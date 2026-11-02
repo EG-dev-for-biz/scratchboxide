@@ -24,12 +24,17 @@
  * 4. each bay's height, from the photos themselves (one facade's window fit may miss what another's photo shows): a row of
  *    the bay is bay where its luminance is under the midpoint between the wall's piers and bays (each read from the
  *    columns above, so a shaded wall is judged by its own light), wall where over it (a band); runs joined across wall
- *    rows up to maxGapM and across rows the photo never reached, kept from minRunM tall; a continued bay takes the runs
+ *    rows up to maxGapM and across rows the photo never reached, kept from minRunM tall, but not a run crossed by
+ *    punchedBands or more wall bands holding punchedShare of its height (read by light, or by the window fit: covered rows from
+ *    bandM tall between its windows holding none, since light alone misses a shaded wall; a stack of punched windows in stone, one per storey: no bay, its windows left to the window fit); a continued bay takes the runs
  *    of the nearest bay read from the photo;
- * 5. tiers: walls whose tops and bottoms lie within tierM of each other are one tier (a setback level); a wall the photo
- *    covers under readCoverage of takes, in its unknown columns only, the bays of its tier's best-read wall within
- *    widthTol of its width, about the wall's centre (generated). A column the photo covers and shows no windows in is
- *    never given a bay: the photo has the veto.
+ * 5. tiers: walls whose tops and bottoms lie within tierM of each other are one tier (a setback level), and the tier has one
+ *    grammar, fitted jointly from every wall's read bays (`fitTierGrammar`): bay width, bay pitch (the median of the gaps
+ *    between neighbouring read bays, a gap a whole number of pitches counting as that many), and the window rows (the
+ *    sill and head runs the read bays share). Each wall lays the grammar along its length (`applyTierGrammar`), its phase
+ *    from its own read bays, else centred on the wall (a facade is laid out about its middle), and gains every grammar
+ *    bay it lacks (generated). A grammar bay over columns the photo shows as wall (vetoShare of them, state 0) is not
+ *    drawn, and a wall the photo covers from silentCoverage with no bays read gets none: the photo has the veto. With under minTierBays read bays the tier has no grammar and keeps step 3's.
  * The bays are written per wall and, in each facade's own frame, per facade (wall_grammar.json beside the orthos), each
  * labelled by where it came from: photo-inferred (read), generated (continued or borrowed).
  */
@@ -39,7 +44,7 @@ import * as path from 'path';
 import { readOccluded, unreadMask } from './pipeline-k/occlusion';
 import type { WindowFitFile, WindowRect } from './window-fit';
 
-export const WALL_GRAMMAR_VERSION = 'wall-grammar/2';
+export const WALL_GRAMMAR_VERSION = 'wall-grammar/3';
 
 export const WALL_GRAMMAR_PARAMS = {
     /** One wall: normals within this cosine, planes within this (m), extents overlapping or within joinGapM (m). */
@@ -52,8 +57,10 @@ export const WALL_GRAMMAR_PARAMS = {
     mullionMaxM: 0.7, minBayM: 0.8, pierShare: 0.6,
     /** A bay's rows joined across wall rows up to maxGapM (m), kept from minRunM tall (m). */
     maxGapM: 2.5, minRunM: 5.0,
-    /** Tiers: walls whose tops and bottoms lie within this (m). A wall covered under readCoverage borrows from its tier's best-read wall within widthTol of its width. */
-    tierM: 3.0, readCoverage: 0.5, widthTol: 0.15
+    /** Tiers: walls whose tops and bottoms lie within this (m). A tier's grammar needs minTierBays read bays; a bay's pitch gap within pitchTol of the tier's pitch counts toward it, and a grammar bay is vetoed where vetoShare of its columns the photo shows as wall. */
+    /** A row run crossed by at least punchedBands wall bands holding punchedShare of its height is punched windows, not a bay. */
+    punchedBands: 3, punchedShare: 0.2, bandM: 0.5,
+    tierM: 3.0, minTierBays: 3, pitchTol: 0.2, vetoShare: 0.2, silentCoverage: 0.5
 };
 export type WallGrammarParams = typeof WALL_GRAMMAR_PARAMS;
 
@@ -73,6 +80,8 @@ export interface Wall {
     u0: number; u1: number; y0: number; y1: number; coverage: number; tier: number; bays: WallBay[];
 }
 export interface WallGrammarFile {
+    /** One window grammar per tier (see the file comment, 5). */
+    tiers?: TierGrammar[];
     version: string; params: WallGrammarParams; walls: Wall[];
     /** Per facade id, its bays in its own frame: [s0, t0, s1, t1, from (0 photo-inferred, 1 generated)]. */
     facades: Record<string, Array<[number, number, number, number, number]>>;
@@ -171,6 +180,18 @@ export function readWallBays(e: WallEvidence, P: WallGrammarParams = WALL_GRAMMA
         if (b > start) split.push([start, b]);
     }
     const cols = split.filter(([a, b]) => (b - a) * cellM >= P.minBayM);
+    // the window fit's wall bands in rows r0..r1 of columns a..b: runs of covered rows with no window, from bandM tall, between windows
+    const fitBands = (a: number, b: number, r0: number, r1: number) => {
+        let bands = 0, rows = 0, gap = 0, seen = false;
+        const minRows = Math.max(1, Math.round(P.bandM / cellM));
+        for (let y = r0; y < r1; y++) {
+            let cov = 0, win = 0;
+            for (let x = a; x < b; x++) { const k = y * nu + x; if (e.covered[k]) { cov++; if (e.window[k]) win++; } }
+            if (!cov) continue;
+            if (win >= P.voteMin * cov) { if (seen && gap >= minRows) { bands++; rows += gap; } seen = true; gap = 0; } else gap++;
+        }
+        return { bands, rows };
+    };
     const rowRuns = (a: number, b: number): Array<[number, number]> => {
         const row = new Int8Array(ny); // 1 bay row, 0 wall row, -1 unknown
         for (let y = 0; y < ny; y++) {
@@ -179,15 +200,21 @@ export function readWallBays(e: WallEvidence, P: WallGrammarParams = WALL_GRAMMA
             row[y] = n < 0.3 * (b - a) || !Number.isFinite(mid) || !(pierLum > bayLum) ? -1 : sum / n < mid ? 1 : 0;
         }
         const out: Array<[number, number]> = [];
-        let start = -1, lastBay = -1, gapWall = 0;
+        let start = -1, lastBay = -1, gapWall = 0, wallIn = 0, bands = 0;
         for (let y = 0; y <= ny; y++) {
             const v = y < ny ? row[y] : 0;
-            if (v === 1) { if (start < 0) start = y; lastBay = y; gapWall = 0; continue; }
+            if (v === 1) { if (start < 0) { start = y; wallIn = 0; bands = 0; } if (gapWall) { wallIn += gapWall; bands++; } lastBay = y; gapWall = 0; continue; }
             if (start < 0) continue;
             if (v === 0) gapWall++;
             // a wall stretch longer than maxGapM, or the end: close the run at its last bay row
             if (y === ny || gapWall * cellM > P.maxGapM) {
-                if ((lastBay + 1 - start) * cellM >= P.minRunM) out.push([start, lastBay + 1]);
+                const len = lastBay + 1 - start;
+                // a run crossed by a wall band storey after storey is a stack of punched windows in stone, not a bay: bands
+                // read by light, or by the window fit (covered rows between its windows holding none; light alone misses a
+                // shaded wall)
+                const fitted = fitBands(a, b, start, lastBay + 1);
+                const punched = Math.max(bands, fitted.bands) >= P.punchedBands && Math.max(wallIn, fitted.rows) >= P.punchedShare * len;
+                if (len * cellM >= P.minRunM && !punched) out.push([start, lastBay + 1]);
                 start = -1; gapWall = 0;
             }
         }
@@ -273,21 +300,13 @@ export function readWallGrammar(orthosDir: string, fit: WindowFitFile, decode: (
         for (const o of walls) if (o.tier < 0 && Math.abs(o.y1 - w.y1) <= P.tierM && Math.abs(o.y0 - w.y0) <= P.tierM) o.tier = tier;
         tier++;
     }
-    for (const [wi, w] of walls.entries()) {
-        if (w.coverage >= P.readCoverage) continue;
-        const width = w.u1 - w.u0;
-        const donor = walls.filter(o => o !== w && o.tier === w.tier && o.coverage >= P.readCoverage && Math.abs((o.u1 - o.u0) / width - 1) <= P.widthTol && o.bays.some(b => b.from === 'photo-inferred'))
-            .sort((a, b) => b.bays.length - a.bays.length)[0];
-        if (!donor) continue;
-        const e = evidence[wi], st = states[wi], cw = (w.u0 + w.u1) / 2, cd = (donor.u0 + donor.u1) / 2;
-        for (const b of donor.bays.filter(x => x.from === 'photo-inferred')) {
-            const a = b.u0 - cd + cw, c = b.u1 - cd + cw;
-            const xa = Math.max(0, Math.floor((a - e.u0) / e.cellM)), xb = Math.min(e.nu, Math.ceil((c - e.u0) / e.cellM));
-            // only where this wall's own photo is silent, and never over a bay of its own
-            if (xb <= xa || st.subarray(xa, xb).some(v => v !== -1)) continue;
-            if (w.bays.some(o => o.u0 < c && o.u1 > a && o.y0 < b.y1 && o.y1 > b.y0)) continue;
-            w.bays.push({ u0: a, u1: c, y0: Math.max(w.y0, b.y0), y1: Math.min(w.y1, b.y1), from: 'generated' });
-        }
+    const tiers: TierGrammar[] = [];
+    for (let t = 0; t < tier; t++) {
+        const idx = walls.flatMap((w, i) => (w.tier === t ? [i] : []));
+        const g = fitTierGrammar(idx.map(i => walls[i]), P);
+        if (!g) continue;
+        tiers.push(g);
+        for (const i of idx) applyTierGrammar(walls[i], evidence[i], states[i], g, P);
     }
     // per facade, in its own frame
     const perFacade: WallGrammarFile['facades'] = {};
@@ -303,13 +322,77 @@ export function readWallGrammar(orthosDir: string, fit: WindowFitFile, decode: (
         }
         perFacade[String(id)] = out;
     }
-    const grammar: WallGrammarFile = { version: WALL_GRAMMAR_VERSION, params: P, walls, facades: perFacade };
+    const grammar: WallGrammarFile = { version: WALL_GRAMMAR_VERSION, params: P, walls, tiers, facades: perFacade };
     const file = path.join(orthosDir, WALL_GRAMMAR_FILE);
     fs.writeFileSync(file, JSON.stringify(grammar));
     return { file, grammar };
 }
 
 export const WALL_GRAMMAR_FILE = 'wall_grammar.json';
+
+/** One tier's window grammar (see the file comment, 5), in metres. */
+export interface TierGrammar { tier: number; walls: number[]; pitch: number; width: number; rows: Array<[number, number]>; readBays: number }
+
+/** A tier's grammar from its walls' read bays, undefined when they hold under minTierBays or no consistent pitch. */
+export function fitTierGrammar(walls: Wall[], P: WallGrammarParams = WALL_GRAMMAR_PARAMS): TierGrammar | undefined {
+    const read = walls.map(w => w.bays.filter(b => b.from === 'photo-inferred'));
+    const all = read.flat();
+    if (all.length < P.minTierBays) return undefined;
+    const width = median(all.map(b => b.u1 - b.u0));
+    // the gaps between neighbouring columns of read bays, on every wall; the shortest common gap is the pitch, and a gap of k pitches votes k times
+    const gaps: number[] = [];
+    for (const bs of read) {
+        const starts = [...new Set(bs.map(b => Math.round(b.u0 * 10) / 10))].sort((a, b) => a - b);
+        for (let i = 1; i < starts.length; i++) if (starts[i] - starts[i - 1] >= width) gaps.push(starts[i] - starts[i - 1]);
+    }
+    if (!gaps.length) return undefined;
+    const base = median(gaps.filter(g => g <= Math.min(...gaps) * (1 + P.pitchTol) * 1.5));
+    const votes: number[] = [];
+    for (const g of gaps) { const k = Math.max(1, Math.round(g / base)); if (Math.abs(g / k - base) <= P.pitchTol * base) for (let i = 0; i < k; i++) votes.push(g / k); }
+    if (votes.length < P.minTierBays - 1) return undefined;
+    const pitch = median(votes);
+    // the rows: each read bay's run, the runs the tier shares (by start and end rounded to cellM) at least twice, else all
+    const key = (b: WallBay) => `${Math.round(b.y0 / P.cellM)}:${Math.round(b.y1 / P.cellM)}`;
+    const count = new Map<string, WallBay>(), n = new Map<string, number>();
+    for (const b of all) { const k = key(b); count.set(k, b); n.set(k, (n.get(k) ?? 0) + 1); }
+    let rows = [...count.entries()].filter(([k]) => n.get(k)! >= 2).map(([, b]) => [b.y0, b.y1] as [number, number]);
+    if (!rows.length) rows = [...count.values()].map(b => [b.y0, b.y1] as [number, number]);
+    // overlapping runs are one (the widest)
+    rows.sort((a, b) => a[0] - b[0]);
+    const merged: Array<[number, number]> = [];
+    for (const r of rows) { const l = merged[merged.length - 1]; if (l && r[0] < l[1]) l[1] = Math.max(l[1], r[1]); else merged.push([...r]); }
+    return { tier: walls[0].tier, walls: walls.map(w => w.wallId), pitch, width, rows: merged, readBays: all.length };
+}
+
+/** Lays a tier's grammar along one wall (see the file comment, 5): every grammar bay the wall lacks, generated, but none the photo vetoes. */
+export function applyTierGrammar(w: Wall, e: WallEvidence, state: Int8Array, g: TierGrammar, P: WallGrammarParams = WALL_GRAMMAR_PARAMS): number {
+    const own = w.bays.filter(b => b.from === 'photo-inferred');
+    // a wall the photo reads well and finds no bays on has none: the grammar never puts bays on a plain wall
+    if (!own.length && w.coverage >= P.silentCoverage) return 0;
+    // the phase: the circular mean of the wall's own read bays' starts modulo the pitch, else the bays centred on the wall
+    let phase: number;
+    if (own.length) {
+        let sx = 0, sy = 0;
+        for (const b of own) { const a = (2 * Math.PI * b.u0) / g.pitch; sx += Math.cos(a); sy += Math.sin(a); }
+        phase = ((Math.atan2(sy, sx) / (2 * Math.PI)) * g.pitch + g.pitch) % g.pitch;
+    } else phase = ((((w.u0 + w.u1) / 2 - g.width / 2) % g.pitch) + g.pitch) % g.pitch;
+    let added = 0;
+    for (let a = w.u0 + ((phase - w.u0) % g.pitch + g.pitch) % g.pitch; a + g.width <= w.u1 + 1e-6; a += g.pitch) {
+        const c = a + g.width;
+        const xa = Math.max(0, Math.floor((a - e.u0) / e.cellM)), xb = Math.min(e.nu, Math.ceil((c - e.u0) / e.cellM));
+        if (xb <= xa) continue;
+        let wall = 0; for (let x = xa; x < xb; x++) if (state[x] === 0) wall++;
+        if (wall >= P.vetoShare * (xb - xa)) continue;
+        for (const [r0, r1] of g.rows) {
+            const y0 = Math.max(w.y0, r0), y1 = Math.min(w.y1, r1);
+            if (y1 - y0 < P.minRunM) continue;
+            if (w.bays.some(o => o.u0 < c && o.u1 > a && o.y0 < y1 && o.y1 > y0)) continue;
+            w.bays.push({ u0: a, u1: c, y0, y1, from: 'generated' });
+            added++;
+        }
+    }
+    return added;
+}
 
 /** A facade's bays from the wall grammar in its own frame ([s0, t0, s1, t1] each), undefined when the grammar does not cover it. */
 export function grammarBays(grammar: WallGrammarFile | undefined, facadeId: number): Array<[number, number, number, number]> | undefined {

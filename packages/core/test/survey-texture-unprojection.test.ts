@@ -19,8 +19,8 @@ import {
 } from '../src/node/spatial/SurveyTextureUnprojector';
 import { AlgorithmicUvEngine } from '../src/node/spatial/AlgorithmicUvEngine';
 import { decodePng, encodePng, resampleRgba } from '../src/node/texture-processing';
-import { GeneratorFailedError, MissingInputError } from '../src/common/errors/pipeline-errors';
-import { uvCubeMesh, writeFixtureGlb } from './helpers/mesh-glb-fixtures';
+import { GeneratorFailedError, MediaModelUnavailableError, MissingInputError } from '../src/common/errors/pipeline-errors';
+import { rewriteGlbJson, uvCubeMesh, writeFixtureGlb } from './helpers/mesh-glb-fixtures';
 import type { GeodeticAnchor, ColmapCameraPose } from '../src/common/spatial/colmap-vector-reference-types';
 import type { StationImageGenerator } from '../src/node/spatial/BeautifyStationService';
 
@@ -910,15 +910,122 @@ describe('SurveyTextureUnprojector: a mesh without its own UVs', () => {
             // A resolved result is summarised (it holds megabytes of buffers that a failure diff would print).
             }).then(r => `resolved: success ${r.success}, fill rate ${r.metrics.fillRate}`, e => e);
             expect(err).toBeInstanceOf(MissingInputError);
-            expect(err.message).toContain('mesh 0 primitive 0 has no TEXCOORD_0');
+            expect(err.message).toContain('none of its 1 primitive(s) has TEXCOORD_0');
         }
         expect(calls).toBe(0);
         expect(fs.existsSync(outGlbPath)).toBe(false);
         // A precomputed-plate run (the mesh bake's path) is refused the same way.
         await expect(SurveyTextureUnprojector.processGlbWithSurveyStations({
             glbPath, stations: [], precomputedPlates: [{} as StationPlate], options: { resolution: 512 }
-        })).rejects.toThrow(/has no TEXCOORD_0/);
+        })).rejects.toThrow(/has TEXCOORD_0/);
     });
+
+    it('bakes the primitives that have UVs and keeps one without them as it was, reported (a pipeline K twin has two)', async () => {
+        const glbPath = path.join(TEST_DIR, 'mixed_uv_submesh.glb');
+        createSyntheticMultiSubmeshGlb(glbPath);
+        rewriteGlbJson(glbPath, gltf => {
+            delete gltf.meshes[0].primitives[1].attributes.TEXCOORD_0;
+            gltf.meshes[0].name = 'Seal';
+        });
+        const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
+        let calls = 0;
+        const gen: StationImageGenerator = { name: 'echo', async generate(a) { calls++; return a.blockoutPng; } };
+        const outGlbPath = path.join(TEST_DIR, 'mixed_uv_submesh_out.glb');
+        const result = await SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath, anchor: ANCHOR, generator: gen, beautifyContext: { locationName: 'Mixed UV building' },
+            stations: [stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR), stationFromLookAt(2, [0, 0, -25], [0, 0, 0], optics, ANCHOR)],
+            options: { resolution: 128, renderWidth: 256, renderHeight: 144, draft: true, outGlbPath }
+        });
+        expect(calls).toBe(2);
+        expect(result.untexturedPrimitives).toEqual([{ meshIndex: 0, primitiveIndex: 1, meshName: 'Seal', reason: expect.stringContaining('no TEXCOORD_0') }]);
+        expect(result.submeshes!.map(s => s.primitiveIndex)).toEqual([0]);
+        const out = AlgorithmicUvEngine.parseGlb(fs.readFileSync(outGlbPath)).json;
+        const [p0, p1] = out.meshes[0].primitives;
+        // the baked primitive gets its own atlas material; the one without UVs keeps its own
+        expect(out.materials[p0.material].name).toBe('pbr_beautified_submesh_0');
+        expect(out.materials[p1.material].name).toBe('mat_north');
+        expect(p1.attributes.TEXCOORD_0).toBeUndefined();
+    });
+
+    it('leaves out a station the image model answers with no image (asked twice), and still ends the run on any other model failure', async () => {
+        const glbPath = path.join(TEST_DIR, 'empty_answer_submesh.glb');
+        createSyntheticMultiSubmeshGlb(glbPath);
+        const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
+        const stations = [stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR), stationFromLookAt(2, [0, 0, -25], [0, 0, 0], optics, ANCHOR)];
+        const asked: number[] = [];
+        let current = 0;
+        const gen: StationImageGenerator = {
+            name: 'empty-for-station-1',
+            async generate(a) {
+                asked.push(current);
+                if (current === 1) throw new MediaModelUnavailableError('gemini-3.1-flash-image', 'Image generation returned no image (STOP)');
+                return a.blockoutPng;
+            }
+        };
+        const result = await SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath, anchor: ANCHOR, generator: gen, beautifyContext: { locationName: 'Empty answer' },
+            stations, options: { resolution: 64, renderWidth: 256, renderHeight: 144, draft: true },
+            onProgress: (message) => { const m = /Beautifying station (\d+)\//.exec(message); if (m) current = Number(m[1]); }
+        });
+        expect(asked.filter(s => s === 1)).toHaveLength(2);
+        expect(result.rejectedStations).toEqual([expect.objectContaining({ stationId: 1, reason: expect.stringContaining('no image after 2 attempts') })]);
+        expect(result.metrics.directlyPaintedTexels).toBeGreaterThan(0);
+
+        // a model that cannot be used at all is not a station's failure
+        const quota: StationImageGenerator = { name: 'quota', async generate() { throw new MediaModelUnavailableError('gemini-3.1-flash-image', 'Quota exceeded'); } };
+        await expect(SurveyTextureUnprojector.processGlbWithSurveyStations({
+            glbPath, anchor: ANCHOR, generator: quota, beautifyContext: { locationName: 'Quota' },
+            stations, options: { resolution: 64, renderWidth: 256, renderHeight: 144, draft: true }
+        })).rejects.toThrow(/Quota exceeded/);
+    });
+
+    it('survey_beautify_to_texture sizes each atlas from its primitive\'s own texture unless a resolution is given', async () => {
+        const os = await import('os');
+        const { vi } = await import('vitest');
+        const { spatialHandlers } = await import('../src/node/gemini/tools/spatial-tools');
+        const { GoogleMediaCredentialsService } = await import('../src/node/google-media-credentials-service');
+        const { fakeImageModelClient } = await import('./helpers/fake-image-model');
+        const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-survey-texture-size-'));
+        const glbPath = path.join(ws, 'own_texture.glb');
+        createSyntheticMultiSubmeshGlb(glbPath);
+        // primitive 0's material gets a 96 x 48 base colour image; primitive 1 has none
+        const png = encodePng(96, 48, Buffer.alloc(96 * 48 * 4, 200));
+        const buf = fs.readFileSync(glbPath);
+        const jsonLen = buf.readUInt32LE(12);
+        const gltf = JSON.parse(buf.toString('utf8', 20, 20 + jsonLen));
+        const bin = buf.subarray(20 + jsonLen + 8);
+        const offset = (bin.length + 3) & ~3;
+        const newBin = Buffer.concat([bin, Buffer.alloc(offset - bin.length), png, Buffer.alloc((4 - (png.length % 4)) % 4)]);
+        gltf.buffers[0].byteLength = newBin.length;
+        gltf.bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: png.length });
+        gltf.images = [{ bufferView: gltf.bufferViews.length - 1, mimeType: 'image/png' }];
+        gltf.textures = [{ source: 0 }];
+        gltf.materials[0].pbrMetallicRoughness = { baseColorTexture: { index: 0 } };
+        fs.writeFileSync(glbPath, AlgorithmicUvEngine.serializeGlb(gltf, newBin));
+
+        const stationsJsonPath = path.join(ws, 'stations.json');
+        const optics = { focalLengthMm: 28, sensorWidthMm: 36 };
+        await fs.outputJson(stationsJsonPath, { anchor: ANCHOR, poses: [stationFromLookAt(1, [0, 0, 25], [0, 0, 0], optics, ANCHOR), stationFromLookAt(2, [0, 0, -25], [0, 0, 0], optics, ANCHOR)] });
+        const spy = vi.spyOn(GoogleMediaCredentialsService.prototype, 'createClient').mockResolvedValue(fakeImageModelClient([], { modelVersion: 'gemini-3.1-flash-image' }) as any);
+        try {
+            const args = { glbPath, stationsJsonPath, locationName: 'Own texture sizes' };
+            const own = await spatialHandlers.survey_beautify_to_texture(args, { workspaceRoot: ws } as any);
+            const p = own.resultPayload as any;
+            // 96 x 48 from its image; the untextured primitive falls back to 1024 square
+            expect(p.totalAtlasTexels).toBe(96 * 48 + 1024 * 1024);
+            expect(own.summaryResult).toContain("each primitive's own texture size x 1");
+
+            const doubled = await spatialHandlers.survey_beautify_to_texture({ ...args, textureScale: 2 }, { workspaceRoot: ws } as any);
+            expect((doubled.resultPayload as any).totalAtlasTexels).toBe(192 * 96 + 2048 * 2048);
+
+            const fixed = await spatialHandlers.survey_beautify_to_texture({ ...args, resolution: 64 }, { workspaceRoot: ws } as any);
+            expect((fixed.resultPayload as any).totalAtlasTexels).toBe(2 * 64 * 64);
+            expect(fixed.summaryResult).toContain('64x64 each');
+        } finally {
+            spy.mockRestore();
+            fs.removeSync(ws);
+        }
+    }, 120000);
 
     it('loads the box at a small atlas without crashing: the generated charts are packed inside the atlas', () => {
         const glb = fs.readFileSync(uvlessBox('uvless_box_load.glb'));

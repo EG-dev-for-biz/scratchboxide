@@ -153,23 +153,6 @@
       "autoPort": false
     },
     {
-      "name": "scratchbox-cartesian-normal-snapping",
-      "runtimeExecutable": "env",
-      "runtimeArgs": [
-        "SCRATCHBOX_NO_ELECTRON=true",
-        "PORT=3071",
-        "SCRATCHBOX_WEB_PORT=3070",
-        "SCRATCHBOX_TOOLS_PORT=3072",
-        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3070,http://localhost:3070",
-        "npm",
-        "--prefix",
-        "/Users/eligreen/dev/scratchbox-ide-master",
-        "run",
-        "dev"
-      ],
-      "port": 3070
-    },
-    {
       "name": "scratchbox-pipeline-k",
       "runtimeExecutable": "env",
       "runtimeArgs": [
@@ -186,6 +169,232 @@
       ],
       "port": 3370,
       "autoPort": false
+    },
+    {
+      "name": "scratchbox-material-regions",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "SCRATCHBOX_K_MATERIAL_REGIONS=1",
+        "SCRATCHBOX_K_MATERIAL_PICK=spectrum",
+        "SCRATCHBOX_REVEAL_DEBUG=1",
+        "PORT=3471",
+        "SCRATCHBOX_WEB_PORT=3470",
+        "SCRATCHBOX_TOOLS_PORT=3472",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3470,http://localhost:3470",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/dev/scratchbox-ide-master",
+        "run",
+        "dev"
+      ],
+      "port": 3470,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-build-steps",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "PORT=3571",
+        "SCRATCHBOX_WEB_PORT=3570",
+        "SCRATCHBOX_TOOLS_PORT=3572",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3570,http://localhost:3570",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/dev/scratchbox-ide-master",
+        "run",
+        "dev"
+      ],
+      "port": 3570,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-weather",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "SCRATCHBOX_K_MATERIAL_REGIONS=1",
+        "SCRATCHBOX_K_MATERIAL_PICK=spectrum",
+        "SCRATCHBOX_REVEAL_DEBUG=1",
+        "PORT=3871",
+        "SCRATCHBOX_WEB_PORT=3870",
+        "SCRATCHBOX_TOOLS_PORT=3872",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3870,http://localhost:3870",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/dev/scratchbox-ide-master",
+        "run",
+        "dev"
+      ],
+      "port": 3870,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-lens-fx",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "PORT=3481",
+        "SCRATCHBOX_WEB_PORT=3480",
+        "SCRATCHBOX_TOOLS_PORT=3482",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3480,http://localhost:3480",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/dev/scratchbox-ide-master",
+        "run",
+        "dev"
+      ],
+      "port": 3480,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-beautify-lite",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "PORT=3491",
+        "SCRATCHBOX_WEB_PORT=3490",
+        "SCRATCHBOX_TOOLS_PORT=3492",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3490,http://localhost:3490",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/dev/scratchbox-ide-master",
+        "run",
+        "dev"
+      ],
+      "port": 3490,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-view-relight",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "PORT=3911",
+        "SCRATCHBOX_WEB_PORT=3910",
+        "SCRATCHBOX_TOOLS_PORT=3912",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3910,http://localhost:3910",
+        "SCRATCHBOX_K_ROOF_SHADOW=1",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/dev/scratchbox-ide-master/desktop-app",
+        "run",
+        "dev"
+      ],
+      "port": 3910,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-window-mask",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "SCRATCHBOX_K_WINDOW_SEGMENT=1",
+        "SCRATCHBOX_K_MATERIAL_REGIONS=1",
+        "SCRATCHBOX_PYTHON=/Users/eligreen/dev/scratchbox-main/.venv/bin/python",
+        "PORT=3981",
+        "SCRATCHBOX_WEB_PORT=3980",
+        "SCRATCHBOX_TOOLS_PORT=3982",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3980,http://localhost:3980",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/dev/scratchbox-ide-master",
+        "run",
+        "dev"
+      ],
+      "port": 3980,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-sky-delight-on",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "SCRATCHBOX_K_SKY_DELIGHT=1",
+        "PORT=3941",
+        "SCRATCHBOX_WEB_PORT=3940",
+        "SCRATCHBOX_TOOLS_PORT=3942",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3940,http://localhost:3940",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/dev/scratchbox-ide-master",
+        "run",
+        "dev"
+      ],
+      "port": 3940,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-sky-delight-off",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "PORT=3941",
+        "SCRATCHBOX_WEB_PORT=3940",
+        "SCRATCHBOX_TOOLS_PORT=3942",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3940,http://localhost:3940",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/dev/scratchbox-ide-master",
+        "run",
+        "dev"
+      ],
+      "port": 3940,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-street-stations",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "PORT=3421",
+        "SCRATCHBOX_WEB_PORT=3420",
+        "SCRATCHBOX_TOOLS_PORT=3422",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3420,http://localhost:3420",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/dev/scratchbox-ide-master",
+        "run",
+        "dev"
+      ],
+      "port": 3420,
+      "autoPort": false
+    },
+    {
+      "name": "scratchbox-m1-run",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "-u",
+        "SCRATCHBOX_STAGED_DISTRICT",
+        "SCRATCHBOX_NO_ELECTRON=true",
+        "SCRATCHBOX_CACHE_RESTORE=off",
+        "PORT=3621",
+        "SCRATCHBOX_WEB_PORT=3620",
+        "SCRATCHBOX_TOOLS_PORT=3622",
+        "SCRATCHBOX_ALLOWED_ORIGINS=http://127.0.0.1:3620,http://localhost:3620",
+        "npm",
+        "--prefix",
+        "/Users/eligreen/dev/scratchbox-ide-master/.claude/worktrees/m1-run",
+        "run",
+        "dev"
+      ],
+      "port": 3620,
+      "autoPort": false
+    },
+    {
+      "name": "ci-progress",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "3170",
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        "docs/screenshots/ci_check_2026-11-02"
+      ],
+      "port": 3170
     }
   ]
 }

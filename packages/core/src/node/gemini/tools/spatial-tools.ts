@@ -1689,12 +1689,13 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
         parameters: {
             type: 'OBJECT',
             properties: {
-                glbPath: { type: 'STRING', description: 'Input GLB mesh model. Every primitive must have its own UVs (TEXCOORD_0): the texture is baked into them, and a mesh without UVs is refused before any station image is generated.' },
+                glbPath: { type: 'STRING', description: 'Input GLB mesh model. The texture is baked into its own UVs (TEXCOORD_0): a primitive without them keeps its material and is reported, and a mesh with none is refused before any station image is generated.' },
                 stationsJsonPath: { type: 'STRING', description: 'Stations JSON (with anchor) from survey_synthesize_stations.' },
                 locationName: { type: 'STRING', description: 'Location name for prompts.' },
                 moodPromptContext: { type: 'STRING', description: 'Mood/lighting sentence(s), identical for all stations.' },
                 styleSuffix: { type: 'STRING', description: 'Style suffix appended verbatim.' },
-                resolution: { type: 'NUMBER', description: 'Atlas texture resolution (default 4096).' },
+                resolution: { type: 'NUMBER', description: 'One square atlas size for every primitive (e.g. 4096). Unset (default), each primitive keeps its own base colour texture size times textureScale; a fixed size gives every primitive of a many-primitive mesh that whole atlas.' },
+                textureScale: { type: 'NUMBER', description: 'Per-primitive atlas size relative to its own base colour texture when resolution is unset (default 1; 2 doubles each side, four times the texels).' },
                 depthTolerance: { type: 'NUMBER', description: 'Occlusion test depth tolerance in meters (default 0.20).' },
                 minCosIncidence: { type: 'NUMBER', description: 'Drop glancing incidence angles below this cos theta (default 0.08).' },
                 isoDate: { type: 'STRING', description: 'UTC time whose sun lit the station images (the time of day their mood describes), for NOAA solar de-lighting. Without it nothing is de-lit.' },
@@ -2942,7 +2943,10 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
         const generator = await resolveStationImageGenerator(ctx);
         const { SurveyTextureUnprojector } = await import('../../spatial/SurveyTextureUnprojector');
 
-        const resolution = typeof args.resolution === 'number' ? args.resolution : 4096;
+        // A fixed atlas only when asked for: by default each primitive keeps its own texture's size (times
+        // textureScale), so a mesh of hundreds of primitives is not given hundreds of 4096 atlases.
+        const resolution = typeof args.resolution === 'number' && args.resolution > 0 ? args.resolution : undefined;
+        const textureScale = typeof args.textureScale === 'number' && args.textureScale > 0 ? args.textureScale : 1;
         const outGlbPath = asString(args.outGlbPath) || pathMod.join(ctx.workspaceRoot || process.cwd(), 'public', 'models', `survey_pbr_${Date.now()}.glb`);
         // De-lighting needs the sun the images were lit by: the stations' anchor and the date the caller gives. The
         // run's own clock is not that date, so without one (or without anchor coordinates) nothing is de-lit.
@@ -2963,6 +2967,7 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             },
             options: {
                 resolution,
+                resolutionScale: resolution === undefined ? textureScale : undefined,
                 depthTolerance: typeof args.depthTolerance === 'number' ? args.depthTolerance : 0.20,
                 minCosIncidence: typeof args.minCosIncidence === 'number' ? args.minCosIncidence : 0.08,
                 solarDelighting: delightRequested ? { lat, lng, isoDate } : undefined,
@@ -2990,9 +2995,13 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 modelsUsed: result.modelsUsed,
                 imageSources: result.imageSources,
                 rejectedStations: result.rejectedStations,
-                unobservedTexels: result.unobservedTexels
+                unobservedTexels: result.unobservedTexels,
+                totalAtlasTexels: result.metrics.totalAtlasTexels,
+                atlases: (result.submeshes || []).length,
+                untexturedPrimitives: result.untexturedPrimitives
             } as unknown as ToolResultPayload,
-            summaryResult: `Unprojected ${result.metrics.stationContributions.length} survey stations into ${resolution}x${resolution} UV atlas (${(result.metrics.fillRate * 100).toFixed(1)}% fill) ${delightNote}, with PBR maps -> ${result.outGlbPath}.`
+            summaryResult: `Unprojected ${result.metrics.stationContributions.length} survey stations into ${(result.submeshes || []).length} UV atlas(es) of ${(result.metrics.totalAtlasTexels / 1e6).toFixed(1)} M texels in all (${resolution !== undefined ? `${resolution}x${resolution} each` : `each primitive's own texture size x ${textureScale}`}, ${(result.metrics.fillRate * 100).toFixed(1)}% fill) ${delightNote}, with PBR maps -> ${result.outGlbPath}.`
+                + (result.untexturedPrimitives.length ? ` Kept ${result.untexturedPrimitives.length} primitive(s) as they were (${result.untexturedPrimitives.map(p => `mesh ${p.meshIndex}${p.meshName ? ` "${p.meshName}"` : ''} primitive ${p.primitiveIndex}: ${p.reason}`).join('; ')}).` : '')
                 + (result.rejectedStations.length ? ` Left out ${result.rejectedStations.length} station(s) whose image failed geometry QC (${result.rejectedStations.map(r => `${r.stationId}: ${r.reason}`).join('; ')}).` : '')
                 + (result.unobservedTexels > 0 && result.metrics.coveredMeshTexels > 0 ? ` ${((result.unobservedTexels / result.metrics.coveredMeshTexels) * 100).toFixed(1)}% of the mesh's texels were seen by no station and keep the mesh's own colour.` : '')
                 + ` ${result.imageSources.join(' ')}`
@@ -3043,6 +3052,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             forceRebake: typeof args.forceRebake === 'boolean' ? args.forceRebake : undefined,
             draft: typeof args.draft === 'boolean' ? args.draft : undefined,
             styleSuffix: typeof args.styleSuffix === 'string' ? args.styleSuffix : undefined,
+            ...(args.refresh === true ? { refresh: true } : {}),
+            ...(street ?? {}),
             onProgress: chatProgress(ctx),
             // The chat's Stop or the time limit ends the run down to the station image-model calls.
             signal: ctx?.signal
@@ -3052,8 +3063,6 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             resultPayload: {
                 success: res.success,
                 locationName: res.locationName,
-            ...(args.refresh === true ? { refresh: true } : {}),
-            ...(street ?? {}),
                 geoAnchor: res.geoAnchor,
                 splatUrl: res.splatUrl,
                 splatPath: res.splatPath,

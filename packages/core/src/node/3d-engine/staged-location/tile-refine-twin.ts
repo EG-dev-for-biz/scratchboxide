@@ -44,10 +44,10 @@ import { encodePng } from './png-encode';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { decodeImageInMemory, type RgbaImage8 } from './tile-texture-transfer';
 import { harmonizeTextures, surfaceClassMasks, TEXEL_ROOF, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
+import { skyDelight, type SkyDelightReport } from './pipeline-k/sky-delight';
 import { viewRelight, type ViewRelightParams, type ViewRelightReport } from './pipeline-k/view-relight';
 import { roofShadowLift, type RoofShadowReport } from './pipeline-k/roof-shadow';
 import { evaluateShadowLift, type ShadowLiftQaReport } from './pipeline-k/shadow-lift-qa';
-import { skyDelight, type SkyDelightReport } from './pipeline-k/sky-delight';
 import { classSwatchSheet, describeMaterialRegions, readRegionClasses, writeMaterialRegions, type MaterialRegionsPlan, type MaterialRegionsReport, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { planMaterialRegionsOnThreads } from './pipeline-k/material-regions-pool';
 import { materialClassesExtras, type ClassWords, type GlassSeen, type MaterialClassesExtras } from './pipeline-k/material-naming';
@@ -251,6 +251,8 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
 
     // pipeline K: one colour across the photos (after the de-light, on the pixels that will be shown)
     let harmonize: TextureHarmonizeReport | undefined;
+    let sky: SkyDelightReport | undefined;
+    if (opts?.harmonize && finalImage.size && process.env.SCRATCHBOX_K_SKY_DELIGHT === '1') { opts.onStep?.('sky de-light', 'running'); sky = await skyDelight(g, json, finalImage, surfaces, opts.harmonize.skyContext).catch(err => { opts.onStep?.('sky de-light', 'failed'); throw err; }); opts.onStep?.('sky de-light', 'done'); }
     let relight: ViewRelightReport | undefined;
     if (opts?.harmonize && opts.viewRelight && finalImage.size) {
         const vr = opts.viewRelight;
@@ -270,8 +272,6 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
             opts.onStep?.('roofShadowQa', 'done');
         }
     }
-    let sky: SkyDelightReport | undefined;
-    if (opts?.harmonize && finalImage.size && process.env.SCRATCHBOX_K_SKY_DELIGHT === '1') { opts.onStep?.('sky de-light', 'running'); sky = skyDelight(g, json, finalImage, surfaces, opts.harmonize.skyContext); opts.onStep?.('sky de-light', 'done'); }
     if (opts?.harmonize && finalImage.size) { opts.onStep?.('harmonize', 'running'); harmonize = harmonizeTextures(g, json, finalImage, opts.harmonize.groundY, undefined, surfaces); opts.onStep?.('harmonize', 'done'); }
 
     // pipeline K: material regions on the harmonised photos (accepted glass edits them before they are encoded)
@@ -334,10 +334,10 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     const method = () => {
         const roofs = roofTexels ? `; roofs seen from above (${roofTexels} texels) highlights only, no shadow lift` : '';
         const base = `tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), de-lit (shadowLift ${PHOTOGRAMMETRIC_DELIGHT.defaults.shadowLift}, highlightCompress ${PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress}${roofs}; ${delit} of ${delit} photos)`;
+        const sk = sky?.applied ? `; walls' sky-visibility darkening taken out (pipeline K): ${sky.why}` : sky ? `; the walls' sky-visibility darkening left in (${sky.why})` : '';
         const vr = relight?.applied ? `; evened out from image-model relights of rendered views, the model's pixels never used (pipeline K): ${relight.why}` : relight ? `; the view relight left them as they were (${relight.why})` : '';
         const rs = roofShadow?.applied ? `; the mesh's cast shadow on its roof decks lifted, a sun fitted per deck (pipeline K, photo-inferred): ${roofShadow.why}` : roofShadow ? `; roof shadows left as they were (${roofShadow.why})` : '';
-        const sk = sky?.applied ? `; walls' sky-visibility darkening taken out (pipeline K): ${sky.why}` : sky ? `; the walls' sky-visibility darkening left in (${sky.why})` : '';
-        const h = vr + rs + sk + (harmonize?.kept ? `; then harmonised (pipeline K): ${harmonize.why}` : harmonize ? `; harmonising left them as they were (${harmonize.why})` : '');
+        const h = sk + vr + rs + (harmonize?.kept ? `; then harmonised (pipeline K): ${harmonize.why}` : harmonize ? `; harmonising left them as they were (${harmonize.why})` : '');
         if (!recreate) return base + h;
         return `${base}${h}, further recreated by ${recreate.modelsUsed.join(', ') || 'an image model'} removing the scan's own baked shadow/highlight and recovering the material's true colour (gated on structure and hue/chroma): ${recreate.accepted} of ${recreate.attempted} accepted (${recreate.rejected} rejected, ${recreate.failed} model failures${recreate.timedOut ? `, ${recreate.timedOut} ran out of time` : ''})`;
     };

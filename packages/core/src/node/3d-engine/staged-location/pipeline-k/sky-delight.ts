@@ -16,8 +16,9 @@
  * in is the fill: a wall deep in a street canyon sees little sky and reads darker than the same stone in the open.
  *
  *  1. Sky visibility V (cosine-weighted, rays over the hemisphere against the whole scan, open below the horizon only to
- *     the ground) at area-weighted sample points on the walls; each surface's more open side counts (the remesh's
- *     winding is not consistent). Points that see no sky (enclosed shells inside the scan) are left out of the fit.
+ *     the ground; cast natively on a BVH, sky-visibility-service.ts) at area-weighted sample points on the walls; each
+ *     surface's more open side counts (the remesh's winding is not consistent). Points that see no sky (enclosed shells
+ *     inside the scan) are left out of the fit.
  *  2. The darkening is fitted from the photos themselves: each photo's log luminance less its own mean, against V, by
  *     least squares: log L = b V + c. It is applied only when it is real: b positive on both halves of the photos (split
  *     by index), and the half fitted on one removing at least minHeldOut of the other's variance.
@@ -31,20 +32,27 @@
  * slope 0.30 (halves 0.24 and 0.36), 2.1% of held-out wall variance, gains 0.95 to 1.27; the seams between photos got
  * further apart (mean patch difference 0.160 -> 0.181 before harmonising, 0.132 -> 0.138 after). The isolated scan has no
  * neighbours, so it cannot see the street canyon that darkens the ESB's lowest 60 m (2.3 times darker than at 60-120 m).
+ * Those figures predate sky-delight/2, which fixed the gain's sign (sky-delight/1 multiplied the darkening in instead of
+ * dividing it out) and casts on the native BVH: they need measuring again.
  */
 
 import { readAccessor, type ParsedGlb } from '../glb-bytes';
 import { SRGB8_TO_LINEAR, linearToSrgb255 } from '../../../../common/spatial/photogrammetric-delight';
 import type { RgbaImage8 } from '../tile-texture-transfer';
+import { runSkyVisibility } from '../../sky-visibility-service';
 import { forEachTexturedTriangle, TEXEL_ROOF } from './texture-harmonize';
 
-export const SKY_DELIGHT_VERSION = 'sky-delight/1';
+export const SKY_DELIGHT_VERSION = 'sky-delight/2';
 
 export const SKY_DELIGHT_PARAMS = {
     /** Wall sample points (area-weighted), and hemisphere rays at each. */
     samples: 8000, rays: 48,
-    /** A ray that travels this far unblocked sees sky (m); the ray grid's cell (m). */
-    maxRayM: 300, cellM: 2,
+    /** A ray that travels this far unblocked sees sky (m). */
+    maxRayM: 300,
+    /** Rays start this far off the wall, and ignore hits nearer than this along them (m). */
+    rayOffsetM: 0.05,
+    /** Rays pointing lower than this (direction y) are not counted. */
+    minRayDy: -0.02,
     /** A wall: |normal y| under this. */
     wallNy: 0.5,
     /** Samples that see less sky than this are enclosed shells, left out of the fit. */
@@ -70,82 +78,28 @@ export interface SkyDelightReport {
     texels: number; gainMin: number; gainMax: number;
 }
 
-/** The occluders as a flat position array: every triangle of the GLB, and the context's (the neighbours, in the same frame). */
-function allTriangles(g: ParsedGlb, json: any, context?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }): Float64Array {
-    const out: number[] = [];
-    if (context) for (let t = 0; t + 2 < context.indices.length; t += 3) for (let k = 0; k < 3; k++) { const i = context.indices[t + k]; out.push(context.vertices[i * 3], context.vertices[i * 3 + 1], context.vertices[i * 3 + 2]); }
+type Context = { vertices: ArrayLike<number>; indices: ArrayLike<number> };
+
+/** The occluders as one indexed mesh: every triangle of the GLB, and the context's (the neighbours, in the same frame). */
+export function occluderMesh(g: ParsedGlb, json: any, context?: Context): { positions: Float32Array; indices: Uint32Array } {
+    const parts: Array<{ pos: ArrayLike<number>; idx?: ArrayLike<number> }> = [];
+    if (context) parts.push({ pos: context.vertices, idx: context.indices });
     for (const mesh of json.meshes ?? []) for (const prim of mesh.primitives ?? []) {
         if ((prim.mode ?? 4) !== 4 || prim.attributes?.POSITION === undefined) continue;
-        const pos = readAccessor(g, prim.attributes.POSITION).data;
-        const idx = prim.indices !== undefined ? readAccessor(g, prim.indices).data : undefined;
-        const n = idx ? idx.length : pos.length / 3;
-        for (let t = 0; t + 2 < n; t += 3) for (let k = 0; k < 3; k++) { const i = idx ? idx[t + k] : t + k; out.push(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]); }
+        parts.push({ pos: readAccessor(g, prim.attributes.POSITION).data, idx: prim.indices !== undefined ? readAccessor(g, prim.indices).data : undefined });
     }
-    return Float64Array.from(out);
-}
-
-/** A uniform grid over triangles, marched for any hit along a ray. */
-function rayGrid(T: Float64Array, cellM: number) {
-    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-    for (let i = 0; i < T.length; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], T[i + k]); hi[k] = Math.max(hi[k], T[i + k]); }
-    const N = [0, 1, 2].map(k => Math.max(1, Math.ceil((hi[k] - lo[k]) / cellM) + 1));
-    const key = (x: number, y: number, z: number) => (x * N[1] + y) * N[2] + z;
-    const cells = new Map<number, number[]>();
-    for (let t = 0; t < T.length / 9; t++) {
-        const b0 = [0, 1, 2].map(k => Math.floor((Math.min(T[t * 9 + k], T[t * 9 + 3 + k], T[t * 9 + 6 + k]) - lo[k]) / cellM));
-        const b1 = [0, 1, 2].map(k => Math.floor((Math.max(T[t * 9 + k], T[t * 9 + 3 + k], T[t * 9 + 6 + k]) - lo[k]) / cellM));
-        for (let x = b0[0]; x <= b1[0]; x++) for (let y = b0[1]; y <= b1[1]; y++) for (let z = b0[2]; z <= b1[2]; z++) {
-            const c = key(x, y, z), l = cells.get(c);
-            if (l) l.push(t); else cells.set(c, [t]);
-        }
+    let nv = 0, ni = 0;
+    for (const p of parts) { nv += Math.floor(p.pos.length / 3); ni += Math.floor((p.idx ? p.idx.length : p.pos.length / 3) / 3) * 3; }
+    const positions = new Float32Array(nv * 3), indices = new Uint32Array(ni);
+    let v0 = 0, at = 0;
+    for (const p of parts) {
+        const count = Math.floor(p.pos.length / 3);
+        for (let k = 0; k < count * 3; k++) positions[v0 * 3 + k] = p.pos[k];
+        const n = Math.floor((p.idx ? p.idx.length : count) / 3) * 3;
+        for (let k = 0; k < n; k++) indices[at++] = v0 + (p.idx ? p.idx[k] : k);
+        v0 += count;
     }
-    const stamp = new Uint32Array(T.length / 9);
-    let ray = 0;
-    /** Whether the ray from o along unit d hits a triangle within maxT (half-cell steps, Moller-Trumbore). */
-    return (ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxT: number): boolean => {
-        ray++;
-        for (let s = 0; s < maxT; s += cellM * 0.5) {
-            const cx = Math.floor((ox + dx * s - lo[0]) / cellM), cy = Math.floor((oy + dy * s - lo[1]) / cellM), cz = Math.floor((oz + dz * s - lo[2]) / cellM);
-            if (cx < 0 || cy < 0 || cz < 0 || cx >= N[0] || cy >= N[1] || cz >= N[2]) return false;
-            const l = cells.get(key(cx, cy, cz));
-            if (!l) continue;
-            for (const t of l) {
-                if (stamp[t] === ray) continue;
-                stamp[t] = ray;
-                const a = t * 9;
-                const e1x = T[a + 3] - T[a], e1y = T[a + 4] - T[a + 1], e1z = T[a + 5] - T[a + 2], e2x = T[a + 6] - T[a], e2y = T[a + 7] - T[a + 1], e2z = T[a + 8] - T[a + 2];
-                const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x;
-                const det = e1x * px + e1y * py + e1z * pz;
-                if (Math.abs(det) < 1e-12) continue;
-                const inv = 1 / det, tx = ox - T[a], ty = oy - T[a + 1], tz = oz - T[a + 2];
-                const u = (tx * px + ty * py + tz * pz) * inv;
-                if (u < 0 || u > 1) continue;
-                const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x;
-                const v = (dx * qx + dy * qy + dz * qz) * inv;
-                if (v < 0 || u + v > 1) continue;
-                if ((e2x * qx + e2y * qy + e2z * qz) * inv > 0.05) return true;
-            }
-        }
-        return false;
-    };
-}
-
-/** Cosine-weighted sky visibility at a point on the side of unit normal n (rays below the horizon not counted). */
-function skyVisibility(hit: ReturnType<typeof rayGrid>, c: number[], n: number[], P: SkyDelightParams): number {
-    const a = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
-    let ux = n[1] * a[2] - n[2] * a[1], uy = n[2] * a[0] - n[0] * a[2], uz = n[0] * a[1] - n[1] * a[0];
-    const ul = Math.hypot(ux, uy, uz); ux /= ul; uy /= ul; uz /= ul;
-    const wx = n[1] * uz - n[2] * uy, wy = n[2] * ux - n[0] * uz, wz = n[0] * uy - n[1] * ux;
-    const ox = c[0] + n[0] * 0.05, oy = c[1] + n[1] * 0.05, oz = c[2] + n[2] * 0.05;
-    let open = 0, counted = 0;
-    for (let k = 0; k < P.rays; k++) {
-        const r = (k + 0.5) / P.rays, ph = k * 2.39996323, sr = Math.sqrt(r), z = Math.sqrt(1 - r);
-        const dx = ux * sr * Math.cos(ph) + wx * sr * Math.sin(ph) + n[0] * z, dy = uy * sr * Math.cos(ph) + wy * sr * Math.sin(ph) + n[1] * z, dz = uz * sr * Math.cos(ph) + wz * sr * Math.sin(ph) + n[2] * z;
-        if (dy < -0.02) continue;
-        counted++;
-        if (!hit(ox, oy, oz, dx, dy, dz, P.maxRayM)) open++;
-    }
-    return counted ? open / counted : 0;
+    return { positions, indices };
 }
 
 interface WallSample { img: number; c: number[]; V: number; logL: number; }
@@ -165,7 +119,7 @@ function fitSlope(fit: Array<{ r: number; V: number }>): { b: number; mv: number
  * place), measured on the GLB's own triangles and the `context`'s (the tile extraction with its neighbours: the street canyon
  * they make is most of the sky a low wall loses). `masks` (surfaceClassMasks) tells roof texels apart; they keep their colour.
  */
-export function skyDelight(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, masks?: Map<number, Uint8Array>, context?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }, P: SkyDelightParams = SKY_DELIGHT_PARAMS): SkyDelightReport {
+export async function skyDelight(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, masks?: Map<number, Uint8Array>, context?: Context, P: SkyDelightParams = SKY_DELIGHT_PARAMS): Promise<SkyDelightReport> {
     const none = (why: string, extra: Partial<SkyDelightReport> = {}): SkyDelightReport => ({ applied: false, why, withContext: !!context, b: 0, bHalves: [0, 0], heldOutVarianceRemoved: 0, samples: 0, fitted: 0, vRef: 0, texels: 0, gainMin: 1, gainMax: 1, ...extra });
     // the wall triangles with a photo, and their total area
     const walls: Array<{ img: number; p: Float64Array; uv: Float64Array; n: number[]; area: number }> = [];
@@ -179,11 +133,11 @@ export function skyDelight(g: ParsedGlb, json: any, images: Map<number, RgbaImag
         wallArea += l / 2;
     });
     if (!walls.length) return none('no textured walls');
-    const hit = rayGrid(allTriangles(g, json, context), P.cellM);
-    // area-weighted samples at wall centroids (deterministic)
+    // area-weighted samples at wall centroids (deterministic), their sky visibility cast together below
     let seed = 7;
     const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
     const samples: WallSample[] = [];
+    const sides: number[] = [];
     for (const w of walls) {
         if (rnd() >= Math.min(1, P.samples * w.area / wallArea)) continue;
         const img = images.get(w.img)!;
@@ -193,8 +147,13 @@ export function skyDelight(g: ParsedGlb, json: any, images: Map<number, RgbaImag
         const L = 0.2126 * SRGB8_TO_LINEAR[img.rgba[o]] + 0.7152 * SRGB8_TO_LINEAR[img.rgba[o + 1]] + 0.0722 * SRGB8_TO_LINEAR[img.rgba[o + 2]];
         if (!(L > 0.002)) continue;
         const c = [(w.p[0] + w.p[3] + w.p[6]) / 3, (w.p[1] + w.p[4] + w.p[7]) / 3, (w.p[2] + w.p[5] + w.p[8]) / 3];
-        const V = Math.max(skyVisibility(hit, c, w.n, P), skyVisibility(hit, c, w.n.map(k => -k), P));
-        samples.push({ img: w.img, c, V, logL: Math.log(L) });
+        sides.push(c[0], c[1], c[2], w.n[0], w.n[1], w.n[2], c[0], c[1], c[2], -w.n[0], -w.n[1], -w.n[2]);
+        samples.push({ img: w.img, c, V: 0, logL: Math.log(L) });
+    }
+    if (samples.length) {
+        const { positions, indices } = occluderMesh(g, json, context);
+        const { visibility } = await runSkyVisibility({ positions, indices, samples: Float32Array.from(sides), rays: P.rays, maxRayM: P.maxRayM, originOffsetM: P.rayOffsetM, minHitM: P.rayOffsetM, minDirY: P.minRayDy });
+        samples.forEach((s, i) => { s.V = Math.max(visibility[2 * i], visibility[2 * i + 1]); });
     }
     const open = samples.filter(s => s.V >= P.minV);
     // each photo's own mean taken out (its exposure), over the samples that are fitted
@@ -242,7 +201,7 @@ export function skyDelight(g: ParsedGlb, json: any, images: Map<number, RgbaImag
         const img = images.get(w.img)!, W = img.width, H = img.height;
         let gm = gains.get(w.img);
         if (!gm) { gm = new Float32Array(W * H); gains.set(w.img, gm); }
-        const gv = [0, 1, 2].map(k => Math.exp(-b * (Math.max(P.minV, vAt(w.p[k * 3], w.p[k * 3 + 1], w.p[k * 3 + 2])) - vRef)));
+        const gv = [0, 1, 2].map(k => Math.exp(b * (Math.max(P.minV, vAt(w.p[k * 3], w.p[k * 3 + 1], w.p[k * 3 + 2])) - vRef)));
         const ax = w.uv[0] * W, ay = w.uv[1] * H, bx = w.uv[2] * W, by = w.uv[3] * H, cx = w.uv[4] * W, cy = w.uv[5] * H;
         const den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
         if (Math.abs(den) < 1e-12) continue;

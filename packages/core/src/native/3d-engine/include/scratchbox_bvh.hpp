@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <limits>
 #include <random>
+#include <atomic>
+#include <thread>
 
 namespace scratchbox {
 namespace bvh {
@@ -570,6 +572,62 @@ inline void bakeMeshRTAO(
         mesh.vertices[i].color.y *= occ;
         mesh.vertices[i].color.z *= occ;
     }
+}
+
+// ============================================================================
+// 4. COSINE-WEIGHTED SKY VISIBILITY AT POINTS
+// ============================================================================
+struct SkyVisibilityParams {
+    /** Rays per point, on a cosine-weighted Fibonacci spiral over the hemisphere of its normal (deterministic). */
+    int rays{48};
+    /** A ray unblocked this far sees sky (m). */
+    float maxDistance{300.0f};
+    /** The ray starts this far off the surface along the normal (m). */
+    float originOffset{0.05f};
+    /** Hits nearer than this along the ray are ignored (m): the surface's own neighbours at the origin. */
+    float minHit{0.05f};
+    /** Rays pointing lower than this (direction y) are not counted: below the horizon the sky is the ground's. */
+    float minDirY{-0.02f};
+};
+
+/**
+ * The share of a point's counted rays that leave the scene unblocked, looking from the side of unit normal `n`; 0 when no
+ * ray is counted. Ray k of K: r = (k + 0.5) / K, phase k x the golden angle, direction sqrt(r) (cos, sin) in the tangent
+ * plane plus sqrt(1 - r) along n, the tangent frame from n x (1,0,0), or n x (0,1,0) when |n.x| >= 0.9.
+ */
+inline float skyVisibilityAt(const BvhTree& bvh, const Vec3& p, const Vec3& n, const SkyVisibilityParams& P) {
+    const Vec3 a = std::abs(n.x) < 0.9f ? Vec3(1, 0, 0) : Vec3(0, 1, 0);
+    const Vec3 u = n.cross(a).normalized();
+    const Vec3 w = n.cross(u);
+    const Vec3 o = p + n * P.originOffset;
+    int open = 0, counted = 0;
+    for (int k = 0; k < P.rays; ++k) {
+        const double r = (k + 0.5) / P.rays, ph = k * 2.39996323, sr = std::sqrt(r), z = std::sqrt(1.0 - r);
+        const Vec3 d = u * static_cast<float>(sr * std::cos(ph)) + w * static_cast<float>(sr * std::sin(ph)) + n * static_cast<float>(z);
+        if (d.y < P.minDirY) continue;
+        ++counted;
+        const Ray ray(o + d * P.minHit, d);
+        if (!bvh.raycastAny(ray, P.maxDistance - P.minHit)) ++open;
+    }
+    return counted ? static_cast<float>(open) / static_cast<float>(counted) : 0.0f;
+}
+
+/** skyVisibilityAt for every (point, normal) pair, on `threads` threads (0: all cores). */
+inline std::vector<float> skyVisibility(const BvhTree& bvh, const std::vector<Vec3>& points, const std::vector<Vec3>& normals,
+                                        const SkyVisibilityParams& P, unsigned threads = 0) {
+    std::vector<float> v(points.size(), 0.0f);
+    if (points.size() != normals.size()) return v;
+    if (threads == 0) threads = std::max(1u, std::thread::hardware_concurrency());
+    std::atomic<size_t> next{0};
+    auto work = [&] {
+        for (size_t i; (i = next.fetch_add(64)) < points.size();)
+            for (size_t j = i; j < std::min(points.size(), i + 64); ++j) v[j] = skyVisibilityAt(bvh, points[j], normals[j], P);
+    };
+    std::vector<std::thread> pool;
+    for (unsigned t = 1; t < threads; ++t) pool.emplace_back(work);
+    work();
+    for (auto& t : pool) t.join();
+    return v;
 }
 
 } // namespace bvh

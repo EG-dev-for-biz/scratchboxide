@@ -46,7 +46,8 @@ describe('the wall grammar', () => {
             covered[k] = 1;
             const inBay = u % 6 >= 1 && u % 6 < 5, band = yy >= 14 && yy < 17, mullion = u % 6 >= 2.7 && u % 6 < 3.3;
             lum[k] = inBay && !band ? 60 : 190;
-            if (inBay && !band && !mullion && yy % 3.5 >= 1 && yy % 3.5 < 2.8) window[k] = 1;
+            // the window fit reads each bay as one strip, spandrels and all (a stack of punched windows is the test below)
+            if (inBay && !band && !mullion) window[k] = 1;
         }
         const e: WallEvidence = { u0: 0, y0: 0, nu, ny, cellM, covered, window, lum };
         const { bays } = readWallBays(e);
@@ -98,6 +99,24 @@ describe('the wall grammar', () => {
         expect(cols).toContain('19-23');
         expect(cols).toContain('7-11');
         expect(bays.every(b => b.u1 - b.u0 < 6)).toBe(true);
+    });
+
+    it('draws no bay over a stack of punched windows in shaded stone, and keeps a strip whose spandrels hold no windows but are no stone', () => {
+        // columns 2 m wide every 4 m, 30 m tall; storeys 3.5 m: windows 2 m tall. The wall is in shade, stone as dark as the
+        // glass, so light cannot tell them apart; on the left (u < 20) the window fit leaves the 1.5 m of stone between
+        // storeys empty (punched windows), on the right it reads each column as one strip
+        const cellM = 0.1, nu = 400, ny = 300;
+        const covered = new Uint8Array(nu * ny).fill(1), window = new Uint8Array(nu * ny), lum = new Float32Array(nu * ny);
+        for (let y = 0; y < ny; y++) for (let x = 0; x < nu; x++) {
+            const u = x * cellM, h = y * cellM, k = y * nu + x, inCol = u % 4 >= 1 && u % 4 < 3;
+            lum[k] = inCol ? 70 : 180;
+            if (inCol && (u >= 20 || h % 3.5 < 2)) window[k] = 1;
+        }
+        const { bays } = readWallBays({ u0: 0, y0: 0, nu, ny, cellM, covered, window, lum });
+        expect(bays.filter(b => b.u0 < 20)).toHaveLength(0);
+        const right = bays.filter(b => b.u0 >= 20);
+        expect(right.length).toBe(5);
+        expect(right.every(b => b.y1 - b.y0 > 25)).toBe(true);
     });
 
     it('lays a wall of two overlapping facades on one sheet: one photo from both, their windows carried, the gap filled and marked', () => {

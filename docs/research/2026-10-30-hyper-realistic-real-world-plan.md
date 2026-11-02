@@ -89,6 +89,11 @@ San Francisco and Los Angeles (user choice, 2026-10-30; the specific places are 
 | Dolores Park, San Francisco | A sloping lawn, palms, and the skyline as far field |
 | Griffith Observatory, Los Angeles | Hillside, with the horizon across the basin |
 
+District tests (the neighbours as massing, as the cleaned scan or as kd) run at one place, Penn Station at 7th Avenue
+and West 32nd Street, Manhattan, with Penn 2 (2 Penn Plaza) as the target (user decision, 2026-10-31). They do not run
+at every benchmark place. From that corner, one view shows the Chase sign on Penn 2's facade, and another looks up 7th
+Avenue to Primark and Macy's.
+
 Each milestone's exit runs only at the places where its gap shows, so that fresh builds stay affordable.
 `GeometricComplexityGate` is not a measure here, because measured geometry is exempt from it. *Exit:* today's two modes
 scored at every place, repeatably within the judge's spread. This also provides the real-place judging pass SB-Roadie
@@ -97,7 +102,8 @@ is waiting for.
 **M2: One build, the hero in its place.** A build that runs K's isolate pipeline on the chosen structure and the
 non-isolate surroundings, in one run and one frame:
 - Surroundings: the tiles with vehicles removed and trees measured and regrown. The neighbours come from district
-  massing or from the cleaned scan; both run as arms in M1 and the judge decides (user decision, 2026-10-30).
+  massing, from the cleaned scan, or from kd (K over the whole district, on `feat/pipeline-kd`). All three run as arms
+  in M1 at the district test place, and the judge decides (user decisions, 2026-10-30 and 2026-10-31).
 - The context loses everything inside the hero's footprint plus 0.3 m (the same clip as K's `clipToFootprint`), so the
   hero and the scan never overlap. Check where the hero meets its neighbours: K draws no party wall.
 - K's base cleanup removes the street and expects the scene's ground to stand in. Here the procedural ground supplies
@@ -181,6 +187,10 @@ Made (2026-10-30):
 - No building or tree inside a district is cut by its edge (M2a).
 - Benchmarks in Manhattan, San Francisco and Los Angeles.
 - No street furniture in v1.
+
+Made (2026-10-31):
+- kd joins massing and the cleaned scan as a neighbours arm. The rebuilt district is not judged in the first run.
+- Every district test runs at Penn Station, 7th Avenue and West 32nd Street, with Penn 2 as the target.
 
 Still open:
 1. The far-field LOD ring (M8.1), as an exception to the deepest-leaf rule.

@@ -1,0 +1,390 @@
+{
+  "title": "Empire State Building, 350 5th Ave, New York, NY 10118, USA — build stages",
+  "subtitle": "Run b53d1645 (interrupted): 13 stages, 11 stopped, 2 committed. Stages are read-only; the build node re-runs the whole build.",
+  "nodes": [
+    {
+      "id": "staged-build",
+      "label": "Build: Empire State Building, 350 5th Ave, New York, NY 10118, USA",
+      "subtitle": "google_3d_tiles_get_clay",
+      "category": "tool",
+      "color": "cyan",
+      "x": 60,
+      "y": 120,
+      "status": "running",
+      "notes": "Run b53d1645, interrupted. Re-running builds the place again into this scene with the same query; the run's other options are not in the scene record.",
+      "parameters": {
+        "toolName": "google_3d_tiles_get_clay",
+        "toolArgs": {
+          "query": "Empire State Building, 350 Fifth Avenue, New York",
+          "isolate": true,
+          "stageIntoActiveScene": true
+        },
+        "targetArtifactId": "scene-stg-b53d1645"
+      },
+      "outputData": {
+        "resultPayload": {
+          "runId": "b53d1645",
+          "runState": "running",
+          "resolvedAddress": "Empire State Building, 350 5th Ave, New York, NY 10118, USA",
+          "lat": 40.748545,
+          "lng": -73.985763
+        },
+        "recorded": true
+      }
+    },
+    {
+      "id": "stage-survey",
+      "label": "Surveying the four faces",
+      "subtitle": "survey",
+      "category": "stage",
+      "color": "rose",
+      "x": 360,
+      "y": 60,
+      "status": "error",
+      "details": "Status: stopped",
+      "parameters": {
+        "stage": "survey",
+        "status": "stopped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-evidence",
+      "label": "Street View close-ups",
+      "subtitle": "evidence",
+      "category": "stage",
+      "color": "rose",
+      "x": 360,
+      "y": 260,
+      "status": "error",
+      "details": "Status: stopped",
+      "parameters": {
+        "stage": "evidence",
+        "status": "stopped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-trees-measure",
+      "label": "Measuring the trees",
+      "subtitle": "trees-measure",
+      "category": "stage",
+      "color": "rose",
+      "x": 360,
+      "y": 460,
+      "status": "error",
+      "details": "Status: stopped",
+      "parameters": {
+        "stage": "trees-measure",
+        "status": "stopped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-ownership",
+      "label": "Ownership vote",
+      "subtitle": "ownership",
+      "category": "stage",
+      "color": "rose",
+      "x": 360,
+      "y": 660,
+      "status": "error",
+      "details": "Status: stopped",
+      "parameters": {
+        "stage": "ownership",
+        "status": "stopped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-textures",
+      "label": "Real textures",
+      "subtitle": "textures",
+      "category": "stage",
+      "color": "rose",
+      "x": 360,
+      "y": 860,
+      "status": "error",
+      "details": "Status: stopped",
+      "parameters": {
+        "stage": "textures",
+        "status": "stopped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-textures-late",
+      "label": "Real textures of later layers",
+      "subtitle": "textures-late",
+      "category": "stage",
+      "color": "rose",
+      "x": 360,
+      "y": 1060,
+      "status": "error",
+      "details": "Status: stopped",
+      "parameters": {
+        "stage": "textures-late",
+        "status": "stopped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-remesh",
+      "label": "Remeshed scan",
+      "subtitle": "remesh",
+      "category": "stage",
+      "color": "rose",
+      "x": 940,
+      "y": 60,
+      "status": "error",
+      "details": "Status: stopped",
+      "parameters": {
+        "stage": "remesh",
+        "status": "stopped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-massing",
+      "label": "Rebuilt buildings",
+      "subtitle": "massing",
+      "category": "stage",
+      "color": "rose",
+      "x": 940,
+      "y": 260,
+      "status": "error",
+      "details": "Status: stopped",
+      "parameters": {
+        "stage": "massing",
+        "status": "stopped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-grammar",
+      "label": "Facade grammar",
+      "subtitle": "grammar",
+      "category": "stage",
+      "color": "rose",
+      "x": 940,
+      "y": 460,
+      "status": "error",
+      "details": "Status: stopped",
+      "parameters": {
+        "stage": "grammar",
+        "status": "stopped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-relief",
+      "label": "Measured relief",
+      "subtitle": "relief",
+      "category": "stage",
+      "color": "rose",
+      "x": 940,
+      "y": 660,
+      "status": "error",
+      "details": "Status: stopped",
+      "parameters": {
+        "stage": "relief",
+        "status": "stopped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-trees",
+      "label": "Trees",
+      "subtitle": "trees",
+      "category": "stage",
+      "color": "rose",
+      "x": 1230,
+      "y": 60,
+      "status": "error",
+      "details": "Status: stopped",
+      "parameters": {
+        "stage": "trees",
+        "status": "stopped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-resolve",
+      "label": "Place",
+      "subtitle": "Empire State Building, 350 5th Ave, New York, NY 10118, USA",
+      "category": "stage",
+      "color": "emerald",
+      "x": 360,
+      "y": 1260,
+      "status": "completed",
+      "executionDurationMs": 367,
+      "details": "Status: committed\nTime: 0.4 s",
+      "parameters": {
+        "stage": "resolve",
+        "status": "committed",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-tiles",
+      "label": "Google 3D Tiles",
+      "subtitle": "176 leaf tiles within 94 m (sized to the structure: 94 m, 2 rounds)",
+      "category": "stage",
+      "color": "emerald",
+      "x": 650,
+      "y": 60,
+      "status": "completed",
+      "executionDurationMs": 7712,
+      "details": "Status: committed\nTime: 7.7 s\nLayers: 1",
+      "parameters": {
+        "stage": "tiles",
+        "status": "committed",
+        "layers": 1,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "scene-output",
+      "label": "Output: viewport",
+      "subtitle": "1 layer in the scene",
+      "category": "output",
+      "color": "emerald",
+      "x": 1520,
+      "y": 120,
+      "status": "completed",
+      "details": "tiles: l1",
+      "parameters": {
+        "output": true,
+        "finalObjectIds": [
+          "stg-2f18e3fd-l1"
+        ],
+        "readOnly": true
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-build-stage-survey",
+      "source": "staged-build",
+      "target": "stage-survey",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-evidence",
+      "source": "staged-build",
+      "target": "stage-evidence",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-trees-measure",
+      "source": "staged-build",
+      "target": "stage-trees-measure",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-ownership",
+      "source": "staged-build",
+      "target": "stage-ownership",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-textures",
+      "source": "staged-build",
+      "target": "stage-textures",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-textures-late",
+      "source": "staged-build",
+      "target": "stage-textures-late",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-remesh",
+      "source": "staged-build",
+      "target": "stage-remesh",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-massing",
+      "source": "staged-build",
+      "target": "stage-massing",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-grammar",
+      "source": "staged-build",
+      "target": "stage-grammar",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-relief",
+      "source": "staged-build",
+      "target": "stage-relief",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-trees",
+      "source": "staged-build",
+      "target": "stage-trees",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-resolve",
+      "source": "staged-build",
+      "target": "stage-resolve",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-tiles",
+      "source": "staged-build",
+      "target": "stage-tiles",
+      "style": "dashed"
+    },
+    {
+      "id": "e-out-tiles",
+      "source": "stage-tiles",
+      "target": "scene-output",
+      "label": "final layer",
+      "style": "solid"
+    }
+  ]
+}

@@ -182,6 +182,15 @@ import { bakeSpecularMaterials } from '../../spatial/specular-material-bake';
 import { prepareTextureSources, type TextureSources, type TextureSourcesInput } from './texture-sources';
 import { ownershipChange, OWNERSHIP_MATERIAL_SHARE } from './ownership-change';
 import { SKY_DELIGHT_VERSION } from './pipeline-k/sky-delight';
+import { VIEW_RELIGHT_VERSION, viewRelightEnvParams } from './pipeline-k/view-relight';
+import { ROOF_SHADOW_VERSION, roofShadowAuditPng } from './pipeline-k/roof-shadow';
+import { shadowLiftQaPng } from './pipeline-k/shadow-lift-qa';
+import { FACADE_READER_MODEL, FACADE_READER_PARAMS, FACADE_READER_VERSION, parseJudgement, parseReading, parseZones, type FacadeAsk } from './pipeline-k/facade-reader';
+import { parseBrief } from './pipeline-k/facade-reader-brief';
+import { readOnTwin, TWIN_READER_VERSION } from './pipeline-k/twin-reader';
+import { CHOICE_SPAN_M, candidateSheetPng, choicePrompt, MATERIAL_CHOICE_VERSION, parseChoices, type ChoiceRow, type SetChoice } from './pipeline-k/material-choice';
+import { betweenSeen, glassSeen, MATERIAL_NAMING_VERSION, namingPrompt, parseClassWords } from './pipeline-k/material-naming';
+import type { FacadeReadRecord } from './pipeline-k/facade-reader';
 import { tileRefineTwin, TILE_REFINE_TWIN_VERSION, type TileRefineTwin } from './tile-refine-twin';
 import { maskTemporaryInViews, textureTemporaryEnabled, visionTemporaryChecker, TEMPORARY_CHECK_VERSION } from './temporary-structures';
 import { objectSegmenter, ownViews, OWNERSHIP_VERSION, type OwnershipSegmenter } from './streetview-ownership';
@@ -200,15 +209,6 @@ import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party
 import { detailBakeProvenance, TILE_DETAIL_BAKE_VERSION, type TileDetailBakeReport } from '../../spatial/tile-detail-bake';
 import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visible-defects';
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
-import { VIEW_RELIGHT_VERSION, viewRelightEnvParams } from './pipeline-k/view-relight';
-import { ROOF_SHADOW_VERSION, roofShadowAuditPng } from './pipeline-k/roof-shadow';
-import { FACADE_READER_MODEL, FACADE_READER_PARAMS, FACADE_READER_VERSION, parseJudgement, parseReading, parseZones, type FacadeAsk } from './pipeline-k/facade-reader';
-import { parseBrief } from './pipeline-k/facade-reader-brief';
-import { readOnTwin, TWIN_READER_VERSION } from './pipeline-k/twin-reader';
-import { CHOICE_SPAN_M, candidateSheetPng, choicePrompt, MATERIAL_CHOICE_VERSION, parseChoices, type ChoiceRow, type SetChoice } from './pipeline-k/material-choice';
-import { betweenSeen, glassSeen, MATERIAL_NAMING_VERSION, namingPrompt, parseClassWords } from './pipeline-k/material-naming';
-import type { FacadeReadRecord } from './pipeline-k/facade-reader';
-import { shadowLiftQaPng } from './pipeline-k/shadow-lift-qa';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
 import { PROJECT_MAX_RELIEF_M, pipelineIRefineEnabled, refinePipelineI, type RefineOutcome } from './pipeline-i/refine';
@@ -2757,7 +2757,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     return picks;
                 } : undefined;
                 const grammarFile = kOrthos ? path.join(kOrthos, WALL_GRAMMAR_FILE) : undefined;
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '', readerAsk ? `${FACADE_READER_VERSION}:${TWIN_READER_VERSION}:${JSON.stringify(FACADE_READER_PARAMS)}` : '', nameClasses ? MATERIAL_NAMING_VERSION : '', chooseSets ? MATERIAL_CHOICE_VERSION : '');
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', readerAsk ? `${FACADE_READER_VERSION}:${TWIN_READER_VERSION}:${JSON.stringify(FACADE_READER_PARAMS)}` : '', nameClasses ? MATERIAL_NAMING_VERSION : '', chooseSets ? MATERIAL_CHOICE_VERSION : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions']; materialClasses?: TileRefineTwin['materialClasses'] }>('textures', key, async dir => {
                     const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0, ...(process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' && extraction.geometryGlb && fs.existsSync(extraction.geometryGlb) ? { skyContext: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)) } : {}) } } : {}), ...(relightClient ? { viewRelight: { client: relightClient, models: lightingModels(), params: viewRelightEnvParams().params, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`) } } : {}), ...roofShadowOpts, ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m), ...(chooseSets && swatches ? { choose: (rows: ChoiceRow[]) => chooseSets(rows, swatches) } : {}) }), planes, ...(planesFor ? { planesFor } : {}), ...(nameClasses ? { nameClasses } : {}) } } : {}) } : enhance || roofShadowOn ? {
                         ...(enhance ? { recreate: {
@@ -2769,6 +2769,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         ...(roofShadowOn ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => { if (step === 'roofShadow') logStep(`twin.${step}`, state); } } : {})
                     } : undefined);
                     if (twin.harmonize) cache.writeRunNote(runId, 'pipeline_k_texture', { version: TEXTURE_HARMONIZE_VERSION, layer: target.layer.layer, ...twin.harmonize });
+                    if (twin.skyDelight) cache.writeRunNote(runId, 'pipeline_k_sky_delight', { version: SKY_DELIGHT_VERSION, layer: target.layer.layer, ...twin.skyDelight });
                     if (twin.viewRelight) cache.writeRunNote(runId, 'pipeline_k_view_relight', { version: VIEW_RELIGHT_VERSION, layer: target.layer.layer, ...twin.viewRelight });
                     if (twin.roofShadow) {
                         // the audit from above beside the twin (run notes hold no images); the note names it
@@ -2777,13 +2778,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         if (auditGrid && auditPng) fs.writeFileSync(auditPng, roofShadowAuditPng(auditGrid));
                         // the stage writes into <entry>.tmp-<pid>-<hex>, renamed to <entry> when it finishes: the note names the entry
                         const auditFinal = auditPng ? path.join(dir.replace(/\.tmp-\d+-[0-9a-f]+$/, ''), 'roof_shadow_topdown.png') : undefined;
+                        if (auditFinal) io.progress(`textures: the roof shadow lift seen from above (green lifted, orange rejected, magenta no sun, grey lit): ${auditFinal}`);
                         if (twin.roofShadowQa) {
                             // the lift judged from above (halos, lifts on lit surfaces, seams), its picture beside the audit
                             const { grid, ...qa } = twin.roofShadowQa;
                             if (grid) fs.writeFileSync(path.join(dir, 'roof_shadow_qa.png'), shadowLiftQaPng(grid));
                             cache.writeRunNote(runId, 'roof_shadow_qa', { layer: target.layer.layer, ...(grid ? { png: path.join(dir.replace(/\.tmp-\d+-[0-9a-f]+$/, ''), 'roof_shadow_qa.png') } : {}), ...qa });
                         }
-                        if (auditFinal) io.progress(`textures: the roof shadow lift seen from above (green lifted, orange rejected, magenta no sun, grey lit): ${auditFinal}`);
                         cache.writeRunNote(runId, 'roof_shadow', { version: ROOF_SHADOW_VERSION, layer: target.layer.layer, ...(auditGrid && auditFinal ? { auditPng: auditFinal, auditGrid: { cellM: auditGrid.cellM, x0: auditGrid.x0, z0: auditGrid.z0, w: auditGrid.w, h: auditGrid.h } } : {}), ...note });
                     }
                     // pipeline K: the party wall (a wall the scan lacks, base-cleanup.ts) drawn as the building's masonry continued, by the image model

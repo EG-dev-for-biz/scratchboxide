@@ -1,0 +1,43 @@
+{
+  "title": "Empire State Building, 350 5th Ave, New York, NY 10118, USA (staged clay) — tool calls",
+  "subtitle": "1 tool call from the chat, as runnable nodes",
+  "nodes": [
+    {
+      "id": "call-1-google_3d_tiles_get_clay",
+      "label": "1. Google 3d tiles get clay",
+      "subtitle": "google_3d_tiles_get_clay",
+      "category": "tool",
+      "color": "cyan",
+      "x": 135,
+      "y": -285,
+      "status": "completed",
+      "executionDurationMs": 875008,
+      "parameters": {
+        "toolName": "google_3d_tiles_get_clay",
+        "toolArgs": {
+          "query": "Empire State Building, 350 Fifth Avenue, New York",
+          "resumeRunId": "5cbb8e3e"
+        }
+      },
+      "outputData": {
+        "resultPayload": {
+          "success": true,
+          "status": "complete",
+          "digest": "Staged build complete: resolve, tiles, survey, remesh, ownership, textures, textures-late committed; retry retryRunId ac8fcb21.",
+          "mode": "clay",
+          "resolvedAddress": "Empire State Building, 350 5th Ave, New York, NY 10118, USA",
+          "glbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/empire_state_building_350_5th_ave_new_yo_40.74855_-73.98576_r94_textured.glb",
+          "groundGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/.scratchbox/cache/tile_refine/e4a49c4a8828796e326b3781d3c3dd6bd170060d98c6d5af60591e9961370de1/polish/ba97aa82f524008f/clay.glb",
+          "degradations": []
+        },
+        "summary": "Staged build complete: resolve, tiles, survey, remesh, ownership, textures, textures-late committed; retry retryRunId ac8fcb21.",
+        "recorded": true,
+        "recordedArgs": {
+          "query": "Empire State Building, 350 Fifth Avenue, New York",
+          "resumeRunId": "5cbb8e3e"
+        }
+      }
+    }
+  ],
+  "edges": []
+}

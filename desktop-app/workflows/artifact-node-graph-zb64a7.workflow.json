@@ -1,0 +1,110 @@
+{
+  "title": "Empire State Building, 350 5th Ave, New York, NY 10118, USA (staged clay) — tool calls",
+  "subtitle": "3 tool calls from the chat, as runnable nodes",
+  "nodes": [
+    {
+      "id": "call-1-load_skill",
+      "label": "1. Load skill",
+      "subtitle": "load_skill",
+      "category": "tool",
+      "color": "cyan",
+      "x": -109,
+      "y": 76,
+      "status": "completed",
+      "executionDurationMs": 7,
+      "parameters": {
+        "toolName": "load_skill",
+        "toolArgs": {
+          "name": "staged-location-build"
+        }
+      },
+      "outputData": {
+        "resultPayload": {
+          "name": "staged-location-build",
+          "files": []
+        },
+        "summary": "Loaded skill \"staged-location-build\".",
+        "recorded": true,
+        "recordedArgs": {
+          "name": "staged-location-build"
+        }
+      }
+    },
+    {
+      "id": "call-2-google_3d_tiles_get_clay",
+      "label": "2. Google 3d tiles get clay",
+      "subtitle": "google_3d_tiles_get_clay",
+      "category": "tool",
+      "color": "cyan",
+      "x": 237,
+      "y": 78,
+      "status": "completed",
+      "executionDurationMs": 311374,
+      "parameters": {
+        "toolName": "google_3d_tiles_get_clay",
+        "toolArgs": {
+          "isolate": true,
+          "query": "Empire State Building, 350 Fifth Avenue, New York",
+          "pipeline": "k"
+        }
+      },
+      "outputData": {
+        "resultPayload": {
+          "success": true,
+          "status": "degraded",
+          "digest": "Staged build degraded: resolve, tiles, survey committed; remesh fell to the raw scan with its facades flattened, its scanned trees kept in it (remesh_failed); retry retryRunId 7e4bd290 stage remesh.",
+          "mode": "clay",
+          "resolvedAddress": "Empire State Building, 350 5th Ave, New York, NY 10118, USA",
+          "glbPath": "/Users/eligreen/dev/scratchbox-ide-master/public/models/empire_state_building_350_5th_ave_new_yo_40.74855_-73.98576_r94_textured.glb",
+          "groundGlbPath": "/Users/eligreen/dev/scratchbox-ide-master/.scratchbox/cache/scan_fit/662a398731402e217f2598c4a587d6593e6721dab589d3cfbf744ecfae2f6fb0/flattened.glb"
+        },
+        "summary": "Staged build degraded: resolve, tiles, survey committed; remesh fell to the raw scan with its facades flattened, its scanned trees kept in it (remesh_failed); retry retryRunId 7e4bd290 stage remesh.",
+        "recorded": true,
+        "recordedArgs": {
+          "isolate": true,
+          "query": "Empire State Building, 350 Fifth Avenue, New York",
+          "pipeline": "k"
+        }
+      }
+    },
+    {
+      "id": "call-3-atmosphere_configure_scene",
+      "label": "3. Atmosphere configure scene",
+      "subtitle": "atmosphere_configure_scene",
+      "category": "tool",
+      "color": "cyan",
+      "x": 530,
+      "y": 83,
+      "status": "completed",
+      "executionDurationMs": 20,
+      "parameters": {
+        "toolName": "atmosphere_configure_scene",
+        "toolArgs": {
+          "preset": "afternoon"
+        }
+      },
+      "outputData": {
+        "resultPayload": {
+          "success": true,
+          "applied": true,
+          "appliedTo": "scene-stg-7e4bd290",
+          "operators": [
+            "sb_set_diurnal_time_of_day",
+            "sb_configure_atmospheric_scattering"
+          ],
+          "sunSource": "preset afternoon",
+          "phase": "Afternoon",
+          "kelvinTemperature": 4957,
+          "castShadows": true,
+          "shadowRadiusMeters": 322.27956995828947
+        },
+        "summary": "Applied to the active 3D scene \"Empire State Building, 350 5th Ave, New York, NY 10118, USA (staged clay)\": sun elevation 48.0°, azimuth 215.0° (preset afternoon), Afternoon, 4957 K; a directional sun casting shadows over 322 m around the scene's centre, the physical sky dome and the hemisphere ambient of that sun, no optional layers. The studio light rig is replaced by this sun.",
+        "recorded": true,
+        "recordedArgs": {
+          "preset": "afternoon"
+        }
+      }
+    }
+  ],
+  "edges": []
+}

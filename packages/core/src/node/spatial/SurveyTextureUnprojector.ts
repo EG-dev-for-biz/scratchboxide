@@ -14,7 +14,7 @@ import { stationToPinhole, cameraBasis, type PinholeIntrinsics } from '../../com
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import { SurveyStationRenderService, EMPTY_DEPTH, solarAtUtcInstant } from './SurveyStationRenderService';
 import { BeautifyStationService, describeStationImageSource, type StationImageGenerator, type BeautifyStationResult } from './BeautifyStationService';
-import { GeneratorFailedError, MissingInputError } from '../../common/errors/pipeline-errors';
+import { GeneratorFailedError, MediaModelUnavailableError, MissingInputError } from '../../common/errors/pipeline-errors';
 import type { StationBeautifyContext } from '../../browser/generative-canvas/services/location-beautify-service';
 import { AlgorithmicUvEngine, type PbrDecompositionOptions, type PbrDecompositionResult } from './AlgorithmicUvEngine';
 import { MaxRectsAtlasPacker, type TextureItem } from './TextureAtlasPacker';
@@ -171,6 +171,11 @@ export interface RejectedStation {
     imageSource: string;
 }
 
+/** Tries per station when the image model answers with no image (an empty STOP, a blocked prompt). */
+export const EMPTY_IMAGE_ATTEMPTS = 2;
+/** The image service's reasons for an answer without an image (google-media-generation-service.ts). */
+const NO_IMAGE_REASON = /returned no image|Safety filter blocked/i;
+
 /** What unobserved texels are filled with: one sRGB colour, or a same-UV-space RGBA image at the atlas size. */
 export type UnobservedTexelFill = { rgb: [number, number, number] } | { rgba: Buffer | Uint8Array };
 
@@ -234,6 +239,8 @@ export interface SurveyTextureResult {
     rejectedStations: RejectedStation[];
     /** Covered texels no station observed; they keep the mesh's own colour. */
     unobservedTexels: number;
+    /** Primitives left with their own material (e.g. no TEXCOORD_0 to bake into). */
+    untexturedPrimitives: UntexturedPrimitive[];
 }
 
 export interface SurveyTexturePipelineRequest {
@@ -262,6 +269,19 @@ export interface MeshPrimitiveData {
     uvs: Float32Array;
     indices: Uint32Array;
     materialIndex?: number;
+    /** Where the primitive sits in the GLB (meshes[meshIndex].primitives[primIndex]). */
+    meshIndex?: number;
+    primIndex?: number;
+    /** False when the GLB gives it no TEXCOORD_0 and `uvs` were synthesised here (they are not written back). */
+    hasOwnUvs?: boolean;
+}
+
+/** A primitive the survey bake left as it was, and why. */
+export interface UntexturedPrimitive {
+    meshIndex: number;
+    primitiveIndex: number;
+    meshName?: string;
+    reason: string;
 }
 
 /**
@@ -324,9 +344,9 @@ export class SurveyTextureUnprojector {
     ): Promise<SurveyTextureResult> {
         const startTime = performance.now();
         const glbBuffer = await fs.readFile(request.glbPath);
-        // The texture is baked into the mesh's own UVs, so a mesh without them is refused before any station image
-        // is generated: UVs made up here would not be in the written GLB, and the texture could not show.
-        this.requireOwnUvs(glbBuffer, request.glbPath);
+        // The texture is baked into the mesh's own UVs: a primitive without them keeps its material and is reported
+        // (UVs made up here would not be in the written GLB), and a mesh with none is refused before any station image.
+        const untexturedPrimitives = this.primitivesWithoutUvs(glbBuffer, request.glbPath);
         const options = request.options || {};
         const isDraft = options.draft === true;
         const defaultResolution = options.resolution;
@@ -397,8 +417,9 @@ export class SurveyTextureUnprojector {
         const bakeStart = request.precomputedPlates && request.precomputedPlates.length > 0 ? 0 : 0.6;
         for (let i = 0; i < primitives.length; i++) {
             throwIfStopped(request.signal);
-            request.onProgress?.(`Baking texture ${i + 1}/${primitives.length}`, bakeStart + (1 - bakeStart) * (i / primitives.length));
             const prim = primitives[i];
+            if (prim.hasOwnUvs === false) continue;
+            request.onProgress?.(`Baking texture ${i + 1}/${primitives.length}`, bakeStart + (1 - bakeStart) * (i / primitives.length));
             let primW: number;
             let primH: number;
             if (options.resolutionScale !== undefined) {
@@ -440,7 +461,8 @@ export class SurveyTextureUnprojector {
         for (const sub of submeshResults) {
             totalCoveredTexels += sub.metrics.coveredMeshTexels;
             totalPaintedTexels += sub.metrics.directlyPaintedTexels;
-            totalTexelArea += sub.resolution * sub.resolution;
+            // width x height: an atlas sized from a non-square source texture is not resolution squared
+            totalTexelArea += (sub.width ?? sub.resolution) * (sub.height ?? sub.resolution);
             for (const sc of sub.metrics.stationContributions) {
                 mergedStationTexels.set(sc.stationId, (mergedStationTexels.get(sc.stationId) || 0) + sc.texelCount);
             }
@@ -483,7 +505,8 @@ export class SurveyTextureUnprojector {
             modelsUsed: Array.from(new Set(plates.map(p => p.modelUsed).filter((m): m is string => !!m))),
             imageSources: Array.from(new Set(plates.map(p => p.imageSource).filter((m): m is string => !!m))),
             rejectedStations,
-            unobservedTexels: totalCoveredTexels - totalPaintedTexels
+            unobservedTexels: totalCoveredTexels - totalPaintedTexels,
+            untexturedPrimitives
         };
     }
 
@@ -1419,7 +1442,7 @@ export class SurveyTextureUnprojector {
             let modelUsed: string | undefined;
             {
                 const beautifyService = new BeautifyStationService(renderService, generator);
-                const bRes = await beautifyService.beautify(
+                const beautifyOnce = () => beautifyService.beautify(
                     st,
                     beautifyContext,
                     {
@@ -1431,6 +1454,23 @@ export class SurveyTextureUnprojector {
                         signal: progress.signal
                     }
                 );
+                // An image model that answers with no image (or a blocked prompt) fails this one station: it is asked
+                // once more, then left out and reported like a station that fails QC. A model that cannot be reached
+                // at all (credentials, quota, network) still ends the run.
+                let bRes: Awaited<ReturnType<typeof beautifyOnce>> | undefined;
+                let noImage: string | undefined;
+                for (let attempt = 0; attempt < EMPTY_IMAGE_ATTEMPTS && !bRes; attempt++) {
+                    try {
+                        bRes = await beautifyOnce();
+                    } catch (err) {
+                        if (progress.signal?.aborted || !(err instanceof MediaModelUnavailableError) || !NO_IMAGE_REASON.test(err.reason)) throw err;
+                        noImage = err.message;
+                    }
+                }
+                if (!bRes) {
+                    rejected.push({ stationId: st.id, reason: `no image after ${EMPTY_IMAGE_ATTEMPTS} attempts (${noImage})`, imageSource: `Generated by the ${generator.name} generator.` });
+                    continue;
+                }
                 if (!bRes.accepted) {
                     // The image moved the geometry beyond tolerance: painting it at the blockout pose would put its
                     // pixels on the wrong surfaces, so the station is left out and reported.
@@ -1512,10 +1552,11 @@ export class SurveyTextureUnprojector {
     }
 
     /**
-     * Refuses a GLB with a triangle primitive that has no TEXCOORD_0: the bake paints into the mesh's own UVs and
-     * writes no new ones, so a texture baked for such a primitive could not be shown. Throws MissingInputError.
+     * The primitives the bake cannot texture: those with no TEXCOORD_0. The bake paints into the mesh's own UVs and
+     * writes no new ones, so such a primitive keeps its material and is reported. Throws MissingInputError when the
+     * GLB is unreadable or no primitive has UVs (then nothing could be painted).
      */
-    public static requireOwnUvs(glbBuffer: Buffer, label: string): void {
+    public static primitivesWithoutUvs(glbBuffer: Buffer, label: string): UntexturedPrimitive[] {
         let json: any;
         try {
             json = AlgorithmicUvEngine.parseGlb(glbBuffer).json;
@@ -1523,19 +1564,24 @@ export class SurveyTextureUnprojector {
             throw new MissingInputError('survey_beautify_to_texture', 'glbPath', `${label} is not a readable GLB (${err?.message || err})`);
         }
         let primitives = 0;
+        const without: UntexturedPrimitive[] = [];
         (json.meshes || []).forEach((mesh: any, meshIndex: number) => {
             (mesh.primitives || []).forEach((prim: any, primIndex: number) => {
                 if (!prim.attributes || prim.attributes.POSITION === undefined) return;
                 primitives++;
                 if (prim.attributes.TEXCOORD_0 === undefined) {
-                    throw new MissingInputError('survey_beautify_to_texture', 'a GLB with UVs',
-                        `${label} mesh ${meshIndex} primitive ${primIndex} has no TEXCOORD_0, so a texture baked for it would have no UVs to show through (unwrap the mesh first)`);
+                    without.push({ meshIndex, primitiveIndex: primIndex, meshName: mesh.name, reason: 'no TEXCOORD_0: a texture baked for it would have no UVs to show through' });
                 }
             });
         });
         if (primitives === 0) {
             throw new MissingInputError('survey_beautify_to_texture', 'a GLB with a mesh', `${label} has no primitive with POSITION to texture`);
         }
+        if (without.length === primitives) {
+            throw new MissingInputError('survey_beautify_to_texture', 'a GLB with UVs',
+                `${label}: none of its ${primitives} primitive(s) has TEXCOORD_0, so a baked texture would have no UVs to show through (unwrap the mesh first)`);
+        }
+        return without;
     }
 
     /**
@@ -1610,7 +1656,10 @@ export class SurveyTextureUnprojector {
                     normals,
                     uvs,
                     indices,
-                    materialIndex: prim.material
+                    materialIndex: prim.material,
+                    meshIndex,
+                    primIndex,
+                    hasOwnUvs: prim.attributes.TEXCOORD_0 !== undefined
                 });
             });
         });
@@ -2034,14 +2083,16 @@ export class SurveyTextureUnprojector {
         if (!newJson.textures) newJson.textures = [];
         if (!newJson.materials) newJson.materials = [];
 
-        let submeshIdx = 0;
+        // primitiveIndex counts the primitives loadMeshPrimitives reads (those with POSITION, in GLB order), so a
+        // primitive the bake skipped (no UVs) keeps its own material and every other one gets its own atlas.
+        const byPrimitive = new Map(submeshResults.map(s => [s.primitiveIndex, s]));
+        let submeshIdx = -1;
         for (const mesh of newJson.meshes || []) {
             for (const prim of mesh.primitives || []) {
-                const submesh = submeshResults[submeshIdx];
-                if (!submesh) {
-                    submeshIdx++;
-                    continue;
-                }
+                if (!prim.attributes || prim.attributes.POSITION === undefined) continue;
+                submeshIdx++;
+                const submesh = byPrimitive.get(submeshIdx);
+                if (!submesh) continue;
 
                 // 1. Albedo image & texture
                 const albBv = appendBuffer(submesh.albedoPng);
@@ -2079,7 +2130,6 @@ export class SurveyTextureUnprojector {
                 });
 
                 prim.material = matIdx;
-                submeshIdx++;
             }
         }
 

@@ -1,0 +1,568 @@
+{
+  "title": "Empire State Building, 350 5th Ave, New York, NY 10118, USA — build stages",
+  "subtitle": "Run b6081752 (finished): 19 stages, 8 skipped, 9 committed, 2 degraded. Stages are read-only; the build node re-runs the whole build.",
+  "nodes": [
+    {
+      "id": "staged-build",
+      "label": "Build: Empire State Building, 350 5th Ave, New York, NY 10118, USA",
+      "subtitle": "google_3d_tiles_get_clay",
+      "category": "tool",
+      "color": "cyan",
+      "x": 60,
+      "y": 120,
+      "status": "running",
+      "notes": "Run b6081752, finished. Re-running builds the place again into this scene with the same query; the run's other options are not in the scene record.",
+      "parameters": {
+        "toolName": "google_3d_tiles_get_clay",
+        "toolArgs": {
+          "query": "Empire State Building, 350 Fifth Avenue, New York",
+          "isolate": true,
+          "stageIntoActiveScene": true
+        },
+        "targetArtifactId": "scene-stg-b6081752"
+      },
+      "outputData": {
+        "resultPayload": {
+          "runId": "b6081752",
+          "runState": "running",
+          "resolvedAddress": "Empire State Building, 350 5th Ave, New York, NY 10118, USA",
+          "lat": 40.748545,
+          "lng": -73.985763
+        },
+        "recorded": true
+      }
+    },
+    {
+      "id": "stage-project",
+      "label": "Slots in the photos",
+      "subtitle": "project",
+      "category": "stage",
+      "color": "blue",
+      "x": 360,
+      "y": 260,
+      "status": "pending",
+      "executionDurationMs": 171499,
+      "details": "Status: skipped\nTime: 171.5 s\nReason: there is no accepted fit to place detail on",
+      "notes": "there is no accepted fit to place detail on",
+      "parameters": {
+        "stage": "project",
+        "status": "skipped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-vision",
+      "label": "Reading the photos",
+      "subtitle": "vision",
+      "category": "stage",
+      "color": "blue",
+      "x": 360,
+      "y": 460,
+      "status": "pending",
+      "executionDurationMs": 171499,
+      "details": "Status: skipped\nTime: 171.5 s\nReason: there is no accepted fit to place detail on",
+      "notes": "there is no accepted fit to place detail on",
+      "parameters": {
+        "stage": "vision",
+        "status": "skipped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-massing",
+      "label": "Rebuilt buildings",
+      "subtitle": "massing",
+      "category": "stage",
+      "color": "blue",
+      "x": 940,
+      "y": 60,
+      "status": "pending",
+      "executionDurationMs": 103256,
+      "details": "Status: skipped\nTime: 103.3 s\nReason: an isolated structure is rebuilt by its own pipeline",
+      "notes": "an isolated structure is rebuilt by its own pipeline",
+      "parameters": {
+        "stage": "massing",
+        "status": "skipped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-grammar",
+      "label": "Facade grammar",
+      "subtitle": "grammar",
+      "category": "stage",
+      "color": "blue",
+      "x": 940,
+      "y": 260,
+      "status": "pending",
+      "executionDurationMs": 103256,
+      "details": "Status: skipped\nTime: 103.3 s\nReason: pipeline K rebuilds the facades on their straightened photos instead of reading them as a grammar",
+      "notes": "pipeline K rebuilds the facades on their straightened photos instead of reading them as a grammar",
+      "parameters": {
+        "stage": "grammar",
+        "status": "skipped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-relief",
+      "label": "Measured relief",
+      "subtitle": "relief",
+      "category": "stage",
+      "color": "blue",
+      "x": 940,
+      "y": 460,
+      "status": "pending",
+      "executionDurationMs": 103256,
+      "details": "Status: skipped\nTime: 103.3 s\nReason: the measured relief runs on pipeline E's clean massing (SCRATCHBOX_STAGED_PIPELINE=e)",
+      "notes": "the measured relief runs on pipeline E's clean massing (SCRATCHBOX_STAGED_PIPELINE=e)",
+      "parameters": {
+        "stage": "relief",
+        "status": "skipped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-correct",
+      "label": "Photo corrections",
+      "subtitle": "correct",
+      "category": "stage",
+      "color": "blue",
+      "x": 1230,
+      "y": 260,
+      "status": "pending",
+      "executionDurationMs": 171499,
+      "details": "Status: skipped\nTime: 171.5 s\nReason: there is no accepted fit to place detail on",
+      "notes": "there is no accepted fit to place detail on",
+      "parameters": {
+        "stage": "correct",
+        "status": "skipped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-detail",
+      "label": "Photo-inferred detail",
+      "subtitle": "detail",
+      "category": "stage",
+      "color": "blue",
+      "x": 1520,
+      "y": 60,
+      "status": "pending",
+      "executionDurationMs": 171500,
+      "details": "Status: skipped\nTime: 171.5 s\nReason: there is no accepted fit to place detail on",
+      "notes": "there is no accepted fit to place detail on",
+      "parameters": {
+        "stage": "detail",
+        "status": "skipped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-figures",
+      "label": "Figures",
+      "subtitle": "figures",
+      "category": "stage",
+      "color": "blue",
+      "x": 1520,
+      "y": 260,
+      "status": "pending",
+      "executionDurationMs": 171500,
+      "details": "Status: skipped\nTime: 171.5 s\nReason: there is no accepted fit to place detail on",
+      "notes": "there is no accepted fit to place detail on",
+      "parameters": {
+        "stage": "figures",
+        "status": "skipped",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-resolve",
+      "label": "Place",
+      "subtitle": "Empire State Building, 350 5th Ave, New York, NY 10118, USA",
+      "category": "stage",
+      "color": "emerald",
+      "x": 360,
+      "y": 1260,
+      "status": "completed",
+      "executionDurationMs": 15,
+      "details": "Status: committed (cached)\nTime: 0.0 s",
+      "parameters": {
+        "stage": "resolve",
+        "status": "committed",
+        "layers": 0,
+        "degradations": 0,
+        "cached": true,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-tiles",
+      "label": "Google 3D Tiles",
+      "subtitle": "176 leaf tiles within 94 m (sized to the structure: 94 m, 2 rounds)",
+      "category": "stage",
+      "color": "emerald",
+      "x": 650,
+      "y": 60,
+      "status": "completed",
+      "executionDurationMs": 5094,
+      "details": "Status: committed (cached)\nTime: 5.1 s\nLayers: 1",
+      "parameters": {
+        "stage": "tiles",
+        "status": "committed",
+        "layers": 1,
+        "degradations": 0,
+        "cached": true,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-survey",
+      "label": "Surveying the four faces",
+      "subtitle": "no survey: the detail passes aim at the scan-only slots",
+      "category": "stage",
+      "color": "amber",
+      "x": 360,
+      "y": 1460,
+      "status": "completed",
+      "executionDurationMs": 212069,
+      "details": "Status: degraded\nTime: 212.1 s\nDegraded parts: 1\nReason: no survey (every survey image failed to fetch (fetch failed; fetch failed)); the detail passes aim at the scan-only slots",
+      "notes": "no survey (every survey image failed to fetch (fetch failed; fetch failed)); the detail passes aim at the scan-only slots",
+      "parameters": {
+        "stage": "survey",
+        "status": "degraded",
+        "layers": 0,
+        "degradations": 1,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-trees-measure",
+      "label": "Measuring the trees",
+      "subtitle": "tile_vegetation strip: 0 canopy triangles measured as trees and removed",
+      "category": "stage",
+      "color": "emerald",
+      "x": 360,
+      "y": 1660,
+      "status": "completed",
+      "executionDurationMs": 87,
+      "details": "Status: committed (cached)\nTime: 0.1 s",
+      "parameters": {
+        "stage": "trees-measure",
+        "status": "committed",
+        "layers": 0,
+        "degradations": 0,
+        "cached": true,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-remesh",
+      "label": "Remeshed scan",
+      "subtitle": "tile_refine: 253,734 triangles",
+      "category": "stage",
+      "color": "emerald",
+      "x": 940,
+      "y": 660,
+      "status": "completed",
+      "executionDurationMs": 97964,
+      "details": "Status: committed (cached)\nTime: 98.0 s\nLayers: 1",
+      "parameters": {
+        "stage": "remesh",
+        "status": "committed",
+        "layers": 1,
+        "degradations": 0,
+        "cached": true,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-trees",
+      "label": "Trees",
+      "subtitle": "0 of 0 trees on the isolated structure rebuilt as SB-Veggie; 0 left as scanned",
+      "category": "stage",
+      "color": "emerald",
+      "x": 1810,
+      "y": 60,
+      "status": "completed",
+      "executionDurationMs": 67624,
+      "details": "Status: committed\nTime: 67.6 s",
+      "parameters": {
+        "stage": "trees",
+        "status": "committed",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-fit",
+      "label": "Scan-fitted rebuild",
+      "subtitle": "scan_fit failed",
+      "category": "stage",
+      "color": "amber",
+      "x": 1230,
+      "y": 60,
+      "status": "completed",
+      "executionDurationMs": 68104,
+      "details": "Status: degraded\nTime: 68.1 s\nDegraded parts: 1\nReason: the fit failed (Scan-fitted rebuild took longer than its 30 s limit); the remeshed scan stands as the structure",
+      "notes": "the fit failed (Scan-fitted rebuild took longer than its 30 s limit); the remeshed scan stands as the structure",
+      "parameters": {
+        "stage": "fit",
+        "status": "degraded",
+        "layers": 0,
+        "degradations": 1,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-textures",
+      "label": "Real textures",
+      "subtitle": "textured l2 with the tile photo tile_refine carries onto its remesh, de-lit (the shadow and highlight it was captured under lifted/compressed): tile photo transfer 74.6%, clay 25.4%; photo-derived texels are photo-inferred; the twins of later layers follow as they land",
+      "category": "stage",
+      "color": "emerald",
+      "x": 360,
+      "y": 860,
+      "status": "completed",
+      "executionDurationMs": 113509,
+      "details": "Status: committed\nTime: 113.5 s\nLayers: 1",
+      "parameters": {
+        "stage": "textures",
+        "status": "committed",
+        "layers": 1,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-textures-late",
+      "label": "Real textures of later layers",
+      "subtitle": "no later layer needed a twin",
+      "category": "stage",
+      "color": "emerald",
+      "x": 360,
+      "y": 1060,
+      "status": "completed",
+      "executionDurationMs": 46073,
+      "details": "Status: committed (cached)\nTime: 46.1 s",
+      "parameters": {
+        "stage": "textures-late",
+        "status": "committed",
+        "layers": 0,
+        "degradations": 0,
+        "cached": true,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-ownership",
+      "label": "Ownership vote",
+      "subtitle": "the vote moved 0.4% of the structure's scan surface (30.8 m² joined, 1342.6 m² left), under the 5% that would replace the geometric isolate; the first isolate and everything built on it stand (the vote's own remesh is not shown)",
+      "category": "stage",
+      "color": "emerald",
+      "x": 360,
+      "y": 660,
+      "status": "completed",
+      "executionDurationMs": 46357,
+      "details": "Status: committed\nTime: 46.4 s",
+      "parameters": {
+        "stage": "ownership",
+        "status": "committed",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "stage-evidence",
+      "label": "Street View close-ups",
+      "subtitle": "7 of 7 Street View images (© Google), kept in memory only, aimed at the structure's facades (no fit was accepted): they texture the remeshed scan",
+      "category": "stage",
+      "color": "emerald",
+      "x": 360,
+      "y": 60,
+      "status": "completed",
+      "executionDurationMs": 6330,
+      "details": "Status: committed\nTime: 6.3 s\nCost: {\"images\":7,\"visionCalls\":0,\"seconds\":0.7}",
+      "parameters": {
+        "stage": "evidence",
+        "status": "committed",
+        "layers": 0,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      }
+    },
+    {
+      "id": "scene-output",
+      "label": "Output: viewport",
+      "subtitle": "1 layer in the scene",
+      "category": "output",
+      "color": "emerald",
+      "x": 2100,
+      "y": 120,
+      "status": "completed",
+      "details": "remesh: l2",
+      "parameters": {
+        "output": true,
+        "finalObjectIds": [
+          "stg-f3a0884b-l2"
+        ],
+        "readOnly": true
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-tiles>remesh",
+      "source": "stage-tiles",
+      "target": "stage-remesh",
+      "label": "replaces layer",
+      "style": "solid"
+    },
+    {
+      "id": "e-build-stage-project",
+      "source": "staged-build",
+      "target": "stage-project",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-vision",
+      "source": "staged-build",
+      "target": "stage-vision",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-massing",
+      "source": "staged-build",
+      "target": "stage-massing",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-grammar",
+      "source": "staged-build",
+      "target": "stage-grammar",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-relief",
+      "source": "staged-build",
+      "target": "stage-relief",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-correct",
+      "source": "staged-build",
+      "target": "stage-correct",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-detail",
+      "source": "staged-build",
+      "target": "stage-detail",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-figures",
+      "source": "staged-build",
+      "target": "stage-figures",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-resolve",
+      "source": "staged-build",
+      "target": "stage-resolve",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-tiles",
+      "source": "staged-build",
+      "target": "stage-tiles",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-survey",
+      "source": "staged-build",
+      "target": "stage-survey",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-trees-measure",
+      "source": "staged-build",
+      "target": "stage-trees-measure",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-trees",
+      "source": "staged-build",
+      "target": "stage-trees",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-fit",
+      "source": "staged-build",
+      "target": "stage-fit",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-textures",
+      "source": "staged-build",
+      "target": "stage-textures",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-textures-late",
+      "source": "staged-build",
+      "target": "stage-textures-late",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-ownership",
+      "source": "staged-build",
+      "target": "stage-ownership",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-evidence",
+      "source": "staged-build",
+      "target": "stage-evidence",
+      "style": "dashed"
+    },
+    {
+      "id": "e-out-remesh",
+      "source": "stage-remesh",
+      "target": "scene-output",
+      "label": "final layer",
+      "style": "solid"
+    }
+  ]
+}
