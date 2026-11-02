@@ -514,6 +514,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     const cloudBucket = defaultCloudBucket();
     // With a cloud bucket, the store's bytes are uploaded as they arrive and restored from the bucket when lost.
     const assetMirror = assetStore && cloudBucket ? new AssetCloudMirror(assetStore, cloudBucket) : undefined;
+    if (assetStore) console.log(`[asset-store] on (Node ${process.versions.node}): ${assetStore.home}`);
     console.log(cloudBucket
         ? `[cloud-store] chats and assets are kept in ${cloudBucket.label}`
         : '[cloud-store] off: no bucket configured (SCRATCHBOX_STORE_BUCKET or ~/.scratchbox/cloud-store.json); chats and assets stay on this machine');

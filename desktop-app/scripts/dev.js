@@ -9,10 +9,49 @@
  * Automatically opens Electron once the dev server is ready.
  ********************************************************************************/
 
+const fs = require('fs');
 const http = require('http');
+const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { persistentLaunchToken } = require('./launch-token');
+
+/**
+ * The backend needs Node 22.13 or newer: the durable asset store, which keeps every chat's models across checkouts,
+ * indexes them with node:sqlite. On an older Node (nvm's default here is 20) the backend and Vite run on a newer
+ * installed one instead: SCRATCHBOX_NODE (a node binary), else the newest nvm install of the repository's .nvmrc major.
+ * With none, the app starts on this Node and says the store is off.
+ */
+const MIN_NODE = [22, 13];
+const atLeast = (version, min) => {
+    const [major, minor] = String(version).replace(/^v/, '').split('.').map(Number);
+    return major > min[0] || (major === min[0] && minor >= min[1]);
+};
+function newerNodeBinDir() {
+    if (atLeast(process.versions.node, MIN_NODE)) return undefined;
+    const explicit = process.env.SCRATCHBOX_NODE;
+    if (explicit && fs.existsSync(explicit)) return path.dirname(explicit);
+    let major = MIN_NODE[0];
+    try {
+        major = Math.max(major, parseInt(fs.readFileSync(path.resolve(__dirname, '..', '..', '.nvmrc'), 'utf8'), 10) || 0);
+    } catch { /* no .nvmrc: the minimum's major */ }
+    const versionsDir = path.join(process.env.NVM_DIR || path.join(os.homedir(), '.nvm'), 'versions', 'node');
+    let installed = [];
+    try {
+        installed = fs.readdirSync(versionsDir).filter(v => /^v\d+\.\d+\.\d+$/.test(v));
+    } catch { /* no nvm */ }
+    const parts = v => v.slice(1).split('.').map(Number);
+    const best = installed
+        .filter(v => parts(v)[0] === major && atLeast(v, MIN_NODE))
+        .sort((a, b) => parts(b)[0] - parts(a)[0] || parts(b)[1] - parts(a)[1] || parts(b)[2] - parts(a)[2])[0];
+    return best ? path.join(versionsDir, best, 'bin') : undefined;
+}
+const nodeBinDir = newerNodeBinDir();
+if (nodeBinDir) {
+    console.log(`[dev] Node ${process.versions.node} is too old for the asset store; the backend and Vite run on ${nodeBinDir}`);
+} else if (!atLeast(process.versions.node, MIN_NODE)) {
+    console.warn(`[dev] Node ${process.versions.node}: the asset store is off (it needs Node ${MIN_NODE.join('.')}+). Install Node ${MIN_NODE[0]} (nvm install ${MIN_NODE[0]}) or set SCRATCHBOX_NODE to a node binary; saved chats then keep models built in other checkouts.`);
+}
 
 const { token, expiresAtMs } = persistentLaunchToken();
 if (expiresAtMs) console.log(`[dev] launch token kept until ${new Date(expiresAtMs).toISOString().slice(0, 10)} (launch-token.js)`);
@@ -28,7 +67,8 @@ const env = {
     SCRATCHBOX_LAUNCH_TOKEN: token,
     SCRATCHBOX_NO_LAUNCH_TOKEN: noLaunchToken ? '1' : '0',
     NODE_ENV: 'development',
-    SCRATCHBOX_ALLOW_LOCAL_IP: 'true'
+    SCRATCHBOX_ALLOW_LOCAL_IP: 'true',
+    ...(nodeBinDir ? { PATH: `${nodeBinDir}${path.delimiter}${process.env.PATH || ''}` } : {})
 };
 
 const appDir = path.resolve(__dirname, '..');
