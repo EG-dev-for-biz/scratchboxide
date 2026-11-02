@@ -20,7 +20,8 @@ known-bad build from a good one, is what turns a score into evidence.
 `packages/core/src/node/3d-engine/staged-location/photo-match-eval.ts`):
 
 - renders every arm from held-out real photo poses: Street View panos the build did not use (`excludePanoIds` adds ones
-  the run records miss), under the same neutral light, inside the photo-textured tile (`inContext`), and again in clay
+  the run records miss) and that stand outdoors, chosen automatically or given as `poses` (`autoViews: false` judges
+  only those; every result lists its views as `heldOut.judgedPoses`), under the same neutral light, inside the photo-textured tile (`inContext`), and again in clay
   for shape alone (`clay`);
 - shows the judge the photo and the renders shuffled and unlabelled, `runs` times per view, and scores each 1-10 on
   shape, materials, detail, errors and overall, reported as mean and spread;
@@ -85,8 +86,13 @@ holds, each "photo" rendered from the reference tile, identity registration and 
 has the config; skipped unless `PHOTO_MATCH_DRYRUN` names it). It must show that:
 
 - every arm and every decoy renders at every held-out pose, with no empty or black render;
-- the held-out panos exclude every pano any arm's build used;
+- the held-out panos exclude every pano any arm's build used, and none stands indoors (`heldOut.indoor`: a pano inside
+  Google's building footprints is not used; with no footprints at the place the rule says it was not applied);
 - the call count and the expected cost match the preregistration.
+
+A dry run has no network, so it can only find panos already in the Street View cache, and a paid call that searched again
+would find others: the views the dry run checked would not be the ones judged. Copy the dry run's `heldOut.judgedPoses`
+into the preregistration as the views, and run the era check on exactly those.
 
 Look at the grid image with the `screenshot-review` skill. A render problem found here costs nothing; found after the
 paid run, it costs the whole run.
@@ -94,7 +100,9 @@ paid run, it costs the whole run.
 ## Step 3: the paid run
 
 Build every arm fresh and uncached: clear the stage caches and restart first. Run `photo_match_evaluate` once, with all
-the arms and decoys as `builds`. Do not add arms, views or places once it has started.
+the arms and decoys as `builds`, and the preregistered views as `poses` with `autoViews: false`: it then judges those views
+and no others, and a view that drops out (it does not register, its pano is refused) is reported in `heldOut.fixed`, never
+replaced by one nobody checked. Do not add arms, views or places once it has started.
 
 ## Step 4: report against the bars
 
