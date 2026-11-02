@@ -35,43 +35,52 @@ jobs:
             test: true
           # The ubuntu-24.04 runner of a private repository has 2 vCPUs: vitest runs one test file at a time there, and
           # renders headless Chrome and compiles C++ several times slower than on macOS, so the whole suite takes over
-          # two hours. Ubuntu typechecks, lints and builds once and runs the tests in eight shards of equal measured
-          # time (vitest --shard, split by vitest.shard-sequencer.ts), each job inside the limit.
+          # two hours. Ubuntu typechecks, lints and builds once and runs the tests in ten shards split by measured time
+          # (vitest --shard, split by vitest.shard-sequencer.ts): the slowest file alone in one, about 14 minutes of tests
+          # in each other, so that a runner a third slower than the one measured still ends inside the limit.
           - name: Typecheck, lint, build (ubuntu-24.04)
             os: ubuntu-24.04
             checks: true
-          - name: Test (ubuntu-24.04, shard 1/8)
+          - name: Test (ubuntu-24.04, shard 1/10)
             os: ubuntu-24.04
             test: true
-            shard: 1/8
-          - name: Test (ubuntu-24.04, shard 2/8)
+            shard: 1/10
+          - name: Test (ubuntu-24.04, shard 2/10)
             os: ubuntu-24.04
             test: true
-            shard: 2/8
-          - name: Test (ubuntu-24.04, shard 3/8)
+            shard: 2/10
+          - name: Test (ubuntu-24.04, shard 3/10)
             os: ubuntu-24.04
             test: true
-            shard: 3/8
-          - name: Test (ubuntu-24.04, shard 4/8)
+            shard: 3/10
+          - name: Test (ubuntu-24.04, shard 4/10)
             os: ubuntu-24.04
             test: true
-            shard: 4/8
-          - name: Test (ubuntu-24.04, shard 5/8)
+            shard: 4/10
+          - name: Test (ubuntu-24.04, shard 5/10)
             os: ubuntu-24.04
             test: true
-            shard: 5/8
-          - name: Test (ubuntu-24.04, shard 6/8)
+            shard: 5/10
+          - name: Test (ubuntu-24.04, shard 6/10)
             os: ubuntu-24.04
             test: true
-            shard: 6/8
-          - name: Test (ubuntu-24.04, shard 7/8)
+            shard: 6/10
+          - name: Test (ubuntu-24.04, shard 7/10)
             os: ubuntu-24.04
             test: true
-            shard: 7/8
-          - name: Test (ubuntu-24.04, shard 8/8)
+            shard: 7/10
+          - name: Test (ubuntu-24.04, shard 8/10)
             os: ubuntu-24.04
             test: true
-            shard: 8/8
+            shard: 8/10
+          - name: Test (ubuntu-24.04, shard 9/10)
+            os: ubuntu-24.04
+            test: true
+            shard: 9/10
+          - name: Test (ubuntu-24.04, shard 10/10)
+            os: ubuntu-24.04
+            test: true
+            shard: 10/10
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     env:
