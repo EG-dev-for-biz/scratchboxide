@@ -27,16 +27,31 @@ import { Worker } from 'worker_threads';
 import { workerTsRegisterSource } from '../../../worker-ts-register';
 import { FACADE_LATTICE_PARAMS, facadeEligible, wallCoverage, type ReliefFacade } from '../facade-lattice';
 import { decodePng } from '../../../texture-processing';
-import { featurelessMaskName, occludedMaskName, ORTHO_RECTIFY_PARAMS, ORTHO_RECTIFY_VERSION, uncoveredMaskName, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
+import { featurelessMaskName, occludedMaskName, ORTHO_RECTIFY_PARAMS, ORTHO_RECTIFY_VERSION, smoothFillHoles, uncoveredMaskName, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
+import { inpaintFace } from '../pipeline-e/occluders';
+import type { EnhanceModelClient } from '../texture-enhance';
 import type { RectifyJob, RectifyMessage } from './ortho-rectify-worker';
 import { encodePng } from '../png-encode';
-import { stagedBuildingPipelineEnv } from '../staged-switches';
+import { stagedBuildingPipelineEnv, stagedDistrict } from '../staged-switches';
 
 /** The featureless photo refilled region by region: regions found, filled (each from one source at one shift), their texels, and the texels kept as photographed. */
 export interface ContinuedFill { regions: number; filled: number; texels: number; fromFacades: Record<string, number>; kept: number; sources: Array<{ texels: number; from: number; shiftM: number; ringDiff: number }> }
 
 /** A straightened facade photo with its masks: where the photo never reached, and where it is a smear (featureless). */
 export interface FacadeImage { f: ReliefFacade; rgba: Uint8Array; width: number; height: number; uncovered?: Uint8Array; featureless?: Uint8Array }
+
+/**
+ * The facade holes no real source covers, inpainted by the image model before the smooth fill (pipeline-e/occluders.ts
+ * inpaintFace: kept only where it reproduces the photo around the hole and joins it). Only small holes: on Shibuya's facades
+ * every hole over about 4,000 texels came back rejected (unpainted, or the photo around it changed), every smaller one
+ * mostly accepted. Capped per build, since each rectangle is a billed image call.
+ */
+export const HOLE_INPAINT = {
+    /** A hole (4-connected) at most this many texels is sent. */
+    maxHoleTexels: 6000,
+    /** Rectangles per facade, and image calls per build. */
+    maxRects: 4, maxCalls: 12
+};
 
 export const CONTINUE_FEATURELESS = {
     /** Sources: the facade itself and every other facade whose normal is within this |cos| on the same side (never mirrored). */
@@ -143,9 +158,17 @@ export function continueFeatureless(images: Map<number, FacadeImage>, P = CONTIN
 
 export const PIPELINE_K_VERSION = `pipeline-k/3(${ORTHO_RECTIFY_VERSION})`;
 
-/** Pipeline K when the request (or SCRATCHBOX_STAGED_BUILDING_PIPELINE) asks for 'k'. */
-export function stagedPipelineK(request: { pipeline?: string }, env: NodeJS.ProcessEnv = process.env): boolean {
-    return (request.pipeline !== undefined ? request.pipeline.trim().toLowerCase() : stagedBuildingPipelineEnv(env)) === 'k';
+/** Pipeline K when the request (or SCRATCHBOX_STAGED_BUILDING_PIPELINE) asks for 'k', and in a district shown as kd. */
+export function stagedPipelineK(request: { pipeline?: string; district?: string; isolate?: boolean }, env: NodeJS.ProcessEnv = process.env): boolean {
+    return (request.pipeline !== undefined ? request.pipeline.trim().toLowerCase() : stagedBuildingPipelineEnv(env)) === 'k' || stagedPipelineKD(request, env);
+}
+
+/**
+ * Pipeline K-D: K's straightening applied to a whole district (no isolate), its trees and surroundings kept. A district
+ * look, not a building pipeline: the request's `district` 'kd', else SCRATCHBOX_STAGED_DISTRICT=kd.
+ */
+export function stagedPipelineKD(request: { district?: string; isolate?: boolean }, env: NodeJS.ProcessEnv = process.env): boolean {
+    return request.isolate !== true && stagedDistrict(request, env) === 'kd';
 }
 
 export interface RectifiedOrthos {
@@ -203,10 +226,11 @@ function runWorkers(jobs: RectifyJob[], signal?: AbortSignal): Promise<RectifyMe
  * The relief orthos of a remesh, straightened and levelled: the facades the lattice rebuild will use (coverage at least
  * its minCoverage) are rectified, the others copied as they are. Cached beside the originals.
  */
-export async function rectifyReliefOrthos(srcDir: string, opts: { params?: OrthoRectifyParams; minCoverage?: number; threads?: number; signal?: AbortSignal } = {}): Promise<RectifiedOrthos> {
+export async function rectifyReliefOrthos(srcDir: string, opts: { params?: OrthoRectifyParams; minCoverage?: number; threads?: number; signal?: AbortSignal; /** The image model for small holes no real source covers (absent: none; the smooth fill takes them). */ inpaint?: { client: EnhanceModelClient; models: string[]; caps?: typeof HOLE_INPAINT } } = {}): Promise<RectifiedOrthos> {
     const t0 = Date.now();
     const params = opts.params ?? ORTHO_RECTIFY_PARAMS, minCoverage = opts.minCoverage ?? FACADE_LATTICE_PARAMS.minCoverage;
-    const key = crypto.createHash('sha256').update(JSON.stringify({ v: PIPELINE_K_VERSION, params, minCoverage })).digest('hex').slice(0, 16);
+    const caps = opts.inpaint?.caps ?? HOLE_INPAINT;
+    const key = crypto.createHash('sha256').update(JSON.stringify({ v: PIPELINE_K_VERSION, params, minCoverage, inpaint: opts.inpaint ? { models: opts.inpaint.models, caps } : false })).digest('hex').slice(0, 16);
     const outDir = path.join(path.dirname(srcDir), `${path.basename(srcDir)}_k_${key}`);
     const reportFile = path.join(outDir, 'rectify.json');
     if (fs.existsSync(reportFile)) {
@@ -251,12 +275,52 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
             const file = path.join(tmp, f.image);
             if (fs.existsSync(file)) { const d = decodePng(fs.readFileSync(file)); images.set(f.facadeId, { f, rgba: new Uint8Array(d.rgba), width: d.width, height: d.height, uncovered: mask(uncoveredMaskName(f.image)), featureless: mask(featurelessMaskName(f.image)) }); }
         }
+        // the holes the facades' own repeats left (still the exact grey of the uncovered mark): refilled with the smears, each
+        // region whole from one facade facing the same way, aligned to the photo around it
+        const grey = (p: Uint8Array, i: number) => p[i * 4] === 128 && p[i * 4 + 1] === 128 && p[i * 4 + 2] === 128;
+        const holesOf = (x: FacadeImage) => Uint8Array.from({ length: x.width * x.height }, (_, i) => (x.uncovered?.[i] && x.rgba[i * 4 + 3] && grey(x.rgba, i) ? 1 : 0));
+        const count = (m: Uint8Array) => m.reduce((a, b) => a + b, 0);
+        const holes0 = new Map<number, Uint8Array>();
+        for (const [id, x] of images) {
+            const h = holesOf(x);
+            if (!count(h)) continue;
+            holes0.set(id, h);
+            const fl = x.featureless ? Uint8Array.from(x.featureless) : new Uint8Array(h.length);
+            for (let i = 0; i < h.length; i++) if (h[i]) fl[i] = 1;
+            x.featureless = fl;
+        }
         const continued = continueFeatureless(images);
+        const changed = new Set<number>(continued.keys());
         for (const [id, c] of continued) {
-            const x = images.get(id)!;
-            fs.writeFileSync(path.join(tmp, x.f.image), encodePng(x.width, x.height, x.rgba, 4));
             const r = reports.find(y => y.facadeId === id);
             if (r && 'report' in r && r.report) (r.report.holes as typeof r.report.holes & { continued?: ContinuedFill }).continued = c;
+        }
+        // what no real source covers: small holes inpainted by the image model (capped), and the rest a smooth fill, never
+        // the nearest texel copied across (it draws straight streaks out of the photo's edge)
+        let inpaintCalls = 0;
+        for (const [id, h0] of holes0) {
+            const x = images.get(id)!, N = x.width * x.height;
+            let left = holesOf(x);
+            const fromRegions = count(h0) - count(left);
+            let fromInpaint = 0;
+            if (opts.inpaint && inpaintCalls < caps.maxCalls && count(left)) {
+                const small = smallHoles(left, x.width, x.height, caps.maxHoleTexels);
+                if (count(small)) {
+                    const t = { width: x.width, height: x.height, rgba: x.rgba, source: new Uint8Array(N) };
+                    const r = await inpaintFace(t, small, `k_${key}_${id}`, opts.inpaint.client, opts.inpaint.models, 1, { maxRects: Math.min(caps.maxRects, caps.maxCalls - inpaintCalls), ...(opts.signal ? { signal: opts.signal } : {}) });
+                    inpaintCalls += r.records.filter(rec => (rec as { decision?: string }).decision !== 'skipped').length;
+                    fromInpaint = r.filled;
+                    left = holesOf(x);
+                }
+            }
+            const fromSmooth = smoothFillHoles({ width: x.width, height: x.height, rgba: x.rgba }, left);
+            changed.add(id);
+            const r = reports.find(y => y.facadeId === id);
+            if (r && 'report' in r && r.report) Object.assign(r.report.holes, { fromRegions, fromInpaint, fromSmooth });
+        }
+        for (const id of changed) {
+            const x = images.get(id)!;
+            fs.writeFileSync(path.join(tmp, x.f.image), encodePng(x.width, x.height, x.rgba, 4));
         }
         // a facade with an occlusion mask beside it names it (tile_refine named it; a warped one keeps the name)
         for (const f of facadesJson.facades) if (fs.existsSync(path.join(tmp, occludedMaskName(f.image)))) f.occludedMask = occludedMaskName(f.image);
@@ -267,8 +331,9 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
             f.uncoveredMask = uncoveredMaskName(f.image);
             const cont = (rep.holes as typeof rep.holes & { continued?: ContinuedFill }).continued;
             const fromOthers = cont ? Object.values(cont.fromFacades).reduce((a, b) => a + b, 0) : 0;
-            const filled = rep.holes.fromRepeats + rep.holes.fromStoreys + rep.holes.fromNearest + fromOthers;
-            if (filled) f.textureFill = { label: 'generated', texels: filled, share: Math.round((filled / (rep.width * rep.height)) * 10000) / 10000, method: `holes filled from the facade's own real texels: ${rep.holes.fromRepeats} at its bay pitch, ${rep.holes.fromStoreys} at its storey pitch, ${rep.holes.fromNearest} from the nearest real texel${rep.holes.featureless ? `; ${rep.holes.featureless} texels of featureless photo (a smear on a wall the photo did not see) found${cont ? `, refilled in ${cont.regions} regions, each whole from one source aligned to the photo around it (${Object.entries(cont.fromFacades).map(([k, v]) => `${Number(k) === f.facadeId ? 'its own photo' : `facade ${k}`}: ${v}`).join(', ')})${cont.kept ? `, ${cont.kept} kept as photographed (no source covers them)` : ''}` : ''}` : ''}` };
+            const later = (rep.holes.fromInpaint ?? 0) + (rep.holes.fromSmooth ?? 0);
+            const filled = rep.holes.fromRepeats + rep.holes.fromStoreys + rep.holes.fromNearest + fromOthers + later;
+            if (filled) f.textureFill = { label: 'generated', texels: filled, share: Math.round((filled / (rep.width * rep.height)) * 10000) / 10000, method: `holes filled: ${rep.holes.fromRepeats} texels from the facade's own repeats at its bay pitch, ${rep.holes.fromStoreys} at its storey pitch${rep.holes.fromRegions ? `, ${rep.holes.fromRegions} copied whole from a facade facing the same way, aligned to the photo around them` : ''}${rep.holes.fromInpaint ? `, ${rep.holes.fromInpaint} inpainted by the image model (kept only where it joined the photo)` : ''}${rep.holes.fromSmooth ? `, ${rep.holes.fromSmooth} a smooth fill between the colours at the hole's edge` : ''}${rep.holes.fromNearest ? `, ${rep.holes.fromNearest} from the nearest real texel` : ''}${rep.holes.featureless ? `; ${rep.holes.featureless} texels of featureless photo (a smear on a wall the photo did not see) found${cont ? `, refilled in ${cont.regions} regions, each whole from one source aligned to the photo around it (${Object.entries(cont.fromFacades).map(([k, v]) => `${Number(k) === f.facadeId ? 'its own photo' : `facade ${k}`}: ${v}`).join(', ')})${cont.kept ? `, ${cont.kept} kept as photographed (no source covers them)` : ''}` : ''}` : ''}` };
         }
         fs.writeFileSync(path.join(tmp, 'facades.json'), JSON.stringify(facadesJson));
         fs.writeFileSync(path.join(tmp, 'rectify.json'), JSON.stringify({ version: PIPELINE_K_VERSION, params, minCoverage, reports }, null, 1));
@@ -281,14 +346,32 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
     }
 }
 
+/** The holes (1) that are 4-connected regions of at most `max` texels. */
+function smallHoles(holes: Uint8Array, W: number, H: number, max: number): Uint8Array {
+    const out = new Uint8Array(holes.length), seen = new Uint8Array(holes.length), stack: number[] = [], comp: number[] = [];
+    for (let s = 0; s < holes.length; s++) {
+        if (!holes[s] || seen[s]) continue;
+        comp.length = 0; stack.push(s); seen[s] = 1;
+        while (stack.length) {
+            const i = stack.pop()!, x = i % W;
+            comp.push(i);
+            for (const j of [x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1, i - W, i + W]) if (j >= 0 && j < holes.length && holes[j] && !seen[j]) { seen[j] = 1; stack.push(j); }
+        }
+        if (comp.length <= max) for (const i of comp) out[i] = 1;
+    }
+    return out;
+}
+
 /** One line for the build's notes. */
 export function describeRectified(r: RectifiedOrthos): string {
     const ok = r.reports.filter(x => x.report);
     const kept = ok.filter(x => x.report!.warp.kept);
     const gains = kept.map(x => x.report!.straightnessPx.gain);
     const smeared = ok.reduce((a, x) => a + x.report!.smear.texels, 0);
-    const filled = ok.reduce((a, x) => a + x.report!.holes.fromRepeats + x.report!.holes.fromStoreys + x.report!.holes.fromNearest, 0);
-    const fromRepeats = ok.reduce((a, x) => a + x.report!.holes.fromRepeats + x.report!.holes.fromStoreys, 0);
+    const sum = (k: 'fromRepeats' | 'fromStoreys' | 'fromNearest' | 'fromRegions' | 'fromInpaint' | 'fromSmooth') => ok.reduce((a, x) => a + (x.report!.holes[k] ?? 0), 0);
+    const filled = sum('fromRepeats') + sum('fromStoreys') + sum('fromNearest') + sum('fromRegions') + sum('fromInpaint') + sum('fromSmooth');
+    const fromRepeats = sum('fromRepeats') + sum('fromStoreys');
+    const pct = (n: number) => (filled ? Math.round((100 * n) / filled) : 0);
     const failed = r.reports.filter(x => x.error);
-    return `${ok.length} facade orthos rectified: ${kept.length} straightened (lines ${gains.length ? Math.round(100 * gains.reduce((a, b) => a + b, 0) / gains.length) : 0}% closer to straight on average)${ok.length > kept.length ? `, ${ok.length - kept.length} left as they were (${[...new Set(ok.filter(x => !x.report!.warp.kept).map(x => x.report!.warp.why))].slice(0, 2).join('; ')})` : ''}; ${smeared.toLocaleString('en-US')} smeared texels levelled against their repeats; ${filled.toLocaleString('en-US')} texels the photo did not reach filled (generated: ${filled ? Math.round((100 * fromRepeats) / filled) : 0}% from the facade's own repeats, the rest from the nearest real texel)${failed.length ? `; ${failed.length} failed and kept their original ortho (${failed[0].error})` : ''}`;
+    return `${ok.length} facade orthos rectified: ${kept.length} straightened (lines ${gains.length ? Math.round(100 * gains.reduce((a, b) => a + b, 0) / gains.length) : 0}% closer to straight on average)${ok.length > kept.length ? `, ${ok.length - kept.length} left as they were (${[...new Set(ok.filter(x => !x.report!.warp.kept).map(x => x.report!.warp.why))].slice(0, 2).join('; ')})` : ''}; ${smeared.toLocaleString('en-US')} smeared texels levelled against their repeats; ${filled.toLocaleString('en-US')} texels the photo did not reach filled (generated: ${pct(fromRepeats)}% from the facade's own repeats, ${pct(sum('fromRegions'))}% copied whole from a facade facing the same way, ${pct(sum('fromInpaint'))}% inpainted, ${pct(sum('fromSmooth'))}% a smooth fill${sum('fromNearest') ? `, ${pct(sum('fromNearest'))}% from the nearest real texel` : ''})${failed.length ? `; ${failed.length} failed and kept their original ortho (${failed[0].error})` : ''}`;
 }

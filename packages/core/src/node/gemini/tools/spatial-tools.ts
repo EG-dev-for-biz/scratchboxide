@@ -233,6 +233,11 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     enum: ['meshy', 'trellis'],
                     description: 'The 3D model service pipeline "j" sends its character sheet to. "meshy" (the default): Meshy 7.1 multi-image-to-3D, sent once, its own textures kept. "trellis": Trellis multi, run six times (one per seed, about $0.12 a building), the candidate whose silhouette and plan best match the sheet and the scan kept, its textures colour-matched to the building\'s swatch. Pass it only when the user asks for one by name.'
                 },
+                district: {
+                    type: 'STRING',
+                    enum: ['massing', 'scan', 'rebuilt', 'kd'],
+                    description: 'How the district around the place is shown, in a build without isolate. "massing" (the default): pipeline E\'s massing for every building the scan confirms. "scan": the remeshed scan as it is. "rebuilt": every building, the ground and the streets recreated, the scan kept as their reference. "kd" (only when the user asks for it; a long build, up to six hours): pipeline K over the whole district, in chunks: every facade\'s photo straightened and rebuilt flat as in pipeline "k", the photos de-lit and colour-matched per building, the trees, terrain and surroundings kept, and no massing. SCRATCHBOX_STAGED_DISTRICT changes the default.'
+                },
                 steps: {
                     type: 'OBJECT',
                     description: 'Steps of a pipeline K build turned on (true) or off (false) for this build only, by step key; a step not named keeps its default. Set by the build graph\'s step switches when the build is re-run; pass it only when the user asks to turn a named step on or off.',

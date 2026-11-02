@@ -20,7 +20,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { runStagedLocation, StagedLocationHardFailure, type ScanFitDeps, type StagedLocationDeps } from '../src/node/3d-engine/staged-location/orchestrator';
+import { footprintSource, runStagedLocation, scanDerivedFootprint, StagedLocationHardFailure, type ScanFitDeps, type StagedLocationDeps } from '../src/node/3d-engine/staged-location/orchestrator';
 import { StageCache } from '../src/node/3d-engine/staged-location/stage-cache';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { DEFAULT_PROVENANCE_LEGEND, validateContract, type StageEvent, type StructureFit } from '../src/common/spatial/staged-location-contracts';
@@ -118,6 +118,31 @@ describe('a pipeline K isolate (the 3D Building default)', () => {
         // and no Street View close-ups are fetched: nothing in a 3D Building reads them
         expect(statusOf(s.events, 'evidence')).toEqual(['skipped']);
         expect(result.stages.find(x => x.stage === 'evidence')?.reason).toMatch(/reads no Street View close-ups/);
+    });
+
+    it('names the footprint its base cleanup stood on by where it came from: the scan outline standing in for Google\'s is not called Google\'s', async () => {
+        const ring = (x0: number, x1: number, z0: number, z1: number): Array<[number, number]> => [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
+        const baseOf = async (footprint: Array<[number, number]>) => {
+            const s = setup(ARCH, {}, { vectorEvidence: async () => ({ buildings: [{ id: 'b', parts: [[footprint]], heightM: 22, extruded: [{ loops: [footprint], heightM: 22 }] }], water: [], roads: [], tiles: 1, zoom: 17 }) });
+            const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false, pipeline: 'k' }, s.deps, s.ctx);
+            const sb = (result.artifact as any).data.stagedBuild;
+            return { pick: sb.structure, base: s.cache.readRunNote<{ loops: Array<Array<[number, number]>>; footprint: string }>(sb.runId, 'pipeline_k_base')! };
+        };
+        // Google's vector data holds no footprint near the structure (as at the ESB and the Ferry Building): the loops the base
+        // is cleaned and clipped by are the scan's own outline (scanDerivedFootprint), and the note says so
+        const none = await baseOf(ring(300, 310, 300, 310));
+        expect(none.pick.footprintSource).toBe('scan-geometry');
+        expect(none.base.footprint).toBe('scan outline');
+        // Google's own footprint of the structure is named Google's
+        const own = await baseOf(ring(-13, 13, -6, 5));
+        expect(own.pick.footprintSource).toBe('vector-footprint');
+        expect(own.base.footprint).toBe('Google vector footprint');
+        expect(own.base.loops).toEqual([ring(-13, 13, -6, 5)]);
+        // by provenance, not by whether there is a footprint at all
+        expect(footprintSource([])).toBe('scan outline');
+        expect(footprintSource([scanDerivedFootprint({ outline: ring(0, 1, 0, 1), heightM: 3 })!])).toBe('scan outline');
+        expect(footprintSource([{}, {}])).toBe('Google vector footprint');
+        expect(footprintSource([{}, { provenance: 'scan-footprint-measured' }])).toBe('scan outline');
     });
 });
 

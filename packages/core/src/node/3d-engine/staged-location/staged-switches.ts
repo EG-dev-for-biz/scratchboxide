@@ -13,9 +13,11 @@
  *    ('k' is already the default for one building; 'j' makes the procedural pipeline the default instead);
  *  - SCRATCHBOX_STAGED_MODEL_SERVICE=meshy|trellis: the 3D model service pipeline J sends its character sheet to when the
  *    request names none (Meshy 7.1 by default, one seed; Trellis multi, best of six seeds and a swatch colour match);
- *  - SCRATCHBOX_STAGED_DISTRICT=scan|massing|rebuilt: a district shown as its remeshed scan, with pipeline E's massing for
- *    every building the scan confirms (the default, district-massing.ts), or rebuilt (every building, the ground and the
- *    streets recreated, the scan kept as the reference they supersede).
+ *  - SCRATCHBOX_STAGED_DISTRICT=scan|massing|rebuilt|kd: a district shown as its remeshed scan, with pipeline E's massing
+ *    for every building the scan confirms (the default, district-massing.ts), rebuilt (every building, the ground and the
+ *    streets recreated, the scan kept as the reference they supersede), or kd (pipeline K over the whole district, in
+ *    chunks: every facade straightened on the scan, no massing; pipeline-k/district-chunks.ts). A request's `district`
+ *    comes first; the staged tool still takes `pipeline: 'kd'` for it.
  * They replace SCRATCHBOX_STAGED_PROCEDURAL, which carried both a pipeline letter and 1 for a rebuilt district, and
  * SCRATCHBOX_STAGED_DISTRICT_MASSING. Pipelines G and H were retired and I merged into J as its Trellis service (user
  * decision, 2026-10-30). A retired switch or letter is not read: one still set is reported once, with the setting that
@@ -25,11 +27,11 @@
 
 export type StagedBuildingPipeline = 'j' | 'k';
 export type StagedModelService = 'meshy' | 'trellis';
-export type StagedDistrictMode = 'scan' | 'massing' | 'rebuilt';
+export type StagedDistrictMode = 'scan' | 'massing' | 'rebuilt' | 'kd';
 
 export const STAGED_BUILDING_PIPELINES: readonly StagedBuildingPipeline[] = ['j', 'k'];
 export const STAGED_MODEL_SERVICES: readonly StagedModelService[] = ['meshy', 'trellis'];
-export const STAGED_DISTRICT_MODES: readonly StagedDistrictMode[] = ['scan', 'massing', 'rebuilt'];
+export const STAGED_DISTRICT_MODES: readonly StagedDistrictMode[] = ['scan', 'massing', 'rebuilt', 'kd'];
 /** The switches these replace (2026-10-30). */
 export const RETIRED_STAGED_SWITCHES = ['SCRATCHBOX_STAGED_PROCEDURAL', 'SCRATCHBOX_STAGED_DISTRICT_MASSING'] as const;
 /** The pipeline letters retired on 2026-10-30, and what to ask for instead. */
@@ -59,10 +61,16 @@ export function stagedModelService(request: { modelService?: string }, env: Node
     return isModelService(v) ? v : 'meshy';
 }
 
-/** How a district is shown: 'massing' unless the environment asks for 'scan' or 'rebuilt'. */
+/** How a district is shown: 'massing' unless the environment asks for 'scan', 'rebuilt' or 'kd'. */
 export function stagedDistrictMode(env: NodeJS.ProcessEnv = process.env): StagedDistrictMode {
     const v = valueOf(env, 'SCRATCHBOX_STAGED_DISTRICT');
     return isDistrictMode(v) ? v : 'massing';
+}
+
+/** How this build's district is shown: the request's, else the environment's, else massing. */
+export function stagedDistrict(request: { district?: string }, env: NodeJS.ProcessEnv = process.env): StagedDistrictMode {
+    const asked = (request.district ?? '').trim().toLowerCase();
+    return isDistrictMode(asked) ? asked : stagedDistrictMode(env);
 }
 
 /** The new setting that does what a pipeline letter asked for. */
@@ -77,6 +85,7 @@ function replacementOf(name: typeof RETIRED_STAGED_SWITCHES[number], v: string):
     if (isRetiredLetter(v)) return `${letterReplacement(v)} (${RETIRED_PIPELINE_LETTERS[v]})`;
     if (isPipeline(v)) return letterReplacement(v);
     if (v === '1') return 'SCRATCHBOX_STAGED_DISTRICT=rebuilt';
+    if (v === 'kd') return 'SCRATCHBOX_STAGED_DISTRICT=kd';
     return `SCRATCHBOX_STAGED_BUILDING_PIPELINE=${STAGED_BUILDING_PIPELINES.join('|')} for the building, or SCRATCHBOX_STAGED_DISTRICT=rebuilt for the district`;
 }
 
@@ -89,6 +98,7 @@ export function stagedSwitchProblems(env: NodeJS.ProcessEnv = process.env): stri
     }
     const pipeline = valueOf(env, 'SCRATCHBOX_STAGED_BUILDING_PIPELINE');
     if (isRetiredLetter(pipeline)) out.push(`SCRATCHBOX_STAGED_BUILDING_PIPELINE=${pipeline} is ignored: ${RETIRED_PIPELINE_LETTERS[pipeline]}; set ${letterReplacement(pipeline)}.`);
+    else if (pipeline === 'kd') out.push('SCRATCHBOX_STAGED_BUILDING_PIPELINE=kd is ignored: kd is how a district is shown; set SCRATCHBOX_STAGED_DISTRICT=kd.');
     else if (pipeline && !isPipeline(pipeline)) out.push(`SCRATCHBOX_STAGED_BUILDING_PIPELINE takes ${STAGED_BUILDING_PIPELINES.join(', ')}; "${pipeline}" is ignored.`);
     const service = valueOf(env, 'SCRATCHBOX_STAGED_MODEL_SERVICE');
     if (service && !isModelService(service)) out.push(`SCRATCHBOX_STAGED_MODEL_SERVICE takes ${STAGED_MODEL_SERVICES.join(', ')}; "${service}" is ignored, so pipeline J uses Meshy.`);

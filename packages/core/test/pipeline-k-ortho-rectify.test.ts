@@ -20,7 +20,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { fillHoles, horizontalPeriod, levelSmears, ORTHO_RECTIFY_PARAMS, rectifyOrtho, traceLines, type Rgba } from '../src/node/3d-engine/staged-location/pipeline-k/ortho-rectify';
+import { fillHoles, horizontalPeriod, levelSmears, ORTHO_RECTIFY_PARAMS, rectifyOrtho, smoothFillHoles, traceLines, type Rgba } from '../src/node/3d-engine/staged-location/pipeline-k/ortho-rectify';
 import { rectifyReliefOrthos } from '../src/node/3d-engine/staged-location/pipeline-k/pipeline-k';
 
 const PX = 0.075, W = 240, H = 480;
@@ -117,6 +117,39 @@ describe('pipeline K ortho rectifier', () => {
         expect(lumaDiff(r.image, truth, 60, 158, 120, 260)).toBeLessThan(6);
         // and the real texels are untouched
         expect(lumaDiff(r.image, truth, 170, W, 0, H)).toBe(0);
+    });
+
+    it('with the nearest texel off, leaves the holes the repeats cannot fill grey for the later rungs', () => {
+        // a plain wall with no repeats (a slow gradient), its lower half uncovered
+        const rgba = new Uint8Array(W * H * 4);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) rgba.set(y < H / 2 ? [90 + (x >> 2), 100, 110, 255] : [128, 128, 128, 255], (y * W + x) * 4);
+        const off = fillHoles({ width: W, height: H, rgba: Uint8Array.from(rgba) }, PX, ORTHO_RECTIFY_PARAMS, { nearest: false });
+        expect(off.fill.fromNearest).toBe(0);
+        expect(Array.from(off.image.rgba.subarray((400 * W + 100) * 4, (400 * W + 100) * 4 + 3))).toEqual([128, 128, 128]);
+        const on = fillHoles({ width: W, height: H, rgba: Uint8Array.from(rgba) }, PX);
+        expect(on.fill.fromNearest).toBeGreaterThan(0);
+    });
+
+    it('fills a hole smoothly between the colours at its edge, never a streak and never the uncovered grey', () => {
+        // red on the left, blue on the right, a hole 80 px wide between them
+        const rgba = new Uint8Array(W * H * 4), hole = new Uint8Array(W * H);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const i = y * W + x;
+            if (x >= 80 && x < 160) { hole[i] = 1; rgba.set([128, 128, 128, 255], i * 4); } else rgba.set(x < 80 ? [220, 30, 30, 255] : [30, 30, 220, 255], i * 4);
+        }
+        expect(smoothFillHoles({ width: W, height: H, rgba }, hole)).toBe(80 * H);
+        // across the hole red falls and blue rises (monotone, give a level), the middle about half of each
+        const y = 240, at = (x: number, q: number) => rgba[(y * W + x) * 4 + q];
+        for (let x = 81; x < 160; x++) { expect(at(x, 0)).toBeLessThanOrEqual(at(x - 1, 0) + 1); expect(at(x, 2)).toBeGreaterThanOrEqual(at(x - 1, 2) - 1); }
+        expect(at(120, 0)).toBeGreaterThan(80); expect(at(120, 0)).toBeLessThan(170);
+        expect(at(120, 2)).toBeGreaterThan(80); expect(at(120, 2)).toBeLessThan(170);
+        // no step: neighbouring texels differ by little (the nearest texel would jump from red to blue mid-hole)
+        for (let x = 81; x < 160; x++) expect(Math.abs(at(x, 0) - at(x - 1, 0))).toBeLessThan(25);
+        // the real texels untouched; no exact grey written
+        expect([at(10, 0), at(10, 2)]).toEqual([220, 30]);
+        let grey = 0;
+        for (let i = 0; i < W * H; i++) if (rgba[i * 4] === 128 && rgba[i * 4 + 1] === 128 && rgba[i * 4 + 2] === 128) grey++;
+        expect(grey).toBe(0);
     });
 
     it('leaves a straight facade alone', () => {
