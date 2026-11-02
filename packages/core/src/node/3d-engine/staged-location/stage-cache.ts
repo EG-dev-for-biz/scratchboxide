@@ -133,6 +133,11 @@ export interface StageCacheOptions {
     /** Default <workspaceRoot>/public/models. */
     modelsDir?: string;
     now?: () => number;
+    /**
+     * Reads an entry this workspace lacks back from elsewhere (the cache mirror's bucket, cache-mirror.ts
+     * restoreCacheEntry) into its place; true when it is there now. Asked on a miss, before the stage runs.
+     */
+    restore?: (stage: string, key: string) => Promise<boolean>;
 }
 
 export class StageCache {
@@ -140,6 +145,7 @@ export class StageCache {
     readonly dir: string;
     readonly modelsDir: string;
     private readonly now: () => number;
+    private readonly restore?: (stage: string, key: string) => Promise<boolean>;
     private readonly inFlight = new Map<string, Promise<CachedStage<unknown>>>();
     /** The run publishing through this cache (the orchestrator sets it): published files are recorded under its recipe. */
     activeRunId?: string;
@@ -149,6 +155,7 @@ export class StageCache {
         this.dir = options.cacheDir ? resolveWithinRoot(this.workspaceRoot, options.cacheDir) : resolveWithinRoot(this.workspaceRoot, path.join('.scratchbox', 'cache', 'staged_location'));
         this.modelsDir = options.modelsDir ? path.resolve(options.modelsDir) : resolveWithinRoot(this.workspaceRoot, path.join('public', 'models'));
         this.now = options.now ?? Date.now;
+        if (options.restore) this.restore = options.restore;
     }
 
     entryDir(stage: string, key: string): string {
@@ -182,7 +189,8 @@ export class StageCache {
 
     /**
      * Runs `produce` into a fresh temp dir and renames it into the entry, then publishes. With `bypass`, an existing
-     * entry is ignored and replaced. Concurrent identical requests share one run.
+     * entry is ignored and replaced. Concurrent identical requests share one run. A miss is first offered to `restore`
+     * (the entry read back from the bucket); a restore that fails is a miss, never the build's failure.
      */
     run<T>(stage: string, key: string, produce: (dir: string) => Promise<{ value: T; inputs?: Record<string, unknown> }>,
         opts: { publish?: (dir: string, value: T) => PublishRequest[]; bypass?: boolean } = {}): Promise<CachedStage<T>> {
@@ -193,7 +201,12 @@ export class StageCache {
         const id = `${stage}/${key}`;
         const pending = this.inFlight.get(id);
         if (pending) return pending as Promise<CachedStage<T>>;
-        const work = this.produceEntry(stage, key, produce, opts.publish).finally(() => this.inFlight.delete(id));
+        const restored = async (): Promise<CachedStage<T> | undefined> => {
+            if (opts.bypass || !this.restore) return undefined;
+            try { return (await this.restore(stage, key)) ? this.get<T>(stage, key) : undefined; }
+            catch (err) { console.warn(`[stage-cache] ${stage}/${key.slice(0, 12)} could not be read back from the bucket: ${(err as Error).message}`); return undefined; }
+        };
+        const work = restored().then(hit => hit ?? this.produceEntry(stage, key, produce, opts.publish)).finally(() => this.inFlight.delete(id));
         this.inFlight.set(id, work as Promise<CachedStage<unknown>>);
         return work;
     }

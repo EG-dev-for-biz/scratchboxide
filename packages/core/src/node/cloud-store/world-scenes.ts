@@ -48,7 +48,24 @@ export interface OpenedWorld<S = Record<string, unknown>> {
 }
 
 const scenesPrefix = (key: string) => `${WORLD_CACHE_PREFIX}/${key}/scenes`;
-const cachedSceneFile = (dir: string) => path.join(dir, WORLD_SCENES_DIR, LATEST);
+const cachedSceneFile = (dir: string, file = LATEST) => path.join(dir, WORLD_SCENES_DIR, file);
+
+/** A saved version's name: its save time to the second (UTC) and four random characters, e.g. `20261030T184905Z-10jk`. */
+export const WORLD_SCENE_VERSION = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z-[a-z0-9]{1,8}$/;
+/** What `version` names to open the build's own scene (`scene3d.json`) rather than a saved one. */
+export const AS_BUILT = 'built';
+
+/** One entry of a world's version list. */
+export interface WorldSceneVersionInfo {
+    version: string;
+    savedAt: string;
+}
+
+/** When the version `name` was saved, read from its name. */
+function savedAtOf(name: string): string | undefined {
+    const m = WORLD_SCENE_VERSION.exec(name);
+    return m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z` : undefined;
+}
 
 /** This machine's copy of the newest saved version of the world in `dir`, or undefined when it holds none. */
 async function readCachedScene<S>(dir: string): Promise<WorldSceneVersion<S> | undefined> {
@@ -60,9 +77,8 @@ async function readCachedScene<S>(dir: string): Promise<WorldSceneVersion<S> | u
     }
 }
 
-/** Writes `entry` as this machine's copy of the world's newest saved version (through a temporary file, so a reader never sees half of it). */
-async function writeCachedScene<S>(dir: string, entry: WorldSceneVersion<S>): Promise<void> {
-    const file = cachedSceneFile(dir);
+/** Writes `entry` as this machine's copy of the world's newest saved version, or of one version (through a temporary file, so a reader never sees half of it). */
+async function writeCachedScene<S>(dir: string, entry: WorldSceneVersion<S>, file = cachedSceneFile(dir)): Promise<void> {
     const tmp = `${file}.${process.pid}.tmp`;
     await fs.outputJson(tmp, entry);
     await fs.move(tmp, file, { overwrite: true });
@@ -98,10 +114,42 @@ export async function saveWorldScene<S>(bucket: CloudBucket, key: string, scene:
     return entry;
 }
 
+/** One saved version of the world `key`, or undefined when there is no such version. */
+export async function loadWorldSceneVersion<S>(bucket: CloudBucket, key: string, version: string): Promise<WorldSceneVersion<S> | undefined> {
+    if (!WORLD_SCENE_VERSION.test(version)) return undefined;
+    return withTmp(async tmp => {
+        if (!(await bucket.download(`${scenesPrefix(key)}/${version}.json`, tmp))) return undefined;
+        return await fs.readJson(tmp) as WorldSceneVersion<S>;
+    });
+}
+
 /** Every saved version of the world `key`, newest first (names and times only). */
 export async function listWorldScenes(bucket: CloudBucket, key: string): Promise<string[]> {
     const objects = await bucket.list(`${scenesPrefix(key)}/`);
-    return objects.map(o => path.basename(o.key, '.json')).filter(v => v !== 'latest').sort().reverse();
+    return objects.map(o => path.basename(o.key, '.json')).filter(v => WORLD_SCENE_VERSION.test(v)).sort().reverse();
+}
+
+/**
+ * The saved versions of the world `slug`, newest first, each with when it was saved: from the cloud, else (no bucket,
+ * or no cloud entry for the world) the versions this machine holds.
+ */
+export async function listWorldVersions(slug: string, tilesetsDir: string, bucket: CloudBucket | undefined): Promise<{ versions: WorldSceneVersionInfo[]; source: 'cloud' | 'cache' }> {
+    if (!WORLD_SLUG.test(slug)) throw new Error(`Not a world name: ${JSON.stringify(slug)}`);
+    const key = bucket ? await readWorldIndex(bucket, slug) : undefined;
+    let names: string[];
+    let source: 'cloud' | 'cache';
+    if (bucket && key) {
+        names = await listWorldScenes(bucket, key);
+        source = 'cloud';
+    } else {
+        const dir = path.join(tilesetsDir, slug, WORLD_SCENES_DIR);
+        const local = (await fs.pathExists(dir)) ? await fs.readdir(dir) : [];
+        const latest = await readCachedScene(path.join(tilesetsDir, slug));
+        names = [...new Set([...local.map(f => path.basename(f, '.json')), ...(latest ? [latest.version] : [])])]
+            .filter(v => WORLD_SCENE_VERSION.test(v)).sort().reverse();
+        source = 'cache';
+    }
+    return { versions: names.map(version => ({ version, savedAt: savedAtOf(version)! })), source };
 }
 
 /**
@@ -134,6 +182,36 @@ export async function openWorld<S>(slug: string, tilesetsDir: string, bucket: Cl
 }
 
 /**
+ * Opens one version of the world kept in `tilesetsDir/<slug>`: a saved version (from this machine's copy when it holds
+ * it, else from the cloud, then kept here), or the build's own scene when `version` is `built`. Throws when there is
+ * no such version.
+ */
+export async function openWorldVersion<S>(slug: string, version: string, tilesetsDir: string, bucket: CloudBucket | undefined): Promise<OpenedWorld<S>> {
+    if (!WORLD_SLUG.test(slug)) throw new Error(`Not a world name: ${JSON.stringify(slug)}`);
+    const dir = path.join(tilesetsDir, slug);
+    if (version === AS_BUILT) {
+        const local = path.join(dir, WORLD_SCENE_FILE);
+        if (!(await fs.pathExists(local))) throw new Error(`The world ${slug} is not on this machine, so its built scene cannot be opened`);
+        return { scene: await fs.readJson(local) as S, source: 'local' };
+    }
+    if (!WORLD_SCENE_VERSION.test(version)) throw new Error(`Not a version name: ${JSON.stringify(version)}`);
+    const kept = await readCachedScene<S>(dir).then(latest => latest?.version === version ? latest : undefined)
+        ?? await (async () => {
+            try {
+                return await fs.readJson(cachedSceneFile(dir, `${version}.json`)) as WorldSceneVersion<S>;
+            } catch {
+                return undefined;
+            }
+        })();
+    if (kept) return { scene: kept.scene, source: 'cache', version: kept.version, savedAt: kept.savedAt };
+    const key = bucket ? await readWorldIndex(bucket, slug) : undefined;
+    const saved = bucket && key ? await loadWorldSceneVersion<S>(bucket, key, version) : undefined;
+    if (!saved) throw new Error(`The world ${slug} has no saved version ${version}${bucket ? '' : ' on this machine, and no world cache bucket is configured'}`);
+    if (await fs.pathExists(path.join(dir, WORLD_SCENE_FILE))) await writeCachedScene(dir, saved, cachedSceneFile(dir, `${version}.json`));
+    return { scene: saved.scene, source: 'cloud', version: saved.version, savedAt: saved.savedAt };
+}
+
+/**
  * Brings this machine's copy of the world's newest saved version up to the cloud's: a version saved elsewhere since
  * replaces it, so the next open shows it. Returns the version now kept here when it changed, else undefined.
  */
@@ -159,6 +237,9 @@ export async function saveWorld<S>(slug: string, scene: S, tilesetsDir: string, 
     if (!key) throw new Error(`The world cache (${bucket.label}) has no entry for ${slug}: build it (or let its build finish storing) before saving it`);
     const saved = await saveWorldScene(bucket, key, scene);
     const dir = path.join(tilesetsDir, slug);
-    if (await fs.pathExists(path.join(dir, WORLD_SCENE_FILE))) await writeCachedScene(dir, saved);
+    if (await fs.pathExists(path.join(dir, WORLD_SCENE_FILE))) {
+        await writeCachedScene(dir, saved, cachedSceneFile(dir, `${saved.version}.json`));
+        await writeCachedScene(dir, saved);
+    }
     return { ...saved, key };
 }

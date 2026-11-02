@@ -262,6 +262,22 @@ export class GoogleTileDistrictCrawler {
         return GoogleTileDistrictCrawler.footprintDistance(box, frame) <= radiusM;
     }
 
+    /**
+     * Whether a 3D Tiles oriented box, projected onto the tangent plane, touches a rectangle of that plane (x east, z south,
+     * metres about the frame origin; the staged scan frame's axes): the box's projected corners' extent against it.
+     */
+    static footprintIntersectsRect(box: number[], frame: LocalFrame, rect: { x0: number; z0: number; x1: number; z1: number }): boolean {
+        const c: Vec3 = [box[0], box[1], box[2]];
+        const axes: Vec3[] = [[box[3], box[4], box[5]], [box[6], box[7], box[8]], [box[9], box[10], box[11]]];
+        let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+        for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) {
+            const p: Vec3 = [0, 1, 2].map(i => c[i] + sx * axes[0][i] + sy * axes[1][i] + sz * axes[2][i] - frame.origin[i]) as Vec3;
+            const x = dot(p, frame.east), z = -dot(p, frame.north);
+            x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+        }
+        return x1 >= rect.x0 && x0 <= rect.x1 && z1 >= rect.z0 && z0 <= rect.z1;
+    }
+
     /** Horizontal distance from the frame origin to a 3D Tiles oriented box projected onto the tangent plane (0 when the footprint covers the origin). */
     static footprintDistance(box: number[], frame: LocalFrame): number {
         const c: Vec3 = [box[0], box[1], box[2]];

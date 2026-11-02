@@ -98,7 +98,7 @@ export interface BaseCleanupReport {
     partyWall: { areaM2: number; edges: number };
 }
 
-const dist2Seg = (px: number, pz: number, a: Vec2, b: Vec2) => {
+export const dist2Seg = (px: number, pz: number, a: Vec2, b: Vec2) => {
     const dx = b[0] - a[0], dz = b[1] - a[1], l2 = dx * dx + dz * dz;
     const t = l2 > 0 ? Math.max(0, Math.min(1, ((px - a[0]) * dx + (pz - a[1]) * dz) / l2)) : 0;
     return Math.hypot(px - a[0] - t * dx, pz - a[1] - t * dz);

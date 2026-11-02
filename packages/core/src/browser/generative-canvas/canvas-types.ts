@@ -995,7 +995,7 @@ export interface SceneColorHarmonySector {
  * A colour harmony grade on the viewport (the tool strip's Colour harmony panel, sb_set_color_harmony): every hue drawn
  * moves toward the nearest sector of a template turned to `hueDeg` on the OKLCH hue circle (Cohen-Or et al. 2006), keeping
  * its lightness, so shading and texture stay and only the colour changes. Drawn in linear light before tone mapping, on
- * the scene's objects only: the sky and background are their own component and are never graded. The template is any list of sectors: no named template types.
+ * the scene's objects only unless `includeSky` asks for the sky and background too. The template is any list of sectors: no named template types.
  */
 export interface SceneColorHarmony {
     /** Where the template is turned, degrees on the OKLCH hue circle (about 30 red, 110 yellow, 145 green, 265 blue). */
@@ -1008,6 +1008,62 @@ export interface SceneColorHarmony {
     chroma?: number;
     /** Colour added at hueDeg, 0-1, scaled by lightness (default 0): what colours neutral surfaces (clay, white, grey), which have no hue to move. */
     tint?: number;
+    /** Grade the sky and background too (opt-in; default false: the scene's objects only). */
+    includeSky?: boolean;
+}
+
+/**
+ * The look of a reference photo, measured over what it shows (the whole photo, or the part a description picks out) by
+ * lightness band: each band's lightness, its mean Oklab colour, and the spread of colour about that mean. Measured on the
+ * photo's display colours.
+ */
+export interface SceneLookBand {
+    /** Oklab lightness (0-1). */
+    L: number;
+    /** Mean Oklab a and b. */
+    a: number;
+    b: number;
+    /** RMS distance of colours from (a, b): how colourful the band is about its mean. */
+    spread: number;
+}
+
+/** One knot of a fitted look match, at a lightness the scene's objects show: where that lightness and its colour go. */
+export interface SceneLookMatchKnot {
+    sourceL: number;
+    targetL: number;
+    /** The objects' mean Oklab a, b at sourceL, and the reference's at targetL. */
+    sourceA: number;
+    sourceB: number;
+    targetA: number;
+    targetB: number;
+    /** Scale of colour about the mean (the reference's spread over the objects'). */
+    chromaGain: number;
+}
+
+/**
+ * A look matched from a reference photo onto the viewport's objects (the Colour harmony panel's reference photo,
+ * sb_set_look_match): the objects' display colours, band by lightness, are mapped onto the reference's: a tone curve, a
+ * colour per band, and the spread of colour about it. Drawn after tone mapping (a grade on what is shown, the domain the
+ * photo was measured in), on the scene's objects only, and on the sky only when `sky` holds its own fit. The fit is made against one view; `reference.bands`
+ * keep the photo's look, so it can be refitted to another view without the photo.
+ */
+export interface SceneLookMatch {
+    reference: {
+        /** A name for the photo (its file name); a label only. */
+        label?: string;
+        /** What in the photo was measured (a description given to the segmenter), absent = the whole photo; a label only. */
+        target?: string;
+        bands: SceneLookBand[];
+    };
+    /** By sourceL ascending. */
+    knots: SceneLookMatchKnot[];
+    /**
+     * The sky matched too (opt-in): what is not the scene's objects (the background, a sky texture or dome) mapped onto the
+     * photo's sky (cut out by the segmenter) the same way. Absent = the sky is left as drawn.
+     */
+    sky?: { bands: SceneLookBand[]; knots: SceneLookMatchKnot[] };
+    /** How far the match is applied, 0-1 (default 1). */
+    strength?: number;
 }
 
 /** What the viewport shows while a graph node holds the display flag; every list is optional, one is enough. */
@@ -1150,6 +1206,8 @@ export interface Scene3DData {
     weather?: import('./services/atmosphere/scene-weather').SceneWeatherState;
     /** A colour harmony grade the viewport draws on the scene's objects (sb_set_color_harmony); absent = none. */
     colorHarmony?: SceneColorHarmony;
+    /** A look matched from a reference photo, drawn on the scene's objects (sb_set_look_match); absent = none. */
+    lookMatch?: SceneLookMatch;
     environment?: {
         skybox?: string;
         lighting?: string;

@@ -24,7 +24,7 @@ import {
 } from '../src/node/3d-engine/staged-location/staged-location-tool';
 import { STAGE_IDS, type ScanFitDeps, type StagedLocationDeps } from '../src/node/3d-engine/staged-location/orchestrator';
 import { StageCache } from '../src/node/3d-engine/staged-location/stage-cache';
-import { MissingInputError } from '../src/common/errors/pipeline-errors';
+import { InvalidInputError, MissingInputError } from '../src/common/errors/pipeline-errors';
 import { GOOGLE_3D_TILES_TOOL_DECLARATIONS as spatialToolDeclarations } from '../src/node/gemini/tools/spatial-tools';
 import { toolResultForModel } from '../src/node/gemini/streaming';
 import { buildContents } from '../src/node/gemini/prompt-builder';
@@ -76,6 +76,15 @@ describe('parseStagedLocationArgs', () => {
         expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, procedural: false }).request).not.toHaveProperty('procedural');
         expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, procedural: false }).request).not.toHaveProperty('pipeline');
         expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', procedural: true }).request).not.toHaveProperty('procedural');
+        // pipeline K-D: K over a district, never isolated nor procedural
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', pipeline: 'kd' }).request).toMatchObject({ isolate: false, district: 'kd' });
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, pipeline: 'kd' }).request).toMatchObject({ isolate: false, district: 'kd' });
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, pipeline: 'kd' }).request).not.toHaveProperty('procedural');
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, pipeline: 'kd' }).request).not.toHaveProperty('pipeline');
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', district: ' KD ' }).request).toMatchObject({ isolate: false, district: 'kd' });
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', district: 'scan' }).request).toMatchObject({ isolate: false, district: 'scan' });
+        expect(parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, district: 'scan' }).request).toMatchObject({ isolate: true, district: 'scan', pipeline: 'k' });
+        expect(() => parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', district: 'procedural' })).toThrow(InvalidInputError);
     });
 
     it('needs a query, a sound tree budget, and for a retry a run id of 8 hex digits and a known stage; a retry needs no query', () => {
