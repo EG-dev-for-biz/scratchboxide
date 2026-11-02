@@ -23,11 +23,64 @@ concurrency:
 
 jobs:
   verify:
-    name: Typecheck, lint, test (${{ matrix.os }})
+    name: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        include:
+          # The macos-15 runner takes four test files at a time, so the whole suite fits one job there.
+          - name: Typecheck, lint, test (macos-15)
+            os: macos-15
+            checks: true
+            test: true
+          # The ubuntu-24.04 runner of a private repository has 2 vCPUs: vitest runs one test file at a time there, and
+          # renders headless Chrome and compiles C++ several times slower than on macOS, so the whole suite takes over
+          # two hours. Ubuntu typechecks, lints and builds once and runs the tests in ten shards split by measured time
+          # (vitest --shard, split by vitest.shard-sequencer.ts): the slowest file alone in one, about 14 minutes of tests
+          # in each other, so that a runner a third slower than the one measured still ends inside the limit.
+          - name: Typecheck, lint, build (ubuntu-24.04)
+            os: ubuntu-24.04
+            checks: true
+          - name: Test (ubuntu-24.04, shard 1/10)
+            os: ubuntu-24.04
+            test: true
+            shard: 1/10
+          - name: Test (ubuntu-24.04, shard 2/10)
+            os: ubuntu-24.04
+            test: true
+            shard: 2/10
+          - name: Test (ubuntu-24.04, shard 3/10)
+            os: ubuntu-24.04
+            test: true
+            shard: 3/10
+          - name: Test (ubuntu-24.04, shard 4/10)
+            os: ubuntu-24.04
+            test: true
+            shard: 4/10
+          - name: Test (ubuntu-24.04, shard 5/10)
+            os: ubuntu-24.04
+            test: true
+            shard: 5/10
+          - name: Test (ubuntu-24.04, shard 6/10)
+            os: ubuntu-24.04
+            test: true
+            shard: 6/10
+          - name: Test (ubuntu-24.04, shard 7/10)
+            os: ubuntu-24.04
+            test: true
+            shard: 7/10
+          - name: Test (ubuntu-24.04, shard 8/10)
+            os: ubuntu-24.04
+            test: true
+            shard: 8/10
+          - name: Test (ubuntu-24.04, shard 9/10)
+            os: ubuntu-24.04
+            test: true
+            shard: 9/10
+          - name: Test (ubuntu-24.04, shard 10/10)
+            os: ubuntu-24.04
+            test: true
+            shard: 10/10
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     env:
@@ -49,11 +102,13 @@ jobs:
       # The Python of the project .venv requirements.txt was pinned from: the committed scratchbox stubs are generated on
       # it, and an older Python writes its annotations differently (typing.Optional[X], not X | None), failing sb-stubs.test.ts.
       - uses: actions/setup-python@v5
+        if: matrix.test
         with:
           python-version: '3.14'
 
       # numpy on the PATH python3: the skinning-parity test runs scripts/sbx_skinning.py with it.
       - name: Python venv for the native engine
+        if: matrix.test
         run: |
           python -m venv .venv
           # PyPI's Linux torch wheel brings the CUDA libraries (several GB) and fills the runner's disk; the tests run
@@ -67,10 +122,13 @@ jobs:
       # Media tests shell out to ffmpeg (JPEG/video encode) and cwebp (WebP textures); they skip
       # with a reason when the binary is missing, so install them here to keep CI covering them.
       - name: System tools for media tests (ffmpeg, cwebp)
+        if: matrix.test
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update
-            sudo apt-get install -y --no-install-recommends ffmpeg webp
+            # libegl1 and libgles2: MediaPipe's native library (pose landmarker, interactive segmenter) links libEGL and
+            # libGLESv2 even when it runs on the CPU, and its Python bindings fail to load without them
+            sudo apt-get install -y --no-install-recommends ffmpeg webp libegl1 libgles2
           else
             brew install ffmpeg webp
           fi
@@ -80,15 +138,21 @@ jobs:
         run: npm run build:core
 
       - name: Typecheck
+        if: matrix.checks
         run: npm run typecheck
 
       - name: Lint
+        if: matrix.checks
         run: npm run lint
 
       - name: Test
-        run: npm test
+        if: matrix.test
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: npm test -- ${SHARD:+--shard=$SHARD}
 
       - name: Build
+        if: matrix.checks
         run: npm run build
 
   docker:

@@ -321,10 +321,25 @@ describe('native build cache bounds', () => {
         expect(hit.cacheHit).toBe(true);
         expect(Date.now() - fs.statSync(stamp).mtimeMs).toBeLessThan(MIN);
 
-        // while bounds_2 compiles in this process, a prune past every bound (no grace) leaves it alone
-        const pending = compileNativeCached(spec(2));
-        await new Promise(r => setTimeout(r, 50));
-        const during = pruneNativeBuildCache({ cacheRoot: root, maxBytes: 0, maxAgeMs: 0, minIdleMs: 0 });
+        // while bounds_2 compiles in this process, a prune past every bound (no grace) leaves it alone. Its compiler is held
+        // at a gate until the prune has looked (a hello world compiles in tens of milliseconds, so a fixed wait could see it
+        // finished, or see its entry changed within the same millisecond as the prune, not yet past an age bound of 0)
+        const gate = path.join(dir, 'bounds2-gate');
+        const gated = path.join(dir, 'cxx-gated.sh');
+        fs.writeFileSync(gated, `#!/bin/sh\nif [ "$1" = "--version" ]; then exec "${process.env.CXX}" --version; fi\ntouch "${gate}.started"\nwhile [ ! -e "${gate}.open" ]; do sleep 0.02; done\nexec "${process.env.CXX}" "$@"\n`);
+        fs.chmodSync(gated, 0o755);
+        const pending = compileNativeCached({ ...spec(2), compiler: gated });
+        const started = `${gate}.started`;
+        let during: ReturnType<typeof pruneNativeBuildCache>;
+        try {
+            for (let t0 = Date.now(); !(fs.existsSync(started) && Date.now() > fs.statSync(started).mtimeMs);) {
+                if (Date.now() - t0 > 60_000) throw new Error('the bounds_2 compiler never started');
+                await new Promise(r => setTimeout(r, 10));
+            }
+            during = pruneNativeBuildCache({ cacheRoot: root, maxBytes: 0, maxAgeMs: 0, minIdleMs: 0 });
+        } finally {
+            fs.writeFileSync(`${gate}.open`, '');
+        }
         expect(during.removed.map(e => e.key)).toEqual([first.key]);
         const second = await pending;
         expect(during.kept.map(e => e.key)).toContain(second.key);
