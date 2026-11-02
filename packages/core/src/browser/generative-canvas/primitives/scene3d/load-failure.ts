@@ -52,3 +52,12 @@ export function isAppPageAnswer(err: unknown): boolean {
     const message = String((err as { message?: unknown } | undefined)?.message ?? err ?? '');
     return /<!doctype|<html|unexpected token '?<'?/i.test(message);
 }
+
+/**
+ * Whether a load error is the server saying the file is not there (404 or 410): a saved scene whose files were made in
+ * another checkout of the app, or deleted. The viewport says so in plain words rather than quoting the loader.
+ */
+export function isMissingFileAnswer(err: unknown): boolean {
+    const message = String((err as { message?: unknown } | undefined)?.message ?? err ?? '');
+    return /responded with (404|410)\b/i.test(message);
+}

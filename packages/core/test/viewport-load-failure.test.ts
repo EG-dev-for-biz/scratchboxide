@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { isAppPageAnswer, isNetworkLoadFailure, networkRetryDelayMs, NETWORK_RETRY_DELAYS_MS } from '../src/browser/generative-canvas/primitives/scene3d/load-failure';
+import { isAppPageAnswer, isMissingFileAnswer, isNetworkLoadFailure, networkRetryDelayMs, NETWORK_RETRY_DELAYS_MS } from '../src/browser/generative-canvas/primitives/scene3d/load-failure';
 import { resolveViewportNotice } from '../src/browser/generative-canvas/primitives/scene3d/ViewportNotice';
 
 describe('model loads that could not reach the server', () => {
@@ -57,5 +57,37 @@ describe('model loads that could not reach the server', () => {
         expect(isAppPageAnswer(new Error('THREE.GLTFLoader: Unsupported asset. glTF versions >=2.0 are supported.'))).toBe(false);
         expect(isAppPageAnswer(new Error('fetch for "/models/x.glb" responded with 404: Not Found'))).toBe(false);
         expect(isAppPageAnswer(undefined)).toBe(false);
+    });
+});
+
+describe('a saved build whose files are not on this machine', () => {
+    const base = { webglError: null, generatorError: null, tilesError: null, contentKind: 'objects' as const };
+
+    it('tells a 404 from other answers', () => {
+        expect(isMissingFileAnswer(new Error('fetch for "http://127.0.0.1:4110/models/st_mark_s_church_iso_tiles_52c85820.glb" responded with 404: Not Found'))).toBe(true);
+        expect(isMissingFileAnswer(new Error('fetch for "/models/x.glb" responded with 410: Gone'))).toBe(true);
+        expect(isMissingFileAnswer(new Error('fetch for "/models/x.glb" responded with 500: Internal Server Error'))).toBe(false);
+        expect(isMissingFileAnswer(new SyntaxError('Unexpected token \'<\', "<!DOCTYPE "... is not valid JSON'))).toBe(false);
+        expect(isMissingFileAnswer(new TypeError('Failed to fetch'))).toBe(false);
+        expect(isMissingFileAnswer(undefined)).toBe(false);
+    });
+
+    it('says so in plain words, once for all its files, apart from files that are there but broken', () => {
+        const notices = resolveViewportNotice({
+            ...base,
+            objectLoadErrors: [
+                { id: 'stg-52c85820-l1', error: 'fetch for "/models/a_tiles_52c85820.glb" responded with 404: Not Found', missingFile: '/models/a_tiles_52c85820.glb' },
+                { id: 'stg-10b42025-l2v', error: 'fetch for "/models/a_remesh_10b42025.glb" responded with 404: Not Found', missingFile: '/models/a_remesh_10b42025.glb' },
+                { id: 'stg-10b42025-l2v~tex', error: 'fetch for "/models/a_remesh_10b42025.glb" responded with 404: Not Found', missingFile: '/models/a_remesh_10b42025.glb' },
+                { id: 'hero', error: 'THREE.GLTFLoader: Unsupported asset.' }
+            ]
+        });
+        expect(notices.map(n => n.kind)).toEqual(['missing-files', 'object-load-error']);
+        expect(notices[0].title).toBe('This build\'s files are not on this machine');
+        expect(notices[0].detail).toBe('2 of its model files were not found here: the build ran in another checkout of the app, or its files were deleted.\na_tiles_52c85820.glb\na_remesh_10b42025.glb');
+        expect(notices[1]).toEqual({ kind: 'object-load-error', title: 'A model failed to load', detail: 'hero: THREE.GLTFLoader: Unsupported asset.' });
+
+        const one = resolveViewportNotice({ ...base, objectLoadErrors: [{ id: 'm', error: 'responded with 404', missingFile: '/models/m.glb' }] });
+        expect(one[0].detail).toMatch(/^Its model file was not found here/);
     });
 });

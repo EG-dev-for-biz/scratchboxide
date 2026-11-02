@@ -144,7 +144,7 @@ import { PlaceReflections, placeReflectionsEnabled } from './scene3d/placeReflec
 import type { AtmosphereInput } from './scene3d/syncAtmosphere';
 import { classifySceneContent, drawableModelKind, hasNonFallbackObjectContent, syncSceneContent, syncWasmMesh, undrawableSceneObjects } from './scene3d/syncSceneContent';
 import { ViewportNotice, resolveViewportNotice } from './scene3d/ViewportNotice';
-import { isAppPageAnswer, isNetworkLoadFailure, networkRetryDelayMs, NETWORK_RETRY_DELAYS_MS } from './scene3d/load-failure';
+import { isAppPageAnswer, isMissingFileAnswer, isNetworkLoadFailure, networkRetryDelayMs, NETWORK_RETRY_DELAYS_MS } from './scene3d/load-failure';
 import { fromInput, generatorErrorForScene, generatorRequestFailure, generatorRunFailure, type GeneratorRunError } from './scene3d/generatorRun';
 import type { SceneContentInput, SceneContentFactories } from './scene3d/syncSceneContent';
 import { syncCustomMeshes, disposeCustomMeshes } from './scene3d/syncCustomMeshes';
@@ -4152,7 +4152,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         return Object.entries(externalLoadStatus)
             .filter(([id, st]) => st.phase === 'error' && declared.has(id) && !recovering.has(st.servedPath ?? servedPathOf(id) ?? '')
                 && !(rebuilding && (st.servedPath ?? servedPathOf(id) ?? '').startsWith('/models/')) && !(st.network && networkRetryDelayMs(st.attempt ?? 1) !== undefined))
-            .map(([id, st]) => ({ id, error: st.error || 'the file could not be loaded' }));
+            .map(([id, st]) => {
+                const servedPath = st.servedPath ?? servedPathOf(id);
+                return { id, error: st.error || 'the file could not be loaded', ...(servedPath && isMissingFileAnswer(st.error) ? { missingFile: servedPath } : {}) };
+            });
     }, [externalLoadStatus, sceneData.objects, sceneData.splatUrl, assetRecovery]);
     /** Declared model files whose load could not reach the server and is being tried again. */
     const reconnectingFiles = React.useMemo(() => {

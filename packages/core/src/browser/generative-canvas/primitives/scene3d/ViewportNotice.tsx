@@ -12,7 +12,7 @@ import type { SceneContentKind } from './types';
 import type { GeneratorRunError } from './generatorRun';
 
 export interface ViewportNoticeEntry {
-    kind: 'webgl-error' | 'generator-error' | 'tiles-error' | 'object-load-error' | 'reconnecting' | 'undrawable-objects' | 'optics' | 'focus' | 'empty' | 'asset-recovery';
+    kind: 'webgl-error' | 'generator-error' | 'tiles-error' | 'object-load-error' | 'missing-files' | 'reconnecting' | 'undrawable-objects' | 'optics' | 'focus' | 'empty' | 'asset-recovery';
     title: string;
     detail?: string;
     /** 0..1 of a running step, when known. */
@@ -44,8 +44,11 @@ export interface ViewportNoticeInput {
      * procedural biome terrain).
      */
     hasAuxiliaryContent?: boolean;
-    /** Declared objects whose model or splat file failed to download or parse. */
-    objectLoadErrors?: Array<{ id: string; error: string }>;
+    /**
+     * Declared objects whose model or splat file failed to download or parse. `missingFile` is the served path when the
+     * server answered that the file is not there (load-failure.ts isMissingFileAnswer).
+     */
+    objectLoadErrors?: Array<{ id: string; error: string; missingFile?: string }>;
     /** Model files whose load could not reach the server and is being retried (Scene3DPrimitive, load-failure.ts). */
     reconnecting?: number;
     /** Declared objects the loader skips (not a model or splat file); see undrawableSceneObjects. */
@@ -87,7 +90,17 @@ export function resolveViewportNotice(input: ViewportNoticeInput): ViewportNotic
                 : recovery.onRebuild ? { action: { label: 'Rebuild this location', onClick: recovery.onRebuild } } : {})
         });
     }
-    const loadErrors = input.objectLoadErrors || [];
+    // files the server does not have (a build made in another checkout, or deleted) are said plainly, once for all of them
+    const missing = (input.objectLoadErrors || []).filter(e => e.missingFile);
+    if (missing.length > 0) {
+        const files = [...new Set(missing.map(e => e.missingFile!.split('/').pop()!))];
+        notices.push({
+            kind: 'missing-files',
+            title: 'This build\'s files are not on this machine',
+            detail: `${files.length === 1 ? 'Its model file was' : `${files.length} of its model files were`} not found here: the build ran in another checkout of the app, or its files were deleted.\n${listOf(files)}`
+        });
+    }
+    const loadErrors = (input.objectLoadErrors || []).filter(e => !e.missingFile);
     if (loadErrors.length > 0) {
         notices.push({
             kind: 'object-load-error',
@@ -155,8 +168,8 @@ export const ViewportNotice: React.FC<{ notices: ViewportNoticeEntry[] }> = ({ n
                     key={n.kind}
                     data-testid="sb-3d-viewport-notice"
                     data-kind={n.kind}
-                    role={n.kind === 'empty' || n.kind === 'focus' || n.kind === 'asset-recovery' || n.kind === 'reconnecting' ? 'status' : 'alert'}
-                    style={{ ...PANEL_STYLE, ...(n.kind === 'empty' || n.kind === 'focus' || n.kind === 'asset-recovery' || n.kind === 'reconnecting' ? EMPTY_STYLE : ERROR_STYLE) }}
+                    role={n.kind === 'empty' || n.kind === 'focus' || n.kind === 'asset-recovery' || n.kind === 'reconnecting' || n.kind === 'missing-files' ? 'status' : 'alert'}
+                    style={{ ...PANEL_STYLE, ...(n.kind === 'empty' || n.kind === 'focus' || n.kind === 'asset-recovery' || n.kind === 'reconnecting' || n.kind === 'missing-files' ? EMPTY_STYLE : ERROR_STYLE) }}
                 >
                     <div style={{ fontWeight: 600 }}>{n.title}</div>
                     {n.fraction !== undefined && (
@@ -167,7 +180,9 @@ export const ViewportNotice: React.FC<{ notices: ViewportNoticeEntry[] }> = ({ n
                     {n.detail && (
                         <div style={{
                             // Error details are tool output (stderr, compiler messages): keep their layout.
-                            ...(n.kind === 'empty' || n.kind === 'focus' || n.kind === 'reconnecting' ? {} : { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', whiteSpace: 'pre-wrap' as const }),
+                            ...(n.kind === 'empty' || n.kind === 'focus' || n.kind === 'reconnecting' ? {}
+                                : n.kind === 'missing-files' ? { whiteSpace: 'pre-wrap' as const }
+                                : { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', whiteSpace: 'pre-wrap' as const }),
                             wordBreak: 'break-word', marginTop: 4, opacity: 0.9
                         }}>{n.detail}</div>
                     )}
