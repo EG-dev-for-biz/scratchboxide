@@ -1,7 +1,7 @@
 # Process: The forest demo page's floor, moss, fern and bark surfaces drawn from the texture library at real size
 
 > **Recorded:** 2026-11-02
-> **Status:** Verified (Wideshot, Canopy, Hero and Ferns bookmarks and four close views before and after; no console errors, no failed responses, no `/textures` request; the forest test passes with credentials unreachable). Section 6: conifer crowns now draw the needle-spray atlas (species classification linked to the leaf choice), Verified. Needs Fix, not done here: the page's lighting was tuned for the old maps (section 3), and the crowns' architecture still grows broadleaf-like (section 6).
+> **Status:** Verified (Wideshot, Canopy, Hero and Ferns bookmarks and four close views before and after; no console errors, no failed responses, no `/textures` request; the forest test passes with credentials unreachable). Section 6: conifer crowns now draw the needle-spray atlas (species classification linked to the leaf choice), Verified. Section 7: pointed crowns whose species holds its leader grow excurrent (a stem through the crown, laterals at the species' angle), Verified. Needs Fix, not done here: the page's lighting was tuned for the old maps (section 3), and spray-sized leaf cards need a porous-leaf coverage rule in the leaf shaders (section 7).
 > **Tags:** `operate-scratchbox` `demos` `pbr-materials` `texture-library` `forest-viewer` `sb-veggie` `tree-species`
 > **Target Domain:** static demo page `/forest_3d_viewer.html` and its native generator `scripts/generate_forest_procedural_3d.cpp`
 
@@ -147,3 +147,32 @@
 * **Crown architecture.** SB-Veggie grows long sinuous scaffold limbs by space colonisation into the described crown. A coast redwood has a straight leader with short, near-horizontal, whorled branches carrying drooping sprays. The species entry's `apicalDominance`, `branchAngleRad` and `scaffoldBranches` do not yet produce that form. This is what still reads broadleaf from the bookmarks.
 * **Spray size.** The LOD sizes leaf cards from crown height (0.08-0.14 m), so a 0.34 m spray is drawn at about 0.4 of its size, as in the app's viewport. Sizing the cards from the chosen atlas leaf would change every tree's cluster geometry and budgets.
 * **Foliage colour.** The crowns' described colour is lifted pale by the page's haze and the foliage kernel's airlight.
+
+---
+
+## 7. Conifer architecture: an excurrent leader with laterals at the species' angle (same day)
+
+* **The cause of the broadleaf look:**
+  - `growSkeleton` (space colonisation, `scratchbox_nature.hpp`) grew every tree as a trunk to its crown break, forked into 2-4 scaffold limbs, which colonised the crown: a decurrent form whatever the species.
+  - The species library's apical dominance cannot express a cone: redwood 0.62, spruce 0.6, birch and ginkgo 0.6 too, and the index notes the grower stalls above about 0.65.
+* **Excurrence** (new, continuous, 0 grows exactly as before), per crown in `tile_vegetation`:
+  - `(1 - smoothstep(0.15, 0.30, measured top share)) x smoothstep(0.45, 0.60, apical dominance)`. A cone's top share is about 0.12 and a dome's about 0.58; the species library's conifers lie at 0.12-0.20, its broadleaves at 0.35 and over. The forest's redwood crowns measure 0.011, so 1.
+  - A first band of 0.20-0.45 also made the test suite's steep broadleaf domes (top share 0.27) excurrent; 0.15-0.30 leaves them at 0.10.
+  - At excurrence `e`, the leader carries on through `e` of the crown depth above the break before colonisation; the scaffold limbs still leave at the break.
+  - A lateral sprouting beside a shoot leaves at the species' `branchAngleRad` from that shoot.
+  - Shoots off the leader are steered `0.6 e` of the way toward that angle from the vertical, with tip droop `+0.25 e`.
+  - Recorded in each tree's `extras.inferred` as `topShare` and `excurrence`.
+  - The band is part of the growth record `strip` writes into crowns.json and `plant` reads back (`scripts/tile_vegetation.cpp`), so measuring and planting grow the same trees.
+  - `tree-mid-lod-cards.test.ts` compares card counts of a 6 m and a 4.5 m crown. Its 6 m crown (top share 0.19, eucalyptus) grows excurrent by default, which changes its card count: 314 decurrent, 261 excurrent, same coverage target met. Card count follows crown shape as well as area: a scaled copy of the small crowns gets 247 decurrent. So the test now plants its crowns at one growth form (decurrent) through that record.
+* **Engine check** (new case in the forest test): a 30 m cone of attractors, branch angle 80 degrees.
+  - At excurrence 0 the trunk stops at the break (leader share 0.005, laterals 32 degrees from vertical, 98% reached).
+  - At excurrence 1 the leader runs through 0.998 of the crown, laterals hold at 90 degrees (80 plus droop), 100% reached.
+* **Forest:** every redwood crown grows at excurrence 1.
+  - **Crowns view:** short, near-level laterals in tiers along a straight stem, where before there were long winding scaffold limbs.
+  - **Wideshot:** the crowns are narrow columns of foliage around their stems instead of spreading forks.
+  - Crown triangles are unchanged (83,070 of an 85,426 budget); generation 1-3 s.
+* **Leaf cards at the atlas leaf's size: tried and reverted.**
+  - Sizing the cards from the chosen leaf (0.34 m for the spray) spaced the stations 3x wider; crown triangles on screen fell from about 14 M to 3.7 M.
+  - The leaf shader's mip-alpha boost (`uSbMipScale`, meant to keep a solid leaf from eroding at distance) turned each distant spray card, which covers only 37% of its box, into an opaque flake. The page renders without MSAA, so alpha-to-coverage does not help.
+  - The Wideshot read as a field of solid pale flakes, so the cards stay sized from crown height.
+  - Drawing sprays at their real size needs a coverage rule for porous leaves (for example hashed alpha, and a boost scaled by the leaf's fill) in the app's viewport shader as well as the page's: a change of its own.

@@ -512,7 +512,9 @@ static int runPlant(const Args& a) {
     if (recorded.type == io::GlbJsonValue::Object) {
         const std::pair<const char*, double*> fields[] = {{"crownBaseRatio", &P.growth.crownBaseRatio}, {"trunkRadiusPerHeight", &P.growth.trunkRadiusPerHeight},
                                                           {"shellDepth", &P.growth.shellDepth}, {"minSurfaceReached", &P.growth.minSurfaceReached},
-                                                          {"crownBaseSpread", &P.growth.crownBaseSpread}, {"trunkLeanShare", &P.growth.trunkLeanShare}};
+                                                          {"crownBaseSpread", &P.growth.crownBaseSpread}, {"trunkLeanShare", &P.growth.trunkLeanShare},
+                                                          {"excurrentTopShareLo", &P.growth.excurrentTopShareLo}, {"excurrentTopShareHi", &P.growth.excurrentTopShareHi},
+                                                          {"excurrentApicalLo", &P.growth.excurrentApicalLo}, {"excurrentApicalHi", &P.growth.excurrentApicalHi}};
         const std::pair<const char*, float*> floatFields[] = {{"branchAngleSpreadRad", &P.growth.morphology.branchAngleSpreadRad}, {"apicalDominance", &P.growth.morphology.apicalDominance},
                                                               {"branchAngleMeanRad", &P.growth.morphology.branchAngleMeanRad}, {"internodeLengthM", &P.growth.morphology.internodeLengthM}};
         for (const auto& [name, field] : floatFields) {

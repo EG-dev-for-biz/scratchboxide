@@ -222,7 +222,100 @@ describe('Hyperrealistic Forest Procedural 3D Reconstruction from Image', () => 
             }
         }
         expect(needleCrowns).toBeGreaterThanOrEqual(40);
+
+        // the redwoods' crowns are pointed and their species holds its leader: they grow excurrent (a stem through the
+        // crown, laterals at the species' angle); the understory's rounded crowns fork at their break
+        const inferredOf = (t: Node) => t.extras!.inferred as { topShare: number; excurrence: number };
+        for (const t of redwoodCrowns) {
+            expect(inferredOf(t).topShare).toBeLessThan(0.2);
+            expect(inferredOf(t).excurrence, t.name).toBeGreaterThan(0.9);
+        }
     });
+
+    it('grows an excurrent crown as a leader through the crown with laterals at the species angle, and leaves excurrence 0 as it was', async () => {
+        const testCpp = `
+#include "scratchbox_nature.hpp"
+#include <iostream>
+#include <random>
+#include <cmath>
+#include <algorithm>
+using namespace scratchbox::nature;
+using namespace scratchbox::math;
+
+// a cone of attractors: 30 m tall, its crown from 12 m, 4 m wide at its base
+int main() {
+    std::vector<Vec3> cone;
+    std::mt19937 g(7);
+    std::uniform_real_distribution<float> u(0.0f, 1.0f);
+    while (cone.size() < 3000) {
+        const float y = 12.0f + 18.0f * u(g), r = 4.0f * (30.0f - y) / 18.0f * std::sqrt(u(g)), a = 6.2831853f * u(g);
+        cone.push_back(Vec3(r * std::cos(a), y, r * std::sin(a)));
+    }
+    for (float excurrence : {0.0f, 1.0f}) {
+        SpaceColonizationConfig cfg;
+        cfg.customAttractors = cone;
+        cfg.attractorCount = static_cast<int>(cone.size());
+        cfg.rootAnchor = Vec3(0, 0, 0);
+        cfg.crownCenter = Vec3(0, 21, 0);
+        cfg.crownExtents = Vec3(4, 9, 4);
+        cfg.clearTrunkHeight = 12.0f;
+        cfg.branchStepLength = 0.5f;
+        cfg.killRadius = 0.8f;
+        cfg.perceptionRadius = 3.5f;
+        cfg.maxIterations = 200;
+        cfg.scaffoldBranchCount = 4;
+        cfg.scaffoldAngleFromLeaderRad = 1.4f;   // 80 degrees: near level
+        cfg.growthMomentumFactor = 0.45f;
+        cfg.trunkSeeksCrown = true;
+        cfg.excurrence = excurrence;
+        cfg.leaderTopY = 30.0f;
+        std::mt19937 rng(11);
+        ColonizationReport rep;
+        auto nodes = SpaceColonizationTreeGenerator::growSkeleton(cfg, rng, &rep);
+        // the leader's top: the highest node within 0.6 m of the stem's axis reached by walking first children up from
+        // the crown break; the laterals' angle from the vertical: segments off that axis, beyond 1 m from it
+        int id = rep.trunkNodes - 1;
+        float leaderTop = nodes[id].position.y;
+        while (!nodes[id].children.empty()) {
+            int next = -1;
+            for (int c : nodes[id].children) {
+                const Vec3 p = nodes[c].position;
+                if (std::hypot(p.x, p.z) < 0.6f && (next < 0 || p.y > nodes[next].position.y)) next = c;
+            }
+            if (next < 0) break;
+            id = next;
+            leaderTop = std::max(leaderTop, nodes[id].position.y);
+        }
+        std::vector<float> angles;
+        for (const auto& n : nodes) {
+            if (n.parentId < 0 || std::hypot(n.position.x, n.position.z) < 1.0f) continue;
+            const Vec3 d = n.position - nodes[n.parentId].position;
+            angles.push_back(std::acos(std::clamp(d.y / std::max(1e-6f, d.length()), -1.0f, 1.0f)));
+        }
+        std::nth_element(angles.begin(), angles.begin() + angles.size() / 2, angles.end());
+        std::cout << "excurrence " << excurrence << " leaderShare " << (leaderTop - 12.0f) / 18.0f << " lateralAngle "
+                  << angles[angles.size() / 2] << " leaderNodes " << rep.leaderNodes << " reached " << rep.attractorsReached << "/" << rep.attractors << "\\n";
+    }
+    return 0;
+}
+`;
+        const result = await compiler.compileSource(testCpp, { outputBinaryName: 'test_excurrent_growth', optimization: '-O2' });
+        expect(result.success).toBe(true);
+        const execResult = await compiler.executeBinary(path.resolve(process.cwd(), 'build/3d-native/test_excurrent_growth'), [], process.cwd());
+        expect(execResult.exitCode).toBe(0);
+        const rows = Object.fromEntries([...execResult.stdout.matchAll(/excurrence (\S+) leaderShare (\S+) lateralAngle (\S+) leaderNodes (\d+) reached (\d+)\/(\d+)/g)]
+            .map(m => [m[1], { leader: +m[2], angle: +m[3], leaderNodes: +m[4], reached: +m[5] / +m[6] }]));
+        console.log(rows);
+        // excurrence 0: the trunk stops at the crown break and grows no leader of its own
+        expect(rows['0'].leaderNodes).toBe(0);
+        // excurrence 1: the leader runs on through most of the crown, the laterals hold near the species' 80 degrees
+        // (within 20), and the crown is still filled
+        expect(rows['1'].leaderNodes).toBeGreaterThan(20);
+        expect(rows['1'].leader).toBeGreaterThan(0.8);
+        expect(Math.abs(rows['1'].angle - 1.4)).toBeLessThan(0.35);
+        expect(rows['1'].angle).toBeGreaterThan(rows['0'].angle);
+        expect(rows['1'].reached).toBeGreaterThan(0.9);
+    }, 120000);
 
     it('should compile and evaluate general BotanicalOrganGenerator, NurseLogGenerator, and BiomassScatterEngine', async () => {
         const testCpp = `

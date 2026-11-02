@@ -548,6 +548,13 @@ struct GrowthParams {
     // it between limbs), internodeLengthM the step along a shoot (0: from the tree's height); the rest (leaf distribution,
     // divergence, blade outline) shapes the leaf clusters plant writes.
     sb_veggie::SbVeggieMorphology morphology;
+    // How excurrent a crown grows (nature::SpaceColonizationConfig::excurrence: its leader on through the crown, laterals at
+    // the species' branch angle): (1 - smoothstep of its measured top share over excurrentTopShare) x smoothstep of the
+    // apical dominance it grows with over excurrentApical. A pointed crown (a cone's top share is about 0.12, a dome's
+    // about 0.58; the species library's conifers lie at 0.12-0.20, its broadleaves at 0.35 and over) whose leader holds
+    // grows a straight stem with its laterals along it; a rounded one forks at its break.
+    double excurrentTopShareLo{0.15}, excurrentTopShareHi{0.30};
+    double excurrentApicalLo{0.45}, excurrentApicalHi{0.60};
     // The tree species library (scratchbox_tree_species.hpp; null: none): each crown grows with the proportions of the
     // entry nearest its measurements (crown base, trunk radius, stems, scaffold limbs and their angle, the leader's
     // momentum, the leaf the textures are chosen by) instead of the ratios above; a crown far from every entry grows
@@ -636,6 +643,8 @@ struct CrownGrowth {
     bool hasSpecies{false};
     tree_species::Choice species;
     int stems{1};                       // stems leaving the ground (more than one: grown as a shrub)
+    double topShare{0};                 // its measured crown's top share (tree_species::describeCrown)
+    double excurrence{0};               // how excurrent it grew (GrowthParams::excurrentTopShare / excurrentApical)
     nature::SpaceColonizationConfig cfg;
     std::vector<nature::ColonizationNode> skeleton;
     nature::ColonizationReport colonisation;
@@ -846,6 +855,14 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
     cfg.scaffoldAngleFromLeaderRad = static_cast<float>(branchAngle) + static_cast<float>(G.morphology.branchAngleSpreadRad * (2.0 * detail::hashUnit(g.seed, 9003, 1) - 1.0));
     cfg.scaffoldAngleSpreadRad = 0.5f * G.morphology.branchAngleSpreadRad;
     cfg.growthMomentumFactor = 0.76f * static_cast<float>(apical);
+    {
+        // a pointed crown whose leader holds grows its leader on through the crown, the laterals along it
+        auto smooth = [](double lo, double hi, double x) { const double t = std::clamp((x - lo) / std::max(1e-9, hi - lo), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); };
+        g.topShare = tree_species::describeCrown(c.apex, support, c.sectorRadii, c.samples, nullptr, G.speciesChoice).topShare;
+        g.excurrence = (1.0 - smooth(G.excurrentTopShareLo, G.excurrentTopShareHi, g.topShare)) * smooth(G.excurrentApicalLo, G.excurrentApicalHi, apical);
+        cfg.excurrence = static_cast<float>(g.excurrence);
+        cfg.leaderTopY = static_cast<float>(g.apexTargetY);
+    }
     // stems from the ground: the trunk forks just above the root collar and the scaffold limbs are the stems
     cfg.isShrub = g.stems > 1;
     if (cfg.isShrub) cfg.scaffoldBranchCount = std::max(cfg.scaffoldBranchCount, g.stems);
@@ -4814,7 +4831,9 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
       << ",\"minSurfaceReached\":" << json::numPrecise(P.growth.minSurfaceReached) << ",\"crownBaseSpread\":" << json::numPrecise(P.growth.crownBaseSpread)
       << ",\"branchAngleSpreadRad\":" << json::num(std::stod(detail::fixed(P.growth.morphology.branchAngleSpreadRad, 6))) << ",\"trunkLeanShare\":" << json::numPrecise(P.growth.trunkLeanShare)
       << ",\"apicalDominance\":" << json::num(std::stod(detail::fixed(P.growth.morphology.apicalDominance, 6))) << ",\"branchAngleMeanRad\":" << json::num(std::stod(detail::fixed(P.growth.morphology.branchAngleMeanRad, 6)))
-      << ",\"internodeLengthM\":" << json::num(std::stod(detail::fixed(P.growth.morphology.internodeLengthM, 6))) << "},\n";
+      << ",\"internodeLengthM\":" << json::num(std::stod(detail::fixed(P.growth.morphology.internodeLengthM, 6)))
+      << ",\"excurrentTopShareLo\":" << json::numPrecise(P.growth.excurrentTopShareLo) << ",\"excurrentTopShareHi\":" << json::numPrecise(P.growth.excurrentTopShareHi)
+      << ",\"excurrentApicalLo\":" << json::numPrecise(P.growth.excurrentApicalLo) << ",\"excurrentApicalHi\":" << json::numPrecise(P.growth.excurrentApicalHi) << "},\n";
     // the species library the crowns were grown with (plant must grow them with the same one)
     if (P.growth.species) s << "\"species\":{\"schema\":" << json::str(P.growth.species->schema) << ",\"index\":" << json::str(P.growth.speciesIndex) << ",\"entries\":" << P.growth.species->entries.size() << "},\n";
     s << "\"crowns\":[";
@@ -5016,6 +5035,7 @@ inline std::string stripStatsJson(const StripResult& r) {
 
 struct PlantedTree {
     int crownId{0};
+    double excurrence{0}, topShare{0};   // how excurrent it grew, from its measured top share (CrownGrowth)
     uint32_t seed{0};
     size_t target{0};                // triangles this crown's size asks for (crownTriangleTarget)
     size_t needed{0};                // triangles its leaf masses on the measured surface need (trianglesForLeafMasses)
@@ -5305,6 +5325,8 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
             tr.colonisation = g.colonisation;
             tr.crownBaseRatio = g.crownBaseRatio;
             tr.trunkRadiusPerHeight = g.trunkRadiusPerHeight;
+            tr.excurrence = g.excurrence;
+            tr.topShare = g.topShare;
             tr.hasSpecies = g.hasSpecies;
             tr.species = g.species;
             tr.stems = g.stems;
@@ -5540,7 +5562,8 @@ inline std::string treeExtrasMembers(const PlantedTree& tr, const PlantParams& P
     if (c["label"].type == io::GlbJsonValue::String) ex << ",\"label\":" << json::write(c["label"]);
     if (c["origin"].type == io::GlbJsonValue::String) ex << ",\"crownOrigin\":" << json::write(c["origin"]);
     ex << ",\"inferred\":{\"crownBaseY\":" << json::num(tr.crownBaseY) << ",\"crownBaseRatio\":" << json::numPrecise(tr.crownBaseRatio)
-       << ",\"trunkRadiusM\":" << json::num(tr.trunkRadius) << ",\"trunkRadiusPerHeight\":" << json::num(tr.trunkRadiusPerHeight) << "}"
+       << ",\"trunkRadiusM\":" << json::num(tr.trunkRadius) << ",\"trunkRadiusPerHeight\":" << json::num(tr.trunkRadiusPerHeight)
+       << ",\"topShare\":" << json::num(tr.topShare) << ",\"excurrence\":" << json::num(tr.excurrence) << "}"
        // measured on the delivered leaf masses (this mesh): the share of the crown's surface samples above its crown
        // base inside one or within reachM of one, and how far their top lies below the apex; grownSurfaceReached is
        // the same share for the grown skeleton's leaf nodes
