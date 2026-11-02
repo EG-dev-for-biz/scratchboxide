@@ -331,16 +331,18 @@
         fov: 46.0,
         buttonId: 'btnMatchedView'
       },
+      // the hero and fern views stand in the clearing in front of the fern bank (its fronds reach z = 2.5 m): the
+      // monarch's column rising from the ferns into its crown, and the bank seen from a crouch 2 m off its edge
       hero: {
-        pos: new THREE.Vector3(0.20, 1.15, -0.40),
-        target: new THREE.Vector3(0.95, 1.45, -2.10),
-        fov: 48.0,
+        pos: new THREE.Vector3(2.40, 2.00, 6.20),
+        target: new THREE.Vector3(0.95, 6.50, -2.10),
+        fov: 70.0,
         buttonId: 'btnHeroCloseUp'
       },
       ferns: {
-        pos: new THREE.Vector3(-0.35, 0.95, 0.90),
-        target: new THREE.Vector3(0.0, 0.45, -0.50),
-        fov: 46.0,
+        pos: new THREE.Vector3(-0.80, 1.85, 4.30),
+        target: new THREE.Vector3(-0.30, 0.60, -0.40),
+        fov: 52.0,
         buttonId: 'btnFernCloseUp'
       },
       canopy: {
