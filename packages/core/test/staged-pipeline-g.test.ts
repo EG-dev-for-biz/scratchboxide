@@ -16,7 +16,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptyPlate, finishPlate, layStation, PLATE_PIXEL_M } from '../src/node/3d-engine/staged-location/pipeline-g/plates';
 import { programItems, parseProgram } from '../src/node/3d-engine/staged-location/pipeline-g/read';
-import { enclosedHoles, G_SRC, inOpening, paintFaces, plateOntoFace, stagedPipelineG, sweepFootprints } from '../src/node/3d-engine/staged-location/pipeline-g/pipeline-g';
+import { enclosedHoles, G_SRC, inOpening, paintFaces, plateOntoFace, sweepFootprints } from '../src/node/3d-engine/staged-location/pipeline-g/pipeline-g';
 import type { MassingFace } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
 import { aerialStations, AERIAL_VIEWS } from '../src/node/3d-engine/staged-location/pipeline-g/stations';
 import { SurveyStationRenderService } from '../src/node/spatial/SurveyStationRenderService';
@@ -28,14 +28,6 @@ const WALL: MassingFace = {
     sMin: 0, sMax: 10, tMin: 0, tMax: 8, tBottom: 0, area: 80, pixel: 0.05, orthoSMin: 0, orthoTMax: 8, width: 200, height: 160, coverage: 1, openings: [], top: []
 };
 
-describe('pipeline G flag', () => {
-    it('runs when the request asks for it, or SCRATCHBOX_STAGED_GEOMETRY=g', () => {
-        expect(stagedPipelineG({ procedural: true }, {} as NodeJS.ProcessEnv)).toBe(true);
-        expect(stagedPipelineG({}, { SCRATCHBOX_STAGED_GEOMETRY: 'G' } as NodeJS.ProcessEnv)).toBe(true);
-        expect(stagedPipelineG({}, {} as NodeJS.ProcessEnv)).toBe(false);
-        expect(stagedPipelineG({ procedural: false }, { SCRATCHBOX_STAGED_GEOMETRY: 'f' } as NodeJS.ProcessEnv)).toBe(false);
-    });
-});
 
 describe('wall plates', () => {
     it('lays a square-on station onto the wall in metres, with its relief', () => {

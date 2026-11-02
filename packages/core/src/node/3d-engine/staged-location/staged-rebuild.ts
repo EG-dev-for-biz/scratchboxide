@@ -15,15 +15,18 @@
 import type { StagedBuildState } from '../../../common/spatial/staged-location-contracts';
 import type { CanvasArtifact } from '../../../browser/generative-canvas/canvas-types';
 import type { StagedRebuilder } from '../../asset-store/asset-recovery-service';
-import { runStagedLocation, type StagedLocationRequest } from './orchestrator';
-import { createStagedLocationDeps } from './staged-location-tool';
+import { runStagedLocation, type StagedLocationContext, type StagedLocationRequest } from './orchestrator';
+import { createStagedLocationDeps, runStagedLocationOffThread, stagedWorkerEnabled } from './staged-location-tool';
 
 export const rebuildStagedForRecovery: StagedRebuilder = async (request, ctx) => {
-    const deps = await createStagedLocationDeps(ctx.workspaceRoot, { signal: ctx.signal });
-    const outcome = await runStagedLocation(request as StagedLocationRequest, deps, {
-        signal: ctx.signal, reportProgress: ctx.reportProgress,
+    const runCtx: StagedLocationContext = {
+        ...(ctx.signal ? { signal: ctx.signal } : {}), ...(ctx.reportProgress ? { reportProgress: ctx.reportProgress } : {}),
         ...(ctx.activeArtifact ? { activeArtifact: ctx.activeArtifact as CanvasArtifact } : {})
-    });
+    };
+    // on its own thread, as the chat's builds are (staged-location-worker.ts): the server keeps answering meanwhile
+    const outcome = stagedWorkerEnabled()
+        ? await runStagedLocationOffThread(request as StagedLocationRequest, ctx.workspaceRoot, undefined, runCtx)
+        : await runStagedLocation(request as StagedLocationRequest, await createStagedLocationDeps(ctx.workspaceRoot, { signal: ctx.signal }), runCtx);
     const artifact = outcome.result.artifact as { data?: { stagedBuild?: StagedBuildState } } | undefined;
     const staged = artifact?.data?.stagedBuild;
     return { runId: staged?.runId ?? '', layers: (staged?.layers ?? []).map(l => ({ url: l.url })) };

@@ -121,7 +121,9 @@ describe.skipIf(!stagedChrome.ok)('auto focus and a tracked focus point in the r
 
     beforeAll(async () => {
         glb = colonnadeGlb();
-        page = await openStagedPage({ width: 1100, height: 720, shotDir: SHOTS, manualFrames: true });
+        // drawn at half resolution (550 x 360 device pixels; the layout, clicks and reticle are CSS pixels and unchanged):
+        // software WebGL draws the depth-of-field frames several times faster, inside the tests' time on a 2-vCPU runner
+        page = await openStagedPage({ width: 1100, height: 720, shotDir: SHOTS, manualFrames: true, deviceScaleFactor: 0.5 });
         await mount(scene(camera(through(NEAR_COLUMN), EYE, LENS_85)));
     }, 120_000);
     afterAll(async () => { await page?.close(); });

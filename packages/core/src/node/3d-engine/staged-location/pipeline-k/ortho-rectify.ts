@@ -45,7 +45,7 @@
 
 import { medianOf } from '../pipeline-e/image-ops';
 
-export const ORTHO_RECTIFY_VERSION = 'ortho-rectify/2';
+export const ORTHO_RECTIFY_VERSION = 'ortho-rectify/3';
 
 export const ORTHO_RECTIFY_PARAMS = {
     /** A line is an edge-energy peak above mean + k sd of its profile (facade-lattice.ts). */
@@ -507,7 +507,11 @@ export function axisPeriod(img: Rgba, pixelM: number, axis: 'x' | 'y', minM: num
 }
 
 /** What the hole fill did: uncovered texels found, and filled from horizontal repeats, vertical repeats, or the nearest real texel; and featureless texels left for another facade (pipeline-k.ts). */
-export interface HoleFill { uncovered: number; fromRepeats: number; fromStoreys: number; fromNearest: number; periodPx?: number; storeyPx?: number; featureless?: number; featurelessLeft?: number }
+export interface HoleFill {
+    uncovered: number; fromRepeats: number; fromStoreys: number; fromNearest: number; periodPx?: number; storeyPx?: number; featureless?: number; featurelessLeft?: number;
+    /** Pipeline K's later rungs (pipeline-k.ts), once every facade is straightened: whole regions copied from a facade facing the same way, small holes inpainted by the image model, and the rest a smooth fill. */
+    fromRegions?: number; fromInpaint?: number; fromSmooth?: number;
+}
 
 /**
  * Where an ortho's photo is featureless (ORTHO_RECTIFY_PARAMS.featureless*): 1 per texel of a large smooth region, the
@@ -567,8 +571,10 @@ export function featurelessMask(img: Rgba, pixelM: number, P: OrthoRectifyParams
  * The ortho's holes (uncovered texels, exact grey 128) filled from real texels only, never from another fill: first the
  * facade's own repeats at its bay pitch (the per-channel median of the covered texels at +-k pitches, chosen by luma), then
  * its repeats at its storey pitch, then the nearest real texel. A believable fill, reported for labelling (generated).
+ * With `nearest: false` the holes the repeats leave stay grey, for pipeline K's later rungs (the nearest real texel, copied
+ * across a hole, draws long straight streaks out of the photo's edge).
  */
-export function fillHoles(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS, opts: { /** Texels never filled from the nearest real texel (featureless photo: left for another facade). */ noNearest?: Uint8Array } = {}): { image: Rgba; fill: HoleFill } {
+export function fillHoles(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS, opts: { /** Texels never filled from the nearest real texel (featureless photo: left for another facade). */ noNearest?: Uint8Array; /** false: no nearest-texel fill at all. */ nearest?: boolean } = {}): { image: Rgba; fill: HoleFill } {
     const { valid, L } = planes(img), W = img.width, H = img.height, N = W * H;
     const out = new Uint8Array(img.rgba);
     const known = new Uint8Array(valid);
@@ -602,6 +608,7 @@ export function fillHoles(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORT
     if (ph) { fill.periodPx = Math.round(ph.periodPx * 100) / 100; fill.fromRepeats = pass(ph.periodPx, 'x'); }
     const pv = axisPeriod(img, pixelM, 'y', P.storeyMinM, P.storeyMaxM, P);
     if (pv) { fill.storeyPx = Math.round(pv.periodPx * 100) / 100; fill.fromStoreys = pass(pv.periodPx, 'y'); }
+    if (opts.nearest === false) return { image: { width: W, height: H, rgba: out }, fill };
     // the rest: the nearest real texel (breadth-first from every real texel, so a fill never copies a fill)
     const src = new Int32Array(N).fill(-1), queue = new Int32Array(N);
     let head = 0, tail = 0;
@@ -619,6 +626,64 @@ export function fillHoles(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORT
         write(i, src[i]); fill.fromNearest++;
     }
     return { image: { width: W, height: H, rgba: out }, fill };
+}
+
+/**
+ * The holes (`hole`, 1) filled smoothly from the real texels around them (push-pull: each level halves the image, averaging
+ * the known texels; each hole texel takes the bilinear mean of the coarser level, from the finest level that has any): a
+ * gradient between the colours at the hole's edge, never a streak. Never writes exact grey 128 (the uncovered mark). Edits
+ * the image in place; returns the texels filled.
+ */
+export function smoothFillHoles(img: Rgba, hole: Uint8Array): number {
+    const W = img.width, H = img.height, rgba = img.rgba;
+    type Level = { w: number; h: number; c: Float32Array; n: Float32Array };
+    const base: Level = { w: W, h: H, c: new Float32Array(W * H * 3), n: new Float32Array(W * H) };
+    let holes = 0;
+    for (let i = 0; i < W * H; i++) {
+        if (!rgba[i * 4 + 3]) continue;
+        if (hole[i]) { holes++; continue; }
+        base.n[i] = 1;
+        for (let q = 0; q < 3; q++) base.c[i * 3 + q] = rgba[i * 4 + q];
+    }
+    if (!holes) return 0;
+    const levels: Level[] = [base];
+    while (levels[levels.length - 1].w > 1 || levels[levels.length - 1].h > 1) {
+        const a = levels[levels.length - 1], w = Math.ceil(a.w / 2), h = Math.ceil(a.h / 2);
+        const b: Level = { w, h, c: new Float32Array(w * h * 3), n: new Float32Array(w * h) };
+        for (let y = 0; y < a.h; y++) for (let x = 0; x < a.w; x++) {
+            const i = y * a.w + x, j = (y >> 1) * w + (x >> 1);
+            b.n[j] += a.n[i];
+            for (let q = 0; q < 3; q++) b.c[j * 3 + q] += a.c[i * 3 + q];
+        }
+        levels.push(b);
+    }
+    // down again: a texel with nothing known takes the coarser level's means, bilinearly, so the blocks blend
+    for (let l = levels.length - 2; l >= 0; l--) {
+        const a = levels[l], b = levels[l + 1];
+        for (let y = 0; y < a.h; y++) for (let x = 0; x < a.w; x++) {
+            const i = y * a.w + x;
+            if (a.n[i] > 0) continue;
+            const fx = Math.min(b.w - 1, Math.max(0, (x + 0.5) / 2 - 0.5)), fy = Math.min(b.h - 1, Math.max(0, (y + 0.5) / 2 - 0.5));
+            const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = Math.min(b.w - 1, x0 + 1), y1 = Math.min(b.h - 1, y0 + 1), tx = fx - x0, ty = fy - y0;
+            let wsum = 0;
+            const acc = [0, 0, 0];
+            for (const [xx, yy, ww] of [[x0, y0, (1 - tx) * (1 - ty)], [x1, y0, tx * (1 - ty)], [x0, y1, (1 - tx) * ty], [x1, y1, tx * ty]] as const) {
+                const j = yy * b.w + xx;
+                if (!(b.n[j] > 0) || !(ww > 0)) continue;
+                for (let q = 0; q < 3; q++) acc[q] += (ww * b.c[j * 3 + q]) / b.n[j];
+                wsum += ww;
+            }
+            if (wsum > 0) { a.n[i] = 1; for (let q = 0; q < 3; q++) a.c[i * 3 + q] = acc[q] / wsum; }
+        }
+    }
+    let n = 0;
+    for (let i = 0; i < W * H; i++) {
+        if (!hole[i] || !rgba[i * 4 + 3] || !(base.n[i] > 0)) continue;
+        for (let q = 0; q < 3; q++) rgba[i * 4 + q] = Math.max(0, Math.min(255, Math.round(base.c[i * 3 + q] / base.n[i])));
+        if (rgba[i * 4] === 128 && rgba[i * 4 + 1] === 128 && rgba[i * 4 + 2] === 128) rgba[i * 4 + 2] = 129;
+        n++;
+    }
+    return n;
 }
 
 /** Per pixel: the luma of its covered horizontal repeats at +-k*period (k = 1..repeats), in a flat array of `repeats * 2` slots (NaN when not covered). */
@@ -814,7 +879,9 @@ export function rectifyOrtho(img: Rgba, pixelM: number, P: OrthoRectifyParams = 
     // the holes last (tracing and the smear step read only covered texels): the mask keeps where they were
     const uncovered = new Uint8Array(W * H);
     for (let k = 0; k < W * H; k++) if (image.rgba[k * 4 + 3] && isUncovered(image.rgba, k)) uncovered[k] = 1;
-    const holes = fillHoles(image, pixelM, P);
+    // the repeats only: the holes they leave are filled once every facade is straightened (pipeline-k.ts: whole regions from a
+    // facade facing the same way, then small ones inpainted, then a smooth fill), never from the nearest texel
+    const holes = fillHoles(image, pixelM, P, { nearest: false });
     // featureless photo (a smear on a wall the photo did not see) is kept here and marked: each smear region is refilled whole,
     // from one aligned source, once every facade is straightened (pipeline-k.ts continueFeatureless); not counted as uncovered
     const flat = featurelessMask(image, pixelM, P);

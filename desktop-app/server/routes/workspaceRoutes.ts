@@ -20,7 +20,6 @@ import {
     PathTraversalError,
     resolveWithinRoot
 } from '../../../packages/core/src/node/security/path-guard';
-import { createEmptyProjectGraph } from '../../../packages/core/src/common';
 import { ContainerSandboxService } from '../../../packages/core/src/node/container-sandbox-service';
 import { DEFAULT_GEMINI_MODEL } from '../../../packages/core/src/node/gemini/gemini-client';
 import { defaultCloudBucket } from '../../../packages/core/src/node/cloud-store/cloud-bucket';
@@ -213,7 +212,8 @@ export function createWorkspaceRouter(services: WorkspaceRouterServices, ctx: Ro
             const graph = await artifactStore.loadOrCreate(root, projectId);
             res.json(graph);
         } catch (err: any) {
-            res.json(createEmptyProjectGraph(projectId));
+            // never an empty graph in its place: the client would save it over the project
+            sendError(res, err);
         }
     });
 
@@ -237,6 +237,21 @@ export function createWorkspaceRouter(services: WorkspaceRouterServices, ctx: Ro
             }
             await artifactStore.save(requireWorkspaceRoot(workspaceRoot), graph);
             res.json({ success: true });
+        } catch (err: any) {
+            sendError(res, err);
+        }
+    });
+
+    // a save of what changed: the graph with only the revisions the store lacks, merged into the stored one
+    router.post('/project-artifacts/merge', async (req: Request, res: Response) => {
+        try {
+            const { workspaceRoot, graph } = req.body || {};
+            if (!graph?.project?.id) {
+                res.status(400).json({ error: 'Missing graph body' });
+                return;
+            }
+            const { missingRevisions } = await artifactStore.merge(requireWorkspaceRoot(workspaceRoot), graph);
+            res.status(missingRevisions.length ? 409 : 200).json({ success: !missingRevisions.length, missingRevisions });
         } catch (err: any) {
             sendError(res, err);
         }

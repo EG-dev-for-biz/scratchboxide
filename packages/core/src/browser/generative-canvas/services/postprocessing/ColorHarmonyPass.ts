@@ -11,8 +11,9 @@
  * The colour harmony grade (color-harmony.ts, whose maths this shader repeats) as a full-screen pass in the viewport's
  * optics chain, on the scene draw before depth of field and the overlays. Colour is the chain's linear,
  * coverage-premultiplied RGBA: each pixel is un-premultiplied, harmonised in OKLCH and premultiplied again. Only the
- * scene's objects are graded, never the sky, which is its own component: objects are what wrote depth (a sky texture,
- * cube map or dome writes none), and content that writes no depth either (Gaussian splats) by its drawn coverage.
+ * scene's objects are graded, unless the grade asks for the sky too: objects are what wrote depth (a sky texture, cube
+ * map or dome writes none), and content that writes no depth either (Gaussian splats) by its drawn coverage. A flat
+ * background is not in this target (it is composited by the output pass); the chain grades its colour itself.
  */
 
 import * as THREE from 'three';
@@ -41,6 +42,7 @@ uniform vec2 uSectors[MAX_SECTORS];  // (centre offset, width), radians
 uniform float uStrength;
 uniform float uChroma;
 uniform float uTint;
+uniform bool uIncludeSky;            // grade the sky and background too
 varying vec2 vUv;
 
 const float PI = 3.14159265358979;
@@ -109,6 +111,7 @@ void main() {
     // content that writes none (a splat over the sky grades by its own alpha)
     float w = texture2D(tDepth, vUv).x < 1.0 ? 1.0 : 0.0;
     if (uUseCoverage) w = max(w, clamp(texture2D(tCoverage, vUv).a, 0.0, 1.0));
+    if (uIncludeSky) w = 1.0;
     if (c.a <= 1e-4 || w <= 0.0) { gl_FragColor = c; return; }
     vec3 src = max(c.rgb / c.a, vec3(0.0));
     vec3 rgb = grade(src);
@@ -129,7 +132,7 @@ export class ColorHarmonyPass {
                 tColor: { value: null }, tDepth: { value: null }, tCoverage: { value: null }, uUseCoverage: { value: false }, tDisplay: { value: null }, uUseDisplay: { value: false },
                 uHue: { value: 0 }, uSectorCount: { value: 0 },
                 uSectors: { value: Array.from({ length: MAX_HARMONY_SECTORS }, () => new THREE.Vector2()) },
-                uStrength: { value: 1 }, uChroma: { value: 1 }, uTint: { value: 0 }
+                uStrength: { value: 1 }, uChroma: { value: 1 }, uTint: { value: 0 }, uIncludeSky: { value: false }
             },
             vertexShader: QUAD_VERTEX,
             fragmentShader: HARMONY_FRAGMENT,
@@ -164,6 +167,7 @@ export class ColorHarmonyPass {
         u.uStrength.value = plan.strength;
         u.uChroma.value = plan.chroma;
         u.uTint.value = plan.tint;
+        u.uIncludeSky.value = plan.includeSky;
         renderer.setRenderTarget(target);
         renderer.render(this.scene, this.ortho);
     }

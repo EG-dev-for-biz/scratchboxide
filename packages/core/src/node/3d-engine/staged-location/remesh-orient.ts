@@ -53,8 +53,80 @@ export type RemeshOrientParams = typeof REMESH_ORIENT_PARAMS;
 
 export interface RemeshOrientStats { triangles: number; turned: number; turnedAreaM2: number; /** Seen from behind but facing open air (a real outer surface, a hole's far side): left. */ facingOut: number; ms: number }
 
-/** Does a ray from o along d meet any triangle of the soup (but `self`) beyond `from` (m)? Möller–Trumbore. */
-function rayMeets(pos: Float32Array, o: number[], d: number[], self: number, from: number): boolean {
+/**
+ * A uniform grid over the soup's triangles (each listed in every cell its box touches), walked cell by cell along a ray
+ * (Amanatides and Woo 1987): a ray test reads only the triangles near its path instead of the whole scan, which on a
+ * district (a million and more triangles) took minutes.
+ */
+export interface RayGrid { pos: Float32Array; lo: [number, number, number]; cell: number; dims: [number, number, number]; start: Uint32Array; items: Uint32Array }
+
+export function rayGrid(pos: Float32Array): RayGrid {
+    const n = pos.length / 9;
+    const lo: [number, number, number] = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < pos.length; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], pos[i + k]); hi[k] = Math.max(hi[k], pos[i + k]); }
+    if (!n) return { pos, lo: [0, 0, 0], cell: 1, dims: [1, 1, 1], start: new Uint32Array(2), items: new Uint32Array(0) };
+    // about two triangles a cell over the box's volume, each side at most 256 cells
+    const ext = [0, 1, 2].map(k => Math.max(hi[k] - lo[k], 1e-3));
+    let cell = Math.cbrt((ext[0] * ext[1] * ext[2]) / Math.max(1, n / 2));
+    cell = Math.max(cell, Math.max(...ext) / 256, 0.05);
+    const dims = ext.map(e => Math.max(1, Math.ceil(e / cell))) as [number, number, number];
+    const idx = (i: number, j: number, k: number) => (k * dims[1] + j) * dims[0] + i;
+    const range = (t: number, ax: number) => {
+        const a = t * 9 + ax, v0 = pos[a], v1 = pos[a + 3], v2 = pos[a + 6];
+        return [Math.min(dims[ax] - 1, Math.max(0, Math.floor((Math.min(v0, v1, v2) - lo[ax]) / cell))), Math.min(dims[ax] - 1, Math.max(0, Math.floor((Math.max(v0, v1, v2) - lo[ax]) / cell)))];
+    };
+    // two passes: count, then fill (a district's lists outgrow nested arrays)
+    const count = new Uint32Array(dims[0] * dims[1] * dims[2] + 1);
+    for (let t = 0; t < n; t++) {
+        const [x0, x1] = range(t, 0), [y0, y1] = range(t, 1), [z0, z1] = range(t, 2);
+        for (let k = z0; k <= z1; k++) for (let j = y0; j <= y1; j++) for (let i = x0; i <= x1; i++) count[idx(i, j, k) + 1]++;
+    }
+    for (let c = 1; c < count.length; c++) count[c] += count[c - 1];
+    const start = Uint32Array.from(count), fill = Uint32Array.from(count), items = new Uint32Array(count[count.length - 1]);
+    for (let t = 0; t < n; t++) {
+        const [x0, x1] = range(t, 0), [y0, y1] = range(t, 1), [z0, z1] = range(t, 2);
+        for (let k = z0; k <= z1; k++) for (let j = y0; j <= y1; j++) for (let i = x0; i <= x1; i++) items[fill[idx(i, j, k)]++] = t;
+    }
+    return { pos, lo, cell, dims, start, items };
+}
+
+/** Does a ray from o along d meet triangle t beyond `from` (m)? Möller–Trumbore. */
+function rayHitsTriangle(pos: Float32Array, t: number, o: number[], d: number[], from: number): boolean {
+    const a = t * 9;
+    const e1x = pos[a + 3] - pos[a], e1y = pos[a + 4] - pos[a + 1], e1z = pos[a + 5] - pos[a + 2];
+    const e2x = pos[a + 6] - pos[a], e2y = pos[a + 7] - pos[a + 1], e2z = pos[a + 8] - pos[a + 2];
+    const px = d[1] * e2z - d[2] * e2y, py = d[2] * e2x - d[0] * e2z, pz = d[0] * e2y - d[1] * e2x;
+    const det = e1x * px + e1y * py + e1z * pz;
+    if (Math.abs(det) < 1e-12) return false;
+    const inv = 1 / det, sx = o[0] - pos[a], sy = o[1] - pos[a + 1], sz = o[2] - pos[a + 2];
+    const u = (sx * px + sy * py + sz * pz) * inv;
+    if (u < 0 || u > 1) return false;
+    const qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+    const v = (d[0] * qx + d[1] * qy + d[2] * qz) * inv;
+    if (v < 0 || u + v > 1) return false;
+    return (e2x * qx + e2y * qy + e2z * qz) * inv > from;
+}
+
+/** Does a ray from o (inside the grid's box) along d meet any triangle of the soup (but `self`) beyond `from` (m)? */
+export function rayMeetsGrid(g: RayGrid, o: number[], d: number[], self: number, from: number): boolean {
+    const { lo, cell, dims } = g;
+    const c = [0, 1, 2].map(k => Math.min(dims[k] - 1, Math.max(0, Math.floor((o[k] - lo[k]) / cell))));
+    const step = d.map(v => (v > 0 ? 1 : v < 0 ? -1 : 0));
+    // the ray's distance to the next cell wall on each axis, and between walls
+    const tMax = [0, 1, 2].map(k => (step[k] ? ((lo[k] + (c[k] + (step[k] > 0 ? 1 : 0)) * cell) - o[k]) / d[k] : Infinity));
+    const tDelta = [0, 1, 2].map(k => (step[k] ? cell / Math.abs(d[k]) : Infinity));
+    for (;;) {
+        const ci = (c[2] * dims[1] + c[1]) * dims[0] + c[0];
+        for (let q = g.start[ci]; q < g.start[ci + 1]; q++) { const t = g.items[q]; if (t !== self && rayHitsTriangle(g.pos, t, o, d, from)) return true; }
+        const ax = tMax[0] < tMax[1] ? (tMax[0] < tMax[2] ? 0 : 2) : tMax[1] < tMax[2] ? 1 : 2;
+        c[ax] += step[ax];
+        if (c[ax] < 0 || c[ax] >= dims[ax]) return false;
+        tMax[ax] += tDelta[ax];
+    }
+}
+
+/** Does a ray from o along d meet any triangle of the soup (but `self`) beyond `from` (m)? Möller–Trumbore, every triangle. */
+export function rayMeets(pos: Float32Array, o: number[], d: number[], self: number, from: number): boolean {
     const n = pos.length / 9;
     for (let t = 0; t < n; t++) {
         if (t === self) continue;
@@ -152,7 +224,7 @@ export function findInwardTriangles(clayBytes: Uint8Array, P: RemeshOrientParams
     for (const az of P.aboveAzimuthsDeg) look(s, az, P.aboveElevationDeg, P, front, back);
     if (P.topDown) look(s, 0, 90, P, front, back);
     const keys = new Set<string>();
-    let area = 0, facingOut = 0;
+    let area = 0, facingOut = 0, grid: RayGrid | undefined;
     for (let t = 0; t < n; t++) {
         if (back[t] < P.minBackPixels || front[t] > P.maxFrontShare * back[t]) continue;
         const p = s.pos.subarray(t * 9, t * 9 + 9);
@@ -161,7 +233,8 @@ export function findInwardTriangles(clayBytes: Uint8Array, P: RemeshOrientParams
         if (!(l > 0)) continue;
         // it faces into the building only when the way it faces is blocked by the scan
         const o = [(p[0] + p[3] + p[6]) / 3, (p[1] + p[4] + p[7]) / 3, (p[2] + p[5] + p[8]) / 3];
-        if (!rayMeets(s.pos, o, [nx / l, ny / l, nz / l], t, P.rayStartM)) { facingOut++; continue; }
+        grid ??= rayGrid(s.pos);
+        if (!rayMeetsGrid(grid, o, [nx / l, ny / l, nz / l], t, P.rayStartM)) { facingOut++; continue; }
         keys.add(triKey(p, P.matchM));
         area += l / 2;
     }

@@ -126,7 +126,9 @@ jobs:
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update
-            sudo apt-get install -y --no-install-recommends ffmpeg webp
+            # libegl1 and libgles2: MediaPipe's native library (pose landmarker, interactive segmenter) links libEGL and
+            # libGLESv2 even when it runs on the CPU, and its Python bindings fail to load without them
+            sudo apt-get install -y --no-install-recommends ffmpeg webp libegl1 libgles2
           else
             brew install ffmpeg webp
           fi
