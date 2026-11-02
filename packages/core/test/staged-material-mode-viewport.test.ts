@@ -78,7 +78,9 @@ describe.skipIf(!stagedChrome.ok)('staged place with an object: clay from chat a
 
     beforeAll(async () => {
         fixture = buildStagedFixture();
-        page = await openStagedPage({ manualFrames: true, shotDir: SHOTS });
+        // drawn at half resolution (the checks read the materials, not pixels): a GPU-less runner's software WebGL draws each
+        // of the several hundred frames a test steps about 4x faster
+        page = await openStagedPage({ manualFrames: true, shotDir: SHOTS, deviceScaleFactor: 0.5 });
         serveFixture(page, fixture.glbs, objectIdOf, fixture.sidecar);
         page.serve(`${HERO}.glb`, chromeHeroGlb());
     }, 180_000);
