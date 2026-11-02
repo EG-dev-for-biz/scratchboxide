@@ -80,6 +80,20 @@ const meanRgb = (im: RgbaImage8) => {
     return s.map(v => v / (im.width * im.height));
 };
 
+/** Mean CIELAB chroma C* over a photo, and its hue: the angle of the summed a*, b* (each texel weighted by its chroma). */
+function chromaHue(im: RgbaImage8): { chroma: number; hueDeg: number } {
+    const lin = (v: number) => { const c = v / 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+    const f = (t: number) => (t > 216 / 24389 ? Math.cbrt(t) : (24389 / 27 * t + 16) / 116);
+    let chroma = 0, sa = 0, sb = 0;
+    for (let k = 0; k < im.width * im.height; k++) {
+        const [r, g, b] = [im.rgba[k * 4], im.rgba[k * 4 + 1], im.rgba[k * 4 + 2]].map(lin);
+        const x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047, y = 0.2126 * r + 0.7152 * g + 0.0722 * b, z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883;
+        const a = 500 * (f(x) - f(y)), bb = 200 * (f(y) - f(z));
+        chroma += Math.hypot(a, bb); sa += a; sb += bb;
+    }
+    return { chroma: chroma / (im.width * im.height), hueDeg: (Math.atan2(sb, sa) * 180) / Math.PI };
+}
+
 /** The photo each primitive of a twin's GLB now shows, decoded. */
 function shownPhotos(glb: Uint8Array): RgbaImage8[] {
     const g = parseGlbBytes(glb);
@@ -153,6 +167,31 @@ describe('pipeline K roofs seen from above', () => {
         expect(gl.mean).toBeGreaterThan(g0.mean + 30);
         expect(sl.mean - gl.mean).toBeLessThan(0.75 * (s0.mean - g0.mean));
         expect(sl.warm).toBeLessThan(0.9 * s0.warm);
+    });
+
+    it("keeps the storefront photo's CIELAB chroma and hue in pipeline K, where the default lift drains the chroma", async () => {
+        const glb = scene([wallAt(0)], storefront());
+        const src = storefront();
+        const [k] = shownPhotos((await tileRefineTwin(glb, 'l2', { shadowLift: PIPELINE_K_SHADOW_LIFT })).glb);
+        const [lifted] = shownPhotos((await tileRefineTwin(glb, 'l2', {})).glb);
+        const [c0, ck, cl] = [src, k, lifted].map(chromaHue);
+        // the de-light takes out light, not colour: the mean chroma within 3% and the hue (chroma-weighted) within 1 degree
+        expect(Math.abs(ck.chroma / c0.chroma - 1)).toBeLessThan(0.03);
+        expect(Math.abs(ck.hueDeg - c0.hueDeg)).toBeLessThan(1);
+        // the default lift blends every dark texel toward grey, so it loses over a quarter of the chroma
+        expect(cl.chroma).toBeLessThan(0.75 * c0.chroma);
+    });
+
+    it('turned off (twin.delight, SCRATCHBOX_K_DELIGHT=0), keeps the photos as captured and says so', async () => {
+        const glb = scene([wallAt(0)], storefront());
+        const steps: string[] = [];
+        const off = await tileRefineTwin(glb, 'l2', { shadowLift: PIPELINE_K_SHADOW_LIFT, delightOff: true, onStep: s => steps.push(s) });
+        expect(Array.from(shownPhotos(off.glb)[0].rgba)).toEqual(Array.from(storefront().rgba));
+        expect(steps).not.toContain('delight');
+        expect(off.provenance[0].method).toMatch(/as captured: not de-lit \(the de-light turned off for this build/);
+        const onSteps: string[] = [];
+        await tileRefineTwin(glb, 'l2', { shadowLift: PIPELINE_K_SHADOW_LIFT, onStep: s => onSteps.push(s) });
+        expect(onSteps.filter(s => s === 'delight')).toHaveLength(2);
     });
 
     it('a district (K-D) lifts its upward surfaces gently when asked, and leaves them as photographed when not', async () => {
