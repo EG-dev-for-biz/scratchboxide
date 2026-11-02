@@ -230,6 +230,13 @@ describe('Hyperrealistic Forest Procedural 3D Reconstruction from Image', () => 
             expect(inferredOf(t).topShare).toBeLessThan(0.2);
             expect(inferredOf(t).excurrence, t.name).toBeGreaterThan(0.9);
         }
+        // the needle sprays draw at their own length, porous (a third of their box): their crowns are filled as they draw,
+        // their clusters closer, so the near level still covers most of the crown seen from outside
+        for (const t of redwoodCrowns) {
+            const lod = (t.extras!.lod ?? t.extras!.sbTree.lod) as { leafLengthM: number; coverage: { cutout: { level0: { mean: number } } } };
+            expect(lod.leafLengthM).toBeCloseTo(0.3427, 4);
+            expect(lod.coverage.cutout.level0.mean, t.name).toBeGreaterThan(0.6);
+        }
     });
 
     it('grows an excurrent crown as a leader through the crown with laterals at the species angle, and leaves excurrence 0 as it was', async () => {

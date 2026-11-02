@@ -55,6 +55,7 @@
 #include <cmath>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <queue>
@@ -220,6 +221,11 @@ struct LodParams {
     // shell first (inset shellInsetPerReach cluster reaches), then a layer deeper, at most coverageMaxFillShare of the
     // tree's stations more. The coverage grid's cell is coverageCellPerLeaf blade lengths (never more than 512 cells across).
     bool coverageFill{true};
+    // A textured tree whose leaves are porous (a needle spray: its cut-out covers a third of its box, mostly gaps, drawn by
+    // the viewport's hashed alpha) is filled toward the target as those leaves cover it (CoverageViews::Cutout::porous),
+    // with up to 1 / its fill times as many fill stations; solid leaves (fill solidLeafFillHi and over: every broad leaf
+    // of the library) are filled as their outlines, as before. solidLeafFill: tree-texture-library.ts SOLID_LEAF_FILL.
+    double solidLeafFillLo{0.42}, solidLeafFillHi{0.60};
     double coverageLeafAreaIndex{4.6};
     double coverageProjection{0.5};
     double coverageMaxFillShare{0.8};
@@ -732,8 +738,11 @@ struct CoverageViews {
         std::vector<uint8_t> ell, hull, covered;
         size_t nEll{0}, nHull{0}, covEll{0}, covHull{0};
     };
-    /** A textured leaf's outline in a blade's coordinates: an ellipse centred (0.5, cv), semi-axes hu x hv, scaled by sqrt(r2). */
-    struct Cutout { double cv{0.5}, hu{0.35}, hv{0.5}, r2{1}; };
+    /** A textured leaf's outline in a blade's coordinates: an ellipse centred (0.5, cv), semi-axes hu x hv, scaled by sqrt(r2).
+     *  The porous share of a leaf set (`porous`, 1 - its solidity: a needle spray) covers each cell of its drawn box (the
+     *  ellipse's bounding box) with probability `porousCover` (its fill), per placed cluster and cell, as the viewport's hashed
+     *  alpha draws it: overlapping porous leaves cover 1 - (1 - fill)^k of a cell, not the union of solid shapes. */
+    struct Cutout { double cv{0.5}, hu{0.35}, hv{0.5}, r2{1}; double porous{0}, porousCover{0}; };
     std::vector<View> views;
     double cell{0.05};
 
@@ -825,7 +834,7 @@ struct CoverageViews {
         for (auto& v : views) { std::fill(v.covered.begin(), v.covered.end(), 0); v.covEll = v.covHull = 0; }
     }
 
-    void triangle(View& v, const Vec3& a, const Vec3& b, const Vec3& c, const Vec2& ua, const Vec2& ub, const Vec2& uc, const Cutout* cut) {
+    void triangle(View& v, const Vec3& a, const Vec3& b, const Vec3& c, const Vec2& ua, const Vec2& ub, const Vec2& uc, const Cutout* cut, uint64_t salt = 0) {
         const double inv = 1.0 / cell;
         const double ax_ = (v.ax.dot(a) - v.x0) * inv - 0.5, ay_ = (v.ay.dot(a) - v.y0) * inv - 0.5;
         const double bx = (v.ax.dot(b) - v.x0) * inv - 0.5, by = (v.ay.dot(b) - v.y0) * inv - 0.5;
@@ -846,7 +855,15 @@ struct CoverageViews {
                 if (cut) {
                     const double u = w0 * ua.x + w1 * ub.x + w2 * uc.x, t = w0 * ua.y + w1 * ub.y + w2 * uc.y;
                     const double su = (u - 0.5) / cut->hu, sv = (t - cut->cv) / cut->hv;
-                    if (su * su + sv * sv > cut->r2) continue;
+                    const bool inside = su * su + sv * sv <= cut->r2;
+                    if (cut->porous > 0) {
+                        // the solid share covers its outline, the porous share each cell of its box at its cover
+                        const bool inBox = std::abs(su) <= 1.0 && std::abs(sv) <= 1.0;
+                        const double p = (1.0 - cut->porous) * (inside ? 1.0 : 0.0) + cut->porous * (inBox ? cut->porousCover : 0.0);
+                        if (p <= 0.0 || hashUnit(salt, at, static_cast<uint64_t>(v.w)) >= p) continue;
+                    } else if (!inside) {
+                        continue;
+                    }
                 }
                 v.covered[at] = 1;
                 v.covEll += v.ell[at];
@@ -915,10 +932,17 @@ struct CoverageViews {
         for (size_t k = 0; k < p.size(); ++k) p[k] = in.t + in.q.rotate(Vec3(m.bladePos[k].x * in.s.x, m.bladePos[k].y * in.s.y, m.bladePos[k].z * in.s.z));
         const bool uv = m.bladeUv.size() == m.bladePos.size();
         const Vec2 z(0.5f, 0.5f);
+        // a porous cut-out's cells are drawn per placed cluster: its place seeds the hash
+        uint64_t salt = 0;
+        if (cut && cut->porous > 0) {
+            uint32_t bits[3];
+            std::memcpy(&bits[0], &in.t.x, 4); std::memcpy(&bits[1], &in.t.y, 4); std::memcpy(&bits[2], &in.t.z, 4);
+            salt = mix64((static_cast<uint64_t>(bits[0]) << 32) ^ (static_cast<uint64_t>(bits[1]) << 16) ^ bits[2]);
+        }
         for (auto& v : views) {
             for (size_t t = 0; t + 2 < m.bladeTri.size(); t += 3) {
                 const uint32_t a = m.bladeTri[t], b = m.bladeTri[t + 1], c = m.bladeTri[t + 2];
-                triangle(v, p[a], p[b], p[c], uv ? m.bladeUv[a] : z, uv ? m.bladeUv[b] : z, uv ? m.bladeUv[c] : z, uv ? cut : nullptr);
+                triangle(v, p[a], p[b], p[c], uv ? m.bladeUv[a] : z, uv ? m.bladeUv[b] : z, uv ? m.bladeUv[c] : z, uv ? cut : nullptr, salt + t);
             }
         }
     }
@@ -978,6 +1002,10 @@ inline CoverageViews::Cutout leafCutout(const LodParams& P, double fill, double 
     c.hv = 0.5 * f;
     c.cv = 0.5 * f;
     c.r2 = std::clamp(fill, 0.0, 1.0) / (M_PI / 4.0);
+    // how solid the set's leaves are (tree-texture-library.ts leafSolidity: smoothstep of the fill over solidLeafFill)
+    const double sl = std::clamp((fill - P.solidLeafFillLo) / std::max(1e-9, P.solidLeafFillHi - P.solidLeafFillLo), 0.0, 1.0);
+    c.porous = fill > 0 ? 1.0 - sl * sl * (3.0 - 2.0 * sl) : 0.0;
+    c.porousCover = std::clamp(fill, 0.0, 1.0);
     return c;
 }
 } // namespace detail
@@ -1427,7 +1455,13 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     const double baseScale = T.leafLengthM / P.referenceLeafM;
     double meanReach = 0;
     for (const auto& v : lib.variants) meanReach += v.level0.reach / static_cast<double>(lib.variants.size());
-    const double spacing = P.spacingRatio * meanReach * baseScale;
+    // porous leaves (a needle spray, LodParams::solidLeafFill) cover a fill's share of their box: their clusters stand
+    // closer, by 1 - porous x (1 - sqrt(fill)), so overlapping sprays reach a solid crown's cover (2.7 x the stations per
+    // area at a spray's fill of 0.37); solid leaves keep their spacing
+    const auto fillCut = detail::leafCutout(P, in.cutoutFill, in.cutoutAspect);
+    const detail::CoverageViews::Cutout* porousCut = in.cutoutFill > 0 && fillCut.porous > 0 ? &fillCut : nullptr;
+    const double porousSpacing = porousCut ? 1.0 - porousCut->porous * (1.0 - std::sqrt(std::max(0.0, porousCut->porousCover))) : 1.0;
+    const double spacing = P.spacingRatio * meanReach * baseScale * porousSpacing;
     detail::Envelope env;
     env.radii = in.sectorRadii;
     env.stemX = in.stemX;
@@ -1678,6 +1712,7 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     // deeper; each hangs from the nearest skeleton node above the crown base (its shoot gives the orientation).
     detail::CoverageViews cov;
     std::vector<Vec3> refPts;
+    // porous leaves (porousCut) are filled toward the target as they draw: their cut-out
     T.coverage.leafiness = std::clamp(in.leafiness, 0.0, 1.0);
     T.coverage.target = coverageTarget(P, psi);
     if (!surface.empty()) {
@@ -1693,13 +1728,15 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
         T.coverage.measured = true;
         T.coverage.cellM = cov.cell;
         T.coverage.views = static_cast<int>(cov.views.size());
-        for (size_t k = 0; k < T.clusters.size(); ++k) for (const auto& c : T.clusters[k]) cov.add(lib.variants[k].level0, c);
+        for (size_t k = 0; k < T.clusters.size(); ++k) for (const auto& c : T.clusters[k]) cov.add(lib.variants[k].level0, c, porousCut);
         T.coverage.level0Before = cov.level();
     }
     if (T.coverage.measured && P.coverageFill && psi > 0.0 && cov.level().meanEllipsoid < T.coverage.target) {
         const CrownEllipsoid& ref = T.coverage.reference;
         const double reachM = meanReach * baseScale;
-        const size_t cap = static_cast<size_t>(std::ceil(std::max(0.0, P.coverageMaxFillShare) * static_cast<double>(std::max<size_t>(T.stations, 8))));
+        // porous leaves cover a fill's share of their box: up to 1 / fill times the fill stations
+        const double porousCapScale = porousCut ? 1.0 + porousCut->porous * (1.0 / std::max(0.1, porousCut->porousCover) - 1.0) : 1.0;
+        const size_t cap = static_cast<size_t>(std::ceil(std::max(0.0, P.coverageMaxFillShare) * porousCapScale * static_cast<double>(std::max<size_t>(T.stations, 8))));
         // the nodes a fill cluster may hang from
         std::vector<Vec3> fillNodePos;
         std::vector<uint32_t> fillNodeId;
@@ -1768,7 +1805,7 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
                     const long k = place(static_cast<uint32_t>(node), false, &q);
                     if (k < 0) continue;
                     accept(static_cast<uint32_t>(node), q);
-                    cov.add(lib.variants[static_cast<size_t>(k)].level0, T.clusters[static_cast<size_t>(k)].back());
+                    cov.add(lib.variants[static_cast<size_t>(k)].level0, T.clusters[static_cast<size_t>(k)].back(), porousCut);
                     ++added; ++placedNow;
                 }
                 if (!placedNow && picked.empty()) break;

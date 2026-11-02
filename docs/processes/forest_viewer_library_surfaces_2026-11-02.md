@@ -1,7 +1,7 @@
 # Process: The forest demo page's floor, moss, fern and bark surfaces drawn from the texture library at real size
 
 > **Recorded:** 2026-11-02
-> **Status:** Verified (Wideshot, Canopy, Hero and Ferns bookmarks and four close views before and after; no console errors, no failed responses, no `/textures` request; the forest test passes with credentials unreachable). Section 6: conifer crowns now draw the needle-spray atlas (species classification linked to the leaf choice), Verified. Section 7: pointed crowns whose species holds its leader grow excurrent (a stem through the crown, laterals at the species' angle), Verified. Needs Fix, not done here: the page's lighting was tuned for the old maps (section 3), and the crowns read lacier with spray-sized cards (section 8).
+> **Status:** Verified (Wideshot, Canopy, Hero and Ferns bookmarks and four close views before and after; no console errors, no failed responses, no `/textures` request; the forest test passes with credentials unreachable). Section 6: conifer crowns now draw the needle-spray atlas (species classification linked to the leaf choice), Verified. Section 7: pointed crowns whose species holds its leader grow excurrent (a stem through the crown, laterals at the species' angle), Verified. Sections 8 and 9: needle sprays draw at their real size with a porous coverage rule, their crowns filled as they draw, Verified. Needs Fix, not done here: the page's lighting was tuned for the old maps (section 3).
 > **Tags:** `operate-scratchbox` `demos` `pbr-materials` `texture-library` `forest-viewer` `sb-veggie` `tree-species`
 > **Target Domain:** static demo page `/forest_3d_viewer.html` and its native generator `scripts/generate_forest_procedural_3d.cpp`
 
@@ -198,3 +198,29 @@
   - **Live:** the app's own leaf and crown-card materials for `leaves_08` and `leaves_01`, built by `TreeTextureLibrary` from the served index and the crowns GLB's card layout, compile and link in WebGL in the Browser pane with no console errors (temporary check page, removed). On the forest page: 584 atlas cards drawn, no console errors or failed requests.
   - **Screenshots:** `forest_spray_cards_2026-11-02.jpg` shows blade-sized cards, spray-sized cards with the old lift (flakes), and spray-sized cards with the rule.
   - **Remaining:** crown triangles on screen fall (Wideshot 9.9 M to 3.8 M: stations are spaced by card size), so the crowns read lacier than the blade-sized ones.
+
+---
+
+## 9. Thicker crowns: porous leaves filled as they draw, their clusters closer (same day)
+
+* **Why the spray crowns read lacy** (section 8): the LOD's coverage fill adds clusters until a crown's projected cover reaches its target (0.90), but it measured cover with the leaves' solid outlines.
+  - A spray drawn by hashed alpha covers about 37% of each card's pixels, so overlapping cards cover `1 - 0.63^k`, not the union of solid shapes. The crowns counted as filled while they drew at about 0.35 cover before the fill.
+  - With cards three times longer, stations stood three times further apart.
+* **The rule** (`scratchbox_tree_lod.hpp`):
+  - **Cover measured as drawn:** the coverage views' cut-out gains a porous share (`1 - solidity`, the same smoothstep of the atlas fill as the viewport's `leafSolidity`). Each cell a porous blade spans is covered with probability equal to its fill, hashed per placed cluster and blade, as the shader draws it.
+  - **Filled toward that cover:** a porous tree is filled toward its target as so measured, with up to `1 / fill` times the fill stations.
+  - **Closer clusters:** spacing, and the fill's minimum gap, shrink by `1 - porous x (1 - sqrt(fill))` (0.61 for the spray: 2.7 x the stations per area).
+  - **Broad leaves unchanged:** solid leaves (every broad leaf of the library) keep their model and spacing exactly.
+* **Forest redwoods:**
+
+  | | Lacy (section 8) | Thicker |
+  | :--- | ---: | ---: |
+  | Stations per crown | 179-382 | 554-921 |
+  | Porous cover after the fill | 0.44-0.64 | 0.74-0.87 (median 0.87, target 0.90) |
+  | Near-mid cover | | 0.94-0.98 |
+  | Near-level triangles per crown | about 300 k | 570-760 k |
+  | Crown triangles on screen, Wideshot | 3.8 M | 8.7 M |
+
+  - In the Canopy and crowns views the 14 M page budget now steps the farthest trees down.
+  - Sheet: `forest_dense_crowns_2026-11-02.jpg`, blade cards against lacy sprays against the thicker sprays.
+  - The forest test checks the redwoods' cards are the spray's length and their drawn cover over 0.6.
