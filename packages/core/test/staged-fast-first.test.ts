@@ -21,11 +21,12 @@
  */
 
 import { TEXTURE_RUNG_CLAY } from '../src/common/spatial/texture-pass-contracts';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { runStagedLocation, type StagedLocationDeps } from '../src/node/3d-engine/staged-location/orchestrator';
+import { ensureMassingBinary } from '../src/node/3d-engine/staged-location/pipeline-e/native-massing';
 import { StageCache } from '../src/node/3d-engine/staged-location/stage-cache';
 import { validateContract, type StageEvent } from '../src/common/spatial/staged-location-contracts';
 import type { CanvasArtifact } from '../src/browser/generative-canvas/canvas-types';
@@ -40,6 +41,9 @@ import { carryStagedChoice, deriveMaterialLayers, INITIAL_SWITCH, nextSwitch, wi
 
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-staged-fast-')));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
+// the vector first paint runs the real native massing tool: built before the races below, as the app has it built after its
+// first use, so the paint races the tiles' download and not a cold compile (seconds here, minutes on a 2-vCPU runner)
+beforeAll(async () => { await ensureMassingBinary(); }, 600_000);
 
 const ARCH: WorldSpec = { ground: 40, buildings: [[-13, 13, -6, 5, 22]], trees: [] };
 const PARK: WorldSpec = { ground: 80, buildings: [[30, 44, 30, 40, 9]], trees: [{ x: -12, z: -10, r: 4, h: 7, id: 3 }] };

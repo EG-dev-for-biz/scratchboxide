@@ -109,7 +109,16 @@ describe('the texture stage of the staged location build', () => {
 
     it('textures several layers at once, so one layer\'s model wait does not hold back the next', async () => {
         const s = setup();
-        await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        // the worker pool sizes itself to the host (CPUs less one: a single thread on a 2-vCPU CI runner, where the layers
+        // could only queue); three threads, the orchestrator's own limit, so this tests the orchestrator's scheduling
+        const saved = process.env.SCRATCHBOX_TEXTURE_WORKERS;
+        process.env.SCRATCHBOX_TEXTURE_WORKERS = '3';
+        try {
+            await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+        } finally {
+            if (saved === undefined) delete process.env.SCRATCHBOX_TEXTURE_WORKERS;
+            else process.env.SCRATCHBOX_TEXTURE_WORKERS = saved;
+        }
         const msgs = s.events.filter(x => (x.e.stage === 'textures' || x.e.stage === 'textures-late') && x.e.status === 'running').map(x => ({ seq: x.e.seq, m: String((x.e as any).message ?? '') }));
         const started = (layer: string) => msgs.find(x => x.m.startsWith(`${layer}: `))?.seq ?? Infinity;
         const finished = (layer: string) => msgs.find(x => x.m.startsWith(`${layer} textured`))?.seq ?? -1;
