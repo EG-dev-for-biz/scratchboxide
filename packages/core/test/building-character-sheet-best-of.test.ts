@@ -35,6 +35,14 @@ function reference(W: number, H: number, rgb: [number, number, number]): Station
     return { width: W, height: H, rgba, silhouette } as unknown as StationBlockoutRender;
 }
 const paint = (W: number, H: number, rgb: [number, number, number]) => { const b = Buffer.alloc(W * H * 4); for (let i = 0; i < W * H; i++) b.set([...rgb, 255], i * 4); return b; };
+/**
+ * The reference sheet drawn, not echoed: its clay recoloured as a model's stone would be, the white sheet left white (an
+ * echoed reference fails the outline check since 8056aebd). Any lines a stand-in draws go on after this.
+ */
+function drawn(rgba: Buffer): Buffer {
+    for (let i = 0; i < rgba.length; i += 4) if (!(rgba[i] === 255 && rgba[i + 1] === 255 && rgba[i + 2] === 255)) { const l = rgba[i]; rgba[i] = Math.min(255, l * 1.15 + 20); rgba[i + 1] = Math.min(255, l * 0.95 + 10); rgba[i + 2] = l * 0.75; }
+    return rgba;
+}
 
 describe('character sheet colour gate and best of N', () => {
     let renderer: SurveyStationRenderService;
@@ -62,7 +70,7 @@ describe('character sheet colour gate and best of N', () => {
             name: 'three-candidates',
             async generate(args) {
                 const k = ++n; calls.push(k);
-                const s = decodePng(args.blockoutPng); const rgba = Buffer.from(s.rgba);
+                const s = decodePng(args.blockoutPng); const rgba = drawn(Buffer.from(s.rgba));
                 if (k < 3) for (let t = 0; t < 2; t++) for (let y = 0; y < s.height; y++) { const i = (y * s.width + s.width / 2 - 1 + t) * 4; rgba[i] = rgba[i + 1] = rgba[i + 2] = 20; }
                 return encodePng(s.width, s.height, rgba);
             }
@@ -82,7 +90,7 @@ describe('character sheet colour gate and best of N', () => {
         const gen: StationImageGenerator = {
             name: 'scored',
             async generate(args) {
-                const k = ++n; const s = decodePng(args.blockoutPng); const rgba = Buffer.from(s.rgba);
+                const k = ++n; const s = decodePng(args.blockoutPng); const rgba = drawn(Buffer.from(s.rgba));
                 if (k === 2) for (let t = 0; t < 2; t++) for (let y = 0; y < s.height; y++) { const i = (y * s.width + s.width / 2 - 1 + t) * 4; rgba[i] = rgba[i + 1] = rgba[i + 2] = 20; }
                 rgba[0] = k;                           // a mark the score reads back: which draw this sheet was
                 return encodePng(s.width, s.height, rgba);
@@ -106,7 +114,7 @@ describe('character sheet colour gate and best of N', () => {
         const gen: StationImageGenerator = {
             name: 'near-miss',
             async generate(args) {
-                n++; const s = decodePng(args.blockoutPng); const rgba = Buffer.from(s.rgba), W = s.width, H = s.height;
+                n++; const s = decodePng(args.blockoutPng); const rgba = drawn(Buffer.from(s.rgba)), W = s.width, H = s.height;
                 for (let y = 0; y < H / 4; y++) {
                     let last = -1;
                     for (let x = W / 2; x < W; x++) { const i = (y * W + x) * 4; if (!(rgba[i] === 255 && rgba[i + 1] === 255 && rgba[i + 2] === 255)) last = x; }
@@ -131,7 +139,7 @@ describe('character sheet colour gate and best of N', () => {
         const gen: StationImageGenerator = {
             name: 'always-lined',
             async generate(args) {
-                const s = decodePng(args.blockoutPng); const rgba = Buffer.from(s.rgba);
+                const s = decodePng(args.blockoutPng); const rgba = drawn(Buffer.from(s.rgba));
                 for (let t = 0; t < 2; t++) for (let y = 0; y < s.height; y++) { const i = (y * s.width + s.width / 2 - 1 + t) * 4; rgba[i] = rgba[i + 1] = rgba[i + 2] = 20; }
                 return encodePng(s.width, s.height, rgba);
             }

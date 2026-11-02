@@ -16,18 +16,21 @@
  */
 import * as React from 'react';
 import { WorkspaceGitStatusSnapshot } from '../state/studio-defaults';
-import { McpServerItem, PrimitiveType, SkillItem } from '../canvas-types';
+import { CanvasArtifact, McpServerItem, PrimitiveType, SkillItem } from '../canvas-types';
 import { ContextMentionItem, cycleSelectedIndex, resolveContextMentionQuery } from '../context-mention-engine';
 import { useComposerAutocomplete } from '../hooks/useComposerAutocomplete';
 import { DEFAULT_WORKSPACE_FILES } from '../state/studio-defaults';
 
 export interface UseComposerInputDeps {
+    activeArtifact?: CanvasArtifact;
     activeContextCategory: ReturnType<typeof useComposerAutocomplete>['activeContextCategory'];
     autocompleteQuery: ReturnType<typeof useComposerAutocomplete>['autocompleteQuery'];
     autocompleteType: ReturnType<typeof useComposerAutocomplete>['autocompleteType'];
+    handleQueueMessage?: (textToQueue?: string, targetPrimitiveType?: PrimitiveType) => void;
     handleSelectAutocompleteContext: ReturnType<typeof useComposerAutocomplete>['handleSelectAutocompleteContext'];
     handleSelectAutocompleteSkill: ReturnType<typeof useComposerAutocomplete>['handleSelectAutocompleteSkill'];
     handleSendMessage: (textToSend?: string, targetPrimitiveType?: PrimitiveType) => Promise<void>;
+    isGenerating?: boolean;
     mcpServers: McpServerItem[];
     selectedAutocompleteIndex: ReturnType<typeof useComposerAutocomplete>['selectedAutocompleteIndex'];
     setAutocompleteQuery: ReturnType<typeof useComposerAutocomplete>['setAutocompleteQuery'];
@@ -41,7 +44,7 @@ export interface UseComposerInputDeps {
 }
 
 export function useComposerInput(deps: UseComposerInputDeps) {
-    const { activeContextCategory, autocompleteQuery, autocompleteType, handleSelectAutocompleteContext, handleSelectAutocompleteSkill, handleSendMessage, mcpServers, selectedAutocompleteIndex, setAutocompleteQuery, setAutocompleteType, setInputValue, setSelectedAutocompleteIndex, showToast, skills, workspaceFilesList, workspaceGitStatus } = deps;
+    const { activeArtifact, activeContextCategory, autocompleteQuery, autocompleteType, handleQueueMessage, handleSelectAutocompleteContext, handleSelectAutocompleteSkill, handleSendMessage, isGenerating, mcpServers, selectedAutocompleteIndex, setAutocompleteQuery, setAutocompleteType, setInputValue, setSelectedAutocompleteIndex, showToast, skills, workspaceFilesList, workspaceGitStatus } = deps;
 
     const [isVoiceActive, setIsVoiceActive] = React.useState<boolean>(false);
     const speechRecognitionRef = React.useRef<any>(null);
@@ -50,7 +53,7 @@ export function useComposerInput(deps: UseComposerInputDeps) {
         if (autocompleteType !== undefined) {
             const items = autocompleteType === 'skill'
                 ? filteredAutocompleteSkills
-                : resolveContextMentionQuery(activeContextCategory, autocompleteQuery, workspaceFilesList, workspaceGitStatus, mcpServers);
+                : resolveContextMentionQuery(activeContextCategory, autocompleteQuery, workspaceFilesList, workspaceGitStatus, mcpServers, activeArtifact);
 
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
@@ -63,15 +66,15 @@ export function useComposerInput(deps: UseComposerInputDeps) {
                 return;
             }
             if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault();
                 if (items.length > 0 && items[selectedAutocompleteIndex]) {
-                    e.preventDefault();
                     if (autocompleteType === 'skill') {
                         handleSelectAutocompleteSkill(items[selectedAutocompleteIndex] as SkillItem);
                     } else {
                         handleSelectAutocompleteContext(items[selectedAutocompleteIndex] as ContextMentionItem);
                     }
-                    return;
                 }
+                return;
             }
             if (e.key === 'Escape') {
                 e.preventDefault();
@@ -84,7 +87,11 @@ export function useComposerInput(deps: UseComposerInputDeps) {
         if (e.key === 'Enter') {
             if (!e.shiftKey || e.metaKey || e.ctrlKey) {
                 e.preventDefault();
-                handleSendMessage();
+                if (isGenerating && handleQueueMessage) {
+                    handleQueueMessage();
+                } else {
+                    handleSendMessage();
+                }
             }
         }
     };

@@ -5524,6 +5524,86 @@ body.sb-light .sb-chat-blockquote {
     color: #475569;
 }
 
+/* GFM pipe tables: the frame scrolls sideways, so a wide table never widens the chat column */
+.sb-chat-table-scroll {
+    margin: 10px 0 12px 0;
+    max-width: 100%;
+    overflow-x: auto;
+    border-radius: var(--sb-radius-md, 8px);
+    background: #161618;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.sb-chat-table-scroll:last-child {
+    margin-bottom: 0;
+}
+
+body.sb-light .sb-chat-table-scroll {
+    background: #f8fafc;
+    border-color: rgba(0, 0, 0, 0.08);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+}
+
+.sb-chat-table {
+    min-width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    line-height: 1.45;
+}
+
+.sb-chat-table th,
+.sb-chat-table td {
+    padding: 7px 12px;
+    text-align: left;
+    vertical-align: top;
+    min-width: 5em;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sb-chat-table th {
+    font-weight: 600;
+    color: #ffffff;
+    white-space: nowrap;
+    background: rgba(255, 255, 255, 0.04);
+    border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+
+.sb-chat-table td {
+    color: var(--sb-text-label, #ececec);
+}
+
+.sb-chat-table tbody tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.sb-chat-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.sb-chat-table .sb-chat-inline-code {
+    white-space: nowrap;
+}
+
+body.sb-light .sb-chat-table th,
+body.sb-light .sb-chat-table td {
+    border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+body.sb-light .sb-chat-table th {
+    color: #0f172a;
+    background: rgba(0, 0, 0, 0.03);
+    border-bottom-color: rgba(0, 0, 0, 0.1);
+}
+
+body.sb-light .sb-chat-table td {
+    color: #1e293b;
+}
+
+body.sb-light .sb-chat-table tbody tr:nth-child(even) {
+    background: rgba(0, 0, 0, 0.02);
+}
+
 .sb-chat-link {
     color: #60a5fa;
     text-decoration: underline;
@@ -8564,6 +8644,18 @@ body.sb-light textarea.sb-composer-main-input:focus-visible {
     font-weight: 500;
 }
 
+.sb-image-status-badge[data-state='applied'] {
+    background: rgba(34, 197, 94, 0.12);
+    border-color: rgba(34, 197, 94, 0.3);
+    color: #4ade80;
+}
+
+.sb-image-status-badge[data-state='failed'] {
+    background: rgba(120, 53, 15, 0.35);
+    border-color: rgba(252, 211, 77, 0.25);
+    color: #fcd34d;
+}
+
 /* 2. Audio Narrated Card */
 .sb-audio-card {
     background: linear-gradient(135deg, var(--sb-surface-card), rgba(255, 255, 255, 0.02));
@@ -9384,6 +9476,7 @@ body.sb-light .sb-3d-budget-btn {
 .sb-3d-camera-panel .sb-cam-error-text { color: #fda4af; font-size: 10px; }
 .sb-3d-camera-panel .sb-cam-disclosure { align-self: flex-start; padding: 0; border: 0; background: none; color: #a1a1aa; font: inherit; font-size: 10px; cursor: pointer; }
 .sb-3d-camera-panel .sb-cam-disclosure:hover { color: #e4e4e7; }
+.sb-3d-camera-panel .sb-cam-version-list { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
 .sb-3d-camera-panel .sb-cam-switch {
     position: relative; width: 26px; height: 15px; padding: 0; border-radius: 999px; cursor: pointer;
     border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(0, 0, 0, 0.4); transition: background 0.12s;

@@ -35,7 +35,7 @@ import { workerTsRegisterSource } from '../../worker-ts-register';
 import { isClientDisconnect, stagedRunRegistry } from './staged-run-registry';
 import type { CanvasArtifact } from '../../../browser/generative-canvas/canvas-types';
 import type { ToolContext, ToolHandlerOutcome, ToolResultPayload } from '../../gemini/tools/types';
-import { MissingInputError } from '../../../common/errors/pipeline-errors';
+import { InvalidInputError, MissingInputError } from '../../../common/errors/pipeline-errors';
 import { STAGED_VISION_MODEL_DEFAULT, type StageEvent } from '../../../common/spatial/staged-location-contracts';
 import { GeminiClient } from '../../gemini/gemini-client';
 import { GoogleMediaCredentialsService } from '../../google-media-credentials-service';
@@ -56,6 +56,7 @@ import { createFalTrellisClient } from './pipeline-i/fal-trellis';
 import { createFalMeshyClient } from './pipeline-i/fal-meshy';
 import { resolveRegionSets } from './pipeline-k/material-sets';
 import { StageCache, stagedWorkspaceRoot } from './stage-cache';
+import { reportStagedSwitchProblems, RETIRED_PIPELINE_LETTERS, STAGED_DISTRICT_MODES, stagedBuildingPipelineEnv } from './staged-switches';
 import { genAiEnhanceClient } from './texture-enhance';
 import { lightingCorrectionEnabled, lightingModels } from './texture-lighting';
 import { bakeTileDetail, defaultSwatchServices, subjectSwatchLibrary } from '../../spatial/tile-detail-bake';
@@ -176,13 +177,22 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
         }
     }
     const place = parsePlaceArg(toolName, args.place);
-    // 'kd' is K over a whole district: it never isolates
-    const asked = args.pipeline === 'g' || args.pipeline === 'h' || args.pipeline === 'i' || args.pipeline === 'j' || args.pipeline === 'k' || args.pipeline === 'kd' ? args.pipeline : undefined;
+    // pipelines G and H were retired and I merged into J as its Trellis service (user decision 2026-10-30): a retired letter
+    // is refused with what replaced it, and 'i' still runs what it ran, J with Trellis
+    const rawPipeline = typeof args.pipeline === 'string' ? args.pipeline.trim().toLowerCase() : undefined;
+    if (rawPipeline === 'g' || rawPipeline === 'h') throw new InvalidInputError(toolName, `pipeline "${rawPipeline}"`, `${RETIRED_PIPELINE_LETTERS[rawPipeline]}; ask for "j" (procedural) or "k"`);
+    const asked = rawPipeline === 'i' ? 'j' : rawPipeline === 'j' || rawPipeline === 'k' ? rawPipeline : undefined;
+    const modelService = args.modelService === 'meshy' || args.modelService === 'trellis' ? args.modelService : rawPipeline === 'i' ? 'trellis' : undefined;
+    // how the district is shown (staged-switches.ts): 'kd' is K over the whole district and never isolates; the pipeline
+    // 'kd' it once was still asks for it
+    const rawDistrict = typeof args.district === 'string' && args.district.trim() ? args.district.trim().toLowerCase() : undefined;
+    if (rawDistrict && !(STAGED_DISTRICT_MODES as readonly string[]).includes(rawDistrict)) throw new InvalidInputError(toolName, `district "${rawDistrict}"`, `a district is shown as ${STAGED_DISTRICT_MODES.join(', ')}`);
+    const district = rawDistrict ?? (rawPipeline === 'kd' ? 'kd' : undefined);
+    const isolate = args.isolate === true && district !== 'kd';
     // one building is pipeline K's, the scan straightened with its own photo, from the chat and the 3D Building button alike
-    // (user decision 2026-10-26), unless the caller asks for a procedural rebuild (procedural true, or a procedural pipeline by
-    // name or by SCRATCHBOX_STAGED_PROCEDURAL) or for the scan detailed (procedural false)
-    const envProcedural = (process.env.SCRATCHBOX_STAGED_PROCEDURAL ?? '').trim().toLowerCase();
-    const pipeline = asked ?? (args.isolate === true && args.procedural === undefined && !['g', 'h', 'i', 'j'].includes(envProcedural) ? 'k' : undefined);
+    // (user decision 2026-10-26), unless the caller asks for a procedural rebuild (procedural true, pipeline 'j', or
+    // SCRATCHBOX_STAGED_BUILDING_PIPELINE=j) or for the scan detailed (procedural false)
+    const pipeline = asked ?? (isolate && args.procedural === undefined && stagedBuildingPipelineEnv() !== 'j' ? 'k' : undefined);
     const radiusM = typeof args.radiusMeters === 'number' && args.radiusMeters > 0 ? args.radiusMeters : undefined;
     // steps turned on or off for this build (the node graph's switches), by step key: unknown keys and non-booleans are dropped
     const steps = args.steps && typeof args.steps === 'object' && !Array.isArray(args.steps)
@@ -191,17 +201,19 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
     return {
         request: {
             query,
-            isolate: args.isolate === true && asked !== 'kd',
+            isolate,
             ...(radiusM !== undefined ? { radiusM } : {}),
             trees: args.trees !== false,
             ...(treeTriangleBudget !== undefined ? { treeTriangleBudget } : {}),
             stageIntoActiveScene: args.stageIntoActiveScene === true,
             ...(typeof args.enhance === 'boolean' ? { enhance: args.enhance } : {}),
             // a procedural rebuild when asked for (above); never for pipeline K or a scan asked to be detailed
-            ...(args.isolate === true && args.procedural !== false && pipeline !== 'k' && pipeline !== 'kd' ? { procedural: true } : {}),
-            // which pipeline ('g', 'h', 'i' or 'j' procedural, pipeline-h/pipeline-h.ts stagedProcedural reads it, else the environment;
-            // 'k' the straightened scan, pipeline-k/pipeline-k.ts)
+            ...(isolate && args.procedural !== false && pipeline !== 'k' ? { procedural: true } : {}),
+            // which pipeline ('j' procedural, pipeline-i/; 'k' the straightened scan, pipeline-k/pipeline-k.ts), and J's model
+            // service when one is named (staged-switches.ts stagedModelService reads it, else the environment, else Meshy)
             ...(pipeline ? { pipeline } : {}),
+            ...(modelService ? { modelService } : {}),
+            ...(district ? { district } : {}),
             ...(steps ? { steps } : {}),
             ...(place ? { place } : {})
         },
@@ -471,6 +483,7 @@ export async function runStagedLocationTool(
     ctx: ToolContext,
     injected?: StagedLocationDeps
 ): Promise<ToolHandlerOutcome> {
+    reportStagedSwitchProblems();
     const { request, retry, resume } = parseStagedLocationArgs(toolName, args);
     const root = stagedWorkspaceRoot();
     // the caller's own copy of the raw extraction, where the extraction tools have always put it: the path as given when

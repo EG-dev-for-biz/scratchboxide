@@ -15,7 +15,7 @@
  */
 
 import * as THREE from 'three';
-import { CONFIDENCE_MAP_KEY } from './revealMaterial';
+import { CONFIDENCE_MAP_KEY, FRONT_BIAS_KEY } from './revealMaterial';
 import { prepareFacadeMaterials } from './facadeMaterialLook';
 import { applyStochasticTiling } from './stochasticTiling';
 
@@ -32,6 +32,38 @@ function confidenceIndexOf(m: THREE.Material): number | undefined {
     return typeof i === 'number' && Number.isInteger(i) && i >= 0 ? i : undefined;
 }
 
+/** A node the remesh polish rebuilt on a facade plane (pipeline K's lattice, node extras `sbFacadeLattice`). */
+const isRebuiltFacade = (o: THREE.Object3D): boolean => !!(o.userData?.sbFacadeLattice ?? o.parent?.userData?.sbFacadeLattice);
+
+/**
+ * The rebuilt facades in front of the scan they replace (FRONT_BIAS_KEY): each rebuilt mesh gets its own copy of a material
+ * it shares with scan pieces (the copy shares its textures), flagged for the depth bias. Returns the meshes flagged.
+ */
+export function biasRebuiltFacades(scene: THREE.Object3D): number {
+    const scanMats = new Set<THREE.Material>(), rebuilt: THREE.Mesh[] = [];
+    scene.traverse(o => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        if (isRebuiltFacade(mesh)) rebuilt.push(mesh);
+        else for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) if (m) scanMats.add(m);
+    });
+    const copies = new Map<THREE.Material, THREE.Material>();
+    const own = (m: THREE.Material): THREE.Material => {
+        if (!scanMats.has(m)) return m;
+        let c = copies.get(m);
+        if (!c) { c = m.clone(); copies.set(m, c); }
+        return c;
+    };
+    for (const mesh of rebuilt) {
+        mesh.material = Array.isArray(mesh.material) ? mesh.material.map(own) : own(mesh.material);
+        for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+            m.userData[FRONT_BIAS_KEY] = true;
+            m.polygonOffset = true; m.polygonOffsetFactor = -1; m.polygonOffsetUnits = -2;
+        }
+    }
+    return rebuilt.length;
+}
+
 /**
  * Marks the textured surfaces of a just-loaded model (synchronously, before the loader's clay pass) and loads their
  * confidence textures. Resolves with the number of materials that got one; a model without texture-pass extras is left
@@ -39,6 +71,8 @@ function confidenceIndexOf(m: THREE.Material): number | undefined {
  * surface in the clay rung's colour) and is reported on the console.
  */
 export function prepareTexturedTwinModel(gltf: GltfLike, opts: { twin?: boolean } = {}): Promise<number> {
+    // first, so the copies are prepared like the rest (confidence textures, the facade material reading)
+    biasRebuiltFacades(gltf.scene);
     const byIndex = new Map<number, THREE.Material[]>();
     gltf.scene.traverse(o => {
         const mesh = o as THREE.Mesh;

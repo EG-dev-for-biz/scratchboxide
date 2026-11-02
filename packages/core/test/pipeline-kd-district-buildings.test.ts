@@ -36,10 +36,16 @@ describe('pipeline K-D: which building a point stands in', () => {
     });
 
     it('is pipeline K throughout, and K-D only for a district', () => {
-        expect(stagedPipelineK({ pipeline: 'kd' }, {})).toBe(true);
-        expect(stagedPipelineKD({ pipeline: 'kd' })).toBe(true);
-        expect(stagedPipelineKD({ pipeline: 'kd', isolate: true })).toBe(false);
-        expect(stagedPipelineKD({ pipeline: 'k' })).toBe(false);
+        expect(stagedPipelineK({ district: 'kd' }, {})).toBe(true);
+        expect(stagedPipelineKD({ district: 'kd' }, {})).toBe(true);
+        expect(stagedPipelineKD({ district: 'kd', isolate: true }, {})).toBe(false);
+        expect(stagedPipelineKD({}, {})).toBe(false);
+        // the environment's district, and the request's over it
+        expect(stagedPipelineKD({}, { SCRATCHBOX_STAGED_DISTRICT: 'kd' })).toBe(true);
+        expect(stagedPipelineKD({ district: 'massing' }, { SCRATCHBOX_STAGED_DISTRICT: 'kd' })).toBe(false);
+        // 'kd' is no longer a building pipeline
+        const asLetter: { pipeline?: string; district?: string } = { pipeline: 'kd' };
+        expect(stagedPipelineKD(asLetter, {})).toBe(false);
     });
 
     it('with no margin, gives the signed distance\'s answer everywhere: overlapping parts, shared walls, a many-sided outline', () => {

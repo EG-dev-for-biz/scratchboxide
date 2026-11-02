@@ -8,20 +8,22 @@
  ********************************************************************************/
 
 import { describe, it, expect } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import {
     detect3DSceneTheme,
     generateDefaultCpp3DSource,
     synthesizeContextual3DScene
 } from '../src/browser/generative-canvas/procedural-3d-synthesizer';
+import { NoSceneBuiltError } from '../src/browser/generative-canvas/services/adaptive-domain-engine';
+import { GLASS_FRACTURE_TOOL_DECLARATIONS, glassFractureHandlers } from '../src/node/gemini/tools/glass-fracture-tools';
 
 describe('Bullet Glass Shatter & Ballistic Fracture System', () => {
 
-    it('2. should detect glass_shatter theme for ballistics and glass fracture prompts', () => {
-        const theme = detect3DSceneTheme('build me a scene of a bully going through a plate of glass');
-        expect(theme).toBe('glass_shatter');
-
-        const theme2 = detect3DSceneTheme('bullet impact on glass pane');
-        expect(theme2).toBe('glass_shatter');
+    it('2. does not route ballistics or glass-fracture prompts on keywords (ADA rule 2)', () => {
+        expect(detect3DSceneTheme('build me a scene of a bully going through a plate of glass')).toBe('general');
+        expect(detect3DSceneTheme('bullet impact on glass pane')).toBe('general');
     });
 
     it('3. should generate compilable C++20 ballistic fracture engine source code', () => {
@@ -36,35 +38,49 @@ describe('Bullet Glass Shatter & Ballistic Fracture System', () => {
         expect(cppSource).toContain('bullet_glass_impact');
     });
 
-    it('4. should synthesize Scene3DData with Voronoi shards, bullet mesh, timeline, and C++ generator', () => {
-        const scene = synthesizeContextual3DScene('build me a scene of a bully going through a plate of glass');
-        expect(scene.sceneType).toBe('glass_shatter');
-        expect(scene.renderMode).toBe('pbr');
-        expect(scene.cameraMode).toBe('orbit');
-        expect(scene.timeline).toBeDefined();
-        expect(scene.timeline?.isPlaying).toBe(true);
-        expect(scene.timeline?.durationMs).toBe(3000);
+    it('4. fails a glass-shatter prompt with NoSceneBuiltError instead of mounting a canned fracture template', () => {
+        let error: any;
+        try {
+            synthesizeContextual3DScene('build me a scene of a bully going through a plate of glass');
+        } catch (err) {
+            error = err;
+        }
+        expect(error).toBeInstanceOf(NoSceneBuiltError);
+        expect(error.code).toBe('NO_SCENE_BUILT');
+    });
 
-        // Verify C++ generator is attached
-        expect(scene.cppGenerator).toBeDefined();
-        expect(scene.cppGenerator?.enabled).toBe(true);
-        expect(scene.cppGenerator?.filename).toBe('world_generator.cpp');
-        expect(scene.cppGenerator?.sourceCode).toContain('#include "scratchbox_engine.hpp"');
-        expect(scene.cppGenerator?.sourceCode).toContain('GlassFractureGenerator::buildCompleteScene');
+    it('5. vfx_fracture_glass_pane builds the Voronoi fracture natively, its shards driven by continuous parameters', async () => {
+        const declaration = GLASS_FRACTURE_TOOL_DECLARATIONS.find(d => d.name === 'vfx_fracture_glass_pane');
+        expect(declaration).toBeDefined();
+        const props = (declaration!.parameters as any).properties;
+        for (const name of ['paneWidth', 'paneHeight', 'radialCrackCount', 'bulletCaliber', 'bulletSpeed', 'bulletMachNumber', 'simulationTimeSec']) {
+            expect(props[name]?.type, name).toBe('NUMBER');
+        }
 
-        // Verify meshes
-        expect(scene.customMeshes).toBeDefined();
-        const meshes = scene.customMeshes!;
-        expect(meshes.some(m => m.name === 'Clamping_Frame')).toBe(true);
-        expect(meshes.some(m => m.name === 'Intact_Glass_Pane')).toBe(true);
-        expect(meshes.some(m => m.name === 'Spitzer_Bullet_9mm')).toBe(true);
-        expect(meshes.some(m => m.name === 'Supersonic_Mach_Cone')).toBe(true);
-        expect(meshes.filter(m => m.name.startsWith('Voronoi_Shard_')).length).toBeGreaterThanOrEqual(20);
+        const [, handler] = glassFractureHandlers[0];
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-glass-fracture-'));
+        try {
+            const run = async (file: string, radialCrackCount: number) => {
+                const outputGlbPath = path.join(dir, file);
+                const outcome = await handler({ outputGlbPath, radialCrackCount }, {} as any);
+                expect(outcome.status, JSON.stringify(outcome.resultPayload)).toBe('completed');
+                const glb = fs.readFileSync(outputGlbPath);
+                expect(glb.subarray(0, 4).toString('latin1')).toBe('glTF');
+                expect(glb.readUInt32LE(4)).toBe(2);
+                expect(glb.readUInt32LE(8)).toBe(glb.length);
+                return outcome.resultPayload as { vertices: number; triangles: number; shardCount: number };
+            };
 
-        // Verify customScript animation logic is present
-        expect(scene.customScript).toBeDefined();
-        expect(scene.customScript).toContain('Spitzer_Bullet_9mm');
-        expect(scene.customScript).toContain('Voronoi_Shard_');
-        expect(scene.customScript).toContain('onFrame');
+            const base = await run('base.glb', 28);
+            expect(base.shardCount).toBeGreaterThanOrEqual(20);
+            expect(base.vertices).toBeGreaterThan(0);
+            expect(base.triangles).toBeGreaterThan(0);
+
+            const denser = await run('denser.glb', 40);
+            expect(denser.shardCount).toBeGreaterThan(base.shardCount);
+            expect(denser.triangles).toBeGreaterThan(base.triangles);
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     });
 });

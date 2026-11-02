@@ -94,13 +94,20 @@ describe('Adaptive Domain Architecture (ADA) - Open-Domain 3D Scene Synthesis', 
             expect(scene.geoAnchor).toBeUndefined();
         });
 
-        it('preserves exact ballistics Voronoi fracture for glass shatter requests', () => {
+        it('does not route glass-shatter words to a canned fracture template (vfx_fracture_glass_pane builds it from parameters)', () => {
+            // The ballistics/glass noun list was removed (ADA rule 2); the native fracture is the vfx_fracture_glass_pane tool.
             const prompt = 'High-speed bullet piercing a plate of glass with supersonic fracture shards';
-            const theme = detect3DSceneTheme(prompt);
-            expect(theme).toBe('glass_shatter');
+            expect(detect3DSceneTheme(prompt)).toBe('general');
 
-            const scene = synthesizeContextual3DScene(prompt);
-            expect(scene.title).toContain('Glass Shatter');
+            let error: any;
+            try {
+                synthesizeContextual3DScene(prompt);
+            } catch (err) {
+                error = err;
+            }
+            expect(error?.name).toBe('NoSceneBuiltError');
+            expect(error.code).toBe('NO_SCENE_BUILT');
+            expect(error.message).toContain(`No 3D scene was built for "${prompt}"`);
         });
     });
 

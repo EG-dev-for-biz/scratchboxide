@@ -149,6 +149,8 @@ import { fromInput, generatorErrorForScene, generatorRequestFailure, generatorRu
 import type { SceneContentInput, SceneContentFactories } from './scene3d/syncSceneContent';
 import { syncCustomMeshes, disposeCustomMeshes } from './scene3d/syncCustomMeshes';
 import type { CustomMeshRegistry, CustomMeshDefinition } from './scene3d/syncCustomMeshes';
+import { APPLY_MESH_TEXTURE_EVENT, applyMeshTexture, textureLoadFailureReason, type MeshTextureOutcome, type MeshTextureRequest } from './scene3d/meshTexture';
+import { resolveTextureUrl } from '../../../common/texture-url-resolver';
 import { syncCustomShaders, tickCustomShaders } from './scene3d/syncCustomShaders';
 import type { CustomShaderDefinition } from './scene3d/syncCustomShaders';
 import { tickObjectAnimations } from './scene3d/objectAnimationRuntime';
@@ -158,6 +160,10 @@ import { syncVectorRoadmapBlueprint } from './scene3d/syncVectorRoadmapBlueprint
 import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
 import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { WeatherControl } from './scene3d/WeatherPanel';
+import { SplatEditControl } from './scene3d/SplatEditPanel';
+import { createSplatEditTool, DEFAULT_SPLAT_BRUSH, type SplatBrush, type SplatEditTool } from './scene3d/splatEditTool';
+import { PRIMARY_SPLAT_TARGET, type SplatEditStroke } from '../../../common/spatial/splat-edits';
+import { ColorHarmonyControl } from './scene3d/ColorHarmonyPanel';
 import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/autoFraming';
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle, Scene3DRenderMode } from './scene3d/types';
 import { applyClayRenderMode } from './scene3d/clayRenderMode';
@@ -1107,6 +1113,11 @@ function mergeExternalSceneData(prev: Scene3DData, streamed: Scene3DData): Scene
     };
 }
 
+/** The strokes of `edits` that edit the splat loaded for the scene object `id` (the scene's own splat when they name none). */
+function splatEditsFor(edits: readonly SplatEditStroke[] | undefined, id: string): SplatEditStroke[] {
+    return (edits ?? []).filter(s => (s.target ?? PRIMARY_SPLAT_TARGET) === id);
+}
+
 export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     data,
     activeArtifact,
@@ -1187,6 +1198,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const [selectedObjectName, setSelectedObjectName] = React.useState<string>('');
     const [isOutlinerOpen, setIsOutlinerOpen] = React.useState<boolean>(false);
     const [isInspectorOpen, setIsInspectorOpen] = React.useState<boolean>(false);
+    // The Edit Splats brush (splatEditTool.ts) and the tool the pointer handlers call while it is active
+    const [splatBrush, setSplatBrush] = React.useState<SplatBrush>(DEFAULT_SPLAT_BRUSH);
+    const splatBrushRef = useLatest(splatBrush);
+    const splatEditToolRef = React.useRef<SplatEditTool | null>(null);
     const [outlinerSearchQuery, setOutlinerSearchQuery] = React.useState<string>('');
     const [sceneEntities, setSceneEntities] = React.useState<Array<{ id: string; name: string; type: string; object: THREE.Object3D; visible: boolean }>>([]);
     const selectionBoxRef = React.useRef<THREE.BoxHelper | null>(null);
@@ -1897,6 +1912,14 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     }, []);
     const physicsRuntimeStateRef = React.useRef<PhysicsRuntimeState>(new Map());
     const activeSplatMeshesRef = React.useRef<Map<string, PhotorealGaussianSplatMesh>>(new Map());
+    // Every change to the strokes (one painted, undo, redo, a saved version opened) redraws each splat from its build.
+    React.useEffect(() => {
+        for (const [id, mesh] of activeSplatMeshesRef.current) mesh.replayEdits(splatEditsFor(sceneData.splatEdits, id));
+    }, [sceneData.splatEdits]);
+    const hasSplatContent = !!sceneData.splatUrl || (sceneData.objects ?? []).some(o => drawableModelKind(o.content?.durableUri, o.content?.type) === 'splat');
+    React.useEffect(() => {
+        if (toolMode !== 'splat') splatEditToolRef.current?.hideCursor();
+    }, [toolMode]);
 
     // Latest-value mirrors so the rAF loop / listeners never need to be re-bound
     const cameraModeRef = useLatest(cameraMode);
@@ -2109,6 +2132,17 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         scene.add(gizmoGroup);
         transformGizmoGroupRef.current = gizmoGroup;
 
+        splatEditToolRef.current = createSplatEditTool({
+            meshes: () => activeSplatMeshesRef.current,
+            brush: () => splatBrushRef.current,
+            cursor: () => brushCursorMeshRef.current,
+            commit: stroke => mutateSceneDataRef.current(
+                prev => ({ ...prev, splatEdits: [...(prev.splatEdits ?? []), stroke] }),
+                { operator: 'splat_edit', params: { op: stroke.op, points: stroke.points.length / 3, radius: stroke.radius, ...(stroke.target ? { target: stroke.target } : {}) } },
+                { history: { label: `${stroke.op === 'erase' ? 'Erase' : stroke.op === 'restore' ? 'Restore' : 'Paint'} splats`, coalesce: false } }
+            )
+        });
+
         const detachControls = attachViewportControls(stack, {
             cameraMode: cameraModeRef,
             toolMode: toolModeRef,
@@ -2127,6 +2161,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             ignoredPickObjects: () => [atmosphereRef.current?.starsMesh, stack.gridHelper],
             mapPointerNdc: ndc => opticsChainRef.current?.active ? opticsChainRef.current.mapPointerNdc(ndc, camera) : ndc,
             pointPick: focusPickRef,
+            splatEdit: splatEditToolRef,
             resolveSelectableObject,
             selectObject: selectObjectRef,
             mutateSceneData: mutateSceneDataRef,
@@ -2157,7 +2192,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             return { depthTexture: target?.depthTexture ?? null };
         };
         const opticsChain = new ViewportOpticsChain();
-        opticsChain.configure(sceneDataRef.current.camera?.lens);
+        opticsChain.configure(sceneDataRef.current.camera?.lens, sceneDataRef.current.colorHarmony, sceneDataRef.current.lookMatch);
         opticsChainRef.current = opticsChain;
         (window as any).__SB_3D_OPTICS__ = opticsChain;
         const focusController = new ViewportFocusController();
@@ -2707,10 +2742,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         };
     }, [atmosphereFingerprint]);
 
-    // ---- 3b. Lens optics: distortion and depth-of-field passes from camera.lens (none when it configures none) ----
-    const lensFingerprint = JSON.stringify(sceneData.camera?.lens ?? null);
+    // ---- 3b. Lens optics: distortion and depth-of-field passes from camera.lens, and the colour harmony grade (none when neither configures one) ----
+    const lensFingerprint = JSON.stringify([sceneData.camera?.lens ?? null, sceneData.colorHarmony ?? null, sceneData.lookMatch ?? null]);
     React.useEffect(() => {
-        opticsChainRef.current?.configure(sceneDataRef.current.camera?.lens);
+        opticsChainRef.current?.configure(sceneDataRef.current.camera?.lens, sceneDataRef.current.colorHarmony, sceneDataRef.current.lookMatch);
         focusControllerRef.current?.configure(sceneDataRef.current.camera?.lens);
     }, [lensFingerprint]);
 
@@ -3291,6 +3326,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     if (isActiveNow(def)) liveScene.add(splatMesh);
                     currentMap.set(obj.id, splatMesh);
                     activeSplatMeshesRef.current.set(obj.id, splatMesh);
+                    // the scene's strokes for this splat, replayed over it as built
+                    const strokes = splatEditsFor(sceneDataRef.current.splatEdits, obj.id);
+                    if (strokes.length) splatMesh.replayEdits(strokes);
                     setStatus(obj.id, readyStatus(uri));
                     refreshEntities();
                     if (splatMesh.parent) autoFrameIfNeeded();
@@ -3541,6 +3579,49 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         };
     }, []);
 
+    // A media card's texture (meshTexture.ts): set on the selected scene mesh once its images load, else the reason it was not.
+    React.useEffect(() => {
+        const onApplyTexture = (e: Event) => {
+            const request = (e as CustomEvent<MeshTextureRequest>).detail;
+            if (!request || request.claimed) return;
+            const targetId = request.targetId ?? selectedObjectIdRef.current;
+            const edit = applyMeshTexture(sceneDataRef.current, targetId, request.channels);
+            if (!edit.ok) {
+                request.decline(edit.reason, !!targetId);
+                return;
+            }
+            if (!customMeshRegistryRef.current.has(edit.meshId)) {
+                request.decline(`'${edit.meshName}' is not drawn in this viewport, so a texture on it would not show. Nothing was changed.`, true);
+                return;
+            }
+            const meshId = edit.meshId;
+            request.claim((async (): Promise<MeshTextureOutcome> => {
+                const loader = new THREE.TextureLoader();
+                for (const channel of edit.channels) {
+                    const url = request.channels[channel]!;
+                    try {
+                        (await loader.loadAsync(await resolveTextureUrl(url))).dispose();
+                    } catch {
+                        return { status: 'failed', reason: textureLoadFailureReason(channel, url) };
+                    }
+                }
+                // the scene may have changed while the images loaded: apply to it as it is now
+                const now = applyMeshTexture(sceneDataRef.current, meshId, request.channels);
+                if (!now.ok) return { status: 'failed', reason: now.reason };
+                mutateSceneData(() => now.scene, { operator: 'apply_mesh_texture', params: { objectId: meshId, channels: now.channels } });
+                return {
+                    status: 'applied',
+                    meshId,
+                    meshName: now.meshName,
+                    channels: now.channels,
+                    ...(renderModeRef.current === 'clay' ? { note: 'The viewport is in clay mode: switch it to textured to see it.' } : {})
+                };
+            })());
+        };
+        window.addEventListener(APPLY_MESH_TEXTURE_EVENT, onApplyTexture);
+        return () => window.removeEventListener(APPLY_MESH_TEXTURE_EVENT, onApplyTexture);
+    }, [mutateSceneData]);
+
     // ---- 7. Custom shaders from schema ---------------------------------------------
     React.useEffect(() => {
         const stack = stackRef.current;
@@ -3781,6 +3862,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     }, []);
 
     const readFocusDistance = React.useCallback(() => opticsChainRef.current?.status.focusDistanceMeters ?? null, []);
+    const sampleViewportObjects = React.useCallback((objectIds?: string[]) => {
+        const chain = opticsChainRef.current;
+        return chain ? chain.requestObjectSample(objectIds) : Promise.reject(new Error('the viewport is not drawing'));
+    }, []);
 
     // Pick focus: a click focuses at the clicked point's distance (Manual) or locks onto that surface point, stored in
     // its object's local frame so it follows the object (Track); Alt-click tracks the whole object.
@@ -4227,8 +4312,29 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     </svg>
                 </button>
 
+                {/* Edit splats: a brush that erases, restores or paints the splats, saved with the world (splat-edits.ts) */}
+                {hasSplatContent && (
+                    <SplatEditControl
+                        sceneData={sceneData}
+                        mutateSceneData={mutateSceneData}
+                        active={toolMode === 'splat'}
+                        onActive={on => setToolMode(on ? 'splat' : 'view')}
+                        brush={splatBrush}
+                        onBrush={setSplatBrush}
+                        currentScene={() => sceneDataRef.current}
+                    />
+                )}
+
                 {/* Weather: time of day into night, cloud cover, haze, fog (scene-weather.ts) */}
                 <WeatherControl sceneData={sceneData} mutateSceneData={mutateSceneData} />
+
+                {/* Colour harmony: every hue on the objects moved toward a hue template (color-harmony.ts) */}
+                <ColorHarmonyControl
+                    sceneData={sceneData}
+                    mutateSceneData={mutateSceneData}
+                    selectedObjectId={selectedObjectId}
+                    sampleObjects={sampleViewportObjects}
+                />
 
                 {/* Camera settings: lens, depth of field, distortion (sb_set_camera / sb_set_camera_lens) */}
                 <CameraSettingsControl

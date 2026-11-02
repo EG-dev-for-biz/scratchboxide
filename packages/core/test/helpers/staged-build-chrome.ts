@@ -19,6 +19,7 @@ import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
 import { spawn, type ChildProcess } from 'child_process';
+import { removeChromeProfile } from './chrome-profile';
 import { REPO_ROOT, type Requirement } from './requirements';
 
 const CHROME_CANDIDATES = [
@@ -187,7 +188,8 @@ ${opts.manualFrames ? MANUAL_FRAMES : ''}</head><body><div id="root"></div><scri
     // Only this harness's own origin is reachable: no tile, Street View or model request can leave the page.
     await send('Network.setBlockedURLs', { urls: ['https://*', 'http://*.com/*', 'http://*.googleapis.com/*', 'http://localhost*'] });
     await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
-    if (opts.reducedMotion) await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+    // Always set, never inherited: a host with Reduce Motion on (GitHub's macOS runners) would otherwise show every reveal's end state at once.
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: opts.reducedMotion ? 'reduce' : 'no-preference' }] });
     await send('Page.navigate', { url: `${origin}/index.html` });
 
     const evaluate = async <T>(expression: string): Promise<T> => {
@@ -257,7 +259,7 @@ ${opts.manualFrames ? MANUAL_FRAMES : ''}</head><body><div id="root"></div><scri
             proc.kill('SIGKILL');
             await Promise.race([exited, new Promise(r => setTimeout(r, 5000))]);
             await new Promise<void>(r => server.close(() => r()));
-            fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+            removeChromeProfile(profile);
         }
     };
 }

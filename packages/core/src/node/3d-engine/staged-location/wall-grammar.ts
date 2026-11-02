@@ -36,6 +36,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { readOccluded, unreadMask } from './pipeline-k/occlusion';
 import type { WindowFitFile, WindowRect } from './window-fit';
 
 export const WALL_GRAMMAR_VERSION = 'wall-grammar/2';
@@ -61,6 +62,7 @@ export interface GrammarFacade {
     facadeId: number; image: string; centroid: number[]; normal: number[]; axisS: number[]; axisT: number[];
     sMin: number; sMax: number; tMin: number; tMax: number; pixel: number; width: number; height: number; orthoSMin: number; orthoTMax: number;
     uncoveredMask?: string;
+    occludedMask?: string;
 }
 
 export type BayFrom = 'photo-inferred' | 'generated';
@@ -103,11 +105,14 @@ export function groupWalls(facades: GrammarFacade[], P: WallGrammarParams = WALL
     return [...groups.values()];
 }
 
-/** A facade photo's uncovered mask: its file, else the ortho's exact grey 128 or transparent texels. */
+/** A facade photo's unread texels: its uncovered mask (its file, else the ortho's exact grey 128 or transparent texels), and its occluded texels. */
 function uncoveredOf(dir: string, f: GrammarFacade, rgba: Uint8Array | Buffer, decode: (b: Buffer) => { rgba: Uint8Array; width: number; height: number }): Uint8Array {
     const file = f.uncoveredMask ? path.join(dir, f.uncoveredMask) : undefined;
-    if (file && fs.existsSync(file)) { const m = decode(fs.readFileSync(file)); return Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] >= 128 ? 1 : 0)); }
-    return Uint8Array.from({ length: rgba.length / 4 }, (_, k) => (rgba[k * 4 + 3] === 0 || (rgba[k * 4] === 128 && rgba[k * 4 + 1] === 128 && rgba[k * 4 + 2] === 128) ? 1 : 0));
+    const unc = file && fs.existsSync(file) ? (() => { const m = decode(fs.readFileSync(file)); return Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] >= 128 ? 1 : 0)); })()
+        : Uint8Array.from({ length: rgba.length / 4 }, (_, k) => (rgba[k * 4 + 3] === 0 || (rgba[k * 4] === 128 && rgba[k * 4 + 1] === 128 && rgba[k * 4 + 2] === 128) ? 1 : 0));
+    // what stood in front of the facade when it was photographed is not read: the wall's rhythm continues over it
+    const occ = readOccluded(dir, f, f.width, f.height, decode);
+    return occ && occ.length === unc.length ? unreadMask(unc, occ, unc.length) : unc;
 }
 
 /** One wall's evidence on its grid (see the file comment, 2). */

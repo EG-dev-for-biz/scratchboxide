@@ -13,7 +13,8 @@
  *   - the vector first paint (Google vector buildings, extruded natively) is on screen before the tiles, labelled
  *     vector-modelled; the tiles supersede it; a district keeps the buildings past the tiles' reach as their own layer;
  *   - the geometric isolate is the first clay building; the ownership vote runs after it, and its voted remesh replaces it
- *     (and the rebuild runs again) only when it moves at least 5% of the structure's surface;
+ *     (and the rebuild runs again) only when it moves at least 5% of the structure's surface; in pipeline K it is shown only
+ *     after the facade work and polish the first isolate had (its base cleaned and clipped to the footprint);
  *   - a twin baked from the tile photo is published before the Street View steps (the fit, the close-ups);
  *   - districts are textured (tile_refine's photo on the district remesh), clay first; a clay request stays clay.
  * No network, no billed call.
@@ -232,6 +233,75 @@ describe('the fast isolate first', () => {
         expect(fitCommits[1]).toBeGreaterThan(ownershipDone);
         // the scene stands on the voted remesh
         expect((result.artifact as any).data.objects.find((o: any) => o.content.metadata.isGround).id).toBe(l2v.objectId);
+    });
+
+    it('pipeline K: a material vote gets the facade work and polish the first isolate got, so the voted building shown is cut to its footprint', async () => {
+        const s0 = setup(ARCH);
+        const v = voteDeps(path.join(s0.root, 'views'), 50);
+        // the vote's isolate holds a rooftop block the geometric one did not (material), and a neighbour's scrap 10 m up past
+        // the footprint's east edge; like the first isolate it keeps tile_refine's ground apron around the base
+        const scrap = building(13, 16, -2, 2, 4).map(t => t.map((c, k) => (k % 3 === 1 ? c + 10 : c)) as typeof t);
+        const votedKeys: string[] = [];
+        const refine: StagedLocationDeps['refine']['refine'] = async req => {
+            const r = await s0.native.deps.refine.refine(req);
+            if (!req.ownership) return r;
+            const dir = path.join(s0.root, `voted_${votedKeys.length}`);
+            fs.mkdirSync(dir, { recursive: true });
+            const roof = building(-4, 4, -4, 4, 6).map(t => t.map((c, k) => (k % 3 === 1 ? c + 22 : c)) as typeof t);
+            for (const [name, from] of [['raw_clay.glb', r.rawClayGlb!], ['clay.glb', r.clayGlb], ['textured.glb', r.texturedGlb]] as const) writeTris(path.join(dir, name), [...readTris(from), ...roof, ...scrap]);
+            const cacheKey = String(votedKeys.length + 5).repeat(64);
+            votedKeys.push(cacheKey);
+            return { ...r, rawClayGlb: path.join(dir, 'raw_clay.glb'), clayGlb: path.join(dir, 'clay.glb'), texturedGlb: path.join(dir, 'textured.glb'), cacheKey };
+        };
+        const s = setup(ARCH, { vision: v.vision, refine: { refine, renderOwnershipViews: v.renderOwnershipViews } });
+        const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false, pipeline: 'k' }, s.deps, s.ctx);
+        expect(validateContract('StagedLocationResult', result)).toEqual([]);
+        const final = (result.artifact as any).data.stagedBuild;
+        const l2v = final.layers.find((l: any) => l.layer === 'l2v');
+        expect(l2v, JSON.stringify(result.stages.find(x => x.stage === 'ownership'))).toBeDefined();
+        // the footprint the base cleanup stood on (no Google footprint here: the scan's own outline, and named so)
+        const base = s.deps.cache.readRunNote<{ loops: Array<Array<[number, number]>>; footprint: string; report: { apronSkipped?: string } | null }>(final.runId, 'pipeline_k_base')!;
+        expect(base.footprint).toBe('scan outline');
+        expect(base.report).not.toBeNull();
+        expect(base.report!.apronSkipped).toBeUndefined();
+        const loop = base.loops[0];
+        const offFootprintM = (x: number, z: number): number => {
+            let inside = false, d = Infinity;
+            for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+                const [ax, az] = loop[j], [bx, bz] = loop[i];
+                if ((bz > z) !== (az > z) && x < ((ax - bx) * (z - bz)) / (az - bz) + bx) inside = !inside;
+                const ex = bx - ax, ez = bz - az, u = Math.max(0, Math.min(1, ((x - ax) * ex + (z - az) * ez) / (ex * ex + ez * ez)));
+                d = Math.min(d, Math.hypot(x - ax - u * ex, z - az - u * ez));
+            }
+            return inside ? 0 : d;
+        };
+        // surface past the footprint (and its clip margin); a triangle the polish collapsed to a point has none
+        const area = (t: number[]) => { const ax = t[3] - t[0], ay = t[4] - t[1], az = t[5] - t[2], bx = t[6] - t[0], by = t[7] - t[1], bz = t[8] - t[2]; return Math.hypot(ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx) / 2; };
+        const outside = (tris: number[][]) => tris.filter(t => area(t) > 1e-6 && offFootprintM((t[0] + t[3] + t[6]) / 3, (t[2] + t[5] + t[8]) / 3) > 0.35);
+        // the raw re-refine had the scrap and the apron past the footprint; the published voted building has none of either
+        const rawVoted = readTris(path.join(s0.root, `voted_${votedKeys.length - 1}`, 'clay.glb'));
+        expect(outside(rawVoted).length).toBeGreaterThan(20);
+        const published = readTris(path.join(s.root, 'public', 'models', path.basename(l2v.url)));
+        expect(published.length).toBeGreaterThan(0);
+        expect(outside(published)).toEqual([]);
+        // its roof block is kept: the vote's change is what the building shows
+        expect(published.some(t => t[1] > 27.5 && t[4] > 27.5 && t[7] > 27.5)).toBe(true);
+        expect(l2v.provenance.method).toMatch(/then pipeline K's facade work and polish, its base cleaned and clipped to the footprint/);
+        // the voted remesh is a polished one: its own cache key and layer id, not the raw re-refine's
+        const rec = JSON.parse(fs.readFileSync(s.deps.cache.runRecordPath(final.runId), 'utf8'));
+        expect(votedKeys).not.toContain(rec.keys.remesh);
+        expect(l2v.objectId).toBe(`stg-${rec.keys.remesh.slice(0, 8)}-l2v`);
+        // the node graph's steps are the voted build's: the base cleanup and the clip ran on it, their snapshots drawn with it
+        const latest = new Map<string, any>();
+        for (const st of final.steps ?? []) latest.set(st.key, st);
+        for (const key of ['polish.base', 'polish.clip', 'polish.infill']) {
+            expect(latest.get(key), key).toMatchObject({ status: 'done', snapshot: { frameOf: [l2v.objectId, expect.any(String)] } });
+            expect(final.steps.filter((st: any) => st.key === key)).toHaveLength(2);
+        }
+        expect(latest.get('ownership.tileRefine')).toMatchObject({ status: 'done', snapshot: { frameOf: [l2v.objectId, expect.any(String)] } });
+        // the scene stands on the voted building, and the texture pass ran again on it
+        expect((result.artifact as any).data.objects.find((o: any) => o.content.metadata.isGround).id).toBe(l2v.objectId);
+        expect(result.stages.find(x => x.stage === 'ownership')?.status).toMatch(/^(committed|degraded)$/);
     });
 
     it('a view that cast no vote stays "not voted" when the vote is read back on a repeat build, and the repeat asks no view live', async () => {

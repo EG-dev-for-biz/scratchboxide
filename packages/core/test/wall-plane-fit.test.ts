@@ -219,9 +219,13 @@ describe('relief on a wall another part splits (native, clipOpenings)', () => {
         return runMassing(massingSpecText(m, { outDir: dir, params: { bake: 0, sections: 0, topdown: 0, residual: 0, clipOpenings: clip }, [which]: items[which] }), dir);
     };
 
-    it('rejects a recess crossing the pieces without clipping, and clips it to every piece with it (above the annex in the middle)', async () => {
+    it('without clipping keeps the recess only on the pieces it fits, and clips it to every piece with it (above the annex in the middle)', async () => {
+        // without clipOpenings the recess straddling the cuts is still split onto the pieces (af61b79e), but the middle
+        // copy reaching below that piece's bottom (the annex roof) is rejected rather than cut into the annex
         const off = await run(0, 'openings');
-        expect(off.report.rejectedOpenings).toEqual(['r']);
+        expect(off.report.rejectedOpenings).toEqual(['r:1']);
+        expect(off.report.rejectedOpeningReasons?.['r:1']).toBe("below the wall's bottom");
+        expect(off.report.faces.filter(f => f.openings.length).map(f => f.key).sort()).toEqual(['w:a:0:1:0', 'w:a:0:1:2']);
         const on = await run(1, 'openings');
         expect(on.report.rejectedOpenings).toEqual([]);
         const hosts = on.report.faces.filter(f => f.openings.length).map(f => f.key).sort();

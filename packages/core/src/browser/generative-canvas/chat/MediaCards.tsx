@@ -11,6 +11,8 @@ import * as React from 'react';
 import * as THREE from 'three';
 import type { TextureMatrixResult, TextureMatrixCandidate } from '../../../common/media-generation-protocol';
 import { resolveTextureUrl } from '../../../common/texture-url-resolver';
+import { canCreatePrimitive } from '../../../common/product-scope';
+import { describeMeshTextureOutcome, requestMeshTexture, type MeshTextureChannels, type MeshTextureOutcome } from '../primitives/scene3d/meshTexture';
 
 /**
  * A one-line notice under generated media saying that a model other than the requested one produced it, and why
@@ -40,6 +42,39 @@ export const MediaModelNotice: React.FC<{ note?: string; style?: React.CSSProper
     );
 };
 
+/** A card's last texture request: still running, or what the 3D viewport said it did. */
+interface MeshTextureStatus {
+    state: 'pending' | MeshTextureOutcome['status'];
+    text: string;
+}
+
+/** A card's texture action: asks the open 3D viewport to apply it (requestMeshTexture) and keeps what it answered. */
+function useMeshTextureApply(): { status: MeshTextureStatus | null; apply: (channels: MeshTextureChannels, targetId?: string) => void } {
+    const [status, setStatus] = React.useState<MeshTextureStatus | null>(null);
+    const apply = React.useCallback((channels: MeshTextureChannels, targetId?: string) => {
+        setStatus({ state: 'pending', text: targetId ? `Applying to '${targetId}'...` : 'Applying to the selected mesh...' });
+        void requestMeshTexture(channels, targetId).then(outcome => {
+            setStatus({ state: outcome.status, text: describeMeshTextureOutcome(outcome) });
+        });
+    }, []);
+    return { status, apply };
+}
+
+/** The line under a card saying what its texture action did; a failure stays with its reason. */
+const MeshTextureStatusBadge: React.FC<{ status: MeshTextureStatus | null }> = ({ status }) => {
+    if (!status) return null;
+    return (
+        <div
+            className="sb-image-status-badge"
+            data-testid="sb-mesh-texture-status"
+            data-state={status.state}
+            role={status.state === 'failed' ? 'alert' : 'status'}
+        >
+            <span>{status.text}</span>
+        </div>
+    );
+};
+
 // ==========================================
 // Multimedia & Geospatial Rendering Cards
 // ==========================================
@@ -60,23 +95,15 @@ export const ImageGeneratedCard: React.FC<{
         return Array.from(new Set(list));
     }, [imageContent, imagesContent]);
 
-    const [statusText, setStatusText] = React.useState<string | null>(null);
+    const texture = useMeshTextureApply();
 
     const handleAction = (action: string, img: string) => {
-        setStatusText(`${action}...`);
-        if (action === 'Apply as 3D Texture' || action === 'Apply as Texture') {
-            window.dispatchEvent(new CustomEvent('scratchbox:apply-3d-texture', { detail: { textureUrl: img } }));
-            window.dispatchEvent(new CustomEvent('scratchbox:open-primitive', { detail: { type: '3d-scene' } }));
-        } else if (action === 'Insert into Code') {
+        if (action === 'Insert into Code') {
             window.dispatchEvent(new CustomEvent('scratchbox:insert-code', { detail: { snippet: `<img src="${img}" alt="Generated asset" />` } }));
             window.dispatchEvent(new CustomEvent('scratchbox:open-primitive', { detail: { type: 'live-code-sandbox' } }));
         } else if (action === 'Remix Prompt') {
             window.dispatchEvent(new CustomEvent('scratchbox:remix-prompt', { detail: { prompt: `Remix generated asset: ${img}` } }));
         }
-        setTimeout(() => {
-            setStatusText(`${action} Succeeded!`);
-            setTimeout(() => setStatusText(null), 2000);
-        }, 800);
     };
 
     if (images.length === 0) return null;
@@ -90,22 +117,20 @@ export const ImageGeneratedCard: React.FC<{
                         <div className="sb-image-overlay">
                             <button
                                 className="sb-btn sb-btn-secondary sb-btn-xs"
-                                onClick={() => handleAction('Apply as 3D Texture', img)}
+                                disabled={texture.status?.state === 'pending'}
+                                title="Sets this image as the base colour of the mesh selected in the open 3D viewport"
+                                onClick={() => texture.apply({ albedo: img })}
                             >
                                 Apply as 3D Texture
                             </button>
-                            <button
-                                className="sb-btn sb-btn-secondary sb-btn-xs"
-                                onClick={() => handleAction('Apply as Texture', img)}
-                            >
-                                Apply as Texture
-                            </button>
-                            <button
-                                className="sb-btn sb-btn-secondary sb-btn-xs"
-                                onClick={() => handleAction('Insert into Code', img)}
-                            >
-                                Insert into Code
-                            </button>
+                            {canCreatePrimitive('live-code-sandbox') && (
+                                <button
+                                    className="sb-btn sb-btn-secondary sb-btn-xs"
+                                    onClick={() => handleAction('Insert into Code', img)}
+                                >
+                                    Insert into Code
+                                </button>
+                            )}
                             <button
                                 className="sb-btn sb-btn-secondary sb-btn-xs"
                                 onClick={() => handleAction('Remix Prompt', img)}
@@ -117,11 +142,7 @@ export const ImageGeneratedCard: React.FC<{
                 ))}
             </div>
             <MediaModelNotice note={modelNote} style={{ marginTop: 6 }} />
-            {statusText && (
-                <div className="sb-image-status-badge">
-                    <span>{statusText}</span>
-                </div>
-            )}
+            <MeshTextureStatusBadge status={texture.status} />
         </div>
     );
 };
@@ -607,14 +628,11 @@ export const GoogleMapsCard: React.FC<{
 // ==========================================
 export const TextureMatrixCard: React.FC<{
     result: TextureMatrixResult;
-    onApplyToMesh?: (candidateId: string, mappingPreset?: 'triplanar' | 'uv' | 'spherical') => void;
-    onBakeCpp?: (candidateId: string) => void;
-}> = ({ result, onApplyToMesh, onBakeCpp }) => {
+}> = ({ result }) => {
     const candidates = result.candidates || [];
     const [selectedId, setSelectedId] = React.useState<string>(result.selectedCandidateId || candidates[0]?.id || 'candidate-0');
     const [activeChannel, setActiveChannel] = React.useState<'composite' | 'albedo' | 'normal' | 'roughness' | 'metallic' | 'ao'>('composite');
-    const [mappingPreset, setMappingPreset] = React.useState<'triplanar' | 'uv' | 'spherical'>('triplanar');
-    const [statusText, setStatusText] = React.useState<string | null>(null);
+    const texture = useMeshTextureApply();
 
     const activeCandidate = candidates.find(c => c.id === selectedId) || candidates[0];
 
@@ -778,24 +796,19 @@ export const TextureMatrixCard: React.FC<{
         };
     }, [activeCandidate, activeChannel]);
 
-    const handleAction = (label: string, callback?: () => void) => {
-        setStatusText(`${label}...`);
-        if (callback) callback();
-        if (activeCandidate) {
-            if (label.includes('C++')) {
-                window.dispatchEvent(new CustomEvent('scratchbox:bake-cpp-texture', { detail: { candidate: activeCandidate } }));
-                window.dispatchEvent(new CustomEvent('scratchbox:open-primitive', { detail: { type: '3d-scene' } }));
-            } else if (label.includes('Mesh')) {
-                window.dispatchEvent(new CustomEvent('scratchbox:apply-3d-texture', {
-                    detail: { textureUrl: activeCandidate.textures.albedo, candidate: activeCandidate, mappingPreset }
-                }));
-                window.dispatchEvent(new CustomEvent('scratchbox:open-primitive', { detail: { type: '3d-scene' } }));
-            }
-        }
-        setTimeout(() => {
-            setStatusText(`${label} Applied!`);
-            setTimeout(() => setStatusText(null), 2500);
-        }, 800);
+    // The candidate's maps on the mesh it was made for, else the viewport's selected mesh; the separate maps win over a packed ORM.
+    const handleApplyToMesh = () => {
+        if (!activeCandidate) return;
+        const t = activeCandidate.textures;
+        const separate = !!(t.roughness || t.metallic || t.ao);
+        texture.apply({
+            albedo: t.albedo,
+            ...(t.normal ? { normal: t.normal } : {}),
+            ...(t.roughness ? { roughness: t.roughness } : {}),
+            ...(t.metallic ? { metallic: t.metallic } : {}),
+            ...(t.ao ? { ao: t.ao } : {}),
+            ...(t.orm && !separate ? { orm: t.orm } : {})
+        }, result.targetMeshId);
     };
 
     if (candidates.length === 0) return null;
@@ -860,45 +873,26 @@ export const TextureMatrixCard: React.FC<{
 
                     <div className="sb-matrix-viewport-container">
                         <canvas ref={canvasRef} className="sb-matrix-webgl-canvas" />
-                        <div className="sb-matrix-viewport-overlay">
-                            <span className="sb-matrix-mesh-preset">
-                                Mapping: {mappingPreset.toUpperCase()}
-                            </span>
-                        </div>
                     </div>
 
                     <div className="sb-matrix-actions-row">
-                        <div style={{ display: 'flex', gap: 6 }}>
-                            <button
-                                className={`sb-btn sb-btn-xs ${mappingPreset === 'triplanar' ? 'sb-btn-primary' : 'sb-btn-secondary'}`}
-                                onClick={() => setMappingPreset(m => m === 'triplanar' ? 'uv' : 'triplanar')}
-                            >
-                                {mappingPreset === 'triplanar' ? 'Triplanar Enabled' : 'Standard UV'}
-                            </button>
-                        </div>
-                        <div style={{ display: 'flex', gap: 6 }}>
-                            <button
-                                className="sb-btn sb-btn-secondary sb-btn-xs"
-                                onClick={() => handleAction('Bake into C++20 glTF', () => onBakeCpp?.(activeCandidate.id))}
-                            >
-                                Bake into C++
-                            </button>
+                        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
                             <button
                                 className="sb-btn sb-btn-primary sb-btn-xs"
-                                onClick={() => handleAction('Projected to Active Mesh', () => onApplyToMesh?.(activeCandidate.id, mappingPreset))}
+                                disabled={texture.status?.state === 'pending'}
+                                title={result.targetMeshId
+                                    ? `Sets these maps on '${result.targetMeshId}' in the open 3D viewport, on its own UVs`
+                                    : 'Sets these maps on the mesh selected in the open 3D viewport, on its own UVs'}
+                                onClick={handleApplyToMesh}
                             >
-                                Project to Mesh
+                                {result.targetMeshId ? `Apply to '${result.targetMeshId}'` : 'Apply to Selected Mesh'}
                             </button>
                         </div>
                     </div>
                 </div>
             )}
 
-            {statusText && (
-                <div className="sb-image-status-badge">
-                    <span>{statusText}</span>
-                </div>
-            )}
+            <MeshTextureStatusBadge status={texture.status} />
         </div>
     );
 };

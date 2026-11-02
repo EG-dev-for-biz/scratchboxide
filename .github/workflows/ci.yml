@@ -46,14 +46,21 @@ jobs:
 
       # The Python 3D engine module (scratchbox_native) is built on the first test run by
       # vitest.global-setup.ts from .venv (nanobind + cmake); without it the Python engine tests fail.
+      # The Python of the project .venv requirements.txt was pinned from: the committed scratchbox stubs are generated on
+      # it, and an older Python writes its annotations differently (typing.Optional[X], not X | None), failing sb-stubs.test.ts.
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.14'
 
       # numpy on the PATH python3: the skinning-parity test runs scripts/sbx_skinning.py with it.
       - name: Python venv for the native engine
         run: |
           python -m venv .venv
+          # PyPI's Linux torch wheel brings the CUDA libraries (several GB) and fills the runner's disk; the tests run
+          # on the CPU, so take the CPU build of the pinned version first (requirements.txt's pin then counts as met).
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            .venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu "$(grep -E '^torch==' requirements.txt)"
+          fi
           .venv/bin/pip install -r requirements.txt
           python -m pip install numpy
 

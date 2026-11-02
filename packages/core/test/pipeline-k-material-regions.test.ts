@@ -18,6 +18,7 @@ import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-locatio
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { GLASS_ROUGHNESS } from '../src/node/3d-engine/staged-location/facade-materials';
 import { MATERIAL_REGIONS_PARAMS, paneSeed, planMaterialRegions, readRegionClasses, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
+import { planMaterialRegionsOnThreads } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions-pool';
 import { tileRefineTwin } from '../src/node/3d-engine/staged-location/tile-refine-twin';
 import type { FittedPlane } from '../src/node/3d-engine/staged-location/window-fit';
 import { decodeImageInMemory, type RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
@@ -203,12 +204,42 @@ describe('pipeline K material regions', () => {
         expect(m.glass).toBe(true);
         expect(plan.report.scanPieces.planes).toEqual([9]);
         expect(plan.report.scanPieces.paneShare).toBeGreaterThan(0);
-        // one window alone makes no bay: no glass on the scan piece
+        // one window alone makes no bay, but its pane is glass all the same (a row of windows has no strip to make a bay)
         const single = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes), [{ ...plane, windows: [windows[0]], panes: [windows[0]] }]);
-        expect(single.materials.find(x => x.material === 2)!.glass).toBe(false);
+        const sm = single.materials.find(x => x.material === 2)!;
+        expect(sm.glass).toBe(true);
+        expect(at(sm.params, 12, 9)[0]).toBeGreaterThan(0);
+        // and not beside it
+        expect(at(sm.params, 25, 19)[0]).toBe(0);
+        // no pane, no glass
+        const none = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes), [{ ...plane, windows: [windows[0]], panes: [] }]);
+        expect(none.materials.find(x => x.material === 2)!.glass).toBe(false);
         // a plane facing the other way draws nothing
         const back = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes), [{ ...plane, normal: [0, 0, -1], axisS: [-1, 0, 0] }]);
         expect(back.report.scanPieces.planes).toEqual([]);
+    });
+
+    it('plans the same maps and report on worker threads as on one thread', async () => {
+        const { glb, photos: flat } = building();
+        // photo noise, so texels of one colour bucket differ (each thread's colour cache fills in its own order)
+        const photos = flat.map((p, i) => ({ ...p, rgba: p.rgba.map((v, k) => (k % 4 === 3 ? v : Math.max(0, Math.min(255, v + ((k * 7919 + i * 104729) % 13) - 6)))) }));
+        const g = parseGlbBytes(glb);
+        const classes = readRegionClasses(g.json, imagesOf(photos))!;
+        const windows: Array<[number, number, number, number]> = [[10, 3, 30, 15], [10, 18, 30, 30], [10, 33, 30, 45]];
+        const plane: FittedPlane = { facadeId: 9, centroid: [52.5, 2.5, 0], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], orthoSMin: -2.5, orthoTMax: 2.5, pixel: 0.1, width: 50, height: 50, windows, panes: windows };
+        const one = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes), [plane]);
+        const many = await planMaterialRegionsOnThreads(g, g.json, imagesOf(photos), classes, sets(classes), [plane], undefined, { threads: 3 });
+        expect(many.materials.length).toBeGreaterThan(1);
+        expect(many.materials.map(m => m.material)).toEqual(one.materials.map(m => m.material));
+        many.materials.forEach((m, i) => {
+            const o = one.materials[i];
+            expect(Buffer.from(m.orm.rgba).equals(Buffer.from(o.orm.rgba))).toBe(true);
+            expect(Buffer.from(m.params.rgba).equals(Buffer.from(o.params.rgba))).toBe(true);
+            expect(!!m.normal && Buffer.from(m.normal.rgba).equals(Buffer.from(o.normal!.rgba))).toBe(!!o.normal);
+            expect([m.rebuilt, m.glass]).toEqual([o.rebuilt, o.glass]);
+        });
+        expect({ ...many.report, ms: 0 }).toEqual({ ...one.report, ms: 0 });
+        expect(many.report.scanPieces.planes).toEqual([9]);
     });
 
     it("puts the stone's relief on the structure alone and glass in the bays it frames, off the wall's class", () => {
@@ -251,6 +282,25 @@ describe('pipeline K material regions', () => {
         expect(onPier.report.baysOnStone).toBe(1);
         expect(at(onPier.materials[0].params, 7, 100)[0]).toBe(0);
         expect(metalTexels(m.orm)).toBe(0);
+    });
+
+    it("puts glass on a bay's fitted panes alone when it holds any (the facade reader's punched windows), whole on a bay without", () => {
+        const photo = piered(), W = photo.width, H = photo.height;
+        const runs = [0, 50, 100, 150].flatMap(x => [x / W, 0, (x + 15) / W, 1]);
+        const bays = [15, 65, 115, 165].flatMap(x => [x / W, 1 / 6, (x + 35) / W, 1]);
+        // the second bay's panes, storey by storey (x 69-79 and 86-96, y 8-26 every 35)
+        const panes = [2, 3, 4, 5, 6, 7].flatMap(k => [69, 86].flatMap(x => [x / W, (8 + 35 * k) / H, (x + 10) / W, (26 + 35 * k) / H]));
+        const quads: Quad[] = [{ mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: panes, panes, label: 'photo-inferred', source: 'test' }, structure: { uv: runs, bays, reliefM: 0.18, reliefFrom: 'measured', reason: 'test', chamferM: 0.05, label: 'photo-inferred' } } } }];
+        const g = parseGlbBytes(scene(quads, [photo]));
+        const b = building(), bg = parseGlbBytes(b.glb);
+        const classes = readRegionClasses(bg.json, imagesOf(b.photos))!;
+        const m = planMaterialRegions(g, g.json, imagesOf([photo]), classes, sets(classes)).materials[0];
+        // the paned bay: glass on a pane, none on the spandrel between storeys (the frame's finish there)
+        expect(at(m.params, 74, 118)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
+        expect(at(m.params, 74, 135)[0]).toBe(0);
+        expect(at(m.orm, 74, 135)[1]).not.toBe(Math.round(GLASS_ROUGHNESS * 255));
+        // the bay without panes: glass whole, spandrel included
+        expect(at(m.params, 24, 135)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
     });
 
     it("draws no glass on a pane whose texels are the wall's class: stone, whatever the fit read", () => {

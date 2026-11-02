@@ -26,7 +26,8 @@ import * as path from 'path';
 import type { ReliefFacade } from './facade-lattice';
 import { wallCoverage } from './facade-lattice';
 import { encodePng } from './png-encode';
-import { fillHoles, smoothFillHoles } from './pipeline-k/ortho-rectify';
+import { readOccluded } from './pipeline-k/occlusion';
+import { fillHoles, occludedMaskName, smoothFillHoles } from './pipeline-k/ortho-rectify';
 import type { WallGrammarFile } from './wall-grammar';
 import type { WindowFitFile, WindowRect } from './window-fit';
 
@@ -76,22 +77,28 @@ export function buildWallSheets(orthosDir: string, grammar: WallGrammarFile, fit
             const mf = f.uncoveredMask ? path.join(orthosDir, f.uncoveredMask) : undefined;
             const unc = mf && fs.existsSync(mf) ? (() => { const m = decode(fs.readFileSync(mf)); return Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] >= 128 ? 1 : 0)); })()
                 : Uint8Array.from({ length: img.width * img.height }, (_, k) => (img.rgba[k * 4 + 3] === 0 || (img.rgba[k * 4] === 128 && img.rgba[k * 4 + 1] === 128 && img.rgba[k * 4 + 2] === 128) ? 1 : 0));
+            // what stood in front of this member when it was photographed (pipeline-k/occlusion.ts)
+            const occ = readOccluded(orthosDir, f, img.width, img.height, decode);
             // sheet pixel (x, y) -> member pixel: affine in x and y
             const o = toPx(f, world(ref, sMin + 0.5 * px, tMax - 0.5 * px)), ox = toPx(f, world(ref, sMin + 1.5 * px, tMax - 0.5 * px)), oy = toPx(f, world(ref, sMin + 0.5 * px, tMax - 1.5 * px));
-            return { f, img, unc, o, dx: [ox[0] - o[0], ox[1] - o[1]], dy: [oy[0] - o[0], oy[1] - o[1]], rank: f.wallCoverage ?? f.coverage };
+            return { f, img, unc, occ, o, dx: [ox[0] - o[0], ox[1] - o[1]], dy: [oy[0] - o[0], oy[1] - o[1]], rank: f.wallCoverage ?? f.coverage };
         }).sort((a, b) => b.rank - a.rank);
-        const rgba = new Uint8Array(W * H * 4), uncovered = new Uint8Array(W * H).fill(1);
+        const rgba = new Uint8Array(W * H * 4), uncovered = new Uint8Array(W * H).fill(1), occluded = new Uint8Array(W * H);
+        const anyOcc = ms.some(m => m.occ);
         for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
             const k = y * W + x;
-            for (const m of ms) {
+            // a member that saw the texel clear first; one with something in front of it only when no other saw it
+            for (let pass = 0; pass < (anyOcc ? 2 : 1) && uncovered[k]; pass++) for (const m of ms) {
                 const mx = Math.floor(m.o[0] + x * m.dx[0] + y * m.dy[0]), my = Math.floor(m.o[1] + x * m.dx[1] + y * m.dy[1]);
                 if (mx < 0 || my < 0 || mx >= m.img.width || my >= m.img.height) continue;
                 const j = my * m.img.width + mx;
                 if (m.unc[j] || !m.img.rgba[j * 4 + 3]) continue;
+                const blocked = !!m.occ?.[j];
+                if (pass === 0 && blocked) continue;
                 rgba.set(m.img.rgba.subarray(j * 4, j * 4 + 3), k * 4);
                 // a real texel exactly the uncovered grey would read as a hole
                 if (rgba[k * 4] === 128 && rgba[k * 4 + 1] === 128 && rgba[k * 4 + 2] === 128) rgba[k * 4 + 2] = 129;
-                rgba[k * 4 + 3] = 255; uncovered[k] = 0;
+                rgba[k * 4 + 3] = 255; uncovered[k] = 0; occluded[k] = blocked ? 1 : 0;
                 break;
             }
             if (uncovered[k]) rgba.set([128, 128, 128, 255], k * 4);
@@ -106,9 +113,11 @@ export function buildWallSheets(orthosDir: string, grammar: WallGrammarFile, fit
         const id = SHEET_ID_BASE + w.wallId, image = `wall_${w.wallId}.png`, mask = `wall_${w.wallId}_uncovered.png`;
         fs.writeFileSync(path.join(orthosDir, image), encodePng(W, H, Buffer.from(filled.image.rgba), 4));
         fs.writeFileSync(path.join(orthosDir, mask), encodePng(W, H, Buffer.from(uncovered.map(v => (v ? 255 : 0))), 1));
+        const occMask = occluded.some(v => v) ? occludedMaskName(image) : undefined;
+        if (occMask) fs.writeFileSync(path.join(orthosDir, occMask), encodePng(W, H, Buffer.from(occluded.map(v => (v ? 255 : 0))), 1));
         const facade: ReliefFacade = {
             facadeId: id, image, centroid: c, normal: ref.normal, axisS: S, axisT: T, sMin, sMax, tMin, tMax, pixel: px, width: W, height: H, orthoSMin: sMin, orthoTMax: tMax,
-            coverage: 1 - holes / (W * H), uncoveredMask: mask, wallCoverage: Math.round(cov.wallCoverage * 1000) / 1000, wallAreaM2: Math.round(cov.wallAreaM2),
+            coverage: 1 - holes / (W * H), uncoveredMask: mask, ...(occMask ? { occludedMask: occMask } : {}), wallCoverage: Math.round(cov.wallCoverage * 1000) / 1000, wallAreaM2: Math.round(cov.wallAreaM2),
             textureFill: { label: 'generated', texels: holes, share: Math.round((holes / (W * H)) * 1e4) / 1e4, method: `the wall's ${members.length} facade photos laid on one sheet, the member covering most of its own wall first; its ${holes} texels no photo reached filled from the sheet's own repeats (${filled.fill.fromRepeats} at its bay pitch, ${filled.fill.fromStoreys} at its storey pitch), ${smooth} by a smooth fill between the colours at the holes' edges` }
         };
         // the members' windows and panes carried onto the sheet

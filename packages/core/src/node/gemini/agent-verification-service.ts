@@ -152,6 +152,9 @@ export class AgentVerificationService {
             if (minX >= maxX || minY >= maxY || minZ >= maxZ) {
                 passed = false;
                 warnings.push(`Invalid bounding box extents: min >= max.`);
+            } else if (options.enforcePositiveYMax && maxY <= 0) {
+                passed = false;
+                warnings.push(`Mesh bounds lie entirely at or below Y=0 (maxY=${maxY}).`);
             }
         }
 
@@ -170,6 +173,46 @@ export class AgentVerificationService {
             }
         };
     }
+}
+
+/**
+ * Extracts `GeometryVerificationOptions` from a 3D tool's result payload when mesh statistics are present.
+ */
+export function extractGeometryVerificationInput(resultPayload: unknown): GeometryVerificationOptions | undefined {
+    if (!resultPayload || typeof resultPayload !== 'object') return undefined;
+    const raw = resultPayload as Record<string, any>;
+    if (raw.error || raw.status === 'error') return undefined;
+    const vertexCount = typeof raw.vertexCount === 'number'
+        ? raw.vertexCount
+        : typeof raw.meshStats?.vertexCount === 'number'
+            ? raw.meshStats.vertexCount
+            : undefined;
+    const triangleCount = typeof raw.triangleCount === 'number'
+        ? raw.triangleCount
+        : typeof raw.faceCount === 'number'
+            ? raw.faceCount
+            : typeof raw.meshStats?.triangleCount === 'number'
+                ? raw.meshStats.triangleCount
+                : typeof raw.meshStats?.faceCount === 'number'
+                    ? raw.meshStats.faceCount
+                    : undefined;
+    if (vertexCount === undefined || triangleCount === undefined) return undefined;
+    const rawBounds = raw.bounds || raw.boundingBox || raw.meshStats?.bounds;
+    const bounds = rawBounds && Array.isArray(rawBounds.min) && Array.isArray(rawBounds.max)
+        && rawBounds.min.length === 3 && rawBounds.max.length === 3
+        && rawBounds.min.every((n: unknown) => typeof n === 'number')
+        && rawBounds.max.every((n: unknown) => typeof n === 'number')
+        ? {
+            min: rawBounds.min as [number, number, number],
+            max: rawBounds.max as [number, number, number]
+        }
+        : undefined;
+    return {
+        vertexCount,
+        triangleCount,
+        ...(bounds ? { bounds } : {}),
+        ...(typeof raw.isManifold === 'boolean' ? { isManifold: raw.isManifold } : {})
+    };
 }
 
 /** Nearest directory at or above `dir` (not above `root`) that holds a tsconfig.json. */

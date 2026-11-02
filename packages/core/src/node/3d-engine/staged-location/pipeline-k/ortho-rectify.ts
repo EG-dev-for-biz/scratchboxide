@@ -132,12 +132,17 @@ export interface OrthoRectifyResult {
     uncovered: Uint8Array;
     /** 1 where the photo is featureless and the facade's own repeats did not refill it (its photo kept): for another facade to continue. */
     featureless: Uint8Array;
+    /** The occlusion mask given, in the straightened ortho's pixels (0-255, the share of the capture's rays blocked). */
+    occluded?: Uint8Array;
 }
 
 const UNCOVERED = 128;
 
 /** The file beside a rectified ortho that marks where its photo did not reach (one channel, 255 = uncovered). */
 export const uncoveredMaskName = (image: string) => image.replace(/\.png$/i, '') + '_uncovered.png';
+
+/** tile_refine's occlusion mask beside an ortho (one channel, 255 = every ray toward the capture blocked). */
+export const occludedMaskName = (image: string) => image.replace(/\.png$/i, '') + '_occluded.png';
 /** The featureless mask beside an ortho (one channel, 255 = a smear its own repeats did not refill). */
 export const featurelessMaskName = (image: string) => image.replace(/\.png$/i, '') + '_featureless.png';
 const isUncovered = (rgba: Uint8Array, i: number) => rgba[i * 4] === UNCOVERED && rgba[i * 4 + 1] === UNCOVERED && rgba[i * 4 + 2] === UNCOVERED;
@@ -423,20 +428,35 @@ export function foldScale(w: MeshWarp, W: number, H: number, minJacobian: number
     return lo;
 }
 
+/** Where output pixel (x, y) of a W x H ortho samples its source through the warp (px, clamped to the image). */
+function warpSource(w: MeshWarp, W: number, H: number, scale: number, x: number, y: number): [number, number] {
+    const [vs, ws] = cellWeights(w, x, y);
+    let sx = 0, sy = 0;
+    for (let k = 0; k < 4; k++) {
+        const i = vs[k] % w.nx, j = Math.floor(vs[k] / w.nx);
+        sx += ws[k] * (Math.min(W - 1, i * w.G) + scale * (w.sx[vs[k]] - Math.min(W - 1, i * w.G)));
+        sy += ws[k] * (Math.min(H - 1, j * w.G) + scale * (w.sy[vs[k]] - Math.min(H - 1, j * w.G)));
+    }
+    return [Math.min(W - 1, Math.max(0, sx)), Math.min(H - 1, Math.max(0, sy))];
+}
+
+/** A one-channel mask of the ortho (W x H) carried through the same warp, by its nearest source pixel. */
+export function applyWarpMask(mask: Uint8Array, W: number, H: number, w: MeshWarp, scale = 1): Uint8Array {
+    const out = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const [sx, sy] = warpSource(w, W, H, scale, x, y);
+        out[y * W + x] = mask[Math.round(sy) * W + Math.round(sx)];
+    }
+    return out;
+}
+
 /** The ortho resampled through the warp (bilinear; uncovered stays uncovered and is never blended in). */
 export function applyWarp(img: Rgba, w: MeshWarp, scale = 1): Rgba {
     const { width: W, height: H, rgba } = img;
     const out = new Uint8Array(rgba.length);
     const valid = planes(img).valid;
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-        const [vs, ws] = cellWeights(w, x, y);
-        let sx = 0, sy = 0;
-        for (let k = 0; k < 4; k++) {
-            const i = vs[k] % w.nx, j = Math.floor(vs[k] / w.nx);
-            sx += ws[k] * (Math.min(W - 1, i * w.G) + scale * (w.sx[vs[k]] - Math.min(W - 1, i * w.G)));
-            sy += ws[k] * (Math.min(H - 1, j * w.G) + scale * (w.sy[vs[k]] - Math.min(H - 1, j * w.G)));
-        }
-        sx = Math.min(W - 1, Math.max(0, sx)); sy = Math.min(H - 1, Math.max(0, sy));
+        const [sx, sy] = warpSource(w, W, H, scale, x, y);
         const x0 = Math.floor(sx), y0 = Math.floor(sy), x1 = Math.min(W - 1, x0 + 1), y1 = Math.min(H - 1, y0 + 1), a = sx - x0, b = sy - y0;
         const o = (y * W + x) * 4;
         const corners = [[y0 * W + x0, (1 - a) * (1 - b)], [y0 * W + x1, a * (1 - b)], [y1 * W + x0, (1 - a) * b], [y1 * W + x1, a * b]] as const;
@@ -806,8 +826,11 @@ export function levelSmears(img: Rgba, periodPx: number, pixelM: number, P: Orth
     return { image: { width: W, height: H, rgba: out }, texels, covered, meanAbsLog: texels ? sumAbs / texels : 0 };
 }
 
-/** One facade ortho straightened (verified) and its smears levelled. */
-export function rectifyOrtho(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS): OrthoRectifyResult {
+/**
+ * One facade ortho straightened (verified) and its smears levelled. `occluded` (one channel, the ortho's size; tile_refine's
+ * occlusion mask) is carried through the warp when one is kept, as the result's `occluded`.
+ */
+export function rectifyOrtho(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS, occluded?: Uint8Array): OrthoRectifyResult {
     const t0 = Date.now();
     const W = img.width, H = img.height;
     const lines = traceLines(img, pixelM, P);
@@ -844,7 +867,7 @@ export function rectifyOrtho(img: Rgba, pixelM: number, P: OrthoRectifyParams = 
         report.straightnessPx = { before: round(before, 3), after: round(after, 3), gain: round(gain, 3) };
         report.warp = { ...report.warp, maxShiftPx: round(maxShift, 2), meanShiftPx: round(sumShift / warp.sx.length, 3), foldScale: round(scale, 3), cgIterations: iterations };
         const regular = !period || !(hAfter > hBefore * 1.02);
-        if (gain >= P.minGain && regular) { image = warped; report.warp.kept = true; report.warp.why = `lines ${round(before, 2)} -> ${round(after, 2)} px from straight (${Math.round(gain * 100)}% straighter)${period ? `, lattice spread ${round(hBefore, 2)} -> ${round(hAfter, 2)}` : ''}`; }
+        if (gain >= P.minGain && regular) { image = warped; if (occluded) occluded = applyWarpMask(occluded, W, H, warp, scale); report.warp.kept = true; report.warp.why = `lines ${round(before, 2)} -> ${round(after, 2)} px from straight (${Math.round(gain * 100)}% straighter)${period ? `, lattice spread ${round(hBefore, 2)} -> ${round(hAfter, 2)}` : ''}`; }
         else report.warp.why = gain < P.minGain ? `the warp straightened the lines by only ${Math.round(gain * 100)}% (at least ${Math.round(P.minGain * 100)}% needed)` : `the warp made the lattice less regular (spread ${round(hBefore, 2)} -> ${round(hAfter, 2)})`;
     }
     if (!period) report.smear.why = 'no horizontal repeat in the ortho to level smears against';
@@ -869,7 +892,7 @@ export function rectifyOrtho(img: Rgba, pixelM: number, P: OrthoRectifyParams = 
     image = holes.image;
     report.holes = holes.fill;
     report.ms = Date.now() - t0;
-    return { image, report, uncovered, featureless: left };
+    return { image, report, uncovered, featureless: left, ...(occluded ? { occluded } : {}) };
 }
 
 /** The given lines traced again on another image, each sample searched about its straight position (for the after measure). */

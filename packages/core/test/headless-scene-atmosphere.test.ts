@@ -18,12 +18,16 @@ import { classifyAtmosphere } from '../src/browser/generative-canvas/primitives/
 
 describe('Headless Scene Atmosphere Architecture', () => {
     it('does not enable atmospheric scattering or sky dome on non-atmospheric scenes', () => {
-        // Bullet through glass scene (user's explicit scenario)
-        const glassScene = synthesizeContextual3DScene('build me a scene of a bully going through a plate of glass');
-        expect(glassScene.sceneType).toBe('glass_shatter');
-        expect(glassScene.features?.atmosphericScattering).toBeUndefined();
-        expect(glassScene.environment?.skybox).toBe('studio');
-        expect(glassScene.environment?.ground).toBe(false);
+        // A vehicle template scene that names no sky: a neutral studio with no scattering, sky dome or fog.
+        const carScene = synthesizeContextual3DScene('a red sports car');
+        expect(carScene.customMeshes?.length).toBeGreaterThan(0);
+        expect(carScene.features?.atmosphericScattering).toBeUndefined();
+        expect(carScene.environment?.skybox).toBe('studio');
+        expect(carScene.environment?.fog).toBeUndefined();
+
+        // Bullet through glass: no template routes it (the native fracture is the vfx_fracture_glass_pane tool), so no
+        // scene is built and none carries an atmosphere.
+        expect(() => synthesizeContextual3DScene('build me a scene of a bully going through a plate of glass')).toThrow(/^No 3D scene was built/);
 
         // Robotic arm / lab scene: no template fits, so nothing is built and the step fails (no scene, no atmosphere).
         expect(() => synthesizeContextual3DScene('robotic arm picking up a silicon wafer in a sterile lab')).toThrow(/^No 3D scene was built/);

@@ -18,8 +18,10 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { applyFacadeLattices, facadeSamples, latticeFacade, photoLattice, STRUCTURE, structureExtras, windowBays, windowGrid, windowStrips, WINDOW_STRIPS, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
-import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
+import { applyFacadeLattices, facadeSamples, latticeFacade, photoLattice, rebuildFacadesOnLattice, STRUCTURE, structureExtras, windowBays, windowGrid, windowStrips, WINDOW_STRIPS, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
+import { assembleGlb, parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
+import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
+import { cutScanToLattice, LATTICE_STITCH_PARAMS } from '../src/node/3d-engine/staged-location/pipeline-k/lattice-stitch';
 import { WINDOW_FIT_VERSION } from '../src/node/3d-engine/staged-location/window-fit';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { readGlbTriangles } from './helpers/clay-glb-render';
@@ -370,6 +372,72 @@ describe('facades on their photo lattice', () => {
         expect(out.tears.droppedFacades).toEqual([]);
     });
 
+    it('with the cut (pipeline K), takes the scan off the rebuilt cells even where its triangles reach past them, and keeps it beyond', () => {
+        // the scan as a tile mesh is: each storey band one pair of long triangles across the whole facade, the photo's right third uncovered
+        const img = photo();
+        for (let y = 0; y < H; y++) for (let x = 80; x < W; x++) img.rgba.set([128, 128, 128, 255], (y * W + x) * 4);
+        const pos: number[] = [];
+        for (let t = 0; t < 9; t += 3) pos.push(0, t, 0, 12, t, 0, 12, t + 3, 0, 0, t, 0, 12, t + 3, 0, 0, t + 3, 0);
+        const soup = Float32Array.from(pos);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-cut-'));
+        try {
+            fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades: [f] }));
+            fs.writeFileSync(path.join(dir, f.image), encodePng(W, H, img.rgba, 4));
+            const file = path.join(dir, 'clay.glb');
+            writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
+            // the scan's live area left of s = 7.5 (over the rebuilt cells) and right of s = 8.5 (beyond them), its lattice nodes aside
+            const scanArea = (bytes: Uint8Array) => {
+                const g = parseGlbBytes(bytes), lattice = new Set((g.json.nodes ?? []).filter((n: any) => n.extras?.sbFacadeLattice).map((n: any) => n.mesh));
+                const area = { over: 0, beyond: 0 };
+                (g.json.meshes ?? []).forEach((m: any, mi: number) => { if (lattice.has(mi)) return; for (const p of m.primitives) {
+                    const X = readAccessor(g, p.attributes.POSITION).data, I = readAccessor(g, p.indices).data;
+                    for (let i = 0; i + 2 < I.length; i += 3) {
+                        const a = I[i] * 3, b = I[i + 1] * 3, c = I[i + 2] * 3;
+                        const A = Math.abs((X[b] - X[a]) * (X[c + 1] - X[a + 1]) - (X[c] - X[a]) * (X[b + 1] - X[a + 1])) / 2, cs = (X[a] + X[b] + X[c]) / 3;
+                        if (cs < 7.5) area.over += A; else if (cs > 8.5) area.beyond += A;
+                    }
+                } });
+                return area;
+            };
+            const whole = rebuildFacadesOnLattice(fs.readFileSync(file), undefined, dir);
+            const cut = rebuildFacadesOnLattice(fs.readFileSync(file), undefined, dir, undefined, undefined, { cut: true });
+            expect(cut.stats.rebuilt).toBe(1);
+            // whole triangles: every one reaches past the rebuilt cells, so all stay, lying on the wall over the rebuild
+            expect(whole.stats.removedTriangles).toBe(0);
+            expect(scanArea(whole.clay).over).toBeGreaterThan(50);
+            // the cut: the scan split at the cells' lines and its pieces over them gone, but for the few the tear audit puts back at
+            // the rebuild's open edge (not storey-long triangles); the uncovered third kept as scanned
+            const over = scanArea(whole.clay).over, a = scanArea(cut.clay);
+            expect(a.over).toBeLessThan(over * 0.1);
+            expect(a.beyond).toBeGreaterThan(9 * 3.4);
+            expect(cut.stats.cut!.cutTriangles).toBe(6);
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    it('keeps each piece of the cut on its own photo where two triangles meet at a texture seam', () => {
+        // one quad of scan as two triangles from two atlas charts (u under 0.4, and over 0.6): the diagonal's positions shared, not its UVs
+        const img = photo();
+        for (let y = 0; y < H; y++) for (let x = 80; x < W; x++) img.rgba.set([128, 128, 128, 255], (y * W + x) * 4);
+        const r = latticeFacade(f, img, facadeSamples(scan(), f))!;
+        const positions = Float32Array.from([0, 0, 0, 12, 0, 0, 12, 3, 0, 0, 0, 0, 12, 3, 0, 0, 3, 0]);
+        const uv = Float32Array.from([0, 0, 0.4, 0, 0.4, 0.4, 0.6, 0, 1, 0.4, 0.6, 0.4]);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-seam-'));
+        try {
+            const file = path.join(dir, 'twin.glb');
+            writeStagedGlbFile(file, [{ name: 'scan', positions, indices: Uint32Array.from([0, 1, 2, 3, 4, 5]), uv }], { texture: { bytes: encodePng(W, H, img.rgba, 4), mimeType: 'image/png' } });
+            const out = cutScanToLattice(fs.readFileSync(file), [{ f, r }], { ...LATTICE_STITCH_PARAMS, cutKeepInside: true });
+            expect(out.report.cutTriangles).toBe(2);
+            const g = parseGlbBytes(out.glb);
+            const pieces = g.json.meshes.flatMap((m: any) => m.primitives).filter((p: any) => p.extras?.sbLatticeCut);
+            expect(pieces.length).toBe(1);
+            const U = readAccessor(g, pieces[0].attributes.TEXCOORD_0).data, I = readAccessor(g, pieces[0].indices).data;
+            let mixed = 0;
+            for (let i = 0; i + 2 < I.length; i += 3) { const us = [I[i], I[i + 1], I[i + 2]].map(v => U[v * 2]); if (Math.min(...us) < 0.5 && Math.max(...us) > 0.5) mixed++; }
+            expect(I.length / 3).toBeGreaterThan(4);
+            expect(mixed).toBe(0);
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
     it('reads coverage from the uncovered mask when the image\'s holes were filled (pipeline K): a filled cell the photo never reached is not rebuilt', () => {
         const mask = new Uint8Array(W * H);
         for (let y = 0; y < H; y++) for (let x = 80; x < W; x++) mask[y * W + x] = 1;
@@ -380,6 +448,21 @@ describe('facades on their photo lattice', () => {
         // without the mask the same filled image builds the whole facade
         const all = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
         expect(all.built.every(v => v === 1)).toBe(true);
+    });
+
+    it('keeps the scan where it lies further behind the plane than any recess (the wall behind a setback), building no deep box there', () => {
+        // the top storey's scan stands 1.6 m behind the plane: another wall, not a window
+        const deep = scan().map((v, i) => (i % 3 === 2 && scan()[i - 1] >= 6.25 ? v - 1.6 : v));
+        const r = latticeFacade(f, photo(), facadeSamples(deep, f))!;
+        const row = (tv: number) => r.t.findIndex((x, i) => tv >= x && tv < r.t[i + 1]);
+        const ns = r.s.length - 1;
+        const builtIn = (tv: number) => r.built.slice(row(tv) * ns, row(tv) * ns + ns);
+        expect(builtIn(7.5).every(v => v === 0)).toBe(true);
+        expect(builtIn(1.5).every(v => v === 1)).toBe(true);
+        // nothing the rebuild drew lies at the clamp's depth
+        let minZ = Infinity;
+        for (let v = 2; v < r.positions.length; v += 3) minZ = Math.min(minZ, r.positions[v]);
+        expect(minZ).toBeGreaterThan(-1.0);
     });
 
     it('never leaves a tear: what the rebuild claims but does not build is found by the audit, and the scan is put back', () => {

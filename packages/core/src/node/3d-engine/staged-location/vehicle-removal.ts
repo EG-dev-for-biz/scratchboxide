@@ -776,16 +776,16 @@ export function pushPull(values: Float32Array, known: Float32Array, w: number, h
 
 /**
  * The direction (unit, plan) a region's patch is painted along: the orientation the road photo around it varies least
- * along (lane lines, kerbs, a crosswalk's bars), from the colour structure tensor of the street texels `use` admits whose
+ * along (lane lines, kerbs, a crosswalk's bars), from the colour structure tensor of the street texels `admits` takes whose
  * distance from the region (`dist`, texels; -1 beyond the band) is set, nearer counting more; `fallback` (the region's long
  * axis) where the photo shows no direction (coherence under `fillMinCoherence`).
  */
-export function fillDirection(val: Float32Array, use: (p: number) => boolean, dist: Int32Array, W: number, H: number, texelM: number, fallback: [number, number], P: VehicleRemovalParams = VEHICLE_REMOVAL_PARAMS): { dir: [number, number]; coherence: number } {
+export function fillDirection(val: Float32Array, admits: (p: number) => boolean, dist: Int32Array, W: number, H: number, texelM: number, fallback: [number, number], P: VehicleRemovalParams = VEHICLE_REMOVAL_PARAMS): { dir: [number, number]; coherence: number } {
     let jxx = 0, jzz = 0, jxz = 0;
     const s2 = 2 * P.fillOrientSigmaM * P.fillOrientSigmaM;
     for (let k = 1; k < H - 1; k++) for (let i = 1; i < W - 1; i++) {
         const p = k * W + i;
-        if (dist[p] <= 0 || !use(p - W - 1) || !use(p - W) || !use(p - W + 1) || !use(p - 1) || !use(p + 1) || !use(p + W - 1) || !use(p + W) || !use(p + W + 1)) continue;
+        if (dist[p] <= 0 || !admits(p - W - 1) || !admits(p - W) || !admits(p - W + 1) || !admits(p - 1) || !admits(p + 1) || !admits(p + W - 1) || !admits(p + W) || !admits(p + W + 1)) continue;
         const w = Math.exp(-((dist[p] * texelM) ** 2) / s2);
         // Scharr's kernel: a direction held to a fraction of a degree at any angle (a central difference drifts by degrees,
         // and a degree is 17 cm across a 10 m queue)
@@ -804,11 +804,11 @@ export function fillDirection(val: Float32Array, use: (p: number) => boolean, di
 }
 
 /**
- * The road's look along strips of direction `dir` (`stripPx` across): per strip, the per-channel median of the texels `use`
- * admits (every second texel each way); `at(i, k, out)` interpolates between the strips' centres. A strip with fewer than
+ * The road's look along strips of direction `dir` (`stripPx` across): per strip, the per-channel median of the texels `admits`
+ * takes (every second texel each way); `at(i, k, out)` interpolates between the strips' centres. A strip with fewer than
  * `minCount` of them takes its nearest neighbour's look, and with none anywhere, black.
  */
-export function stripLooks(val: Float32Array, use: (p: number) => boolean, W: number, H: number, dir: [number, number], stripPx: number, minCount = 8): { at(i: number, k: number, out: number[]): void } {
+export function stripLooks(val: Float32Array, admits: (p: number) => boolean, W: number, H: number, dir: [number, number], stripPx: number, minCount = 8): { at(i: number, k: number, out: number[]): void } {
     const [ax, az] = dir;
     const across = (i: number, k: number) => -az * i + ax * k;
     const u0 = Math.min(across(0, 0), across(W, 0), across(0, H), across(W, H));
@@ -817,7 +817,7 @@ export function stripLooks(val: Float32Array, use: (p: number) => boolean, W: nu
     const hist = new Uint32Array(S * 3 * 256), count = new Uint32Array(S);
     for (let k = 0; k < H; k += 2) for (let i = 0; i < W; i += 2) {
         const p = k * W + i;
-        if (!use(p)) continue;
+        if (!admits(p)) continue;
         const b = Math.min(S - 1, Math.floor((across(i + 0.5, k + 0.5) - u0) / stripPx));
         count[b]++;
         for (let j = 0; j < 3; j++) hist[(b * 3 + j) * 256 + Math.max(0, Math.min(255, Math.round(val[p * 3 + j])))]++;

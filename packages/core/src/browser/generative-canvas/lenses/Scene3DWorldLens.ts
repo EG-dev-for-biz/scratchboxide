@@ -17,7 +17,8 @@ import {
 import {
     Media4DObject,
     PrimitiveType,
-    Scene3DData
+    Scene3DData,
+    sceneTimelineKeyframeCount
 } from '../canvas-types';
 import {
     DirectDispatchOperatorEngine,
@@ -311,4 +312,67 @@ export class Scene3DWorldLens implements CodebaseLens<Scene3DData> {
             changeSummary: `Unprojected 3D scene "${primitiveData.title}" with ${totalMeshCount} objects & ${primitiveData.operatorStack?.length || 0} operators in stack`
         };
     }
+
+    static summarizeSceneStateForAgent(sceneData: Scene3DData): Record<string, unknown> {
+        return summarizeSceneStateForAgent(sceneData);
+    }
+}
+
+/**
+ * Projects live 3D viewport state (selected mesh, timeline playhead, operator stack,
+ * recent manual viewport actions, and spatial objects) into a compact agent-ready summary.
+ */
+export function summarizeSceneStateForAgent(sceneData: Scene3DData): Record<string, unknown> {
+    const selectedId = sceneData.selectedMeshId;
+    const objectsSummary = (sceneData.customMeshes || []).map(m => ({
+        id: m.id,
+        name: m.name || m.id,
+        type: m.type,
+        position: m.position,
+        rotation: m.rotation,
+        scale: m.scale,
+        material: m.material,
+        ...(selectedId && m.id === selectedId ? { selected: true } : {})
+    }));
+    const media4dSummary = (sceneData.objects || []).map(o => ({
+        id: o.id,
+        space: o.space?.spatial3d,
+        role: o.content?.metadata?.role,
+        source: o.content?.metadata?.source,
+        resolvedAddress: o.content?.metadata?.resolvedAddress || o.content?.metadata?.location,
+        isGround: o.content?.metadata?.isGround,
+        dims: o.content?.metadata?.dims,
+        durableUri: o.content?.durableUri,
+        boundingBox: o.content?.metadata?.boundingBox,
+        restyledFrom: o.content?.metadata?.restyledFrom,
+        ...(selectedId && o.id === selectedId ? { selected: true } : {})
+    }));
+    const tl = sceneData.timeline;
+    const timelineSummary = tl
+        ? {
+            currentTime: (tl.currentTimeMs ?? 0) / 1000,
+            duration: (tl.durationMs ?? 0) / 1000,
+            isPlaying: tl.isPlaying,
+            trackCount: tl.tracks?.length ?? 0,
+            keyframeCount: sceneTimelineKeyframeCount(tl.tracks)
+        }
+        : undefined;
+    return {
+        title: sceneData.title,
+        subtitle: sceneData.subtitle,
+        renderMode: sceneData.renderMode,
+        toolMode: sceneData.toolMode,
+        selectedMeshId: sceneData.selectedMeshId,
+        camera: sceneData.camera,
+        environment: sceneData.environment,
+        groundDatum: (sceneData as any).groundDatum,
+        geoAnchor: (sceneData as any).geoAnchor,
+        sculptSettings: sceneData.sculptSettings,
+        features: sceneData.features,
+        timeline: timelineSummary,
+        customMeshes: objectsSummary,
+        objects: media4dSummary,
+        recentOperators: (sceneData.operatorStack || []).slice(-10),
+        recentActions: (sceneData.actionLog || []).slice(-10)
+    };
 }

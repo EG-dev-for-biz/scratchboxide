@@ -82,7 +82,7 @@ const LOG_EPS = 1e-3;
 export const TEXEL_NONE = 0, TEXEL_WALL = 1, TEXEL_ROOF = 2;
 
 /** Each textured triangle of a GLB: its world corners, UVs and photo. */
-function forEachTexturedTriangle(g: ParsedGlb, json: any, fn: (img: number, p: Float64Array, uv: Float64Array) => void): void {
+export function forEachTexturedTriangle(g: ParsedGlb, json: any, fn: (img: number, p: Float64Array, uv: Float64Array) => void): void {
     const p = new Float64Array(9), q = new Float64Array(6);
     for (const mesh of json.meshes ?? []) for (const prim of mesh.primitives ?? []) {
         if ((prim.mode ?? 4) !== 4 || prim.attributes?.POSITION === undefined || prim.material === undefined) continue;

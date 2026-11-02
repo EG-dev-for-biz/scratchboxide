@@ -20,16 +20,23 @@
  *   5. lens flare and diffusion (LensGlowPass) read from that frame: the light the lens and a filter in front of it spread;
  *   6. tone mapping and output colour space to the canvas (what the renderer applies when drawing straight to it), with the
  *      flare and diffusion added before it, then film grain when the lens has it (on the finished picture, as on film).
+ *      Content drawn with tone mapping off (provenance views) is left un-tone-mapped, and content whose shader writes
+ *      final display values (splats) is left as drawn, each by its coverage mask (depthless-coverage.ts, drawn after
+ *      step 1 against the scene's depth), as a direct draw leaves them.
  * Picking maps the pointer back through the distortion (mapPointerNdc), so a click hits what is drawn under it.
  */
 
 import * as THREE from 'three';
-import type { SceneCameraLens, SceneFilmGrain, SceneLensDiffusion, SceneLensDistortion, SceneLensFlare } from '../../canvas-types';
+import type { SceneCameraLens, SceneColorHarmony, SceneFilmGrain, SceneLookMatch, SceneLensDiffusion, SceneLensDistortion, SceneLensFlare } from '../../canvas-types';
 import { VfxPlateMatchmoveService } from '../../services/video/VfxPlateMatchmoveService';
 import { LensDistortionEffect } from '../../services/optics/LensDistortionEffect';
 import { CinematicBokehPass } from '../../services/optics/CinematicBokehPass';
 import { LensGlowPass, type LensGlowSettings } from '../../services/optics/LensGlowPass';
 import { TemporalAAPass } from '../../services/optics/TemporalAAPass';
+import { ColorHarmonyPass } from '../../services/postprocessing/ColorHarmonyPass';
+import { harmonizeLinearRgb, planColorHarmony, type ColorHarmonyPlan } from '../../services/postprocessing/color-harmony';
+import { findDepthlessContent, findToneMapExemptContent, renderContentMask, renderObjectMask, sameContent } from '../../services/postprocessing/depthless-coverage';
+import { LOOK_BANDS, planLookMatch, type LookMatchPlan } from '../../services/postprocessing/look-match';
 import { lensMeasuresFocus } from './viewportFocus';
 
 /** Widest overscan rendered for distortion (2x the frame on each axis = 4x the pixels). */
@@ -41,7 +48,7 @@ export const MAX_OVERSCAN = 2;
  */
 export const MAX_BLUR_RADIUS_FRAME_FRACTION = 0.12;
 
-export type ViewportOpticsPassName = 'temporal-aa' | 'depth-of-field' | 'lens-distortion' | 'lens-flare' | 'diffusion' | 'film-grain' | 'output' | (string & {});
+export type ViewportOpticsPassName = 'temporal-aa' | 'color-harmony' | 'look-match' | 'depth-of-field' | 'lens-distortion' | 'lens-flare' | 'diffusion' | 'film-grain' | 'output' | (string & {});
 
 /** Flare defaults when the lens sets only an amount: four ghosts, a faint halo, no streak, flaring above 1.5 (brighter than white). */
 export const DEFAULT_FLARE: Required<Omit<SceneLensFlare, 'amount'>> = { ghosts: 4, halo: 0.3, streak: 0, threshold: 1.5 };
@@ -73,6 +80,10 @@ export interface ViewportOpticsPlan {
     flare: Required<SceneLensFlare> | null;
     diffusion: Required<SceneLensDiffusion> | null;
     depthOfField: ViewportDepthOfFieldPlan | null;
+    /** The scene's colour harmony grade (color-harmony.ts), drawn on the scene before depth of field, or null. */
+    colorHarmony: ColorHarmonyPlan | null;
+    /** The scene's look match (look-match.ts), drawn in the output pass after tone mapping, or null. */
+    lookMatch: LookMatchPlan | null;
     /** Passes in draw order; empty = the viewport renders straight to the canvas as before. */
     passes: ViewportOpticsPassName[];
     /** Lens values present but not drawn, and why. */
@@ -82,10 +93,21 @@ export interface ViewportOpticsPlan {
 const finitePositive = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
 const finiteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
-/** Which passes a scene lens configures. Pure: no GPU objects. */
-export function planViewportOptics(lens: SceneCameraLens | undefined | null): ViewportOpticsPlan {
-    const plan: ViewportOpticsPlan = { distortion: null, filmGrain: null, flare: null, diffusion: null, depthOfField: null, passes: [], issues: [] };
-    if (!lens) return plan;
+/** Which passes a scene lens (and the scene's colour harmony grade) configures. Pure: no GPU objects. */
+export function planViewportOptics(lens: SceneCameraLens | undefined | null, harmony?: SceneColorHarmony | null, lookMatch?: SceneLookMatch | null): ViewportOpticsPlan {
+    const plan: ViewportOpticsPlan = { distortion: null, filmGrain: null, flare: null, diffusion: null, depthOfField: null, colorHarmony: null, lookMatch: null, passes: [], issues: [] };
+    const graded = planColorHarmony(harmony);
+    plan.colorHarmony = graded.harmony;
+    plan.issues.push(...graded.issues);
+    if (plan.colorHarmony) plan.passes.push('color-harmony');
+    const matched = planLookMatch(lookMatch);
+    plan.lookMatch = matched.lookMatch;
+    plan.issues.push(...matched.issues);
+    if (!lens) {
+        if (plan.lookMatch) plan.passes.push('look-match');
+        if (plan.passes.length > 0) plan.passes.push('output');
+        return plan;
+    }
     const squeeze = finitePositive(lens.anamorphicSqueeze) ? lens.anamorphicSqueeze : 1;
 
     const d = lens.distortion;
@@ -155,6 +177,8 @@ export function planViewportOptics(lens: SceneCameraLens | undefined | null): Vi
     if (plan.distortion) plan.passes.push('lens-distortion');
     if (plan.flare) plan.passes.push('lens-flare');
     if (plan.diffusion) plan.passes.push('diffusion');
+    // the look match is drawn in the output pass, after tone mapping and before the grain
+    if (plan.lookMatch) plan.passes.push('look-match');
     if (plan.filmGrain) plan.passes.push('film-grain');
     if (plan.passes.length > 0) plan.passes.push('output');
     return plan;
@@ -335,6 +359,31 @@ export interface ViewportOpticsFrameIO {
     measureFocus?: (camera: THREE.PerspectiveCamera, depthTexture: THREE.Texture | null, frame: { width: number; height: number; renderWidth: number; renderHeight: number }, issues: string[]) => number | null | undefined;
 }
 
+/**
+ * A look match in GLSL (look-match.ts applyLookMatch, which this repeats) over one set of knot uniforms: (sourceL,
+ * targetL, chromaGain, -) and (sourceA, sourceB, targetA, targetB), on display colours.
+ */
+function lookMatchGlsl(name: string, knotL: string, knotAB: string, count: string): string {
+    return /* glsl */ `
+        vec3 ${name}(vec3 shown) {
+            vec3 lin = uSrgbOutput ? sbDecode(clamp(shown, 0.0, 1.0)) : clamp(shown, 0.0, 1.0);
+            vec3 lab = sbToOklab(lin);
+            vec4 l0 = ${knotL}[0], l1 = ${knotL}[1], ab0 = ${knotAB}[0], ab1 = ${knotAB}[1];
+            for (int i = 1; i < ${LOOK_BANDS} - 1; i++) {
+                if (i + 1 >= ${count} || lab.x <= ${knotL}[i].x) break;
+                l0 = ${knotL}[i]; l1 = ${knotL}[i + 1]; ab0 = ${knotAB}[i]; ab1 = ${knotAB}[i + 1];
+            }
+            float t = clamp((lab.x - l0.x) / (l1.x - l0.x), 0.0, 1.0);
+            float L2 = lab.x < l0.x ? lab.x + (l0.y - l0.x) : lab.x > l1.x ? lab.x + (l1.y - l1.x) : mix(l0.y, l1.y, t);
+            vec4 ab = mix(ab0, ab1, t);
+            float gain = mix(l0.z, l1.z, t);
+            vec2 moved = (lab.yz - ab.xy) * gain + ab.zw;
+            vec3 graded = mix(lab, vec3(L2, moved), uLookMatch);
+            vec3 outLin = clamp(sbFromOklab(graded), 0.0, 1.0);
+            return uSrgbOutput ? sbEncode(outLin) : outLin;
+        }`;
+}
+
 const OUTPUT_SHADER = {
     vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -359,7 +408,60 @@ const OUTPUT_SHADER = {
         uniform sampler2D tStreak;
         uniform float uFlare;
         uniform float uStreak;
+        // coverage (alpha) of content drawn with tone mapping off: left un-tone-mapped, as a direct draw leaves it
+        uniform sampler2D tUntoned;
+        uniform bool uUseUntoned;
+        // coverage of content whose shader writes final display values (splats): left as drawn, neither tone-mapped nor encoded
+        uniform sampler2D tDisplay;
+        uniform bool uUseDisplay;
+        // the look match (look-match.ts applyLookMatch, which this repeats), on display colours, where tObjects marks the
+        // scene's objects: knots (sourceL, targetL, chromaGain, -) and (sourceA, sourceB, targetA, targetB)
+        uniform float uLookMatch;
+        uniform int uKnotCount;
+        uniform vec4 uKnotL[${LOOK_BANDS}];
+        uniform vec4 uKnotAB[${LOOK_BANDS}];
+        // the sky's own knots (uSkyKnotCount 0: the sky is left as drawn)
+        uniform int uSkyKnotCount;
+        uniform vec4 uSkyKnotL[${LOOK_BANDS}];
+        uniform vec4 uSkyKnotAB[${LOOK_BANDS}];
+        uniform sampler2D tObjects;
+        uniform bool uSrgbOutput;
         varying vec2 vUv;
+
+        vec3 sbCbrt(vec3 v) { return sign(v) * pow(abs(v), vec3(1.0 / 3.0)); }
+        vec3 sbToOklab(vec3 c) {
+            vec3 lms = sbCbrt(vec3(
+                dot(c, vec3(0.4122214708, 0.5363325363, 0.0514459929)),
+                dot(c, vec3(0.2119034982, 0.6806995451, 0.1073969566)),
+                dot(c, vec3(0.0883024619, 0.2817188376, 0.6299787005))));
+            return vec3(
+                dot(lms, vec3(0.2104542553, 0.7936177850, -0.0040720468)),
+                dot(lms, vec3(1.9779984951, -2.4285922050, 0.4505937099)),
+                dot(lms, vec3(0.0259040371, 0.7827717662, -0.8086757660)));
+        }
+        vec3 sbFromOklab(vec3 lab) {
+            vec3 lms = vec3(
+                dot(lab, vec3(1.0, 0.3963377774, 0.2158037573)),
+                dot(lab, vec3(1.0, -0.1055613458, -0.0638541728)),
+                dot(lab, vec3(1.0, -0.0894841775, -1.2914855480)));
+            lms = lms * lms * lms;
+            return vec3(
+                dot(lms, vec3(4.0767416621, -3.3077115913, 0.2309699292)),
+                dot(lms, vec3(-1.2684380046, 2.6097574011, -0.3413193965)),
+                dot(lms, vec3(-0.0041960863, -0.7034186147, 1.7076147010)));
+        }
+        vec3 sbDecode(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c)); }
+        vec3 sbEncode(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
+${lookMatchGlsl('sbLookObjects', 'uKnotL', 'uKnotAB', 'uKnotCount')}
+${lookMatchGlsl('sbLookSky', 'uSkyKnotL', 'uSkyKnotAB', 'uSkyKnotCount')}
+        // the objects (where tObjects marks them) take their match, the rest the sky's when it has one
+        vec3 sbMatched(vec3 shown) {
+            if (uLookMatch <= 0.0) return shown;
+            float w = clamp(texture2D(tObjects, vUv).r, 0.0, 1.0);
+            vec3 outRgb = w > 0.0 ? mix(shown, sbLookObjects(shown), w) : shown;
+            if (uSkyKnotCount >= 2 && w < 1.0) outRgb = mix(outRgb, sbLookSky(shown), 1.0 - w);
+            return outRgb;
+        }
 
         float sbHash(vec3 p) {
             p = fract(p * vec3(0.1031, 0.1030, 0.0973));
@@ -397,15 +499,18 @@ const OUTPUT_SHADER = {
                 c = vec4(c.rgb + flare, max(c.a, clamp(dot(flare, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0)));
             }
             if (uDisplayReferred) {
-                gl_FragColor = vec4(sbApplyGrain(c.rgb), 1.0);
+                gl_FragColor = vec4(sbApplyGrain(sbMatched(c.rgb)), 1.0);
                 return;
             }
             // the scene was drawn over a transparent clear: alpha is its coverage (blur spreads it like the colour)
             float a = clamp(c.a, 0.0, 1.0);
             gl_FragColor = vec4(a > 1e-4 ? c.rgb / a : vec3(0.0), 1.0);
+            vec3 untonedRgb = gl_FragColor.rgb;
             #include <tonemapping_fragment>
+            if (uUseUntoned) gl_FragColor.rgb = mix(gl_FragColor.rgb, untonedRgb, clamp(texture2D(tUntoned, vUv).a, 0.0, 1.0));
             #include <colorspace_fragment>
-            gl_FragColor = vec4(sbApplyGrain(mix(uBackground, gl_FragColor.rgb, a)), 1.0);
+            if (uUseDisplay) gl_FragColor.rgb = mix(gl_FragColor.rgb, untonedRgb, clamp(texture2D(tDisplay, vUv).a, 0.0, 1.0));
+            gl_FragColor = vec4(sbApplyGrain(sbMatched(mix(uBackground, gl_FragColor.rgb, a))), 1.0);
         }
     `
 };
@@ -430,12 +535,55 @@ function makeTarget(width: number, height: number, withDepth: boolean, samples: 
 
 const FOCUS_CENTRE_REFRESH_FRAMES = 30;
 
+/** An 8-bit target: masks the CPU reads back (readRenderTargetPixels needs a byte format). */
+function makeByteTarget(width: number, height: number, withDepth: boolean): THREE.WebGLRenderTarget {
+    const target = new THREE.WebGLRenderTarget(width, height, { type: THREE.UnsignedByteType, format: THREE.RGBAFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: withDepth });
+    if (withDepth) {
+        const depth = new THREE.DepthTexture(width, height);
+        depth.format = THREE.DepthFormat;
+        depth.type = THREE.UnsignedIntType;
+        target.depthTexture = depth;
+    }
+    return target;
+}
+
+/**
+ * One frame as shown on the canvas, before the look match, and which of its pixels are the objects measured: the scene's
+ * objects, or the given ones where they are seen. Both bottom row first, RGBA bytes.
+ */
+export interface ViewportObjectSample {
+    width: number;
+    height: number;
+    /** The canvas's display colours. */
+    rgba: Uint8Array;
+    /** Per pixel, red channel: the share of it that is the objects measured. */
+    mask: Uint8Array;
+    /** The ids asked for that are not in the viewport (their pixels are not in the mask). */
+    missing: string[];
+}
+
 export class ViewportOpticsChain {
     private plan: ViewportOpticsPlan = planViewportOptics(undefined);
     private lensPass: LensDistortionEffect | null = null;
     private bokehPass: CinematicBokehPass | null = null;
     private glowPass: LensGlowPass | null = null;
     private taaPass: TemporalAAPass | null = null;
+    private harmonyPass: ColorHarmonyPass | null = null;
+    private harmonyTarget: THREE.WebGLRenderTarget | null = null;
+    private coverageTarget: THREE.WebGLRenderTarget | null = null;
+    /** The share of each pixel that is the scene's objects (the look match's weight), and it bent by the lens. */
+    private objectMaskTarget: THREE.WebGLRenderTarget | null = null;
+    private objectMaskLensTarget: THREE.WebGLRenderTarget | null = null;
+    /** Coverage of the objects a sample asked for, and it bent by the lens. */
+    private sampleMaskTarget: THREE.WebGLRenderTarget | null = null;
+    private sampleMaskLensTarget: THREE.WebGLRenderTarget | null = null;
+    private pendingSample: { objectIds: string[]; resolve: (s: ViewportObjectSample) => void; reject: (e: Error) => void } | null = null;
+    /** Coverage of content drawn with tone mapping off (provenance views): the output leaves it un-tone-mapped. */
+    private untonedTarget: THREE.WebGLRenderTarget | null = null;
+    private untonedLensTarget: THREE.WebGLRenderTarget | null = null;
+    /** Coverage of content whose shader writes final display values (splats): the output leaves it as drawn. */
+    private displayTarget: THREE.WebGLRenderTarget | null = null;
+    private displayLensTarget: THREE.WebGLRenderTarget | null = null;
     private taaCopyTarget: THREE.WebGLRenderTarget | null = null;
     private sceneTarget: THREE.WebGLRenderTarget | null = null;
     private dofTarget: THREE.WebGLRenderTarget | null = null;
@@ -451,9 +599,9 @@ export class ViewportOpticsChain {
     private readonly box = new THREE.Box3();
     public status: ViewportOpticsStatus = { passes: [], drawn: [], overscan: 1, focusDistanceMeters: null, issues: [] };
 
-    /** Sets the lens; creates the passes it configures and frees the rest. */
-    public configure(lens: SceneCameraLens | undefined | null): ViewportOpticsPlan {
-        this.plan = planViewportOptics(lens);
+    /** Sets the lens and the scene's colour harmony grade; creates the passes they configure and frees the rest. */
+    public configure(lens: SceneCameraLens | undefined | null, harmony?: SceneColorHarmony | null, lookMatch?: SceneLookMatch | null): ViewportOpticsPlan {
+        this.plan = planViewportOptics(lens, harmony, lookMatch);
         this.sensorHeightMm = lens?.sensorHeightMm;
         if (this.plan.distortion && !this.lensPass) {
             this.lensPass = new LensDistortionEffect({ mode: 'redistort', edgeMode: 'clamp', chromaticAberration: 0, enabled: true });
@@ -477,8 +625,18 @@ export class ViewportOpticsChain {
             this.glowPass.dispose();
             this.glowPass = null;
         }
-        // temporal anti-aliasing runs whenever the chain draws, unless the lens turns it off
-        const taa = this.active && lens?.temporalAntiAliasing !== false;
+        if (this.plan.colorHarmony && !this.harmonyPass) {
+            this.harmonyPass = new ColorHarmonyPass();
+        } else if (!this.plan.colorHarmony && this.harmonyPass) {
+            this.harmonyPass.dispose();
+            this.harmonyPass = null;
+            this.harmonyTarget?.dispose();
+            this.harmonyTarget = null;
+        }
+        // temporal anti-aliasing runs whenever a lens effect draws, unless the lens turns it off (a colour grade alone
+        // spreads no light, so it does not need it)
+        const lensEffect = this.plan.passes.some(p => p !== 'color-harmony' && p !== 'look-match' && p !== 'output');
+        const taa = lensEffect && lens?.temporalAntiAliasing !== false;
         if (taa && !this.taaPass) this.taaPass = new TemporalAAPass();
         else if (!taa && this.taaPass) {
             this.taaPass.dispose();
@@ -486,7 +644,7 @@ export class ViewportOpticsChain {
         }
         this.taaPass?.reset();
         if (!this.plan.depthOfField || this.focus?.id !== this.plan.depthOfField.focusObjectId) this.focus = null;
-        if (!this.active) this.disposeTargets();
+        if (this.plan.passes.length === 0 && !this.pendingSample) this.disposeTargets();
         this.overscanKey = '';
         this.status = { passes: [...this.plan.passes], drawn: [], overscan: 1, focusDistanceMeters: null, issues: [...this.plan.issues] };
         return this.plan;
@@ -499,7 +657,17 @@ export class ViewportOpticsChain {
 
     /** True when the scene lens configures any pass; the viewport renders through render() only then. */
     public get active(): boolean {
-        return this.plan.passes.length > 0;
+        return this.plan.passes.length > 0 || !!this.pendingSample;
+    }
+
+    /**
+     * The next frame as shown, before the look match, with a mask of the objects to measure: `objectIds` where they are
+     * seen, else every object of the scene (never the sky). The viewport draws through the chain for that frame. A newer
+     * request replaces one not yet taken (it is rejected).
+     */
+    public requestObjectSample(objectIds: string[] = []): Promise<ViewportObjectSample> {
+        this.pendingSample?.reject(new Error('a newer sample was asked for'));
+        return new Promise((resolve, reject) => { this.pendingSample = { objectIds, resolve, reject }; });
     }
 
     /** The configured passes in draw order. */
@@ -555,6 +723,12 @@ export class ViewportOpticsChain {
             return null;
         }
         return depth;
+    }
+
+    private ensureByteTarget(current: THREE.WebGLRenderTarget | null, width: number, height: number, withDepth: boolean): THREE.WebGLRenderTarget {
+        if (current && current.width === width && current.height === height) return current;
+        current?.dispose();
+        return makeByteTarget(width, height, withDepth);
     }
 
     private ensureTarget(current: THREE.WebGLRenderTarget | null, width: number, height: number, withDepth: boolean, samples: number): THREE.WebGLRenderTarget {
@@ -626,16 +800,81 @@ export class ViewportOpticsChain {
             this.taaPass?.endJitter(camera);
         }
         const depthTexture = drawn_.depthTexture;
+        // content masks, drawn alone against the scene's depth (so what other geometry hides is not in them):
+        //  - the harmony grade is on the scene's objects only, never the sky (a dome mesh, a texture, a flat colour): objects
+        //    are what wrote depth, and content that writes none (splats) by its coverage;
+        //  - content drawn with tone mapping off (splats, provenance views) is left un-tone-mapped by the output, as a direct
+        //    draw to the canvas leaves it
+        let coverage: THREE.Texture | null = null;
+        let untoned: THREE.Texture | null = null;
+        let display: THREE.Texture | null = null;
+        const sample = this.pendingSample;
+        this.pendingSample = null;
+        const wantsObjects = !!this.plan.lookMatch || !!sample;
+        const depthless = (this.plan.colorHarmony || wantsObjects) && depthTexture ? findDepthlessContent(scene) : [];
+        const exempt = !drawn_.displayReferred ? findToneMapExemptContent(scene, new Set(overlays)) : { untoned: [], display: [] };
+        if (exempt.untoned.length + exempt.display.length > 0 && !depthTexture) issues.push('no depth texture from the scene draw; content drawn with tone mapping off (splats, provenance views) is tone-mapped with the rest');
+        if (depthTexture && exempt.untoned.length > 0) {
+            this.untonedTarget = this.ensureTarget(this.untonedTarget, RW, RH, true, 0);
+            if (renderContentMask(renderer, camera, exempt.untoned, this.untonedTarget, depthTexture)) untoned = this.untonedTarget.texture;
+        }
+        if (depthTexture && exempt.display.length > 0) {
+            this.displayTarget = this.ensureTarget(this.displayTarget, RW, RH, true, 0);
+            if (renderContentMask(renderer, camera, exempt.display, this.displayTarget, depthTexture)) display = this.displayTarget.texture;
+        }
+        if (depthless.length > 0) {
+            if (display && sameContent(depthless, exempt.display)) coverage = display;
+            else {
+                this.coverageTarget = this.ensureTarget(this.coverageTarget, RW, RH, true, 0);
+                if (renderContentMask(renderer, camera, depthless, this.coverageTarget, depthTexture)) coverage = this.coverageTarget.texture;
+            }
+        }
+        // the objects' share of each pixel: the look match's weight, and what a sample measures
+        let objectMask: THREE.Texture | null = null;
+        let sampleMask: THREE.Texture | null = null;
+        const missing: string[] = [];
+        if (wantsObjects && depthTexture) {
+            this.objectMaskTarget = this.ensureByteTarget(this.objectMaskTarget, RW, RH, false);
+            renderObjectMask(renderer, depthTexture, coverage, this.objectMaskTarget);
+            objectMask = this.objectMaskTarget.texture;
+            if (sample && sample.objectIds.length > 0) {
+                const objects = sample.objectIds.map(id => {
+                    const o = io.resolveObject(id);
+                    if (!o) missing.push(id);
+                    return o;
+                }).filter((o): o is THREE.Object3D => !!o);
+                this.sampleMaskTarget = this.ensureByteTarget(this.sampleMaskTarget, RW, RH, true);
+                if (renderContentMask(renderer, camera, objects, this.sampleMaskTarget, depthTexture)) sampleMask = this.sampleMaskTarget.texture;
+            } else {
+                sampleMask = objectMask;
+            }
+        } else if (this.plan.lookMatch) {
+            issues.push('no depth texture from the scene draw; look match not drawn (it could not tell the objects from the background)');
+        }
         let current = this.sceneTarget;
+        let taaHistory: THREE.WebGLRenderTarget | null = null;
 
         // temporal anti-aliasing: every lens effect after it reads the steady, resolved frame
         if (this.taaPass) {
             if (depthTexture) {
-                current = this.taaPass.render(renderer, current.texture, depthTexture, RW, RH);
+                current = taaHistory = this.taaPass.render(renderer, current.texture, depthTexture, RW, RH);
                 drawn.push('temporal-aa');
             } else {
                 issues.push('no depth texture from the scene draw; temporal anti-aliasing not drawn');
                 this.taaPass.reset();
+            }
+        }
+
+        // colour harmony: on the scene's own light, before depth of field blurs objects into the background
+        const harmony = this.plan.colorHarmony;
+        if (harmony && this.harmonyPass) {
+            if (!depthTexture) {
+                issues.push('no depth texture from the scene draw; colour harmony not drawn (it could not tell the objects from the background)');
+            } else {
+                this.harmonyTarget = this.ensureTarget(this.harmonyTarget, RW, RH, false, 0);
+                this.harmonyPass.render(renderer, current.texture, depthTexture, harmony, this.harmonyTarget, coverage, display);
+                current = this.harmonyTarget;
+                drawn.push('color-harmony');
             }
         }
 
@@ -672,7 +911,7 @@ export class ViewportOpticsChain {
         // overlays: sharp, on top, in the same (widened) frustum as the scene
         if (overlays.length > 0) {
             // the resolved frame is also the next frame's history: overlays go on a copy of it
-            if (this.taaPass && current !== this.sceneTarget && current !== this.dofTarget) {
+            if (this.taaPass && taaHistory && current === taaHistory) {
                 this.taaCopyTarget = this.ensureTarget(this.taaCopyTarget, RW, RH, false, 0);
                 this.taaPass.copy(renderer, current.texture, this.taaCopyTarget);
                 current = this.taaCopyTarget;
@@ -700,6 +939,30 @@ export class ViewportOpticsChain {
                 .setSourceScale(W / RW, H / RH);
             this.lensPass.render(renderer, current.texture, this.lensTarget);
             current = this.lensTarget;
+            // the tone mapping masks bend with the frame they mark
+            this.lensPass.setChromaticAberration(0);
+            if (untoned) {
+                this.untonedLensTarget = this.ensureTarget(this.untonedLensTarget, W, H, false, 0);
+                this.lensPass.render(renderer, untoned, this.untonedLensTarget);
+                untoned = this.untonedLensTarget.texture;
+            }
+            if (display) {
+                this.displayLensTarget = this.ensureTarget(this.displayLensTarget, W, H, false, 0);
+                this.lensPass.render(renderer, display, this.displayLensTarget);
+                display = this.displayLensTarget.texture;
+            }
+            if (objectMask) {
+                const bentObjects = objectMask;
+                this.objectMaskLensTarget = this.ensureByteTarget(this.objectMaskLensTarget, W, H, false);
+                this.lensPass.render(renderer, objectMask, this.objectMaskLensTarget);
+                objectMask = this.objectMaskLensTarget.texture;
+                if (sampleMask === bentObjects) sampleMask = objectMask;
+            }
+            if (sampleMask && sampleMask !== objectMask) {
+                this.sampleMaskLensTarget = this.ensureByteTarget(this.sampleMaskLensTarget, W, H, false);
+                this.lensPass.render(renderer, sampleMask, this.sampleMaskLensTarget);
+                sampleMask = this.sampleMaskLensTarget.texture;
+            }
             drawn.push('lens-distortion');
         }
 
@@ -708,7 +971,14 @@ export class ViewportOpticsChain {
             const material = new THREE.ShaderMaterial({
                 uniforms: {
                     tDiffuse: { value: null }, uBackground: { value: new THREE.Vector3() }, uDisplayReferred: { value: false }, uGrainAmount: { value: 0 }, uGrainCellPx: { value: 1 }, uGrainChroma: { value: 0 }, uGrainSeed: { value: 0 },
-                    tDiffusion: { value: null }, uDiffusion: { value: 0 }, tGhosts: { value: null }, tStreak: { value: null }, uFlare: { value: 0 }, uStreak: { value: 0 }
+                    tDiffusion: { value: null }, uDiffusion: { value: 0 }, tGhosts: { value: null }, tStreak: { value: null }, uFlare: { value: 0 }, uStreak: { value: 0 },
+                    tUntoned: { value: null }, uUseUntoned: { value: false }, tDisplay: { value: null }, uUseDisplay: { value: false },
+                    uLookMatch: { value: 0 }, uKnotCount: { value: 0 }, tObjects: { value: null }, uSrgbOutput: { value: true },
+                    uKnotL: { value: Array.from({ length: LOOK_BANDS }, () => new THREE.Vector4()) },
+                    uKnotAB: { value: Array.from({ length: LOOK_BANDS }, () => new THREE.Vector4()) },
+                    uSkyKnotCount: { value: 0 },
+                    uSkyKnotL: { value: Array.from({ length: LOOK_BANDS }, () => new THREE.Vector4()) },
+                    uSkyKnotAB: { value: Array.from({ length: LOOK_BANDS }, () => new THREE.Vector4()) }
                 },
                 vertexShader: OUTPUT_SHADER.vertexShader,
                 fragmentShader: OUTPUT_SHADER.fragmentShader,
@@ -736,6 +1006,10 @@ export class ViewportOpticsChain {
         if (glow?.ghosts) drawn.push('lens-flare');
         if (glow?.diffusion) drawn.push('diffusion');
         ou.uDisplayReferred.value = !!drawn_.displayReferred;
+        ou.tUntoned.value = untoned;
+        ou.uUseUntoned.value = !!untoned;
+        ou.tDisplay.value = display;
+        ou.uUseDisplay.value = !!display;
         // film grain: its size on the sensor -> output pixels by the frame height on the sensor (the lens's film back)
         const grain = this.plan.filmGrain;
         ou.uGrainAmount.value = grain ? grain.amount : 0;
@@ -748,9 +1022,51 @@ export class ViewportOpticsChain {
             drawn.push('film-grain');
         }
         // a texture / cube background was drawn into the target opaque; the composite then never shows this colour
+        // a flat background is composited here, outside the harmony pass's target: a grade that takes the sky grades it here
+        const harmonyOnSky = harmony && drawn.includes('color-harmony') && harmony.includeSky ? harmony : null;
+        if (backgroundColour && harmonyOnSky) {
+            // a Color holds linear (working colour space) values
+            const [r, g, b] = harmonizeLinearRgb([backgroundColour.r, backgroundColour.g, backgroundColour.b], harmonyOnSky);
+            backgroundColour.setRGB(r, g, b);
+        }
         const bg = backgroundColour ? backgroundColour.getRGB({ r: 0, g: 0, b: 0 }, renderer.outputColorSpace) : { r: 0, g: 0, b: 0 };
         (ou.uBackground.value as THREE.Vector3).set(bg.r, bg.g, bg.b);
+        // the look match, on the objects as shown
+        const look = objectMask ? this.plan.lookMatch : null;
+        ou.tObjects.value = objectMask;
+        ou.uSrgbOutput.value = renderer.outputColorSpace === THREE.SRGBColorSpace;
+        if (look) {
+            ou.uKnotCount.value = look.knots.length;
+            const load = (knots: LookMatchPlan['knots'], l: THREE.Vector4[], ab: THREE.Vector4[]) => knots.forEach((k, i) => {
+                l[i].set(k.sourceL, k.targetL, k.chromaGain, 0);
+                ab[i].set(k.sourceA, k.sourceB, k.targetA, k.targetB);
+            });
+            load(look.knots, ou.uKnotL.value, ou.uKnotAB.value);
+            if (look.sky) load(look.sky, ou.uSkyKnotL.value, ou.uSkyKnotAB.value);
+            drawn.push('look-match');
+        }
+        ou.uSkyKnotCount.value = look?.sky ? look.sky.length : 0;
         renderer.setRenderTarget(null);
+        if (sample) {
+            // the frame as it shows before the match, read back as drawn, then the frame drawn again with it
+            ou.uLookMatch.value = 0;
+            renderer.render(this.output.scene, this.output.camera);
+            try {
+                if (!sampleMask) throw new Error(missing.length ? `none of ${missing.join(', ')} is in the viewport` : 'no depth texture from the scene draw: the objects cannot be told from the background');
+                const gl = renderer.getContext();
+                const rgba = new Uint8Array(W * H * 4);
+                gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
+                const maskTarget = sampleMask === objectMask ? (distortion ? this.objectMaskLensTarget! : this.objectMaskTarget!) : (distortion ? this.sampleMaskLensTarget! : this.sampleMaskTarget!);
+                const mask = new Uint8Array(W * H * 4);
+                if (maskTarget.width !== W || maskTarget.height !== H) throw new Error(`the object mask is ${maskTarget.width}x${maskTarget.height}, the frame ${W}x${H}`);
+                renderer.readRenderTargetPixels(maskTarget, 0, 0, W, H, mask);
+                renderer.setRenderTarget(null);
+                sample.resolve({ width: W, height: H, rgba, mask, missing });
+            } catch (e) {
+                sample.reject(e instanceof Error ? e : new Error(String(e)));
+            }
+        }
+        ou.uLookMatch.value = look ? look.strength : 0;
         renderer.render(this.output.scene, this.output.camera);
         drawn.push('output');
         renderer.setRenderTarget(previousTarget);
@@ -763,7 +1079,18 @@ export class ViewportOpticsChain {
         this.dofTarget?.dispose();
         this.lensTarget?.dispose();
         this.taaCopyTarget?.dispose();
-        this.sceneTarget = this.dofTarget = this.lensTarget = this.taaCopyTarget = null;
+        this.harmonyTarget?.dispose();
+        this.coverageTarget?.dispose();
+        this.objectMaskTarget?.dispose();
+        this.objectMaskLensTarget?.dispose();
+        this.sampleMaskTarget?.dispose();
+        this.sampleMaskLensTarget?.dispose();
+        this.objectMaskTarget = this.objectMaskLensTarget = this.sampleMaskTarget = this.sampleMaskLensTarget = null;
+        this.untonedTarget?.dispose();
+        this.untonedLensTarget?.dispose();
+        this.displayTarget?.dispose();
+        this.displayLensTarget?.dispose();
+        this.sceneTarget = this.dofTarget = this.lensTarget = this.taaCopyTarget = this.harmonyTarget = this.coverageTarget = this.untonedTarget = this.untonedLensTarget = this.displayTarget = this.displayLensTarget = null;
         if (this.output) {
             this.output.material.dispose();
             this.output.mesh.geometry.dispose();
@@ -772,6 +1099,8 @@ export class ViewportOpticsChain {
     }
 
     public dispose(): void {
+        this.pendingSample?.reject(new Error('the viewport closed'));
+        this.pendingSample = null;
         this.configure(undefined);
         this.disposeTargets();
     }

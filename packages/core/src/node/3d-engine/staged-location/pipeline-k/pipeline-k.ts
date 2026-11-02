@@ -12,7 +12,7 @@
  * facades snapped to fitted planes, the remesh polish's cleanup), every rectified facade's ortho is straightened and its
  * smears levelled (ortho-rectify.ts), and the facade is then rebuilt on the lines that ortho shows and textured with it
  * (facade-lattice.ts through remesh-polish.ts). Asked for with the staged tool's pipeline 'k' (or
- * SCRATCHBOX_STAGED_PROCEDURAL=k); it replaces pipeline E's massing and any procedural rebuild for that build, so what is
+ * SCRATCHBOX_STAGED_BUILDING_PIPELINE=k); it replaces pipeline E's massing and any procedural rebuild for that build, so what is
  * shown is the real scan, straightened, with its own photo.
  *
  * The rectified orthos are written beside the originals in a folder keyed by the rectifier's version and parameters,
@@ -27,11 +27,12 @@ import { Worker } from 'worker_threads';
 import { workerTsRegisterSource } from '../../../worker-ts-register';
 import { FACADE_LATTICE_PARAMS, facadeEligible, wallCoverage, type ReliefFacade } from '../facade-lattice';
 import { decodePng } from '../../../texture-processing';
-import { featurelessMaskName, ORTHO_RECTIFY_PARAMS, ORTHO_RECTIFY_VERSION, smoothFillHoles, uncoveredMaskName, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
+import { featurelessMaskName, occludedMaskName, ORTHO_RECTIFY_PARAMS, ORTHO_RECTIFY_VERSION, smoothFillHoles, uncoveredMaskName, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
 import { inpaintFace } from '../pipeline-e/occluders';
 import type { EnhanceModelClient } from '../texture-enhance';
 import type { RectifyJob, RectifyMessage } from './ortho-rectify-worker';
 import { encodePng } from '../png-encode';
+import { stagedBuildingPipelineEnv, stagedDistrict } from '../staged-switches';
 
 /** The featureless photo refilled region by region: regions found, filled (each from one source at one shift), their texels, and the texels kept as photographed. */
 export interface ContinuedFill { regions: number; filled: number; texels: number; fromFacades: Record<string, number>; kept: number; sources: Array<{ texels: number; from: number; shiftM: number; ringDiff: number }> }
@@ -157,15 +158,17 @@ export function continueFeatureless(images: Map<number, FacadeImage>, P = CONTIN
 
 export const PIPELINE_K_VERSION = `pipeline-k/3(${ORTHO_RECTIFY_VERSION})`;
 
-/** Pipeline K when the request (or SCRATCHBOX_STAGED_PROCEDURAL) asks for 'k'. */
-export function stagedPipelineK(request: { pipeline?: string }, env: NodeJS.ProcessEnv = process.env): boolean {
-    const p = (request.pipeline ?? env.SCRATCHBOX_STAGED_PROCEDURAL ?? '').trim().toLowerCase();
-    return p === 'k' || p === 'kd';
+/** Pipeline K when the request (or SCRATCHBOX_STAGED_BUILDING_PIPELINE) asks for 'k', and in a district shown as kd. */
+export function stagedPipelineK(request: { pipeline?: string; district?: string; isolate?: boolean }, env: NodeJS.ProcessEnv = process.env): boolean {
+    return (request.pipeline !== undefined ? request.pipeline.trim().toLowerCase() : stagedBuildingPipelineEnv(env)) === 'k' || stagedPipelineKD(request, env);
 }
 
-/** Pipeline K-D: K's straightening applied to a whole district (no isolate), its trees and surroundings kept. */
-export function stagedPipelineKD(request: { pipeline?: string; isolate?: boolean }): boolean {
-    return (request.pipeline ?? '').trim().toLowerCase() === 'kd' && request.isolate !== true;
+/**
+ * Pipeline K-D: K's straightening applied to a whole district (no isolate), its trees and surroundings kept. A district
+ * look, not a building pipeline: the request's `district` 'kd', else SCRATCHBOX_STAGED_DISTRICT=kd.
+ */
+export function stagedPipelineKD(request: { district?: string; isolate?: boolean }, env: NodeJS.ProcessEnv = process.env): boolean {
+    return request.isolate !== true && stagedDistrict(request, env) === 'kd';
 }
 
 export interface RectifiedOrthos {
@@ -247,14 +250,23 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
         }
         const todo = facadesJson.facades.filter(f => facadeEligible(f, { ...FACADE_LATTICE_PARAMS, minCoverage }) && fs.existsSync(path.join(srcDir, f.image)));
         for (const f of facadesJson.facades) if (!todo.includes(f) && fs.existsSync(path.join(srcDir, f.image))) fs.copyFileSync(path.join(srcDir, f.image), path.join(tmp, f.image));
+        // tile_refine's occlusion masks: a straightened facade's comes back through its warp; the others' are copied as they are
+        for (const f of facadesJson.facades) {
+            const occ = occludedMaskName(f.image);
+            if (!todo.includes(f) && fs.existsSync(path.join(srcDir, occ))) fs.copyFileSync(path.join(srcDir, occ), path.join(tmp, occ));
+        }
         // largest first, dealt round the threads
         const n = Math.max(1, Math.min(opts.threads ?? Math.max(1, Math.min(4, os.cpus().length - 1)), todo.length));
         const sorted = [...todo].sort((a, b) => b.width * b.height - a.width * a.height);
         const jobs: RectifyJob[] = Array.from({ length: n }, () => ({ srcDir, outDir: tmp, facades: [], params }));
         sorted.forEach((f, k) => jobs[k % n].facades.push({ facadeId: f.facadeId, image: f.image, pixel: f.pixel }));
         const msgs = await runWorkers(jobs.filter(j => j.facades.length), opts.signal);
-        // a facade that failed keeps its original ortho
-        for (const m of msgs) if (m.error) { const f = todo.find(x => x.facadeId === m.facadeId)!; fs.copyFileSync(path.join(srcDir, f.image), path.join(tmp, f.image)); }
+        // a facade that failed keeps its original ortho (and its occlusion mask)
+        for (const m of msgs) if (m.error) {
+            const f = todo.find(x => x.facadeId === m.facadeId)!, occ = occludedMaskName(f.image);
+            fs.copyFileSync(path.join(srcDir, f.image), path.join(tmp, f.image));
+            if (fs.existsSync(path.join(srcDir, occ))) fs.copyFileSync(path.join(srcDir, occ), path.join(tmp, occ));
+        }
         const reports = todo.map(f => msgs.find(m => m.facadeId === f.facadeId) ?? { facadeId: f.facadeId, error: 'no report came back' });
         // featureless photo the facades' own repeats could not refill: continued from the nearest facade facing the same way
         const images = new Map<number, FacadeImage>();
@@ -310,6 +322,8 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
             const x = images.get(id)!;
             fs.writeFileSync(path.join(tmp, x.f.image), encodePng(x.width, x.height, x.rgba, 4));
         }
+        // a facade with an occlusion mask beside it names it (tile_refine named it; a warped one keeps the name)
+        for (const f of facadesJson.facades) if (fs.existsSync(path.join(tmp, occludedMaskName(f.image)))) f.occludedMask = occludedMaskName(f.image);
         // a rectified facade names its uncovered mask (the rebuild reads coverage from it, its ortho's holes being filled) and its fill
         for (const f of facadesJson.facades) {
             const rep = reports.find(x => x.facadeId === f.facadeId)?.report;

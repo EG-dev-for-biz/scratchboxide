@@ -41,7 +41,7 @@ import { outsideFootprint, signedFootprintDistance } from './base-cleanup';
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor } from '../glb-bytes';
 import type { FacadeLatticeResult, ReliefFacade } from '../facade-lattice';
 
-export const LATTICE_STITCH_VERSION = 'lattice-stitch/18';
+export const LATTICE_STITCH_VERSION = 'lattice-stitch/21';
 
 export const LATTICE_STITCH_PARAMS = {
     /** The slab of a rebuilt facade cut from the scan: within this of its plane (m). */
@@ -56,6 +56,10 @@ export const LATTICE_STITCH_PARAMS = {
     splitPerimeterM: 8, splitRatio: 0.35,
     /** Cut: only scan triangles facing along a facade (|cos| of their normal to its normal at least this) are wall it replaces; roofs, ledges and terraces meeting it stay. */
     cutFacingMin: 0.5,
+    /** Cut: keep the pieces over the rebuilt cells too (the scan only split at the cells' lines), for a caller that removes them itself (facade-lattice.ts, under its tear audit). */
+    cutKeepInside: false,
+    /** Cut: only the scan facing the way the rebuilt wall faces (not a parapet's or a thin wall's other side behind it, which the rebuild does not replace). */
+    cutSameFacing: false,
     /** Fill lying on a surface the scan already has (its centre, corners and points along its edges within this (m) of it, facing alike) is a second skin, not a hole: dropped. */
     doubledM: 0.02,
     /** Fill a rebuilt wall already stands in for (parallel to it, within this of it (m), over it at every probe) is dropped: the scan
@@ -225,10 +229,11 @@ export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: Lattic
             for (const fr of frames) {
                 const { f, r } = fr;
                 // the rebuilt cells replace wall only: a roof, ledge or terrace meeting the wall is no part of them
-                if (!(tl > 0) || Math.abs(dot(tn, f.normal)) < P.cutFacingMin * tl) continue;
+                if (!(tl > 0) || (P.cutSameFacing ? dot(tn, f.normal) : Math.abs(dot(tn, f.normal))) < P.cutFacingMin * tl) continue;
                 const st = (v: Vx) => { const m = [v.p[0] - f.centroid[0], v.p[1] - f.centroid[1], v.p[2] - f.centroid[2]]; return [dot(m, f.axisS), dot(m, f.axisT), dot(m, f.normal)]; };
                 const all = polys.flat().map(st);
-                const smin = Math.min(...all.map(c => c[0])), smax = Math.max(...all.map(c => c[0])), tmin = Math.min(...all.map(c => c[1])), tmax = Math.max(...all.map(c => c[1])), dmin = Math.min(...all.map(c => c[2])), dmax = Math.max(...all.map(c => c[2]));
+                let smin = Infinity, smax = -Infinity, tmin = Infinity, tmax = -Infinity, dmin = Infinity, dmax = -Infinity;
+                for (const c of all) { smin = Math.min(smin, c[0]); smax = Math.max(smax, c[0]); tmin = Math.min(tmin, c[1]); tmax = Math.max(tmax, c[1]); dmin = Math.min(dmin, c[2]); dmax = Math.max(dmax, c[2]); }
                 if (smax <= fr.s0 || smin >= fr.s1 || tmax <= fr.t0 || tmin >= fr.t1 || dmax <= -P.depthBandM || dmin >= P.depthBandM) continue;
                 // does it reach a rebuilt cell at all
                 const a0 = cellIndex(Math.max(smin, fr.s0), r.s), a1 = cellIndex(Math.min(smax, fr.s1), r.s), b0 = cellIndex(Math.max(tmin, fr.t0), r.t), b1 = cellIndex(Math.min(tmax, fr.t1), r.t);
@@ -245,7 +250,7 @@ export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: Lattic
                     const c = poly.map(st), cs = c.reduce((s, x) => s + x[0], 0) / c.length, ct = c.reduce((s, x) => s + x[1], 0) / c.length, cd = c.reduce((s, x) => s + x[2], 0) / c.length;
                     const inside = cs > fr.s0 && cs < fr.s1 && ct > fr.t0 && ct < fr.t1 && Math.abs(cd) < P.depthBandM && r.built[cellIndex(ct, r.t) * fr.ns + cellIndex(cs, r.s)];
                     if (inside) report.removedPieces++;
-                    return !inside;
+                    return !inside || P.cutKeepInside;
                 });
             }
             if (!touched) continue;
@@ -374,17 +379,20 @@ function welded(bytes: Uint8Array, P: LatticeStitchParams): { pos: number[][]; t
     return { pos, tris, wall, idOf: p => id.get(k(p[0], p[1], p[2])) };
 }
 
-const ekey = (a: number, b: number) => (a < b ? `${a},${b}` : `${b},${a}`);
+// an edge's key, its two vertex ids in one number (ids under 2^26): Map and Set keep insertion order whatever the key,
+// and a number key costs no string per edge (a build's infill counts millions)
+const EDGE_BASE = 2 ** 26;
+const ekey = (a: number, b: number) => (a < b ? a * EDGE_BASE + b : b * EDGE_BASE + a);
 /**
  * The open edges: those of an odd number of triangles. Around any vertex the triangle counts of its edges sum to twice its
  * faces, so a vertex always has an even number of odd edges: they always walk into closed loops, and filling each loop once
  * makes every count even (closed, even where the scan is not manifold). `once` keeps only edges of exactly one triangle.
  */
-function openEdges(tris: number[][], owner?: Map<string, number>, once = false): Array<[number, number]> {
-    const c = new Map<string, number>();
+function openEdges(tris: number[][], owner?: Map<number, number>, once = false): Array<[number, number]> {
+    const c = new Map<number, number>();
     tris.forEach((f, t) => { for (let k = 0; k < 3; k++) { const e = ekey(f[k], f[(k + 1) % 3]); c.set(e, (c.get(e) ?? 0) + 1); owner?.set(e, t); } });
     const out: Array<[number, number]> = [];
-    for (const [k, n] of c) if (once ? n === 1 : n % 2 === 1) { const [a, b] = k.split(',').map(Number); out.push([a, b]); }
+    for (const [k, n] of c) if (once ? n === 1 : n % 2 === 1) out.push([Math.floor(k / EDGE_BASE), k % EDGE_BASE]);
     return out;
 }
 
@@ -399,7 +407,7 @@ function triangulate(outer: number[], holes: number[][], xy: (v: number) => Vect
     let faces: number[][];
     try { faces = ShapeUtils.triangulateShape(contour, hs); } catch { return undefined; }
     const out = faces.map(f => [ids[f[0]], ids[f[1]], ids[f[2]]]);
-    const got = new Set<string>();
+    const got = new Set<number>();
     for (const f of out) for (let k = 0; k < 3; k++) got.add(ekey(f[k], f[(k + 1) % 3]));
     for (const l of [outer, ...holes]) for (let k = 0; k < l.length; k++) if (!got.has(ekey(l[k], l[(k + 1) % l.length]))) return undefined;
     return out;
@@ -410,15 +418,18 @@ const uvArea = (t: number[][]) => Math.abs((t[1][0] - t[0][0]) * (t[2][1] - t[0]
 const dist3 = (a: ArrayLike<number>, b: ArrayLike<number>) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 const cross3 = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 
-/** A grid cell's integer coordinates as one number (2^17 cells a side, centred on 0). */
-const cellKey = (x: number, y: number, z: number) => ((x + 65536) * 131072 + (y + 65536)) * 131072 + (z + 65536);
+/** A grid cell's key: three cell indices in one number while each is under 2^16 from the origin, else a string (never shared). */
+const CELL_OFF = 2 ** 16, CELL_BASE = 2 ** 17;
+const cellKey = (x: number, y: number, z: number): number | string => (Math.abs(x) < CELL_OFF && Math.abs(y) < CELL_OFF && Math.abs(z) < CELL_OFF ? ((x + CELL_OFF) * CELL_BASE + (y + CELL_OFF)) * CELL_BASE + (z + CELL_OFF) : `${x},${y},${z}`);
+/** (u x v) . m, in the order dot(cross3(u, v), m) computes it. */
+const crossDot = (ux: number, uy: number, uz: number, vx: number, vy: number, vz: number, m0: number, m1: number, m2: number) => (uy * vz - uz * vy) * m0 + (uz * vx - ux * vz) * m1 + (ux * vy - uy * vx) * m2;
 
 /**
  * The cells of size C any point of these triangles can fall in: each triangle sampled on a barycentric grid no coarser than C,
  * every sample's cell and its neighbours (a point of the triangle lies within C of a sample, so within one cell of its cell).
  */
-function cellsUnder(tris: number[][][], C: number): Set<number> {
-    const seen = new Set<number>(), out = new Set<number>();
+function cellsUnder(tris: number[][][], C: number): Set<number | string> {
+    const seen = new Set<number | string>(), out = new Set<number | string>();
     for (const [a, b, c] of tris) {
         const div = Math.max(1, Math.ceil(Math.max(dist3(a, b), dist3(b, c), dist3(c, a)) / C));
         for (let i = 0; i <= div; i++) for (let j = 0; i + j <= div; j++) {
@@ -435,39 +446,44 @@ function cellsUnder(tris: number[][][], C: number): Set<number> {
 
 /**
  * Whether a point lies on one of these triangles (within tol, inside it, facing like n within about 25°), none touching the
- * vertices `not`. With `near`, only points on those triangles are asked about: the grid holds only the cells under them.
+ * vertices `not`. Each triangle's corners, normal and its length are computed once, and a query allocates nothing: the
+ * infill asks this millions of times. With `near`, only points on those triangles are asked about: the grid holds only the
+ * cells under them.
  */
 function surfaceProbe(pos: number[][], tris: number[][], tol: number, C = 1, near?: number[][][]): (q: number[], n: number[], not?: number[]) => boolean {
     const focus = near ? cellsUnder(near, C) : undefined;
-    const grid = new Map<number, number[]>();
+    const grid = new Map<number | string, number[]>();
+    // per triangle: a, b, c, the normal m = (b - a) x (c - a) and |m|
+    const T = new Float64Array(tris.length * 13);
     if (!focus || focus.size) tris.forEach((f, t) => {
-        const a = pos[f[0]], b = pos[f[1]], c = pos[f[2]];
-        const x0 = Math.floor((Math.min(a[0], b[0], c[0]) - tol) / C), y0 = Math.floor((Math.min(a[1], b[1], c[1]) - tol) / C), z0 = Math.floor((Math.min(a[2], b[2], c[2]) - tol) / C);
-        const x1 = Math.floor((Math.max(a[0], b[0], c[0]) + tol) / C), y1 = Math.floor((Math.max(a[1], b[1], c[1]) + tol) / C), z1 = Math.floor((Math.max(a[2], b[2], c[2]) + tol) / C);
-        if ((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > 4000) return;
-        for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) {
+        const [a, b, c] = f.map(v => pos[v]);
+        const m = cross3(sub3(b, a), sub3(c, a));
+        T.set([a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2], m[0], m[1], m[2], Math.hypot(m[0], m[1], m[2])], t * 13);
+        const lo = [0, 1, 2].map(k => Math.floor((Math.min(a[k], b[k], c[k]) - tol) / C)), hi = [0, 1, 2].map(k => Math.floor((Math.max(a[k], b[k], c[k]) + tol) / C));
+        if ((hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1) > 4000) return;
+        for (let x = lo[0]; x <= hi[0]; x++) for (let y = lo[1]; y <= hi[1]; y++) for (let z = lo[2]; z <= hi[2]; z++) {
             const k = cellKey(x, y, z);
             if (focus && !focus.has(k)) continue;
             const l = grid.get(k);
             if (l) l.push(t); else grid.set(k, [t]);
         }
     });
-    // each triangle's normal (unnormalised) and its length, worked out once
-    const M = new Float64Array(tris.length * 4).fill(NaN);
     return (q, n, not = []) => {
         const nl = Math.hypot(n[0], n[1], n[2]);
         if (!(nl > 0)) return false;
-        for (const t of grid.get(cellKey(Math.floor(q[0] / C), Math.floor(q[1] / C), Math.floor(q[2] / C))) ?? []) {
-            const f = tris[t];
-            if (not.length && (not.includes(f[0]) || not.includes(f[1]) || not.includes(f[2]))) continue;
-            const a = pos[f[0]], b = pos[f[1]], c = pos[f[2]];
-            if (Number.isNaN(M[t * 4 + 3])) { const mm = cross3(sub3(b, a), sub3(c, a)); M[t * 4] = mm[0]; M[t * 4 + 1] = mm[1]; M[t * 4 + 2] = mm[2]; M[t * 4 + 3] = Math.hypot(mm[0], mm[1], mm[2]); }
-            const m = [M[t * 4], M[t * 4 + 1], M[t * 4 + 2]], ml = M[t * 4 + 3];
-            if (!(ml > 0) || Math.abs(dot(m, n)) < 0.9 * ml * nl) continue;
-            const d = dot(sub3(q, a), m) / ml;
+        const list = grid.get(cellKey(Math.floor(q[0] / C), Math.floor(q[1] / C), Math.floor(q[2] / C)));
+        if (!list) return false;
+        for (const t of list) {
+            if (not.length) { const f = tris[t]; if (not.includes(f[0]) || not.includes(f[1]) || not.includes(f[2])) continue; }
+            const o = t * 13, m0 = T[o + 9], m1 = T[o + 10], m2 = T[o + 11], ml = T[o + 12];
+            if (!(ml > 0) || Math.abs(m0 * n[0] + m1 * n[1] + m2 * n[2]) < 0.9 * ml * nl) continue;
+            const ax = T[o], ay = T[o + 1], az = T[o + 2], bx = T[o + 3], by = T[o + 4], bz = T[o + 5], cx = T[o + 6], cy = T[o + 7], cz = T[o + 8];
+            const d = ((q[0] - ax) * m0 + (q[1] - ay) * m1 + (q[2] - az) * m2) / ml;
             if (Math.abs(d) > tol) continue;
-            const r = [q[0] - (m[0] * d) / ml, q[1] - (m[1] * d) / ml, q[2] - (m[2] * d) / ml];
-            const s1 = dot(cross3(sub3(b, a), sub3(r, a)), m), s2 = dot(cross3(sub3(c, b), sub3(r, b)), m), s3 = dot(cross3(sub3(a, c), sub3(r, c)), m);
+            const r0 = q[0] - (m0 * d) / ml, r1 = q[1] - (m1 * d) / ml, r2 = q[2] - (m2 * d) / ml;
+            const s1 = crossDot(bx - ax, by - ay, bz - az, r0 - ax, r1 - ay, r2 - az, m0, m1, m2);
+            const s2 = crossDot(cx - bx, cy - by, cz - bz, r0 - bx, r1 - by, r2 - bz, m0, m1, m2);
+            const s3 = crossDot(ax - cx, ay - cy, az - cz, r0 - cx, r1 - cy, r2 - cz, m0, m1, m2);
             if (s1 >= 0 && s2 >= 0 && s3 >= 0) return true;
         }
         return false;
@@ -884,7 +900,7 @@ export function stitchLattice(clay: Uint8Array, others: Uint8Array[], facades: F
     }
     // walls meeting at a building corner: the open edges of each facade's outline that found no scan (their vertices are that
     // wall's only), walked into chains, zipped by height to another facade's chain running beside them within cornerGapM
-    const usedEdge = new Set<string>();
+    const usedEdge = new Set<number>();
     for (const t of out) { const ids = t.map(p => w.idOf(Float32Array.from(p))!); for (let k = 0; k < 3; k++) usedEdge.add(ekey(ids[k], ids[(k + 1) % 3])); }
     const wallOf = new Map<number, number>();
     w.tris.forEach((f, i) => { if (w.wall[i] >= 0) for (const v of f) wallOf.set(v, w.wall[i]); });
@@ -929,7 +945,7 @@ export function stitchLattice(clay: Uint8Array, others: Uint8Array[], facades: F
     });
     report.stripTriangles = out.length;
     // a failed segment is joined after all when the corner zip (or another strip) used its wall edge; the rest are holes
-    const joined = new Set<string>();
+    const joined = new Set<number>();
     for (const t of out) { const ids = t.map(p => w.idOf(Float32Array.from(p))); for (let k = 0; k < 3; k++) if (ids[k] !== undefined && ids[(k + 1) % 3] !== undefined) joined.add(ekey(ids[k]!, ids[(k + 1) % 3]!)); }
     const unjoinedCells = new Map<number, Array<[number, number]>>();
     for (const x of failed) {
@@ -948,7 +964,8 @@ export interface FillReport { openBefore: number; kinds: Record<string, number>;
 /** The open loops left closed (the scan's holes, corners, the base: the bottom capped), counted again after. */
 export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /** The structure's footprint (plan loops [x, z]): a fill past it pokes out of the building. */ footprint?: Vec2[][] } = {}, P: LatticeStitchParams = LATTICE_STITCH_PARAMS): { clay: Buffer; others: Buffer[]; report: FillReport } {
     const w = welded(clay, P);
-    const owner = new Map<string, number>();
+    if (w.pos.length >= EDGE_BASE) throw new Error(`the infill keys edges by vertex ids under ${EDGE_BASE}; this mesh has ${w.pos.length} vertices`);
+    const owner = new Map<number, number>();
     const open = openEdges(w.tris, owner);
     const wallFacade = new Map<number, number>();
     w.tris.forEach((f, i) => { if (w.wall[i] >= 0) for (const v of f) wallFacade.set(v, w.wall[i]); });
@@ -957,7 +974,7 @@ export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /*
     // loops: trails over the open edges, split where a walk comes back to a vertex, turning to the nearest edge at a junction
     const adj = new Map<number, number[]>();
     for (const [a, b] of open) { (adj.get(a) ?? adj.set(a, []).get(a)!).push(b); (adj.get(b) ?? adj.set(b, []).get(b)!).push(a); }
-    const used = new Set<string>(), loops: number[][] = [];
+    const used = new Set<number>(), loops: number[][] = [];
     let openPathEdges = 0;
     const d2 = (a: number, b: number) => (w.pos[a][0] - w.pos[b][0]) ** 2 + (w.pos[a][1] - w.pos[b][1]) ** 2 + (w.pos[a][2] - w.pos[b][2]) ** 2;
     for (const [a0, b0] of open) {
@@ -993,15 +1010,15 @@ export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /*
     const out: number[][][] = [], addedFaces: number[][] = [];
     // the building's envelope before the fill: its top-down height map (the highest surface per cell) and its footprint;
     // a fill triangle above the one or outside the other (past envelopeMarginM) would poke out of the building
-    const cell = P.envelopeCellM, top = new Map<string, number>();
-    const ck = (x: number, z: number) => `${Math.floor(x / cell)},${Math.floor(z / cell)}`;
+    const cell = P.envelopeCellM, top = new Map<number | string, number>();
+    const ck = (x: number, z: number) => cellKey(Math.floor(x / cell), Math.floor(z / cell), 0);
     const raise = (x: number, y: number, z: number) => { const k = ck(x, z), o = top.get(k); if (o === undefined || y > o) top.set(k, y); };
     for (const f of w.tris) {
         const [a, b, c] = f.map(v => w.pos[v]);
         const steps = Math.min(30, Math.max(1, Math.ceil(Math.max(Math.hypot(b[0] - a[0], b[2] - a[2]), Math.hypot(c[0] - a[0], c[2] - a[2])) / cell)));
         for (let p = 0; p <= steps; p++) for (let q = 0; p + q <= steps; q++) { const u = p / steps, v = q / steps; raise(a[0] + (b[0] - a[0]) * u + (c[0] - a[0]) * v, a[1] + (b[1] - a[1]) * u + (c[1] - a[1]) * v, a[2] + (b[2] - a[2]) * u + (c[2] - a[2]) * v); }
     }
-    const topNear = (x: number, z: number) => { let m = -Infinity; const cx = Math.floor(x / cell), cz = Math.floor(z / cell); for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) { const y = top.get(`${cx + dx},${cz + dz}`); if (y !== undefined && y > m) m = y; } return m; };
+    const topNear = (x: number, z: number) => { let m = -Infinity; const cx = Math.floor(x / cell), cz = Math.floor(z / cell); for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) { const y = top.get(cellKey(cx + dx, cz + dz, 0)); if (y !== undefined && y > m) m = y; } return m; };
     // past the footprint is measured from the triangle's own corners: a hole among scan pieces already standing past it may
     // close at their distance, never further out
     const past = (p: ArrayLike<number>) => (opts.footprint?.length ? Math.max(0, outsideFootprint(p[0], p[2], opts.footprint)) : 0);
@@ -1159,7 +1176,7 @@ export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /*
         }
     });
     report.skinHiddenM2 = Math.round(report.skinHiddenM2);
-    const counts = new Map<string, number>();
+    const counts = new Map<number, number>();
     for (const f of [...w.tris, ...addedFaces]) for (let k = 0; k < 3; k++) { const e = ekey(f[k], f[(k + 1) % 3]); counts.set(e, (counts.get(e) ?? 0) + 1); }
     for (const c of counts.values()) { if (c % 2 === 1) report.openAfter++; else if (c > 2) report.nonManifoldAfter++; }
     for (const t of out) { const a = t[0], b = t[1], c = t[2]; const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2]; report.addedAreaM2 += 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx); }

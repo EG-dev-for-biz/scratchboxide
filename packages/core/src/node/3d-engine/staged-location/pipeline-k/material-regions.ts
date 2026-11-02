@@ -49,7 +49,7 @@ import { bandResponses, TEXTURE_BANDS_M, type TextureEnergy } from './material-h
 import type { FittedPlane } from '../window-fit';
 import { windowStrips } from '../facade-lattice';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/26';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/30';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /** Appearance classes, texels sampled per facade photo, k-means iterations, sampling seed. */
@@ -97,11 +97,13 @@ export interface RegionSet {
     distance: number;
     /** The tile-only harvest's pick (material-harvest.ts): the class's and the set's texture energy at the class's texel, the distances it was chosen by, and what of it is generated. */
     harvest?: { colourDistance: number; textureDistance: number; classEnergy: number[]; setEnergy: number[]; texelM: number; candidates: number; grain: string };
+    /** The pick by appearance (material-choice.ts): the candidates shown, whether the look or the ranking chose, what the chooser saw and why the ranking's nearest was kept. */
+    choice?: { candidates: string[]; by: 'appearance' | 'ranking'; seen?: string; conf?: number; why?: string };
 }
 
 export interface MaterialRegionsReport {
     version: string;
-    classes: Array<Pick<RegionClass, 'index' | 'meanLab' | 'share' | 'wall' | 'texture' | 'facades'> & { set: string; distance: number; harvest?: RegionSet['harvest'] }>;
+    classes: Array<Pick<RegionClass, 'index' | 'meanLab' | 'share' | 'wall' | 'texture' | 'facades'> & { set: string; distance: number; harvest?: RegionSet['harvest']; choice?: RegionSet['choice'] }>;
     facades: { total: number; withWindows: number; perFacade: Array<{ mesh: string; texelM: number; /** The window fit's windows (window-fit.ts) and the lattice's bays, the share of the facade the windows cover, and the share drawn as glass (the bays' texels off the wall's class). */ fittedWindows: number; bays: number; windowShare: number; glassShare: number; /** The share of the facade its structure covers (the wall's set there; the bays' infill takes the frame's). */ structureShare: number; /** The class the windows' frames and the bays' infill are drawn with. */ frameSet: string }> };
     /** Scan pieces: their texels on a fitted plane, in its windows and in its panes (shares of all their texels), and the planes drawn on them. */
     scanPieces: { total: number; onPlanes: number; windowShare: number; paneShare: number; planes: number[] };
@@ -126,10 +128,11 @@ export interface MaterialRegionsPlan { materials: PlannedMaterial[]; sets: Regio
 // ---- colour ----
 const LAB_CACHE = new Map<number, [number, number, number]>();
 function labOf(r: number, g: number, b: number): [number, number, number] {
-    // 5 bits a channel is finer than the classes need and keeps the cache small
+    // 5 bits a channel is finer than the classes need and keeps the cache small; the value is the bucket's own centre, so it
+    // never depends on which texel filled the cache first (and is the same on every worker thread)
     const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
     let v = LAB_CACHE.get(key);
-    if (!v) { v = linearRgbToLab([SRGB8_TO_LINEAR[r], SRGB8_TO_LINEAR[g], SRGB8_TO_LINEAR[b]]); LAB_CACHE.set(key, v); }
+    if (!v) { v = linearRgbToLab([SRGB8_TO_LINEAR[(r & ~7) | 4], SRGB8_TO_LINEAR[(g & ~7) | 4], SRGB8_TO_LINEAR[(b & ~7) | 4]]); LAB_CACHE.set(key, v); }
     return v;
 }
 const lumaOf = (rgba: Uint8Array, p: number) => 0.2126 * SRGB8_TO_LINEAR[rgba[p]] + 0.7152 * SRGB8_TO_LINEAR[rgba[p + 1]] + 0.0722 * SRGB8_TO_LINEAR[rgba[p + 2]];
@@ -475,37 +478,85 @@ function featherWeights(glass: ArrayLike<number>, W: number, H: number, ramp: nu
     return Float32Array.from(d, v => (v ? Math.min(1, v / Math.max(1, ramp)) : 0));
 }
 
-/**
- * Plans the maps of every photo-textured material (see the file comment). `sets[k]` is class k's set.
- */
-export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], sets: RegionSet[], planes: FittedPlane[] = [], P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS): MaterialRegionsPlan {
-    const t0 = Date.now();
-    const K = classes.length, WALL = K - 1;
-    const { rebuilt, other } = photoMaterials(json);
-    const planned: PlannedMaterial[] = [];
-    const report: MaterialRegionsReport = {
-        version: MATERIAL_REGIONS_VERSION,
-        classes: classes.map((c, k) => ({ index: c.index, meanLab: c.meanLab, share: c.share, wall: c.wall, set: sets[k].name, distance: Math.round(sets[k].distance * 100) / 100, ...(sets[k].harvest ? { harvest: sets[k].harvest } : {}), ...(c.texture ? { texture: c.texture, facades: c.facades } : {}) })),
-        facades: { total: rebuilt.size, withWindows: 0, perFacade: [] }, scanPieces: { total: other.size, onPlanes: 0, windowShare: 0, paneShare: 0, planes: [] }, texels: { total: 0, glass: 0 }, panesOnStone: 0, baysOnStone: 0, ms: 0
+/** One material's share of the plan: a rebuilt facade's photo, or a scan piece's (each photo planned once, the first material using it). */
+export interface MaterialPlanJob { kind: 'rebuilt' | 'scan'; material: number; mesh?: string }
+
+/** A job's planned maps and its part of the report, merged in job order (mergeMaterialPlan) so the plan is the same however the jobs ran. */
+export interface MaterialPlanPiece {
+    planned?: PlannedMaterial;
+    facade?: MaterialRegionsReport['facades']['perFacade'][number]; withWindows: boolean;
+    panesOnStone: number; baysOnStone: number; texels: { total: number; glass: number };
+    scan?: { texels: number; onPlane: number; inWindows: number; inPanes: number; planes: number[] };
+}
+
+/** What every job reads: the GLB, its photos, the classes and their sets, the fitted planes. */
+export interface MaterialPlanContext {
+    g: ParsedGlb; json: any; images: Map<number, RgbaImage8>; classes: RegionClass[]; sets: RegionSet[]; planes: FittedPlane[]; P: MaterialRegionsParams;
+    wallMean: [number, number, number]; setMeans: Array<[number, number, number]>;
+    /** Each plane's windows and bays rasterised in its ortho's pixels (built once, on first use). */
+    rasters: () => PlaneRaster[];
+}
+
+interface PlaneRaster { pl: FittedPlane; win: Uint8Array; bay: Int32Array; off: number; storey?: { pitch: number; phase: number }; /** The plane's fitted panes (their id across every plane), and the bays holding any of them. */ pane: Int32Array; panedBays: Set<number> }
+
+export function materialPlanContext(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], sets: RegionSet[], planes: FittedPlane[] = [], P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS): MaterialPlanContext {
+    let built: PlaneRaster[] | undefined;
+    const rasters = (): PlaneRaster[] => {
+        if (built) return built;
+        let bayBase = 0, paneBase = 0;
+        built = planes.map(pl => {
+            const win = new Uint8Array(pl.width * pl.height);
+            const uv = (rs: number[][]) => rs.flatMap(([x0, y0, x1, y1]) => [x0 / pl.width, y0 / pl.height, x1 / pl.width, y1 / pl.height]);
+            markRects(uv(pl.windows), pl.width, pl.height, win);
+            // the wall grammar's bays when it read this plane's wall, else the strips the plane's own windows make
+            const bayPx: number[][] = pl.bays ?? windowStrips(pl.windows.map(([x0, y0, x1, y1]) => [pl.orthoSMin + x0 * pl.pixel, pl.orthoTMax - y1 * pl.pixel, pl.orthoSMin + x1 * pl.pixel, pl.orthoTMax - y0 * pl.pixel] as [number, number, number, number]))
+                .map(([s0, t0, s1, t1]) => [(s0 - pl.orthoSMin) / pl.pixel, (pl.orthoTMax - t1) / pl.pixel, (s1 - pl.orthoSMin) / pl.pixel, (pl.orthoTMax - t0) / pl.pixel]);
+            const local = paneIdsOf(uv(bayPx), pl.width, pl.height, new Uint8Array(pl.width * pl.height).fill(1)), base = bayBase;
+            bayBase += bayPx.length;
+            const bay = Int32Array.from(local, v => (v ? v + base : 0));
+            const off = dot3(pl.centroid, pl.normal), storey = storeyPitchOf(uv(pl.windows), pl.width, pl.height);
+            const paneLocal = paneIdsOf(uv(pl.panes), pl.width, pl.height, new Uint8Array(pl.width * pl.height).fill(1)), pBase = paneBase;
+            paneBase += pl.panes.length;
+            const pane = Int32Array.from(paneLocal, v => (v ? v + pBase : 0));
+            const panedBays = new Set<number>();
+            for (let j = 0; j < pane.length; j++) if (pane[j] && bay[j]) panedBays.add(bay[j]);
+            return { pl, win, bay, off, storey, pane, panedBays };
+        });
+        return built;
     };
-    const done = new Set<number>();
+    return { g, json, images, classes, sets, planes, P, wallMean: meanOf(sets[sets.length - 1].orm), setMeans: sets.map(st => meanOf(st.orm)), rasters };
+}
+
+/** The plan's jobs, in the order the plan is merged: the rebuilt facades' photos, then the scan pieces' (each photo once). */
+export function materialPlanJobs(json: any, images: Map<number, RgbaImage8>): MaterialPlanJob[] {
+    const { rebuilt, other } = photoMaterials(json);
+    const done = new Set<number>(), jobs: MaterialPlanJob[] = [];
+    for (const [mi, mesh] of rebuilt) { const image = photoOf(json, mi)!.image; if (!images.get(image) || done.has(image)) continue; done.add(image); jobs.push({ kind: 'rebuilt', material: mi, mesh }); }
+    for (const mi of other) { const image = photoOf(json, mi)!.image; if (!images.get(image) || done.has(image)) continue; done.add(image); jobs.push({ kind: 'scan', material: mi }); }
+    return jobs;
+}
+
+/** Plans one job's maps (see the file comment): independent of every other job, so jobs can run on separate threads. */
+export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext): MaterialPlanPiece {
+    const { g, json, images, classes, sets, P } = ctx;
+    const K = classes.length, WALL = K - 1;
+    const piece: MaterialPlanPiece = { withWindows: false, panesOnStone: 0, baysOnStone: 0, texels: { total: 0, glass: 0 } };
     // dielectric everywhere: the set's roughness, metalness 0
     const write = (orm: RgbaImage8, params: RgbaImage8, k: number, r: number, glassWeight: number, seed = 255) => {
         orm.rgba[k * 4] = 255; orm.rgba[k * 4 + 1] = Math.round(r * 255); orm.rgba[k * 4 + 2] = 0; orm.rgba[k * 4 + 3] = 255;
         params.rgba[k * 4] = glassWeight; params.rgba[k * 4 + 2] = 0; params.rgba[k * 4 + 3] = seed;
-        report.texels.total++;
-        if (glassWeight) report.texels.glass++;
+        piece.texels.total++;
+        if (glassWeight) piece.texels.glass++;
     };
     const r3 = (v: number) => Math.round(v * 1000) / 1000;
+    const mi = job.material, img = images.get(photoOf(json, mi)!.image)!;
 
     // ---- rebuilt facades: wall, and the window fit's windows (panes glass, the rest their frame) ----
-    for (const [mi, mesh] of rebuilt) {
-        const photo = photoOf(json, mi)!, img = images.get(photo.image);
-        if (!img || done.has(photo.image)) continue;
-        done.add(photo.image);
+    if (job.kind === 'rebuilt') {
+        const mesh = job.mesh!;
         const { width: W, height: H } = img, N = W * H;
         const texelM = texelMetres(g, json, mi, img);
-        if (!(texelM > 0)) continue;
+        if (!(texelM > 0)) return piece;
         const fitted = fittedWindows(json, mesh) ?? [];
         const window = new Uint8Array(N), pane = new Uint8Array(N);
         const windowN = markRects(fitted, W, H, window);
@@ -518,7 +569,11 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
         const stoneN = runs ? markRects(runs, W, H, stone) : 0;
         const bays = structureBays(json, mesh) ?? [], bayId = paneIdsOf(bays, W, H, new Uint8Array(N).fill(1));
         const stoneBays = stonePanes(img, classes, bayId, P.paneWallShare);
-        const glassBay = (k: number) => !!bayId[k] && !stoneBays.has(bayId[k]);
+        // a bay holding fitted panes (the facade reader's punched windows) takes glass on its panes alone, its spandrels and
+        // mullions the frame's finish; a bay without is glass whole
+        const allPanes = paneIdsOf(fittedPanes(json, mesh) ?? [], W, H, new Uint8Array(N).fill(1)), panedBays = new Set<number>();
+        for (let k = 0; k < N; k++) if (allPanes[k] && bayId[k]) panedBays.add(bayId[k]);
+        const glassBay = (k: number) => !!bayId[k] && !stoneBays.has(bayId[k]) && (!panedBays.has(bayId[k]) || !!allPanes[k]);
         let paneN = 0;
         // each bay's glass tilted storey by storey (the facade's own storey pitch, from its fitted windows), so a glint covers a
         // storey's glass, not a whole bay
@@ -531,8 +586,8 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
         for (let k = 0; k < N; k++) loose[k] = window[k] && !glassBay(k) ? 1 : 0;
         const paneIds = paneIdsOf(fittedPanes(json, mesh) ?? [], W, H, loose), stoneIds = stonePanes(img, classes, paneIds, P.paneWallShare);
         for (let k = 0; k < N; k++) if (paneIds[k] && !stoneIds.has(paneIds[k])) { pane[k] = paneSeed(100000 + paneIds[k]); paneN++; }
-        report.panesOnStone += stoneIds.size;
-        report.baysOnStone += stoneBays.size;
+        piece.panesOnStone += stoneIds.size;
+        piece.baysOnStone += stoneBays.size;
         const framed = (k: number) => !pane[k] && (!!bayId[k] || !!window[k]);
         // the frame: its most common class other than the wall, among the bays' texels that are not glass and the windows'
         let frameClass = WALL;
@@ -564,41 +619,22 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
             write(orm, params, k, t.o[j + 1], 0);
             nrm.rgba.set([Math.round(t.n[j] * 255), Math.round(t.n[j + 1] * 255), Math.round(t.n[j + 2] * 255), 255], k * 4);
         }
-        if (windowN) report.facades.withWindows++;
-        report.facades.perFacade.push({
+        piece.withWindows = windowN > 0;
+        piece.facade = {
             mesh, texelM: Math.round(texelM * 1e4) / 1e4, fittedWindows: fitted.length / 4, bays: bays.length / 4,
             windowShare: r3(windowN / N), glassShare: r3(paneN / N), structureShare: r3(stoneN / N), frameSet: sets[frameClass].name
-        });
-        planned.push({ material: mi, orm, normal: nrm, params, rebuilt: true, glass: paneN > 0 });
+        };
+        piece.planned = { material: mi, orm, normal: nrm, params, rebuilt: true, glass: paneN > 0 };
+        return piece;
     }
 
     // ---- scan pieces: the wall set's mean finish, and the window fit's windows of the plane a piece lies on ----
-    // each plane's windows (1) and bays (their id across every plane) rasterised in its ortho's pixels: the bays the window
-    // strips the lattice would draw from the plane's windows (windowStrips, in the plane's metres)
-    let bayBase = 0;
-    const rasters = planes.map(pl => {
-        const win = new Uint8Array(pl.width * pl.height);
-        const uv = (rs: number[][]) => rs.flatMap(([x0, y0, x1, y1]) => [x0 / pl.width, y0 / pl.height, x1 / pl.width, y1 / pl.height]);
-        markRects(uv(pl.windows), pl.width, pl.height, win);
-        // the wall grammar's bays when it read this plane's wall, else the strips the plane's own windows make
-        const bayPx: number[][] = pl.bays ?? windowStrips(pl.windows.map(([x0, y0, x1, y1]) => [pl.orthoSMin + x0 * pl.pixel, pl.orthoTMax - y1 * pl.pixel, pl.orthoSMin + x1 * pl.pixel, pl.orthoTMax - y0 * pl.pixel] as [number, number, number, number]))
-            .map(([s0, t0, s1, t1]) => [(s0 - pl.orthoSMin) / pl.pixel, (pl.orthoTMax - t1) / pl.pixel, (s1 - pl.orthoSMin) / pl.pixel, (pl.orthoTMax - t0) / pl.pixel]);
-        const local = paneIdsOf(uv(bayPx), pl.width, pl.height, new Uint8Array(pl.width * pl.height).fill(1)), base = bayBase;
-        bayBase += bayPx.length;
-        const bay = Int32Array.from(local, v => (v ? v + base : 0));
-        const off = dot3(pl.centroid, pl.normal), storey = storeyPitchOf(uv(pl.windows), pl.width, pl.height);
-        return { pl, win, bay, off, storey };
-    });
-    const wallMean = meanOf(sets[WALL].orm), setMeans = sets.map(st => meanOf(st.orm));
-    let scanN = 0, onPlane = 0, inWindows = 0, inPanes = 0;
-    const used = new Set<number>();
-    for (const mi of other) {
-        const photo = photoOf(json, mi)!, img = images.get(photo.image);
-        if (!img || done.has(photo.image)) continue;
-        done.add(photo.image);
+    const used = new Set<number>(), scan = { texels: 0, onPlane: 0, inWindows: 0, inPanes: 0, planes: [] as number[] };
+    {
         const { width: W, height: H } = img, N = W * H;
         // per texel: on a plane (1), in a window (2), or the pane's seed (in pane)
-        const on = new Uint8Array(N), win = new Uint8Array(N), bayId = new Int32Array(N), storeyOf = new Int32Array(N), pane = new Uint8Array(N);
+        const on = new Uint8Array(N), win = new Uint8Array(N), bayId = new Int32Array(N), storeyOf = new Int32Array(N), pane = new Uint8Array(N), onPane = new Uint8Array(N), paneAt = new Int32Array(N), paned = new Uint8Array(N);
+        const rasters = ctx.rasters();
         if (rasters.length) forEachTriangleOf(g, json, mi, (p, uv) => {
             const ux = p[3] - p[0], uy = p[4] - p[1], uz = p[5] - p[2], vx = p[6] - p[0], vy = p[7] - p[1], vz = p[8] - p[2];
             const nn = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx], nl = Math.hypot(nn[0], nn[1], nn[2]);
@@ -625,13 +661,19 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
                 if (x < 0 || y < 0 || x >= pl.width || y >= pl.height) return;
                 const j = y * pl.width + x;
                 if (best!.win[j]) win[k] = 1;
-                if (best!.bay[j]) { bayId[k] = best!.bay[j]; storeyOf[k] = best!.storey ? Math.floor((y - best!.storey.phase) / best!.storey.pitch) : 0; }
+                if (best!.bay[j]) { bayId[k] = best!.bay[j]; storeyOf[k] = best!.storey ? Math.floor((y - best!.storey.phase) / best!.storey.pitch) : 0; if (best!.panedBays.has(best!.bay[j])) paned[k] = 1; }
+                if (best!.pane[j]) { onPane[k] = 1; paneAt[k] = best!.pane[j]; }
             });
         });
         // glass by the plane's bays: a bay whose texels here are mostly not the wall's class is glass whole
         const stoneBays = stonePanes(img, classes, bayId, P.paneWallShare);
-        for (let k = 0; k < N; k++) if (bayId[k] && !stoneBays.has(bayId[k])) pane[k] = paneSeed((bayId[k] - 1) * 997 + storeyOf[k] + 500);
-        report.baysOnStone += stoneBays.size;
+        for (let k = 0; k < N; k++) if (bayId[k] && !stoneBays.has(bayId[k]) && (!paned[k] || onPane[k])) pane[k] = paneSeed((bayId[k] - 1) * 997 + storeyOf[k] + 500);
+        piece.baysOnStone += stoneBays.size;
+        // a fitted pane outside every bay (a row of windows, no strip to make a bay) is glass, as on a rebuilt facade, less a
+        // pane most of whose texels here are the wall's class
+        const loose = Int32Array.from(paneAt, (v, k) => (v && !bayId[k] ? v : 0)), stoneLoose = stonePanes(img, classes, loose, P.paneWallShare);
+        for (let k = 0; k < N; k++) if (loose[k] && !stoneLoose.has(loose[k])) pane[k] = paneSeed(100000 + loose[k]);
+        piece.panesOnStone += stoneLoose.size;
         // the windows' frame: the most common class other than the wall among their texels that are not pane
         let frameClass = WALL;
         const frameMask = Uint8Array.from(win, (v, k) => ((v || bayId[k]) && !pane[k] ? 1 : 0));
@@ -643,18 +685,51 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
         const orm = blank(W, H), params = blank(W, H);
         const scanTexelM = texelMetres(g, json, mi, img), fw = featherWeights(pane, W, H, scanTexelM > 0 ? P.glassFeatherM / scanTexelM : 1);
         for (let k = 0; k < N; k++) {
-            const r = (pane[k] || win[k] || bayId[k] ? setMeans[frameClass] : wallMean)[1];
+            const r = (pane[k] || win[k] || bayId[k] ? ctx.setMeans[frameClass] : ctx.wallMean)[1];
             if (pane[k]) write(orm, params, k, r + (GLASS_ROUGHNESS - r) * fw[k], Math.max(1, Math.round(P.paneGlassWeight * fw[k])), pane[k]);
             else write(orm, params, k, r, 0);
-            onPlane += on[k]; inWindows += win[k]; if (pane[k]) inPanes++;
+            scan.onPlane += on[k]; scan.inWindows += win[k]; if (pane[k]) scan.inPanes++;
         }
-        scanN += N;
-        planned.push({ material: mi, orm, params, rebuilt: false, glass: pane.some(v => v) });
+        scan.texels = N;
+        piece.planned = { material: mi, orm, params, rebuilt: false, glass: pane.some(v => v) };
+    }
+    scan.planes = [...used];
+    piece.scan = scan;
+    return piece;
+}
+
+/** The plan from its jobs' pieces, in job order. */
+export function mergeMaterialPlan(json: any, classes: RegionClass[], sets: RegionSet[], pieces: MaterialPlanPiece[], ms: number): MaterialRegionsPlan {
+    const { rebuilt, other } = photoMaterials(json);
+    const report: MaterialRegionsReport = {
+        version: MATERIAL_REGIONS_VERSION,
+        classes: classes.map((c, k) => ({ index: c.index, meanLab: c.meanLab, share: c.share, wall: c.wall, set: sets[k].name, distance: Math.round(sets[k].distance * 100) / 100, ...(sets[k].harvest ? { harvest: sets[k].harvest } : {}), ...(sets[k].choice ? { choice: sets[k].choice } : {}), ...(c.texture ? { texture: c.texture, facades: c.facades } : {}) })),
+        facades: { total: rebuilt.size, withWindows: 0, perFacade: [] }, scanPieces: { total: other.size, onPlanes: 0, windowShare: 0, paneShare: 0, planes: [] }, texels: { total: 0, glass: 0 }, panesOnStone: 0, baysOnStone: 0, ms
+    };
+    const planned: PlannedMaterial[] = [], used = new Set<number>();
+    let scanN = 0, onPlane = 0, inWindows = 0, inPanes = 0;
+    for (const p of pieces) {
+        if (p.planned) planned.push(p.planned);
+        if (p.withWindows) report.facades.withWindows++;
+        if (p.facade) report.facades.perFacade.push(p.facade);
+        report.panesOnStone += p.panesOnStone; report.baysOnStone += p.baysOnStone;
+        report.texels.total += p.texels.total; report.texels.glass += p.texels.glass;
+        if (p.scan) { scanN += p.scan.texels; onPlane += p.scan.onPlane; inWindows += p.scan.inWindows; inPanes += p.scan.inPanes; for (const id of p.scan.planes) used.add(id); }
     }
     const share = (v: number) => (scanN ? Math.round((v / scanN) * 1e4) / 1e4 : 0);
     report.scanPieces = { total: other.size, onPlanes: share(onPlane), windowShare: share(inWindows), paneShare: share(inPanes), planes: [...used].sort((a, b) => a - b) };
-    report.ms = Date.now() - t0;
     return { materials: planned, sets, report };
+}
+
+/**
+ * Plans the maps of every photo-textured material (see the file comment). `sets[k]` is class k's set. One thread; the
+ * pipeline runs the same jobs across worker threads (material-regions-pool.ts) with the same result.
+ */
+export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], sets: RegionSet[], planes: FittedPlane[] = [], P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS): MaterialRegionsPlan {
+    const t0 = Date.now();
+    const ctx = materialPlanContext(g, json, images, classes, sets, planes, P);
+    const pieces = materialPlanJobs(json, images).map(j => planMaterialJob(j, ctx));
+    return mergeMaterialPlan(json, classes, sets, pieces, Date.now() - t0);
 }
 
 /**
@@ -691,6 +766,41 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
         json.extensionsUsed = json.extensionsUsed.filter((e: string) => e !== 'KHR_materials_unlit');
         if (!json.extensionsUsed.length) delete json.extensionsUsed;
     }
+}
+
+/**
+ * The appearance classes as a picture, for a vision model to name them (material-naming.ts) and to choose their library
+ * sets by their look (material-choice.ts): one row a class, up to
+ * `perClass` patches of the harmonised rebuilt facade photos where that class covers most of the patch (each texel given
+ * to its nearest class, as the classes were read), scaled up `zoom` times, on white. The rows follow `classes`' order.
+ */
+export function classSwatchSheet(json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], opts: { patch?: number; perClass?: number; zoom?: number; seed?: number; /** The parsed GLB: the patches' real size measured (`spanM`). */ g?: ParsedGlb } = {}): { width: number; height: number; rgba: Uint8Array; /** The median real size of a patch, metres (with `g`). */ spanM?: number } | undefined {
+    const patch = opts.patch ?? 24, per = opts.perClass ?? 6, zoom = opts.zoom ?? 4, gap = 8;
+    const { rebuilt } = photoMaterials(json);
+    const texel = new Map<RgbaImage8, number>();
+    const photos = [...rebuilt.keys()].map(mi => { const img = images.get(photoOf(json, mi)!.image); if (img && opts.g && !texel.has(img)) texel.set(img, texelMetres(opts.g, json, mi, img)); return img; }).filter((x): x is RgbaImage8 => !!x && x.width > patch && x.height > patch);
+    if (!photos.length || !classes.length) return undefined;
+    const nearest = (r: number, g: number, b: number) => { const L = labOf(r, g, b); let best = 0, bd = Infinity; classes.forEach((c, k) => { const d = (L[0] - c.meanLab[0]) ** 2 + (L[1] - c.meanLab[1]) ** 2 + (L[2] - c.meanLab[2]) ** 2; if (d < bd) { bd = d; best = k; } }); return best; };
+    const found: Array<Array<{ img: RgbaImage8; x: number; y: number }>> = classes.map(() => []);
+    const rnd = sampler(opts.seed ?? 11);
+    for (let tries = 0; tries < 4000 && found.some(f => f.length < per); tries++) {
+        const img = photos[tries % photos.length], x = Math.floor(rnd() * (img.width - patch)), y = Math.floor(rnd() * (img.height - patch));
+        const count = new Array<number>(classes.length).fill(0);
+        let covered = 0;
+        for (let yy = y; yy < y + patch; yy += 2) for (let xx = x; xx < x + patch; xx += 2) { const q = (yy * img.width + xx) * 4; if (!img.rgba[q + 3]) continue; covered++; count[nearest(img.rgba[q], img.rgba[q + 1], img.rgba[q + 2])]++; }
+        if (covered < 0.9 * (patch / 2) ** 2) continue;
+        const k = count.indexOf(Math.max(...count));
+        if (count[k] >= 0.7 * covered && found[k].length < per) found[k].push({ img, x, y });
+    }
+    const cell = patch * zoom, W = per * (cell + gap) + gap, H = classes.length * (cell + gap) + gap, out = new Uint8Array(W * H * 4).fill(255);
+    found.forEach((row, r) => row.forEach((p, c) => {
+        for (let y = 0; y < cell; y++) for (let x = 0; x < cell; x++) {
+            const sq = ((p.y + Math.floor(y / zoom)) * p.img.width + p.x + Math.floor(x / zoom)) * 4, dq = ((gap + r * (cell + gap) + y) * W + gap + c * (cell + gap) + x) * 4;
+            out[dq] = p.img.rgba[sq]; out[dq + 1] = p.img.rgba[sq + 1]; out[dq + 2] = p.img.rgba[sq + 2]; out[dq + 3] = 255;
+        }
+    }));
+    const spans = found.flat().map(p => patch * (texel.get(p.img) ?? 0)).filter(v => v > 0).sort((a, b) => a - b);
+    return { width: W, height: H, rgba: out, ...(spans.length ? { spanM: spans[spans.length >> 1] } : {}) };
 }
 
 /** One line for the build's notes. */

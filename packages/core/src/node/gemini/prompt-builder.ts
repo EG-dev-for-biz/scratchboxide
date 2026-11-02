@@ -21,6 +21,8 @@ import { OBJECT_BUILD_SOURCE, type BuiltObjectRecord } from '../../common/spatia
 import { stagedBuildContext } from '../3d-engine/staged-location/staged-summary';
 import { SB_API_SUMMARY } from '../3d-engine/sb-api.generated';
 import { toolOfferMode } from './tool-catalog';
+import { canCreatePrimitive, isScopedTo3dVfx } from '../../common/product-scope';
+import { summarizeSceneStateForAgent } from '../../browser/generative-canvas/lenses/Scene3DWorldLens';
 
 /** Workspace-intelligence services the system instruction draws context from. */
 export interface PromptContextServices {
@@ -408,6 +410,93 @@ Output complete, high-quality, fully runnable React 19 code with Tailwind CSS, L
 \`\`\`
 `;
 
+/** What the model is told in the 3D/VFX build (common/product-scope.ts), ahead of the canvas specification. */
+export const PRODUCT_SCOPE_SECTION = `
+### PRODUCT SCOPE (THIS BUILD: 3D AND VFX ONLY):
+This build of Scratchbox makes two kinds of canvas: 3D scenes ("3d-scene") and video timelines ("video-timeline"). The app opens a scene's node graph and studio browser pages by itself; never create those. Documents, code sandboxes and micro-apps, dashboards, kanban boards, forms, checklists, mind maps and hubs are not available: mount_canvas_primitive and morph_canvas_primitive refuse them, and a tag or JSON block of those types is not opened. Wherever other instructions here mention those types, they do not apply in this build. When a request would need one, answer in the chat (prose, tables and inline images are fine), say in one sentence that this build is limited to 3D and VFX projects, and offer the 3D or video route that fits, if there is one.
+`;
+
+/** The 3D scene's picture rule in the 3D/VFX build, where there are no documents to hold a picture. */
+const SCOPED_PICTURE_RULE = `      - When the user asks for a picture, image, photo, illustration, painting, drawing, storyboard frame or concept art:
+        Make it with the generate_image tool and show it in your chat reply as a markdown image ![title](url), using the url the tool returns, with a short caption. This build has no documents to hold pictures.
+        The result says which model answered and that the picture is generated. If generate_image fails, say so: never show a placeholder or a made-up URL.
+        Do not revise an open "3d-scene" for a picture request.`;
+
+/** Persona lines that push work into a code sandbox, dropped in the 3D/VFX build. */
+const SANDBOX_PUSH_MARKERS = [
+    'CODE-FIRST UNIVERSAL APPLICATION CREATION',
+    "eagerly mount an interactive 'live-code-sandbox'",
+    'IN-SITU VISUAL PIN REFINEMENT',
+    'ENCAPSULATED VIRTUAL SDK'
+];
+
+/**
+ * The canvas specification for the 3D/VFX build: the entries for the types people can make there (picked by type
+ * name, never by words in a prompt), the tag and envelope formats without the sandbox example, and pictures shown in
+ * the chat reply instead of a document.
+ */
+export function scopedCanvasSpecification(spec: string = CANVAS_PRIMITIVES_SPECIFICATION): string {
+    const blocks: string[][] = [];
+    for (const line of spec.split('\n')) {
+        if (blocks.length === 0 || specEntryHead(line) || line.startsWith('### ')) blocks.push([line]);
+        else blocks[blocks.length - 1].push(line);
+    }
+    const kept: string[] = [];
+    let entryNumber = 0;
+    for (const block of blocks) {
+        const head = block[0];
+        const entry = specEntryHead(head);
+        if (entry) {
+            if (!canCreatePrimitive(entry.type, '3d-vfx')) continue;
+            entryNumber += 1;
+            kept.push(`${entryNumber}.${entry.rest}`, ...withScopedMediaRules(block.slice(1)));
+        } else if (head.startsWith('### THE ')) {
+            kept.push('### THE SCRATCHBOX CANVAS PRIMITIVES IN THIS BUILD (3D AND VFX ONLY):', ...block.slice(1));
+        } else if (head.startsWith('### UNBOUNDED GENERATIVE MICRO-APPS')) {
+            continue;
+        } else if (head.startsWith('### UNIFIED ARTIFACT TAG')) {
+            const start = block.findIndex(l => l.startsWith('For `live-code-sandbox`'));
+            const end = start < 0 ? -1 : block.findIndex((l, i) => i > start && l.trim() === '</scratchboxPrimitive>');
+            kept.push(...(start < 0 || end < 0 ? block : [...block.slice(0, start), ...block.slice(end + 1)]));
+        } else {
+            kept.push(...block);
+        }
+    }
+    return kept.join('\n');
+}
+
+/** A numbered spec entry's head (`11. "3d-scene" (or ...):`): its type and the text after its number. */
+function specEntryHead(line: string): { type: string; rest: string } | undefined {
+    const dot = line.indexOf('. "');
+    const number = line.slice(0, dot);
+    if (dot < 1 || [...number].some(c => c < '0' || c > '9')) return undefined;
+    const close = line.indexOf('"', dot + 3);
+    return close > dot + 3 ? { type: line.slice(dot + 3, close), rest: line.slice(dot + 1) } : undefined;
+}
+
+/** A spec entry's lines with the document picture rule replaced by the chat one and the video-article rule dropped. */
+function withScopedMediaRules(lines: string[]): string[] {
+    const out = [...lines];
+    const article = out.findIndex(l => l.includes('When the user asks for a written article'));
+    if (article >= 0) out.splice(article, 2);
+    const picture = out.findIndex(l => l.includes("illustrated editorial 'picture'"));
+    const video = out.findIndex(l => l.includes('When the user asks for VIDEO EDITING'));
+    if (picture >= 0 && video > picture) out.splice(picture, video - picture, SCOPED_PICTURE_RULE);
+    return out;
+}
+
+/**
+ * A creating persona (agent or studio chat) for the 3D/VFX build: the scope note ahead of the scoped specification,
+ * without the lines that push work into a code sandbox.
+ */
+export function scopedPersona(persona: string): string {
+    return persona
+        .split(CANVAS_PRIMITIVES_SPECIFICATION).join(`${PRODUCT_SCOPE_SECTION}\n${scopedCanvasSpecification()}`)
+        .split('\n')
+        .filter(line => !SANDBOX_PUSH_MARKERS.some(marker => line.includes(marker)))
+        .join('\n');
+}
+
 
 /**
  * One policy for every prompt in the modes that offer the 3D tools (not Plan or Ask, which offer only read-only
@@ -422,7 +511,6 @@ Decide from the meaning of the request, not from particular words, which case ap
 - Vegetation in any scene is SB-Veggie trees: alone (a tree, a grove), call botanical_synthesize_tree; in a scripted scene, sb.create_tree in the script; a staged place regrows its own. Never model trees or foliage from other shapes.
 - An imagined environment, a landscape, or a scene of several objects (anything that is neither one object nor a real place): write an sb Python script and run it with execute_3d_python_script. Call read_sb_script_guide before writing the script unless its rules ("WRITING SB PYTHON SCRIPTS") are already in these instructions.
 - A real-world place (landmark, building, street, district, address or coordinates) and nothing else to build: call google_3d_tiles_get_clay with the place as query. It geocodes the place with Google Places and stages its Google 3D Tiles remeshed, with the trees measured in the tiles regrown in place as SB-Veggie trees (its streets stay the scanned tiles for now: SB-Roadie road resurfacing is shelved); the clay massing shows first and the viewport crossfades to the real textures on its own as the background texture pass finishes them (pass trees: false only when the user asks for no trees); tell the user the address it resolved and what its result says it contains, nothing more. Pass isolate: true when the user wants one building or structure rather than the area around it, and radiusMeters when they give an extent. Use google_3d_tiles_get_full_texture only when they ask for photo texture.
-- To make an isolated procedural building (isolate: true with procedural true or a procedural pipeline named) closer to the real one after it is staged: the result's buildingBrief.path names a JSON written beside the build (massing footprint and heights, roof planes, what the scan measured standing on the roof, every wall and roof face's frame, the facades a sawtooth footprint was grouped into, every survey station's pose and its own photograph, every wall plate's colour and relief image with what was read off it and how well that reading explains it, the roof plate, and the build's own clay and textured GLBs). Read that path directly with workspace_view_file; never search the workspace for it, the path is already given. Then open a handful of the station renders and plate images it lists with workspace_view_image, the walls its readings judged weak first (a plate's readingFit.weak, or a low readingFit.explains). In execute_3d_python_script, load the build itself with sb.read_glb on the brief's build.clayGlb so the script sculpts onto what already stands rather than starting over, and add, extrude, bevel and sweep what the images show and the build still lacks (piers, bays, arched openings, cornices, a skylight) before sb.io.write_glb. Look at a render of that result beside the same survey images, judge what still differs, and repeat only where it still falls short, calling workspace_view_image again only for what changed rather than the whole set each round.
 - One object at a real-world place: call build_3d_object_from_reference with location set to the place and placement set to where the object stands relative to the place's geocoded anchor (metres east and north of it, and the compass heading its front faces), worked out from what the user said, such as in front of an entrance or across a square. The anchor is often the middle of a building, so an object meant to stand beside it needs an offset. When the active scene already shows that place (google_3d_tiles_get_clay staged it, or objects were built there), pass addToActiveScene: true so the object joins that scene instead of the place being staged again.
 - Several objects at a real-world place: call build_3d_object_from_reference once per object, each with the same location and its own placement. While the active scene is an object build staged at that location, each call adds its object beside the objects already there. Leave room for each object's whole size: a placement under a tree crown or on top of another object fails before anything is built, and an object that would pass through a crown, a trunk, another object or a wall fails after its build; both name spots where it fits, and the second returns the spec to rebuild there with specJson.
 Never supply coordinates from memory: pass the place name or address (or coordinates the user gave) and let the tool geocode it. Do not build real places with scripts.
@@ -718,6 +806,7 @@ You pair-program with the user to explore, plan, implement, and verify code chan
    - GUARDRAIL: NEVER search or edit internal IDE runtime directories (such as 'dist-electron/', 'packages/core/', or 'node_modules/') to satisfy user canvas creation prompts. Canvas creations are self-contained artifacts rendered directly in the stage via canvas primitives.
 8. Gaussian Splats of Real Places:
    - A Gaussian splat (3DGS) of a real place is built by the survey pipeline, which the user does not need to name: extract the place (google_3d_tiles_get_full_texture), place camera stations around it (survey_synthesize_stations), then run survey_beautify_to_splats on that GLB and stations JSON. Mount only the splat tileset that survey_beautify_to_splats returns; never mount a splat path or tileset a tool did not produce.
+   - A splat a person stands in at street level ("standing on the west sidewalk of 7th Ave at the Penn Station entrance, looking east across the avenue") is one call to location_generate_3dgs: \`location\` is the corner of that street and the cross street nearest the spot, from what you know of the place ("7th Avenue & West 32nd Street, New York"; a landmark's name resolves to the landmark's own point, often on another of its streets), \`vantageSideDeg\` the compass direction from the street to the sidewalk they stand on (west 270), and \`vantageHeadingDeg\` the compass direction they look (east 90; leave it out for "across the street"). Read the words as compass directions as said; the tool places the viewer on the sidewalk and turns a heading near "across" onto the street's own grid. Report where it put the viewer, from its result.
 
 ${CANVAS_PRIMITIVES_SPECIFICATION}`;
     } else if (isAsk) {
@@ -743,6 +832,10 @@ You pair-program, research topics, and generate live interactive visual canvas p
 ${CANVAS_PRIMITIVES_SPECIFICATION}
 `;
     }
+
+    // The 3D/VFX build (common/product-scope.ts) describes only the canvases it makes; Plan and Ask create none.
+    const scoped = isScopedTo3dVfx() && !isPlan && !isAsk;
+    if (scoped) basePersona = scopedPersona(basePersona);
 
     let superpowersSection = '';
     if (request.attachedSkills && request.attachedSkills.length > 0) {
@@ -846,7 +939,7 @@ ${CANVAS_PRIMITIVES_SPECIFICATION}
 You have direct, sandboxed function-calling access to the developer's workspace and terminal.${toolOfferMode() === 'catalog' ? `
 Tools not yet declared are listed in load_tools: load the ones a task needs by name, then call them.` : ''}
 Available workspace tools:
-- mount_canvas_primitive: Declaratively mount an interactive visual canvas primitive on the stage (3D scene, live code sandbox, kanban board, markdown document, or node graph).
+- mount_canvas_primitive: Declaratively mount an interactive visual canvas primitive on the stage (${scoped ? '3D scene or video timeline' : '3D scene, live code sandbox, kanban board, markdown document, or node graph'}).
 - ask_user_question: Ask the user a structured multiple-choice question with answer options, radio/checkboxes, and an optional recommended path when requirements are ambiguous.
 - present_execution_plan: Present a structured confirmation plan card with steps and deliverables before executing expensive multi-step tasks.
 - workspace_read_file: Inspect disk contents and slice line ranges.
@@ -1001,41 +1094,7 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
             userPrompt += `\n[Active Document Content: ${JSON.stringify({ title: docData.title, sections: docData.sections }).slice(0, 3000)}]`;
         } else if (request.activeArtifact.type === '3d-scene' && request.activeArtifact.data) {
             const sceneData = request.activeArtifact.data as Scene3DData;
-            const objectsSummary = (sceneData.customMeshes || []).map(m => ({
-                id: m.id,
-                name: m.name || m.id,
-                type: m.type,
-                position: m.position,
-                rotation: m.rotation,
-                scale: m.scale,
-                material: m.material
-            }));
-            const media4dSummary = (sceneData.objects || []).map(o => ({
-                id: o.id,
-                space: o.space?.spatial3d,
-                role: o.content?.metadata?.role,
-                source: o.content?.metadata?.source,
-                resolvedAddress: o.content?.metadata?.resolvedAddress || o.content?.metadata?.location,
-                isGround: o.content?.metadata?.isGround,
-                dims: o.content?.metadata?.dims,
-                durableUri: o.content?.durableUri,
-                boundingBox: o.content?.metadata?.boundingBox,
-                restyledFrom: o.content?.metadata?.restyledFrom
-            }));
-            const sceneSummary = {
-                title: sceneData.title,
-                subtitle: sceneData.subtitle,
-                renderMode: sceneData.renderMode,
-                camera: sceneData.camera,
-                environment: sceneData.environment,
-                groundDatum: (sceneData as any).groundDatum,
-                geoAnchor: (sceneData as any).geoAnchor,
-                sculptSettings: sceneData.sculptSettings,
-                features: sceneData.features,
-                customMeshes: objectsSummary,
-                objects: media4dSummary,
-                recentOperators: (sceneData.operatorStack || []).slice(-10)
-            };
+            const sceneSummary = summarizeSceneStateForAgent(sceneData);
             // a staged location build on the canvas: its run state, degradations and retry handle, ahead of the capped summary
             userPrompt += stagedBuildContext(sceneData);
             userPrompt += `\n[Active 3D Scene In-Memory State: ${JSON.stringify(sceneSummary).slice(0, 5000)}]`;

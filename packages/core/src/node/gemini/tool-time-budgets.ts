@@ -16,6 +16,8 @@
  * Kept off ToolDeclaration on purpose: declarations are sent to Gemini verbatim.
  */
 
+import { stagedDistrict } from '../3d-engine/staged-location/staged-switches';
+
 export interface ToolTimeBudget {
     /** Hard ceiling for one call, in ms. */
     maxMs: number;
@@ -35,14 +37,23 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     survey_harvest_swatches: { maxMs: 90 * MIN, idleMs: 10 * MIN },
     // the same harvest when no swatch library is given, then the atlas bake (minutes for a few hundred atlases)
     tile_detail_bake: { maxMs: 90 * MIN, idleMs: 10 * MIN },
-    location_generate_3dgs: { maxMs: 60 * MIN, idleMs: 10 * MIN },
+    // with a street vantage, up to 6 panos x 4 views of street stations (four at a time) come before the survey's chain
+    location_generate_3dgs: args => (typeof args.vantageHeadingDeg === 'number' || typeof args.vantageSideDeg === 'number')
+        ? { maxMs: 120 * MIN, idleMs: 15 * MIN }
+        : { maxMs: 60 * MIN, idleMs: 10 * MIN },
     // The headless-Chrome tile runner allows itself up to ~38 min for a 72-frame orbit and has its own startup
     // and inactivity watchdogs; the blockout runner adds ffmpeg encodes (10 min cap each).
     // A district (no isolate) rebuilds every building the scan confirms: its massing alone may take 125 min
     // (orchestrator.ts DISTRICT_RUN_BUDGET_MS, 140 min, plus the run's 2 min margin).
     // Pipeline K-D builds a large district as chunks, each a district build of its own, several at a time
     // (orchestrator.ts CHUNKED_DISTRICT_RUN_BUDGET_MS, 360 min, plus the margin).
-    google_3d_tiles_get_clay: args => ({ maxMs: args.isolate === true ? 40 * MIN : args.pipeline === 'kd' ? 362 * MIN : 142 * MIN }),
+    // kd is a district's look: the call's district (or its pipeline 'kd'), which overrides isolate, else
+    // SCRATCHBOX_STAGED_DISTRICT=kd for a call without isolate.
+    google_3d_tiles_get_clay: args => {
+        const asked = typeof args.district === 'string' ? args.district : args.pipeline === 'kd' ? 'kd' : undefined;
+        const kd = asked !== undefined ? stagedDistrict({ district: asked }) === 'kd' : args.isolate !== true && stagedDistrict({}) === 'kd';
+        return { maxMs: kd ? 362 * MIN : args.isolate === true ? 40 * MIN : 142 * MIN };
+    },
     google_3d_tiles_get_full_texture: { maxMs: 40 * MIN },
     google_3d_tiles_clay_blockout_runner: { maxMs: 60 * MIN },
     // With a location it ingests 3D Tiles (above) before running the script.

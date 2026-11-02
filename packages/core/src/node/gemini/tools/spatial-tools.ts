@@ -225,8 +225,18 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 pipeline: {
                     type: 'STRING',
-                    enum: ['g', 'h', 'i', 'j', 'k', 'kd'],
-                    description: 'Which pipeline rebuilds the structure (with isolate). "k" is the default for one building, from the chat and the 3D Building button (see the end of this description); "j" (the procedural default, with procedural true): the isolated scan is rendered at four planned views, made into one photoreal character sheet of the building (one 4K image, every view checked against the scan), the four views are sent together once to Meshy 7.1 multi-image-to-3D on Fal.ai, the model is fitted onto the scan\'s footprint and height and labelled generated, with its fit (plan IoU, share outside the footprint) reported; needs FAL_KEY. "i": the same character sheet, fitting and labelling as "j", but with Trellis multi in place of Meshy as the 3D model service, run six times (one per seed, about $0.12 a building), the candidate whose silhouette and plan best match the sheet and the scan kept, its textures colour-matched to the building\'s swatch; needs FAL_KEY. "h": the scan leads and vector/Solar data only agree with it, the structure is seeded on the vector building nearest the place, the build commits what its time budget allows instead of being discarded at the limit, readings that explain almost none of their wall are dropped, continued openings are checked before the native build, rejections are reported by reason, and an evidence ledger of every decision is written into the brief. "g": the earlier rules. "k" (with isolate, not procedural): the real scan straightened instead of rebuilt: the remeshed structure\'s walls snapped to their fitted planes, each facade\'s photo straightened (its pier and storey lines traced and warped straight, smears levelled against the facade\'s own repeats) and the facade rebuilt flat on those lines with that photo; use it when the user asks for one building, to straighten or clean up the building from Google Maps with its own texture. Default "k" with isolate; with procedural true, "j" (SCRATCHBOX_STAGED_PROCEDURAL=g, h, i or j makes that procedural pipeline the default instead of "k"). "kd" (a district, without isolate; only when the user asks for it): pipeline K over the whole district, every facade\'s photo straightened and rebuilt as in "k", the photos de-lit and colour-matched per building, the trees, terrain and surroundings kept as in a district build, and no facade grammar.'
+                    enum: ['j', 'k'],
+                    description: 'Which pipeline rebuilds the structure (with isolate). "k" is the default for one building, from the chat and the 3D Building button: the real scan straightened instead of rebuilt: the remeshed structure\'s walls snapped to their fitted planes, each facade\'s photo straightened (its pier and storey lines traced and warped straight, smears levelled against the facade\'s own repeats) and the facade rebuilt flat on those lines with that photo; use it when the user asks for one building, to straighten or clean up the building from Google Maps with its own texture. "j" (the procedural build, with procedural true): the isolated scan is rendered at four planned views, made into one photoreal character sheet of the building (one 4K image, every view checked against the scan), the four views are sent to the model service (modelService) on Fal.ai, and the model is fitted onto the scan\'s footprint and height and labelled generated, with its fit (plan IoU, share outside the footprint) reported; needs FAL_KEY. Default "k" with isolate; with procedural true, "j" (SCRATCHBOX_STAGED_BUILDING_PIPELINE=j makes "j" the default instead of "k").'
+                },
+                modelService: {
+                    type: 'STRING',
+                    enum: ['meshy', 'trellis'],
+                    description: 'The 3D model service pipeline "j" sends its character sheet to. "meshy" (the default): Meshy 7.1 multi-image-to-3D, sent once, its own textures kept. "trellis": Trellis multi, run six times (one per seed, about $0.12 a building), the candidate whose silhouette and plan best match the sheet and the scan kept, its textures colour-matched to the building\'s swatch. Pass it only when the user asks for one by name.'
+                },
+                district: {
+                    type: 'STRING',
+                    enum: ['massing', 'scan', 'rebuilt', 'kd'],
+                    description: 'How the district around the place is shown, in a build without isolate. "massing" (the default): pipeline E\'s massing for every building the scan confirms. "scan": the remeshed scan as it is. "rebuilt": every building, the ground and the streets recreated, the scan kept as their reference. "kd" (only when the user asks for it; a long build, up to six hours): pipeline K over the whole district, in chunks: every facade\'s photo straightened and rebuilt flat as in pipeline "k", the photos de-lit and colour-matched per building, the trees, terrain and surroundings kept, and no massing. SCRATCHBOX_STAGED_DISTRICT changes the default.'
                 },
                 steps: {
                     type: 'OBJECT',
@@ -1715,7 +1725,12 @@ export const PANORAMA_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 outDir: { type: 'STRING', description: 'Output directory for splat and tileset files.' },
                 forceRebake: { type: 'BOOLEAN', description: 'Default true: the image model paints every station image. false reuses station images (and the splats baked from them) already in outDir once each passes geometry QC against the mesh again; a station without a usable image is still painted by the image model.' },
                 draft: { type: 'BOOLEAN', description: 'Fast draft mode (Nano Banana Lite, 1K resolution, empty style suffix for later prompt customization).' },
-                styleSuffix: { type: 'STRING', description: 'Optional style suffix to append to prompt. Leave empty to allow prompt entry later.' }
+                styleSuffix: { type: 'STRING', description: 'Optional style suffix to append to prompt. Leave empty to allow prompt entry later.' },
+                vantageHeadingDeg: { type: 'NUMBER', description: 'A street-level vantage: the compass heading the viewer looks along (east 90, south-west 225). Adds street stations posed by the registered Google Street View around the spot, each beautified from its own photograph (Maps Imagery Grounding, kept in memory, never stored) and baked first, so the splat holds up where a person stands. With vantageSideDeg, a heading near "across the street" is snapped to the street (on a rotated grid "east" is the grid\'s east). Needs the Maps key and the Google Cloud service account.' },
+                vantageSideDeg: { type: 'NUMBER', description: 'A street-level vantage on a sidewalk ("on the west sidewalk of 7th Avenue"): the compass direction from the street to the sidewalk the viewer stands on (west 270, north-east 45). Give `location` as the corner of that street and the nearest cross street to the spot ("7th Avenue & West 32nd Street, New York"), not a landmark\'s name: a landmark resolves to its own point, which may lie on another of its streets. The viewer is put on that sidewalk of the street, just in front of the building line the scan shows. Without vantageHeadingDeg the viewer looks across the street.' },
+                refresh: { type: 'BOOLEAN', description: 'Build the world again even when the world cache in Google Cloud already holds the same one (by default a world built before from the same ask is fetched from there in about a minute instead of built). Only when the user asks for a rebuild.' },
+                walkMeters: { type: 'NUMBER', description: 'With vantageHeadingDeg: length of the walk across the look direction (along the sidewalk), centred on the vantage. Default 60.' },
+                streetViewPanos: { type: 'NUMBER', description: 'With vantageHeadingDeg: most Street View panoramas used, the nearest first (four views each: ahead, half left, half right, behind). Default 6.' }
             },
             required: ['location']
         }
@@ -2991,7 +3006,32 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
 
     location_generate_3dgs: async (args, ctx) => {
         const { Location3DGaussianSplatService } = await import('../../spatial/Location3DGaussianSplatService');
-        const service = new Location3DGaussianSplatService({ workspaceRoot: ctx?.workspaceRoot || process.cwd() });
+        const workspaceRoot = ctx?.workspaceRoot || process.cwd();
+        const service = new Location3DGaussianSplatService({ workspaceRoot });
+        // a street vantage: the Street View deps the staged build uses (the Maps key for discovery, the grounding service on
+        // the service account for the images, the staged metadata cache)
+        let street: { vantage: { headingDeg?: number; sideDeg?: number; walkMeters?: number; maxPanos?: number; lat?: number; lng?: number }; streetView: import('../../3d-engine/staged-location/streetview-evidence').StreetViewEvidenceDeps } | undefined;
+        if (typeof args.vantageHeadingDeg === 'number' || typeof args.vantageSideDeg === 'number') {
+            const { resolveMapsApiKey } = await import('../../../browser/generative-canvas/services/google-maps-service');
+            const { StageCache } = await import('../../3d-engine/staged-location/stage-cache');
+            const gemini = new GeminiClient();
+            street = {
+                vantage: {
+                    ...(typeof args.vantageHeadingDeg === 'number' ? { headingDeg: args.vantageHeadingDeg } : {}),
+                    ...(typeof args.vantageSideDeg === 'number' ? { sideDeg: args.vantageSideDeg } : {}),
+                    ...(typeof args.lat === 'number' ? { lat: args.lat } : {}), ...(typeof args.lng === 'number' ? { lng: args.lng } : {}),
+                    ...(typeof args.walkMeters === 'number' ? { walkMeters: args.walkMeters } : {}),
+                    ...(typeof args.streetViewPanos === 'number' ? { maxPanos: args.streetViewPanos } : {})
+                },
+                streetView: {
+                    mapsApiKey: resolveMapsApiKey(),
+                    ...(gemini.ensureAuth()
+                        ? { grounding: createStreetViewGroundingImageService(gemini) }
+                        : { groundingUnavailable: 'no Google Cloud service account is configured for the Maps Imagery Grounding API' }),
+                    metadataCachePath: path.join(new StageCache({ workspaceRoot }).dir, 'streetview', 'metadata.json')
+                }
+            };
+        }
         // The service throws when the survey pipeline fails; a failed run is never reported as a built splat world.
         const res = await service.generate({
             location: asString(args.location),
@@ -3017,6 +3057,8 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             resultPayload: {
                 success: res.success,
                 locationName: res.locationName,
+            ...(args.refresh === true ? { refresh: true } : {}),
+            ...(street ?? {}),
                 geoAnchor: res.geoAnchor,
                 splatUrl: res.splatUrl,
                 splatPath: res.splatPath,
@@ -3030,9 +3072,16 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
                 scene3DData: res.scene3DData,
                 durationMs: res.durationMs,
                 modelsUsed: res.modelsUsed,
-                imageSources: res.imageSources
+                imageSources: res.imageSources,
+                ...(res.streetView ? { streetView: res.streetView } : {}),
+                ...(res.worldCache ? { worldCache: res.worldCache } : {}),
+                // opens the splat world in a 3D Scene (at the viewer's eye in walk mode when a street vantage was given)
+                artifact: { type: '3d-scene', data: res.scene3DData }
             } as unknown as ToolResultPayload,
             summaryResult: `Generated a 3DGS radiance field for ${res.locationName}: ${res.splatCount.toLocaleString()} splats from ${res.acceptedStations}/${res.stationCount} accepted station image(s) of the clay tiles ${res.glbPath} in ${(res.durationMs / 1000).toFixed(1)}s -> ${res.splatUrl}. ${res.imageSources.join(' ')}`
+                + (res.worldCache?.state === 'fetched' ? ` Fetched from the world cache (${res.worldCache.bucket}), built ${res.worldCache.storedAt}; nothing was generated (refresh: true builds it again).` : res.worldCache ? ` Being stored in the world cache (${res.worldCache.bucket}) for next time.` : '')
+                + (res.streetView?.snap ? ` Viewer placed at ${res.streetView.snap.lat.toFixed(6)}, ${res.streetView.snap.lng.toFixed(6)}, ${res.streetView.snap.offsetM.toFixed(1)} m from the street's centreline (${res.streetView.snap.reason}), looking ${res.streetView.snap.headingDeg.toFixed(1)}°.` : '')
+                + (res.streetView ? ` Street level: ${res.streetView.accepted}/${res.streetView.stations} Street View station(s) accepted from ${res.streetView.panos.length} pano(s) (${res.streetView.discovery.panosFound} found)${res.streetView.unmatched ? `, ${res.streetView.unmatched} of them stitched in although the photograph disagrees with the scan (by design)` : ''}; ${res.streetView.registrationSummary}.${res.streetView.failures.length ? ` ${res.streetView.failures.length} view(s) failed or were refused.` : ''} Their pictures are generated from the photographs, which were not stored.` : '')
         };
     },
 
