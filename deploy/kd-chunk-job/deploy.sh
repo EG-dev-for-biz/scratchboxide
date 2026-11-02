@@ -106,7 +106,7 @@ job() {
     # key as a plain variable of the job: for a project where nobody here may grant access to the secrets
     [ -n "${GOOGLE_MAPS_API_KEY:-}" ] || { echo "set GOOGLE_MAPS_API_KEY"; exit 1; }
     echo "[job] $JOB -> $IMAGE, as $app, the Maps key a plain job variable"
-    auth=(--service-account "$app" --clear-secrets --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT,SCRATCHBOX_GOOGLE_ADC=1,GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY,$common")
+    auth=(--service-account "$app" --clear-secrets --clear-volumes --clear-volume-mounts --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT,SCRATCHBOX_GOOGLE_ADC=1,GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY,$common")
   else
     echo "[job] $JOB -> $IMAGE, as $JOB_SA, keys from Secret Manager"
     auth=(--service-account "$JOB_SA" \
