@@ -9,20 +9,28 @@ import { canvasHandlers } from '../src/node/gemini/tools/canvas-tools';
 import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
 import { ProjectArtifactController } from '../src/browser/generative-canvas/project-artifact-controller';
 import { loadServedGeneratorGlb, servedGeneratorGlbUrl } from '../src/common/strip-embedded-glb';
+import { createEmptyProjectGraph } from '../src/common/project-artifact-graph-protocol';
 import type { CanvasArtifact } from '../src/browser/generative-canvas/canvas-types';
 
 /** As large as the generated model base64 that filled the real graph (two of these exceeded 50 MB). */
 const LARGE_GLB_BASE64 = Buffer.alloc(18 * 1024 * 1024, 7).toString('base64');
 const actor = { id: 'user-test', displayName: 'Test User', kind: 'user' as const };
 
-/** Captures the body the store client posts, as the server would receive it. */
-function captureSaves(): string[] {
+/**
+ * A controller loaded from the server, as the app loads it (a project the server never gave this window is not saved
+ * there), and the bodies the store client posts after that, as the server would receive them. The load answers with a
+ * new project's empty graph.
+ */
+async function loadedController(): Promise<{ controller: ProjectArtifactController; bodies: string[] }> {
     const bodies: string[] = [];
     (globalThis as any).fetch = async (_url: string, init?: { method?: string; body?: string }) => {
         if (init?.method === 'POST' && typeof init.body === 'string') bodies.push(init.body);
-        return { ok: true, json: async () => ({ success: true }) };
+        return { ok: true, json: async () => (init?.method === 'POST' ? { success: true } : createEmptyProjectGraph('project-save-test')) };
     };
-    return bodies;
+    const controller = new ProjectArtifactController('project-save-test', actor);
+    await controller.initialize([], '/workspace');
+    bodies.length = 0;
+    return { controller, bodies };
 }
 
 const originalFetch = globalThis.fetch;
@@ -46,8 +54,7 @@ describe('saving a scene whose objects reference a large GLB by URL', () => {
             }
         }, { request: { prompt: 'Compare the hall interior based on the earlier export', chatHistory: [] } } as any);
 
-        const bodies = captureSaves();
-        const controller = new ProjectArtifactController('project-save-test', actor);
+        const { controller, bodies } = await loadedController();
         controller.registerArtifact(res.resultPayload.artifact as CanvasArtifact, 'test-mount');
         await controller.persist('/workspace');
 
@@ -70,8 +77,7 @@ describe('saving a scene whose objects reference a large GLB by URL', () => {
                 }
             } as any
         };
-        const bodies = captureSaves();
-        const controller = new ProjectArtifactController('project-save-test', actor);
+        const { controller, bodies } = await loadedController();
         controller.registerArtifact(scene, 'test-legacy');
         controller.registerArtifact({ ...scene, version: 2, title: 'Flatiron AI retexture v2', data: { ...(scene.data as any), title: 'v2' } }, 'test-legacy-2');
         await controller.persist('/workspace');

@@ -107,6 +107,7 @@ const TILESET = {
 const realFetch = globalThis.fetch;
 const realKey = process.env.GOOGLE_MAPS_API_KEY;
 const realRoot = process.env.SCRATCHBOX_ROOT;
+const realWorker = process.env.SCRATCHBOX_STAGED_WORKER;
 const scratch: string[] = [];
 
 /** Serves the tileset, its leaves and the elevation API; records every requested path. */
@@ -126,6 +127,8 @@ function serveTiles(tileset: unknown = TILESET, leaves: Record<string, Buffer> =
         return new Response('not served by this test', { status: 404 });
     }) as typeof fetch;
     process.env.GOOGLE_MAPS_API_KEY = 'TEST_KEY';
+    // A staged build runs on its own worker thread, where this fetch is not installed and the real one would answer; keep it here.
+    process.env.SCRATCHBOX_STAGED_WORKER = '0';
     // The staged build keeps its caches and published models under the workspace root; keep them out of the checkout too.
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tile-tools-root-')));
     scratch.push(root);
@@ -162,6 +165,8 @@ afterEach(() => {
     else process.env.GOOGLE_MAPS_API_KEY = realKey;
     if (realRoot === undefined) delete process.env.SCRATCHBOX_ROOT;
     else process.env.SCRATCHBOX_ROOT = realRoot;
+    if (realWorker === undefined) delete process.env.SCRATCHBOX_STAGED_WORKER;
+    else process.env.SCRATCHBOX_STAGED_WORKER = realWorker;
 });
 
 afterAll(() => {

@@ -41,7 +41,7 @@ import { outsideFootprint, signedFootprintDistance } from './base-cleanup';
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor } from '../glb-bytes';
 import type { FacadeLatticeResult, ReliefFacade } from '../facade-lattice';
 
-export const LATTICE_STITCH_VERSION = 'lattice-stitch/20';
+export const LATTICE_STITCH_VERSION = 'lattice-stitch/21';
 
 export const LATTICE_STITCH_PARAMS = {
     /** The slab of a rebuilt facade cut from the scan: within this of its plane (m). */
@@ -56,6 +56,10 @@ export const LATTICE_STITCH_PARAMS = {
     splitPerimeterM: 8, splitRatio: 0.35,
     /** Cut: only scan triangles facing along a facade (|cos| of their normal to its normal at least this) are wall it replaces; roofs, ledges and terraces meeting it stay. */
     cutFacingMin: 0.5,
+    /** Cut: keep the pieces over the rebuilt cells too (the scan only split at the cells' lines), for a caller that removes them itself (facade-lattice.ts, under its tear audit). */
+    cutKeepInside: false,
+    /** Cut: only the scan facing the way the rebuilt wall faces (not a parapet's or a thin wall's other side behind it, which the rebuild does not replace). */
+    cutSameFacing: false,
     /** Fill lying on a surface the scan already has (its centre, corners and points along its edges within this (m) of it, facing alike) is a second skin, not a hole: dropped. */
     doubledM: 0.02,
     /** Fill a rebuilt wall already stands in for (parallel to it, within this of it (m), over it at every probe) is dropped: the scan
@@ -92,12 +96,12 @@ type Facade = { f: ReliefFacade; r: FacadeLatticeResult };
 const dot = (a: ArrayLike<number>, b: ArrayLike<number>) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
 /** A vertex: position and every other attribute, flattened. */
-interface Vx { p: [number, number, number]; a: Float64Array; key: string }
+export interface Vx { p: [number, number, number]; a: Float64Array; key: string }
 const keyOf = (p: ArrayLike<number>) => `${p[0]},${p[1]},${p[2]}`;
 
-interface PrimRead { mesh: number; prim: number; names: string[]; comps: number[]; flags: boolean[]; data: Float64Array[]; I: ArrayLike<number>; idxBase: number; idxStride: number; idxSize: number }
+export interface PrimRead { mesh: number; prim: number; names: string[]; comps: number[]; flags: boolean[]; data: Float64Array[]; I: ArrayLike<number>; idxBase: number; idxStride: number; idxSize: number }
 
-function readPrims(glb: ReturnType<typeof parseGlbBytes>): PrimRead[] {
+export function readPrims(glb: ReturnType<typeof parseGlbBytes>): PrimRead[] {
     const out: PrimRead[] = [];
     (glb.json.meshes ?? []).forEach((m: any, mi: number) => (m.primitives ?? []).forEach((p: any, pi: number) => {
         if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined || p.indices === undefined) return;
@@ -110,7 +114,7 @@ function readPrims(glb: ReturnType<typeof parseGlbBytes>): PrimRead[] {
     return out;
 }
 
-function vertexOf(pr: PrimRead, i: number): Vx {
+export function vertexOf(pr: PrimRead, i: number): Vx {
     const p: [number, number, number] = [pr.data[0][i * 3], pr.data[0][i * 3 + 1], pr.data[0][i * 3 + 2]];
     const a: number[] = [];
     for (let k = 1; k < pr.data.length; k++) for (let c = 0; c < pr.comps[k]; c++) a.push(pr.data[k][i * pr.comps[k] + c]);
@@ -133,14 +137,17 @@ function cutPoint(u: Vx, v: Vx, gu: number, gv: number, pr: PrimRead): Vx {
 }
 
 /** Splits a convex polygon by g (a plane): the parts with g <= 0 and g >= 0 (a vertex on the plane goes to both). */
-function split(poly: Vx[], g: (v: Vx) => number, plane: string, pr: PrimRead, cache: Map<string, Vx>): [Vx[], Vx[]] {
+export function split(poly: Vx[], g: (v: Vx) => number, plane: string, pr: PrimRead, cache: Map<string, Vx>): [Vx[], Vx[]] {
     const neg: Vx[] = [], pos: Vx[] = [], gs = poly.map(v => { const x = g(v); return Math.abs(x) < 1e-9 ? 0 : x; });
     for (let i = 0; i < poly.length; i++) {
         const u = poly[i], v = poly[(i + 1) % poly.length], gu = gs[i], gv = gs[(i + 1) % poly.length];
         if (gu <= 0) neg.push(u);
         if (gu >= 0) pos.push(u);
         if ((gu < 0 && gv > 0) || (gu > 0 && gv < 0)) {
-            const ck = u.key < v.key ? `${u.key}|${v.key}|${plane}` : `${v.key}|${u.key}|${plane}`;
+            // keyed by the ends' attributes too: across a UV seam two triangles share an edge's positions but not its UVs, and
+            // must not share its cut point (its position is the same either way: cutPoint orders the ends by position)
+            const ek = (x: Vx) => `${x.key}#${x.a.join(',')}`;
+            const ck = u.key < v.key ? `${ek(u)}|${ek(v)}|${plane}` : `${ek(v)}|${ek(u)}|${plane}`;
             let c = cache.get(ck);
             if (!c) { c = cutPoint(u, v, gu, gv, pr); cache.set(ck, c); }
             neg.push(c); pos.push(c);
@@ -222,10 +229,11 @@ export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: Lattic
             for (const fr of frames) {
                 const { f, r } = fr;
                 // the rebuilt cells replace wall only: a roof, ledge or terrace meeting the wall is no part of them
-                if (!(tl > 0) || Math.abs(dot(tn, f.normal)) < P.cutFacingMin * tl) continue;
+                if (!(tl > 0) || (P.cutSameFacing ? dot(tn, f.normal) : Math.abs(dot(tn, f.normal))) < P.cutFacingMin * tl) continue;
                 const st = (v: Vx) => { const m = [v.p[0] - f.centroid[0], v.p[1] - f.centroid[1], v.p[2] - f.centroid[2]]; return [dot(m, f.axisS), dot(m, f.axisT), dot(m, f.normal)]; };
                 const all = polys.flat().map(st);
-                const smin = Math.min(...all.map(c => c[0])), smax = Math.max(...all.map(c => c[0])), tmin = Math.min(...all.map(c => c[1])), tmax = Math.max(...all.map(c => c[1])), dmin = Math.min(...all.map(c => c[2])), dmax = Math.max(...all.map(c => c[2]));
+                let smin = Infinity, smax = -Infinity, tmin = Infinity, tmax = -Infinity, dmin = Infinity, dmax = -Infinity;
+                for (const c of all) { smin = Math.min(smin, c[0]); smax = Math.max(smax, c[0]); tmin = Math.min(tmin, c[1]); tmax = Math.max(tmax, c[1]); dmin = Math.min(dmin, c[2]); dmax = Math.max(dmax, c[2]); }
                 if (smax <= fr.s0 || smin >= fr.s1 || tmax <= fr.t0 || tmin >= fr.t1 || dmax <= -P.depthBandM || dmin >= P.depthBandM) continue;
                 // does it reach a rebuilt cell at all
                 const a0 = cellIndex(Math.max(smin, fr.s0), r.s), a1 = cellIndex(Math.min(smax, fr.s1), r.s), b0 = cellIndex(Math.max(tmin, fr.t0), r.t), b1 = cellIndex(Math.min(tmax, fr.t1), r.t);
@@ -242,7 +250,7 @@ export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: Lattic
                     const c = poly.map(st), cs = c.reduce((s, x) => s + x[0], 0) / c.length, ct = c.reduce((s, x) => s + x[1], 0) / c.length, cd = c.reduce((s, x) => s + x[2], 0) / c.length;
                     const inside = cs > fr.s0 && cs < fr.s1 && ct > fr.t0 && ct < fr.t1 && Math.abs(cd) < P.depthBandM && r.built[cellIndex(ct, r.t) * fr.ns + cellIndex(cs, r.s)];
                     if (inside) report.removedPieces++;
-                    return !inside;
+                    return !inside || P.cutKeepInside;
                 });
             }
             if (!touched) continue;
@@ -258,7 +266,7 @@ export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: Lattic
 }
 
 /** The GLB with each source primitive's kept pieces appended as a new primitive (same material and attributes, `extras`). */
-function appendPieces(glb: ReturnType<typeof parseGlbBytes>, appended: Array<{ pr: PrimRead; polys: Vx[][] }>, extras: Record<string, unknown>): Buffer {
+export function appendPieces(glb: ReturnType<typeof parseGlbBytes>, appended: Array<{ pr: PrimRead; polys: Vx[][] }>, extras: Record<string, unknown>): Buffer {
     const json = glb.json;
     // the kept pieces: one new primitive per source primitive, same material and attributes
     const chunks: Uint8Array[] = [glb.bin];
@@ -417,21 +425,48 @@ const cellKey = (x: number, y: number, z: number): number | string => (Math.abs(
 const crossDot = (ux: number, uy: number, uz: number, vx: number, vy: number, vz: number, m0: number, m1: number, m2: number) => (uy * vz - uz * vy) * m0 + (uz * vx - ux * vz) * m1 + (ux * vy - uy * vx) * m2;
 
 /**
+ * The cells of size C any point of these triangles can fall in: each triangle sampled on a barycentric grid no coarser than C,
+ * every sample's cell and its neighbours (a point of the triangle lies within C of a sample, so within one cell of its cell).
+ */
+function cellsUnder(tris: number[][][], C: number): Set<number | string> {
+    const seen = new Set<number | string>(), out = new Set<number | string>();
+    for (const [a, b, c] of tris) {
+        const div = Math.max(1, Math.ceil(Math.max(dist3(a, b), dist3(b, c), dist3(c, a)) / C));
+        for (let i = 0; i <= div; i++) for (let j = 0; i + j <= div; j++) {
+            const u = i / div, v = j / div;
+            const x = Math.floor((a[0] + (b[0] - a[0]) * u + (c[0] - a[0]) * v) / C), y = Math.floor((a[1] + (b[1] - a[1]) * u + (c[1] - a[1]) * v) / C), z = Math.floor((a[2] + (b[2] - a[2]) * u + (c[2] - a[2]) * v) / C);
+            const k = cellKey(x, y, z);
+            if (seen.has(k)) continue;
+            seen.add(k);
+            for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) out.add(cellKey(x + dx, y + dy, z + dz));
+        }
+    }
+    return out;
+}
+
+/**
  * Whether a point lies on one of these triangles (within tol, inside it, facing like n within about 25°), none touching the
  * vertices `not`. Each triangle's corners, normal and its length are computed once, and a query allocates nothing: the
- * infill asks this millions of times.
+ * infill asks this millions of times. With `near`, only points on those triangles are asked about: the grid holds only the
+ * cells under them.
  */
-function surfaceProbe(pos: number[][], tris: number[][], tol: number, C = 1): (q: number[], n: number[], not?: number[]) => boolean {
+function surfaceProbe(pos: number[][], tris: number[][], tol: number, C = 1, near?: number[][][]): (q: number[], n: number[], not?: number[]) => boolean {
+    const focus = near ? cellsUnder(near, C) : undefined;
     const grid = new Map<number | string, number[]>();
     // per triangle: a, b, c, the normal m = (b - a) x (c - a) and |m|
     const T = new Float64Array(tris.length * 13);
-    tris.forEach((f, t) => {
+    if (!focus || focus.size) tris.forEach((f, t) => {
         const [a, b, c] = f.map(v => pos[v]);
         const m = cross3(sub3(b, a), sub3(c, a));
         T.set([a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2], m[0], m[1], m[2], Math.hypot(m[0], m[1], m[2])], t * 13);
         const lo = [0, 1, 2].map(k => Math.floor((Math.min(a[k], b[k], c[k]) - tol) / C)), hi = [0, 1, 2].map(k => Math.floor((Math.max(a[k], b[k], c[k]) + tol) / C));
         if ((hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1) > 4000) return;
-        for (let x = lo[0]; x <= hi[0]; x++) for (let y = lo[1]; y <= hi[1]; y++) for (let z = lo[2]; z <= hi[2]; z++) { const k = cellKey(x, y, z); const l = grid.get(k); if (l) l.push(t); else grid.set(k, [t]); }
+        for (let x = lo[0]; x <= hi[0]; x++) for (let y = lo[1]; y <= hi[1]; y++) for (let z = lo[2]; z <= hi[2]; z++) {
+            const k = cellKey(x, y, z);
+            if (focus && !focus.has(k)) continue;
+            const l = grid.get(k);
+            if (l) l.push(t); else grid.set(k, [t]);
+        }
     });
     return (q, n, not = []) => {
         const nl = Math.hypot(n[0], n[1], n[2]);
@@ -1096,8 +1131,9 @@ export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /*
     }
     // a fill triangle lying on a surface already there (an odd count where the scan is doubled, not a hole) is dropped:
     // it would be a second, photo-less skin over the real one
-    const onSurface = surfaceProbe(w.pos, w.tris, P.doubledM);
-    const onWall = surfaceProbe(w.pos, w.tris.filter((_, i) => w.wall[i] >= 0), P.coveredByWallM, P.coveredByWallCellM);
+    // every probe below lies on a fill triangle: the grids hold only the cells under them
+    const onSurface = surfaceProbe(w.pos, w.tris, P.doubledM, 1, out);
+    const onWall = surfaceProbe(w.pos, w.tris.filter((_, i) => w.wall[i] >= 0), P.coveredByWallM, P.coveredByWallCellM, out);
     let kept = 0;
     for (let i = 0; i < out.length; i++) {
         const [a, b, c] = out[i];
@@ -1117,7 +1153,7 @@ export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /*
     // the textured twin judges the fill in pieces of at most pieceM: a piece lying over a surface already there (most of it
     // within skinM, its own neighbours included) closes no visible hole and is left out (it would show over the photo); the
     // clay keeps every triangle whole, so the shell stays closed
-    const overSurface = surfaceProbe(w.pos, w.tris, P.skinM);
+    const overSurface = surfaceProbe(w.pos, w.tris, P.skinM, 1, out);
     const pieces: Piece[] = [];
     out.forEach((t, parent) => {
         const [a, b, c] = t, n = cross3(sub3(b, a), sub3(c, a));

@@ -8,8 +8,9 @@
  ********************************************************************************/
 
 /**
- * Pipeline G: the isolated structure rebuilt procedurally from a survey of the photo tile, in pipeline E's grammar slot
- * (request.procedural, set for every isolated building unless the caller passes procedural false; or SCRATCHBOX_STAGED_GEOMETRY=g everywhere). E's massing stands as built (the vector footprint, its
+ * Pipeline G: the isolated structure rebuilt procedurally from a survey of the photo tile, in pipeline E's grammar slot.
+ * Retired as a choice on 2026-10-30 (user decision): no build runs it any more; its steps are kept, frozen, and its survey
+ * modules (stations.ts, plates.ts, check.ts, facades.ts) are what pipeline J's refine step uses. E's massing stands as built (the vector footprint, its
  * walls on the facades the scan measures); G then
  *   0. groups the walls of a footprint that traces piers or bays into the facades they make (facades.ts), surveyed and read
  *      whole, what is read laid back onto the walls,
@@ -112,11 +113,6 @@ export const BUDGET_TEXTURE_MS = 90_000;
  * the start; when the walls are drawn it is waited for at most this long, then the walls go without it (said so).
  */
 export const G_STREET_VIEW_WAIT_MS = 120_000;
-
-/** Pipeline G for this request: asked for (procedural), or SCRATCHBOX_STAGED_GEOMETRY=g. */
-export function stagedPipelineG(request: { procedural?: boolean }, env: NodeJS.ProcessEnv = process.env): boolean {
-    return request.procedural === true || (env.SCRATCHBOX_STAGED_GEOMETRY ?? '').trim().toLowerCase() === 'g';
-}
 
 const rung = (name: (typeof TEXTURE_LADDER_RUNGS)[number]) => TEXTURE_LADDER_RUNGS.indexOf(name);
 /** Texel sources of G's paint (indices into the legend). */

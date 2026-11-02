@@ -143,3 +143,43 @@ export function renderContentMask(renderer: THREE.WebGLRenderer, camera: THREE.P
     }
     return true;
 }
+
+const OBJECT_MASK_FRAGMENT = /* glsl */ `
+    uniform sampler2D tDepth;
+    uniform sampler2D tCoverage;
+    uniform bool uUseCoverage;
+    varying vec2 vUv;
+    void main() {
+        float w = texture2D(tDepth, vUv).x < 1.0 ? 1.0 : 0.0;
+        if (uUseCoverage) w = max(w, clamp(texture2D(tCoverage, vUv).a, 0.0, 1.0));
+        gl_FragColor = vec4(w);
+    }
+`;
+let objectMask: { scene: THREE.Scene; camera: THREE.OrthographicCamera; material: THREE.ShaderMaterial } | null = null;
+
+/**
+ * Writes the share of each pixel that is the scene's objects into `target` (every channel): what wrote depth, else the
+ * coverage of content that writes none (splats). The sky and background are 0. The grades' own weight, as a texture.
+ */
+export function renderObjectMask(renderer: THREE.WebGLRenderer, depth: THREE.Texture, coverage: THREE.Texture | null, target: THREE.WebGLRenderTarget): void {
+    if (!objectMask) {
+        const material = new THREE.ShaderMaterial({
+            uniforms: { tDepth: { value: null }, tCoverage: { value: null }, uUseCoverage: { value: false } },
+            vertexShader: DEPTH_FILL.vertexShader,
+            fragmentShader: OBJECT_MASK_FRAGMENT,
+            depthTest: false,
+            depthWrite: false
+        });
+        const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+        mesh.frustumCulled = false;
+        const scene = new THREE.Scene();
+        scene.add(mesh);
+        objectMask = { scene, camera: new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), material };
+    }
+    const u = objectMask.material.uniforms;
+    u.tDepth.value = depth;
+    u.tCoverage.value = coverage;
+    u.uUseCoverage.value = !!coverage;
+    renderer.setRenderTarget(target);
+    renderer.render(objectMask.scene, objectMask.camera);
+}

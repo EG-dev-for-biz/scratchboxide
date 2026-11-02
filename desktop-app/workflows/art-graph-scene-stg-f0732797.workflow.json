@@ -1,0 +1,1185 @@
+{
+  "title": "Shibuya Scramble Crossing, 21 Udagawacho, Shibuya, Tokyo 150-0042, Japan — build steps",
+  "subtitle": "Run f0732797 (finished): 30 steps, 8 timed steps done. Wires carry what a step reads; click a step's flag to see the model as it stood after it.",
+  "nodes": [
+    {
+      "id": "staged-build",
+      "label": "Build: Shibuya Scramble Crossing, 21 Udagawacho, Shibuya, Tokyo 150-0042, Japan",
+      "subtitle": "google_3d_tiles_get_clay",
+      "category": "tool",
+      "color": "cyan",
+      "x": 60,
+      "y": 120,
+      "status": "running",
+      "notes": "Run f0732797, finished. Re-running builds the place again into this scene with the same query; the run's other options are not in the scene record.",
+      "parameters": {
+        "toolName": "google_3d_tiles_get_clay",
+        "toolArgs": {
+          "query": "Shibuya Crossing, Tokyo",
+          "stageIntoActiveScene": true
+        },
+        "targetArtifactId": "scene-stg-f0732797"
+      },
+      "outputData": {
+        "resultPayload": {
+          "runId": "f0732797",
+          "runState": "running",
+          "resolvedAddress": "Shibuya Scramble Crossing, 21 Udagawacho, Shibuya, Tokyo 150-0042, Japan",
+          "lat": 35.659482,
+          "lng": 139.70056
+        },
+        "recorded": true
+      }
+    },
+    {
+      "id": "stage-resolve",
+      "label": "Place",
+      "subtitle": "Shibuya Scramble Crossing, 21 Udagawacho, Shibuya, Tokyo 150-0042, Japan",
+      "category": "stage",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 2,
+      "details": "Status: committed (cached)\nTime: 0.0 s",
+      "parameters": {
+        "stage": "resolve",
+        "status": "committed",
+        "layers": 0,
+        "degradations": 0,
+        "cached": true,
+        "readOnly": true
+      },
+      "x": 360,
+      "y": 1660
+    },
+    {
+      "id": "stage-tiles",
+      "label": "Google 3D Tiles",
+      "subtitle": "70 leaf tiles within 115 m",
+      "category": "stage",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 631,
+      "details": "Status: committed (cached)\nTime: 0.6 s\nLayers: 1",
+      "parameters": {
+        "stage": "tiles",
+        "status": "committed",
+        "layers": 1,
+        "degradations": 0,
+        "cached": true,
+        "readOnly": true
+      },
+      "x": 940,
+      "y": 260
+    },
+    {
+      "id": "stage-trees-measure",
+      "label": "Measuring the trees",
+      "subtitle": "tile_vegetation strip: 2,025 canopy triangles measured as trees and removed",
+      "category": "stage",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 352,
+      "details": "Status: committed (cached)\nTime: 0.4 s\nDegraded parts: 1",
+      "parameters": {
+        "stage": "trees-measure",
+        "status": "committed",
+        "layers": 0,
+        "degradations": 1,
+        "cached": true,
+        "readOnly": true
+      },
+      "x": 360,
+      "y": 460
+    },
+    {
+      "id": "step-remesh.tileRefine",
+      "label": "tile_refine: isolate, remesh, flatten",
+      "subtitle": "Remeshed scan · remesh.tileRefine",
+      "category": "step",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 384,
+      "details": "Status: done\nTime: 0.4 s\nSnapshot: the model after this step",
+      "parameters": {
+        "stage": "remesh",
+        "step": "remesh.tileRefine",
+        "status": "done",
+        "readOnly": true,
+        "snapshot": {
+          "url": "/models/shibuya_crossing_tokyo_step_remesh_tileRefine.glb",
+          "bytes": 12306576,
+          "frameOf": [
+            "stg-4c58f74f-l2",
+            "stg-d02050b4-l1"
+          ]
+        }
+      },
+      "x": 940,
+      "y": 260
+    },
+    {
+      "id": "step-remesh.pipelineK",
+      "label": "Straighten the facade photos",
+      "subtitle": "Remeshed scan · remesh.pipelineK",
+      "category": "step",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 1,
+      "details": "Status: done\nTime: 0.0 s\nNo snapshot: shows its stage's result",
+      "parameters": {
+        "stage": "remesh",
+        "step": "remesh.pipelineK",
+        "status": "done",
+        "readOnly": true
+      },
+      "x": 1230,
+      "y": 60
+    },
+    {
+      "id": "step-remesh.windowFit",
+      "label": "Window fit",
+      "subtitle": "Remeshed scan · remesh.windowFit",
+      "category": "step",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 3,
+      "details": "Status: done\nTime: 0.0 s\nNo snapshot: shows its stage's result",
+      "parameters": {
+        "stage": "remesh",
+        "step": "remesh.windowFit",
+        "status": "done",
+        "readOnly": true,
+        "toggle": {
+          "key": "remesh.windowFit",
+          "on": true,
+          "whenOff": "the facades are opened by their bay rhythm and the lattice's own window cells"
+        }
+      },
+      "x": 1520,
+      "y": 60
+    },
+    {
+      "id": "step-remesh.revealDepth",
+      "label": "Window depth from Street View",
+      "subtitle": "Remeshed scan · remesh.revealDepth",
+      "category": "step",
+      "color": "blue",
+      "status": "pending",
+      "executionDurationMs": 0,
+      "details": "Status: skipped\nTime: 0.0 s\nNo snapshot: shows its stage's result\nOff for the next build: the recesses follow the photo-contrast rule",
+      "parameters": {
+        "stage": "remesh",
+        "step": "remesh.revealDepth",
+        "status": "skipped",
+        "readOnly": true,
+        "toggle": {
+          "key": "remesh.revealDepth",
+          "on": false,
+          "whenOff": "the recesses follow the photo-contrast rule"
+        },
+        "off": true
+      },
+      "x": 1810,
+      "y": 60
+    },
+    {
+      "id": "step-polish.cleanup",
+      "label": "Remesh cleanup",
+      "subtitle": "Remeshed scan · polish.cleanup",
+      "category": "step",
+      "color": "blue",
+      "status": "pending",
+      "details": "Status: skipped\nNo snapshot: shows its stage's result\nOff for the next build: the lattice works on the remesh as tile_refine left it",
+      "parameters": {
+        "stage": "remesh",
+        "step": "polish.cleanup",
+        "status": "skipped",
+        "readOnly": true,
+        "toggle": {
+          "key": "polish.cleanup",
+          "on": false,
+          "whenOff": "the lattice works on the remesh as tile_refine left it"
+        },
+        "off": true
+      },
+      "x": 1230,
+      "y": 260
+    },
+    {
+      "id": "step-polish.lattice",
+      "label": "Facades rebuilt on the lattice",
+      "subtitle": "Remeshed scan · polish.lattice",
+      "category": "step",
+      "color": "blue",
+      "status": "pending",
+      "details": "Status: skipped\nNo snapshot: shows its stage's result\nOff for the next build: the facades stay as scanned",
+      "parameters": {
+        "stage": "remesh",
+        "step": "polish.lattice",
+        "status": "skipped",
+        "readOnly": true,
+        "toggle": {
+          "key": "polish.lattice",
+          "on": false,
+          "whenOff": "the facades stay as scanned"
+        },
+        "off": true
+      },
+      "x": 1810,
+      "y": 260
+    },
+    {
+      "id": "step-polish.base",
+      "label": "Base cleanup",
+      "subtitle": "Remeshed scan · polish.base",
+      "category": "step",
+      "color": "blue",
+      "status": "pending",
+      "details": "Status: skipped\nNo snapshot: shows its stage's result\nOff for the next build: the base is left as scanned, no skirt",
+      "parameters": {
+        "stage": "remesh",
+        "step": "polish.base",
+        "status": "skipped",
+        "readOnly": true,
+        "toggle": {
+          "key": "polish.base",
+          "on": false,
+          "whenOff": "the base is left as scanned, no skirt"
+        },
+        "off": true
+      },
+      "x": 1810,
+      "y": 460
+    },
+    {
+      "id": "step-polish.clip",
+      "label": "Clip at the footprint",
+      "subtitle": "Remeshed scan · polish.clip",
+      "category": "step",
+      "color": "blue",
+      "status": "pending",
+      "details": "Status: skipped\nNo snapshot: shows its stage's result\nOff for the next build: the building is not cut at its footprint",
+      "parameters": {
+        "stage": "remesh",
+        "step": "polish.clip",
+        "status": "skipped",
+        "readOnly": true,
+        "toggle": {
+          "key": "polish.clip",
+          "on": false,
+          "whenOff": "the building is not cut at its footprint"
+        },
+        "off": true
+      },
+      "x": 1810,
+      "y": 660
+    },
+    {
+      "id": "step-polish.infill",
+      "label": "Fill the openings",
+      "subtitle": "Remeshed scan · polish.infill",
+      "category": "step",
+      "color": "blue",
+      "status": "pending",
+      "details": "Status: skipped\nNo snapshot: shows its stage's result\nOff for the next build: the openings the clip leaves stay open",
+      "parameters": {
+        "stage": "remesh",
+        "step": "polish.infill",
+        "status": "skipped",
+        "readOnly": true,
+        "toggle": {
+          "key": "polish.infill",
+          "on": false,
+          "whenOff": "the openings the clip leaves stay open"
+        },
+        "off": true
+      },
+      "x": 1810,
+      "y": 860
+    },
+    {
+      "id": "step-polish.seal",
+      "label": "Seal (cut and stitch)",
+      "subtitle": "Remeshed scan · polish.seal",
+      "category": "step",
+      "color": "blue",
+      "status": "pending",
+      "details": "Status: skipped\nNo snapshot: shows its stage's result\nOff for the next build: the shell is left open",
+      "parameters": {
+        "stage": "remesh",
+        "step": "polish.seal",
+        "status": "skipped",
+        "readOnly": true,
+        "toggle": {
+          "key": "polish.seal",
+          "on": false,
+          "whenOff": "the shell is left open"
+        },
+        "off": true
+      },
+      "x": 1810,
+      "y": 1060
+    },
+    {
+      "id": "step-polish.orient",
+      "label": "Turn inward faces outward",
+      "subtitle": "Remeshed scan · polish.orient",
+      "category": "step",
+      "color": "blue",
+      "status": "pending",
+      "details": "Status: skipped\nNo snapshot: shows its stage's result\nOff for the next build: inward-facing scan pieces stay as they are",
+      "parameters": {
+        "stage": "remesh",
+        "step": "polish.orient",
+        "status": "skipped",
+        "readOnly": true,
+        "toggle": {
+          "key": "polish.orient",
+          "on": false,
+          "whenOff": "inward-facing scan pieces stay as they are"
+        },
+        "off": true
+      },
+      "x": 1810,
+      "y": 1260
+    },
+    {
+      "id": "step-remesh.streetViewScore",
+      "label": "Relief score against Street View",
+      "subtitle": "Remeshed scan · remesh.streetViewScore",
+      "category": "step",
+      "color": "blue",
+      "status": "pending",
+      "details": "Status: skipped\nNo snapshot: shows its stage's result\nOff for the next build: no relief score against Street View",
+      "parameters": {
+        "stage": "remesh",
+        "step": "remesh.streetViewScore",
+        "status": "skipped",
+        "readOnly": true,
+        "toggle": {
+          "key": "remesh.streetViewScore",
+          "on": false,
+          "whenOff": "no relief score against Street View"
+        },
+        "off": true
+      },
+      "x": 1810,
+      "y": 1460
+    },
+    {
+      "id": "step-remesh.visibleDefects",
+      "label": "Holes seen from outside",
+      "subtitle": "Remeshed scan · remesh.visibleDefects",
+      "category": "step",
+      "color": "blue",
+      "status": "pending",
+      "details": "Status: skipped\nNo snapshot: shows its stage's result\nOff for the next build: holes are not looked for",
+      "parameters": {
+        "stage": "remesh",
+        "step": "remesh.visibleDefects",
+        "status": "skipped",
+        "readOnly": true,
+        "toggle": {
+          "key": "remesh.visibleDefects",
+          "on": false,
+          "whenOff": "holes are not looked for"
+        },
+        "off": true
+      },
+      "x": 1810,
+      "y": 1660
+    },
+    {
+      "id": "stage-trees",
+      "label": "Trees",
+      "subtitle": "5 of 5 trees rebuilt as SB-Veggie; 0 left as scanned",
+      "category": "stage",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 40017,
+      "details": "Status: committed (cached)\nTime: 40.0 s\nLayers: 1",
+      "parameters": {
+        "stage": "trees",
+        "status": "committed",
+        "layers": 1,
+        "degradations": 0,
+        "cached": true,
+        "readOnly": true
+      },
+      "x": 2100,
+      "y": 60
+    },
+    {
+      "id": "step-textures.tileRefineTwins",
+      "label": "De-lit photo twin",
+      "subtitle": "Real textures · textures.tileRefineTwins",
+      "category": "step",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 39995,
+      "details": "Status: done\nTime: 40.0 s\nNo snapshot: shows its stage's result",
+      "parameters": {
+        "stage": "textures",
+        "step": "textures.tileRefineTwins",
+        "status": "done",
+        "readOnly": true
+      },
+      "x": 1810,
+      "y": 2060
+    },
+    {
+      "id": "step-twin.harmonize",
+      "label": "Harmonise the photos",
+      "subtitle": "Real textures · twin.harmonize",
+      "category": "step",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 17877,
+      "details": "Status: done\nTime: 17.9 s\nNo snapshot: shows its stage's result",
+      "parameters": {
+        "stage": "textures",
+        "step": "twin.harmonize",
+        "status": "done",
+        "readOnly": true,
+        "toggle": {
+          "key": "twin.harmonize",
+          "on": true,
+          "whenOff": "the de-lit photos are kept as they are, photo by photo"
+        }
+      },
+      "x": 2100,
+      "y": 60
+    },
+    {
+      "id": "step-twin.materials",
+      "label": "Material regions",
+      "subtitle": "Real textures · twin.materials",
+      "category": "step",
+      "color": "blue",
+      "status": "pending",
+      "executionDurationMs": 0,
+      "details": "Status: skipped\nTime: 0.0 s\nNo snapshot: shows its stage's result\nOff for the next build: no roughness, metal or glass maps: the photos only",
+      "parameters": {
+        "stage": "textures",
+        "step": "twin.materials",
+        "status": "skipped",
+        "readOnly": true,
+        "toggle": {
+          "key": "twin.materials",
+          "on": false,
+          "whenOff": "no roughness, metal or glass maps: the photos only"
+        },
+        "off": true
+      },
+      "x": 2390,
+      "y": 60
+    },
+    {
+      "id": "step-twin.partyWall",
+      "label": "Party wall",
+      "subtitle": "Real textures · twin.partyWall",
+      "category": "step",
+      "color": "blue",
+      "status": "pending",
+      "executionDurationMs": 0,
+      "details": "Status: skipped\nTime: 0.0 s\nNo snapshot: shows its stage's result\nOff for the next build: the party wall stays untextured",
+      "parameters": {
+        "stage": "textures",
+        "step": "twin.partyWall",
+        "status": "skipped",
+        "readOnly": true,
+        "toggle": {
+          "key": "twin.partyWall",
+          "on": false,
+          "whenOff": "the party wall stays untextured"
+        },
+        "off": true
+      },
+      "x": 2390,
+      "y": 260
+    },
+    {
+      "id": "step-twin.detailBake",
+      "label": "Swatch detail",
+      "subtitle": "Real textures · twin.detailBake",
+      "category": "step",
+      "color": "blue",
+      "status": "pending",
+      "details": "Status: skipped\nNo snapshot: shows its stage's result\nOff for the next build: the photo atlases keep the tile's own resolution, no swatch detail",
+      "parameters": {
+        "stage": "textures",
+        "step": "twin.detailBake",
+        "status": "skipped",
+        "readOnly": true,
+        "toggle": {
+          "key": "twin.detailBake",
+          "on": false,
+          "whenOff": "the photo atlases keep the tile's own resolution, no swatch detail"
+        },
+        "off": true
+      },
+      "x": 2390,
+      "y": 460
+    },
+    {
+      "id": "step-textures.lateLayers",
+      "label": "Textures of later layers",
+      "subtitle": "Real textures · textures.lateLayers",
+      "category": "step",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 0,
+      "details": "Status: done\nTime: 0.0 s\nNo snapshot: shows its stage's result",
+      "parameters": {
+        "stage": "textures",
+        "step": "textures.lateLayers",
+        "status": "done",
+        "readOnly": true
+      },
+      "x": 2390,
+      "y": 660
+    },
+    {
+      "id": "stage-textures-late",
+      "label": "Real textures of later layers",
+      "subtitle": "no later layer needed a twin",
+      "category": "stage",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 2219,
+      "details": "Status: committed (cached)\nTime: 2.2 s",
+      "parameters": {
+        "stage": "textures-late",
+        "status": "committed",
+        "layers": 0,
+        "degradations": 0,
+        "cached": true,
+        "readOnly": true
+      },
+      "x": 360,
+      "y": 1460
+    },
+    {
+      "id": "step-remesh.wallGrammar",
+      "label": "remesh.wallGrammar",
+      "subtitle": "Remeshed scan · remesh.wallGrammar",
+      "category": "step",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 2456,
+      "details": "Status: done\nTime: 2.5 s\nNo snapshot: shows its stage's result",
+      "parameters": {
+        "stage": "remesh",
+        "step": "remesh.wallGrammar",
+        "status": "done",
+        "readOnly": true
+      },
+      "x": 360,
+      "y": 260
+    },
+    {
+      "id": "step-remesh.wallSheets",
+      "label": "remesh.wallSheets",
+      "subtitle": "Remeshed scan · remesh.wallSheets",
+      "category": "step",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 1794,
+      "details": "Status: done\nTime: 1.8 s\nNo snapshot: shows its stage's result",
+      "parameters": {
+        "stage": "remesh",
+        "step": "remesh.wallSheets",
+        "status": "done",
+        "readOnly": true
+      },
+      "x": 360,
+      "y": 460
+    },
+    {
+      "id": "stage-vector",
+      "label": "Google vector massing",
+      "subtitle": "662 buildings from Google vector data (the tiles were first); 607 kept past the tiles; 216 footprint parts with no height in the vector data shown at a plausible 12 m (generated); 83 buildings with no measured height at all, shown at 12 m (generated); 6 buildings with no footprint shape and no Google volume left out",
+      "category": "stage",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 51730,
+      "details": "Status: committed (cached)\nTime: 51.7 s\nLayers: 1",
+      "parameters": {
+        "stage": "vector",
+        "status": "committed",
+        "layers": 1,
+        "degradations": 0,
+        "cached": true,
+        "readOnly": true
+      },
+      "x": 650,
+      "y": 260
+    },
+    {
+      "id": "stage-vehicles",
+      "label": "Removing vehicles",
+      "subtitle": "vehicles: 103 components of scan standing proud of the street shown to the vision model in 18 top-down crops (0 calls failed); it read 32 vehicles (6 of them too flat in the scan to stand proud, patched by their box), 23 regions removed and patched (941.01 m²)",
+      "category": "stage",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 1805,
+      "details": "Status: committed (cached)\nTime: 1.8 s\nLayers: 1",
+      "parameters": {
+        "stage": "vehicles",
+        "status": "committed",
+        "layers": 1,
+        "degradations": 0,
+        "cached": true,
+        "readOnly": true
+      },
+      "x": 940,
+      "y": 60
+    },
+    {
+      "id": "stage-terrain",
+      "label": "Surrounding terrain",
+      "subtitle": "Google Elevation API: 6,561 heights out to 4 km",
+      "category": "stage",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 327,
+      "details": "Status: committed (cached)\nTime: 0.3 s\nLayers: 1",
+      "parameters": {
+        "stage": "terrain",
+        "status": "committed",
+        "layers": 1,
+        "degradations": 0,
+        "cached": true,
+        "readOnly": true
+      },
+      "x": 650,
+      "y": 60
+    },
+    {
+      "id": "stage-chunks",
+      "label": "The rest of the district",
+      "subtitle": "44 of 44 chunks around the centre built and joined (3 at a time), every building whole in one chunk",
+      "category": "stage",
+      "color": "emerald",
+      "status": "completed",
+      "executionDurationMs": 2301839,
+      "details": "Status: committed\nTime: 2301.8 s\nLayers: 125",
+      "parameters": {
+        "stage": "chunks",
+        "status": "committed",
+        "layers": 125,
+        "degradations": 0,
+        "cached": false,
+        "readOnly": true
+      },
+      "x": 1230,
+      "y": 1060
+    },
+    {
+      "id": "scene-output",
+      "label": "Output: viewport",
+      "subtitle": "53 layers in the scene",
+      "category": "output",
+      "color": "emerald",
+      "x": 2390,
+      "y": 120,
+      "status": "completed",
+      "details": "terrain: l0\ntrees: l5\ntrees: l5\ntrees: l5\ntrees: l5\ntrees: l5\ntrees: l5\ntrees: l5\ntrees: l5\ntrees: l5\ntrees: l5\ntrees: l5\nvector: l0o\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2\nremesh: l2",
+      "parameters": {
+        "output": true,
+        "finalObjectIds": [
+          "stg-9344a101-l0",
+          "stg-6172a956-l5",
+          "stg-9c0d6d91-l5-kd15",
+          "stg-cd50ad00-l5-kd16",
+          "stg-86828ec1-l5-kd28",
+          "stg-8eeb72b1-l5-kd36",
+          "stg-6932aa11-l5-kd7",
+          "stg-ce8008c6-l5-kd13",
+          "stg-7ba96f27-l5-kd35",
+          "stg-6c087c1e-l5-kd6",
+          "stg-96578d24-l5-kd42",
+          "stg-60eedf3a-l5-kd26",
+          "stg-a19bfef0-l0o-p37",
+          "stg-4c58f74f-l2-seam",
+          "stg-00ad8a4d-l2-kd23-seam",
+          "stg-b485a866-l2-kd21-seam",
+          "stg-7c614e26-l2-kd15-seam",
+          "stg-758dbe75-l2-kd29-seam",
+          "stg-21f812b6-l2-kd14-seam",
+          "stg-1eb77284-l2-kd16-seam",
+          "stg-0ed4033b-l2-kd28-seam",
+          "stg-42d462ec-l2-kd30-seam",
+          "stg-8f163587-l2-kd8-seam",
+          "stg-12accb43-l2-kd20-seam",
+          "stg-683b45d5-l2-kd24-seam",
+          "stg-effdce8c-l2-kd36-seam",
+          "stg-37019a5e-l2-kd9-seam",
+          "stg-73dd173c-l2-kd7-seam",
+          "stg-440e26fb-l2-kd17-seam",
+          "stg-f4a350ab-l2-kd13-seam",
+          "stg-e22b3327-l2-kd27-seam",
+          "stg-1f580b06-l2-kd35-seam",
+          "stg-8b3aab0c-l2-kd31-seam",
+          "stg-775178b8-l2-kd37-seam",
+          "stg-1c8017fd-l2-kd6-seam",
+          "stg-7f7d0df2-l2-kd10-seam",
+          "stg-ff37f985-l2-kd34-seam",
+          "stg-32a0389c-l2-kd38-seam",
+          "stg-a4c642b8-l2-kd2-seam",
+          "stg-17e08b7d-l2-kd19-seam",
+          "stg-0d808a07-l2-kd42-seam",
+          "stg-4387008d-l2-kd25-seam",
+          "stg-4781b8e2-l2-kd1-seam",
+          "stg-620fc423-l2-kd3-seam",
+          "stg-21543f1e-l2-kd12-seam",
+          "stg-81ba1f21-l2-kd18-seam",
+          "stg-2ed9e922-l2-kd26-seam",
+          "stg-da3401a1-l2-kd32-seam",
+          "stg-38f468ac-l2-kd41-seam",
+          "stg-e18d0581-l2-kd43-seam",
+          "stg-c65153c6-l2-kd5-seam",
+          "stg-1aabc623-l2-kd39-seam",
+          "stg-82957da3-l2-kd40-seam"
+        ],
+        "readOnly": true
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e-stage-resolve>stage-tiles",
+      "source": "stage-resolve",
+      "target": "stage-tiles",
+      "label": "the place",
+      "style": "solid"
+    },
+    {
+      "id": "e-stage-tiles>stage-trees-measure",
+      "source": "stage-tiles",
+      "target": "stage-trees-measure",
+      "label": "tile mesh",
+      "style": "solid"
+    },
+    {
+      "id": "e-stage-tiles>step-remesh.tileRefine",
+      "source": "stage-tiles",
+      "target": "step-remesh.tileRefine",
+      "label": "tile mesh",
+      "style": "solid"
+    },
+    {
+      "id": "e-step-remesh.tileRefine>step-remesh.pipelineK",
+      "source": "step-remesh.tileRefine",
+      "target": "step-remesh.pipelineK",
+      "label": "facade orthophotos",
+      "style": "solid"
+    },
+    {
+      "id": "e-step-remesh.pipelineK>step-remesh.windowFit",
+      "source": "step-remesh.pipelineK",
+      "target": "step-remesh.windowFit",
+      "label": "straightened facade photos",
+      "style": "solid"
+    },
+    {
+      "id": "e-step-remesh.windowFit>step-remesh.revealDepth",
+      "source": "step-remesh.windowFit",
+      "target": "step-remesh.revealDepth",
+      "label": "windows",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.tileRefine>step-polish.cleanup",
+      "source": "step-remesh.tileRefine",
+      "target": "step-polish.cleanup",
+      "label": "remeshed scan",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.tileRefine>step-polish.lattice",
+      "source": "step-remesh.tileRefine",
+      "target": "step-polish.lattice",
+      "label": "remeshed scan (Remesh cleanup off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.pipelineK>step-polish.lattice",
+      "source": "step-remesh.pipelineK",
+      "target": "step-polish.lattice",
+      "label": "straightened facade photos",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.windowFit>step-polish.lattice",
+      "source": "step-remesh.windowFit",
+      "target": "step-polish.lattice",
+      "label": "windows, windows (Window depth from Street View off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.tileRefine>step-polish.base",
+      "source": "step-remesh.tileRefine",
+      "target": "step-polish.base",
+      "label": "remeshed scan (Facades rebuilt on the lattice, Remesh cleanup off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.pipelineK>step-polish.base",
+      "source": "step-remesh.pipelineK",
+      "target": "step-polish.base",
+      "label": "straightened facade photos (Facades rebuilt on the lattice off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.windowFit>step-polish.base",
+      "source": "step-remesh.windowFit",
+      "target": "step-polish.base",
+      "label": "windows (Facades rebuilt on the lattice off), windows (Facades rebuilt on the lattice, Window depth from Street View off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.tileRefine>step-polish.clip",
+      "source": "step-remesh.tileRefine",
+      "target": "step-polish.clip",
+      "label": "remeshed scan (Base cleanup, Facades rebuilt on the lattice, Remesh cleanup off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.pipelineK>step-polish.clip",
+      "source": "step-remesh.pipelineK",
+      "target": "step-polish.clip",
+      "label": "straightened facade photos (Base cleanup, Facades rebuilt on the lattice off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.windowFit>step-polish.clip",
+      "source": "step-remesh.windowFit",
+      "target": "step-polish.clip",
+      "label": "windows (Base cleanup, Facades rebuilt on the lattice off), windows (Base cleanup, Facades rebuilt on the lattice, Window depth from Street View off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.tileRefine>step-polish.infill",
+      "source": "step-remesh.tileRefine",
+      "target": "step-polish.infill",
+      "label": "remeshed scan (Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Remesh cleanup off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.pipelineK>step-polish.infill",
+      "source": "step-remesh.pipelineK",
+      "target": "step-polish.infill",
+      "label": "straightened facade photos (Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.windowFit>step-polish.infill",
+      "source": "step-remesh.windowFit",
+      "target": "step-polish.infill",
+      "label": "windows (Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off), windows (Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Window depth from Street View off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.tileRefine>step-polish.seal",
+      "source": "step-remesh.tileRefine",
+      "target": "step-polish.seal",
+      "label": "remeshed scan (Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Remesh cleanup off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.pipelineK>step-polish.seal",
+      "source": "step-remesh.pipelineK",
+      "target": "step-polish.seal",
+      "label": "straightened facade photos (Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.windowFit>step-polish.seal",
+      "source": "step-remesh.windowFit",
+      "target": "step-polish.seal",
+      "label": "windows (Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off), windows (Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Window depth from Street View off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.tileRefine>step-polish.orient",
+      "source": "step-remesh.tileRefine",
+      "target": "step-polish.orient",
+      "label": "remeshed scan (Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Remesh cleanup off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.pipelineK>step-polish.orient",
+      "source": "step-remesh.pipelineK",
+      "target": "step-polish.orient",
+      "label": "straightened facade photos (Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.windowFit>step-polish.orient",
+      "source": "step-remesh.windowFit",
+      "target": "step-polish.orient",
+      "label": "windows (Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off), windows (Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Window depth from Street View off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.tileRefine>step-remesh.streetViewScore",
+      "source": "step-remesh.tileRefine",
+      "target": "step-remesh.streetViewScore",
+      "label": "remeshed scan, remeshed scan (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Remesh cleanup off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.pipelineK>step-remesh.streetViewScore",
+      "source": "step-remesh.pipelineK",
+      "target": "step-remesh.streetViewScore",
+      "label": "straightened facade photos (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.windowFit>step-remesh.streetViewScore",
+      "source": "step-remesh.windowFit",
+      "target": "step-remesh.streetViewScore",
+      "label": "windows (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off), windows (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Window depth from Street View off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.tileRefine>step-remesh.visibleDefects",
+      "source": "step-remesh.tileRefine",
+      "target": "step-remesh.visibleDefects",
+      "label": "remeshed scan (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Remesh cleanup off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.pipelineK>step-remesh.visibleDefects",
+      "source": "step-remesh.pipelineK",
+      "target": "step-remesh.visibleDefects",
+      "label": "straightened facade photos (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.windowFit>step-remesh.visibleDefects",
+      "source": "step-remesh.windowFit",
+      "target": "step-remesh.visibleDefects",
+      "label": "windows (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off), windows (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Window depth from Street View off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-stage-trees-measure>stage-trees",
+      "source": "stage-trees-measure",
+      "target": "stage-trees",
+      "label": "canopy",
+      "style": "solid"
+    },
+    {
+      "id": "e-step-remesh.tileRefine>stage-trees",
+      "source": "step-remesh.tileRefine",
+      "target": "stage-trees",
+      "label": "remeshed scan (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Remesh cleanup off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.pipelineK>stage-trees",
+      "source": "step-remesh.pipelineK",
+      "target": "stage-trees",
+      "label": "straightened facade photos (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.windowFit>stage-trees",
+      "source": "step-remesh.windowFit",
+      "target": "stage-trees",
+      "label": "windows (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off), windows (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Window depth from Street View off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.tileRefine>step-textures.tileRefineTwins",
+      "source": "step-remesh.tileRefine",
+      "target": "step-textures.tileRefineTwins",
+      "label": "remeshed scan (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Remesh cleanup off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.pipelineK>step-textures.tileRefineTwins",
+      "source": "step-remesh.pipelineK",
+      "target": "step-textures.tileRefineTwins",
+      "label": "straightened facade photos (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.windowFit>step-textures.tileRefineTwins",
+      "source": "step-remesh.windowFit",
+      "target": "step-textures.tileRefineTwins",
+      "label": "windows (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off), windows (Turn inward faces outward, Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Window depth from Street View off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-stage-tiles>step-textures.tileRefineTwins",
+      "source": "stage-tiles",
+      "target": "step-textures.tileRefineTwins",
+      "label": "tile mesh",
+      "style": "solid"
+    },
+    {
+      "id": "e-step-textures.tileRefineTwins>step-twin.harmonize",
+      "source": "step-textures.tileRefineTwins",
+      "target": "step-twin.harmonize",
+      "label": "de-lit photos",
+      "style": "solid"
+    },
+    {
+      "id": "e-step-twin.harmonize>step-twin.materials",
+      "source": "step-twin.harmonize",
+      "target": "step-twin.materials",
+      "label": "harmonised photos",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.windowFit>step-twin.materials",
+      "source": "step-remesh.windowFit",
+      "target": "step-twin.materials",
+      "label": "windows",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-twin.harmonize>step-twin.partyWall",
+      "source": "step-twin.harmonize",
+      "target": "step-twin.partyWall",
+      "label": "harmonised photos",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.tileRefine>step-twin.partyWall",
+      "source": "step-remesh.tileRefine",
+      "target": "step-twin.partyWall",
+      "label": "remeshed scan (Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Remesh cleanup off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.pipelineK>step-twin.partyWall",
+      "source": "step-remesh.pipelineK",
+      "target": "step-twin.partyWall",
+      "label": "straightened facade photos (Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.windowFit>step-twin.partyWall",
+      "source": "step-remesh.windowFit",
+      "target": "step-twin.partyWall",
+      "label": "windows (Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice off), windows (Fill the openings, Clip at the footprint, Base cleanup, Facades rebuilt on the lattice, Window depth from Street View off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-twin.harmonize>step-twin.detailBake",
+      "source": "step-twin.harmonize",
+      "target": "step-twin.detailBake",
+      "label": "harmonised photos",
+      "style": "dashed"
+    },
+    {
+      "id": "e-stage-tiles>step-twin.detailBake",
+      "source": "stage-tiles",
+      "target": "step-twin.detailBake",
+      "label": "tile mesh",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-twin.harmonize>step-textures.lateLayers",
+      "source": "step-twin.harmonize",
+      "target": "step-textures.lateLayers",
+      "label": "harmonised photos (Material regions off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.windowFit>step-textures.lateLayers",
+      "source": "step-remesh.windowFit",
+      "target": "step-textures.lateLayers",
+      "label": "windows (Material regions off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-twin.harmonize>stage-textures-late",
+      "source": "step-twin.harmonize",
+      "target": "stage-textures-late",
+      "label": "harmonised photos (Material regions off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-step-remesh.windowFit>stage-textures-late",
+      "source": "step-remesh.windowFit",
+      "target": "stage-textures-late",
+      "label": "windows (Material regions off)",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-resolve",
+      "source": "staged-build",
+      "target": "stage-resolve",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-step-remesh.wallGrammar",
+      "source": "staged-build",
+      "target": "step-remesh.wallGrammar",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-step-remesh.wallSheets",
+      "source": "staged-build",
+      "target": "step-remesh.wallSheets",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-vector",
+      "source": "staged-build",
+      "target": "stage-vector",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-vehicles",
+      "source": "staged-build",
+      "target": "stage-vehicles",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-terrain",
+      "source": "staged-build",
+      "target": "stage-terrain",
+      "style": "dashed"
+    },
+    {
+      "id": "e-build-stage-chunks",
+      "source": "staged-build",
+      "target": "stage-chunks",
+      "style": "dashed"
+    },
+    {
+      "id": "e-out-stage-terrain",
+      "source": "stage-terrain",
+      "target": "scene-output",
+      "label": "final layer",
+      "style": "solid"
+    },
+    {
+      "id": "e-out-stage-trees",
+      "source": "stage-trees",
+      "target": "scene-output",
+      "label": "final layer",
+      "style": "solid"
+    },
+    {
+      "id": "e-out-stage-vector",
+      "source": "stage-vector",
+      "target": "scene-output",
+      "label": "final layer",
+      "style": "solid"
+    },
+    {
+      "id": "e-out-step-remesh.wallSheets",
+      "source": "step-remesh.wallSheets",
+      "target": "scene-output",
+      "label": "final layer",
+      "style": "solid"
+    }
+  ]
+}
