@@ -146,14 +146,25 @@ ${opts.manualFrames ? MANUAL_FRAMES : ''}</head><body><div id="root"></div><scri
         '--ignore-gpu-blocklist', '--enable-webgl', `--force-device-scale-factor=${scale}`, '--disable-renderer-backgrounding',
         '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows',
         `--window-size=${width},${height}`, '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'
-    ], { stdio: 'ignore' });
+    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    // Chrome's last words, for a launch that fails (read throughout, so a full pipe never stalls it)
+    let stderrTail = '';
+    proc.stderr!.on('data', (d: Buffer) => { stderrTail = (stderrTail + d.toString('utf8')).slice(-4000); });
 
+    // Chrome writes the port once it is up: while it runs and has not, it is still starting (the first launch on a fresh
+    // host builds its font cache and profile, which took over 10 s on a 2-vCPU CI runner)
     let port = '';
-    for (let i = 0; i < 200 && !port; i++) {
+    const running = () => proc.exitCode === null && proc.signalCode === null;
+    for (const t0 = Date.now(); !port && running() && Date.now() - t0 < 120_000;) {
         await new Promise(r => setTimeout(r, 50));
         try { port = fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]; } catch { /* not yet */ }
     }
-    if (!port) { proc.kill('SIGKILL'); server.close(); throw new Error('Chrome did not open its DevTools port'); }
+    if (!port) {
+        const why = running() ? 'still starting after 120 s' : `it exited (${proc.exitCode ?? proc.signalCode})`;
+        proc.kill('SIGKILL');
+        server.close();
+        throw new Error(`Chrome did not open its DevTools port: ${why}${stderrTail.trim() ? `; its stderr ends: ${stderrTail.trim().split('\n').slice(-6).join(' | ')}` : ''}`);
+    }
     const targets: Array<{ type: string; webSocketDebuggerUrl: string }> = await new Promise((resolve, reject) => {
         http.get(`http://127.0.0.1:${port}/json`, r => { let d = ''; r.on('data', c => { d += c; }); r.on('end', () => resolve(JSON.parse(d))); }).on('error', reject);
     });
