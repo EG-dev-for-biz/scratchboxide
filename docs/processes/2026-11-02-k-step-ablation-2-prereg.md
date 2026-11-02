@@ -4,6 +4,13 @@ Date: 2026-11-02. Status: **written before any build or paid call of this run.**
 except the run record and the report. A bar, arm, place or view changed after a paid call is a new preregistration that
 names this one.
 
+**Result (2026-11-02):** the ESB is not judged (2 views register). The Haughwout and the Ferry are indicative
+(`matchedShare` under 0.99). Nothing is named.
+- The de-light now costs nothing: turning it off changes no score.
+- K is 0.27 below the raw scan at the Haughwout, where lattice off or window fit off reads level.
+- K is 1.20 below at the Ferry, where the loss is geometry none of these arms isolates.
+- See "Report".
+
 ## The first run, and why this one is made
 
 - **What the first found.** [The first preregistration](./2026-11-02-k-step-ablation-prereg.md) made one paid call at the
@@ -233,9 +240,110 @@ Values written as they are fixed.
   `fovDeg` as the probes used them).
   - Haughwout: `views: 6`. Ferry: `views: 5`.
   - `runs: 3`, `clay: true`, `judgeRegions: true`, `trees: true`, `baseline: true`.
+- **The free dry runs** (13:21 to 13:34, the server stopped, credentials unreachable, the fixed poses as `poses`). Out:
+  `docs/screenshots/k_step_ablation_2026-11-02/run2_{hw,ferry}_dryrun/`.
+
+  | Place | Poses judged | Stand-in calls | Build panos excluded | Placement (stand-in; raw / K / X2) | **D** |
+  |---|---|---|---|---|---|
+  | Haughwout | 6 of 6 | 36 | 1 | 2.50 / 6.21 / 20.71 | **7.25 px** |
+  | Ferry | 5 of 5 | 30 | 5 | 2.13 / 6.33 / 16.65 (3 views with a placement) | **5.16 px** |
+
+  Every arm drew at every pose. The renders with the de-light fixed take the raw scan's colour, not the first run's grey.
+- **The paid calls:** made from 13:36 on the restarted server, the Haughwout then the Ferry, with the arguments above.
 - **The decoys** (`make_decoys.py`) are in `public/models/k_ablation2/`. Their flat colours: ESB sRGB (90, 79, 76), against
   the old K's (123, 119, 117), so darker and warmer with the de-light fixed; Haughwout (87, 80, 90); Ferry (67, 72, 76).
 
 ## Report
 
-(after the paid calls)
+### The result (2026-11-02): the ESB not judged; the Haughwout and the Ferry indicative; nothing named
+
+- **The paid calls.**
+
+  | Place | Eval | Time | Calls | Views judged |
+  |---|---|---|---|---|
+  | Haughwout | `e_v_haughwout_building_488_broad_20261102T212027_a78c` | 13:20 to 13:32 | 36 | 6 of 6 fixed poses |
+  | Ferry | `1_ferry_building_san_francisco_c_20261102T213308_f286` | 13:33 to 13:44 | 30 | 5 of 5 |
+
+  Every call was answered by `gemini-4-argon`, with no retry, 403 or failure.
+- **The ESB is not judged.** Its probe registered 2 views, fewer than 3.
+- **The two judged places are indicative only.** Both miss V4 (`matchedShare` 0.875 and 0.862, as in M1). So nothing is
+  named, as this preregistration says.
+- Every other judge bar is met at both places: the judge repeats itself (V1), and the decoys lose by their margins (V2,
+  V3). These are the first runs in which the flat-colour decoy lost by its bar: K's texture now reads as texture.
+
+**Against the bars.**
+
+| Bar | Haughwout | Ferry |
+|---|---|---|
+| V1 run spread, mean | 0.136, met | 0.133, met |
+| V2 X2 placement − K (D) | +9.89 px (7.25), met | +8.99 px (5.16), met |
+| V3 K − X3, materials / overall | 1.50 / 1.00, met | 1.54 / 1.46, met |
+| V4 frame agreement; `matchedShare` | 1.00 in every view; **0.875, missed** | 1.00; **0.862, missed** |
+| P raw above K | raw 4.22 ± 0.16, K 3.95 ± 0.08 (0.27), raw ahead in 4 of 6: missed | raw 5.93 ± 0.09, K 4.73 ± 0.09 (1.20), raw ahead in 5 of 5: met |
+| K level with raw (bar: raw − spread) | 3.95 against 4.06: not level, 0.11 short; level in 2 of 6 views | 4.73 against 5.84: not level; 0 of 5 views |
+
+**Every arm** (building mask; judge mean ± run spread; placement in px, lower is better):
+
+| Arm | Haughwout overall | shape | clay shape | placement | Ferry overall | shape | clay shape | placement |
+|---|---|---|---|---|---|---|---|---|
+| raw | 4.22 ± 0.16 | 4.44 | 4.67 | 4.77 | 5.93 ± 0.09 | 6.60 | 6.00 | 3.05 |
+| **K, fixed de-light** | **3.95 ± 0.08** | 4.50 | 4.89 | 7.33 | **4.73 ± 0.09** | 5.47 | 4.07 | 6.50 |
+| K without the de-light | 3.95 ± 0.08 | 4.50 | 4.89 | 7.33 | 4.73 ± 0.09 | 5.47 | 4.07 | 6.50 |
+| K without lattice | 4.17 ± 0.16 | 4.67 | 3.22 | 7.33 | 5.07 ± 0.19 | 5.53 | 4.67 | 6.87 |
+| K without window fit | 4.11 ± 0.08 | 4.72 | 3.94 | 7.39 | 5.07 ± 0.19 | 5.60 | 4.33 | 6.87 |
+| X2 moved 4 m | 3.89 ± 0.31 | 4.11 | 4.39 | 17.22 | 4.27 ± 0.19 | 4.60 | 3.53 | 15.49 |
+| X3 flat colour | 2.95 ± 0.08 | 4.00 | 4.89 | 7.33 | 3.27 ± 0.09 | 4.73 | 4.07 | 6.50 |
+
+- **No arm moves K** by the sign rule (three quarters of the views and at least 3).
+  - Lattice off and window fit off score above K by more than both spreads at both places.
+  - But they are ahead in only 2 or 3 views, tying K in the rest (Haughwout 3 of 6 and 2 of 6, Ferry 2 of 5 each).
+- **At the Haughwout, lattice off and window fit off read level with raw** (4.17 and 4.11 against a bar of 4.06), with gap
+  shares 0.81 and 0.59. At the Ferry they recover 0.28 of the gap.
+- **The de-light off arm scores exactly K's** at both places, on every metric. Its renders differ from K's only by the
+  highlight compression.
+
+### What it points at
+
+Information only, not findings of this run.
+
+1. **The de-light costs nothing now.** The first run's stage cuts put 1.17 of K's gap in it at the ESB. Here, with the fix,
+   turning it off changes no score at either place. Its colour loss is gone (the flat-colour decoy now loses on materials,
+   V3), and the de-light no longer separates K from anything.
+2. **What is left at the Haughwout is small and sits in the facade rebuild.**
+   - K is 0.27 below the raw scan, a quarter of M1's gap there (raw 3.92, K 3.50, on other views and the old code).
+   - Lattice off or window fit off bring it level, but not in enough views to name either.
+   - In clay, K's rebuilt geometry still beats the scan (4.89 against 4.67) and the lattice off loses most (3.22). So the
+     rebuild helps the shape and costs a little in texture.
+3. **The Ferry's loss is geometry, and none of these arms isolates it.**
+   - K is 1.20 below raw overall, 1.93 below in clay shape (4.07 against 6.00), and 3.45 px further from the photo's
+     silhouette (6.50 against 3.05).
+   - Lattice off and window fit off recover only 0.28 of it.
+   - The rest lies before or after the lattice. The outline diagnosis (2026-11-01) named two candidates: tile_refine
+     snapping the isolate's ragged cut end into a flush slab beside the tower, and the base skirt's spikes along the arcade.
+   - The next step is a stage-cut look at the Ferry. K's own snapshots, after tile_refine and after the polish, can be
+     judged without a build, as the first run's were at the ESB.
+4. **The ESB cannot be judged with these views.** Of its 11 nearest held-out panos, 9 do not register (12 → 12 px), all
+   podium-side close-ups. This is the judge's (reported to the M1 session). Until it is fixed, or the ESB is judged from
+   views that do register, the benchmark the first run asked about has only 2 views.
+
+### Cost
+
+| Part | Basis | Cost |
+|---|---|---|
+| Builds | 12 builds' vision calls (their reply cache since 12:35): 57 Argon (97k in, 60k out) and 532 Flash (845k in, 189k out) | $2.14 |
+| Builds' Street View | at most 16 survey images each | at most about $1.34 |
+| View probes | 13 judge calls of 8 images (from the server log) | about $0.42 |
+| Probes' photos | 34 | about $0.24 |
+| Paid calls | 66 judge calls, 9.2k to 9.5k tokens in and about 1.2k out each (server log) | about $2.00 |
+| Their photos, footprint fetches | 11 photos and a few vector tiles | about $0.10 |
+| **This run** | | **about $4.50 to $6.30**, against the estimate of $10 to $50 and the $60 stop |
+| **With the first run** | | **about $11.50 to $16** in all |
+
+### Follow-ups
+
+- **A stage-cut judgement at the Ferry.** K's tile_refine and polish snapshots, judged beside raw and K, would show which
+  stage holds its geometry loss, at no build cost.
+- **The ESB's registration** (the M1 session's judge). Until more than 2 views register there, no comparison at the
+  benchmark can be read.
+- **`matchedShare` at the Haughwout and the Ferry.** While it stays under 0.99, every building bar there is indicative.
+  Whether the 0.99 bar or the isolates should change is a decision for the M1 session and the user.
