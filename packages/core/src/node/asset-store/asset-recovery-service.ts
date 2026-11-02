@@ -59,6 +59,11 @@ export interface RecoveryStartOptions {
      * was, which is what makes the district remesh carved around the scene's kept structure.
      */
     activeArtifact?: { id: string; type: string; data?: unknown };
+    /**
+     * Only restore what the store holds; re-run nothing (a chat opened to look at it, user decision 2026-11-02). A file
+     * that would need a rebuild is reported unrecoverable with what could rebuild it, and the viewport offers the rebuild.
+     */
+    restoreOnly?: boolean;
 }
 
 export interface AssetRecoveryOptions {
@@ -156,7 +161,7 @@ export class AssetRecoveryService {
         const groups = new Map<string, { recipe: { id: string; kind: string; body: unknown }; items: RecoveryItem[] }>();
         // a staged file with no recipe of its own is rebuilt from the scene's place when the caller gives it
         // an isolated structure and its district are two runs: a file name with "_iso" came from the isolated one
-        const fallbackRequest = opts.fallbackStaged && this.options.rebuildStaged ? opts.fallbackStaged.request as Record<string, unknown> : undefined;
+        const fallbackRequest = opts.fallbackStaged && this.options.rebuildStaged && !opts.restoreOnly ? opts.fallbackStaged.request as Record<string, unknown> : undefined;
         // the district is staged into the scene when the scene is given: that carves its remesh around the kept structure
         const fallbackGroup = (isolate: boolean) => ({
             recipe: { id: `fallback:staged:${isolate ? 'isolated' : 'district'}`, kind: 'staged-location', body: { request: { ...fallbackRequest, isolate, ...(!isolate && opts.activeArtifact ? { stageIntoActiveScene: true } : {}) } } },
@@ -191,6 +196,11 @@ export class AssetRecoveryService {
             if (recipe.kind !== 'staged-location' || !this.options.rebuildStaged) {
                 item.outcome = 'unrecoverable';
                 item.detail = `its recipe is a ${recipe.kind} result, which is not rebuilt automatically; ask the chat to make it again`;
+                continue;
+            }
+            if (opts.restoreOnly) {
+                item.outcome = 'unrecoverable';
+                item.detail = `not in the asset store; its recorded run ${recipe.id} can build it again (Rebuild this location)`;
                 continue;
             }
             const group = groups.get(recipe.id) ?? { recipe, items: [] };

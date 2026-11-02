@@ -28,7 +28,7 @@ import { CanvasArtifact, ChatSession, LiveCodeSandboxData, Scene3DData } from '.
 import { captureActiveCanvasPixels } from '../chat/streaming-utils';
 import { PRELOADED_SHOWCASE_DEMOS } from '../demos/preloadedDemos';
 import { GeminiClient } from '../gemini-client';
-import { artifactVersionKey, chatArtifactVersionKeys } from '../state/chat-activity';
+import { artifactVersionKey, chatArtifactVersionKeys, noteOpenedChatArtifacts } from '../state/chat-activity';
 import { ChatState, ChatStore } from '../state/chatStore';
 import { WorkspaceGraphCoordinator } from '../studio/useWorkspaceGraphCoordinator';
 import { WorkspaceConfigClient } from '../workspace-config-client';
@@ -294,13 +294,16 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
     const isVerifyingVisualRef = React.useRef<boolean>(false);
 
     // A chat opened to look at it is not checked again (each check is a paid vision call): the versions it holds when
-    // opened count as checked, so only versions made or edited while it is open are audited. Runs before the audit below.
+    // opened count as checked, so only versions made or edited while it is open are audited, and the viewport rebuilds
+    // none of their lost files on its own (chat-activity.ts). Runs before the audit below.
     const openedRef = React.useRef<{ id?: string; opens: number }>({ opens: -1 });
     React.useEffect(() => {
         const opens = chatOpenCountRef.current;
         if (openedRef.current.id === currentSessionId && openedRef.current.opens === opens) return;
         openedRef.current = { id: currentSessionId, opens };
-        for (const key of chatArtifactVersionKeys(messages, activeArtifact, artifactHistory)) verifiedArtifactKeysRef.current.add(key);
+        const opened = chatArtifactVersionKeys(messages, activeArtifact, artifactHistory);
+        noteOpenedChatArtifacts(opened);
+        for (const key of opened) verifiedArtifactKeysRef.current.add(key);
     }, [currentSessionId, messages, activeArtifact, artifactHistory, chatOpenCountRef]);
 
     // Automated Background Visual Verification & Self-Correction Loop

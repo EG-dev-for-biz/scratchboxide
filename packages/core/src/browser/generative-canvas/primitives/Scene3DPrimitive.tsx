@@ -134,6 +134,7 @@ import {
 } from '../services/mesh/aircraft';
 import type { ArticulatedAircraftComponents } from '../services/mesh/aircraft';
 import { useLatest } from '../hooks/useLatest';
+import { isFromOpenedChat } from '../state/chat-activity';
 import { createRendererStack, attachViewportResize, reconcileDrawingBufferSize, DEFAULT_CAMERA_FOV_DEG } from './scene3d/createRendererStack';
 import { liveTilesAnchor, syncTilesLayer } from './scene3d/syncTilesLayer';
 import { sceneAsksForLiveTiles } from './scene3d/liveTilesAnchor';
@@ -1245,6 +1246,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         };
     })());
     const rebuildKeyOf = (servedPath: string) => `${activeArtifact?.id ?? ''}|${servedPath}`;
+    // A scene from a saved chat opened to look at it (chat-activity.ts) only restores lost files from the asset store and
+    // offers "Rebuild this location"; one made or edited in this page rebuilds them on its own. Read when used: the chat
+    // is noted as opened by the studio's effects, which run after this viewport's.
+    const activeArtifactRef = useLatest(activeArtifact);
     const [recoveryNoticeJobId, setRecoveryNoticeJobId] = React.useState<string | undefined>(undefined);
     React.useEffect(() => {
         const job = assetRecovery.job;
@@ -3167,7 +3172,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         /** A served file that failed to load is recovered once (restored from the asset store or rebuilt from its recipe). */
         const requestRecovery = (loadUri: string) => {
             const servedPath = recoverableAssetPath(loadUri);
-            if (servedPath && !assetRecoveryClient.outcomeOf(servedPath)) assetRecoveryClient.request([servedPath]);
+            if (servedPath && !assetRecoveryClient.outcomeOf(servedPath)) assetRecoveryClient.request([servedPath], { restoreOnly: isFromOpenedChat(activeArtifactRef.current) });
         };
         /**
          * A load that failed: a file the server answered about (404, a parse error) is recorded and recovered; a load
@@ -4138,9 +4143,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         // a file whose recovery is running is not reported as failed while it may still come back
         const job = assetRecovery.job;
         const recovering = new Set(job && job.status === 'running' ? job.items.filter(i => i.outcome === 'pending').map(i => i.path) : []);
-        // a lost staged file that is rebuilt from the scene's place is said by the recovery notice, not as a failure too:
-        // before its rebuild starts, and while the rebuild runs (one job for the whole place, so it may list one item)
-        if (job && job.status !== 'running' && readStagedBuild(sceneData)?.place?.query) {
+        // a lost staged file that is rebuilt from the scene's place on its own is said by the recovery notice, not as a
+        // failure too: before its rebuild starts, and while the rebuild runs (one job for the whole place, so it may list one item)
+        if (job && job.status !== 'running' && readStagedBuild(sceneData)?.place?.query && !isFromOpenedChat(activeArtifact)) {
             for (const i of job.items) if ((i.outcome === 'unrecoverable' || i.outcome === 'failed') && i.path.startsWith('/models/') && !autoRebuiltRef.current.has(rebuildKeyOf(i.path))) recovering.add(i.path);
         }
         const rebuilding = job?.status === 'running' && !!readStagedBuild(sceneData)?.place?.query;
@@ -4156,7 +4161,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 const servedPath = st.servedPath ?? servedPathOf(id);
                 return { id, error: st.error || 'the file could not be loaded', ...(servedPath && isMissingFileAnswer(st.error) ? { missingFile: servedPath } : {}) };
             });
-    }, [externalLoadStatus, sceneData.objects, sceneData.splatUrl, assetRecovery]);
+    }, [externalLoadStatus, sceneData.objects, sceneData.splatUrl, assetRecovery, activeArtifact]);
     /** Declared model files whose load could not reach the server and is being tried again. */
     const reconnectingFiles = React.useMemo(() => {
         const declared = new Set((sceneData.objects || []).map(o => o.id));
@@ -4182,16 +4187,17 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         }, scene);
     }, [assetRecovery, sceneData, activeArtifact?.id]);
     // Lost files are rebuilt on their own (user decision, 2026-10-23): once per scene and file, so a rebuild that fails
-    // is reported, not started again.
+    // is reported, not started again. Not for a scene from a saved chat opened to look at it: its notice offers "Rebuild
+    // this location" instead (user decision, 2026-11-02).
     React.useEffect(() => {
         const job = assetRecovery.job;
-        if (!recoveryRebuild || !job) return;
+        if (!recoveryRebuild || !job || isFromOpenedChat(activeArtifact)) return;
         const lost = job.items.filter(i => i.outcome === 'unrecoverable' || i.outcome === 'failed').map(i => rebuildKeyOf(i.path));
         if (lost.every(k => autoRebuiltRef.current.has(k))) return;
         for (const k of lost) autoRebuiltRef.current.add(k);
         console.info(`[Asset Recovery] rebuilding ${lost.length} lost file(s) from the scene's place on its own`);
         recoveryRebuild();
-    }, [recoveryRebuild, assetRecovery]);
+    }, [recoveryRebuild, assetRecovery, activeArtifact]);
     const viewportNotices = React.useMemo(() => resolveViewportNotice({
         webglError,
         generatorError: currentGeneratorError,
@@ -4209,8 +4215,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             files: assetRecovery.job.items.length,
             onCancel: () => { void assetRecoveryClient.cancel(); },
             reasons: recoveryReasons(assetRecovery.job),
-            ...(recoveryRebuild ? { onRebuild: recoveryRebuild } : {})
-        } : undefined
+            // the lasting missing-files notice carries the rebuild when it shows (the summary clears after 12 s)
+            ...(recoveryRebuild && !objectLoadErrors.some(e => e.missingFile) ? { onRebuild: recoveryRebuild } : {})
+        } : undefined,
+        ...(recoveryRebuild && objectLoadErrors.some(e => e.missingFile) ? { onRebuildMissing: recoveryRebuild } : {})
     }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects, opticsIssues, assetRecovery, recoveryNoticeJobId, recoveryRebuild]);
 
     const handleExportGlb = React.useCallback(async () => {

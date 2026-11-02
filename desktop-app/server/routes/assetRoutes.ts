@@ -14,7 +14,7 @@
 
 import { Request, Response, Router } from 'express';
 import type { DurableAssetStore } from '../../../packages/core/src/node/asset-store/durable-asset-store';
-import type { AssetRecoveryService } from '../../../packages/core/src/node/asset-store/asset-recovery-service';
+import type { AssetRecoveryService, RecoveryStartOptions } from '../../../packages/core/src/node/asset-store/asset-recovery-service';
 
 const MAX_RECOVERY_PATHS = 200;
 
@@ -49,7 +49,7 @@ export function createAssetRouter(store: DurableAssetStore, recovery: AssetRecov
             return;
         }
         const fallback = req.body?.fallbackStagedRequest;
-        let opts: { fallbackStaged?: { request: unknown }; activeArtifact?: { id: string; type: string; data?: unknown } } = {};
+        let opts: RecoveryStartOptions = {};
         if (fallback !== undefined) {
             if (!fallback || typeof fallback !== 'object' || typeof fallback.query !== 'string' || !fallback.query.trim()) {
                 res.status(400).json({ success: false, error: 'fallbackStagedRequest needs a query (the place to rebuild)' });
@@ -65,6 +65,8 @@ export function createAssetRouter(store: DurableAssetStore, recovery: AssetRecov
             }
             opts.activeArtifact = { id: scene.id, type: scene.type, data: scene.data };
         }
+        // a chat opened to look at it: restore from the store only, re-run nothing
+        if (req.body?.restoreOnly === true) opts.restoreOnly = true;
         res.json({ success: true, job: recovery.start(paths, opts) });
     });
 

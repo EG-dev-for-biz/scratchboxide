@@ -49,6 +49,8 @@ export interface ViewportNoticeInput {
      * server answered that the file is not there (load-failure.ts isMissingFileAnswer).
      */
     objectLoadErrors?: Array<{ id: string; error: string; missingFile?: string }>;
+    /** Offered on the missing-files notice when the scene knows its place: build the lost files again (a new staged build). */
+    onRebuildMissing?: () => void;
     /** Model files whose load could not reach the server and is being retried (Scene3DPrimitive, load-failure.ts). */
     reconnecting?: number;
     /** Declared objects the loader skips (not a model or splat file); see undrawableSceneObjects. */
@@ -98,6 +100,8 @@ export function resolveViewportNotice(input: ViewportNoticeInput): ViewportNotic
             kind: 'missing-files',
             title: 'This build\'s files are not on this machine',
             detail: `${files.length === 1 ? 'Its model file was' : `${files.length} of its model files were`} not found here: the build ran in another checkout of the app, or its files were deleted.\n${listOf(files)}`
+                + (input.onRebuildMissing ? '\nThe scene knows the place it was built at, so they can be built again (a new staged build).' : ''),
+            ...(input.onRebuildMissing ? { action: { label: 'Rebuild this location', onClick: input.onRebuildMissing } } : {})
         });
     }
     const loadErrors = (input.objectLoadErrors || []).filter(e => !e.missingFile);

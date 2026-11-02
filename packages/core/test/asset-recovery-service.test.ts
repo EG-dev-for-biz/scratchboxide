@@ -166,6 +166,32 @@ describe('AssetRecoveryService', () => {
         store.close();
     });
 
+    it('restores only, rebuilding nothing, for a chat opened to look at it, and says what could rebuild each file', async () => {
+        const store = new DurableAssetStore(path.join(HOME, 'home-restore-only'));
+        store.putRecipe({ id: 'staged:44444444', kind: 'staged-location', body: { runId: '44444444', request: { query: 'Jefferson Market Library' } } });
+        store.putFile(writeFile(glbBytes(300)), { servedPath: '/models/jml_iso_l2_44444444.glb', origin: 'staged-location', recipeId: 'staged:44444444' });
+        store.putFile(writeFile(glbBytes(310)), { servedPath: '/models/jml_iso_tiles_44444444.glb', origin: 'staged-location', recipeId: 'staged:44444444' });
+        fs.rmSync(store.lookup('/models/jml_iso_l2_44444444.glb')!.file);
+        const calls: unknown[] = [];
+        const rebuild: StagedRebuilder = async req => { calls.push(req); return { runId: '55555555', layers: [] }; };
+        const service = new AssetRecoveryService(store, { workspaceRoot: HOME, rebuildStaged: rebuild });
+        const paths = ['/models/jml_iso_tiles_44444444.glb', '/models/jml_iso_l2_44444444.glb', '/models/jml_iso_remesh_66666666.glb'];
+        // a fallback given with restoreOnly is not used either
+        const job = await settled(service, service.start(paths, { restoreOnly: true, fallbackStaged: { request: { query: 'Jefferson Market Library', isolate: true } } }).id);
+        expect(calls).toEqual([]);
+        expect(job.items.map(i => [i.path.split('/').pop(), i.outcome])).toEqual([
+            ['jml_iso_tiles_44444444.glb', 'restored'],
+            ['jml_iso_l2_44444444.glb', 'unrecoverable'],
+            ['jml_iso_remesh_66666666.glb', 'unrecoverable']
+        ]);
+        expect(job.items[1].detail).toBe('not in the asset store; its recorded run staged:44444444 can build it again (Rebuild this location)');
+        expect(job.items[2].detail).toMatch(/never recorded/);
+        // the same files without restoreOnly: the recorded run is re-run once
+        await settled(service, service.start(paths).id);
+        expect(calls).toHaveLength(1);
+        store.close();
+    });
+
     it('splits a fallback into the isolated structure and its district, and takes twins an earlier run published at the same place', async () => {
         const store = new DurableAssetStore(path.join(HOME, 'home-e'));
         const place = { lat: 40.73122, lng: -73.99709, formattedAddress: 'Washington Square Arch, New York' };

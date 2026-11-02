@@ -67,7 +67,8 @@ const POLL_MS = 1500;
 export class AssetRecoveryClient {
     private state: AssetRecoveryState = {};
     private readonly listeners = new Set<(state: AssetRecoveryState) => void>();
-    private queued = new Set<string>();
+    /** Paths waiting to be sent, each with whether only a restore from the store was asked for (a chat opened to look at it). */
+    private queued = new Map<string, boolean>();
     private batchTimer: ReturnType<typeof setTimeout> | undefined;
     private pollTimer: ReturnType<typeof setTimeout> | undefined;
     /** Paths recovered (or found unrecoverable) already: not sent again. */
@@ -89,10 +90,15 @@ export class AssetRecoveryClient {
         return () => { this.listeners.delete(listener); };
     }
 
-    /** Asks for `servedPaths` to be recovered; calls within a short window go as one request. */
-    request(servedPaths: string[]): void {
+    /**
+     * Asks for `servedPaths` to be recovered; calls within a short window go as one request. `restoreOnly`: only what the
+     * store holds is restored and nothing is rebuilt (the viewport offers the rebuild instead).
+     */
+    request(servedPaths: string[], opts: { restoreOnly?: boolean } = {}): void {
         for (const p of servedPaths) {
-            if (!this.settled.has(p) && !this.state.job?.items.some(i => i.path === p && this.state.job?.status === 'running')) this.queued.add(p);
+            if (!this.settled.has(p) && !this.state.job?.items.some(i => i.path === p && this.state.job?.status === 'running')) {
+                this.queued.set(p, (this.queued.get(p) ?? true) && !!opts.restoreOnly);
+            }
         }
         if (this.queued.size === 0 || this.batchTimer) return;
         this.batchTimer = setTimeout(() => { this.batchTimer = undefined; void this.flush(); }, BATCH_MS);
@@ -105,7 +111,7 @@ export class AssetRecoveryClient {
     rebuild(servedPaths: string[], stagedRequest: { query: string; isolate?: boolean; trees?: boolean; place?: { lat: number; lng: number; formattedAddress: string } }, activeArtifact?: { id: string; type: string; data?: unknown }): void {
         for (const p of servedPaths) {
             this.settled.delete(p);
-            this.queued.add(p);
+            this.queued.set(p, false);
         }
         if (this.batchTimer) clearTimeout(this.batchTimer);
         this.batchTimer = undefined;
@@ -135,12 +141,16 @@ export class AssetRecoveryClient {
             this.batchTimer = setTimeout(() => { this.batchTimer = undefined; void this.flush(fallbackStagedRequest, activeArtifact); }, POLL_MS);
             return;
         }
-        const paths = [...this.queued];
-        this.queued.clear();
+        // paths that may be rebuilt go first and alone: a restore-only path never rides in a job that rebuilds
+        const rebuildable = [...this.queued].filter(([, restoreOnly]) => !restoreOnly).map(([p]) => p);
+        const paths = rebuildable.length ? rebuildable : [...this.queued.keys()];
+        const restoreOnly = rebuildable.length === 0 && !fallbackStagedRequest;
+        for (const p of paths) this.queued.delete(p);
+        if (this.queued.size && !this.batchTimer) this.batchTimer = setTimeout(() => { this.batchTimer = undefined; void this.flush(); }, BATCH_MS);
         if (paths.length === 0) return;
         try {
             const res = await this.fetchImpl(this.url('/api/assets/recover'), withApiHeaders({
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths, ...(fallbackStagedRequest ? { fallbackStagedRequest } : {}), ...(activeArtifact ? { activeArtifact } : {}) })
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths, ...(restoreOnly ? { restoreOnly } : {}), ...(fallbackStagedRequest ? { fallbackStagedRequest } : {}), ...(activeArtifact ? { activeArtifact } : {}) })
             }));
             const body = await res.json().catch(() => ({}));
             if (!res.ok || !body?.job) throw new Error(body?.error || `${res.status} ${res.statusText}`);

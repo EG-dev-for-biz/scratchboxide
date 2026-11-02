@@ -37,6 +37,23 @@ export function chatArtifactVersionKeys(
 }
 
 /**
+ * Artifact versions that came from a saved chat as it was opened in this page (useArtifactSync notes them). A scene
+ * among them is being looked at: the viewport restores its lost files from the asset store only and offers "Rebuild
+ * this location" rather than rebuilding on its own (user decision, 2026-11-02). One set per page, like the asset
+ * recovery client it steers.
+ */
+const openedChatVersions = new Set<string>();
+
+export function noteOpenedChatArtifacts(keys: Iterable<string>): void {
+    for (const key of keys) openedChatVersions.add(key);
+}
+
+/** Whether `artifact` is a version a saved chat held when it was opened (not made or edited in this page). */
+export function isFromOpenedChat(artifact: VersionedArtifact | undefined): boolean {
+    return !!artifact && openedChatVersions.has(artifactVersionKey(artifact));
+}
+
+/**
  * When a chat last changed, in ms since the epoch. `updatedAt` holds that time (ISO) once the chat has changed in this
  * version of the app; chats saved before hold the literal 'Just now', so their time is read from their newest message
  * id (`msg-<sender>-<Date.now()>`), else from when the file was last written (`savedAt`). Undefined for a chat with

@@ -89,5 +89,14 @@ describe('a saved build whose files are not on this machine', () => {
 
         const one = resolveViewportNotice({ ...base, objectLoadErrors: [{ id: 'm', error: 'responded with 404', missingFile: '/models/m.glb' }] });
         expect(one[0].detail).toMatch(/^Its model file was not found here/);
+        expect(one[0].action).toBeUndefined();
+
+        // a scene that knows its place offers the rebuild on this lasting notice (an opened chat never rebuilds on its own)
+        let rebuilt = 0;
+        const offered = resolveViewportNotice({ ...base, objectLoadErrors: [{ id: 'm', error: 'responded with 404', missingFile: '/models/m.glb' }], onRebuildMissing: () => { rebuilt++; } });
+        expect(offered[0].detail).toMatch(/so they can be built again \(a new staged build\)\.$/);
+        expect(offered[0].action?.label).toBe('Rebuild this location');
+        offered[0].action!.onClick();
+        expect(rebuilt).toBe(1);
     });
 });
