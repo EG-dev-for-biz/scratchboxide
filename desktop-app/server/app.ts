@@ -290,6 +290,16 @@ const PROTECTED_PREFIXES = ['/gemini', '/workspace', '/media', '/api', '/3d', '/
 /** Served paths the durable asset store answers for when the checkout's own copy is missing. */
 const ASSET_STORE_SERVED_PREFIXES = ['/models/', '/build/3d-python/', '/build/generated-images/', '/renders/', '/datasets/', '/splats/'];
 
+/**
+ * Whether a request asks for a file (/models/x.glb, /videos/y.mp4) rather than one of the app's page routes. A file
+ * this server does not have is a 404, never the app's index.html with 200: a saved chat's model built in another
+ * checkout would otherwise reach the viewport as HTML and fail as unparsable glTF.
+ */
+export function isFileRequestPath(requestPath: string): boolean {
+    if (ASSET_STORE_SERVED_PREFIXES.some(prefix => requestPath.startsWith(prefix))) return true;
+    return /\.[A-Za-z0-9]+$/.test(requestPath.split('/').pop() || '');
+}
+
 /** Methods that only read; anything else always requires the token. */
 const SAFE_METHODS = new Set(['GET', 'HEAD']);
 
@@ -773,6 +783,10 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
         app.get('*', (req: Request, res: Response, next: NextFunction) => {
             if (PROTECTED_PREFIXES.some(prefix => req.path === prefix || req.path.startsWith(`${prefix}/`))) {
                 next();
+                return;
+            }
+            if (isFileRequestPath(req.path)) {
+                res.status(404).json({ error: 'not_found', message: `${req.path} is not on this machine` });
                 return;
             }
             res.sendFile(path.join(options.staticDir!, 'index.html'));
