@@ -2015,9 +2015,10 @@ struct GlbJsonValue {
     std::vector<GlbJsonValue> arr;
     std::vector<std::pair<std::string, GlbJsonValue>> obj;
 
-    // user-provided: libstdc++'s pair<string, GlbJsonValue> asks whether this type is implicitly default constructible
-    // while it is still incomplete, and an implicit constructor then depends on itself (Linux clang with GCC 12's library)
-    GlbJsonValue() noexcept {}
+    // User-provided, not implicit: with libstdc++ (clang on Linux), building the implicit one instantiates
+    // std::pair<std::string, GlbJsonValue>, whose conditionally explicit default constructor asks whether GlbJsonValue
+    // is default constructible while that pair is still incomplete, and the compile fails.
+    GlbJsonValue() {}
 
     const GlbJsonValue& operator[](const std::string& key) const {
         static GlbJsonValue nullVal;
