@@ -1,7 +1,7 @@
 # Process: The forest demo page's crowns regrown with SB-Veggie, its maps read from the GLB
 
 > **Recorded:** 2026-11-02
-> **Status:** Verified (wideshot and canopy bookmarks show SB-Veggie crowns; no 404s or console errors; tests pass). Needs Fix, not done here: the hero and fern bookmarks' cameras stand inside the fern bank and the hero column's buttress flare, so those two frames show fern fronds, not trees.
+> **Status:** Verified (wideshot, canopy and hero bookmarks show SB-Veggie crowns, the fern bookmark the fern bank; no 404s or console errors; tests pass). The hero and fern bookmarks were re-framed the same day, out of the fern bank. Not changed: the Photo-Matched and Forest Path Walk cameras still stand at or in the fern clumps, so those two frames show fronds and a buttress.
 > **Tags:** `operate-scratchbox` `demos` `sb-veggie` `vegetation` `forest-viewer`
 > **Target Domain:** static demo page `/forest_3d_viewer.html` and its native generator `scripts/generate_forest_procedural_3d.cpp`
 
@@ -11,7 +11,7 @@
 
 * **What prompted this session:** item 5 of `app_tour_fixes_2026-11-02.md` (branch `claude/awesome-nobel-5e8080`): the page drew grey spike trunks. Two causes were found there: the model's crowns (straight cylinder limbs, 2,061,948 needle slivers of 1.9 cm² median, invisible from the 32 m wideshot) and 13 `textures/photo_*.png` fetches the server refuses.
 * **Instance used:** own launch entry `scratchbox-determined-nightingale`: web `4160`, API `4161`, tools `4162`, run from this worktree. `scratchbox-dev` was not touched. The old 262 MB `forest_hyperreal.glb` was linked in from the main checkout for the "before" shots, then replaced in this worktree's `public/models` by the regenerated files (the main checkout's copy is untouched).
-* **Screenshots:** headless Chromium (Playwright, ANGLE on Metal) at 1600 x 1000, the camera set to each bookmark's `pos`, `target` and `fov`; the median of 40 frame times recorded at each. Also checked in the Browser pane (console, network, the Canopy Sunbeams button).
+* **Screenshots:** headless Chromium (Playwright, ANGLE on Metal) at 1600 x 1000, the camera set to each bookmark's `pos`, `target` and `fov`; the median of 40 frame times recorded at each. Also checked in the Browser pane (console, network, the Canopy Sunbeams, Hero Redwood and Nurse Log & Ferns buttons).
 
 ---
 
@@ -34,9 +34,11 @@
   | Bookmark | What it shows | Triangles drawn | Frame (ms) |
   | :--- | :--- | ---: | ---: |
   | wideshot | columns with leafy SB-Veggie crowns from 12 m up, every tree at near-mid | 14,172,648 | 33.1 |
-  | hero | fern fronds (the camera is inside the fern bank and the monarch's buttress flare) | 14,580,327 | 12.2 |
-  | ferns | fern fronds over the nurse log | 13,908,520 | 8.3 |
+  | matched | fern fronds: the camera (0, 1.3, 2.2) stands at the fern bank's edge (not changed: it is matched to the reference photo) | 13,789,310 | 8.8 |
+  | hero | the monarch's column rising from the fern bank into its crown and its neighbours' crowns, from 8.4 m off its axis | 14,384,364 | 16.7 |
+  | ferns | the fern bank from a crouch, 2 m off its front edge, the columns behind; the nurse log stays hidden behind the front clumps (its top is no higher than their fronds) | 13,623,055 | 8.5 |
   | canopy | the far-left column's fluted base rising into crowns overhead | 14,124,301 | 16.7 |
+  | walk | a buttress and a fern frond: the camera (−0.5, 1.35, −1.2) stands in the clumps behind the nurse log (not changed) | 13,908,520 | 8.3 |
 
 * **Live checks** (Browser pane, port 4160): no console errors; `GET /models/forest_hyperreal.glb` and `/models/forest_hyperreal_trees.glb` `200`; 49 crowns loaded; no resource under `/textures/`.
 * **Tests** (vitest with an empty HOME and no environment: credentials unreachable): `forest-hyperrealistic-3d-reconstruction.test.ts` (with a new case on the crowns GLB: 49 trees, four levels each, instanced, species library named, redwood trunks inside their columns), `tile-vegetation-species.test.ts`, `sb-veggie-lockdown.test.ts`.
@@ -45,6 +47,7 @@
 
 ## 3. What Broke / Didn't Work
 
+* **Re-framed the same day: the hero and fern bookmarks (the next item).** Both now stand in the clearing in front of the fern bank (its fronds reach z = 2.5 m), placed from a 0.5 m map of where fern fronds and trunks stand: hero (2.4, 2.0, 6.2) looking at (0.95, 6.5, −2.1), fov 70; ferns (−0.8, 1.85, 4.3) looking at (−0.3, 0.6, −0.4), fov 52. Photo-Matched (at the bank's edge) and Forest Path Walk (in the clumps behind the log) still frame fronds and a buttress; they were left as they are.
 * **Hero and fern bookmarks show fern fronds, not trees.** The hero camera (0.2, 1.15, −0.4) is 1.86 m from the monarch's axis, inside its buttress flare (up to about 3 m at 1.15 m high), and 0.55 m from a fern clump's centre; the fern camera sits in the clumps around the nurse log. These framings were drawn for a different layout; re-framing them is a page change of its own (not done).
 * **The "photo PBR" maps are crops of the reference photograph**, not tileable material swatches (`photo_redwood_bark_albedo` is two trunks and the forest between them; `photo_forest_floor_albedo` has ferns and moss in it). Tiled on surfaces they read as noise or painted scenery. Choosing floor, moss and fern surfaces from a material library by appearance and real-world scale would fix it (not done).
 * **The ferns' pinnules are single large triangles**, flat green in close-up.
