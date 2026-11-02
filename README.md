@@ -17,7 +17,9 @@ library `@scratchbox/core` (`packages/core/`) and the desktop/web shell (`deskto
 
 ## Quick start
 
-Prerequisites: Node.js >= 20, npm >= 10.
+Prerequisites: Node.js 22.13 or newer (`.nvmrc`: `nvm install 22`), npm >= 10. The shared
+model store (`~/.scratchbox/assets`, which keeps every checkout's models so saved chats
+find them) runs on Node's built-in `node:sqlite` and is off on older Node.
 
 ```bash
 npm install
@@ -27,7 +29,11 @@ npm run dev        # Vite renderer on http://127.0.0.1:3000 + API on http://127.
 `npm run dev` (see `desktop-app/scripts/dev.js`) generates a per-launch bearer token,
 starts the Express API (`desktop-app/server/index.ts`, via ts-node) and the isolated
 tools origin on port 3002, then starts Vite. The first API boot takes ~1 minute under
-ts-node; the compiled server (below) starts in a few seconds.
+ts-node; the compiled server (below) starts in a few seconds. Started on a Node older
+than 22.13, it runs the API and Vite on `SCRATCHBOX_NODE` (a node binary), else on the
+newest nvm install of the `.nvmrc` major, and says so; with neither it starts anyway
+and warns that the store is off. The API logs `[asset-store] on (Node …)` when the store
+is on.
 
 ### Python 3D engine
 
@@ -100,7 +106,7 @@ or `--reporter=json` lists exactly what is missing and how to get it.
 
 | Prerequisite | Needed by | Without it |
 |---|---|---|
-| Node 22+ and `npm install` | everything | — |
+| Node 22.13+ and `npm install` | everything (the asset store tests need `node:sqlite`) | — |
 | Python 3.10+ venv: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt` (nanobind + cmake) | Python 3D engine tests; `vitest.global-setup.ts` builds `scratchbox_native` from `.venv` on the first run | those tests fail |
 | `clang++` with C++20 (Xcode CLT / `apt install clang`), `zlib` | native C++ engine tests | those tests fail |
 | `ffmpeg` (`brew install ffmpeg` / `apt install ffmpeg`; `FFMPEG_PATH` is honoured where the code honours it) | JPEG/video encode, Street View, texture fusion, media pipelines | skipped |
