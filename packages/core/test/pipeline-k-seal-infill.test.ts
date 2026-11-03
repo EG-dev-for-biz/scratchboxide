@@ -15,7 +15,8 @@
  * leaves it clay.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { ensureRemeshPolishBinary } from '../src/node/3d-engine/staged-location/remesh-polish-native';
 import { fillOpenLoops, foldIntoRepeats, repeatPitch } from '../src/node/3d-engine/staged-location/pipeline-k/lattice-stitch';
 import { readGlbTriangles } from './helpers/clay-glb-render';
 import { assembleGlb, parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
@@ -93,6 +94,9 @@ function sealOf(bytes: Buffer) {
 }
 
 const inHole = (t: { p: V[] }) => t.p.every(v => v[2] === 0 && v[0] >= 4 && v[0] <= 6 && v[1] >= 4 && v[1] <= 6);
+
+// the fill runs natively unless SCRATCHBOX_K_NATIVE_POLISH=0: its binary built first (remesh-polish-native.ts)
+beforeAll(async () => { await ensureRemeshPolishBinary(); }, 900_000);
 
 describe('pipeline K seal: fill textured as the surface it closes', () => {
     it('fills a hole in a rebuilt facade from that facade\'s own photo, through its planar mapping', () => {

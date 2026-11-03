@@ -15,7 +15,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { ensureRemeshPolishBinary } from '../src/node/3d-engine/staged-location/remesh-polish-native';
 import { clipToFootprint, fillOpenLoops } from '../src/node/3d-engine/staged-location/pipeline-k/lattice-stitch';
 import { BASE_CLEANUP_PARAMS, cleanBase } from '../src/node/3d-engine/staged-location/pipeline-k/base-cleanup';
 import { assembleGlb, parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
@@ -58,6 +59,9 @@ function live(bytes: Uint8Array): V[][] {
     return out;
 }
 const area = (t: V[]) => { const u = [t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]], v = [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]]; return Math.hypot(u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]) / 2; };
+
+// the fill runs natively unless SCRATCHBOX_K_NATIVE_POLISH=0: its binary built first (remesh-polish-native.ts)
+beforeAll(async () => { await ensureRemeshPolishBinary(); }, 900_000);
 
 describe('the building clipped to its footprint', () => {
     it('cuts a wall running past the footprint exactly at the outline plus the margin, at any height, and drops a jagged plane outside', () => {

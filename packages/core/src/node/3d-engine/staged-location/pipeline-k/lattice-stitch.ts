@@ -40,6 +40,7 @@ import type { Vec2 } from '../../../../common/spatial/staged-location-contracts'
 import { outsideFootprint, signedFootprintDistance } from './base-cleanup';
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor } from '../glb-bytes';
 import type { FacadeLatticeResult, ReliefFacade } from '../facade-lattice';
+import { nativePolishEnabled, nativePolishThreads, runNativeFill, type NativeFillPrim } from '../remesh-polish-native';
 
 export const LATTICE_STITCH_VERSION = 'lattice-stitch/21';
 
@@ -961,8 +962,45 @@ export function stitchLattice(clay: Uint8Array, others: Uint8Array[], facades: F
 /** openBefore / openAfter: edges of an odd number of triangles (open); nonManifoldAfter: closed edges of four or more. */
 export interface FillReport { openBefore: number; kinds: Record<string, number>; loops: number; split: number; filled: number; clipped3d: number; skippedWallOnly: number; /** Loops left open because no ear stayed inside the building. */ rejectedTriangles: number; unclosedLoops: number; /** Loops left open because their rim strays off its plane (rimPlanarM) around a cap over offRimCapM2: count and cap area (m²). */ refusedCaps: number; refusedCapM2: number; /** Fill dropped because it lay on a surface the scan already has (m²). */ droppedDoubledM2: number; /** Fill dropped because a rebuilt wall stands in for it (coveredByWallM; m²). */ droppedCoveredM2: number; /** Caps turned to face out of the building (capRayM). */ turnedCaps: number; /** Fill lying wholly over a surface already there (within skinM): kept in the clay, left out of the textured twin (m²). */ skinHiddenM2: number; openPathEdges: number; openAfter: number; nonManifoldAfter: number; addedAreaM2: number }
 
-/** The open loops left closed (the scan's holes, corners, the base: the bottom capped), counted again after. */
-export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /** The structure's footprint (plan loops [x, z]): a fill past it pokes out of the building. */ footprint?: Vec2[][] } = {}, P: LatticeStitchParams = LATTICE_STITCH_PARAMS): { clay: Buffer; others: Buffer[]; report: FillReport } {
+const SEAL_METHOD = 'the shell closed: every open loop left (the scan\'s own holes, corners, the base, which caps the bottom) triangulated in its best-fitting plane';
+
+/** The fill's GLBs: the clay with every fill triangle, the textured twins with the pieces not lying over a surface already there. */
+function sealed(clay: Uint8Array, others: Uint8Array[], out: number[][][], pieces: Piece[], report: FillReport): { clay: Buffer; others: Buffer[]; report: FillReport } {
+    return { clay: appendTriangles(clay, out, 'Seal', SEAL_METHOD, false), others: others.map(o => appendTriangles(o, out, 'Seal', `${SEAL_METHOD}; fill lying over a surface already there (${report.skinHiddenM2} m²) left out of the textured twin`, true, pieces)), report };
+}
+
+/** LATTICE_STITCH_PARAMS' fill fields in the order of scratchbox_open_loop_fill.hpp's Params. */
+export function fillParamVector(P: LatticeStitchParams): number[] {
+    return [P.weldM, P.splitPerimeterM, P.splitRatio, P.doubledM, P.coveredByWallM, P.coveredByWallCellM, P.envelopeCellM, P.envelopeMarginM, P.skinM, P.skinShare, P.rimPlanarM, P.offRimCapM2, P.capRayM, P.capRayStartM, P.capRaySamples, P.pieceM];
+}
+
+/**
+ * The fill's geometry natively (scratchbox_open_loop_fill.hpp through remesh-polish-native.ts, a pool of `threads`): the
+ * clay's triangle primitives handed over as welded() reads them, the fill's triangles, pieces and report handed back, the
+ * GLBs written here as the TypeScript fill writes them.
+ */
+function fillOpenLoopsNative(clay: Uint8Array, others: Uint8Array[], opts: { footprint?: Vec2[][]; threads?: number }, P: LatticeStitchParams): { clay: Buffer; others: Buffer[]; report: FillReport } {
+    const g = parseGlbBytes(clay);
+    const wallMesh = new Map<number, number>();
+    for (const n of g.json.nodes ?? []) if (n.mesh !== undefined && n.extras?.sbFacadeLattice) wallMesh.set(n.mesh, n.extras.sbFacadeLattice.facadeId);
+    const prims: NativeFillPrim[] = [];
+    (g.json.meshes ?? []).forEach((m: any, mi: number) => {
+        for (const p of m.primitives ?? []) {
+            if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined) continue;
+            prims.push({ wall: wallMesh.get(mi) ?? -1, X: readAccessor(g, p.attributes.POSITION).data, ...(p.indices !== undefined ? { I: readAccessor(g, p.indices).data } : {}) });
+        }
+    });
+    const r = runNativeFill(fillParamVector(P), opts.footprint ?? [], prims, opts.threads ?? nativePolishThreads());
+    return sealed(clay, others, r.out, r.pieces, r.report as unknown as FillReport);
+}
+
+/**
+ * The open loops left closed (the scan's holes, corners, the base: the bottom capped), counted again after. Natively on a
+ * pool of `threads` (every core when none is given) unless SCRATCHBOX_K_NATIVE_POLISH=0; the binary must be built first
+ * (remesh-polish-native.ts ensureRemeshPolishBinary).
+ */
+export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /** The structure's footprint (plan loops [x, z]): a fill past it pokes out of the building. */ footprint?: Vec2[][]; /** The native fill's threads: a chunked district's share of the cores. */ threads?: number } = {}, P: LatticeStitchParams = LATTICE_STITCH_PARAMS): { clay: Buffer; others: Buffer[]; report: FillReport } {
+    if (nativePolishEnabled()) return fillOpenLoopsNative(clay, others, opts, P);
     const w = welded(clay, P);
     if (w.pos.length >= EDGE_BASE) throw new Error(`the infill keys edges by vertex ids under ${EDGE_BASE}; this mesh has ${w.pos.length} vertices`);
     const owner = new Map<number, number>();
@@ -1181,6 +1219,5 @@ export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /*
     for (const c of counts.values()) { if (c % 2 === 1) report.openAfter++; else if (c > 2) report.nonManifoldAfter++; }
     for (const t of out) { const a = t[0], b = t[1], c = t[2]; const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2]; report.addedAreaM2 += 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx); }
     report.addedAreaM2 = Math.round(report.addedAreaM2);
-    const method = 'the shell closed: every open loop left (the scan\'s own holes, corners, the base, which caps the bottom) triangulated in its best-fitting plane';
-    return { clay: appendTriangles(clay, out, 'Seal', method, false), others: others.map(o => appendTriangles(o, out, 'Seal', `${method}; fill lying over a surface already there (${report.skinHiddenM2} m²) left out of the textured twin`, true, pieces)), report };
+    return sealed(clay, others, out, pieces, report);
 }
