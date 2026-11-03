@@ -106,17 +106,20 @@ void main() {
     float depth = texture2D(tDepth, vUv).x;
     if (depth >= 1.0) { gl_FragColor = vec4(1.0); return; }
     vec3 P = viewPosAt(vUv, depth);
-    // the face's normal from the depth (outward, toward the camera)
-    vec3 N = normalize(cross(dFdx(P), dFdy(P)));
+    float dist = length(P);
+    // one pixel's footprint at this distance, metres
+    float pixelM = 2.0 * dist / (uProj[1][1] * resolution.y);
+    // the face's normal from the depth (outward, toward the camera); none at a depth jump (a silhouette against the sky
+    // or a nearer building), where the neighbouring pixel lies far further than even a grazing surface reaches
+    vec3 dx = dFdx(P), dy = dFdy(P);
+    if (max(length(dx), length(dy)) > 30.0 * pixelM) { gl_FragColor = vec4(1.0); return; }
+    vec3 N = normalize(cross(dx, dy));
     if (dot(N, -P) < 0.0) N = -N;
     float ndl = dot(N, uSunView);
     float fade = smoothstep(uFade.x, uFade.y, -P.z);
     if (ndl <= 0.0 || fade <= 0.0) { gl_FragColor = vec4(1.0); return; }
     float lit = litByCascades(P, N);
     if (lit <= 0.0) { gl_FragColor = vec4(1.0); return; }
-    float dist = length(P);
-    // one pixel's footprint at this distance, metres
-    float pixelM = 2.0 * dist / (uProj[1][1] * resolution.y);
     float len = clamp(dist * uLengthPerMetre, uLengthBounds.x, uLengthBounds.y);
     vec3 start = P + N * (0.5 * pixelM);
     float occluded = 0.0;
