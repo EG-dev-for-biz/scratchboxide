@@ -5571,7 +5571,7 @@ inline std::string treeExtrasMembers(const PlantedTree& tr, const PlantParams& P
 /** The projected coverage of a tree's leaves (tree_lod::CoverageReport) as a JSON object. */
 inline std::string coverageJson(const tree_lod::CoverageReport& c) {
     auto lv = [](const tree_lod::CoverageLevel& l) {
-        return "{\"mean\":" + json::num(l.meanEllipsoid) + ",\"min\":" + json::num(l.minEllipsoid) + ",\"meanHull\":" + json::num(l.meanHull) + "}";
+        return "{\"mean\":" + json::num(l.meanEllipsoid) + ",\"min\":" + json::num(l.minEllipsoid) + ",\"meanHull\":" + json::num(l.meanHull) + ",\"areaM2\":" + json::num(l.meanAreaM2) + "}";
     };
     std::string o = "{\"measured\":" + std::string(c.measured ? "true" : "false") + ",\"leafiness\":" + json::num(c.leafiness) + ",\"target\":" + json::num(c.target) +
                     ",\"views\":" + std::to_string(c.views) + ",\"cellM\":" + json::num(c.cellM) + ",\"fillStations\":" + std::to_string(c.fillStations);
@@ -5580,12 +5580,11 @@ inline std::string coverageJson(const tree_lod::CoverageReport& c) {
         if (c.cardTarget > 0) o += ",\"midClusters\":" + lv(c.midClusters) + ",\"cardTarget\":" + json::num(c.cardTarget);
         if (c.level0Cutout.meanEllipsoid > 0 || c.midCutout.meanEllipsoid > 0)
             o += ",\"cutout\":{\"level0\":" + lv(c.level0Cutout) + ",\"mid\":" + lv(c.midCutout) + (c.cardTarget > 0 ? ",\"midClusters\":" + lv(c.midClustersCutout) : std::string()) + "}";
-        o += ",\"drawn\":{\"level0\":" + lv(c.drawnLevel0) + ",\"nearMid\":" + lv(c.drawnNearMid) + ",\"mid\":" + lv(c.drawnMid) + (c.drawnFarMeasured ? ",\"far\":" + lv(c.drawnFar) : std::string());
-        if (c.drawnLevel0Cutout.meanEllipsoid > 0)
-            o += ",\"cutout\":{\"level0\":" + lv(c.drawnLevel0Cutout) + ",\"nearMid\":" + lv(c.drawnNearMidCutout) + ",\"mid\":" + lv(c.drawnMidCutout) + (c.drawnFarMeasured ? ",\"far\":" + lv(c.drawnFarCutout) : std::string()) + "}";
-        o += ",\"of\":\"everything each level draws: its wood, twigs and every triangle of its leaf clusters or cards (the far level its trunk, main limbs and leaf masses); cutout: the blades and cards cut out as the chosen leaf texture is, the far masses solid; before any holes a viewer opens\"}";
+        o += ",\"drawn\":{\"level0\":" + lv(c.drawnLevel0) + ",\"nearMid\":" + lv(c.drawnNearMid) + ",\"mid\":" + lv(c.drawnMid) +
+             (c.drawnFarMeasured ? ",\"far\":" + lv(c.drawnFar) + ",\"farBefore\":" + lv(c.drawnFarBefore) + ",\"farMassSpread\":" + json::num(c.farMassSpread) : std::string());
+        o += ",\"of\":\"everything each level draws: its wood, twigs and every triangle of its leaf clusters or cards (the far level its trunk, main limbs and leaf masses, farBefore as the budgeted meshing built them, before they were spread farMassSpread along the crown surface until they cover as much of each view as the near level, areaM2); solid (clay), before any holes a viewer opens\"}";
     }
-    return o + ",\"of\":\"the share of the measured crown (an ellipsoid fitted to its surface samples and footprint) the leaves cover, seen from outside, the mean over the views; level0 .. midClusters and cutout count the leaf blades only, drawn counts everything each level draws\"}";
+    return o + ",\"of\":\"the share of the measured crown (an ellipsoid fitted to its surface samples and footprint) the leaves cover, seen from outside, the mean over the views (areaM2: the area they cover in a view, inside the crown's silhouette or not); level0 .. midClusters and cutout count the leaf blades only, drawn counts everything each level draws\"}";
 }
 
 /** A tree's crown cards (the mid level when it has them): how many, their side, the candidates they were chosen from (and the time, stats only: a GLB holds no timings). */

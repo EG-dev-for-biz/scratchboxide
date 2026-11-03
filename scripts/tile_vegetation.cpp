@@ -444,6 +444,7 @@ static int runPlant(const Args& a) {
     P.treeLod.shellDepthPerHeight = a.num("shell-depth-per-height", P.treeLod.shellDepthPerHeight);
     P.treeLod.spacingRatio = a.num("station-spacing", P.treeLod.spacingRatio);
     P.treeLod.coverageFill = a.num("coverage-fill", P.treeLod.coverageFill ? 1 : 0) != 0;
+    P.treeLod.farMassCoverMatch = a.num("far-mass-cover-match", P.treeLod.farMassCoverMatch ? 1 : 0) != 0;
     P.treeLod.coverageLeafAreaIndex = a.num("coverage-leaf-area-index", P.treeLod.coverageLeafAreaIndex);
     P.treeLod.coverageMaxFillShare = a.num("coverage-max-fill-share", P.treeLod.coverageMaxFillShare);
     P.treeLod.level1AreaGain = a.num("mid-area-gain", P.treeLod.level1AreaGain);

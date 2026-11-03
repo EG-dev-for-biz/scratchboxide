@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
         expect(fs.existsSync(path.join(SHOTS, 'measure_half_shell_v0.pgm'))).toBe(true);
     }, 120_000);
 
-    it('counts every drawn triangle: a plain mesh solid, a library mesh\'s blades cut out and its petioles not', () => {
+    it('counts every drawn triangle: a plain mesh, and a library mesh\'s petioles and sub-shoots as well as its blades', () => {
         const bin = compileProbe('coverage-drawn', `#include "scratchbox_tree_lod.hpp"
 #include <cstdio>
 using namespace scratchbox; using namespace scratchbox::tree_lod; using math::Vec3; using math::Vec2;
@@ -135,30 +135,31 @@ int main() {
   for (int j = 0; j <= V; ++j) for (int i = 0; i <= U; ++i) { const double th = M_PI * j / V, ph = 2 * M_PI * i / U;
     shell.vertices.push_back(Vec3(float(1.05 * std::sin(th) * std::cos(ph)), 5.0f + float(1.05 * std::cos(th)), float(1.05 * std::sin(th) * std::sin(ph)))); }
   for (int j = 0; j < V; ++j) for (int i = 0; i < U; ++i) { const uint32_t a = j * (U + 1) + i, b = a + 1, c = a + U + 1, d = c + 1; shell.indices.insert(shell.indices.end(), {a, c, b, b, c, d}); }
-  { detail::CoverageViews cv; cv.init(ref, hull, 0.01); cv.addMesh(shell); const auto L = cv.level(); std::printf("shell %.4f %.4f\\n", L.meanEllipsoid, L.minEllipsoid); }
-  // one horizontal card as a library mesh, flagged as a blade (leaf 1) or as a petiole (leaf 0), seen from above
-  auto card = [](float flag) { LibraryMesh m; const float s = 4.0f;
-    m.positions = {Vec3(-s, 0, -s), Vec3(s, 0, -s), Vec3(s, 0, s), Vec3(-s, 0, s)};
-    m.uvs = {Vec2(0, 0), Vec2(1, 0), Vec2(1, 1), Vec2(0, 1)};
-    m.leaf = {{0.5f, flag}, {0.5f, flag}, {0.5f, flag}, {0.5f, flag}};
-    m.indices = {0, 1, 2, 0, 2, 3}; return m; };
-  detail::CoverageViews::Cutout cut; cut.cv = 0.5; cut.hu = 0.5; cut.hv = 0.5; cut.r2 = 0.6 / (M_PI / 4.0);
-  ref.radii = {6, 6, 6};
+  { detail::CoverageViews cv; cv.init(ref, hull, 0.01); cv.addMesh(shell); const auto L = cv.level(); std::printf("shell %.4f %.4f %.4f\\n", L.meanEllipsoid, L.minEllipsoid, L.meanAreaM2); }
+  // a library mesh of two horizontal squares 1 m apart, the first its blade (bladeTri) and the second a petiole, seen from above
+  LibraryMesh m;
+  m.positions = {Vec3(-1.5f, 0, -0.5f), Vec3(-0.5f, 0, -0.5f), Vec3(-0.5f, 0, 0.5f), Vec3(-1.5f, 0, 0.5f), Vec3(0.5f, 0, -0.5f), Vec3(1.5f, 0, -0.5f), Vec3(1.5f, 0, 0.5f), Vec3(0.5f, 0, 0.5f)};
+  m.indices = {0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7};
+  m.bladePos = {m.positions[0], m.positions[1], m.positions[2], m.positions[3]};
+  m.bladeUv = {Vec2(0, 0), Vec2(1, 0), Vec2(1, 1), Vec2(0, 1)};
+  m.bladeTri = {0, 1, 2, 0, 2, 3};
+  ref.radii = {3, 3, 3};
   Instance in; in.t = Vec3(0, 5, 0); in.s = Vec3(1, 1, 1);
-  auto top = [&](const LibraryMesh& m, const detail::CoverageViews::Cutout* c) { detail::CoverageViews cv; cv.init(ref, hull, 0.02); cv.addWhole(m, in, c); return cv.views[8].covEll; };
-  std::printf("cards %zu %zu %zu\\n", top(card(1.0f), nullptr), top(card(1.0f), &cut), top(card(0.0f), &cut));
+  detail::CoverageViews blades; blades.init(ref, hull, 0.02); blades.add(m, in);
+  detail::CoverageViews whole; whole.init(ref, hull, 0.02); whole.addWhole(m, in);
+  std::printf("top %zu %zu %.4f\\n", blades.views[8].covAll, whole.views[8].covAll, whole.views[8].covAll * whole.cell * whole.cell);
 }`);
         const out = spawnSync(bin, [], { encoding: 'utf8' });
         expect(out.status, out.stderr).toBe(0);
         const lines = out.stdout.trim().split('\n');
-        const [, mean, min] = lines[0].split(' ').map(Number);
-        // a closed plain mesh around the crown hides it from every side
+        const [, mean, min, area] = lines[0].split(' ').map(Number);
+        // a closed plain mesh around the crown hides it from every side, and its area is the silhouette's (pi x 1.05^2)
         expect(mean).toBeGreaterThan(0.99); expect(min).toBeGreaterThan(0.99);
-        const [, solid, blade, petiole] = lines[1].split(' ').map(Number);
-        expect(solid).toBeGreaterThan(0);
-        // a blade is cut out as the leaf texture cuts it (the ellipse fills 0.6 of the card); a petiole or sub-shoot is solid
-        expect(blade / solid).toBeGreaterThan(0.57); expect(blade / solid).toBeLessThan(0.63);
-        expect(petiole).toBe(solid);
+        expect(area).toBeGreaterThan(Math.PI * 1.05 ** 2 * 0.97); expect(area).toBeLessThan(Math.PI * 1.05 ** 2 * 1.03);
+        const [, blade, all, allM2] = lines[1].split(' ').map(Number);
+        // the blades alone are one 1 m square; every triangle the mesh draws is two
+        expect(all / blade).toBeGreaterThan(1.95); expect(all / blade).toBeLessThan(2.05);
+        expect(allM2).toBeGreaterThan(1.9); expect(allM2).toBeLessThan(2.1);
     }, 120_000);
 });
 
@@ -214,6 +215,10 @@ describe('crown fill by season (TileVegetationService.plant)', () => {
             expect(d.mid.mean).toBeGreaterThanOrEqual(c.mid.mean);
             expect(d.far.mean).toBeGreaterThan(0.3);
             for (const k of ['level0', 'nearMid', 'mid', 'far']) expect(d[k].mean).toBeLessThanOrEqual(1);
+            // the far masses are spread along the crown surface until the far level covers as much of each view as the near
+            // level draws (or as far as they may spread)
+            if (d.farBefore.areaM2 < d.level0.areaM2) expect(d.far.areaM2).toBeGreaterThanOrEqual(d.farBefore.areaM2 - 1e-9);
+            if (d.farMassSpread < 2.99) expect(Math.abs(d.far.areaM2 / d.level0.areaM2 - 1)).toBeLessThanOrEqual(0.011);
         }
         const leaves = (p: typeof summer) => p.stats.perTree.reduce((n: number, t: any) => n + t.lod.level0.leaves, 0);
         for (const t of sparse.stats.perTree) {
