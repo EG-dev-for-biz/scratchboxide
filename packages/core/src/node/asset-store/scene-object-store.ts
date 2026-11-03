@@ -24,6 +24,12 @@
  * checkGlbBytes before it is kept, and is stored under a path named by its input hash, so two processes storing the
  * same object race to the same bytes.
  *
+ * Measured versions (the place store, place-store.ts; the 2026-11-03 district run-over-run plan): a version stored with
+ * `measures` (each saying which way is better and the change within which it is noise) and the defects found in it
+ * becomes current only when no measure of the current version gets worse and none goes unmeasured, so a later run never
+ * makes an object worse. A version that fails is still stored, as history, with the decision and its reason in its
+ * record; the current one stays. A current version stored without measures is not compared.
+ *
  * Records are additive-only JSON: a reader ignores fields it does not know, a writer never removes or renames one.
  */
 
@@ -68,6 +74,36 @@ export function objectInputHash(...parts: unknown[]): string {
     return h.digest('hex');
 }
 
+/** One measure of a version: its value, which way is better, and the change within which it is not worse. */
+export interface ObjectMeasure { value: number; better: 'lower' | 'higher'; tol?: number }
+export type ObjectMeasures = Record<string, ObjectMeasure>;
+
+/** A defect found in a version: what kind (a label), in words, what found it, and where (frame metres; a critic's view and screen box). */
+export interface ObjectDefect { kind: string; detail: string; source: string; at?: [number, number, number]; view?: string; box?: [number, number, number, number] }
+
+/** Whether a measured version became current, and why. */
+export interface ObjectDecision {
+    kept: boolean;
+    reason: string;
+    /** The current version it was compared with. */
+    comparedTo?: number;
+    /** Measures that got worse, or went unmeasured, in words. */
+    worse?: string[];
+}
+
+/** Measures of `current` that `next` makes worse beyond their tolerance, or does not measure, in words. */
+export function worseMeasures(current: ObjectMeasures, next: ObjectMeasures): string[] {
+    const out: string[] = [];
+    const fmt = (v: number) => (Math.abs(v) >= 100 || Number.isInteger(v) ? String(Math.round(v * 10) / 10) : v.toPrecision(3));
+    for (const [name, c] of Object.entries(current)) {
+        const n = next[name];
+        if (!n || !Number.isFinite(n.value)) { out.push(`${name} not measured (was ${fmt(c.value)})`); continue; }
+        const tol = c.tol ?? 0;
+        if (c.better === 'lower' ? n.value > c.value + tol : n.value < c.value - tol) out.push(`${name} ${fmt(c.value)} -> ${fmt(n.value)} (${c.better} is better)`);
+    }
+    return out;
+}
+
 export interface ObjectRecord {
     schema: typeof OBJECT_RECORD_SCHEMA;
     objectKey: string;
@@ -92,6 +128,12 @@ export interface ObjectRecord {
     workspace?: string;
     createdAtMs: number;
     glb: { path: string; sha256: string; bytes: number; triangles: number; vertices: number; nodes: number };
+    /** The version's measures, the defects found in it and the audit's own detail, when it was measured. */
+    measures?: ObjectMeasures;
+    defects?: ObjectDefect[];
+    audit?: unknown;
+    /** Whether it became current when it was stored, and why (measured versions only). */
+    decision?: ObjectDecision;
 }
 
 export interface PutObjectInput {
@@ -109,6 +151,10 @@ export interface PutObjectInput {
     catalogId?: string;
     runId?: string;
     workspace?: string;
+    /** Measured: the version becomes current only when no measure of the current version is worse (see the module doc). */
+    measures?: ObjectMeasures;
+    defects?: ObjectDefect[];
+    audit?: unknown;
 }
 
 export interface PutObjectResult {
@@ -118,6 +164,8 @@ export interface PutObjectResult {
     reused: boolean;
     /** The current pointer moved (a new version, or back to an older one). */
     pointerMoved: boolean;
+    /** A measured version: whether it is current now, and why. */
+    decision?: ObjectDecision;
     glbPath: string;
     recordPath: string;
     sha256: string;
@@ -233,19 +281,48 @@ export class SceneObjectStore {
      * Stores an object's geometry for `inputHash`, or reuses the version that already has it (see the module doc).
      * Throws when the GLB fails the structural check: nothing malformed is ever kept.
      */
+    /** The parsed record of a stored version, when its record is present. */
+    recordOf(row: ObjectVersionRow): ObjectRecord | undefined {
+        const rec = this.store.lookup(row.recordPath);
+        if (!rec) return undefined;
+        try {
+            const record = JSON.parse(fs.readFileSync(rec.file, 'utf8')) as ObjectRecord;
+            return record.schema === OBJECT_RECORD_SCHEMA ? record : undefined;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /** Whether measures may make a version (`version`, or a new one) current over the current version (see the module doc). */
+    private gate(objectKey: string, measures: ObjectMeasures | undefined, version?: number): ObjectDecision | undefined {
+        if (!measures) return undefined;
+        const cur = this.store.db.currentObjectVersion(objectKey);
+        if (!cur) return { kept: true, reason: 'the first version of this object' };
+        if (cur.version === version) return { kept: true, reason: 'already the current version', comparedTo: cur.version };
+        const current = this.recordOf(cur);
+        if (!current?.measures) return { kept: true, reason: `the current version ${cur.version} carries no measures`, comparedTo: cur.version };
+        const worse = worseMeasures(current.measures, measures);
+        return worse.length
+            ? { kept: false, reason: `version ${cur.version} stays current: ${worse.join('; ')}`, comparedTo: cur.version, worse }
+            : { kept: true, reason: `no measure is worse than version ${cur.version}`, comparedTo: cur.version };
+    }
+
     put(input: PutObjectInput): PutObjectResult {
         const locationHash = locationHashOf(input.frame);
         const objectKey = objectKeyOf(input.kind, input.identity, locationHash);
         const reuse = this.find(objectKey, input.inputHash);
         if (reuse) {
-            const moved = this.store.db.currentObjectVersion(objectKey)?.version !== reuse.version;
+            const decision = this.gate(objectKey, input.measures, reuse.version);
+            const moved = this.store.db.currentObjectVersion(objectKey)?.version !== reuse.version && decision?.kept !== false;
             if (moved) this.store.db.transaction(() => {
                 this.store.db.setCurrentObjectVersion(objectKey, reuse.version);
-                this.store.db.addEvent('object.current', objectKey, reuse.glbSha256, { version: reuse.version, inputHash: input.inputHash, reason: 'an earlier input again' });
+                this.store.db.addEvent('object.current', objectKey, reuse.glbSha256, { version: reuse.version, inputHash: input.inputHash, reason: decision?.reason ?? 'an earlier input again' });
             });
+            else if (decision?.kept === false) this.store.db.addEvent('object.rejected', objectKey, reuse.glbSha256, { version: reuse.version, inputHash: input.inputHash, ...decision });
             const bytes = this.store.lookup(reuse.glbPath)?.bytes ?? 0;
-            return { objectKey, version: reuse.version, reused: true, pointerMoved: moved, glbPath: reuse.glbPath, recordPath: reuse.recordPath, sha256: reuse.glbSha256, bytes };
+            return { objectKey, version: reuse.version, reused: true, pointerMoved: moved, glbPath: reuse.glbPath, recordPath: reuse.recordPath, sha256: reuse.glbSha256, bytes, ...(decision ? { decision } : {}) };
         }
+        const decision = this.gate(objectKey, input.measures);
         const glb = input.glb();
         const check = checkGlbBytes(glb);
         if (!check.ok) throw new Error(`scene object store: ${objectKey} is not a valid GLB (${check.errors.slice(0, 3).join('; ')}${check.errors.length > 3 ? `; ${check.errors.length - 3} more` : ''})`);
@@ -271,7 +348,9 @@ export class SceneObjectStore {
             provenance: input.provenance, materials, inputHash: input.inputHash, ...(input.inputs ? { inputs: input.inputs } : {}),
             producer: input.producer, ...(input.catalogId ? { catalogId: input.catalogId } : {}), ...(input.runId ? { runId: input.runId } : {}), ...(input.workspace ? { workspace: input.workspace } : {}),
             createdAtMs: Date.now(),
-            glb: { path: glbPath, sha256, bytes: glb.length, triangles: check.counts.triangles, vertices: check.counts.vertices, nodes: check.counts.nodes }
+            glb: { path: glbPath, sha256, bytes: glb.length, triangles: check.counts.triangles, vertices: check.counts.vertices, nodes: check.counts.nodes },
+            ...(input.measures ? { measures: input.measures } : {}), ...(input.defects ? { defects: input.defects } : {}),
+            ...(input.audit !== undefined ? { audit: input.audit } : {}), ...(decision ? { decision } : {})
         };
         fs.mkdirSync(this.tmpDir, { recursive: true });
         const tag = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
@@ -303,11 +382,13 @@ export class SceneObjectStore {
                 });
                 this.store.db.addEvent('object.version', objectKey, sha256, { version, inputHash: input.inputHash, glbPath, bytes: glb.length, triangles: check.counts.triangles });
             }
-            const moved = this.store.db.currentObjectVersion(objectKey)?.version !== version;
+            // a measured version that would make the current one worse is kept as history, not made current
+            const moved = this.store.db.currentObjectVersion(objectKey)?.version !== version && decision?.kept !== false;
             if (moved) this.store.db.setCurrentObjectVersion(objectKey, version);
+            else if (decision?.kept === false) this.store.db.addEvent('object.rejected', objectKey, sha256, { version, inputHash: input.inputHash, ...decision });
             return { version, moved, raced: !!known };
         });
-        return { objectKey, version: out.version, reused: out.raced, pointerMoved: out.moved, glbPath, recordPath, sha256, bytes: glb.length };
+        return { objectKey, version: out.version, reused: out.raced, pointerMoved: out.moved, glbPath, recordPath, sha256, bytes: glb.length, ...(decision ? { decision } : {}) };
     }
 
     /** Keeps a finished scene: its data and the object versions it used, under its own served path, with a recipe. */
