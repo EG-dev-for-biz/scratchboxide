@@ -57,6 +57,8 @@ import type { FitFrame, FittedPlane, WindowFitFile, WindowRect } from '../window
 import { contactSheet, contextFor, parseBrief, briefPrompt, planePlaces, type BuildingBrief, type NamedBuilding, type PlaneFamily } from './facade-reader-brief';
 import { exemplarOf, matchExemplar, mergeMatches, TEMPLATE_PARAMS, type TemplateMatch, type WindowExemplar } from './facade-reader-template';
 import { planePixelsKey, readingKey, type ModelReadingStore } from './model-readings';
+import { kNative } from './native/native-switch';
+import { matchExemplarsNative } from './native/template-match-native';
 import { readOccluded, unreadMask } from './occlusion';
 import { PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
 
@@ -656,8 +658,11 @@ export async function readFromTemplates(img: FacadePhoto, uncovered: ArrayLike<n
     // the photo's matches of each exemplar give its grid (facade-reader-template.ts): the columns they stand in, at least a
     // quarter as often as the best (and three times), and the rows at the exemplar's zone's storey pitch, phased on the
     // matches; the grid is then drawn where the photo covers each opening, as a reading's tiling is
+    const g = { L, W, H, pixel: f.pixel };
+    // every exemplar's matches in one native run, off the event loop (native/template-match-native.ts), unless the TypeScript is asked for
+    const found = kNative('template') ? await matchExemplarsNative(g, family.exemplars) : family.exemplars.map(ex => matchExemplar(g, ex));
     const lattice = family.exemplars.flatMap((ex, ei) => {
-        const ms = matchExemplar({ L, W, H, pixel: f.pixel }, ex).filter(m => !m.grid);
+        const ms = found[ei].filter(m => !m.grid);
         if (ms.length < TEMPLATE_PARAMS.minMatches) return [];
         const med = (v: number[]) => { const q = [...v].sort((a, b) => a - b); return q[q.length >> 1]; };
         const ow = med(ms.map(m => m.rect[2] - m.rect[0])), oh = med(ms.map(m => m.rect[3] - m.rect[1]));
