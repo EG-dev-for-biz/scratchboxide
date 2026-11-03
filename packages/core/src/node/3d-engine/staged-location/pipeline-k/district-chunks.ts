@@ -10,9 +10,8 @@
 /**
  * Pipeline K-D's chunked district: the whole radius at leaf LOD, built as chunks.
  *
- * One build keeps at most the nearest few hundred leaf tiles (Google3DTileBlockoutPipelineService maxLeaves), so a dense
- * district's scan stopped far short of the radius asked for, and one build holding the whole radius at leaf LOD would not
- * fit in memory. Here the radius is cut into chunks, each built on its own (extraction, remesh, K, trees, textures) in its
+ * One build holding a dense district's whole radius at leaf LOD, and every stage run over it, would not fit in memory
+ * (an extraction keeps every leaf the radius touches, Google3DTileBlockoutPipelineService selectLeavesByPlanReach). Here the radius is cut into chunks, each built on its own (extraction, remesh, K, trees, textures) in its
  * own worker, and joined:
  *  1. The plan (planDistrictChunks): a square grid of `cellM` cells over the disc. Every building (Google's vector
  *     footprints) belongs wholly to the cell holding its centroid, so no chunk boundary cuts through a building (AGENTS.md
