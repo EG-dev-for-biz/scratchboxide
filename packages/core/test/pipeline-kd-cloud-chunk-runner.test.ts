@@ -32,7 +32,7 @@ const tmp = (name: string) => fs.mkdtempSync(path.join(os.tmpdir(), `kd-cloud-${
 const SHA = '86ec852f0123456789abcdef0123456789abcdef';
 
 const request = (index = 7): StagedLocationRequest => ({
-    query: 'Shibuya Crossing', isolate: false, radiusM: 140, stageIntoActiveScene: false, pipeline: 'kd',
+    query: 'Shibuya Crossing', isolate: false, radiusM: 140, stageIntoActiveScene: false, district: 'kd',
     place: { lat: 35.6595, lng: 139.7005, formattedAddress: `Shibuya (chunk ${index})` },
     chunk: { of: 'c527da43', index, rect: { x0: -70, z0: -70, x1: 70, z1: 70 } }
 } as StagedLocationRequest);
