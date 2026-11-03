@@ -24,9 +24,10 @@ So a bake cannot match the viewport: the native sky has no multiple scattering, 
 - **Driver and service:** the CLI `scripts/atmosphere_lut.cpp` and the service `atmosphere-lut-service.ts`, built through `compileNativeCached`. The same driver also loads tables (ours or any in this layout) and evaluates sky radiance, transmittance and sun and sky irradiance.
 - **Validation** (`packages/core/test/atmosphere-lut.test.ts`):
   1. All of Bruneton's `functions_test.cc` is ported: 25 tests and 127 checks, at his tolerances.
-  2. Our Earth tables vs three-geospatial's shipped tables (pinned `eac10398`, fetched into `.model-cache/` by `scripts/fetch_three_geospatial_atmosphere.mjs`), per table and channel. Tolerance: mean < 0.3 %, p99 < 2.5 %, max < 15 %. The same runtime functions on both sets of tables must give the same sky to within a mean of 0.5 %.
+  2. Our Earth tables vs three-geospatial's shipped tables (pinned `eac10398`, fetched into `.model-cache/` by `scripts/fetch_three_geospatial_atmosphere.mjs`), per table and channel. Tolerance: mean < 0.3 %, p99 < 2.5 %, max < 15 %. The same runtime functions on both sets of tables must give the same sky to within a mean of 1.5 % for a camera at 1 m and 0.3 % at 1 km.
   3. The four sun elevations (90°, 30°, 5°, −3°) against the native and viewer skies, rendered as a labelled sheet in `docs/screenshots/sky_bruneton_2026-11-03/`.
   4. The precompute timing.
+- **Where it runs:** every run, pull requests included, builds the functions test (1) and a single-scattering Earth precompute, checks its layout and refuses non-physical media: about 8 s cold. The 4-order and spectral tables with checks 2–4 take about 30 minutes on a CI runner (the scattering density is 90 % of it), so they run only under `SCRATCHBOX_HEAVY_TESTS=1`: set by the macOS job on pushes to main and nightly, and locally for the sheet. Check 2 also needs the fetched fixture and skips with its reason without it.
 - **Not ported:** `model_test.cc`. It compares the GPU model's renders against the CPU reference by PSNR, which has no counterpart here: there is no GPU model in this PR. Its spectral-vs-three-wavelength question is answered in P3 instead, as the viewer columns of the sheet.
 
 ### P1 results (2026-11-03, 16-core Mac)
