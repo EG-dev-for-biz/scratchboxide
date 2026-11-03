@@ -19,8 +19,9 @@
  *  - with no place: a plain sun path (east at 6:00, highest in the south at noon, west at 18:00, below the horizon at
  *    night), labelled as such, never an assumed location.
  *
- * No uninvited atmosphere (AGENTS.md 3.6): nothing here runs until someone sets the weather; clearing it restores the sky
- * the scene had before.
+ * No uninvited atmosphere (AGENTS.md 3.6): nothing here runs until someone sets the weather, except a real place's opening
+ * sky (withLocationSceneWeather: every 3D Building, 3D Scene and 3D World, user decision 2026-11-02); clearing it restores
+ * the sky the scene had before, and a scene whose weather was cleared keeps it cleared.
  */
 
 import type { Scene3DData } from '../../canvas-types';
@@ -140,6 +141,10 @@ export function applySceneWeather(scene: Scene3DData, weather: Partial<SceneWeat
     const prior = prevState?.prior ?? { atmosphericScattering: prevAtmo, skybox: scene.environment?.skybox, timeOfDay: scene.environment?.timeOfDay };
     // a district (a geo-anchored or tiled scene) is hundreds of metres across, a studio scene tens
     const large = !!(scene.geoAnchor || (scene as { tiles3d?: unknown }).tiles3d);
+    // a splat world draws Gaussian splats, which write no depth and whose colours are final display values: the aerial
+    // perspective pass would take them for sky and tone-map them a second time, washing the whole world out to white
+    // (AerialPerspectiveEffect.ts), so a splat world gets the sky without it (the splats carry the photos' own haze)
+    const splatWorld = !!(scene.splatUrl || (scene as { splatTilesetUrl?: string }).splatTilesetUrl);
     const base = typeof prevAtmo === 'object' && prevAtmo !== null ? prevAtmo : {};
     const atmosphericScattering = {
         ...base,
@@ -154,27 +159,33 @@ export function applySceneWeather(scene: Scene3DData, weather: Partial<SceneWeat
         turbidity: 2 + 8 * w.haze,
         // haze is in the air all around, not only in the sky: the aerial perspective pass (AerialPerspectiveEffect.ts)
         // fades every surface toward the sky's colour with distance, over a range that shortens as the haze thickens
-        // (a district clears to about 2 km, thick haze to 80 m; a studio scene a tenth of that); on whenever the sky is
-        aerialPerspectiveEnabled: true,
+        // (a district clears to about 2 km, thick haze to 80 m; a studio scene a tenth of that); on whenever the sky is,
+        // except in a splat world (above)
+        aerialPerspectiveEnabled: !splatWorld,
         aerialPerspectiveRange: hazeRangeM(w.haze, large),
         mie: 0.002 + 0.03 * w.haze,
         inscatteringIntensity: 1,
         fogDensity: w.fog > 0 ? w.fog * (large ? 0.002 : 0.04) : 0,
         weather: { version: SCENE_WEATHER_VERSION, sun: sun.source }
     };
+    const { weatherCleared: _cleared, ...rest } = scene as Scene3DData & { weatherCleared?: boolean };
     return {
-        ...scene,
+        ...rest,
         weather: { ...w, version: SCENE_WEATHER_VERSION, prior },
         features: { ...(scene.features || {}), atmosphericScattering },
         environment: { ...(scene.environment || {}), skybox: 'sky', timeOfDay: w.timeOfDay }
     } as Scene3DData;
 }
 
-/** The scene with its weather cleared: the sky it had before the weather was first set. */
+/**
+ * The scene with its weather cleared: the sky it had before the weather was first set. It is marked `weatherCleared`, so a
+ * location's opening sky (withLocationSceneWeather) is not put back when the scene is composed or opened again.
+ */
 export function clearSceneWeather(scene: Scene3DData): Scene3DData {
     const state = (scene as { weather?: SceneWeatherState }).weather;
     if (!state) return scene;
-    const { weather: _w, ...rest } = scene as Scene3DData & { weather?: SceneWeatherState };
+    const { weather: _w, ...kept } = scene as Scene3DData & { weather?: SceneWeatherState };
+    const rest = { ...kept, weatherCleared: true };
     const features = { ...(scene.features || {}) } as Record<string, unknown>;
     if (state.prior?.atmosphericScattering === undefined) delete features.atmosphericScattering;
     else features.atmosphericScattering = state.prior.atmosphericScattering;
@@ -182,6 +193,46 @@ export function clearSceneWeather(scene: Scene3DData): Scene3DData {
     if (state.prior?.skybox === undefined) delete environment.skybox; else environment.skybox = state.prior.skybox;
     if (state.prior?.timeOfDay === undefined) delete environment.timeOfDay; else environment.timeOfDay = state.prior.timeOfDay;
     return { ...rest, features, environment } as Scene3DData;
+}
+
+/**
+ * The afternoon time of day (local mean solar time, hours) at which the sun stands `elevationDeg` above the horizon at the
+ * place on `date` (the plain sun path with no place), found by bisection on the sun's descent after its highest. A day
+ * whose sun never climbs that high gives the time of its highest (the sun as high as it gets, still lower than asked); a
+ * day it never sinks below it (polar summer) gives the latest time searched.
+ */
+export function afternoonTimeForSunElevation(elevationDeg: number, location?: { lat: number; lng: number }, date?: string): number {
+    const at = (t: number) => weatherSun(normalizeWeather({ timeOfDay: t, date }), location).elevationDeg;
+    // the sun's highest lies within an hour of 12:00 local mean solar time (the equation of time stays under 17 minutes)
+    let noon = 12, highest = at(12);
+    for (let t = 11; t <= 13; t += 0.05) { const e = at(t); if (e > highest) { highest = e; noon = t; } }
+    if (highest <= elevationDeg) return noon;
+    let lo = noon, hi = 23.99;
+    if (at(hi) >= elevationDeg) return hi;
+    for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (at(mid) > elevationDeg) lo = mid; else hi = mid; }
+    return (lo + hi) / 2;
+}
+
+/**
+ * The sky a real place opens under (user decision 2026-11-02: every 3D Building, 3D Scene and 3D World): partly cloudy, with
+ * the sun low in the afternoon, from the place's own ephemeris on the build's day. 20 degrees is the low late-day sun the
+ * 3D Scene button already asked for (2026-10-21: high enough that shadows do not crush to black).
+ */
+export const LOCATION_SCENE_WEATHER = { sunElevationDeg: 20, cloudCover: 0.4, haze: 0.2, fog: 0 } as const;
+
+/**
+ * A location scene with its opening sky (LOCATION_SCENE_WEATHER) on `date` (yyyy-mm-dd), unless it has a weather of its own
+ * or its weather was cleared. The weather records the sky the scene had before, so the Weather tool's Off goes back to it.
+ */
+export function withLocationSceneWeather(scene: Scene3DData, date: string): Scene3DData {
+    if (readSceneWeather(scene) || (scene as { weatherCleared?: boolean }).weatherCleared) return scene;
+    const { sunElevationDeg, cloudCover, haze, fog } = LOCATION_SCENE_WEATHER;
+    return applySceneWeather(scene, { timeOfDay: afternoonTimeForSunElevation(sunElevationDeg, sceneLocation(scene), date), date, cloudCover, haze, fog });
+}
+
+/** The UTC day (yyyy-mm-dd) of an instant: the day a location's opening sky is computed for. */
+export function weatherDateOf(ms: number): string {
+    return new Date(ms).toISOString().slice(0, 10);
 }
 
 /** "14:30" for 14.5 hours. */

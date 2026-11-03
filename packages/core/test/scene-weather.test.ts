@@ -14,7 +14,10 @@
 
 import { describe, expect, it } from 'vitest';
 import type { GraphNode, Scene3DData } from '../src/browser/generative-canvas/canvas-types';
-import { applySceneWeather, clearSceneWeather, formatTimeOfDay, normalizeWeather, readSceneWeather, weatherPhase, weatherSun } from '../src/browser/generative-canvas/services/atmosphere/scene-weather';
+import {
+    LOCATION_SCENE_WEATHER, afternoonTimeForSunElevation, applySceneWeather, clearSceneWeather, formatTimeOfDay, normalizeWeather, readSceneWeather, weatherPhase, weatherSun,
+    withLocationSceneWeather
+} from '../src/browser/generative-canvas/services/atmosphere/scene-weather';
 import { applySceneNodeParam, sceneNodeFields } from '../src/browser/generative-canvas/scene-node-params';
 import { sceneOptsIntoAtmosphere } from '../src/common/scene-atmosphere-opt-in';
 import { morphScene3DToNodeGraph } from '../src/browser/generative-canvas/primitive-transformer-engine';
@@ -124,5 +127,56 @@ describe('scene weather', () => {
         expect(w.date).toBeUndefined();
         expect(formatTimeOfDay(14.5)).toBe('14:30');
         expect(formatTimeOfDay(23.999)).toBe('00:00');
+    });
+});
+
+describe('a real place\'s opening sky (user decision 2026-11-02)', () => {
+    const nyc = { lat: 40.7484, lng: -73.9857 };
+    const place = (): Scene3DData => ({ title: 'Empire State Building', environment: { skybox: 'studio', lighting: 'studio' }, geoAnchor: { ...nyc } } as unknown as Scene3DData);
+
+    it('finds the afternoon time the sun stands at a given height, from the place\'s ephemeris', () => {
+        for (const date of ['2026-06-21', '2026-11-02', '2026-12-21']) {
+            const t = afternoonTimeForSunElevation(20, nyc, date);
+            expect(t).toBeGreaterThan(12);
+            expect(weatherSun(normalizeWeather({ timeOfDay: t, date }), nyc).elevationDeg).toBeCloseTo(20, 2);
+        }
+        // a later sunset in June: the sun reaches 20 degrees later in the day than in December
+        expect(afternoonTimeForSunElevation(20, nyc, '2026-06-21')).toBeGreaterThan(afternoonTimeForSunElevation(20, nyc, '2026-12-21') + 2);
+        // the plain sun path with no place: 20 degrees up after noon
+        expect(weatherSun(normalizeWeather({ timeOfDay: afternoonTimeForSunElevation(20) })).elevationDeg).toBeCloseTo(20, 2);
+    });
+
+    it('gives the time of the highest sun when the sun never climbs that high (London at midwinter peaks near 15 degrees)', () => {
+        const london = { lat: 51.508, lng: -0.128 };
+        const t = afternoonTimeForSunElevation(20, london, '2026-12-21');
+        const at = weatherSun(normalizeWeather({ timeOfDay: t, date: '2026-12-21' }), london).elevationDeg;
+        expect(at).toBeLessThan(20);
+        expect(at).toBeGreaterThan(weatherSun(normalizeWeather({ timeOfDay: t + 1, date: '2026-12-21' }), london).elevationDeg);
+        expect(Math.abs(t - 12)).toBeLessThan(1);
+    });
+
+    it('opens a place partly cloudy under a low sun, over a studio the Weather tool\'s Off returns to', () => {
+        const s = withLocationSceneWeather(place(), '2026-11-02') as Scene3DData & { weather: any; weatherCleared?: boolean };
+        expect(readSceneWeather(s)).toMatchObject({ cloudCover: LOCATION_SCENE_WEATHER.cloudCover, haze: LOCATION_SCENE_WEATHER.haze, fog: 0, date: '2026-11-02' });
+        expect(weatherSun(readSceneWeather(s)!, nyc).elevationDeg).toBeCloseTo(LOCATION_SCENE_WEATHER.sunElevationDeg, 2);
+        expect(s.environment?.skybox).toBe('sky');
+        expect((s.features as any).atmosphericScattering).toMatchObject({ enabled: true, cloudCoverage: 0.4, cloudShadowsEnabled: true, latitude: nyc.lat, longitude: nyc.lng });
+        expect((s.features as any).atmosphericScattering.aerialPerspectiveEnabled).toBe(true);
+        // a splat world gets the sky without the haze pass, which would tone-map its depthless splats a second time
+        const world = withLocationSceneWeather({ ...place(), splatUrl: '/tilesets/w/fused.spz' } as Scene3DData, '2026-11-02');
+        expect((world.features as any).atmosphericScattering).toMatchObject({ enabled: true, cloudCoverage: 0.4, aerialPerspectiveEnabled: false });
+        const off = clearSceneWeather(s) as Scene3DData & { weatherCleared?: boolean };
+        expect(off.environment?.skybox).toBe('studio');
+        expect((off.features as any).atmosphericScattering).toBeUndefined();
+        expect(off.weatherCleared).toBe(true);
+    });
+
+    it('never overrides a weather the scene has, nor puts one back once it was cleared', () => {
+        const own = applySceneWeather(place(), { timeOfDay: 9, cloudCover: 0.9 });
+        expect(withLocationSceneWeather(own, '2026-11-02')).toBe(own);
+        const cleared = clearSceneWeather(withLocationSceneWeather(place(), '2026-11-02'));
+        expect(withLocationSceneWeather(cleared, '2026-11-03')).toBe(cleared);
+        // setting a weather again lifts the mark
+        expect((applySceneWeather(cleared, { cloudCover: 0.2 }) as { weatherCleared?: boolean }).weatherCleared).toBeUndefined();
     });
 });
