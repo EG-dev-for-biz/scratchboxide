@@ -68,9 +68,11 @@ export interface SurveySplatPipelineRequest {
     /**
      * A splat on every patch of the scan, coloured from the stations (surface-splat-layer.ts), instead of the stations'
      * per-pixel splats fused by voxel: its spacing grows with the distance to the walk `corridor` (scan frame x, z at eye
-     * height), within `budget` splats. Also written as .spz, which the scene loads.
+     * height), within `budget` splats. Also written as .spz, which the scene loads. With the scan's photo-textured
+     * extraction of the same crawl (`tileGlbPath`), every station colours only what it truly sees and the rest takes the
+     * scan's own texture; each splat's source is written beside the splat (fused.provenance.u8).
      */
-    surfaceLayer?: { corridor: { a: [number, number]; b: [number, number]; eyeY: number }; budget?: number };
+    surfaceLayer?: { corridor: { a: [number, number]; b: [number, number]; eyeY: number }; budget?: number; tileGlbPath?: string };
     outDir: string;
     beautify: StationBeautifyContext;
     /** 'chained' warps each accepted image into the next station (consistent materials); 'fanout' beautifies independently. */
@@ -183,6 +185,8 @@ export interface SurveySplatPipelineResult {
     fusedSplatPath: string;
     /** The same splats as SPZ (about a tenth of the size), when written: the scene loads it. */
     spzPath?: string;
+    /** The surface layer's report, when it was built (its colour sources among it). */
+    surfaceLayer?: SurfaceLayerReport;
     fusedSplatCount: number;
     tilesetPath: string;
     metaPath: string;
@@ -450,9 +454,9 @@ export class SurveySplatPipelineService {
             let surface: SurfaceLayerReport | undefined;
             const spzPath = path.join(outDir, 'fused.spz');
             if (req.surfaceLayer) {
-                // a splat on every patch of the scan, coloured from the stations, in place of the per-pixel splats' voxel fuse
+                // a splat on every patch of the scan, coloured from the stations that truly see it, in place of the per-pixel splats' voxel fuse
                 throwIfStopped(signal);
-                report(0.8, 'Laying a splat on every patch of the scan, coloured from the stations');
+                report(0.8, 'Laying a splat on every patch of the scan, coloured from the stations that truly see it');
                 const layerStations = reports.filter(r => r.accepted && r.splatPath && r.imagePath).flatMap(r => {
                     const baked = bakedStations.find(b => b.splatPath === r.splatPath);
                     return baked ? [{ station: baked.station, imagePath: r.imagePath, posePath: r.splatPath!.replace(/\.splat$/, '.pose.json'), priority: r.groundingPanoId ? 1.5 : 1 }] : [];
@@ -460,7 +464,8 @@ export class SurveySplatPipelineService {
                 surface = await buildSurfaceSplatLayer({
                     glbPath: req.glbPath, anchor: req.anchor, renderer, stations: layerStations, corridor: req.surfaceLayer.corridor,
                     outSplat: fusedSplatPath, outSpz: spzPath, workDir: path.join(outDir, 'surface_work'),
-                    ...(req.surfaceLayer.budget ? { budget: req.surfaceLayer.budget } : {}), ...(signal ? { signal } : {})
+                    ...(req.surfaceLayer.budget ? { budget: req.surfaceLayer.budget } : {}), ...(signal ? { signal } : {}),
+                    ...(req.surfaceLayer.tileGlbPath ? { tileGlbPath: req.surfaceLayer.tileGlbPath, outProvenance: path.join(outDir, 'fused.provenance.u8') } : {})
                 });
                 fusedCount = surface.splats;
             } else {
@@ -536,7 +541,7 @@ export class SurveySplatPipelineService {
             };
             await fs.writeJson(metaPath, meta, { spaces: 2 });
             report(1, 'Done');
-            return { success: true, stations: reports, fusedSplatPath, ...(surface ? { spzPath } : {}), fusedSplatCount: fusedCount, tilesetPath, metaPath, cropBox, durationMs: Date.now() - t0 };
+            return { success: true, stations: reports, fusedSplatPath, ...(surface ? { spzPath, surfaceLayer: surface } : {}), fusedSplatCount: fusedCount, tilesetPath, metaPath, cropBox, durationMs: Date.now() - t0 };
         } catch (e: any) {
             // A stopped run is not a pipeline failure: the caller gets the stop itself.
             throwIfStopped(signal);

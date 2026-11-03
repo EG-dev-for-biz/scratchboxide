@@ -18,7 +18,7 @@ import {
     type StationImageGenerator
 } from './BeautifyStationService';
 import { resolveSurveyPreset } from './survey-router';
-import { geocode3DTilesAddress, getGoogle3DTilesClay } from './Google3DTileBlockoutPipelineService';
+import { geocode3DTilesAddress, getGoogle3DTilesClay, getGoogle3DTilesFullTexture } from './Google3DTileBlockoutPipelineService';
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
 import { glbRaycaster, planStreetViewStations, snapVantageToDrivenSidewalk, snapVantageToSidewalk, SNAP_STREET_RADIUS_M, type SidewalkSnap, type StreetVantage, type StreetViewStationsResult, type VectorStreet } from './street-view-stations';
@@ -148,6 +148,12 @@ export interface Location3DGSResult {
     streetView?: Omit<StreetViewStationsResult, 'stations'> & { snap?: SidewalkSnap; stations: number; accepted: number; unmatched: number; panos: string[] };
     /** The world cache: this world was fetched from it (built when `storedAt`), or is being stored in it. */
     worldCache?: { key: string; bucket: string; state: 'fetched' | 'storing'; storedAt?: string };
+    /**
+     * Where the surface layer's colours came from (user decision, 2026-11-03, "colour from true views"): splats and patches
+     * from a station that truly sees them, from the scan's own photo texture, and generated; or why the true-view gate did
+     * not run (every station's view of the scan was then used, as before).
+     */
+    colourSources?: { gate: boolean; reason?: string; splats: { trueView: number; tileTexture: number; generated: number }; patches: { trueView: number; tileTexture: number; generated: number } };
 }
 
 /**
@@ -255,7 +261,9 @@ export class Location3DGaussianSplatService {
             lat: anchor.lat.toFixed(6), lng: anchor.lng.toFixed(6), location: req.location, glbPath: req.glbPath,
             headingDeg: req.vantage?.headingDeg, sideDeg: req.vantage?.sideDeg, walkMeters: req.vantage?.walkMeters, maxPanos: req.vantage?.maxPanos,
             cameraCount: req.cameraCount, surveyPattern: req.surveyPattern, draft: req.draft === true || req.fidelity === 'draft',
-            styleSuffix: req.styleSuffix, moodPromptContext: req.moodPromptContext, architecturalStyle: req.architecturalStyle, stylePreset: req.stylePreset, mood: req.mood
+            styleSuffix: req.styleSuffix, moodPromptContext: req.moodPromptContext, architecturalStyle: req.architecturalStyle, stylePreset: req.stylePreset, mood: req.mood,
+            // a street world coloured from true views (2026-11-03) is never served from a world coloured before it
+            colour: req.vantage ? 'true-views' : undefined
         });
         if (cache && !req.refresh) {
             progressReporter(0.05, `Looking for this world in the world cache (${cache.label})...`);
@@ -293,6 +301,23 @@ export class Location3DGaussianSplatService {
                 throw new TileExtractionError('download', `no clay tiles were extracted at ${anchor.lat}, ${anchor.lng} for ${anchor.formattedAddress}`);
             }
             glbPath = extraction.glbPath;
+        }
+        // the same crawl with its photo texture (its leaves come from the leaf cache): the surface layer colours each surface
+        // only from a station that truly sees it and the rest from this texture. A caller's own GLB has no textured twin of
+        // its crawl, so its world is coloured as before, and the result says so.
+        let tileGlbPath: string | undefined, gateReason: string | undefined;
+        if (preset.glbPath) gateReason = 'the world was built on a GLB the caller passed, which has no photo-textured extraction of the same crawl';
+        else if (req.vantage) {
+            try {
+                const textured = await getGoogle3DTilesFullTexture(
+                    { lat: anchor.lat, lng: anchor.lng, elevation: anchor.elevationMeters, landmarkName: anchor.formattedAddress },
+                    { radiusMeters: preset.cropRadius || 75, outputDir: path.resolve(root, 'public/models') }
+                );
+                if (textured.success !== false && textured.glbPath && fs.existsSync(textured.glbPath)) tileGlbPath = textured.glbPath;
+                else gateReason = 'the photo-textured tiles did not come back';
+            } catch (err) {
+                gateReason = `the photo-textured tiles could not be extracted (${err instanceof Error ? err.message : String(err)})`;
+            }
         }
         throwIfStopped(req.signal);
 
@@ -393,7 +418,7 @@ export class Location3DGaussianSplatService {
             stations,
             ...(street?.stations.length ? { streetStations: street.stations.map(s => ({ station: s.station, photo: s.photo })) } : {}),
             // a world to stand in: a splat on every patch of the scan (kept to its hulls), densest along the walk
-            ...(street && viewer ? { surfaceLayer: { corridor: walkCorridor(viewer, snap?.streetBearingDeg) } } : {}),
+            ...(street && viewer ? { surfaceLayer: { corridor: walkCorridor(viewer, snap?.streetBearingDeg), ...(tileGlbPath ? { tileGlbPath } : {}) } } : {}),
             outDir,
             beautify: beautifyContext,
             mode: 'chained',
@@ -459,6 +484,13 @@ export class Location3DGaussianSplatService {
             scene3DData,
             cropBox: pipelineResult.cropBox,
             durationMs: Date.now() - t0,
+            ...(pipelineResult.surfaceLayer ? {
+                colourSources: {
+                    gate: !!tileGlbPath, ...(tileGlbPath ? {} : { reason: gateReason ?? 'no photo-textured extraction' }),
+                    splats: { trueView: pipelineResult.surfaceLayer.sources.trueView, tileTexture: pipelineResult.surfaceLayer.sources.tileTexture, generated: pipelineResult.surfaceLayer.sources.generated },
+                    patches: pipelineResult.surfaceLayer.sources.patches
+                }
+            } : {}),
             modelsUsed: Array.from(new Set(pipelineResult.stations.map(st => st.modelUsed).filter((m): m is string => !!m))),
             imageSources: Array.from(new Set(pipelineResult.stations.map(st => st.imageSource).filter((m): m is string => !!m))),
             ...(street ? {
