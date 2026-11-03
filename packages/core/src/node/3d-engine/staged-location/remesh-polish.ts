@@ -81,7 +81,8 @@ export function polishRemesh(input: { clayGlb: string; texturedGlb?: string; cac
             const misfit = stats.base?.apronSkipped;
             if (misfit) stats.clip = { skipped: misfit };
             else {
-                const c = step('clip', () => ({ clay: clipToFootprint(clay, input.base!.loops, BASE_CLEANUP_PARAMS.clipMarginM), tex: tex ? clipToFootprint(tex, input.base!.loops, BASE_CLEANUP_PARAMS.clipMarginM) : undefined }));
+                const clipOpts = input.threads ? { threads: input.threads } : {};
+                const c = step('clip', () => ({ clay: clipToFootprint(clay, input.base!.loops, BASE_CLEANUP_PARAMS.clipMarginM, clipOpts), tex: tex ? clipToFootprint(tex, input.base!.loops, BASE_CLEANUP_PARAMS.clipMarginM, clipOpts) : undefined }));
                 clay = c.clay.glb; tex = c.tex?.glb ?? tex; stats.clip = { clay: c.clay.report, ...(c.tex ? { textured: c.tex.report } : {}) }; snapshot('clip');
             }
         }

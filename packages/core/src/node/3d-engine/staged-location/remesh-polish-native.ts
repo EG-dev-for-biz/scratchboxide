@@ -21,7 +21,11 @@
  *  - `cut`: pipeline-k/lattice-stitch.ts cutScanToLattice (scratchbox_lattice_cut.hpp), triangles in chunks;
  *  - `stitch`: pipeline-k/lattice-stitch.ts stitchLattice's strips and corner zips (scratchbox_lattice_stitch.hpp), one
  *    facade a task;
- *  - `infill`: pipeline-k/lattice-stitch.ts fillOpenLoops (scratchbox_open_loop_fill.hpp).
+ *  - `clip`: pipeline-k/lattice-stitch.ts clipToFootprint (scratchbox_lattice_cut.hpp, the cut's splits and weld), triangles
+ *    in chunks;
+ *  - `infill`: pipeline-k/lattice-stitch.ts fillOpenLoops (scratchbox_open_loop_fill.hpp);
+ *  - `fill-texture`: pipeline-k/lattice-stitch.ts appendTexturedTriangles' routes (scratchbox_fill_texture.hpp), the
+ *    texturing of the fill, seal and stitch in the twin, triangles and pieces in chunks.
  *
  * Data goes over stdin as raw little-endian buffers (a header, then arrays), never PNG; the window fit's facades are
  * streamed as they are decoded and fitted as they arrive. The pool's size is the caller's: a chunked district's builds
@@ -67,9 +71,9 @@ export function ensureRemeshPolishBinary(repoRoot = findTileRefineRepoRoot()): P
     return building;
 }
 
-/** The polish input's native steps built before it runs: the lattice (its cut and stitch) and the infill (or seal) run synchronously and cannot compile. */
-export async function ensureNativePolishFor(input: { infill?: boolean; seal?: boolean; lattice?: boolean; orthosDir?: string }): Promise<void> {
-    if (((input.infill || input.seal) && kNative('infill')) || (input.orthosDir && input.lattice !== false && (kNative('lattice') || kNative('cut') || kNative('stitch')))) await ensureRemeshPolishBinary();
+/** The polish input's native steps built before it runs: the lattice (its cut and stitch), the clip and the infill (or seal, and their textured fill) run synchronously and cannot compile. */
+export async function ensureNativePolishFor(input: { infill?: boolean; seal?: boolean; lattice?: boolean; orthosDir?: string; clip?: boolean; base?: unknown }): Promise<void> {
+    if (((input.infill || input.seal) && (kNative('infill') || kNative('fill-texture'))) || (input.clip && input.base && kNative('clip')) || (input.orthosDir && input.lattice !== false && (kNative('lattice') || kNative('cut') || kNative('stitch') || kNative('fill-texture')))) await ensureRemeshPolishBinary();
 }
 
 /** The wall grammar's native reading built before it runs: readWallGrammar runs synchronously and cannot compile. */
@@ -98,10 +102,11 @@ class Writer {
     u32(v: number) { const b = Buffer.alloc(4); b.writeUInt32LE(v >>> 0); this.parts.push(b); return this; }
     i32(v: number) { const b = Buffer.alloc(4); b.writeInt32LE(v | 0); this.parts.push(b); return this; }
     // typed arrays are little-endian on every host Node runs the app on
-    f64s(v: ArrayLike<number>) { const a = Float64Array.from(v); this.parts.push(Buffer.from(a.buffer, a.byteOffset, a.byteLength)); return this; }
+    // typed arrays of the right kind go as they are, others are copied once
+    f64s(v: ArrayLike<number>) { const a = v instanceof Float64Array ? v : Float64Array.from(v); this.parts.push(Buffer.from(a.buffer, a.byteOffset, a.byteLength)); return this; }
     f32s(v: Float32Array) { this.parts.push(Buffer.from(v.buffer, v.byteOffset, v.byteLength)); return this; }
     str(v: string) { const b = Buffer.from(v, 'utf8'); return this.u32(b.length).raw(b); }
-    u32s(v: ArrayLike<number>) { const a = Uint32Array.from(v); this.parts.push(Buffer.from(a.buffer, a.byteOffset, a.byteLength)); return this; }
+    u32s(v: ArrayLike<number>) { const a = v instanceof Uint32Array ? v : Uint32Array.from(v); this.parts.push(Buffer.from(a.buffer, a.byteOffset, a.byteLength)); return this; }
     raw(v: Uint8Array) { this.parts.push(Buffer.from(v.buffer, v.byteOffset, v.byteLength)); return this; }
     magic(m: string) { this.parts.push(Buffer.from(m, 'latin1')); return this; }
     take(): Buffer { const b = Buffer.concat(this.parts); this.parts = []; return b; }
@@ -342,6 +347,15 @@ export function runNativeCut(params: number[], facades: NativeCutFacade[], prims
         if (f.built.length !== (f.s.length - 1) * (f.t.length - 1)) throw new Error(`facade ${f.facadeId}: its built cells do not match its lattice`);
         w.i32(f.facadeId).f64s([...f.centroid, ...f.normal, ...f.axisS, ...f.axisT]).u32(f.s.length).f64s(f.s).u32(f.t.length).f64s(f.t).raw(f.built);
     }
+    writeCutPrims(w, prims);
+    const r = new Reader(runSync('cut', w.take(), threads));
+    const report = { cutTriangles: r.f64(), removedPieces: r.f64(), keptPieces: r.f64() };
+    const out = readCutOuts(r, prims);
+    r.done('cut');
+    return { report, prims: out };
+}
+
+function writeCutPrims(w: Writer, prims: NativeCutPrim[]): void {
     w.u32(prims.length);
     for (const p of prims) {
         w.u32(p.comps.length);
@@ -351,15 +365,30 @@ export function runNativeCut(params: number[], facades: NativeCutFacade[], prims
         p.attr.forEach((a, k) => { if (a.length !== n * p.comps[k]) throw new Error('a cut primitive\'s attribute does not match its positions'); w.f64s(a); });
         w.u32(p.I.length).u32s(p.I);
     }
-    const r = new Reader(runSync('cut', w.take(), threads));
-    const report = { cutTriangles: r.f64(), removedPieces: r.f64(), keptPieces: r.f64() };
-    const out = prims.map((p): NativeCutOut => {
+}
+
+function readCutOuts(r: Reader, prims: NativeCutPrim[]): NativeCutOut[] {
+    return prims.map((p): NativeCutOut => {
         const cut = r.u32s(r.u32()), verts = r.u32();
         const arrays = [r.f32s(verts * 3), ...p.comps.map(c => r.f32s(verts * c))];
         const min = Array.from(r.f64s(3)), max = Array.from(r.f64s(3));
         return { cut, verts, arrays, min, max, tris: r.u32s(r.u32()) };
     });
-    r.done('cut');
+}
+
+/**
+ * lattice-stitch.ts clipToFootprint's geometry natively, per primitive: the outline lines (a point and the outward normal
+ * in plan, as the TypeScript works them out), the footprint's loops and the margin; its report (the area unrounded).
+ */
+export function runNativeClip(marginM: number, loops: Vec2[][], lines: Array<{ ax: number; az: number; nx: number; nz: number }>, prims: NativeCutPrim[], threads: number): { report: { cutTriangles: number; removedTriangles: number; removedAreaM2: number }; prims: NativeCutOut[] } {
+    const w = new Writer().magic('SBCL').u32(1).f64s([marginM]).u32(loops.length);
+    for (const loop of loops) w.u32(loop.length).f64s(loop.flatMap(p => [p[0], p[1]]));
+    w.u32(lines.length).f64s(lines.flatMap(l => [l.ax, l.az, l.nx, l.nz]));
+    writeCutPrims(w, prims);
+    const r = new Reader(runSync('clip', w.take(), threads));
+    const report = { cutTriangles: r.f64(), removedTriangles: r.f64(), removedAreaM2: r.f64() };
+    const out = readCutOuts(r, prims);
+    r.done('clip');
     return { report, prims: out };
 }
 
@@ -411,4 +440,44 @@ export function runNativeWallSheets(params: number[], sheets: NativeSheetJob[], 
     });
     r.done('wall-sheets');
     return out;
+}
+
+// ------------------------------------------------------------------------------------------------ the fill's texturing
+
+/** A rebuilt facade's photo mapping for the native texturing (lattice-stitch.ts wallMaps). */
+export interface NativeWallMap { material: number; U: number[]; u0: number; V: number[]; v0: number; n: number[]; dLo: number; dHi: number; pu?: number; pv?: number }
+/** A textured primitive of the twin: its material, positions, UVs and indices. */
+export interface NativeTexPrim { material: number; X: ArrayLike<number>; UV: ArrayLike<number>; I: ArrayLike<number> }
+/** A generated piece: its triangle, corners and their weights in it, and how many pieces that triangle was cut into. */
+export interface NativeFillPiece2 { parent: number; p: number[][]; w: number[][]; of: number }
+
+/**
+ * lattice-stitch.ts appendTexturedTriangles' routes natively: whether the twin has a textured triangle at all, the facade
+ * materials continued pieces asked to repeat (in the order they asked), and per piece kept its corners and route (0 clay,
+ * 1 the facade's own photo, 2 the photo at its triangle's corners, 3 continued) with its material, UVs and confidence.
+ */
+export function runNativeFillTexture(params: number[], walls: NativeWallMap[], prims: NativeTexPrim[], tris: number[][][], pieces: NativeFillPiece2[] | undefined, threads: number): { textured: boolean; repeatOrder: number[]; parts: Array<{ parent: number; p: number[][]; route: number; material: number; uv: number[][]; confidence: number }> } {
+    const w = new Writer().magic('SBFT').u32(1).u32(params.length).f64s(params).u32(walls.length);
+    for (const m of walls) w.i32(m.material).f64s([...m.U, m.u0, ...m.V, m.v0, ...m.n, m.dLo, m.dHi]).u32(m.pu !== undefined ? 1 : 0).f64s([m.pu ?? 0]).u32(m.pv !== undefined ? 1 : 0).f64s([m.pv ?? 0]);
+    w.u32(prims.length);
+    for (const p of prims) {
+        const n = p.X.length / 3;
+        if (p.UV.length !== n * 2) throw new Error("a textured primitive's UVs do not match its positions");
+        w.i32(p.material).u32(n).f64s(p.X).f64s(p.UV).u32(p.I.length).u32s(p.I);
+    }
+    const corners = new Float64Array(tris.length * 9);
+    tris.forEach((t, i) => { for (let k = 0; k < 3; k++) for (let c = 0; c < 3; c++) corners[i * 9 + k * 3 + c] = t[k][c]; });
+    w.u32(tris.length).f64s(corners);
+    w.u32(pieces ? 1 : 0).u32(pieces?.length ?? 0);
+    for (const q of pieces ?? []) w.i32(q.parent).i32(q.of).f64s([...q.p[0], ...q.p[1], ...q.p[2], ...q.w[0], ...q.w[1], ...q.w[2]]);
+    const r = new Reader(runSync('fill-texture', w.take(), threads));
+    if (!r.u32()) { r.done('fill-texture'); return { textured: false, repeatOrder: [], parts: [] }; }
+    const repeatOrder = Array.from(r.i32s(r.u32()));
+    const parts = Array.from({ length: r.u32() }, () => {
+        const parent = r.i32(), p = [Array.from(r.f64s(3)), Array.from(r.f64s(3)), Array.from(r.f64s(3))], route = r.i32(), material = r.i32();
+        const uv = [Array.from(r.f64s(2)), Array.from(r.f64s(2)), Array.from(r.f64s(2))];
+        return { parent, p, route, material, uv, confidence: r.f64() };
+    });
+    r.done('fill-texture');
+    return { textured: true, repeatOrder, parts };
 }

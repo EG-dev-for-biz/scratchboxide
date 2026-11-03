@@ -34,9 +34,10 @@
  * Every added triangle uses existing vertices exactly (plus a fan's centre), so the result welds shut. The open edges
  * left are counted on the welded result and reported.
  *
- * The cut, the stitch's strips and the fill run natively by default (scratchbox_lattice_cut.hpp, scratchbox_lattice_stitch.hpp,
- * scratchbox_open_loop_fill.hpp, through remesh-polish-native.ts), giving these functions' results bit for bit;
- * SCRATCHBOX_K_NATIVE without `cut`, `stitch` or `infill` runs them here.
+ * The cut, the stitch's strips, the clip, the fill and the fill's texturing in the twin run natively by default
+ * (scratchbox_lattice_cut.hpp, scratchbox_lattice_stitch.hpp, scratchbox_open_loop_fill.hpp, scratchbox_fill_texture.hpp,
+ * through remesh-polish-native.ts), giving these functions' results bit for bit; SCRATCHBOX_K_NATIVE without `cut`,
+ * `stitch`, `clip`, `infill` or `fill-texture` runs them here.
  */
 
 import { ShapeUtils, Vector2 } from 'three';
@@ -44,7 +45,7 @@ import type { Vec2 } from '../../../../common/spatial/staged-location-contracts'
 import { outsideFootprint, signedFootprintDistance } from './base-cleanup';
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor } from '../glb-bytes';
 import type { FacadeLatticeResult, ReliefFacade } from '../facade-lattice';
-import { nativePolishThreads, runNativeCut, runNativeFill, runNativeStitch, type NativeFillPrim } from '../remesh-polish-native';
+import { nativePolishThreads, runNativeClip, runNativeCut, runNativeFill, runNativeFillTexture, runNativeStitch, type NativeCutPrim, type NativeFillPrim } from '../remesh-polish-native';
 import { kNative } from './native/native-switch';
 
 export const LATTICE_STITCH_VERSION = 'lattice-stitch/21';
@@ -233,14 +234,8 @@ export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: Lattic
     if (kNative('cut')) {
         // natively: the same pieces, welded as appendPieces welds them
         const prims = readPrims(glb);
-        const r = runNativeCut(cutParamVector(P), facades.map(({ f, r: x }) => ({ facadeId: f.facadeId, centroid: f.centroid, normal: f.normal, axisS: f.axisS, axisT: f.axisT, s: x.s, t: x.t, built: x.built })), prims.map(pr => ({ comps: pr.comps.slice(1), flags: pr.flags, normals: pr.names.map(n => n === 'NORMAL'), pos: pr.data[0], attr: pr.data.slice(1), I: pr.I })), opts.threads ?? nativePolishThreads());
-        const welded: WeldedPieces[] = [];
-        prims.forEach((pr, i) => {
-            const o = r.prims[i];
-            for (const t of o.cut) degenerate(dv, pr, t);
-            if (o.tris.length) welded.push({ pr, arrays: o.arrays, count: o.verts, min: o.min, max: o.max, tris: o.tris });
-        });
-        return { glb: appendWelded(glb, welded, extras), report: { cutTriangles: r.report.cutTriangles, removedPieces: r.report.removedPieces, keptPieces: r.report.keptPieces } };
+        const r = runNativeCut(cutParamVector(P), facades.map(({ f, r: x }) => ({ facadeId: f.facadeId, centroid: f.centroid, normal: f.normal, axisS: f.axisS, axisT: f.axisT, s: x.s, t: x.t, built: x.built })), prims.map(nativeCutPrim), opts.threads ?? nativePolishThreads());
+        return { glb: appendNativeCut(glb, dv, prims, r.prims, extras), report: { cutTriangles: r.report.cutTriangles, removedPieces: r.report.removedPieces, keptPieces: r.report.keptPieces } };
     }
     const report: CutReport = { cutTriangles: 0, removedPieces: 0, keptPieces: 0 };
     const frames = facades.map(({ f, r }) => ({ f, r, ns: r.s.length - 1, s0: r.s[0], s1: r.s[r.s.length - 1], t0: r.t[0], t1: r.t[r.t.length - 1] }));
@@ -292,6 +287,20 @@ export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: Lattic
         if (kept.length) appended.push({ pr, polys: kept });
     }
     return { glb: appendPieces(glb, appended, extras), report };
+}
+
+/** A primitive as the native cut and clip read it. */
+const nativeCutPrim = (pr: PrimRead): NativeCutPrim => ({ comps: pr.comps.slice(1), flags: pr.flags, normals: pr.names.map(n => n === 'NORMAL'), pos: pr.data[0], attr: pr.data.slice(1), I: pr.I });
+
+/** The native cut's or clip's result written: its triangles made degenerate in place, its kept pieces appended. */
+function appendNativeCut(glb: ReturnType<typeof parseGlbBytes>, dv: DataView, prims: PrimRead[], outs: ReturnType<typeof runNativeCut>['prims'], extras: Record<string, unknown>): Buffer {
+    const welded: WeldedPieces[] = [];
+    prims.forEach((pr, i) => {
+        const o = outs[i];
+        for (const t of o.cut) degenerate(dv, pr, t);
+        if (o.tris.length) welded.push({ pr, arrays: o.arrays, count: o.verts, min: o.min, max: o.max, tris: o.tris });
+    });
+    return appendWelded(glb, welded, extras);
 }
 
 /** A source primitive's kept pieces welded: per attribute (POSITION first) its values, the positions' bounds, the triangles. */
@@ -356,21 +365,28 @@ function appendWelded(glb: ReturnType<typeof parseGlbBytes>, welded: WeldedPiece
  * attribute is carried (UVs, normals), so the textured twin is clipped the same way. The openings the cut leaves are for the
  * fill (fillOpenLoops) to close.
  */
-export function clipToFootprint(bytes: Uint8Array, loops: Vec2[][], marginM: number): { glb: Buffer; report: ClipReport } {
+export function clipToFootprint(bytes: Uint8Array, loops: Vec2[][], marginM: number, opts: { /** The native clip's threads (every core when none). */ threads?: number } = {}): { glb: Buffer; report: ClipReport } {
     const glb = parseGlbBytes(bytes);
     const dv = new DataView(glb.bin.buffer, glb.bin.byteOffset, glb.bin.byteLength);
     const report: ClipReport = { cutTriangles: 0, removedTriangles: 0, removedAreaM2: 0, marginM };
     const outside = (x: number, z: number) => signedFootprintDistance(x, z, loops) - marginM;
     // each outline edge's line, pushed out by the margin: its outward normal is the side a point just off its middle stands outside
-    const lines: Array<{ key: string; g: (v: Vx) => number }> = [];
+    const lines: Array<{ key: string; ax: number; az: number; nx: number; nz: number; g: (v: Vx) => number }> = [];
     loops.forEach((loop, li) => loop.forEach((a, i) => {
         const b = loop[(i + 1) % loop.length], dx = b[0] - a[0], dz = b[1] - a[1], l = Math.hypot(dx, dz);
         if (!(l > 0)) return;
         let nx = dz / l, nz = -dx / l;
         const mx = (a[0] + b[0]) / 2, mz = (a[1] + b[1]) / 2;
         if (signedFootprintDistance(mx + nx * 1e-3, mz + nz * 1e-3, loops) < 0) { nx = -nx; nz = -nz; }
-        lines.push({ key: `fp${li}.${i}`, g: v => (v.p[0] - a[0]) * nx + (v.p[2] - a[1]) * nz - marginM });
+        lines.push({ key: `fp${li}.${i}`, ax: a[0], az: a[1], nx, nz, g: v => (v.p[0] - a[0]) * nx + (v.p[2] - a[1]) * nz - marginM });
     }));
+    const extras = { sbFootprintClip: { version: LATTICE_STITCH_VERSION, provenance: `as-scanned: the scan cut at the footprint's outline plus ${marginM} m` } };
+    if (kNative('clip')) {
+        // natively: the same pieces, the same report, the area summed in the same order
+        const prims = readPrims(glb);
+        const r = runNativeClip(marginM, loops, lines, prims.map(nativeCutPrim), opts.threads ?? nativePolishThreads());
+        return { glb: appendNativeCut(glb, dv, prims, r.prims, extras), report: { cutTriangles: r.report.cutTriangles, removedTriangles: r.report.removedTriangles, removedAreaM2: Math.round(r.report.removedAreaM2), marginM } };
+    }
     const area = (poly: Vx[]) => { let s = 0; for (let k = 1; k + 1 < poly.length; k++) s += Math.hypot(...cross3(sub3(poly[k].p, poly[0].p), sub3(poly[k + 1].p, poly[0].p)) as [number, number, number]) / 2; return s; };
     const centreOutside = (poly: Vx[]) => outside(poly.reduce((a, v) => a + v.p[0], 0) / poly.length, poly.reduce((a, v) => a + v.p[2], 0) / poly.length) > 0;
     const appended: Array<{ pr: PrimRead; polys: Vx[][] }> = [];
@@ -397,7 +413,7 @@ export function clipToFootprint(bytes: Uint8Array, loops: Vec2[][], marginM: num
         if (kept.length) appended.push({ pr, polys: kept });
     }
     report.removedAreaM2 = Math.round(report.removedAreaM2);
-    return { glb: appendPieces(glb, appended, { sbFootprintClip: { version: LATTICE_STITCH_VERSION, provenance: `as-scanned: the scan cut at the footprint's outline plus ${marginM} m` } }), report };
+    return { glb: appendPieces(glb, appended, extras), report };
 }
 
 export interface ClipReport { cutTriangles: number; removedTriangles: number; removedAreaM2: number; marginM: number }
@@ -709,43 +725,17 @@ function uvShear(p: number[][], uv: number[][]): number {
  * material with a repeating sampler); labelled generated. Clay only where no such facade stands. Undefined when the GLB has
  * no textured triangle.
  */
-function appendTexturedTriangles(bytes: Uint8Array, tris: number[][][], name: string, method: string, pieces?: Piece[], P: LatticeStitchParams = LATTICE_STITCH_PARAMS): Buffer | undefined {
+/** The native texturing's parameters (scratchbox_fill_texture.hpp Params). */
+export function fillTextureParamVector(P: LatticeStitchParams): number[] {
+    return [P.wallFacingMin, P.wallBandM, P.wallUvMargin, P.maxShear, P.continueFacingMin, P.continueMaxM, P.confidenceRepeat, P.confidenceNoRepeat, P.confidenceFloor];
+}
+
+function appendTexturedTriangles(bytes: Uint8Array, tris: number[][][], name: string, method: string, pieces?: Piece[], P: LatticeStitchParams = LATTICE_STITCH_PARAMS, threads?: number): Buffer | undefined {
     if (!tris.length) return undefined;
     let parts: Piece[] = pieces ?? tris.map((f, parent) => ({ parent, p: f, w: [[1, 0, 0], [0, 1, 0], [0, 0, 1]], of: 1 }));
     const g = parseGlbBytes(bytes);
     const json = g.json;
     const walls = wallMaps(g);
-    const wk = (p: ArrayLike<number>) => `${Math.round(p[0] * 1000)},${Math.round(p[1] * 1000)},${Math.round(p[2] * 1000)}`;
-    const uvOf = new Map<string, Map<number, number[]>>();
-    const density = new Map<number, number[]>();
-    for (const pr of readPrims(g)) {
-        const prim = json.meshes[pr.mesh].primitives[pr.prim];
-        const ti = pr.names.indexOf('TEXCOORD_0');
-        if (prim.material === undefined || ti < 0 || !json.materials?.[prim.material]?.pbrMetallicRoughness?.baseColorTexture) continue;
-        const X = pr.data[0], U = pr.data[ti + 1], mat: number = prim.material;
-        const dens = density.get(mat) ?? density.set(mat, []).get(mat)!;
-        for (let t = 0; t + 2 < pr.I.length; t += 3) {
-            const ids = [pr.I[t], pr.I[t + 1], pr.I[t + 2]];
-            for (const i of ids) { const k = wk([X[i * 3], X[i * 3 + 1], X[i * 3 + 2]]); const m = uvOf.get(k) ?? uvOf.set(k, new Map()).get(k)!; if (!m.has(mat)) m.set(mat, [U[i * 2], U[i * 2 + 1]]); }
-            if (t % 30 === 0) { const [a, b, c] = ids.map(i => [X[i * 3], X[i * 3 + 1], X[i * 3 + 2]]), A = Math.hypot(...cross3(sub3(b, a), sub3(c, a))); if (A > 1e-6) dens.push(uvArea(ids.map(i => [U[i * 2], U[i * 2 + 1]])) / A); }
-        }
-    }
-    if (!uvOf.size) return undefined;
-    const limit = new Map<number, number>();
-    for (const [m, l] of density) { l.sort((x, y) => x - y); limit.set(m, (l[Math.floor(l.length / 2)] ?? 0) * 4); }
-    // the photo at a whole triangle's corners, when that mapping is a plain copy of its shape
-    const cornerMap: Array<{ material: number; uv: number[][] } | undefined> = tris.map(f => {
-        const A = Math.hypot(...cross3(sub3(f[1], f[0]), sub3(f[2], f[0])));
-        if (!(A > 1e-9)) return undefined;
-        const at = f.map(p => uvOf.get(wk(p)));
-        if (at.some(x => !x)) return undefined;
-        for (const mat of at[0]!.keys()) {
-            if (!at[1]!.has(mat) || !at[2]!.has(mat)) continue;
-            const uv = at.map(x => x!.get(mat)!);
-            if (uvArea(uv) / A <= (limit.get(mat) ?? 0) && uvShear(f, uv) <= P.maxShear) return { material: mat, uv };
-        }
-        return undefined;
-    });
     // a facade's material drawn repeating (its photo carried on past its edges), made once per facade material
     const repeating = new Map<number, number>();
     const repeatOf = (mat: number) => {
@@ -760,51 +750,96 @@ function appendTexturedTriangles(bytes: Uint8Array, tris: number[][][], name: st
         repeating.set(mat, r);
         return r;
     };
-    // where no photo reached: the nearest rebuilt facade facing the same way, its mapping continued
-    const continued = (f: number[][], m: number[], A: number): { material: number; uv: number[][]; continued: true; confidence: number } | undefined => {
-        let best: { material: number; uv: number[][]; continued: true; confidence: number } | undefined, bestD = P.continueMaxM;
-        for (const wm of walls) {
-            if (Math.abs(dot(m, wm.n)) < P.continueFacingMin * A) continue;
-            const uv = f.map(p => [dot(wm.U, p) + wm.u0, dot(wm.V, p) + wm.v0]);
-            // how far outside the photo, in metres along each axis (uv per metre is the axis's length), and the planes apart
-            const du = Math.max(0, -Math.min(...uv.map(x => x[0])), Math.max(...uv.map(x => x[0])) - 1) / (Math.hypot(wm.U[0], wm.U[1], wm.U[2]) || 1);
-            const dvv = Math.max(0, -Math.min(...uv.map(x => x[1])), Math.max(...uv.map(x => x[1])) - 1) / (Math.hypot(wm.V[0], wm.V[1], wm.V[2]) || 1);
-            const dd = f.map(p => dot(p, wm.n)), off = Math.max(0, wm.dLo - Math.min(...dd), Math.max(...dd) - wm.dHi);
-            const d = Math.hypot(du, dvv) + off;
-            if (d < bestD) {
-                bestD = d;
-                // the facade's nearest repeats at its own bay and storey pitch, its confidence falling with the distance
-                const base = wm.pu !== undefined && wm.pv !== undefined ? P.confidenceRepeat : P.confidenceNoRepeat;
-                best = { material: repeatOf(wm.material), uv: foldIntoRepeats(uv, wm.pu, wm.pv), continued: true, confidence: base * (1 - (1 - P.confidenceFloor) * (d / P.continueMaxM)) };
+    let maps: Array<{ material: number; uv: number[][]; wall?: boolean; continued?: boolean; confidence?: number } | undefined>;
+    if (kNative('fill-texture')) {
+        // natively: every piece's route; the facade materials continued pieces asked to repeat made here, in the order they asked
+        const texPrims = readPrims(g).flatMap(pr => {
+            const prim = json.meshes[pr.mesh].primitives[pr.prim], ti = pr.names.indexOf('TEXCOORD_0');
+            return prim.material === undefined || ti < 0 || !json.materials?.[prim.material]?.pbrMetallicRoughness?.baseColorTexture ? [] : [{ material: prim.material as number, X: pr.data[0], UV: pr.data[ti + 1], I: pr.I }];
+        });
+        const r = runNativeFillTexture(fillTextureParamVector(P), walls, texPrims, tris, pieces, threads ?? nativePolishThreads());
+        if (!r.textured) return undefined;
+        for (const mat of r.repeatOrder) repeatOf(mat);
+        parts = r.parts.map(x => ({ parent: x.parent, p: x.p, w: [[1, 0, 0], [0, 1, 0], [0, 0, 1]], of: 1 }));
+        maps = r.parts.map(x => (x.route === 0 ? undefined : x.route === 1 ? { material: x.material, uv: x.uv, wall: true } : x.route === 2 ? { material: x.material, uv: x.uv } : { material: repeatOf(x.material), uv: x.uv, continued: true, confidence: x.confidence }));
+    } else {
+        const wk = (p: ArrayLike<number>) => `${Math.round(p[0] * 1000)},${Math.round(p[1] * 1000)},${Math.round(p[2] * 1000)}`;
+        const uvOf = new Map<string, Map<number, number[]>>();
+        const density = new Map<number, number[]>();
+        for (const pr of readPrims(g)) {
+            const prim = json.meshes[pr.mesh].primitives[pr.prim];
+            const ti = pr.names.indexOf('TEXCOORD_0');
+            if (prim.material === undefined || ti < 0 || !json.materials?.[prim.material]?.pbrMetallicRoughness?.baseColorTexture) continue;
+            const X = pr.data[0], U = pr.data[ti + 1], mat: number = prim.material;
+            const dens = density.get(mat) ?? density.set(mat, []).get(mat)!;
+            for (let t = 0; t + 2 < pr.I.length; t += 3) {
+                const ids = [pr.I[t], pr.I[t + 1], pr.I[t + 2]];
+                for (const i of ids) { const k = wk([X[i * 3], X[i * 3 + 1], X[i * 3 + 2]]); const m = uvOf.get(k) ?? uvOf.set(k, new Map()).get(k)!; if (!m.has(mat)) m.set(mat, [U[i * 2], U[i * 2 + 1]]); }
+                if (t % 30 === 0) { const [a, b, c] = ids.map(i => [X[i * 3], X[i * 3 + 1], X[i * 3 + 2]]), A = Math.hypot(...cross3(sub3(b, a), sub3(c, a))); if (A > 1e-6) dens.push(uvArea(ids.map(i => [U[i * 2], U[i * 2 + 1]])) / A); }
             }
         }
-        return best;
-    };
-    let maps: Array<{ material: number; uv: number[][]; wall?: boolean; continued?: boolean; confidence?: number } | undefined> = parts.map(({ parent, p: f, w }) => {
-        const m = cross3(sub3(f[1], f[0]), sub3(f[2], f[0])), A = Math.hypot(m[0], m[1], m[2]);
-        if (!(A > 1e-12)) return undefined;
-        // infill on a rebuilt facade: the nearest wall it lies on
-        let best: { material: number; uv: number[][]; wall: boolean } | undefined, bestD = Infinity;
-        for (const wm of walls) {
-            if (Math.abs(dot(m, wm.n)) < P.wallFacingMin * A) continue;
-            const d = f.map(p => dot(p, wm.n)), off = Math.max(0, wm.dLo - Math.min(...d), Math.max(...d) - wm.dHi);
-            if (off > P.wallBandM || off >= bestD) continue;
-            const uv = f.map(p => [dot(wm.U, p) + wm.u0, dot(wm.V, p) + wm.v0]);
-            if (uv.some(([u, v]) => u < -P.wallUvMargin || u > 1 + P.wallUvMargin || v < -P.wallUvMargin || v > 1 + P.wallUvMargin)) continue;
-            best = { material: wm.material, uv, wall: true }; bestD = off;
-        }
-        if (best) return best;
-        const c = cornerMap[parent];
-        return c ? { material: c.material, uv: w.map(b => [0, 1].map(k => b[0] * c.uv[0][k] + b[1] * c.uv[1][k] + b[2] * c.uv[2][k])) } : continued(f, m, A);
-    });
-    // a triangle all of whose pieces are kept and clay (most are inside the shell) goes back whole
-    const kept = new Map<number, { n: number; clay: number }>();
-    parts.forEach((q, i) => { const k = kept.get(q.parent) ?? { n: 0, clay: 0 }; k.n++; if (!maps[i]) k.clay++; kept.set(q.parent, k); });
-    const whole = (q: Piece) => { const k = kept.get(q.parent)!; return q.of > 1 && k.n === q.of && k.clay === q.of; };
-    const merged = new Set<number>();
-    const keep = parts.map((q, i) => { if (!whole(q)) return i; if (merged.has(q.parent)) return -1; merged.add(q.parent); return i; }).filter(i => i >= 0);
-    parts = keep.map(i => whole(parts[i]) ? { parent: parts[i].parent, p: tris[parts[i].parent], w: [[1, 0, 0], [0, 1, 0], [0, 0, 1]], of: 1 } : parts[i]);
-    maps = keep.map(i => maps[i]);
+        if (!uvOf.size) return undefined;
+        const limit = new Map<number, number>();
+        for (const [m, l] of density) { l.sort((x, y) => x - y); limit.set(m, (l[Math.floor(l.length / 2)] ?? 0) * 4); }
+        // the photo at a whole triangle's corners, when that mapping is a plain copy of its shape
+        const cornerMap: Array<{ material: number; uv: number[][] } | undefined> = tris.map(f => {
+            const A = Math.hypot(...cross3(sub3(f[1], f[0]), sub3(f[2], f[0])));
+            if (!(A > 1e-9)) return undefined;
+            const at = f.map(p => uvOf.get(wk(p)));
+            if (at.some(x => !x)) return undefined;
+            for (const mat of at[0]!.keys()) {
+                if (!at[1]!.has(mat) || !at[2]!.has(mat)) continue;
+                const uv = at.map(x => x!.get(mat)!);
+                if (uvArea(uv) / A <= (limit.get(mat) ?? 0) && uvShear(f, uv) <= P.maxShear) return { material: mat, uv };
+            }
+            return undefined;
+        });
+        // where no photo reached: the nearest rebuilt facade facing the same way, its mapping continued
+        const continued = (f: number[][], m: number[], A: number): { material: number; uv: number[][]; continued: true; confidence: number } | undefined => {
+            let best: { material: number; uv: number[][]; continued: true; confidence: number } | undefined, bestD = P.continueMaxM;
+            for (const wm of walls) {
+                if (Math.abs(dot(m, wm.n)) < P.continueFacingMin * A) continue;
+                const uv = f.map(p => [dot(wm.U, p) + wm.u0, dot(wm.V, p) + wm.v0]);
+                // how far outside the photo, in metres along each axis (uv per metre is the axis's length), and the planes apart
+                const du = Math.max(0, -Math.min(...uv.map(x => x[0])), Math.max(...uv.map(x => x[0])) - 1) / (Math.hypot(wm.U[0], wm.U[1], wm.U[2]) || 1);
+                const dvv = Math.max(0, -Math.min(...uv.map(x => x[1])), Math.max(...uv.map(x => x[1])) - 1) / (Math.hypot(wm.V[0], wm.V[1], wm.V[2]) || 1);
+                const dd = f.map(p => dot(p, wm.n)), off = Math.max(0, wm.dLo - Math.min(...dd), Math.max(...dd) - wm.dHi);
+                const d = Math.hypot(du, dvv) + off;
+                if (d < bestD) {
+                    bestD = d;
+                    // the facade's nearest repeats at its own bay and storey pitch, its confidence falling with the distance
+                    const base = wm.pu !== undefined && wm.pv !== undefined ? P.confidenceRepeat : P.confidenceNoRepeat;
+                    best = { material: repeatOf(wm.material), uv: foldIntoRepeats(uv, wm.pu, wm.pv), continued: true, confidence: base * (1 - (1 - P.confidenceFloor) * (d / P.continueMaxM)) };
+                }
+            }
+            return best;
+        };
+        maps = parts.map(({ parent, p: f, w }) => {
+            const m = cross3(sub3(f[1], f[0]), sub3(f[2], f[0])), A = Math.hypot(m[0], m[1], m[2]);
+            if (!(A > 1e-12)) return undefined;
+            // infill on a rebuilt facade: the nearest wall it lies on
+            let best: { material: number; uv: number[][]; wall: boolean } | undefined, bestD = Infinity;
+            for (const wm of walls) {
+                if (Math.abs(dot(m, wm.n)) < P.wallFacingMin * A) continue;
+                const d = f.map(p => dot(p, wm.n)), off = Math.max(0, wm.dLo - Math.min(...d), Math.max(...d) - wm.dHi);
+                if (off > P.wallBandM || off >= bestD) continue;
+                const uv = f.map(p => [dot(wm.U, p) + wm.u0, dot(wm.V, p) + wm.v0]);
+                if (uv.some(([u, v]) => u < -P.wallUvMargin || u > 1 + P.wallUvMargin || v < -P.wallUvMargin || v > 1 + P.wallUvMargin)) continue;
+                best = { material: wm.material, uv, wall: true }; bestD = off;
+            }
+            if (best) return best;
+            const c = cornerMap[parent];
+            return c ? { material: c.material, uv: w.map(b => [0, 1].map(k => b[0] * c.uv[0][k] + b[1] * c.uv[1][k] + b[2] * c.uv[2][k])) } : continued(f, m, A);
+        });
+        // a triangle all of whose pieces are kept and clay (most are inside the shell) goes back whole
+        const kept = new Map<number, { n: number; clay: number }>();
+        parts.forEach((q, i) => { const k = kept.get(q.parent) ?? { n: 0, clay: 0 }; k.n++; if (!maps[i]) k.clay++; kept.set(q.parent, k); });
+        const whole = (q: Piece) => { const k = kept.get(q.parent)!; return q.of > 1 && k.n === q.of && k.clay === q.of; };
+        const merged = new Set<number>();
+        const keep = parts.map((q, i) => { if (!whole(q)) return i; if (merged.has(q.parent)) return -1; merged.add(q.parent); return i; }).filter(i => i >= 0);
+        parts = keep.map(i => whole(parts[i]) ? { parent: parts[i].parent, p: tris[parts[i].parent], w: [[1, 0, 0], [0, 1, 0], [0, 0, 1]], of: 1 } : parts[i]);
+        maps = keep.map(i => maps[i]);
+    }
     const groups = new Map<number, number[]>();
     parts.forEach((_, i) => { const mat = maps[i]?.material ?? -1; const l = groups.get(mat); if (l) l.push(i); else groups.set(mat, [i]); });
     const chunks: Uint8Array[] = [g.bin];
@@ -855,8 +890,8 @@ function appendTexturedTriangles(bytes: Uint8Array, tris: number[][][], name: st
 }
 
 /** Appends triangles (vertex positions) as one node labelled generated (clay in the twin: no photo). */
-function appendTriangles(bytes: Uint8Array, tris: number[][][], name: string, method: string, textured: boolean, pieces?: Piece[]): Buffer {
-    if (textured) { const t = appendTexturedTriangles(bytes, tris, name, method, pieces); if (t) return t; }
+function appendTriangles(bytes: Uint8Array, tris: number[][][], name: string, method: string, textured: boolean, pieces?: Piece[], threads?: number): Buffer {
+    if (textured) { const t = appendTexturedTriangles(bytes, tris, name, method, pieces, LATTICE_STITCH_PARAMS, threads); if (t) return t; }
     const g = parseGlbBytes(bytes);
     const json = g.json;
     if (!tris.length) return assembleGlb(json, g.bin);
@@ -903,7 +938,7 @@ export function stitchLattice(clay: Uint8Array, others: Uint8Array[], facades: F
             }
         });
         const r = runNativeStitch(stitchParamVector(P), facades.map(({ f, r: x }) => ({ facadeId: f.facadeId, centroid: f.centroid, normal: f.normal, axisS: f.axisS, axisT: f.axisT, s: x.s, t: x.t, built: x.built, depth: x.depth.flat() })), prims, opts.threads ?? nativePolishThreads());
-        return { clay: appendTriangles(clay, r.out, 'LatticeStitch', STITCH_METHOD, false), others: others.map(o => appendTriangles(o, r.out, 'LatticeStitch', STITCH_METHOD, true)), report: r.report, unjoinedCells: r.unjoinedCells };
+        return { clay: appendTriangles(clay, r.out, 'LatticeStitch', STITCH_METHOD, false), others: others.map(o => appendTriangles(o, r.out, 'LatticeStitch', STITCH_METHOD, true, undefined, opts.threads)), report: r.report, unjoinedCells: r.unjoinedCells };
     }
     const w = welded(clay, P);
     const open = openEdges(w.tris, undefined, true);
@@ -1022,7 +1057,7 @@ export function stitchLattice(clay: Uint8Array, others: Uint8Array[], facades: F
         const l = unjoinedCells.get(x.facadeId) ?? unjoinedCells.set(x.facadeId, []).get(x.facadeId)!;
         if (!l.some(c => c[0] === x.cell[0] && c[1] === x.cell[1])) l.push(x.cell);
     }
-    return { clay: appendTriangles(clay, out, 'LatticeStitch', STITCH_METHOD, false), others: others.map(o => appendTriangles(o, out, 'LatticeStitch', STITCH_METHOD, true)), report, unjoinedCells };
+    return { clay: appendTriangles(clay, out, 'LatticeStitch', STITCH_METHOD, false), others: others.map(o => appendTriangles(o, out, 'LatticeStitch', STITCH_METHOD, true, undefined, opts.threads)), report, unjoinedCells };
 }
 
 /** openBefore / openAfter: edges of an odd number of triangles (open); nonManifoldAfter: closed edges of four or more. */
@@ -1031,8 +1066,8 @@ export interface FillReport { openBefore: number; kinds: Record<string, number>;
 const SEAL_METHOD = 'the shell closed: every open loop left (the scan\'s own holes, corners, the base, which caps the bottom) triangulated in its best-fitting plane';
 
 /** The fill's GLBs: the clay with every fill triangle, the textured twins with the pieces not lying over a surface already there. */
-function sealed(clay: Uint8Array, others: Uint8Array[], out: number[][][], pieces: Piece[], report: FillReport): { clay: Buffer; others: Buffer[]; report: FillReport } {
-    return { clay: appendTriangles(clay, out, 'Seal', SEAL_METHOD, false), others: others.map(o => appendTriangles(o, out, 'Seal', `${SEAL_METHOD}; fill lying over a surface already there (${report.skinHiddenM2} m²) left out of the textured twin`, true, pieces)), report };
+function sealed(clay: Uint8Array, others: Uint8Array[], out: number[][][], pieces: Piece[], report: FillReport, threads?: number): { clay: Buffer; others: Buffer[]; report: FillReport } {
+    return { clay: appendTriangles(clay, out, 'Seal', SEAL_METHOD, false), others: others.map(o => appendTriangles(o, out, 'Seal', `${SEAL_METHOD}; fill lying over a surface already there (${report.skinHiddenM2} m²) left out of the textured twin`, true, pieces, threads)), report };
 }
 
 /** LATTICE_STITCH_PARAMS' fill fields in the order of scratchbox_open_loop_fill.hpp's Params. */
@@ -1057,7 +1092,7 @@ function fillOpenLoopsNative(clay: Uint8Array, others: Uint8Array[], opts: { foo
         }
     });
     const r = runNativeFill(fillParamVector(P), opts.footprint ?? [], prims, opts.threads ?? nativePolishThreads());
-    return sealed(clay, others, r.out, r.pieces, r.report as unknown as FillReport);
+    return sealed(clay, others, r.out, r.pieces, r.report as unknown as FillReport, opts.threads);
 }
 
 /**
@@ -1285,5 +1320,5 @@ export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /*
     for (const c of counts.values()) { if (c % 2 === 1) report.openAfter++; else if (c > 2) report.nonManifoldAfter++; }
     for (const t of out) { const a = t[0], b = t[1], c = t[2]; const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2]; report.addedAreaM2 += 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx); }
     report.addedAreaM2 = Math.round(report.addedAreaM2);
-    return sealed(clay, others, out, pieces, report);
+    return sealed(clay, others, out, pieces, report, opts.threads);
 }
