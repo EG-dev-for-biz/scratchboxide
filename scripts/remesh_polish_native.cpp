@@ -9,7 +9,7 @@
 
 /**
  * CLI of pipeline K's remesh-polish steps run natively on a fixed thread pool (packages/core/src/node/3d-engine/
- * staged-location/remesh-polish-native.ts drives it; SCRATCHBOX_K_NATIVE without window-fit, wall-grammar, wall-sheets, lattice, cut, stitch or infill keeps that step in TypeScript). Data
+ * staged-location/remesh-polish-native.ts drives it; SCRATCHBOX_K_NATIVE without window-fit, wall-grammar, wall-sheets, lattice, cut, stitch, clip, infill or fill-texture keeps that step in TypeScript). Data
  * arrives on stdin as raw little-endian buffers, a header then arrays, never PNG:
  *
  *   remesh_polish_native window-fit <threads>
@@ -62,6 +62,19 @@
  *     out: f64 cutTriangles, removedPieces, keptPieces; per primitive u32 n, u32[n] the cut triangles' first index slots,
  *          u32 verts, f32[verts*3] positions, per attribute f32[verts*comps], f64[3] min, f64[3] max, u32 n, u32[n] indices.
  *
+ *   remesh_polish_native clip <threads>
+ *     in:  "SBCL" u32 version (1), f64 marginM, u32 nLoops, per loop u32 n, f64[n*2] (plan x z), u32 nLines, per line
+ *          f64 ax, az, nx, nz (an outline edge's point and outward normal), then the primitives as `cut` reads them.
+ *     out: f64 cutTriangles, removedTriangles, removedAreaM2 (unrounded), then per primitive as `cut` writes it.
+ *
+ *   remesh_polish_native fill-texture <threads>
+ *     in:  "SBFT" u32 version (1), u32 nParams, f64[nParams] (scratchbox_fill_texture.hpp Params), u32 nWalls, per facade
+ *          mapping i32 material, f64[3] U, f64 u0, f64[3] V, f64 v0, f64[3] n, f64 dLo, f64 dHi, u32 hasPu, f64 pu, u32 hasPv,
+ *          f64 pv; u32 nPrims, per textured primitive i32 material, u32 nVerts, f64[nVerts*3], f64[nVerts*2] UVs, u32 n, u32[n];
+ *          u32 nTris, f64[nTris*9]; u32 hasPieces, u32 n, per piece i32 parent, i32 of, f64[9] corners, f64[9] weights.
+ *     out: u32 textured; then u32 n, i32[n] the materials to repeat in order; u32 nParts, per part i32 parent, f64[9] corners,
+ *          i32 route (0 clay, 1 wall, 2 corners, 3 continued), i32 material, f64[6] UVs, f64 confidence.
+ *
  *   remesh_polish_native stitch <threads>
  *     in:  "SBST" u32 version (1), u32 nParams, f64[nParams] (scratchbox_lattice_stitch.hpp Params), u32 nFacades, per
  *          facade i32 id, f64[12] centroid, normal, axisS, axisT, u32 n, f64[n] s, u32 n, f64[n] t, f64[cells] depths,
@@ -87,6 +100,7 @@
 #include "scratchbox_lattice_cut.hpp"
 #include "scratchbox_lattice_stitch.hpp"
 #include "scratchbox_wall_sheets.hpp"
+#include "scratchbox_fill_texture.hpp"
 #include "scratchbox_thread_pool.hpp"
 
 #include <chrono>
@@ -383,20 +397,8 @@ int wallGrammar(unsigned threads) {
     return 0;
 }
 
-int cut(unsigned threads) {
-    expectMagic("SBCT", 1);
-    const auto params = lattice_cut::Params::from(readDoubles(readOne<uint32_t>()));
-    std::vector<lattice_cut::Facade> facades(readOne<uint32_t>());
-    for (auto& f : facades) {
-        f.facadeId = readOne<int32_t>();
-        const auto v = readDoubles(12);
-        for (int k = 0; k < 3; ++k) { f.centroid[k] = v[k]; f.normal[k] = v[3 + k]; f.axisS[k] = v[6 + k]; f.axisT[k] = v[9 + k]; }
-        f.s = readDoubles(readOne<uint32_t>());
-        f.t = readDoubles(readOne<uint32_t>());
-        if (f.s.size() < 2 || f.t.size() < 2) throw std::runtime_error("a rebuilt facade needs two lines each way");
-        f.built.resize((f.s.size() - 1) * (f.t.size() - 1));
-        readExact(f.built.data(), f.built.size());
-    }
+/** The cut's and the clip's primitives: per primitive its attributes (comps, flag, normal), positions, attributes, indices. */
+std::vector<lattice_cut::Prim> readCutPrims() {
     std::vector<lattice_cut::Prim> prims(readOne<uint32_t>());
     for (auto& p : prims) {
         const uint32_t nAttr = readOne<uint32_t>();
@@ -412,12 +414,11 @@ int cut(unsigned threads) {
         if (!p.I.empty()) readExact(p.I.data(), p.I.size() * sizeof(uint32_t));
         for (uint32_t i : p.I) if (i >= nVerts) throw std::runtime_error("an index past the primitive's vertices");
     }
-    FixedThreadPool pool(threads);
-    lattice_cut::Report report;
-    const auto outs = lattice_cut::cut(prims, facades, params, pool, report);
-    writeOne<double>(report.cutTriangles);
-    writeOne<double>(report.removedPieces);
-    writeOne<double>(report.keptPieces);
+    return prims;
+}
+
+/** Per primitive: the triangles cut (their first index slots) and its kept pieces welded. */
+void writeCutOuts(const std::vector<lattice_cut::PrimOut>& outs) {
     for (const auto& o : outs) {
         writeArray(o.cut);
         writeOne<uint32_t>(static_cast<uint32_t>(o.verts));
@@ -428,6 +429,51 @@ int cut(unsigned threads) {
         writeArray(o.tris);
     }
     std::fflush(stdout);
+}
+
+int cut(unsigned threads) {
+    expectMagic("SBCT", 1);
+    const auto params = lattice_cut::Params::from(readDoubles(readOne<uint32_t>()));
+    std::vector<lattice_cut::Facade> facades(readOne<uint32_t>());
+    for (auto& f : facades) {
+        f.facadeId = readOne<int32_t>();
+        const auto v = readDoubles(12);
+        for (int k = 0; k < 3; ++k) { f.centroid[k] = v[k]; f.normal[k] = v[3 + k]; f.axisS[k] = v[6 + k]; f.axisT[k] = v[9 + k]; }
+        f.s = readDoubles(readOne<uint32_t>());
+        f.t = readDoubles(readOne<uint32_t>());
+        if (f.s.size() < 2 || f.t.size() < 2) throw std::runtime_error("a rebuilt facade needs two lines each way");
+        f.built.resize((f.s.size() - 1) * (f.t.size() - 1));
+        readExact(f.built.data(), f.built.size());
+    }
+    const auto prims = readCutPrims();
+    FixedThreadPool pool(threads);
+    lattice_cut::Report report;
+    const auto outs = lattice_cut::cut(prims, facades, params, pool, report);
+    writeOne<double>(report.cutTriangles);
+    writeOne<double>(report.removedPieces);
+    writeOne<double>(report.keptPieces);
+    writeCutOuts(outs);
+    return 0;
+}
+
+int clip(unsigned threads) {
+    expectMagic("SBCL", 1);
+    const double marginM = readOne<double>();
+    std::vector<lattice_cut::Loop> loops(readOne<uint32_t>());
+    for (auto& loop : loops) {
+        const auto v = readDoubles(static_cast<size_t>(readOne<uint32_t>()) * 2);
+        for (size_t i = 0; i + 1 < v.size(); i += 2) loop.push_back({v[i], v[i + 1]});
+    }
+    std::vector<lattice_cut::ClipLine> lines(readOne<uint32_t>());
+    for (auto& l : lines) { const auto v = readDoubles(4); l = {v[0], v[1], v[2], v[3]}; }
+    const auto prims = readCutPrims();
+    FixedThreadPool pool(threads);
+    lattice_cut::ClipReport report;
+    const auto outs = lattice_cut::clip(prims, loops, lines, marginM, pool, report);
+    writeOne<double>(report.cutTriangles);
+    writeOne<double>(report.removedTriangles);
+    writeOne<double>(report.removedAreaM2);
+    writeCutOuts(outs);
     return 0;
 }
 
@@ -506,11 +552,66 @@ int wallSheets(unsigned threads) {
     return 0;
 }
 
+int fillTexture(unsigned threads) {
+    expectMagic("SBFT", 1);
+    const auto params = fill_texture::Params::from(readDoubles(readOne<uint32_t>()));
+    std::vector<fill_texture::WallMap> walls(readOne<uint32_t>());
+    for (auto& w : walls) {
+        w.material = readOne<int32_t>();
+        const auto a = readDoubles(12);
+        for (int k = 0; k < 3; ++k) { w.U[k] = a[k]; w.V[k] = a[4 + k]; w.n[k] = a[8 + k]; }
+        w.u0 = a[3]; w.v0 = a[7]; w.dLo = a[11];
+        w.dHi = readOne<double>();
+        w.hasPu = readOne<uint32_t>() != 0; w.pu = readOne<double>();
+        w.hasPv = readOne<uint32_t>() != 0; w.pv = readOne<double>();
+    }
+    std::vector<fill_texture::TexPrim> prims(readOne<uint32_t>());
+    for (auto& p : prims) {
+        p.material = readOne<int32_t>();
+        const uint32_t n = readOne<uint32_t>();
+        p.X = readDoubles(static_cast<size_t>(n) * 3);
+        p.UVs = readDoubles(static_cast<size_t>(n) * 2);
+        p.I.resize(readOne<uint32_t>());
+        if (!p.I.empty()) readExact(p.I.data(), p.I.size() * sizeof(uint32_t));
+        for (uint32_t i : p.I) if (i >= n) throw std::runtime_error("an index past the primitive's vertices");
+    }
+    const auto tv = readDoubles(static_cast<size_t>(readOne<uint32_t>()) * 9);
+    std::vector<std::array<fill_texture::Vec3, 3>> tris(tv.size() / 9);
+    for (size_t i = 0; i < tris.size(); ++i) for (int k = 0; k < 3; ++k) tris[i][k] = {tv[i * 9 + k * 3], tv[i * 9 + k * 3 + 1], tv[i * 9 + k * 3 + 2]};
+    const bool hasPieces = readOne<uint32_t>() != 0;
+    std::vector<fill_texture::Piece> pieces(readOne<uint32_t>());
+    for (auto& q : pieces) {
+        q.parent = readOne<int32_t>();
+        q.of = readOne<int32_t>();
+        const auto v = readDoubles(18);
+        for (int k = 0; k < 3; ++k) { q.p[k] = {v[k * 3], v[k * 3 + 1], v[k * 3 + 2]}; q.w[k] = {v[9 + k * 3], v[9 + k * 3 + 1], v[9 + k * 3 + 2]}; }
+        if (q.parent < 0 || static_cast<size_t>(q.parent) >= tris.size()) throw std::runtime_error("a piece of no triangle");
+    }
+    FixedThreadPool pool(threads);
+    const auto r = fill_texture::texture(walls, prims, tris, hasPieces ? &pieces : nullptr, params, pool);
+    writeOne<uint32_t>(r.textured ? 1 : 0);
+    if (r.textured) {
+        std::vector<int32_t> rep(r.repeatOrder.begin(), r.repeatOrder.end());
+        writeArray(rep);
+        writeOne<uint32_t>(static_cast<uint32_t>(r.parts.size()));
+        for (size_t i = 0; i < r.parts.size(); ++i) {
+            writeOne<int32_t>(r.parts[i].parent);
+            for (const auto& p : r.parts[i].p) writeExact(p.data(), sizeof(double) * 3);
+            writeOne<int32_t>(r.routes[i].kind);
+            writeOne<int32_t>(r.routes[i].material);
+            for (const auto& uv : r.routes[i].uv) writeExact(uv.data(), sizeof(double) * 2);
+            writeOne<double>(r.routes[i].confidence);
+        }
+    }
+    std::fflush(stdout);
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|lattice|lattice-audit|wall-grammar|cut|stitch|wall-sheets <threads>  (binary input on stdin)\n");
+        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|fill-texture|lattice|lattice-audit|wall-grammar|cut|clip|stitch|wall-sheets <threads>  (binary input on stdin)\n");
         return 2;
     }
     const std::string cmd = argv[1];
@@ -522,6 +623,8 @@ int main(int argc, char** argv) {
         if (cmd == "lattice-audit") return latticeAudit(threads);
         if (cmd == "wall-grammar") return wallGrammar(threads);
         if (cmd == "cut") return cut(threads);
+        if (cmd == "clip") return clip(threads);
+        if (cmd == "fill-texture") return fillTexture(threads);
         if (cmd == "stitch") return stitch(threads);
         if (cmd == "wall-sheets") return wallSheets(threads);
         std::fprintf(stderr, "unknown command %s\n", cmd.c_str());
