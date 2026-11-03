@@ -17,7 +17,7 @@ import { sharedTreeClayMaterial } from '../clayRenderMode';
 import {
     allocateCrownLobes, attachCrownAttributes, attachCrownInstanceField, breakupDepthMaterial, breakupDistanceMaterial, crownLobesInMeshFrame, crownQuadricInMeshFrame, isBreakupDepthMaterial,
     makeCrownVariant, releaseCrownLobeAtlas, resolveCrownShading, retainCrownLobeAtlas,
-    setCrownShadingUniforms, supportsCrownShading, type CrownShadingInput, type CrownShadingOptions
+    setCrownRimShare, setCrownShadingUniforms, supportsCrownShading, type CrownShadingInput, type CrownShadingOptions
 } from './treeCrownShading';
 import {
     DEFAULT_TREE_LOD_VIEW, DEFAULT_TREE_TRIANGLE_BUDGET, FADE_STEPS, crownSlotOf, blurDemotionLevels, demoteEdges, dominantLevel, edgesAtLevel, edgesNoFinerThan, finestLevel, fovealWeight, hysteresisDistanceRelative,
@@ -422,9 +422,15 @@ export class TreeLodController {
         const key = JSON.stringify(next);
         if (key === this.crownKey) return;
         const toggled = next.enabled !== this.crown.enabled;
+        const rimMoved = next.breakup.rimWidth !== this.crown.breakup.rimWidth;
         this.crown = next;
         this.crownKey = key;
         setCrownShadingUniforms(next);
+        if (rimMoved) {
+            // the rim shares are measured against the rim band: measure them again, and the far batch's copies with them
+            for (const t of this.trees) for (const l of t.levels) for (const m of l.meshes) if (m.userData.sbCrownLeaf) setCrownRimShare(m, next.breakup.rimWidth);
+            this.farBatch?.refreshPerMesh();
+        }
         if (toggled) for (const t of this.trees) for (const l of t.levels) if (l.applied !== 'off') l.applied = 'redress';
     }
 
@@ -554,6 +560,8 @@ export class TreeLodController {
                     if (m.customDepthMaterial === undefined) m.customDepthMaterial = breakupDepthMaterial();
                     if (m.customDistanceMaterial === undefined) m.customDistanceMaterial = breakupDistanceMaterial();
                     if (lb && (m as THREE.InstancedMesh).isInstancedMesh) attachCrownInstanceField(m as THREE.InstancedMesh, lb.lobes, lb.blend, lb.meanRadius);
+                    // how much of the level lies in the rim band, for its share of the holes (a small crown, all rim, takes fewer)
+                    setCrownRimShare(m, this.crown.breakup.rimWidth);
                     m.userData.sbCrownLeaf = true;
                     leaves++;
                 }

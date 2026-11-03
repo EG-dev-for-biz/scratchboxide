@@ -1,11 +1,12 @@
-# Process: Why SB-Veggie's mid and far tree levels look sparser than the near level; a coverage report that counts what each level draws; far masses spread to the near level's cover
+# Process: Why SB-Veggie's mid and far tree levels look sparser than the near level; a coverage report that counts what each level draws; far masses spread to the near level's cover; crown holes scaled to what lies behind the rim
 
 > **Recorded:** 2026-11-02
 > **Status:**
 > - Verified: the report fixed. Each level's report counts every triangle it draws, the far level included, and lands within 0.07 of the screen.
 > - Verified: the far level fixed. Its leaf masses are spread along the crown surface until it covers what the near level draws: report median 1.00x, was 0.85x. On screen with the holes off: redwoods 1.02x and 0.96x, a 5 m tree 0.92x (was 0.58x). Same triangles.
+> - Verified: the viewer's crown holes scaled to what lies behind each crown's rim. Screen, holes on: a 5 m tree's mid level 0.74x -> 0.99x and far 0.66x -> 0.82x; the 36 m redwood unchanged (0.91x, 0.87x).
 > - Vitest and typecheck pass.
-> - Not fixed: the viewer's crown holes still thin the mid and far levels, most on small trees.
+> - Not checked in the live app.
 > **Tags:** `sb-veggie` `tree-lod` `coverage` `vegetation`
 > **Target Domain:** native tree LOD (`packages/core/src/native/3d-engine/include/scratchbox_tree_lod.hpp`, `scratchbox_tile_vegetation.hpp`) and the viewer's crown holes (`treeCrownShading.ts`)
 
@@ -18,7 +19,8 @@
 * **Screenshots:** `docs/screenshots/tree_lod_coverage_2026-11-02/` (gitignored):
   - `tree_lod_level_coverage_proof.png`: the reverted trial below;
   - `tree_lod_drawn_coverage_proof.png`: the report;
-  - `tree_lod_far_masses_proof.png` and `tree_lod_far_masses_at_switch.png`: the far masses.
+  - `tree_lod_far_masses_proof.png` and `tree_lod_far_masses_at_switch.png`: the far masses;
+  - `tree_lod_crown_holes_proof.png`: the crown holes.
 
 ---
 
@@ -54,21 +56,52 @@
   - Unchanged: the far triangles, and the near, near-mid and mid levels.
   - Screen, 4 sides, holes off / on: redwood 36.5 m 0.81x / 0.72x -> 1.02x / 0.87x; redwood 29.5 m 0.67x / 0.57x -> 0.96x / 0.84x; understory 5.4 m 0.58x / 0.40x -> 0.92x / 0.66x.
   - Seen up close (9-45 m) the spread masses are large faceted plates. Where the far level is first drawn (166 m for the redwoods, 87 m for the small tree) they fill the crown's outline as the near level does, with some dark faces on the redwoods.
+* **The viewer's crown holes scaled to what lies behind the rim** (`treeCrownShading.ts`):
+  - The holes are weighted to a rim band 0.9 mean lobe radii deep.
+  - The viewer measures once per mesh how much of a level's leaves lie in that band (`crownRimShareOf`: the mean rim weight at each instance's origin, or at the far masses' vertices) and carries it in the fraction of the mesh's detail slot (`crownRimSlot`; under 0.5, so the slot's selection is unchanged and no vertex attribute is added).
+  - The shader takes `(1 - share) / (1 - rimShareFull)` of the slot's holes, capped at 1 (`sbBkRimHoles`; `rimShareFull` 0.45, the share at which the 36 m redwood takes its full holes).
+  - When `rimWidth` changes, the controller measures again and the far batch re-reads its copies (`TreeFarBatch.refreshPerMesh`).
+  - Measured rim shares, mid / far: redwoods 0.33-0.45 / 0.21-0.37, a slimmer redwood 0.67 / 0.65, the 5 m trees 0.87-0.89 / 0.82-0.83.
+  - Screen, holes on, mid / far:
+
+    | Tree | Before | After |
+    | :--- | ---: | ---: |
+    | 36.5 m redwood | 0.91x / 0.87x | unchanged |
+    | 29.5 m redwood | 0.90x / 0.84x | 0.94x / 0.90x |
+    | 27.5 m redwood | - | 0.92x / 0.88x |
+    | 5 m trees | 0.74x / 0.66x | 0.99x / 0.82x and 0.99x / 0.90x |
+
+  - Before choosing the rule, the hole settings were measured on the 5 m tree, mid / far (holes off 1.07x / 0.92x):
+    - default 0.74x / 0.66x;
+    - no pockets 0.78x / 0.70x;
+    - no rim holes 1.06x / 0.92x;
+    - a 0.3 rim band 0.89x / 0.75x;
+    - holes no smaller than 0.4 m 0.77x / 0.65x.
+
+    The rim holes were the loss.
+  - A share ratio `rimShareFull / share` took the 5 m tree only to 0.90x / 0.78x; the support rule above took it to 0.99x / 0.82x.
 * **Cost** (CPU time for the forest's 49 trees, three alternating runs on a loaded machine): 59-61 s against 37-41 s on main. Most of it is measuring every triangle of the near level; the spread adds about 5%.
 * **Tests** (vitest with an empty HOME and no environment):
   - `tree-crown-density` has a new probe: a closed plain mesh covers the whole silhouette, its area that of the silhouette; a library mesh's petiole counts as well as its blade. Its planted crowns check that each `drawn` level covers at least its blades, that the far level is measured, and that the spread far level covers the near level's area within 1.1% unless it reached the largest spread.
-  - Also run: `tree-mid-lod-cards`, `tile-vegetation-lod`, `sb-veggie-lockdown`, `tile-vegetation-species`, `tile-vegetation-textures`, and `npm run typecheck`. `staged-build-native-trees` was skipped (no staged trees GLB in its cache), so the staged viewport was not checked.
+  - `tree-crown-breakup` has a new case for the hole rule (the share packed in the slot leaves the slot as it was; full holes up to 0.45, half at 0.725, none at 1; a level all in the rim band keeps every fragment), and its GLSL-against-TypeScript check has a packed slot. `tree-crown-shading` and `tree-lod-controller` read the slot as the integer part.
+  - Run on Node 22 (as CI does) with credentials unreachable, after the last change:
+    - `tree-crown-breakup` 7/7, `tree-crown-shading` 13/13, `tree-lod-controller` 16/16, `tree-far-batch` 4/4, `tree-lod-viewport` 5/5, `tree-lod-screen` 15/15;
+    - `tree-lod-settle-budget` 8/8, `tree-lod-adaptive-budget` 6/6, `tree-lod-shared-budget` 4/4, `tree-mid-lod-cards` 3/3, `tree-crown-density` 7/7;
+    - `tile-vegetation-lod` 7/7, `tile-vegetation-species` 5/5, `tile-vegetation-textures` 6/6;
+    - `sb-veggie-lockdown` 10/10 (its script type check timed out once under the machine's load, then passed alone);
+    - `npm run typecheck` exit 0.
+  - On Node 20 the WebGL viewport suites cannot start (no global WebSocket); that is the shell, not the change.
+  - `staged-build-native-trees` was skipped (no staged trees GLB in its cache), so the staged viewport was not checked.
 
 ---
 
 ## 3. What Broke / Didn't Work
 
 * **Matching the coarser levels' leaf size to the near level's blade coverage (tried, reverted).** Each shared cluster's near-mid and mid leaf-area gain was bisected until its projected blade area matched the near cluster's, and the crown cards were aimed at the near level's coverage. The blade-only report then read 1.00x everywhere, but on screen every farther level got sparser: understory near-mid 0.86x, mid 0.50x with holes. The blade-only measure leaves out the near level's petioles, sub-shoots and twigs, which add 15-50% to a near cluster's projected area. The fixed gains (1.7, 2.6) were already within 5% on screen at the near-mid level. Nothing was committed.
-* **The mid level's sparseness is the viewer's crown holes, not its geometry.**
+* **The mid level's sparseness is the viewer's crown holes, not its geometry** (scaled above).
   - The setting: `DEFAULT_CROWN_BREAKUP` holes 0.5 and pockets 0.18 at the mid slot, weighted to a rim 0.9 mean lobe radii deep, with a hole scale of `clamp(0.28 x crown radius, 0.8, 1.5)` m.
   - The understory crown is one lobe of 2.18 m, so the rim band reaches its centre and the 0.8 m holes go through the whole crown: they take 31% of its mid level.
   - The redwood's 6 lobes over 21 m of crown keep leaves behind its holes: 6%.
-  - Not changed.
 * **The far level's sparseness was its geometry** (fixed above).
   - The blob masses' number follows the tree's triangle budget, with no coverage target: the redwood gets 61 masses in 2,063 triangles, the understory tree 10 in 334. They covered 0.62x of the near level, and the holes took the screen to 0.40x.
   - A first spread held every mass inside its own farthest reach. Most masses already touch the crown's surface, so the far level only reached 0.95x, with most trees at the largest spread.
@@ -85,7 +118,7 @@
 
 * **The harness's one-tree mode.** `packages/core/test/tree-lod-harness/harness.ts` hero-shots a tree with every other tree drawn, so a forest's neighbours fill the frame. An `only` crown id in `init` (removing the other tree nodes before the controller is built) and a no-anti-aliasing switch made the level-by-level screen coverage measurable. Both belong in the harness.
 * **A screen-coverage probe per level** returning the share of the frame per level, with the holes on and off, so the `drawn` report can be checked against the viewer on any trees GLB.
-* **Hole shares scaled to how much of a crown lies in the rim band** would close the gap that is left (the viewer's holes on small crowns).
+* **A live-app check** of a staged location's trees (the viewport's own scene, textured) would confirm the three changes where users meet them; the staged-viewport test skips without a cached staged trees GLB.
 
 ---
 

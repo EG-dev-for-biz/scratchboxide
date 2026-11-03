@@ -437,6 +437,19 @@ export class TreeFarBatch {
         this.stale = false;
     }
 
+    /** Rewrites every instance's per-mesh texels from its mesh's attributes (after a per-mesh value changed: a crown's rim share). */
+    refreshPerMesh(): void {
+        for (const g of this.groups) {
+            for (const inst of g.instances) {
+                g.perMesh.forEach((pa, k) => {
+                    const a = (inst.mesh.geometry as THREE.BufferGeometry).getAttribute(pa.name) as THREE.BufferAttribute | undefined;
+                    if (a) for (let c = 0; c < pa.itemSize; c++) g.data[4 * (g.texelsPerInstance * inst.id + 1 + k) + c] = (a.array as ArrayLike<number>)[c];
+                });
+            }
+            g.state.needsUpdate = true;
+        }
+    }
+
     private clearGroups(): void {
         for (const g of this.groups) {
             this.holder.remove(g.batched);
