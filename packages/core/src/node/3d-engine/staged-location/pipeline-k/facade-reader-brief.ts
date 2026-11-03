@@ -19,8 +19,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { decodePng } from '../../../texture-processing';
-import { encodePng } from '../png-encode';
+import { mapLimit } from '../../../../common/map-limit';
+import { decodePngAsync, encodePngAsync, pngCodecThreads } from '../../../png-codec-pool';
 
 /** Where a plane stands, from its frame: what the brief and every reading are told. */
 export interface PlanePlace {
@@ -71,17 +71,20 @@ export const BRIEF_PARAMS = {
 
 export interface ContactSheet { png: Buffer; width: number; height: number; cells: Array<{ cell: string; facadeId: number }> }
 
-/** The planes' photos laid out on one sheet on white, each in its own cell, row by row; uncovered areas stay as the photo has them. */
-export function contactSheet(orthosDir: string, frames: PlaneFrameLike[], P = BRIEF_PARAMS): ContactSheet {
+/**
+ * The planes' photos laid out on one sheet on white, each in its own cell, row by row; uncovered areas stay as the photo
+ * has them. The photos are decoded and the sheet encoded on the codec threads (png-codec-pool.ts); the cells do not
+ * overlap, so the photos are drawn in whatever order they arrive.
+ */
+export async function contactSheet(orthosDir: string, frames: PlaneFrameLike[], P = BRIEF_PARAMS): Promise<ContactSheet> {
     const picked = frames.slice(0, P.maxCells);
     const cols = Math.min(P.columns, picked.length), rows = Math.ceil(picked.length / Math.max(1, cols));
     const W = cols * (P.cellW + P.gutter) + P.gutter, H = rows * (P.cellH + P.gutter) + P.gutter;
     const out = new Uint8Array(W * H * 4).fill(255);
-    const cells: ContactSheet['cells'] = [];
-    picked.forEach((f, k) => {
+    const cells: ContactSheet['cells'] = picked.map((f, k) => ({ cell: `r${Math.floor(k / cols) + 1}c${(k % cols) + 1}`, facadeId: f.facadeId }));
+    await mapLimit(picked, Math.max(1, pngCodecThreads()), async (f, k) => {
         const r = Math.floor(k / cols), c = k % cols;
-        cells.push({ cell: `r${r + 1}c${c + 1}`, facadeId: f.facadeId });
-        const img = decodePng(fs.readFileSync(path.join(orthosDir, f.image)));
+        const img = await decodePngAsync(fs.readFileSync(path.join(orthosDir, f.image)));
         const s = Math.min(P.cellW / img.width, P.cellH / img.height);
         const w = Math.max(1, Math.round(img.width * s)), h = Math.max(1, Math.round(img.height * s));
         const ox = P.gutter + c * (P.cellW + P.gutter) + Math.floor((P.cellW - w) / 2), oy = P.gutter + r * (P.cellH + P.gutter) + (P.cellH - h);
@@ -91,7 +94,7 @@ export function contactSheet(orthosDir: string, frames: PlaneFrameLike[], P = BR
             out[q] = img.rgba[p]; out[q + 1] = img.rgba[p + 1]; out[q + 2] = img.rgba[p + 2];
         }
     });
-    return { png: encodePng(W, H, out, 4), width: W, height: H, cells };
+    return { png: await encodePngAsync(W, H, out, 4), width: W, height: H, cells };
 }
 
 /** The building the request named: what the brief and every reading are told it is. */

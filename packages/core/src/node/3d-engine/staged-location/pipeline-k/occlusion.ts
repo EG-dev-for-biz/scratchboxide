@@ -21,6 +21,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { decodePngAsync } from '../../../png-codec-pool';
 import { decodePng } from '../../../texture-processing';
 import { occludedMaskName } from './ortho-rectify';
 
@@ -31,15 +32,24 @@ export const OCCLUSION_PARAMS = {
     minBlocked: 0.65
 } as const;
 
-/** 1 where the facade's occlusion mask (`f.occludedMask` beside its image in `dir`) is at least minBlocked; undefined without a mask of the photo's size. */
-export function readOccluded(dir: string, f: { occludedMask?: string }, width: number, height: number, decode: (b: Buffer) => { rgba: ArrayLike<number>; width: number; height: number } = decodePng, P = OCCLUSION_PARAMS): Uint8Array | undefined {
-    if (!f.occludedMask) return undefined;
-    const file = path.join(dir, f.occludedMask);
-    if (!fs.existsSync(file)) return undefined;
-    const m = decode(fs.readFileSync(file));
+const occludedFile = (dir: string, f: { occludedMask?: string }) => (f.occludedMask && fs.existsSync(path.join(dir, f.occludedMask)) ? path.join(dir, f.occludedMask) : undefined);
+
+function occludedOf(m: { rgba: ArrayLike<number>; width: number; height: number }, width: number, height: number, P: typeof OCCLUSION_PARAMS): Uint8Array | undefined {
     if (m.width !== width || m.height !== height) return undefined;
     const at = Math.round(P.minBlocked * 255);
     return Uint8Array.from({ length: width * height }, (_, k) => (m.rgba[k * 4] >= at ? 1 : 0));
+}
+
+/** 1 where the facade's occlusion mask (`f.occludedMask` beside its image in `dir`) is at least minBlocked; undefined without a mask of the photo's size. */
+export function readOccluded(dir: string, f: { occludedMask?: string }, width: number, height: number, decode: (b: Buffer) => { rgba: ArrayLike<number>; width: number; height: number } = decodePng, P = OCCLUSION_PARAMS): Uint8Array | undefined {
+    const file = occludedFile(dir, f);
+    return file ? occludedOf(decode(fs.readFileSync(file)), width, height, P) : undefined;
+}
+
+/** readOccluded with the mask decoded on a codec thread (png-codec-pool.ts). */
+export async function readOccludedAsync(dir: string, f: { occludedMask?: string }, width: number, height: number, P = OCCLUSION_PARAMS): Promise<Uint8Array | undefined> {
+    const file = occludedFile(dir, f);
+    return file ? occludedOf(await decodePngAsync(fs.readFileSync(file)), width, height, P) : undefined;
 }
 
 /** The texels a reader skips: uncovered or occluded (a new array; `uncovered` absent reads as all covered). */
