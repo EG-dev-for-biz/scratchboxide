@@ -207,3 +207,72 @@ The voxel-fused photo splats were replaced by a splat on every patch of the scan
 - **Register the 299° street views against the scan** with the M1 session's pano registration (`photo_match_evaluate`: edges to within 5 px, PR 5) or mark their stale surfaces, once the user decides how era mismatches should look.
 - **Rebuild flattened lumps as flat patches** rather than folded triangles.
 
+
+## 11. Colour from true views (2026-11-03)
+
+**Status: Verified offline** (the app's splat renderer from the vantage, the same views as section 10; the live-app check is in section 11.6). Proof sheet: `docs/screenshots/splat_true_views_2026-11-03/proof_sheet_true_views.png` (gitignored).
+
+**The decision** (user, 2026-11-03, relayed by MAIN): keep the tiles' structure where a Street View photo sees through it, and colour each surface only from a view that truly sees that surface; else the tiles' own photo texture of it; else a labelled generated fill. It refines "stitch regardless of era" (2026-10-29): disagreeing views are still stitched, never rejected, but a photo of something else is never painted onto a surface. Recorded in AGENTS.md section 4.
+
+**Why it came up:** in the live app the user saw a slab beside the walk with other buildings painted on it, and the flattened cars as white folded shards (the world on disk was the 31 October build).
+
+### 11.1 Registration of the views facing Penn Station
+
+The judge's pano registration (`registerPanosByEdges`, as `photo_match_evaluate` runs it) was run on all six panos' four views each, against a fresh photo-textured extraction of the same crawl (112,949 triangles, the same frame as the clay scan). No pano locked: every median edge residual stayed at or near the 12 px truncation (one went to 7.8 px; 5 px and better than the start are required), and the held-out inter-view agreement was no better at the edge poses (0.004 to 0.065 at the stated poses, -0.032 to 0.028 at the edge poses). The 299 degree views have no sky outline at all: the scan's wall fills those frames. The stated poses stand.
+
+### 11.2 Which photo truly sees a surface
+
+`true-view-gate.ts`, per station: the scan's own photo texture is drawn from the station's camera (unlit), the scan's depth cuts the view into blocks of space (8 m, facing one of 14 ways), and each block's photo is tested against the texture with pipeline E's agreement test (`structuralAgreement`: band-passed luma, NCC at the best shift within 1 m, at least 0.3; refused when too small to tell or at the shift limit). The station's mask (its sky, and every block it does not truly see) is read by the splat builder's projection test, so a sample there is not seen by that station.
+
+- Synthetic: a true view passes all 18 measured blocks (median NCC 0.91); a photo of another pattern 1 of 18 (4% of its pixels). With 4 m blocks the unrelated photo passed 12 of 30: a smaller block holds too few features against a 1 m shift search.
+- At 7th Ave, behind the vantage (pano `feKTMhN8`, 299 degrees): the April 2026 photo (the new canopy, the plaza) is refused everywhere but the ground at the camera's feet. The scan's wall there carries the tiles' own photo of Penn Station's sign: it is that era's Penn Station frontage, not another building.
+- Down W 32nd St (h119): the right-hand building's upper floors pass; the near surfaces, where the tiles still hold the construction fences and sheds of their era, are refused and take the tiles' texture of them.
+- The passed blocks' best shifts sit a median 0.6 to 1.0 m off.
+
+### 11.3 Colour order
+
+Per splat (`scratchbox_surface_splats.hpp`): its patch's station when that station truly sees it; else the scan's own photo texture of its triangle (`tile-texture`); else a generated fill, the colour of the nearest same-facing patches that have one (`generated`). Each splat's source is written beside the world (`fused.provenance.u8`), the shares are in the report (`sources`) and the world result (`colourSources`).
+
+- **The tiles' texture is brought to the stations' look** by a tone curve per channel that matches its quantiles to theirs over the samples a station truly sees and the texture covers, from at least three stations. On 7th Ave the texture was 3.4 to 4.5 times darker (linear) than the beautified stations; pipeline E's one gain within 0.5 to 2 left it dark, and a curve of the stations' mean at each texture value flattened it to grey (a view sits up to a metre off the scan, so the two agree only on average).
+- **Station gains are refused when any is clamped:** with the mismatched content gated away, the station pairs formed no loop, so the gain residual was 0 by construction and 35 channels sat at the bound.
+- **Flattened lumps lie flat whole:** a triangle with any vertex laid on the street is laid down whole, so a parked car beside a kept low structure no longer folds up from it as a shard. Its tiles' texture photographed the car, not the street under it, so it takes the generated fill.
+- **Sampling follows geometric visibility** (any station's view), colour follows the gate: a wall the gate refuses is still sampled as finely as the walk asks.
+
+### 11.4 The image model's answers against their views
+
+MAIN's ask, after the aerial-paint session's finding (answers moved and rescaled by a median 4.3 px at 1K). Measured with its block matching and one-affine fit (`registrationCheck`, `fitAnswerWarp`, from its branch, not copied), each street station's beautified image against its Street View photo (fetched again through the grounding API, in memory only, never written; 24 requests) and each survey station's against its blockout:
+
+- **Street stations (24):** 15 are placed by one affine to within 0.3 to 0.6 px (median block residual). Every one carries the same stretch, 0.63% across and none down, with the content about 5 px left at the frame's edge: the 3:2 photo (1920 x 1280) was fitted into a 2528 x 1696 answer by its height and cropped at the sides, while the bake took the answer as fitting the width, so its focal length was 0.63% short and colours near the frame's edges sat up to 8 px off. These 15 are baked at their measured camera (focal lengths through the affine; the principal point, within about a pixel of the centre, is kept). The other 9 match the photo in only 7 to 46% of their textured blocks: the image model redrew them (cars and people taken out, lighting evened), so no single warp places them.
+- **Survey stations (9):** none is placed on its blockout (2 to 74 of 73 to 194 blocks match).
+- **Refused, with the reason:** the 9 redrawn street stations and the 9 survey stations colour nothing. Their cameras still say what the walk sees, so the scan is still sampled as finely there (`SurfaceLayerStation.refused`). The aerial-paint session is extracting its warp check into a module on main; until it lands, the measurement and the refusals for this world come from a script, and the app's own bake does not yet undo the warp (BeautifyStationService is where it goes, with the photo still in memory).
+
+### 11.5 The rebuilt world
+
+Built uncached from the 31 October station images (not regenerated), the fresh textured extraction and the measured cameras, 114 s on this machine; installed in the world folder (the 31 October `fused.*` and `tileset.meta.json` kept aside), the meta's `colourFromTrueViews` naming every refusal.
+
+| Measure | 31 Oct world | Colour from true views |
+|---|---|---|
+| Splats | 4.0 M | 4.0 M |
+| Patches from a station that truly sees them | 46,006 (every patch from its best station, gated by nothing) | 5,250 (12%) |
+| Patches from the tiles' own texture | 0 | 38,973 (86%) |
+| Patches generated | 0 (unseen surfaces took one mean colour) | 863 (2%, flattened lumps) |
+| Station images used / refused | 33 / 0 | 15 / 18 |
+| Station gains | not applied (residual 0.26) | not applied (6 channels at the bound, no loop to test) |
+| Tile texture tone curve | n/a | median gain 3.2 / 4.1 / 4.1 (r, g, b) from 147,895 samples of 15 stations |
+
+What the views show (proof sheet rows 1 to 6):
+- **Behind the vantage** the wall is its own texture (dark, soft: the tiles' close-up of Penn Station's frontage) where it was a smear of plaza pavement.
+- **The road** shows its crosswalks and lane lines, from the tiles' texture; the folded shards in front of the walk are gone (a flat labelled fill where the lumps were laid down).
+- **Facades a true view sees** keep the station's detail (the flags down 7th Ave); the rest show the tiles' texture of the same structure, softer and in places of the tiles' era (the construction fences on W 32nd St).
+
+### 11.6 In the live app
+
+Port 3780 (`scratchbox-splat-true-views`, this branch), the front page's 3D World button: the rebuilt world opens at the vantage, `fused.spz` 200, no console errors (proof sheet row 9). Not run with PR 29's sky (not on main yet).
+
+### 11.7 Still wrong
+
+1. **Parked cars beside the W 32nd St fence still stand crumpled.** They sit in the scan's low structures, which containment keeps standing (a connected footprint of at least 50 m²), so the lump flattening never reaches them.
+2. **The tiles' texture carries its own era and light:** construction fences and sheds where the April 2026 street is finished, and cast shadows (a dark band across the road at the walk camera).
+3. **True-view blocks still sit a median 0.6 to 1.0 m off** at their best shift; the shift is measured but not applied.
+4. **Only 12% of patches are true views.** Most street photos see the scan at grazing angles, or see what the tiles show differently.
+5. **The cloud copy** of the world (`worlds/v2/d46ee4caa1de6ae432e1a2e2`) is the 31 October layer; new chat-built street worlds are keyed apart from it (`colour: 'true-views'` in the cache key).
