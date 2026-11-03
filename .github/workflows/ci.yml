@@ -65,6 +65,7 @@ jobs:
       os: macos-15
       checks: true
       test: true
+      heavy: true
 
   docker:
     name: Docker image builds

@@ -11,8 +11,8 @@
  * Which of pipeline K's stages run their native kernels (the C++ ports beside this file and the remesh polish's,
  * remesh-polish-native.ts; each bit for bit the TypeScript's result, held to it by its parity test). On by default:
  * unset, `1`, `all` or `on` runs every port; `SCRATCHBOX_K_NATIVE=0` (or `off`) runs the TypeScript everywhere; a comma
- * list names the ports that run (`rectify`, `window-fit`, `wall-grammar`, `wall-sheets`, `lattice`, `cut`, `stitch`,
- * `infill`, `roof-shadow`, `regions`, `harmonize`, `template`: the facade reader's window search), the rest in
+ * list names the ports that run (`rectify`, `window-fit`, `wall-grammar`, `wall-sheets`, `lattice`, `cut`, `stitch`, `clip`,
+ * `infill`, `fill-texture`, `roof-shadow`, `regions`, `harmonize`, `template`: the facade reader's window search), the rest in
  * TypeScript. Read at each call, so a worker thread sees the same environment as the server. A native build or run that
  * fails is thrown, never answered by the TypeScript path: the switch picks the engine, it is not a fallback.
  *
@@ -24,8 +24,8 @@
  */
 
 export const K_NATIVE_STAGES = [
-    'rectify', 'window-fit', 'wall-grammar', 'wall-sheets', 'lattice', 'cut', 'stitch', 'infill', 'roof-shadow', 'regions',
-    'harmonize', 'template',
+    'rectify', 'window-fit', 'wall-grammar', 'wall-sheets', 'lattice', 'cut', 'stitch', 'clip', 'infill', 'fill-texture',
+    'roof-shadow', 'regions', 'harmonize', 'template',
 ] as const;
 export type KNativeStage = (typeof K_NATIVE_STAGES)[number];
 
