@@ -96,7 +96,7 @@ import { buildWallSheets, WALL_SHEETS_VERSION, type WallSheet } from './wall-she
 import { decodePng as decodePngForGrammar } from '../../texture-processing';
 import { TILE_SEAMS_VERSION, type TileSeamWeldRequest, type TileSeamWeldResult } from '../tile-seam-weld-service';
 import { measureRevealDepth, REVEAL_DEPTH_VERSION, type RevealFacade, type RevealView } from './reveal-depth';
-import { streetViewClayScore } from './streetview-clay-score';
+import { streetViewClayScores, visibleDefects } from './remesh-scores';
 import { decodeJpegInMemory } from './photo-palette';
 import type { ReliefFacade } from './facade-lattice';
 import { wallSampleIndex } from './wall-plane-fit';
@@ -4021,10 +4021,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // the clay's relief against Street View, before the polish and after it (streetview-clay-score.ts)
                 if (pipelineK && surveyViews?.length && pol.clayGlb !== r.clayGlb && stepOn('remesh.streetViewScore', true)) {
                     try {
-                        const score = await timed('streetViewScore', async () => ({
-                            before: streetViewClayScore(sceneToRenderMesh(readGlbScene(r.clayGlb)), surveyViews!),
-                            after: streetViewClayScore(sceneToRenderMesh(readGlbScene(pol.clayGlb)), surveyViews!)
-                        }));
+                        // on a remesh worker thread, as the polish (remesh-scores.ts)
+                        const score = await timed('streetViewScore', () => streetViewClayScores(r.clayGlb, pol.clayGlb, surveyViews!, { signal: io.signal }));
                         notes.write('pipeline_k_streetview_score', { views: surveyViews.length, poses: 'nominal survey poses (±2 m), common to both', ...score });
                         notes.note(PROVENANCE.photoInferred, `clay against Street View (${surveyViews.length} photos, © Google): model edges ${score.before.modelToPhotoPx ?? '–'} → ${score.after.modelToPhotoPx ?? '–'} px from the photo's, photo edges ${score.before.photoToModelPx ?? '–'} → ${score.after.photoToModelPx ?? '–'} px from the model's (before → after the polish; lower is better)`);
                     } catch (err) {
@@ -4040,7 +4038,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // the build looked at from outside: holes seen on it are flagged here, where its geometry is final; untextured surface
                 // is judged on the finished model in the texture stage, which still paints some of it (the party wall)
                 if (pipelineK && isolateMode && pol.texturedGlb && stepOn('remesh.visibleDefects', true)) {
-                    const seen = await timed('visibleDefects', async () => measureVisibleDefects(fs.readFileSync(pol.texturedGlb!)));
+                    const seen = await timed('visibleDefects', () => visibleDefects(pol.texturedGlb!, { signal: io.signal }));
                     notes.write('pipeline_k_visible_defects', { ...seen, views: seen.views.map(({ mask: _m, ...v }) => v), judged: 'holes (untextured surface is judged on the finished model: pipeline_k_visible_defects_textured)' });
                     if (seen.holesFlagged) degradations.push(notes.degrade(record(stage, 'visible_defects', {
                         part: { description: 'holes seen on the outside of the building' }, intended: 'every surface seen from outside closed',
