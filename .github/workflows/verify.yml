@@ -21,16 +21,21 @@ on:
         description: vitest --shard, e.g. 3/10; empty runs every test file.
         type: string
         default: ''
+      heavy:
+        description: Also run the tests gated on SCRATCHBOX_HEAVY_TESTS (the 4-order and spectral atmosphere tables).
+        type: boolean
+        default: false
 
 jobs:
   verify:
     name: verify
     runs-on: ${{ inputs.os }}
-    # 60 while atmosphere-lut.test.ts precomputes the spectral Bruneton tables (about 30 min on a 4-vCPU runner);
-    # back to 40 once that test is light enough for PRs.
-    timeout-minutes: 60
+    # 60 with the heavy tests (the macOS whole suite with the 4-order and spectral atmosphere tables took 29.5 min on
+    # #49), 40 otherwise.
+    timeout-minutes: ${{ inputs.heavy && 60 || 40 }}
     env:
       SCRATCHBOX_TEST: '1'
+      SCRATCHBOX_HEAVY_TESTS: ${{ inputs.heavy && '1' || '' }}
       NODE_OPTIONS: --max_old_space_size=6144
     steps:
       - uses: actions/checkout@v4
