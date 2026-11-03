@@ -26,7 +26,9 @@ jobs:
   verify:
     name: verify
     runs-on: ${{ inputs.os }}
-    timeout-minutes: 40
+    # 60 while atmosphere-lut.test.ts precomputes the spectral Bruneton tables (about 30 min on a 4-vCPU runner);
+    # back to 40 once that test is light enough for PRs.
+    timeout-minutes: 60
     env:
       SCRATCHBOX_TEST: '1'
       NODE_OPTIONS: --max_old_space_size=6144
