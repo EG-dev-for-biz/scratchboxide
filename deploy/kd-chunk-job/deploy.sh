@@ -90,7 +90,7 @@ build() {
   # the commit itself, not the working tree: the tag must name exactly what is inside
   local tgz; tgz="$(mktemp -d)/kd-chunk-job-$COMMIT.tgz"
   git -C "$REPO_ROOT" archive --format tar.gz -o "$tgz" "$COMMIT" -- \
-    package.json package-lock.json tsconfig.json packages/core scripts tools deploy/kd-chunk-job \
+    package.json package-lock.json tsconfig.json packages/core scripts tools deploy/kd-chunk-job assets/textures \
     packages/cli/package.json desktop-app/package.json
   echo "[build] $IMAGE from $(du -h "$tgz" | cut -f1) of source"
   [ -n "$(git -C "$REPO_ROOT" status --porcelain)" ] && echo "[build] note: the working tree has changes; the image is HEAD ($COMMIT) without them"
