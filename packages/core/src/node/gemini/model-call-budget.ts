@@ -47,6 +47,24 @@ export function modelCallLimitsFromEnv(env: NodeJS.ProcessEnv = process.env): { 
     return { all, byModel };
 }
 
+/**
+ * One of `shares` equal parts of these limits, as the environment that sets them, for a process that shares the quota
+ * with others (a district's Cloud Run chunk tasks beside its centre build). A limit set keeps at least 1 call; one unset
+ * stays unset; with none set, nothing is set.
+ */
+export function modelCallShareEnv(limits: { all: ModelCallLimits; byModel: Map<string, ModelCallLimits> }, shares: number): Record<string, string> {
+    const n = Math.max(1, Math.floor(shares));
+    const part = (v: number | undefined) => v ? Math.max(1, Math.floor(v / n)) : undefined;
+    const env: Record<string, string> = {};
+    const all = { inFlight: part(limits.all.inFlight), perMinute: part(limits.all.perMinute) };
+    if (all.inFlight) env.SCRATCHBOX_MODEL_CALLS_IN_FLIGHT = String(all.inFlight);
+    if (all.perMinute) env.SCRATCHBOX_MODEL_CALLS_PER_MINUTE = String(all.perMinute);
+    const byModel = [...limits.byModel.entries()].filter(([, l]) => l.inFlight || l.perMinute)
+        .map(([m, l]) => `${m}=${part(l.inFlight) ?? ''}/${part(l.perMinute) ?? ''}`);
+    if (byModel.length) env.SCRATCHBOX_MODEL_CALL_BUDGET = byModel.join(',');
+    return env;
+}
+
 interface ModelLane { active: number; starts: number[]; queue: Array<{ go: () => void; signal?: AbortSignal; onAbort?: () => void }>; timer?: ReturnType<typeof setTimeout> }
 
 export class ModelCallBudget implements CallBudget {

@@ -92,7 +92,7 @@ class FakeJobs implements CloudRunJobs {
     async cancel(name: string) { this.cancelled.push(name); }
 }
 
-function setup(opts: { progress?: string[]; fail?: Error; hang?: boolean; image?: string; withMirror?: boolean } = {}) {
+function setup(opts: { progress?: string[]; fail?: Error; hang?: boolean; image?: string; withMirror?: boolean; env?: NodeJS.ProcessEnv } = {}) {
     const bucketDir = tmp('bucket'), laptopRoot = tmp('laptop'), jobRoot = tmp('job');
     const laptopStats = path.join(laptopRoot, 'build', 'texture-library', 'stats'), jobStats = path.join(jobRoot, 'build', 'texture-library', 'stats');
     const bucket = new DirectoryCloudBucket(bucketDir);
@@ -104,7 +104,7 @@ function setup(opts: { progress?: string[]; fail?: Error; hang?: boolean; image?
         return runKdChunkJob({ bucket, prefix: where.prefix, cache: jobCache, build: fakeBuild(jobCache, opts), flushMs: 5, log: () => undefined, libraryStatsDir: jobStats, ...(mirror ? { mirror } : {}) });
     }, opts.hang);
     const config = { ...cloudChunkConfig({}), bucket: 'scoutscan-kd-jobs', pollMs: 5 };
-    const runChunk = createCloudChunkRunner({ cache: laptop, bucket, jobs, config, head: () => SHA, newRunId: () => 'a1b2c3d4', env: {}, log: () => undefined, libraryStatsDir: laptopStats });
+    const runChunk = createCloudChunkRunner({ cache: laptop, bucket, jobs, config, head: () => SHA, newRunId: () => 'a1b2c3d4', env: opts.env ?? {}, log: () => undefined, libraryStatsDir: laptopStats });
     return { bucket, bucketDir, laptop, jobCache, jobs, runChunk, mirror, laptopRoot, jobRoot, laptopStats, jobStats };
 }
 
@@ -160,6 +160,29 @@ describe('pipeline K-D cloud chunk runner', () => {
         expect(JSON.parse(fs.readFileSync(path.join(s.jobStats, 'Concrete015.json'), 'utf8'))).toEqual({ version: 2, lab: [38, 0, 0] });
         expect(JSON.parse(fs.readFileSync(path.join(s.jobStats, 'Plaster005.json'), 'utf8'))).toEqual({ version: 2, lab: [70, 0, 0] });
         expect(fs.readdirSync(s.jobStats).sort()).toEqual(['Concrete015.json', 'Plaster005.json']);
+    });
+
+    it("gives each execution its share of this process's model-call budget: the chunks at once and the centre", async () => {
+        const s = setup({ env: { SCRATCHBOX_MODEL_CALLS_IN_FLIGHT: '64', SCRATCHBOX_MODEL_CALLS_PER_MINUTE: '1000', SCRATCHBOX_MODEL_CALL_BUDGET: 'gemini-3.8-flash=/300,imagen=5/' } });
+        const seen: string[] = [];
+        await s.runChunk(request(), { atOnce: 7, onProgress: m => seen.push(m) });
+        expect(s.jobs.runs).toEqual([{
+            KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/7',
+            SCRATCHBOX_MODEL_CALLS_IN_FLIGHT: '8', SCRATCHBOX_MODEL_CALLS_PER_MINUTE: '125', SCRATCHBOX_MODEL_CALL_BUDGET: 'gemini-3.8-flash=/37,imagen=1/'
+        }]);
+        expect(seen.find(m => m.startsWith('started in the cloud'))).toContain('1/8 of the budget');
+        // the width the cloud runner sets when the orchestrator names none
+        const t = setup({ env: { SCRATCHBOX_KD_CHUNK_RUNNER: 'cloud', SCRATCHBOX_KD_CLOUD_PARALLEL: '3', SCRATCHBOX_MODEL_CALLS_PER_MINUTE: '100' } });
+        await t.runChunk(request(), {});
+        expect(t.jobs.runs[0].SCRATCHBOX_MODEL_CALLS_PER_MINUTE).toBe('25');
+    });
+
+    it('sets no budget on an execution when this process has none', async () => {
+        const s = setup();
+        const seen: string[] = [];
+        await s.runChunk(request(), { atOnce: 20, onProgress: m => seen.push(m) });
+        expect(s.jobs.runs).toEqual([{ KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/7' }]);
+        expect(seen.find(m => m.startsWith('started in the cloud'))).not.toContain('budget');
     });
 
     it('starts the chunks without library statistics when this checkout has measured none', async () => {
