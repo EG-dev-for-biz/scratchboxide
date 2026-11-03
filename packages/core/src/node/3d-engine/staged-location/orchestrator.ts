@@ -86,7 +86,7 @@ import { REVOLUTION_FIT_VERSION, revolutionFitEnabled, reviseForRevolutions, typ
 import { districtEDetail, districtEDetailEnabled, DISTRICT_E_DETAIL_VERSION } from './district-e-detail';
 import { describePolish, polishRemesh, REMESH_POLISH_VERSION, type PolishedRemesh } from './remesh-polish';
 import { remeshWorkersEnabled, remeshWorkerThreads, runRemeshJob, runRemeshJobs } from './remesh-worker-pool';
-import { ensureNativePolishFor, ensureNativeWallGrammar } from './remesh-polish-native';
+import { ensureNativePolishFor, ensureNativeWallGrammar, ensureNativeWallSheets } from './remesh-polish-native';
 import type { PolishJobInput } from './remesh-worker';
 import { remeshCleanupEnabled } from './remesh-cleanup';
 import { remeshOrientEnabled } from './remesh-orient';
@@ -3933,7 +3933,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 notes.write('pipeline_k_wall_grammar', { version: WALL_GRAMMAR_VERSION, walls: wg.grammar.walls.length, multiFacadeWalls: wg.grammar.walls.filter(w => w.facades.length > 1).length, tiers: new Set(wg.grammar.walls.map(w => w.tier)).size, baysRead: bays.filter(b => b.from === 'photo-inferred').length, baysGenerated: bays.filter(b => b.from === 'generated').length });
                                 // one sheet per multi-facade wall, rebuilt in place of its facades (on unless SCRATCHBOX_K_WHOLE_WALLS=0)
                                 if (stepOn('remesh.wallSheets', process.env.SCRATCHBOX_K_WHOLE_WALLS?.trim() !== '0')) {
-                                    const ws = await timed('wallSheets', async () => onThreads ? runRemeshJob<{ file: string; sheets: WallSheet[] }>({ kind: 'wallSheets', orthosDir: k.orthosDir, grammar: wg.grammar, fit: wf.fit }, { signal: io.signal }) : buildWallSheets(k.orthosDir, wg.grammar, wf.fit, b => { const d = decodePngForGrammar(b); return { rgba: d.rgba, width: d.width, height: d.height }; }));
+                                    const ws = await timed('wallSheets', async () => { await ensureNativeWallSheets(); return onThreads ? runRemeshJob<{ file: string; sheets: WallSheet[] }>({ kind: 'wallSheets', orthosDir: k.orthosDir, grammar: wg.grammar, fit: wf.fit, ...(cpuShare ? { threads: cpuShare.threads } : {}) }, { signal: io.signal }) : buildWallSheets(k.orthosDir, wg.grammar, wf.fit, b => { const d = decodePngForGrammar(b); return { rgba: d.rgba, width: d.width, height: d.height }; }, cpuShare ? { threads: cpuShare.threads } : {}); });
                                     wallSheets = ws.file;
                                     notes.write('pipeline_k_wall_sheets', { version: WALL_SHEETS_VERSION, sheets: ws.sheets.map(sh => ({ wallId: sh.wallId, members: sh.members, sizeM: [Math.round(sh.facade.sMax - sh.facade.sMin), Math.round(sh.facade.tMax - sh.facade.tMin)], filledShare: sh.facade.textureFill?.share, windows: sh.windows.length, bays: sh.bays.length })) });
                                     notes.note(PROVENANCE.photoInferred, `whole walls (${WALL_SHEETS_VERSION}): ${ws.sheets.length} walls rebuilt as one sheet each from ${ws.sheets.reduce((a, sh) => a + sh.members.length, 0)} facades; their photo-less texels filled from each sheet's own repeats (generated)`);

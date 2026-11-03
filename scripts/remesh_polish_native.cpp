@@ -9,7 +9,7 @@
 
 /**
  * CLI of pipeline K's remesh-polish steps run natively on a fixed thread pool (packages/core/src/node/3d-engine/
- * staged-location/remesh-polish-native.ts drives it; SCRATCHBOX_K_NATIVE without window-fit, wall-grammar, lattice, cut, stitch or infill keeps that step in TypeScript). Data
+ * staged-location/remesh-polish-native.ts drives it; SCRATCHBOX_K_NATIVE without window-fit, wall-grammar, wall-sheets, lattice, cut, stitch or infill keeps that step in TypeScript). Data
  * arrives on stdin as raw little-endian buffers, a header then arrays, never PNG:
  *
  *   remesh_polish_native window-fit <threads>
@@ -69,6 +69,14 @@
  *     out: f64 segments, stitched, stripTriangles, cornersZipped, unjoined; u32 n, per reason str, f64 count; u32 n, per
  *          facade i32 id, u32 cells, i32[2*cells]; u32 nOut, f64[nOut*9] the strips' and zips' triangles.
  *
+ *   remesh_polish_native wall-sheets <threads>
+ *     in:  "SBWS" u32 version (1), u32 nParams, f64[nParams] (scratchbox_ortho_rectify.hpp paramNames' order, then the
+ *          occlusion mask's threshold code), u32 nSheets, per sheet u32 W, u32 H, f64 pixel, u32 nMembers, per member (in
+ *          the sheet's order) str image, str uncovered mask, str occluded mask (empty: none), f64[6] its map from the sheet's
+ *          pixels (o, dx, dy).
+ *     out: per sheet in order, f64 holes, wallCoverage, wallAreaM2, fromRepeats, fromStoreys, smooth texels; u32 anyOccluded;
+ *          u32 n, u8[n] the photo's PNG scanlines, u32 n, u8[n] the uncovered mask's, u32 n, u8[n] the occluded mask's.
+ *
  * Build: clang++ -std=c++20 -O3 -I packages/core/src/native/3d-engine/include scripts/remesh_polish_native.cpp -o build/3d-native/remesh_polish_native -lz
  */
 
@@ -78,6 +86,7 @@
 #include "scratchbox_wall_grammar.hpp"
 #include "scratchbox_lattice_cut.hpp"
 #include "scratchbox_lattice_stitch.hpp"
+#include "scratchbox_wall_sheets.hpp"
 #include "scratchbox_thread_pool.hpp"
 
 #include <chrono>
@@ -464,11 +473,44 @@ int stitch(unsigned threads) {
     return 0;
 }
 
+int wallSheets(unsigned threads) {
+    expectMagic("SBWS", 1);
+    const auto params = readDoubles(readOne<uint32_t>());
+    const size_t nOrtho = ortho_rectify::paramNames().size();
+    if (params.size() != nOrtho + 1) throw std::runtime_error("the wall sheets take " + std::to_string(nOrtho + 1) + " parameters, got " + std::to_string(params.size()));
+    const auto P = ortho_rectify::paramsFromDoubles(params.data());
+    const double occludedAt = params[nOrtho];
+    std::vector<wall_sheets::SheetJob> jobs(readOne<uint32_t>());
+    for (auto& j : jobs) {
+        j.W = static_cast<int>(readOne<uint32_t>());
+        j.H = static_cast<int>(readOne<uint32_t>());
+        j.px = readOne<double>();
+        j.members.resize(readOne<uint32_t>());
+        for (auto& m : j.members) {
+            m.image = readString();
+            m.uncovered = readString();
+            m.occluded = readString();
+            const auto v = readDoubles(6);
+            m.o[0] = v[0]; m.o[1] = v[1]; m.dx[0] = v[2]; m.dx[1] = v[3]; m.dy[0] = v[4]; m.dy[1] = v[5];
+        }
+    }
+    FixedThreadPool pool(threads);
+    for (const auto& o : wall_sheets::buildSheets(jobs, P, occludedAt, pool)) {
+        for (double v : {o.holes, o.wallCoverage, o.wallAreaM2, o.fromRepeats, o.fromStoreys, o.smooth}) writeOne<double>(v);
+        writeOne<uint32_t>(o.anyOccluded ? 1 : 0);
+        writeArray(o.image);
+        writeArray(o.mask);
+        writeArray(o.occluded);
+    }
+    std::fflush(stdout);
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|lattice|lattice-audit|wall-grammar|cut|stitch <threads>  (binary input on stdin)\n");
+        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|lattice|lattice-audit|wall-grammar|cut|stitch|wall-sheets <threads>  (binary input on stdin)\n");
         return 2;
     }
     const std::string cmd = argv[1];
@@ -481,6 +523,7 @@ int main(int argc, char** argv) {
         if (cmd == "wall-grammar") return wallGrammar(threads);
         if (cmd == "cut") return cut(threads);
         if (cmd == "stitch") return stitch(threads);
+        if (cmd == "wall-sheets") return wallSheets(threads);
         std::fprintf(stderr, "unknown command %s\n", cmd.c_str());
         return 2;
     } catch (const std::exception& e) {

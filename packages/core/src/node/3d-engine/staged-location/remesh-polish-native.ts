@@ -14,6 +14,8 @@
  *  - `window-fit`: window-fit.ts fitOrthoFacadesNative (scratchbox_window_fit.hpp), the photometric relief read in the
  *    same process, one facade a task;
  *  - `wall-grammar`: wall-grammar.ts readWallGrammar's evidence and bays (scratchbox_wall_grammar.hpp), one wall a task;
+ *  - `wall-sheets`: wall-sheets.ts buildWallSheets' photos and masks (scratchbox_wall_sheets.hpp), one sheet a task, their
+ *    PNG scanlines filtered there and deflated by Node's zlib, so the files are the TypeScript's byte for byte;
  *  - `lattice`: facade-lattice.ts (scratchbox_facade_lattice.hpp), each facade's lattice, rebuilt surface and repeat
  *    texture one facade a task, then the removals under the tear audit one view a task;
  *  - `cut`: pipeline-k/lattice-stitch.ts cutScanToLattice (scratchbox_lattice_cut.hpp), triangles in chunks;
@@ -73,6 +75,11 @@ export async function ensureNativePolishFor(input: { infill?: boolean; seal?: bo
 /** The wall grammar's native reading built before it runs: readWallGrammar runs synchronously and cannot compile. */
 export async function ensureNativeWallGrammar(): Promise<void> {
     if (kNative('wall-grammar')) await ensureRemeshPolishBinary();
+}
+
+/** The wall sheets' native photos built before they run: buildWallSheets runs synchronously and cannot compile. */
+export async function ensureNativeWallSheets(): Promise<void> {
+    if (kNative('wall-sheets')) await ensureRemeshPolishBinary();
 }
 
 /** The binary already in the native build cache for this source, found synchronously; throws when it was never built. */
@@ -382,3 +389,26 @@ export function runNativeStitch(params: number[], facades: NativeStitchFacade[],
     return { report: { segments, stitched, stripTriangles, cornersZipped, why, unjoined }, unjoinedCells, out };
 }
 
+// ------------------------------------------------------------------------------------------------ the wall sheets
+
+/** A sheet for the native wall sheets: its size and texel, and its members in the sheet's order with their files and maps from its pixels. */
+export interface NativeSheetJob { width: number; height: number; pixel: number; members: Array<{ image: string; uncovered?: string; occluded?: string; o: number[]; dx: number[]; dy: number[] }> }
+/** A sheet's photo and masks as PNG scanlines (png-encode.ts encodePngFiltered), and what was filled. */
+export interface NativeSheetOut { holes: number; wallCoverage: number; wallAreaM2: number; fromRepeats: number; fromStoreys: number; smooth: number; image: Uint8Array; mask: Uint8Array; occluded?: Uint8Array }
+
+/** wall-sheets.ts buildWallSheets' pixel work natively: each sheet's mosaic, its holes filled, its images' scanlines. */
+export function runNativeWallSheets(params: number[], sheets: NativeSheetJob[], threads: number): NativeSheetOut[] {
+    const w = new Writer().magic('SBWS').u32(1).u32(params.length).f64s(params).u32(sheets.length);
+    for (const sh of sheets) {
+        w.u32(sh.width).u32(sh.height).f64s([sh.pixel]).u32(sh.members.length);
+        for (const m of sh.members) w.str(m.image).str(m.uncovered ?? '').str(m.occluded ?? '').f64s([m.o[0], m.o[1], m.dx[0], m.dx[1], m.dy[0], m.dy[1]]);
+    }
+    const r = new Reader(runSync('wall-sheets', w.take(), threads));
+    const out = sheets.map((): NativeSheetOut => {
+        const holes = r.f64(), wallCoverage = r.f64(), wallAreaM2 = r.f64(), fromRepeats = r.f64(), fromStoreys = r.f64(), smooth = r.f64(), anyOccluded = r.u32();
+        const image = r.u8s(r.u32()), mask = r.u8s(r.u32()), occluded = r.u8s(r.u32());
+        return { holes, wallCoverage, wallAreaM2, fromRepeats, fromStoreys, smooth, image, mask, ...(anyOccluded ? { occluded } : {}) };
+    });
+    r.done('wall-sheets');
+    return out;
+}
