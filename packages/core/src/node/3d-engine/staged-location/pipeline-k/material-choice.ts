@@ -154,25 +154,25 @@ export async function chooseWithMemory(rows: ChoiceRow[], swatches: { png: Buffe
     const labs = rows.map(r => linearRgbToLab(r.meanLinear));
     const keys = rows.map(r => (memory && r.candidates.length ? choiceKey(r, spanM, memory.model) : undefined));
     const picks: Array<SetChoice | undefined> = rows.map(() => undefined);
-    keys.forEach((key, k) => {
-        const kept = key ? memory!.store.get<ChoiceMemoryRecord>(key)?.classes ?? [] : [];
+    for (const [k, key] of keys.entries()) {
+        const kept = key ? (await memory!.store.get<ChoiceMemoryRecord>(key))?.classes ?? [] : [];
         const near = kept.map(c => ({ c, d: colourUnits(c.meanLab, labs[k]) })).filter(x => x.d < CHOICE_REUSE.maxColourUnits && x.c.pick >= 0 && x.c.pick <= rows[k].candidates.length).sort((a, b) => a.d - b.d)[0];
         if (near) picks[k] = { pick: near.c.pick, ...(near.c.seen ? { seen: near.c.seen } : {}), conf: near.c.conf, reused: { meanLab: near.c.meanLab, colourUnits: Math.round(near.d * 1000) / 1000 } };
-    });
+    }
     const open = rows.map((_, k) => k).filter(k => !picks[k]);
     if (!open.length) return { picks, calls: 0, reused: rows.length };
     // only the classes not seen before, their swatches cut from the sheet (every row when the sheet cannot be cut; the kept picks stand)
     const cut = open.length < rows.length ? swatchRows(swatches.png, rows.length, open) : undefined;
     const asked = cut ? open : rows.map((_, k) => k);
     const answers = await ask(asked.map(k => rows[k]), cut ? { ...swatches, png: cut } : swatches);
-    asked.forEach((k, i) => {
-        if (picks[k]) return;
+    for (const [i, k] of asked.entries()) {
+        if (picks[k]) continue;
         const a = answers[i], key = keys[k];
         picks[k] = a;
-        if (!a || !key) return;
-        const kept = memory!.store.get<ChoiceMemoryRecord>(key)?.classes ?? [];
+        if (!a || !key) continue;
+        const kept = (await memory!.store.get<ChoiceMemoryRecord>(key))?.classes ?? [];
         const classes = [...kept, { meanLab: labs[k], pick: a.pick, ...(a.seen ? { seen: a.seen } : {}), conf: a.conf, atMs: Date.now() }].slice(-CHOICE_REUSE.maxKept);
         memory!.store.put(key, { schema: 'scratchbox.material-choice/1', key, model: memory!.model, classes } satisfies ChoiceMemoryRecord);
-    });
+    }
     return { picks, calls: 1, reused: rows.length - open.length };
 }

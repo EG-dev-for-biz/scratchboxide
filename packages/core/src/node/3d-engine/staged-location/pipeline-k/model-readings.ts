@@ -13,7 +13,10 @@
  * material choices (material-choice.ts, keyed by the candidates a class was shown). Each record's key is its name in the
  * store, `<kind>/<sha256>` (`facade-reading/…`, `material-choice/…`): the place store
  * (docs/research/2026-11-03-district-run-over-run-plan.md, section 4) can hold the same records under the same names.
- * Here they are files beside the stage caches (MODEL_READINGS_DIR under the staged-location cache).
+ * Here they are files beside the stage caches (MODEL_READINGS_DIR under the staged-location cache); they go to the cache
+ * mirror's bucket with the caches (cache-mirror.ts), and a record this workspace lacks is read back from there before the
+ * model is asked (fileReadingStore's `restore`), so a Cloud Run chunk, which starts on an empty disk, asks only about what
+ * changed. Keys are the same everywhere.
  */
 
 import * as crypto from 'crypto';
@@ -25,8 +28,19 @@ export const MODEL_READINGS_DIR = 'model_readings';
 
 /** Records by key. A record that cannot be read is absent; one that cannot be written is asked for again next time. */
 export interface ModelReadingStore {
-    get<T>(key: string): T | undefined;
+    /** A record kept here comes back at once; one read back from elsewhere first (fileReadingStore's `restore`), through a promise. */
+    get<T>(key: string): T | undefined | Promise<T | undefined>;
     put(key: string, value: unknown): void;
+}
+
+/** What a run's store did (the `model_readings` run note). */
+export interface ModelReadingReport {
+    /** Asks answered by a record here, by one read back from elsewhere, and by none; records written. */
+    kept: number; restored: number; missed: number; written: number;
+    /** Restores that failed (counted as misses), with the first reason. */
+    restoreFailed: number; restoreError?: string;
+    /** Time spent waiting on `restore`, summed over the records (ms). */
+    restoreMs: number;
 }
 
 const KEY = /^[a-z][a-z0-9-]*\/[0-9a-f]{64}$/;
@@ -38,16 +52,46 @@ export function readingKey(kind: string, parts: unknown[]): string {
     return `${kind}/${h.digest('hex')}`;
 }
 
-/** The store as files: `<dir>/<kind>/<first two hex>/<sha256>.json`, each written whole (a temp file renamed). */
-export function fileReadingStore(dir: string): ModelReadingStore {
-    const fileOf = (key: string) => {
+/**
+ * The store as files: `<dir>/<kind>/<first two hex>/<sha256>.json`, each written whole (a temp file renamed). With
+ * `restore`, a record not here is first read back to its file from elsewhere (`rel`, the file's path under `dir`: the cache
+ * mirror's bucket, stage-cache.ts restoreFile), once a key: a key asked again while it is read waits for the same read, and
+ * one found nowhere is not looked for again until it is written. A restore that fails is a miss.
+ */
+export function fileReadingStore(dir: string, opts: { restore?: (rel: string) => Promise<boolean> } = {}): ModelReadingStore & { report: () => ModelReadingReport } {
+    const relOf = (key: string) => {
         if (!KEY.test(key)) throw new Error(`not a reading key: ${key}`);
         const [kind, hex] = key.split('/');
-        return path.join(dir, kind, hex.slice(0, 2), `${hex}.json`);
+        return `${kind}/${hex.slice(0, 2)}/${hex}.json`;
     };
+    const fileOf = (key: string) => path.join(dir, ...relOf(key).split('/'));
+    const read = <T>(key: string): T | undefined => {
+        try { return JSON.parse(fs.readFileSync(fileOf(key), 'utf8')) as T; } catch { return undefined; }
+    };
+    const report: ModelReadingReport = { kept: 0, restored: 0, missed: 0, written: 0, restoreFailed: 0, restoreMs: 0 };
+    const reading = new Map<string, Promise<unknown>>(), nowhere = new Set<string>();
+    const restore = opts.restore;
     return {
-        get: <T>(key: string) => {
-            try { return JSON.parse(fs.readFileSync(fileOf(key), 'utf8')) as T; } catch { return undefined; }
+        get: <T>(key: string): T | undefined | Promise<T | undefined> => {
+            const here = read<T>(key);
+            if (here !== undefined) { report.kept++; return here; }
+            if (!restore || nowhere.has(key)) { report.missed++; return undefined; }
+            let pending = reading.get(key) as Promise<T | undefined> | undefined;
+            if (!pending) {
+                const t0 = Date.now();
+                pending = restore(relOf(key)).catch(err => {
+                    report.restoreFailed++;
+                    report.restoreError ??= err instanceof Error ? err.message : String(err);
+                    return false;
+                }).then(ok => {
+                    report.restoreMs += Date.now() - t0;
+                    const got = ok ? read<T>(key) : undefined;
+                    if (got === undefined) nowhere.add(key);
+                    return got;
+                }).finally(() => reading.delete(key));
+                reading.set(key, pending);
+            }
+            return pending.then(got => { if (got === undefined) report.missed++; else report.restored++; return got; });
         },
         put: (key, value) => {
             try {
@@ -55,8 +99,11 @@ export function fileReadingStore(dir: string): ModelReadingStore {
                 fs.mkdirSync(path.dirname(file), { recursive: true });
                 fs.writeFileSync(tmp, JSON.stringify(value));
                 fs.renameSync(tmp, file);
+                nowhere.delete(key);
+                report.written++;
             } catch { /* not kept: asked again next time */ }
-        }
+        },
+        report: () => ({ ...report })
     };
 }
 

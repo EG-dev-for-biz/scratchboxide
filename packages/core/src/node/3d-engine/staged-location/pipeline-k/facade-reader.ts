@@ -516,7 +516,7 @@ interface Question { kind: FacadeAskKind; n: number; png: () => Promise<Buffer |
 function asker(ask: FacadeAsk, memory: ReadingMemory | undefined, tally: CallTally): (q: Question) => Promise<string> {
     return async q => {
         const key = memory ? readingKey('facade-reading', [FACADE_READER_PROMPT_VERSION, memory.model, memory.plane, q.kind, q.bare, q.about]) : undefined;
-        const kept = key ? memory!.store.get<FacadeReadingRecord>(key) : undefined;
+        const kept = key ? await memory!.store.get<FacadeReadingRecord>(key) : undefined;
         if (kept && typeof kept.text === 'string' && facadeReplyUsable(q.kind, kept.text, q.n)) { tally.reused++; return kept.text; }
         tally.calls++;
         const text = await ask(await q.png(), q.told ?? q.bare, q.kind, q.region, q.regions);
