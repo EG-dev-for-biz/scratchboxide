@@ -65,7 +65,7 @@ The arm is **K with the step on**: steps `{"remesh.streetViewWalls": true}` in t
      - The view is refused when any of those shifts agrees better than the best shift within 1 m.
      - This is E's own "at the limit" refusal, carried over a longer reach.
    - **Report:** every refusal is recorded with its reason. E's verdict without the phase check is recorded beside it.
-6. **Output,** in `streetview/` inside the straightened orthos folder. Images are written for each wall and view the gate
+6. **Output** (where it goes: see "Fixes after the first ESB build"). Images are written for each wall and view the gate
    judges (at least 400 qualifying points); the others are recorded with their counts and reasons, without images:
    - `sv_<facadeId>_<view>.png` (the rectified photo as projected, alpha 0 where not covered);
    - `sv_<facadeId>_<view>_masks.png` (R coverage, G visibility, B ownership);
@@ -245,6 +245,27 @@ Made after the free dry run, before any build. No bar, place or protocol changed
 - **Images only for the walls and views the gate judges**, to keep the ESB's output bounded (about 92 facades x 16
   views).
 - **A matched pier-line pair needs 4 shared edge samples** (1 m), so one sample cannot make a line.
+
+## Fixes after the first ESB build (run 85817f1e), before any reading
+
+The first ESB build is void. No bar was read from it, and nothing about the bars changed.
+- **The step's time.**
+  - It ran inside the remesh stage. With the step on, that stage gets 1,200 s more (`STREETVIEW_WALLS_ALLOWANCE_MS`).
+  - In 85817f1e the window fit took 350 s. My typecheck and a test run were competing for the CPU during that build. Nothing
+    else runs during the builds from now on.
+  - The step was still registering 364 s in when the stage's 900 s ran out. The remesh fell to the raw scan.
+  - This is the stop rule's case ("a bug in this step: fix it and rebuild that place only").
+- **The first isolate only.** The step runs in the remesh stage's pass only. It does not run again when the ownership vote
+  re-runs K's facade work on the voted remesh, since that stage has its own 300 s limit.
+- **Really uncached.**
+  - Since 2026-10-30 (`0ecb8890`), a stage entry the workspace lacks is restored from the training bucket's cache mirror
+    before the stage runs. In 85817f1e tile_refine came back in 9 s with every local cache set aside.
+  - The server now starts with `SCRATCHBOX_CACHE_RESTORE=off`, for every build here, A and B included.
+- **Where the photos go.** The mirror also sends everything under `tile_refine/` to the bucket, so the Street View images
+  are not written beside the orthos.
+  - The images go to `.scratchbox/cache/streetview_walls/<runId>/`, outside the mirrored roots, in this workspace only.
+  - Beside the orthos there is only `streetview_walls.json` (numbers, pano ids and poses, no pixels).
+  - Both copies of the JSON, and the run note, are the same file.
 
 ## The free dry run (done, 2026-11-03)
 

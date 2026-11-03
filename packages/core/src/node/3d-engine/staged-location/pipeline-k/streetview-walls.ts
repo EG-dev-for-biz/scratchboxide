@@ -71,6 +71,12 @@ export const STREETVIEW_WALLS_PARAMS = {
 };
 export type StreetViewWallsParams = typeof STREETVIEW_WALLS_PARAMS;
 
+/**
+ * The time the step adds to the remesh stage when it is on: the registration's own budgets (edges 90 s, jointly 120 s), the
+ * ownership cut-outs and the rectification (ESB run 85817f1e: still registering 364 s in, when the stage's 900 s ran out).
+ */
+export const STREETVIEW_WALLS_ALLOWANCE_MS = 1_200_000;
+
 /** Off unless SCRATCHBOX_K_STREETVIEW_WALLS=1 (the node graph's `remesh.streetViewWalls` turns it on for one build): report-only until judged. */
 export const streetViewWallsByDefault = (env: NodeJS.ProcessEnv = process.env): boolean => env.SCRATCHBOX_K_STREETVIEW_WALLS?.trim() === '1';
 

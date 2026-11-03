@@ -95,7 +95,7 @@ import { buildWallSheets, WALL_SHEETS_VERSION, type WallSheet } from './wall-she
 import { decodePng as decodePngForGrammar } from '../../texture-processing';
 import { TILE_SEAMS_VERSION, type TileSeamWeldRequest, type TileSeamWeldResult } from '../tile-seam-weld-service';
 import { measureRevealDepth, REVEAL_DEPTH_VERSION, type RevealFacade, type RevealView } from './reveal-depth';
-import { describeStreetViewWalls, streetViewWalls, streetViewWallsByDefault, STREETVIEW_WALLS_VERSION, surveyWallViews } from './pipeline-k/streetview-walls';
+import { describeStreetViewWalls, streetViewWalls, streetViewWallsByDefault, STREETVIEW_WALLS_ALLOWANCE_MS, STREETVIEW_WALLS_VERSION, surveyWallViews } from './pipeline-k/streetview-walls';
 import { streetViewClayScore } from './streetview-clay-score';
 import { decodeJpegInMemory } from './photo-palette';
 import type { ReliefFacade } from './facade-lattice';
@@ -3978,10 +3978,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 notes.note(PROVENANCE.photoInferred, `window depth could not be read from Street View (${errorMessage(err)}); the recesses follow the photo-contrast rule`);
                             }
                         }
-                        // the survey's Street View photos laid on the facade planes as evidence beside the orthos, report-only: nothing
-                        // reads them yet (pipeline-k/streetview-walls.ts; off unless SCRATCHBOX_K_STREETVIEW_WALLS=1 or the node graph
-                        // turns it on, until judged: docs/processes/2026-11-03-k-streetview-walls-prereg.md)
-                        if (!stepOn('remesh.streetViewWalls', streetViewWallsByDefault())) {
+                        // the survey's Street View photos laid on the facade planes as evidence, report-only: nothing reads them yet
+                        // (pipeline-k/streetview-walls.ts; off unless SCRATCHBOX_K_STREETVIEW_WALLS=1 or the node graph turns it on, until
+                        // judged: docs/processes/2026-11-03-k-streetview-walls-prereg.md). Its record goes beside the orthos; the photos
+                        // laid on the planes stay in this workspace, outside the cache roots the mirror sends to the bucket. It runs on
+                        // the remesh's first isolate only (the remesh stage is given its time for it), not again on the voted remesh
+                        if (stage !== 'remesh') { /* the voted remesh: the first isolate's walls were laid */ }
+                        else if (!stepOn('remesh.streetViewWalls', streetViewWallsByDefault())) {
                             notes.write('pipeline_k_streetview_walls', { version: STREETVIEW_WALLS_VERSION, skipped: true, reason: request.steps?.['remesh.streetViewWalls'] === false ? 'turned off for this build' : 'off (SCRATCHBOX_K_STREETVIEW_WALLS=1 or the node graph turns it on)' });
                             logStep('remesh.streetViewWalls', 'skipped');
                         } else try {
@@ -3998,8 +4001,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                         survey: sres, bytesOf: i => surveyImageBytes(sres, i), tileGlb: extraction.geometryGlb, tileMesh, structure: structureMesh, segment,
                                         ...(visionAvailable ? { target: request.query } : {}), signal: io.signal, onProgress: m => io.progress(`pipeline K: Street View on the facades: ${m}`)
                                     });
-                                    const file = await streetViewWalls({ tileOrthosDir, outDir: path.join(k.orthosDir, 'streetview'), views: got.views, tileMesh, structure: structureMesh, runId, signal: io.signal, onProgress: m => io.progress(`pipeline K: ${m}`) });
-                                    fs.writeFileSync(path.join(k.orthosDir, 'streetview', 'streetview_walls.json'), JSON.stringify(file));
+                                    const file = await streetViewWalls({ tileOrthosDir, outDir: path.join(path.dirname(cache.dir), 'streetview_walls', runId), views: got.views, tileMesh, structure: structureMesh, runId, signal: io.signal, onProgress: m => io.progress(`pipeline K: ${m}`) });
+                                    fs.writeFileSync(path.join(file.dir, 'streetview_walls.json'), JSON.stringify(file));
+                                    fs.writeFileSync(path.join(k.orthosDir, 'streetview_walls.json'), JSON.stringify(file));
                                     return { ...file, ...(got.registrationError ? { registrationError: got.registrationError } : {}) };
                                 });
                                 notes.write('pipeline_k_streetview_walls', sw);
@@ -4067,6 +4071,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         };
         const remesh = await runner.stage<RemeshValue>({
             id: 'remesh',
+            // the Street View walls (report-only, off by default) take their time inside the remesh: it is given that time
+            ...(pipelineK && stepOn('remesh.streetViewWalls', streetViewWallsByDefault()) ? { budgetMs: STAGES.remesh.budgetMs + STREETVIEW_WALLS_ALLOWANCE_MS } : {}),
             run: async io => {
                 if (eEligible) {
                     const e = await runPipelineE(io);
