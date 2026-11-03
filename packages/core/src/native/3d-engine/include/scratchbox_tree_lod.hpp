@@ -904,6 +904,34 @@ struct CoverageViews {
         return n;
     }
 
+    /**
+     * Covers what every triangle of one placed library mesh covers (a cluster's blades, both sides, petioles and sub-shoots; a
+     * twig's tube), in every view; with `cut`, a blade's triangle (`leaf` 1 at its corners) only inside the textured leaf's
+     * outline, the rest solid.
+     */
+    void addWhole(const LibraryMesh& m, const Instance& in, const Cutout* cut = nullptr) {
+        if (m.indices.empty()) return;
+        std::vector<Vec3> p(m.positions.size());
+        for (size_t k = 0; k < p.size(); ++k) p[k] = in.t + in.q.rotate(Vec3(m.positions[k].x * in.s.x, m.positions[k].y * in.s.y, m.positions[k].z * in.s.z));
+        const bool uv = m.uvs.size() == m.positions.size(), blade = m.leaf.size() == m.positions.size();
+        const Vec2 z(0.5f, 0.5f);
+        for (auto& v : views) {
+            for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+                const uint32_t a = m.indices[t], b = m.indices[t + 1], c = m.indices[t + 2];
+                const bool cutHere = cut && uv && blade && m.leaf[a][1] > 0.5f && m.leaf[b][1] > 0.5f && m.leaf[c][1] > 0.5f;
+                triangle(v, p[a], p[b], p[c], uv ? m.uvs[a] : z, uv ? m.uvs[b] : z, uv ? m.uvs[c] : z, cutHere ? cut : nullptr);
+            }
+        }
+    }
+
+    /** Covers what a plain mesh covers (a level's wood, the far level's leaf masses), solid, in every view. */
+    void addMesh(const geometry::Mesh& m) {
+        const Vec2 z(0.5f, 0.5f);
+        for (auto& v : views)
+            for (size_t t = 0; t + 2 < m.indices.size(); t += 3)
+                triangle(v, m.vertices[m.indices[t]], m.vertices[m.indices[t + 1]], m.vertices[m.indices[t + 2]], z, z, z, nullptr);
+    }
+
     /** Covers what the blades of one placed library mesh cover, in every view. */
     void add(const LibraryMesh& m, const Instance& in, const Cutout* cut = nullptr) {
         if (m.bladeTri.empty()) return;
@@ -1007,6 +1035,7 @@ struct TreeLodInput {
     double leafiness{1.0};                       // the crown's season cue (seasonLeafiness): scales psiSeason and the coverage target
     double cutoutFill{0.0};                      // the chosen leaf texture's fill of its cell (0: no textures; the cut-out coverage is not measured)
     double cutoutAspect{0.0};                    // ... and its leaf's width / length
+    const geometry::Mesh* farFoliage{nullptr};   // the far level's leaf masses (nature::meshWithinBudget), for its drawn coverage (null: not measured)
 };
 
 /** What the leaves of a tree cover of its measured crown, seen from outside (LodParams coverage*, detail::CoverageViews). */
@@ -1018,6 +1047,13 @@ struct CoverageReport {
     CoverageLevel level0, nearMid, mid;          // solid leaves (clay), after the fill; `mid` is what the mid level draws (its crown cards when it has them)
     CoverageLevel level0Cutout, midCutout;       // cut out as the chosen leaf texture is (only with textures)
     CoverageLevel midClusters, midClustersCutout; // the mid clusters (what the mid level drew before crown cards; the cards' target)
+    // Everything each level draws, not only its leaf blades: the near level its wood, its twigs and every triangle of its
+    // leaf clusters (blades, petioles, sub-shoots); the near-mid and mid levels their wood and their clusters or crown
+    // cards; the far level its trunk and main limbs and its leaf masses. Solid (clay), and with textures with the blades
+    // and cards cut out as the leaf texture cuts them. What a viewer shows of the crown before it opens holes of its own.
+    CoverageLevel drawnLevel0, drawnNearMid, drawnMid, drawnFar;
+    CoverageLevel drawnLevel0Cutout, drawnNearMidCutout, drawnMidCutout, drawnFarCutout;
+    bool drawnFarMeasured{false};
     double cardTarget{0};                        // the projected coverage the crown cards were placed toward
     size_t fillStations{0};
     CrownEllipsoid reference;                    // the measured crown the shares are of (surface samples and footprint ring)
@@ -1058,7 +1094,7 @@ struct TreeLod {
     size_t cardCandidates{0};
     size_t cardCount() const { size_t n = 0; for (const auto& c : cards) n += c.size(); return n; }
     bool midCards() const { return cardCount() > 0; }
-    double msWood{0}, msTwigs{0}, msStations{0}, msRepair{0}, msFill{0}, msMeasure{0}, msCards{0};   // where the build's time went
+    double msWood{0}, msTwigs{0}, msStations{0}, msRepair{0}, msFill{0}, msMeasure{0}, msCards{0}, msDrawn{0};   // where the build's time went
     std::string error;
     /** Triangles drawn at the near level / the mid level / the near-mid level (wood, twigs and clusters, instances expanded). */
     size_t drawnLevel0() const { return woodTriangles + twigTriangles + level0.clusterTriangles; }
@@ -1821,7 +1857,46 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
             }
         }
     }
-    T.msCards = msSince(tPhase);
+    T.msCards = msSince(tPhase); tPhase = Clock::now();
+    if (T.coverage.measured) {
+        const auto cut = detail::leafCutout(P, in.cutoutFill, in.cutoutAspect);
+        const CardMask tex = in.cutoutFill > 0 && T.midCards() ? detail::texturedCardMask(lib, in.cutoutFill, in.cutoutAspect) : CardMask{};
+        // 0 near, 1 near-mid, 2 mid, 3 far
+        auto drawn = [&](int level, bool cutout) {
+            cov.clearCovered();
+            const detail::CoverageViews::Cutout* c = cutout ? &cut : nullptr;
+            if (level == 3) {
+                cov.addMesh(T.farWood);
+                if (in.farFoliage) cov.addMesh(*in.farFoliage);
+                return cov.level();
+            }
+            cov.addMesh(T.wood);
+            if (level == 0)
+                for (size_t k = 0; k < T.twigs.size() && k < lib.twigs.size(); ++k) for (const auto& tw : T.twigs[k]) cov.addWhole(lib.twigs[k], tw);
+            if (level == 2 && T.midCards()) {
+                for (size_t k = 0; k < T.cards.size(); ++k) for (const auto& cd : T.cards[k]) cov.addCard(cd, cutout ? tex : lib.cardMask, static_cast<int>(k));
+                return cov.level();
+            }
+            for (size_t k = 0; k < T.clusters.size() && k < lib.variants.size(); ++k) {
+                const ClusterVariant& v = lib.variants[k];
+                const LibraryMesh& m = level == 0 ? v.level0 : level == 1 ? v.nearMid : v.level1;
+                for (const auto& inst : T.clusters[k]) cov.addWhole(m, inst, c);
+            }
+            return cov.level();
+        };
+        T.coverage.drawnLevel0 = drawn(0, false);
+        T.coverage.drawnNearMid = drawn(1, false);
+        T.coverage.drawnMid = drawn(2, false);
+        T.coverage.drawnFarMeasured = in.farFoliage != nullptr;
+        if (T.coverage.drawnFarMeasured) T.coverage.drawnFar = drawn(3, false);
+        if (in.cutoutFill > 0) {
+            T.coverage.drawnLevel0Cutout = drawn(0, true);
+            T.coverage.drawnNearMidCutout = drawn(1, true);
+            T.coverage.drawnMidCutout = drawn(2, true);
+            if (T.coverage.drawnFarMeasured) T.coverage.drawnFarCutout = T.coverage.drawnFar;   // the masses are not cut out
+        }
+    }
+    T.msDrawn = msSince(tPhase);
 }
 
 /** The crown ellipsoid of a tree's level-0 leaves: the hull points of each placed cluster, in the tree's frame. */

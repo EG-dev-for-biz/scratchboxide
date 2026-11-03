@@ -122,6 +122,44 @@ int main(int argc, char** argv) {
         expect(t0).toBe(0);
         expect(fs.existsSync(path.join(SHOTS, 'measure_half_shell_v0.pgm'))).toBe(true);
     }, 120_000);
+
+    it('counts every drawn triangle: a plain mesh solid, a library mesh\'s blades cut out and its petioles not', () => {
+        const bin = compileProbe('coverage-drawn', `#include "scratchbox_tree_lod.hpp"
+#include <cstdio>
+using namespace scratchbox; using namespace scratchbox::tree_lod; using math::Vec3; using math::Vec2;
+int main() {
+  CrownEllipsoid ref; ref.centre = Vec3(0, 5, 0); ref.radii = {1, 1, 1}; ref.points = 1;
+  std::vector<Vec3> hull; for (int k = 0; k < 64; ++k) { const double a = 2 * M_PI * k / 64; hull.push_back(Vec3(float(std::cos(a)), 5.0f + float(std::sin(a)), 0)); hull.push_back(Vec3(0, 5.0f + float(std::sin(a)), float(std::cos(a)))); }
+  // a closed lat-long shell of radius 1.05 around the crown, as a plain mesh (a level's wood, the far level's masses)
+  geometry::Mesh shell; const int U = 48, V = 24;
+  for (int j = 0; j <= V; ++j) for (int i = 0; i <= U; ++i) { const double th = M_PI * j / V, ph = 2 * M_PI * i / U;
+    shell.vertices.push_back(Vec3(float(1.05 * std::sin(th) * std::cos(ph)), 5.0f + float(1.05 * std::cos(th)), float(1.05 * std::sin(th) * std::sin(ph)))); }
+  for (int j = 0; j < V; ++j) for (int i = 0; i < U; ++i) { const uint32_t a = j * (U + 1) + i, b = a + 1, c = a + U + 1, d = c + 1; shell.indices.insert(shell.indices.end(), {a, c, b, b, c, d}); }
+  { detail::CoverageViews cv; cv.init(ref, hull, 0.01); cv.addMesh(shell); const auto L = cv.level(); std::printf("shell %.4f %.4f\\n", L.meanEllipsoid, L.minEllipsoid); }
+  // one horizontal card as a library mesh, flagged as a blade (leaf 1) or as a petiole (leaf 0), seen from above
+  auto card = [](float flag) { LibraryMesh m; const float s = 4.0f;
+    m.positions = {Vec3(-s, 0, -s), Vec3(s, 0, -s), Vec3(s, 0, s), Vec3(-s, 0, s)};
+    m.uvs = {Vec2(0, 0), Vec2(1, 0), Vec2(1, 1), Vec2(0, 1)};
+    m.leaf = {{0.5f, flag}, {0.5f, flag}, {0.5f, flag}, {0.5f, flag}};
+    m.indices = {0, 1, 2, 0, 2, 3}; return m; };
+  detail::CoverageViews::Cutout cut; cut.cv = 0.5; cut.hu = 0.5; cut.hv = 0.5; cut.r2 = 0.6 / (M_PI / 4.0);
+  ref.radii = {6, 6, 6};
+  Instance in; in.t = Vec3(0, 5, 0); in.s = Vec3(1, 1, 1);
+  auto top = [&](const LibraryMesh& m, const detail::CoverageViews::Cutout* c) { detail::CoverageViews cv; cv.init(ref, hull, 0.02); cv.addWhole(m, in, c); return cv.views[8].covEll; };
+  std::printf("cards %zu %zu %zu\\n", top(card(1.0f), nullptr), top(card(1.0f), &cut), top(card(0.0f), &cut));
+}`);
+        const out = spawnSync(bin, [], { encoding: 'utf8' });
+        expect(out.status, out.stderr).toBe(0);
+        const lines = out.stdout.trim().split('\n');
+        const [, mean, min] = lines[0].split(' ').map(Number);
+        // a closed plain mesh around the crown hides it from every side
+        expect(mean).toBeGreaterThan(0.99); expect(min).toBeGreaterThan(0.99);
+        const [, solid, blade, petiole] = lines[1].split(' ').map(Number);
+        expect(solid).toBeGreaterThan(0);
+        // a blade is cut out as the leaf texture cuts it (the ellipse fills 0.6 of the card); a petiole or sub-shoot is solid
+        expect(blade / solid).toBeGreaterThan(0.57); expect(blade / solid).toBeLessThan(0.63);
+        expect(petiole).toBe(solid);
+    }, 120_000);
 });
 
 describe('crown fill by season (TileVegetationService.plant)', () => {
@@ -168,6 +206,14 @@ describe('crown fill by season (TileVegetationService.plant)', () => {
             expect(c.mid.mean).toBeGreaterThan(0.85);
             expect(c.mid.mean).toBeLessThanOrEqual(1);
             expect(c.views).toBe(9);
+            // what each level draws (wood, twigs, petioles and sub-shoots too) covers at least what its blades alone do,
+            // and the far level's trunk, limbs and leaf masses are measured
+            const d = c.drawn;
+            expect(d.level0.mean).toBeGreaterThanOrEqual(c.level0.mean);
+            expect(d.nearMid.mean).toBeGreaterThanOrEqual(c.nearMid.mean);
+            expect(d.mid.mean).toBeGreaterThanOrEqual(c.mid.mean);
+            expect(d.far.mean).toBeGreaterThan(0.3);
+            for (const k of ['level0', 'nearMid', 'mid', 'far']) expect(d[k].mean).toBeLessThanOrEqual(1);
         }
         const leaves = (p: typeof summer) => p.stats.perTree.reduce((n: number, t: any) => n + t.lod.level0.leaves, 0);
         for (const t of sparse.stats.perTree) {

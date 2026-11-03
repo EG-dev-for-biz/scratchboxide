@@ -5372,6 +5372,7 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
                     in.barkTileAroundM = static_cast<float>(bark.tileAroundM);
                     in.barkTileAlongM = static_cast<float>(bark.tileAlongM);
                 }
+                in.farFoliage = &m.foliage;   // the far level's leaf masses, for its drawn coverage
                 const auto tLod = std::chrono::steady_clock::now();
                 tree_lod::buildTreeLod(tr.lod, in, *R.library);
                 tr.lodMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tLod).count();
@@ -5579,8 +5580,12 @@ inline std::string coverageJson(const tree_lod::CoverageReport& c) {
         if (c.cardTarget > 0) o += ",\"midClusters\":" + lv(c.midClusters) + ",\"cardTarget\":" + json::num(c.cardTarget);
         if (c.level0Cutout.meanEllipsoid > 0 || c.midCutout.meanEllipsoid > 0)
             o += ",\"cutout\":{\"level0\":" + lv(c.level0Cutout) + ",\"mid\":" + lv(c.midCutout) + (c.cardTarget > 0 ? ",\"midClusters\":" + lv(c.midClustersCutout) : std::string()) + "}";
+        o += ",\"drawn\":{\"level0\":" + lv(c.drawnLevel0) + ",\"nearMid\":" + lv(c.drawnNearMid) + ",\"mid\":" + lv(c.drawnMid) + (c.drawnFarMeasured ? ",\"far\":" + lv(c.drawnFar) : std::string());
+        if (c.drawnLevel0Cutout.meanEllipsoid > 0)
+            o += ",\"cutout\":{\"level0\":" + lv(c.drawnLevel0Cutout) + ",\"nearMid\":" + lv(c.drawnNearMidCutout) + ",\"mid\":" + lv(c.drawnMidCutout) + (c.drawnFarMeasured ? ",\"far\":" + lv(c.drawnFarCutout) : std::string()) + "}";
+        o += ",\"of\":\"everything each level draws: its wood, twigs and every triangle of its leaf clusters or cards (the far level its trunk, main limbs and leaf masses); cutout: the blades and cards cut out as the chosen leaf texture is, the far masses solid; before any holes a viewer opens\"}";
     }
-    return o + ",\"of\":\"the share of the measured crown (an ellipsoid fitted to its surface samples and footprint) the leaves cover, seen from outside, the mean over the views\"}";
+    return o + ",\"of\":\"the share of the measured crown (an ellipsoid fitted to its surface samples and footprint) the leaves cover, seen from outside, the mean over the views; level0 .. midClusters and cutout count the leaf blades only, drawn counts everything each level draws\"}";
 }
 
 /** A tree's crown cards (the mid level when it has them): how many, their side, the candidates they were chosen from (and the time, stats only: a GLB holds no timings). */
