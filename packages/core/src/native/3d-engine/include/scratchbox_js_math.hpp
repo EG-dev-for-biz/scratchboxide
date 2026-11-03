@@ -17,7 +17,7 @@
  *
  *  - round: Math.round (the spec's: ceil, minus one when that overshoots by more than a half; -0 kept; not
  *    floor(x + 0.5), which differs at 0.49999999999999994);
- *  - min, max, sign: Math.min / Math.max of two and Math.sign, NaN propagating;
+ *  - min, max, sign: Math.min / Math.max of two and Math.sign, NaN propagating, -0 below +0;
  *  - toUint32, toInt32, toUint8, toInt16: the conversions of typed-array stores (modular; NaN and infinities to 0);
  *  - hypot: V8's Math.hypot (builtins/math.tq MathHypot: over the largest, squares summed with Kahan compensation);
  *  - log, exp, cbrt: V8's fdlibm ports (src/base/ieee754.cc). V8 is compiled by clang with contraction on: on arm64 its
@@ -25,17 +25,30 @@
  *    Node 20 and 22 on arm64 over 3 million arguments: 0 differ, where macOS's libm differs on 4-9% of them and the same
  *    ports unfused on 0.1-0.9% (cbrt agrees either way). GCC ignores the clang pragmas; build these kernels with clang.
  *  - pow is not ported. Where a pow decides a stored value, the caller works the values out in JavaScript and sends
- *    them: a table over the 8-bit codes, or the 8-bit sRGB encoder's thresholds (Srgb8Encoder).
+ *    them: a table over the 8-bit codes, or the 8-bit sRGB encoder's thresholds (Srgb8Encoder). Nor are sin and cos:
+ *    the few angles a kernel turns by are sent the same way.
+ *  - toString: String(n), the shortest digits that read back as n, in JavaScript's layout;
+ *  - sort: Array.prototype.sort with a comparator, as V8 12.4 (Node 22) runs it (third_party/v8/builtins/array-sort.tq,
+ *    TimSort). Stable, so any stable sort gives its order for a consistent comparator; it is needed where the comparator
+ *    is not, as (x, y) => x - y over values holding NaN: the comparator's NaN is read as 0 (equal), and the order such a
+ *    relation leaves only V8's own steps decide. Newer V8 sorts by PowerSort; js-math-native.test.ts holds this to the
+ *    running V8.
  *
  * Everything outside log, exp and cbrt must be compiled with contraction off, as V8's generated code never fuses a
  * multiply and an add: each kernel says so for its own code (the pragma after its includes, or -ffp-contract=off).
  */
 
+#include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <initializer_list>
 #include <limits>
+#include <string>
+#include <utility>
+#include <vector>
 
 #if defined(__clang__) && defined(__aarch64__)
 #define SCRATCHBOX_JS_V8_CONTRACT _Pragma("clang fp contract(on)")
@@ -62,9 +75,9 @@ inline double round(double x) {
     const double r = std::ceil(x);
     return r - 0.5 > x ? r - 1.0 : r;
 }
-/** Math.min / Math.max of two (NaN wins); Math.sign. */
-inline double min(double a, double b) { if (std::isnan(a) || std::isnan(b)) return kNaN; return a < b ? a : b; }
-inline double max(double a, double b) { if (std::isnan(a) || std::isnan(b)) return kNaN; return a > b ? a : b; }
+/** Math.min / Math.max of two (NaN wins; -0 below +0); Math.sign. */
+inline double min(double a, double b) { if (std::isnan(a) || std::isnan(b)) return kNaN; if (a == 0 && b == 0) return std::signbit(a) ? a : b; return a < b ? a : b; }
+inline double max(double a, double b) { if (std::isnan(a) || std::isnan(b)) return kNaN; if (a == 0 && b == 0) return std::signbit(a) ? b : a; return a > b ? a : b; }
 inline double sign(double x) { if (std::isnan(x)) return kNaN; return x > 0 ? 1.0 : x < 0 ? -1.0 : x; }
 
 /** ToUint32; ToInt32; a Uint8Array store (ToUint8); an Int16Array store (ToInt16). */
@@ -235,6 +248,358 @@ struct Srgb8Encoder {
         return static_cast<uint8_t>(lo);
     }
 };
+
+/** String(n): the shortest round-trip digits (std::to_chars) in Number::toString's layout. */
+inline std::string toString(double v) {
+    if (std::isnan(v)) return "NaN";
+    if (v == 0) return "0";
+    if (std::isinf(v)) return v > 0 ? "Infinity" : "-Infinity";
+    char buf[64];
+    auto r = std::to_chars(buf, buf + sizeof buf, v, std::chars_format::scientific);
+    std::string sci(buf, r.ptr);
+    std::string sign;
+    if (sci[0] == '-') { sign = "-"; sci.erase(0, 1); }
+    const size_t e = sci.find('e');
+    std::string digits;
+    for (size_t i = 0; i < e; ++i) if (sci[i] != '.') digits += sci[i];
+    const int exp10 = std::atoi(sci.c_str() + e + 1), k = static_cast<int>(digits.size()), n = exp10 + 1;
+    if (k <= n && n <= 21) return sign + digits + std::string(n - k, '0');
+    if (0 < n && n <= 21) return sign + digits.substr(0, n) + "." + digits.substr(n);
+    if (-6 < n && n <= 0) return sign + "0." + std::string(-n, '0') + digits;
+    return sign + digits.substr(0, 1) + (k > 1 ? "." + digits.substr(1) : "") + "e" + (n - 1 >= 0 ? "+" : "-") + std::to_string(std::abs(n - 1));
+}
+
+namespace detail {
+
+/** V8 12.4's TimSort (array-sort.tq), step for step; `cmp(a, b)` is the comparator's number, NaN allowed. */
+template <class T, class Cmp>
+class TimSort {
+public:
+    TimSort(std::vector<T>& a, Cmp& cmp) : w_(a), cmp_(cmp) {}
+
+    void run() {
+        const int length = static_cast<int>(w_.size());
+        if (length < 2) return;
+        int remaining = length, low = 0;
+        const int minRun = minRunLength(remaining);
+        while (remaining != 0) {
+            int current = countAndMakeRun(low, low + remaining);
+            if (current < minRun) {
+                const int forced = std::min(minRun, remaining);
+                binaryInsertionSort(low, low + current, low + forced);
+                current = forced;
+            }
+            runs_.push_back({low, current});
+            mergeCollapse();
+            low += current;
+            remaining -= current;
+        }
+        mergeForceCollapse();
+    }
+
+private:
+    static constexpr int kMinGallopWins = 7;
+    std::vector<T>& w_;
+    Cmp& cmp_;
+    std::vector<std::pair<int, int>> runs_;
+    std::vector<T> tmp_;
+    int minGallop_ = kMinGallopWins;
+
+    // SortCompareUserFn: the comparator's number, NaN read as +0
+    double compare(const T& a, const T& b) { const double v = static_cast<double>(cmp_(a, b)); return std::isnan(v) ? 0.0 : v; }
+
+    static int minRunLength(int n) {
+        int r = 0;
+        while (n >= 64) { r |= n & 1; n >>= 1; }
+        return n + r;
+    }
+
+    void binaryInsertionSort(int low, int startArg, int high) {
+        for (int start = low == startArg ? startArg + 1 : startArg; start < high; ++start) {
+            int left = low, right = start;
+            T pivot = w_[start];
+            while (left < right) {
+                const int mid = left + ((right - left) >> 1);
+                if (compare(pivot, w_[mid]) < 0) right = mid; else left = mid + 1;
+            }
+            for (int p = start; p > left; --p) w_[p] = w_[p - 1];
+            w_[left] = pivot;
+        }
+    }
+
+    int countAndMakeRun(int lowArg, int high) {
+        const int low = lowArg + 1;
+        if (low == high) return 1;
+        int runLength = 2;
+        double order = compare(w_[low], w_[low - 1]);
+        const bool descending = order < 0;
+        int previous = low;
+        for (int idx = low + 1; idx < high; ++idx) {
+            order = compare(w_[idx], w_[previous]);
+            if (descending) { if (order >= 0) break; }
+            else { if (order < 0) break; }
+            previous = idx;
+            ++runLength;
+        }
+        if (descending) std::reverse(w_.begin() + lowArg, w_.begin() + lowArg + runLength);
+        return runLength;
+    }
+
+    static bool invariant(const std::vector<std::pair<int, int>>& r, int n) {
+        if (n < 2) return true;
+        return r[n - 2].second > r[n - 1].second + r[n].second;
+    }
+
+    void mergeCollapse() {
+        while (runs_.size() > 1) {
+            int n = static_cast<int>(runs_.size()) - 2;
+            if (!invariant(runs_, n + 1) || !invariant(runs_, n)) {
+                if (runs_[n - 1].second < runs_[n + 1].second) --n;
+                mergeAt(n);
+            } else if (runs_[n].second <= runs_[n + 1].second) {
+                mergeAt(n);
+            } else {
+                break;
+            }
+        }
+    }
+
+    void mergeForceCollapse() {
+        while (runs_.size() > 1) {
+            int n = static_cast<int>(runs_.size()) - 2;
+            if (n > 0 && runs_[n - 1].second < runs_[n + 1].second) --n;
+            mergeAt(n);
+        }
+    }
+
+    // GallopLeft and GallopRight over `a` (the work array or the temp array)
+    int gallopLeft(const std::vector<T>& a, const T& key, int base, int length, int hint) {
+        int lastOfs = 0, offset = 1;
+        double order = compare(a[base + hint], key);
+        if (order < 0) {
+            const int maxOfs = length - hint;
+            while (offset < maxOfs) {
+                order = compare(a[base + hint + offset], key);
+                if (order >= 0) break;
+                lastOfs = offset;
+                offset = (offset << 1) + 1;
+                if (offset <= 0) offset = maxOfs;
+            }
+            if (offset > maxOfs) offset = maxOfs;
+            lastOfs += hint;
+            offset += hint;
+        } else {
+            const int maxOfs = hint + 1;
+            while (offset < maxOfs) {
+                order = compare(a[base + hint - offset], key);
+                if (order < 0) break;
+                lastOfs = offset;
+                offset = (offset << 1) + 1;
+                if (offset <= 0) offset = maxOfs;
+            }
+            if (offset > maxOfs) offset = maxOfs;
+            const int t = lastOfs;
+            lastOfs = hint - offset;
+            offset = hint - t;
+        }
+        ++lastOfs;
+        while (lastOfs < offset) {
+            const int m = lastOfs + ((offset - lastOfs) >> 1);
+            if (compare(a[base + m], key) < 0) lastOfs = m + 1; else offset = m;
+        }
+        return offset;
+    }
+
+    int gallopRight(const std::vector<T>& a, const T& key, int base, int length, int hint) {
+        int lastOfs = 0, offset = 1;
+        double order = compare(key, a[base + hint]);
+        if (order < 0) {
+            const int maxOfs = hint + 1;
+            while (offset < maxOfs) {
+                order = compare(key, a[base + hint - offset]);
+                if (order >= 0) break;
+                lastOfs = offset;
+                offset = (offset << 1) + 1;
+                if (offset <= 0) offset = maxOfs;
+            }
+            if (offset > maxOfs) offset = maxOfs;
+            const int t = lastOfs;
+            lastOfs = hint - offset;
+            offset = hint - t;
+        } else {
+            const int maxOfs = length - hint;
+            while (offset < maxOfs) {
+                order = compare(key, a[base + hint + offset]);
+                if (order < 0) break;
+                lastOfs = offset;
+                offset = (offset << 1) + 1;
+                if (offset <= 0) offset = maxOfs;
+            }
+            if (offset > maxOfs) offset = maxOfs;
+            lastOfs += hint;
+            offset += hint;
+        }
+        ++lastOfs;
+        while (lastOfs < offset) {
+            const int m = lastOfs + ((offset - lastOfs) >> 1);
+            if (compare(key, a[base + m]) < 0) offset = m; else lastOfs = m + 1;
+        }
+        return offset;
+    }
+
+    void mergeAt(int i) {
+        int baseA = runs_[i].first, lengthA = runs_[i].second;
+        const int baseB = runs_[i + 1].first;
+        int lengthB = runs_[i + 1].second;
+        runs_[i].second = lengthA + lengthB;
+        runs_.erase(runs_.begin() + i + 1);
+        const T keyRight = w_[baseB];
+        const int k = gallopRight(w_, keyRight, baseA, lengthA, 0);
+        baseA += k;
+        lengthA -= k;
+        if (lengthA == 0) return;
+        const T keyLeft = w_[baseA + lengthA - 1];
+        lengthB = gallopLeft(w_, keyLeft, baseB, lengthB, lengthB - 1);
+        if (lengthB == 0) return;
+        if (lengthA <= lengthB) mergeLow(baseA, lengthA, baseB, lengthB);
+        else mergeHigh(baseA, lengthA, baseB, lengthB);
+    }
+
+    void mergeLow(int baseA, int lengthA, int baseB, int lengthB) {
+        tmp_.assign(w_.begin() + baseA, w_.begin() + baseA + lengthA);
+        int dest = baseA, cursorTemp = 0, cursorB = baseB;
+        w_[dest++] = w_[cursorB++];
+        enum { kRun, kSucceed, kCopyB } exit = kRun;
+        if (--lengthB == 0) exit = kSucceed;
+        else if (lengthA == 1) exit = kCopyB;
+        int minGallop = minGallop_;
+        while (exit == kRun) {
+            int winsA = 0, winsB = 0;
+            for (;;) {
+                if (compare(w_[cursorB], tmp_[cursorTemp]) < 0) {
+                    w_[dest++] = w_[cursorB++];
+                    ++winsB; --lengthB; winsA = 0;
+                    if (lengthB == 0) { exit = kSucceed; break; }
+                    if (winsB >= minGallop) break;
+                } else {
+                    w_[dest++] = tmp_[cursorTemp++];
+                    ++winsA; --lengthA; winsB = 0;
+                    if (lengthA == 1) { exit = kCopyB; break; }
+                    if (winsA >= minGallop) break;
+                }
+            }
+            if (exit != kRun) break;
+            ++minGallop;
+            bool first = true;
+            while (winsA >= kMinGallopWins || winsB >= kMinGallopWins || first) {
+                first = false;
+                minGallop = std::max(1, minGallop - 1);
+                minGallop_ = minGallop;
+                winsA = gallopRight(tmp_, w_[cursorB], cursorTemp, lengthA, 0);
+                if (winsA > 0) {
+                    std::copy(tmp_.begin() + cursorTemp, tmp_.begin() + cursorTemp + winsA, w_.begin() + dest);
+                    dest += winsA; cursorTemp += winsA; lengthA -= winsA;
+                    if (lengthA == 1) { exit = kCopyB; break; }
+                    if (lengthA == 0) { exit = kSucceed; break; }
+                }
+                w_[dest++] = w_[cursorB++];
+                if (--lengthB == 0) { exit = kSucceed; break; }
+                winsB = gallopLeft(w_, tmp_[cursorTemp], cursorB, lengthB, 0);
+                if (winsB > 0) {
+                    std::copy(w_.begin() + cursorB, w_.begin() + cursorB + winsB, w_.begin() + dest);
+                    dest += winsB; cursorB += winsB; lengthB -= winsB;
+                    if (lengthB == 0) { exit = kSucceed; break; }
+                }
+                w_[dest++] = tmp_[cursorTemp++];
+                if (--lengthA == 1) { exit = kCopyB; break; }
+            }
+            if (exit != kRun) break;
+            ++minGallop;
+            minGallop_ = minGallop;
+        }
+        if (exit == kSucceed) {
+            if (lengthA > 0) std::copy(tmp_.begin() + cursorTemp, tmp_.begin() + cursorTemp + lengthA, w_.begin() + dest);
+        } else {
+            // the last element of run A belongs at the end of the merge
+            std::copy(w_.begin() + cursorB, w_.begin() + cursorB + lengthB, w_.begin() + dest);
+            w_[dest + lengthB] = tmp_[cursorTemp];
+        }
+    }
+
+    void mergeHigh(int baseA, int lengthA, int baseB, int lengthB) {
+        tmp_.assign(w_.begin() + baseB, w_.begin() + baseB + lengthB);
+        int dest = baseB + lengthB - 1, cursorTemp = lengthB - 1, cursorA = baseA + lengthA - 1;
+        w_[dest--] = w_[cursorA--];
+        enum { kRun, kSucceed, kCopyA } exit = kRun;
+        if (--lengthA == 0) exit = kSucceed;
+        else if (lengthB == 1) exit = kCopyA;
+        int minGallop = minGallop_;
+        while (exit == kRun) {
+            int winsA = 0, winsB = 0;
+            for (;;) {
+                if (compare(tmp_[cursorTemp], w_[cursorA]) < 0) {
+                    w_[dest--] = w_[cursorA--];
+                    ++winsA; --lengthA; winsB = 0;
+                    if (lengthA == 0) { exit = kSucceed; break; }
+                    if (winsA >= minGallop) break;
+                } else {
+                    w_[dest--] = tmp_[cursorTemp--];
+                    ++winsB; --lengthB; winsA = 0;
+                    if (lengthB == 1) { exit = kCopyA; break; }
+                    if (winsB >= minGallop) break;
+                }
+            }
+            if (exit != kRun) break;
+            ++minGallop;
+            bool first = true;
+            while (winsA >= kMinGallopWins || winsB >= kMinGallopWins || first) {
+                first = false;
+                minGallop = std::max(1, minGallop - 1);
+                minGallop_ = minGallop;
+                int k = gallopRight(w_, tmp_[cursorTemp], baseA, lengthA, lengthA - 1);
+                winsA = lengthA - k;
+                if (winsA > 0) {
+                    dest -= winsA; cursorA -= winsA;
+                    std::copy_backward(w_.begin() + cursorA + 1, w_.begin() + cursorA + 1 + winsA, w_.begin() + dest + 1 + winsA);
+                    lengthA -= winsA;
+                    if (lengthA == 0) { exit = kSucceed; break; }
+                }
+                w_[dest--] = tmp_[cursorTemp--];
+                if (--lengthB == 1) { exit = kCopyA; break; }
+                k = gallopLeft(tmp_, w_[cursorA], 0, lengthB, lengthB - 1);
+                winsB = lengthB - k;
+                if (winsB > 0) {
+                    dest -= winsB; cursorTemp -= winsB;
+                    std::copy(tmp_.begin() + cursorTemp + 1, tmp_.begin() + cursorTemp + 1 + winsB, w_.begin() + dest + 1);
+                    lengthB -= winsB;
+                    if (lengthB == 1) { exit = kCopyA; break; }
+                    if (lengthB == 0) { exit = kSucceed; break; }
+                }
+                w_[dest--] = w_[cursorA--];
+                if (--lengthA == 0) { exit = kSucceed; break; }
+            }
+            if (exit != kRun) break;
+            ++minGallop;
+            minGallop_ = minGallop;
+        }
+        if (exit == kSucceed) {
+            if (lengthB > 0) std::copy(tmp_.begin(), tmp_.begin() + lengthB, w_.begin() + (dest - (lengthB - 1)));
+        } else {
+            // the first element of run B belongs at the front of the merge
+            dest -= lengthA; cursorA -= lengthA;
+            std::copy_backward(w_.begin() + cursorA + 1, w_.begin() + cursorA + 1 + lengthA, w_.begin() + dest + 1 + lengthA);
+            w_[dest] = tmp_[cursorTemp];
+        }
+    }
+};
+
+} // namespace detail
+
+/** Array.prototype.sort(cmp) over `a`, as V8 12.4 runs it. */
+template <class T, class Cmp>
+void sort(std::vector<T>& a, Cmp cmp) {
+    detail::TimSort<T, Cmp>(a, cmp).run();
+}
 
 } // namespace js
 } // namespace scratchbox

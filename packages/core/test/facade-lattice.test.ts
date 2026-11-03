@@ -14,7 +14,7 @@
  * degenerate and the rebuilt facade appended (textured with the facade photo in the twin).
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -25,6 +25,10 @@ import { cutScanToLattice, LATTICE_STITCH_PARAMS } from '../src/node/3d-engine/s
 import { WINDOW_FIT_VERSION } from '../src/node/3d-engine/staged-location/window-fit';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { readGlbTriangles } from './helpers/clay-glb-render';
+import { ensureRemeshPolishBinary } from '../src/node/3d-engine/staged-location/remesh-polish-native';
+
+// the lattice's audit and rebuild run natively by default (SCRATCHBOX_K_NATIVE): its binary built once for the file
+beforeAll(async () => { await ensureRemeshPolishBinary(); }, 900_000);
 
 // a facade in the plane z = 0 facing +z: s along +x (0..12 m), t up (0..9 m); windows 1.2 m wide every 3 m, 1.6 m tall on 3 storeys
 const PX = 0.1, W = 120, H = 90;

@@ -11,7 +11,8 @@
  * The native kernels' JavaScript arithmetic (scratchbox_js_math.hpp) against this V8, bit for bit: a probe compiled
  * through the native build cache (with the kernels' flags) runs Math.log, Math.exp, Math.cbrt, Math.hypot, Math.round
  * and the typed-array stores over a million arguments (ordinary, tiny, huge, negative, the special values), and every
- * result must be the one V8 gives, -0 and NaN included.
+ * result must be the one V8 gives, -0 and NaN included; and String(n), Math.min and Math.max over signed zeros, and
+ * Array.prototype.sort((x, y) => x - y) over 3000 arrays holding NaN and repeats, element for element.
  */
 
 import { execFileSync } from 'child_process';
@@ -36,6 +37,31 @@ int main() {
         o[5] = js::round(a); o[6] = js::toUint8(a); o[7] = js::toInt16(a); o[8] = js::toInt32(a);
     }
     std::fwrite(out.data(), 8, out.size(), stdout);
+}
+`;
+
+const SORT_PROBE = `#include "scratchbox_js_math.hpp"
+#include <cstdio>
+#include <string>
+#include <vector>
+using namespace scratchbox;
+int main() {
+    uint32_t nx, nz;
+    std::fread(&nx, 4, 1, stdin); std::fread(&nz, 4, 1, stdin);
+    std::vector<double> x(nx), z(nz);
+    std::fread(x.data(), 8, nx, stdin); std::fread(z.data(), 8, nz, stdin);
+    std::string text;
+    for (size_t i = 0; i < nx; ++i) { if (i) text += '\\n'; text += js::toString(x[i]); }
+    std::fwrite(text.data(), 1, text.size(), stdout);
+    std::fputc(0, stdout);
+    for (double a : z) for (double b : z) { const double m[2] = {js::min(a, b), js::max(a, b)}; std::fwrite(m, 8, 2, stdout); }
+    uint32_t n;
+    while (std::fread(&n, 4, 1, stdin) == 1) {
+        std::vector<double> v(n);
+        if (n) std::fread(v.data(), 8, n, stdin);
+        js::sort(v, [](double a, double b) { return a - b; });
+        std::fwrite(v.data(), 8, n, stdout);
+    }
 }
 `;
 
@@ -76,5 +102,46 @@ describe('scratchbox_js_math.hpp: JavaScript arithmetic, bit for bit with this V
         }
         expect(first.filter(Boolean)).toEqual([]);
         expect(differ).toEqual(names.map(() => 0));
+    }, 300_000);
+
+    it('String(n), Math.min and Math.max with signed zeros, and Array.prototype.sort over values holding NaN', async () => {
+        const repo = path.resolve(__dirname, '../../..');
+        const built = await compileNativeCached({ sourceCode: SORT_PROBE, includeDirs: [path.join(repo, 'packages/core/src/native/3d-engine/include')], flags: defaultNativeFlags(['-ffp-contract=off']), name: 'js_sort_probe', timeoutMs: 300_000 });
+        // numbers to print and compare: the arguments above, and the zeros both ways round
+        const xs = argumentsToTry(20_000), zeros = [0, -0, -0, 0, 0, 0, -0, -0, 1, -0];
+        // arrays to sort with (x, y) => x - y: every length to 300 and longer ones (V8's runs and merges), NaN and repeats
+        let s = 0x2545f491;
+        const rnd = () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; };
+        const arrays = Array.from({ length: 3000 }, (_, t) => {
+            const n = t < 300 ? t : Math.floor(rnd() * 900), nanShare = [0, 0.02, 0.1, 0.4, 0.9][t % 5], repeats = t % 3 === 0;
+            const a = Array.from({ length: n }, () => (rnd() < nanShare ? NaN : repeats ? Math.floor(rnd() * 8) : rnd() * 100));
+            if (t % 7 === 0) a.sort((x, y) => x - y);
+            if (t % 11 === 0) a.reverse();
+            return a;
+        });
+        const head = Buffer.alloc(8);
+        head.writeUInt32LE(xs.length, 0); head.writeUInt32LE(zeros.length, 4);
+        const parts = [head, Buffer.from(xs.buffer), Buffer.from(Float64Array.from(zeros).buffer)];
+        for (const a of arrays) { const n = Buffer.alloc(4); n.writeUInt32LE(a.length); parts.push(n, Buffer.from(Float64Array.from(a).buffer)); }
+        const raw = execFileSync(built.binaryPath, { input: Buffer.concat(parts), maxBuffer: 1 << 28 });
+        let o = 0;
+        const strings = raw.toString('utf8', 0, raw.indexOf(0)).split('\n');
+        o = raw.indexOf(0) + 1;
+        expect(strings.filter((v, i) => v !== String(xs[i]))).toEqual([]);
+        const mm = new Float64Array(raw.buffer.slice(raw.byteOffset + o, raw.byteOffset + o + zeros.length * zeros.length * 2 * 8));
+        o += mm.byteLength;
+        for (let i = 0; i < zeros.length; i++) for (let j = 0; j < zeros.length; j++) {
+            expect(Object.is(mm[(i * zeros.length + j) * 2], Math.min(zeros[i], zeros[j]))).toBe(true);
+            expect(Object.is(mm[(i * zeros.length + j) * 2 + 1], Math.max(zeros[i], zeros[j]))).toBe(true);
+        }
+        const sorted = new Float64Array(raw.buffer.slice(raw.byteOffset + o));
+        let at = 0, differ = 0;
+        for (const a of arrays) {
+            const want = [...a].sort((x, y) => x - y);
+            if (want.some((v, i) => !Object.is(v, sorted[at + i]))) differ++;
+            at += a.length;
+        }
+        expect(at).toBe(sorted.length);
+        expect(differ).toBe(0);
     }, 300_000);
 });
