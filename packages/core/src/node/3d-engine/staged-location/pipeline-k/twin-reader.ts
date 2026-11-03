@@ -14,8 +14,9 @@
  * material regions, and its openings and panes draw the glass (the window recesses stay the window fit's, cut earlier).
  *
  * - Each rebuilt facade's own texture in the twin is its straightened photo (facade-lattice.ts), the same size and frame:
- *   harmonised, it takes the photo's place in a copy of the orthos (facades.json, the coverage masks kept). A facade with
- *   no rebuilt texture keeps its straightened photo, not de-lit (counted).
+ *   harmonised, it takes the photo's place in a copy of the orthos (facades.json, the coverage and occlusion masks kept,
+ *   so what tile_refine found blocked is greyed and skipped here as on the photo: occlusion.ts). A facade with no rebuilt
+ *   texture keeps its straightened photo, not de-lit (counted).
  * - Every other plane (roofs, terraces, the walls tile_refine did not analyse) is photographed face on (plane-orthos.ts)
  *   from tile_refine's flat scan with its photos swapped for the harmonised ones: the twin appends to the scan's images,
  *   it never reorders them.
@@ -35,7 +36,7 @@ import type { NamedBuilding } from './facade-reader-brief';
 import type { ModelReadingStore } from './model-readings';
 import { planeOrthos, PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
 
-export const TWIN_READER_VERSION = 'twin-reader/1';
+export const TWIN_READER_VERSION = 'twin-reader/2';
 
 export interface TwinReaderReport {
     dir: string;
@@ -116,7 +117,7 @@ export async function readOnTwin(input: {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
     // the facades: their harmonised rebuilt textures in place of their straightened photos, the frames and masks kept
-    const facadesFile = JSON.parse(fs.readFileSync(path.join(input.orthosDir, 'facades.json'), 'utf8')) as { facades: Array<{ facadeId: number; image: string; width: number; height: number; uncoveredMask?: string }> };
+    const facadesFile = JSON.parse(fs.readFileSync(path.join(input.orthosDir, 'facades.json'), 'utf8')) as { facades: Array<{ facadeId: number; image: string; width: number; height: number; uncoveredMask?: string; occludedMask?: string }> };
     const textures = facadeTextures(input.twinJson);
     let facadesHarmonised = 0, facadesAsPhotographed = 0;
     for (const f of facadesFile.facades) {
@@ -125,7 +126,7 @@ export async function readOnTwin(input: {
         const ti = textures.get(f.facadeId), img = ti !== undefined ? input.finalImage.get(ti) : undefined;
         if (img && img.width === f.width && img.height === f.height) { fs.writeFileSync(path.join(dir, f.image), encodePng(img.width, img.height, img.rgba, 4)); facadesHarmonised++; }
         else { fs.copyFileSync(src, path.join(dir, f.image)); facadesAsPhotographed++; }
-        if (f.uncoveredMask && fs.existsSync(path.join(input.orthosDir, f.uncoveredMask))) fs.copyFileSync(path.join(input.orthosDir, f.uncoveredMask), path.join(dir, f.uncoveredMask));
+        for (const m of [f.uncoveredMask, f.occludedMask]) if (m && fs.existsSync(path.join(input.orthosDir, m))) fs.copyFileSync(path.join(input.orthosDir, m), path.join(dir, m));
     }
     fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify(facadesFile));
     // the other planes, photographed from the flat scan with its photos harmonised

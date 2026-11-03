@@ -31,8 +31,8 @@ import type { ClayScoreView } from './streetview-clay-score';
 export type PolishJobInput = Omit<Parameters<typeof polishRemesh>[0], 'onStep'>;
 
 export type RemeshJob =
-    | { kind: 'wallGrammar'; orthosDir: string; fit: WindowFitFile }
-    | { kind: 'wallSheets'; orthosDir: string; grammar: WallGrammarFile; fit: WindowFitFile }
+    | { kind: 'wallGrammar'; orthosDir: string; fit: WindowFitFile; threads?: number }
+    | { kind: 'wallSheets'; orthosDir: string; grammar: WallGrammarFile; fit: WindowFitFile; threads?: number }
     | { kind: 'polish'; input: PolishJobInput }
     | { kind: 'windowFacade'; orthosDir: string; facade: OrthoFacade; params: WindowFitParams }
     | { kind: 'streetViewScore'; clayGlb: string; views: ClayScoreView[] }
@@ -48,8 +48,8 @@ const decode = (b: Buffer) => { const d = decodePng(b); return { rgba: d.rgba, w
 
 async function run(i: number, job: RemeshJob): Promise<unknown> {
     switch (job.kind) {
-        case 'wallGrammar': return readWallGrammar(job.orthosDir, job.fit, decode);
-        case 'wallSheets': return buildWallSheets(job.orthosDir, job.grammar, job.fit, decode);
+        case 'wallGrammar': return readWallGrammar(job.orthosDir, job.fit, decode, undefined, job.threads ? { threads: job.threads } : {});
+        case 'wallSheets': return buildWallSheets(job.orthosDir, job.grammar, job.fit, decode, job.threads ? { threads: job.threads } : {});
         case 'polish': return polishRemesh({ ...job.input, onStep: (step, state) => parentPort!.postMessage({ i, step, state } satisfies RemeshWorkerMessage) });
         case 'windowFacade': return (await fitOrthoFacades(job.orthosDir, [job.facade], job.params))[0];
         case 'streetViewScore': return streetViewClayScoreOf(job.clayGlb, job.views);
