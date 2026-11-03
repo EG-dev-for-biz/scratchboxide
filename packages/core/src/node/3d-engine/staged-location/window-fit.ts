@@ -30,7 +30,7 @@
  *    read them; every pane kept only where it reads unlike the stone beside its window (panesUnlikeWall).
  * The windows are photo-inferred. Facades are fitted in parallel, before the lattice reads them (window_fit.json beside the
  * orthos): natively by default (scratchbox_window_fit.hpp, the same readings in one process on a fixed thread pool, the
- * relief read there too; fitOrthoFacadesNative), in this TypeScript with SCRATCHBOX_K_NATIVE_POLISH=0.
+ * relief read there too; fitOrthoFacadesNative), in this TypeScript when SCRATCHBOX_K_NATIVE leaves `window-fit` out.
  *
  * A facade this leaves with no rects at all (no grid repeats on it, or it is too narrow or short to repeat) may be read
  * once more from an open-vocabulary segmenter's opening mask (SCRATCHBOX_K_WINDOW_SEGMENT, off by default: it bills per
@@ -49,7 +49,8 @@ import { findTileRefineRepoRoot } from '../tile-refine-service';
 import { MASK_YES, type SegmentImage } from './facade-material-evidence';
 import { countSet, readOccluded, unreadMask } from './pipeline-k/occlusion';
 import { encodePng } from './png-encode';
-import { nativePolishEnabled, nativePolishThreads, runNativeWindowFit, type NativeFacadeInput } from './remesh-polish-native';
+import { nativePolishThreads, runNativeWindowFit, type NativeFacadeInput } from './remesh-polish-native';
+import { kNative } from './pipeline-k/native/native-switch';
 
 export const WINDOW_FIT_VERSION = 'window-fit/8';
 
@@ -727,10 +728,17 @@ export function panesOfStrip(img: { rgba: ArrayLike<number>; width: number; heig
     return out.length ? out : undefined;
 }
 
+/** An sRGB 8-bit code's linear value. */
+const srgb8Linear = (v: number) => { const c = v / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+
+/** Every code's linear value, for the native fit: a pow, so worked out here (scratchbox_window_fit.hpp setSrgb8Linear). */
+export function srgb8LinearTable(): Float64Array {
+    return Float64Array.from({ length: 256 }, (_, v) => srgb8Linear(v));
+}
+
 /** sRGB 8-bit to CIELAB (D65). */
 function labOf8(r: number, g: number, b: number): [number, number, number] {
-    const lin = (v: number) => { const c = v / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
-    const R = lin(r), G = lin(g), B = lin(b);
+    const R = srgb8Linear(r), G = srgb8Linear(g), B = srgb8Linear(b);
     const f = (t: number) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
     const x = f((0.4124 * R + 0.3576 * G + 0.1805 * B) / 0.95047), y = f(0.2126 * R + 0.7152 * G + 0.0722 * B), z = f((0.0193 * R + 0.1192 * G + 0.9505 * B) / 1.08883);
     return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
@@ -1508,7 +1516,7 @@ export async function fitOrthoFacadesNative(orthosDir: string, facades: OrthoFac
             yield { slot: i, width: img.width, height: img.height, pixel: f.pixel, orthoSMin: f.orthoSMin, orthoTMax: f.orthoTMax, texel: f.texel, rgba: img.rgba, unread: mask };
         }
     }
-    await runNativeWindowFit(windowFitParamVector(P), feed(), {
+    await runNativeWindowFit(windowFitParamVector(P), srgb8LinearTable(), feed(), {
         threads: opts.threads ?? nativePolishThreads(), ...(opts.signal ? { signal: opts.signal } : {}),
         onFit: r => {
             const s = sent.get(r.slot), f = facades[r.slot];
@@ -1572,8 +1580,8 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency
     const facades = orthoFacades(orthosDir);
     const concurrency = Math.max(1, opts.concurrency ?? Math.max(1, Math.min(8, os.cpus().length - 1)));
     // natively (one process, a pool of `concurrency` threads when the caller caps it, else every core) unless
-    // SCRATCHBOX_K_NATIVE_POLISH=0, which keeps the TypeScript fit (on worker threads when the caller gives them)
-    const out = nativePolishEnabled() ? await fitOrthoFacadesNative(orthosDir, facades, P, { threads: opts.concurrency ?? nativePolishThreads(), ...(opts.signal ? { signal: opts.signal } : {}) })
+    // SCRATCHBOX_K_NATIVE without window-fit keeps the TypeScript fit (on worker threads when the caller gives them)
+    const out = kNative('window-fit') ? await fitOrthoFacadesNative(orthosDir, facades, P, { threads: opts.concurrency ?? nativePolishThreads(), ...(opts.signal ? { signal: opts.signal } : {}) })
         : opts.fitFacades ? await opts.fitFacades(facades, P) : await fitOrthoFacades(orthosDir, facades, P, { concurrency, ...(opts.signal ? { signal: opts.signal } : {}) });
     // the six readings found nothing (the no-pattern tail): the segmenter's opening mask, as far as the photo confirms it. On
     // this thread, since it calls a model

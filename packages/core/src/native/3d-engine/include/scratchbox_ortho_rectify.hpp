@@ -18,16 +18,17 @@
  * Parity with the TypeScript, bit for bit on the same input:
  *  - JS numbers are doubles, Float32Array slots are floats stored from a double computation (as Math.fround), Uint8Array
  *    and Int16Array stores keep their conversions (ToUint8: NaN to 0, modular; Int16 modular).
- *  - Math.round is jsRound (ceil, minus one when that overshoots by more than a half: the spec's rounding, not floor(x+0.5),
- *    which differs at 0.49999999999999994); Math.min / Math.max propagate NaN (jsMin / jsMax); Math.sign of NaN is NaN.
- *  - Math.log and Math.exp are V8's fdlibm ports (base/ieee754.cc), compiled as V8 is on arm64 (clang, fp contraction on):
- *    the platform libm differs in the last bit for several percent of inputs. Math.hypot is V8's (Kahan sum, scaled by the
- *    largest). Everything else is compiled with contraction off: V8's generated code never fuses a multiply and an add.
+ *  - Math.round, Math.min / Math.max (NaN propagating), Math.sign, Math.log, Math.exp and Math.hypot are V8's, from
+ *    scratchbox_js_math.hpp (log and exp its fdlibm ports, compiled as V8 is; the platform libm differs in the last bit for
+ *    several percent of inputs). Everything else is compiled with contraction off: V8's generated code never fuses a
+ *    multiply and an add.
  *  - Sorts with a comparator are stable (Array.prototype.sort is), reductions run in the TypeScript's order, and threads only
  *    split loops whose iterations are independent (rows, columns, pixels), so the thread count never changes a result.
  */
 
 #pragma clang fp contract(off)
+
+#include "scratchbox_js_math.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -97,147 +98,17 @@ inline Params paramsFromDoubles(const double* v) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// JavaScript number semantics
+// JavaScript number semantics: scratchbox_js_math.hpp
 
-constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-constexpr double kInf = std::numeric_limits<double>::infinity();
-
-/** Math.round. */
-inline double jsRound(double x) {
-    if (!std::isfinite(x)) return x;
-    double r = std::ceil(x);
-    if (r - 0.5 > x) r -= 1.0;
-    return r;
-}
-/** Math.min / Math.max of two (NaN wins). */
-inline double jsMin(double a, double b) { if (std::isnan(a) || std::isnan(b)) return kNaN; return a < b ? a : b; }
-inline double jsMax(double a, double b) { if (std::isnan(a) || std::isnan(b)) return kNaN; return a > b ? a : b; }
-inline double jsSign(double x) { if (std::isnan(x)) return kNaN; return x > 0 ? 1.0 : x < 0 ? -1.0 : x; }
-/** A Uint8Array store (ToUint8). */
-inline uint8_t toUint8(double x) {
-    if (!std::isfinite(x)) return 0;
-    double t = std::trunc(x), m = std::fmod(t, 256.0);
-    if (m < 0) m += 256.0;
-    return static_cast<uint8_t>(m);
-}
-/** An Int16Array store of an integer value (ToInt16, modular). */
-inline int16_t toInt16(double x) {
-    if (!std::isfinite(x)) return 0;
-    double t = std::trunc(x), m = std::fmod(t, 65536.0);
-    if (m < 0) m += 65536.0;
-    return static_cast<int16_t>(static_cast<uint16_t>(m));
-}
+using js::kNaN;
+using js::kInf;
 inline float f32(double x) { return static_cast<float>(x); }
-
-namespace fdlibm {
-inline uint32_t hiWord(double x) { uint64_t b; std::memcpy(&b, &x, 8); return static_cast<uint32_t>(b >> 32); }
-inline uint32_t loWord(double x) { uint64_t b; std::memcpy(&b, &x, 8); return static_cast<uint32_t>(b); }
-inline double withHi(double x, uint32_t h) { uint64_t b; std::memcpy(&b, &x, 8); b = (b & 0xffffffffull) | (static_cast<uint64_t>(h) << 32); std::memcpy(&x, &b, 8); return x; }
-
-/** Math.log: V8's ieee754::log (fdlibm e_log.c). */
-inline double log(double x) {
-#pragma clang fp contract(on)
-    const double ln2_hi = 6.93147180369123816490e-01, ln2_lo = 1.90821492927058770002e-10, two54 = 1.80143985094819840000e+16;
-    const double Lg1 = 6.666666666666735130e-01, Lg2 = 3.999999999940941908e-01, Lg3 = 2.857142874366239149e-01, Lg4 = 2.222219843214978396e-01;
-    const double Lg5 = 1.818357216161805012e-01, Lg6 = 1.531383769920937332e-01, Lg7 = 1.479819860511658591e-01;
-    double hfsq, f, s, z, R, w, t1, t2, dk;
-    int32_t k = 0, hx = static_cast<int32_t>(hiWord(x)), i, j;
-    uint32_t lx = loWord(x);
-    if (hx < 0x00100000) {
-        if (((hx & 0x7fffffff) | static_cast<int32_t>(lx)) == 0) return -kInf;
-        if (hx < 0) return kNaN;
-        k -= 54; x *= two54; hx = static_cast<int32_t>(hiWord(x));
-    }
-    if (hx >= 0x7ff00000) return x + x;
-    k += (hx >> 20) - 1023;
-    hx &= 0x000fffff;
-    i = (hx + 0x95f64) & 0x100000;
-    x = withHi(x, static_cast<uint32_t>(hx | (i ^ 0x3ff00000)));
-    k += (i >> 20);
-    f = x - 1.0;
-    if ((0x000fffff & (2 + hx)) < 3) {
-        if (f == 0.0) { if (k == 0) return 0.0; dk = static_cast<double>(k); return dk * ln2_hi + dk * ln2_lo; }
-        R = f * f * (0.5 - 0.33333333333333333 * f);
-        if (k == 0) return f - R;
-        dk = static_cast<double>(k);
-        return dk * ln2_hi - ((R - dk * ln2_lo) - f);
-    }
-    s = f / (2.0 + f); dk = static_cast<double>(k); z = s * s; i = hx - 0x6147a; w = z * z; j = 0x6b851 - hx;
-    t1 = w * (Lg2 + w * (Lg4 + w * Lg6)); t2 = z * (Lg1 + w * (Lg3 + w * (Lg5 + w * Lg7))); i |= j; R = t2 + t1;
-    if (i > 0) {
-        hfsq = 0.5 * f * f;
-        if (k == 0) return f - (hfsq - s * (hfsq + R));
-        return dk * ln2_hi - ((hfsq - (s * (hfsq + R) + dk * ln2_lo)) - f);
-    }
-    if (k == 0) return f - s * (f - R);
-    return dk * ln2_hi - ((s * (f - R) - dk * ln2_lo) - f);
-}
-
-/** Math.exp: V8's ieee754::exp (fdlibm e_exp.c, with V8's exact exp(1)). */
-inline double exp(double x) {
-#pragma clang fp contract(on)
-    const double halF[2] = {0.5, -0.5}, huge = 1.0e+300, twom1000 = 9.33263618503218878990e-302;
-    const double o_threshold = 7.09782712893383973096e+02, u_threshold = -7.45133219101941108420e+02;
-    const double ln2HI[2] = {6.93147180369123816490e-01, -6.93147180369123816490e-01}, ln2LO[2] = {1.90821492927058770002e-10, -1.90821492927058770002e-10};
-    const double invln2 = 1.44269504088896338700e+00, E = 2.718281828459045;
-    const double P1 = 1.66666666666666019037e-01, P2 = -2.77777777770155933842e-03, P3 = 6.61375632143793436117e-05, P4 = -1.65339022054652515390e-06, P5 = 4.13813679705723846039e-08;
-    double y, hi = 0, lo = 0, c, t;
-    int32_t k = 0, xsb;
-    uint32_t hx = hiWord(x);
-    xsb = static_cast<int32_t>((hx >> 31) & 1);
-    hx &= 0x7fffffff;
-    if (hx >= 0x40862E42) {
-        if (hx >= 0x7ff00000) { if (((hx & 0xfffff) | loWord(x)) != 0) return x + x; return xsb == 0 ? x : 0.0; }
-        if (x > o_threshold) return kInf;
-        if (x < u_threshold) return 0.0;
-    }
-    if (hx > 0x3fd62e42) {
-        if (hx < 0x3FF0A2B2) {
-            if (x == 1.0) return E;
-            hi = x - ln2HI[xsb]; lo = ln2LO[xsb]; k = 1 - xsb - xsb;
-        } else {
-            k = static_cast<int32_t>(invln2 * x + halF[xsb]);
-            t = k;
-            hi = x - t * ln2HI[0];
-            lo = t * ln2LO[0];
-        }
-        x = hi - lo;
-    } else if (hx < 0x3e300000) {
-        if (huge + x > 1.0) return 1.0 + x;
-    } else {
-        k = 0;
-    }
-    t = x * x;
-    c = x - t * (P1 + t * (P2 + t * (P3 + t * (P4 + t * P5))));
-    if (k == 0) return 1.0 - ((x * c) / (c - 2.0) - x);
-    y = 1.0 - ((lo - (x * c) / (2.0 - c)) - hi);
-    if (k >= -1021) return withHi(y, hiWord(y) + (static_cast<uint32_t>(k) << 20));
-    y = withHi(y, hiWord(y) + (static_cast<uint32_t>(k + 1000) << 20));
-    return y * twom1000;
-}
-} // namespace fdlibm
-
-/** Math.hypot of two: V8's (MathHypot in builtins/math.tq). */
-inline double jsHypot(double a, double b) {
-    const double v[2] = {std::fabs(a), std::fabs(b)};
-    if (v[0] == kInf || v[1] == kInf) return kInf;
-    if (std::isnan(a) || std::isnan(b)) return kNaN;
-    const double mx = v[0] > v[1] ? v[0] : v[1];
-    if (mx == 0) return 0;
-    double sum = 0, compensation = 0;
-    for (double q : v) {
-        const double n = q / mx, summand = n * n - compensation, preliminary = sum + summand;
-        compensation = (preliminary - sum) - summand;
-        sum = preliminary;
-    }
-    return std::sqrt(sum) * mx;
-}
 
 /** The round(v, d) of ortho-rectify.ts: Math.round(v * 10 ** d) / 10 ** d, non-finite values as they are. */
 inline double roundTo(double v, int d) {
     if (!std::isfinite(v)) return v;
     const double p = d == 0 ? 1 : d == 1 ? 10 : d == 2 ? 100 : d == 3 ? 1000 : d == 4 ? 10000 : std::pow(10.0, d);
-    return jsRound(v * p) / p;
+    return js::round(v * p) / p;
 }
 
 /** A number as a JS template literal prints it (Number::toString for the magnitudes the reports hold). */
@@ -395,8 +266,8 @@ inline std::vector<TracedLine> traceAxis(char axis, const std::vector<float>& g,
     parallelFor(static_cast<size_t>(nAcross), [&](size_t b, size_t e) {
         for (size_t c = b; c < e; c++) { double acc = 0; for (int a = 0; a < nAlong; a++) acc += std::fabs(static_cast<double>(g[at(a, static_cast<int>(c))])); profile[c] = acc; }
     }, 16);
-    const double sep = jsMax(2, jsRound(P.minLineGapM / pixelM));
-    const int R = static_cast<int>(jsMax(1, jsRound(P.maxShiftM / pixelM))), S = static_cast<int>(jsMax(1, jsRound(P.trackStepM / pixelM)));
+    const double sep = js::max(2, js::round(P.minLineGapM / pixelM));
+    const int R = static_cast<int>(js::max(1, js::round(P.maxShiftM / pixelM))), S = static_cast<int>(js::max(1, js::round(P.trackStepM / pixelM)));
     const int nS = nAlong / S;
     const std::vector<int> peaks = profilePeaks(profile, P.peakK, sep);
     std::vector<TracedLine> found(peaks.size());
@@ -432,14 +303,14 @@ inline std::vector<TracedLine> traceAxis(char axis, const std::vector<float>& g,
                     double bc = kInf; int bd = 0;
                     for (int q = 0; q < nD; q++) { const double v = cost[static_cast<size_t>(s - 1) * nD + q] + P.bendCost * std::fabs(static_cast<double>(d - q)); if (v < bc) { bc = v; bd = q; } }
                     cost[static_cast<size_t>(s) * nD + d] = bc - e[static_cast<size_t>(s) * nD + d] / norm;
-                    back[static_cast<size_t>(s) * nD + d] = toInt16(bd);
+                    back[static_cast<size_t>(s) * nD + d] = js::toInt16(bd);
                 }
             }
             std::vector<int16_t> path(nS, 0);
             int bd = 0;
             if (nS > 0) {
                 for (int d = 1; d < nD; d++) if (cost[static_cast<size_t>(nS - 1) * nD + d] < cost[static_cast<size_t>(nS - 1) * nD + bd]) bd = d;
-                for (int s = nS - 1; s >= 0; s--) { path[s] = toInt16(bd); if (s > 0) bd = back[static_cast<size_t>(s) * nD + bd]; }
+                for (int s = nS - 1; s >= 0; s--) { path[s] = js::toInt16(bd); if (s > 0) bd = back[static_cast<size_t>(s) * nD + bd]; }
             }
             TracedLine l;
             l.axis = axis; l.at = c0;
@@ -448,11 +319,11 @@ inline std::vector<TracedLine> traceAxis(char axis, const std::vector<float>& g,
                 l.along.push_back((s + 0.5) * S - 0.5);
                 const int d = path[s];
                 const double rm = d > 0 ? e[static_cast<size_t>(s) * nD + d - 1] : kNaN, r0 = e[static_cast<size_t>(s) * nD + d], rp = d < nD - 1 ? e[static_cast<size_t>(s) * nD + d + 1] : kNaN, den = rm - 2 * r0 + rp;
-                l.across.push_back(static_cast<double>(c0 - R + d) + (den < 0 ? jsMax(-0.5, jsMin(0.5, 0.5 * (rm - rp) / den)) : 0));
+                l.across.push_back(static_cast<double>(c0 - R + d) + (den < 0 ? js::max(-0.5, js::min(0.5, 0.5 * (rm - rp) / den)) : 0));
                 const double r = e[static_cast<size_t>(s) * nD + path[s]] / norm;
-                weight.push_back(r >= P.minEdge && path[s] > 0 && path[s] < nD - 1 ? jsMin(1, r) : 0);
+                weight.push_back(r >= P.minEdge && path[s] > 0 && path[s] < nD - 1 ? js::min(1, r) : 0);
             }
-            const int gapS = static_cast<int>(jsMax(1, jsRound(P.segmentGapM / (S * pixelM))));
+            const int gapS = static_cast<int>(js::max(1, js::round(P.segmentGapM / (S * pixelM))));
             std::vector<double> straight(nS, kNaN);
             int segs = 0, s = 0;
             while (s < nS) {
@@ -563,7 +434,7 @@ struct MeshWarp { double G = 4; int nx = 0, ny = 0; std::vector<double> sx, sy; 
 
 /** Bilinear weights of an output point (px) in the warp's grid: the four vertex indices and weights. */
 inline void cellWeights(const MeshWarp& w, double x, double y, int vs[4], double ws[4]) {
-    const double fx = jsMin(w.nx - 1 - 1e-9, jsMax(0, x / w.G)), fy = jsMin(w.ny - 1 - 1e-9, jsMax(0, y / w.G));
+    const double fx = js::min(w.nx - 1 - 1e-9, js::max(0, x / w.G)), fy = js::min(w.ny - 1 - 1e-9, js::max(0, y / w.G));
     const int i = static_cast<int>(std::floor(fx)), j = static_cast<int>(std::floor(fy));
     const double a = fx - i, b = fy - j;
     vs[0] = j * w.nx + i; vs[1] = j * w.nx + i + 1; vs[2] = (j + 1) * w.nx + i; vs[3] = (j + 1) * w.nx + i + 1;
@@ -572,7 +443,7 @@ inline void cellWeights(const MeshWarp& w, double x, double y, int vs[4], double
 
 /** The content-preserving warp that takes every traced sample onto its straight line (unknowns [sx0, sy0, sx1, ...]). */
 inline MeshWarp solveWarp(const std::vector<TracedLine>& lines, int W, int H, double pixelM, const Params& P, int& iterations) {
-    const double G = jsMax(4, jsRound(P.gridM / pixelM));
+    const double G = js::max(4, js::round(P.gridM / pixelM));
     const int nx = static_cast<int>(std::ceil((W - 1) / G)) + 1, ny = static_cast<int>(std::ceil((H - 1) / G)) + 1, nv = nx * ny;
     auto id = [&](int i, int j) { return j * nx + i; };
     auto X = [](int v) { return 2 * v; };
@@ -595,7 +466,7 @@ inline MeshWarp solveWarp(const std::vector<TracedLine>& lines, int W, int H, do
         rows.add({X(a), X(b), X(c), Y(c), Y(b)}, {1, -1 + mu, -mu, -nu, nu}, 0, P.wSimilarity);
         rows.add({Y(a), Y(b), Y(c), X(c), X(b)}, {1, -1 + mu, -mu, nu, -nu}, 0, P.wSimilarity);
     };
-    auto pos = [&](int i, int j) -> Pt { return {jsMin(W - 1, i * G), jsMin(H - 1, j * G)}; };
+    auto pos = [&](int i, int j) -> Pt { return {js::min(W - 1, i * G), js::min(H - 1, j * G)}; };
     for (int j = 0; j + 1 < ny; j++) for (int i = 0; i + 1 < nx; i++) {
         const int v00 = id(i, j), v10 = id(i + 1, j), v01 = id(i, j + 1), v11 = id(i + 1, j + 1);
         const Pt p00 = pos(i, j), p10 = pos(i + 1, j), p01 = pos(i, j + 1), p11 = pos(i + 1, j + 1);
@@ -622,13 +493,13 @@ inline MeshWarp solveWarp(const std::vector<TracedLine>& lines, int W, int H, do
 /** The largest scale s in (0, 1] of the warp's displacement under which no source triangle shrinks below minJacobian. */
 inline double foldScale(const MeshWarp& w, int W, int H, double minJacobian) {
     auto ok = [&](double s) {
-        auto px = [&](int v, int i) { return jsMin(W - 1, i * w.G) + s * (w.sx[v] - jsMin(W - 1, i * w.G)); };
-        auto py = [&](int v, int j) { return jsMin(H - 1, j * w.G) + s * (w.sy[v] - jsMin(H - 1, j * w.G)); };
+        auto px = [&](int v, int i) { return js::min(W - 1, i * w.G) + s * (w.sx[v] - js::min(W - 1, i * w.G)); };
+        auto py = [&](int v, int j) { return js::min(H - 1, j * w.G) + s * (w.sy[v] - js::min(H - 1, j * w.G)); };
         for (int j = 0; j + 1 < w.ny; j++) for (int i = 0; i + 1 < w.nx; i++) {
             const int v[4] = {j * w.nx + i, j * w.nx + i + 1, (j + 1) * w.nx + i, (j + 1) * w.nx + i + 1};
             const int ci[4] = {i, i + 1, i, i + 1}, cj[4] = {j, j, j + 1, j + 1};
             double Px[4], Py[4], Ox[4], Oy[4];
-            for (int k = 0; k < 4; k++) { Px[k] = px(v[k], ci[k]); Py[k] = py(v[k], cj[k]); Ox[k] = jsMin(W - 1, ci[k] * w.G); Oy[k] = jsMin(H - 1, cj[k] * w.G); }
+            for (int k = 0; k < 4; k++) { Px[k] = px(v[k], ci[k]); Py[k] = py(v[k], cj[k]); Ox[k] = js::min(W - 1, ci[k] * w.G); Oy[k] = js::min(H - 1, cj[k] * w.G); }
             const int tris[2][3] = {{0, 1, 2}, {1, 3, 2}};
             for (const auto& t : tris) {
                 const int a = t[0], b = t[1], c = t[2];
@@ -654,10 +525,10 @@ inline void warpSource(const MeshWarp& w, int W, int H, double scale, double x, 
     double sx = 0, sy = 0;
     for (int k = 0; k < 4; k++) {
         const int i = vs[k] % w.nx, j = vs[k] / w.nx;
-        sx += ws[k] * (jsMin(W - 1, i * w.G) + scale * (w.sx[vs[k]] - jsMin(W - 1, i * w.G)));
-        sy += ws[k] * (jsMin(H - 1, j * w.G) + scale * (w.sy[vs[k]] - jsMin(H - 1, j * w.G)));
+        sx += ws[k] * (js::min(W - 1, i * w.G) + scale * (w.sx[vs[k]] - js::min(W - 1, i * w.G)));
+        sy += ws[k] * (js::min(H - 1, j * w.G) + scale * (w.sy[vs[k]] - js::min(H - 1, j * w.G)));
     }
-    outX = jsMin(W - 1, jsMax(0, sx)); outY = jsMin(H - 1, jsMax(0, sy));
+    outX = js::min(W - 1, js::max(0, sx)); outY = js::min(H - 1, js::max(0, sy));
 }
 
 /** A one-channel mask (W x H) carried through the same warp, by its nearest source pixel. */
@@ -667,7 +538,7 @@ inline std::vector<uint8_t> applyWarpMask(const std::vector<uint8_t>& mask, int 
         for (size_t y = b; y < e; y++) for (int x = 0; x < W; x++) {
             double sx, sy;
             warpSource(w, W, H, scale, x, static_cast<double>(y), sx, sy);
-            out[y * W + x] = mask[static_cast<size_t>(jsRound(sy)) * W + static_cast<size_t>(jsRound(sx))];
+            out[y * W + x] = mask[static_cast<size_t>(js::round(sy)) * W + static_cast<size_t>(js::round(sx))];
         }
     }, 8);
     return out;
@@ -691,9 +562,9 @@ inline Rgba applyWarp(const Rgba& img, const MeshWarp& w, double scale) {
             const double cw[4] = {(1 - a) * (1 - b), a * (1 - b), (1 - a) * b, a * b};
             double wsum = 0, acc[4] = {0, 0, 0, 0};
             for (int k = 0; k < 4; k++) if (valid[ci[k]] && cw[k] > 0) { wsum += cw[k]; for (int c = 0; c < 4; c++) acc[c] += cw[k] * rgba[ci[k] * 4 + c]; }
-            const size_t nearPx = static_cast<size_t>(jsRound(sy)) * W + static_cast<size_t>(jsRound(sx));
+            const size_t nearPx = static_cast<size_t>(js::round(sy)) * W + static_cast<size_t>(js::round(sx));
             if (!valid[nearPx] || wsum <= 0) { out.rgba[o] = out.rgba[o + 1] = out.rgba[o + 2] = UNCOVERED; out.rgba[o + 3] = rgba[nearPx * 4 + 3]; continue; }
-            for (int c = 0; c < 4; c++) out.rgba[o + c] = toUint8(jsRound(acc[c] / wsum));
+            for (int c = 0; c < 4; c++) out.rgba[o + c] = js::toUint8(js::round(acc[c] / wsum));
             if (out.rgba[o] == UNCOVERED && out.rgba[o + 1] == UNCOVERED && out.rgba[o + 2] == UNCOVERED) out.rgba[o + 2] = UNCOVERED + 1;
         }
     }, 8);
@@ -719,7 +590,7 @@ inline Period axisPeriod(const Rgba& img, double pixelM, char axis, double minM,
         }, 16);
     }
     for (int x = 0; x < W; x++) prof[x] = cnt[x] > 0.1 * H ? prof[x] / cnt[x] : kNaN;
-    const int lo = static_cast<int>(jsMax(2, jsRound(minM / pixelM))), hi = static_cast<int>(jsMin(std::floor(W / 2.0), jsRound(maxM / pixelM)));
+    const int lo = static_cast<int>(js::max(2, js::round(minM / pixelM))), hi = static_cast<int>(js::min(std::floor(W / 2.0), js::round(maxM / pixelM)));
     auto nccAt = [&](int lag) {
         double n = 0, sa = 0, sb = 0, ab = 0, aa = 0, bb = 0;
         for (int x = 0; x + lag < W; x++) { const double a = prof[x], b = prof[x + lag]; if (std::isfinite(a) && std::isfinite(b)) { n++; sa += a; sb += b; ab += a * b; aa += a * a; bb += b * b; } }
@@ -760,7 +631,7 @@ inline std::vector<uint8_t> featurelessMask(const Rgba& img, double pixelM, cons
             }
         }
     }, 16);
-    const int r = static_cast<int>(jsMax(1, jsRound(P.featureWindowM / pixelM / 2)));
+    const int r = static_cast<int>(js::max(1, js::round(P.featureWindowM / pixelM / 2)));
     const size_t W1 = static_cast<size_t>(W) + 1;
     std::vector<double> S(W1 * (H + 1), 0.0), C(W1 * (H + 1), 0.0);
     for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
@@ -839,7 +710,7 @@ inline Rgba fillHoles(const Rgba& img, double pixelM, const Params& P, HoleFill&
             cand.clear();
             for (double k = -P.fillRepeats; k <= P.fillRepeats; k++) {
                 if (k == 0) continue;
-                const double xx = axis == 'x' ? jsRound(x + k * period) : x, yy = axis == 'y' ? jsRound(y + k * period) : y;
+                const double xx = axis == 'x' ? js::round(x + k * period) : x, yy = axis == 'y' ? js::round(y + k * period) : y;
                 if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
                 const size_t j = static_cast<size_t>(yy) * W + static_cast<size_t>(xx);
                 if (valid[j]) cand.push_back({j, L[j]});
@@ -852,9 +723,9 @@ inline Rgba fillHoles(const Rgba& img, double pixelM, const Params& P, HoleFill&
         return n;
     };
     const Period ph = horizontalPeriod(img, pixelM, P);
-    if (ph.found) { fill.hasPeriodPx = true; fill.periodPx = jsRound(ph.periodPx * 100) / 100; fill.fromRepeats = pass(ph.periodPx, 'x'); }
+    if (ph.found) { fill.hasPeriodPx = true; fill.periodPx = js::round(ph.periodPx * 100) / 100; fill.fromRepeats = pass(ph.periodPx, 'x'); }
     const Period pv = axisPeriod(img, pixelM, 'y', P.storeyMinM, P.storeyMaxM, P);
-    if (pv.found) { fill.hasStoreyPx = true; fill.storeyPx = jsRound(pv.periodPx * 100) / 100; fill.fromStoreys = pass(pv.periodPx, 'y'); }
+    if (pv.found) { fill.hasStoreyPx = true; fill.storeyPx = js::round(pv.periodPx * 100) / 100; fill.fromStoreys = pass(pv.periodPx, 'y'); }
     if (!nearest) return out;
     std::vector<int64_t> src(N, -1), queue(N);
     size_t head = 0, tail = 0;
@@ -1002,16 +873,16 @@ inline SmearResult levelSmears(const Rgba& img, double periodPx, double pixelM, 
     planes(img, valid, L);
     const int W = img.width, H = img.height;
     const size_t N = static_cast<size_t>(W) * H;
-    const int nrx = static_cast<int>(jsMax(2, jsRound(periodPx / 2))), nry = static_cast<int>(jsMax(2, jsRound(P.repeatWindowM / pixelM)));
+    const int nrx = static_cast<int>(js::max(2, js::round(periodPx / 2))), nry = static_cast<int>(js::max(2, js::round(P.repeatWindowM / pixelM)));
     struct Shift { std::vector<int16_t> s; std::vector<float> ncc; };
     std::vector<Shift> shifts;
     for (double k = -P.smearRepeats; k <= P.smearRepeats; k++) {
         if (k == 0) continue;
-        const double s0 = jsRound(k * periodPx);
+        const double s0 = js::round(k * periodPx);
         Shift sh; sh.ncc.assign(N, std::numeric_limits<float>::quiet_NaN()); sh.s.assign(N, 0);
         for (double d = -P.phaseSearchPx; d <= P.phaseSearchPx; d++) {
             const auto ncc = shiftedNcc(L, valid, W, H, static_cast<int>(s0 + d), nrx, nry);
-            const int16_t sv = toInt16(s0 + d);
+            const int16_t sv = js::toInt16(s0 + d);
             parallelFor(N, [&](size_t ib, size_t ie) {
                 for (size_t i = ib; i < ie; i++) if (ncc[i] > sh.ncc[i] || (!(sh.ncc[i] >= -1) && ncc[i] >= -1)) { sh.ncc[i] = ncc[i]; sh.s[i] = sv; }
             }, 4096);
@@ -1033,11 +904,11 @@ inline SmearResult levelSmears(const Rgba& img, double periodPx, double pixelM, 
                 if (j >= 0 && j < static_cast<long>(N) && valid[j]) buf.push_back(L[j]);
             }
             if (buf.size() < P.minSmearRepeats) continue;
-            ratio[i] = f32(fdlibm::log((L[i] + 8.0) / (medianOf(buf) + 8)));
+            ratio[i] = f32(js::log((L[i] + 8.0) / (medianOf(buf) + 8)));
             has[i] = 1;
         }
     }, 4096);
-    const int rx = static_cast<int>(jsMax(1, jsMin(jsRound(P.smearRadiusXM / pixelM), jsRound(periodPx / 3)))), ry = static_cast<int>(jsMax(1, jsRound(P.smearRadiusYM / pixelM)));
+    const int rx = static_cast<int>(js::max(1, js::min(js::round(P.smearRadiusXM / pixelM), js::round(periodPx / 3)))), ry = static_cast<int>(js::max(1, js::round(P.smearRadiusYM / pixelM)));
     const auto low = boxMean(ratio, has, W, H, rx, ry);
     std::vector<double> vals;
     for (size_t i = 0; i < N; i += 3) if (has[i] && std::isfinite(low[i])) vals.push_back(low[i]);
@@ -1046,7 +917,7 @@ inline SmearResult levelSmears(const Rgba& img, double periodPx, double pixelM, 
     for (size_t k = 0; k < vals.size(); k++) dev[k] = std::fabs(vals[k] - med);
     const double mad = medianOf(std::move(dev));
     const double sd = 1.4826 * (mad != 0 && !std::isnan(mad) ? mad : 1e-3);
-    const double thr = jsMax(P.smearMinLog, P.smearK * sd);
+    const double thr = js::max(P.smearMinLog, P.smearK * sd);
     SmearResult res;
     res.image.width = W; res.image.height = H; res.image.rgba = img.rgba;
     auto& out = res.image.rgba;
@@ -1055,10 +926,10 @@ inline SmearResult levelSmears(const Rgba& img, double periodPx, double pixelM, 
         if (!valid[i] || !std::isfinite(low[i])) continue;
         const double r = low[i] - med, a = std::fabs(r);
         if (a <= thr) continue;
-        const double ramp = jsMin(1, (a - thr) / (0.5 * thr));
-        const double corr = jsSign(r) * jsMin(P.smearMaxLog, ramp * a);
-        const double gain = fdlibm::exp(-corr);
-        for (int c = 0; c < 3; c++) out[i * 4 + c] = toUint8(jsMax(0, jsMin(255, jsRound(img.rgba[i * 4 + c] * gain))));
+        const double ramp = js::min(1, (a - thr) / (0.5 * thr));
+        const double corr = js::sign(r) * js::min(P.smearMaxLog, ramp * a);
+        const double gain = js::exp(-corr);
+        for (int c = 0; c < 3; c++) out[i * 4 + c] = js::toUint8(js::max(0, js::min(255, js::round(img.rgba[i * 4 + c] * gain))));
         if (out[i * 4] == UNCOVERED && out[i * 4 + 1] == UNCOVERED && out[i * 4 + 2] == UNCOVERED) out[i * 4 + 2] = UNCOVERED + 1;
         texels++; sumAbs += std::fabs(corr);
     }
@@ -1073,7 +944,7 @@ inline std::vector<TracedLine> retrace(const Rgba& img, const std::vector<Traced
     gradients(L, valid, img.width, img.height, gx, gy);
     const int W = img.width;
     const long N = static_cast<long>(img.width) * img.height;
-    const int R = static_cast<int>(jsMax(1, jsRound(P.maxShiftM / pixelM))), S = static_cast<int>(jsMax(1, jsRound(P.trackStepM / pixelM)));
+    const int R = static_cast<int>(js::max(1, js::round(P.maxShiftM / pixelM))), S = static_cast<int>(js::max(1, js::round(P.trackStepM / pixelM)));
     std::vector<TracedLine> out(lines.size());
     parallelFor(lines.size(), [&](size_t lb, size_t le) {
         for (size_t li = lb; li < le; li++) {
@@ -1086,13 +957,13 @@ inline std::vector<TracedLine> retrace(const Rgba& img, const std::vector<Traced
             };
             const int nAcross = l.axis == 'v' ? img.width : img.height;
             double signedSum = 0;
-            for (size_t k = 0; k < l.along.size(); k++) if (l.weight[k] > 0) signedSum += gat(jsRound(l.along[k]), jsRound(l.across[k]));
+            for (size_t k = 0; k < l.along.size(); k++) if (l.weight[k] > 0) signedSum += gat(js::round(l.along[k]), js::round(l.across[k]));
             const double pol = signedSum >= 0 ? 1 : -1;
             TracedLine t = l;
             for (size_t k = 0; k < l.across.size(); k++) {
                 if (!(l.weight[k] > 0)) { t.across[k] = kNaN; continue; }
-                const double c0 = jsRound(l.straight[k]);
-                const double a0 = jsRound(l.along[k] - (S - 1) / 2.0);
+                const double c0 = js::round(l.straight[k]);
+                const double a0 = js::round(l.along[k] - (S - 1) / 2.0);
                 double best = -kInf; int bd = 0;
                 for (int d = -R; d <= R; d++) {
                     const double c = c0 + d;
@@ -1105,7 +976,7 @@ inline std::vector<TracedLine> retrace(const Rgba& img, const std::vector<Traced
                 const double c = c0 + bd;
                 if (c - 1 < 1 || c + 1 >= nAcross - 1) { t.across[k] = c; continue; }
                 const double rm = rr(bd - 1), rp = rr(bd + 1), den = rm - 2 * best + rp;
-                t.across[k] = c + (den < 0 ? jsMax(-0.5, jsMin(0.5, 0.5 * (rm - rp) / den)) : 0);
+                t.across[k] = c + (den < 0 ? js::max(-0.5, js::min(0.5, 0.5 * (rm - rp) / den)) : 0);
             }
             out[li] = std::move(t);
         }
@@ -1146,8 +1017,8 @@ inline Result rectifyOrtho(const Rgba& img, double pixelM, const Params& P, cons
         double maxShift = 0, sumShift = 0;
         for (size_t v = 0; v < warp.sx.size(); v++) {
             const int i = static_cast<int>(v % warp.nx), j = static_cast<int>(v / warp.nx);
-            const double d = scale * jsHypot(warp.sx[v] - jsMin(W - 1, i * warp.G), warp.sy[v] - jsMin(H - 1, j * warp.G));
-            maxShift = jsMax(maxShift, d); sumShift += d;
+            const double d = scale * js::hypot({warp.sx[v] - js::min(W - 1, i * warp.G), warp.sy[v] - js::min(H - 1, j * warp.G)});
+            maxShift = js::max(maxShift, d); sumShift += d;
         }
         const double hBefore = period.found ? homogeneity(img, period.periodPx, P) : kNaN, hAfter = period.found ? homogeneity(warped, period.periodPx, P) : kNaN;
         if (period.found) { report.hasHomogeneity = true; report.homogeneity = {roundTo(hBefore, 3), roundTo(hAfter, 3)}; }
@@ -1159,10 +1030,10 @@ inline Result rectifyOrtho(const Rgba& img, double pixelM, const Params& P, cons
             image = std::move(warped);
             if (occluded) res.occluded = applyWarpMask(*occluded, W, H, warp, scale);
             report.warp.kept = true;
-            report.warp.why = "lines " + jsNumberString(roundTo(before, 2)) + " -> " + jsNumberString(roundTo(after, 2)) + " px from straight (" + jsNumberString(jsRound(gain * 100)) + "% straighter)" +
+            report.warp.why = "lines " + jsNumberString(roundTo(before, 2)) + " -> " + jsNumberString(roundTo(after, 2)) + " px from straight (" + jsNumberString(js::round(gain * 100)) + "% straighter)" +
                 (period.found ? ", lattice spread " + jsNumberString(roundTo(hBefore, 2)) + " -> " + jsNumberString(roundTo(hAfter, 2)) : "");
         } else {
-            report.warp.why = gain < P.minGain ? "the warp straightened the lines by only " + jsNumberString(jsRound(gain * 100)) + "% (at least " + jsNumberString(jsRound(P.minGain * 100)) + "% needed)"
+            report.warp.why = gain < P.minGain ? "the warp straightened the lines by only " + jsNumberString(js::round(gain * 100)) + "% (at least " + jsNumberString(js::round(P.minGain * 100)) + "% needed)"
                                                : "the warp made the lattice less regular " + spread;
         }
     }

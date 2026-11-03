@@ -17,11 +17,12 @@
  * Parallel where the TypeScript's order allows it, with the same result: the loops (the TypeScript's stack runs each
  * loop's splits before the next loop, so loops are independent and their caps are numbered in that order), the caps'
  * rays, the drop tests and the pieces each on the pool; every sum the report rounds is added in the TypeScript's order.
- * Floating point as JavaScript evaluates it (no fused multiply-add, Math.hypot's compensated sum).
+ * Floating point as JavaScript evaluates it (no fused multiply-add; Math.round and Math.hypot from scratchbox_js_math.hpp).
  */
 
 #pragma once
 
+#include "scratchbox_js_math.hpp"
 #include "scratchbox_thread_pool.hpp"
 
 #include <algorithm>
@@ -81,23 +82,8 @@ struct Result { std::vector<std::array<V3, 3>> out; std::vector<Piece> pieces; R
 
 namespace detail {
 
-inline double jsRound(double x) { const double f = std::floor(x); return x - f >= 0.5 ? f + 1 : f; }
-/** Math.hypot: the arguments over their largest, squared with a compensated sum, its root times the largest. */
-inline double hypot(std::initializer_list<double> xs) {
-    double mx = 0;
-    bool nan = false;
-    for (double v : xs) { if (std::isnan(v)) nan = true; else mx = std::max(mx, std::fabs(v)); }
-    if (mx == std::numeric_limits<double>::infinity()) return mx;
-    if (nan) return std::numeric_limits<double>::quiet_NaN();
-    if (mx == 0) return 0;
-    double sum = 0, comp = 0;
-    for (double v : xs) {
-        const double n = std::fabs(v) / mx, summand = n * n - comp, prelim = sum + summand;
-        comp = (prelim - sum) - summand;
-        sum = prelim;
-    }
-    return std::sqrt(sum) * mx;
-}
+/** Math.round and Math.hypot: scratchbox_js_math.hpp. */
+using scratchbox::js::hypot;
 inline V3 sub3(const V3& a, const V3& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
 inline V3 cross3(const V3& a, const V3& b) { return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]}; }
 inline double dot(const V3& a, const V3& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
@@ -608,7 +594,7 @@ inline Result fillOpenLoops(const std::vector<Prim>& prims, const std::vector<st
     {
         std::unordered_map<std::array<int64_t, 3>, int, Int3Hash> id;
         const auto q = [&](double x, double y, double z) {
-            const std::array<int64_t, 3> k{static_cast<int64_t>(jsRound(x / P.weldM)), static_cast<int64_t>(jsRound(y / P.weldM)), static_cast<int64_t>(jsRound(z / P.weldM))};
+            const std::array<int64_t, 3> k{static_cast<int64_t>(js::round(x / P.weldM)), static_cast<int64_t>(js::round(y / P.weldM)), static_cast<int64_t>(js::round(z / P.weldM))};
             const auto [it, fresh] = id.emplace(k, static_cast<int>(pos.size()));
             if (fresh) pos.push_back({x, y, z});
             return it->second;
@@ -944,9 +930,9 @@ inline Result fillOpenLoops(const std::vector<Prim>& prims, const std::vector<st
         out.resize(kept);
         addedFaces.resize(kept);
     }
-    report.droppedDoubledM2 = jsRound(report.droppedDoubledM2);
-    report.droppedCoveredM2 = jsRound(report.droppedCoveredM2);
-    report.refusedCapM2 = jsRound(report.refusedCapM2);
+    report.droppedDoubledM2 = js::round(report.droppedDoubledM2);
+    report.droppedCoveredM2 = js::round(report.droppedCoveredM2);
+    report.refusedCapM2 = js::round(report.refusedCapM2);
     // the textured twin judges the fill in pieces of at most pieceM: a piece lying over a surface already there is left out
     {
         const SurfaceProbe overSurface(pos, tris, nullptr, P.skinM, 1, out);
@@ -986,7 +972,7 @@ inline Result fillOpenLoops(const std::vector<Prim>& prims, const std::vector<st
             for (auto& pc : pp.pieces) res.pieces.push_back(pc);
         }
     }
-    report.skinHiddenM2 = jsRound(report.skinHiddenM2);
+    report.skinHiddenM2 = js::round(report.skinHiddenM2);
     // the edges counted again with the fill: every edge's count from the scan, plus the fill's
     for (const auto& f : addedFaces) for (int k = 0; k < 3; ++k) {
         const uint64_t e = ekey(f[k], f[(k + 1) % 3]);
@@ -1002,7 +988,7 @@ inline Result fillOpenLoops(const std::vector<Prim>& prims, const std::vector<st
         const double ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
         report.addedAreaM2 += 0.5 * hypot({uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx});
     }
-    report.addedAreaM2 = jsRound(report.addedAreaM2);
+    report.addedAreaM2 = js::round(report.addedAreaM2);
     res.out = std::move(out);
     return res;
 }

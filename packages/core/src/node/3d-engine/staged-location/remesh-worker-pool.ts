@@ -11,7 +11,7 @@
  * The remesh steps on worker threads (remesh-worker.ts), off the server's main thread and each run in a fresh heap.
  *
  * - runRemeshJob: one step (the wall grammar, the wall sheets, the polish) on a thread of its own, retired after it.
- * - runRemeshJobs: many jobs (one facade's window fit each, when SCRATCHBOX_K_NATIVE_POLISH=0 keeps the window fit in
+ * - runRemeshJobs: many jobs (one facade's window fit each, when SCRATCHBOX_K_NATIVE without window-fit keeps the window fit in
  *   TypeScript; natively it is one process on a thread pool of its own, remesh-polish-native.ts) on up to `threads`
  *   threads, each thread taking the next job as it finishes one; results come back in job order.
  * - The stage's AbortSignal terminates the threads and rejects at once; a thread that dies or a job that throws rejects

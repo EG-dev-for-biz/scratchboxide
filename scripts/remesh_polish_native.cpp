@@ -9,17 +9,18 @@
 
 /**
  * CLI of pipeline K's remesh-polish steps run natively on a fixed thread pool (packages/core/src/node/3d-engine/
- * staged-location/remesh-polish-native.ts drives it; SCRATCHBOX_K_NATIVE_POLISH=0 keeps the TypeScript instead). Data
+ * staged-location/remesh-polish-native.ts drives it; SCRATCHBOX_K_NATIVE without window-fit or infill keeps that step in TypeScript). Data
  * arrives on stdin as raw little-endian buffers, a header then arrays, never PNG:
  *
  *   remesh_polish_native window-fit <threads>
- *     in:  "SBWF" u32 version, u32 nParams, f64[nParams] (scratchbox_window_fit.hpp Params), then per facade
+ *     in:  "SBWF" u32 version (2), u32 nParams, f64[nParams] (scratchbox_window_fit.hpp Params), u32 256, f64[256] each
+ *          sRGB code's linear value as JavaScript works it out (window-fit.ts srgb8LinearTable), then per facade
  *          u32 1, i32 slot, u32 W, u32 H, f64 pixel, f64 orthoSMin, f64 orthoTMax, f64 texel, u8 rgba[W*H*4],
  *          u8 unread[W*H]; u32 0 ends. Facades are fitted as they arrive, one a task.
  *     out: one JSON line per facade as it finishes (window_fit::fitJson), {"slot":n,"error":"..."} when one throws.
  *
  *   remesh_polish_native fill <threads>
- *     in:  "SBFL" u32 version, u32 nParams, f64[nParams] (scratchbox_open_loop_fill.hpp Params), u32 nLoops, per loop
+ *     in:  "SBFL" u32 version (1), u32 nParams, f64[nParams] (scratchbox_open_loop_fill.hpp Params), u32 nLoops, per loop
  *          u32 n, f64[n*2] (the footprint, plan x z), u32 nPrims, per primitive i32 wall, u32 nVerts, f64[nVerts*3],
  *          u32 indexed, u32 nIdx, u32[nIdx].
  *     out: u32 jsonLen, the report's JSON, u32 nOut, f64[nOut*9] (the fill's triangles), u32 nPieces, per piece
@@ -61,11 +62,11 @@ void writeExact(const void* src, size_t n) { if (n && std::fwrite(src, 1, n, std
 template <class T>
 void writeOne(T v) { writeExact(&v, sizeof v); }
 
-void expectMagic(const char* magic) {
+void expectMagic(const char* magic, uint32_t version) {
     char m[4];
     readExact(m, 4);
     if (std::memcmp(m, magic, 4) != 0) throw std::runtime_error(std::string("expected the ") + magic + " header");
-    if (readOne<uint32_t>() != 1) throw std::runtime_error("unknown input version");
+    if (readOne<uint32_t>() != version) throw std::runtime_error("unknown input version");
 }
 
 std::string escapeJson(const std::string& s) {
@@ -79,8 +80,11 @@ std::string escapeJson(const std::string& s) {
 }
 
 int windowFit(unsigned threads) {
-    expectMagic("SBWF");
+    expectMagic("SBWF", 2);
     const auto params = window_fit::Params::from(readDoubles(readOne<uint32_t>()));
+    const auto linear = readDoubles(readOne<uint32_t>());
+    if (linear.size() != 256) throw std::runtime_error("the sRGB table must hold 256 values");
+    window_fit::detail::setSrgb8Linear(linear.data());
     FixedThreadPool pool(threads);
     std::mutex outM;
     const auto emit = [&](const std::string& line) {
@@ -116,7 +120,7 @@ int windowFit(unsigned threads) {
 }
 
 int fill(unsigned threads) {
-    expectMagic("SBFL");
+    expectMagic("SBFL", 1);
     const auto params = open_loop_fill::Params::from(readDoubles(readOne<uint32_t>()));
     std::vector<std::vector<std::array<double, 2>>> footprint(readOne<uint32_t>());
     for (auto& loop : footprint) {

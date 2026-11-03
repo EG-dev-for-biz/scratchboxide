@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include "scratchbox_js_math.hpp"
 #include "scratchbox_photometric_relief.hpp"
 #include "scratchbox_thread_pool.hpp"
 
@@ -165,25 +166,12 @@ struct FitResult {
 
 namespace js {
 
-inline double round(double x) { const double f = std::floor(x); return x - f >= 0.5 ? f + 1 : f; }
+/** Math.round, Math.hypot and Math.cbrt: scratchbox_js_math.hpp. */
+using ::scratchbox::js::round;
+using ::scratchbox::js::hypot;
+using ::scratchbox::js::cbrt;
 /** Python's round(): halves to even. */
 inline double pyRound(double x) { const double f = std::floor(x), d = x - f; return d > 0.5 ? f + 1 : d < 0.5 ? f : std::fmod(f, 2.0) == 0 ? f : f + 1; }
-/** Math.hypot: the arguments over their largest, squared with a compensated sum, its root times the largest. */
-inline double hypot(std::initializer_list<double> xs) {
-    double mx = 0;
-    bool nan = false;
-    for (double v : xs) { if (std::isnan(v)) nan = true; else mx = std::max(mx, std::fabs(v)); }
-    if (mx == std::numeric_limits<double>::infinity()) return mx;
-    if (nan) return std::numeric_limits<double>::quiet_NaN();
-    if (mx == 0) return 0;
-    double sum = 0, comp = 0;
-    for (double v : xs) {
-        const double n = std::fabs(v) / mx, summand = n * n - comp, prelim = sum + summand;
-        comp = (prelim - sum) - summand;
-        sum = prelim;
-    }
-    return std::sqrt(sum) * mx;
-}
 /** A number as JavaScript's String(n) writes it. */
 inline std::string str(double v) {
     if (std::isnan(v)) return "NaN";
@@ -916,16 +904,17 @@ inline SplitBays splitBays(const Ctx& c, const std::vector<Rect>& rects) {
     return {out, nf, static_cast<int>(bays.size())};
 }
 
-/** sRGB 8-bit to CIELAB (D65). */
-struct LabTable {
-    double lin[256];
-    LabTable() { for (int v = 0; v < 256; ++v) { const double c = v / 255.0; lin[v] = c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); } }
-};
-inline const LabTable& labTable() { static const LabTable t; return t; }
+/**
+ * sRGB 8-bit to CIELAB (D65), as window-fit.ts labOf8. Each code's linear value is a pow, so it is the caller's, worked
+ * out in JavaScript (window-fit.ts srgb8LinearTable) and set before any fit (setSrgb8Linear); the cube root is V8's.
+ */
+struct LabTable { double lin[256]; };
+inline LabTable& labTable() { static LabTable t; return t; }
+inline void setSrgb8Linear(const double* lin) { std::memcpy(labTable().lin, lin, sizeof labTable().lin); }
 inline std::array<double, 3> labOf8(int r, int g, int b) {
     const auto& T = labTable();
     const double R = T.lin[r], G = T.lin[g], B = T.lin[b];
-    const auto f = [](double t) { return t > 0.008856 ? std::cbrt(t) : 7.787 * t + 16.0 / 116; };
+    const auto f = [](double t) { return t > 0.008856 ? js::cbrt(t) : 7.787 * t + 16.0 / 116; };
     const double x = f((0.4124 * R + 0.3576 * G + 0.1805 * B) / 0.95047), y = f(0.2126 * R + 0.7152 * G + 0.0722 * B), z = f((0.0193 * R + 0.1192 * G + 0.9505 * B) / 1.08883);
     return {116 * y - 16, 500 * (x - y), 200 * (y - z)};
 }

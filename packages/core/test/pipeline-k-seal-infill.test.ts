@@ -95,7 +95,7 @@ function sealOf(bytes: Buffer) {
 
 const inHole = (t: { p: V[] }) => t.p.every(v => v[2] === 0 && v[0] >= 4 && v[0] <= 6 && v[1] >= 4 && v[1] <= 6);
 
-// the fill runs natively unless SCRATCHBOX_K_NATIVE_POLISH=0: its binary built first (remesh-polish-native.ts)
+// the fill runs natively unless SCRATCHBOX_K_NATIVE leaves `infill` out: its binary built first (remesh-polish-native.ts)
 beforeAll(async () => { await ensureRemeshPolishBinary(); }, 900_000);
 
 describe('pipeline K seal: fill textured as the surface it closes', () => {

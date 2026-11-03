@@ -21,12 +21,14 @@
  *  - planRebuilt / planScan: planMaterialJob's two branches (markRects, paneIdsOf, stonePanes over classify,
  *    storeyPitchOf, shrinkTile, featherWeights, forTexelsOf and the maps they write).
  *
- * Parity rules: a JS number is a double, a Float32Array element a float (stored rounded), a Uint8Array/Int32Array store
- * wraps as ToUint8/ToInt32, Math.round rounds half up (jsRound), Math.hypot is V8's normalised Kahan sum (jsHypot3),
- * Math.cbrt is fdlibm's (V8's ieee754::cbrt), and no multiply-add is fused (the pragma below), since JS never fuses.
+ * Parity rules: a JS number is a double, a Float32Array element a float (stored rounded); a Uint8Array/Int32Array store
+ * (ToUint8/ToInt32), Math.round, Math.hypot and Math.cbrt are V8's, from scratchbox_js_math.hpp; and no multiply-add is
+ * fused outside it (the pragma below), since JS never fuses.
  */
 
 #pragma STDC FP_CONTRACT OFF
+
+#include "scratchbox_js_math.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -38,88 +40,10 @@
 
 namespace scratchbox::material_regions {
 
-// ---- JS number semantics ----
+// ---- JS number semantics: scratchbox_js_math.hpp ----
 
-/** Math.round: the nearest integer, halves up (exact for every double, unlike floor(x + 0.5) at 0.49999999999999994). */
-inline double jsRound(double x) {
-    if (!std::isfinite(x)) return x;
-    const double r = std::ceil(x);
-    return (r - 0.5 > x) ? r - 1.0 : r;
-}
-
-/** ToUint32. */
-inline uint32_t toUint32(double x) {
-    if (!std::isfinite(x)) return 0;
-    double m = std::fmod(std::trunc(x), 4294967296.0);
-    if (m < 0) m += 4294967296.0;
-    return static_cast<uint32_t>(m);
-}
-inline int32_t toInt32(double x) { return static_cast<int32_t>(toUint32(x)); }
-/** A Uint8Array store (ToUint8). */
-inline uint8_t toUint8(double x) { return static_cast<uint8_t>(toUint32(x) & 0xff); }
-
-/** Math.hypot of three numbers as V8 computes it: scaled by the largest, squares summed with Kahan compensation. */
-inline double jsHypot3(double a, double b, double c) {
-    const double v[3] = {a, b, c};
-    double abs[3] = {0, 0, 0}, max = 0;
-    bool nan = false;
-    for (int i = 0; i < 3; i++) {
-        if (std::isnan(v[i])) { nan = true; continue; }
-        abs[i] = std::fabs(v[i]);
-        if (abs[i] > max) max = abs[i];
-    }
-    if (max == INFINITY) return INFINITY;
-    if (nan) return NAN;
-    if (max == 0) return 0;
-    double sum = 0, comp = 0;
-    for (int i = 0; i < 3; i++) {
-        const double n = abs[i] / max, summand = n * n - comp, pre = sum + summand;
-        comp = (pre - sum) - summand;
-        sum = pre;
-    }
-    return std::sqrt(sum) * max;
-}
 /** `Math.hypot(...) || 1`. */
-inline double hypotOr1(double a, double b, double c) { const double h = jsHypot3(a, b, c); return (h == 0 || std::isnan(h)) ? 1.0 : h; }
-
-/** Math.cbrt as V8 computes it (fdlibm s_cbrt.c, V8's ieee754::cbrt). */
-inline double jsCbrt(double x) {
-    static const uint32_t B1 = 715094163, B2 = 696219795;
-    static const double P0 = 1.87595182427177009643, P1 = -1.88497979543377169875, P2 = 1.621429720105354466140,
-                        P3 = -0.758397934778766047437, P4 = 0.145996192886612446982;
-    uint64_t bits;
-    std::memcpy(&bits, &x, 8);
-    uint32_t hx = static_cast<uint32_t>(bits >> 32);
-    const uint32_t low = static_cast<uint32_t>(bits);
-    const uint32_t sign = hx & 0x80000000u;
-    hx ^= sign;
-    if (hx >= 0x7ff00000u) return x + x;
-    double t = 0.0;
-    auto words = [](uint32_t hi, uint32_t lo) { const uint64_t b = (static_cast<uint64_t>(hi) << 32) | lo; double d; std::memcpy(&d, &b, 8); return d; };
-    if (hx < 0x00100000u) {
-        if ((hx | low) == 0) return x;
-        t = words(0x43500000u, 0);
-        t *= x;
-        uint64_t tb;
-        std::memcpy(&tb, &t, 8);
-        const uint32_t high = static_cast<uint32_t>(tb >> 32);
-        t = words(sign | ((high & 0x7fffffffu) / 3 + B2), 0);
-    } else {
-        t = words(sign | (hx / 3 + B1), 0);
-    }
-    double r = (t * t) * (t / x);
-    t = t * ((P0 + r * (P1 + r * P2)) + ((r * r) * r) * (P3 + r * P4));
-    uint64_t ub;
-    std::memcpy(&ub, &t, 8);
-    ub = (ub + 0x80000000ull) & 0xffffffffc0000000ull;
-    std::memcpy(&t, &ub, 8);
-    const double s = t * t;
-    r = x / s;
-    const double w = t + t;
-    r = (r - t) / (w + r);
-    t = t + t * r;
-    return t;
-}
+inline double hypotOr1(double a, double b, double c) { const double h = js::hypot({a, b, c}); return (h == 0 || std::isnan(h)) ? 1.0 : h; }
 
 // ---- colour ----
 
@@ -135,7 +59,7 @@ inline const Srgb8ToLinear& srgb8ToLinear() { static const Srgb8ToLinear s; retu
 /** linearRgbToLab (texture-library-index.ts). */
 inline void linearRgbToLab(double r, double g, double b, double out[3]) {
     const double X = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047, Y = 0.2126 * r + 0.7152 * g + 0.0722 * b, Z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883;
-    auto f = [](double t) { return t > 0.008856 ? jsCbrt(t) : 7.787 * t + 16.0 / 116.0; };
+    auto f = [](double t) { return t > 0.008856 ? js::cbrt(t) : 7.787 * t + 16.0 / 116.0; };
     const double fX = f(X), fY = f(Y), fZ = f(Z);
     out[0] = 116 * fY - 16; out[1] = 500 * (fX - fY); out[2] = 200 * (fY - fZ);
 }
@@ -304,8 +228,8 @@ inline std::vector<uint8_t> classify(const Image& img, const std::vector<double>
 /** A rect's texel span (Math.round of its UVs, clamped). */
 struct Span { int x0, x1, y0, y1; };
 inline Span spanOf(const std::vector<double>& rects, size_t i, int W, int H) {
-    return { static_cast<int>(std::max(0.0, jsRound(rects[i] * W))), static_cast<int>(std::min(static_cast<double>(W), jsRound(rects[i + 2] * W))),
-             static_cast<int>(std::max(0.0, jsRound(rects[i + 1] * H))), static_cast<int>(std::min(static_cast<double>(H), jsRound(rects[i + 3] * H))) };
+    return { static_cast<int>(std::max(0.0, js::round(rects[i] * W))), static_cast<int>(std::min(static_cast<double>(W), js::round(rects[i + 2] * W))),
+             static_cast<int>(std::max(0.0, js::round(rects[i + 1] * H))), static_cast<int>(std::min(static_cast<double>(H), js::round(rects[i + 3] * H))) };
 }
 
 /** markRects with value 1: marks the rects' unmarked texels (within `inside` when given); returns how many. */
@@ -371,7 +295,7 @@ inline Storey storeyPitchOf(const std::vector<double>& rects, int W, int H) {
 }
 
 /** paneSeed: 1 + (Math.imul(pane + 1, 2654435761) >>> 0) % 254. */
-inline uint8_t paneSeed(double pane) { return static_cast<uint8_t>(1 + (toUint32(pane + 1) * 2654435761u) % 254u); }
+inline uint8_t paneSeed(double pane) { return static_cast<uint8_t>(1 + (js::toUint32(pane + 1) * 2654435761u) % 254u); }
 
 /** shrinkTile: a library map box-filtered to tw x th texels (floats; a normal map renormalised). */
 inline std::vector<float> shrinkTile(const Image& src, int tw, int th, bool normal) {
@@ -498,7 +422,7 @@ inline RebuiltResult planRebuilt(const RebuiltJob& job, const PlanContext& ctx) 
     struct Tile { int tw, th; std::vector<float> n, o; };
     auto tileOf = [&](const RegionSet& s) {
         Tile t;
-        t.tw = static_cast<int>(std::max(2.0, jsRound(s.realSizeX / texelM))); t.th = static_cast<int>(std::max(2.0, jsRound(s.realSizeY / texelM)));
+        t.tw = static_cast<int>(std::max(2.0, js::round(s.realSizeX / texelM))); t.th = static_cast<int>(std::max(2.0, js::round(s.realSizeY / texelM)));
         t.n = shrinkTile(s.normal, t.tw, t.th, true); t.o = shrinkTile(s.orm, t.tw, t.th, false);
         return t;
     };
@@ -508,8 +432,8 @@ inline RebuiltResult planRebuilt(const RebuiltJob& job, const PlanContext& ctx) 
     const auto fw = featherWeights(pane, W, H, ctx.P.glassFeatherM / texelM);
     r.orm.assign(N * 4, 0); r.normal.assign(N * 4, 0); r.params.assign(N * 4, 0);
     auto write = [&](size_t k, double rough, double glassWeight, double seed) {
-        r.orm[k * 4] = 255; r.orm[k * 4 + 1] = toUint8(jsRound(rough * 255)); r.orm[k * 4 + 2] = 0; r.orm[k * 4 + 3] = 255;
-        r.params[k * 4] = toUint8(glassWeight); r.params[k * 4 + 2] = 0; r.params[k * 4 + 3] = toUint8(seed);
+        r.orm[k * 4] = 255; r.orm[k * 4 + 1] = js::toUint8(js::round(rough * 255)); r.orm[k * 4 + 2] = 0; r.orm[k * 4 + 3] = 255;
+        r.params[k * 4] = js::toUint8(glassWeight); r.params[k * 4 + 2] = 0; r.params[k * 4 + 3] = js::toUint8(seed);
         r.texels++;
         if (glassWeight != 0) r.glass++;
     };
@@ -520,16 +444,16 @@ inline RebuiltResult planRebuilt(const RebuiltJob& job, const PlanContext& ctx) 
         const double a = fw[k];
         if (pane[k]) {
             const double o1 = t.o[j + 1];
-            write(k, o1 + (ctx.P.glassRoughness - o1) * a, std::max(1.0, jsRound(ctx.P.paneGlassWeight * a)), pane[k]);
+            write(k, o1 + (ctx.P.glassRoughness - o1) * a, std::max(1.0, js::round(ctx.P.paneGlassWeight * a)), pane[k]);
             double n[3];
             for (int c = 0; c < 3; c++) n[c] = (static_cast<double>(t.n[j + c]) * 2 - 1) * (1 - a) + (c == 2 ? a : 0);
             const double l = hypotOr1(n[0], n[1], n[2]);
-            for (int c = 0; c < 3; c++) r.normal[k * 4 + c] = toUint8(jsRound(((n[c] / l) * 0.5 + 0.5) * 255));
+            for (int c = 0; c < 3; c++) r.normal[k * 4 + c] = js::toUint8(js::round(((n[c] / l) * 0.5 + 0.5) * 255));
             r.normal[k * 4 + 3] = 255;
             continue;
         }
         write(k, t.o[j + 1], 0, 255);
-        for (int c = 0; c < 3; c++) r.normal[k * 4 + c] = toUint8(jsRound(static_cast<double>(t.n[j + c]) * 255));
+        for (int c = 0; c < 3; c++) r.normal[k * 4 + c] = js::toUint8(js::round(static_cast<double>(t.n[j + c]) * 255));
         r.normal[k * 4 + 3] = 255;
     }
     r.paneN = paneN;
@@ -574,7 +498,7 @@ inline ScanResult planScan(const ScanJob& job, const std::vector<PlaneRaster>& p
             if (x < 0 || y < 0 || x >= b.width || y >= b.height) return;
             const size_t j = static_cast<size_t>(y * b.width + x);
             if (b.win[j]) win[k] = 1;
-            if (b.bay[j]) { bayId[k] = b.bay[j]; storeyOf[k] = b.storey.ok ? toInt32(std::floor((y - b.storey.phase) / b.storey.pitch)) : 0; if (b.panedBays.count(b.bay[j])) paned[k] = 1; }
+            if (b.bay[j]) { bayId[k] = b.bay[j]; storeyOf[k] = b.storey.ok ? js::toInt32(std::floor((y - b.storey.phase) / b.storey.pitch)) : 0; if (b.panedBays.count(b.bay[j])) paned[k] = 1; }
             if (b.pane[j]) { onPane[k] = 1; paneAt[k] = b.pane[j]; }
         });
     }
@@ -601,10 +525,10 @@ inline ScanResult planScan(const ScanJob& job, const std::vector<PlaneRaster>& p
     r.orm.assign(N * 4, 0); r.params.assign(N * 4, 0);
     for (size_t k = 0; k < N; k++) {
         const double rough = pane[k] || win[k] || bayId[k] ? ctx.setMeanG[frameClass] : ctx.wallMeanG;
-        const double gw = pane[k] ? std::max(1.0, jsRound(ctx.P.paneGlassWeight * fw[k])) : 0;
+        const double gw = pane[k] ? std::max(1.0, js::round(ctx.P.paneGlassWeight * fw[k])) : 0;
         const double v = pane[k] ? rough + (ctx.P.glassRoughness - rough) * fw[k] : rough;
-        r.orm[k * 4] = 255; r.orm[k * 4 + 1] = toUint8(jsRound(v * 255)); r.orm[k * 4 + 2] = 0; r.orm[k * 4 + 3] = 255;
-        r.params[k * 4] = toUint8(gw); r.params[k * 4 + 2] = 0; r.params[k * 4 + 3] = pane[k] ? pane[k] : 255;
+        r.orm[k * 4] = 255; r.orm[k * 4 + 1] = js::toUint8(js::round(v * 255)); r.orm[k * 4 + 2] = 0; r.orm[k * 4 + 3] = 255;
+        r.params[k * 4] = js::toUint8(gw); r.params[k * 4 + 2] = 0; r.params[k * 4 + 3] = pane[k] ? pane[k] : 255;
         r.texels++;
         if (gw != 0) r.glass++;
         r.onPlane += on[k]; r.inWindows += win[k]; if (pane[k]) { r.inPanes++; r.anyGlass = true; }

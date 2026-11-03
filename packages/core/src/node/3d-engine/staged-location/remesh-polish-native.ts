@@ -11,7 +11,8 @@
  * Pipeline K's remesh-polish steps in native C++20 on a fixed thread pool (scripts/remesh_polish_native.cpp over
  * scratchbox_window_fit.hpp and scratchbox_open_loop_fill.hpp): the window fit (window-fit.ts fitOrthoFacadesNative, the
  * photometric relief read in the same process, one facade a task) and the infill (pipeline-k/lattice-stitch.ts
- * fillOpenLoops). Their results are the TypeScript's, which stays behind SCRATCHBOX_K_NATIVE_POLISH=0 for comparison.
+ * fillOpenLoops). Their results are the TypeScript's, which runs when SCRATCHBOX_K_NATIVE leaves `window-fit` or `infill`
+ * out (pipeline-k/native/native-switch.ts; both native by default).
  *
  * Data goes over stdin as raw little-endian buffers (a header, then arrays), never PNG; the window fit's facades are
  * streamed as they are decoded and fitted as they arrive. The pool's size is the caller's: a chunked district's builds
@@ -28,11 +29,7 @@ import * as path from 'path';
 import type { Vec2 } from '../../../common/spatial/staged-location-contracts';
 import { compileNativeCached, defaultNativeFlags, nativeBuildCacheRoot, nativeBuildEntryBinary, nativeBuildKey, NativeBuildError, type NativeCompileSpec } from '../native-build-cache';
 import { findTileRefineRepoRoot } from '../tile-refine-service';
-
-/** The native polish steps are on unless SCRATCHBOX_K_NATIVE_POLISH=0. */
-export function nativePolishEnabled(): boolean {
-    return process.env.SCRATCHBOX_K_NATIVE_POLISH?.trim() !== '0';
-}
+import { kNative } from './pipeline-k/native/native-switch';
 
 /** The pool's size when the caller names none: every core. */
 export function nativePolishThreads(): number {
@@ -63,14 +60,14 @@ export function ensureRemeshPolishBinary(repoRoot = findTileRefineRepoRoot()): P
 
 /** The polish input's native steps built before it runs: the infill (or seal) runs synchronously and cannot compile. */
 export async function ensureNativePolishFor(input: { infill?: boolean; seal?: boolean }): Promise<void> {
-    if ((input.infill || input.seal) && nativePolishEnabled()) await ensureRemeshPolishBinary();
+    if ((input.infill || input.seal) && kNative('infill')) await ensureRemeshPolishBinary();
 }
 
 /** The binary already in the native build cache for this source, found synchronously; throws when it was never built. */
 export function remeshPolishBinarySync(repoRoot = findTileRefineRepoRoot()): string {
     if (process.env.SCRATCHBOX_REMESH_POLISH_BIN) return process.env.SCRATCHBOX_REMESH_POLISH_BIN;
     const bin = nativeBuildEntryBinary(nativeBuildCacheRoot(), nativeBuildKey(compileSpec(repoRoot)).key);
-    if (!fs.existsSync(bin)) throw new Error('the native remesh polish is not built yet: await ensureRemeshPolishBinary() before the polish (or set SCRATCHBOX_K_NATIVE_POLISH=0 for the TypeScript)');
+    if (!fs.existsSync(bin)) throw new Error('the native remesh polish is not built yet: await ensureRemeshPolishBinary() before the polish (or leave `infill` out of SCRATCHBOX_K_NATIVE for the TypeScript)');
     return bin;
 }
 
@@ -100,7 +97,7 @@ export type NativeFacadeFit = { slot: number; ms: number; rects: Array<[number, 
  * Fits the facades natively, `threads` at once, each handed back (onFit) as it finishes. The facades are written to the
  * driver as the iterable yields them, so decoding the next overlaps fitting the last.
  */
-export async function runNativeWindowFit(params: number[], facades: AsyncIterable<NativeFacadeInput> | Iterable<NativeFacadeInput>, opts: { threads: number; signal?: AbortSignal; onFit: (fit: NativeFacadeFit) => void }): Promise<void> {
+export async function runNativeWindowFit(params: number[], srgb8Linear: Float64Array, facades: AsyncIterable<NativeFacadeInput> | Iterable<NativeFacadeInput>, opts: { threads: number; signal?: AbortSignal; onFit: (fit: NativeFacadeFit) => void }): Promise<void> {
     const bin = await ensureRemeshPolishBinary();
     if (opts.signal?.aborted) throw opts.signal.reason ?? new Error('aborted');
     const child = spawn(bin, ['window-fit', String(Math.max(1, Math.floor(opts.threads)))], { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -128,7 +125,7 @@ export async function runNativeWindowFit(params: number[], facades: AsyncIterabl
     const write = (b: Buffer) => Promise.race([new Promise<void>(resolve => { if (child.stdin.write(b)) resolve(); else child.stdin.once('drain', resolve); }), exited]);
     try {
         const w = new Writer();
-        await write(w.magic('SBWF').u32(1).u32(params.length).f64s(params).take());
+        await write(w.magic('SBWF').u32(2).u32(params.length).f64s(params).u32(srgb8Linear.length).f64s(srgb8Linear).take());
         for await (const f of facades) {
             if (opts.signal?.aborted || child.exitCode !== null) break;
             if (f.rgba.length !== f.width * f.height * 4 || f.unread.length !== f.width * f.height) throw new Error(`facade ${f.slot}: rgba or mask does not match ${f.width} x ${f.height}`);

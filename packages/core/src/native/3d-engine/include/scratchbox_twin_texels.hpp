@@ -34,11 +34,13 @@
  * -ffp-contract=off: a fused multiply-add rounds once where JavaScript rounds twice. What JavaScript computes with its
  * own transcendental functions and a threshold then reads comes from the caller, worked out there: the sun frames
  * (cos, sin, tan), the log colour table, and the 8-bit sRGB encoder's thresholds (the least linear value of each
- * code). Left here are exp and pow ahead of that encoder, within an ulp of V8's: a texel's code can differ only when
- * its linear value lies within an ulp of a code's threshold.
+ * code). exp is V8's own (scratchbox_js_math.hpp); left here is the lift's pow ahead of that encoder, within an ulp of
+ * V8's: a texel's code can differ only when its linear value lies within an ulp of a code's threshold.
  *
  * Nothing here knows what a roof, a building or a photo shows: maps, cells and texels are measurements and indices.
  */
+
+#include "scratchbox_js_math.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -59,12 +61,6 @@ namespace twin_texels {
 
 /** A texel's surface (texture-harmonize.ts surfaceClassMasks): no triangle uses it, a wall, a roof. */
 constexpr uint8_t TEXEL_NONE = 0, TEXEL_WALL = 1, TEXEL_ROOF = 2;
-
-/** JavaScript's Math.round: the nearest integer, a half up. */
-inline double jsRound(double x) {
-    const double f = std::floor(x);
-    return x - f >= 0.5 ? f + 1.0 : f;
-}
 
 /**
  * A fixed set of threads, made once and reused for every parallel loop. run(count, fn) calls fn(i, worker) for every
@@ -140,21 +136,8 @@ private:
     bool stop_ = false;
 };
 
-/**
- * 8-bit sRGB from linear light: the code is how many of the 255 thresholds the value reaches, threshold k - 1 being the
- * least linear value whose code (Math.round of linearToSrgb255) is at least k, as the caller found it.
- */
-struct Srgb8Encoder {
-    double t[255];
-    uint8_t encode(double x) const {
-        int lo = 0, hi = 255;
-        while (lo < hi) {
-            const int mid = (lo + hi) >> 1;
-            if (t[mid] <= x) lo = mid + 1; else hi = mid;
-        }
-        return static_cast<uint8_t>(lo);
-    }
-};
+/** The 8-bit sRGB encoder from the caller's thresholds: scratchbox_js_math.hpp. */
+using js::Srgb8Encoder;
 
 /** A sun's map frame as roof-shadow.ts sunFrame works it out: toward the sun, across it, the third axis; and the slope term. */
 struct SunFrame {
@@ -514,11 +497,11 @@ private:
                 const double* ratio;
                 double lit, logLum;
                 if (sun) {
-                    auto it = plan.terraceLit.find(LiftPlan::terraceKey(ph.img, static_cast<int32_t>(jsRound(wy / P.terraceBinM))));
+                    auto it = plan.terraceLit.find(LiftPlan::terraceKey(ph.img, static_cast<int32_t>(js::round(wy / P.terraceBinM))));
                     if (it == plan.terraceLit.end()) continue;
                     ratio = sun->ratio; lit = it->second; logLum = sun->logLum;
                 } else {
-                    auto it = plan.compOfKey.find(LiftPlan::gridKey(static_cast<int32_t>(jsRound(wy / P.terraceBinM)), static_cast<int32_t>(std::floor(wx / P.componentGridM)), static_cast<int32_t>(std::floor(wz / P.componentGridM))));
+                    auto it = plan.compOfKey.find(LiftPlan::gridKey(static_cast<int32_t>(js::round(wy / P.terraceBinM)), static_cast<int32_t>(std::floor(wx / P.componentGridM)), static_cast<int32_t>(std::floor(wz / P.componentGridM))));
                     if (it == plan.compOfKey.end()) continue;
                     const LiftPlan::Comp& c = plan.comps[static_cast<size_t>(it->second)];
                     if (c.sun != sunIndex) continue;
@@ -598,7 +581,7 @@ inline void harmonizeApply(TexelPool& pool, const std::vector<HarmonizePhoto>& p
                 for (int c = 0; c < 3; ++c) {
                     const double* oc = off[c].data();
                     const double o = gg[c] + w00 * oc[k00] + w10 * oc[k10] + w01 * oc[k01] + w11 * oc[k11];
-                    dst[p + static_cast<size_t>(c)] = encoder.encode(static_cast<double>(linear[src[p + static_cast<size_t>(c)]]) * std::exp(o));
+                    dst[p + static_cast<size_t>(c)] = encoder.encode(static_cast<double>(linear[src[p + static_cast<size_t>(c)]]) * js::exp(o));
                 }
                 dst[p + 3] = src[p + 3];
             }

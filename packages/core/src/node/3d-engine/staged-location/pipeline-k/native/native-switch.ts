@@ -8,25 +8,26 @@
  ********************************************************************************/
 
 /**
- * Which of pipeline K's stages run their native kernels (the C++ ports beside this file, each bit for bit the
- * TypeScript's result, held to it by its parity test). On by default: unset, `1`, `all` or `on` runs every port;
- * `SCRATCHBOX_K_NATIVE=0` (or `off`) runs the TypeScript everywhere; a comma list names the ports that run (`rectify`,
- * `roof-shadow`, `regions`, `harmonize`), the rest in TypeScript. Read at each call, so a worker thread sees the same
- * environment as the server. A native build or run that fails is thrown, never answered by the TypeScript path: the
- * switch picks the engine, it is not a fallback.
+ * Which of pipeline K's stages run their native kernels (the C++ ports beside this file and the remesh polish's,
+ * remesh-polish-native.ts; each bit for bit the TypeScript's result, held to it by its parity test). On by default:
+ * unset, `1`, `all` or `on` runs every port; `SCRATCHBOX_K_NATIVE=0` (or `off`) runs the TypeScript everywhere; a comma
+ * list names the ports that run (`rectify`, `window-fit`, `infill`, `roof-shadow`, `regions`, `harmonize`), the rest in
+ * TypeScript. Read at each call, so a worker thread sees the same environment as the server. A native build or run that
+ * fails is thrown, never answered by the TypeScript path: the switch picks the engine, it is not a fallback.
  *
  * The outputs are the same either way, so the stages' versions (and the caches they name) do not change with it.
  *
- * Retired (2026-11-03, never on main; the roof-shadow and harmonise ports' own switches while they were reviewed): a
- * SCRATCHBOX_K_NATIVE_TWIN, SCRATCHBOX_K_NATIVE_TWIN_THREADS or SCRATCHBOX_K_NATIVE_TWIN_BIN still set is not read, and
- * is reported once with its replacement.
+ * Retired (2026-11-03; the ports' own switches while they were reviewed apart): a SCRATCHBOX_K_NATIVE_POLISH
+ * (the window fit and the infill), SCRATCHBOX_K_NATIVE_TWIN, SCRATCHBOX_K_NATIVE_TWIN_THREADS or
+ * SCRATCHBOX_K_NATIVE_TWIN_BIN still set is not read, and is reported once with its replacement.
  */
 
-export const K_NATIVE_STAGES = ['rectify', 'roof-shadow', 'regions', 'harmonize'] as const;
+export const K_NATIVE_STAGES = ['rectify', 'window-fit', 'infill', 'roof-shadow', 'regions', 'harmonize'] as const;
 export type KNativeStage = (typeof K_NATIVE_STAGES)[number];
 
 /** The retired switches and what to set instead. */
 export const RETIRED_K_NATIVE_SWITCHES: Readonly<Record<string, string>> = {
+    SCRATCHBOX_K_NATIVE_POLISH: 'SCRATCHBOX_K_NATIVE (0: every port in TypeScript; or a list without window-fit and infill)',
     SCRATCHBOX_K_NATIVE_TWIN: 'SCRATCHBOX_K_NATIVE (0: every port in TypeScript; or a list without roof-shadow and harmonize)',
     SCRATCHBOX_K_NATIVE_TWIN_THREADS: 'SCRATCHBOX_K_NATIVE_THREADS',
     SCRATCHBOX_K_NATIVE_TWIN_BIN: 'SCRATCHBOX_TWIN_TEXELS_BIN'
