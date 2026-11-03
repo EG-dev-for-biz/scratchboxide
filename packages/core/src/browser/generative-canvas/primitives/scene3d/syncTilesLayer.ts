@@ -7,11 +7,13 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-import { GooglePhotorealistic3DTilesLayer } from '../../services/GooglePhotorealistic3DTilesLayer';
+import { GooglePhotorealistic3DTilesLayer, type TilesLoadFailure } from '../../services/GooglePhotorealistic3DTilesLayer';
 import { TerrainManager } from '../../services/TerrainManager';
+import { resolveMapsApiKey } from '../../services/google-maps-service';
 import type { RendererStack, Scene3DRenderMode, TilesLayerHandle } from './types';
 import type { GroundTileMode } from '../../canvas-types';
 import { checkLiveTilesAnchor, type LiveTilesAnchorInput } from './liveTilesAnchor';
+import { liveTilesWindowRecorder, NO_MAPS_KEY_MESSAGE, type LiveTilesWindowRecorder } from './liveTilesStatus';
 
 export interface TilesLayerInput {
     has3DTiles: boolean;
@@ -28,7 +30,10 @@ export interface TilesLayerCallbacks {
     onTileLoaded?: (terrainManager: TerrainManager) => void;
     /** The live layer exists and is placed at the anchor; it may arrive after syncTilesLayer returns (geoid lookup). */
     onLayerReady?: (tilesLayer: any, terrainManager: TerrainManager) => void;
-    /** The live layer was asked for but cannot be shown, or cannot be placed; the message says why. */
+    /**
+     * The live layer was asked for but cannot be shown (no Maps key, a tileset Google refused or did not answer), or
+     * cannot be placed; the message says why and, where the user can, how to fix it.
+     */
     onError?: (message: string) => void;
     /** A placement problem reported through onError was resolved (the ground was measured after all). */
     onRecovered?: () => void;
@@ -38,6 +43,10 @@ export interface TilesLayerDeps {
     createLayer?: (options: ConstructorParameters<typeof GooglePhotorealistic3DTilesLayer>[0]) => any;
     /** EGM96 undulation (ellipsoid height minus sea level) at a point, in metres. Rejects when it cannot be looked up. */
     fetchGeoidUndulation?: (lat: number, lng: number) => Promise<number>;
+    /** The window's Maps key for the tiles; '' when it has none. Defaults to the key Settings or the build holds. */
+    mapsApiKey?: () => string;
+    /** Where tileset outcomes are recorded for the chat (liveTilesStatus.ts). */
+    windowStatus?: LiveTilesWindowRecorder;
 }
 
 async function fetchGeoidUndulationFromServer(lat: number, lng: number): Promise<number> {
@@ -49,6 +58,22 @@ async function fetchGeoidUndulationFromServer(lat: number, lng: number): Promise
 }
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/** What a failed tiles load means for the user, from the HTTP status Google answered with (none: no answer). */
+export function tilesLoadFailureMessage(failure: TilesLoadFailure): string {
+    const subject = failure.root ? 'Google 3D Tiles did not load' : 'Some Google 3D Tiles did not load';
+    const missing = failure.root ? '' : ', so parts of the place are missing';
+    const status = failure.status;
+    if (status === undefined) return `${subject}${missing}: Google could not be reached (${failure.detail}).`;
+    // Google answers the root tileset 400 for a key that is not valid (API_KEY_INVALID), 403 for one not allowed the
+    // Map Tiles API; the root request carries nothing else that could be invalid.
+    const keyRefused = status === 401 || status === 403 || (status === 400 && failure.root);
+    const why = keyRefused
+        ? 'the Maps key was refused. Check in Settings > MCP Tools > Maps API Key that it is the right key, that the Map Tiles API is enabled for its project and that its restrictions allow this app'
+        : status === 429 ? 'the Maps key\'s Map Tiles quota is used up for now'
+        : status >= 500 ? 'Google\'s tiles service failed; it may work again later' : '';
+    return `${subject} (HTTP ${status} from Google)${missing}${why ? `: ${why}` : ''}.`;
+}
 
 /** Ground below the origin is re-measured until it sits within this distance of y = 0. */
 const GROUND_TOLERANCE_M = 0.25;
@@ -70,8 +95,10 @@ const GROUND_MISS_LIMIT = 32;
  * The layer is placed only at the scene's geoAnchor, and only once the geoid undulation there is known: the tiles are
  * in ellipsoid heights while the anchor elevation is above sea level, and the offset between them varies by up to
  * ~190 m worldwide. A missing, non-numeric, out-of-range or (0, 0) anchor, or a failed lookup, is reported through
- * onError and no tiles are shown. When the anchor has no elevation, none is assumed: the ground under the origin is
- * measured on the loaded tiles and the layer is re-placed so that ground sits at y = 0.
+ * onError and no tiles are shown. So is a window with no Maps key: no renderer is started that Google can only refuse.
+ * A tileset Google refuses or does not answer is reported with its HTTP status, and nothing is drawn in its place.
+ * When the anchor has no elevation, none is assumed: the ground under the origin is measured on the loaded tiles and
+ * the layer is re-placed so that ground sits at y = 0.
  * A scene-local TerrainManager always exists so callers have something to sample ground height from.
  */
 export function syncTilesLayer(
@@ -91,6 +118,7 @@ export function syncTilesLayer(
             if (tilesLayer) {
                 try {
                     tilesLayer.onTileLoaded = undefined;
+                    tilesLayer.onLoadError = undefined;
                     if (tilesLayer.group) scene.remove(tilesLayer.group);
                     tilesLayer.dispose?.();
                 } catch (e) {
@@ -113,6 +141,12 @@ export function syncTilesLayer(
         return handle;
     }
     const { lat, lng, elevation } = check;
+    const apiKey = (deps.mapsApiKey ?? resolveMapsApiKey)().trim();
+    if (!apiKey) {
+        callbacks.onError?.(NO_MAPS_KEY_MESSAGE);
+        return handle;
+    }
+    const windowStatus = deps.windowStatus ?? liveTilesWindowRecorder;
     // With no elevation the layer starts at sea level and is re-placed on the measured ground (see measureGround).
     const origin = { lat, lng, alt: elevation ?? 0 };
     const isClay = mode === 'photoreal-clay' || (mode !== 'photoreal-textured' && input.renderMode === 'clay');
@@ -122,6 +156,9 @@ export function syncTilesLayer(
     let groundFound = false;
     let groundMisses = 0;
     let groundMissReported = false;
+    /** A load failure was reported: it stands, and no placement report replaces or clears it. */
+    let loadFailed = false;
+    let tileLoaded = false;
     /** Ground height under the origin on the loaded tiles, probing from above any land; null when nothing is hit. */
     const sampleOriginGround = (layer: any): number | null => {
         const terrain = typeof layer.getTerrainManager === 'function' ? layer.getTerrainManager(scene) : undefined;
@@ -131,7 +168,7 @@ export function syncTilesLayer(
         return typeof h === 'number' && Number.isFinite(h) ? h : null;
     };
     const measureGround = (layer: any, geoidHeight: number) => {
-        if (elevation !== undefined || groundCorrections >= MAX_GROUND_CORRECTIONS) return;
+        if (elevation !== undefined || groundCorrections >= MAX_GROUND_CORRECTIONS || loadFailed) return;
         const h = sampleOriginGround(layer);
         if (h === null) {
             // No elevation and no ground found yet: the tiles' height is unknown. Said once, not assumed.
@@ -155,15 +192,27 @@ export function syncTilesLayer(
     const place = (geoidHeight: number) => {
         if (disposed) return;
         try {
-            const layer = createLayer({ origin: { ...origin }, renderMode: isClay ? 'clay' : 'textured', clayPreset: 'studio-grey', geoidHeight });
+            const layer = createLayer({ apiKey, origin: { ...origin }, renderMode: isClay ? 'clay' : 'textured', clayPreset: 'studio-grey', geoidHeight });
             tilesLayer = layer;
             handle.tilesLayer = layer;
             scene.add(layer.group);
             const terrainManager: TerrainManager = layer.getTerrainManager(scene);
             handle.terrainManager = terrainManager;
             layer.onTileLoaded = () => {
+                if (!tileLoaded) {
+                    tileLoaded = true;
+                    windowStatus.loaded();
+                }
                 measureGround(layer, geoidHeight);
                 callbacks.onTileLoaded?.(terrainManager);
+            };
+            // The first failure is reported (a refused key fails every request alike); the root's also tells the chat.
+            layer.onLoadError = (failure: TilesLoadFailure) => {
+                if (disposed || loadFailed) return;
+                loadFailed = true;
+                const message = tilesLoadFailureMessage(failure);
+                if (failure.root) windowStatus.failed(apiKey, message);
+                callbacks.onError?.(message);
             };
             callbacks.onLayerReady?.(layer, terrainManager);
         } catch (err) {

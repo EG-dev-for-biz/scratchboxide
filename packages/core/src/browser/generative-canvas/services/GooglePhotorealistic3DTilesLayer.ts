@@ -46,6 +46,31 @@ export interface Google3DTilesLayerOptions {
   enablePersistentCache?: boolean;
 }
 
+/** A tileset or tile the renderer could not load (its 'load-error' event). */
+export interface TilesLoadFailure {
+  /** The root tileset failed, so nothing at all is shown. */
+  root: boolean;
+  /** The HTTP status Google answered with, when the failure was an answer. */
+  status?: number;
+  /** The error's own text, with any key or session token in it masked. */
+  detail: string;
+}
+
+/**
+ * Reads a renderer 'load-error' event. The status is in the error's text: "Failed to load tileset ... with status 403"
+ * (the root, no auth plugin), "Failed to load data with error code 403" (the auth plugin) or "Failed to load model with
+ * error code 403" (a tile).
+ */
+export function tilesLoadFailure(event: { tile?: unknown; error?: unknown }): TilesLoadFailure {
+  const text = event.error instanceof Error ? event.error.message : String(event.error ?? 'unknown error');
+  const status = /(?:status|error code)\s+(\d{3})\b/.exec(text);
+  return {
+    root: !event.tile,
+    ...(status ? { status: Number(status[1]) } : {}),
+    detail: text.replace(/([?&](?:key|session)=)[^&\s"']+/g, '$1…')
+  };
+}
+
 /**
  * High-performance Google Photorealistic 3D Tiles Layer for Scratchbox IDE.
  * Anchors the 3D scene directly to Google's worldwide photorealistic 3D tile system
@@ -55,6 +80,8 @@ export class GooglePhotorealistic3DTilesLayer {
   public readonly group: THREE.Group;
   public tilesRenderer: any = null;
   public onTileLoaded?: (modelScene: THREE.Object3D) => void;
+  /** A tileset or tile failed to load (any HTTP status, or no answer); the renderer itself only logs it. */
+  public onLoadError?: (failure: TilesLoadFailure) => void;
   private terrainManager?: TerrainManager;
   private isDisposed: boolean = false;
   private currentOrigin: LatLngAlt;
@@ -195,6 +222,14 @@ export class GooglePhotorealistic3DTilesLayer {
 
       this.tilesRenderer.addEventListener('load-model', onModelLoaded);
       (this.tilesRenderer as any).onLoadModel = (scene: THREE.Object3D) => onModelLoaded({ scene });
+      this.tilesRenderer.addEventListener('load-error', (event: { tile?: unknown; error?: unknown }) => {
+        if (this.isDisposed || !this.onLoadError) return;
+        try {
+          this.onLoadError(tilesLoadFailure(event));
+        } catch {
+          // Ignore callback error
+        }
+      });
     } catch (err) {
       console.warn('[GooglePhotorealistic3DTilesLayer] TilesRenderer initialization error:', err);
     }

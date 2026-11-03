@@ -1102,6 +1102,11 @@ export function buildContents(request: GeminiGenerateRequest): Content[] {
         }
     }
 
+    // The viewport streams live tiles with the window's own Maps key, which the server cannot see: what the window says.
+    if (request.liveTilesUnavailable?.trim()) {
+        userPrompt += `\n\n[LIVE 3D TILES UNAVAILABLE IN THIS WINDOW: ${request.liveTilesUnavailable.trim()} Until that is fixed, a scene's geoAnchor or map-3d object shows no live tiles in the viewport. When a scene you make or describe relies on them, tell the user so, with the fix; never say the tiles are streaming or visible.]`;
+    }
+
     // Images the user attached: shown to the model inline, and named by where they were saved so tools
     // that take an image path (reference reads, depth, lighting, style) can be given the same image.
     const images = (request.images || []).filter(img => img && typeof img.data === 'string' && img.data.length > 0);

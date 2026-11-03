@@ -443,6 +443,15 @@ export const canvasHandlers: Record<string, ToolHandler> = {
             }
         }
 
+        // The viewport streams live tiles with the Maps key of the user's window, which the server cannot see; the window
+        // says when they cannot load (liveTilesStatus.ts), and the result says so ahead of the artifact (which a long
+        // payload may truncate), so the reply does not describe tiles the viewport does not show.
+        const liveTilesNotShown = primitiveType === '3d-scene' && sceneAsksForLiveTiles(payload as Scene3DData)
+            ? asString(_ctx?.request?.liveTilesUnavailable).trim() : '';
+        const liveTilesNote = liveTilesNotShown
+            ? `The scene is mounted, but its live Google 3D Tiles will not show in the user's viewport: ${liveTilesNotShown} Tell the user so, with the fix; do not say the tiles are streaming or visible.`
+            : '';
+
         const artifactId = `art-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         const artifact: CanvasArtifact = {
             id: artifactId,
@@ -457,13 +466,14 @@ export const canvasHandlers: Record<string, ToolHandler> = {
         return {
             resultPayload: {
                 status: 'success',
+                ...(liveTilesNote ? { liveTilesNotShown: liveTilesNote } : {}),
                 artifactId,
                 primitiveType,
                 title,
                 summary,
                 artifact
             },
-            summaryResult: `Mounted ${primitiveType} primitive: "${title}".`
+            summaryResult: `Mounted ${primitiveType} primitive: "${title}".${liveTilesNote ? ` ${liveTilesNote}` : ''}`
         };
     },
 

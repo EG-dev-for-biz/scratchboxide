@@ -60,6 +60,7 @@ import { cleanMessageTextSmart } from '../ChatMarkdownRenderer';
 import { ProjectArtifactController } from '../project-artifact-controller';
 import { WorkspaceConfigClient } from '../workspace-config-client';
 import { markStagedRun, publishStageEvent, settleStagedRunInSession } from '../primitives/scene3d/stagedBuild/stagedBuildState';
+import { liveTilesUnavailableReason } from '../primitives/scene3d/liveTilesStatus';
 import type { StageEvent } from '../../../common/spatial/staged-location-contracts';
 import { ProjectItem } from '../ProjectsModal';
 
@@ -537,6 +538,7 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                 attachedSkills: attachedSkillsContext,
                 attachedMcpTools: attachedMcpContext,
                 activeArtifact,
+                liveTilesUnavailable: liveTilesUnavailableReason(),
                 chatHistory,
                 mode: d.aiInteractionMode || 'agent',
                 enableWorkspaceTools: true,

@@ -289,12 +289,14 @@ describe('objects the viewport cannot draw or load are named in the viewport', (
 describe('live 3D Tiles need the scene\'s anchor and a known geoid height', () => {
     const stack = () => ({ scene: new THREE.Scene() }) as any;
     const fakeLayer = () => ({ group: new THREE.Group(), getTerrainManager: () => ({ fake: true }), dispose: () => {} });
+    // A made-up key: no layer here fetches anything (a window with no key is live-tiles-failure-reporting.test.ts).
+    const mapsApiKey = () => 'test-maps-key-not-real';
 
     it('without a geoAnchor no layer is created (no San Francisco default) and the error is reported', () => {
         const errors: string[] = [];
         let created = 0;
         const handle = syncTilesLayer(stack(), { has3DTiles: true, geoAnchor: null, renderMode: 'clay', groundTileMode: 'photoreal-clay' },
-            { onError: m => errors.push(m) }, { createLayer: () => { created++; return fakeLayer(); } });
+            { onError: m => errors.push(m) }, { mapsApiKey, createLayer: () => { created++; return fakeLayer(); } });
         expect(created).toBe(0);
         expect(handle.tilesLayer).toBeNull();
         expect(errors).toHaveLength(1);
@@ -306,7 +308,7 @@ describe('live 3D Tiles need the scene\'s anchor and a known geoid height', () =
         let created = 0;
         syncTilesLayer(stack(), { has3DTiles: true, geoAnchor: { lat: 51.5055, lng: -0.0754 }, renderMode: 'clay', groundTileMode: 'photoreal-clay' },
             { onError: m => errors.push(m) },
-            { createLayer: () => { created++; return fakeLayer(); }, fetchGeoidUndulation: async () => { throw new Error('HTTP 500'); } });
+            { mapsApiKey, createLayer: () => { created++; return fakeLayer(); }, fetchGeoidUndulation: async () => { throw new Error('HTTP 500'); } });
         await new Promise(r => setTimeout(r, 0));
         expect(created).toBe(0);
         expect(errors).toEqual([expect.stringContaining('HTTP 500')]);
@@ -322,7 +324,7 @@ describe('live 3D Tiles need the scene\'s anchor and a known geoid height', () =
             const errors: string[] = [];
             let created = 0;
             syncTilesLayer(stack(), { has3DTiles: true, geoAnchor: geoAnchor as any, renderMode: 'clay', groundTileMode: 'photoreal-clay' },
-                { onError: m => errors.push(m) }, { createLayer: () => { created++; return fakeLayer(); }, fetchGeoidUndulation: async () => 0 });
+                { onError: m => errors.push(m) }, { mapsApiKey, createLayer: () => { created++; return fakeLayer(); }, fetchGeoidUndulation: async () => 0 });
             expect(created).toBe(0);
             expect(errors).toEqual([expect.stringContaining(reason)]);
             expect(errors[0]).not.toContain('has none');
@@ -332,7 +334,7 @@ describe('live 3D Tiles need the scene\'s anchor and a known geoid height', () =
     it('reads numeric-string coordinates as the numbers they are', async () => {
         const options: any[] = [];
         syncTilesLayer(stack(), { has3DTiles: true, geoAnchor: { lat: '40.7484', lng: '-73.9857', elevation: '10' }, renderMode: 'clay', groundTileMode: 'photoreal-clay' },
-            { onError: m => { throw new Error(m); } }, { createLayer: o => { options.push(o); return fakeLayer(); }, fetchGeoidUndulation: async () => -32.5 });
+            { onError: m => { throw new Error(m); } }, { mapsApiKey, createLayer: o => { options.push(o); return fakeLayer(); }, fetchGeoidUndulation: async () => -32.5 });
         await new Promise(r => setTimeout(r, 0));
         expect(options[0].origin).toEqual({ lat: 40.7484, lng: -73.9857, alt: 10 });
     });
@@ -348,7 +350,7 @@ describe('live 3D Tiles need the scene\'s anchor and a known geoid height', () =
         };
         const options: any[] = [];
         syncTilesLayer(stack(), { has3DTiles: true, geoAnchor: { lat: 39.7392, lng: -104.9903 }, renderMode: 'clay', groundTileMode: 'photoreal-clay' },
-            { onError: m => { throw new Error(m); } }, { createLayer: o => { options.push(o); return layer; }, fetchGeoidUndulation: async () => -16.9 });
+            { onError: m => { throw new Error(m); } }, { mapsApiKey, createLayer: o => { options.push(o); return layer; }, fetchGeoidUndulation: async () => -16.9 });
         await new Promise(r => setTimeout(r, 0));
         expect(options[0].origin.alt).toBe(0);
         layer.onTileLoaded();
@@ -371,7 +373,7 @@ describe('live 3D Tiles need the scene\'s anchor and a known geoid height', () =
         const errors: string[] = [];
         const layer: any = { ...fakeLayer(), getTerrainManager: () => terrain, updateOrigin: (o: any) => { origins.push({ ...o }); ground.position.y = 0; ground.updateMatrixWorld(true); } };
         syncTilesLayer({ scene } as any, { has3DTiles: true, geoAnchor: { lat: -16.5, lng: -68.15, geoidUndulationMeters: 44 }, renderMode: 'clay', groundTileMode: 'photoreal-clay' },
-            { onError: m => errors.push(m) }, { createLayer: () => layer });
+            { onError: m => errors.push(m) }, { mapsApiKey, createLayer: () => layer });
         layer.onTileLoaded();
         expect(origins).toHaveLength(1);
         expect(origins[0].alt).toBeCloseTo(3600, 3);
@@ -384,7 +386,7 @@ describe('live 3D Tiles need the scene\'s anchor and a known geoid height', () =
         let groundY: number | null = null;
         const layer: any = { ...fakeLayer(), getTerrainManager: () => ({ sampleGroundHeight: () => groundY }), updateOrigin: () => { groundY = 0; } };
         syncTilesLayer(stack(), { has3DTiles: true, geoAnchor: { lat: -16.5, lng: -68.15, geoidUndulationMeters: 44 }, renderMode: 'clay', groundTileMode: 'photoreal-clay' },
-            { onError: m => errors.push(m), onRecovered: () => recovered++ }, { createLayer: () => layer });
+            { onError: m => errors.push(m), onRecovered: () => recovered++ }, { mapsApiKey, createLayer: () => layer });
         for (let i = 0; i < 31; i++) layer.onTileLoaded();
         expect(errors).toEqual([]);
         for (let i = 0; i < 10; i++) layer.onTileLoaded();
@@ -412,9 +414,10 @@ describe('live 3D Tiles need the scene\'s anchor and a known geoid height', () =
         const ready: any[] = [];
         const handle = syncTilesLayer(stack(), { has3DTiles: true, geoAnchor: { lat: 51.5055, lng: -0.0754, elevation: 12 }, renderMode: 'clay', groundTileMode: 'photoreal-clay' },
             { onLayerReady: layer => ready.push(layer), onError: m => { throw new Error(m); } },
-            { createLayer: o => { options.push(o); return fakeLayer(); }, fetchGeoidUndulation: async () => 45.6 });
+            { mapsApiKey, createLayer: o => { options.push(o); return fakeLayer(); }, fetchGeoidUndulation: async () => 45.6 });
         await new Promise(r => setTimeout(r, 0));
-        expect(options).toEqual([expect.objectContaining({ origin: { lat: 51.5055, lng: -0.0754, alt: 12 }, geoidHeight: 45.6, renderMode: 'clay' })]);
+        // the layer is given the window's key, so it never resolves (or misses) one of its own
+        expect(options).toEqual([expect.objectContaining({ apiKey: 'test-maps-key-not-real', origin: { lat: 51.5055, lng: -0.0754, alt: 12 }, geoidHeight: 45.6, renderMode: 'clay' })]);
         expect(ready).toHaveLength(1);
         expect(handle.tilesLayer).toBe(ready[0]);
     });

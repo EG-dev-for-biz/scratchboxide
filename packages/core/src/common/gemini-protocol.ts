@@ -120,6 +120,12 @@ export interface GeminiGenerateRequest {
     attachedSkills?: AttachedSkillContext[];
     attachedMcpTools?: AttachedMcpToolContext[];
     activeArtifact?: CanvasArtifact;
+    /**
+     * Why live Google 3D Tiles cannot load in the sending window's viewport (it has no Maps key, or Google refused its
+     * last tileset), from liveTilesStatus.ts; absent when nothing known stops them. The viewport streams tiles with the
+     * window's own key, not the server's, so the turn learns it here and does not describe tiles the viewport cannot show.
+     */
+    liveTilesUnavailable?: string;
     chatHistory?: Array<{ role: 'user' | 'model'; text: string }>;
     /** Set on requests made by a subagent run, so it cannot start further subagents. */
     isSubagentRun?: boolean;

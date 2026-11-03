@@ -137,6 +137,7 @@ import { useLatest } from '../hooks/useLatest';
 import { createRendererStack, attachViewportResize, reconcileDrawingBufferSize, DEFAULT_CAMERA_FOV_DEG } from './scene3d/createRendererStack';
 import { liveTilesAnchor, syncTilesLayer } from './scene3d/syncTilesLayer';
 import { sceneAsksForLiveTiles } from './scene3d/liveTilesAnchor';
+import { GoogleMapsService } from '../services/google-maps-service';
 import { groundDatumBadge, projectRoutePoint } from './scene3d/geoAnchorLabels';
 import type { TilesLayerInput } from './scene3d/syncTilesLayer';
 import { classifyAtmosphere, compensateUnlitForExposure, drawsProceduralBiomeTerrain, syncAtmosphere } from './scene3d/syncAtmosphere';
@@ -1172,6 +1173,17 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // Failures of the scene's own content sources, shown in the viewport (never swapped for other geometry).
     const [generatorError, setGeneratorError] = React.useState<GeneratorRunError | null>(null);
     const [tilesError, setTilesError] = React.useState<string | null>(null);
+    // The tiles stream with this window's Maps key: saving a key in Settings starts them again (none or a refused one is reported).
+    const [mapsKeyVersion, setMapsKeyVersion] = React.useState(0);
+    React.useEffect(() => {
+        const maps = GoogleMapsService.getInstance();
+        let key = maps.getApiKey();
+        return maps.subscribe(state => {
+            if (state.apiKey === key) return;
+            key = state.apiKey;
+            setMapsKeyVersion(v => v + 1);
+        });
+    }, []);
     /** What the scene lens configures but the viewport cannot draw (e.g. a missing focus object), shown as a notice. */
     const [opticsIssues, setOpticsIssues] = React.useState<string[]>([]);
     /** The tree level-of-detail stats line (scene data treeLod.statsOverlay), refreshed four times a second. */
@@ -2680,7 +2692,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             tilesRendererRef.current = null;
             terrainManagerRef.current = null;
         };
-    }, [tilesFingerprint]);
+    }, [tilesFingerprint, mapsKeyVersion]);
 
     // ---- 2b. Vector ROADMAP ground blueprint underlay (Cloud-Based Map Styling) ----
     React.useEffect(() => {

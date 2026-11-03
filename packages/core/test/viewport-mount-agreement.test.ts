@@ -26,6 +26,7 @@ import { newEmptySceneArtifact } from '../src/browser/generative-canvas/hooks/us
 import { Scene3DPrimitive } from '../src/browser/generative-canvas/primitives/Scene3DPrimitive';
 import * as SceneContent from '../src/browser/generative-canvas/primitives/scene3d/syncSceneContent';
 import { syncTilesLayer } from '../src/browser/generative-canvas/primitives/scene3d/syncTilesLayer';
+import { NO_MAPS_KEY_MESSAGE } from '../src/browser/generative-canvas/primitives/scene3d/liveTilesStatus';
 import { ViewportNotice, resolveViewportNotice } from '../src/browser/generative-canvas/primitives/scene3d/ViewportNotice';
 import type { Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 import { decodePng } from '../src/node/texture-processing';
@@ -111,7 +112,9 @@ describe('the object loader reads a URI the way the drawability checks do', () =
 describe('the mount judges a live tiles anchor as the tiles layer does', () => {
     const tilesError = (anchor: any): string => {
         let message = '';
-        syncTilesLayer({ scene: new THREE.Scene() } as any, { has3DTiles: true, geoAnchor: anchor, renderMode: 'clay' }, { onError: m => { message = m; } });
+        // a made-up key: the window's key is not what is judged here (live-tiles-failure-reporting.test.ts)
+        syncTilesLayer({ scene: new THREE.Scene() } as any, { has3DTiles: true, geoAnchor: anchor, renderMode: 'clay' }, { onError: m => { message = m; } },
+            { mapsApiKey: () => 'test-maps-key-not-real' });
         return message;
     };
     const cases: Array<[string, any]> = [
@@ -147,5 +150,38 @@ describe('the mount judges a live tiles anchor as the tiles layer does', () => {
         expect(asSceneAnchor.resultPayload.status).toBe('success');
         const asMapObject = await mount({ primitiveType: '3d-scene', title: 'Flatiron', payload: { objects: [{ id: 'map', content: { type: 'map-3d' }, space: { geoAnchor: flatiron } }] } });
         expect(asMapObject.resultPayload.status).toBe('success');
+        expect(asSceneAnchor.resultPayload.liveTilesNotShown).toBeUndefined();
+    });
+});
+
+describe('the mount says so when the user\'s window cannot load live tiles', () => {
+    // The viewport streams tiles with the window's own key; the window sends why it cannot (liveTilesStatus.ts).
+    const mountIn = (liveTilesUnavailable: string | undefined, payload: Record<string, unknown>) =>
+        canvasHandlers.mount_canvas_primitive({ primitiveType: '3d-scene', title: 'Empire State Building', payload },
+            { request: { prompt: '', chatHistory: [], ...(liveTilesUnavailable ? { liveTilesUnavailable } : {}) } } as any) as Promise<any>;
+    const esb = { lat: 40.748817, lng: -73.985428, active: true };
+
+    it('a scene of live tiles mounts, and its result says first that they will not show, why, and not to say they stream', async () => {
+        const res = await mountIn(NO_MAPS_KEY_MESSAGE, { geoAnchor: esb });
+        expect(res.resultPayload.status).toBe('success');
+        const note: string = res.resultPayload.liveTilesNotShown;
+        expect(note).toContain('will not show in the user\'s viewport');
+        expect(note).toContain(NO_MAPS_KEY_MESSAGE);
+        expect(note).toContain('do not say the tiles are streaming');
+        // ahead of the artifact, which a long payload may lose to truncation
+        const keys = Object.keys(res.resultPayload);
+        expect(keys.indexOf('liveTilesNotShown')).toBeLessThan(keys.indexOf('artifact'));
+        expect(res.summaryResult).toContain(note);
+        // the scene keeps its anchor: once a key is saved, the same scene shows the tiles
+        expect(res.resultPayload.artifact.data.geoAnchor).toMatchObject({ lat: esb.lat, lng: esb.lng });
+    });
+
+    it('says nothing of tiles for a scene that does not ask for them, or when the window reports no problem', async () => {
+        const model = await mountIn(NO_MAPS_KEY_MESSAGE, { objects: [{ id: 'a', content: { type: '3d-model', durableUri: '/models/a.glb' } }] });
+        expect(model.resultPayload.status).toBe('success');
+        expect(model.resultPayload.liveTilesNotShown).toBeUndefined();
+        expect(model.summaryResult).not.toContain('Google 3D Tiles');
+        const fine = await mountIn(undefined, { geoAnchor: esb });
+        expect(fine.resultPayload.liveTilesNotShown).toBeUndefined();
     });
 });
