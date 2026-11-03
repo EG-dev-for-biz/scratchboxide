@@ -59,6 +59,32 @@ describe('pipeline K-D: a district in chunks', () => {
         expect(planDistrictChunks(120, [block])).toBeUndefined();
     });
 
+    it('plans whole every building the circle reaches, its middle past it or not, and leaves out one reaching too far', () => {
+        // across the 350 m line: its middle at x 375, it reaches in to x 330 and out to 420
+        const edge = { id: 'edge', centroid: [375, 0] as [number, number], loops: [rect(330, -10, 420, 10)] };
+        // a rail yard reaching in to x 340 but out to 700: more than edgeGrowthM past the line
+        const yard = { id: 'yard', centroid: [520, 30] as [number, number], loops: [rect(340, 20, 700, 40)] };
+        // past the line altogether
+        const far = { id: 'far', centroid: [500, 0] as [number, number], loops: [rect(490, -10, 510, 10)] };
+        const plan = planDistrictChunks(350, [edge, yard, far])!;
+        // the edge building is owned whole by the cell its nearest point (x 330) lies in, whose rectangle reaches its far end
+        const cell = plan.chunks.find(c => c.cx === 360 && c.cz === 0)!;
+        expect(cell.buildings).toEqual(['edge']);
+        expect(cell.rect.x1).toBe(420 + DISTRICT_CHUNKS_PARAMS.marginM);
+        const owner = chunkOwner(plan);
+        expect(owner(400, 0)).toBe(cell.index);
+        expect(owner(345, 0)).toBe(cell.index);
+        // the yard is left out whole, with its reason: no chunk owns any of it, inside the circle or out
+        expect(plan.chunks.some(c => c.buildings.includes('yard'))).toBe(false);
+        expect(plan.leftOut?.map(b => b.id)).toEqual(['yard']);
+        expect(plan.leftOut![0].reason).toMatch(/reaches 701 m from the centre, more than 100 m past the district's 350 m edge/);
+        expect(owner(345, 30)).toBe(-1);
+        expect(owner(345, 50)).toBe(plan.chunks.find(c => c.cx === 360 && c.cz === 0)!.index);
+        // the far building is neither planned nor left out
+        expect(plan.footprints.some(f => f.id === 'far')).toBe(false);
+        expect(plan.leftOut!.some(f => f.id === 'far')).toBe(false);
+    });
+
     it("places a chunk's frame in the district's exactly: a point of one is the same place on Earth in the other", () => {
         const here = { lat: 35.6595, lng: 139.7005, originEllipsoidalHeightM: 76.2 };
         // a chunk 240 m east and 120 m south of the centre, its own origin a little higher
