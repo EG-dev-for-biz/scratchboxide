@@ -17,6 +17,7 @@ import { BUILDING_SHAPE_TOOL_DECLARATION, buildingShapeHandler } from './locatio
 import { ISOLATE_STRUCTURE_TOOL_DECLARATION, isolateStructureHandler } from './location-evidence/isolate-structure';
 import { PHOTO_MATCH_EVALUATE_DECLARATION, runPhotoMatchEvaluate } from './location-evidence/photo-match-evaluate';
 import { STREETVIEW_SURVEY_DECLARATION, streetviewSurveyHandler } from './location-evidence/streetview-survey';
+import { STREETVIEW_LOOK_DECLARATION, streetviewLookHandler } from './location-evidence/streetview-look';
 import { SPLIT_BLOCK_TOOL_DECLARATION, splitBlockHandler } from './location-evidence/split-block';
 import { RESIDUAL_AUDIT_TOOL_DECLARATION, residualAuditHandler } from './location-evidence/residual-audit';
 import { FIT_OBJECT_TOOL_DECLARATION, fitObjectHandler } from './location-evidence/fit-object';
@@ -26,6 +27,7 @@ export const LOCATION_EVIDENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     BUILDING_SHAPE_TOOL_DECLARATION,
     PHOTO_MATCH_EVALUATE_DECLARATION,
     STREETVIEW_SURVEY_DECLARATION,
+    STREETVIEW_LOOK_DECLARATION,
     ISOLATE_STRUCTURE_TOOL_DECLARATION,
     SPLIT_BLOCK_TOOL_DECLARATION,
     RESIDUAL_AUDIT_TOOL_DECLARATION,
@@ -37,6 +39,7 @@ export const locationEvidenceHandlers: Record<string, ToolHandler> = {
     [BUILDING_SHAPE_TOOL_DECLARATION.name]: buildingShapeHandler,
     [PHOTO_MATCH_EVALUATE_DECLARATION.name]: runPhotoMatchEvaluate,
     [STREETVIEW_SURVEY_DECLARATION.name]: streetviewSurveyHandler,
+    [STREETVIEW_LOOK_DECLARATION.name]: streetviewLookHandler,
     [ISOLATE_STRUCTURE_TOOL_DECLARATION.name]: isolateStructureHandler,
     [SPLIT_BLOCK_TOOL_DECLARATION.name]: splitBlockHandler,
     [RESIDUAL_AUDIT_TOOL_DECLARATION.name]: residualAuditHandler,

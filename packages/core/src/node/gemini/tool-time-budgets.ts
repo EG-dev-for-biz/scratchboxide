@@ -64,6 +64,8 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     // With a place not yet built it extracts and isolates the structure from 3D Tiles first (minutes, cached after), then
     // the grounding fetches, the registration (up to 90 s edges + 120 s joint) and, optionally, the segmenter per view.
     streetview_survey: { maxMs: 40 * MIN, idleMs: 10 * MIN },
+    // Free metadata queries (8 at a time), the grounding fetches (30 s each, in parallel) and one vision call per view.
+    streetview_look: { maxMs: 10 * MIN, idleMs: 5 * MIN },
     // The first call compiles the native binary (up to 10 min) before the run (up to 5 min).
     tile_refine: { maxMs: 16 * MIN },
     // Street View discovery and fetch, edge registration (worker thread), then several judge calls per view; reports

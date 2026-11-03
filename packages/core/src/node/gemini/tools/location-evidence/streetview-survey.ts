@@ -741,6 +741,15 @@ export interface SurveySiteRequest {
     structureGlbPath?: string;
 }
 
+/** The place a name or address resolves to, through the staged geocode cache (GEOCODE_TTL_MS). */
+export async function resolveQueryPlace(query: string, deps: Pick<StagedLocationDeps, 'cache' | 'geocode'>, signal?: AbortSignal, now: () => number = Date.now): Promise<ResolvedPlace> {
+    const q = query.trim();
+    const key = stageKey('geocode/v1', q.toLowerCase().replace(/\s+/g, ' '));
+    const hit = deps.cache.get<ResolvedPlace>('resolve', key);
+    if (hit && now() - hit.builtAtMs < GEOCODE_TTL_MS) return hit.value;
+    return (await deps.cache.run('resolve', key, async () => ({ value: await deps.geocode(q, signal) }), { bypass: true })).value;
+}
+
 /**
  * The structure and its street, from the staged caches: the geocode (30 days), the request-sized extraction at the same
  * keys the staged build uses (7 days), the canopy mask and vector footprints, and the structure pick. With a structure
@@ -752,11 +761,7 @@ export async function prepareSurveySite(req: SurveySiteRequest, deps: StagedLoca
     if (Number.isFinite(req.lat) && Number.isFinite(req.lng)) {
         place = { lat: req.lat!, lng: req.lng!, formattedAddress: req.query?.trim() || `${req.lat!.toFixed(6)}, ${req.lng!.toFixed(6)}` };
     } else {
-        const query = (req.query ?? '').trim();
-        const key = stageKey('geocode/v1', query.toLowerCase().replace(/\s+/g, ' '));
-        const hit = cache.get<ResolvedPlace>('resolve', key);
-        if (hit && now() - hit.builtAtMs < GEOCODE_TTL_MS) place = hit.value;
-        else place = (await cache.run('resolve', key, async () => ({ value: await deps.geocode(query, io.signal) }), { bypass: true })).value;
+        place = await resolveQueryPlace(req.query ?? '', deps, io.signal, now);
     }
     const extractCached = async (radiusM: number): Promise<StagedExtraction> => {
         const key = stageKey('extract/v3', place.lat.toFixed(6), place.lng.toFixed(6), Math.round(radiusM));
