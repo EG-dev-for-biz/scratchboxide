@@ -32,6 +32,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { StagedLayer } from '../../../common/spatial/staged-location-contracts';
 import type { CloudBucket } from '../../cloud-store/cloud-bucket';
+import { textureLibraryStatsDir } from '../texture-library';
+import { libraryRepoRoot } from './pipeline-k/material-sets';
 import { StagedLocationHardFailure, type StagedLocationOutcome, type StagedLocationRequest, type StageId } from './orchestrator';
 import type { StageCache } from './stage-cache';
 
@@ -124,6 +126,50 @@ export function localiseJobPaths<T>(value: T, from: { root: string; modelsDir: s
         return v;
     };
     return walk(value) as T;
+}
+
+export const KD_LIBRARY_STATS_SCHEMA = 'scratchbox.kd-library-stats/1';
+
+/**
+ * The texture library's measured statistics (texture-library.ts, one file a set), sent once a district beside its chunks:
+ * a job's image has none, and the material regions would measure every set again in every chunk (about 25 min a build).
+ */
+export interface KdLibraryStats {
+    schema: typeof KD_LIBRARY_STATS_SCHEMA;
+    /** The set id and its file, as measured. */
+    stats: Record<string, unknown>;
+}
+
+/** Where a district's library statistics go: `kd-jobs/<parentRunId>/library-stats.json`. */
+export function kdLibraryStatsKey(of: string): string {
+    if (!/^[0-9a-f]{8}$/.test(of)) throw new Error(`not a district run id: ${of}`);
+    return `kd-jobs/${of}/library-stats.json`;
+}
+
+/** The statistics measured in `dir`; undefined when none are (a half-written file is left out). */
+export function packLibraryStats(dir: string): KdLibraryStats | undefined {
+    let names: string[];
+    try { names = fs.readdirSync(dir).filter(n => n.endsWith('.json')); } catch { return undefined; }
+    const stats: Record<string, unknown> = {};
+    for (const n of names) {
+        try { stats[n.slice(0, -5)] = JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8')); } catch { /* measured again where needed */ }
+    }
+    return Object.keys(stats).length ? { schema: KD_LIBRARY_STATS_SCHEMA, stats } : undefined;
+}
+
+/** Writes the statistics into `dir`, each set not already measured there; how many it wrote. */
+export function unpackLibraryStats(bundle: KdLibraryStats, dir: string): number {
+    if (bundle.schema !== KD_LIBRARY_STATS_SCHEMA) throw new Error(`library statistics this job cannot read (${String(bundle.schema)})`);
+    fs.mkdirSync(dir, { recursive: true });
+    let written = 0;
+    for (const [id, st] of Object.entries(bundle.stats)) {
+        if (!/^[A-Za-z0-9._-]+$/.test(id)) continue;
+        const file = path.join(dir, `${id}.json`);
+        if (fs.existsSync(file)) continue;
+        fs.writeFileSync(file, JSON.stringify(st));
+        written++;
+    }
+    return written;
 }
 
 /** The lines of a progress log past the first `seen`, and how many lines it now holds (a partial last line waits). */
@@ -239,6 +285,8 @@ export interface CloudChunkRunnerOptions {
     newRunId?: () => string;
     env?: NodeJS.ProcessEnv;
     log?: (message: string) => void;
+    /** The texture library's measured statistics sent with each district (default this checkout's, textureLibraryStatsDir). */
+    libraryStatsDir?: string;
 }
 
 export type RunChunk = (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void }) => Promise<StagedLocationOutcome>;
@@ -253,6 +301,29 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
         checkImageSkew(image, (o.head ?? (() => gitHead(__dirname)))(), env);
         return image;
     });
+    // once a district, before its first chunk starts; a chunk without them measures what it needs itself
+    const statsSent = new Map<string, Promise<void>>();
+    const libraryStatsSent = (of: string) => {
+        let sent = statsSent.get(of);
+        if (!sent) {
+            sent = (async () => {
+                const bundle = packLibraryStats(o.libraryStatsDir ?? textureLibraryStatsDir(libraryRepoRoot()));
+                if (!bundle) return;
+                fs.mkdirSync(o.cache.dir, { recursive: true });
+                const work = fs.mkdtempSync(path.join(o.cache.dir, '.kd-cloud-'));
+                try {
+                    const file = path.join(work, 'library-stats.json');
+                    fs.writeFileSync(file, JSON.stringify(bundle));
+                    await o.bucket.putFile(kdLibraryStatsKey(of), file, { contentType: 'application/json' });
+                    log(`[kd-cloud] district ${of}: ${Object.keys(bundle.stats).length} measured texture library sets sent`);
+                } finally {
+                    fs.rmSync(work, { recursive: true, force: true });
+                }
+            })().catch(err => log(`[kd-cloud] district ${of}: the texture library statistics were not sent (${err instanceof Error ? err.message : String(err)})`));
+            statsSent.set(of, sent);
+        }
+        return sent;
+    };
 
     return async (request, opts) => {
         const signal = opts.signal;
@@ -260,6 +331,7 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
         const image = await imageChecked();
         if (signal?.aborted) throw abortReason(signal);
         const prefix = kdChunkJobPrefix(request);
+        await libraryStatsSent(request.chunk!.of);
         const keys = kdChunkJobKeys(prefix);
         const runId = (o.newRunId ?? (() => crypto.randomBytes(4).toString('hex')))();
         fs.mkdirSync(o.cache.dir, { recursive: true });

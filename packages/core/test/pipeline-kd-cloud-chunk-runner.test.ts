@@ -94,17 +94,18 @@ class FakeJobs implements CloudRunJobs {
 
 function setup(opts: { progress?: string[]; fail?: Error; hang?: boolean; image?: string; withMirror?: boolean } = {}) {
     const bucketDir = tmp('bucket'), laptopRoot = tmp('laptop'), jobRoot = tmp('job');
+    const laptopStats = path.join(laptopRoot, 'build', 'texture-library', 'stats'), jobStats = path.join(jobRoot, 'build', 'texture-library', 'stats');
     const bucket = new DirectoryCloudBucket(bucketDir);
     const mirror = opts.withMirror ? new DirectoryCloudBucket(tmp('training')) : undefined;
     const laptop = new StageCache({ workspaceRoot: laptopRoot });
     const jobCache = new StageCache({ workspaceRoot: jobRoot });
     const jobs = new FakeJobs(opts.image ?? `us-central1-docker.pkg.dev/scoutscan/depthbox3-repo/kd-chunk-job:${SHA}`, async env => {
         const where = parseKdJobLocation(env.KD_JOB);
-        return runKdChunkJob({ bucket, prefix: where.prefix, cache: jobCache, build: fakeBuild(jobCache, opts), flushMs: 5, log: () => undefined, ...(mirror ? { mirror } : {}) });
+        return runKdChunkJob({ bucket, prefix: where.prefix, cache: jobCache, build: fakeBuild(jobCache, opts), flushMs: 5, log: () => undefined, libraryStatsDir: jobStats, ...(mirror ? { mirror } : {}) });
     }, opts.hang);
     const config = { ...cloudChunkConfig({}), bucket: 'scoutscan-kd-jobs', pollMs: 5 };
-    const runChunk = createCloudChunkRunner({ cache: laptop, bucket, jobs, config, head: () => SHA, newRunId: () => 'a1b2c3d4', env: {}, log: () => undefined });
-    return { bucket, bucketDir, laptop, jobCache, jobs, runChunk, mirror, laptopRoot, jobRoot };
+    const runChunk = createCloudChunkRunner({ cache: laptop, bucket, jobs, config, head: () => SHA, newRunId: () => 'a1b2c3d4', env: {}, log: () => undefined, libraryStatsDir: laptopStats });
+    return { bucket, bucketDir, laptop, jobCache, jobs, runChunk, mirror, laptopRoot, jobRoot, laptopStats, jobStats };
 }
 
 describe('pipeline K-D cloud chunk runner', () => {
@@ -139,6 +140,34 @@ describe('pipeline K-D cloud chunk runner', () => {
         expect(seen.at(-1)).toMatch(/^built in the cloud in 600 s \(about \$0\.12\)/);
         // nothing left in the stage cache's working dirs
         expect(fs.readdirSync(s.laptop.dir).filter(n => n.startsWith('.kd-cloud-'))).toEqual([]);
+    });
+
+    it('hands the jobs the measured texture library once a district, and a job keeps what it already measured', async () => {
+        const s = setup();
+        fs.mkdirSync(s.laptopStats, { recursive: true });
+        fs.writeFileSync(path.join(s.laptopStats, 'Concrete015.json'), JSON.stringify({ version: 2, lab: [38, 0, 0] }));
+        fs.writeFileSync(path.join(s.laptopStats, 'Plaster005.json'), JSON.stringify({ version: 2, lab: [67, 2, 2] }));
+        fs.writeFileSync(path.join(s.laptopStats, 'half-written.json'), '{"version"');
+        fs.mkdirSync(s.jobStats, { recursive: true });
+        fs.writeFileSync(path.join(s.jobStats, 'Plaster005.json'), JSON.stringify({ version: 2, lab: [70, 0, 0] }));
+        const puts: string[] = [];
+        const putFile = s.bucket.putFile.bind(s.bucket);
+        s.bucket.putFile = (key, file, o) => { puts.push(key); return putFile(key, file, o); };
+        await s.runChunk(request(7), {});
+        await s.runChunk(request(8), {});
+        expect(puts.filter(k => k.endsWith('library-stats.json'))).toEqual(['kd-jobs/c527da43/library-stats.json']);
+        // the set the job had not measured is written as the laptop measured it; its own measurement and the half-written file are not touched
+        expect(JSON.parse(fs.readFileSync(path.join(s.jobStats, 'Concrete015.json'), 'utf8'))).toEqual({ version: 2, lab: [38, 0, 0] });
+        expect(JSON.parse(fs.readFileSync(path.join(s.jobStats, 'Plaster005.json'), 'utf8'))).toEqual({ version: 2, lab: [70, 0, 0] });
+        expect(fs.readdirSync(s.jobStats).sort()).toEqual(['Concrete015.json', 'Plaster005.json']);
+    });
+
+    it('starts the chunks without library statistics when this checkout has measured none', async () => {
+        const s = setup();
+        const out = await s.runChunk(request(), {});
+        expect(out.result.status).toBe('complete');
+        expect(fs.existsSync(path.join(s.bucketDir, 'kd-jobs', 'c527da43', 'library-stats.json'))).toBe(false);
+        expect(fs.existsSync(s.jobStats)).toBe(false);
     });
 
     it('mirrors the job\'s caches to cache/v1/ once the outcome is sent', async () => {

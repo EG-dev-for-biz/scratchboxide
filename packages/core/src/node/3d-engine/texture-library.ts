@@ -93,6 +93,11 @@ const STATS_VERSION = 2;
 const statsDir = (repoRoot: string) => path.join(repoRoot, 'build', 'texture-library', 'stats');
 const statsFile = (repoRoot: string, id: string) => path.join(statsDir(repoRoot), `${id}.json`);
 
+/** Where the measured statistics are kept, one file a set: a cloud chunk job is handed them (cloud-chunk-runner.ts). */
+export function textureLibraryStatsDir(repoRoot: string): string {
+    return statsDir(repoRoot);
+}
+
 /** An index entry with its measured statistics, when the set has been measured: colour, finish, and the shape the
  * preview's aspect gives (the pixel size, and the height when the publisher gave only a width). */
 function withStats(e: TextureLibraryEntry, st: MeasuredStats | undefined): TextureLibraryEntry {

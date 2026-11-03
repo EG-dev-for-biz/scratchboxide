@@ -23,7 +23,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { CloudBucket } from '../../cloud-store/cloud-bucket';
 import { CACHE_MIRROR_PARAMS, cacheMirrorRoots, syncCacheDir } from '../../cloud-store/cache-mirror';
-import { KD_CHUNK_JOB_SCHEMA, kdChunkJobKeys, kdChunkLayerFiles, type KdChunkJobError, type KdChunkJobOutcome, type KdChunkJobSpec } from './cloud-chunk-runner';
+import { textureLibraryStatsDir } from '../texture-library';
+import { KD_CHUNK_JOB_SCHEMA, kdChunkJobKeys, kdChunkLayerFiles, kdLibraryStatsKey, unpackLibraryStats, type KdChunkJobError, type KdChunkJobOutcome, type KdChunkJobSpec, type KdLibraryStats } from './cloud-chunk-runner';
+import { libraryRepoRoot } from './pipeline-k/material-sets';
 import type { StagedLocationContext, StagedLocationOutcome } from './orchestrator';
 import type { StageCache } from './stage-cache';
 
@@ -43,6 +45,8 @@ export interface KdChunkJobOptions {
     commit?: string;
     log?: (message: string) => void;
     now?: () => number;
+    /** Where the district's measured texture library statistics go (default the image's, textureLibraryStatsDir). */
+    libraryStatsDir?: string;
 }
 
 /** Builds the chunk and sends what the runner reads. True when outcome.json was sent. */
@@ -74,6 +78,16 @@ export async function runKdChunkJob(o: KdChunkJobOptions): Promise<boolean> {
         spec = JSON.parse(fs.readFileSync(specFile, 'utf8')) as KdChunkJobSpec;
         if (spec.schema !== KD_CHUNK_JOB_SCHEMA || !/^[0-9a-f]{8}$/.test(spec.runId) || !spec.request?.chunk) throw new Error(`${keys.request} is not a K-D chunk job (${KD_CHUNK_JOB_SCHEMA})`);
         log(`[kd-job] chunk ${spec.request.chunk.index} of ${spec.request.chunk.of}, run ${spec.runId}${o.commit ? `, image ${o.commit.slice(0, 12)}` : ''}`);
+        // the laptop's measured texture library statistics, so the material regions do not measure the library again; never fails the chunk
+        try {
+            const statsFile = path.join(work, 'library-stats.json');
+            if (await o.bucket.download(kdLibraryStatsKey(spec.request.chunk.of), statsFile)) {
+                const n = unpackLibraryStats(JSON.parse(fs.readFileSync(statsFile, 'utf8')) as KdLibraryStats, o.libraryStatsDir ?? textureLibraryStatsDir(libraryRepoRoot()));
+                log(`[kd-job] ${n} measured texture library sets from the runner`);
+            }
+        } catch (err) {
+            log(`[kd-job] the texture library statistics were not read: ${err instanceof Error ? err.message : String(err)}`);
+        }
         const outcome = await o.build(spec, { ...(o.signal ? { signal: o.signal } : {}), reportProgress: m => progress(m) });
         progress('sending the layers to the runner');
         for (const name of kdChunkLayerFiles(outcome)) {
