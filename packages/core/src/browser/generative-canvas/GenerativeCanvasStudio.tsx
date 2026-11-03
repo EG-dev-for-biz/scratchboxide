@@ -207,6 +207,7 @@ import { StreamBufferQueue, captureActiveCanvasScreenshot, streamTokensAsync } f
 import { useSendMessage } from './hooks/useSendMessage';
 import { LIVE_CODE_STARTER_APP } from './studio/liveCodeStarterTemplate';
 import { homeHeadline, pickStarterPrompt, visibleStarterButtons, type StarterButton } from './studio/starterPrompts';
+import { weatherDateOf, withLocationSceneWeather } from './services/atmosphere/scene-weather';
 import { canCreatePrimitive, canShowLayoutMode, canShowPrimitive, primitiveOutOfScopeReason } from '../../common/product-scope';
 import { postScopeNote } from './chat/scopeNote';
 
@@ -1223,6 +1224,8 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
             handleSendMessage(pickStarterPrompt(item));
             return;
         }
+        // a world saved before the location sky default (2026-11-02) opens under it too; a cleared weather stays cleared
+        data = withLocationSceneWeather(data, weatherDateOf(Date.now()));
         // Registered in the project graph under a stable id (the world's name), as every opener does: an id the graph
         // would replace on the first edit would remount the viewport mid-stroke and leave a second tab.
         const art = graphControllerRef.current.registerArtifact({

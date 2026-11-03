@@ -168,6 +168,7 @@ import { ColorHarmonyControl } from './scene3d/ColorHarmonyPanel';
 import { computeSceneGeometryBounds, calculateStandoffCamera } from './scene3d/autoFraming';
 import type { RendererStack, AtmosphereHandle, TilesLayerHandle, SceneContentHandle, WasmMeshHandle, VectorRoadmapHandle, Scene3DRenderMode } from './scene3d/types';
 import { applyClayRenderMode } from './scene3d/clayRenderMode';
+import { castShadowsFromBackFaces } from './scene3d/shadowSides';
 import { MAX_BLUR_RADIUS_FRAME_FRACTION, ViewportOpticsChain } from './scene3d/viewportOptics';
 import { ViewportFocusController, pinholeNdcToDisplayedNdc, viewAxisDepth } from './scene3d/viewportFocus';
 import { CameraSettingsControl } from './scene3d/CameraSettingsControl';
@@ -3074,6 +3075,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         }
                     }
                 });
+                castShadowsFromBackFaces(gltf.scene);
                 applyClayRenderMode([gltf.scene], renderModeRef.current === 'clay', { trees: treesClayRef.current });
                 // Shared metric ground logic: snap procedural geometry to terrain or 3D tile surface
                 if (terrainManagerRef.current) {
@@ -3386,6 +3388,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             }
                         }
                     });
+                    // before the twin's copies are made (prepareTexturedTwinModel), so they carry it
+                    castShadowsFromBackFaces(model);
 
                     // a built model's weathering layer (SB_material_weathering): its atlas blended over the surfaces
                     void applyWeatheringLayer(gltf)

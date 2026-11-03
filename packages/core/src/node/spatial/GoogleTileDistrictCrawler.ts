@@ -334,14 +334,27 @@ export class GoogleTileDistrictCrawler {
         return url;
     }
 
-    private async fetchWithRetry(url: URL): Promise<Response> {
+    /**
+     * One request and its body (`read`), retried with backoff on HTTP 429 and 5xx and on a connection dropped while it was
+     * sent or read (Google closes a socket mid-tile now and then, and a district downloads hundreds of tiles). A stop
+     * (AbortError) is never retried.
+     */
+    private async fetchWithRetry<T>(url: URL, read: (res: Response) => Promise<T>): Promise<T> {
         let lastError = '';
         for (let attempt = 0; attempt < 5; attempt++) {
-            const res = await this.fetchImpl(url.toString());
-            if (res.ok) return res;
-            lastError = `HTTP ${res.status}`;
-            if (res.status !== 429 && res.status < 500) break;
-            await new Promise(r => setTimeout(r, 400 * 2 ** attempt));
+            if (attempt) await new Promise(r => setTimeout(r, 400 * 2 ** (attempt - 1)));
+            let status: number;
+            try {
+                const res = await this.fetchImpl(url.toString());
+                if (res.ok) return await read(res);
+                status = res.status;
+            } catch (err) {
+                if ((err as Error)?.name === 'AbortError') throw err;
+                lastError = (err as Error)?.message ?? String(err);
+                continue;
+            }
+            lastError = `HTTP ${status}`;
+            if (status !== 429 && status < 500) break;
         }
         throw new Error(`Google 3D Tiles request failed (${lastError}) for ${stripCredentials(url.toString())}`);
     }
@@ -391,9 +404,9 @@ export class GoogleTileDistrictCrawler {
 
         const fetchJson = (uri: string) => this.limited(async () => {
             requests++;
-            const res = await this.fetchWithRetry(this.buildUrl(uri, session));
+            const json = await this.fetchWithRetry(this.buildUrl(uri, session), res => res.json() as Promise<any>);
             this.onProgress?.('traverse', leaves.length, requests);
-            return res.json() as Promise<any>;
+            return json;
         });
 
         const visit = async (tile: any, depth: number): Promise<void> => {
@@ -448,8 +461,7 @@ export class GoogleTileDistrictCrawler {
             const cachePath = this.cacheDir ? path.join(this.cacheDir, `${leaf.id}.glb`) : null;
             let bytes: Buffer | null = cachePath && fs.existsSync(cachePath) ? fs.readFileSync(cachePath) : null;
             if (!bytes) {
-                const res = await this.fetchWithRetry(this.buildUrl(leaf.path, session));
-                bytes = Buffer.from(await res.arrayBuffer());
+                bytes = await this.fetchWithRetry(this.buildUrl(leaf.path, session), async res => Buffer.from(await res.arrayBuffer()));
                 if (bytes.length < 12 || bytes.toString('utf8', 0, 4) !== 'glTF') {
                     throw new Error(`Leaf tile is not a binary glTF: ${leaf.path}`);
                 }

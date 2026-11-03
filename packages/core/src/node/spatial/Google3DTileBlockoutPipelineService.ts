@@ -231,12 +231,14 @@ export interface Google3DTile3DObjectResult {
   requestedRadiusMeters?: number;
   /**
    * Ground radius around the anchor, in metres, within which every selected leaf tile is in the GLB (direct tile crawl
-   * only). Equals requestedRadiusMeters unless the leaf cap dropped tiles; then it is how far the kept tiles reach
-   * before the nearest dropped one.
+   * only): the radius asked, or the one it grew to (`containment`), unless a leaf cap dropped tiles; then it is how far
+   * the kept tiles reach before the nearest dropped one.
    */
   coveredRadiusMeters?: number;
-  /** True when the requested radius selected more leaf tiles than the cap and the farthest ones were left out. */
+  /** True when the radius selected more leaf tiles than a cap and the farthest ones were left out. */
   truncated?: boolean;
+  /** The radius grown to keep whole every building the asked one reaches (`containRadiusM`), or why it could not grow. */
+  containment?: { grownToMeters: number; error?: string };
   /** Leaf tiles in the GLB, and leaf tiles the requested radius selected (direct tile crawl only). */
   leafTiles?: { kept: number; selected: number };
   error?: string;
@@ -275,7 +277,14 @@ export interface Google3DTilesQueryOptions {
   atomicBuildingIntegrity?: boolean;
   enforceZeroBuildingClipping?: boolean;
   zenithAltitudeMeters?: number;
+  /** A cap on the leaf tiles kept, nearest in plan first (selectLeavesByPlanReach). Unset: every leaf the radius touches. */
   maxLeaves?: number;
+  /**
+   * Atomic building integrity: the radius that keeps whole every building the asked radius reaches (the caller's, from
+   * Google's vector footprints: orchestrator.ts districtContainedRadiusM). The leaves are selected out to it; without it,
+   * or when it fails (the result says why), the asked radius is extracted. Not used with `rect`.
+   */
+  containRadiusM?: (place: { lat: number; lng: number }, radiusM: number) => Promise<number>;
   /**
    * Keep only the leaf tiles touching this rectangle of the tangent plane (x east, z south, metres about the anchor), of
    * those within the radius: a chunked district's chunk extracts its own cell and buildings, not a circle around them.
@@ -2504,9 +2513,23 @@ export class Google3DTileBlockoutPipelineService {
       heightGuessM: (geoAnchor.elevation ?? 0) + geoidUndulation(geoAnchor.lat, geoAnchor.lng)
     };
 
+    // grown to keep whole every building the asked radius reaches, when the caller can say how far
+    let extractRadiusM = radiusMeters;
+    let containment: Google3DTile3DObjectResult['containment'];
+    if (options?.containRadiusM && !options.rect) {
+      try {
+        extractRadiusM = Math.max(radiusMeters, await options.containRadiusM({ lat: geoAnchor.lat, lng: geoAnchor.lng }, radiusMeters));
+        containment = { grownToMeters: extractRadiusM };
+      } catch (err) {
+        stopIfAborted();
+        containment = { grownToMeters: radiusMeters, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+    stopIfAborted();
+
     let collected: Awaited<ReturnType<GoogleTileDistrictCrawler['collectLeafTiles']>>;
     try {
-      collected = await crawler.collectLeafTiles(anchor, radiusMeters);
+      collected = await crawler.collectLeafTiles(anchor, extractRadiusM);
     } catch (err) {
       stopIfAborted();
       // A radius that selects too many leaves is the caller's to fix; it keeps its own type.
@@ -2519,28 +2542,11 @@ export class Google3DTileBlockoutPipelineService {
       throw new TileExtractionError('crawl', `no Photorealistic 3D Tiles coverage at ${formatCoordinates(geoAnchor.lat, geoAnchor.lng)} (${resolvedAddress})`);
     }
 
-    const maxLeaves = options?.maxLeaves || 524;
-    // Sort leaves by 3D distance from anchor in ECEF space so the central landmark is 100% contiguous and complete
     const anchorFrame = GoogleTileDistrictCrawler.localFrame(anchor.lat, anchor.lng, anchor.heightGuessM);
     // a rectangle asked for: only the leaves touching it (a leaf with no box cannot be placed, and is kept)
     const rect = options?.rect;
     const picked = rect ? leaves.filter(l => !(Array.isArray(l.box) && l.box.length >= 12) || GoogleTileDistrictCrawler.footprintIntersectsRect(l.box, anchorFrame, rect)) : leaves;
-    const sortedLeaves = [...picked].sort((a, b) => {
-      const distA = Math.hypot(a.box[0] - anchorFrame.origin[0], a.box[1] - anchorFrame.origin[1], a.box[2] - anchorFrame.origin[2]);
-      const distB = Math.hypot(b.box[0] - anchorFrame.origin[0], b.box[1] - anchorFrame.origin[1], b.box[2] - anchorFrame.origin[2]);
-      return distA - distB;
-    });
-    const leafSubset = sortedLeaves.length > maxLeaves ? sortedLeaves.slice(0, maxLeaves) : sortedLeaves;
-    // The cap drops the leaves whose centres lie farthest from the anchor, so the district is complete only out to
-    // the nearest dropped leaf's footprint. (A leaf without a box cannot be placed; it does not shorten the radius.)
-    const droppedLeaves = sortedLeaves.slice(leafSubset.length);
-    const truncated = droppedLeaves.length > 0;
-    const coveredRadiusMeters = truncated
-      ? Math.floor(droppedLeaves.reduce(
-        (r, leaf) => (leaf.box.length >= 12 ? Math.min(r, GoogleTileDistrictCrawler.footprintDistance(leaf.box, anchorFrame)) : r),
-        radiusMeters
-      ))
-      : radiusMeters;
+    const { kept: leafSubset, selected: sortedLeaves, truncated, coveredRadiusM: coveredRadiusMeters } = selectLeavesByPlanReach(picked, anchorFrame, extractRadiusM, options?.maxLeaves);
 
     let buffers: Buffer[];
     let downloadRanks: number[] = [];
@@ -2620,6 +2626,7 @@ export class Google3DTileBlockoutPipelineService {
       requestedRadiusMeters: radiusMeters,
       coveredRadiusMeters,
       truncated,
+      ...(containment ? { containment } : {}),
       leafTiles: { kept: leafSubset.length, selected: sortedLeaves.length },
       leafIds: leafSubset.map(l => l.id),
       copyrights: district.copyrights,
@@ -2748,6 +2755,29 @@ function extractionStopped(signal: AbortSignal): Error {
 /** Per-call temp root for offline-mock placeholder outputs that were not given an explicit path. */
 function offlineMockOutputRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-tile-blockout-mock-'));
+}
+
+/**
+ * The leaf tiles an extraction keeps: every leaf the crawl selected (its plan footprint touches the circle, at any height),
+ * in order of plan distance from the anchor, so a tower's upper leaves count as near as its base (ordering by distance to
+ * a box's centre in 3D ranked them far and dropped them first). With no cap every leaf is kept; the crawl's own limit
+ * (`maxLeafTiles`, DistrictTooLargeError) bounds the radius. A cap cuts at a plan distance, never within a column of leaves
+ * at the same one, and the radius covered is the nearest dropped leaf's (a leaf with no box cannot be placed: it sorts
+ * first and does not shorten the radius).
+ */
+export function selectLeavesByPlanReach<L extends { id: string; box: number[] }>(leaves: L[], frame: ReturnType<typeof GoogleTileDistrictCrawler.localFrame>, radiusM: number, maxLeaves?: number): { kept: L[]; selected: L[]; truncated: boolean; coveredRadiusM: number } {
+  const placed = (l: L) => Array.isArray(l.box) && l.box.length >= 12;
+  const dist = new Map(leaves.map(l => [l, placed(l) ? GoogleTileDistrictCrawler.footprintDistance(l.box, frame) : 0]));
+  const selected = [...leaves].sort((a, b) => dist.get(a)! - dist.get(b)! || a.id.localeCompare(b.id));
+  let kept = selected;
+  if (maxLeaves !== undefined && maxLeaves > 0 && selected.length > maxLeaves) {
+    const cut = dist.get(selected[maxLeaves])!;
+    const whole = selected.slice(0, maxLeaves).filter(l => dist.get(l)! < cut);
+    kept = whole.length ? whole : selected.slice(0, maxLeaves);
+  }
+  const dropped = selected.slice(kept.length);
+  const coveredRadiusM = dropped.length ? Math.floor(dropped.reduce((r, l) => (placed(l) ? Math.min(r, dist.get(l)!) : r), radiusM)) : radiusM;
+  return { kept, selected, truncated: dropped.length > 0, coveredRadiusM };
 }
 
 /**
