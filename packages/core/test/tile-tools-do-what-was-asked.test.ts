@@ -26,7 +26,7 @@ import { findTileRefineRepoRoot, TileRefineService } from '../src/node/3d-engine
 import { TileVegetationError, TileVegetationService } from '../src/node/3d-engine/tile-vegetation-service';
 import { TILE_SEAMS_VERSION } from '../src/node/3d-engine/tile-seam-weld-service';
 import { Google3DTileCrawlerBaker } from '../src/node/spatial/Google3DTileCrawlerBaker';
-import { Google3DTileBlockoutPipelineService } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
+import { Google3DTileBlockoutPipelineService, selectLeavesByPlanReach } from '../src/node/spatial/Google3DTileBlockoutPipelineService';
 import { DistrictTooLargeError, GoogleTileDistrictCrawler } from '../src/node/spatial/GoogleTileDistrictCrawler';
 
 const REPO = fs.realpathSync(path.resolve(__dirname, '../../..'));
@@ -200,6 +200,31 @@ describe('google_3d_tiles extraction radius', () => {
         expect(outcome.exec.summaryResult).toContain('within 120 m of the anchor');
     });
 
+    it('grows the radius to keep whole every building it reaches, when the caller can say how far, and says so', async () => {
+        const { requested } = serveTiles();
+        const r = await new Google3DTileBlockoutPipelineService().fetch3DObject(`${ANCHOR.lat}, ${ANCHOR.lng}`, 'full-texture', {
+            radiusMeters: 120, outputGlbPath: outGlb('flatiron_grown.glb'),
+            containRadiusM: async (_place, radiusM) => { expect(radiusM).toBe(120); return 200; }
+        });
+        expect(r.requestedRadiusMeters).toBe(120);
+        expect(r.coveredRadiusMeters).toBe(200);
+        expect(r.truncated).toBe(false);
+        expect(r.containment).toEqual({ grownToMeters: 200 });
+        expect(r.leafTiles).toEqual({ kept: 2, selected: 2 });
+        expect(requested.some(p => p.endsWith('/far.glb'))).toBe(true); // the roof 190 m out, past the 120 m asked
+    });
+
+    it('extracts the radius asked when the growth cannot be read, and says why', async () => {
+        const { requested } = serveTiles();
+        const r = await new Google3DTileBlockoutPipelineService().fetch3DObject(`${ANCHOR.lat}, ${ANCHOR.lng}`, 'full-texture', {
+            radiusMeters: 120, outputGlbPath: outGlb('flatiron_not_grown.glb'),
+            containRadiusM: async () => { throw new Error('the vector tiles did not answer'); }
+        });
+        expect(r.coveredRadiusMeters).toBe(120);
+        expect(r.containment).toEqual({ grownToMeters: 120, error: 'the vector tiles did not answer' });
+        expect(requested.some(p => p.endsWith('/far.glb'))).toBe(false);
+    });
+
     it('uses the 250 m default when no radius is given', async () => {
         const { requested } = serveTiles();
         const outcome = await createDefaultToolRegistry().dispatch('google_3d_tiles_get_clay',
@@ -214,8 +239,52 @@ describe('google_3d_tiles extraction radius', () => {
     });
 });
 
-describe('google_3d_tiles extraction beyond the leaf cap', () => {
-    // A 25 x 25 grid of 20 m leaves covering 500 m x 500 m around the anchor: 625 leaves, more than the 524 kept.
+describe('selectLeavesByPlanReach: which leaves an extraction keeps', () => {
+    const frame = GoogleTileDistrictCrawler.localFrame(ANCHOR.lat, ANCHOR.lng, GROUND_H);
+    // a 460 m tower at the anchor, as Google tiles one: a column of leaves over one footprint, the top ones high up
+    const tower = Array.from({ length: 12 }, (_, k) => ({ id: `tower_${k}`, box: enuBox([0, 0, 20 + 40 * k], [15, 15, 20]) }));
+    // and the street around it: 20 m ground leaves out to 200 m
+    const ground: Array<{ id: string; box: number[] }> = [];
+    for (let i = -10; i <= 10; i++) for (let j = -10; j <= 10; j++) if (Math.abs(i) > 1 || Math.abs(j) > 1) ground.push({ id: `g_${i}_${j}`, box: enuBox([i * 20, j * 20, 0], [10, 10, 5]) });
+    const leaves = [...tower, ...ground];
+    const plan = (l: { box: number[] }) => GoogleTileDistrictCrawler.footprintDistance(l.box, frame);
+
+    it('keeps every leaf the radius touches when nothing caps it, a tower whole', () => {
+        const r = selectLeavesByPlanReach(leaves, frame, 220);
+        expect(r.kept).toHaveLength(leaves.length);
+        expect(r.truncated).toBe(false);
+        expect(r.coveredRadiusM).toBe(220);
+    });
+
+    it('under a cap keeps the whole tower and drops the farthest street, cutting at one plan distance', () => {
+        // the old rule (nearest box centre in 3D) ranked the tower's top leaves past the street 200 m out and dropped them first
+        const centre3d = (l: { box: number[] }) => Math.hypot(l.box[0] - frame.origin[0], l.box[1] - frame.origin[1], l.box[2] - frame.origin[2]);
+        const old = [...leaves].sort((a, b) => centre3d(a) - centre3d(b)).slice(0, 300);
+        expect(tower.filter(t => !old.includes(t)).length).toBeGreaterThan(4);
+
+        const r = selectLeavesByPlanReach(leaves, frame, 220, 300);
+        expect(tower.every(t => r.kept.includes(t))).toBe(true);
+        expect(r.truncated).toBe(true);
+        expect(r.kept.length).toBeLessThanOrEqual(300);
+        const dropped = leaves.filter(l => !r.kept.includes(l));
+        const nearestDropped = Math.min(...dropped.map(plan));
+        // nothing kept at or past the first dropped leaf's plan distance (no column or ring of leaves split), all nearer kept
+        expect(Math.max(...r.kept.map(plan))).toBeLessThan(nearestDropped);
+        expect(r.coveredRadiusM).toBe(Math.floor(nearestDropped));
+        expect(r.coveredRadiusM).toBeLessThan(220);
+    });
+
+    it('keeps a leaf with no box first, and it does not shorten the radius covered', () => {
+        const unplaced = { id: 'zz_unplaced', box: [] as number[] };
+        const r = selectLeavesByPlanReach([...ground, unplaced], frame, 220, 10);
+        expect(r.kept[0]).toBe(unplaced);
+        const dropped = ground.filter(l => !r.kept.includes(l));
+        expect(r.coveredRadiusM).toBe(Math.floor(Math.min(...dropped.map(plan))));
+    });
+});
+
+describe('google_3d_tiles extraction of a radius holding many leaves', () => {
+    // A 25 x 25 grid of 20 m leaves covering 500 m x 500 m around the anchor: 625 leaves, more than the 524 an extraction kept before.
     const CELL = 20;
     const cells: Array<{ name: string; east: number; north: number }> = [];
     for (let i = -12; i <= 12; i++) for (let j = -12; j <= 12; j++) cells.push({ name: `cell_${i + 12}_${j + 12}.glb`, east: i * CELL, north: j * CELL });
@@ -237,7 +306,7 @@ describe('google_3d_tiles extraction beyond the leaf cap', () => {
     /** Horizontal distance from the anchor to a cell's footprint. */
     const footprintDistance = (c: { east: number; north: number }) => Math.hypot(Math.max(0, Math.abs(c.east) - half), Math.max(0, Math.abs(c.north) - half));
 
-    it('reports the radius the kept tiles cover, not the one asked for', async () => {
+    it('keeps every leaf the radius touches and covers the radius asked for', async () => {
         const { requested } = serveTiles(grid, gridLeaves);
         const outcome = await createDefaultToolRegistry().dispatch('google_3d_tiles_get_full_texture',
             { query: `${ANCHOR.lat}, ${ANCHOR.lng}`, radiusMeters: 400, outputGlbPath: outGlb('grid_400.glb'), remesh: false }, {} as any);
@@ -245,22 +314,14 @@ describe('google_3d_tiles extraction beyond the leaf cap', () => {
         expect(outcome.exec.status).toBe('completed');
 
         const downloaded = new Set(requested.filter(p => p.includes('/cell_')).map(p => path.basename(p)));
-        const dropped = cells.filter(c => !downloaded.has(c.name));
-        expect(downloaded.size).toBe(524);
-        expect(dropped).toHaveLength(625 - 524);
-        // complete out to the nearest left-out tile, which is well inside the 400 m asked for
-        const nearestDropped = Math.min(...dropped.map(footprintDistance));
+        expect(downloaded.size).toBe(625);
+        expect(cells.every(c => footprintDistance(c) <= 400)).toBe(true);
         expect(payload.requestedRadiusMeters).toBe(400);
-        expect(payload.truncated).toBe(true);
-        expect(payload.leafTiles).toEqual({ kept: 524, selected: 625 });
-        expect(payload.coveredRadiusMeters).toBeLessThan(400);
-        expect(Math.abs(payload.coveredRadiusMeters - Math.floor(nearestDropped))).toBeLessThanOrEqual(1);
-        for (const c of cells.filter(c => footprintDistance(c) < payload.coveredRadiusMeters)) expect(downloaded.has(c.name)).toBe(true);
-        expect(payload.mesh.triangleCount).toBe(2 * 524);
-
-        const summary = outcome.exec.summaryResult!;
-        expect(summary).toContain(`covers about ${payload.coveredRadiusMeters} m around the anchor (asked for 400 m; capped at 524 of the 625 tiles in that radius)`);
-        expect(summary).not.toContain('within 400 m');
+        expect(payload.truncated).toBe(false);
+        expect(payload.leafTiles).toEqual({ kept: 625, selected: 625 });
+        expect(payload.coveredRadiusMeters).toBe(400);
+        expect(payload.mesh.triangleCount).toBe(2 * 625);
+        expect(outcome.exec.summaryResult).toContain('within 400 m of the anchor');
     });
 
     it('fails with the crawler\'s "reduce the radius" error instead of running the blockout runner', async () => {

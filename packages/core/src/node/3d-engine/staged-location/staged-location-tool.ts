@@ -88,7 +88,7 @@ export const STAGED_ISOLATE_DESCRIPTION =
     'extraction is sized to the structure, so radiusMeters is ignored. Use it when the user asks for one building or object rather than an area.';
 
 export const STAGED_RADIUS_DESCRIPTION =
-    'Extraction radius in metres around the anchor for a district (default 250). The nearest 524 leaf tiles are kept; when the radius holds more, the result ' +
+    'Extraction radius in metres around the anchor for a district (default 250). Every leaf tile whose plan footprint the radius touches is kept, at any height; when a cap keeps fewer, the result ' +
     'reports the smaller radius actually covered as extraction.radiusM (extraction.requestedRadiusM is what was asked) with a radius_truncated degradation, and ' +
     'the summary says so. A radius that selects more than 6000 leaf tiles fails. Ignored with isolate, whose extraction is sized to the structure ' +
     '(extraction.radiusM says how far it reached).';

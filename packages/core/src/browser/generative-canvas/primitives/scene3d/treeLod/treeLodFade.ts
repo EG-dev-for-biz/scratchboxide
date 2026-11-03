@@ -9,6 +9,7 @@
 
 
 import * as THREE from 'three';
+import { markDissolveVariant } from '../stagedBuild/revealMaterial';
 import { FADE_STEPS } from './treeLodMath';
 
 /**
@@ -57,5 +58,7 @@ export function makeFadeVariant(base: THREE.Material, loStep: number, hiStep: nu
         }
     };
     mat.needsUpdate = true;
+    // a staged build's reveal of this level draws the base, whole (the range moves on, a held staged material would not)
+    markDissolveVariant(mat, base);
     return mat;
 }

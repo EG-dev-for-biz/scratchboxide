@@ -24,6 +24,7 @@ import type { BakedGaussian } from '../../common/geospatial-4d-protocol';
 import { decodePng, calibrateStoneAlbedoRgba, type StoneAlbedoPreset } from '../texture-processing';
 import type { TileSunSpec } from '../3d-engine/native-tile-path-tracer-service';
 import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
+import { weatherDateOf, withLocationSceneWeather } from '../../browser/generative-canvas/services/atmosphere/scene-weather';
 import { buildNativeIfStale } from '../3d-engine/native-build';
 import { repoPath } from '../process/repo-python';
 import { containSplatsToScan, type ContainmentReport } from './splat-containment';
@@ -748,7 +749,9 @@ export class SurveySplatPipelineService {
             }
         };
 
-        const scene3DData: Scene3DData = {
+        // a real place opens under its partly cloudy, low-sun sky (user decision 2026-11-02; the splat keeps its own even
+        // light); the studio stays as the sky the Weather tool's Off returns to
+        const scene3DData: Scene3DData = withLocationSceneWeather({
             title: `${locationName} — 3D Gaussian Splat`,
             subtitle: `Photorealistic 3DGS radiance field at Lat ${anchor.lat.toFixed(4)}°, Lng ${anchor.lng.toFixed(4)}° synthesized via Nano Banana multi-station capture and C++20 metric depth unprojection.`,
             worldBranch: `splat-world/${sceneSlug}`,
@@ -777,7 +780,6 @@ export class SurveySplatPipelineService {
             camera: vantage
                 ? { position: vantage.eye, target: [vantage.eye[0] + 20 * look[0], vantage.eye[1], vantage.eye[2] + 20 * look[1]], fov: 60, keepPoseOnLoad: true }
                 : { position: [0, 20, 45], target: [0, 2, 0], fov: 45 },
-            // no uninvited atmosphere (AGENTS.md 3.6): the splat carries its own (even) light, the scene is a neutral studio
             environment: {
                 skybox: 'studio',
                 lighting: 'studio',
@@ -794,7 +796,7 @@ export class SurveySplatPipelineService {
             },
             customMeshes: [],
             objects: [splatMediaObject]
-        };
+        }, weatherDateOf(Date.now()));
 
         return { scene3DData, splatMediaObject };
     }

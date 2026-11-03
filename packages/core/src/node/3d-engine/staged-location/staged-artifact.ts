@@ -21,11 +21,14 @@
  *   azimuth 45° (the app's auto-framing defaults), distance max(the stand-off for the structure, 1.2 × L1's bounding
  *   sphere radius), the elevation raised in 5° steps up to 70° until the eye is outside L1's box. Every later layer is
  *   no larger than L1, so calculateStandoffCamera keeps it on every attach.
- * - A neutral studio (AGENTS.md): skybox and lighting 'studio', no ground plane, clay.
+ * - A new scene opens under the place's partly cloudy, low-sun sky (scene-weather.ts withLocationSceneWeather, user
+ *   decision 2026-11-02), over a studio the Weather tool's Off returns to; no ground plane, clay. Staged into an open
+ *   scene, that scene's own sky is kept.
  */
 
 import * as fs from 'fs';
-import type { CanvasArtifact, Media4DObject } from '../../../browser/generative-canvas/canvas-types';
+import type { CanvasArtifact, Media4DObject, Scene3DData } from '../../../browser/generative-canvas/canvas-types';
+import { weatherDateOf, withLocationSceneWeather } from '../../../browser/generative-canvas/services/atmosphere/scene-weather';
 import type { StagedBuildState, StagedLayer } from '../../../common/spatial/staged-location-contracts';
 import { anchorOffset, isLocationLayer, offsetObjects, partitionActiveScene, type ActiveScenePartition } from './kept-structure';
 
@@ -201,20 +204,23 @@ export function composeStagedArtifact(input: StagedArtifactInput): CanvasArtifac
             data: { ...prev, ...base, stagedBuild, objects: [...carried.other, ...structure.filter(o => !ownIds.has(o.id)), ...objects] }
         } as CanvasArtifact;
     }
+    // a real place opens under its partly cloudy, low-sun sky, computed for the day the run started (the same on every
+    // compose); the studio stays as the sky the Weather tool's Off returns to
+    const started = Math.min(...state.stages.map(s => s.timings?.startedAtMs).filter((v): v is number => Number.isFinite(v) && (v as number) > 0), state.updatedAtMs);
     return {
         id: state.artifactId,
         type: '3d-scene',
         title: `${place} (staged clay)`,
         summary: input.summary,
         version: input.version,
-        data: {
+        data: withLocationSceneWeather({
             title: `${place} — staged clay from Google 3D Tiles`,
             subtitle: 'Google 3D Tiles in studio clay, built in stages as each one finishes.',
             cameraMode: 'orbit',
             environment: { skybox: 'studio', lighting: 'studio', ground: false },
             ...base,
             objects
-        }
+        } as unknown as Scene3DData, weatherDateOf(started))
     } as unknown as CanvasArtifact;
 }
 
