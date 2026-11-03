@@ -1536,7 +1536,9 @@ public:
                 Vec3 axisPt = cfg.rootAnchor + (cfg.crownCenter - cfg.rootAnchor) * tAxis;
                 Vec3 radialVec(nodes[nodeId].position.x - axisPt.x, 0.0f, nodes[nodeId].position.z - axisPt.z);
                 float rDist = std::sqrt(radialVec.x * radialVec.x + radialVec.z * radialVec.z);
-                Vec3 radialDir = (rDist > 0.05f) ? (radialVec / rDist) : Vec3(1, 0, 0);
+                // within 5 cm of the axis "outward" is the way the node's attractors lie (it was +x, the same side for
+                // every tree)
+                Vec3 radialDir = (rDist > 0.05f) ? (radialVec / rDist) : Vec3(avgDir.x, 0.0f, avgDir.z).normalized();
 
                 // Blend attraction direction with previous growth momentum
                 Vec3 prevDir = nodes[nodeId].growthDir;
