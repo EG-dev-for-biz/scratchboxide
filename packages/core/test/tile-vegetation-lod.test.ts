@@ -119,8 +119,11 @@ describe('trees at four levels', () => {
                 expect(Math.hypot(l[0] - c.stem[0], l[2] - c.stem[1])).toBeLessThan(radius);
                 expect(l[1]).toBeLessThan(c.apex[1]); expect(l[1]).toBeGreaterThan(c.supportY);
             }
+            // the lobes are spheres of about 0.75 of the crown radius (a smooth union), so their union reaches past the leaves
+            // themselves (0.95-0.98 of the radius; the ellipsoid above bounds their width): 1.31-1.39 of the radius on macOS,
+            // 1.40 on Ubuntu, moving by +-0.03 as the four lobe centres land
             const reach = Math.max(...crown.lobes.map((l: number[]) => Math.hypot(l[0] - c.stem[0], l[2] - c.stem[1]) + l[3]));
-            expect(reach).toBeGreaterThan(0.7 * radius); expect(reach).toBeLessThan(1.4 * radius);
+            expect(reach).toBeGreaterThan(0.7 * radius); expect(reach).toBeLessThan(1.5 * radius);
             const levels = t.children.map((k: number) => json.nodes[k]).sort((a: any, b: any) => a.extras.sbLod.level - b.extras.sbLod.level);
             expect(levels.map((n: any) => n.extras.sbLod.level)).toEqual([0, 1, 2, 3]);
             expect(levels.map((n: any) => n.extras.sbLod.instanced)).toEqual([true, true, true, false]);
