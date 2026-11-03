@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 /**
- * Pipeline K's material regions on the native kernel (opt-in; nothing in the pipeline calls it yet): the per-texel work of
+ * Pipeline K's material regions on the native kernel (when SCRATCHBOX_K_NATIVE runs `regions`, the default; native-switch.ts, material-regions-pool.ts): the per-texel work of
  * material-regions.ts (the appearance k-means, the harvest's texel classes, and planMaterialJob's masks, classes, tiles,
  * feathering and maps) runs in C++ (scratchbox_material_regions.hpp behind scripts/material_regions_native.cpp), built
  * through the native build cache. The GLB JSON, the triangles' plane choice, the band responses, the classes' formatting

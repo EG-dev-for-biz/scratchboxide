@@ -9,7 +9,7 @@
 
 /**
  * twin_texels: pipeline K's per-texel twin kernels (scratchbox_twin_texels.hpp) behind a small binary protocol on
- * stdin and stdout, so the photos go over as raw pixels, never PNG (pipeline-k/native-twin.ts is the other end).
+ * stdin and stdout, so the photos go over as raw pixels, never PNG (pipeline-k/native/twin-texels-native.ts is the other end).
  *
  * Requests follow one another until stdin closes; each is a 16-byte header (u32 magic "SBTT", u32 command, u64
  * payload bytes) and its payload, all little-endian, with no padding. Each gets one reply, the same header (the
@@ -22,7 +22,9 @@
  *                    f32[6 soup] UVs, f32[soup] normal y, i32[soup] photo, f32[9 context] corners, u32 photos, and per
  *                    photo i32 image, i32 width, i32 height, u8[4 w h] RGBA, u8[w h] surface classes.   -> (nothing)
  *   2 roof cells:    f64 mpp, frame (the map from above).        -> u32 n, i32[n] photo, f32[3n] point, f32[3n] colour
- *   3 cell shadows:  f64 mpp, u32 suns, frames.                  -> u8[suns n], one sun after another
+ *   3 cell shadows:  f64 mpp, u32 suns, frames, f64 halfBlockM, u32 decks, each u32 n and i32[n] cells, then per sun
+ *                    u32 m and u32[m] decks to score it on.
+ *                                 -> u8[suns n], one sun after another; then per sun, per deck asked, f64[18] sums
  *   4 roof lift:     f64 mpp, u32 suns, frames; u32 photo suns, each i32 image, i32 sun, f64[3] ratio, f64 log lum
  *                    ratio; u32 terraces, each i32 image, i32 height bin, f64 lit level (NaN: none); u32 terraces
  *                    across photos, each i32 sun, f64[3] ratio, f64 lit level, f64 log lum ratio; u32 keys, each
@@ -183,8 +185,25 @@ int main(int argc, char** argv) {
             if (!celled) fail("cell shadows before the roof cells");
             const double mpp = in.get<double>();
             const std::vector<SunFrame> suns = in.frames();
-            out.owned.push_back(roof.cellShadows(suns, mpp));
+            const double halfBlockM = in.get<double>();
+            std::vector<std::vector<int32_t>> planes(in.get<uint32_t>());
+            for (auto& pl : planes) {
+                in.into(pl, in.get<uint32_t>());
+                for (int32_t i : pl) if (i < 0 || static_cast<size_t>(i) >= roof.cells.size()) fail("a deck names a cell that is not there");
+            }
+            std::vector<std::vector<uint32_t>> score(suns.size());
+            for (auto& sc : score) {
+                in.into(sc, in.get<uint32_t>());
+                for (uint32_t k : sc) if (k >= planes.size()) fail("a sun is scored on a deck that is not there");
+            }
+            std::vector<std::vector<double>> sums;
+            out.owned.push_back(roof.cellShadows(suns, mpp, planes, score, halfBlockM, sums));
             out.add(out.owned.back().data(), out.owned.back().size());
+            for (auto& sm : sums) {
+                out.owned.emplace_back(sm.size() * sizeof(double));
+                std::memcpy(out.owned.back().data(), sm.data(), out.owned.back().size());
+                out.add(out.owned.back().data(), out.owned.back().size());
+            }
         } else if (cmd == 4) {
             if (!celled) fail("the lift before the roof cells");
             LiftPlan plan;

@@ -8,43 +8,139 @@
  ********************************************************************************/
 
 /**
- * The roof cast-shadow kernels in C++ (scratchbox_roof_shadow.hpp, pipeline-k/native/roof-shadow-native.ts) against
- * roof-shadow.ts on a synthetic roof: a 60 x 60 m deck at 100 m with a parapet and a tower to 160 m, a taller neighbour
- * at +x casting a shadow over half the deck, and context blocks around; the deck's photo painted with a true sun's
- * shadow (az 0, el 40).
+ * The roof-shadow lift's native kernels (scratchbox_twin_texels.hpp, pipeline-k/native/twin-texels-native.ts) against
+ * the TypeScript ones they replace (roof-shadow.ts, SCRATCHBOX_K_NATIVE=0). Every comparison is exact. Two synthetic
+ * twins:
+ * - the deck: a 40 m deck with a tower, a setback beside it and a finely meshed neighbour in the context; five photos
+ *   (one a patch too small to fit a sun of its own, wholly in the tower's shadow) darkened under one sun. It reaches
+ *   a fitted deck, lifted terraces and a terrace across photos;
+ * - the roof: a 60 x 60 m deck at 100 m with a parapet and a tower to 160 m, a taller neighbour casting over half the
+ *   deck and context blocks on a ring, the deck painted with a true sun's shadow (az 0, el 40).
  *
- *   1. shadowMapNative is shadowMap, pixel for pixel (an oblique sun, a sun along the walls, the map from above);
- *   2. shadowedBitsNative is shadowedAt over every roof cell;
- *   3. sunSearchNative is roofShadowLift's step 3 (scored suns, medians, coarse bits, candidates), and its best deck sun
- *      is the one roofShadowLift reports;
- *   4. the native search and lift reproduce roofShadowLift's lifted photo byte for byte;
- *   5. liftRoofShadowsNative is step 7 on a pass with a terrace across photos as well as a photo's own sun;
- *   6. roofShadowLift itself, with SCRATCHBOX_K_NATIVE=roof-shadow, gives the same photos and report as without.
- * All comparisons are exact. The references below that roof-shadow.ts does not export (occludersOf, roofCells,
- * planesOf, planeScore, shadowFraction, the step 3 and step 7 loops) are verbatim copies of roof-shadow/9.
- * Last, the TypeScript and native search and lift are timed on a roof of a few hundred thousand occluders.
+ * 1. The kernels: the same roof cells; the same cell shadows and deck sums under an oblique sun, a sun off the search
+ *    grid, one along the walls, one from straight above; and the same lift with a photo's own sun on a terrace with
+ *    no lit level known (the uncapped lift) and terraces across photos under several suns.
+ * 2. roofShadowLift on each twin: the same report field for field and the same photos, native on every core and on
+ *    3 threads.
+ * 3. One timing line, TypeScript against native, on the roof at a few hundred thousand occluders (vitest
+ *    --silent=false shows it).
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { writeGlb, encodePng, type Chunk } from './helpers/synthetic-scan-glb';
-import { parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
-import { ROOF_SHADOW_PARAMS, roofShadowLift, shadowMap, shadowedAt, type Occluders, type RoofShadowParams, type ShadowMap } from '../src/node/3d-engine/staged-location/pipeline-k/roof-shadow';
-import { collect, type Soup } from '../src/node/3d-engine/staged-location/pipeline-k/view-relight';
-import { SRGB8_TO_LINEAR, linearToSrgb255 } from '../src/common/spatial/photogrammetric-delight';
-import { TEXEL_NONE } from '../src/node/3d-engine/staged-location/pipeline-k/texture-harmonize';
+import { encodePng, writeGlb, type Chunk } from './helpers/synthetic-scan-glb';
+import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
+import { occludersOf, planesOf, ROOF_SHADOW_PARAMS, roofShadowKernels, roofShadowLift, shadowMap, shadowedAt, type LiftPlan, type RoofShadowReport } from '../src/node/3d-engine/staged-location/pipeline-k/roof-shadow';
+import { surfaceClassMasks } from '../src/node/3d-engine/staged-location/pipeline-k/texture-harmonize';
+import { collect } from '../src/node/3d-engine/staged-location/pipeline-k/view-relight';
+import { ensureNativeTwinBinary } from '../src/node/3d-engine/staged-location/pipeline-k/native/twin-texels-native';
+import { linearToSrgb255 } from '../src/common/spatial/photogrammetric-delight';
 import type { RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
-import {
-    ensureRoofShadowNativeBinary, liftRoofShadowsNative, shadowMapNative, shadowedBitsNative, sunSearchNative,
-    type RoofCells, type RoofShadowLiftPass, type RoofShadowScored
-} from '../src/node/3d-engine/staged-location/pipeline-k/native/roof-shadow-native';
 
 type V3 = [number, number, number];
 const P0 = ROOF_SHADOW_PARAMS;
+interface Twin { g: ReturnType<typeof parseGlbBytes>; context: { vertices: Float32Array; indices: Uint32Array }; photos: Map<number, RgbaImage8>; surfaces: Map<number, Uint8Array> }
 
-// ---- the synthetic roof ----
+// ---- the deck ----
+
+interface Prim { pos: number[]; uv?: number[]; idx: number[]; image?: number }
+
+/** A GLB of the primitives (a textured one draws on its image through a material of its own image). */
+function glb(prims: Prim[], images: number): ReturnType<typeof parseGlbBytes> {
+    const bytes: number[] = [], views: any[] = [], accessors: any[] = [];
+    const add = (arr: Float32Array | Uint32Array, type: string, ct: number, count: number) => {
+        const b = new Uint8Array(arr.buffer);
+        views.push({ buffer: 0, byteOffset: bytes.length, byteLength: b.length });
+        for (const v of b) bytes.push(v);
+        accessors.push({ bufferView: views.length - 1, componentType: ct, count, type });
+        return accessors.length - 1;
+    };
+    const meshes = prims.map(p => {
+        const POSITION = add(new Float32Array(p.pos), 'VEC3', 5126, p.pos.length / 3);
+        const TEXCOORD_0 = p.uv ? add(new Float32Array(p.uv), 'VEC2', 5126, p.uv.length / 2) : undefined;
+        const indices = add(new Uint32Array(p.idx), 'SCALAR', 5125, p.idx.length);
+        return { primitives: [{ attributes: { POSITION, ...(TEXCOORD_0 !== undefined ? { TEXCOORD_0 } : {}) }, indices, mode: 4, ...(p.image !== undefined ? { material: p.image } : {}) }] };
+    });
+    const ids = Array.from({ length: images }, (_, k) => k);
+    const json = {
+        asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: meshes.map((_, k) => k) }], nodes: meshes.map((_, k) => ({ mesh: k })), meshes,
+        materials: ids.map(k => ({ pbrMetallicRoughness: { baseColorTexture: { index: k } } })), textures: ids.map(k => ({ source: k })), images: ids.map(k => ({ uri: `${k}.png` })),
+        accessors, bufferViews: views, buffers: [{ byteLength: bytes.length }]
+    };
+    return parseGlbBytes(assembleGlb(json as never, Uint8Array.from(bytes)));
+}
+
+/** A closed box's four sides (untextured), in quads of about `stepM` (one quad a side when absent). */
+function sides(x0: number, x1: number, z0: number, z1: number, y0: number, y1: number, stepM?: number): Prim {
+    const c = [[x0, z0], [x1, z0], [x1, z1], [x0, z1]], pos: number[] = [], idx: number[] = [];
+    for (let k = 0; k < 4; k++) {
+        const [ax, az] = c[k], [bx, bz] = c[(k + 1) % 4];
+        const nu = stepM ? Math.ceil(Math.hypot(bx - ax, bz - az) / stepM) : 1, nv = stepM ? Math.ceil((y1 - y0) / stepM) : 1;
+        for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+            const xa = ax + ((bx - ax) * i) / nu, za = az + ((bz - az) * i) / nu, xb = ax + ((bx - ax) * (i + 1)) / nu, zb = az + ((bz - az) * (i + 1)) / nu;
+            const ya = y0 + ((y1 - y0) * j) / nv, yb = y0 + ((y1 - y0) * (j + 1)) / nv, b = pos.length / 3;
+            pos.push(xa, ya, za, xb, ya, zb, xb, yb, zb, xa, yb, za);
+            idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+        }
+    }
+    return { pos, idx };
+}
+
+/** A deterministic surface colour (linear) at a plan point: stripes and a little grain. */
+function albedo(x: number, z: number, img: number): [number, number, number] {
+    const grain = ((Math.sin(x * 12.9898 + z * 78.233 + img * 3.1) * 43758.5453) % 1 + 1) % 1;
+    const v = 0.16 + 0.07 * Math.sin(x * 1.3) * Math.cos(z * 0.7) + 0.05 * grain;
+    return [v, v * 0.93, v * 0.82];
+}
+
+/** The deck twin: its photos shadowed under az 60, el 40 by the twin and the neighbour, and their surface classes. */
+function deckTwin(): Twin {
+    const tpm = 8, sun = { az: 60, el: 40 }, dark = [2.4, 2.3, 2.0];
+    const rects = [
+        { x0: 0, x1: 20, z0: 0, z1: 40, y: 20 },    // 0: the deck's west half
+        { x0: 15, x1: 25, z0: 15, z1: 25, y: 60 },  // 1: the tower's top
+        { x0: 20, x1: 40, z0: 0, z1: 40, y: 20 },   // 2: the deck's east half
+        { x0: -15, x1: 0, z0: 0, z1: 40, y: 10 },   // 3: the setback
+        { x0: 9, x1: 13, z0: 2, z1: 6, y: 20 }      // 4: a patch of the deck in the tower's shadow
+    ];
+    const tops: Prim[] = rects.map((_, k) => ({ pos: [], uv: [], idx: [], image: k }));
+    // an up-facing quad UV-mapped into its photo's rectangle
+    const quad = (img: number, x0: number, x1: number, z0: number, z1: number) => {
+        const r = rects[img], p = tops[img], b = p.pos.length / 3, u = (x: number) => (x - r.x0) / (r.x1 - r.x0), v = (z: number) => (z - r.z0) / (r.z1 - r.z0);
+        p.pos.push(x0, r.y, z0, x1, r.y, z0, x1, r.y, z1, x0, r.y, z1);
+        p.uv!.push(u(x0), v(z0), u(x1), v(z0), u(x1), v(z1), u(x0), v(z1));
+        p.idx.push(b, b + 2, b + 1, b, b + 3, b + 2);
+    };
+    // the deck in 1 m quads, each on the photo its middle falls in
+    for (let x = 0; x < 40; x++) for (let z = 0; z < 40; z++) {
+        const mx = x + 0.5, mz = z + 0.5;
+        quad(mx > 9 && mx < 13 && mz > 2 && mz < 6 ? 4 : mx < 20 ? 0 : 2, x, x + 1, z, z + 1);
+    }
+    for (let x = -15; x < 0; x++) for (let z = 0; z < 40; z++) quad(3, x, x + 1, z, z + 1);
+    quad(1, 15, 25, 15, 25);
+    const g = glb([...tops, sides(0, 40, 0, 40, 0, 20), sides(15, 25, 15, 25, 20, 60), sides(-15, 0, 0, 40, 0, 10)], rects.length);
+    // the neighbour across the street, east of the deck, as finely meshed as a scan (the maps' cost is in their triangles)
+    const box = sides(50, 60, -10, 50, 0, 45, 0.5);
+    const context = { vertices: Float32Array.from(box.pos), indices: Uint32Array.from(box.idx) };
+    const soup = collect(g, g.json);
+    const m = shadowMap({ P: Float32Array.from([...soup.P, ...box.idx.flatMap(i => box.pos.slice(i * 3, i * 3 + 3))]), n: soup.n + box.idx.length / 3 }, sun.az, sun.el, 0.05);
+    const photos = new Map<number, RgbaImage8>();
+    rects.forEach((r, k) => {
+        const W = Math.round((r.x1 - r.x0) * tpm), H = Math.round((r.z1 - r.z0) * tpm), rgba = new Uint8Array(W * H * 4);
+        for (let ty = 0; ty < H; ty++) for (let tx = 0; tx < W; tx++) {
+            const x = r.x0 + ((tx + 0.5) / W) * (r.x1 - r.x0), z = r.z0 + ((ty + 0.5) / H) * (r.z1 - r.z0);
+            const lin = albedo(x, z, k), shaded = shadowedAt(m, x, r.y, z, 0.05), o = (ty * W + tx) * 4;
+            for (let c = 0; c < 3; c++) rgba[o + c] = Math.round(linearToSrgb255(shaded ? lin[c] / dark[c] : lin[c]));
+            rgba[o + 3] = 255;
+        }
+        photos.set(k, { width: W, height: H, rgba });
+    });
+    return { g, context, photos, surfaces: surfaceClassMasks(g, g.json, photos) };
+}
+
+// ---- the roof ----
 
 /** A planar grid from o along u and v; uv (0,0) at o, (1,1) at o + u + v. */
 function grid(o: V3, u: V3, v: V3, nu: number, nv: number, image?: number): Chunk {
@@ -70,10 +166,8 @@ function box(x0: number, x1: number, z0: number, z1: number, y0: number, y1: num
     return out;
 }
 
-interface Scene { g: ReturnType<typeof parseGlbBytes>; photos: Map<number, RgbaImage8>; surfaces: Map<number, Uint8Array>; context: { vertices: Float32Array; indices: Uint32Array }; twinTriangles: number; contextTriangles: number }
-
-/** `step`: the twin's tessellation (m); `ctxStep`: the context's; `texel`: the photos' texel (m); `blocks`: context blocks on a ring. */
-function buildScene(step: number, ctxStep: number, texel: number, blocks: number): Scene {
+/** The roof twin. `step`: the twin's tessellation (m); `ctxStep`: the context's; `texel`: the photos' texel (m); `blocks`: context blocks on a ring. */
+function roofTwin(step: number, ctxStep: number, texel: number, blocks: number): Twin {
     const twin: Chunk[] = [
         ...box(-30, 30, -30, 30, 0, 100, step * 4, null),
         grid([-30, 100, -30], [60, 0, 0], [0, 0, 60], Math.round(60 / step), Math.round(60 / step), 0),
@@ -113,417 +207,140 @@ function buildScene(step: number, ctxStep: number, texel: number, blocks: number
     try {
         const file = path.join(dir, 'twin.glb'), png = encodePng(1, 1, new Uint8Array([128, 128, 128]));
         writeGlb(file, twin, [png, png]);
-        const g = parseGlbBytes(new Uint8Array(fs.readFileSync(file)));
-        return { g, photos, surfaces, context: { vertices: Float32Array.from(vertices), indices: Uint32Array.from(indices) }, twinTriangles: twin.reduce((s, c) => s + c.indices.length / 3, 0), contextTriangles: indices.length / 3 };
+        return { g: parseGlbBytes(new Uint8Array(fs.readFileSync(file))), context: { vertices: Float32Array.from(vertices), indices: Uint32Array.from(indices) }, photos, surfaces };
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
     }
 }
 
-// ---- verbatim copies of roof-shadow.ts's unexported steps (roof-shadow/9) ----
+// ---- comparisons ----
 
-function occludersOf(soup: Soup, context: { vertices: ArrayLike<number>; indices: ArrayLike<number> } | undefined, P: RoofShadowParams): Occluders {
-    if (!context) return { P: soup.P, n: soup.n };
-    let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
-    for (let i = 0; i < soup.P.length; i += 3) { x0 = Math.min(x0, soup.P[i]); x1 = Math.max(x1, soup.P[i]); z0 = Math.min(z0, soup.P[i + 2]); z1 = Math.max(z1, soup.P[i + 2]); }
-    const g = P.footprintGrowM, W = Math.ceil(x1 - x0 + 2 * g) + 1, H = Math.ceil(z1 - z0 + 2 * g) + 1, X0 = x0 - g, Z0 = z0 - g;
-    const core = new Uint8Array(W * H);
-    for (let t = 0; t < soup.n; t++) {
-        const a = t * 9, xs = [soup.P[a] - X0, soup.P[a + 3] - X0, soup.P[a + 6] - X0], zs = [soup.P[a + 2] - Z0, soup.P[a + 5] - Z0, soup.P[a + 8] - Z0];
-        for (let k = 0; k < 3; k++) core[Math.min(H - 1, Math.floor(zs[k])) * W + Math.min(W - 1, Math.floor(xs[k]))] = 1;
-        const det = (xs[1] - xs[0]) * (zs[2] - zs[0]) - (xs[2] - xs[0]) * (zs[1] - zs[0]);
-        if (Math.abs(det) < 1e-9) continue;
-        for (let z = Math.max(0, Math.floor(Math.min(...zs))); z <= Math.min(H - 1, Math.floor(Math.max(...zs))); z++)
-            for (let x = Math.max(0, Math.floor(Math.min(...xs))); x <= Math.min(W - 1, Math.floor(Math.max(...xs))); x++) {
-                const px = x + 0.5, pz = z + 0.5;
-                const b1 = ((px - xs[0]) * (zs[2] - zs[0]) - (xs[2] - xs[0]) * (pz - zs[0])) / det, b2 = ((xs[1] - xs[0]) * (pz - zs[0]) - (px - xs[0]) * (zs[1] - zs[0])) / det;
-                if (b1 >= 0 && b2 >= 0 && b1 + b2 <= 1) core[z * W + x] = 1;
-            }
-    }
-    const plan = new Uint8Array(W * H), r = Math.ceil(g);
-    for (let z = 0; z < H; z++) for (let x = 0; x < W; x++) {
-        if (!core[z * W + x]) continue;
-        for (let dz = -r; dz <= r; dz++) for (let dx = -r; dx <= r; dx++) { const zz = z + dz, xx = x + dx; if (zz >= 0 && xx >= 0 && zz < H && xx < W) plan[zz * W + xx] = 1; }
-    }
-    const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, out: number[] = [];
-    const V = context.vertices, I = context.indices;
-    for (let t = 0; t + 2 < I.length; t += 3) {
-        const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
-        const mx = (V[a] + V[b] + V[c]) / 3, mz = (V[a + 2] + V[b + 2] + V[c + 2]) / 3;
-        if (Math.hypot(mx - cx, mz - cz) > P.contextRadiusM) continue;
-        const px = Math.floor(mx - X0), pz = Math.floor(mz - Z0);
-        if (px >= 0 && pz >= 0 && px < W && pz < H && plan[pz * W + px]) continue;
-        out.push(V[a], V[a + 1], V[a + 2], V[b], V[b + 1], V[b + 2], V[c], V[c + 1], V[c + 2]);
-    }
-    const all = new Float32Array(soup.P.length + out.length);
-    all.set(soup.P); all.set(out, soup.P.length);
-    return { P: all, n: soup.n + out.length / 9 };
-}
+const copyPhotos = (m: Map<number, RgbaImage8>) => new Map([...m].map(([k, v]) => [k, { width: v.width, height: v.height, rgba: v.rgba.slice() }]));
+const withoutMs = (r: RoofShadowReport) => ({ ...r, ms: 0 });
+const sameBytes = (a: ArrayBufferView, b: ArrayBufferView) => Buffer.from(a.buffer, a.byteOffset, a.byteLength).equals(Buffer.from(b.buffer, b.byteOffset, b.byteLength));
 
-function shadowFraction(m: ShadowMap, x: number, y: number, z: number, biasM: number): number {
-    const fx = (x * m.r[0] + y * m.r[1] + z * m.r[2] - m.X0) / m.mpp - 0.5, fy = (m.Y1 - (x * m.u[0] + y * m.u[1] + z * m.u[2])) / m.mpp - 0.5;
-    const x0 = Math.floor(fx), y0 = Math.floor(fy), ax = fx - x0, ay = fy - y0, t = x * m.s[0] + y * m.s[1] + z * m.s[2] + biasM + m.slope;
-    let f = 0;
-    for (const [dx, dy, w] of [[0, 0, (1 - ax) * (1 - ay)], [1, 0, ax * (1 - ay)], [0, 1, (1 - ax) * ay], [1, 1, ax * ay]] as const) {
-        const px = x0 + dx, py = y0 + dy;
-        if (px < 0 || py < 0 || px >= m.W || py >= m.H) continue;
-        if (m.top[py * m.W + px] > t) f += w;
-    }
-    return f;
-}
-
-function roofCells(soup: Soup, photos: Map<number, RgbaImage8>, surfaces: Map<number, Uint8Array>, above: ShadowMap, P: RoofShadowParams): RoofCells {
-    const G = P.cellTexels;
-    const img: number[] = [], p: number[] = [], c: number[] = [];
-    const taken = new Map<number, Set<number>>();
-    for (let t = 0; t < soup.n; t++) {
-        const im = soup.img[t];
-        if (im < 0 || Math.abs(soup.N[t * 3 + 1]) < P.flatNy) continue;
-        const photo = photos.get(im), mask = surfaces.get(im);
-        if (!photo || !mask) continue;
-        const W = photo.width, H = photo.height, gw = Math.ceil(W / G);
-        let seen = taken.get(im);
-        if (!seen) taken.set(im, (seen = new Set()));
-        const a = t * 9, q = t * 6;
-        const ax = (soup.UV[q] * W) / G, ay = (soup.UV[q + 1] * H) / G, bx = (soup.UV[q + 2] * W) / G, by = (soup.UV[q + 3] * H) / G, cx = (soup.UV[q + 4] * W) / G, cy = (soup.UV[q + 5] * H) / G;
-        const det = (bx - ax) * (cy - ay) - (cx - ax) * (by - ay);
-        if (Math.abs(det) < 1e-12) continue;
-        const x0 = Math.max(0, Math.floor(Math.min(ax, bx, cx))), x1 = Math.min(gw - 1, Math.ceil(Math.max(ax, bx, cx)));
-        const y0 = Math.max(0, Math.floor(Math.min(ay, by, cy))), y1 = Math.min(Math.ceil(H / G) - 1, Math.ceil(Math.max(ay, by, cy)));
-        for (let gy = y0; gy <= y1; gy++) for (let gx = x0; gx <= x1; gx++) {
-            const px = gx + 0.5, py = gy + 0.5;
-            const b1 = ((px - ax) * (cy - ay) - (cx - ax) * (py - ay)) / det, b2 = ((bx - ax) * (py - ay) - (px - ax) * (by - ay)) / det, b0 = 1 - b1 - b2;
-            if (b0 < 0 || b1 < 0 || b2 < 0) continue;
-            const key = gy * gw + gx;
-            if (seen.has(key)) continue;
-            const tx = Math.min(W - 1, Math.floor(px * G)), ty = Math.min(H - 1, Math.floor(py * G)), i = ty * W + tx;
-            if (mask[i] === TEXEL_NONE) continue;
-            const x = b0 * soup.P[a] + b1 * soup.P[a + 3] + b2 * soup.P[a + 6], y = b0 * soup.P[a + 1] + b1 * soup.P[a + 4] + b2 * soup.P[a + 7], z = b0 * soup.P[a + 2] + b1 * soup.P[a + 5] + b2 * soup.P[a + 8];
-            if (shadowedAt(above, x, y, z, P.biasM)) continue;
-            seen.add(key);
-            img.push(im); p.push(x, y, z);
-            for (let k = 0; k < 3; k++) c.push(Math.log(1e-4 + SRGB8_TO_LINEAR[photo.rgba[i * 4 + k]]));
+/** Texels two runs changed (against the input), and how many of them the two disagree on. */
+function changedTexels(input: Map<number, RgbaImage8>, a: Map<number, RgbaImage8>, b: Map<number, RgbaImage8>): { a: number; differ: number } {
+    let changed = 0, differ = 0;
+    for (const [k, im] of input) {
+        const ra = a.get(k)!.rgba, rb = b.get(k)!.rgba;
+        for (let i = 0; i < im.rgba.length; i += 4) {
+            let ca = false, d = false;
+            for (let c = 0; c < 4; c++) { if (ra[i + c] !== im.rgba[i + c]) ca = true; if (ra[i + c] !== rb[i + c]) d = true; }
+            if (ca) changed++;
+            if (d) differ++;
         }
     }
-    return { n: img.length, img: Int32Array.from(img), p: Float32Array.from(p), c: Float32Array.from(c) };
+    return { a: changed, differ };
 }
 
-function planesOf(cells: RoofCells, P: RoofShadowParams): Array<{ y: number; idx: Int32Array }> {
-    const bins = new Map<number, number>();
-    for (let i = 0; i < cells.n; i++) { const b = Math.round(cells.p[i * 3 + 1] / P.planeBinM); bins.set(b, (bins.get(b) ?? 0) + 1); }
-    const peaks: number[] = [];
-    for (const [b, n] of bins) {
-        const around = (bins.get(b - 1) ?? 0) + n + (bins.get(b + 1) ?? 0);
-        if (around >= P.minPlaneCells && n >= (bins.get(b - 1) ?? 0) && n > (bins.get(b + 1) ?? 0)) peaks.push(b * P.planeBinM);
-    }
-    peaks.sort((a, b) => a - b);
-    const members = peaks.map(() => [] as number[]);
-    for (let i = 0; i < cells.n; i++) {
-        const y = cells.p[i * 3 + 1];
-        let best = -1, bd = P.planeTolM;
-        peaks.forEach((py, k) => { const d = Math.abs(y - py); if (d <= bd) { bd = d; best = k; } });
-        if (best >= 0) members[best].push(i);
-    }
-    return peaks.map((y, k) => ({ y, idx: Int32Array.from(members[k]) })).filter(pl => pl.idx.length >= P.minPlaneCells);
+/** roofShadowLift with SCRATCHBOX_K_NATIVE=0 (the TypeScript) or unset (native), on copies of the photos. */
+async function lift(t: Twin, native: boolean, threads?: number): Promise<{ report: RoofShadowReport; photos: Map<number, RgbaImage8>; ms: number }> {
+    if (native) delete process.env.SCRATCHBOX_K_NATIVE; else process.env.SCRATCHBOX_K_NATIVE = '0';
+    const photos = copyPhotos(t.photos), t0 = performance.now();
+    const report = await roofShadowLift(t.g, t.g.json, photos, t.surfaces, { context: t.context, ...(threads ? { threads } : {}) });
+    return { report, photos, ms: performance.now() - t0 };
 }
 
-const lum = (c: Float32Array, i: number) => 0.2126 * c[i * 3] + 0.7152 * c[i * 3 + 1] + 0.0722 * c[i * 3 + 2];
-
-function planeScore(cells: RoofCells, idx: Int32Array, m: ShadowMap, P: RoofShadowParams): { share: number; ratio: number; rgb: [number, number, number]; halves: [number, number] } {
-    const sum = [[0, 0, 0, 0], [0, 0, 0, 0]], n = [0, 0], hs = [[0, 0], [0, 0]], hn = [[0, 0], [0, 0]];
-    for (const i of idx) {
-        const sh = shadowedAt(m, cells.p[i * 3], cells.p[i * 3 + 1], cells.p[i * 3 + 2], P.biasM) ? 1 : 0;
-        n[sh]++;
-        for (let k = 0; k < 3; k++) sum[sh][k] += cells.c[i * 3 + k];
-        const L = lum(cells.c, i);
-        sum[sh][3] += L;
-        const half = (Math.floor(cells.p[i * 3] / P.halfBlockM) + Math.floor(cells.p[i * 3 + 2] / P.halfBlockM)) & 1;
-        hs[half][sh] += L; hn[half][sh]++;
-    }
-    const share = n[1] / Math.max(1, n[0] + n[1]);
-    if (!n[0] || !n[1]) return { share, ratio: 0, rgb: [1, 1, 1], halves: [0, 0] };
-    const step = (k: number) => Math.exp(sum[0][k] / n[0] - sum[1][k] / n[1]);
-    const half = (h: number) => (hn[h][0] && hn[h][1] ? Math.exp(hs[h][0] / hn[h][0] - hs[h][1] / hn[h][1]) : 0);
-    return { share, ratio: step(3), rgb: [step(0), step(1), step(2)], halves: [half(0), half(1)] };
-}
-
-/** roofShadowLift's step 3 (the coarse suns, the medians, each plane's best refined). */
-function referenceSunSearch(occ: Occluders, cells: RoofCells, planes: Array<{ y: number; idx: Int32Array }>, P: RoofShadowParams) {
-    type Cand = { az: number; el: number };
-    const scored: RoofShadowScored[][] = planes.map(() => []);
-    const valid = (s: RoofShadowScored) => s.share >= P.minShare && s.share <= P.maxShare && s.ratio > 0;
-    const coarseBits: Array<{ cand: Cand; bits: Uint8Array }> = [];
-    let candidates = 0;
-    const evaluate = (cand: Cand, which: number[], keep = false) => {
-        const m = shadowMap(occ, cand.az, cand.el, P.coarseMapM);
-        candidates++;
-        for (const k of which) scored[k].push({ ...cand, ...planeScore(cells, planes[k].idx, m, P) });
-        if (keep) {
-            const bits = new Uint8Array(cells.n);
-            for (let i = 0; i < cells.n; i++) bits[i] = shadowedAt(m, cells.p[i * 3], cells.p[i * 3 + 1], cells.p[i * 3 + 2], P.biasM) ? 1 : 0;
-            coarseBits.push({ cand, bits });
-        }
-    };
-    const all = planes.map((_, k) => k);
-    const coarse: Cand[] = [];
-    for (const el of P.coarseElDeg) for (let az = 0; az < 360; az += P.coarseAzDeg) coarse.push({ az, el });
-    for (const cand of coarse) evaluate(cand, all, true);
-    const medians = scored.map(list => { const r = list.filter(valid).map(s => s.ratio).sort((a, b) => a - b); return r.length ? r[Math.floor(r.length / 2)] : 0; });
-    for (let k = 0; k < planes.length; k++) {
-        const v = scored[k].filter(valid);
-        if (!v.length) continue;
-        const best = v.reduce((a, b) => (b.ratio > a.ratio ? b : a));
-        for (let da = -P.refineSteps; da <= P.refineSteps; da++) for (let de = -P.refineSteps; de <= P.refineSteps; de++) {
-            const el = best.el + de * P.refineDeg;
-            if ((da || de) && el >= 5 && el <= 85) evaluate({ az: (best.az + da * P.refineDeg + 360) % 360, el }, [k]);
-        }
-    }
-    return { scored, medians, coarseBits, candidates };
-}
-
-/** roofShadowLift's step 7 over a resolved pass (the loop as written there, its maps read through the pass). */
-function referenceLift(pass: RoofShadowLiftPass, P: RoofShadowParams) {
-    const { soup, occ, photos, surfaces } = pass;
-    const above = shadowMap(soup, 0, 89.9, P.aboveMapM);
-    const gridKey = (x: number, y: number, z: number) => `${Math.round(y / P.terraceBinM)}:${Math.floor(x / P.componentGridM)}:${Math.floor(z / P.componentGridM)}`;
-    const changed = new Map<number, Uint8Array>(), planeLifted = new Map<number, number>();
-    let texelsLifted = 0;
-    pass.suns.forEach((sunScored, sunIdx) => {
-        const m = shadowMap(occ, sunScored.az, sunScored.el, P.fineMapM);
-        for (let t = 0; t < soup.n; t++) {
-            const im = soup.img[t];
-            if (im < 0 || Math.abs(soup.N[t * 3 + 1]) < P.flatNy) continue;
-            const sun = pass.photoSun.get(im);
-            if (sun ? sun.sun !== sunIdx : !pass.hasComp) continue;
-            const photo = photos.get(im), mask = surfaces.get(im);
-            if (!photo || !mask) continue;
-            const a = t * 9, q = t * 6, W = photo.width, H = photo.height;
-            const ax = soup.UV[q] * W, ay = soup.UV[q + 1] * H, bx = soup.UV[q + 2] * W, by = soup.UV[q + 3] * H, cx = soup.UV[q + 4] * W, cy = soup.UV[q + 5] * H;
-            const det = (bx - ax) * (cy - ay) - (cx - ax) * (by - ay);
-            if (Math.abs(det) < 1e-12) continue;
-            let out = changed.get(im);
-            const x0 = Math.max(0, Math.floor(Math.min(ax, bx, cx))), x1 = Math.min(W - 1, Math.ceil(Math.max(ax, bx, cx)));
-            const y0 = Math.max(0, Math.floor(Math.min(ay, by, cy))), y1 = Math.min(H - 1, Math.ceil(Math.max(ay, by, cy)));
-            for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-                const i = y * W + x;
-                if (mask[i] === TEXEL_NONE) continue;
-                const px = x + 0.5, py = y + 0.5;
-                const b1 = ((px - ax) * (cy - ay) - (cx - ax) * (py - ay)) / det, b2 = ((bx - ax) * (py - ay) - (px - ax) * (by - ay)) / det, b0 = 1 - b1 - b2;
-                if (b0 < 0 || b1 < 0 || b2 < 0) continue;
-                const wx = b0 * soup.P[a] + b1 * soup.P[a + 3] + b2 * soup.P[a + 6], wy = b0 * soup.P[a + 1] + b1 * soup.P[a + 4] + b2 * soup.P[a + 7], wz = b0 * soup.P[a + 2] + b1 * soup.P[a + 5] + b2 * soup.P[a + 8];
-                let ratio: number[], lit: number | undefined;
-                if (sun) {
-                    const key = `${im}:${Math.round(wy / P.terraceBinM)}`;
-                    if (!pass.liftTerrace.has(key)) continue;
-                    ratio = sun.ratio; lit = pass.liftTerrace.get(key);
-                } else {
-                    const ci = pass.compCells.get(gridKey(wx, wy, wz)), cs = ci === undefined ? undefined : pass.comps[ci];
-                    if (!cs || cs.sun !== sunIdx) continue;
-                    ratio = cs.ratio; lit = cs.lit;
-                }
-                if (shadowedAt(above, wx, wy, wz, P.biasM)) continue;
-                let f = shadowFraction(m, wx, wy, wz, P.biasM);
-                if (f <= 0) continue;
-                if (lit !== undefined) {
-                    const L = 0.2126 * Math.log(1e-4 + SRGB8_TO_LINEAR[photo.rgba[i * 4]]) + 0.7152 * Math.log(1e-4 + SRGB8_TO_LINEAR[photo.rgba[i * 4 + 1]]) + 0.0722 * Math.log(1e-4 + SRGB8_TO_LINEAR[photo.rgba[i * 4 + 2]]);
-                    const full = f * Math.log(0.2126 * ratio[0] + 0.7152 * ratio[1] + 0.0722 * ratio[2]);
-                    if (full > 0) f *= Math.max(0, Math.min(1, (lit - L) / full));
-                    if (f <= 0.01) continue;
-                }
-                if (!out) changed.set(im, (out = Uint8Array.from(photo.rgba)));
-                texelsLifted++;
-                if (sun && sun.k >= 0) planeLifted.set(sun.k, (planeLifted.get(sun.k) ?? 0) + 1);
-                for (let k2 = 0; k2 < 3; k2++) out[i * 4 + k2] = Math.round(linearToSrgb255(SRGB8_TO_LINEAR[photo.rgba[i * 4 + k2]] * Math.pow(ratio[k2], f)));
-            }
-        }
-    });
-    return { changed, texelsLifted, planeLifted };
-}
-
-// ---- helpers ----
-
-interface Prepared { scene: Scene; soup: Soup; occ: Occluders; above: ShadowMap; cells: RoofCells; planes: Array<{ y: number; idx: Int32Array }> }
-function prepare(scene: Scene): Prepared {
-    const soup = collect(scene.g, scene.g.json);
-    const above = shadowMap(soup, 0, 89.9, P0.aboveMapM);
-    const occ = occludersOf(soup, scene.context, P0);
-    const cells = roofCells(soup, scene.photos, scene.surfaces, above, P0);
-    return { scene, soup, occ, above, cells, planes: planesOf(cells, P0) };
-}
-
-/** Bit-exact equality of two float arrays (NaN and -Infinity included), reporting the first difference. */
-function firstFloatDifference(a: Float32Array, b: Float32Array): number {
-    if (a.length !== b.length) return -2;
-    const ua = new Uint32Array(a.buffer, a.byteOffset, a.length), ub = new Uint32Array(b.buffer, b.byteOffset, b.length);
-    for (let i = 0; i < ua.length; i++) if (ua[i] !== ub[i]) return i;
-    return -1;
-}
-
-const clonePhotos = (photos: Map<number, RgbaImage8>) => new Map([...photos].map(([k, v]) => [k, { width: v.width, height: v.height, rgba: Uint8Array.from(v.rgba) }]));
-
-describe('roof shadow native kernels equal roof-shadow.ts', () => {
-    let small: Prepared;
-
+describe('roof-shadow lift: native kernels against the TypeScript', () => {
+    let deck: Twin, roof: Twin;
     beforeAll(async () => {
-        // the first build is paid here, outside every timing
-        await ensureRoofShadowNativeBinary();
-        small = prepare(buildScene(0.5, 3, 0.1, 8));
-    }, 600_000);
+        await ensureNativeTwinBinary();
+        deck = deckTwin();
+        roof = roofTwin(0.5, 3, 0.1, 8);
+    }, 300_000);
+    afterEach(() => { delete process.env.SCRATCHBOX_K_NATIVE; });
 
-    it('builds a scene the fit accepts', () => {
-        expect(small.cells.n).toBeGreaterThan(30_000);
-        expect(small.planes.map(p => p.y)).toEqual([100, 160]);
-        expect(small.occ.n).toBeGreaterThan(small.soup.n);
-    });
-
-    it('shadowMapNative is shadowMap, pixel for pixel', async () => {
-        const cases: Array<[Occluders, number, number, number]> = [[small.occ, 0, 40, 0.4], [small.occ, 37.5, 23, 0.15], [small.occ, 90, 60, 0.4], [small.soup, 0, 89.9, 0.25]];
-        for (const [occ, az, el, mpp] of cases) {
-            const ts = shadowMap(occ, az, el, mpp), nat = await shadowMapNative(occ, az, el, mpp);
-            expect({ W: nat.W, H: nat.H, X0: nat.X0, Y1: nat.Y1, slope: nat.slope, s: nat.s, r: nat.r, u: nat.u }).toEqual({ W: ts.W, H: ts.H, X0: ts.X0, Y1: ts.Y1, slope: ts.slope, s: ts.s, r: ts.r, u: ts.u });
-            expect(firstFloatDifference(nat.top, ts.top)).toBe(-1);
-            expect(ts.top.some(v => v > -Infinity)).toBe(true);
-        }
-    });
-
-    it('shadowedBitsNative is shadowedAt over every roof cell', async () => {
-        const suns = [{ az: 0, el: 40 }, { az: 135, el: 20 }, { az: 300, el: 70 }];
-        const nat = await shadowedBitsNative(small.occ, suns, P0.coarseMapM, small.cells.p, P0.biasM);
-        suns.forEach((s, k) => {
-            const m = shadowMap(small.occ, s.az, s.el, P0.coarseMapM), ts = new Uint8Array(small.cells.n);
-            for (let i = 0; i < small.cells.n; i++) ts[i] = shadowedAt(m, small.cells.p[i * 3], small.cells.p[i * 3 + 1], small.cells.p[i * 3 + 2], P0.biasM) ? 1 : 0;
-            expect(Buffer.from(nat[k]).equals(Buffer.from(ts))).toBe(true);
-        });
-        expect(nat[0].reduce((a, b) => a + b, 0)).toBeGreaterThan(1000);
-    });
-
-    it('sunSearchNative is step 3, and its best deck sun is the one roofShadowLift reports', async () => {
-        const ts = referenceSunSearch(small.occ, small.cells, small.planes, P0);
-        const nat = await sunSearchNative(small.occ, small.cells, small.planes, P0);
-        expect(nat.candidates).toBe(ts.candidates);
-        expect(nat.medians).toEqual(ts.medians);
-        expect(nat.scored).toEqual(ts.scored);
-        expect(nat.coarseBits.length).toBe(ts.coarseBits.length);
-        nat.coarseBits.forEach((b, c) => { expect(b.cand).toEqual(ts.coarseBits[c].cand); expect(Buffer.from(b.bits).equals(Buffer.from(ts.coarseBits[c].bits))).toBe(true); });
-        // against the real roofShadowLift's records
-        const report = await roofShadowLift(small.scene.g, small.scene.g.json, clonePhotos(small.scene.photos), small.scene.surfaces, { context: small.scene.context });
-        expect(report.candidates).toBe(nat.candidates);
-        const valid = (s: RoofShadowScored) => s.share >= P0.minShare && s.share <= P0.maxShare && s.ratio > 0;
-        const deck = report.records[0], best = nat.scored[0].filter(valid).reduce((a, b) => (b.ratio > a.ratio ? b : a));
-        expect(deck.accepted).toBe(true);
-        expect({ az: deck.sunAzDeg, el: deck.sunElDeg, ratio: deck.ratio, share: deck.shadowShare, median: deck.medianRatio }).toEqual({ az: best.az, el: best.el, ratio: +best.ratio.toFixed(3), share: +best.share.toFixed(3), median: +nat.medians[0].toFixed(3) });
-        expect([best.az, best.el]).toEqual([0, 40]);
-    });
-
-    it('the native search and lift reproduce roofShadowLift\'s lifted photo byte for byte', async () => {
-        const photos = clonePhotos(small.scene.photos);
-        const report = await roofShadowLift(small.scene.g, small.scene.g.json, photos, small.scene.surfaces, { context: small.scene.context });
-        expect(report.records.map(r => r.accepted)).toEqual([true, false]);
-        expect(report.terraces.photos).toBe(1);
-        expect(report.terraces.lifted).toBe(1);
-        expect(report.terraces.componentsLifted).toBe(0);
-        // the native path: the deck's sun from the search; photo 0 takes it (as roofShadowLift's step 5 does here); its
-        // one terrace at 100 m lifted with its lit level (step 5's), measured on the coarse map through shadowedBitsNative
-        const nat = await sunSearchNative(small.occ, small.cells, small.planes, P0);
-        const valid = (s: RoofShadowScored) => s.share >= P0.minShare && s.share <= P0.maxShare && s.ratio > 0;
-        const best = nat.scored[0].filter(valid).reduce((a, b) => (b.ratio > a.ratio ? b : a));
-        const [bits] = await shadowedBitsNative(small.occ, [best], P0.coarseMapM, small.cells.p, P0.biasM);
-        let nl = 0, ll = 0;
-        for (let i = 0; i < small.cells.n; i++) if (small.cells.img[i] === 0 && Math.round(small.cells.p[i * 3 + 1] / P0.terraceBinM) === 100 && !bits[i]) { nl++; ll += lum(small.cells.c, i); }
-        const pass: RoofShadowLiftPass = {
-            soup: small.soup, occ: small.occ, photos: small.scene.photos, surfaces: small.scene.surfaces, suns: [{ az: best.az, el: best.el }],
-            photoSun: new Map([[0, { sun: 0, ratio: best.rgb.map(x => Math.min(P0.maxRatio, Math.max(1, x))), k: 0 }]]),
-            liftTerrace: new Map([['0:100', ll / nl]]), comps: [], compCells: new Map(), hasComp: false
-        };
-        const lifted = await liftRoofShadowsNative(pass, P0);
-        expect(lifted.texelsLifted).toBe(report.texelsLifted);
-        expect(lifted.planeLifted.get(0)).toBe(report.records[0].texelsLifted);
-        expect([...lifted.changed.keys()]).toEqual([0]);
-        expect(Buffer.from(lifted.changed.get(0)!).equals(Buffer.from(photos.get(0)!.rgba))).toBe(true);
-        expect(Buffer.from(photos.get(0)!.rgba).equals(Buffer.from(small.scene.photos.get(0)!.rgba))).toBe(false);
-    });
-
-    it('liftRoofShadowsNative is step 7 with terraces across photos and an unknown lit level', async () => {
-        const gridKey = (x: number, y: number, z: number) => `${Math.round(y / P0.terraceBinM)}:${Math.floor(x / P0.componentGridM)}:${Math.floor(z / P0.componentGridM)}`;
-        const cellsOf = (im: number, side: (x: number) => boolean, comp: number, into: Map<string, number>) => {
-            for (let i = 0; i < small.cells.n; i++) if (small.cells.img[i] === im && side(small.cells.p[i * 3])) into.set(gridKey(small.cells.p[i * 3], small.cells.p[i * 3 + 1], small.cells.p[i * 3 + 2]), comp);
-            return into;
-        };
-        const base = { soup: small.soup, occ: small.occ, photos: small.scene.photos, surfaces: small.scene.surfaces };
-        const passes: RoofShadowLiftPass[] = [
-            // photo 0's own sun on its terrace with no lit level known (the uncapped lift); photo 1 through a terrace across photos
-            {
-                ...base, suns: [{ az: 0, el: 40 }, { az: 200, el: 25 }],
-                photoSun: new Map([[0, { sun: 0, ratio: [2.4, 2.2, 1.9], k: 0 }]]),
-                liftTerrace: new Map<string, number | undefined>([['0:100', undefined]]),
-                comps: [{ sun: 1, ratio: [1.8, 1.7, 1.5], lit: -1.2 }], compCells: cellsOf(1, () => true, 0, new Map()), hasComp: true
-            },
-            // photo 0 with no sun of its own, its deck split between two terraces across photos under two suns (the
-            // neighbour's shadow on the +x half, the tower's on the other); photo 1 with its own sun and deck -1
-            {
-                ...base, suns: [{ az: 0, el: 40 }, { az: 180, el: 30 }, { az: 90, el: 50 }],
-                photoSun: new Map([[1, { sun: 2, ratio: [1.5, 1.5, 1.5], k: -1 }]]),
-                liftTerrace: new Map<string, number | undefined>([['1:160', -2]]),
-                comps: [{ sun: 0, ratio: [2.4, 2.2, 1.9], lit: -1.1 }, { sun: 1, ratio: [2, 2, 2], lit: -1.4 }],
-                compCells: cellsOf(0, x => x < 0, 1, cellsOf(0, x => x >= 0, 0, new Map())), hasComp: true
-            }
-        ];
-        for (const pass of passes) {
-            const ts = referenceLift(pass, P0), nat = await liftRoofShadowsNative(pass, P0);
-            expect(ts.texelsLifted).toBeGreaterThan(10_000);
-            expect(nat.texelsLifted).toBe(ts.texelsLifted);
-            expect([...nat.planeLifted]).toEqual([...ts.planeLifted]);
-            expect([...nat.changed.keys()].sort()).toEqual([...ts.changed.keys()].sort());
-            for (const [im, rgba] of ts.changed) expect(Buffer.from(nat.changed.get(im)!).equals(Buffer.from(rgba))).toBe(true);
-        }
-    });
-
-    it('roofShadowLift gives the same photos and report with SCRATCHBOX_K_NATIVE=roof-shadow', async () => {
-        const saved = process.env.SCRATCHBOX_K_NATIVE;
-        const runOnce = async (native: boolean) => {
-            if (native) process.env.SCRATCHBOX_K_NATIVE = 'roof-shadow'; else delete process.env.SCRATCHBOX_K_NATIVE;
-            const photos = clonePhotos(small.scene.photos), t = performance.now();
-            const report = await roofShadowLift(small.scene.g, small.scene.g.json, photos, small.scene.surfaces, { context: small.scene.context });
-            return { photos, report, ms: performance.now() - t };
-        };
+    it('the kernels: the same roof cells, cell shadows and deck sums under suns of every kind', async () => {
+        const soup = collect(roof.g, roof.g.json), occ = occludersOf(soup, roof.context, P0);
+        const ts = await roofShadowKernels(soup, occ, roof.photos, roof.surfaces, P0, false), nat = await roofShadowKernels(soup, occ, roof.photos, roof.surfaces, P0, true);
         try {
-            const ts = await runOnce(false), nat = await runOnce(true);
-            expect(ts.report.texelsLifted).toBeGreaterThan(10_000);
-            expect([...nat.photos.keys()]).toEqual([...ts.photos.keys()]);
-            for (const [im, ph] of ts.photos) expect(Buffer.from(nat.photos.get(im)!.rgba).equals(Buffer.from(ph.rgba))).toBe(true);
-            expect({ ...nat.report, ms: 0 }).toEqual({ ...ts.report, ms: 0 });
-            process.stderr.write(`roofShadowLift on the fixture (${small.occ.n} occluders, ${small.cells.n} roof cells): TS ${ts.ms.toFixed(0)} ms, SCRATCHBOX_K_NATIVE=roof-shadow ${nat.ms.toFixed(0)} ms\n`);
+            const a = await ts.cells(), b = await nat.cells();
+            expect(a.n).toBeGreaterThan(30_000);
+            expect(b.n).toBe(a.n);
+            for (const k of ['img', 'p', 'c'] as const) expect(sameBytes(b[k], a[k])).toBe(true);
+            const planes = planesOf(a, P0);
+            expect(planes.map(p => p.y)).toEqual([100, 160]);
+            // oblique, off the search grid, along the walls, from straight above, from behind the neighbour
+            const suns = [{ az: 0, el: 40 }, { az: 37.5, el: 23 }, { az: 90, el: 60 }, { az: 0, el: 89.9 }, { az: 200, el: 25 }];
+            const score = suns.map((_, s) => (s % 2 ? [1] : [0, 1]));
+            const sa = await ts.shadows(suns, planes, score), sb = await nat.shadows(suns, planes, score);
+            suns.forEach((_, s) => {
+                expect(sameBytes(sb.bits[s], sa.bits[s])).toBe(true);
+                expect(sb.sums[s].map(x => [...x])).toEqual(sa.sums[s].map(x => [...x]));
+            });
+            // the oblique sun splits the deck
+            const shaded = sa.bits[0].reduce((n, v) => n + v, 0);
+            expect(shaded).toBeGreaterThan(a.n / 10);
+            expect(shaded).toBeLessThan(a.n * 0.9);
         } finally {
-            if (saved === undefined) delete process.env.SCRATCHBOX_K_NATIVE; else process.env.SCRATCHBOX_K_NATIVE = saved;
+            ts.close(); nat.close();
         }
-    });
+    }, 120_000);
 
-    it('times the TypeScript and native search and lift on a roof of a few hundred thousand occluders', async () => {
-        const big = prepare(buildScene(0.25, 1.6, 0.1, 16));
-        const t0 = performance.now();
-        const ts = referenceSunSearch(big.occ, big.cells, big.planes, P0);
-        const t1 = performance.now();
-        const nat = await sunSearchNative(big.occ, big.cells, big.planes, P0);
-        const t2 = performance.now();
-        expect(nat.scored).toEqual(ts.scored);
-        const valid = (s: RoofShadowScored) => s.share >= P0.minShare && s.share <= P0.maxShare && s.ratio > 0;
-        const best = ts.scored[0].filter(valid).reduce((a, b) => (b.ratio > a.ratio ? b : a));
-        const pass: RoofShadowLiftPass = {
-            soup: big.soup, occ: big.occ, photos: big.scene.photos, surfaces: big.scene.surfaces, suns: [{ az: best.az, el: best.el }],
-            photoSun: new Map([[0, { sun: 0, ratio: best.rgb.map(x => Math.min(P0.maxRatio, Math.max(1, x))), k: 0 }]]),
-            liftTerrace: new Map([['0:100', -1.5]]), comps: [], compCells: new Map(), hasComp: false
+    it('the lift kernel: a photo\'s own sun with no lit level known, and terraces across photos under several suns', async () => {
+        const soup = collect(roof.g, roof.g.json), occ = occludersOf(soup, roof.context, P0);
+        const gridKey = (i: number, c: { p: Float32Array }) => `${Math.round(c.p[i * 3 + 1] / P0.terraceBinM)}:${Math.floor(c.p[i * 3] / P0.componentGridM)}:${Math.floor(c.p[i * 3 + 2] / P0.componentGridM)}`;
+        const plans = (c: { n: number; img: Int32Array; p: Float32Array }): LiftPlan[] => {
+            const keysOf = (im: number, side: (x: number) => boolean, comp: number, into: Map<string, number>) => {
+                for (let i = 0; i < c.n; i++) if (c.img[i] === im && side(c.p[i * 3])) into.set(gridKey(i, c), comp);
+                return into;
+            };
+            return [
+                // photo 0's own sun on its terrace with no lit level known (the uncapped lift); photo 1 through a terrace across photos
+                { suns: [{ az: 0, el: 40 }, { az: 200, el: 25 }], photoSun: new Map([[0, { sun: 0, ratio: [2.4, 2.2, 1.9] }]]), terraceLit: new Map<string, number | undefined>([['0:100', undefined]]), comps: [{ sun: 1, ratio: [1.8, 1.7, 1.5], lit: -1.2 }], compOfKey: keysOf(1, () => true, 0, new Map()) },
+                // photo 0 with no sun of its own, its deck split between two terraces across photos under two suns; photo 1 with its own sun
+                { suns: [{ az: 0, el: 40 }, { az: 180, el: 30 }, { az: 90, el: 50 }], photoSun: new Map([[1, { sun: 2, ratio: [1.5, 1.5, 1.5] }]]), terraceLit: new Map<string, number | undefined>([['1:160', -2]]), comps: [{ sun: 0, ratio: [2.4, 2.2, 1.9], lit: -1.1 }, { sun: 1, ratio: [2, 2, 2], lit: -1.4 }], compOfKey: keysOf(0, x => x < 0, 1, keysOf(0, x => x >= 0, 0, new Map())) }
+            ];
         };
-        const t3 = performance.now();
-        const tsLift = referenceLift(pass, P0);
-        const t4 = performance.now();
-        const natLift = await liftRoofShadowsNative(pass, P0);
-        const t5 = performance.now();
-        expect(natLift.texelsLifted).toBe(tsLift.texelsLifted);
-        expect(Buffer.from(natLift.changed.get(0)!).equals(Buffer.from(tsLift.changed.get(0)!))).toBe(true);
-        const line = `roof shadow, ${big.occ.n} occluders (twin ${big.soup.n}), ${big.cells.n} roof cells, ${big.planes.length} decks, ${ts.candidates} suns: `
-            + `search TS ${(t1 - t0).toFixed(0)} ms, native ${(t2 - t1).toFixed(0)} ms (${((t1 - t0) / (t2 - t1)).toFixed(1)}x); `
-            + `lift (${tsLift.texelsLifted} texels) TS ${(t4 - t3).toFixed(0)} ms, native ${(t5 - t4).toFixed(0)} ms (${((t4 - t3) / (t5 - t4)).toFixed(1)}x)`;
-        process.stderr.write(`${line}\n`);
-        expect(big.occ.n).toBeGreaterThan(250_000);
+        const ts = await roofShadowKernels(soup, occ, roof.photos, roof.surfaces, P0, false), nat = await roofShadowKernels(soup, occ, roof.photos, roof.surfaces, P0, true, 3);
+        try {
+            const cells = await ts.cells();
+            await nat.cells();
+            for (const plan of plans(cells)) {
+                const a = await ts.lift(plan), b = await nat.lift(plan);
+                expect([...a.lifted.values()].reduce((s, n) => s + n, 0)).toBeGreaterThan(10_000);
+                expect([...b.lifted].sort()).toEqual([...a.lifted].sort());
+                expect([...b.changed.keys()].sort()).toEqual([...a.changed.keys()].sort());
+                for (const [im, rgba] of a.changed) expect(sameBytes(b.changed.get(im)!, rgba)).toBe(true);
+            }
+        } finally {
+            ts.close(); nat.close();
+        }
+    }, 120_000);
+
+    it('roofShadowLift on the deck: the same report and photos, on every core and on 3 threads', async () => {
+        const a = await lift(deck, false), b = await lift(deck, true), c = await lift(deck, true, 3);
+        // every path: a deck fitted, terraces lifted, the patch lifted as part of a terrace across photos
+        expect(a.report.applied).toBe(true);
+        expect(a.report.fitted).toBeGreaterThanOrEqual(1);
+        expect(a.report.contextTriangles).toBe(50_400);
+        expect(a.report.terraces.lifted).toBeGreaterThanOrEqual(2);
+        expect(a.report.terraces.componentsLifted).toBeGreaterThanOrEqual(1);
+        expect(a.report.texelsLifted).toBeGreaterThan(1000);
+        expect(withoutMs(b.report)).toEqual(withoutMs(a.report));
+        expect(withoutMs(c.report)).toEqual(withoutMs(a.report));
+        const d = changedTexels(deck.photos, a.photos, b.photos);
+        expect(d.a).toBeGreaterThan(1000);
+        expect(d.differ).toBe(0);
+        expect(changedTexels(deck.photos, b.photos, c.photos).differ).toBe(0);
+    }, 120_000);
+
+    it('roofShadowLift on the roof: the same report and photos', async () => {
+        const a = await lift(roof, false), b = await lift(roof, true);
+        expect(a.report.texelsLifted).toBeGreaterThan(10_000);
+        expect(withoutMs(b.report)).toEqual(withoutMs(a.report));
+        expect(changedTexels(roof.photos, a.photos, b.photos).differ).toBe(0);
+    }, 120_000);
+
+    it('times the TypeScript and native lift on the roof at a few hundred thousand occluders', async () => {
+        const big = roofTwin(0.25, 1.6, 0.1, 16);
+        const a = await lift(big, false), b = await lift(big, true);
+        expect(withoutMs(b.report)).toEqual(withoutMs(a.report));
+        const d = changedTexels(big.photos, a.photos, b.photos);
+        expect(d.differ).toBe(0);
+        const soup = collect(big.g, big.g.json), occ = occludersOf(soup, big.context, P0);
+        expect(occ.n).toBeGreaterThan(250_000);
+        console.log(`[timing] roof-shadow lift, ${occ.n} occluders (twin ${soup.n}), ${a.report.cells} roof cells, ${a.report.planes} decks, ${a.report.candidates} suns: TypeScript ${a.ms.toFixed(0)} ms, native ${b.ms.toFixed(0)} ms (${(a.ms / b.ms).toFixed(1)}x); ${d.a} texels lifted, ${d.differ} differ`);
     }, 600_000);
 });

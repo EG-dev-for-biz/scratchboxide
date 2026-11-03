@@ -809,8 +809,11 @@ inline std::vector<uint8_t> featurelessMask(const Rgba& img, double pixelM, cons
     return out;
 }
 
-/** The ortho's holes filled from real texels only: bay repeats, then storey repeats, then the nearest real texel. */
-inline Rgba fillHoles(const Rgba& img, double pixelM, const Params& P, HoleFill& fill, const std::vector<uint8_t>* noNearest = nullptr) {
+/**
+ * The ortho's holes filled from real texels only: bay repeats, then storey repeats, then the nearest real texel. With
+ * `nearest` false the holes the repeats leave stay grey, for pipeline K's later rungs (ortho-rectify.ts fillHoles).
+ */
+inline Rgba fillHoles(const Rgba& img, double pixelM, const Params& P, HoleFill& fill, const std::vector<uint8_t>* noNearest = nullptr, bool nearest = true) {
     std::vector<uint8_t> valid; std::vector<float> L;
     planes(img, valid, L);
     const int W = img.width, H = img.height;
@@ -852,6 +855,7 @@ inline Rgba fillHoles(const Rgba& img, double pixelM, const Params& P, HoleFill&
     if (ph.found) { fill.hasPeriodPx = true; fill.periodPx = jsRound(ph.periodPx * 100) / 100; fill.fromRepeats = pass(ph.periodPx, 'x'); }
     const Period pv = axisPeriod(img, pixelM, 'y', P.storeyMinM, P.storeyMaxM, P);
     if (pv.found) { fill.hasStoreyPx = true; fill.storeyPx = jsRound(pv.periodPx * 100) / 100; fill.fromStoreys = pass(pv.periodPx, 'y'); }
+    if (!nearest) return out;
     std::vector<int64_t> src(N, -1), queue(N);
     size_t head = 0, tail = 0;
     for (size_t i = 0; i < N; i++) if (valid[i]) { src[i] = static_cast<int64_t>(i); queue[tail++] = static_cast<int64_t>(i); }
@@ -1173,7 +1177,8 @@ inline Result rectifyOrtho(const Rgba& img, double pixelM, const Params& P, cons
     res.uncovered.assign(N, 0);
     for (size_t k = 0; k < N; k++) if (image.rgba[k * 4 + 3] && isUncovered(image.rgba, k)) res.uncovered[k] = 1;
     HoleFill fill;
-    Rgba filled = fillHoles(image, pixelM, P, fill);
+    // the repeats only: the holes they leave are filled once every facade is straightened (pipeline-k.ts), never from the nearest texel
+    Rgba filled = fillHoles(image, pixelM, P, fill, nullptr, false);
     const auto flat = featurelessMask(image, pixelM, P);
     res.featureless.assign(N, 0);
     double featureless = 0;

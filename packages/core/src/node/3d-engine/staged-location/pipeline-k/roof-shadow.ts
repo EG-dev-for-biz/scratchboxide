@@ -66,9 +66,10 @@
  * applied, only on roof texels of an accepted terrace in the shadow of a fitted sun. The colour stays the photo's
  * (photo-inferred). Off by default (SCRATCHBOX_K_ROOF_SHADOW=1 on), for pipeline K's building and a district's twin alike.
  *
- * The loops (the roof cells, each cell's shadow under each candidate sun, the lift) run natively on a thread pool
- * (native-twin.ts, scratchbox_twin_texels.hpp); SCRATCHBOX_K_NATIVE_TWIN=0 runs them here, the reference the native
- * kernels match value for value. The fits between them are this file's either way, so the report is the same.
+ * The loops (the roof cells, each cell's shadow under each candidate sun with its sums on the decks, the lift) run
+ * natively on a thread pool (native/twin-texels-native.ts, scratchbox_twin_texels.hpp) when SCRATCHBOX_K_NATIVE runs
+ * `roof-shadow` natively (native/native-switch.ts; the default), else here, the reference the native kernels match value for
+ * value. The fits between them are this file's either way, so the report is the same.
  *
  * The audit, from straight above: every roof cell of every photo, at every height, put on an `auditCellM` grid as
  * lifted (in a fitted sun's shadow, lifted), rejected (in shadow on a terrace that failed its check), no sun (its photo
@@ -82,7 +83,8 @@ import type { RgbaImage8 } from '../tile-texture-transfer';
 import { TEXEL_NONE } from './texture-harmonize';
 import { collect, type Soup } from './view-relight';
 import { encodePng } from '../png-encode';
-import { LOG_LINEAR, NativeTwinWorker, nativeTwinEnabled, srgb8Thresholds, TWIN_CMD, TwinRequest } from './native-twin';
+import { kNative } from './native/native-switch';
+import { LOG_LINEAR, NativeTwinWorker, srgb8Thresholds, TWIN_CMD, TwinRequest } from './native/twin-texels-native';
 
 export const ROOF_SHADOW_VERSION = 'roof-shadow/9';
 
@@ -168,7 +170,7 @@ export interface Occluders { P: Float32Array; n: number }
  * The twin's triangles and the context's that stand off its footprint (a 1 m grid of the twin's plan, grown by footprintGrowM)
  * within contextRadiusM of its centre.
  */
-function occludersOf(soup: Soup, context: { vertices: ArrayLike<number>; indices: ArrayLike<number> } | undefined, P: RoofShadowParams): Occluders {
+export function occludersOf(soup: Soup, context: { vertices: ArrayLike<number>; indices: ArrayLike<number> } | undefined, P: RoofShadowParams): Occluders {
     if (!context) return { P: soup.P, n: soup.n };
     let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
     for (let i = 0; i < soup.P.length; i += 3) { x0 = Math.min(x0, soup.P[i]); x1 = Math.max(x1, soup.P[i]); z0 = Math.min(z0, soup.P[i + 2]); z1 = Math.max(z1, soup.P[i + 2]); }
@@ -280,7 +282,7 @@ function shadowFraction(m: ShadowMap, x: number, y: number, z: number, biasM: nu
 }
 
 /** Roof cells over all photos: photo, 3D point, log linear colour. */
-interface Cells { n: number; img: Int32Array; p: Float32Array; c: Float32Array }
+export interface Cells { n: number; img: Int32Array; p: Float32Array; c: Float32Array }
 
 function roofCells(soup: Soup, photos: Map<number, RgbaImage8>, surfaces: Map<number, Uint8Array>, above: ShadowMap, P: RoofShadowParams): Cells {
     const G = P.cellTexels;
@@ -319,7 +321,7 @@ function roofCells(soup: Soup, photos: Map<number, RgbaImage8>, surfaces: Map<nu
 }
 
 /** The planes: peaks of the cells' height histogram, each with the cells within planeTolM of it (each cell to its nearest peak). */
-function planesOf(cells: Cells, P: RoofShadowParams): Array<{ y: number; idx: Int32Array }> {
+export function planesOf(cells: Cells, P: RoofShadowParams): Array<{ y: number; idx: Int32Array }> {
     const bins = new Map<number, number>();
     for (let i = 0; i < cells.n; i++) { const b = Math.round(cells.p[i * 3 + 1] / P.planeBinM); bins.set(b, (bins.get(b) ?? 0) + 1); }
     const peaks: number[] = [];
@@ -340,8 +342,11 @@ function planesOf(cells: Cells, P: RoofShadowParams): Array<{ y: number; idx: In
 
 const lum = (c: Float32Array, i: number) => 0.2126 * c[i * 3] + 0.7152 * c[i * 3 + 1] + 0.0722 * c[i * 3 + 2];
 
-/** A sun on a plane (`bits`: each cell in its shadow): the share in shadow, the lit-to-shadow luminance ratio, per channel, and each checkerboard half's. */
-function planeScore(cells: Cells, idx: Int32Array, bits: Uint8Array, P: RoofShadowParams): { share: number; ratio: number; rgb: [number, number, number]; halves: [number, number] } {
+/** The sums planeScore reads, PLANE_SUMS of them: n lit, n shadowed, the log colour (r, g, b, luminance) summed lit then shadowed, the halves' luminance sums and counts ([half][shadowed]). */
+const PLANE_SUMS = 18;
+
+/** A sun on a plane's sums (`bits`: each cell in its shadow), every one added in the plane's cell order. */
+function planeSums(cells: Cells, idx: Int32Array, bits: Uint8Array, P: RoofShadowParams): Float64Array {
     const sum = [[0, 0, 0, 0], [0, 0, 0, 0]], n = [0, 0], hs = [[0, 0], [0, 0]], hn = [[0, 0], [0, 0]];
     for (const i of idx) {
         const sh = bits[i];
@@ -352,6 +357,12 @@ function planeScore(cells: Cells, idx: Int32Array, bits: Uint8Array, P: RoofShad
         const half = (Math.floor(cells.p[i * 3] / P.halfBlockM) + Math.floor(cells.p[i * 3 + 2] / P.halfBlockM)) & 1;
         hs[half][sh] += L; hn[half][sh]++;
     }
+    return Float64Array.of(n[0], n[1], ...sum[0], ...sum[1], hs[0][0], hs[0][1], hs[1][0], hs[1][1], hn[0][0], hn[0][1], hn[1][0], hn[1][1]);
+}
+
+/** A sun on a plane, from its sums: the share in shadow, the lit-to-shadow luminance ratio, per channel, and each checkerboard half's. */
+function planeScore(q: ArrayLike<number>): { share: number; ratio: number; rgb: [number, number, number]; halves: [number, number] } {
+    const n = [q[0], q[1]], sum = [[q[2], q[3], q[4], q[5]], [q[6], q[7], q[8], q[9]]], hs = [[q[10], q[11]], [q[12], q[13]]], hn = [[q[14], q[15]], [q[16], q[17]]];
     const share = n[1] / Math.max(1, n[0] + n[1]);
     if (!n[0] || !n[1]) return { share, ratio: 0, rgb: [1, 1, 1], halves: [0, 0] };
     const step = (k: number) => Math.exp(sum[0][k] / n[0] - sum[1][k] / n[1]);
@@ -360,7 +371,7 @@ function planeScore(cells: Cells, idx: Int32Array, bits: Uint8Array, P: RoofShad
 }
 
 /** A sun: azimuth and elevation, degrees. */
-interface Cand { az: number; el: number }
+export interface Cand { az: number; el: number }
 
 /** A terrace across photos' plan cell: its height bin and its componentGridM cell. */
 const gridKey = (x: number, y: number, z: number, P: RoofShadowParams) => `${Math.round(y / P.terraceBinM)}:${Math.floor(x / P.componentGridM)}:${Math.floor(z / P.componentGridM)}`;
@@ -370,7 +381,7 @@ const gridKey = (x: number, y: number, z: number, P: RoofShadowParams) => `${Mat
  * `suns`) and ratio; each lifted terrace's lit level, by `${photo}:${height bin}` (undefined: no cap); and the
  * terraces across photos, with the plan cells (gridKey) of each.
  */
-interface LiftPlan {
+export interface LiftPlan {
     suns: Cand[];
     photoSun: Map<number, { sun: number; ratio: number[] }>;
     terraceLit: Map<string, number | undefined>;
@@ -380,30 +391,31 @@ interface LiftPlan {
 
 /**
  * The loops over triangles, map pixels and texels: the roof cells (step 1), each cell's shadow under suns at
- * coarseMapM (steps 3-6 read only these), and the lift (step 7). Native or TypeScript; the fit between them is the
- * same code.
+ * coarseMapM with the sums that score them on the decks (steps 3-6 read only these), and the lift (step 7). Native or
+ * TypeScript; the fit between them is the same code. cells() comes first.
  */
-interface RoofKernels {
+export interface RoofKernels {
     cells(): Promise<Cells>;
-    /** Per sun, each cell in its shadow (1) or not (0). */
-    shadows(suns: Cand[]): Promise<Uint8Array[]>;
+    /** Per sun, each cell in its shadow (1) or not (0), and its planeSums on each deck `score[s]` names (`planes`' indices). */
+    shadows(suns: Cand[], planes: Array<{ idx: Int32Array }>, score: number[][]): Promise<{ bits: Uint8Array[]; sums: Float64Array[][] }>;
     /** Texels lifted per photo (a texel once per triangle and sun that lifts it), and the photos changed. */
     lift(plan: LiftPlan): Promise<{ lifted: Map<number, number>; changed: Map<number, Uint8Array> }>;
     close(): void;
 }
 
-/** The kernels in TypeScript (SCRATCHBOX_K_NATIVE_TWIN=0): the reference the native ones match. */
+/** The kernels in TypeScript (SCRATCHBOX_K_NATIVE without roof-shadow): the reference the native ones match. */
 function typescriptKernels(soup: Soup, occ: Occluders, photos: Map<number, RgbaImage8>, surfaces: Map<number, Uint8Array>, P: RoofShadowParams): RoofKernels {
     const above = shadowMap(soup, 0, 89.9, P.aboveMapM);
     let cells: Cells = { n: 0, img: new Int32Array(0), p: new Float32Array(0), c: new Float32Array(0) };
     return {
         cells: async () => (cells = roofCells(soup, photos, surfaces, above, P)),
-        shadows: async suns => {
-            const out: Uint8Array[] = [];
-            for (const sun of suns) {
-                const m = shadowMap(occ, sun.az, sun.el, P.coarseMapM), bits = new Uint8Array(cells.n);
+        shadows: async (suns, planes, score) => {
+            const out: { bits: Uint8Array[]; sums: Float64Array[][] } = { bits: [], sums: [] };
+            for (let s = 0; s < suns.length; s++) {
+                const m = shadowMap(occ, suns[s].az, suns[s].el, P.coarseMapM), bits = new Uint8Array(cells.n);
                 for (let i = 0; i < cells.n; i++) bits[i] = shadowedAt(m, cells.p[i * 3], cells.p[i * 3 + 1], cells.p[i * 3 + 2], P.biasM) ? 1 : 0;
-                out.push(bits);
+                out.bits.push(bits);
+                out.sums.push(score[s].map(k => planeSums(cells, planes[k].idx, bits, P)));
                 await new Promise(r => setImmediate(r));
             }
             return out;
@@ -469,7 +481,7 @@ function typescriptKernels(soup: Soup, occ: Occluders, photos: Map<number, RgbaI
 /** The ten numbers of a sun's frame the native kernels take (sunFrame). */
 const frameOf = (sun: Cand, mpp: number) => { const f = sunFrame(sun.az, sun.el, mpp); return [...f.s, ...f.r, ...f.u, f.slope]; };
 
-/** The kernels natively (native-twin.ts): the twin and the photos its roof triangles draw on go over once. */
+/** The kernels natively (native/twin-texels-native.ts): the twin and the photos its roof triangles draw on go over once. */
 async function nativeKernels(soup: Soup, occ: Occluders, photos: Map<number, RgbaImage8>, surfaces: Map<number, Uint8Array>, P: RoofShadowParams, threads?: number): Promise<RoofKernels> {
     const worker = await NativeTwinWorker.start(threads);
     const ids: number[] = [];
@@ -503,10 +515,14 @@ async function nativeKernels(soup: Soup, occ: Occluders, photos: Map<number, Rgb
             n = r.u32();
             return { n, img: r.int32s(n), p: r.float32s(3 * n), c: r.float32s(3 * n) };
         },
-        shadows: async list => {
-            if (!list.length) return [];
-            const r = await worker.request(TWIN_CMD.cellShadows, suns(list, P.coarseMapM));
-            return list.map(() => r.view(n));
+        shadows: async (list, planes, score) => {
+            if (!list.length) return { bits: [], sums: [] };
+            const req = suns(list, P.coarseMapM).f64(P.halfBlockM).u32(planes.length);
+            for (const pl of planes) req.u32(pl.idx.length).array(pl.idx);
+            for (const sc of score) req.u32(sc.length).array(Uint32Array.from(sc));
+            const r = await worker.request(TWIN_CMD.cellShadows, req);
+            const bits = list.map(() => r.view(n));
+            return { bits, sums: score.map(sc => sc.map(() => Float64Array.from({ length: PLANE_SUMS }, () => r.f64()))) };
         },
         lift: async plan => {
             const req = suns(plan.suns, P.fineMapM);
@@ -550,10 +566,15 @@ async function nativeKernels(soup: Soup, occ: Occluders, photos: Map<number, Rgb
     };
 }
 
+/** The kernels over a twin's soup and occluders, native or in TypeScript (roofShadowLift picks by SCRATCHBOX_K_NATIVE; the parity tests take both). */
+export async function roofShadowKernels(soup: Soup, occ: Occluders, photos: Map<number, RgbaImage8>, surfaces: Map<number, Uint8Array>, P: RoofShadowParams, native: boolean, threads?: number): Promise<RoofKernels> {
+    return native ? nativeKernels(soup, occ, photos, surfaces, P, threads) : typescriptKernels(soup, occ, photos, surfaces, P);
+}
+
 /**
  * Fits a sun per roof deck and lifts the shadow the mesh casts on it (`photos` edited in place). `surfaces` is
  * texture-harmonize.ts surfaceClassMasks, read only to skip texels no triangle uses; roof is the map from above's.
- * `threads` caps the native kernels' threads (native-twin.ts nativeTwinThreads).
+ * `threads` caps the native kernels' threads (native/twin-texels-native.ts nativeTwinThreads).
  */
 export async function roofShadowLift(g: ParsedGlb, json: any, photos: Map<number, RgbaImage8>, surfaces: Map<number, Uint8Array>, opts: { context?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }; progress?: (message: string) => void; params?: Partial<RoofShadowParams>; threads?: number } = {}): Promise<RoofShadowReport> {
     const P = { ...ROOF_SHADOW_PARAMS, ...(opts.params ?? {}) };
@@ -562,7 +583,7 @@ export async function roofShadowLift(g: ParsedGlb, json: any, photos: Map<number
     // an empty twin (a chunk with nothing in it) has no extent: every map would be Infinity pixels a side
     if (!soup.n) return { applied: false, why: 'the twin has no triangles', cells: 0, planes: 0, fitted: 0, texelsLifted: 0, photosChanged: 0, contextTriangles: 0, photoRecords: [], terraces: { photos: 0, unconfirmed: 0, ownFit: 0, lifted: 0, liftedWhollyInShadow: 0, rejected: 0, lit: 0, components: 0, componentsLifted: 0, rejections: [] }, candidates: 0, ms: Date.now() - t0, records: [] };
     const occ = occludersOf(soup, opts.context, P);
-    const kernels = nativeTwinEnabled() ? await nativeKernels(soup, occ, photos, surfaces, P, opts.threads) : typescriptKernels(soup, occ, photos, surfaces, P);
+    const kernels = await roofShadowKernels(soup, occ, photos, surfaces, P, kNative('roof-shadow'), opts.threads);
     try {
         return await fitAndLift(kernels, soup, occ, photos, P, t0, opts.progress);
     } finally {
@@ -582,23 +603,35 @@ async function fitAndLift(kernels: RoofKernels, soup: Soup, occ: Occluders, phot
     type Scored = Cand & ReturnType<typeof planeScore>;
     const scored: Scored[][] = planes.map(() => []);
     const valid = (s: Scored) => s.share >= P.minShare && s.share <= P.maxShare && s.ratio > 0;
-    // every roof cell's shadow under each sun evaluated (at coarseMapM), by `${az},${el}`: what steps 3-6 and the audit read
+    // every roof cell's shadow under each sun evaluated (at coarseMapM), by `${az},${el}`: what steps 3-6 and the audit
+    // read; and each sun's sums on the decks it is scored on, by `${az},${el}|${deck}`
     const keyOf = (c: Cand) => `${c.az},${c.el}`;
-    const shadowBits = new Map<string, Uint8Array>();
+    const shadowBits = new Map<string, Uint8Array>(), deckSums = new Map<string, Float64Array>();
     const bitsOf = (c: Cand) => shadowBits.get(keyOf(c))!;
-    const shade = async (suns: Cand[]) => {
-        const todo = [...new Map(suns.filter(c => !shadowBits.has(keyOf(c))).map(c => [keyOf(c), c])).values()];
-        (await kernels.shadows(todo)).forEach((bits, i) => shadowBits.set(keyOf(todo[i]), bits));
+    const shade = async (asks: Array<{ cand: Cand; decks: number[] }>) => {
+        const todo = new Map<string, { cand: Cand; decks: number[] }>();
+        for (const { cand, decks } of asks) {
+            const key = keyOf(cand), missing = decks.filter(k => !deckSums.has(`${key}|${k}`));
+            if (shadowBits.has(key) && !missing.length) continue;
+            const t = todo.get(key);
+            if (t) for (const k of missing) { if (!t.decks.includes(k)) t.decks.push(k); } else todo.set(key, { cand, decks: missing });
+        }
+        const list = [...todo.values()];
+        const r = await kernels.shadows(list.map(t => t.cand), planes, list.map(t => t.decks));
+        list.forEach((t, i) => {
+            shadowBits.set(keyOf(t.cand), r.bits[i]);
+            t.decks.forEach((k, j) => deckSums.set(`${keyOf(t.cand)}|${k}`, r.sums[i][j]));
+        });
     };
     const evaluate = (cand: Cand, which: number[]) => {
         report.candidates++;
-        for (const k of which) scored[k].push({ ...cand, ...planeScore(cells, planes[k].idx, bitsOf(cand), P) });
+        for (const k of which) scored[k].push({ ...cand, ...planeScore(deckSums.get(`${keyOf(cand)}|${k}`)!) });
     };
     const all = planes.map((_, k) => k);
     const coarse: Cand[] = [];
     for (const el of P.coarseElDeg) for (let az = 0; az < 360; az += P.coarseAzDeg) coarse.push({ az, el });
     progress?.(`roof shadows: scoring ${coarse.length} candidate suns on ${planes.length} roof decks (${cells.n} roof cells)`);
-    await shade(coarse);
+    await shade(coarse.map(cand => ({ cand, decks: all })));
     for (const cand of coarse) { evaluate(cand, all); await new Promise(r => setImmediate(r)); }
     const medians = scored.map(list => { const r = list.filter(valid).map(s => s.ratio).sort((a, b) => a - b); return r.length ? r[Math.floor(r.length / 2)] : 0; });
     const refine: Array<{ cand: Cand; k: number }> = [];
@@ -611,7 +644,7 @@ async function fitAndLift(kernels: RoofKernels, soup: Soup, occ: Occluders, phot
             if ((da || de) && el >= 5 && el <= 85) refine.push({ cand: { az: (best.az + da * P.refineDeg + 360) % 360, el }, k });
         }
     }
-    await shade(refine.map(r => r.cand));
+    await shade(refine.map(r => ({ cand: r.cand, decks: [r.k] })));
     for (const { cand, k } of refine) evaluate(cand, [k]);
 
     // 4: acceptance per plane

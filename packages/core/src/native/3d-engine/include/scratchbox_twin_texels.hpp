@@ -21,14 +21,15 @@
  *  2. Roof cells: every photo's roof texels on a grid every cellTexels texels that the map from straight above sees,
  *     with their point and log colour. Photos are independent (a cell is taken by the first triangle of its photo that
  *     reaches it), one photo a task; the cells are put back in triangle order, as the TypeScript lists them.
- *  3. Cell shadows: each cell in or out of each candidate sun's shadow, one sun a task.
+ *  3. Cell shadows: each cell in or out of each candidate sun's shadow, one sun a task; with them, the sums that score
+ *     the sun on each roof deck asked for (roof-shadow.ts planeSums), added in the deck's cell order.
  *  4. The lift: per sun (in the caller's order), its finer map, then each photo's roof texels in triangle order, one
  *     photo a task; a texel is multiplied by its ratio to the power of its shadowed share, capped at its terrace's lit
  *     level.
  *  5. Harmonise apply: each texel's photo gain (its roof's on a roof texel) and its photo's offset field, bilinear, in
  *     linear light; rows of every photo, a block of rows a task.
  *
- * Parity with the TypeScript, which stays the reference (SCRATCHBOX_K_NATIVE_TWIN=0): every value is computed with
+ * Parity with the TypeScript, which stays the reference (SCRATCHBOX_K_NATIVE=0): every value is computed with
  * the same operations in the same order, in doubles, on the same float32 inputs. It must be compiled with
  * -ffp-contract=off: a fused multiply-add rounds once where JavaScript rounds twice. What JavaScript computes with its
  * own transcendental functions and a threshold then reads comes from the caller, worked out there: the sun frames
@@ -425,18 +426,45 @@ public:
         });
     }
 
-    /** Each cell in each sun's shadow (1) or not (0), suns.size() x cells bytes; one sun a task, its map dropped after. */
-    std::vector<uint8_t> cellShadows(const std::vector<SunFrame>& suns, double mpp) {
+    /** A sun scored on a deck (roof-shadow.ts planeSums): cells lit and shadowed, their summed log colour (r, g, b, luminance) lit then shadowed, and the checkerboard halves' luminance sums and counts ([half][shadowed]). */
+    static constexpr int PLANE_SUMS = 18;
+
+    /**
+     * Each cell in each sun's shadow (1) or not (0), suns.size() x cells bytes; one sun a task, its map dropped after.
+     * `score[s]` names the decks (indices in `planes`, each its cells in order) sun s is scored on; their sums go to
+     * `sums[s]`, PLANE_SUMS a deck, in that order.
+     */
+    std::vector<uint8_t> cellShadows(const std::vector<SunFrame>& suns, double mpp, const std::vector<std::vector<int32_t>>& planes, const std::vector<std::vector<uint32_t>>& score, double halfBlockM, std::vector<std::vector<double>>& sums) {
         const size_t n = cells.size();
         std::vector<uint8_t> bits(suns.size() * n, 0);
         std::vector<ShadowMap> maps(pool_.size());
+        sums.assign(suns.size(), {});
         pool_.run(suns.size(), [&](size_t s, unsigned w) {
             ShadowMap& m = maps[w];
             buildShadowMap(m, occ.data(), occ.size() / 9, suns[s], mpp);
             uint8_t* out = bits.data() + s * n;
             for (size_t i = 0; i < n; ++i) out[i] = m.shadowedAt(cells.p[i * 3], cells.p[i * 3 + 1], cells.p[i * 3 + 2], params.biasM) ? 1 : 0;
+            if (s < score.size()) for (uint32_t k : score[s]) planeSums(planes[k], out, halfBlockM, sums[s]);
         });
         return bits;
+    }
+
+    /** One deck's sums under one sun's cell shadows, appended to `to`: every accumulator added in the deck's cell order, as the TypeScript adds them. */
+    void planeSums(const std::vector<int32_t>& idx, const uint8_t* bits, double halfBlockM, std::vector<double>& to) const {
+        double n[2] = {0, 0}, sum[2][4] = {{0, 0, 0, 0}, {0, 0, 0, 0}}, hs[2][2] = {{0, 0}, {0, 0}}, hn[2][2] = {{0, 0}, {0, 0}};
+        for (int32_t i : idx) {
+            const size_t c = static_cast<size_t>(i) * 3;
+            const int sh = bits[i];
+            n[sh]++;
+            for (int k = 0; k < 3; ++k) sum[sh][k] += static_cast<double>(cells.c[c + static_cast<size_t>(k)]);
+            const double L = 0.2126 * static_cast<double>(cells.c[c]) + 0.7152 * static_cast<double>(cells.c[c + 1]) + 0.0722 * static_cast<double>(cells.c[c + 2]);
+            sum[sh][3] += L;
+            // JavaScript's (a + b) & 1 on the two floors: the parity of their sum
+            const int half = static_cast<int>(static_cast<int64_t>(std::floor(static_cast<double>(cells.p[c]) / halfBlockM) + std::floor(static_cast<double>(cells.p[c + 2]) / halfBlockM)) & 1);
+            hs[half][sh] += L;
+            hn[half][sh]++;
+        }
+        to.insert(to.end(), {n[0], n[1], sum[0][0], sum[0][1], sum[0][2], sum[0][3], sum[1][0], sum[1][1], sum[1][2], sum[1][3], hs[0][0], hs[0][1], hs[1][0], hs[1][1], hn[0][0], hn[0][1], hn[1][0], hn[1][1]});
     }
 
     struct LiftOut {

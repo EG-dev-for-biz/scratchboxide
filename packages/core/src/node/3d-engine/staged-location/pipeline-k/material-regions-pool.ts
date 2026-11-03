@@ -61,7 +61,7 @@ function workerEntry(): string {
 
 /**
  * planMaterialRegions across `threads` worker threads (one: on this thread); the same plan, its report's ms the wall time.
- * With SCRATCHBOX_K_NATIVE naming `regions`, every job in one native run across the cores instead (the same plan).
+ * When SCRATCHBOX_K_NATIVE runs `regions` (the default), every job in one native run across the cores instead (the same plan).
  */
 export async function planMaterialRegionsOnThreads(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], sets: RegionSet[], planes: FittedPlane[] = [], P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS, opts: { threads?: number; signal?: AbortSignal } = {}): Promise<MaterialRegionsPlan> {
     if (kNative('regions')) return planMaterialRegionsNative(g, json, images, classes, sets, planes, P, opts.threads ? { threads: opts.threads } : {});

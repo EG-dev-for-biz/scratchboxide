@@ -9,7 +9,7 @@
 
 /**
  * Pipeline K's worker thread: rectifies the facade orthos it is given (pipeline-k.ts) off the server's main thread,
- * writes each as a PNG into the output folder and posts its report back. With SCRATCHBOX_K_NATIVE naming `rectify`, each
+ * writes each as a PNG into the output folder and posts its report back. When SCRATCHBOX_K_NATIVE runs `rectify` (the default), each
  * through the native kernel (native/ortho-rectify-native.ts, the same result; four threads, past which it is memory bound).
  */
 

@@ -11,7 +11,7 @@
  * The native facade ortho straightening (pipeline-k/native/ortho-rectify-native.ts over scratchbox_ortho_rectify.hpp)
  * against the TypeScript it translates (pipeline-k/ortho-rectify.ts rectifyOrtho), on synthetic facade orthos: piers and
  * storey lines bent and skewed so the warp is solved and kept, uncovered holes so the fill runs from bay and storey repeats
- * and the nearest texel, a bay darkened over several storeys so the smear levelling runs, a large smooth patch so the
+ * (what they leave stays grey for pipeline K's later rungs, never the nearest texel), a bay darkened over several storeys so the smear levelling runs, a large smooth patch so the
  * featureless mask is drawn, transparent texels, and an occlusion mask carried through the warp. Parity is exact: every
  * image byte, every mask and every report field but `ms`. Then the two timed on a full-size ortho.
  */
@@ -124,7 +124,7 @@ describe('native ortho rectify parity', () => {
         expectParity(ts, nat);
     }, 120_000);
 
-    it('a facade whose holes outrun its repeats (the nearest-texel fill) and changed parameters', async () => {
+    it('a facade whose holes outrun its repeats (left grey for pipeline K\'s later rungs) and changed parameters', async () => {
         const spec: FacadeSpec = { ...bentSpec, W: 200, H: 360, px: 0.06, pitchM: 2.4, storeyM: 3.2, wobbleX: y => 3 * Math.sin(y / 30), wobbleY: x => 2 * Math.cos(x / 25) };
         const img = facade(spec);
         hole(img, 0, 0, 200, 70);
@@ -134,7 +134,8 @@ describe('native ortho rectify parity', () => {
         const ts = rectifyOrtho({ ...img, rgba: new Uint8Array(img.rgba) }, spec.px, params, occ.slice());
         const nat = await rectifyOrthoNative(img, spec.px, params, occ.slice());
         expect(ts.report.lines.horizontal).toBe(0);
-        expect(ts.report.holes.fromNearest).toBeGreaterThan(0);
+        expect(ts.report.holes.fromNearest).toBe(0);
+        expect(ts.report.holes.uncovered).toBeGreaterThan(ts.report.holes.fromRepeats + ts.report.holes.fromStoreys);
         expectParity(ts, nat);
     }, 120_000);
 

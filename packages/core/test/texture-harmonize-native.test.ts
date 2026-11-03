@@ -8,19 +8,23 @@
  ********************************************************************************/
 
 /**
- * Pipeline K's native texture harmonisation (pipeline-k/native/texture-harmonize-native.ts over
- * scratchbox_texture_harmonize.hpp) against the TypeScript it translates (pipeline-k/texture-harmonize.ts), on a box
- * building whose walls are photographed in two overlapping bands (a seam where they overlap), a roof and a hidden floor
- * inside, every photo exposed differently. The class masks and the harmonised photos must equal the TypeScript's byte for
- * byte, and the report field for field (its figures are rounded to four places on both sides; the libm exp/log/pow/atan2
- * may differ from V8's in the last bit, which could only move a rounded figure at an exact tie, so the figures are
- * compared after the same rounding). Also timed at a realistic size (about 500k triangles over eight 2048 x 2048 photos).
+ * Harmonising's native apply (scratchbox_twin_texels.hpp, pipeline-k/native/twin-texels-native.ts) against the
+ * TypeScript it replaces (texture-harmonize.ts, SCRATCHBOX_K_NATIVE=0). Every comparison is exact: the report field for
+ * field (but its times) and every texel.
+ * - The 8-bit sRGB encoder's thresholds give the code JavaScript rounds to.
+ * - Two walls and two roofs, each its own photo at its own exposure: also on 3 threads with one photo a batch.
+ * - A box building whose walls are photographed in two overlapping bands (a seam where they overlap), a roof and a hidden
+ *   floor inside, every photo exposed differently: in three photos and in eight, with given masks, and a single photo
+ *   left alone.
+ * - The box at a realistic size (about 500k triangles over eight 2048 x 2048 photos), with one timing line, TypeScript
+ *   against native (vitest --silent=false shows it).
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { assembleGlb, parseGlbBytes, type ParsedGlb } from '../src/node/3d-engine/staged-location/glb-bytes';
-import { harmonizeTextures, surfaceClassMasks, TEXEL_ROOF, TEXEL_WALL, TEXTURE_HARMONIZE_PARAMS, type TextureHarmonizeReport } from '../src/node/3d-engine/staged-location/pipeline-k/texture-harmonize';
-import { ensureTextureHarmonizeNativeBinary, harmonizeTexturesNative, harmonizeTexturesNativeDetailed, surfaceClassMasksNative } from '../src/node/3d-engine/staged-location/pipeline-k/native/texture-harmonize-native';
+import { harmonizeTextures, surfaceClassMasks, TEXEL_ROOF, TEXTURE_HARMONIZE_PARAMS, type TextureHarmonizeReport } from '../src/node/3d-engine/staged-location/pipeline-k/texture-harmonize';
+import { ensureNativeTwinBinary, srgb8Thresholds } from '../src/node/3d-engine/staged-location/pipeline-k/native/twin-texels-native';
+import { SRGB8_TO_LINEAR, linearToSrgb255 } from '../src/common/spatial/photogrammetric-delight';
 import type { RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 
 type V3 = [number, number, number];
@@ -113,102 +117,143 @@ function boxBuilding(o: { W: number; D: number; H: number; cell: number; tex: nu
     return { g, images };
 }
 
-const copyImages = (m: Map<number, RgbaImage8>) => new Map([...m].map(([k, im]) => [k, { width: im.width, height: im.height, rgba: im.rgba.slice() }] as [number, RgbaImage8]));
-const withoutMs = (r: TextureHarmonizeReport) => ({ ...r, ms: 0 });
-/** Bytes that differ between two photo sets (same keys and sizes asserted). */
-function differingBytes(a: Map<number, RgbaImage8>, b: Map<number, RgbaImage8>): number {
-    expect([...a.keys()]).toEqual([...b.keys()]);
-    let n = 0;
-    for (const [k, im] of a) {
-        const o = b.get(k)!;
-        expect([o.width, o.height]).toEqual([im.width, im.height]);
-        for (let i = 0; i < im.rgba.length; i++) if (im.rgba[i] !== o.rgba[i]) n++;
-    }
-    return n;
+/** Two walls (z = 0, facing +z) and two roofs behind them (y = 10), each its own photo (N x N) at its own exposure. */
+function wallsAndRoofs(N: number): { g: ParsedGlb; images: Map<number, RgbaImage8> } {
+    const gains = [1, 1.6, 0.8, 1.3];
+    const roof = (x0: number, x1: number) => ({ pos: [x0, 10, -10, x1, 10, -10, x1, 10, 0, x0, 10, 0], uv: [0, 0, 1, 0, 1, 1, 0, 1], idx: [0, 2, 1, 0, 3, 2] });
+    const prims = [
+        { pos: [0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0], uv: [0, 1, 1, 1, 1, 0, 0, 0], idx: [0, 1, 2, 0, 2, 3] },
+        { pos: [10, 0, 0, 20, 0, 0, 20, 10, 0, 10, 10, 0], uv: [0, 1, 1, 1, 1, 0, 0, 0], idx: [0, 1, 2, 0, 2, 3] },
+        roof(0, 10), roof(10, 20)
+    ];
+    const bytes: number[] = [], views: any[] = [], accessors: any[] = [];
+    const add = (arr: Float32Array | Uint32Array, type: string, ct: number, count: number) => {
+        const b = new Uint8Array(arr.buffer);
+        views.push({ buffer: 0, byteOffset: bytes.length, byteLength: b.length });
+        for (const v of b) bytes.push(v);
+        accessors.push({ bufferView: views.length - 1, componentType: ct, count, type });
+        return accessors.length - 1;
+    };
+    const meshes = prims.map((p, k) => ({ primitives: [{ attributes: { POSITION: add(new Float32Array(p.pos), 'VEC3', 5126, 4), TEXCOORD_0: add(new Float32Array(p.uv), 'VEC2', 5126, 4) }, indices: add(new Uint32Array(p.idx), 'SCALAR', 5125, 6), material: k, mode: 4 }] }));
+    const json = {
+        asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0, 1, 2, 3] }], nodes: meshes.map((_, k) => ({ mesh: k })), meshes,
+        materials: meshes.map((_, k) => ({ pbrMetallicRoughness: { baseColorTexture: { index: k } } })), textures: meshes.map((_, k) => ({ source: k })), images: meshes.map((_, k) => ({ uri: `${k}.png` })),
+        accessors, bufferViews: views, buffers: [{ byteLength: bytes.length }]
+    };
+    const g = parseGlbBytes(assembleGlb(json as never, Uint8Array.from(bytes)));
+    const images = new Map<number, RgbaImage8>();
+    gains.forEach((gain, k) => {
+        const rgba = new Uint8Array(N * N * 4);
+        for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+            const grain = ((Math.sin(x * 12.9898 + y * 78.233 + k * 3.1) * 43758.5453) % 1 + 1) % 1;
+            const v = (0.16 + 0.07 * Math.sin((x / N) * 13) * Math.cos((y / N) * 7) + 0.05 * grain) * gain, o = (y * N + x) * 4;
+            for (const [c, tint] of [1, 0.93, 0.82].entries()) rgba[o + c] = Math.round(linearToSrgb255(v * tint));
+            rgba[o + 3] = 255;
+        }
+        images.set(k, { width: N, height: N, rgba });
+    });
+    return { g, images };
 }
 
-describe('pipeline K texture harmonisation, native', () => {
-    it('builds its driver', async () => {
-        expect(await ensureTextureHarmonizeNativeBinary()).toMatch(/bin$/);
+const copyImages = (m: Map<number, RgbaImage8>) => new Map([...m].map(([k, im]) => [k, { width: im.width, height: im.height, rgba: im.rgba.slice() }] as [number, RgbaImage8]));
+const withoutTimes = (r: TextureHarmonizeReport) => ({ ...r, ms: 0, phasesMs: undefined });
+
+/** Texels a run changed (against the input), and texels two runs disagree on. */
+function changedTexels(input: Map<number, RgbaImage8>, a: Map<number, RgbaImage8>, b: Map<number, RgbaImage8>): { a: number; differ: number } {
+    expect([...a.keys()]).toEqual([...b.keys()]);
+    let changed = 0, differ = 0;
+    for (const [k, im] of input) {
+        const ra = a.get(k)!.rgba, rb = b.get(k)!.rgba;
+        expect([a.get(k)!.width, a.get(k)!.height, rb.length]).toEqual([im.width, im.height, im.rgba.length]);
+        for (let i = 0; i < im.rgba.length; i += 4) {
+            let ca = false, d = false;
+            for (let c = 0; c < 4; c++) { if (ra[i + c] !== im.rgba[i + c]) ca = true; if (ra[i + c] !== rb[i + c]) d = true; }
+            if (ca) changed++;
+            if (d) differ++;
+        }
+    }
+    return { a: changed, differ };
+}
+
+/** harmonizeTextures with SCRATCHBOX_K_NATIVE=0 (the TypeScript) or unset (native), on copies of the photos. */
+function harmonize(g: ParsedGlb, images: Map<number, RgbaImage8>, native: boolean, masks?: Map<number, Uint8Array>, opts: { threads?: number; nativeBatchBytes?: number } = {}) {
+    if (native) delete process.env.SCRATCHBOX_K_NATIVE; else process.env.SCRATCHBOX_K_NATIVE = '0';
+    const photos = copyImages(images), t = performance.now();
+    const report = harmonizeTextures(g, g.json, photos, 0, TEXTURE_HARMONIZE_PARAMS, masks, opts);
+    return { report, photos, ms: performance.now() - t };
+}
+
+describe('harmonising: the native apply against the TypeScript', () => {
+    beforeAll(async () => { await ensureNativeTwinBinary(); }, 300_000);
+    afterEach(() => { delete process.env.SCRATCHBOX_K_NATIVE; });
+
+    it('reads the 8-bit sRGB code from its thresholds as JavaScript rounds it', () => {
+        const t = srgb8Thresholds();
+        const code = (x: number) => { let k = 0; while (k < 255 && t[k] <= x) k++; return k; };
+        for (let k = 0; k < 255; k++) {
+            expect(Math.round(linearToSrgb255(t[k]))).toBe(k + 1);
+            expect(Math.round(linearToSrgb255(t[k] - Number.EPSILON * t[k]))).toBeLessThanOrEqual(k);
+        }
+        for (let v = 0; v < 256; v++) expect(code(SRGB8_TO_LINEAR[v])).toBe(v);
+    });
+
+    it('two walls and two roofs: the same report and photos, also on 3 threads with one photo a batch', () => {
+        const { g, images } = wallsAndRoofs(512);
+        const masks = surfaceClassMasks(g, g.json, images);
+        const a = harmonize(g, images, false, masks), b = harmonize(g, images, true, masks), c = harmonize(g, images, true, masks, { threads: 3, nativeBatchBytes: 1 });
+        expect(a.report.kept).toBe(true);
+        expect(a.report.roofs.roofGains).toBeGreaterThanOrEqual(2);
+        expect(withoutTimes(b.report)).toEqual(withoutTimes(a.report));
+        expect(withoutTimes(c.report)).toEqual(withoutTimes(a.report));
+        const d = changedTexels(images, a.photos, b.photos);
+        expect(d.a).toBeGreaterThan(512 * 512);
+        expect(d.differ).toBe(0);
+        expect(changedTexels(images, b.photos, c.photos).differ).toBe(0);
     });
 
     for (const [name, opts] of [
         ['three photos', { W: 20, D: 16, H: 30, cell: 1, tex: 256, perWallPhotos: false }],
         ['eight photos', { W: 24, D: 24, H: 60, cell: 0.7, tex: 384, perWallPhotos: true }]
     ] as const) {
-        it(`computes the TypeScript's class masks (${name})`, async () => {
+        it(`the box in ${name}: the same report and photos`, () => {
             const { g, images } = boxBuilding(opts);
-            const ts = surfaceClassMasks(g, g.json, images);
-            const nat = await surfaceClassMasksNative(g, g.json, images);
-            expect([...nat.keys()]).toEqual([...ts.keys()]);
-            let roof = 0, wall = 0;
-            for (const [k, m] of ts) {
-                expect(Buffer.compare(Buffer.from(nat.get(k)!), Buffer.from(m))).toBe(0);
-                for (const v of m) { if (v === TEXEL_ROOF) roof++; else if (v === TEXEL_WALL) wall++; }
-            }
-            // the fixture exercises both classes (the hidden floor is wall, the roof roof)
-            expect(roof).toBeGreaterThan(100);
-            expect(wall).toBeGreaterThan(1000);
-        });
-
-        it(`harmonises the photos as the TypeScript does (${name})`, async () => {
-            const { g, images } = boxBuilding(opts);
-            const a = copyImages(images), b = copyImages(images);
-            const ts = harmonizeTextures(g, g.json, a, 0);
-            const nat = await harmonizeTexturesNative(g, g.json, b, 0);
-            expect(ts.kept).toBe(true);
-            expect(ts.seams.pairs).toBeGreaterThan(10);
-            if (opts.perWallPhotos) expect(ts.roofs.roofGains).toBeGreaterThan(0);
-            expect(withoutMs(nat)).toEqual(withoutMs(ts));
-            expect(differingBytes(a, b)).toBe(0);
-            // and the photos did change
-            expect(differingBytes(a, images)).toBeGreaterThan(1000);
+            const a = harmonize(g, images, false), b = harmonize(g, images, true);
+            expect(a.report.kept).toBe(true);
+            expect(a.report.seams.pairs).toBeGreaterThan(10);
+            if (opts.perWallPhotos) expect(a.report.roofs.roofGains).toBeGreaterThan(0);
+            expect(withoutTimes(b.report)).toEqual(withoutTimes(a.report));
+            const d = changedTexels(images, a.photos, b.photos);
+            expect(d.a).toBeGreaterThan(1000);
+            expect(d.differ).toBe(0);
         });
     }
 
-    it('uses given masks as the TypeScript does, and leaves a single photo alone', async () => {
+    it('uses given masks as the TypeScript does, and leaves a single photo alone', () => {
         const { g, images } = boxBuilding({ W: 20, D: 16, H: 30, cell: 1, tex: 256, perWallPhotos: false });
         // given masks: every texel of photo 2 roof, the others' as computed
         const masks = surfaceClassMasks(g, g.json, images);
         masks.get(2)!.fill(TEXEL_ROOF);
-        const a = copyImages(images), b = copyImages(images);
-        const ts = harmonizeTextures(g, g.json, a, 0, TEXTURE_HARMONIZE_PARAMS, masks);
-        const nat = await harmonizeTexturesNative(g, g.json, b, 0, TEXTURE_HARMONIZE_PARAMS, masks);
-        expect(withoutMs(nat)).toEqual(withoutMs(ts));
-        expect(differingBytes(a, b)).toBe(0);
+        const a = harmonize(g, images, false, masks), b = harmonize(g, images, true, masks);
+        expect(withoutTimes(b.report)).toEqual(withoutTimes(a.report));
+        expect(changedTexels(images, a.photos, b.photos).differ).toBe(0);
         // one photo: nothing to harmonise, the photo object kept
+        delete process.env.SCRATCHBOX_K_NATIVE;
         const one = new Map([[0, images.get(0)!]]);
-        const r = await harmonizeTexturesNative(g, g.json, one, 0);
-        expect(withoutMs(r)).toEqual(withoutMs(harmonizeTextures(g, g.json, new Map([[0, images.get(0)!]]), 0)));
+        const r = harmonizeTextures(g, g.json, one, 0);
         expect(r.kept).toBe(false);
         expect(one.get(0)).toBe(images.get(0));
     });
 
-    it('matches the TypeScript at a realistic size and reports both timings', async () => {
-        await ensureTextureHarmonizeNativeBinary();
+    it('the box at a realistic size: the same report and photos, and the two timed', () => {
         const { g, images } = boxBuilding({ W: 40, D: 40, H: 120, cell: 0.32, tex: 2048, perWallPhotos: true });
         let triangles = 0;
-        for (const a of g.json.accessors) if (a.type === 'SCALAR') triangles += a.count / 3;
+        for (const acc of g.json.accessors) if (acc.type === 'SCALAR') triangles += acc.count / 3;
         expect(triangles).toBeGreaterThan(450_000);
-        const a = copyImages(images), b = copyImages(images);
-        let t = Date.now();
-        const ts = harmonizeTextures(g, g.json, a, 0);
-        const tsMs = Date.now() - t;
-        t = Date.now();
-        const { report: nat, stats } = await harmonizeTexturesNativeDetailed(g, g.json, b, 0);
-        const natMs = Date.now() - t;
-        expect(withoutMs(nat)).toEqual(withoutMs(ts));
-        expect(differingBytes(a, b)).toBe(0);
-        t = Date.now();
-        const tsMasks = surfaceClassMasks(g, g.json, images);
-        const tsMaskMs = Date.now() - t;
-        t = Date.now();
-        const natMasks = await surfaceClassMasksNative(g, g.json, images);
-        const natMaskMs = Date.now() - t;
-        for (const [k, m] of tsMasks) expect(Buffer.compare(Buffer.from(natMasks.get(k)!), Buffer.from(m))).toBe(0);
-        console.log(`texture harmonise, ${triangles} triangles, ${images.size} photos of 2048 x 2048, ${ts.samples} samples, ${ts.seams.pairs} seam pairs:\n`
-            + `  harmonizeTextures   TS ${tsMs} ms, native ${natMs} ms (${(tsMs / natMs).toFixed(1)}x)\n`
-            + `  native stages (ms): ${JSON.stringify(stats.ms)}, CG iterations ${stats.cgIterations.join('/')}\n`
-            + `  surfaceClassMasks   TS ${tsMaskMs} ms, native ${natMaskMs} ms (${(tsMaskMs / natMaskMs).toFixed(1)}x)`);
-    });
+        const a = harmonize(g, images, false), b = harmonize(g, images, true);
+        expect(withoutTimes(b.report)).toEqual(withoutTimes(a.report));
+        const d = changedTexels(images, a.photos, b.photos);
+        expect(d.differ).toBe(0);
+        const phases = (r: TextureHarmonizeReport) => Object.entries(r.phasesMs ?? {}).map(([k, v]) => `${k} ${v}`).join(', ');
+        console.log(`[timing] harmonise, ${triangles} triangles, ${images.size} photos of 2048 x 2048, ${a.report.samples} samples, ${a.report.seams.pairs} seam pairs: TypeScript ${a.ms.toFixed(0)} ms (${phases(a.report)}), native ${b.ms.toFixed(0)} ms (${phases(b.report)}); apply ${((a.report.phasesMs?.apply ?? 0) / Math.max(1, b.report.phasesMs?.apply ?? 0)).toFixed(1)}x, whole ${(a.ms / b.ms).toFixed(1)}x; ${d.a} texels changed, ${d.differ} differ`);
+    }, 300_000);
 });

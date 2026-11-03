@@ -37,15 +37,17 @@
  * roof (tile-refine-twin.ts: no shadow lift there, since a roof photographed from the air is lit, and a dark roof is a
  * dark material).
  *
- * The apply, the one loop over every texel, runs natively on a thread pool (native-twin.ts, scratchbox_twin_texels.hpp);
- * SCRATCHBOX_K_NATIVE_TWIN=0 runs it here, the reference the native apply matches value for value.
+ * The apply, the one loop over every texel, runs natively on a thread pool (native/twin-texels-native.ts,
+ * scratchbox_twin_texels.hpp) when SCRATCHBOX_K_NATIVE runs `harmonize` natively (native/native-switch.ts; the default), else
+ * here, the reference the native apply matches value for value.
  */
 
 import { readAccessor, type ParsedGlb } from '../glb-bytes';
 import { SRGB8_TO_LINEAR, linearToSrgb255 } from '../../../../common/spatial/photogrammetric-delight';
 import type { RgbaImage8 } from '../tile-texture-transfer';
 import { Rows, solveLeastSquares } from './ortho-rectify';
-import { nativeTwinEnabled, runNativeTwinSync, srgb8Thresholds, TWIN_CMD, TwinRequest } from './native-twin';
+import { kNative } from './native/native-switch';
+import { runNativeTwinSync, srgb8Thresholds, TWIN_CMD, TwinRequest } from './native/twin-texels-native';
 
 export const TEXTURE_HARMONIZE_VERSION = 'texture-harmonize/4';
 
@@ -298,7 +300,7 @@ function fieldWeights(f: Field, u: number, v: number): [number[], number[]] {
 /** About this many bytes of pixels go to the native apply at a time (the request, the reply and the copies stay bounded). */
 const NATIVE_BATCH_BYTES = 256 * 1024 * 1024;
 
-/** The apply natively (native-twin.ts): the same gains and fields, photos in batches; each photo's pixels replaced. */
+/** The apply natively (native/twin-texels-native.ts): the same gains and fields, photos in batches; each photo's pixels replaced. */
 function applyNative(images: Map<number, RgbaImage8>, fields: Map<number, Field>, gain: Map<number, [number, number, number]>, off: Float64Array[], classOf: Map<number, Uint8Array>, threads?: number, batchBytes = NATIVE_BATCH_BYTES): void {
     const ids = [...images.keys()];
     for (let start = 0; start < ids.length;) {
@@ -324,7 +326,7 @@ function applyNative(images: Map<number, RgbaImage8>, fields: Map<number, Field>
  * `masks` are the photos' surfaceClassMasks (computed here when not given). A district (pipeline K-D) passes `buildingOf`,
  * the building a point stands in (by plan x, z; -1 for none): the groups and the seam patches are then per building as well, so a
  * photo is only compared with the others on the same building's surfaces, and two buildings of different stone keep their
- * own colours, even where they meet flush. `threads` caps the native apply's threads (native-twin.ts nativeTwinThreads);
+ * own colours, even where they meet flush. `threads` caps the native apply's threads (native/twin-texels-native.ts nativeTwinThreads);
  * `nativeBatchBytes` is about how many bytes of pixels go to it at a time (default NATIVE_BATCH_BYTES).
  */
 export function harmonizeTextures(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, groundY: number, P: TextureHarmonizeParams = TEXTURE_HARMONIZE_PARAMS, masks?: Map<number, Uint8Array>, opts: { buildingOf?: (x: number, z: number) => number; /** Each phase as it ends, with its time (ms). */ onPhase?: (phase: string, ms: number) => void; threads?: number; nativeBatchBytes?: number } = {}): TextureHarmonizeReport {
@@ -445,7 +447,7 @@ export function harmonizeTextures(g: ParsedGlb, json: any, images: Map<number, R
     if (!(report.seams.after < report.seams.before)) { report.why = `the seams did not get closer (${report.seams.before} -> ${report.seams.after} in log colour)`; report.ms = Date.now() - t0; return report; }
     // apply: per texel, the photo's gain (its roof's on a roof texel) and its field's offset, in linear light
     const classOf = masks ?? surfaceClassMasks(g, json, images, P);
-    if (nativeTwinEnabled()) applyNative(images, fields, gain, off, classOf, opts.threads, opts.nativeBatchBytes);
+    if (kNative('harmonize')) applyNative(images, fields, gain, off, classOf, opts.threads, opts.nativeBatchBytes);
     else for (const [img, im] of images) {
         const f = fields.get(img)!, wallGain = gain.get(img * 2) ?? [0, 0, 0], roofGain = gain.get(img * 2 + 1) ?? [0, 0, 0], out = new Uint8Array(im.rgba);
         const mask = classOf.get(img);

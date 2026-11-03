@@ -8,11 +8,12 @@
  ********************************************************************************/
 
 /**
- * Pipeline K's facade ortho straightening, native and opt-in: rectifyOrtho (../ortho-rectify.ts) translated line for line
+ * Pipeline K's facade ortho straightening, native: rectifyOrtho (../ortho-rectify.ts) translated line for line
  * into C++20 (scratchbox_ortho_rectify.hpp) behind its CLI driver (scripts/ortho_rectify_native.cpp), built through the
  * native build cache. Same parameters, same result: the image, the uncovered, featureless and (warped) occluded masks
- * and the report, bit for bit on the same input (ortho-rectify-native.test.ts holds the parity). Nothing in the pipeline
- * calls it yet. A failed build or run throws; there is no fallback to the TypeScript.
+ * and the report, bit for bit on the same input (ortho-rectify-native.test.ts holds the parity). ortho-rectify-worker.ts
+ * calls it when SCRATCHBOX_K_NATIVE runs `rectify` (native-switch.ts; the default). A failed build or run throws; there is
+ * no fallback to the TypeScript.
  */
 
 import { execFile } from 'child_process';

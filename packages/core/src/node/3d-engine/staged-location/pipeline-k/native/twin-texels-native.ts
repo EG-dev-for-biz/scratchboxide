@@ -9,12 +9,13 @@
 
 /**
  * Pipeline K's per-texel twin kernels in native code: scratchbox_twin_texels.hpp behind its CLI driver
- * (scripts/twin_texels.cpp), built through the native build cache. roof-shadow.ts runs its roof cells, cell shadows
- * and lift there, and texture-harmonize.ts its apply; the fits that decide what to change stay in TypeScript.
+ * (scripts/twin_texels.cpp), built through the native build cache. roof-shadow.ts runs its roof cells, cell shadows,
+ * plane sums and lift there, and texture-harmonize.ts its apply; the fits that decide what to change stay in TypeScript.
  *
- * On by default; SCRATCHBOX_K_NATIVE_TWIN=0 runs the TypeScript loops instead, the reference the kernels match
- * (pipeline-k-native-twin.test.ts). SCRATCHBOX_K_NATIVE_TWIN_THREADS caps the threads (default every core) when a
- * caller passes none, so chunk builds running side by side can share the machine (district-chunks.ts chunkCpuShare).
+ * Run when SCRATCHBOX_K_NATIVE runs `roof-shadow` or `harmonize` natively (native-switch.ts; the default), else the TypeScript
+ * loops, the reference the kernels match (roof-shadow-native.test.ts, texture-harmonize-native.test.ts).
+ * SCRATCHBOX_K_NATIVE_THREADS caps their threads (default every core) when a caller passes none, so chunk builds
+ * running side by side can share the machine (district-chunks.ts chunkCpuShare).
  *
  * The data goes over stdin and stdout as raw little-endian buffers (a 16-byte header and the fields the driver's
  * comment lists), never PNG. The roof-shadow lift keeps one process for its four requests (NativeTwinWorker), so its
@@ -28,9 +29,9 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
-import { SRGB8_TO_LINEAR, linearToSrgb255 } from '../../../../common/spatial/photogrammetric-delight';
-import { compileNativeCached, compileNativeCachedSync, defaultNativeFlags, NativeBuildError, placeCachedBinary, type NativeCompileSpec } from '../../native-build-cache';
-import { findTileRefineRepoRoot } from '../../tile-refine-service';
+import { SRGB8_TO_LINEAR, linearToSrgb255 } from '../../../../../common/spatial/photogrammetric-delight';
+import { compileNativeCached, compileNativeCachedSync, defaultNativeFlags, NativeBuildError, placeCachedBinary, type NativeCompileSpec } from '../../../native-build-cache';
+import { findTileRefineRepoRoot } from '../../../tile-refine-service';
 
 /** The driver's requests (scripts/twin_texels.cpp). */
 export const TWIN_CMD = { roofLoad: 1, roofCells: 2, cellShadows: 3, roofLift: 4, harmonize: 5 } as const;
@@ -40,14 +41,9 @@ const CLI_SOURCE = path.join('scripts', 'twin_texels.cpp');
 const INCLUDE_DIR = path.join('packages', 'core', 'src', 'native', '3d-engine', 'include');
 const BINARY = path.join('build', '3d-native', 'twin_texels');
 
-/** Whether the twin's per-texel steps run natively (SCRATCHBOX_K_NATIVE_TWIN=0: the TypeScript). */
-export function nativeTwinEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-    return env.SCRATCHBOX_K_NATIVE_TWIN?.trim() !== '0';
-}
-
-/** The kernels' threads: the caller's, else SCRATCHBOX_K_NATIVE_TWIN_THREADS, else 0 (every core). */
+/** The kernels' threads: the caller's, else SCRATCHBOX_K_NATIVE_THREADS, else 0 (every core). */
 export function nativeTwinThreads(requested?: number, env: NodeJS.ProcessEnv = process.env): number {
-    const n = requested ?? Number(env.SCRATCHBOX_K_NATIVE_TWIN_THREADS ?? 0);
+    const n = requested ?? Number(env.SCRATCHBOX_K_NATIVE_THREADS ?? 0);
     return Number.isInteger(n) && n > 0 ? Math.min(n, 1024) : 0;
 }
 
@@ -62,7 +58,7 @@ let building: Promise<string> | undefined;
 
 /** Builds build/3d-native/twin_texels through the native build cache when its sources changed. */
 export function ensureNativeTwinBinary(repoRoot = findTileRefineRepoRoot()): Promise<string> {
-    if (process.env.SCRATCHBOX_K_NATIVE_TWIN_BIN) return Promise.resolve(process.env.SCRATCHBOX_K_NATIVE_TWIN_BIN);
+    if (process.env.SCRATCHBOX_TWIN_TEXELS_BIN) return Promise.resolve(process.env.SCRATCHBOX_TWIN_TEXELS_BIN);
     if (building) return building;
     building = (async () => {
         const bin = path.join(repoRoot, BINARY);
@@ -78,7 +74,7 @@ export function ensureNativeTwinBinary(repoRoot = findTileRefineRepoRoot()): Pro
 
 /** ensureNativeTwinBinary for a synchronous caller (the thread waits while a first use compiles). */
 export function nativeTwinBinarySync(repoRoot = findTileRefineRepoRoot()): string {
-    if (process.env.SCRATCHBOX_K_NATIVE_TWIN_BIN) return process.env.SCRATCHBOX_K_NATIVE_TWIN_BIN;
+    if (process.env.SCRATCHBOX_TWIN_TEXELS_BIN) return process.env.SCRATCHBOX_TWIN_TEXELS_BIN;
     const bin = path.join(repoRoot, BINARY);
     try {
         placeCachedBinary(compileNativeCachedSync(compileSpec(repoRoot)).binaryPath, bin);
