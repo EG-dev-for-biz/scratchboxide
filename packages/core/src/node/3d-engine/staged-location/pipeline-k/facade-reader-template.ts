@@ -96,6 +96,9 @@ export function nccAt(g: LumGrid, t: Float32Array, tw: number, th: number, ox: n
     return (sab - (sa * sb) / n) / Math.sqrt(va * vb);
 }
 
+/** Matches top to bottom, then left to right (a stable sort: equal positions keep their order). */
+export const byRowThenColumn = (a: { rect: WindowRect }, b: { rect: WindowRect }) => a.rect[1] - b.rect[1] || a.rect[0] - b.rect[0];
+
 export interface TemplateMatch { rect: WindowRect; ncc: number; grid?: boolean; /** The panes of the exemplar it matched. */ panes?: number; fromPlane?: number; /** Which of the plane's exemplars it matched. */ exemplar?: number }
 
 /** Where the exemplar's opening stands on the plane g: matches at minNcc, then the crossings of their columns and rows that still match at gridNcc. */
@@ -143,7 +146,7 @@ export function matchExemplar(g: LumGrid, ex: WindowExemplar, P: TemplateParams 
         const b = refine(x - opening[0], y - opening[1]);
         if (b.s >= P.gridNcc && covered(at(b.x, b.y))) found.push({ rect: at(b.x, b.y), ncc: Math.round(b.s * 1000) / 1000, grid: true, panes: ex.panes, fromPlane: ex.fromPlane });
     }
-    return found.sort((a, b) => a.rect[1] - b.rect[1] || a.rect[0] - b.rect[0]);
+    return found.sort(byRowThenColumn);
 }
 
 /** Matches of several exemplars on one plane: an opening overlapping a stronger one by half its area is dropped. */
@@ -152,5 +155,5 @@ export function mergeMatches(sets: TemplateMatch[][]): TemplateMatch[] {
     const area = (r: WindowRect) => Math.max(0, r[2] - r[0]) * Math.max(0, r[3] - r[1]);
     const overlap = (a: WindowRect, b: WindowRect) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
     for (const m of all) if (!kept.some(k => overlap(k.rect, m.rect) > 0.5 * Math.min(area(k.rect), area(m.rect)))) kept.push(m);
-    return kept.sort((a, b) => a.rect[1] - b.rect[1] || a.rect[0] - b.rect[0]);
+    return kept.sort(byRowThenColumn);
 }

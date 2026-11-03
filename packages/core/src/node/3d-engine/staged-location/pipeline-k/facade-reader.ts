@@ -57,6 +57,8 @@ import type { FitFrame, FittedPlane, WindowFitFile, WindowRect } from '../window
 import { contactSheet, contextFor, parseBrief, briefPrompt, planePlaces, type BuildingBrief, type NamedBuilding, type PlaneFamily } from './facade-reader-brief';
 import { exemplarOf, matchExemplar, mergeMatches, TEMPLATE_PARAMS, type TemplateMatch, type WindowExemplar } from './facade-reader-template';
 import { planePixelsKey, readingKey, type ModelReadingStore } from './model-readings';
+import { kNative } from './native/native-switch';
+import { matchExemplarsNative } from './native/template-match-native';
 import { readOccluded, unreadMask } from './occlusion';
 import { PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
 
@@ -359,11 +361,11 @@ export function zoneCrops(L: Float32Array, W: number, zone: ImageRegion, h: numb
 }
 
 /**
- * A region of the photo as a PNG scaled by `scale` (nearest texel), with optional outlines (photo pixels). With `L`, the
- * texels the photo never reached (NaN there) are drawn uniform grey, so the model neither reads nor misses openings in
- * texture filled from the facade's repeats.
+ * A region of the photo scaled by `scale` (nearest texel), with optional outlines (photo pixels). With `L`, the texels
+ * the photo never reached (NaN there) are drawn uniform grey, so the model neither reads nor misses openings in texture
+ * filled from the facade's repeats.
  */
-export function regionPng(img: FacadePhoto, r: ImageRegion, scale: number, outlines: WindowRect[] = [], L?: Float32Array): { png: Buffer; width: number; height: number; rgba: Uint8Array } {
+export function regionRgba(img: FacadePhoto, r: ImageRegion, scale: number, outlines: WindowRect[] = [], L?: Float32Array): { width: number; height: number; rgba: Uint8Array } {
     const W = img.width, ow = Math.max(1, Math.round((r.x1 - r.x0) * scale)), oh = Math.max(1, Math.round((r.y1 - r.y0) * scale));
     const out = new Uint8Array(ow * oh * 4);
     for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) {
@@ -380,7 +382,13 @@ export function regionPng(img: FacadePhoto, r: ImageRegion, scale: number, outli
             out.set([255, 0, 255, 255], (y * ow + x) * 4);
         }
     }
-    return { png: encodePng(ow, oh, out, 4), width: ow, height: oh, rgba: out };
+    return { width: ow, height: oh, rgba: out };
+}
+
+/** regionRgba as a PNG. */
+export function regionPng(img: FacadePhoto, r: ImageRegion, scale: number, outlines: WindowRect[] = [], L?: Float32Array): { png: Buffer; width: number; height: number; rgba: Uint8Array } {
+    const c = regionRgba(img, r, scale, outlines, L);
+    return { png: encodePng(c.width, c.height, c.rgba, 4), ...c };
 }
 
 /** Two crops side by side with a white gap, as one PNG. */
@@ -583,7 +591,7 @@ export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> 
         z.t = t;
         z.kept = [...new Set(t.columnOf)].sort((a, b) => a - b);
         // the judge's picture: the outlines over the read crop and a held-out one
-        z.judged = sideBySide(regionPng(img, z.read!, z.scale!, t.rects, L), regionPng(img, z.heldOut ?? z.read!, z.scale!, t.rects, L));
+        z.judged = sideBySide(regionRgba(img, z.read!, z.scale!, t.rects, L), regionRgba(img, z.heldOut ?? z.read!, z.scale!, t.rects, L));
         review?.(z.judged, `z${work.indexOf(z)}`);
     }
     // 4. the judge: the zones' judged as their unit cells were read
@@ -650,8 +658,11 @@ export async function readFromTemplates(img: FacadePhoto, uncovered: ArrayLike<n
     // the photo's matches of each exemplar give its grid (facade-reader-template.ts): the columns they stand in, at least a
     // quarter as often as the best (and three times), and the rows at the exemplar's zone's storey pitch, phased on the
     // matches; the grid is then drawn where the photo covers each opening, as a reading's tiling is
+    const g = { L, W, H, pixel: f.pixel };
+    // every exemplar's matches in one native run, off the event loop (native/template-match-native.ts), unless the TypeScript is asked for
+    const found = kNative('template') ? await matchExemplarsNative(g, family.exemplars) : family.exemplars.map(ex => matchExemplar(g, ex));
     const lattice = family.exemplars.flatMap((ex, ei) => {
-        const ms = matchExemplar({ L, W, H, pixel: f.pixel }, ex).filter(m => !m.grid);
+        const ms = found[ei].filter(m => !m.grid);
         if (ms.length < TEMPLATE_PARAMS.minMatches) return [];
         const med = (v: number[]) => { const q = [...v].sort((a, b) => a - b); return q[q.length >> 1]; };
         const ow = med(ms.map(m => m.rect[2] - m.rect[0])), oh = med(ms.map(m => m.rect[3] - m.rect[1]));
@@ -694,7 +705,7 @@ export async function readFromTemplates(img: FacadePhoto, uncovered: ArrayLike<n
     const { read, heldOut } = zoneCrops(L, W, box, P.readCropM / f.pixel, P);
     if (!read) return undefined;
     const scale = scaleFor(read, P), rects = matches.map(m => m.rect);
-    const judged = sideBySide(regionPng(img, read, scale, rects, L), regionPng(img, heldOut ?? read, scale, rects, L));
+    const judged = sideBySide(regionRgba(img, read, scale, rects, L), regionRgba(img, heldOut ?? read, scale, rects, L));
     review?.(judged, 'template');
     let judge: FacadeJudgement;
     try { judge = parseJudgement(await asker(ask, memory, tally)({ kind: 'judge', n: 1, png: () => judged, bare: judgePrompt(columns), region: heldOut ?? read, about: [read, heldOut ?? read, scale, rects] })); }
