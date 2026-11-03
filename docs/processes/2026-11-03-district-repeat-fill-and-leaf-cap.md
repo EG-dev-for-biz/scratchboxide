@@ -1,10 +1,9 @@
 # Pipeline E's repeat fill at district scale, and the leaf-tile cap at Penn Station
 
 **Date:** 2026-11-03
-**Status:** the donor search is fixed with the same output byte for byte (offline, on Penn's real district faces). The
-live E-detail timing at Penn is not done: three builds stopped at stage time limits (the tiles stage twice, then the
-remesh) under a load average of 70 to 430 from other sessions' work (see "The live build"). The leaf-cap decision is
-below.
+**Status:** the donor search is fixed with the same output byte for byte (offline, on Penn's real district faces and its
+relief faces). Live at Penn the E detail now runs to the end: 48.5 minutes, most of it writing the relief layers (run
+`454f8a26`, section 3). The leaf-cap proposal in section 2 is superseded by the reach fix (PR 32, merged).
 **Branch:** `fix/texture-repeat-donor-index` (from main `cd52dcb3`), commit `42f403c3`.
 **Routed by:** MAIN (2026-11-03), from the aerial-paint session's findings (`feat/district-aerial-paint`).
 
@@ -60,6 +59,17 @@ No cache key changed, because the output is the same.
 | Peak RSS of the process | 0.71 GB | 0.74 GB |
 | Slowest face (wall 7871, 233 x 839, coverage 0.00) | 2,741 ms | 13.7 ms |
 | Wall 7885 (717 x 859, coverage 0.64) | 1,378 ms | 152 ms |
+
+**The relief layer's faces** are the re-rendered faces the hang was in. They came from run `454f8a26` (section 3):
+10,463 faces, 530 M texels. The old code was stopped after 18 minutes, so it covers the first 7,491.
+
+| Penn relief faces | Old | New |
+| :--- | ---: | ---: |
+| Byte-identical faces (of those both finished) | 7,491 of 7,491 | |
+| Texels filled on those faces | 15,044,748 | 15,044,748 |
+| Repeat fill on those faces | 1,110 s | 125 s |
+| Repeat fill on all 10,463 faces | (over 18 min, stopped) | 155 s, peak RSS 2.0 GB |
+| Slowest face (wall 755, 799 x 1094, coverage 0.006) | 74.4 s | 0.24 s |
 
 These faces are the district massing's own layer. On them the old code takes 46 s, not 80 minutes. The hang is in
 `buildLayer`'s re-rendered faces, which exist only when the district's buildings are rebuilt. At Penn that needs more
@@ -131,6 +141,18 @@ every leaf: `truncated: false` at both radii. The 81 m reach is the aerial-paint
     - The massing, relief and grammar stages were skipped because the remesh failed. So the E-detail step never ran.
     - The load climbed back to 140 to 180 during the run, with other sessions' native audits and compiles running.
     - The server's peak RSS was 3.6 GB.
-- **What is still open.** The live E-detail time and RSS at Penn, and its relief faces for an old-against-new byte
-  check, need a build whose remesh finishes. On this machine that means a time when it is not shared with other
-  sessions' builds and test suites. No stage budget can be stretched for a slow machine: only kd chunks scale theirs.
+  - **`454f8a26`** (the retry of `030f649b` from the remesh, with the load at 3 to 90): completed.
+    - It ran on this fix plus `closeUnsourcedTexels` (`fix/massing-unsourced-texels`), and kept every leaf to 250 m
+      (780). It is a measurement, not a comparison arm.
+    - The massing stage took 58.8 min, and 98 of 179 buildings were rebuilt.
+    - The E detail took 48.5 min: the inference attempt, then relief for 40.7 min, with 169 features built (109 bands,
+      60 vertical elements).
+    - The server's RSS peaked at 15.3 GB. The 80-minute, 21 GB profile was Milan's.
+    - **Where the 40 minutes go.** Two stack samples taken while relief wrote its layers show the build thread inside
+      the atlas pages' `Array.map` in `writeMassingTexturedGlb`, 14% of it in zlib deflate. That is PNG-encoding many
+      4096² pages: the relief layer's textured GLB is 325 MB. Each relief layer took 16 to 21 min after its native run.
+      The donor search no longer shows in the samples.
+    - **The inference failed.** Its native `staged_massing` run on the 98-building spec was killed three minutes in,
+      most likely at `runMassing`'s 180 s timeout. So relief built on the plain layer.
+- **The relief faces, old against new.** The relief layer's re-rendered faces were copied from `454f8a26` and run
+  through `penn_repeat_bench.ts` both ways: byte-identical on every face both finished. Section 1 has the table.
