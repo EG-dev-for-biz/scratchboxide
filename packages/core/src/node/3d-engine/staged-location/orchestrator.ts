@@ -629,7 +629,7 @@ export interface StagedLocationDeps {
     /** Pipeline K-D: every leaf tile of the district's radius fetched into the shared leaf cache while the chunks build; absent = each chunk fetches its own. */
     prefetchTiles?: (req: { lat: number; lng: number; elevation?: number; radiusM: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void }) => Promise<{ leaves: number; downloaded: number; ms: number }>;
     /** Pipeline K-D: one chunk of a chunked district built on its own (its own worker, staged-location-tool.ts); absent = no chunking. */
-    runChunk?: (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void }) => Promise<StagedLocationOutcome>;
+    runChunk?: (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void; atOnce?: number }) => Promise<StagedLocationOutcome>;
 }
 
 export interface StagedLocationContext {
@@ -1789,7 +1789,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 };
                 let next = 0, joined = 0;
                 const retry: Array<DistrictChunkPlan['chunks'][number]> = [];
-                const one = async (c: DistrictChunkPlan['chunks'][number], last = false) => {
+                const one = async (c: DistrictChunkPlan['chunks'][number], atOnce: number, last = false) => {
                     const t0 = now();
                     const ll = frameToLatLng(placeValue!, [c.cx, c.cz]);
                     io.progress(`chunk ${c.index}: building ${c.buildings.length} buildings within ${Math.round(c.radiusM)} m`);
@@ -1799,7 +1799,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             place: { lat: ll.lat, lng: ll.lng, formattedAddress: `${placeValue!.formattedAddress} (chunk ${c.index})` },
                             ...(request.enhance !== undefined ? { enhance: request.enhance } : {}), ...(request.steps ? { steps: request.steps } : {}),
                             chunk: { of: runId, index: c.index, rect: { x0: c.rect.x0 - c.cx, z0: c.rect.z0 - c.cz, x1: c.rect.x1 - c.cx, z1: c.rect.z1 - c.cz } }
-                        }, { signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`) });
+                        }, { signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce });
                         if (!out.compat.frame) throw new Error('the chunk did not report its frame');
                         const m = frameTransform(out.compat.frame, here);
                         const mine = (x: number, z: number) => owner(x, z) === c.index, band = chunkTerritory(plan, c.index, DISTRICT_CHUNKS_PARAMS.seamBandM);
@@ -1853,8 +1853,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         })));
                     }
                 };
-                await Promise.all(Array.from({ length: Math.min(parallel, todo.length) }, async () => { while (next < todo.length) await one(todo[next++]); }));
-                if (retry.length) { let k = 0; await Promise.all(Array.from({ length: Math.min(parallel, retry.length) }, async () => { while (k < retry.length) await one(retry[k++], true); })); }
+                const width = Math.min(parallel, todo.length);
+                await Promise.all(Array.from({ length: width }, async () => { while (next < todo.length) await one(todo[next++], width); }));
+                if (retry.length) { let k = 0; const again = Math.min(parallel, retry.length); await Promise.all(Array.from({ length: again }, async () => { while (k < retry.length) await one(retry[k++], again, true); })); }
                 // ---- the seam stage over the joined ground (scene-healing §3.1; pipeline-k/district-seams.ts), one chunk at a time:
                 // the chunks' photos levelled to one another by a gain per chunk, fitted where they meet; each chunk's ground cut
                 // exactly at the cell lines around what it owns, and its cut edge moved onto the edge the chunks before it left

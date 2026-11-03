@@ -23,7 +23,7 @@ import { checkFacadeReply, FACADE_READER_PARAMS, facadeReplyUsable, parseBatch, 
 import { memoryReadingStore, planePixelsKey, type ModelReadingStore } from '../src/node/3d-engine/staged-location/pipeline-k/model-readings';
 import { chooseWithMemory, swatchRows, type ChoiceRow, type SetChoice } from '../src/node/3d-engine/staged-location/pipeline-k/material-choice';
 import { MessageChannel } from 'worker_threads';
-import { budgetedClient, ModelCallBudget, ModelCallMeter, modelCallLimitsFromEnv, RemoteCallBudget, serveCallBudget } from '../src/node/gemini/model-call-budget';
+import { budgetedClient, ModelCallBudget, ModelCallMeter, modelCallLimitsFromEnv, modelCallShareEnv, RemoteCallBudget, serveCallBudget } from '../src/node/gemini/model-call-budget';
 import { VisionModelChain } from '../src/node/gemini/vision-model-chain';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { decodePng } from '../src/node/texture-processing';
@@ -277,6 +277,16 @@ describe('pipeline K model calls', () => {
         expect(new ModelCallBudget(env).limitsFor('other')).toEqual({ inFlight: 8 });
         expect(() => modelCallLimitsFromEnv({ SCRATCHBOX_MODEL_CALL_BUDGET: 'flash:3' })).toThrow(/model=inFlight\/perMinute/);
         expect(modelCallLimitsFromEnv({}).all).toEqual({});
+    });
+
+    it('splits the limits into equal shares the environment reads back, each limit set keeping at least one call', () => {
+        const limits = modelCallLimitsFromEnv({ SCRATCHBOX_MODEL_CALLS_IN_FLIGHT: '30', SCRATCHBOX_MODEL_CALL_BUDGET: 'flash=/600,image=2/' });
+        const env = modelCallShareEnv(limits, 4);
+        expect(env).toEqual({ SCRATCHBOX_MODEL_CALLS_IN_FLIGHT: '7', SCRATCHBOX_MODEL_CALL_BUDGET: 'flash=/150,image=1/' });
+        const back = modelCallLimitsFromEnv(env);
+        expect(back.all).toEqual({ inFlight: 7, perMinute: undefined });
+        expect([...back.byModel]).toEqual([['flash', { inFlight: undefined, perMinute: 150 }], ['image', { inFlight: 1, perMinute: undefined }]]);
+        expect(modelCallShareEnv(modelCallLimitsFromEnv({}), 21)).toEqual({});
     });
 
     it("counts a run's requests and their estimated cost through the wrapped client, and leaves the client's other parts as they were", async () => {

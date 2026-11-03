@@ -14,7 +14,9 @@
  *
  *  1. the chunk's request goes to `gs://<bucket>/kd-jobs/<parentRunId>/<chunk>/request.json`, with the run id the chunk
  *     builds under (made here, so its run record is known before it starts);
- *  2. one execution of the job starts with `KD_JOB` pointing at it;
+ *  2. one execution of the job starts with `KD_JOB` pointing at it, and with its share of the model-call budget: this
+ *     process's limits (SCRATCHBOX_MODEL_CALLS_*, SCRATCHBOX_MODEL_CALL_BUDGET; model-call-budget.ts) read as the project's
+ *     quota and split evenly between the chunks building at once and the centre build;
  *  3. the job's `progress.jsonl` is read every 10 s and its new lines forwarded; a stop cancels the execution;
  *  4. when the execution succeeds, `outcome.json`, every layer GLB the orchestrator joins (kdChunkLayerFiles) and the run
  *     record are downloaded into this workspace's models folder and run records, the job's paths moved onto this
@@ -32,7 +34,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { StagedLayer } from '../../../common/spatial/staged-location-contracts';
 import type { CloudBucket } from '../../cloud-store/cloud-bucket';
+import { modelCallLimitsFromEnv, modelCallShareEnv } from '../../gemini/model-call-budget';
 import { textureLibraryStatsDir } from '../texture-library';
+import { chunkParallel } from './pipeline-k/district-chunks';
 import { libraryRepoRoot } from './pipeline-k/material-sets';
 import { StagedLocationHardFailure, type StagedLocationOutcome, type StagedLocationRequest, type StageId } from './orchestrator';
 import type { StageCache } from './stage-cache';
@@ -289,7 +293,8 @@ export interface CloudChunkRunnerOptions {
     libraryStatsDir?: string;
 }
 
-export type RunChunk = (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void }) => Promise<StagedLocationOutcome>;
+/** `atOnce`: the chunks the orchestrator builds at the same time (default chunkParallel()), for each one's share of the model-call budget. */
+export type RunChunk = (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void; atOnce?: number }) => Promise<StagedLocationOutcome>;
 
 /** The cloud `runChunk`. The image check runs once, on the first chunk; every chunk fails with its reason when it fails. */
 export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
@@ -343,9 +348,13 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
             const specFile = path.join(work, 'request.json');
             fs.writeFileSync(specFile, JSON.stringify(spec));
             await o.bucket.putFile(keys.request, specFile, { contentType: 'application/json' });
-            const execution = await o.jobs.run({ KD_JOB: `gs://${config.bucket}/${prefix}` });
+            // its share of the project's model calls: one of the chunks at once and the centre beside them
+            const shares = (opts.atOnce ?? chunkParallel(undefined, undefined, env)) + 1;
+            const budget = modelCallShareEnv(modelCallLimitsFromEnv(env), shares);
+            const execution = await o.jobs.run({ KD_JOB: `gs://${config.bucket}/${prefix}`, ...budget });
             const short = execution.split('/').pop();
-            progress(`started in the cloud (${short}, run ${runId})`);
+            const kept = Object.entries(budget).map(([k, v]) => `${k}=${v}`).join(' ');
+            progress(`started in the cloud (${short}, run ${runId})${kept ? `, model calls kept to 1/${shares} of the budget (${kept})` : ''}`);
             log(`[kd-cloud] chunk ${request.chunk!.index}: execution ${execution}, run ${runId}`);
 
             let seen = 0, state: CloudExecution | undefined;
