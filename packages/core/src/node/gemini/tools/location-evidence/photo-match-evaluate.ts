@@ -46,6 +46,7 @@ import { bearingDeg, discoverPanos, fetchViews, type PanoCandidate, type Selecte
 import { EDGE_MAX_RESIDUAL_PX, type HeldImage } from '../../../3d-engine/staged-location/pano-edge-registration';
 import { runPanoRegistrationOffThread } from '../../../3d-engine/staged-location/pano-registration-run';
 import { StageCache, stagedWorkspaceRoot } from '../../../3d-engine/staged-location/stage-cache';
+import { appendJudgeRow, judgeRowFromReport } from '../../../3d-engine/staged-location/run-ledger';
 import { readGlbScene, renderFrameDepth, sceneToRenderMesh, type PoseCorrection } from '../../../spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../../../spatial/HeadlessMeshSilhouetteRenderer';
 import type { GeodeticOrigin } from '../../../spatial/StreetViewSurveyPlanner';
@@ -1015,7 +1016,11 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
         outDir,
         ms: now() - t0
     };
-    fs.writeFileSync(path.join(outDir, 'report.json'), JSON.stringify(report, null, 1));
+    const reportJson = path.join(outDir, 'report.json');
+    fs.writeFileSync(reportJson, JSON.stringify(report, null, 1));
+    // one durable row for this judgement, outside the stage cache (run-ledger.ts): each arm's cheap measurements beside
+    // the scores it was given, joined to its build by runId, and marked when only the stand-in scored it
+    appendJudgeRow(judgeRowFromReport(report, { reportJson }));
     progress('done', 1);
     return report;
 }
