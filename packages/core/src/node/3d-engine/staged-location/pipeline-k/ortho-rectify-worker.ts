@@ -9,7 +9,8 @@
 
 /**
  * Pipeline K's worker thread: rectifies the facade orthos it is given (pipeline-k.ts) off the server's main thread,
- * writes each as a PNG into the output folder and posts its report back. When SCRATCHBOX_K_NATIVE runs `rectify` (the default), each
+ * writes each as a PNG into the output folder and posts its report back, with its pixels and masks as raw buffers (moved,
+ * not copied), so the tail in pipeline-k.ts need not decode the PNGs again. When SCRATCHBOX_K_NATIVE runs `rectify` (the default), each
  * through the native kernel (native/ortho-rectify-native.ts, the same result; four threads, past which it is memory bound).
  */
 
@@ -23,7 +24,9 @@ import { rectifyOrthoNative } from './native/ortho-rectify-native';
 import { kNative } from './native/native-switch';
 
 export interface RectifyJob { srcDir: string; outDir: string; facades: Array<{ facadeId: number; image: string; pixel: number }>; params: OrthoRectifyParams }
-export type RectifyMessage = { facadeId: number; report?: OrthoRectifyReport; error?: string };
+/** A straightened ortho as the main thread uses it: RGBA, and 0/1 masks of where the photo did not reach and of its smear (absent when none). */
+export interface RectifiedPixels { width: number; height: number; rgba: Uint8Array; uncovered: Uint8Array; featureless?: Uint8Array }
+export type RectifyMessage = { facadeId: number; report?: OrthoRectifyReport; pixels?: RectifiedPixels; error?: string };
 
 const job = (workerData as { job: RectifyJob }).job;
 const native = kNative('rectify');
@@ -41,7 +44,12 @@ void (async () => { for (const f of job.facades) {
         fs.writeFileSync(path.join(job.outDir, uncoveredMaskName(f.image)), encodePng(r.image.width, r.image.height, r.uncovered.map(v => (v ? 255 : 0)), 1));
         if (r.occluded) fs.writeFileSync(path.join(job.outDir, occludedMaskName(f.image)), encodePng(r.image.width, r.image.height, r.occluded, 1));
         if (r.featureless.some(v => v)) fs.writeFileSync(path.join(job.outDir, featurelessMaskName(f.image)), encodePng(r.image.width, r.image.height, r.featureless.map(v => (v ? 255 : 0)), 1));
-        parentPort!.postMessage({ facadeId: f.facadeId, report: r.report } satisfies RectifyMessage);
+        // the pixels as the files hold them: the masks read back as 0/1 (a featureless mask only where there is one)
+        const uncovered = Uint8Array.from(r.uncovered, v => (v ? 1 : 0));
+        const featureless = r.featureless.some(v => v) ? Uint8Array.from(r.featureless, v => (v ? 1 : 0)) : undefined;
+        const rgba = Uint8Array.from(r.image.rgba);
+        const pixels: RectifiedPixels = { width: r.image.width, height: r.image.height, rgba, uncovered, ...(featureless ? { featureless } : {}) };
+        parentPort!.postMessage({ facadeId: f.facadeId, report: r.report, pixels } satisfies RectifyMessage, [rgba.buffer, uncovered.buffer, ...(featureless ? [featureless.buffer] : [])]);
     } catch (err) {
         parentPort!.postMessage({ facadeId: f.facadeId, error: (err as Error).message } satisfies RectifyMessage);
     }
