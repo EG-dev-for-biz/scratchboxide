@@ -14,7 +14,8 @@
  * that ground). A splat is kept on the ground layer, or inside a building column up to its top; everything else goes:
  * - under the ground (seen through any gap, it reads as an upside-down world below the street);
  * - in the air over the street outside the buildings: the scan's lumps for cars, people, trees and street furniture,
- *   which the obstruction-free station images painted with the street behind them (floating smears);
+ *   which the obstruction-free station images painted with the street behind them (floating smears); a lump in a
+ *   building column's margin counts as one up to its own top, so a car parked against a wall is not kept for the wall;
  * - above the scan's own top surface.
  * The same rule published work applies at training time (keep only Gaussians on ground or building surfaces,
  * GS4Buildings / Clean-GS), applied here once to the fused splats, without training.
@@ -112,6 +113,9 @@ export function buildScanHulls(ray: Pick<TileMeshRaycaster, 'topHitLocal'>, exte
     for (let i = 0; i < isBuilding.length; i++) if (top[i] - ground[i] > rise) isBuilding[i] = 1;
     const lowMin = opts.lowStructureRiseM ?? 0.8, minCells = Math.ceil((opts.minStructureAreaM2 ?? 50) / (cell * cell));
     const isLow = (i: number) => !isBuilding[i] && top[i] - ground[i] > lowMin;
+    // a low component too small to be a structure is a lump (a parked car, a kiosk), wherever it stands
+    const isLump = new Uint8Array(cols * rows);
+    const lumpTop = new Float32Array(cols * rows).fill(Number.NaN);
     const seen = new Uint8Array(cols * rows), stack: number[] = [], comp: number[] = [];
     for (let s0 = 0; s0 < seen.length; s0++) {
         if (seen[s0] || !isLow(s0)) continue;
@@ -126,6 +130,21 @@ export function buildScanHulls(ray: Pick<TileMeshRaycaster, 'topHitLocal'>, exte
             }
         }
         if (comp.length >= minCells) for (const i of comp) isBuilding[i] = 1;
+        else for (const i of comp) isLump[i] = 1;
+    }
+    // each lump's top over its own cells and the ground-level cells beside them (a car is two or three cells wide, and a
+    // cell whose centre misses it reads as ground while the car's side still stands in it)
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+        const i = r * cols + c;
+        if (isBuilding[i]) continue;
+        if (isLump[i]) { lumpTop[i] = Math.max(Number.isNaN(lumpTop[i]) ? -Infinity : lumpTop[i], top[i]); continue; }
+        if (!(top[i] - ground[i] <= lowMin)) continue;
+        for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+            const rr = r + dr, cc = c + dc;
+            if (rr < 0 || cc < 0 || rr >= rows || cc >= cols) continue;
+            const j = rr * cols + cc;
+            if (isLump[j] && !(lumpTop[i] >= top[j])) lumpTop[i] = top[j];
+        }
     }
     const grow = Math.max(0, Math.round((opts.hullMarginM ?? 1) / cell));
     const hull = new Uint8Array(isBuilding);
@@ -164,6 +183,9 @@ export function buildScanHulls(ray: Pick<TileMeshRaycaster, 'topHitLocal'>, exte
             if (y < g - band) return ContainmentReason.Underground;
             if (y <= g + band) return ContainmentReason.Ground;
             if (!hull[k]) return ContainmentReason.InAir;
+            // a lump in a column's margin is still a lump up to its own top (7th Ave, 2026-11-03: cars parked against a
+            // 7 m structure stood crumpled beside the walk, kept by its margin); the column's facade above it stays
+            if (!Number.isNaN(lumpTop[k]) && y <= lumpTop[k] + band) return ContainmentReason.InAir;
             if (y > hullTop[k] + band) return ContainmentReason.AboveScan;
             return ContainmentReason.Building;
         }

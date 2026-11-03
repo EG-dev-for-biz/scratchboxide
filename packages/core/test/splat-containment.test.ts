@@ -63,6 +63,28 @@ describe('containSplatsToScan', () => {
         expect(report.kept).toBe(5);
     });
 
+    it('takes a car parked against a tall structure for a lump, while the structure\'s face above it stays', () => {
+        // a street at y = 0; a 7 m structure over x in [10, 20) (its face at x = 10), and a 1.6 m car 1.8 x 4 m parked
+        // against it over x in [8.2, 10), within the structure's 1 m margin
+        const scan3 = {
+            topHitLocal(x: number, z: number): number | undefined {
+                if (x >= 10 && x < 20 && z >= -15 && z < 15) return 7;
+                if (x >= 8.2 && x < 10 && z >= -2 && z < 2) return 1.6;
+                return 0;
+            }
+        };
+        const pts: Array<[number, number, number]> = [
+            [9.5, 1.2, 0],    // the car's side, in a cell whose centre the car covers: in the air (a lump, laid on the street by the layer)
+            [8.6, 1.5, 0.5],  // the car's top: in the air
+            [9.5, 1.2, 2.5],  // beside the car, in a ground-level cell of the margin, at the car's height: in the air too
+            [9.5, 4.5, 0],    // the structure's face above the car, in the margin cell: kept
+            [9.5, 1.2, 10],   // the structure's face beside no car, low down: kept (the margin as before)
+            [0, 0.1, 0]       // the street: kept
+        ];
+        const { reasons } = containSplatsToScan(splats(pts), scan3, { cellM: 1, groundWindowM: 8 });
+        expect(Array.from(reasons)).toEqual([4, 4, 4, 1, 1, 0]);
+    });
+
     it('keeps splats over cells the scan does not cover', () => {
         const { report } = containSplatsToScan(splats([[0, 0, 0], [1, 50, 1]]), { topHitLocal: () => undefined });
         expect(report).toMatchObject({ kept: 2, unmeasured: 2 });
