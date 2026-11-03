@@ -376,3 +376,111 @@ describe('the patch paint follows the lanes', () => {
         expect(flat.dir).toEqual([0, 1]);
     });
 });
+
+describe("a vehicle's shell over the street the scan also holds beneath it", () => {
+    // Google's mesh sometimes keeps the street surface under a vehicle and the vehicle as its own shell over it: over the
+    // vehicle a cell's stack reads street, then roof 1.4 m up, a gap the ceiling alone takes for an awning (Penn kd
+    // 266b12eb: 95% of what the patch left standing inside the vehicles the model boxed)
+    /** One textured primitive from separate surfaces (uv by plan position over the street's square, one flat grey photo). */
+    function sceneGlb(surfaces: Array<{ pos: number[]; idx: number[] }>): Buffer {
+        const pos: number[] = [], idx: number[] = [];
+        for (const s of surfaces) { const base = pos.length / 3; pos.push(...s.pos); idx.push(...s.idx.map(i => i + base)); }
+        const n = pos.length / 3, nor = Array.from({ length: n * 3 }, (_, j) => (j % 3 === 1 ? 1 : 0));
+        const uv: number[] = [];
+        for (let v = 0; v < n; v++) uv.push((pos[v * 3] + HALF) / (2 * HALF), (pos[v * 3 + 2] + HALF) / (2 * HALF));
+        const parts: Buffer[] = [], views: any[] = [];
+        let off = 0;
+        const add = (b: Buffer, target?: number) => { const pad = (4 - (off % 4)) % 4; if (pad) { parts.push(Buffer.alloc(pad)); off += pad; } views.push({ buffer: 0, byteOffset: off, byteLength: b.length, ...(target ? { target } : {}) }); parts.push(b); off += b.length; return views.length - 1; };
+        const f32 = (a: number[]) => Buffer.from(new Float32Array(a).buffer);
+        const ys = pos.filter((_, j) => j % 3 === 1);
+        const accessors: any[] = [
+            { bufferView: add(f32(pos), 34962), componentType: 5126, count: n, type: 'VEC3', min: [-HALF, Math.min(...ys), -HALF], max: [HALF, Math.max(...ys), HALF] },
+            { bufferView: add(f32(nor), 34962), componentType: 5126, count: n, type: 'VEC3' },
+            { bufferView: add(f32(uv), 34962), componentType: 5126, count: n, type: 'VEC2' },
+            { bufferView: add(Buffer.from(new Uint32Array(idx).buffer), 34963), componentType: 5125, count: idx.length, type: 'SCALAR' }
+        ];
+        const rgba = new Uint8Array(64 * 64 * 4);
+        for (let i = 0; i < 64 * 64; i++) rgba.set([90, 90, 90, 255], i * 4);
+        const vImg = add(Buffer.from(jpegJs.encode({ data: Buffer.from(rgba.buffer), width: 64, height: 64 }, 95).data));
+        const json: any = {
+            asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
+            meshes: [{ primitives: [{ attributes: { POSITION: 0, NORMAL: 1, TEXCOORD_0: 2 }, indices: 3, mode: 4, material: 0 }] }],
+            materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0, roughnessFactor: 1 } }],
+            images: [{ bufferView: vImg, mimeType: 'image/jpeg' }], textures: [{ source: 0, sampler: 0 }],
+            samplers: [{ magFilter: 9729, minFilter: 9729, wrapS: 33071, wrapT: 33071 }], accessors, bufferViews: views, buffers: [{ byteLength: off }]
+        };
+        return assembleGlb(json, Buffer.concat(parts));
+    }
+    /** A grid over x0..x1, z0..z1 at `step`, its height y(x, z). */
+    function grid(x0: number, x1: number, z0: number, z1: number, step: number, y: (x: number, z: number) => number): { pos: number[]; idx: number[] } {
+        const nx = Math.round((x1 - x0) / step), nz = Math.round((z1 - z0) / step), pos: number[] = [], idx: number[] = [];
+        for (let k = 0; k <= nz; k++) for (let i = 0; i <= nx; i++) { const x = x0 + i * step, z = z0 + k * step; pos.push(x, y(x, z), z); }
+        for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) { const a = k * (nx + 1) + i; idx.push(a, a + nx + 1, a + 1, a + 1, a + nx + 1, a + nx + 2); }
+        return { pos, idx };
+    }
+    /** The car as its own closed shell: a roof 1.4 m over the road and four walls down to it, each a fine grid. */
+    function carShell(): { pos: number[]; idx: number[] } {
+        const pos: number[] = [], idx: number[] = [];
+        const quad = (p: (u: number, v: number) => [number, number, number], nu: number, nv: number) => {
+            const base = pos.length / 3;
+            for (let j = 0; j <= nv; j++) for (let i = 0; i <= nu; i++) pos.push(...p(i / nu, j / nv));
+            for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) { const a = base + j * (nu + 1) + i; idx.push(a, a + nu + 1, a + 1, a + 1, a + nu + 1, a + nu + 2); }
+        };
+        const x0 = CAR.cx - CAR.ax, x1 = CAR.cx + CAR.ax, z0 = CAR.cz - CAR.az, z1 = CAR.cz + CAR.az, h = CAR.h;
+        quad((u, v) => { const x = x0 + u * (x1 - x0), z = z0 + v * (z1 - z0); return [x, road(x) + h, z]; }, 18, 8);
+        quad((u, v) => { const x = x0 + u * (x1 - x0); return [x, road(x) + v * h, z0]; }, 18, 6);
+        quad((u, v) => { const x = x0 + u * (x1 - x0); return [x, road(x) + v * h, z1]; }, 18, 6);
+        quad((u, v) => { const z = z0 + u * (z1 - z0); return [x0, road(x0) + v * h, z]; }, 8, 6);
+        quad((u, v) => { const z = z0 + u * (z1 - z0); return [x1, road(x1) + v * h, z]; }, 8, 6);
+        return { pos, idx };
+    }
+    const carJudge: VehicleJudge = async crop => {
+        const inCrop = (x: number, z: number) => x >= crop.frame.x0 && z >= crop.frame.z0 && x <= crop.frame.x0 + crop.frame.widthM && z <= crop.frame.z0 + crop.frame.heightM;
+        return inCrop(CAR.cx, CAR.cz) ? [{ label: 'white van', vehicle: true, permanent: false, confidence: 0.9, lo: [CAR.cx - CAR.ax - 0.15, CAR.cz - CAR.az - 0.15] as [number, number], hi: [CAR.cx + CAR.ax + 0.15, CAR.cz + CAR.az + 0.15] as [number, number], crop: crop.index }] : [];
+    };
+    const street = () => grid(-HALF, HALF, -HALF, HALF, STEP, x => road(x));
+    const inShell = (x: number, z: number) => Math.abs(x - CAR.cx) <= CAR.ax + 1e-6 && Math.abs(z - CAR.cz) <= CAR.az + 1e-6;
+    const run = async (name: string, surfaces: Array<{ pos: number[]; idx: number[] }>) => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), `sb-shell-${name}-`));
+        const tex = path.join(dir, 'in.glb');
+        fs.writeFileSync(tex, sceneGlb(surfaces));
+        const scan = loadScanMesh(tex);
+        const out = await removeVehicles({ texturedGlb: tex, scan, ground: buildGroundModel(scan, { cellMeters: 1 }), judge: carJudge, outDir: path.join(dir, 'out') });
+        return { before: positionsOf(tex), after: positionsOf(out.texturedGlb), report: out.report };
+    };
+
+    it('flattens the whole shell, roof and all, though its roof stands across a gap in the stack', async () => {
+        const street0 = street(), shell = carShell();
+        const { before, after, report } = await run('gap', [street0, shell]);
+        expect(report.removed).toHaveLength(1);
+        let shellVerts = 0, worst = 0;
+        for (let v = street0.pos.length / 3; v < before.length / 3; v++) {
+            shellVerts++;
+            worst = Math.max(worst, Math.abs(after[v * 3 + 1] - road(before[v * 3])));
+        }
+        expect(shellVerts).toBeGreaterThan(300);
+        // no roof left hanging over the patched road, no wall left leaning up to it
+        expect(worst).toBeLessThan(0.03);
+        // the roof's inner cells (the walls' cells have a continuous stack and were moved before this rule)
+        expect(report.patch.textured!.shellVertices).toBeGreaterThan(100);
+    });
+
+    it('keeps an awning over the vehicle that runs on past it, and still patches the vehicle under it', async () => {
+        const street0 = street(), shell = carShell();
+        // a canopy 3 m up over the car, reaching 3 m past it on every side
+        const awning = grid(CAR.cx - CAR.ax - 3, CAR.cx + CAR.ax + 3, CAR.cz - CAR.az - 3, CAR.cz + CAR.az + 3, 0.5, x => road(x) + 3);
+        const { before, after, report } = await run('awning', [street0, shell, awning]);
+        expect(report.removed).toHaveLength(1);
+        const shellEnd = (street0.pos.length + shell.pos.length) / 3;
+        for (let v = street0.pos.length / 3; v < shellEnd; v++) expect(Math.abs(after[v * 3 + 1] - road(before[v * 3]))).toBeLessThan(0.03);
+        // the awning keeps its height everywhere, over the car too
+        let awningVerts = 0, overCar = 0;
+        for (let v = shellEnd; v < before.length / 3; v++) {
+            awningVerts++;
+            if (inShell(before[v * 3], before[v * 3 + 2])) overCar++;
+            expect(after[v * 3 + 1]).toBe(before[v * 3 + 1]);
+        }
+        expect(awningVerts).toBeGreaterThan(100);
+        expect(overCar).toBeGreaterThan(20);
+    });
+});
