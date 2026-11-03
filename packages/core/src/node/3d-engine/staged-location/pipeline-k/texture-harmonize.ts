@@ -36,12 +36,18 @@
  * covers, laid a rectangle of different tone over a flat roof. The masks also tell the twin's de-light which texels are
  * roof (tile-refine-twin.ts: no shadow lift there, since a roof photographed from the air is lit, and a dark roof is a
  * dark material).
+ *
+ * The apply, the one loop over every texel, runs natively on a thread pool (native/twin-texels-native.ts,
+ * scratchbox_twin_texels.hpp) when SCRATCHBOX_K_NATIVE runs `harmonize` natively (native/native-switch.ts; the default), else
+ * here, the reference the native apply matches value for value.
  */
 
 import { readAccessor, type ParsedGlb } from '../glb-bytes';
 import { SRGB8_TO_LINEAR, linearToSrgb255 } from '../../../../common/spatial/photogrammetric-delight';
 import type { RgbaImage8 } from '../tile-texture-transfer';
 import { Rows, solveLeastSquares } from './ortho-rectify';
+import { kNative } from './native/native-switch';
+import { runNativeTwinSync, srgb8Thresholds, TWIN_CMD, TwinRequest } from './native/twin-texels-native';
 
 export const TEXTURE_HARMONIZE_VERSION = 'texture-harmonize/4';
 
@@ -291,15 +297,39 @@ function fieldWeights(f: Field, u: number, v: number): [number[], number[]] {
     return [[at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1)], [(1 - a) * (1 - b), a * (1 - b), (1 - a) * b, a * b]];
 }
 
+/** About this many bytes of pixels go to the native apply at a time (the request, the reply and the copies stay bounded). */
+const NATIVE_BATCH_BYTES = 256 * 1024 * 1024;
+
+/** The apply natively (native/twin-texels-native.ts): the same gains and fields, photos in batches; each photo's pixels replaced. */
+function applyNative(images: Map<number, RgbaImage8>, fields: Map<number, Field>, gain: Map<number, [number, number, number]>, off: Float64Array[], classOf: Map<number, Uint8Array>, threads?: number, batchBytes = NATIVE_BATCH_BYTES): void {
+    const ids = [...images.keys()];
+    for (let start = 0; start < ids.length;) {
+        let end = start, bytes = 0;
+        while (end < ids.length && (end === start || bytes + images.get(ids[end])!.rgba.length <= batchBytes)) bytes += images.get(ids[end++])!.rgba.length;
+        const batch = ids.slice(start, end);
+        const req = new TwinRequest().array(SRGB8_TO_LINEAR).array(srgb8Thresholds()).u32(off[0].length).array(off[0]).array(off[1]).array(off[2]).u32(batch.length);
+        for (const img of batch) {
+            const im = images.get(img)!, f = fields.get(img)!, mask = classOf.get(img);
+            if (im.rgba.length !== im.width * im.height * 4 || (mask && mask.length !== im.width * im.height)) throw new Error(`harmonise: photo ${img}'s pixels or surface classes are not ${im.width} x ${im.height}`);
+            req.i32(img).i32(im.width).i32(im.height).i32(f.nx).i32(f.ny).i32(f.base).f64(...(gain.get(img * 2) ?? [0, 0, 0]), ...(gain.get(img * 2 + 1) ?? [0, 0, 0])).u8(mask ? 1 : 0).array(im.rgba);
+            if (mask) req.array(mask);
+        }
+        const r = runNativeTwinSync(TWIN_CMD.harmonize, req, bytes, threads);
+        for (const img of batch) { const im = images.get(img)!; images.set(img, { width: im.width, height: im.height, rgba: r.bytes(im.rgba.length) }); }
+        start = end;
+    }
+}
+
 /**
  * Harmonises the photos in `images` (image index -> de-lit photo) of the textured GLB `g` (its JSON `json`) in place:
  * colour matched per side and height band, seams levelled. `groundY` is the ground the bands are measured from;
  * `masks` are the photos' surfaceClassMasks (computed here when not given). A district (pipeline K-D) passes `buildingOf`,
  * the building a point stands in (by plan x, z; -1 for none): the groups and the seam patches are then per building as well, so a
  * photo is only compared with the others on the same building's surfaces, and two buildings of different stone keep their
- * own colours, even where they meet flush.
+ * own colours, even where they meet flush. `threads` caps the native apply's threads (native/twin-texels-native.ts nativeTwinThreads);
+ * `nativeBatchBytes` is about how many bytes of pixels go to it at a time (default NATIVE_BATCH_BYTES).
  */
-export function harmonizeTextures(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, groundY: number, P: TextureHarmonizeParams = TEXTURE_HARMONIZE_PARAMS, masks?: Map<number, Uint8Array>, opts: { buildingOf?: (x: number, z: number) => number; /** Each phase as it ends, with its time (ms). */ onPhase?: (phase: string, ms: number) => void } = {}): TextureHarmonizeReport {
+export function harmonizeTextures(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, groundY: number, P: TextureHarmonizeParams = TEXTURE_HARMONIZE_PARAMS, masks?: Map<number, Uint8Array>, opts: { buildingOf?: (x: number, z: number) => number; /** Each phase as it ends, with its time (ms). */ onPhase?: (phase: string, ms: number) => void; threads?: number; nativeBatchBytes?: number } = {}): TextureHarmonizeReport {
     const t0 = Date.now();
     const phasesMs: Record<string, number> = {};
     let tp = t0;
@@ -417,7 +447,8 @@ export function harmonizeTextures(g: ParsedGlb, json: any, images: Map<number, R
     if (!(report.seams.after < report.seams.before)) { report.why = `the seams did not get closer (${report.seams.before} -> ${report.seams.after} in log colour)`; report.ms = Date.now() - t0; return report; }
     // apply: per texel, the photo's gain (its roof's on a roof texel) and its field's offset, in linear light
     const classOf = masks ?? surfaceClassMasks(g, json, images, P);
-    for (const [img, im] of images) {
+    if (kNative('harmonize')) applyNative(images, fields, gain, off, classOf, opts.threads, opts.nativeBatchBytes);
+    else for (const [img, im] of images) {
         const f = fields.get(img)!, wallGain = gain.get(img * 2) ?? [0, 0, 0], roofGain = gain.get(img * 2 + 1) ?? [0, 0, 0], out = new Uint8Array(im.rgba);
         const mask = classOf.get(img);
         // the field's bilinear cell and weight per column and per row (fieldWeights, worked out once per line, not per texel)

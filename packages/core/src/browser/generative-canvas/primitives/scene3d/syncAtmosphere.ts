@@ -19,6 +19,8 @@ import type { AtmosphereHandle, RendererStack, Scene3DRenderMode } from './types
 import { removeAndDispose } from './types';
 import { hasExplicitSun } from '../../../../common/scene-atmosphere-opt-in';
 import { hazeRangeM } from '../../services/atmosphere/scene-weather';
+import { CascadedSunLight, isCascadedSunShadow } from './sunShadowCascades';
+import { ContactAmbientOcclusion } from './contactAmbientOcclusion';
 
 export interface AtmosphereInput {
     skybox?: string;
@@ -244,9 +246,11 @@ function createStarfield(scene: THREE.Scene): THREE.Points {
 export const TILES_SUN_SHADOW_RADIUS_M = 150;
 
 /**
- * The atmospheric sun's shadow camera sized to the content: an orthographic box of half-width `radius` around the scene's
- * centre, the light placed along the sun direction outside it, and a map fine enough for that extent (the three.js default
- * box is 10 m wide, which leaves anything larger unshadowed).
+ * The atmospheric sun's shadows sized to the content. The sky's sun in the viewport casts camera-fitted cascades
+ * (sunShadowCascades.ts): they are shadowed out to a view depth of five content radii (at least 1 km), looking a few
+ * radii toward the sun for casters, with a 2048 px tile per cascade. Any other sun gets one orthographic box of
+ * half-width `radius` around the scene's centre, the light placed along the sun direction outside it, and a map fine
+ * enough for that extent (the three.js default box is 10 m wide, which leaves anything larger unshadowed).
  */
 export function fitSunShadowToContent(sunLight: THREE.DirectionalLight | undefined, radius: number): void {
     if (!sunLight?.shadow) return;
@@ -255,6 +259,19 @@ export function fitSunShadowToContent(sunLight: THREE.DirectionalLight | undefin
     dir.normalize();
     sunLight.position.copy(dir.multiplyScalar(radius * 3));
     sunLight.target.position.set(0, 0, 0);
+    if (isCascadedSunShadow(sunLight.shadow)) {
+        const cascades = sunLight.shadow;
+        cascades.maxDistance = Math.max(1000, radius * 5);
+        cascades.casterReach = Math.max(500, radius * 3);
+        cascades.mapSize.set(2048, 2048);
+        // in texels of each cascade: a world distance that follows the cascade's resolution
+        cascades.bias = 0.5;
+        cascades.normalBias = 1;
+        cascades.invalidateContent();
+        cascades.map?.dispose();
+        cascades.map = null;
+        return;
+    }
     const cam = sunLight.shadow.camera as THREE.OrthographicCamera;
     cam.left = -radius; cam.right = radius; cam.top = radius; cam.bottom = -radius;
     cam.near = 0.5; cam.far = radius * 10;
@@ -269,8 +286,9 @@ export function fitSunShadowToContent(sunLight: THREE.DirectionalLight | undefin
 }
 
 /**
- * Holds unlit photo-textured materials (a scan's twin drawn from its photos, MeshBasicMaterial with a map) at the
- * brightness they had under exposure 1 when the camera's metered exposure (sky-light-rig.ts) differs: a photo already
+ * Holds unlit photo-textured materials (a scan drawn from its photos, MeshBasicMaterial with a map; a staged layer's
+ * photo twin is drawn lit instead, litPhotoTwins.ts) at the brightness they had under exposure 1 when the camera's
+ * metered exposure (sky-light-rig.ts) differs: a photo already
  * carries its own exposure, and scaling it again blew a night scene's unlit building out to white (exposure 9 at -12°).
  * The authored colour is kept in userData and restored at exposure 1.
  */
@@ -305,6 +323,9 @@ export function syncAtmosphere(
     const cls = classifyAtmosphere(input);
     const { isSkySkybox, isSunset, hasGodRays, hasBiomes, biomeType, backgroundHex } = cls;
     const isLargeScale = !!(input.has3DTiles || input.hasGeoCoordinates || (input.worldBranch || '').startsWith('earth'));
+    // Under the sky's sun the shadow maps hold raw depth, which the sun's contact-hardening filter reads (softShadowChunk.ts);
+    // every other scene keeps three's hardware PCF.
+    if (stack.renderer?.shadowMap) stack.renderer.shadowMap.type = isSkySkybox ? THREE.BasicShadowMap : THREE.PCFShadowMap;
 
     scene.background = new THREE.Color(backgroundHex);
     // Zero Default Fog/Haze: fog is strictly null unless explicitly requested via input.fog or explicit atmospheric fog
@@ -376,7 +397,10 @@ export function syncAtmosphere(
         // over live 3D Tiles the shadows fall on the street around the camera, not only on the scene's own objects
         const shadowRadius = input.has3DTiles ? Math.max(configured, TILES_SUN_SHADOW_RADIUS_M) : configured;
         // the dome encloses the camera's orbit around content of that size (the stand-off camera sits a few radii out)
-        skyDomeModule = createAtmosphericSkyDome(scene, isSunset, atmoConfig, { sphereRadius: Math.max(280, shadowRadius * 8) });
+        skyDomeModule = createAtmosphericSkyDome(scene, isSunset, atmoConfig, {
+            sphereRadius: Math.max(280, shadowRadius * 8),
+            createSunLight: (color, intensity) => new CascadedSunLight(color, intensity)
+        });
         skyDomeObject = skyDomeModule.skyDome;
         fitSunShadowToContent(skyDomeModule.sunLight, shadowRadius);
 
@@ -401,6 +425,9 @@ export function syncAtmosphere(
                     cloudDensity: atmoConfig.cloudDensity ?? ((atmoConfig.volumetricClouds === true || (atmoConfig.cloudCoverage ?? 0) > 0) ? 0.3 : 0.0),
                     windVector: atmoConfig.windVector ?? [0.05, 0.02]
                 }, width, height);
+                // contact ambient occlusion from the same depth, applied before the haze: where walls meet the street,
+                // in window reveals and under eaves (off with the aerial pass, so off in a splat world, whose splats write no depth)
+                aerialPerspective.ambientOcclusion = new ContactAmbientOcclusion();
             } catch (e) {
                 console.warn('[AerialPerspectiveEffect] Post-pass setup warning:', e);
             }

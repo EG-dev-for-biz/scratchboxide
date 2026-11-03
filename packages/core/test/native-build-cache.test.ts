@@ -14,6 +14,8 @@
  *   and stages each call's assets in its own directory, so concurrent calls never run against another call's assets;
  * - two different sources built concurrently under one name get their own binaries;
  * - another process reuses a build (a child process compiles nothing);
+ * - a synchronous caller builds a cold entry the async path then hits, and while this process builds the same entry
+ *   asynchronously (holding its lock), compiles its own copy instead of waiting on itself;
  * - the sky, de-lighting and groom services compile once and then run their one binary with new parameters;
  * - the PCH path follows header content; field remesh gets no -march=native unless SCRATCHBOX_NATIVE_ARCH=1;
  * - the Python module fingerprint is memoised (no source read when nothing changed) and still follows edits;
@@ -29,7 +31,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { compileNativeCached, defaultNativeFlags, maybePruneNativeBuildCache, pruneNativeBuildCache } from '../src/node/3d-engine/native-build-cache';
+import { compileNativeCached, compileNativeCachedSync, defaultNativeFlags, maybePruneNativeBuildCache, pruneNativeBuildCache } from '../src/node/3d-engine/native-build-cache';
 import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
 import { NativeSkyService } from '../src/node/3d-engine/native-sky-service';
 import { NativeTileLightingService } from '../src/node/3d-engine/native-tile-lighting-service';
@@ -105,6 +107,25 @@ describe('native build cache', () => {
         expect(a.binaryPath).not.toBe(b.binaryPath);
         expect(execFileSync(a.binaryPath, { encoding: 'utf8' }).trim()).toBe('1');
         expect(execFileSync(b.binaryPath, { encoding: 'utf8' }).trim()).toBe('2');
+    }, 120_000);
+
+    it('compileNativeCachedSync: builds a cold entry, and never waits on a build this process has in flight', async () => {
+        const make = (n: number) => ({ sourceCode: `#include <cstdio>\nint main() { std::printf("sync ${n}\\n"); return 0; }\n`, includeDirs: [], flags: defaultNativeFlags(), name: 'sync_build' });
+        const before = compileLines().length;
+        const cold = compileNativeCachedSync(make(1));
+        expect(cold.cacheHit).toBe(false);
+        expect(execFileSync(cold.binaryPath, { encoding: 'utf8' }).trim()).toBe('sync 1');
+        expect(fs.existsSync(`${cold.binaryPath}.lock`)).toBe(false);
+        const hit = await compileNativeCached(make(1));
+        expect(hit.cacheHit).toBe(true);
+        expect(hit.binaryPath).toBe(cold.binaryPath);
+        // the async build holds the entry's lock from its first step: the sync call compiles its own copy, and the async one finds it built
+        const pending = compileNativeCached(make(2));
+        const sync = compileNativeCachedSync(make(2));
+        const later = await pending;
+        expect(later.binaryPath).toBe(sync.binaryPath);
+        expect(execFileSync(sync.binaryPath, { encoding: 'utf8' }).trim()).toBe('sync 2');
+        expect(compileLines().length - before).toBe(2);
     }, 120_000);
 
     it('compileSource: a hit under another output name compiles nothing and writes no .cpp', async () => {

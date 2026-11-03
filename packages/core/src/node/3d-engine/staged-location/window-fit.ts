@@ -29,7 +29,8 @@
  *    storey pitch and across their width; glass rows by colour, glass columns between the mullions), none where it cannot
  *    read them; every pane kept only where it reads unlike the stone beside its window (panesUnlikeWall).
  * The windows are photo-inferred. Facades are fitted in parallel, before the lattice reads them (window_fit.json beside the
- * orthos).
+ * orthos): natively by default (scratchbox_window_fit.hpp, the same readings in one process on a fixed thread pool, the
+ * relief read there too; fitOrthoFacadesNative), in this TypeScript when SCRATCHBOX_K_NATIVE leaves `window-fit` out.
  *
  * A facade this leaves with no rects at all (no grid repeats on it, or it is too narrow or short to repeat) may be read
  * once more from an open-vocabulary segmenter's opening mask (SCRATCHBOX_K_WINDOW_SEGMENT, off by default: it bills per
@@ -48,6 +49,8 @@ import { findTileRefineRepoRoot } from '../tile-refine-service';
 import { MASK_YES, type SegmentImage } from './facade-material-evidence';
 import { countSet, readOccluded, unreadMask } from './pipeline-k/occlusion';
 import { encodePng } from './png-encode';
+import { nativePolishThreads, runNativeWindowFit, type NativeFacadeInput } from './remesh-polish-native';
+import { kNative } from './pipeline-k/native/native-switch';
 
 export const WINDOW_FIT_VERSION = 'window-fit/8';
 
@@ -725,10 +728,17 @@ export function panesOfStrip(img: { rgba: ArrayLike<number>; width: number; heig
     return out.length ? out : undefined;
 }
 
+/** An sRGB 8-bit code's linear value. */
+const srgb8Linear = (v: number) => { const c = v / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+
+/** Every code's linear value, for the native fit: a pow, so worked out here (scratchbox_window_fit.hpp setSrgb8Linear). */
+export function srgb8LinearTable(): Float64Array {
+    return Float64Array.from({ length: 256 }, (_, v) => srgb8Linear(v));
+}
+
 /** sRGB 8-bit to CIELAB (D65). */
 function labOf8(r: number, g: number, b: number): [number, number, number] {
-    const lin = (v: number) => { const c = v / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
-    const R = lin(r), G = lin(g), B = lin(b);
+    const R = srgb8Linear(r), G = srgb8Linear(g), B = srgb8Linear(b);
     const f = (t: number) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
     const x = f((0.4124 * R + 0.3576 * G + 0.1805 * B) / 0.95047), y = f(0.2126 * R + 0.7152 * G + 0.0722 * B), z = f((0.0193 * R + 0.1192 * G + 0.9505 * B) / 1.08883);
     return [116 * y - 16, 500 * (x - y), 200 * (y - z)];
@@ -1464,6 +1474,63 @@ function facadePhoto(orthosDir: string, f: OrthoFacade): { img: ReturnType<typeo
     return { img, mask: unreadMask(uncovered, occluded, uncovered.length), own: false, occluded };
 }
 
+/** A facade's entry from its fit: the windows continued into what stood in front of the facade (generated) added. */
+function facadeEntry(f: OrthoFacade, width: number, height: number, fitIn: WindowFit, occluded: Uint8Array | undefined, P: WindowFitParams, ms: number): WindowFitEntry {
+    let fit = fitIn;
+    const occludedRead = occluded ? countSet(occluded) : 0;
+    let occludedContinued = 0;
+    if (occluded && occludedRead && fit.rects.length) {
+        const cont = continueIntoOccluded(fit.rects, occluded, width, height, P);
+        occludedContinued = cont.generated.length;
+        if (occludedContinued) fit = { ...fit, rects: cont.rects, generated: [...(fit.generated ?? []), ...cont.generated].sort(cmpRect) };
+    }
+    return { facadeId: f.facadeId, width, height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, ...(occludedRead ? { occludedTexels: occludedRead, occludedContinued } : {}), ms };
+}
+
+/** WINDOW_FIT_PARAMS flattened in the order of scratchbox_window_fit.hpp's Params. */
+export function windowFitParamVector(P: WindowFitParams): number[] {
+    return [P.present, P.heldOutSpanM, P.runShare, P.minBandSM, P.minBandTM, P.splitGain, P.rowNcc, P.storeysMin, P.clearlyBetter, P.stripMargin, P.stripDarkShare,
+        P.heightBand[0], P.heightBand[1], P.storeySpread, P.shortStorey, P.latWindowM, P.rephaseWidth[0], P.rephaseWidth[1], P.mullion, P.pierMinShare, P.bayRange[0], P.bayRange[1],
+        P.subAc, P.subMajority, P.minScore, P.paneContrast, P.paneShare[0], P.paneShare[1],
+        P.complete.overlap, P.complete.minAxis, P.complete.minValid, P.complete.clearShare,
+        P.narrow.maxWidthM, P.narrow.minColumnShare, P.narrow.minContrast, P.narrow.runShare[0], P.narrow.runShare[1], P.narrow.minStoreyNcc, P.narrow.minStoreys,
+        P.glassDeltaE, P.pitchS[0], P.pitchS[1], P.meanWindowM];
+}
+
+/**
+ * The structural fit of these facades natively (scratchbox_window_fit.hpp through remesh-polish-native.ts): the same
+ * entries as fitOrthoFacades, `threads` facades at once in one process, the relief read there too. The photos are decoded
+ * here, largest first, and streamed as raw buffers while the earlier ones are fitted.
+ */
+export async function fitOrthoFacadesNative(orthosDir: string, facades: OrthoFacade[], P: WindowFitParams = WINDOW_FIT_PARAMS, opts: { threads?: number; signal?: AbortSignal } = {}): Promise<WindowFitEntry[]> {
+    const out: WindowFitEntry[] = [];
+    const order = facades.map((_, i) => i).sort((a, b) => facades[b].width * facades[b].height - facades[a].width * facades[a].height || a - b);
+    const sent = new Map<number, { t: number; width: number; height: number; occluded?: Uint8Array }>();
+    function* feed(): Generator<NativeFacadeInput> {
+        for (const i of order) {
+            const f = facades[i], t = Date.now();
+            let photo: ReturnType<typeof facadePhoto>;
+            try { photo = facadePhoto(orthosDir, f); } catch (err) { out.push({ facadeId: f.facadeId, error: err instanceof Error ? err.message : String(err) }); continue; }
+            const { img, mask, occluded } = photo;
+            sent.set(i, { t, width: img.width, height: img.height, ...(occluded ? { occluded } : {}) });
+            yield { slot: i, width: img.width, height: img.height, pixel: f.pixel, orthoSMin: f.orthoSMin, orthoTMax: f.orthoTMax, texel: f.texel, rgba: img.rgba, unread: mask };
+        }
+    }
+    await runNativeWindowFit(windowFitParamVector(P), srgb8LinearTable(), feed(), {
+        threads: opts.threads ?? nativePolishThreads(), ...(opts.signal ? { signal: opts.signal } : {}),
+        onFit: r => {
+            const s = sent.get(r.slot), f = facades[r.slot];
+            sent.delete(r.slot);
+            if (!s || !f) throw new Error(`the native window fit answered for facade slot ${r.slot}, which was not sent`);
+            if ('error' in r) { out.push({ facadeId: f.facadeId, error: r.error }); return; }
+            const fit: WindowFit = { rects: r.rects, panes: r.panes, bands: r.bands as WindowFitBand[], ...(r.generated ? { generated: r.generated } : {}) };
+            out.push(facadeEntry(f, s.width, s.height, fit, s.occluded, P, Date.now() - s.t));
+        }
+    });
+    for (const i of sent.keys()) out.push({ facadeId: facades[i].facadeId, error: 'the native window fit gave no answer for it' });
+    return out;
+}
+
 /**
  * The structural fit (the six readings) of these facades on this thread, `concurrency` at once so their native relief
  * runs overlap; a facade that fails is its entry's error. The opening-mask fallback is fitWindowsForOrthos's.
@@ -1483,16 +1550,8 @@ export async function fitOrthoFacades(orthosDir: string, facades: OrthoFacade[],
                 const { img, mask, own, occluded } = facadePhoto(orthosDir, f);
                 let maskFile = own ? path.join(orthosDir, f.uncoveredMask!) : undefined;
                 if (!maskFile) { maskFile = path.join(scratch, `${f.facadeId}_unread.png`); fs.writeFileSync(maskFile, encodePng(img.width, img.height, Buffer.from(mask.map(v => (v ? 255 : 0))), 1)); }
-                let fit = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile, f, opts.signal), P);
-                const occludedRead = occluded ? countSet(occluded) : 0;
-                // the windows continued into what stood in front of the facade (generated)
-                let occludedContinued = 0;
-                if (occluded && occludedRead && fit.rects.length) {
-                    const cont = continueIntoOccluded(fit.rects, occluded, img.width, img.height, P);
-                    occludedContinued = cont.generated.length;
-                    if (occludedContinued) fit = { ...fit, rects: cont.rects, generated: [...(fit.generated ?? []), ...cont.generated].sort(cmpRect) };
-                }
-                out.push({ facadeId: f.facadeId, width: img.width, height: img.height, rects: fit.rects, panes: fit.panes, ...(fit.generated ? { generated: fit.generated } : {}), bands: fit.bands, ...(occludedRead ? { occludedTexels: occludedRead, occludedContinued } : {}), ms: Date.now() - t });
+                const fit = await fitFacadeWindows({ rgba: img.rgba, width: img.width, height: img.height }, mask, f, nativeRelief(bin, png, maskFile, f, opts.signal), P);
+                out.push(facadeEntry(f, img.width, img.height, fit, occluded, P, Date.now() - t));
             } catch (err) {
                 if (opts.signal?.aborted) throw err;
                 out.push({ facadeId: f.facadeId, error: err instanceof Error ? err.message : String(err) });
@@ -1520,7 +1579,10 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency
     const t0 = Date.now();
     const facades = orthoFacades(orthosDir);
     const concurrency = Math.max(1, opts.concurrency ?? Math.max(1, Math.min(8, os.cpus().length - 1)));
-    const out = opts.fitFacades ? await opts.fitFacades(facades, P) : await fitOrthoFacades(orthosDir, facades, P, { concurrency, ...(opts.signal ? { signal: opts.signal } : {}) });
+    // natively (one process, a pool of `concurrency` threads when the caller caps it, else every core) unless
+    // SCRATCHBOX_K_NATIVE without window-fit keeps the TypeScript fit (on worker threads when the caller gives them)
+    const out = kNative('window-fit') ? await fitOrthoFacadesNative(orthosDir, facades, P, { threads: opts.concurrency ?? nativePolishThreads(), ...(opts.signal ? { signal: opts.signal } : {}) })
+        : opts.fitFacades ? await opts.fitFacades(facades, P) : await fitOrthoFacades(orthosDir, facades, P, { concurrency, ...(opts.signal ? { signal: opts.signal } : {}) });
     // the six readings found nothing (the no-pattern tail): the segmenter's opening mask, as far as the photo confirms it. On
     // this thread, since it calls a model
     const segmentFn = opts.segment;
