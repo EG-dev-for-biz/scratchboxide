@@ -198,6 +198,7 @@ import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
 import { districtBuildingIndex, districtFootprints } from './pipeline-k/district-buildings';
 import { chunkCpuShare, chunkOwner, chunkParallel, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, planDistrictChunks, type DistrictChunkPlan, type TileFrame } from './pipeline-k/district-chunks';
+import { placeStoreEnabled, recordDistrictInPlaceStore } from './place-store-district';
 import { addSeamEdges, applySeamGain, cutChunkGround, DISTRICT_SEAMS_PARAMS, DISTRICT_SEAMS_VERSION, sampleSeamColour, seamCoverage, seamOwner, solveSeamGains, type SeamCoverage, type SeamCutReport, type SeamEdges, type SeamSamples } from './pipeline-k/district-seams';
 import * as os from 'os';
 import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
@@ -1935,6 +1936,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 cache.writeRunNote(runId, 'district_chunks_joined', { version: DISTRICT_CHUNKS_VERSION, parallel, chunks: report, ...(seams ? { seams } : {}), ...(prefetch ? { prefetch } : {}) });
                 // the vector buildings shown past the centre build's tiles stand in only where no chunk was joined
                 if (joined === todo.length) for (const l of run.state.layers.filter(x => x.layer === 'l0o' && !x.retired)) run.commit({ ...l, retired: true }, run.layerMeta[l.objectId]);
+                // the place store (place-store-district.ts, SCRATCHBOX_PLACE_STORE=1): the joined district audited and offered as the place's next version
+                if (placeStoreEnabled()) cache.writeRunNote(runId, 'place_store', await recordDistrictInPlaceStore({ runId, place: placeValue!, originEllipsoidalHeightM: here.originEllipsoidalHeightM, plan, layers: run.state.layers, modelsDir: cache.modelsDir, workspaceRoot: cache.workspaceRoot, request, ...(deps.vectorEvidence ? { vectorEvidence: deps.vectorEvidence } : {}), signal: io.signal, progress: m => io.progress(m) }));
                 const failed = todo.length - joined;
                 return {
                     status: failed || degradations.length ? 'degraded' : 'committed', value: { chunks: plan.chunks.length, joined, failed }, layers: committed, degradations,
