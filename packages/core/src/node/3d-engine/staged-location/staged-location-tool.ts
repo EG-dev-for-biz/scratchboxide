@@ -46,10 +46,9 @@ import { getTileVegetationService } from '../tile-vegetation-service';
 import { loadScanFit } from '../scan-fit-loader';
 import { createDefaultStationImageGenerator } from '../../spatial/BeautifyStationService';
 import { createFalTrellisClient } from './pipeline-i/fal-trellis';
-import { createFalMeshyClient } from './pipeline-i/fal-meshy';
 import { resolveRegionSets } from './pipeline-k/material-sets';
 import { StageCache, stagedWorkspaceRoot } from './stage-cache';
-import { reportStagedSwitchProblems, RETIRED_PIPELINE_LETTERS, stagedBuildingPipelineEnv } from './staged-switches';
+import { reportStagedSwitchProblems, RETIRED_MODEL_SERVICES, RETIRED_PIPELINE_LETTERS, stagedBuildingPipelineEnv } from './staged-switches';
 import { genAiEnhanceClient } from './texture-enhance';
 import { lightingCorrectionEnabled, lightingModels } from './texture-lighting';
 import { bakeTileDetail, defaultSwatchServices, subjectSwatchLibrary } from '../../spatial/tile-detail-bake';
@@ -174,7 +173,10 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
     const rawPipeline = typeof args.pipeline === 'string' ? args.pipeline.trim().toLowerCase() : undefined;
     if (rawPipeline === 'g' || rawPipeline === 'h') throw new InvalidInputError(toolName, `pipeline "${rawPipeline}"`, `${RETIRED_PIPELINE_LETTERS[rawPipeline]}; ask for "j" (procedural) or "k"`);
     const asked = rawPipeline === 'i' ? 'j' : rawPipeline === 'j' || rawPipeline === 'k' ? rawPipeline : undefined;
-    const modelService = args.modelService === 'meshy' || args.modelService === 'trellis' ? args.modelService : rawPipeline === 'i' ? 'trellis' : undefined;
+    // Meshy was removed (user decision 2026-11-02): a saved request that still names it is refused with that reason
+    const rawService = typeof args.modelService === 'string' ? args.modelService.trim().toLowerCase() : undefined;
+    if (rawService && Object.prototype.hasOwnProperty.call(RETIRED_MODEL_SERVICES, rawService)) throw new InvalidInputError(toolName, `modelService "${rawService}"`, `${RETIRED_MODEL_SERVICES[rawService]}; leave modelService out`);
+    const modelService = rawService === 'trellis' || rawPipeline === 'i' ? 'trellis' : undefined;
     // one building is pipeline K's, the scan straightened with its own photo, from the chat and the 3D Building button alike
     // (user decision 2026-10-26), unless the caller asks for a procedural rebuild (procedural true, pipeline 'j', or
     // SCRATCHBOX_STAGED_BUILDING_PIPELINE=j) or for the scan detailed (procedural false)
@@ -196,7 +198,7 @@ export function parseStagedLocationArgs(toolName: string, args: Record<string, u
             // a procedural rebuild when asked for (above); never for pipeline K or a scan asked to be detailed
             ...(args.isolate === true && args.procedural !== false && pipeline !== 'k' ? { procedural: true } : {}),
             // which pipeline ('j' procedural, pipeline-i/; 'k' the straightened scan, pipeline-k/pipeline-k.ts), and J's model
-            // service when one is named (staged-switches.ts stagedModelService reads it, else the environment, else Meshy)
+            // service when one is named (staged-switches.ts stagedModelService reads it, else the environment, else Trellis)
             ...(pipeline ? { pipeline } : {}),
             ...(modelService ? { modelService } : {}),
             ...(steps ? { steps } : {}),
@@ -238,10 +240,9 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
     const elevationService = mapsKey ? new GoogleElevationService({ apiKey: mapsKey }) : undefined;
     return {
         cache,
-        // pipeline I/J (J the 3D Building default): the image model draws the character sheet, then Meshy (J, default, one
-        // seed) or Trellis (I, best of six seeds) on Fal.ai makes the model; made on first use, so a build without FAL_KEY
-        // fails pipeline I/J with that reason
-        pipelineI: { generator: () => createDefaultStationImageGenerator({ workspaceRoot: cache.dir }), model: (name?: string) => name === 'meshy' ? createFalMeshyClient() : createFalTrellisClient() },
+        // pipeline J (the procedural build): the image model draws the character sheet, then Trellis (best of six seeds) on
+        // Fal.ai makes the model; made on first use, so a build without FAL_KEY fails pipeline J with that reason
+        pipelineI: { generator: () => createDefaultStationImageGenerator({ workspaceRoot: cache.dir }), model: () => createFalTrellisClient() },
         // pipeline K's material regions: a texture library set per appearance class, fetched from the library bucket
         // and the swatch detail bake (off unless asked): the building's survey swatches baked into the twin's atlases
         pipelineK: {

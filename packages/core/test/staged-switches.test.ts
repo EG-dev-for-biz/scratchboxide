@@ -33,12 +33,12 @@ describe('staged build switches: one meaning each (2026-10-30)', () => {
         expect(stagedPipelineK({ pipeline: 'K' }, env({}))).toBe(true);
     });
 
-    it('picks pipeline J\'s model service from the request, else SCRATCHBOX_STAGED_MODEL_SERVICE, else Meshy', () => {
-        expect(stagedModelService({}, env({}))).toBe('meshy');
+    it('picks Trellis as pipeline J\'s model service whatever the request or SCRATCHBOX_STAGED_MODEL_SERVICE names (Meshy removed)', () => {
+        expect(stagedModelService({}, env({}))).toBe('trellis');
         expect(stagedModelService({}, env({ SCRATCHBOX_STAGED_MODEL_SERVICE: ' Trellis ' }))).toBe('trellis');
-        expect(stagedModelService({ modelService: 'meshy' }, env({ SCRATCHBOX_STAGED_MODEL_SERVICE: 'trellis' }))).toBe('meshy');
-        expect(stagedModelService({ modelService: 'trellis' }, env({}))).toBe('trellis');
-        expect(stagedModelService({ modelService: 'triposr' }, env({ SCRATCHBOX_STAGED_MODEL_SERVICE: 'nope' }))).toBe('meshy');
+        expect(stagedModelService({}, env({ SCRATCHBOX_STAGED_MODEL_SERVICE: 'meshy' }))).toBe('trellis');
+        expect(stagedModelService({ modelService: 'meshy' }, env({}))).toBe('trellis');
+        expect(stagedModelService({ modelService: 'triposr' }, env({ SCRATCHBOX_STAGED_MODEL_SERVICE: 'nope' }))).toBe('trellis');
     });
 
     it('reads the district from SCRATCHBOX_STAGED_DISTRICT only, massing by default', () => {
@@ -76,7 +76,9 @@ describe('staged build switches: one meaning each (2026-10-30)', () => {
         // a name on the object prototype is not a retired letter
         expect(stagedSwitchProblems(env({ SCRATCHBOX_STAGED_BUILDING_PIPELINE: 'constructor' }))).toEqual(['SCRATCHBOX_STAGED_BUILDING_PIPELINE takes j, k; "constructor" is ignored.']);
         expect(stagedSwitchProblems(env({ SCRATCHBOX_STAGED_MODEL_SERVICE: 'triposr' })))
-            .toEqual(['SCRATCHBOX_STAGED_MODEL_SERVICE takes meshy, trellis; "triposr" is ignored, so pipeline J uses Meshy.']);
+            .toEqual(['SCRATCHBOX_STAGED_MODEL_SERVICE takes trellis; "triposr" is ignored, so pipeline J uses Trellis.']);
+        expect(stagedSwitchProblems(env({ SCRATCHBOX_STAGED_MODEL_SERVICE: 'Meshy' })))
+            .toEqual(['SCRATCHBOX_STAGED_MODEL_SERVICE=meshy is ignored: Meshy was removed from the codebase on 2026-11-02 (user decision); pipeline J uses Trellis; unset it.']);
         expect(stagedSwitchProblems(env({ SCRATCHBOX_STAGED_GEOMETRY: 'G' }))[0]).toMatch(/^SCRATCHBOX_STAGED_GEOMETRY=g is ignored: .*; set SCRATCHBOX_STAGED_BUILDING_PIPELINE=j\.$/);
         expect(stagedSwitchProblems(env({ SCRATCHBOX_STAGED_DISTRICT: 'procedural' })))
             .toEqual(['SCRATCHBOX_STAGED_DISTRICT takes scan, massing, rebuilt; "procedural" is ignored, so a district has its massing.']);
@@ -108,10 +110,10 @@ describe('staged build switches: one meaning each (2026-10-30)', () => {
         expect(isolated().procedural).toBeUndefined();
     });
 
-    it('the staged tool runs \'i\' as J with Trellis, takes a model service, and refuses the retired G and H', () => {
+    it('the staged tool runs \'i\' as J with Trellis, refuses Meshy, and refuses the retired G and H', () => {
         const parse = (args: Record<string, unknown>) => parseStagedLocationArgs('google_3d_tiles_get_clay', { query: 'q', isolate: true, ...args }).request;
         expect(parse({ pipeline: 'i' })).toMatchObject({ pipeline: 'j', modelService: 'trellis', procedural: true });
-        expect(parse({ pipeline: 'i', modelService: 'meshy' })).toMatchObject({ pipeline: 'j', modelService: 'meshy' });
+        expect(() => parse({ pipeline: 'j', modelService: 'Meshy' })).toThrow(/Meshy was removed from the codebase on 2026-11-02/);
         expect(parse({ pipeline: 'j', modelService: 'trellis' })).toMatchObject({ pipeline: 'j', modelService: 'trellis', procedural: true });
         expect(parse({ pipeline: 'j' })).not.toHaveProperty('modelService');
         expect(parse({ procedural: true, modelService: 'other' })).not.toHaveProperty('modelService');

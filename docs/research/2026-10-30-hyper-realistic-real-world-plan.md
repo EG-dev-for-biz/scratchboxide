@@ -57,7 +57,7 @@ Built 2026-10-30 (`staged-switches.ts`; the server reports a retired switch at s
 pipeline K and none ran G, H, I or J. So:
 - K stays the one-building default.
 - I and J are one pipeline, J, with the model service as a setting: `modelService` in the request, or
-  `SCRATCHBOX_STAGED_MODEL_SERVICE=meshy|trellis` (Meshy by default; Trellis was pipeline I). The staged tool still
+  `SCRATCHBOX_STAGED_MODEL_SERVICE=meshy|trellis` (Meshy by default; Trellis was pipeline I; Meshy removed 2026-11-02, so Trellis is now the only service). The staged tool still
   takes `pipeline: 'i'`, as J with Trellis.
 - G and H are retired as choices. The tool refuses `pipeline: 'g'` or `'h'` with that reason, and their code is kept,
   frozen, with the survey modules J's refine step uses.

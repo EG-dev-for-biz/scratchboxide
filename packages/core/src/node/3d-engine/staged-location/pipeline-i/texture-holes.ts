@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 /**
- * Pipeline I's kept model (Trellis/Meshy) can come back with real holes in its own generated texture: surfaces its four
+ * Pipeline J's kept model (Trellis) can come back with real holes in its own generated texture: surfaces its four
  * input views never saw bake as flat black in the atlas (measured on a live Haughwout Building run: 7.8% of the
  * 2048x2048 texture, visible on the built facade as hard black tears -- the visual check scored that build 48/100 for
  * "severe tearing and missing faces... harsh black artifacts"). AGENTS.md's "believability first" default (a plausible

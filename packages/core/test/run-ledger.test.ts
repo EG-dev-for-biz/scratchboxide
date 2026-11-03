@@ -127,7 +127,7 @@ describe('run ledger: where it lives', () => {
 describe('run ledger: the build row', () => {
     it('reads the arm from the request and the environment, request first', () => {
         expect(buildArm(REQUEST, { SCRATCHBOX_STAGED_BUILDING_PIPELINE: 'j', SCRATCHBOX_STAGED_DISTRICT: 'scan' }))
-            .toMatchObject({ pipeline: 'k', district: 'scan', modelService: 'meshy', isolate: true, trees: false, relief: true });
+            .toMatchObject({ pipeline: 'k', district: 'scan', modelService: 'trellis', isolate: true, trees: false, relief: true });
         expect(buildArm({ query: 'x', isolate: true, trees: false }, { SCRATCHBOX_STAGED_BUILDING_PIPELINE: 'j', SCRATCHBOX_STAGED_MODEL_SERVICE: 'trellis' }))
             .toMatchObject({ pipeline: 'j', modelService: 'trellis', district: 'massing' });
         expect(buildArm({ query: 'x', isolate: true, trees: false, steps: { 'twin.roofShadow': false, 'remesh.occlusion': true } }, {}).stepOverrides)

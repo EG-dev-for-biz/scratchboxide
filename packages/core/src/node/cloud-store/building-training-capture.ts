@@ -68,8 +68,9 @@ export interface BuildingTrainingRecord {
     targetKind: BuildingTrainingTargetKind;
     pipelineVersion: string;
     /**
-     * Whether the target may be trained on. Trellis (MIT) and our own pipelines' targets may; Meshy outputs from runs
-     * before pipeline I moved to Trellis (2026-10-24) stay evaluation-only; failed runs have no target to train on.
+     * Whether the target may be trained on. Trellis (MIT) and our own pipelines' targets may; Meshy outputs (runs before
+     * Meshy was removed from the codebase, 2026-11-02, whose records are still in the store) stay evaluation-only; failed
+     * runs have no target to train on.
      */
     trainAllowed: boolean;
     files: BuildingTrainingFile[];

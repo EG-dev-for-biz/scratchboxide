@@ -27,7 +27,7 @@ function asBoolean(val: unknown, defaultVal = false): boolean {
 export const TURNAROUND_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'generate_multi_angle_turnaround',
-        description: 'Generates a geometrically consistent multi-angle turnaround image set of an object, prop, vehicle or structure with an image model (Nano Banana Lite first by default). By default the hero view is generated first and every other view at once, each conditioned on the hero view (fast: about two image calls of wall time); conditioning "chained" instead generates one view at a time, each conditioned on the hero view and the previous view (slower, tighter detail between neighbouring views). Uses continuous spherical camera orbit mathematics and strict isolation (no ground/pedestal, no cast shadows, no text/labels). Optionally sends the views to Trellis or Meshy 7.1 on Fal.ai for a GLB (only when downstreamTarget is "trellis-fal" or "meshy-7.1-fal"). The result names the image model that produced the views and why any earlier model was skipped; a step that fails fails the tool.',
+        description: 'Generates a geometrically consistent multi-angle turnaround image set of an object, prop, vehicle or structure with an image model (Nano Banana Lite first by default). By default the hero view is generated first and every other view at once, each conditioned on the hero view (fast: about two image calls of wall time); conditioning "chained" instead generates one view at a time, each conditioned on the hero view and the previous view (slower, tighter detail between neighbouring views). Uses continuous spherical camera orbit mathematics and strict isolation (no ground/pedestal, no cast shadows, no text/labels). Optionally sends the views to Trellis on Fal.ai for a GLB (only when downstreamTarget is "trellis-fal"). The result names the image model that produced the views and why any earlier model was skipped; a step that fails fails the tool.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -57,7 +57,7 @@ export const TURNAROUND_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 downstreamTarget: {
                     type: 'STRING',
-                    description: 'Downstream 3D reconstruction: "none" (default), "trellis-fal" (Trellis on Fal.ai), or "meshy-7.1-fal" (Meshy 7.1 multi on Fal.ai); needs FAL_KEY, and only when the user asks for a reconstruction.'
+                    description: 'Downstream 3D reconstruction: "none" (default) or "trellis-fal" (Trellis on Fal.ai); needs FAL_KEY, and only when the user asks for a reconstruction.'
                 },
                 conditioning: {
                     type: 'STRING',
@@ -95,7 +95,9 @@ export const turnaroundHandlers: Record<string, ToolHandler> = {
         const floatingVoid = asBoolean(args.floatingVoid, true);
         const suppressShadows = asBoolean(args.suppressShadows, true);
         const suppressText = asBoolean(args.suppressText, true);
-        const downstreamTarget = (asString(args.downstreamTarget) || 'none') as 'trellis-fal' | 'meshy-7.1-fal' | 'trellis' | 'none';
+        const downstreamTarget = (asString(args.downstreamTarget) || 'none') as 'trellis-fal' | 'trellis' | 'none';
+        // Meshy was removed from the codebase (user decision, 2026-11-02): a saved call that still asks for it is refused, not rerouted
+        if ((downstreamTarget as string) === 'meshy-7.1-fal') throw new Error('generate_multi_angle_turnaround: downstreamTarget "meshy-7.1-fal" is no longer available (Meshy was removed on 2026-11-02); use "trellis-fal".');
         const model = asString(args.model) || undefined;
 
         const metricDimensions = (args.lengthMeters || args.widthMeters || args.heightMeters)
@@ -124,9 +126,8 @@ export const turnaroundHandlers: Record<string, ToolHandler> = {
             onProgress: (fraction, message) => ctx.reportProgress?.(message, fraction)
         });
 
-        const modelName = result.downstreamTarget === 'meshy-7.1-fal' ? 'Meshy 7.1' : 'Trellis';
         const downstreamSummary = result.downstreamGlb
-            ? ` ${modelName} reconstructed ${result.downstreamGlb.path} (${result.downstreamGlb.vertexCount} vertices, ${result.downstreamGlb.triangleCount} triangles).`
+            ? ` Trellis reconstructed ${result.downstreamGlb.path} (${result.downstreamGlb.vertexCount} vertices, ${result.downstreamGlb.triangleCount} triangles).`
             : '';
         const { views, ...rest } = result;
 

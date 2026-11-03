@@ -211,7 +211,7 @@ import { betweenSeen, glassSeen, MATERIAL_NAMING_VERSION, namingPrompt, parseCla
 import type { FacadeReadRecord } from './pipeline-k/facade-reader';
 import { shadowLiftQaPng } from './pipeline-k/shadow-lift-qa';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
-import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
+import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, runPipelineI } from './pipeline-i/pipeline-i';
 import { PROJECT_MAX_RELIEF_M, pipelineIRefineEnabled, refinePipelineI, type RefineOutcome } from './pipeline-i/refine';
 import { captureBuildingTrainingInBackground, sweepPendingBuildingTraining, type BuildingTrainingCaptureInput } from '../../cloud-store/building-training-capture';
 import { captureTrainingPairsInBackground } from '../../cloud-store/training-pair-capture';
@@ -458,11 +458,10 @@ export interface StagedLocationRequest {
      */
     pipeline?: 'j' | 'k' | (string & {});
     /**
-     * Pipeline J's 3D model service (staged-switches.ts): 'meshy' (Meshy 7.1, one seed, its own texture kept; the
-     * default) or 'trellis' (Trellis multi, the best of six seeds, then a swatch colour match; formerly pipeline I).
-     * SCRATCHBOX_STAGED_MODEL_SERVICE changes the default.
+     * Pipeline J's 3D model service (staged-switches.ts): 'trellis' (Trellis multi, the best of six seeds, then a swatch
+     * colour match; formerly pipeline I), the only one since Meshy was removed (user decision, 2026-11-02).
      */
-    modelService?: 'meshy' | 'trellis' | (string & {});
+    modelService?: 'trellis' | (string & {});
     /**
      * Steps turned on or off for this build, by step key (TOGGLEABLE_STEPS in staged-build-steps.ts): the node graph's
      * toggles. A step not named keeps its default (its environment switch, else on).
@@ -544,7 +543,7 @@ export interface StagedLocationDeps {
     solarRoof?(lat: number, lng: number): Promise<SolarRoof>;
     /**
      * Pipeline J's paid services (pipeline-i/): the image model for the character sheet and a Fal.ai model client by
-     * model service ('meshy' or 'trellis'), made on first use so a missing key fails that build with its reason. The
+     * model service ('trellis'), made on first use so a missing key fails that build with its reason. The
      * app's deps (createStagedLocationDeps) provide them; without them a procedural build degrades with that reason.
      */
     pipelineI?: { generator: () => StationImageGenerator; model: (name?: string) => ModelClient };
@@ -1919,7 +1918,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const pipelineE = stagedPipelineE() && request.isolate && !pipelineK;
         /** The procedural pipeline of this request, 'j' (pipeline-i/), undefined when none is asked for (G and H retired 2026-10-30). */
         const procedural: 'j' | undefined = request.procedural === true && !pipelineK ? 'j' : undefined;
-        /** Pipeline J's 3D model service: Meshy unless the request or SCRATCHBOX_STAGED_MODEL_SERVICE asks for Trellis. */
+        /** Pipeline J's 3D model service: Trellis, the only one (Meshy removed 2026-11-02). */
         const modelService = stagedModelService(request);
         /** The scan-led structure and massing rules pipeline J builds on: the scan's own plan when the vector massing fails its check. */
         const scanLed = procedural !== undefined;
@@ -4123,9 +4122,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             }
         };
 
-        // ---------------- pipeline J (the grammar stage's slot, request.procedural): character sheet -> Meshy (one seed) or Trellis (best of six), fitted to the scan ----------------
+        // ---------------- pipeline J (the grammar stage's slot, request.procedural): character sheet -> Trellis (best of six seeds), fitted to the scan ----------------
         const iRun = async (e: IRunState): Promise<void> => {
-            const isMeshy = modelService === 'meshy';
             await runner.stage<{ steps: Array<{ step: string; accepted: number; proposed: number }> }>({
                 id: 'grammar',
                 run: async io => {
@@ -4133,15 +4131,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (!deps.pipelineI) throw new Error(`pipeline J needs its image model and a Fal.ai 3D model service (${modelService}), which these deps do not provide`);
                     // the model client first: a missing FAL_KEY fails here, before the 4K sheet is drawn
                     const model = deps.pipelineI.model(modelService);
-                    // Meshy's single output is already texture-complete, so it skips Trellis's best-of-six seed selection and
-                    // its swatch colour match (tuned for Trellis's own colour drift)
                     const out = await runPipelineI({
                         texturedGlb: e.refined.texturedGlb, clayGlb: e.refined.rawClayGlb ?? e.refined.clayGlb,
                         footprint: { cells: structure!.cells, groundY: structure!.groundY, heightM: structure!.heightM },
                         anchor: { lat: placeValue!.lat, lng: placeValue!.lng, elevationMeters: 0 }, place: placeValue!.formattedAddress || request.query,
                         dir: path.join(cache.dir, 'pipeline_i', stageKey(PIPELINE_I_VERSION, e.key).slice(0, 24)),
                         generator: deps.pipelineI.generator(), model, budgetMs: Math.max(0, STAGES.grammar.budgetMs - (now() - t0) - 20_000),
-                        ...(isMeshy ? { seeds: [TRELLIS_SEEDS[0]], skipColourMatch: true } : {}),
                         ...(visionAvailable ? { infill: { client: genAiEnhanceClient(visionAvailable.client), models: [LIGHTING_MODEL_FULL] } } : {}),
                         signal: io.signal, onProgress: m => io.progress(m), now
                     });
@@ -4184,7 +4179,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const describe = `${out.steps.map(s => `${s.step}: ${s.accepted} of ${s.proposed}`).join('; ')}; fit to the scan: plan IoU ${f.planIoU.toFixed(2)}, ${(f.overflowShare * 100).toFixed(0)}% of the model outside the footprint (reported, not clipped), ${(f.coverage * 100).toFixed(0)}% of the footprint covered` +
                         (refined ? `; refined with the survey: fitted to the massing footprint (plan IoU with the scan ${refined.fit.scanIoUOfMassingFit.toFixed(2)}, shifted ${refined.fit.shift.map(v => v.toFixed(2)).join(', ')} m), ${refined.facades.length} facades scored, the tile's plates projected onto ${projectedFaces.length} (${refined.projected.texels.toLocaleString('en-US')} texels, photo-inferred)` : '') +
                         (refined?.holes?.holePixels ? `; ${refined.holes.holePixels} texels of the model's own texture it never covered: ${refined.holes.decision === 'accepted' ? `${refined.holes.filledPixels} filled by ${refined.holes.modelUsed} (generated)` : `left as the model built them (${refined.holes.reason ?? refined.holes.decision})`}` : '');
-                    const method = `pipeline J (${modelService}): the isolated scan rendered from its tile photos at four planned stations, made into one building-survey character sheet (one 4K image, every panel checked against the scan), the four views sent together to ${out.model.model} on Fal.ai ${isMeshy ? `once (job ${out.model.requestId}), its own textures kept` : `once per seed, the best of ${out.candidates.length} (seed ${out.model.seed}, job ${out.model.requestId}) by its silhouette against the sheet and its plan fit, its textures colour-matched to the structure's swatch`}, fitted onto the scan's footprint and height (yaw ${f.yawDeg.toFixed(1)} deg${f.mirrored ? ', mirrored' : ''}, scale ${f.scale.toFixed(2)})`;
+                    const method = `pipeline J (${modelService}): the isolated scan rendered from its tile photos at four planned stations, made into one building-survey character sheet (one 4K image, every panel checked against the scan), the four views sent together to ${out.model.model} on Fal.ai once per seed, the best of ${out.candidates.length} (seed ${out.model.seed}, job ${out.model.requestId}) by its silhouette against the sheet and its plan fit, its textures colour-matched to the structure's swatch, fitted onto the scan's footprint and height (yaw ${f.yawDeg.toFixed(1)} deg${f.mirrored ? ', mirrored' : ''}, scale ${f.scale.toFixed(2)})`;
                     const generated = TEXTURE_LADDER_RUNGS.indexOf('generated tileable PBR');
                     const layer: StagedLayer = {
                         objectId: layerObjectId(e.key, 'l2i'), stage: 'grammar', layer: 'l2i', order: STAGES.grammar.order, url: pubClay.url, bytes: pubClay.bytes,
@@ -4194,7 +4189,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [e.layer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(refined?.files.clayGlb ?? out.files.clayGlb),
                         textured: {
                             url: pubTex.url, bytes: pubTex.bytes, ladderRung: generated, rungShares: TEXTURE_LADDER_RUNGS.map((_, k) => (k === generated ? 1 : 0)),
-                            provenance: [{ source: `pipeline-j-${modelService}`, label: 'generated', method: `${out.model.model}'s textures (seed ${out.model.seed}), made from the character sheet's four views${isMeshy ? '' : ' and colour-matched to the structure\'s swatch measured from them'}`, coverage: 1 },
+                            provenance: [{ source: `pipeline-j-${modelService}`, label: 'generated', method: `${out.model.model}'s textures (seed ${out.model.seed}), made from the character sheet's four views and colour-matched to the structure\'s swatch measured from them`, coverage: 1 },
                                 ...(projectedFaces.length ? [{ source: 'pipeline-i-refine-plates', label: refined?.cleaned ? 'generated' : PROVENANCE.photoInferred, method: `the tile's wall plates (the survey stations)${refined?.cleaned ? ', redrawn by the facade texture builder and kept through its identity gate,' : ''} projected onto the model where its wall lies within ${PROJECT_MAX_RELIEF_M} m of the massing's plane: ${projectedFaces.map(x => x.key).join(', ')}`, coverage: 0 }] : [])],
                             confidenceChannels: 'none: the model carries its own textures', builtAtMs: now(), cached: false
                         }
@@ -4218,7 +4213,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 degrade: async err => (captureTraining(e, { source: 'pipeline-i', pipelineVersion: PIPELINE_I_VERSION, outcome: 'failed', reason: errorMessage(err) }), {
                     status: 'degraded', source: 'the clean massing stands without the generated model', reason: `pipeline J (${modelService}) failed (${errorMessage(err)})`,
                     degradations: [run.degrade(record('grammar', 'pipeline_i_failed', {
-                        part: { description: 'the generated model of the structure' }, intended: isMeshy ? 'a model made by Meshy from a character sheet of the scan and fitted to the scan' : 'a model made by Trellis from a character sheet of the scan, the best of several seeds, colour-matched and fitted to the scan', fellTo: 'the clean massing with its tile ortho textures',
+                        part: { description: 'the generated model of the structure' }, intended: 'a model made by Trellis from a character sheet of the scan, the best of several seeds, colour-matched and fitted to the scan', fellTo: 'the clean massing with its tile ortho textures',
                         provenanceAfter: 'vector-massing', reason: `pipeline J (${modelService}) failed (${errorMessage(err)})`, cause: err, transient: true, runId, now: now(), reuses: ['resolve', 'tiles', 'trees-measure', 'remesh']
                     }))]
                 })

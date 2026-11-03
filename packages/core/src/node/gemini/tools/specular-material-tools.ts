@@ -52,7 +52,7 @@ export const SPECULAR_MATERIALS_TOOL_NAME = 'infer_specular_materials';
 export const SPECULAR_MATERIALS_TOOL_DECLARATION: ToolDeclaration = {
     name: SPECULAR_MATERIALS_TOOL_NAME,
     description: 'Finds a described reflective or dielectric surface (by default, glass window panes) on any single textured GLB — a '
-        + 'staged-location building, a procedural object, a Trellis/Meshy model (pipeline I/J), anything with its own bake — and writes it '
+        + 'staged-location building, a procedural object, a Trellis model (pipeline J), anything with its own bake — and writes it '
         + 'into a new copy of the mesh as a real metallicRoughness texture (low roughness, dielectric, so the viewer\'s own environment gives '
         + 'the reflection), leaving everything outside it unchanged. Evidence, strongest first: referenceViews (real photos or known-pose '
         + 'renders, e.g. pipeline I/J\'s own character-sheet stations) when given; otherwise a few canonical views rendered of the mesh\'s own '
