@@ -10,7 +10,8 @@
 /**
  * Pipeline K-D's chunks built in the cloud (SCRATCHBOX_KD_CHUNK_RUNNER=cloud; plan:
  * docs/research/2026-10-29-kd-cloud-chunk-runner-plan.md): the second implementation of the orchestrator's `runChunk`,
- * beside the local worker thread. Each chunk is one Cloud Run job execution (8 vCPU / 32 GiB) running kd-chunk-job.ts:
+ * beside the local worker thread, and by default the centre cell's too (district-chunks.ts kdCentreRunner: the laptop then only
+ * plans, paints, joins and publishes). Each chunk is one Cloud Run job execution (8 vCPU / 32 GiB) running kd-chunk-job.ts:
  *
  *  1. the chunk's request goes to `gs://<bucket>/kd-jobs/<parentRunId>/<chunk>/request.json`, with the run id the chunk
  *     builds under (made here, so its run record is known before it starts);
