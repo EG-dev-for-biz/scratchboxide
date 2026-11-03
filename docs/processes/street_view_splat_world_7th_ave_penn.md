@@ -167,5 +167,43 @@ The voxel-fused photo splats were replaced by a splat on every patch of the scan
 - A stroke's sweep between points was a row of spheres, leaving the band narrower mid-segment. It is now an exact capsule.
 
 **Not done.**
-- No view lists the saved versions or opens an older one; `/versions` exists but nothing calls it.
+- ~~No view lists the saved versions or opens an older one~~: the Edit splats panel's Versions list does (above).
 - The colour-harmony session reports that splats drawn through any optics pass (its grade, lens effects) come out brighter and washed out: the splat material is not tone-mapped, but the chain's output pass tone-maps the whole frame. Not fixed here.
+
+## 10. Seams between stations, and gaps between splats (2026-10-31)
+
+**Status: Verified offline** (the app's `PhotorealGaussianSplatMesh` in headless Chrome, six fixed views, same scan and stations; not yet looked at in the live app). Screenshots: `docs/screenshots/splat_seams_2026-10-31/` (gitignored). The world's own `fused.spz` was rebuilt with these changes on this machine; the cloud copy (`worlds/v2/d46ee4caa1de6ae432e1a2e2`) still has the old layer.
+
+**What the views showed** (vantage at h119, h299, h29, h209; Penn 2 poses A and B from the M1 session, eyes 2.5 m up):
+- The largest defect near the walk was not a seam between stations but the gaps between splats: the background showed through 7 to 11% of the lower view in a cobblestone pattern (measured on a magenta background).
+- Each splat blended its two best stations (two thirds and one third); where they disagree, the wall showed two overlapping photographs (view h119, the left wall).
+- The per-station gains sat at their bounds (+-0.3) for every pano's 299° view, the ones facing Penn Station: those views are darker because of the dark glass and the canopy's shade, and the gain brightened each of them by 36%.
+
+**Why colour fitting cannot close these seams.** Where two stations see a patch face on (|n.view| at least 0.5), their colours differ by a median factor of 2.3; only 16% of the shared patches agree within 20%. Even two views of one pano differ by e^0.41 (each view is beautified on its own). One gain per station leaves a median e^0.26 of the pairs' differences unexplained. These are content differences, not exposure:
+- **The views facing Penn Station (299°):** they overlap the scan by 1 to 4% at 12 to 31 px residual. From pano `feKTMhN8...` (station 1019) the scan has a large wall about 8 m away, where the April 2026 photo shows open plaza and Penn Station's facade some 30 to 40 m away (`pose_check_1019_1016.png`). The vantage stands 2 m from that wall, so the wall behind it is the plaza's pavement painted on the tiles' structure. This is the era mismatch stitched by the user's decision (2026-10-29), not a fault in the colouring.
+- **The other street views:** they align with the scan by edges at 1 to 10 px, but their beautified pictures and their capture times differ.
+
+**Changed** (`scratchbox_surface_splats.hpp`, `mesh_to_surface_splats.cpp`, `surface-splat-layer.ts`):
+- **One station per patch** (after Waechter et al.):
+  - The surface is cut into 1 m patches facing one of 14 ways. Each takes the station that loses least projected area against each splat's best view, then neighbouring patches are smoothed (iterated conditional modes).
+  - Every splat is coloured from its patch's one station: no blend. On 7th Ave: 46,006 patches, 997 relabelled by the smoothing, 110 k splats outside their patch station's view (fallback to their own best).
+- **Colour agreement on the same content only:**
+  - Only shared patches within 0.3 of their station pair's most common difference count (2,386 of 8,248).
+  - Gains are applied only when one gain per station explains the pairs to within 0.15 (the residual is reported). On 7th Ave it is 0.26, so no gain is applied; the old code applied gains of 0.74 to 1.36.
+  - A smooth offset field per station over its image (12 x 8 nodes, after texture-harmonize.ts) is fitted on those patches and kept when they agree better: 0.60 to 0.33 here. In the pose A view it softened the seam between two stations on the plaza's ground without removing it.
+- **Wider splats:** in-plane sigma 0.75 of the spacing (was 0.55). Background showing through fell from 7.3% and 10.8% of the lower view (h119, h299) to 0.2% and 0.0%.
+- The report adds `patches`, `relabelled`, `fallback` and `seams` (pairs, inliers, medianAll, before, afterGain, after, gainResidual, gainsKept, fieldKept). `gains` is now per channel.
+- **Tests** (`surface-splat-layer.test.ts`):
+  - no splat on a face seen by a red and a green station is a blend of the two;
+  - a station exposed darker by 1.71x (linear) is lifted to the other's grey where both show the same surface.
+
+**Still wrong, and why:**
+1. **The wall behind the vantage** is pavement colour on the tiles' old structure (era). Stitched by decision. Showing it differently would need a decision: for example, keep the scan there but colour it from a station that sees the structure, or drop scan surfaces a Street View photo sees through.
+2. **The 7th Ave roadway reads as crumpled shards** in poses A and B: the parked cars and vans laid flat (7,351 triangles) keep their triangles' folds. Not a colour problem.
+3. **A seam remains on the Penn Plaza ground** between two stations whose pictures of it differ (crosswalk and pavement): content again.
+4. **Not run in the live app yet.** The renders use the app's splat mesh without the scene's optics.
+
+**Candidate next steps.**
+- **Register the 299° street views against the scan** with the M1 session's pano registration (`photo_match_evaluate`: edges to within 5 px, PR 5) or mark their stale surfaces, once the user decides how era mismatches should look.
+- **Rebuild flattened lumps as flat patches** rather than folded triangles.
+
