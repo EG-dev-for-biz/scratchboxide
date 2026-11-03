@@ -1,0 +1,577 @@
+# Preregistration: which step of pipeline K makes it score worse than the raw scan
+
+Date: 2026-11-02. Status: **written before any paid call.** Nothing below changes after this line except the run record
+and the report.
+
+**Result (2026-11-02, after the one paid call): indicative only, nothing named.**
+- Only 2 of the 8 fetched views registered, and the preregistration needs 3 judged views.
+- The stage cuts point at the twin's de-light, a step with no off switch: 1.17 of K's 1.83 gap to the raw scan on overall.
+- The facade rebuild accounts for most of the rest.
+- No one-step-off arm reaches the raw scan.
+- See "Report". A bar, arm, place or view changed after a paid call is a new preregistration that names this one.
+
+Branch `feat/k-step-ablation`, cut from `84b54d44` (the tip of `feat/m1-judge-kd`, PR #5). The judge's code
+(`photo-match-evaluate.ts`, `photo-match-eval.ts`) is used as it stands there and is not edited here.
+
+## Question
+
+At the Empire State Building, M1's judge scored the raw scan above pipeline K, the default 3D Building pipeline, on the
+building ([the rerun](./2026-11-01-m1-fixed-judge-rerun-prereg.md), ESB eval `..._20261101T070440_fd3a`):
+
+| Metric (building mask) | Raw | K |
+|---|---|---|
+| Overall (judge, 1-10) | 6.75 | 4.75 |
+| Shape (judge) | 7.34 | 5.67 |
+| Materials (judge, information) | 6.50 | 4.25 |
+| Clay shape (judge, untextured) | 4.00 | 5.33 |
+| Placement (mean px from the photo's silhouette, amendment 3's measure) | 3.62 | 4.06 |
+
+K starts from that scan. **Which of K's steps makes it score worse?** Each step with an off switch is turned off alone,
+and each such build is judged beside raw and K in one blind call.
+
+- **A step is named** when turning it off brings K level with or above raw on the overall score (bars below). The named
+  step is then the first thing M2 and M3 fix or turn off; nothing is changed by this run itself.
+- **No step named, but a stage cut is:** the loss lies in a step with no off switch, inside that stage. The next step is
+  a switch or a fix for that stage, as a separate task.
+- **Nothing named and nothing moves:** the loss is spread over several steps, or the judge cannot tell them apart with
+  these views. The report says which.
+
+## The steps of K, checked in the code
+
+`stepOn(key, default)` (`orchestrator.ts` 1480) reads the build's `steps` argument for the keys in `TOGGLEABLE_STEPS`
+(`common/staged-build-steps.ts`), else the default. Some switches are environment variables only.
+
+### Steps on by default that change the model: one arm each
+
+| Arm | Step | How it is turned off | Where it is read | Stage cache key holds it |
+|---|---|---|---|---|
+| noSeams | tile seam weld (overlap trim, vertex weld, T-junction split, 3 cm) | `SCRATCHBOX_TILE_SEAMS=0` (environment only) | `orchestrator.ts` 2003 | every stage reads the raw extraction instead: new tile_refine key |
+| noOccl | occlusion masks beside the facade orthos | `steps: {'remesh.occlusion': false}` (also `SCRATCHBOX_K_OCCLUSION=0`) | 3885 | tile_refine `keyParams.reliefOcclusion` |
+| noInpaint | image-model inpaint of small facade holes | `SCRATCHBOX_K_HOLE_INPAINT=0` (environment only) | 3942 | rectify key `inpaint` (`pipeline-k.ts` 233) |
+| noFit | window fit (and with it the wall grammar and wall sheets, which read the fit) | `steps: {'remesh.windowFit': false}` | 3949 | polish key hashes `windowFit`, `wallGrammar`, `walls` |
+| noWalls | whole-wall sheets | `SCRATCHBOX_K_WHOLE_WALLS=0` (environment only: `remesh.wallSheets` is not in `TOGGLEABLE_STEPS`) | 3980 | polish key hashes `walls` |
+| noRead | the facade reader on the finished exterior (its glass gives way to the window fit's) | `steps: {'remesh.facadeRead': false}` (also `SCRATCHBOX_K_FACADE_READ=0`) | 3071, 3960 | twin key `FACADE_READER_VERSION...` |
+| noClean | polish cleanup | `steps: {'polish.cleanup': false}` | 4057 | polish key `cleanup` |
+| noLattice | the lattice (facades rebuilt flat on the straightened photos) | `steps: {'polish.lattice': false}` | 4057 | polish key `lattice` |
+| noBase | base cleanup and skirt (and with it the clip, which runs only with the base: `remesh-polish.ts` `input.clip && input.base`) | `steps: {'polish.base': false}` | 4057 | polish key `base` |
+| noClip | clip at the footprint plus 0.3 m | `steps: {'polish.clip': false}` (also `SCRATCHBOX_K_CLIP=0`) | 4057 | polish key `clip` |
+| noInfill | infill of the open loops | `steps: {'polish.infill': false}` (also `SCRATCHBOX_K_INFILL=0`) | 4057 | polish key `infill` |
+| noOrient | inward-facing scan pieces turned outward | `steps: {'polish.orient': false}` | 4057 | polish key `orient` |
+| noHarm | harmonising (and with it the roof-shadow lift, which a K twin runs only with harmonising) | `steps: {'twin.harmonize': false}` | 3037, 3059 | twin key `TEXTURE_HARMONIZE_VERSION`, `ROOF_SHADOW_VERSION` |
+| noShadow | roof-shadow lift | `steps: {'twin.roofShadow': false}` (also `SCRATCHBOX_K_ROOF_SHADOW=0`) | 3059 | twin key `ROOF_SHADOW_VERSION` |
+| noMat | material regions (and with them the twin's facade reader, whose planes are handed to material regions: `kOrthos` is read only with material sets) | `steps: {'twin.materials': false}` (also `SCRATCHBOX_K_MATERIAL_REGIONS=0`) | 3046, 3064 | twin key `MATERIAL_REGIONS_VERSION` |
+
+The brief's list held 8 of these. The code adds 7: the window fit, the lattice, the base, the cleanup, the orient,
+harmonising and hole inpaint. `SCRATCHBOX_K_WHOLE_WALLS` and `SCRATCHBOX_TILE_SEAMS` have no per-build switch.
+
+**One no-op rule, decided from K default's own record before any arm is built:** if K default's `pipeline_k` note shows
+no texel inpainted (no `fromInpaint` in any facade's hole report), noInpaint is not built. Its output would equal K's, and
+its row reads "not built: the step did nothing here". (M1's ESB build 0bb20154 inpainted none.) No other arm is pruned:
+every polish step's snapshot in 0bb20154 differs from the one before it.
+
+### Checked, and not arms
+
+- **Off by default in K:** seal, reveal depth, view relight, party wall, detail bake, Street View evidence, lattice cut
+  (`SCRATCHBOX_K_LATTICE_CUT`), window segmenter (`SCRATCHBOX_K_WINDOW_SEGMENT`), sky de-light (`SCRATCHBOX_K_SKY_DELIGHT`).
+- **Measuring only, the model unchanged:** `remesh.streetViewScore` and `remesh.visibleDefects` write run notes and
+  degradations, never the GLB.
+- **K steps with no off switch:** tile_refine's remesh and wall flattening; the ortho rectify (straightening warp, smear
+  levelling, holes filled from repeats); the twin's de-light; material naming. The stage cuts below cover them.
+
+### Stage cuts: free arms from K default's own build
+
+The polish writes the model after each step it ran (`remesh-polish.ts` `snapshots`), textured, and the app publishes them
+for the node graph. In M1's ESB build, `step_polish_orient.glb` has the final twin's 975,625 triangles with the scan's
+photos as tile_refine transferred them (203 images, none de-lit).
+
+| Arm | What it is | What the gap to its neighbour isolates |
+|---|---|---|
+| S1 | `step_remesh_tileRefine.glb`: tile_refine's textured remesh, before K's rectify and polish | raw → S1: tile_refine |
+| S2 | `step_polish_orient.glb`: K's finished geometry, before the twin | S1 → S2: rectify and polish |
+| T0 | built: `steps: {'twin.harmonize': false, 'twin.materials': false}`, the twin with its switchable steps off, so the de-light alone | S2 → T0: the de-light; T0 → K: harmonise, roof shadow, material regions, facade reader |
+
+## Arms
+
+All are judged in one call, scope `target`, drawn in the reference's tile with the target cut out.
+
+| Id | Label (reports only) | Built from |
+|---|---|---|
+| K | K DEFAULT | `google_3d_tiles_get_clay` `{ query: "Empire State Building, New York", isolate: true, trees: true, pipeline: "k", stageIntoActiveScene: false }`, as M1's run 0bb20154; named first, so it is the reference (tile, masks, views) |
+| raw | RAW SCAN (CUT TO TARGET) | `baseline: true`: K's isolate cut from K's welded tile |
+| S1, S2 | STAGE CUT | K's own snapshot GLBs, above |
+| T0 | TWIN DE-LIGHT ONLY | as K, with the steps above off |
+| noSeams ... noMat | K WITHOUT <step> | as K, with the one switch in the table above |
+| X2 | DECOY MOVED 4 M | K's twin with its root node translated 4 m along +x (one node translation in the glTF JSON), as M1 |
+| X3 | DECOY FLAT COLOUR | K's twin with every base-colour image replaced by one 4 x 4 image of one colour: the pixel-weighted mean of all K's base-colour images. Geometry, UVs and the other maps unchanged |
+
+Each built arm passes `runId` (so its used panos are excluded) and `glbs`: the run's textured twin
+(`..._iso_l2_tex_<key>.glb`), as M1's K arm did.
+
+**Fresh and uncached.** This worktree has never written a `.scratchbox` cache, and the server starts with
+`SCRATCHBOX_CACHE_RESTORE=off`, so no stage comes back from the Cloud Storage bucket: K default computes every stage. The
+other arms then run on the same cache, one after another, on this code:
+- each recomputes every stage its switch reaches (each switch is in its stage's cache key, the table above);
+- each takes from the cache only stages upstream of its switch that K default computed minutes earlier: the geocode, the
+  extraction and its weld, the survey, and for twin and polish arms tile_refine and the rectify;
+- the vision-reply cache answers a facade-reader or material-choice call whose inputs are byte-identical to one K default
+  made.
+
+This is deliberate. Every arm shares one extraction, so the switch is the only difference. Two extractions of one place
+matched only 85% to 97% in M1, which would add noise unrelated to any step. Each arm's record is checked: a stage
+downstream of its switch marked cached voids the arm.
+
+The environment-only arms (noSeams, noWalls, noInpaint) run on the same server restarted with that one variable set; the
+cache is kept.
+
+## Places and views
+
+- **The ESB first,** with the query above (M1's).
+- **Views:** `views: 4`, chosen by the tool from held-out Street View panos round K's isolate, 8 fetched and the nearest 4
+  registered judged. The view rule is the code's at `84b54d44`: panos past the tile's edge and sight lines crossing empty
+  tile are refused (the M1 rerun's last two changes), so the fetch list will differ from M1's ESB list.
+- **Era check before the paid call** (M1's amendment 7 method): fetch the 8 photos the paid call will fetch, set each
+  beside the tile at its pose, compare the structure, drop and swap any view of another era (`excludePanoIds`). The
+  outcome is written in the run record and committed before the paid call.
+- **The Haughwout Building and the Ferry Building only if the ESB names a step** (a clear loser). Then, at each, with
+  their M1 queries: raw, K, S2, the named arm or arms, X2 and X3, the same bars, era-checked first. In M1 both had a
+  `matchedShare` under 0.99, which keeps a place out of the building bars (the first preregistration's amendment 3). If
+  that holds again, their numbers are reported as information.
+
+### Tool arguments (the paid call)
+
+```
+photo_match_evaluate {
+  arms: [K (first: the reference), S1, S2, T0, noSeams, noOccl, noInpaint (unless pruned), noFit, noWalls, noRead,
+         noClean, noLattice, noBase, noClip, noInfill, noOrient, noHarm, noShadow, noMat, X2, X3,
+         each { id, label, runId?, glbs, scope: 'target' }],
+  views: 4, runs: 3, clay: true, judgeRegions: true, trees: true, baseline: true, includeSatelliteOrtho: false,
+  excludePanoIds: [any the era check drops]
+}
+```
+
+These are M1's arguments with more arms. The judge sees the photo and up to 22 renders per call, shuffled and unlabelled.
+M1 judged 5 renders per call at the benchmark places and 7 at Penn 2; whether it still separates this many is what the
+decoys and the precondition test.
+
+## Bars
+
+"Spread" is the judge's run spread (`runSd`) as the tool reports it. "Views" are the judged views. Placement is
+`placement.mean[arm].errorPx` and `views[].placement`, as the tool computes it at `84b54d44`: Google's footprint fetched
+at judging time, 1.5 m margin, holes filled, the street in front.
+
+### The judge can answer (all must hold, or nothing is named)
+
+| # | Metric | Bar | A miss means |
+|---|---|---|---|
+| V1 | `overall` runSd, mean over all arms | at most 0.75 | the judge does not repeat itself with this many renders |
+| V2 | X2 against K, placement errorPx | X2 at least **D** above K, D = half X2 − K in the free dry run, and at least 2 px | placement cannot see a 4 m move here |
+| V3 | X3 against K, judge `materials` and `overall` | each at least 1.0 below K | the judge does not see texture with this many renders, so a texture step cannot be told |
+| V4 | raw frame agreement; `regions.target.matchedShare` | 1.00 in every view (M1 bar 7); at least 0.99 (M1 bar 8) | the reference or the cut is broken; stop |
+| P | raw against K, `overall` | raw above K by more than both arms' spread, and above at 3 or more of the 4 views | K is not shown worse than raw in this call: there is nothing to name |
+
+### Per arm (A is any arm other than raw and K)
+
+| Reading | Judge metrics: overall, shape, clay shape (higher is better) | Placement (lower is better) |
+|---|---|---|
+| **Moves K** | \|A − K\| wider than both arms' spread, the same sign at 3 or more of the 4 views | \|A − K\| at least 0.25 px, the same sign at 3 or more of the 4 views |
+| **Level with or above raw** | A at least raw − (the larger of A's and raw's spread) | A at most raw + 0.25 px |
+| **Gap share** (information) | (A − K) / (raw − K) | the same |
+
+- **The answer.** A step is named as making K worse than raw when its arm moves K up **and** is level with or above raw
+  on `overall`. Shape, clay shape and placement are read the same way and reported per metric.
+- **No single step level.** Then the arms that move K up on `overall` are listed with their gap shares, and so are the
+  stage cuts that do, and the report says that no single switch accounts for it.
+- **A step whose removal moves K down** is reported as one that helps.
+- **The stage cuts** are read with the same rules between neighbours (raw → S1 → S2 → T0 → K).
+- **Secondary, deciding nothing:** materials, detail, errors, realism, identity, SSIM, edge chamfer, CIEDE2000, region
+  scores.
+
+## Decoys
+
+Both are made locally from K default's twin, at no cost, and judged blind in the same call.
+
+- **X2, moved 4 m along +x:** must lose on placement by D (V2). Its judge numbers are reported and decide nothing (in
+  M1 the judge saw the move only 0.75 below K overall).
+- **X3, one flat colour:** must lose by 1.0 on materials and overall (V3). Its geometry is K's, so its placement must
+  equal K's exactly (a render check), and its clay renders are K's: the gap between their clay scores is the judge's
+  noise on two identical images in this call, reported.
+- **The raw scan** is not a decoy here: it is the comparator.
+
+## Stop rules
+
+- **Spend:** stop when the running total passes **$60**, and on any 403 or spend-cap error.
+- **Disk:** no build starts with less than 10 GB free (the disk had 28 GB free at the start; M1's KD failed on ENOSPC).
+- **A build that is not what its arm says:** an arm whose build fails, whose stage downstream of its switch is cached,
+  or which carries a failed stage or a degradation K default's record lacks (other than what its switch explains) is not
+  judged, and is reported.
+- **The dry run, before any paid call:** stop on an empty or black render, an arm with 0 triangles, `frame_mismatch`,
+  `liftedM` over 1 m, or a pano any arm's build used that is not excluded.
+- **V1 to V4, or P, missed:** nothing is named. The report says the judge cannot answer here (V1 to V3), the reference is
+  broken (V4), or K is not worse than raw in this call (P).
+- **Spread wider than the gap:** an arm that does not move K reads "the judge cannot tell it from K", not "no effect".
+- **One paid call per place.** No re-run until it passes; a second call is a new preregistration that names this one.
+
+## Exposure
+
+- **Panos the builds used** (every arm's survey, which the arms share) are excluded by the tool from the runs' notes.
+- **Panos earlier comparisons judged at the ESB:** the M1 rerun judged VqOxFz9R, w4nU8TkI, uPcMge9M and hi-cmKU8 (and
+  fetched G8sOFZp8, QcCvIfC8, Q1IjAWuz). They are not excluded: the judge does not learn from them (M1's decision, kept).
+  w4nU8T and hi-cmKU8 are refused anyway by the past-edge rule at this commit.
+- **The stand-in dry run** judges nothing real.
+
+## Step 2: the free dry run
+
+After the builds, with the server stopped, run M1's driver with credentials unreachable:
+
+```bash
+env -i PATH="$PATH" HOME="$(mktemp -d)" PHOTO_MATCH_DRYRUN=<config.json> ./node_modules/.bin/vitest run packages/core/test/photo-match-dryrun.test.ts
+```
+
+Config: `{ root: <this worktree>, tile: <K default's welded textured tile>, out: docs/screenshots/k_step_ablation_2026-11-02/esb_dryrun, args: <the tool arguments above> }`.
+
+It must show:
+- every arm rendering at every held-out pose, no empty or black render;
+- every arm's runId panos excluded;
+- the call count: 24 (4 views x 3 runs x textured and clay);
+- D for V2, from X2 − K;
+- X3's placement equal to K's.
+
+The grids are looked at with the `screenshot-review` skill.
+
+## Cost
+
+Prices as read in [the first M1 preregistration](./2026-10-31-m1-two-modes-prereg.md) ("Price", 2026-10-31): Gemini 4
+Argon $2 / $10 per million in / out through 2026-11-30; Flash $0.75 / $3.75; Street View images about $7 per 1,000.
+
+| Item | Basis | Low | High |
+|---|---|---|---|
+| K default, fresh | measured at the ESB in M1 (run 7f594cd6): $1.20 of vision calls, plus 16 survey images and the library's tile sizes, measured once | $1.30 | $2.40 |
+| 18 more ESB builds (15 one-offs, T0, and noInpaint if built) | high: each pays K's $1.20 again; low: the reader's and material choice's replies are reused wherever their inputs are unchanged | $3 | $22 |
+| Era check | 8 photos, up to 8 more for swaps | $0.06 | $0.12 |
+| Judge, 24 calls | up to 23 images a call at 1,089 tokens (measured), about 27k tokens in; out 2k to 26k (thinking HIGH) | $2.30 | $7.50 |
+| Judge photos, footprint fetch | 8 images; 4 vector tiles | $0.06 | $0.15 |
+| **The ESB** | | **about $7** | **about $32** |
+| The Haughwout and the Ferry, only if a step is named | per place: K, S2's build is K's, up to 2 named arms, judge, era check | $3 each | $6 each |
+| **In all** | | **about $7** | **about $44, against the $60 stop** |
+
+Under the user's $100 (2026-10-31): no approval needed. The actual spend is reported after.
+
+**Time.** M1's ESB K build took 26 min, 22 of them in the twin (material regions alone 19 min). About 19 builds at 3 to
+25 min each, one or two at a time: about 4 to 7 hours.
+
+## Order
+
+1. Launch entry `scratchbox-k-step-ablation` (web 3740, API 3741, tools 3742) on this worktree, `SCRATCHBOX_CACHE_RESTORE=off`.
+2. Build K default. Read its record: every stage a cache miss; apply the no-op rule.
+3. Build the `steps` arms and T0 on the same server; then restart with each environment variable for noWalls, noSeams
+   and noInpaint (unless pruned). Check each record.
+4. Make X2 and X3. Stop the server. Free dry run; review the grids; write D.
+5. Start the server. Era check; commit the outcome.
+6. The paid call. Record and report against the bars, with the grids.
+
+## Amendment 1 (2026-11-02, before any paid call): the sign rules count the views a metric can be read in
+
+**Why.** An early free dry run (K, raw, S1, S2, X2 and X3 only; run record below) chose four views at 46 to 56 m, all on
+the podium's sidewalks, because the past-edge rule at this commit refuses the farther panos M1 used. In two of them the
+target fills the frame, so there is no silhouette and placement is null (`views[].placement` null for every arm). As
+written, "the same sign at 3 or more of the 4 views" could then never hold for placement, and the judge rules assumed
+4 judged views.
+
+**The rules now.** Nothing else changes: arms, views, bars' thresholds, decoys and stop rules are as above.
+- **Placement, "moves K":** \|A − K\| at least 0.25 px and the same sign at **every view with a placement, at least 2**.
+  With fewer than 2 such views placement is untested for every arm, and V2 is untested (then nothing is named on
+  placement, and V2 does not stop the run; V3 must still hold).
+- **V2** reads the mean over the views with a placement, as the tool reports it.
+- **Judge metrics, "moves K" and P:** the same sign at **at least three quarters of the judged views, and at least 3**.
+  With fewer than 3 judged views the run is indicative only (M1's rule) and nothing is named.
+
+## Run record
+
+Values written as they are fixed.
+
+- **The app.** Launch entry `scratchbox-k-step-ablation` on this worktree: web 3740, API 3741, tools 3742,
+  `SCRATCHBOX_CACHE_RESTORE=off`, served from source at `c69cf8cb` (this preregistration's commit on `84b54d44`). Builds go
+  through the app's own tool endpoint, `POST /gemini/tools/run-stream` (`google_3d_tiles_get_clay`).
+- **The machine.** 16 cores, with a load average of 330 to 390 from other sessions' test suites while the builds ran; 26 GB
+  free at the first build.
+- **A first K default attempt was lost, and nothing from it is used** (2026-11-02, 08:07 to 08:21). Run 8132aa40 started
+  on the empty cache. Its client was Node's `fetch`, which drops a response after 5 minutes without data (undici's body
+  timeout). The stream fell silent during the facade straightening and the client dropped, which makes the server abort
+  the build. The server was stopped and this worktree's whole `.scratchbox/cache` deleted (only that run had written it;
+  its record is kept in the session's scratchpad). The server was restarted, and K default rebuilt from the empty cache with
+  a `curl` client, which has no idle timeout.
+- **K default, run b9684a9b (08:22 to 08:43), degraded by the machine, not by K.** Resolve, tiles and survey committed,
+  every one a cache miss. The remesh stage then hit its fixed 900 s limit (`remesh_failed`, "Remeshed scan took longer than
+  its 900 s limit", marked transient) while the load average stood near 390: tile_refine took 2.6 min and the facade
+  straightening ran past 8 min, against 86 s in M1. A single building's stage limits have no override (only K-D chunks
+  scale them). The build is not judged as it stands. With the load down to about 150, the remesh stage is retried by the
+  app's own retry (`retryRunId b9684a9b`, `retryStage remesh`), which rebuilds the recorded request and takes the earlier
+  stages from this run's own fresh results.
+- **K default is runs b9684a9b and its retry 15a376d6 together.** b9684a9b computed, as cache misses: resolve, tiles (and
+  the seam weld), the survey, tile_refine (77 s) and the facade straightening (729 s, `pipeline_k` `cached: false`); its
+  window fit was cut off by the stage limit. The retry 15a376d6 took resolve and tiles from that run's results, ran the
+  survey again (uncached: 16 more images), took tile_refine and the straightening from b9684a9b's results (`cached: true`,
+  the same `orthosDir`), and computed the window fit, wall grammar, wall sheets, every polish step and the twin itself.
+  Every stage was computed on this code in this session; none came from an earlier session or the bucket.
+- **15a376d6 then hit the run's own limit** (40 min for an isolated build, `tool-time-budgets.ts`; `run_deadline`, transient)
+  inside the twin's material regions, after harmonising and the facade reader had finished. Its twin was not committed.
+  The textures stage is retried by the app's retry (`retryRunId 15a376d6`, `retryStage textures`), which reuses the
+  committed remesh.
+- **The disk.** Free space fell from 26 GB (08:07) to 2 GB (09:17) and came back to about 9 GB, from other sessions'
+  writes; this worktree holds 1.5 GB. The parent session was asked at 09:15 to have space freed or the G-RAID mounted. The
+  10 GB floor holds for every new arm. K default's textures retry, which finishes a build that started with 19.6 GB free and
+  writes about 0.4 GB, was let run against a 3 GB floor.
+- **K default is complete: run 61b8974b** (the textures retry, 09:24 to 09:58), status `complete`, no degradation. Its
+  twin is `public/models/empire_state_building_new_york_iso_l2_tex_c95df7ef.glb` (152,197,532 bytes), textured "with the
+  tile photo tile_refine carries onto its remesh, de-lit": photo transfer 98.7%, clay 1.3%. Its tile is the welded
+  extraction `staged_location/tiles/dd1a8a9f.../textured_tile_seams_2.glb` (the same tile key as M1's 0bb20154). So K
+  default is the chain b9684a9b → 15a376d6 → 61b8974b, every stage computed on this code today.
+- **The no-op rule: noInpaint is built.** K default's straightening (b9684a9b) inpainted 6,541 texels (`fromInpaint`, in 61
+  of 88 facade reports), unlike M1's 0bb20154. So hole inpaint did something here, and its arm runs.
+- **The decoys,** made from K default's twin with `make_decoys.py` (in the session's scratchpad):
+  - X2: `public/models/k_ablation/X2_K_moved_4m.glb`, the 69 root nodes translated [4, 0, 0]; its binary chunk is K's
+    byte for byte (the same construction as M1's X2, checked on M1's files);
+  - X3: `public/models/k_ablation/X3_K_flat_colour.glb`, 203 base-colour images (of 870) replaced by one 4 x 4 PNG of
+    sRGB (123, 119, 117), the pixel-weighted mean of K's base-colour images.
+- **The arms' queue started at 09:54,** two builds at a time, when the load had fallen to 8 and the disk had 20 GB free (the
+  parent session moving 27 GB of k-d's cold runs to the G-RAID). An arm stopped by a transient time limit is finished by
+  the app's retry of the stage the result names, at most twice; every attempt is kept.
+- **The disk, resolved.** The parent session had the user mount the G-RAID and moved k-d's three cold runs (about 27 GB)
+  there; at 10:16 the Mac had 30 GB free.
+- **noFit (run 7d755776) degraded on the ownership vote's 300 s limit** (`ownership_vote_unavailable`, transient), with 13
+  builds sharing the vision model. In every other arm the vote moved 0.1% to 0.6% of the scan, under the 5% that would
+  replace the geometric isolate, so "the first isolate and everything built on it stand"; in noFit the geometric isolate
+  stood too, so its model is the one the vote would have left. Its ownership stage is retried by the app's retry anyway
+  (`retryRunId 7d755776`, `retryStage ownership`), to keep the rule that no judged arm carries a degradation K lacks.
+- **noOrient (run fb760328) carries `visible_defects`, which its switch explains, so it is judged.** With orient off the
+  scan's inward-facing pieces stay as they are, and the outside check sees their back faces: 1.46% of the building's pixels
+  through holes, 1.40% "showing the inside" (K default: 0.28%), worst at the back faces of FacadeLattice_10044 and
+  relief_m27/m28. That flag is the measured effect of the switch, not a failure of the build (the stop rule's "other than
+  what its switch explains").
+- **noFit is run 7d755776 and its ownership retry f0cec4a5** (complete). The first computed the twin (`..._l2_tex_41544a96`,
+  textures uncached); the retry rebuilt the recorded request, took that twin from the cache and finished the vote, which
+  moved too little to replace the isolate.
+- **noOccl is run 5452f902 and its remesh retry f44cd647** (complete). The first hit the remesh stage's 900 s limit while
+  13 builds shared the machine; the retry computed tile_refine with no occlusion, the straightening, window fit, polish and
+  twin.
+- **The arm check** (`check_arms.py`, the session's scratchpad) reads each arm's run chain: status, degradations, steps
+  skipped and failed, and every stage at or after its switch that came from the cache. It accepts a cached stage only when
+  an earlier attempt of the same arm committed it uncached. 18 arms passed at 10:42 (K, S1, S2, T0, X2, X3 and 12
+  one-offs); the three environment-variable arms were still building.
+- **The environment-variable arms** (noWalls, noSeams, noInpaint) were built from 10:33 on three more servers on this
+  worktree and its cache (`scratchbox-k-step-ablation-nowalls` API 3751, `-noseams` 3754, `-noinpaint` 3757), each with its
+  one variable and `SCRATCHBOX_CACHE_RESTORE=off`, beside the default server's last arm. Each switch changes a different
+  stage's key (the polish's `walls`, tile_refine's input, the rectify's `inpaint`), so the servers share nothing they write.
+- **The environment-variable arms, done by 10:51.** Each server's own process was checked to carry its one variable
+  (`ps eww`). noWalls is run 8b536d92 (complete; `remesh.wallSheets` skipped, the wall grammar, lattice and material regions
+  ran). noInpaint is run d4f92b93 (complete; its straightening recomputed with `fromInpaint` 0). noSeams is run ec2a7573;
+  no `tile_seams` note was written (the weld skipped), and it carries `visible_defects`, which its switch explains, so it is
+  judged. The outside check finds new long, narrow openings, where K's holes are all 30 m² or less: 94 m² (34.1 x 2.76 m) at
+  96 m up, 21.8 m² (37.5 x 0.58 m) and 21.4 m² (36 x 0.6 m). Unwelded tile seams leave cracks of that shape. Its share
+  through holes is 0.40%, against 0.28% for K and the 1% limit.
+- **Every arm, as judged** (run, then its twin; all in `public/models/`, `empire_state_building_new_york_iso_l2_tex_<key>.glb`):
+
+  | Arm | Run (chain) | Twin key | Arm | Run (chain) | Twin key |
+  |---|---|---|---|---|---|
+  | K | 61b8974b (b9684a9b, 15a376d6) | c95df7ef | noRead | bef0accc | 445f88e3 |
+  | T0 | 4b1a3f7a | de179f7e | noClean | 824962ea | 93dafc1b |
+  | noSeams | ec2a7573 | d6928382 | noLattice | 0e36316b | 9a45dd4e |
+  | noOccl | f44cd647 (5452f902) | 4c77c6ba | noBase | 9b68ee31 | 31e55eb0 |
+  | noInpaint | d4f92b93 | 34fbc9f5 | noClip | 36db5cbb | 40a87e7d |
+  | noFit | f0cec4a5 (7d755776) | 41544a96 | noInfill | a1d4b090 | 0f163e43 |
+  | noWalls | 8b536d92 | c5cbd72f | noOrient | fb760328 | 4ce2a7cd |
+  | noHarm | d7a32089 | 16d062fb | noShadow | 6969b1f9 | df247a08 |
+  | noMat | 6dec3e8e | 27f35a3d | | | |
+
+  S1, S2, X2 and X3 are the files in `public/models/k_ablation/` above.
+- **The builds' spend, measured.** Every vision reply the builds made is in this workspace's vision-reply cache (a reply
+  is cached once and served again for identical inputs, so these are the billed calls): 2,188 `gemini-3.8-flash` calls
+  (3.37 M tokens in, 0.69 M out and thinking), $5.13; 45 `gemini-4-argon` calls, $0.56. Street View: each of up to 23 runs
+  surveyed 16 faces, at most 368 images, about $2.60 (an upper bound: repeated fetches may have come from the image cache).
+  **About $6 to $8.50 for the builds**, against the estimate of $4 to $24.
+- **The full free dry run (Step 2), 10:52 to 11:05,** every server stopped, all 21 arms and the raw baseline, credentials
+  unreachable. Out: `docs/screenshots/k_step_ablation_2026-11-02/esb_dryrun/`.
+  - Every arm drew at every view (22 renders a view); 24 stand-in calls (12 textured, 12 clay), as preregistered.
+  - 20 build panos excluded: K's run 17 and T0's run 3 more. The union of the panos named in all 21 run folders, the
+    arms' earlier attempts included, is the same 20, so no pano any build used can be judged.
+  - The same four views as the early dry run; placement in v0 and v1 only.
+  - Placement (stand-in, deciding nothing): raw 2.45, S1 2.53, noBase 2.84, K and every arm whose geometry is K's 3.94,
+    the other geometry arms 3.96 to 4.15, X2 10.55. **D = (10.55 − 3.94) / 2 = 3.3 px**, above the 2 px floor.
+  - The grids, looked at: every arm with the twin is drawn washed-out grey, T0 (de-light only) as much as K; S2 (before
+    the twin) keeps the stone's colour but shows doubled and smeared windows; noFit and noLattice show fewer of them. On
+    the stand-in "photo" (the tile itself) this says where the renders differ, not which is better.
+- **The fetch list.** The dry-run driver reports only a count of fetched views, so, as M1 did, a scratch copy of it (never
+  committed, deleted after) logged the stand-in's grounding requests: G8sOFZp8 (46 m), 58DEtdMq (118 m, looking up 30°),
+  IfRssLv6 (51 m), YcgPbg5t (47 m), QcCvIfC8 (90 m), pIZTkAVT (82 m), mMKyx5tm (98 m, up 30°), AGFKaBOw (55 m).
+- **The era check** (M1's amendment 7 method): the 8 photos fetched through the app (`streetview_grounding_image`, 8
+  images, about $0.06), each set beside the tile at its stand-in pose
+  (`docs/screenshots/k_step_ablation_2026-11-02/era_check/era_check_sheet.jpg`).
+
+  | View | Photo | Kept, and why |
+  |---|---|---|
+  | G8sOFZp8 h218 | 2026-04 | kept: the 34th St podium, the same window grid and storefront base as the tile |
+  | 58DEtdMq h318 up 30° | 2026-04 | kept: the tower over a lower building, as in the tile |
+  | IfRssLv6 h51 | 2024-09 | kept: the podium and its curved entrance canopy, which the tile holds too |
+  | YcgPbg5t h322 | 2026-04 | kept: the street along the podium, the canopy at the right, as in the tile |
+  | QcCvIfC8 h196 | 2026-04 | kept: the neighbour's Liberty-bear mural and the Build-A-Bear front are in the tile too, so the same era |
+  | pIZTkAVT h289 | 2024-09 | kept: the podium with the Starbucks Reserve and the tall Art Deco bay, as in the tile |
+  | mMKyx5tm h334 up 30° | 2026-04 | kept: the tower behind a white building, as in the tile |
+  | AGFKaBOw h195 | **2010-07** | **dropped:** an indoor pano taken inside a shop, looking out through its door; the target is not in the photo, so its era cannot be read |
+
+  AGFKaBOw is passed as `excludePanoIds`, and the logging dry run is made again to find the view that replaces it.
+- **The swap** (the logging dry run with AGFKaBOw excluded, all arms, 11:25 to 11:36,
+  `docs/screenshots/k_step_ablation_2026-11-02/esb_dryrun_swap1/`). The fetch list is the 7 kept views and hKrY0_rr
+  (2024-09, 62 m, h206). Its photo (fetched through the app, 1 image) shows the podium's Starbucks Reserve and Chipotle bays,
+  the piers and the two storeys of windows the tile holds at that pose: **kept**
+  (`era_check/pair_9_hKrY0_rr.jpg`). All 8 views of the paid call's fetch list are era-checked.
+  - The stand-in judges G8sOFZp8, YcgPbg5t, IfRssLv6 and hKrY0_rr (the nearest four that register); placement in three of
+    them. Every arm drew at every view; 24 stand-in calls.
+  - **D is 3.58 px:** half X2 − K on these final views. That is the dry run on the paid call's own arguments, and it is
+    stricter than the 3.3 px of the full dry run before the swap.
+- **The paid call's arguments,** fixed here before it is made: every arm in the table below, in the preregistration's order
+  (K first), `views: 4, runs: 3, clay: true, judgeRegions: true, trees: true, baseline: true, includeSatelliteOrtho: false,
+  excludePanoIds: ["AGFKaBOwt9kkXfbWrA7ljA"]`; 22 renders a call, 24 calls.
+- **Spend before the paid call:** builds about $6 to $8.50 (measured above), era-check photos 9 (about $0.06).
+- **The paid call** was made once, at 11:22, through the app's tool endpoint on the default server (API 3741, restarted at
+  11:13 with `SCRATCHBOX_CACHE_RESTORE=off`, the other servers stopped), with the arguments above. The tool-node endpoint
+  sets no tool time limit (`gemini-service.ts` `runToolNode` passes none; the chat's 30 min for `photo_match_evaluate`
+  does not apply), so the 22-arm call could not be cut off part way.
+- **A follow-up for the view selection, not changed here** (the judge's code is the M1 session's): AGFKaBOw stands inside
+  the ESB's ground floor, so the tile has a surface under it and its sight line crosses no empty tile, and the past-edge
+  and sight-line rules let it through. A pano inside the target's own footprint is never a street view of it.
+- **The queue ran all 13 `steps` arms at once, not two at a time.** Its limit (`jobs -r` inside the script's pipeline)
+  saw no jobs, so the arms started 20 s apart from 09:55 to 09:58. The machine held it (load about 66, the server 17.5 GB,
+  27 GB free at 10:11), so they were left to run; an arm stopped by a time limit is finished by the app's retry. This
+  changes how long each arm took, not what it computed.
+- **A coupling found in the build, like those in the table: the lattice off also leaves material regions out.** noLattice
+  (run 0e36316b) logged `twin.materials` failed at once, and its note reads "no rebuilt facade photo to read appearance
+  classes from": material regions read the lattice's rebuilt facades, so with none there is nothing to classify. So
+  noLattice is the lattice and material regions off together. noMat, built separately, tells the two apart.
+- **An early free dry run** (09:59 to 10:09, the same driver and conditions as Step 2) on K, raw, S1, S2, X2 and X3 only,
+  to catch render problems while the arms build. Out: `docs/screenshots/k_step_ablation_2026-11-02/esb_dryrun_early/`.
+  - Every arm drew at every view; 24 stand-in calls; 17 build panos excluded; `matchedShare` 0.996; raw's frame
+    agreement 1.00 in every view.
+  - The fetch list's nearest 4: G8sOFZp8 (2026-04, 46 m), YcgPbg5t (2026-04, 46 m; the tile ends inside 9.1% of it),
+    IfRssLv6 (2024-09, 52 m), AGFKaBOw (**2010-07**, 56 m). All four stand on the podium's sidewalks. In the stand-in, v3's
+    eye stands against the podium wall, which fills the frame.
+  - Placement only in v0 and v1 (v2 and v3: the target fills the frame, no silhouette): raw 2.45, K 3.94, S1 2.53,
+    S2 3.94, X2 10.55, X3 3.94. X3 and S2 equal K exactly, as their geometry is K's.
+  - It led to amendment 1. The full dry run (all arms) is still Step 2, and sets D.
+- **K default's stage-cut snapshots** were cloned (APFS `cp -c`, no extra space) the moment its remesh committed, before any
+  other build could overwrite their unkeyed names: `public/models/k_ablation/S1_K_15a376d6_step_remesh_tileRefine.glb` and
+  `S2_K_15a376d6_step_polish_orient.glb` (sha256 of S2 checked against the published file).
+
+## Report
+
+### The result (2026-11-02): indicative only, nothing named
+
+**The paid call, eval `empire_state_building_20_w_34th__20261102T192257_597f`** (11:22 to 11:35):
+- Every judge call was answered by `gemini-4-argon`, with no retry, 403 or failure.
+- Only **2 of the 8 fetched views registered**, so only 2 were judged.
+- Amendment 1 says a run with fewer than 3 judged views is indicative only and names nothing. So **no step is named**, and
+  the Haughwout and the Ferry were not run.
+- The numbers below are what the call measured. They point somewhere, and they decide nothing.
+
+**Why only 2 views.**
+- **The fetch list was not the one the era check checked.** The paid call's own pano lookup (Street View metadata round the
+  isolate) found more panos than the dry-run driver lists from the build's metadata cache, M1's ESB views among them.
+  - Fetched: VqOxFz9R, uPcMge9M, G8sOFZp8, QcCvIfC8, Q1IjAWuz, hKrY0_rr, p88-CBpq and cCtlAloF.
+  - 21 build panos were excluded, against 20 in the dry run.
+- **Six did not register:** "the edge search did not lock onto the scan". G8sOFZp8 went from 12 to 6.35 px, the other
+  five from 12 to 12 px, against a bar of at most 5 px.
+- **The two judged views:**
+  - VqOxFz9R, 2024-09, 83 m: residual 3.16 to 1.10 px. Every region is in frame.
+  - uPcMge9M, 2026-04, 92 m: residual 3.61 to 2.11 px. The tile ends inside 5.2% of the frame, so its regions are left
+    out.
+
+  Both were era-checked and kept in the M1 rerun (its amendment 7 list). Of the views this run's era check covered, only
+  those two and the swap were fetched again.
+
+**Against the bars.**
+
+| Bar | Value | Result |
+|---|---|---|
+| V1 run spread, overall, mean over all arms | 0.086 | met |
+| V2 X2 placement minus K, over the 2 placement views | 16.47 − 4.58 = +11.89 px, D 3.58 | met |
+| V3 X3 at least 1.0 below K on materials and overall | materials 3.67 → 3.00 (−0.67), overall 4.00 → 3.00 (−1.00) | **missed** (materials) |
+| V4 raw frame agreement; `matchedShare` | 1.00, 1.00; 0.996 | met |
+| P raw above K on overall at 3 of 4 views or more | raw 5.83 ± 0.47, K 4.00 ± 0.00 (gap 1.83), raw ahead in 2 of 2 | untested: 2 views |
+| Judged views | 2 | **under 3: indicative only (amendment 1)** |
+
+- **V3's miss says something too:** the judge scores K's materials only 0.67 above one flat grey.
+- **X3's clay renders equal K's:** they score 5.34 each, a gap of 0.00 on identical images.
+
+**Every arm (building mask; judge mean ± run spread; placement in px, lower is better):**
+
+| Arm | Overall | Shape | Materials | Clay shape | Placement |
+|---|---|---|---|---|---|
+| raw | 5.83 ± 0.47 | 5.83 ± 0.47 | 5.50 | 3.34 ± 0.24 | 3.85 |
+| **K** | **4.00 ± 0.00** | **4.50 ± 0.00** | **3.67** | **5.34 ± 0.24** | **4.58** |
+| S1 after tile_refine | 5.83 ± 0.47 | 5.83 ± 0.47 | 5.50 | 3.50 ± 0.00 | 3.91 |
+| S2 before the twin | 5.17 ± 0.24 | 4.67 ± 0.24 | 5.33 | 5.34 ± 0.24 | 4.58 |
+| T0 de-light only | 4.00 ± 0.00 | 4.50 ± 0.00 | 3.67 | 5.34 ± 0.24 | 4.58 |
+| noFit | 4.67 ± 0.24 | 5.50 ± 0.00 | 3.67 | 5.00 ± 0.82 | 4.52 |
+| noLattice | 4.67 ± 0.24 | 5.50 ± 0.00 | 3.67 | 3.50 ± 0.00 | 3.91 |
+| noBase | 3.84 ± 0.24 | 4.50 | 3.67 | 5.34 | 4.63 |
+| noWalls | 4.00 | 4.67 ± 0.24 | 3.67 | 6.34 ± 0.24 | 4.79 |
+| noSeams | 4.00 | 4.50 ± 0.47 | 3.50 | 6.67 ± 0.47 | 4.58 |
+| noOccl | 4.00 | 4.50 | 3.67 | 5.50 ± 0.47 | 4.34 |
+| noClean | 4.00 | 4.50 | 3.67 | 4.67 ± 0.24 | 4.64 |
+| noInpaint, noRead, noClip, noInfill, noOrient, noHarm, noShadow, noMat | 4.00 ± 0.00 each | 4.50 each | 3.67 each | 5.34 ± 0.24 each | 4.58 each |
+| X2 moved 4 m | 3.50 | 3.67 ± 0.24 | 3.50 | 4.34 ± 0.24 | 16.47 |
+| X3 flat colour | 3.00 | 4.50 | 3.00 | 5.34 ± 0.24 | 4.58 |
+
+- No arm can read "moves K": amendment 1 needs 3 judged views for the judge's metrics, and the same sign at every
+  placement view for placement.
+- Per view, overall (VqOxFz / uPcMge):
+  - raw 5.33 / 6.33; S1 5.33 / 6.33; S2 5.00 / 5.33; T0 4.00 / 4.00;
+  - K 4.00 / 4.00; noFit and noLattice 4.33 / 5.00.
+- Placement, VqOxFz:
+  - raw 4.09, S1 4.13, noLattice 4.19, against K and S2 5.62;
+  - in uPcMge all lie within 3.53 to 3.69.
+
+**What it points at, for the next preregistration to test.** This is not a finding of this run.
+1. **The twin's de-light, a step with no off switch, holds most of the loss.**
+   - On overall: S2 5.17, then T0 4.00, which is K's 4.00. That is 1.17 of the 1.83 gap.
+   - On materials: 5.33, then 3.67.
+   - Every switchable twin step scores exactly K's numbers (noHarm, noShadow, noMat, noRead): harmonising, the roof-shadow
+     lift, material regions and the facade reader change nothing the judge sees.
+   - The grids show it plainly. raw, S1 and S2 keep the photo's beige stone, dark windows and black storefront band, while
+     T0 and every arm with the twin are a flat light grey, storefront included
+     (`docs/screenshots/k_step_ablation_2026-11-02/esb_paid/grid_v0_VqOxFz.png`).
+2. **The facade rebuild (rectify, lattice, window fit) holds the rest.**
+   - S1 5.83 to S2 5.17 overall, and 5.83 to 4.67 on shape: the textured renders show doubled, smeared windows.
+   - noLattice and noFit recover 0.67 of it (4.67; shape 5.50) and bring placement at VqOxFz back to the scan's.
+   - In clay the rebuild is better than the scan: K 5.34 against raw 3.34 and noLattice 3.50, with noWalls and noSeams
+     highest at 6.34 and 6.67. So its geometry helps and its texture hurts.
+3. **tile_refine costs nothing:** S1 equals raw on every judge metric.
+4. **The base, clip, infill, orient, cleanup, occlusion, inpaint and seam weld each move K by no more than one run
+   spread.**
+
+**Cost.**
+
+| Part | Count | Cost |
+|---|---|---|
+| Judge | 12 calls, all `gemini-4-argon` (server log): 304,899 tokens in, 26,305 out and thinking | $0.87 |
+| Its Street View photos | 8 | about $0.06 |
+| Footprint fetch | 4 vector tiles | under $0.05 |
+| Era check | 9 photos | about $0.06 |
+| Builds | measured above | about $6 to $8.50 |
+| **In all** | | **about $7 to $9.50**, against the $60 stop and the estimate of $7 to $32 |
+
+### Follow-ups
+
+- **A switch for the twin's de-light.** It is K's own code, and the step this run points at. With it, the de-light can be
+  an arm.
+- **A second paid call, which is a new preregistration naming this one.** The reason it would run: only 2 views
+  registered. The options:
+  - more views (`views: 8`);
+  - fixed poses at views known to register here (VqOxFz9R, uPcMge9M and M1's ESB list).
+
+  Its arms could be cut to raw, K, S1, S2, T0, noFit, noLattice and the decoys.
+- **For the M1 session (the judge and its dry-run driver, not changed here):**
+  - **Fetch list.** The dry-run driver lists only panos in the build's metadata cache, so its fetch list can differ from
+    the paid call's. Here it missed M1's ESB views, and the era check covered a different list.
+  - **View rules.** A pano inside the target's own footprint (AGFKaBOw, an indoor shop pano) passes the past-edge and
+    sight-line rules.
+  - **Registration.** Six of eight podium-side views did not register at the ESB.

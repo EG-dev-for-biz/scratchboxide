@@ -303,7 +303,7 @@ describe('facades on their photo lattice', () => {
         expect(revealAt(edge, -1)).toBe(true);
     });
 
-    it("unfolds every reveal's texels into the recessed cell's photo, never one line of texels across it", () => {
+    it("unfolds every reveal's texels into the proud side's photo (the stone beside the opening), never one line of texels across it", () => {
         const r = latticeFacade(f, photo(), facadeSamples(scan(), f), undefined, undefined, true)!;
         let reveals = 0;
         for (let i = 0; i < r.indices.length; i += 3) {
@@ -318,6 +318,13 @@ describe('facades on their photo lattice', () => {
             const depth = Math.max(...ids.map(k => r.positions[k * 3 + 2])) - Math.min(...ids.map(k => r.positions[k * 3 + 2]));
             expect(spread * (sideS ? W * PX : H * PX)).toBeCloseTo(depth, 5);
             for (const x of [...u, ...v]) { expect(x).toBeGreaterThanOrEqual(-1e-6); expect(x).toBeLessThanOrEqual(1 + 1e-6); }
+            // a reveal faces the opening it borders, so its deepest texels lie away from it, on the proud side of its arris: a
+            // reveal unfolded into the opening repeated the opening's edge texels on itself and again on the face behind it
+            const front = ids.reduce((a, k) => (r.positions[k * 3 + 2] > r.positions[a * 3 + 2] ? k : a)), deep = ids.reduce((a, k) => (r.positions[k * 3 + 2] < r.positions[a * 3 + 2] ? k : a));
+            const n = r.normals[ids[0] * 3 + (sideS ? 0 : 1)];
+            // u runs with s; v runs against t (down from the photo's top)
+            const toward = sideS ? (r.uv[deep * 2] - r.uv[front * 2]) * n : -(r.uv[deep * 2 + 1] - r.uv[front * 2 + 1]) * n;
+            expect(toward).toBeLessThan(0);
         }
         expect(reveals).toBeGreaterThan(0);
     });

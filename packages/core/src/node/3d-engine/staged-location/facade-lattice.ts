@@ -41,7 +41,7 @@ import { encodePng } from './png-encode';
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const FACADE_LATTICE_VERSION = 'facade-lattice/19';
+export const FACADE_LATTICE_VERSION = 'facade-lattice/20';
 /** The cut (rebuildFacadesOnLattice opts.cut): the scan split at the rebuilt cells' lines before the removals and the tear audit. */
 export const LATTICE_CUT_VERSION = 'lattice-cut/3';
 
@@ -503,16 +503,22 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
     };
     const N = f.normal, S = f.axisS, T = f.axisT, neg = (v: number[]) => v.map(x => -x);
     // a side face on line s = sv between depth L (the smaller-s side) and R, wound to face the side it shows to (S x T = N); its
-    // texels unfold into the recessed side's photo, from the edge (the front depth) inward as far as the face is deep, so a
-    // reveal shows the photo beside the opening rather than one column of texels drawn across it
+    // texels unfold into the proud side's photo, from the arris outward as far as the surface runs from it (the bevel, then the
+    // face's depth), so a reveal shows the stone beside the opening, as a real reveal is the proud part's material seen edge on.
+    // Unfolded into the recessed side, it repeated the opening's own edge texels (its dark frame) on the reveal and again on the
+    // recessed face behind it: seen at an angle every window was drawn twice (the ESB's podium, 2026-11-02)
     // with the structure, a step at least twice chamferM deep has its front edge chamfered at 45 degrees: the chamfer leans over
     // the recessed side by c and the side face below it starts c into it, so the stone's arris catches the light (STRUCTURE)
     const bevelOf = (L: number, R: number) => (structure && Math.abs(L - R) >= 2 * STRUCTURE.chamferM ? STRUCTURE.chamferM : 0);
     const unit = (v: number[]) => { const l = Math.hypot(v[0], v[1], v[2]); return v.map(x => x / l); };
+    // the surface distance from the arris (at x0, depth front) of a point (x, d) on the bevel (d at or above top) or the face below
+    const fromArris = (x0: number, front: number, top: number, c: number, x: number, d: number) => (d >= top - 1e-9 ? Math.hypot(x - x0, front - d) : c * Math.SQRT2 + (top - d));
+    const sLo = f.orthoSMin, sHi = f.orthoSMin + W, tHi = f.orthoTMax, tLo = f.orthoTMax - H;
+    const clampTo = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
     const sideS = (sv: number, t0: number, t1: number, L: number, R: number) => {
         if (!(Math.abs(L - R) > P.stepM)) return;
         const front = Math.max(L, R), back = Math.min(L, R), into = L < R ? -1 : 1, c = bevelOf(L, R), sb = sv + into * c;
-        const at = (sx: number, tv: number, d: number): [number, number] => [sx + into * (front - d), tv];
+        const at = (sx: number, tv: number, d: number): [number, number] => [clampTo(sv - into * fromArris(sv, front, front - c, c, sx, d), sLo, sHi), tv];
         if (c) {
             // the bevel, facing out and over the recess (N + into S)
             if (L > R) quad([[sv, t0, front], [sb, t0, front - c], [sb, t1, front - c], [sv, t1, front]], unit(N.map((x, k) => x + into * S[k])), at);
@@ -526,7 +532,7 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
     const sideT = (tv: number, s0: number, s1: number, B: number, A: number) => {
         if (!(Math.abs(B - A) > P.stepM)) return;
         const front = Math.max(B, A), back = Math.min(B, A), into = B < A ? -1 : 1, c = bevelOf(B, A), tb = tv + into * c;
-        const at = (sv: number, ty: number, d: number): [number, number] => [sv, ty + into * (front - d)];
+        const at = (sv: number, ty: number, d: number): [number, number] => [sv, clampTo(tv - into * fromArris(tv, front, front - c, c, ty, d), tLo, tHi)];
         if (c) {
             if (B > A) quad([[s0, tv, front], [s1, tv, front], [s1, tb, front - c], [s0, tb, front - c]], unit(N.map((x, k) => x + into * T[k])), at);
             else quad([[s0, tv, front], [s0, tb, front - c], [s1, tb, front - c], [s1, tv, front]], unit(N.map((x, k) => x + into * T[k])), at);

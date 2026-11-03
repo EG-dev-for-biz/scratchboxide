@@ -21,7 +21,8 @@
  * Nothing is re-projected or invented; the geometry bytes are tile_refine's.
  *
  * Every embedded leaf-tile photo is de-lit (the same analytic lift/compress curve every other texture source in the
- * app already applies, photogrammetric-delight.ts) and, when a model client is given (`opts.recreate`), further
+ * app already applies, photogrammetric-delight.ts; pipeline K compresses the highlights only, PIPELINE_K_SHADOW_LIFT) and,
+ * when a model client is given (`opts.recreate`), further
  * recreated by an image model: the same `recreate` mode and structural gate texture-enhance.ts already built for the
  * richer texture-pass.ts pipeline (RECREATE_GATE - edges and openings stay put, the material's hue/chroma stays put,
  * only its lighting and fine surface detail change), run per leaf-tile image rather than per UV-atlas chart, with no
@@ -36,7 +37,7 @@
 import type { FittedPlane } from './window-fit';
 import * as jpegJs from 'jpeg-js';
 import { TEXTURE_LADDER_RUNGS, TEXTURE_RUNG_CLAY } from '../../../common/spatial/texture-pass-contracts';
-import { delightLinearRgb, linearToSrgb255, PHOTOGRAMMETRIC_DELIGHT, SRGB8_TO_LINEAR } from '../../../common/spatial/photogrammetric-delight';
+import { delightLinearRgb, linearToSrgb255, PHOTOGRAMMETRIC_DELIGHT, SRGB8_TO_LINEAR, type PhotogrammetricDelightParams } from '../../../common/spatial/photogrammetric-delight';
 import { IMAGE_MODEL_PRIORITY } from '../../../common/media-generation-protocol';
 import { MediaModelUnavailableError } from '../../../common/errors/pipeline-errors';
 import { assembleGlb, parseGlbBytes, readAccessor } from './glb-bytes';
@@ -56,7 +57,16 @@ import {
     type EnhanceModelClient, type EnhanceModelRequest
 } from './texture-enhance';
 
-export const TILE_REFINE_TWIN_VERSION = 'tile-refine-twin/v2';
+export const TILE_REFINE_TWIN_VERSION = 'tile-refine-twin/v3';
+/**
+ * Pipeline K's de-light lifts no shadow on any surface (opts.shadowLift): highlights compressed only, walls as roofs. The
+ * lift is a brightness curve, so it pulls every dark texel toward grey, a dark material as much as a shadow, and the leaf
+ * photos carry almost no cast shadow to lift (sky-delight.ts: no sun direction explains more than 1.2 to 1 on the ESB). On
+ * the ESB's K run 0bb20154 (M1, 2026-11-01) it greyed the storefront glazing into a slab and, in the photo-match views,
+ * left the facade half the raw scan's contrast and chroma (CIELAB sd of L* 6 to 10 against 13 to 16, chroma 2 to 3
+ * against 4 to 6). What does darken a wall is taken out by the steps that measure it: the roof shadow lift, the sky de-light.
+ */
+export const PIPELINE_K_SHADOW_LIFT = 0;
 /** The rung of a photo texel from the tile (TEXTURE_LADDER_RUNGS). */
 export const RUNG_TILE_PHOTO = TEXTURE_LADDER_RUNGS.indexOf('tile photo transfer');
 
@@ -116,15 +126,16 @@ interface ImageJob { originalIndex: number; name: string; mimeType: string; deli
 const ROOF_DELIGHT = { shadowLift: 0, highlightCompress: PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress };
 
 /**
- * `upward` (pipeline K-D): the upward surfaces seen from above (roofs, terraces, streets, plazas; a texel any of them draws)
- * and the shadow lift they take, in place of ROOF_DELIGHT's none: a district's ground is mostly in its buildings' baked
- * shadows. It is the same brightness curve as the walls', so it lifts a dark material as much as a shadow; hence gentler.
+ * `wall`: every texel that is not roof (pipeline K lifts no shadow there either, PIPELINE_K_SHADOW_LIFT). `upward` (pipeline
+ * K-D): the upward surfaces seen from above (roofs, terraces, streets, plazas; a texel any of them draws) and the shadow
+ * lift they take, in place of ROOF_DELIGHT's none: a district's ground is mostly in its buildings' baked shadows. It is a
+ * brightness curve, so it lifts a dark material as much as a shadow; hence gentle and off by default.
  */
-function delightImage(decoded: RgbaImage8, surface?: Uint8Array, upward?: { mask: Uint8Array; shadowLift: number }): RgbaImage8 {
+function delightImage(decoded: RgbaImage8, wall: PhotogrammetricDelightParams, surface?: Uint8Array, upward?: { mask: Uint8Array; shadowLift: number }): RgbaImage8 {
     const out = new Uint8Array(decoded.rgba.length);
     const upParams = upward ? { shadowLift: upward.shadowLift, highlightCompress: PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress } : undefined;
     for (let p = 0; p < decoded.rgba.length; p += 4) {
-        const params = upParams && upward!.mask[p >> 2] === TEXEL_ROOF ? upParams : surface?.[p >> 2] === TEXEL_ROOF ? ROOF_DELIGHT : PHOTOGRAMMETRIC_DELIGHT.defaults;
+        const params = upParams && upward!.mask[p >> 2] === TEXEL_ROOF ? upParams : surface?.[p >> 2] === TEXEL_ROOF ? ROOF_DELIGHT : wall;
         const [lr, lg, lb] = delightLinearRgb(SRGB8_TO_LINEAR[decoded.rgba[p]], SRGB8_TO_LINEAR[decoded.rgba[p + 1]], SRGB8_TO_LINEAR[decoded.rgba[p + 2]], params);
         out[p] = Math.round(linearToSrgb255(lr)); out[p + 1] = Math.round(linearToSrgb255(lg)); out[p + 2] = Math.round(linearToSrgb255(lb)); out[p + 3] = decoded.rgba[p + 3];
     }
@@ -183,7 +194,7 @@ function resizeToExact(img: RgbaImage8, width: number, height: number): RgbaImag
 }
 
 /** The twin of tile_refine's photo-textured output `texturedGlb` (its bytes) for the layer `layerKey`. */
-export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { /** Each step as it starts and finishes (the run's step log). */ onStep?: (step: string, state: 'running' | 'done' | 'failed') => void; recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ harmonize?: { groundY: number; /** The tile extraction with its neighbours (same frame): the sky de-light's occluders. */ skyContext?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }; /** A district (K-D): the building a point stands in (plan x, z; -1 for none), so colours are matched per building. */ buildingOf?: (x: number, z: number) => number }; /** false: the photos are already de-lit (a chunked district's welded ground, its chunks' twins joined): harmonised as they are. */ delight?: boolean; /** Pipeline K-D: the shadow lift of the upward surfaces seen from above (0 or absent: none, as for a building's roofs). */ upwardShadowLift?: number; /** Pipeline K (with harmonize): the photos relit from rendered views of the building (pipeline-k/view-relight.ts) before harmonising. */ viewRelight?: { client: EnhanceModelClient; models: string[]; params?: Partial<ViewRelightParams>; signal?: AbortSignal; progress?: (message: string) => void }; /** The mesh's cast shadow on its roofs and terraces lifted (pipeline-k/roof-shadow.ts), before any harmonising: pipeline K or a district. */ roofShadow?: { /** The tile extraction with its neighbours (same frame): their shadows on the lower terraces. */ context?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }; progress?: (message: string) => void }; /** Pipeline K: roughness, metalness and normal under the photos by appearance region (pipeline-k/material-regions.ts), one library set per class. */ materialRegions?: { /** The library set per class; given the classes' swatch sheet (classSwatchSheet: PNG, its patches' real size) when there is one, for a pick by their look. */ sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => Promise<RegionSet[]>; /** The tile-only harvest (material-harvest.ts): classes read from the wall alone, with their texture, for a pick by colour and texture. */ harvest?: boolean; /** The window fit's planes (window-fit.ts fittedPlanesOf): their windows drawn on the scan pieces lying on them. */ planes?: FittedPlane[]; /** The planes read on the harmonised photos (pipeline-k/twin-reader.ts): given the photos by image index and the glTF, the planes to draw instead of `planes`. */ planesFor?: (finalImage: Map<number, RgbaImage8>, json: any) => Promise<FittedPlane[]>; /** The classes named in words from a picture of them (pipeline-k/material-naming.ts), and the glass seen; its reason when it named none. */ nameClasses?: (classes: RegionClass[], swatches: Buffer) => Promise<{ words?: Array<ClassWords | undefined>; glass?: GlassSeen[]; unnamed?: string }> } }): Promise<TileRefineTwin> {
+export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { /** Each step as it starts and finishes (the run's step log). */ onStep?: (step: string, state: 'running' | 'done' | 'failed') => void; recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ harmonize?: { groundY: number; /** The tile extraction with its neighbours (same frame): the sky de-light's occluders. */ skyContext?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }; /** A district (K-D): the building a point stands in (plan x, z; -1 for none), so colours are matched per building. */ buildingOf?: (x: number, z: number) => number }; /** false: the photos are already de-lit (a chunked district's welded ground, its chunks' twins joined): harmonised as they are. */ delight?: boolean; /** Pipeline K: the de-light turned off for this build (the node graph's twin.delight, SCRATCHBOX_K_DELIGHT=0): the photos kept as captured, and the provenance says so. */ delightOff?: boolean; /** The de-light's shadow lift on every texel but the roofs' and the upward surfaces' (default PHOTOGRAMMETRIC_DELIGHT's; pipeline K: PIPELINE_K_SHADOW_LIFT). */ shadowLift?: number; /** Pipeline K-D: the shadow lift of the upward surfaces seen from above (0 or absent: none, as for a building's roofs). */ upwardShadowLift?: number; /** Pipeline K (with harmonize): the photos relit from rendered views of the building (pipeline-k/view-relight.ts) before harmonising. */ viewRelight?: { client: EnhanceModelClient; models: string[]; params?: Partial<ViewRelightParams>; signal?: AbortSignal; progress?: (message: string) => void }; /** The mesh's cast shadow on its roofs and terraces lifted (pipeline-k/roof-shadow.ts), before any harmonising: pipeline K or a district. */ roofShadow?: { /** The tile extraction with its neighbours (same frame): their shadows on the lower terraces. */ context?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }; progress?: (message: string) => void }; /** Pipeline K: roughness, metalness and normal under the photos by appearance region (pipeline-k/material-regions.ts), one library set per class. */ materialRegions?: { /** The library set per class; given the classes' swatch sheet (classSwatchSheet: PNG, its patches' real size) when there is one, for a pick by their look. */ sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => Promise<RegionSet[]>; /** The tile-only harvest (material-harvest.ts): classes read from the wall alone, with their texture, for a pick by colour and texture. */ harvest?: boolean; /** The window fit's planes (window-fit.ts fittedPlanesOf): their windows drawn on the scan pieces lying on them. */ planes?: FittedPlane[]; /** The planes read on the harmonised photos (pipeline-k/twin-reader.ts): given the photos by image index and the glTF, the planes to draw instead of `planes`. */ planesFor?: (finalImage: Map<number, RgbaImage8>, json: any) => Promise<FittedPlane[]>; /** The classes named in words from a picture of them (pipeline-k/material-naming.ts), and the glass seen; its reason when it named none. */ nameClasses?: (classes: RegionClass[], swatches: Buffer) => Promise<{ words?: Array<ClassWords | undefined>; glass?: GlassSeen[]; unnamed?: string }> } }): Promise<TileRefineTwin> {
     const g = parseGlbBytes(texturedGlb);
     const json = JSON.parse(JSON.stringify(g.json));
     const materials: any[] = json.materials ?? (json.materials = []);
@@ -228,12 +239,18 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     let roofTexels = 0;
     if (surfaces) for (const m of surfaces.values()) for (let k = 0; k < m.length; k++) if (m[k] === TEXEL_ROOF) roofTexels++;
     // the upward surfaces' own mask (a texel any upward surface draws), for their shadow lift
-    const upLift = opts?.delight !== false && (opts?.upwardShadowLift ?? 0) > 0 ? opts!.upwardShadowLift! : 0;
+    const asCaptured = opts?.delightOff === true;
+    const upLift = opts?.delight !== false && !asCaptured && (opts?.upwardShadowLift ?? 0) > 0 ? opts!.upwardShadowLift! : 0;
     const upMasks = upLift ? surfaceClassMasks(g, json, new Map(decodedImages.map(d => [d.i, d.decoded])), undefined, { sharedTexel: 'up' }) : undefined;
+    const wallLift = Math.max(0, Math.min(1, opts?.shadowLift ?? PHOTOGRAMMETRIC_DELIGHT.defaults.shadowLift));
+    const wallDelight = { shadowLift: wallLift, highlightCompress: PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress };
+    const delighting = opts?.delight !== false && !asCaptured;
+    if (delighting) opts?.onStep?.('delight', 'running');
     const jobs: ImageJob[] = decodedImages.map(({ i, im, decoded }) => {
         const up = upMasks?.get(i);
-        return { originalIndex: i, name: im.name ?? `image_${i}`, mimeType: im.mimeType, delit: opts?.delight === false ? decoded : delightImage(decoded, surfaces?.get(i), up ? { mask: up, shadowLift: upLift } : undefined) };
+        return { originalIndex: i, name: im.name ?? `image_${i}`, mimeType: im.mimeType, delit: delighting ? delightImage(decoded, wallDelight, surfaces?.get(i), up ? { mask: up, shadowLift: upLift } : undefined) : decoded };
     });
+    if (delighting) opts?.onStep?.('delight', 'done');
 
     const finalImage = new Map<number, RgbaImage8>();
     for (const job of jobs) finalImage.set(job.originalIndex, job.delit);
@@ -344,8 +361,11 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
 
     const delit = jobs.length;
     const method = () => {
-        const roofs = upLift ? `; upward surfaces seen from above (roofs, terraces, streets, plazas) a gentler shadow lift (shadowLift ${upLift}: the same brightness curve, so dark materials are lifted too)` : roofTexels ? `; roofs seen from above (${roofTexels} texels) highlights only, no shadow lift` : '';
-        const base = `tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), de-lit (shadowLift ${PHOTOGRAMMETRIC_DELIGHT.defaults.shadowLift}, highlightCompress ${PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress}${roofs}; ${delit} of ${delit} photos)`;
+        const roofs = upLift ? `; upward surfaces seen from above (roofs, terraces, streets, plazas) ${wallLift ? 'a gentler' : 'a'} shadow lift (shadowLift ${upLift}: the same brightness curve, so dark materials are lifted too)` : roofTexels && wallLift ? `; roofs seen from above (${roofTexels} texels) highlights only, no shadow lift` : '';
+        const lift = wallLift ? `shadowLift ${wallLift}, highlightCompress ${PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress}` : `highlights compressed (highlightCompress ${PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress}), no shadow lift (a brightness curve cannot tell a shadow from a dark material)`;
+        const base = asCaptured
+            ? `tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), as captured: not de-lit (the de-light turned off for this build; ${delit} photos)`
+            : `tile_refine's remesh carries the leaf tiles' own photos (UVs into each leaf's image), de-lit (${lift}${roofs}; ${delit} of ${delit} photos)`;
         const vr = relight?.applied ? `; evened out from image-model relights of rendered views, the model's pixels never used (pipeline K): ${relight.why}` : relight ? `; the view relight left them as they were (${relight.why})` : '';
         const rs = roofShadow?.applied ? `; the mesh's cast shadow on its roof decks lifted, a sun fitted per deck (pipeline K, photo-inferred): ${roofShadow.why}` : roofShadow ? `; roof shadows left as they were (${roofShadow.why})` : '';
         const sk = sky?.applied ? `; walls' sky-visibility darkening taken out (pipeline K): ${sky.why}` : sky ? `; the walls' sky-visibility darkening left in (${sky.why})` : '';

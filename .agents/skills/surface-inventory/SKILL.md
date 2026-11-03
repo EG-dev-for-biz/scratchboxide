@@ -41,7 +41,7 @@ and they hold a large share of what an aerial view of the building shows: roofs,
 each up-facing surface (normal within ~30 deg of up) by height band, with its own evidence: a top-down view of it (the
 tiles' own nadir photos, a station straight above or steeply down at it), and a top-down height map of the tier to tell
 a roof from the ledge or object on it (pipeline K's roof de-light already builds one). A dark roof is a dark material,
-not a shadow (`tile-refine-twin.ts`: roofs seen from above get no shadow lift).
+not a shadow (`tile-refine-twin.ts`: roofs seen from above get no shadow lift, and in pipeline K no surface does).
 
 **Curved and fragmented surfaces are surfaces too.** A plane finder splits a photogrammetry wall into thousands of
 patches and returns nothing for a curved one: group those patches by height band and facing (normal within ~15 deg)
