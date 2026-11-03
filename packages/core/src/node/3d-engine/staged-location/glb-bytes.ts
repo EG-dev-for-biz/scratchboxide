@@ -163,3 +163,27 @@ export function assembleGlb(json: unknown, bin: Uint8Array): Buffer {
     const bh = Buffer.alloc(8); bh.writeUInt32LE(binBuf.length, 0); bh.writeUInt32LE(CHUNK_BIN, 4);
     return Buffer.concat([header, jh, jsonBuf, bh, binBuf]);
 }
+
+/** The GLB with some images' bytes replaced, its buffer views laid out again in order (nothing left unreferenced). */
+export function replaceGlbImages(glb: ParsedGlb, replaced: Map<number, { bytes: Uint8Array; mime: string }>): Buffer {
+    const json = glb.json;
+    const byView = new Map<number, { bytes: Uint8Array; mime: string }>();
+    for (const [im, r] of replaced) { byView.set(json.images[im].bufferView, r); json.images[im].mimeType = r.mime; }
+    const parts: Uint8Array[] = [];
+    let len = 0;
+    json.bufferViews = json.bufferViews.map((v: any, i: number) => {
+        const data = byView.get(i)?.bytes ?? glb.bin.subarray(v.byteOffset ?? 0, (v.byteOffset ?? 0) + v.byteLength);
+        const pad = (4 - (len % 4)) % 4;
+        if (pad) { parts.push(new Uint8Array(pad)); len += pad; }
+        const out = { ...v, byteOffset: len, byteLength: data.byteLength };
+        parts.push(data); len += data.byteLength;
+        return out;
+    });
+    const pad = (4 - (len % 4)) % 4;
+    if (pad) { parts.push(new Uint8Array(pad)); len += pad; }
+    const bin = new Uint8Array(len);
+    let o = 0;
+    for (const p of parts) { bin.set(p, o); o += p.length; }
+    json.buffers = [{ ...(json.buffers?.[0] ?? {}), byteLength: len }];
+    return assembleGlb(json, bin);
+}

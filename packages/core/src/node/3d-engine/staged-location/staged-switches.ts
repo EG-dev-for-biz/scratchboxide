@@ -115,3 +115,13 @@ export function reportStagedSwitchProblems(env: NodeJS.ProcessEnv = process.env,
     reported = true;
     for (const problem of stagedSwitchProblems(env)) log(`[staged-location] ${problem}`);
 }
+
+/**
+ * The most leaf tiles one extraction keeps (SCRATCHBOX_STAGED_MAX_LEAF_TILES, a whole number from 1 to 6000), for an
+ * experiment that needs a district's scan to reach further than the default 524 nearest leaves; unset, the extraction's
+ * own default stands. A dense place at the default reaches about 80 m, short of its large buildings.
+ */
+export function stagedMaxLeafTiles(env: NodeJS.ProcessEnv = process.env): number | undefined {
+    const n = Number(env.SCRATCHBOX_STAGED_MAX_LEAF_TILES?.trim());
+    return Number.isInteger(n) && n >= 1 && n <= 6000 ? n : undefined;
+}

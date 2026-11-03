@@ -81,6 +81,7 @@ import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorBuilding, type VectorEvidence } from './vector-footprints';
 import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type DistrictStreetAuditSummary } from './district-residual-audit';
 import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, type InventoryCrown, type SceneInventorySummary } from './scene-inventory';
+import { DISTRICT_PAINT_VERSION, districtPaintEnabled, genAiPaintClient, paintDistrictAerial, type DistrictPaintReport } from './district-aerial-paint';
 import { buildDistrictMassingLayer, districtFootprint, districtMassingEnabled, DISTRICT_MASSING_PARAMS, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict, planeFirstEnabled, proceduralDistrictEnabled } from './district-massing';
 import { REVOLUTION_FIT_VERSION, revolutionFitEnabled, reviseForRevolutions, type RevolutionLayerSummary } from './revolution-fit';
 import { districtEDetail, districtEDetailEnabled, DISTRICT_E_DETAIL_VERSION } from './district-e-detail';
@@ -194,7 +195,7 @@ import { genAiEnhanceClient, type EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
-import { stagedModelService } from './staged-switches';
+import { stagedMaxLeafTiles, stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
 import { districtBuildingIndex, districtFootprints } from './pipeline-k/district-buildings';
 import { chunkCpuShare, chunkOwner, chunkParallel, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, planDistrictChunks, type DistrictChunkPlan, type TileFrame } from './pipeline-k/district-chunks';
@@ -1944,7 +1945,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         type TilesValue = { extraction: StagedExtraction; key: string; sizedTo: 'structure' | 'request' | 'district-fallback' | 'district-containment'; structure?: StructurePickResult; ground?: GroundModel; scan?: ScanMesh; unmaskedTop?: Float32Array; canopy?: CanopyMask; vector?: EvidenceLookup; vectorError?: string; rounds: number; cached: boolean; builtAtMs: number };
         /** One extraction, cached for 7 days by place and radius; the entry holds its files, named relative to it. */
         const extractCached = async (radiusM: number, io: StageIO, rect?: { x0: number; z0: number; x1: number; z1: number }): Promise<{ extraction: StagedExtraction; key: string; cached: boolean; builtAtMs: number }> => {
-            const key = stageKey('extract/v2', placeValue!.lat.toFixed(6), placeValue!.lng.toFixed(6), Math.round(radiusM), rect ? [rect.x0, rect.z0, rect.x1, rect.z1].map(v => v.toFixed(1)).join(',') : '');
+            const key = stageKey('extract/v2', placeValue!.lat.toFixed(6), placeValue!.lng.toFixed(6), Math.round(radiusM), rect ? [rect.x0, rect.z0, rect.x1, rect.z1].map(v => v.toFixed(1)).join(',') : '', ...(stagedMaxLeafTiles() ? [`leaves:${stagedMaxLeafTiles()}`] : []));
             const inEntry = (dir: string, v: StagedExtraction): StagedExtraction => ({ ...v, texturedGlb: path.join(dir, v.texturedGlb), geometryGlb: path.join(dir, v.geometryGlb) });
             const hit = !bypass('tiles') ? cache.get<StagedExtraction>('tiles', key) : undefined;
             if (hit && now() - hit.builtAtMs < EXTRACTION_TTL_MS) {
@@ -4939,6 +4940,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 rebuilt: number; buildings: number; reasons: Record<string, number>; roofErrMedianM: number | null; removedTriangles: number; residualOffFootprint: number; timingsMs: Record<string, number>;
                 caveats?: number;
                 revolutions?: RevolutionLayerSummary & { cut: Record<string, number> };
+                /** The aerial paint (district-aerial-paint.ts), when SCRATCHBOX_STAGED_DISTRICT_PAINT=1: its counts, or why it did not run. */
+                paint?: Omit<DistrictPaintReport, 'perView' | 'params'> | { unavailable: string };
                 /** Plane-first walls (wall-plane-fit.ts): walls by fit status, relief kept, scan lumps taken out of the residual. */
                 planeFirst?: { walls: number; measured: number; estimated: number; unseen: number; recesses: number; projections: number; rejectedRelief: number; residualRemovedTriangles: number; residualRemovedAreaM2: number };
                 /** The scene object store (scene-objects.ts): buildings taken from it unchanged instead of massed again, and the ground and streets. */
@@ -4965,7 +4968,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const referenceClient = revolutionsOn && revolutionReferenceEnabled() && deps.vision && 'client' in deps.vision ? deps.vision.client : undefined;
                     const surfaceMode = proceduralSurfaceMode();
                     const bridgesOn = procedural && proceduralBridgesEnabled();
-                    const key = stageKey(DISTRICT_MASSING_VERSION, districtEDetailEnabled() ? DISTRICT_E_DETAIL_VERSION : 'no-detail', stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M), procedural ? `${PROCEDURAL_GROUND_VERSION}+${PROCEDURAL_ROADS_VERSION}${deps.textures?.disabled && surfaceMode === 'photo' ? '' : `+${PROCEDURAL_MATERIALS_VERSION}+${surfaceMode}`}${bridgesOn ? `+${BRIDGE_BUILD_VERSION}+${WATER_VERSION}` : ''}` : 'carve', ...(revolutionsOn ? [REVOLUTION_FIT_VERSION] : []), ...(referenceClient ? [REVOLUTION_REFERENCE_VERSION] : []));
+                    // the aerial paint (district-aerial-paint.ts): the massing's atlas repainted from the air, on the massing district only
+                    const paintOn = !procedural && districtPaintEnabled();
+                    const key = stageKey(DISTRICT_MASSING_VERSION, districtEDetailEnabled() ? DISTRICT_E_DETAIL_VERSION : 'no-detail', stripped.cacheKey, vectorKey, refined.cacheKey, covered.toFixed(1), String(DISTRICT_TEXEL_M), procedural ? `${PROCEDURAL_GROUND_VERSION}+${PROCEDURAL_ROADS_VERSION}${deps.textures?.disabled && surfaceMode === 'photo' ? '' : `+${PROCEDURAL_MATERIALS_VERSION}+${surfaceMode}`}${bridgesOn ? `+${BRIDGE_BUILD_VERSION}+${WATER_VERSION}` : ''}` : 'carve', ...(revolutionsOn ? [REVOLUTION_FIT_VERSION] : []), ...(referenceClient ? [REVOLUTION_REFERENCE_VERSION] : []), ...(paintOn ? [DISTRICT_PAINT_VERSION] : []));
                     run.keys.massing = key;
                     const key8 = key.slice(0, 8);
                     // the scene object store: each rebuilt building, the ground and the streets kept as their own versioned
@@ -5251,9 +5256,32 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         fs.writeFileSync(path.join(dir, 'remesh_carved.glb'), clay.glb);
                         fs.writeFileSync(path.join(dir, 'remesh_carved_textured.glb'), hideFootprintInGlb(fs.readFileSync(refined.texturedGlb), footprint).glb);
                         const revolutions = await reviseRevolutions(['district_massing_textured.glb', 'district_massing_clay.glb', 'remesh_carved.glb', 'remesh_carved_textured.glb']);
+                        let paint: DistrictMassingValue['paint'];
+                        if (paintOn) {
+                            const tp = Date.now();
+                            const vis = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
+                            if (!vis) paint = { unavailable: `no image model is configured (${deps.vision && 'unavailable' in deps.vision ? deps.vision.unavailable : 'no vision deps'}): the massing keeps the tile photo laid on it` };
+                            else {
+                                // the unpainted layer is kept beside the painted one, for comparison
+                                const unpainted = path.join(dir, 'district_massing_unpainted.glb');
+                                fs.copyFileSync(texturedFile, unpainted);
+                                try {
+                                    const { perView: _views, params: _params, ...report } = await paintDistrictAerial({
+                                        massingGlb: unpainted, referenceGlb: stripped.devegetatedGlb, outGlb: texturedFile, viewsDir: path.join(dir, 'paint_views'),
+                                        client: genAiPaintClient(vis.client), radiusM: covered, signal: io.signal, onProgress: m => io.progress(m)
+                                    });
+                                    paint = report;
+                                } catch (err) {
+                                    if (isAbort(err)) throw err;
+                                    fs.copyFileSync(unpainted, texturedFile);
+                                    paint = { unavailable: `the aerial paint failed (${errorMessage(err)}): the massing keeps the tile photo laid on it` };
+                                }
+                            }
+                            timingsMs.paint = Date.now() - tp;
+                        }
                         listBuildings();
                         if (plan) writeLayerManifests(dir, manifests);
-                        return { value: { rebuilt: okRows.length, ...summary, caveats, ...(planeFirst ? { planeFirst } : {}), removedTriangles: clay.removedTriangles, residualOffFootprint, timingsMs, ...(revolutions ? { revolutions } : {}), ...(objects ? { objects } : {}) } };
+                        return { value: { rebuilt: okRows.length, ...summary, caveats, ...(planeFirst ? { planeFirst } : {}), removedTriangles: clay.removedTriangles, residualOffFootprint, timingsMs, ...(revolutions ? { revolutions } : {}), ...(objects ? { objects } : {}), ...(paint ? { paint } : {}) } };
                     }, {
                         publish: (dir, v) => !v.rebuilt ? []
                             : v.procedural?.texturePass?.inferred ? [
@@ -5275,6 +5303,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     });
                     const v = entry.value;
                     cache.writeRunNote(runId, 'district_massing', { key, cached: entry.cached, ...v });
+                    if (v.paint && 'unavailable' in v.paint) run.note(PROVENANCE.asScanned, `aerial paint not applied: ${v.paint.unavailable}`);
+                    else if (v.paint) run.note(PROVENANCE.generated, `aerial paint (${v.paint.version}): ${v.paint.views.accepted} of ${v.paint.views.withWork} aerial views kept by the gate (${v.paint.views.rejected} rejected, ${v.paint.views.failed} model failures) over ${v.paint.faces.written} of ${v.paint.faces.total} massing faces; ${v.paint.texels.fill + v.paint.texels.repeatReplaced} texels no photo reached painted and ${v.paint.texels.photoDetail} photo texels given the model's detail over their own colour, all labelled generated (${v.paint.legend.map(l => `${l.source} = ${l.index}`).join(', ')}); ${v.paint.models.join(', ') || 'no model answered'}, ${v.paint.imagesAsked} images (about $${v.paint.costUsdEstimate})`);
                     let manifests = v.rebuilt && objectStore ? readLayerManifests(entry.dir) : {};
                     if (v.rebuilt && objectStore && !manifests['district_massing_textured.glb']) {
                         // an entry massed before the object store: its buildings are listed now (the inputs are the entry's own)

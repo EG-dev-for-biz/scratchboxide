@@ -53,7 +53,7 @@ import { createFalTrellisClient } from './pipeline-i/fal-trellis';
 import { createFalMeshyClient } from './pipeline-i/fal-meshy';
 import { resolveRegionSets } from './pipeline-k/material-sets';
 import { StageCache, stagedWorkspaceRoot } from './stage-cache';
-import { reportStagedSwitchProblems, RETIRED_PIPELINE_LETTERS, STAGED_DISTRICT_MODES, stagedBuildingPipelineEnv } from './staged-switches';
+import { reportStagedSwitchProblems, RETIRED_PIPELINE_LETTERS, STAGED_DISTRICT_MODES, stagedBuildingPipelineEnv, stagedMaxLeafTiles } from './staged-switches';
 import { genAiEnhanceClient } from './texture-enhance';
 import { lightingCorrectionEnabled, lightingModels } from './texture-lighting';
 import { bakeTileDetail, defaultSwatchServices, subjectSwatchLibrary } from '../../spatial/tile-detail-bake';
@@ -290,7 +290,7 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
             const r = await getGoogle3DTilesFullTexture({
                 lat: req.lat, lng: req.lng, formattedAddress: req.place.formattedAddress, landmarkName: req.place.formattedAddress,
                 ...(req.place.elevation !== undefined ? { elevation: req.place.elevation } : {})
-            }, { radiusMeters: req.radiusM, outputDir: req.outDir, outputGlbPath: textured, geometryGlbPath: geometry, signal: req.signal, ...(req.rect ? { rect: req.rect } : {}) });
+            }, { radiusMeters: req.radiusM, outputDir: req.outDir, outputGlbPath: textured, geometryGlbPath: geometry, signal: req.signal, ...(req.rect ? { rect: req.rect } : {}), ...(stagedMaxLeafTiles() ? { maxLeaves: stagedMaxLeafTiles() } : {}) });
             if (r.mock) throw new Error('the extraction returned placeholder tiles, not Google 3D Tiles');
             if (!r.geometryGlbPath || !r.frame || !r.leafIds || !r.copyrights || !r.fetchedAt || r.leafGeometricErrorM === undefined) {
                 throw new Error('the extraction did not report its leaves, attribution and frame');

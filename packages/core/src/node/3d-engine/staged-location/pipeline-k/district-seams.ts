@@ -46,7 +46,7 @@
 import * as jpegJs from 'jpeg-js';
 import { encodePng } from '../../../texture-processing';
 import { decodeImageInMemory, type RgbaImage8 } from '../tile-texture-transfer';
-import { assembleGlb, parseGlbBytes, readAccessor, type ParsedGlb } from '../glb-bytes';
+import { assembleGlb, parseGlbBytes, readAccessor, replaceGlbImages, type ParsedGlb } from '../glb-bytes';
 import { appendPieces, readPrims, split, vertexOf, type PrimRead, type Vx } from './lattice-stitch';
 import { chunkOwner, DISTRICT_CHUNKS_PARAMS, type DistrictChunkPlan } from './district-chunks';
 
@@ -668,7 +668,7 @@ export function applySeamGain(bytes: Uint8Array, gain: [number, number, number],
             const t = m.pbrMetallicRoughness?.baseColorTexture?.index, im = t !== undefined ? json.textures?.[t]?.source : undefined;
             if (im === undefined || !replaced.has(im)) scaleFactor(m, gain);
         }
-        return { glb: replaceImages(glb, replaced), mode: 'texels', images: replaced.size };
+        return { glb: replaceGlbImages(glb, replaced), mode: 'texels', images: replaced.size };
     }
     // the rest in each vertex's colour (times any it had); a surface whose photo was not rewritten keeps the whole multiplier, clamped at 1
     const extra: Uint8Array[] = [];
@@ -691,29 +691,5 @@ export function applySeamGain(bytes: Uint8Array, gain: [number, number, number],
     bin.set(glb.bin, 0);
     let o = glb.bin.byteLength;
     for (const e of extra) { bin.set(e, o); o += e.byteLength; }
-    return { glb: replaceImages({ json, bin }, replaced), mode: brightens ? 'texels+vertex' : 'vertex', images: replaced.size };
-}
-
-/** The GLB with some images' bytes replaced, its buffer views laid out again in order (nothing left unreferenced). */
-function replaceImages(glb: ParsedGlb, replaced: Map<number, { bytes: Uint8Array; mime: string }>): Buffer {
-    const json = glb.json;
-    const byView = new Map<number, { bytes: Uint8Array; mime: string }>();
-    for (const [im, r] of replaced) { byView.set(json.images[im].bufferView, r); json.images[im].mimeType = r.mime; }
-    const parts: Uint8Array[] = [];
-    let len = 0;
-    json.bufferViews = json.bufferViews.map((v: any, i: number) => {
-        const data = byView.get(i)?.bytes ?? glb.bin.subarray(v.byteOffset ?? 0, (v.byteOffset ?? 0) + v.byteLength);
-        const pad = (4 - (len % 4)) % 4;
-        if (pad) { parts.push(new Uint8Array(pad)); len += pad; }
-        const out = { ...v, byteOffset: len, byteLength: data.byteLength };
-        parts.push(data); len += data.byteLength;
-        return out;
-    });
-    const pad = (4 - (len % 4)) % 4;
-    if (pad) { parts.push(new Uint8Array(pad)); len += pad; }
-    const bin = new Uint8Array(len);
-    let o = 0;
-    for (const p of parts) { bin.set(p, o); o += p.length; }
-    json.buffers = [{ ...(json.buffers?.[0] ?? {}), byteLength: len }];
-    return assembleGlb(json, bin);
+    return { glb: replaceGlbImages({ json, bin }, replaced), mode: brightens ? 'texels+vertex' : 'vertex', images: replaced.size };
 }
