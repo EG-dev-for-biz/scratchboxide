@@ -1134,7 +1134,7 @@ describe('what the result says about the extraction, the correction and the gate
         expect(result.extraction).toMatchObject({ requestedRadiusM: 60, radiusM: 33 });
         expect(result.degradations.find(d => d.reasonCode === 'radius_truncated')).toMatchObject({
             stage: 'tiles', transient: false, provenanceAfter: 'as-scanned',
-            part: { description: 'the outer ring of the extraction (33 to 60 m)' }, fellTo: 'the nearest 2 leaf tiles, which reach 33 m'
+            part: { description: 'the outer ring of the extraction (33 to 60 m)' }, fellTo: 'the 2 leaf tiles nearest in plan, which reach 33 m'
         });
         expect(result.stages.find(x => x.stage === 'tiles')!.status).toBe('degraded');
         expect(result.summary).toContain('in clay from Google 3D Tiles within 33 m (60 m asked for; the leaf-tile cap stopped it short): the remeshed scan.');

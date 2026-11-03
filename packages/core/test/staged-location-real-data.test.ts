@@ -295,7 +295,7 @@ describe.skipIf(!arch.requirement.ok)(withReason('the Washington Square Arch, is
         // the pick, recomputed on the extraction the run used: inside the structure's box (26.3 x 11.0 m, plus 2 m), no canopy
         // cell in it, and well inside the extraction (the structure is never clipped)
         const last = s.cuts[s.cuts.length - 1];
-        const lastEntry = s.deps.cache.entryDir('tiles', stageKey('extract/v2', (40.73122).toFixed(6), (-73.99709).toFixed(6), Math.round(last.radiusM)));
+        const lastEntry = s.deps.cache.entryDir('tiles', stageKey('extract/v3', (40.73122).toFixed(6), (-73.99709).toFixed(6), Math.round(last.radiusM)));
         const scan = loadScanMesh(path.join(lastEntry, 'textured.glb'));
         const mask = canopyMaskFromCrowns(real.strip.crowns);
         const ground = buildGroundModel(scan, { cellMeters: 1, exclude: canopyLookup(mask) });
