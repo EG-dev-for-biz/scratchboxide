@@ -46,8 +46,9 @@ export const STARTER_BUTTONS: readonly StarterButton[] = [
         // which remeshes and resurfaces every building, applies the real textures and regrows the measured trees.
         // Stays in district mode deliberately (not isolate: true) - that is a different build shape (one structure,
         // no surrounding streets/trees), not a "cleaner" version of this one. "textured" and the mood/sun clause are
-        // said outright: textures are the default, and the sky dome, scattering and solar ephemeris are opt-in
-        // (AGENTS.md §3.6), so the words must be in the request. 2026-10-21 (user ask): raised and cooled from a full
+        // said outright: textures are the default, and since 2026-11-02 (user decision) every staged place opens under
+        // the same partly cloudy, low-sun sky on its own (scene-weather.ts withLocationSceneWeather), so the clause now
+        // only names the light the build already gives. 2026-10-21 (user ask): raised and cooled from a full
         // golden hour (~20 deg elevation, a gentler warmth) so shadow regions read less crushed/near-black, and the
         // azimuth is asked from the place's own real solar geometry rather than a fixed number - there is no tool
         // that reads the sun direction baked into the tile imagery itself (investigated: the closest prior work,

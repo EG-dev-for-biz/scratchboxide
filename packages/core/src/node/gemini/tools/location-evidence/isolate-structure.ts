@@ -427,7 +427,7 @@ export async function resolveStagedPlace(
 }
 
 /**
- * The staged extraction cache (key extract/v2, its TTL): the leaves within a radius of the place, extracted once and served
+ * The staged extraction cache (key extract/v3, its TTL): the leaves within a radius of the place, extracted once and served
  * to every tool and stage that asks for the same radius. `last` says whether the latest call came from the cache.
  */
 export function stagedExtractor(place: ResolvedPlace, deps: Pick<IsolateStructureDeps, 'cache' | 'extract' | 'now'>, ctx: IsolateStructureContext = {}): { extract(radiusM: number): Promise<StagedExtraction>; last(): { key: string; cached: boolean } | undefined } {
@@ -435,7 +435,7 @@ export function stagedExtractor(place: ResolvedPlace, deps: Pick<IsolateStructur
     const cache = deps.cache;
     let last: { key: string; cached: boolean } | undefined;
     const extract = async (radiusM: number): Promise<StagedExtraction> => {
-        const key = stageKey('extract/v2', place.lat.toFixed(6), place.lng.toFixed(6), Math.round(radiusM));
+        const key = stageKey('extract/v3', place.lat.toFixed(6), place.lng.toFixed(6), Math.round(radiusM));
         const inEntry = (dir: string, v: StagedExtraction): StagedExtraction => ({ ...v, texturedGlb: path.join(dir, v.texturedGlb), geometryGlb: path.join(dir, v.geometryGlb) });
         const hit = cache.get<StagedExtraction>('tiles', key);
         if (hit && now() - hit.builtAtMs < EXTRACTION_TTL_MS) {
