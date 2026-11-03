@@ -25,10 +25,12 @@
  *     who owns their middle, every vertex attribute carried, so both copies end on the same line. Where ownership changes
  *     at no cell line (the outline of a building that reaches into the next cell: its own chunk's build may have taken the
  *     street out from under it), a triangle across the change is kept by each chunk owning a corner of it: a sliver of
- *     overlap beside a wall rather than a hole. Who owns a point (seamOwner) is the
- *     plan's owner (district-chunks.ts chunkOwner) where that chunk's ground reaches it, else a chunk whose ground does
- *     (seamCoverage, read from every chunk first): a building far larger than a cell can reach past where its own chunk's
- *     extraction stopped, and its ground there must not be handed to a chunk that has none.
+ *     overlap beside a wall rather than a hole. The district's own edge is the exception: a triangle across the circle,
+ *     where its outside is no chunk's (no building planned whole there), is cut exactly on the circle and only its inside
+ *     kept, the cut points set on the circle, so the district ends on one clean curve and no torn triangle stands past it.
+ *     Who owns a point (seamOwner) is the plan's owner (district-chunks.ts chunkOwner) where that chunk's ground reaches
+ *     it, else a chunk whose ground does (seamCoverage, read from every chunk first): a building far larger than a cell can
+ *     reach past where its own chunk's extraction stopped, and its ground there must not be handed to a chunk that has none.
  *  3. Snap: chunks are cut in a fixed order; each later chunk's vertices on a cell line are moved, along the line and up
  *     or down, onto the nearest edge an earlier chunk left on that line within `snapM`, so the two cuts meet on one curve
  *     (the step between two independent remeshes, a few centimetres, is closed; the cut edges of the earlier chunk stay).
@@ -52,7 +54,7 @@ import { chunkOwner, DISTRICT_CHUNKS_PARAMS, type DistrictChunkPlan } from './di
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- glTF JSON is untyped */
 
-export const DISTRICT_SEAMS_VERSION = 'district-seams/2';
+export const DISTRICT_SEAMS_VERSION = 'district-seams/3';  // 3: the ground cut exactly on the district's circle
 
 export const DISTRICT_SEAMS_PARAMS = {
     /** How far a later chunk's cut vertex may move onto an earlier chunk's cut edge (m): the step two remeshes leave. */
@@ -132,6 +134,8 @@ export interface SeamCutReport {
     maxSnapM: number;
     /** Primitives without indices, kept as they were. */
     skippedPrimitives: number;
+    /** Triangles cut on the district's circle (their outside, past the edge, left out). */
+    edgeCut: number;
 }
 
 interface SnapIndex { segs: number[]; buckets: Map<number, number[]> }
@@ -183,7 +187,8 @@ export function cutChunkGround(bytes: Uint8Array, plan: DistrictChunkPlan, index
     const owner = opts.owner ?? chunkOwner(plan), { xs, zs } = cellLines(plan);
     const touchesLine = (x: number, z: number) => Math.abs(nearest(xs, x) - x) < 1e-6 || Math.abs(nearest(zs, z) - z) < 1e-6;
     const snap = snapTo ? snapIndex(snapTo) : undefined;
-    const report: SeamCutReport = { trianglesIn: 0, dropped: 0, cut: 0, keptPieces: 0, snapped: 0, unsnapped: 0, maxSnapM: 0, skippedPrimitives: 0 };
+    const report: SeamCutReport = { trianglesIn: 0, dropped: 0, cut: 0, keptPieces: 0, snapped: 0, unsnapped: 0, maxSnapM: 0, skippedPrimitives: 0, edgeCut: 0 };
+    const R = plan.radiusM, radius = (i: number, X: ArrayLike<number>) => Math.hypot(X[i * 3], X[i * 3 + 2]);
     for (const m of glb.json.meshes ?? []) for (const p of m.primitives ?? []) if ((p.mode ?? 4) === 4 && p.attributes?.POSITION !== undefined && p.indices === undefined) report.skippedPrimitives++;
     const appended: Array<{ pr: PrimRead; polys: Vx[][] }> = [];
     const kill = (pr: PrimRead, t: number) => {
@@ -214,7 +219,10 @@ export function cutChunkGround(bytes: Uint8Array, plan: DistrictChunkPlan, index
             // a corner already on a cell line: the triangle goes through the cut too, so that corner is snapped and its edge
             // on the line recorded like any cut one
             const onLine = !offLine(a) || !offLine(b) || !offLine(c);
-            if (!lx.length && !lz.length && !(onLine && ownsAny)) {
+            // across the district's circle, its outside no chunk's: cut on the circle, never kept whole past it
+            const ra = radius(a, X), rb = radius(b, X), rc = radius(c, X);
+            const acrossEdge = Math.min(ra, rb, rc) < R && Math.max(ra, rb, rc) > R && (oa === -1 || ob === -1 || oc === -1);
+            if (!lx.length && !lz.length && !(onLine && ownsAny) && !acrossEdge) {
                 if (!ownsAny) { kill(pr, t); report.dropped++; }
                 continue;
             }
@@ -225,6 +233,7 @@ export function cutChunkGround(bytes: Uint8Array, plan: DistrictChunkPlan, index
             let polys: Vx[][] = [[va, vb, vc]];
             for (const x of lx) polys = polys.flatMap(poly => split(poly, v => v.p[0] - x, `x${x}`, pr, cache)).filter(q => q.length >= 3);
             for (const z of lz) polys = polys.flatMap(poly => split(poly, v => v.p[2] - z, `z${z}`, pr, cache)).filter(q => q.length >= 3);
+            if (acrossEdge) { polys = polys.flatMap(poly => split(poly, v => Math.hypot(v.p[0], v.p[2]) - R, 'circle', pr, cache)).filter(q => q.length >= 3); report.edgeCut++; }
             const mine = polys.filter(poly => poly.some(v => corner.get(v)) || owner(poly.reduce((s, v) => s + v.p[0], 0) / poly.length, poly.reduce((s, v) => s + v.p[2], 0) / poly.length) === index);
             if (mine.length === polys.length && polys.length === 1 && !onLine) continue;
             kill(pr, t);
@@ -233,6 +242,8 @@ export function cutChunkGround(bytes: Uint8Array, plan: DistrictChunkPlan, index
             report.keptPieces += mine.length;
             kept.push(...mine);
         }
+        // the circle's cut points: set on the circle (each was placed on its edge by its ends' distances, which a circle bends)
+        for (const [k, v] of cache) if (k.endsWith('|circle')) { const d = Math.hypot(v.p[0], v.p[2]); if (d > 0) { v.p[0] *= R / d; v.p[2] *= R / d; } }
         if (kept.length) appended.push({ pr, polys: kept });
     }
     // the cut vertices on a cell line: snapped onto the earlier chunks' edges, then this chunk's own edges recorded

@@ -1563,8 +1563,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         if (kdDistrict && !request.chunk && deps.runChunk && deps.vectorEvidence) {
             try {
                 const radius = request.radiusM ?? 250;
-                const ev = await deps.vectorEvidence({ lat: placeValue.lat, lng: placeValue.lng, radiusM: radius });
-                chunkPlan = planDistrictChunks(radius, selectPaintBuildings(ev, radius).buildings.map(b => ({ id: b.id, centroid: b.centroid, loops: b.parts.map(p => p.loops[0]).filter(l => l && l.length >= 3) })));
+                // the buildings the circle may reach too (their middles up to the edge growth past it): each planned whole or left out
+                const reach = radius + DISTRICT_CHUNKS_PARAMS.edgeGrowthM;
+                const ev = await deps.vectorEvidence({ lat: placeValue.lat, lng: placeValue.lng, radiusM: reach });
+                chunkPlan = planDistrictChunks(radius, selectPaintBuildings(ev, reach).buildings.map(b => ({ id: b.id, centroid: b.centroid, loops: b.parts.map(p => p.loops[0]).filter(l => l && l.length >= 3) })));
                 if (chunkPlan) {
                     // the whole plan, footprints too: the seam stage's ownership can be rebuilt from it offline
                     cache.writeRunNote(runId, 'district_chunks', chunkPlan);
