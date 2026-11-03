@@ -383,6 +383,18 @@ export function districtContainmentRadiusM(ev: VectorEvidence, baseRadiusM: numb
 }
 
 /**
+ * The extraction radius that keeps whole every building the base radius reaches, from Google's vector footprints
+ * (`evidence`): districtContainmentRadiusM, then a second round, since the grown area reaches a second ring of
+ * buildings the first did not size it for (Haughwout, 2026-10-22: 23 of 87 footprints ran past the extraction); the
+ * same cap holds.
+ */
+export async function districtContainedRadiusM(evidence: (radiusM: number) => Promise<VectorEvidence>, baseRadiusM: number): Promise<number> {
+    const radiusM = districtContainmentRadiusM(await evidence(baseRadiusM), baseRadiusM);
+    if (radiusM <= baseRadiusM) return radiusM;
+    return Math.min(baseRadiusM + DISTRICT_CONTAINMENT_MAX_GROWTH_M, districtContainmentRadiusM(await evidence(radiusM), radiusM));
+}
+
+/**
  * A fallback building for pipeline E/G when Google's vector data has no footprint at the place (e.g. the Great Pyramid
  * of Giza: Google's vector tiles carry no building there) — extruded from the structure's own convex outline on the
  * scan (StructurePickResult.outline, already computed in the tiles stage regardless of vector data) and its measured
@@ -1994,14 +2006,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const chunkRect = request.chunk?.rect ?? (chunkPlan ? chunkPlan.chunks.find(c => c.centre)!.rect : undefined);
                     if (deps.vectorEvidence && !chunkRect) {
                         try {
-                            const ev = await deps.vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: baseRadiusM });
-                            radiusM = districtContainmentRadiusM(ev, baseRadiusM);
-                            // a second round: the grown area reaches a second ring of buildings, which the first round did not
-                            // size it for (Haughwout, 2026-10-22: 23 of 87 footprints ran past the extraction); the same cap holds
-                            if (radiusM > baseRadiusM) {
-                                const ev2 = await deps.vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM });
-                                radiusM = Math.min(baseRadiusM + DISTRICT_CONTAINMENT_MAX_GROWTH_M, districtContainmentRadiusM(ev2, radiusM));
-                            }
+                            const vectorEvidence = deps.vectorEvidence;
+                            radiusM = await districtContainedRadiusM(r => vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: r }), baseRadiusM);
                         } catch (err) {
                             // atomic building integrity is best-effort for a district: a vector-fetch failure keeps the
                             // base radius rather than failing the whole build over it

@@ -24,6 +24,14 @@ footprint touches the circle at any height. It then kept the 524 whose box centr
   - **A cap a caller sets** (`maxLeaves`) cuts at a plan distance, never inside a column of leaves at one distance.
   - **Reach is still reported.** The covered radius is the nearest dropped leaf's (`coveredRadiusMeters`,
     `truncated`, the staged `radius_truncated` degradation).
+- **Whole buildings across the radius line.** A building standing past the line but reaching into it is kept whole.
+  - The staged district already grew its radius from Google's vector footprints. That growth is now one helper,
+    orchestrator.ts `districtContainedRadiusM`: two rounds, at most 100 m past the radius asked.
+  - The extraction tools (`google_3d_tiles_get_full_texture`, and the clay tool with `remesh: false`) never grew. They
+    now pass the same growth to the service (`containRadiusM`) whenever the service account can read the vector tiles.
+  - The result reports the grown radius (`containment.grownToMeters`, `coveredRadiusMeters`), and the summary says
+    "grown so no building it reaches is cut". When the footprints cannot be read, the radius asked is extracted and the
+    summary says buildings at its edge may be cut, with the reason.
 - **The extraction cache key** is now `extract/v3` (orchestrator, isolate-structure, streetview-survey), so no
   524-leaf extraction is served from the cache or the bucket mirror.
 - **Dropped connections are retried** (GoogleTileDistrictCrawler `fetchWithRetry`). Every tile in the radius now
@@ -46,6 +54,17 @@ Each extraction ran in an empty directory on the Scratchbox SSD, so no leaf came
 | 2 Penn Plaza, now | 780 of 780 | 250 m | 232 m | 16.0 s | 575 MB |
 | 2 Penn Plaza, old rule | 524 | 81 m | 188 m (the highest leaf kept) | | |
 
+- **A tower across the line (the horizontal case).** The circle was centred 220 m west of the ESB (40.74844,
+  -73.98827) at 200 m, so its line cuts the building. The ESB's vector footprint runs from 150 to 291 m and holds 96
+  leaves, up to 422 m. Each selection, compared on the same crawl
+  (`.scratchbox/examples/tools/containment_check.ts`, gitignored):
+
+  | Selection | Radius | ESB leaves missing |
+  | :--- | ---: | ---: |
+  | The extraction alone at the radius asked (before this change) | 200 m | 55, the highest 422 m up |
+  | The old rule at the grown radius | 300 m | 69 |
+  | The staged district, grown | 300 m | 0 |
+  | The extraction tools now, grown (a real extraction, uncached: 9.2 s, 0.86 GB) | 300 m, 1,059 leaves | 0 (GLB top 442 m) |
 - **The ESB under the old rule:** 28 leaves within 60 m of the anchor were dropped, all of them more than 200 m up.
   Those were the tower's upper shaft and spire, so the reach collapsed to 0 m.
 - **The Penn massing.** The district build `454f8a26` (this session's SSD instance, every leaf to 250 m: the same 780
@@ -60,7 +79,9 @@ Each extraction ran in an empty directory on the Scratchbox SSD, so no leaf came
   - `tile-tools-do-what-was-asked.test.ts`:
     - the 625-leaf grid at 400 m now keeps every leaf and covers 400 m;
     - `selectLeavesByPlanReach` keeps a 12-leaf, 460 m tower whole under a cap that the old rule cut, cuts at one plan
-      distance, and keeps a boxless leaf first.
+      distance, and keeps a boxless leaf first;
+    - `containRadiusM`: an extraction asked for 120 m and grown to 200 m reaches the roof 190 m out and reports the
+      growth; a growth that cannot be read extracts the 120 m asked and gives the reason.
   - `google-tile-district-crawler.test.ts`: a body cut off mid-read is fetched again; an abort is not retried.
   - Every test file that touches extraction passes, 280 tests in all with 13 skipped: the orchestrator, crawler, staged
     extraction, kd chunks, location tools, real-data staged runs and instruction drift. So does `tsc -p packages/core`.

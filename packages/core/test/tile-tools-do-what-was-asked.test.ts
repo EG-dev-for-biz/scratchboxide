@@ -200,6 +200,31 @@ describe('google_3d_tiles extraction radius', () => {
         expect(outcome.exec.summaryResult).toContain('within 120 m of the anchor');
     });
 
+    it('grows the radius to keep whole every building it reaches, when the caller can say how far, and says so', async () => {
+        const { requested } = serveTiles();
+        const r = await new Google3DTileBlockoutPipelineService().fetch3DObject(`${ANCHOR.lat}, ${ANCHOR.lng}`, 'full-texture', {
+            radiusMeters: 120, outputGlbPath: outGlb('flatiron_grown.glb'),
+            containRadiusM: async (_place, radiusM) => { expect(radiusM).toBe(120); return 200; }
+        });
+        expect(r.requestedRadiusMeters).toBe(120);
+        expect(r.coveredRadiusMeters).toBe(200);
+        expect(r.truncated).toBe(false);
+        expect(r.containment).toEqual({ grownToMeters: 200 });
+        expect(r.leafTiles).toEqual({ kept: 2, selected: 2 });
+        expect(requested.some(p => p.endsWith('/far.glb'))).toBe(true); // the roof 190 m out, past the 120 m asked
+    });
+
+    it('extracts the radius asked when the growth cannot be read, and says why', async () => {
+        const { requested } = serveTiles();
+        const r = await new Google3DTileBlockoutPipelineService().fetch3DObject(`${ANCHOR.lat}, ${ANCHOR.lng}`, 'full-texture', {
+            radiusMeters: 120, outputGlbPath: outGlb('flatiron_not_grown.glb'),
+            containRadiusM: async () => { throw new Error('the vector tiles did not answer'); }
+        });
+        expect(r.coveredRadiusMeters).toBe(120);
+        expect(r.containment).toEqual({ grownToMeters: 120, error: 'the vector tiles did not answer' });
+        expect(requested.some(p => p.endsWith('/far.glb'))).toBe(false);
+    });
+
     it('uses the 250 m default when no radius is given', async () => {
         const { requested } = serveTiles();
         const outcome = await createDefaultToolRegistry().dispatch('google_3d_tiles_get_clay',

@@ -91,6 +91,8 @@ import { MapsImageryGroundingService } from '../../spatial/MapsImageryGroundingS
 import { createStreetViewGroundingImageService, GROUNDING_ASPECT_RATIOS, StreetViewGroundingImageService, type GooglePano, type GroundingAspectRatio } from '../../spatial/StreetViewGroundingImageService';
 import { GeminiClient } from '../gemini-client';
 import { GoogleVectorTileService } from '../../spatial/GoogleVectorTileService';
+import { districtContainedRadiusM } from '../../3d-engine/staged-location/orchestrator';
+import { fetchVectorEvidence } from '../../3d-engine/staged-location/vector-footprints';
 import { describeLocationClay, runLocationClayPipeline, type LocationClayResult } from '../../3d-engine/location-clay-pipeline';
 import {
     runStagedLocationTool, STAGED_CLAY_TOOL_DESCRIPTION, STAGED_ISOLATE_DESCRIPTION, STAGED_PLACE_DESCRIPTION, STAGED_RADIUS_DESCRIPTION, STAGED_RETRY_RUN_DESCRIPTION, STAGED_RETRY_STAGE_DESCRIPTION, STAGED_RESUME_RUN_DESCRIPTION
@@ -126,9 +128,10 @@ export interface GeospatialAnchorOrigin {
 
 /** The ground an extraction covers, as its summary states it: the radius the tiles really reach, not only the one asked for. */
 function describeTileExtent(result: Google3DTile3DObjectResult): string {
-    const { requestedRadiusMeters: asked, coveredRadiusMeters: covered, leafTiles } = result;
+    const { requestedRadiusMeters: asked, coveredRadiusMeters: covered, leafTiles, containment } = result;
     if (asked === undefined || covered === undefined) return '';
-    if (!result.truncated) return ` within ${asked} m of the anchor`;
+    const uncut = containment?.error ? `; buildings at its edge may be cut (Google's vector footprints could not be read: ${containment.error})` : '';
+    if (!result.truncated) return covered > asked ? ` within ${covered} m of the anchor (asked for ${asked} m, grown so no building it reaches is cut)` : ` within ${asked} m of the anchor${uncut}`;
     const cap = leafTiles ? `; capped at ${leafTiles.kept} of the ${leafTiles.selected} tiles in that radius` : '';
     return `; it covers about ${covered} m around the anchor (asked for ${asked} m${cap})`;
 }
@@ -151,7 +154,7 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 radiusMeters: {
                     type: 'NUMBER',
-                    description: 'Extraction radius in metres around the anchor (default 250). Every leaf tile whose plan footprint the radius touches is kept, at any height; when a cap keeps fewer, the result reports the smaller radius actually covered (coveredRadiusMeters, truncated). A radius that selects more than 6000 leaf tiles fails.'
+                    description: 'Extraction radius in metres around the anchor (default 250). Every leaf tile whose plan footprint the radius touches is kept, at any height, and the radius grows (up to 100 m) so no building it reaches is cut (coveredRadiusMeters says how far); when a cap keeps fewer, the result reports the smaller radius actually covered (coveredRadiusMeters, truncated). A radius that selects more than 6000 leaf tiles fails.'
                 },
                 stageIntoActiveScene: {
                     type: 'BOOLEAN',
@@ -544,6 +547,10 @@ async function extractLocation(toolName: string, args: Record<string, unknown>, 
         enforceZeroBuildingClipping: typeof args.enforceZeroBuildingClipping === 'boolean' ? args.enforceZeroBuildingClipping : undefined,
         zenithAltitudeMeters: typeof args.zenithAltitudeMeters === 'number' ? args.zenithAltitudeMeters : undefined,
         radiusMeters: typeof args.radiusMeters === 'number' && args.radiusMeters > 0 ? args.radiusMeters : undefined,
+        // atomic building integrity: grown, from Google's vector footprints, to keep whole every building the radius reaches
+        ...(new GeminiClient().ensureAuth() ? {
+            containRadiusM: (place: { lat: number; lng: number }, radiusM: number) => districtContainedRadiusM(r => fetchVectorEvidence({ ...place, radiusM: r, fetchTile: (x, y, z) => GoogleVectorTileService.fetchVectorTile(x, y, z, '') }), radiusM)
+        } : {}),
         // a stopped chat stops the crawl and its tile downloads too (honoured where the extraction supports it)
         signal: ctx?.signal
     };
