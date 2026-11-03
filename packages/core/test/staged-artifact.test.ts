@@ -22,6 +22,7 @@ import {
     composeStagedArtifact, glbBounds, layerObjectId, retireSupersededLayers, stagedArtifactId, stagedCamera, RETIRE_SUPERSEDED_BYTES
 } from '../src/node/3d-engine/staged-location/staged-artifact';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
+import { LOCATION_SCENE_WEATHER, normalizeWeather, weatherSun } from '../src/browser/generative-canvas/services/atmosphere/scene-weather';
 import { resolveCanvasArtifactId, registerCanvasArtifact } from '../src/browser/generative-canvas/project-artifact-adapter';
 import { calculateStandoffCamera } from '../src/browser/generative-canvas/primitives/scene3d/autoFraming';
 import { ProjectArtifactGraphEngine, createEmptyProjectGraph } from '../src/common/project-artifact-graph-protocol';
@@ -79,7 +80,7 @@ describe('staged artifact', () => {
         expect(stagedCamera(archL1, [0.4, 12, -1.2], Math.hypot(13, 12, 5.5))).toEqual(arch);
     });
 
-    it('composes one object per unretired layer, with the state, the camera and a neutral studio', () => {
+    it('composes one object per unretired layer, with the state, the camera and the place\'s partly cloudy, low-sun sky', () => {
         const state = stagedBuildState();
         const camera = stagedCamera({ min: [-26, -2, -26], max: [26, 28, 26] }, [0, 12, 0], 20);
         const meta = Object.fromEntries(state.layers.map(l => [l.objectId, { source: l.stage === 'trees' ? 'Google3DTilesClay' : 'Google3DTilesClay', isGround: l.layer === 'l2', resolvedAddress: state.place.resolvedAddress }]));
@@ -88,7 +89,17 @@ describe('staged artifact', () => {
         expect(art.data.objects.map((o: any) => o.id)).toEqual(state.layers.map(l => l.objectId));
         expect(art.data.objects.filter((o: any) => o.content.metadata.isGround).map((o: any) => o.id)).toEqual(['stg-90e96133-l2']);
         expect(art.data.objects.every((o: any) => o.content.metadata.role === 'environment')).toBe(true);
-        expect(art.data.environment).toEqual({ skybox: 'studio', lighting: 'studio', ground: false });
+        // the sky of the run's day at the place (user decision 2026-11-02), the studio kept for the Weather tool's Off
+        const day = new Date(Math.min(...state.stages.map(s => s.timings.startedAtMs), state.updatedAtMs)).toISOString().slice(0, 10);
+        expect(art.data.weather).toMatchObject({ cloudCover: LOCATION_SCENE_WEATHER.cloudCover, date: day, prior: { skybox: 'studio' } });
+        expect(art.data.environment).toMatchObject({ skybox: 'sky', lighting: 'studio', ground: false });
+        const sun = weatherSun(normalizeWeather(art.data.weather), { lat: state.place.lat, lng: state.place.lng });
+        expect(sun.source).toBe('ephemeris');
+        expect(sun.elevationDeg).toBeCloseTo(LOCATION_SCENE_WEATHER.sunElevationDeg, 1);
+        expect(art.data.weather.timeOfDay).toBeGreaterThan(12);
+        expect(art.data.features.atmosphericScattering).toMatchObject({ enabled: true, cloudCoverage: LOCATION_SCENE_WEATHER.cloudCover, latitude: state.place.lat });
+        // the same sky on every compose of the run
+        expect(composeStagedArtifact({ state: { ...state, updatedAtMs: state.updatedAtMs + 3_600_000 }, camera, layerMeta: meta, geoAnchor: { lat: state.place.lat, lng: state.place.lng }, summary: 'x', version: 4 }).data).toMatchObject({ weather: art.data.weather });
         expect(art.data.renderMode).toBe('clay');
         expect(art.data.camera).toEqual(camera);
         expect(validateContract('StagedBuildState', art.data.stagedBuild)).toEqual([]);
@@ -101,6 +112,8 @@ describe('staged artifact', () => {
         const merged = composeStagedArtifact({ state: { ...state, artifactId: 'scene-arch-1' }, camera, layerMeta: meta, geoAnchor: { lat: 0, lng: 0 }, activeScene: active, summary: 'x', version: 5 }) as any;
         expect(merged.id).toBe('scene-arch-1');
         expect(merged.data.objects.map((o: any) => o.id)).toEqual(['statue', ...state.layers.map(l => l.objectId)]);
+        // staged into an open scene, that scene's own sky is kept
+        expect(merged.data.weather).toBeUndefined();
     });
 
     it('retires superseded layers over 8 MB at finish, never the ground', () => {
