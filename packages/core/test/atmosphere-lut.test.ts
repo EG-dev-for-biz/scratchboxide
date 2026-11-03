@@ -37,7 +37,7 @@ import { buildPhysicalSkyLut } from '../src/browser/generative-canvas/services/a
 import { cieColorMatching } from '../src/browser/generative-canvas/services/atmosphere/spectral-sun';
 import { encodePng } from './helpers/synthetic-scan-glb';
 import { saveHtmlScreenshot, htmlScreenshotChrome } from './helpers/html-screenshot';
-import { requireFiles, withReason } from './helpers/requirements';
+import { requireEnv, requireFiles, withReason } from './helpers/requirements';
 
 const REPO = path.resolve(__dirname, '../../..');
 const INCLUDE = path.join(REPO, 'packages/core/src/native/3d-engine/include');
@@ -206,7 +206,49 @@ function viewerSky(sunElevationDeg: number, queries: SkyQuery[]): { radiance: V3
 
 interface Model { key: string; label: string; detail: string; medium: string; perElevation: { radiance: V3[]; skyIrradiance: V3 }[] }
 
-describe('Bruneton tables for Earth', () => {
+const TABLE_TEXELS = { transmittance: 256 * 64, scattering: 256 * 128 * 32, single_mie_scattering: 256 * 128 * 32, higher_order_scattering: 256 * 128 * 32, irradiance: 64 * 16 };
+
+// Every run, PRs included: single scattering only (one order), a few seconds. The multiple-scattering functions
+// (scattering density, indirect irradiance, multiple scattering) are proved case by case by the ported functions test
+// above; the full 4-order tables, the spectral tables and the comparisons with three-geospatial and today's skies cost
+// about 30 minutes on a CI runner (the scattering density is 90 % of it) and run only under SCRATCHBOX_HEAVY_TESTS=1.
+describe('Bruneton tables for Earth, single scattering', () => {
+    const medium = hillaireEarthMedium();
+    const precompute = { batches: [radianceBatch()], scatteringOrders: 1 };
+    let single: AtmosphereLutResult;
+
+    beforeAll(async () => {
+        fs.rmSync(path.join(WORK, 'earth_rgb_single'), { recursive: true, force: true });
+        single = await precomputeAtmosphereLut({ medium, precompute, outDir: path.join(WORK, 'earth_rgb_single'), format: 'float16' });
+        console.log(`[atmosphere_lut] precompute, ${single.threads} threads, 1 order, 3 wavelengths: ${(single.ms.total / 1000).toFixed(1)} s`);
+    }, 300_000);
+
+    it('refuses an atmosphere that is not physical, before anything runs', async () => {
+        await expect(precomputeAtmosphereLut({ medium: { ...medium, topRadiusM: medium.bottomRadiusM }, precompute, outDir: path.join(WORK, 'bad') }))
+            .rejects.toMatchObject({ code: 'bad_request' });
+        await expect(precomputeAtmosphereLut({ medium: { ...medium, mieScattering: [1e-6] }, precompute, outDir: path.join(WORK, 'bad') }))
+            .rejects.toBeInstanceOf(AtmosphereLutError);
+        await expect(precomputeAtmosphereLut({ medium, precompute: { batches: [] }, outDir: path.join(WORK, 'bad') })).rejects.toMatchObject({ code: 'bad_request' });
+    });
+
+    it('writes every table in Bruneton\'s layout with its description', () => {
+        for (const [t, texels] of Object.entries(TABLE_TEXELS)) expect(fs.statSync(path.join(single.outDir, `${t}.bin`)).size).toBe(texels * 4 * 2);
+        const desc = JSON.parse(fs.readFileSync(single.files.description, 'utf8'));
+        expect(desc.layout.scatteringNuMuSMuR).toEqual([8, 32, 128, 32]);
+        expect(desc.atmosphere.wavelengths).toEqual([440, 550, 680]);
+        expect(desc.scatteringOrders).toBe(1);
+        // transmittance falls to the horizon; single scattering holds light; one order leaves no higher orders
+        const t = readHalf(single.files.transmittance);
+        expect(t[0]).toBeGreaterThan(0.9);
+        expect(t[(0 * 256 + 255) * 4 + 2]).toBeLessThan(0.05);
+        expect(readHalf(single.files.scattering).some(v => v > 0.1)).toBe(true);
+        expect(readHalf(single.files.higherOrderScattering).every(v => v === 0)).toBe(true);
+    });
+});
+
+const heavy = requireEnv('SCRATCHBOX_HEAVY_TESTS', 'the 4-order and spectral precompute, about 30 min on a CI runner; set by the macOS push and nightly job, set it locally for the proof sheet');
+
+describe.skipIf(!heavy.ok)(withReason('Bruneton tables for Earth, 4 orders and spectral', heavy), () => {
     const rgbMedium = hillaireEarthMedium();
     const rgbPrecompute = { batches: [radianceBatch()], scatteringOrders: 4 };
     const specMedium = viewerSkyMedium({ turbidity: TURBIDITY, groundAlbedo: VIEWER_ALBEDO });
@@ -218,35 +260,19 @@ describe('Bruneton tables for Earth', () => {
     let spec: AtmosphereLutResult;
 
     beforeAll(async () => {
-        fs.rmSync(WORK, { recursive: true, force: true });
+        for (const f of ['earth_rgb', 'earth_viewer_spectral', 'three_geospatial_table_errors.json', 'three_geospatial_sky_errors.json']) fs.rmSync(path.join(WORK, f), { recursive: true, force: true });
         rgb = await precomputeAtmosphereLut({ medium: rgbMedium, precompute: rgbPrecompute, outDir: path.join(WORK, 'earth_rgb'), format: 'float16', queries: allQueries });
         spec = await precomputeAtmosphereLut({ medium: specMedium, precompute: specPrecompute, outDir: path.join(WORK, 'earth_viewer_spectral'), format: 'float32', queries: allQueries });
         console.log(`[atmosphere_lut] precompute, ${rgb.threads} threads, 4 orders: 3 wavelengths ${(rgb.ms.total / 1000).toFixed(1)} s ` +
             `(scattering density ${(rgb.ms.scatteringDensity / 1000).toFixed(1)} s); ${specMedium.wavelengthsNm.length} wavelengths in ${spec.batches} batches ${(spec.ms.total / 1000).toFixed(1)} s`);
     }, 1_800_000);
 
-    it('refuses an atmosphere that is not physical, before anything runs', async () => {
-        await expect(precomputeAtmosphereLut({ medium: { ...rgbMedium, topRadiusM: rgbMedium.bottomRadiusM }, precompute: rgbPrecompute, outDir: path.join(WORK, 'bad') }))
-            .rejects.toMatchObject({ code: 'bad_request' });
-        await expect(precomputeAtmosphereLut({ medium: { ...rgbMedium, mieScattering: [1e-6] }, precompute: rgbPrecompute, outDir: path.join(WORK, 'bad') }))
-            .rejects.toBeInstanceOf(AtmosphereLutError);
-        await expect(precomputeAtmosphereLut({ medium: rgbMedium, precompute: { batches: [] }, outDir: path.join(WORK, 'bad') })).rejects.toMatchObject({ code: 'bad_request' });
-    });
-
-    it('writes every table in Bruneton\'s layout with its description', () => {
-        const sizes = { transmittance: 256 * 64, scattering: 256 * 128 * 32, single_mie_scattering: 256 * 128 * 32, higher_order_scattering: 256 * 128 * 32, irradiance: 64 * 16 };
-        for (const [t, texels] of Object.entries(sizes)) {
+    it('writes the 4-order and spectral tables in Bruneton\'s layout', () => {
+        for (const [t, texels] of Object.entries(TABLE_TEXELS)) {
             expect(fs.statSync(path.join(rgb.outDir, `${t}.bin`)).size).toBe(texels * 4 * 2);
             expect(fs.statSync(path.join(spec.outDir, `${t}.bin`)).size).toBe(texels * 4 * 4);
         }
-        const desc = JSON.parse(fs.readFileSync(rgb.files.description, 'utf8'));
-        expect(desc.layout.scatteringNuMuSMuR).toEqual([8, 32, 128, 32]);
-        expect(desc.atmosphere.wavelengths).toEqual([440, 550, 680]);
         expect(spec.batches).toBe(4);
-        // transmittance falls to the horizon; the scattering tables hold light, not zeros
-        const t = readHalf(rgb.files.transmittance);
-        expect(t[0]).toBeGreaterThan(0.9);
-        expect(t[(0 * 256 + 255) * 4 + 2]).toBeLessThan(0.05);
         expect(readHalf(rgb.files.higherOrderScattering).some(v => v > 0.1)).toBe(true);
     });
 
