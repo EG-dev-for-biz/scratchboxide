@@ -248,17 +248,18 @@ MAIN's ask, after the aerial-paint session's finding (answers moved and rescaled
 
 ### 11.5 The rebuilt world
 
-Built uncached from the 31 October station images (not regenerated), the fresh textured extraction and the measured cameras, 114 s on this machine; installed in the world folder (the 31 October `fused.*` and `tileset.meta.json` kept aside), the meta's `colourFromTrueViews` naming every refusal.
+Built uncached from the 31 October station images (not regenerated), the fresh textured extraction and the measured cameras, 162 s on this machine; installed in the world folder (the 31 October `fused.*` and `tileset.meta.json` kept aside), the meta's `colourFromTrueViews` naming every refusal.
 
 | Measure | 31 Oct world | Colour from true views |
 |---|---|---|
 | Splats | 4.0 M | 4.0 M |
-| Patches from a station that truly sees them | 46,006 (every patch from its best station, gated by nothing) | 5,250 (12%) |
-| Patches from the tiles' own texture | 0 | 38,973 (86%) |
-| Patches generated | 0 (unseen surfaces took one mean colour) | 863 (2%, flattened lumps) |
+| Patches from a station that truly sees them | 46,006 (every patch from its best station, gated by nothing) | 5,068 (11.5%) |
+| Patches from the tiles' own texture | 0 | 37,943 (86.1%) |
+| Patches generated | 0 (unseen surfaces took one mean colour) | 1,064 (2.4%, flattened lumps) |
+| Lump triangles laid on the street | 7,351 | 9,544 (section 11.8) |
 | Station images used / refused | 33 / 0 | 15 / 18 |
 | Station gains | not applied (residual 0.26) | not applied (6 channels at the bound, no loop to test) |
-| Tile texture tone curve | n/a | median gain 3.2 / 4.1 / 4.1 (r, g, b) from 147,895 samples of 15 stations |
+| Tile texture tone curve | n/a | median gain 3.3 / 4.2 / 4.2 (r, g, b) from 148,220 samples of 15 stations |
 
 What the views show (proof sheet rows 1 to 6):
 - **Behind the vantage** the wall is its own texture (dark, soft: the tiles' close-up of Penn Station's frontage) where it was a smear of plaza pavement.
@@ -271,8 +272,18 @@ Port 3780 (`scratchbox-splat-true-views`, this branch), the front page's 3D Worl
 
 ### 11.7 Still wrong
 
-1. **Parked cars beside the W 32nd St fence still stand crumpled.** They sit in the scan's low structures, which containment keeps standing (a connected footprint of at least 50 m²), so the lump flattening never reaches them.
+1. **One parked car still stands** beside the walk (the walk camera's right edge): it lies inside the 7 m structure's own cells, where the scan's top is the structure's; the top-down hull cannot tell it from the structure, and taking it down there would cut the structure's wall base too (section 11.8).
 2. **The tiles' texture carries its own era and light:** construction fences and sheds where the April 2026 street is finished, and cast shadows (a dark band across the road at the walk camera).
 3. **True-view blocks still sit a median 0.6 to 1.0 m off** at their best shift; the shift is measured but not applied.
 4. **Only 12% of patches are true views.** Most street photos see the scan at grazing angles, or see what the tiles show differently.
 5. **The cloud copy** of the world (`worlds/v2/d46ee4caa1de6ae432e1a2e2`) is the 31 October layer; new chat-built street worlds are keyed apart from it (`colour: 'true-views'` in the cache key).
+
+### 11.8 Parked cars against a taller structure (2026-11-03)
+
+The live check showed creased cars still standing beside the walk. They were parked against a structure about 7 m tall along W 32nd St's curb, inside its 1 m hull margin; the margin takes the column's own top, so the containment (`splat-containment.ts`) kept everything under 7 m there as the structure's. The margin is there for the column's own facade, not for what stands beside it.
+
+- **Changed:** a low component too small to be a structure (under 50 m²) is a lump wherever it stands; a point in its cells, or in the ground-level cells beside them (a car is two or three cells wide, and a cell whose centre misses it reads as ground), counts as in the air up to the lump's own top, so the layer lays it on the street. The column's face above the lump stays. The same rule applies to the voxel-fused worlds' containment.
+- **Measured** on the walk camera's view of those cars: scan points 0.3 to 3 m above the ground that the hulls kept went from 115 to 47; the rest stand inside the structure's own cells. Lump triangles laid flat: 7,351 to 9,544.
+- **Test:** `splat-containment.test.ts`, a 1.6 m car parked within a 7 m structure's margin: its side, its top and its side in the ground-level cell beside it are in the air; the structure's face above it and beside no car is kept.
+- **Seen:** proof sheet row 10 (the creased shard in the middle is gone; one car at the right remains) and row 9 (the live app, mid-walk).
+
