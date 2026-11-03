@@ -359,11 +359,11 @@ export function zoneCrops(L: Float32Array, W: number, zone: ImageRegion, h: numb
 }
 
 /**
- * A region of the photo as a PNG scaled by `scale` (nearest texel), with optional outlines (photo pixels). With `L`, the
- * texels the photo never reached (NaN there) are drawn uniform grey, so the model neither reads nor misses openings in
- * texture filled from the facade's repeats.
+ * A region of the photo scaled by `scale` (nearest texel), with optional outlines (photo pixels). With `L`, the texels
+ * the photo never reached (NaN there) are drawn uniform grey, so the model neither reads nor misses openings in texture
+ * filled from the facade's repeats.
  */
-export function regionPng(img: FacadePhoto, r: ImageRegion, scale: number, outlines: WindowRect[] = [], L?: Float32Array): { png: Buffer; width: number; height: number; rgba: Uint8Array } {
+export function regionRgba(img: FacadePhoto, r: ImageRegion, scale: number, outlines: WindowRect[] = [], L?: Float32Array): { width: number; height: number; rgba: Uint8Array } {
     const W = img.width, ow = Math.max(1, Math.round((r.x1 - r.x0) * scale)), oh = Math.max(1, Math.round((r.y1 - r.y0) * scale));
     const out = new Uint8Array(ow * oh * 4);
     for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) {
@@ -380,7 +380,13 @@ export function regionPng(img: FacadePhoto, r: ImageRegion, scale: number, outli
             out.set([255, 0, 255, 255], (y * ow + x) * 4);
         }
     }
-    return { png: encodePng(ow, oh, out, 4), width: ow, height: oh, rgba: out };
+    return { width: ow, height: oh, rgba: out };
+}
+
+/** regionRgba as a PNG. */
+export function regionPng(img: FacadePhoto, r: ImageRegion, scale: number, outlines: WindowRect[] = [], L?: Float32Array): { png: Buffer; width: number; height: number; rgba: Uint8Array } {
+    const c = regionRgba(img, r, scale, outlines, L);
+    return { png: encodePng(c.width, c.height, c.rgba, 4), ...c };
 }
 
 /** Two crops side by side with a white gap, as one PNG. */
@@ -583,7 +589,7 @@ export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> 
         z.t = t;
         z.kept = [...new Set(t.columnOf)].sort((a, b) => a - b);
         // the judge's picture: the outlines over the read crop and a held-out one
-        z.judged = sideBySide(regionPng(img, z.read!, z.scale!, t.rects, L), regionPng(img, z.heldOut ?? z.read!, z.scale!, t.rects, L));
+        z.judged = sideBySide(regionRgba(img, z.read!, z.scale!, t.rects, L), regionRgba(img, z.heldOut ?? z.read!, z.scale!, t.rects, L));
         review?.(z.judged, `z${work.indexOf(z)}`);
     }
     // 4. the judge: the zones' judged as their unit cells were read
@@ -694,7 +700,7 @@ export async function readFromTemplates(img: FacadePhoto, uncovered: ArrayLike<n
     const { read, heldOut } = zoneCrops(L, W, box, P.readCropM / f.pixel, P);
     if (!read) return undefined;
     const scale = scaleFor(read, P), rects = matches.map(m => m.rect);
-    const judged = sideBySide(regionPng(img, read, scale, rects, L), regionPng(img, heldOut ?? read, scale, rects, L));
+    const judged = sideBySide(regionRgba(img, read, scale, rects, L), regionRgba(img, heldOut ?? read, scale, rects, L));
     review?.(judged, 'template');
     let judge: FacadeJudgement;
     try { judge = parseJudgement(await asker(ask, memory, tally)({ kind: 'judge', n: 1, png: () => judged, bare: judgePrompt(columns), region: heldOut ?? read, about: [read, heldOut ?? read, scale, rects] })); }
