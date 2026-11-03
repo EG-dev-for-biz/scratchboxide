@@ -44,5 +44,38 @@ building), 3,146 stood above the ceiling and 167 outside the region's cells.
 - **The Penn centre, replayed.** The vertices standing inside the model's vehicle boxes drop from 3,570 (the run's patch)
   to 788 (this patch), with 3,331 shell vertices flattened. The rest belong to pieces attached to something outside the
   region. The before and after render is `docs/screenshots/2026-11-03-vehicle-patch-before-after.png` (gitignored).
-- **Not this:** the slanted slabs along the west sidewalk against the wall. They are not in any vehicle box (most likely a
-  sidewalk structure in the scan) and stay; that is a separate item.
+- **Not this:** the slanted slabs along the west sidewalk against the wall. They are not in any vehicle box (section
+  below).
+
+## The west sidewalk slabs: a temporary construction structure
+
+These were chased the same way: from the saved inputs, with no build and no model call. The evidence sheet is
+`docs/screenshots/2026-11-03-penn-west-sidewalk-structure.png` (gitignored).
+- **What the scan holds.** Cross-sections of the centre's welded scan every 10 m between W 32nd and W 33rd St show one
+  structure along the whole stretch:
+  - a front at the kerb (9.7 m west of 7th Ave's centreline) rising about 8 m;
+  - a flat deck about 6.3 m over the street;
+  - a back at 15.5 m;
+  - the sidewalk continuing beneath it;
+  - the building's own facade standing behind it at 18.4 m, down to the street.
+
+  It is about 90 m long and 6 m deep. Google's footprint edges only start 12 m out, so it stands mostly off the building.
+- **What it is.** Its street face, drawn from the scan photo, shows a "PENN STATION" sign on a steel frame, pallets, a
+  yellow skip, red barriers and crates. Its deck from above shows tarps and loose items. It is a sidewalk shed with a
+  construction staging yard: the renovation's site, standing when the tiles were captured.
+- **What the build did with it.**
+  - **The vehicle stage never saw it.** That stage removes temporary objects, scaffold sheds by name, under the user's
+    clutter decision of 2026-10-30. But it only takes lumps at most `proudMaxM` (5 m) tall and more than `buildingClearM`
+    (1 m) from a footprint, and this structure is neither.
+  - **Pipeline K treated its front as a building facade:** it built a facade lattice on it, and generated seal strips
+    under it.
+  - **So it shows as a scanned box.** Its melted ends read as slanted slabs from the street up to the wall.
+- **Which step should handle it.** By the clutter policy it is temporary, so it should go, with the sidewalk patched and
+  the building's scanned facade behind it left standing. The vehicle stage's temporary-object path is the step that
+  owns that.
+- **What that needs.**
+  - Proud lumps up to a shed's height, about 10 m, beside buildings, offered to the model. Fixtures, entrances and
+    canopies that are part of a building must still stay.
+  - A removal that leaves the facade behind it standing.
+
+  Not fixed here: it changes what the model is shown and needs a decision, recorded in the PR.
