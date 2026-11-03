@@ -37,11 +37,17 @@
  *    drawn, and a wall the photo covers from silentCoverage with no bays read gets none: the photo has the veto. With under minTierBays read bays the tier has no grammar and keeps step 3's.
  * The bays are written per wall and, in each facade's own frame, per facade (wall_grammar.json beside the orthos), each
  * labelled by where it came from: photo-inferred (read), generated (continued or borrowed).
+ *
+ * Steps 2 to 4 (each wall's evidence and bays) run natively by default, one wall a task (scratchbox_wall_grammar.hpp
+ * through remesh-polish-native.ts), giving these functions' results bit for bit; SCRATCHBOX_K_NATIVE without
+ * `wall-grammar` runs them here. The walls and the tiers' grammars are worked out here either way.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { readOccluded, unreadMask } from './pipeline-k/occlusion';
+import { kNative } from './pipeline-k/native/native-switch';
+import { OCCLUSION_PARAMS, readOccluded, unreadMask } from './pipeline-k/occlusion';
+import { nativePolishThreads, runNativeWallGrammar } from './remesh-polish-native';
 import type { WindowFitFile, WindowRect } from './window-fit';
 
 export const WALL_GRAMMAR_VERSION = 'wall-grammar/3';
@@ -63,6 +69,11 @@ export const WALL_GRAMMAR_PARAMS = {
     tierM: 3.0, minTierBays: 3, pitchTol: 0.2, vetoShare: 0.2, silentCoverage: 0.5
 };
 export type WallGrammarParams = typeof WALL_GRAMMAR_PARAMS;
+
+/** The native wall grammar's parameters (scratchbox_wall_grammar.hpp Params): P's reading fields in order, and the occlusion mask's threshold code. */
+export function wallGrammarParamVector(P: WallGrammarParams = WALL_GRAMMAR_PARAMS): number[] {
+    return [P.cellM, P.voteMin, P.minCoverage, P.mullionMaxM, P.minBayM, P.pierShare, P.maxGapM, P.minRunM, P.punchedBands, P.punchedShare, P.bandM, Math.round(OCCLUSION_PARAMS.minBlocked * 255)];
+}
 
 /** A facade's frame, as relief_orthos/facades.json gives it. */
 export interface GrammarFacade {
@@ -271,12 +282,12 @@ export function wallEvidence(orthosDir: string, fs0: GrammarFacade[], windowsOf:
 }
 
 /** Reads every wall's bay grammar from the orthos and the window fit (see the file comment) and writes wall_grammar.json beside them. */
-export function readWallGrammar(orthosDir: string, fit: WindowFitFile, decode: (b: Buffer) => { rgba: Uint8Array; width: number; height: number }, P: WallGrammarParams = WALL_GRAMMAR_PARAMS): { file: string; grammar: WallGrammarFile } {
+export function readWallGrammar(orthosDir: string, fit: WindowFitFile, decode: (b: Buffer) => { rgba: Uint8Array; width: number; height: number }, P: WallGrammarParams = WALL_GRAMMAR_PARAMS, opts: { /** The native reading's threads (every core when none). It changes how fast, not what, is read. */ threads?: number } = {}): { file: string; grammar: WallGrammarFile } {
     const facades = (JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as GrammarFacade[]).filter(f => fs.existsSync(path.join(orthosDir, f.image)));
     const windowsOf = new Map<number, WindowRect[]>();
     for (const e of fit.facades) if (!('error' in e)) windowsOf.set(e.facadeId, e.rects);
-    const walls: Wall[] = [], evidence: WallEvidence[] = [], states: Int8Array[] = [];
-    for (const [wi, members] of groupWalls(facades, P).entries()) {
+    const walls: Wall[] = [], evidence: Array<Pick<WallEvidence, 'u0' | 'cellM' | 'nu'>> = [], states: Int8Array[] = [];
+    const frames = groupWalls(facades, P).map(members => {
         const fs0 = members.map(i => facades[i]);
         const ref = fs0.reduce((m, f) => ((f.sMax - f.sMin) * (f.tMax - f.tMin) > (m.sMax - m.sMin) * (m.tMax - m.tMin) ? f : m));
         const U = ref.axisS, N = ref.normal;
@@ -286,13 +297,26 @@ export function readWallGrammar(orthosDir: string, fit: WindowFitFile, decode: (
             return [dot(p, U), p[1]];
         }));
         const u0 = Math.min(...corners.map(c => c[0])), u1 = Math.max(...corners.map(c => c[0])), y0 = Math.min(...corners.map(c => c[1])), y1 = Math.max(...corners.map(c => c[1]));
-        const e = wallEvidence(orthosDir, fs0, windowsOf, U, u0, y0, u1, y1, decode, P);
+        return { fs0, ref, U, N, u0, u1, y0, y1 };
+    });
+    const wallOf = (wi: number, x: (typeof frames)[number], cov: number, cells: number, bays: WallBay[]): Wall => ({ wallId: wi, facades: x.fs0.map(f => f.facadeId), normal: x.N, axisU: x.U, offset: dot(x.ref.centroid, x.N), u0: x.u0, u1: x.u1, y0: x.y0, y1: x.y1, coverage: cov / cells, tier: -1, bays });
+    if (kNative('wall-grammar')) {
+        // natively: every wall's evidence and bays, one wall a task
+        const file = (name?: string) => { const p = name ? path.join(orthosDir, name) : undefined; return p && fs.existsSync(p) ? p : undefined; };
+        const read = runNativeWallGrammar(wallGrammarParamVector(P), frames.map(x => ({ u0: x.u0, y0: x.y0, u1: x.u1, y1: x.y1, U: x.U, members: x.fs0.map(f => ({ facadeId: f.facadeId, centroid: f.centroid, axisS: f.axisS, axisT: f.axisT, pixel: f.pixel, orthoSMin: f.orthoSMin, orthoTMax: f.orthoTMax, width: f.width, height: f.height, image: path.join(orthosDir, f.image), uncovered: file(f.uncoveredMask), occluded: file(f.occludedMask), windows: windowsOf.get(f.facadeId) ?? [] })) })), opts.threads ?? nativePolishThreads());
+        frames.forEach((x, wi) => {
+            const r = read[wi];
+            walls.push(wallOf(wi, x, r.covered, r.nu * r.ny, r.bays.map(b => ({ u0: b.u0, u1: b.u1, y0: b.y0, y1: b.y1, from: b.generated ? 'generated' : 'photo-inferred' }))));
+            evidence.push({ u0: x.u0, cellM: P.cellM, nu: r.nu }); states.push(r.state);
+        });
+    } else frames.forEach((x, wi) => {
+        const e = wallEvidence(orthosDir, x.fs0, windowsOf, x.U, x.u0, x.y0, x.u1, x.y1, decode, P);
         const covered = e.covered;
         let cov = 0; for (let k = 0; k < covered.length; k++) cov += covered[k];
         const r = readWallBays(e, P);
-        walls.push({ wallId: wi, facades: fs0.map(f => f.facadeId), normal: N, axisU: U, offset: dot(ref.centroid, N), u0, u1, y0, y1, coverage: cov / covered.length, tier: -1, bays: r.bays });
+        walls.push(wallOf(wi, x, cov, covered.length, r.bays));
         evidence.push(e); states.push(r.state);
-    }
+    });
     // tiers, each with one grammar fitted from its walls' read bays and laid along every wall of it (the file comment, 5)
     let tier = 0;
     for (const w of walls) {
@@ -365,7 +389,7 @@ export function fitTierGrammar(walls: Wall[], P: WallGrammarParams = WALL_GRAMMA
 }
 
 /** Lays a tier's grammar along one wall (see the file comment, 5): every grammar bay the wall lacks, generated, but none the photo vetoes. */
-export function applyTierGrammar(w: Wall, e: WallEvidence, state: Int8Array, g: TierGrammar, P: WallGrammarParams = WALL_GRAMMAR_PARAMS): number {
+export function applyTierGrammar(w: Wall, e: Pick<WallEvidence, 'u0' | 'cellM' | 'nu'>, state: Int8Array, g: TierGrammar, P: WallGrammarParams = WALL_GRAMMAR_PARAMS): number {
     const own = w.bays.filter(b => b.from === 'photo-inferred');
     // a wall the photo reads well and finds no bays on has none: the grammar never puts bays on a plain wall
     if (!own.length && w.coverage >= P.silentCoverage) return 0;

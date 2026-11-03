@@ -9,11 +9,12 @@
 
 /**
  * Pipeline K's remesh-polish steps in native C++20 on a fixed thread pool (scripts/remesh_polish_native.cpp over
- * scratchbox_window_fit.hpp, scratchbox_facade_lattice.hpp and scratchbox_open_loop_fill.hpp): the window fit
- * (window-fit.ts fitOrthoFacadesNative, the photometric relief read in the same process, one facade a task), the lattice
+ * scratchbox_window_fit.hpp, scratchbox_wall_grammar.hpp, scratchbox_facade_lattice.hpp and scratchbox_open_loop_fill.hpp):
+ * the window fit (window-fit.ts fitOrthoFacadesNative, the photometric relief read in the same process, one facade a
+ * task), the wall grammar's evidence and bays (wall-grammar.ts readWallGrammar, one wall a task), the lattice
  * (facade-lattice.ts: each facade's lattice and rebuilt surface, and its repeat texture, one facade a task; then the
  * removals under the tear audit, one view a task) and the infill (pipeline-k/lattice-stitch.ts fillOpenLoops). Their
- * results are the TypeScript's, which runs when SCRATCHBOX_K_NATIVE leaves `window-fit`, `lattice` or `infill` out
+ * results are the TypeScript's, which runs when SCRATCHBOX_K_NATIVE leaves `window-fit`, `wall-grammar`, `lattice` or `infill` out
  * (pipeline-k/native/native-switch.ts; all native by default).
  *
  * Data goes over stdin as raw little-endian buffers (a header, then arrays), never PNG; the window fit's facades are
@@ -21,7 +22,8 @@
  * pass their share of the cores (pipeline-k/district-chunks.ts chunkCpuShare).
  *
  * The binary is built through the native build cache. The polish runs synchronously (often on a worker thread), so the
- * lattice and the infill find the binary by its cache key (remeshPolishBinarySync); ensureRemeshPolishBinary builds it first.
+ * wall grammar, the lattice and the infill find the binary by its cache key (remeshPolishBinarySync); ensureRemeshPolishBinary
+ * builds it first.
  */
 
 import { spawn, spawnSync } from 'child_process';
@@ -65,11 +67,16 @@ export async function ensureNativePolishFor(input: { infill?: boolean; seal?: bo
     if (((input.infill || input.seal) && kNative('infill')) || (input.orthosDir && input.lattice !== false && kNative('lattice'))) await ensureRemeshPolishBinary();
 }
 
+/** The wall grammar's native reading built before it runs: readWallGrammar runs synchronously and cannot compile. */
+export async function ensureNativeWallGrammar(): Promise<void> {
+    if (kNative('wall-grammar')) await ensureRemeshPolishBinary();
+}
+
 /** The binary already in the native build cache for this source, found synchronously; throws when it was never built. */
 export function remeshPolishBinarySync(repoRoot = findTileRefineRepoRoot()): string {
     if (process.env.SCRATCHBOX_REMESH_POLISH_BIN) return process.env.SCRATCHBOX_REMESH_POLISH_BIN;
     const bin = nativeBuildEntryBinary(nativeBuildCacheRoot(), nativeBuildKey(compileSpec(repoRoot)).key);
-    if (!fs.existsSync(bin)) throw new Error('the native remesh polish is not built yet: await ensureRemeshPolishBinary() before the polish (or leave `lattice` and `infill` out of SCRATCHBOX_K_NATIVE for the TypeScript)');
+    if (!fs.existsSync(bin)) throw new Error('the native remesh polish is not built yet: await ensureRemeshPolishBinary() before the step (or leave `wall-grammar`, `lattice` and `infill` out of SCRATCHBOX_K_NATIVE for the TypeScript)');
     return bin;
 }
 
@@ -281,3 +288,30 @@ export function runNativeLatticeAudit(params: number[], sameFacing: boolean, sou
     return { claim, found, restored, left, obliqueLeft, ...(hasOblique ? { oblique } : {}), dropped };
 }
 
+// ------------------------------------------------------------------------------------------------ the wall grammar
+
+/** A wall for the native wall grammar: its frame, and its member facades in order with their photos and masks by file and their windows in texels. */
+export interface NativeWallJob {
+    u0: number; y0: number; u1: number; y1: number; U: number[];
+    members: Array<{ facadeId: number; centroid: number[]; axisS: number[]; axisT: number[]; pixel: number; orthoSMin: number; orthoTMax: number; width: number; height: number; image: string; uncovered?: string; occluded?: string; windows: readonly Rect4[] }>;
+}
+
+/** wall-grammar.ts' evidence and readWallBays natively, per wall: its grid's size, its covered cells, its bays and its columns' states. */
+export function runNativeWallGrammar(params: number[], walls: NativeWallJob[], threads: number): Array<{ nu: number; ny: number; covered: number; bays: Array<{ u0: number; u1: number; y0: number; y1: number; generated: boolean }>; state: Int8Array }> {
+    const w = new Writer().magic('SBWG').u32(1).u32(params.length).f64s(params).u32(walls.length);
+    for (const x of walls) {
+        w.f64s([x.u0, x.y0, x.u1, x.y1, ...x.U]).u32(x.members.length);
+        for (const m of x.members) {
+            w.i32(m.facadeId).f64s([...m.centroid, ...m.axisS, ...m.axisT, m.pixel, m.orthoSMin, m.orthoTMax, m.width, m.height]).str(m.image).str(m.uncovered ?? '').str(m.occluded ?? '');
+            rects(w, m.windows);
+        }
+    }
+    const r = new Reader(runSync('wall-grammar', w.take(), threads));
+    const out = walls.map(() => {
+        const nu = r.u32(), ny = r.u32(), covered = r.f64();
+        const bays = Array.from({ length: r.u32() }, () => { const [u0, u1, y0, y1] = r.f64s(4); return { u0, u1, y0, y1, generated: r.u32() === 1 }; });
+        return { nu, ny, covered, bays, state: new Int8Array(r.u8s(nu).buffer) };
+    });
+    r.done('wall-grammar');
+    return out;
+}

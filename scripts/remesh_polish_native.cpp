@@ -9,7 +9,7 @@
 
 /**
  * CLI of pipeline K's remesh-polish steps run natively on a fixed thread pool (packages/core/src/node/3d-engine/
- * staged-location/remesh-polish-native.ts drives it; SCRATCHBOX_K_NATIVE without window-fit, lattice or infill keeps that step in TypeScript). Data
+ * staged-location/remesh-polish-native.ts drives it; SCRATCHBOX_K_NATIVE without window-fit, wall-grammar, lattice or infill keeps that step in TypeScript). Data
  * arrives on stdin as raw little-endian buffers, a header then arrays, never PNG:
  *
  *   remesh_polish_native window-fit <threads>
@@ -46,12 +46,21 @@
  *     out: u32 nTri, i32[nTri] the facade claiming each triangle (-1: kept), f64 found, f64 restored, f64 left,
  *          f64 obliqueLeft, u32 hasOblique, f64 oblique, u32 n, i32[n] the facades dropped, in the order dropped.
  *
+ *   remesh_polish_native wall-grammar <threads>
+ *     in:  "SBWG" u32 version (1), u32 nParams, f64[nParams] (scratchbox_wall_grammar.hpp Params), u32 nWalls, per wall
+ *          f64 u0, y0, u1, y1, f64[3] U, u32 nMembers, per member i32 facadeId, f64[9] centroid, axisS, axisT, f64 pixel,
+ *          orthoSMin, orthoTMax, width, height, str image, str uncovered mask, str occluded mask (empty: none), u32 n,
+ *          f64[4n] the window fit's windows in texels.
+ *     out: per wall in order, u32 nu, u32 ny, f64 covered cells, u32 nBays, per bay f64 u0, u1, y0, y1, u32 generated,
+ *          then i8[nu] the columns' states.
+ *
  * Build: clang++ -std=c++20 -O3 -I packages/core/src/native/3d-engine/include scripts/remesh_polish_native.cpp -o build/3d-native/remesh_polish_native -lz
  */
 
 #include "scratchbox_window_fit.hpp"
 #include "scratchbox_open_loop_fill.hpp"
 #include "scratchbox_facade_lattice.hpp"
+#include "scratchbox_wall_grammar.hpp"
 #include "scratchbox_thread_pool.hpp"
 
 #include <chrono>
@@ -311,11 +320,48 @@ int latticeAudit(unsigned threads) {
     return 0;
 }
 
+int wallGrammar(unsigned threads) {
+    expectMagic("SBWG", 1);
+    const auto params = wall_grammar::Params::from(readDoubles(readOne<uint32_t>()));
+    std::vector<wall_grammar::WallJob> walls(readOne<uint32_t>());
+    for (auto& w : walls) {
+        const auto v = readDoubles(7);
+        w.u0 = v[0]; w.y0 = v[1]; w.u1 = v[2]; w.y1 = v[3];
+        w.U = {v[4], v[5], v[6]};
+        w.members.resize(readOne<uint32_t>());
+        for (auto& m : w.members) {
+            m.facadeId = readOne<int32_t>();
+            const auto f = readDoubles(14);
+            for (int k = 0; k < 3; ++k) { m.centroid[k] = f[k]; m.axisS[k] = f[3 + k]; m.axisT[k] = f[6 + k]; }
+            m.pixel = f[9]; m.orthoSMin = f[10]; m.orthoTMax = f[11]; m.width = f[12]; m.height = f[13];
+            m.image = readString();
+            m.uncovered = readString();
+            m.occluded = readString();
+            m.windows = readRects();
+        }
+    }
+    FixedThreadPool pool(threads);
+    for (const auto& o : wall_grammar::readWalls(walls, params, pool)) {
+        writeOne<uint32_t>(static_cast<uint32_t>(o.nu));
+        writeOne<uint32_t>(static_cast<uint32_t>(o.ny));
+        writeOne<double>(o.covered);
+        writeOne<uint32_t>(static_cast<uint32_t>(o.bays.size()));
+        for (const auto& b : o.bays) {
+            const double v[4] = {b.u0, b.u1, b.y0, b.y1};
+            writeExact(v, sizeof v);
+            writeOne<uint32_t>(b.generated ? 1 : 0);
+        }
+        writeExact(o.state.data(), o.state.size());
+    }
+    std::fflush(stdout);
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|lattice|lattice-audit <threads>  (binary input on stdin)\n");
+        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|lattice|lattice-audit|wall-grammar <threads>  (binary input on stdin)\n");
         return 2;
     }
     const std::string cmd = argv[1];
@@ -325,6 +371,7 @@ int main(int argc, char** argv) {
         if (cmd == "fill") return fill(threads);
         if (cmd == "lattice") return lattice(threads);
         if (cmd == "lattice-audit") return latticeAudit(threads);
+        if (cmd == "wall-grammar") return wallGrammar(threads);
         std::fprintf(stderr, "unknown command %s\n", cmd.c_str());
         return 2;
     } catch (const std::exception& e) {
