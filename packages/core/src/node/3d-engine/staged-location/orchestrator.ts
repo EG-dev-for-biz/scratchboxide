@@ -1475,6 +1475,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     // the vision replies of identical earlier requests are read back (a retry of the stage asks the model again), and a
     // call whose first token is late is sent once more (VisionModelChainOptions.hedgeAfterMs)
     const chainExtras = (id: StageId) => ({ hedgeAfterMs: VISION_HEDGE_AFTER_MS, ...(bypass(id) ? {} : { replyCache: stagedReplyCache(cache) }) });
+    // the vision model's answers kept between builds (pipeline-k/model-readings.ts), one store a run; one this workspace
+    // lacks is read back from the cache mirror's bucket before the model is asked (stage-cache.ts restoreFile)
+    let readingStore: ReturnType<typeof fileReadingStore> | undefined;
+    const modelReadingsStore = () => (readingStore ??= fileReadingStore(path.join(cache.dir, MODEL_READINGS_DIR), { restore: rel => cache.restoreFile(`${MODEL_READINGS_DIR}/${rel}`) }));
     const runId = deps.newRunId?.() ?? crypto.randomBytes(4).toString('hex');
     cache.activeRunId = runId;
     // every stage event also goes to the run's wall-clock timeline (runs/<runId>/timeline.jsonl)
@@ -3105,7 +3109,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 let readerSeen: { records: FacadeReadRecord[]; brief?: string } | undefined;
                 // the reader's answers and the material choices kept beside the stage caches, so a rebuild or a later run asks
                 // only about what changed (pipeline-k/model-readings.ts); a retry of the stage asks again, as its reply cache does
-                const modelReadings = bypass('textures') ? undefined : fileReadingStore(path.join(cache.dir, MODEL_READINGS_DIR));
+                const modelReadings = bypass('textures') ? undefined : modelReadingsStore();
                 const planesFor = readerAsk ? async (finalImage: Map<number, RgbaImage8>, json: any) => {
                     try {
                         const tr = await readOnTwin({ orthosDir: kOrthos!, flatGlb: flatGlb!, twinJson: json, finalImage, fitted: planes, ask: readerAsk, building: { name: request.query, ...(run.state.place?.resolvedAddress ? { address: run.state.place.resolvedAddress } : {}) }, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`), ...(modelReadings ? { readings: { store: modelReadings, model: FACADE_READER_MODEL_KEY } } : {}) });
@@ -6209,6 +6213,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- finish ----------------
         cache.writeRunNote(runId, 'main_thread', blockTracer.stop());
         cache.writeRunNote(runId, 'model_calls', modelCalls.report());
+        if (readingStore) cache.writeRunNote(runId, 'model_readings', readingStore.report());
         const outcome = finishRun(run, {
             request, place: placeValue, extraction, structure, sizedTo: t.sizedTo, remeshed: remeshedNow, groundFile: groundOverride?.groundFile ?? remesh.value?.groundFile, groundLayerId: groundOverride?.groundLayerId ?? remesh.value?.groundLayerId ?? currentL1()?.objectId,
             trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, ...(textureValue ? { textures: textureValue } : {}), now, persist
@@ -6234,6 +6239,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         run.close();
         try { cache.writeRunNote(runId, 'main_thread', blockTracer.stop()); } catch { /* the note is diagnostics only */ }
         try { cache.writeRunNote(runId, 'model_calls', modelCalls.report()); } catch { /* the note is diagnostics only */ }
+        try { if (readingStore) cache.writeRunNote(runId, 'model_readings', readingStore.report()); } catch { /* the note is diagnostics only */ }
         throw err;
     }
 }
