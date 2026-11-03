@@ -8,9 +8,14 @@
  ********************************************************************************/
 
 /**
- * The place store (docs/research/2026-11-03-district-run-over-run-plan.md, section 4): a real place kept between runs,
- * so each run at a place starts from what the last one left and a run never makes a building worse or loses one. A
- * stage cache only replays identical inputs; this keeps the place itself.
+ * The place store (docs/research/2026-11-03-district-run-over-run-plan.md, section 4): the scene object store's
+ * (asset-store/scene-object-store.ts) cloud side for one real place, so each run at a place starts from what the last
+ * one left, on any machine, and a run never makes an object worse or loses one.
+ *
+ * The working copy is the scene object store under the user's Scratchbox home: per-object versioned GLBs
+ * (`building/<Google vector feature id>`, `tree/<catalog id>`, the ground), each version measured by the completeness
+ * audit and made current only when no measure gets worse. This module copies a run's objects to the place's store and
+ * keeps the place's own record:
  *
  * **Where.** `gs://<training bucket>/places/v1/<place key>/` (the bucket the cache mirror already writes, through the
  * same service-account credentials: training-pair-capture.ts defaultTrainingBucket). When that bucket is not configured
@@ -20,27 +25,25 @@
  * (PlaceStore.where); opening the store never throws.
  *
  * **What.**
- *   - `manifest.json`: the place's ENU anchor, radius, grown edge and chunk grid, the code version of the last commit,
- *     an index of the records, the runs that committed, and the writer's lease;
- *   - `records/<record key>.json`: one record per building (keyed by its Google vector feature id, else its scan
- *     component), and one each for the ground and the trees. A record holds every version a run offered, kept or
- *     not, each with its files, provenance shares, measures, defects, the switches and code version that built it, and
- *     the decision with its reason; `current` names the version kept;
- *   - `blobs/<sha256[0:2]>/<sha256>.glb`: the files of kept versions, content-addressed (written once, never rewritten).
+ *   - `manifest.json`: the place's ENU anchor, radius, grown edge and chunk grid, the code version and switches of the
+ *     last sync, the audit's summary (its trees among it), an index of the objects, the runs that synced, and the
+ *     writer's lease;
+ *   - `objects/<object key>.json`: one per object (`<kind>/<identity>@<frame>`), every version any machine synced (the
+ *     object store's record of it: measures, defects, decision, inputs, provenance), and the version current here;
+ *   - `blobs/<sha256[0:2]>/<sha256>.glb`: the GLB of every version that has been current here, content-addressed.
  *
  * **One writer at a time.** The manifest carries a lease, taken and released with a generation precondition on the
  * manifest (VersionedCloudBucket.putFileIfGeneration): of two writers that read the same manifest only one write lands.
  * A lease that outlives PLACE_STORE_PARAMS.leaseMs is taken for a crashed writer's and may be taken over; its holder then
- * finds its own commit refused and reports that it lost the lease. Readers never need the lease.
+ * finds its own manifest write refused and reports that it lost the lease. Readers never need the lease.
  *
- * **Promote or reject.** A new version is kept only when no measure of the current one gets worse (each measure says
- * which way is better, and a tolerance within which a change is noise) and none goes unmeasured; otherwise the current
- * version stays and the new one is recorded beside it with the reason. A version whose files are byte-identical to the
- * current one's adds nothing.
+ * **Never worse here either.** The version current on this machine is offered; it becomes current in the place store
+ * only when no measure of the place's current version gets worse (the object store's own rule, worseMeasures), so a
+ * machine that never saw the place's best version cannot replace it with a worse one.
  *
  * **The run ledger's sync rules** (run-ledger-sync.ts on the ledger's branch): records are union-merged with what the
- * bucket already holds, by version identity, so a writer that missed a version cannot drop it; and every path under the
- * workspace leaves workspace-relative, since an absolute path is meaningless on another machine.
+ * bucket already holds, by the version's input hash, so a writer that missed a version cannot drop it; and every path
+ * under the workspace leaves workspace-relative, since an absolute path is meaningless on another machine.
  */
 
 import { execFileSync } from 'child_process';
@@ -48,78 +51,32 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import type { Vec2 } from '../../../common/spatial/staged-location-contracts';
+import { worseMeasures, type ObjectRecord, type SceneObjectStore } from '../../asset-store/scene-object-store';
 import { DirectoryCloudBucket, isVersionedBucket, NO_GENERATION, type CloudBucket, type VersionedCloudBucket } from '../../cloud-store/cloud-bucket';
 import { defaultTrainingBucket } from '../../cloud-store/training-pair-capture';
 
 export const PLACE_STORE_SCHEMA = 'scratchbox.place-store/1';
-export const PLACE_RECORD_SCHEMA = 'scratchbox.place-record/1';
+export const PLACE_OBJECT_SCHEMA = 'scratchbox.place-object/1';
 export const PLACE_STORE_PREFIX = 'places/v1';
 export const PLACE_STORE_FALLBACK_ROOT = '/Volumes/G-RAID MIRROR/scratchbox-places';
 
 export const PLACE_STORE_PARAMS = {
     /** A lease not released by then is taken for a crashed writer's and may be taken over (ms). */
     leaseMs: 20 * 60_000,
-    /** Records and blobs written at once. */
+    /** Objects and blobs written at once. */
     concurrency: 6
 };
 
-/** SCRATCHBOX_PLACE_STORE=1 turns the store on for staged districts; off by default. */
+/**
+ * SCRATCHBOX_PLACE_STORE=1 audits a chunked district and copies its objects to the place store. Off by default. It keeps
+ * the scene object store's versions, so SCRATCHBOX_OBJECT_STORE=1 must be on too (scene-objects.ts objectStoreEnabled).
+ */
 export function placeStoreEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
     return env.SCRATCHBOX_PLACE_STORE?.trim() === '1';
 }
 
-/** One measure of a version: its value, which way is better, and the change within which it is not worse. */
-export interface PlaceMeasure { value: number; better: 'lower' | 'higher'; tol?: number }
-export type PlaceMeasures = Record<string, PlaceMeasure>;
-
-/** A defect found in a version: what kind (a label), in words, and where when known (district frame, m; a view and a screen box from a critic). */
-export interface PlaceDefect { kind: string; detail: string; source: string; at?: [number, number, number]; view?: string; box?: [number, number, number, number] }
-
-/** A file of a version: its role (a label: 'clay', 'textured'), where it was written, its content hash, and its blob key once stored. */
-export interface PlaceFile { role: string; path: string; sha256: string; bytes: number; blob?: string }
-
-/** What built a version: the commit, and the versions of the modules that matter to it. */
+/** What built a sync: the commit, and the versions of the modules that matter to it. */
 export interface PlaceCodeVersion { commit?: string; modules: Record<string, string> }
-
-export interface PlaceDecision {
-    kept: boolean;
-    reason: string;
-    /** The version it was compared with. */
-    comparedTo?: string;
-    /** Measures that got worse, or went unmeasured, in words. */
-    worse?: string[];
-}
-
-export interface PlaceVersion {
-    /** The run that offered it: one version per record per run, so a retried run's version is the same one. */
-    version: string;
-    runId: string;
-    atMs: number;
-    files: PlaceFile[];
-    /** Share of the record's surface area per provenance label. */
-    provenance: Record<string, number>;
-    measures: PlaceMeasures;
-    defects: PlaceDefect[];
-    switches: Record<string, string>;
-    codeVersion: PlaceCodeVersion;
-    /** The deterministic audit's own detail for this record (district-completeness-audit.ts). */
-    audit?: unknown;
-    decision: PlaceDecision;
-}
-
-export interface PlaceRecord {
-    schema: typeof PLACE_RECORD_SCHEMA;
-    id: string;
-    /** What the id is (a label: a Google vector feature id, a scan component, the ground, the trees). */
-    idSource: string;
-    /** Plan outline (m, the place's frame: x east, z south), when the record has one. */
-    footprint?: Vec2[][];
-    /** The version kept. */
-    current?: string;
-    /** Every version offered, oldest first, kept or not. */
-    versions: PlaceVersion[];
-}
 
 export interface PlaceLease { holder: string; host: string; runId?: string; takenAtMs: number; expiresAtMs: number }
 
@@ -129,19 +86,38 @@ export interface PlaceChunkGrid {
     cells: Array<{ index: number; cx: number; cz: number; half: number; rect: { x0: number; z0: number; x1: number; z1: number }; centre: boolean; buildings: string[] }>;
 }
 
+/** One version of an object as the place store holds it: the object store's record, where it came from, and its blob once stored. */
+export interface PlaceObjectVersion { inputHash: string; record: ObjectRecord; host: string; runId?: string; syncedAtMs: number; blob?: string }
+
+export interface PlaceObjectRecord {
+    schema: typeof PLACE_OBJECT_SCHEMA;
+    objectKey: string;
+    kind: string;
+    identity: string;
+    /** The input hash of the version current in the place store. */
+    current?: string;
+    /** Every version any machine synced, oldest first. */
+    versions: PlaceObjectVersion[];
+    /** Each time a machine offered a version other than the current one: whether it became current here, and why. */
+    decisions: Array<{ inputHash: string; atMs: number; runId?: string; host: string; kept: boolean; reason: string }>;
+}
+
 export interface PlaceManifest {
     schema: typeof PLACE_STORE_SCHEMA;
     key: string;
     /** The place's ENU anchor (the district frame's origin). */
     anchor?: { lat: number; lng: number; originEllipsoidalHeightM?: number; address?: string };
     radiusM?: number;
-    /** The district's grown edge: the disc of radiusM, grown by these records' whole footprints. */
+    /** The district's grown edge: the disc of radiusM, grown by these buildings' whole footprints. */
     edge?: { radiusM: number; grownBy: string[] };
     chunks?: PlaceChunkGrid;
     codeVersion?: PlaceCodeVersion;
-    /** Index of the records: their object key, the version kept, and how many audit checks it fails. */
-    records: Record<string, { key: string; current?: string; failures: number; updatedAtMs: number }>;
-    runs: Array<{ runId: string; atMs: number; added: number; promoted: number; rejected: number; unchanged: number }>;
+    switches?: Record<string, string>;
+    /** The last audit's summary (district-completeness-audit.ts), its trees among it. */
+    audit?: unknown;
+    /** Index of the objects: their record's key, the version current here, and the defects it carries. */
+    objects: Record<string, { key: string; kind: string; current?: string; defects: number; updatedAtMs: number }>;
+    runs: Array<{ runId: string; atMs: number; host: string; added: number; promoted: number; rejected: number; unchanged: number }>;
     lease?: PlaceLease;
     createdAtMs: number;
     updatedAtMs: number;
@@ -166,7 +142,7 @@ export function placeKey(place: { lat: number; lng: number }): string {
     return `${place.lat.toFixed(5)}_${place.lng.toFixed(5)}`;
 }
 
-/** A record's object key: the id itself when it is a key already, else its characters made safe and its hash added (Google's ids hold '/'). */
+/** A record's object key: the id itself when it is a key already, else its characters made safe and its hash added (object keys hold '/' and '@'). */
 export function recordKey(id: string): string {
     if (KEY_PART.test(id) && id.length <= 120 && id !== '.' && id !== '..') return id;
     const safe = id.replace(/[^A-Za-z0-9._-]+/g, '.').replace(/^\.+|\.+$/g, '').slice(0, 100);
@@ -213,7 +189,7 @@ export async function openPlaceStore(opts: { key: string; bucket?: CloudBucket |
 }
 
 const manifestKey = (store: PlaceStore) => `${store.prefix}/manifest.json`;
-const recordObjectKey = (store: PlaceStore, id: string) => `${store.prefix}/records/${recordKey(id)}.json`;
+const objectRecordKey = (store: PlaceStore, objectKey: string) => `${store.prefix}/objects/${recordKey(objectKey)}.json`;
 const blobKey = (store: PlaceStore, sha256: string) => `${store.prefix}/blobs/${sha256.slice(0, 2)}/${sha256}.glb`;
 
 function scratchFile(store: PlaceStore, name: string): string {
@@ -253,9 +229,9 @@ export async function loadPlaceManifest(store: PlaceStore): Promise<{ manifest: 
     return r ? { manifest: r.value, generation: r.generation } : undefined;
 }
 
-export async function loadPlaceRecord(store: PlaceStore, id: string): Promise<PlaceRecord | undefined> {
+export async function loadPlaceObject(store: PlaceStore, objectKey: string): Promise<PlaceObjectRecord | undefined> {
     if (!store.bucket) return undefined;
-    return (await readJson<PlaceRecord>(store, recordObjectKey(store, id)))?.value;
+    return (await readJson<PlaceObjectRecord>(store, objectRecordKey(store, objectKey)))?.value;
 }
 
 export type LeaseResult = { ok: true; generation: string; manifest: PlaceManifest; lease: PlaceLease } | { ok: false; reason: string; heldBy?: PlaceLease };
@@ -274,7 +250,7 @@ export async function acquirePlaceLease(store: PlaceStore, who: { holder: string
     const lease: PlaceLease = { holder: who.holder, host: os.hostname(), ...(who.runId ? { runId: who.runId } : {}), takenAtMs: now, expiresAtMs: now + P.leaseMs };
     const manifest: PlaceManifest = read?.manifest
         ? { ...read.manifest, lease }
-        : { schema: PLACE_STORE_SCHEMA, key: store.key, records: {}, runs: [], lease, createdAtMs: now, updatedAtMs: now };
+        : { schema: PLACE_STORE_SCHEMA, key: store.key, objects: {}, runs: [], lease, createdAtMs: now, updatedAtMs: now };
     const w = await writeJson(store, manifestKey(store), manifest, read?.generation ?? NO_GENERATION);
     if (w === 'conflict') return { ok: false, reason: 'another writer changed the manifest first' };
     return { ok: true, generation: w.generation, manifest, lease };
@@ -292,58 +268,29 @@ export async function releasePlaceLease(store: PlaceStore, held: { generation: s
     return (await writeLeasedManifest(store, held.manifest, held.generation, false)) !== 'conflict';
 }
 
-/** Measures of `current` that `next` makes worse beyond their tolerance, or does not measure, in words. */
-export function worseMeasures(current: PlaceMeasures, next: PlaceMeasures): string[] {
-    const out: string[] = [];
-    for (const [name, c] of Object.entries(current)) {
-        const n = next[name];
-        if (!n || !Number.isFinite(n.value)) { out.push(`${name} not measured (was ${fmt(c.value)})`); continue; }
-        const tol = c.tol ?? 0;
-        const worse = c.better === 'lower' ? n.value > c.value + tol : n.value < c.value - tol;
-        if (worse) out.push(`${name} ${fmt(c.value)} -> ${fmt(n.value)} (${c.better} is better)`);
-    }
-    return out;
-}
-
-function fmt(v: number): string {
-    return Math.abs(v) >= 100 || Number.isInteger(v) ? String(Math.round(v * 10) / 10) : v.toPrecision(3);
-}
-
-const sameFiles = (a: PlaceFile[], b: PlaceFile[]) => a.length === b.length && a.map(f => f.sha256).sort().join() === b.map(f => f.sha256).sort().join();
-
-/**
- * Whether a version offered for `record` is kept: always when the record has none, never when its files are the current
- * version's ('unchanged'), else when no measure of the current version gets worse.
- */
-export function decideVersion(record: PlaceRecord | undefined, offered: Omit<PlaceVersion, 'decision'>): PlaceDecision | 'unchanged' {
-    const current = record?.current ? record.versions.find(v => v.version === record.current) : undefined;
-    if (!current) return { kept: true, reason: 'the first version of this record' };
-    if (current.version === offered.version || sameFiles(current.files, offered.files)) return 'unchanged';
-    const worse = worseMeasures(current.measures, offered.measures);
-    if (worse.length) return { kept: false, reason: `the current version ${current.version} stays: ${worse.join('; ')}`, comparedTo: current.version, worse };
-    return { kept: true, reason: `no measure is worse than the current version ${current.version}`, comparedTo: current.version };
-}
-
-/** The union of two copies of a record: every version either holds (by version), and the kept version the newer copy names. */
-export function mergeRecords(remote: PlaceRecord | undefined, local: PlaceRecord): PlaceRecord {
+/** The union of two copies of an object's record: every version either holds (by input hash), every decision, and the current version the newer copy names. */
+export function mergePlaceObjects(remote: PlaceObjectRecord | undefined, local: PlaceObjectRecord): PlaceObjectRecord {
     if (!remote) return local;
-    const byVersion = new Map<string, PlaceVersion>();
-    for (const v of remote.versions) byVersion.set(v.version, v);
-    for (const v of local.versions) byVersion.set(v.version, v);
-    const versions = [...byVersion.values()].sort((a, b) => a.atMs - b.atMs);
-    const atOf = (r: PlaceRecord) => r.versions.find(v => v.version === r.current)?.atMs ?? -Infinity;
-    const current = atOf(local) >= atOf(remote) ? local.current : remote.current;
-    return { ...remote, ...local, versions, ...(current ? { current } : {}) };
+    // a version is immutable under its input hash: the copy first synced stands, gaining a blob once one is stored
+    const byHash = new Map<string, PlaceObjectVersion>();
+    for (const v of remote.versions) byHash.set(v.inputHash, v);
+    for (const v of local.versions) {
+        const had = byHash.get(v.inputHash);
+        byHash.set(v.inputHash, had ? { ...had, ...(v.blob && !had.blob ? { blob: v.blob } : {}) } : v);
+    }
+    const seen = new Set<string>();
+    const decisions = [...remote.decisions, ...local.decisions].filter(d => { const k = `${d.inputHash}:${d.atMs}:${d.host}`; if (seen.has(k)) return false; seen.add(k); return true; }).sort((a, b) => a.atMs - b.atMs);
+    return { ...remote, ...local, versions: [...byHash.values()].sort((a, b) => a.syncedAtMs - b.syncedAtMs), decisions };
 }
 
 /**
  * Every string under `root` rewritten relative to it, through the whole value (the run ledger's rule): a path is
- * absolute on the machine that wrote it and dead anywhere else. Paths outside the workspace are left alone.
+ * absolute on the machine that wrote it and dead anywhere else. The root itself becomes '.'; paths outside it are left alone.
  */
 export function relativisePaths<T>(value: T, root: string): T {
     const prefix = root.endsWith(path.sep) ? root : root + path.sep;
     const walk = (v: unknown): unknown => {
-        if (typeof v === 'string') return v.startsWith(prefix) ? v.slice(prefix.length) : v;
+        if (typeof v === 'string') return v === root ? '.' : v.startsWith(prefix) ? v.slice(prefix.length) : v;
         if (Array.isArray(v)) return v.map(walk);
         if (v && typeof v === 'object') {
             const out: Record<string, unknown> = {};
@@ -355,7 +302,7 @@ export function relativisePaths<T>(value: T, root: string): T {
     return walk(value) as T;
 }
 
-/** The code a version was built with: SCRATCHBOX_CODE_VERSION (a container has no .git), else the workspace's commit. */
+/** The code a sync was built with: SCRATCHBOX_CODE_VERSION (a container has no .git), else the workspace's commit. */
 export function placeCodeVersion(workspaceRoot: string, modules: Record<string, string>, env: NodeJS.ProcessEnv = process.env): PlaceCodeVersion {
     const asked = env.SCRATCHBOX_CODE_VERSION?.trim();
     if (asked) return { commit: asked, modules };
@@ -367,49 +314,36 @@ export function placeCodeVersion(workspaceRoot: string, modules: Record<string, 
     }
 }
 
-/** One record's offer from a run: what it is, and its version without the parts the store fills. */
-export interface PlaceOffer {
-    id: string;
-    idSource: string;
-    footprint?: Vec2[][];
-    files: Array<{ role: string; path: string }>;
-    provenance: Record<string, number>;
-    measures: PlaceMeasures;
-    defects: PlaceDefect[];
-    audit?: unknown;
-}
-
-export interface PlaceRunCommit {
+/** A run's objects to copy to the place, and the place's own fields. */
+export interface PlaceSync {
     runId: string;
     holder?: string;
+    /** The object store holding the run's versions (the working copy). */
+    objects: SceneObjectStore;
+    /** The objects the run kept (scene-objects.ts storeSceneObjects report.kept), by object key. */
+    objectKeys: string[];
     anchor: NonNullable<PlaceManifest['anchor']>;
     radiusM: number;
     edge: NonNullable<PlaceManifest['edge']>;
     chunks?: PlaceChunkGrid;
     codeVersion: PlaceCodeVersion;
     switches: Record<string, string>;
-    offers: PlaceOffer[];
+    audit?: unknown;
     workspaceRoot: string;
     now?: () => number;
 }
 
-export interface PlaceCommitReport {
+export interface PlaceSyncReport {
     where: PlaceStoreLocation;
     key: string;
-    /** Set when nothing was committed, with why. */
+    /** Set when nothing was synced, with why. */
     skipped?: string;
-    records: { added: number; promoted: number; rejected: number; unchanged: number };
-    decisions: Array<{ id: string; kept: boolean | 'unchanged'; reason: string }>;
+    objects: { added: number; promoted: number; rejected: number; unchanged: number };
+    /** Each object whose current version here is not the one this machine offered, or that changed here, with why. */
+    decisions: Array<{ objectKey: string; kept: boolean | 'unchanged'; reason: string }>;
     blobs: { stored: number; existing: number; bytes: number; missing: string[] };
     errors: string[];
     ms: number;
-}
-
-async function sha256File(file: string): Promise<{ sha256: string; bytes: number }> {
-    const hash = crypto.createHash('sha256');
-    let bytes = 0;
-    for await (const chunk of fs.createReadStream(file)) { hash.update(chunk as Buffer); bytes += (chunk as Buffer).length; }
-    return { sha256: hash.digest('hex'), bytes };
 }
 
 async function eachLimited<T>(items: T[], limit: number, run: (item: T) => Promise<void>): Promise<void> {
@@ -418,92 +352,96 @@ async function eachLimited<T>(items: T[], limit: number, run: (item: T) => Promi
 }
 
 /**
- * A run's offers committed to the place under its lease: each record read back, its offered version decided, the files of
- * kept versions stored as blobs, the record written as the union of the bucket's copy and this one (paths made
- * workspace-relative), then the manifest written and the lease released in one generation-matched write. Never throws:
- * what went wrong is in the report.
+ * A run's objects copied to the place store under its lease: for each object, every version the object store holds is
+ * added to the place's record (union by input hash), the version current on this machine is offered and becomes current
+ * here unless it would make the place's current version worse, its GLB is stored as a blob, and the record is written
+ * with workspace-relative paths; then the manifest is written and the lease released in one generation-matched write.
+ * Never throws: what went wrong is in the report.
  */
-export async function commitPlaceRun(store: PlaceStore, run: PlaceRunCommit, P = PLACE_STORE_PARAMS): Promise<PlaceCommitReport> {
-    const now = run.now ?? Date.now;
+export async function syncPlaceObjects(store: PlaceStore, sync: PlaceSync, P = PLACE_STORE_PARAMS): Promise<PlaceSyncReport> {
+    const now = sync.now ?? Date.now;
     const t0 = now();
-    const report: PlaceCommitReport = { where: store.where, key: store.key, records: { added: 0, promoted: 0, rejected: 0, unchanged: 0 }, decisions: [], blobs: { stored: 0, existing: 0, bytes: 0, missing: [] }, errors: [], ms: 0 };
+    const host = os.hostname();
+    const report: PlaceSyncReport = { where: store.where, key: store.key, objects: { added: 0, promoted: 0, rejected: 0, unchanged: 0 }, decisions: [], blobs: { stored: 0, existing: 0, bytes: 0, missing: [] }, errors: [], ms: 0 };
     const done = (skipped?: string) => ({ ...report, ...(skipped ? { skipped } : {}), ms: now() - t0 });
     if (!store.bucket) return done(store.where.reason ?? 'no place store');
-    const holder = run.holder ?? `${os.hostname()}:${process.pid}:${run.runId}`;
     let held: LeaseResult;
     try {
-        held = await acquirePlaceLease(store, { holder, runId: run.runId }, now(), P);
+        held = await acquirePlaceLease(store, { holder: sync.holder ?? `${host}:${process.pid}:${sync.runId}`, runId: sync.runId }, now(), P);
     } catch (err) {
         return done(`the lease could not be taken (${errorMessage(err)})`);
     }
     if (!held.ok) return done(held.reason);
     const leased = held;
-    const manifest: PlaceManifest = { ...leased.manifest, records: { ...leased.manifest.records }, runs: [...leased.manifest.runs] };
+    const manifest: PlaceManifest = { ...leased.manifest, objects: { ...leased.manifest.objects }, runs: [...leased.manifest.runs] };
     try {
-        const hashes = new Map<string, Promise<{ sha256: string; bytes: number } | undefined>>();
-        const hashOf = (file: string) => {
-            let h = hashes.get(file);
-            if (!h) hashes.set(file, h = sha256File(file).catch(() => undefined));
-            return h;
-        };
-        const stored = new Map<string, Promise<string>>();
-        const storeBlob = (file: string, sha256: string, bytes: number) => {
-            let s = stored.get(sha256);
-            if (!s) {
-                const key = blobKey(store, sha256);
-                stored.set(sha256, s = store.bucket!.putFile(key, file, { onlyIfAbsent: true, contentType: 'model/gltf-binary', metadata: { place: store.key, sha256 } }).then(state => {
-                    if (state === 'stored') { report.blobs.stored++; report.blobs.bytes += bytes; } else report.blobs.existing++;
-                    return key;
-                }));
-            }
-            return s;
-        };
-        await eachLimited(run.offers, P.concurrency, async offer => {
+        await eachLimited([...new Set(sync.objectKeys)], P.concurrency, async objectKey => {
             try {
-                const files: PlaceFile[] = [];
-                for (const f of offer.files) {
-                    const h = await hashOf(f.path);
-                    if (!h) { if (!report.blobs.missing.includes(f.path)) report.blobs.missing.push(f.path); continue; }
-                    files.push({ role: f.role, path: f.path, ...h });
+                const rows = sync.objects.versions(objectKey);
+                const cur = sync.objects.current(objectKey);
+                if (!rows.length || !cur) throw new Error('the object store holds no version of it');
+                const atMs = now();
+                const versions: PlaceObjectVersion[] = [];
+                for (const row of rows) {
+                    const record = sync.objects.recordOf(row);
+                    if (record) versions.push({ inputHash: row.inputHash, record, host, ...(row.runId ? { runId: row.runId } : {}), syncedAtMs: atMs });
                 }
-                const remote = await loadPlaceRecord(store, offer.id);
-                const offered: Omit<PlaceVersion, 'decision'> = {
-                    version: run.runId, runId: run.runId, atMs: now(), files, provenance: offer.provenance, measures: offer.measures,
-                    defects: offer.defects, switches: run.switches, codeVersion: run.codeVersion, ...(offer.audit !== undefined ? { audit: offer.audit } : {})
-                };
-                const decision = decideVersion(remote, offered);
-                if (decision === 'unchanged') {
-                    report.records.unchanged++;
-                    report.decisions.push({ id: offer.id, kept: 'unchanged', reason: 'the same files as the current version' });
-                    return;
+                const offered = versions.find(v => v.inputHash === cur.inputHash);
+                if (!offered) throw new Error(`the record of its current version ${cur.version} is missing`);
+                const remote = await loadPlaceObject(store, objectKey);
+                const remoteCurrent = remote?.current ? remote.versions.find(v => v.inputHash === remote.current) : undefined;
+                // the place's current version stays unless the offered one is no worse by every measure it carries
+                let kept: boolean | 'unchanged', reason: string;
+                if (!remoteCurrent) { kept = true; reason = 'the first version of this object in the place store'; }
+                else if (remoteCurrent.inputHash === offered.inputHash) { kept = 'unchanged'; reason = 'already the current version here'; }
+                else {
+                    const worse = worseMeasures(remoteCurrent.record.measures ?? {}, offered.record.measures ?? {});
+                    kept = !worse.length;
+                    reason = worse.length ? `the place's current version stays: ${worse.join('; ')}` : 'no measure is worse than the place\'s current version';
                 }
-                if (decision.kept) for (const f of files) f.blob = await storeBlob(f.path, f.sha256, f.bytes);
-                const local: PlaceRecord = {
-                    schema: PLACE_RECORD_SCHEMA, id: offer.id, idSource: offer.idSource, ...(offer.footprint ? { footprint: offer.footprint } : {}),
-                    ...(decision.kept ? { current: offered.version } : remote?.current ? { current: remote.current } : {}),
-                    versions: [{ ...offered, decision }]
+                const current = kept === false ? remoteCurrent!.inputHash : offered.inputHash;
+                // the GLB of the version current here, once
+                if (kept === true || (kept === 'unchanged' && !remoteCurrent?.blob)) {
+                    const glb = sync.objects.store.lookup(cur.glbPath);
+                    if (!glb) report.blobs.missing.push(objectKey);
+                    else {
+                        const state = await store.bucket!.putFile(blobKey(store, cur.glbSha256), glb.file, { onlyIfAbsent: true, contentType: 'model/gltf-binary', metadata: { place: store.key, objectKey, sha256: cur.glbSha256 } });
+                        if (state === 'stored') { report.blobs.stored++; report.blobs.bytes += glb.bytes; } else report.blobs.existing++;
+                        offered.blob = blobKey(store, cur.glbSha256);
+                    }
+                }
+                const local: PlaceObjectRecord = {
+                    schema: PLACE_OBJECT_SCHEMA, objectKey, kind: cur.kind, identity: cur.identity, current, versions,
+                    decisions: kept === 'unchanged' ? [] : [{ inputHash: offered.inputHash, atMs, runId: sync.runId, host, kept, reason }]
                 };
-                const merged = relativisePaths(mergeRecords(remote, local), run.workspaceRoot);
-                await writeJson(store, recordObjectKey(store, offer.id), merged);
-                if (!remote?.current) report.records.added++;
-                else if (decision.kept) report.records.promoted++;
-                else report.records.rejected++;
-                report.decisions.push({ id: offer.id, kept: decision.kept, reason: decision.reason });
-                const kept = merged.versions.find(v => v.version === merged.current);
-                manifest.records[offer.id] = { key: recordKey(offer.id), ...(merged.current ? { current: merged.current } : {}), failures: kept?.defects.length ?? 0, updatedAtMs: now() };
+                const merged = relativisePaths(mergePlaceObjects(remote, local), sync.workspaceRoot);
+                await writeJson(store, objectRecordKey(store, objectKey), merged);
+                if (!remoteCurrent) report.objects.added++;
+                else if (kept === 'unchanged') report.objects.unchanged++;
+                else if (kept) report.objects.promoted++;
+                else report.objects.rejected++;
+                if (kept !== 'unchanged') report.decisions.push({ objectKey, kept, reason });
+                const here = merged.versions.find(v => v.inputHash === merged.current);
+                manifest.objects[objectKey] = { key: recordKey(objectKey), kind: cur.kind, ...(merged.current ? { current: merged.current } : {}), defects: here?.record.defects?.length ?? 0, updatedAtMs: atMs };
             } catch (err) {
-                report.errors.push(`${offer.id}: ${errorMessage(err)}`);
+                report.errors.push(`${objectKey}: ${errorMessage(err)}`);
             }
         });
         const atMs = now();
-        const entry = { runId: run.runId, atMs, ...report.records };
         const next: PlaceManifest = {
-            ...manifest, anchor: run.anchor, radiusM: run.radiusM, edge: run.edge, ...(run.chunks ? { chunks: run.chunks } : {}), codeVersion: run.codeVersion,
-            runs: [...manifest.runs.filter(r => r.runId !== run.runId), entry].sort((a, b) => a.atMs - b.atMs), updatedAtMs: atMs
+            ...manifest, anchor: sync.anchor, radiusM: sync.radiusM, edge: sync.edge, ...(sync.chunks ? { chunks: sync.chunks } : {}), codeVersion: sync.codeVersion,
+            switches: sync.switches, ...(sync.audit !== undefined ? { audit: sync.audit } : {}),
+            runs: [...manifest.runs.filter(r => r.runId !== sync.runId), { runId: sync.runId, atMs, host, ...report.objects }].sort((a, b) => a.atMs - b.atMs), updatedAtMs: atMs
         };
         // the manifest and the release in one write, over the generation the lease was taken at
-        const w = await writeLeasedManifest(store, relativisePaths(next, run.workspaceRoot), leased.generation, false);
-        if (w === 'conflict') report.errors.push('the lease ran out and another writer took the place before the manifest was written: the records written stand (union-merged), the manifest index does not list this run');
+        const w = await writeLeasedManifest(store, relativisePaths(next, sync.workspaceRoot), leased.generation, false);
+        if (w === 'conflict') report.errors.push('the lease ran out and another writer took the place before the manifest was written: the object records written stand (union-merged), the manifest does not list this run');
+        else {
+            // this machine keeps the place's manifest too, beside the objects (the asset store's recipes)
+            const { lease, ...body } = next;
+            void lease;
+            try { sync.objects.store.putRecipe({ id: `place:${store.key}`, kind: 'place-manifest', body: relativisePaths(body, sync.workspaceRoot) }); } catch (err) { report.errors.push(`the local copy of the manifest: ${errorMessage(err)}`); }
+        }
         return done();
     } catch (err) {
         report.errors.push(errorMessage(err));

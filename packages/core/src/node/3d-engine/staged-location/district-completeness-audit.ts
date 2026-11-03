@@ -14,7 +14,7 @@
  *
  * Every triangle belongs to the building whose footprint (Google's vector outline, within `buildingMarginM`) holds its
  * middle in plan; one in none belongs to a scan component when it lies on a separate piece large enough to be a
- * structure, else to the ground. Per building:
+ * structure, else to its layer's ground (`ground:<layer id>`: a chunk's ground is measured as that chunk's). Per building:
  *   - **The edge.** The district's grown edge is the disc of `radiusM` grown by whole footprints (the buildings the plan
  *     keeps whole). A footprint is sampled (its corners, along its sides every `footprintStepM`, and inside on that grid):
  *     wholly inside the edge, wholly out, or straddling it. Independently, open edges lying within `edgeBandM` of the
@@ -137,8 +137,9 @@ export interface SurfaceAudit {
     provenance: Record<string, number>;
     /** The layers holding it. */
     layers: string[];
-    /** Plan middle (m), area-weighted. */
+    /** Plan middle (m), area-weighted, and the lowest and highest point (m). */
     centre?: Vec2;
+    heightRangeM?: [number, number];
     /** The checks over their limits: which (a label) and in words. */
     failures: Array<{ check: string; detail: string }>;
 }
@@ -156,10 +157,15 @@ export interface TreeAudit {
     whole: boolean;
 }
 
+/** One owner's triangles in one layer, as glb-subset.ts cuts them (asked for with `cuts`), with their middle (frame metres). */
+export interface LayerOwnerCut { id: string; kind: string; areaM2: number; centre: [number, number, number]; cuts: Array<{ node: number; triangles: number[] }> }
+
 export interface DistrictAudit {
     version: string;
     radiusM: number;
     surfaces: SurfaceAudit[];
+    /** With `cuts`: per surface layer, each owner's triangles (an instanced node's are left out). */
+    cuts?: Record<string, LayerOwnerCut[]>;
     trees: { count: number; straddling: number; cut: number; list: TreeAudit[] };
     layers: Array<{ id: string; triangles: number; textures: number; error?: string }>;
     ms: number;
@@ -179,6 +185,9 @@ interface LayerSoup {
     tex: Int32Array;
     /** The `sbTree` node above the triangle's node, -1 when none. */
     tree: Int32Array;
+    /** The node that draws it, and its index among that node's mesh triangles (glb-subset.ts numbering; -1 for an instance). */
+    node: Int32Array;
+    nodeTri: Int32Array;
     glb: ParsedGlb;
     world: Mat4[];
 }
@@ -228,7 +237,7 @@ function readLayer(bytes: Uint8Array): LayerSoup {
         }
         return d;
     };
-    type Draw = { node: number; m: Mat4; prim: any };
+    type Draw = { node: number; m: Mat4; prim: any; first: number };
     const draws: Draw[] = [];
     let n = 0;
     nodes.forEach((node, ni) => {
@@ -242,15 +251,17 @@ function readLayer(bytes: Uint8Array): LayerSoup {
             const count = T ? T.length / 3 : R ? R.length / 4 : S ? S.length / 3 : 0;
             placements = Array.from({ length: count }, (_, i) => mul(world[ni], trs(T?.subarray(i * 3, i * 3 + 3), R?.subarray(i * 4, i * 4 + 4), S?.subarray(i * 3, i * 3 + 3))));
         }
+        let first = 0;
         for (const prim of json.meshes[node.mesh].primitives ?? []) {
             if ((prim.mode ?? 4) !== 4 || prim.attributes?.POSITION === undefined) continue;
             const count = prim.indices !== undefined ? json.accessors[prim.indices].count : json.accessors[prim.attributes.POSITION].count;
-            for (const m of placements) { draws.push({ node: ni, m, prim }); n += Math.floor(count / 3); }
+            for (const m of placements) { draws.push({ node: ni, m, prim, first: inst ? -1 : first }); n += Math.floor(count / 3); }
+            first += Math.floor(count / 3);
         }
     });
-    const pos = new Float32Array(n * 9), uv = new Float32Array(n * 6), tex = new Int32Array(n), tree = new Int32Array(n);
+    const pos = new Float32Array(n * 9), uv = new Float32Array(n * 6), tex = new Int32Array(n), tree = new Int32Array(n), nodeOf = new Int32Array(n), nodeTri = new Int32Array(n);
     let t = 0;
-    for (const { node, m, prim } of draws) {
+    for (const { node, m, prim, first } of draws) {
         const P = acc(prim.attributes.POSITION);
         const nv = P.length / 3;
         const I = prim.indices !== undefined ? acc(prim.indices) : undefined;
@@ -274,9 +285,11 @@ function readLayer(bytes: Uint8Array): LayerSoup {
             }
             tex[t] = ti;
             tree[t] = tr;
+            nodeOf[t] = node;
+            nodeTri[t] = first < 0 ? -1 : first + k / 3;
         }
     }
-    return { n, pos, uv, tex, tree, glb, world };
+    return { n, pos, uv, tex, tree, node: nodeOf, nodeTri, glb, world };
 }
 
 /** The base-colour image of a glTF texture, decoded, with its wrap modes; undefined when it cannot be read in memory. */
@@ -488,7 +501,7 @@ function pointTriangleDist2(px: number, py: number, pz: number, P: Float32Array,
 
 interface Owner {
     id: string; kind: string; edge?: { state: EdgeState; insideShare: number };
-    triangles: number; area: number; cx: number; cz: number;
+    triangles: number; area: number; cx: number; cz: number; minY: number; maxY: number;
     openEdgeM: number; nonManifold: number; holes: number; holePerimeterM: number; smallHoles: number; cutAtEdgeM: number;
     blackArea: number; untexturedArea: number; undecodedArea: number;
     overlapArea: number; floatingPieces: number; floatingArea: number;
@@ -496,7 +509,7 @@ interface Owner {
 }
 
 const newOwner = (id: string, kind: string): Owner => ({
-    id, kind, triangles: 0, area: 0, cx: 0, cz: 0, openEdgeM: 0, nonManifold: 0, holes: 0, holePerimeterM: 0, smallHoles: 0, cutAtEdgeM: 0,
+    id, kind, triangles: 0, area: 0, cx: 0, cz: 0, minY: Infinity, maxY: -Infinity, openEdgeM: 0, nonManifold: 0, holes: 0, holePerimeterM: 0, smallHoles: 0, cutAtEdgeM: 0,
     blackArea: 0, untexturedArea: 0, undecodedArea: 0, overlapArea: 0, floatingPieces: 0, floatingArea: 0, provenance: new Map(), layers: new Set()
 });
 
@@ -506,7 +519,7 @@ interface Kept { pos: Float32Array[]; ids: Int32Array[]; owner: Int32Array[]; pi
 const R2_A1 = 0.7548776662466927, R2_A2 = 0.5698402909980532;
 
 /** Audits a district's layers against its grown edge and its buildings' footprints. Reads each layer once, in order. */
-export async function auditDistrict(input: { layers: AuditLayer[]; buildings: DistrictFootprint[]; edge: DistrictEdge; signal?: AbortSignal; progress?: (m: string) => void }, P: DistrictAuditParams = DISTRICT_AUDIT_PARAMS): Promise<DistrictAudit> {
+export async function auditDistrict(input: { layers: AuditLayer[]; buildings: DistrictFootprint[]; edge: DistrictEdge; cuts?: boolean; signal?: AbortSignal; progress?: (m: string) => void }, P: DistrictAuditParams = DISTRICT_AUDIT_PARAMS): Promise<DistrictAudit> {
     const t0 = Date.now();
     const R = input.edge.radiusM;
     // a hair of margin: a footprint's own side, sampled, is inside its footprint however it rounds
@@ -522,10 +535,10 @@ export async function auditDistrict(input: { layers: AuditLayer[]; buildings: Di
         if (k === undefined) { k = owners.length; owners.push(newOwner(id, kind)); byId.set(id, k); }
         return k;
     };
-    const ground = ownerNamed('ground', 'ground');
     const kept: Kept = { pos: [], ids: [], owner: [], piece: [], largest: [], area: [] };
     const trees: TreeAudit[] = [];
     const layerReport: DistrictAudit['layers'] = [];
+    const cuts: Record<string, LayerOwnerCut[]> = {};
     const cosOverlap = Math.cos((P.overlapAngleDeg * Math.PI) / 180);
     let vertexBase = 0, pieceBase = 0;
 
@@ -567,7 +580,8 @@ export async function auditDistrict(input: { layers: AuditLayer[]; buildings: Di
         }
         let largest = 0;
         for (let p = 1; p < pc.count; p++) if (pArea[p] > pArea[largest]) largest = p;
-        // owners: the footprint holding the middle; else a separate structure-sized piece; else the ground
+        // owners: the footprint holding the middle; else a separate structure-sized piece; else this layer's ground
+        const ground = ownerNamed(`ground:${layer.id}`, 'ground');
         const owner = new Int32Array(n);
         for (let t = 0; t < n; t++) {
             const b = ownerOfPoint((pos[t * 9] + pos[t * 9 + 3] + pos[t * 9 + 6]) / 3, (pos[t * 9 + 2] + pos[t * 9 + 5] + pos[t * 9 + 8]) / 3);
@@ -587,6 +601,27 @@ export async function auditDistrict(input: { layers: AuditLayer[]; buildings: Di
             const label = layer.label ?? 'unlabelled';
             o.provenance.set(label, (o.provenance.get(label) ?? 0) + area[t]);
             for (let c = 0; c < 3; c++) minY[owner[t]] = Math.min(minY[owner[t]], pos[t * 9 + c * 3 + 1]);
+            o.minY = Math.min(o.minY, minY[owner[t]]);
+            for (let c = 0; c < 3; c++) o.maxY = Math.max(o.maxY, pos[t * 9 + c * 3 + 1]);
+        }
+        if (input.cuts) {
+            const byOwner = new Map<number, { area: number; x: number; z: number; y0: number; y1: number; nodes: Map<number, number[]> }>();
+            for (let t = 0; t < n; t++) {
+                if (soup.nodeTri[t] < 0) continue;
+                let e = byOwner.get(owner[t]);
+                if (!e) byOwner.set(owner[t], e = { area: 0, x: 0, z: 0, y0: Infinity, y1: -Infinity, nodes: new Map() });
+                e.area += area[t];
+                e.x += area[t] * (pos[t * 9] + pos[t * 9 + 3] + pos[t * 9 + 6]) / 3;
+                e.z += area[t] * (pos[t * 9 + 2] + pos[t * 9 + 5] + pos[t * 9 + 8]) / 3;
+                for (let c = 0; c < 3; c++) { e.y0 = Math.min(e.y0, pos[t * 9 + c * 3 + 1]); e.y1 = Math.max(e.y1, pos[t * 9 + c * 3 + 1]); }
+                const list = e.nodes.get(soup.node[t]);
+                if (list) list.push(soup.nodeTri[t]); else e.nodes.set(soup.node[t], [soup.nodeTri[t]]);
+            }
+            cuts[layer.id] = [...byOwner].map(([k, e]) => ({
+                id: owners[k].id, kind: owners[k].kind, areaM2: e.area,
+                centre: [e.area > 0 ? e.x / e.area : 0, (e.y0 + e.y1) / 2, e.area > 0 ? e.z / e.area : 0] as [number, number, number],
+                cuts: [...e.nodes].map(([node, triangles]) => ({ node, triangles }))
+            }));
         }
 
         // open and non-manifold edges, then the loops the open ones make
@@ -658,7 +693,7 @@ export async function auditDistrict(input: { layers: AuditLayer[]; buildings: Di
     const surfaces = owners.map(o => finishOwner(o, P));
     const straddling = trees.filter(t => t.straddles);
     return {
-        version: DISTRICT_AUDIT_VERSION, radiusM: R, surfaces,
+        version: DISTRICT_AUDIT_VERSION, radiusM: R, surfaces, ...(input.cuts ? { cuts } : {}),
         trees: { count: trees.length, straddling: straddling.length, cut: trees.filter(t => !t.whole).length, list: straddling },
         layers: layerReport, ms: Date.now() - t0
     };
@@ -833,6 +868,6 @@ function finishOwner(o: Owner, P: DistrictAuditParams): SurfaceAudit {
         id: o.id, kind: o.kind, ...(o.edge ? { edge: o.edge } : {}), cutAtEdgeM: o.cutAtEdgeM, triangles: o.triangles, areaM2: o.area,
         openEdgeM: o.openEdgeM, nonManifoldEdges: o.nonManifold, holes: o.holes, holePerimeterM: o.holePerimeterM, smallHoles: o.smallHoles,
         blackShare, untexturedShare, undecodedAreaM2: o.undecodedArea, overlapAreaM2: o.overlapArea, floatingPieces: o.floatingPieces, floatingAreaM2: o.floatingArea,
-        provenance, layers: [...o.layers], ...(o.area > 0 ? { centre: [o.cx / o.area, o.cz / o.area] as Vec2 } : {}), failures
+        provenance, layers: [...o.layers], ...(o.area > 0 ? { centre: [o.cx / o.area, o.cz / o.area] as Vec2, heightRangeM: [o.minY, o.maxY] as [number, number] } : {}), failures
     };
 }

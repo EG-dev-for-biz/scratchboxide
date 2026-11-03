@@ -161,7 +161,7 @@ describe('district completeness audit', () => {
         expect(cut.centre[0]).toBeCloseTo(R - 1, 6);
         expect(cut.reachOutM).toBeCloseTo(1, 6);
         expect(cut.expectedOutM).toBeCloseTo(3, 6);
-        // trees are audited as trees, not as the ground's surface
-        expect(surface(audit, 'ground').triangles).toBe(0);
+        // trees are audited as trees, not as a surface
+        expect(audit.surfaces.filter(s => s.kind === 'ground')).toEqual([]);
     });
 });
