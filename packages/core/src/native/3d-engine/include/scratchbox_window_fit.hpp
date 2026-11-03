@@ -172,25 +172,8 @@ using ::scratchbox::js::hypot;
 using ::scratchbox::js::cbrt;
 /** Python's round(): halves to even. */
 inline double pyRound(double x) { const double f = std::floor(x), d = x - f; return d > 0.5 ? f + 1 : d < 0.5 ? f : std::fmod(f, 2.0) == 0 ? f : f + 1; }
-/** A number as JavaScript's String(n) writes it. */
-inline std::string str(double v) {
-    if (std::isnan(v)) return "NaN";
-    if (v == 0) return "0";
-    if (std::isinf(v)) return v > 0 ? "Infinity" : "-Infinity";
-    char buf[64];
-    auto r = std::to_chars(buf, buf + sizeof buf, v, std::chars_format::scientific);
-    std::string sci(buf, r.ptr);
-    std::string sign;
-    if (sci[0] == '-') { sign = "-"; sci.erase(0, 1); }
-    const size_t e = sci.find('e');
-    std::string digits;
-    for (size_t i = 0; i < e; ++i) if (sci[i] != '.') digits += sci[i];
-    const int exp10 = std::atoi(sci.c_str() + e + 1), k = static_cast<int>(digits.size()), n = exp10 + 1;
-    if (k <= n && n <= 21) return sign + digits + std::string(n - k, '0');
-    if (0 < n && n <= 21) return sign + digits.substr(0, n) + "." + digits.substr(n);
-    if (-6 < n && n <= 0) return sign + "0." + std::string(-n, '0') + digits;
-    return sign + digits.substr(0, 1) + (k > 1 ? "." + digits.substr(1) : "") + "e" + (n - 1 >= 0 ? "+" : "-") + std::to_string(std::abs(n - 1));
-}
+/** A number as JavaScript's String(n) writes it: scratchbox_js_math.hpp. */
+inline std::string str(double v) { return ::scratchbox::js::toString(v); }
 /** A double that JSON.parse reads back exactly. */
 inline std::string num(double v) {
     if (!std::isfinite(v)) return "null";

@@ -132,6 +132,11 @@ export function repeatTexture(img: { rgba: Uint8Array; width: number; height: nu
     // the spandrels first, then the windows over them (their edges are the windows' own)
     draw(spandrels, false, 'spandrels');
     draw(windows, true, 'windows');
-    report.method = `each fitted window (${report.windows}) and each spandrel between two windows of a strip (${report.spandrels}) drawn as the per-texel median of its ${report.groups} size group(s) (at least ${P.minRepeats} repeats within ${Math.round(P.sizeTol * 100)}%), window edges snapped over ${edge} texel(s), ${Math.round(P.keepShade * 100)}% of each repeat's own shade kept (at most ${P.maxShade} levels)`;
+    report.method = repeatTextureMethod(report, edge, P);
     return { rgba: out, report };
+}
+
+/** The report's method: what was drawn, from how many repeats, with the edge band (texels) it snapped. */
+export function repeatTextureMethod(r: Pick<RepeatTextureReport, 'windows' | 'spandrels' | 'groups'>, edge: number, P: RepeatTextureParams = REPEAT_TEXTURE): string {
+    return `each fitted window (${r.windows}) and each spandrel between two windows of a strip (${r.spandrels}) drawn as the per-texel median of its ${r.groups} size group(s) (at least ${P.minRepeats} repeats within ${Math.round(P.sizeTol * 100)}%), window edges snapped over ${edge} texel(s), ${Math.round(P.keepShade * 100)}% of each repeat's own shade kept (at most ${P.maxShade} levels)`;
 }
