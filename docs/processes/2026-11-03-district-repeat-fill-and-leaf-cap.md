@@ -67,6 +67,11 @@ than the default 524 leaves (section 2). The live build that would capture them 
 
 ## 2. The 524 leaf-tile cap at Penn
 
+> **Superseded the same day.** MAIN routed a reach fix instead of a district cap: EG-dev-for-biz/scratchboxide#32
+> keeps every leaf the radius touches, ranked by the plan distance of its footprint, with the crawl's 6,000-leaf limit
+> as the budget (`docs/processes/2026-11-03-district-reach-plan-leaves.md` on `fix/district-reach-plan-leaves`). The
+> measurements below still stand; the cap of 2,000 proposed here does not.
+
 `Google3DTileBlockoutPipelineService` keeps the nearest `options.maxLeaves || 524` leaf tiles. The district path never
 passes `maxLeaves`, so every district extraction keeps 524. The containment step (`districtContainmentRadiusM`,
 `DISTRICT_CONTAINMENT_MAX_GROWTH_M` = 100 m) then grows the radius so it ends on whole buildings.
