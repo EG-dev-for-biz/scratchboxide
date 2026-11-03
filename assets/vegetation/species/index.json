@@ -11,7 +11,7 @@
     "scaffoldBranches": "primary limbs at the crown break (0: the grower's seeded 2-4)",
     "leafLengthM / leafAspect": "the leaf or frond the leaf set is chosen by (length, width / length)",
     "hueDeg": "[centre, spread] of the foliage's hue in the chromaticity plane (0 red, 60 yellow, 120 green); inside the spread costs nothing",
-    "apicalDominance": "0..1, the leader's momentum over the laterals; the grower stalls on a measured crown above about 0.65 (its branches overshoot the attractors), so a columnar form is expressed by the crown's own measurements, not by a higher value"
+    "apicalDominance": "0..1, the leader's dominance over the laterals: each shoot's momentum along its heading (0.76 x this) and how firmly the leader holds its course through the crown to the apex (smoothstep from 0.45 to 0.60: at 0.45 and below the trunk forks into its scaffold limbs at the crown break, from 0.60 it rises through the crown to the apex); the grower stalls on a measured crown above about 0.65 (its branches overshoot the attractors), so a columnar form is expressed by the crown's own measurements, not by a higher value"
   },
   "entries": [
     { "id": "london_plane", "label": "London plane", "description": "Broad spreading street tree with a tall clear trunk and a wide dome of large palmate leaves.", "heightM": [

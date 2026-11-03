@@ -64,7 +64,7 @@ struct SbVeggieBlade {
 
 /** How a tree grows and carries its leaves. All continuous; defaults are the neutral values the canonical template was drawn with. */
 struct SbVeggieMorphology {
-    float apicalDominance{0.5f};       // 0..1: how far the leader outgrows the laterals (a grown tree: the momentum of a branch along its heading, 0.76 x this)
+    float apicalDominance{0.5f};       // 0..1: how far the leader outgrows the laterals (a grown tree: the momentum of a branch along its heading, 0.76 x this, and how firmly its leader holds its course to the apex, tile_vegetation GrowthParams::excurrentApical)
     float branchAngleMeanRad{0.80795f};// mean angle of laterals from the leader (atan2(0.68, 0.65): the direction scaffold limbs have always sprouted in)
     float branchAngleSpreadRad{0.2f};  // spread of that angle: between crowns and (half of it) between the limbs of one
     float crownAspect{1.0f};           // crown height / crown width (1 = the canonical template; a grown tree has the aspect of its measured crown)

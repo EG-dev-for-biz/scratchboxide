@@ -548,11 +548,15 @@ struct GrowthParams {
     // it between limbs), internodeLengthM the step along a shoot (0: from the tree's height); the rest (leaf distribution,
     // divergence, blade outline) shapes the leaf clusters plant writes.
     sb_veggie::SbVeggieMorphology morphology;
-    // How excurrent a crown grows (nature::SpaceColonizationConfig::excurrence: its leader on through the crown, laterals at
-    // the species' branch angle): (1 - smoothstep of its measured top share over excurrentTopShare) x smoothstep of the
-    // apical dominance it grows with over excurrentApical. A pointed crown (a cone's top share is about 0.12, a dome's
-    // about 0.58; the species library's conifers lie at 0.12-0.20, its broadleaves at 0.35 and over) whose leader holds
-    // grows a straight stem with its laterals along it; a rounded one forks at its break.
+    // How firmly a crown's leader holds its course to the apex (nature::SpaceColonizationConfig::leaderHold): smoothstep of
+    // the apical dominance it grows with over excurrentApical (the species library's conifers, birch, ginkgo and eucalyptus
+    // at 0.6 hold fully, linden at 0.55 by 0.74, honey locust and Scots pine at 0.5 by 0.26, plane, maple, oak, olive and
+    // the palms not at all: their trunks fork at the crown break). How excurrent it grows besides
+    // (SpaceColonizationConfig::excurrence: laterals at the species' branch angle along the leader): (1 - smoothstep of its
+    // measured top share over excurrentTopShare) x the leader hold. A pointed crown (a cone's top share is about 0.12, a
+    // dome's about 0.58; the species library's conifers lie at 0.12-0.20, its broadleaves at 0.35 and over) whose leader
+    // holds grows a straight stem with its laterals along it; a rounded one whose leader holds grows a stem through the
+    // crown with its laterals spreading as colonisation leads them.
     double excurrentTopShareLo{0.15}, excurrentTopShareHi{0.30};
     double excurrentApicalLo{0.45}, excurrentApicalHi{0.60};
     // The tree species library (scratchbox_tree_species.hpp; null: none): each crown grows with the proportions of the
@@ -645,6 +649,7 @@ struct CrownGrowth {
     int stems{1};                       // stems leaving the ground (more than one: grown as a shrub)
     double topShare{0};                 // its measured crown's top share (tree_species::describeCrown)
     double excurrence{0};               // how excurrent it grew (GrowthParams::excurrentTopShare / excurrentApical)
+    double leaderHold{0};               // how firmly its leader held its course to the apex (GrowthParams::excurrentApical)
     nature::SpaceColonizationConfig cfg;
     std::vector<nature::ColonizationNode> skeleton;
     nature::ColonizationReport colonisation;
@@ -856,10 +861,13 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
     cfg.scaffoldAngleSpreadRad = 0.5f * G.morphology.branchAngleSpreadRad;
     cfg.growthMomentumFactor = 0.76f * static_cast<float>(apical);
     {
-        // a pointed crown whose leader holds grows its leader on through the crown, the laterals along it
+        // a tree whose leader holds (its apical dominance) grows its leader on through the crown to the apex; a pointed
+        // crown's grows excurrent besides, the laterals along it at the species' angle
         auto smooth = [](double lo, double hi, double x) { const double t = std::clamp((x - lo) / std::max(1e-9, hi - lo), 0.0, 1.0); return t * t * (3.0 - 2.0 * t); };
         g.topShare = tree_species::describeCrown(c.apex, support, c.sectorRadii, c.samples, nullptr, G.speciesChoice).topShare;
-        g.excurrence = (1.0 - smooth(G.excurrentTopShareLo, G.excurrentTopShareHi, g.topShare)) * smooth(G.excurrentApicalLo, G.excurrentApicalHi, apical);
+        g.leaderHold = smooth(G.excurrentApicalLo, G.excurrentApicalHi, apical);
+        g.excurrence = (1.0 - smooth(G.excurrentTopShareLo, G.excurrentTopShareHi, g.topShare)) * g.leaderHold;
+        cfg.leaderHold = static_cast<float>(g.leaderHold);
         cfg.excurrence = static_cast<float>(g.excurrence);
         cfg.leaderTopY = static_cast<float>(g.apexTargetY);
     }
@@ -5036,6 +5044,7 @@ inline std::string stripStatsJson(const StripResult& r) {
 struct PlantedTree {
     int crownId{0};
     double excurrence{0}, topShare{0};   // how excurrent it grew, from its measured top share (CrownGrowth)
+    double leaderHold{0};                // how firmly its leader held its course to the apex (CrownGrowth)
     uint32_t seed{0};
     size_t target{0};                // triangles this crown's size asks for (crownTriangleTarget)
     size_t needed{0};                // triangles its leaf masses on the measured surface need (trianglesForLeafMasses)
@@ -5326,6 +5335,7 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
             tr.crownBaseRatio = g.crownBaseRatio;
             tr.trunkRadiusPerHeight = g.trunkRadiusPerHeight;
             tr.excurrence = g.excurrence;
+            tr.leaderHold = g.leaderHold;
             tr.topShare = g.topShare;
             tr.hasSpecies = g.hasSpecies;
             tr.species = g.species;
@@ -5564,7 +5574,7 @@ inline std::string treeExtrasMembers(const PlantedTree& tr, const PlantParams& P
     if (c["origin"].type == io::GlbJsonValue::String) ex << ",\"crownOrigin\":" << json::write(c["origin"]);
     ex << ",\"inferred\":{\"crownBaseY\":" << json::num(tr.crownBaseY) << ",\"crownBaseRatio\":" << json::numPrecise(tr.crownBaseRatio)
        << ",\"trunkRadiusM\":" << json::num(tr.trunkRadius) << ",\"trunkRadiusPerHeight\":" << json::num(tr.trunkRadiusPerHeight)
-       << ",\"topShare\":" << json::num(tr.topShare) << ",\"excurrence\":" << json::num(tr.excurrence) << "}"
+       << ",\"topShare\":" << json::num(tr.topShare) << ",\"excurrence\":" << json::num(tr.excurrence) << ",\"leaderHold\":" << json::num(tr.leaderHold) << "}"
        // measured on the delivered leaf masses (this mesh): the share of the crown's surface samples above its crown
        // base inside one or within reachM of one, and how far their top lies below the apex; grownSurfaceReached is
        // the same share for the grown skeleton's leaf nodes
