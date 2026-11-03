@@ -11,8 +11,8 @@
  * atmosphere_configure_scene lights the open scene, or says it did not. The survey's run asked for "the real sun this
  * afternoon" on a staged clay scene: the tool returned a config, the viewport kept its studio rig, and the reply said the
  * lighting was configured. Now the tool writes the sun into the scene through the atmosphere operators and returns the
- * updated scene; the viewport draws a clay scene's explicit sun (directional light at the computed position, shadow
- * camera sized to the scene, sky dome and hemisphere ambient); with no scene open the result is NOT applied.
+ * updated scene; the viewport draws a clay scene's explicit sun (directional light at the computed position, cascaded
+ * shadows reaching as far as the scene, sky dome and hemisphere ambient); with no scene open the result is NOT applied.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -22,6 +22,7 @@ import * as THREE from 'three';
 import { atmosphereHandlers } from '../src/node/gemini/tools/atmosphere-tools';
 import { calculateNOAASolarPosition, getSunVectorFromAngles } from '../src/browser/generative-canvas/services/atmosphere';
 import { classifyAtmosphere, syncAtmosphere } from '../src/browser/generative-canvas/primitives/scene3d/syncAtmosphere';
+import type { SunCascadeShadow } from '../src/browser/generative-canvas/primitives/scene3d/sunShadowCascades';
 import { sceneShowsSky } from '../src/common/scene-atmosphere-opt-in';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 
@@ -87,9 +88,12 @@ describe('atmosphere_configure_scene applies the sun to the open scene', () => {
         const light = stack.scene.getObjectByName('AtmosphericSunLight') as THREE.DirectionalLight;
         expect(light?.isDirectionalLight).toBe(true);
         expect(light.castShadow).toBe(true);
-        const cam = light.shadow.camera as THREE.OrthographicCamera;
-        expect(cam.right).toBeCloseTo(atm.sunShadowRadiusMeters, 6);
-        expect(cam.left).toBeCloseTo(-atm.sunShadowRadiusMeters, 6);
+        // the configured shadow reach sizes the sun's camera-fitted cascades: shadowed out to five radii (at least 1 km),
+        // casters looked for three radii toward the sun
+        const cascades = light.shadow as unknown as SunCascadeShadow;
+        expect(cascades.isSunCascadeShadow).toBe(true);
+        expect(cascades.maxDistance).toBeCloseTo(Math.max(1000, 5 * atm.sunShadowRadiusMeters), 6);
+        expect(cascades.casterReach).toBeCloseTo(Math.max(500, 3 * atm.sunShadowRadiusMeters), 6);
         // the light stands along the computed sun direction
         const dir = getSunVectorFromAngles(atm.sunElevation, atm.sunAzimuth).normalize();
         expect(light.position.clone().normalize().dot(dir)).toBeGreaterThan(0.9999);

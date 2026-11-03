@@ -689,7 +689,11 @@ export function createAtmosphericSkyDome(
     scene: THREE.Scene,
     isSunset: boolean = false,
     config: AtmosphericScatteringConfig = {},
-    options: { sphereRadius?: number; distanceOffset?: number; bakeResolution?: number } = {}
+    options: {
+        sphereRadius?: number; distanceOffset?: number; bakeResolution?: number;
+        /** Makes the sun's light (the viewport's casts cascaded shadows, sunShadowCascades.ts); a plain DirectionalLight otherwise. */
+        createSunLight?: (color: number, intensity: number) => THREE.DirectionalLight;
+    } = {}
 ): AtmosphericSkyDomeModule {
     const radius = options.sphereRadius || 280;
 
@@ -982,10 +986,9 @@ export function createAtmosphericSkyDome(
     applyPhysicalSky(initialElev);
 
     // Physical Directional Sunlight
-    const sunLight = new THREE.DirectionalLight(
-        effectiveSunColor.getHex(),
-        diurnalProfile.sunIntensity
-    );
+    const sunLight = options.createSunLight
+        ? options.createSunLight(effectiveSunColor.getHex(), diurnalProfile.sunIntensity)
+        : new THREE.DirectionalLight(effectiveSunColor.getHex(), diurnalProfile.sunIntensity);
     sunLight.name = 'AtmosphericSunLight';
     sunLight.position.copy(sunMesh.position);
     sunLight.castShadow = diurnalProfile.castShadows;

@@ -52,7 +52,8 @@ export function createRendererStack(options: CreateRendererStackOptions): Render
         renderer.setSize(width, height);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.shadowMap.enabled = true;
-        // PCFSoftShadowMap was removed in three r186 (it silently fell back to PCFShadowMap).
+        // PCFSoftShadowMap was removed in three r186 (it silently fell back to PCFShadowMap). Under the sky's sun
+        // syncAtmosphere switches to BasicShadowMap, whose raw depth the soft sun filter reads (softShadowChunk.ts).
         renderer.shadowMap.type = THREE.PCFShadowMap;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.0;
