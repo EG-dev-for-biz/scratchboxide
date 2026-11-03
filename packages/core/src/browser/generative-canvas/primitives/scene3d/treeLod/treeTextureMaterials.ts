@@ -147,13 +147,29 @@ if ( vSbBlade < 0.5 ) diffuseColor.a = 1.0;
 else if ( vSbST.x < 0.0 || vSbST.x > 1.0 || vSbST.y < 0.0 || vSbST.y > 1.0 ) diffuseColor.a = 0.0;
 `;
 
+/**
+ * The sun the leaves are lit through: the sky's sun (a SunLight, sunShadowCascades.ts), else the first directional light.
+ * Defines SB_SUN_DIR and SB_SUN_COLOR where there is one.
+ */
+const SUN_FOR_TRANSLUCENCY = `
+#if NUM_SUN_LIGHTS > 0
+#define SB_SUN_DIR sunLights[ 0 ].direction
+#define SB_SUN_COLOR sunLights[ 0 ].color
+#elif NUM_DIR_LIGHTS > 0
+#define SB_SUN_DIR directionalLights[ 0 ].direction
+#define SB_SUN_COLOR directionalLights[ 0 ].color
+#endif
+`;
+
 /** After lights_fragment_end: sunlight arriving from behind the leaf (as seen) passes through it, coloured by the leaf. */
-export const LEAF_FRAGMENT_TRANSLUCENCY = `
-#if NUM_DIR_LIGHTS > 0
+export const LEAF_FRAGMENT_TRANSLUCENCY = `${SUN_FOR_TRANSLUCENCY}
+#ifdef SB_SUN_DIR
 {
-    float sbBack = max( 0.0, dot( - normal, directionalLights[ 0 ].direction ) );
-    reflectedLight.directDiffuse += diffuseColor.rgb * directionalLights[ 0 ].color * ( sbBack * uSbTranslucency * vSbBlade );
+    float sbBack = max( 0.0, dot( - normal, SB_SUN_DIR ) );
+    reflectedLight.directDiffuse += diffuseColor.rgb * SB_SUN_COLOR * ( sbBack * uSbTranslucency * vSbBlade );
 }
+#undef SB_SUN_DIR
+#undef SB_SUN_COLOR
 #endif
 `;
 
@@ -329,12 +345,14 @@ uniform float uSbCardMipScale;
 varying vec3 vSbTint;
 `;
 /** After lights_fragment_end: sunlight through the leaves of a card lit from behind (as the leaves' term). */
-export const CARD_FRAGMENT_TRANSLUCENCY = `
-#if NUM_DIR_LIGHTS > 0
+export const CARD_FRAGMENT_TRANSLUCENCY = `${SUN_FOR_TRANSLUCENCY}
+#ifdef SB_SUN_DIR
 {
-    float sbBack = max( 0.0, dot( - normal, directionalLights[ 0 ].direction ) );
-    reflectedLight.directDiffuse += diffuseColor.rgb * directionalLights[ 0 ].color * ( sbBack * uSbTranslucency );
+    float sbBack = max( 0.0, dot( - normal, SB_SUN_DIR ) );
+    reflectedLight.directDiffuse += diffuseColor.rgb * SB_SUN_COLOR * ( sbBack * uSbTranslucency );
 }
+#undef SB_SUN_DIR
+#undef SB_SUN_COLOR
 #endif
 `;
 

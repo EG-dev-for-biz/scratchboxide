@@ -274,6 +274,14 @@ export class GeminiClient {
                 // Ignore parse errors
             }
         }
+
+        // a cloud task with no key file (the K-D chunk job): the account Google gives the task, opted into with
+        // SCRATCHBOX_GOOGLE_ADC=1 and GOOGLE_CLOUD_PROJECT, so a machine without a key never picks up gcloud's user login
+        const project = (process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT)?.trim();
+        if (!this.auth && process.env.SCRATCHBOX_GOOGLE_ADC === '1' && project) {
+            this.cachedProjectId = project;
+            this.auth = new GoogleAuth({ projectId: project, scopes: GOOGLE_AUTH_SCOPES });
+        }
     }
 
     /** Point the client at a service-account key file that has just been written to disk. */

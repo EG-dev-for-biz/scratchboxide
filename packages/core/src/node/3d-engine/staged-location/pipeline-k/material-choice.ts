@@ -15,12 +15,20 @@
  * mean colour, so only the surface itself (grain, relief, joints, pattern, how its tone varies) tells them apart, and
  * picks the candidate that would pass for the same surface. The words it gives are labels; nothing branches on them.
  * A row it answers with none, or a reply that fails, keeps the ranking's nearest. The set is generated either way.
+ *
+ * Each pick is kept (chooseWithMemory, model-readings.ts) under the candidates its class was shown, and a later class
+ * (another building, chunk or run) shown the same candidates at the same span, whose colour lies within CHOICE_REUSE of
+ * it, takes that pick without being asked: the model is asked only about the classes not seen before, their swatches
+ * cut from the sheet.
  */
 
+import { linearRgbToLab } from '../../../../common/spatial/texture-library-index';
+import { decodePng } from '../../../texture-processing';
 import { encodePng } from '../png-encode';
 import type { RgbaImage8 } from '../tile-texture-transfer';
+import { readingKey, type ModelReadingStore } from './model-readings';
 
-export const MATERIAL_CHOICE_VERSION = 'material-choice/1';
+export const MATERIAL_CHOICE_VERSION = 'material-choice/2';
 
 /** Candidates shown a class (the ranking's nearest), and the cell each is drawn in, pixels. */
 export const CHOICE_CANDIDATES = 10;
@@ -79,7 +87,11 @@ export function choicePrompt(rows: ChoiceRow[], spanM: number, ctx: { building?:
     ].join('\n');
 }
 
-export interface SetChoice { pick: number; seen?: string; conf: number }
+export interface SetChoice {
+    pick: number; seen?: string; conf: number;
+    /** Taken from an earlier class shown the same candidates (CHOICE_REUSE), not asked: its colour, and how far this class's lies from it. */
+    reused?: { meanLab: [number, number, number]; colourUnits: number };
+}
 
 /** The reply: per row, the 1-based candidate picked (0: none), in row order; a row left out or out of range gets none. Throws on anything malformed. */
 export function parseChoices(text: string, rows: ChoiceRow[]): Array<SetChoice | undefined> {
@@ -95,4 +107,72 @@ export function parseChoices(text: string, rows: ChoiceRow[]): Array<SetChoice |
         out[k] = { pick, ...(typeof r.seen === 'string' && r.seen.trim() ? { seen: r.seen.trim().slice(0, 80) } : {}), conf: typeof r.conf === 'number' && Number.isFinite(r.conf) ? Math.max(0, Math.min(100, r.conf)) : 50 };
     }
     return out;
+}
+
+// ------------------------------------------------------------------------------------------------ picks kept between builds
+
+/**
+ * When a class takes a pick kept for an earlier one: shown the same candidates in the same order at the same span, its
+ * colour within maxColourUnits of the earlier class's in the library search's own colour scale (searchTextureLibrary:
+ * chroma and hue in units of 10 ΔE, lightness in units of 25, one unit a clearly visible difference).
+ */
+export const CHOICE_REUSE = { maxColourUnits: 1, /** Classes kept per shortlist, the latest. */ maxKept: 64 } as const;
+
+/** Two CIELAB colours apart, in the library search's colour units. */
+export const colourUnits = (a: readonly number[], b: readonly number[]) => Math.hypot(a[1] - b[1], a[2] - b[2]) / 10 + Math.abs(a[0] - b[0]) / 25;
+
+/** The kept picks among one shortlist, under `material-choice/<sha256>` (its candidates in order, the span and the model). */
+export interface ChoiceMemoryRecord {
+    schema: 'scratchbox.material-choice/1'; key: string; model: string;
+    classes: Array<{ meanLab: [number, number, number]; pick: number; seen?: string; conf: number; atMs: number }>;
+}
+
+export const choiceKey = (row: ChoiceRow, spanM: number, model: string) => readingKey('material-choice', [MATERIAL_CHOICE_VERSION, model, Math.round(spanM * 10) / 10, row.candidates.map(c => c.id)]);
+
+/**
+ * The swatch sheet's rows `keep`, in that order, as a sheet of their own (classSwatchSheet: n rows of square cells on
+ * white, GAP apart); undefined when the sheet is not laid out so.
+ */
+export function swatchRows(png: Buffer, n: number, keep: number[]): Buffer | undefined {
+    const img = decodePng(png), cell = (img.height - GAP) / n - GAP;
+    if (!(n > 0) || !Number.isInteger(cell) || cell <= 0 || keep.some(k => k < 0 || k >= n)) return undefined;
+    const W = img.width, H = keep.length * (cell + GAP) + GAP, out = new Uint8Array(W * H * 4).fill(255);
+    keep.forEach((k, r) => {
+        const from = (GAP + k * (cell + GAP)) * W * 4;
+        out.set(img.rgba.subarray(from, from + cell * W * 4), (GAP + r * (cell + GAP)) * W * 4);
+    });
+    return Buffer.from(encodePng(W, H, out, 4));
+}
+
+/**
+ * The picks for `rows`: a row whose class takes a kept pick (CHOICE_REUSE) is not asked; the rest go to the model in one
+ * call (`ask`, given just those rows and their swatches; every row, as before, when none is kept), and their picks are
+ * kept. Without a memory every row is asked. A failed call throws, as `ask` does.
+ */
+export async function chooseWithMemory(rows: ChoiceRow[], swatches: { png: Buffer; spanM?: number }, ask: (rows: ChoiceRow[], swatches: { png: Buffer; spanM?: number }) => Promise<Array<SetChoice | undefined>>, memory?: { store: ModelReadingStore; model: string }): Promise<{ picks: Array<SetChoice | undefined>; calls: number; reused: number }> {
+    const spanM = swatches.spanM ?? CHOICE_SPAN_M;
+    const labs = rows.map(r => linearRgbToLab(r.meanLinear));
+    const keys = rows.map(r => (memory && r.candidates.length ? choiceKey(r, spanM, memory.model) : undefined));
+    const picks: Array<SetChoice | undefined> = rows.map(() => undefined);
+    keys.forEach((key, k) => {
+        const kept = key ? memory!.store.get<ChoiceMemoryRecord>(key)?.classes ?? [] : [];
+        const near = kept.map(c => ({ c, d: colourUnits(c.meanLab, labs[k]) })).filter(x => x.d < CHOICE_REUSE.maxColourUnits && x.c.pick >= 0 && x.c.pick <= rows[k].candidates.length).sort((a, b) => a.d - b.d)[0];
+        if (near) picks[k] = { pick: near.c.pick, ...(near.c.seen ? { seen: near.c.seen } : {}), conf: near.c.conf, reused: { meanLab: near.c.meanLab, colourUnits: Math.round(near.d * 1000) / 1000 } };
+    });
+    const open = rows.map((_, k) => k).filter(k => !picks[k]);
+    if (!open.length) return { picks, calls: 0, reused: rows.length };
+    // only the classes not seen before, their swatches cut from the sheet (every row when the sheet cannot be cut; the kept picks stand)
+    const cut = open.length < rows.length ? swatchRows(swatches.png, rows.length, open) : undefined;
+    const asked = cut ? open : rows.map((_, k) => k);
+    const answers = await ask(asked.map(k => rows[k]), cut ? { ...swatches, png: cut } : swatches);
+    asked.forEach((k, i) => {
+        if (picks[k]) return;
+        const a = answers[i], key = keys[k];
+        picks[k] = a;
+        if (!a || !key) return;
+        const kept = memory!.store.get<ChoiceMemoryRecord>(key)?.classes ?? [];
+        const classes = [...kept, { meanLab: labs[k], pick: a.pick, ...(a.seen ? { seen: a.seen } : {}), conf: a.conf, atMs: Date.now() }].slice(-CHOICE_REUSE.maxKept);
+        memory!.store.put(key, { schema: 'scratchbox.material-choice/1', key, model: memory!.model, classes } satisfies ChoiceMemoryRecord);
+    });
+    return { picks, calls: 1, reused: rows.length - open.length };
 }

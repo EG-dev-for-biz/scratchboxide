@@ -1,0 +1,17 @@
+# The K-D chunk job's image, tagged with the commit it was built from (deploy.sh build passes _COMMIT).
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'deploy/kd-chunk-job/Dockerfile'
+      - '--build-arg'
+      - 'COMMIT=${_COMMIT}'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/${PROJECT_ID}/depthbox3-repo/kd-chunk-job:${_COMMIT}'
+      - '.'
+images:
+  - 'us-central1-docker.pkg.dev/${PROJECT_ID}/depthbox3-repo/kd-chunk-job:${_COMMIT}'
+options:
+  machineType: 'E2_HIGHCPU_32'
+timeout: '3600s'

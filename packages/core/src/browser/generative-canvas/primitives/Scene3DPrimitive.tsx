@@ -200,6 +200,7 @@ import { readStagedBuild, type StagedSceneData } from './scene3d/stagedBuild/sta
 import { mergeStagedParts, mergeStagedPartsEnabled } from './scene3d/stagedBuild/mergeStagedParts';
 import { carryStagedChoice, carryTwinObjects, twinSourceOf, type StagedMaterialModeFields } from './scene3d/stagedBuild/texturedTwins';
 import { prepareTexturedTwinModel } from './scene3d/stagedBuild/texturedTwinModel';
+import { drawPhotoTwinsLit } from './scene3d/stagedBuild/litPhotoTwins';
 import { refreshFacadeReflections } from './scene3d/stagedBuild/facadeMaterialLook';
 
 // Aircraft helpers live in services/mesh/aircraft.ts (single source of truth, shared with the
@@ -3406,7 +3407,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                             .catch(err => console.warn('[Scene3D] tree textures not applied:', (err as Error).message));
                     }
                     // A staged layer's textured twin keeps its photo material under the clay pass, and its confidence texture is loaded.
-                    void prepareTexturedTwinModel(gltf, { twin: !!twinSourceOf(def) }).then(() => {
+                    const twinPrepared = prepareTexturedTwinModel(gltf, { twin: !!twinSourceOf(def) });
+                    // its unlit photo surfaces drawn lit, so the sun lights and shadows them like everything else
+                    drawPhotoTwinsLit(model);
+                    void twinPrepared.then(() => {
                         // the facade material reading's glass reflects the scene: render its probe once the textures are in,
                         // and again for the other twins (this layer is now part of what they see)
                         const stack = stackRef.current;

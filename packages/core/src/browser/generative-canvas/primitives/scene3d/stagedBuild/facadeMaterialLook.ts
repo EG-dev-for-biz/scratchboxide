@@ -188,6 +188,10 @@ const FRAGMENT_ENV_GATE = `
             #if NUM_DIR_LIGHTS > 0
             for ( int i = 0; i < NUM_DIR_LIGHTS; i ++ ) sbEg += directionalLights[ i ].color * max( 0.0, dot( directionalLights[ i ].direction, sbUpV ) );
             #endif
+            // the sky's sun is drawn as a SunLight (cascaded shadows, sunShadowCascades.ts)
+            #if NUM_SUN_LIGHTS > 0
+            for ( int i = 0; i < NUM_SUN_LIGHTS; i ++ ) sbEg += sunLights[ i ].color * max( 0.0, dot( sunLights[ i ].direction, sbUpV ) );
+            #endif
             vec3 sbGround = uSbGroundAlbedo * RECIPROCAL_PI * sbEg;
             float sbAbove = smoothstep( -0.03, 0.03, sbRwG.y );
             radiance = mix( min( radiance, sbGround ), radiance, sbAbove );

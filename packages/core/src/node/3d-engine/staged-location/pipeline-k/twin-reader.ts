@@ -32,6 +32,7 @@ import { encodePng } from '../png-encode';
 import type { FittedPlane } from '../window-fit';
 import { readPlanes, type FacadeAsk, type FacadeReaderFile } from './facade-reader';
 import type { NamedBuilding } from './facade-reader-brief';
+import type { ModelReadingStore } from './model-readings';
 import { planeOrthos, PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
 
 export const TWIN_READER_VERSION = 'twin-reader/1';
@@ -102,11 +103,13 @@ function imageSize(b: Uint8Array): [number, number] | undefined {
 /**
  * Reads every plane of the building on the harmonised twin (finalImage, the twin's photos by its own image index; json, its
  * glTF) beside the K orthos, and returns the planes for the material regions: the reader's where it drew, the window fit's
- * (`fitted`) elsewhere.
+ * (`fitted`) elsewhere. With `readings`, a plane whose photo is unchanged since an earlier build is answered from the store.
  */
 export async function readOnTwin(input: {
     orthosDir: string; flatGlb: string; twinJson: any; finalImage: Map<number, RgbaImage8>; fitted: FittedPlane[];
     ask: FacadeAsk; building?: NamedBuilding; signal?: AbortSignal; progress?: (m: string) => void;
+    /** The reader's answers kept between builds (model-readings.ts), and the model they are asked of. */
+    readings?: { store: ModelReadingStore; model: string };
 }): Promise<{ planes: FittedPlane[]; records: FacadeReaderFile; report: TwinReaderReport }> {
     const key = crypto.createHash('sha256').update(TWIN_READER_VERSION).update(fs.readFileSync(path.join(input.orthosDir, 'facades.json'))).digest('hex').slice(0, 16);
     const dir = path.join(input.orthosDir, `twin_read_${key}`);
@@ -131,7 +134,7 @@ export async function readOnTwin(input: {
     fs.writeFileSync(scanFile, scan.glb);
     const po = await planeOrthos(scanFile, dir);
     fs.rmSync(scanFile, { force: true });
-    const { records } = await readPlanes(dir, input.ask, { ...(input.signal ? { signal: input.signal } : {}), ...(input.progress ? { progress: input.progress } : {}), ...(input.building ? { building: input.building } : {}) });
+    const { records } = await readPlanes(dir, input.ask, { ...(input.signal ? { signal: input.signal } : {}), ...(input.progress ? { progress: input.progress } : {}), ...(input.building ? { building: input.building } : {}), ...(input.readings ? { readings: input.readings } : {}) });
     // the reader's planes where it drew; the window fit's elsewhere (a facade keeps its wall grammar bays)
     const frames = new Map<number, Omit<FittedPlane, 'windows' | 'panes'>>();
     for (const f of facadesFile.facades as unknown as Array<Omit<FittedPlane, 'windows' | 'panes'>>) frames.set(f.facadeId, f);

@@ -21,13 +21,17 @@
  */
 
 import { cacheMirrorBucket, mirrorCachesInBackground, restoreCacheEntry } from '../../cloud-store/cache-mirror';
+import { GcsCloudBucket } from '../../cloud-store/cloud-bucket';
+import { cloudChunkConfig, CloudRunJobsRest, createCloudChunkRunner, type RunChunk } from './cloud-chunk-runner';
+import { kdChunkRunner } from './pipeline-k/district-chunks';
 import { TOGGLEABLE_STEPS } from '../../../common/staged-build-steps';
 import { solarRoofFromBuildingShape } from './pipeline-e/solar-roof';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as v8 from 'v8';
-import { Worker } from 'worker_threads';
+import { MessageChannel, Worker } from 'worker_threads';
+import { serveCallBudget } from '../../gemini/model-call-budget';
 import { workerTsRegisterSource } from '../../worker-ts-register';
 import { isClientDisconnect, stagedRunRegistry } from './staged-run-registry';
 import type { CanvasArtifact } from '../../../browser/generative-canvas/canvas-types';
@@ -334,10 +338,13 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         vehicleRemoval: true,
         // the tile seam stage on the extraction as it arrives (tile-seam-weld-service.ts)
         tileSeams: runTileSeamWeld,
-        // pipeline K-D: the district's leaf tiles fetched ahead of its chunks, into the shared leaf cache
-        prefetchTiles: req => prefetchGoogle3DTileLeaves({ lat: req.lat, lng: req.lng, ...(req.elevation !== undefined ? { elevation: req.elevation } : {}) }, req.radiusM, { ...(req.signal ? { signal: req.signal } : {}), ...(req.onProgress ? { onProgress: req.onProgress } : {}) }),
-        // pipeline K-D: each chunk of a chunked district is a build of its own, on its own worker thread
-        runChunk: (request, o) => runStagedLocationOffThread(request, workspaceRoot, undefined, { ...(o.signal ? { signal: o.signal } : {}), ...(o.onProgress ? { reportProgress: (m: string) => o.onProgress!(m) } : {}) }),
+        // pipeline K-D: each chunk of a chunked district is a build of its own, on its own worker thread, or with
+        // SCRATCHBOX_KD_CHUNK_RUNNER=cloud one Cloud Run job each (cloud-chunk-runner.ts); the district's leaf tiles are
+        // fetched ahead of its chunks into the shared leaf cache only when the chunks build here
+        ...(kdChunkRunner() === 'cloud' ? { runChunk: cloudRunChunk(cache) } : {
+            prefetchTiles: (req: Parameters<NonNullable<StagedLocationDeps['prefetchTiles']>>[0]) => prefetchGoogle3DTileLeaves({ lat: req.lat, lng: req.lng, ...(req.elevation !== undefined ? { elevation: req.elevation } : {}) }, req.radiusM, { ...(req.signal ? { signal: req.signal } : {}), ...(req.onProgress ? { onProgress: req.onProgress } : {}) }),
+            runChunk: (request: StagedLocationRequest, o: { signal?: AbortSignal; onProgress?: (message: string) => void }) => runStagedLocationOffThread(request, workspaceRoot, undefined, { ...(o.signal ? { signal: o.signal } : {}), ...(o.onProgress ? { reportProgress: (m: string) => o.onProgress!(m) } : {}) })
+        }),
         // the texture pass's model texture rung: the image model redraws the tile transfer, kept only past its gate
         // (SCRATCHBOX_TEXTURE_ENHANCE=0 turns the rung off); default mode 'recreate' (user decision, 2026-10-21) removes
         // the scan's own baked shadow/highlight and recovers the material's true colour, gated on structure and
@@ -352,6 +359,25 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
             } : {}),
             ...(lightingCorrectionEnabled() ? { lighting: genAiEnhanceClient(vision.client), lightingModels: lightingModels() } : {})
         } : {}
+    };
+}
+
+/**
+ * The cloud chunk runner on the app's service account: the job bucket (SCRATCHBOX_KD_JOB_BUCKET) and the Cloud Run job
+ * (cloud-chunk-runner.ts cloudChunkConfig), made on the first chunk, so a district without credentials fails its chunks
+ * with that reason (the orchestrator then degrades them) rather than building them here.
+ */
+function cloudRunChunk(cache: StageCache): NonNullable<StagedLocationDeps['runChunk']> {
+    let runner: Promise<RunChunk> | undefined;
+    const make = async (): Promise<RunChunk> => {
+        const config = cloudChunkConfig();
+        const storage = new GoogleMediaCredentialsService().createStorageClient();
+        return createCloudChunkRunner({ cache, config, bucket: new GcsCloudBucket(storage.bucket(config.bucket)), jobs: await CloudRunJobsRest.create(config) });
+    };
+    return async (request, o) => {
+        runner ??= make();
+        runner.catch(() => { runner = undefined; });
+        return (await runner)(request, o);
     };
 }
 
@@ -403,7 +429,8 @@ require(workerData.entry);
  * runStagedLocation on its own worker thread, with services it makes itself (createStagedLocationDeps on `root`): the
  * same events, outcome and errors, while the server's main thread stays free to stream the chat and serve the layers
  * already committed. The worker gets the server's own heap limit; the signal stops it (the build ends as stopped, and
- * the worker is terminated if it has not ended a few seconds later).
+ * the worker is terminated if it has not ended a few seconds later). Its model calls are kept to this thread's call
+ * budget (model-call-budget.ts serveCallBudget), so every build in the process shares one.
  */
 export function runStagedLocationOffThread(request: StagedLocationRequest, root: string, runId: string | undefined, ctx: StagedLocationContext): Promise<StagedLocationOutcome> {
     const dir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
@@ -412,15 +439,20 @@ export function runStagedLocationOffThread(request: StagedLocationRequest, root:
     const heapMb = Math.floor(v8.getHeapStatistics().heap_size_limit / (1024 * 1024));
     return new Promise<StagedLocationOutcome>((resolve, reject) => {
         let settled = false, killTimer: NodeJS.Timeout | undefined;
+        const budget = new MessageChannel();
+        serveCallBudget(budget.port1);
         const w = new Worker(STAGED_WORKER_BOOTSTRAP, {
             eval: true, resourceLimits: { maxOldGenerationSizeMb: heapMb },
             workerData: {
-                entry, request, root, runId,
+                entry, request, root, runId, modelCallBudget: budget.port2,
                 ...(ctx.remainingMs ? { deadlineAt: Date.now() + ctx.remainingMs() } : {}),
                 ...(ctx.activeArtifact ? { activeArtifact: ctx.activeArtifact } : {}),
                 ...(ctx.retry ? { retry: ctx.retry } : {}), ...(ctx.resume ? { resume: ctx.resume } : {})
-            }
+            },
+            transferList: [budget.port2]
         });
+        // the worker's turns are let go when it ends, whichever way
+        w.once('exit', () => budget.port1.close());
         const finish = (fn: () => void) => {
             if (settled) return;
             settled = true;

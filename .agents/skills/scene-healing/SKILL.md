@@ -142,7 +142,8 @@ Rules:
 - **Conservative over wrong.** A missed window is a smaller defect than glass on stone. When the score is in the
   uncertain band, leave the cell as wall and report it.
 - **One grammar per wall, not per photo.** Coplanar overlapping facade patches are one wall. Read the bay grammar from
-  all its photos together; a setback level's best-read wall may lend its pitch to a poorly read one.
+  all its photos together; a setback level's walls share one grammar fitted from all their read bays, laid on each wall
+  except where its own photo shows plain wall.
 - **Straighten before reading.** Detection on a straightened ortho is markedly more accurate than on a skewed photo.
 - **Measure against a checked set.** Report per wall: found / missed / false placements against hand-checked windows,
   intersection-over-union of the window rectangles, and window-to-wall ratio error. A change is kept only when found

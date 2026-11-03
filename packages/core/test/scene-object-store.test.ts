@@ -353,3 +353,15 @@ describe('a finished scene into the store', () => {
         expect(store.db.object(catalogId)!.type).toBe('SB_FEATURE_TYPE_TREE');
     });
 });
+
+describe('the scene object store is on by default (user decision 2026-11-03)', () => {
+    it('stores and reuses objects unless a switch says 0', async () => {
+        const { objectReuseEnabled, objectStoreEnabled } = await import('../src/node/3d-engine/staged-location/scene-objects');
+        expect(objectStoreEnabled({})).toBe(true);
+        expect(objectReuseEnabled({})).toBe(true);
+        expect(objectStoreEnabled({ SCRATCHBOX_OBJECT_STORE: '0' })).toBe(false);
+        expect(objectReuseEnabled({ SCRATCHBOX_OBJECT_REUSE: '0' })).toBe(false);
+        // the old opt-in value still means on
+        expect(objectReuseEnabled({ SCRATCHBOX_OBJECT_REUSE: '1' })).toBe(true);
+    });
+});

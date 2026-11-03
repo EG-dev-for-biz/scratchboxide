@@ -97,8 +97,8 @@ export interface RegionSet {
     distance: number;
     /** The tile-only harvest's pick (material-harvest.ts): the class's and the set's texture energy at the class's texel, the distances it was chosen by, and what of it is generated. */
     harvest?: { colourDistance: number; textureDistance: number; classEnergy: number[]; setEnergy: number[]; texelM: number; candidates: number; grain: string };
-    /** The pick by appearance (material-choice.ts): the candidates shown, whether the look or the ranking chose, what the chooser saw and why the ranking's nearest was kept. */
-    choice?: { candidates: string[]; by: 'appearance' | 'ranking'; seen?: string; conf?: number; why?: string };
+    /** The pick by appearance (material-choice.ts): the candidates shown, whether the look or the ranking chose, what the chooser saw and why the ranking's nearest was kept; `reused`: the pick kept for an earlier class shown the same candidates, its colour and how far this class's lies from it (CHOICE_REUSE), not asked again. */
+    choice?: { candidates: string[]; by: 'appearance' | 'ranking'; seen?: string; conf?: number; reused?: { meanLab: [number, number, number]; colourUnits: number }; why?: string };
 }
 
 export interface MaterialRegionsReport {
