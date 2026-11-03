@@ -16,6 +16,9 @@
  *   spacing <k> <sMin> <sMax> <budget>
  *   incidence <minCos> <relaxedCos>
  *   unseen <spacing> <maxDist>
+ *   shape <sigmaRatio> <thicknessRatio>                       (optional)
+ *   views <cellM> <smoothCost>                                (optional)
+ *   colour <gainCos> <maxGainLog> <fieldNx> <fieldNy>         (optional; fieldNx 0 turns the offset field off)
  *   station <rgb8 path> <W> <H> <fx> <fy> <cx> <cy> <eye xyz> <right xyz> <up xyz> <fwd xyz>
  *           <depth f32 path> <DW> <DH> <dfx> <dfy> <dcx> <dcy> <priority>
  *   out <.splat path> <.spz path>
@@ -69,6 +72,12 @@ int main(int argc, char** argv) {
             in >> prm.minCos >> prm.relaxedCos;
         } else if (key == "unseen") {
             in >> prm.unseenSpacing >> prm.unseenMaxDist;
+        } else if (key == "shape") {
+            in >> prm.sigmaRatio >> prm.thicknessRatio;
+        } else if (key == "views") {
+            in >> prm.cellM >> prm.smoothCost;
+        } else if (key == "colour") {
+            in >> prm.gainCos >> prm.maxGainLog >> prm.fieldNx >> prm.fieldNy;
         } else if (key == "station") {
             surfacesplats::StationView s;
             std::string rgbPath, depthPath;
@@ -102,8 +111,11 @@ int main(int argc, char** argv) {
     std::cout << "{\"triangles\":" << rep.triangles << ",\"invisibleTriangles\":" << rep.invisibleTriangles << ",\"skippedTriangles\":" << rep.skippedTriangles
               << ",\"splats\":" << splats.size() << ",\"observed\":" << rep.observed << ",\"relaxed\":" << rep.relaxed
               << ",\"unobserved\":" << rep.unobserved << ",\"spacingScale\":" << rep.spacingScale << ",\"spzBytes\":" << spzBytes
-              << ",\"gains\":[";
-    for (size_t i = 0; i < rep.gains.size(); ++i) std::cout << (i ? "," : "") << rep.gains[i];
+              << ",\"patches\":" << rep.patches << ",\"relabelled\":" << rep.relabelled << ",\"fallback\":" << rep.fallback
+              << ",\"seams\":{\"pairs\":" << rep.seams.pairs << ",\"inliers\":" << rep.seams.inliers << ",\"medianAll\":" << rep.seams.medianAll << ",\"before\":" << rep.seams.before << ",\"afterGain\":" << rep.seams.afterGain
+              << ",\"after\":" << rep.seams.after << ",\"gainResidual\":" << rep.seams.gainResidual << ",\"gainsKept\":" << (rep.seams.gainsKept ? "true" : "false")
+              << ",\"fieldKept\":" << (rep.seams.fieldKept ? "true" : "false") << "},\"gains\":[";
+    for (size_t i = 0; i < rep.gains.size(); ++i) std::cout << (i ? "," : "") << "[" << rep.gains[i][0] << "," << rep.gains[i][1] << "," << rep.gains[i][2] << "]";
     std::cout << "],\"ms\":" << static_cast<long>(ms) << "}" << std::endl;
     return 0;
 }

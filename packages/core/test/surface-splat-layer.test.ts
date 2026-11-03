@@ -24,12 +24,12 @@ const GLB = path.join(WORK, 'box_ground.glb');
 const W = 320, H = 240;
 const CAR: [number[], number[]] = [[12, 0, 14], [14, 1.5, 18]];
 
-/** A station looking at the box from `eye`, its image one flat colour, and its pose.json as the bake writes it. */
-async function station(renderer: SurveyStationRenderService, id: number, eye: [number, number, number], rgb: [number, number, number]) {
+/** A station looking at the box from `eye`, its image one flat colour, and its pose.json as the bake writes it (in `dir`). */
+async function station(renderer: SurveyStationRenderService, id: number, eye: [number, number, number], rgb: [number, number, number], dir = WORK) {
     const st = stationFromLookAt(id, eye, [0, 5, 0], { focalLengthMm: 24, sensorWidthMm: 36, aspectRatio: W / H }, ANCHOR);
     const b = renderer.renderStationBlockout(st, { width: W, height: H });
     const { right, up, forward } = cameraBasis(st.forwardVector, st.upVector || [0, 1, 0]);
-    const base = path.join(WORK, `st${id}`);
+    const base = path.join(dir, `st${id}`);
     await fs.writeJson(`${base}.pose.json`, { fx: b.intrinsics.fx, fy: b.intrinsics.fy, cx: b.intrinsics.cx, cy: b.intrinsics.cy, eye, right, up, forward, depthKind: 'camera-z' });
     const px = Buffer.alloc(W * H * 4);
     for (let i = 0; i < W * H; i++) { px[i * 4] = rgb[0]; px[i * 4 + 1] = rgb[1]; px[i * 4 + 2] = rgb[2]; px[i * 4 + 3] = 255; }
@@ -109,4 +109,53 @@ describe('buildSurfaceSplatLayer', () => {
         expect(spz).toBeGreaterThan(0);
         expect(spz).toBeLessThan(fs.statSync(path.join(WORK, 'surface.splat')).size / 3);
     });
+});
+
+describe('buildSurfaceSplatLayer: one station per patch, stations\' colours agreed', () => {
+    const DIR = path.join(WORK, 'patches');
+    const eastFace = (list: ReturnType<typeof readSplats>) => list.filter(s => Math.abs(s.p[0] - 5) < 1e-3 && s.p[1] > 1 && Math.abs(s.p[2]) < 4.5);
+    async function layer(name: string, colours: [[number, number, number], [number, number, number]]) {
+        const glb = path.join(DIR, 'box.glb');
+        if (!fs.existsSync(glb)) { fs.ensureDirSync(DIR); writeBoxGroundGlb(glb, [-5, 0, -5], [5, 10, 5], 60, []); }
+        const renderer = new SurveyStationRenderService();
+        await renderer.loadMesh(glb);
+        const dir = path.join(DIR, name);
+        fs.ensureDirSync(dir);
+        // two stations either side of the box's east face, seeing it (and the top and the ground) about equally well
+        const stations = [await station(renderer, 1, [30, 12, 10], colours[0], dir), await station(renderer, 2, [30, 12, -10], colours[1], dir)];
+        const report = await buildSurfaceSplatLayer({
+            glbPath: glb, anchor: ANCHOR, renderer, stations,
+            corridor: { a: [-30, 20], b: [30, 20], eyeY: 1.6 },
+            outSplat: path.join(dir, 'surface.splat'), outSpz: path.join(dir, 'surface.spz'), workDir: path.join(dir, 'work'), budget: 200_000
+        });
+        return { report, splats: readSplats(path.join(dir, 'surface.splat')) };
+    }
+
+    it('colours every splat from its patch\'s one station, never a blend of two stations\' pictures', async () => {
+        const { report, splats } = await layer('red-green', [[200, 40, 40], [40, 200, 40]]);
+        const face = eastFace(splats);
+        expect(face.length).toBeGreaterThan(1000);
+        expect(report.patches).toBeGreaterThan(50);
+        // a blend of the two would be red and green in proportion (about 150 and 90); one station keeps one dominant
+        const blended = face.filter(s => Math.max(s.c[0], s.c[1]) < 2 * Math.min(s.c[0], s.c[1]));
+        expect(blended.length).toBeLessThan(face.length * 0.01);
+        // both stations colour part of the face, each over whole patches
+        const red = face.filter(s => s.c[0] > s.c[1]).length;
+        expect(red).toBeGreaterThan(face.length * 0.1);
+        expect(red).toBeLessThan(face.length * 0.9);
+    }, 600000);
+
+    it('matches a darker station\'s exposure to the other\'s where both show the same surface', async () => {
+        const { report, splats } = await layer('exposure', [[160, 160, 160], [125, 125, 125]]);
+        expect(report.seams.inliers).toBeGreaterThan(10);
+        expect(report.seams.gainResidual).toBeLessThan(0.05);
+        expect(report.seams.gainsKept).toBe(true);
+        expect(report.seams.afterGain).toBeLessThan(report.seams.before / 5);
+        // the darker station is lifted and the brighter lowered toward each other (linear light: 160 is 1.71x 125)
+        const lum = (g: number[]) => 0.2126 * g[0] + 0.7152 * g[1] + 0.0722 * g[2];
+        expect(lum(report.gains[1]) / lum(report.gains[0])).toBeGreaterThan(1.5);
+        // and the face reads as one grey: before, its two halves were 35 levels apart
+        const grey = eastFace(splats).map(s => s.c[1]).sort((a, b) => a - b);
+        expect(grey[Math.floor(grey.length * 0.95)] - grey[Math.floor(grey.length * 0.05)]).toBeLessThan(8);
+    }, 600000);
 });
