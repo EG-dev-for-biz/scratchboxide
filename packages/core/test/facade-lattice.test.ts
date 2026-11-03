@@ -372,6 +372,35 @@ describe('facades on their photo lattice', () => {
         expect(out.tears.droppedFacades).toEqual([]);
     });
 
+    it('with sameFacing, keeps the scan of a thin wall\'s other side lying in the rebuilt cells', () => {
+        // the wall's back face 5 cm behind its front, wound the other way (a parapet's street side behind its rebuilt terrace side)
+        const img = photo();
+        for (let y = 0; y < H; y++) for (let x = 80; x < W; x++) img.rgba.set([128, 128, 128, 255], (y * W + x) * 4);
+        const front = scan();
+        const r = latticeFacade(f, img, facadeSamples(front, f))!;
+        const back = new Float32Array(front.length);
+        for (let i = 0; i < front.length; i += 9) for (let j = 0; j < 3; j++) { const k = [0, 2, 1][j]; back.set([front[i + 3 * k], front[i + 3 * k + 1], front[i + 3 * k + 2] - 0.05], i + 3 * j); }
+        const soup = new Float32Array(front.length * 2); soup.set(front); soup.set(back, front.length);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-'));
+        const file = path.join(dir, 'clay.glb');
+        writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
+        const live = (sameFacing: boolean) => {
+            const t = readGlbTriangles(applyFacadeLattices(fs.readFileSync(file), [{ f, r }], false, undefined, { sameFacing }).glb);
+            const n = { front: 0, back: 0 }, half = front.length / 9;
+            for (let k = 0; k < soup.length / 9; k++) {
+                const i = k * 3;
+                if (t.indices[i] === t.indices[i + 1] && t.indices[i + 1] === t.indices[i + 2]) continue;
+                if ((soup[k * 9] + soup[k * 9 + 3] + soup[k * 9 + 6]) / 3 < 7.5) n[k < half ? 'front' : 'back']++;
+            }
+            return n;
+        };
+        // facing either way, both sides go alike; facing the same way, the back stays whole and the front goes as before
+        const either = live(false), same = live(true);
+        expect(either.back).toBe(either.front);
+        expect(same.front).toBeLessThanOrEqual(either.front);
+        expect(same.back).toBeGreaterThan(either.back + 500);
+    });
+
     it('with the cut (pipeline K), takes the scan off the rebuilt cells even where its triangles reach past them, and keeps it beyond', () => {
         // the scan as a tile mesh is: each storey band one pair of long triangles across the whole facade, the photo's right third uncovered
         const img = photo();

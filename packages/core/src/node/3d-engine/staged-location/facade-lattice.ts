@@ -43,7 +43,7 @@ import * as path from 'path';
 
 export const FACADE_LATTICE_VERSION = 'facade-lattice/19';
 /** The cut (rebuildFacadesOnLattice opts.cut): the scan split at the rebuilt cells' lines before the removals and the tear audit. */
-export const LATTICE_CUT_VERSION = 'lattice-cut/3';
+export const LATTICE_CUT_VERSION = 'lattice-cut/5';
 
 export const FACADE_LATTICE_PARAMS = {
     /**
@@ -612,13 +612,16 @@ export function glbSoup(glb: ParsedGlb): Float32Array {
 }
 
 /** Is a triangle (world corners) a candidate of facade f's rebuilt region: facing it (or a sliver), its centre within the depth band. */
-function facesFacade(a: number[], b: number[], c: number[], f: ReliefFacade, P = FACADE_LATTICE_PARAMS): boolean {
+function facesFacade(a: number[], b: number[], c: number[], f: ReliefFacade, P = FACADE_LATTICE_PARAMS, sameFacing = false): boolean {
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, nl = Math.hypot(nx, ny, nz);
     const m = [(a[0] + b[0] + c[0]) / 3 - f.centroid[0], (a[1] + b[1] + c[1]) / 3 - f.centroid[1], (a[2] + b[2] + c[2]) / 3 - f.centroid[2]];
     if (Math.abs(dot(m, f.normal)) > P.depthBandM) return false;
     // a facing triangle, or a sliver (the reveals of the scan's lumps): both are the facade's
-    return !(nl > 0) || Math.abs(dot([nx / nl, ny / nl, nz / nl], f.normal)) >= 0.3;
+    // sameFacing: only a triangle facing the way the facade does (a thin wall's other side, behind it, is no part of its rebuild)
+    if (!(nl > 0)) return true;
+    const c0 = dot([nx / nl, ny / nl, nz / nl], f.normal);
+    return (sameFacing ? c0 : Math.abs(c0)) >= 0.3;
 }
 
 /** Does a triangle's centre fall inside a facade's lattice rectangle (in its plane's s and t). */
@@ -772,7 +775,7 @@ class BinBuilder {
  * Edits a GLB of the remesh: the facades' scan triangles degenerate, each rebuilt facade appended as a node (`textured`:
  * an unlit material with the facade's orthophoto, as tile_refine's twin is; otherwise the GLB's first material, its clay).
  */
-export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: ReliefFacade; r: FacadeLatticeResult; png?: Uint8Array }>, textured: boolean, P = FACADE_LATTICE_PARAMS, opts: { /** false: the scan was already cut to the lattice (pipeline-k/lattice-stitch.ts); only append the rebuilt facades. */ removeScan?: boolean } = {}): { glb: Buffer; removed: number; tears: TearReport } {
+export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: ReliefFacade; r: FacadeLatticeResult; png?: Uint8Array }>, textured: boolean, P = FACADE_LATTICE_PARAMS, opts: { /** false: the scan was already cut to the lattice (pipeline-k/lattice-stitch.ts); only append the rebuilt facades. */ removeScan?: boolean; /** Only scan facing the way a rebuilt facade faces is removed under it (its audit sees only its own front). */ sameFacing?: boolean } = {}): { glb: Buffer; removed: number; tears: TearReport } {
     const glb = parseGlbBytes(bytes);
     const json = glb.json;
     const dv = new DataView(glb.bin.buffer, glb.bin.byteOffset, glb.bin.byteLength);
@@ -800,7 +803,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
             // is removed only when both are rebuilt over it: seen from the other wall, one wall's rebuild is edge-on)
             let first = -1, ok = true;
             for (let fi = 0; fi < facadesIn.length && ok; fi++) {
-                if (dropped.has(fi) || !facesFacade(a, b, c, facadesIn[fi].f, P) || !centreInRect(a, b, c, facadesIn[fi])) continue;
+                if (dropped.has(fi) || !facesFacade(a, b, c, facadesIn[fi].f, P, opts.sameFacing === true) || !centreInRect(a, b, c, facadesIn[fi])) continue;
                 if (coveredByRebuild(a, b, c, [facadesIn[fi]], P)) { if (first < 0) first = fi; } else ok = false;
             }
             if (ok && first >= 0) claim[k] = first;
@@ -1014,10 +1017,12 @@ export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Ui
     // storey of it
     const split = { ...LATTICE_STITCH_PARAMS, cutKeepInside: true, cutSameFacing: true };
     const cut = opts.cut && done.length ? cutScanToLattice(Uint8Array.from(clayBytes), done, split) : undefined;
-    const clay = applyFacadeLattices(cut ? cut.glb : clayBytes, done, false, P);
+    // with the cut, a triangle's other side is its own piece: the street face of a parapet whose terrace face is rebuilt lies in
+    // that rebuild's cells, out of its audit's sight (a 2 m strip along the ESB's podium attic), so only same-facing scan goes
+    const clay = applyFacadeLattices(cut ? cut.glb : clayBytes, done, false, P, { sameFacing: !!cut });
     const kept = done.filter(d => !clay.tears.droppedFacades.includes(d.f.facadeId));
     // the twin rebuilds what the clay kept (its own audit still runs over its own triangles; the same cut, the same triangles)
-    const tex = texturedBytes ? applyFacadeLattices(cut ? cutScanToLattice(Uint8Array.from(texturedBytes), kept, split).glb : texturedBytes, kept, true, P) : undefined;
+    const tex = texturedBytes ? applyFacadeLattices(cut ? cutScanToLattice(Uint8Array.from(texturedBytes), kept, split).glb : texturedBytes, kept, true, P, { sameFacing: !!cut }) : undefined;
     return {
         clay: clay.glb, ...(tex ? { textured: tex.glb } : {}),
         stats: { facades: facades.length, rebuilt: kept.length, cells: kept.reduce((a, d) => a + d.r.cells, 0), removedTriangles: clay.removed, tears: clay.tears, ...(cut ? { cut: cut.report } : {}), ...(opts.photoRecess ? { photoRecessCells: kept.reduce((a, d) => a + (d.r.photoRecessCells ?? 0), 0) } : {}), perFacade: kept.map(d => ({ id: d.f.facadeId, cells: d.r.cells, measuredShare: d.r.measuredShare, lines: [d.r.s.length, d.r.t.length] as [number, number], ...(d.r.photoRecessCells !== undefined ? { photoRecessCells: d.r.photoRecessCells } : {}) })) }
