@@ -65,7 +65,7 @@ export async function runWebglPage<T>(entry: string, timeoutMs = 60000): Promise
             server.listen(0, '127.0.0.1', () => {
                 const port = (server.address() as { port: number }).port;
                 chrome = spawn(webglChromePath, [
-                    '--headless=new', `--user-data-dir=${profile}`, '--no-sandbox', '--no-first-run',
+                    '--headless=new', `--user-data-dir=${profile}`, '--no-sandbox', '--no-first-run', '--use-mock-keychain', '--password-store=basic',
                     '--use-gl=angle', ...(process.platform === 'darwin' ? ['--use-angle=metal'] : []),
                     '--enable-unsafe-swiftshader', `http://127.0.0.1:${port}/`
                 ], { stdio: 'ignore' });
