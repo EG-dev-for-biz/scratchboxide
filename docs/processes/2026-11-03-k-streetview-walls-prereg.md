@@ -60,13 +60,14 @@ The arm is **K with the step on**: steps `{"remesh.streetViewWalls": true}` in t
    - **The phase check (added here; MAIN may veto it before the first build).** On a repeating facade, a pose one bay
      off agrees with the wall almost as well as the true one at zero shift. E's ±1 m search cannot see that.
      - The agreement is also searched along each axis, out to 6 m or a third of the wall's covered extent, whichever is
-       less, in 0.25 m steps beyond 1 m.
+       less, at every pixel beyond 1 m.
      - Only shifts that keep at least half the zero-shift overlap, and at least 1500 pixels, count.
      - The view is refused when any of those shifts agrees better than the best shift within 1 m.
      - This is E's own "at the limit" refusal, carried over a longer reach.
    - **Report:** every refusal is recorded with its reason. E's verdict without the phase check is recorded beside it.
-6. **Output,** in `streetview/` inside the straightened orthos folder:
-   - per wall and view, `sv_<facadeId>_<view>.png` (the rectified photo as projected, alpha 0 where not covered);
+6. **Output,** in `streetview/` inside the straightened orthos folder. Images are written for each wall and view the gate
+   judges (at least 400 qualifying points); the others are recorded with their counts and reasons, without images:
+   - `sv_<facadeId>_<view>.png` (the rectified photo as projected, alpha 0 where not covered);
    - `sv_<facadeId>_<view>_masks.png` (R coverage, G visibility, B ownership);
    - `sv_<facadeId>_<view>_res.png` (ground resolution, 1 grey level = 0.25 cm/px, capped at 255);
    - one `streetview_walls.json`, also saved as the run note `pipeline_k_streetview_walls`. Per wall and view it holds:
@@ -94,7 +95,7 @@ For each wall and view that passes the gate:
    uncovered grey, so they are not traced.
 3. **Trace:** `ortho-rectify.ts` `traceLines` with `ORTHO_RECTIFY_PARAMS`, vertical lines only (piers and jambs).
 4. **Match:** each view line to the tile line whose start is nearest, within 0.5 m. Per matched pair, the offset is the
-   median |view − tile| over the samples where both lines carry an edge.
+   median |view − tile| over the samples where both lines carry an edge; a pair needs at least 4 such samples (1 m).
 5. **The place's figure:**
    - the median of the matched lines' offsets, in ortho pixels;
    - the number of matched lines, and the share of view lines matched.
@@ -235,6 +236,30 @@ user's $100, so no approval is needed; the actual spend is reported after.
     correction itself.
 - **The survey weights panoramas by capture date** (`surveyCandidates`, `recency`). The user decided on 2026-10-29 that
   date is not a criterion. Flagged to MAIN.
+
+## Amendments before the first build
+
+Made after the free dry run, before any build. No bar, place or protocol changed.
+- **The phase check scans every pixel** beyond 1 m, not 0.25 m steps. On the synthetic wall the steps straddled the true
+  alignment: the fine grain decorrelates a shift 1 px off, so the best stepped shift landed a whole repeat past it.
+- **Images only for the walls and views the gate judges**, to keep the ESB's output bounded (about 92 facades x 16
+  views).
+- **A matched pier-line pair needs 4 shared edge samples** (1 m), so one sample cannot make a line.
+
+## The free dry run (done, 2026-11-03)
+
+`packages/core/test/pipeline-k-streetview-walls.test.ts`, credentials unreachable: 4 of 4 passed.
+
+| Check | Result |
+|---|---|
+| The rectified photo lands back on the ortho | Median colour difference under 4 levels; pier lines under 0.5 px over at least 5 matched lines |
+| The masks | Points behind the panel: covered, not visible, not owned |
+| Resolution | fx / z x cos at a clear point, to 3 decimals |
+| The true pose | Passes, at a shift within 1 px |
+| A nominal pose | Refused |
+| **The decoys** (the eye 2 m, one repeat, each way) | **Refused by the phase check.** E's rules alone pass both (NCC 0.93 and 0.94 at zero shift). The farther search finds the true alignment 2 m away (0.99 and 1.00) |
+| The record | Images written for the judged pair; 1 passed, 1 refused as nominal; 2 decoys, none passing |
+| The switch | Off unless `SCRATCHBOX_K_STREETVIEW_WALLS=1` |
 
 ## Result
 

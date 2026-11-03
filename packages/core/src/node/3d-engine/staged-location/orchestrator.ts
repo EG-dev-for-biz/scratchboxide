@@ -95,6 +95,7 @@ import { buildWallSheets, WALL_SHEETS_VERSION, type WallSheet } from './wall-she
 import { decodePng as decodePngForGrammar } from '../../texture-processing';
 import { TILE_SEAMS_VERSION, type TileSeamWeldRequest, type TileSeamWeldResult } from '../tile-seam-weld-service';
 import { measureRevealDepth, REVEAL_DEPTH_VERSION, type RevealFacade, type RevealView } from './reveal-depth';
+import { describeStreetViewWalls, streetViewWalls, streetViewWallsByDefault, STREETVIEW_WALLS_VERSION, surveyWallViews } from './pipeline-k/streetview-walls';
 import { streetViewClayScore } from './streetview-clay-score';
 import { decodeJpegInMemory } from './photo-palette';
 import type { ReliefFacade } from './facade-lattice';
@@ -3879,6 +3880,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const holeInpaint = deps.textures?.enhance && process.env.SCRATCHBOX_K_HOLE_INPAINT?.trim() !== '0' ? { client: deps.textures.enhance, models: [LIGHTING_MODEL_LITE] } : undefined;
                         const k = await timed('pipelineK', () => rectifyReliefOrthos(r.reliefOrthosDir!, { signal: io.signal, ...(cpuShare ? { threads: cpuShare.threads } : {}), ...(holeInpaint ? { inpaint: holeInpaint } : {}) }));
                         orthosKey = `${PIPELINE_K_VERSION}:${k.key}`;
+                        // tile_refine's orthos as it wrote them, the frame and the reference the Street View walls are laid against
+                        const tileOrthosDir = r.reliefOrthosDir;
                         r = { ...r, reliefOrthosDir: k.orthosDir };
                         notes.write('pipeline_k', { version: PIPELINE_K_VERSION, orthosDir: k.orthosDir, cached: k.cached, ms: k.ms, reports: k.reports });
                         notes.note(PROVENANCE.photoInferred, `pipeline K (${PIPELINE_K_VERSION}): ${describeRectified(k)}`);
@@ -3974,6 +3977,37 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 notes.write('pipeline_k_reveal_depth', { version: REVEAL_DEPTH_VERSION, failed: true, reason: errorMessage(err) });
                                 notes.note(PROVENANCE.photoInferred, `window depth could not be read from Street View (${errorMessage(err)}); the recesses follow the photo-contrast rule`);
                             }
+                        }
+                        // the survey's Street View photos laid on the facade planes as evidence beside the orthos, report-only: nothing
+                        // reads them yet (pipeline-k/streetview-walls.ts; off unless SCRATCHBOX_K_STREETVIEW_WALLS=1 or the node graph
+                        // turns it on, until judged: docs/processes/2026-11-03-k-streetview-walls-prereg.md)
+                        if (!stepOn('remesh.streetViewWalls', streetViewWallsByDefault())) {
+                            notes.write('pipeline_k_streetview_walls', { version: STREETVIEW_WALLS_VERSION, skipped: true, reason: request.steps?.['remesh.streetViewWalls'] === false ? 'turned off for this build' : 'off (SCRATCHBOX_K_STREETVIEW_WALLS=1 or the node graph turns it on)' });
+                            logStep('remesh.streetViewWalls', 'skipped');
+                        } else try {
+                            const sres = surveyPromise ? (await surveyPromise.catch(() => undefined))?.result : undefined;
+                            if (!sres?.read.length) notes.write('pipeline_k_streetview_walls', { version: STREETVIEW_WALLS_VERSION, skipped: true, reason: 'the survey fetched no Street View photo' });
+                            else {
+                                io.progress('pipeline K: laying the survey\'s Street View photos on the facade planes');
+                                const sw = await timed('streetViewWalls', async () => {
+                                    const tileMesh = sceneToRenderMesh(readGlbScene(extraction.geometryGlb));
+                                    const structureMesh = sceneToRenderMesh(readGlbScene(r.rawClayGlb && fs.existsSync(r.rawClayGlb) ? r.rawClayGlb : r.clayGlb));
+                                    const segment = process.env.SCRATCHBOX_TEXTURE_OWNERSHIP === '0' ? false : deps.textures?.segmenter
+                                        ?? objectSegmenter(visionAvailable ? { modelSource: { getGenAIClient: async () => visionAvailable.client, getModelCandidates: () => visionAvailable.candidates } } : {});
+                                    const got = await surveyWallViews({
+                                        survey: sres, bytesOf: i => surveyImageBytes(sres, i), tileGlb: extraction.geometryGlb, tileMesh, structure: structureMesh, segment,
+                                        ...(visionAvailable ? { target: request.query } : {}), signal: io.signal, onProgress: m => io.progress(`pipeline K: Street View on the facades: ${m}`)
+                                    });
+                                    const file = await streetViewWalls({ tileOrthosDir, outDir: path.join(k.orthosDir, 'streetview'), views: got.views, tileMesh, structure: structureMesh, runId, signal: io.signal, onProgress: m => io.progress(`pipeline K: ${m}`) });
+                                    fs.writeFileSync(path.join(k.orthosDir, 'streetview', 'streetview_walls.json'), JSON.stringify(file));
+                                    return { ...file, ...(got.registrationError ? { registrationError: got.registrationError } : {}) };
+                                });
+                                notes.write('pipeline_k_streetview_walls', sw);
+                                notes.note(PROVENANCE.photoInferred, describeStreetViewWalls(sw));
+                            }
+                        } catch (err) {
+                            if (isAbort(err) || io.signal.aborted) throw err;
+                            notes.write('pipeline_k_streetview_walls', { version: STREETVIEW_WALLS_VERSION, failed: true, reason: errorMessage(err) });
                         }
                     } catch (err) {
                         if (isAbort(err) || io.signal.aborted) throw err;

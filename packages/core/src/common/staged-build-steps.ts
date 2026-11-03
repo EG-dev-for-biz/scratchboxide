@@ -30,7 +30,7 @@ export interface BuildStepSpec {
 export const BUILD_RESULTS: Record<string, string> = {
     place: 'the place', tiles: 'tile mesh', surveyPhotos: 'Street View photos', canopy: 'canopy',
     scanClay: 'remeshed scan', orthos: 'facade orthophotos', straightOrthos: 'straightened facade photos', occlusion: 'occlusion masks', windows: 'windows', planeReadings: 'openings read by the vision agent',
-    depth: 'window depth', cleanClay: 'cleaned scan', latticeClay: 'facades rebuilt', baseClay: 'base cleaned',
+    depth: 'window depth', streetWalls: 'Street View on the facade planes', cleanClay: 'cleaned scan', latticeClay: 'facades rebuilt', baseClay: 'base cleaned',
     sealedClay: 'sealed shell', finalClay: 'final model', score: 'relief score', holes: 'holes seen',
     ownerViews: 'ownership views', ownerMasks: 'ownership vote', votedClay: 'voted remesh', registeredPoses: 'registered photos', treeStrip: 'trees', delit: 'de-lit photos',
     harmonised: 'harmonised photos', materials: 'material maps', partyWall: 'party wall', late: 'later layers', published: 'scene'
@@ -48,6 +48,7 @@ export const BUILD_STEPS: BuildStepSpec[] = [
     { key: 'remesh.windowFit', stage: 'remesh', title: 'Window fit', needs: ['straightOrthos'], makes: ['windows'] },
     { key: 'remesh.facadeRead', stage: 'remesh', title: 'Read every plane\'s openings', needs: ['straightOrthos', 'tiles'], makes: ['planeReadings'] },
     { key: 'remesh.revealDepth', stage: 'remesh', title: 'Window depth from Street View', needs: ['windows', 'surveyPhotos'], makes: ['depth'] },
+    { key: 'remesh.streetViewWalls', stage: 'remesh', title: 'Street View laid on the facade planes (report-only)', needs: ['orthos', 'surveyPhotos', 'tiles'], makes: ['streetWalls'] },
     { key: 'polish.cleanup', stage: 'remesh', title: 'Remesh cleanup', needs: ['scanClay'], makes: ['cleanClay'] },
     { key: 'polish.lattice', stage: 'remesh', title: 'Facades rebuilt on the lattice', needs: ['cleanClay', 'straightOrthos', 'windows', 'planeReadings', 'depth'], makes: ['latticeClay'] },
     { key: 'polish.base', stage: 'remesh', title: 'Base cleanup', needs: ['latticeClay'], makes: ['baseClay'] },
@@ -86,6 +87,7 @@ export const TOGGLEABLE_STEPS = new Map<string, string>([
     ['remesh.windowFit', 'the facades are opened by their bay rhythm and the lattice\'s own window cells'],
     ['remesh.facadeRead', 'the openings stay as the window fit read them; roofs and the walls without a facade photo get none'],
     ['remesh.revealDepth', 'the recesses follow the photo-contrast rule'],
+    ['remesh.streetViewWalls', 'no Street View photo is laid on the facade planes (report-only evidence; off unless turned on)'],
     ['polish.cleanup', 'the lattice works on the remesh as tile_refine left it'],
     ['polish.lattice', 'the facades stay as scanned'],
     ['polish.base', 'the base is left as scanned, no skirt'],
