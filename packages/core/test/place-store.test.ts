@@ -310,14 +310,14 @@ describe('a chunked district into the object store and the place store', () => {
         expect((await loadPlaceObject(await cloudStore(bucket), roofless.objectKey))!.current).toBe(first.kept.kept.find(k => k.identity === 'b-roofless')!.inputHash);
     });
 
-    it('audits without listing objects when the object store is off, and says why', async () => {
+    it('audits without listing objects when the object store is switched off, and says why', async () => {
         const ws = path.join(tmp, 'ws'), modelsDir = path.join(ws, 'public', 'models');
         fs.mkdirSync(modelsDir, { recursive: true });
         fs.writeFileSync(path.join(modelsDir, 'scan.glb'), testGlb([{ prims: [box(-5, 0, -5, 5, 10, 5, ['bottom'])] }]));
         const plan: DistrictChunkPlan = { version: 'district-chunks/2', radiusM: 150, cellM: 120, chunks: [{ index: 0, cx: 0, cz: 0, half: 60, rect: { x0: -68, z0: -68, x1: 68, z1: 68 }, radiusM: 97, buildings: ['b'], centre: true }], footprints: [{ id: 'b', loops: [[[-5, -5], [5, -5], [5, 5], [-5, 5]]], chunk: 0 }] };
         const manifests = new Map<string, LayerObjectManifest>();
         const note = await auditDistrictForPlace({
-            runId: 'run-1', place: { lat: FRAME.lat, lng: FRAME.lng }, plan, manifests, modelsDir, workspaceRoot: ws, request: {}, env: {},
+            runId: 'run-1', place: { lat: FRAME.lat, lng: FRAME.lng }, plan, manifests, modelsDir, workspaceRoot: ws, request: {}, env: { SCRATCHBOX_OBJECT_STORE: '0' },
             layers: [{ objectId: 'stg-l2', stage: 'remesh', layer: 'l2', url: '/models/scan.glb', supersedes: [], provenance: { label: 'remeshed' } } as unknown as StagedLayer]
         });
         expect(note.objectsKept).toBe(false);

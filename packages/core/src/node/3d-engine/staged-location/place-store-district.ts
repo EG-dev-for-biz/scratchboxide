@@ -24,8 +24,8 @@
  *     run's objects are copied to the place store (place-store.ts) under its lease; the report is the run note
  *     `place_store`.
  *
- * The objects are kept only with SCRATCHBOX_OBJECT_STORE=1 (the scene object store's own switch); without it the audit
- * still runs and its note says so. Neither step ever fails the build (a stopped build's stop passes through).
+ * The objects are kept only while the scene object store is on (scene-objects.ts objectStoreEnabled; SCRATCHBOX_OBJECT_STORE);
+ * with it off the audit still runs and its note says so. Neither step ever fails the build (a stopped build's stop passes through).
  */
 
 import * as fs from 'fs';

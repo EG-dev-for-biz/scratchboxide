@@ -443,7 +443,7 @@ export function runStagedLocationOffThread(request: StagedLocationRequest, root:
         w.on('message', (m: StagedWorkerOut) => {
             if (m.kind === 'event') ctx.emitStage?.(m.event, m.artifact);
             else if (m.kind === 'progress') ctx.reportProgress?.(m.message, m.fraction);
-            // the result is answered at once; the worker goes once its background passes end (none unless the object store is on)
+            // the result is answered at once; the worker goes once its background passes end (none while the object store is off)
             else if (m.kind === 'done') finish(() => { resolve(m.outcome); idleTimer = setTimeout(() => void w.terminate(), STAGED_WORKER_IDLE_CAP_MS); idleTimer.unref(); });
             else if (m.kind === 'idle') { if (idleTimer) clearTimeout(idleTimer); void w.terminate(); }
             else finish(() => {

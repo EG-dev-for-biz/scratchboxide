@@ -69,7 +69,7 @@ export const PLACE_STORE_PARAMS = {
 
 /**
  * SCRATCHBOX_PLACE_STORE=1 audits a chunked district and copies its objects to the place store. Off by default. It keeps
- * the scene object store's versions, so SCRATCHBOX_OBJECT_STORE=1 must be on too (scene-objects.ts objectStoreEnabled).
+ * the scene object store's versions, so that store must be on too (scene-objects.ts objectStoreEnabled; SCRATCHBOX_OBJECT_STORE).
  */
 export function placeStoreEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
     return env.SCRATCHBOX_PLACE_STORE?.trim() === '1';
