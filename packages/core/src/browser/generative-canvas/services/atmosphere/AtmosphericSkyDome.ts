@@ -48,7 +48,7 @@ void main() {
  * view; at 1024 a cloud's edge showed as texel blocks).
  */
 export const SKY_BAKE_RESOLUTION = 2048;
-/** While clouds drift, how often (seconds of scene time) the bake starts another one-face-per-frame refresh. */
+/** While clouds drift, how often (seconds of scene time) the bake starts another strip-per-frame refresh. */
 export const SKY_REFRESH_SECONDS = 0.5;
 
 /** The visible dome: the baked sky looked up by view direction, then the renderer's tone mapping and colour space. */
@@ -280,6 +280,9 @@ float shellFbm(vec2 p, float octaves) {
 
 
 #define CUMULUS_THICKNESS 1800.0
+// Spatial frequency of the cumulus shape (1/m): cloud forms about 1-2 km across, so a field reads as separate clouds,
+// not popcorn. The coverage threshold is a quantile of the noise, which a change of scale leaves as it is.
+#define CUMULUS_SHAPE_FREQ 0.0003
 // Inverse CDF of perlinWorley3D, measured on the GPU: 0-90% in 10% steps, then 95%, and the tail to 100%.
 float perlinWorleyQuantile(float q) {
     q = clamp(q, 0.0, 1.0);
@@ -311,16 +314,29 @@ float cumulusDensity(vec3 p, float detail, float ramp, out float h) {
     float weather = fBm3D(vec3(w.x * 0.00016, h * 0.6, w.z * 0.00016));
     float baseThreshold = perlinWorleyQuantile(1.0 - uCloudCoverage) - (weather - 0.5) * 0.6;
     float topThreshold = perlinWorleyQuantile(1.0 - uCloudCoverage * 0.12) + 0.06;
-    float threshold = mix(baseThreshold, topThreshold, smoothstep(0.1, 1.0, h));
-    float base = perlinWorley3D(vec3(w.x, w.y * 1.6, w.z) * 0.0006, uTime);
-    // ramp: the shape's edge width, crisp close by and wider far away (cumulusEdgeRamp), so distant cloud merges into
-    // a soft bank instead of speckling along the horizon. The light march passes the view sample's ramp.
-    float shape = remapClamped(base, threshold, threshold + ramp, 0.0, 1.0) * smoothstep(0.0, 0.04, h);
+    float threshold = mix(baseThreshold, topThreshold, smoothstep(0.0, 0.75, h));
+    // Stretched vertically, so a cloud stands on the flat base and the threshold rising with height rounds it into a dome
+    // wider than it is tall; a vertically squashed noise made blobs floating at all heights, half this frequency pillars.
+    float base = perlinWorley3D(vec3(w.x, w.y * 0.8, w.z) * CUMULUS_SHAPE_FREQ, uTime);
+    // ramp: the shape's edge width, wider far away, so distant cloud merges into a soft bank instead of speckling along the
+    // horizon (the light march passes the view sample's ramp); wider again low on the cloud (ragged sides and base) than
+    // on the sunlit tops
+    float rampH = ramp * mix(1.8, 0.8, smoothstep(0.2, 0.8, h));
+    float shape = remapClamped(base, threshold, threshold + rampH, 0.0, 1.0) * smoothstep(0.0, 0.04, h);
+    // A cumulus holds more water higher above its flat base: its base and fringe are thinner than its body.
+    shape *= mix(0.55, 1.0, smoothstep(0.0, 0.35, h));
     if (detail <= 0.0 || shape <= 0.0) return shape;
-    // Erosion: wispy (worley) at the base, billowy (inverted worley: cauliflower puffs) toward the tops.
-    float wf = worley3D(w * 0.0035) * 0.625 + worley3D(w * 0.0081) * 0.25 + worley3D(w * 0.017) * 0.125;
-    float erode = mix(wf, 1.0 - wf, smoothstep(0.1, 0.6, h));
-    return remapClamped(shape, erode * 0.55 * detail, 1.0, 0.0, 1.0);
+    // Erosion, strongest where the shape is thin: a fibrous, translucent fringe (worley) low down, rounded cauliflower
+    // (inverted worley) toward the tops, and the smallest puffs eaten away whole.
+    float wf = worley3D(w * 0.004) * 0.5 + worley3D(w * 0.0093) * 0.3 + worley3D(w * 0.021) * 0.2;
+    float erode = mix(wf, 1.0 - wf, 0.8 * smoothstep(0.15, 0.7, h));
+    // turbulence (~70 m): frays the edges into wisps, most low on the cloud where it is not yet billowing; the core,
+    // which no erosion reaches, skips it
+    if (shape < 0.85) erode = mix(erode, fBm3D(w * 0.015), mix(0.35, 0.12, smoothstep(0.2, 0.7, h)));
+    float eroded = remapClamped(shape, erode * 0.75 * detail, 1.0, 0.0, 1.0);
+    // the density builds up toward the core, so an edge, and a small fragment, is a translucent veil, not a solid
+    // surface: most slowly low on the cloud (ragged, see-through sides and base), faster on the sunlit tops
+    return pow(eroded, mix(1.8, 1.5, smoothstep(0.3, 0.8, h)));
 }
 
 // Composites the shell cloud decks over the sky colour, back to front. Each shell is a sphere concentric with the Earth,
@@ -531,9 +547,10 @@ void main() {
             float dt = pathLen / float(steps);
             float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
             float t = tStart + dt * ign;
-            // Extinction: 0.25/m at density 1, 0.11/m at the default 0.45 (cumulus: 1.5 LWC / (rho_w r_eff) with
-            // 0.5-1 g/m^3 of liquid water in ~10 um droplets gives 0.05-0.15/m).
-            float sigmaT = 0.25 * uCloudDensity;
+            // Extinction: 0.18/m at density 1, 0.08/m at the location sky's 0.46 (cumulus: 1.5 LWC / (rho_w r_eff) with
+            // 0.5-1 g/m^3 of liquid water in ~10 um droplets gives 0.05-0.15/m; the lower end keeps a cloud's thinner
+            // parts see-through).
+            float sigmaT = 0.18 * uCloudDensity;
             vec3 sunE = uSunColor * uSunIntensity * smoothstep(-0.02, 0.04, uSunDirection.y);
             vec3 L = vec3(0.0);
             float T = 1.0;
@@ -544,7 +561,7 @@ void main() {
                 vec3 p = rayDir * t;
                 float h;
                 float detailW = 1.0 - smoothstep(8000.0, 25000.0, t);
-                float ramp = mix(0.25, 0.07, detailW);
+                float ramp = mix(0.3, 0.12, detailW);
                 float d = cumulusDensity(p, detailW, ramp, h);
                 if (d > 0.002 && skipped) {
                     // A double stride landed inside cloud: back up half of it once so the cloud's edge is not stepped over.
@@ -553,22 +570,27 @@ void main() {
                     continue;
                 }
                 if (d > 0.002) {
-                    // Optical depth toward the sun over ~6.3 km (7 doubling steps, shape only): deep enough that a
-                    // backlit cloud's core goes dark while its thin rim stays bright, and at a low sun long enough to
-                    // reach the neighbouring cloud between this one and the sun (cloud-to-cloud shadow).
-                    float od = 0.0, ls = 50.0, lt = 0.0;
-                    for (int k = 0; k < 7; k++) {
-                        lt += ls;
+                    // Optical depth toward the sun over ~3.3 km (8 steps growing 1.8x from 24 m, shape only): deep enough
+                    // that a backlit cloud's core goes dark while its thin rim stays bright, and at a low sun long enough
+                    // to reach the neighbouring cloud between this one and the sun (cloud-to-cloud shadow). Each step is
+                    // sampled at its middle: sampled at its far end, the first 50 m step put 50 m of cloud between the
+                    // sun and a point just inside a sunlit face, and every sunlit face read a dull grey.
+                    float od = 0.0, ls = 24.0, lt = 0.0;
+                    for (int k = 0; k < 8; k++) {
                         float hh;
-                        od += cumulusDensity(p + uSunDirection * lt, 0.0, ramp, hh) * ls;
-                        ls *= 2.0;
+                        od += cumulusDensity(p + uSunDirection * (lt + 0.5 * ls), 0.0, ramp, hh) * ls;
+                        lt += ls;
+                        ls *= 1.8;
                     }
                     // Direct beam (single scattering, two-lobe phase) plus the multiply scattered light that diffuses
-                    // through the cloud (two-stream transmission, isotropic re-scatter; gain 3 makes a deep cloud
-                    // reflect ~80% of the sun like a white surface, as sunlit cumulus does).
+                    // through the cloud (isotropic re-scatter). Gain 7, set by eye at the metered exposure: a deep
+                    // cloud's sunlit face reads near white, as in a photograph of sunlit cumulus; at 3 it read grey-beige.
                     float tauSun = sigmaT * od;
                     float ph = mix(henyeyGreenstein(cosViewSun, 0.8), henyeyGreenstein(cosViewSun, -0.3), 0.3);
-                    float diffuseT = 1.0 / (1.0 + 0.75 * (1.0 - 0.85) * tauSun);
+                    // Diffuse light reaching this point from the sunlit surface: the two-stream slab transmission, and
+                    // the Beer-Lambert falloff of the similarity-scaled depth (tau (1 - g)), which takes the light down
+                    // through a cloud's body so its shaded side is lit mostly by the sky, as in a photograph.
+                    float diffuseT = mix(1.0 / (1.0 + 0.75 * (1.0 - 0.85) * tauSun), exp(-(1.0 - 0.85) * tauSun), 0.6);
                     // Multiply scattered light keeps part of the droplets' forward bias (Wrenninge: g halves per octave),
                     // but only near the sunlit surface: a few optical depths in, the light has scattered many times and
                     // is isotropic, so a thick backlit cloud is dark with a bright thin rim.
@@ -576,14 +598,14 @@ void main() {
                     float msPhase = mix(1.0, henyeyGreenstein(cosViewSun, 0.4) * 12.566371, forwardBias);
                     // Powder (Schneider): just inside a cloud's edge little light has scattered in yet, so edges facing
                     // away from the sun read darker and the creases between puffs show; toward the sun it fades out so
-                    // the backlit rim keeps its silver lining.
-                    float powder = mix(1.0 - exp(-2.0 * sigmaT * d * 120.0), 1.0, smoothstep(0.3, 0.95, cosViewSun));
-                    vec3 sunL = sunE * (exp(-tauSun) * ph + diffuseT * msPhase * 3.0 / 12.566371) * powder;
-                    // Sky light: the zenith's on the tops, the darker horizon/ground light under the base.
-                    // A cloud sees the sky, other cloud and the ground, so its ambient light is half desaturated.
-                    // The base sees the horizon sky and the ground below (dark), so bellies sit well under the tops.
-                    vec3 skyAmb = mix(horizonColor * 0.3, zenithColor * 1.2, h * h * (3.0 - 2.0 * h));
-                    vec3 ambient = mix(skyAmb, vec3(dot(skyAmb, vec3(0.2126, 0.7152, 0.0722))), 0.5) * mix(0.6, 1.0, diffuseT);
+                    // the backlit rim keeps its silver lining. At most half the light: deeper, thin fringe in shadow
+                    // went near black.
+                    float powder = mix(0.5 + 0.5 * (1.0 - exp(-2.0 * sigmaT * d * 120.0)), 1.0, smoothstep(0.3, 0.95, cosViewSun));
+                    vec3 sunL = sunE * (exp(-tauSun) * ph + diffuseT * msPhase * 7.0 / 12.566371) * powder;
+                    // Sky light: the zenith's on the tops; the base sees the horizon sky and the ground below, so bellies
+                    // sit grey-blue, well under the tops. A quarter desaturated, for the cloud and ground around it.
+                    vec3 skyAmb = mix(horizonColor * 0.6, zenithColor * 1.1, h * h * (3.0 - 2.0 * h));
+                    vec3 ambient = mix(skyAmb, vec3(dot(skyAmb, vec3(0.2126, 0.7152, 0.0722))), 0.25) * mix(0.7, 1.0, diffuseT);
                     float sT = sigmaT * d;
                     vec3 S = sT * (sunL + ambient);
                     float stepT = exp(-sT * dt);
@@ -598,8 +620,12 @@ void main() {
                 }
             }
             vec3 clouded = skyColor * T + L;
-            // Aerial perspective: distant cloud sinks into the haze (e-folding 25 km), forming a soft horizon bank.
-            skyColor = mix(clouded, skyColor, 1.0 - exp(-tStart / 25000.0));
+            // Aerial perspective: distant cloud sinks into the haze. The aerosol haze lies low (scale height ~1.2 km),
+            // so the slant path to the cloud base crosses only part of it; it thickens with the turbidity (an e-folding
+            // of 25 km at turbidity 2, the clear sky's), and the air itself (Rayleigh, ~80 km) adds a little.
+            float aerosolPath = tStart * (1200.0 / max(uCloudAltitude, 100.0)) * (1.0 - exp(-max(uCloudAltitude, 100.0) / 1200.0));
+            float hazeOpticalDepth = aerosolPath / (50000.0 / max(uTurbidity, 1.0)) + tStart / 80000.0;
+            skyColor = mix(clouded, skyColor, 1.0 - exp(-hazeOpticalDepth));
         }
     }
 
@@ -673,11 +699,17 @@ export function directSunColor(profile: DiurnalLightingProfile, config: Atmosphe
 
 /**
  * Sky cover seen from the ground (15-85° up) for each plan coverage of the cumulus layer, measured on this renderer
- * (suns 25/45/65°, four cloud positions; sd <= 0.06). Cloud sides fill sky, so a little plan cover shows as a lot.
+ * (suns 25/45/65°, four cloud positions; sd <= 0.06). At low cover cloud sides fill sky, so a little plan cover shows
+ * as a lot.
+ * Re-measured 2026-11-03 for the reshaped cumulus (wider domes on flat bases, see-through edges): each row is the plan
+ * coverage at which the new cloud measures (measureClouds, the same suns and positions) what the old one measured at that
+ * row's sky cover; up to 0.908, where the old cloud's measure stopped rising, and evenly from there to overcast. A cloud's
+ * thin, see-through parts show the sky, so beyond the sparsest skies a larger share of the layer is cloud than of the sky.
  */
 const CUMULUS_SKY_COVER: Array<[number, number]> = [
-    [0, 0], [0.01, 0.032], [0.025, 0.235], [0.05, 0.392], [0.075, 0.452], [0.1, 0.512], [0.15, 0.586], [0.2, 0.657],
-    [0.3, 0.757], [0.4, 0.829], [0.5, 0.873], [0.6, 0.908], [0.7, 0.938], [0.8, 0.963], [0.9, 0.984], [1, 1]
+    [0, 0], [0.01, 0.032], [0.288, 0.235], [0.497, 0.392], [0.588, 0.452], [0.673, 0.512], [0.776, 0.586],
+    [0.86, 0.657], [0.922, 0.757], [0.944, 0.829], [0.962, 0.873], [0.972, 0.908], [0.979, 0.938], [0.986, 0.963],
+    [0.993, 0.984], [1, 1]
 ];
 
 /** Plan coverage of the cumulus layer that shows as `skyCover` of the sky (the measured table, inverted). */
@@ -881,8 +913,9 @@ export function createAtmosphericSkyDome(
     };
     // Clouds and wind-driven decks move with uTime; a clear sky does not.
     const skyMoves = () => uniforms.uCloudCoverage.value > 0.0 || (uniforms.uShellWind.value as number[]).some((w, i) => i < uniforms.uShellLayerCount.value && w !== 0);
-    // A refresh while clouds drift goes one strip (an eighth of a face) per frame, so no frame carries a whole face.
-    const STRIPS = 8;
+    // A refresh while clouds drift goes one strip (a sixteenth of a face) per frame, so no frame carries a whole face:
+    // about 30 ms a strip on an M-series Mac for a 0.4 sky cover of the cumulus (a full bake 2.7-3.4 s, was 1.2-1.6 s).
+    const STRIPS = 16;
     const savedScissor = new THREE.Vector4();
     const renderFace = (renderer: THREE.WebGLRenderer, face: number, strip = -1) => {
         if (bakeCamera.coordinateSystem !== renderer.coordinateSystem) {
