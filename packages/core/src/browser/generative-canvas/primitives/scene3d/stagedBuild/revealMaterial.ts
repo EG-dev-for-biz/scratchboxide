@@ -190,6 +190,18 @@ export function baseMaterialOf(m: THREE.Material): THREE.Material | undefined {
     return BASE.get(m);
 }
 
+/** A dissolve variant → the material it dissolves (markDissolveVariant). */
+const DISSOLVE_OF = new WeakMap<THREE.Material, THREE.Material>();
+
+/**
+ * Registers `variant` as a dissolve of `full`: the same surface with its fragments dropped outside a range that moves every
+ * frame (a tree level mid-crossfade, treeLodFade.ts). A reveal made while a mesh wears it draws `full`, whole: the staged
+ * material is held for the reveal and the sweep, and would freeze the range where it stood.
+ */
+export function markDissolveVariant(variant: THREE.Material, full: THREE.Material): void {
+    DISSOLVE_OF.set(variant, full);
+}
+
 const VERTEX_DECL = `
 attribute vec2 ${REVEAL_ATTRIBUTE};
 attribute vec3 ${DISP_ATTRIBUTE};
@@ -431,18 +443,24 @@ function makeUniforms(): StagedUniforms {
 
 /**
  * A staged material for `mesh`, standing in for `base`:
- *  - 'reveal': a clone of the base (clay or shaded) with the reveal patch;
+ *  - 'reveal': a clone of the base (clay or shaded) with the reveal patch over the base's own shader patches (a tree's
+ *    tint, leaf atlas and crown shading, treeTextureMaterials.ts: the trees' far masses take their whole colour from
+ *    the tint, and without it draw white for as long as a stage runs); a level mid-dissolve is drawn whole, as the
+ *    material it dissolves (markDissolveVariant);
  *  - 'provenance': lit MeshStandardMaterial (roughness 0.9) in the legend colours with the reveal patch, the per-vertex
  *    classes and the patterns; lines keep their vertex colours (fit error) or take the node colour.
- * All staged materials of a variant share one program.
+ * All staged materials of a variant share one program (reveals: of a base patched the same way).
  */
 export function createStagedMaterial(mesh: THREE.Mesh | THREE.LineSegments, base: THREE.Material, kind: StagedMaterialKind, classCount: number, withReveal = true): THREE.Material {
     const geometry = mesh.geometry as THREE.BufferGeometry;
     const isLine = (mesh as THREE.LineSegments).isLine === true;
     let mat: THREE.Material;
     const confidence = kind === 'rungs' && !isLine ? confidenceMapOf(base) : undefined;
+    // what a reveal draws: the base, or the material a dissolve variant dissolves; never a staged material (one made by
+    // another copy of this module across a hot reload), whose patch would then be injected twice
+    const own = kind === 'reveal' && !isStagedMaterial(base) ? (DISSOLVE_OF.get(base) ?? base) : undefined;
     if (kind === 'reveal') {
-        mat = base.clone();
+        mat = (own ?? base).clone();
     } else if (kind === 'rungs' && !isLine) {
         // Lit like the provenance shading; the confidence texture is bound as the map only to be sampled for its rungs.
         mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, metalness: 0, map: confidence ?? null, side: (base as THREE.MeshStandardMaterial).side ?? THREE.FrontSide });
@@ -484,8 +502,13 @@ export function createStagedMaterial(mesh: THREE.Mesh | THREE.LineSegments, base
         (mat as THREE.MeshStandardMaterial).color.set(TEXTURE_RUNG_COLORS[TEXTURE_RUNG_COLORS.length - 1]);
         defs.defines = { ...(defs.defines ?? {}), SB_RUNG_FLAT: '' };
     }
-    mat.onBeforeCompile = shader => injectShader(shader, uniforms);
-    const cacheKey = `sb-staged-v3:${kind}:${provenanceClasses}:${withReveal ? 'r' : 's'}:${confidence ? 'c' : ''}${defs.defines && 'SB_MAT_STRIPES' in defs.defines ? 'm' : ''}:${partCount}`;
+    // a reveal draws the base as itself, so the base's patches run first (they keep the includes the reveal patches after)
+    const ownKey = own?.customProgramCacheKey?.call(own) ?? '';
+    mat.onBeforeCompile = (shader, renderer) => {
+        own?.onBeforeCompile?.call(own, shader, renderer);
+        injectShader(shader, uniforms);
+    };
+    const cacheKey = `sb-staged-v3:${kind}:${provenanceClasses}:${withReveal ? 'r' : 's'}:${confidence ? 'c' : ''}${defs.defines && 'SB_MAT_STRIPES' in defs.defines ? 'm' : ''}:${partCount}|${ownKey}`;
     mat.customProgramCacheKey = () => cacheKey;
     mat.userData = { ...(kind === 'reveal' ? mat.userData : {}), [STAMP]: kind, [REVEAL_VARIANT]: withReveal, ...(kind === 'reveal' && base.userData?.[CLAY_FLAG] ? { [CLAY_FLAG]: true } : {}) };
     mat.needsUpdate = true;

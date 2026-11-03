@@ -383,6 +383,18 @@ export function districtContainmentRadiusM(ev: VectorEvidence, baseRadiusM: numb
 }
 
 /**
+ * The extraction radius that keeps whole every building the base radius reaches, from Google's vector footprints
+ * (`evidence`): districtContainmentRadiusM, then a second round, since the grown area reaches a second ring of
+ * buildings the first did not size it for (Haughwout, 2026-10-22: 23 of 87 footprints ran past the extraction); the
+ * same cap holds.
+ */
+export async function districtContainedRadiusM(evidence: (radiusM: number) => Promise<VectorEvidence>, baseRadiusM: number): Promise<number> {
+    const radiusM = districtContainmentRadiusM(await evidence(baseRadiusM), baseRadiusM);
+    if (radiusM <= baseRadiusM) return radiusM;
+    return Math.min(baseRadiusM + DISTRICT_CONTAINMENT_MAX_GROWTH_M, districtContainmentRadiusM(await evidence(radiusM), radiusM));
+}
+
+/**
  * A fallback building for pipeline E/G when Google's vector data has no footprint at the place (e.g. the Great Pyramid
  * of Giza: Google's vector tiles carry no building there) — extruded from the structure's own convex outline on the
  * scan (StructurePickResult.outline, already computed in the tiles stage regardless of vector data) and its measured
@@ -1944,7 +1956,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         type TilesValue = { extraction: StagedExtraction; key: string; sizedTo: 'structure' | 'request' | 'district-fallback' | 'district-containment'; structure?: StructurePickResult; ground?: GroundModel; scan?: ScanMesh; unmaskedTop?: Float32Array; canopy?: CanopyMask; vector?: EvidenceLookup; vectorError?: string; rounds: number; cached: boolean; builtAtMs: number };
         /** One extraction, cached for 7 days by place and radius; the entry holds its files, named relative to it. */
         const extractCached = async (radiusM: number, io: StageIO, rect?: { x0: number; z0: number; x1: number; z1: number }): Promise<{ extraction: StagedExtraction; key: string; cached: boolean; builtAtMs: number }> => {
-            const key = stageKey('extract/v2', placeValue!.lat.toFixed(6), placeValue!.lng.toFixed(6), Math.round(radiusM), rect ? [rect.x0, rect.z0, rect.x1, rect.z1].map(v => v.toFixed(1)).join(',') : '');
+            const key = stageKey('extract/v3', placeValue!.lat.toFixed(6), placeValue!.lng.toFixed(6), Math.round(radiusM), rect ? [rect.x0, rect.z0, rect.x1, rect.z1].map(v => v.toFixed(1)).join(',') : '');
             const inEntry = (dir: string, v: StagedExtraction): StagedExtraction => ({ ...v, texturedGlb: path.join(dir, v.texturedGlb), geometryGlb: path.join(dir, v.geometryGlb) });
             const hit = !bypass('tiles') ? cache.get<StagedExtraction>('tiles', key) : undefined;
             if (hit && now() - hit.builtAtMs < EXTRACTION_TTL_MS) {
@@ -1994,14 +2006,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const chunkRect = request.chunk?.rect ?? (chunkPlan ? chunkPlan.chunks.find(c => c.centre)!.rect : undefined);
                     if (deps.vectorEvidence && !chunkRect) {
                         try {
-                            const ev = await deps.vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: baseRadiusM });
-                            radiusM = districtContainmentRadiusM(ev, baseRadiusM);
-                            // a second round: the grown area reaches a second ring of buildings, which the first round did not
-                            // size it for (Haughwout, 2026-10-22: 23 of 87 footprints ran past the extraction); the same cap holds
-                            if (radiusM > baseRadiusM) {
-                                const ev2 = await deps.vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM });
-                                radiusM = Math.min(baseRadiusM + DISTRICT_CONTAINMENT_MAX_GROWTH_M, districtContainmentRadiusM(ev2, radiusM));
-                            }
+                            const vectorEvidence = deps.vectorEvidence;
+                            radiusM = await districtContainedRadiusM(r => vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: r }), baseRadiusM);
                         } catch (err) {
                             // atomic building integrity is best-effort for a district: a vector-fetch failure keeps the
                             // base radius rather than failing the whole build over it
@@ -2081,13 +2087,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (vf?.used) run.note(PROVENANCE.remeshed, `footprint from Google vector data: building ${vf.featureIds.join(', ')} (${Math.round(vf.areaM2)} m²), ${Math.round(vf.raisedShare * 100)}% of it raised in the scan, ${Math.round(vf.openShare * 100)}% open ground, ${Math.round(vf.canopyShare * 100)}% tree canopy${vf.enclosesStructure ? ' (larger than the structure: it encloses it)' : ''}; the scan's raised cells within ${FOOTPRINT_TOLERANCE_M} m of it are the structure (IoU ${vf.iou} with the footprint)${chosen}`);
                     else run.note(PROVENANCE.remeshed, `footprint from the scan's geometry alone: ${vf?.reason ?? (value.vectorError ? `Google vector data could not be read (${value.vectorError})` : 'no Google vector data was available')}${chosen}`);
                 }
-                // the cap on leaf tiles can stop a large request short: the scan reaches less far than asked, and says so
+                // a cap on leaf tiles can stop a large request short: the scan reaches less far than asked, and says so
                 if (e.truncated && e.coveredRadiusM < e.radiusM - 0.5) {
                     const asked = Math.round(e.radiusM), covered = Math.round(e.coveredRadiusM);
                     run.degrade(record('tiles', 'radius_truncated', {
                         part: { description: `the outer ring of the extraction (${covered} to ${asked} m)` }, intended: `every leaf tile within ${asked} m of the place`,
-                        fellTo: `the nearest ${e.leafTiles} leaf tiles, which reach ${covered} m`, provenanceAfter: PROVENANCE.asScanned,
-                        reason: `more leaf tiles lie within ${asked} m than the build keeps (the nearest ${e.leafTiles}), so the scan reaches ${covered} m, not the ${asked} m asked for`,
+                        fellTo: `the ${e.leafTiles} leaf tiles nearest in plan, which reach ${covered} m`, provenanceAfter: PROVENANCE.asScanned,
+                        reason: `more leaf tiles lie within ${asked} m than the build keeps (the ${e.leafTiles} nearest in plan), so the scan reaches ${covered} m, not the ${asked} m asked for`,
                         transient: false, runId, now: now()
                     }));
                 }
