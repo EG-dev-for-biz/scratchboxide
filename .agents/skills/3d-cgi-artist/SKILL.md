@@ -5,7 +5,7 @@ description: >-
   ACTIVATE this skill whenever the user works on 3D computer graphics, CGI, visual rendering, geometric topology, shader creation, lighting,
   materials (PBR), or needs creative, out-of-the-box technical artist problem-solving across Blender (Geometry Nodes, bpy, Cycles, Eevee),
   Unreal Engine (Nanite, Lumen, Substrate, Niagara, PCG, HLSL), Unity (URP, HDRP, Shader Graph, VFX Graph, C# Mesh API), or Scratchbox IDE
-  (Procedural3DEngineService, 3DGS/4DGS, UniversalPbrBakingKernel, VirtualBevelKernel, UTDRA/ULDRA photogrammetric elevation slicing, and WGS-84/ECEF/LTP geodesics).
+  (Procedural3DEngineService, 3DGS/4DGS, the sb_apply_normal_bevel operator, Toksvig filtering in the UV rewrap and tile cleanup, UTDRA/ULDRA photogrammetric elevation slicing, and WGS-84/ECEF/LTP geodesics).
   MANDATORY: Formulate and suggest ANY solution this skill conceives as direct, actionable changes to the codebase with target file paths, complete drop-in implementations, and verification harnesses.
   MANDATORY SELF-INTERROGATION: The skill must ALWAYS ask itself "are these solutions adaptive domain architecture compliant?" before proposing or implementing changes.
   Use this skill to leverage Scratchbox IDE code, make grounded code improvements, explain what industry competitors (Blender, Unreal, Unity, Cesium, Luma AI) do to solve a problem,
@@ -66,12 +66,14 @@ When answering, generating, or refactoring code in or for Scratchbox IDE, import
 | **Procedural 3D Engine** | `packages/core/src/node/3d-engine/Procedural3DEngineService.ts` | AI-native Blender alternative. Runs Python scripts against C++20 invariant kernel, streams binary glTF 2.0 directly to memory. |
 | **AST Pre-flight Guard** | `packages/core/src/node/3d-engine/ProceduralAstGuard.ts` | Validates procedural scripts, extracts dynamic UI params, bans low-fidelity toy JS primitives (`THREE.BoxGeometry`). |
 | **Location 3DGS** | `packages/core/src/node/spatial/Location3DGaussianSplatService.ts` | Autonomous Google 3D Tiles ingestion, multi-tier survey blockouts, depth unprojection, and OGC 3D Tiles 1.1 / SPZ packaging. |
-| **Universal PBR Baking** | `packages/core/src/node/3d-engine/universal-pbr-baking-kernel.ts` | Toksvig specular variance filtering ($\kappa = 0.50$), shadow de-lighting via luminance Laplacian, and ORM channel packing. |
-| **Virtual Specular Bevel** | `packages/core/src/node/3d-engine/virtual-bevel-kernel.ts` | 5mm normal map chamfer on sharp edges ($>45^\circ$) with **0.000 mm geometric drift** and zero polygon overhead. |
+| **Toksvig Specular AA** | `algorithmic_uv_unwrap_rewrap` (`enableToksvigFiltering`), `packages/core/src/node/3d-engine/tile-cleanup-service.ts`, the viewer's `facadeMaterialLook.ts` | Folds normal variance into roughness so distant surfaces do not shimmer. |
+| **Normal Bevel** | `sb_apply_normal_bevel` (`packages/core/src/browser/generative-canvas/services/operators/advanced-realism-operators.ts`) | Rounds the live viewport mesh's shading normals across creases between two dihedral angles; geometry unchanged; live viewport only. |
 | **Living Foliage Kernel** | `packages/core/src/node/3d-engine/living-foliage-kernel.ts` | Biophysical wind animation, transmission scattering, and seasonal color modulation in glTF. |
 | **Geodesics & Local Frames** | `packages/core/src/common/GeoFrame.ts`, `LocalTangentPlane.ts` | Double-precision WGS-84 ellipsoidal to ECEF and Local Tangent Plane (ENU) conversion ($< 0.1\text{mm}$ error). |
 | **Photogrammetry Void Excision** | Patent Application 64/168,583 (UTDRA / ULDRA) | Autonomous macro-geographic telemetry probing, topological void excision, and non-destructive elevation slicing. |
 | **Geometric Complexity Gate** | `packages/core/src/common/spatial/GeometricComplexityGate.ts` | Hardening gatekeeper rejecting low-poly toy models ($\ge 25,000$ vertices enforced). |
+
+`UniversalPbrBakingKernel` (`universal-pbr-baking-kernel.ts`) and `VirtualBevelKernel` (`virtual-bevel-kernel.ts`) are exported but no build, tool or route calls them: never say they ran or that Scratchbox uses them. The baking kernel's rules also conflict with AGENTS.md (it brightens any dark texel as shadow, reads cavities and relief from image brightness, and adds ground grime unasked), so do not propose wiring it in as written.
 
 ---
 
@@ -94,11 +96,11 @@ When analyzing visual, geometric, or architectural problems, provide clear compa
    - *Blender*: Bumps Cycles path-tracing samples to 1,024+ and applies OIDN/OptiX denoisers.
    - *Unreal Engine 5*: Applies TSR (Temporal Super Resolution) roughness bias based on screen derivatives.
    - *Unity*: Uses MSAA / TAA passes and mipmapped normal maps.
-   - *Scratchbox IDE*: Uses analytical **Toksvig Normal Variance Filtering** in `UniversalPbrBakingKernel`, coupling normal dispersion into roughness at bake time.
+   - *Scratchbox IDE*: Uses **Toksvig Normal Variance Filtering** in the UV rewrap tool and tile cleanup, coupling normal dispersion into roughness at bake time; the viewer raises glass and facade roughness where the normal varies within a pixel.
 2. **Infinite Specular Edges (Knife-Edge Polygons)**:
    - *Blender*: Adds subdivisions via Bevel Modifier or uses the raytraced Cycles Bevel node.
    - *Unreal Engine 5*: Models high-poly geometric bevels directly into Nanite clusters.
-   - *Scratchbox IDE*: Uses **`VirtualBevelKernel`** to compute dihedral angles and synthesize 5mm tangent normal chamfers with 0.000mm geometry modification.
+   - *Scratchbox IDE*: The `sb_apply_normal_bevel` viewport operator rounds shading normals across creases without changing geometry; pipeline K chamfers its facade structure edges 5 cm in real geometry. Nothing bakes a bevel into exported normal maps today.
 3. **Large-World Coordinate Jitter (>10km)**:
    - *Blender*: Scale breaks past 10km (no planetary geodesic support).
    - *Unity*: Requires custom Floating Origin scripts to move the world back to $(0,0,0)$.
@@ -151,7 +153,7 @@ Whenever this skill conceives, diagnoses, or discovers a solution to ANY visual,
 2. **Production-Ready Drop-In Implementation**:
    - Provide complete, copy-paste ready or drop-in TypeScript, C++20, WGSL/GLSL, or Python code.
    - Never supply pseudocode, hand-waving outlines, or hollow placeholders (`// TODO: implement logic here`).
-   - Import directly from `@scratchbox/core` (e.g., `Procedural3DEngineService`, `UniversalPbrBakingKernel`, `VirtualBevelKernel`, `LocalTangentPlane`, `GeoFrame`).
+   - Import directly from `@scratchbox/core` (e.g., `Procedural3DEngineService`, `LocalTangentPlane`, `GeoFrame`).
 3. **Structured Modification Blueprint / Diff**:
    - Present the changes as a clean git diff or structured modification block clearly distinguishing existing code from new logic.
 4. **Mechanical Verification & Invariant Proof**:
@@ -186,7 +188,7 @@ For in-depth procedures, math proofs, node setups, and code snippets, consult th
 Complete architectural breakdown of `/Users/eligreen/dev/scratchbox-ide-master/`:
 - Adaptive Domain Architecture (ADA) and the Alien Planet Test.
 - Ingesting Google 3D Tiles and compiling binary glTF 2.0 via `Procedural3DEngineService`.
-- Packing PBR maps with `UniversalPbrBakingKernel` and chamfering edges with `VirtualBevelKernel`.
+- Toksvig filtering and normal bevels as they actually run, and the two unused kernels to leave alone.
 - Mathematical invariant verification and AST prevention rules.
 
 ### [Competitive Analysis & Industry Benchmarks](./references/competitive_analysis_and_benchmarks.md)

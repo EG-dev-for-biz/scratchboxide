@@ -11,7 +11,7 @@
 | **Primary Runtime** | React 18 + Vite + Electron (WebGL / WebGPU) | Desktop C/C++ + Python API | C++20 Native Monolith (DirectX 12 / Vulkan) | C# / C++ (DirectX / Vulkan / Metal) | WebGL + CesiumJS / 3D Tiles 1.1 | Python / PyTorch / CUDA + Web viewers |
 | **Geospatial Precision** | Double-precision WGS-84 $\rightarrow$ ECEF $\rightarrow$ Local Tangent Plane ($<0.1\text{mm}$) | Single-precision flat Euclidean (scale breaks $>10\text{km}$) | Large World Coordinates (LWC double precision) | Single-precision floats (jitter without custom floating origins) | Double-precision RTC (Relative To Center) geodetic transforms | No geodetic awareness; normalized bounding cubes |
 | **Photogrammetry & Void Repair** | **Patent Pending UTDRA / ULDRA**: Non-destructive elevation slicing & void excision | Manual retopology + Boolean modifiers + Remesh | Manual cleanup in Maya/ZBrush or simple mesh decimation | Third-party plugins; no native photogrammetric excision | Raw photogrammetry mesh ingestion; no void excision | Blind neural novel-view synthesis (floaters and cloudy artifacts) |
-| **Surface Microgeometry & Bevels** | **Virtual Specular Bevel Kernel**: 5mm normal map chamfer with zero polygon overhead | Render-time Bevel Shader (Cycles) / Bevel Modifier | Virtual Bevel in Substrate / High-poly Nanite micro-triangles | Custom Shader Graph screen-space derivatives | Raw faceted terrain normals; no specular edge rounding | Unstructured point clouds / Gaussian splats |
+| **Surface Microgeometry & Bevels** | `sb_apply_normal_bevel` viewport operator (shading normals only); pipeline K's 5 cm geometric chamfer on facade structure | Render-time Bevel Shader (Cycles) / Bevel Modifier | Virtual Bevel in Substrate / High-poly Nanite micro-triangles | Custom Shader Graph screen-space derivatives | Raw faceted terrain normals; no specular edge rounding | Unstructured point clouds / Gaussian splats |
 | **3D Gaussian Splatting** | Native C++20 metric depth fusion + OGC 3D Tiles 1.1 + Dynamic 4DGS Avatars | Third-party add-ons (point cloud imports) | Experimental plugins; high VRAM consumption | Third-party packages (e.g. Aras-P Splatting) | Point cloud 3D Tiles; limited anisotropic splats | Standalone WebGL / Splat file viewers (static scenes) |
 | **Procedural Generation** | AI-driven prompt $\rightarrow$ C++20 invariant kernel $\rightarrow$ Binary glTF streaming | Geometry Nodes (CPU/GPU evaluation) | PCG (Procedural Content Generation) GPU graphs | VFX Graph + C# Burst / Jobs procedural meshes | Procedural 3D buildings from 2D vector footprints | Diffusion-based image-to-3D models (often non-manifold) |
 
@@ -30,7 +30,9 @@
 - **How Unity Solves It**:
   - Requires baking normal maps from high-poly models in Substance 3D, or using custom Shader Graph normal blending passes.
 - **How Scratchbox IDE Solves It**:
-  - Uses the **`VirtualBevelKernel`**: A mathematical normal-synthesis kernel that calculates dihedral angles across all submesh edges. Edges with dihedral angles $> 45^\circ$ receive a 5mm tangent-space normal chamfer, guaranteeing continuous specular glints with **0.000 mm geometric drift** and zero polygon overhead in glTF 2.0.
+  - The **`sb_apply_normal_bevel`** viewport operator rounds the live mesh's shading normals across creases between two dihedral angles, without changing geometry (not exported into normal maps).
+  - Pipeline K chamfers its facade structure edges 5 cm at 45 degrees in real geometry.
+  - `VirtualBevelKernel` (`virtual-bevel-kernel.ts`) exists but nothing calls it; do not cite it as running.
 
 ---
 
@@ -74,7 +76,7 @@
 - **How Unity Solves It**:
   - Relies on mipmapping and MSAA / TAA anti-aliasing passes in URP/HDRP.
 - **How Scratchbox IDE Solves It**:
-  - Employs **Toksvig Normal Variance Filtering** in its `UniversalPbrBakingKernel`:
+  - Employs **Toksvig Normal Variance Filtering** in the UV rewrap tool (`algorithmic_uv_unwrap_rewrap`, `enableToksvigFiltering`) and tile cleanup (`TileCleanupService`), and the viewer raises roughness where the normal varies within a pixel (`facadeMaterialLook.ts`):
     $$\kappa = \frac{\|\sum \vec{N}_i\|}{\sum \|\vec{N}_i\|}, \quad \sigma_{\text{new}}^2 = \sigma_{\text{base}}^2 + \frac{1 - \kappa}{\kappa}$$
     It mathematically measures the dispersion of normal vectors across the texel footprint and couples that variance into the roughness map, smoothing highlights before they ever reach the rasterizer.
 
@@ -89,6 +91,6 @@ When analyzing a problem in Scratchbox IDE, structure your recommendation using 
 2. **Competitor Baseline (What Others Do)**:
    - Explain how Blender (Geometry Nodes / Python), Unreal (Nanite / Lumen / PCG), Unity (URP / Burst), or Cesium handle this scenario.
 3. **Scratchbox Native Solution (Leveraging Existing Code)**:
-   - Identify which Scratchbox service (`Procedural3DEngineService`, `UniversalPbrBakingKernel`, `VirtualBevelKernel`, `Location3DGS`, `GeometricComplexityGate`) already has the machinery to solve this.
+   - Identify which Scratchbox service (`Procedural3DEngineService`, `algorithmic_uv_unwrap_rewrap`, `sb_apply_normal_bevel`, `Location3DGS`, `GeometricComplexityGate`) already has the machinery to solve this.
 4. **Concrete, AST-Free Code Improvement**:
    - Provide concrete TypeScript, Python, or C++20 code—never hollow mocks—and specify how to verify it with unit tests and math invariant checks.

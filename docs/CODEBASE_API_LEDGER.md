@@ -120,9 +120,9 @@ Exported through `@scratchbox/core`, `@scratchbox/core/node`, `@scratchbox/core/
 
 ### PBR Materials, Texture Baking & Algorithmic UV Rewrapping
 - **`AdaptiveMaterialPbrService`** (`packages/core/src/node/3d-engine/adaptive-material-pbr-service.ts`): Dynamically resolves material albedos, roughness, and metalness without static presets.
-- **`UniversalPbrBakingKernel`** (`packages/core/src/node/3d-engine/universal-pbr-baking-kernel.ts`): High-resolution normal/roughness map baking with Toksvig roughness coupling for anti-aliasing.
+- **`UniversalPbrBakingKernel`** (`packages/core/src/node/3d-engine/universal-pbr-baking-kernel.ts`): High-resolution normal/roughness map baking with Toksvig roughness coupling for anti-aliasing. Exported and tested only; nothing calls it.
 - **`LivingFoliageKernel`** (`packages/core/src/node/3d-engine/living-foliage-kernel.ts`): Synthesizes continuous chlorophyll albedos, subsurface translucency, and wind flutter vectors.
-- **`VirtualBevelKernel`** (`packages/core/src/node/3d-engine/virtual-bevel-kernel.ts`): Screen-space and object-space normal-map beveling along sharp triangle boundaries.
+- **`VirtualBevelKernel`** (`packages/core/src/node/3d-engine/virtual-bevel-kernel.ts`): Screen-space and object-space normal-map beveling along sharp triangle boundaries. Exported and tested only; nothing calls it (the live bevel is the `sb_apply_normal_bevel` viewport operator).
 - **`TextureCompressionService`** (`packages/core/src/node/texture-compression-service.ts`): Compresses PBR textures and GLB files using Basis Universal, KTX2, and Draco geometric compression.
 - **`GlbTextureRecolorService`** (`packages/core/src/node/spatial/GlbTextureRecolorService.ts`): In-place material segmentation in CIELAB space with PBR synthesis.
 - **`AlgorithmicUvEngine`** (`packages/core/src/node/spatial/AlgorithmicUvEngine.ts`): Seam cutting, conformal parameterization, and inverse barycentric UV rewrapping.

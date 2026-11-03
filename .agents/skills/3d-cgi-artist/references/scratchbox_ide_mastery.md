@@ -61,20 +61,20 @@ scratchbox-ide/
   4. Multi-view depth unprojection via native C++20 voxel-hash fusion (`station_to_splats.cpp`).
   5. Packaging to OGC 3D Tiles 1.1 or Niantic SPZ.
 
-### 2.3 Universal PBR Texture Baking Kernel (`universal-pbr-baking-kernel.ts`)
-- **File**: `packages/core/src/node/3d-engine/universal-pbr-baking-kernel.ts`
-- **What it does**: Native baking kernel that computes microfacet roughness, metallic, ambient occlusion, and normal variance.
-- **Key Features**:
-  - **Toksvig Specular Filtering**: Filters high-frequency normal variance into roughness ($\kappa = 0.50$), eliminating specular crawling and fireflies.
-  - **Shadow De-Lighting**: Uses luminance Laplacian filtering to remove baked-in sunlight shadows from photogrammetric albedo.
-  - **ORM Packing**: Generates channel-packed Red=AO, Green=Roughness, Blue=Metallic textures.
+### 2.3 Toksvig Specular Filtering (where it runs)
+- **`algorithmic_uv_unwrap_rewrap`** (`enableToksvigFiltering`, default on) and **`TileCleanupService`** (`packages/core/src/node/3d-engine/tile-cleanup-service.ts`, `enableToksvigFiltering`) fold normal variance into roughness at bake time.
+- **The viewer** (`facadeMaterialLook.ts`) raises roughness where the normal varies within a pixel, so distant glass and facades do not shimmer.
 
-### 2.4 Virtual Specular Bevel Kernel (`VirtualBevelKernel`)
-- **File**: `packages/core/src/node/3d-engine/virtual-bevel-kernel.ts`
-- **What it does**: Smoothly rounds sharp dihedral edges ($>45^\circ$) within 5mm to produce continuous specular highlight glints on stone cornices and Roman arches.
-- **Enforces**: **0.000 mm geometric drift** (zero polygon modifications), compliant with standard glTF 2.0 PBR tangent-space normal maps.
+### 2.4 Normal Bevel (where it runs)
+- **`sb_apply_normal_bevel`** (`packages/core/src/browser/generative-canvas/services/operators/advanced-realism-operators.ts`): rounds the live viewport mesh's shading normals across creases between a threshold and a maximum dihedral angle; geometry unchanged; live viewport only, not exported into normal maps.
+- **Pipeline K** chamfers its facade structure edges 5 cm at 45 degrees in real geometry.
 
-### 2.5 Dynamic 4DGS Humanoid Avatar Engine (`SbHumanLoader` & `ConcertStagePerformerService`)
+### 2.5 Unused kernels: do not cite as running
+- **`UniversalPbrBakingKernel`** (`universal-pbr-baking-kernel.ts`) and **`VirtualBevelKernel`** (`virtual-bevel-kernel.ts`) are exported and unit-tested, but no build, tool or route has ever called them.
+- The baking kernel's per-texel rule (`applyUniversalSleightOfHand`) conflicts with AGENTS.md: it brightens every texel under 45% luminance as shadow (dark materials included), derives cavities and height relief from image brightness, invents a vertical grain pattern, and darkens walls near the ground unasked. Do not propose wiring it in as written.
+- The bevel kernel's fixed 5 mm width is smaller than a texel on tile textures and would sparkle along noisy scan edges; if a bevel is wanted on engine-built objects, scale its width to the object.
+
+### 2.6 Dynamic 4DGS Humanoid Avatar Engine (`SbHumanLoader` & `ConcertStagePerformerService`)
 - **Files**: `packages/core/src/common/spatial/SbHumanLoader.ts`, `packages/core/src/browser/generative-canvas/services/ConcertStagePerformerService.ts`
 - **What it does**: 22-joint canonical kinematic skeleton with dual-quaternion / linear blend skinning driving dynamic 3D Gaussian splat ellipsoids for realistic humanoid performance in WebGL.
 
