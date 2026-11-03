@@ -21,6 +21,7 @@ import { hasExplicitSun } from '../../../../common/scene-atmosphere-opt-in';
 import { hazeRangeM } from '../../services/atmosphere/scene-weather';
 import { CascadedSunLight, isCascadedSunShadow } from './sunShadowCascades';
 import { ContactAmbientOcclusion } from './contactAmbientOcclusion';
+import { ContactShadows } from './contactShadows';
 
 export interface AtmosphereInput {
     skybox?: string;
@@ -428,6 +429,9 @@ export function syncAtmosphere(
                 // contact ambient occlusion from the same depth, applied before the haze: where walls meet the street,
                 // in window reveals and under eaves (off with the aerial pass, so off in a splat world, whose splats write no depth)
                 aerialPerspective.ambientOcclusion = new ContactAmbientOcclusion();
+                // and the sun's contact shadows past the nearest cascade: sills, cornices and mullions far out
+                const dome = skyDomeModule;
+                aerialPerspective.contactShadows = new ContactShadows(() => ({ sun: dome.sunLight, hemi: dome.hemiLight }));
             } catch (e) {
                 console.warn('[AerialPerspectiveEffect] Post-pass setup warning:', e);
             }
