@@ -14,7 +14,7 @@
  * textures and the flat scan's photos swapped and encoded (twin-reader.ts), the other planes photographed (plane-orthos.ts),
  * the brief's contact sheet, the photos and their uncovered and occlusion masks decoded, the overview and cell crops,
  * the judges' side-by-sides and a family drawn from its lead's window (facade-reader.ts); every image large enough to
- * go to a codec thread.
+ * go to a codec thread. Then the crops (regionRgba) against the per-texel loop they were drawn with before, kept here.
  */
 
 import { afterAll, describe, expect, it } from 'vitest';
@@ -26,7 +26,7 @@ import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { encodeRgbaToJpeg } from '../src/node/image-codec-ffmpeg';
 import { closePngCodecPool, INLINE_MAX_BYTES } from '../src/node/png-codec-pool';
 import { readOnTwin } from '../src/node/3d-engine/staged-location/pipeline-k/twin-reader';
-import type { FacadeAsk } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
+import { regionRgba, type FacadeAsk, type FacadePhoto, type ImageRegion } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
 import type { FittedPlane } from '../src/node/3d-engine/staged-location/window-fit';
 import { packGlb, quad } from './helpers/synthetic-material-scan';
 
@@ -135,6 +135,27 @@ function snapshot(dir: string): Map<string, string> {
     return out;
 }
 
+/** regionRgba as it was: every output texel's source found on its own. */
+function regionRgbaBefore(img: FacadePhoto, r: ImageRegion, scale: number, outlines: Array<[number, number, number, number]>, L?: Float32Array): Uint8Array {
+    const W = img.width, ow = Math.max(1, Math.round((r.x1 - r.x0) * scale)), oh = Math.max(1, Math.round((r.y1 - r.y0) * scale));
+    const out = new Uint8Array(ow * oh * 4);
+    for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) {
+        const sx = Math.min(W - 1, r.x0 + Math.floor(x / scale)), sy = Math.min(img.height - 1, r.y0 + Math.floor(y / scale)), p = (sy * W + sx) * 4, q = (y * ow + x) * 4;
+        if (L && !Number.isFinite(L[sy * W + sx])) { out[q] = out[q + 1] = out[q + 2] = 128; out[q + 3] = 255; continue; }
+        out[q] = img.rgba[p]; out[q + 1] = img.rgba[p + 1]; out[q + 2] = img.rgba[p + 2]; out[q + 3] = 255;
+    }
+    const lw = Math.max(1, Math.round(scale / 2));
+    for (const [x0, y0, x1, y1] of outlines) {
+        const X0 = Math.round((x0 - r.x0) * scale), X1 = Math.round((x1 - r.x0) * scale) - 1, Y0 = Math.round((y0 - r.y0) * scale), Y1 = Math.round((y1 - r.y0) * scale) - 1;
+        if (Y1 < 0 || Y0 >= oh || X1 < 0 || X0 >= ow) continue;
+        for (let y = Math.max(0, Y0); y <= Math.min(oh - 1, Y1); y++) for (let x = Math.max(0, X0); x <= Math.min(ow - 1, X1); x++) {
+            if (x - X0 >= lw && X1 - x >= lw && y - Y0 >= lw && Y1 - y >= lw) continue;
+            out.set([255, 0, 255, 255], (y * ow + x) * 4);
+        }
+    }
+    return out;
+}
+
 afterAll(async () => { await closePngCodecPool(); });
 
 describe('the facade reader on the codec threads', () => {
@@ -174,4 +195,24 @@ describe('the facade reader on the codec threads', () => {
         for (const name of ['facade_7.png', 'facade_8.png', 'facade_9.png']) expect(Buffer.from(inline.files.get(name)!, 'base64').length, name).toBeGreaterThan(INLINE_MAX_BYTES);
         for (const p of JSON.parse(inline.files.get('planes.json')!).planes) expect(p.width * p.height * 4, p.image).toBeGreaterThan(INLINE_MAX_BYTES);
     }, 120_000);
+
+    it('draws the crops as the per-texel loop did: regions, scales, uncovered texels and outlines', () => {
+        let seed = 5;
+        const rnd = () => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) / 4294967296);
+        const W = 230, H = 170, img = { rgba: wall(W, H, 180, 70, 3), width: W, height: H };
+        const L = new Float32Array(W * H).map(() => (rnd() < 0.1 ? NaN : rnd()));
+        let compared = 0;
+        for (const scale of [0.37, 0.5, 1, 1.6, 2.5, 4]) for (let k = 0; k < 6; k++) {
+            const x0 = Math.floor(rnd() * W * 0.6), y0 = Math.floor(rnd() * H * 0.6);
+            // a region running past the photo's edge as well (its texels clamped)
+            const r = { x0, y0, x1: Math.min(W + 6, x0 + 4 + Math.floor(rnd() * (W - x0))), y1: Math.min(H + 6, y0 + 4 + Math.floor(rnd() * (H - y0))) };
+            const outlines = Array.from({ length: 1 + Math.floor(rnd() * 12) }, () => { const a = rnd() * W, b = rnd() * H; return [a - 10, b - 10, a + rnd() * 40, b + rnd() * 30] as [number, number, number, number]; });
+            for (const lum of [undefined, L]) {
+                const now = regionRgba(img, r, scale, outlines, lum), before = regionRgbaBefore(img, r, scale, outlines, lum);
+                expect(Buffer.from(now.rgba).equals(Buffer.from(before)), JSON.stringify({ r, scale })).toBe(true);
+                compared += before.length;
+            }
+        }
+        expect(compared).toBeGreaterThan(1_000_000);
+    });
 });

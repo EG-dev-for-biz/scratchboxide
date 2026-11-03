@@ -365,12 +365,19 @@ export function zoneCrops(L: Float32Array, W: number, zone: ImageRegion, h: numb
  * filled from the facade's repeats.
  */
 export function regionRgba(img: FacadePhoto, r: ImageRegion, scale: number, outlines: WindowRect[] = [], L?: Float32Array): { width: number; height: number; rgba: Uint8Array } {
-    const W = img.width, ow = Math.max(1, Math.round((r.x1 - r.x0) * scale)), oh = Math.max(1, Math.round((r.y1 - r.y0) * scale));
+    const W = img.width, src = img.rgba, ow = Math.max(1, Math.round((r.x1 - r.x0) * scale)), oh = Math.max(1, Math.round((r.y1 - r.y0) * scale));
     const out = new Uint8Array(ow * oh * 4);
-    for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) {
-        const sx = Math.min(W - 1, r.x0 + Math.floor(x / scale)), sy = Math.min(img.height - 1, r.y0 + Math.floor(y / scale)), p = (sy * W + sx) * 4, q = (y * ow + x) * 4;
-        if (L && !Number.isFinite(L[sy * W + sx])) { out[q] = out[q + 1] = out[q + 2] = 128; out[q + 3] = 255; continue; }
-        out[q] = img.rgba[p]; out[q + 1] = img.rgba[p + 1]; out[q + 2] = img.rgba[p + 2]; out[q + 3] = 255;
+    // each output column's and row's texel, once
+    const sxs = new Int32Array(ow), sys = new Int32Array(oh);
+    for (let x = 0; x < ow; x++) sxs[x] = Math.min(W - 1, r.x0 + Math.floor(x / scale));
+    for (let y = 0; y < oh; y++) sys[y] = Math.min(img.height - 1, r.y0 + Math.floor(y / scale));
+    for (let y = 0, q = 0; y < oh; y++) {
+        const row = sys[y] * W;
+        for (let x = 0; x < ow; x++, q += 4) {
+            const s = row + sxs[x], p = s * 4;
+            if (L && !Number.isFinite(L[s])) { out[q] = out[q + 1] = out[q + 2] = 128; out[q + 3] = 255; continue; }
+            out[q] = src[p]; out[q + 1] = src[p + 1]; out[q + 2] = src[p + 2]; out[q + 3] = 255;
+        }
     }
     const lw = Math.max(1, Math.round(scale / 2));
     for (const [x0, y0, x1, y1] of outlines) {
@@ -378,7 +385,8 @@ export function regionRgba(img: FacadePhoto, r: ImageRegion, scale: number, outl
         if (Y1 < 0 || Y0 >= oh || X1 < 0 || X0 >= ow) continue;
         for (let y = Math.max(0, Y0); y <= Math.min(oh - 1, Y1); y++) for (let x = Math.max(0, X0); x <= Math.min(ow - 1, X1); x++) {
             if (x - X0 >= lw && X1 - x >= lw && y - Y0 >= lw && Y1 - y >= lw) continue;
-            out.set([255, 0, 255, 255], (y * ow + x) * 4);
+            const q = (y * ow + x) * 4;
+            out[q] = 255; out[q + 1] = 0; out[q + 2] = 255; out[q + 3] = 255;
         }
     }
     return { width: ow, height: oh, rgba: out };
@@ -857,7 +865,7 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
                 const d = await decodePngAsync(fs.readFileSync(path.join(orthosDir, f.image)));
                 let uncovered: Uint8Array | undefined;
                 const mf = f.uncoveredMask ? path.join(orthosDir, f.uncoveredMask) : undefined;
-                if (mf && fs.existsSync(mf)) { const m = await decodePngAsync(fs.readFileSync(mf)); uncovered = Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] >= 128 ? 1 : 0)); }
+                if (mf && fs.existsSync(mf)) { const m = await decodePngAsync(fs.readFileSync(mf)); uncovered = new Uint8Array(m.width * m.height); for (let k = 0; k < uncovered.length; k++) uncovered[k] = m.rgba[k * 4] >= 128 ? 1 : 0; }
                 // what stood in front of the facade when it was photographed is greyed out of the crops and not tiled from (occlusion.ts)
                 const occluded = await readOccludedAsync(orthosDir, f, d.width, d.height);
                 if (occluded) uncovered = unreadMask(uncovered, occluded, d.width * d.height);

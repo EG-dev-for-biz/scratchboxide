@@ -36,8 +36,9 @@ const occludedFile = (dir: string, f: { occludedMask?: string }) => (f.occludedM
 
 function occludedOf(m: { rgba: ArrayLike<number>; width: number; height: number }, width: number, height: number, P: typeof OCCLUSION_PARAMS): Uint8Array | undefined {
     if (m.width !== width || m.height !== height) return undefined;
-    const at = Math.round(P.minBlocked * 255);
-    return Uint8Array.from({ length: width * height }, (_, k) => (m.rgba[k * 4] >= at ? 1 : 0));
+    const at = Math.round(P.minBlocked * 255), out = new Uint8Array(width * height);
+    for (let k = 0; k < out.length; k++) out[k] = m.rgba[k * 4] >= at ? 1 : 0;
+    return out;
 }
 
 /** 1 where the facade's occlusion mask (`f.occludedMask` beside its image in `dir`) is at least minBlocked; undefined without a mask of the photo's size. */
