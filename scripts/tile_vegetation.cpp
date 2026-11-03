@@ -667,7 +667,7 @@ static int runPlant(const Args& a) {
               << ", \"unfit\": " << L.unfit << ", \"inset\": " << L.inset << ", \"outsideCrown\": " << L.outsideCrown << ", \"prunedBelowRadiusM\": " << json::num(L.prunedBelowRadiusM) << ", \"skeletonNodes\": " << t.report.skeletonNodes << ", \"twigs\": " << L.twigCount() << ", \"twigRadiusMinM\": " << json::num(L.twigRadiusMinM) << ", \"twigRadiusMedianM\": " << json::num(L.twigRadiusMedianM) << ", \"twigRadiusMaxM\": " << json::num(L.twigRadiusMaxM) << ", \"woodTriangles\": " << L.woodTriangles
               << ", \"level0\": " << lvl(L.level0, L.drawnLevel0()) << ", \"nearMid\": " << lvl(L.nearMid, L.drawnNearMid()) << ", \"level1\": " << lvl(L.level1, L.drawnLevel1()) << ", \"level2Triangles\": " << L.drawnFar(t.foliage.indices.size() / 3) << ", \"farWoodTriangles\": " << L.farWoodTriangles << ", \"farWoodPrunedBelowRadiusM\": " << json::num(L.farWoodPrunedBelowRadiusM)
               << ", \"ms\": " << json::num(t.lodMs) << ", \"msWood\": " << json::num(L.msWood) << ", \"msTwigs\": " << json::num(L.msTwigs) << ", \"msStations\": " << json::num(L.msStations)
-              << ", \"msRepair\": " << json::num(L.msRepair) << ", \"msFill\": " << json::num(L.msFill) << ", \"msMeasure\": " << json::num(L.msMeasure) << ", \"msCards\": " << json::num(L.msCards)
+              << ", \"msRepair\": " << json::num(L.msRepair) << ", \"msFill\": " << json::num(L.msFill) << ", \"msMeasure\": " << json::num(L.msMeasure) << ", \"msCards\": " << json::num(L.msCards) << ", \"msDrawn\": " << json::num(L.msDrawn)
               << (L.midCards() ? ", \"crownCards\": " + detail::crownCardsJson(L, true) : std::string())
               << ", \"coverage\": " << detail::coverageJson(L.coverage) << "}";
         }

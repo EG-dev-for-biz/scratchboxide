@@ -58,6 +58,7 @@
 #include <limits>
 #include <string>
 #include <queue>
+#include <set>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -302,6 +303,10 @@ struct LibraryMesh {
     std::vector<uint32_t> bladeTri;      // 3 per triangle, into bladePos
     std::vector<Vec2> bladeUv;           // the blade's own coordinates at each bladePos (u = 0.5 + across / length, v = along / length)
     std::vector<Sphere> leafSpheres;     // `first`, `count`: triangles of bladeTri
+    // the rest of what the mesh draws (petioles, sub-shoots), own vertices: a blade's underside is its upper side's triangle
+    // again and is left out, so the blades' upper sides and these cover what the whole mesh covers
+    std::vector<Vec3> otherPos;
+    std::vector<uint32_t> otherTri;
     Vec3 bladeCentre;
     float bladeRadius{0};
     double bladeArea{0};                 // area of the blades' upper sides, m^2 (what a level's leaf cover is matched on)
@@ -464,6 +469,30 @@ inline LibraryMesh fromCluster(const std::string& name, const sv::SbVeggieCluste
             m.bladeUv.push_back(idx < c.uvs.size() ? c.uvs[idx] : Vec2(0.5f, 0.5f));
         }
         m.bladeTri.push_back(it->second);
+    }
+    {
+        // every other triangle, less those on the same three points as a blade's upper side (its underside)
+        auto corners = [&](const uint32_t* t) {
+            std::array<std::array<float, 3>, 3> k;
+            for (int j = 0; j < 3; ++j) { const Vec3& p = c.positions[t[j]]; k[static_cast<size_t>(j)] = {p.x, p.y, p.z}; }
+            std::sort(k.begin(), k.end());
+            return k;
+        };
+        std::set<std::array<std::array<float, 3>, 3>> fronts;
+        for (size_t t = 0; t + 2 < c.bladeFrontIndices.size(); t += 3) fronts.insert(corners(&c.bladeFrontIndices[t]));
+        std::unordered_map<uint32_t, uint32_t> other;
+        for (size_t t = 0; t + 2 < c.indices.size(); t += 3) {
+            if (fronts.count(corners(&c.indices[t]))) continue;
+            for (int j = 0; j < 3; ++j) {
+                const uint32_t idx = c.indices[t + static_cast<size_t>(j)];
+                auto it = other.find(idx);
+                if (it == other.end()) {
+                    it = other.emplace(idx, static_cast<uint32_t>(m.otherPos.size())).first;
+                    m.otherPos.push_back(c.positions[idx]);
+                }
+                m.otherTri.push_back(it->second);
+            }
+        }
     }
     const size_t front = m.bladeTri.size() / 3;
     for (size_t t = 0; t < front; ++t) {
@@ -926,6 +955,33 @@ struct CoverageViews {
         const Vec2 z(0.5f, 0.5f);
         for (auto& v : views)
             for (size_t t = 0; t + 2 < m.indices.size(); t += 3) triangle(v, p[m.indices[t]], p[m.indices[t + 1]], p[m.indices[t + 2]], z, z, z, nullptr);
+    }
+
+    /** Covers what one placed library mesh draws beside its blades' upper sides (its petioles, sub-shoots), solid, in every view. */
+    void addOther(const LibraryMesh& m, const Instance& in) {
+        if (m.otherTri.empty()) return;
+        std::vector<Vec3> p(m.otherPos.size());
+        for (size_t k = 0; k < p.size(); ++k) p[k] = in.t + in.q.rotate(Vec3(m.otherPos[k].x * in.s.x, m.otherPos[k].y * in.s.y, m.otherPos[k].z * in.s.z));
+        const Vec2 z(0.5f, 0.5f);
+        for (auto& v : views)
+            for (size_t t = 0; t + 2 < m.otherTri.size(); t += 3) triangle(v, p[m.otherTri[t]], p[m.otherTri[t + 1]], p[m.otherTri[t + 2]], z, z, z, nullptr);
+    }
+
+    /** What every view covers, to come back to (restore). */
+    struct Snapshot {
+        std::vector<std::vector<uint8_t>> covered;
+        std::vector<std::array<size_t, 3>> counts;   // covEll, covHull, covAll
+    };
+    Snapshot snapshot() const {
+        Snapshot s;
+        for (const auto& v : views) { s.covered.push_back(v.covered); s.counts.push_back({v.covEll, v.covHull, v.covAll}); }
+        return s;
+    }
+    void restore(const Snapshot& s) {
+        for (size_t k = 0; k < views.size() && k < s.covered.size(); ++k) {
+            views[k].covered = s.covered[k];
+            views[k].covEll = s.counts[k][0]; views[k].covHull = s.counts[k][1]; views[k].covAll = s.counts[k][2];
+        }
     }
 
     /** Covers what a plain mesh covers (a level's wood, the far level's leaf masses), solid, in every view. */
@@ -1890,6 +1946,7 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     }
     T.msFill = msSince(tPhase); tPhase = Clock::now();
     // ---- measurements of each level ----
+    detail::CoverageViews::Snapshot blades0, bladesNearMid, bladesMid;   // each level's blades, solid: what it draws starts from them
     auto finish = [&](LeafLevelMeasure& m, const detail::LeafSoup& soup, const detail::ReachTracker& tr) {
         m.reached = tr.nBig;
         m.reachedStrict = tr.nSmall;
@@ -1918,8 +1975,11 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
         auto nearMid = [](const ClusterVariant& v) -> const LibraryMesh& { return v.nearMid; };
         auto mid = [](const ClusterVariant& v) -> const LibraryMesh& { return v.level1; };
         T.coverage.level0 = levelOf(near, nullptr);
+        blades0 = cov.snapshot();
         T.coverage.nearMid = levelOf(nearMid, nullptr);
+        bladesNearMid = cov.snapshot();
         T.coverage.mid = T.coverage.midClusters = levelOf(mid, nullptr);
+        bladesMid = cov.snapshot();
         if (in.cutoutFill > 0) {
             T.coverage.level0Cutout = levelOf(near, &cut);
             T.coverage.midCutout = T.coverage.midClustersCutout = levelOf(mid, &cut);
@@ -1942,23 +2002,22 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     if (T.coverage.measured) {
         // 0 near, 1 near-mid, 2 mid, 3 far
         auto drawn = [&](int level) {
-            cov.clearCovered();
-            if (level == 3) {
-                cov.addMesh(T.farWood);
-                if (in.farFoliage) cov.addMesh(*in.farFoliage);
+            if (level == 3 || (level == 2 && T.midCards())) {
+                cov.clearCovered();
+                cov.addMesh(level == 3 ? T.farWood : T.wood);
+                if (level == 3 && in.farFoliage) cov.addMesh(*in.farFoliage);
+                if (level == 2) for (size_t k = 0; k < T.cards.size(); ++k) for (const auto& cd : T.cards[k]) cov.addCard(cd, lib.cardMask, static_cast<int>(k));
                 return cov.level();
             }
+            // the level's blades are already covered (the measurement above): the rest of what it draws is added to them
+            cov.restore(level == 0 ? blades0 : level == 1 ? bladesNearMid : bladesMid);
             cov.addMesh(T.wood);
             if (level == 0)
                 for (size_t k = 0; k < T.twigs.size() && k < lib.twigs.size(); ++k) for (const auto& tw : T.twigs[k]) cov.addWhole(lib.twigs[k], tw);
-            if (level == 2 && T.midCards()) {
-                for (size_t k = 0; k < T.cards.size(); ++k) for (const auto& cd : T.cards[k]) cov.addCard(cd, lib.cardMask, static_cast<int>(k));
-                return cov.level();
-            }
             for (size_t k = 0; k < T.clusters.size() && k < lib.variants.size(); ++k) {
                 const ClusterVariant& v = lib.variants[k];
                 const LibraryMesh& m = level == 0 ? v.level0 : level == 1 ? v.nearMid : v.level1;
-                for (const auto& inst : T.clusters[k]) cov.addWhole(m, inst);
+                for (const auto& inst : T.clusters[k]) cov.addOther(m, inst);
             }
             return cov.level();
         };
@@ -1985,18 +2044,28 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
                 }
                 detail::FarMassSpread spread;
                 spread.init(*in.farFoliage, T.coverage.reference, leafReach);
-                auto at = [&](double s) { spread.apply(*in.farFoliage, s); return drawn(3); };
-                double lo = std::min(1.0, P.farMassMinSpread), hi = std::max(1.0, P.farMassMaxSpread), best = 1.0;
-                double bestErr = std::abs(relErr(T.coverage.drawnFar));
-                for (int it = 0; it < 14; ++it) {
-                    const double s = 0.5 * (lo + hi);
-                    const double e = relErr(at(s));
-                    if (std::abs(e) < bestErr) { bestErr = std::abs(e); best = s; }
-                    if (std::abs(e) <= P.farMassCoverTolerance) break;
-                    (e < 0 ? lo : hi) = s;
+                double best = 1.0, bestErr = std::abs(relErr(T.coverage.drawnFar));
+                CoverageLevel bestLevel = T.coverage.drawnFar;
+                auto at = [&](double s) {
+                    spread.apply(*in.farFoliage, s);
+                    const CoverageLevel L = drawn(3);
+                    const double e = relErr(L);
+                    if (std::abs(e) < bestErr) { bestErr = std::abs(e); best = s; bestLevel = L; }
+                    return e;
+                };
+                // the cover grows with the spread: first the end of its range the near level's cover lies toward (taken when
+                // even that falls short), then false position (the Illinois rule) between it and 1
+                double a = 1.0, fa = relErr(T.coverage.drawnFar);
+                double b = fa < 0 ? std::max(1.0, P.farMassMaxSpread) : std::min(1.0, P.farMassMinSpread), fb = at(b);
+                for (int it = 0, side = 0; it < 14 && fa * fb < 0 && bestErr > P.farMassCoverTolerance; ++it) {
+                    const double c = (a * fb - b * fa) / (fb - fa), fc = at(c);
+                    if (fc * fb > 0) { b = c; fb = fc; if (side == -1) fa *= 0.5; side = -1; }
+                    else { a = c; fa = fc; if (side == 1) fb *= 0.5; side = 1; }
                 }
+                if (best == 1.0) { in.farFoliage->vertices = spread.pos; if (!spread.nrm.empty()) in.farFoliage->normals = spread.nrm; }
+                else spread.apply(*in.farFoliage, best);
                 T.coverage.farMassSpread = best;
-                T.coverage.drawnFar = at(best);
+                T.coverage.drawnFar = bestLevel;
             }
         }
     }

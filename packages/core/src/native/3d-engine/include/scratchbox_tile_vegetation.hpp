@@ -5378,6 +5378,13 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
                 tr.lodMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tLod).count();
                 if (!tr.lod.error.empty()) { errors[i] = "crown " + std::to_string(tr.crownId) + ": " + tr.lod.error; return; }
                 tr.hasLod = true;
+                if (tr.lod.coverage.farMassSpread != 1.0) {
+                    // the masses it delivers were spread: what they reach is measured again, on the masses the GLB holds
+                    m.reach = measureFoliage(m.foliage, m.report.foliageClumps, g.surface, g.reachRadius);
+                    tr.leaves = m.reach;
+                    tr.leavesStrict = measureFoliage(m.foliage, m.report.foliageClumps, g.surface, P.treeLod.strictReachM);
+                    if (psi >= 1.0) tr.shortOfCrown = m.shortfall(g, shapes[i], P.growth.minSurfaceReached, tr.budget);
+                }
             }
             tr.wood = std::move(m.wood);
             tr.foliage = std::move(m.foliage);
