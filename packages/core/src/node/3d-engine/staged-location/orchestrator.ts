@@ -200,6 +200,7 @@ import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
 import { districtBuildingIndex, districtFootprints } from './pipeline-k/district-buildings';
 import { chunkCpuShare, chunkOwner, chunkParallel, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, planDistrictChunks, type DistrictChunkPlan, type TileFrame } from './pipeline-k/district-chunks';
+import { auditDistrictForPlace, placeStoreEnabled, syncPlaceAfterObjects } from './place-store-district';
 import { addSeamEdges, applySeamGain, cutChunkGround, DISTRICT_SEAMS_PARAMS, DISTRICT_SEAMS_VERSION, sampleSeamColour, seamCoverage, seamOwner, solveSeamGains, type SeamCoverage, type SeamCutReport, type SeamEdges, type SeamSamples } from './pipeline-k/district-seams';
 import * as os from 'os';
 import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
@@ -629,7 +630,7 @@ export interface StagedLocationDeps {
     /** Pipeline K-D: every leaf tile of the district's radius fetched into the shared leaf cache while the chunks build; absent = each chunk fetches its own. */
     prefetchTiles?: (req: { lat: number; lng: number; elevation?: number; radiusM: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void }) => Promise<{ leaves: number; downloaded: number; ms: number }>;
     /** Pipeline K-D: one chunk of a chunked district built on its own (its own worker, staged-location-tool.ts); absent = no chunking. */
-    runChunk?: (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void }) => Promise<StagedLocationOutcome>;
+    runChunk?: (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void; atOnce?: number }) => Promise<StagedLocationOutcome>;
 }
 
 export interface StagedLocationContext {
@@ -1568,8 +1569,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         if (kdDistrict && !request.chunk && deps.runChunk && deps.vectorEvidence) {
             try {
                 const radius = request.radiusM ?? 250;
-                const ev = await deps.vectorEvidence({ lat: placeValue.lat, lng: placeValue.lng, radiusM: radius });
-                chunkPlan = planDistrictChunks(radius, selectPaintBuildings(ev, radius).buildings.map(b => ({ id: b.id, centroid: b.centroid, loops: b.parts.map(p => p.loops[0]).filter(l => l && l.length >= 3) })));
+                // the buildings the circle may reach too (their middles up to the edge growth past it): each planned whole or left out
+                const reach = radius + DISTRICT_CHUNKS_PARAMS.edgeGrowthM;
+                const ev = await deps.vectorEvidence({ lat: placeValue.lat, lng: placeValue.lng, radiusM: reach });
+                chunkPlan = planDistrictChunks(radius, selectPaintBuildings(ev, reach).buildings.map(b => ({ id: b.id, centroid: b.centroid, loops: b.parts.map(p => p.loops[0]).filter(l => l && l.length >= 3) })));
                 if (chunkPlan) {
                     // the whole plan, footprints too: the seam stage's ownership can be rebuilt from it offline
                     cache.writeRunNote(runId, 'district_chunks', chunkPlan);
@@ -1789,7 +1792,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 };
                 let next = 0, joined = 0;
                 const retry: Array<DistrictChunkPlan['chunks'][number]> = [];
-                const one = async (c: DistrictChunkPlan['chunks'][number], last = false) => {
+                const one = async (c: DistrictChunkPlan['chunks'][number], atOnce: number, last = false) => {
                     const t0 = now();
                     const ll = frameToLatLng(placeValue!, [c.cx, c.cz]);
                     io.progress(`chunk ${c.index}: building ${c.buildings.length} buildings within ${Math.round(c.radiusM)} m`);
@@ -1799,7 +1802,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             place: { lat: ll.lat, lng: ll.lng, formattedAddress: `${placeValue!.formattedAddress} (chunk ${c.index})` },
                             ...(request.enhance !== undefined ? { enhance: request.enhance } : {}), ...(request.steps ? { steps: request.steps } : {}),
                             chunk: { of: runId, index: c.index, rect: { x0: c.rect.x0 - c.cx, z0: c.rect.z0 - c.cz, x1: c.rect.x1 - c.cx, z1: c.rect.z1 - c.cz } }
-                        }, { signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`) });
+                        }, { signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce });
                         if (!out.compat.frame) throw new Error('the chunk did not report its frame');
                         const m = frameTransform(out.compat.frame, here);
                         const mine = (x: number, z: number) => owner(x, z) === c.index, band = chunkTerritory(plan, c.index, DISTRICT_CHUNKS_PARAMS.seamBandM);
@@ -1853,8 +1856,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         })));
                     }
                 };
-                await Promise.all(Array.from({ length: Math.min(parallel, todo.length) }, async () => { while (next < todo.length) await one(todo[next++]); }));
-                if (retry.length) { let k = 0; await Promise.all(Array.from({ length: Math.min(parallel, retry.length) }, async () => { while (k < retry.length) await one(retry[k++], true); })); }
+                const width = Math.min(parallel, todo.length);
+                await Promise.all(Array.from({ length: width }, async () => { while (next < todo.length) await one(todo[next++], width); }));
+                if (retry.length) { let k = 0; const again = Math.min(parallel, retry.length); await Promise.all(Array.from({ length: again }, async () => { while (k < retry.length) await one(retry[k++], again, true); })); }
                 // ---- the seam stage over the joined ground (scene-healing §3.1; pipeline-k/district-seams.ts), one chunk at a time:
                 // the chunks' photos levelled to one another by a gain per chunk, fitted where they meet; each chunk's ground cut
                 // exactly at the cell lines around what it owns, and its cut edge moved onto the edge the chunks before it left
@@ -1940,6 +1944,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 cache.writeRunNote(runId, 'district_chunks_joined', { version: DISTRICT_CHUNKS_VERSION, parallel, chunks: report, ...(seams ? { seams } : {}), ...(prefetch ? { prefetch } : {}) });
                 // the vector buildings shown past the centre build's tiles stand in only where no chunk was joined
                 if (joined === todo.length) for (const l of run.state.layers.filter(x => x.layer === 'l0o' && !x.retired)) run.commit({ ...l, retired: true }, run.layerMeta[l.objectId]);
+                // the place store (place-store-district.ts, SCRATCHBOX_PLACE_STORE=1): the joined district audited, its buildings listed for the object store
+                if (placeStoreEnabled()) cache.writeRunNote(runId, 'place_audit', await auditDistrictForPlace({ runId, place: placeValue!, originEllipsoidalHeightM: here.originEllipsoidalHeightM, plan, layers: run.state.layers, manifests: run.objectManifests, modelsDir: cache.modelsDir, workspaceRoot: cache.workspaceRoot, request, ...(deps.vectorEvidence ? { vectorEvidence: deps.vectorEvidence } : {}), signal: io.signal, progress: m => io.progress(m) }));
                 const failed = todo.length - joined;
                 return {
                     status: failed || degradations.length ? 'degraded' : 'committed', value: { chunks: plan.chunks.length, joined, failed }, layers: committed, degradations,
@@ -3067,8 +3073,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const upwardLift = kTwin && kdDistrict ? Math.max(0, Math.min(1, Number(process.env.SCRATCHBOX_KD_UPWARD_LIFT?.trim() || 0) || 0)) : 0;
                 // the image-model party wall: off by default (user decision, 2026-10-28: the tiled wall did not work; the clip and infill close the side), SCRATCHBOX_K_PARTY_WALL_TEXTURE=1 or the node graph on
                 const partyWallOn = kTwin && stepOn('twin.partyWall', process.env.SCRATCHBOX_K_PARTY_WALL_TEXTURE?.trim() === '1');
-                // pipeline K's material regions: only with the app's texture library (deps.pipelineK), and off for now (user decision,
-                // 2026-10-28: the openings' finishes are not calculated correctly); SCRATCHBOX_K_MATERIAL_REGIONS=1 on
+                // pipeline K's material regions: only with the app's texture library (deps.pipelineK); on again since the user's
+                // decision of 2026-10-30 (off 2026-10-28 to 10-30 while the openings' finishes were wrong); SCRATCHBOX_K_MATERIAL_REGIONS=0 off
                 const materialSets = kTwin && stepOn('twin.materials', process.env.SCRATCHBOX_K_MATERIAL_REGIONS?.trim() !== '0') ? deps.pipelineK?.materialSets : undefined;
                 if (kTwin && !materialSets) logStep('twin.materials', 'skipped');
                 // the swatch detail bake: the building's survey swatches (AI Beautify, one image call per station) baked into the
@@ -6247,6 +6253,8 @@ function keepSceneObjects(run: StagedRun, cache: StageCache, outcome: StagedLoca
         modelsDir: cache.modelsDir, scene: (outcome.result.artifact as { data?: unknown } | null)?.data ?? null, workspace: cache.workspaceRoot
     }).then(report => {
         cache.writeRunNote(run.runId, 'object_store', report);
+        // a chunked district's kept objects copied to the place store (place-store-district.ts)
+        if (placeStoreEnabled()) inBackground(syncPlaceAfterObjects({ runId: run.runId, cache, store, kept: report.kept }).then(r => { if (r) cache.writeRunNote(run.runId, 'place_store', r); }));
         console.log(`[staged-location] scene objects: ${report.objects} (${report.stored} stored, ${report.reused} reused, ${report.failed.length} failed) in ${report.ms} ms; scene ${report.scenePath ?? 'not kept'}`);
         // the district and object training pairs (scene-training-pairs.ts), where this instance has a training bucket;
         // started and forgotten like the objects themselves

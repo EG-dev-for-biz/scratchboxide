@@ -103,6 +103,41 @@ describe('pipeline K-D: the seam stage, one chunk at a time', () => {
         expect(overlap).toBeLessThan(14 * 0.9);
     });
 
+    it("ends the district on its circle: ground across the edge cut exactly on it, nothing past it, nothing torn", () => {
+        // a chunk's ground running 20 m past the 350 m edge, at a step that lines up with nothing
+        const p = planDistrictChunks(350, [])!;
+        const cell = p.chunks.find(c => c.cx === 360 && c.cz === 0)!.index;
+        const g = ground(320.3, 370.1, -12.1, 12.4, 0.7, (x, z) => 0.01 * x + 0.02 * z, 100);
+        const cut = cutChunkGround(g, p, cell);
+        const tris = triangles(cut.glb);
+        const r = (v: number[]) => Math.hypot(v[0], v[2]);
+        // nothing past the circle, and the edge it leaves lies on it
+        expect(Math.max(...tris.flat().map(r))).toBeLessThanOrEqual(350 + 1e-4); // positions are float32: 350 m holds to about 3e-5
+        const onCircle = tris.flat().filter(v => Math.abs(r(v) - 350) < 1e-4);
+        expect(onCircle.length).toBeGreaterThan(20);
+        // they span the ground's width, and each stands on the surface it was cut from (the height carried across the cut)
+        expect(Math.min(...onCircle.map(v => v[2]))).toBeLessThan(-11.5);
+        expect(Math.max(...onCircle.map(v => v[2]))).toBeGreaterThan(11.8);
+        for (const v of onCircle) expect(Math.abs(v[1] - (0.01 * v[0] + 0.02 * v[2]))).toBeLessThan(1e-3);
+        // the area kept is the ground's inside the circle
+        let inside = 0;
+        for (let x = 320.3 + 0.025; x < 370.1; x += 0.05) for (let z = -12.1 + 0.025; z < 12.4; z += 0.05) if (Math.hypot(x, z) <= 350) inside += 0.0025;
+        expect(planArea(tris)).toBeCloseTo(inside, 0);
+        expect(cut.report.edgeCut).toBeGreaterThan(20);
+    });
+
+    it("keeps a building planned whole past the circle, ground and all, and cuts only the street beside it", () => {
+        const rect = (x0: number, z0: number, x1: number, z1: number): Array<[number, number]> => [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
+        const p = planDistrictChunks(350, [{ id: 'edge', centroid: [375, 0], loops: [rect(330, -6, 420, 6)] }])!;
+        const cell = p.chunks.find(c => c.buildings.includes('edge'))!.index;
+        const tris = triangles(cutChunkGround(ground(330.2, 370.1, -12.1, 12.4, 0.7, () => 0, 100), p, cell).glb);
+        const mid = (t: number[][]) => [0, 2].map(k => (t[0][k] + t[1][k] + t[2][k]) / 3);
+        // inside the footprint the ground runs on to 370 m, the whole extraction
+        expect(Math.max(...tris.filter(t => Math.abs(mid(t)[1]) < 5).flat().map(v => v[0]))).toBeGreaterThan(369.9);
+        // beside it, the street stops on the circle
+        for (const t of tris.filter(t => Math.abs(mid(t)[1]) > 7)) for (const v of t) expect(Math.hypot(v[0], v[2])).toBeLessThanOrEqual(350 + 1e-4);
+    });
+
     it("keeps ground the owner's build never reached with a chunk whose build did", () => {
         const rect = (x0: number, z0: number, x1: number, z1: number): Array<[number, number]> => [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
         const p = planDistrictChunks(350, [{ id: 'hall', centroid: [70, 0], loops: [rect(55, -2, 85, 2)] }])!;

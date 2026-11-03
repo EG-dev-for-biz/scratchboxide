@@ -39,7 +39,7 @@ import type { EvidenceLookup, VectorBuilding } from './vector-footprints';
 import { scanToGeodetic, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
 import { sha256File } from './stage-cache';
 import type { DurableAssetStore } from '../../asset-store/durable-asset-store';
-import { locationHashOf, objectInputHash, objectKeyOf, SceneObjectStore, type ObjectFrame, type PutObjectResult, type SceneLayerRef, type SceneObjectRef } from '../../asset-store/scene-object-store';
+import { locationHashOf, objectInputHash, objectKeyOf, SceneObjectStore, type ObjectDecision, type ObjectDefect, type ObjectFrame, type ObjectMeasures, type PutObjectResult, type SceneLayerRef, type SceneObjectRef } from '../../asset-store/scene-object-store';
 import { recordDiscoveredObjectIn } from '../../asset-store/object-catalog';
 import type { StagedLayer } from '../../../common/spatial/staged-location-contracts';
 
@@ -82,6 +82,10 @@ export interface LayerObject {
     centre?: [number, number, number];
     /** The object catalog type to link it to (an SB_FEATURE_TYPE_* / FEATURE_TYPE_* code). */
     catalogType?: string;
+    /** Measured (the completeness audit): the version becomes current only when no measure is worse (scene-object-store.ts). */
+    measures?: ObjectMeasures;
+    defects?: ObjectDefect[];
+    audit?: unknown;
 }
 
 export interface LayerObjectManifest {
@@ -475,6 +479,8 @@ export interface StoreSceneReport {
     stored: number;
     reused: number;
     pointerMoved: number;
+    /** Measured versions kept as history only: a measure of the current version would have got worse. */
+    rejected: number;
     bytesWritten: number;
     /** Image bytes the objects would have carried uncut, and what they carry. */
     imageBytes: { uncut: number; cut: number };
@@ -482,7 +488,7 @@ export interface StoreSceneReport {
     perLayer: Array<{ layer: string; objects: number; stored: number; reused: number; notes: string[] }>;
     scenePath?: string;
     /** Every object kept (stored or reused), with what it is: what the training capture pairs with the scan. */
-    kept: Array<{ objectKey: string; version: number; kind: string; identity: string; layer: string; glbPath: string; sha256: string; catalogType?: string; centre?: [number, number, number]; wgs84?: { lat: number; lng: number; altM: number }; provenanceLabels: string[]; inputs?: Record<string, unknown> }>;
+    kept: Array<{ objectKey: string; version: number; kind: string; identity: string; layer: string; glbPath: string; sha256: string; catalogType?: string; centre?: [number, number, number]; wgs84?: { lat: number; lng: number; altM: number }; provenanceLabels: string[]; inputs?: Record<string, unknown>; inputHash?: string; decision?: ObjectDecision }>;
     ms: number;
 }
 
@@ -494,7 +500,7 @@ export interface StoreSceneReport {
 export async function storeSceneObjects(input: StoreSceneInput): Promise<StoreSceneReport> {
     const t0 = Date.now();
     const objectsStore = new SceneObjectStore(input.store);
-    const report: StoreSceneReport = { objects: 0, stored: 0, reused: 0, pointerMoved: 0, bytesWritten: 0, imageBytes: { uncut: 0, cut: 0 }, failed: [], perLayer: [], kept: [], ms: 0 };
+    const report: StoreSceneReport = { objects: 0, stored: 0, reused: 0, pointerMoved: 0, rejected: 0, bytesWritten: 0, imageBytes: { uncut: 0, cut: 0 }, failed: [], perLayer: [], kept: [], ms: 0 };
     const superseded = new Set(input.layers.flatMap(l => l.supersedes));
     const refs: SceneObjectRef[] = [];
     const layerRefs: SceneLayerRef[] = [];
@@ -561,17 +567,19 @@ export async function storeSceneObjects(input: StoreSceneInput): Promise<StoreSc
                         },
                         provenance: obj.provenance, producer: { ...manifest.producer, layer: layer.layer }, ...(obj.inputs ? { inputs: obj.inputs } : {}),
                         ...(wgs ? { wgs84: { lat: wgs.lat, lng: wgs.lng, altM: wgs.alt } } : {}), ...(catalogId ? { catalogId } : {}),
-                        runId: input.runId, ...(input.workspace ? { workspace: input.workspace } : {})
+                        runId: input.runId, ...(input.workspace ? { workspace: input.workspace } : {}),
+                        ...(obj.measures ? { measures: obj.measures } : {}), ...(obj.defects ? { defects: obj.defects } : {}), ...(obj.audit !== undefined ? { audit: obj.audit } : {})
                     });
                     if (cut) { report.imageBytes.uncut += cut.uncut; report.imageBytes.cut += cut.cut; }
                     if (put.reused) { report.reused++; lr.reused++; } else { report.stored++; lr.stored++; report.bytesWritten += put.bytes; }
                     if (put.pointerMoved) report.pointerMoved++;
+                    if (put.decision?.kept === false) report.rejected++;
                     cutHere++;
                     refs.push({ objectKey: put.objectKey, version: put.version, kind: obj.kind, layer: layer.layer, glbPath: put.glbPath, sha256: put.sha256, reused: put.reused });
                     report.kept.push({
                         objectKey: put.objectKey, version: put.version, kind: obj.kind, identity, layer: layer.layer, glbPath: put.glbPath, sha256: put.sha256,
                         ...(obj.catalogType ? { catalogType: obj.catalogType } : {}), ...(obj.centre ? { centre: obj.centre } : {}), ...(wgs ? { wgs84: { lat: wgs.lat, lng: wgs.lng, altM: wgs.alt } } : {}),
-                        provenanceLabels: obj.provenance.labels, ...(obj.inputs ? { inputs: obj.inputs } : {})
+                        provenanceLabels: obj.provenance.labels, ...(obj.inputs ? { inputs: obj.inputs } : {}), inputHash: obj.inputHash, ...(put.decision ? { decision: put.decision } : {})
                     });
                 } catch (err) {
                     report.failed.push({ layer: layer.layer, object: `${obj.kind}/${identity || '?'}`, error: (err as Error).message });

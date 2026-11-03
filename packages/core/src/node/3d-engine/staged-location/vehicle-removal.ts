@@ -46,7 +46,7 @@ import { renderTriangles } from './photo-match-eval';
 import { encodePng } from './png-encode';
 import type { VisionModelChain } from '../../gemini/vision-model-chain';
 
-export const VEHICLE_REMOVAL_VERSION = 'vehicle-removal/3';
+export const VEHICLE_REMOVAL_VERSION = 'vehicle-removal/4';  // 4: a vehicle's own shell over a gap in the stack is patched too
 
 export const VEHICLE_REMOVAL_PARAMS = {
     /** The top-surface grid. */
@@ -1094,12 +1094,40 @@ export function invert(m: Mat4): Mat4 {
     return inv;
 }
 
-export interface PatchGlbStats { movedVertices: number; touchedTriangles: number; paintedTexels: number; repaintedImages: number; primitives: number }
+export interface PatchGlbStats {
+    movedVertices: number; touchedTriangles: number; paintedTexels: number; repaintedImages: number; primitives: number;
+    /** Of the moved vertices, those over their cell's stack ceiling in a piece attached to nothing outside the region. */
+    shellVertices?: number;
+}
+
+/**
+ * The vertices over their cell's stack ceiling (`above`) whose piece is attached to nothing outside the region: a vehicle's
+ * own shell over a street the scan also holds beneath it, its roof standing across a gap in the stack and so taken for an
+ * awning by the ceiling alone. An awning, a canopy or a tree runs on past the vehicle: a triangle of its piece reaches a
+ * vertex outside the region, and the whole piece is kept.
+ */
+export function unattachedAboveCeiling(above: Uint8Array, inRegion: Uint8Array, triangle: (t: number) => [number, number, number], triangles: number): Uint8Array {
+    const n = above.length, parent = new Int32Array(n).map((_, i) => i), attached = new Uint8Array(n);
+    const find = (x: number): number => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+    for (let t = 0; t < triangles; t++) {
+        const tri = triangle(t), up = tri.filter(v => above[v]);
+        if (!up.length) continue;
+        if (tri.some(v => !inRegion[v])) for (const v of up) attached[v] = 1;
+        for (let k = 1; k < up.length; k++) parent[find(up[k])] = find(up[0]);
+    }
+    const rootAttached = new Uint8Array(n);
+    for (let v = 0; v < n; v++) if (above[v] && attached[v]) rootAttached[find(v)] = 1;
+    const out = new Uint8Array(n);
+    for (let v = 0; v < n; v++) if (above[v] && !rootAttached[find(v)]) out[v] = 1;
+    return out;
+}
 
 /**
  * Moves every vertex of the GLB that lies in a region group (and not more than proudMaxM above its patch surface) onto the
- * patch surface, and, with `fills`, paints again the texels of every triangle it moved from the group's fill field. Index
- * lists are untouched (no triangle removed, no edge opened); positions, normals, the moved accessors' bounds and the
+ * patch surface, and, with `fills`, paints again the texels of every triangle it moved from the group's fill field. A vertex
+ * over its cell's stack ceiling stays (an awning or a canopy over the vehicle) unless its piece is attached to nothing
+ * outside the region (unattachedAboveCeiling: the vehicle's own shell, its roof over a street the scan holds beneath it).
+ * Index lists are untouched (no triangle removed, no edge opened); positions, normals, the moved accessors' bounds and the
  * repainted images change.
  */
 export function patchVehiclesInGlb(bytes: Uint8Array, region: VehicleRegion, opts: { fills?: Map<number, FillField>; extras?: Record<string, unknown>; P?: VehicleRemovalParams } = {}): { glb: Buffer; stats: PatchGlbStats } {
@@ -1110,7 +1138,7 @@ export function patchVehiclesInGlb(bytes: Uint8Array, region: VehicleRegion, opt
     bin.set(glb.bin);
     const dv = new DataView(bin.buffer);
     const world = nodeWorldMatrices(json);
-    const stats: PatchGlbStats = { movedVertices: 0, touchedTriangles: 0, paintedTexels: 0, repaintedImages: 0, primitives: 0 };
+    const stats: PatchGlbStats = { movedVertices: 0, touchedTriangles: 0, paintedTexels: 0, repaintedImages: 0, primitives: 0, shellVertices: 0 };
     const images = new Map<number, { width: number; height: number; rgba: Uint8Array; mime: string }>();
     const dirty = new Set<number>();
     const done = new Set<number>();
@@ -1132,6 +1160,18 @@ export function patchVehiclesInGlb(bytes: Uint8Array, region: VehicleRegion, opt
             const moved = new Uint8Array(n);
             const gid = new Int32Array(n).fill(-1);
             let any = 0;
+            // the triangles (their vertex indices), read before anything moves
+            const idxAcc = prim.indices !== undefined ? json.accessors[prim.indices] : undefined;
+            const count = idxAcc ? idxAcc.count : n;
+            const readIndex = (k: number) => {
+                if (!idxAcc) return k;
+                const v = json.bufferViews[idxAcc.bufferView];
+                const size = idxAcc.componentType === 5125 ? 4 : idxAcc.componentType === 5123 ? 2 : 1;
+                const o = (v.byteOffset ?? 0) + (idxAcc.byteOffset ?? 0) + k * (v.byteStride || size);
+                return size === 4 ? dv.getUint32(o, true) : size === 2 ? dv.getUint16(o, true) : dv.getUint8(o);
+            };
+            // each vertex's group, and whether it stands over its cell's stack ceiling
+            const group = new Int32Array(n).fill(-1), inRegion = new Uint8Array(n), above = new Uint8Array(n);
             for (let v = 0; v < n; v++) {
                 const o = pl.base + v * pl.stride;
                 const lx = dv.getFloat32(o, true), ly = dv.getFloat32(o + 4, true), lz = dv.getFloat32(o + 8, true);
@@ -1141,11 +1181,20 @@ export function patchVehiclesInGlb(bytes: Uint8Array, region: VehicleRegion, opt
                 if (ci < 0 || ck < 0 || ci >= region.nx || ck >= region.nz) continue;
                 const g = region.group[ck * region.nx + ci];
                 if (g < 0) continue;
-                if (w[1] > region.ceiling[ck * region.nx + ci] + 0.05) continue;
+                group[v] = g; inRegion[v] = 1;
+                if (w[1] > region.ceiling[ck * region.nx + ci] + 0.05) above[v] = 1;
+            }
+            const shell = above.some(a => a === 1) ? unattachedAboveCeiling(above, inRegion, t => [readIndex(t * 3), readIndex(t * 3 + 1), readIndex(t * 3 + 2)], Math.floor(count / 3)) : above;
+            for (let v = 0; v < n; v++) {
+                const g = group[v];
+                if (g < 0 || (above[v] && !shell[v])) continue;
+                const o = pl.base + v * pl.stride;
+                const w = [wp[v * 3], wp[v * 3 + 1], wp[v * 3 + 2]];
                 const y = patchHeight(region.groups[g], w[0], w[2]);
                 if (y !== y || w[1] - y > P.proudMaxM) continue;
                 gid[v] = g;
                 moved[v] = 1; any++;
+                if (above[v]) stats.shellVertices!++;
                 wp[v * 3 + 1] = y;
                 const l = ident ? [w[0], y, w[2]] : transformPoint(inv, w[0], y, w[2]);
                 dv.setFloat32(o, l[0], true); dv.setFloat32(o + 4, l[1], true); dv.setFloat32(o + 8, l[2], true);
@@ -1167,16 +1216,7 @@ export function patchVehiclesInGlb(bytes: Uint8Array, region: VehicleRegion, opt
                 }
             }
             // the triangles it moved
-            const idxAcc = prim.indices !== undefined ? json.accessors[prim.indices] : undefined;
             const triIdx: number[] = [];
-            const count = idxAcc ? idxAcc.count : n;
-            const readIndex = (k: number) => {
-                if (!idxAcc) return k;
-                const v = json.bufferViews[idxAcc.bufferView];
-                const size = idxAcc.componentType === 5125 ? 4 : idxAcc.componentType === 5123 ? 2 : 1;
-                const o = (v.byteOffset ?? 0) + (idxAcc.byteOffset ?? 0) + k * (v.byteStride || size);
-                return size === 4 ? dv.getUint32(o, true) : size === 2 ? dv.getUint16(o, true) : dv.getUint8(o);
-            };
             for (let t = 0; t + 2 < count; t += 3) {
                 const a = readIndex(t), b = readIndex(t + 1), c = readIndex(t + 2);
                 if (moved[a] || moved[b] || moved[c]) triIdx.push(a, b, c);
