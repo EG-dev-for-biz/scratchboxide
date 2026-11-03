@@ -21,7 +21,13 @@
  *   colour <gainCos> <maxGainLog> <fieldNx> <fieldNy>         (optional; fieldNx 0 turns the offset field off)
  *   station <rgb8 path> <W> <H> <fx> <fy> <cx> <cy> <eye xyz> <right xyz> <up xyz> <fwd xyz>
  *           <depth f32 path> <DW> <DH> <dfx> <dfy> <dcx> <dcy> <priority>
- *   sky <u8 path>                                             (optional; W x H, the station above's sky mask)
+ *   mask <u8 path>                                            (optional; W x H, where the station above does not see
+ *                                                              the scan: its sky, what its photo disagrees with)
+ *   tile <uv f32 x 6 per triangle> <texture i32 per triangle> <moved u8 per triangle>
+ *                                                             (optional: the scan's own photo texture of the triangles)
+ *   texture <rgb8 path> <W> <H>                               (the tile's textures, in index order)
+ *   provenance <u8 path>                                      (optional: each splat's colour source, 0 true view,
+ *                                                              1 tile texture, 2 generated)
  *   out <.splat path> <.spz path>
  *
  * Prints a JSON report on stdout.
@@ -57,7 +63,9 @@ int main(int argc, char** argv) {
     surfacesplats::Params prm;
     std::vector<float> tris;
     std::vector<surfacesplats::StationView> stations;
-    std::string outSplat, outSpz, line;
+    std::string outSplat, outSpz, provenancePath, line;
+    surfacesplats::TileSurface tile;
+    bool hasTile = false;
     while (std::getline(mf, line)) {
         std::istringstream in(line);
         std::string key;
@@ -88,11 +96,23 @@ int main(int argc, char** argv) {
             if (!readAll(rgbPath, s.rgb, static_cast<size_t>(s.W) * s.H * 3)) { std::cerr << "cannot read the station image " << rgbPath << std::endl; return 3; }
             if (!readAll(depthPath, s.depth, static_cast<size_t>(s.DW) * s.DH)) { std::cerr << "cannot read the station depth " << depthPath << std::endl; return 3; }
             stations.push_back(std::move(s));
-        } else if (key == "sky") {
+        } else if (key == "mask") {
             std::string path; in >> path;
-            if (stations.empty()) { std::cerr << "a sky line needs its station line before it" << std::endl; return 2; }
+            if (stations.empty()) { std::cerr << "a mask line needs its station line before it" << std::endl; return 2; }
             auto& s = stations.back();
-            if (!readAll(path, s.sky, static_cast<size_t>(s.W) * s.H)) { std::cerr << "cannot read the station sky " << path << std::endl; return 3; }
+            if (!readAll(path, s.mask, static_cast<size_t>(s.W) * s.H)) { std::cerr << "cannot read the station mask " << path << std::endl; return 3; }
+        } else if (key == "tile") {
+            std::string uvPath, texPath, movedPath; in >> uvPath >> texPath >> movedPath;
+            const size_t n = tris.size() / 9;
+            if (!n) { std::cerr << "a tile line needs the triangles line before it" << std::endl; return 2; }
+            if (!readAll(uvPath, tile.uv, n * 6) || !readAll(texPath, tile.tex, n) || !readAll(movedPath, tile.moved, n)) { std::cerr << "cannot read the tile texture's triangles" << std::endl; return 3; }
+            hasTile = true;
+        } else if (key == "texture") {
+            std::string path; surfacesplats::TileTexture t; in >> path >> t.W >> t.H;
+            if (!readAll(path, t.rgb, static_cast<size_t>(t.W) * t.H * 3)) { std::cerr << "cannot read the tile texture " << path << std::endl; return 3; }
+            tile.textures.push_back(std::move(t));
+        } else if (key == "provenance") {
+            in >> provenancePath;
         } else if (key == "out") {
             in >> outSplat >> outSpz;
         }
@@ -100,7 +120,12 @@ int main(int argc, char** argv) {
     if (tris.empty() || stations.empty() || outSplat.empty()) { std::cerr << "the manifest needs triangles, stations and out" << std::endl; return 2; }
 
     surfacesplats::Report rep;
-    const auto splats = surfacesplats::build(tris, stations, prm, rep);
+    std::vector<uint8_t> sources;
+    const auto splats = surfacesplats::build(tris, stations, prm, rep, hasTile ? &tile : nullptr, provenancePath.empty() ? nullptr : &sources);
+    if (!provenancePath.empty()) {
+        std::ofstream f(provenancePath, std::ios::binary);
+        f.write(reinterpret_cast<const char*>(sources.data()), static_cast<std::streamsize>(sources.size()));
+    }
     {
         const auto bytes = spz::SplatCodec::encode(splats);
         std::ofstream f(outSplat, std::ios::binary);
@@ -119,9 +144,14 @@ int main(int argc, char** argv) {
               << ",\"unobserved\":" << rep.unobserved << ",\"spacingScale\":" << rep.spacingScale << ",\"spzBytes\":" << spzBytes
               << ",\"patches\":" << rep.patches << ",\"relabelled\":" << rep.relabelled << ",\"fallback\":" << rep.fallback
               << ",\"seams\":{\"pairs\":" << rep.seams.pairs << ",\"inliers\":" << rep.seams.inliers << ",\"medianAll\":" << rep.seams.medianAll << ",\"before\":" << rep.seams.before << ",\"afterGain\":" << rep.seams.afterGain
-              << ",\"after\":" << rep.seams.after << ",\"gainResidual\":" << rep.seams.gainResidual << ",\"gainsKept\":" << (rep.seams.gainsKept ? "true" : "false")
+              << ",\"after\":" << rep.seams.after << ",\"gainResidual\":" << rep.seams.gainResidual << ",\"gainsAtBound\":" << rep.seams.gainsAtBound << ",\"gainsKept\":" << (rep.seams.gainsKept ? "true" : "false")
               << ",\"fieldKept\":" << (rep.seams.fieldKept ? "true" : "false") << "},\"gains\":[";
     for (size_t i = 0; i < rep.gains.size(); ++i) std::cout << (i ? "," : "") << "[" << rep.gains[i][0] << "," << rep.gains[i][1] << "," << rep.gains[i][2] << "]";
+    std::cout << "],\"sources\":{\"trueView\":" << rep.trueView << ",\"tileTexture\":" << rep.tileTexture << ",\"generated\":" << rep.generated
+              << ",\"generatedMoved\":" << rep.generatedMoved << ",\"generatedUntextured\":" << rep.generatedUntextured
+              << ",\"patches\":{\"trueView\":" << rep.patchesTrueView << ",\"tileTexture\":" << rep.patchesTile << ",\"generated\":" << rep.patchesGenerated << "}"
+              << ",\"tileGain\":[" << rep.tileGain[0] << "," << rep.tileGain[1] << "," << rep.tileGain[2] << "],\"tileGainSamples\":" << rep.tileGainSamples << ",\"tileToneStations\":" << rep.tileToneStations << "},\"stationPatches\":[";
+    for (size_t i = 0; i < rep.stationPatches.size(); ++i) std::cout << (i ? "," : "") << rep.stationPatches[i];
     std::cout << "],\"ms\":" << static_cast<long>(ms) << "}" << std::endl;
     return 0;
 }

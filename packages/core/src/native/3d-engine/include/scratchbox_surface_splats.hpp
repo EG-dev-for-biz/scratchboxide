@@ -8,8 +8,8 @@
  ********************************************************************************/
 
 /**
- * A splat for every patch of a scanned surface, coloured from the station images that see it (a training-free
- * Mesh2Splat: geometry decides where splats are, the stations only decide their colour).
+ * A splat for every patch of a scanned surface, coloured from the station images that truly see it, else from the
+ * scan's own photo texture (a training-free Mesh2Splat: geometry decides where splats are, the views only their colour).
  *
  * - Sampling: each triangle is sampled at a spacing that grows with its distance to the walk corridor
  *   (s = clamp(k * distance, sMin, sMax)), scaled up together until the splat count fits the budget. A triangle no
@@ -24,7 +24,7 @@
  *   more than smoothCost (iterated conditional modes). Every splat is coloured from its patch's one station, read over
  *   its footprint in that image (Mip-Splatting's bound), so no splat blends two stations' renderings of a detail, and
  *   the station changes only between patches. A sample its patch's station cannot see takes its own best view
- *   (counted as fallback); none at all takes the mean colour of observed samples facing the same way (unobserved).
+ *   (counted as fallback); none at all takes the colour order below (unobserved).
  * - Colour agreement, after pipeline K's texture-harmonize.ts: where two stations both see a patch face on (|n.view|
  *   at least gainCos), their mean colours there (linear light, logs) are compared, patch by patch, never splat by
  *   splat. Only patches showing the same content in both count: within inlierLog of the station pair's most common
@@ -39,9 +39,21 @@
  *   weak pull to zero, kept when it brings them closer (with or without gains: it is local, so a disagreement elsewhere
  *   does not set it; on 7th Ave 0.60 -> 0.33, and the seam between two stations on the Penn Plaza ground softened).
  *   The report gives the patch difference before, after the gains and after the field, and the gains' residual.
- * - Sky: a station may carry a sky mask of its image (the caller's, already grown past a footprint's reach). A sample
- *   that lands on sky in a station is not seen by it: a roof edge the scan draws a little past the photo's roofline
- *   then takes its colour from a station that shows it, never from the sky behind it.
+ * - Masks: a station may carry a mask of its image (the caller's): its sky, already grown past a footprint's reach, and
+ *   what its photo does not truly see (true-view-gate.ts: where the photo's structure disagrees with the scan's own
+ *   texture). A sample that lands on the mask in a station is not seen by it: a roof edge the scan draws a little past
+ *   the photo's roofline takes its colour from a station that shows it, never from the sky behind it, and a wall a
+ *   photo sees through (a newer era's open plaza) is never painted with what lies beyond it.
+ * - Colour order (user decision, 2026-11-03, "colour from true views"): a station that truly sees the sample (above);
+ *   else the scan's own photo texture of that surface (the tiles' view of that era's structure), brought to the
+ *   stations' look by a tone curve per channel matching its distribution to theirs (quantile to quantile) over the
+ *   samples a station truly sees and the texture also covers (the same surfaces in both: on 7th Ave the aerial texture
+ *   was 3 to 4 times darker in linear light than the beautified stations, beyond any one gain without clipping the
+ *   sunlit texels; a curve of the stations' mean at each texture value flattened the texture to grey, since a view
+ *   sits up to a metre off the scan and the two only agree on average); else a generated
+ *   fill, the mean colour of the nearest patches facing the same way that have one (the facing's mean when none
+ *   does). A flattened lump has no texture of its new surface (the tiles photographed the car, not the street under
+ *   it) and takes the fill. Each splat's source is returned (Source), the shares in the report.
  * - Shape: a 2DGS surfel on the triangle's plane, in-plane sigma sigmaRatio * s so neighbours overlap with no gap.
  */
 
@@ -64,11 +76,11 @@ using math::Vec3;
 using math::Quat;
 
 /** One station: its image (RGB8, row 0 at the top) and pinhole camera, its depth (camera-z, EMPTY beyond 1e8), and
- *  optionally its sky (W x H, nonzero where the image shows sky). */
+ *  optionally its mask (W x H, nonzero where it does not see the scan: its sky, what its photo does not agree with). */
 struct StationView {
     int W = 0, H = 0;
     std::vector<uint8_t> rgb;
-    std::vector<uint8_t> sky;
+    std::vector<uint8_t> mask;
     float fx = 1, fy = 1, cx = 0, cy = 0;
     Vec3 eye, right, up, fwd;
     int DW = 0, DH = 0;
@@ -107,8 +119,28 @@ struct Params {
     int fieldNx = 12, fieldNy = 8;
     float wSmooth = 0.15f, wAnchor = 0.01f, maxOffsetLog = 0.47f;
     size_t statSamples = 600000;
+    /** The tile texture's tone curve: knots (quantiles of the paired samples), and the samples and stations it
+     *  needs at least (one station's few blocks are not the stations' look). */
+    int toneKnots = 24;
+    size_t minToneSamples = 2000;
+    int minToneStations = 3;
+    /** Passes of the generated fill from patch to neighbouring patch before the facing's mean stands in. */
+    int fillPasses = 24;
     uint32_t seed = 1;
 };
+
+/** The scan's own photo texture: per triangle its UVs (glTF, v down the image), texture index (-1: none) and whether
+ *  it was moved off the surface the texture photographed (a flattened lump); the textures as RGB8. */
+struct TileTexture { int W = 0, H = 0; std::vector<uint8_t> rgb; };
+struct TileSurface {
+    std::vector<float> uv;
+    std::vector<int32_t> tex;
+    std::vector<uint8_t> moved;
+    std::vector<TileTexture> textures;
+};
+
+/** Where a splat's colour came from. */
+enum Source : uint8_t { TrueView = 0, TileTextureSource = 1, Generated = 2 };
 
 struct SeamReport {
     /** Shared patch comparisons (a station against the patch's best-covered one), and those showing the same content
@@ -121,6 +153,8 @@ struct SeamReport {
     /** How far one gain per station leaves the station pairs' differences unexplained (weighted median, natural log,
      *  the worst channel): above maxResidualLog the differences are content, not exposure, and no gain is applied. */
     float gainResidual = 0;
+    /** Station channels whose fitted gain lay past maxGainLog (clamped there); any, and no gain is applied. */
+    size_t gainsAtBound = 0;
     bool gainsKept = false, fieldKept = false;
 };
 
@@ -132,6 +166,17 @@ struct Report {
     /** Per station, per channel (r, g, b). */
     std::vector<std::array<float, 3>> gains;
     SeamReport seams;
+    /** Splats by colour source, patches by the source most of their splats have, and per station the patches it colours. */
+    size_t trueView = 0, tileTexture = 0, generated = 0;
+    size_t patchesTrueView = 0, patchesTile = 0, patchesGenerated = 0;
+    std::vector<size_t> stationPatches;
+    /** The tile texture's tone curve: its median gain per channel (station over texture, linear; 1 when no curve was
+     *  fitted), and the paired samples and stations it was fitted on (under minToneSamples or minToneStations: none,
+     *  the texture kept as photographed). */
+    std::array<float, 3> tileGain = {1, 1, 1};
+    size_t tileGainSamples = 0, tileToneStations = 0;
+    /** Generated splats on a flattened lump (no texture of their new surface) and with no texture at all. */
+    size_t generatedMoved = 0, generatedUntextured = 0;
 };
 
 inline float distToSegment(const Vec3& p, const Vec3& a, const Vec3& b) {
@@ -141,16 +186,16 @@ inline float distToSegment(const Vec3& p, const Vec3& a, const Vec3& b) {
     return (p - (a + ab * t)).length();
 }
 
-/** Projection of p into a station: pixel (u, v), camera-z, and whether the station sees it there: not on its sky, and
- *  unoccluded in its depth. */
-inline bool project(const StationView& s, const Vec3& p, const Params& prm, float& u, float& v, float& z) {
+/** Projection of p into a station: pixel (u, v), camera-z, and whether the station sees it there: not on its mask (unless
+ *  `masked` is false: in view at all), and unoccluded in its depth. */
+inline bool project(const StationView& s, const Vec3& p, const Params& prm, float& u, float& v, float& z, bool masked = true) {
     const Vec3 d = p - s.eye;
     z = d.dot(s.fwd);
     if (z <= 0.1f) return false;
     u = s.cx + s.fx * d.dot(s.right) / z;
     v = s.cy - s.fy * d.dot(s.up) / z;
     if (u < 0 || v < 0 || u >= s.W - 1 || v >= s.H - 1) return false;
-    if (!s.sky.empty() && s.sky[static_cast<size_t>(std::lround(v)) * s.W + static_cast<size_t>(std::lround(u))]) return false;
+    if (masked && !s.mask.empty() && s.mask[static_cast<size_t>(std::lround(v)) * s.W + static_cast<size_t>(std::lround(u))]) return false;
     if (!s.depth.empty()) {
         const int du = static_cast<int>(s.dcx + s.dfx * d.dot(s.right) / z), dv = static_cast<int>(s.dcy - s.dfy * d.dot(s.up) / z);
         if (du < 0 || dv < 0 || du >= s.DW || dv >= s.DH) return false;
@@ -259,8 +304,31 @@ inline float weightedMedian(std::vector<std::pair<float, float>>& vw) {
     return vw.empty() ? 0.0f : vw.back().first;
 }
 
-/** Builds the surface splats of `tris` (9 floats each) coloured from `stations`. */
-inline std::vector<spz::GaussianSplat> build(const std::vector<float>& tris, const std::vector<StationView>& stations, const Params& prm, Report& rep) {
+/** The scan's own texture at a point of triangle t (barycentric r1, r2 as sampled), sRGB 0..1; false where it has none
+ *  of that surface (no texture, or the triangle was moved off what it photographed). */
+inline bool tileColour(const TileSurface& tile, size_t t, float r1, float r2, Vec3& out) {
+    if (t >= tile.tex.size() || (t < tile.moved.size() && tile.moved[t])) return false;
+    const int ti = tile.tex[t];
+    if (ti < 0 || ti >= static_cast<int>(tile.textures.size())) return false;
+    const auto& tx = tile.textures[ti];
+    if (tx.W < 2 || tx.H < 2) return false;
+    const float* uv = &tile.uv[t * 6];
+    const float wa = 1 - r1, wb = r1 * (1 - r2), wc = r1 * r2;
+    const float U = uv[0] * wa + uv[2] * wb + uv[4] * wc, V = uv[1] * wa + uv[3] * wb + uv[5] * wc;
+    const float x = std::clamp(U * tx.W - 0.5f, 0.0f, tx.W - 1.001f), y = std::clamp(V * tx.H - 0.5f, 0.0f, tx.H - 1.001f);
+    const int x0 = static_cast<int>(x), y0 = static_cast<int>(y);
+    const float fx = x - x0, fy = y - y0;
+    auto px = [&](int xx, int yy, int c) { return tx.rgb[(static_cast<size_t>(yy) * tx.W + xx) * 3 + c] / 255.0f; };
+    float o[3];
+    for (int c = 0; c < 3; ++c) o[c] = (px(x0, y0, c) * (1 - fx) + px(x0 + 1, y0, c) * fx) * (1 - fy) + (px(x0, y0 + 1, c) * (1 - fx) + px(x0 + 1, y0 + 1, c) * fx) * fy;
+    out = Vec3(o[0], o[1], o[2]);
+    return true;
+}
+
+/** Builds the surface splats of `tris` (9 floats each) coloured from `stations`, else from `tile` (the scan's own photo
+ *  texture of the same triangles), else a generated fill; `sources`, when given, gets each splat's Source. */
+inline std::vector<spz::GaussianSplat> build(const std::vector<float>& tris, const std::vector<StationView>& stations, const Params& prm, Report& rep,
+                                             const TileSurface* tile = nullptr, std::vector<uint8_t>* sources = nullptr) {
     const size_t T = tris.size() / 9;
     const size_t S = stations.size();
     rep.triangles = T;
@@ -275,8 +343,10 @@ inline std::vector<spz::GaussianSplat> build(const std::vector<float>& tris, con
         const Vec3 ctr = (a + b + c) / 3.0f;
         dist[t] = distToSegment(ctr, prm.corridorA, prm.corridorB);
         float u, v, z;
+        // in a station's view at all, whether or not its photo truly sees it there: the walk sees it, so it is sampled as
+        // finely as its distance asks (its colour may then come from the scan's own texture)
         for (const auto& s : stations) {
-            if (!project(s, ctr, prm, u, v, z)) continue;
+            if (!project(s, ctr, prm, u, v, z, false)) continue;
             const Vec3 toCam = (s.eye - ctr).normalized();
             if (std::fabs(normal[t].dot(toCam)) >= prm.relaxedCos) { seen[t] = 1; break; }
         }
@@ -296,7 +366,7 @@ inline std::vector<spz::GaussianSplat> build(const std::vector<float>& tris, con
     }
     const float scale = rep.spacingScale;
 
-    struct Sample { Vec3 p; Vec3 n; float s; uint32_t patch = 0; int view = -1; float u = 0, v = 0; Vec3 c; };
+    struct Sample { Vec3 p; Vec3 n; float s; uint32_t patch = 0; int view = -1; float u = 0, v = 0; Vec3 c; uint32_t tri = 0; float r1 = 0, r2 = 0; uint8_t src = Generated; };
     std::vector<Sample> samples;
     samples.reserve(static_cast<size_t>(std::min<double>(countAt(scale) * 1.05 + T, 2e8)));
     uint32_t serial = prm.seed;
@@ -313,6 +383,7 @@ inline std::vector<spz::GaussianSplat> build(const std::vector<float>& tris, con
             smp.p = a * (1 - r1) + b * (r1 * (1 - r2)) + c * (r1 * r2);
             smp.n = normal[t];
             smp.s = s;
+            smp.tri = static_cast<uint32_t>(t); smp.r1 = r1; smp.r2 = r2;
             samples.push_back(smp);
         }
     }
@@ -519,7 +590,10 @@ inline std::vector<spz::GaussianSplat> build(const std::vector<float>& tris, con
         std::vector<std::pair<float, float>> res;
         for (const auto& e : edges) res.push_back({static_cast<float>(std::fabs(lg[e.a][c] - lg[e.b][c] + e.d)), static_cast<float>(e.w)});
         if (!res.empty()) rep.seams.gainResidual = std::max(rep.seams.gainResidual, weightedMedian(res));
-        for (size_t a = 0; a < S; ++a) lg[a][c] = std::clamp(lg[a][c], -static_cast<double>(prm.maxGainLog), static_cast<double>(prm.maxGainLog));
+        for (size_t a = 0; a < S; ++a) {
+            if (std::fabs(lg[a][c]) > prm.maxGainLog) rep.seams.gainsAtBound++;
+            lg[a][c] = std::clamp(lg[a][c], -static_cast<double>(prm.maxGainLog), static_cast<double>(prm.maxGainLog));
+        }
     }
     const int FN = prm.fieldNx * prm.fieldNy;
     std::vector<std::array<std::vector<double>, 3>> field(S);
@@ -546,7 +620,9 @@ inline std::vector<spz::GaussianSplat> build(const std::vector<float>& tris, con
     rep.seams.afterGain = seamDiff(true, false);
     // gains are an exposure correction: kept only when the pairs agree on one gain per station (their differences are
     // not then content) and they bring the shared patches closer
-    rep.seams.gainsKept = rep.seams.inliers > 0 && rep.seams.gainResidual <= prm.maxResidualLog && rep.seams.afterGain < rep.seams.before;
+    // (a gain the pairs push past its bound is not exposure either; and where the station pairs form no loop the residual
+    // is 0 by construction, so the bound is the only check left)
+    rep.seams.gainsKept = rep.seams.inliers > 0 && rep.seams.gainsAtBound == 0 && rep.seams.gainResidual <= prm.maxResidualLog && rep.seams.afterGain < rep.seams.before;
     if (!rep.seams.gainsKept) for (auto& g : lg) g = {0.0, 0.0, 0.0};
     const float base = rep.seams.gainsKept ? rep.seams.afterGain : rep.seams.before;
     if (rep.seams.inliers > 0 && prm.fieldNx >= 2 && prm.fieldNy >= 2) {
@@ -594,24 +670,121 @@ inline std::vector<spz::GaussianSplat> build(const std::vector<float>& tris, con
         smp.c = Vec3(out[0], out[1], out[2]);
     }
 
-    // the colour of what no station saw: the mean of the observed samples facing the same way (up, or not)
+    // what no station truly sees: the scan's own photo texture of it, brought to the stations' look by a tone curve per
+    // channel (log linear light) mapping the texture's quantiles to the stations' over the same samples (each coloured
+    // by a station that truly sees it and covered by the texture); past the end knots the end gain holds.
+    auto chan = [](const Vec3& v, int c) { return c == 0 ? v.x : c == 1 ? v.y : v.z; };
+    std::array<std::vector<std::pair<float, float>>, 3> knots;
+    if (tile) {
+        std::array<std::vector<std::pair<float, float>>, 3> paired;
+        std::vector<uint8_t> pairedStation(S, 0);
+        const size_t gstride = std::max<size_t>(1, samples.size() / std::max<size_t>(1, prm.statSamples));
+        Vec3 tc;
+        for (size_t i = 0; i < samples.size(); i += gstride) {
+            const auto& smp = samples[i];
+            if (smp.view < 0 || !tileColour(*tile, smp.tri, smp.r1, smp.r2, tc)) continue;
+            pairedStation[smp.view] = 1;
+            for (int c = 0; c < 3; ++c) paired[c].push_back({std::log(srgbToLinear(chan(tc, c)) + LOG_EPS), std::log(srgbToLinear(chan(smp.c, c)) + LOG_EPS)});
+        }
+        rep.tileGainSamples = paired[0].size();
+        for (uint8_t f : pairedStation) rep.tileToneStations += f;
+        if (paired[0].size() >= prm.minToneSamples && static_cast<int>(rep.tileToneStations) >= prm.minToneStations) for (int c = 0; c < 3; ++c) {
+            auto& P2 = paired[c];
+            std::sort(P2.begin(), P2.end());
+            const size_t K = static_cast<size_t>(std::max(2, prm.toneKnots));
+            std::vector<float> ratio;
+            for (const auto& e : P2) ratio.push_back(e.second - e.first);
+            std::nth_element(ratio.begin(), ratio.begin() + ratio.size() / 2, ratio.end());
+            rep.tileGain[c] = std::exp(ratio[ratio.size() / 2]);
+            std::vector<float> ys;
+            for (const auto& e : P2) ys.push_back(e.second);
+            std::sort(ys.begin(), ys.end());
+            for (size_t k = 0; k < K; ++k) {
+                const size_t q = std::min(P2.size() - 1, (P2.size() * (2 * k + 1)) / (2 * K));
+                if (!knots[c].empty() && P2[q].first <= knots[c].back().first) continue;
+                knots[c].push_back({P2[q].first, ys[q]});
+            }
+        }
+    }
+    auto toned = [&](int c, float srgb) {
+        const float x = std::log(srgbToLinear(srgb) + LOG_EPS);
+        const auto& kn = knots[c];
+        if (kn.empty()) return srgb;
+        float y;
+        if (x <= kn.front().first) y = x + (kn.front().second - kn.front().first);
+        else if (x >= kn.back().first) y = x + (kn.back().second - kn.back().first);
+        else {
+            size_t k = 1;
+            while (kn[k].first < x) ++k;
+            const float t = (x - kn[k - 1].first) / std::max(1e-6f, kn[k].first - kn[k - 1].first);
+            y = kn[k - 1].second + t * (kn[k].second - kn[k - 1].second);
+        }
+        return linearToSrgb(std::max(0.0f, std::exp(y) - LOG_EPS));
+    };
+    for (auto& smp : samples) {
+        if (smp.view >= 0) { smp.src = TrueView; continue; }
+        Vec3 tc;
+        if (tile && tileColour(*tile, smp.tri, smp.r1, smp.r2, tc)) {
+            smp.c = Vec3(toned(0, tc.x), toned(1, tc.y), toned(2, tc.z));
+            smp.src = TileTextureSource;
+        } else {
+            smp.src = Generated;
+            if (tile && smp.tri < tile->moved.size() && tile->moved[smp.tri]) rep.generatedMoved++; else rep.generatedUntextured++;
+        }
+    }
+
+    // the rest, generated: the mean colour of the nearest patches facing the same way that have one, grown patch by
+    // patch; the facing's mean (up, or not) past fillPasses
     Vec3 upSum(0, 0, 0), sideSum(0, 0, 0);
     double upN = 0, sideN = 0;
+    std::vector<Vec3> patchCol(P, Vec3(0, 0, 0));
+    std::vector<float> patchW(P, 0.0f);
     for (const auto& smp : samples) {
-        if (smp.view < 0) continue;
+        if (smp.src == Generated) continue;
+        patchCol[smp.patch] += smp.c; patchW[smp.patch] += 1;
         if (std::fabs(smp.n.y) > 0.7f) { upSum += smp.c; upN += 1; } else { sideSum += smp.c; sideN += 1; }
+    }
+    for (size_t p = 0; p < P; ++p) if (patchW[p] > 0) { patchCol[p] = patchCol[p] / patchW[p]; patchW[p] = 1; }
+    for (int pass = 0; pass < prm.fillPasses; ++pass) {
+        std::vector<std::pair<uint32_t, Vec3>> grown;
+        for (size_t p = 0; p < P; ++p) {
+            if (patchW[p] > 0) continue;
+            Vec3 acc(0, 0, 0); int n = 0;
+            for (uint32_t k = nbStart[p]; k < nbStart[p + 1]; ++k) if (patchW[nbList[k]] > 0) { acc += patchCol[nbList[k]]; n++; }
+            if (n) grown.push_back({static_cast<uint32_t>(p), acc / static_cast<float>(n)});
+        }
+        if (grown.empty()) break;
+        for (const auto& [p, c] : grown) { patchCol[p] = c; patchW[p] = 1; }
     }
     const Vec3 upMean = upN > 0 ? upSum / static_cast<float>(upN) : Vec3(0.5f, 0.5f, 0.5f);
     const Vec3 sideMean = sideN > 0 ? sideSum / static_cast<float>(sideN) : Vec3(0.5f, 0.5f, 0.5f);
 
+    // the patches by the source most of their splats have, and the stations' true-view patches
+    {
+        std::vector<std::array<uint32_t, 3>> bySrc(P, {0, 0, 0});
+        for (const auto& smp : samples) bySrc[smp.patch][smp.src]++;
+        rep.stationPatches.assign(S, 0);
+        for (size_t p = 0; p < P; ++p) {
+            const auto& b = bySrc[p];
+            if (!b[0] && !b[1] && !b[2]) continue;
+            if (b[0] >= b[1] && b[0] >= b[2]) { rep.patchesTrueView++; if (label[p] >= 0) rep.stationPatches[label[p]]++; }
+            else if (b[1] >= b[2]) rep.patchesTile++;
+            else rep.patchesGenerated++;
+        }
+    }
+
     std::vector<spz::GaussianSplat> out;
     out.reserve(samples.size());
+    if (sources) { sources->clear(); sources->reserve(samples.size()); }
     for (const auto& smp : samples) {
         spz::GaussianSplat g;
         g.position = smp.p;
         Vec3 col;
-        if (smp.view < 0) { col = std::fabs(smp.n.y) > 0.7f ? upMean : sideMean; rep.unobserved++; }
+        if (smp.view < 0) rep.unobserved++;
+        if (smp.src == TrueView) rep.trueView++; else if (smp.src == TileTextureSource) rep.tileTexture++; else rep.generated++;
+        if (smp.src == Generated) col = patchW[smp.patch] > 0 ? patchCol[smp.patch] : (std::fabs(smp.n.y) > 0.7f ? upMean : sideMean);
         else col = smp.c;
+        if (sources) sources->push_back(smp.src);
         g.color = Vec3(std::clamp(col.x, 0.0f, 1.0f), std::clamp(col.y, 0.0f, 1.0f), std::clamp(col.z, 0.0f, 1.0f));
         g.opacity = 1.0f;
         const Vec3 helper = std::fabs(smp.n.y) < 0.9f ? Vec3(0, 1, 0) : Vec3(1, 0, 0);

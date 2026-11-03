@@ -16,8 +16,13 @@
  * This prepares what the native builder (scripts/mesh_to_surface_splats.cpp, scratchbox_surface_splats.hpp) reads: the
  * scan's triangles the hulls keep (splat-containment.ts: no pits, no car lumps, nothing above the scan), each station's
  * image at the size its camera was baked for, its depth for the occlusion test, rendered from the same mesh, and its
- * sky (segmentSky, the Street View registration's own, above the camera's horizon only), so a roof edge is never
- * coloured from the sky behind it.
+ * mask: its sky (segmentSky, the Street View registration's own, above the camera's horizon only), so a roof edge is
+ * never coloured from the sky behind it, and, with the scan's photo-textured extraction (`tileGlbPath`), what its photo
+ * does not truly see (true-view-gate.ts), so a surface is coloured only from a photo of that surface.
+ *
+ * Colour order (user decision, 2026-11-03, "colour from true views"): a station that truly sees the surface; else the
+ * scan's own photo texture of it (the tiles' view of that era's structure, `tile-texture`); else a generated fill
+ * (`generated`). The scan's structure is kept either way: a photo that sees through it (a newer era) is not used there.
  */
 
 import * as fs from 'fs-extra';
@@ -29,7 +34,10 @@ import { HeadlessMeshSilhouetteRenderer } from './HeadlessMeshSilhouetteRenderer
 import type { SurveyStationRenderService } from './SurveyStationRenderService';
 import { buildScanHulls, keptByHulls, ContainmentReason } from './splat-containment';
 import { glbRaycaster } from './street-view-stations';
-import { buildValidMask, segmentSky } from './StreetViewPoseRegistrar';
+import { buildValidMask, readGlbScene, sceneToRenderMesh, segmentSky } from './StreetViewPoseRegistrar';
+import { trueViewMask, type TrueViewReport } from './true-view-gate';
+import { readTileTriangles, type TileTriangles } from '../3d-engine/staged-location/tile-texture-transfer';
+import { linearToSrgb255 } from '../../common/spatial/photogrammetric-delight';
 import { dilateMask } from '../3d-engine/staged-location/streetview-ownership';
 import { decodePng, resampleRgba } from '../texture-processing';
 import { NativeCppCompilerService } from '../3d-engine/native-compiler-service';
@@ -78,6 +86,12 @@ export interface SurfaceLayerStation {
     posePath: string;
     /** Weight of its views against the others' (a street station's real photograph wins ties). */
     priority: number;
+    /**
+     * Why its picture is not used, when it is not (e.g. the image model redrew the view, so no single warp places it on
+     * the photo it was asked for): its camera still says what the walk sees, and so how finely the scan is sampled there,
+     * but it colours nothing.
+     */
+    refused?: string;
 }
 
 export interface SurfaceLayerRequest {
@@ -94,8 +108,19 @@ export interface SurfaceLayerRequest {
     budget?: number;
     /** Mask each station's sky so no sample is coloured from it (default true; false reads every pixel, as before). */
     skyMask?: boolean;
+    /**
+     * The scan with its photo texture: the textured extraction of the same crawl (the same triangles as `glbPath`, in its
+     * frame). With it each station colours only what it truly sees (true-view-gate.ts), and what no station truly sees
+     * takes this texture; without it every station's view of the scan is used, as before.
+     */
+    tileGlbPath?: string;
+    /** Where to write each splat's colour source (one byte per splat, in the splat file's order: SURFACE_SOURCES). */
+    outProvenance?: string;
     signal?: AbortSignal;
 }
+
+/** A splat's colour source, as the provenance file stores it: a station that truly sees it, the scan's texture, a fill. */
+export const SURFACE_SOURCES = ['true-view', 'tile-texture', 'generated'] as const;
 
 export interface SurfaceLayerReport {
     triangles: number;
@@ -121,11 +146,21 @@ export interface SurfaceLayerReport {
      * same-content ones' mean difference as read, after the gains and after the offset field, how much one gain per
      * station leaves unexplained, and which corrections were applied.
      */
-    seams: { pairs: number; inliers: number; medianAll: number; before: number; afterGain: number; after: number; gainResidual: number; gainsKept: boolean; fieldKept: boolean };
+    seams: { pairs: number; inliers: number; medianAll: number; before: number; afterGain: number; after: number; gainResidual: number; gainsAtBound: number; gainsKept: boolean; fieldKept: boolean };
     /** Per station, per channel (r, g, b); all 1 when no gain was applied. */
     gains: number[][];
     /** Per station, the share of its image masked as sky (above its horizon, grown); 0 when the sky is not masked. */
     skyShares: number[];
+    /** Per station, what the true-view gate found (absent without `tileGlbPath`). */
+    trueViews?: TrueViewReport[];
+    /**
+     * Splats and patches by colour source (SURFACE_SOURCES order: a true view, the tile texture, generated), the generated
+     * splats on a flattened lump and with no texture, and the tile texture's tone curve toward the stations: its median
+     * gain per channel (linear; all 1 when no curve was fitted) and the paired samples and stations it was fitted on.
+     */
+    sources: { trueView: number; tileTexture: number; generated: number; generatedMoved: number; generatedUntextured: number; patches: { trueView: number; tileTexture: number; generated: number }; tileGain: number[]; tileGainSamples: number; tileToneStations: number };
+    /** Per station, the patches it colours (by most of their splats). */
+    stationPatches: number[];
     ms: number;
 }
 
@@ -133,43 +168,83 @@ export interface SurfaceLayerReport {
 export async function buildSurfaceSplatLayer(req: SurfaceLayerRequest): Promise<SurfaceLayerReport> {
     await fs.ensureDir(req.workDir);
     try {
-        // the scan's triangles the hulls keep
-        const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(req.glbPath);
-        const v = mesh.vertices, idx = mesh.indices;
+        // the scan's triangles the hulls keep: the textured extraction's own when given (each with its UVs and texture),
+        // else the clay mesh's
+        const tile: TileTriangles | undefined = req.tileGlbPath ? readTileTriangles(await fs.readFile(req.tileGlbPath)) : undefined;
+        let v: ArrayLike<number>, idx: ArrayLike<number>;
+        if (tile) { v = tile.positions; idx = Uint32Array.from({ length: tile.texture.length * 3 }, (_, i) => i); }
+        else { const mesh = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(req.glbPath); v = mesh.vertices; idx = mesh.indices; }
         let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
         for (let i = 0; i < v.length; i += 3) { minX = Math.min(minX, v[i]); maxX = Math.max(maxX, v[i]); minZ = Math.min(minZ, v[i + 2]); maxZ = Math.max(maxZ, v[i + 2]); }
         const hulls = buildScanHulls(glbRaycaster(req.glbPath, { lat: req.anchor.lat, lng: req.anchor.lng, heightMeters: req.anchor.elevationMeters }), { minX, maxX, minZ, maxZ });
         const triCount = Math.floor(idx.length / 3);
         const kept = new Float32Array(triCount * 9);
+        const keptUv = tile ? new Float32Array(triCount * 6) : undefined, keptTex = tile ? new Int32Array(triCount) : undefined, keptMoved = tile ? new Uint8Array(triCount) : undefined;
         let k = 0, flattenedTriangles = 0;
         const flat: number[] = [];
         for (let t = 0; t < triCount; t++) {
             const a = idx[t * 3] * 3, b = idx[t * 3 + 1] * 3, c = idx[t * 3 + 2] * 3;
             // a lump outside every hull (a parked car, a van, a kiosk) stood up as a cone in front of the walk: its
-            // vertices are laid on the street it stands on, coloured from whatever the stations show there; taller, it is dropped
+            // vertices are laid on the street it stands on; taller, it is dropped. A triangle with any vertex laid down is
+            // laid down whole, so a lump that meets a kept low structure lies flat instead of folding up from it as a
+            // shard (7th Ave, 2026-11-03: the creased white shards beside the walk)
             flat.length = 0;
-            let drop = false;
+            let drop = false, lay = false;
             for (const o of [a, b, c]) {
-                let y = v[o + 1];
-                const why = hulls.classify(v[o], y, v[o + 2]);
+                const why = hulls.classify(v[o], v[o + 1], v[o + 2]);
                 if (why === ContainmentReason.InAir) {
                     const g = hulls.groundAt(v[o], v[o + 2]);
-                    if (g === undefined || y - g > LUMP_MAX_RISE_M) { drop = true; break; }
-                    y = g;
+                    if (g === undefined || v[o + 1] - g > LUMP_MAX_RISE_M) { drop = true; break; }
+                    lay = true;
                 } else if (!keptByHulls(why)) { drop = true; break; }
-                flat.push(v[o], y, v[o + 2]);
             }
             if (drop) continue;
-            if (flat[1] !== v[a + 1] || flat[4] !== v[b + 1] || flat[7] !== v[c + 1]) flattenedTriangles++;
+            for (const o of [a, b, c]) {
+                const g = lay ? hulls.groundAt(v[o], v[o + 2]) : undefined;
+                if (lay && g === undefined) { drop = true; break; }
+                flat.push(v[o], g ?? v[o + 1], v[o + 2]);
+            }
+            if (drop) continue;
+            const moved = flat[1] !== v[a + 1] || flat[4] !== v[b + 1] || flat[7] !== v[c + 1];
+            if (moved) flattenedTriangles++;
+            if (tile) {
+                const kt = k / 9;
+                keptUv!.set(tile.uvs.subarray(t * 6, t * 6 + 6), kt * 6);
+                keptTex![kt] = tile.texture[t];
+                keptMoved![kt] = moved ? 1 : 0;
+            }
             for (const x of flat) kept[k++] = x;
         }
         const keptTriangles = k / 9;
         const trisPath = path.join(req.workDir, 'tris.f32');
         await fs.writeFile(trisPath, Buffer.from(kept.buffer, 0, k * 4));
+        const tileLines: string[] = [];
+        if (tile) {
+            const uvPath = path.join(req.workDir, 'tile.uv.f32'), texPath = path.join(req.workDir, 'tile.tex.i32'), movedPath = path.join(req.workDir, 'tile.moved.u8');
+            await fs.writeFile(uvPath, Buffer.from(keptUv!.buffer, 0, keptTriangles * 6 * 4));
+            await fs.writeFile(texPath, Buffer.from(keptTex!.buffer, 0, keptTriangles * 4));
+            await fs.writeFile(movedPath, Buffer.from(keptMoved!.buffer, 0, keptTriangles));
+            tileLines.push(`tile ${uvPath} ${texPath} ${movedPath}`);
+            for (const [ti, tx] of tile.textures.entries()) {
+                const rgb = Buffer.alloc(tx.width * tx.height * 3);
+                for (let p = 0; p < rgb.length; p++) rgb[p] = linearToSrgb255(tx.linear[p]);
+                const tp = path.join(req.workDir, `tile${ti}.rgb`);
+                await fs.writeFile(tp, rgb);
+                tileLines.push(`texture ${tp} ${tx.width} ${tx.height}`);
+            }
+        }
+        // the gate's depth: the same scan, as the registration renders it; the textured tiles must be its own crawl (the
+        // stations' depth, the hulls and the splats' texture are then one surface)
+        const gateMesh = tile ? sceneToRenderMesh(readGlbScene(req.glbPath)) : undefined;
+        if (tile && gateMesh!.indices.length / 3 !== tile.texture.length) {
+            throw new Error(`the photo-textured tiles ${req.tileGlbPath} (${tile.texture.length} triangles) are not the crawl of the scan ${req.glbPath} (${gateMesh!.indices.length / 3}): extract both at the same place and radius`);
+        }
 
-        // each station: its image at its baked camera's size, its depth for the occlusion test, and its sky
+        // each station: its image at its baked camera's size, its depth for the occlusion test, and its mask (its sky,
+        // and what its photo does not truly see)
         const lines: string[] = [];
         const skyShares: number[] = [];
+        const trueViews: TrueViewReport[] = [];
         for (const [i, s] of req.stations.entries()) {
             if (req.signal?.aborted) throw req.signal.reason ?? new Error('stopped');
             const pose = await fs.readJson(s.posePath) as { fx: number; fy: number; cx: number; cy: number; eye: number[]; right: number[]; up: number[]; forward: number[] };
@@ -185,14 +260,24 @@ export async function buildSurfaceSplatLayer(req: SurfaceLayerRequest): Promise<
             await fs.writeFile(depthPath, Buffer.from(d.depth.buffer, d.depth.byteOffset, d.depth.byteLength));
             const f = (xs: number[]) => xs.map(x => x.toFixed(6)).join(' ');
             lines.push(`station ${rgbPath} ${W} ${H} ${pose.fx} ${pose.fy} ${pose.cx} ${pose.cy} ${f(pose.eye)} ${f(pose.right)} ${f(pose.up)} ${f(pose.forward)} ${depthPath} ${DW} ${DH} ${d.intrinsics.fx} ${d.intrinsics.fy} ${d.intrinsics.cx} ${d.intrinsics.cy} ${s.priority}`);
-            if (req.skyMask === false) { skyShares.push(0); continue; }
-            const sky = stationSky(rgba, W, H, pose);
+            const sky = req.skyMask === false ? undefined : stationSky(rgba, W, H, pose);
             let skyPx = 0;
-            for (let p = 0; p < sky.length; p++) skyPx += sky[p];
-            skyShares.push(skyPx / sky.length);
-            const skyPath = path.join(req.workDir, `s${i}.sky.u8`);
-            await fs.writeFile(skyPath, sky);
-            lines.push(`sky ${skyPath}`);
+            if (sky) for (let p = 0; p < sky.length; p++) skyPx += sky[p];
+            skyShares.push(sky ? skyPx / sky.length : 0);
+            let mask = sky;
+            if (s.refused) {
+                mask = new Uint8Array(W * H).fill(1);
+                if (tile) trueViews.push({ blocks: 0, passed: 0, refused: { tooSmall: 0, disagree: 0, atLimit: 0 }, seenShare: 0, medianNcc: null, medianShiftM: null, width: W, height: H, ms: 0, pictureRefused: s.refused });
+            } else if (tile) {
+                const gate = trueViewMask({ photo: rgba, width: W, height: H, camera: pose, tile, mesh: gateMesh!, ...(sky ? { sky } : {}) });
+                trueViews.push(gate.report);
+                mask = new Uint8Array(W * H);
+                for (let p = 0; p < mask.length; p++) mask[p] = (sky && sky[p]) || !gate.seen[p] ? 1 : 0;
+            }
+            if (!mask) continue;
+            const maskPath = path.join(req.workDir, `s${i}.mask.u8`);
+            await fs.writeFile(maskPath, mask);
+            lines.push(`mask ${maskPath}`);
         }
 
         const c = req.corridor;
@@ -203,6 +288,8 @@ export async function buildSurfaceSplatLayer(req: SurfaceLayerRequest): Promise<
             'incidence 0.26 0.05',
             `unseen ${SURFACE_UNSEEN.spacingM} ${SURFACE_UNSEEN.maxDistM}`,
             ...lines,
+            ...tileLines,
+            ...(req.outProvenance ? [`provenance ${req.outProvenance}`] : []),
             `out ${req.outSplat} ${req.outSpz}`
         ].join('\n');
         const manifestPath = path.join(req.workDir, 'manifest.txt');
@@ -213,8 +300,8 @@ export async function buildSurfaceSplatLayer(req: SurfaceLayerRequest): Promise<
             includeDir: new NativeCppCompilerService().getSdkIncludePath(), libs: ['-lz']
         });
         const { stdout } = await execFileAsync(binary, [manifestPath], { maxBuffer: 16 * 1024 * 1024, ...(req.signal ? { signal: req.signal } : {}) });
-        const out = JSON.parse(stdout.trim().split('\n').pop()!) as Omit<SurfaceLayerReport, 'keptTriangles' | 'flattenedTriangles' | 'skyShares'>;
-        return { ...out, triangles: triCount, keptTriangles, flattenedTriangles, skyShares };
+        const out = JSON.parse(stdout.trim().split('\n').pop()!) as Omit<SurfaceLayerReport, 'keptTriangles' | 'flattenedTriangles' | 'skyShares' | 'trueViews'>;
+        return { ...out, triangles: triCount, keptTriangles, flattenedTriangles, skyShares, ...(tile ? { trueViews } : {}) };
     } finally {
         await fs.remove(req.workDir).catch(() => undefined);
     }
