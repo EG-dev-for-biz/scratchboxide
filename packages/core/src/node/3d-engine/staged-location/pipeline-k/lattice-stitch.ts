@@ -40,7 +40,8 @@ import type { Vec2 } from '../../../../common/spatial/staged-location-contracts'
 import { outsideFootprint, signedFootprintDistance } from './base-cleanup';
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor } from '../glb-bytes';
 import type { FacadeLatticeResult, ReliefFacade } from '../facade-lattice';
-import { nativePolishEnabled, nativePolishThreads, runNativeFill, type NativeFillPrim } from '../remesh-polish-native';
+import { nativePolishThreads, runNativeFill, type NativeFillPrim } from '../remesh-polish-native';
+import { kNative } from './native/native-switch';
 
 export const LATTICE_STITCH_VERSION = 'lattice-stitch/21';
 
@@ -996,11 +997,11 @@ function fillOpenLoopsNative(clay: Uint8Array, others: Uint8Array[], opts: { foo
 
 /**
  * The open loops left closed (the scan's holes, corners, the base: the bottom capped), counted again after. Natively on a
- * pool of `threads` (every core when none is given) unless SCRATCHBOX_K_NATIVE_POLISH=0; the binary must be built first
+ * pool of `threads` (every core when none is given) unless SCRATCHBOX_K_NATIVE leaves `infill` out; the binary must be built first
  * (remesh-polish-native.ts ensureRemeshPolishBinary).
  */
 export function fillOpenLoops(clay: Uint8Array, others: Uint8Array[], opts: { /** The structure's footprint (plan loops [x, z]): a fill past it pokes out of the building. */ footprint?: Vec2[][]; /** The native fill's threads: a chunked district's share of the cores. */ threads?: number } = {}, P: LatticeStitchParams = LATTICE_STITCH_PARAMS): { clay: Buffer; others: Buffer[]; report: FillReport } {
-    if (nativePolishEnabled()) return fillOpenLoopsNative(clay, others, opts, P);
+    if (kNative('infill')) return fillOpenLoopsNative(clay, others, opts, P);
     const w = welded(clay, P);
     if (w.pos.length >= EDGE_BASE) throw new Error(`the infill keys edges by vertex ids under ${EDGE_BASE}; this mesh has ${w.pos.length} vertices`);
     const owner = new Map<number, number>();

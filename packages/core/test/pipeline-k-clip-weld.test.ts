@@ -60,7 +60,7 @@ function live(bytes: Uint8Array): V[][] {
 }
 const area = (t: V[]) => { const u = [t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]], v = [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]]; return Math.hypot(u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]) / 2; };
 
-// the fill runs natively unless SCRATCHBOX_K_NATIVE_POLISH=0: its binary built first (remesh-polish-native.ts)
+// the fill runs natively unless SCRATCHBOX_K_NATIVE leaves `infill` out: its binary built first (remesh-polish-native.ts)
 beforeAll(async () => { await ensureRemeshPolishBinary(); }, 900_000);
 
 describe('the building clipped to its footprint', () => {

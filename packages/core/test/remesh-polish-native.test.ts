@@ -8,8 +8,8 @@
  ********************************************************************************/
 
 /**
- * Pipeline K's native remesh-polish steps against their TypeScript (remesh-polish-native.ts; SCRATCHBOX_K_NATIVE_POLISH=0
- * keeps the TypeScript), both compiled with the real clang++ through the native build cache:
+ * Pipeline K's native remesh-polish steps against their TypeScript (remesh-polish-native.ts; SCRATCHBOX_K_NATIVE without
+ * window-fit or infill keeps the TypeScript), both compiled with the real clang++ through the native build cache:
  * - the window fit (scratchbox_window_fit.hpp) on synthetic straightened facades whose readings differ (punched windows
  *   over a shopfront with a corner the photo never reached, glass strips with mullions and coloured spandrels, a narrow
  *   tower face of one window column, two wings of different rhythm): the same accepted bands and band reports, and the
@@ -201,16 +201,16 @@ function trianglesOf(bytes: Buffer, node: string): number {
     return (g.json.meshes[nd.mesh].primitives as any[]).reduce((s, p) => s + readAccessor(g, p.indices ?? p.attributes.POSITION).count / 3, 0);
 }
 
-/** fillOpenLoops with SCRATCHBOX_K_NATIVE_POLISH set to `on`, and how long it took. */
+/** fillOpenLoops natively (SCRATCHBOX_K_NATIVE=infill) or in TypeScript (SCRATCHBOX_K_NATIVE=0), and how long it took. */
 function fillWith(on: boolean, s: ReturnType<typeof shell>, threads?: number) {
-    const prior = process.env.SCRATCHBOX_K_NATIVE_POLISH;
-    process.env.SCRATCHBOX_K_NATIVE_POLISH = on ? '1' : '0';
+    const prior = process.env.SCRATCHBOX_K_NATIVE;
+    process.env.SCRATCHBOX_K_NATIVE = on ? 'infill' : '0';
     try {
         const t = performance.now();
         const r = fillOpenLoops(s.clay, [s.tex], { footprint: s.footprint, ...(threads ? { threads } : {}) });
         return { ...r, ms: performance.now() - t };
     } finally {
-        if (prior === undefined) delete process.env.SCRATCHBOX_K_NATIVE_POLISH; else process.env.SCRATCHBOX_K_NATIVE_POLISH = prior;
+        if (prior === undefined) delete process.env.SCRATCHBOX_K_NATIVE; else process.env.SCRATCHBOX_K_NATIVE = prior;
     }
 }
 
