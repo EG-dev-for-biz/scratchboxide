@@ -49,7 +49,7 @@ function boxImage(W: number, H: number, sizeX: number, sizeY: number, fn: (x: nu
 }
 const toRgba8 = (lin: Float32Array, n: number) => { const b = Buffer.alloc(n * 4); for (let i = 0; i < n; i++) { for (let c = 0; c < 3; c++) b[i * 4 + c] = toSrgb8(lin[i * 3 + c]); b[i * 4 + 3] = 255; } return b; };
 
-function packGlb(prims: Array<{ positions: number[]; uvs: number[]; indices: number[]; image: Buffer }>, assetExtras?: unknown): Buffer {
+export function packGlb(prims: Array<{ positions: number[]; uvs: number[]; indices: number[]; image: Buffer }>, assetExtras?: unknown): Buffer {
     const views: Buffer[] = [];
     const gltf: any = {
         asset: { version: '2.0', generator: 'synthetic', ...(assetExtras ? { extras: assetExtras } : {}) }, scene: 0, scenes: [{ nodes: prims.map((_, i) => i) }],
@@ -70,7 +70,7 @@ function packGlb(prims: Array<{ positions: number[]; uvs: number[]; indices: num
     });
     return GltfBinaryPacker.packGlb(gltf, views, true).glbBuffer;
 }
-const quad = (p00: V3, p10: V3, p11: V3, p01: V3) => ({ positions: [...p00, ...p10, ...p11, ...p01], uvs: [0, 1, 1, 1, 1, 0, 0, 0], indices: [0, 1, 2, 0, 2, 3] });
+export const quad = (p00: V3, p10: V3, p11: V3, p01: V3) => ({ positions: [...p00, ...p10, ...p11, ...p01], uvs: [0, 1, 1, 1, 1, 0, 0, 0], indices: [0, 1, 2, 0, 2, 3] });
 
 /** Writes base.glb and lib/library.json under `work`; `assetExtras` go on the GLB's asset (e.g. a staged twin's sbTexture). */
 export async function syntheticMaterialScan(work: string, assetExtras?: unknown): Promise<{ glbPath: string; libraryPath: string; library: MaterialLibrary }> {

@@ -24,7 +24,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { buildPlaneClusters, LinearImageCache, loadBaseScan, mergeCoplanarClusters, type PlaneCluster } from '../../../spatial/MaterialDetailBaker';
-import { encodePng } from '../png-encode';
+import { encodePngAsync, pngCodecThreads } from '../../../png-codec-pool';
 
 export const PLANE_ORTHOS_VERSION = 'plane-orthos/1';
 
@@ -108,6 +108,8 @@ export async function planeOrthos(texturedGlb: string, orthosDir: string, P = PL
     for (const p of scan.prims) for (let t = 0; t < p.indices.length / 3; t++) { const i = index.get(triCluster[p.triOffset + t]); if (i !== undefined) tris[i].push({ p, t }); }
     const images = new LinearImageCache(scan);
     const planes: PlaneFrame[] = [];
+    // each plane's photo encoded on a codec thread (png-codec-pool.ts) while the next is drawn, a few in flight
+    const writes: Array<Promise<void>> = [], inFlight = Math.max(1, pngCodecThreads());
     for (let i = 0; i < chosen.length; i++) {
         const c = chosen[i], list = tris[i];
         const pts: number[] = [];
@@ -151,7 +153,10 @@ export async function planeOrthos(texturedGlb: string, orthosDir: string, P = PL
         let filled = 0; for (let k = 3; k < rgba.length; k += 4) if (rgba[k]) filled++;
         if (!filled) continue;
         const id = P.firstId + planes.length, image = `plane_${id}.png`;
-        fs.writeFileSync(path.join(orthosDir, image), encodePng(W, H, rgba, 4));
+        const write = encodePngAsync(W, H, rgba, 4).then(png => fs.writeFileSync(path.join(orthosDir, image), png));
+        write.catch(() => { /* awaited below */ });
+        writes.push(write);
+        if (writes.length >= inFlight) await writes.shift();
         const r3 = (v: number) => Math.round(v * 1e4) / 1e4;
         planes.push({
             facadeId: id, image, kind, centroid: centroid.map(r3), normal: (c.normal as number[]).map(r3), axisS: S.map(r3), axisT: T.map(r3),
@@ -159,6 +164,7 @@ export async function planeOrthos(texturedGlb: string, orthosDir: string, P = PL
             coverage: Math.round((filled / (W * H)) * 1000) / 1000, areaM2: Math.round(c.area)
         });
     }
+    await Promise.all(writes);
     const file: PlaneOrthosFile = { version: PLANE_ORTHOS_VERSION, params: P, source, ms: Date.now() - t0, planes, skipped };
     fs.writeFileSync(out, JSON.stringify(file));
     return { file, cached: false };

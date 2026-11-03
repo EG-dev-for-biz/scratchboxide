@@ -27,9 +27,10 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { mapLimit } from '../../../../common/map-limit';
+import { encodePngAsync, pngCodecThreads } from '../../../png-codec-pool';
 import type { RgbaImage8 } from '../tile-texture-transfer';
 import { assembleGlb, parseGlbBytes } from '../glb-bytes';
-import { encodePng } from '../png-encode';
 import type { FittedPlane } from '../window-fit';
 import { readPlanes, type FacadeAsk, type FacadeReaderFile } from './facade-reader';
 import type { NamedBuilding } from './facade-reader-brief';
@@ -62,32 +63,35 @@ function facadeTextures(json: any): Map<number, number> {
 }
 
 /** tile_refine's flat scan with each of its photos swapped for the harmonised one of the same index and size. */
-function harmonisedScan(flatGlb: Uint8Array, finalImage: Map<number, RgbaImage8>): { glb: Uint8Array; swapped: number } {
+async function harmonisedScan(flatGlb: Uint8Array, finalImage: Map<number, RgbaImage8>): Promise<{ glb: Uint8Array; swapped: number }> {
     const g = parseGlbBytes(flatGlb);
     const json = JSON.parse(JSON.stringify(g.json));
-    const parts: Uint8Array[] = [g.bin];
-    let length = g.bin.byteLength, swapped = 0;
-    const pad = () => { const r = length % 4; if (r) { parts.push(new Uint8Array(4 - r)); length += 4 - r; } };
-    (json.images ?? []).forEach((im: any, i: number) => {
+    const swaps = (json.images ?? []).flatMap((im: any, i: number) => {
         const img = finalImage.get(i);
-        if (!img || im.bufferView === undefined) return;
+        if (!img || im.bufferView === undefined) return [];
         const view = json.bufferViews[im.bufferView], raw = g.bin.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength);
         // the same photo only: its size as the scan holds it (PNG IHDR or JPEG SOF)
         const size = imageSize(raw);
-        if (!size || size[0] !== img.width || size[1] !== img.height) return;
-        const bytes = encodePng(img.width, img.height, img.rgba, 4);
+        return size && size[0] === img.width && size[1] === img.height ? [{ im, img }] : [];
+    }) as Array<{ im: { bufferView?: number; mimeType?: string }; img: RgbaImage8 }>;
+    // encoded on the codec threads (png-codec-pool.ts), a few at once, then laid into the buffer in image order
+    const encoded = await mapLimit(swaps, Math.max(1, pngCodecThreads()), s => encodePngAsync(s.img.width, s.img.height, s.img.rgba, 4));
+    const parts: Uint8Array[] = [g.bin];
+    let length = g.bin.byteLength;
+    const pad = () => { const r = length % 4; if (r) { parts.push(new Uint8Array(4 - r)); length += 4 - r; } };
+    swaps.forEach(({ im }, k) => {
+        const bytes = encoded[k];
         pad();
         json.bufferViews.push({ buffer: 0, byteOffset: length, byteLength: bytes.length });
         parts.push(bytes); length += bytes.length;
         im.bufferView = json.bufferViews.length - 1; im.mimeType = 'image/png';
-        swapped++;
     });
     pad();
     const bin = new Uint8Array(length);
     let o = 0;
     for (const p of parts) { bin.set(p, o); o += p.byteLength; }
     json.buffers = [{ byteLength: length }];
-    return { glb: assembleGlb(json, bin), swapped };
+    return { glb: assembleGlb(json, bin), swapped: swaps.length };
 }
 
 function imageSize(b: Uint8Array): [number, number] | undefined {
@@ -120,17 +124,18 @@ export async function readOnTwin(input: {
     const facadesFile = JSON.parse(fs.readFileSync(path.join(input.orthosDir, 'facades.json'), 'utf8')) as { facades: Array<{ facadeId: number; image: string; width: number; height: number; uncoveredMask?: string; occludedMask?: string }> };
     const textures = facadeTextures(input.twinJson);
     let facadesHarmonised = 0, facadesAsPhotographed = 0;
-    for (const f of facadesFile.facades) {
+    // the textures encoded on the codec threads (png-codec-pool.ts), a few at once
+    await mapLimit(facadesFile.facades, Math.max(1, pngCodecThreads()), async f => {
         const src = path.join(input.orthosDir, f.image);
-        if (!fs.existsSync(src)) continue;
+        if (!fs.existsSync(src)) return;
         const ti = textures.get(f.facadeId), img = ti !== undefined ? input.finalImage.get(ti) : undefined;
-        if (img && img.width === f.width && img.height === f.height) { fs.writeFileSync(path.join(dir, f.image), encodePng(img.width, img.height, img.rgba, 4)); facadesHarmonised++; }
+        if (img && img.width === f.width && img.height === f.height) { fs.writeFileSync(path.join(dir, f.image), await encodePngAsync(img.width, img.height, img.rgba, 4)); facadesHarmonised++; }
         else { fs.copyFileSync(src, path.join(dir, f.image)); facadesAsPhotographed++; }
         for (const m of [f.uncoveredMask, f.occludedMask]) if (m && fs.existsSync(path.join(input.orthosDir, m))) fs.copyFileSync(path.join(input.orthosDir, m), path.join(dir, m));
-    }
+    });
     fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify(facadesFile));
     // the other planes, photographed from the flat scan with its photos harmonised
-    const scan = harmonisedScan(fs.readFileSync(input.flatGlb), input.finalImage);
+    const scan = await harmonisedScan(fs.readFileSync(input.flatGlb), input.finalImage);
     const scanFile = path.join(dir, 'scan_harmonised.glb');
     fs.writeFileSync(scanFile, scan.glb);
     const po = await planeOrthos(scanFile, dir);
