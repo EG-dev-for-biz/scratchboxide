@@ -190,7 +190,7 @@ print(f"{res.max_distance:.4f},{res.mean_distance:.4f}")
         expect(parseFloat(meanDist)).toBeLessThan(0.15);
     });
 
-    it('8. Crease-Preserving QEM Decimation: a locked box keeps its true shape where plain QEM distorts or stalls', () => {
+    it('8. Crease-Preserving QEM Decimation: a box built from separate faces keeps its true shape, with or without crease locking', () => {
         const script = `
 def make_box():
     return sb.create_subdivided_box(size=(4.0, 4.0, 4.0), subdivisions=8)
@@ -209,11 +209,50 @@ h_wc = reference.hausdorff_distance(with_crease, samples=4000)
 print(f"{len(no_crease.indices)//3},{len(with_crease.indices)//3},{h_nc.max_distance:.4f},{h_wc.max_distance:.4f}")
 `;
         const output = runPythonScript(script);
-        const [, withCreaseTris, maxDistNoCrease, maxDistWithCrease] = output.split(',');
+        const [noCreaseTris, withCreaseTris, maxDistNoCrease, maxDistWithCrease] = output.split(',');
         // crease preservation reaches the requested triangle budget with the box's true shape intact
         expect(parseInt(withCreaseTris)).toBe(48);
         expect(parseFloat(maxDistWithCrease)).toBeLessThan(0.01);
-        // plain QEM on the same mesh and target measurably distorts the shape more
-        expect(parseFloat(maxDistNoCrease)).toBeGreaterThan(parseFloat(maxDistWithCrease) * 10);
+        // so does plain QEM: the faces are welded at their shared edges, where each vertex's quadric holds both faces'
+        // planes (one face at a time, it tore the box open along them, stalled at 81 triangles and drifted 2.6 m)
+        expect(parseInt(noCreaseTris)).toBe(48);
+        expect(parseFloat(maxDistNoCrease)).toBeLessThan(0.01);
+    });
+
+    it('9. QEM Decimation keeps a closed UV sphere closed: its seam and pole copies collapse as one surface', () => {
+        const script = `
+reference = sb.create_sphere(radius=2.0, segments=32)
+sphere = sb.create_sphere(radius=2.0, segments=32)
+sphere.decimate(ratio=0.5)
+
+# the seam and the poles repeat vertices, so edges are counted between positions (welded within 1e-5 m)
+ids = {}
+pos_id = [ids.setdefault((round(v.position.x * 1e5), round(v.position.y * 1e5), round(v.position.z * 1e5)), len(ids)) for v in sphere.vertices]
+idx = list(sphere.indices)
+uses = {}
+degenerate = 0
+for t in range(0, len(idx), 3):
+    tri = [pos_id[idx[t + k]] for k in range(3)]
+    if len(set(tri)) < 3:
+        degenerate += 1
+        continue
+    for k in range(3):
+        key = (min(tri[k], tri[(k + 1) % 3]), max(tri[k], tri[(k + 1) % 3]))
+        uses[key] = uses.get(key, 0) + 1
+open_edges = sum(1 for n in uses.values() if n == 1)
+non_manifold = sum(1 for n in uses.values() if n > 2)
+h = reference.hausdorff_distance(sphere, samples=4000)
+print(f"{len(idx)//3},{open_edges},{non_manifold},{degenerate},{h.max_distance:.4f}")
+`;
+        const output = runPythonScript(script);
+        const [tris, openEdges, nonManifold, degenerate, maxDist] = output.split(',');
+        expect(parseInt(tris)).toBeLessThanOrEqual(961);
+        expect(parseInt(tris)).toBeGreaterThan(900);
+        // no crack along the seam (each side's copy collapsing without its twin opened 26 edges) and no pinched edge
+        expect(parseInt(openEdges)).toBe(0);
+        expect(parseInt(nonManifold)).toBe(0);
+        expect(parseInt(degenerate)).toBe(0);
+        // every sample of the original sphere lies near the halved one (0.48 m while it cracked; about 0.014 m closed)
+        expect(parseFloat(maxDist)).toBeLessThan(0.05);
     });
 });
