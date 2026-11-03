@@ -57,9 +57,9 @@ export const WALL_GRAMMAR_PARAMS = {
     mullionMaxM: 0.7, minBayM: 0.8, pierShare: 0.6,
     /** A bay's rows joined across wall rows up to maxGapM (m), kept from minRunM tall (m). */
     maxGapM: 2.5, minRunM: 5.0,
-    /** Tiers: walls whose tops and bottoms lie within this (m). A tier's grammar needs minTierBays read bays; a bay's pitch gap within pitchTol of the tier's pitch counts toward it, and a grammar bay is vetoed where vetoShare of its columns the photo shows as wall. */
-    /** A row run crossed by at least punchedBands wall bands holding punchedShare of its height is punched windows, not a bay. */
+    /** A row run crossed by at least punchedBands wall bands (each from bandM tall, m) holding punchedShare of its height is punched windows, not a bay. */
     punchedBands: 3, punchedShare: 0.2, bandM: 0.5,
+    /** Tiers: walls whose tops and bottoms lie within this (m). A tier's grammar needs minTierBays read bays; a bay's pitch gap within pitchTol of the tier's pitch counts toward it, a grammar bay is vetoed where vetoShare of its columns the photo shows as wall, and a wall covered from silentCoverage with no bays read gets none. */
     tierM: 3.0, minTierBays: 3, pitchTol: 0.2, vetoShare: 0.2, silentCoverage: 0.5
 };
 export type WallGrammarParams = typeof WALL_GRAMMAR_PARAMS;
@@ -293,7 +293,7 @@ export function readWallGrammar(orthosDir: string, fit: WindowFitFile, decode: (
         walls.push({ wallId: wi, facades: fs0.map(f => f.facadeId), normal: N, axisU: U, offset: dot(ref.centroid, N), u0, u1, y0, y1, coverage: cov / covered.length, tier: -1, bays: r.bays });
         evidence.push(e); states.push(r.state);
     }
-    // tiers, and an under-read wall's unknown columns from its tier's best-read wall
+    // tiers, each with one grammar fitted from its walls' read bays and laid along every wall of it (the file comment, 5)
     let tier = 0;
     for (const w of walls) {
         if (w.tier >= 0) continue;
