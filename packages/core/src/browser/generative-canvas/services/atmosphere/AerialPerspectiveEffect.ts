@@ -32,6 +32,8 @@ void main() {
 export const AERIAL_PERSPECTIVE_FRAGMENT_SHADER = /* glsl */ `
 uniform sampler2D tColor;
 uniform sampler2D tDepth;
+uniform sampler2D tAo;
+uniform float uAoIntensity;
 
 uniform mat4 uInverseProjectionMatrix;
 uniform mat4 uInverseViewMatrix;
@@ -218,9 +220,10 @@ void main() {
     float dist = length(toCamera);
     vec3 viewDir = normalize(-toCamera);
 
-    // 1. Terrain Cloud Shadows Modulation
+    // 1. Terrain Cloud Shadows Modulation, and the contact ambient occlusion (1 where no pass supplies one)
     float shadowFactor = computeCloudShadow(worldPos);
-    vec3 litColor = sceneColor.rgb * (1.0 - shadowFactor);
+    float ao = uAoIntensity > 0.0 ? mix(1.0, texture2D(tAo, vUv).r, uAoIntensity) : 1.0;
+    vec3 litColor = sceneColor.rgb * (1.0 - shadowFactor) * ao;
 
     // 2. Aerial Perspective Transmittance & Depth Inscattering
     vec3 transmittance, inscattering;
@@ -432,8 +435,20 @@ export function computeCloudShadowFactor(
 /**
  * Complete WebGL Post-Processing Aerial Perspective & Cloud Shadows Effect Module.
  */
+/**
+ * Occlusion drawn from the scene's depth between the scene and the haze (contactAmbientOcclusion.ts): its texture's red
+ * channel is the open share of each pixel, applied at `intensity`.
+ */
+export interface AerialAmbientOcclusion {
+    readonly intensity: number;
+    render(renderer: THREE.WebGLRenderer, camera: THREE.PerspectiveCamera, depthTexture: THREE.Texture, width: number, height: number): THREE.Texture;
+    dispose(): void;
+}
+
 export class AerialPerspectiveEffect {
     public readonly renderTarget: THREE.WebGLRenderTarget;
+    /** Contact ambient occlusion applied to the scene before the haze; none when null. Disposed with the effect. */
+    public ambientOcclusion: AerialAmbientOcclusion | null = null;
     public readonly material: THREE.ShaderMaterial;
     private readonly quadScene: THREE.Scene;
     private readonly quadCamera: THREE.OrthographicCamera;
@@ -446,9 +461,11 @@ export class AerialPerspectiveEffect {
         this.height = height;
 
         // Depth texture setup
+        // 24-bit: the scene is depth-tested against it (16 bits left surfaces a few decimetres apart fighting at a few
+        // hundred metres), and the ambient occlusion rebuilds positions and normals from it
         const depthTexture = new THREE.DepthTexture(width, height);
         depthTexture.format = THREE.DepthFormat;
-        depthTexture.type = THREE.UnsignedShortType;
+        depthTexture.type = THREE.UnsignedIntType;
 
         this.renderTarget = new THREE.WebGLRenderTarget(width, height, {
             minFilter: THREE.LinearFilter,
@@ -463,6 +480,8 @@ export class AerialPerspectiveEffect {
         const uniforms = {
             tColor: { value: this.renderTarget.texture },
             tDepth: { value: depthTexture },
+            tAo: { value: null as THREE.Texture | null },
+            uAoIntensity: { value: 0 },
 
             uInverseProjectionMatrix: { value: new THREE.Matrix4() },
             uInverseViewMatrix: { value: new THREE.Matrix4() },
@@ -589,6 +608,9 @@ export class AerialPerspectiveEffect {
         const currentRenderTarget = renderer.getRenderTarget();
         renderer.setRenderTarget(this.renderTarget);
         renderer.render(scene, camera);
+        const ao = this.ambientOcclusion;
+        u.tAo.value = ao ? ao.render(renderer, camera, this.renderTarget.depthTexture!, this.width, this.height) : null;
+        u.uAoIntensity.value = ao ? ao.intensity : 0;
 
         // 2. Render full-screen post-pass to original target/screen
         renderer.setRenderTarget(currentRenderTarget);
@@ -596,6 +618,8 @@ export class AerialPerspectiveEffect {
     }
 
     public dispose(): void {
+        this.ambientOcclusion?.dispose();
+        this.ambientOcclusion = null;
         this.renderTarget.dispose();
         this.material.dispose();
         this.quadMesh.geometry.dispose();
