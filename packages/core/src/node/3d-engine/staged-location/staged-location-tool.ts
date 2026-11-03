@@ -386,7 +386,12 @@ export type StagedWorkerOut =
     | { kind: 'event'; event: StageEvent; artifact?: CanvasArtifact }
     | { kind: 'progress'; message: string; fraction?: number }
     | { kind: 'done'; outcome: StagedLocationOutcome }
+    /** After `done`: the build's background passes (the scene object store's) have ended, so the worker can go. */
+    | { kind: 'idle' }
     | { kind: 'error'; name: string; message: string; stack?: string; stage?: string; reasonCode?: string };
+
+/** How long a worker that has answered may go on with its background passes before it is terminated (ms). */
+const STAGED_WORKER_IDLE_CAP_MS = 60 * 60_000;
 
 /** SCRATCHBOX_STAGED_WORKER=0 runs the staged build on the server's main thread, as before. */
 export function stagedWorkerEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -411,7 +416,7 @@ export function runStagedLocationOffThread(request: StagedLocationRequest, root:
     if (!entry) return Promise.reject(new Error(`the staged build worker was not found beside ${dir}`));
     const heapMb = Math.floor(v8.getHeapStatistics().heap_size_limit / (1024 * 1024));
     return new Promise<StagedLocationOutcome>((resolve, reject) => {
-        let settled = false, killTimer: NodeJS.Timeout | undefined;
+        let settled = false, killTimer: NodeJS.Timeout | undefined, idleTimer: NodeJS.Timeout | undefined;
         const w = new Worker(STAGED_WORKER_BOOTSTRAP, {
             eval: true, resourceLimits: { maxOldGenerationSizeMb: heapMb },
             workerData: {
@@ -438,7 +443,9 @@ export function runStagedLocationOffThread(request: StagedLocationRequest, root:
         w.on('message', (m: StagedWorkerOut) => {
             if (m.kind === 'event') ctx.emitStage?.(m.event, m.artifact);
             else if (m.kind === 'progress') ctx.reportProgress?.(m.message, m.fraction);
-            else if (m.kind === 'done') finish(() => { resolve(m.outcome); void w.terminate(); });
+            // the result is answered at once; the worker goes once its background passes end (none unless the object store is on)
+            else if (m.kind === 'done') finish(() => { resolve(m.outcome); idleTimer = setTimeout(() => void w.terminate(), STAGED_WORKER_IDLE_CAP_MS); idleTimer.unref(); });
+            else if (m.kind === 'idle') { if (idleTimer) clearTimeout(idleTimer); void w.terminate(); }
             else finish(() => {
                 const e = m.name === 'StagedLocationHardFailure' ? new StagedLocationHardFailure((m.stage ?? 'resolve') as StageId, m.reasonCode ?? 'failed', m.message) : Object.assign(new Error(m.message), { name: m.name });
                 if (m.stack) e.stack = m.stack;
