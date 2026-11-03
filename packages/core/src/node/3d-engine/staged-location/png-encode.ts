@@ -69,6 +69,15 @@ export function encodePng(width: number, height: number, pixels: Uint8Array, cha
         raw[y * (stride + 1)] = best;
         raw.set(cand[best], y * (stride + 1) + 1);
     }
+    return encodePngFiltered(width, height, raw, channels);
+}
+
+/**
+ * PNG bytes from scanlines already filtered (each row its filter type, then the filtered bytes), as encodePng chooses them:
+ * the native steps choose them the same way and leave the deflate to Node's zlib, so their files are encodePng's byte for byte.
+ */
+export function encodePngFiltered(width: number, height: number, raw: Uint8Array, channels: 1 | 3 | 4): Buffer {
+    if (raw.length !== (width * channels + 1) * height) throw new Error(`PNG scanlines have ${raw.length} bytes for ${width}x${height}x${channels}`);
     const ihdr = Buffer.alloc(13);
     ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4);
     ihdr[8] = 8; ihdr[9] = channels === 1 ? 0 : channels === 3 ? 2 : 6; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;

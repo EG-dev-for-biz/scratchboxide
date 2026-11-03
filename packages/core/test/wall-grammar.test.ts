@@ -13,7 +13,7 @@
  * wall's rhythm, generated); and the lattice drawing the grammar's bays as its strips.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { groupWalls, readWallBays, type GrammarFacade, type WallEvidence } from '../src/node/3d-engine/staged-location/wall-grammar';
 import { facadeSamples, latticeFacade, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
 import { buildWallSheets, SHEET_ID_BASE } from '../src/node/3d-engine/staged-location/wall-sheets';
@@ -22,6 +22,10 @@ import { decodePng } from '../src/node/texture-processing';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { ensureRemeshPolishBinary } from '../src/node/3d-engine/staged-location/remesh-polish-native';
+
+// the wall sheets run natively by default (SCRATCHBOX_K_NATIVE): their binary built once for the file
+beforeAll(async () => { await ensureRemeshPolishBinary(); }, 900_000);
 
 const facade = (facadeId: number, cx: number, z: number, width: number, y0: number, y1: number): GrammarFacade => ({
     facadeId, image: `f${facadeId}.png`, centroid: [cx, (y0 + y1) / 2, z], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0],

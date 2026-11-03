@@ -8,22 +8,27 @@
  ********************************************************************************/
 
 /**
- * Pipeline K's remesh-polish steps in native C++20 on a fixed thread pool (scripts/remesh_polish_native.cpp over
- * scratchbox_window_fit.hpp, scratchbox_wall_grammar.hpp, scratchbox_facade_lattice.hpp and scratchbox_open_loop_fill.hpp):
- * the window fit (window-fit.ts fitOrthoFacadesNative, the photometric relief read in the same process, one facade a
- * task), the wall grammar's evidence and bays (wall-grammar.ts readWallGrammar, one wall a task), the lattice
- * (facade-lattice.ts: each facade's lattice and rebuilt surface, and its repeat texture, one facade a task; then the
- * removals under the tear audit, one view a task) and the infill (pipeline-k/lattice-stitch.ts fillOpenLoops). Their
- * results are the TypeScript's, which runs when SCRATCHBOX_K_NATIVE leaves `window-fit`, `wall-grammar`, `lattice` or `infill` out
- * (pipeline-k/native/native-switch.ts; all native by default).
+ * Pipeline K's remesh-polish steps in native C++20 on a fixed thread pool (scripts/remesh_polish_native.cpp over the
+ * headers each names), every one giving its TypeScript's result, which runs when SCRATCHBOX_K_NATIVE leaves its port out
+ * (pipeline-k/native/native-switch.ts; all native by default):
+ *  - `window-fit`: window-fit.ts fitOrthoFacadesNative (scratchbox_window_fit.hpp), the photometric relief read in the
+ *    same process, one facade a task;
+ *  - `wall-grammar`: wall-grammar.ts readWallGrammar's evidence and bays (scratchbox_wall_grammar.hpp), one wall a task;
+ *  - `wall-sheets`: wall-sheets.ts buildWallSheets' photos and masks (scratchbox_wall_sheets.hpp), one sheet a task, their
+ *    PNG scanlines filtered there and deflated by Node's zlib, so the files are the TypeScript's byte for byte;
+ *  - `lattice`: facade-lattice.ts (scratchbox_facade_lattice.hpp), each facade's lattice, rebuilt surface and repeat
+ *    texture one facade a task, then the removals under the tear audit one view a task;
+ *  - `cut`: pipeline-k/lattice-stitch.ts cutScanToLattice (scratchbox_lattice_cut.hpp), triangles in chunks;
+ *  - `stitch`: pipeline-k/lattice-stitch.ts stitchLattice's strips and corner zips (scratchbox_lattice_stitch.hpp), one
+ *    facade a task;
+ *  - `infill`: pipeline-k/lattice-stitch.ts fillOpenLoops (scratchbox_open_loop_fill.hpp).
  *
  * Data goes over stdin as raw little-endian buffers (a header, then arrays), never PNG; the window fit's facades are
  * streamed as they are decoded and fitted as they arrive. The pool's size is the caller's: a chunked district's builds
  * pass their share of the cores (pipeline-k/district-chunks.ts chunkCpuShare).
  *
- * The binary is built through the native build cache. The polish runs synchronously (often on a worker thread), so the
- * wall grammar, the lattice and the infill find the binary by its cache key (remeshPolishBinarySync); ensureRemeshPolishBinary
- * builds it first.
+ * The binary is built through the native build cache. The steps after the window fit run synchronously (often on a worker
+ * thread), so they find the binary by its cache key (remeshPolishBinarySync); ensureRemeshPolishBinary builds it first.
  */
 
 import { spawn, spawnSync } from 'child_process';
@@ -62,14 +67,19 @@ export function ensureRemeshPolishBinary(repoRoot = findTileRefineRepoRoot()): P
     return building;
 }
 
-/** The polish input's native steps built before it runs: the lattice and the infill (or seal) run synchronously and cannot compile. */
+/** The polish input's native steps built before it runs: the lattice (its cut and stitch) and the infill (or seal) run synchronously and cannot compile. */
 export async function ensureNativePolishFor(input: { infill?: boolean; seal?: boolean; lattice?: boolean; orthosDir?: string }): Promise<void> {
-    if (((input.infill || input.seal) && kNative('infill')) || (input.orthosDir && input.lattice !== false && kNative('lattice'))) await ensureRemeshPolishBinary();
+    if (((input.infill || input.seal) && kNative('infill')) || (input.orthosDir && input.lattice !== false && (kNative('lattice') || kNative('cut') || kNative('stitch')))) await ensureRemeshPolishBinary();
 }
 
 /** The wall grammar's native reading built before it runs: readWallGrammar runs synchronously and cannot compile. */
 export async function ensureNativeWallGrammar(): Promise<void> {
     if (kNative('wall-grammar')) await ensureRemeshPolishBinary();
+}
+
+/** The wall sheets' native photos built before they run: buildWallSheets runs synchronously and cannot compile. */
+export async function ensureNativeWallSheets(): Promise<void> {
+    if (kNative('wall-sheets')) await ensureRemeshPolishBinary();
 }
 
 /** The binary already in the native build cache for this source, found synchronously; throws when it was never built. */
@@ -313,5 +323,92 @@ export function runNativeWallGrammar(params: number[], walls: NativeWallJob[], t
         return { nu, ny, covered, bays, state: new Int8Array(r.u8s(nu).buffer) };
     });
     r.done('wall-grammar');
+    return out;
+}
+
+// ------------------------------------------------------------------------------------------------ the cut
+
+/** A rebuilt facade for the native cut: its frame, lattice lines and rebuilt cells. */
+export interface NativeCutFacade { facadeId: number; centroid: number[]; normal: number[]; axisS: number[]; axisT: number[]; s: number[]; t: number[]; built: Uint8Array }
+/** A scan primitive for the native cut (lattice-stitch.ts readPrims): every attribute after POSITION with its width and kind, as doubles. */
+export interface NativeCutPrim { comps: number[]; flags: boolean[]; normals: boolean[]; pos: ArrayLike<number>; attr: ArrayLike<number>[]; I: ArrayLike<number> }
+/** A primitive's cut: the triangles cut (their first index slots) and its kept pieces welded (appendPieces' vertices and triangles). */
+export interface NativeCutOut { cut: Uint32Array; verts: number; arrays: Float32Array[]; min: number[]; max: number[]; tris: Uint32Array }
+
+/** lattice-stitch.ts cutScanToLattice's geometry natively, per primitive, and its report. */
+export function runNativeCut(params: number[], facades: NativeCutFacade[], prims: NativeCutPrim[], threads: number): { report: { cutTriangles: number; removedPieces: number; keptPieces: number }; prims: NativeCutOut[] } {
+    const w = new Writer().magic('SBCT').u32(1).u32(params.length).f64s(params).u32(facades.length);
+    for (const f of facades) {
+        if (f.built.length !== (f.s.length - 1) * (f.t.length - 1)) throw new Error(`facade ${f.facadeId}: its built cells do not match its lattice`);
+        w.i32(f.facadeId).f64s([...f.centroid, ...f.normal, ...f.axisS, ...f.axisT]).u32(f.s.length).f64s(f.s).u32(f.t.length).f64s(f.t).raw(f.built);
+    }
+    w.u32(prims.length);
+    for (const p of prims) {
+        w.u32(p.comps.length);
+        p.comps.forEach((c, k) => w.i32(c).u32(p.flags[k] ? 1 : 0).u32(p.normals[k] ? 1 : 0));
+        const n = p.pos.length / 3;
+        w.u32(n).f64s(p.pos);
+        p.attr.forEach((a, k) => { if (a.length !== n * p.comps[k]) throw new Error('a cut primitive\'s attribute does not match its positions'); w.f64s(a); });
+        w.u32(p.I.length).u32s(p.I);
+    }
+    const r = new Reader(runSync('cut', w.take(), threads));
+    const report = { cutTriangles: r.f64(), removedPieces: r.f64(), keptPieces: r.f64() };
+    const out = prims.map((p): NativeCutOut => {
+        const cut = r.u32s(r.u32()), verts = r.u32();
+        const arrays = [r.f32s(verts * 3), ...p.comps.map(c => r.f32s(verts * c))];
+        const min = Array.from(r.f64s(3)), max = Array.from(r.f64s(3));
+        return { cut, verts, arrays, min, max, tris: r.u32s(r.u32()) };
+    });
+    r.done('cut');
+    return { report, prims: out };
+}
+
+// ------------------------------------------------------------------------------------------------ the stitch
+
+/** A rebuilt facade for the native stitch: its frame, lattice lines, rebuilt cells and their depths, row by row. */
+export interface NativeStitchFacade extends NativeCutFacade { depth: number[] }
+
+/** lattice-stitch.ts stitchLattice's geometry natively: its report, the cells left unjoined per facade, and the strips' and zips' triangles. */
+export function runNativeStitch(params: number[], facades: NativeStitchFacade[], prims: NativeFillPrim[], threads: number): { report: { segments: number; stitched: number; stripTriangles: number; cornersZipped: number; why: Record<string, number>; unjoined: number }; unjoinedCells: Map<number, Array<[number, number]>>; out: number[][][] } {
+    const w = new Writer().magic('SBST').u32(1).u32(params.length).f64s(params).u32(facades.length);
+    for (const f of facades) {
+        const cells = (f.s.length - 1) * (f.t.length - 1);
+        if (f.built.length !== cells || f.depth.length !== cells) throw new Error(`facade ${f.facadeId}: its built cells or depths do not match its lattice`);
+        w.i32(f.facadeId).f64s([...f.centroid, ...f.normal, ...f.axisS, ...f.axisT]).u32(f.s.length).f64s(f.s).u32(f.t.length).f64s(f.t).f64s(f.depth).raw(f.built);
+    }
+    w.u32(prims.length);
+    for (const p of prims) w.i32(p.wall).u32(p.X.length / 3).f64s(p.X).u32(p.I ? 1 : 0).u32(p.I ? p.I.length : 0).u32s(p.I ?? []);
+    const r = new Reader(runSync('stitch', w.take(), threads));
+    const segments = r.f64(), stitched = r.f64(), stripTriangles = r.f64(), cornersZipped = r.f64(), unjoined = r.f64();
+    const why: Record<string, number> = {};
+    for (let n = r.u32(); n > 0; n--) { const k = r.str(); why[k] = r.f64(); }
+    const unjoinedCells = new Map<number, Array<[number, number]>>();
+    for (let n = r.u32(); n > 0; n--) { const id = r.i32(); unjoinedCells.set(id, Array.from({ length: r.u32() }, () => [r.i32(), r.i32()] as [number, number])); }
+    const out = Array.from({ length: r.u32() }, () => [Array.from(r.f64s(3)), Array.from(r.f64s(3)), Array.from(r.f64s(3))]);
+    r.done('stitch');
+    return { report: { segments, stitched, stripTriangles, cornersZipped, why, unjoined }, unjoinedCells, out };
+}
+
+// ------------------------------------------------------------------------------------------------ the wall sheets
+
+/** A sheet for the native wall sheets: its size and texel, and its members in the sheet's order with their files and maps from its pixels. */
+export interface NativeSheetJob { width: number; height: number; pixel: number; members: Array<{ image: string; uncovered?: string; occluded?: string; o: number[]; dx: number[]; dy: number[] }> }
+/** A sheet's photo and masks as PNG scanlines (png-encode.ts encodePngFiltered), and what was filled. */
+export interface NativeSheetOut { holes: number; wallCoverage: number; wallAreaM2: number; fromRepeats: number; fromStoreys: number; smooth: number; image: Uint8Array; mask: Uint8Array; occluded?: Uint8Array }
+
+/** wall-sheets.ts buildWallSheets' pixel work natively: each sheet's mosaic, its holes filled, its images' scanlines. */
+export function runNativeWallSheets(params: number[], sheets: NativeSheetJob[], threads: number): NativeSheetOut[] {
+    const w = new Writer().magic('SBWS').u32(1).u32(params.length).f64s(params).u32(sheets.length);
+    for (const sh of sheets) {
+        w.u32(sh.width).u32(sh.height).f64s([sh.pixel]).u32(sh.members.length);
+        for (const m of sh.members) w.str(m.image).str(m.uncovered ?? '').str(m.occluded ?? '').f64s([m.o[0], m.o[1], m.dx[0], m.dx[1], m.dy[0], m.dy[1]]);
+    }
+    const r = new Reader(runSync('wall-sheets', w.take(), threads));
+    const out = sheets.map((): NativeSheetOut => {
+        const holes = r.f64(), wallCoverage = r.f64(), wallAreaM2 = r.f64(), fromRepeats = r.f64(), fromStoreys = r.f64(), smooth = r.f64(), anyOccluded = r.u32();
+        const image = r.u8s(r.u32()), mask = r.u8s(r.u32()), occluded = r.u8s(r.u32());
+        return { holes, wallCoverage, wallAreaM2, fromRepeats, fromStoreys, smooth, image, mask, ...(anyOccluded ? { occluded } : {}) };
+    });
+    r.done('wall-sheets');
     return out;
 }

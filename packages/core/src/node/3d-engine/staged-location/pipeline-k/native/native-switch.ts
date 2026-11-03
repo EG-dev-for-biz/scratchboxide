@@ -11,10 +11,10 @@
  * Which of pipeline K's stages run their native kernels (the C++ ports beside this file and the remesh polish's,
  * remesh-polish-native.ts; each bit for bit the TypeScript's result, held to it by its parity test). On by default:
  * unset, `1`, `all` or `on` runs every port; `SCRATCHBOX_K_NATIVE=0` (or `off`) runs the TypeScript everywhere; a comma
- * list names the ports that run (`rectify`, `window-fit`, `wall-grammar`, `lattice`, `infill`, `roof-shadow`, `regions`,
- * `harmonize`, `template`: the facade reader's window search), the rest in TypeScript. Read at each call, so a worker
- * thread sees the same environment as the server. A native build or run that fails is thrown, never answered by the
- * TypeScript path: the switch picks the engine, it is not a fallback.
+ * list names the ports that run (`rectify`, `window-fit`, `wall-grammar`, `wall-sheets`, `lattice`, `cut`, `stitch`,
+ * `infill`, `roof-shadow`, `regions`, `harmonize`, `template`: the facade reader's window search), the rest in
+ * TypeScript. Read at each call, so a worker thread sees the same environment as the server. A native build or run that
+ * fails is thrown, never answered by the TypeScript path: the switch picks the engine, it is not a fallback.
  *
  * The outputs are the same either way, so the stages' versions (and the caches they name) do not change with it.
  *
@@ -23,7 +23,10 @@
  * SCRATCHBOX_K_NATIVE_TWIN_BIN still set is not read, and is reported once with its replacement.
  */
 
-export const K_NATIVE_STAGES = ['rectify', 'window-fit', 'wall-grammar', 'lattice', 'infill', 'roof-shadow', 'regions', 'harmonize', 'template'] as const;
+export const K_NATIVE_STAGES = [
+    'rectify', 'window-fit', 'wall-grammar', 'wall-sheets', 'lattice', 'cut', 'stitch', 'infill', 'roof-shadow', 'regions',
+    'harmonize', 'template',
+] as const;
 export type KNativeStage = (typeof K_NATIVE_STAGES)[number];
 
 /** The retired switches and what to set instead. */
