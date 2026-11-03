@@ -242,6 +242,18 @@ describe('pipeline K-D cloud chunk runner', () => {
         expect(imageCommit('x/kd-chunk-job:latest')).toBeUndefined();
     });
 
+    it('asks for the job image again after the API could not be reached', async () => {
+        const s = setup();
+        const real = s.jobs.jobImage.bind(s.jobs);
+        let calls = 0;
+        s.jobs.jobImage = async () => { if (++calls === 1) throw new Error('socket hang up'); return real(); };
+        await expect(s.runChunk(request(), {})).rejects.toThrow(/socket hang up/);
+        expect(s.jobs.runs).toEqual([]);
+        await s.runChunk(request(), {});
+        expect(calls).toBe(2);
+        expect(s.jobs.runs).toHaveLength(1);
+    });
+
     it('builds only district chunks', () => {
         expect(() => kdChunkJobPrefix({ ...request(), chunk: undefined } as StagedLocationRequest)).toThrow(/only district chunks/);
         expect(() => kdChunkJobPrefix({ ...request(), chunk: { of: '../x', index: 1 } } as StagedLocationRequest)).toThrow();

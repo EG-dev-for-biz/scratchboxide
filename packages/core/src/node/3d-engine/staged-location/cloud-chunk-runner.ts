@@ -302,10 +302,11 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
     const env = o.env ?? process.env;
     const log = o.log ?? ((m: string) => console.log(m));
     let checked: Promise<string> | undefined;
+    // a failure to read the image (the API out of reach) is asked again by the next chunk; a skewed image stays refused
     const imageChecked = () => checked ??= o.jobs.jobImage().then(image => {
         checkImageSkew(image, (o.head ?? (() => gitHead(__dirname)))(), env);
         return image;
-    });
+    }, err => { checked = undefined; throw err; });
     // once a district, before its first chunk starts; a chunk without them measures what it needs itself
     const statsSent = new Map<string, Promise<void>>();
     const libraryStatsSent = (of: string) => {
