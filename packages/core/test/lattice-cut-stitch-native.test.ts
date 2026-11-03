@@ -8,12 +8,14 @@
  ********************************************************************************/
 
 /**
- * The native cut and stitch (scratchbox_lattice_cut.hpp and scratchbox_lattice_stitch.hpp, SCRATCHBOX_K_NATIVE's `cut`
- * and `stitch`) against pipeline-k/lattice-stitch.ts on a small synthetic building: a scan box of two meshes whose
- * triangles carry normals, UVs (with a seam: two triangles sharing an edge's positions but not its UVs) and a flag
- * attribute, and two rebuilt facades meeting at its corner. The cut (plain, keeping the pieces inside, same-facing only)
- * and a whole stitch round (each facade made watertight, the scan cut, the walls appended, the strips and corner zips)
- * give the same GLBs byte for byte, the same reports and the same cells left unjoined. The binary is compiled with the
+ * The native cut, stitch, clip and fill texturing (scratchbox_lattice_cut.hpp, scratchbox_lattice_stitch.hpp and
+ * scratchbox_fill_texture.hpp, SCRATCHBOX_K_NATIVE's `cut`, `stitch`, `clip` and `fill-texture`) against
+ * pipeline-k/lattice-stitch.ts on a small synthetic building: a scan box of two meshes whose triangles carry normals, UVs
+ * (with a seam: two triangles sharing an edge's positions but not its UVs) and a flag attribute, and two rebuilt facades
+ * meeting at its corner. The cut (plain, keeping the pieces inside, same-facing only), a whole stitch round (each facade
+ * made watertight, the scan cut, the walls appended, the strips and corner zips), the clip to a footprint that crosses
+ * the box, and the fill of what is left open textured in a twin whose rebuilt walls carry their photos, give the same
+ * GLBs byte for byte, the same reports and the same cells left unjoined. The binary is compiled with the
  * real clang++; nothing here reaches a network or a credential.
  */
 
@@ -22,7 +24,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { applyFacadeLattices, facadeSamples, latticeFacade, type FacadeLatticeResult, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
-import { cutScanToLattice, LATTICE_STITCH_PARAMS, stitchLattice, watertightLatticeMesh } from '../src/node/3d-engine/staged-location/pipeline-k/lattice-stitch';
+import { clipToFootprint, cutScanToLattice, fillOpenLoops, LATTICE_STITCH_PARAMS, stitchLattice, watertightLatticeMesh } from '../src/node/3d-engine/staged-location/pipeline-k/lattice-stitch';
+import { parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { ensureRemeshPolishBinary } from '../src/node/3d-engine/staged-location/remesh-polish-native';
 import { writeStagedGlbFile, type StagedGlbNode } from '../src/node/3d-engine/staged-location/staged-glb-writer';
@@ -124,5 +127,39 @@ describe('lattice cut and stitch: native against TypeScript', () => {
         expect(Buffer.compare(nat.out.clay, ts.out.clay)).toBe(0);
         expect(Buffer.compare(nat.out.others[0], ts.out.others[0])).toBe(0);
         console.log(`lattice stitch round, ${ts.out.report.segments} segments (${ts.out.report.stitched} stitched, ${ts.out.report.cornersZipped} corners zipped): TypeScript ${ts.ms.toFixed(0)} ms, native ${nat.ms.toFixed(0)} ms`);
+    }, 300_000);
+
+    // a footprint that crosses the box: its left 2 m and a corner of its front outside, a notch in the back
+    const FOOTPRINT: Array<[number, number]> = [[2, -0.5], [9, -0.5], [9, 1.5], [11, 1.5], [11, -0.5], [16.5, -0.5], [16.5, 9], [13, 12.5], [2, 12.5]];
+
+    it('clips the scan to the footprint the same, at every margin', () => {
+        for (const margin of [0, 0.3]) {
+            const ts = withNative('0', () => clipToFootprint(Uint8Array.from(scan), [FOOTPRINT], margin));
+            const nat = withNative('1', () => clipToFootprint(Uint8Array.from(scan), [FOOTPRINT], margin));
+            expect(ts.out.report.cutTriangles).toBeGreaterThan(10);
+            expect(ts.out.report.removedTriangles).toBeGreaterThan(10);
+            expect(nat.out.report).toEqual(ts.out.report);
+            expect(Buffer.compare(nat.out.glb, ts.out.glb)).toBe(0);
+            console.log(`footprint clip (${margin} m), ${ts.out.report.cutTriangles} triangles cut, ${ts.out.report.removedTriangles} removed: TypeScript ${ts.ms.toFixed(0)} ms, native ${nat.ms.toFixed(0)} ms`);
+        }
+    }, 300_000);
+
+    it('textures the fill the same: on a rebuilt wall, at its corners, continued from a wall, or clay', () => {
+        // the walls rebuilt over the cut scan, the twin's with their photos; the clip opens the base and the left
+        const sealed = facades.map(d => ({ ...d, r: { ...d.r, ...watertightLatticeMesh(d.f, d.r) } }));
+        const textured = sealed.map(d => ({ ...d, png: encodePng(d.f.width, d.f.height, photo(d.f).rgba, 4) }));
+        const cut = cutScanToLattice(Uint8Array.from(scan), sealed).glb;
+        const clay = clipToFootprint(applyFacadeLattices(cut, sealed, false, undefined, { removeScan: false }).glb, [FOOTPRINT], 0.3).glb;
+        const twin = clipToFootprint(applyFacadeLattices(cut, textured, true, undefined, { removeScan: false }).glb, [FOOTPRINT], 0.3).glb;
+        const fill = () => fillOpenLoops(Uint8Array.from(clay), [Uint8Array.from(twin)], { footprint: [FOOTPRINT] });
+        const ts = withNative('0', fill), nat = withNative('1', fill);
+        const seal = (glb: Buffer) => parseGlbBytes(glb).json.nodes.find((n: any) => n.extras?.sbSeal)?.extras.sbSeal;
+        const routes = seal(ts.out.others[0]);
+        expect(routes.wallInfill + routes.cornerTextured + routes.continued).toBeGreaterThan(0);
+        expect(nat.out.report).toEqual(ts.out.report);
+        expect(seal(nat.out.others[0])).toEqual(routes);
+        expect(Buffer.compare(nat.out.clay, ts.out.clay)).toBe(0);
+        expect(Buffer.compare(nat.out.others[0], ts.out.others[0])).toBe(0);
+        console.log(`fill textured, ${routes.wallInfill} pieces on a wall, ${routes.cornerTextured} at their corners, ${routes.continued} continued, ${routes.clay} clay: TypeScript ${ts.ms.toFixed(0)} ms, native ${nat.ms.toFixed(0)} ms`);
     }, 300_000);
 });
