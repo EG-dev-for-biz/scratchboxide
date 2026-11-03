@@ -180,8 +180,8 @@ async function warm(root: string): Promise<number> {
     const { ensureMaterialRegionsNativeBinary } = await import('./pipeline-k/native/material-regions-native');
     const { ensureNativeTwinBinary } = await import('./pipeline-k/native/twin-texels-native');
     const steps = [
-        // the Python module (the object builder's) is not on a chunk's path
-        ...nativeWarmupSteps(root).filter(s => !s.name.startsWith('scratchbox_native')),
+        // the Python module too: material regions prepare the library maps with it
+        ...nativeWarmupSteps(root),
         { name: 'tile_seam_weld', run: async () => { await ensureTileSeamWeldBinary(root); } },
         { name: 'relief_band', run: async () => { await ensureReliefBandBinary(root); } },
         { name: 'residual_audit', run: async () => { await ensureResidualAuditBinary(root); } },
