@@ -3073,8 +3073,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const upwardLift = kTwin && kdDistrict ? Math.max(0, Math.min(1, Number(process.env.SCRATCHBOX_KD_UPWARD_LIFT?.trim() || 0) || 0)) : 0;
                 // the image-model party wall: off by default (user decision, 2026-10-28: the tiled wall did not work; the clip and infill close the side), SCRATCHBOX_K_PARTY_WALL_TEXTURE=1 or the node graph on
                 const partyWallOn = kTwin && stepOn('twin.partyWall', process.env.SCRATCHBOX_K_PARTY_WALL_TEXTURE?.trim() === '1');
-                // pipeline K's material regions: only with the app's texture library (deps.pipelineK), and off for now (user decision,
-                // 2026-10-28: the openings' finishes are not calculated correctly); SCRATCHBOX_K_MATERIAL_REGIONS=1 on
+                // pipeline K's material regions: only with the app's texture library (deps.pipelineK); on again since the user's
+                // decision of 2026-10-30 (off 2026-10-28 to 10-30 while the openings' finishes were wrong); SCRATCHBOX_K_MATERIAL_REGIONS=0 off
                 const materialSets = kTwin && stepOn('twin.materials', process.env.SCRATCHBOX_K_MATERIAL_REGIONS?.trim() !== '0') ? deps.pipelineK?.materialSets : undefined;
                 if (kTwin && !materialSets) logStep('twin.materials', 'skipped');
                 // the swatch detail bake: the building's survey swatches (AI Beautify, one image call per station) baked into the
