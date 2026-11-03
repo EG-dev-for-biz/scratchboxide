@@ -68,7 +68,7 @@ export function libraryRepoRoot(): string {
 /** One set per class, in class order. Throws with the reason when the library cannot give one. */
 export async function resolveRegionSets(classes: RegionClass[], opts: {
     repoRoot?: string; signal?: AbortSignal; progress?: (m: string) => void;
-    /** The pick by appearance (material-choice.ts): given each class's nearest candidates with their previews, the 1-based one per class that looks like it (0 or none: the ranking's nearest). */
+    /** The pick by appearance (material-choice.ts): given each class's nearest candidates with their previews, the 1-based one per class that looks like it (0 or none: the ranking's nearest; a pick kept for an earlier class that looked the same says so in `reused`). */
     choose?: (rows: ChoiceRow[]) => Promise<Array<SetChoice | undefined>>;
 } = {}): Promise<RegionSet[]> {
     const repoRoot = opts.repoRoot ?? libraryRepoRoot();
@@ -181,7 +181,7 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         const files = prepared.get(hit.entry.id)!;
         return {
             name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
-            ...(choices[k] ? { choice: { candidates: choices[k]!.candidates, by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick?.seen ? { seen: choices[k]!.pick!.seen } : {}), ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}), ...(choices[k]!.why ? { why: choices[k]!.why } : {}) } } : {}),
+            ...(choices[k] ? { choice: { candidates: choices[k]!.candidates, by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick?.seen ? { seen: choices[k]!.pick!.seen } : {}), ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}), ...(choices[k]!.pick?.reused ? { reused: choices[k]!.pick!.reused } : {}), ...(choices[k]!.why ? { why: choices[k]!.why } : {}) } } : {}),
             ...(textured.has(k) ? { harvest: { ...textured.get(k)!, classEnergy: classes[k].texture!.energy, texelM: classes[k].texture!.texelM, grain: `generated: the set's detail finer than the tile's ${Math.round(classes[k].texture!.texelM * 100)} cm texel is its own, below the tile's resolution` } } : {}),
             normal: decodeImageInMemory(fs.readFileSync(files.normal)), orm: decodeImageInMemory(fs.readFileSync(files.orm))
         };

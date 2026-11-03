@@ -27,7 +27,8 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as v8 from 'v8';
-import { Worker } from 'worker_threads';
+import { MessageChannel, Worker } from 'worker_threads';
+import { serveCallBudget } from '../../gemini/model-call-budget';
 import { workerTsRegisterSource } from '../../worker-ts-register';
 import { isClientDisconnect, stagedRunRegistry } from './staged-run-registry';
 import type { CanvasArtifact } from '../../../browser/generative-canvas/canvas-types';
@@ -403,7 +404,8 @@ require(workerData.entry);
  * runStagedLocation on its own worker thread, with services it makes itself (createStagedLocationDeps on `root`): the
  * same events, outcome and errors, while the server's main thread stays free to stream the chat and serve the layers
  * already committed. The worker gets the server's own heap limit; the signal stops it (the build ends as stopped, and
- * the worker is terminated if it has not ended a few seconds later).
+ * the worker is terminated if it has not ended a few seconds later). Its model calls are kept to this thread's call
+ * budget (model-call-budget.ts serveCallBudget), so every build in the process shares one.
  */
 export function runStagedLocationOffThread(request: StagedLocationRequest, root: string, runId: string | undefined, ctx: StagedLocationContext): Promise<StagedLocationOutcome> {
     const dir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
@@ -412,15 +414,20 @@ export function runStagedLocationOffThread(request: StagedLocationRequest, root:
     const heapMb = Math.floor(v8.getHeapStatistics().heap_size_limit / (1024 * 1024));
     return new Promise<StagedLocationOutcome>((resolve, reject) => {
         let settled = false, killTimer: NodeJS.Timeout | undefined;
+        const budget = new MessageChannel();
+        serveCallBudget(budget.port1);
         const w = new Worker(STAGED_WORKER_BOOTSTRAP, {
             eval: true, resourceLimits: { maxOldGenerationSizeMb: heapMb },
             workerData: {
-                entry, request, root, runId,
+                entry, request, root, runId, modelCallBudget: budget.port2,
                 ...(ctx.remainingMs ? { deadlineAt: Date.now() + ctx.remainingMs() } : {}),
                 ...(ctx.activeArtifact ? { activeArtifact: ctx.activeArtifact } : {}),
                 ...(ctx.retry ? { retry: ctx.retry } : {}), ...(ctx.resume ? { resume: ctx.resume } : {})
-            }
+            },
+            transferList: [budget.port2]
         });
+        // the worker's turns are let go when it ends, whichever way
+        w.once('exit', () => budget.port1.close());
         const finish = (fn: () => void) => {
             if (settled) return;
             settled = true;
