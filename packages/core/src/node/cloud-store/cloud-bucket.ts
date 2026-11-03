@@ -42,6 +42,26 @@ export interface CloudBucket {
     remove(key: string): Promise<void>;
 }
 
+/**
+ * A bucket that can say which generation of an object it read and write only over that generation: a compare-and-swap,
+ * so one writer at a time can hold a lease on an object (the place store's manifest, place-store.ts). A generation is an
+ * opaque string that changes on every write; NO_GENERATION names an object that does not exist yet.
+ */
+export interface VersionedCloudBucket extends CloudBucket {
+    /** Writes the object to `file` and returns the generation it was read at; undefined when there is no such object. */
+    downloadVersioned(key: string, file: string): Promise<string | undefined>;
+    /** Writes `file` only when the object is still at `generation`: its new generation, or 'conflict' when it is not. */
+    putFileIfGeneration(key: string, file: string, generation: string, opts?: Omit<PutFileOptions, 'onlyIfAbsent'>): Promise<{ generation: string } | 'conflict'>;
+}
+
+/** The generation of an object that does not exist (GCS's ifGenerationMatch: 0). */
+export const NO_GENERATION = '0';
+
+export function isVersionedBucket(bucket: CloudBucket | undefined): bucket is VersionedCloudBucket {
+    const b = bucket as Partial<VersionedCloudBucket> | undefined;
+    return typeof b?.downloadVersioned === 'function' && typeof b.putFileIfGeneration === 'function';
+}
+
 const KEY = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
 
 function assertKey(key: string): void {
@@ -56,7 +76,7 @@ function errorCode(err: unknown): number | undefined {
 }
 
 /** Google Cloud Storage, authenticated with the app's service account. */
-export class GcsCloudBucket implements CloudBucket {
+export class GcsCloudBucket implements VersionedCloudBucket {
     readonly label: string;
 
     constructor(private readonly bucket: Bucket) {
@@ -91,6 +111,45 @@ export class GcsCloudBucket implements CloudBucket {
         }
     }
 
+    async downloadVersioned(key: string, file: string): Promise<string | undefined> {
+        assertKey(key);
+        // the generation first, then exactly that generation's bytes: a write in between makes the read a 404 (the
+        // generation is gone), and the read starts again at the new one
+        for (let attempt = 0; attempt < 4; attempt++) {
+            let generation: string;
+            try {
+                const [meta] = await this.bucket.file(key).getMetadata();
+                generation = String(meta.generation);
+            } catch (err) {
+                if (errorCode(err) === 404) return undefined;
+                throw err;
+            }
+            try {
+                await this.bucket.file(key, { generation }).download({ destination: file });
+                return generation;
+            } catch (err) {
+                if (errorCode(err) !== 404) throw err;
+            }
+        }
+        throw new Error(`cloud store: ${this.label}/${key} kept changing while it was read`);
+    }
+
+    async putFileIfGeneration(key: string, file: string, generation: string, opts: Omit<PutFileOptions, 'onlyIfAbsent'> = {}): Promise<{ generation: string } | 'conflict'> {
+        assertKey(key);
+        try {
+            const [written] = await this.bucket.upload(file, {
+                destination: key,
+                resumable: false,
+                metadata: { contentType: opts.contentType ?? 'application/octet-stream', metadata: opts.metadata ?? {} },
+                preconditionOpts: { ifGenerationMatch: Number(generation) }
+            });
+            return { generation: String(written.metadata.generation) };
+        } catch (err) {
+            if (errorCode(err) === 412) return 'conflict';
+            throw err;
+        }
+    }
+
     async list(prefix: string): Promise<CloudObject[]> {
         const [files] = await this.bucket.getFiles({ prefix, autoPaginate: true });
         return files.map(f => ({
@@ -107,8 +166,16 @@ export class GcsCloudBucket implements CloudBucket {
     }
 }
 
-/** A directory laid out like a bucket (a mounted share, or a temp dir under test); metadata sits in `<key>.meta.json`. */
-export class DirectoryCloudBucket implements CloudBucket {
+/** How long a directory bucket's write lock may stand before it is taken for a crashed writer's and broken (ms). */
+const DIRECTORY_LOCK_STALE_MS = 30_000;
+
+/**
+ * A directory laid out like a bucket (a mounted share, or a temp dir under test); metadata sits in `<key>.meta.json`,
+ * with the object's generation, which every write changes. A generation-matched write (and the read that gives the
+ * generation) holds `<key>.lock`, a directory, for the moment it takes: creating a directory is atomic on a local disk
+ * and on an SMB share alike.
+ */
+export class DirectoryCloudBucket implements VersionedCloudBucket {
     readonly label: string;
     private readonly root: string;
 
@@ -122,15 +189,68 @@ export class DirectoryCloudBucket implements CloudBucket {
         return path.join(this.root, ...key.split('/'));
     }
 
+    private async write(target: string, file: string, metadata: Record<string, string>): Promise<string> {
+        await fs.ensureDir(path.dirname(target));
+        const tmp = `${target}.tmp-${crypto.randomBytes(4).toString('hex')}`;
+        const generation = `${Date.now().toString(36)}-${crypto.randomBytes(6).toString('hex')}`;
+        await fs.copyFile(file, tmp);
+        await fs.writeJson(`${target}.meta.json`, { metadata, updatedMs: Date.now(), generation });
+        await fs.move(tmp, target, { overwrite: true });
+        return generation;
+    }
+
+    /** The object's generation; one written before generations were kept has its write time as one. */
+    private async generationOf(target: string): Promise<string | undefined> {
+        if (!(await fs.pathExists(target))) return undefined;
+        const meta = await fs.readJson(`${target}.meta.json`).catch(() => undefined);
+        return typeof meta?.generation === 'string' ? meta.generation : `t${Math.round((await fs.stat(target)).mtimeMs)}`;
+    }
+
+    private async locked<T>(target: string, run: () => Promise<T>): Promise<T> {
+        const lock = `${target}.lock`;
+        await fs.ensureDir(path.dirname(target));
+        for (let attempt = 0; ; attempt++) {
+            try {
+                await fs.mkdir(lock);
+                break;
+            } catch (err) {
+                if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') throw err;
+                const age = await fs.stat(lock).then(s => Date.now() - s.mtimeMs, () => 0);
+                if (age > DIRECTORY_LOCK_STALE_MS) { await fs.remove(lock); continue; }
+                if (attempt > 200) throw new Error(`cloud store: ${lock} stayed locked`);
+                await new Promise(r => setTimeout(r, 25));
+            }
+        }
+        try {
+            return await run();
+        } finally {
+            await fs.remove(lock);
+        }
+    }
+
     async putFile(key: string, file: string, opts: PutFileOptions = {}): Promise<'stored' | 'exists'> {
         const target = this.objectPath(key);
         if (opts.onlyIfAbsent && await fs.pathExists(target)) return 'exists';
-        await fs.ensureDir(path.dirname(target));
-        const tmp = `${target}.tmp-${crypto.randomBytes(4).toString('hex')}`;
-        await fs.copyFile(file, tmp);
-        await fs.writeJson(`${target}.meta.json`, { metadata: opts.metadata ?? {}, updatedMs: Date.now() });
-        await fs.move(tmp, target, { overwrite: true });
+        await this.write(target, file, opts.metadata ?? {});
         return 'stored';
+    }
+
+    async downloadVersioned(key: string, file: string): Promise<string | undefined> {
+        const source = this.objectPath(key);
+        return this.locked(source, async () => {
+            const generation = await this.generationOf(source);
+            if (generation === undefined) return undefined;
+            await fs.copyFile(source, file);
+            return generation;
+        });
+    }
+
+    async putFileIfGeneration(key: string, file: string, generation: string, opts: Omit<PutFileOptions, 'onlyIfAbsent'> = {}): Promise<{ generation: string } | 'conflict'> {
+        const target = this.objectPath(key);
+        return this.locked(target, async () => {
+            if ((await this.generationOf(target) ?? NO_GENERATION) !== generation) return 'conflict';
+            return { generation: await this.write(target, file, opts.metadata ?? {}) };
+        });
     }
 
     async download(key: string, file: string): Promise<boolean> {
