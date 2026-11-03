@@ -33,6 +33,10 @@
  *
  * Every added triangle uses existing vertices exactly (plus a fan's centre), so the result welds shut. The open edges
  * left are counted on the welded result and reported.
+ *
+ * The cut, the stitch's strips and the fill run natively by default (scratchbox_lattice_cut.hpp, scratchbox_lattice_stitch.hpp,
+ * scratchbox_open_loop_fill.hpp, through remesh-polish-native.ts), giving these functions' results bit for bit;
+ * SCRATCHBOX_K_NATIVE without `cut`, `stitch` or `infill` runs them here.
  */
 
 import { ShapeUtils, Vector2 } from 'three';
@@ -40,7 +44,7 @@ import type { Vec2 } from '../../../../common/spatial/staged-location-contracts'
 import { outsideFootprint, signedFootprintDistance } from './base-cleanup';
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor } from '../glb-bytes';
 import type { FacadeLatticeResult, ReliefFacade } from '../facade-lattice';
-import { nativePolishThreads, runNativeFill, type NativeFillPrim } from '../remesh-polish-native';
+import { nativePolishThreads, runNativeCut, runNativeFill, runNativeStitch, type NativeFillPrim } from '../remesh-polish-native';
 import { kNative } from './native/native-switch';
 
 export const LATTICE_STITCH_VERSION = 'lattice-stitch/21';
@@ -210,11 +214,34 @@ export function watertightLatticeMesh(f: ReliefFacade, r: FacadeLatticeResult): 
 
 export interface CutReport { cutTriangles: number; removedPieces: number; keptPieces: number }
 
+/** The native cut's parameters (scratchbox_lattice_cut.hpp Params). */
+export function cutParamVector(P: LatticeStitchParams): number[] {
+    return [P.depthBandM, P.cutFacingMin, P.cutKeepInside ? 1 : 0, P.cutSameFacing ? 1 : 0];
+}
+
+/** A removed triangle made degenerate in place: its last two indices set to its first. */
+function degenerate(dv: DataView, pr: PrimRead, t: number): void {
+    for (const e of [t + 1, t + 2]) { const o = pr.idxBase + e * pr.idxStride; if (pr.idxSize === 4) dv.setUint32(o, pr.I[t], true); else if (pr.idxSize === 2) dv.setUint16(o, pr.I[t], true); else dv.setUint8(o, pr.I[t]); }
+}
+
 /** The scan cut to the rebuilt cells: pieces inside them removed, the rest kept (exact cut edges, attributes carried). */
-export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: LatticeStitchParams = LATTICE_STITCH_PARAMS): { glb: Buffer; report: CutReport } {
+export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: LatticeStitchParams = LATTICE_STITCH_PARAMS, opts: { /** The native cut's threads (every core when none). */ threads?: number } = {}): { glb: Buffer; report: CutReport } {
     const glb = parseGlbBytes(bytes);
     const json = glb.json;
     const dv = new DataView(glb.bin.buffer, glb.bin.byteOffset, glb.bin.byteLength);
+    const extras = { sbLatticeCut: { version: LATTICE_STITCH_VERSION, provenance: 'as-scanned: the scan cut exactly to the rebuilt cells' } };
+    if (kNative('cut')) {
+        // natively: the same pieces, welded as appendPieces welds them
+        const prims = readPrims(glb);
+        const r = runNativeCut(cutParamVector(P), facades.map(({ f, r: x }) => ({ facadeId: f.facadeId, centroid: f.centroid, normal: f.normal, axisS: f.axisS, axisT: f.axisT, s: x.s, t: x.t, built: x.built })), prims.map(pr => ({ comps: pr.comps.slice(1), flags: pr.flags, normals: pr.names.map(n => n === 'NORMAL'), pos: pr.data[0], attr: pr.data.slice(1), I: pr.I })), opts.threads ?? nativePolishThreads());
+        const welded: WeldedPieces[] = [];
+        prims.forEach((pr, i) => {
+            const o = r.prims[i];
+            for (const t of o.cut) degenerate(dv, pr, t);
+            if (o.tris.length) welded.push({ pr, arrays: o.arrays, count: o.verts, min: o.min, max: o.max, tris: o.tris });
+        });
+        return { glb: appendWelded(glb, welded, extras), report: { cutTriangles: r.report.cutTriangles, removedPieces: r.report.removedPieces, keptPieces: r.report.keptPieces } };
+    }
     const report: CutReport = { cutTriangles: 0, removedPieces: 0, keptPieces: 0 };
     const frames = facades.map(({ f, r }) => ({ f, r, ns: r.s.length - 1, s0: r.s[0], s1: r.s[r.s.length - 1], t0: r.t[0], t1: r.t[r.t.length - 1] }));
     const appended: Array<{ pr: PrimRead; polys: Vx[][] }> = [];
@@ -258,41 +285,58 @@ export function cutScanToLattice(bytes: Uint8Array, facades: Facade[], P: Lattic
             if (!touched) continue;
             report.cutTriangles++;
             // the original goes; its kept pieces are appended
-            for (const e of [t + 1, t + 2]) { const o = pr.idxBase + e * pr.idxStride; if (pr.idxSize === 4) dv.setUint32(o, pr.I[t], true); else if (pr.idxSize === 2) dv.setUint16(o, pr.I[t], true); else dv.setUint8(o, pr.I[t]); }
+            degenerate(dv, pr, t);
             kept.push(...polys);
             report.keptPieces += polys.length;
         }
         if (kept.length) appended.push({ pr, polys: kept });
     }
-    return { glb: appendPieces(glb, appended, { sbLatticeCut: { version: LATTICE_STITCH_VERSION, provenance: 'as-scanned: the scan cut exactly to the rebuilt cells' } }), report };
+    return { glb: appendPieces(glb, appended, extras), report };
 }
+
+/** A source primitive's kept pieces welded: per attribute (POSITION first) its values, the positions' bounds, the triangles. */
+interface WeldedPieces { pr: PrimRead; arrays: Float32Array[]; count: number; min: number[]; max: number[]; tris: Uint32Array }
 
 /** The GLB with each source primitive's kept pieces appended as a new primitive (same material and attributes, `extras`). */
 export function appendPieces(glb: ReturnType<typeof parseGlbBytes>, appended: Array<{ pr: PrimRead; polys: Vx[][] }>, extras: Record<string, unknown>): Buffer {
+    // each primitive's pieces welded: one vertex per position and attributes
+    const welded = appended.map(({ pr, polys }): WeldedPieces => {
+        const index = new Map<string, number>(), verts: Vx[] = [], tris: number[] = [];
+        const idOf = (v: Vx) => { const k = `${v.key}|${Array.from(v.a).join(',')}`; let i = index.get(k); if (i === undefined) { i = verts.length; index.set(k, i); verts.push(v); } return i; };
+        for (const poly of polys) for (let k = 1; k + 1 < poly.length; k++) tris.push(idOf(poly[0]), idOf(poly[k]), idOf(poly[k + 1]));
+        const arrays = pr.comps.map((c, k) => {
+            const arr = new Float32Array(verts.length * c);
+            let off = 0;
+            for (let j = 0; j < k; j++) off += j === 0 ? 0 : pr.comps[j];
+            verts.forEach((v, i) => { for (let q = 0; q < c; q++) arr[i * c + q] = k === 0 ? v.p[q] : v.a[off + q]; });
+            return arr;
+        });
+        const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+        for (const v of verts) for (let q = 0; q < 3; q++) { mn[q] = Math.min(mn[q], v.p[q]); mx[q] = Math.max(mx[q], v.p[q]); }
+        return { pr, arrays, count: verts.length, min: mn, max: mx, tris: Uint32Array.from(tris) };
+    });
+    return appendWelded(glb, welded, extras);
+}
+
+/** The GLB with each primitive's welded pieces appended as a new primitive (same material and attributes, `extras`). */
+function appendWelded(glb: ReturnType<typeof parseGlbBytes>, welded: WeldedPieces[], extras: Record<string, unknown>): Buffer {
     const json = glb.json;
     // the kept pieces: one new primitive per source primitive, same material and attributes
     const chunks: Uint8Array[] = [glb.bin];
     let len = glb.bin.length;
     const push = (bytesArr: Uint8Array, target: number) => { const pad = (4 - (len % 4)) % 4; if (pad) { chunks.push(new Uint8Array(pad)); len += pad; } json.bufferViews.push({ buffer: 0, byteOffset: len, byteLength: bytesArr.length, target }); chunks.push(bytesArr); len += bytesArr.length; return json.bufferViews.length - 1; };
-    for (const { pr, polys } of appended) {
-        const index = new Map<string, number>(), verts: Vx[] = [], tris: number[] = [];
-        const idOf = (v: Vx) => { const k = `${v.key}|${Array.from(v.a).join(',')}`; let i = index.get(k); if (i === undefined) { i = verts.length; index.set(k, i); verts.push(v); } return i; };
-        for (const poly of polys) for (let k = 1; k + 1 < poly.length; k++) tris.push(idOf(poly[0]), idOf(poly[k]), idOf(poly[k + 1]));
+    for (const { pr, arrays, count, min, max, tris } of welded) {
         const src = json.meshes[pr.mesh].primitives[pr.prim];
         const attributes: Record<string, number> = {};
         const names = ['POSITION', ...pr.names];
         names.forEach((name, k) => {
-            const c = pr.comps[k], arr = new Float32Array(verts.length * c);
-            let off = 0;
-            for (let j = 0; j < k; j++) off += j === 0 ? 0 : pr.comps[j];
-            verts.forEach((v, i) => { for (let q = 0; q < c; q++) arr[i * c + q] = k === 0 ? v.p[q] : v.a[off + q]; });
-            const acc: any = { bufferView: push(new Uint8Array(arr.buffer), 34962), componentType: 5126, count: verts.length, type: c === 1 ? 'SCALAR' : `VEC${c}` };
-            if (k === 0) { const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity]; for (const v of verts) for (let q = 0; q < 3; q++) { mn[q] = Math.min(mn[q], v.p[q]); mx[q] = Math.max(mx[q], v.p[q]); } acc.min = mn; acc.max = mx; }
+            const c = pr.comps[k], arr = arrays[k];
+            const acc: any = { bufferView: push(new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength), 34962), componentType: 5126, count, type: c === 1 ? 'SCALAR' : `VEC${c}` };
+            if (k === 0) { acc.min = min; acc.max = max; }
             json.accessors.push(acc);
             attributes[name] = json.accessors.length - 1;
         });
-        const idx = Uint32Array.from(tris);
-        json.accessors.push({ bufferView: push(new Uint8Array(idx.buffer), 34963), componentType: 5125, count: idx.length, type: 'SCALAR' });
+        json.accessors.push({ bufferView: push(new Uint8Array(tris.buffer, tris.byteOffset, tris.byteLength), 34963), componentType: 5125, count: tris.length, type: 'SCALAR' });
         json.meshes[pr.mesh].primitives.push({ attributes, indices: json.accessors.length - 1, mode: 4, ...(src.material !== undefined ? { material: src.material } : {}), extras });
     }
     const pad = (4 - (len % 4)) % 4;
@@ -837,8 +881,30 @@ function appendTriangles(bytes: Uint8Array, tris: number[][][], name: string, me
 
 export interface StitchReport { segments: number; stitched: number; stripTriangles: number; cornersZipped: number; why: Record<string, number>; /** Outline edges joined to nothing (no strip, no corner zip): the cells beside them are left as scan (facade-lattice.ts). */ unjoined: number }
 
+/** The native stitch's parameters (scratchbox_lattice_stitch.hpp Params). */
+export function stitchParamVector(P: LatticeStitchParams): number[] {
+    return [P.weldM, P.onLineM, P.cornerGapM, P.depthBandM];
+}
+
+const STITCH_METHOD = 'the rebuilt walls stitched to the scan cut to them (a strip along each edge of a rebuilt outline, in its vertical plane) and to each other at the building\'s corners';
+
 /** The rebuilt walls' outlines stitched to the scan's cut, segment by segment, in each segment's vertical plane. */
-export function stitchLattice(clay: Uint8Array, others: Uint8Array[], facades: Facade[], P: LatticeStitchParams = LATTICE_STITCH_PARAMS): { clay: Buffer; others: Buffer[]; report: StitchReport; /** The rebuilt cells with an outline edge joined to nothing, per facade id: [a, b]. */ unjoinedCells: Map<number, Array<[number, number]>> } {
+export function stitchLattice(clay: Uint8Array, others: Uint8Array[], facades: Facade[], P: LatticeStitchParams = LATTICE_STITCH_PARAMS, opts: { /** The native stitch's threads (every core when none). */ threads?: number } = {}): { clay: Buffer; others: Buffer[]; report: StitchReport; /** The rebuilt cells with an outline edge joined to nothing, per facade id: [a, b]. */ unjoinedCells: Map<number, Array<[number, number]>> } {
+    if (kNative('stitch')) {
+        // natively: the same strips and zips, the same report; appended here
+        const g = parseGlbBytes(clay);
+        const wallMesh = new Map<number, number>();
+        for (const n of g.json.nodes ?? []) if (n.mesh !== undefined && n.extras?.sbFacadeLattice) wallMesh.set(n.mesh, n.extras.sbFacadeLattice.facadeId);
+        const prims: NativeFillPrim[] = [];
+        (g.json.meshes ?? []).forEach((m: any, mi: number) => {
+            for (const p of m.primitives ?? []) {
+                if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined) continue;
+                prims.push({ wall: wallMesh.get(mi) ?? -1, X: readAccessor(g, p.attributes.POSITION).data, ...(p.indices !== undefined ? { I: readAccessor(g, p.indices).data } : {}) });
+            }
+        });
+        const r = runNativeStitch(stitchParamVector(P), facades.map(({ f, r: x }) => ({ facadeId: f.facadeId, centroid: f.centroid, normal: f.normal, axisS: f.axisS, axisT: f.axisT, s: x.s, t: x.t, built: x.built, depth: x.depth.flat() })), prims, opts.threads ?? nativePolishThreads());
+        return { clay: appendTriangles(clay, r.out, 'LatticeStitch', STITCH_METHOD, false), others: others.map(o => appendTriangles(o, r.out, 'LatticeStitch', STITCH_METHOD, true)), report: r.report, unjoinedCells: r.unjoinedCells };
+    }
     const w = welded(clay, P);
     const open = openEdges(w.tris, undefined, true);
     const openVerts = new Set(open.flat());
@@ -956,8 +1022,7 @@ export function stitchLattice(clay: Uint8Array, others: Uint8Array[], facades: F
         const l = unjoinedCells.get(x.facadeId) ?? unjoinedCells.set(x.facadeId, []).get(x.facadeId)!;
         if (!l.some(c => c[0] === x.cell[0] && c[1] === x.cell[1])) l.push(x.cell);
     }
-    const method = 'the rebuilt walls stitched to the scan cut to them (a strip along each edge of a rebuilt outline, in its vertical plane) and to each other at the building\'s corners';
-    return { clay: appendTriangles(clay, out, 'LatticeStitch', method, false), others: others.map(o => appendTriangles(o, out, 'LatticeStitch', method, true)), report, unjoinedCells };
+    return { clay: appendTriangles(clay, out, 'LatticeStitch', STITCH_METHOD, false), others: others.map(o => appendTriangles(o, out, 'LatticeStitch', STITCH_METHOD, true)), report, unjoinedCells };
 }
 
 /** openBefore / openAfter: edges of an odd number of triangles (open); nonManifoldAfter: closed edges of four or more. */

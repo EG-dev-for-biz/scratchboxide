@@ -9,7 +9,7 @@
 
 /**
  * CLI of pipeline K's remesh-polish steps run natively on a fixed thread pool (packages/core/src/node/3d-engine/
- * staged-location/remesh-polish-native.ts drives it; SCRATCHBOX_K_NATIVE without window-fit, wall-grammar, lattice or infill keeps that step in TypeScript). Data
+ * staged-location/remesh-polish-native.ts drives it; SCRATCHBOX_K_NATIVE without window-fit, wall-grammar, lattice, cut, stitch or infill keeps that step in TypeScript). Data
  * arrives on stdin as raw little-endian buffers, a header then arrays, never PNG:
  *
  *   remesh_polish_native window-fit <threads>
@@ -54,6 +54,21 @@
  *     out: per wall in order, u32 nu, u32 ny, f64 covered cells, u32 nBays, per bay f64 u0, u1, y0, y1, u32 generated,
  *          then i8[nu] the columns' states.
  *
+ *   remesh_polish_native cut <threads>
+ *     in:  "SBCT" u32 version (1), u32 nParams, f64[nParams] (scratchbox_lattice_cut.hpp Params), u32 nFacades, per facade
+ *          i32 id, f64[12] centroid, normal, axisS, axisT, u32 n, f64[n] s, u32 n, f64[n] t, u8[cells] built; u32 nPrims,
+ *          per primitive u32 nAttr, per attribute i32 comps, u32 flag, u32 normal; u32 nVerts, f64[nVerts*3] positions,
+ *          per attribute f64[nVerts*comps], u32 n, u32[n] indices.
+ *     out: f64 cutTriangles, removedPieces, keptPieces; per primitive u32 n, u32[n] the cut triangles' first index slots,
+ *          u32 verts, f32[verts*3] positions, per attribute f32[verts*comps], f64[3] min, f64[3] max, u32 n, u32[n] indices.
+ *
+ *   remesh_polish_native stitch <threads>
+ *     in:  "SBST" u32 version (1), u32 nParams, f64[nParams] (scratchbox_lattice_stitch.hpp Params), u32 nFacades, per
+ *          facade i32 id, f64[12] centroid, normal, axisS, axisT, u32 n, f64[n] s, u32 n, f64[n] t, f64[cells] depths,
+ *          u8[cells] built; u32 nPrims, per primitive i32 wall, u32 nVerts, f64[nVerts*3], u32 indexed, u32 n, u32[n].
+ *     out: f64 segments, stitched, stripTriangles, cornersZipped, unjoined; u32 n, per reason str, f64 count; u32 n, per
+ *          facade i32 id, u32 cells, i32[2*cells]; u32 nOut, f64[nOut*9] the strips' and zips' triangles.
+ *
  * Build: clang++ -std=c++20 -O3 -I packages/core/src/native/3d-engine/include scripts/remesh_polish_native.cpp -o build/3d-native/remesh_polish_native -lz
  */
 
@@ -61,6 +76,8 @@
 #include "scratchbox_open_loop_fill.hpp"
 #include "scratchbox_facade_lattice.hpp"
 #include "scratchbox_wall_grammar.hpp"
+#include "scratchbox_lattice_cut.hpp"
+#include "scratchbox_lattice_stitch.hpp"
 #include "scratchbox_thread_pool.hpp"
 
 #include <chrono>
@@ -357,11 +374,101 @@ int wallGrammar(unsigned threads) {
     return 0;
 }
 
+int cut(unsigned threads) {
+    expectMagic("SBCT", 1);
+    const auto params = lattice_cut::Params::from(readDoubles(readOne<uint32_t>()));
+    std::vector<lattice_cut::Facade> facades(readOne<uint32_t>());
+    for (auto& f : facades) {
+        f.facadeId = readOne<int32_t>();
+        const auto v = readDoubles(12);
+        for (int k = 0; k < 3; ++k) { f.centroid[k] = v[k]; f.normal[k] = v[3 + k]; f.axisS[k] = v[6 + k]; f.axisT[k] = v[9 + k]; }
+        f.s = readDoubles(readOne<uint32_t>());
+        f.t = readDoubles(readOne<uint32_t>());
+        if (f.s.size() < 2 || f.t.size() < 2) throw std::runtime_error("a rebuilt facade needs two lines each way");
+        f.built.resize((f.s.size() - 1) * (f.t.size() - 1));
+        readExact(f.built.data(), f.built.size());
+    }
+    std::vector<lattice_cut::Prim> prims(readOne<uint32_t>());
+    for (auto& p : prims) {
+        const uint32_t nAttr = readOne<uint32_t>();
+        for (uint32_t k = 0; k < nAttr; ++k) {
+            p.comps.push_back(readOne<int32_t>());
+            p.flag.push_back(readOne<uint32_t>() != 0 ? 1 : 0);
+            p.normal.push_back(readOne<uint32_t>() != 0 ? 1 : 0);
+        }
+        const uint32_t nVerts = readOne<uint32_t>();
+        p.pos = readDoubles(static_cast<size_t>(nVerts) * 3);
+        for (uint32_t k = 0; k < nAttr; ++k) p.attr.push_back(readDoubles(static_cast<size_t>(nVerts) * static_cast<size_t>(p.comps[k])));
+        p.I.resize(readOne<uint32_t>());
+        if (!p.I.empty()) readExact(p.I.data(), p.I.size() * sizeof(uint32_t));
+        for (uint32_t i : p.I) if (i >= nVerts) throw std::runtime_error("an index past the primitive's vertices");
+    }
+    FixedThreadPool pool(threads);
+    lattice_cut::Report report;
+    const auto outs = lattice_cut::cut(prims, facades, params, pool, report);
+    writeOne<double>(report.cutTriangles);
+    writeOne<double>(report.removedPieces);
+    writeOne<double>(report.keptPieces);
+    for (const auto& o : outs) {
+        writeArray(o.cut);
+        writeOne<uint32_t>(static_cast<uint32_t>(o.verts));
+        writeExact(o.pos.data(), o.pos.size() * sizeof(float));
+        for (const auto& a : o.attr) writeExact(a.data(), a.size() * sizeof(float));
+        writeExact(o.mn.data(), sizeof(double) * 3);
+        writeExact(o.mx.data(), sizeof(double) * 3);
+        writeArray(o.tris);
+    }
+    std::fflush(stdout);
+    return 0;
+}
+
+int stitch(unsigned threads) {
+    expectMagic("SBST", 1);
+    const auto params = lattice_stitch::Params::from(readDoubles(readOne<uint32_t>()));
+    std::vector<lattice_stitch::Facade> facades(readOne<uint32_t>());
+    for (auto& f : facades) {
+        f.facadeId = readOne<int32_t>();
+        const auto v = readDoubles(12);
+        for (int k = 0; k < 3; ++k) { f.centroid[k] = v[k]; f.normal[k] = v[3 + k]; f.axisS[k] = v[6 + k]; f.axisT[k] = v[9 + k]; }
+        f.s = readDoubles(readOne<uint32_t>());
+        f.t = readDoubles(readOne<uint32_t>());
+        if (f.s.size() < 2 || f.t.size() < 2) throw std::runtime_error("a rebuilt facade needs two lines each way");
+        const size_t cells = (f.s.size() - 1) * (f.t.size() - 1);
+        f.depth = readDoubles(cells);
+        f.built.resize(cells);
+        readExact(f.built.data(), cells);
+    }
+    std::vector<lattice_stitch::Prim> prims(readOne<uint32_t>());
+    for (auto& p : prims) {
+        p.wall = readOne<int32_t>();
+        p.X = readDoubles(static_cast<size_t>(readOne<uint32_t>()) * 3);
+        p.indexed = readOne<uint32_t>() != 0;
+        p.I.resize(readOne<uint32_t>());
+        if (!p.I.empty()) readExact(p.I.data(), p.I.size() * sizeof(uint32_t));
+        for (uint32_t i : p.I) if (static_cast<size_t>(i) * 3 >= p.X.size()) throw std::runtime_error("an index past the primitive's vertices");
+    }
+    FixedThreadPool pool(threads);
+    const auto r = lattice_stitch::stitch(prims, facades, params, pool);
+    for (double v : {r.segments, r.stitched, r.stripTriangles, r.cornersZipped, r.unjoined}) writeOne<double>(v);
+    writeOne<uint32_t>(static_cast<uint32_t>(r.why.size()));
+    for (const auto& [k, n] : r.why) { writeString(k); writeOne<double>(n); }
+    writeOne<uint32_t>(static_cast<uint32_t>(r.unjoinedCells.size()));
+    for (const auto& [id, cells] : r.unjoinedCells) {
+        writeOne<int32_t>(id);
+        writeOne<uint32_t>(static_cast<uint32_t>(cells.size()));
+        for (const auto& c : cells) { writeOne<int32_t>(c[0]); writeOne<int32_t>(c[1]); }
+    }
+    writeOne<uint32_t>(static_cast<uint32_t>(r.out.size()));
+    for (const auto& t : r.out) for (const auto& p : t) writeExact(p.data(), sizeof(double) * 3);
+    std::fflush(stdout);
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|lattice|lattice-audit|wall-grammar <threads>  (binary input on stdin)\n");
+        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|lattice|lattice-audit|wall-grammar|cut|stitch <threads>  (binary input on stdin)\n");
         return 2;
     }
     const std::string cmd = argv[1];
@@ -372,6 +479,8 @@ int main(int argc, char** argv) {
         if (cmd == "lattice") return lattice(threads);
         if (cmd == "lattice-audit") return latticeAudit(threads);
         if (cmd == "wall-grammar") return wallGrammar(threads);
+        if (cmd == "cut") return cut(threads);
+        if (cmd == "stitch") return stitch(threads);
         std::fprintf(stderr, "unknown command %s\n", cmd.c_str());
         return 2;
     } catch (const std::exception& e) {
