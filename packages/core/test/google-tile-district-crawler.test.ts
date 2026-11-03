@@ -325,6 +325,29 @@ describe('GoogleTileDistrictCrawler: real leaf-tile district extraction', () => 
         expect(throttled).toBe(1);
     });
 
+    it('fetches a leaf again when the connection drops while its body is read, and never retries a stop', async () => {
+        const glb = makeLeafGlb([[0, 0, 0], [5, 0, 0], [0, 5, 0]], [0, 1, 2]);
+        const calls = new Map<string, number>();
+        const fakeFetch = (async (input: any) => {
+            const name = path.basename(new URL(String(input)).pathname);
+            calls.set(name, (calls.get(name) ?? 0) + 1);
+            if (name === 't1.glb' && calls.get(name) === 1) {
+                // headers arrive, then the far side closes the socket mid-body, as Google's front end now and then does
+                const body = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(glb.subarray(0, 8))); c.error(new TypeError('terminated')); } });
+                return new Response(body, { status: 200 });
+            }
+            if (name === 't2.glb') throw new DOMException('This operation was aborted', 'AbortError');
+            return new Response(glb, { status: 200 });
+        }) as typeof fetch;
+        const leaf = (i: number) => ({ id: `id${i}`, path: `/v1/3dtiles/datasets/X/files/t${i}.glb`, geometricError: 2, depth: 3, box: [] });
+        const crawler = new GoogleTileDistrictCrawler({ apiKey: 'K', fetchImpl: fakeFetch });
+        const bytes = await crawler.downloadLeaves([leaf(0), leaf(1)], 'S');
+        expect(bytes.map(b => b.equals(glb))).toEqual([true, true]);
+        expect(calls.get('t1.glb')).toBe(2);
+        await expect(crawler.downloadLeaves([leaf(2)], 'S')).rejects.toThrow(/aborted/);
+        expect(calls.get('t2.glb')).toBe(1);
+    });
+
     it('writes a commit: GLB plus a manifest with anchor, frame, attribution, fetch time and a verified hash', async () => {
         const ground = makeLeafGlb([[-30, -30, 0], [30, -30, 0], [-30, 30, 0], [30, 30, 0]], [0, 1, 2, 2, 1, 3]);
         const result = GoogleTileDistrictCrawler.buildDistrictGlb([GoogleTileDistrictCrawler.parseLeafGlb(ground)], { lat: ANCHOR.lat, lng: ANCHOR.lng, heightGuessM: GROUND_H });
