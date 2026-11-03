@@ -151,7 +151,7 @@ export const GOOGLE_3D_TILES_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 radiusMeters: {
                     type: 'NUMBER',
-                    description: 'Extraction radius in metres around the anchor (default 250). The nearest 524 leaf tiles are kept; when the radius holds more, the result reports the smaller radius actually covered (coveredRadiusMeters, truncated). A radius that selects more than 6000 leaf tiles fails.'
+                    description: 'Extraction radius in metres around the anchor (default 250). Every leaf tile whose plan footprint the radius touches is kept, at any height; when a cap keeps fewer, the result reports the smaller radius actually covered (coveredRadiusMeters, truncated). A radius that selects more than 6000 leaf tiles fails.'
                 },
                 stageIntoActiveScene: {
                     type: 'BOOLEAN',
