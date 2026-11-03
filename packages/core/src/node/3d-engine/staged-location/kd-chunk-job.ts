@@ -173,6 +173,12 @@ async function warm(root: string): Promise<number> {
     const { ensureResidualAuditBinary } = await import('./residual-audit');
     const { ensureRevolutionBinary } = await import('./revolution-fit');
     const { ensureUvAtlasBinary } = await import('./texture-uv');
+    // pipeline K's native ports (pipeline-k/native/, remesh-polish-native.ts), built where they run, as they run them
+    const { ensureRemeshPolishBinary } = await import('./remesh-polish-native');
+    const { ensureOrthoRectifyBinary } = await import('./pipeline-k/native/ortho-rectify-native');
+    const { ensureTemplateMatchBinary } = await import('./pipeline-k/native/template-match-native');
+    const { ensureMaterialRegionsNativeBinary } = await import('./pipeline-k/native/material-regions-native');
+    const { ensureNativeTwinBinary } = await import('./pipeline-k/native/twin-texels-native');
     const steps = [
         // the Python module (the object builder's) is not on a chunk's path
         ...nativeWarmupSteps(root).filter(s => !s.name.startsWith('scratchbox_native')),
@@ -180,7 +186,12 @@ async function warm(root: string): Promise<number> {
         { name: 'relief_band', run: async () => { await ensureReliefBandBinary(root); } },
         { name: 'residual_audit', run: async () => { await ensureResidualAuditBinary(root); } },
         { name: 'revolution_fit', run: async () => { await ensureRevolutionBinary(root); } },
-        { name: 'uv_atlas', run: async () => { await ensureUvAtlasBinary(); } }
+        { name: 'uv_atlas', run: async () => { await ensureUvAtlasBinary(); } },
+        { name: 'remesh_polish_native', run: async () => { await ensureRemeshPolishBinary(); } },
+        { name: 'ortho_rectify_native', run: async () => { await ensureOrthoRectifyBinary(); } },
+        { name: 'template_match_native', run: async () => { await ensureTemplateMatchBinary(); } },
+        { name: 'material_regions_native', run: async () => { await ensureMaterialRegionsNativeBinary(); } },
+        { name: 'twin_texels', run: async () => { await ensureNativeTwinBinary(); } }
     ];
     const report = await warmNativeEngine(root, { steps, env: {} });
     const failed = report.steps.filter(s => !s.ok || s.note);

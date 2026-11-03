@@ -1,8 +1,9 @@
 # Pipeline K-D chunk job (packages/core/src/node/3d-engine/staged-location/kd-chunk-job.ts): one district chunk a task.
 # Built by Cloud Build (cloudbuild.yaml) from a `git archive` of one commit (deploy.sh build), tagged with that commit.
-FROM node:22-bookworm
+FROM node:22-trixie
 
-# clang for the native engine (C++20, -O3, never -march=native: the task's CPU is not the build machine's);
+# clang for the native engine (C++20, -O3, never -march=native: the task's CPU is not the build machine's): trixie's
+# clang 19, since bookworm's clang 14 rejects C++20 the native kernels use (a lambda capturing a structured binding);
 # python3 with numpy and OpenCV for the photo-tier rectify the orchestrator spawns
 RUN apt-get update \
  && apt-get install -y --no-install-recommends clang zlib1g-dev python3 python3-numpy python3-opencv ca-certificates \
