@@ -3482,7 +3482,22 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // neighbour are generated (the tile's mean colour) and said so, one record per kind
                     const degradations: DegradationRecord[] = [];
                     const fill = r.stats?.fill;
-                    for (const kind of ['cap', 'skirt'] as const) {
+                    // refilled by the surface infill (strip-infill.ts): a piece is coloured, not sampled, only where no rung of
+                    // its ladder passed the seam gate (the least bad attempt kept, labelled generated)
+                    const infill = r.stats?.infill;
+                    if (infill) for (const kind of ['cap', 'skirt'] as const) {
+                        const failed = Number(infill.gateFailed?.[kind] ?? 0);
+                        if (!failed) continue;
+                        degradations.push(run.degrade(record('trees-measure', 'strip_fill_generated', {
+                            part: { description: kind === 'cap' ? 'the ground closed where trees were removed' : 'the walls closed down to the ground where trees were removed' },
+                            intended: 'texels continued or synthesised from the closed surface\'s own photo, passing the seam gate',
+                            fellTo: `the attempt that failed the seam gate least (generated) on ${failed} piece${failed === 1 ? '' : 's'} (${Number(infill.gateFailed.areaM2 ?? 0).toFixed(1)} m² of caps and skirts together)`,
+                            provenanceAfter: 'generated',
+                            reason: `no rung of the surface infill passed the seam gate there (its join, detail, structure or repeat bar): the fill is kept, labelled generated, its failures in the GLB's sbInfill`,
+                            transient: false, runId, now: now(), suffix: kind
+                        })));
+                    }
+                    if (!infill) for (const kind of ['cap', 'skirt'] as const) {
                         const k = fill?.[kind];
                         const generatedArea = Number(k?.generatedAreaM2 ?? 0), pieces = Number(k?.piecesGenerated ?? 0);
                         if (!(fill?.enabled && pieces > 0 && generatedArea > 0.05)) continue;

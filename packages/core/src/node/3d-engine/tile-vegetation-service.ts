@@ -47,6 +47,7 @@ import { resolveWithinRoot } from '../security/path-guard';
 import { buildNativeIfStale } from './native-build';
 import { implausibleLayerBounds } from './layer-bounds-guard';
 import { glbWorldBounds } from './part-connectivity';
+import { refillStripPieces, stripInfillEnabled, STRIP_INFILL_VERSION } from './staged-location/strip-infill';
 
 /** Continuous strip parameters (metres, ratios); every one maps to a CLI flag of the same name in kebab case. */
 export interface TileVegetationStripParams {
@@ -745,6 +746,9 @@ export class TileVegetationService {
             .update(tileSha256).update('\0').update(JSON.stringify({ ...keyParams, topDown: !!req.topDown, seed, ...(roi ? { roi: roi.polygon, ...(roi.keep ? { keep: roi.keep } : {}) } : {}) }));
         hash.update('\0species\0');
         if (speciesIndex) sha256File(speciesIndex, hash);
+        // the caps and skirts refilled by the surface infill (strip-infill.ts) after the native strip
+        const refill = stripInfillEnabled();
+        hash.update(`\0infill\0${refill ? STRIP_INFILL_VERSION : 'off'}`);
         const key = hash.digest('hex');
         const outputs = ['devegetated.glb', 'removed_trees.glb', 'crowns.json', 'stats.json', ...(req.topDown ? ['topdown.png'] : [])];
         const res = await this.cached(key, outputs, async (dir, signal) => {
@@ -758,6 +762,17 @@ export class TileVegetationService {
             if (speciesIndex) args.push('--species-index', speciesIndex, '--species-index-label', TREE_SPECIES_INDEX);
             if (req.threads !== undefined) args.push('--threads', String(req.threads));
             await runFile(bin, args, timeoutMs, signal);
+            if (refill) {
+                // the strip's own fill (the nearest real texel's mirror, else the tile's mean colour) painted again from the
+                // closed surface's own photo by the surface infill; its report joins the strip's stats
+                const out = path.join(dir, 'devegetated.glb');
+                const r = await refillStripPieces(fs.readFileSync(out), { signal });
+                fs.writeFileSync(out, r.glb);
+                const statsFile = path.join(dir, 'stats.json');
+                const stats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
+                stats.infill = r.report;
+                fs.writeFileSync(statsFile, JSON.stringify(stats));
+            }
         }, (dir, cached) => ({
             devegetatedGlb: path.join(dir, 'devegetated.glb'),
             removedTreesGlb: path.join(dir, 'removed_trees.glb'),
