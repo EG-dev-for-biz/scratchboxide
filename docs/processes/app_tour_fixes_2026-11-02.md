@@ -77,3 +77,14 @@ The user approved: run on Node 22, sweep every worktree's models, and make a cha
 * **Cost of keeping:** the store holds 170 GB of clone blocks; deleting a worktree no longer frees the space of models it published. Moving cold blobs to the G-RAID volume would need the store to look there; not done.
 * **Checks:** typecheck exit 0; eslint 0 errors; 75 tests in 7 files (store, recovery service, recovery client, chat activity, viewport notices, SPA fallback) pass on Node 22 (CI's version), credentials unreachable.
 
+
+## 7. Merged with #12, the disk read first (2026-11-04)
+
+* **What changed:** #12 (main at `da280cfa`) reads disk's copy of the chats before the open chat is written, and can put disk's copy of the open chat in place of the browser's. Merged here as `0afc5d18`: nothing is written before the read, then only a real change is (a new message or artifact version), written as #12's `selectChatToWrite` gives it, with its ISO `updatedAt` (`chat-activity.ts` `chatChangeSince`).
+* **Instance used:** own launch entry on web `4110`, API `4111`, tools `4112`, with `SCRATCHBOX_STORE_BUCKET=off` (no cloud mirror of the test chats); two of the user's chats copied into the worktree's `desktop-app/.scratchbox/sessions`, deleted afterwards. No model call was made.
+* **Found live, fixed:**
+  * the read swapped disk's Empire State chat into a fresh profile after the chat was noted as opened, so the background visual check ran on its scene (it captured no frame, so nothing was billed) and the result rewrote the chat. The read now counts as opening the chat (`76f3890b`).
+  * a browser copy with disk's messages but another check result inside one of them was written on open, because the merge compared it with disk's by reference. The read now looks only for messages and versions disk lacks (`fd5e68c3`).
+* **Verified after the fixes:** two fresh-profile loads, a reload, a browser copy with a different check result, Open 3D and opening the other chat: both chat files byte-identical (shasum), no new check result. Launching the NLE demo saved its chat once (3 messages, `updatedAt` stamped), which moved to the top of the list as "now".
+* **Checks:** typecheck exit 0; eslint 0 errors; 51 tests in 9 files on Node 22 with credentials unreachable, including six new cases in `chat-disk-read.test.ts` that run #12's reducer and the write rule together.
+* **Note for later:** the chat's `artifactRefs` name a project revision held in the checkout that made it; opened in another checkout the scene is registered there as revision 1 and the message's ref is rewritten (a write). Seen only because the test chat was copied between checkouts.
