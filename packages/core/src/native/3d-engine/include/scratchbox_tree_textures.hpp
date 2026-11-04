@@ -36,6 +36,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -52,6 +53,7 @@ struct LeafEntry {
     RGB meanLinear{0, 0, 0};
     double leafLengthM{0}, leafWidthM{0};
     double fill{0.7};   // share of a leaf's cell box (length x width) its cut-out covers (index leaf.fill; 0.7 when absent)
+    double bladeWidthM{0};   // the width of its flat parts, 2 x area / outline (index leaf.bladeWidthM; 0 when not measured)
 };
 
 struct BarkEntry {
@@ -149,6 +151,7 @@ inline Library parseIndex(const std::string& text) {
         L.leafLengthM = detail::positive(e["leaf"]["lengthM"], L.id + ".leaf.lengthM");
         L.leafWidthM = detail::positive(e["leaf"]["widthM"], L.id + ".leaf.widthM");
         if (e["leaf"]["fill"].type == io::GlbJsonValue::Number && e["leaf"]["fill"].num > 0 && e["leaf"]["fill"].num <= 1) L.fill = e["leaf"]["fill"].num;
+        if (e["leaf"]["bladeWidthM"].type == io::GlbJsonValue::Number && e["leaf"]["bladeWidthM"].num > 0) L.bladeWidthM = e["leaf"]["bladeWidthM"].num;
         lib.leaves.push_back(L);
     }
     for (const auto& e : doc["bark"].arr) {
@@ -198,6 +201,8 @@ inline RGB leafOnPrior(const Library& lib) {
 struct TreeAppearance {
     MeasuredColour colour;
     double leafLengthHintM{0};  // the leaf (or frond) length the leaf set is chosen by when > 0 (a species entry's); else from the tree's size
+    double leafWidthHintM{0};   // the species leaf's blade width (bladeWidthOfLeaf) the leaf set is matched to when > 0: a needle or
+                                // scale leaf's millimetres pick a needle spray, a broad leaf's centimetres a leaf
     double heightM{0};          // apex above support
     double crownRadiusM{0};     // mean of the measured sector radii
     double trunkRadiusM{0};
@@ -212,6 +217,8 @@ struct ChoiceParams {
     double saturationSigmaLog{2.0};     // |ln(entry saturation / measured saturation)| that costs 1 (squared)
     double greySaturation{0.06};        // below this measured saturation the hue counts for proportionally less
     double leafSizeSigmaLog{0.35};      // |ln(entry length / target length)| that costs 1 (squared)
+    double bladeWidthSigmaLog{0.6};     // |ln(entry blade width / the species leaf's)| that costs 1 (squared)
+    double bladeWidthReach{3.0};        // a species leaf this many times thinner or wider than every entry's is not matched on width
     double leafPerHeight{0.0065};       // target leaf length: the geometric mean of leafPerHeight x height ...
     double leafPerCrownRadius{0.018};   // ... and leafPerCrownRadius x crown radius,
     double leafMinM{0.04}, leafMaxM{0.35};  // within these
@@ -233,12 +240,25 @@ struct Choice {
     RGB leafTint{1, 1, 1}, barkTint{1, 1, 1};
     RGB massColourLinear{0, 0, 0};       // the far level's leaf masses: the chosen leaves' mean colour under the tint
     double targetLeafLengthM{0};
+    double targetBladeWidthM{0};         // the species leaf's blade width the leaves were matched to (0: not used)
     double sizeShare{0};                 // 0 young .. 1 old (the bark's target)
     double targetRelief{0};
     double leafCost{0}, barkCost{0};
     bool colourMeasured{false};
     std::string colourSource{"none"};     // measured | neighbours | prior | none (MeasuredColour::source)
 };
+
+/**
+ * The blade width of a leaf `lengthM` long and `aspect` (width / length) wide, as leaf.bladeWidthM measures an atlas leaf:
+ * twice the area of the ellipse of that length and width over its perimeter (Ramanujan's). A 2 cm needle a tenth as wide is
+ * about 1.6 mm, an 11 cm oak leaf 0.6 as wide about 4 cm.
+ */
+inline double bladeWidthOfLeaf(double lengthM, double aspect) {
+    const double a = 0.5 * lengthM, b = 0.5 * lengthM * aspect;
+    if (!(a > 0) || !(b > 0)) return 0;
+    const double perimeter = 3.14159265358979323846 * (3.0 * (a + b) - std::sqrt((3.0 * a + b) * (a + 3.0 * b)));
+    return 2.0 * 3.14159265358979323846 * a * b / perimeter;
+}
 
 /** The target leaf length of a tree: in proportion to its height and to its crown radius (their geometric mean). */
 inline double targetLeafLength(const TreeAppearance& t, const ChoiceParams& C) {
@@ -268,11 +288,25 @@ inline Choice choose(const Library& lib, const TreeAppearance& t, const ChoicePa
         if (t.leafLengthHintM >= lo / 1.5 && t.leafLengthHintM <= hi * 1.5) hint = t.leafLengthHintM;
     }
     out.targetLeafLengthM = hint > 0 ? hint : targetLeafLength(t, C);
+    // the species leaf's blade width, when every entry is measured for its own and the width is within bladeWidthReach of
+    // theirs: the form of the foliage (a needle or scale leaf's millimetres against a leaf's centimetres), whatever the
+    // element's length
+    double widthHint = 0;
+    if (t.leafWidthHintM > 0 && !lib.leaves.empty()) {
+        double lo = std::numeric_limits<double>::infinity(), hi = 0;
+        for (const auto& e : lib.leaves) { lo = std::min(lo, e.bladeWidthM); hi = std::max(hi, e.bladeWidthM); }
+        if (lo > 0 && t.leafWidthHintM >= lo / C.bladeWidthReach && t.leafWidthHintM <= hi * C.bladeWidthReach) widthHint = t.leafWidthHintM;
+    }
+    out.targetBladeWidthM = widthHint;
     std::vector<double> lc(lib.leaves.size());
     for (size_t i = 0; i < lib.leaves.size(); ++i) {
         const auto& e = lib.leaves[i];
         const double dl = std::log(e.leafLengthM / out.targetLeafLengthM) / C.leafSizeSigmaLog;
         double cost = dl * dl;
+        if (widthHint > 0) {
+            const double dw = std::log(e.bladeWidthM / widthHint) / C.bladeWidthSigmaLog;
+            cost += dw * dw;
+        }
         if (t.colour.known) {
             const auto hw = hueSaturation(t.colour.meanLinear), he = hueSaturation(e.meanLinear);
             double dh = std::fmod(std::abs(he[0] - hw[0]), 360.0);

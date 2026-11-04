@@ -767,7 +767,9 @@ export interface TreeLodExtras {
 export interface TreeClusterExtras { clusterMesh: string; hashSeed: number }
 
 /** Leaf blade length (m) = clamp(sizeRatio * crownHeightM, minM, maxM). Continuous, so it scales with the tree. */
-export interface TreeLeafSizeModel { sizeRatioToCrownHeight: number; minM: number; maxM: number }
+/** Blade length = clamp(sizeRatioToCrownHeight x crown height, minM, maxM); with a leaf texture chosen, its leaf's real
+ *  length within [minM, atlasMaxM] (a needle spray's shoot draws at its own size). */
+export interface TreeLeafSizeModel { sizeRatioToCrownHeight: number; minM: number; maxM: number; atlasMaxM?: number }
 
 /** One shared cluster mesh: how many leaves it holds at the near level (leavesLevel0), the near-mid level (trees-lod/2) and the mid level (leavesLevel1). */
 export interface TreeClusterVariant { mesh: string; leavesLevel0: number; leavesNearMid?: number; leavesLevel1: number }
@@ -804,7 +806,8 @@ export interface TreeColourExtras {
  * the median of its planting's measured crowns ('neighbours'), or the library's leaf-on prior ('prior').
  */
 export interface TreeTextureExtras {
-    leaves: { entry: string; tint: [number, number, number]; leafLengthM: number; targetLeafLengthM: number; cost: number; provenance: 'library' };
+    /** bladeWidthM: the entry's measured blade width; targetBladeWidthM: the species leaf's it was matched to (0: not matched on width). */
+    leaves: { entry: string; tint: [number, number, number]; leafLengthM: number; targetLeafLengthM: number; bladeWidthM?: number; targetBladeWidthM?: number; cost: number; provenance: 'library' };
     bark: {
         entry: string; tint: [number, number, number]; tileM: [number, number]; reliefIndex: number; targetReliefIndex: number; sizeShare: number;
         cost: number; provenance: 'library';
@@ -1887,7 +1890,8 @@ const DEFINITIONS = {
         texture: obj(['leaves', 'bark', 'massColourLinear', 'colourProvenance'], {
             leaves: obj(['entry', 'tint', 'leafLengthM', 'targetLeafLengthM', 'cost', 'provenance'], {
                 entry: { type: 'string', minLength: 1 }, tint: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }), leafLengthM: { type: 'number', exclusiveMinimum: 0 },
-                targetLeafLengthM: { type: 'number', exclusiveMinimum: 0 }, cost: ref('nonneg'), provenance: { const: 'library' }
+                targetLeafLengthM: { type: 'number', exclusiveMinimum: 0 }, bladeWidthM: ref('nonneg'), targetBladeWidthM: ref('nonneg'),
+                cost: ref('nonneg'), provenance: { const: 'library' }
             }),
             bark: obj(['entry', 'tint', 'tileM', 'reliefIndex', 'targetReliefIndex', 'sizeShare', 'cost', 'provenance'], {
                 entry: { type: 'string', minLength: 1 }, tint: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }),
@@ -1911,7 +1915,8 @@ const DEFINITIONS = {
         clusterLibrary: obj(['variants', 'leafSizeModel'], {
             variants: arr(obj(['mesh', 'leavesLevel0', 'leavesLevel1'], { mesh: { type: 'string', minLength: 1 }, leavesLevel0: NONNEG_INT, leavesNearMid: NONNEG_INT, leavesLevel1: NONNEG_INT }), { minItems: 1 }),
             leafSizeModel: obj(['sizeRatioToCrownHeight', 'minM', 'maxM'], {
-                sizeRatioToCrownHeight: ref('nonneg'), minM: { type: 'number', exclusiveMinimum: 0 }, maxM: { type: 'number', exclusiveMinimum: 0 }
+                sizeRatioToCrownHeight: ref('nonneg'), minM: { type: 'number', exclusiveMinimum: 0 }, maxM: { type: 'number', exclusiveMinimum: 0 },
+                atlasMaxM: { type: 'number', exclusiveMinimum: 0 }
             }),
             leafCard: obj(['widthRatio', 'uv', 'leafAttribute'], { widthRatio: { type: 'number', exclusiveMinimum: 0 }, uv: STR, leafAttribute: STR })
         }),

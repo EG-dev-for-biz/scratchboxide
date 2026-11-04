@@ -64,7 +64,11 @@ describe('the mid level as crown cards', () => {
         work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tree-mid-lod-')));
         svc = new TileVegetationService({ workspaceRoot: work, repoRoot: REPO });
         await svc.ensureBinary();
-        fs.writeFileSync(path.join(work, 'crowns.json'), JSON.stringify({ version: 1, frame: { frame: 'x = east, y = up, z = south (metres)' }, params: { sampleSpacing: 0.7 }, crowns: CROWNS }));
+        // the card counts are compared at one growth form: the crowns are grown decurrent (no leader through the crown; the
+        // 6 m crown is pointed enough to grow excurrent by default, its foliage then in tiers), as a measurement records it
+        const growth = { excurrentApicalLo: 2, excurrentApicalHi: 3 };
+        fs.writeFileSync(path.join(work, 'crowns.json'), JSON.stringify({ version: 1, frame: { frame: 'x = east, y = up, z = south (metres)' }, params: { sampleSpacing: 0.7 },
+            growth, species: { index: 'assets/vegetation/species/index.json' }, crowns: CROWNS }));
         cards = await svc.plant({ crownsPath: 'crowns.json', triangleBudget: 14000, seed: 'abc' });
         clusters = await svc.plant({ crownsPath: 'crowns.json', triangleBudget: 14000, seed: 'abc', params: { crownCards: 0 } });
     }, 900_000);
