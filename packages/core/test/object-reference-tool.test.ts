@@ -28,7 +28,7 @@ import { withStagedMaterialMode } from '../src/browser/generative-canvas/primiti
 import { TerrainManager } from '../src/browser/generative-canvas/services/TerrainManager';
 import { glbToTriangleSoup, mergeTriangleSoups } from '../src/node/3d-engine/part-connectivity';
 import { renderReviewViews } from '../src/node/3d-engine/visual-review';
-import { REFERENCE_IMAGE_MODEL, buildObjectFromSpec, objectBuildSpecPatchJsonSchema, photoSpecJsonSchema, schemaInstruction, type ChatModelSource, type GenerateContentClient, type ReferenceObjectBuilderDeps } from '../src/node/3d-engine/reference-object-builder';
+import { REFERENCE_IMAGE_MODEL, buildObjectFromReference, buildObjectFromSpec, objectBuildSpecPatchJsonSchema, photoSpecJsonSchema, schemaInstruction, type ChatModelSource, type GenerateContentClient, type ReferenceObjectBuilderDeps } from '../src/node/3d-engine/reference-object-builder';
 import type { PhotoCutter } from '../src/node/3d-engine/photo-reference';
 import { SegmentTargetNotFoundError } from '../src/common/errors/pipeline-errors';
 import { decodePng } from '../src/node/texture-processing';
@@ -2250,6 +2250,35 @@ describe('build_3d_object_from_reference from a real photo', () => {
         // the live view shows the cut-out the spec read saw, not the photo
         expect(first.referenceUri).toMatch(/^data:image\/png;base64,/);
         expect(first.referenceUri).not.toContain(PHOTO_JPEG.toString('base64').slice(0, 200));
+    }, 180_000);
+
+    it('takes the photo in memory with the caller\'s own mask, a measured size and the read\'s notes (the street-objects entry)', async () => {
+        const client = fakeClient({ specs: [photoReply(BIN)] });
+        let cutterCalls = 0;
+        const result = await buildObjectFromReference({
+            request: 'weathered beige concrete trash can',
+            photo: { data: PHOTO_JPEG, mimeType: 'image/jpeg', source: 'Street View pano 2GCrQKIND0ZilG2zd2QY-Q (in memory)', mask: { mask: PHOTO_MASK, width: PHOTO_W, height: PHOTO_H, segmenter: 'street-objects segmenter mask' } },
+            dimensionsHintMeters: [0.6, 0.955, 0.63], sizeSource: 'measured in the scan (family row/277)', sizeLabel: 'measured',
+            hints: ['weathered beige concrete trash can', 'section exponent 4, aspect 1']
+        }, {
+            chat: chatSource(client), outputDir: path.join(TMP, 'build'), sleep: async () => undefined, styleReference: null,
+            cutPhoto: async () => { cutterCalls++; throw new Error('unused: the mask was given'); }
+        });
+        // nothing re-located or re-cut, and no image model asked
+        expect(cutterCalls).toBe(0);
+        expect(client.calls.filter(c => c.config?.responseModalities)).toEqual([]);
+        expect(result.photo).toMatchObject({ given: 'mask', segmenter: 'street-objects segmenter mask', source: 'Street View pano 2GCrQKIND0ZilG2zd2QY-Q (in memory)', outOfViewParts: ['backplate'] });
+        expect(result.photo!.locator).toBeUndefined();
+        expect(result.photo!.areaFraction).toBeCloseTo((35 * 80) / (PHOTO_W * PHOTO_H), 6);
+        // the read's notes reach the spec read as hints; the size is labelled measured, with its source
+        expect(askedText(client.calls.find(isSpecCall)!)).toContain('(hints, not measurements; where they disagree with the picture, the picture decides): weathered beige concrete trash can; section exponent 4, aspect 1');
+        expect(result.size).toMatchObject({ label: 'measured', hintMeters: [0.6, 0.955, 0.63], note: 'Sized to about 0.6 x 0.955 x 0.63 m (width x height x depth), measured in the scan (family row/277).' });
+        // returned unmounted: the GLB, its spec and each part's provenance
+        expect(result.glb.toString('utf8', 0, 4)).toBe('glTF');
+        expect(result.spec.parts.map(p => p.id)).toEqual(['body', 'lid', 'backplate']);
+        expect(result.materials).toMatchObject({ label: 'photo-inferred', generatedParts: ['backplate'] });
+        const json = JSON.parse(result.glb.toString('utf8', 20, 20 + result.glb.readUInt32LE(12)));
+        expect(json.asset.extras.scratchbox.sizeProvenance.label).toBe('measured');
     }, 180_000);
 
     it('declares the photo route for the agent', () => {

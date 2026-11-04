@@ -155,6 +155,8 @@ describe('the spec read of a photo build', () => {
         expect(drawn).toContain('the side facing the viewer');
         expect(drawn).not.toContain('photoView');
         expect(specConventions(undefined, { photo: true })).toContain('A photo has no scale');
+        expect(specConventions(undefined, { photo: true, hints: ['weathered beige concrete trash can', 'section exponent 4'] }))
+            .toContain('- Notes from another reading of photos of this object (hints, not measurements; where they disagree with the picture, the picture decides): weathered beige concrete trash can; section exponent 4');
     });
 });
 
@@ -173,6 +175,8 @@ describe('size of a photo build', () => {
         const est = describeSize({}, [0.6, 0.95, 0.6], { photo: true, visionModel: 'gemini-4-argon' });
         expect(est.label).toBe('generated');
         expect(est.note).toBe('A photo has no scale, and no size was given: gemini-4-argon estimated it from what such an object measures (generated).');
+        // a caller that measured it labels it so
+        expect(describeSize({ dimensionsHintMeters: [0.6, 0.91, 0.6], sizeSource: 'measured in the scan', sizeLabel: 'measured' }, [0.6, 0.91, 0.6], { photo: true }).label).toBe('measured');
     });
 });
 
@@ -233,5 +237,12 @@ describe('segmenterPhotoCutter', () => {
         expect(segmented[0].positive).toEqual([[0.5, 0.5]]);
         expect(segmented[0].negative).toEqual([[0.3, 0.5]]);
         expect(mask).toMatchObject({ width: 2, height: 2, areaFraction: 0.5, locator: { model: 'gemini-4-argon', label: 'green litter bin' }, segmenter: 'mediapipe-interactive-segmenter-legacy (magic_touch.tflite)' });
+
+        // with the caller's box, nobody is asked to find it: the segmenter cuts from that box
+        const fromBox = await cutter({ data: bytes, mimeType: 'image/jpeg' }, 'the green litter bin', undefined, { box: [0.1, 0.2, 0.3, 0.4] });
+        expect(asked).toHaveLength(1);
+        expect(segmented[1]).toMatchObject({ bytes, box: [0.1, 0.2, 0.3, 0.4] });
+        expect(segmented[1].positive).toBeUndefined();
+        expect(fromBox.locator).toBeUndefined();
     });
 });

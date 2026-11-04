@@ -145,11 +145,30 @@ export interface ReferenceObjectBuildRequest {
     heightHintMeters?: number;
     /** Where the size hint came from, in a few words (a measurement, the user's words); shown in the result and the GLB. */
     sizeSource?: string;
+    /** The size hint's provenance label, e.g. `measured` for a scan measurement (`as-given` when unset). */
+    sizeLabel?: string;
     /**
      * A real photograph of the object to build from, in place of a drawn reference: `target` (else the request) is
-     * found in it and cut out. Only a photograph: never an image a model drew or restyled.
+     * found in it and cut out. Only a photograph: never an image a model drew or restyled. A caller that already knows
+     * where the object is passes `box` (the segmenter cuts from it; no model is asked to find it) or `mask` (used as
+     * given). The bytes stay in memory throughout.
      */
-    photo?: { data: Buffer; mimeType: string; /** Where it came from, as the caller named it (shown in the result). */ source: string; target?: string };
+    photo?: {
+        data: Buffer;
+        mimeType: string;
+        /** Where it came from, as the caller named it (shown in the result). */
+        source: string;
+        target?: string;
+        /** The object's box in the photo, normalised [x0, y0, x1, y1]. */
+        box?: [number, number, number, number];
+        /** The object's mask (one byte a pixel, 1 for the object), at the photo's size or another, and what cut it. */
+        mask?: { mask: Uint8Array; width: number; height: number; segmenter?: string };
+    };
+    /**
+     * Notes on the object from another reading of its photos (what it is, its section, its colour bands), given to the
+     * spec read as hints; the picture decides where they disagree.
+     */
+    hints?: string[];
     /**
      * True when the user asked for clay (untextured grey): the reference is drawn as clay, no materials are read and
      * every part is studio clay. Otherwise each part gets the material read from a full-colour reference.
@@ -204,8 +223,10 @@ export interface SizeProvenance {
 export interface PhotoReferenceUse {
     source: string;
     target: string;
-    /** The vision model that boxed the object, and its words for what it found. */
+    /** The vision model that boxed the object, and its words for what it found (absent when the caller gave the box or mask). */
     locator?: { model: string; label: string };
+    /** Set when the caller gave where the object is: its box (the segmenter cut from it) or its mask (used as given). */
+    given?: 'box' | 'mask';
     segmenter: string;
     /** The object's share of the photo and its box in it ([x0, y0, x1, y1], 0..1). */
     areaFraction: number;
@@ -623,12 +644,14 @@ export function materialConventions(options: { photo?: boolean } = {}): string {
     ].join('\n');
 }
 
-/** How a spec is told the object's size. */
+/** How a spec is told the object's size, and any notes from another reading of its photos. */
 export interface SpecSizeHint {
     /** The object's height alone, when only that is known. */
     heightMeters?: number;
     /** Where the size came from (shown with it); without it a dimensions hint is the user's. */
     sizeSource?: string;
+    /** Notes from another reading of the object's photos, given as hints. */
+    hints?: string[];
 }
 
 /** The size sentence of the conventions. */
@@ -668,7 +691,8 @@ export function specConventions(dimensionsHintMeters?: Vec3, options: { material
         '- Spend parts on the main mass first, then the secondary assemblies, then small details; use as many parts as the object needs.',
         ...(options.materials ? [materialConventions({ photo: options.photo })] : []),
         `- observations: short notes on proportions, counts and how the parts join${options.materials ? ', and the materials you see' : ''}.`,
-        ...(options.photo ? [PHOTO_FIELD_CONVENTIONS] : [])
+        ...(options.photo ? [PHOTO_FIELD_CONVENTIONS] : []),
+        ...(options.hints?.length ? [`- Notes from another reading of photos of this object (hints, not measurements; where they disagree with the picture, the picture decides): ${options.hints.join('; ')}`] : [])
     ].join('\n');
 }
 
@@ -2005,8 +2029,9 @@ export async function buildObjectFromSpec(
 }
 
 /**
- * The object cut out of a photo build's photo onto the backdrop, and what cut it. The photo must decode here (PNG or
- * JPEG) and hold the target; otherwise the build fails at 'reference-image' with the reason, and nothing is drawn.
+ * The object cut out of a photo build's photo onto the backdrop, and what cut it: the caller's mask as given, else the
+ * cutter (from the caller's box, else from the target). The photo must decode here (PNG or JPEG) and hold the
+ * object; otherwise the build fails at 'reference-image' with the reason, and nothing is drawn.
  */
 async function cutOutPhoto(
     photo: NonNullable<ReferenceObjectBuildRequest['photo']>,
@@ -2023,7 +2048,15 @@ async function cutOutPhoto(
     let mask: PhotoMask;
     let cut: ReturnType<typeof cutOutReference>;
     try {
-        mask = await cutter({ data: photo.data, mimeType: photo.mimeType }, target, signal);
+        if (photo.mask) {
+            const m = photo.mask;
+            if (m.mask.length !== m.width * m.height) throw new Error(`the given mask is ${m.mask.length} bytes, not ${m.width} x ${m.height}`);
+            let on = 0;
+            for (let i = 0; i < m.mask.length; i++) if (m.mask[i] === 1) on++;
+            mask = { mask: m.mask, width: m.width, height: m.height, areaFraction: on / m.mask.length, segmenter: m.segmenter ?? 'the caller\'s mask' };
+        } else {
+            mask = await cutter({ data: photo.data, mimeType: photo.mimeType }, target, signal, photo.box ? { box: photo.box } : undefined);
+        }
         cut = cutOutReference(pixels, mask);
     } catch (err) {
         throwIfAborted(signal, 'reference-image');
@@ -2037,6 +2070,7 @@ async function cutOutPhoto(
             source: photo.source.length > 300 ? `${photo.source.slice(0, 300)}...` : photo.source,
             target,
             ...(mask.locator ? { locator: mask.locator } : {}),
+            ...(photo.mask ? { given: 'mask' as const } : photo.box ? { given: 'box' as const } : {}),
             segmenter: mask.segmenter,
             areaFraction: mask.areaFraction,
             bbox: cut.bbox,
@@ -2048,11 +2082,11 @@ async function cutOutPhoto(
 }
 
 /** Where a build's size came from: the hint the caller gave (and its source), else the vision model's estimate. */
-export function describeSize(input: Pick<ReferenceObjectBuildRequest, 'dimensionsHintMeters' | 'heightHintMeters' | 'sizeSource'>, builtMeters: Vec3, how: { photo: boolean; visionModel?: string }): SizeProvenance {
+export function describeSize(input: Pick<ReferenceObjectBuildRequest, 'dimensionsHintMeters' | 'heightHintMeters' | 'sizeSource' | 'sizeLabel'>, builtMeters: Vec3, how: { photo: boolean; visionModel?: string }): SizeProvenance {
     const dims = input.dimensionsHintMeters, height = input.heightHintMeters;
     if (dims || height !== undefined) {
         return {
-            label: 'as-given',
+            label: input.sizeLabel?.trim() || 'as-given',
             ...(dims ? { hintMeters: dims } : { heightMeters: height }),
             note: `Sized to ${dims ? `about ${dims.join(' x ')} m (width x height x depth)` : `${height} m tall`}, ${input.sizeSource?.trim() || 'as the request gave it'}.`,
             builtMeters
@@ -2090,7 +2124,11 @@ export async function buildObjectFromReference(
 
     const clay = input.clay === true;
     const photo = input.photo;
-    const sizeHint: SpecSizeHint = { ...(input.heightHintMeters !== undefined ? { heightMeters: input.heightHintMeters } : {}), ...(input.sizeSource?.trim() ? { sizeSource: input.sizeSource.trim() } : {}) };
+    const sizeHint: SpecSizeHint = {
+        ...(input.heightHintMeters !== undefined ? { heightMeters: input.heightHintMeters } : {}),
+        ...(input.sizeSource?.trim() ? { sizeSource: input.sizeSource.trim() } : {}),
+        ...(input.hints?.length ? { hints: input.hints.filter(h => typeof h === 'string' && h.trim()).map(h => h.trim().slice(0, 400)).slice(0, 24) } : {})
+    };
     // what a photo build's spec read says outside the spec: where the camera stood, the parts the photo does not show
     const photoRead: PhotoRead | undefined = photo ? { unseen: [] } : undefined;
     let photoUse: PhotoReferenceUse | undefined;
@@ -2101,7 +2139,7 @@ export async function buildObjectFromReference(
     if (photo) {
         // a real photo replaces the drawn reference: the object is cut out of it, nothing is drawn
         const target = photo.target?.trim() || input.request.trim();
-        progress(`Finding ${JSON.stringify(target)} in the photo and cutting it out`, 0.05);
+        progress(photo.mask ? 'Laying the given cut-out of the photo on the backdrop' : photo.box ? `Cutting ${JSON.stringify(target)} out of the photo from its given box` : `Finding ${JSON.stringify(target)} in the photo and cutting it out`, 0.05);
         const cut = await clock.time('photo-cutout', () => cutOutPhoto(photo, target, deps.cutPhoto ?? segmenterPhotoCutter(chat, requestedModel), input.signal),
             c => (c.use.locator ? { model: c.use.locator.model } : {}));
         photoUse = cut.use;

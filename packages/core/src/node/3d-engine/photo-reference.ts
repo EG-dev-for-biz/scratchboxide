@@ -50,12 +50,19 @@ export interface PhotoMask {
     segmenter: string;
 }
 
-/** Finds `target` in the photo and returns its mask; throws when it is not there. */
-export type PhotoCutter = (photo: { data: Buffer; mimeType: string }, target: string, signal?: AbortSignal) => Promise<PhotoMask>;
+/**
+ * Finds `target` in the photo and returns its mask; throws when it is not there. With `hint.box` (normalised
+ * [x0, y0, x1, y1]) the object is known to be there: it is cut from that box and nobody is asked to find it.
+ */
+export type PhotoCutter = (photo: { data: Buffer; mimeType: string }, target: string, signal?: AbortSignal, hint?: { box?: NormBox }) => Promise<PhotoMask>;
 
-/** The app's cutter: the chat's vision model boxes the object, the segmenter cuts it (both in memory). */
+/** The app's cutter: the chat's vision model boxes the object (unless the box is given), the segmenter cuts it (both in memory). */
 export function segmenterPhotoCutter(source: LocatorModelSource, requestedModel?: string, segmenter: Pick<ObjectSegmenterService, 'segmentBytes'> = new ObjectSegmenterService()): PhotoCutter {
-    return async (photo, target, signal) => {
+    return async (photo, target, signal, hint) => {
+        if (hint?.box) {
+            const cut = await segmenter.segmentBytes({ bytes: photo.data, box: hint.box, ...(signal ? { signal } : {}) });
+            return { mask: cut.mask, width: cut.width, height: cut.height, areaFraction: cut.areaFraction, segmenter: cut.model };
+        }
         const located = await new SegmentTargetLocator(source, requestedModel).locate({ imageBytes: photo.data, mimeType: photo.mimeType, target, ...(signal ? { signal } : {}) });
         const cut = await segmenter.segmentBytes({ bytes: photo.data, box: located.box, positive: located.positive, negative: located.negative, ...(signal ? { signal } : {}) });
         return { mask: cut.mask, width: cut.width, height: cut.height, areaFraction: cut.areaFraction, locator: { model: located.model, label: located.label }, segmenter: cut.model };
