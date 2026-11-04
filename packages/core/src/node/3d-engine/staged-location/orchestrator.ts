@@ -117,6 +117,8 @@ import { VISION_CALL_POLICY, VisionModelChain, type VisionGenAIClient } from '..
 import { budgetedClient, ModelCallMeter } from '../../gemini/model-call-budget';
 import { segmentOwnershipViews } from './ownership-masks';
 import { buildGroundModel, geodeticToScan, loadScanMesh, scanToGeodetic, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
+import { removeStreetResidue, streetResidueEnabled, writeStreetResidue, STREET_RESIDUE_VERSION, type StreetResidueReport } from './street-residue';
+import { SURFACE_INFILL_VERSION } from './surface-infill';
 import { removeVehicles, vehicleRemovalEnabled, vehicleRemovalParams, visionVehicleBatchJudge, visionVehicleJudge, VEHICLE_REMOVAL_VERSION, type VehicleRemovalReport } from './vehicle-removal';
 import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, PROCEDURAL_ROADS_VERSION, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
 import { renderTopDownPhoto } from './top-down-photo';
@@ -577,6 +579,13 @@ export interface StagedLocationDeps {
      * stand-in deps leave it out, so their vision replies are not asked about vehicles.
      */
     vehicleRemoval?: boolean;
+    /**
+     * Street residue (street-residue.ts): in a district, what the residual audit finds standing in the streets that nothing
+     * explains (floating artefacts, wide-and-low lumps, twisted spikes) taken out of the tree-stripped scan and the street
+     * under it filled by the surface infill, before anything builds on the scan. True in the app's deps; stand-in deps leave
+     * it out, so their builds read the stripped scan as it is.
+     */
+    streetResidue?: boolean;
     /**
      * The tile seam stage (tile-seam-weld-service.ts runTileSeamWeld): the extraction's seams closed as it arrives, and
      * every later stage reads the welded scan. The app's deps provide it; stand-in deps leave it out (the raw extraction is
@@ -2123,6 +2132,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const t = tiles.value;
 
         // ---------------- vehicles (vehicle-removal.ts): every later stage builds on the scan without them ----------------
+        /** The vehicle step's report once it has committed: its readings of fixtures keep the street residue off them. */
+        let vehicleReport: VehicleRemovalReport | undefined;
         const devehicled = await (async (): Promise<typeof t.extraction | undefined> => {
             if (request.procedural === true) { runner.skip('vehicles', PROCEDURAL_ONLY); return undefined; }
             if (kIsolate) { runner.skip('vehicles', PIPELINE_K_ISOLATE); return undefined; }
@@ -2202,6 +2213,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 })
             });
             persist();
+            if (r.status === 'committed') vehicleReport = r.value?.report;
             return r.status === 'committed' ? r.value?.extraction : undefined;
         })();
         const extraction = devehicled ?? t.extraction;
@@ -3511,6 +3523,44 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             strip = measured.status === 'committed' ? measured.value : undefined;
         } else {
             runner.skip('trees-measure', request.procedural === true ? PROCEDURAL_ONLY : oneBuildingK ? 'a single building keeps no surroundings, so its trees are not measured' : 'trees were not asked for');
+        }
+
+        // ---------------- street residue (street-residue.ts): what the residual audit finds standing in the streets that nothing explains, out of the tree-stripped scan before anything builds on it ----------------
+        if (strip && !request.isolate && deps.streetResidue && deps.vectorEvidence && streetResidueEnabled()) {
+            const stripped = strip;
+            try {
+                const covered = extraction.coveredRadiusM;
+                const look = t.vector ?? evidenceLookup(await deps.vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: covered + 20 }), covered + 20);
+                // the fixtures the vehicle step's model read stay, whatever their shape
+                const keep = (vehicleReport?.readings ?? []).filter(r => r.permanent && !r.vehicle).map(r => ({ lo: r.lo, hi: r.hi }));
+                const key = stageKey(STREET_RESIDUE_VERSION, DISTRICT_AUDIT_VERSION, SURFACE_INFILL_VERSION, stripped.cacheKey, covered.toFixed(1), crypto.createHash('sha256').update(JSON.stringify(keep)).digest('hex').slice(0, 16));
+                const entry = await cache.run<{ glb: string | null; report: StreetResidueReport }>('street-residue', key, async dir => {
+                    const scan = loadScanMesh(stripped.devegetatedGlb);
+                    const ground = buildGroundModel(scan, { cellMeters: 1, water: look.waterAt, road: look.roadAt });
+                    const within = (x: number, z: number) => Math.hypot(x, z) <= covered;
+                    const audit = await auditDistrict({ scan, ground, buildingAt: look.buildingAt, waterAt: look.waterAt, within, dir: path.join(dir, 'residual_audit'), ...(ctx.signal ? { signal: ctx.signal } : {}), idPrefix: `residue/${key.slice(0, 8)}` });
+                    const r = await removeStreetResidue({
+                        glb: fs.readFileSync(stripped.devegetatedGlb), scan, ground, audit, keep, look: { buildingAt: look.buildingAt, waterAt: look.waterAt, roadAt: look.roadAt, within },
+                        recordsDir: path.join(dir, 'infill'), ...(ctx.signal ? { signal: ctx.signal } : {})
+                    });
+                    const changed = r.report.floating.triangles > 0 || r.report.lumps.length > 0;
+                    if (changed) writeStreetResidue(dir, r);
+                    else fs.writeFileSync(path.join(dir, 'street_residue.json'), JSON.stringify(r.report, null, 1));
+                    return { value: { glb: changed ? 'street_residue.glb' : null, report: r.report } };
+                });
+                const rep = entry.value.report;
+                cache.writeRunNote(runId, 'street_residue', {
+                    key, cached: entry.cached, dir: entry.dir, notes: rep.notes, floating: rep.floating, kept: rep.kept, patch: rep.patch ?? null, ms: rep.ms,
+                    lumps: rep.lumps.map(l => ({ id: l.id, kind: l.kind, clusters: l.clusters, lo: l.lo, hi: l.hi, planM2: l.planM2, heightM: l.heightM, real: l.real, infill: l.infill }))
+                });
+                if (entry.value.glb) {
+                    strip = { ...stripped, devegetatedGlb: path.join(entry.dir, entry.value.glb), cacheKey: key };
+                    if (rep.lumps.length) run.note('generated', `${rep.notes[0]}: the street under each estimated from the measured scan around it (generated), its texels from the street's own photo by the surface infill`);
+                }
+            } catch (err) {
+                if (isAbort(err) || ctx.signal?.aborted) throw err;
+                cache.writeRunNote(runId, 'street_residue', { error: `the street residue could not be taken out (${errorMessage(err)}); the tree-stripped scan is built on as it is` });
+            }
         }
 
         // ---------------- roads (SB-Roadie: Google's road centrelines measured kerb to kerb on the tree-stripped scan; runs beside the remesh) ----------------

@@ -336,6 +336,8 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         // search-grounded reference images (the bridges' detail the scan cannot resolve): the Vertex client with the image models
         groundedReferences: async () => (await new GoogleMediaCredentialsService().createVertexClient()) as unknown as GroundedReferenceClient,
         vehicleRemoval: true,
+        // what the residual audit finds standing in a district's streets that nothing explains, out of the tree-stripped scan (street-residue.ts)
+        streetResidue: true,
         // the tile seam stage on the extraction as it arrives (tile-seam-weld-service.ts)
         tileSeams: runTileSeamWeld,
         // pipeline K-D: each chunk of a chunked district is a build of its own, on its own worker thread, or with
