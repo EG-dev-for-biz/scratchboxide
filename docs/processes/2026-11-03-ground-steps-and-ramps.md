@@ -1,9 +1,9 @@
 # Steps, stairs and ramps as geometry, and the scan carved under them
 
 **Date:** 2026-11-03
-**Status:** Unit-tested on synthetic flights and run through a whole staged build in the orchestrator test. Not yet built
-live in the app (the load average stayed at 250-500, against the no-builds-above-100 rule), no proof sheet yet, and
-not yet judged by the user.
+**Status:** Unit-tested, run through a whole staged build in the orchestrator test, and built live and uncached at Farley
+(run `daafc303`: the grand steps, 33 steps counted on Street View) and Federation Square (run `9ad011dc`) on 2026-11-04.
+Before/after sheet made; not yet judged by the user.
 **Branch:** `feat/ground-steps`, stacked on `feat/road-kerbs-gutters` (it reuses that branch's carve, `road-carve.ts`,
 and its bevel rule, `frontBevelM`).
 **Switch:** `SCRATCHBOX_STAGED_STEPS=1`, off by default. It turns the roads stage on with it, with or without the
@@ -145,7 +145,31 @@ Every part is its own node with its label. Nothing here names a kind of stair.
 - **Street View counts:** none yet. At Penn the stage ran out of time on the first flight; at Farley the two flights
   counted (before the fix) stood mid-block, where no pano reaches.
 
-The uncached builds on the final code (Farley, Federation Square, Penn) and their sheets are below.
+- **Federation Square (run `d10c8f6e`, ground-steps/2):** 22 flights and 12 ramps, among them a 103 m wide slope of 2.5 m
+  turned into 16 "steps" with 91 cm treads, where nothing counted it. Now an estimate whose treads would be longer than a
+  step's (0.7 m) draws the slope instead.
+- **Farley (run `6f8aa209`, ground-steps/2):** the grand steps were refused again. In a build they joined the gentler
+  street cells in front of them into one incline reaching 21 m into the avenue, so its foot was read in the street; and
+  the walk along each section started from the incline's lowest cell, skipping a first sample more than a riser above it
+  and every one after. An incline now keeps only cells at least half its median slope, and the first sample is taken as
+  it is.
+- **Street View counts:** at Farley its three metadata points each found a visitor's photosphere, not a Google capture;
+  at Federation Square the grounding API refused the two Google panos picked (403). It now looks at eight points and
+  fetches up to four views.
+
+**The uncached builds on the final code:**
+
+| | Farley, 421 8th Ave (`daafc303`) | Federation Square (`9ad011dc`) |
+|---|---|---|
+| Inclines looked at / kept | 67 / 3 flights, 6 ramps | 142 / 17 flights, 23 ramps |
+| The flight shown | the grand steps: 4.98 m over 13.4 m (20 degrees), 83.0 m wide | `incline_109`: 4.88 m over 11.3 m, 10.7 m wide; `incline_102`: 2.99 m over 9.7 m, 43.1 m wide |
+| Its count | 33, photo-inferred: 3 Street View views counted 33, 32, 33 | 31 and 19, generated: estimated at 16 cm (that run predates the counter's fix; its Street View gave 403s or no pano) |
+| Each step | 15.1 cm rise, 40.7 cm run | 15.7 / 36.5 cm and 15.7 / 50.9 cm |
+
+**The sheet** (`docs/screenshots/road-kerbs_2026-11-04/steps-sheet.jpg`, gitignored; also in the shared notes):
+before/after, textured and clay, from in front of each flight at walk-mode eye height and from above. In clay the melted
+slopes become evenly pitched treads between their cheeks; the textured flights match the scene. **Visible limits:**
+the risers take the photo seen from above, so they show vertical streaks; the treads keep the scan's own photo bands.
 
 ## Known gaps
 
