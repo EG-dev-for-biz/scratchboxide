@@ -22,12 +22,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { ProvenanceRecord } from '../../../../common/spatial/staged-location-contracts';
+import { TEXTURE_LADDER_RUNGS } from '../../../../common/spatial/texture-pass-contracts';
 import type { VectorBuilding } from '../vector-footprints';
 import { buildMassing, HEIGHT_AGREEMENT_M, massingSpecText, type FaceSweepItem, type Massing, type OpeningItem, type SweepItem } from './massing-spec';
 import * as jpegJs from 'jpeg-js';
 import { PHOTO_JPEG_QUALITY, writeMassingClayGlb, writeMassingTexturedGlb, type FaceTexture, type TexelSource } from './massing-glb';
 import { decodeImageInMemory } from '../tile-texture-transfer';
-import { readFaceOrtho, runMassing, type MassingNode, type MassingRun } from './native-massing';
+import { readFaceOrtho, runMassing, type MassingFace, type MassingNode, type MassingRun } from './native-massing';
 import { baseLegend, fillNearest, medianColour, SRC, textureFromOrtho } from './face-textures';
 import { repeatFillFace } from './face-texture-repeat';
 import { facadeMaterialsEnabled } from '../facade-material-evidence';
@@ -104,7 +105,16 @@ export interface MassingStageInput {
     massing?: Massing;
 }
 
-export interface MassingLayerFiles { clayGlb: string; texturedGlb: string; texturedShares: number[] }
+export interface MassingLayerFiles {
+    clayGlb: string; texturedGlb: string; texturedShares: number[];
+    /** The legend the textured twin was packed with: the caller's, and closeUnsourcedTexels' entries when it filled any. */
+    legend?: TexelSource[];
+    /** What closeUnsourcedTexels filled, when anything reached the layer without a source. */
+    unsourced?: UnsourcedClosure;
+}
+
+/** What closeUnsourcedTexels filled: the faces it touched and the texels by how. */
+export interface UnsourcedClosure { faces: number; repeat: number; nearest: number; median: number }
 
 export interface MassingStageResult {
     massing: Massing;
@@ -208,8 +218,75 @@ export function plainTextures(run: MassingRun): { textures: Map<number, FaceText
     return { textures, legend: baseLegend() };
 }
 
-/** Writes the clay layer and its textured twin into `dir`. */
+const UNSOURCED_WHY = 'a texel no earlier stage wrote (every texel of its face masked as an occluder, or a face the re-cut made that its parent face\'s texture does not reach)';
+const ladderRung = (name: (typeof TEXTURE_LADDER_RUNGS)[number]) => TEXTURE_LADDER_RUNGS.indexOf(name);
+/** closeUnsourcedTexels' legend entries, in its trust order. */
+export const UNSOURCED_LEGEND: TexelSource[] = [
+    { source: 'unsourced-repeat', label: 'generated', method: `${UNSOURCED_WHY}, filled from its face's own real photo texels at a gated same-plane repeat pitch (texture-repeat.ts)`, rung: ladderRung('repeated same-plane fill'), weight: 0.2 },
+    { source: 'unsourced-nearest', label: 'generated', method: `${UNSOURCED_WHY}, given the colour of the nearest texel of its face that has a source`, rung: ladderRung('measured palette colour'), weight: 0.1 },
+    { source: 'unsourced-median', label: 'generated', method: `${UNSOURCED_WHY}, on a face none of whose texels has a source, given the median colour of its building's real wall photo texels (else the layer's)`, rung: ladderRung('measured palette colour'), weight: 0.05 }
+];
+
+function hasUnsourced(t: FaceTexture, legendLength: number): boolean {
+    for (let i = 0; i < t.source.length; i++) if (t.source[i] >= legendLength) return true;
+    return false;
+}
+
+/**
+ * Gives every texel of a layer a source. One whose index the legend does not hold (255: not yet produced) would be packed
+ * as clay over whatever RGB it holds, black where nothing wrote it. Each is filled by the believability default on a copy
+ * (the callers' textures feed later stages): from its face's own repeats of its real photo texels, else the face's
+ * nearest texel with a source, else (no texel of the face has one) its building's median real wall colour, labelled
+ * generated with the reason in its legend entry. The entries are appended only when used, so a layer with nothing
+ * unsourced is written exactly as before.
+ */
+export function closeUnsourcedTexels(run: MassingRun, textures: Map<number, FaceTexture>, legend: TexelSource[]): { textures: Map<number, FaceTexture>; legend: TexelSource[]; closed: UnsourcedClosure } {
+    const closed: UnsourcedClosure = { faces: 0, repeat: 0, nearest: 0, median: 0 };
+    const open = [...textures].filter(([, t]) => hasUnsourced(t, legend.length));
+    if (!open.length) return { textures, legend, closed };
+    // provisional indices just past the legend, renumbered below to the entries used
+    const [REPEAT, NEAREST, MEDIAN] = UNSOURCED_LEGEND.map((_, k) => legend.length + k);
+    const real = legend.findIndex(e => e.source === 'tile-ortho');
+    const isReal = real >= 0 ? (s: number) => s === real : (s: number) => s < legend.length;
+    const faceOf = new Map(run.report.faces.map(f => [f.index, f]));
+    const walls = (pick: (f: MassingFace) => boolean) => run.report.faces.filter(f => f.kind === 'wall' && pick(f)).map(f => textures.get(f.index)).filter((t): t is FaceTexture => !!t);
+    const partMedian = new Map<string, [number, number, number] | undefined>();
+    let layerMedian: [number, number, number] | undefined;
+    const out = new Map(textures);
+    for (const [index, src] of open) {
+        const face = faceOf.get(index);
+        const t: FaceTexture = { width: src.width, height: src.height, rgba: new Uint8Array(src.rgba), source: new Uint8Array(src.source) };
+        let sourced = 0, reals = 0;
+        for (let i = 0; i < t.source.length; i++) {
+            if (t.source[i] >= legend.length) { t.source[i] = 255; t.rgba.fill(0, i * 4, i * 4 + 4); } // the repeat fill's targets have alpha 0
+            else { sourced++; if (isReal(t.source[i])) reals++; }
+        }
+        closed.faces++;
+        if (sourced) {
+            if (real >= 0 && reals) closed.repeat += repeatFillFace(t, face?.pixel || 0.05, { real, fillSource: REPEAT }).filled;
+            closed.nearest += fillNearest(t, NEAREST);
+        } else {
+            const part = face?.part;
+            if (part !== undefined && !partMedian.has(part)) partMedian.set(part, medianColour(walls(f => f.part === part), isReal));
+            const rgb = (part !== undefined ? partMedian.get(part) : undefined)
+                ?? (layerMedian ??= medianColour(walls(() => true), isReal) ?? medianColour([...textures.values()], isReal) ?? [150, 150, 150]);
+            for (let i = 0; i < t.source.length; i++) { t.rgba.set(rgb, i * 4); t.rgba[i * 4 + 3] = 255; t.source[i] = MEDIAN; }
+            closed.median += t.source.length;
+        }
+        out.set(index, t);
+    }
+    const added: TexelSource[] = [];
+    const remap = Uint8Array.from({ length: 256 }, (_, k) => k);
+    [closed.repeat, closed.nearest, closed.median].forEach((n, k) => { if (n) { remap[legend.length + k] = legend.length + added.length; added.push(UNSOURCED_LEGEND[k]); } });
+    for (const [index] of open) { const s = out.get(index)!.source; for (let i = 0; i < s.length; i++) s[i] = remap[s[i]]; }
+    return { textures: out, legend: [...legend, ...added], closed };
+}
+
+/** Writes the clay layer and its textured twin into `dir`; texels without a source are filled first (closeUnsourcedTexels). */
 export function writeMassingLayer(run: MassingRun, massing: Pick<Massing, 'check'>, textures: Map<number, FaceTexture>, legend: TexelSource[], dir: string, stage: string, stageKey: string, name = 'massing', provenanceOf?: (n: MassingNode) => ProvenanceRecord | undefined, opts: { photoJpeg?: boolean } = {}): MassingLayerFiles {
+    const closure = closeUnsourcedTexels(run, textures, legend);
+    textures = closure.textures;
+    legend = closure.legend;
     // de-lit (residual-tile-delight.ts): every other texel in the scene is de-lit on its way in, but a residual
     // ("as-scanned") cluster renders straight off this shared image, its own native UV, nothing else touching it
     const tileImages = new Map<number, { bytes: Uint8Array; mimeType: string }>();
@@ -231,7 +308,7 @@ export function writeMassingLayer(run: MassingRun, massing: Pick<Massing, 'check
     fs.writeFileSync(clayGlb, writeMassingClayGlb(input));
     const tex = writeMassingTexturedGlb(input);
     fs.writeFileSync(texturedGlb, tex.glb);
-    return { clayGlb, texturedGlb, texturedShares: tex.shares };
+    return { clayGlb, texturedGlb, texturedShares: tex.shares, legend, ...(closure.closed.faces ? { unsourced: closure.closed } : {}) };
 }
 
 /** Step 1 and 2: the massing, its check, the native solid with orthos and residual, the plain layer files. */
