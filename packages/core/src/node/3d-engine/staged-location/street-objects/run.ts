@@ -53,6 +53,12 @@ import { encodePng } from '../png-encode';
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- glTF JSON is untyped */
 
+/**
+ * The registration's time: three times the staged build's (90 s edges, 120 s joint). Narrow views of street objects give
+ * the edge search little to hold, and a loaded machine ran the joint fit out of its own budget (Penn, 2026-11-03).
+ */
+export const REGISTRATION_BUDGET_MS = { edges: 270_000, joint: 360_000 };
+
 /** A plan this many times longer than deep (and about as long as tall, or more) is built from its front outline. */
 export const FRONT_LONG_ASPECT = 1.6;
 
@@ -347,7 +353,7 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
         try {
             const held: HeldImage[] = [...images.values()].map(im => ({ id: im.id, bytes: im.bytes, widthPx: im.widthPx, heightPx: im.heightPx, view: im.view }));
             progress(`registering ${held.length} views against the 3D tiles`);
-            reg = await (input.register ?? runPanoRegistrationOffThread)({ images: held, meshFiles: [input.tileGlb], correspondences: [], faces: [] }, { ...(input.signal ? { signal: input.signal } : {}), log: progress });
+            reg = await (input.register ?? runPanoRegistrationOffThread)({ images: held, meshFiles: [input.tileGlb], correspondences: [], faces: [], edgeBudgetMs: REGISTRATION_BUDGET_MS.edges, jointBudgetMs: REGISTRATION_BUDGET_MS.joint }, { ...(input.signal ? { signal: input.signal } : {}), log: progress });
         } catch (err) {
             if (input.signal?.aborted) throw err;
             notes.push(`registration failed (${err instanceof Error ? err.message : String(err)}); the nominal poses stand (good to about 2 m and 2 degrees)`);
