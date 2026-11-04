@@ -365,10 +365,19 @@ function appendWelded(glb: ReturnType<typeof parseGlbBytes>, welded: WeldedPiece
  * attribute is carried (UVs, normals), so the textured twin is clipped the same way. The openings the cut leaves are for the
  * fill (fillOpenLoops) to close.
  */
-export function clipToFootprint(bytes: Uint8Array, loops: Vec2[][], marginM: number, opts: { /** The native clip's threads (every core when none). */ threads?: number } = {}): { glb: Buffer; report: ClipReport } {
+export function clipToFootprint(bytes: Uint8Array, loops: Vec2[][], marginM: number, opts: { /** The native clip's threads (every core when none). */ threads?: number; /** Nodes left uncut, by name, with the reason for the report (the rebuilt facades when the footprint is only the scan's own outline). */ keepNodes?: { keep: (name: string) => boolean; why: string } } = {}): { glb: Buffer; report: ClipReport } {
     const glb = parseGlbBytes(bytes);
     const dv = new DataView(glb.bin.buffer, glb.bin.byteOffset, glb.bin.byteLength);
     const report: ClipReport = { cutTriangles: 0, removedTriangles: 0, removedAreaM2: 0, marginM };
+    // the meshes of the nodes left uncut (a mesh another node also draws is cut as before)
+    const keptMeshes = new Set<number>();
+    if (opts.keepNodes) {
+        const nodes: any[] = glb.json.nodes ?? [], kept = nodes.filter(n => n.mesh !== undefined && opts.keepNodes!.keep(n.name ?? ''));
+        for (const n of kept) if (!nodes.some(o => o.mesh === n.mesh && !opts.keepNodes!.keep(o.name ?? ''))) keptMeshes.add(n.mesh);
+        report.keptNodes = kept.length;
+        report.keptWhy = opts.keepNodes.why;
+    }
+    const clipped = (prims: PrimRead[]) => prims.filter(pr => !keptMeshes.has(pr.mesh));
     const outside = (x: number, z: number) => signedFootprintDistance(x, z, loops) - marginM;
     // each outline edge's line, pushed out by the margin: its outward normal is the side a point just off its middle stands outside
     const lines: Array<{ key: string; ax: number; az: number; nx: number; nz: number; g: (v: Vx) => number }> = [];
@@ -383,14 +392,14 @@ export function clipToFootprint(bytes: Uint8Array, loops: Vec2[][], marginM: num
     const extras = { sbFootprintClip: { version: LATTICE_STITCH_VERSION, provenance: `as-scanned: the scan cut at the footprint's outline plus ${marginM} m` } };
     if (kNative('clip')) {
         // natively: the same pieces, the same report, the area summed in the same order
-        const prims = readPrims(glb);
+        const prims = clipped(readPrims(glb));
         const r = runNativeClip(marginM, loops, lines, prims.map(nativeCutPrim), opts.threads ?? nativePolishThreads());
-        return { glb: appendNativeCut(glb, dv, prims, r.prims, extras), report: { cutTriangles: r.report.cutTriangles, removedTriangles: r.report.removedTriangles, removedAreaM2: Math.round(r.report.removedAreaM2), marginM } };
+        return { glb: appendNativeCut(glb, dv, prims, r.prims, extras), report: { ...report, cutTriangles: r.report.cutTriangles, removedTriangles: r.report.removedTriangles, removedAreaM2: Math.round(r.report.removedAreaM2) } };
     }
     const area = (poly: Vx[]) => { let s = 0; for (let k = 1; k + 1 < poly.length; k++) s += Math.hypot(...cross3(sub3(poly[k].p, poly[0].p), sub3(poly[k + 1].p, poly[0].p)) as [number, number, number]) / 2; return s; };
     const centreOutside = (poly: Vx[]) => outside(poly.reduce((a, v) => a + v.p[0], 0) / poly.length, poly.reduce((a, v) => a + v.p[2], 0) / poly.length) > 0;
     const appended: Array<{ pr: PrimRead; polys: Vx[][] }> = [];
-    for (const pr of readPrims(glb)) {
+    for (const pr of clipped(readPrims(glb))) {
         const kept: Vx[][] = [];
         const cache = new Map<string, Vx>();
         for (let t = 0; t + 2 < pr.I.length; t += 3) {
@@ -416,7 +425,7 @@ export function clipToFootprint(bytes: Uint8Array, loops: Vec2[][], marginM: num
     return { glb: appendPieces(glb, appended, extras), report };
 }
 
-export interface ClipReport { cutTriangles: number; removedTriangles: number; removedAreaM2: number; marginM: number }
+export interface ClipReport { cutTriangles: number; removedTriangles: number; removedAreaM2: number; marginM: number; /** Nodes left uncut (opts.keepNodes): how many, and why. */ keptNodes?: number; keptWhy?: string }
 
 /** A welded view of a GLB's live triangles: positions, faces, and which faces belong to rebuilt walls. */
 function welded(bytes: Uint8Array, P: LatticeStitchParams): { pos: number[][]; tris: number[][]; wall: number[]; idOf: (p: ArrayLike<number>) => number | undefined } {
