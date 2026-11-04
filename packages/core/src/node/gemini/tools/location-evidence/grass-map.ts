@@ -25,15 +25,18 @@ import { loadScanMesh, buildGroundModel, type GroundModel } from '../../../spati
 import { renderTopDownPhoto } from '../../../3d-engine/staged-location/top-down-photo';
 import { readTileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
 import { fetchVectorEvidence, rasterizeEvidence, rasterizeAreas } from '../../../3d-engine/staged-location/vector-footprints';
-import { detectGrass, type GrassMask } from '../../../3d-engine/staged-location/grass-detect';
+import { detectGrass, grassOverlay, type GrassMask } from '../../../3d-engine/staged-location/grass-detect';
+import { classifyGround, type GroundClassification } from '../../../3d-engine/staged-location/ground-classifier';
+import { areaPriorRasters } from '../../../3d-engine/staged-location/ground-area-priors';
 import { buildGrassField, grassFieldGrid, scanTrianglesNear, writeGrassFieldGlb, GRASS_FIELD_VERSION, type GrassFieldParams } from '../../../3d-engine/staged-location/grass-field';
 import { GltfBinaryPacker } from '../../../3d-engine/gltf-binary-packer';
+import { encodePng } from '../../../3d-engine/staged-location/png-encode';
 
 export const GRASS_MAP_TOOL_NAME = 'location_grass_map';
 
 export const GRASS_MAP_TOOL_DECLARATION: ToolDeclaration = {
     name: GRASS_MAP_TOOL_NAME,
-    description: 'Map where the ground of a real place is grass and show it in the viewport over the photo-textured Google 3D Tiles. Grass seen from above (ground-level cells whose lit colour is vegetation green) is labelled photo-inferred and drawn green; inside Google park outlines, ground hidden under tree crowns continues the nearest surface seen in the same park (grass, or a path for a few metres) and is labelled generated, drawn cyan. Google vector water areas are never grass and buildings are never filled. Reports the grass area, the filled area, the patches and why other ground was not grass. Use it when the user asks where the grass or lawns are at a place. With blades: true it instead grows real 3D grass (instanced blade clumps, generated geometry tinted to the photo colour) over the mapped grass within a band around the place (or the nearest grass to it), never over buildings or water; ground farther out stays the tile photo. Use blades when the user wants 3D grass, lawns or a grass layer they can see up close.',
+    description: 'Map where the ground of a real place is grass and show it in the viewport over the photo-textured Google 3D Tiles. Grass seen from above (ground-level cells whose lit colour is vegetation green) is labelled photo-inferred and drawn green; inside Google park outlines, ground hidden under tree crowns continues the nearest surface seen in the same park (grass, or a path for a few metres) and is labelled generated, drawn cyan. Google vector water areas are never grass and buildings are never filled; green open ground is checked against Google land-use areas (park outlines say planted; parking lots and carriageways say paved), so green paint, roofs and vehicles off every planted area are held back and reported. Writes a top-down overlay PNG of the map. Reports the grass area, the filled area, the patches and why other ground was not grass. Use it when the user asks where the grass or lawns are at a place. With blades: true it instead grows real 3D grass (instanced blade clumps, generated geometry tinted to the photo colour) over the mapped grass within a band around the place (or the nearest grass to it), never over buildings or water; ground farther out stays the tile photo. Use blades when the user wants 3D grass, lawns or a grass layer they can see up close.',
     parameters: {
         type: 'OBJECT',
         properties: {
@@ -103,27 +106,30 @@ export const grassMapHandler: ToolHandler = async (args, ctx): Promise<ToolHandl
     const photo = renderTopDownPhoto(readTileTriangles(fs.readFileSync(tiles.glbPath)), frame, { texelM: 0.2, maxPx: 3000 });
 
     ctx.reportProgress?.('Reading Google vector water, parks and buildings');
-    let evidence: { water?: Uint8Array; park?: Uint8Array; building?: Int32Array } | undefined, vectorNote: string;
+    let evidence: { water?: Uint8Array; park?: Uint8Array; building?: Int32Array; classification?: GroundClassification } | undefined, vectorNote: string;
     try {
         const ev = await fetchVectorEvidence({ lat: anchor.lat, lng: anchor.lng, radiusM: radiusM + 20, fetchTile: (x, y, z) => GoogleVectorTileService.fetchVectorTile(x, y, z, '') });
-        const r = rasterizeEvidence(ev, ground);
-        evidence = { water: r.water, building: r.building, park: rasterizeAreas(ev, ground, 'FEATURE_TYPE_PARK') };
-        vectorNote = `Google vector data: ${ev.water.length} water areas, ${(ev.landuse ?? []).filter(a => a.types.includes('FEATURE_TYPE_PARK')).length} park outlines`;
+        const r = rasterizeEvidence(ev, ground), priors = areaPriorRasters(ev, ground);
+        evidence = { water: r.water, building: r.building, park: rasterizeAreas(ev, ground, 'FEATURE_TYPE_PARK'), classification: classifyGround(photo, frame, ground, { raster: r, priors }) };
+        vectorNote = `Google vector data: ${ev.water.length} water areas, ${(ev.landuse ?? []).filter(a => a.types.includes('FEATURE_TYPE_PARK')).length} park outlines, ${ev.roads.length} road centrelines, area priors from ${priors.used.map(u => `${u.areas} ${u.code}`).join(', ') || 'no area'}`;
     } catch (err) {
-        vectorNote = `no Google vector data (${err instanceof Error ? err.message : String(err)}): water is not excluded and nothing under crowns is filled`;
+        vectorNote = `no Google vector data (${err instanceof Error ? err.message : String(err)}): water is not excluded, green is not checked against planted areas and nothing under crowns is filled`;
     }
     const g = detectGrass(photo, frame, ground, undefined, evidence);
+    const cls = evidence?.classification;
 
     const out = tiles.glbPath.replace(/(_textured)?\.glb$/i, '_grass_map.glb');
     const extras = { sb: { provenance: { label: 'photo-inferred', measuredGeometry: false, method: g.provenance.method, confidence: 0.7, ...(g.provenance.underCrown ? { underCrown: { ...g.provenance.underCrown, confidence: 0.35 } } : {}) }, version: g.version } };
     const triangles = writeGrassGlb(out, g, ground, extras);
+    const overlayPng = out.replace(/\.glb$/i, '_overlay.png');
+    fs.writeFileSync(overlayPng, encodePng(photo.width, photo.height, grassOverlay(photo, frame, g), 4));
     const stamp = Date.now();
     const object = (id: string, file: string, metadata: Record<string, unknown>) => ({
         id, content: { type: '3d-model', durableUri: modelUri(file), mimeType: 'model/gltf-binary', metadata: { role: 'environment', resolvedAddress: place, ...metadata } },
         space: { spatial3d: { x: 0, y: 0, z: 0 } }, time: { startMs: 0, durationMs: 20000 }, lineage: { version: 1 }
     });
     const seenM2 = g.areaM2 - g.underCrown.areaM2;
-    let summary = `Grass at ${place}: ${Math.round(seenM2).toLocaleString()} m² seen from above (photo-inferred, green) and ${Math.round(g.underCrown.areaM2).toLocaleString()} m² filled under park tree crowns (generated, cyan), in ${g.patches.length} patches. Not grass: ${g.stats.tooHigh.toLocaleString()} m² standing above the ground, ${g.stats.water.toLocaleString()} m² water, ${g.stats.notGreen.toLocaleString()} m² ground that is not green. ${vectorNote}.`;
+    let summary = `Grass at ${place}: ${Math.round(seenM2).toLocaleString()} m² seen from above (photo-inferred, green) and ${Math.round(g.underCrown.areaM2).toLocaleString()} m² filled under park tree crowns (generated, cyan), in ${g.patches.length} patches. Not grass: ${g.stats.tooHigh.toLocaleString()} m² standing above the ground, ${g.stats.water.toLocaleString()} m² water, ${g.stats.notGreen.toLocaleString()} m² ground that is not green${g.stats.offPlanted || g.stats.paved ? `; ${g.stats.offPlanted.toLocaleString()} m² green but off every planted area (likely paint, a roof or a vehicle) and ${g.stats.paved.toLocaleString()} m² green on paved ground were held back (orange in the overlay)` : ''}. ${vectorNote}.${cls?.stats.openInFootprintM2 ? ` ${Math.round(cls.stats.openInFootprintM2).toLocaleString()} m² of open ground at the terrain lies inside Google building footprints with nothing standing on it in the scan (a plaza or a lawn over an underground structure): classified as ground.` : ''}`;
     const layer = object(`grass-map-${stamp}`, out, { source: GRASS_MAP_TOOL_NAME, layer: 'grass', isGround: false, triangleCount: triangles, provenance: extras.sb.provenance });
     let bladeLayer: ReturnType<typeof object> | undefined, blades: Record<string, unknown> | undefined;
     if (args.blades === true) {
@@ -141,7 +147,7 @@ export const grassMapHandler: ToolHandler = async (args, ctx): Promise<ToolHandl
             if (params.bladeHeightMin !== undefined && params.bladeHeightMax === undefined) params.bladeHeightMax = Math.max(params.bladeHeightMin, 0.14);
             if (params.bladeHeightMax !== undefined && params.bladeHeightMin === undefined) params.bladeHeightMin = Math.min(params.bladeHeightMax, 0.06);
             const near = scanTrianglesNear(scan.mesh.vertices as Float32Array, scan.mesh.indices as Uint32Array, centre.x, centre.z, bandRadiusM + 2);
-            const field = await buildGrassField(grassFieldGrid(g, ground, { building: evidence?.building, water: evidence?.water }, near), out.replace(/\.glb$/i, '_blades'), params, { signal: ctx.signal });
+            const field = await buildGrassField(grassFieldGrid(g, ground, { building: cls ? cls.scores.building : evidence?.building, water: evidence?.water }, near), out.replace(/\.glb$/i, '_blades'), params, { signal: ctx.signal });
             const bladesFile = tiles.glbPath.replace(/(_textured)?\.glb$/i, '_grass_blades.glb');
             const provenance = {
                 label: 'generated', measuredGeometry: false, geometry: { label: 'generated', method: `${GRASS_FIELD_VERSION}: GrassClumpGenerator clumps (V-keel blades, droop, splay, senescent tips), instanced on blue-noise samples over the grass mask, kept with each cell's confidence` },
@@ -176,8 +182,10 @@ export const grassMapHandler: ToolHandler = async (args, ctx): Promise<ToolHandl
         status: 'completed',
         summaryResult: summary,
         resultPayload: {
-            status: 'success', place, geoAnchor: tiles.geoAnchor, glbPath: out, areaM2: g.areaM2, underCrown: g.underCrown, patches: g.patches.slice(0, 20), stats: g.stats,
-            provenance: g.provenance, vector: vectorNote, ...(blades ? { blades } : {}), artifact
+            status: 'success', place, geoAnchor: tiles.geoAnchor, glbPath: out, overlayPng, areaM2: g.areaM2, underCrown: g.underCrown, patches: g.patches.slice(0, 20), stats: g.stats,
+            provenance: g.provenance, vector: vectorNote, heldBack: { offPlantedM2: g.stats.offPlanted, pavedM2: g.stats.paved },
+            ...(cls ? { ground: { version: cls.version, areaM2: cls.stats.areaM2, greenOffPlantedM2: cls.stats.greenOffPlantedM2, openInFootprintM2: cls.stats.openInFootprintM2, provenance: cls.provenance } } : {}),
+            ...(blades ? { blades } : {}), artifact
         } as unknown as ToolResultPayload
     };
 };

@@ -110,7 +110,7 @@ export function encodeGrassFieldInput(g: GrassFieldGrid): Buffer {
  * and under crowns on the terrain raised as far as the nearest seen ground stands above it; `exclude` is building footprints and water (non-zero per ground cell); a grass cell
  * with no photo colour (under crowns, or filled by the majority filter) takes the nearest seen one.
  */
-export function grassFieldGrid(g: GrassMask, ground: GroundModel, exclude: { building?: Uint8Array | Int32Array; water?: Uint8Array }, scan?: Float32Array): GrassFieldGrid {
+export function grassFieldGrid(g: GrassMask, ground: GroundModel, exclude: { building?: ArrayLike<number>; water?: ArrayLike<number> }, scan?: Float32Array): GrassFieldGrid {
     const N = g.nx * g.nz;
     if (ground.nx !== g.nx || ground.nz !== g.nz) throw new Error('grass mask and ground model grids differ');
     const ex = new Uint8Array(N), surfaceY = new Float32Array(N).fill(NaN), colour = Float32Array.from(g.colour);

@@ -11,8 +11,12 @@
  * Where a district's ground is grass, from two measurements that must agree:
  *   - height: the scan's top surface within `maxAboveGroundM` of the terrain (the ground model), so building roofs,
  *     tree crowns, hedges taller than that and parked cars are never grass;
- *   - appearance: the cell's lit colour (litColour over the top-down tile photo) is vegetation green in CIELAB
- *     (a* well below zero, with chroma), not a grey plaza or a brown path.
+ *   - appearance: the cell's lit colour (litColour over the top-down tile photo) reads as vegetation in CIELAB
+ *     (ground-classifier.ts vegetationColourScore: a hue window from olive to fresh green, with chroma), not a grey plaza
+ *     or a brown path; weighed by what the ground classifier's area priors say about the cell (Google's park outlines say
+ *     planted, parking lots and carriageways say paved, green open ground off every planted area is held back as likely
+ *     paint, a roof or a vehicle and counted as `offPlanted`). Without a classification the photo and the scan decide
+ *     alone, at the no-evidence prior.
  * A majority filter removes speckle, and patches under `minPatchM2` are dropped. Each grass cell carries a confidence
  * from how green it is and how close to the terrain it lies; the mask is photo-inferred (read off photographs), never
  * measured. Water is never grass: a green pond or fountain pool passes both tests, so cells inside Google's vector water
@@ -28,19 +32,15 @@
 
 import type { GroundModel } from '../../spatial/StreetViewSurveyPlanner';
 import type { TopDownFrame, TopDownPhoto } from './top-down-photo';
-import { litColour } from './surface-materials';
+import { cellColours, vegetationColourScore, GROUND_CLASSIFIER_PARAMS, type GroundClassification } from './ground-classifier';
 
-export const GRASS_DETECT_VERSION = 'grass-detect/1';
+export const GRASS_DETECT_VERSION = 'grass-detect/2';
 
 export const GRASS_DETECT_PARAMS = {
     /** Highest the top surface may stand above the terrain and still be a lawn (m). */
     maxAboveGroundM: 0.6,
-    /** CIELAB a* at or below which a cell reads as green, and where its confidence reaches 1. */
-    greenA: -5, fullGreenA: -16,
-    /** Lightness range of a lawn texel mean (excludes deep shade and specular glare). */
-    minL: 12, maxL: 88,
-    /** Least chroma (sqrt(a*^2 + b*^2)) of a green cell. */
-    minChroma: 7,
+    /** Least vegetation score (the colour's vegetation score x the area's vegetation prior x (1 - its paved prior)) of a grass cell. */
+    minScore: 0.35,
     majorityPasses: 2,
     minPatchM2: 4,
     /** How far past a vector water area's edge a cell is still water (m): the polygon and the scan disagree by about a metre. */
@@ -62,11 +62,13 @@ export interface GrassMask {
     colour: Float32Array;
     cells: number;
     areaM2: number;
+    /** Green open ground held back by the area priors: 1 off every planted area (likely paint, a roof, a vehicle), 2 on paved ground. */
+    heldBack: Uint8Array;
     /** The filled-in part (mask value 2): cells and area, included in `cells` and `areaM2`. */
     underCrown: { cells: number; areaM2: number };
     patches: Array<{ cells: number; areaM2: number; centre: [number, number]; meanConfidence: number }>;
     /** Cells looked at, and why the rest were not grass. */
-    stats: { measured: number; tooHigh: number; water: number; notGreen: number; noColour: number; speckle: number };
+    stats: { measured: number; tooHigh: number; water: number; notGreen: number; noColour: number; speckle: number; offPlanted: number; paved: number; building: number };
     provenance: { label: 'photo-inferred'; method: string; underCrown?: { label: 'generated'; method: string } };
 }
 
@@ -74,14 +76,14 @@ export interface GrassMask {
  * `water`, `park` and `building`, when given, are non-zero per ground-grid cell inside a vector water area, a park
  * outline and a building footprint (rasterizeEvidence / rasterizeAreas over the ground model's grid).
  */
-export function detectGrass(photo: TopDownPhoto, frame: TopDownFrame, ground: GroundModel, P = GRASS_DETECT_PARAMS, evidence?: { water?: Uint8Array; park?: Uint8Array; building?: Uint8Array | Int32Array }): GrassMask {
+export function detectGrass(photo: TopDownPhoto, frame: TopDownFrame, ground: GroundModel, P = GRASS_DETECT_PARAMS, evidence?: { water?: Uint8Array; park?: Uint8Array; building?: Uint8Array | Int32Array; classification?: GroundClassification }): GrassMask {
     const { nx, nz, cellMeters: cellM, x0, z0 } = ground;
     const N = nx * nz;
-    const raw = new Uint8Array(N), score = new Float32Array(N), colour = new Float32Array(N * 3);
-    const stats = { measured: 0, tooHigh: 0, water: 0, notGreen: 0, noColour: 0, speckle: 0 };
+    const raw = new Uint8Array(N), heldBack = new Uint8Array(N), score = new Float32Array(N), colour = new Float32Array(N * 3);
+    const stats = { measured: 0, tooHigh: 0, water: 0, notGreen: 0, noColour: 0, speckle: 0, offPlanted: 0, paved: 0, building: 0 };
     const water = evidence?.water ? grow(evidence.water, nx, nz, Math.round(P.waterMarginM / cellM)) : undefined;
-    const per = Math.max(1, Math.round(cellM / photo.texelM));
-    const buf = new Uint8Array(per * per * 4);
+    const cls = evidence?.classification;
+    const colours = cls?.colours ?? cellColours(photo, frame, ground);
     for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
         const c = k * nx + i;
         const top = ground.top[c], g = ground.ground[c];
@@ -90,23 +92,17 @@ export function detectGrass(photo: TopDownPhoto, frame: TopDownFrame, ground: Gr
         const above = top - g;
         if (above > P.maxAboveGroundM) { stats.tooHigh++; continue; }
         if (water?.[c]) { stats.water++; continue; }
-        const cx = x0 + i * cellM, cz = z0 + k * cellM;
-        const px0 = Math.floor((cx - frame.x0) / photo.texelM), py0 = Math.floor((cz - frame.z0) / photo.texelM);
-        let n = 0;
-        for (let y = 0; y < per; y++) for (let x = 0; x < per; x++, n++) {
-            const sx = px0 + x, sy = py0 + y;
-            if (sx < 0 || sy < 0 || sx >= photo.width || sy >= photo.height) { buf[n * 4 + 3] = 0; continue; }
-            const o = (sy * photo.width + sx) * 4;
-            buf[n * 4] = photo.rgba[o]; buf[n * 4 + 1] = photo.rgba[o + 1]; buf[n * 4 + 2] = photo.rgba[o + 2];
-            buf[n * 4 + 3] = photo.rgba[o + 3];
-        }
-        const col = litColour(buf, { minTexels: Math.max(4, (per * per) >> 2) });
-        if (!col) { stats.noColour++; continue; }
-        const [L, a, b] = col.lab;
-        if (a > P.greenA || L < P.minL || L > P.maxL || Math.hypot(a, b) < P.minChroma) { stats.notGreen++; continue; }
+        if (cls ? cls.scores.building[c] : evidence?.building?.[c]) { stats.building++; continue; }
+        const L = colours.lab[c * 3], a = colours.lab[c * 3 + 1], b = colours.lab[c * 3 + 2];
+        if (!Number.isFinite(L)) { stats.noColour++; continue; }
+        const veg = cls ? cls.vegetationColour[c] : vegetationColourScore(L, a, b);
+        if (veg * (cls ? 1 : GROUND_CLASSIFIER_PARAMS.noEvidenceVegetationPrior) < P.minScore) { stats.notGreen++; continue; }
+        const pv = cls ? cls.prior.vegetation[c] : GROUND_CLASSIFIER_PARAMS.noEvidenceVegetationPrior, pp = cls ? cls.prior.paved[c] : 0;
+        const fused = veg * pv * (1 - pp);
+        if (fused < P.minScore) { if (pp >= 0.5) { stats.paved++; heldBack[c] = 2; } else { stats.offPlanted++; heldBack[c] = 1; } continue; }
         raw[c] = 1;
-        colour.set(col.linearRgb, c * 3);
-        const green = Math.min(1, (P.greenA - a) / (P.greenA - P.fullGreenA));
+        colour.set(colours.linear.subarray(c * 3, c * 3 + 3), c * 3);
+        const green = Math.min(1, fused / Math.max(P.minScore, pv));
         const low = 1 - Math.max(0, above) / P.maxAboveGroundM;
         score[c] = Math.max(0.05, 0.5 * green + 0.5 * Math.min(1, low * 1.5)) * (0.6 + 0.4 * green);
     }
@@ -159,9 +155,9 @@ export function detectGrass(photo: TopDownPhoto, frame: TopDownFrame, ground: Gr
     for (let c = 0; c < N; c++) { if (mask[c]) cells++; if (mask[c] === 2) under++; }
     patches.sort((p, q) => q.areaM2 - p.areaM2);
     return {
-        version: GRASS_DETECT_VERSION, x0, z0, nx, nz, cellM, mask, confidence, colour, cells, areaM2: cells * cellM * cellM,
+        version: GRASS_DETECT_VERSION, x0, z0, nx, nz, cellM, mask, confidence, colour, heldBack, cells, areaM2: cells * cellM * cellM,
         underCrown: { cells: under, areaM2: under * cellM * cellM }, patches, stats,
-        provenance: { label: 'photo-inferred', method: `ground-level cells (within ${P.maxAboveGroundM} m of the terrain) whose lit top-down colour is vegetation green (CIELAB a* <= ${P.greenA}), majority-filtered, patches >= ${P.minPatchM2} m2${water ? `, outside vector water areas (+${P.waterMarginM} m)` : ', no vector water areas given'}`,
+        provenance: { label: 'photo-inferred', method: `ground-level cells (within ${P.maxAboveGroundM} m of the terrain) whose lit top-down colour reads as vegetation (CIELAB hue ${GROUND_CLASSIFIER_PARAMS.hueInnerLow}-${GROUND_CLASSIFIER_PARAMS.hueInnerHigh} deg, chroma), ${cls?.prior.source === 'google-vector' ? 'weighed by Google land-use priors (planted areas, parking, carriageways; green off every planted area held back), ' : 'no area priors (photo and scan alone), '}score >= ${P.minScore}, majority-filtered, patches >= ${P.minPatchM2} m2${water ? `, outside vector water areas (+${P.waterMarginM} m)` : ', no vector water areas given'}`,
             ...(evidence?.park ? { underCrown: { label: 'generated' as const, method: `inside park outlines, ground hidden by crowns (${filled} cells) continues the nearest surface seen in the same park (grass; a path for ${P.pathReachM} m), lawn beyond` } } : {}) }
     };
 }
@@ -215,7 +211,7 @@ function grow(m: Uint8Array, nx: number, nz: number, r: number): Uint8Array {
     return out;
 }
 
-/** The top-down photo with the grass mask laid over it (seen grass green, filled-in grass cyan, tint by confidence; outlines bright), RGBA. */
+/** The top-down photo with the grass mask laid over it (seen grass green, filled-in grass cyan, tint by confidence; outlines bright; green held back by the area priors orange), RGBA. */
 export function grassOverlay(photo: TopDownPhoto, frame: TopDownFrame, g: GrassMask): Uint8Array {
     const out = Uint8Array.from(photo.rgba);
     const at = (x: number, z: number) => {
@@ -226,6 +222,7 @@ export function grassOverlay(photo: TopDownPhoto, frame: TopDownFrame, g: GrassM
         const x = frame.x0 + (px + 0.5) * photo.texelM, z = frame.z0 + (py + 0.5) * photo.texelM;
         const c = at(x, z);
         const o = (py * photo.width + px) * 4;
+        if (c >= 0 && !g.mask[c] && g.heldBack?.[c]) { out[o] = out[o] * 0.4 + 255 * 0.6; out[o + 1] = out[o + 1] * 0.4 + 120 * 0.6; out[o + 2] = out[o + 2] * 0.4; continue; }
         if (c < 0 || !g.mask[c]) { out[o] = out[o] * 0.55; out[o + 1] = out[o + 1] * 0.55; out[o + 2] = out[o + 2] * 0.55; continue; }
         const i = c % g.nx, k = (c / g.nx) | 0;
         const edge = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([di, dk]) => { const ii = i + di, kk = k + dk; return ii < 0 || kk < 0 || ii >= g.nx || kk >= g.nz || !g.mask[kk * g.nx + ii]; });
