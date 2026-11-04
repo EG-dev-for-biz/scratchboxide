@@ -74,7 +74,11 @@ export interface CrownShadingOptions {
  *
  * - Holes: a fragment is discarded where a band-limited world-space value noise (two octaves, at the clump scale and
  *   `coarseOctave` times it) falls below a hole share: `holes` (per slot) weighted toward the crown's rim (1 on and
- *   outside the crown's surface, falling to 0 at `rimWidth` mean lobe radii inside it, from the crown field) plus `pockets`
+ *   outside the crown's surface, falling to 0 at `rimWidth` mean lobe radii inside it, from the crown field), scaled by
+ *   what lies behind the rim: a level whose leaves lie more than `rimShareFull` in the rim band (their mean rim weight,
+ *   measured once per mesh: crownRimShareOf) takes holes in proportion to the share of its leaves outside the band,
+ *   (1 - share) / (1 - rimShareFull), so a small crown, all rim, is not holed through (on the forest demo's crowns a
+ *   5 m tree's mid level lost 31% of its cover to the holes, a 36 m redwood's 6%; scaled, 8%), plus `pockets`
  *   (per slot) where a third, coarser octave rises (a few interior gaps). The edge of a hole is dithered over `edgeSoftness`
  *   of the noise range. Each octave fades out (its share of the holes with it) as the pixel footprint grows from
  *   `filterStart` to `filterEnd` of its period, so a distant crown keeps only the holes the screen can resolve (no shimmer).
@@ -102,6 +106,8 @@ export interface CrownBreakupOptions {
     clumpMaxM: number;
     coarseOctave: number;
     rimWidth: number;
+    /** The share of a level's leaves in the rim band up to which it takes the full holes (see above). */
+    rimShareFull: number;
     edgeSoftness: number;
     filterStart: number;
     filterEnd: number;
@@ -114,7 +120,7 @@ export interface CrownBreakupOptions {
 
 export const DEFAULT_CROWN_BREAKUP: Readonly<CrownBreakupOptions> = Object.freeze<CrownBreakupOptions>({
     enabled: true, holes: [0, 0, 0.5, 0.55], pockets: [0, 0, 0.18, 0.2], clump: [0, 0, 1, 1], tone: [0, 1, 1, 1], shadowHoles: 1,
-    clumpPerCrownRadius: 0.28, clumpMinM: 0.8, clumpMaxM: 1.5, coarseOctave: 2.7, rimWidth: 0.9, edgeSoftness: 0.05,
+    clumpPerCrownRadius: 0.28, clumpMinM: 0.8, clumpMaxM: 1.5, coarseOctave: 2.7, rimWidth: 0.9, rimShareFull: 0.45, edgeSoftness: 0.05,
     filterStart: 0.25, filterEnd: 0.6, gapDarkening: 0.55, clumpTop: 0.2, clumpCrevice: 0.22, lobeVariation: 0.1, treeVariation: 0.07
 });
 
@@ -159,7 +165,8 @@ const uniforms = {
     // clumpTop, clumpCrevice, lobeVariation, treeVariation
     uSbBkValue: { value: new THREE.Vector4(DEFAULT_CROWN_BREAKUP.clumpTop, DEFAULT_CROWN_BREAKUP.clumpCrevice, DEFAULT_CROWN_BREAKUP.lobeVariation, DEFAULT_CROWN_BREAKUP.treeVariation) },
     uSbBkOctave: { value: DEFAULT_CROWN_BREAKUP.coarseOctave },
-    uSbBkShadowHoles: { value: DEFAULT_CROWN_BREAKUP.shadowHoles }
+    uSbBkShadowHoles: { value: DEFAULT_CROWN_BREAKUP.shadowHoles },
+    uSbBkRimFull: { value: DEFAULT_CROWN_BREAKUP.rimShareFull }
 };
 
 /** The uniforms every crown variant shares (one set for all trees). */
@@ -221,6 +228,7 @@ export function setCrownShadingUniforms(o: Pick<CrownShadingOptions, 'blend' | '
     uniforms.uSbBkValue.value.set(pos(b.clumpTop), c01(b.clumpCrevice), c01(b.lobeVariation), c01(b.treeVariation));
     uniforms.uSbBkOctave.value = Math.max(1.01, pos(b.coarseOctave));
     uniforms.uSbBkShadowHoles.value = c01(b.shadowHoles);
+    uniforms.uSbBkRimFull.value = Math.min(0.999, c01(b.rimShareFull));
 }
 
 /** An override of the breakup: the per-slot factors as four numbers (near, near-mid, mid, far) or three (near, mid, far). */
@@ -264,7 +272,7 @@ export function resolveCrownBreakup(o: CrownBreakupInput | undefined | null): Cr
         enabled: o?.enabled ?? d.enabled,
         holes: slotFactors(o?.holes, d.holes), pockets: slotFactors(o?.pockets, d.pockets), clump: slotFactors(o?.clump, d.clump), tone: slotFactors(o?.tone, d.tone), shadowHoles: num(o?.shadowHoles, d.shadowHoles),
         clumpPerCrownRadius: num(o?.clumpPerCrownRadius, d.clumpPerCrownRadius), clumpMinM: num(o?.clumpMinM, d.clumpMinM), clumpMaxM: num(o?.clumpMaxM, d.clumpMaxM),
-        coarseOctave: num(o?.coarseOctave, d.coarseOctave), rimWidth: num(o?.rimWidth, d.rimWidth), edgeSoftness: num(o?.edgeSoftness, d.edgeSoftness),
+        coarseOctave: num(o?.coarseOctave, d.coarseOctave), rimWidth: num(o?.rimWidth, d.rimWidth), rimShareFull: num(o?.rimShareFull, d.rimShareFull), edgeSoftness: num(o?.edgeSoftness, d.edgeSoftness),
         filterStart: num(o?.filterStart, d.filterStart), filterEnd: num(o?.filterEnd, d.filterEnd), gapDarkening: num(o?.gapDarkening, d.gapDarkening),
         clumpTop: num(o?.clumpTop, d.clumpTop), clumpCrevice: num(o?.clumpCrevice, d.clumpCrevice), lobeVariation: num(o?.lobeVariation, d.lobeVariation),
         treeVariation: num(o?.treeVariation, d.treeVariation)
@@ -347,6 +355,60 @@ export function crownLobeField(lobes: ReadonlyArray<readonly [number, number, nu
 
 /** One value for every instance of a mesh (and for a plain mesh, which draws as instance 0). */
 export const PER_MESH_DIVISOR = 1 << 30;
+
+/**
+ * A leaf mesh's rim share rides in the fraction of its detail slot (sbCrownC.w = slot + CROWN_RIM_SHARE_PACK x share): the
+ * slot's selection steps at 0.5, 1.5 and 2.5, so a fraction under 0.5 leaves it as it was, and no attribute is added (a
+ * textured instanced leaf mesh already uses 15 of the 16 a vertex shader is sure to have).
+ */
+export const CROWN_RIM_SHARE_PACK = 0.4;
+/** The most vertices of a plain mesh (the far masses) its rim share is measured on. */
+const RIM_SAMPLES = 512;
+
+/** The detail slot `slot` (its integer part) carrying the rim share `share` in [0, 1]. */
+export function crownRimSlot(slot: number, share: number): number {
+    return Math.floor(slot + 1e-6) + CROWN_RIM_SHARE_PACK * Math.min(1, Math.max(0, Number.isFinite(share) ? share : 0));
+}
+
+/** The share of its slot's holes a level takes, from its packed slot, the share read to 1e-4 (mirrors sbBkRimHoles). */
+export function crownRimHoles(slot: number): number {
+    const share = Math.min(1, Math.max(0, Math.floor(((slot - Math.floor(slot + 1e-6)) / CROWN_RIM_SHARE_PACK) * 1e4 + 0.5) * 1e-4));
+    return Math.min(1, Math.max(0, (1 - share) / Math.max(1 - uniforms.uSbBkRimFull.value, 1e-3)));
+}
+
+/**
+ * A leaf mesh's rim share: the mean rim weight (1 on the crown's surface, falling to 0 at `rimWidth` mean lobe radii inside
+ * it, as the holes weigh it) of its leaves where its shader puts them: each instance's origin for an instanced mesh, its
+ * vertices for a plain one (every one, or RIM_SAMPLES evenly spread). Needs its crown attributes (attachCrownAttributes,
+ * and attachCrownInstanceField for an instanced mesh with lobes).
+ */
+export function crownRimShareOf(mesh: THREE.Mesh, rimWidth: number): number {
+    const g = mesh.geometry as THREE.BufferGeometry;
+    if (!g.getAttribute('sbCrownL') || !g.getAttribute('sbCrownC')) return 0;
+    const w = Math.max(1e-3, rimWidth);
+    const v = new THREE.Vector3();
+    let sum = 0, n = 0;
+    const im = mesh as THREE.InstancedMesh;
+    if (im.isInstancedMesh) {
+        const m = new THREE.Matrix4();
+        for (let i = 0; i < im.count; i++) { im.getMatrixAt(i, m); v.setFromMatrixPosition(m); sum += 1 - smooth(0, w, crownSignedDepthAt(mesh, v, i)); n++; }
+    } else {
+        const pos = g.getAttribute('position');
+        if (!pos) return 0;
+        const step = Math.max(1, Math.floor(pos.count / RIM_SAMPLES));
+        for (let i = 0; i < pos.count; i += step) { v.fromBufferAttribute(pos, i); sum += 1 - smooth(0, w, crownSignedDepthAt(mesh, v)); n++; }
+    }
+    return n ? sum / n : 0;
+}
+
+/** Measures a leaf mesh's rim share and writes it into its slot (crownRimSlot), where its holes read it; returns the share. */
+export function setCrownRimShare(mesh: THREE.Mesh, rimWidth: number): number {
+    const C = (mesh.geometry as THREE.BufferGeometry).getAttribute('sbCrownC');
+    if (!C) return 0;
+    const share = crownRimShareOf(mesh, rimWidth);
+    setPerMeshAttribute(mesh, 'sbCrownC', [C.getX(0), C.getY(0), C.getZ(0), crownRimSlot(C.getW(0), share)]);
+    return share;
+}
 
 /**
  * The mesh's own geometry: a light geometry that shares every buffer of the current one (the renderer keys buffers by
@@ -606,6 +668,7 @@ uniform vec4 uSbBkFilter;
 uniform vec4 uSbBkValue;
 uniform float uSbBkOctave;
 uniform float uSbBkShadowHoles;
+uniform float uSbBkRimFull;
 varying vec3 vSbBkW;
 varying float vSbBkDepth;
 varying vec4 vSbBkInfo;
@@ -647,6 +710,11 @@ vec3 sbBkWorley( vec3 p ) {
 vec4 sbBkSlot( float lvl ) {
     return vec4( 1.0 - step( 0.5, lvl ), step( 0.5, lvl ) - step( 1.5, lvl ), step( 1.5, lvl ) - step( 2.5, lvl ), step( 2.5, lvl ) );
 }
+// the share of the holes a level takes: its leaves' rim share rides in the slot's fraction (crownRimSlot), read to 1e-4
+float sbBkRimHoles( float lvl ) {
+    float share = clamp( floor( fract( lvl ) / ${CROWN_RIM_SHARE_PACK.toFixed(2)} * 1e4 + 0.5 ) * 1e-4, 0.0, 1.0 );
+    return clamp( ( 1.0 - share ) / max( 1.0 - uSbBkRimFull, 1e-3 ), 0.0, 1.0 );
+}
 // the clump scale (m) of this crown
 float sbBkClumpM() {
     return clamp( uSbBkShape.x * vSbBkInfo.z, uSbBkShape.y, uSbBkShape.z );
@@ -660,7 +728,7 @@ float sbBkResolved( float footprintM, float periodM ) {
  * factors, the pixel footprint (m) and a dither value in [0, 1).
  */
 bool sbBreakupKeep( vec3 pM, float depthS, vec4 sel, float footprintM, float dither ) {
-    float holes = dot( uSbBkHoles, sel );
+    float holes = dot( uSbBkHoles, sel ) * sbBkRimHoles( vSbBkInfo.x );
     float pockets = dot( uSbBkPockets, sel );
 #ifdef SB_BREAKUP_SHADOW
     holes *= uSbBkShadowHoles;
@@ -890,7 +958,7 @@ export function breakupValueNoise(x: number, y: number, z: number): number {
 export function breakupKeepAt(pM: readonly [number, number, number], depthS: number, slot: number, footprintM: number, dither: number, crownRadiusM: number): boolean {
     const u = uniforms;
     const k = slot < 0.5 ? 'x' : slot < 1.5 ? 'y' : slot < 2.5 ? 'z' : 'w';
-    const holes = u.uSbBkHoles.value[k], pockets = u.uSbBkPockets.value[k];
+    const holes = u.uSbBkHoles.value[k] * crownRimHoles(slot), pockets = u.uSbBkPockets.value[k];
     if (u.uSbBkOn.value < 0.5 || holes + pockets <= 0) return true;
     const sh = u.uSbBkShape.value, fl = u.uSbBkFilter.value;
     const c = Math.min(sh.z, Math.max(sh.y, sh.x * crownRadiusM));
