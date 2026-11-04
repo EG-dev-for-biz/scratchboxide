@@ -1,8 +1,9 @@
 # Kerbs and gutters as geometry, and the scan carved under them
 
 **Date:** 2026-11-03
-**Status:** Unit-tested on synthetic cross-sections and a synthetic crossing, and replayed offline on the Penn K-D smoke run's
-own files. Not yet built live in the app, and not yet judged by the user.
+**Status:** Unit-tested, replayed offline on the Penn K-D smoke run, and built live and uncached at Penn (7th Ave & W 33rd
+St, run `d2a35134`) and Federation Square (run `d10c8f6e`) on 2026-11-04. Before/after sheets made; not yet judged by the
+user.
 **Branch:** `feat/road-kerbs-gutters` (from main `d20e36d3`).
 **Switch:** `SCRATCHBOX_STAGED_ROAD_KERBS=1`, off by default. It turns the roads stage on with it.
 
@@ -182,11 +183,55 @@ code of this branch:
 - **Crack count on real data:** the remeshed ground carries part of its street twice (mesh 42 repeats mesh 0's triangles
   with reversed winding), which confounds an exact-weld open-edge count, so the real-data check is the renders.
 
-### Live build
+### Live builds (2026-11-03/04)
 
-Not run. The Mac's load average stayed between 150 and 620 from 17:20 to 20:00, above the 100 the shared rules allow for
-a build. The launch entry `scratchbox-road-kerbs` is in place: ports 4310/4311/4312, the switch on,
-`SCRATCHBOX_CACHE_RESTORE=off`. Federation Square has not been built.
+My own instance (launch entry `scratchbox-road-kerbs`, ports 4310-4312, `SCRATCHBOX_CACHE_RESTORE=off`), districts shown
+as scanned (`district: "scan"`), each started only with the load average under 100, through the app's tool route
+(`/gemini/tools/run-stream`, `google_3d_tiles_get_clay`).
+
+**The first build, at Penn (run `02c4e917`), found four faults, all fixed:**
+
+- **The carve fanned a kiosk's face into slivers.** The T-junction repair put a cut point into any edge it lay over in
+  plan, and a vertical face's edges are one line in plan, so the street's cut points below went into it, reading other
+  charts of the twin's photo. Now a point goes into an edge only when it lies on it in 3D, with that piece's own
+  attributes along the edge.
+- **The new surfaces' photo sat metres off the scan's.** The photo seen from above was exact at the tile's highest point,
+  so beside a 230 m tower the street was drawn 7 % small toward the frame's centre. `renderTopDownPhoto` takes a
+  `referenceY` (default unchanged); the kerbs pass the ground's level.
+- **The new surfaces were darker than the ground around them**, coloured from the raw tile photo while the ground shows
+  the de-lit twin. When the build's own ground twin commits, its own kerbed streets are coloured again from it (seen from
+  above, before the carve), and committed again (`road_recolour` run note).
+- **The roads stage ran past its 240 s limit.** It now has 6 more minutes with the kerbs on.
+
+**Then, found by the seam session in chunked K-D builds, also fixed:** the centre's ground, clipped to its territory first
+(`_kd0_`), was skipped by the carve as if it were a joined chunk's; and the recolour fired on every joined and seam-cut
+ground. A joined chunk is now told by `meta.extra.chunk` alone, and a build recolours only its own streets from its own
+ground.
+
+**The uncached builds on the final code:**
+
+| | Penn, 7th Ave & W 33rd St (`d2a35134`) | Federation Square (`d10c8f6e`) |
+|---|---|---|
+| Extraction | 581 leaf tiles, 210 m | 298 leaf tiles, 201 m |
+| Kerb line measured / drawn | 2,295.5 m / 1,932.1 m | 1,432.1 m / 1,321.3 m |
+| Not drawn (no kerb measured) | 816.1 m | 369.5 m |
+| Faces (10th / 50th / 90th pct) | 2.5 / 11.0 / 23.7 cm | 4.1 / 13.6 / 23.0 cm |
+| Ramps, corners | 390.4 m; 2 drawn, 10 not | 225.3 m; 0 drawn, 2 not |
+| Gutters measured / generated | 7.9 m / 1,924.3 m | 7.2 m / 1,314.1 m |
+| Scan carved (textured twin) | 6,975 triangles removed, 11,271 cut (6,455 m²), 2,914 standing kept | 1,427 removed, 3,081 cut (7,834 m²), 4,325 standing kept |
+| Rim | 36,213 points pinned (max 0.249 m), 1,430 curtain triangles | 11,767 pinned (max 0.25 m), 3,438 curtain triangles |
+| Roads stage | 240 s | 53 s |
+| Recolour from the twin | 17.7 s | 15.4 s |
+
+**What the sheets show** (`docs/screenshots/road-kerbs_2026-11-04/kerbs-sheet-penn.jpg`, `kerbs-sheet-fedsquare.jpg`,
+gitignored; walk-mode eye height along the three best-measured kerb stretches and from above, before and after,
+textured and clay, rendered offline from each run's published layers):
+
+- From above, the recoloured surfaces cannot be told from the ground around them: lanes, lines and crossings continue.
+- At eye height the measured kerb reads as a clean edge with its face; the street otherwise looks as the scan did.
+- **Defects:**
+  - a few small black slivers at the carve's rim, one or two a view, that the before does not have;
+  - at Federation Square, sliver spikes in the sweep where a kerb run meets a crossing (`road_39`).
 
 ## Known gaps
 
@@ -199,6 +244,12 @@ a build. The launch entry `scratchbox-road-kerbs` is in place: ports 4310/4311/4
   on a loaded Mac.
 - **Sidewalks:** the scan's own sidewalk stays (settled by road-flatten). SB-Roadie's sidewalk strips are still off
   (`buildSidewalks: false`).
+- **Rim slivers and crossing spikes:** see the live builds above.
+- **The photo seen from above elsewhere:** `renderTopDownPhoto`'s default is still the tile's highest point. Its other
+  callers (vehicle removal's crops, the grass map, bridge build, scan massing, procedural materials, revolution fit, and
+  the legacy SB-Roadie path) draw the ground small beside tall buildings in the same way; each should pass its ground's
+  level.
+- **The recolour's cost:** it runs in the commit listener, synchronously: 15-30 s a layer at these sizes.
 
 ## Candidate Tool/Service Ideas
 

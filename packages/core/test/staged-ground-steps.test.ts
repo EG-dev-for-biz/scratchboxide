@@ -10,7 +10,8 @@
 /**
  * Steps and ramps as geometry (ground-steps.ts) on synthetic scans: a flight of ten 15 cm by 35 cm steps the scan resolves
  * (counted from the scan), the same flight melted into a smooth incline (counted by Street View, else estimated), a 1:12
- * ramp, a flight with a landing, a long street on a hill (no flight), the replicated rebuild, and the scan carved under it.
+ * ramp, a flight with a landing, a long street on a hill (no flight), a flight under a canopy and one running on under a
+ * portico (each read to its own top), the replicated rebuild, and the scan carved under it.
  */
 
 import { describe, it, expect, afterAll } from 'vitest';
@@ -119,6 +120,42 @@ describe('a ramp, a landing, a street on a hill', () => {
         // the rebuild puts it there, level, between the two runs
         const mesh = buildStepsMesh([f]);
         expect(mesh.parts.has('landing:measured')).toBe(true);
+    });
+
+    it('reads a flight on to its own top under a canopy, not the canopy as its top', async () => {
+        // the melted flight, a canopy 12 m up over its top landing from 0.3 m past it; the scan's top surface there is the canopy,
+        // which read as the top made a 12 m flight of the 1.5 m incline (the live Penn build: 10-70 m "flights" under roofs)
+        const s = scanOf('canopy', (x, z) => (x >= LEN + 0.3 && x < LEN + 8 ? 12 : melted(x, z)), -3, LEN + 10, -5, 5, 0.05);
+        const f = only((await measureSteps(s.scan, s.h)).flights);
+        expect(Math.abs(f.topY - f.footY - TOP)).toBeLessThan(0.1);
+        expect(f.count).toBeLessThanOrEqual(11);
+    });
+
+    it('reads a flight on under a portico: the top surface stops at the roof, the steps go on beneath it', async () => {
+        // ten melted steps whose last 1.05 m (three steps) run under a roof 6 m up, the landing behind them under it too; the
+        // scan holds both the roof and the steps and landing under it (two surfaces over the same ground)
+        const under = (x: number, z: number) => melted(x, z), roofFrom = LEN - 1.05;
+        const sc = scanOf('portico-steps', under, -3, LEN + 6, -5, 5, 0.05);
+        // the roof: a second sheet over x >= roofFrom
+        const roof = scanOf('portico-roof', () => 6, roofFrom, LEN + 6, -5, 5, 0.25);
+        const merged = path.join(WORK, 'portico.glb');
+        const a = parseGlbBytes(fs.readFileSync(sc.file)), b = parseGlbBytes(fs.readFileSync(roof.file));
+        const P0 = readAccessor(a, a.json.meshes[0].primitives[0].attributes.POSITION).data, I0 = readAccessor(a, a.json.meshes[0].primitives[0].indices).data;
+        const P1 = readAccessor(b, b.json.meshes[0].primitives[0].attributes.POSITION).data, I1 = readAccessor(b, b.json.meshes[0].primitives[0].indices).data;
+        const n0 = P0.length / 3;
+        writeStagedGlbFile(merged, [{ positions: Float32Array.from([...P0, ...P1]), indices: Uint32Array.from([...I0, ...Array.from(I1, i => i + n0)]) }], {});
+        const scan = loadScanMesh(merged);
+        const f = only((await measureSteps(scan, scanHeightIndex(scan, 1))).flights);
+        expect(Math.abs(f.topY - f.footY - TOP)).toBeLessThan(0.1);
+        expect(f.sTop - f.sFoot).toBeGreaterThan(LEN - 0.3);
+    });
+
+    it('draws a smooth incline steeper than a ramp as its slope when no count gives steps a step\'s tread', async () => {
+        // 1.7 m over 10 m (1:6), 6 m wide, nothing to count it by: 11 estimated steps would need 91 cm treads, no step's
+        const s = scanOf('plaza', (x, z) => (x < 0 ? 0 : x >= 10 || Math.abs(z) > 3 ? 1.7 : 0.17 * x), -3, 13, -5, 5, 0.05);
+        const f = only((await measureSteps(s.scan, s.h)).flights);
+        expect(f.kind).toBe('ramp');
+        expect(f.slope).toBeCloseTo(0.17, 1);
     });
 
     it('leaves a long street on a hill alone (the road\'s own)', async () => {

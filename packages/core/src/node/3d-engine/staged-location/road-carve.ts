@@ -325,22 +325,32 @@ export function carveUnderRoads(bytes: Uint8Array, footprint: CarveFootprint, P:
                 const out: Vx[] = [];
                 poly.forEach((u, k) => {
                     out.push(u);
-                    const w = poly[(k + 1) % poly.length], dx = w.p[0] - u.p[0], dz = w.p[2] - u.p[2], l2 = dx * dx + dz * dz;
+                    const w = poly[(k + 1) % poly.length], dx = w.p[0] - u.p[0], dz = w.p[2] - u.p[2], dy = w.p[1] - u.p[1], l2 = dx * dx + dz * dz;
                     if (!(l2 > 1e-12)) return;
+                    const tol = 1e-5 + 1e-6 * Math.sqrt(l2 + dy * dy);
                     const on: Array<{ t: number; v: Vx }> = [];
                     for (let i = Math.floor(Math.min(u.p[0], w.p[0]) / cell); i <= Math.floor(Math.max(u.p[0], w.p[0]) / cell); i++) for (let j = Math.floor(Math.min(u.p[2], w.p[2]) / cell); j <= Math.floor(Math.max(u.p[2], w.p[2]) / cell); j++) {
                         for (const v of grid.get(cellKey(i, j)) ?? []) {
-                            if (v === u || v === w || poly.includes(v)) continue;
+                            if (v.p === u.p || v.p === w.p || poly.some(x => x.p === v.p)) continue;
                             const t = ((v.p[0] - u.p[0]) * dx + (v.p[2] - u.p[2]) * dz) / l2;
                             if (t <= 1e-7 || t >= 1 - 1e-7) continue;
                             if (Math.abs((v.p[0] - u.p[0]) * dz - (v.p[2] - u.p[2]) * dx) / Math.sqrt(l2) > 1e-6) continue;
+                            // on the edge itself, not only over it: a wall's or a kiosk's face has edges that are one line in plan,
+                            // and the street's cut points below it lie on that line
+                            if (Math.abs(v.p[1] - (u.p[1] + t * dy)) > tol) continue;
                             on.push({ t, v });
                         }
                     }
                     if (!on.length) return;
                     changed = true;
                     on.sort((a, b) => a.t - b.t);
-                    for (const { v } of on) if (out[out.length - 1] !== v) out.push(v);
+                    // the point with this piece's own attributes along its edge (its photo coordinates may be another chart's
+                    // across a UV seam), its position shared, so the rim moving it moves both
+                    for (const { t, v } of on) {
+                        if (out[out.length - 1].p === v.p) continue;
+                        const a = u.a.map((x, i) => x + t * (w.a[i] - x));
+                        out.push(a.every((x, i) => Math.abs(x - v.a[i]) < 1e-7) ? v : { p: v.p, key: v.key, a });
+                    }
                 });
                 return changed ? out : poly;
             };
