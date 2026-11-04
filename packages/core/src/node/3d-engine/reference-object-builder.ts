@@ -82,6 +82,7 @@ import {
 import { renderReviewViews } from './visual-review';
 import { materialPreviewMeshes, renderMaterialPreview } from './material-preview-render';
 import { downscaleForVision } from '../vision-image-downscale';
+import { finalImagePart } from '../google-media-generation-service';
 import { generateStyleDnaImage, studioMcpConfigFromEnv, type StudioImagePresets } from '../scratchbox-studio/studio-mcp-client';
 
 /** Nano Banana Lite: the reference model for clay builds, and when the Style DNA source is not configured or fails. */
@@ -759,7 +760,7 @@ async function generateReferenceImage(
         if (blocked) {
             throw new ReferenceObjectBuildError('reference-image', `${REFERENCE_IMAGE_MODEL} refused the request (${blocked}).`, { model: REFERENCE_IMAGE_MODEL, code: 'safety_filtered' });
         }
-        const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData?.data);
+        const part = finalImagePart(response.candidates?.[0]?.content?.parts);
         if (part?.inlineData?.data) {
             return {
                 image: { data: Buffer.from(part.inlineData.data, 'base64'), mimeType: part.inlineData.mimeType || 'image/png' },
