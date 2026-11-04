@@ -1474,7 +1474,9 @@ function roadCarver(cache: StageCache, roads: RoadSurface[], footprint: CarveFoo
     };
     return (layer, meta) => {
         const ground = layer.layer === 'l2' || meta.isGround === true;
-        if (!ground || meta.source !== 'Google3DTilesClay' || meta.vegetation || (meta.extra as { chunk?: number } | undefined)?.chunk !== undefined || CHUNK_URL.test(layer.url)) return layer;
+        // a chunk joined from another build (meta.extra.chunk) was carved by that build; the centre's own ground, clipped to
+        // its territory first (published as _kd0_), is carved here like any other
+        if (!ground || meta.source !== 'Google3DTilesClay' || meta.vegetation || (meta.extra as { chunk?: number } | undefined)?.chunk !== undefined) return layer;
         const c = carve(layer.url, layer.objectId, false), ct = layer.textured ? carve(layer.textured.url, layer.objectId, true) : undefined;
         if (!c && !ct) return layer;
         const rec = records.filter(x => x.objectId === layer.objectId && !x.textured).pop()?.report;
