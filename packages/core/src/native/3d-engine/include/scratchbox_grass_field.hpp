@@ -27,6 +27,14 @@
  * kept), r the doubling that brings a blade to `pixelAngle` x its distance from the centre, capped at `maxWidthScale`.
  * `pixelAngle` 0 keeps one ring.
  *
+ * Density cues. A real lawn reads dense because no ground shows between its blades, not because each blade is seen:
+ *   - self-occlusion: the lower part of every blade lies in its neighbours' shade, so the vertex tone climbs from
+ *     `rootShade` at the root to full at `occlusionHeight` of the blade;
+ *   - an underlayer: a sheet lifted `underlayerLiftM` over the grass cells within `underlayerRadiusM`, standing on the
+ *     scan's surface, in the cell's photo colour darkened to `underlayerShade` (the dense lower grass seen from above) and
+ *     further by `contactShade` where clumps stand, fading back to the photo colour over `underlayerFadeM` at the grass
+ *     edge, and carrying a tiling blade-detail texture (strokes at blade scale, `detailTileM` a tile).
+ *
  * Every shape quantity is a continuous parameter: blade height and width, keel depth, droop, splay, curl, clump radius,
  * senescence; nothing selects a grass kind.
  *
@@ -35,7 +43,8 @@
  * f32 colour[N * 3] (linear RGB lit photo colour of the cell; 0,0,0 = none), then u32 nTri and nTri * 9 f32: the scan's
  * triangles over the band (x y z per corner; 0 triangles = no snapping).
  *
- * Output: mesh.bin (per variant: positions f32x3, normals f32x3, colours f32x4, indices u32) and instances.bin (per
+ * Output: underlayer.bin (positions f32x3, normals f32x3, colours f32x4, uvs f32x2, indices u32) and detail.rgba (the
+ * detail texture, RGBA8), counts in report.json's `underlayer`; mesh.bin (per variant: positions f32x3, normals f32x3, colours f32x4, indices u32) and instances.bin (per
  * variant: translation f32x3, rotation f32x4 (x y z w), scale f32x3, colour f32x3, confidence f32: its cell's mask
  * confidence), laid out as report.json says.
  */
@@ -50,6 +59,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace scratchbox::grass_field {
@@ -83,6 +93,18 @@ struct Params {
     double clumpNormalBlend = 0.35;
     double senescence = 0.35;       // how far the tip goes toward straw (0 = all green)
     // distance rings
+    // self-occlusion up the blade
+    double rootShade = 0.3;         // tone at the root, relative to the lit lamina
+    double occlusionHeight = 0.6;   // share of the blade the shade climbs
+    // underlayer
+    double underlayerRadiusM = 40;  // 0 = none
+    double underlayerSpacingM = 0.25;
+    double underlayerLiftM = 0.02;
+    double underlayerShade = 0.55;  // the dense lower grass seen from above, relative to the photo colour
+    double contactShade = 0.35;     // further darkening where clumps stand
+    double contactRadiusM = 0.3;
+    double underlayerFadeM = 1.5;   // at the grass edge the shade fades back to the photo colour over this
+    double detailTexPx = 256, detailTileM = 0.5;
     double pixelAngle = 0.0015;     // radians a pixel spans (about 1 px at 1000 px over 60 degrees); 0 = no rings
     double maxWidthScale = 16;      // widest blade, as a multiple of the near blade
 
@@ -93,7 +115,9 @@ struct Params {
         SB_GF_P(variants) SB_GF_P(seed) SB_GF_P(bladeCount) SB_GF_P(clumpRadius) SB_GF_P(bladeHeightMin) SB_GF_P(bladeHeightMax)
         SB_GF_P(bladeWidthBase) SB_GF_P(bladeWidthMid) SB_GF_P(keelDepth) SB_GF_P(segmentsPerBlade) SB_GF_P(farSegmentsPerBlade) SB_GF_P(gravityDroop)
         SB_GF_P(radialSplay) SB_GF_P(curlStochasticity) SB_GF_P(centerHeightBias) SB_GF_P(clumpNormalBlend) SB_GF_P(senescence)
-        SB_GF_P(pixelAngle) SB_GF_P(maxWidthScale)
+        SB_GF_P(pixelAngle) SB_GF_P(maxWidthScale) SB_GF_P(rootShade) SB_GF_P(occlusionHeight)
+        SB_GF_P(underlayerRadiusM) SB_GF_P(underlayerSpacingM) SB_GF_P(underlayerLiftM) SB_GF_P(underlayerShade)
+        SB_GF_P(contactShade) SB_GF_P(contactRadiusM) SB_GF_P(underlayerFadeM) SB_GF_P(detailTexPx) SB_GF_P(detailTileM)
 #undef SB_GF_P
         throw std::runtime_error("unknown parameter " + k);
     }
@@ -143,6 +167,15 @@ struct Instance { float t[3], r[4], s[3], c[3], conf; double d; bool snapped; };
 
 struct Variant { geometry::Mesh mesh; std::vector<Instance> instances; int ring = 0; double widthScale = 1; };
 
+/** The sheet under the blades, and its detail texture. */
+struct Underlayer {
+    std::vector<float> positions, normals, colours, uvs;
+    std::vector<uint32_t> indices;
+    std::vector<uint8_t> texture;
+    int texPx = 0;
+    double areaM2 = 0, textureMean = 0;
+};
+
 struct Stats {
     long strata = 0, notGrass = 0, lowConfidence = 0, outsideBand = 0, nearExcluded = 0, thinned = 0, overBudget = 0, snapped = 0, unsnapped = 0;
     double expected = 0, bandGrassM2 = 0, radiusReachedM = 0;
@@ -185,6 +218,17 @@ public:
         }
         bucketScan();
         place(nv, nr);
+        underlayer();
+    }
+
+    const Underlayer& under() const { return under_; }
+
+    void writeUnderlayer(const std::string& meshFile, const std::string& texFile) const {
+        std::ofstream m(meshFile, std::ios::binary), t(texFile, std::ios::binary);
+        if (!m || !t) throw std::runtime_error("cannot write " + meshFile);
+        for (const auto* a : {&under_.positions, &under_.normals, &under_.colours, &under_.uvs}) m.write(reinterpret_cast<const char*>(a->data()), std::streamsize(a->size() * 4));
+        m.write(reinterpret_cast<const char*>(under_.indices.data()), std::streamsize(under_.indices.size() * 4));
+        t.write(reinterpret_cast<const char*>(under_.texture.data()), std::streamsize(under_.texture.size()));
     }
 
     const std::vector<Variant>& variants() const { return variants_; }
@@ -228,7 +272,9 @@ public:
           << ",\"stats\":{\"strata\":" << s.strata << ",\"notGrass\":" << s.notGrass << ",\"lowConfidence\":" << s.lowConfidence
           << ",\"outsideBand\":" << s.outsideBand << ",\"nearExcluded\":" << s.nearExcluded << ",\"thinned\":" << s.thinned
           << ",\"overBudget\":" << s.overBudget << ",\"snapped\":" << s.snapped << ",\"unsnapped\":" << s.unsnapped << ",\"expected\":" << s.expected << ",\"bandGrassM2\":" << s.bandGrassM2
-          << ",\"radiusReachedM\":" << s.radiusReachedM << "}}";
+          << ",\"radiusReachedM\":" << s.radiusReachedM << "},\"underlayer\":{\"vertices\":" << under_.positions.size() / 3
+          << ",\"indices\":" << under_.indices.size() << ",\"texPx\":" << under_.texPx << ",\"tileM\":" << p_.detailTileM
+          << ",\"areaM2\":" << under_.areaM2 << ",\"textureMean\":" << under_.textureMean << "}}";
         return j.str();
     }
 
@@ -237,6 +283,7 @@ private:
     Params p_;
     std::vector<Variant> variants_;
     Stats stats_;
+    Underlayer under_;
     // the scan's triangles bucketed by grid cell (every cell a triangle's plan bounds touch)
     std::vector<uint32_t> bucketStart_, bucketTris_;
 
@@ -298,10 +345,17 @@ private:
         // tones relative to the photo colour the instance carries: a paler sheath, a straw tip by senescence
         const float k = kMidTone, s = float(std::clamp(p_.senescence, 0.0, 1.0));
         c.midColor = Vec4(k, k, k, 1);
-        c.rootColor = Vec4(0.95f, 0.95f, 0.78f, 1);
+        c.rootColor = Vec4(k, k, k, 1);
         c.tipColor = Vec4(math::lerp(k, 0.98f, s), math::lerp(k, 0.86f, s), math::lerp(k, 0.5f, s), 1);
         c.seed = uint32_t(p_.seed) * 7919u + uint32_t(v) * 104729u + 17u;
-        return GrassClumpGenerator::generateClump(c);
+        geometry::Mesh m = GrassClumpGenerator::generateClump(c);
+        // self-occlusion: the blade's lower part in its neighbours' shade (uv.y runs root 0 to tip 1)
+        const double h = std::max(1e-3, p_.occlusionHeight), r0 = std::clamp(p_.rootShade, 0.0, 1.0);
+        for (size_t i = 0; i < m.vertexColors.size(); ++i) {
+            const double t = std::clamp(double(m.uvs[i].y) / h, 0.0, 1.0), occ = r0 + (1 - r0) * t * t * (3 - 2 * t);
+            m.vertexColors[i].x *= float(occ); m.vertexColors[i].y *= float(occ); m.vertexColors[i].z *= float(occ);
+        }
+        return m;
     }
 
     int cellOf(double x, double z) const {
@@ -339,6 +393,115 @@ private:
             sum += wt * g_.surfaceY[c]; w += wt;
         }
         return w > 1e-6 ? sum / w : g_.surfaceY[own];
+    }
+
+    /** A tiling texture of blade-scale strokes (the lawn's top seen from above), grey around 0.8; wraps at its edges. */
+    void detailTexture() {
+        const int n = std::clamp(int(std::lround(p_.detailTexPx)), 16, 2048);
+        std::vector<float> v(size_t(n) * n, 0.8f);
+        const long strokes = long(n) * n / 30;
+        const uint64_t salt = uint64_t(p_.seed) + 9001;
+        for (long q = 0; q < strokes; ++q) {
+            const double cx = hash01(q, 1, salt) * n, cy = hash01(q, 2, salt) * n, ang = hash01(q, 3, salt) * math::PI;
+            const double len = n * (0.006 + 0.02 * hash01(q, 4, salt)) / std::max(0.05, p_.detailTileM) * 0.5;
+            const float val = float(0.45 + 0.6 * hash01(q, 5, salt));
+            const int steps = std::max(2, int(len * 2));
+            for (int k = 0; k <= steps; ++k) {
+                const double f = double(k) / steps - 0.5;
+                const int x = ((int(std::floor(cx + std::cos(ang) * len * f)) % n) + n) % n, y = ((int(std::floor(cy + std::sin(ang) * len * f)) % n) + n) % n;
+                v[size_t(y) * n + x] = val;
+            }
+        }
+        under_.texPx = n;
+        under_.texture.resize(size_t(n) * n * 4);
+        double sum = 0;
+        for (size_t i = 0; i < v.size(); ++i) {
+            const float c = std::clamp(v[i], 0.f, 1.f);
+            sum += c;
+            const uint8_t b = uint8_t(std::lround(c * 255));
+            under_.texture[i * 4] = b; under_.texture[i * 4 + 1] = b; under_.texture[i * 4 + 2] = b; under_.texture[i * 4 + 3] = 255;
+        }
+        under_.textureMean = sum / v.size();
+    }
+
+    void underlayer() {
+        detailTexture();
+        const double R = p_.underlayerRadiusM, sp = std::max(0.05, p_.underlayerSpacingM);
+        if (!(R > 0)) return;
+        const size_t N = size_t(g_.nx) * g_.nz;
+        auto grass = [&](long c) { return c >= 0 && g_.mask[c] && !g_.exclude[c]; };
+        // cells from the grass edge (chessboard distance, in cells), for the fade
+        std::vector<int> edge(N, 0);
+        {
+            std::vector<long> q;
+            for (size_t c = 0; c < N; ++c) if (!grass(long(c))) { edge[c] = 0; q.push_back(long(c)); } else edge[c] = -1;
+            for (size_t h = 0; h < q.size(); ++h) {
+                const long c = q[h], i = c % g_.nx, k = c / g_.nx;
+                for (int dk = -1; dk <= 1; ++dk) for (int di = -1; di <= 1; ++di) {
+                    const long ii = i + di, kk = k + dk;
+                    if (ii < 0 || kk < 0 || ii >= long(g_.nx) || kk >= long(g_.nz)) continue;
+                    const long n = kk * long(g_.nx) + ii;
+                    if (edge[n] < 0) { edge[n] = edge[c] + 1; q.push_back(n); }
+                }
+            }
+        }
+        // the clumps on a hash grid, for the contact shade
+        const double cr = std::max(0.05, p_.contactRadiusM);
+        std::unordered_map<int64_t, std::vector<std::pair<float, float>>> near;
+        auto key = [&](double x, double z) { return (int64_t(std::floor(x / cr)) << 32) ^ (int64_t(std::floor(z / cr)) & 0xffffffff); };
+        for (const auto& var : variants_) for (const auto& in : var.instances) near[key(in.t[0], in.t[2])].push_back({in.t[0], in.t[2]});
+        // the vertex lattice over the disk, on the grass cells
+        const double cx = p_.centreX, cz = p_.centreZ;
+        const long a0 = long(std::floor((cx - R) / sp)), a1 = long(std::ceil((cx + R) / sp));
+        const long b0 = long(std::floor((cz - R) / sp)), b1 = long(std::ceil((cz + R) / sp));
+        const long W = a1 - a0 + 1, Hh = b1 - b0 + 1;
+        std::vector<int64_t> vid(size_t(W) * Hh, -1);
+        auto& U = under_;
+        for (long b = b0; b <= b1; ++b) for (long a = a0; a <= a1; ++a) {
+            const double x = a * sp, z = b * sp;
+            if ((x - cx) * (x - cx) + (z - cz) * (z - cz) > R * R) continue;
+            const int c = cellOf(x, z);
+            if (!grass(c)) continue;
+            const float* col = &g_.colour[size_t(c) * 3];
+            if (!(col[0] > 0 || col[1] > 0 || col[2] > 0)) continue;
+            const double est = surfaceAt(x, z, c), sy = scanAt(x, z, c, est);
+            const double y = (std::isfinite(sy) ? sy : est) + p_.underlayerLiftM;
+            // shade: the lower grass, deeper where clumps stand; fading to the photo colour at the grass edge
+            const double inside = std::clamp(edge[size_t(c)] * double(g_.cellM) / std::max(1e-3, p_.underlayerFadeM), 0.0, 1.0);
+            int count = 0;
+            for (int dz = -1; dz <= 1; ++dz) for (int dx = -1; dx <= 1; ++dx) {
+                auto it = near.find(key(x + dx * cr, z + dz * cr));
+                if (it == near.end()) continue;
+                for (const auto& [px, pz] : it->second) if ((px - x) * (px - x) + (pz - z) * (pz - z) <= cr * cr) ++count;
+            }
+            const double contact = std::min(1.0, count / 3.0);
+            const double shade = (1 - inside * (1 - p_.underlayerShade)) * (1 - inside * p_.contactShade * contact);
+            // the texture multiplies by its mean; the vertex colour carries the rest
+            const double k = shade / std::max(0.1, U.textureMean);
+            vid[size_t(b - b0) * W + (a - a0)] = int64_t(U.positions.size() / 3);
+            U.positions.insert(U.positions.end(), {float(x), float(y), float(z)});
+            U.normals.insert(U.normals.end(), {0.f, 1.f, 0.f});
+            U.colours.insert(U.colours.end(), {float(std::min(1.0, col[0] * k)), float(std::min(1.0, col[1] * k)), float(std::min(1.0, col[2] * k)), 1.f});
+            U.uvs.insert(U.uvs.end(), {float(x / p_.detailTileM), float(z / p_.detailTileM)});
+        }
+        for (long b = b0; b < b1; ++b) for (long a = a0; a < a1; ++a) {
+            const int64_t v00 = vid[size_t(b - b0) * W + (a - a0)], v10 = vid[size_t(b - b0) * W + (a + 1 - a0)];
+            const int64_t v01 = vid[size_t(b + 1 - b0) * W + (a - a0)], v11 = vid[size_t(b + 1 - b0) * W + (a + 1 - a0)];
+            if (v00 < 0 || v10 < 0 || v01 < 0 || v11 < 0) continue;
+            U.indices.insert(U.indices.end(), {uint32_t(v00), uint32_t(v11), uint32_t(v10), uint32_t(v00), uint32_t(v01), uint32_t(v11)});
+            U.areaM2 += sp * sp;
+        }
+        // normals from the lattice's own heights
+        for (long b = b0; b <= b1; ++b) for (long a = a0; a <= a1; ++a) {
+            const int64_t v = vid[size_t(b - b0) * W + (a - a0)];
+            if (v < 0) continue;
+            auto hy = [&](long aa, long bb) -> double { if (aa < a0 || bb < b0 || aa > a1 || bb > b1) return NAN; const int64_t w = vid[size_t(bb - b0) * W + (aa - a0)]; return w < 0 ? NAN : double(U.positions[size_t(w) * 3 + 1]); };
+            const double y0 = U.positions[size_t(v) * 3 + 1];
+            double l = hy(a - 1, b), r = hy(a + 1, b), d = hy(a, b - 1), u = hy(a, b + 1);
+            const double dx = (std::isfinite(r) ? r : y0) - (std::isfinite(l) ? l : y0), dz = (std::isfinite(u) ? u : y0) - (std::isfinite(d) ? d : y0);
+            const double span = 2 * sp, nx = -dx / span, nz = -dz / span, len = std::sqrt(nx * nx + 1 + nz * nz);
+            U.normals[size_t(v) * 3] = float(nx / len); U.normals[size_t(v) * 3 + 1] = float(1 / len); U.normals[size_t(v) * 3 + 2] = float(nz / len);
+        }
     }
 
     void place(int nv, int nr) {

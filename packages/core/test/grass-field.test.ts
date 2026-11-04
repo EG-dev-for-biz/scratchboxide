@@ -125,12 +125,17 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
         }
         const file = path.join(tmp(), 'blades.glb');
         const tris = writeGrassFieldGlb(file, field, { sb: { provenance: { label: 'generated', colour: { label: 'photo-inferred' } } } });
-        expect(tris).toBe(field.report.instancedTriangles);
+        expect(tris).toBe(field.report.instancedTriangles + field.underlayer.indices.length / 3);
         const glb = fs.readFileSync(file);
         expect(glb.readUInt32LE(0)).toBe(0x46546c67);
         const json = JSON.parse(glb.subarray(20, 20 + glb.readUInt32LE(12)).toString('utf8'));
         expect(json.extensionsUsed).toContain('EXT_mesh_gpu_instancing');
-        const counts = json.nodes.map((n: { extensions: { EXT_mesh_gpu_instancing: { attributes: Record<string, number> } } }) => {
+        // the underlayer is its own node, textured, outside the instancing
+        const under = json.nodes.filter((n: { name: string }) => n.name === 'grass underlayer');
+        expect(under).toHaveLength(1);
+        expect(json.materials[json.meshes[under[0].mesh].primitives[0].material].pbrMetallicRoughness.baseColorTexture.index).toBe(0);
+        expect(json.images[0].mimeType).toBe('image/png');
+        const counts = json.nodes.filter((n: { name: string }) => n.name !== 'grass underlayer').map((n: { extensions: { EXT_mesh_gpu_instancing: { attributes: Record<string, number> } } }) => {
             const a = n.extensions.EXT_mesh_gpu_instancing.attributes;
             expect(Object.keys(a).sort()).toEqual(['ROTATION', 'SCALE', 'TRANSLATION', '_COLOR_0', '_CONFIDENCE']);
             return json.accessors[a.TRANSLATION].count;
@@ -214,12 +219,13 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
         expect(trisTiled).toBe(trisWhole);
         const t = read(tiled), w = read(whole);
         const live = field.variants.filter(v => v.confidence.length > 0).length;
-        expect(w.json.nodes.length).toBe(live);
-        expect(t.json.meshes.length).toBe(live);
+        // plus the underlayer, one node and one mesh in both
+        expect(w.json.nodes.length).toBe(live + 1);
+        expect(t.json.meshes.length).toBe(live + 1);
         expect(t.json.nodes.length).toBeGreaterThan(live * 3);
         let total = 0;
         const seen = new Set<string>();
-        for (const node of t.json.nodes) {
+        for (const node of t.json.nodes.filter((n: { name: string }) => n.name !== 'grass underlayer')) {
             const { i, k, sizeM } = node.extras.tile;
             expect(sizeM).toBe(10);
             const key = `${node.mesh}:${i},${k}`;
@@ -234,5 +240,45 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
             total += tr.length / 3;
         }
         expect(total).toBe(field.report.instances);
+    });
+
+    it('shades each blade from a dark root up to a lit lamina (self-occlusion)', () => {
+        // a near blade of 5 segments: rows of three vertices (left, keel, right) root to tip, then the tip
+        const v = field.variants.find(w => w.ring === 0)!;
+        const tone = (q: number) => v.colours[q * 4 + 1];
+        const root = tone(0), mid = tone(3 * 3), upper = tone(4 * 3);
+        expect(root).toBeCloseTo(0.8 * 0.3, 3);
+        expect(mid).toBeGreaterThan(root * 2);
+        expect(upper).toBeGreaterThanOrEqual(mid);
+    });
+
+    it('lays a darker, textured sheet under the blades on the grass cells only, lifted off the measured surface', () => {
+        const u = field.underlayer, nv = u.positions.length / 3;
+        expect(nv).toBeGreaterThan(1000);
+        expect(u.areaM2).toBeGreaterThan(1000);
+        let interiorMax = 0, edgeMax = 0;
+        for (let q = 0; q < nv; q++) {
+            const x = u.positions[q * 3], y = u.positions[q * 3 + 1], z = u.positions[q * 3 + 2];
+            // on the grass, never on a building or the pond, within the 40 m disk
+            expect(inRect(x, z, FULL) || inRect(x, z, HALF)).toBe(true);
+            expect(inRect(x, z, BUILDING) || inRect(x, z, POND)).toBe(false);
+            expect(Math.hypot(x, z)).toBeLessThanOrEqual(40 + 1e-4);
+            // the scan's ground over the confident lawn, else the cell surface, plus the lift
+            expect(y).toBeCloseTo((inRect(x, z, FULL) ? 10.23 : 10.03) + 0.02, 3);
+            const g = u.colours[q * 4 + 1], deep = x > -24 && x < -4 && z > -8 && z < -2, rim = inRect(x, z, [-28, -10, -27, 2] as Rect);
+            if (deep) interiorMax = Math.max(interiorMax, g);
+            if (rim) edgeMax = Math.max(edgeMax, g);
+        }
+        // the seen lawn colour 0.12 green, over the texture's mean: deep inside darkened to at most 0.55 of it, the rim brighter
+        const mean = field.report.underlayer.textureMean;
+        expect(mean).toBeGreaterThan(0.65);
+        expect(mean).toBeLessThan(0.9);
+        expect(interiorMax).toBeLessThanOrEqual((0.12 * 0.55) / mean + 1e-4);
+        expect(edgeMax).toBeGreaterThan(interiorMax);
+        // the detail texture: blade-scale strokes, not flat
+        expect(u.texture.length).toBe(u.texPx * u.texPx * 4);
+        let sd = 0;
+        for (let q = 0; q < u.texture.length; q += 4) sd += (u.texture[q] / 255 - mean) ** 2;
+        expect(Math.sqrt(sd / (u.texture.length / 4))).toBeGreaterThan(0.05);
     });
 });
