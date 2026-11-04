@@ -31,6 +31,7 @@ import type { ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
 import type { RoadAtlasLayout, RoadMeshPart, RoadStation, RoadSurface, RoadSurfaceParams } from './road-surfaces';
 import { stationsAlong } from './road-surfaces';
 import { writeStagedGlbFile } from './staged-glb-writer';
+import { assembleGlb, parseGlbBytes, readAccessor } from './glb-bytes';
 
 export const ROAD_KERBS_VERSION = 'road-kerbs/1';
 
@@ -1047,4 +1048,52 @@ export function nearStreets(roads: RoadSurface[], reachM: number): (x: number, z
         for (let dk = -r; dk <= r; dk++) for (let di = -r; di <= r; di++) cells.add(`${i + di},${k + dk}`);
     }
     return (x, z) => cells.has(`${Math.floor(x / cell)},${Math.floor(z / cell)}`);
+}
+
+/**
+ * The planar frame a self-textured surface's texture coordinates read the photo seen from above in (u = (x - x0) / width,
+ * v = (z - z0) / height), fitted on the GLB's own vertices: so a layer can be coloured again from another photo of the same
+ * ground without its frame being stored (and its mean height, the level that photo's scale should be exact at). Undefined
+ * when the GLB has no texture coordinates or they are not planar.
+ */
+export function planarFrameOf(bytes: Uint8Array): { x0: number; z0: number; widthM: number; heightM: number; meanY: number } | undefined {
+    const glb = parseGlbBytes(bytes);
+    // least squares u = a + b x, v = c + d z over every textured vertex
+    let n = 0, sx = 0, sxx = 0, su = 0, sxu = 0, sz = 0, szz = 0, sv = 0, szv = 0, sy = 0;
+    for (const mesh of glb.json.meshes ?? []) for (const prim of mesh.primitives ?? []) {
+        const pa = prim.attributes?.POSITION, ta = prim.attributes?.TEXCOORD_0;
+        if (pa === undefined || ta === undefined) continue;
+        const P = readAccessor(glb, pa).data, T = readAccessor(glb, ta).data;
+        for (let i = 0; i * 3 < P.length && i * 2 < T.length; i++) {
+            const x = P[i * 3], z = P[i * 3 + 2], u = T[i * 2], v = T[i * 2 + 1];
+            n++; sx += x; sxx += x * x; su += u; sxu += x * u; sz += z; szz += z * z; sv += v; szv += z * v; sy += P[i * 3 + 1];
+        }
+    }
+    const dx = n * sxx - sx * sx, dz = n * szz - sz * sz;
+    if (n < 3 || !(dx > 0) || !(dz > 0)) return undefined;
+    const b = (n * sxu - sx * su) / dx, a = (su - b * sx) / n, d = (n * szv - sz * sv) / dz, c = (sv - d * sz) / n;
+    if (!(b > 0) || !(d > 0)) return undefined;
+    return { x0: -a / b, z0: -c / d, widthM: 1 / b, heightM: 1 / d, meanY: sy / n };
+}
+
+/** The GLB with its one embedded image replaced by `jpeg`: every buffer view laid out again in order, the image's swapped. */
+export function withGlbImage(bytes: Uint8Array, jpeg: Uint8Array): Buffer {
+    const { json, bin } = parseGlbBytes(bytes);
+    const image = json.images?.[0];
+    if (!image || image.bufferView === undefined || (json.images?.length ?? 0) !== 1) throw new Error('the GLB has not exactly one embedded image to replace');
+    const parts: Uint8Array[] = [];
+    let offset = 0;
+    json.bufferViews = (json.bufferViews as any[]).map((v, i) => {
+        const data = i === image.bufferView ? jpeg : bin.subarray(v.byteOffset ?? 0, (v.byteOffset ?? 0) + v.byteLength);
+        const pad = (4 - (offset % 4)) % 4;
+        if (pad) { parts.push(new Uint8Array(pad)); offset += pad; }
+        parts.push(data);
+        const placed = { ...v, byteOffset: offset, byteLength: data.byteLength };
+        offset += data.byteLength;
+        return placed;
+    });
+    image.mimeType = 'image/jpeg';
+    const out = Buffer.concat(parts);
+    json.buffers = [{ ...(json.buffers?.[0] ?? {}), byteLength: out.byteLength }];
+    return assembleGlb(json, out);
 }
