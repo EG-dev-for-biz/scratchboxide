@@ -22,6 +22,7 @@
  *   whenever the mask's area or centroid jumps past the thresholds, and the frame is re-anchored on its answer; every
  *   re-check is reported with why it ran and how far the propagated mask had drifted from the re-anchored one.
  *
+ * In memory (segmentBytes): encoded image bytes in, the binary mask out, nothing written (Street View grounding images).
  * Failures are typed: a missing input is a MissingInputError, a description the model cannot find (or prompts that give
  * no mask) a SegmentTargetNotFoundError, a failed tool a GeneratorFailedError. No other segmenter (the person segmenter
  * included) stands in for a target that was not found, and a failed video leaves no partial sequence.
@@ -35,6 +36,7 @@ import { repoPath, resolveRepoPython } from '../process/repo-python';
 import { VfxSubjectSegmenterService } from './VfxSubjectSegmenterService';
 import { GeminiClient } from '../gemini/gemini-client';
 import { SegmentTargetLocator, type LocatedTarget, type LocatorModelSource, type NormBox, type NormPoint } from './segment-target-locator';
+import { decodePng } from '../texture-processing';
 
 const TOOL = 'vfx_segment_subject';
 
@@ -154,6 +156,8 @@ interface ScriptAnswer {
     matte: string;
     model: string;
     timingsMs: Record<string, number>;
+    /** With returnMask: the binary mask as a PNG, base64 (nothing written). */
+    maskPng?: string;
     iouWithCompare?: number;
 }
 
@@ -379,6 +383,24 @@ export class ObjectSegmenterService {
             if (videoPath) await fs.remove(workDir);
             if (!complete) await Promise.all(written.map(p => fs.remove(p)));
         }
+    }
+
+    /**
+     * One image held in memory (encoded bytes as given: a JPEG or PNG), one prompt, the binary mask back in memory: the
+     * image is decoded inside the worker and nothing is written (for photos that must never be written, such as Street
+     * View grounding images). A prompt that gives no mask is a SegmentTargetNotFoundError, as in segment().
+     */
+    async segmentBytes(input: { bytes: Buffer | Uint8Array; box?: NormBox; positive?: NormPoint[]; negative?: NormPoint[]; refine?: boolean; signal?: AbortSignal }): Promise<{ mask: Uint8Array; width: number; height: number; areaFraction: number; bbox: NormBox; refinement: string; model: string }> {
+        if (input.signal?.aborted) throw new GeneratorFailedError('python', `${TOOL}: stopped by the user`);
+        const answer = await this.runScript({
+            imageB64: Buffer.from(input.bytes.buffer, input.bytes.byteOffset, input.bytes.byteLength).toString('base64'), returnMask: true,
+            positive: input.positive ?? [], negative: input.negative ?? [], box: input.box ?? null, refine: input.refine !== false
+        });
+        if (!answer.success || !answer.maskPng) throw new SegmentTargetNotFoundError(TOOL, 'the prompted object', `${answer.code ?? 'no_mask'}: ${answer.error ?? 'no mask came back'}`);
+        const png = decodePng(Buffer.from(answer.maskPng, 'base64'));
+        const mask = new Uint8Array(png.width * png.height);
+        for (let i = 0; i < mask.length; i++) mask[i] = png.rgba[i * 4] >= 128 ? 1 : 0;
+        return { mask, width: png.width, height: png.height, areaFraction: answer.areaFraction, bbox: answer.bbox, refinement: answer.refinement, model: answer.model };
     }
 
     private async runScript(request: Record<string, unknown>): Promise<ScriptAnswer> {
