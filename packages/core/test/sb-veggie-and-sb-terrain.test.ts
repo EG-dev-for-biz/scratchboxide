@@ -70,8 +70,8 @@ describe('SB-Veggie Botanical Engine Core', () => {
 
         expect(resultWinter.success).toBe(true);
         expect(resultWinter.glbBuffer).toBeDefined();
-        // Bare skeleton has exact template vertex & triangle counts
-        expect(resultWinter.telemetry.outputVertices).toBe(2568);
+        // Bare skeleton has exact template vertex & triangle counts (each tube ring has a seam column at u = 1)
+        expect(resultWinter.telemetry.outputVertices).toBe(2993);
         expect(resultWinter.telemetry.outputTriangles).toBe(4064);
 
         if (fs.existsSync(resultWinter.outputGlbPath)) {
