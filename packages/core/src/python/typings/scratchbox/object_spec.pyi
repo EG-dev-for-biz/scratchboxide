@@ -31,13 +31,16 @@ or substituted. Labels and material descriptions are never read.
 import scratchbox.world
 import typing
 
-__all__ = ['AO_INTENSITY', 'AO_REACH_SHARE', 'AO_SAMPLES', 'CREASE_DEGREES', 'EDGE_ROUND_FRACTION', 'EDGE_ROUND_MAX_SHARE', 'MAX_TRIANGLES', 'PART_VERTEX_CAP', 'SpecError', 'TARGET_VERTICES', 'build', 'build_meshes', 'crown_trees', 'math', 'part_material', 'validate']
+__all__ = ['AO_INTENSITY', 'AO_REACH_SHARE', 'AO_SAMPLES', 'CREASE_DEGREES', 'EDGE_RADIUS_MAX', 'EDGE_RADIUS_MAX_SHARE', 'EDGE_RADIUS_MIN', 'EDGE_RADIUS_SHARE', 'EDGE_ROUND_MAX_SHARE', 'MAX_TRIANGLES', 'PART_VERTEX_CAP', 'SpecError', 'TARGET_VERTICES', 'build', 'build_meshes', 'crown_trees', 'edge_radius', 'json', 'math', 'part_material', 'validate']
 
 AO_INTENSITY: float
 AO_REACH_SHARE: float
 AO_SAMPLES: int
 CREASE_DEGREES: float
-EDGE_ROUND_FRACTION: float
+EDGE_RADIUS_MAX: float
+EDGE_RADIUS_MAX_SHARE: float
+EDGE_RADIUS_MIN: float
+EDGE_RADIUS_SHARE: float
 EDGE_ROUND_MAX_SHARE: float
 MAX_TRIANGLES: int
 PART_VERTEX_CAP: int
@@ -69,6 +72,15 @@ def build_meshes(spec):
 def crown_trees(spec, shift_y=0.0):
     """The spec's crown parts as SB-Veggie trees (vegetation.SbVeggieTree), lifted by shift_y like the meshes."""
 
+
+def edge_radius(part) -> (tuple[float, typing.Literal['spec']] | tuple[float, typing.Literal['default']]):
+    """
+    (radius in metres, "spec" or "default"): the part's edgeRadiusMeters when given (0 keeps its edges sharp, other
+    values clamped to EDGE_RADIUS_MIN..EDGE_RADIUS_MAX), else EDGE_RADIUS_SHARE of its smallest dimension, clamped the same
+    and to at most EDGE_RADIUS_MAX_SHARE of it.
+    """
+
+import json
 import math
 
 def part_material(sb, pid, material):

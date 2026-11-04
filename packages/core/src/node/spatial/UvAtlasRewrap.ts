@@ -74,6 +74,8 @@ export interface UvRewrapOptions {
     jpegQuality?: number;
     /** 'rewrap' from another mesh (nearest surface) instead of the input's own textures. */
     transferSource?: { glb: Buffer | Uint8Array; maxDistanceM?: number; maxNormalAngleDeg?: number };
+    /** Meshes left exactly as they are (reported in primitivesSkipped with this reason). */
+    leaveMeshes?: { meshes: number[]; reason: string };
     native?: { binaryPath?: string; repoRoot?: string; timeoutMs?: number; threads?: number };
     signal?: AbortSignal;
 }
@@ -474,10 +476,10 @@ function textureTransform(info: any): { texCoord: number; apply?: (u: number, v:
     return { texCoord, apply: (u, v) => [c * sx * u + s * sy * v + ox, -s * sx * u + c * sy * v + oy] };
 }
 
-interface SlotRef { path: string; holder: any; key: string; info: any }
+export interface SlotRef { path: string; holder: any; key: string; info: any }
 
 /** Every textureInfo of a material (objects with a numeric `index` under a key ending in "Texture"), extensions included. */
-function materialSlots(material: any): SlotRef[] {
+export function materialSlots(material: any): SlotRef[] {
     const out: SlotRef[] = [];
     const walk = (obj: any, prefix: string) => {
         if (!obj || typeof obj !== 'object') return;
@@ -517,7 +519,7 @@ function slotFactor(ref: SlotRef): { factor: [number, number, number, number]; s
     return { factor: [1, 1, 1, 1], srgb: false, reset: () => undefined };
 }
 
-function imageOfTexture(json: any, textureIndex: number): number | undefined {
+export function imageOfTexture(json: any, textureIndex: number): number | undefined {
     const tex = json.textures?.[textureIndex];
     if (!tex) return undefined;
     if (typeof tex.source === 'number') return tex.source;
@@ -529,7 +531,8 @@ function imageOfTexture(json: any, textureIndex: number): number | undefined {
 // GLB writer with compaction
 // =============================================================================
 
-class GlbWriter {
+/** A copy of a GLB's JSON to edit, new binary data appended to it, and `finish` to write it compacted. */
+export class GlbWriter {
     readonly json: any;
     private readonly newViews = new Map<number, Uint8Array>();
     constructor(private readonly src: ParsedGlb) {
@@ -669,9 +672,9 @@ function mergeStats(parts: Array<{ s: UvDistortionStats; w: number }>): UvDistor
     if (!(W > 0)) return emptyStats();
     return {
         stretchRms: Math.sqrt(parts.reduce((a, p) => a + p.w * p.s.stretchRms ** 2, 0) / W),
-        stretchMax: Math.max(...parts.map(p => p.s.stretchMax)),
+        stretchMax: parts.reduce((m, p) => Math.max(m, p.s.stretchMax), -Infinity),
         areaRms: Math.sqrt(parts.reduce((a, p) => a + p.w * p.s.areaRms ** 2, 0) / W),
-        areaMax: Math.max(...parts.map(p => p.s.areaMax)),
+        areaMax: parts.reduce((m, p) => Math.max(m, p.s.areaMax), -Infinity),
         flippedTriangles: parts.reduce((a, p) => a + p.s.flippedTriangles, 0)
     };
 }
@@ -835,9 +838,11 @@ export async function unwrapRewrapGlb(mode: UvRewrapMode, input: Buffer | Uint8A
 
     // primitives by material
     const atlases = new Map<number, Prim[]>();
+    const left = new Set(options.leaveMeshes?.meshes ?? []);
     (json.meshes ?? []).forEach((mesh: any, meshIndex: number) => {
         (mesh.primitives ?? []).forEach((def: any, primitive: number) => {
             const skip = (reason: string) => report.primitivesSkipped.push({ mesh: meshIndex, primitive, reason });
+            if (left.has(meshIndex)) return skip(options.leaveMeshes!.reason);
             if (def.attributes?.POSITION === undefined) return skip('no POSITION attribute');
             if (def.extensions && Object.keys(def.extensions).some(k => /draco|meshopt/i.test(k))) return skip(`compressed primitive (${Object.keys(def.extensions).join(', ')}) is not decoded here`);
             if (compressed.length && /quantiz/i.test(compressed.join())) {
@@ -1079,7 +1084,7 @@ export async function unwrapRewrapGlb(mode: UvRewrapMode, input: Buffer | Uint8A
             if (triArea3D[t] > 1e-12) dens.push({ d: Math.sqrt(a2 / triArea3D[t]), w: triArea3D[t] });
         }
         at.texelDensity = densityStats(dens);
-        densityAll.push(...dens);
+        for (const d of dens) densityAll.push(d);   // one per triangle: a spread overflows the call stack on large meshes
         uvAreaAll += nat.utilisation * nat.width * nat.height; atlasAreaAll += nat.width * nat.height;
 
         // per primitive: output vertices in first-use order

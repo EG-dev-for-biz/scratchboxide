@@ -17,10 +17,11 @@ import { SceneObjectStore, type ObjectMeasures } from '../src/node/asset-store/s
 import { DirectoryCloudBucket, NO_GENERATION, type CloudObject, type PutFileOptions, type VersionedCloudBucket } from '../src/node/cloud-store/cloud-bucket';
 import type { DistrictChunkPlan } from '../src/node/3d-engine/staged-location/pipeline-k/district-chunks';
 import {
-    acquirePlaceLease, loadPlaceManifest, loadPlaceObject, openPlaceStore, placeKey, recordKey, syncPlaceObjects, writeLeasedManifest,
+    acquirePlaceLease, loadPlaceManifest, loadPlaceObject, openPlaceStore, placeKey, PLACE_STORE_PARAMS, placeStoreEnabled, pullPlace, recordKey, syncPlaceObjects, writeLeasedManifest,
     type PlaceStore, type PlaceSync
 } from '../src/node/3d-engine/staged-location/place-store';
-import { auditDistrictForPlace, syncPlaceAfterObjects, type PlaceAuditNote } from '../src/node/3d-engine/staged-location/place-store-district';
+import { auditDistrictForPlace, pullPlaceForRun, syncPlaceAfterObjects, type PlaceAuditNote } from '../src/node/3d-engine/staged-location/place-store-district';
+import { fileReadingStore, readingFileOf, readingKey } from '../src/node/3d-engine/staged-location/pipeline-k/model-readings';
 import { storeSceneObjects, type LayerObjectManifest } from '../src/node/3d-engine/staged-location/scene-objects';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { box, quad, testGlb, type TestPrim } from './helpers/test-glb';
@@ -189,7 +190,7 @@ describe('place store', () => {
     it('lets one writer at a time hold the lease, and refuses a lapsed holder\'s write once another has taken it', async () => {
         for (const bucket of [new MemoryVersionedBucket(), new DirectoryCloudBucket(path.join(tmp, 'dir-bucket'))]) {
             const store: PlaceStore = { key: KEY, where: { kind: 'cloud', label: bucket.label }, bucket, prefix: `places/v1/${KEY}`, tmpDir: path.join(tmp, 'scratch') };
-            const P = { leaseMs: 60_000, concurrency: 2 };
+            const P = { ...PLACE_STORE_PARAMS, leaseMs: 60_000, concurrency: 2 };
             const a = await acquirePlaceLease(store, { holder: 'a', runId: 'run-a' }, 1_000, P);
             expect(a.ok).toBe(true);
             expect(await acquirePlaceLease(store, { holder: 'b', runId: 'run-b' }, 2_000, P)).toMatchObject({ ok: false, heldBy: { holder: 'a' } });
@@ -240,6 +241,109 @@ describe('place store', () => {
         const r = await syncPlaceObjects(store, sync(objects, 'run-1', [putVersion(objects, 'b1', 1, measures(0, 0)).objectKey]));
         expect(r.skipped).toContain('is not available');
         expect(r.objects.added).toBe(0);
+    });
+});
+
+describe('a district run reads its place first', () => {
+    it('is on unless SCRATCHBOX_PLACE_STORE=0', () => {
+        expect(placeStoreEnabled({})).toBe(true);
+        expect(placeStoreEnabled({ SCRATCHBOX_PLACE_STORE: '1' })).toBe(true);
+        expect(placeStoreEnabled({ SCRATCHBOX_PLACE_STORE: '0' })).toBe(false);
+    });
+
+    it("brings the place's current versions and readings to another machine, where a better version stays current", async () => {
+        const bucket = new MemoryVersionedBucket();
+        const store = await cloudStore(bucket);
+        // machine A: two buildings and two readings, synced to the place
+        const a = objectStore('a'), readingsA = path.join(tmp, 'a-readings');
+        const b1 = putVersion(a, 'b1', 1, measures(1, 0.01)), b2 = putVersion(a, 'b2', 2, measures(2, 0.01));
+        const ra = fileReadingStore(readingsA), kUsed = readingKey('facade-reading', ['used']), kWritten = readingKey('material-choice', ['written']);
+        ra.put(kUsed, { text: 'kept from before' }); ra.put(kWritten, { classes: [1] });
+        const synced = await syncPlaceObjects(store, { ...sync(a, 'run-a', [b1.objectKey, b2.objectKey]), readings: { dir: readingsA, used: [kUsed], written: [kWritten] } });
+        expect(synced.errors).toEqual([]);
+        expect(synced.readings).toEqual({ stored: 2, existing: 0, missing: 0 });
+        expect(bucket.objects.has(`places/v1/${KEY}/readings/${readingFileOf(kUsed)}`)).toBe(true);
+        // machine B has b2 already, at a better version than the place's
+        const b = objectStore('b'), readingsB = path.join(tmp, 'b-readings');
+        const better = putVersion(b, 'b2', 7, measures(0, 0));
+        const pulled = await pullPlace(store, { objects: b, readingsDir: readingsB });
+        expect(pulled.errors).toEqual([]);
+        expect(pulled.objects).toEqual({ adopted: 1, keptLocal: 1, alreadyHere: 0, failed: 0 });
+        expect(b.current(b2.objectKey)!.inputHash).toBe(better.objectKey === b2.objectKey ? 'hash-b2-7' : '');
+        expect(pulled.readings).toEqual({ pulled: 2, present: 0, failed: 0 });
+        // the place's b1 is current on B, its measures, defects, labels and source run as the place holds them, its GLB byte for byte
+        const cur = b.read(b1.objectKey)!;
+        expect(cur.row.inputHash).toBe('hash-b1-1');
+        expect(cur.record.measures).toEqual(measures(1, 0.01));
+        expect(cur.record.provenance.labels).toEqual(['remeshed']);
+        expect(cur.record.runId).toBe('run-1');
+        expect(fs.readFileSync(cur.glbFile).equals(glbOf(1))).toBe(true);
+        expect(fileReadingStore(readingsB).get(kUsed)).toEqual({ text: 'kept from before' });
+        // again: nothing new to bring
+        const again = await pullPlace(store, { objects: b, readingsDir: readingsB });
+        expect(again.objects).toMatchObject({ adopted: 0, alreadyHere: 2 });
+        expect(again.readings).toEqual({ pulled: 0, present: 2, failed: 0 });
+    });
+
+    it("keeps this machine's version current when the place's is worse, and takes nothing with reuse or restore off", async () => {
+        const bucket = new MemoryVersionedBucket();
+        const store = await cloudStore(bucket);
+        const a = objectStore('a');
+        const worse = putVersion(a, 'b1', 1, measures(3, 0.02));
+        const rk = readingKey('facade-reading', ['x']), dirA = path.join(tmp, 'a-readings');
+        fileReadingStore(dirA).put(rk, { text: 't' });
+        await syncPlaceObjects(store, { ...sync(a, 'run-a', [worse.objectKey]), readings: { dir: dirA, used: [], written: [rk] } });
+        const b = objectStore('b');
+        const mine = putVersion(b, 'b1', 2, measures(0, 0.01));
+        const pulled = await pullPlace(store, { objects: b });
+        expect(pulled.objects).toMatchObject({ adopted: 0, keptLocal: 1 });
+        expect(b.current(mine.objectKey)!.inputHash).toBe('hash-b1-2');
+        // the place's version is history here, its record saying why it is not current
+        const theirs = b.versions(mine.objectKey).find(v => v.inputHash === 'hash-b1-1')!;
+        expect(b.recordOf(theirs)!.decision?.reason).toContain('holes 0 -> 3 (lower is better)');
+        // the switches: SCRATCHBOX_OBJECT_REUSE=0 brings no object, SCRATCHBOX_CACHE_RESTORE=off no reading
+        const c = objectStore('c'), dirC = path.join(tmp, 'c-readings');
+        const off = await pullPlaceForRun({ place: FRAME, store: c.store, readingsDir: dirC, placeStore: { bucket, fallbackRoot: path.join(tmp, 'no-volume', 'x'), tmpDir: path.join(tmp, 'scratch') }, env: { SCRATCHBOX_OBJECT_REUSE: '0', SCRATCHBOX_CACHE_RESTORE: 'off' } });
+        expect(off.objects).toMatchObject({ adopted: 0, skipped: 'SCRATCHBOX_OBJECT_REUSE=0: no stored object is taken' });
+        expect(off.readings).toMatchObject({ pulled: 0, skipped: 'SCRATCHBOX_CACHE_RESTORE=off: nothing is read back' });
+        expect(c.current(mine.objectKey)).toBeUndefined();
+        expect(fs.existsSync(dirC)).toBe(false);
+        const on = await pullPlaceForRun({ place: FRAME, store: c.store, readingsDir: dirC, placeStore: { bucket, fallbackRoot: path.join(tmp, 'no-volume', 'x'), tmpDir: path.join(tmp, 'scratch') }, env: {} });
+        expect(on.objects.adopted).toBe(1);
+        expect(on.readings.pulled).toBe(1);
+    });
+
+    it('reports a place store that cannot be reached, or a place with none yet, and takes nothing', async () => {
+        const bucket = new MemoryVersionedBucket();
+        bucket.down = true;
+        const objects = objectStore();
+        const unreachable = await pullPlaceForRun({ place: FRAME, store: objects.store, readingsDir: path.join(tmp, 'r'), placeStore: { bucket, fallbackRoot: path.join(tmp, 'not-mounted', 'x'), tmpDir: path.join(tmp, 'scratch') }, env: {} });
+        expect(unreachable.where.kind).toBe('none');
+        expect(unreachable.skipped).toContain('mem://training could not be reached');
+        bucket.down = false;
+        const empty = await pullPlace(await cloudStore(bucket), { objects, readingsDir: path.join(tmp, 'r') });
+        expect(empty.skipped).toBe('the place has no store yet');
+    });
+
+    it("copies the readings a run used or wrote: a written one replaces the place's, a used one only fills a gap, one this workspace lacks is read back first", async () => {
+        const bucket = new MemoryVersionedBucket();
+        const store = await cloudStore(bucket);
+        const objects = objectStore(), dir = path.join(tmp, 'readings'), rs = fileReadingStore(dir);
+        const b1 = putVersion(objects, 'b1', 1, measures(0, 0));
+        const used = readingKey('facade-reading', ['u']), grown = readingKey('material-choice', ['g']), chunk = readingKey('facade-reading', ['chunk']), gone = readingKey('facade-reading', ['gone']);
+        rs.put(used, { text: 'v1' }); rs.put(grown, { classes: [1] });
+        await syncPlaceObjects(store, { ...sync(objects, 'run-1', [b1.objectKey]), readings: { dir, used: [used], written: [grown] } });
+        // the next run: the used reading changed here (it may not replace the place's), the choice grew, a chunk's reading is in the cache mirror only
+        rs.put(used, { text: 'v2' }); rs.put(grown, { classes: [1, 2] });
+        const restored: string[] = [];
+        const restore = async (k: string) => { restored.push(k); if (k !== chunk) return false; fileReadingStore(dir).put(chunk, { text: 'from the chunk' }); return true; };
+        const r = await syncPlaceObjects(store, { ...sync(objects, 'run-2', [b1.objectKey], 2_000), readings: { dir, used: [used, chunk, gone], written: [grown], restore } });
+        expect(r.readings).toEqual({ stored: 2, existing: 1, missing: 1 });
+        expect(restored.sort()).toEqual([chunk, gone].sort());
+        const at = (k: string) => JSON.parse(bucket.objects.get(`places/v1/${KEY}/readings/${readingFileOf(k)}`)!.bytes.toString('utf8'));
+        expect(at(used)).toEqual({ text: 'v1' });
+        expect(at(grown)).toEqual({ classes: [1, 2] });
+        expect(at(chunk)).toEqual({ text: 'from the chunk' });
     });
 });
 

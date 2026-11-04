@@ -265,7 +265,8 @@ export {
     MetalPathTraceStudioLighting,
     MetalPathTraceRequest,
     MetalPathTraceStats,
-    MetalPathTraceResult
+    MetalPathTraceResult,
+    readSbvgOrigin
 } from './node/3d-engine/metal-path-tracer-service';
 export {
     ColmapReconstructionService,

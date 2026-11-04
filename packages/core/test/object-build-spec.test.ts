@@ -112,6 +112,18 @@ describe('validateObjectBuildSpec', () => {
         expect(validateObjectBuildSpec(child).join('\n')).toContain("meridian's axial distances must span 0");
     });
 
+    it('takes an edge radius from 0 (sharp) to the limit on sweep and revolve parts only', () => {
+        for (const r of [0, 0.002, 0.05]) {
+            expect(validateObjectBuildSpec(withPart(s => { s.parts[0].edgeRadiusMeters = r; s.parts[1].edgeRadiusMeters = r; })), String(r)).toEqual([]);
+        }
+        expect(validateObjectBuildSpec(withPart(s => { s.parts[0].edgeRadiusMeters = -0.01; })).join(' ')).toMatch(/part "body": edgeRadiusMeters must be 0 \(sharp\) to 0.05 metres/);
+        expect(validateObjectBuildSpec(withPart(s => { s.parts[0].edgeRadiusMeters = 0.2; })).join(' ')).toMatch(/edgeRadiusMeters must be 0 \(sharp\) to 0.05/);
+        expect(validateObjectBuildSpec(withPart(s => { s.parts[2].edgeRadiusMeters = 0.01; })).join(' ')).toMatch(/a replicate part has no edges of its own/);
+        const parts = (OBJECT_BUILD_SPEC_JSON_SCHEMA as any).properties.parts.items;
+        expect(parts.properties.edgeRadiusMeters).toMatchObject({ minimum: 0, maximum: 0.05 });
+        expect(parts.propertyOrdering).toContain('edgeRadiusMeters');
+    });
+
     it('allows replicate and relief only on parts with geometry', () => {
         expect(validateObjectBuildSpec(withPart(s => { s.parts[3].relief.targetPartId = 'arms'; })).join('\n'))
             .toContain('is a replicate part; relief needs a sweep or revolve surface');

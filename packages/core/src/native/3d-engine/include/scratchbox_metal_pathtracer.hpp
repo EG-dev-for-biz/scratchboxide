@@ -125,7 +125,7 @@ public:
             options.fastMathEnabled = NO;
 #pragma clang diagnostic pop
             NSError* error = nil;
-            const std::string source = std::string(kKernelSource) + kDenoiseKernelSource;
+            const std::string source = std::string(kKernelSource) + render::detail::ggxEssMetalSource() + kDenoiseKernelSource;
             id<MTLLibrary> library = [device_ newLibraryWithSource:[NSString stringWithUTF8String:source.c_str()] options:options error:&error];
             if (!library) throw Error(std::string("Metal kernel compilation failed: ") + (error ? error.localizedDescription.UTF8String : "unknown error"));
             initPso_ = makePipeline(library, "pt_init");

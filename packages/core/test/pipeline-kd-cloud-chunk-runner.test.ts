@@ -222,6 +222,44 @@ describe('pipeline K-D cloud chunk runner', () => {
         expect(fs.existsSync(stale)).toBe(false);
     });
 
+    it('asks for the execution again when a poll fails, and fails the chunk (its execution cancelled) after too many in a row', async () => {
+        const s = setup();
+        const real = s.jobs.get.bind(s.jobs);
+        let fails = 3;
+        s.jobs.get = async (name: string) => { if (fails-- > 0) throw new Error('read ETIMEDOUT'); return real(name); };
+        const out = await s.runChunk(request(), {});
+        expect(out.result.status).toBe('complete');
+        expect(s.jobs.cancelled).toEqual([]);
+
+        const t = setup();
+        t.jobs.get = async () => { throw new Error('read ETIMEDOUT'); };
+        await expect(t.runChunk(request(), {})).rejects.toThrow(/ETIMEDOUT/);
+        expect(t.jobs.cancelled).toEqual([expect.stringMatching(/kd-chunk-job-0$/)]);
+    });
+
+    it("tries a cut-off download of the job's layers again before failing the chunk", async () => {
+        const s = setup();
+        const real = s.bucket.download.bind(s.bucket);
+        let cuts = 2;
+        s.bucket.download = async (key: string, file: string) => { if (key.includes('/models/') && cuts-- > 0) throw new Error('aborted'); return real(key, file); };
+        const out = await s.runChunk(request(), {});
+        expect(out.result.status).toBe('complete');
+        expect(fs.readFileSync(path.join(s.laptop.modelsDir, 'ground_c7.glb'), 'utf8')).toBe('glTF-ground');
+
+        const t = setup();
+        const realT = t.bucket.download.bind(t.bucket);
+        let tries = 0;
+        t.bucket.download = async (key: string, file: string) => { if (key.includes('/models/')) { tries++; throw new Error('aborted'); } return realT(key, file); };
+        await expect(t.runChunk(request(), {})).rejects.toThrow(/aborted/);
+        expect(tries).toBe(4);
+        // asked for again (the orchestrator's retry), the chunk its job built is downloaded again, never built again
+        t.bucket.download = realT;
+        const again = await t.runChunk(request(), {});
+        expect(again.result.status).toBe('complete');
+        expect(t.jobs.runs).toHaveLength(1);
+        expect(fs.readFileSync(path.join(t.laptop.modelsDir, 'ground_c7.glb'), 'utf8')).toBe('glTF-ground');
+    });
+
     it('a stop cancels the execution and rejects with the stop', async () => {
         const s = setup({ hang: true });
         const ac = new AbortController();
@@ -240,6 +278,18 @@ describe('pipeline K-D cloud chunk runner', () => {
         expect(() => checkImageSkew('x/kd-chunk-job:86ec852f', SHA, {})).not.toThrow();
         expect(() => checkImageSkew('x/kd-chunk-job@sha256:ffff', SHA, {})).toThrow();
         expect(imageCommit('x/kd-chunk-job:latest')).toBeUndefined();
+    });
+
+    it('asks for the job image again after the API could not be reached', async () => {
+        const s = setup();
+        const real = s.jobs.jobImage.bind(s.jobs);
+        let calls = 0;
+        s.jobs.jobImage = async () => { if (++calls === 1) throw new Error('socket hang up'); return real(); };
+        await expect(s.runChunk(request(), {})).rejects.toThrow(/socket hang up/);
+        expect(s.jobs.runs).toEqual([]);
+        await s.runChunk(request(), {});
+        expect(calls).toBe(2);
+        expect(s.jobs.runs).toHaveLength(1);
     });
 
     it('builds only district chunks', () => {

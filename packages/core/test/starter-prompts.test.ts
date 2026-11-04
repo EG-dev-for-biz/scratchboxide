@@ -51,8 +51,22 @@ describe('new-chat starter buttons pick a varied example', () => {
         expect(p).not.toMatch(/procedural/);
     });
 
+    it('3D Object sends one of several distinct single-object examples, each a textured object with no real place', () => {
+        const b = button('3D Object');
+        expect(b.makes).toBe('3d-scene');
+        expect(b.prompts.length).toBeGreaterThanOrEqual(6);
+        expect(new Set(b.prompts).size).toBe(b.prompts.length);
+        for (const p of b.prompts) {
+            expect(p).toMatch(/^Build a textured 3D object of /);
+            expect(p).not.toMatch(/ in [A-Z]| at \d|script/);
+        }
+        const storage = memoryStorage();
+        const first = pickStarterPrompt(b, () => 0, storage);
+        expect(pickStarterPrompt(b, () => 0, storage)).not.toBe(first);
+    });
+
     it('the front page offers 3D World, opening the 7th Avenue splat world, and no System Spec or KPI Dashboard', () => {
-        expect(STARTER_BUTTONS.map(b => b.label)).toEqual(['Interactive App', '3D Scene', '3D Building', '3D World', 'Video NLE']);
+        expect(STARTER_BUTTONS.map(b => b.label)).toEqual(['Interactive App', '3D Scene', '3D Building', '3D Object', '3D World', 'Video NLE']);
         const w = button('3D World');
         expect(w.world!.scenePath).toBe('/tilesets/7th_avenue_west_32nd_street_new_york_40.74974_-73.99163/scene3d.json');
         // without the built world on this machine, the button builds it from the chat

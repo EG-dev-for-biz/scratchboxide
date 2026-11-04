@@ -13,6 +13,27 @@ import * as path from 'path';
 import { AnalyticalGroomSplatService } from '../src/node/3d-engine/AnalyticalGroomSplatService';
 import { TaskCapabilityResolver } from '../src/node/agent/task-capability-resolver';
 import type { AnalyticalGroomContract } from '../src/common/spatial/analytical-groom-types';
+import { analyticalGroomHandlers } from '../src/node/gemini/tools/spatial-tools';
+import * as os from 'os';
+
+/** The splats of a binary PLY the groomer wrote: position and 0..255 colour of each. */
+function readPly(file: string): Array<{ p: [number, number, number]; c: [number, number, number] }> {
+    const buf = fs.readFileSync(file);
+    const end = buf.indexOf('end_header\n') + 'end_header\n'.length;
+    const header = buf.toString('ascii', 0, end);
+    const count = Number(/element vertex (\d+)/.exec(header)![1]);
+    const props = [...header.matchAll(/property (\w+) (\w+)/g)].map(m => ({ type: m[1], name: m[2] }));
+    const size = (t: string) => (t === 'uchar' ? 1 : 4);
+    const stride = props.reduce((a, p) => a + size(p.type), 0);
+    const at = (name: string) => props.slice(0, props.findIndex(p => p.name === name)).reduce((a, p) => a + size(p.type), 0);
+    const [ox, oy, oz, or, og, ob] = ['x', 'y', 'z', 'red', 'green', 'blue'].map(at);
+    const out = [];
+    for (let i = 0; i < count; i++) {
+        const b = end + i * stride;
+        out.push({ p: [buf.readFloatLE(b + ox), buf.readFloatLE(b + oy), buf.readFloatLE(b + oz)] as [number, number, number], c: [buf[b + or], buf[b + og], buf[b + ob]] as [number, number, number] });
+    }
+    return out;
+}
 
 describe('Analytical Groom & 3D Gaussian Splatting Engine', () => {
     describe('Adaptive Domain Architecture (ADA) contract from explicit continuous descriptors', () => {
@@ -148,5 +169,76 @@ describe('Analytical Groom & 3D Gaussian Splatting Engine', () => {
                 fs.rmSync(testOutputDir, { recursive: true, force: true });
             }
         }, 60000);
+    });
+
+    describe('A full coat that shows', () => {
+        it('defaults to strands in proportion to the surface area, with a guide per hundred', () => {
+            const c = AnalyticalGroomSplatService.getInstance().buildContract({ surface: { baseRadius: 0.12, harmonicFrequency: 0, harmonicAmplitude: 0 }, groom: { length: 0.05, baseColorRgb: [0.5, 0.3, 0.2] } }, 'splat_synthesize_analytical_groom');
+            expect(c.groom.strandCount).toBe(Math.round(400000 * 4 * Math.PI * 0.12 * 0.12));
+            expect(c.groom.guideCount).toBe(Math.round(c.groom.strandCount! / 100));
+            const big = AnalyticalGroomSplatService.getInstance().buildContract({ surface: { baseRadius: 2, harmonicFrequency: 0, harmonicAmplitude: 0 }, groom: { length: 0.05, baseColorRgb: [0.5, 0.3, 0.2] } }, 'splat_synthesize_analytical_groom');
+            expect([big.groom.strandCount, big.groom.guideCount]).toEqual([120000, 1200]);
+        });
+
+        it('spreads roots evenly by area, grows a body just inside them, and keeps the root colour along the strand', async () => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-groom-'));
+            try {
+                // a 1 m ball with short hair: the 4.5 cm spread around each guide is small against it
+                const contract: AnalyticalGroomContract = {
+                    id: 'coat', surface: { center: [0, 0, 0], baseRadius: 1, harmonicFrequency: 0, harmonicAmplitude: 0, axialTaper: 0 },
+                    groom: { guideCount: 1200, strandCount: 6000, segmentsPerStrand: 8, length: 0.02, rootWidth: 0.003, tipWidth: 0.0006, clumping: 0, curlRadius: 0, curlFrequency: 0, waveAmplitude: 0, waveFrequency: 0, baseColorRgb: [0.6, 0.3, 0.1], tipColorRgb: [1, 1, 1] },
+                    splat: { scaleMultiplier: 1, opacity: 0.9, exportFormat: 'spz' }
+                };
+                const result = await AnalyticalGroomSplatService.getInstance().executeGroomSplat(contract, { outputDir: dir });
+                expect(result.success, result.error).toBe(true);
+                const splats = readPly(result.plyPath!);
+                // area-uniform: half the area lies within 30 degrees of the equator (|cos theta| < 0.5); a uniform theta put a third there
+                const r = (q: number[]) => Math.hypot(q[0], q[1], q[2]);
+                const nearEquator = splats.filter(s => Math.abs(s.p[1] / r(s.p)) < 0.5).length / splats.length;
+                expect(nearEquator).toBeGreaterThan(0.44);
+                expect(nearEquator).toBeLessThan(0.56);
+                // the body: a closed GLB of the same surface 1.5 % inside the roots
+                const glb = fs.readFileSync(result.bodyGlbPath!);
+                expect(glb.toString('ascii', 0, 4)).toBe('glTF');
+                const json = JSON.parse(glb.toString('utf8', 20, 20 + glb.readUInt32LE(12)));
+                const pos = json.accessors[json.meshes[0].primitives[0].attributes.POSITION];
+                expect(pos.max[1]).toBeCloseTo(0.985, 2);
+                expect(json.materials[0].pbrMetallicRoughness.baseColorFactor.slice(0, 3).map((v: number) => +v.toFixed(3))).toEqual([0.36, 0.18, 0.06]);
+                // colour: the strands' inner half keeps the root colour (a linear blend made it halfway to white)
+                const inner = splats.filter(s => r(s.p) < 1.008);
+                const meanRed = inner.reduce((a, s) => a + s.c[0], 0) / inner.length;
+                const meanBlue = inner.reduce((a, s) => a + s.c[2], 0) / inner.length;
+                expect(meanBlue).toBeLessThan(meanRed * 0.5);
+            } finally {
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        }, 120000);
+
+        it('the tool publishes the splat and body where the viewport serves models and opens them in a scene', async () => {
+            const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-groom-root-'));
+            const saved = process.env.SCRATCHBOX_ROOT;
+            process.env.SCRATCHBOX_ROOT = root;
+            const uris: string[] = [];
+            try {
+                const out: any = await analyticalGroomHandlers.splat_synthesize_analytical_groom({
+                    baseRadius: 0.12, harmonicFrequency: 0, harmonicAmplitude: 0, length: 0.05, strandCount: 2000, guideCount: 64,
+                    baseColorRgb: [0.58, 0.35, 0.18], tipColorRgb: [0.96, 0.91, 0.8]
+                }, {} as any);
+                const p = out.resultPayload;
+                uris.push(p.splatUri, p.bodyUri);
+                expect(p.splatUri).toMatch(/^\/models\/.+\.spz$/);
+                expect(p.bodyUri).toMatch(/^\/models\/.+_body\.glb$/);
+                for (const uri of [p.splatUri, p.bodyUri]) expect(fs.existsSync(path.join(root, 'public', uri))).toBe(true);
+                expect(p.artifact.type).toBe('3d-scene');
+                expect(p.artifact.data.objects.map((o: any) => o.content.durableUri)).toEqual([p.bodyUri, p.splatUri]);
+                expect(p.artifact.data.environment).toEqual({ skybox: 'studio', lighting: 'studio', ground: false });
+                expect(out.summaryResult).toMatch(/generated/);
+            } finally {
+                if (saved === undefined) delete process.env.SCRATCHBOX_ROOT; else process.env.SCRATCHBOX_ROOT = saved;
+                // the copies into the served folders of the checkout the test runs in
+                for (const uri of uris) for (const pub of [path.resolve(process.cwd(), 'public'), path.resolve(process.cwd(), '..', 'public')]) fs.rmSync(path.join(pub, uri), { force: true });
+                fs.rmSync(root, { recursive: true, force: true });
+            }
+        }, 120000);
     });
 });

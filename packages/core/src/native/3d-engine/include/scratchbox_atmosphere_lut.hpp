@@ -66,12 +66,23 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
 
 namespace scratchbox {
 namespace atmosphere_lut {
@@ -975,6 +986,173 @@ std::vector<uint8_t> encodeRgba(size_t texels, bool half, Rgb rgb, Alpha alpha) 
         }
     }
     return out;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Tables by medium, cached: once per process, and on disk across processes and runs. The key is every input the
+// precompute reads, so a changed medium is a new entry and an unchanged one is a lookup. The directory is
+// SCRATCHBOX_ATMOSPHERE_CACHE, else $TMPDIR/scratchbox-atmosphere-cache. Entries are float32, written to a temporary
+// name and renamed, so a reader never sees half a file; a file that does not hold its key is recomputed. A medium
+// first wanted by several processes at once is precomputed by one of them (an flock beside the entry).
+
+/** What the runtime functions read: the medium at the output wavelengths and the tables (no higher-order table). */
+struct CachedAtmosphere {
+    AtmosphereParameters parameters;
+    PrecomputedTables tables;
+    /** True when the tables came from the disk cache rather than a precompute in this process. */
+    bool fromDisk{false};
+    double precomputeMs{0};
+};
+
+/** The cache key: every value the precompute reads, at full precision (worker threads excluded). */
+inline std::string atmosphereCacheKey(const SpectralAtmosphere& m, const PrecomputeOptions& o) {
+    std::ostringstream k;
+    k.precision(17);
+    auto list = [&](const char* name, const std::vector<double>& v) { k << name; for (double x : v) k << ' ' << x; k << '\n'; };
+    auto profile = [&](const char* name, const DensityProfile& p) {
+        k << name;
+        for (const auto& l : p.layers) k << ' ' << l.width << ' ' << l.exp_term << ' ' << l.exp_scale << ' ' << l.linear_term << ' ' << l.constant_term;
+        k << '\n';
+    };
+    k << "scratchbox-atmosphere-lut 1 " << TRANSMITTANCE_TEXTURE_WIDTH << 'x' << TRANSMITTANCE_TEXTURE_HEIGHT << ' ' << SCATTERING_TEXTURE_NU_SIZE << 'x'
+      << SCATTERING_TEXTURE_MU_S_SIZE << 'x' << SCATTERING_TEXTURE_MU_SIZE << 'x' << SCATTERING_TEXTURE_R_SIZE << ' ' << IRRADIANCE_TEXTURE_WIDTH << 'x'
+      << IRRADIANCE_TEXTURE_HEIGHT << '\n';
+    list("wavelengths", m.wavelengths);
+    list("solar_irradiance", m.solar_irradiance);
+    list("rayleigh_scattering", m.rayleigh_scattering);
+    list("mie_scattering", m.mie_scattering);
+    list("mie_extinction", m.mie_extinction);
+    list("absorption_extinction", m.absorption_extinction);
+    list("ground_albedo", m.ground_albedo);
+    k << "scalars " << m.sun_angular_radius << ' ' << m.bottom_radius << ' ' << m.top_radius << ' ' << m.mie_phase_function_g << ' ' << m.mu_s_min << '\n';
+    profile("rayleigh_density", m.rayleigh_density);
+    profile("mie_density", m.mie_density);
+    profile("absorption_density", m.absorption_density);
+    k << "transmittance_lambdas " << o.transmittance_lambdas[0] << ' ' << o.transmittance_lambdas[1] << ' ' << o.transmittance_lambdas[2] << '\n';
+    k << "scattering_orders " << o.scattering_orders << '\n';
+    for (const auto& b : o.batches) {
+        k << "batch " << b.lambdas[0] << ' ' << b.lambdas[1] << ' ' << b.lambdas[2];
+        for (double x : b.to_output.m) k << ' ' << x;
+        k << '\n';
+    }
+    return k.str();
+}
+
+inline uint64_t fnv1a64(const std::string& s) {
+    uint64_t h = 1469598103934665603ull;
+    for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; }
+    return h;
+}
+
+inline std::filesystem::path atmosphereCacheDir() {
+    if (const char* dir = std::getenv("SCRATCHBOX_ATMOSPHERE_CACHE"); dir && *dir) return dir;
+    const char* tmp = std::getenv("TMPDIR");
+    return std::filesystem::path(tmp && *tmp ? tmp : "/tmp") / "scratchbox-atmosphere-cache";
+}
+
+namespace cache_detail {
+
+constexpr char kMagic[8] = {'S', 'B', 'A', 'T', 'M', 'L', 'U', 'T'};
+
+template <typename T, size_t N>
+void put(std::vector<float>& out, const std::vector<T>& texels, const double* (*channels)(const T&)) {
+    for (const T& t : texels) { const double* c = channels(t); for (size_t i = 0; i < N; ++i) out.push_back(static_cast<float>(c[i])); }
+}
+
+inline size_t floatCount() {
+    const size_t t = static_cast<size_t>(TRANSMITTANCE_TEXTURE_WIDTH) * TRANSMITTANCE_TEXTURE_HEIGHT;
+    const size_t s = static_cast<size_t>(SCATTERING_TEXTURE_WIDTH) * SCATTERING_TEXTURE_HEIGHT * SCATTERING_TEXTURE_DEPTH;
+    const size_t e = static_cast<size_t>(IRRADIANCE_TEXTURE_WIDTH) * IRRADIANCE_TEXTURE_HEIGHT;
+    return t * 3 + s * 4 + s * 3 + e * 3;
+}
+
+inline void write(const std::filesystem::path& file, const std::string& key, const PrecomputedTables& t) {
+    std::vector<float> f;
+    f.reserve(floatCount());
+    auto rgb = [](const Spec& c) -> const double* { return c.v; };
+    auto rgba = [](const Spec4& c) -> const double* { return c.v; };
+    put<Spec, 3>(f, t.transmittance.data, rgb);
+    put<Spec4, 4>(f, t.scattering.data, rgba);
+    put<Spec, 3>(f, t.single_mie_scattering.data, rgb);
+    put<Spec, 3>(f, t.irradiance.data, rgb);
+    std::error_code ec;
+    std::filesystem::create_directories(file.parent_path(), ec);
+    std::filesystem::path partial = file;
+    partial += ".partial." + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    {
+        std::ofstream out(partial, std::ios::binary);
+        if (!out) return;  // an unwritable cache only costs the next process a precompute
+        uint32_t keyLength = static_cast<uint32_t>(key.size());
+        out.write(kMagic, sizeof kMagic);
+        out.write(reinterpret_cast<const char*>(&keyLength), sizeof keyLength);
+        out.write(key.data(), static_cast<std::streamsize>(key.size()));
+        out.write(reinterpret_cast<const char*>(f.data()), static_cast<std::streamsize>(f.size() * sizeof(float)));
+        if (!out) { out.close(); std::filesystem::remove(partial, ec); return; }
+    }
+    std::filesystem::rename(partial, file, ec);
+    if (ec) std::filesystem::remove(partial, ec);
+}
+
+/** False when the file is missing, truncated or holds another key. */
+inline bool read(const std::filesystem::path& file, const std::string& key, PrecomputedTables& t) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return false;
+    char magic[8];
+    uint32_t keyLength = 0;
+    if (!in.read(magic, sizeof magic) || std::memcmp(magic, kMagic, sizeof magic) != 0) return false;
+    if (!in.read(reinterpret_cast<char*>(&keyLength), sizeof keyLength) || keyLength != key.size()) return false;
+    std::string stored(keyLength, '\0');
+    if (!in.read(stored.data(), keyLength) || stored != key) return false;
+    std::vector<float> f(floatCount());
+    if (!in.read(reinterpret_cast<char*>(f.data()), static_cast<std::streamsize>(f.size() * sizeof(float)))) return false;
+    if (in.peek() != std::char_traits<char>::eof()) return false;
+    size_t i = 0;
+    t.transmittance = makeTransmittanceTexture();
+    for (Spec& c : t.transmittance.data) { c = Spec(f[i], f[i + 1], f[i + 2]); i += 3; }
+    t.scattering = Texture3D<Spec4>(SCATTERING_TEXTURE_WIDTH, SCATTERING_TEXTURE_HEIGHT, SCATTERING_TEXTURE_DEPTH);
+    for (Spec4& c : t.scattering.data) { c = Spec4(Spec(f[i], f[i + 1], f[i + 2]), f[i + 3]); i += 4; }
+    t.single_mie_scattering = makeScatteringTexture();
+    for (Spec& c : t.single_mie_scattering.data) { c = Spec(f[i], f[i + 1], f[i + 2]); i += 3; }
+    t.irradiance = makeIrradianceTexture();
+    for (Spec& c : t.irradiance.data) { c = Spec(f[i], f[i + 1], f[i + 2]); i += 3; }
+    return true;
+}
+
+} // namespace cache_detail
+
+/** The tables of `m` under `o`: from this process's cache, else the disk cache, else precomputed (and stored in both). */
+inline std::shared_ptr<const CachedAtmosphere> cachedAtmosphere(const SpectralAtmosphere& m, const PrecomputeOptions& o) {
+    static std::mutex lock;
+    static std::map<std::string, std::shared_ptr<const CachedAtmosphere>> memory;
+    const std::string key = atmosphereCacheKey(m, o);
+    std::lock_guard<std::mutex> guard(lock);
+    if (auto it = memory.find(key); it != memory.end()) return it->second;
+
+    Model model(m, o);
+    auto entry = std::make_shared<CachedAtmosphere>();
+    entry->parameters = model.outputParameters();
+    char name[32];
+    std::snprintf(name, sizeof name, "%016llx.bin", static_cast<unsigned long long>(fnv1a64(key)));
+    const std::filesystem::path file = atmosphereCacheDir() / name;
+    // Processes wanting the same medium take turns on a lock beside the entry: the first precomputes, the rest read.
+    std::error_code ec;
+    std::filesystem::create_directories(file.parent_path(), ec);
+    std::filesystem::path lockPath = file;
+    lockPath += ".lock";
+    const int lockFd = ::open(lockPath.c_str(), O_CREAT | O_RDWR, 0644);
+    if (lockFd >= 0) ::flock(lockFd, LOCK_EX);
+    struct Unlock { int fd; ~Unlock() { if (fd >= 0) { ::flock(fd, LOCK_UN); ::close(fd); } } } unlock{lockFd};
+    if (cache_detail::read(file, key, entry->tables)) {
+        entry->fromDisk = true;
+    } else {
+        model.precompute();
+        entry->tables = model.tables();
+        entry->tables.higher_order_scattering = {};
+        entry->precomputeMs = model.timings().total_ms;
+        cache_detail::write(file, key, entry->tables);
+    }
+    memory.emplace(key, entry);
+    return entry;
 }
 
 } // namespace atmosphere_lut

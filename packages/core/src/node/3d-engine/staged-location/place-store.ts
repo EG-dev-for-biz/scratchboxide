@@ -30,7 +30,13 @@
  *     writer's lease;
  *   - `objects/<object key>.json`: one per object (`<kind>/<identity>@<frame>`), every version any machine synced (the
  *     object store's record of it: measures, defects, decision, inputs, provenance), and the version current here;
- *   - `blobs/<sha256[0:2]>/<sha256>.glb`: the GLB of every version that has been current here, content-addressed.
+ *   - `blobs/<sha256[0:2]>/<sha256>.glb`: the GLB of every version that has been current here, content-addressed;
+ *   - `readings/<kind>/<xx>/<sha256>.json`: the vision model's answers the place's runs used or wrote
+ *     (pipeline-k/model-readings.ts), under the names they have in every workspace.
+ *
+ * **Read first.** A district run at the place opens its store before it builds (pullPlace: read only, no lease) and
+ * brings the current version of each object into this machine's object store, through the object store's own rule (a
+ * local version that is no worse stays current), and the readings this workspace lacks into its reading store.
  *
  * **One writer at a time.** The manifest carries a lease, taken and released with a generation precondition on the
  * manifest (VersionedCloudBucket.putFileIfGeneration): of two writers that read the same manifest only one write lands.
@@ -52,8 +58,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { worseMeasures, type ObjectRecord, type SceneObjectStore } from '../../asset-store/scene-object-store';
-import { DirectoryCloudBucket, isVersionedBucket, NO_GENERATION, type CloudBucket, type VersionedCloudBucket } from '../../cloud-store/cloud-bucket';
+import { DirectoryCloudBucket, isVersionedBucket, NO_GENERATION, type CloudBucket, type CloudObject, type VersionedCloudBucket } from '../../cloud-store/cloud-bucket';
 import { defaultTrainingBucket } from '../../cloud-store/training-pair-capture';
+import { readingFileOf } from './pipeline-k/model-readings';
 
 export const PLACE_STORE_SCHEMA = 'scratchbox.place-store/1';
 export const PLACE_OBJECT_SCHEMA = 'scratchbox.place-object/1';
@@ -63,16 +70,19 @@ export const PLACE_STORE_FALLBACK_ROOT = '/Volumes/G-RAID MIRROR/scratchbox-plac
 export const PLACE_STORE_PARAMS = {
     /** A lease not released by then is taken for a crashed writer's and may be taken over (ms). */
     leaseMs: 20 * 60_000,
-    /** Objects and blobs written at once. */
-    concurrency: 6
+    /** Objects and blobs written (or read) at once. */
+    concurrency: 6,
+    /** How long a finished build waits for its place's pull before it keeps its objects without it (ms). */
+    pullWaitMs: 2 * 60_000
 };
 
 /**
- * SCRATCHBOX_PLACE_STORE=1 audits a chunked district and copies its objects to the place store. Off by default. It keeps
- * the scene object store's versions, so that store must be on too (scene-objects.ts objectStoreEnabled; SCRATCHBOX_OBJECT_STORE).
+ * A district run reads the place store first and copies its objects (and its chunked district's audit) to it after; on
+ * by default, SCRATCHBOX_PLACE_STORE=0 off. It keeps the scene object store's versions, so with that store off
+ * (scene-objects.ts objectStoreEnabled; SCRATCHBOX_OBJECT_STORE=0) no objects move.
  */
 export function placeStoreEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-    return env.SCRATCHBOX_PLACE_STORE?.trim() === '1';
+    return env.SCRATCHBOX_PLACE_STORE?.trim() !== '0';
 }
 
 /** What built a sync: the commit, and the versions of the modules that matter to it. */
@@ -191,6 +201,8 @@ export async function openPlaceStore(opts: { key: string; bucket?: CloudBucket |
 const manifestKey = (store: PlaceStore) => `${store.prefix}/manifest.json`;
 const objectRecordKey = (store: PlaceStore, objectKey: string) => `${store.prefix}/objects/${recordKey(objectKey)}.json`;
 const blobKey = (store: PlaceStore, sha256: string) => `${store.prefix}/blobs/${sha256.slice(0, 2)}/${sha256}.glb`;
+const readingsPrefix = (store: PlaceStore) => `${store.prefix}/readings/`;
+const readingObjectKey = (store: PlaceStore, key: string) => `${readingsPrefix(store)}${readingFileOf(key)}`;
 
 function scratchFile(store: PlaceStore, name: string): string {
     fs.mkdirSync(store.tmpDir, { recursive: true });
@@ -329,6 +341,12 @@ export interface PlaceSync {
     codeVersion: PlaceCodeVersion;
     switches: Record<string, string>;
     audit?: unknown;
+    /**
+     * The vision model's answers the run used and wrote (model-readings.ts ModelReadingReport), and the reading store's
+     * directory. A written record replaces the place's copy (a material choice grows); one only used is stored when the
+     * place lacks it. `restore` reads back one this workspace lacks (a Cloud Run chunk's, from the cache mirror) first.
+     */
+    readings?: { dir: string; used: string[]; written: string[]; restore?: (key: string) => Promise<boolean> };
     workspaceRoot: string;
     now?: () => number;
 }
@@ -342,6 +360,7 @@ export interface PlaceSyncReport {
     /** Each object whose current version here is not the one this machine offered, or that changed here, with why. */
     decisions: Array<{ objectKey: string; kept: boolean | 'unchanged'; reason: string }>;
     blobs: { stored: number; existing: number; bytes: number; missing: string[] };
+    readings: { stored: number; existing: number; missing: number };
     errors: string[];
     ms: number;
 }
@@ -362,7 +381,7 @@ export async function syncPlaceObjects(store: PlaceStore, sync: PlaceSync, P = P
     const now = sync.now ?? Date.now;
     const t0 = now();
     const host = os.hostname();
-    const report: PlaceSyncReport = { where: store.where, key: store.key, objects: { added: 0, promoted: 0, rejected: 0, unchanged: 0 }, decisions: [], blobs: { stored: 0, existing: 0, bytes: 0, missing: [] }, errors: [], ms: 0 };
+    const report: PlaceSyncReport = { where: store.where, key: store.key, objects: { added: 0, promoted: 0, rejected: 0, unchanged: 0 }, decisions: [], blobs: { stored: 0, existing: 0, bytes: 0, missing: [] }, readings: { stored: 0, existing: 0, missing: 0 }, errors: [], ms: 0 };
     const done = (skipped?: string) => ({ ...report, ...(skipped ? { skipped } : {}), ms: now() - t0 });
     if (!store.bucket) return done(store.where.reason ?? 'no place store');
     let held: LeaseResult;
@@ -427,6 +446,20 @@ export async function syncPlaceObjects(store: PlaceStore, sync: PlaceSync, P = P
                 report.errors.push(`${objectKey}: ${errorMessage(err)}`);
             }
         });
+        // the readings: each one written replaces the place's copy, each one only used is stored when the place lacks it
+        if (sync.readings) {
+            const r = sync.readings, written = new Set(r.written);
+            await eachLimited([...new Set([...r.written, ...r.used])], P.concurrency, async key => {
+                try {
+                    const file = path.join(r.dir, ...readingFileOf(key).split('/'));
+                    if (!fs.existsSync(file) && !(r.restore && (await r.restore(key)) && fs.existsSync(file))) { report.readings.missing++; return; }
+                    const state = await store.bucket!.putFile(readingObjectKey(store, key), file, { contentType: 'application/json', metadata: { place: store.key }, ...(written.has(key) ? {} : { onlyIfAbsent: true }) });
+                    if (state === 'stored') report.readings.stored++; else report.readings.existing++;
+                } catch (err) {
+                    if (report.errors.length < 20) report.errors.push(`reading ${key}: ${errorMessage(err)}`);
+                }
+            });
+        }
         const atMs = now();
         const next: PlaceManifest = {
             ...manifest, anchor: sync.anchor, radiusM: sync.radiusM, edge: sync.edge, ...(sync.chunks ? { chunks: sync.chunks } : {}), codeVersion: sync.codeVersion,
@@ -448,6 +481,116 @@ export async function syncPlaceObjects(store: PlaceStore, sync: PlaceSync, P = P
         await releasePlaceLease(store, leased).catch(() => false);
         return done();
     }
+}
+
+/** What a run read from its place's store before it built. */
+export interface PlacePullReport {
+    where: PlaceStoreLocation;
+    key: string;
+    /** Set when nothing was read, with why (no store, or the place has none yet). */
+    skipped?: string;
+    /**
+     * The place's current version of each object, brought into this machine's object store: current here (`adopted`),
+     * stored but not current because the version here is no worse (`keptLocal`), here already, or failed; `skipped` when
+     * no object was read, with why.
+     */
+    objects: { adopted: number; keptLocal: number; alreadyHere: number; failed: number; skipped?: string };
+    /** The place's readings this workspace lacked, brought into its reading store; `skipped` when none was read, with why. */
+    readings: { pulled: number; present: number; failed: number; skipped?: string };
+    bytes: number;
+    errors: string[];
+    ms: number;
+}
+
+export interface PlacePull {
+    /** This machine's object store; without it no object is brought here. */
+    objects?: SceneObjectStore;
+    /** Why no object is brought here even with a store (SCRATCHBOX_OBJECT_REUSE=0). */
+    objectsOff?: string;
+    /** The reading store's directory; without it no reading is brought here. */
+    readingsDir?: string;
+    /** Why no reading is brought here (SCRATCHBOX_CACHE_RESTORE=off). */
+    readingsOff?: string;
+    workspace?: string;
+    now?: () => number;
+}
+
+const READING_FILE = /^[a-z][a-z0-9-]*\/[0-9a-f]{2}\/[0-9a-f]{64}\.json$/;
+
+/**
+ * Reads the place's store before a run builds, without the lease: the current version of each object the manifest lists
+ * is put into this machine's object store (its own gate decides: a version here that is no worse stays current), its GLB
+ * read from the place's blob and checked against the record's sha256; and every reading the place holds that this
+ * workspace lacks is written into the reading store. Never throws: what went wrong is in the report.
+ */
+export async function pullPlace(store: PlaceStore, pull: PlacePull, P = PLACE_STORE_PARAMS): Promise<PlacePullReport> {
+    const now = pull.now ?? Date.now;
+    const t0 = now();
+    const report: PlacePullReport = { where: store.where, key: store.key, objects: { adopted: 0, keptLocal: 0, alreadyHere: 0, failed: 0 }, readings: { pulled: 0, present: 0, failed: 0 }, bytes: 0, errors: [], ms: 0 };
+    const done = (skipped?: string) => ({ ...report, ...(skipped ? { skipped } : {}), ms: now() - t0 });
+    const fail = (what: string, err: unknown) => { if (report.errors.length < 20) report.errors.push(`${what}: ${errorMessage(err)}`); };
+    if (!store.bucket) return done(store.where.reason ?? 'no place store');
+    let read: Awaited<ReturnType<typeof loadPlaceManifest>>;
+    try { read = await loadPlaceManifest(store); } catch (err) { return done(`the manifest could not be read (${errorMessage(err)})`); }
+    if (!read) return done('the place has no store yet');
+    const objects = pull.objects;
+    if (!objects || pull.objectsOff) report.objects.skipped = pull.objectsOff ?? 'this machine keeps no object store';
+    else {
+        await eachLimited(Object.keys(read.manifest.objects), P.concurrency, async objectKey => {
+            const file = path.join(store.tmpDir, `blob-${crypto.randomBytes(6).toString('hex')}.glb`);
+            try {
+                const rec = await loadPlaceObject(store, objectKey);
+                const cur = rec?.current ? rec.versions.find(v => v.inputHash === rec.current) : undefined;
+                if (!cur) throw new Error('the place names no current version of it');
+                if (objects.find(objectKey, cur.inputHash)) { report.objects.alreadyHere++; return; }
+                if (!cur.blob) throw new Error(`its current version ${cur.inputHash.slice(0, 12)} has no blob`);
+                fs.mkdirSync(store.tmpDir, { recursive: true });
+                if (!(await store.bucket!.download(cur.blob, file))) throw new Error(`${cur.blob} is missing`);
+                const bytes = fs.readFileSync(file);
+                const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+                if (sha !== cur.record.glb.sha256) throw new Error(`its blob's sha256 ${sha.slice(0, 12)} is not the record's ${cur.record.glb.sha256.slice(0, 12)}`);
+                const r = cur.record, { locationHash: _h, ...frame } = r.location.frame;
+                const put = objects.put({
+                    kind: r.kind, identity: r.identity, frame, inputHash: cur.inputHash, glb: () => bytes, provenance: r.provenance, producer: r.producer,
+                    ...(r.inputs ? { inputs: r.inputs } : {}), ...(r.location.wgs84 ? { wgs84: r.location.wgs84 } : {}), ...(r.catalogId ? { catalogId: r.catalogId } : {}),
+                    ...(r.runId ? { runId: r.runId } : {}), ...(pull.workspace ? { workspace: pull.workspace } : {}),
+                    ...(r.measures ? { measures: r.measures } : {}), ...(r.defects ? { defects: r.defects } : {}), ...(r.audit !== undefined ? { audit: r.audit } : {})
+                });
+                if (put.objectKey !== objectKey) throw new Error(`it was stored as ${put.objectKey}`);
+                report.bytes += bytes.length;
+                if (put.decision?.kept === false) report.objects.keptLocal++; else report.objects.adopted++;
+            } catch (err) {
+                report.objects.failed++;
+                fail(objectKey, err);
+            } finally {
+                fs.rmSync(file, { force: true });
+            }
+        });
+    }
+    if (!pull.readingsDir || pull.readingsOff) report.readings.skipped = pull.readingsOff ?? 'this run keeps no readings';
+    else {
+        const dir = pull.readingsDir, prefix = readingsPrefix(store);
+        let listed: CloudObject[] = [];
+        try { listed = await store.bucket.list(prefix); } catch (err) { fail('the readings could not be listed', err); }
+        await eachLimited(listed.filter(o => READING_FILE.test(o.key.slice(prefix.length))), P.concurrency, async o => {
+            const rel = o.key.slice(prefix.length), target = path.join(dir, ...rel.split('/'));
+            if (fs.existsSync(target)) { report.readings.present++; return; }
+            const tmp = `${target}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+            try {
+                fs.mkdirSync(path.dirname(target), { recursive: true });
+                if (!(await store.bucket!.download(o.key, tmp))) throw new Error('gone');
+                fs.renameSync(tmp, target);
+                report.readings.pulled++;
+                report.bytes += o.bytes;
+            } catch (err) {
+                report.readings.failed++;
+                fail(`reading ${rel}`, err);
+            } finally {
+                fs.rmSync(tmp, { force: true });
+            }
+        });
+    }
+    return done();
 }
 
 function errorMessage(err: unknown): string {

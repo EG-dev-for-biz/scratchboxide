@@ -246,11 +246,42 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
             count++;
         }
         const mean = sum / count;
-        // A convex white body under a unit dome: Lambert returns 1; single-scatter GGX at roughness 1
-        // loses some energy (no multiple-scattering term), never gains any.
+        // A convex white body under a unit dome: Lambert returns 1; the dielectric's Fresnel-weighted diffuse
+        // loses a little, the compensated specular lobe never makes energy.
         expect(count).toBeGreaterThan(0.4 * 160 * 160);
         expect(mean).toBeGreaterThan(0.85);
         expect(mean).toBeLessThan(1.02);
+    });
+
+    it('keeps a rough white metal near the furnace limit: the specular lobe is compensated for multiple scattering', async ctx => {
+        if (!device.raytracing) return ctx.skip();
+        const means: Record<string, number> = {};
+        for (const roughness of [0.3, 0.6, 1]) {
+            const res = await service.render({
+                sbvgPath: sphereSbvg, outputDir: path.join(tmp, `furnace-metal-${roughness}`),
+                width: 160, height: 160, samplesPerPixel: 256, maxBounces: 8, clampIndirect: 0, seed: 7,
+                lighting: { studio: { radiance: [1, 1, 1] } },
+                material: { albedo: [1, 1, 1], roughness, metallic: 1 },
+                camera: { position: [0, 0, 4], target: [0, 0, 0], verticalFovDeg: 35 }
+            });
+            expect(res.stats.nanSamples).toBe(0);
+            const color = readLinearColor(res);
+            let sum = 0, count = 0;
+            for (let i = 0; i < color.length; i += 3) {
+                const l = luminance(color, i);
+                if (Math.abs(l - 1) < 1e-6) continue;
+                sum += l;
+                count++;
+            }
+            means[roughness] = sum / count;
+        }
+        // A white metal under a white dome returns nearly all the light at every roughness. Measured on an M1 Ultra
+        // (2026-11-03): 0.9996 / 0.9994 / 0.9981 at roughness 0.3 / 0.6 / 1, where single-scatter GGX returned
+        // 0.976 / 0.808 / 0.429; Lazarov's fit in place of the integrated table overshot to 1.16.
+        for (const r of Object.keys(means)) {
+            expect(means[r]).toBeGreaterThan(0.9);
+            expect(means[r]).toBeLessThan(1.03);
+        }
     });
 
     it('agrees with the CPU reference on the sphere under the sun', async ctx => {

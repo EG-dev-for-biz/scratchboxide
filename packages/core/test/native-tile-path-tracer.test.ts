@@ -17,7 +17,7 @@ import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-
 import { NativeTilePathTracerService } from '../src/node/3d-engine/native-tile-path-tracer-service';
 import { resolveBinary } from '../src/node/video/HeadlessVideoEditorService';
 import { decodePng } from '../src/node/texture-processing';
-import { HOW_TO, requireAll, requireAsset, requireBinary, withReason } from './helpers/requirements';
+import { HOW_TO, requireAll, requireAsset, requireBinary, requireEnv, withReason } from './helpers/requirements';
 
 const REPO_ROOT = process.cwd();
 const TILE_GLB = path.resolve(REPO_ROOT, 'public/models/nyc_grand_army_plaza_raw.glb');
@@ -278,7 +278,7 @@ int main(int argc, char** argv) {
         expect(arch.firstUnlit).toBe(true);
     });
 
-    it('computes a single-scattering sky with physically ordered colors', async () => {
+    it('reads a multiple-scattering sky from the Bruneton tables, with physically ordered colors', async () => {
         const res = await runProgram('sky_check', String.raw`
 #include "scratchbox_sky.hpp"
 int main() {
@@ -312,6 +312,8 @@ int main() {
         }
     }
     r.num("maxLutRelativeError", maxRelative);
+    const auto& a = noon.atmosphere();
+    r.num("tablesReady", a.fromDisk || a.precomputeMs > 0 ? 1 : 0).num("orders", sky::earthPrecompute().scattering_orders);
 
     Vec3 center = noon.sunDiscRadiance(noon.sunDirection());
     Vec3 outside = noon.sunDiscRadiance(dirFrom(60.0f, 185.0f));
@@ -347,7 +349,7 @@ int main() {
         const noonRatio = res.noonSunTransmittance[0] / res.noonSunTransmittance[2];
         const sunsetRatio = res.sunsetSunTransmittance[0] / res.sunsetSunTransmittance[2];
         expect(sunsetRatio).toBeGreaterThan(3 * noonRatio);
-        expect(res.maxLutRelativeError).toBeLessThan(0.05);
+        expect(res.maxLutRelativeError).toBeLessThan(0.01); // measured 0.0002-0.0013 against the 4D tables
         expect(res.discCenterLuminance).toBeGreaterThan(0);
         expect(res.discOutsideLuminance).toBe(0);
         expect(res.discIntegralOverIrradiance).toBeGreaterThan(0.97);
@@ -356,10 +358,49 @@ int main() {
         expect(hb).toBeGreaterThan(hg);
         expect(hg).toBeGreaterThan(hr);
         expect(hr).toBeGreaterThan(0);
-        expect(res.skyIrradianceHorizontal[2]).toBeGreaterThan(res.skyIrradianceHorizontal[0]);
-        expect(res.skyToSunHorizontalRatio).toBeGreaterThan(0.03);
-        expect(res.skyToSunHorizontalRatio).toBeLessThan(0.5);
+        expect(res.tablesReady).toBe(1);
+        expect(res.orders).toBe(process.env.SCRATCHBOX_SKY_SCATTERING_ORDERS ? Number(process.env.SCRATCHBOX_SKY_SCATTERING_ORDERS) : 4);
+        if (res.orders >= 2) {
+            expect(res.skyIrradianceHorizontal[2]).toBeGreaterThan(res.skyIrradianceHorizontal[0]);
+            expect(res.skyToSunHorizontalRatio).toBeGreaterThan(0.03);
+            expect(res.skyToSunHorizontalRatio).toBeLessThan(0.5);
+        } else {
+            // Bruneton's irradiance table holds the sky light of orders 1..N-1: at one order it is empty, by design.
+            expect(res.skyIrradianceHorizontal).toEqual([0, 0, 0]);
+        }
     });
+
+    const heavy = requireEnv('SCRATCHBOX_HEAVY_TESTS', 'the four-order sky tables, 25 s on 16 cores and about 100 s on a CI runner once per machine; set by the macOS push and nightly job');
+    it.skipIf(!heavy.ok)(withReason('the four-order sky holds the light the higher orders add', heavy), async () => {
+        const res = await runProgram('sky_orders_check', String.raw`
+#include "scratchbox_sky.hpp"
+int main() {
+    using namespace scratchbox;
+    using math::Vec3;
+    auto lum = [](const atmosphere_lut::Spec& c) { return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+    float e = 60.0f * math::DEG_TO_RAD;
+    Vec3 sun(0.0f, std::sin(e), std::cos(e));
+    sky::PhysicalSky noon(sun);
+    atmosphere_lut::PrecomputeOptions single = sky::earthPrecompute();
+    single.scattering_orders = 1;
+    auto once = atmosphere_lut::cachedAtmosphere(sky::earthAtmosphere({}), single);
+    const auto& all = noon.atmosphere();
+    atmosphere_lut::Vec3d camera{0, all.parameters.bottom_radius, 0}, up{0, 1, 0}, s{sun.x, sun.y, sun.z};
+    atmosphere_lut::Spec t;
+    double one = lum(atmosphere_lut::GetSkyRadiance(once->parameters, once->tables, camera, up, 0.0, s, t));
+    double every = lum(atmosphere_lut::GetSkyRadiance(all.parameters, all.tables, camera, up, 0.0, s, t));
+    ResultJson r;
+    r.num("orders", sky::earthPrecompute().scattering_orders).num("singleOverAllOrdersZenith", one / every);
+    r.emit();
+    return 0;
+}
+`);
+        expect(res.orders).toBe(4);
+        // Single scattering alone is short of the sky's light; the higher orders add the rest. Measured 2026-11-03: the
+        // old single-scattering integrator gave 65-89 % of this sky's radiance (0.80 at the noon zenith).
+        expect(res.singleOverAllOrdersZenith).toBeGreaterThan(0.65);
+        expect(res.singleOverAllOrdersZenith).toBeLessThan(0.92);
+    }, 900_000); // a cold machine precomputes the four-order tables (about 25 s on 16 cores, 100 s on 4)
 
     it('applies the AgX view transform and exposure', async () => {
         const res = await runProgram('agx_check', String.raw`

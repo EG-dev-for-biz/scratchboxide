@@ -20,7 +20,7 @@
  *   the final scene. A place that cannot be resolved or has no tile coverage fails the call; nothing else does.
  */
 
-import { cacheMirrorBucket, mirrorCachesInBackground, restoreCacheEntry } from '../../cloud-store/cache-mirror';
+import { cacheMirrorBucket, mirrorCachesInBackground, restoreCacheEntry, restoreCacheFile } from '../../cloud-store/cache-mirror';
 import { GcsCloudBucket } from '../../cloud-store/cloud-bucket';
 import { cloudChunkConfig, CloudRunJobsRest, createCloudChunkRunner, type RunChunk } from './cloud-chunk-runner';
 import { kdChunkRunner } from './pipeline-k/district-chunks';
@@ -233,9 +233,16 @@ function stoppableFetch(signal: AbortSignal | undefined): typeof fetch | undefin
 
 /** The orchestrator's dependencies wired to the app's own services. */
 export async function createStagedLocationDeps(workspaceRoot: string, options: { signal?: AbortSignal } = {}): Promise<StagedLocationDeps> {
-    // a stage this workspace lacks is read back from the cache mirror's bucket before it runs (SCRATCHBOX_CACHE_RESTORE=off: never)
+    // a stage this workspace lacks is read back from the cache mirror's bucket before it runs, and so is a model's answer
+    // kept as one file (pipeline-k/model-readings.ts) before the model is asked (SCRATCHBOX_CACHE_RESTORE=off: never)
     const mirror = process.env.SCRATCHBOX_CACHE_RESTORE?.trim() === 'off' ? undefined : cacheMirrorBucket();
-    const cache: StageCache = new StageCache({ workspaceRoot, ...(mirror ? { restore: (stage: string, key: string) => restoreCacheEntry(mirror, cache.workspaceRoot, `staged_location/${stage}/${key}`, { modelsDir: cache.modelsDir }) } : {}) });
+    const cache: StageCache = new StageCache({
+        workspaceRoot,
+        ...(mirror ? {
+            restore: (stage: string, key: string) => restoreCacheEntry(mirror, cache.workspaceRoot, `staged_location/${stage}/${key}`, { modelsDir: cache.modelsDir }),
+            restoreFile: (rel: string) => restoreCacheFile(mirror, cache.workspaceRoot, `staged_location/${rel}`)
+        } : {})
+    });
     const gemini = new GeminiClient();
     const vegetation = getTileVegetationService(workspaceRoot);
     const canopy = (vegetation as unknown as { canopy?: (req: { tilePath: string; cellM?: number; signal?: AbortSignal }) => Promise<any> }).canopy;
@@ -336,6 +343,8 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         // search-grounded reference images (the bridges' detail the scan cannot resolve): the Vertex client with the image models
         groundedReferences: async () => (await new GoogleMediaCredentialsService().createVertexClient()) as unknown as GroundedReferenceClient,
         vehicleRemoval: true,
+        // what the residual audit finds standing in a district's streets that nothing explains, out of the tree-stripped scan (street-residue.ts)
+        streetResidue: true,
         // the tile seam stage on the extraction as it arrives (tile-seam-weld-service.ts)
         tileSeams: runTileSeamWeld,
         // pipeline K-D: each chunk of a chunked district is a build of its own, on its own worker thread, or with

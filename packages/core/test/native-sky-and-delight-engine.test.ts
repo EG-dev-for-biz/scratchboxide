@@ -26,7 +26,7 @@ describe('Native C++20 Physical Sky & De-Lighting Engine', () => {
         expect(fs.existsSync(path.join(includePath, 'scratchbox_atmosphere.hpp'))).toBe(true);
     });
 
-    it('should generate physical Rayleigh/Mie atmospheric sky equirectangular map via C++20 engine', async () => {
+    it('should generate a multiple-scattering Rayleigh/Mie sky equirectangular map from the precomputed tables', async () => {
         // High noon sun: pointing straight down from zenith +Y
         const middayOptions: PhysicalSkyOptions = {
             sunDirection: [0, 1, 0],
@@ -60,9 +60,10 @@ describe('Native C++20 Physical Sky & De-Lighting Engine', () => {
 
         // Rayleigh signature: Blue > Red
         expect(bZenith).toBeGreaterThan(rZenith);
-        expect(result.skyIrradianceHorizontal[1]).toBeGreaterThan(0); // non-zero horizontal irradiance
+        // Bruneton's irradiance table holds the sky light of orders 1..N-1, so it is empty when the suite runs one order
+        if (Number(process.env.SCRATCHBOX_SKY_SCATTERING_ORDERS ?? 4) >= 2) expect(result.skyIrradianceHorizontal[1]).toBeGreaterThan(0);
         expect(result.sunIrradiance[0]).toBeGreaterThan(0); // direct sun transmittance
-    }, 45000);
+    }, 600_000); // a cold machine precomputes this medium's tables first (about 25 s on 16 cores, 100 s on 4)
 
     it('should correctly shift chromaticity toward sunset/golden hour in C++ physical sky', async () => {
         // Low sun near horizon: elevation ~ 5 degrees (Y=0.087, Z=0.996)
@@ -85,7 +86,7 @@ describe('Native C++20 Physical Sky & De-Lighting Engine', () => {
         // Sun irradiance transmittance through long atmospheric path should heavily attenuate blue
         // causing sunIrradiance Red > Blue
         expect(result.sunIrradiance[0]).toBeGreaterThan(result.sunIrradiance[2]);
-    }, 45000);
+    }, 600_000); // a turbid medium is its own set of tables
 
     it('should execute physical C++ albedo extraction eliminating heuristic GLSL shadow lift', async () => {
         // Simple test quad

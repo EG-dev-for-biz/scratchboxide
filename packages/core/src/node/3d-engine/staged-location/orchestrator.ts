@@ -117,6 +117,8 @@ import { VISION_CALL_POLICY, VisionModelChain, type VisionGenAIClient } from '..
 import { budgetedClient, ModelCallMeter } from '../../gemini/model-call-budget';
 import { segmentOwnershipViews } from './ownership-masks';
 import { buildGroundModel, geodeticToScan, loadScanMesh, scanToGeodetic, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
+import { carriagewayLevelAt, removeStreetResidue, streetResidueEnabled, writeStreetResidue, STREET_RESIDUE_VERSION, type StreetResidueReport } from './street-residue';
+import { SURFACE_INFILL_VERSION } from './surface-infill';
 import { removeVehicles, vehicleRemovalEnabled, vehicleRemovalParams, visionVehicleBatchJudge, visionVehicleJudge, VEHICLE_REMOVAL_VERSION, type VehicleRemovalReport } from './vehicle-removal';
 import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, PROCEDURAL_ROADS_VERSION, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
 import { renderTopDownPhoto, topDownJpeg } from './top-down-photo';
@@ -204,9 +206,10 @@ import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSIO
 import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
 import { districtBuildingIndex, districtFootprints } from './pipeline-k/district-buildings';
-import { chunkCpuShare, chunkOwner, chunkParallel, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, planDistrictChunks, type DistrictChunkPlan, type TileFrame } from './pipeline-k/district-chunks';
-import { auditDistrictForPlace, placeStoreEnabled, syncPlaceAfterObjects } from './place-store-district';
-import { addSeamEdges, applySeamGain, cutChunkGround, DISTRICT_SEAMS_PARAMS, DISTRICT_SEAMS_VERSION, sampleSeamColour, seamCoverage, seamOwner, solveSeamGains, type SeamCoverage, type SeamCutReport, type SeamEdges, type SeamSamples } from './pipeline-k/district-seams';
+import { chunkCpuShare, chunkOwner, chunkParallel, kdCentreRunner, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, planDistrictChunks, type DistrictChunkPlan, type TileFrame } from './pipeline-k/district-chunks';
+import { auditDistrictForPlace, placeStoreEnabled, pullPlaceForRun, syncPlaceAfterObjects } from './place-store-district';
+import { PLACE_STORE_PARAMS } from './place-store';
+import { addSeamEdges, applySeamGain, cutChunkLayer, DISTRICT_SEAMS_PARAMS, DISTRICT_SEAMS_VERSION, sampleSeamColour, seamCoverage, seamOwner, solveSeamGains, type SeamCoverage, type SeamCutReport, type SeamEdges, type SeamSamples } from './pipeline-k/district-seams';
 import * as os from 'os';
 import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
 import { detailBakeProvenance, TILE_DETAIL_BAKE_VERSION, type TileDetailBakeReport } from '../../spatial/tile-detail-bake';
@@ -277,6 +280,9 @@ const PROCEDURAL_ONLY = 'procedural build only: the 3D Building build runs only 
 /** The stages a procedural-only build runs: the place, the tiles, the vector data, the massing it builds on (remesh) and the procedural pipeline (grammar). */
 const PROCEDURAL_STAGES: ReadonlySet<string> = new Set(['resolve', 'tiles', 'vector', 'remesh', 'grammar', 'finish']);
 const PIPELINE_K_ISOLATE = 'pipeline K builds the one building: the surroundings (vector massing, terrain, street cleanup) are not loaded';
+const CENTRE_IN_CLOUD = "the district's centre cell is built in the cloud as one more chunk job (SCRATCHBOX_KD_CENTRE_RUNNER=local builds it here): this build plans, paints, joins and publishes";
+/** What a build whose centre cell is a cloud job runs itself. */
+const CENTRE_IN_CLOUD_STAGES: ReadonlySet<StageId> = new Set<StageId>(['resolve', 'vector', 'chunks']);
 const PIPELINE_K_KEEPS_SCAN = 'pipeline K keeps the building\'s own scan, straightened: a scan-fitted rebuild, and the detail placed on it, would replace it';
 /** The rebuild stages a pipeline K isolate leaves out, as it keeps the straightened scan as the structure. */
 const PIPELINE_K_FIT_SKIPPED: StageId[] = ['fit', 'project', 'vision', 'correct', 'detail', 'figures'];
@@ -583,6 +589,13 @@ export interface StagedLocationDeps {
      */
     vehicleRemoval?: boolean;
     /**
+     * Street residue (street-residue.ts): in a district, what the residual audit finds standing in the streets that nothing
+     * explains (floating artefacts, wide-and-low lumps, twisted spikes) taken out of the tree-stripped scan and the street
+     * under it filled by the surface infill, before anything builds on the scan. True in the app's deps; stand-in deps leave
+     * it out, so their builds read the stripped scan as it is.
+     */
+    streetResidue?: boolean;
+    /**
      * The tile seam stage (tile-seam-weld-service.ts runTileSeamWeld): the extraction's seams closed as it arrives, and
      * every later stage reads the welded scan. The app's deps provide it; stand-in deps leave it out (the raw extraction is
      * used and the run says so).
@@ -673,6 +686,8 @@ interface RunRecord {
 /** The payload beside the contract result, for consumers of the previous result shape (the object builder). */
 export interface StagedLocationOutcome {
     result: StagedLocationResult;
+    /** The run's id (its records under staged_location/runs/<runId>/): a district's chunks are found by it. */
+    runId?: string;
     compat: {
         remesh: { ok: boolean; url?: string; error?: string };
         resolvedAddress: string;
@@ -1566,6 +1581,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     // the vision replies of identical earlier requests are read back (a retry of the stage asks the model again), and a
     // call whose first token is late is sent once more (VisionModelChainOptions.hedgeAfterMs)
     const chainExtras = (id: StageId) => ({ hedgeAfterMs: VISION_HEDGE_AFTER_MS, ...(bypass(id) ? {} : { replyCache: stagedReplyCache(cache) }) });
+    // the vision model's answers kept between builds (pipeline-k/model-readings.ts), one store a run; one this workspace
+    // lacks is read back from the cache mirror's bucket before the model is asked (stage-cache.ts restoreFile)
+    let readingStore: ReturnType<typeof fileReadingStore> | undefined;
+    const modelReadingsStore = () => (readingStore ??= fileReadingStore(path.join(cache.dir, MODEL_READINGS_DIR), { restore: rel => cache.restoreFile(`${MODEL_READINGS_DIR}/${rel}`) }));
     const runId = deps.newRunId?.() ?? crypto.randomBytes(4).toString('hex');
     cache.activeRunId = runId;
     // every stage event also goes to the run's wall-clock timeline (runs/<runId>/timeline.jsonl)
@@ -1618,6 +1637,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         cache.writeRunRecord(runId, rec);
     };
     let placeValue: ResolvedPlace | undefined;
+    let placePull: Promise<void> | undefined;
     // every stage promise the call starts is settled before it returns or throws, so none runs on, or rejects unseen, after it
     const siblings: Array<Promise<unknown>> = [];
     // the tiles' extraction, for the stages that start before it and finish after it (the vector first paint)
@@ -1653,6 +1673,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         });
         if (resolved.status === 'stopped' || !resolved.value) throw new StagedLocationHardFailure('resolve', 'run_deadline', `The run reached its time limit before the place was resolved, so there is nothing to show.`);
         placeValue = resolved.value;
+        // a district run reads its place's store first (place-store.ts pullPlace): the place's objects into the object store,
+        // its readings into the reading store; read in the background, waited for before the run's objects are kept
+        if (kdDistrict && !request.chunk && placeStoreEnabled()) placePull = pullPlaceForRun({ place: placeValue, store: defaultDurableAssetStore(), readingsDir: path.join(cache.dir, MODEL_READINGS_DIR), workspace: cache.workspaceRoot })
+            .then(r => { cache.writeRunNote(runId, 'place_pull', r); }, () => undefined);
         run.state.place = { query: request.query, resolvedAddress: placeValue.formattedAddress, lat: placeValue.lat, lng: placeValue.lng, ...(placeValue.alternatives?.length ? { alternatives: placeValue.alternatives } : {}) };
         persist();
         // pipeline K-D: a district larger than one build reaches is cut into chunks (pipeline-k/district-chunks.ts); this build is the
@@ -1683,6 +1707,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             run.carried = partitionActiveScene(intoActive, request.isolate ? placeValue : undefined);
             if (run.carried.structure.length) run.layerTransform = keptStructureCarver(run, cache, base);
         }
+        // pipeline K-D with the cloud runner: the centre cell is one more chunk job (kdCentreRunner), so this build reads no
+        // tiles of its own and its own stages are skipped; the vector paint stands for the whole district until the chunks join
+        const centreInCloud = !!chunkPlan && kdCentreRunner() === 'cloud' && !!deps.runChunk;
+        if (centreInCloud) {
+            for (const id of STAGE_IDS) if (!CENTRE_IN_CLOUD_STAGES.has(id)) runner.skip(id, CENTRE_IN_CLOUD);
+            tilesSettle(undefined);
+        }
+        /** The centre job's outcome (or, when it failed, the first chunk joined): the scan the finish reads with the centre in the cloud. */
+        let cloudScan: StagedLocationOutcome | undefined;
 
         // ---------------- vector (the first paint: Google's vector buildings, extruded natively, beside the tile download) ----------------
         // it commits l0 as soon as it is built, unless the tiles were first; once the tiles commit, the buildings they do not cover
@@ -1840,12 +1873,19 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const chunksPromise = !plan ? Promise.resolve(undefined) : runner.stage<{ chunks: number; joined: number; failed: number }>({
             id: 'chunks',
             run: async io => {
-                const tiles = await tilesReady;
-                if (!tiles) return { status: 'skipped', source: '', reason: 'the centre build has no tiles to join the chunks to' };
-                const here: TileFrame = { lat: placeValue!.lat, lng: placeValue!.lng, originEllipsoidalHeightM: tiles.extraction.originEllipsoidalHeightM };
+                const tiles = centreInCloud ? undefined : await tilesReady;
+                if (!tiles && !centreInCloud) return { status: 'skipped', source: '', reason: 'the centre build has no tiles to join the chunks to' };
+                // the district's frame: the centre build's tiles; with the centre in the cloud, its job's frame once it is back
+                // (every other chunk waits for it to be joined), else, when the centre could not be built, the place at the
+                // first joined chunk's origin height
+                let here: TileFrame | undefined = tiles ? { lat: placeValue!.lat, lng: placeValue!.lng, originEllipsoidalHeightM: tiles.extraction.originEllipsoidalHeightM } : undefined;
+                const centreFrame = deferred<TileFrame | undefined>();
+                if (!centreInCloud) centreFrame.resolve(here);
                 const owner = chunkOwner(plan);
-                const todo = plan.chunks.filter(c => !c.centre).sort((a, b) => Math.hypot(a.cx, a.cz) - Math.hypot(b.cx, b.cz));
-                // several at once, as memory allows (a district build holds several GB), the centre build running beside them
+                // with the centre in the cloud it is one of them, the first (nearest)
+                const todo = plan.chunks.filter(c => !c.centre || centreInCloud).sort((a, b) => Math.hypot(a.cx, a.cz) - Math.hypot(b.cx, b.cz));
+                // several at once, as memory allows (a district build holds several GB), the centre build running beside them (here,
+                // or with the centre in the cloud as the first of them)
                 const parallel = chunkParallel();
                 // every chunk's leaf tiles fetched while the first chunks build, nearest first (the chunks are built nearest first too):
                 // a later chunk's extraction then reads its leaves from disk; best effort, a chunk fetches what is missing itself
@@ -1854,14 +1894,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     .then(r => { prefetch = r; }, err => { if (!io.signal.aborted) prefetch = { error: errorMessage(err) }; }) : Promise.resolve();
                 const committed: StagedLayer[] = [];
                 const degradations: DegradationRecord[] = [];
-                const report: Array<{ index: number; radiusM: number; buildings: number; status: string; layers?: number; truncated?: boolean; ms: number; error?: string }> = [];
+                const report: Array<{ index: number; radiusM: number; buildings: number; status: string; runId?: string; layers?: number; truncated?: boolean; ms: number; error?: string }> = [];
                 // the vector buildings shown past the centre build's tiles stand in only where no chunk has been joined yet: as each
                 // chunk joins, the placeholders it owns are taken out (the layer republished without them, whole buildings by their middle)
                 const joinedChunks = new Set<number>(), replacedPlaceholders = new Set<string>();
                 const identity = Float64Array.from([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
                 const retirePlaceholders = (index: number) => {
                     joinedChunks.add(index);
-                    for (const l of run.state.layers.filter(x => x.layer === 'l0o' && !x.retired && !replacedPlaceholders.has(x.objectId))) {
+                    // with the centre in the cloud the first paint (l0) stands for the whole district: it is cut back the same way
+                    for (const l of run.state.layers.filter(x => (x.layer === 'l0o' || (centreInCloud && x.layer === 'l0')) && !x.retired && !replacedPlaceholders.has(x.objectId))) {
                         const source = path.join(cache.modelsDir, path.basename(l.url));
                         if (!fs.existsSync(source)) continue;
                         const r = joinChunkGlb(fs.readFileSync(source), identity, (x, z) => !joinedChunks.has(owner(x, z)), { whole: true });
@@ -1890,11 +1931,24 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     try {
                         const out = await deps.runChunk!({
                             query: request.query, isolate: false, radiusM: c.radiusM, trees: request.trees, stageIntoActiveScene: false, district: 'kd',
-                            place: { lat: ll.lat, lng: ll.lng, formattedAddress: `${placeValue!.formattedAddress} (chunk ${c.index})` },
+                            // the centre keeps the hero's address: its scene is the one the district is published on
+                            place: { lat: ll.lat, lng: ll.lng, formattedAddress: c.centre ? placeValue!.formattedAddress : `${placeValue!.formattedAddress} (chunk ${c.index})` },
                             ...(request.enhance !== undefined ? { enhance: request.enhance } : {}), ...(request.steps ? { steps: request.steps } : {}),
                             chunk: { of: runId, index: c.index, rect: { x0: c.rect.x0 - c.cx, z0: c.rect.z0 - c.cz, x1: c.rect.x1 - c.cx, z1: c.rect.z1 - c.cz } }
                         }, { signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce });
                         if (!out.compat.frame) throw new Error('the chunk did not report its frame');
+                        if (c.centre) {
+                            here = out.compat.frame;
+                            cloudScan = out;
+                            run.geoAnchor = { ...out.compat.geoAnchor };
+                            // the vector paint frames the scene; when it could not, the centre job's own camera (its frame is the district's)
+                            const camera = (out.result.artifact as { data?: { camera?: StagedCamera } } | null)?.data?.camera;
+                            if (!run.camera && camera) run.camera = camera;
+                            centreFrame.resolve(here);
+                        } else if (!here) {
+                            here = (await centreFrame.promise) ?? { lat: placeValue!.lat, lng: placeValue!.lng, originEllipsoidalHeightM: out.compat.frame.originEllipsoidalHeightM };
+                            cloudScan ??= out;
+                        }
                         const m = frameTransform(out.compat.frame, here);
                         const mine = (x: number, z: number) => owner(x, z) === c.index, band = chunkTerritory(plan, c.index, DISTRICT_CHUNKS_PARAMS.seamBandM);
                         const layers = ((out.result.artifact as { data?: { stagedBuild?: { layers?: StagedLayer[] } } } | undefined)?.data?.stagedBuild?.layers ?? []);
@@ -1929,7 +1983,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         joined++;
                         retirePlaceholders(c.index);
                         const truncated = out.result.stages.some(s => s.stage === 'tiles' && s.status === 'degraded');
-                        report.push({ index: c.index, radiusM: c.radiusM, buildings: c.buildings.length, status: out.result.status, layers: batch.length, truncated, ms: now() - t0 });
+                        report.push({ index: c.index, radiusM: c.radiusM, buildings: c.buildings.length, status: out.result.status, ...(out.runId ? { runId: out.runId } : {}), layers: batch.length, truncated, ms: now() - t0 });
                         if (truncated) degradations.push(run.degrade(record('chunks', 'chunk_truncated', {
                             part: { description: `chunk ${c.index} of the district` }, intended: `its ${Math.round(c.radiusM)} m at leaf LOD`, fellTo: 'as far as its leaf tiles reach',
                             provenanceAfter: PROVENANCE.asScanned, reason: `chunk ${c.index}'s extraction reached the leaf-tile cap before its own radius`, transient: false, runId, now: now()
@@ -1939,7 +1993,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // only this build being stopped ends the stage: a chunk's own hard failure (its tiles could not be fetched,
                         // a network error of the moment) is that chunk's, built once more after the others, then left to its vector buildings
                         if (io.signal.aborted || (err as Error)?.name === 'AbortError') throw err;
+                        // the centre, which every other chunk waits for, is built again at once
+                        if (!last && c.centre) { io.progress(`the centre chunk failed (${errorMessage(err)}); it is built again`); return one(c, atOnce, true); }
                         if (!last) { retry.push(c); io.progress(`chunk ${c.index} failed (${errorMessage(err)}); it is built again after the others`); return; }
+                        if (c.centre) centreFrame.resolve(undefined);
                         report.push({ index: c.index, radiusM: c.radiusM, buildings: c.buildings.length, status: 'failed', ms: now() - t0, error: errorMessage(err) });
                         degradations.push(run.degrade(record('chunks', 'chunk_failed', {
                             part: { description: `chunk ${c.index} of the district` }, intended: `its ${c.buildings.length} buildings and ground at leaf LOD`, fellTo: "the vector buildings past the centre build's tiles",
@@ -1953,11 +2010,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // ---- the seam stage over the joined ground (scene-healing §3.1; pipeline-k/district-seams.ts), one chunk at a time:
                 // the chunks' photos levelled to one another by a gain per chunk, fitted where they meet; each chunk's ground cut
                 // exactly at the cell lines around what it owns, and its cut edge moved onto the edge the chunks before it left
-                // there; each committed in place of the chunk's joined ground. Never the district's ground in memory at once ----
+                // there; each committed in place of the chunk's joined ground; then SB-Roadie's streets cut the same way, by the
+                // same owner. Never the district's ground in memory at once ----
                 let seams: Record<string, unknown> | undefined;
                 if (joined) {
-                    // the centre build's own ground and its texture are committed first
-                    for (const id of ['remesh', 'textures', 'textures-late'] as StageId[]) {
+                    // the centre build's own ground, its texture and its streets are committed first
+                    for (const id of ['remesh', 'textures', 'textures-late', 'roads'] as StageId[]) {
                         while (['pending', 'running'].includes(run.summary(id).status)) {
                             if (io.signal.aborted) throw io.signal.reason ?? abortError();
                             await new Promise(r => setTimeout(r, 5_000));
@@ -1997,13 +2055,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             const c = chunkOf(g);
                             io.progress(`closing chunk ${c}'s seams (${cuts.length + 1} of ${grounds.length})`);
                             const key8 = crypto.createHash('sha256').update(`${runId}:${DISTRICT_SEAMS_VERSION}:${g.url}`).digest('hex').slice(0, 8);
-                            const clay = cutChunkGround(read(g.url), plan, c, { snapTo: edges, owner: seamOwnerOf });
+                            const clay = cutChunkLayer(read(g.url), plan, c, { snapTo: edges, owner: seamOwnerOf });
                             fs.writeFileSync(path.join(dir, `ground_${c}.glb`), clay.glb);
                             const pubClay = cache.publishFile(path.join(dir, `ground_${c}.glb`), `${base}_kd_ground_${c}_${key8}.glb`);
                             let pubTex: { url: string; bytes: number } | undefined, gainMode: string | undefined;
                             const gain = gains.get(c);
                             if (g.textured) {
-                                const tex = cutChunkGround(read(g.textured.url), plan, c, { snapTo: edges, owner: seamOwnerOf });
+                                const tex = cutChunkLayer(read(g.textured.url), plan, c, { snapTo: edges, owner: seamOwnerOf });
                                 const levelled = applySeamGain(tex.glb, gain ?? [1, 1, 1], fields.get(c));
                                 gainMode = levelled.mode;
                                 fs.writeFileSync(path.join(dir, `ground_${c}_tex.glb`), levelled.glb);
@@ -2025,22 +2083,61 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             cuts.push({ chunk: c, clay: clay.report, ...(gain ? { gain } : {}), ...(gainMode ? { gainMode } : {}) });
                             await new Promise(r => setImmediate(r));
                         }
+                        // 5. SB-Roadie's streets (l1r): each joined with the seam band past its cell like the ground, so a street crossing
+                        // a cell line was drawn twice there. Each chunk carved its own ground under its own streets, so a street is kept
+                        // by whoever keeps the ground there (seamOwnerOf), cut exactly at the cell lines; both chunks measured it on the
+                        // same tiles, so its cut edge stays where it was measured (no snap) and its colour as drawn (no gain)
+                        const streets = shown.filter(l => l.layer === 'l1r' && !hiddenNow.has(l.objectId)).sort((a, b) => dist(a) - dist(b));
+                        const roads: Array<{ chunk: number; objectId: string; clay: SeamCutReport; textured?: SeamCutReport }> = [];
+                        for (const s of streets) {
+                            if (io.signal.aborted) throw io.signal.reason ?? abortError();
+                            const c = chunkOf(s), meta = run.layerMeta[s.objectId];
+                            io.progress(`cutting chunk ${c}'s streets at its cell lines (${roads.length + 1} of ${streets.length})`);
+                            const key8 = crypto.createHash('sha256').update(`${runId}:${DISTRICT_SEAMS_VERSION}:${s.url}`).digest('hex').slice(0, 8);
+                            const subject = "as measured: the chunk's streets";
+                            const clay = cutChunkLayer(read(s.url), plan, c, { owner: seamOwnerOf, subject });
+                            const tex = s.textured ? cutChunkLayer(read(s.textured.url), plan, c, { owner: seamOwnerOf, subject }) : undefined;
+                            roads.push({ chunk: c, objectId: s.objectId, clay: clay.report, ...(tex ? { textured: tex.report } : {}) });
+                            // every triangle of it is its neighbours' to draw: the joined layer goes
+                            if (clay.report.trianglesIn <= clay.report.dropped && !clay.report.skippedPrimitives) {
+                                run.commit({ ...s, retired: true }, meta);
+                                continue;
+                            }
+                            fs.writeFileSync(path.join(dir, `roads_${c}_${key8}.glb`), clay.glb);
+                            const pubClay = cache.publishFile(path.join(dir, `roads_${c}_${key8}.glb`), `${base}_kd_roads_${c}_${key8}.glb`);
+                            let pubTex: { url: string; bytes: number } | undefined;
+                            if (tex) {
+                                fs.writeFileSync(path.join(dir, `roads_${c}_${key8}_tex.glb`), tex.glb);
+                                pubTex = cache.publishFile(path.join(dir, `roads_${c}_${key8}_tex.glb`), `${base}_kd_roads_tex_${c}_${key8}.glb`);
+                            }
+                            const note = `chunk ${c}'s streets cut at its cell lines by who keeps the ground there (${DISTRICT_SEAMS_VERSION}): ${clay.report.cut} triangles cut there and ${clay.report.dropped} left to its neighbours; the cut edge where it was measured, its colour as drawn`;
+                            const layer: StagedLayer = {
+                                ...s, objectId: `${s.objectId}-seam`, url: pubClay.url, bytes: pubClay.bytes, counts: layerCounts(path.join(dir, `roads_${c}_${key8}.glb`)),
+                                supersedes: [s.objectId], revealAfter: [], reveal: { durationMs: 600, stagger: 0, crossfadeFrom: [s.objectId] },
+                                ...(s.textured && pubTex ? { textured: { ...s.textured, url: pubTex.url, bytes: pubTex.bytes } } : {}),
+                                provenance: { ...s.provenance, note: `${s.provenance.note ? `${s.provenance.note}; ` : ''}${note}` }, cached: false, builtAtMs: now()
+                            };
+                            run.commit(layer, { ...meta, extra: { ...(meta?.extra ?? {}), chunk: c } });
+                            committed.push(layer);
+                            run.emit('chunks', 'running', { message: `chunk ${c}'s streets cut at its cell lines`, layers: [layer] }, true);
+                            await new Promise(r => setImmediate(r));
+                        }
                         const before = colour.pairs.map(p => p.stepBeforePct).sort((a, b) => a - b), after = colour.pairs.map(p => p.stepAfterFieldPct ?? p.stepAfterPct).sort((a, b) => a - b);
                         const med = (v: number[]) => (v.length ? v[v.length >> 1] : 0);
-                        run.note(PROVENANCE.remeshed, `the ${grounds.length} chunks' ground joined (${DISTRICT_SEAMS_VERSION}): each cut exactly at its cell lines and its cut edge moved onto its neighbour's (at most ${DISTRICT_SEAMS_PARAMS.snapM * 100} cm); the colour step where chunks meet, median ${med(before)}% before and ${med(after)}% after a gain per chunk and a correction fading in over each chunk's last ${DISTRICT_SEAMS_PARAMS.featherM} m (generated)`);
-                        seams = { version: DISTRICT_SEAMS_VERSION, grounds: grounds.length, colour, cuts, ms: now() - t1 };
+                        run.note(PROVENANCE.remeshed, `the ${grounds.length} chunks' ground joined (${DISTRICT_SEAMS_VERSION}): each cut exactly at its cell lines and its cut edge moved onto its neighbour's (at most ${DISTRICT_SEAMS_PARAMS.snapM * 100} cm); the colour step where chunks meet, median ${med(before)}% before and ${med(after)}% after a gain per chunk and a correction fading in over each chunk's last ${DISTRICT_SEAMS_PARAMS.featherM} m (generated)${roads.length ? `; SB-Roadie's streets (${roads.length} layers) cut at the same lines by the same owner, ${roads.reduce((n, r) => n + r.clay.cut, 0)} triangles cut there` : ''}`);
+                        seams = { version: DISTRICT_SEAMS_VERSION, grounds: grounds.length, colour, cuts, roads, ms: now() - t1 };
                     }
                 }
                 await prefetching;
                 cache.writeRunNote(runId, 'district_chunks_joined', { version: DISTRICT_CHUNKS_VERSION, parallel, chunks: report, ...(seams ? { seams } : {}), ...(prefetch ? { prefetch } : {}) });
                 // the vector buildings shown past the centre build's tiles stand in only where no chunk was joined
-                if (joined === todo.length) for (const l of run.state.layers.filter(x => x.layer === 'l0o' && !x.retired)) run.commit({ ...l, retired: true }, run.layerMeta[l.objectId]);
-                // the place store (place-store-district.ts, SCRATCHBOX_PLACE_STORE=1): the joined district audited, its buildings listed for the object store
-                if (placeStoreEnabled()) cache.writeRunNote(runId, 'place_audit', await auditDistrictForPlace({ runId, place: placeValue!, originEllipsoidalHeightM: here.originEllipsoidalHeightM, plan, layers: run.state.layers, manifests: run.objectManifests, modelsDir: cache.modelsDir, workspaceRoot: cache.workspaceRoot, request, ...(deps.vectorEvidence ? { vectorEvidence: deps.vectorEvidence } : {}), signal: io.signal, progress: m => io.progress(m) }));
+                if (joined === todo.length) for (const l of run.state.layers.filter(x => (x.layer === 'l0o' || (centreInCloud && x.layer === 'l0')) && !x.retired)) run.commit({ ...l, retired: true }, run.layerMeta[l.objectId]);
+                // the place store (place-store-district.ts; SCRATCHBOX_PLACE_STORE=0 off): the joined district audited, its buildings listed for the object store
+                if (placeStoreEnabled() && here) cache.writeRunNote(runId, 'place_audit', await auditDistrictForPlace({ runId, place: placeValue!, originEllipsoidalHeightM: here.originEllipsoidalHeightM, plan, layers: run.state.layers, manifests: run.objectManifests, modelsDir: cache.modelsDir, workspaceRoot: cache.workspaceRoot, request, ...(deps.vectorEvidence ? { vectorEvidence: deps.vectorEvidence } : {}), signal: io.signal, progress: m => io.progress(m) }));
                 const failed = todo.length - joined;
                 return {
                     status: failed || degradations.length ? 'degraded' : 'committed', value: { chunks: plan.chunks.length, joined, failed }, layers: committed, degradations,
-                    source: `${joined} of ${todo.length} chunks around the centre built and joined (${parallel} at a time), every building whole in one chunk`
+                    source: `${joined} of ${todo.length} chunks ${centreInCloud ? 'of the district, the centre among them, built in the cloud' : 'around the centre built'} and joined (${parallel} at a time), every building whole in one chunk`
                 };
             },
             degrade: async err => ({
@@ -2053,6 +2150,27 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         });
         chunksPromise.catch(() => undefined);
         siblings.push(chunksPromise);
+
+        // ---------------- the centre in the cloud: no tiles here; the district is its chunks joined, finished on the centre job's scan ----------------
+        if (centreInCloud) {
+            const settled = await Promise.allSettled(siblings);
+            const failed = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+            if (failed) throw failed.reason;
+            const scanOut = cloudScan;
+            if (!scanOut) throw new StagedLocationHardFailure('chunks', 'no_chunk_built', `No chunk of the district at ${placeValue.formattedAddress} could be built in the cloud, so there is nothing to show.`);
+            const scan = cloudScanOf(scanOut);
+            persist();
+            cache.writeRunNote(runId, 'main_thread', blockTracer.stop());
+            cache.writeRunNote(runId, 'model_calls', modelCalls.report());
+            const outcome = finishRun(run, {
+                request, place: placeValue, extraction: scan, sizedTo: 'request', remeshedElsewhere: true, now, persist,
+                ...(scanOut.compat.groundGlbPath ? { groundFile: scanOut.compat.groundGlbPath } : {}), ...(scanOut.compat.trees ? { trees: scanOut.compat.trees } : {}),
+                rebuild: { droppedNotResolvable: 0, sourceLimits: scanOut.result.sourceLimits }
+            });
+            // no training pairs from here: the centre job's raw scan stays in the cloud (its caches go to the training bucket)
+            keepSceneObjects(run, cache, outcome, scan, request.query, { isolate: false });
+            return outcome;
+        }
 
         // ---------------- tiles ----------------
         type TilesValue = { extraction: StagedExtraction; key: string; sizedTo: 'structure' | 'request' | 'district-fallback' | 'district-containment'; structure?: StructurePickResult; ground?: GroundModel; scan?: ScanMesh; unmaskedTop?: Float32Array; canopy?: CanopyMask; vector?: EvidenceLookup; vectorError?: string; rounds: number; cached: boolean; builtAtMs: number };
@@ -2214,6 +2332,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const t = tiles.value;
 
         // ---------------- vehicles (vehicle-removal.ts): every later stage builds on the scan without them ----------------
+        /** The vehicle step's report once it has committed: its readings of fixtures keep the street residue off them. */
+        let vehicleReport: VehicleRemovalReport | undefined;
         const devehicled = await (async (): Promise<typeof t.extraction | undefined> => {
             if (request.procedural === true) { runner.skip('vehicles', PROCEDURAL_ONLY); return undefined; }
             if (kIsolate) { runner.skip('vehicles', PIPELINE_K_ISOLATE); return undefined; }
@@ -2273,7 +2393,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const published = cache.publishFile(extraction.geometryGlb, `${base}_tiles_${t.key.slice(0, 8)}_novehicles_${key8}.glb`);
                     const area = report.removed.reduce((s, x) => s + x.areaM2, 0);
                     const generatedShare = report.removed.reduce((s, x) => s + x.areaM2 * x.provenance.texture.generatedShare, 0) / Math.max(area, 1e-6);
-                    const note = `${report.removed.length} vehicle region${report.removed.length === 1 ? '' : 's'} (${report.vehicles} vehicles read by the vision model, ${Math.round(area)} m²) removed: the surface under each estimated from the measured scan around it (generated: nothing was measured under a vehicle), its texels mirrored from the scan's own photo of the road beyond it (photo-inferred; ${Math.round(generatedShare * 100)} % filled from surroundings: generated)`;
+                    const gateFailed = report.removed.filter(x => x.infill && !x.infill.gatePassed).length;
+                    const note = `${report.removed.length} vehicle region${report.removed.length === 1 ? '' : 's'} (${report.vehicles} vehicles read by the vision model, ${Math.round(area)} m²) removed: the surface under each rebuilt from the measured scan around it by the surface infill (generated: nothing was measured under a vehicle; kerbs kept as steps), its texels continued from the street's own photo along its measured direction or repeat (photo-inferred) or synthesised from its grain (${Math.round(generatedShare * 100)} % generated)${gateFailed ? `; ${gateFailed} region${gateFailed === 1 ? '' : 's'} kept the fill that failed the seam gate least, labelled generated` : ''}`;
                     const layer: StagedLayer = {
                         objectId: layerObjectId(key, 'l1'), stage: 'vehicles', layer: 'l1', order: STAGES.tiles.order, url: published.url, bytes: published.bytes,
                         provenance: { label: PROVENANCE.asScanned, measuredGeometry: true, method: 'Google Photorealistic 3D Tiles, leaf LOD, with the vehicles the scan baked in removed (vehicle-removal.ts)', sources: [{ kind: 'tile-extraction', id: `extract:${t.key.slice(0, 8)}` }], note },
@@ -2292,6 +2413,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 })
             });
             persist();
+            if (r.status === 'committed') vehicleReport = r.value?.report;
             return r.status === 'committed' ? r.value?.extraction : undefined;
         })();
         const extraction = devehicled ?? t.extraction;
@@ -3196,7 +3318,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 let readerSeen: { records: FacadeReadRecord[]; brief?: string } | undefined;
                 // the reader's answers and the material choices kept beside the stage caches, so a rebuild or a later run asks
                 // only about what changed (pipeline-k/model-readings.ts); a retry of the stage asks again, as its reply cache does
-                const modelReadings = bypass('textures') ? undefined : fileReadingStore(path.join(cache.dir, MODEL_READINGS_DIR));
+                const modelReadings = bypass('textures') ? undefined : modelReadingsStore();
                 const planesFor = readerAsk ? async (finalImage: Map<number, RgbaImage8>, json: any) => {
                     try {
                         const tr = await readOnTwin({ orthosDir: kOrthos!, flatGlb: flatGlb!, twinJson: json, finalImage, fitted: planes, ask: readerAsk, building: { name: request.query, ...(run.state.place?.resolvedAddress ? { address: run.state.place.resolvedAddress } : {}) }, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`), ...(modelReadings ? { readings: { store: modelReadings, model: FACADE_READER_MODEL_KEY } } : {}) });
@@ -3601,6 +3723,47 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             strip = measured.status === 'committed' ? measured.value : undefined;
         } else {
             runner.skip('trees-measure', request.procedural === true ? PROCEDURAL_ONLY : oneBuildingK ? 'a single building keeps no surroundings, so its trees are not measured' : 'trees were not asked for');
+        }
+
+        // ---------------- street residue (street-residue.ts): what the residual audit finds standing in the streets that nothing explains, out of the tree-stripped scan before anything builds on it ----------------
+        if (strip && !request.isolate && deps.streetResidue && deps.vectorEvidence && streetResidueEnabled()) {
+            const stripped = strip;
+            try {
+                const covered = extraction.coveredRadiusM;
+                const look = t.vector ?? evidenceLookup(await deps.vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: covered + 20 }), covered + 20);
+                // the fixtures the vehicle step's model read stay, whatever their shape
+                const keep = (vehicleReport?.readings ?? []).filter(r => r.permanent && !r.vehicle).map(r => ({ lo: r.lo, hi: r.hi }));
+                const key = stageKey(STREET_RESIDUE_VERSION, DISTRICT_AUDIT_VERSION, SURFACE_INFILL_VERSION, stripped.cacheKey, covered.toFixed(1), crypto.createHash('sha256').update(JSON.stringify(keep)).digest('hex').slice(0, 16));
+                const entry = await cache.run<{ glb: string | null; report: StreetResidueReport }>('street-residue', key, async dir => {
+                    const scan = loadScanMesh(stripped.devegetatedGlb);
+                    const ground = buildGroundModel(scan, { cellMeters: 1, water: look.waterAt, road: look.roadAt });
+                    const within = (x: number, z: number) => Math.hypot(x, z) <= covered;
+                    const audit = await auditDistrict({ scan, ground, buildingAt: look.buildingAt, waterAt: look.waterAt, within, dir: path.join(dir, 'residual_audit'), ...(ctx.signal ? { signal: ctx.signal } : {}), idPrefix: `residue/${key.slice(0, 8)}` });
+                    // the carriageways, measured kerb to kerb on the stripped scan: a lump is taken only on one
+                    const centrelines = look.raster.roads.filter(l => l.some(([x, z]) => Math.hypot(x, z) <= covered));
+                    const roads = centrelines.length ? measureRoadSurfaces({ roads: centrelines, grid: { ...surfaceModel(scan, 0.5), cellM: 0.5 }, within, buildingAt: look.buildingAt, groundAt: ground.groundAt }) : [];
+                    const r = await removeStreetResidue({
+                        glb: fs.readFileSync(stripped.devegetatedGlb), scan, ground, audit, keep, carriageway: carriagewayLevelAt(roads), look: { buildingAt: look.buildingAt, waterAt: look.waterAt, roadAt: look.roadAt, within },
+                        recordsDir: path.join(dir, 'infill'), ...(ctx.signal ? { signal: ctx.signal } : {})
+                    });
+                    const changed = r.report.floating.triangles > 0 || r.report.lumps.length > 0;
+                    if (changed) writeStreetResidue(dir, r);
+                    else fs.writeFileSync(path.join(dir, 'street_residue.json'), JSON.stringify(r.report, null, 1));
+                    return { value: { glb: changed ? 'street_residue.glb' : null, report: r.report } };
+                });
+                const rep = entry.value.report;
+                cache.writeRunNote(runId, 'street_residue', {
+                    key, cached: entry.cached, dir: entry.dir, notes: rep.notes, floating: rep.floating, kept: rep.kept, patch: rep.patch ?? null, ms: rep.ms,
+                    lumps: rep.lumps.map(l => ({ id: l.id, kind: l.kind, clusters: l.clusters, lo: l.lo, hi: l.hi, planM2: l.planM2, heightM: l.heightM, real: l.real, infill: l.infill }))
+                });
+                if (entry.value.glb) {
+                    strip = { ...stripped, devegetatedGlb: path.join(entry.dir, entry.value.glb), cacheKey: key };
+                    if (rep.lumps.length) run.note('generated', `${rep.notes[0]}: the street under each estimated from the measured scan around it (generated), its texels from the street's own photo by the surface infill`);
+                }
+            } catch (err) {
+                if (isAbort(err) || ctx.signal?.aborted) throw err;
+                cache.writeRunNote(runId, 'street_residue', { error: `the street residue could not be taken out (${errorMessage(err)}); the tree-stripped scan is built on as it is` });
+            }
         }
 
         // ---------------- roads (SB-Roadie: Google's road centrelines measured kerb to kerb on the tree-stripped scan; runs beside the remesh) ----------------
@@ -6490,10 +6653,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // ---------------- finish ----------------
         cache.writeRunNote(runId, 'main_thread', blockTracer.stop());
         cache.writeRunNote(runId, 'model_calls', modelCalls.report());
+        if (readingStore) cache.writeRunNote(runId, 'model_readings', readingStore.report());
         const outcome = finishRun(run, {
             request, place: placeValue, extraction, structure, sizedTo: t.sizedTo, remeshed: remeshedNow, groundFile: groundOverride?.groundFile ?? remesh.value?.groundFile, groundLayerId: groundOverride?.groundLayerId ?? remesh.value?.groundLayerId ?? currentL1()?.objectId,
             trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, ...(textureValue ? { textures: textureValue } : {}), now, persist
         });
+        // the place's versions are in the object store before this run's are offered to it (a pull still out keeps reading)
+        if (placePull) await Promise.race([placePull, new Promise(r => setTimeout(r, PLACE_STORE_PARAMS.pullWaitMs).unref())]);
         keepSceneObjects(run, cache, outcome, extraction, request.query, { isolate: !!request.isolate, place: placeValue ? { name: placeValue.formattedAddress || request.query, lat: placeValue.lat, lng: placeValue.lng } : undefined });
         return outcome;
     } catch (err) {
@@ -6515,6 +6681,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         run.close();
         try { cache.writeRunNote(runId, 'main_thread', blockTracer.stop()); } catch { /* the note is diagnostics only */ }
         try { cache.writeRunNote(runId, 'model_calls', modelCalls.report()); } catch { /* the note is diagnostics only */ }
+        try { if (readingStore) cache.writeRunNote(runId, 'model_readings', readingStore.report()); } catch { /* the note is diagnostics only */ }
         throw err;
     }
 }
@@ -6524,7 +6691,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
  * versioned GLB, and the scene's data with the versions it used. Informative like the rest of the asset store: a failure
  * is written to the run's notes and never fails the build.
  */
-function keepSceneObjects(run: StagedRun, cache: StageCache, outcome: StagedLocationOutcome, extraction: StagedExtraction, query: string, training: { isolate: boolean; place?: { name: string; lat: number; lng: number } }): void {
+function keepSceneObjects(run: StagedRun, cache: StageCache, outcome: StagedLocationOutcome, extraction: FinishScan, query: string, training: { isolate: boolean; place?: { name: string; lat: number; lng: number } }): void {
     if (!objectStoreEnabled()) return;
     const store = defaultDurableAssetStore();
     if (!store) return;
@@ -6630,10 +6797,25 @@ function commitFitLayers(run: StagedRun, r: ScanFitFitResult, key: string, base:
     return out;
 }
 
+/** What the finish reads of the extraction: this build's own, or with the centre in the cloud the centre job's (cloudScanOf). */
+type FinishScan = Pick<StagedExtraction, 'texturedGlb' | 'rawGlbPath' | 'radiusM' | 'coveredRadiusM' | 'truncated' | 'leafTiles' | 'leafGeometricErrorM' | 'originEllipsoidalHeightM' | 'geoAnchor'>;
+
+/** The centre job's extraction as its outcome reports it (its paths moved onto this workspace; its raw scan is not downloaded). */
+function cloudScanOf(out: StagedLocationOutcome): FinishScan {
+    const e = out.result.extraction;
+    const truncated = out.result.stages.some(s => s.stage === 'tiles' && s.status === 'degraded');
+    return {
+        texturedGlb: out.compat.glbPath, rawGlbPath: out.compat.glbPath, radiusM: e.radiusM, coveredRadiusM: e.radiusM, truncated, leafTiles: e.leafTiles,
+        leafGeometricErrorM: out.result.sourceLimits?.leafGeometricErrorM ?? e.geometricErrorM, originEllipsoidalHeightM: out.compat.frame!.originEllipsoidalHeightM, geoAnchor: out.compat.geoAnchor
+    };
+}
+
 interface FinishInput {
     request: StagedLocationRequest;
     place: ResolvedPlace;
-    extraction: StagedExtraction;
+    extraction: FinishScan;
+    /** The remesh ran in the centre's cloud job, not here. */
+    remeshedElsewhere?: boolean;
     structure?: StructurePickResult;
     sizedTo: 'structure' | 'request' | 'district-fallback' | 'district-containment';
     remeshed?: TileRefineResult;
@@ -6789,8 +6971,9 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
     run.close();
     return {
         result,
+        runId: run.runId,
         compat: {
-            remesh: f.remeshed ? { ok: true, url: remeshLayer?.url } : { ok: false, error: (run.state.degradations.find(d => d.stage === 'remesh' && d.reasonCode === 'remesh_failed') ?? run.state.degradations.find(d => d.stage === 'remesh'))?.reason ?? 'the remesh did not run' },
+            remesh: f.remeshed || f.remeshedElsewhere ? { ok: true, url: remeshLayer?.url } : { ok: false, error: (run.state.degradations.find(d => d.stage === 'remesh' && d.reasonCode === 'remesh_failed') ?? run.state.degradations.find(d => d.stage === 'remesh'))?.reason ?? 'the remesh did not run' },
             resolvedAddress: f.place.formattedAddress,
             geoAnchor: f.extraction.geoAnchor,
             frame: { lat: f.place.lat, lng: f.place.lng, originEllipsoidalHeightM: f.extraction.originEllipsoidalHeightM },
