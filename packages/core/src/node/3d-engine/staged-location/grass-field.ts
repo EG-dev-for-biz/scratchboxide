@@ -213,11 +213,16 @@ export async function buildGrassField(grid: GrassFieldGrid, dir: string, params:
     return { report, variants, params, ms: Date.now() - t0 };
 }
 
+/** Side of the square tiles the instances are split into (m): one node per (variant, tile), so the viewer culls the tiles out of view. */
+export const GRASS_CHUNK_M = 30;
+
 /**
- * Writes the field as a GLB: one mesh per clump variant (vertex colours the clump's own tones), one node per variant
- * instanced with EXT_mesh_gpu_instancing. Returns the triangles drawn (instances x clump triangles).
+ * Writes the field as a GLB: one mesh per clump variant (vertex colours the clump's own tones), instanced with
+ * EXT_mesh_gpu_instancing by one node per (variant, `chunkM` tile) holding that tile's instances, so the viewer can drop
+ * the tiles outside its frustum (a node spanning the whole band is always drawn). `chunkM` 0 writes one node per variant.
+ * Returns the triangles drawn when every tile is in view (instances x clump triangles).
  */
-export function writeGrassFieldGlb(file: string, field: GrassField, extras: Record<string, unknown>): number {
+export function writeGrassFieldGlb(file: string, field: GrassField, extras: Record<string, unknown>, chunkM = GRASS_CHUNK_M): number {
     const views: Buffer[] = [], accessors: object[] = [], bufferViews: object[] = [], meshes: object[] = [], nodes: object[] = [];
     const add = (a: Float32Array | Uint32Array, accessor: Record<string, unknown>, target?: number) => {
         views.push(Buffer.from(a.buffer, a.byteOffset, a.byteLength));
@@ -225,6 +230,7 @@ export function writeGrassFieldGlb(file: string, field: GrassField, extras: Reco
         accessors.push({ bufferView: bufferViews.length - 1, ...accessor });
         return accessors.length - 1;
     };
+    const pick = (a: Float32Array, w: number, idx: number[]) => { const o = new Float32Array(idx.length * w); idx.forEach((q, j) => o.set(a.subarray(q * w, q * w + w), j * w)); return o; };
     let triangles = 0;
     field.variants.forEach((v, k) => {
         if (!v.translation.length) return;
@@ -234,19 +240,32 @@ export function writeGrassFieldGlb(file: string, field: GrassField, extras: Reco
         const COLOR_0 = add(v.colours, { componentType: 5126, count: nv, type: 'VEC4' }, 34962);
         const indices = add(v.indices, { componentType: 5125, count: v.indices.length, type: 'SCALAR' }, 34963);
         meshes.push({ name: `grass clump ${k}`, primitives: [{ attributes: { POSITION, NORMAL, COLOR_0 }, indices, material: 0, mode: 4 }] });
-        const tmin = [Infinity, Infinity, Infinity], tmax = [-Infinity, -Infinity, -Infinity];
-        for (let q = 0; q < v.translation.length; q++) { tmin[q % 3] = Math.min(tmin[q % 3], v.translation[q]); tmax[q % 3] = Math.max(tmax[q % 3], v.translation[q]); }
-        const attributes = {
-            TRANSLATION: add(v.translation, { componentType: 5126, count: n, type: 'VEC3', min: tmin, max: tmax }),
-            ROTATION: add(v.rotation, { componentType: 5126, count: n, type: 'VEC4' }),
-            SCALE: add(v.scale, { componentType: 5126, count: n, type: 'VEC3' }),
-            _COLOR_0: add(v.tint, { componentType: 5126, count: n, type: 'VEC3' }),
-            _CONFIDENCE: add(v.confidence, { componentType: 5126, count: n, type: 'SCALAR' })
-        };
-        let cmin = Infinity, cmax = -Infinity, csum = 0;
-        for (const c of v.confidence) { cmin = Math.min(cmin, c); cmax = Math.max(cmax, c); csum += c; }
-        nodes.push({ name: `grass clump ${k}`, mesh: meshes.length - 1, extensions: { EXT_mesh_gpu_instancing: { attributes } },
-            extras: { ...extras, instances: n, ring: v.ring, bladeWidthScale: v.widthScale, maskConfidence: { mean: csum / n, min: cmin, max: cmax } } });
+        const mesh = meshes.length - 1;
+        // the instances by tile, in tile order
+        const tiles = new Map<string, { i: number; k: number; idx: number[] }>();
+        for (let q = 0; q < n; q++) {
+            const ti = chunkM > 0 ? Math.floor(v.translation[q * 3] / chunkM) : 0, tk = chunkM > 0 ? Math.floor(v.translation[q * 3 + 2] / chunkM) : 0;
+            const key = `${ti},${tk}`;
+            let t = tiles.get(key);
+            if (!t) { t = { i: ti, k: tk, idx: [] }; tiles.set(key, t); }
+            t.idx.push(q);
+        }
+        for (const t of [...tiles.values()].sort((a, b) => a.k - b.k || a.i - b.i)) {
+            const m = t.idx.length, tr = pick(v.translation, 3, t.idx), conf = pick(v.confidence, 1, t.idx);
+            const tmin = [Infinity, Infinity, Infinity], tmax = [-Infinity, -Infinity, -Infinity];
+            for (let q = 0; q < tr.length; q++) { tmin[q % 3] = Math.min(tmin[q % 3], tr[q]); tmax[q % 3] = Math.max(tmax[q % 3], tr[q]); }
+            const attributes = {
+                TRANSLATION: add(tr, { componentType: 5126, count: m, type: 'VEC3', min: tmin, max: tmax }),
+                ROTATION: add(pick(v.rotation, 4, t.idx), { componentType: 5126, count: m, type: 'VEC4' }),
+                SCALE: add(pick(v.scale, 3, t.idx), { componentType: 5126, count: m, type: 'VEC3' }),
+                _COLOR_0: add(pick(v.tint, 3, t.idx), { componentType: 5126, count: m, type: 'VEC3' }),
+                _CONFIDENCE: add(conf, { componentType: 5126, count: m, type: 'SCALAR' })
+            };
+            let cmin = Infinity, cmax = -Infinity, csum = 0;
+            for (const c of conf) { cmin = Math.min(cmin, c); cmax = Math.max(cmax, c); csum += c; }
+            nodes.push({ name: chunkM > 0 ? `grass clump ${k} tile ${t.i},${t.k}` : `grass clump ${k}`, mesh, extensions: { EXT_mesh_gpu_instancing: { attributes } },
+                extras: { ...extras, instances: m, ring: v.ring, bladeWidthScale: v.widthScale, ...(chunkM > 0 ? { tile: { i: t.i, k: t.k, sizeM: chunkM } } : {}), maskConfidence: { mean: csum / m, min: cmin, max: cmax } } });
+        }
         triangles += n * v.indices.length / 3;
     });
     const gltf = {
