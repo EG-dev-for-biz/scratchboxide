@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <iostream>
 #include <array>
+#include <optional>
 
 namespace scratchbox {
 namespace io {
@@ -106,6 +107,34 @@ struct InstanceTransform {
 // ============================================================================
 class GlbWriter {
 public:
+    static bool hasNormalTexture(const std::vector<EmbeddedTexture>& textures) {
+        for (const auto& t : textures) if (t.usage == TextureUsage::NORMAL) return true;
+        return false;
+    }
+
+    /** Whether a texture belongs to sub-mesh m's material in a multi-mesh GLB: by its target name when it has one,
+     * else by its material index. */
+    static bool textureAppliesTo(const EmbeddedTexture& tex, size_t m, const ScratchboxMesh& mesh) {
+        if (tex.targetMaterialName.empty()) return tex.materialIndex == static_cast<int>(m);
+        auto toLower = [](std::string s) {
+            for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+        std::string matLow = toLower(mesh.material.name);
+        std::string subLow = toLower(mesh.name);
+        std::string targetLow = toLower(tex.targetMaterialName);
+
+        bool matchesTarget = (matLow.find(targetLow) != std::string::npos || subLow.find(targetLow) != std::string::npos);
+        if (targetLow == "bark" || targetLow == "wood") {
+            matchesTarget = matchesTarget || (matLow.find("bark") != std::string::npos || matLow.find("wood") != std::string::npos ||
+                                             subLow.find("bark") != std::string::npos || subLow.find("wood") != std::string::npos);
+        } else if (targetLow == "foliage" || targetLow == "leaf") {
+            matchesTarget = matchesTarget || (matLow.find("foliage") != std::string::npos || matLow.find("leaf") != std::string::npos ||
+                                             subLow.find("foliage") != std::string::npos || subLow.find("leaf") != std::string::npos);
+        }
+        return matchesTarget;
+    }
+
     static std::vector<uint8_t> writeGlb(const ScratchboxMesh& mesh, const std::vector<EmbeddedTexture>& textures = {}, const std::vector<lighting::Light>& lights = {}) {
         return serializeToGlb(mesh, textures, lights);
     }
@@ -118,8 +147,17 @@ public:
         return serializeToGlb(mesh.toScratchboxMesh(), textures, lights);
     }
 
-    static std::vector<uint8_t> serializeToGlb(const ScratchboxMesh& mesh, const std::vector<EmbeddedTexture>& textures = {}, const std::vector<lighting::Light>& lights = {}) {
-        if (mesh.vertices.empty()) return {};
+    static std::vector<uint8_t> serializeToGlb(const ScratchboxMesh& source, const std::vector<EmbeddedTexture>& textures = {}, const std::vector<lighting::Light>& lights = {}) {
+        if (source.vertices.empty()) return {};
+
+        // Every texture here belongs to the one material: with a normal texture, tangents still at the placeholder are
+        // computed from the UVs (explicitly set ones are kept)
+        std::optional<ScratchboxMesh> withTangents;
+        if (hasNormalTexture(textures) && source.hasPlaceholderTangents()) {
+            withTangents = source;
+            withTangents->computeUvTangents(true);
+        }
+        const ScratchboxMesh& mesh = withTangents ? *withTangents : source;
 
         // 1. Pack binary buffer (BIN chunk)
         // Order: Indices (uint32), Positions (vec3 float), Normals (vec3 float), UVs (vec2 float), Colors (vec4 float), Tangents (vec4 float), Textures (bytes)
@@ -545,6 +583,14 @@ public:
 
         size_t numMeshes = subMeshes.size();
 
+        // A sub-mesh whose material has a normal texture: tangents still at the placeholder are computed from the UVs
+        // (explicitly set ones are kept)
+        for (size_t m = 0; m < numMeshes; ++m) {
+            bool normalMapped = false;
+            for (const auto& t : textures) normalMapped = normalMapped || (t.usage == TextureUsage::NORMAL && textureAppliesTo(t, m, subMeshes[m]));
+            if (normalMapped && subMeshes[m].hasPlaceholderTangents()) subMeshes[m].computeUvTangents(true);
+        }
+
         // 1. Compute binary layout for all meshes
         struct MeshOffsets {
             size_t indexOffset{0}, indexBytes{0}, indexCount{0};
@@ -834,28 +880,7 @@ public:
             int weatheringTexIdx = -1;
 
             for (size_t i = 0; i < textures.size(); ++i) {
-                bool matchesMaterial = (textures[i].materialIndex == static_cast<int>(m));
-                if (!textures[i].targetMaterialName.empty()) {
-                    auto toLower = [](std::string s) {
-                        for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-                        return s;
-                    };
-                    std::string matLow = toLower(mat.name);
-                    std::string subLow = toLower(subMeshes[m].name);
-                    std::string targetLow = toLower(textures[i].targetMaterialName);
-
-                    bool matchesTarget = (matLow.find(targetLow) != std::string::npos || subLow.find(targetLow) != std::string::npos);
-                    if (targetLow == "bark" || targetLow == "wood") {
-                        matchesTarget = matchesTarget || (matLow.find("bark") != std::string::npos || matLow.find("wood") != std::string::npos ||
-                                                         subLow.find("bark") != std::string::npos || subLow.find("wood") != std::string::npos);
-                    } else if (targetLow == "foliage" || targetLow == "leaf") {
-                        matchesTarget = matchesTarget || (matLow.find("foliage") != std::string::npos || matLow.find("leaf") != std::string::npos ||
-                                                         subLow.find("foliage") != std::string::npos || subLow.find("leaf") != std::string::npos);
-                    }
-                    matchesMaterial = matchesTarget;
-                }
-
-                if (matchesMaterial) {
+                if (textureAppliesTo(textures[i], m, subMeshes[m])) {
                     if (textures[i].usage == TextureUsage::BASE_COLOR && baseColorTexIdx == -1) baseColorTexIdx = static_cast<int>(i);
                     else if ((textures[i].usage == TextureUsage::METALLIC_ROUGHNESS || textures[i].usage == TextureUsage::ORM) && mrTexIdx == -1) mrTexIdx = static_cast<int>(i);
                     else if (textures[i].usage == TextureUsage::NORMAL && normalTexIdx == -1) normalTexIdx = static_cast<int>(i);
