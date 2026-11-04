@@ -59,6 +59,9 @@ import { encodePng } from '../png-encode';
  */
 export const REGISTRATION_BUDGET_MS = { edges: 270_000, joint: 360_000 };
 
+/** One batch of grounding fetches (12 views, each with its own limit) ends after this, whatever it waits on. */
+export const FETCH_BATCH_LIMIT_MS = 180_000;
+
 /** A plan this many times longer than deep (and about as long as tall, or more) is built from its front outline. */
 export const FRONT_LONG_ASPECT = 1.6;
 
@@ -363,7 +366,15 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
     progress(`fetching ${all.length} Street View views through the grounding API`);
     for (let i = 0; i < all.length; i += 12) {
         const batch = all.slice(i, i + 12);
-        const got = await fetchViews(batch, input.streetView, input.signal);
+        // a batch that never answers (the grounding service waits for its OAuth token before any per-image limit runs;
+        // 2026-11-03 two runs sat there with no connection open) is ended, its views failed with the reason
+        const own = new AbortController();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const got = await Promise.race([
+            fetchViews(batch, input.streetView, input.signal ? AbortSignal.any([input.signal, own.signal]) : own.signal),
+            new Promise<undefined>(resolve => { timer = setTimeout(() => { own.abort(new Error('batch timed out')); resolve(undefined); }, FETCH_BATCH_LIMIT_MS); })
+        ]).finally(() => clearTimeout(timer));
+        if (!got) { for (const v of batch) fetchErrors.set(v, `the grounding service did not answer in ${FETCH_BATCH_LIMIT_MS / 1000} s (its token or the API)`); continue; }
         for (const im of got.images) images.set(im.view as PlannedView, im);
         for (const f of got.failures) fetchErrors.set(f.view as PlannedView, f.error);
     }
