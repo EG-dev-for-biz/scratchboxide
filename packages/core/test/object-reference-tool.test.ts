@@ -1167,8 +1167,12 @@ describe('build_3d_object_from_reference', () => {
         expect(spec.blueprint).toEqual(outlines);
         expect(spec.parts[0].sweep).toEqual({ fromBlueprint: { insetMeters: 0.01 } }); // the stored spec keeps the block, not the rings
         expect((await handlerWith(fakeClient({})).run({ request: 'a box', blueprintPath: 'test-results/none.json' })).resultPayload.error).toBe('No blueprint at test-results/none.json.');
-        expect((await handlerWith(fakeClient({})).run({ request: 'a box', specJson: JSON.stringify(spec), blueprintPath: rel })).resultPayload.error)
-            .toBe('blueprintPath is for new builds; a spec from a blueprint build already carries its outlines.');
+        // an edited spec without its outlines takes them from blueprintPath, with no model call
+        const { blueprint: _bp, ...edited } = spec;
+        const rebuilt = await handlerWith(fakeClient({})).run({ request: 'a box, rebuilt', specJson: JSON.stringify(edited), blueprintPath: rel });
+        expect(rebuilt.status, String(rebuilt.resultPayload.error)).toBe('completed');
+        expect((rebuilt.resultPayload.artifact as any).data.objectBuild.spec.blueprint).toEqual(outlines);
+        expect((await handlerWith(fakeClient({})).run({ request: 'a box', specJson: JSON.stringify(edited) })).resultPayload.error).toMatch(/needs the spec's blueprint outlines/);
     }, 180_000);
 
     it('raises no size problem within 3 % (or 2 cm) of the size the user gave, and one per missed axis beyond it', () => {

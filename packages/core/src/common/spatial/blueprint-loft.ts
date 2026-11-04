@@ -72,7 +72,8 @@ const SIDE_LEVELS = 16;
 const MIN_SLICE_METERS = 0.01;
 export const MAX_LOFT_SECTIONS = 128;
 
-const round4 = (v: number) => Math.round(v * 1e4) / 1e4;
+// + 0 turns -0 into 0, as Python's rounding gives (object_spec.py lofts the same rings)
+const round4 = (v: number) => Math.round(v * 1e4) / 1e4 + 0;
 
 function interpolate<T>(stations: T[], at: number, key: (s: T) => number, value: (s: T) => number): number | undefined {
     if (!stations.length) return undefined;

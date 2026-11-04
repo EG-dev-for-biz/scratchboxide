@@ -259,7 +259,9 @@ Materials: paint Kings Red Metallic baseColor [0.64, 0.01, 0.01] roughness 0.4 c
 - With a blueprint, check the build against it: object_blueprint_outlines with blueprintPath and compareGlbPath set
   to the result's modelUri. It lists every span where the build's outline is off (no image call). Fix the parts that
   set those spans in the spec (the key heights and widths at those z or y), rebuild with specJson, and check again;
-  stop after two rounds, and report the spans still off.
+  stop after two rounds, and report the spans still off. Parts lofted fromBlueprint already follow the outlines: a
+  span they set is fixed in their fromBlueprint block (a height band, inset or clearance), never by redrawing them.
+  When rebuilding with specJson, leave the spec's blueprint out and pass blueprintPath; the outlines are added back.
 - Reply with what was built and that the shape follows the published dimensions while its surfaces and details
   come from a generated picture (materials inferred, `generated`). Name every number you estimated. It is a
   recognisable model of the car, not a manufacturer's CAD surface; say so if the user asks for exactness.

@@ -21,6 +21,7 @@ import { expandBlueprintParts, loftSections, LOFT_RING_POINTS, type ObjectOutlin
 import { validateObjectBuildSpec, buildObjectSpecScript, objectBuildSpecJsonSchema, type ObjectBuildSpec } from '../src/common/spatial/object-build-spec';
 import { compareOutlines, outlinesFromTriangles } from '../src/node/3d-engine/blueprint-outlines';
 import { buildObjectFromSpec } from '../src/node/3d-engine/reference-object-builder';
+import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
 import { glbToTriangleSoup, type TriangleSoup } from '../src/node/3d-engine/part-connectivity';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-loft-'));
@@ -88,16 +89,26 @@ describe('specs with fromBlueprint parts', () => {
         expect(validateObjectBuildSpec(spec([{ ...body, sweep: { fromBlueprint: { clearances: [{ zMeters: 1 }] } } }]))).toContainEqual(expect.stringMatching(/clearances\[0\] needs zMeters, yMeters and a radiusMeters/));
     });
 
-    it('expands only for the build: the script carries rings, never the outlines or the block', () => {
+    it('keeps the build script compact: the block and the outlines, never the rings', () => {
         const s = spec([body]) as ObjectBuildSpec;
-        const expanded = expandBlueprintParts(s);
-        expect(expanded.parts[0].sweep!.sections!.length).toBeGreaterThan(70);
+        expect(expandBlueprintParts(s).parts[0].sweep!.sections!.length).toBeGreaterThan(70);
         expect(s.parts[0].sweep!.sections).toBeUndefined();                      // the stored spec is unchanged
         const script = buildObjectSpecScript(s);
-        expect(script).toContain('"sections"');
-        expect(script).not.toContain('"fromBlueprint"');
-        expect(script).not.toContain('"groundContacts"');
+        expect(script).toContain('"fromBlueprint"');
+        expect(script).toContain('"groundContacts"');
+        expect(script).not.toContain('"sections"');
+        expect(script.length).toBeLessThan(40_000);
     });
+
+    it('lofts the same rings in the engine as in TypeScript, to the last digit', async () => {
+        const looks = [{}, { yToMeters: 1.0, clearances: ARCHES }, { fromTopMeters: 0.04, zFromMeters: -1.0, zToMeters: 0.5, insetMeters: -0.004 }];
+        const run = await NativePythonRunnerService.getInstance().runScript(
+            `import json\nimport scratchbox as sb\nprint("RINGS" + json.dumps([sb.object_spec.loft_sections(${JSON.stringify(BLUEPRINT)}, l) for l in ${JSON.stringify(looks)}]))\n`,
+            { timeoutMs: 120_000, outputDir: TMP });
+        expect(run.success, run.stderr).toBe(true);
+        const engine = JSON.parse(run.stdout.slice(run.stdout.indexOf('RINGS') + 5).trim().split('\n')[0]);
+        looks.forEach((l, i) => expect(engine[i]).toEqual(loftSections(BLUEPRINT, l)));
+    }, 180_000);
 
     it('offers fromBlueprint to the spec reader only when there is a blueprint', () => {
         const sweepOf = (schema: any) => schema.properties.parts.items.properties.sweep;

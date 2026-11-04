@@ -1517,8 +1517,133 @@ def build_meshes(spec):
     return _build_meshes(spec)[0]
 
 
+# ---------------------------------------------------------------------------
+# Blueprint lofts: sweep.fromBlueprint expanded into rings (the same slicing as blueprint-loft.ts loftSections)
+# ---------------------------------------------------------------------------
+
+LOFT_RING_POINTS = 48
+_LOFT_SIDE_LEVELS = 16
+_LOFT_MIN_SLICE = 0.01
+_LOFT_MAX_SECTIONS = 128
+
+
+def _round4(v):
+    # JavaScript's Math.round (halves toward +infinity), so the rings match blueprint-loft.ts to the last digit
+    return math.floor(v * 1e4 + 0.5) / 1e4 + 0.0
+
+
+def _interp_stations(stations, at, key, value):
+    if not stations:
+        return None
+    srt = sorted(stations, key=key)
+    if at <= key(srt[0]):
+        return value(srt[0])
+    if at >= key(srt[-1]):
+        return value(srt[-1])
+    for a, b in zip(srt, srt[1:]):
+        if at <= key(b):
+            w = (at - key(a)) / ((key(b) - key(a)) or 1.0)
+            return value(a) + (value(b) - value(a)) * w
+    return None
+
+
+def _resample_ring(points, count):
+    closed = list(points) + [points[0]]
+    acc = [0.0]
+    for i in range(1, len(closed)):
+        acc.append(acc[-1] + math.hypot(closed[i][0] - closed[i - 1][0], closed[i][1] - closed[i - 1][1]))
+    total = acc[-1]
+    out = []
+    seg = 1
+    for k in range(count):
+        s_ = total * k / count
+        while seg < len(acc) - 1 and acc[seg] < s_:
+            seg += 1
+        w = (s_ - acc[seg - 1]) / ((acc[seg] - acc[seg - 1]) or 1.0)
+        a, b = closed[seg - 1], closed[seg]
+        out.append([_round4(a[0] + (b[0] - a[0]) * w), _round4(a[1] + (b[1] - a[1]) * w)])
+    return out
+
+
+def loft_sections(outlines, loft=None):
+    """The rings of a blueprint loft, rear to front (blueprint-loft.ts loftSections)."""
+    loft = loft or {}
+    front = outlines["front"]
+
+    def front_half(y):
+        v = _interp_stations(front, y, lambda s: s["y"], lambda s: s["halfWidth"])
+        return v if v is not None else 0.0
+
+    sections = []
+    for st in sorted(outlines["side"], key=lambda s: s["z"]):
+        z = st["z"]
+        if loft.get("zFromMeters") is not None and z < loft["zFromMeters"] - 1e-9:
+            continue
+        if loft.get("zToMeters") is not None and z > loft["zToMeters"] + 1e-9:
+            continue
+        plan = _interp_stations(outlines["plan"], z, lambda p: p["z"], lambda p: p["halfWidth"]) or 0.0
+        lo, hi = st["bottom"], st["top"]
+        if loft.get("yFromMeters") is not None:
+            lo = max(lo, loft["yFromMeters"])
+        if loft.get("yToMeters") is not None:
+            hi = min(hi, loft["yToMeters"])
+        if loft.get("fromTopMeters") is not None:
+            lo = max(lo, st["top"] - loft["fromTopMeters"])
+        for c in loft.get("clearances") or []:
+            dz = z - c["zMeters"]
+            if abs(dz) < c["radiusMeters"]:
+                lo = max(lo, c["yMeters"] + math.sqrt(c["radiusMeters"] ** 2 - dz * dz))
+        if hi - lo < _LOFT_MIN_SLICE:
+            continue
+        inset = loft.get("insetMeters") or 0.0
+        ys = [lo + (hi - lo) * i / (_LOFT_SIDE_LEVELS - 1) for i in range(_LOFT_SIDE_LEVELS)]
+        halves = [min(plan, front_half(y)) - inset for y in ys]
+        if max(halves) < _LOFT_MIN_SLICE:
+            continue
+        h = [max(v, _LOFT_MIN_SLICE / 2) for v in halves]
+        ring = [(0.0, lo)] + [(h[i], ys[i]) for i in range(len(ys))] + [(0.0, hi)] + [(-h[i], ys[i]) for i in range(len(ys) - 1, -1, -1)]
+        sections.append({"z": _round4(z), "points": _resample_ring(ring, LOFT_RING_POINTS)})
+    if len(sections) > _LOFT_MAX_SECTIONS:
+        keep = []
+        for i in range(_LOFT_MAX_SECTIONS):
+            k = int(math.floor(i * (len(sections) - 1) / float(_LOFT_MAX_SECTIONS - 1) + 0.5))
+            if k not in keep:
+                keep.append(k)
+        sections = [sections[k] for k in keep]
+    return sections
+
+
+def expand_blueprint(spec):
+    """The spec with every sweep.fromBlueprint turned into rings (sweep.sections) from spec["blueprint"]."""
+    if not isinstance(spec, dict) or not isinstance(spec.get("parts"), list):
+        return spec
+    if not any(isinstance(p, dict) and isinstance(p.get("sweep"), dict) and "fromBlueprint" in p["sweep"] for p in spec["parts"]):
+        return spec
+    outlines = spec.get("blueprint")
+    if not isinstance(outlines, dict):
+        raise SpecError(["the spec has parts with sweep.fromBlueprint but no blueprint outlines to loft them from"])
+    parts = []
+    for p in spec["parts"]:
+        sw = p.get("sweep") if isinstance(p, dict) else None
+        if not isinstance(sw, dict) or "fromBlueprint" not in sw:
+            parts.append(p)
+            continue
+        sections = loft_sections(outlines, sw["fromBlueprint"])
+        if len(sections) < 2:
+            raise SpecError(['part "%s": its slice of the blueprint (sweep.fromBlueprint) leaves fewer than two sections; widen its height band or span' % p.get("id")])
+        rest = dict((k, v) for k, v in sw.items() if k != "fromBlueprint")
+        rest["sections"] = sections
+        q = dict(p)
+        q["sweep"] = rest
+        parts.append(q)
+    out = dict((k, v) for k, v in spec.items() if k != "blueprint")
+    out["parts"] = parts
+    return out
+
+
 def _build_meshes(spec):
     """build_meshes, and the lift every part (and every crown's trunk base) was given so the lowest point rests on y = 0."""
+    spec = expand_blueprint(spec)
     problems = validate(spec)
     if problems:
         raise SpecError(problems)
@@ -1786,6 +1911,7 @@ def build(spec, clay=False):
     import scratchbox as sb
     vec3 = sb.math.Vec3
     scene = sb.Scene()
+    spec = expand_blueprint(spec)
     built, shift_y = _build_meshes(spec)   # validates first
     # crown parts are SB-Veggie trees, grown natively when the scene is written (studio clay or not: a tree's
     # leaves and bark come from the tree texture library by its foliage colour)

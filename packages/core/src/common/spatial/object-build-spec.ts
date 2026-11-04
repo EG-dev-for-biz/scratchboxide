@@ -31,7 +31,7 @@
  * material (factors only, no texture maps); a clay build ignores them and gives every part studio clay.
  */
 
-import { expandBlueprintParts, validateBlueprintLoft, validateOutlines, type BlueprintLoft, type LoftSection, type ObjectOutlines } from './blueprint-loft';
+import { validateBlueprintLoft, validateOutlines, type BlueprintLoft, type LoftSection, type ObjectOutlines } from './blueprint-loft';
 
 export type Vec3 = [number, number, number];
 
@@ -1111,12 +1111,6 @@ export function toPythonLiteral(value: unknown, indent = 0): string {
  * The build script stored with the scene (data.pythonGenerator.sourceCode): running it rebuilds the object from SPEC.
  * The object is changed through build_3d_object_from_reference with the edited spec, which keeps it at its place.
  */
-/** The spec as the build reads it: fromBlueprint parts already lofted, so the outlines themselves are not needed. */
-function withoutBlueprint(spec: ObjectBuildSpec): ObjectBuildSpec {
-    const { blueprint: _b, ...rest } = spec;
-    return rest;
-}
-
 export function buildObjectSpecScript(spec: ObjectBuildSpec, options: { clay?: boolean } = {}): string {
     return [
         '# Built by build_3d_object_from_reference from SPEC (metres, +Y up). To change the object, pass the edited',
@@ -1126,7 +1120,7 @@ export function buildObjectSpecScript(spec: ObjectBuildSpec, options: { clay?: b
             : '# Each part\'s material factors become its glTF material; a part without one is studio clay.',
         'import scratchbox as sb',
         '',
-        `SPEC = ${toPythonLiteral(withoutBlueprint(expandBlueprintParts(spec)))}`,
+        `SPEC = ${toPythonLiteral(spec)}`,
         '',
         `sb.io.write_glb(OUTPUT_GLB_PATH, sb.object_spec.build(SPEC${options.clay ? ', clay=True' : ''}))`,
         ''

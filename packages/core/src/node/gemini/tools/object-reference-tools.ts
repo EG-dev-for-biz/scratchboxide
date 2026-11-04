@@ -93,7 +93,7 @@ export const OBJECT_REFERENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 blueprintPath: {
                     type: 'STRING',
-                    description: 'Optional, new builds only: the blueprintPath object_blueprint_outlines returned for this object. The spec then carries its outlines, and the main masses can be lofted from them (sweep.fromBlueprint), so they follow the drawings section by section; a later specJson keeps them.'
+                    description: 'Optional: the blueprintPath object_blueprint_outlines returned for this object. On a new build the spec then carries its outlines, and the main masses can be lofted from them (sweep.fromBlueprint), so they follow the drawings section by section. With specJson, it supplies the outlines when the edited spec leaves them out, so they need not be copied back.'
                 },
                 buildNotes: {
                     type: 'STRING',
@@ -1082,7 +1082,10 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                 }
                 if (dimensions) return failed('dimensionsHintMeters is for new builds; with specJson, set the sizes in the spec itself.', { stage: 'build-spec' });
                 if (buildNotes) return failed('buildNotes is for new builds; with specJson, make the change in the spec itself.', { stage: 'build-spec' });
-                if (blueprint) return failed('blueprintPath is for new builds; a spec from a blueprint build already carries its outlines.', { stage: 'build-spec' });
+                // a spec edited without its outlines takes them from the blueprint file; one that carries them keeps its own
+                if (blueprint && givenSpec && typeof givenSpec === 'object' && !Array.isArray(givenSpec) && !(givenSpec as { blueprint?: unknown }).blueprint) {
+                    givenSpec = { ...(givenSpec as object), blueprint };
+                }
             }
             const location = typeof args.location === 'string' && args.location.trim() ? args.location.trim() : undefined;
             const placementArgs = parsePlacement(args.placement);
