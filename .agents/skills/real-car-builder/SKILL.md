@@ -3,8 +3,10 @@ name: real-car-builder
 description: >-
   Build a 3D model of a real, manufactured car (a named make and model, e.g. "2025 VW Golf GTI", "Kia Carnival",
   "Polestar 3") with build_3d_object_from_reference: pin down the exact generation and trim, look up its published
-  dimensions, turn them into hardpoints (axles, tyres, bonnet, beltline, windscreen, roof) with proportions measured
-  from eight production-car models, and hand the spec reader a car construction plan in buildNotes. Use for any
+  dimensions, draw its orthographic blueprint (object_blueprint_outlines) and read its outlines at scale, turn them
+  into hardpoints (axles, tyres, bonnet, beltline, windscreen, roof) checked against proportions measured from eight
+  production-car models, hand the spec reader a car construction plan in buildNotes, and check the build against
+  the blueprint. Use for any
   request to model, build or place a real production car, van, SUV or pickup, even when the user names only the model.
 ---
 
@@ -48,6 +50,24 @@ in millimetres:
 Never invent a published number. Where one is missing, use the ratio in section 3 and mark it **estimated** in
 buildNotes. Keep the sources for the reply.
 
+### 2b. Draw the blueprint
+
+Car modellers work from blueprints: every line placed against side, top and front drawings at scale. Do the same:
+load object_blueprint_outlines with load_tools and call it with subject (the same visual description as the build
+request) and sizeMeters [width with mirrors, height, length] (the build's dimensionsHintMeters). It draws the three
+orthographic views (three billed image calls), scales them to that size and returns the outlines in the build frame:
+the side top and bottom line and the plan half width every few centimetres along the car, the front half width up
+its height, and where the side outline touches the ground (the tyres). Keep its blueprintPath for the check.
+
+Judge the drawing before using it:
+- **Ground contacts:** the two contact centres should be one wheelbase apart (within 3 %) at about the axle positions
+  of section 3. If they are not, the side drawing is wrong: call the tool once more; if it is wrong again, build
+  from the published hardpoints and the ratios, and say the blueprint was not used.
+- **aspectError** over 0.12 on a view means its proportions were drawn wrong before scaling; trust that view's
+  outline only for shape, not for heights or widths the published figures give.
+- The outlines are read from generated drawings: published figures win where they disagree, and the outlines are
+  labelled generated.
+
 ## 3. Derive the hardpoints
 
 Work in metres in the builder's frame: +Y up, **+Z toward the car's front**, +X to the car's right, origin on the
@@ -57,6 +77,10 @@ ground at the middle of the car (z = 0 halfway between the bumpers). Then:
 - Front axle z = L/2 - front overhang; rear axle z = front axle z - wheelbase. Without a published overhang split,
   the front overhang is 0.45-0.53 of (L - wheelbase); 0.5 is the median.
 - Tyre radius R from the tyre size; hub height = R. Track from the data, else 0.85-0.88 x body width.
+- With a blueprint, read the remaining heights off its side top line instead of the ratios below: the bonnet height
+  at the front axle, the nose and tail heights, the windscreen's foot and where the roof starts and ends (the top
+  line's flat run). Read the plan taper off the plan outline and the cabin's narrowing off the front outline. The
+  ratios below then only bound them: a blueprint value far outside a range is a drawing error.
 
 Measured ranges across the eight cars (median in brackets). H is overall height, W body width without mirrors, WB
 wheelbase. Positions along the car are measured backward from the front axle.
@@ -188,7 +212,11 @@ is [0.62, 0.63, 0.64]). Convert sRGB as (v/255)^2.2: light silver or grey about 
 - **dimensionsHintMeters**: [width with mirrors, height, length]. Use the published with-mirrors width, else the
   body width + 0.28 m (estimated). The build is revised until it is within 3 % of this on every axis.
 - **buildNotes**: the hardpoint sheet and the plan from section 4 with every number filled in, each marked
-  published or estimated, and the materials from section 5 with the paint colour. Example (2025 Golf GTI; look up
+  published, blueprint or estimated, and the materials from section 5 with the paint colour. With a blueprint, add
+  its notesText and say how to use it: the upper body's and the glasshouse's top lines follow the side top line
+  station by station (one profile key per blueprint station over the bonnet, windscreen, roof and tail), the
+  section widths follow the plan half widths (times 2), and the glasshouse's widths follow the front outline above
+  the beltline. Example (2025 Golf GTI; look up
   the real figures for the car asked for):
 
 ```
@@ -210,6 +238,10 @@ Materials: paint Kings Red Metallic baseColor [0.64, 0.01, 0.01] roughness 0.4 c
 - Read the result: the built size against the hint, and the remaining differences. If the wheelbase or wheel size
   reads wrong in the render, fix the spec (axle and tyre parts) and rebuild it with specJson; that call makes no
   model or image call.
+- With a blueprint, check the build against it: object_blueprint_outlines with blueprintPath and compareGlbPath set
+  to the result's modelUri. It lists every span where the build's outline is off (no image call). Fix the parts that
+  set those spans in the spec (the key heights and widths at those z or y), rebuild with specJson, and check again;
+  stop after two rounds, and report the spans still off.
 - Reply with what was built and that the shape follows the published dimensions while its surfaces and details
   come from a generated picture (materials inferred, `generated`). Name every number you estimated. It is a
   recognisable model of the car, not a manufacturer's CAD surface; say so if the user asks for exactness.
