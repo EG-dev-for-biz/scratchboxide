@@ -47,7 +47,7 @@ import { combineProfiles, profileFromSilhouette, type SilhouetteProfile } from '
 import { planHeadingOf, streetObjectSpec, type StreetObjectSpec } from './object-spec';
 import { frontOutline, frontSpec, squareness } from './front-outline';
 import { CHECK_PARAMS, checkView, judgeFamily, overlayOutlines, scaledCamera, type FamilyCheck, type ViewCheck } from './check';
-import { planAxis, splitMember } from './split';
+import { castPiece, planAxis, splitMember } from './split';
 import { renderTriangles } from '../photo-match-eval';
 import { encodePng } from '../png-encode';
 
@@ -111,7 +111,7 @@ export interface FamilyReport {
     reason: string;
     views: Array<{ id: string; panoId: string; captureMonth?: string; clusterId: number; headingDeg: number; fovDeg: number; rangeM: number; clearShare: number; registration: string; widthPx?: number; heightPx?: number; fetched: boolean; error?: string }>;
     /** What Street View saw, in the model's words and numbers. */
-    seen?: { description: string; permanent: boolean; membersAlike?: boolean; pieceCount?: number; markings: string[]; confidence?: number; perView: Array<{ id: string; visible: boolean; sameObject: boolean; footVisible: boolean; hiddenShare: number; maskPixels?: number; pieces?: number; note?: string }> };
+    seen?: { description: string; permanent: boolean; membersAlike?: boolean; pieceCount?: number; markings: string[]; confidence?: number; perView: Array<{ id: string; visible: boolean; sameObject: boolean; footVisible: boolean; hiddenShare: number; maskPixels?: number; pieces?: number; member?: number; note?: string }> };
     /** A long or flat object built from its front outline (front-outline.ts): the view, the boxes, its length and depth. */
     frontOutline?: { view: string; boxes: number; lengthM: number; depthM: number; squareness: number; scale: number };
     /** A scan ridge the photos showed as several alike pieces, split into members along the scan's line (split.ts). */
@@ -182,6 +182,18 @@ export function translated(t: TileTriangles, d: V3): TileTriangles {
     return { ...t, positions: p };
 }
 
+/** A render mesh's triangles with a corner within `reachM` (plan) of any of `centres`. */
+export function meshNear(m: RenderMesh3D, centres: Array<[number, number]>, reachM: number): RenderMesh3D {
+    const cell = reachM, grid = new Set<string>();
+    for (const [x, z] of centres) for (let i = -1; i <= 1; i++) for (let k = -1; k <= 1; k++) grid.add(`${Math.floor(x / cell) + i},${Math.floor(z / cell) + k}`);
+    const near = (x: number, z: number) => grid.has(`${Math.floor(x / cell)},${Math.floor(z / cell)}`) && centres.some(c => Math.hypot(c[0] - x, c[1] - z) <= reachM);
+    const V = m.vertices, I = m.indices, kept: number[] = [];
+    for (let t = 0; t + 2 < I.length; t += 3) {
+        if ([0, 1, 2].some(j => near(V[I[t + j] * 3], V[I[t + j] * 3 + 2]))) kept.push(I[t], I[t + 1], I[t + 2]);
+    }
+    return { vertices: V, indices: Uint32Array.from(kept) };
+}
+
 /** A render mesh without the triangles whose centroid keys are in `drop`. */
 function meshWithout(m: RenderMesh3D, drop: Set<string>): RenderMesh3D {
     const V = m.vertices, I = m.indices, kept: number[] = [];
@@ -248,6 +260,22 @@ export function lookAtCamera(eye: V3, target: V3, fovDeg: number, width: number,
 
 const median2 = (ps: Array<[number, number]>): [number, number] => { const m = (k: number) => { const v = ps.map(p => p[k]).sort((a, b) => a - b); return v[v.length >> 1]; }; return [m(0), m(1)]; };
 
+/**
+ * Where an upright of `heightM` stands (plan x, z) whose mask is this, when its foot is hidden: the ray through the mask's
+ * top middle, at the distance its height in the photo says (the focal length over the rows it spans, times the height).
+ */
+export function alongRayByHeight(cam: FrameCamera, mask: Uint8Array, W: number, H: number, heightM: number): [number, number] | undefined {
+    let y0 = -1, y1 = -1;
+    for (let i = 0; i < mask.length; i++) if (mask[i]) { const y = (i - (i % W)) / W; if (y0 < 0) y0 = y; y1 = y; }
+    if (y0 < 0 || y1 <= y0) return undefined;
+    const xs: number[] = [];
+    for (let x = 0; x < W; x++) if (mask[y0 * W + x]) xs.push(x);
+    const d = (heightM * cam.fy) / (y1 - y0 + 1);
+    const xc = (xs[xs.length >> 1] + 0.5 - cam.cx) / cam.fx, yc = -(y0 + 0.5 - cam.cy) / cam.fy;
+    const dir = [cam.right[0] * xc + cam.up[0] * yc + cam.fwd[0], cam.right[2] * xc + cam.up[2] * yc + cam.fwd[2]];
+    return [cam.eye[0] + dir[0] * d, cam.eye[2] + dir[1] * d];
+}
+
 async function pool<T>(xs: T[], n: number, fn: (x: T, i: number) => Promise<void>): Promise<void> {
     let i = 0;
     await Promise.all(Array.from({ length: Math.max(1, Math.min(n, xs.length)) }, async () => { for (let k; (k = i++) < xs.length;) await fn(xs[k], k); }));
@@ -292,7 +320,10 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
         memberPoints.set(m.clusterId, pts);
         memberKeys.set(m.clusterId, keys);
     }
-    const tileMesh = sceneToRenderMesh(readGlbScene(input.tileGlb));
+    // the tile mesh near the families only (the views reach maxRangeM; the clear checks and the checks' occluders need nothing
+    // farther): a district's whole tile is millions of triangles, each depth render of it seconds
+    const reachM = (input.see?.maxRangeM ?? SEE_PARAMS.maxRangeM) + 20;
+    const tileMesh = meshNear(sceneToRenderMesh(readGlbScene(input.tileGlb)), families.flatMap(f => f.members.map(m => [m.foot[0], m.foot[2]] as [number, number])), reachM);
     const ground = buildGroundModel(scan, { cellMeters: 1 });
     // ---- 2. see
     const reach = (input.see?.maxRangeM ?? SEE_PARAMS.maxRangeM) - 3;
@@ -378,13 +409,6 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
             description: reading.look.description, permanent: reading.permanent, pieceCount: reading.pieceCount, ...(reading.membersAlike !== undefined ? { membersAlike: reading.membersAlike } : {}), markings: reading.look.markings ?? [], ...(reading.look.confidence !== undefined ? { confidence: reading.look.confidence } : {}),
             perView: reading.views.map((rv, k) => ({ id: images.get(views[k])!.id, visible: rv.visible, sameObject: rv.sameObject, footVisible: rv.footVisible, hiddenShare: rv.hiddenShare, ...(rv.maskPixels ? { maskPixels: rv.maskPixels } : {}), ...(rv.error ? { note: rv.error } : {}) }))
         };
-        // put out for a while (a cone, a barrier for works, luggage): not rebuilt; the splice takes it out and fills the ground
-        if (!reading.permanent) {
-            rep.decision = 'temporary';
-            rep.decisionReason = `Street View reads it as put out for a while ("${reading.look.description}"), not installed: it is not rebuilt; the splice step removes it and fills the ground under it`;
-            rep.ms = Date.now() - tf;
-            return;
-        }
         // the masks: cut from the read's boxes by the segmenter, in memory (the photo's own and each piece's)
         for (let k = 0; k < views.length; k++) {
             const rv = reading.views[k], im = images.get(views[k])!;
@@ -398,7 +422,26 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
             }
             rv.pieces = rv.pieces?.filter(pc => pc.mask && pc.pixels);
         }
-        rep.seen.perView = reading.views.map((rv, k) => ({ id: images.get(views[k])!.id, visible: rv.visible, sameObject: rv.sameObject, footVisible: rv.footVisible, hiddenShare: rv.hiddenShare, ...(rv.maskPixels ? { maskPixels: rv.maskPixels } : {}), ...(rv.pieces?.length ? { pieces: rv.pieces.length } : {}), ...(rv.error ? { note: rv.error } : {}) }));
+        // which member each mask is: its foot cast onto the ground from the view's camera (or, when the foot is hidden, as far
+        // along the ray as its height in the photo says), the family's member nearest there; a mask standing far from every
+        // member is something else (a narrow view along a row sees the nearer members too)
+        const assigned = new Map<number, number>();
+        for (let k = 0; k < views.length; k++) {
+            const rv = reading.views[k], im = images.get(views[k])!;
+            if (!rv.mask || !rv.maskPixels) continue;
+            const m0 = member(views[k]);
+            let at: [number, number] | undefined;
+            if (rv.footVisible) at = castPiece(cams[k], { mask: rv.mask, width: im.widthPx, height: im.heightPx }, m0.foot[1])?.at;
+            if (!at) at = alongRayByHeight(cams[k], rv.mask, im.widthPx, im.heightPx, m0.heightM);
+            if (!at) continue;
+            const near = fam.members.map(m => ({ m, d: Math.hypot(m.foot[0] - at![0], m.foot[2] - at![1]) })).sort((a, b) => a.d - b.d)[0];
+            const tol = Math.max(1.5, 0.12 * views[k].rangeM);
+            if (near.d <= tol) assigned.set(k, near.m.clusterId);
+            else { rv.sameObject = false; rv.error = `its mask stands ${Math.round(near.d * 10) / 10} m from the nearest member (over ${Math.round(tol * 10) / 10} m): something else`; }
+        }
+        const cidOf = (k: number) => assigned.get(k) ?? views[k].clusterId;
+        const memberAt = (k: number) => fam.members.find(m => m.clusterId === cidOf(k))!;
+        rep.seen.perView = reading.views.map((rv, k) => ({ id: images.get(views[k])!.id, visible: rv.visible, sameObject: rv.sameObject, footVisible: rv.footVisible, hiddenShare: rv.hiddenShare, ...(rv.maskPixels ? { maskPixels: rv.maskPixels } : {}), ...(rv.pieces?.length ? { pieces: rv.pieces.length } : {}), ...(assigned.has(k) && assigned.get(k) !== views[k].clusterId ? { member: assigned.get(k) } : {}), ...(rv.error ? { note: rv.error } : {}) }));
         const usable = reading.views.map((rv, k) => ({ rv, k })).filter(x => x.rv.visible && x.rv.sameObject && x.rv.mask && x.rv.maskPixels);
         if (!usable.length) {
             rep.decision = 'not-seen';
@@ -407,6 +450,14 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
             rep.ms = Date.now() - tf;
             return;
         }
+        // put out for a while (a cone, a barrier for works, luggage): not rebuilt; the splice takes it out and fills the ground
+        if (!reading.permanent) {
+            rep.decision = 'temporary';
+            rep.decisionReason = `Street View reads it as put out for a while ("${reading.look.description}"), not installed: it is not rebuilt; the splice step removes it and fills the ground under it`;
+            rep.ms = Date.now() - tf;
+            return;
+        }
+
         // ---- a ridge the photos show as several alike pieces: split along the scan's line (split.ts)
         let family = fam;
         const piecesOf = (k: number) => (reading!.views[k].pieces ?? []).filter(pc => pc.mask).map(pc => ({ ...pc, mask: pc.mask!, width: images.get(views[k])!.widthPx, height: images.get(views[k])!.heightPx }));
@@ -414,7 +465,7 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
             const members: StreetObjectMember[] = [];
             const splits: NonNullable<ReturnType<typeof splitMember>>[] = [];
             for (const m of fam.members) {
-                const lead = usable.filter(u => views[u.k].clusterId === m.clusterId && (u.rv.pieces?.length ?? 0) >= 2).sort((a, b) => b.rv.pieces!.length - a.rv.pieces!.length)[0];
+                const lead = usable.filter(u => cidOf(u.k) === m.clusterId && (u.rv.pieces?.length ?? 0) >= 2).sort((a, b) => b.rv.pieces!.length - a.rv.pieces!.length)[0];
                 const sp = lead ? splitMember(m, cams[lead.k], piecesOf(lead.k)) : undefined;
                 if (sp) { members.push(...sp.members); splits.push(sp); } else members.push(m);
             }
@@ -434,7 +485,7 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
         const failures: string[] = [];
         for (const { rv, k } of usable) {
             const im = images.get(views[k])!;
-            const here = family.members.filter(m => m.clusterId === views[k].clusterId);
+            const here = family.members.filter(m => m.clusterId === cidOf(k));
             for (const m of here) {
                 let mask = rv.mask!;
                 if (split) {
@@ -466,7 +517,7 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
         if (!split && (longPlan || flatRead)) {
             const axis = planAxis(planHeadingOf(family.members.map(m => m.planHeadingDeg)));
             const best = usable.map(u => ({ u, sq: squareness(cams[u.k], axis) })).sort((a, b) => b.sq - a.sq)[0];
-            const im = images.get(views[best.u.k])!, m = member(views[best.u.k]);
+            const im = images.get(views[best.u.k])!, m = memberAt(best.u.k);
             const fo = frontOutline({ mask: best.u.rv.mask!, width: im.widthPx, height: im.heightPx, cam: cams[best.u.k] }, m);
             if ('failed' in fo) (rep.profileFailures ??= []).push(`front outline from ${im.id}: ${fo.failed}`);
             else {
@@ -502,8 +553,8 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
         const checks: ViewCheck[] = [];
         for (const { rv, k } of usable) {
             const v = views[k], im = images.get(v)!;
-            const here = family.members.filter(m => m.clusterId === v.clusterId);
-            const keys = memberKeys.get(v.clusterId)!;
+            const here = family.members.filter(m => m.clusterId === cidOf(k));
+            const keys = memberKeys.get(cidOf(k))!;
             let mask = rv.mask!;
             if (split && rv.pieces?.length) { mask = new Uint8Array(rv.mask!.length); for (const pc of rv.pieces) if (pc.mask) for (let i = 0; i < mask.length; i++) if (pc.mask[i]) mask[i] = 1; }
             const photo = decodeImageInMemory(im.bytes);

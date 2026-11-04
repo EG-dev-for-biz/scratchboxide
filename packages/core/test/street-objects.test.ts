@@ -378,6 +378,10 @@ describe('the view aim, the read\'s masks, the keep rule and the instanced layer
         expect(c.keep).toBe(false);
         expect(c.reason).toMatch(/colour/);
         expect(judgeFamily([]).keep).toBe(false);
+        // beating a blob that barely matches is not enough: under the floor, the scan stays
+        const low = judgeFamily([v(0.2, 0.05, 5, 9)]);
+        expect(low.keep).toBe(false);
+        expect(low.reason).toMatch(/under IoU 0.3/);
         const a = new Uint8Array([1, 1, 0, 0]), b = new Uint8Array([1, 0, 1, 0]);
         expect(iou(a, b)).toBeCloseTo(1 / 3, 6);
     });

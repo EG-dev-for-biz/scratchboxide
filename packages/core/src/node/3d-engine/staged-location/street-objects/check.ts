@@ -19,8 +19,8 @@
  * Each drawn silhouette is first moved onto the photo's mask by whole pixels (its foot's middle onto the mask's foot when
  * the foot shows, else its top onto the mask's top): the views' poses can be off by a metre or two where the registration
  * could not pose them, and both arms stand at the scan's own place, so the score is of shape, not of the pose's error. The
- * shifts are reported. The rebuild is kept when, over its views, its IoU is higher than the scan's and its colour distance
- * is no larger; else the scan stays, with the numbers as the reason. The photo is decoded in memory for the colour medians
+ * shifts are reported. The rebuild is kept when, over its views, its IoU is higher than the scan's and at least minIou, and
+ * its colour distance is no larger; else the scan stays, with the numbers as the reason. The photo is decoded in memory for the colour medians
  * and dropped.
  */
 
@@ -38,7 +38,9 @@ export const CHECK_PARAMS = {
     /** A colour distance this much larger than the scan's still counts as no larger (the medians' own noise). */
     deltaETol: 2,
     /** Bands under this many photo pixels are not compared. */
-    minBandPixels: 20
+    minBandPixels: 20,
+    /** And a rebuild must match the photos at least this well (silhouette IoU) to be kept, whatever the scan scores. */
+    minIou: 0.3
 };
 
 export interface ViewCheck {
@@ -209,10 +211,11 @@ export function judgeFamily(all: ViewCheck[], P = CHECK_PARAMS): FamilyCheck {
     if (!views.length || !Number.isFinite(iouR)) return { views, iouRebuild: NaN, iouScan: NaN, deltaERebuild: NaN, deltaEScan: NaN, keep: false, reason: 'no view had a mask of the object to check against' };
     const shapeBetter = iouR > iouS;
     const colourOk = !Number.isFinite(dR) || !Number.isFinite(dS) || dR <= dS + P.deltaETol;
-    const keep = shapeBetter && colourOk;
+    const fits = iouR >= P.minIou;
+    const keep = shapeBetter && colourOk && fits;
     const say = `silhouette IoU ${r3(iouR)} rebuilt against ${r3(iouS)} scanned; colour ΔE ${Number.isFinite(dR) ? r1(dR) : 'n/a'} rebuilt against ${Number.isFinite(dS) ? r1(dS) : 'n/a'} scanned, over ${views.length} view${views.length === 1 ? '' : 's'} (${w} photo pixels)`;
     return {
         views, iouRebuild: r3(iouR), iouScan: r3(iouS), deltaERebuild: r1(dR), deltaEScan: r1(dS), keep,
-        reason: keep ? `kept: ${say}` : `the scan stays: ${!shapeBetter ? 'the rebuild\'s silhouette is no closer to the photos' : 'the rebuild\'s colour is further from the photos'} (${say})`
+        reason: keep ? `kept: ${say}` : `the scan stays: ${!shapeBetter ? 'the rebuild\'s silhouette is no closer to the photos' : !fits ? `the rebuild matches the photos under IoU ${P.minIou}` : 'the rebuild\'s colour is further from the photos'} (${say})`
     };
 }
