@@ -33,7 +33,8 @@
  *   - an underlayer: a sheet lifted `underlayerLiftM` over the grass cells within `underlayerRadiusM`, standing on the
  *     scan's surface, in the cell's photo colour darkened to `underlayerShade` (the dense lower grass seen from above) and
  *     further by `contactShade` where clumps stand, fading back to the photo colour over `underlayerFadeM` at the grass
- *     edge, and carrying a tiling blade-detail texture (strokes at blade scale, `detailTileM` a tile).
+ *     edge and over the last `underlayerRadialFade` of its radius, and carrying a tiling blade-detail texture (strokes at
+ *     blade scale, `detailTileM` a tile).
  *
  * Every shape quantity is a continuous parameter: blade height and width, keel depth, droop, splay, curl, clump radius,
  * senescence; nothing selects a grass kind.
@@ -91,7 +92,7 @@ struct Params {
     double farSegmentsPerBlade = 2;   // spine segments of the widened blades (rings 1 and out), whose curve is not seen
     double gravityDroop = 0.3, radialSplay = 0.5, curlStochasticity = 0.25, centerHeightBias = 0.3;
     double clumpNormalBlend = 0.35;
-    double senescence = 0.35;       // how far the tip goes toward straw (0 = all green)
+    double senescence = 0.2;        // how far the tip goes toward straw (0 = all green)
     // distance rings
     // self-occlusion up the blade
     double rootShade = 0.3;         // tone at the root, relative to the lit lamina
@@ -100,8 +101,9 @@ struct Params {
     double underlayerRadiusM = 40;  // 0 = none
     double underlayerSpacingM = 0.25;
     double underlayerLiftM = 0.02;
-    double underlayerShade = 0.55;  // the dense lower grass seen from above, relative to the photo colour
-    double contactShade = 0.35;     // further darkening where clumps stand
+    double underlayerShade = 0.78;  // the lower grass seen from above, relative to the photo colour (which already averages blades and gaps)
+    double contactShade = 0.25;     // further darkening where clumps stand
+    double underlayerRadialFade = 0.25; // share of the radius over which the sheet fades back to the photo colour at its rim
     double contactRadiusM = 0.3;
     double underlayerFadeM = 1.5;   // at the grass edge the shade fades back to the photo colour over this
     double detailTexPx = 256, detailTileM = 0.5;
@@ -117,7 +119,7 @@ struct Params {
         SB_GF_P(radialSplay) SB_GF_P(curlStochasticity) SB_GF_P(centerHeightBias) SB_GF_P(clumpNormalBlend) SB_GF_P(senescence)
         SB_GF_P(pixelAngle) SB_GF_P(maxWidthScale) SB_GF_P(rootShade) SB_GF_P(occlusionHeight)
         SB_GF_P(underlayerRadiusM) SB_GF_P(underlayerSpacingM) SB_GF_P(underlayerLiftM) SB_GF_P(underlayerShade)
-        SB_GF_P(contactShade) SB_GF_P(contactRadiusM) SB_GF_P(underlayerFadeM) SB_GF_P(detailTexPx) SB_GF_P(detailTileM)
+        SB_GF_P(contactShade) SB_GF_P(contactRadiusM) SB_GF_P(underlayerFadeM) SB_GF_P(underlayerRadialFade) SB_GF_P(detailTexPx) SB_GF_P(detailTileM)
 #undef SB_GF_P
         throw std::runtime_error("unknown parameter " + k);
     }
@@ -467,7 +469,8 @@ private:
             const double est = surfaceAt(x, z, c), sy = scanAt(x, z, c, est);
             const double y = (std::isfinite(sy) ? sy : est) + p_.underlayerLiftM;
             // shade: the lower grass, deeper where clumps stand; fading to the photo colour at the grass edge
-            const double inside = std::clamp(edge[size_t(c)] * double(g_.cellM) / std::max(1e-3, p_.underlayerFadeM), 0.0, 1.0);
+            const double rim = std::clamp((R - std::sqrt((x - cx) * (x - cx) + (z - cz) * (z - cz))) / std::max(1e-3, R * p_.underlayerRadialFade), 0.0, 1.0);
+            const double inside = std::clamp(edge[size_t(c)] * double(g_.cellM) / std::max(1e-3, p_.underlayerFadeM), 0.0, 1.0) * rim;
             int count = 0;
             for (int dz = -1; dz <= 1; ++dz) for (int dx = -1; dx <= 1; ++dx) {
                 auto it = near.find(key(x + dx * cr, z + dz * cr));

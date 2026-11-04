@@ -52,7 +52,7 @@ export interface GrassFieldParams {
     rootShade?: number; occlusionHeight?: number;
     /** The sheet under the blades (0 radius: none): spacing, lift, shade of the lower grass, contact shade, edge fade, detail texture. */
     underlayerRadiusM?: number; underlayerSpacingM?: number; underlayerLiftM?: number; underlayerShade?: number;
-    contactShade?: number; contactRadiusM?: number; underlayerFadeM?: number; detailTexPx?: number; detailTileM?: number;
+    contactShade?: number; contactRadiusM?: number; underlayerFadeM?: number; underlayerRadialFade?: number; detailTexPx?: number; detailTileM?: number;
     /** Radians a pixel spans: blades are widened ring by ring so they stay about a pixel wide away from the centre (0: one ring). */
     pixelAngle?: number; maxWidthScale?: number;
 }

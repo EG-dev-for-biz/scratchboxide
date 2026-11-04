@@ -54,7 +54,7 @@ export const GRASS_MAP_TOOL_DECLARATION: ToolDeclaration = {
             bladeChunkM: { type: 'NUMBER', description: 'Side of the square tiles the grass is split into so the viewer skips the tiles out of view (default 30 m; 0 = one piece per clump shape).' },
             bladeHeightMinM: { type: 'NUMBER', description: 'Shortest blade length (default 0.06 m).' },
             bladeHeightMaxM: { type: 'NUMBER', description: 'Longest blade length (default 0.14 m). A mown lawn is a few centimetres; a meadow half a metre or more.' },
-            bladeSenescence: { type: 'NUMBER', description: '0..1, how far blade tips turn toward straw (default 0.35).' },
+            bladeSenescence: { type: 'NUMBER', description: '0..1, how far blade tips turn toward straw (default 0.2).' },
             bladePixelAngle: { type: 'NUMBER', description: 'Radians one screen pixel spans (default 0.0015). Blades farther from the centre are built wider and fewer so they stay about a pixel wide; 0 keeps every blade at its near width.' }
         },
         required: ['query']

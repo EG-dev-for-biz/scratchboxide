@@ -269,11 +269,11 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
             if (deep) interiorMax = Math.max(interiorMax, g);
             if (rim) edgeMax = Math.max(edgeMax, g);
         }
-        // the seen lawn colour 0.12 green, over the texture's mean: deep inside darkened to at most 0.55 of it, the rim brighter
+        // the seen lawn colour 0.12 green, over the texture's mean: deep inside darkened to at most 0.78 of it, the rim brighter
         const mean = field.report.underlayer.textureMean;
         expect(mean).toBeGreaterThan(0.65);
         expect(mean).toBeLessThan(0.9);
-        expect(interiorMax).toBeLessThanOrEqual((0.12 * 0.55) / mean + 1e-4);
+        expect(interiorMax).toBeLessThanOrEqual((0.12 * 0.78) / mean + 1e-4);
         expect(edgeMax).toBeGreaterThan(interiorMax);
         // the detail texture: blade-scale strokes, not flat
         expect(u.texture.length).toBe(u.texPx * u.texPx * 4);
