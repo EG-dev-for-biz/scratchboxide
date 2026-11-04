@@ -45,13 +45,12 @@ import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
 import type { DecodedImage, PinholeCamera } from '../../../common/spatial/texture-pass-contracts';
 import { linearToSrgb255, SRGB8_TO_LINEAR } from '../../../common/spatial/photogrammetric-delight';
 import { ProColorGradeMatchingService as Colour } from '../../image/ProColorGradeMatchingService';
-import { assembleGlb, isIdentity, nodeWorldMatrices, parseGlbBytes, transformPoint } from './glb-bytes';
+import { assembleGlb, invert, isIdentity, nodeWorldMatrices, parseGlbBytes, transformPoint } from './glb-bytes';
 import { decodeImageInMemory, type TileTriangles } from './tile-texture-transfer';
 import { encodePng } from './png-encode';
 import { fitChart, fitSurfaceModel, fromChart, toChart, INFILL_GEOMETRY_PARAMS, type InfillChart, type InfillGeometryParams, type SurfaceModel } from './surface-infill-geometry';
 import { distanceFrom, seamGate, SEAM_GATE, type SeamGateParams, type SeamGateResult } from './surface-infill-gates';
-import { correctToRim, directionalRule, latticeRule, onTheLine, readStructure, stochasticRule, synthesize, INFILL_SYNTHESIS_PARAMS, type InfillSynthesisParams, type MeasuredPeriod, type OffsetRule, type StructureReading } from './surface-infill-synthesis';
-import { invert, pushPull } from './vehicle-removal';
+import { correctToRim, directionalRule, latticeRule, onTheLine, pushPull, readStructure, stochasticRule, synthesize, INFILL_SYNTHESIS_PARAMS, type InfillSynthesisParams, type MeasuredPeriod, type OffsetRule, type StructureReading } from './surface-infill-synthesis';
 
 export const SURFACE_INFILL_VERSION = 'surface-infill/1';
 

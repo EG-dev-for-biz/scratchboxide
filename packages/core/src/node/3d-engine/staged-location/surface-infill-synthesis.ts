@@ -32,7 +32,6 @@
  */
 
 import { MAX_PERIOD_M, MIN_PERIOD_M, MIN_REPEATS, NCC_GATE, K_SIGMA, MIN_BIN_SAMPLES, TRIM } from './texture-repeat';
-import { pushPull } from './vehicle-removal';
 
 export const INFILL_SYNTHESIS_PARAMS = {
     /** The clear texels read for the structure: within this of the region (m), nearer counting more (sigma, m). */
@@ -66,6 +65,35 @@ export const INFILL_SYNTHESIS_PARAMS = {
     seed: 0x5eed
 };
 export type InfillSynthesisParams = typeof INFILL_SYNTHESIS_PARAMS;
+
+/** Fills the unknown entries of a `c`-channel field from the known ones (push-pull over a pyramid). */
+export function pushPull(values: Float32Array, known: Float32Array, w: number, h: number, c: number): Float32Array {
+    if (w <= 1 && h <= 1) return values.slice();
+    const cw = Math.ceil(w / 2), ch = Math.ceil(h / 2);
+    const cv = new Float32Array(cw * ch * c), ck = new Float32Array(cw * ch);
+    for (let k = 0; k < h; k++) for (let i = 0; i < w; i++) {
+        const wt = known[k * w + i];
+        if (!(wt > 0)) continue;
+        const q = (k >> 1) * cw + (i >> 1);
+        ck[q] += wt;
+        for (let j = 0; j < c; j++) cv[q * c + j] += wt * values[(k * w + i) * c + j];
+    }
+    for (let q = 0; q < cw * ch; q++) if (ck[q] > 0) { for (let j = 0; j < c; j++) cv[q * c + j] /= ck[q]; ck[q] = Math.min(1, ck[q]); }
+    const coarse = ck.some(v => v > 0) ? pushPull(cv, ck, cw, ch, c) : cv;
+    const out = new Float32Array(w * h * c);
+    for (let k = 0; k < h; k++) for (let i = 0; i < w; i++) {
+        // bilinear from the coarse level (its texel centres at (2i + 0.5) of this level)
+        const fx = Math.max(0, Math.min(cw - 1, (i - 0.5) / 2)), fz = Math.max(0, Math.min(ch - 1, (k - 0.5) / 2));
+        const i0 = Math.floor(fx), k0 = Math.floor(fz), i1 = Math.min(cw - 1, i0 + 1), k1 = Math.min(ch - 1, k0 + 1);
+        const ax = fx - i0, az = fz - k0;
+        const wt = Math.min(1, known[k * w + i] || 0);
+        for (let j = 0; j < c; j++) {
+            const up = (1 - az) * ((1 - ax) * coarse[(k0 * cw + i0) * c + j] + ax * coarse[(k0 * cw + i1) * c + j]) + az * ((1 - ax) * coarse[(k1 * cw + i0) * c + j] + ax * coarse[(k1 * cw + i1) * c + j]);
+            out[(k * w + i) * c + j] = wt * values[(k * w + i) * c + j] + (1 - wt) * up;
+        }
+    }
+    return out;
+}
 
 /** A small deterministic generator (mulberry32). */
 export function rng(seed: number): () => number {
