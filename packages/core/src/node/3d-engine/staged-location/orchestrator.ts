@@ -1307,6 +1307,10 @@ function loadMesh(files: Array<string | undefined>): RenderMesh3D {
 /** A district layer published without the kept structure's footprint (keptStructureCarver). */
 const CARVED_URL = /_around_[0-9a-f]{8}\.glb$/;
 
+/** The roads stage's extra time with the kerbs on: at Penn over 210 m their read and photo alone took 2.5 minutes, at a load of 150-300. */
+const ROAD_KERBS_EXTRA_BUDGET_MS = 360_000;
+/** And with the steps on: the inclines read, and each melted flight's two Street View views counted, four flights at a time. */
+const GROUND_STEPS_EXTRA_BUDGET_MS = 300_000;
 /** A ground layer published with the scan carved under the streets' kerbs (roadCarver). */
 const ROAD_CARVED_URL = /_road_[0-9a-f]{8}\.glb$/;
 
@@ -3688,6 +3692,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             };
             await runner.stage<RoadStageValue>({
                 id: 'roads',
+                // the kerbs are read again on the scan's triangles and coloured from above: 2-5 minutes more over a 200 m district;
+                // the steps are found and read on it, their melted flights counted on Street View
+                ...(kerbsOn || stepsOn ? { budgetMs: STAGES.roads.budgetMs + (kerbsOn ? ROAD_KERBS_EXTRA_BUDGET_MS : 0) + (stepsOn ? GROUND_STEPS_EXTRA_BUDGET_MS : 0) } : {}),
                 run: async io => {
                     const r = roadsOn && centrelines.length ? await roadsRun(io) : undefined;
                     const st = stepsOn ? await stepsRun(io) : undefined;
