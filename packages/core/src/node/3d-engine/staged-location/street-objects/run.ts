@@ -609,12 +609,13 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
             const m0 = j.fam.members.slice().sort((a, b) => Math.hypot(a.foot[0] - j.side[0], a.foot[2] - j.side[1]) - Math.hypot(b.foot[0] - j.side[0], b.foot[2] - j.side[1]))[0];
             let dx = j.side[0] - m0.foot[0], dz = j.side[1] - m0.foot[2];
             const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
-            const dist = Math.min(L, Math.max(3.5, j.fam.heightM * 2.5 + 2));
+            // far enough that the frame's height (70 degrees across at 16:9) holds the member whole, at most as far as the pano stood
+            const dist = Math.min(L, Math.max(3.5, j.fam.heightM * 1.9 + 1.5));
             const ex = m0.foot[0] + dx * dist, ez = m0.foot[2] + dz * dist;
             const g = ground.groundAt(ex, ez);
             const eye: V3 = [ex, (Number.isFinite(g) ? g : m0.foot[1]) + 1.6, ez];
             const target: V3 = [m0.foot[0], m0.foot[1] + j.fam.heightM * 0.5, m0.foot[2]];
-            const cam = lookAtCamera(eye, target, 60, 1280, 720);
+            const cam = lookAtCamera(eye, target, 70, 1280, 720);
             const stem = path.join(input.outDir, `${j.fam.id.replace(/\//g, '_')}_eye`);
             const before = renderTriangles([tileSoup], cam, { supersample: 2 }), after = renderTriangles([without, ...placed], cam, { supersample: 2 });
             fs.writeFileSync(`${stem}_before.png`, encodePng(cam.width, cam.height, before.rgba, 4));
