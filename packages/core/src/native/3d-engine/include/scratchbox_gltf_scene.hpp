@@ -16,6 +16,7 @@
 #include "scratchbox_png.hpp"
 #include "scratchbox_math.hpp"
 #include "scratchbox_texture.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -36,7 +37,11 @@ struct SceneMaterial {
     Vec4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
     float metallicFactor{1.0f};
     float roughnessFactor{1.0f};
+    /** Emitted radiance: emissiveFactor times KHR_materials_emissive_strength, before the emissive texture. */
     Vec3 emissiveFactor{0.0f, 0.0f, 0.0f};
+    int emissiveImage{-1};
+    int emissiveWrapS{10497};
+    int emissiveWrapT{10497};
     int baseColorImage{-1};
     int wrapS{10497};  // glTF sampler wrap mode: 10497 repeat, 33071 clamp, 33648 mirrored repeat
     int wrapT{10497};
@@ -57,6 +62,24 @@ struct SceneMaterial {
      * its pixels, and consumers that bake or measure the scan's photo must not count it as such.
      */
     bool photoInferredFill{false};
+};
+
+/**
+ * A KHR_lights_punctual light at its node's world transform. A point light has no cone (outerConeAngle pi);
+ * a spot has one; a directional light is distant. Intensity is the light's colour times its intensity:
+ * candela for point and spot, lux for directional.
+ */
+struct SceneLight {
+    std::string name;
+    Vec3 position{0.0f, 0.0f, 0.0f};
+    /** The unit direction the light travels (the node's -Z). */
+    Vec3 direction{0.0f, 0.0f, -1.0f};
+    Vec3 intensity{1.0f, 1.0f, 1.0f};
+    /** 0: no range. */
+    float range{0.0f};
+    float innerConeAngle{0.0f};
+    float outerConeAngle{3.14159265358979323846f};
+    bool distant{false};
 };
 
 struct SceneImage {
@@ -80,6 +103,7 @@ struct GltfScene {
     std::vector<uint32_t> triangleMaterial;
     std::vector<SceneMaterial> materials;
     std::vector<SceneImage> images;
+    std::vector<SceneLight> lights;
     AABB bounds;
     size_t primitiveCount{0};
     size_t nodeCount{0};
@@ -330,6 +354,19 @@ private:
             if (emissive.arr.size() == 3) {
                 sm.emissiveFactor = Vec3(emissive[0].asFloat(0), emissive[1].asFloat(0), emissive[2].asFloat(0));
             }
+            sm.emissiveFactor = sm.emissiveFactor * std::max(0.0f, m["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"].asFloat(1.0f));
+            const auto& emTex = m["emissiveTexture"];
+            int emTexIdx = emTex["index"].asInt(-1);
+            if (emTexIdx >= 0 && emTexIdx < static_cast<int>(textures.arr.size())) {
+                const auto& tex = textures[static_cast<size_t>(emTexIdx)];
+                sm.emissiveImage = tex["source"].asInt(-1);
+                int samplerIndex = tex["sampler"].asInt(-1);
+                if (samplerIndex >= 0 && samplerIndex < static_cast<int>(samplers.arr.size())) {
+                    const auto& sampler = samplers[static_cast<size_t>(samplerIndex)];
+                    sm.emissiveWrapS = sampler["wrapS"].asInt(10497);
+                    sm.emissiveWrapT = sampler["wrapT"].asInt(10497);
+                }
+            }
             sm.doubleSided = m["doubleSided"].type == io::GlbJsonValue::Bool && m["doubleSided"].b;
             sm.unlit = m["extensions"].has("KHR_materials_unlit");
             scene.materials.push_back(sm);
@@ -423,11 +460,36 @@ private:
         return n;
     }
 
+    static SceneLight readLight(const io::GlbJsonValue& def, const Mat4& world) {
+        SceneLight light;
+        light.name = def["name"].asString("");
+        const std::string type = def["type"].asString("point");
+        const auto& color = def["color"];
+        Vec3 c(1.0f, 1.0f, 1.0f);
+        if (color.arr.size() == 3) c = Vec3(color[0].asFloat(1), color[1].asFloat(1), color[2].asFloat(1));
+        light.intensity = c * std::max(0.0f, def["intensity"].asFloat(1.0f));
+        light.range = std::max(0.0f, def["range"].asFloat(0.0f));
+        light.position = world.transformPoint(Vec3(0.0f, 0.0f, 0.0f));
+        Vec3 d = world.transformDirection(Vec3(0.0f, 0.0f, -1.0f));
+        light.direction = d.lengthSquared() > 1e-20f ? d.normalized() : Vec3(0.0f, 0.0f, -1.0f);
+        light.distant = type == "directional";
+        if (type == "spot") {
+            light.outerConeAngle = std::clamp(def["spot"]["outerConeAngle"].asFloat(0.78539816f), 0.0f, 1.57079633f);
+            light.innerConeAngle = std::clamp(def["spot"]["innerConeAngle"].asFloat(0.0f), 0.0f, light.outerConeAngle);
+        }
+        return light;
+    }
+
     static void walkNode(Context& ctx, GltfScene& scene, int nodeIndex, const Mat4& parent, int depth) {
         const auto& nodes = ctx.root["nodes"];
         if (nodeIndex < 0 || nodeIndex >= static_cast<int>(nodes.arr.size()) || depth > 64) return;
         const auto& node = nodes[static_cast<size_t>(nodeIndex)];
         Mat4 world = parent * localMatrix(node);
+        int lightIndex = node["extensions"]["KHR_lights_punctual"]["light"].asInt(-1);
+        const auto& lightDefs = ctx.root["extensions"]["KHR_lights_punctual"]["lights"];
+        if (lightIndex >= 0 && lightIndex < static_cast<int>(lightDefs.arr.size())) {
+            scene.lights.push_back(readLight(lightDefs[static_cast<size_t>(lightIndex)], world));
+        }
         int meshIndex = node["mesh"].asInt(-1);
         const auto& meshes = ctx.root["meshes"];
         if (meshIndex >= 0 && meshIndex < static_cast<int>(meshes.arr.size())) {
