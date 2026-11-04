@@ -17,6 +17,9 @@
  * scratchbox_metal_pathtracer_kernels.hpp are compiled at run time, so no shader toolchain is needed
  * on the machine.
  *
+ * The scene's own lights (emissive triangles of the traced geometry and the glTF punctual lights given to
+ * setLights) are sampled from the light tree of scratchbox_light_tree.hpp, built here and uploaded as it is.
+ *
  * Every sample pass is one compute dispatch that adds to a per-pixel accumulation buffer, so a render
  * can be read back after any number of samples. Render time is the GPU's own (sum of the command
  * buffers' GPU start-to-end times), and ray counts are tallied by the kernels, never estimated.
@@ -33,6 +36,7 @@
 #import <MetalFX/MetalFX.h>
 
 #include "scratchbox_gltf_scene.hpp"
+#include "scratchbox_light_tree.hpp"
 #include "scratchbox_metal_pathtracer_kernels.hpp"
 #include "scratchbox_pathtracer.hpp"
 #include "scratchbox_sky.hpp"
@@ -162,6 +166,10 @@ public:
             emptyMaterialIds_ = [device_ newBufferWithBytes:&zero length:sizeof(zero) options:MTLResourceStorageModeShared];
             emptyMaterials_ = [device_ newBufferWithBytes:&defaultRecord length:sizeof(defaultRecord) options:MTLResourceStorageModeShared];
             emptyTextures_ = [device_ newBufferWithBytes:&noTexture length:sizeof(noTexture) options:MTLResourceStorageModeShared];
+            static const render::lights::LightRecord noLight{};
+            static const render::lights::LightNode noNode{};
+            emptyLightRecords_ = [device_ newBufferWithBytes:&noLight length:sizeof(noLight) options:MTLResourceStorageModeShared];
+            emptyLightNodes_ = [device_ newBufferWithBytes:&noNode length:sizeof(noNode) options:MTLResourceStorageModeShared];
             const std::vector<uint32_t> sobol = sobolDirectionVectors(64);
             sobolDims_ = static_cast<uint32_t>(sobol.size() / 32);
             sobolBuffer_ = [device_ newBufferWithBytes:sobol.data() length:sobol.size() * sizeof(uint32_t) options:MTLResourceStorageModeShared];
@@ -206,6 +214,7 @@ public:
             accel_ = b.accel;
             accelerationBuildMs_ = b.buildMs;
             bounceAccel_ = nil;
+            lightsDirty_ = true;
         }
     }
 
@@ -231,10 +240,33 @@ public:
             bounceBuildMs_ = b.buildMs;
             bounceTriangleCount_ = static_cast<uint32_t>(indices.size() / 3);
             bounceErrorPerDistance_ = std::max(0.0f, errorPerDistance);
+            lightsDirty_ = true;
         }
     }
 
-    void clearBounceGeometry() { bounceAccel_ = nil; }
+    void clearBounceGeometry() {
+        bounceAccel_ = nil;
+        lightsDirty_ = true;
+    }
+
+    /**
+     * The scene's punctual lights (gltf::GltfScene::lights), in the geometry's coordinates. Emissive triangles need
+     * no call: they are found in the traced geometry by their materials (setMaterials) when a frame begins.
+     */
+    void setLights(const std::vector<gltf::SceneLight>& punctual) {
+        punctual_ = punctual;
+        lightsDirty_ = true;
+    }
+
+    /** Off: no light samples, and emission is found by BSDF rays alone (the tracer before its light tree). */
+    void setLightSampling(bool enabled) {
+        if (enabled != lightSampling_) lightsDirty_ = true;
+        lightSampling_ = enabled;
+    }
+    bool lightSampling() const { return lightSampling_; }
+
+    /** The light set the last frame sampled (built in beginFrame). */
+    const render::lights::LightSet& lightSet() const { return lightSet_; }
     /** Whether shadow rays trace the bounce geometry too (default) or stay on the primary cut. */
     void setBounceShadowRays(bool enabled) { bounceShadowRays_ = enabled; }
 
@@ -417,6 +449,9 @@ public:
                 r.mrWrapS = m.mrWrapS;
                 r.mrWrapT = m.mrWrapT;
                 r.occlusionImage = imageRef(m.occlusionImage);
+                r.emissiveImage = imageRef(m.emissiveImage);
+                r.emissiveWrapS = m.emissiveWrapS;
+                r.emissiveWrapT = m.emissiveWrapT;
                 records.push_back(r);
             }
             defaultMaterial_ = static_cast<uint32_t>(records.size());
@@ -426,6 +461,16 @@ public:
             textureRefBuffer_ = [device_ newBufferWithBytes:refs.data() length:refs.size() * sizeof(uint64_t) options:MTLResourceStorageModeShared];
             if (!materialBuffer_ || !textureRefBuffer_) throw Error("could not allocate the material buffers");
             hasMaterials_ = true;
+            sceneMaterials_ = scene.materials;
+            // The emissive textures stay on the host too: the light tree reads each emitter's power from them.
+            emissiveImages_.assign(scene.images.size(), texture::ImageBuffer{});
+            for (const gltf::SceneMaterial& m : scene.materials) {
+                const int i = m.emissiveImage;
+                if (i >= 0 && i < static_cast<int>(scene.images.size()) && scene.images[static_cast<size_t>(i)].decoded) {
+                    emissiveImages_[static_cast<size_t>(i)] = scene.images[static_cast<size_t>(i)].pixels;
+                }
+            }
+            lightsDirty_ = true;
         }
     }
 
@@ -514,6 +559,9 @@ public:
         u.guideSamples = guideSamples_;
         u.restirGi = restirGi_ ? 1 : 0;
         u.giSpatial = giSpatial_;
+        ensureLights(!uniformMaterial);
+        u.localLights = lightSet_.localCount;
+        u.distantLights = lightSet_.distantCount;
 
         std::vector<float> lut(3, 0.0f);
         if (lighting.mode == Lighting::Mode::Sky) {
@@ -642,6 +690,9 @@ public:
                 [encoder setBuffer:(frameGuided_ ? guidePending_ : dummyRestir_) offset:0 atIndex:19];
                 [encoder setBuffer:(frameGi_ ? giA_ : dummyGi_) offset:0 atIndex:20];
                 [encoder setBuffer:(frameGi_ ? giB_ : dummyGi_) offset:0 atIndex:21];
+                [encoder setBuffer:(lightRecordBuffer_ ? lightRecordBuffer_ : emptyLightRecords_) offset:0 atIndex:22];
+                [encoder setBuffer:(lightNodeBuffer_ ? lightNodeBuffer_ : emptyLightNodes_) offset:0 atIndex:23];
+                [encoder setBuffer:(triangleLightBuffer_ ? triangleLightBuffer_ : emptyMaterialIds_) offset:0 atIndex:24];
                 if (!frameUniform_) {
                     for (id<MTLTexture> texture : textures_) [encoder useResource:texture usage:MTLResourceUsageRead];
                 }
@@ -824,6 +875,61 @@ public:
     void clearHistory() { historyValid_ = false; }
 
 private:
+    /**
+     * Builds the light set when the geometry, materials or punctual lights changed, or when a frame switches
+     * between scene materials and the uniform one (which emits nothing: then only the punctual lights).
+     * Emissive triangles are taken from the geometry bounce rays trace, since that is what their rays find.
+     */
+    void ensureLights(bool triangles) {
+        if (!lightsDirty_ && lightsWithTriangles_ == triangles) return;
+        if (!lightSampling_) {
+            lightSet_ = render::lights::LightSet{};
+            lightRecordBuffer_ = lightNodeBuffer_ = triangleLightBuffer_ = nil;
+            lightsDirty_ = false;
+            lightsWithTriangles_ = triangles;
+            return;
+        }
+        const bool bounce = bounceAccel_ != nil;
+        id<MTLBuffer> indexBuffer = bounce ? bounceIndexBuffer_ : indexBuffer_;
+        id<MTLBuffer> materialBuffer = bounce ? bounceMaterialIdBuffer_ : materialIdBuffer_;
+        const size_t indexCount = indexBuffer.length / sizeof(uint32_t);
+        const uint32_t* idx = static_cast<const uint32_t*>(indexBuffer.contents);
+        const std::vector<uint32_t> indices(idx, idx + indexCount);
+        const uint32_t* mats = static_cast<const uint32_t*>(materialBuffer.contents);
+        const float* verts = static_cast<const float*>(vertexBuffer_.contents);
+        constexpr size_t floats = sizeof(Vertex) / sizeof(float);
+        // The kernels' triangleEmission: the material's factor times its emissive texture at the interpolated uv.
+        auto emittedAt = [&](size_t t, float bu, float bv) {
+            const uint32_t id = mats[t];
+            if (id >= sceneMaterials_.size()) return Vec3(0, 0, 0);
+            const gltf::SceneMaterial& m = sceneMaterials_[id];
+            Vec3 e = m.emissiveFactor;
+            if (!(render::detail::luminance(e) > 0.0f)) return Vec3(0, 0, 0);
+            if (m.emissiveImage >= 0 && m.emissiveImage < static_cast<int>(emissiveImages_.size()) && emissiveImages_[static_cast<size_t>(m.emissiveImage)].width > 0) {
+                const float* v0 = verts + static_cast<size_t>(indices[t * 3]) * floats;
+                const float* v1 = verts + static_cast<size_t>(indices[t * 3 + 1]) * floats;
+                const float* v2 = verts + static_cast<size_t>(indices[t * 3 + 2]) * floats;
+                const float bw = 1.0f - bu - bv;
+                const math::Vec2 uv(v0[6] * bw + v1[6] * bu + v2[6] * bv, v0[7] * bw + v1[7] * bu + v2[7] * bv);
+                e = e * render::detail::sampleTextureLinear(emissiveImages_[static_cast<size_t>(m.emissiveImage)], uv, m.emissiveWrapS, m.emissiveWrapT);
+            }
+            return e;
+        };
+        lightSet_ = render::lights::buildLightSet(
+            [&](uint32_t i) { const float* p = verts + static_cast<size_t>(i) * floats; return Vec3(p[0], p[1], p[2]); }, indices,
+            emittedAt, punctual_, triangles && hasMaterials_);
+        @autoreleasepool {
+            lightRecordBuffer_ = lightSet_.records.empty() ? nil
+                : [device_ newBufferWithBytes:lightSet_.records.data() length:lightSet_.records.size() * sizeof(render::lights::LightRecord) options:MTLResourceStorageModeShared];
+            lightNodeBuffer_ = lightSet_.nodes.empty() ? nil
+                : [device_ newBufferWithBytes:lightSet_.nodes.data() length:lightSet_.nodes.size() * sizeof(render::lights::LightNode) options:MTLResourceStorageModeShared];
+            triangleLightBuffer_ = lightSet_.triangleLight.empty() ? nil
+                : [device_ newBufferWithBytes:lightSet_.triangleLight.data() length:lightSet_.triangleLight.size() * sizeof(uint32_t) options:MTLResourceStorageModeShared];
+        }
+        lightsDirty_ = false;
+        lightsWithTriangles_ = triangles;
+    }
+
     void rasterVisibility() {
         const int w = frameWidth_, h = frameHeight_;
         if (!visibility_ || visibility_.width != static_cast<NSUInteger>(w) || visibility_.height != static_cast<NSUInteger>(h)) {
@@ -1056,6 +1162,18 @@ private:
     uint32_t defaultMaterial_{0};
     uint64_t textureBytes_{0};
     bool hasMaterials_{false};
+    std::vector<gltf::SceneMaterial> sceneMaterials_;
+    std::vector<texture::ImageBuffer> emissiveImages_;
+    std::vector<gltf::SceneLight> punctual_;
+    render::lights::LightSet lightSet_;
+    bool lightsDirty_{true};
+    bool lightSampling_{true};
+    bool lightsWithTriangles_{false};
+    id<MTLBuffer> lightRecordBuffer_{nil};
+    id<MTLBuffer> lightNodeBuffer_{nil};
+    id<MTLBuffer> triangleLightBuffer_{nil};
+    id<MTLBuffer> emptyLightRecords_{nil};
+    id<MTLBuffer> emptyLightNodes_{nil};
 };
 
 } // namespace metalpt

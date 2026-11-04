@@ -66,10 +66,19 @@ export interface MetalPathTraceStudioLighting {
     studio: { radiance?: [number, number, number] };
 }
 
+/**
+ * Beside the sun and sky or the dome, the scene's own lights (the materials GLB's emissive materials and its
+ * KHR_lights_punctual lights) are sampled from a light tree and weighted against the BSDF. `sampleLights: false`
+ * leaves them to be found by BSDF rays alone (no punctual lights then), for comparison.
+ */
+export interface MetalPathTraceSceneLights {
+    sampleLights?: boolean;
+}
+
 export interface MetalPathTraceRequest {
     sbvgPath: string;
     outputDir: string;
-    /** "metal" (default) traces on the GPU; "cpu" traces the same cut with render::PathTracer (sun lighting only). */
+    /** "metal" (default) traces on the GPU; "cpu" traces the same cut with render::PathTracer, the reference. */
     backend?: 'metal' | 'cpu';
     width?: number;
     height?: number;
@@ -81,7 +90,7 @@ export interface MetalPathTraceRequest {
     threads?: number;
     lod?: { thresholdPx?: number; near?: number; finestLevel?: number };
     /** Default: the neutral studio dome. */
-    lighting?: MetalPathTraceSunLighting | MetalPathTraceStudioLighting;
+    lighting?: (MetalPathTraceSunLighting | MetalPathTraceStudioLighting) & MetalPathTraceSceneLights;
     /** One uniform material (linear RGB albedo); default is the studio clay. Ignored when `materials` is given. */
     material?: { albedo?: [number, number, number]; roughness?: number; metallic?: number };
     /** Shade with the materials and textures of the GLB the .sbvg (version 3) was built from, by the material ids it carries. */
@@ -123,6 +132,8 @@ export interface MetalPathTraceStats {
     samplesPerPixel: number;
     maxBounces: number;
     lighting: 'sky' | 'studio';
+    /** The lights sampled: emissive triangles of the cut, point and spot lights, distant lights, and the tree's nodes. */
+    lights: MetalPathTraceLightStats;
     file: { clusters: number; levels: number; vertices: number; leafTriangles: number; atlases: number };
     cut: { clusters: number; triangles: number; thresholdPx: number; finestLevel: number };
     /** Closest-hit and shadow rays traced, counted by the kernels. */
@@ -179,6 +190,14 @@ export interface MetalPathTraceStats {
     camera: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number]; verticalFovDeg: number };
 }
 
+export interface MetalPathTraceLightStats {
+    sampling: boolean;
+    triangles: number;
+    points: number;
+    distant: number;
+    treeNodes: number;
+}
+
 export interface MetalPathTraceResult {
     beautyPngPath: string;
     /** float32 scene-linear RGB per pixel, row-major (readLinearColor). */
@@ -197,7 +216,7 @@ export interface MetalPathTraceSessionOpen {
     sbvgPath: string;
     /** The GLB the .sbvg was built from, for its materials and textures; without it every triangle is `material`. */
     glbPath?: string;
-    lighting?: MetalPathTraceSunLighting | MetalPathTraceStudioLighting;
+    lighting?: (MetalPathTraceSunLighting | MetalPathTraceStudioLighting) & MetalPathTraceSceneLights;
     material?: { albedo?: [number, number, number]; roughness?: number; metallic?: number };
 }
 
@@ -240,6 +259,8 @@ export interface MetalPathTraceViewStarted {
     sampler: 'sobol' | 'pcg';
     cut: { clusters: number; triangles: number; thresholdPx: number; rebuilt: boolean; cutMs: number; accelerationBuildMs: number };
     lighting: 'sky' | 'studio';
+    /** The lights the view's frame samples. */
+    lights: MetalPathTraceLightStats;
     targetSpp: number;
 }
 

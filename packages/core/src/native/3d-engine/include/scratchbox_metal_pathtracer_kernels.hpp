@@ -16,8 +16,9 @@
  * (scratchbox_pathtracer.hpp) over Metal's hardware ray intersector: same camera, same PCG32 sample
  * stream per pixel, same glTF metallic-roughness materials (bilinear texture reads with the glTF wrap
  * modes, sRGB decode for colour maps only, tangents from uv derivatives), same GGX BSDF, solar
- * next-event estimation, sky dome, haze and Russian roulette, so a GPU render and a CPU render of the
- * same geometry agree to sampling noise. Change the two together.
+ * next-event estimation, sky dome, haze and Russian roulette, and the scene lights' next-event estimation
+ * with its light tree and power-heuristic weights (scratchbox_light_tree.hpp, ported below), so a GPU render
+ * and a CPU render of the same geometry agree to sampling noise. Change the two together.
  *
  * The structs below are mirrored by the C++ side as plain 4-byte scalars so both agree on layout.
  * Textures are bindless: a buffer of Metal resource ids, one per decoded glTF image.
@@ -84,8 +85,13 @@ struct Uniforms {
      */
     uint32_t restirGi{0}, giSpatial{3};
     uint32_t pad13{0};
+    /**
+     * The scene's lights (render::lights::LightSet, buffers 22-24): local lights in the tree, then distant ones.
+     * The emissive triangles are those of the geometry bounce rays trace (the bounce cut when there is one).
+     */
+    uint32_t localLights{0}, distantLights{0}, pad14{0}, pad15{0};
 };
-static_assert(sizeof(Uniforms) == 4 * 72, "Uniforms must stay a flat array of 4-byte scalars");
+static_assert(sizeof(Uniforms) == 4 * 76, "Uniforms must stay a flat array of 4-byte scalars");
 
 /** A ReSTIR GI sample: a path's second hit (or escape direction) with the radiance it sent back to the first hit. */
 struct GiSample {
@@ -199,7 +205,7 @@ struct MaterialRecord {
     int32_t baseColorImage{-1};
     int32_t wrapS{10497}, wrapT{10497}, normalImage{-1}, normalWrapS{10497};
     int32_t normalWrapT{10497}, mrImage{-1}, mrWrapS{10497}, mrWrapT{10497};
-    int32_t occlusionImage{-1}, pad0{0}, pad1{0}, pad2{0};
+    int32_t occlusionImage{-1}, emissiveImage{-1}, emissiveWrapS{10497}, emissiveWrapT{10497};
 };
 static_assert(sizeof(MaterialRecord) == 96, "MaterialRecord layout is shared with the Metal kernels");
 
@@ -272,6 +278,7 @@ struct Uniforms {
     uint bounceShadowRays, restir, restirCandidates, restirSpatial;
     uint guided, guideTile, guideBands, guideSectors;
     uint guideSamples, restirGi, giSpatial, pad13;
+    uint localLights, distantLights, pad14, pad15;
 };
 
 struct GiSample {
@@ -335,7 +342,44 @@ struct MaterialRecord {
     int baseColorImage;
     int wrapS, wrapT, normalImage, normalWrapS;
     int normalWrapT, mrImage, mrWrapS, mrWrapT;
-    int occlusionImage, pad0, pad1, pad2;
+    int occlusionImage, emissiveImage, emissiveWrapS, emissiveWrapT;
+};
+
+// ---- Scene lights (port of scratchbox_light_tree.hpp) -------------------------------------------
+constant uint kNoLight = 0xFFFFFFFFu;
+constant uint kTriangleLight = 0u;
+constant uint kPointLight = 1u;
+
+struct LightRecord {
+    float p0[3];
+    uint kind;
+    float e1[3];
+    float area;
+    float e2[3];
+    uint triangle;
+    float intensity[3];
+    float energy;
+    float range, cosInner, cosOuter;
+    uint leaf;
+};
+
+struct LightNode {
+    float bmin[3];
+    float energy;
+    float bmax[3];
+    float thetaO;
+    float axis[3];
+    float thetaE;
+    int child0, child1, parent;
+    uint pad;
+};
+
+/** The light tables a path samples, with the per-triangle light of the geometry bounce rays trace. */
+struct Lights {
+    device const LightRecord* records;
+    device const LightNode* nodes;
+    device const uint* triangleLight;
+    uint localCount, distantCount;
 };
 
 struct TextureRef {
@@ -458,9 +502,12 @@ inline float nextSample(thread Sampler& s) {
     return min((float)v * (1.0f / 4294967296.0f), 0.99999994f);
 }
 
-/** Dimensions are laid out per bounce so every bounce's lobe gets its own well-stratified pair. */
-inline void startBounceDimensions(thread Sampler& s, uint bounce) {
-    if (s.mode != 0u) s.dim = 4u + bounce * 6u;
+/**
+ * Dimensions are laid out per bounce so every bounce's lobe gets its own well-stratified pair: 6 a bounce (sun,
+ * BSDF, roulette), 9 when the scene has lights (their pick and point too).
+ */
+inline void startBounceDimensions(thread Sampler& s, uint bounce, uint stride) {
+    if (s.mode != 0u) s.dim = 4u + bounce * stride;
 }
 
 inline float tentSample(float u) {
@@ -576,6 +623,126 @@ inline float3 horizonRadiance(constant Uniforms& u, device const float* lut, flo
     float3 flat = float3(direction.x, 0.0f, direction.z);
     if (lengthSquared(flat) < 1e-8f) flat = float3(1.0f, 0.0f, 0.0f);
     return skyRadiance(u, lut, normalize(flat));
+}
+
+
+inline float nodeImportance(device const LightNode& node, float3 x, float3 n) {
+    if (!(node.energy > 0.0f)) return 0.0f;
+    float3 bmin = float3(node.bmin[0], node.bmin[1], node.bmin[2]), bmax = float3(node.bmax[0], node.bmax[1], node.bmax[2]);
+    float3 center = (bmin + bmax) * 0.5f;
+    float3 v = center - x;
+    float d2 = dot(v, v);
+    float3 ext = bmax - bmin;
+    float r2 = 0.25f * dot(ext, ext);
+    if (d2 <= r2) return node.energy / max(r2, 1e-12f);
+    float d = sqrt(d2);
+    float3 w = v / d;
+    float thetaU = asin(min(sqrt(r2 / d2), 1.0f));
+    float thetaI = acos(clamp(dot(n, w), -1.0f, 1.0f));
+    float thetaIp = max(thetaI - thetaU, 0.0f);
+    if (thetaIp >= 0.5f * kPi) return 0.0f;
+    float3 axis = float3(node.axis[0], node.axis[1], node.axis[2]);
+    float theta = acos(clamp(-dot(axis, w), -1.0f, 1.0f));
+    float thetaP = max(theta - node.thetaO - thetaU, 0.0f);
+    if (thetaP > 0.0f && thetaP >= node.thetaE) return 0.0f;
+    return node.energy * cos(thetaIp) * cos(min(thetaP, 0.5f * kPi)) / d2;
+}
+
+inline float distantImportance(device const LightRecord& light, float3 n) {
+    return light.energy * max(0.0f, -dot(float3(light.e1[0], light.e1[1], light.e1[2]), n));
+}
+
+inline float pointFalloff(device const LightRecord& light, float3 towardLight, float distance) {
+    float f = 1.0f;
+    if (light.cosOuter > -1.0f) {
+        float scale = 1.0f / max(0.001f, light.cosInner - light.cosOuter);
+        float cd = -dot(float3(light.e1[0], light.e1[1], light.e1[2]), towardLight);
+        float s = clamp(cd * scale - light.cosOuter * scale, 0.0f, 1.0f);
+        f *= s * s;
+    }
+    if (light.range > 0.0f) {
+        float q = distance / light.range;
+        float w = clamp(1.0f - q * q * q * q, 0.0f, 1.0f);
+        f *= w * w;
+    }
+    return f;
+}
+
+inline float topImportance(thread const Lights& L, float3 x, float3 n, thread float& rootImportance) {
+    rootImportance = L.localCount > 0u ? nodeImportance(L.nodes[0], x, n) : 0.0f;
+    float sum = rootImportance;
+    for (uint j = 0u; j < L.distantCount; ++j) sum += distantImportance(L.records[L.localCount + j], n);
+    return sum;
+}
+
+inline float pickLight(thread const Lights& L, float3 x, float3 n, float u, thread uint& light) {
+    float rootImportance;
+    float sum = topImportance(L, x, n, rootImportance);
+    if (!(sum > 0.0f)) return 0.0f;
+    u = min(u, 0.99999994f) * sum;
+    if (u >= rootImportance) {
+        u -= rootImportance;
+        float acc = 0.0f;
+        for (uint j = 0u; j < L.distantCount; ++j) {
+            float w = distantImportance(L.records[L.localCount + j], n);
+            acc += w;
+            if (u < acc || j + 1u == L.distantCount) {
+                if (!(w > 0.0f)) return 0.0f;
+                light = L.localCount + j;
+                return w / sum;
+            }
+        }
+        return 0.0f;
+    }
+    float prob = rootImportance / sum;
+    u /= rootImportance;
+    int node = 0;
+    while (L.nodes[node].child0 >= 0) {
+        device const LightNode& nd = L.nodes[node];
+        float i0 = nodeImportance(L.nodes[nd.child0], x, n);
+        float i1 = nodeImportance(L.nodes[nd.child1], x, n);
+        float s = i0 + i1;
+        if (!(s > 0.0f)) return 0.0f;
+        float p0 = i0 / s;
+        if (u < p0) {
+            u = min(u / p0, 0.99999994f);
+            node = nd.child0;
+            prob *= p0;
+        } else {
+            u = min((u - p0) / (1.0f - p0), 0.99999994f);
+            node = nd.child1;
+            prob *= 1.0f - p0;
+        }
+    }
+    light = (uint)(-1 - L.nodes[node].child0);
+    return prob;
+}
+
+inline float selectPdf(thread const Lights& L, float3 x, float3 n, uint light) {
+    if (light >= L.localCount + L.distantCount) return 0.0f;
+    float rootImportance;
+    float sum = topImportance(L, x, n, rootImportance);
+    if (!(sum > 0.0f)) return 0.0f;
+    device const LightRecord& rec = L.records[light];
+    if (light >= L.localCount) return distantImportance(rec, n) / sum;
+    float prob = rootImportance / sum;
+    int node = (int)rec.leaf;
+    while (L.nodes[node].parent >= 0) {
+        device const LightNode& parent = L.nodes[L.nodes[node].parent];
+        int sibling = parent.child0 == node ? parent.child1 : parent.child0;
+        float own = nodeImportance(L.nodes[node], x, n);
+        float other = nodeImportance(L.nodes[sibling], x, n);
+        float s = own + other;
+        if (!(s > 0.0f)) return 0.0f;
+        prob *= own / s;
+        node = L.nodes[node].parent;
+    }
+    return prob;
+}
+
+inline float powerHeuristic(float a, float b) {
+    float a2 = a * a, b2 = b * b;
+    return a2 + b2 > 0.0f ? a2 / (a2 + b2) : 0.0f;
 }
 
 // ---- glTF metallic-roughness BSDF (port of detail::MetallicRoughnessBsdf) ---------------------
@@ -748,6 +915,9 @@ inline Surface shade(constant Uniforms& u, device const Vertex* verts, device co
         s.metallic = clamp(m.metallic, 0.0f, 1.0f);
         s.roughness = clamp(m.roughness, 0.02f, 1.0f);
         s.emission = f3(m.emissive);
+        if (m.emissiveImage >= 0 && luminance(s.emission) > 0.0f) {
+            s.emission = s.emission * sampleTexture(textures[m.emissiveImage].tex, uv, m.emissiveWrapS, m.emissiveWrapT, true);
+        }
         if (m.mrImage >= 0) {
             float3 mr = sampleTexture(textures[m.mrImage].tex, uv, m.mrWrapS, m.mrWrapT, false);
             s.roughness = clamp(s.roughness * mr.y, 0.02f, 1.0f);
@@ -807,6 +977,75 @@ struct Geometry {
     device const uint* idx;
     device const uint* triMaterials;
 };
+
+/** Emitted radiance of a triangle of `g` at barycentrics (bu, bv): its material's factor times its emissive texture. */
+inline float3 triangleEmission(constant Uniforms& u, device const Vertex* verts, Geometry g, device const MaterialRecord* materials,
+                               device const TextureRef* textures, uint tri, float bu, float bv) {
+    if (u.useMaterials == 0u) return float3(0.0f);
+    uint matId = g.triMaterials[tri];
+    if (matId == kNoMaterial) matId = u.defaultMaterial;
+    device const MaterialRecord& m = materials[matId];
+    float3 e = f3(m.emissive);
+    if (!(luminance(e) > 0.0f)) return float3(0.0f);
+    if (m.emissiveImage >= 0) {
+        uint i0 = g.idx[tri * 3], i1 = g.idx[tri * 3 + 1], i2 = g.idx[tri * 3 + 2];
+        float2 uv = f2(verts[i0].uv) * (1.0f - bu - bv) + f2(verts[i1].uv) * bu + f2(verts[i2].uv) * bv;
+        e = e * sampleTexture(textures[m.emissiveImage].tex, uv, m.emissiveWrapS, m.emissiveWrapT, true);
+    }
+    return e;
+}
+
+/**
+ * One light sample at a vertex (port of PathTracer::sampleLight): a light picked from the tree, a point on it,
+ * and the contribution before its shadow ray, weighted against the BSDF when the path goes on (`mis`).
+ * Returns false when there is nothing to trace; else `wi` and `tMax` give the shadow ray.
+ */
+inline bool sampleLight(constant Uniforms& u, thread const Lights& L, device const Vertex* verts, Geometry lightGeo,
+                        device const MaterialRecord* materials, device const TextureRef* textures,
+                        thread const Surface& surface, thread const Bsdf& bsdf, float3 throughput, float uSelect, float u1, float u2, bool mis,
+                        thread float3& contribution, thread float3& wi, thread float& tMax) {
+    uint index = kNoLight;
+    float select = pickLight(L, surface.position, surface.shadingNormal, uSelect, index);
+    if (!(select > 0.0f)) return false;
+    device const LightRecord& light = L.records[index];
+    float3 incident;
+    float distance = 1e9f, lightPdf = 0.0f;
+    if (index >= L.localCount) {
+        wi = -float3(light.e1[0], light.e1[1], light.e1[2]);
+        incident = float3(light.intensity[0], light.intensity[1], light.intensity[2]) / select;
+    } else if (light.kind == kTriangleLight) {
+        float su = sqrt(u1);
+        float bu = su * (1.0f - u2), bv = su * u2;
+        float3 e1 = float3(light.e1[0], light.e1[1], light.e1[2]), e2 = float3(light.e2[0], light.e2[1], light.e2[2]);
+        float3 y = float3(light.p0[0], light.p0[1], light.p0[2]) + e1 * bu + e2 * bv;
+        float3 v = y - surface.position;
+        float d2 = dot(v, v);
+        if (!(d2 > 1e-12f)) return false;
+        distance = sqrt(d2);
+        wi = v / distance;
+        float cosLight = abs(dot(normalize(cross(e1, e2)), wi));
+        if (cosLight < 1e-6f) return false;
+        float3 emitted = triangleEmission(u, verts, lightGeo, materials, textures, light.triangle, bu, bv);
+        if (!(luminance(emitted) > 0.0f)) return false;
+        lightPdf = select * d2 / (light.area * cosLight);
+        incident = emitted / lightPdf;
+    } else {
+        float3 v = float3(light.p0[0], light.p0[1], light.p0[2]) - surface.position;
+        float d2 = dot(v, v);
+        if (!(d2 > 1e-12f)) return false;
+        distance = sqrt(d2);
+        wi = v / distance;
+        incident = float3(light.intensity[0], light.intensity[1], light.intensity[2]) * (pointFalloff(light, wi, distance) / (d2 * select));
+    }
+    float cosShading = dot(surface.shadingNormal, wi);
+    if (cosShading <= 0.0f || dot(surface.geometricNormal, wi) <= 0.0f) return false;
+    float3 f = bsdfEval(bsdf, wi);
+    float weight = mis && lightPdf > 0.0f ? powerHeuristic(lightPdf, bsdfPdf(bsdf, wi)) : 1.0f;
+    contribution = throughput * f * incident * (cosShading * weight);
+    if (!(maxComponent(contribution) > 0.0f)) return false;
+    tMax = distance < 1e9f ? max(distance - 2.0f * kRayEpsilon, 1e-4f) : 1e9f;
+    return true;
+}
 
 /** Moller-Trumbore against one triangle, both faces, with the intersector's barycentric convention (u for v1, v for v2). */
 inline bool intersectTriangle(device const Vertex* verts, device const uint* idx, uint tri, float3 origin, float3 dir,
@@ -1068,7 +1307,7 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
                             device Reservoir* reservoir, device PrimarySurface* primarySurface,
                             device const Reservoir* prevReservoirs, device const PrimarySurface* prevSurfaces, uint2 gid,
                             device const uint* guideHist, device atomic_uint* guidePending,
-                            device GiSample* giOut, device const GiSample* giPrev) {
+                            device GiSample* giOut, device const GiSample* giPrev, thread const Lights& lights) {
     PathResult result;
     result.radiance = float3(0.0f);
     result.albedo = float3(0.0f);
@@ -1098,6 +1337,13 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
     own.flags = 0u;
     Bsdf bsdf1;
     float3 x1 = float3(0.0f), ng1 = float3(0.0f);
+    const bool sampleLights = lights.localCount + lights.distantCount > 0u;
+    // Emissive triangles are those of the geometry bounce rays trace; light samples read their materials there.
+    const Geometry lightGeo = u.useBounceAccel != 0u ? bounceGeo : primary;
+    const uint dimStride = sampleLights ? 9u : 6u;
+    // The previous vertex, for weighting emission a BSDF ray finds against the light sample taken there.
+    float3 prevPosition = float3(0.0f), prevNormal = float3(0.0f, 1.0f, 0.0f);
+    float prevBsdfPdf = 0.0f;
 
     intersector<triangle_data> closest;
     closest.assume_geometry_type(geometry_type::triangle);
@@ -1110,7 +1356,7 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
     // After the first hit, rays may trace the coarser bounce cut; they start past its error bound to miss its own surface.
     float rayStart = 1e-4f;
     for (uint bounce = 0;; ++bounce) {
-        startBounceDimensions(smp, bounce);
+        startBounceDimensions(smp, bounce, dimStride);
         const bool coarse = u.useBounceAccel != 0u && bounce > 0u;
         const Geometry geo = coarse ? bounceGeo : primary;
         intersection_result<triangle_data> hit;
@@ -1186,8 +1432,20 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
             else accumulate(radiance, inScatter, bounce, u.clampIndirect);
             throughput = throughput * transmittance;
         }
-        if (giActive) giRadiance += throughput * surface.emission;
-        else radiance += throughput * surface.emission;
+        const uint emitter = bounce > 0u && sampleLights ? lights.triangleLight[hit.primitive_id] : kNoLight;
+        if (emitter == kNoLight) {
+            if (giActive) giRadiance += throughput * surface.emission;
+            else radiance += throughput * surface.emission;
+        } else {
+            // Found by the BSDF ray of the previous vertex, which also sampled the lights: weight the two.
+            float cosLight = abs(dot(surface.geometricNormal, dir));
+            float lightPdf = cosLight > 1e-6f
+                ? selectPdf(lights, prevPosition, prevNormal, emitter) * hit.distance * hit.distance / (lights.records[emitter].area * cosLight)
+                : 0.0f;
+            float3 emitted = throughput * surface.emission * powerHeuristic(prevBsdfPdf, lightPdf);
+            if (giActive) accumulate(giRadiance, emitted, bounce, u.clampIndirect);
+            else accumulate(radiance, emitted, bounce, u.clampIndirect);
+        }
 
         const float3 wo = -dir;
         Bsdf bsdf = makeBsdf(surface.shadingNormal, surface.baseColor, surface.metallic, surface.roughness, wo);
@@ -1211,6 +1469,25 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
                     float3 sunLight = throughput * bsdfEval(bsdf, wi) * f3(u.sunIrradiance) * cosShading;
                     if (giActive) accumulate(giRadiance, sunLight, bounce, u.clampIndirect);
                     else accumulate(radiance, sunLight, bounce, u.clampIndirect);
+                }
+            }
+        }
+        if (sampleLights) {
+            float uSelect = nextSample(smp);
+            float l1 = nextSample(smp);
+            float l2 = nextSample(smp);
+            float3 contribution, wi;
+            float tMax;
+            if (sampleLight(u, lights, verts, lightGeo, materials, textures, surface, bsdf, throughput, uSelect, l1, l2, bounce < u.maxBounces,
+                            contribution, wi, tMax)) {
+                ++rays;
+                const bool coarseShadow = u.useBounceAccel != 0u && u.bounceShadowRays != 0u;
+                const Geometry shadowGeo = coarseShadow ? bounceGeo : primary;
+                ray shadow(surface.position + surface.geometricNormal * (coarseShadow ? coarseOffset : kRayEpsilon), wi, 1e-4f, tMax);
+                intersection_result<triangle_data> blocker = any.intersect(shadow, shadowGeo.accel);
+                if (blocker.type == intersection_type::none) {
+                    if (giActive) accumulate(giRadiance, contribution, bounce, u.clampIndirect);
+                    else accumulate(radiance, contribution, bounce, u.clampIndirect);
                 }
             }
         }
@@ -1249,6 +1526,9 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
         if (bounce >= u.maxBounces) break;
         float3 wi, weight;
         if (!bsdfSample(bsdf, smp, wi, weight) || dot(surface.geometricNormal, wi) <= 0.0f) break;
+        prevPosition = surface.position;
+        prevNormal = surface.shadingNormal;
+        prevBsdfPdf = bsdfPdf(bsdf, wi);
         if (bounce == 0u && guideActive) firstBsdfPdf = bsdfPdf(bsdf, wi);
         if (gi && bounce == 0u) {
             giActive = true;
@@ -1401,6 +1681,8 @@ kernel void pt_sample(device PixelState* pixels [[buffer(0)]], constant Uniforms
                       device const Reservoir* prevReservoirs [[buffer(16)]], device const PrimarySurface* prevSurfaces [[buffer(17)]],
                       device const uint* guideHistograms [[buffer(18)]], device atomic_uint* guidePending [[buffer(19)]],
                       device GiSample* giOut [[buffer(20)]], device const GiSample* giPrev [[buffer(21)]],
+                      device const LightRecord* lightRecords [[buffer(22)]], device const LightNode* lightNodes [[buffer(23)]],
+                      device const uint* triangleLight [[buffer(24)]],
                       uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= u.width || gid.y >= u.height) return;
     uint pixel = gid.y * u.width + gid.x;
@@ -1439,10 +1721,11 @@ kernel void pt_sample(device PixelState* pixels [[buffer(0)]], constant Uniforms
         dir = normalize(focusPoint - origin);
     }
     uint rays = 0u;
+    const Lights lights{lightRecords, lightNodes, triangleLight, u.localLights, u.distantLights};
     PathResult s = tracePath(origin, dir, smp, u, verts, lut, primary, bounceGeo, materials, textures, visibleTriangle, rays,
                              reservoirs + pixel, surfaces + pixel, prevReservoirs, prevSurfaces, gid,
                              guideHistograms + guideIndex, guidePending + guideIndex,
-                             giOut + (u.restirGi != 0u ? pixel : 0u), giPrev);
+                             giOut + (u.restirGi != 0u ? pixel : 0u), giPrev, lights);
     p->rays += rays;
     p->pad += s.giCandidates;
     p->rngState = smp.rng.state;

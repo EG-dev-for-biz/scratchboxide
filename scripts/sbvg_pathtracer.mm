@@ -15,7 +15,9 @@
 //                                   frames as <dir>/frame.rgba (8-bit RGBA, display-ready); see serve()
 //
 // backend "metal" (default) traces on the GPU; backend "cpu" traces the same LOD cut with render::PathTracer,
-// the reference the GPU kernels are checked against. The CPU backend needs sun lighting.
+// the reference the GPU kernels are checked against. Both light the scene by the sun and sky or the studio
+// dome, plus the GLB's own lights (emissive materials and KHR_lights_punctual) sampled from the light tree;
+// config.lighting.sampleLights false leaves the lights to be found by BSDF rays alone, for comparison.
 
 #import <Foundation/Foundation.h>
 
@@ -230,6 +232,13 @@ MaterialSource loadMaterials(const std::string& glbPath, const sbvg::File& file,
         material.wrapT = 33071;
         material.metallicFactor = atlas.metallic;
         material.roughnessFactor = atlas.roughness;
+        if (!atlas.emissionImagePath.empty() && atlas.emissionScale > 0.0f) {
+            // The level's emitters, baked: radiance is the atlas (sRGB) times its scale.
+            material.emissiveImage = loadAtlasImage(atlas.emissionImagePath, atlas.level, "emission atlas");
+            material.emissiveWrapS = 33071;
+            material.emissiveWrapT = 33071;
+            material.emissiveFactor = Vec3(atlas.emissionScale, atlas.emissionScale, atlas.emissionScale);
+        }
         if (atlasNormals && !atlas.normalImagePath.empty()) {
             material.normalImage = loadAtlasImage(atlas.normalImagePath, atlas.level, "normal atlas");
             material.normalWrapS = 33071;
@@ -242,12 +251,27 @@ MaterialSource loadMaterials(const std::string& glbPath, const sbvg::File& file,
     return source;
 }
 
+/** The GLB's punctual lights in the file's coordinates (its vertices are the GLB's world less the stored origin). */
+std::vector<gltf::SceneLight> lightsInFile(const gltf::GltfScene& scene, const sbvg::File& file) {
+    const Vec3 origin(static_cast<float>(file.origin[0]), static_cast<float>(file.origin[1]), static_cast<float>(file.origin[2]));
+    std::vector<gltf::SceneLight> out = scene.lights;
+    for (gltf::SceneLight& l : out) l.position = l.position - origin;
+    return out;
+}
+
+std::string lightsJson(const render::lights::LightSet& set, bool sampling) {
+    std::ostringstream s;
+    s << "{\"sampling\":" << (sampling ? "true" : "false") << ",\"triangles\":" << set.triangleLights << ",\"points\":" << set.pointLights
+      << ",\"distant\":" << set.distantCount << ",\"treeNodes\":" << set.nodes.size() << "}";
+    return s.str();
+}
+
 /**
  * The LOD cut as a glTF scene for render::PathTracer, vertices relative to the file origin. With a
  * `source` scene its materials and images are taken over (a default material appended for triangles
  * without one); otherwise one default material, for the uniform clay path.
  */
-gltf::GltfScene sceneFromCut(const sbvg::File& file, const sbvg::Cut& cut, gltf::GltfScene* source) {
+gltf::GltfScene sceneFromCut(const sbvg::File& file, const sbvg::Cut& cut, gltf::GltfScene* source, const std::vector<gltf::SceneLight>& lights) {
     gltf::GltfScene scene;
     scene.ok = true;
     scene.mesh.name = "sbvg_cut";
@@ -258,6 +282,7 @@ gltf::GltfScene sceneFromCut(const sbvg::File& file, const sbvg::Cut& cut, gltf:
         scene.mesh.addVertex(geometry::Vertex(Vec3(v[0], v[1], v[2]), Vec3(v[3], v[4], v[5]), math::Vec2(v[6], v[7]), math::Vec4(1, 1, 1, 1), math::Vec4(0, 0, 0, 1)));
     }
     scene.mesh.indices = cut.indices;
+    scene.lights = lights;
     if (source) {
         scene.materials = source->materials;
         scene.images = std::move(source->images);
@@ -338,6 +363,9 @@ int renderOnce(const std::string& configPath) {
         const bool sceneMaterials = !materialsGlb.empty();
         MaterialSource source;
         if (sceneMaterials) source = loadMaterials(materialsGlb, file, boolOr(config["materials"]["atlasNormals"], true));
+        const bool sampleLights = boolOr(config["lighting"]["sampleLights"], true);
+        const std::vector<gltf::SceneLight> punctual = sampleLights && sceneMaterials ? lightsInFile(source.scene, file) : std::vector<gltf::SceneLight>{};
+        render::lights::LightSet usedLights;
 
         render::RenderOutput out;
         std::string deviceName = "cpu";
@@ -387,17 +415,23 @@ int renderOnce(const std::string& configPath) {
                 tracer.setMaterials(source.scene);
                 texturesUploaded = tracer.textureCount();
             }
+            tracer.setLights(punctual);
+            tracer.setLightSampling(sampleLights);
             deviceName = tracer.deviceName();
             accelerationBuildMs = tracer.accelerationBuildMs();
             out = tracer.render(camera, lighting.lighting, settings, sceneMaterials ? nullptr : &material);
+            usedLights = tracer.lightSet();
         } else {
-            if (lighting.lighting.mode != metalpt::Lighting::Mode::Sky) throw std::runtime_error("backend \"cpu\" (render::PathTracer) needs config.lighting.sun");
-            const gltf::GltfScene scene = sceneFromCut(file, cut, sceneMaterials ? &source.scene : nullptr);
+            const gltf::GltfScene scene = sceneFromCut(file, cut, sceneMaterials ? &source.scene : nullptr, punctual);
             const auto buildStart = std::chrono::steady_clock::now();
             render::PathTracer tracer(scene, false);
             accelerationBuildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - buildStart).count();
             if (!sceneMaterials) tracer.setClayMaterial(material.albedo, material.roughness, material.metallic);
-            out = tracer.render(camera, *lighting.sky, settings);
+            tracer.setLightSampling(sampleLights);
+            const render::Environment environment{lighting.lighting.mode == metalpt::Lighting::Mode::Sky ? lighting.sky.get() : nullptr,
+                                                  lighting.lighting.studioRadiance};
+            out = tracer.render(camera, environment, settings);
+            usedLights = tracer.lightSet();
         }
 
         std::vector<Vec3> beauty = out.color;
@@ -460,6 +494,7 @@ int renderOnce(const std::string& configPath) {
               << "  \"samplesPerPixel\": " << settings.samplesPerPixel << ",\n"
               << "  \"maxBounces\": " << settings.maxBounces << ",\n"
               << "  \"lighting\": " << jsonString(lighting.lighting.mode == metalpt::Lighting::Mode::Sky ? "sky" : "studio") << ",\n"
+              << "  \"lights\": " << lightsJson(usedLights, sampleLights) << ",\n"
               << "  \"file\": { \"clusters\": " << file.clusters.size() << ", \"levels\": " << file.levelCount
               << ", \"vertices\": " << file.vertexCount() << ", \"leafTriangles\": " << file.leafTriangleCount << ", \"atlases\": " << file.atlases.size() << " },\n"
               << "  \"cut\": { \"clusters\": " << cut.clusterIds.size() << ", \"triangles\": " << cut.triangleCount()
@@ -652,6 +687,9 @@ private:
         lightingConfig_ = cmd.has("lighting") ? serialize(cmd["lighting"]) : "{}";
         if (!tracer_) tracer_ = std::make_unique<metalpt::MetalPathTracer>();
         if (sceneMaterials_) tracer_->setMaterials(source_.scene);
+        const bool sampleLights = boolOr(cmd["lighting"]["sampleLights"], true);
+        tracer_->setLights(sampleLights && sceneMaterials_ ? lightsInFile(source_.scene, file_) : std::vector<gltf::SceneLight>{});
+        tracer_->setLightSampling(sampleLights);
         opened_ = true;
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         std::ostringstream s;
@@ -757,7 +795,8 @@ private:
           << ",\"renderWidth\":" << width << ",\"renderHeight\":" << height << ",\"renderScale\":" << renderScale_ << ",\"sampler\":" << jsonString(samplerName)
           << ",\"cut\":{\"clusters\":" << cut_.clusterIds.size() << ",\"triangles\":" << cut_.triangleCount() << ",\"thresholdPx\":" << cutParams_.thresholdPx
           << ",\"rebuilt\":" << ((lodChanged || moved) ? "true" : "false") << ",\"cutMs\":" << cutMs_ << ",\"accelerationBuildMs\":" << accelerationBuildMs << "}"
-          << ",\"lighting\":" << jsonString(lighting_.lighting.mode == metalpt::Lighting::Mode::Sky ? "sky" : "studio") << ",\"targetSpp\":" << targetSpp_ << "}";
+          << ",\"lighting\":" << jsonString(lighting_.lighting.mode == metalpt::Lighting::Mode::Sky ? "sky" : "studio")
+          << ",\"lights\":" << lightsJson(tracer_->lightSet(), tracer_->lightSampling()) << ",\"targetSpp\":" << targetSpp_ << "}";
         emit(s.str());
     }
 
