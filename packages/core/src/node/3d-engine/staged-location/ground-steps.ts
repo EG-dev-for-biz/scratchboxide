@@ -35,7 +35,7 @@ import { frontBevelM, type FootprintTri, type HeightAt } from './road-kerbs';
 import type { RoadMeshPart } from './road-surfaces';
 import { writeStagedGlbFile } from './staged-glb-writer';
 
-export const GROUND_STEPS_VERSION = 'ground-steps/2';
+export const GROUND_STEPS_VERSION = 'ground-steps/3';
 
 /** SCRATCHBOX_STAGED_STEPS=1 rebuilds the steps and ramps the scan melted (and carves under them). Off until the user judges it. */
 export function groundStepsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -52,6 +52,8 @@ export const GROUND_STEPS_PARAMS = {
     /** An incline worth rebuilding: at least this area (m²) and rise (m), and this share of its cells sloping its way (within 35
      *  degrees; the cells beside its walls point elsewhere, a dome's or a berm's every way). */
     minAreaM2: 4, minRiseM: 0.3, minCoherence: 0.35,
+    /** Its cells at least this share of its median slope. */
+    steepShare: 0.5,
     /** Its foot within this of the terrain (m): an inclined roof is no flight. */
     maxFootAboveGroundM: 1.5,
     /** At most this long along its slope (m): longer is a street on a hill, the road's own. */
@@ -164,8 +166,13 @@ export function findInclines(scan: ScanMesh, opts: { groundAt?: (x: number, z: n
         const ul = Math.hypot(ux0, uz0);
         if (!(ul > 0)) continue;
         ux0 /= ul; uz0 /= ul;
-        const kept = cells.filter(v => (gx[v] * ux0 + gz[v] * uz0) / Math.hypot(gx[v], gz[v]) >= Math.cos(35 * Math.PI / 180));
-        const coherence = kept.length / cells.length, areaM2 = kept.length * cell * cell;
+        const aligned = cells.filter(v => (gx[v] * ux0 + gz[v] * uz0) / Math.hypot(gx[v], gz[v]) >= Math.cos(35 * Math.PI / 180));
+        // and as steep as the incline itself: a street's gentler cells joined to the foot of a flight are not the flight (a
+        // uniform ramp keeps them all)
+        const slopes = aligned.map(v => Math.hypot(gx[v], gz[v])).sort((a, b) => a - b);
+        const medianSlope = slopes.length ? slopes[Math.floor(slopes.length / 2)] : 0;
+        const kept = aligned.filter(v => Math.hypot(gx[v], gz[v]) >= P.steepShare * medianSlope);
+        const coherence = aligned.length / cells.length, areaM2 = kept.length * cell * cell;
         if (coherence < P.minCoherence || areaM2 < P.minAreaM2) continue;
         let sx = 0, sz = 0, mx = 0, mz = 0, lo = Infinity, hi = -Infinity, footX = 0, footZ = 0;
         const xs = new Float64Array(kept.length), zs = new Float64Array(kept.length);
@@ -233,11 +240,11 @@ export function readIncline(id: string, inc: ReturnType<typeof findInclines>[num
         // the last sample, so a flight is read on under a portico's roof or a canopy; a jump of more than a riser (a wall, a
         // roof) is a gap
         const s: number[] = [], hs: number[] = [];
-        let last = inc.lo;
+        let last = NaN;
         for (let a = a0 - P.sectionPastM; a <= a1 + P.sectionPastM + P.coverReachM + 1e-9; a += P.sectionStepM) {
             const x = inc.cx + ux * a + vx * b, z = inc.cz + uz * a + vz * b;
-            const y = a < a0 ? h(x, z, inc.lo) : a <= a1 ? h(x, z) : h(x, z, last);
-            if (!(y === y) || Math.abs(y - last) > P.maxRiseEachM + 0.1) continue;
+            const y = a < a0 ? h(x, z, inc.lo) : a <= a1 || !(last === last) ? h(x, z) : h(x, z, last);
+            if (!(y === y) || (last === last && Math.abs(y - last) > P.maxRiseEachM + 0.1)) continue;
             s.push(a); hs.push(y); last = y;
         }
         const level = (from: number, to: number) => {
@@ -322,17 +329,22 @@ export async function modelFlight(r: InclineReading, counter: StepCounter | unde
         if (each >= P.minRiseEachM && each <= P.maxRiseEachM && count >= 1) return finish(count, 'measured', `the scan resolves the steps: a ${(r.runM * 100).toFixed(0)} cm pitch repeats on ${r.periodic} of ${r.sections} cross-sections`);
     }
     if (r.slope <= P.rampMaxSlope) return { ...r, kind: 'ramp' };
-    // a flight the scan melted: counted from Street View, else estimated from a plausible rise
+    // a flight the scan melted: counted from Street View, else estimated from a plausible rise; an estimate whose treads would be
+    // longer than a step's is no flight anyone measured: the incline is drawn as the slope the scan measures
+    const estimate = (why: string): FlightModel => {
+        const n = Math.max(1, Math.round(rise / P.estimateRiseM));
+        return stepped / n > P.maxRunM ? { ...r, kind: 'ramp' } : finish(n, 'generated', why);
+    };
     if (counter) {
         const got = await counter(r);
         if (got.count !== undefined) {
             const each = rise / got.count;
             if (each >= P.minRiseEachM && each <= P.maxRiseEachM) return finish(got.count, 'photo-inferred', `${got.count} steps counted on ${got.views} Street View view${got.views === 1 ? '' : 's'} (${got.note}); the scan melts them into a ${(Math.atan(r.slope) * 180 / Math.PI).toFixed(0)}-degree incline`);
-            return finish(Math.max(1, Math.round(rise / P.estimateRiseM)), 'generated', `Street View counted ${got.count} steps, a ${(each * 100).toFixed(0)} cm rise each, outside ${P.minRiseEachM * 100}-${P.maxRiseEachM * 100} cm: estimated at a ${P.estimateRiseM * 100} cm rise instead`);
+            return estimate(`Street View counted ${got.count} steps, a ${(each * 100).toFixed(0)} cm rise each, outside ${P.minRiseEachM * 100}-${P.maxRiseEachM * 100} cm: estimated at a ${P.estimateRiseM * 100} cm rise instead`);
         }
-        return finish(Math.max(1, Math.round(rise / P.estimateRiseM)), 'generated', `the scan melts the steps and Street View gave no count (${got.reason}): estimated at a ${P.estimateRiseM * 100} cm rise`);
+        return estimate(`the scan melts the steps and Street View gave no count (${got.reason}): estimated at a ${P.estimateRiseM * 100} cm rise`);
     }
-    return finish(Math.max(1, Math.round(rise / P.estimateRiseM)), 'generated', `the scan melts the steps and no Street View count was asked: estimated at a ${P.estimateRiseM * 100} cm rise`);
+    return estimate(`the scan melts the steps and no Street View count was asked: estimated at a ${P.estimateRiseM * 100} cm rise`);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

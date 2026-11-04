@@ -150,6 +150,14 @@ describe('a ramp, a landing, a street on a hill', () => {
         expect(f.sTop - f.sFoot).toBeGreaterThan(LEN - 0.3);
     });
 
+    it('draws a smooth incline steeper than a ramp as its slope when no count gives steps a step\'s tread', async () => {
+        // 1.7 m over 10 m (1:6), 6 m wide, nothing to count it by: 11 estimated steps would need 91 cm treads, no step's
+        const s = scanOf('plaza', (x, z) => (x < 0 ? 0 : x >= 10 || Math.abs(z) > 3 ? 1.7 : 0.17 * x), -3, 13, -5, 5, 0.05);
+        const f = only((await measureSteps(s.scan, s.h)).flights);
+        expect(f.kind).toBe('ramp');
+        expect(f.slope).toBeCloseTo(0.17, 1);
+    });
+
     it('leaves a long street on a hill alone (the road\'s own)', async () => {
         const s = scanOf('hill', x => 0.08 * x, -30, 30, -4, 4, 0.5);
         const r = await measureSteps(s.scan, s.h);
