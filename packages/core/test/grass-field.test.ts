@@ -1,0 +1,160 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
+ *
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
+ ********************************************************************************/
+
+/**
+ * The native grass field (grass-field.ts over scratchbox_grass_field.hpp) on a grid with a known truth: a confident lawn
+ * and a half-confident lawn of equal area, a building footprint and a pond set into the confident lawn, plaza around.
+ * Instance counts must follow the mask area times its confidence, no clump may stand within its reach of a building or
+ * water cell, nothing grows off the mask or past the band, the budget keeps the nearest, and the GLB must carry the
+ * instancing extension with the labels.
+ */
+
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { describe, expect, it } from 'vitest';
+import { buildGrassField, grassFieldGrid, writeGrassFieldGlb, type GrassField, type GrassFieldGrid } from '../src/node/3d-engine/staged-location/grass-field';
+import type { GrassMask } from '../src/node/3d-engine/staged-location/grass-detect';
+import type { GroundModel } from '../src/node/spatial/StreetViewSurveyPlanner';
+
+const N = 60, CELL = 1;
+type Rect = [number, number, number, number];
+const inRect = (x: number, z: number, [x0, z0, x1, z1]: Rect) => x >= x0 && x < x1 && z >= z0 && z < z1;
+// lawns in the scene's own frame (the grid starts at -30, -30)
+const FULL: Rect = [-28, -28, 2, 2], HALF: Rect = [6, -28, 26, 2], BUILDING: Rect = [-20, -20, -12, -12], POND: Rect = [-8, -24, -2, -18];
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'grass-field-'));
+
+function scene(): { grid: GrassFieldGrid; mask: GrassMask } {
+    const M = N * N, mask = new Uint8Array(M), confidence = new Float32Array(M), colour = new Float32Array(M * 3);
+    const top = new Float32Array(M), groundH = new Float32Array(M), building = new Uint8Array(M), water = new Uint8Array(M);
+    for (let k = 0; k < N; k++) for (let i = 0; i < N; i++) {
+        const c = k * N + i, x = -30 + i + 0.5, z = -30 + k + 0.5;
+        groundH[c] = 10; top[c] = 10.03;
+        if (inRect(x, z, BUILDING)) { building[c] = 1; top[c] = 25; continue; }
+        // the mask lies about the pond (a green pool passes the colour test); exclusion must still win
+        if (inRect(x, z, POND)) water[c] = 1;
+        const conf = inRect(x, z, FULL) ? 1 : inRect(x, z, HALF) ? 0.5 : 0;
+        if (!conf) continue;
+        mask[c] = 1; confidence[c] = conf;
+        // the right half of each lawn seen, the left filled (no colour): the nearest seen colour must carry over
+        if (x > -14 || x > 6) colour.set([0.06, 0.12, 0.03], c * 3);
+    }
+    const ground = { cellMeters: CELL, x0: -30, z0: -30, nx: N, nz: N, top, ground: groundH } as unknown as GroundModel;
+    const g = { x0: -30, z0: -30, nx: N, nz: N, cellM: CELL, mask, confidence, colour } as unknown as GrassMask;
+    // the scan over the confident lawn: its ground 0.2 m above the cell surface (snapped to), and a crown far above (ignored)
+    const quad = ([x0, z0, x1, z1]: Rect, y: number) => [x0, y, z0, x1, y, z0, x1, y, z1, x0, y, z0, x1, y, z1, x0, y, z1];
+    const scan = Float32Array.from([...quad(FULL, 10.23), ...quad(FULL, 18)]);
+    return { grid: grassFieldGrid(g, ground, { building, water }, scan), mask: g };
+}
+
+describe('grass field (native, instanced clumps over a grass mask)', () => {
+    const { grid } = scene();
+    let field: GrassField;
+    const all = (f: GrassField) => f.variants.flatMap(v => Array.from({ length: v.confidence.length }, (_, q) => ({
+        x: v.translation[q * 3], y: v.translation[q * 3 + 1], z: v.translation[q * 3 + 2], s: v.scale[q * 3], conf: v.confidence[q], tint: [v.tint[q * 3], v.tint[q * 3 + 1], v.tint[q * 3 + 2]]
+    })));
+
+    it('places instances in proportion to grass area times confidence', async () => {
+        field = await buildGrassField(grid, tmp(), { densityPerM2: 4, bandRadiusM: 200 });
+        const inst = all(field);
+        expect(inst.length).toBe(field.report.instances);
+        // away from the exclusions, each lawn's count follows its area x density x confidence
+        const clear: Rect = [-28, -10, 2, 2], half: Rect = [6, -28, 26, 2];
+        const nClear = inst.filter(p => inRect(p.x, p.z, clear)).length, nHalf = inst.filter(p => inRect(p.x, p.z, half)).length;
+        const expClear = 30 * 12 * 4, expHalf = 20 * 30 * 4 * 0.5;
+        expect(Math.abs(nClear - expClear) / expClear).toBeLessThan(0.08);
+        expect(Math.abs(nHalf - expHalf) / expHalf).toBeLessThan(0.1);
+        expect(field.report.stats.bandGrassM2).toBe(30 * 30 + 20 * 30 - 8 * 8 - 6 * 6);
+        expect(field.report.stats.expected).toBeCloseTo((30 * 30 - 8 * 8 - 6 * 6) * 4 + 20 * 30 * 4 * 0.5, 0);
+        // the carried confidence is the cell's
+        for (const p of inst) expect(p.conf).toBeCloseTo(inRect(p.x, p.z, FULL) ? 1 : 0.5, 5);
+    });
+
+    it('grows nothing off the mask, and no clump within its reach of a building or water', () => {
+        const inst = all(field), reach = field.report.reachM;
+        expect(field.report.stats.nearExcluded).toBeGreaterThan(0);
+        expect(field.report.stats.snapped + field.report.stats.unsnapped).toBe(field.report.instances);
+        expect(field.report.stats.snapped).toBe(inst.filter(p => inRect(p.x, p.z, FULL)).length);
+        const dist = (x: number, z: number, [x0, z0, x1, z1]: Rect) => Math.hypot(Math.max(x0 - x, 0, x - x1), Math.max(z0 - z, 0, z - z1));
+        for (const p of inst) {
+            expect(inRect(p.x, p.z, FULL) || inRect(p.x, p.z, HALF)).toBe(true);
+            expect(dist(p.x, p.z, BUILDING)).toBeGreaterThan(reach * p.s);
+            expect(dist(p.x, p.z, POND)).toBeGreaterThan(reach * p.s);
+            // standing on the scan's ground where it has one near the cell surface, else on the cell surface; tinted
+            // toward the seen colour (never the white fallback)
+            expect(p.y).toBeCloseTo(inRect(p.x, p.z, FULL) ? 10.23 : 10.03, 3);
+            expect(p.tint[1]).toBeLessThan(0.3);
+            expect(p.tint[1]).toBeGreaterThan(p.tint[0]);
+        }
+    });
+
+    it('keeps to the band, and past the budget keeps the nearest', async () => {
+        const banded = await buildGrassField(grid, tmp(), { densityPerM2: 4, bandRadiusM: 10, centreX: 16, centreZ: -13 });
+        const inst = all(banded);
+        expect(inst.length).toBeGreaterThan(0);
+        for (const p of inst) expect(Math.hypot(p.x - 16, p.z + 13)).toBeLessThanOrEqual(10);
+        // about pi r^2 of half-confident lawn
+        expect(Math.abs(inst.length - Math.PI * 100 * 2) / (Math.PI * 100 * 2)).toBeLessThan(0.12);
+        const capped = await buildGrassField(grid, tmp(), { densityPerM2: 4, bandRadiusM: 200, centreX: 16, centreZ: -13, maxInstances: 300 });
+        expect(capped.report.instances).toBe(300);
+        expect(capped.report.stats.overBudget).toBe(field.report.instances - 300);
+        const r = capped.report.stats.radiusReachedM;
+        expect(all(capped).every(p => Math.hypot(p.x - 16, p.z + 13) <= r + 1e-4)).toBe(true);
+        // the kept ones are exactly the full run's instances that near the centre
+        const nearer = all(field).filter(p => Math.hypot(p.x - 16, p.z + 13) < r - 1e-3).length;
+        expect(nearer).toBeLessThanOrEqual(300);
+    });
+
+    it('builds real clump variants and writes an instanced GLB with its labels', () => {
+        expect(field.variants.length).toBe(4);
+        for (const v of field.variants) {
+            expect(v.positions.length / 3).toBeGreaterThan(22 * 15);
+            expect(v.indices.length % 3).toBe(0);
+            expect(Math.max(...v.indices)).toBeLessThan(v.positions.length / 3);
+            // blades rise from the anchor: a few centimetres to well under a metre
+            expect(v.max[1]).toBeGreaterThan(0.04);
+            expect(v.max[1]).toBeLessThan(0.5);
+        }
+        const file = path.join(tmp(), 'blades.glb');
+        const tris = writeGrassFieldGlb(file, field, { sb: { provenance: { label: 'generated', colour: { label: 'photo-inferred' } } } });
+        expect(tris).toBe(field.report.instancedTriangles);
+        const glb = fs.readFileSync(file);
+        expect(glb.readUInt32LE(0)).toBe(0x46546c67);
+        const json = JSON.parse(glb.subarray(20, 20 + glb.readUInt32LE(12)).toString('utf8'));
+        expect(json.extensionsUsed).toContain('EXT_mesh_gpu_instancing');
+        const counts = json.nodes.map((n: { extensions: { EXT_mesh_gpu_instancing: { attributes: Record<string, number> } } }) => {
+            const a = n.extensions.EXT_mesh_gpu_instancing.attributes;
+            expect(Object.keys(a).sort()).toEqual(['ROTATION', 'SCALE', 'TRANSLATION', '_COLOR_0', '_CONFIDENCE']);
+            return json.accessors[a.TRANSLATION].count;
+        });
+        expect(counts.reduce((s: number, c: number) => s + c, 0)).toBe(field.report.instances);
+        expect(json.nodes[0].extras.sb.provenance.label).toBe('generated');
+        expect(json.nodes[0].extras.maskConfidence.max).toBeLessThanOrEqual(1);
+    });
+
+    it('stands blades under crowns on the nearest seen ground, not the smooth terrain below it, in the nearest seen colour', () => {
+        // a park whose real ground lies 0.4 m above the street-level terrain; its middle hidden under a 15 m crown
+        const n = 20, M = n * n, top = new Float32Array(M), groundH = new Float32Array(M).fill(5), mask = new Uint8Array(M);
+        for (let k = 0; k < n; k++) for (let i = 0; i < n; i++) {
+            const c = k * n + i, hidden = i >= 6 && i < 14 && k >= 6 && k < 14;
+            top[c] = hidden ? 20 : 5.4; mask[c] = hidden ? 2 : (i < 2 ? 1 : 0);
+        }
+        // the hidden patch touches no seen grass: only the strip at the west edge was seen green
+        const colour = new Float32Array(M * 3);
+        for (let k = 0; k < n; k++) colour.set([0.05, 0.1, 0.02], (k * n) * 3);
+        const ground = { cellMeters: 1, x0: 0, z0: 0, nx: n, nz: n, top, ground: groundH } as unknown as GroundModel;
+        const g = { x0: 0, z0: 0, nx: n, nz: n, cellM: 1, mask, confidence: new Float32Array(M).fill(0.5), colour } as unknown as GrassMask;
+        const grid = grassFieldGrid(g, ground, {});
+        expect(grid.surfaceY[10 * n + 10]).toBeCloseTo(5.4, 5);
+        expect(grid.surfaceY[2 * n + 1]).toBeCloseTo(5.4, 5);
+        // its colour is the nearest seen grass's, carried across the ground between
+        expect(Array.from(grid.colour.subarray((10 * n + 10) * 3, (10 * n + 10) * 3 + 3))).toEqual(Array.from(Float32Array.from([0.05, 0.1, 0.02])));
+        expect(grid.colour[(2 * n + 4) * 3 + 1]).toBe(0);
+    });
+});
