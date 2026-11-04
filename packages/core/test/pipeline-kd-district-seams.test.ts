@@ -11,19 +11,24 @@ import { describe, expect, it } from 'vitest';
 import { chunkTerritory, joinChunkGlb, planDistrictChunks } from '../src/node/3d-engine/staged-location/pipeline-k/district-chunks';
 import { addSeamEdges, applySeamGain, cutChunkLayer, sampleSeamColour, seamCoverage, seamFieldAt, seamOwner, solveSeamGains, type SeamEdges } from '../src/node/3d-engine/staged-location/pipeline-k/district-seams';
 import { parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
-import { writeStagedGlb } from '../src/node/3d-engine/staged-location/staged-glb-writer';
+import { writeStagedGlb, type StagedGlbNode } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 
-/** A grid of ground over x0..x1, z0..z1 at `step`, its height y(x, z), uv over the grid, drawn with one flat grey photo. */
-function ground(x0: number, x1: number, z0: number, z1: number, step: number, y: (x: number, z: number) => number, grey: number | [number, number, number] | ((row: number) => number)): Buffer {
+/** A grid over x0..x1, z0..z1 at `step`, its height y(x, z), uv over the grid: one node. */
+function grid(name: string, x0: number, x1: number, z0: number, z1: number, step: number, y: (x: number, z: number) => number, extras?: Record<string, unknown>): StagedGlbNode {
     const nx = Math.round((x1 - x0) / step), nz = Math.round((z1 - z0) / step);
     const pos: number[] = [], uv: number[] = [], idx: number[] = [];
     for (let j = 0; j <= nz; j++) for (let i = 0; i <= nx; i++) { const x = x0 + i * step, z = z0 + j * step; pos.push(x, y(x, z), z); uv.push(i / nx, j / nz); }
     for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { const a = j * (nx + 1) + i; idx.push(a, a + nx + 1, a + 1, a + 1, a + nx + 1, a + nx + 2); }
+    return { name, positions: Float32Array.from(pos), indices: Uint32Array.from(idx), uv: Float32Array.from(uv), ...(extras ? { extras } : {}) };
+}
+
+/** A grid of ground over x0..x1, z0..z1 at `step`, its height y(x, z), uv over the grid, drawn with one flat grey photo. */
+function ground(x0: number, x1: number, z0: number, z1: number, step: number, y: (x: number, z: number) => number, grey: number | [number, number, number] | ((row: number) => number)): Buffer {
     // a 4 x 4 photo: one grey, or a grey per row (its rows run along z)
     const px = Uint8Array.from({ length: 48 }, (_, i) => (typeof grey === 'number' ? grey : Array.isArray(grey) ? grey[i % 3] : grey(Math.floor(i / 12))));
-    return writeStagedGlb([{ name: 'ground', positions: Float32Array.from(pos), indices: Uint32Array.from(idx), uv: Float32Array.from(uv) }], { texture: { bytes: encodePng(4, 4, px, 3), mimeType: 'image/png' } });
+    return writeStagedGlb([grid('ground', x0, x1, z0, z1, step, y)], { texture: { bytes: encodePng(4, 4, px, 3), mimeType: 'image/png' } });
 }
 
 /** Every live triangle of a GLB (degenerate ones, the cut's dropped originals, left out). */
@@ -161,16 +166,22 @@ describe('pipeline K-D: the seam stage, one chunk at a time', () => {
     it("cuts two chunks' streets across a cell line by who keeps the ground: none drawn twice, none lost", () => {
         const identity = Float64Array.from([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
         const y = (x: number, z: number) => 0.01 * x + 0.002 * z;
-        // each chunk's build drew the same street (z -4..4) on the same tiles, at its own tessellation, past its own cell
-        const sa = ground(40, 80, -4, 4, 0.5, y, 90), sb = ground(40.2, 80.2, -4, 4, 0.8, y, 90);
+        // each chunk's build drew the same street (z -4..4) on the same tiles, at its own tessellation, past its own cell: two
+        // parts, each its own node with its label and method (as SB-Roadie's kerbed streets are written)
+        const parts = [
+            { name: 'carriageway_measured', z0: -4, z1: 0, extras: { part: 'carriageway', provenance: 'measured', method: 'swept through the measured camber' } },
+            { name: 'gutter_generated', z0: 0, z1: 4, extras: { part: 'gutter', provenance: 'generated', method: 'a plausible pan where the scan resolves no dip' } }
+        ];
+        const street = (x0: number, x1: number, step: number) => writeStagedGlb(parts.map(p => grid(p.name, x0, x1, p.z0, p.z1, step, y, p.extras)), { texture: { bytes: encodePng(4, 4, new Uint8Array(48).fill(90), 3), mimeType: 'image/png' } });
+        const sa = street(40, 80, 0.5), sb = street(40.2, 80.2, 0.8);
         // each carved its own ground under it (the street's band of the grid left out), the ground joined with the seam band
         const carved = (g: Buffer) => joinChunkGlb(g, identity, (x, z) => Math.abs(z) > 4).glb;
         const ga = carved(ground(40, 63, -10, 10, 0.5, y, 100)), gb = carved(ground(57, 80, -10, 10, 0.5, y, 100));
         const owner = seamOwner(plan, new Map([[centre, seamCoverage(ga)], [east, seamCoverage(gb)]]), [centre, east]);
         // joined as the chunks stage joins a layer that is not a tree: with the seam band past each cell, so drawn twice there
         const ja = joinChunkGlb(sa, identity, chunkTerritory(plan, centre, 3)).glb, jb = joinChunkGlb(sb, identity, chunkTerritory(plan, east, 3)).glb;
-        const street = (80.2 - 40) * 8;
-        expect(planArea(triangles(ja)) + planArea(triangles(jb)) - street).toBeGreaterThan(5 * 8);
+        const whole = (80.2 - 40) * 8;
+        expect(planArea(triangles(ja)) + planArea(triangles(jb)) - whole).toBeGreaterThan(5 * 8);
         const subject = "as measured: the chunk's streets";
         const ca = cutChunkLayer(ja, plan, centre, { owner, subject }), cb = cutChunkLayer(jb, plan, east, { owner, subject });
         const ta = triangles(ca.glb), tb = triangles(cb.glb);
@@ -205,10 +216,21 @@ describe('pipeline K-D: the seam stage, one chunk at a time', () => {
         expect(ca.report.cut).toBeGreaterThan(0);
         expect(cb.report.cut).toBeGreaterThan(0);
         expect(ca.report.snapped + cb.report.snapped).toBe(0);
-        // the cut pieces say what they are: the streets as measured, cut, nothing moved
-        const notes = parseGlbBytes(cb.glb).json.meshes.flatMap((m: any) => m.primitives).map((p: any) => p.extras?.sbDistrictSeam?.provenance).filter(Boolean);
-        expect(notes.length).toBeGreaterThan(0);
-        for (const n of notes) expect(n).toBe("as measured: the chunk's streets cut at its cell lines");
+        for (const [joined, cut] of [[ja, ca.glb], [jb, cb.glb]] as const) {
+            const before = parseGlbBytes(joined).json, after = parseGlbBytes(cut).json;
+            // every part keeps its node, its name and its label and method; its kept pieces are drawn in its own mesh
+            expect(after.nodes.map((n: any) => [n.name, n.extras])).toEqual(before.nodes.map((n: any) => [n.name, n.extras]));
+            for (const n of after.nodes.filter((q: any) => q.mesh !== undefined)) {
+                const part = parts.find(p => p.name === n.name)!;
+                const g = parseGlbBytes(cut), pieces = after.meshes[n.mesh].primitives.filter((p: any) => p.extras?.sbDistrictSeam);
+                expect(pieces.length).toBe(1);
+                // the cut pieces say what they are: the streets as measured, cut, nothing moved
+                expect(pieces[0].extras.sbDistrictSeam.provenance).toBe("as measured: the chunk's streets cut at its cell lines");
+                const Z = readAccessor(g, pieces[0].attributes.POSITION).data.filter((_, i) => i % 3 === 2);
+                expect(Math.min(...Z)).toBeGreaterThanOrEqual(part.z0 - 1e-6);
+                expect(Math.max(...Z)).toBeLessThanOrEqual(part.z1 + 1e-6);
+            }
+        }
     });
 
     it("gives each triangle's cut corner that triangle's own UVs across a UV seam", () => {
