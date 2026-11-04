@@ -1495,7 +1495,8 @@ function roadCarver(cache: StageCache, roads: RoadSurface[], footprint: CarveFoo
 }
 
 /** A new surface's layer (the kerbed streets, the steps) with its photo seen from above taken again from `twinFile` over the
- *  same planar frame its texture coordinates read; undefined when its file is gone or its texture is not planar. */
+ *  same planar frame its texture coordinates read, at its own level; undefined when its file is gone or its texture is not
+ *  planar. */
 function recolourFromTwin(cache: StageCache, layer: StagedLayer, twinFile: string, tag: string): { url: string; bytes: number; ms: number; cached: boolean } | undefined {
     const source = path.join(cache.modelsDir, path.basename(layer.url));
     if (!fs.existsSync(source)) return undefined;
