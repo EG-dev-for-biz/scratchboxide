@@ -31,6 +31,8 @@
  * material (factors only, no texture maps); a clay build ignores them and gives every part studio clay.
  */
 
+import { expandBlueprintParts, validateBlueprintLoft, validateOutlines, type BlueprintLoft, type LoftSection, type ObjectOutlines } from './blueprint-loft';
+
 export type Vec3 = [number, number, number];
 
 /** Where a child meets its parent: `u` along the parent (0..1), `angleDeg` around it, then along the surface normal. */
@@ -59,6 +61,13 @@ export interface SweepOperator {
     twistDegAlong?: Array<[number, number]>;
     /** Periodic radial ribbing along (and optionally around) the sweep. */
     modulation?: { amplitudeMeters: number; cyclesPerMeter: number; cyclesAround: number };
+    /**
+     * In place of controlPoints and profile: the slice of the spec's blueprint this part is lofted from, straight along
+     * Z through the blueprint's stations (blueprint-loft.ts). A root part only; the spec must carry blueprint.
+     */
+    fromBlueprint?: BlueprintLoft;
+    /** The rings a fromBlueprint block expands to for the build (never authored; not kept in a stored spec). */
+    sections?: LoftSection[];
 }
 
 export interface RevolveOperator {
@@ -186,6 +195,8 @@ export interface ObjectBuildSpec {
     expectedBodies: number;
     observations: string[];
     parts: ObjectPartSpec[];
+    /** The object's blueprint outlines (object_blueprint_outlines), which fromBlueprint parts are lofted from. */
+    blueprint?: ObjectOutlines;
 }
 
 /**
@@ -271,8 +282,8 @@ export const PART_MATERIAL_JSON_SCHEMA: Record<string, unknown> = {
  * schema cannot state, such as "exactly one operator block per part", are enforced by `validateObjectBuildSpec`.
  * With `materials: false` (a clay build) parts have no material block to fill.
  */
-export function objectBuildSpecJsonSchema(options: { materials: boolean }): Record<string, unknown> {
-    const base = OBJECT_BUILD_SPEC_JSON_SCHEMA as any;
+export function objectBuildSpecJsonSchema(options: { materials: boolean; blueprint?: boolean }): Record<string, unknown> {
+    const base = options.blueprint ? withBlueprintSweeps(OBJECT_BUILD_SPEC_JSON_SCHEMA as any) : OBJECT_BUILD_SPEC_JSON_SCHEMA as any;
     if (!options.materials) return base;
     const items = base.properties.parts.items;
     return {
@@ -285,6 +296,56 @@ export function objectBuildSpecJsonSchema(options: { materials: boolean }): Reco
                     ...items,
                     properties: { ...items.properties, material: PART_MATERIAL_JSON_SCHEMA },
                     propertyOrdering: [...items.propertyOrdering, 'material']
+                }
+            }
+        }
+    };
+}
+
+/** The schema with a sweep's fromBlueprint block, which stands in for its controlPoints and profile. */
+function withBlueprintSweeps(base: any): any {
+    const items = base.properties.parts.items;
+    const sweep = items.properties.sweep;
+    const m = (d: string) => num(d);
+    return {
+        ...base,
+        properties: {
+            ...base.properties,
+            parts: {
+                ...base.properties.parts,
+                items: {
+                    ...items,
+                    properties: {
+                        ...items.properties,
+                        sweep: {
+                            ...sweep,
+                            properties: {
+                                ...sweep.properties,
+                                fromBlueprint: {
+                                    type: 'object',
+                                    description: 'Root parts only, in place of controlPoints and profile: loft this part straight along Z through the blueprint\'s stations, each section the blueprint\'s outline there. Every field is optional and narrows the slice.',
+                                    properties: {
+                                        yFromMeters: m('Lowest height kept.'),
+                                        yToMeters: m('Highest height kept.'),
+                                        fromTopMeters: m('Keep only this depth under the outline\'s top at each station (a roof panel).'),
+                                        zFromMeters: m('Rearmost station kept.'),
+                                        zToMeters: m('Frontmost station kept.'),
+                                        insetMeters: m('Shrink the half width by this much; negative grows it.'),
+                                        clearances: {
+                                            type: 'array',
+                                            items: {
+                                                type: 'object',
+                                                properties: { zMeters: m('Circle centre along the length.'), yMeters: m('Circle centre height.'), radiusMeters: m('Circle radius.') },
+                                                required: ['zMeters', 'yMeters', 'radiusMeters']
+                                            },
+                                            description: 'Circles (side view) the underside is lifted over, such as a wheel arch round its hub.'
+                                        }
+                                    }
+                                }
+                            },
+                            required: []
+                        }
+                    }
                 }
             }
         }
@@ -494,6 +555,7 @@ export function validateObjectBuildSpec(input: unknown, options: { requireMateri
         errors.push('parts must be a non-empty array');
         return errors;
     }
+    if (given(spec.blueprint)) errors.push(...validateOutlines(spec.blueprint));
     if (spec.parts.length > OBJECT_SPEC_LIMITS.maxParts) {
         errors.push(`parts has ${spec.parts.length} entries; at most ${OBJECT_SPEC_LIMITS.maxParts} are allowed`);
     }
@@ -592,7 +654,7 @@ export function validateObjectBuildSpec(input: unknown, options: { requireMateri
         }
 
         const isChild = given(part.parentId);
-        if (op === 'sweep') validateSweep(part.sweep, where, isChild, errors, pointInReach);
+        if (op === 'sweep') validateSweep(part.sweep, where, isChild, errors, pointInReach, given(spec.blueprint));
         if (op === 'revolve') validateRevolve(part.revolve, where, isChild, errors, pointInReach);
         if (op === 'replicate') validateReplicate(part.replicate, id, where, byId, operatorOf, errors, pointInReach);
         if (op === 'relief') validateRelief(part.relief, where, byId, operatorOf, errors, reach);
@@ -773,10 +835,17 @@ function validateSweep(
     where: string,
     isChild: boolean,
     errors: string[],
-    pointInReach: (p: number[], where: string, field: string) => void
+    pointInReach: (p: number[], where: string, field: string) => void,
+    hasBlueprint = false
 ): void {
     if (!isRecord(sweep)) {
         errors.push(`${where}: sweep must be an object`);
+        return;
+    }
+    if (given(sweep.fromBlueprint)) {
+        errors.push(...validateBlueprintLoft(sweep.fromBlueprint, where));
+        if (isChild) errors.push(`${where}: a sweep lofted fromBlueprint is a root part, in object coordinates; remove parentId and attach`);
+        if (!hasBlueprint) errors.push(`${where}: sweep.fromBlueprint needs the spec's blueprint outlines, and this spec has none`);
         return;
     }
     const pts = sweep.controlPoints;
@@ -1042,6 +1111,12 @@ export function toPythonLiteral(value: unknown, indent = 0): string {
  * The build script stored with the scene (data.pythonGenerator.sourceCode): running it rebuilds the object from SPEC.
  * The object is changed through build_3d_object_from_reference with the edited spec, which keeps it at its place.
  */
+/** The spec as the build reads it: fromBlueprint parts already lofted, so the outlines themselves are not needed. */
+function withoutBlueprint(spec: ObjectBuildSpec): ObjectBuildSpec {
+    const { blueprint: _b, ...rest } = spec;
+    return rest;
+}
+
 export function buildObjectSpecScript(spec: ObjectBuildSpec, options: { clay?: boolean } = {}): string {
     return [
         '# Built by build_3d_object_from_reference from SPEC (metres, +Y up). To change the object, pass the edited',
@@ -1051,7 +1126,7 @@ export function buildObjectSpecScript(spec: ObjectBuildSpec, options: { clay?: b
             : '# Each part\'s material factors become its glTF material; a part without one is studio clay.',
         'import scratchbox as sb',
         '',
-        `SPEC = ${toPythonLiteral(spec)}`,
+        `SPEC = ${toPythonLiteral(withoutBlueprint(expandBlueprintParts(spec)))}`,
         '',
         `sb.io.write_glb(OUTPUT_GLB_PATH, sb.object_spec.build(SPEC${options.clay ? ', clay=True' : ''}))`,
         ''

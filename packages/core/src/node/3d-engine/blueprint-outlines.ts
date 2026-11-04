@@ -38,7 +38,9 @@ import { isModelNotFoundError } from '../gemini/gemini-client';
 import type { RgbaImage } from '../image-codec-ffmpeg';
 import type { TriangleSoup } from './part-connectivity';
 
-export type Vec3 = [number, number, number];
+import type { FrontStation, ObjectOutlines, PlanStation, SideStation, Vec3 } from '../../common/spatial/blueprint-loft';
+
+export type { FrontStation, ObjectOutlines, PlanStation, SideStation, Vec3 };
 
 /** The model the views are drawn with first; REFERENCE_IMAGE_MODEL stands in when it is not served. */
 export const BLUEPRINT_IMAGE_MODEL = 'gemini-3.1-flash-image';
@@ -65,20 +67,6 @@ export interface Silhouette {
     background: [number, number, number];
     /** Share of the image the object covers. */
     coverage: number;
-}
-
-export interface SideStation { z: number; top: number; bottom: number }
-export interface PlanStation { z: number; halfWidth: number }
-export interface FrontStation { y: number; halfWidth: number }
-
-export interface ObjectOutlines {
-    /** [width X, height Y, length Z] the outlines are scaled to (blueprint) or measure (a build). */
-    sizeMeters: Vec3;
-    side: SideStation[];
-    plan: PlanStation[];
-    front: FrontStation[];
-    /** Runs along Z where the side bottom line touches the ground, front first: [start, end, centre]. */
-    groundContacts: Array<{ zFrom: number; zTo: number; zCentre: number }>;
 }
 
 export interface BlueprintView {

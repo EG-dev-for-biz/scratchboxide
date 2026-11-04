@@ -334,9 +334,40 @@ def _validate_crown(crown, where, errors, in_reach):
             errors.append("%s: crown.trunkRadiusMeters must be more than 0 and under 0.2 of heightMeters" % where)
 
 
+def _validate_sections(sweep, where, is_child, errors, in_reach):
+    """A loft's rings: 2-128 sections at increasing z, each the same number (8-256) of [x, y] points."""
+    secs = sweep["sections"]
+    if is_child:
+        errors.append("%s: a lofted sweep (sections) is a root part, in object coordinates" % where)
+    if not isinstance(secs, list) or not 2 <= len(secs) <= 128:
+        errors.append("%s: sweep.sections must have 2-128 sections" % where)
+        return
+    count = None
+    last_z = None
+    for i, sec in enumerate(secs):
+        pts = sec.get("points") if isinstance(sec, dict) else None
+        if not isinstance(sec, dict) or not _is_num(sec.get("z")) or not isinstance(pts, list) or not 8 <= len(pts) <= 256 \
+                or not all(_is_vec(p, 2) for p in pts):
+            errors.append("%s: sweep.sections[%d] must be {z, points: 8-256 [x, y]}" % (where, i))
+            return
+        if count is not None and len(pts) != count:
+            errors.append("%s: every sweep.sections ring must have the same number of points" % where)
+            return
+        count = len(pts)
+        if last_z is not None and sec["z"] <= last_z:
+            errors.append("%s: sweep.sections must run in increasing z" % where)
+            return
+        last_z = sec["z"]
+        for p in pts:
+            in_reach((p[0], p[1], sec["z"]), where, "sweep.sections[%d]" % i)
+
+
 def _validate_sweep(sweep, where, is_child, errors, in_reach):
     if not isinstance(sweep, dict):
         errors.append("%s: sweep must be an object" % where)
+        return
+    if "sections" in sweep:
+        _validate_sections(sweep, where, is_child, errors, in_reach)
         return
     pts = sweep.get("controlPoints")
     if not isinstance(pts, list) or not 2 <= len(pts) <= 64 or not all(_is_vec(p, 3) for p in pts):
@@ -738,8 +769,91 @@ def _rmf_frames(points, closed, up_hint, field="sweep.controlPoints"):
     return tangents, normals
 
 
+def _build_loft(part, origin, edge, relief_ops):
+    """
+    A sweep straight along +Z through measured rings (sweep.sections, from a blueprint): each ring a closed list of
+    [x, y] points in the plane at its z, all rings the same length and starting at corresponding points. The rings are
+    the surface's rows, densified between sections no further apart than `edge`; the ends are capped flat.
+    """
+    secs = sorted(part["sweep"]["sections"], key=lambda sec: sec["z"])
+    count = len(secs[0]["points"])
+    z0, z1 = float(secs[0]["z"]), float(secs[-1]["z"])
+    total = z1 - z0
+    if total < 1e-6:
+        raise SpecError('part "%s" sweep.sections: the sections have no length along z' % part["id"])
+    rings = [[(float(x), float(y), float(sec["z"])) for x, y in sec["points"]] for sec in secs]
+    rows, us = [], []
+    for k in range(len(rings)):
+        a = rings[k]
+        rows.append([_add(origin, p) for p in a])
+        us.append((a[0][2] - z0) / total)
+        if k + 1 < len(rings):
+            b = rings[k + 1]
+            steps = int(math.ceil((b[0][2] - a[0][2]) / max(edge, 1e-6)))
+            for s_ in range(1, steps):
+                w = s_ / float(steps)
+                rows.append([_add(origin, _lerp(pa, pb, w)) for pa, pb in zip(a, b)])
+                us.append((a[0][2] + (b[0][2] - a[0][2]) * w - z0) / total)
+    _check_grid_budget(part["id"], len(rows), count)
+    surface = _Surface("sweep", part["id"])
+    surface.us, surface.vs, surface.closed_u, surface.length = us, [j / float(count) for j in range(count)], False, total
+    centres = [_mul(_add_all(row), 1.0 / count) for row in rows]
+    for i, row in enumerate(rows):
+        prev_row, next_row = rows[max(i - 1, 0)], rows[min(i + 1, len(rows) - 1)]
+        out = []
+        for j in range(count):
+            along = _sub(next_row[j], prev_row[j])
+            around = _sub(row[(j + 1) % count], row[(j - 1) % count])
+            n = _cross(around, along)
+            if _length(n) < 1e-12:
+                n = _sub(row[j], centres[i])
+            if _dot(n, _sub(row[j], centres[i])) < 0:
+                n = _mul(n, -1.0)
+            out.append(_unit(n, "loft normal") if _length(n) > 1e-12 else (0.0, 1.0, 0.0))
+        surface.rows.append(row)
+        surface.normals_out.append(out)
+        surface.pole.append(False)
+        surface.circumference.append(sum(_length(_sub(row[(j + 1) % count], row[j])) for j in range(count)))
+    surface.caps = [(0, centres[0], (0.0, 0.0, -1.0)), (len(rows) - 1, centres[-1], (0.0, 0.0, 1.0))]
+    surface._loft = True
+    surface._centres = centres
+    return surface
+
+
+def _add_all(points):
+    x = y = z = 0.0
+    for p in points:
+        x += p[0]
+        y += p[1]
+        z += p[2]
+    return (x, y, z)
+
+
+def _loft_point(surface, u, angle_deg):
+    """Attach point and outward normal on a loft: its rings interpolated at u, at angle_deg around them."""
+    if u <= 1e-9:
+        return surface._centres[0], (0.0, 0.0, -1.0)
+    if u >= 1 - 1e-9:
+        return surface._centres[-1], (0.0, 0.0, 1.0)
+    us = surface.us
+    i = max(0, min(len(us) - 2, _bisect(us, u)))
+    w = (u - us[i]) / (us[i + 1] - us[i]) if us[i + 1] > us[i] else 0.0
+    count = len(surface.vs)
+    v = (angle_deg / 360.0) % 1.0 * count
+    j = int(math.floor(v)) % count
+    f = v - math.floor(v)
+    jn = (j + 1) % count
+    p_i = _lerp(surface.rows[i][j], surface.rows[i][jn], f)
+    p_n = _lerp(surface.rows[i + 1][j], surface.rows[i + 1][jn], f)
+    n_i = _lerp(surface.normals_out[i][j], surface.normals_out[i][jn], f)
+    n_n = _lerp(surface.normals_out[i + 1][j], surface.normals_out[i + 1][jn], f)
+    return _lerp(p_i, p_n, w), _unit(_lerp(n_i, n_n, w), "loft normal")
+
+
 def _build_sweep(part, origin, edge, relief_ops):
     sw = part["sweep"]
+    if "sections" in sw:
+        return _build_loft(part, origin, edge, relief_ops)
     closed = bool(sw["closedLoop"])
     smoothing = float(sw["smoothing"])
     ctrl = [_add(origin, tuple(float(x) for x in p)) for p in sw["controlPoints"]]
@@ -879,6 +993,8 @@ def _part_extent(part):
         mer = part["revolve"]["meridian"]
         zs = [float(p[0]) for p in mer]
         dims = [2.0 * max(float(p[1]) for p in mer), max(zs) - min(zs)]
+    elif part.get("sweep") and "sections" in part["sweep"]:
+        dims = [_loft_extent(part["sweep"])[0]]
     elif part.get("sweep"):
         sw = part["sweep"]
         dims = [min(min(float(k["widthMeters"]), float(k["heightMeters"])) for k in sw["profile"])]
@@ -1066,6 +1182,8 @@ def _revolve_point(surface, u, angle_deg):
 
 
 def _surface_point(surface, u, angle_deg):
+    if getattr(surface, "_loft", False):
+        return _loft_point(surface, u, angle_deg)
     if surface.kind == "sweep":
         return _sweep_point(surface, u, angle_deg)
     return _revolve_point(surface, u, angle_deg)
@@ -1307,7 +1425,22 @@ def _vertex_normals(mesh):
 # Spec -> geometry
 # ---------------------------------------------------------------------------
 
+def _loft_extent(sw):
+    """(smallest ring size, mean ring perimeter, length along z) of a loft's sections."""
+    sizes, perims = [], []
+    for sec in sw["sections"]:
+        pts = sec["points"]
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        sizes.append(min(max(xs) - min(xs), max(ys) - min(ys)))
+        perims.append(sum(math.hypot(pts[(j + 1) % len(pts)][0] - pts[j][0], pts[(j + 1) % len(pts)][1] - pts[j][1]) for j in range(len(pts))))
+    zs = [sec["z"] for sec in sw["sections"]]
+    return min(sizes), sum(perims) / len(perims), max(zs) - min(zs)
+
+
 def _estimate_area(part):
+    if part.get("sweep") and "sections" in part["sweep"]:
+        _, perim, length = _loft_extent(part["sweep"])
+        return length * perim
     if part.get("sweep"):
         sw = part["sweep"]
         pts = sw["controlPoints"]
