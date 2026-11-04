@@ -21,8 +21,9 @@ import * as jpegJs from 'jpeg-js';
 import { describe, expect, it } from 'vitest';
 import { assembleGlb, parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
-import { fillDirection, parseVehicleBatchReply, parseVehicleReply, removeVehicles, vehicleRemovalParams, VEHICLE_REMOVAL_PARAMS, type VehicleBatchJudge, type VehicleJudge } from '../src/node/3d-engine/staged-location/vehicle-removal';
+import { parseVehicleBatchReply, parseVehicleReply, removeVehicles, vehicleRemovalParams, VEHICLE_REMOVAL_PARAMS, type VehicleBatchJudge, type VehicleJudge } from '../src/node/3d-engine/staged-location/vehicle-removal';
 import { buildGroundModel, loadScanMesh } from '../src/node/spatial/StreetViewSurveyPlanner';
+import { readStructure } from '../src/node/3d-engine/staged-location/surface-infill-synthesis';
 
 const HALF = 15, STEP = 0.25, TEX = 600;
 const SLOPE = 0.02;
@@ -361,19 +362,21 @@ describe('the patch paint follows the lanes', () => {
         expect(busLane / busSamples).toBeGreaterThan(0.8);
     });
 
-    it('reads the direction the markings run from the photo', () => {
+    it('reads the direction the markings run from the photo (the surface infill\'s reading)', () => {
         const W = 160, H = 120, phi = (25 * Math.PI) / 180;
-        const val = new Float32Array(W * H * 3), dist = new Int32Array(W * H).fill(1);
+        const val = new Float32Array(W * H * 3), source = new Uint8Array(W * H).fill(1), target = new Uint8Array(W * H);
         for (let k = 0; k < H; k++) for (let i = 0; i < W; i++) {
             const stripe = (((-Math.sin(phi) * i + Math.cos(phi) * k) / 12) % 1 + 1) % 1 < 0.3 ? 200 : 60;
             val.set([stripe, stripe, stripe], (k * W + i) * 3);
         }
-        const { dir: d, coherence } = fillDirection(val, () => true, dist, W, H, 0.05, [1, 0]);
+        for (let k = 50; k < 70; k++) for (let i = 70; i < 90; i++) { target[k * W + i] = 1; source[k * W + i] = 0; }
+        const { dir: d, coherence } = readStructure(val, source, target, W, H, 0.05);
         expect(Math.abs(d[0] * Math.cos(phi) + d[1] * Math.sin(phi))).toBeGreaterThan(Math.cos((2 * Math.PI) / 180));
         expect(coherence).toBeGreaterThan(0.8);
-        // no markings: the fallback (the region's long axis)
-        const flat = fillDirection(new Float32Array(W * H * 3).fill(90), () => true, dist, W, H, 0.05, [0, 1]);
-        expect(flat.dir).toEqual([0, 1]);
+        // no markings: no direction to continue along
+        const flat = readStructure(new Float32Array(W * H * 3).fill(90), source, target, W, H, 0.05);
+        expect(flat.coherence).toBeLessThan(0.25);
+        expect(flat.refusals.join(' ')).toMatch(/no measured direction/);
     });
 });
 

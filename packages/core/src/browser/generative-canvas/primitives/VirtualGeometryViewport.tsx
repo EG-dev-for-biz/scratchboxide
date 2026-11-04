@@ -16,6 +16,8 @@ import {
     type VirtualGeometryStats
 } from '../services/virtual-geometry/VirtualGeometryRenderer';
 import { virtualGeometryLoadPlan } from '../services/virtual-geometry/viewport-source';
+import { startPathTraceOverlay, type PathTraceOverlayHandle, type PathTraceStatus } from '../services/virtual-geometry/path-trace-client';
+import { PathTraceStillButton } from './scene3d/PathTraceStillButton';
 
 export interface VirtualGeometryViewportProps {
     data: Scene3DData;
@@ -31,29 +33,6 @@ const SHADINGS: Array<{ id: VirtualGeometryShading; label: string }> = [
     { id: 'clusters', label: 'Clusters' },
     { id: 'lod-levels', label: 'LOD levels' }
 ];
-
-/** What the path-traced overlay knows about its session, for the HUD. */
-interface PathTraceStatus {
-    device: string;
-    triangles: number;
-    clusters: number;
-    spp: number;
-    targetSpp: number;
-    rays: number;
-    gpuMs: number;
-    width: number;
-    height: number;
-    materials: string;
-    denoised: boolean;
-    denoiseMs: number;
-    /** Pixels whose illumination came from the previous view (temporal reuse). */
-    historyPixels: number;
-    /** Size the frame was traced at before MetalFX scaled it to width x height. */
-    renderWidth: number;
-    renderHeight: number;
-    upscaleMs: number;
-    message?: string;
-}
 
 const DEFAULT_SUN = { elevationDeg: 42, azimuthDeg: 150 };
 
@@ -88,6 +67,7 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
     const [sun, setSun] = React.useState(Boolean(vg.pathTrace?.sun));
     const [ptStatus, setPtStatus] = React.useState<PathTraceStatus | null>(null);
     const overlayRef = React.useRef<HTMLCanvasElement | null>(null);
+    const stillRef = React.useRef<PathTraceOverlayHandle | null>(null);
     const loadedUrl = React.useRef<string | null>(null);
     const latest = React.useRef({ data, onUpdate });
     latest.current = { data, onUpdate };
@@ -215,148 +195,32 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
             if (!pathTrace) setPtStatus(null);
             return;
         }
-        let cancelled = false;
-        let sessionId: string | null = null;
-        let sentView = '';
-        let viewTimer: number | null = null;
-        let lastFrameTag = '';
-        let frameSeq = 0;
-        let done = false;
-        let status: PathTraceStatus | null = null;
         const plan = virtualGeometryLoadPlan(latest.current.data.virtualGeometry, workspacePath);
-        const sunSpec = latest.current.data.virtualGeometry?.pathTrace?.sun ?? (sun ? DEFAULT_SUN : undefined);
-        const targetSpp = latest.current.data.virtualGeometry?.pathTrace?.targetSpp ?? 256;
-        const renderScale = Math.min(1, Math.max(0.25, latest.current.data.virtualGeometry?.pathTrace?.renderScale ?? 1));
-        const offscreen = document.createElement('canvas');
-        const post = async (route: string, body: unknown) => {
-            const res = await fetch(`/3d/path-trace/${route}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-            const json = await res.json().catch(() => ({}));
-            if (!res.ok || !json.success) throw new Error(json.error || `${route} failed (HTTP ${res.status})`);
-            return json;
-        };
-        const show = (patch: Partial<PathTraceStatus>) => {
-            status = { ...(status ?? { device: '', triangles: 0, clusters: 0, spp: 0, targetSpp, rays: 0, gpuMs: 0, width: 0, height: 0, materials: '', denoised: false, denoiseMs: 0, historyPixels: 0, renderWidth: 0, renderHeight: 0, upscaleMs: 0 }), ...patch };
-            setPtStatus(status);
-        };
-
-        const renderSize = () => {
-            const w = Math.max(8, Math.round(overlay.clientWidth));
-            const h = Math.max(8, Math.round(overlay.clientHeight));
-            const scale = Math.min(1, 1280 / w);
-            return { width: Math.round(w * scale), height: Math.round(h * scale) };
-        };
-
-        const sendView = async () => {
-            if (cancelled || !sessionId) return;
-            const v = renderer.getView();
-            const size = renderSize();
-            const body = {
-                sessionId, ...size,
-                camera: { position: v.eye, target: v.target, up: v.up, verticalFovDeg: v.fovYDeg },
-                lod: { thresholdPx: latestThreshold.current },
-                targetSpp,
-                renderScale
-            };
-            const tag = JSON.stringify(body);
-            if (tag === sentView) return;
-            sentView = tag;
-            try {
-                const started = await post('view', body);
-                if (cancelled) return;
-                frameSeq = started.seq;
-                done = false;
-                show({ triangles: started.cut.triangles, clusters: started.cut.clusters, spp: 0, rays: 0, gpuMs: 0, width: size.width, height: size.height, message: undefined });
-            } catch (err: any) {
-                if (!cancelled) show({ message: err?.message ?? String(err) });
-            }
-        };
-
-        const draw = (rgba: ArrayBuffer, width: number, height: number) => {
-            if (offscreen.width !== width || offscreen.height !== height) {
-                offscreen.width = width;
-                offscreen.height = height;
-            }
-            const octx = offscreen.getContext('2d');
-            const ctx = overlay.getContext('2d');
-            if (!octx || !ctx) return;
-            octx.putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
-            if (overlay.width !== overlay.clientWidth || overlay.height !== overlay.clientHeight) {
-                overlay.width = Math.max(1, overlay.clientWidth);
-                overlay.height = Math.max(1, overlay.clientHeight);
-            }
-            ctx.imageSmoothingEnabled = true;
-            ctx.drawImage(offscreen, 0, 0, overlay.width, overlay.height);
-        };
-
-        const pollFrame = async () => {
-            if (cancelled || !sessionId || done) return;
-            try {
-                const res = await fetch(`/3d/path-trace/frame?sessionId=${encodeURIComponent(sessionId)}&after=${encodeURIComponent(lastFrameTag)}`);
-                if (cancelled) return;
-                if (res.status === 204) return;
-                if (!res.ok) throw new Error(`frame failed (HTTP ${res.status})`);
-                const seq = Number(res.headers.get('X-Frame-Seq'));
-                if (seq !== frameSeq) return; // a frame of the view before the last camera move
-                const spp = Number(res.headers.get('X-Frame-Spp'));
-                const width = Number(res.headers.get('X-Frame-Width'));
-                const height = Number(res.headers.get('X-Frame-Height'));
-                const rgba = await res.arrayBuffer();
-                if (cancelled || rgba.byteLength !== width * height * 4) return;
-                lastFrameTag = `${seq}.${spp}`;
-                done = res.headers.get('X-Frame-Done') === '1';
-                draw(rgba, width, height);
-                show({
-                    spp, rays: Number(res.headers.get('X-Frame-Rays')), gpuMs: Number(res.headers.get('X-Frame-Gpu-Ms')), width, height,
-                    denoised: res.headers.get('X-Frame-Denoised') === '1', denoiseMs: Number(res.headers.get('X-Frame-Denoise-Ms') ?? 0),
-                    historyPixels: Number(res.headers.get('X-Frame-History') ?? 0),
-                    renderWidth: Number(res.headers.get('X-Frame-Render-Width') ?? width), renderHeight: Number(res.headers.get('X-Frame-Render-Height') ?? height),
-                    upscaleMs: Number(res.headers.get('X-Frame-Upscale-Ms') ?? 0)
-                });
-            } catch (err: any) {
-                if (!cancelled) show({ message: err?.message ?? String(err) });
-            }
-        };
-
-        let ticker: number | null = null;
-        let lastCameraTag = '';
-        (async () => {
-            try {
-                show({ message: 'Opening the Metal path tracer…' });
-                const opened = await post('open', {
-                    sbvgUrl: loadedUrl.current,
-                    ...(plan.kind === 'build' ? { sourceGlbPath: plan.request.sourceGlbPath, workspaceRoot: plan.request.workspaceRoot } : {}),
-                    lighting: sunSpec ? { sun: sunSpec } : { studio: {} }
-                });
-                if (cancelled) { await post('close', { sessionId: opened.sessionId }).catch(() => undefined); return; }
-                sessionId = opened.sessionId;
-                const m = opened.materials;
-                show({ device: opened.device, materials: m.source === 'glb' ? `${m.count} materials · ${m.texturesUploaded} textures` : 'clay (no source GLB)', message: undefined });
-                renderer.stop();
-                await sendView();
-                ticker = window.setInterval(() => {
-                    if (cancelled) return;
-                    const v = renderer.getView();
-                    const size = renderSize();
-                    const tag = JSON.stringify({ v, size, t: latestThreshold.current });
-                    if (tag !== lastCameraTag) {
-                        lastCameraTag = tag;
-                        if (viewTimer !== null) window.clearTimeout(viewTimer);
-                        viewTimer = window.setTimeout(() => { void sendView(); }, 80);
-                    }
-                    void pollFrame();
-                }, 50);
-            } catch (err: any) {
-                if (!cancelled) show({ message: err?.message ?? String(err) });
-            }
-        })();
-
+        const pt = latest.current.data.virtualGeometry?.pathTrace;
+        const sunSpec = pt?.sun ?? (sun ? DEFAULT_SUN : undefined);
+        let paused = false;
+        const handle = startPathTraceOverlay({
+            overlay,
+            open: {
+                sbvgUrl: loadedUrl.current,
+                ...(plan.kind === 'build' ? { sourceGlbPath: plan.request.sourceGlbPath, workspaceRoot: plan.request.workspaceRoot } : {}),
+                lighting: sunSpec ? { sun: sunSpec } : { studio: {} }
+            },
+            getView: () => {
+                const v = renderer.getView();
+                return { eye: v.eye, target: v.target, up: v.up, fovYDeg: v.fovYDeg };
+            },
+            targetSpp: pt?.targetSpp ?? 256,
+            ...(pt?.renderScale !== undefined ? { renderScale: pt.renderScale } : {}),
+            thresholdPx: () => latestThreshold.current,
+            onStatus: setPtStatus,
+            onOpened: () => { renderer.stop(); paused = true; }
+        });
+        stillRef.current = handle;
         return () => {
-            cancelled = true;
-            if (ticker !== null) window.clearInterval(ticker);
-            if (viewTimer !== null) window.clearTimeout(viewTimer);
-            renderer.start();
-            overlay.getContext('2d')?.clearRect(0, 0, overlay.width, overlay.height);
-            if (sessionId) void fetch('/3d/path-trace/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId }) }).catch(() => undefined);
+            handle.stop();
+            stillRef.current = null;
+            if (paused) renderer.start();
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [pathTrace, sun, phase.kind, source]);
@@ -432,6 +296,16 @@ export const VirtualGeometryViewport: React.FC<VirtualGeometryViewportProps> = (
                     >
                         {sun ? 'Sun' : 'Studio'}
                     </button>
+                )}
+                {pathTrace && (
+                    <PathTraceStillButton
+                        handle={() => stillRef.current}
+                        aspect={() => (overlayRef.current && overlayRef.current.clientHeight > 0 ? overlayRef.current.clientWidth / overlayRef.current.clientHeight : NaN)}
+                        workspaceRoot={vg.workspaceRoot ?? workspacePath}
+                        name={data.title}
+                        className="sb-btn sb-btn-ghost sb-btn-xs"
+                        style={styles.chip}
+                    />
                 )}
             </div>
 

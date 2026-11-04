@@ -28,6 +28,7 @@ clay build, gets sb.PbrMaterial.clay(). Invalid input raises SpecError (a ValueE
 or substituted. Labels and material descriptions are never read.
 """
 
+import json
 import math
 
 __all__ = ["SpecError", "validate", "build", "build_meshes", "part_material", "TARGET_VERTICES"]
@@ -36,10 +37,16 @@ TARGET_VERTICES = 40000
 MAX_TRIANGLES = 450000
 PART_VERTEX_CAP = 160000
 CREASE_DEGREES = 30.0
-# Fillets on sharp revolve corners: a razor edge catches no highlight and reads as CG. Each corner sharper than
-# CREASE_DEGREES is replaced by a curve this share of the part's own extent, never more than EDGE_ROUND_MAX_SHARE of
-# either edge it joins (so neighbouring fillets never overlap).
-EDGE_ROUND_FRACTION = 0.02
+# Rounded edges: a razor edge catches no highlight and reads as CG. Each part has an edge radius, its spec's
+# edgeRadiusMeters (0 keeps it sharp) or else EDGE_RADIUS_SHARE of its smallest dimension, clamped to
+# EDGE_RADIUS_MIN..EDGE_RADIUS_MAX metres and never over EDGE_RADIUS_MAX_SHARE of that dimension (parts under 4 cm).
+# A revolve's corners sharper than CREASE_DEGREES are filleted at that radius, never more than EDGE_ROUND_MAX_SHARE of
+# either edge they join (so neighbouring fillets never overlap); a sweep's section corners are arcs of that radius, and
+# an open sweep's ends round over it instead of meeting their end discs at a rim.
+EDGE_RADIUS_SHARE = 0.015
+EDGE_RADIUS_MAX_SHARE = 0.05
+EDGE_RADIUS_MIN = 0.002
+EDGE_RADIUS_MAX = 0.05
 EDGE_ROUND_MAX_SHARE = 0.3
 _DENSE_PER_SEGMENT = 48
 _EPS = 1e-9
@@ -209,6 +216,12 @@ def validate(spec):
             op_of[pid] = present[0]
         if _given(part, "mirrorPlaneNormal") and (not _is_vec(part["mirrorPlaneNormal"], 3) or _length(part["mirrorPlaneNormal"]) < _EPS):
             errors.append("%s: mirrorPlaneNormal must be a non-zero [x, y, z] vector" % where)
+        if _given(part, "edgeRadiusMeters"):
+            r = part["edgeRadiusMeters"]
+            if len(present) == 1 and present[0] not in ("sweep", "revolve"):
+                errors.append("%s: a %s part has no edges of its own, so it cannot have an edgeRadiusMeters" % (where, present[0]))
+            elif not _is_num(r) or r < 0 or r > EDGE_RADIUS_MAX:
+                errors.append("%s: edgeRadiusMeters must be 0 (sharp) to %g metres" % (where, EDGE_RADIUS_MAX))
         if _given(part, "material"):
             if len(present) == 1 and present[0] in ("replicate", "relief"):
                 errors.append("%s: a %s part has no surface of its own, so it cannot have a material" % (where, present[0]))
@@ -741,6 +754,24 @@ def _build_sweep(part, origin, edge, relief_ops):
     around = min(512, max(8, int(math.ceil(max_perimeter / edge))))
     around += (-around) % 4
     extra_u, extra_v = _relief_refinement(relief_ops, total, max_perimeter)
+    # an open sweep's ends round over the part's edge radius: the section shrinks along a quarter circle over the last
+    # `rr` metres, so the end disc meets the side in a curve, not a sharp rim (rows added where the curve bends)
+    radius = edge_radius(part)[0]
+    ends = []
+    if not closed:
+        for at in (0.0, 1.0):
+            w, h = _interp_keys(keys, at, ["widthMeters", "heightMeters"])
+            rr = min(radius, 0.45 * min(w, h), 0.25 * total)  # the end section keeps at least a tenth of its size
+            # a child's start is inside its parent, and a rounding finer than half the sample spacing cannot show
+            # (it would only add rows, which a part copied many times multiplies): both keep the full section
+            buried = at == 0.0 and _given(part, "parentId")
+            ends.append(rr if rr >= 0.5 * edge and not buried else 0.0)
+        steps = 4
+        for at, rr in zip((0.0, 1.0), ends):
+            for k in range(1, steps):
+                d = rr * (1.0 - math.cos(0.5 * math.pi * k / steps))
+                if rr > 0:
+                    extra_u = list(extra_u) + [d / total if at == 0.0 else 1.0 - d / total]
     us = _u_samples(acc, knots, edge, extra_u)
     if closed and us[-1] >= 1.0 - 1e-12:
         us = us[:-1]
@@ -755,17 +786,28 @@ def _build_sweep(part, origin, edge, relief_ops):
     surface._centres, surface._tangents, surface._normals, surface._keys, surface._twist = centres, tangents, normals, keys, twist
     for i, u in enumerate(us):
         width, height, exponent = _interp_keys(keys, u, ["widthMeters", "heightMeters", "exponent"])
+        if ends:
+            shrink = 0.0
+            for rr, d in ((ends[0], u * total), (ends[1], (1.0 - u) * total)):
+                if rr > 0 and d < rr:
+                    shrink = max(shrink, rr - math.sqrt(max(0.0, rr * rr - (rr - d) ** 2)))
+            if shrink > 0:
+                width, height = max(width - 2.0 * shrink, 0.1 * width), max(height - 2.0 * shrink, 0.1 * height)
         tau = math.radians(_interp_pairs(twist, u)) if twist else 0.0
         t, nrm = tangents[i], normals[i]
         b = _cross(t, nrm)
         n_tw = _add(_mul(nrm, math.cos(tau)), _mul(b, math.sin(tau)))
         b_tw = _sub(_mul(b, math.cos(tau)), _mul(nrm, math.sin(tau)))
         row, out = [], []
+        # the section's long edges round at the same radius: the superellipse shrunk by it, then pushed back out along
+        # its normal, so a boxy section's corners become arcs of that radius (a round section is barely changed)
+        rs = min(radius, 0.9 * min(height, width) / 2.0)
         for v in vs:
             theta = 2 * math.pi * v
-            a, bb = _superellipse(theta, height / 2, width / 2, exponent)
+            a, bb = _superellipse(theta, height / 2 - rs, width / 2 - rs, exponent)
+            na, nb = _section_normal(theta, height / 2 - rs, width / 2 - rs, exponent)
+            a, bb = a + rs * na, bb + rs * nb
             row.append(_add(centres[i], _add(_mul(n_tw, a), _mul(b_tw, bb))))
-            na, nb = _section_normal(theta, height / 2, width / 2, exponent)
             out.append(_unit(_add(_mul(n_tw, na), _mul(b_tw, nb)), "sweep section normal"))
         surface.rows.append(row)
         surface.normals_out.append(out)
@@ -830,19 +872,51 @@ def _meridian_orientation(meridian):
 
 
 
-def _round_meridian(meridian):
+def _part_extent(part):
+    """The part's smallest overall dimension in metres (0 when it has none): what its default edge radius scales with."""
+    dims = []
+    if part.get("revolve"):
+        mer = part["revolve"]["meridian"]
+        zs = [float(p[0]) for p in mer]
+        dims = [2.0 * max(float(p[1]) for p in mer), max(zs) - min(zs)]
+    elif part.get("sweep"):
+        sw = part["sweep"]
+        dims = [min(min(float(k["widthMeters"]), float(k["heightMeters"])) for k in sw["profile"])]
+        if not sw["closedLoop"]:
+            pts = [tuple(float(x) for x in p) for p in sw["controlPoints"]]
+            dims.append(sum(_length(_sub(b, a)) for a, b in zip(pts, pts[1:])))
+    dims = [d for d in dims if d > _EPS]
+    return min(dims) if dims else 0.0
+
+
+def edge_radius(part):
     """
-    The meridian with every corner sharper than CREASE_DEGREES replaced by a quadratic fillet, and an end that stops
-    off the axis first closed to it (so the cap's rim is a corner that is rounded too). Radii stay 0 or more: a fillet
-    is a convex blend of points that are.
+    (radius in metres, "spec" or "default"): the part's edgeRadiusMeters when given (0 keeps its edges sharp, other
+    values clamped to EDGE_RADIUS_MIN..EDGE_RADIUS_MAX), else EDGE_RADIUS_SHARE of its smallest dimension, clamped the same
+    and to at most EDGE_RADIUS_MAX_SHARE of it.
+    """
+    if _given(part, "edgeRadiusMeters"):
+        r = float(part["edgeRadiusMeters"])
+        return (0.0 if r <= 0 else min(EDGE_RADIUS_MAX, max(EDGE_RADIUS_MIN, r))), "spec"
+    extent = _part_extent(part)
+    if extent <= 0:
+        return 0.0, "default"
+    # never more than EDGE_RADIUS_MAX_SHARE of a small part, so the floor does not round a stud or a rivet away
+    return min(EDGE_RADIUS_MAX, max(EDGE_RADIUS_MIN, EDGE_RADIUS_SHARE * extent), EDGE_RADIUS_MAX_SHARE * extent), "default"
+
+
+def _round_meridian(meridian, radius):
+    """
+    The meridian with every corner sharper than CREASE_DEGREES replaced by a quadratic fillet `radius` metres along
+    each edge (at most EDGE_ROUND_MAX_SHARE of it; radius 0 keeps the corners), and an end that stops off the axis first
+    closed to it (so the cap's rim is a corner that is rounded too). Radii stay 0 or more: a fillet is a convex blend of
+    points that are.
     """
     pts = list(meridian)
     if pts[0][1] > 1e-7:
         pts.insert(0, (pts[0][0], 0.0))
     if pts[-1][1] > 1e-7:
         pts.append((pts[-1][0], 0.0))
-    zs = [z for z, _ in pts]
-    scale = max(max(zs) - min(zs), max(r for _, r in pts))
     out = [pts[0]]
     for k in range(1, len(pts) - 1):
         a, b, c = pts[k - 1], pts[k], pts[k + 1]
@@ -853,7 +927,7 @@ def _round_meridian(meridian):
             out.append(b)
             continue
         turn = math.degrees(math.acos(max(-1.0, min(1.0, (d1[0] * d2[0] + d1[1] * d2[1]) / (l1 * l2)))))
-        size = min(EDGE_ROUND_MAX_SHARE * min(l1, l2), EDGE_ROUND_FRACTION * scale)
+        size = min(EDGE_ROUND_MAX_SHARE * min(l1, l2), radius)
         if turn <= CREASE_DEGREES or size < 1e-5:
             out.append(b)
             continue
@@ -898,7 +972,7 @@ def _build_revolve(part, origin, edge, relief_ops):
         return dense, knots, acc, us, vs
 
     # rounded corners unless the extra rows would put the part over its sample budget (then it keeps its sharp edges)
-    rounded = _round_meridian(meridian)
+    rounded = _round_meridian(meridian, edge_radius(part)[0])
     dense, knots, acc, us, vs = sample(rounded)
     if len(us) * len(vs) > PART_VERTEX_CAP:
         dense, knots, acc, us, vs = sample(meridian)
@@ -1585,6 +1659,8 @@ def build(spec, clay=False):
     for tree in crown_trees(spec, shift_y):
         scene.add(tree)
     materials = {} if clay else dict((p["id"], p.get("material")) for p in spec["parts"])
+    # each surface part's edge radius, recorded on its material (generated: chosen for the look, never measured)
+    edges = dict((p["id"], edge_radius(p)) for p in spec["parts"] if p.get("sweep") or p.get("revolve"))
     occlusion = _occlusion(sb, built)
     for (owner, positions, normals, triangles), occ in zip(built, occlusion):
         mesh = sb.geometry.Mesh(owner)
@@ -1598,5 +1674,9 @@ def build(spec, clay=False):
         # glTF viewers multiply COLOR_0 by baseColorFactor, which would square every colour. The vertex colour carries
         # only the grey ambient occlusion, which darkens creases without changing the part's colour.
         mesh.material = part_material(sb, owner, materials.get(owner))
+        if owner in edges:
+            radius, source = edges[owner]
+            mesh.material.extras_json = json.dumps({"scratchbox": {"edge": {
+                "radiusMeters": round(radius, 4), "source": source, "provenance": "generated"}}})
         scene.add_mesh(mesh)
     return scene

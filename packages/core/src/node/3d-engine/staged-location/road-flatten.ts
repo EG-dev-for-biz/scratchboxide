@@ -24,8 +24,7 @@
 import type { Vec2 } from '../../../common/spatial/staged-location-contracts';
 import type { RoadStation, RoadSurface } from './road-surfaces';
 import { ROAD_SURFACE_PARAMS } from './road-surfaces';
-import { assembleGlb, isIdentity, nodeWorldMatrices, parseGlbBytes, transformPoint } from './glb-bytes';
-import { invert } from './vehicle-removal';
+import { assembleGlb, invert, isIdentity, nodeWorldMatrices, parseGlbBytes, transformPoint } from './glb-bytes';
 
 export const ROAD_FLATTEN_VERSION = 'road-flatten/1';
 

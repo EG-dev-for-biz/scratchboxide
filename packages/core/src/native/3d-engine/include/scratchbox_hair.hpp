@@ -257,12 +257,14 @@ public:
         guides.reserve(config.guideCount);
 
         std::mt19937 rng(1337);
-        std::uniform_real_distribution<float> distTheta(0.05f, PI - 0.05f);
+        // Roots spread evenly by area: cos(theta) uniform, not theta (a uniform theta crowds the poles and starves the
+        // equator, leaving bare patches on a full coat).
+        std::uniform_real_distribution<float> distCosTheta(std::cos(PI - 0.05f), std::cos(0.05f));
         std::uniform_real_distribution<float> distPhi(0.0f, TWO_PI);
         std::uniform_real_distribution<float> distJitter(-0.08f, 0.08f);
 
         for (uint32_t i = 0; i < config.guideCount; ++i) {
-            float theta = distTheta(rng);
+            float theta = std::acos(distCosTheta(rng));
             float phi = distPhi(rng);
 
             // Continuous radial harmonic equation: r = R * (1 + A * cos(m * phi) * sin(theta)) * (1 - taper * cos(theta))
@@ -776,7 +778,11 @@ public:
                 float tMid = (v0.u + v1.u) * 0.5f;
                 Vec3 color;
                 if (customBaseColor.x >= 0.0f && customTipColor.x >= 0.0f) {
-                    color = customBaseColor * (1.0f - tMid) + customTipColor * tMid;
+                    // The base colour holds along the strand and turns to the tip colour over its outer part: a coat
+                    // shows mostly the outer half of each strand, so a linear blend read as the tip colour all over.
+                    float s = std::clamp((tMid - 0.55f) / 0.45f, 0.0f, 1.0f);
+                    float tipShare = s * s * (3.0f - 2.0f * s);
+                    color = customBaseColor * (1.0f - tipShare) + customTipColor * tipShare;
                 } else {
                     color = strand.baseColor;
                 }

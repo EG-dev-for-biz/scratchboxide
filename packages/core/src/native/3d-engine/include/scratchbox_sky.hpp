@@ -10,10 +10,12 @@
 #ifndef SCRATCHBOX_SKY_HPP
 #define SCRATCHBOX_SKY_HPP
 
+#include "scratchbox_atmosphere_lut.hpp"
 #include "scratchbox_math.hpp"
 #include <algorithm>
 #include <cmath>
-#include <thread>
+#include <cstdlib>
+#include <memory>
 #include <vector>
 
 namespace scratchbox {
@@ -32,59 +34,71 @@ struct AtmosphereParams {
     float ozoneDensity{1.0f};
     float sunAngularDiameterDeg{0.545f};
     float sunIntensity{1.0f};
+    /** Lambertian albedo of the ground under the atmosphere, which the higher scattering orders bounce off. */
+    float groundAlbedo{0.1f};
 };
 
 namespace detail {
 
 constexpr double kPi = 3.14159265358979323846;
-constexpr double kEarthRadius = 6360e3;
-constexpr double kAtmosphereRadius = 6420e3;
-constexpr double kRayleighScaleHeight = 8000.0;
-constexpr double kMieScaleHeight = 1200.0;
-constexpr double kOzoneCenter = 25000.0;
-constexpr double kOzoneHalfWidth = 15000.0;
-// Sea-level coefficients (1/m) for the linear sRGB primaries, sampled at 680, 550 and 440 nm.
-constexpr double kRayleighScattering[3] = {5.802e-6, 13.558e-6, 33.1e-6};
+constexpr double kLimbDarkening = 0.6;
+// Sea-level coefficients (1/m) at 440, 550 and 680 nm (Hillaire 2020's Earth, Bruneton's three wavelengths).
+constexpr double kRayleighScattering[3] = {33.1e-6, 13.558e-6, 5.802e-6};
 constexpr double kMieScattering = 3.996e-6;
 constexpr double kMieExtinction = 4.440e-6;
-constexpr double kOzoneAbsorption[3] = {0.650e-6, 1.881e-6, 0.085e-6};
-constexpr double kMieAnisotropy = 0.8;
-constexpr double kLimbDarkening = 0.6;
-
-struct Dvec3 {
-    double x{0}, y{0}, z{0};
-    Dvec3 operator+(const Dvec3& o) const { return {x + o.x, y + o.y, z + o.z}; }
-    Dvec3 operator*(double s) const { return {x * s, y * s, z * s}; }
-    double dot(const Dvec3& o) const { return x * o.x + y * o.y + z * o.z; }
-    double length() const { return std::sqrt(dot(*this)); }
-};
-
-// Returns the far intersection distance of a ray starting inside a sphere, or -1 when it misses.
-inline double sphereExit(const Dvec3& origin, const Dvec3& dir, double radius) {
-    double b = origin.dot(dir);
-    double c = origin.dot(origin) - radius * radius;
-    double disc = b * b - c;
-    if (disc < 0.0) return -1.0;
-    return -b + std::sqrt(disc);
-}
-
-// Returns the near positive intersection distance with a sphere the ray starts outside of, or -1.
-inline double sphereEntry(const Dvec3& origin, const Dvec3& dir, double radius) {
-    double b = origin.dot(dir);
-    double c = origin.dot(origin) - radius * radius;
-    double disc = b * b - c;
-    if (disc < 0.0) return -1.0;
-    double t = -b - std::sqrt(disc);
-    return t > 0.0 ? t : -1.0;
-}
+constexpr double kOzoneAbsorption[3] = {0.085e-6, 1.881e-6, 0.650e-6};
 
 } // namespace detail
 
 /**
- * Single-scattering clear sky over a spherical planet (Rayleigh + Mie + ozone absorption),
- * precomputed into an equirectangular lookup table relative to the sun azimuth. Radiance is
- * expressed relative to a top-of-atmosphere solar irradiance of `sunIntensity` per channel.
- * World frame: +Y up, +X east, +Z south.
+ * Earth's atmosphere with the controls applied as continuous multipliers: Rayleigh 8 km and Mie 1.2 km scale heights,
+ * an ozone tent 25 +- 15 km, Mie g 0.8, radii 6360 and 6420 km. The solar irradiance is 1 at every wavelength, so the
+ * tables hold radiance per unit of top-of-atmosphere irradiance; PhysicalSky scales it by sunIntensity.
+ */
+inline atmosphere_lut::SpectralAtmosphere earthAtmosphere(const AtmosphereParams& p) {
+    using namespace atmosphere_lut;
+    SpectralAtmosphere m;
+    m.wavelengths = {440, 550, 680};
+    m.solar_irradiance = {1, 1, 1};
+    for (int c = 0; c < 3; ++c) {
+        m.rayleigh_scattering.push_back(detail::kRayleighScattering[c] * std::max(0.0f, p.airDensity));
+        m.mie_scattering.push_back(detail::kMieScattering * std::max(0.0f, p.dustDensity));
+        m.mie_extinction.push_back(detail::kMieExtinction * std::max(0.0f, p.dustDensity));
+        m.absorption_extinction.push_back(detail::kOzoneAbsorption[c] * std::max(0.0f, p.ozoneDensity));
+        m.ground_albedo.push_back(std::clamp(static_cast<double>(p.groundAlbedo), 0.0, 1.0));
+    }
+    m.sun_angular_radius = 0.5 * p.sunAngularDiameterDeg * detail::kPi / 180.0;
+    m.bottom_radius = 6360e3;
+    m.top_radius = 6420e3;
+    m.rayleigh_density.layers[1] = {0, 1, -1.0 / 8000.0, 0, 0};
+    m.mie_density.layers[1] = {0, 1, -1.0 / 1200.0, 0, 0};
+    m.absorption_density.layers[0] = {25000, 0, 0, 1.0 / 15000.0, 1.0 - 25000.0 / 15000.0};
+    m.absorption_density.layers[1] = {0, 0, 0, -1.0 / 15000.0, 1.0 + 25000.0 / 15000.0};
+    m.mie_phase_function_g = 0.8;
+    m.mu_s_min = -0.5;
+    return m;
+}
+
+/**
+ * Three wavelengths (680, 550, 440 nm as red, green, blue), four orders of scattering. SCRATCHBOX_SKY_SCATTERING_ORDERS
+ * sets the orders (1-16): the test suite sets 1, a 0.2 s precompute instead of 25 s, outside SCRATCHBOX_HEAVY_TESTS.
+ */
+inline atmosphere_lut::PrecomputeOptions earthPrecompute() {
+    atmosphere_lut::PrecomputeOptions o;
+    o.batches.push_back(atmosphere_lut::WavelengthBatch{});
+    o.scattering_orders = 4;
+    if (const char* orders = std::getenv("SCRATCHBOX_SKY_SCATTERING_ORDERS"); orders && *orders) {
+        o.scattering_orders = std::clamp(std::atoi(orders), 1, 16);
+    }
+    return o;
+}
+
+/**
+ * Clear sky over a spherical planet with every order of scattering, read from Bruneton's precomputed tables
+ * (scratchbox_atmosphere_lut.hpp; precomputed once per medium and cached). The view-dependent radiance is resampled
+ * into an equirectangular table relative to the sun azimuth, which skyRadiance interpolates and the Metal tracer
+ * uploads. Radiance is relative to a top-of-atmosphere solar irradiance of `sunIntensity` per channel.
+ * World frame: +Y up, +X east, +Z south; the planet centre is straight below the observer.
  */
 class PhysicalSky {
 public:
@@ -98,28 +112,24 @@ public:
         sunSolidAngle_ = static_cast<float>(2.0 * detail::kPi * (1.0 - static_cast<double>(sunCosHalfAngle_)));
         buildSunBasis();
 
-        detail::Dvec3 observer{0.0, detail::kEarthRadius + std::max(0.0f, params_.observerAltitudeMeters), 0.0};
-        detail::Dvec3 sun{sunDir_.x, sunDir_.y, sunDir_.z};
-        double depth[3];
-        if (opticalDepthToSpace(observer, sun, 256, depth)) {
-            sunTransmittance_ = Vec3(static_cast<float>(std::exp(-depth[0])),
-                                     static_cast<float>(std::exp(-depth[1])),
-                                     static_cast<float>(std::exp(-depth[2])));
-        } else {
-            sunTransmittance_ = Vec3(0, 0, 0);
-        }
+        atmosphere_ = atmosphere_lut::cachedAtmosphere(earthAtmosphere(params_), earthPrecompute());
+        const atmosphere_lut::AtmosphereParameters& a = atmosphere_->parameters;
+        const double h = std::max(0.0f, params_.observerAltitudeMeters);
+        camera_ = {0.0, a.bottom_radius + h, 0.0};
+        const double r = camera_.y;
+        const double muS = std::clamp(static_cast<double>(sunDir_.y), -1.0, 1.0);
+        const atmosphere_lut::Spec t = atmosphere_lut::GetTransmittanceToSun(a, atmosphere_->tables.transmittance, std::min(r, a.top_radius), muS);
+        sunTransmittance_ = toVec3(t);
+        skyIrradiance_ = toVec3(atmosphere_lut::GetIrradiance(a, atmosphere_->tables.irradiance, std::min(r, a.top_radius), muS)) * params_.sunIntensity;
 
-        double h = std::max(0.0, static_cast<double>(params_.observerAltitudeMeters));
-        double densities[3];
-        densityAt(h, densities);
+        const double rayleigh = atmosphere_lut::GetProfileDensity(a.rayleigh_density, h);
+        const double mie = atmosphere_lut::GetProfileDensity(a.mie_density, h);
+        const double ozone = atmosphere_lut::GetProfileDensity(a.absorption_density, h);
         for (int c = 0; c < 3; ++c) {
-            haze_[c] = static_cast<float>(detail::kRayleighScattering[c] * densities[0]
-                                          + detail::kMieExtinction * densities[1]
-                                          + detail::kOzoneAbsorption[c] * densities[2]);
+            haze_[c] = static_cast<float>(a.rayleigh_scattering[c] * rayleigh + a.mie_extinction[c] * mie + a.absorption_extinction[c] * ozone);
         }
 
         buildLut();
-        integrateHorizontalIrradiance();
     }
 
     /** Sky radiance excluding the solar disc (bilinear lookup). */
@@ -139,11 +149,11 @@ public:
         return top * (1.0f - fr) + bottom * fr;
     }
 
-    /** Reference single-scattering integral for one direction (no lookup table). */
+    /** Sky radiance read from the 4D tables directly, without the equirectangular resampling. */
     Vec3 skyRadianceDirect(const Vec3& direction) const {
         Vec3 d = direction.normalized();
-        d.y = std::max(d.y, 1e-4f);
-        return integrate(d.normalized(), 48, 24);
+        d.y = std::max(d.y, 0.0f);
+        return tableRadiance(d.normalized());
     }
 
     /** Limb-darkened solar disc radiance; zero outside the disc. */
@@ -170,6 +180,7 @@ public:
 
     /** Direct solar irradiance at the observer on a surface facing the sun. */
     Vec3 sunIrradiance() const { return sunTransmittance_ * params_.sunIntensity; }
+    /** Transmittance to the sun, with the share of the disc above the horizon (Bruneton's GetTransmittanceToSun). */
     Vec3 sunTransmittance() const { return sunTransmittance_; }
     /** Sky radiance at the horizon with the same azimuth as `direction`: the color distant haze converges to. */
     Vec3 horizonRadiance(const Vec3& direction) const {
@@ -179,7 +190,7 @@ public:
     }
     /** Extinction coefficient (1/m) of the air at the observer altitude. */
     Vec3 hazeExtinction() const { return Vec3(haze_[0], haze_[1], haze_[2]); }
-    /** Irradiance on an upward-facing surface from the sky dome alone (solar disc excluded). */
+    /** Irradiance on an upward-facing surface from the sky dome alone (solar disc excluded), from the irradiance table. */
     Vec3 skyIrradianceHorizontal() const { return skyIrradiance_; }
 
     const Vec3& sunDirection() const { return sunDir_; }
@@ -193,86 +204,25 @@ public:
     const std::vector<Vec3>& skyLut() const { return lut_; }
     int azimuthResolution() const { return azimuthRes_; }
     int elevationResolution() const { return elevationRes_; }
+    /** The medium and precomputed tables this sky reads. */
+    const atmosphere_lut::CachedAtmosphere& atmosphere() const { return *atmosphere_; }
 
 private:
+    static Vec3 toVec3(const atmosphere_lut::Spec& s) {
+        return Vec3(static_cast<float>(s[0]), static_cast<float>(s[1]), static_cast<float>(s[2]));
+    }
+
     void buildSunBasis() {
         Vec3 helper = std::abs(sunDir_.y) < 0.9f ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
         sunTangent_ = helper.cross(sunDir_).normalized();
         sunBitangent_ = sunDir_.cross(sunTangent_);
     }
 
-    void densityAt(double height, double out[3]) const {
-        double h = std::max(0.0, height);
-        out[0] = params_.airDensity * std::exp(-h / detail::kRayleighScaleHeight);
-        out[1] = params_.dustDensity * std::exp(-h / detail::kMieScaleHeight);
-        out[2] = params_.ozoneDensity * std::max(0.0, 1.0 - std::abs(h - detail::kOzoneCenter) / detail::kOzoneHalfWidth);
-    }
-
-    // Optical depth from `origin` to the top of the atmosphere; false when the planet blocks the ray.
-    bool opticalDepthToSpace(const detail::Dvec3& origin, const detail::Dvec3& dir, int samples, double out[3]) const {
-        out[0] = out[1] = out[2] = 0.0;
-        if (detail::sphereEntry(origin, dir, detail::kEarthRadius) > 0.0) return false;
-        double length = detail::sphereExit(origin, dir, detail::kAtmosphereRadius);
-        if (length <= 0.0) return true;
-        double sums[3] = {0, 0, 0};
-        for (int i = 0; i < samples; ++i) {
-            double u = (i + 0.5) / samples;
-            double t = length * u * u;
-            double dt = length * 2.0 * u / samples;
-            double h = (origin + dir * t).length() - detail::kEarthRadius;
-            double rho[3];
-            densityAt(h, rho);
-            sums[0] += rho[0] * dt;
-            sums[1] += rho[1] * dt;
-            sums[2] += rho[2] * dt;
-        }
-        for (int c = 0; c < 3; ++c) {
-            out[c] = detail::kRayleighScattering[c] * sums[0] + detail::kMieExtinction * sums[1] + detail::kOzoneAbsorption[c] * sums[2];
-        }
-        return true;
-    }
-
-    Vec3 integrate(const Vec3& d, int viewSamples, int lightSamples) const {
-        detail::Dvec3 observer{0.0, detail::kEarthRadius + std::max(0.0f, params_.observerAltitudeMeters), 0.0};
-        detail::Dvec3 dir{d.x, d.y, d.z};
-        detail::Dvec3 sun{sunDir_.x, sunDir_.y, sunDir_.z};
-        double length = detail::sphereExit(observer, dir, detail::kAtmosphereRadius);
-        double ground = detail::sphereEntry(observer, dir, detail::kEarthRadius);
-        if (ground > 0.0) length = ground;
-        if (length <= 0.0) return Vec3(0, 0, 0);
-
-        double mu = dir.dot(sun);
-        const double g = detail::kMieAnisotropy;
-        double rayleighPhase = 3.0 / (16.0 * detail::kPi) * (1.0 + mu * mu);
-        double miePhase = 3.0 / (8.0 * detail::kPi) * (1.0 - g * g) * (1.0 + mu * mu)
-                        / ((2.0 + g * g) * std::pow(1.0 + g * g - 2.0 * g * mu, 1.5));
-
-        double viewDepth[3] = {0, 0, 0};
-        double radiance[3] = {0, 0, 0};
-        for (int i = 0; i < viewSamples; ++i) {
-            double u = (i + 0.5) / viewSamples;
-            double t = length * u * u;
-            double dt = length * 2.0 * u / viewSamples;
-            detail::Dvec3 x = observer + dir * t;
-            double h = x.length() - detail::kEarthRadius;
-            double rho[3];
-            densityAt(h, rho);
-            double extinction[3];
-            for (int c = 0; c < 3; ++c) {
-                extinction[c] = detail::kRayleighScattering[c] * rho[0] + detail::kMieExtinction * rho[1] + detail::kOzoneAbsorption[c] * rho[2];
-            }
-            double sunDepth[3];
-            if (opticalDepthToSpace(x, sun, lightSamples, sunDepth)) {
-                for (int c = 0; c < 3; ++c) {
-                    double transmittance = std::exp(-(viewDepth[c] + 0.5 * extinction[c] * dt + sunDepth[c]));
-                    double scattering = detail::kRayleighScattering[c] * rho[0] * rayleighPhase + detail::kMieScattering * rho[1] * miePhase;
-                    radiance[c] += transmittance * scattering * dt;
-                }
-            }
-            for (int c = 0; c < 3; ++c) viewDepth[c] += extinction[c] * dt;
-        }
-        const double scale = params_.sunIntensity;
-        return Vec3(static_cast<float>(radiance[0] * scale), static_cast<float>(radiance[1] * scale), static_cast<float>(radiance[2] * scale));
+    Vec3 tableRadiance(const Vec3& d) const {
+        atmosphere_lut::Spec transmittance;
+        atmosphere_lut::Spec radiance = atmosphere_lut::GetSkyRadiance(atmosphere_->parameters, atmosphere_->tables, camera_, {d.x, d.y, d.z}, 0.0,
+                                                                       {sunDir_.x, sunDir_.y, sunDir_.z}, transmittance);
+        return toVec3(radiance) * params_.sunIntensity;
     }
 
     float relativeAzimuth(const Vec3& d) const {
@@ -296,38 +246,9 @@ private:
 
     void buildLut() {
         lut_.assign(static_cast<size_t>(azimuthRes_) * elevationRes_, Vec3(0, 0, 0));
-        unsigned workers = std::max(1u, std::min(std::thread::hardware_concurrency(), 32u));
-        std::vector<std::thread> pool;
-        for (unsigned w = 0; w < workers; ++w) {
-            pool.emplace_back([this, w, workers]() {
-                for (int row = static_cast<int>(w); row < elevationRes_; row += static_cast<int>(workers)) {
-                    for (int col = 0; col < azimuthRes_; ++col) {
-                        lut_[static_cast<size_t>(row) * azimuthRes_ + col] = integrate(lutDirection(row, col), 48, 24);
-                    }
-                }
-            });
-        }
-        for (auto& t : pool) t.join();
-    }
-
-    void integrateHorizontalIrradiance() {
-        const int elevationSteps = 64;
-        const int azimuthSteps = 128;
-        Vec3 sum(0, 0, 0);
-        const double dElevation = detail::kPi * 0.5 / elevationSteps;
-        const double dAzimuth = 2.0 * detail::kPi / azimuthSteps;
-        for (int i = 0; i < elevationSteps; ++i) {
-            double elevation = (i + 0.5) * dElevation;
-            double weight = std::sin(elevation) * std::cos(elevation) * dElevation * dAzimuth;
-            for (int j = 0; j < azimuthSteps; ++j) {
-                double az = (j + 0.5) * dAzimuth;
-                Vec3 d(static_cast<float>(std::cos(elevation) * std::sin(az)),
-                       static_cast<float>(std::sin(elevation)),
-                       static_cast<float>(-std::cos(elevation) * std::cos(az)));
-                sum += skyRadiance(d) * static_cast<float>(weight);
-            }
-        }
-        skyIrradiance_ = sum;
+        atmosphere_lut::RunJobs([this](int row) {
+            for (int col = 0; col < azimuthRes_; ++col) lut_[static_cast<size_t>(row) * azimuthRes_ + col] = tableRadiance(lutDirection(row, col));
+        }, elevationRes_, 0);
     }
 
     AtmosphereParams params_;
@@ -338,6 +259,8 @@ private:
     Vec3 sunBitangent_{0, 0, 1};
     float sunCosHalfAngle_{1.0f};
     float sunSolidAngle_{0.0f};
+    std::shared_ptr<const atmosphere_lut::CachedAtmosphere> atmosphere_;
+    atmosphere_lut::Vec3d camera_;
     Vec3 sunTransmittance_{1, 1, 1};
     float haze_[3] = {0, 0, 0};
     Vec3 skyIrradiance_{0, 0, 0};

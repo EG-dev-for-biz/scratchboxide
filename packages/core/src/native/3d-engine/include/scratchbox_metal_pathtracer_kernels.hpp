@@ -588,6 +588,8 @@ struct Bsdf {
     float alpha;
     float a2;
     float specularProbability;
+    /** Multiple-scattering compensation of the specular lobe (Turquin 2019): 1 + f0 (1 / Ess - 1). */
+    float3 msScale;
 };
 
 inline float3 schlickFresnel(float3 f0, float cosTheta) {
@@ -614,6 +616,10 @@ inline float smithVisibilityCorrelated(float cosV, float cosL, float a2) {
 inline float3 toLocal(thread const Bsdf& s, float3 v) { return float3(dot(v, s.t), dot(v, s.b), dot(v, s.n)); }
 inline float3 toWorld(thread const Bsdf& s, float3 v) { return s.t * v.x + s.b * v.y + s.n * v.z; }
 
+// Directional albedo of the specular lobe at F = 1; its table and definition are appended by the host
+// (render::detail::ggxEssMetalSource), the same numbers the CPU tracer reads.
+float ggxEss(float cosV, float roughness);
+
 inline Bsdf makeBsdf(float3 shadingNormal, float3 baseColor, float metallic, float roughness, float3 woWorld) {
     Bsdf s;
     s.n = shadingNormal;
@@ -635,7 +641,12 @@ inline Bsdf makeBsdf(float3 shadingNormal, float3 baseColor, float metallic, flo
     float4 r = roughness * c0 + c1;
     float a004 = min(r.x * r.x, exp2(-9.28f * cosV)) * r.x + r.y;
     float2 AB = float2(a004 * -1.04f + r.z, a004 * 1.04f + r.w);
-    float specularWeight = luminance(s.f0 * AB.x + float3(AB.y));
+    // Single-scatter GGX loses the light that bounces between microfacets (most on a rough metal); scaling the
+    // lobe by 1 + f0 (1 / Ess - 1), Ess its directional albedo, returns it (Turquin 2019), so rough metals and
+    // rough glossy paint stop going dark.
+    float ess = clamp(ggxEss(cosV, roughness), 0.05f, 1.0f);
+    s.msScale = float3(1.0f) + s.f0 * (1.0f / ess - 1.0f);
+    float specularWeight = luminance(s.msScale * (s.f0 * AB.x + float3(AB.y)));
     float diffuseWeight = (1.0f - metallic) * luminance(baseColor);
     s.specularProbability = clamp(specularWeight / max(specularWeight + diffuseWeight, 1e-6f), 0.02f, 0.9f);
     return s;
@@ -646,7 +657,7 @@ inline float3 bsdfEval(thread const Bsdf& s, float3 wiWorld) {
     if (l.z <= 0.0f || s.wo.z <= 0.0f) return float3(0.0f);
     float3 h = normalize(s.wo + l);
     float3 f = schlickFresnel(s.f0, max(dot(s.wo, h), 0.0f));
-    float3 specular = f * (ggxDistribution(h.z, s.a2) * smithVisibilityCorrelated(s.wo.z, l.z, s.a2));
+    float3 specular = s.msScale * f * (ggxDistribution(h.z, s.a2) * smithVisibilityCorrelated(s.wo.z, l.z, s.a2));
     float3 diffuse = s.base * ((1.0f - s.metallic) / kPi) * (float3(1.0f) - f);
     return diffuse + specular;
 }

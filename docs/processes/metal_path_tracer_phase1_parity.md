@@ -281,9 +281,30 @@ A third of the triangles (4 px) lowers the noise by 5% and costs 4.6% in block f
 
 4% less error at 8 spp and 10% at 32 for 4% more rays (more paths continue), dead first-hit samples 21% to 13% (the rest are the rough lobe's own lost energy, a property of single-scattering GGX), and GPU and CPU still agree to 0.04% in block means. The one change in Phases 9-12 that is a win per unit of time, and it cost nothing. Remaining known term of this kind: a multiple-scattering GGX (Kulla-Conty energy compensation) would return the lost energy of rough lobes; it changes the images, so it is a model decision, not a sampling one.
 
+## Phase 13 (2026-11-03): the 3D scene viewport, stills, full-resolution frames and multiple-scattering GGX
+
+**3D scene viewport.** A "Path traced" toolstrip button (`scene3d/ScenePathTrace.tsx`). It captures what the viewport shows as one GLB (`scene3d/pathTraceSnapshot.ts`: every visible triangle mesh at its world transform with its own material, instanced meshes written per instance up to 30M triangles, the viewport's furniture left out; points, lines and shader materials counted as "not traced", never approximated), posts it to `POST /3d/path-trace/snapshot` (stored by content hash beside the builds, the newest 24 kept, built once with the same builder), and opens a session on it (`/open` with `snapshotId`). The camera goes over in the file's coordinates (world less the file origin, `readSbvgOrigin`). The light is the atmosphere's sun when one is up (elevation and azimuth in the helper's convention), else the studio dome. While a traced frame covers the viewport, the viewport stops drawing its own. "Re-capture" takes the scene again after it changes.
+
+**Shared client.** `services/virtual-geometry/path-trace-client.ts` now runs the session (open, views, frame polling, drawing) for both viewports.
+
+**Full resolution.** The 1280-wide cap is gone: frames are shown at the overlay's device pixels (up to 8192), traced at about 1280 x 720 pixels' worth and scaled up by MetalFX unless a `renderScale` is set.
+
+**Stills.** "Render still" in both viewports. `POST /3d/path-trace/render` renders one denoised 4K, 1024 spp still of the session's file, materials and light, at the live view's exposure, into `renders/path-traced/` with a JSON of how it was made. The agent tool `path_trace_render` does the same for any workspace GLB (camera in the GLB's coordinates, or automatic framing; studio or sun).
+
+**Multiple-scattering GGX** (Turquin 2019), in both tracers. The specular lobe is scaled by 1 + f0 (1 / Ess - 1). Ess, the lobe's directional albedo at F = 1, comes from a 32 x 32 table integrated once for this exact lobe (height-correlated Smith, visible-normal quadrature, 4,096 samples a cell). The Metal kernels get the same numbers as source (`ggxEssMetalSource`), so the two tracers stay at parity. White metal sphere under a white dome, 256 spp:
+
+| Roughness | Single scatter | Compensated |
+| :--- | :--- | :--- |
+| 0.3 | 0.976 | 0.9996 |
+| 0.6 | 0.808 | 0.9994 |
+| 1.0 | 0.429 | 0.9981 |
+
+Lazarov's environment-BRDF fit used as Ess overshot to 1.16, so the table replaced it. The fit still sets the lobe-selection weights. All 11 tracer tests pass (GPU/CPU parity on the sun sphere and the checkerboard included), as do 4 route tests (snapshot validation, build reuse, origin offset, still into the workspace).
+
+**Not done.** No live check in the app yet. The snapshot re-encodes textures in the browser, so big staged builds will be slow to capture: the server should assemble the scene from its saved JSON instead, keeping the browser snapshot only for content that exists only there. Mac only.
+
 ## Next (plan)
 
-- Multiple-scattering GGX energy compensation (model change, images get slightly brighter on rough surfaces; measure against footage, not against the current reference).
 - Metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share.
 - Phase 4: the a-trous denoiser on the GPU and temporal reuse.
 - Rays: rasterize the camera hit with the existing WebGPU cluster pass; coarser cuts for bounce and shadow rays; any-hit shadow rays (done); merged per-chunk acceleration structures; better samplers; MetalFX upscale.
