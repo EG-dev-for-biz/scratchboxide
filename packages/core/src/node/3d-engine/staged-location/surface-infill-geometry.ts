@@ -359,11 +359,16 @@ export function fitSurfaceModel(ring: Float32Array, chart: InfillChart, P: Infil
             // the level's nearest points (enough for the quadric's reach); sigma from the k-th of them
             let near = nearest(a, b, Math.min(g.length, P.fitPoints), inLevel);
             const d1 = Math.sqrt(near[0]?.d2 ?? 0), dk = Math.sqrt(near[Math.min(k, near.length) - 1]?.d2 ?? 0);
+            // surrounded: the ring has points on at least three sides within 2.5 times the nearest (inside the region,
+            // not out past the ring where the scan itself is the surface)
+            const quads = new Uint8Array(4);
+            for (const { i, d2 } of near) if (d2 <= (2.5 * d1 + gc) ** 2) quads[(A[i] >= a ? 1 : 0) + (B[i] >= b ? 2 : 0)] = 1;
+            const surrounded = quads[0] + quads[1] + quads[2] + quads[3] >= 3;
             // deep inside a wide region the reach passes the nearest points read: the whole level is read instead
-            if (near.length < g.length && P.surroundReach * d1 > Math.sqrt(near[near.length - 1].d2) / 2) near = g.map(i => ({ i, d2: (A[i] - a) ** 2 + (B[i] - b) ** 2 }));
+            if (surrounded && near.length < g.length && P.surroundReach * d1 > Math.sqrt(near[near.length - 1].d2) / 2) near = g.map(i => ({ i, d2: (A[i] - a) ** 2 + (B[i] - b) ** 2 }));
             // the reach: at least the k-th nearest point, and surroundReach times the nearest, so deep inside a wide region
             // the ring's far side weighs in too (no slope of the near side extrapolated across it)
-            const sigma = Math.max(P.sigmaMinM, dk, P.surroundReach * d1);
+            const sigma = Math.max(P.sigmaMinM, dk, surrounded ? P.surroundReach * d1 : 0);
             const s2 = 2 * sigma * sigma;
             // the local quadric through the level's points within 3 sigma (all of them when few), in sigma-scaled
             // coordinates: a camber's curvature is kept inside the ring; the curvature terms are held to zero by a light
@@ -402,7 +407,7 @@ export function fitSurfaceModel(ring: Float32Array, chart: InfillChart, P: Infil
             // deep inside a wide region (deepFromM..deepToM from the ring) the fit's slope would be carried across metres
             // of unmeasured ground: it blends into the ring's weighted mean there (the plane's own value at the middle of a
             // ring around it, and never further than the ring's heights)
-            const deep = Math.max(0, Math.min(1, (d1 - P.deepFromM) / (P.deepToM - P.deepFromM)));
+            const deep = surrounded ? Math.max(0, Math.min(1, (d1 - P.deepFromM) / (P.deepToM - P.deepFromM))) : 0;
             if (deep > 0 && wsum > 0) h = (1 - deep) * h + deep * (wy / wsum);
             // within the ring's range, widening outward at a steep street's grade (no bulge inside, extrapolation outside)
             const reach = P.extrapolateSlope * d1;
