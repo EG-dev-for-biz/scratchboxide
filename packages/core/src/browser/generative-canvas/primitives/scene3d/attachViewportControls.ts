@@ -33,7 +33,8 @@ export interface OrbitState { theta: number; phi: number; distance: number }
 export const CLICK_TRAVEL_PX = 4;
 /** Orbit distance scales by exp(deltaY * rate) per wheel event: ~12% per 100 px notch at any scale. */
 export const WHEEL_ZOOM_RATE = 0.0012;
-const MIN_ORBIT_DISTANCE = 1;
+/** Close enough to fill the view with a few-centimetre object (a groomed coat, a small prop). */
+const MIN_ORBIT_DISTANCE = 0.05;
 /** Near plane used close-up and in FPS mode (matches createRendererStack). */
 const DEFAULT_NEAR = 0.1;
 const MAX_NEAR = 5;
@@ -594,8 +595,9 @@ export function stepCamera(
         camera.position.z = target.z + orbit.distance * Math.sin(orbit.phi) * Math.cos(orbit.theta);
         camera.lookAt(target);
         // Depth precision is governed by near/far: keep near proportional to the viewing distance so
-        // km-scale scenes do not z-fight, while close-up work (< 100 m) keeps the default.
-        setNearPlane(camera, THREE.MathUtils.clamp(orbit.distance / 1000, DEFAULT_NEAR, MAX_NEAR));
+        // km-scale scenes do not z-fight, while close-up work (< 100 m) keeps the default; inside 2 m the
+        // near plane follows the camera in (a twentieth of the distance) so a close-up object is not clipped.
+        setNearPlane(camera, orbit.distance < 2 ? orbit.distance / 20 : THREE.MathUtils.clamp(orbit.distance / 1000, DEFAULT_NEAR, MAX_NEAR));
         return;
     }
     setNearPlane(camera, DEFAULT_NEAR);

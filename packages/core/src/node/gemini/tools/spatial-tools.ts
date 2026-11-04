@@ -5612,7 +5612,7 @@ Object.assign(avatar4dgsHandlers, humanoidAvatarHandlers);
 export const ANALYTICAL_GROOM_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'splat_synthesize_analytical_groom',
-        description: 'Synthesize biophysical hair grooming and forward-project into anisotropic 3D Gaussian Splats (.spz, .ply, .glb) using native C++20 Astro hair and SPZ engines. Takes continuous descriptors only (fill them from your reading of the request; nothing is inferred from words): the harmonic surface r(theta, phi) (baseRadius, harmonicFrequency, harmonicAmplitude, axialTaper), strand length, and pigment as Marschner melanin (eumelanin + pheomelanin) or an explicit baseColorRgb are required. Curl, wave, clumping and taper left out are neutral (none). Missing required descriptors fail with an error naming them.',
+        description: 'Synthesize biophysical hair grooming and forward-project into anisotropic 3D Gaussian Splats (.spz, .ply, .glb) using native C++20 Astro hair and SPZ engines. Takes continuous descriptors only (fill them from your reading of the request; nothing is inferred from words): the harmonic surface r(theta, phi) (baseRadius, harmonicFrequency, harmonicAmplitude, axialTaper), strand length, and pigment as Marschner melanin (eumelanin + pheomelanin) or an explicit baseColorRgb are required. Curl, wave, clumping and taper left out are neutral (none). Missing required descriptors fail with an error naming them. The coat opens in a studio scene as its .spz splat over a body grown from the same surface in the undercoat colour (both generated); the base colour holds along each strand and turns to tipColorRgb near the tips.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -5634,11 +5634,11 @@ export const ANALYTICAL_GROOM_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 strandCount: {
                     type: 'NUMBER',
-                    description: 'Number of dense synthesized strands (default: 4096)'
+                    description: 'Number of dense synthesized strands. Omit for a full coat: about 400,000 per square metre of the surface, 20,000 to 120,000 (a 24 cm ball gets about 72,000); far fewer leave bare patches.'
                 },
                 guideCount: {
                     type: 'NUMBER',
-                    description: 'Number of sparse guide curves (default: 64)'
+                    description: 'Number of sparse guide curves. Omit for one per hundred strands (64 to 1,200).'
                 },
                 length: {
                     type: 'NUMBER',
@@ -5732,9 +5732,57 @@ export const analyticalGroomHandlers: Record<string, ToolHandler> = {
             throw new Error(`Failed to synthesize analytical groom splat: ${result.error}`);
         }
 
+        // Published where the viewport serves models, and shown: the coat as its .spz splat (the GLB surfel mesh is
+        // many times larger and only an export) over the body it grows from.
+        const fs = await import('fs');
+        // the checkout's models folder, and the server's own when it runs from another checkout (as the object builder does)
+        const modelsDir = path.resolve(process.env.SCRATCHBOX_ROOT || findTileRefineRepoRoot(), 'public/models');
+        fs.mkdirSync(modelsDir, { recursive: true });
+        const servedDirs = [...new Set([modelsDir, path.resolve(process.cwd(), 'public/models'), path.resolve(process.cwd(), '..', 'public/models')])]
+            .filter(dir => fs.existsSync(dir));
+        const publish = (file?: string) => {
+            if (!file) return undefined;
+            for (const dir of servedDirs) fs.copyFileSync(file, path.join(dir, path.basename(file)));
+            return `/models/${path.basename(file)}`;
+        };
+        const splatUri = publish(result.spzPath);
+        const bodyUri = publish(result.bodyGlbPath);
+        if (!splatUri) throw new Error('The groom wrote no .spz splat, so there is nothing to show.');
+        const s = contract.surface;
+        const extent = (s.baseRadius ?? 0.1) * (1 + Math.abs(s.harmonicAmplitude ?? 0)) + (contract.groom.length ?? 0.05);
+        const center = s.center || [0, 0, 0];
+        const object = (id: string, uri: string, description: string) => ({
+            id,
+            content: { type: '3d-model', durableUri: uri, mimeType: uri.endsWith('.spz') ? 'application/octet-stream' : 'model/gltf-binary', metadata: { role: 'hero', description, metricScale: 1.0, groundSnapped: false, provenance: 'generated' } },
+            space: { spatial3d: { x: center[0], y: center[1] + extent, z: center[2] } },
+            time: { startMs: 0, durationMs: 20000 },
+            lineage: { version: 1 }
+        });
+        const title = 'Groomed coat';
+        const artifact = {
+            id: `artifact-3d-${Date.now()}`,
+            type: '3d-scene',
+            title,
+            summary: `${result.strandCount.toLocaleString('en-US')} strands as ${result.splatCount.toLocaleString('en-US')} Gaussian splats${bodyUri ? ' over its body' : ''}.`,
+            version: 1,
+            data: {
+                title,
+                worldBranch: 'procedural/analytical-groom',
+                sceneType: 'custom',
+                renderMode: 'pbr',
+                cameraMode: 'orbit',
+                camera: { position: [center[0] + extent * 2.2, center[1] + extent * 1.9, center[2] + extent * 2.6], target: [center[0], center[1] + extent, center[2]], fov: 45 },
+                environment: { skybox: 'studio', lighting: 'studio', ground: false },
+                objects: [
+                    ...(bodyUri ? [object('groom-body', bodyUri, 'the body the coat grows from (generated)')] : []),
+                    object('groom-coat', splatUri, `groomed coat: ${result.strandCount.toLocaleString('en-US')} strands (generated)`)
+                ]
+            }
+        } as unknown as CanvasArtifact;
+
         return {
-            resultPayload: result as unknown as ToolResultPayload,
-            summaryResult: `Successfully synthesized ${result.splatCount} anisotropic 3D Gaussian Splats from ${result.strandCount} biophysical strands (harmonic freq: ${contract.surface.harmonicFrequency ?? 0}, amplitude: ${contract.surface.harmonicAmplitude ?? 0}) in ${result.executionTimeMs}ms. SPZ: ${result.spzPath || 'N/A'}`
+            resultPayload: { ...(result as unknown as ToolResultPayload), splatUri, ...(bodyUri ? { bodyUri } : {}), artifact } as unknown as ToolResultPayload,
+            summaryResult: `Groomed ${result.strandCount} strands into ${result.splatCount} Gaussian splats in ${result.executionTimeMs} ms and opened them${bodyUri ? ' over their body' : ''} in a studio scene (${splatUri}${bodyUri ? `, body ${bodyUri}` : ''}). The coat and body are generated.`
         };
     },
     streetview_grounding_image: async (args, ctx) => {
