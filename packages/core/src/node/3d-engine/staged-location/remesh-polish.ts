@@ -22,7 +22,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { cleanRemesh, remeshCleanupEnabled, REMESH_CLEANUP_VERSION, type RemeshCleanupStats } from './remesh-cleanup';
 import { orientRemesh, remeshOrientEnabled, REMESH_ORIENT_VERSION, type RemeshOrientStats } from './remesh-orient';
-import { FACADE_LATTICE_PARAMS, FACADE_LATTICE_VERSION, LATTICE_CUT_VERSION, PHOTO_RECESS, rebuildFacadesOnLattice, type TearReport } from './facade-lattice';
+import { FACADE_LATTICE_PARAMS, FACADE_LATTICE_VERSION, LATTICE_CUT_VERSION, PHOTO_RECESS, rebuildFacadesOnLattice, type LatticeSurfaceReport, type TearReport } from './facade-lattice';
 import { BASE_CLEANUP_PARAMS, BASE_CLEANUP_VERSION, cleanBase, type BaseCleanupReport } from './pipeline-k/base-cleanup';
 import { clipToFootprint, fillOpenLoops, LATTICE_STITCH_VERSION, type ClipReport, type CutReport, type FillReport } from './pipeline-k/lattice-stitch';
 import type { Vec2 } from '../../../common/spatial/staged-location-contracts';
@@ -43,7 +43,7 @@ export interface RemeshPolishStats {
     clip?: { clay: ClipReport; textured?: ClipReport } | { skipped: string };
     /** The openings left closed by the fill (without the seal's cut and stitch). */
     infill?: FillReport;
-    lattice?: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears?: TearReport; cut?: CutReport; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number] }> };
+    lattice?: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears?: TearReport; cut?: CutReport; /** The rebuilt cells merged into faces and steps, welded (facade-lattice.ts latticeSurface). */ surface?: LatticeSurfaceReport; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number] }> };
 }
 
 /** The polish's steps in the order they run. */
@@ -119,7 +119,9 @@ export function describePolish(s: RemeshPolishStats): string {
     if (s.orient?.turned) parts.push(`${s.orient.turned} scan triangles seen only from behind turned to face outward (${s.orient.turnedAreaM2} m²)`);
     if (s.lattice) {
         const t = s.lattice.tears;
+        const sf = s.lattice.surface;
         parts.push(`${s.lattice.rebuilt} of ${s.lattice.facades} rectified facades rebuilt on the lines their photo shows (${s.lattice.cells} cells; lines photo-inferred, depths measured and averaged along each storey's repeats)` +
+            (sf ? `; the cells merged into ${sf.faces} faces and ${sf.steps} steps, welded: ${sf.triangles} triangles, ${sf.vertices} vertices` : '') +
             (s.lattice.cut ? `; the scan cut exactly at the rebuilt cells (${s.lattice.cut.cutTriangles} triangles cut, ${s.lattice.cut.removedPieces} pieces over the cells dropped)` : '') +
             (t ? `; tear audit: ${t.found ? `${t.found} torn pixels found, ${t.restoredTriangles} scan triangles put back${t.restoredInFront ? ` (${t.restoredInFront} over holes seen straight on, though they stand in front of the rebuild)` : ''}${t.keptInFront ? `, ${t.keptInFront} kept out because they would stand in front of the rebuild${t.obliqueLeft ? ` (${t.obliqueLeft} pixels seen only from an angle left open)` : ''}` : ''}${t.droppedFacades.length ? `, ${t.droppedFacades.length} facades left as scanned because a tear stayed` : ''}` : 'no tear'}${t.left ? `, ${t.left} torn pixels left` : ''}` : ''));
     }

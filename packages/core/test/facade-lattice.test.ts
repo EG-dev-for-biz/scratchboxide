@@ -18,7 +18,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { applyFacadeLattices, facadeSamples, latticeFacade, photoLattice, rebuildFacadesOnLattice, STRUCTURE, structureExtras, windowBays, windowGrid, windowStrips, WINDOW_STRIPS, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
+import { applyFacadeLattices, FACADE_LATTICE_PARAMS, facadeSamples, latticeFacade, latticeSurface, photoLattice, rebuildFacadesOnLattice, STRUCTURE, structureExtras, windowBays, windowGrid, windowStrips, WINDOW_STRIPS, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
 import { assembleGlb, parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { cutScanToLattice, LATTICE_STITCH_PARAMS } from '../src/node/3d-engine/staged-location/pipeline-k/lattice-stitch';
@@ -626,6 +626,97 @@ describe('facade lattices on a district-sized remesh', () => {
         expect(back.json.meshes).toHaveLength(2);
         const idx = new Uint32Array(back.bin.buffer.slice(back.bin.byteOffset + 36, back.bin.byteOffset + 48));
         expect(Array.from(idx)).toEqual([0, 0, 0]);
+    });
+});
+
+/** Edges used by an odd number of triangles once the vertices are welded at 1 mm (as the infill counts them), as point pairs in mm. */
+function openEdges(r: { positions: Float32Array; indices: Uint32Array }): Array<[number[], number[]]> {
+    const ids = new Map<string, number>(), at: number[][] = [];
+    const vid = Array.from({ length: r.positions.length / 3 }, (_, v) => {
+        const p = [0, 1, 2].map(k => Math.round(r.positions[v * 3 + k] / 0.001)), key = p.join(',');
+        if (!ids.has(key)) { ids.set(key, at.length); at.push(p); }
+        return ids.get(key)!;
+    });
+    const count = new Map<number, number>();
+    for (let q = 0; q < r.indices.length; q += 3) {
+        const f3 = [0, 1, 2].map(j => vid[r.indices[q + j]]);
+        if (new Set(f3).size < 3) continue;
+        for (let k = 0; k < 3; k++) { const a = f3[k], b = f3[(k + 1) % 3], e = Math.min(a, b) * 2 ** 26 + Math.max(a, b); count.set(e, (count.get(e) ?? 0) + 1); }
+    }
+    return [...count].filter(([, n]) => n % 2).map(([e]) => [at[Math.floor(e / 2 ** 26)], at[e % 2 ** 26]]);
+}
+
+describe('the rebuilt surface: merged, welded and closed inside the wall', () => {
+    const g: ReliefFacade = { facadeId: 1, image: '', centroid: [0, 0, 0], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], sMin: 0, sMax: 6, tMin: 0, tMax: 4, pixel: 0.1, width: 60, height: 40, orthoSMin: 0, orthoTMax: 4, coverage: 1 };
+    const surface = (s: number[], t: number[], depthAt: (a: number, b: number) => number, structure = true) => {
+        const ns = s.length - 1, nt = t.length - 1, h: ReliefFacade = { ...g, sMax: s[ns], tMax: t[nt], orthoTMax: t[nt], width: s[ns] * 10, height: t[nt] * 10 };
+        const depth = Float64Array.from({ length: ns * nt }, (_, k) => depthAt(k % ns, Math.floor(k / ns)));
+        return { r: latticeSurface(h, s[ns], t[nt], s, t, new Uint8Array(ns * nt).fill(1), depth, new Float64Array(ns * nt).fill(NaN), structure), sMax: s[ns] * 1000, tMax: t[nt] * 1000 };
+    };
+    // an open edge on the facade's outline is where the scan or the next facade takes over; anywhere else it is a hole in the wall
+    const inside = ({ r, sMax, tMax }: ReturnType<typeof surface>) => openEdges(r).filter(([p, q]) => !([0, sMax].some(v => p[0] === v && q[0] === v) || [0, tMax].some(v => p[1] === v && q[1] === v)));
+    const S5 = [0, 1, 2, 4, 5, 6], T3 = [0, 1, 3, 4];
+
+    it('makes rows whose depths differ by millimetres one face at their median, with no slit between them', () => {
+        const x = surface([0, 1, 2, 3], [0, 1, 2, 3], (_a, b) => [0, 0.004, 0.008][b], false);
+        expect(x.r.surface.faces).toBe(1);
+        expect(x.r.surface.steps).toBe(0);
+        expect(x.r.indices.length / 3).toBe(2);
+        for (let v = 2; v < x.r.positions.length; v += 3) expect(x.r.positions[v]).toBeCloseTo(0.004, 6);
+        expect(inside(x)).toEqual([]);
+    });
+
+    it('closes every step inside the wall, the corners where several depths meet included', () => {
+        // a window recessed 0.3 m, a sill 0.12 m deep below it and a pier standing 0.2 m proud beside them, unchamfered
+        const x = surface(S5, [0, 1, 1.5, 3, 4], (a, b) => (a === 2 && b === 2 ? -0.3 : a === 2 && b === 1 ? -0.12 : a === 3 && b > 0 && b < 3 ? 0.2 : 0), false);
+        expect(x.r.surface.steps).toBeGreaterThan(0);
+        expect(inside(x)).toEqual([]);
+        // welded: well under the 2 vertices a triangle of separate quads have
+        expect(x.r.positions.length / 3 / (x.r.indices.length / 3)).toBeLessThan(1.8);
+    });
+
+    it("mitres a recess's chamfered arrises at its inner corners and a pier's at its outer ones, and cuts the recessed face back to their foot", () => {
+        for (const v of [-0.2, 0.2]) {
+            const x = surface(S5, T3, (a, b) => (a === 2 && b === 1 ? v : b * 0.004));
+            expect(x.r.surface.chamfered).toBe(4);
+            expect(x.r.surface.mitres).toBe(8);
+            expect(x.r.surface.caps).toBe(0);
+            expect(x.r.surface.cutFaces).toBeGreaterThan(0);
+            expect(inside(x)).toEqual([]);
+            // the bevels lean 45 degrees between the normal and the facade's axes
+            let bevels = 0;
+            for (let i = 0; i < x.r.indices.length; i += 3) { const k = x.r.indices[i]; if (Math.abs(Math.abs(x.r.normals[k * 3]) + Math.abs(x.r.normals[k * 3 + 1]) - Math.SQRT1_2) < 1e-3 && Math.abs(x.r.normals[k * 3 + 2] - Math.SQRT1_2) < 1e-3) bevels++; }
+            expect(bevels).toBeGreaterThan(0);
+        }
+    });
+
+    it('runs a chamfered bay on flush across the faces a tall wall is cut into, and caps it where it leaves the facade', () => {
+        const tall = surface([0, 1, 2, 3], Array.from({ length: 13 }, (_, i) => i), (a, b) => (a === 1 && b > 0 && b < 11 ? -0.15 : 0.001 * (b % 3)));
+        expect(tall.r.surface.faces).toBeGreaterThan(3);
+        expect(inside(tall)).toEqual([]);
+        const through = surface(S5, T3, a => (a === 2 ? -0.15 : 0));
+        expect(through.r.surface.caps).toBe(4);
+        expect(inside(through)).toEqual([]);
+    });
+
+    it('keeps the photo where it was: every face texel in the plane frame, and no face larger than mergeMaxM', () => {
+        const s = Array.from({ length: 21 }, (_, i) => i * 0.5), t = Array.from({ length: 13 }, (_, i) => i * 0.5);
+        const x = surface(s, t, (a, b) => ((a % 4 === 1 || a % 4 === 2) && b % 3 === 1 ? -0.25 : 0));
+        const { r } = x;
+        for (let v = 0; v < r.positions.length / 3; v++) {
+            if (Math.abs(r.normals[v * 3 + 2] - 1) > 1e-6) continue;
+            expect(r.uv[v * 2]).toBeCloseTo(r.positions[v * 3] / 10, 5);
+            expect(r.uv[v * 2 + 1]).toBeCloseTo((6 - r.positions[v * 3 + 1]) / 6, 5);
+        }
+        for (let i = 0; i < r.indices.length; i += 3) {
+            const ids = [0, 1, 2].map(j => r.indices[i + j]);
+            for (const k of [0, 1]) expect(Math.max(...ids.map(q => r.positions[q * 3 + k])) - Math.min(...ids.map(q => r.positions[q * 3 + k]))).toBeLessThanOrEqual(FACADE_LATTICE_PARAMS.mergeMaxM + 1e-6);
+        }
+        expect(inside(x)).toEqual([]);
+        // without chamfers, fewer triangles than the two a cell each of the old rebuild had before any of its reveals
+        const plainWall = surface(s, t, (a, b) => ((a % 4 === 1 || a % 4 === 2) && b % 3 === 1 ? -0.25 : 0), false);
+        expect(plainWall.r.indices.length / 3).toBeLessThan(2 * plainWall.r.surface.cells);
+        expect(inside(plainWall)).toEqual([]);
     });
 });
 

@@ -20,8 +20,9 @@
  * 3. repeats averaged: the windows are read in rows and columns (windowGrid: a darker column crossing a darker row, the
  *    cell darker than the wall); in each row the windows and the wall each take their median depth, so repeated windows
  *    get one recess measured from all of them;
- * 4. the facade rebuilt: one face per cell at its depth, step faces between cells (reveals, sills, cornices), replacing the
- *    scan's facade triangles; textured with the facade's own orthophoto (planar UVs in the plane's frame). Only cells the
+ * 4. the facade rebuilt: the cells at their depths, step faces between them (reveals, sills, cornices), replacing the scan's
+ *    facade triangles, merged into faces, welded and closed inside the wall (latticeSurface); textured with the facade's own
+ *    orthophoto (planar UVs in the plane's frame). Only cells the
  *    photo covers are rebuilt: an uncovered cell keeps its scan triangles, never a face painted the uncovered grey. Pipeline
  *    K rebuilds whole walls instead (wall-sheets.ts): a wall of several facades is one sheet with one photo, rebuilt in place
  *    of them, and a cell the photo missed is rebuilt too where the scan measures the wall inside its outline (its texture
@@ -47,7 +48,7 @@ import { nativePolishThreads, runNativeLattice, runNativeLatticeAudit, type Nati
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const FACADE_LATTICE_VERSION = 'facade-lattice/20';
+export const FACADE_LATTICE_VERSION = 'facade-lattice/21';
 /** The cut (rebuildFacadesOnLattice opts.cut): the scan split at the rebuilt cells' lines before the removals and the tear audit. */
 export const LATTICE_CUT_VERSION = 'lattice-cut/5';
 
@@ -102,7 +103,13 @@ export const FACADE_LATTICE_PARAMS = {
      * front of the surface its rebuilt facade draws there (seen straight on); where the rebuild draws nothing, a real hole, it
      * comes back, and so does one under a tear seen straight on (on the ESB those are seams and corners the rebuild leaves open).
      */
-    restoreFrontM: 0.05
+    restoreFrontM: 0.05,
+    /**
+     * Rebuilt cells of equal depth merge into faces at most this on a side (m), and the steps along one line into stretches at
+     * most this long (latticeSurface): lean, while the steps after the lattice that judge a triangle by its centre (the base
+     * cleanup's apron and wall line) still judge the wall at about a storey's size.
+     */
+    mergeMaxM: 4
 };
 
 /**
@@ -276,8 +283,8 @@ export function fittedCells(s: number[], t: number[], windows: Array<[number, nu
 
 /**
  * The native lattice's parameters (scratchbox_facade_lattice.hpp Params): P, PHOTO_RECESS, WINDOW_GRID, WINDOW_STRIPS,
- * STRUCTURE and REPEAT_TEXTURE in order, the audit's world box reach, and its four angled views with their cosines and sines
- * as this file's Math.cos and Math.sin give them.
+ * STRUCTURE and REPEAT_TEXTURE in order, the audit's world box reach, its four angled views with their cosines and sines
+ * as this file's Math.cos and Math.sin give them, and the surface's mergeMaxM.
  */
 export function latticeParamVector(P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS): number[] {
     const views = [P.auditYawDeg, -P.auditYawDeg, P.auditPitchDeg, -P.auditPitchDeg].flatMap(deg => [deg, Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)]);
@@ -290,7 +297,8 @@ export function latticeParamVector(P: typeof FACADE_LATTICE_PARAMS = FACADE_LATT
         STRUCTURE.chamferM, STRUCTURE.minReliefM, STRUCTURE.defaultReliefM,
         REPEAT_TEXTURE.sizeTol, REPEAT_TEXTURE.minRepeats, REPEAT_TEXTURE.edgeM, REPEAT_TEXTURE.keepShade, REPEAT_TEXTURE.maxShade, REPEAT_TEXTURE.maxSpandrelM, REPEAT_TEXTURE.minSidePx,
         FACADE_LATTICE_PARAMS.depthBandM + 1,
-        ...views
+        ...views,
+        P.mergeMaxM
     ];
 }
 
@@ -328,6 +336,8 @@ export interface FacadeLatticeResult {
     /** Of the fitted windows, those continued into parts the photo never reached (window-fit.ts completeLattice), u0 v0 u1 v1 each: generated. */
     generatedWindows?: number[];
     positions: Float32Array; normals: Float32Array; uv: Float32Array; indices: Uint32Array;
+    /** How the surface was built from the cells (latticeSurface). */
+    surface?: LatticeSurfaceReport;
 }
 
 const dot = (a: ArrayLike<number>, b: ArrayLike<number>) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -533,74 +543,328 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
         depth.push(cells.map(k => clamp(Number.isFinite(win[k] ? dm : lm) ? (win[k] ? dm : lm) : Number.isFinite(rowMed) ? rowMed : 0)));
         if (recessed) photoRecessCells += dark.filter(k => built[k]).length;
     }
-    // the surface: one face per cell, step faces between cells
-    const pos: number[] = [], nrm: number[] = [], uv: number[] = [], idx: number[] = [];
-    const W = img.width * f.pixel, H = img.height * f.pixel;
-    const world = (sv: number, tv: number, d: number) => [0, 1, 2].map(k => f.centroid[k] + sv * f.axisS[k] + tv * f.axisT[k] + d * f.normal[k]);
-    // texels by the plane's frame; a side face passes where its points read the photo (unfolded), else it would take one texel line
-    const quad = (pts: Array<[number, number, number]>, n: number[], at: (sv: number, tv: number, d: number) => [number, number] = (sv, tv) => [sv, tv]) => {
-        const base = pos.length / 3;
-        for (const [sv, tv, d] of pts) { const [us, ut] = at(sv, tv, d); pos.push(...world(sv, tv, d)); nrm.push(...n); uv.push((us - f.orthoSMin) / W, (f.orthoTMax - ut) / H); }
-        // wound counter-clockwise seen from the side n points to
-        const p = (i: number) => pos.slice((base + i) * 3, (base + i) * 3 + 3), o = p(0), e1 = p(1).map((x, k) => x - o[k]), e2 = p(2).map((x, k) => x - o[k]);
-        const g = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
-        if (dot(g, n) < 0) idx.push(base, base + 2, base + 1, base, base + 3, base + 2);
-        else idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
-    };
-    const N = f.normal, S = f.axisS, T = f.axisT, neg = (v: number[]) => v.map(x => -x);
-    // a side face on line s = sv between depth L (the smaller-s side) and R, wound to face the side it shows to (S x T = N); its
-    // texels unfold into the recessed side's photo, from the edge (the front depth) inward as far as the face is deep, so a
-    // reveal shows the photo beside the opening rather than one column of texels drawn across it
-    // with the structure, a step at least twice chamferM deep has its front edge chamfered at 45 degrees: the chamfer leans over
-    // the recessed side by c and the side face below it starts c into it, so the stone's arris catches the light (STRUCTURE)
-    const bevelOf = (L: number, R: number) => (structure && Math.abs(L - R) >= 2 * STRUCTURE.chamferM ? STRUCTURE.chamferM : 0);
-    const unit = (v: number[]) => { const l = Math.hypot(v[0], v[1], v[2]); return v.map(x => x / l); };
-    const sideS = (sv: number, t0: number, t1: number, L: number, R: number) => {
-        if (!(Math.abs(L - R) > P.stepM)) return;
-        const front = Math.max(L, R), back = Math.min(L, R), into = L < R ? -1 : 1, c = bevelOf(L, R), sb = sv + into * c;
-        const at = (sx: number, tv: number, d: number): [number, number] => [sx + into * (front - d), tv];
-        if (c) {
-            // the bevel, facing out and over the recess (N + into S)
-            if (L > R) quad([[sv, t0, front], [sb, t0, front - c], [sb, t1, front - c], [sv, t1, front]], unit(N.map((x, k) => x + into * S[k])), at);
-            else quad([[sv, t0, front], [sv, t1, front], [sb, t1, front - c], [sb, t0, front - c]], unit(N.map((x, k) => x + into * S[k])), at);
-        }
-        const top = front - c;
-        if (L > R) quad([[sb, t0, back], [sb, t1, back], [sb, t1, top], [sb, t0, top]], S, at);
-        else quad([[sb, t0, top], [sb, t0, back], [sb, t1, back], [sb, t1, top]], neg(S), at);
-    };
-    // on line t = tv between depth B (the smaller-t side, below) and A
-    const sideT = (tv: number, s0: number, s1: number, B: number, A: number) => {
-        if (!(Math.abs(B - A) > P.stepM)) return;
-        const front = Math.max(B, A), back = Math.min(B, A), into = B < A ? -1 : 1, c = bevelOf(B, A), tb = tv + into * c;
-        const at = (sv: number, ty: number, d: number): [number, number] => [sv, ty + into * (front - d)];
-        if (c) {
-            if (B > A) quad([[s0, tv, front], [s1, tv, front], [s1, tb, front - c], [s0, tb, front - c]], unit(N.map((x, k) => x + into * T[k])), at);
-            else quad([[s0, tv, front], [s0, tb, front - c], [s1, tb, front - c], [s1, tv, front]], unit(N.map((x, k) => x + into * T[k])), at);
-        }
-        const top = front - c;
-        if (B > A) quad([[s0, tb, back], [s0, tb, top], [s1, tb, top], [s1, tb, back]], T, at);
-        else quad([[s0, tb, top], [s1, tb, top], [s1, tb, back], [s0, tb, back]], neg(T), at);
-    };
     // where the scan stands beside a rebuilt cell (a neighbour left as scan): its measured depth, else its row's; NaN when the
-    // scan measures nothing there, or another surface further behind than any recess (no face is drawn). Past the lattice's outer edge nothing is drawn: the neighbouring facade or
-    // the scan closes the corner, and a face back to the edge cell's own depth would lie on that facade's plane, over its pier
-    const scanDepthAt = (a: number, b: number) => { const v = raw[b * ns + a]; return Number.isFinite(v) ? (v < P.minDepthM ? NaN : clamp(v)) : Number.isFinite(rowMeds[b]) ? clamp(rowMeds[b]) : NaN; };
-    const isBuilt = (a: number, b: number) => a >= 0 && b >= 0 && a < ns && b < nt && !!built[b * ns + a];
-    const beside = (na: number, nb: number) => isBuilt(na, nb) ? depth[nb][na] : na >= 0 && nb >= 0 && na < ns && nb < nt ? scanDepthAt(na, nb) : NaN;
-    for (let b = 0; b < nt; b++) for (let a = 0; a < ns; a++) {
-        // a cell the photo does not cover keeps the scan
-        if (!built[b * ns + a]) continue;
-        const d = depth[b][a];
-        // counter-clockwise seen from outside (along +normal): s right, t up
-        quad([[s[a], t[b], d], [s[a + 1], t[b], d], [s[a + 1], t[b + 1], d], [s[a], t[b + 1], d]], N);
-        // reveals: to every side, toward a rebuilt cell (drawn once, from its smaller-s or smaller-t side) or toward the scan
-        sideS(s[a + 1], t[b], t[b + 1], d, beside(a + 1, b));
-        if (!isBuilt(a - 1, b)) sideS(s[a], t[b], t[b + 1], beside(a - 1, b), d);
-        sideT(t[b + 1], s[a], s[a + 1], d, beside(a, b + 1));
-        if (!isBuilt(a, b - 1)) sideT(t[b], s[a], s[a + 1], beside(a, b - 1), d);
-    }
+    // scan measures nothing there, or another surface further behind than any recess (no face is drawn)
+    const scan = Float64Array.from({ length: ns * nt }, (_, k) => { const v = raw[k], m = rowMeds[Math.floor(k / ns)]; return Number.isFinite(v) ? (v < P.minDepthM ? NaN : clamp(v)) : Number.isFinite(m) ? clamp(m) : NaN; });
     if (!built.some(v => v)) return undefined;
-    return { facadeId: f.facadeId, s, t, cells: built.reduce((x, v) => x + v, 0), measuredShare: Math.round(measured * 1000) / 1000, depth, ...(photoRecess ? { photoRecessCells } : {}), ...(strips.length ? { strips, stripCells } : {}), ...(structure ? { structure } : {}), built, windows, cellU: s.map(v => (v - f.orthoSMin) / (img.width * f.pixel)), cellV: t.map(v => (f.orthoTMax - v) / (img.height * f.pixel)), positions: Float32Array.from(pos), normals: Float32Array.from(nrm), uv: Float32Array.from(uv), indices: Uint32Array.from(idx) };
+    const surface = latticeSurface(f, img.width * f.pixel, img.height * f.pixel, s, t, built, Float64Array.from(depth.flat()), scan, !!structure, P);
+    return { facadeId: f.facadeId, s, t, cells: built.reduce((x, v) => x + v, 0), measuredShare: Math.round(measured * 1000) / 1000, depth, ...(photoRecess ? { photoRecessCells } : {}), ...(strips.length ? { strips, stripCells } : {}), ...(structure ? { structure } : {}), built, windows, cellU: s.map(v => (v - f.orthoSMin) / (img.width * f.pixel)), cellV: t.map(v => (f.orthoTMax - v) / (img.height * f.pixel)), ...surface };
+}
+
+/** What latticeSurface built: the faces it merged the cells into, the steps between them, and the vertices it welded. */
+export interface LatticeSurfaceReport {
+    cells: number; faces: number; steps: number;
+    /** Of the steps, those chamfered; the recessed faces cut back to their bevels' foot, the arris ends mitred (counted once per arris end) and capped. */
+    chamfered: number; cutFaces: number; mitres: number; caps: number;
+    triangles: number; vertices: number;
+}
+
+/**
+ * A rebuilt facade's surface, welded and lean: the rebuilt cells merged into faces, steps between them, one vertex per shared
+ * corner.
+ * 1. Faces: connected built cells whose depths all lie within stepM of each other are one flat region at their median depth
+ *    (the old rebuild drew no step under stepM either, leaving a slit between rows whose medians differ by millimetres), cut
+ *    greedily into rectangles (along s first, then up t over the same span) at most mergeMaxM on a side, so the steps after the lattice that judge a triangle by its centre (the base cleanup's apron
+ *    and wall line) judge the wall at about the size they did cell by cell. UVs stay planar in the plane's frame, so a merged
+ *    face shows the same photo as its cells, and the window and structure extras (read by UV) stay as they were.
+ * 2. Steps: on every lattice line between two rebuilt cells whose depths differ at all (a step under stepM was left a slit),
+ *    and toward the scan beside a rebuilt cell where the two differ by more than stepM, as before; neighbouring stretches of
+ *    one line with the same two depths are one step. Its texels unfold into the recessed side's photo, from the edge (the
+ *    front depth) inward as far as the face is deep, so a reveal shows the photo beside the opening rather than one column of
+ *    texels drawn across it. With the structure, a step between two rebuilt cells at least twice chamferM deep has its front
+ *    edge chamfered at 45 degrees: the chamfer leans over the recessed side by c and the side face below it starts c into it
+ *    (STRUCTURE); the recessed face ends at the side face's foot. Where two such arrises meet at a corner with the same two
+ *    depths (a recess's inner corner, a pier's outer one) they are mitred; one that runs on along its line meets the next
+ *    flush; any other end is capped. Three arrises meeting at one corner stay capped, the one place left open inside a wall.
+ * 3. No T-junction: every face and plain step carries a vertex at every lattice corner on its edges where another face or
+ *    step has one, and a step's ends carry every depth met at that corner (as watertightLatticeMesh does for the seal), so
+ *    neighbours share their edges exactly. A face with corner vertices only on two opposite sides is zipped across them;
+ *    one with more is fanned from its centre.
+ * 4. Welded: vertices with the same position, normal and UV (as stored, in 32 bits) are one.
+ * Lines are photo-inferred and depths measured as before (a face's the median of its cells', which differ by under stepM);
+ * the cells' own depths (FacadeLatticeResult.depth) are unchanged.
+ */
+export function latticeSurface(f: ReliefFacade, W: number, H: number, s: number[], t: number[], built: Uint8Array, depth: Float64Array, scan: Float64Array, structure: boolean, P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS): Pick<FacadeLatticeResult, 'positions' | 'normals' | 'uv' | 'indices'> & { surface: LatticeSurfaceReport } {
+    const ns = s.length - 1, nt = t.length - 1, G = ns + 1;
+    const isBuilt = (a: number, b: number) => a >= 0 && b >= 0 && a < ns && b < nt && !!built[b * ns + a];
+    // 1. the flat regions: connected rebuilt cells whose depths all lie within stepM of each other (no step was ever drawn between
+    // them), grown breadth first from each unclaimed cell in turn, each at its cells' median depth; then the faces, rectangles of
+    // one region's cells
+    const region = new Int32Array(ns * nt).fill(-1), D = new Float64Array(ns * nt);
+    let regions = 0;
+    for (let k0 = 0; k0 < ns * nt; k0++) {
+        if (!built[k0] || region[k0] >= 0) continue;
+        let lo = depth[k0], hi = depth[k0];
+        const queue = [k0];
+        region[k0] = regions;
+        for (let qi = 0; qi < queue.length; qi++) {
+            const k = queue[qi], a = k % ns, b = Math.floor(k / ns);
+            for (const [x, y] of [[a + 1, b], [a, b + 1], [a - 1, b], [a, b - 1]]) {
+                if (!isBuilt(x, y)) continue;
+                const n = y * ns + x, v = depth[n];
+                if (region[n] >= 0 || !(Math.max(hi, v) - Math.min(lo, v) <= P.stepM)) continue;
+                lo = Math.min(lo, v); hi = Math.max(hi, v); region[n] = regions; queue.push(n);
+            }
+        }
+        const rep = median(queue.map(k => depth[k]));
+        for (const k of queue) D[k] = rep;
+        regions++;
+    }
+    const faceOf = new Int32Array(ns * nt).fill(-1), faces: Array<[number, number, number, number]> = [];
+    for (let b = 0; b < nt; b++) for (let a = 0; a < ns; a++) {
+        const k = b * ns + a;
+        if (!built[k] || faceOf[k] >= 0) continue;
+        const free = (x: number, y: number) => isBuilt(x, y) && faceOf[y * ns + x] < 0 && region[y * ns + x] === region[k];
+        let a1 = a, b1 = b;
+        while (free(a1 + 1, b) && s[a1 + 2] - s[a] <= P.mergeMaxM) a1++;
+        for (;;) {
+            if (!(b1 + 1 < nt) || !(t[b1 + 2] - t[b] <= P.mergeMaxM)) break;
+            let row = true;
+            for (let x = a; x <= a1 && row; x++) row = free(x, b1 + 1);
+            if (!row) break;
+            b1++;
+        }
+        for (let y = b; y <= b1; y++) for (let x = a; x <= a1; x++) faceOf[y * ns + x] = faces.length;
+        faces.push([a, b, a1, b1]);
+    }
+    // 2. the steps, line by line: [line, from, to (cells along it), L, R] with L on the line's smaller side
+    const bevelOf = (L: number, R: number) => (structure && Math.abs(L - R) >= 2 * STRUCTURE.chamferM ? STRUCTURE.chamferM : 0);
+    // [L, R, 1 between two rebuilt cells | 0 toward the scan]
+    const stepDepths = (na: number, nb: number, xa: number, xb: number): [number, number, number] | undefined => {
+        const n = isBuilt(na, nb), x = isBuilt(xa, xb);
+        if (!n && !x) return undefined;
+        const at = (a: number, b: number, own: boolean) => (own ? D[b * ns + a] : a >= 0 && b >= 0 && a < ns && b < nt ? scan[b * ns + a] : NaN);
+        const L = at(na, nb, n), R = at(xa, xb, x);
+        if (n && x) return L !== R ? [L, R, 1] : undefined;
+        return Math.abs(L - R) > P.stepM ? [L, R, 0] : undefined;
+    };
+    type Step = { dir: 0 | 1; line: number; from: number; to: number; L: number; R: number; c: number };
+    const steps: Step[] = [];
+    const runs = (dir: 0 | 1, lines: number, along: number, edges: number[], pair: (line: number, i: number) => [number, number, number] | undefined) => {
+        for (let line = 0; line < lines; line++) {
+            let cur: Step | undefined;
+            for (let i = 0; i < along; i++) {
+                const p = pair(line, i);
+                if (cur && p && p[0] === cur.L && p[1] === cur.R && (p[2] ? bevelOf(p[0], p[1]) : 0) === cur.c && edges[i + 1] - edges[cur.from] <= P.mergeMaxM) { cur.to = i; continue; }
+                if (cur) steps.push(cur);
+                cur = p ? { dir, line, from: i, to: i, L: p[0], R: p[1], c: p[2] ? bevelOf(p[0], p[1]) : 0 } : undefined;
+            }
+            if (cur) steps.push(cur);
+        }
+    };
+    // dir 0: on line s = s[line] between cells (line - 1, b) and (line, b); dir 1: on t = t[line] between (a, line - 1) and (a, line)
+    runs(0, G, nt, t, (line, b) => stepDepths(line - 1, b, line, b));
+    runs(1, nt + 1, ns, s, (line, a) => stepDepths(a, line - 1, a, line));
+    // 3. the corners everything meets at, and the depths met at each
+    const junction = new Uint8Array(G * (nt + 1));
+    for (const [a0, b0, a1, b1] of faces) for (const [x, y] of [[a0, b0], [a1 + 1, b0], [a0, b1 + 1], [a1 + 1, b1 + 1]]) junction[y * G + x] = 1;
+    const corner = (st: Step, end: 0 | 1): [number, number] => { const i = end ? st.to + 1 : st.from; return st.dir === 0 ? [st.line, i] : [i, st.line]; };
+    const met = new Map<number, number[]>();
+    const meet = (x: number, y: number, d: number) => { const k = y * G + x, l = met.get(k); if (!l) met.set(k, [d]); else if (!l.includes(d)) l.push(d); };
+    for (const st of steps) for (const end of [0, 1] as const) {
+        const [x, y] = corner(st, end);
+        junction[y * G + x] = 1;
+        meet(x, y, st.L); meet(x, y, st.R);
+    }
+    for (let y = 0; y <= nt; y++) for (let x = 0; x <= ns; x++) if (junction[y * G + x]) for (const [a, b] of [[x - 1, y - 1], [x, y - 1], [x - 1, y], [x, y]]) if (isBuilt(a, b)) meet(x, y, D[b * ns + a]);
+    // 4. the chamfered arrises, closed: each end of a chamfered step runs on into the next one along its line (flush), meets one
+    // across it with the same two depths in a mitre (a recess's inner corner, a pier's outer one), or is capped; the bevel's foot
+    // (its side face, `inset` c into the recess) is where the recessed face now ends, cut back by each arris's zone
+    const along = (dir: number) => (dir === 0 ? t : s), across = (dir: number) => (dir === 0 ? s : t);
+    type Arris = { st: Step; front: number; back: number; into: number; l: number; inset: number; kind: number[]; backEnd: number[]; cutEnd: number[]; partner: Array<[Arris, number] | undefined> };
+    const arrises: Arris[] = [];
+    const arrisOf = new Map<Step, Arris>();
+    for (const st of steps) {
+        if (!st.c) continue;
+        const into = st.L < st.R ? -1 : 1, l = across(st.dir)[st.line];
+        const x: Arris = { st, front: Math.max(st.L, st.R), back: Math.min(st.L, st.R), into, l, inset: l + into * st.c, kind: [1, 1], backEnd: [along(st.dir)[st.from], along(st.dir)[st.to + 1]], cutEnd: [along(st.dir)[st.from], along(st.dir)[st.to + 1]], partner: [undefined, undefined] };
+        arrises.push(x); arrisOf.set(st, x);
+    }
+    const endsAt = new Map<number, Array<[Arris, number]>>();
+    for (const x of arrises) for (const e of [0, 1]) { const [cx, cy] = corner(x.st, e as 0 | 1), k = cy * G + cx, l = endsAt.get(k); if (l) l.push([x, e]); else endsAt.set(k, [[x, e]]); }
+    // kind: 0 flush, 1 capped, 2 an inner mitre, 3 an outer mitre
+    for (const x of arrises) for (const e of [0, 1]) {
+        const [cx, cy] = corner(x.st, e as 0 | 1), others = endsAt.get(cy * G + cx)!.filter(([o]) => o !== x), sigma = e ? -1 : 1;
+        if (others.some(([o]) => o.st.dir === x.st.dir && o.st.L === x.st.L && o.st.R === x.st.R)) { x.kind[e] = 0; continue; }
+        if (others.length !== 1) continue;
+        const [o, oe] = others[0], so = oe ? -1 : 1;
+        if (o.st.dir === x.st.dir || o.front !== x.front || o.back !== x.back) continue;
+        if (o.into === sigma && x.into === so) { x.kind[e] = 2; x.backEnd[e] = o.inset; x.partner[e] = [o, oe]; continue; }
+        if (o.into !== -sigma || x.into !== -so) continue;
+        // an outer corner: the cell diagonal to it, which the two bevels' foot reaches into, must be the same recess
+        const da = x.st.dir === 0 ? (x.into > 0 ? cx : cx - 1) : (-sigma > 0 ? cx : cx - 1), db = x.st.dir === 0 ? (-sigma > 0 ? cy : cy - 1) : (x.into > 0 ? cy : cy - 1);
+        if (!isBuilt(da, db) || D[db * ns + da] !== x.back) continue;
+        x.kind[e] = 3; x.backEnd[e] = o.inset; x.cutEnd[e] = o.inset; x.partner[e] = [o, oe];
+    }
+    // an arris too short for its inner mitres (its foot would end before it starts) is capped at both, and so are its partners
+    const capEnd = (x: Arris, e: number) => { const A = along(x.st.dir); x.kind[e] = 1; x.backEnd[e] = x.cutEnd[e] = e ? A[x.st.to + 1] : A[x.st.from]; x.partner[e] = undefined; };
+    for (const x of arrises) if (!(x.backEnd[0] < x.backEnd[1])) for (const e of [0, 1]) { const p = x.partner[e]; if (p) capEnd(p[0], p[1]); capEnd(x, e); }
+    // the points every face and step on an arris's foot must carry (its two ends and the lattice corners between), by line
+    const footKey = (dir: number, v: number, d: number) => `${dir}|${v}|${d}`;
+    const feet = new Map<string, number[]>();
+    for (const x of arrises) {
+        const lo = Math.min(x.backEnd[0], x.backEnd[1]), hi = Math.max(x.backEnd[0], x.backEnd[1]), A = along(x.st.dir), key = footKey(x.st.dir, x.inset, x.back);
+        const pts = feet.get(key) ?? [];
+        pts.push(lo, hi);
+        for (let i = 0; i < A.length; i++) if (A[i] > lo && A[i] < hi && junction[x.st.dir === 0 ? i * G + x.st.line : x.st.line * G + i]) pts.push(A[i]);
+        feet.set(key, pts);
+    }
+    // each recessed face's cuts: the zones [s0, t0, s1, t1] under the bevels beside it, the outer mitres' corners included; each
+    // zone's corners are points on both its lines that every face and step there carries (line dir 0: s = v, 1: t = v)
+    const zones = new Map<number, Array<[number, number, number, number]>>();
+    const onFoot = (dir: number, v: number, d: number, w: number) => { const k = footKey(dir, v, d), l = feet.get(k); if (l) l.push(w); else feet.set(k, [w]); };
+    for (const x of arrises) {
+        const { st } = x, lo = Math.min(x.l, x.inset), hi = Math.max(x.l, x.inset), z: [number, number, number, number] = st.dir === 0 ? [lo, x.cutEnd[0], hi, x.cutEnd[1]] : [x.cutEnd[0], lo, x.cutEnd[1], hi];
+        const cellsOf: Array<[number, number]> = [];
+        for (let i = st.from - (x.kind[0] === 3 ? 1 : 0); i <= st.to + (x.kind[1] === 3 ? 1 : 0); i++) cellsOf.push(st.dir === 0 ? [x.into > 0 ? st.line : st.line - 1, i] : [i, x.into > 0 ? st.line : st.line - 1]);
+        for (const [a, b] of cellsOf) {
+            if (!isBuilt(a, b) || D[b * ns + a] !== x.back) continue;
+            const fi = faceOf[b * ns + a], l = zones.get(fi) ?? [];
+            if (!l.includes(z)) l.push(z);
+            zones.set(fi, l);
+        }
+        for (const sv of [z[0], z[2]]) for (const tv of [z[1], z[3]]) { onFoot(0, sv, x.back, tv); onFoot(1, tv, x.back, sv); }
+    }
+    for (const [k, v] of feet) feet.set(k, [...new Set(v)].sort((p, q) => p - q));
+    // 5. the triangles, as corner records [s, t, d, nx, ny, nz, u, v], welded after
+    const tri: number[][] = [];
+    const N = f.normal, S = f.axisS, T = f.axisT, neg = (v: number[]) => v.map(x => -x);
+    const world = (sv: number, tv: number, d: number) => [0, 1, 2].map(k => f.centroid[k] + sv * f.axisS[k] + tv * f.axisT[k] + d * f.normal[k]);
+    const unit = (v: number[]) => { const l = Math.hypot(v[0], v[1], v[2]); return v.map(x => x / l); };
+    type Pt = [number, number, number];
+    // triangles wound to face n; texels by `at` (the plane's frame, a step's unfolded)
+    const emit = (out: Pt[][], n: number[], at: (sv: number, tv: number, d: number) => [number, number]) => {
+        for (const q of out) {
+            const w = q.map(p => world(p[0], p[1], p[2]));
+            const e1 = [0, 1, 2].map(k => w[1][k] - w[0][k]), e2 = [0, 1, 2].map(k => w[2][k] - w[0][k]);
+            const g = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+            const order = dot(g, n) < 0 ? [0, 2, 1] : [0, 1, 2];
+            for (const o of order) { const [us, ut] = at(q[o][0], q[o][1], q[o][2]); tri.push([...w[o], n[0], n[1], n[2], (us - f.orthoSMin) / W, (f.orthoTMax - ut) / H]); }
+        }
+    };
+    // a polygon given as its four sides (each from its first corner to its last: bottom and top along u, left and right along v),
+    // wound to face n; texels by `at` (the plane's frame, a step's unfolded)
+    const poly = (bottom: Pt[], right: Pt[], top: Pt[], left: Pt[], n: number[], at: (sv: number, tv: number, d: number) => [number, number]) => {
+        const out: Pt[][] = [];
+        const zip = (A: Pt[], B: Pt[], key: (p: Pt) => number) => {
+            let i = 0, j = 0;
+            while (i < A.length - 1 || j < B.length - 1) {
+                if (j >= B.length - 1 || (i < A.length - 1 && key(A[i + 1]) <= key(B[j + 1]))) { out.push([A[i], B[j], A[i + 1]]); i++; }
+                else { out.push([A[i], B[j], B[j + 1]]); j++; }
+            }
+        };
+        if (left.length === 2 && right.length === 2) zip(bottom, top, p => (bottom[0][0] !== bottom[bottom.length - 1][0] ? p[0] : bottom[0][1] !== bottom[bottom.length - 1][1] ? p[1] : p[2]));
+        else if (bottom.length === 2 && top.length === 2) zip(left, right, p => (left[0][1] !== left[left.length - 1][1] ? p[1] : left[0][0] !== left[left.length - 1][0] ? p[0] : p[2]));
+        else {
+            const ring = [...bottom.slice(0, -1), ...right.slice(0, -1), ...[...top].reverse().slice(0, -1), ...[...left].reverse().slice(0, -1)];
+            const a = bottom[0], c = top[top.length - 1];
+            const mid: Pt = [(a[0] + c[0]) / 2, (a[1] + c[1]) / 2, (a[2] + c[2]) / 2];
+            for (let i = 0; i < ring.length; i++) out.push([mid, ring[i], ring[(i + 1) % ring.length]]);
+        }
+        emit(out, n, at);
+    };
+    const plain = (sv: number, tv: number): [number, number] => [sv, tv];
+    // the lattice corners on a line between two corners with a junction (the ends always), and the points of the arrises' feet
+    // and zones on that line between them
+    const withFeet = (vals: number[], dir: number, v: number, d: number) => {
+        const extra = (feet.get(footKey(dir, v, d)) ?? []).filter(w => w > vals[0] && w < vals[vals.length - 1]);
+        return extra.length ? [...new Set([...vals, ...extra])].sort((p, q) => p - q) : vals;
+    };
+    const alongS = (b: number, a0: number, a1: number, d: number): Pt[] => { const o: number[] = []; for (let x = a0; x <= a1; x++) if (x === a0 || x === a1 || junction[b * G + x]) o.push(s[x]); return withFeet(o, 1, t[b], d).map((v): Pt => [v, t[b], d]); };
+    const alongT = (a: number, b0: number, b1: number, d: number): Pt[] => { const o: number[] = []; for (let y = b0; y <= b1; y++) if (y === b0 || y === b1 || junction[y * G + a]) o.push(t[y]); return withFeet(o, 0, s[a], d).map((v): Pt => [s[a], v, d]); };
+    const sIndex = new Map(s.map((v, i) => [v, i])), tIndex = new Map(t.map((v, i) => [v, i]));
+    // a recessed face cut back by the zones under the bevels beside it: what is left of it, on the grid of its own edges and the
+    // zones' (xs by ys), cut greedily into rectangles, each carrying on its edges every corner of the others and every point the
+    // faces and feet beside it have there; false (drawn whole) when the zones cover it all
+    let cutFaces = 0;
+    const cutFace = (q: [number, number, number, number], d: number, zs: Array<[number, number, number, number]>): boolean => {
+        const S0 = s[q[0]], S1 = s[q[2] + 1], T0 = t[q[1]], T1 = t[q[3] + 1];
+        const xs = [...new Set([S0, S1, ...zs.flatMap(z => [z[0], z[2]]).filter(v => v > S0 && v < S1)])].sort((p, r) => p - r);
+        const ys = [...new Set([T0, T1, ...zs.flatMap(z => [z[1], z[3]]).filter(v => v > T0 && v < T1)])].sort((p, r) => p - r);
+        const nx = xs.length - 1, ny = ys.length - 1, X = nx + 1;
+        const open = new Uint8Array(nx * ny);
+        for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const cx = (xs[i] + xs[i + 1]) / 2, cy = (ys[j] + ys[j + 1]) / 2; open[j * nx + i] = zs.some(z => cx > z[0] && cx < z[2] && cy > z[1] && cy < z[3]) ? 0 : 1; }
+        if (!open.some(v => v)) return false;
+        const used = new Uint8Array(nx * ny), rects: Array<[number, number, number, number]> = [], cornerOf = new Uint8Array(X * (ny + 1));
+        for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+            if (!open[j * nx + i] || used[j * nx + i]) continue;
+            let i1 = i, j1 = j;
+            while (i1 + 1 < nx && open[j * nx + i1 + 1] && !used[j * nx + i1 + 1]) i1++;
+            for (;;) { if (j1 + 1 >= ny) break; let row = true; for (let x = i; x <= i1 && row; x++) row = !!open[(j1 + 1) * nx + x] && !used[(j1 + 1) * nx + x]; if (!row) break; j1++; }
+            for (let y = j; y <= j1; y++) for (let x = i; x <= i1; x++) used[y * nx + x] = 1;
+            rects.push([i, j, i1, j1]);
+            for (const [x, y] of [[i, j], [i1 + 1, j], [i, j1 + 1], [i1 + 1, j1 + 1]]) cornerOf[y * X + x] = 1;
+        }
+        // a side's points: the grid's corners on it, the lattice's junctions where it lies on a lattice line, the feet's points
+        const side = (horizontal: boolean, at: number, k0: number, k1: number): Pt[] => {
+            const A = horizontal ? xs : ys, lo = A[k0], hi = A[k1], v: number[] = [];
+            for (let k = k0; k <= k1; k++) if (k === k0 || k === k1 || cornerOf[horizontal ? at * X + k : k * X + at]) v.push(A[k]);
+            const c = horizontal ? ys[at] : xs[at], line = horizontal ? tIndex.get(c) : sIndex.get(c), L = horizontal ? s : t;
+            if (line !== undefined) for (let k = 0; k < L.length; k++) if (L[k] > lo && L[k] < hi && junction[horizontal ? line * G + k : k * G + line]) v.push(L[k]);
+            for (const w of feet.get(footKey(horizontal ? 1 : 0, c, d)) ?? []) if (w > lo && w < hi) v.push(w);
+            return [...new Set(v)].sort((p, r) => p - r).map((w): Pt => (horizontal ? [w, c, d] : [c, w, d]));
+        };
+        for (const [i0, j0, i1, j1] of rects) poly(side(true, j0, i0, i1 + 1), side(false, i1 + 1, j0, j1 + 1), side(true, j1 + 1, i0, i1 + 1), side(false, i0, j0, j1 + 1), N, plain);
+        cutFaces++;
+        return true;
+    };
+    faces.forEach(([a0, b0, a1, b1], fi) => {
+        const d = D[b0 * ns + a0], zs = zones.get(fi);
+        if (zs && cutFace([a0, b0, a1, b1], d, zs)) return;
+        poly(alongS(b0, a0, a1 + 1, d), alongT(a1 + 1, b0, b1 + 1, d), alongS(b1 + 1, a0, a1 + 1, d), alongT(a0, b0, b1 + 1, d), N, plain);
+    });
+    // a step's end at a corner: its back and front depth and every depth met there between
+    const chain = (x: number, y: number, lo: number, hi: number) => [lo, ...(met.get(y * G + x) ?? []).filter(v => v > lo && v < hi).sort((p, q) => p - q), hi];
+    let chamfered = 0;
+    for (const st of steps) {
+        const { L, R, c } = st, front = Math.max(L, R), back = Math.min(L, R), into = L < R ? -1 : 1;
+        if (st.dir === 0) {
+            const sv = s[st.line], t0 = t[st.from], t1 = t[st.to + 1], sb = sv + into * c;
+            const at = (sx: number, tv: number, d: number): [number, number] => [sx + into * (front - d), tv];
+            const n = L > R ? S : neg(S);
+            if (!c) {
+                const e0 = chain(st.line, st.from, back, front), e1 = chain(st.line, st.to + 1, back, front);
+                poly(alongT(st.line, st.from, st.to + 1, back), e1.map((d): Pt => [sv, t1, d]), alongT(st.line, st.from, st.to + 1, front), e0.map((d): Pt => [sv, t0, d]), n, at);
+                continue;
+            }
+            chamfered++;
+            // the bevel, facing out and over the recess (N + into S), its front edge on the face's corners and its foot between its
+            // ends' (a mitre's on the other arris's foot); the side below it, its foot on the recessed face's corners; the caps
+            const x = arrisOf.get(st)!, [b0, b1] = x.backEnd, foot = (feet.get(footKey(0, sb, back)) ?? []).filter(v => v >= b0 && v <= b1);
+            poly(alongT(st.line, st.from, st.to + 1, front), [[sv, t1, front], [sb, b1, front - c]], [[sb, b0, front - c], [sb, b1, front - c]], [[sv, t0, front], [sb, b0, front - c]], unit(N.map((v, k) => v + into * S[k])), at);
+            poly(foot.map((v): Pt => [sb, v, back]), [[sb, b1, back], [sb, b1, front - c]], [[sb, b0, front - c], [sb, b1, front - c]], [[sb, b0, back], [sb, b0, front - c]], n, at);
+            for (const e of [0, 1]) if (x.kind[e] === 1) {
+                const tv = e ? t1 : t0;
+                poly([[sv, tv, back], [sb, tv, back]], [[sb, tv, back], [sb, tv, front - c]], [[sv, tv, front], [sb, tv, front - c]], chain(st.line, e ? st.to + 1 : st.from, back, front).map((d): Pt => [sv, tv, d]), e ? T : neg(T), at);
+            }
+        } else {
+            const tv = t[st.line], s0 = s[st.from], s1 = s[st.to + 1], tb = tv + into * c;
+            const at = (sv: number, ty: number, d: number): [number, number] => [sv, ty + into * (front - d)];
+            const n = L > R ? T : neg(T);
+            if (!c) {
+                const e0 = chain(st.from, st.line, back, front), e1 = chain(st.to + 1, st.line, back, front);
+                poly(alongS(st.line, st.from, st.to + 1, back), e1.map((d): Pt => [s1, tv, d]), alongS(st.line, st.from, st.to + 1, front), e0.map((d): Pt => [s0, tv, d]), n, at);
+                continue;
+            }
+            chamfered++;
+            const x = arrisOf.get(st)!, [b0, b1] = x.backEnd, foot = (feet.get(footKey(1, tb, back)) ?? []).filter(v => v >= b0 && v <= b1);
+            poly(alongS(st.line, st.from, st.to + 1, front), [[s1, tv, front], [b1, tb, front - c]], [[b0, tb, front - c], [b1, tb, front - c]], [[s0, tv, front], [b0, tb, front - c]], unit(N.map((v, k) => v + into * T[k])), at);
+            poly(foot.map((v): Pt => [v, tb, back]), [[b1, tb, back], [b1, tb, front - c]], [[b0, tb, front - c], [b1, tb, front - c]], [[b0, tb, back], [b0, tb, front - c]], n, at);
+            for (const e of [0, 1]) if (x.kind[e] === 1) {
+                const sv = e ? s1 : s0;
+                poly([[sv, tv, back], [sv, tb, back]], [[sv, tb, back], [sv, tb, front - c]], [[sv, tv, front], [sv, tb, front - c]], chain(e ? st.to + 1 : st.from, st.line, back, front).map((d): Pt => [sv, tv, d]), e ? S : neg(S), at);
+            }
+        }
+    }
+    // 6. welded: one vertex per position, normal and UV as stored
+    const pos: number[] = [], nrm: number[] = [], uv: number[] = [], idx: number[] = [], ids = new Map<string, number>();
+    for (const v of tri) {
+        const q = v.map(Math.fround), key = q.join(',');
+        let i = ids.get(key);
+        if (i === undefined) { i = pos.length / 3; ids.set(key, i); pos.push(q[0], q[1], q[2]); nrm.push(q[3], q[4], q[5]); uv.push(q[6], q[7]); }
+        idx.push(i);
+    }
+    return { positions: Float32Array.from(pos), normals: Float32Array.from(nrm), uv: Float32Array.from(uv), indices: Uint32Array.from(idx), surface: { cells: built.reduce((x, v) => x + v, 0), faces: faces.length, steps: steps.length, chamfered, cutFaces, mitres: arrises.reduce((a, x) => a + (x.kind[0] >= 2 ? 1 : 0) + (x.kind[1] >= 2 ? 1 : 0), 0), caps: arrises.reduce((a, x) => a + (x.kind[0] === 1 ? 1 : 0) + (x.kind[1] === 1 ? 1 : 0), 0), triangles: idx.length / 3, vertices: pos.length / 3 } };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1045,11 +1309,18 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
     return { glb: assembleGlb(json, bin.bytes()), removed, tears };
 }
 
+/** Surface reports summed over facades. */
+function sumSurfaces(list: Array<LatticeSurfaceReport | undefined>): LatticeSurfaceReport {
+    const o: LatticeSurfaceReport = { cells: 0, faces: 0, steps: 0, chamfered: 0, cutFaces: 0, mitres: 0, caps: 0, triangles: 0, vertices: 0 };
+    for (const r of list) if (r) for (const k of Object.keys(o) as Array<keyof LatticeSurfaceReport>) o[k] += r[k];
+    return o;
+}
+
 /** Rebuilds a remesh's rectified facades on their photo lattices: the clay and (when given) its textured twin. */
 /** Cut-and-stitch rounds at most: each leaves as scan the rebuilt cells beside outline edges the stitch could join to nothing. */
 const STITCH_ROUNDS = 4;
 
-export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Uint8Array | undefined, orthosDir: string, P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS, skip: Set<number> = new Set(), opts: { /** Pipeline K: the scan cut exactly to the rebuilt cells and stitched to them (pipeline-k/lattice-stitch.ts), instead of whole triangles removed. */ stitch?: boolean; /** Pipeline K: window recesses read from the straightened photo (PHOTO_RECESS), the scan being uncarved. */ photoRecess?: boolean; /** window_fit.json (window-fit.ts): each facade's fitted windows written into its extras. */ windowFit?: string; /** reveal_depth.json (reveal-depth.ts): each facade's window depth read from Street View. */ revealDepth?: string; /** wall_grammar.json (wall-grammar.ts): each facade's bays read per wall. */ wallGrammar?: string; /** The isolated scan before its walls were flattened: where the structure's relief is measured. */ rawScan?: string; /** walls.json (wall-sheets.ts): each multi-facade wall rebuilt once, as one sheet, in place of its facades; and every facade rebuilt whole, where the scan has its wall. */ walls?: string; /** Pipeline K: the scan cut exactly to the rebuilt cells (pipeline-k/lattice-stitch.ts cutScanToLattice) with no stitch, instead of whole triangles removed. */ cut?: boolean; /** The native steps' threads (the lattice, the audit, the cut and the stitch; every core when none). It changes how fast, not what, is built. */ threads?: number } = {}): { clay: Buffer; textured?: Buffer; stats: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears: TearReport; /** With opts.cut: the triangles cut and the pieces dropped and kept. */ cut?: CutReport; stitch?: { cut: CutReport; strips: StitchReport; /** Per round: outline edges joined to nothing, and the cells beside them left as scan for the next round. */ rounds?: Array<{ unjoined: number; cellsLeftAsScan: number }> }; photoRecessCells?: number; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number]; photoRecessCells?: number }> } } {
+export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Uint8Array | undefined, orthosDir: string, P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS, skip: Set<number> = new Set(), opts: { /** Pipeline K: the scan cut exactly to the rebuilt cells and stitched to them (pipeline-k/lattice-stitch.ts), instead of whole triangles removed. */ stitch?: boolean; /** Pipeline K: window recesses read from the straightened photo (PHOTO_RECESS), the scan being uncarved. */ photoRecess?: boolean; /** window_fit.json (window-fit.ts): each facade's fitted windows written into its extras. */ windowFit?: string; /** reveal_depth.json (reveal-depth.ts): each facade's window depth read from Street View. */ revealDepth?: string; /** wall_grammar.json (wall-grammar.ts): each facade's bays read per wall. */ wallGrammar?: string; /** The isolated scan before its walls were flattened: where the structure's relief is measured. */ rawScan?: string; /** walls.json (wall-sheets.ts): each multi-facade wall rebuilt once, as one sheet, in place of its facades; and every facade rebuilt whole, where the scan has its wall. */ walls?: string; /** Pipeline K: the scan cut exactly to the rebuilt cells (pipeline-k/lattice-stitch.ts cutScanToLattice) with no stitch, instead of whole triangles removed. */ cut?: boolean; /** The native steps' threads (the lattice, the audit, the cut and the stitch; every core when none). It changes how fast, not what, is built. */ threads?: number } = {}): { clay: Buffer; textured?: Buffer; stats: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears: TearReport; /** The kept facades' surfaces summed (latticeSurface): cells, the faces and steps they became, triangles and vertices. */ surface?: LatticeSurfaceReport; /** With opts.cut: the triangles cut and the pieces dropped and kept. */ cut?: CutReport; stitch?: { cut: CutReport; strips: StitchReport; /** Per round: outline edges joined to nothing, and the cells beside them left as scan for the next round. */ rounds?: Array<{ unjoined: number; cellsLeftAsScan: number }> }; photoRecessCells?: number; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number]; photoRecessCells?: number }> } } {
     const facades = JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as ReliefFacade[];
     // the native steps' threads (the lattice, the audit, the cut and the stitch)
     const threads = opts.threads ? { threads: opts.threads } : {};
@@ -1086,7 +1357,7 @@ export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Ui
     const latticed: Array<{ r?: FacadeLatticeResult; tex: () => Uint8Array; width: number; height: number }> = kNative('lattice')
         ? runNativeLattice(latticeParamVector(P), { photoRecess: opts.photoRecess === true, whole }, soup, rawSoup, jobs.map((j): NativeLatticeJob => ({ f: j.f, image: j.file, ...(j.mask ? { mask: j.mask } : {}), ...(j.planeRects ? { fitted: j.planeRects } : {}), ...(j.bays ? { bays: j.bays } : {}), ...(j.depth?.depthM !== undefined ? { recessM: j.depth.depthM } : {}), ...(j.rects ? { rectsPx: j.rects } : {}) })), opts.threads ?? nativePolishThreads()).map((o, i) => {
             const x = o.lattice, f = jobs[i].f;
-            const r0: FacadeLatticeResult | undefined = x ? { facadeId: f.facadeId, s: x.s, t: x.t, cells: x.cells, measuredShare: x.measuredShare, depth: Array.from({ length: x.t.length - 1 }, (_, b) => Array.from(x.depth.subarray(b * (x.s.length - 1), (b + 1) * (x.s.length - 1)))), ...(x.photoRecessCells !== undefined ? { photoRecessCells: x.photoRecessCells } : {}), ...(x.strips.length ? { strips: x.strips, stripCells: x.stripCells } : {}), ...(x.structure ? { structure: { cells: x.structure.cells, reliefM: x.structure.reliefM, reliefFrom: x.structure.reliefFrom as 'measured' | 'photo-inferred' | 'generated', reason: x.structure.reason } } : {}), built: x.built, windows: x.windows, cellU: x.cellU, cellV: x.cellV, positions: x.positions, normals: x.normals, uv: x.uv, indices: x.indices } : undefined;
+            const r0: FacadeLatticeResult | undefined = x ? { facadeId: f.facadeId, s: x.s, t: x.t, cells: x.cells, measuredShare: x.measuredShare, depth: Array.from({ length: x.t.length - 1 }, (_, b) => Array.from(x.depth.subarray(b * (x.s.length - 1), (b + 1) * (x.s.length - 1)))), ...(x.photoRecessCells !== undefined ? { photoRecessCells: x.photoRecessCells } : {}), ...(x.strips.length ? { strips: x.strips, stripCells: x.stripCells } : {}), ...(x.structure ? { structure: { cells: x.structure.cells, reliefM: x.structure.reliefM, reliefFrom: x.structure.reliefFrom as 'measured' | 'photo-inferred' | 'generated', reason: x.structure.reason } } : {}), built: x.built, windows: x.windows, cellU: x.cellU, cellV: x.cellV, positions: x.positions, normals: x.normals, uv: x.uv, indices: x.indices, surface: x.surface } : undefined;
             const rep = o.repeat;
             const report: RepeatTextureReport | undefined = rep ? { version: REPEAT_TEXTURE_VERSION, groups: rep.groups, windows: rep.windows, spandrels: rep.spandrels, texels: rep.texels, filled: rep.filled, label: 'generated', method: repeatTextureMethod(rep, rep.edge) } : undefined;
             return { r: r0 && report ? { ...r0, repeatTexture: report } : r0, tex: () => (rep ? rep.png : fs.readFileSync(jobs[i].file)), width: o.width, height: o.height };
@@ -1157,6 +1428,6 @@ export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Ui
     const tex = texturedBytes ? applyFacadeLattices(cut ? cutScanToLattice(Uint8Array.from(texturedBytes), kept, split, threads).glb : texturedBytes, kept, true, P, { sameFacing: !!cut, ...threads }) : undefined;
     return {
         clay: clay.glb, ...(tex ? { textured: tex.glb } : {}),
-        stats: { facades: facades.length, rebuilt: kept.length, cells: kept.reduce((a, d) => a + d.r.cells, 0), removedTriangles: clay.removed, tears: clay.tears, ...(cut ? { cut: cut.report } : {}), ...(opts.photoRecess ? { photoRecessCells: kept.reduce((a, d) => a + (d.r.photoRecessCells ?? 0), 0) } : {}), perFacade: kept.map(d => ({ id: d.f.facadeId, cells: d.r.cells, measuredShare: d.r.measuredShare, lines: [d.r.s.length, d.r.t.length] as [number, number], ...(d.r.photoRecessCells !== undefined ? { photoRecessCells: d.r.photoRecessCells } : {}) })) }
+        stats: { facades: facades.length, rebuilt: kept.length, cells: kept.reduce((a, d) => a + d.r.cells, 0), removedTriangles: clay.removed, tears: clay.tears, surface: sumSurfaces(kept.map(d => d.r.surface)), ...(cut ? { cut: cut.report } : {}), ...(opts.photoRecess ? { photoRecessCells: kept.reduce((a, d) => a + (d.r.photoRecessCells ?? 0), 0) } : {}), perFacade: kept.map(d => ({ id: d.f.facadeId, cells: d.r.cells, measuredShare: d.r.measuredShare, lines: [d.r.s.length, d.r.t.length] as [number, number], ...(d.r.photoRecessCells !== undefined ? { photoRecessCells: d.r.photoRecessCells } : {}) })) }
     };
 }

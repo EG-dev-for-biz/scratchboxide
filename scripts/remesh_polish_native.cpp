@@ -36,7 +36,8 @@
  *          measuredShare, f64[cells] depth, u32 hasPhotoRecess, i32 photoRecessCells, u32 n, f64[4n] strips, i32
  *          stripCells, u32 hasStructure (then u8[cells], f64 reliefM, str reliefFrom, str reason), u8[cells] built,
  *          u8[cells] windows, f64[] cellU, f64[] cellV, u32 n, f32[n] positions, u32 n, f32[n] normals, u32 n, f32[n] uv,
- *          u32 n, u32[n] indices; then u32 hasRepeat and, when set, i32 groups, i32 windows, i32 spandrels, f64 texels,
+ *          u32 n, u32[n] indices, i32[9] the surface's report (cells, faces, steps, chamfered steps, cut faces, mitres,
+ *          caps, triangles, vertices); then u32 hasRepeat and, when set, i32 groups, i32 windows, i32 spandrels, f64 texels,
  *          f64 filled, f64 edge, u32 n, u8[n] the PNG ([cells]: one per lattice cell, row by row).
  *
  *   remesh_polish_native lattice-audit <threads>
@@ -313,6 +314,7 @@ int lattice(unsigned threads) {
         writeArray(r.normals);
         writeArray(r.uv);
         writeArray(r.indices);
+        for (int v : r.surface) writeOne<int32_t>(v);
         writeOne<uint32_t>(o.repeat.ok ? 1 : 0);
         if (o.repeat.ok) {
             writeOne<int32_t>(o.repeat.groups);

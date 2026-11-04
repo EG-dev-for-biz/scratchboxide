@@ -35,11 +35,14 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // V8 never fuses a multiply and an add
@@ -66,8 +69,10 @@ struct Params {
     /** The audit's world box reach (the module's depthBandM + 1, whatever P says), and its four angled views' turns. */
     double reachM;
     double viewDeg[4], viewCos[4], viewSin[4];
+    /** The surface's merged faces and steps at most this on a side (m). */
+    double mergeMaxM;
 
-    static constexpr size_t kCount = 19 + 5 + 3 + 6 + 3 + 7 + 1 + 12;
+    static constexpr size_t kCount = 19 + 5 + 3 + 6 + 3 + 7 + 1 + 12 + 1;
     static Params from(const std::vector<double>& v) {
         if (v.size() != kCount) throw std::runtime_error("the lattice takes " + std::to_string(kCount) + " parameters, got " + std::to_string(v.size()));
         Params p;
@@ -80,7 +85,8 @@ struct Params {
             &p.rtSizeTol, &p.rtMinRepeats, &p.rtEdgeM, &p.rtKeepShade, &p.rtMaxShade, &p.rtMaxSpandrelM, &p.rtMinSidePx,
             &p.reachM,
             &p.viewDeg[0], &p.viewCos[0], &p.viewSin[0], &p.viewDeg[1], &p.viewCos[1], &p.viewSin[1],
-            &p.viewDeg[2], &p.viewCos[2], &p.viewSin[2], &p.viewDeg[3], &p.viewCos[3], &p.viewSin[3]};
+            &p.viewDeg[2], &p.viewCos[2], &p.viewSin[2], &p.viewDeg[3], &p.viewCos[3], &p.viewSin[3],
+            &p.mergeMaxM};
         static_assert(sizeof fields / sizeof fields[0] == kCount);
         for (size_t i = 0; i < kCount; ++i) *fields[i] = v[i];
         return p;
@@ -131,6 +137,8 @@ struct LatticeResult {
     std::vector<double> cellU, cellV;
     std::vector<float> positions, normals, uv;
     std::vector<uint32_t> indices;
+    /** latticeSurface's report: cells, faces, steps, chamfered steps, cut faces, mitres, caps, triangles, vertices. */
+    int surface[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
 };
 
 /** repeatTexture's report (its method sentence is written by the caller) and the redrawn photo, encoded. */
@@ -437,6 +445,401 @@ inline double photoRecessDepth(double contrast, const Params& P) {
 
 inline std::string cm(double v) { return js::toString(js::round(v * 100)); }
 
+/**
+ * latticeSurface: a rebuilt facade's surface welded, lean and closed (facade-lattice.ts latticeSurface, which says what and
+ * why): flat regions of cells at their median depth cut into faces, steps on the lines between them, the chamfered arrises
+ * mitred, run on or capped with the recessed faces cut back to their feet, a vertex at every corner another face or step has
+ * on an edge, and the vertices welded. Writes positions, normals, UVs, indices and the report into res.
+ */
+inline void latticeSurface(const Frame& f, double Wm, double Hm, const std::vector<double>& s, const std::vector<double>& t, const std::vector<uint8_t>& built,
+                           const std::vector<double>& depth, const std::vector<double>& scan, bool structure, const Params& P, LatticeResult& res) {
+    const long ns = static_cast<long>(s.size()) - 1, nt = static_cast<long>(t.size()) - 1, G = ns + 1;
+    const auto at = [&](long a, long b) { return static_cast<size_t>(b * ns + a); };
+    const auto gk = [&](long x, long y) { return static_cast<size_t>(y * G + x); };
+    const auto isBuilt = [&](long a, long b) { return a >= 0 && b >= 0 && a < ns && b < nt && built[at(a, b)]; };
+    // 1. the flat regions, then the faces
+    std::vector<int32_t> region(static_cast<size_t>(ns * nt), -1);
+    std::vector<double> D(static_cast<size_t>(ns * nt), 0.0);
+    int32_t regions = 0;
+    for (long k0 = 0; k0 < ns * nt; ++k0) {
+        if (!built[static_cast<size_t>(k0)] || region[static_cast<size_t>(k0)] >= 0) continue;
+        double lo = depth[static_cast<size_t>(k0)], hi = lo;
+        std::vector<long> queue{k0};
+        region[static_cast<size_t>(k0)] = regions;
+        for (size_t qi = 0; qi < queue.size(); ++qi) {
+            const long k = queue[qi], a = k % ns, b = k / ns;
+            const long nb[4][2] = {{a + 1, b}, {a, b + 1}, {a - 1, b}, {a, b - 1}};
+            for (const auto& c : nb) {
+                if (!isBuilt(c[0], c[1])) continue;
+                const size_t n = at(c[0], c[1]);
+                const double v = depth[n];
+                if (region[n] >= 0 || !(js::max(hi, v) - js::min(lo, v) <= P.stepM)) continue;
+                lo = js::min(lo, v); hi = js::max(hi, v); region[n] = regions; queue.push_back(static_cast<long>(n));
+            }
+        }
+        std::vector<double> member;
+        for (long k : queue) member.push_back(depth[static_cast<size_t>(k)]);
+        const double rep = median(member);
+        for (long k : queue) D[static_cast<size_t>(k)] = rep;
+        regions++;
+    }
+    std::vector<int32_t> faceOf(static_cast<size_t>(ns * nt), -1);
+    std::vector<std::array<long, 4>> faces;
+    for (long b = 0; b < nt; ++b) for (long a = 0; a < ns; ++a) {
+        const size_t k = at(a, b);
+        if (!built[k] || faceOf[k] >= 0) continue;
+        const auto freeCell = [&](long x, long y) { return isBuilt(x, y) && faceOf[at(x, y)] < 0 && region[at(x, y)] == region[k]; };
+        long a1 = a, b1 = b;
+        while (freeCell(a1 + 1, b) && s[static_cast<size_t>(a1 + 2)] - s[static_cast<size_t>(a)] <= P.mergeMaxM) a1++;
+        for (;;) {
+            if (!(b1 + 1 < nt) || !(t[static_cast<size_t>(b1 + 2)] - t[static_cast<size_t>(b)] <= P.mergeMaxM)) break;
+            bool row = true;
+            for (long x = a; x <= a1 && row; ++x) row = freeCell(x, b1 + 1);
+            if (!row) break;
+            b1++;
+        }
+        for (long y = b; y <= b1; ++y) for (long x = a; x <= a1; ++x) faceOf[at(x, y)] = static_cast<int32_t>(faces.size());
+        faces.push_back({a, b, a1, b1});
+    }
+    // 2. the steps, line by line
+    const auto bevelOf = [&](double l, double r) { return structure && std::abs(l - r) >= 2 * P.chamferM ? P.chamferM : 0.0; };
+    // 0: none; 1: between two rebuilt cells; 2: toward the scan
+    const auto stepDepths = [&](long na, long nb, long xa, long xb, double& L, double& R) {
+        const bool n = isBuilt(na, nb), x = isBuilt(xa, xb);
+        if (!n && !x) return 0;
+        const auto depthAt = [&](long a, long b, bool own) { return own ? D[at(a, b)] : a >= 0 && b >= 0 && a < ns && b < nt ? scan[at(a, b)] : kNaN; };
+        L = depthAt(na, nb, n); R = depthAt(xa, xb, x);
+        if (n && x) return L != R ? 1 : 0;
+        return std::abs(L - R) > P.stepM ? 2 : 0;
+    };
+    struct Step { int dir; long line, from, to; double L, R, c; };
+    std::vector<Step> steps;
+    const auto runs = [&](int dir, long lines, long along, const std::vector<double>& edges) {
+        for (long line = 0; line < lines; ++line) {
+            bool open = false;
+            Step cur{};
+            for (long i = 0; i < along; ++i) {
+                double L = 0, R = 0;
+                const int p = dir == 0 ? stepDepths(line - 1, i, line, i, L, R) : stepDepths(i, line - 1, i, line, L, R);
+                const double c = p == 1 ? bevelOf(L, R) : 0.0;
+                if (open && p && L == cur.L && R == cur.R && c == cur.c && edges[static_cast<size_t>(i + 1)] - edges[static_cast<size_t>(cur.from)] <= P.mergeMaxM) { cur.to = i; continue; }
+                if (open) steps.push_back(cur);
+                open = p != 0;
+                if (open) cur = Step{dir, line, i, i, L, R, c};
+            }
+            if (open) steps.push_back(cur);
+        }
+    };
+    runs(0, G, nt, t);
+    runs(1, nt + 1, ns, s);
+    // 3. the corners everything meets at, and the depths met at each
+    std::vector<uint8_t> junction(static_cast<size_t>(G * (nt + 1)));
+    for (const auto& q : faces) {
+        const long cs[4][2] = {{q[0], q[1]}, {q[2] + 1, q[1]}, {q[0], q[3] + 1}, {q[2] + 1, q[3] + 1}};
+        for (const auto& c : cs) junction[gk(c[0], c[1])] = 1;
+    }
+    const auto corner = [&](const Step& st, int end, long& x, long& y) { const long i = end ? st.to + 1 : st.from; x = st.dir == 0 ? st.line : i; y = st.dir == 0 ? i : st.line; };
+    std::vector<std::vector<double>> met(static_cast<size_t>(G * (nt + 1)));
+    const auto meet = [&](long x, long y, double d) { auto& l = met[gk(x, y)]; if (std::find(l.begin(), l.end(), d) == l.end()) l.push_back(d); };
+    for (const Step& st : steps) for (int end = 0; end < 2; ++end) {
+        long x, y;
+        corner(st, end, x, y);
+        junction[gk(x, y)] = 1;
+        meet(x, y, st.L); meet(x, y, st.R);
+    }
+    for (long y = 0; y <= nt; ++y) for (long x = 0; x <= ns; ++x) {
+        if (!junction[gk(x, y)]) continue;
+        const long around[4][2] = {{x - 1, y - 1}, {x, y - 1}, {x - 1, y}, {x, y}};
+        for (const auto& c : around) if (isBuilt(c[0], c[1])) meet(x, y, D[at(c[0], c[1])]);
+    }
+    // 4. the chamfered arrises, closed
+    const auto alongOf = [&](int dir) -> const std::vector<double>& { return dir == 0 ? t : s; };
+    const auto acrossOf = [&](int dir) -> const std::vector<double>& { return dir == 0 ? s : t; };
+    struct Arris { size_t st; double front, back, into, l, inset; int kind[2]; double backEnd[2], cutEnd[2]; int partner[2], partnerEnd[2]; std::array<double, 4> z; };
+    std::vector<Arris> arrises;
+    std::vector<int> arrisOf(steps.size(), -1);
+    for (size_t i = 0; i < steps.size(); ++i) {
+        const Step& st = steps[i];
+        if (!st.c) continue;
+        const double into = st.L < st.R ? -1 : 1, l = acrossOf(st.dir)[static_cast<size_t>(st.line)];
+        const auto& A = alongOf(st.dir);
+        Arris x{i, js::max(st.L, st.R), js::min(st.L, st.R), into, l, l + into * st.c, {1, 1}, {A[static_cast<size_t>(st.from)], A[static_cast<size_t>(st.to + 1)]}, {A[static_cast<size_t>(st.from)], A[static_cast<size_t>(st.to + 1)]}, {-1, -1}, {0, 0}, {}};
+        arrisOf[i] = static_cast<int>(arrises.size());
+        arrises.push_back(x);
+    }
+    std::unordered_map<size_t, std::vector<std::pair<int, int>>> endsAt;
+    for (size_t xi = 0; xi < arrises.size(); ++xi) for (int e = 0; e < 2; ++e) { long cx, cy; corner(steps[arrises[xi].st], e, cx, cy); endsAt[gk(cx, cy)].push_back({static_cast<int>(xi), e}); }
+    for (size_t xi = 0; xi < arrises.size(); ++xi) for (int e = 0; e < 2; ++e) {
+        Arris& x = arrises[xi];
+        const Step& xs = steps[x.st];
+        long cx, cy;
+        corner(xs, e, cx, cy);
+        std::vector<std::pair<int, int>> others;
+        for (const auto& p : endsAt[gk(cx, cy)]) if (p.first != static_cast<int>(xi)) others.push_back(p);
+        const double sigma = e ? -1 : 1;
+        bool flush = false;
+        for (const auto& p : others) { const Step& os = steps[arrises[static_cast<size_t>(p.first)].st]; if (os.dir == xs.dir && os.L == xs.L && os.R == xs.R) flush = true; }
+        if (flush) { x.kind[e] = 0; continue; }
+        if (others.size() != 1) continue;
+        const Arris& o = arrises[static_cast<size_t>(others[0].first)];
+        const int oe = others[0].second;
+        const double so = oe ? -1 : 1;
+        if (steps[o.st].dir == xs.dir || o.front != x.front || o.back != x.back) continue;
+        if (o.into == sigma && x.into == so) { x.kind[e] = 2; x.backEnd[e] = o.inset; x.partner[e] = others[0].first; x.partnerEnd[e] = oe; continue; }
+        if (o.into != -sigma || x.into != -so) continue;
+        const long da = xs.dir == 0 ? (x.into > 0 ? cx : cx - 1) : (-sigma > 0 ? cx : cx - 1), db = xs.dir == 0 ? (-sigma > 0 ? cy : cy - 1) : (x.into > 0 ? cy : cy - 1);
+        if (!isBuilt(da, db) || D[at(da, db)] != x.back) continue;
+        x.kind[e] = 3; x.backEnd[e] = o.inset; x.cutEnd[e] = o.inset; x.partner[e] = others[0].first; x.partnerEnd[e] = oe;
+    }
+    const auto capEnd = [&](Arris& x, int e) { const Step& st = steps[x.st]; const auto& A = alongOf(st.dir); x.kind[e] = 1; x.backEnd[e] = x.cutEnd[e] = e ? A[static_cast<size_t>(st.to + 1)] : A[static_cast<size_t>(st.from)]; x.partner[e] = -1; };
+    for (size_t xi = 0; xi < arrises.size(); ++xi) {
+        if (arrises[xi].backEnd[0] < arrises[xi].backEnd[1]) continue;
+        for (int e = 0; e < 2; ++e) { const int p = arrises[xi].partner[e], pe = arrises[xi].partnerEnd[e]; if (p >= 0) capEnd(arrises[static_cast<size_t>(p)], pe); capEnd(arrises[xi], e); }
+    }
+    // the feet: points on lines (dir 0: s = v, 1: t = v) at a depth (-0 is 0, as JavaScript's keys have it)
+    struct FootKey { int dir; uint64_t v, d; bool operator==(const FootKey& o) const { return dir == o.dir && v == o.v && d == o.d; } };
+    struct FootHash { size_t operator()(const FootKey& k) const { return static_cast<size_t>((k.v * 1099511628211ull) ^ (k.d * 14695981039346656037ull) ^ static_cast<uint64_t>(k.dir)); } };
+    const auto bits = [](double v) { if (v == 0) v = 0; uint64_t b; std::memcpy(&b, &v, 8); return b; };
+    std::unordered_map<FootKey, std::vector<double>, FootHash> feet;
+    const auto footKey = [&](int dir, double v, double d) { return FootKey{dir, bits(v), bits(d)}; };
+    for (const Arris& x : arrises) {
+        const Step& st = steps[x.st];
+        const double lo = js::min(x.backEnd[0], x.backEnd[1]), hi = js::max(x.backEnd[0], x.backEnd[1]);
+        const auto& A = alongOf(st.dir);
+        auto& pts = feet[footKey(st.dir, x.inset, x.back)];
+        pts.push_back(lo); pts.push_back(hi);
+        for (size_t i = 0; i < A.size(); ++i) if (A[i] > lo && A[i] < hi && junction[st.dir == 0 ? i * static_cast<size_t>(G) + static_cast<size_t>(st.line) : static_cast<size_t>(st.line * G) + i]) pts.push_back(A[i]);
+    }
+    std::vector<std::vector<int>> zones(faces.size());
+    for (size_t xi = 0; xi < arrises.size(); ++xi) {
+        Arris& x = arrises[xi];
+        const Step& st = steps[x.st];
+        const double lo = js::min(x.l, x.inset), hi = js::max(x.l, x.inset);
+        x.z = st.dir == 0 ? std::array<double, 4>{lo, x.cutEnd[0], hi, x.cutEnd[1]} : std::array<double, 4>{x.cutEnd[0], lo, x.cutEnd[1], hi};
+        for (long i = st.from - (x.kind[0] == 3 ? 1 : 0); i <= st.to + (x.kind[1] == 3 ? 1 : 0); ++i) {
+            const long a = st.dir == 0 ? (x.into > 0 ? st.line : st.line - 1) : i, b = st.dir == 0 ? i : (x.into > 0 ? st.line : st.line - 1);
+            if (!isBuilt(a, b) || D[at(a, b)] != x.back) continue;
+            auto& l = zones[static_cast<size_t>(faceOf[at(a, b)])];
+            if (std::find(l.begin(), l.end(), static_cast<int>(xi)) == l.end()) l.push_back(static_cast<int>(xi));
+        }
+        for (double sv : {x.z[0], x.z[2]}) for (double tv : {x.z[1], x.z[3]}) { feet[footKey(0, sv, x.back)].push_back(tv); feet[footKey(1, tv, x.back)].push_back(sv); }
+    }
+    for (auto& kv : feet) { auto& v = kv.second; std::sort(v.begin(), v.end()); v.erase(std::unique(v.begin(), v.end()), v.end()); }
+    const auto feetOf = [&](int dir, double v, double d) -> const std::vector<double>* { const auto it = feet.find(footKey(dir, v, d)); return it == feet.end() ? nullptr : &it->second; };
+    // 5. the triangles, as corner records, welded after
+    using Pt = std::array<double, 3>;
+    std::vector<std::array<double, 8>> tri;
+    const Vec3 &C = f.centroid, &Nv = f.normal, &S = f.axisS, &T = f.axisT;
+    const Vec3 negS{-S[0], -S[1], -S[2]}, negT{-T[0], -T[1], -T[2]};
+    const auto world = [&](const Pt& p) { return Vec3{C[0] + p[0] * S[0] + p[1] * T[0] + p[2] * Nv[0], C[1] + p[0] * S[1] + p[1] * T[1] + p[2] * Nv[1], C[2] + p[0] * S[2] + p[1] * T[2] + p[2] * Nv[2]}; };
+    const auto unit = [](const Vec3& v) { const double l = js::hypot({v[0], v[1], v[2]}); return Vec3{v[0] / l, v[1] / l, v[2] / l}; };
+    // mode 0: the plane's frame; 1: unfolded along s (a step on an s line); 2: along t
+    const auto emit = [&](const std::vector<std::array<Pt, 3>>& out, const Vec3& n, int mode, double into, double front) {
+        for (const auto& q : out) {
+            const Vec3 w[3] = {world(q[0]), world(q[1]), world(q[2])};
+            const Vec3 e1{w[1][0] - w[0][0], w[1][1] - w[0][1], w[1][2] - w[0][2]}, e2{w[2][0] - w[0][0], w[2][1] - w[0][1], w[2][2] - w[0][2]};
+            const Vec3 g{e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
+            const int order[3] = {0, dot(g, n) < 0 ? 2 : 1, dot(g, n) < 0 ? 1 : 2};
+            for (int o : order) {
+                const Pt& p = q[static_cast<size_t>(o)];
+                const double us = mode == 1 ? p[0] + into * (front - p[2]) : p[0], ut = mode == 2 ? p[1] + into * (front - p[2]) : p[1];
+                tri.push_back({w[o][0], w[o][1], w[o][2], n[0], n[1], n[2], (us - f.orthoSMin) / Wm, (f.orthoTMax - ut) / Hm});
+            }
+        }
+    };
+    const auto poly = [&](const std::vector<Pt>& bottom, const std::vector<Pt>& right, const std::vector<Pt>& top, const std::vector<Pt>& left, const Vec3& n, int mode, double into, double front) {
+        std::vector<std::array<Pt, 3>> out;
+        const auto zip = [&](const std::vector<Pt>& A, const std::vector<Pt>& B, int axis) {
+            size_t i = 0, j = 0;
+            while (i < A.size() - 1 || j < B.size() - 1) {
+                if (j >= B.size() - 1 || (i < A.size() - 1 && A[i + 1][static_cast<size_t>(axis)] <= B[j + 1][static_cast<size_t>(axis)])) { out.push_back({A[i], B[j], A[i + 1]}); i++; }
+                else { out.push_back({A[i], B[j], B[j + 1]}); j++; }
+            }
+        };
+        if (left.size() == 2 && right.size() == 2) zip(bottom, top, bottom.front()[0] != bottom.back()[0] ? 0 : bottom.front()[1] != bottom.back()[1] ? 1 : 2);
+        else if (bottom.size() == 2 && top.size() == 2) zip(left, right, left.front()[1] != left.back()[1] ? 1 : left.front()[0] != left.back()[0] ? 0 : 2);
+        else {
+            std::vector<Pt> ring;
+            for (size_t i = 0; i + 1 < bottom.size(); ++i) ring.push_back(bottom[i]);
+            for (size_t i = 0; i + 1 < right.size(); ++i) ring.push_back(right[i]);
+            for (size_t i = top.size() - 1; i > 0; --i) ring.push_back(top[i]);
+            for (size_t i = left.size() - 1; i > 0; --i) ring.push_back(left[i]);
+            const Pt &a = bottom.front(), &c = top.back();
+            const Pt mid{(a[0] + c[0]) / 2, (a[1] + c[1]) / 2, (a[2] + c[2]) / 2};
+            for (size_t i = 0; i < ring.size(); ++i) out.push_back({mid, ring[i], ring[(i + 1) % ring.size()]});
+        }
+        emit(out, n, mode, into, front);
+    };
+    const auto withFeet = [&](std::vector<double> vals, int dir, double v, double d) {
+        const auto* ft = feetOf(dir, v, d);
+        if (!ft) return vals;
+        const double lo = vals.front(), hi = vals.back();
+        bool any = false;
+        for (double w : *ft) if (w > lo && w < hi) { vals.push_back(w); any = true; }
+        if (any) { std::sort(vals.begin(), vals.end()); vals.erase(std::unique(vals.begin(), vals.end()), vals.end()); }
+        return vals;
+    };
+    const auto alongS = [&](long b, long a0, long a1, double d) {
+        std::vector<double> o;
+        for (long x = a0; x <= a1; ++x) if (x == a0 || x == a1 || junction[gk(x, b)]) o.push_back(s[static_cast<size_t>(x)]);
+        std::vector<Pt> p;
+        for (double v : withFeet(o, 1, t[static_cast<size_t>(b)], d)) p.push_back({v, t[static_cast<size_t>(b)], d});
+        return p;
+    };
+    const auto alongT = [&](long a, long b0, long b1, double d) {
+        std::vector<double> o;
+        for (long y = b0; y <= b1; ++y) if (y == b0 || y == b1 || junction[gk(a, y)]) o.push_back(t[static_cast<size_t>(y)]);
+        std::vector<Pt> p;
+        for (double v : withFeet(o, 0, s[static_cast<size_t>(a)], d)) p.push_back({s[static_cast<size_t>(a)], v, d});
+        return p;
+    };
+    std::map<double, long> sIndex, tIndex;
+    for (size_t i = 0; i < s.size(); ++i) sIndex.emplace(s[i], static_cast<long>(i));
+    for (size_t i = 0; i < t.size(); ++i) tIndex.emplace(t[i], static_cast<long>(i));
+    int cutFaces = 0;
+    const auto cutFace = [&](const std::array<long, 4>& q, double d, const std::vector<int>& zl) {
+        const double S0 = s[static_cast<size_t>(q[0])], S1 = s[static_cast<size_t>(q[2] + 1)], T0 = t[static_cast<size_t>(q[1])], T1 = t[static_cast<size_t>(q[3] + 1)];
+        std::vector<double> xs{S0, S1}, ys{T0, T1};
+        for (int zi : zl) {
+            const auto& z = arrises[static_cast<size_t>(zi)].z;
+            for (double v : {z[0], z[2]}) if (v > S0 && v < S1) xs.push_back(v);
+            for (double v : {z[1], z[3]}) if (v > T0 && v < T1) ys.push_back(v);
+        }
+        std::sort(xs.begin(), xs.end()); xs.erase(std::unique(xs.begin(), xs.end()), xs.end());
+        std::sort(ys.begin(), ys.end()); ys.erase(std::unique(ys.begin(), ys.end()), ys.end());
+        const size_t nx = xs.size() - 1, ny = ys.size() - 1, X = nx + 1;
+        std::vector<uint8_t> open(nx * ny);
+        bool any = false;
+        for (size_t j = 0; j < ny; ++j) for (size_t i = 0; i < nx; ++i) {
+            const double cx = (xs[i] + xs[i + 1]) / 2, cy = (ys[j] + ys[j + 1]) / 2;
+            bool in = false;
+            for (int zi : zl) { const auto& z = arrises[static_cast<size_t>(zi)].z; if (cx > z[0] && cx < z[2] && cy > z[1] && cy < z[3]) { in = true; break; } }
+            open[j * nx + i] = in ? 0 : 1;
+            any = any || !in;
+        }
+        if (!any) return false;
+        std::vector<uint8_t> used(nx * ny), cornerOf(X * (ny + 1));
+        std::vector<std::array<size_t, 4>> rects;
+        for (size_t j = 0; j < ny; ++j) for (size_t i = 0; i < nx; ++i) {
+            if (!open[j * nx + i] || used[j * nx + i]) continue;
+            size_t i1 = i, j1 = j;
+            while (i1 + 1 < nx && open[j * nx + i1 + 1] && !used[j * nx + i1 + 1]) i1++;
+            for (;;) { if (j1 + 1 >= ny) break; bool row = true; for (size_t x = i; x <= i1 && row; ++x) row = open[(j1 + 1) * nx + x] && !used[(j1 + 1) * nx + x]; if (!row) break; j1++; }
+            for (size_t y = j; y <= j1; ++y) for (size_t x = i; x <= i1; ++x) used[y * nx + x] = 1;
+            rects.push_back({i, j, i1, j1});
+            cornerOf[j * X + i] = 1; cornerOf[j * X + i1 + 1] = 1; cornerOf[(j1 + 1) * X + i] = 1; cornerOf[(j1 + 1) * X + i1 + 1] = 1;
+        }
+        const auto side = [&](bool horizontal, size_t atk, size_t k0, size_t k1) {
+            const auto& A = horizontal ? xs : ys;
+            const double lo = A[k0], hi = A[k1];
+            std::vector<double> v;
+            for (size_t k = k0; k <= k1; ++k) if (k == k0 || k == k1 || cornerOf[horizontal ? atk * X + k : k * X + atk]) v.push_back(A[k]);
+            const double c = horizontal ? ys[atk] : xs[atk];
+            const auto& idx = horizontal ? tIndex : sIndex;
+            const auto li = idx.find(c);
+            const auto& L = horizontal ? s : t;
+            if (li != idx.end()) for (size_t k = 0; k < L.size(); ++k) if (L[k] > lo && L[k] < hi && junction[horizontal ? static_cast<size_t>(li->second * G) + k : k * static_cast<size_t>(G) + static_cast<size_t>(li->second)]) v.push_back(L[k]);
+            if (const auto* ft = feetOf(horizontal ? 1 : 0, c, d)) for (double w : *ft) if (w > lo && w < hi) v.push_back(w);
+            std::sort(v.begin(), v.end()); v.erase(std::unique(v.begin(), v.end()), v.end());
+            std::vector<Pt> p;
+            for (double w : v) p.push_back(horizontal ? Pt{w, c, d} : Pt{c, w, d});
+            return p;
+        };
+        for (const auto& r : rects) poly(side(true, r[1], r[0], r[2] + 1), side(false, r[2] + 1, r[1], r[3] + 1), side(true, r[3] + 1, r[0], r[2] + 1), side(false, r[0], r[1], r[3] + 1), Nv, 0, 0, 0);
+        cutFaces++;
+        return true;
+    };
+    for (size_t fi = 0; fi < faces.size(); ++fi) {
+        const auto& q = faces[fi];
+        const double d = D[at(q[0], q[1])];
+        if (!zones[fi].empty() && cutFace(q, d, zones[fi])) continue;
+        poly(alongS(q[1], q[0], q[2] + 1, d), alongT(q[2] + 1, q[1], q[3] + 1, d), alongS(q[3] + 1, q[0], q[2] + 1, d), alongT(q[0], q[1], q[3] + 1, d), Nv, 0, 0, 0);
+    }
+    const auto chain = [&](long x, long y, double lo, double hi) {
+        std::vector<double> mid;
+        for (double v : met[gk(x, y)]) if (v > lo && v < hi) mid.push_back(v);
+        std::sort(mid.begin(), mid.end());
+        std::vector<double> o{lo};
+        o.insert(o.end(), mid.begin(), mid.end());
+        o.push_back(hi);
+        return o;
+    };
+    const auto footOn = [&](int dir, double v, double d, double b0, double b1) { std::vector<double> o; if (const auto* ft = feetOf(dir, v, d)) for (double w : *ft) if (w >= b0 && w <= b1) o.push_back(w); return o; };
+    int chamfered = 0;
+    for (size_t si = 0; si < steps.size(); ++si) {
+        const Step& st = steps[si];
+        const double L = st.L, R = st.R, c = st.c, front = js::max(L, R), back = js::min(L, R), into = L < R ? -1 : 1;
+        if (st.dir == 0) {
+            const double sv = s[static_cast<size_t>(st.line)], t0 = t[static_cast<size_t>(st.from)], t1 = t[static_cast<size_t>(st.to + 1)], sb = sv + into * c;
+            const Vec3& n = L > R ? S : negS;
+            if (!c) {
+                std::vector<Pt> e0, e1;
+                for (double d : chain(st.line, st.from, back, front)) e0.push_back({sv, t0, d});
+                for (double d : chain(st.line, st.to + 1, back, front)) e1.push_back({sv, t1, d});
+                poly(alongT(st.line, st.from, st.to + 1, back), e1, alongT(st.line, st.from, st.to + 1, front), e0, n, 1, into, front);
+                continue;
+            }
+            chamfered++;
+            const Arris& x = arrises[static_cast<size_t>(arrisOf[si])];
+            const double b0 = x.backEnd[0], b1 = x.backEnd[1];
+            std::vector<Pt> foot;
+            for (double v : footOn(0, sb, back, b0, b1)) foot.push_back({sv + into * c, v, back});
+            poly(alongT(st.line, st.from, st.to + 1, front), {{sv, t1, front}, {sb, b1, front - c}}, {{sb, b0, front - c}, {sb, b1, front - c}}, {{sv, t0, front}, {sb, b0, front - c}}, unit({Nv[0] + into * S[0], Nv[1] + into * S[1], Nv[2] + into * S[2]}), 1, into, front);
+            poly(foot, {{sb, b1, back}, {sb, b1, front - c}}, {{sb, b0, front - c}, {sb, b1, front - c}}, {{sb, b0, back}, {sb, b0, front - c}}, n, 1, into, front);
+            for (int e = 0; e < 2; ++e) {
+                if (x.kind[e] != 1) continue;
+                const double tv = e ? t1 : t0;
+                std::vector<Pt> ch;
+                for (double d : chain(st.line, e ? st.to + 1 : st.from, back, front)) ch.push_back({sv, tv, d});
+                poly({{sv, tv, back}, {sb, tv, back}}, {{sb, tv, back}, {sb, tv, front - c}}, {{sv, tv, front}, {sb, tv, front - c}}, ch, e ? T : negT, 1, into, front);
+            }
+        } else {
+            const double tv = t[static_cast<size_t>(st.line)], s0 = s[static_cast<size_t>(st.from)], s1 = s[static_cast<size_t>(st.to + 1)], tb = tv + into * c;
+            const Vec3& n = L > R ? T : negT;
+            if (!c) {
+                std::vector<Pt> e0, e1;
+                for (double d : chain(st.from, st.line, back, front)) e0.push_back({s0, tv, d});
+                for (double d : chain(st.to + 1, st.line, back, front)) e1.push_back({s1, tv, d});
+                poly(alongS(st.line, st.from, st.to + 1, back), e1, alongS(st.line, st.from, st.to + 1, front), e0, n, 2, into, front);
+                continue;
+            }
+            chamfered++;
+            const Arris& x = arrises[static_cast<size_t>(arrisOf[si])];
+            const double b0 = x.backEnd[0], b1 = x.backEnd[1];
+            std::vector<Pt> foot;
+            for (double v : footOn(1, tb, back, b0, b1)) foot.push_back({v, tb, back});
+            poly(alongS(st.line, st.from, st.to + 1, front), {{s1, tv, front}, {b1, tb, front - c}}, {{b0, tb, front - c}, {b1, tb, front - c}}, {{s0, tv, front}, {b0, tb, front - c}}, unit({Nv[0] + into * T[0], Nv[1] + into * T[1], Nv[2] + into * T[2]}), 2, into, front);
+            poly(foot, {{b1, tb, back}, {b1, tb, front - c}}, {{b0, tb, front - c}, {b1, tb, front - c}}, {{b0, tb, back}, {b0, tb, front - c}}, n, 2, into, front);
+            for (int e = 0; e < 2; ++e) {
+                if (x.kind[e] != 1) continue;
+                const double sv = e ? s1 : s0;
+                std::vector<Pt> ch;
+                for (double d : chain(e ? st.to + 1 : st.from, st.line, back, front)) ch.push_back({sv, tv, d});
+                poly({{sv, tv, back}, {sv, tb, back}}, {{sv, tb, back}, {sv, tb, front - c}}, {{sv, tv, front}, {sv, tb, front - c}}, ch, e ? S : negS, 2, into, front);
+            }
+        }
+    }
+    // 6. welded: one vertex per position, normal and UV as stored (32 bits; -0 is 0, as JavaScript's keys have it)
+    struct KeyHash { size_t operator()(const std::array<uint32_t, 8>& k) const { uint64_t h = 1469598103934665603ull; for (uint32_t v : k) { h ^= v; h *= 1099511628211ull; } return static_cast<size_t>(h); } };
+    std::unordered_map<std::array<uint32_t, 8>, uint32_t, KeyHash> ids;
+    ids.reserve(tri.size());
+    res.positions.clear(); res.normals.clear(); res.uv.clear(); res.indices.clear();
+    res.indices.reserve(tri.size());
+    for (const auto& v : tri) {
+        std::array<float, 8> q;
+        std::array<uint32_t, 8> key;
+        for (size_t k = 0; k < 8; ++k) { q[k] = static_cast<float>(v[k]); const float z = q[k] == 0.0f ? 0.0f : q[k]; std::memcpy(&key[k], &z, 4); }
+        const auto [it, fresh] = ids.emplace(key, static_cast<uint32_t>(res.positions.size() / 3));
+        if (fresh) { res.positions.insert(res.positions.end(), {q[0], q[1], q[2]}); res.normals.insert(res.normals.end(), {q[3], q[4], q[5]}); res.uv.insert(res.uv.end(), {q[6], q[7]}); }
+        res.indices.push_back(it->second);
+    }
+    int cells = 0, mitres = 0, caps = 0;
+    for (uint8_t v : built) cells += v;
+    for (const Arris& x : arrises) for (int e = 0; e < 2; ++e) { if (x.kind[e] >= 2) mitres++; if (x.kind[e] == 1) caps++; }
+    const int report[9] = {cells, static_cast<int>(faces.size()), static_cast<int>(steps.size()), chamfered, cutFaces, mitres, caps, static_cast<int>(res.indices.size() / 3), static_cast<int>(res.positions.size() / 3)};
+    std::copy(std::begin(report), std::end(report), res.surface);
+}
+
 /** latticeFacade, with the scan's (and the raw scan's) samples drawn first. */
 inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::vector<double>& samples, const Params& P, const std::vector<uint8_t>* uncovered, bool photoRecess,
                                    const std::vector<Rect>& fitted, bool hasRecess, double recessM, const std::vector<Rect>* bays, const std::vector<double>* reliefSamples, bool buildWhereMeasured) {
@@ -589,80 +992,14 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
         }
         if (recessed) for (size_t k : dark) if (built[k]) photoRecessCells++;
     }
-    // the surface: one face per cell, step faces between cells
-    std::vector<double> pos, nrm, uv;
-    std::vector<uint32_t> idx;
-    const double Wm = W * f.pixel, Hm = H * f.pixel;
-    const Vec3 &C = f.centroid, &Nv = f.normal, &S = f.axisS, &T = f.axisT;
-    struct Pt { double s, t, d; };
-    const auto quadAt = [&](const Pt* pts, const Vec3& n, auto at) {
-        const size_t base = pos.size() / 3;
-        for (int i = 0; i < 4; ++i) {
-            const auto [us, ut] = at(pts[i].s, pts[i].t, pts[i].d);
-            for (int k = 0; k < 3; ++k) pos.push_back(C[k] + pts[i].s * S[k] + pts[i].t * T[k] + pts[i].d * Nv[k]);
-            for (int k = 0; k < 3; ++k) nrm.push_back(n[k]);
-            uv.push_back((us - f.orthoSMin) / Wm);
-            uv.push_back((f.orthoTMax - ut) / Hm);
-        }
-        const double* o = &pos[base * 3];
-        const Vec3 e1{o[3] - o[0], o[4] - o[1], o[5] - o[2]}, e2{o[6] - o[0], o[7] - o[1], o[8] - o[2]};
-        const Vec3 g{e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
-        const uint32_t b0 = static_cast<uint32_t>(base);
-        if (dot(g, n) < 0) idx.insert(idx.end(), {b0, b0 + 2, b0 + 1, b0, b0 + 3, b0 + 2});
-        else idx.insert(idx.end(), {b0, b0 + 1, b0 + 2, b0, b0 + 2, b0 + 3});
-    };
-    const auto plain = [](double sv, double tv, double) { return std::array<double, 2>{sv, tv}; };
-    const auto unit = [](const Vec3& v) { const double l = js::hypot({v[0], v[1], v[2]}); return Vec3{v[0] / l, v[1] / l, v[2] / l}; };
-    const Vec3 negS{-S[0], -S[1], -S[2]}, negT{-T[0], -T[1], -T[2]};
-    const bool structure = res.hasStructure;
-    const auto bevelOf = [&](double l, double r) { return structure && std::abs(l - r) >= 2 * P.chamferM ? P.chamferM : 0.0; };
-    const auto sideS = [&](double sv, double t0, double t1, double l, double r) {
-        if (!(std::abs(l - r) > P.stepM)) return;
-        const double front = js::max(l, r), back = js::min(l, r), into = l < r ? -1 : 1, c = bevelOf(l, r), sb = sv + into * c;
-        const auto at = [&](double sx, double tv, double d) { return std::array<double, 2>{sx + into * (front - d), tv}; };
-        if (c) {
-            const Vec3 bn = unit({Nv[0] + into * S[0], Nv[1] + into * S[1], Nv[2] + into * S[2]});
-            if (l > r) { const Pt q[4] = {{sv, t0, front}, {sb, t0, front - c}, {sb, t1, front - c}, {sv, t1, front}}; quadAt(q, bn, at); }
-            else { const Pt q[4] = {{sv, t0, front}, {sv, t1, front}, {sb, t1, front - c}, {sb, t0, front - c}}; quadAt(q, bn, at); }
-        }
-        const double top = front - c;
-        if (l > r) { const Pt q[4] = {{sb, t0, back}, {sb, t1, back}, {sb, t1, top}, {sb, t0, top}}; quadAt(q, S, at); }
-        else { const Pt q[4] = {{sb, t0, top}, {sb, t0, back}, {sb, t1, back}, {sb, t1, top}}; quadAt(q, negS, at); }
-    };
-    const auto sideT = [&](double tv, double s0, double s1, double bl, double ab) {
-        if (!(std::abs(bl - ab) > P.stepM)) return;
-        const double front = js::max(bl, ab), back = js::min(bl, ab), into = bl < ab ? -1 : 1, c = bevelOf(bl, ab), tb = tv + into * c;
-        const auto at = [&](double sv, double ty, double d) { return std::array<double, 2>{sv, ty + into * (front - d)}; };
-        if (c) {
-            const Vec3 bn = unit({Nv[0] + into * T[0], Nv[1] + into * T[1], Nv[2] + into * T[2]});
-            if (bl > ab) { const Pt q[4] = {{s0, tv, front}, {s1, tv, front}, {s1, tb, front - c}, {s0, tb, front - c}}; quadAt(q, bn, at); }
-            else { const Pt q[4] = {{s0, tv, front}, {s0, tb, front - c}, {s1, tb, front - c}, {s1, tv, front}}; quadAt(q, bn, at); }
-        }
-        const double top = front - c;
-        if (bl > ab) { const Pt q[4] = {{s0, tb, back}, {s0, tb, top}, {s1, tb, top}, {s1, tb, back}}; quadAt(q, T, at); }
-        else { const Pt q[4] = {{s0, tb, top}, {s1, tb, top}, {s1, tb, back}, {s0, tb, back}}; quadAt(q, negT, at); }
-    };
-    const auto scanDepthAt = [&](long a, long b) {
-        const double v = raw[static_cast<size_t>(b) * ns + static_cast<size_t>(a)];
-        return finite(v) ? (v < P.minDepthM ? kNaN : clamp(v)) : finite(rowMeds[static_cast<size_t>(b)]) ? clamp(rowMeds[static_cast<size_t>(b)]) : kNaN;
-    };
-    const long nsl = static_cast<long>(ns), ntl = static_cast<long>(nt);
-    const auto isBuilt = [&](long a, long b) { return a >= 0 && b >= 0 && a < nsl && b < ntl && built[static_cast<size_t>(b) * ns + static_cast<size_t>(a)]; };
-    const auto beside = [&](long na, long nb) { return isBuilt(na, nb) ? depth[static_cast<size_t>(nb) * ns + static_cast<size_t>(na)] : na >= 0 && nb >= 0 && na < nsl && nb < ntl ? scanDepthAt(na, nb) : kNaN; };
-    for (long b = 0; b < ntl; ++b) for (long a = 0; a < nsl; ++a) {
-        if (!built[static_cast<size_t>(b) * ns + static_cast<size_t>(a)]) continue;
-        const double d = depth[static_cast<size_t>(b) * ns + static_cast<size_t>(a)];
-        const size_t ua = static_cast<size_t>(a), ub = static_cast<size_t>(b);
-        const Pt q[4] = {{s[ua], t[ub], d}, {s[ua + 1], t[ub], d}, {s[ua + 1], t[ub + 1], d}, {s[ua], t[ub + 1], d}};
-        quadAt(q, Nv, plain);
-        sideS(s[ua + 1], t[ub], t[ub + 1], d, beside(a + 1, b));
-        if (!isBuilt(a - 1, b)) sideS(s[ua], t[ub], t[ub + 1], beside(a - 1, b), d);
-        sideT(t[ub + 1], s[ua], s[ua + 1], d, beside(a, b + 1));
-        if (!isBuilt(a, b - 1)) sideT(t[ub], s[ua], s[ua + 1], beside(a, b - 1), d);
-    }
+    // where the scan stands beside a rebuilt cell (a neighbour left as scan): its measured depth, else its row's; NaN when the
+    // scan measures nothing there, or another surface further behind than any recess
+    std::vector<double> scan(ns * nt);
+    for (size_t k = 0; k < ns * nt; ++k) { const double v = raw[k], m = rowMeds[k / ns]; scan[k] = finite(v) ? (v < P.minDepthM ? kNaN : clamp(v)) : finite(m) ? clamp(m) : kNaN; }
     int cells = 0;
     for (uint8_t v : built) cells += v;
     if (!cells) return res;
+    latticeSurface(f, W * f.pixel, H * f.pixel, s, t, built, depth, scan, res.hasStructure, P, res);
     res.ok = true;
     res.cells = cells;
     res.measuredShare = js::round(measured * 1000) / 1000;
@@ -677,10 +1014,6 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
     for (double v : t) res.cellV.push_back((f.orthoTMax - v) / (H * f.pixel));
     res.s = std::move(s);
     res.t = std::move(t);
-    res.positions.assign(pos.begin(), pos.end());
-    res.normals.assign(nrm.begin(), nrm.end());
-    res.uv.assign(uv.begin(), uv.end());
-    res.indices = std::move(idx);
     return res;
 }
 
