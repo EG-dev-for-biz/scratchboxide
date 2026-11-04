@@ -24,7 +24,7 @@
 * **Penn Station, 7th Ave & W 32nd St** (district test place, r 250): 81 m² of grass in the whole area, so 38 clumps on the nearest patch, 106 m from the place. The band recentres on the nearest grass and says so.
 * Each run took about 17–30 s with tiles cached.
 
-Proof sheet: `docs/screenshots/2026-11-04-grass-blades-proof.png` (gitignored; sent in the PR thread).
+Proof sheets (gitignored, local): `docs/screenshots/2026-11-04-grass-blades-proof.png` (Sheep Meadow, Madison Sq) and `docs/screenshots/2026-11-04-grass-blades-penn-proof.png` (Penn: photo, mask, grass off/on).
 
 ---
 
@@ -33,6 +33,7 @@ Proof sheet: `docs/screenshots/2026-11-04-grass-blades-proof.png` (gitignored; s
 * **Blades buried under crowns (fixed).** Mask-2 cells (grass filled in under park crowns) used the ground model's smooth terrain, which lay about 0.4 m (median) under the tile's real ground. Raycasts from the viewport showed no clump open to the sky at Bryant Park. Fix: each clump stands on the scan's own surface nearest the cell estimate (within 0.75 m, measured), and the estimate under crowns is the terrain plus the rise of the nearest seen ground.
 * **White blades (fixed).** Under-crown patches that touch no seen grass got no photo colour, and the native code fell back to a white tint. Fix: the nearest seen grass colour is carried over any ground.
 * **Mid-distance visibility (open).** Blades 4–5 mm wide fall under a pixel at about 10 m, so at that distance the field looks like the tile photo alone. Needs a distance treatment (wider far blades or cards), not more instances.
+* **Penn Station: every grass patch is a false positive in the mask (open, upstream of this work).** On a fresh extraction (stage outputs cleared, load under 100), `detectGrass` finds 81 m² at 7th Ave & W 32nd St. The main 50 m² is the green roof of a footbridge/canopy over the rail cut, and 11 m² is a parked truck's green cab. Both pass the colour test and stand within 0.6 m of the local terrain estimate. The blades follow the mask faithfully (169 clumps, 146 of 152 within 5 cm of the surface). Proof: `docs/screenshots/2026-11-04-grass-blades-penn-proof.png` (photo, mask, grass off/on).
 * **Grass detection misses many NYC lawns (open, upstream of this work).** Madison Square Park has 44 m² read green and Bryant Park little near its centre. Their lawns fail the colour test in these tiles (`notGreen`). The blades follow the mask faithfully, so they show up sparse and shade-tinted under the crowns.
 
 ---
