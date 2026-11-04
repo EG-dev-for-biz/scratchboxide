@@ -9,11 +9,11 @@
 
 /**
  * A melted flight's step count from Street View (ground-steps.ts StepCounter). Panos near the flight are found by the
- * free metadata query; the nearest that see it (from its side, where the step profile shows, or from its front, where the
- * risers show as lines) are fetched through the Maps Imagery Grounding API, at most two, in memory only, as the
- * streetview-evidence.ts route has them (no decode, no write, no log). A vision model counts the risers on each, told
- * what the scan measured (the rise, the length, the width). The counts agree within one, or the median of three is taken.
- */
+ * free metadata query at points across its front and off its sides (Google's own captures only); the nearest that see it
+ * (from its side, where the step profile shows, and from its front, where the risers show as lines, then the next nearest)
+ * are fetched through the Maps Imagery Grounding API, at most four, in memory only, as the streetview-evidence.ts route
+ * has them (no decode, no write, no log). A vision model counts the risers on each, told what the scan measured (the
+ * rise, the length, the width). Two counts must agree within one; three or more give their median. */
 
 import type { GenerateContentResponse } from '@google/genai';
 import type { GeodeticOrigin } from '../../spatial/StreetViewSurveyPlanner';
@@ -24,8 +24,9 @@ import type { InclineReading, StepCount, StepCounter } from './ground-steps';
 export const STEP_COUNT_PARAMS = {
     /** A pano sees the flight from this far (m): nearer, it fills the frame; further, the risers blur. */
     minDistanceM: 5, maxDistanceM: 45,
-    /** At most this many views a flight. */
-    views: 2,
+    /** Up to this many views fetched a flight (the nearest, from its side and its front first): the grounding API refuses
+     *  some panos, and the counts of all that arrive are combined. */
+    views: 4,
     /** The pano's eye above its ground (m). */
     eyeM: 2.5
 };
@@ -34,8 +35,11 @@ export const STEP_COUNT_PARAMS = {
 function flightPoints(f: InclineReading): { centre: { x: number; z: number }; around: Array<{ x: number; z: number }> } {
     const at = (s: number, b: number) => ({ x: f.cx + f.ux * s + f.vx * b, z: f.cz + f.uz * s + f.vz * b });
     const sm = (f.sFoot + f.sTop) / 2, bm = (f.bMin + f.bMax) / 2;
-    // in front of the foot, and off either side, a street's width away
-    return { centre: at(sm, bm), around: [at(f.sFoot - 12, bm), at(sm, f.bMin - 10), at(sm, f.bMax + 10)] };
+    // in front of the foot at two distances, across its width (the nearest pano to a point may be a visitor's photosphere,
+    // not Google's), and off either side, a street's width away
+    const w = f.bMax - f.bMin;
+    const front = [10, 18].flatMap(d => [f.bMin + w / 4, bm, f.bMax - w / 4].map(b => at(f.sFoot - d, b)));
+    return { centre: at(sm, bm), around: [...front, at(sm, f.bMin - 10), at(sm, f.bMax + 10)] };
 }
 
 /** The reply: {"risers": n | null, "confidence": 0..1}. */
@@ -82,7 +86,9 @@ export function streetViewStepCounter(deps: {
             const along = Math.abs((dx * f.ux + dz * f.uz) / Math.max(1e-6, d));
             return { p, d, side: along < 0.5 };
         }).filter(c => c.d >= STEP_COUNT_PARAMS.minDistanceM && c.d <= STEP_COUNT_PARAMS.maxDistanceM).sort((a, b) => a.d - b.d);
-        const picks = [ranked.find(c => c.side), ranked.find(c => !c.side)].filter((c): c is NonNullable<typeof c> => !!c).slice(0, STEP_COUNT_PARAMS.views);
+        // the nearest from the side and from the front first, then the next nearest
+        const first = [ranked.find(c => c.side), ranked.find(c => !c.side)].filter((c): c is NonNullable<typeof c> => !!c);
+        const picks = [...first, ...ranked.filter(c => !first.includes(c))].slice(0, STEP_COUNT_PARAMS.views);
         if (!picks.length) return { reason: `no Street View pano within ${STEP_COUNT_PARAMS.maxDistanceM} m sees the flight (${found.panos.length} near it)` };
         const views: SelectedView[] = picks.map(({ p, d }) => {
             const g = deps.groundAt(p.x, p.z), eyeY = (g === g ? g : f.footY) + STEP_COUNT_PARAMS.eyeM;

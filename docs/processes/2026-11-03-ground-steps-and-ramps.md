@@ -66,12 +66,14 @@ A flight needs two such sections and 1.2 m of width. From them:
 
 ### 4. Counting a melted flight on Street View (`step-count-streetview.ts`)
 
-- The free metadata query finds panos around the flight (in front of its foot and off either side).
-- The nearest within 5-45 m that sees it from the side, and the nearest that sees it from the front, are fetched
-  through the Maps Imagery Grounding API. At most two, in memory only, as `streetview-evidence.ts` has them.
+- The free metadata query finds panos around the flight: at two distances in front of its foot across its width, and off
+  either side. Only Google's own captures count (the nearest pano to a point is often a visitor's photosphere).
+- The nearest within 5-45 m that sees it from the side, then from the front, then the next nearest, are fetched through
+  the Maps Imagery Grounding API. At most four, in memory only, as `streetview-evidence.ts` has them; the API refuses
+  some panos.
 - A vision model counts the risers on each, told what the scan measured (the rise, the length, the width).
 - Two counts within one of each other give the larger (a riser hidden is likelier than one invented). Two further apart
-  give no count, with the reason.
+  give no count, with the reason. Three or more give their median.
 
 ### 5. The rebuild (`buildStepsMesh`)
 
