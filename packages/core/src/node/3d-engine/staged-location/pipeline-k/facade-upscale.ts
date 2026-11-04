@@ -18,7 +18,8 @@
  *     upscaled once and every later run, chunk or machine reads it back.
  *  2. Detail transfer: the output is the photo enlarged (bilinear) plus only the answer's fine detail (the answer minus
  *     its own enlarged box-average), so at the photo's resolution the result is the photo, texel for texel.
- *  3. The detail is kept where the answer, shrunk back, still matches the photo (CIELAB difference under fullDeltaE: all
+ *  3. The detail is kept where the answer, shrunk back and its smooth colour offset removed (offsetRadiusPx), still
+ *     matches the photo (CIELAB difference under fullDeltaE: all
  *     of it; over maxDeltaE: none; between, a ramp; the difference smoothed and grown by a texel), so where the model
  *     redrew something (a sign drawn into a blur, windows painted on a filled patch) none of its detail is used.
  *  4. The detail's amplitude is capped at softRatio times the photo's own local contrast (contrastFloor at least), so a
@@ -38,7 +39,7 @@ import { resizeRgba, type EnhanceModelClient } from '../texture-enhance';
 import { decodeImageInMemory, type RgbaImage8 } from '../tile-texture-transfer';
 import { readingKey, type ModelReadingStore } from './model-readings';
 
-export const FACADE_UPSCALE_VERSION = 'facade-upscale/1';
+export const FACADE_UPSCALE_VERSION = 'facade-upscale/2';
 
 /** The image models asked, in order: the one the 2026-11-03 Penn test used first. */
 export const FACADE_UPSCALE_MODELS = ['gemini-3-pro-image', 'gemini-3.1-flash-image'];
@@ -65,6 +66,8 @@ export const FACADE_UPSCALE_PARAMS = {
     /** CIELAB difference between the photo and the answer shrunk back: all detail kept at or under fullDeltaE, none at maxDeltaE. */
     fullDeltaE: 3,
     maxDeltaE: 7,
+    /** The answer's colour offset from the photo averaged over this radius (photo texels, a box) is removed before the difference: a smooth shift in colour or brightness carries no fine detail, so only a different shape counts. */
+    offsetRadiusPx: 6,
     /** The detail's amplitude (8-bit sRGB) at most softRatio times the photo's 3 x 3 contrast, and at least contrastFloor. */
     softRatio: 1.5,
     contrastFloor: 3
@@ -162,11 +165,17 @@ export function transferDetail(src: RgbaImage8, ai: RgbaImage8, F: number, P: Fa
         const i = (y * W + x) * 3;
         low[i] = r * inv; low[i + 1] = g * inv; low[i + 2] = b * inv;
     }
+    // the answer's smooth colour offset from the photo, removed: low less the offset's local mean
+    const off = new Float32Array(n * 3);
+    for (let i = 0; i < n * 3; i++) off[i] = low[i] - photo[i];
+    const offMean = boxBlur3(off, W, H, P.offsetRadiusPx);
+    const lowAligned = new Float32Array(n * 3);
+    for (let i = 0; i < n * 3; i++) lowAligned[i] = low[i] - offMean[i];
     // the shrunk-back difference per photo texel, smoothed (3 x 3 mean) and grown by a texel (3 x 3 max)
     const de = new Float32Array(n);
     let deSum = 0;
     for (let i = 0; i < n; i++) {
-        const a = labOf(photo[i * 3], photo[i * 3 + 1], photo[i * 3 + 2]), b = labOf(low[i * 3], low[i * 3 + 1], low[i * 3 + 2]);
+        const a = labOf(photo[i * 3], photo[i * 3 + 1], photo[i * 3 + 2]), b = labOf(lowAligned[i * 3], lowAligned[i * 3 + 1], lowAligned[i * 3 + 2]);
         de[i] = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
         deSum += de[i];
     }
@@ -222,6 +231,23 @@ export function transferDetail(src: RgbaImage8, ai: RgbaImage8, F: number, P: Fa
         out[o + 3] = src.rgba[(Math.min(H - 1, Math.floor(oy / F)) * W + Math.min(W - 1, Math.floor(ox / F))) * 4 + 3];
     }
     return { image: { width: OW, height: OH, rgba: out }, keptShare: n ? keptSum / n : 0, meanDeltaE: n ? deSum / n : 0, cappedShare: OW * OH ? capped / (OW * OH) : 0 };
+}
+
+/** A box mean of radius r over a W x H x 3 field (separable, clamped at the edges). */
+function boxBlur3(f: Float32Array, W: number, H: number, r: number): Float32Array {
+    if (r <= 0) return Float32Array.from(f);
+    const tmp = new Float32Array(f.length), out = new Float32Array(f.length);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) for (let c = 0; c < 3; c++) {
+        let s = 0, k = 0;
+        for (let d = -r; d <= r; d++) { const xx = x + d; if (xx < 0 || xx >= W) continue; s += f[(y * W + xx) * 3 + c]; k++; }
+        tmp[(y * W + x) * 3 + c] = s / k;
+    }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) for (let c = 0; c < 3; c++) {
+        let s = 0, k = 0;
+        for (let d = -r; d <= r; d++) { const yy = y + d; if (yy < 0 || yy >= H) continue; s += tmp[(yy * W + x) * 3 + c]; k++; }
+        out[(y * W + x) * 3 + c] = s / k;
+    }
+    return out;
 }
 
 /** One square crop of the photo, padded past the image's edge with its own edge texels. */

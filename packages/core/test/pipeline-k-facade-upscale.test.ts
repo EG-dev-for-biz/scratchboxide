@@ -24,6 +24,7 @@ import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-locatio
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { decodeImageInMemory, type RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 import { resolveToolTimeBudget } from '../src/node/gemini/tool-time-budgets';
+import { finalImagePart } from '../src/node/google-media-generation-service';
 import type { EnhanceModelRequest } from '../src/node/3d-engine/staged-location/texture-enhance';
 
 /** A facade photo: stone (190, 170, 150) with dark windows (60, 70, 80) on a 8 x 6 px grid. */
@@ -94,6 +95,15 @@ describe('facade upscale: tiles and factor', () => {
     });
 });
 
+describe('the image model reply', () => {
+    it("takes the answer, not Gemini 3 Pro Image's draft thought images before it", () => {
+        const parts = [{ text: 'thinking' }, { inlineData: { data: 'draft1', mimeType: 'image/png' }, thought: true }, { inlineData: { data: 'draft2', mimeType: 'image/png' }, thought: true }, { inlineData: { data: 'final', mimeType: 'image/png' } }];
+        expect(finalImagePart(parts)?.inlineData?.data).toBe('final');
+        expect(finalImagePart([{ inlineData: { data: 'only', mimeType: 'image/png' }, thought: true }])?.inlineData?.data).toBe('only');
+        expect(finalImagePart([{ text: 'no image' }])).toBeUndefined();
+    });
+});
+
 describe('facade upscale: detail transfer', () => {
     const photo = facadePhoto(32, 24);
 
@@ -117,6 +127,16 @@ describe('facade upscale: detail transfer', () => {
             for (let c = 0; c < 3; c++) worst = Math.max(worst, Math.abs(back.rgba[(y * 32 + x) * 4 + c] - photo.rgba[(y * 32 + x) * 4 + c]));
         }
         expect(worst).toBeLessThanOrEqual(2);
+    });
+
+    it('keeps the detail of an answer whose colours are shifted as a whole (a brighter answer)', () => {
+        const ai = enlargeWithChecker(photo, 4, 4);
+        for (let i = 0; i < ai.rgba.length; i++) if (i % 4 !== 3) ai.rgba[i] = Math.min(255, ai.rgba[i] + 12);
+        const t = transferDetail(photo, ai, 4);
+        expect(t.keptShare).toBeGreaterThan(0.9);
+        // and the photo's colours are kept, not the answer's brighter ones
+        const back = shrink(t.image, 4);
+        expect(Math.abs(back.rgba[(3 * 32 + 0) * 4] - photo.rgba[(3 * 32 + 0) * 4])).toBeLessThanOrEqual(2);
     });
 
     it('drops the detail where the answer redrew the photo (a block invented over a plain patch)', () => {
