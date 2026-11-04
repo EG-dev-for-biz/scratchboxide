@@ -272,4 +272,20 @@ describe('sb script guide', () => {
         const registry = createDefaultToolRegistry();
         expect(registry.declarations(['workspace']).some(d => d.name === 'read_sb_script_guide')).toBe(true);
     });
+
+    it('asks for a weathering and decal pass on generated 3D content, never on measured content, with tools that exist', async () => {
+        const rule = SPATIAL_INTENT_POLICY.slice(SPATIAL_INTENT_POLICY.indexOf('DETAIL PASS'));
+        expect(rule.length).toBeGreaterThan(200);
+        expect(rule).toMatch(/weathering and decals/);
+        expect(rule).toMatch(/measured or scanned content/);
+        expect(rule).toMatch(/clean or untouched/);
+        expect(rule).toMatch(/generated/);
+        const registry = createDefaultToolRegistry();
+        for (const tool of ['weather_mesh', 'decal_generate', 'asset_decal']) {
+            expect(rule).toContain(tool);
+            expect(registry.has(tool), tool).toBe(true);
+        }
+        expect(rule).toContain('load_tools');
+        expect(await buildSystemInstruction({ prompt: 'make a robot', mode: 'agent' } as GeminiGenerateRequest)).toContain('DETAIL PASS');
+    });
 });
