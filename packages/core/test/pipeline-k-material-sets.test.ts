@@ -12,7 +12,8 @@
  * concrete and a metal panel of the same dark grey) measured in the committed statistics bundle (no set is measured in the
  * build), and a readings store holding both sets' prepared maps (no set is fetched: the bucket is out of reach in tests).
  * A dark class with no finish reading, or an unsure one, takes the concrete, a dielectric; read confidently as metal it
- * takes the panel, marked metal; and a set not yet measured is left out, never measured here.
+ * takes the panel, marked metal; read as a smooth dielectric (glass) it takes a plain finish, no set; and a set not yet
+ * measured is left out, never measured here.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -62,6 +63,12 @@ describe('pipeline K library sets', () => {
         expect(metal[0].finish?.read?.seen).toBe('anodized aluminium panel');
         // the prepared maps came from the store: the panel's metalness (blue) is there to draw
         expect(metal[0].orm.rgba[2]).toBe(242);
+        // read as dark glass (smooth, not metal): a plain finish at its roughness, flat, no library set
+        const glass = await resolveRegionSets([dark], { repoRoot: root, store, finish: async () => [{ roughness: 0.1, metalness: 0.05, conf: 80, seen: 'dark tinted glass' }] });
+        expect(glass[0].name).toBe('plain (read finish)');
+        expect(glass[0].metal).toBeUndefined();
+        expect(glass[0].orm.rgba[1]).toBe(26);
+        expect(Array.from(glass[0].normal.rgba.subarray(0, 3))).toEqual([128, 128, 255]);
         // the unmeasured set is counted and left out, never measured in the build
         expect(progress.some(m => /1 library sets .* not measured yet/.test(m))).toBe(true);
         expect(fs.existsSync(path.join(root, 'build', 'texture-library', 'stats'))).toBe(false);

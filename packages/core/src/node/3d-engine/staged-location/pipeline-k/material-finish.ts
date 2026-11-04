@@ -17,7 +17,7 @@
  * drawn with their metalness) only at metalConf with metalness at least metalAt. Below that a class keeps the matte
  * dielectric finish (REGION_FINISH), as before the user's decision of 2026-11-04 (a class the model reads as metal panel
  * is drawn as one; the old rule "nothing is drawn metal" stood while no reading could tell a metal from a dark stone).
- * Labelled photo-inferred.
+ * A class read as a smooth dielectric (plainBelowRoughness) takes a plain finish, no set. Labelled photo-inferred.
  */
 
 import type { RegionClass } from './material-regions';
@@ -28,7 +28,13 @@ export const FINISH_READ = {
     /** A reading's roughness ranks the class's sets at this confidence (0..100) and above. */
     minConf: 50,
     /** Metal: the class's sets may be metal, and are drawn with their metalness, at this confidence and metalness. */
-    metalConf: 70, metalAt: 0.5
+    metalConf: 70, metalAt: 0.5,
+    /**
+     * A class read confidently (minConf) as a dielectric this smooth or smoother (glass, polished stone, gloss paint) takes no
+     * library set: a plain finish at its read roughness with a flat normal. The library's sets this smooth are snow, foam
+     * and road paint (Penn 2's dark glass took Snow005), whose grain is no part of a smooth facade.
+     */
+    plainBelowRoughness: 0.3
 } as const;
 
 export interface ClassFinish { roughness: number; metalness: number; conf: number; seen?: string }
@@ -68,7 +74,8 @@ export function parseClassFinish(text: string, rows = 0): Array<ClassFinish | un
 }
 
 /** What the ranking takes from a reading: the roughness to rank toward, the metalness, and whether metal sets may be used. */
-export function finishTarget(f: ClassFinish | undefined, matte: { roughness: number; metallic: number }, R = FINISH_READ): { roughness: number; metallic: number; metal: boolean } {
+export function finishTarget(f: ClassFinish | undefined, matte: { roughness: number; metallic: number }, R = FINISH_READ): { roughness: number; metallic: number; metal: boolean; plain: boolean } {
     const metal = !!f && f.conf >= R.metalConf && f.metalness >= R.metalAt;
-    return { roughness: f && f.conf >= R.minConf ? f.roughness : matte.roughness, metallic: metal ? f!.metalness : matte.metallic, metal };
+    const sure = !!f && f.conf >= R.minConf;
+    return { roughness: sure ? f!.roughness : matte.roughness, metallic: metal ? f!.metalness : matte.metallic, metal, plain: sure && f!.metalness < R.metalAt && f!.roughness <= R.plainBelowRoughness };
 }
