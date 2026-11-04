@@ -21,7 +21,7 @@ import {
     resolveWithinRoot
 } from '../../../packages/core/src/node/security/path-guard';
 import { ContainerSandboxService } from '../../../packages/core/src/node/container-sandbox-service';
-import { DEFAULT_GEMINI_MODEL } from '../../../packages/core/src/node/gemini/gemini-client';
+import { DEFAULT_CHAT_MODEL } from '../../../packages/core/src/node/gemini/gemini-client';
 import { defaultCloudBucket } from '../../../packages/core/src/node/cloud-store/cloud-bucket';
 import {
     WorkspaceConfigService,
@@ -283,7 +283,7 @@ export function createWorkspaceRouter(services: WorkspaceRouterServices, ctx: Ro
                 await fs.writeJSON(configPath, {
                     workspaceName: cleanName,
                     theme: 'dark',
-                    defaultModel: DEFAULT_GEMINI_MODEL,
+                    defaultModel: DEFAULT_CHAT_MODEL,
                     thinkingBudget: 1024,
                     template: template || 'blank'
                 }, { spaces: 2 });

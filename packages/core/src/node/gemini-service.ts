@@ -75,6 +75,7 @@ import {
 import { VisualVerificationService } from './visual-verification-service';
 import {
     GeminiClient,
+    DEFAULT_CHAT_MODEL,
     DEFAULT_GEMINI_MODEL,
     FALLBACK_GEMINI_MODELS,
     DEFAULT_SUBAGENT_MODEL,
@@ -106,7 +107,7 @@ import {
     withOpenArtifactRule
 } from './gemini/artifact-synthesis';
 
-export { DEFAULT_GEMINI_MODEL, FALLBACK_GEMINI_MODELS, DEFAULT_SUBAGENT_MODEL, FALLBACK_SUBAGENT_MODELS };
+export { DEFAULT_CHAT_MODEL, DEFAULT_GEMINI_MODEL, FALLBACK_GEMINI_MODELS, DEFAULT_SUBAGENT_MODEL, FALLBACK_SUBAGENT_MODELS };
 
 /**
  * Gemini TTS returns raw 16-bit little-endian PCM (audio/L16;codec=pcm;rate=24000); browsers decode WAV, so the PCM is
@@ -140,7 +141,7 @@ export function pcmToWavBase64(base64: string, mimeType: string): string {
  * desktop server, deep-write pipeline, long-running agents and the subagent pool.
  */
 export class GeminiService {
-    private readonly client: GeminiClient = new GeminiClient();
+    private readonly client: GeminiClient = new GeminiClient({ defaultModel: DEFAULT_CHAT_MODEL });
     private readonly lens: LensBridge = new LensBridge();
     private readonly mcp: McpBridge = new McpBridge();
     private readonly toolRegistry: ToolRegistry = createDefaultToolRegistry();
@@ -604,7 +605,7 @@ export class GeminiService {
      * model is called. Never rejects; start it without awaiting it once the server listens.
      */
     public warmChatPrompt(options: ChatPromptWarmupOptions = {}): Promise<ChatPromptWarmupReport> {
-        return warmChatPrompt(request => this.streaming.buildFirstCallPayload(request, DEFAULT_GEMINI_MODEL), options);
+        return warmChatPrompt(request => this.streaming.buildFirstCallPayload(request, DEFAULT_CHAT_MODEL), options);
     }
 
     public async compilePrompt(request: GeminiGenerateRequest): Promise<{ systemInstruction?: string; contents: any[] }> {

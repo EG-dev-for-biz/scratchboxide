@@ -16,6 +16,12 @@ import type { GeminiGenerateRequest, GeminiStatus, GroundingMetadata } from '../
 import { FileKeyStore, type KeyStore } from '../key-store';
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-4-argon';
+/**
+ * The chat agent's model (user decision 2026-11-03, "default our main agent as gemini-3.8-flash for speed"): the chat
+ * service's client prefers it, and a new workspace's config names it. Every other caller that names no model keeps
+ * DEFAULT_GEMINI_MODEL. A workspace that chose a model in Settings > Models keeps its choice.
+ */
+export const DEFAULT_CHAT_MODEL = 'gemini-3.8-flash';
 export const FALLBACK_GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'];
 
 export const DEFAULT_SUBAGENT_MODEL = 'gemini-3.5-flash-lite';

@@ -104,16 +104,17 @@ describe('server: which model and credential answered', () => {
     });
 
     it('starts every turn from the requested model again (no sticky default after a fallback)', async () => {
+        // the chat's default (DEFAULT_CHAT_MODEL, gemini-3.8-flash since 2026-11-03) fails; its first fallback answers
         const { service, urls } = serviceWith({
-            'gemini-4-argon': () => ({ ok: false, status: 404, body: NOT_FOUND }),
-            'gemini-3.8-flash': () => ({ ok: true, status: 200, body: sse('ok') })
+            'gemini-3.8-flash': () => ({ ok: false, status: 404, body: NOT_FOUND }),
+            'gemini-3.7-flash': () => ({ ok: true, status: 200, body: sse('ok') })
         });
         await service.streamGenerate({ prompt: 'one', mode: 'ask' } as any, () => {});
         urls.length = 0;
         const second = await service.streamGenerate({ prompt: 'two', mode: 'ask' } as any, () => {});
-        expect(urls[0]).toContain('/models/gemini-4-argon:');
-        expect(second.modelProvenance?.requestedModel).toBe('gemini-4-argon');
-        expect(second.modelProvenance?.modelUsed).toBe('gemini-3.8-flash');
+        expect(urls[0]).toContain('/models/gemini-3.8-flash:');
+        expect(second.modelProvenance?.requestedModel).toBe('gemini-3.8-flash');
+        expect(second.modelProvenance?.modelUsed).toBe('gemini-3.7-flash');
     });
 
     it('says nothing extra when the requested model answers', async () => {

@@ -860,8 +860,8 @@ export class StreamingEngine {
             };
             const startStream = (streamUrl: string, streamPayload: VertexStreamPayload, streamModel: string, useCache = false): StartStream => async (streamSignal, onLine) => {
                 // The router reads the stable prefix from an explicit context cache when one is ready
-                // (context-cache.ts); the content it reads is the same either way. The chat model (gemini-4-argon)
-                // refuses explicit caches, so its calls do not ask.
+                // (context-cache.ts); the content it reads is the same either way. The chat's own calls do not ask (gemini-4-argon,
+                // the chat model until 2026-11-03, refuses explicit caches).
                 const cacheName = useCache && auth.type === 'vertex'
                     ? this.contextCache.lookup(this.contextCacheTarget({ projectId: auth.projectId, token: (headers['Authorization'] || '').replace(/^Bearer /, '') || auth.token }), streamModel, streamPayload.systemInstruction, streamPayload.tools)
                     : undefined;

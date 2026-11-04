@@ -234,7 +234,7 @@ async function runTests() {
     const geminiService = new GeminiService();
     const status = await geminiService.getStatus();
 
-    assert.strictEqual(status.activeModel, 'gemini-4-argon', 'Master orchestrator must be Gemini 4 Argon');
+    assert.strictEqual(status.activeModel, 'gemini-3.8-flash', 'Master orchestrator must be the chat model, Gemini 3.8 Flash (user decision 2026-11-03)');
     assert.strictEqual(status.subagentModel, 'gemini-3.5-flash-lite', 'Subagents must execute on Gemini 3.5 Flash Lite');
     console.log('  ✓ Test 6 Passed: Gemini 3.8 Flash configured as orchestrator with Gemini 3.5 Flash Lite subagents');
 

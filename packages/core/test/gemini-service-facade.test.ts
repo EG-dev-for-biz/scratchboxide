@@ -2,7 +2,8 @@ import { test } from 'vitest';
 import * as assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { GeminiService, DEFAULT_GEMINI_MODEL, FALLBACK_GEMINI_MODELS } from '../src/node/gemini-service';
+import { GeminiService, DEFAULT_CHAT_MODEL, DEFAULT_GEMINI_MODEL, FALLBACK_GEMINI_MODELS } from '../src/node/gemini-service';
+import { GeminiClient } from '../src/node/gemini/gemini-client';
 
 const SERVICE_PATH = path.join(__dirname, '../src/node/gemini-service.ts');
 const GEMINI_DIR = path.join(__dirname, '../src/node/gemini');
@@ -120,4 +121,17 @@ test('initAuth no longer probes personal Downloads paths', () => {
     assert.ok(src.includes('GOOGLE_APPLICATION_CREDENTIALS'));
     assert.ok(src.includes('.scratchbox/service-account.json'));
     assert.ok(src.includes('.scratchbox-ide/service-account.json'));
+});
+
+test('the chat agent defaults to gemini-3.8-flash; callers that name no model keep the flagship', () => {
+    // user decision 2026-11-03: the main agent on gemini-3.8-flash for speed
+    assert.strictEqual(DEFAULT_CHAT_MODEL, 'gemini-3.8-flash');
+    const service = new GeminiService();
+    assert.strictEqual(service.getActiveModel(), DEFAULT_CHAT_MODEL);
+    assert.strictEqual((service as any).client.getModelCandidates()[0], DEFAULT_CHAT_MODEL);
+    // a model the workspace chose in Settings > Models still leads
+    assert.strictEqual((service as any).client.getModelCandidates('gemini-4-argon')[0], 'gemini-4-argon');
+    // every other client (vision chains, judges, reference builds) is unchanged
+    assert.strictEqual(DEFAULT_GEMINI_MODEL, 'gemini-4-argon');
+    assert.strictEqual(new GeminiClient().preferredModel, DEFAULT_GEMINI_MODEL);
 });

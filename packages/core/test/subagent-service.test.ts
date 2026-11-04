@@ -27,7 +27,7 @@ async function runTests() {
     const status = await service.getStatus();
 
     assert.ok(status, 'Status must not be null');
-    assert.strictEqual(status.activeModel, 'gemini-4-argon');
+    assert.strictEqual(status.activeModel, 'gemini-3.8-flash');
     assert.strictEqual(status.subagentModel, 'gemini-3.5-flash-lite');
     assert.ok(status.availableSubagentModels && status.availableSubagentModels.includes('gemini-3.5-flash-lite'));
     console.log('  ✓ Test 3 Passed: Service status correctly reports primary and subagent models');

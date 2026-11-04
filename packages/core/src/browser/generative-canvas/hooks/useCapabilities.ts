@@ -141,8 +141,8 @@ export function useCapabilities() {
                 if (cancelled) return;
                 setGeminiStatus({
                     connected: false,
-                    activeModel: 'gemini-4-argon',
-                    availableModels: ['gemini-4-argon', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'],
+                    activeModel: 'gemini-3.8-flash',
+                    availableModels: ['gemini-3.8-flash', 'gemini-4-argon', 'gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'],
                     thinkingBudget: 1024,
                     authMethod: 'unauthenticated'
                 });
