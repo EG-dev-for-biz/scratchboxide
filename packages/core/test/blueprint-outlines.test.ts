@@ -226,7 +226,7 @@ describe('object_blueprint_outlines', () => {
         expect(saved.outlines.groundContacts.map((c: any) => c.zCentre)).toEqual([1.3, -1.3]);
         expect(p.aspectError).toEqual({ side: 0, top: 0, front: 0 });
         expect(p.notesText).toContain('Blueprint outlines');
-        expect(out.summaryResult).toContain('Touches the ground at z 1.3, -1.3 m.');
+        expect(out.summaryResult).toContain('Touches the ground at z 1.3, -1.3 m, the outermost contacts 2.600 m apart');
     });
 
     it('compares a built model with the blueprint, with no image call', async () => {

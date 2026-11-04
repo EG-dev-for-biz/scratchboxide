@@ -184,7 +184,9 @@ export function createBlueprintOutlineHandlers(deps: BlueprintOutlineToolDeps = 
                     `Drew the side, top and front views of ${subject} and read their outlines at ${size.join(' x ')} m (blueprint ${rel(blueprintFile)}).`,
                     `Drawn proportions before scaling: side ${aspectError.side}, top ${aspectError.top}, front ${aspectError.front}.`,
                     offScale.length ? `Not to scale: ${offScale.map(v => `${v.view} (${(v.aspectError * 100).toFixed(0)} %)`).join(', ')}; its outline is stretched to the size, so read it with care.` : '',
-                    outlines.groundContacts.length ? `Touches the ground at z ${outlines.groundContacts.map(c => c.zCentre).join(', ')} m.` : 'No ground contact was read from the side view.'
+                    outlines.groundContacts.length
+                        ? `Touches the ground at z ${outlines.groundContacts.map(c => c.zCentre).join(', ')} m${outlines.groundContacts.length > 1 ? `, the outermost contacts ${(outlines.groundContacts[0].zCentre - outlines.groundContacts[outlines.groundContacts.length - 1].zCentre).toFixed(3)} m apart (check it against a published spacing, such as a wheelbase)` : ''}.`
+                        : 'No ground contact was read from the side view.'
                 ].filter(Boolean).join(' ')
             };
         }
