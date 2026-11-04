@@ -61,7 +61,7 @@ const RGB_ITEMS = { type: 'ARRAY', items: { type: 'NUMBER' } } as const;
 const WEAR_PROPERTIES: Record<string, ToolParameterSchema> = {
     edgeWear: { type: 'NUMBER', description: 'Wear on convex edges and corners, 0..1 (default 0.6): paint rubbed through, polish, chips; read from the geometry\'s convexity.' },
     grime: { type: 'NUMBER', description: 'Dirt in cavities, creases and sheltered places, 0..1 (default 0.5); read from occlusion by every part and the ground.' },
-    streaks: { type: 'NUMBER', description: 'Run-off streaks down steep faces under whatever overhangs them, 0..1 (default 0.3).' },
+    streaks: { type: 'NUMBER', description: 'Run-off streaks where rain or condensation runs down steep faces under whatever overhangs them, 0..1 (default 0.3); 0 where nothing ever wets the object (in vacuum, kept indoors).' },
     dust: { type: 'NUMBER', description: 'Dust on surfaces facing the open sky, 0..1 (default 0.25).' },
     sunFade: { type: 'NUMBER', description: 'Fading and chalking where the sky reaches, 0..1 (default 0.15).' },
     variation: { type: 'NUMBER', description: 'Large-scale patchiness of every layer, 0..1 (default 0.35).' },
