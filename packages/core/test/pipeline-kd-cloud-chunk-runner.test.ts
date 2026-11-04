@@ -222,6 +222,21 @@ describe('pipeline K-D cloud chunk runner', () => {
         expect(fs.existsSync(stale)).toBe(false);
     });
 
+    it('asks for the execution again when a poll fails, and fails the chunk (its execution cancelled) after too many in a row', async () => {
+        const s = setup();
+        const real = s.jobs.get.bind(s.jobs);
+        let fails = 3;
+        s.jobs.get = async (name: string) => { if (fails-- > 0) throw new Error('read ETIMEDOUT'); return real(name); };
+        const out = await s.runChunk(request(), {});
+        expect(out.result.status).toBe('complete');
+        expect(s.jobs.cancelled).toEqual([]);
+
+        const t = setup();
+        t.jobs.get = async () => { throw new Error('read ETIMEDOUT'); };
+        await expect(t.runChunk(request(), {})).rejects.toThrow(/ETIMEDOUT/);
+        expect(t.jobs.cancelled).toEqual([expect.stringMatching(/kd-chunk-job-0$/)]);
+    });
+
     it('a stop cancels the execution and rejects with the stop', async () => {
         const s = setup({ hang: true });
         const ac = new AbortController();
@@ -240,6 +255,18 @@ describe('pipeline K-D cloud chunk runner', () => {
         expect(() => checkImageSkew('x/kd-chunk-job:86ec852f', SHA, {})).not.toThrow();
         expect(() => checkImageSkew('x/kd-chunk-job@sha256:ffff', SHA, {})).toThrow();
         expect(imageCommit('x/kd-chunk-job:latest')).toBeUndefined();
+    });
+
+    it('asks for the job image again after the API could not be reached', async () => {
+        const s = setup();
+        const real = s.jobs.jobImage.bind(s.jobs);
+        let calls = 0;
+        s.jobs.jobImage = async () => { if (++calls === 1) throw new Error('socket hang up'); return real(); };
+        await expect(s.runChunk(request(), {})).rejects.toThrow(/socket hang up/);
+        expect(s.jobs.runs).toEqual([]);
+        await s.runChunk(request(), {});
+        expect(calls).toBe(2);
+        expect(s.jobs.runs).toHaveLength(1);
     });
 
     it('builds only district chunks', () => {

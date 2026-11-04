@@ -203,10 +203,13 @@ describe('pipeline K facade reader (vision agent)', () => {
             fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades: [frame, { ...frame, facadeId: 8, image: 'f8.png', width: Wn }] }));
             const { ask } = standIn();
             const events: string[] = [];
-            let inFlight = 0, maxInFlight = 0;
-            // the wide wall answers slowly; the narrow face (3 m) at once, its reading every other storey only
+            let inFlight = 0, maxInFlight = 0, wideAsked!: () => void;
+            const wideStarted = new Promise<void>(resolve => { wideAsked = resolve; });
+            // the wide wall answers slowly; the narrow face (3 m) at once, its reading every other storey only, once the wide
+            // wall's first call is out (its photo is decoded on a codec thread, the narrow face's small one inline)
             const timed: FacadeAsk = async (png, prompt, kind, region) => {
                 const isNarrow = kind === 'overview' ? region.x1 === Wn : region.x1 - region.x0 <= Wn;
+                if (isNarrow) await wideStarted; else wideAsked();
                 inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
                 try {
                     if (!isNarrow) await new Promise(r => setTimeout(r, 40));

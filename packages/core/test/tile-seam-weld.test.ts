@@ -29,6 +29,7 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { type Chunk, quad, writeGlb, readGlb, encodePng } from './helpers/synthetic-scan-glb';
 import { runTileSeamWeld, TileSeamWeldError } from '../src/node/3d-engine/tile-seam-weld-service';
+import { parseGlb, serializeGlb } from '../src/node/3d-engine/glb-geometry-patcher';
 import { parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
 
 const REPO = path.resolve(__dirname, '../../..');
@@ -257,5 +258,21 @@ describe('tile_seam_weld on synthetic tile chunks', () => {
         const keep = await weld('overlap_off', [wall(0, 2), b], { overlapTrim: false });
         expect(keep.r.overlapTrim).toBeUndefined();
         expect(keep.r.outputTriangles).toBeGreaterThan(r.outputTriangles);
+    });
+
+    it('carries the scan\'s frame (document extras) onto the welded scan and its clay', async () => {
+        const input = path.join(WORK, 'framed.glb'), output = path.join(WORK, 'framed_welded.glb'), clay = path.join(WORK, 'framed_clay.glb');
+        writeGlb(input, [wall(0, 2), wall(2.02, 4)]);
+        const localToEcef = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1334000.5, -4654000.25, 4138000.75, 1];
+        const doc = parseGlb(fs.readFileSync(input));
+        doc.json.extras = { frame: 'enu', anchor: { lat: 40.748545, lng: -73.985763 }, localToEcef };
+        fs.writeFileSync(input, serializeGlb(doc));
+        await runTileSeamWeld({ inputGlb: input, outputGlb: output, outputClayGlb: clay, threads: 2, repoRoot: REPO });
+        for (const out of [output, clay]) {
+            const extras = parseGlb(fs.readFileSync(out)).json.extras as any;
+            expect(extras.localToEcef).toEqual(localToEcef);
+            expect(extras.anchor).toEqual({ lat: 40.748545, lng: -73.985763 });
+        }
+        expect(positions(output).length).toBeGreaterThan(0);
     });
 });

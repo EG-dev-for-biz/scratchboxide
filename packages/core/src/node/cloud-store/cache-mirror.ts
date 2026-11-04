@@ -25,9 +25,12 @@
  *
  * And back (restoreCacheEntry): a stage entry the workspace lacks is read from the bucket before the stage runs
  * (stage-cache.ts `restore`, wired in staged-location-tool.ts; SCRATCHBOX_CACHE_RESTORE=off never), with the native and
- * stage entries it points at, so a wiped cache or another machine rebuilds a scene from what was built before.
+ * stage entries it points at, so a wiped cache or another machine rebuilds a scene from what was built before. A record
+ * kept as one file (the vision model's answers, pipeline-k/model-readings.ts) is read back on its own (restoreCacheFile,
+ * stage-cache.ts `restoreFile`), so a Cloud Run chunk, which starts on an empty disk, asks the model only about what changed.
  */
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -36,6 +39,8 @@ import { defaultTrainingBucket } from './training-pair-capture';
 
 export const CACHE_MIRROR_PREFIX = 'cache/v1';
 const MANIFEST = '.cloud-mirror.json';
+/** Beside a root's manifest: the files restoreCacheFile read back, one JSON line each, folded into the manifest by the next sync. */
+const RESTORED = '.cloud-mirror-restored.jsonl';
 
 export const CACHE_MIRROR_PARAMS = {
     /** A file changed this recently may still be being written: it waits for the next sync (ms). */
@@ -87,6 +92,20 @@ export async function syncCacheDir(bucket: CloudBucket, root: string, prefix: st
         if (m?.bucket === bucket.label && m.files && typeof m.files === 'object') manifest = m;
     } catch { /* none yet */ }
     const save = () => { const tmp = `${manifestFile}.tmp-${process.pid}`; fs.writeFileSync(tmp, JSON.stringify(manifest)); fs.renameSync(tmp, manifestFile); };
+    // the files read back from this bucket since the last sync are not sent back to it (taken whole first, so a file read
+    // back meanwhile starts a new list)
+    const restoredFile = path.join(root, RESTORED), taken = `${restoredFile}.${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+    try { fs.renameSync(restoredFile, taken); } catch { /* none */ }
+    if (fs.existsSync(taken)) {
+        for (const line of fs.readFileSync(taken, 'utf8').split('\n')) {
+            try {
+                const r = JSON.parse(line) as { bucket?: unknown; rel?: unknown; stamp?: unknown };
+                if (r.bucket === bucket.label && typeof r.rel === 'string' && typeof r.stamp === 'string') manifest.files[r.rel] = r.stamp;
+            } catch { /* a blank or torn line */ }
+        }
+        save();
+        fs.rmSync(taken, { force: true });
+    }
     const todo: Array<{ rel: string; stamp: string; bytes: number }> = [];
     for (const rel of walk(root)) {
         report.files++;
@@ -228,5 +247,32 @@ export async function restoreCacheEntry(bucket: CloudBucket, workspaceRoot: stri
         fs.writeFileSync(t, JSON.stringify(manifest));
         fs.renameSync(t, manifestFile);
     } catch { /* at worst the files are sent again */ }
+    return true;
+}
+
+/**
+ * One file of a cache read back from the bucket (`cache/v1/<rel>`; `rel` as it lies under .scratchbox/cache,
+ * `staged_location/model_readings/<kind>/<xx>/<sha256>.json`): for a record kept as a single file, which has no done.json
+ * to restore it by. Written whole (a temp file renamed), and listed beside the root's manifest so the next sync does not
+ * send it back. True when the file is here now, false when the bucket does not hold it; throws when the bucket cannot be read.
+ */
+export async function restoreCacheFile(bucket: CloudBucket, workspaceRoot: string, rel: string): Promise<boolean> {
+    const parts = rel.split('/');
+    if (!RESTORE_ROOTS.includes(parts[0]) || parts.length < 2 || !parts.every(SAFE_PART)) return false;
+    const rootDir = path.join(workspaceRoot, '.scratchbox', 'cache', parts[0]), file = path.join(rootDir, ...parts.slice(1));
+    if (fs.existsSync(file)) return true;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp-restore-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+    try {
+        if (!(await bucket.download(`${CACHE_MIRROR_PREFIX}/${rel}`, tmp))) return false;
+        fs.renameSync(tmp, file);
+    } finally {
+        fs.rmSync(tmp, { force: true });
+    }
+    // what came from the bucket is not sent back to it
+    try {
+        const st = fs.statSync(file);
+        fs.appendFileSync(path.join(rootDir, RESTORED), `${JSON.stringify({ bucket: bucket.label, rel: parts.slice(1).join('/'), stamp: `${st.size}:${Math.round(st.mtimeMs)}` })}\n`);
+    } catch { /* at worst the file is sent again */ }
     return true;
 }
