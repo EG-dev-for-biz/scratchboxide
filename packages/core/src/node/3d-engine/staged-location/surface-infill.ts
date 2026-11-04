@@ -831,10 +831,12 @@ function inTarget(r: RegionInfill, a: number, b: number): boolean {
 /**
  * Writes the infill into a GLB: with `moveVertices`, every vertex inside a region's target and within `moveMaxM` of its
  * model (and that the predicate takes) moves along the chart's normal onto it; with `paint`, every texel of a triangle
- * whose surface lies in a region's target (within `paintTolM` of its model) takes the fill. Index lists are untouched (no
+ * whose surface lies in a region's target (within `paintTolM` of its model) takes the fill; with `paintPlan` too, every
+ * texel inside the target of a triangle that has a corner on the model, whatever its height (by plan position: the
+ * slivers left between the rebuilt surface and what stood there). Index lists are untouched (no
  * triangle removed, no edge opened). `extras` lands in the GLB's root and scene extras.
  */
-export function applyInfillToGlb(bytes: Uint8Array, regions: RegionInfill[], opts: { moveVertices?: boolean | ((world: Vec3, region: number) => boolean); paint?: boolean; extras?: Record<string, unknown>; params?: Partial<SurfaceInfillParams> } = {}): { glb: Buffer; stats: InfillGlbStats } {
+export function applyInfillToGlb(bytes: Uint8Array, regions: RegionInfill[], opts: { moveVertices?: boolean | ((world: Vec3, region: number) => boolean); paint?: boolean; paintPlan?: boolean; extras?: Record<string, unknown>; params?: Partial<SurfaceInfillParams> } = {}): { glb: Buffer; stats: InfillGlbStats } {
     const P = { ...SURFACE_INFILL_PARAMS, ...opts.params };
     const glb = parseGlbBytes(bytes);
     const json = glb.json;
@@ -920,8 +922,15 @@ export function applyInfillToGlb(bytes: Uint8Array, regions: RegionInfill[], opt
                         const lo: Vec3 = [Math.min(wp[a * 3], wp[b * 3], wp[c * 3]), Math.min(wp[a * 3 + 1], wp[b * 3 + 1], wp[c * 3 + 1]), Math.min(wp[a * 3 + 2], wp[b * 3 + 2], wp[c * 3 + 2])];
                         const hi: Vec3 = [Math.max(wp[a * 3], wp[b * 3], wp[c * 3]), Math.max(wp[a * 3 + 1], wp[b * 3 + 1], wp[c * 3 + 1]), Math.max(wp[a * 3 + 2], wp[b * 3 + 2], wp[c * 3 + 2])];
                         if (hi[0] < all[0] || hi[1] < all[1] || hi[2] < all[2] || lo[0] > allHi[0] || lo[1] > allHi[1] || lo[2] > allHi[2]) continue;
-                        const ks = regionsAt(lo, hi);
+                        let ks = regionsAt(lo, hi);
                         if (!ks.length) continue;
+                        // paintPlan: every texel of a triangle that touches the rebuilt surface (a corner on it inside the
+                        // target), by plan position whatever its height: the slivers a patch leaves between the surface and
+                        // what stood there take the surface's colour; a triangle wholly above it (an awning) is left
+                        if (opts.paintPlan) {
+                            ks = ks.filter(kr => [a, b, c].some(v => { const r = regions[kr], [va, vb, vw] = toChart(r.chart, wp[v * 3], wp[v * 3 + 1], wp[v * 3 + 2]); return inTarget(r, va, vb) && Math.abs(vw - r.model.heightAt(va, vb)) <= P.paintTolM; }));
+                            if (!ks.length) continue;
+                        }
                         if (!img) {
                             const view = json.bufferViews[image.bufferView];
                             const d = decodeImageInMemory(glb.bin.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength));
@@ -947,7 +956,7 @@ export function applyInfillToGlb(bytes: Uint8Array, regions: RegionInfill[], opt
                             const x = (b1 * wp[a * 3] + b2 * wp[b * 3] + b3 * wp[c * 3]) / bs, y = (b1 * wp[a * 3 + 1] + b2 * wp[b * 3 + 1] + b3 * wp[c * 3 + 1]) / bs, z = (b1 * wp[a * 3 + 2] + b2 * wp[b * 3 + 2] + b3 * wp[c * 3 + 2]) / bs;
                             for (const kr of ks) {
                                 const r = regions[kr], [ca, cb, cw] = toChart(r.chart, x, y, z);
-                                if (!inTarget(r, ca, cb) || Math.abs(cw - r.model.heightAt(ca, cb)) > P.paintTolM) continue;
+                                if (!inTarget(r, ca, cb) || (!opts.paintPlan && Math.abs(cw - r.model.heightAt(ca, cb)) > P.paintTolM)) continue;
                                 if (!sampleRegion(r, ca, cb, col)) continue;
                                 const q = (k * IW + i) * 4;
                                 img.rgba[q] = Math.round(col[0]); img.rgba[q + 1] = Math.round(col[1]); img.rgba[q + 2] = Math.round(col[2]);
