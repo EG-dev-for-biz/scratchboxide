@@ -160,6 +160,7 @@ import { syncVectorRoadmapBlueprint } from './scene3d/syncVectorRoadmapBlueprint
 import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
 import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { WeatherControl } from './scene3d/WeatherPanel';
+import { ScenePathTraceButton, ScenePathTraceLayer } from './scene3d/ScenePathTrace';
 import { SplatEditControl } from './scene3d/SplatEditPanel';
 import { createSplatEditTool, DEFAULT_SPLAT_BRUSH, type SplatBrush, type SplatEditTool } from './scene3d/splatEditTool';
 import { PRIMARY_SPLAT_TARGET, type SplatEditStroke } from '../../../common/spatial/splat-edits';
@@ -1627,6 +1628,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const animationFrameIdRef = React.useRef<number | null>(null);
     /** Draws one viewport frame (optics passes when the scene lens configures them); set while the renderer is mounted. */
     const renderFrameRef = React.useRef<(() => void) | null>(null);
+    // Path-traced view (ScenePathTrace.tsx): while its frame covers the viewport, the viewport does not draw its own.
+    const [pathTraceOn, setPathTraceOn] = React.useState(false);
+    const pathTraceShowingRef = React.useRef(false);
     /** Lens distortion and depth of field from scene camera.lens; inactive (no cost) when nothing is configured. */
     const opticsChainRef = React.useRef<ViewportOpticsChain | null>(null);
     const focusControllerRef = React.useRef<ViewportFocusController | null>(null);
@@ -2574,10 +2578,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     stepSnapshot.sync(flag, stack.scene ?? undefined, externalObjectsMapRef.current);
                     displayFlagWasOn = !!flag;
                 }
-                const timeFrame = !!gpuFrameTimer?.available && treeLodControllers().length > 0;
-                if (timeFrame) gpuFrameTimer!.begin();
-                renderFrame();
-                if (timeFrame) { gpuFrameTimer!.end(); for (const ms of gpuFrameTimer!.poll()) adaptiveBudget!.sample(ms, now); }
+                if (!pathTraceShowingRef.current) {
+                    const timeFrame = !!gpuFrameTimer?.available && treeLodControllers().length > 0;
+                    if (timeFrame) gpuFrameTimer!.begin();
+                    renderFrame();
+                    if (timeFrame) { gpuFrameTimer!.end(); for (const ms of gpuFrameTimer!.poll()) adaptiveBudget!.sample(ms, now); }
+                }
                 updateFocusReticle();
             } catch (frameErr) {
                 if (!hasWarnedFrameErrorRef.current) {
@@ -4279,6 +4285,14 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 {/* a span: the frame forces every direct div child to fill it */}
                 <span ref={focusReticleRef} className="sb-3d-focus-reticle" data-testid="sb-3d-focus-reticle" aria-hidden="true" />
                 <ViewportNotice notices={viewportNotices} />
+                <ScenePathTraceLayer
+                    active={pathTraceOn}
+                    scene={() => threeSceneRef.current}
+                    camera={() => threeCameraRef.current}
+                    exclude={() => [transformGizmoGroupRef.current, selectionBoxRef.current, brushCursorMeshRef.current, customGridHelperRef.current]}
+                    title={sceneData.title}
+                    onShowing={showing => { pathTraceShowingRef.current = showing; }}
+                />
             </div>
             {treeLodStatsLine && (
                 <div
@@ -4339,6 +4353,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
                 {/* Weather: time of day into night, cloud cover, haze, fog (scene-weather.ts) */}
                 <WeatherControl sceneData={sceneData} mutateSceneData={mutateSceneData} />
+
+                {/* Path traced: the scene through the Metal path tracer (ScenePathTrace.tsx) */}
+                <ScenePathTraceButton active={pathTraceOn} onToggle={() => setPathTraceOn(v => !v)} />
 
                 {/* Colour harmony: every hue on the objects moved toward a hue template (color-harmony.ts) */}
                 <ColorHarmonyControl
