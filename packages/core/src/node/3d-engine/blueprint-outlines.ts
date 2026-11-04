@@ -51,6 +51,8 @@ export const HEIGHT_STATIONS = 21;
 export const BACKGROUND_TOLERANCE = 60;
 /** A drawn view whose proportions are off by more than this is reported as not to scale. */
 export const ASPECT_WARNING = 0.12;
+/** Horizontal runs thinner than this many pixel rows are not part of the object: a drawn ground line, anti-aliased (6 rows on a 1376 px Golf side view). */
+export const OPEN_PX = 9;
 /** The side bottom line counts as touching the ground below this share of the height. */
 const CONTACT_SHARE = 0.03;
 const DEFAULT_BACKGROUND = { name: 'magenta', hex: '#FF00FF' };
@@ -98,11 +100,32 @@ export function silhouetteOf(image: RgbaImage, tolerance = BACKGROUND_TOLERANCE)
         return dr * dr + dg * dg + db * db <= tol2;
     };
 
-    // flood the background in from every border pixel that is background-coloured
+    // what is not background-coloured, less every horizontal run thinner than OPEN_PX rows (a vertical opening): a drawn
+    // ground line joining the tyres would otherwise close off the gap under the object and fill it in
+    const solid = new Uint8Array(n);
+    for (let i = 0; i < n; i++) solid[i] = isBackground(i) ? 0 : 1;
+    const r = OPEN_PX >> 1;
+    const eroded = new Uint8Array(n);
+    for (let y = r; y < h - r; y++) {
+        for (let x = 0; x < w; x++) {
+            let all = 1;
+            for (let k = -r; k <= r && all; k++) all = solid[(y + k) * w + x];
+            eroded[y * w + x] = all;
+        }
+    }
+    const kept = new Uint8Array(n);
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            if (!eroded[y * w + x]) continue;
+            for (let k = -r; k <= r; k++) { const yy = y + k; if (yy >= 0 && yy < h) kept[yy * w + x] = 1; }
+        }
+    }
+
+    // flood the background in from the border through everything not kept
     const outside = new Uint8Array(n);
     const queue = new Int32Array(n);
     let head = 0, tail = 0;
-    const seed = (i: number) => { if (!outside[i] && isBackground(i)) { outside[i] = 1; queue[tail++] = i; } };
+    const seed = (i: number) => { if (!outside[i] && !kept[i]) { outside[i] = 1; queue[tail++] = i; } };
     for (let x = 0; x < w; x++) { seed(x); seed((h - 1) * w + x); }
     for (let y = 0; y < h; y++) { seed(y * w); seed(y * w + w - 1); }
     while (head < tail) {
@@ -419,7 +442,7 @@ export function blueprintViewPrompt(view: BlueprintViewName, subject: string, ba
         'True orthographic projection, as in a manufacturer\'s blueprint: no perspective, no foreshortening, no tilt.',
         'Show the whole object, uncropped and centred, filling the frame with a small even margin on every side.',
         `Draw it as a clean, evenly lit rendering in its real colours on a perfectly flat, uniform ${background.name} (${background.hex}) background that fills everything around it.`,
-        'No ground, floor line, shadow, reflection, text, dimension lines, labels, logos or any other object.'
+        'No ground, ground line, floor line, shadow, reflection, text, dimension lines, labels, logos or any other object: the object alone, nothing drawn under or around it.'
     ].join('\n');
 }
 

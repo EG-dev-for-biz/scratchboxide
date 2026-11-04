@@ -131,6 +131,17 @@ describe('silhouettes', () => {
         expect(s.mask[6 * s.width + 6]).toBe(0);
     });
 
+    it('drops a drawn ground line joining the tyres, so only the wheels touch the ground', () => {
+        const img = viewOf(carBoxes(), 'side', (rgba, w, h) => {
+            // a 3-pixel black line along the ground under the whole car, touching both wheels
+            for (let py = h - MARGIN - 1; py < h - MARGIN + 2; py++) for (let px = MARGIN - 10; px < w - MARGIN + 10; px++) { const i = (py * w + px) * 4; rgba[i] = 10; rgba[i + 1] = 10; rgba[i + 2] = 10; }
+        });
+        const s = silhouetteOf(img);
+        expect(s.box.x0).toBe(MARGIN);                       // the line's ends past the car are gone
+        const outlines = outlinesFromSilhouettes({ side: s, top: silhouetteOf(viewOf(carBoxes(), 'top')), front: silhouetteOf(viewOf(carBoxes(), 'front')) }, SIZE);
+        expect(outlines.groundContacts.map(c => c.zCentre)).toEqual([1.3, -1.3]);
+    });
+
     it('fails on a view with no object', () => {
         const blank = { width: 10, height: 10, rgba: Buffer.alloc(400, 255) };
         expect(() => silhouetteOf(blank)).toThrow(/no object/);
