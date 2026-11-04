@@ -54,7 +54,8 @@ export interface GrassFieldParams {
     underlayerRadiusM?: number; underlayerSpacingM?: number; underlayerLiftM?: number; underlayerShade?: number;
     contactShade?: number; contactRadiusM?: number; underlayerFadeM?: number; underlayerRadialFade?: number;
     /** Shells over the near lawn (0 radius: none): layers, height, blade cross-sections per m2, texture tile. */
-    shellRadiusM?: number; shellLayers?: number; shellHeightM?: number; shellBladesPerM2?: number; shellTileM?: number; shellTexPx?: number; detailTexPx?: number; detailTileM?: number;
+    shellRadiusM?: number; shellLayers?: number; shellHeightM?: number; shellBladesPerM2?: number; shellTileM?: number; shellTexPx?: number;
+    shellTuftsPerM2?: number; shellTuftRadiusM?: number; shellTuftShare?: number; shellBottomTone?: number; shellTopTone?: number; shellToneNoise?: number; shellNoiseCellM?: number; detailTexPx?: number; detailTileM?: number;
     /** Radians a pixel spans: blades are widened ring by ring so they stay about a pixel wide away from the centre (0: one ring). */
     pixelAngle?: number; maxWidthScale?: number;
 }

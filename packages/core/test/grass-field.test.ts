@@ -329,15 +329,23 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
             if (Math.hypot(x, z) > 12 - 0.05) expect(sh.colours[q * 4 + 3]).toBeLessThan(0.05);
         }
         expect(u.positions.length / 3).toBeGreaterThan(per);
-        // tone climbs up the layers (shaded low, lit high)
-        expect(sh.colours[(11 * per) * 4 + 1]).toBeGreaterThan(sh.colours[1] * 2);
-        // the cross-sections: the share of texels a layer keeps falls with height; about 3000 blades per m2
-        expect(sh.bladesPerM2).toBeGreaterThan(2900);
+        // tone climbs up the layers, from 0.8 of the floor's (the underlayer's) tone at the bottom to the floor's own at the top
+        expect(sh.colours[(11 * per) * 4 + 1] / sh.colours[1]).toBeCloseTo(1 / 0.8, 1);
+        // the bottom layer matches the underlayer under it (same vertex, same shade before the texture's mean)
+        // the texture: a 1 m tile of flat slivers, near-white, a few blades per tuft; not round dots
+        expect(sh.texPx).toBe(1024);
+        expect(sh.tileM).toBe(1);
+        let minLum = 255;
+        for (let q = 0; q < sh.texture.length; q += 4) if (sh.texture[q + 3] > 0) minLum = Math.min(minLum, sh.texture[q]);
+        expect(minLum).toBeGreaterThanOrEqual(Math.floor(0.85 * 255));
+        // the cross-sections: the share of texels a layer keeps falls with height; about 8000 blades per m2
+        expect(sh.bladesPerM2).toBeGreaterThan(7900);
         const share = (cut: number) => { let n = 0; for (let q = 3; q < sh.texture.length; q += 4) if (sh.texture[q] / 255 >= cut) n++; return n / (sh.texture.length / 4); };
         const low = share(0.5 / 12), mid = share(5.5 / 12), high = share(10.5 / 12);
         expect(low).toBeGreaterThan(mid);
         expect(mid).toBeGreaterThan(high);
-        expect(low).toBeGreaterThan(0.1);
+        // twelve layers of the bottom share hide most of the ground seen from above
+        expect(1 - (1 - low) ** 12).toBeGreaterThan(0.6);
         expect(high).toBeGreaterThan(0);
         // in the GLB: one primitive per layer, alpha masks with rising cutoffs
         const file = path.join(tmp(), 'shells.glb');
