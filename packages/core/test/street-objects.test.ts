@@ -29,7 +29,7 @@ import type { FrameCamera } from '../src/node/spatial/StreetViewPoseRegistrar';
 import { aimAt } from '../src/node/3d-engine/staged-location/street-objects/see';
 import { maskFromReply, parseFamilyReading } from '../src/node/3d-engine/staged-location/street-objects/read';
 import { iou, judgeFamily } from '../src/node/3d-engine/staged-location/street-objects/check';
-import { instancedLayer } from '../src/node/3d-engine/staged-location/street-objects/run';
+import { heightFromPhotos, instancedLayer } from '../src/node/3d-engine/staged-location/street-objects/run';
 import { splitMember } from '../src/node/3d-engine/staged-location/street-objects/split';
 import { bodiesOf, frontOutline, frontSpec } from '../src/node/3d-engine/staged-location/street-objects/front-outline';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
@@ -470,5 +470,21 @@ describe('a long object\'s front outline', () => {
         const cam = lookAt([7, 1.6, 0.2], [0, 0.45, 0], 30);
         const v = render(cam, box([-0.9, 0, -0.25], [0.9, 0.9, 0.25]), { lo: [-0.9, 0, -0.25], hi: [0.9, 0.9, 0.25] });
         expect(frontOutline(v, { foot: [0, 0, 0], heightM: 0.9, planM: [1.8, 0.5], planHeadingDeg: 90 })).toHaveProperty('failed');
+    });
+});
+
+describe('the height: the scan\'s unless the photos outweigh it', () => {
+    const p = (photoHeightM: number, scanHeightM = 1.43) => ({ photoHeightM, scanHeightM });
+    it('takes the photos\' height when they agree and the scan\'s blob is off by more than the poses could err', () => {
+        const h = heightFromPhotos([p(0.9), p(0.92)], [false, false]);
+        expect(h?.heightM).toBeCloseTo(0.92, 2);
+        expect(h?.reason).toMatch(/the blob's top is not the object's/);
+        expect(heightFromPhotos([p(0.9)], [true])?.heightM).toBe(0.9);
+    });
+    it('keeps the scan\'s when the photos disagree, when one nominal view is all there is, or when the gap is within the pose\'s error', () => {
+        expect(heightFromPhotos([p(0.9), p(1.2)], [true, true])).toBeUndefined();
+        expect(heightFromPhotos([p(0.9)], [false])).toBeUndefined();
+        expect(heightFromPhotos([p(1.21, 1.48), p(1.2, 1.48)], [false, false])).toBeUndefined();
+        expect(heightFromPhotos([p(1.3, 1.48)], [true])).toBeDefined();
     });
 });

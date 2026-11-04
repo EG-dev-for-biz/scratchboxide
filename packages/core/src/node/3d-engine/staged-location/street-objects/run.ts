@@ -269,6 +269,23 @@ export function lookAtCamera(eye: V3, target: V3, fovDeg: number, width: number,
 const median2 = (ps: Array<[number, number]>): [number, number] => { const m = (k: number) => { const v = ps.map(p => p[k]).sort((a, b) => a - b); return v[v.length >> 1]; }; return [m(0), m(1)]; };
 
 /**
+ * The object's height from its photos, when they should be taken over the scan's: every view's photo height within 10% of
+ * their median (or one view, from a pose the registration took), and that median off the scan's by more than a pose could
+ * err (12% registered, 25% nominal: the photo's metres come from the camera's distance to the scan's foot).
+ */
+export function heightFromPhotos(profiles: Array<Pick<SilhouetteProfile, 'photoHeightM' | 'scanHeightM'>>, posed: boolean[]): { heightM: number; reason: string } | undefined {
+    if (!profiles.length) return undefined;
+    const hs = profiles.map(p => p.photoHeightM).sort((a, b) => a - b), med = hs[hs.length >> 1], scan = profiles[0].scanHeightM;
+    const agree = hs.every(h => Math.abs(h - med) <= 0.1 * med);
+    const anyPosed = posed.some(Boolean);
+    if (!agree || (profiles.length === 1 && !anyPosed)) return undefined;
+    const tol = anyPosed ? 0.12 : 0.25;
+    if (Math.abs(med / scan - 1) <= tol) return undefined;
+    const r = (v: number) => Math.round(v * 100) / 100;
+    return { heightM: r(med), reason: `the photos: ${profiles.length} view${profiles.length === 1 ? '' : 's'} agreeing on ${r(med)} m, the scan's blob ${r(scan)} m (off by more than the ${Math.round(tol * 100)}% ${anyPosed ? 'a registered' : 'a nominal'} pose could err: the blob's top is not the object's)` };
+}
+
+/**
  * Where an upright of `heightM` stands (plan x, z) whose mask is this, when its foot is hidden: the ray through the mask's
  * top middle, at the distance its height in the photo says (the focal length over the rows it spans, times the height).
  */
@@ -520,7 +537,17 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
         if (failures.length) rep.profileFailures = failures;
         if (!profiles.length) { rep.decision = 'scan-kept'; rep.decisionReason = `no view's mask could be read as a profile (${failures.join('; ')}); the scan stays`; rep.ms = Date.now() - tf; return; }
         rep.profiles = profiles.map(({ samples, ...p }) => ({ ...p, halfWidthsM: samples.map(s => s.halfWidthM) }));
-        const combined = combineProfiles(profiles);
+        let combined = combineProfiles(profiles);
+        // the height: the scan's, unless the photos agree with one another and differ from it by more than their poses could
+        // err (a melted blob's top need not be the object's): then the photos' (photo-inferred, with the reason)
+        const hp = heightFromPhotos(profiles, profiles.map(p => /^(edges|joint)/.test(methodOf(views[usable.find(u => p.id?.startsWith(images.get(views[u.k])!.id))?.k ?? 0].panoId))));
+        let heightNote: { label: 'photo-inferred'; source: string } | undefined;
+        if (hp) {
+            const k = hp.heightM / family.heightM;
+            combined = { ...combined, samples: combined.samples.map(x => ({ ...x, halfWidthM: x.halfWidthM * k, offsetM: x.offsetM * k })) };
+            family = { ...family, heightM: hp.heightM, members: family.members.map(m => ({ ...m, heightM: hp.heightM })) };
+            heightNote = { label: 'photo-inferred', source: hp.reason };
+        }
         const lead = profiles.slice().sort((a, b) => b.pixelHeight - a.pixelHeight)[0];
         const leadCam = cams[usable.find(u => lead.id?.startsWith(images.get(views[u.k])!.id))?.k ?? usable[0].k];
         // ---- 5. build
@@ -529,7 +556,9 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
         const [pl0, pl1] = family.planM;
         const longPlan = Math.max(pl0, pl1) >= FRONT_LONG_ASPECT * Math.max(0.05, Math.min(pl0, pl1)) && Math.max(pl0, pl1) >= family.heightM * 0.8;
         const flatRead = (reading.look.sectionAspect ?? 1) < 0.6;
-        if (!split && (longPlan || flatRead)) {
+        // the read's own section numbers outweigh a melted blob's plan: a section it calls round is not built as an outline
+        const roundRead = (reading.look.sectionAspect ?? 0) >= 0.75 && (reading.look.sectionExponent ?? 9) <= 3;
+        if (!split && (flatRead || (longPlan && !roundRead))) {
             const axis = planAxis(planHeadingOf(family.members.map(m => m.planHeadingDeg)));
             const best = usable.map(u => ({ u, sq: squareness(cams[u.k], axis) })).sort((a, b) => b.sq - a.sq)[0];
             const im = images.get(views[best.u.k])!, m = memberAt(best.u.k);
@@ -544,6 +573,7 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
             }
         }
         spec ??= streetObjectSpec({ family, profile: combined, look: reading.look, panelRightDir: [leadCam.right[0], leadCam.right[2]], radialSymmetry: fam.members[0].radialSymmetry });
+        if (heightNote) spec.provenance = spec.provenance.map(p => (p.field === 'height' ? { field: 'height', ...heightNote } : p));
         // members of a row no view showed get the look of those seen (alike in the scan, at a steady pitch): generated, said so
         const seenIds = new Set(usable.map(u => cidOf(u.k)));
         const unseen = family.members.filter(m => !seenIds.has(m.clusterId)).length;
