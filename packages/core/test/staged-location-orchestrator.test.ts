@@ -231,6 +231,59 @@ describe('a district', () => {
         }
     });
 
+    it('with SCRATCHBOX_STAGED_ROAD_KERBS=1, the streets are swept with kerbs and gutters and the ground is carved under them', async () => {
+        const prev = process.env.SCRATCHBOX_STAGED_ROAD_KERBS;
+        process.env.SCRATCHBOX_STAGED_ROAD_KERBS = '1';
+        try {
+            // two 8 m streets crossing at the origin, 0.13 m kerbs, 3 m corners, a 0.3 m lump on the east-west carriageway
+            const ground = (x: number, z: number) => {
+                const dx = Math.abs(x) - 4, dz = Math.abs(z) - 4;
+                const block = dx > 0 && dz > 0 && !(dx < 3 && dz < 3 && (3 - dx) ** 2 + (3 - dz) ** 2 > 9);
+                return block ? 0.13 : 0.3 * Math.max(0, 1 - Math.hypot(x + 18, z - 1) / 0.6);
+            };
+            const tris: Array<[number, number, number, number, number, number, number, number, number]> = [];
+            for (let x = -40; x < 40; x += 0.5) for (let z = -40; z < 40; z += 0.5) {
+                const p = (a: number, b: number) => [a, ground(a, b), b];
+                const [a, b, c, d] = [p(x, z), p(x + 0.5, z), p(x, z + 0.5), p(x + 0.5, z + 0.5)];
+                tris.push([...a, ...c, ...b] as any, [...b, ...c, ...d] as any);
+            }
+            const s = setup(PARK, {}, {
+                extract: async req => {
+                    const textured = writeTris(path.join(req.outDir, 'textured.glb'), tris), geometry = writeTris(path.join(req.outDir, 'geometry.glb'), tris);
+                    return { texturedGlb: textured, geometryGlb: geometry, downloadOrder: { leafA: 0, leafB: 1 }, leafIds: ['leafA', 'leafB'], copyrights: ['Google'], fetchedAt: '2026-11-03T12:00:00.000Z', radiusM: req.radiusM, coveredRadiusM: req.radiusM, truncated: false, leafTiles: 2, leafGeometricErrorM: 2.0064, originEllipsoidalHeightM: -23.5, geoAnchor: { lat: req.lat, lng: req.lng, elevation: 9.2 } };
+                },
+                vectorEvidence: async () => ({ buildings: [], water: [], roads: [[[-38, 0], [38, 0]], [[0, -38], [0, 38]]], tiles: 1, zoom: 17 })
+            });
+            const { result } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: false }, s.deps, s.ctx);
+            expect(validateContract('StagedLocationResult', result)).toEqual([]);
+            expect(result.stages.find(x => x.stage === 'roads')).toMatchObject({ status: 'committed', source: expect.stringMatching(/kerbs and gutters/) });
+            const sb = (result.artifact as any).data.stagedBuild;
+            const roadsLayer = sb.layers.find((l: any) => l.layer === 'l1r');
+            expect(roadsLayer.provenance.note).toMatch(/kerb line [\d.]+ m measured, [\d.]+ m drawn/);
+            expect(roadsLayer.provenanceLabels).toEqual(['measured', 'generated']);
+            // the ground shown is the carved one, its twin too, and the carve is on record
+            const groundLayer = sb.layers.find((l: any) => l.layer === 'l2' && !l.retired);
+            expect(groundLayer.url).toMatch(/_road_[0-9a-f]{8}\.glb$/);
+            expect(groundLayer.provenance.note).toMatch(/carved under the streets' new surfaces/);
+            const note = s.cache.readRunNote<{ layers: Array<{ report: { removed: number; pinned: number } }> }>(sb.runId, 'road_carve')!;
+            expect(note.layers.length).toBeGreaterThan(0);
+            expect(note.layers[0].report.removed).toBeGreaterThan(100);
+            expect(note.layers[0].report.pinned).toBeGreaterThan(10);
+            // the lump went with the street under the new surface (a removed triangle is collapsed onto one corner)
+            const carved = readGlbTriangles(fs.readFileSync(path.join(s.cache.modelsDir, path.basename(groundLayer.url))));
+            let lump = 0;
+            for (let t = 0; t < carved.indices.length; t += 3) {
+                const [a, b, c] = [carved.indices[t], carved.indices[t + 1], carved.indices[t + 2]];
+                if (a === b || b === c || a === c) continue;
+                const P = carved.positions, mx = (P[a * 3] + P[b * 3] + P[c * 3]) / 3, mz = (P[a * 3 + 2] + P[b * 3 + 2] + P[c * 3 + 2]) / 3;
+                if (Math.hypot(mx + 18, mz - 1) < 0.4) lump++;
+            }
+            expect(lump).toBe(0);
+        } finally {
+            if (prev === undefined) delete process.env.SCRATCHBOX_STAGED_ROAD_KERBS; else process.env.SCRATCHBOX_STAGED_ROAD_KERBS = prev;
+        }
+    });
+
     it('commits tiles, remesh and trees in order, each commit carrying the scene with one id and one camera', async () => {
         const s = setup(PARK);
         const { result, compat } = await runStagedLocation({ query: 'Central Park', isolate: false, radiusM: 60, trees: true }, s.deps, s.ctx);
