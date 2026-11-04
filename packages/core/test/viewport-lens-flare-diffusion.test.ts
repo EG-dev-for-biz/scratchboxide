@@ -9,15 +9,14 @@
 
 /**
  * Lens flare and diffusion (a Black Pro-Mist) on the scene lens: planned only when asked for, validated by
- * sb_set_camera_lens; lateral colour drawn on its own; and the sun's glare easing toward its measured visibility instead
- * of stepping with each probe read (the flicker under depth of field).
+ * sb_set_camera_lens; and lateral colour drawn on its own. The sun glare's visibility under a moving occluder is tested on
+ * real WebGL in sun-glare-occlusion.test.ts.
  */
 
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { DEFAULT_DIFFUSION_SPREAD, DEFAULT_FLARE, planViewportOptics } from '../src/browser/generative-canvas/primitives/scene3d/viewportOptics';
 import { mergeCameraLens } from '../src/browser/generative-canvas/services/operators/lighting-camera-operators';
-import { SunGlare, VISIBILITY_EASE_SECONDS } from '../src/browser/generative-canvas/services/atmosphere/SunGlare';
 import { haltonJitter, isCameraCut, TemporalAAPass } from '../src/browser/generative-canvas/services/optics/TemporalAAPass';
 
 describe('lens flare and diffusion on the scene lens', () => {
@@ -53,37 +52,6 @@ describe('lens flare and diffusion on the scene lens', () => {
         expect(() => mergeCameraLens(on, { flare: { threshold: 0 } }, 45)).toThrow(/threshold/);
         expect(() => mergeCameraLens(on, { diffusion: { strength: -0.1 } }, 45)).toThrow(/strength/);
         expect(() => mergeCameraLens(on, { diffusion: { spread: 0.9 } }, 45)).toThrow(/spread/);
-    });
-});
-
-describe('the sun glare under a changing visibility', () => {
-    const glare = () => new SunGlare({
-        sunDirection: () => new THREE.Vector3(0, 0.5, -1).normalize(),
-        sunIrradiance: () => new THREE.Color(1, 1, 1),
-        sunElevationDeg: () => 30,
-        skyCube: () => new THREE.CubeTexture(),
-        clearDiscLuminance: () => 1,
-        skyObjects: () => []
-    }, 1);
-
-    it('glides toward a new visibility over its time constant, never jumping to it', () => {
-        const g = glare();
-        expect(g.ease(1, 0)).toBe(1);
-        // the probe now reads the sun half hidden: one 60 Hz frame later the glare has moved only a few percent
-        const next = g.ease(0.5, 1000 / 60);
-        expect(next).toBeLessThan(1);
-        expect(next).toBeGreaterThan(0.95);
-        // after one time constant, 1 - 1/e of the way
-        let t = 1000 / 60, v = next;
-        while (t < VISIBILITY_EASE_SECONDS * 1000) { t += 1000 / 60; v = g.ease(0.5, t); }
-        expect(v).toBeGreaterThan(0.5 + 0.5 * Math.exp(-1) - 0.03);
-        expect(v).toBeLessThan(0.5 + 0.5 * Math.exp(-1) + 0.03);
-        g.dispose();
-    });
-
-    it('reaches the same value at any frame rate', () => {
-        const at = (fps: number) => { const g = glare(); g.ease(1, 0); let v = 1; for (let t = 1000 / fps; t <= 500 + 1e-6; t += 1000 / fps) v = g.ease(0, t); g.dispose(); return v; };
-        expect(Math.abs(at(30) - at(120))).toBeLessThan(0.01);
     });
 });
 
