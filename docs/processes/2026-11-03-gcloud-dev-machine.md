@@ -112,6 +112,10 @@ touched, plus `npm run typecheck`, with at most 4 workers.
 * **Network check** — `devbox.sh network` → `allow-ssh-ingress-from-iap` allows SSH from IAP; `gcp-3d-ai-nat` covers
   every subnet in `us-central1`.
 * **Prices** — `devbox.sh prices` → the table in section 2, read from the Cloud Billing Catalog API.
+* **Cache size** — `gcloud storage du -s` on `gs://scoutscan-building-training/cache/v1/` (2026-11-03): `staged_location`
+  160.6 GB, `tile_refine` 165.6 GB, `tile_vegetation` 5.1 GB, about 331 GB in all. A build restores only the entries it
+  asks for, so the 2 TB disk holds the whole mirror with room for checkouts and new runs. The bucket is in `us-central1`
+  and reached over Private Google Access, so the restores cross no NAT and cost no egress.
 
 ## 8. What broke / didn't work
 
