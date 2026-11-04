@@ -70,7 +70,7 @@ const CATALOG_TTL_MS = 7 * 24 * 3600 * 1000;
 let indexCache: { file: string; mtimeMs: number; index: TextureLibraryIndex } | undefined;
 
 /** One set's statistics, measured by the engine on its publisher's preview maps, cached under build/texture-library/stats/. */
-interface MeasuredStats {
+export interface MeasuredStats {
     colour?: TextureLibraryColour;
     roughnessMean?: number;
     roughnessSpread?: number;
@@ -92,6 +92,41 @@ const STATS_VERSION = 2;
 
 const statsDir = (repoRoot: string) => path.join(repoRoot, 'build', 'texture-library', 'stats');
 const statsFile = (repoRoot: string, id: string) => path.join(statsDir(repoRoot), `${id}.json`);
+
+/**
+ * Every set's measured statistics, committed beside the index (scripts/bundle_texture_library_stats.ts, `npm run
+ * library:stats`), so a fresh checkout, worktree or cloud job ranks the library at once instead of measuring it inside a
+ * build. Only entries at the current STATS_VERSION (or a failure) are kept; a set's own file under statsDir wins over it.
+ */
+export const LIBRARY_STATS_BUNDLE = 'stats.json';
+export interface LibraryStatsBundle { version: number; sets: Record<string, MeasuredStats> }
+let bundleCache: { file: string; mtimeMs: number; sets: Map<string, MeasuredStats> } | undefined;
+function bundledStats(repoRoot: string): Map<string, MeasuredStats> {
+    const file = path.join(repoRoot, 'assets', 'textures', 'library', LIBRARY_STATS_BUNDLE);
+    let mtimeMs: number;
+    try { mtimeMs = fs.statSync(file).mtimeMs; } catch { return new Map(); }
+    if (bundleCache?.file !== file || bundleCache.mtimeMs !== mtimeMs) {
+        let sets = new Map<string, MeasuredStats>();
+        try {
+            const doc = JSON.parse(fs.readFileSync(file, 'utf8')) as LibraryStatsBundle;
+            if (doc.version === STATS_VERSION) sets = new Map(Object.entries(doc.sets).filter(([, st]) => !!st.error || st.version === STATS_VERSION));
+        } catch { /* an unreadable bundle is no bundle */ }
+        bundleCache = { file, mtimeMs, sets };
+    }
+    return bundleCache.sets;
+}
+
+/** The statistics of every set measured here (statsDir), at the current STATS_VERSION or failed: what the bundle is written from. */
+export function measuredLibraryStats(repoRoot: string): LibraryStatsBundle {
+    const sets: Record<string, MeasuredStats> = {};
+    let files: string[] = [];
+    try { files = fs.readdirSync(statsDir(repoRoot)).filter(f => f.endsWith('.json')).sort(); } catch { /* nothing measured */ }
+    for (const f of files) {
+        try { const st = JSON.parse(fs.readFileSync(path.join(statsDir(repoRoot), f), 'utf8')) as MeasuredStats; if (st.error || st.version === STATS_VERSION) sets[f.slice(0, -5)] = st; } catch { /* a half-written file */ }
+    }
+    for (const [id, st] of bundledStats(repoRoot)) if (!sets[id]) sets[id] = st;
+    return { version: STATS_VERSION, sets: Object.fromEntries(Object.entries(sets).sort(([a], [b]) => a.localeCompare(b))) };
+}
 
 /** Where the measured statistics are kept, one file a set: a cloud chunk job is handed them (cloud-chunk-runner.ts). */
 export function textureLibraryStatsDir(repoRoot: string): string {
@@ -137,8 +172,10 @@ export function loadTextureLibraryIndex(repoRoot: string): TextureLibraryIndex |
     let measured: string[] = [];
     try { measured = fs.readdirSync(statsDir(repoRoot)).filter(f => f.endsWith('.json')); } catch { /* nothing measured yet */ }
     const estimates = estimatedSizes(path.join(path.dirname(file), ESTIMATED_SIZES_FILE));
-    if (!measured.length && !estimates) return indexCache.index;
-    const stats = new Map<string, MeasuredStats>();
+    const bundled = bundledStats(repoRoot);
+    if (!measured.length && !estimates && !bundled.size) return indexCache.index;
+    // the committed bundle first, each set's own file over it
+    const stats = new Map<string, MeasuredStats>(bundled);
     for (const f of measured) {
         try { stats.set(f.slice(0, -5), JSON.parse(fs.readFileSync(path.join(statsDir(repoRoot), f), 'utf8')) as MeasuredStats); } catch { /* a half-written file: measured again when needed */ }
     }
@@ -214,7 +251,8 @@ export async function libraryColourPreview(entry: TextureLibraryEntry, repoRoot:
 
 /** Whether a set has been measured at the current STATS_VERSION, or failed to be (a failure is not retried). */
 export function libraryEntryMeasured(repoRoot: string, id: string): boolean {
-    try { const st = JSON.parse(fs.readFileSync(statsFile(repoRoot, id), 'utf8')) as MeasuredStats; return !!st.error || st.version === STATS_VERSION; } catch { return false; }
+    try { const st = JSON.parse(fs.readFileSync(statsFile(repoRoot, id), 'utf8')) as MeasuredStats; if (st.error || st.version === STATS_VERSION) return true; } catch { /* not measured here */ }
+    return bundledStats(repoRoot).has(id);
 }
 
 /**
