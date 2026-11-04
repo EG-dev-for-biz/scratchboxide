@@ -34,7 +34,7 @@ import { parseGlbBytes, readAccessor, type ParsedGlb } from './glb-bytes';
 import { composeGlb, mergeGlbs, type ComposeSelection } from './glb-subset';
 import { checkGlbBytes } from './glb-integrity';
 import { DecodedImageCache, repackTextures } from './glb-texture-repack';
-import { footprintCellsByBuilding, type DistrictBuildingMassing } from './district-massing';
+import { clipKeepsCell, footprintCellsByBuilding, type DistrictBuildingMassing } from './district-massing';
 import type { EvidenceLookup, VectorBuilding } from './vector-footprints';
 import { scanToGeodetic, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
 import { sha256File } from './stage-cache';
@@ -142,10 +142,13 @@ export function footprintOwners(rows: DistrictBuildingMassing[], look: EvidenceL
     const OFF = 1 << 15, key = (x: number, z: number) => (x + OFF) * (1 << 16) + (z + OFF);
     const R = Math.ceil(marginM);
     rows.forEach((r, ri) => {
-        for (const [x, z] of fps.get(r.index)?.cells ?? []) for (let dz = -R; dz <= R; dz++) for (let dx = -R; dx <= R; dx++) {
+        // a building rebuilt over part of it owns only the cells its cut keeps (district-massing.ts districtFootprint)
+        const clip = r.clip;
+        for (const [x, z] of (fps.get(r.index)?.cells ?? []).filter(([x, z]) => !clip || clipKeepsCell(clip, x, z))) for (let dz = -R; dz <= R; dz++) for (let dx = -R; dx <= R; dx++) {
             if (dx * dx + dz * dz > marginM * marginM + 0.5) continue;
             const b = look.buildingAt(x + dx + 0.5, z + dz + 0.5);
             if (b > 0 && b - 1 !== r.index) continue;
+            if (clip && b - 1 === r.index && !clipKeepsCell(clip, x + dx, z + dz)) continue;
             const k = key(x + dx, z + dz);
             // a cell of the building's own footprint is its own; a margin cell goes to the first building reaching it
             if (!owner.has(k) || b - 1 === r.index) owner.set(k, ri);

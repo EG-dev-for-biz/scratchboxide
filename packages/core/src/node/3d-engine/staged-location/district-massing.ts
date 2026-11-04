@@ -17,9 +17,12 @@
  *   - raised: most of the footprint stands clear of the street in the scan (the vector data and the scan agree a building is
  *     there);
  *   - overhang: little raised scan lies just outside the footprint where no other footprint is (the footprint is not too
- *     small for what was scanned);
+ *     small for what was scanned); a raised mass no footprint holds that has width of its own (not a band of facade along
+ *     a footprint) is a structure of its own (districtUnmappedStructures: its outline the scan's, photo-inferred), not any building's overhang;
  *   - roof: pipeline E's own roof error against the scan, over the footprint's raised cells;
- *   - whole: the footprint lies inside the extraction (a building the scan only partly covers is never rebuilt from part).
+ *   - scanned: the footprint lies where the scan reaches. A building the scan holds only part of is rebuilt over that part
+ *     when a straight cut where the scan ends keeps at least `minScannedShare` of its footprint (clipToScanned); the rest
+ *     keeps the scan, and nothing is drawn where the scan never reached.
  * A building that fails keeps the scan, with the reason.
  *
  * Plane first (wall-plane-fit.ts; off unless SCRATCHBOX_STAGED_PLANE_FIRST=1: the user rejected vertical planes everywhere,
@@ -42,10 +45,10 @@ import type { FaceTexture, TexelSource } from './pipeline-e/massing-glb';
 import type { MassingRun } from './pipeline-e/native-massing';
 import { FOOTPRINT_GROUND_CLEARANCE_M, hideFootprintInGlb, type StructureFootprint } from './kept-structure';
 import { APRON_HEIGHT_M } from './pipeline-e/residual-audit-e';
-import { inLoops } from './pipeline-e/massing-spec';
+import { cellsFootprint, inLoops, ringArea } from './pipeline-e/massing-spec';
 import { carveCourtyards, COURTYARD_FLOOR_TOKEN, fitRooftopSolids, roofDebrisDecider, ROOF_AND_VOIDS_VERSION, ROOFTOP_SOLID_TOKEN, type RooftopRecord, type VoidRecord } from './roof-and-voids';
 import { dropResidualClusters, dropWallBandResidual, planeFirstMassing, PLANE_RELIEF_TOKEN, WALL_PLANE_FIT_VERSION, type PlaneFirstMassing, type PlaneFirstWall, type WallSampleIndex } from './wall-plane-fit';
-import type { ProvenanceRecord } from '../../../common/spatial/staged-location-contracts';
+import type { ProvenanceRecord, Vec2 } from '../../../common/spatial/staged-location-contracts';
 import type { MassingNode } from './pipeline-e/native-massing';
 import type { MassingPart } from './pipeline-e/massing-spec';
 import { stagedDistrict } from './staged-switches';
@@ -55,7 +58,7 @@ export function planeFirstEnabled(env: NodeJS.ProcessEnv = process.env): boolean
     return env.SCRATCHBOX_STAGED_PLANE_FIRST === '1';
 }
 
-export const DISTRICT_MASSING_VERSION = `district-massing/1${planeFirstEnabled() ? `+${WALL_PLANE_FIT_VERSION}+${ROOF_AND_VOIDS_VERSION}` : ''}`;
+export const DISTRICT_MASSING_VERSION = `district-massing/2${planeFirstEnabled() ? `+${WALL_PLANE_FIT_VERSION}+${ROOF_AND_VOIDS_VERSION}` : ''}`;
 
 /**
  * The district massing stage: pipeline E's massing for every building the scan confirms, the default for districts (user
@@ -82,6 +85,9 @@ export function proceduralDistrictEnabled(request: { district?: string } = {}, e
  */
 export const DISTRICT_TEXEL_M = 0.15;
 
+/** The district's footprints are read this far past the extraction (m), so a building it holds only part of is seen whole. */
+export const DISTRICT_EVIDENCE_REACH_M = 60;
+
 export const DISTRICT_MASSING_PARAMS = {
     /** A cell is raised when the scan stands this far over the measured ground there. */
     raisedM: 2.5,
@@ -89,8 +95,35 @@ export const DISTRICT_MASSING_PARAMS = {
     minRaisedShare: 0.6,
     /** Raised cells in a ring this wide outside the footprint, in no other footprint, at most this share of the footprint. */
     overhangRingM: 1.5,
-    maxOverhangShare: 0.35
+    maxOverhangShare: 0.35,
+    /** A building the scan holds only part of is rebuilt over that part when the cut keeps at least this share of its footprint. */
+    minScannedShare: 0.9,
+    /**
+     * A raised mass in no footprint is a structure of its own when at least this much of it (m2) lies `unmappedCoreM` or
+     * more inside it (from the street, a footprint, anything it is not): a facade standing past a footprint that is too
+     * small is a band along it, however long, and never qualifies (at Penn such bands ran 2 to 5 m along whole blocks).
+     */
+    unmappedMinAreaM2: 6,
+    unmappedCoreM: 3
 };
+
+/**
+ * A raised mass the scan shows where no Google footprint is (districtUnmappedStructures): its own outline, traced from the
+ * scan's cells (photo-inferred, never vector-modelled). It keeps the scan; no building counts it as its overhang, and no
+ * rebuilt neighbour's cut reaches into it.
+ */
+export interface UnmappedStructureOutline {
+    id: string;
+    label: 'photo-inferred';
+    areaM2: number;
+    heightM: number;
+    centroid: Vec2;
+    outline: Vec2[];
+    /** The buildings whose footprint it touches (their ids). */
+    touches: string[];
+    /** Its cells ("floor(x),floor(z)"). */
+    cells: Set<string>;
+}
 
 export interface DistrictBuildingMassing {
     id: string;
@@ -100,6 +133,10 @@ export interface DistrictBuildingMassing {
     footprintCells: number;
     raisedShare: number;
     overhangShare: number;
+    /** Raised cells around the footprint that belong to an unmapped structure of their own, as a share of the footprint (not counted as overhang). */
+    unmappedShare?: number;
+    /** A building the scan holds only part of, rebuilt over that part: the cut (keep dot([x, z], normal) <= offset), and the shares of its footprint the scan holds and the cut keeps. */
+    clip?: ScanClip;
     massing?: Massing;
     ok: boolean;
     reason?: string;
@@ -115,23 +152,197 @@ export interface DistrictBuildingMassing {
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
+/** A building's footprint cells where the scan reaches, and those where it does not (`outside`, their count). */
+export interface FootprintCells { cells: Array<[number, number]>; outside: number; outsideCells: Array<[number, number]> }
+
 /** Each building's footprint cells inside the extraction, and whether any part of it lies outside. */
-export function footprintCellsByBuilding(look: EvidenceLookup, within: (x: number, z: number) => boolean): Map<number, { cells: Array<[number, number]>; outside: number }> {
+export function footprintCellsByBuilding(look: EvidenceLookup, within: (x: number, z: number) => boolean): Map<number, FootprintCells> {
     const g = look.grid, raster = look.raster.building;
-    const out = new Map<number, { cells: Array<[number, number]>; outside: number }>();
+    const out = new Map<number, FootprintCells>();
     for (let k = 0; k < g.nz; k++) for (let i = 0; i < g.nx; i++) {
         const b = raster[k * g.nx + i] - 1;
         if (b < 0) continue;
         const x = g.x0 + (i + 0.5) * g.cellMeters, z = g.z0 + (k + 0.5) * g.cellMeters;
-        const e = out.get(b) ?? { cells: [], outside: 0 };
-        if (within(x, z)) e.cells.push([Math.floor(x), Math.floor(z)]); else e.outside++;
+        const e = out.get(b) ?? { cells: [], outside: 0, outsideCells: [] };
+        if (within(x, z)) e.cells.push([Math.floor(x), Math.floor(z)]); else { e.outside++; e.outsideCells.push([Math.floor(x), Math.floor(z)]); }
         out.set(b, e);
     }
     return out;
 }
 
-export function massDistrictBuilding(b: VectorBuilding, index: number, fp: { cells: Array<[number, number]>; outside: number }, look: EvidenceLookup, ground: Pick<GroundModel, 'groundAt' | 'topAt'>, P = DISTRICT_MASSING_PARAMS, opts: { lenient?: boolean; walls?: WallSampleIndex } = {}): DistrictBuildingMassing {
+/** The straight cut of a building the scan holds only part of: its plan is kept where dot([x, z], normal) <= offset. */
+export interface ScanClip { normal: Vec2; offset: number; scannedShare: number; keptShare: number }
+
+/** Whether the 1 m cell at (x, z) (its floor corner) lies wholly on the kept side of a clip. */
+export const clipKeepsCell = (c: Pick<ScanClip, 'normal' | 'offset'>, x: number, z: number): boolean =>
+    Math.max(x * c.normal[0], (x + 1) * c.normal[0]) + Math.max(z * c.normal[1], (z + 1) * c.normal[1]) <= c.offset + 1e-9;
+
+/**
+ * The straight cut that keeps the most of a footprint's scanned cells and none of its unscanned ones: tried across the
+ * direction from the scanned cells toward the unscanned, the direction from the scan's centre, and the four axes, each
+ * placed at the nearest unscanned cell. Undefined when the footprint is wholly scanned or no cut keeps anything.
+ */
+export function clipToScanned(fp: Pick<FootprintCells, 'cells' | 'outsideCells'>): ScanClip | undefined {
+    if (!fp.outsideCells.length || !fp.cells.length) return undefined;
+    const mean = (cs: Array<[number, number]>): Vec2 => { let x = 0, z = 0; for (const [a, b] of cs) { x += a + 0.5; z += b + 0.5; } return [x / cs.length, z / cs.length]; };
+    const ci = mean(fp.cells), co = mean(fp.outsideCells);
+    const unit = (v: Vec2): Vec2 | undefined => { const l = Math.hypot(v[0], v[1]); return l > 1e-9 ? [v[0] / l, v[1] / l] : undefined; };
+    const dirs = [unit([co[0] - ci[0], co[1] - ci[1]]), unit(co), [1, 0], [-1, 0], [0, 1], [0, -1]].filter((d): d is Vec2 => !!d);
+    const total = fp.cells.length + fp.outsideCells.length;
+    let best: ScanClip | undefined, bestKept = 0;
+    for (const normal of dirs) {
+        // the cut at the nearest corner of any unscanned cell along the normal: no unscanned cell is kept, even in part
+        let offset = Infinity;
+        for (const [x, z] of fp.outsideCells) offset = Math.min(offset, Math.min(x * normal[0], (x + 1) * normal[0]) + Math.min(z * normal[1], (z + 1) * normal[1]));
+        const clip = { normal, offset };
+        const kept = fp.cells.reduce((a, [x, z]) => a + (clipKeepsCell(clip, x, z) ? 1 : 0), 0);
+        if (kept > bestKept) { bestKept = kept; best = { normal, offset, scannedShare: r2(fp.cells.length / total), keptShare: Math.floor((kept / total) * 100) / 100 }; }
+    }
+    return best;
+}
+
+/**
+ * A ring cut to the half-plane dot(p, normal) <= offset, as simple rings: the ring's runs on the kept side, each closed
+ * along the cut line by the chord to the next crossing (crossings along the line paired in order, so a concave ring cut
+ * across several times gives one ring per piece, never a ring that doubles back along the line).
+ */
+export function clipRingToHalfPlane(ring: Vec2[], normal: Vec2, offset: number): Vec2[][] {
+    const n = ring.length;
+    const s = ring.map(([x, z]) => offset - (x * normal[0] + z * normal[1]));
+    if (s.every(v => v >= 0)) return [ring.slice()];
+    if (s.every(v => v < 0)) return [];
+    const along: Vec2 = [-normal[1], normal[0]];
+    const nodes: Array<{ p: Vec2; cross?: 'enter' | 'exit'; t?: number }> = [];
+    for (let i = 0; i < n; i++) {
+        const a = ring[i], b = ring[(i + 1) % n], sa = s[i], sb = s[(i + 1) % n];
+        if (sa >= 0) nodes.push({ p: a });
+        if ((sa >= 0) !== (sb >= 0)) {
+            const t = sa / (sa - sb);
+            const p: Vec2 = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+            nodes.push({ p, cross: sa >= 0 ? 'exit' : 'enter', t: p[0] * along[0] + p[1] * along[1] });
+        }
+    }
+    const crosses = nodes.map((nd, i) => ({ nd, i })).filter(x => x.nd.cross).sort((u, v) => u.nd.t! - v.nd.t!);
+    const partner = new Map<number, number>();
+    for (let k = 0; k + 1 < crosses.length; k += 2) { partner.set(crosses[k].i, crosses[k + 1].i); partner.set(crosses[k + 1].i, crosses[k].i); }
+    const used = new Set<number>();
+    const pieces: Vec2[][] = [];
+    for (let start = 0; start < nodes.length; start++) {
+        if (used.has(start) || nodes[start].cross !== 'enter') continue;
+        const piece: Vec2[] = [];
+        let i = start;
+        for (let guard = 0; guard <= nodes.length; guard++) {
+            used.add(i);
+            const p = nodes[i].p, last = piece[piece.length - 1];
+            if (!last || Math.hypot(p[0] - last[0], p[1] - last[1]) > 1e-9) piece.push(p);
+            const next = nodes[i].cross === 'exit' ? partner.get(i) : (i + 1) % nodes.length;
+            if (next === undefined || next === start || used.has(next)) break;
+            i = next;
+        }
+        if (piece.length >= 3 && Math.abs(ringArea(piece)) >= 1e-6) pieces.push(piece);
+    }
+    return pieces;
+}
+
+/**
+ * The building cut to the part the scan holds (clip): each extruded part's loops (else its plan's) cut to the clip's
+ * half-plane; its modelled volumes left out (they cannot be cut honestly), so its heights come from the scan over what is
+ * kept. Undefined when nothing is left.
+ */
+export function clipBuilding(b: VectorBuilding, clip: Pick<ScanClip, 'normal' | 'offset'>): VectorBuilding | undefined {
+    const source = (b.extruded?.length ? b.extruded : b.parts.map(loops => ({ loops, ...(b.heightM !== undefined ? { heightM: b.heightM } : {}) }))).map(p => ({ ...p, planOnly: undefined }));
+    const extruded = source.map(p => {
+        // the outer ring (the largest) cut into pieces; every other loop (a hole) cut on its own and kept with every piece
+        const outerIdx = p.loops.reduce((bi, l, i) => (Math.abs(ringArea(l)) > Math.abs(ringArea(p.loops[bi])) ? i : bi), 0);
+        const holes = p.loops.flatMap((l, i) => (i === outerIdx ? [] : clipRingToHalfPlane(l, clip.normal, clip.offset)));
+        return clipRingToHalfPlane(p.loops[outerIdx], clip.normal, clip.offset).map(outer => ({ ...p, loops: [outer, ...holes.filter(h => inLoops(h[0][0], h[0][1], [outer]))] }));
+    }).flat().filter(p => p.loops.length && Math.abs(ringArea(p.loops[0])) >= 1);
+    if (!extruded.length) return undefined;
+    return { ...b, parts: extruded.map(p => p.loops), extruded: extruded.map(({ planOnly: _p, ...p }) => p), volumes: undefined };
+}
+
+/**
+ * Raised masses the scan shows where no Google footprint is (`raisedM` over the measured ground, not water), each a
+ * structure of its own: the mask opened by `unmappedCoreM` (the cells within it of a cell lying that far inside the mask),
+ * so a band of facade past a footprint, however long, falls away, as does the band joining a real mass to its neighbours;
+ * each 4-connected piece holding at least `unmappedMinAreaM2` of such inner cells, its outline traced from its cells
+ * (cellsFootprint), the buildings it touches. Labelled photo-inferred: the outline is read from the scan, no
+ * vector data says it is there.
+ */
+export function districtUnmappedStructures(input: { buildings: VectorBuilding[]; look: EvidenceLookup; ground: Pick<GroundModel, 'groundAt' | 'topAt'>; within: (x: number, z: number) => boolean }, P = DISTRICT_MASSING_PARAMS): UnmappedStructureOutline[] {
+    const g = input.look.grid, nx = g.nx, nz = g.nz, cell = g.cellMeters, raster = input.look.raster.building;
+    const raised = (c: number) => {
+        if (raster[c] > 0) return false;
+        const x = g.x0 + ((c % nx) + 0.5) * cell, z = g.z0 + (((c / nx) | 0) + 0.5) * cell;
+        if (!input.within(x, z) || input.look.waterAt(x, z)) return false;
+        const t = input.ground.topAt(x, z), gy = input.ground.groundAt(x, z);
+        return Number.isFinite(t) && Number.isFinite(gy) && t - gy > P.raisedM;
+    };
+    const mask = new Uint8Array(nx * nz);
+    for (let c = 0; c < nx * nz; c++) mask[c] = raised(c) ? 1 : 0;
+    // metres from each raised cell to the nearest cell that is not one, along the axes or diagonals (chessboard): a band
+    // w wide is at most w / 2 inside everywhere
+    const depth = chessboardDistance(mask, nx, nz, cell);
+    // the opening: what lies within unmappedCoreM of the inner cells
+    const notCore = new Uint8Array(nx * nz);
+    for (let c = 0; c < nx * nz; c++) notCore[c] = depth[c] >= P.unmappedCoreM ? 0 : 1;
+    const toCore = chessboardDistance(notCore, nx, nz, cell);
+    for (let c = 0; c < nx * nz; c++) if (mask[c] && toCore[c] > P.unmappedCoreM) mask[c] = 0;
+    const seen = new Uint8Array(nx * nz);
+    const out: UnmappedStructureOutline[] = [];
+    for (let s = 0; s < nx * nz; s++) {
+        if (seen[s] || !mask[s]) continue;
+        seen[s] = 1;
+        const stack = [s], comp: number[] = [], touches = new Set<number>();
+        let clear = 0, h = 0;
+        while (stack.length) {
+            const c = stack.pop()!;
+            comp.push(c);
+            if (depth[c] >= P.unmappedCoreM) clear++;
+            const i = c % nx, k = (c / nx) | 0;
+            const x = g.x0 + (i + 0.5) * cell, z = g.z0 + (k + 0.5) * cell;
+            h = Math.max(h, input.ground.topAt(x, z) - input.ground.groundAt(x, z));
+            for (const [ii, kk] of [[i + 1, k], [i - 1, k], [i, k + 1], [i, k - 1]]) {
+                if (ii < 0 || kk < 0 || ii >= nx || kk >= nz) continue;
+                const q = kk * nx + ii;
+                if (raster[q] > 0) touches.add(raster[q] - 1);
+                else if (!seen[q] && mask[q]) { seen[q] = 1; stack.push(q); }
+            }
+        }
+        if (clear * cell * cell < P.unmappedMinAreaM2) continue;
+        const cells = new Set<string>();
+        let sx = 0, sz = 0;
+        for (const c of comp) {
+            const x = g.x0 + ((c % nx) + 0.5) * cell, z = g.z0 + (((c / nx) | 0) + 0.5) * cell;
+            cells.add(`${Math.floor(x)},${Math.floor(z)}`);
+            sx += x; sz += z;
+        }
+        const outline = cellsFootprint(cells);
+        if (!outline) continue;
+        out.push({
+            id: `unmapped/${out.length}`, label: 'photo-inferred', areaM2: r2(comp.length * cell * cell), heightM: r2(h), centroid: [r2(sx / comp.length), r2(sz / comp.length)], outline,
+            touches: [...touches].sort((a, b) => a - b).map(b => input.buildings[b]?.id ?? String(b)), cells
+        });
+    }
+    return out.sort((a, b) => b.areaM2 - a.areaM2).map((u, i) => ({ ...u, id: `unmapped/${i}` }));
+}
+
+/** Chessboard distance (m) from each cell of `mask` to the nearest cell outside it (0 outside; past the grid is outside). */
+function chessboardDistance(mask: Uint8Array, nx: number, nz: number, cell: number): Float32Array {
+    const d = new Float32Array(nx * nz);
+    for (let c = 0; c < nx * nz; c++) d[c] = mask[c] ? Infinity : 0;
+    const relax = (c: number, ii: number, kk: number) => { const v = ii < 0 || kk < 0 || ii >= nx || kk >= nz ? 0 : d[kk * nx + ii]; if (v + cell < d[c]) d[c] = v + cell; };
+    for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) { const c = k * nx + i; if (!mask[c]) continue; relax(c, i - 1, k); relax(c, i - 1, k - 1); relax(c, i, k - 1); relax(c, i + 1, k - 1); }
+    for (let k = nz - 1; k >= 0; k--) for (let i = nx - 1; i >= 0; i--) { const c = k * nx + i; if (!mask[c]) continue; relax(c, i + 1, k); relax(c, i + 1, k + 1); relax(c, i, k + 1); relax(c, i - 1, k + 1); }
+    return d;
+}
+
+export function massDistrictBuilding(b: VectorBuilding, index: number, fp: { cells: Array<[number, number]>; outside: number; outsideCells?: Array<[number, number]> }, look: EvidenceLookup, ground: Pick<GroundModel, 'groundAt' | 'topAt'>, P = DISTRICT_MASSING_PARAMS, opts: { lenient?: boolean; walls?: WallSampleIndex; /** Cells of unmapped structures of their own (districtUnmappedStructures): never this building's overhang. */ unmapped?: ReadonlySet<string> } = {}): DistrictBuildingMassing {
     const t0 = Date.now();
+    // a building the scan holds only part of: the straight cut that keeps the most of what it holds (applied below, once
+    // the checks that read the scanned part have passed)
+    const clip = fp.outside > 0 && fp.outsideCells?.length ? clipToScanned({ cells: fp.cells, outsideCells: fp.outsideCells }) : undefined;
+    const keptCells = clip ? fp.cells.filter(([x, z]) => clipKeepsCell(clip, x, z)) : fp.cells;
     const base = { id: b.id, index, footprintCells: fp.cells.length };
     const gs = fp.cells.map(([x, z]) => ground.groundAt(x + 0.5, z + 0.5)).filter(Number.isFinite).sort((p, q) => p - q);
     if (!gs.length) return { ...base, groundY: NaN, raisedShare: 0, overhangShare: 0, ok: false, reason: 'no ground was measured under the footprint', ms: Date.now() - t0 };
@@ -142,29 +353,44 @@ export function massDistrictBuilding(b: VectorBuilding, index: number, fp: { cel
     for (const [x, z] of fp.cells) if (raisedAt(x, z)) raised.add(`${x},${z}`);
     const raisedShare = raised.size / Math.max(1, fp.cells.length);
     const ring = new Set<string>();
+    let toUnmapped = 0;
     const R = Math.ceil(P.overhangRingM);
     for (const [x, z] of fp.cells) for (let dz = -R; dz <= R; dz++) for (let dx = -R; dx <= R; dx++) {
         if (dx * dx + dz * dz > P.overhangRingM * P.overhangRingM + 0.5) continue;
         const k = `${x + dx},${z + dz}`;
         if (inFoot.has(k) || ring.has(k)) continue;
         if (look.buildingAt(x + dx + 0.5, z + dz + 0.5) > 0) continue;
-        if (raisedAt(x + dx, z + dz)) ring.add(k);
+        if (!raisedAt(x + dx, z + dz)) continue;
+        // a structure of its own the vector data does not map stands there: not this footprint's overhang
+        if (opts.unmapped?.has(k)) { toUnmapped++; continue; }
+        ring.add(k);
     }
     const overhangShare = ring.size / Math.max(1, fp.cells.length);
-    const common = { ...base, groundY: r2(groundY), raisedShare: r2(raisedShare), overhangShare: r2(overhangShare) };
+    const common = { ...base, groundY: r2(groundY), raisedShare: r2(raisedShare), overhangShare: r2(overhangShare), ...(toUnmapped ? { unmappedShare: r2(toUnmapped / Math.max(1, fp.cells.length)) } : {}) };
     let reason: string | undefined;
     const caveats: string[] = [];
     // the scan showing street where the footprint is: real data leads, nothing is built there (lenient or not)
     if (raisedShare < P.minRaisedShare) reason = `only ${Math.round(raisedShare * 100)}% of the footprint stands ${P.raisedM} m over the street in the scan (at least ${Math.round(P.minRaisedShare * 100)}% needed): the vector data and the scan disagree that a building stands here`;
     if (reason) return { ...common, ok: false, reason, ms: Date.now() - t0 };
     const soft: string[] = [];
-    if (fp.outside > 0) soft.push(`the footprint runs past the extraction (${fp.outside} of its cells outside): the scan holds only part of the building`);
     if (overhangShare > P.maxOverhangShare) soft.push(`the scan stands raised over ${Math.round(overhangShare * 100)}% of the footprint's area just outside it, where no footprint is (at most ${Math.round(P.maxOverhangShare * 100)}%): the footprint is smaller than what was scanned`);
     // plane first: a soft failure is the rebuilt building's labelled caveat, never a reason to leave the scan's lumps standing
     const lenient = opts.lenient || !!opts.walls;
-    if (soft.length && !lenient) return { ...common, ok: false, reason: soft[0], ms: Date.now() - t0 };
+    // a building the scan holds only part of: rebuilt over the part a straight cut keeps when that is nearly all of it (any
+    // part, lenient), the rest kept as scanned; nothing is ever drawn where the scan did not reach (lenient or not)
+    let built = b;
+    if (fp.outside > 0) {
+        const share = clip?.keptShare ?? 0;
+        const cut = clip && (lenient || share >= P.minScannedShare) ? clipBuilding(b, clip) : undefined;
+        const why = `the footprint runs past the extraction (${fp.outside} of its cells outside): the scan holds ${Math.round((fp.cells.length / (fp.cells.length + fp.outside)) * 100)}% of it, and a straight cut where the scan ends keeps ${Math.round(share * 100)}% (at least ${Math.round(P.minScannedShare * 100)}% needed to rebuild the part it holds)`;
+        if (!cut) return { ...common, ok: false, reason: why, ...(clip ? { clip } : {}), ms: Date.now() - t0 };
+        built = cut;
+        caveats.push(`rebuilt over the ${Math.round(share * 100)}% of its footprint the scan holds, cut straight where the scan ends; the rest (${fp.cells.length - keptCells.length + fp.outside} cells) is kept as scanned or was never scanned, and nothing is drawn there`);
+    }
+    if (soft.length && !lenient) return { ...common, ok: false, reason: soft[0], ...(clip && fp.outside > 0 ? { clip } : {}), ms: Date.now() - t0 };
     caveats.push(...soft);
-    const massing = buildMassing({ buildings: [b], groundY, scanTop: ground.topAt, cells: raised });
+    const massCells = clip && fp.outside > 0 ? new Set(keptCells.map(([x, z]) => `${x},${z}`).filter(k => raised.has(k))) : raised;
+    const massing = buildMassing({ buildings: [built], groundY, scanTop: ground.topAt, cells: massCells });
     let planeFirst: DistrictBuildingMassing['planeFirst'];
     let rooftopSolids: MassingPart[] = [];
     if (opts.walls && massing.parts.length) {
@@ -183,37 +409,50 @@ export function massDistrictBuilding(b: VectorBuilding, index: number, fp: { cel
         if (overhangShare > P.maxOverhangShare) caveats.push(`with the walls on the planes the scan measures, ${Math.round(planeFirst.overhangAfterShare * 100)}% remains outside them`);
     }
     // pipeline E's roof check over the raised footprint (its plan check is the isolate's and does not apply here)
-    const roof = checkMassing(massing.parts, massing.meshes, { groundY, scanTop: ground.topAt, cells: raised });
+    const roof = checkMassing(massing.parts, massing.meshes, { groundY, scanTop: ground.topAt, cells: massCells });
     if (!roof.massingCells) reason = 'the vector data hold no extruded part or modelled volume for the building';
     // a roof off the scan is not a wall question: plane first leaves it a reason (a pitched or spired roof the flat massing
     // would erase is a measured distinctive feature); only the procedural district, where the scan is not shown, rebuilds it
     else if (roof.reason && !/plan agrees/.test(roof.reason)) { if (opts.lenient) caveats.push(roof.reason); else reason = roof.reason; }
     // the rooftop solids join after the roof check: they never make a roof the check refused pass
     if (rooftopSolids.length) massing.parts = [...massing.parts, ...rooftopSolids];
-    return { ...common, massing, ok: !reason, ...(reason ? { reason } : {}), ...(caveats.length ? { caveat: caveats.join('; ') } : {}), ...(planeFirst ? { planeFirst } : {}), ms: Date.now() - t0 };
+    return { ...common, massing, ok: !reason, ...(reason ? { reason } : {}), ...(clip && fp.outside > 0 ? { clip } : {}), ...(caveats.length ? { caveat: caveats.join('; ') } : {}), ...(planeFirst ? { planeFirst } : {}), ms: Date.now() - t0 };
 }
 
-/** Every building of the district reaching the extraction, massed and checked. */
-export function massDistrict(input: { buildings: VectorBuilding[]; look: EvidenceLookup; ground: Pick<GroundModel, 'groundAt' | 'topAt'>; within: (x: number, z: number) => boolean; lenient?: boolean; /** Plane first: the scan's wall samples (wall-plane-fit.ts wallSampleIndex). */ walls?: WallSampleIndex }, P = DISTRICT_MASSING_PARAMS): DistrictBuildingMassing[] {
+/**
+ * Every building of the district reaching the extraction, massed and checked. `unmapped` (districtUnmappedStructures,
+ * computed here when not given): the raised masses no footprint holds that are structures of their own.
+ */
+export function massDistrict(input: { buildings: VectorBuilding[]; look: EvidenceLookup; ground: Pick<GroundModel, 'groundAt' | 'topAt'>; within: (x: number, z: number) => boolean; lenient?: boolean; /** Plane first: the scan's wall samples (wall-plane-fit.ts wallSampleIndex). */ walls?: WallSampleIndex; unmapped?: UnmappedStructureOutline[] }, P = DISTRICT_MASSING_PARAMS): DistrictBuildingMassing[] {
     const fps = footprintCellsByBuilding(input.look, input.within);
+    const unmapped = unmappedCells(input.unmapped ?? districtUnmappedStructures(input, P));
     const out: DistrictBuildingMassing[] = [];
-    for (const [b, fp] of [...fps].sort((p, q) => p[0] - q[0])) if (fp.cells.length) out.push(massDistrictBuilding(input.buildings[b], b, fp, input.look, input.ground, P, { lenient: input.lenient, ...(input.walls ? { walls: input.walls } : {}) }));
+    for (const [b, fp] of [...fps].sort((p, q) => p[0] - q[0])) if (fp.cells.length) out.push(massDistrictBuilding(input.buildings[b], b, fp, input.look, input.ground, P, { lenient: input.lenient, unmapped, ...(input.walls ? { walls: input.walls } : {}) }));
     return out;
+}
+
+/** Every cell of the unmapped structures, one set. */
+export function unmappedCells(us: ReadonlyArray<Pick<UnmappedStructureOutline, 'cells'>>): Set<string> {
+    const s = new Set<string>();
+    for (const u of us) for (const c of u.cells) s.add(c);
+    return s;
 }
 
 /**
  * The plan cells the rebuilt buildings stand on, for cutting them out of the scan's layers: their footprints, grown by
  * `marginM` (the scan's facade stands a little outside a footprint) but never into another building's footprint, so a
- * neighbour left as scanned keeps its own walls whole.
+ * neighbour left as scanned keeps its own walls whole. A building rebuilt over part of it (clip) gives only the cells its
+ * cut keeps, so the rest of it keeps the scan; `keepOut` (the unmapped structures' cells) is never taken in by a margin.
  */
-export function districtFootprint(rows: DistrictBuildingMassing[], look: EvidenceLookup, within: (x: number, z: number) => boolean, marginM = 1): StructureFootprint {
+export function districtFootprint(rows: DistrictBuildingMassing[], look: EvidenceLookup, within: (x: number, z: number) => boolean, marginM = 1, keepOut?: ReadonlySet<string>): StructureFootprint {
     const fps = footprintCellsByBuilding(look, within);
     const cells = new Set<string>();
     const cellGroundY = new Map<string, number>();
     let baseY = Infinity, topY = -Infinity;
     const R = Math.ceil(marginM);
     for (const r of rows.filter(x => x.ok && x.massing)) {
-        const seeds = [...(fps.get(r.index)?.cells ?? [])];
+        const clip = r.clip;
+        const seeds = (fps.get(r.index)?.cells ?? []).filter(([x, z]) => !clip || clipKeepsCell(clip, x, z));
         // plane first: the walls stand on the scanned facades, which may lie outside the vector footprint; the cells the
         // moved walls take in are the building's too (the scan's facade there is what the plane replaces)
         if (r.planeFirst) {
@@ -231,7 +470,10 @@ export function districtFootprint(rows: DistrictBuildingMassing[], look: Evidenc
             if (dx * dx + dz * dz > marginM * marginM + 0.5) continue;
             const b = look.buildingAt(x + dx + 0.5, z + dz + 0.5);
             if (b > 0 && b - 1 !== r.index) continue;
+            // the part of a cut building left as scanned stays whole, as does a structure the vector data does not map
+            if (clip && b - 1 === r.index && !clipKeepsCell(clip, x + dx, z + dz)) continue;
             const k = `${x + dx},${z + dz}`;
+            if (keepOut?.has(k)) continue;
             cells.add(k);
             // each cell is cut at its own building's ground (a district's streets rise and fall)
             if (!cellGroundY.has(k) || b - 1 === r.index) cellGroundY.set(k, r.groundY);
@@ -264,13 +506,13 @@ export interface DistrictMassingLayer {
  * massing does not explain kept as residual and audited), textured from the tile photo, written beside `outDir`. `scanGlb` is
  * the tree-stripped scan; the native tool sees only its part over the rebuilt footprints.
  */
-export async function buildDistrictMassingLayer(input: { rows: DistrictBuildingMassing[]; look: EvidenceLookup; within: (x: number, z: number) => boolean; scanGlb: string; outDir: string; stage: string; stageKey: string; signal?: AbortSignal }): Promise<DistrictMassingLayer | undefined> {
+export async function buildDistrictMassingLayer(input: { rows: DistrictBuildingMassing[]; look: EvidenceLookup; within: (x: number, z: number) => boolean; scanGlb: string; outDir: string; stage: string; stageKey: string; signal?: AbortSignal; /** Cells no margin takes in (the unmapped structures'). */ keepOut?: ReadonlySet<string> }): Promise<DistrictMassingLayer | undefined> {
     const timingsMs: Record<string, number> = {};
     const ok = input.rows.filter(r => r.ok && r.massing);
     if (!ok.length) return undefined;
     let t = Date.now();
     fs.mkdirSync(input.outDir, { recursive: true });
-    const footprint = districtFootprint(ok, input.look, input.within, 2);
+    const footprint = districtFootprint(ok, input.look, input.within, 2, input.keepOut);
     // the native tool sees what stands on the footprints: nothing within the apron height of each building's own ground
     // (kerbs and street scanned at the footprint's edge would come back as residual lying on the street)
     for (const [k, y] of footprint.cellGroundY ?? []) footprint.cellGroundY!.set(k, y + APRON_HEIGHT_M - FOOTPRINT_GROUND_CLEARANCE_M);
@@ -312,7 +554,7 @@ export async function buildDistrictMassingLayer(input: { rows: DistrictBuildingM
     const files = writeMassingLayer(run, { check }, textures, legend, input.outDir, input.stage, input.stageKey, 'district_massing', provenanceOf, { photoJpeg: true });
     timingsMs.glb = Date.now() - t;
     const massing: Massing = { parts, meshes, check, solar: { segments: 0, inside: 0, pitchedKept: 0, pitchedRejected: 0, flatUsed: 0 }, notes: [`${ok.length} buildings massed together`] };
-    return { files, run, footprint: districtFootprint(ok, input.look, input.within, 1), rebuilt: ok.length, residualOffFootprint: offFootprint, timingsMs, ...(planeFirst ? { planeFirst } : {}), massing, textures, legend, isolateGlb: isolate };
+    return { files, run, footprint: districtFootprint(ok, input.look, input.within, 1, input.keepOut), rebuilt: ok.length, residualOffFootprint: offFootprint, timingsMs, ...(planeFirst ? { planeFirst } : {}), massing, textures, legend, isolateGlb: isolate };
 }
 
 /**

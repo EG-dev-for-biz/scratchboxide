@@ -56,3 +56,22 @@ describe('districtContainmentRadiusM', () => {
         expect(r).toBeGreaterThan(80);
     });
 });
+
+describe('districtContainment', () => {
+    it('grows round after round until no building it reaches runs past it', async () => {
+        const { districtContainment } = await import('../src/node/3d-engine/staged-location/orchestrator');
+        // a chain: the first reaches past 60 to 75, the next starts at 72 and reaches 90
+        const e = ev([{ id: 'a', ring: [[50, -2], [75, -2], [75, 2], [50, 2]] }, { id: 'b', ring: [[72, 10], [90, 10], [90, 14], [72, 14]] }]);
+        const r = await districtContainment(async () => e, 60);
+        expect(r.capped).toBeUndefined();
+        expect(r.radiusM).toBeCloseTo(Math.hypot(90, 14), 6);
+        expect(r.rounds).toBe(3);
+    });
+
+    it('says what the cap still cuts', async () => {
+        const { districtContainment } = await import('../src/node/3d-engine/staged-location/orchestrator');
+        const r = await districtContainment(async () => ev([{ id: 'huge', ring: [[50, -5], [250, -5], [250, 5], [50, 5]] }]), 60);
+        expect(r.radiusM).toBe(160);
+        expect(r.capped).toEqual({ capM: 160, cut: 1, neededM: 250 });
+    });
+});

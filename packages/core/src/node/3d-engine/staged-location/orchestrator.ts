@@ -81,7 +81,7 @@ import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorBuilding, type VectorEvidence } from './vector-footprints';
 import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type DistrictStreetAuditSummary } from './district-residual-audit';
 import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, type InventoryCrown, type SceneInventorySummary } from './scene-inventory';
-import { buildDistrictMassingLayer, districtFootprint, districtMassingEnabled, DISTRICT_MASSING_PARAMS, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict, planeFirstEnabled, proceduralDistrictEnabled } from './district-massing';
+import { buildDistrictMassingLayer, districtFootprint, districtMassingEnabled, DISTRICT_EVIDENCE_REACH_M, DISTRICT_MASSING_PARAMS, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, districtUnmappedStructures, massDistrict, planeFirstEnabled, proceduralDistrictEnabled, unmappedCells } from './district-massing';
 import { REVOLUTION_FIT_VERSION, revolutionFitEnabled, reviseForRevolutions, type RevolutionLayerSummary } from './revolution-fit';
 import { districtEDetail, districtEDetailEnabled, DISTRICT_E_DETAIL_VERSION } from './district-e-detail';
 import { describePolish, polishRemesh, REMESH_POLISH_VERSION, type PolishedRemesh } from './remesh-polish';
@@ -398,16 +398,52 @@ export function districtContainmentRadiusM(ev: VectorEvidence, baseRadiusM: numb
     return Math.min(baseRadiusM + DISTRICT_CONTAINMENT_MAX_GROWTH_M, grown);
 }
 
+/** Growth rounds of a district's containment: each grown circle reaches buildings the one before did not size it for. */
+const DISTRICT_CONTAINMENT_MAX_ROUNDS = 4;
+
+/** How a district's extraction was grown to keep its buildings whole, and, when the cap stopped it, what it still cuts. */
+export interface DistrictContainment {
+    radiusM: number;
+    rounds: number;
+    /** The cap (DISTRICT_CONTAINMENT_MAX_GROWTH_M past the base) stopped the growth: buildings the extraction reaches that still run past it, and the radius that would hold them. */
+    capped?: { capM: number; cut: number; neededM: number };
+}
+
+/** Buildings reaching within `radiusM` (at least one vertex) whose footprint runs past it, and the radius that holds them all. */
+function districtCut(ev: VectorEvidence, radiusM: number): { cut: number; neededM: number } {
+    let cut = 0, neededM = radiusM;
+    for (const b of ev.buildings) {
+        let nearest = Infinity, farthest = 0;
+        for (const part of b.parts) for (const loop of part) for (const [x, z] of loop) { const d = Math.hypot(x, z); nearest = Math.min(nearest, d); farthest = Math.max(farthest, d); }
+        if (nearest <= radiusM && farthest > radiusM) { cut++; neededM = Math.max(neededM, farthest); }
+    }
+    return { cut, neededM };
+}
+
 /**
- * The extraction radius that keeps whole every building the base radius reaches, from Google's vector footprints
- * (`evidence`): districtContainmentRadiusM, then a second round, since the grown area reaches a second ring of
- * buildings the first did not size it for (Haughwout, 2026-10-22: 23 of 87 footprints ran past the extraction); the
- * same cap holds.
+ * The extraction radius that keeps whole every building it reaches, from Google's vector footprints (`evidence`): grown
+ * to the union of the footprints the circle cuts, round after round, since each grown circle reaches a ring of buildings
+ * the one before did not size it for (Haughwout, 2026-10-22: 23 of 87 footprints ran past after one round), until it
+ * cuts none, for at most DISTRICT_CONTAINMENT_MAX_ROUNDS rounds and DISTRICT_CONTAINMENT_MAX_GROWTH_M past the base.
+ * When the cap stops it, what it still cuts is returned for the run to report (those buildings are massed over the
+ * part the scan holds, or kept as scanned: district-massing.ts).
  */
+export async function districtContainment(evidence: (radiusM: number) => Promise<VectorEvidence>, baseRadiusM: number): Promise<DistrictContainment> {
+    const capM = baseRadiusM + DISTRICT_CONTAINMENT_MAX_GROWTH_M;
+    let radiusM = baseRadiusM;
+    for (let round = 1; round <= DISTRICT_CONTAINMENT_MAX_ROUNDS; round++) {
+        const { cut, neededM } = districtCut(await evidence(radiusM), radiusM);
+        if (!cut) return { radiusM, rounds: round };
+        if (radiusM >= capM) return { radiusM, rounds: round, capped: { capM, cut, neededM: Math.round(neededM) } };
+        radiusM = Math.min(capM, neededM);
+    }
+    const { cut, neededM } = districtCut(await evidence(radiusM), radiusM);
+    return { radiusM, rounds: DISTRICT_CONTAINMENT_MAX_ROUNDS, ...(cut ? { capped: { capM: radiusM, cut, neededM: Math.round(neededM) } } : {}) };
+}
+
+/** The radius alone (districtContainment). */
 export async function districtContainedRadiusM(evidence: (radiusM: number) => Promise<VectorEvidence>, baseRadiusM: number): Promise<number> {
-    const radiusM = districtContainmentRadiusM(await evidence(baseRadiusM), baseRadiusM);
-    if (radiusM <= baseRadiusM) return radiusM;
-    return Math.min(baseRadiusM + DISTRICT_CONTAINMENT_MAX_GROWTH_M, districtContainmentRadiusM(await evidence(radiusM), radiusM));
+    return (await districtContainment(evidence, baseRadiusM)).radiusM;
 }
 
 /**
@@ -2258,7 +2294,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (deps.vectorEvidence && !chunkRect) {
                         try {
                             const vectorEvidence = deps.vectorEvidence;
-                            radiusM = await districtContainedRadiusM(r => vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: r }), baseRadiusM);
+                            const contained = await districtContainment(r => vectorEvidence({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: r }), baseRadiusM);
+                            radiusM = contained.radiusM;
+                            const c = contained.capped;
+                            if (c) {
+                                run.note(PROVENANCE.asScanned, `the extraction grew from ${Math.round(baseRadiusM)} m to ${Math.round(radiusM)} m in ${contained.rounds} round${contained.rounds === 1 ? '' : 's'} to keep the buildings it reaches whole, and the cap (${Math.round(c.capM)} m) stopped it: ${c.cut} building${c.cut === 1 ? '' : 's'} it reaches still run${c.cut === 1 ? 's' : ''} past it (holding them would take ${c.neededM} m); each is rebuilt over the part the scan holds, or kept as scanned`);
+                                cache.writeRunNote(runId, 'district_containment', { baseRadiusM, ...contained });
+                            }
                         } catch (err) {
                             // atomic building integrity is best-effort for a district: a vector-fetch failure keeps the
                             // base radius rather than failing the whole build over it
@@ -5448,6 +5490,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             type DistrictMassingValue = {
                 rebuilt: number; buildings: number; reasons: Record<string, number>; roofErrMedianM: number | null; removedTriangles: number; residualOffFootprint: number; timingsMs: Record<string, number>;
                 caveats?: number;
+                /** Buildings the scan holds only part of, rebuilt over the part a straight cut keeps (the rest kept as scanned). */
+                partial?: number;
+                /** Raised masses no footprint holds, each its own photo-inferred outline (districtUnmappedStructures): not counted as any building's overhang. */
+                unmapped?: { structures: number; areaM2: number; buildingsExplained: number };
                 revolutions?: RevolutionLayerSummary & { cut: Record<string, number> };
                 /** Plane-first walls (wall-plane-fit.ts): walls by fit status, relief kept, scan lumps taken out of the residual. */
                 planeFirst?: { walls: number; measured: number; estimated: number; unseen: number; recesses: number; projections: number; rejectedRelief: number; residualRemovedTriangles: number; residualRemovedAreaM2: number };
@@ -5467,8 +5513,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 id: 'massing',
                 run: async io => {
                     const covered = extraction.coveredRadiusM;
-                    const ev = await deps.vectorEvidence!({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: covered + 20 });
-                    const look = evidenceLookup(ev, covered + 20);
+                    // footprints are read well past the extraction, so a building the scan holds only part of is seen whole
+                    const ev = await deps.vectorEvidence!({ lat: placeValue!.lat, lng: placeValue!.lng, radiusM: covered + DISTRICT_EVIDENCE_REACH_M });
+                    const look = evidenceLookup(ev, covered + DISTRICT_EVIDENCE_REACH_M);
                     const vectorKey = crypto.createHash('sha256').update(JSON.stringify([ev.buildings.map(b => [b.id, b.parts, b.heightM ?? null, b.extruded ?? null]), ev.water, ev.roads])).digest('hex').slice(0, 16);
                     const revolutionsOn = revolutionFitEnabled();
                     // detail the scan cannot resolve (ribs) from search-grounded references, when a model client is configured
@@ -5490,22 +5537,28 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const massRows = () => {
                         const scan = loadScanMesh(stripped.devegetatedGlb);
                         const ground = buildGroundModel(scan, { cellMeters: 1, water: look.waterAt, road: look.roadAt });
-                        const within = (x: number, z: number) => Math.hypot(x, z) <= covered;
+                        // where the scan reaches: the extraction's circle, and the whole leaf tiles past it (a cell the scan measures)
+                        const within = (x: number, z: number) => Math.hypot(x, z) <= covered || (Number.isFinite(ground.topAt(x, z)) && Number.isFinite(ground.groundAt(x, z)));
+                        const unmapped = districtUnmappedStructures({ buildings: ev.buildings, look, ground, within });
                         // plane first: the scan's near-vertical surface as samples, each wall fitted as one plane (wall-plane-fit.ts)
                         const walls = planeFirstEnabled() ? wallSampleIndex(scan.mesh.vertices, scan.mesh.indices, { keep: (x, z) => Math.hypot(x, z) <= covered + 10 }) : undefined;
-                        const rows = massDistrict({ buildings: ev.buildings, look, ground, within, lenient: procedural, ...(walls ? { walls } : {}) });
-                        return { scan, ground, within, rows, okRows: rows.filter(r => r.ok && r.massing) };
+                        const rows = massDistrict({ buildings: ev.buildings, look, ground, within, lenient: procedural, unmapped, ...(walls ? { walls } : {}) });
+                        return { scan, ground, within, rows, okRows: rows.filter(r => r.ok && r.massing), unmapped, keepOut: unmappedCells(unmapped) };
                     };
                     const wholeManifest = (kind: string, identity: string, hash: string, file: string, layerName: string, version: string, labels: string[]): LayerObjectManifest =>
                         wholeLayerManifest(kind, identity, hash, sha256File(file), { stage: 'massing', stageKey: key, layer: layerName, version }, { labels, confidence: null });
                     const entry = await cache.run<DistrictMassingValue>('massing', key, async dir => {
                         io.progress('massing every building from its footprint and the scan');
-                        const { scan, ground, within, rows, okRows } = massRows();
+                        const { scan, ground, within, rows, okRows, unmapped, keepOut } = massRows();
                         const reasons: Record<string, number> = {};
                         for (const r of rows.filter(x => !x.ok)) { const k = (r.reason ?? 'unknown').split(':')[0].replace(/[\d.]+/g, 'N'); reasons[k] = (reasons[k] ?? 0) + 1; }
                         const ok = rows.filter(r => r.ok);
                         const errs = ok.map(r => r.massing!.check.heightErrMedianM).sort((a, b) => a - b);
-                        const summary = { buildings: rows.length, reasons, roofErrMedianM: errs.length ? errs[errs.length >> 1] : null };
+                        const summary = {
+                            buildings: rows.length, reasons, roofErrMedianM: errs.length ? errs[errs.length >> 1] : null, partial: ok.filter(r => r.clip).length,
+                            unmapped: { structures: unmapped.length, areaM2: Math.round(unmapped.reduce((a, u) => a + u.areaM2, 0)), buildingsExplained: rows.filter(r => r.unmappedShare).length }
+                        };
+                        fs.writeFileSync(path.join(dir, 'unmapped_structures.json'), JSON.stringify(unmapped.map(({ cells: _c, ...u }) => u)));
                         fs.writeFileSync(path.join(dir, 'buildings.json'), JSON.stringify(rows.map(({ massing, ...r }) => ({ ...r, parts: massing?.parts.length ?? 0, roofErrMedianM: massing?.check.heightErrMedianM ?? null }))));
                         const plan: DistrictObjectPlan | undefined = objectStore && okRows.length
                             ? planDistrictObjects({ rows: okRows, buildings: ev.buildings, scan, look, within, frame, versions: objectVersions, store: objectStore, reuse: reuseObjects })
@@ -5514,7 +5567,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         io.progress(`${ok.length} of ${rows.length} buildings pass their check; building ${reused.size ? `${ok.length - reused.size} (${reused.size} unchanged since they were stored, reused)` : 'them'}`);
                         const freshRows = rows.filter(r => !reused.has(r.id));
                         const layer = freshRows.some(r => r.ok && r.massing)
-                            ? await buildDistrictMassingLayer({ rows: freshRows, look, within, scanGlb: stripped.devegetatedGlb, outDir: dir, stage: 'massing', stageKey: key, signal: io.signal })
+                            ? await buildDistrictMassingLayer({ rows: freshRows, look, within, scanGlb: stripped.devegetatedGlb, outDir: dir, stage: 'massing', stageKey: key, signal: io.signal, keepOut })
                             : undefined;
                         if (!layer && !reused.size) return { value: { rebuilt: 0, ...summary, removedTriangles: 0, residualOffFootprint: 0, timingsMs: {} } };
                         // pipeline E's detail on every building massed now: inference, then measured relief (district-e-detail.ts)
@@ -5543,7 +5596,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             timingsMs.reuseAssemble = Date.now() - tm;
                         }
                         // the cut of the scan's own buildings covers every rebuilt one, massed now or reused
-                        const footprint = districtFootprint(okRows, look, within, 1);
+                        const footprint = districtFootprint(okRows, look, within, 1, keepOut);
                         const manifests: Record<string, LayerObjectManifest> = {};
                         // listed once the layer is final (the revolution fit cuts it in place)
                         const listBuildings = () => { if (plan) manifests['district_massing_textured.glb'] = districtMassingManifest(parseGlbBytes(fs.readFileSync(texturedFile)), sha256File(texturedFile), okRows, plan.owners, plan.hashes, massProducer); };

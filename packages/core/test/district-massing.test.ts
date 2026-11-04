@@ -10,12 +10,13 @@
 /**
  * District massing (district-massing.ts): every building massed from its vector footprint and the scan's surface, and checked
  * building by building. A building the scan shows standing whole is rebuilt at the scanned height; one over flat street is
- * not (vector and scan disagree); one running past the extraction is not (the scan holds part of it); one whose scan spills
- * well past its footprint is not (the footprint is too small); each says why.
+ * not (vector and scan disagree); one running past the extraction is rebuilt over the part the scan holds when that is nearly
+ * all of it, and kept as scanned otherwise; one whose scan spills well past its footprint is not (the footprint is too
+ * small), unless what spills is a structure of its own the vector data does not map; each says why.
  */
 
 import { describe, expect, it } from 'vitest';
-import { massDistrict } from '../src/node/3d-engine/staged-location/district-massing';
+import { clipRingToHalfPlane, clipToScanned, DISTRICT_MASSING_PARAMS, districtFootprint, districtUnmappedStructures, footprintCellsByBuilding, massDistrict, unmappedCells } from '../src/node/3d-engine/staged-location/district-massing';
 import { evidenceLookup, type VectorEvidence } from '../src/node/3d-engine/staged-location/vector-footprints';
 import type { Vec2 } from '../src/common/spatial/staged-location-contracts';
 
@@ -94,5 +95,94 @@ describe('cutting a district\'s scan to the rebuilt footprints', () => {
         expect(keepResidualOver(run, cells)).toBe(1);
         expect((run as { nodes: Array<{ kind: string; indices: Uint32Array }> }).nodes.find(n => n.kind === 'residual')!.indices.length).toBe(3);
         expect((run as { nodes: Array<{ kind: string }> }).nodes.some(n => n.kind === 'wall')).toBe(true);
+    });
+});
+
+describe('a building the scan holds only part of', () => {
+    const area = (r: Vec2[]) => Math.abs(r.reduce((a, p, i) => { const q = r[(i + 1) % r.length]; return a + p[0] * q[1] - q[0] * p[1]; }, 0) / 2);
+
+    it('cuts a concave ring into one simple ring per piece on the kept side', () => {
+        // a U opening to +z, cut at z = 5: the two arms are kept as two rectangles, never one ring doubling back along the cut
+        const u: Vec2[] = [[0, 0], [10, 0], [10, 10], [7, 10], [7, 3], [3, 3], [3, 10], [0, 10]];
+        const pieces = clipRingToHalfPlane(u, [0, 1], 5);
+        expect(pieces).toHaveLength(1);
+        expect(area(pieces[0])).toBeCloseTo(10 * 5 - 4 * 2, 6);
+        const arms = clipRingToHalfPlane(u, [0, -1], -5);
+        expect(arms).toHaveLength(2);
+        expect(arms.map(area)).toEqual([15, 15]);
+        expect(clipRingToHalfPlane(u, [1, 0], 20)).toEqual([u]);
+        expect(clipRingToHalfPlane(u, [1, 0], -1)).toEqual([]);
+    });
+
+    it('places the cut at the nearest unscanned cell, keeping none of them', () => {
+        const cells: Array<[number, number]> = [], outsideCells: Array<[number, number]> = [];
+        for (let x = 0; x < 20; x++) for (let z = 0; z < 10; z++) (x < 19 ? cells : outsideCells).push([x, z]);
+        const clip = clipToScanned({ cells, outsideCells })!;
+        expect(clip.normal).toEqual([1, 0]);
+        expect(clip.offset).toBe(19);
+        expect(clip.scannedShare).toBe(0.95);
+        expect(clip.keptShare).toBe(0.95);
+    });
+
+    it('rebuilds nearly all of it over the part the scan holds, draws nothing past the scan, and leaves a mostly unscanned one as scanned', () => {
+        const ev: VectorEvidence = {
+            buildings: [
+                building('mostly', rect(0, -10, 40, 10), 20),     // 38 of its 40 m lie inside the scan (x < 38)
+                building('half', rect(0, 20, 76, 30), 20)          // only half of it does
+            ], water: [], roads: [], tiles: 1, zoom: 17
+        };
+        const look = evidenceLookup(ev, 90);
+        const top = (x: number, z: number) => (x >= 38 ? NaN : (x >= 0 && x <= 40 && z >= -10 && z <= 10) || (x >= 0 && x <= 76 && z >= 20 && z <= 30) ? 22 : 2);
+        const within = (x: number) => x < 38;
+        const rows = massDistrict({ buildings: ev.buildings, look, ground: { groundAt: (x: number) => (x >= 38 ? NaN : 2), topAt: top }, within });
+        const mostly = rows.find(r => r.id === 'mostly')!, half = rows.find(r => r.id === 'half')!;
+        expect(mostly.ok).toBe(true);
+        expect(mostly.clip).toMatchObject({ normal: [1, 0], offset: 38 });
+        expect(mostly.clip!.keptShare).toBeGreaterThanOrEqual(0.9);
+        expect(mostly.caveat).toMatch(/rebuilt over the 95% of its footprint the scan holds/);
+        // every corner of the massing stands where the scan reaches
+        const xs = mostly.massing!.parts.flatMap(p => p.loops.flat().map(q => q[0]));
+        expect(Math.max(...xs)).toBeLessThanOrEqual(38 + 1e-9);
+        expect(Math.max(...xs)).toBeGreaterThan(37);
+        expect(mostly.massing!.meshes).toHaveLength(0);
+        expect(half.ok).toBe(false);
+        expect(half.reason).toMatch(/runs past the extraction .* keeps 50% \(at least 90% needed/);
+        // the scan is cut only under the kept part
+        const fp = districtFootprint(rows, look, within, 1);
+        expect([...fp.cells].every(k => Number(k.split(',')[0]) < 38)).toBe(true);
+        expect(fp.cells.has('20,0')).toBe(true);
+        expect(fp.cells.has('20,25')).toBe(false);
+        expect(footprintCellsByBuilding(look, within).get(0)!.outsideCells).toHaveLength(40);
+    });
+
+    it('takes a raised mass standing clear of every footprint as its own structure, not a building\'s overhang, and keeps the cut out of it', () => {
+        // a 10 x 10 footprint with an unmapped 8 m-deep annex against its east wall; one with a 1 m sliver of facade; and a
+        // long one with a 4 m band of facade along its whole south side (the footprint drawn too small, not a structure)
+        const ev: VectorEvidence = { buildings: [building('annexed', rect(0, 0, 10, 10), 15), building('sliver', rect(30, 0, 40, 10), 15), building('banded', rect(-60, 30, 0, 40), 15)], water: [], roads: [], tiles: 1, zoom: 17 };
+        const look = evidenceLookup(ev, 70);
+        const top = (x: number, z: number) => (x >= 0 && x < 18 && z >= 0 && z < 10) || (x >= 30 && x < 41 && z >= 0 && z < 10) || (x >= -60 && x < 0 && z >= 30 && z < 44) ? 17 : 2;
+        const ground = { groundAt: () => 2, topAt: top }, within = () => true;
+        // a strict overhang check, so the one-cell ring the scan raises past each footprint fails it
+        const P = { ...DISTRICT_MASSING_PARAMS, maxOverhangShare: 0.05 };
+        const unmapped = districtUnmappedStructures({ buildings: ev.buildings, look, ground, within });
+        expect(unmapped).toHaveLength(1);
+        expect(unmapped[0]).toMatchObject({ label: 'photo-inferred', areaM2: 80, touches: ['annexed'] });
+        expect(unmapped[0].outline.length).toBeGreaterThanOrEqual(4);
+        const rows = massDistrict({ buildings: ev.buildings, look, ground, within, unmapped }, P);
+        const annexed = rows.find(r => r.id === 'annexed')!;
+        expect(annexed.ok).toBe(true);
+        expect(annexed.overhangShare).toBe(0);
+        expect(annexed.unmappedShare).toBeGreaterThan(0);
+        const without = massDistrict({ buildings: ev.buildings, look, ground, within, unmapped: [] }, P).find(r => r.id === 'annexed')!;
+        expect(without.ok).toBe(false);
+        expect(without.reason).toMatch(/smaller than what was scanned/);
+        // the facade a little past a footprint is no structure of its own
+        expect(rows.find(r => r.id === 'sliver')!.unmappedShare).toBeUndefined();
+        expect(rows.find(r => r.id === 'sliver')!.reason).toMatch(/smaller than what was scanned/);
+        expect(rows.find(r => r.id === 'banded')!.unmappedShare).toBeUndefined();
+        expect(rows.find(r => r.id === 'banded')!.reason).toMatch(/smaller than what was scanned/);
+        const fp = districtFootprint(rows, look, within, 2, unmappedCells(unmapped));
+        expect(fp.cells.has('11,5')).toBe(false);
+        expect(districtFootprint(rows, look, within, 2).cells.has('11,5')).toBe(true);
     });
 });
