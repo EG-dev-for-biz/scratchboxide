@@ -49,10 +49,12 @@ export const GRASS_MAP_TOOL_DECLARATION: ToolDeclaration = {
             bladeSegments: { type: 'NUMBER', description: 'Spine segments of a near blade (default 5; fewer is cheaper and straighter).' },
             bladeFarSegments: { type: 'NUMBER', description: 'Spine segments of the widened distant blades (default 2).' },
             bladeMaxClumps: { type: 'NUMBER', description: 'Most clumps grown (default 150000); past it the nearest are kept.' },
+            bladeRootShade: { type: 'NUMBER', description: '0..1: tone of a blade at its root relative to its lit upper part (default 0.3): the shade neighbouring blades cast low in a lawn.' },
+            bladeUnderlayerRadiusM: { type: 'NUMBER', description: 'Radius around the centre of the darker, blade-textured sheet laid under the blades so no bare ground shows between them (default 40 m; 0 = none).' },
             bladeChunkM: { type: 'NUMBER', description: 'Side of the square tiles the grass is split into so the viewer skips the tiles out of view (default 30 m; 0 = one piece per clump shape).' },
             bladeHeightMinM: { type: 'NUMBER', description: 'Shortest blade length (default 0.06 m).' },
             bladeHeightMaxM: { type: 'NUMBER', description: 'Longest blade length (default 0.14 m). A mown lawn is a few centimetres; a meadow half a metre or more.' },
-            bladeSenescence: { type: 'NUMBER', description: '0..1, how far blade tips turn toward straw (default 0.35).' },
+            bladeSenescence: { type: 'NUMBER', description: '0..1, how far blade tips turn toward straw (default 0.2).' },
             bladePixelAngle: { type: 'NUMBER', description: 'Radians one screen pixel spans (default 0.0015). Blades farther from the centre are built wider and fewer so they stay about a pixel wide; 0 keeps every blade at its near width.' }
         },
         required: ['query']
@@ -148,6 +150,8 @@ export const grassMapHandler: ToolHandler = async (args, ctx): Promise<ToolHandl
             const params: GrassFieldParams = {
                 centreX: centre.x, centreZ: centre.z, bandRadiusM, densityPerM2: num(args.bladeDensityPerM2),
                 bladeHeightMin: num(args.bladeHeightMinM), bladeHeightMax: num(args.bladeHeightMaxM),
+                rootShade: typeof args.bladeRootShade === 'number' ? Math.min(1, Math.max(0, args.bladeRootShade)) : undefined,
+                underlayerRadiusM: typeof args.bladeUnderlayerRadiusM === 'number' && args.bladeUnderlayerRadiusM >= 0 ? args.bladeUnderlayerRadiusM : undefined,
                 bladeCount: num(args.bladesPerClump), segmentsPerBlade: num(args.bladeSegments), farSegmentsPerBlade: num(args.bladeFarSegments), maxInstances: num(args.bladeMaxClumps),
                 senescence: typeof args.bladeSenescence === 'number' ? Math.min(1, Math.max(0, args.bladeSenescence)) : undefined,
                 pixelAngle: typeof args.bladePixelAngle === 'number' && args.bladePixelAngle >= 0 ? args.bladePixelAngle : undefined
@@ -160,7 +164,8 @@ export const grassMapHandler: ToolHandler = async (args, ctx): Promise<ToolHandl
             const provenance = {
                 label: 'generated', measuredGeometry: false, geometry: { label: 'generated', method: `${GRASS_FIELD_VERSION}: GrassClumpGenerator clumps (V-keel blades, droop, splay, senescent tips), instanced on blue-noise samples over the grass mask, kept with each cell's confidence` },
                 standing: { label: 'measured', method: `each clump stands on the scan's surface where one lies within 0.75 m of the cell surface (${field.report.stats.snapped} clumps); elsewhere on the estimated ground (${field.report.stats.unsnapped}, generated)` },
-                colour: { label: 'photo-inferred', method: 'each instance tinted toward its cell\'s lit top-down photo colour; cells under crowns take the nearest seen grass colour' },
+                colour: { label: 'photo-inferred', method: 'each instance tinted toward its cell\'s lit top-down photo colour; cells under crowns take the nearest seen grass colour; each blade shaded from a dark root (self-occlusion, generated)' },
+                underlayer: { label: 'generated', method: 'a sheet over the grass cells near the centre, on the scan surface, in the photo colour darkened as the lower grass and where clumps stand, fading to the photo colour at the grass edge, with a generated blade-scale detail texture' },
                 mask: { ...extras.sb.provenance }, confidence: 0.6
             };
             const bladeChunkM = typeof args.bladeChunkM === 'number' && args.bladeChunkM >= 0 ? args.bladeChunkM : GRASS_CHUNK_M;
@@ -172,7 +177,8 @@ export const grassMapHandler: ToolHandler = async (args, ctx): Promise<ToolHandl
             for (let c = 0; c < g.mask.length && !seenColour; c++) seenColour = !!g.mask[c] && g.colour[c * 3 + 1] > 0;
             if (!seenColour) summary += ' No grass was seen from above here, so the blades keep their own neutral tone (no photo colour to tint them toward).';
             const rings = new Set(field.variants.map(v => v.ring)).size;
-            summary += ` Grew ${field.report.instances.toLocaleString()} grass clumps (generated geometry, photo-inferred colour${rings > 1 ? `; blades widened in ${rings} distance rings so they stay visible farther out` : ''}) over ${Math.round(s.bandGrassM2).toLocaleString()} m² of grass within ${bandRadiusM} m of ${centre.from}${s.overBudget ? `; ${s.overBudget.toLocaleString()} farther ones left out past the instance budget (blades reach ${s.radiusReachedM.toFixed(0)} m)` : ''}; ${s.nearExcluded.toLocaleString()} kept clear of buildings and water. Farther ground stays the tile photo.`;
+            const under = field.report.underlayer.areaM2 ? ` with a blade-textured sheet under them over ${Math.round(field.report.underlayer.areaM2).toLocaleString()} m² so no bare ground shows between them` : '';
+            summary += ` Grew ${field.report.instances.toLocaleString()} grass clumps (generated geometry, photo-inferred colour${rings > 1 ? `; blades widened in ${rings} distance rings so they stay visible farther out` : ''}) over ${Math.round(s.bandGrassM2).toLocaleString()} m² of grass within ${bandRadiusM} m of ${centre.from}${under}${s.overBudget ? `; ${s.overBudget.toLocaleString()} farther ones left out past the instance budget (blades reach ${s.radiusReachedM.toFixed(0)} m)` : ''}; ${s.nearExcluded.toLocaleString()} kept clear of buildings and water. Farther ground stays the tile photo.`;
         }
     }
     const artifact = {

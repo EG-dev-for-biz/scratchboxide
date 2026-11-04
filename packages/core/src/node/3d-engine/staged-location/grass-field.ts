@@ -30,6 +30,7 @@ import { compileNativeCached, defaultNativeFlags, NativeBuildError } from '../na
 import { findTileRefineRepoRoot } from '../tile-refine-service';
 import { GltfBinaryPacker } from '../gltf-binary-packer';
 import { GRASS_DETECT_PARAMS, type GrassMask } from './grass-detect';
+import { encodePng } from './png-encode';
 import type { GroundModel } from '../../spatial/StreetViewSurveyPlanner';
 
 export const GRASS_FIELD_VERSION = 'grass-field/1';
@@ -47,6 +48,11 @@ export interface GrassFieldParams {
     bladeWidthBase?: number; bladeWidthMid?: number; keelDepth?: number; segmentsPerBlade?: number; farSegmentsPerBlade?: number;
     gravityDroop?: number; radialSplay?: number; curlStochasticity?: number; centerHeightBias?: number;
     clumpNormalBlend?: number; senescence?: number;
+    /** Self-occlusion: tone at the blade root relative to the lit lamina, and the share of the blade the shade climbs. */
+    rootShade?: number; occlusionHeight?: number;
+    /** The sheet under the blades (0 radius: none): spacing, lift, shade of the lower grass, contact shade, edge fade, detail texture. */
+    underlayerRadiusM?: number; underlayerSpacingM?: number; underlayerLiftM?: number; underlayerShade?: number;
+    contactShade?: number; contactRadiusM?: number; underlayerFadeM?: number; underlayerRadialFade?: number; detailTexPx?: number; detailTileM?: number;
     /** Radians a pixel spans: blades are widened ring by ring so they stay about a pixel wide away from the centre (0: one ring). */
     pixelAngle?: number; maxWidthScale?: number;
 }
@@ -56,6 +62,7 @@ export interface GrassFieldReport {
     instances: number;
     instancedTriangles: number;
     reachM: number;
+    underlayer: { vertices: number; indices: number; texPx: number; tileM: number; areaM2: number; textureMean: number };
     stats: { strata: number; notGrass: number; lowConfidence: number; outsideBand: number; nearExcluded: number; thinned: number; overBudget: number; snapped: number; unsnapped: number; expected: number; bandGrassM2: number; radiusReachedM: number };
 }
 
@@ -69,7 +76,13 @@ export interface GrassFieldVariant {
     reachM: number;
 }
 
-export interface GrassField { report: GrassFieldReport; variants: GrassFieldVariant[]; params: GrassFieldParams; ms: number }
+/** The sheet under the blades: a lattice over the grass cells near the centre, and its tiling detail texture (RGBA8). */
+export interface GrassUnderlayer {
+    positions: Float32Array; normals: Float32Array; colours: Float32Array; uvs: Float32Array; indices: Uint32Array;
+    texture: Uint8Array; texPx: number; tileM: number; areaM2: number;
+}
+
+export interface GrassField { report: GrassFieldReport; variants: GrassFieldVariant[]; underlayer: GrassUnderlayer; params: GrassFieldParams; ms: number }
 
 let building: Promise<string> | undefined;
 
@@ -210,7 +223,15 @@ export async function buildGrassField(grid: GrassFieldGrid, dir: string, params:
         }
         return { positions, normals, colours, indices, translation, rotation, scale, tint, confidence, min: v.min, max: v.max, ring: v.ring, widthScale: v.widthScale, reachM: v.reachM };
     });
-    return { report, variants, params, ms: Date.now() - t0 };
+    const ub = fs.readFileSync(path.join(dir, 'underlayer.bin')), u = report.underlayer, nv = u.vertices;
+    let o = 0;
+    const take = (n: number) => { const a = f32(ub, o, n); o += n * 4; return a; };
+    const underlayer: GrassUnderlayer = {
+        positions: take(nv * 3), normals: take(nv * 3), colours: take(nv * 4), uvs: take(nv * 2),
+        indices: new Uint32Array(ub.buffer.slice(ub.byteOffset + o, ub.byteOffset + o + u.indices * 4)),
+        texture: new Uint8Array(fs.readFileSync(path.join(dir, 'detail.rgba'))), texPx: u.texPx, tileM: u.tileM, areaM2: u.areaM2
+    };
+    return { report, variants, underlayer, params, ms: Date.now() - t0 };
 }
 
 /** Side of the square tiles the instances are split into (m): one node per (variant, tile), so the viewer culls the tiles out of view. */
@@ -268,12 +289,36 @@ export function writeGrassFieldGlb(file: string, field: GrassField, extras: Reco
         }
         triangles += n * v.indices.length / 3;
     });
+    // the sheet under the blades, textured with the detail tile
+    const u = field.underlayer;
+    const images: object[] = [], textures: object[] = [], samplers: object[] = [];
+    if (u && u.indices.length) {
+        const nv = u.positions.length / 3, min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+        for (let q = 0; q < u.positions.length; q++) { min[q % 3] = Math.min(min[q % 3], u.positions[q]); max[q % 3] = Math.max(max[q % 3], u.positions[q]); }
+        const attributes = {
+            POSITION: add(u.positions, { componentType: 5126, count: nv, type: 'VEC3', min, max }, 34962),
+            NORMAL: add(u.normals, { componentType: 5126, count: nv, type: 'VEC3' }, 34962),
+            COLOR_0: add(u.colours, { componentType: 5126, count: nv, type: 'VEC4' }, 34962),
+            TEXCOORD_0: add(u.uvs, { componentType: 5126, count: nv, type: 'VEC2' }, 34962)
+        };
+        const indices = add(u.indices, { componentType: 5125, count: u.indices.length, type: 'SCALAR' }, 34963);
+        const png = encodePng(u.texPx, u.texPx, u.texture, 4);
+        views.push(png); bufferViews.push({ buffer: 0 });
+        images.push({ name: 'grass detail', bufferView: bufferViews.length - 1, mimeType: 'image/png' });
+        samplers.push({ magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 });
+        textures.push({ sampler: 0, source: 0 });
+        meshes.push({ name: 'grass underlayer', primitives: [{ attributes, indices, material: 1, mode: 4 }] });
+        nodes.push({ name: 'grass underlayer', mesh: meshes.length - 1, extras: { ...extras, underlayer: { areaM2: u.areaM2, tileM: u.tileM, texPx: u.texPx } } });
+        triangles += u.indices.length / 3;
+    }
     const gltf = {
         asset: { version: '2.0', generator: `Scratchbox ${GRASS_FIELD_VERSION}`, extras },
         extensionsUsed: ['EXT_mesh_gpu_instancing'], extensionsRequired: ['EXT_mesh_gpu_instancing'],
         scene: 0, scenes: [{ name: 'grass field', nodes: nodes.map((_, i) => i) }],
         nodes, meshes, accessors, bufferViews,
-        materials: [{ name: 'grass blades', pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1], metallicFactor: 0, roughnessFactor: 0.85 }, doubleSided: true }]
+        materials: [{ name: 'grass blades', pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1], metallicFactor: 0, roughnessFactor: 0.85 }, doubleSided: true },
+            { name: 'grass underlayer', pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1], ...(images.length ? { baseColorTexture: { index: 0 } } : {}), metallicFactor: 0, roughnessFactor: 0.95 } }],
+        ...(images.length ? { images, textures, samplers } : {})
     };
     GltfBinaryPacker.writeGlb(file, gltf, views);
     return triangles;
