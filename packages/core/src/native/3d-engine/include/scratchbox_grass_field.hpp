@@ -22,6 +22,11 @@
  * between cell centres; an estimate under crowns), turned about the vertical,
  * scaled, and tinted toward its cell's photo colour (linear RGB, relative to the clump's own mid tone).
  *
+ * Distance: a blade a few millimetres wide falls under a pixel some metres out, so the clump variants are built in rings
+ * around the band's centre (the viewer's place): in ring r the blades are 2^r times wider and fewer (coverage per clump
+ * kept), r the doubling that brings a blade to `pixelAngle` x its distance from the centre, capped at `maxWidthScale`.
+ * `pixelAngle` 0 keeps one ring.
+ *
  * Every shape quantity is a continuous parameter: blade height and width, keel depth, droop, splay, curl, clump radius,
  * senescence; nothing selects a grass kind.
  *
@@ -76,6 +81,9 @@ struct Params {
     double gravityDroop = 0.3, radialSplay = 0.5, curlStochasticity = 0.25, centerHeightBias = 0.3;
     double clumpNormalBlend = 0.35;
     double senescence = 0.35;       // how far the tip goes toward straw (0 = all green)
+    // distance rings
+    double pixelAngle = 0.0015;     // radians a pixel spans (about 1 px at 1000 px over 60 degrees); 0 = no rings
+    double maxWidthScale = 16;      // widest blade, as a multiple of the near blade
 
     void set(const std::string& k, double v) {
 #define SB_GF_P(name) if (k == #name) { name = v; return; }
@@ -84,6 +92,7 @@ struct Params {
         SB_GF_P(variants) SB_GF_P(seed) SB_GF_P(bladeCount) SB_GF_P(clumpRadius) SB_GF_P(bladeHeightMin) SB_GF_P(bladeHeightMax)
         SB_GF_P(bladeWidthBase) SB_GF_P(bladeWidthMid) SB_GF_P(keelDepth) SB_GF_P(segmentsPerBlade) SB_GF_P(gravityDroop)
         SB_GF_P(radialSplay) SB_GF_P(curlStochasticity) SB_GF_P(centerHeightBias) SB_GF_P(clumpNormalBlend) SB_GF_P(senescence)
+        SB_GF_P(pixelAngle) SB_GF_P(maxWidthScale)
 #undef SB_GF_P
         throw std::runtime_error("unknown parameter " + k);
     }
@@ -131,7 +140,7 @@ inline double hash01(uint64_t a, uint64_t b, uint64_t salt) {
 
 struct Instance { float t[3], r[4], s[3], c[3], conf; double d; bool snapped; };
 
-struct Variant { geometry::Mesh mesh; std::vector<Instance> instances; };
+struct Variant { geometry::Mesh mesh; std::vector<Instance> instances; int ring = 0; double widthScale = 1; };
 
 struct Stats {
     long strata = 0, notGrass = 0, lowConfidence = 0, outsideBand = 0, nearExcluded = 0, thinned = 0, overBudget = 0, snapped = 0, unsnapped = 0;
@@ -145,18 +154,36 @@ class GrassField {
 public:
     GrassField(Grid g, Params p) : g_(std::move(g)), p_(p) {}
 
-    /** The farthest any blade of a clump reaches from its anchor in plan, at scale 1 (m). */
-    double reach() const {
+    /** The farthest any blade of a clump reaches from its anchor in plan, at scale 1, with blades `widthScale` times the near ones (m); by default the widest ring's. */
+    double reach(double widthScale = -1) const {
         const double h = p_.bladeHeightMax * (1 + p_.centerHeightBias);
-        return p_.clumpRadius + h * 0.8 * (p_.radialSplay + p_.curlStochasticity) + p_.bladeWidthMid;
+        return p_.clumpRadius + h * 0.8 * (p_.radialSplay + p_.curlStochasticity) + p_.bladeWidthMid * (widthScale > 0 ? widthScale : std::ldexp(1.0, rings() - 1));
+    }
+
+    /** Rings the band needs: the doubling that brings a blade at the band's edge to a pixel, capped. */
+    int rings() const {
+        if (!(p_.pixelAngle > 0)) return 1;
+        const double need = std::min(std::max(1.0, p_.maxWidthScale), p_.bandRadiusM * p_.pixelAngle / std::max(1e-5, p_.bladeWidthMid));
+        return 1 + std::max(0, int(std::ceil(std::log2(std::max(1.0, need)) - 1e-9)));
+    }
+
+    /** The ring a clump at distance d from the centre is drawn in. */
+    int ringAt(double d, int nr) const {
+        if (nr <= 1) return 0;
+        const double need = d * p_.pixelAngle / std::max(1e-5, p_.bladeWidthMid);
+        return std::clamp(int(std::floor(std::log2(std::max(1.0, need)))), 0, nr - 1);
     }
 
     void run() {
-        const int nv = std::max(1, int(p_.variants));
-        variants_.assign(nv, {});
-        for (int v = 0; v < nv; ++v) variants_[v].mesh = clump(v, nv);
+        const int nv = std::max(1, int(p_.variants)), nr = rings();
+        variants_.assign(size_t(nv) * nr, {});
+        for (int r = 0; r < nr; ++r) for (int v = 0; v < nv; ++v) {
+            auto& var = variants_[size_t(r) * nv + v];
+            var.ring = r; var.widthScale = std::ldexp(1.0, r);
+            var.mesh = clump(v, nv, var.widthScale);
+        }
         bucketScan();
-        place(nv);
+        place(nv, nr);
     }
 
     const std::vector<Variant>& variants() const { return variants_; }
@@ -190,7 +217,7 @@ public:
             for (const auto& p : mesh.vertices) { const float q[3] = {p.x, p.y, p.z}; for (int a = 0; a < 3; ++a) { lo[a] = std::min(lo[a], q[a]); hi[a] = std::max(hi[a], q[a]); } }
             j << (v ? "," : "") << "{\"vertices\":" << nv << ",\"indices\":" << ni << ",\"meshOffset\":" << mo
               << ",\"min\":[" << lo[0] << "," << lo[1] << "," << lo[2] << "],\"max\":[" << hi[0] << "," << hi[1] << "," << hi[2] << "]"
-              << ",\"instances\":" << n << ",\"instanceOffset\":" << io << "}";
+              << ",\"instances\":" << n << ",\"instanceOffset\":" << io << ",\"ring\":" << variants_[v].ring << ",\"widthScale\":" << variants_[v].widthScale << ",\"reachM\":" << reach(variants_[v].widthScale) << "}";
             mo += nv * (12 + 12 + 16) + ni * 4;
             io += n * 56;
             total += n; tris += n * ni / 3;
@@ -251,15 +278,16 @@ private:
     static void writeF(std::ofstream& o, std::initializer_list<float> v) { for (float f : v) o.write(reinterpret_cast<const char*>(&f), 4); }
 
     /** Variant v of nv: the blade-height range split across the variants (with overlap), its own seed. */
-    geometry::Mesh clump(int v, int nv) const {
+    geometry::Mesh clump(int v, int nv, double widthScale = 1) const {
         GrassClumpConfig c;
         const double span = p_.bladeHeightMax - p_.bladeHeightMin;
         const double a = nv > 1 ? double(v) / (nv - 1) : 0.5;
-        c.bladeCount = std::max(1, int(std::lround(p_.bladeCount)));
+        // wider blades, fewer of them: the clump covers about the same ground
+        c.bladeCount = std::max(3, int(std::lround(p_.bladeCount / widthScale)));
         c.clumpRadius = float(p_.clumpRadius);
         c.bladeHeightMin = float(p_.bladeHeightMin + span * 0.4 * a);
         c.bladeHeightMax = float(p_.bladeHeightMax - span * 0.4 * (1 - a));
-        c.bladeWidthBase = float(p_.bladeWidthBase); c.bladeWidthMid = float(p_.bladeWidthMid); c.keelDepth = float(p_.keelDepth);
+        c.bladeWidthBase = float(p_.bladeWidthBase * widthScale); c.bladeWidthMid = float(p_.bladeWidthMid * widthScale); c.keelDepth = float(p_.keelDepth * widthScale);
         c.segmentsPerBlade = std::max(4, int(std::lround(p_.segmentsPerBlade)));
         c.gravityDroop = float(p_.gravityDroop); c.radialSplay = float(p_.radialSplay);
         c.curlStochasticity = float(p_.curlStochasticity); c.centerHeightBias = float(p_.centerHeightBias);
@@ -310,12 +338,12 @@ private:
         return w > 1e-6 ? sum / w : g_.surfaceY[own];
     }
 
-    void place(int nv) {
+    void place(int nv, int nr) {
         auto& s = stats_;
         const double density = std::max(1e-6, p_.densityPerM2), step = 1.0 / std::sqrt(density);
         const double R = std::max(0.0, p_.bandRadiusM), cx = p_.centreX, cz = p_.centreZ;
         const double scaleMax = std::max(p_.scaleMin, p_.scaleMax);
-        const double clearance = reach() * scaleMax + p_.edgeMarginM;
+
         const uint64_t salt = uint64_t(p_.seed) + 1;
         // the band's grass and the expected count
         for (uint32_t k = 0; k < g_.nz; ++k) for (uint32_t i = 0; i < g_.nx; ++i) {
@@ -348,7 +376,8 @@ private:
                 const double conf = std::clamp(double(g_.confidence[c]), 0.0, 1.0);
                 if (conf < p_.minConfidence) { s.lowConfidence++; continue; }
                 if (hash01(ua, ub, salt + 23) >= conf) { s.thinned++; continue; }
-                if (nearExcluded(x, z, clearance)) { s.nearExcluded++; continue; }
+                const int ring = ringAt(std::sqrt(d2), nr);
+                if (nearExcluded(x, z, reach(std::ldexp(1.0, ring)) * scaleMax + p_.edgeMarginM)) { s.nearExcluded++; continue; }
                 Instance in{};
                 const double yaw = hash01(ua, ub, salt + 37) * 2 * math::PI;
                 const double sc = p_.scaleMin + (scaleMax - p_.scaleMin) * hash01(ua, ub, salt + 41);
@@ -369,7 +398,7 @@ private:
                 in.snapped = std::isfinite(scanY);
                 in.d = std::sqrt(d2);
                 all.push_back(in);
-                which.push_back(int(hash01(ua, ub, salt + 53) * nv) % nv);
+                which.push_back(ring * nv + int(hash01(ua, ub, salt + 53) * nv) % nv);
             }
         }
         // past the budget, the nearest ones
