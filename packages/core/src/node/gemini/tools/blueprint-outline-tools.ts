@@ -34,6 +34,16 @@ import { glbToTriangleSoupAsync } from '../../3d-engine/part-connectivity';
 import { decodeImageToRgba } from '../../image-codec-ffmpeg';
 import { encodePngAsync } from '../../png-codec-pool';
 import { GeminiClient, errorMessage } from '../gemini-client';
+import { findOpenings, type BlueprintOpening, type NormBox } from '../../3d-engine/blueprint-openings';
+import { ObjectSegmenterService } from '../../video/ObjectSegmenterService';
+
+/** The object segmenter's extent of the region in a box (normalised); fails on an empty mask. */
+async function defaultSegment(imagePath: string, box: NormBox, outputDir: string, signal?: AbortSignal): Promise<NormBox> {
+    const out = await new ObjectSegmenterService().segment({ imagePath, outputDir, box, refine: true, signal });
+    const frame = out.frames[0];
+    if (!frame || !(frame.areaFraction > 0)) throw new Error('the segmenter found nothing in the box');
+    return frame.bbox;
+}
 
 export const BLUEPRINT_OUTLINE_TOOL = 'object_blueprint_outlines';
 
@@ -66,6 +76,10 @@ export const BLUEPRINT_OUTLINE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 model: {
                     type: 'STRING',
                     description: 'Optional image model for the views; omitted, the standard image model, then Nano Banana Lite.'
+                },
+                openings: {
+                    type: 'BOOLEAN',
+                    description: 'Optional, for a new blueprint: also read the areas set into the surface (openings, recessed panels, grilles, vents, glass behind frames) from the front and side drawings, each boxed by a vision model (one more billed call) and traced by the object segmenter, as extents in metres in the build frame (labelled generated): the places to cut or set glass.'
                 }
             }
         }
@@ -74,6 +88,8 @@ export const BLUEPRINT_OUTLINE_TOOL_DECLARATIONS: ToolDeclaration[] = [
 
 export interface BlueprintOutlineToolDeps {
     client?: () => Promise<GenerateContentClient | undefined>;
+    /** Traces a region inside a box of a drawing (normalised); the object segmenter by default. */
+    segment?: (imagePath: string, box: NormBox, outputDir: string, signal?: AbortSignal) => Promise<NormBox>;
     /** Where public/models lives (scene paths "/models/..." resolve there); default the repository's. */
     publicDir?: string;
     sleep?: (ms: number) => Promise<void>;
@@ -167,10 +183,27 @@ export function createBlueprintOutlineHandlers(deps: BlueprintOutlineToolDeps = 
                 files[`${v.view}Overlay`] = path.join(dir, `${v.view}_outline.png`);
                 fs.writeFileSync(files[`${v.view}Overlay`], await encodePngAsync(overlay.width, overlay.height, overlay.rgba, 4));
             }
+            let openings: BlueprintOpening[] | undefined;
+            let openingsNote: string | undefined;
+            if (args.openings === true) {
+                ctx.reportProgress?.('Reading the openings from the front and side drawings', 0.8);
+                const view = (name: 'front' | 'side') => { const v = views.find(x => x.view === name)!; return { image: v.image, path: files[name], silhouette: v.silhouette }; };
+                let n = 0;
+                const segment = deps.segment ?? defaultSegment;
+                try {
+                    const read = await findOpenings(client, subject, { front: view('front'), side: view('side') }, size, {
+                        segment: (imagePath, box) => segment(imagePath, box, path.join(dir, 'masks', String(n++)), ctx.signal),
+                        signal: ctx.signal
+                    });
+                    openings = read.openings;
+                } catch (err) {
+                    openingsNote = `The openings could not be read: ${errorMessage(err)}`;
+                }
+            }
             const aspectError = Object.fromEntries(views.map(v => [v.view, v.aspectError]));
             const provenance = { label: 'generated', note: `Outlines read from orthographic views drawn by ${[...new Set(views.map(v => v.model))].join(', ')} and scaled to the given size; not measured.` };
             const blueprintFile = path.join(dir, 'blueprint.json');
-            fs.writeFileSync(blueprintFile, JSON.stringify({ subject, sizeMeters: size, outlines, aspectError, provenance, models: views.map(v => ({ view: v.view, model: v.model })) }, null, 1));
+            fs.writeFileSync(blueprintFile, JSON.stringify({ subject, sizeMeters: size, outlines, aspectError, provenance, models: views.map(v => ({ view: v.view, model: v.model })), ...(openings ? { openings } : {}) }, null, 1));
             const rel = (f: string) => path.relative(ctx.workspaceRoot || process.cwd(), f);
             const offScale = views.filter(v => Math.abs(v.aspectError) > ASPECT_WARNING);
             const notesText = outlinesAsNotes(outlines);
@@ -178,12 +211,14 @@ export function createBlueprintOutlineHandlers(deps: BlueprintOutlineToolDeps = 
                 resultPayload: {
                     status: 'success', subject, sizeMeters: size, blueprintPath: rel(blueprintFile),
                     files: Object.fromEntries(Object.entries(files).map(([k, f]) => [k, rel(f)])),
-                    aspectError, outlines, notesText, provenance
+                    aspectError, outlines, notesText, provenance,
+                    ...(openings ? { openings } : {}), ...(openingsNote ? { openingsNote } : {})
                 },
                 summaryResult: [
                     `Drew the side, top and front views of ${subject} and read their outlines at ${size.join(' x ')} m (blueprint ${rel(blueprintFile)}).`,
                     `Drawn proportions before scaling: side ${aspectError.side}, top ${aspectError.top}, front ${aspectError.front}.`,
                     offScale.length ? `Not to scale: ${offScale.map(v => `${v.view} (${(v.aspectError * 100).toFixed(0)} %)`).join(', ')}; its outline is stretched to the size, so read it with care.` : '',
+                    openings ? `Read ${openings.length} opening${openings.length === 1 ? '' : 's'} (${openings.filter(o => o.traced).length} traced by the segmenter): ${openings.slice(0, 12).map(o => `${o.label} (${o.view}, ${o.view === 'front' ? 'x' : 'z'} ${o.across[0]}..${o.across[1]}, y ${o.height[0]}..${o.height[1]})`).join('; ')}.` : (openingsNote ?? ''),
                     outlines.groundContacts.length
                         ? `Touches the ground at z ${outlines.groundContacts.map(c => c.zCentre).join(', ')} m${outlines.groundContacts.length > 1 ? `, the outermost contacts ${(outlines.groundContacts[0].zCentre - outlines.groundContacts[outlines.groundContacts.length - 1].zCentre).toFixed(3)} m apart (check it against a published spacing, such as a wheelbase)` : ''}.`
                         : 'No ground contact was read from the side view.'

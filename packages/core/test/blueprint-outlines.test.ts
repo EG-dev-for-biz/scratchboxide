@@ -33,6 +33,9 @@ import { createBlueprintOutlineHandlers, BLUEPRINT_OUTLINE_TOOL_DECLARATIONS } f
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
 import type { TriangleSoup } from '../src/node/3d-engine/part-connectivity';
 import type { ToolContext } from '../src/node/gemini/tools/types';
+import { boxToMeters, findOpenings, parseRegions } from '../src/node/3d-engine/blueprint-openings';
+import { ObjectSegmenterService } from '../src/node/video/ObjectSegmenterService';
+import { resolveRepoPython } from '../src/node/process/repo-python';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-blueprint-'));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -208,7 +211,7 @@ describe('object_blueprint_outlines', () => {
     it('is declared with its two modes', () => {
         const d = BLUEPRINT_OUTLINE_TOOL_DECLARATIONS[0];
         expect(d.name).toBe('object_blueprint_outlines');
-        expect(Object.keys((d.parameters as any).properties)).toEqual(['subject', 'sizeMeters', 'blueprintPath', 'compareGlbPath', 'model']);
+        expect(Object.keys((d.parameters as any).properties)).toEqual(['subject', 'sizeMeters', 'blueprintPath', 'compareGlbPath', 'model', 'openings']);
     });
 
     let blueprintPath = '';
@@ -250,3 +253,70 @@ describe('object_blueprint_outlines', () => {
 });
 
 export type { ObjectOutlines };
+
+describe('openings read from the drawings', () => {
+    const front = viewOf(carBoxes(), 'front', (rgba, w, h) => {
+        // a dark intake 0.8 m wide and 0.2 m tall, centred, 0.35-0.55 m up the front
+        for (let py = Math.round(h - MARGIN - 0.55 * PX); py < Math.round(h - MARGIN - 0.35 * PX); py++) {
+            for (let px = Math.round(MARGIN + 0.5 * PX); px < Math.round(MARGIN + 1.3 * PX); px++) { const i = (py * w + px) * 4; rgba[i] = 20; rgba[i + 1] = 20; rgba[i + 2] = 22; }
+        }
+    });
+    const side = viewOf(carBoxes(), 'side');
+    const sFront = silhouetteOf(front), sSide = silhouetteOf(side);
+
+    it('parses only well-formed regions', () => {
+        const regions = parseRegions('noise {"regions": [{"view": "front", "label": "intake", "box": [0.2, 0.5, 0.8, 0.6]}, {"view": "top", "label": "x", "box": [0, 0, 1, 1]}, {"view": "side", "label": "y", "box": [0.5, 0.5, 0.4, 0.6]}]} tail');
+        expect(regions).toEqual([{ view: 'front', label: 'intake', box: [0.2, 0.5, 0.8, 0.6] }]);
+        expect(parseRegions('not json')).toEqual([]);
+    });
+
+    it('maps a box to metres: x mirrored in the front view (the object\'s right is the viewer\'s left), z forward in the side view', () => {
+        const nx = (m: number) => (MARGIN + (m + 0.9) * PX) / front.width, ny = (m: number) => (front.height - MARGIN - m * PX) / front.height;
+        // a box over the viewer's left half of the intake: the object's right, +X
+        const m = boxToMeters('front', [nx(-0.4), ny(0.55), nx(0), ny(0.35)], sFront, SIZE);
+        expect(m.across[0]).toBeCloseTo(0, 2);
+        expect(m.across[1]).toBeCloseTo(0.4, 2);
+        expect(m.height[0]).toBeCloseTo(0.35, 2);
+        expect(m.height[1]).toBeCloseTo(0.55, 2);
+        const zx = (z: number) => (MARGIN + (z + 2) * PX) / side.width, zy = (y: number) => (side.height - MARGIN - y * PX) / side.height;
+        const s = boxToMeters('side', [zx(0.6), zy(1.4), zx(1.0), zy(1.1)], sSide, SIZE);
+        expect(s.across).toEqual([0.6, 1]);
+        expect(s.height[0]).toBeCloseTo(1.1, 2);
+    });
+
+    it('boxes regions with the vision model, traces them, and keeps an untraced box with its reason', async () => {
+        const client = { models: { generateContent: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify({ regions: [
+            { view: 'front', label: 'lower intake', box: [0.1, 0.4, 0.9, 0.7] },
+            { view: 'side', label: 'side glass', box: [0.4, 0.1, 0.6, 0.3] }
+        ] }) }] } }], modelVersion: 'stand-in' }) } } as any;
+        const views = { front: { image: { data: Buffer.alloc(0), mimeType: 'image/png' }, path: '/front.png', silhouette: sFront }, side: { image: { data: Buffer.alloc(0), mimeType: 'image/png' }, path: '/side.png', silhouette: sSide } };
+        const found = await findOpenings(client, 'a test car', views, SIZE, {
+            // the stand-in segmenter traces the front view's dark rectangle exactly and cannot trace the side view
+            segment: async (imagePath) => {
+                if (imagePath === '/side.png') throw new Error('empty mask');
+                return [(MARGIN + 0.5 * PX) / front.width, (front.height - MARGIN - 0.55 * PX) / front.height, (MARGIN + 1.3 * PX) / front.width, (front.height - MARGIN - 0.35 * PX) / front.height];
+            }
+        });
+        expect(found.model).toBe('stand-in');
+        const [intake, glass] = found.openings;
+        expect(intake).toMatchObject({ view: 'front', label: 'lower intake', traced: true, provenance: 'generated' });
+        expect(intake.across[0]).toBeCloseTo(-0.4, 2);
+        expect(intake.across[1]).toBeCloseTo(0.4, 2);
+        expect(intake.height[0]).toBeCloseTo(0.35, 2);
+        expect(glass).toMatchObject({ view: 'side', traced: false, note: expect.stringMatching(/not traced \(empty mask\)/) });
+    });
+
+    let python: string | undefined;
+    try { python = resolveRepoPython({ modules: ['numpy', 'cv2', 'mediapipe'] }); } catch { python = undefined; }
+    it.skipIf(!python)('traces a drawn intake with the real object segmenter (the project\'s Python: numpy, cv2, mediapipe)', async () => {
+        const file = path.join(TMP, 'front_intake.png');
+        fs.writeFileSync(file, HeadlessMeshSilhouetteRenderer.encodePng(front.width, front.height, front.rgba));
+        const box: [number, number, number, number] = [(MARGIN + 0.4 * PX) / front.width, (front.height - MARGIN - 0.6 * PX) / front.height, (MARGIN + 1.4 * PX) / front.width, (front.height - MARGIN - 0.3 * PX) / front.height];
+        const out = await new ObjectSegmenterService().segment({ imagePath: file, outputDir: path.join(TMP, 'seg'), box, refine: true });
+        const traced = boxToMeters('front', out.frames[0].bbox, sFront, SIZE);
+        expect(Math.abs(traced.across[0] + 0.4)).toBeLessThan(0.05);
+        expect(Math.abs(traced.across[1] - 0.4)).toBeLessThan(0.05);
+        expect(Math.abs(traced.height[0] - 0.35)).toBeLessThan(0.05);
+        expect(Math.abs(traced.height[1] - 0.55)).toBeLessThan(0.05);
+    }, 180_000);
+});

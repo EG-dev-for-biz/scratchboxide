@@ -57,7 +57,11 @@ load object_blueprint_outlines with load_tools and call it with subject (the sam
 request) and sizeMeters [width with mirrors, height, length] (the build's dimensionsHintMeters). It draws the three
 orthographic views (three billed image calls), scales them to that size and returns the outlines in the build frame:
 the side top and bottom line and the plan half width every few centimetres along the car, the front half width up
-its height, and where the side outline touches the ground (the tyres). Keep its blueprintPath for the check.
+its height, and where the side outline touches the ground (the tyres). Keep its blueprintPath for the check. Pass openings: true: it also reads the areas set into the body from the front
+and side drawings (grille, intakes, vents, outlets, the side windows), each traced by the object segmenter, as extents
+in metres (front view: x and y; side view: z and y). Those are where the cuts and the window slices go (section 4):
+an opening in the front view is a cut at that x and y, from the nose back as deep as the part is; the side windows' z
+spans set the pillars between them.
 
 Judge the drawing before using it:
 - **Ground contacts:** the two contact centres should be one wheelbase apart (within 3 %) at about the axle positions
