@@ -54,6 +54,17 @@ int main(int argc, char** argv) {
                 }
                 return base;
             };
+            retex.sampleEmissionLevel0 = [&scene](uint32_t material, const F2& uv) {
+                if (material >= scene.materials.size()) return F3(0, 0, 0);
+                const auto& m = scene.materials[material];
+                F3 e(m.emissiveFactor.x, m.emissiveFactor.y, m.emissiveFactor.z);
+                if (e.x <= 0.0f && e.y <= 0.0f && e.z <= 0.0f) return F3(0, 0, 0);
+                if (m.emissiveImage >= 0 && m.emissiveImage < static_cast<int>(scene.images.size()) && scene.images[static_cast<size_t>(m.emissiveImage)].decoded) {
+                    const F3 t = retex::sampleImageLinear(scene.images[static_cast<size_t>(m.emissiveImage)].pixels, uv, m.emissiveWrapS, m.emissiveWrapT);
+                    e = F3(e.x * t.x, e.y * t.y, e.z * t.z);
+                }
+                return e;
+            };
             retex.bake = retex::bakeAtlas;
             for (const auto& m : scene.materials) retex.materialFactors.push_back({m.metallicFactor, m.roughnessFactor});
             retex.minTexelWorld = retex::sourceTexelWorld(mesh, scene);
