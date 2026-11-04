@@ -20,8 +20,9 @@
  * was measured under what stood there.
  *
  * **Texture**, on the chart raster: the scan's photo rendered straight along the chart's normal, a texel clear when the
- * first surface it sees lies on the model (so a canopy or an awning over the surface is no source), the region and a
- * guard band around it the target, every other region kept out of the sources. One ladder, each rung chosen by what the
+ * first surface it sees lies on the model (so a canopy or an awning over the surface is no source) and is the scan's own
+ * photo (another step's fill is never a source), the region and a guard band around it the target, every other region
+ * kept out of the sources. One ladder, each rung chosen by what the
  * surface itself measures, never by what it is called:
  *   1. real views: registered photos that see the surface clear (their occluder masks applied, a depth test against the
  *      scan), gain-matched to the ring: measured;
@@ -49,7 +50,7 @@ import { decodeImageInMemory, type TileTriangles } from './tile-texture-transfer
 import { encodePng } from './png-encode';
 import { fitChart, fitSurfaceModel, fromChart, toChart, INFILL_GEOMETRY_PARAMS, type InfillChart, type InfillGeometryParams, type SurfaceModel } from './surface-infill-geometry';
 import { distanceFrom, seamGate, SEAM_GATE, type SeamGateParams, type SeamGateResult } from './surface-infill-gates';
-import { correctToRim, directionalRule, latticeRule, readStructure, stochasticRule, synthesize, INFILL_SYNTHESIS_PARAMS, type InfillSynthesisParams, type MeasuredPeriod, type OffsetRule, type StructureReading } from './surface-infill-synthesis';
+import { correctToRim, directionalRule, latticeRule, onTheLine, readStructure, stochasticRule, synthesize, INFILL_SYNTHESIS_PARAMS, type InfillSynthesisParams, type MeasuredPeriod, type OffsetRule, type StructureReading } from './surface-infill-synthesis';
 import { invert, pushPull } from './vehicle-removal';
 
 export const SURFACE_INFILL_VERSION = 'surface-infill/1';
@@ -462,12 +463,12 @@ const RUNG_LABEL: Record<InfillRungName, InfillLabelName> = {
     'stochastic synthesis': 'generated', 'library material': 'generated', 'generative inpaint': 'generated', 'membrane fill': 'generated'
 };
 
-function admittedOf(reading: StructureReading, texelM: number, S: InfillSynthesisParams): ((dx: number, dy: number) => boolean) | undefined {
+function admittedOf(reading: StructureReading, S: InfillSynthesisParams): ((dx: number, dy: number) => boolean) | undefined {
     const periods = [reading.along, reading.across].filter((p): p is MeasuredPeriod => !!p);
-    const rules: OffsetRule[] = [];
-    if (reading.coherence >= S.coherenceMin) rules.push(directionalRule(reading, texelM, S));
-    if (periods.length) rules.push(latticeRule(periods, S));
-    return rules.length ? (dx, dy) => rules.some(r => r.admits(dx, dy)) : undefined;
+    const rules: Array<(dx: number, dy: number) => boolean> = [];
+    if (reading.coherence >= S.coherenceMin) rules.push(onTheLine(reading));
+    if (periods.length) { const l = latticeRule(periods, S); rules.push((dx, dy) => l.admits(dx, dy)); }
+    return rules.length ? (dx, dy) => rules.some(r => r(dx, dy)) : undefined;
 }
 
 async function infillOne(spec: InfillRegionSpec, scan: TileTriangles, grid: TriangleGrid, others: Float32Array[], input: InfillInput, P: SurfaceInfillParams, G: SeamGateParams, S: InfillSynthesisParams, Gm: InfillGeometryParams): Promise<RegionInfill> {
@@ -510,7 +511,8 @@ async function infillOne(spec: InfillRegionSpec, scan: TileTriangles, grid: Tria
         if (tr < 0) continue;
         triangleColour(scan, tr, bary[p * 3], bary[p * 3 + 1], bary[p * 3 + 2], c3);
         rgb[p * 3] = linearToSrgb255(c3[0]); rgb[p * 3 + 1] = linearToSrgb255(c3[1]); rgb[p * 3 + 2] = linearToSrgb255(c3[2]);
-        if (target[p] || dExcl[p] <= guardPx) continue;
+        // what another step filled (the tree strip's caps and skirts) is never a source: a fill is not built on a fill
+        if (target[p] || dExcl[p] <= guardPx || scan.fill?.[tr]) continue;
         const nn = scan.normals, facing = Math.abs(nn[tr * 3] * chart.n[0] + nn[tr * 3 + 1] * chart.n[1] + nn[tr * 3 + 2] * chart.n[2]);
         const i = p % W, k = (p - i) / W;
         if (facing >= P.facingMin && Math.abs(hitW[p] - model.heightAt((i + 0.5) * chart.texelM, (k + 0.5) * chart.texelM)) <= P.sourceTolM) { source[p] = 1; ref[p] = 1; sources++; }
@@ -521,7 +523,7 @@ async function infillOne(spec: InfillRegionSpec, scan: TileTriangles, grid: Tria
     const open = Uint8Array.from(target);
     const work: Work = { W, H, texelM: chart.texelM, rgb, source, ref, open, label, rung };
     const structure = readStructure(rgb, source, target, W, H, chart.texelM, S);
-    const admitted = admittedOf(structure, chart.texelM, S);
+    const admitted = admittedOf(structure, S);
     const along = structure.coherence >= S.coherenceMin ? structure.dir : undefined;
     const tStructure = Date.now();
     const attempts: RungAttempt[] = [];
@@ -532,7 +534,10 @@ async function infillOne(spec: InfillRegionSpec, scan: TileTriangles, grid: Tria
         const ts = Date.now();
         if (!count) { attempts.push({ rung: name, label: RUNG_LABEL[name], texels: 0, accepted: false, reason: what || 'nothing it could fill', ms: 0 }); return false; }
         correctToRim(rgb, W, H, fill, ref, S);
-        const gate = seamGate({ width: W, height: H, texelM: chart.texelM, rgb, fill, ref, admitted: rule ? (dx, dy) => rule.admits(dx, dy) || !!admitted?.(dx, dy) : admitted, ...(along ? { along } : {}) }, G);
+        // the texture is judged on the region as it will look: this attempt with the fills accepted before it
+        const texture = new Uint8Array(N);
+        for (let p = 0; p < N; p++) if (fill[p] || (target[p] && !open[p])) texture[p] = 1;
+        const gate = seamGate({ width: W, height: H, texelM: chart.texelM, rgb, fill, texture, ref, admitted: rule ? (dx, dy) => rule.admits(dx, dy) || !!admitted?.(dx, dy) : admitted, ...(along ? { along } : {}) }, G);
         const attempt: RungAttempt = { rung: name, label: RUNG_LABEL[name], texels: count, accepted: gate.pass, reason: gate.pass ? what : `rejected by the seam gate: ${gate.failures.join('; ')}`, gate, ms: Date.now() - ts };
         attempts.push(attempt);
         if (gate.pass) {
@@ -745,7 +750,7 @@ export function measureFill(scan: TileTriangles, r: RegionInfill, gate: Partial<
         triangleColour(scan, hitT[p], bary[p * 3], bary[p * 3 + 1], bary[p * 3 + 2], c3);
         rgb[p * 3] = linearToSrgb255(c3[0]); rgb[p * 3 + 1] = linearToSrgb255(c3[1]); rgb[p * 3 + 2] = linearToSrgb255(c3[2]);
     }
-    const result = seamGate({ width: c.width, height: c.height, texelM: c.texelM, rgb, fill: r.target, ref: r.source, admitted: admittedOf(r.structure, c.texelM, INFILL_SYNTHESIS_PARAMS), ...(r.structure.coherence >= INFILL_SYNTHESIS_PARAMS.coherenceMin ? { along: r.structure.dir } : {}) }, { ...SEAM_GATE, ...gate });
+    const result = seamGate({ width: c.width, height: c.height, texelM: c.texelM, rgb, fill: r.target, ref: r.source, admitted: admittedOf(r.structure, INFILL_SYNTHESIS_PARAMS), ...(r.structure.coherence >= INFILL_SYNTHESIS_PARAMS.coherenceMin ? { along: r.structure.dir } : {}) }, { ...SEAM_GATE, ...gate });
     return { gate: result, rgb: Uint8Array.from(rgb, v => Math.round(v)) };
 }
 

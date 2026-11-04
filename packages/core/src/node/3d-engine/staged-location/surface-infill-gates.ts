@@ -84,6 +84,11 @@ export interface SeamGateInput {
     rgb: Float32Array;
     /** 1: this attempt's texels. */
     fill: Uint8Array;
+    /**
+     * 1: the texels whose texture is judged (gradient, detail, orientation, repeat): the region as it will look, this
+     * attempt with the fills already accepted around it. Defaults to `fill`; a scattered leftover is judged as part of it.
+     */
+    texture?: Uint8Array;
     /** 1: the real (or already accepted) texels the fill must meet. */
     ref: Uint8Array;
     /** Shifts (texels) the real texture itself repeats at (its measured line, its measured lattice): not counted as a repeat. */
@@ -299,6 +304,7 @@ export function autocorrelationPeak(hp: Float32Array, mask: Uint8Array, W: numbe
 /** The seam gate (see the file comment). */
 export function seamGate(input: SeamGateInput, P: SeamGateParams = SEAM_GATE): SeamGateResult {
     const { width: W, height: H, rgb, fill, ref } = input;
+    const tex = input.texture ?? fill;
     const bandPx = Math.max(3, Math.round(P.bandM / input.texelM));
     const dFill = distanceFrom(fill, W, H, Math.max(bandPx, P.naturalAtPx + P.rimHalf + 2));
     const failures: string[] = [];
@@ -306,10 +312,8 @@ export function seamGate(input: SeamGateInput, P: SeamGateParams = SEAM_GATE): S
     const fail = (msg: string, rel: number) => { failures.push(msg); excess += Math.max(0.05, rel); };
     // ---- rim
     const rimStarts: number[] = [];
-    let fillCount = 0;
     for (let p = 0; p < W * H; p++) {
         if (!fill[p]) continue;
-        fillCount++;
         const i = p % W;
         if ((i > 0 && ref[p - 1]) || (i < W - 1 && ref[p + 1]) || (p >= W && ref[p - W]) || (p < W * (H - 1) && ref[p + W])) rimStarts.push(p);
     }
@@ -329,15 +333,16 @@ export function seamGate(input: SeamGateInput, P: SeamGateParams = SEAM_GATE): S
     // ---- texture: the fill against the ring band
     const L = new Float32Array(W * H);
     for (let p = 0; p < W * H; p++) L[p] = luma(rgb, p);
-    const inBand = (q: number) => ref[q] === 1 && !fill[q] && dFill[q] <= bandPx;
-    const fs = textureStats(L, W, H, q => fill[q] === 1);
+    const dTex = tex === fill ? dFill : distanceFrom(tex, W, H, bandPx);
+    const inBand = (q: number) => ref[q] === 1 && !tex[q] && dTex[q] <= bandPx;
+    const fs = textureStats(L, W, H, q => tex[q] === 1);
     const rs = textureStats(L, W, H, inBand);
     let gradientRatio: number | null = null, hfRatio: number | null = null, orientation: SeamGateMetrics['orientation'] = null, stretch: number | null = null;
     if (fs.n >= P.textureMinTexels && rs.n >= P.textureMinTexels && rs.gradient > 0.5) {
         gradientRatio = fs.gradient / rs.gradient;
         hfRatio = rs.hf > 0.05 ? fs.hf / rs.hf : null;
         // a surface with a direction: strip by strip across it (the fill against its own strips along the line)
-        const st = input.along ? stratifiedRatios(L, W, H, q => fill[q] === 1, inBand, input.along, Math.max(3, Math.round(P.stripM / input.texelM))) : null;
+        const st = input.along ? stratifiedRatios(L, W, H, q => tex[q] === 1, inBand, input.along, Math.max(3, Math.round(P.stripM / input.texelM))) : null;
         if (st) { gradientRatio = st.gradient; hfRatio = st.hf === st.hf ? st.hf : hfRatio; }
         if (gradientRatio < P.gradientLo) fail(`the fill is flatter than the surface: gradient energy ${gradientRatio.toFixed(2)} of the ring's (< ${P.gradientLo})`, P.gradientLo / Math.max(gradientRatio, 1e-3) - 1);
         if (gradientRatio > P.gradientHi) fail(`the fill is busier than the surface: gradient energy ${gradientRatio.toFixed(2)} of the ring's (> ${P.gradientHi})`, gradientRatio / P.gradientHi - 1);
@@ -354,13 +359,13 @@ export function seamGate(input: SeamGateInput, P: SeamGateParams = SEAM_GATE): S
     }
     // ---- repeat
     let repeat: SeamGateMetrics['repeat'] = null;
-    let span = { x0: W, x1: -1, y0: H, y1: -1 };
-    for (let p = 0; p < W * H; p++) if (fill[p]) { const i = p % W, k = (p - i) / W; span = { x0: Math.min(span.x0, i), x1: Math.max(span.x1, i), y0: Math.min(span.y0, k), y1: Math.max(span.y1, k) }; }
-    if (fillCount >= P.repeatMinTexels && span.x1 - span.x0 + 1 >= P.repeatMinSpanPx && span.y1 - span.y0 + 1 >= P.repeatMinSpanPx) {
+    let span = { x0: W, x1: -1, y0: H, y1: -1 }, texCount = 0;
+    for (let p = 0; p < W * H; p++) if (tex[p]) { texCount++; const i = p % W, k = (p - i) / W; span = { x0: Math.min(span.x0, i), x1: Math.max(span.x1, i), y0: Math.min(span.y0, k), y1: Math.max(span.y1, k) }; }
+    if (texCount >= P.repeatMinTexels && span.x1 - span.x0 + 1 >= P.repeatMinSpanPx && span.y1 - span.y0 + 1 >= P.repeatMinSpanPx) {
         const hp = new Float32Array(W * H);
         const box = (mask: (q: number) => boolean, p: number) => { const i = p % W, k = (p - i) / W; let s = 0, n = 0; for (let kk = Math.max(0, k - 2); kk <= Math.min(H - 1, k + 2); kk++) for (let ii = Math.max(0, i - 2); ii <= Math.min(W - 1, i + 2); ii++) { const q = kk * W + ii; if (mask(q)) { s += L[q]; n++; } } return n ? s / n : L[p]; };
         const fillMask = new Uint8Array(W * H), bandMask = new Uint8Array(W * H);
-        for (let p = 0; p < W * H; p++) { if (fill[p]) { fillMask[p] = 1; hp[p] = L[p] - box(q => fill[q] === 1, p); } else if (inBand(p)) { bandMask[p] = 1; hp[p] = L[p] - box(inBand, p); } }
+        for (let p = 0; p < W * H; p++) { if (tex[p]) { fillMask[p] = 1; hp[p] = L[p] - box(q => tex[q] === 1, p); } else if (inBand(p)) { bandMask[p] = 1; hp[p] = L[p] - box(inBand, p); } }
         const minShift = Math.max(P.repeatMinShiftPx, P.repeatMinShiftM / input.texelM);
         const fa = autocorrelationPeak(hp, fillMask, W, H, minShift, input.admitted);
         const ra = autocorrelationPeak(hp, bandMask, W, H, minShift, input.admitted);

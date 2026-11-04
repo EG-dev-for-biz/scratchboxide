@@ -53,6 +53,11 @@ export const INFILL_SYNTHESIS_PARAMS = {
     missingCost: 2500,
     /** Each further use of a source texel costs this (squared sRGB units): keeps copies from repeating. */
     reuseCost: 60,
+    /**
+     * A fresh candidate (not continuing a neighbour's copy) costs this many times its match plus freshCost (squared sRGB
+     * units): copies stay whole unless a fresh source matches clearly better, so a soft photo is not cut into texel noise.
+     */
+    freshFactor: 1.5, freshCost: 40,
     /** Periodic lattice multiples tried (each way). */
     latticeReach: 6,
     /** The join: rim mismatch capped at this a channel. */
@@ -248,10 +253,14 @@ export interface OffsetRule {
     admits(dx: number, dy: number): boolean;
 }
 
-/** The neighbourhood match's sparse 7 x 7 stencil (25 samples, a checkerboard), as dx, dy pairs. */
+/**
+ * The neighbourhood match's stencil, as dx, dy pairs: the dense 5 x 5 (so a seam between two copies, even a texel wide,
+ * costs) and eight points at 3 texels on the axes and diagonals (the reach of a 7 x 7).
+ */
 const STENCIL: Int8Array = (() => {
     const out: number[] = [];
-    for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) if (((dx + dy) & 1) === 0) out.push(dx, dy);
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) out.push(dx, dy);
+    for (const [dx, dy] of [[3, 0], [-3, 0], [0, 3], [0, -3], [3, 3], [-3, 3], [3, -3], [-3, -3]]) out.push(dx, dy);
     return Int8Array.from(out);
 })();
 
@@ -276,10 +285,16 @@ export function directionalRule(reading: StructureReading, texelM: number, P: In
             if (ac) c -= Math.round(c / ac.pitchPx) * ac.pitchPx;
             if (Math.abs(c) > 1.5) return false;
             const along = dx * ax + dy * ay;
-            if (al) { const f = along / al.pitchPx; return Math.abs(f - Math.round(f)) * al.pitchPx <= 1.5 && Math.round(f) !== 0; }
+            if (al) { const f = along / al.pitchPx; return Math.abs(f - Math.round(f)) * al.pitchPx <= Math.max(1.5, 0.03 * Math.abs(along)) && Math.round(f) !== 0; }
             return Math.abs(along) >= P.minOffsetPx - 1;
         }
     };
+}
+
+/** Shifts along the measured line (any length; within 2 texels or 6 % of the shift across it): what a surface with a direction repeats at by itself. */
+export function onTheLine(reading: StructureReading): (dx: number, dy: number) => boolean {
+    const [ax, ay] = reading.dir, px = -ay, py = ax;
+    return (dx, dy) => Math.abs(dx * px + dy * py) <= Math.max(2, 0.06 * Math.hypot(dx, dy));
 }
 
 /** Whole multiples of the measured periods (one or two axes). */
@@ -403,12 +418,13 @@ export function synthesize(rgb: Float32Array, W: number, H: number, source: Uint
         const ti = t % W, tk = (t - ti) / W;
         let nTried = 0;
         let best = -1, bestC = Infinity;
-        const tryOff = (dx: number, dy: number) => {
+        const tryOff = (dx: number, dy: number, fresh = false) => {
             const s = candidateOk(t, dx, dy);
             if (s < 0) return;
             for (let j = 0; j < nTried; j++) if (tried[j] === s) return;
             if (nTried < tried.length) tried[nTried++] = s;
-            const c = cost(t, s, refine);
+            let c = cost(t, s, refine);
+            if (fresh) c = c * P.freshFactor + P.freshCost;
             if (c < bestC) { bestC = c; best = s; }
         };
         // coherence: the offsets of filled neighbours (a copied patch stays whole)
@@ -422,8 +438,8 @@ export function synthesize(rgb: Float32Array, W: number, H: number, source: Uint
             tryOff(fi - ni, fk - nk);
         }
         if (refine && from[t] >= 0) { const f = from[t], fi = f % W; tryOff(fi - ti, (f - fi) / W - tk); }
-        for (const [dx, dy] of extra?.(t) ?? []) tryOff(dx, dy);
-        for (let k = 0; k < fresh; k++) { const o = rule.sample(r, t); if (o && rule.admits(o[0], o[1])) tryOff(o[0], o[1]); }
+        for (const [dx, dy] of extra?.(t) ?? []) tryOff(dx, dy, true);
+        for (let k = 0; k < fresh; k++) { const o = rule.sample(r, t); if (o && rule.admits(o[0], o[1])) tryOff(o[0], o[1], true); }
         return best;
     };
     const put = (t: number, s: number) => {
