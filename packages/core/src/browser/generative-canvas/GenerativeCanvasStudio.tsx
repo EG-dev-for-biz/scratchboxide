@@ -574,9 +574,9 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     }, [isConversationMenuOpen]);
 
     // Local Storage Debounced Auto-Persistence for Sessions, Artifacts & History
-    const { persistSessionsImmediately } = usePersistedChatState(chatState, setSessions, mergeSessionsFromDisk, appearanceConfig, activeWorkspace.path, chatOpenCountRef);
+    const { persistSessionsImmediately, readRoot: chatsReadRoot } = usePersistedChatState(chatState, setSessions, mergeSessionsFromDisk, appearanceConfig, activeWorkspace.path, chatOpenCountRef);
 
-    const { handleUpdateArtifact } = useArtifactSync({ activeArtifact, activeWorkspace, artifactHistory, chatOpenCountRef, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions });
+    const { handleUpdateArtifact } = useArtifactSync({ activeArtifact, activeWorkspace, artifactHistory, chatOpenCountRef, chatsReadRoot, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions });
 
 
     const { handleMorphArtifact, handleOpenInAppBrowser, handlePreviewCodeInCanvas, applyStreamedArtifact } = useCanvasOpeners({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, layoutMode, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setLayoutMode, setMessages, setSessions, showToast, stageLayoutMode });

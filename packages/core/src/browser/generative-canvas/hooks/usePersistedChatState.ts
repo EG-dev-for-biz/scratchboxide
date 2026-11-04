@@ -189,7 +189,7 @@ export function usePersistedChatState(
     workspaceRoot?: string,
     /** Bumped each time a saved chat is opened (GenerativeCanvasStudio): the chat as opened is what disk already holds. */
     chatOpenCountRef?: React.MutableRefObject<number>
-): { persistSessionsImmediately: (updatedSessions: ChatSession[]) => void } {
+): { persistSessionsImmediately: (updatedSessions: ChatSession[]) => void; readRoot?: string } {
     const { sessions, currentSessionId, messages, activeArtifact, artifactHistory, layoutMode, artifactVersions } = chatState;
 
     // Disk is the durable copy (<workspace>/.scratchbox/sessions); localStorage only gives an instant first paint, and
@@ -305,5 +305,5 @@ export function usePersistedChatState(
         }
     }, [currentSessionId]);
 
-    return { persistSessionsImmediately };
+    return { persistSessionsImmediately, readRoot };
 }

@@ -154,6 +154,8 @@ export interface UseArtifactSyncDeps {
     artifactHistory: ChatState['artifactHistory'];
     /** Bumped each time a saved chat is opened (GenerativeCanvasStudio). */
     chatOpenCountRef: React.MutableRefObject<number>;
+    /** The workspace whose chats were last read from disk (usePersistedChatState); the read can bring in disk's copy of the open chat. */
+    chatsReadRoot?: string;
     currentSessionId: ChatState['currentSessionId'];
     graphControllerRef: WorkspaceGraphCoordinator['graphControllerRef'];
     isGenerating: boolean;
@@ -170,7 +172,7 @@ export interface UseArtifactSyncDeps {
 }
 
 export function useArtifactSync(deps: UseArtifactSyncDeps) {
-    const { activeArtifact, activeWorkspace, artifactHistory, chatOpenCountRef, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions } = deps;
+    const { activeArtifact, activeWorkspace, artifactHistory, chatOpenCountRef, chatsReadRoot, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions } = deps;
 
     /**
      * An artifact edited on its surface: saved, versioned and written through its lens. It becomes the main view, first in
@@ -295,16 +297,18 @@ export function useArtifactSync(deps: UseArtifactSyncDeps) {
 
     // A chat opened to look at it is not checked again (each check is a paid vision call): the versions it holds when
     // opened count as checked, so only versions made or edited while it is open are audited, and the viewport rebuilds
-    // none of their lost files on its own (chat-activity.ts). Runs before the audit below.
-    const openedRef = React.useRef<{ id?: string; opens: number }>({ opens: -1 });
+    // none of their lost files on its own (chat-activity.ts). Reading disk is opening it too: the read can put disk's
+    // copy of the open chat in place of the browser's (chatStore 'sessions/fromDisk'). Runs before the audit below.
+    const openedRef = React.useRef<{ id?: string; opens: number; read?: string }>({ opens: -1 });
     React.useEffect(() => {
         const opens = chatOpenCountRef.current;
-        if (openedRef.current.id === currentSessionId && openedRef.current.opens === opens) return;
-        openedRef.current = { id: currentSessionId, opens };
-        const opened = chatArtifactVersionKeys(messages, activeArtifact, artifactHistory);
-        noteOpenedChatArtifacts(opened);
-        for (const key of opened) verifiedArtifactKeysRef.current.add(key);
-    }, [currentSessionId, messages, activeArtifact, artifactHistory, chatOpenCountRef]);
+        const opened = openedRef.current;
+        if (opened.id === currentSessionId && opened.opens === opens && opened.read === chatsReadRoot) return;
+        openedRef.current = { id: currentSessionId, opens, read: chatsReadRoot };
+        const keys = chatArtifactVersionKeys(messages, activeArtifact, artifactHistory);
+        noteOpenedChatArtifacts(keys);
+        for (const key of keys) verifiedArtifactKeysRef.current.add(key);
+    }, [currentSessionId, messages, activeArtifact, artifactHistory, chatOpenCountRef, chatsReadRoot]);
 
     // Automated Background Visual Verification & Self-Correction Loop
     React.useEffect(() => {
