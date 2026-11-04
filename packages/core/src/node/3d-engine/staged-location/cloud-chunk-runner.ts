@@ -225,6 +225,8 @@ export interface CloudChunkConfig {
     vcpu: number;
     memGiB: number;
     pollMs: number;
+    /** Polls of the execution's state that may fail in a row (the API out of reach a moment) before the chunk is failed. */
+    pollMisses: number;
 }
 
 /** The runner's settings: SCRATCHBOX_KD_CLOUD_{PROJECT,REGION,JOB,BUCKET}, defaults scoutscan / us-central1 / kd-chunk-job / scoutscan-kd-jobs. */
@@ -237,7 +239,8 @@ export function cloudChunkConfig(env: NodeJS.ProcessEnv = process.env): CloudChu
         bucket: v('SCRATCHBOX_KD_JOB_BUCKET', 'scoutscan-kd-jobs'),
         vcpu: 8,
         memGiB: 32,
-        pollMs: 10_000
+        pollMs: 10_000,
+        pollMisses: 12
     };
 }
 
@@ -369,16 +372,28 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
                     for (const l of r.lines) progress(l);
                 } catch { /* the next poll reads it */ }
             };
+            const cancel = () => o.jobs.cancel(execution).catch(e => log(`[kd-cloud] cancelling ${execution} failed: ${e instanceof Error ? e.message : String(e)}`));
             try {
+                // a poll that fails is asked again (a moment's timeout must not fail a job that is still building); after
+                // pollMisses in a row the chunk fails, its execution cancelled so a retry does not run beside it
+                let misses = 0;
                 while (true) {
                     await sleep(config.pollMs, signal);
                     await readProgress();
-                    state = await o.jobs.get(execution);
+                    try {
+                        state = await o.jobs.get(execution);
+                        misses = 0;
+                    } catch (err) {
+                        if (signal?.aborted) throw err;
+                        if (++misses >= config.pollMisses) { await cancel(); throw err; }
+                        log(`[kd-cloud] chunk ${request.chunk!.index}: reading ${short} failed (${err instanceof Error ? err.message : String(err)}); asked again (${misses} of ${config.pollMisses})`);
+                        continue;
+                    }
                     if (state.done) break;
                 }
             } catch (err) {
                 if (signal?.aborted) {
-                    await o.jobs.cancel(execution).catch(e => log(`[kd-cloud] cancelling ${execution} failed: ${e instanceof Error ? e.message : String(e)}`));
+                    await cancel();
                     throw abortReason(signal);
                 }
                 throw err;
