@@ -57,7 +57,7 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
     const { grid } = scene();
     let field: GrassField;
     const all = (f: GrassField) => f.variants.flatMap(v => Array.from({ length: v.confidence.length }, (_, q) => ({
-        x: v.translation[q * 3], y: v.translation[q * 3 + 1], z: v.translation[q * 3 + 2], s: v.scale[q * 3], conf: v.confidence[q], tint: [v.tint[q * 3], v.tint[q * 3 + 1], v.tint[q * 3 + 2]]
+        x: v.translation[q * 3], y: v.translation[q * 3 + 1], z: v.translation[q * 3 + 2], s: v.scale[q * 3], reach: v.reachM, conf: v.confidence[q], tint: [v.tint[q * 3], v.tint[q * 3 + 1], v.tint[q * 3 + 2]]
     })));
 
     it('places instances in proportion to grass area times confidence', async () => {
@@ -77,15 +77,15 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
     });
 
     it('grows nothing off the mask, and no clump within its reach of a building or water', () => {
-        const inst = all(field), reach = field.report.reachM;
+        const inst = all(field);
         expect(field.report.stats.nearExcluded).toBeGreaterThan(0);
         expect(field.report.stats.snapped + field.report.stats.unsnapped).toBe(field.report.instances);
         expect(field.report.stats.snapped).toBe(inst.filter(p => inRect(p.x, p.z, FULL)).length);
         const dist = (x: number, z: number, [x0, z0, x1, z1]: Rect) => Math.hypot(Math.max(x0 - x, 0, x - x1), Math.max(z0 - z, 0, z - z1));
         for (const p of inst) {
             expect(inRect(p.x, p.z, FULL) || inRect(p.x, p.z, HALF)).toBe(true);
-            expect(dist(p.x, p.z, BUILDING)).toBeGreaterThan(reach * p.s);
-            expect(dist(p.x, p.z, POND)).toBeGreaterThan(reach * p.s);
+            expect(dist(p.x, p.z, BUILDING)).toBeGreaterThan(p.reach * p.s);
+            expect(dist(p.x, p.z, POND)).toBeGreaterThan(p.reach * p.s);
             // standing on the scan's ground where it has one near the cell surface, else on the cell surface; tinted
             // toward the seen colour (never the white fallback)
             expect(p.y).toBeCloseTo(inRect(p.x, p.z, FULL) ? 10.23 : 10.03, 3);
@@ -102,18 +102,20 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
         // about pi r^2 of half-confident lawn
         expect(Math.abs(inst.length - Math.PI * 100 * 2) / (Math.PI * 100 * 2)).toBeLessThan(0.12);
         const capped = await buildGrassField(grid, tmp(), { densityPerM2: 4, bandRadiusM: 200, centreX: 16, centreZ: -13, maxInstances: 300 });
+        const uncapped = await buildGrassField(grid, tmp(), { densityPerM2: 4, bandRadiusM: 200, centreX: 16, centreZ: -13 });
         expect(capped.report.instances).toBe(300);
-        expect(capped.report.stats.overBudget).toBe(field.report.instances - 300);
+        expect(capped.report.stats.overBudget).toBe(uncapped.report.instances - 300);
         const r = capped.report.stats.radiusReachedM;
         expect(all(capped).every(p => Math.hypot(p.x - 16, p.z + 13) <= r + 1e-4)).toBe(true);
         // the kept ones are exactly the full run's instances that near the centre
-        const nearer = all(field).filter(p => Math.hypot(p.x - 16, p.z + 13) < r - 1e-3).length;
+        const nearer = all(uncapped).filter(p => Math.hypot(p.x - 16, p.z + 13) < r - 1e-3).length;
         expect(nearer).toBeLessThanOrEqual(300);
     });
 
     it('builds real clump variants and writes an instanced GLB with its labels', () => {
-        expect(field.variants.length).toBe(4);
-        for (const v of field.variants) {
+        // band 200 m: blades of 5 mm need a 16x widening (capped) by its edge, so 5 rings of 4 variants
+        expect(field.variants.length).toBe(4 * 5);
+        for (const v of field.variants.filter(w => w.ring === 0)) {
             expect(v.positions.length / 3).toBeGreaterThan(22 * 15);
             expect(v.indices.length % 3).toBe(0);
             expect(Math.max(...v.indices)).toBeLessThan(v.positions.length / 3);
@@ -156,5 +158,38 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
         // its colour is the nearest seen grass's, carried across the ground between
         expect(Array.from(grid.colour.subarray((10 * n + 10) * 3, (10 * n + 10) * 3 + 3))).toEqual(Array.from(Float32Array.from([0.05, 0.1, 0.02])));
         expect(grid.colour[(2 * n + 4) * 3 + 1]).toBe(0);
+    });
+
+    it('widens and thins the blades ring by ring with distance from the centre, so they stay about a pixel wide', async () => {
+        const width = (v: GrassField['variants'][number]) => {
+            // the widest cross-section of a blade: left and right margin vertices of its first row
+            let w = 0;
+            for (let q = 0; q + 2 < 9; q += 3) w = Math.max(w, Math.hypot(v.positions[q * 3] - v.positions[(q + 2) * 3], v.positions[q * 3 + 2] - v.positions[(q + 2) * 3 + 2]));
+            return w;
+        };
+        const byRing = new Map<number, GrassField['variants']>();
+        for (const v of field.variants) byRing.set(v.ring, [...(byRing.get(v.ring) ?? []), v]);
+        expect([...byRing.keys()].sort()).toEqual([0, 1, 2, 3, 4]);
+        for (const [r, vs] of byRing) {
+            expect(vs[0].widthScale).toBe(2 ** r);
+            if (r > 0) {
+                expect(width(vs[0])).toBeGreaterThan(width(byRing.get(r - 1)![0]) * 1.5);
+                // fewer blades (22, 11, 6, then the floor of 3): fewer vertices per clump
+                if (r <= 3) expect(vs[0].positions.length).toBeLessThan(byRing.get(r - 1)![0].positions.length);
+                else expect(vs[0].positions.length).toBe(byRing.get(r - 1)![0].positions.length);
+            }
+        }
+        // each instance in the ring its distance asks for: the pixel at d metres spans d x 0.0015, a near blade 5 mm
+        for (const v of field.variants) for (let q = 0; q < v.confidence.length; q++) {
+            const d = Math.hypot(v.translation[q * 3], v.translation[q * 3 + 2]);
+            expect(v.ring).toBe(Math.min(4, Math.max(0, Math.floor(Math.log2(Math.max(1, (d * 0.0015) / 0.005))))));
+        }
+        // the ring count does not change how many clumps stand where
+        const flat = await buildGrassField(grid, tmp(), { densityPerM2: 4, bandRadiusM: 200, pixelAngle: 0 });
+        expect(flat.variants.length).toBe(4);
+        // (only the far rings' wider blades keep a little farther from buildings and water)
+        expect(flat.report.instances).toBeGreaterThanOrEqual(field.report.instances);
+        expect(flat.report.instances - field.report.instances).toBeLessThan(field.report.instances * 0.01);
+        expect(flat.report.instancedTriangles).toBeGreaterThan(field.report.instancedTriangles);
     });
 });

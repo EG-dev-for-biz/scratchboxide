@@ -11,7 +11,8 @@
  * Grass blades over the ground a grass mask (grass-detect.ts) marks as grass, as instanced meshes: the native grass field
  * (scratchbox_grass_field.hpp over GrassClumpGenerator) builds a few clump variants once and places one instance per
  * blue-noise sample on a grass cell, kept with the cell's confidence, inside a band around a centre (the near ground; the
- * far ground stays the tile photo). The GLB carries one node per variant with EXT_mesh_gpu_instancing (TRANSLATION,
+ * far ground stays the tile photo). Away from the centre the variants come in distance rings with wider, fewer blades, so a
+ * blade stays about a pixel wide where the viewer at the centre sees it. The GLB carries one node per variant with EXT_mesh_gpu_instancing (TRANSLATION,
  * ROTATION, SCALE, _COLOR_0 tinted toward the cell's lit photo colour, _CONFIDENCE the cell's mask confidence).
  *
  * Buildings win and water is never grass: cells inside vector building footprints or water areas are excluded, and no
@@ -46,10 +47,12 @@ export interface GrassFieldParams {
     bladeWidthBase?: number; bladeWidthMid?: number; keelDepth?: number; segmentsPerBlade?: number;
     gravityDroop?: number; radialSplay?: number; curlStochasticity?: number; centerHeightBias?: number;
     clumpNormalBlend?: number; senescence?: number;
+    /** Radians a pixel spans: blades are widened ring by ring so they stay about a pixel wide away from the centre (0: one ring). */
+    pixelAngle?: number; maxWidthScale?: number;
 }
 
 export interface GrassFieldReport {
-    variants: Array<{ vertices: number; indices: number; meshOffset: number; min: number[]; max: number[]; instances: number; instanceOffset: number }>;
+    variants: Array<{ vertices: number; indices: number; meshOffset: number; min: number[]; max: number[]; instances: number; instanceOffset: number; ring: number; widthScale: number; reachM: number }>;
     instances: number;
     instancedTriangles: number;
     reachM: number;
@@ -60,6 +63,10 @@ export interface GrassFieldVariant {
     positions: Float32Array; normals: Float32Array; colours: Float32Array; indices: Uint32Array;
     translation: Float32Array; rotation: Float32Array; scale: Float32Array; tint: Float32Array; confidence: Float32Array;
     min: number[]; max: number[];
+    /** The distance ring the variant is drawn in, and how much wider its blades are than the near ones. */
+    ring: number; widthScale: number;
+    /** The farthest its blades reach from the anchor in plan at scale 1 (m). */
+    reachM: number;
 }
 
 export interface GrassField { report: GrassFieldReport; variants: GrassFieldVariant[]; params: GrassFieldParams; ms: number }
@@ -201,7 +208,7 @@ export async function buildGrassField(grid: GrassFieldGrid, dir: string, params:
             translation.set(rec.subarray(r, r + 3), q * 3); rotation.set(rec.subarray(r + 3, r + 7), q * 4);
             scale.set(rec.subarray(r + 7, r + 10), q * 3); tint.set(rec.subarray(r + 10, r + 13), q * 3); confidence[q] = rec[r + 13];
         }
-        return { positions, normals, colours, indices, translation, rotation, scale, tint, confidence, min: v.min, max: v.max };
+        return { positions, normals, colours, indices, translation, rotation, scale, tint, confidence, min: v.min, max: v.max, ring: v.ring, widthScale: v.widthScale, reachM: v.reachM };
     });
     return { report, variants, params, ms: Date.now() - t0 };
 }
@@ -239,7 +246,7 @@ export function writeGrassFieldGlb(file: string, field: GrassField, extras: Reco
         let cmin = Infinity, cmax = -Infinity, csum = 0;
         for (const c of v.confidence) { cmin = Math.min(cmin, c); cmax = Math.max(cmax, c); csum += c; }
         nodes.push({ name: `grass clump ${k}`, mesh: meshes.length - 1, extensions: { EXT_mesh_gpu_instancing: { attributes } },
-            extras: { ...extras, instances: n, maskConfidence: { mean: csum / n, min: cmin, max: cmax } } });
+            extras: { ...extras, instances: n, ring: v.ring, bladeWidthScale: v.widthScale, maskConfidence: { mean: csum / n, min: cmin, max: cmax } } });
         triangles += n * v.indices.length / 3;
     });
     const gltf = {

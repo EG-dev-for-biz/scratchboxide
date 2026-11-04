@@ -47,7 +47,8 @@ export const GRASS_MAP_TOOL_DECLARATION: ToolDeclaration = {
             bladeDensityPerM2: { type: 'NUMBER', description: 'Clumps per square metre on fully confident grass (default 4).' },
             bladeHeightMinM: { type: 'NUMBER', description: 'Shortest blade length (default 0.06 m).' },
             bladeHeightMaxM: { type: 'NUMBER', description: 'Longest blade length (default 0.14 m). A mown lawn is a few centimetres; a meadow half a metre or more.' },
-            bladeSenescence: { type: 'NUMBER', description: '0..1, how far blade tips turn toward straw (default 0.35).' }
+            bladeSenescence: { type: 'NUMBER', description: '0..1, how far blade tips turn toward straw (default 0.35).' },
+            bladePixelAngle: { type: 'NUMBER', description: 'Radians one screen pixel spans (default 0.0015). Blades farther from the centre are built wider and fewer so they stay about a pixel wide; 0 keeps every blade at its near width.' }
         },
         required: ['query']
     }
@@ -142,7 +143,8 @@ export const grassMapHandler: ToolHandler = async (args, ctx): Promise<ToolHandl
             const params: GrassFieldParams = {
                 centreX: centre.x, centreZ: centre.z, bandRadiusM, densityPerM2: num(args.bladeDensityPerM2),
                 bladeHeightMin: num(args.bladeHeightMinM), bladeHeightMax: num(args.bladeHeightMaxM),
-                senescence: typeof args.bladeSenescence === 'number' ? Math.min(1, Math.max(0, args.bladeSenescence)) : undefined
+                senescence: typeof args.bladeSenescence === 'number' ? Math.min(1, Math.max(0, args.bladeSenescence)) : undefined,
+                pixelAngle: typeof args.bladePixelAngle === 'number' && args.bladePixelAngle >= 0 ? args.bladePixelAngle : undefined
             };
             if (params.bladeHeightMin !== undefined && params.bladeHeightMax === undefined) params.bladeHeightMax = Math.max(params.bladeHeightMin, 0.14);
             if (params.bladeHeightMax !== undefined && params.bladeHeightMin === undefined) params.bladeHeightMin = Math.min(params.bladeHeightMax, 0.06);
@@ -162,7 +164,8 @@ export const grassMapHandler: ToolHandler = async (args, ctx): Promise<ToolHandl
             let seenColour = false;
             for (let c = 0; c < g.mask.length && !seenColour; c++) seenColour = !!g.mask[c] && g.colour[c * 3 + 1] > 0;
             if (!seenColour) summary += ' No grass was seen from above here, so the blades keep their own neutral tone (no photo colour to tint them toward).';
-            summary += ` Grew ${field.report.instances.toLocaleString()} grass clumps (generated geometry, photo-inferred colour) over ${Math.round(s.bandGrassM2).toLocaleString()} m² of grass within ${bandRadiusM} m of ${centre.from}${s.overBudget ? `; ${s.overBudget.toLocaleString()} farther ones left out past the instance budget (blades reach ${s.radiusReachedM.toFixed(0)} m)` : ''}; ${s.nearExcluded.toLocaleString()} kept clear of buildings and water. Farther ground stays the tile photo.`;
+            const rings = new Set(field.variants.map(v => v.ring)).size;
+            summary += ` Grew ${field.report.instances.toLocaleString()} grass clumps (generated geometry, photo-inferred colour${rings > 1 ? `; blades widened in ${rings} distance rings so they stay visible farther out` : ''}) over ${Math.round(s.bandGrassM2).toLocaleString()} m² of grass within ${bandRadiusM} m of ${centre.from}${s.overBudget ? `; ${s.overBudget.toLocaleString()} farther ones left out past the instance budget (blades reach ${s.radiusReachedM.toFixed(0)} m)` : ''}; ${s.nearExcluded.toLocaleString()} kept clear of buildings and water. Farther ground stays the tile photo.`;
         }
     }
     const artifact = {
