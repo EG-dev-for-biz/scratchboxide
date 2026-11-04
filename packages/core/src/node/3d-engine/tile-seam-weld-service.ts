@@ -23,11 +23,12 @@
 import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { parseGlb, serializeGlb } from './glb-geometry-patcher';
 import { compileNativeCached, defaultNativeFlags, NativeBuildError, placeCachedBinary } from './native-build-cache';
 import { findTileRefineRepoRoot } from './tile-refine-service';
 
 /** The seam stage's version: names its cached outputs beside the extraction, so a change to any pass rebuilds them. */
-export const TILE_SEAMS_VERSION = 'tile-seams/2';
+export const TILE_SEAMS_VERSION = 'tile-seams/3';
 
 export type TileSeamWeldErrorCode = 'bad_request' | 'build_failed' | 'run_failed' | 'invalid_output';
 
@@ -155,6 +156,19 @@ export function parseTileSeamWeldReport(text: string): Omit<TileSeamWeldResult, 
     };
 }
 
+/**
+ * Copies the scan's document extras (its frame: localToEcef, anchor) onto a welded output, which the native writer
+ * leaves without them; members the output already has are kept. Without the frame, later stages (tile_vegetation, the
+ * site guides) cannot place the welded scan on the earth.
+ */
+function carryRootExtras(glbPath: string, extras: unknown): void {
+    if (!extras || typeof extras !== 'object') return;
+    const doc = parseGlb(fs.readFileSync(glbPath));
+    const own = doc.json.extras && typeof doc.json.extras === 'object' ? doc.json.extras : {};
+    doc.json.extras = { ...(extras as object), ...own };
+    fs.writeFileSync(glbPath, serializeGlb(doc));
+}
+
 /** Runs the seam weld on a scan. The outputs named in the request are written; the report is returned. */
 export async function runTileSeamWeld(req: TileSeamWeldRequest): Promise<TileSeamWeldResult> {
     if (!req.inputGlb || !fs.existsSync(req.inputGlb)) throw new TileSeamWeldError('bad_request', `inputGlb must be an existing file (${req.inputGlb})`);
@@ -182,6 +196,8 @@ export async function runTileSeamWeld(req: TileSeamWeldRequest): Promise<TileSea
         for (const out of [req.outputGlb, req.outputClayGlb]) {
             if (out && !(fs.existsSync(out) && fs.statSync(out).size > 12)) throw new TileSeamWeldError('invalid_output', `tile_seam_weld exited 0 but did not write ${out}`);
         }
+        const rootExtras = parseGlb(fs.readFileSync(req.inputGlb)).json.extras;
+        for (const out of [req.outputGlb, req.outputClayGlb]) if (out) carryRootExtras(out, rootExtras);
         return { ...report, binaryPath: bin };
     } finally {
         fs.rmSync(statsPath, { force: true });
