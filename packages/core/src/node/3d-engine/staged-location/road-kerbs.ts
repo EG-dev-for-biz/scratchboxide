@@ -33,7 +33,7 @@ import { stationsAlong } from './road-surfaces';
 import { writeStagedGlbFile } from './staged-glb-writer';
 import { assembleGlb, parseGlbBytes, readAccessor } from './glb-bytes';
 
-export const ROAD_KERBS_VERSION = 'road-kerbs/1';
+export const ROAD_KERBS_VERSION = 'road-kerbs/2';
 
 /**
  * SCRATCHBOX_STAGED_ROAD_KERBS=1 builds the streets with kerbs and gutters as geometry and carves the scan under them
