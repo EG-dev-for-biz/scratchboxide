@@ -48,7 +48,9 @@ export const INFILL_GEOMETRY_PARAMS = {
     /** Nearest ring points voting for a point's level (no straight breakline). */
     levelVoteK: 5,
     /** The local quadrics: Gaussian sigma at least this (m), growing to the distance of the k-th nearest ring point of the level. */
-    sigmaMinM: 1.0, sigmaK: 12,
+    sigmaMinM: 1.0, sigmaK: 12, surroundReach: 1.5,
+    /** Past deepFromM from the nearest ring point the fit blends into the ring's weighted mean, wholly by deepToM (m). */
+    deepFromM: 3, deepToM: 7,
     /** A grid node's quadric reads at most this many of its level's nearest ring points (a thin ring alone does not pin a curvature down). */
     fitPoints: 160,
     /** Past the ring a height may leave the ring's range by this slope times its distance from the nearest ring point. */
@@ -225,18 +227,21 @@ function smoothLevels(A: Float64Array, B: Float64Array, W: Float64Array, P: Infi
     }
     const pieces = (): number[][] => { const by = new Map<number, number[]>(); for (let i = 0; i < m; i++) { const r = find(i); let l = by.get(r); if (!l) by.set(r, l = []); l.push(i); } return [...by.values()].sort((x, y) => y.length - x.length); };
     // pieces that meet without a step are one level: the closest cross pairs' rise, less a smooth surface's, under the step
+    // a step is one side consistently higher: the signed rise of the closest cross pairs (q over p), less a smooth
+    // surface's over their distance; noise between two pieces of one surface scatters both ways and medians out near zero
     const meetsSmoothly = (p: number[], q: number[]) => {
         const pairs: Array<{ d: number; rise: number }> = [];
         for (const i of p) for (const j of q) {
             const d = Math.hypot(A[i] - A[j], B[i] - B[j]);
             if (pairs.length < P.stepPairs || d < pairs[pairs.length - 1].d) {
-                pairs.push({ d, rise: Math.abs(W[i] - W[j]) - P.smoothSlope * d });
+                pairs.push({ d, rise: W[j] - W[i] });
                 pairs.sort((x, y) => x.d - y.d);
                 if (pairs.length > P.stepPairs) pairs.pop();
             }
         }
-        const r = pairs.map(x => x.rise).sort((x, y) => x - y);
-        return r.length > 0 && r[r.length >> 1] < 0.7 * P.stepMinM;
+        if (!pairs.length) return false;
+        const r = pairs.map(x => x.rise).sort((x, y) => x - y), d = pairs.map(x => x.d).sort((x, y) => x - y);
+        return Math.abs(r[r.length >> 1]) - P.smoothSlope * d[d.length >> 1] < 0.7 * P.stepMinM;
     };
     let ps = pieces();
     for (let changed = true; changed && ps.length > 1;) {
@@ -352,8 +357,13 @@ export function fitSurfaceModel(ring: Float32Array, chart: InfillChart, P: Infil
         for (let gk = 0; gk < gh; gk++) for (let gi = 0; gi < gw; gi++) {
             const a = (gi - 0.5) * gc, b = (gk - 0.5) * gc;
             // the level's nearest points (enough for the quadric's reach); sigma from the k-th of them
-            const near = nearest(a, b, Math.min(g.length, P.fitPoints), inLevel);
-            const sigma = Math.max(P.sigmaMinM, Math.sqrt(near[Math.min(k, near.length) - 1]?.d2 ?? 0));
+            let near = nearest(a, b, Math.min(g.length, P.fitPoints), inLevel);
+            const d1 = Math.sqrt(near[0]?.d2 ?? 0), dk = Math.sqrt(near[Math.min(k, near.length) - 1]?.d2 ?? 0);
+            // deep inside a wide region the reach passes the nearest points read: the whole level is read instead
+            if (near.length < g.length && P.surroundReach * d1 > Math.sqrt(near[near.length - 1].d2) / 2) near = g.map(i => ({ i, d2: (A[i] - a) ** 2 + (B[i] - b) ** 2 }));
+            // the reach: at least the k-th nearest point, and surroundReach times the nearest, so deep inside a wide region
+            // the ring's far side weighs in too (no slope of the near side extrapolated across it)
+            const sigma = Math.max(P.sigmaMinM, dk, P.surroundReach * d1);
             const s2 = 2 * sigma * sigma;
             // the local quadric through the level's points within 3 sigma (all of them when few), in sigma-scaled
             // coordinates: a camber's curvature is kept inside the ring; the curvature terms are held to zero by a light
@@ -389,8 +399,13 @@ export function fitSurfaceModel(ring: Float32Array, chart: InfillChart, P: Infil
                     h = planeH + Math.max(-dev, Math.min(dev, sol[0] - planeH));
                 }
             }
+            // deep inside a wide region (deepFromM..deepToM from the ring) the fit's slope would be carried across metres
+            // of unmeasured ground: it blends into the ring's weighted mean there (the plane's own value at the middle of a
+            // ring around it, and never further than the ring's heights)
+            const deep = Math.max(0, Math.min(1, (d1 - P.deepFromM) / (P.deepToM - P.deepFromM)));
+            if (deep > 0 && wsum > 0) h = (1 - deep) * h + deep * (wy / wsum);
             // within the ring's range, widening outward at a steep street's grade (no bulge inside, extrapolation outside)
-            const reach = P.extrapolateSlope * Math.sqrt(near[0]?.d2 ?? 0);
+            const reach = P.extrapolateSlope * d1;
             h = Math.max(ranges[l][0] - reach, Math.min(ranges[l][1] + reach, h));
             grid[gk * gw + gi] = h;
         }

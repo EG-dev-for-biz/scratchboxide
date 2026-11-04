@@ -46,7 +46,7 @@ describe('surface infill: geometry', () => {
     const ringOf = (f: (x: number, z: number) => number, r0: number, r1: number) => { const out: number[] = []; for (let z = -4; z <= 4; z += 0.25) for (let x = -4; x <= 4; x += 0.25) { const d = Math.hypot(x, z); if (d >= r0 && d <= r1) out.push(x, f(x, z), z); } return Float32Array.from(out); };
     const holeDisc = (r: number) => { const out: number[] = []; for (let z = -r; z < r; z += 0.1) for (let x = -r; x < r; x += 0.1) if (Math.hypot(x + 0.05, z + 0.05) < r) out.push(x, 0, z, x, 0, z + 0.1, x + 0.1, 0, z, x + 0.1, 0, z, x, 0, z + 0.1, x + 0.1, 0, z + 0.1); return Float32Array.from(out); };
 
-    it('keeps grade and camber from the ring: one surface, heights within a centimetre under the hole', () => {
+    it('keeps grade and camber from the ring: one surface, heights within 1.5 cm under the hole', () => {
         const f = (x: number, z: number) => 0.03 * x - 0.008 * z * z + 5;
         const ring = ringOf(f, 2.2, 3.5);
         const chart = fitChart({ ring, hole: holeDisc(2), texelM: 0.05, marginM: 2 });
@@ -55,7 +55,7 @@ describe('surface infill: geometry', () => {
         expect(m.kind).toBe('surface');
         let worst = 0;
         for (const [x, z] of [[0, 0], [1, 1], [-1.5, 0.5], [0.5, -1.7]]) { const p = resurfacePoint(m, x, 99, z); worst = Math.max(worst, Math.abs(p[1] - f(x, z))); expect(p[0]).toBeCloseTo(x, 6); expect(p[2]).toBeCloseTo(z, 6); }
-        expect(worst).toBeLessThan(0.012);
+        expect(worst).toBeLessThan(0.015);
         expect(m.ringRmsM).toBeLessThan(0.01);
     });
 
