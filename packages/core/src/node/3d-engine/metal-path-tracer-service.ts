@@ -281,6 +281,8 @@ export class MetalPathTraceSession extends EventEmitter {
     readonly openedAt = Date.now();
     lastUsed = Date.now();
     opened: MetalPathTraceOpened | null = null;
+    /** What the session was opened with, so a still can be rendered from the same file, materials and light. */
+    openRequest: MetalPathTraceSessionOpen | null = null;
 
     constructor(private readonly binary: string, readonly dir: string) {
         super();
@@ -341,6 +343,7 @@ export class MetalPathTraceSession extends EventEmitter {
             ...(request.material ? { material: request.material } : {})
         }, 'opened');
         this.opened = opened;
+        this.openRequest = { ...request };
         return opened;
     }
 
@@ -436,6 +439,21 @@ function run(binary: string, args: string[], timeoutMs: number): Promise<{ stdou
             resolve({ stdout: String(stdout), stderr: String(stderr) + (err && typeof err.code !== 'number' ? `\n${err.message}` : ''), code });
         });
     });
+}
+
+/**
+ * World position of the local origin an .sbvg file's vertices are relative to (header bytes 72-95, three float64):
+ * a camera in the source GLB's coordinates is in the file's coordinates after subtracting it.
+ */
+export function readSbvgOrigin(sbvgPath: string): [number, number, number] {
+    const fd = fs.openSync(sbvgPath, 'r');
+    try {
+        const header = Buffer.alloc(96);
+        if (fs.readSync(fd, header, 0, 96, 0) !== 96) throw new MetalPathTracerError(`${sbvgPath} is too short for an sbvg header`);
+        return [header.readDoubleLE(72), header.readDoubleLE(80), header.readDoubleLE(88)];
+    } finally {
+        fs.closeSync(fd);
+    }
 }
 
 /** The scene-linear RGB image a render wrote (stats.width x stats.height, 3 floats per pixel); `which` picks the raw, denoised or CPU-denoised file. */
