@@ -47,7 +47,7 @@ import { nativePolishThreads, runNativeLattice, runNativeLatticeAudit, type Nati
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const FACADE_LATTICE_VERSION = 'facade-lattice/19';
+export const FACADE_LATTICE_VERSION = 'facade-lattice/20';
 /** The cut (rebuildFacadesOnLattice opts.cut): the scan split at the rebuilt cells' lines before the removals and the tear audit. */
 export const LATTICE_CUT_VERSION = 'lattice-cut/5';
 
@@ -90,14 +90,34 @@ export const FACADE_LATTICE_PARAMS = {
      * down about its along axis): a slit at a recess side or a facade's edge shows only at an angle (0.81% of the ESB was seen
      * through such holes while the straight-on audit found none).
      */
-    auditYawDeg: 45, auditPitchDeg: 35
+    auditYawDeg: 45, auditPitchDeg: 35,
+    /**
+     * Seen from an angle, a pixel is torn only where the result shows nothing, or a surface deeper than the rebuilt facade's
+     * own deepest point by more than this (m): its recesses and reveals lie within its depth range and are not tears (seen at
+     * 45 degrees against the flat scan they read as 593,217 torn pixels on the ESB, which put the scan back over its piers).
+     */
+    auditBeyondM: 0.1,
+    /**
+     * A removed scan triangle under a tear seen only from an angle is never put back where it would stand more than this (m) in
+     * front of the surface its rebuilt facade draws there (seen straight on); where the rebuild draws nothing, a real hole, it
+     * comes back, and so does one under a tear seen straight on (on the ESB those are seams and corners the rebuild leaves open).
+     */
+    restoreFrontM: 0.05
 };
 
 /**
  * What the tear audit found: torn pixels in the first pass, scan triangles put back over them, facades left unrebuilt because a
  * tear stayed after that, and torn pixels left at the end (0 unless the scan itself lacked surface there).
  */
-export interface TearReport { found: number; restoredTriangles: number; droppedFacades: number[]; left: number; /** Of `found`, torn pixels seen only from an angle; and those left after restoring (the rebuilt geometry's own slits). */ oblique?: number; obliqueLeft?: number }
+export interface TearReport {
+    found: number; restoredTriangles: number; droppedFacades: number[]; left: number;
+    /** Of `found`, torn pixels seen only from an angle; and those left after restoring (the rebuilt geometry's own slits, or where only scan in front of the rebuild would close them). */
+    oblique?: number; obliqueLeft?: number;
+    /** Removed scan triangles a tear seen from an angle touched that stay removed because they would stand in front of the rebuild (restoreFrontM). */
+    keptInFront?: number;
+    /** Of `restoredTriangles`, those put back over a hole seen straight on though they stand in front of the rebuild. */
+    restoredInFront?: number;
+}
 
 export interface ReliefFacade {
     facadeId: number; image: string; centroid: number[]; normal: number[]; axisS: number[]; axisT: number[];
@@ -263,7 +283,7 @@ export function latticeParamVector(P: typeof FACADE_LATTICE_PARAMS = FACADE_LATT
     const views = [P.auditYawDeg, -P.auditYawDeg, P.auditPitchDeg, -P.auditPitchDeg].flatMap(deg => [deg, Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)]);
     return [
         P.minCoverage, P.minWallM2, P.peakK, P.minLineGapM, P.depthBandM, P.facingCos, P.sampleM, P.minSamples, P.minDepthM, P.maxDepthM, P.stepM,
-        P.minMeasuredShare, P.minCellPhotoShare, P.auditPixelM, P.tearDepthM, P.auditYawDeg, P.auditPitchDeg,
+        P.minMeasuredShare, P.minCellPhotoShare, P.auditPixelM, P.tearDepthM, P.auditYawDeg, P.auditPitchDeg, P.auditBeyondM, P.restoreFrontM,
         PHOTO_RECESS.contrastLo, PHOTO_RECESS.contrastHi, PHOTO_RECESS.recessMin, PHOTO_RECESS.recessMax, PHOTO_RECESS.minRepeats,
         WINDOW_GRID.lineContrast, WINDOW_GRID.cellContrast, WINDOW_GRID.minRepeats,
         WINDOW_STRIPS.overlap, WINDOW_STRIPS.maxGapM, WINDOW_STRIPS.minWindows, WINDOW_STRIPS.minStripM, WINDOW_STRIPS.mullionRatio, WINDOW_STRIPS.windowInsetM,
@@ -738,14 +758,17 @@ function obliqueViews(f: ReliefFacade, r: Pick<FacadeLatticeResult, 's' | 't'>, 
 
 /**
  * The outermost surface seen from an angled view (depth along the view's normal), and where that surface lies against the
- * facade's own plane (its distance along the facade normal), over the facade's world box.
+ * facade's own plane (its distance along the facade normal), over the facade's world box: its lattice rectangle and a metre
+ * past the depth band either side, as the straight view culls. (A box around the view's own axes, a few metres deep along
+ * the view, cut a wide facade's ends away at 45 degrees: their small rebuilt triangles were culled where the scan's large
+ * ones still reached in, and read as 460,000 torn pixels on the ESB.)
  */
-function obliqueDepth(soup: Float32Array, f: ReliefFacade, v: AuditView, px: number, live?: Uint8Array): { W: number; H: number; s0: number; t0: number; depth: Float32Array; onPlane: Float32Array; view: AuditView } {
+function obliqueDepth(soup: Float32Array, f: ReliefFacade, r: Pick<FacadeLatticeResult, 's' | 't'>, v: AuditView, px: number, live?: Uint8Array): { W: number; H: number; s0: number; t0: number; depth: Float32Array; onPlane: Float32Array; view: AuditView } {
     const W = Math.max(1, Math.ceil((v.s1 - v.s0) / px)), H = Math.max(1, Math.ceil((v.t1 - v.t0) / px));
     const depth = new Float32Array(W * H).fill(-Infinity), onPlane = new Float32Array(W * H).fill(NaN);
     const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity], reach = FACADE_LATTICE_PARAMS.depthBandM + 1;
-    for (const sv of [v.s0, v.s1]) for (const tv of [v.t0, v.t1]) for (const dv of [-reach, reach]) for (let k = 0; k < 3; k++) {
-        const w = v.c[k] + sv * v.S[k] + tv * v.T[k] + dv * v.N[k];
+    for (const sv of [r.s[0], r.s[r.s.length - 1]]) for (const tv of [r.t[0], r.t[r.t.length - 1]]) for (const dv of [-reach, reach]) for (let k = 0; k < 3; k++) {
+        const w = f.centroid[k] + sv * f.axisS[k] + tv * f.axisT[k] + dv * f.normal[k];
         lo[k] = Math.min(lo[k], w - 0.01); hi[k] = Math.max(hi[k], w + 0.01);
     }
     for (let i = 0, k = 0; i + 8 < soup.length; i += 9, k++) {
@@ -771,11 +794,53 @@ function obliqueDepth(soup: Float32Array, f: ReliefFacade, v: AuditView, px: num
     return { W, H, s0: v.s0, t0: v.t0, depth, onPlane, view: v };
 }
 
-/** Tears seen from an angle: the scan's outermost surface there lies on the facade (within its depth band) and the result shows something farther back. */
-function obliqueTearPixels(before: ReturnType<typeof obliqueDepth>, after: ReturnType<typeof obliqueDepth>, P = FACADE_LATTICE_PARAMS): number[] {
-    const out: number[] = [];
-    for (let o = 0; o < before.depth.length; o++) if (Number.isFinite(before.depth[o]) && Math.abs(before.onPlane[o]) <= P.depthBandM && !(after.depth[o] >= before.depth[o] - P.tearDepthM)) out.push(o);
+/**
+ * Tears seen from an angle: the scan's outermost surface there and at the four pixels beside it lies on the facade (within its
+ * depth band) and the result shows nothing, or a surface both beyond the rebuilt facade's depth range (deeper than `floor`, its
+ * deepest point less auditBeyondM) and behind the scan's own surface there (by more than tearDepthM along the view): the inside
+ * of the building seen through a slit. The rebuilt facade's own recesses and reveals lie within its range, the scan it kept
+ * shows where it was, and a pixel on the scan's own outline, where the rebuild's edge falls a few centimetres short of the
+ * noisy scan's, is no hole.
+ */
+function obliqueTearPixels(before: ReturnType<typeof obliqueDepth>, after: ReturnType<typeof obliqueDepth>, floor: number, P = FACADE_LATTICE_PARAMS): number[] {
+    const out: number[] = [], { W, H } = before;
+    const onFacade = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < H && Number.isFinite(before.depth[y * W + x]) && Math.abs(before.onPlane[y * W + x]) <= P.depthBandM;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        if (onFacade(x, y) && onFacade(x - 1, y) && onFacade(x + 1, y) && onFacade(x, y - 1) && onFacade(x, y + 1) && !(after.onPlane[y * W + x] >= floor) && !(after.depth[y * W + x] >= before.depth[y * W + x] - P.tearDepthM)) out.push(y * W + x);
+    }
     return out;
+}
+
+/** The depth (along the facade's normal) below which nothing of its rebuilt surface lies, less auditBeyondM. */
+function rebuildFloor(f: ReliefFacade, r: Pick<FacadeLatticeResult, 'positions'>, P = FACADE_LATTICE_PARAMS): number {
+    let lo = Infinity;
+    for (let v = 0; v + 2 < r.positions.length; v += 3) lo = Math.min(lo, (r.positions[v] - f.centroid[0]) * f.normal[0] + (r.positions[v + 1] - f.centroid[1]) * f.normal[1] + (r.positions[v + 2] - f.centroid[2]) * f.normal[2]);
+    return lo - P.auditBeyondM;
+}
+
+/** A rebuilt facade's own surface seen straight on: outermostDepth of its triangles alone. */
+function rebuildDepth(f: ReliefFacade, r: FacadeLatticeResult, P = FACADE_LATTICE_PARAMS): ReturnType<typeof outermostDepth> {
+    const tri = new Float32Array(r.indices.length * 3);
+    for (let q = 0; q < r.indices.length; q++) for (let k = 0; k < 3; k++) tri[q * 3 + k] = r.positions[r.indices[q] * 3 + k];
+    return outermostDepth(tri, f, r, P.auditPixelM);
+}
+
+/**
+ * Would a removed scan triangle stand in front of the rebuilt facade that claimed it: sampled as coveredByRebuild samples it,
+ * any sample more than restoreFrontM in front of the surface the rebuild draws at its pixel (`drawn`, rebuildDepth). Put back
+ * there, it would hide the rebuild; where the rebuild draws nothing (a real hole) it would not.
+ */
+function inFrontOfRebuild(a: number[], b: number[], c: number[], f: ReliefFacade, drawn: ReturnType<typeof outermostDepth>, P = FACADE_LATTICE_PARAMS): boolean {
+    const steps = Math.min(40, Math.max(1, Math.ceil(Math.max(Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]), Math.hypot(c[0] - a[0], c[1] - a[1], c[2] - a[2]), Math.hypot(c[0] - b[0], c[1] - b[1], c[2] - b[2])) / P.sampleM)));
+    for (let p = 0; p <= steps; p++) for (let q = 0; p + q <= steps; q++) {
+        const u = p / steps, v = q / steps;
+        const m = [a[0] + (b[0] - a[0]) * u + (c[0] - a[0]) * v - f.centroid[0], a[1] + (b[1] - a[1]) * u + (c[1] - a[1]) * v - f.centroid[1], a[2] + (b[2] - a[2]) * u + (c[2] - a[2]) * v - f.centroid[2]];
+        const x = Math.floor((dot(m, f.axisS) - drawn.s0) / P.auditPixelM), y = Math.floor((dot(m, f.axisT) - drawn.t0) / P.auditPixelM);
+        if (x < 0 || y < 0 || x >= drawn.W || y >= drawn.H) continue;
+        const d = drawn.depth[y * drawn.W + x];
+        if (Number.isFinite(d) && dot(m, f.normal) > d + P.restoreFrontM) return true;
+    }
+    return false;
 }
 
 /**
@@ -839,7 +904,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
     // 2. the tear audit, per facade: the scan seen straight on against the result; a tear restores the removed triangles over it
     // (at that facade's depth), and a facade still torn after that is not rebuilt at all (its scan stays whole, the removals are
     // decided again without it), until nothing is torn
-    const tears: TearReport = { found: 0, restoredTriangles: 0, droppedFacades: [], left: 0 };
+    const tears: TearReport = { found: 0, restoredTriangles: 0, droppedFacades: [], left: 0, keptInFront: 0, restoredInFront: 0 };
     if (!keepScan && kNative('lattice')) {
         // natively: the same removals, audit, restores and drops, one view a task
         const a = runNativeLatticeAudit(latticeParamVector(P), opts.sameFacing === true, soup, facadesIn.map(x => ({ f: x.f, s: x.r.s, t: x.r.t, built: x.r.built, positions: x.r.positions, indices: x.r.indices })), opts.threads ?? nativePolishThreads());
@@ -848,6 +913,8 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         tears.found = a.found; tears.restoredTriangles = a.restored; tears.left = a.left;
         if (a.oblique !== undefined) tears.oblique = a.oblique;
         tears.obliqueLeft = a.obliqueLeft;
+        tears.keptInFront = a.keptInFront;
+        tears.restoredInFront = a.restoredInFront;
     } else auditHere();
     function auditHere(): void {
         if (!keepScan) decide();
@@ -861,6 +928,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
             return { soup: all, live };
         };
         type AuditGrid = { W: number; H: number; s0: number; t0: number; view?: AuditView };
+        const floors = facadesIn.map(x => rebuildFloor(x.f, x.r, P)), drawn = facadesIn.map(x => rebuildDepth(x.f, x.r, P)), keptBack = new Uint8Array(nTri);
         const audit = (count: boolean): Array<{ fi: number; pix: number[]; grid: AuditGrid; oblique?: boolean }> => {
             const { soup: rs, live } = resultSoup();
             const torn: Array<{ fi: number; pix: number[]; grid: AuditGrid; oblique?: boolean }> = [];
@@ -872,8 +940,8 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
                 // the same facade from four angles: slits at recess sides and edges show only obliquely
                 if (dropped.has(fi)) return;
                 for (const v of obliqueViews(x.f, x.r, P)) {
-                    const b = obliqueDepth(soup, x.f, v, P.auditPixelM), a = obliqueDepth(rs, x.f, v, P.auditPixelM, live);
-                    const op = obliqueTearPixels(b, a, P);
+                    const b = obliqueDepth(soup, x.f, x.r, v, P.auditPixelM), a = obliqueDepth(rs, x.f, x.r, v, P.auditPixelM, live);
+                    const op = obliqueTearPixels(b, a, floors[fi], P);
                     if (op.length) torn.push({ fi, pix: op, grid: b, oblique: true });
                     if (count) { tears.found += op.length; tears.oblique = (tears.oblique ?? 0) + op.length; }
                 }
@@ -882,10 +950,12 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         };
         let torn = keepScan ? [] : audit(true);
         // restore: every removed triangle whose footprint (seen straight on, at that facade's depth) touches a torn pixel or its
-        // neighbours, up to three rounds; then a facade whose own frame is still torn by its own removals is not rebuilt
+        // neighbours, up to three rounds; from an angle never one that would stand in front of the rebuild that claimed it (a hole
+        // seen straight on is the rebuild's own, a seam or a corner it leaves open, and gets its scan back whatever it stands in
+        // front of); then a facade whose own frame is still torn by its own removals is not rebuilt
         const restore = (list: typeof torn): number => {
             let n = 0;
-            for (const { fi, pix, grid } of list) {
+            for (const { fi, pix, grid, oblique } of list) {
                 const f = facadesIn[fi].f, mark = new Uint8Array(grid.W * grid.H);
                 // the frame the torn pixels were seen in: the facade straight on, or one of its angled views
                 const fc = grid.view?.c ?? f.centroid, fS = grid.view?.S ?? f.axisS, fT = grid.view?.T ?? f.axisT;
@@ -902,7 +972,10 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
                     if (!near || x1 < 0 || y1 < 0 || x0 >= grid.W || y0 >= grid.H) continue;
                     let hit = false;
                     for (let y = Math.max(0, Math.floor(y0)); y <= Math.min(grid.H - 1, Math.floor(y1)) && !hit; y++) for (let x = Math.max(0, Math.floor(x0)); x <= Math.min(grid.W - 1, Math.floor(x1)) && !hit; x++) if (mark[y * grid.W + x]) hit = true;
-                    if (hit) { claim[k] = -1; n++; }
+                    if (!hit) continue;
+                    const front = inFrontOfRebuild(corner(k, 0), corner(k, 1), corner(k, 2), facadesIn[claim[k]].f, drawn[claim[k]], P);
+                    if (oblique && front) keptBack[k] = 1;
+                    else { claim[k] = -1; n++; if (front) tears.restoredInFront!++; }
                 }
             }
             return n;
@@ -925,6 +998,8 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         tears.obliqueLeft = torn.filter(x => x.oblique).reduce((a, x) => a + x.pix.length, 0);
         // the last resort: anything still torn straight on means no facade is rebuilt (the scan is shown whole, as it came)
         if (tears.left) { facadesIn.forEach((x, fi) => { if (!dropped.has(fi)) { dropped.add(fi); tears.droppedFacades.push(x.f.facadeId); } }); decide(); tears.left = straight(audit(false)).reduce((a, x) => a + x.pix.length, 0); }
+        tears.keptInFront = 0;
+        for (let k = 0; k < nTri; k++) if (keptBack[k] && claim[k] >= 0) tears.keptInFront++;
     }
     // 3. the removals written: a removed triangle made degenerate in place
     let removed = 0;

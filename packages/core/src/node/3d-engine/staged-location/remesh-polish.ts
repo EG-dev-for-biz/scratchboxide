@@ -118,7 +118,7 @@ export function describePolish(s: RemeshPolishStats): string {
         const t = s.lattice.tears;
         parts.push(`${s.lattice.rebuilt} of ${s.lattice.facades} rectified facades rebuilt on the lines their photo shows (${s.lattice.cells} cells; lines photo-inferred, depths measured and averaged along each storey's repeats)` +
             (s.lattice.cut ? `; the scan cut exactly at the rebuilt cells (${s.lattice.cut.cutTriangles} triangles cut, ${s.lattice.cut.removedPieces} pieces over the cells dropped)` : '') +
-            (t ? `; tear audit: ${t.found ? `${t.found} torn pixels found, ${t.restoredTriangles} scan triangles put back${t.droppedFacades.length ? `, ${t.droppedFacades.length} facades left as scanned because a tear stayed` : ''}` : 'no tear'}${t.left ? `, ${t.left} torn pixels left` : ''}` : ''));
+            (t ? `; tear audit: ${t.found ? `${t.found} torn pixels found, ${t.restoredTriangles} scan triangles put back${t.restoredInFront ? ` (${t.restoredInFront} over holes seen straight on, though they stand in front of the rebuild)` : ''}${t.keptInFront ? `, ${t.keptInFront} kept out because they would stand in front of the rebuild` : ''}${t.droppedFacades.length ? `, ${t.droppedFacades.length} facades left as scanned because a tear stayed` : ''}` : 'no tear'}${t.left ? `, ${t.left} torn pixels left` : ''}` : ''));
     }
     if (s.base) {
         const b = s.base;
