@@ -2783,7 +2783,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             const dx = px - tx;
             const dy = py - ty;
             const dz = pz - tz;
-            const dist = Math.max(5, Math.sqrt(dx * dx + dy * dy + dz * dz));
+            const dist = Math.max(0.05, Math.sqrt(dx * dx + dy * dy + dz * dz));
             const phi = Math.acos(Math.max(-1, Math.min(1, dy / dist)));
             const theta = Math.atan2(dx, dz);
 
@@ -3794,7 +3794,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         const dx = px - tx;
         const dy = py - ty;
         const dz = pz - tz;
-        const dist = Math.max(5, Math.sqrt(dx * dx + dy * dy + dz * dz));
+        const dist = Math.max(0.05, Math.sqrt(dx * dx + dy * dy + dz * dz));
         const phi = Math.acos(Math.max(-1, Math.min(1, dy / dist)));
         const theta = Math.atan2(dx, dz);
 

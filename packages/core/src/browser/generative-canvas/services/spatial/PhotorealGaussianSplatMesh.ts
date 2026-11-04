@@ -143,6 +143,12 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
     for (let i = 0; i < splatData.count; i++) sortOrderArray[i] = i;
     instancedGeo.setAttribute('sortOrder', new THREE.InstancedBufferAttribute(sortOrderArray, 1));
 
+    // The quad's own bounds (a unit square) are not the splats': framing and picking read the splats' extent.
+    if (splatData.bounds) {
+      instancedGeo.boundingBox = new THREE.Box3(new THREE.Vector3(...splatData.bounds.min), new THREE.Vector3(...splatData.bounds.max));
+      instancedGeo.boundingSphere = instancedGeo.boundingBox.getBoundingSphere(new THREE.Sphere());
+    }
+
     this.splatGeometry = instancedGeo;
 
     // 3. Build Production Shader Material
@@ -588,10 +594,11 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
    */
   private buildContactShadow(splatData: SplatData, options: PhotorealSplatOptions = {}): void {
     const bounds = splatData.bounds;
-    const width = bounds ? Math.max(0.5, bounds.max[0] - bounds.min[0]) : 1.0;
-    const depth = bounds ? Math.max(0.5, bounds.max[2] - bounds.min[2]) : 1.0;
-    const height = bounds ? Math.max(1.0, bounds.max[1] - bounds.min[1]) : 1.8;
-    const groundY = bounds ? bounds.min[1] + 0.01 : 0.01;
+    // Sized by the splats themselves (floors of a few centimetres only), so a small object's shadow is not metres long.
+    const width = bounds ? Math.max(0.05, bounds.max[0] - bounds.min[0]) : 1.0;
+    const depth = bounds ? Math.max(0.05, bounds.max[2] - bounds.min[2]) : 1.0;
+    const height = bounds ? Math.max(0.05, bounds.max[1] - bounds.min[1]) : 1.8;
+    const groundY = bounds ? bounds.min[1] + Math.min(0.01, height * 0.02) : 0.01;
 
     const shadowGeo = new THREE.PlaneGeometry(width * 2.5, depth * 2.5 + height * 2.5);
     shadowGeo.rotateX(-Math.PI * 0.5);
@@ -643,7 +650,9 @@ export class PhotorealGaussianSplatMesh extends THREE.Group {
     });
 
     const shadowMesh = new THREE.Mesh(shadowGeo, shadowMat);
-    shadowMesh.position.set(0, groundY, 0);
+    shadowMesh.position.set(bounds ? (bounds.min[0] + bounds.max[0]) / 2 : 0, groundY, bounds ? (bounds.min[2] + bounds.max[2]) / 2 : 0);
+    // a viewport helper (the sb- prefix): camera framing reads the splats, not the shadow under them
+    shadowMesh.name = 'sb-splat-contact-shadow';
     shadowMesh.renderOrder = -1;
     this.add(shadowMesh);
     this.contactShadowMesh = shadowMesh;
