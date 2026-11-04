@@ -121,7 +121,7 @@ import { removeVehicles, vehicleRemovalEnabled, vehicleRemovalParams, visionVehi
 import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, PROCEDURAL_ROADS_VERSION, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
 import { renderTopDownPhoto, topDownJpeg } from './top-down-photo';
 import { synthesizeRoadTextures } from './road-texture';
-import { buildKerbedRoadMesh, measureKerbs, nearStreets, roadKerbsEnabled, scanHeightIndex, writeKerbedRoadsGlb, ROAD_KERBS_VERSION, type FootprintTri, type KerbModelStats } from './road-kerbs';
+import { buildKerbedRoadMesh, measureKerbs, nearStreets, planarFrameOf, roadKerbsEnabled, scanHeightIndex, withGlbImage, writeKerbedRoadsGlb, ROAD_KERBS_VERSION, type FootprintTri, type KerbModelStats } from './road-kerbs';
 import { carveUnderRoads, isRoadCarved, prepareFootprint, ROAD_CARVE_VERSION, type CarveFootprint, type RoadCarveReport } from './road-carve';
 import { flattenRoadsInGlb, flattenTargets, roadFlattenEnabled, ROAD_FLATTEN_PARAMS, ROAD_FLATTEN_VERSION, type RoadFlattenStats } from './road-flatten';
 import { buildStepsMesh, groundStepsEnabled, measureSteps, writeStepsGlb, GROUND_STEPS_VERSION, type FlightModel } from './ground-steps';
@@ -1492,6 +1492,27 @@ function roadCarver(cache: StageCache, roads: RoadSurface[], footprint: CarveFoo
             ...(note ? { provenance: { ...layer.provenance, note: layer.provenance.note ? `${layer.provenance.note}; ${note}` : note } } : {})
         };
     };
+}
+
+/** A new surface's layer (the kerbed streets, the steps) with its photo seen from above taken again from `twinFile` over the
+ *  same planar frame its texture coordinates read; undefined when its file is gone or its texture is not planar. */
+function recolourFromTwin(cache: StageCache, layer: StagedLayer, twinFile: string, tag: string): { url: string; bytes: number; ms: number; cached: boolean } | undefined {
+    const source = path.join(cache.modelsDir, path.basename(layer.url));
+    if (!fs.existsSync(source)) return undefined;
+    const t0 = Date.now();
+    const name = `${path.basename(layer.url, '.glb').replace(/_tw[0-9a-f]{8}$/, '')}_tw${tag}.glb`;
+    const dir = path.join(cache.dir, 'road-carve'), file = path.join(dir, name);
+    const cached = fs.existsSync(file);
+    if (!cached) {
+        const bytes = fs.readFileSync(source);
+        const frame = planarFrameOf(bytes);
+        if (!frame) return undefined;
+        const photo = renderTopDownPhoto(fs.readFileSync(twinFile), frame, { texelM: Math.max(0.05, Math.max(frame.widthM, frame.heightM) / 4096), maxPx: 4096, referenceY: frame.meanY });
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, withGlbImage(bytes, topDownJpeg(photo, 90)));
+    }
+    const pub = cache.publishFile(file, name);
+    return { url: pub.url, bytes: pub.bytes, ms: Date.now() - t0, cached };
 }
 
 /** The result's account of the active scene: what was kept and what was taken out, by object id. */
@@ -3637,7 +3658,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             const stations = roads.reduce((n, r) => n + r.stations.length, 0);
                             const measuredKerbShare = stations ? roads.reduce((n, r) => n + r.measuredKerbShare * r.stations.length, 0) / stations : 0;
                             io.progress(`colouring ${mesh.stats.samples} street samples from the tile photo seen from above`);
-                            const photo = renderTopDownPhoto(fs.readFileSync(tileForRoads), mesh.uvFrame, { texelM: 0.1, maxPx: 4096 });
+                            const photo = renderTopDownPhoto(fs.readFileSync(tileForRoads), mesh.uvFrame, { texelM: 0.1, maxPx: 4096, referenceY: (mesh.minY + mesh.maxY) / 2 });
                             const kerbs = { ...model.stats, triangles: mesh.stats.triangles, footprintM2: mesh.stats.footprintM2, ms: Date.now() - t0 };
                             // the legacy stats the layer's note and the tool read, from the same streets
                             const legacy = buildRoadMesh(roads, roadParams).stats;
@@ -3713,6 +3734,35 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 run.emit('roads', 'failed', { reason: errorMessage(err) });
                 return undefined;
             });
+            // the new surfaces coloured again from the ground's textured twin once it is in: its de-lit photo, seen from above, is
+            // what the ground around them shows (the tile photo they were first coloured with is darker), so they meet it without a
+            // seam of colour; the twin they read is the one before the carve, which still has the ground under them
+            if ((kerbsOn || stepsOn) && run.state.layers.some(l => !l.retired && l.stage === 'roads' && (l.layer === 'l1r' || l.layer === 'l1s'))) {
+                const seen = new Set<string>(), records: Array<{ layer: string; twin: string; ms: number; cached: boolean } | { layer: string; twin: string; failed: string }> = [];
+                const recolour = (ground: StagedLayer) => {
+                    const meta = run.layerMeta[ground.objectId];
+                    if (!(ground.layer === 'l2' || meta?.isGround) || !ground.textured?.url || meta?.vegetation) return;
+                    const twin = path.join(cache.modelsDir, path.basename(ground.textured.url).replace(/_road_[0-9a-f]{8}(?=\.glb$)/, ''));
+                    if (seen.has(twin) || !fs.existsSync(twin)) return;
+                    seen.add(twin);
+                    const tag = crypto.createHash('sha256').update(path.basename(twin)).digest('hex').slice(0, 8);
+                    for (const l of run.state.layers.filter(x => !x.retired && x.stage === 'roads' && (x.layer === 'l1r' || x.layer === 'l1s'))) {
+                        try {
+                            const r = recolourFromTwin(cache, l, twin, tag);
+                            if (!r) continue;
+                            records.push({ layer: l.layer, twin: path.basename(twin), ms: r.ms, cached: r.cached });
+                            const why = `coloured again from the ground's textured twin seen from above (its de-lit photo), so it meets the ground around it without a seam of colour`;
+                            run.commit({ ...l, url: r.url, bytes: r.bytes, provenance: { ...l.provenance, ...(l.provenance.note?.includes(why) ? {} : { note: l.provenance.note ? `${l.provenance.note}; ${why}` : why }) } }, run.layerMeta[l.objectId]);
+                        } catch (err) {
+                            if (isAbort(err)) throw err;
+                            records.push({ layer: l.layer, twin: path.basename(twin), failed: errorMessage(err) });
+                        }
+                    }
+                    cache.writeRunNote(runId, 'road_recolour', { records });
+                };
+                for (const l of run.state.layers.filter(x => !x.retired)) recolour(l);
+                run.commitListeners.add(recolour);
+            }
             // the kerbed streets' layer, and the scan carved under them from here on (the ground already standing carved now)
             function commitKerbedRoads(v: NonNullable<RoadStageValue>, entry: { dir: string; cached: boolean; builtAtMs: number }, pub: { url: string; bytes: number; path: string }, key: string, key8: string) {
                 const k = v.kerbs!;
@@ -3786,7 +3836,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
                     }
                     const uvFrame = { x0, z0, widthM: Math.max(1, x1 - x0), heightM: Math.max(1, z1 - z0) };
-                    const photo = renderTopDownPhoto(fs.readFileSync(tileForSteps), uvFrame, { texelM: 0.05, maxPx: 4096 });
+                    const photo = renderTopDownPhoto(fs.readFileSync(tileForSteps), uvFrame, { texelM: 0.05, maxPx: 4096, referenceY: found.flights.reduce((t, f) => t + (f.footY + f.topY) / 2, 0) / found.flights.length });
                     const mesh = buildStepsMesh(found.flights, undefined, uvFrame);
                     const flights = found.flights.map(f => ({ id: f.id, kind: f.kind, slope: f.slope, totalRiseM: f.topY - f.footY, lengthM: f.sTop - f.sFoot, widthM: f.bMax - f.bMin, landings: f.landings.length, ...(f.count !== undefined ? { count: f.count, riseM: f.riseM, runEachM: f.runEachM, countSource: f.countSource, countNote: f.countNote } : {}) }));
                     writeStepsGlb(path.join(dir, 'steps.glb'), mesh, { stats: mesh.stats, flights }, { jpeg: topDownJpeg(photo, 90), width: photo.width, height: photo.height });

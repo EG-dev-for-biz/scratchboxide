@@ -22,11 +22,13 @@ import * as path from 'path';
 import { loadScanMesh, surfaceModel } from '../src/node/spatial/StreetViewSurveyPlanner';
 import { measureRoadSurfaces, ROAD_SURFACE_PARAMS, type RoadSurface } from '../src/node/3d-engine/staged-location/road-surfaces';
 import {
-    buildKerbedRoadMesh, measureKerbs, readKerbSection, ROAD_KERB_PARAMS, scanHeightIndex, writeKerbedRoadsGlb, type HeightAt, type KerbModel, type KerbedRoadMesh
+    buildKerbedRoadMesh, measureKerbs, planarFrameOf, readKerbSection, ROAD_KERB_PARAMS, scanHeightIndex, withGlbImage, writeKerbedRoadsGlb, type HeightAt, type KerbModel,
+    type KerbedRoadMesh
 } from '../src/node/3d-engine/staged-location/road-kerbs';
 import { carveUnderRoads, isRoadCarved, prepareFootprint, type RoadCarveReport } from '../src/node/3d-engine/staged-location/road-carve';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { assembleGlb, parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
+import { renderTopDownPhoto } from '../src/node/3d-engine/staged-location/top-down-photo';
 import * as jpegJs from 'jpeg-js';
 
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-kerbs-'));
@@ -267,6 +269,49 @@ describe('the sweep', () => {
         const gen = g.json.nodes.find((n: any) => n.name === 'gutter_generated');
         expect(gen.extras.provenance).toBe('generated');
         expect(gen.extras.method).toMatch(/plausible gutter/);
+    });
+
+    it('is coloured again from another photo over the same frame: the frame read off its own vertices, the image swapped, the geometry kept', () => {
+        const file = path.join(WORK, 'roads-photo.glb');
+        const photo = (shade: number) => Buffer.from(jpegJs.encode({ data: Buffer.alloc(16 * 16 * 4, shade), width: 16, height: 16 }, 90).data);
+        // coloured as a build colours it: planar, by the photo seen from above
+        const planar = buildKerbedRoadMesh(model);
+        writeKerbedRoadsGlb(file, planar, { stats: model.stats }, { jpeg: photo(60), width: 16, height: 16 });
+        const bytes = fs.readFileSync(file);
+        const frame = planarFrameOf(bytes)!;
+        expect(frame.x0).toBeCloseTo(planar.uvFrame.x0, 3);
+        expect(frame.z0).toBeCloseTo(planar.uvFrame.z0, 3);
+        expect(frame.widthM).toBeCloseTo(planar.uvFrame.widthM, 3);
+        expect(frame.heightM).toBeCloseTo(planar.uvFrame.heightM, 3);
+        const lighter = photo(200), out = withGlbImage(bytes, lighter);
+        const a = parseGlbBytes(bytes), b = parseGlbBytes(out);
+        const view = b.json.bufferViews[b.json.images[0].bufferView];
+        expect(Buffer.from(b.bin.subarray(view.byteOffset, view.byteOffset + view.byteLength)).equals(lighter)).toBe(true);
+        // every accessor reads the same as before
+        expect(b.json.accessors.length).toBe(a.json.accessors.length);
+        for (let i = 0; i < a.json.accessors.length; i++) expect(Array.from(readAccessor(b, i).data)).toEqual(Array.from(readAccessor(a, i).data));
+        expect(b.json.nodes.map((n: any) => n.extras)).toEqual(a.json.nodes.map((n: any) => n.extras));
+    });
+
+    it('sees the ground from above to scale at the ground\'s level, a tower beside it or not', () => {
+        // a 100 m square of ground at 0 m and a 200 m tower's roof over one corner; the photo of the ground's square: at the
+        // tower's height (the default) the ground is drawn 1 / 15 small toward the centre, its edges short of the photo's
+        const quad = (x0: number, x1: number, z0: number, z1: number, y: number) => [x0, y, z0, x0, y, z1, x1, y, z0, x1, y, z0, x0, y, z1, x1, y, z1];
+        const pos = Float32Array.from([...quad(-50, 50, -50, 50, 0), ...quad(40, 50, 40, 50, 200)]);
+        const uv = new Float32Array(pos.length / 3 * 2).fill(0.5);
+        const file = path.join(WORK, 'tower.glb');
+        writeStagedGlbFile(file, [{ positions: pos, uv }], { texture: { bytes: jpegJs.encode({ data: Buffer.alloc(64, 250), width: 4, height: 4 }, 90).data, mimeType: 'image/jpeg' } });
+        const frame = { x0: -50, z0: -50, widthM: 100, heightM: 100 };
+        const grey = (ph: ReturnType<typeof renderTopDownPhoto>) => {
+            // the background (128) in the middle row, left of the centre: the ground did not reach there
+            const row = Math.floor(ph.height / 2);
+            let n = 0;
+            for (let c = 0; c < ph.width / 2; c++) if (ph.rgba[(row * ph.width + c) * 4] < 200) n++;
+            return n;
+        };
+        const atTop = renderTopDownPhoto(fs.readFileSync(file), frame, { texelM: 0.5 }), atGround = renderTopDownPhoto(fs.readFileSync(file), frame, { texelM: 0.5, referenceY: 0 });
+        expect(grey(atTop)).toBeGreaterThan(4);
+        expect(grey(atGround)).toBeLessThanOrEqual(1);
     });
 });
 
