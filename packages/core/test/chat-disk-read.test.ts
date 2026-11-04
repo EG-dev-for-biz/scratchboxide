@@ -165,6 +165,19 @@ describe('what the open chat writes, read first and only when it changed', () =>
         expect(writePass(read, mounted.baseline, '', onDisk).written?.messages).toBe(newer);
     });
 
+    it('an open copy holding the messages disk holds, one of them with another check result, writes nothing', () => {
+        const onDisk = openChatOnDisk();
+        const cached = onDisk.messages.map((m, i) => (i === onDisk.messages.length - 1 ? { ...m, visualAudit: { status: 'unavailable', error: 'No frame of the canvas could be captured.' } } : { ...m })) as ChatMessage[];
+        const open: ChatState = { ...loadInitialChatState(), messages: cached, activeArtifact: onDisk.activeArtifact, artifactHistory: onDisk.artifactHistory };
+        const mounted = writePass(open, undefined, undefined);
+        const read = chatReducer(open, { type: 'sessions/fromDisk', disk: [onDisk] });
+        expect(read.messages).toBe(cached);
+
+        const settled = writePass(read, mounted.baseline, '', onDisk);
+        expect(settled.written).toBeUndefined();
+        expect(writePass(read, settled.baseline, '', onDisk).written).toBeUndefined();
+    });
+
     it('a chat disk does not hold, changed before the read, is written once read', () => {
         const fresh = loadInitialChatState();
         const mounted = writePass(fresh, undefined, undefined);

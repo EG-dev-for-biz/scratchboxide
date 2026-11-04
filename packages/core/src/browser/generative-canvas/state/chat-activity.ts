@@ -37,7 +37,7 @@ export function chatArtifactVersionKeys(
 }
 
 interface ChatContent {
-    messages: ReadonlyArray<{ artifacts?: VersionedArtifact[] }>;
+    messages: ReadonlyArray<{ id?: string; artifacts?: VersionedArtifact[] }>;
     activeArtifact?: VersionedArtifact;
     artifactHistory?: ReadonlyArray<VersionedArtifact>;
 }
@@ -62,17 +62,21 @@ export function chatBaseline(open: OpenChat): ChatBaseline {
 /**
  * Whether the open chat changed since `baseline` (a new message, or an artifact version it did not hold), and the
  * baseline to measure its next change against. A chat just opened is measured against itself: opening it is not a
- * change. Once disk's copy is read (`open.root` set; `onDisk`, what disk holds of this chat), it is measured against
- * that copy: the read is not a change, but an open copy holding what disk lacks (a demo launched before the read, a
- * message the last write missed) is.
+ * change. When disk's copy is read (`open.root` set; `onDisk`, what disk holds of this chat, else the chat as opened),
+ * the open copy is measured against that copy by the messages and versions it holds: the read is not a change, but
+ * an open copy holding a message or version disk lacks (a demo launched before the read, a message the last write
+ * missed) is.
  */
 export function chatChangeSince(baseline: ChatBaseline | undefined, open: OpenChat, onDisk?: ChatContent): { changed: boolean; baseline: ChatBaseline } {
     const now = chatBaseline(open);
-    let from = !baseline || baseline.id !== open.id || baseline.opens !== open.opens ? now : baseline;
+    const from = !baseline || baseline.id !== open.id || baseline.opens !== open.opens ? now : baseline;
     if (open.root !== undefined && from.root !== open.root) {
-        from = onDisk
-            ? { ...from, root: open.root, messages: onDisk.messages || [], artifactKeys: chatArtifactVersionKeys(onDisk.messages || [], onDisk.activeArtifact, onDisk.artifactHistory) }
-            : { ...from, root: open.root };
+        const read = onDisk
+            ? { ...now, messages: onDisk.messages || [], artifactKeys: chatArtifactVersionKeys(onDisk.messages || [], onDisk.activeArtifact, onDisk.artifactHistory) }
+            : { ...now, messages: from.messages, artifactKeys: from.artifactKeys };
+        const ids = new Set(read.messages.map(m => m.id));
+        const changed = now.messages.some(m => !ids.has(m.id)) || [...now.artifactKeys].some(k => !read.artifactKeys.has(k));
+        return { changed, baseline: changed ? read : now };
     }
     const changed = now.messages.length > 0 && (now.messages !== from.messages || [...now.artifactKeys].some(k => !from.artifactKeys.has(k)));
     return { changed, baseline: from };
