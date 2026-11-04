@@ -32,9 +32,11 @@ describe('Hyperrealistic Forest Procedural 3D Reconstruction from Image', () => 
         expect(fs.existsSync(sourcePath)).toBe(true);
         const sourceCode = fs.readFileSync(sourcePath, 'utf8');
 
+        // zlib: the generator reads the reference photograph and writes the fern leaf's maps as PNG
         const result = await compiler.compileSource(sourceCode, {
             outputBinaryName: 'generate_forest_procedural_3d',
-            optimization: '-O3'
+            optimization: '-O3',
+            extraFlags: ['-lz']
         });
 
         if (!result.success) {
@@ -112,7 +114,215 @@ describe('Hyperrealistic Forest Procedural 3D Reconstruction from Image', () => 
         expect(maxY - minY).toBeGreaterThan(15.0); // Tall forest canopy >= 15m
         expect(maxX - minX).toBeGreaterThan(20.0); // Broad forest width >= 20m
         expect(maxZ - minZ).toBeGreaterThan(25.0); // Forest depth >= 25m
+
+        // The page draws with the GLB's own maps: four surfaces (albedo, normal, ORM) embedded, and no canopy of
+        // needle slivers left in the forest mesh (the crowns are their own GLB)
+        expect(gltf.images?.length).toBe(12);
+        expect((gltf.meshes as Array<{ name?: string }>).some(m => /Canopy|Foliage/.test(m.name ?? ''))).toBe(false);
+
+        // The surfaces are texture library sets at their real tile size, each tinted to its region of the reference
+        // photograph: the floor's duff, the bark and the moss from the library copies, the fern pinnae a leaf atlas
+        type Surface = { set: string; library: string; realSizeM: number[]; provenance: string; tint: { factor: number[]; pixels: number; regionsPx: number[][] } };
+        const materials = gltf.materials as Array<{ name: string; extras?: { sbSurface?: Surface }; pbrMetallicRoughness: { baseColorFactor: number[] } }>;
+        const surfaceOf = (name: string) => materials.find(m => m.name === name)?.extras?.sbSurface;
+        const copies = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'assets/textures/library/copies/index.json'), 'utf8')) as { sets: Array<{ id: string; realSizeM: number[] }> };
+        for (const name of ['PBR_Forest_Floor', 'PBR_Redwood_Bark', 'PBR_Moss', 'PBR_Sword_Ferns']) {
+            const s = surfaceOf(name);
+            expect(s, name).toBeDefined();
+            expect(s!.provenance).toBe('library');
+            expect(s!.realSizeM.every(v => v > 0.05 && v < 5)).toBe(true);
+            expect(s!.tint.pixels).toBeGreaterThan(1000);
+            expect(s!.tint.factor.every(v => v > 0 && v <= 1)).toBe(true);
+            expect(Math.max(...s!.tint.factor)).toBeGreaterThan(0.2);
+            if (name !== 'PBR_Sword_Ferns') {
+                expect(s!.library).toBe('assets/textures/library/copies/');
+                expect(copies.sets.find(c => c.id === s!.set)?.realSizeM).toEqual(s!.realSizeM);
+            }
+        }
+        expect(surfaceOf('PBR_Sword_Ferns')!.library).toBe('assets/textures/trees/');
+
+        const binOffset = 20 + jsonChunkLen + 8;
+        // the floor's, bark's and moss's colour maps are the library copies' own bytes (not crops of the photograph)
+        for (const name of ['PBR_Forest_Floor', 'PBR_Redwood_Bark', 'PBR_Moss']) {
+            const mat = materials.find(m => m.name === name) as unknown as { pbrMetallicRoughness: { baseColorTexture: { index: number } } };
+            const image = gltf.images[gltf.textures[mat.pbrMetallicRoughness.baseColorTexture.index].source];
+            const view = gltf.bufferViews[image.bufferView];
+            const embedded = buf.subarray(binOffset + (view.byteOffset ?? 0), binOffset + (view.byteOffset ?? 0) + view.byteLength);
+            const copy = fs.readFileSync(path.resolve(process.cwd(), 'assets/textures/library/copies', surfaceOf(name)!.set, 'albedo.jpg'));
+            expect(image.mimeType).toBe('image/jpeg');
+            expect(Buffer.compare(embedded, copy)).toBe(0);
+        }
+        const attribute = (meshName: string, key: string, width: number) => {
+            const mesh = (gltf.meshes as Array<{ name: string; primitives: Array<{ attributes: Record<string, number> }> }>).find(m => m.name === meshName)!;
+            const acc = gltf.accessors[mesh.primitives[0].attributes[key]];
+            const view = gltf.bufferViews[acc.bufferView];
+            const start = binOffset + (view.byteOffset ?? 0) + (acc.byteOffset ?? 0);
+            return new Float32Array(buf.buffer.slice(buf.byteOffset + start, buf.byteOffset + start + acc.count * width * 4));
+        };
+        // the floor's UVs run in duff tiles: 80 m across over the set's real size
+        const floorUv = attribute('Forest_Terrain_Floor', 'TEXCOORD_0', 2);
+        let uMin = Infinity, uMax = -Infinity;
+        for (let i = 0; i < floorUv.length; i += 2) { uMin = Math.min(uMin, floorUv[i]); uMax = Math.max(uMax, floorUv[i]); }
+        const duffSize = surfaceOf('PBR_Forest_Floor')!.realSizeM[0];
+        expect(uMax - uMin).toBeCloseTo(80 / duffSize, 0);
+        // tangents follow the UVs (the normal maps need them): perpendicular to the normal on the columns, not a placeholder
+        const normals = attribute('Forest_Trunks_And_Log', 'NORMAL', 3);
+        const tangents = attribute('Forest_Trunks_And_Log', 'TANGENT', 4);
+        let perpendicular = 0;
+        const n = normals.length / 3;
+        for (let i = 0; i < n; i++) {
+            const dot = normals[i * 3] * tangents[i * 4] + normals[i * 3 + 1] * tangents[i * 4 + 1] + normals[i * 3 + 2] * tangents[i * 4 + 2];
+            if (Math.abs(dot) < 0.05 && Math.abs(Math.abs(tangents[i * 4 + 3]) - 1) < 1e-4) perpendicular++;
+        }
+        expect(perpendicular / n).toBeGreaterThan(0.99);
     }, 60000);
+
+    it('should grow every crown with SB-Veggie into the trees GLB beside the forest', () => {
+        const treesPath = path.join(outDir, 'forest_hyperreal_trees.glb');
+        expect(fs.existsSync(treesPath)).toBe(true);
+        const buf = fs.readFileSync(treesPath);
+        expect(buf.readUInt32LE(0)).toBe(0x46546C67);
+        const gltf = JSON.parse(buf.toString('utf8', 20, 20 + buf.readUInt32LE(12)));
+        type Node = { name?: string; children?: number[]; extras?: Record<string, any> };
+        const nodes = gltf.nodes as Node[];
+        const trees = nodes.filter(n => n.extras?.sbTree && n.extras?.stem);
+        // 45 redwood crowns on their columns and 4 understory crowns
+        expect(trees.length).toBe(49);
+        for (const t of trees) {
+            expect(t.extras!.crownOrigin).toBe('described');
+            expect(t.extras!.crownSurfaceReached).toBeGreaterThanOrEqual(0.75);
+            const levels = (t.children ?? []).map(i => nodes[i].extras?.sbLod?.level).filter((l): l is number => typeof l === 'number');
+            expect(levels).toEqual([0, 1, 2, 3]);
+        }
+        // the leaf clusters are instanced library meshes, and the species library chose each crown's proportions
+        expect(gltf.extensionsUsed).toContain('EXT_mesh_gpu_instancing');
+        expect(gltf.extras.sbTrees.species.index).toBe('assets/vegetation/species/index.json');
+        const stats = JSON.parse(fs.readFileSync(path.join(outDir, 'forest_hyperreal_trees.stats.json'), 'utf8'));
+        expect(stats.trees).toBe(49);
+        expect(stats.shortOfCrown).toBe(0);
+        const redwoodCrowns = trees.filter(t => t.extras!.label === 'coast redwood crown');
+        expect(redwoodCrowns.length).toBe(45);
+        // a redwood's grown trunk stays inside its fluted column (half the column's base radius)
+        for (const t of redwoodCrowns) expect(t.extras!.inferred.trunkRadiusM).toBeLessThan(1.0);
+
+        // the species the library matches carries its leaf's form to the leaf choice: the crowns matched to needle or scale
+        // leaves (blade width of millimetres) draw the library's needle spray, the broadleaf understory draws leaves
+        const textures = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'assets/textures/trees/index.json'), 'utf8')) as { leaves: Array<{ id: string; leaf: { bladeWidthM: number } }> };
+        const bladeOf = (id: string) => textures.leaves.find(e => e.id === id)!.leaf.bladeWidthM;
+        const thinnest = Math.min(...textures.leaves.map(e => e.leaf.bladeWidthM));
+        let needleCrowns = 0;
+        for (const t of trees) {
+            const leaves = t.extras!.sbTree.texture.leaves as { entry: string; bladeWidthM: number; targetBladeWidthM: number };
+            expect(leaves.bladeWidthM).toBe(bladeOf(leaves.entry));
+            if (leaves.targetBladeWidthM > 0 && leaves.targetBladeWidthM < 0.004) {
+                needleCrowns++;
+                expect(leaves.bladeWidthM, t.name).toBe(thinnest);
+            } else {
+                expect(leaves.bladeWidthM, t.name).toBeGreaterThan(0.005);
+            }
+        }
+        expect(needleCrowns).toBeGreaterThanOrEqual(40);
+
+        // the redwoods' crowns are pointed and their species holds its leader: they grow excurrent (a stem through the
+        // crown, laterals at the species' angle); the understory's rounded crowns fork at their break
+        const inferredOf = (t: Node) => t.extras!.inferred as { topShare: number; excurrence: number };
+        for (const t of redwoodCrowns) {
+            expect(inferredOf(t).topShare).toBeLessThan(0.2);
+            expect(inferredOf(t).excurrence, t.name).toBeGreaterThan(0.9);
+        }
+        // the needle sprays draw at their own length, porous (a third of their box): their crowns are filled as they draw,
+        // their clusters closer, so the near level still covers most of the crown seen from outside
+        for (const t of redwoodCrowns) {
+            const lod = (t.extras!.lod ?? t.extras!.sbTree.lod) as { leafLengthM: number; coverage: { cutout: { level0: { mean: number } } } };
+            expect(lod.leafLengthM).toBeCloseTo(0.3427, 4);
+            expect(lod.coverage.cutout.level0.mean, t.name).toBeGreaterThan(0.6);
+        }
+    });
+
+    it('grows an excurrent crown as a leader through the crown with laterals at the species angle, and leaves excurrence 0 as it was', async () => {
+        const testCpp = `
+#include "scratchbox_nature.hpp"
+#include <iostream>
+#include <random>
+#include <cmath>
+#include <algorithm>
+using namespace scratchbox::nature;
+using namespace scratchbox::math;
+
+// a cone of attractors: 30 m tall, its crown from 12 m, 4 m wide at its base
+int main() {
+    std::vector<Vec3> cone;
+    std::mt19937 g(7);
+    std::uniform_real_distribution<float> u(0.0f, 1.0f);
+    while (cone.size() < 3000) {
+        const float y = 12.0f + 18.0f * u(g), r = 4.0f * (30.0f - y) / 18.0f * std::sqrt(u(g)), a = 6.2831853f * u(g);
+        cone.push_back(Vec3(r * std::cos(a), y, r * std::sin(a)));
+    }
+    for (float excurrence : {0.0f, 1.0f}) {
+        SpaceColonizationConfig cfg;
+        cfg.customAttractors = cone;
+        cfg.attractorCount = static_cast<int>(cone.size());
+        cfg.rootAnchor = Vec3(0, 0, 0);
+        cfg.crownCenter = Vec3(0, 21, 0);
+        cfg.crownExtents = Vec3(4, 9, 4);
+        cfg.clearTrunkHeight = 12.0f;
+        cfg.branchStepLength = 0.5f;
+        cfg.killRadius = 0.8f;
+        cfg.perceptionRadius = 3.5f;
+        cfg.maxIterations = 200;
+        cfg.scaffoldBranchCount = 4;
+        cfg.scaffoldAngleFromLeaderRad = 1.4f;   // 80 degrees: near level
+        cfg.growthMomentumFactor = 0.45f;
+        cfg.trunkSeeksCrown = true;
+        cfg.excurrence = excurrence;
+        cfg.leaderTopY = 30.0f;
+        std::mt19937 rng(11);
+        ColonizationReport rep;
+        auto nodes = SpaceColonizationTreeGenerator::growSkeleton(cfg, rng, &rep);
+        // the leader's top: the highest node within 0.6 m of the stem's axis reached by walking first children up from
+        // the crown break; the laterals' angle from the vertical: segments off that axis, beyond 1 m from it
+        int id = rep.trunkNodes - 1;
+        float leaderTop = nodes[id].position.y;
+        while (!nodes[id].children.empty()) {
+            int next = -1;
+            for (int c : nodes[id].children) {
+                const Vec3 p = nodes[c].position;
+                if (std::hypot(p.x, p.z) < 0.6f && (next < 0 || p.y > nodes[next].position.y)) next = c;
+            }
+            if (next < 0) break;
+            id = next;
+            leaderTop = std::max(leaderTop, nodes[id].position.y);
+        }
+        std::vector<float> angles;
+        for (const auto& n : nodes) {
+            if (n.parentId < 0 || std::hypot(n.position.x, n.position.z) < 1.0f) continue;
+            const Vec3 d = n.position - nodes[n.parentId].position;
+            angles.push_back(std::acos(std::clamp(d.y / std::max(1e-6f, d.length()), -1.0f, 1.0f)));
+        }
+        std::nth_element(angles.begin(), angles.begin() + angles.size() / 2, angles.end());
+        std::cout << "excurrence " << excurrence << " leaderShare " << (leaderTop - 12.0f) / 18.0f << " lateralAngle "
+                  << angles[angles.size() / 2] << " leaderNodes " << rep.leaderNodes << " reached " << rep.attractorsReached << "/" << rep.attractors << "\\n";
+    }
+    return 0;
+}
+`;
+        const result = await compiler.compileSource(testCpp, { outputBinaryName: 'test_excurrent_growth', optimization: '-O2' });
+        expect(result.success).toBe(true);
+        const execResult = await compiler.executeBinary(path.resolve(process.cwd(), 'build/3d-native/test_excurrent_growth'), [], process.cwd());
+        expect(execResult.exitCode).toBe(0);
+        const rows = Object.fromEntries([...execResult.stdout.matchAll(/excurrence (\S+) leaderShare (\S+) lateralAngle (\S+) leaderNodes (\d+) reached (\d+)\/(\d+)/g)]
+            .map(m => [m[1], { leader: +m[2], angle: +m[3], leaderNodes: +m[4], reached: +m[5] / +m[6] }]));
+        console.log(rows);
+        // excurrence 0: the trunk stops at the crown break and grows no leader of its own
+        expect(rows['0'].leaderNodes).toBe(0);
+        // excurrence 1: the leader runs on through most of the crown, the laterals hold near the species' 80 degrees
+        // (within 20), and the crown is still filled
+        expect(rows['1'].leaderNodes).toBeGreaterThan(20);
+        expect(rows['1'].leader).toBeGreaterThan(0.8);
+        expect(Math.abs(rows['1'].angle - 1.4)).toBeLessThan(0.35);
+        expect(rows['1'].angle).toBeGreaterThan(rows['0'].angle);
+        expect(rows['1'].reached).toBeGreaterThan(0.9);
+    }, 120000);
 
     it('should compile and evaluate general BotanicalOrganGenerator, NurseLogGenerator, and BiomassScatterEngine', async () => {
         const testCpp = `

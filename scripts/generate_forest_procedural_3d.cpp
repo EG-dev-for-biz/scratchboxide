@@ -6,8 +6,19 @@
  * - .agents/skills/3d-artist/SKILL.md
  * - 70-20-10 Form Hierarchy
  * - 7-Tier Biome Stratification (Canopy -> Subcanopy -> Ferns -> Herbs -> Epiphytes -> Debris -> Substrate)
- * - Multi-Mesh glTF 2.0 Binary Output (.glb) with embedded authentic photo-derived PBR texture sets
+ * - Multi-Mesh glTF 2.0 Binary Output (.glb) with embedded PBR maps: the floor, moss and bark from the app's texture
+ *   library (photographed tileable sets) at their real size, the fern pinnae a leaf from the tree texture library, each
+ *   tinted to its region of the reference photograph
  * - Macro-to-Micro Rule-Based Clutter Placement
+ * - Every crown grown by SB-Veggie (scratchbox_sb_veggie_grove.hpp) into <output>_trees.glb beside the forest
+ *
+ * Run from the repository root (it reads public/forest_reference.png, assets/textures/library/copies,
+ * assets/vegetation/species and assets/textures/trees):
+ *   clang++ -std=c++20 -O3 -pthread -I packages/core/src/native/3d-engine/include \
+ *       scripts/generate_forest_procedural_3d.cpp -o build/3d-native/generate_forest_procedural_3d -lz
+ *   build/3d-native/generate_forest_procedural_3d public/models/forest_hyperreal.glb
+ * writes public/models/forest_hyperreal.glb, forest_hyperreal_trees.glb and forest_hyperreal_trees.stats.json, which
+ * /forest_3d_viewer.html loads.
  ********************************************************************************/
 
 #include "scratchbox_engine.hpp"
@@ -15,6 +26,9 @@
 #include "scratchbox_substrate.hpp"
 #include "scratchbox_botanical_texture.hpp"
 #include "scratchbox_infiniti.hpp"
+#include "scratchbox_sb_veggie_grove.hpp"
+#include "scratchbox_png.hpp"
+#include "scratchbox_jpeg.hpp"
 
 #include <iostream>
 #include <fstream>
@@ -24,6 +38,10 @@
 #include <cmath>
 #include <chrono>
 #include <algorithm>
+#include <limits>
+#include <functional>
+#include <stdexcept>
+#include <tuple>
 
 using namespace scratchbox;
 using namespace scratchbox::geometry;
@@ -40,9 +58,9 @@ using math::HALF_PI;
 using math::DEG_TO_RAD;
 
 // ============================================================================
-// File Loading Helper for Authentic Embedded Textures
+// File Loading Helper for Embedded Textures
 // ============================================================================
-inline std::vector<uint8_t> loadPngFile(const std::string& path) {
+inline std::vector<uint8_t> readFileBytes(const std::string& path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
     if (!file.is_open()) return {};
     std::streamsize size = file.tellg();
@@ -55,12 +73,343 @@ inline std::vector<uint8_t> loadPngFile(const std::string& path) {
 }
 
 // ============================================================================
+// Surface Materials: Texture Library Sets at Their Real Size, Tinted to the Reference Photograph
+// ============================================================================
+// The floor (needle duff), the moss and the bark are tileable photographed sets from the app's texture library
+// (ambientCG / Poly Haven, CC0), copied at a working resolution into assets/textures/library/copies by
+// scripts/copy_texture_library_sets.py; each was chosen by its measured colour and texture against the region of
+// public/forest_reference.png it stands for (docs/processes/forest_viewer_library_surfaces_2026-11-02.md lists the
+// candidates). The fern pinnae draw a leaf from the tree texture library, chosen below by shape, real size and colour.
+// UVs are laid in metres over each set's real tile size. A material's baseColorFactor tints its map to the chromaticity
+// measured in its region of the photograph (per channel the region's share over the set's, scaled so the largest is 1: a
+// factor can only darken), then darkens it where the photograph shows the surface darker, relative to the duff, than its
+// set is (luminanceShare); otherwise a set keeps its own albedo. Vertex colours only modulate the tinted map (1 = the set
+// as tinted): damp humus, the flutes' crevices, moss on bark.
+
+struct SurfaceSet {
+    std::string id, publisher, licence, sizeSource, library;
+    float tileU{1.0f}, tileV{1.0f};    // real tile width and height, metres
+    Vec3 meanLinear;                   // the map's mean colour, linear sRGB (over opaque texels for a leaf)
+    std::vector<uint8_t> albedo, normal, orm;
+    std::string albedoMime{"image/jpeg"}, normalMime{"image/jpeg"}, ormMime{"image/jpeg"};
+};
+
+struct PhotoRegion { int x0, y0, x1, y1; };
+
+/** A region set of the reference photograph and the linear colour measured over its kept pixels. */
+struct MeasuredTarget {
+    std::vector<PhotoRegion> regions;
+    std::string keeps;   // which pixels count, for the record
+    Vec3 meanLinear;
+    size_t pixels{0};
+};
+
+inline float srgbToLinear(uint8_t v) {
+    const float c = v / 255.0f;
+    return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+}
+
+inline std::string jsonVec(const Vec3& v) {
+    std::ostringstream s;
+    s << "[" << v.x << "," << v.y << "," << v.z << "]";
+    return s.str();
+}
+
+inline std::string jsonStr(const std::string& v) {
+    std::string out = "\"";
+    for (char c : v) {
+        if (c == '"' || c == '\\') out += '\\';
+        out += c;
+    }
+    return out + "\"";
+}
+
+inline io::GlbJsonValue readJsonFile(const std::string& path) {
+    const auto bytes = readFileBytes(path);
+    if (bytes.empty()) throw std::runtime_error("cannot read " + path + " (run from the repository root)");
+    io::GlbJsonParser p(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    return p.parse();
+}
+
+inline Vec3 vec3Of(const io::GlbJsonValue& v, const std::string& what) {
+    if (v.type != io::GlbJsonValue::Array || v.arr.size() < 3) throw std::runtime_error(what + " must be an array of three numbers");
+    return Vec3(static_cast<float>(v[size_t(0)].num), static_cast<float>(v[size_t(1)].num), static_cast<float>(v[size_t(2)].num));
+}
+
+/** A set's working copy (assets/textures/library/copies/index.json): its maps and the size and colour measured on them. */
+inline SurfaceSet loadLibraryCopy(const std::string& id) {
+    const std::string dir = "assets/textures/library/copies/";
+    const io::GlbJsonValue index = readJsonFile(dir + "index.json");
+    for (const auto& e : index["sets"].arr) {
+        if (e["id"].str != id) continue;
+        SurfaceSet s;
+        s.id = id;
+        s.library = dir;
+        s.publisher = e["publisher"].str;
+        s.licence = e["licence"].str;
+        s.sizeSource = e["sizeSource"].str;
+        s.tileU = static_cast<float>(e["realSizeM"][size_t(0)].num);
+        s.tileV = static_cast<float>(e["realSizeM"][size_t(1)].num);
+        if (!(s.tileU > 0.0f) || !(s.tileV > 0.0f)) throw std::runtime_error(id + ": no real tile size in " + dir + "index.json");
+        s.meanLinear = vec3Of(e["colour"]["meanLinearRgb"], id + ".colour.meanLinearRgb");
+        for (auto [map, bytes] : { std::pair{"albedo", &s.albedo}, std::pair{"normal", &s.normal}, std::pair{"orm", &s.orm} }) {
+            const std::string path = dir + e["maps"][map].str;
+            *bytes = readFileBytes(path);
+            if (bytes->empty()) throw std::runtime_error("cannot read " + path);
+        }
+        return s;
+    }
+    throw std::runtime_error("no set '" + id + "' in " + dir + "index.json (copy it with scripts/copy_texture_library_sets.py)");
+}
+
+/** The mean linear colour of the photograph's pixels in `regions` that `keep` accepts. */
+inline MeasuredTarget measurePhoto(const texture::ImageBuffer& photo, std::vector<PhotoRegion> regions, std::string keeps,
+                                   const std::function<bool(float r, float g, float b)>& keep) {
+    MeasuredTarget t{std::move(regions), std::move(keeps), Vec3(0, 0, 0), 0};
+    double sum[3] = {0, 0, 0};
+    for (const auto& r : t.regions) {
+        for (int y = std::max(0, r.y0); y < std::min(photo.height, r.y1); ++y) {
+            for (int x = std::max(0, r.x0); x < std::min(photo.width, r.x1); ++x) {
+                const uint8_t* px = &photo.data[(static_cast<size_t>(y) * photo.width + x) * photo.channels];
+                const float lr = srgbToLinear(px[0]), lg = srgbToLinear(px[1]), lb = srgbToLinear(px[2]);
+                if (!keep(lr, lg, lb)) continue;
+                sum[0] += lr; sum[1] += lg; sum[2] += lb;
+                ++t.pixels;
+            }
+        }
+    }
+    if (t.pixels == 0) throw std::runtime_error("no pixel of the reference photograph is kept for '" + t.keeps + "'");
+    t.meanLinear = Vec3(static_cast<float>(sum[0] / t.pixels), static_cast<float>(sum[1] / t.pixels), static_cast<float>(sum[2] / t.pixels));
+    return t;
+}
+
+inline Vec3 chromaticity(const Vec3& c) {
+    const float s = std::max(1e-6f, c.x + c.y + c.z);
+    return Vec3(c.x / s, c.y / s, c.z / s);
+}
+
+/** The factor (each channel at most 1) that gives `from` the chromaticity of `to`. */
+inline Vec3 tintFactor(const Vec3& from, const Vec3& to) {
+    const Vec3 a = chromaticity(to), b = chromaticity(from);
+    Vec3 g(a.x / std::max(1e-6f, b.x), a.y / std::max(1e-6f, b.y), a.z / std::max(1e-6f, b.z));
+    const float m = std::max({g.x, g.y, g.z});
+    return Vec3(g.x / m, g.y / m, g.z / m);
+}
+
+inline float luminance(const Vec3& c) { return 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z; }
+
+/**
+ * The share a surface's tint is darkened by so that its luminance stands to the duff's as the photograph shows them (the
+ * duff, the largest and most evenly lit surface there, keeps its set's albedo). A factor can only darken, so a surface
+ * the photograph shows brighter than this (sunlit moss, translucent fronds) keeps its set's own; 1 then.
+ */
+inline float luminanceShare(const Vec3& setMean, const Vec3& tint, const MeasuredTarget& target, float duffLuminance, const MeasuredTarget& duffTarget) {
+    const float have = luminance(Vec3(setMean.x * tint.x, setMean.y * tint.y, setMean.z * tint.z));
+    const float want = duffLuminance * luminance(target.meanLinear) / std::max(1e-6f, luminance(duffTarget.meanLinear));
+    return have > 1e-6f ? std::min(1.0f, want / have) : 1.0f;
+}
+
+/** The material's extras: the set it draws, its real size, and the measurement it is tinted to. */
+inline std::string surfaceExtras(const SurfaceSet& s, const MeasuredTarget& t, const Vec3& factor, float luminanceShareOf, const std::string& uv) {
+    std::ostringstream e;
+    e << "{\"sbSurface\":{\"set\":" << jsonStr(s.id) << ",\"library\":" << jsonStr(s.library) << ",\"publisher\":" << jsonStr(s.publisher)
+      << ",\"licence\":" << jsonStr(s.licence) << ",\"realSizeM\":[" << s.tileU << "," << s.tileV << "],\"sizeSource\":" << jsonStr(s.sizeSource)
+      << ",\"uv\":" << jsonStr(uv) << ",\"setMeanLinearRgb\":" << jsonVec(s.meanLinear)
+      << ",\"tint\":{\"factor\":" << jsonVec(factor) << ",\"luminanceShare\":" << luminanceShareOf
+      << ",\"measuredLinearRgb\":" << jsonVec(t.meanLinear) << ",\"pixels\":" << t.pixels
+      << ",\"keeps\":" << jsonStr(t.keeps) << ",\"source\":\"public/forest_reference.png\",\"regionsPx\":[";
+    for (size_t i = 0; i < t.regions.size(); ++i) {
+        const auto& r = t.regions[i];
+        e << (i ? "," : "") << "[" << r.x0 << "," << r.y0 << "," << r.x1 << "," << r.y1 << "]";
+    }
+    e << "]},\"provenance\":\"library\"}}";
+    return e.str();
+}
+
+// A sword fern pinna as the clump generator (section 5) draws it: its length a share of the clump's radius at mid-frond,
+// its width a share of that length. The pinnae's leaf is chosen against the pinna of a clump this size.
+constexpr float PINNA_LENGTH_SHARE = 0.32f;
+constexpr float PINNA_WIDTH_SHARE = 0.38f;
+constexpr float PINNA_TIP_REACH = 1.15f;   // the tip stands this far out along the pinna's length
+constexpr float REFERENCE_CLUMP_RADIUS_M = 0.95f;
+
+/** One leaf of an atlas in glTF UVs (v down): uv = origin + t * along + s * across, s across and t along in [0, 1]. */
+struct LeafCell {
+    Vec2 origin, along, across;
+    float aspect;   // the leaf's real width over its length
+    Vec2 uvAt(float s, float t) const {
+        return Vec2(origin.x + t * along.x + s * across.x, origin.y + t * along.y + s * across.y);
+    }
+};
+
+/** The pinnae's leaf: an atlas from the tree texture library, its cells, and one opaque texel on a stem (the rachis). */
+struct FernLeaf {
+    SurfaceSet set;
+    std::vector<LeafCell> cells;
+    Vec2 stemUv;
+    float lengthM{0}, widthM{0}, cost{0};
+};
+
+/**
+ * Chooses the tree texture library's leaf whose shape (width over length), real length and colour are nearest a sword
+ * fern pinna's, and readies its maps for a MASK material: the colour map with the opacity in its alpha (transparent
+ * texels take the leaf's mean colour, so no background bleeds into the mips), its normal map, and its roughness packed
+ * into an ORM map.
+ */
+inline FernLeaf chooseFernLeaf(const MeasuredTarget& fern) {
+    const std::string root = "assets/textures/trees/";
+    const io::GlbJsonValue index = readJsonFile(root + "index.json");
+    const float pinnaLength = PINNA_TIP_REACH * PINNA_LENGTH_SHARE * REFERENCE_CLUMP_RADIUS_M;
+    const float pinnaAspect = PINNA_WIDTH_SHARE * PINNA_LENGTH_SHARE * REFERENCE_CLUMP_RADIUS_M / pinnaLength;
+    const Vec3 want = chromaticity(fern.meanLinear);
+    const io::GlbJsonValue* best = nullptr;
+    float bestCost = std::numeric_limits<float>::infinity();
+    std::cout << "   Fern pinna (" << pinnaLength << " m long, width/length " << pinnaAspect << ") against the tree texture library's leaves:\n";
+    for (const auto& e : index["leaves"].arr) {
+        const float len = static_cast<float>(e["leaf"]["lengthM"].num), wid = static_cast<float>(e["leaf"]["widthM"].num);
+        if (!(len > 0.0f) || !(wid > 0.0f)) continue;
+        const Vec3 c = chromaticity(vec3Of(e["colour"]["meanLinearRgb"], e["id"].str));
+        const float colour = std::abs(c.x - want.x) + std::abs(c.y - want.y) + std::abs(c.z - want.z);
+        const float cost = std::abs(std::log((wid / len) / pinnaAspect)) + std::abs(std::log(len / pinnaLength)) + 4.0f * colour;
+        std::cout << "     " << e["id"].str << ": shape " << std::abs(std::log((wid / len) / pinnaAspect)) << ", length "
+                  << std::abs(std::log(len / pinnaLength)) << ", colour " << colour << " -> " << cost << "\n";
+        if (cost < bestCost) { bestCost = cost; best = &e; }
+    }
+    if (!best) throw std::runtime_error("the tree texture library has no leaf with a measured size");
+    const io::GlbJsonValue& e = *best;
+
+    FernLeaf leaf;
+    leaf.cost = bestCost;
+    leaf.lengthM = static_cast<float>(e["leaf"]["lengthM"].num);
+    leaf.widthM = static_cast<float>(e["leaf"]["widthM"].num);
+    leaf.set.id = e["id"].str;
+    leaf.set.library = root;
+    leaf.set.publisher = "tree texture library";
+    leaf.set.licence = "see assets/textures/trees/index.json";
+    leaf.set.sizeSource = "leaf length and width measured on the atlas (" + root + "index.json: leafSize)";
+    leaf.set.tileU = leaf.widthM;
+    leaf.set.tileV = leaf.lengthM;
+
+    auto colour = jpeg::decodeFile(root + e["maps"]["color"].str, jpeg::OutputFormat::Rgb);
+    const auto opacityBytes = readFileBytes(root + e["maps"]["opacity"].str);
+    auto opacity = png::decode(opacityBytes.data(), opacityBytes.size(), png::OutputFormat::Luma);
+    auto rough = jpeg::decodeFile(root + e["maps"]["roughness"].str, jpeg::OutputFormat::Luma);
+    if (!colour.ok || !opacity.ok || !rough.ok) throw std::runtime_error("cannot decode the maps of leaf " + leaf.set.id);
+    if (opacity.image.width != colour.image.width || opacity.image.height != colour.image.height)
+        throw std::runtime_error("leaf " + leaf.set.id + ": its opacity and colour maps differ in size");
+
+    // halve the atlas (2x2 means, colour in linear light): the GLB stays light and a pinna still gets a texel per millimetre
+    const int W = colour.image.width / 2, H = colour.image.height / 2;
+    texture::ImageBuffer rgba(W, H, 4);
+    double sum[3] = {0, 0, 0};
+    size_t opaque = 0;
+    std::vector<float> lin(static_cast<size_t>(W) * H * 3);
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            float c[3] = {0, 0, 0}, a = 0;
+            for (int dy = 0; dy < 2; ++dy) {
+                for (int dx = 0; dx < 2; ++dx) {
+                    const size_t i = static_cast<size_t>(2 * y + dy) * colour.image.width + (2 * x + dx);
+                    for (int k = 0; k < 3; ++k) c[k] += srgbToLinear(colour.image.data[i * 3 + k]);
+                    a += opacity.image.data[i] / 255.0f;
+                }
+            }
+            const size_t o = static_cast<size_t>(y) * W + x;
+            for (int k = 0; k < 3; ++k) lin[o * 3 + k] = c[k] / 4.0f;
+            rgba.data[o * 4 + 3] = static_cast<uint8_t>(std::lround(a / 4.0f * 255.0f));
+            if (a / 4.0f >= 0.5f) {
+                for (int k = 0; k < 3; ++k) sum[k] += lin[o * 3 + k];
+                ++opaque;
+            }
+        }
+    }
+    if (opaque == 0) throw std::runtime_error("leaf " + leaf.set.id + " has no opaque texel");
+    leaf.set.meanLinear = Vec3(static_cast<float>(sum[0] / opaque), static_cast<float>(sum[1] / opaque), static_cast<float>(sum[2] / opaque));
+    auto toSrgb = [](float v) {
+        v = std::clamp(v, 0.0f, 1.0f);
+        return static_cast<uint8_t>(std::lround((v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f) * 255.0f));
+    };
+    for (size_t o = 0; o < static_cast<size_t>(W) * H; ++o) {
+        const bool clear = rgba.data[o * 4 + 3] < 128;
+        rgba.data[o * 4 + 0] = toSrgb(clear ? leaf.set.meanLinear.x : lin[o * 3 + 0]);
+        rgba.data[o * 4 + 1] = toSrgb(clear ? leaf.set.meanLinear.y : lin[o * 3 + 1]);
+        rgba.data[o * 4 + 2] = toSrgb(clear ? leaf.set.meanLinear.z : lin[o * 3 + 2]);
+    }
+    leaf.set.albedo = png::encode(rgba, 6);
+    leaf.set.albedoMime = "image/png";
+    leaf.set.normal = readFileBytes(root + e["maps"]["normal"].str);
+    texture::ImageBuffer orm(rough.image.width, rough.image.height, 3);
+    for (size_t i = 0; i < static_cast<size_t>(rough.image.width) * rough.image.height; ++i) {
+        orm.data[i * 3 + 0] = 255;
+        orm.data[i * 3 + 1] = rough.image.data[i];
+        orm.data[i * 3 + 2] = 0;
+    }
+    leaf.set.orm = png::encode(orm, 6);
+    leaf.set.ormMime = "image/png";
+    if (leaf.set.albedo.empty() || leaf.set.normal.empty() || leaf.set.orm.empty()) throw std::runtime_error("cannot ready the maps of leaf " + leaf.set.id);
+
+    // the library's cells are in UVs with v up (a texture loaded flipped); glTF's v runs down the image
+    for (const auto& c : e["atlas"]["cells"].arr) {
+        LeafCell cell;
+        cell.origin = Vec2(static_cast<float>(c["origin"][size_t(0)].num), 1.0f - static_cast<float>(c["origin"][size_t(1)].num));
+        cell.along = Vec2(static_cast<float>(c["along"][size_t(0)].num), -static_cast<float>(c["along"][size_t(1)].num));
+        cell.across = Vec2(static_cast<float>(c["across"][size_t(0)].num), -static_cast<float>(c["across"][size_t(1)].num));
+        const float l = static_cast<float>(c["lengthM"].num), w = static_cast<float>(c["widthM"].num);
+        cell.aspect = (l > 0.0f && w > 0.0f) ? w / l : leaf.widthM / leaf.lengthM;
+        leaf.cells.push_back(cell);
+    }
+    if (leaf.cells.empty()) throw std::runtime_error("leaf " + leaf.set.id + " has no atlas cells");
+
+    // the rachis and crosiers sample one opaque texel on the first leaf's stem, nearest its base
+    const LeafCell& first = leaf.cells.front();
+    float bestD = std::numeric_limits<float>::infinity();
+    leaf.stemUv = first.uvAt(0.5f, 0.5f);
+    for (int it = 0; it <= 60; ++it) {
+        for (int is = 0; is <= 40; ++is) {
+            const float t = 0.02f + 0.6f * it / 60.0f, s = 0.3f + 0.4f * is / 40.0f;
+            const Vec2 uv = first.uvAt(s, t);
+            const int x = std::clamp(static_cast<int>(uv.x * W), 0, W - 1), y = std::clamp(static_cast<int>(uv.y * H), 0, H - 1);
+            if (rgba.data[(static_cast<size_t>(y) * W + x) * 4 + 3] < 250) continue;
+            const float d = std::abs(s - 0.5f) * 4.0f + t;
+            if (d < bestD) { bestD = d; leaf.stemUv = uv; }
+        }
+    }
+    return leaf;
+}
+
+/** Per-vertex glTF tangents from the UVs: xyz along increasing u, w the sign that makes cross(normal, tangent) * w point up
+ * the image (decreasing v), as glTF's normal textures (+Y up) need. */
+inline void computeTangents(ScratchboxMesh& mesh) {
+    std::vector<Vec3> du(mesh.vertices.size(), Vec3(0, 0, 0)), dv(mesh.vertices.size(), Vec3(0, 0, 0));
+    for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+        const uint32_t a = mesh.indices[i], b = mesh.indices[i + 1], c = mesh.indices[i + 2];
+        const Vertex &A = mesh.vertices[a], &B = mesh.vertices[b], &C = mesh.vertices[c];
+        const Vec3 e1 = B.position - A.position, e2 = C.position - A.position;
+        const float u1 = B.uv.x - A.uv.x, v1 = B.uv.y - A.uv.y, u2 = C.uv.x - A.uv.x, v2 = C.uv.y - A.uv.y;
+        const float det = u1 * v2 - u2 * v1;
+        if (std::abs(det) < 1e-12f) continue;
+        const float r = 1.0f / det;
+        const Vec3 sdir = (e1 * v2 - e2 * v1) * r, tdir = (e2 * u1 - e1 * u2) * r;
+        for (uint32_t k : {a, b, c}) { du[k] = du[k] + sdir; dv[k] = dv[k] + tdir; }
+    }
+    for (size_t k = 0; k < mesh.vertices.size(); ++k) {
+        Vertex& v = mesh.vertices[k];
+        const Vec3 n = v.normal;
+        Vec3 t = du[k] - n * n.dot(du[k]);
+        if (t.length() < 1e-8f) {
+            t = std::abs(n.y) < 0.9f ? Vec3(0, 1, 0).cross(n) : Vec3(1, 0, 0).cross(n);
+        }
+        t = t.normalized();
+        const float w = n.cross(t).dot(dv[k] * -1.0f) < 0.0f ? -1.0f : 1.0f;
+        v.tangent = Vec4(t.x, t.y, t.z, w);
+    }
+}
+
+// ============================================================================
 // Photometrically Calibrated Forest PBR Color Palette (National Geographic Grade)
 // ============================================================================
 static const Vec4 COL_REDWOOD_BARK(0.35f, 0.19f, 0.12f, 1.0f);       // Deep reddish-brown heartwood bark
 static const Vec4 COL_BARK_FURROW(0.10f, 0.05f, 0.03f, 1.0f);        // Crevice shadow / ambient occlusion
-static const Vec4 COL_BARK_RIDGE(0.48f, 0.28f, 0.16f, 1.0f);         // Outer sun-catching bark plate
-static const Vec4 COL_TRUNK_MOSS(0.28f, 0.50f, 0.15f, 1.0f);         // Damp velvet moss on lower trunk
 static const Vec4 COL_FOREST_HUMUS(0.12f, 0.08f, 0.05f, 1.0f);       // Rich dark forest soil / loam (moist)
 static const Vec4 COL_NEEDLE_DUFF(0.26f, 0.15f, 0.09f, 1.0f);        // Redwood fallen needle carpet (duff)
 static const Vec4 COL_ORGANIC_LOAM(0.18f, 0.12f, 0.08f, 1.0f);       // Weathered soil surface
@@ -69,9 +418,21 @@ static const Vec4 COL_NURSE_LOG_WOOD(0.42f, 0.28f, 0.18f, 1.0f);     // Splinter
 static const Vec4 COL_NURSE_LOG_MOSS(0.30f, 0.60f, 0.16f, 1.0f);     // Dense sunlit moss cap on log
 static const Vec4 COL_FERN_FROND(0.22f, 0.56f, 0.13f, 1.0f);         // Lush sword fern green
 static const Vec4 COL_FERN_HIGHLIGHT(0.50f, 0.82f, 0.18f, 1.0f);     // Sunlit translucent fern tip (SSS)
-static const Vec4 COL_CANOPY_FOLIAGE(0.22f, 0.48f, 0.12f, 0.96f);     // High canopy foliage
-static const Vec4 COL_CANOPY_SUNLIT(0.52f, 0.82f, 0.20f, 1.0f);      // SSS transmitted foliage glow
 static const Vec4 COL_SUNBEAM_GOLD(0.98f, 0.92f, 0.74f, 0.28f);      // Morning crepuscular light beam
+
+// On the library-textured surfaces a vertex colour modulates the tinted map: the palette's variations as shares of the
+// surface the map stands for (each channel at most 1)
+inline Vec4 relativeTo(const Vec4& c, const Vec4& ref) {
+    return Vec4(std::min(1.0f, c.x / ref.x), std::min(1.0f, c.y / ref.y), std::min(1.0f, c.z / ref.z), 1.0f);
+}
+inline float luminance(const Vec4& c) { return 0.2126f * c.x + 0.7152f * c.y + 0.0722f * c.z; }
+static const Vec4 MOD_NONE(1.0f, 1.0f, 1.0f, 1.0f);
+static const Vec4 MOD_HUMUS = relativeTo(COL_FOREST_HUMUS, COL_NEEDLE_DUFF);
+static const Vec4 MOD_LOAM = relativeTo(COL_ORGANIC_LOAM, COL_NEEDLE_DUFF);
+static const Vec4 MOD_DAMP_SOIL = relativeTo(Vec4(0.08f, 0.05f, 0.03f, 1.0f), COL_NEEDLE_DUFF);
+static const Vec4 MOD_FURROW = relativeTo(COL_BARK_FURROW, COL_REDWOOD_BARK);
+static const Vec4 MOD_FLOOR_MOSS = relativeTo(COL_FLOOR_MOSS, COL_NURSE_LOG_MOSS);
+static const Vec4 MOD_FERN_FROND = relativeTo(COL_FERN_FROND, COL_FERN_HIGHLIGHT);
 
 // ============================================================================
 // 1. Terrain Heightfield & Normal Telemetry (Domain-Warped Geology & Forest Bowl)
@@ -110,7 +471,7 @@ inline Vec3 getTerrainNormal(float x, float z) {
 // ============================================================================
 // 2. Woodland Floor Mesh Generator with Micro-Relief
 // ============================================================================
-ScratchboxMesh generateForestFloor(float minX, float maxX, float minZ, float maxZ, float step = 0.26f) {
+ScratchboxMesh generateForestFloor(const SurfaceSet& duff, float minX, float maxX, float minZ, float maxZ, float step = 0.26f) {
     ScratchboxMesh mesh("Forest_Terrain_Floor");
     mesh.material.name = "PBR_Forest_Floor";
     mesh.material.roughnessFactor = 0.92f;
@@ -142,21 +503,19 @@ ScratchboxMesh generateForestFloor(float minX, float maxX, float minZ, float max
             float humusNoise  = 0.5f + 0.5f * std::sin(x * 3.4f - z * 2.8f) * std::cos(x * 1.2f + z * 3.1f);
             float microFbm    = 0.5f + 0.5f * std::sin(x * 4.2f + z * 4.6f) * std::cos(x * 5.1f - z * 3.3f);
 
-            Vec4 color = math::lerp(COL_FOREST_HUMUS, COL_NEEDLE_DUFF, needleNoise * 0.70f + 0.15f);
-            color = math::lerp(color, COL_ORGANIC_LOAM, humusNoise * 0.35f);
+            // the duff map, darker where humus and loam show through and in the damp drainage channels (the moss is its
+            // own surface, the hummocks)
+            Vec4 color = math::lerp(MOD_HUMUS, MOD_NONE, needleNoise * 0.70f + 0.15f);
+            color = math::lerp(color, MOD_LOAM, humusNoise * 0.35f);
 
             // Soil machine moisture deepening in drainage channels
-            color = math::lerp(color, Vec4(0.08f, 0.05f, 0.03f, 1.0f), moisture * 0.40f);
+            color = math::lerp(color, MOD_DAMP_SOIL, moisture * 0.40f);
 
-            if (norm.y > 0.88f && microFbm > 0.68f) {
-                float mossWeight = std::clamp((microFbm - 0.68f) / 0.28f, 0.0f, 1.0f);
-                color = math::lerp(color, COL_FLOOR_MOSS, mossWeight * 0.75f);
-            }
-
-            float noiseShade = 0.92f + 0.16f * microFbm;
+            float noiseShade = 0.86f + 0.14f * microFbm;
             color = Vec4(color.x * noiseShade, color.y * noiseShade, color.z * noiseShade, 1.0f);
 
-            Vec2 uv((x - minX) * 0.35f, (z - minZ) * 0.35f);
+            // the duff's real tile size, in metres across the ground
+            Vec2 uv((x - minX) / duff.tileU, (z - minZ) / duff.tileV);
             mesh.addVertex(Vertex(pos, norm, uv, color));
         }
     }
@@ -178,11 +537,11 @@ ScratchboxMesh generateForestFloor(float minX, float maxX, float minZ, float max
 }
 
 // Micro-Topographic Moss Hummock Cushion Generator
-ScratchboxMesh generateMossHummock(const Vec3& center, float radiusX = 1.4f, float radiusZ = 1.1f, float height = 0.38f) {
+ScratchboxMesh generateMossHummock(const SurfaceSet& moss, const Vec3& center, float radiusX = 1.4f, float radiusZ = 1.1f, float height = 0.38f) {
     ScratchboxMesh mesh("Moss_Hummock");
-    mesh.material.name = "PBR_Forest_Floor";
-    mesh.material.roughnessFactor = 0.94f;
-    mesh.material.metallicFactor = 0.01f;
+    mesh.material.name = "PBR_Moss";
+    mesh.material.roughnessFactor = 1.0f;
+    mesh.material.metallicFactor = 0.0f;
 
     const int rings = 12;
     const int sectors = 18;
@@ -203,8 +562,8 @@ ScratchboxMesh generateMossHummock(const Vec3& center, float radiusX = 1.4f, flo
             Vec3 norm(std::cos(theta) * rFrac * 0.6f, 1.0f - rFrac * 0.5f, std::sin(theta) * rFrac * 0.6f);
             norm = norm.normalized();
 
-            Vec4 col = math::lerp(COL_FLOOR_MOSS, COL_NURSE_LOG_MOSS, 0.5f + 0.5f * std::cos(theta * 3.0f));
-            mesh.addVertex(Vertex(pos, norm, Vec2(px * 0.5f, pz * 0.5f), col));
+            Vec4 col = math::lerp(MOD_FLOOR_MOSS, MOD_NONE, 0.5f + 0.5f * std::cos(theta * 3.0f));
+            mesh.addVertex(Vertex(pos, norm, Vec2(px / moss.tileU, pz / moss.tileV), col));
         }
     }
 
@@ -228,6 +587,8 @@ ScratchboxMesh generateMossHummock(const Vec3& center, float radiusX = 1.4f, flo
 // ============================================================================
 // 3. Ancient Redwood Trunk Generator with Fluted Buttress Roots & Cork Furrows
 // ============================================================================
+// The column stands vertical: its crown (section 6) is grown about the vertical through its stem, and the column is the
+// leader that crown's limbs leave.
 struct TrunkSpec {
     Vec3 basePos;
     float height;
@@ -235,13 +596,11 @@ struct TrunkSpec {
     float topRadius;
     int buttressLobes;
     float buttressSpread;
-    float leanAngleRad;
-    float leanAzimuthRad;
     bool hasHeroMoss;
     float furrowDepth;
 };
 
-ScratchboxMesh generateProceduralTrunk(const TrunkSpec& spec) {
+ScratchboxMesh generateProceduralTrunk(const TrunkSpec& spec, const SurfaceSet& bark, const Vec4& mossOnBark) {
     ScratchboxMesh mesh("Procedural_Tree_Trunk");
     mesh.material.name = "PBR_Redwood_Bark";
     mesh.material.roughnessFactor = 0.92f;
@@ -249,6 +608,10 @@ ScratchboxMesh generateProceduralTrunk(const TrunkSpec& spec) {
 
     const int vRings = 72;
     const int hSectors = 48;
+    // The bark's real size: a whole number of tiles around the column at its mean radius (so the seam meets; the furrows
+    // run up the column and widen with it towards the flared base, as an old trunk's do), metres up it along. A seam
+    // column of vertices (sec = hSectors, at theta = 2 pi) carries u's last value.
+    const float tilesAround = std::max(1.0f, std::round(TWO_PI * 0.5f * (spec.baseRadius + spec.topRadius) / bark.tileU));
 
     float groundY = getTerrainHeight(spec.basePos.x, spec.basePos.z);
     Vec3 rootOrigin(spec.basePos.x, groundY, spec.basePos.z);
@@ -257,9 +620,8 @@ ScratchboxMesh generateProceduralTrunk(const TrunkSpec& spec) {
         float t = static_cast<float>(ring) / static_cast<float>(vRings);
         float currentY = rootOrigin.y + t * spec.height;
 
-        float leanOffset = std::sin(t * 1.57f) * std::tan(spec.leanAngleRad) * (t * spec.height);
-        float centerX = rootOrigin.x + leanOffset * std::cos(spec.leanAzimuthRad);
-        float centerZ = rootOrigin.z + leanOffset * std::sin(spec.leanAzimuthRad);
+        float centerX = rootOrigin.x;
+        float centerZ = rootOrigin.z;
 
         // Continuous Da Vinci taper transitioning to an organic pointed conifer spire apex
         float coreRadius = (t <= 0.72f)
@@ -269,7 +631,7 @@ ScratchboxMesh generateProceduralTrunk(const TrunkSpec& spec) {
         float buttressDecay = std::max(0.0f, 1.0f - (t * spec.height) / 4.4f);
         buttressDecay = buttressDecay * buttressDecay;
 
-        for (int sec = 0; sec < hSectors; ++sec) {
+        for (int sec = 0; sec <= hSectors; ++sec) {
             float theta = (static_cast<float>(sec) / static_cast<float>(hSectors)) * TWO_PI;
             float cosT = std::cos(theta);
             float sinT = std::sin(theta);
@@ -306,34 +668,32 @@ ScratchboxMesh generateProceduralTrunk(const TrunkSpec& spec) {
             norm.z += cosT * dAngle;
             norm = norm.normalized();
 
-            // Organic, photo-grounded redwood bark color modulation
-            Vec4 color = COL_REDWOOD_BARK;
+            // the bark map, shaded in the flutes' crevices (the map carries the bark's own furrows and plates)
+            Vec4 color = MOD_NONE;
             if (barkFbm < -0.02f) {
                 float tFurrow = std::clamp((-barkFbm - 0.02f) / 0.12f, 0.0f, 1.0f);
-                color = math::lerp(COL_REDWOOD_BARK, COL_BARK_FURROW, tFurrow * 0.45f);
-            } else if (barkFbm > 0.02f) {
-                float tRidge = std::clamp((barkFbm - 0.02f) / 0.12f, 0.0f, 1.0f);
-                color = math::lerp(COL_REDWOOD_BARK, COL_BARK_RIDGE, tRidge * 0.40f);
+                color = math::lerp(MOD_NONE, MOD_FURROW, tFurrow * 0.45f);
             }
 
             if (spec.hasHeroMoss && (currentY - rootOrigin.y) < 3.8f) {
                 float mossHeightFactor = std::max(0.0f, 1.0f - (currentY - rootOrigin.y) / 3.8f);
                 float aspectFacing = 0.5f + 0.5f * (norm.z * 0.65f - norm.x * 0.35f);
                 float mossAmount = mossHeightFactor * (0.50f + 0.50f * aspectFacing);
-                color = math::lerp(color, COL_TRUNK_MOSS, std::clamp(mossAmount, 0.0f, 0.94f));
+                color = math::lerp(color, mossOnBark, std::clamp(mossAmount, 0.0f, 0.94f));
             }
 
-            Vec2 uv(static_cast<float>(sec) / static_cast<float>(hSectors) * 4.0f, t * (spec.height / 2.0f));
+            Vec2 uv(static_cast<float>(sec) / static_cast<float>(hSectors) * tilesAround, t * spec.height / bark.tileV);
             mesh.addVertex(Vertex(pos, norm, uv, color));
         }
     }
 
+    const int ringStride = hSectors + 1;
     for (int ring = 0; ring < vRings; ++ring) {
-        int r0 = ring * hSectors;
-        int r1 = (ring + 1) * hSectors;
+        int r0 = ring * ringStride;
+        int r1 = (ring + 1) * ringStride;
 
         for (int sec = 0; sec < hSectors; ++sec) {
-            int next = (sec + 1) % hSectors;
+            int next = sec + 1;
             uint32_t i0 = r0 + sec;
             uint32_t i1 = r0 + next;
             uint32_t i2 = r1 + sec;
@@ -347,25 +707,20 @@ ScratchboxMesh generateProceduralTrunk(const TrunkSpec& spec) {
     // 1. Close the subterranean trunk base with a watertight convex root disc cap (0 open boundary edges)
     uint32_t bottomCenterIdx = static_cast<uint32_t>(mesh.vertices.size());
     Vec3 bottomCenterPos(rootOrigin.x, rootOrigin.y - 0.90f, rootOrigin.z);
-    mesh.addVertex(Vertex(bottomCenterPos, Vec3(0, -1, 0), Vec2(0.5f, 0.5f), COL_BARK_FURROW));
+    mesh.addVertex(Vertex(bottomCenterPos, Vec3(0, -1, 0), Vec2(0.5f, 0.5f), MOD_FURROW));
     for (int sec = 0; sec < hSectors; ++sec) {
-        int next = (sec + 1) % hSectors;
+        int next = sec + 1;
         mesh.addTriangle(bottomCenterIdx, next, sec);
     }
 
     // 2. Close the trunk crown with a conical spire apex cap
     uint32_t apexIdx = static_cast<uint32_t>(mesh.vertices.size());
-    float apexLean = std::sin(1.57f) * std::tan(spec.leanAngleRad) * spec.height;
-    Vec3 apexPos(
-        rootOrigin.x + apexLean * std::cos(spec.leanAzimuthRad),
-        rootOrigin.y + spec.height + 0.55f,
-        rootOrigin.z + apexLean * std::sin(spec.leanAzimuthRad)
-    );
-    mesh.addVertex(Vertex(apexPos, Vec3(0, 1, 0), Vec2(0.5f, 1.0f), COL_REDWOOD_BARK));
+    Vec3 apexPos(rootOrigin.x, rootOrigin.y + spec.height + 0.55f, rootOrigin.z);
+    mesh.addVertex(Vertex(apexPos, Vec3(0, 1, 0), Vec2(0.5f * tilesAround, (spec.height + 0.55f) / bark.tileV), MOD_NONE));
 
-    int topRingBase = vRings * hSectors;
+    int topRingBase = vRings * ringStride;
     for (int sec = 0; sec < hSectors; ++sec) {
-        int next = (sec + 1) % hSectors;
+        int next = sec + 1;
         mesh.addTriangle(topRingBase + sec, topRingBase + next, apexIdx);
     }
 
@@ -373,366 +728,9 @@ ScratchboxMesh generateProceduralTrunk(const TrunkSpec& spec) {
     return mesh;
 }
 
-inline void appendVolumetricNeedleDirect(
-    ScratchboxMesh& mesh,
-    const Vec3& origin,
-    const Vec3& direction,
-    float length,
-    float baseRadius,
-    float tipRadius,
-    const Vec4& baseColor,
-    const Vec4& tipColor
-) {
-    Vec3 dir = direction.normalized();
-    Vec3 refUp = std::abs(dir.y) > 0.92f ? Vec3(1, 0, 0) : Vec3(0, 1, 0);
-    Vec3 side = dir.cross(refUp).normalized();
-    Vec3 up = side.cross(dir).normalized();
-
-    Vec3 baseCenter = origin;
-    Vec3 tipCenter = origin + dir * length;
-    Vec3 apex = tipCenter + dir * (length * 0.08f);
-
-    const int segs = 4;
-    uint32_t baseIdx = static_cast<uint32_t>(mesh.vertices.size());
-
-    for (int i = 0; i < segs; ++i) {
-        float angle = (static_cast<float>(i) / static_cast<float>(segs)) * math::TWO_PI;
-        Vec3 radial = side * std::cos(angle) + up * std::sin(angle);
-        mesh.addVertex(Vertex(baseCenter + radial * baseRadius, radial, Vec2(0.5f, 0.5f), baseColor));
-    }
-
-    uint32_t tipIdx = static_cast<uint32_t>(mesh.vertices.size());
-    for (int i = 0; i < segs; ++i) {
-        float angle = (static_cast<float>(i) / static_cast<float>(segs)) * math::TWO_PI;
-        Vec3 radial = side * std::cos(angle) + up * std::sin(angle);
-        mesh.addVertex(Vertex(tipCenter + radial * tipRadius, radial, Vec2(0.5f, 0.5f), tipColor));
-    }
-
-    uint32_t apexIdx = static_cast<uint32_t>(mesh.vertices.size());
-    mesh.addVertex(Vertex(apex, dir, Vec2(0.5f, 0.5f), tipColor));
-
-    for (int i = 0; i < segs; ++i) {
-        int next = (i + 1) % segs;
-        uint32_t b0 = baseIdx + i;
-        uint32_t b1 = baseIdx + next;
-        uint32_t t0 = tipIdx + i;
-        uint32_t t1 = tipIdx + next;
-
-        mesh.addTriangle(b0, t0, b1);
-        mesh.addTriangle(b1, t0, t1);
-        mesh.addTriangle(t0, apexIdx, t1);
-    }
-}
-
-// Dense Conifer Needle Fan Limb Generator
-// Populates 100% independent 3D conifer needle blades along both sides of every limb
-inline void appendConiferNeedleFanLimb(
-    const Vec3& boughStart,
-    const Vec3& boughEnd,
-    const Vec3& boughDir,
-    float spreadRadius,
-    float profileT,
-    ScratchboxMesh& outWood,
-    ScratchboxMesh& outFoliage,
-    bool isHero
-) {
-    Vec3 up(0, 1, 0);
-    Vec3 side = boughDir.cross(up).normalized();
-    if (side.lengthSquared() < 0.01f) side = Vec3(1, 0, 0);
-    up = side.cross(boughDir).normalized();
-
-    // 1. Main bough wood cylinder
-    const int segs = 5;
-    float rStart = math::lerp(0.15f, 0.06f, profileT);
-    float rEnd = 0.022f;
-    uint32_t bIdx = static_cast<uint32_t>(outWood.vertices.size());
-    for (int i = 0; i < segs; ++i) {
-        float ang = (static_cast<float>(i) / static_cast<float>(segs)) * TWO_PI;
-        Vec3 radial = side * std::cos(ang) + up * std::sin(ang);
-        outWood.addVertex(Vertex(boughStart + radial * rStart, radial, Vec2(0, 0), COL_REDWOOD_BARK));
-        outWood.addVertex(Vertex(boughEnd + radial * rEnd, radial, Vec2(1, 1), COL_REDWOOD_BARK));
-    }
-    for (int i = 0; i < segs; ++i) {
-        int next = (i + 1) % segs;
-        outWood.addTriangle(bIdx + i * 2, bIdx + i * 2 + 1, bIdx + next * 2);
-        outWood.addTriangle(bIdx + next * 2, bIdx + i * 2 + 1, bIdx + next * 2 + 1);
-    }
-
-    // Seal bough limb base (internal trunk anchor) and bough limb tip into closed watertight manifolds
-    uint32_t startCapIdx = static_cast<uint32_t>(outWood.vertices.size());
-    outWood.addVertex(Vertex(boughStart - boughDir * 0.02f, -boughDir, Vec2(0, 0), COL_REDWOOD_BARK));
-    for (int i = 0; i < segs; ++i) {
-        int next = (i + 1) % segs;
-        outWood.addTriangle(startCapIdx, bIdx + next * 2, bIdx + i * 2);
-    }
-
-    uint32_t endCapIdx = static_cast<uint32_t>(outWood.vertices.size());
-    outWood.addVertex(Vertex(boughEnd + boughDir * (rEnd * 0.5f), boughDir, Vec2(1, 1), COL_REDWOOD_BARK));
-    for (int i = 0; i < segs; ++i) {
-        int next = (i + 1) % segs;
-        outWood.addTriangle(bIdx + i * 2 + 1, bIdx + next * 2 + 1, endCapIdx);
-    }
-
-    // 2. Lateral Conifer Branchlets & Dense Needles along the branch
-    int numStations = isHero ? 7 : 5;
-    for (int st = 0; st < numStations; ++st) {
-        float frac = 0.20f + 0.76f * (static_cast<float>(st + 1) / static_cast<float>(numStations));
-        Vec3 stationPos = math::lerp(boughStart, boughEnd, frac);
-
-        // Emit lateral shoots on left and right
-        for (int sideSign = -1; sideSign <= 1; sideSign += 2) {
-            float s = static_cast<float>(sideSign);
-            float shootAngle = 1.05f + 0.15f * std::sin(st * 2.3f);
-            Vec3 shootDir = (boughDir * 0.42f + side * (s * std::sin(shootAngle)) + up * 0.08f).normalized();
-            float shootLen = (spreadRadius * 0.38f) * (1.15f - frac * 0.38f) * (0.85f + 0.28f * (st % 2));
-
-            // Fine twig axis
-            Vec3 shootEnd = stationPos + shootDir * shootLen;
-            shootEnd.y -= shootLen * 0.12f; // Slight downward cantilever droop
-
-            uint32_t tIdx = static_cast<uint32_t>(outFoliage.vertices.size());
-            outFoliage.addVertex(Vertex(stationPos, up, Vec2(0.5f, 0.5f), COL_REDWOOD_BARK));
-            outFoliage.addVertex(Vertex(shootEnd, up, Vec2(0.5f, 0.5f), COL_REDWOOD_BARK));
-            outFoliage.addVertex(Vertex(shootEnd + side * 0.008f, up, Vec2(0.5f, 0.5f), COL_REDWOOD_BARK));
-            outFoliage.addTriangle(tIdx, tIdx + 1, tIdx + 2);
-
-            // Populating 10 to 14 pairs of distinct, independent conifer needles along the shoot
-            int needlePairs = isHero ? 14 : 9;
-            float nLenBase = 0.115f; // 11.5 cm needle length (visible, lush evergreen needle foliage)
-            float nWidthBase = 0.018f; // 1.8 cm needle width
-
-            for (int n = 0; n < needlePairs; ++n) {
-                float nFrac = static_cast<float>(n + 1) / (needlePairs + 1);
-                Vec3 nodePos = math::lerp(stationPos, shootEnd, nFrac);
-                float curLen = nLenBase * (1.10f - nFrac * 0.32f);
-                float curWidth = nWidthBase * (1.05f - nFrac * 0.28f);
-
-                for (int nSideSign = -1; nSideSign <= 1; nSideSign += 2) {
-                    float ns = static_cast<float>(nSideSign);
-                    // Needle orientation: radiating outward from shoot axis with forward sweep and slight droop
-                    Vec3 nDir = (shootDir * 0.32f + side * (ns * 0.90f) - up * (0.08f + 0.06f * nFrac)).normalized();
-
-                    Vec3 p0 = nodePos;
-                    Vec3 p1 = nodePos + nDir * (curLen * 0.55f) + shootDir * (curWidth * 0.5f);
-                    Vec3 p2 = nodePos + nDir * curLen;
-                    Vec3 p3 = nodePos + nDir * (curLen * 0.55f) - shootDir * (curWidth * 0.5f);
-
-                    // Transferred envelope normal with upward sky bias for soft natural SSS illumination
-                    Vec3 envNorm = (nDir * 0.40f + Vec3(0, 0.85f, 0)).normalized();
-
-                    uint32_t vBase = static_cast<uint32_t>(outFoliage.vertices.size());
-                    outFoliage.addVertex(Vertex(p0, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-                    outFoliage.addVertex(Vertex(p1, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-                    outFoliage.addVertex(Vertex(p2, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_SUNLIT));
-                    outFoliage.addVertex(Vertex(p3, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-
-                    outFoliage.addTriangle(vBase, vBase + 1, vBase + 2);
-                    outFoliage.addTriangle(vBase, vBase + 2, vBase + 3);
-                }
-            }
-
-            // Radiating pine needle fascicle (cluster of 4 needles) at shoot tip
-            for (int f = 0; f < 4; ++f) {
-                float fTheta = f * (TWO_PI / 4.0f);
-                Vec3 fDir = (shootDir * 0.82f + side * std::cos(fTheta) * 0.45f + up * std::sin(fTheta) * 0.35f).normalized();
-                appendVolumetricNeedleDirect(
-                    outFoliage, shootEnd, fDir, 0.095f, 0.0055f, 0.0010f,
-                    COL_CANOPY_FOLIAGE, COL_CANOPY_SUNLIT
-                );
-            }
-        }
-    }
-
-    // 3. Terminal Fanning Conifer Needle Spray at Bough End
-    for (int t = -1; t <= 1; ++t) {
-        float tAngle = t * 0.38f;
-        Vec3 tDir = (boughDir * 0.85f + side * std::sin(tAngle) * 0.48f + up * 0.10f).normalized();
-        float tLen = 0.85f;
-        Vec3 tEnd = boughEnd + tDir * tLen;
-
-        int tipPairs = isHero ? 14 : 9;
-        for (int n = 0; n < tipPairs; ++n) {
-            float nFrac = static_cast<float>(n + 1) / (tipPairs + 1);
-            Vec3 nodePos = math::lerp(boughEnd, tEnd, nFrac);
-            float curLen = 0.12f * (1.10f - nFrac * 0.35f);
-            float curWidth = 0.018f;
-
-            for (int nSideSign = -1; nSideSign <= 1; nSideSign += 2) {
-                float ns = static_cast<float>(nSideSign);
-                Vec3 nDir = (tDir * 0.35f + side * (ns * 0.90f) + up * 0.05f).normalized();
-
-                Vec3 p0 = nodePos;
-                Vec3 p1 = nodePos + nDir * (curLen * 0.55f) + tDir * (curWidth * 0.5f);
-                Vec3 p2 = nodePos + nDir * curLen;
-                Vec3 p3 = nodePos + nDir * (curLen * 0.55f) - tDir * (curWidth * 0.5f);
-
-                Vec3 envNorm = (nDir * 0.35f + Vec3(0, 0.88f, 0)).normalized();
-                uint32_t vBase = static_cast<uint32_t>(outFoliage.vertices.size());
-                outFoliage.addVertex(Vertex(p0, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-                outFoliage.addVertex(Vertex(p1, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-                outFoliage.addVertex(Vertex(p2, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_SUNLIT));
-                outFoliage.addVertex(Vertex(p3, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-
-                outFoliage.addTriangle(vBase, vBase + 1, vBase + 2);
-                outFoliage.addTriangle(vBase, vBase + 2, vBase + 3);
-            }
-        }
-    }
-}
-
-// Multi-Tier Botanical Branch Scaffold and Living Conifer Crown Generator
-void appendConiferBranchesAndCrown(
-    const TrunkSpec& trunkSpec,
-    ScratchboxMesh& outWood,
-    ScratchboxMesh& outFoliage,
-    int numTiers = 10,
-    float crownBaseFrac = 0.28f,
-    float maxSpread = 5.2f,
-    bool isHero = false
-) {
-    float groundY = getTerrainHeight(trunkSpec.basePos.x, trunkSpec.basePos.z);
-    Vec3 rootOrigin(trunkSpec.basePos.x, groundY, trunkSpec.basePos.z);
-
-    // 1. Lower deadwood stubs (old-growth natural self-pruned branch snags)
-    int snagCount = isHero ? 4 : 2;
-    for (int s = 0; s < snagCount; ++s) {
-        float tSnag = 0.16f + 0.08f * (static_cast<float>(s) / snagCount);
-        float lean = std::sin(tSnag * 1.57f) * std::tan(trunkSpec.leanAngleRad) * (tSnag * trunkSpec.height);
-        Vec3 snagPos(
-            rootOrigin.x + lean * std::cos(trunkSpec.leanAzimuthRad),
-            rootOrigin.y + tSnag * trunkSpec.height,
-            rootOrigin.z + lean * std::sin(trunkSpec.leanAzimuthRad)
-        );
-        float snagAzim = s * 2.39996f + 0.7f;
-        Vec3 snagDir(std::cos(snagAzim), -0.12f, std::sin(snagAzim));
-        snagDir = snagDir.normalized();
-        float snagLen = 0.45f + 0.35f * (s % 2);
-
-        Vec3 up(0, 1, 0);
-        Vec3 side = snagDir.cross(up).normalized();
-        up = side.cross(snagDir).normalized();
-        uint32_t sIdx = static_cast<uint32_t>(outWood.vertices.size());
-        Vec3 endPos = snagPos + snagDir * snagLen;
-        float rStart = 0.11f, rEnd = 0.04f;
-        for (int i = 0; i < 4; ++i) {
-            float ang = (static_cast<float>(i) / 4.0f) * TWO_PI;
-            Vec3 rad = side * std::cos(ang) + up * std::sin(ang);
-            Vec4 snagCol = math::lerp(COL_REDWOOD_BARK, COL_BARK_FURROW, 0.45f);
-            outWood.addVertex(Vertex(snagPos + rad * rStart, rad, Vec2(0, 0), snagCol));
-            outWood.addVertex(Vertex(endPos + rad * rEnd, rad, Vec2(1, 1), snagCol));
-        }
-        for (int i = 0; i < 4; ++i) {
-            int next = (i + 1) % 4;
-            outWood.addTriangle(sIdx + i * 2, sIdx + i * 2 + 1, sIdx + next * 2);
-            outWood.addTriangle(sIdx + next * 2, sIdx + i * 2 + 1, sIdx + next * 2 + 1);
-        }
-
-        // Close snag deadwood base and cut terminal cap
-        uint32_t snagStartCapIdx = static_cast<uint32_t>(outWood.vertices.size());
-        outWood.addVertex(Vertex(snagPos - snagDir * 0.02f, -snagDir, Vec2(0, 0), COL_REDWOOD_BARK));
-        for (int i = 0; i < 4; ++i) {
-            int next = (i + 1) % 4;
-            outWood.addTriangle(snagStartCapIdx, sIdx + next * 2, sIdx + i * 2);
-        }
-
-        uint32_t snagEndCapIdx = static_cast<uint32_t>(outWood.vertices.size());
-        outWood.addVertex(Vertex(endPos + snagDir * 0.015f, snagDir, Vec2(1, 1), math::lerp(COL_REDWOOD_BARK, COL_BARK_FURROW, 0.60f)));
-        for (int i = 0; i < 4; ++i) {
-            int next = (i + 1) % 4;
-            outWood.addTriangle(sIdx + i * 2 + 1, sIdx + next * 2 + 1, snagEndCapIdx);
-        }
-    }
-
-    // 2. Multi-tier radiating living branch limbs with dense conifer needle fronds
-    for (int tier = 0; tier < numTiers; ++tier) {
-        float tTier = crownBaseFrac + (0.96f - crownBaseFrac) * (static_cast<float>(tier) / static_cast<float>(numTiers));
-        float profileT = (tTier - crownBaseFrac) / (1.0f - crownBaseFrac); // 0 at crown base, 1 at apex
-
-        float lean = std::sin(tTier * 1.57f) * std::tan(trunkSpec.leanAngleRad) * (tTier * trunkSpec.height);
-        Vec3 tierCenter(
-            rootOrigin.x + lean * std::cos(trunkSpec.leanAzimuthRad),
-            rootOrigin.y + tTier * trunkSpec.height,
-            rootOrigin.z + lean * std::sin(trunkSpec.leanAzimuthRad)
-        );
-
-        // Branch count: 3 to 5 limbs per tier
-        int limbsInTier = (profileT > 0.85f) ? 3 : (isHero ? 5 : 4);
-        float tierAzimOffset = tier * 2.39996f; // Golden ratio spiral distribution
-        float spreadRadius = maxSpread * (1.12f - 0.80f * profileT); // Full conical crown taper
-
-        float baseElevation = (profileT < 0.35f) ? -0.05f : (profileT > 0.75f ? 0.28f : 0.08f);
-        float droopAmt = (profileT < 0.50f) ? (spreadRadius * 0.22f) : (spreadRadius * 0.08f);
-
-        for (int b = 0; b < limbsInTier; ++b) {
-            float azimuth = tierAzimOffset + b * (TWO_PI / limbsInTier) + (0.12f * std::sin(b * 1.8f));
-            Vec3 boughDir(std::cos(azimuth), baseElevation, std::sin(azimuth));
-            boughDir = boughDir.normalized();
-
-            Vec3 boughStart = tierCenter;
-            Vec3 boughEnd = boughStart + boughDir * (spreadRadius * (0.88f + 0.24f * (b % 3)));
-            boughEnd.y -= droopAmt; // Cantilever droop under gravity
-
-            // Phototropic tip upturn
-            if (profileT < 0.65f) {
-                boughEnd.y += 0.16f;
-            }
-
-            // Append main limb wood cylinder and dense conifer needle fronds
-            appendConiferNeedleFanLimb(
-                boughStart, boughEnd, boughDir, spreadRadius, profileT,
-                outWood, outFoliage, isHero
-            );
-        }
-    }
-
-    // 3. Spire crown terminal leader shoots pointing skyward with dense needles
-    float apexLean = std::sin(1.57f) * std::tan(trunkSpec.leanAngleRad) * trunkSpec.height;
-    Vec3 apexTip(
-        rootOrigin.x + apexLean * std::cos(trunkSpec.leanAzimuthRad),
-        rootOrigin.y + trunkSpec.height + 0.50f,
-        rootOrigin.z + apexLean * std::sin(trunkSpec.leanAzimuthRad)
-    );
-
-    for (int t = 0; t < 5; ++t) {
-        float tAngle = t * (TWO_PI / 5.0f);
-        Vec3 shootDir(0.20f * std::cos(tAngle), 0.95f, 0.20f * std::sin(tAngle));
-        shootDir = shootDir.normalized();
-        Vec3 sideDir(-shootDir.z, 0, shootDir.x);
-        Vec3 upDir = sideDir.cross(shootDir).normalized();
-
-        float shootLen = 0.90f;
-        Vec3 sEnd = apexTip + shootDir * shootLen;
-
-        for (int n = 0; n < 14; ++n) {
-            float nFrac = static_cast<float>(n + 1) / 15.0f;
-            Vec3 nodePos = math::lerp(apexTip, sEnd, nFrac);
-            float nLen = 0.12f * (1.0f - nFrac * 0.3f);
-            float nWidth = 0.015f;
-
-            for (int sign = -1; sign <= 1; sign += 2) {
-                float s = static_cast<float>(sign);
-                Vec3 nDir = (shootDir * 0.40f + sideDir * (s * 0.88f) + upDir * 0.15f).normalized();
-                Vec3 p0 = nodePos;
-                Vec3 p1 = nodePos + nDir * (nLen * 0.55f) + shootDir * (nWidth * 0.5f);
-                Vec3 p2 = nodePos + nDir * nLen;
-                Vec3 p3 = nodePos + nDir * (nLen * 0.55f) - shootDir * (nWidth * 0.5f);
-
-                Vec3 envNorm = (nDir * 0.35f + Vec3(0, 0.88f, 0)).normalized();
-                uint32_t vBase = static_cast<uint32_t>(outFoliage.vertices.size());
-                outFoliage.addVertex(Vertex(p0, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-                outFoliage.addVertex(Vertex(p1, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-                outFoliage.addVertex(Vertex(p2, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_SUNLIT));
-                outFoliage.addVertex(Vertex(p3, envNorm, Vec2(0.5f, 0.5f), COL_CANOPY_FOLIAGE));
-
-                outFoliage.addTriangle(vBase, vBase + 1, vBase + 2);
-                outFoliage.addTriangle(vBase, vBase + 2, vBase + 3);
-            }
-        }
-    }
-}
-
 // Meandering surface root runner snaking across the forest floor
-ScratchboxMesh generateSurfaceRootRunner(const Vec3& start, const Vec3& end, float rStart = 0.32f, float rEnd = 0.08f) {
+ScratchboxMesh generateSurfaceRootRunner(const SurfaceSet& bark, const Vec4& mossOnBark, const Vec3& start, const Vec3& end,
+                                         float rStart = 0.32f, float rEnd = 0.08f) {
     ScratchboxMesh mesh("Surface_Root_Runner");
     mesh.material.name = "PBR_Redwood_Bark";
     mesh.material.roughnessFactor = 0.92f;
@@ -744,6 +742,8 @@ ScratchboxMesh generateSurfaceRootRunner(const Vec3& start, const Vec3& end, flo
     Vec3 delta = end - start;
     float dist = delta.length();
     Vec3 dir = delta.normalized();
+    // the bark at its real size: a whole number of tiles around (at the root's mean radius), metres along
+    const float tilesAround = std::max(1.0f, std::round(TWO_PI * 0.5f * (rStart + rEnd) / bark.tileU));
 
     for (int s = 0; s <= steps; ++s) {
         float u = static_cast<float>(s) / static_cast<float>(steps);
@@ -762,8 +762,8 @@ ScratchboxMesh generateSurfaceRootRunner(const Vec3& start, const Vec3& end, flo
             Vec3 radial = (side * std::cos(theta) + up * std::sin(theta)).normalized();
             Vec3 p = pos + radial * r;
             Vec3 norm = radial;
-            Vec4 col = math::lerp(COL_REDWOOD_BARK, COL_TRUNK_MOSS, std::clamp(norm.y * 0.65f + 0.35f, 0.0f, 0.88f));
-            mesh.addVertex(Vertex(p, norm, Vec2(u * 2.0f, static_cast<float>(sec) / sectors), col));
+            Vec4 col = math::lerp(MOD_NONE, mossOnBark, std::clamp(norm.y * 0.65f + 0.35f, 0.0f, 0.88f));
+            mesh.addVertex(Vertex(p, norm, Vec2(static_cast<float>(sec) / sectors * tilesAround, u * dist / bark.tileV), col));
         }
     }
 
@@ -782,14 +782,14 @@ ScratchboxMesh generateSurfaceRootRunner(const Vec3& start, const Vec3& end, flo
 
     // Seal both ends of surface root runner into closed watertight hulls
     uint32_t rootStartCap = static_cast<uint32_t>(mesh.vertices.size());
-    mesh.addVertex(Vertex(start - dir * (rStart * 0.5f), -dir, Vec2(0, 0.5f), COL_REDWOOD_BARK));
+    mesh.addVertex(Vertex(start - dir * (rStart * 0.5f), -dir, Vec2(0.5f * tilesAround, 0.0f), MOD_NONE));
     for (int sec = 0; sec < sectors; ++sec) {
         mesh.addTriangle(rootStartCap, sec + 1, sec);
     }
 
     uint32_t rootEndCap = static_cast<uint32_t>(mesh.vertices.size());
     int endRingBase = steps * (sectors + 1);
-    mesh.addVertex(Vertex(end + dir * (rEnd * 0.5f), dir, Vec2(1, 0.5f), COL_REDWOOD_BARK));
+    mesh.addVertex(Vertex(end + dir * (rEnd * 0.5f), dir, Vec2(0.5f * tilesAround, dist / bark.tileV), MOD_NONE));
     for (int sec = 0; sec < sectors; ++sec) {
         mesh.addTriangle(endRingBase + sec, endRingBase + sec + 1, rootEndCap);
     }
@@ -801,16 +801,21 @@ ScratchboxMesh generateSurfaceRootRunner(const Vec3& start, const Vec3& end, flo
 // ============================================================================
 // 4. Fallen Mossy Nurse Log with Decayed Cavities & Splintered Hollow Caps
 // ============================================================================
-ScratchboxMesh generateFallenNurseLog(const Vec3& start, const Vec3& end, float radius = 0.50f) {
+ScratchboxMesh generateFallenNurseLog(const SurfaceSet& bark, const Vec4& mossOnBark, const Vec3& start, const Vec3& end, float radius = 0.50f) {
     ScratchboxMesh mesh("Fallen_Nurse_Log");
     mesh.material.name = "PBR_Redwood_Bark";
     mesh.material.roughnessFactor = 0.90f;
     mesh.material.metallicFactor = 0.01f;
 
+    // the bark map, moss-tinted on the log's cap and shaded in its furrows; the split wood shows the same fibres
     geometry::Mesh hMesh = NurseLogGenerator::generateHollowNurseLog(
         start, end, radius, 0.55f, 40, 36,
-        COL_REDWOOD_BARK, COL_NURSE_LOG_MOSS, COL_NURSE_LOG_WOOD, COL_BARK_FURROW
+        MOD_NONE, mossOnBark, MOD_NONE, MOD_FURROW
     );
+    // its UVs run two tiles around and six along: rescaled to the bark's real size (a whole number of tiles around)
+    const float length = (end - start).length();
+    const float tilesAround = std::max(1.0f, std::round(TWO_PI * radius / bark.tileU));
+    for (auto& uv : hMesh.uvs) uv = Vec2(uv.x * tilesAround / 2.0f, uv.y * (length / bark.tileV) / 6.0f);
     mesh.merge(hMesh.toScratchboxMesh());
     mesh.recomputeBounds();
     return mesh;
@@ -819,7 +824,10 @@ ScratchboxMesh generateFallenNurseLog(const Vec3& start, const Vec3& end, float 
 // ============================================================================
 // 5. Lush Anatomical Sword Fern Clump Generator (Polystichum munitum)
 // ============================================================================
-ScratchboxMesh generateSwordFernClump(const Vec3& center, float clumpRadius = 1.45f, int numFronds = 24) {
+// Each pinna draws one leaf of the chosen atlas (chooseFernLeaf): leaf-local t from the pinna's base on the rachis to its
+// tip, s across it at the leaf's own width over length (the leaf keeps its real proportions at the pinna's length); the
+// leaf's opacity cuts the pinna's outline. The rachis and the crosiers sample the leaf's stem.
+ScratchboxMesh generateSwordFernClump(const FernLeaf& leaf, const Vec3& center, float clumpRadius = 1.45f, int numFronds = 24) {
     ScratchboxMesh mesh("Sword_Fern_Clump");
     mesh.material.name = "PBR_Sword_Ferns";
     mesh.material.roughnessFactor = 0.50f;
@@ -863,11 +871,11 @@ ScratchboxMesh generateSwordFernClump(const Vec3& center, float clumpRadius = 1.
             Vec3 rSide = forward.cross(frondUp).normalized();
 
             uint32_t rIdx = static_cast<uint32_t>(mesh.vertices.size());
-            Vec4 rCol(0.26f, 0.18f, 0.10f, 1.0f);
-            mesh.addVertex(Vertex(pS - rSide * rRachis, frondUp, Vec2(0, 0), rCol));
-            mesh.addVertex(Vertex(pS + rSide * rRachis, frondUp, Vec2(1, 0), rCol));
-            mesh.addVertex(Vertex(pE - rSide * (rRachis * 0.8f), frondUp, Vec2(0, 1), rCol));
-            mesh.addVertex(Vertex(pE + rSide * (rRachis * 0.8f), frondUp, Vec2(1, 1), rCol));
+            Vec4 rCol = relativeTo(Vec4(0.26f, 0.18f, 0.10f, 1.0f), COL_FERN_HIGHLIGHT);
+            mesh.addVertex(Vertex(pS - rSide * rRachis, frondUp, leaf.stemUv, rCol));
+            mesh.addVertex(Vertex(pS + rSide * rRachis, frondUp, leaf.stemUv, rCol));
+            mesh.addVertex(Vertex(pE - rSide * (rRachis * 0.8f), frondUp, leaf.stemUv, rCol));
+            mesh.addVertex(Vertex(pE + rSide * (rRachis * 0.8f), frondUp, leaf.stemUv, rCol));
             mesh.addTriangle(rIdx, rIdx + 1, rIdx + 2);
             mesh.addTriangle(rIdx + 1, rIdx + 3, rIdx + 2);
         }
@@ -879,24 +887,38 @@ ScratchboxMesh generateSwordFernClump(const Vec3& center, float clumpRadius = 1.
             Vec3 forward = (spinePoints[s + 1] - spinePoints[s - 1]).normalized();
             Vec3 stemUp = forward.cross(frondSide).normalized();
 
-            float pinnuleLen = clumpRadius * 0.32f * std::sin(u * PI);
-            float pinnuleWidth = pinnuleLen * 0.38f;
+            float pinnuleLen = clumpRadius * PINNA_LENGTH_SHARE * std::sin(u * PI);
+            float pinnuleWidth = pinnuleLen * PINNA_WIDTH_SHARE;
 
-            Vec4 leafColor = math::lerp(COL_FERN_FROND, COL_FERN_HIGHLIGHT, u * 0.85f);
+            Vec4 leafColor = math::lerp(MOD_FERN_FROND, MOD_NONE, u * 0.85f);
 
             for (int sideSign = -1; sideSign <= 1; sideSign += 2) {
                 float signF = static_cast<float>(sideSign);
                 Vec3 pBlade = pStem + frondSide * (signF * pinnuleLen) + stemUp * (0.06f * signF);
-                Vec3 pTip   = pStem + frondSide * (signF * pinnuleLen * 1.15f) + forward * (pinnuleWidth * 0.5f);
+                Vec3 pTip   = pStem + frondSide * (signF * pinnuleLen * PINNA_TIP_REACH) + forward * (pinnuleWidth * 0.5f);
                 Vec3 pBase  = pStem - forward * (pinnuleWidth * 0.45f);
+
+                // the pinna's leaf: its axis from the rachis to the tip, across it along the rachis
+                const LeafCell& cell = leaf.cells[static_cast<size_t>(f * 31 + s * 7 + (sideSign > 0)) % leaf.cells.size()];
+                const Vec3 axisVec = pTip - pStem;
+                const float pinnaLen = std::max(1e-4f, axisVec.length());
+                const Vec3 axis = axisVec * (1.0f / pinnaLen);
+                Vec3 acrossDir = forward - axis * forward.dot(axis);
+                acrossDir = acrossDir.length() > 1e-6f ? acrossDir.normalized() : frondUp;
+                auto leafUv = [&](const Vec3& p) {
+                    const Vec3 d = p - pStem;
+                    const float t = std::clamp(d.dot(axis) / pinnaLen, 0.0f, 1.0f);
+                    const float sAcross = std::clamp(0.5f + d.dot(acrossDir) / (pinnaLen * cell.aspect), 0.0f, 1.0f);
+                    return cell.uvAt(sAcross, t);
+                };
 
                 Vec3 norm = stemUp;
                 uint32_t bIdx = static_cast<uint32_t>(mesh.vertices.size());
 
-                mesh.addVertex(Vertex(pStem, norm, Vec2(0.5f, 0.0f), leafColor));
-                mesh.addVertex(Vertex(pBase, norm, Vec2(0.0f, 0.5f), leafColor));
-                mesh.addVertex(Vertex(pBlade, norm, Vec2(0.8f, 0.5f), leafColor));
-                mesh.addVertex(Vertex(pTip, norm, Vec2(1.0f, 1.0f), leafColor));
+                mesh.addVertex(Vertex(pStem, norm, leafUv(pStem), leafColor));
+                mesh.addVertex(Vertex(pBase, norm, leafUv(pBase), leafColor));
+                mesh.addVertex(Vertex(pBlade, norm, leafUv(pBlade), leafColor));
+                mesh.addVertex(Vertex(pTip, norm, leafUv(pTip), leafColor));
 
                 mesh.addTriangle(bIdx, bIdx + 1, bIdx + 2);
                 mesh.addTriangle(bIdx, bIdx + 2, bIdx + 3);
@@ -910,10 +932,10 @@ ScratchboxMesh generateSwordFernClump(const Vec3& center, float clumpRadius = 1.
         Vec3 cPos = center + Vec3(std::cos(cAzimuth) * 0.12f, 0.18f, std::sin(cAzimuth) * 0.12f);
         uint32_t cIdx = static_cast<uint32_t>(mesh.vertices.size());
         Vec3 cUp(0, 1, 0);
-        Vec4 crosierColor(0.38f, 0.62f, 0.16f, 1.0f);
-        mesh.addVertex(Vertex(cPos, cUp, Vec2(0.5f, 0.5f), crosierColor));
-        mesh.addVertex(Vertex(cPos + Vec3(0.08f, 0.10f, 0), cUp, Vec2(0.8f, 0.8f), crosierColor));
-        mesh.addVertex(Vertex(cPos + Vec3(-0.06f, 0.12f, 0.06f), cUp, Vec2(0.2f, 0.8f), crosierColor));
+        Vec4 crosierColor = relativeTo(Vec4(0.38f, 0.62f, 0.16f, 1.0f), COL_FERN_HIGHLIGHT);
+        mesh.addVertex(Vertex(cPos, cUp, leaf.stemUv, crosierColor));
+        mesh.addVertex(Vertex(cPos + Vec3(0.08f, 0.10f, 0), cUp, leaf.stemUv, crosierColor));
+        mesh.addVertex(Vertex(cPos + Vec3(-0.06f, 0.12f, 0.06f), cUp, leaf.stemUv, crosierColor));
         mesh.addTriangle(cIdx, cIdx + 1, cIdx + 2);
     }
 
@@ -922,174 +944,94 @@ ScratchboxMesh generateSwordFernClump(const Vec3& center, float clumpRadius = 1.
 }
 
 // ============================================================================
-// 6. Multi-Tier Spreading Boughs & Transferred-Normal Canopy Foliage
+// 6. Crowns: SB-Veggie Trees Grown into Described Crowns
 // ============================================================================
-ScratchboxMesh generateCanopyBoughs(
-    const Vec3& origin,
-    float spreadRadius = 5.2f,
-    int numBoughs = 6,
-    float baseElevation = 0.15f,
-    bool droopLimb = true
-) {
-    ScratchboxMesh foliage("Canopy_Boughs_Foliage");
-    foliage.material.name = "PBR_Canopy_Foliage";
-    foliage.material.roughnessFactor = 0.52f;
-    foliage.material.metallicFactor = 0.01f;
-    foliage.material.doubleSided = true;
-    foliage.material.alphaMode = "MASK";
-    foliage.material.alphaCutoff = 0.45f;
+// Every crown is grown by SB-Veggie (scratchbox_sb_veggie_grove.hpp, the vegetation generator every 3D path uses): space
+// colonisation into the crown described here in metres, SB-Veggie leaf clusters, proportions from the tree species
+// library and bark from the tree texture library (each chosen by the crown's measurements and colour, never by name),
+// written at four levels of detail into a GLB of its own. A redwood's crown rises from its fluted column: the grown
+// tree's trunk is kept inside the column (half the column's base radius: inside its deepest furrows at the ground and
+// at the crown base) and its limbs leave the column from the crown base up.
 
-    ScratchboxMesh wood("Canopy_Boughs_Wood");
-    wood.material.name = "PBR_Redwood_Bark";
+// Neighbouring crowns share the gap between their stems: a crown reaches this share of the distance to the nearest other
+// stem past a reach every crown keeps, so foliage stops short of the next column.
+constexpr float CROWN_GAP_SHARE = 0.62f;
+constexpr float CROWN_MIN_REACH_M = 1.2f;
 
-    float angleStep = TWO_PI / static_cast<float>(numBoughs);
-    for (int b = 0; b < numBoughs; ++b) {
-        float azimuth = b * angleStep + (0.18f * std::sin(b * 2.4f));
-        float elevation = baseElevation + 0.12f * (b % 2) - (droopLimb ? 0.08f : 0.0f);
+inline float unitHash(uint32_t a, uint32_t b) {
+    uint32_t h = a * 0x9E3779B1u ^ (b + 0x7F4A7C15u) * 0x85EBCA77u;
+    h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12; h *= 0x297A2D39u; h ^= h >> 15;
+    return static_cast<float>(h & 0xFFFFFFu) / static_cast<float>(0x1000000u);
+}
 
-        Vec3 boughDir(std::cos(azimuth), elevation, std::sin(azimuth));
-        boughDir = boughDir.normalized();
+struct CrownProfile {
+    float crownBaseShare;      // crown base / tree height
+    float widestAt;            // share of the crown's depth where it is widest (0 its base)
+    float topExponent;         // superellipse exponent of its upper profile (1 a cone, 2 a dome)
+    Vec3 leafLinearRgb;        // foliage colour, linear RGB
+    float colourSpread;        // +- share each tree's foliage varies by
+    const char* label;         // free text carried into the GLB
+};
 
-        Vec3 boughStart = origin - Vec3(0, (b % 3) * 0.4f, 0);
-        Vec3 boughEnd = boughStart + boughDir * (spreadRadius * (0.88f + 0.24f * (b % 3)));
-        if (droopLimb) {
-            boughEnd.y -= spreadRadius * 0.22f;
+inline tile_vegetation::DescribedTree describeCrown(const Vec3& stem, float heightM, float crownRadiusM, float trunkRadiusM,
+                                                    const CrownProfile& profile, uint32_t index) {
+    tile_vegetation::DescribedTree d;
+    d.x = stem.x;
+    d.y = getTerrainHeight(stem.x, stem.z);
+    d.z = stem.z;
+    d.heightM = heightM;
+    d.crownRadiusXM = d.crownRadiusZM = crownRadiusM;
+    d.crownBaseHeightM = profile.crownBaseShare * (0.92f + 0.16f * unitHash(index, 1)) * heightM;
+    d.crownWidestAt = profile.widestAt;
+    d.crownTopExponent = profile.topExponent;
+    if (trunkRadiusM > 0.0f) d.trunkRadiusM = trunkRadiusM;
+    const float shade = 1.0f + profile.colourSpread * (2.0f * unitHash(index, 2) - 1.0f);
+    d.leafColourKnown = true;
+    d.leafLinearRgb = {std::clamp(profile.leafLinearRgb.x * shade, 0.0f, 1.0f), std::clamp(profile.leafLinearRgb.y * shade, 0.0f, 1.0f),
+                       std::clamp(profile.leafLinearRgb.z * shade, 0.0f, 1.0f)};
+    d.label = profile.label;
+    return d;
+}
+
+/** Each crown's radius: its own spread, within the gap the nearest other stem (of these crowns or `columns`) leaves it. */
+inline void shareCrownGaps(std::vector<tile_vegetation::DescribedTree>& crowns, const std::vector<Vec3>& columns = {}) {
+    for (size_t i = 0; i < crowns.size(); ++i) {
+        double gap = std::numeric_limits<double>::infinity();
+        for (size_t j = 0; j < crowns.size(); ++j) {
+            if (i != j) gap = std::min(gap, std::hypot(crowns[i].x - crowns[j].x, crowns[i].z - crowns[j].z));
         }
-
-        appendConiferNeedleFanLimb(
-            boughStart, boughEnd, boughDir, spreadRadius, 0.4f,
-            wood, foliage, true
-        );
+        for (const Vec3& c : columns) gap = std::min(gap, std::hypot(crowns[i].x - c.x, crowns[i].z - c.z));
+        const double r = std::min(crowns[i].crownRadiusXM, CROWN_MIN_REACH_M + CROWN_GAP_SHARE * gap);
+        crowns[i].crownRadiusXM = crowns[i].crownRadiusZM = r;
     }
-
-    foliage.merge(wood);
-    foliage.recomputeBounds();
-    return foliage;
-}
-
-// Understory Subcanopy Trees (Pacific Dogwoods / Hemlocks with 3D Anatomical Leaves)
-ScratchboxMesh generateUnderstoryTree(const Vec3& basePos, float height = 5.5f, float spread = 3.2f) {
-    ScratchboxMesh mesh("Understory_Subcanopy_Tree");
-    mesh.material.name = "PBR_Canopy_Foliage";
-    mesh.material.roughnessFactor = 0.58f;
-    mesh.material.metallicFactor = 0.01f;
-    mesh.material.doubleSided = true;
-    mesh.material.alphaMode = "MASK";
-    mesh.material.alphaCutoff = 0.45f;
-
-    float gy = getTerrainHeight(basePos.x, basePos.z);
-    Vec3 root(basePos.x, gy, basePos.z);
-    Vec3 tip = root + Vec3(0.35f, height, -0.25f);
-
-    const int segs = 6;
-    Vec3 dir = (tip - root).normalized();
-    Vec3 up(0, 1, 0);
-    Vec3 side = dir.cross(up).normalized();
-    up = side.cross(dir).normalized();
-
-    uint32_t tIdx = static_cast<uint32_t>(mesh.vertices.size());
-    for (int i = 0; i < segs; ++i) {
-        float a = (static_cast<float>(i) / segs) * TWO_PI;
-        Vec3 rad = side * std::cos(a) + up * std::sin(a);
-        mesh.addVertex(Vertex(root + rad * 0.16f, rad, Vec2(0, 0), COL_REDWOOD_BARK));
-        mesh.addVertex(Vertex(tip + rad * 0.05f, rad, Vec2(1, 1), COL_REDWOOD_BARK));
-    }
-    for (int i = 0; i < segs; ++i) {
-        int next = (i + 1) % segs;
-        mesh.addTriangle(tIdx + i * 2, tIdx + i * 2 + 1, tIdx + next * 2);
-        mesh.addTriangle(tIdx + next * 2, tIdx + i * 2 + 1, tIdx + next * 2 + 1);
-    }
-
-    // Seal understory tree trunk root base and tip into a closed solid hull
-    uint32_t rootCapIdx = static_cast<uint32_t>(mesh.vertices.size());
-    mesh.addVertex(Vertex(root - Vec3(0, 0.35f, 0), Vec3(0, -1, 0), Vec2(0, 0), COL_REDWOOD_BARK));
-    for (int i = 0; i < segs; ++i) {
-        int next = (i + 1) % segs;
-        mesh.addTriangle(rootCapIdx, tIdx + next * 2, tIdx + i * 2);
-    }
-
-    uint32_t tipCapIdx = static_cast<uint32_t>(mesh.vertices.size());
-    mesh.addVertex(Vertex(tip + dir * 0.08f, dir, Vec2(1, 1), COL_REDWOOD_BARK));
-    for (int i = 0; i < segs; ++i) {
-        int next = (i + 1) % segs;
-        mesh.addTriangle(tIdx + i * 2 + 1, tIdx + next * 2 + 1, tipCapIdx);
-    }
-
-    mesh.merge(generateCanopyBoughs(tip, spread, 5, 0.10f, true));
-
-    geometry::Mesh twigs("SubcanopyTwigs");
-    TwigClusterConfig twigCfg;
-    twigCfg.twigLength = 0.65f;
-    twigCfg.leafCount = 7;
-    twigCfg.leafScale = 1.10f;
-    twigCfg.phyllotaxis = PhyllotaxisPattern::GoldenSpiral137;
-    twigCfg.leafConfig.outline = LeafOutline{};
-    twigCfg.leafConfig.laminaCupping = 0.018f;
-    twigCfg.leafConfig.midribDepth = 0.010f;
-    twigCfg.leafConfig.droopCurvature = 0.024f;
-    twigCfg.leafConfig.laminaColor = COL_CANOPY_FOLIAGE;
-    twigCfg.leafConfig.marginColor = COL_CANOPY_SUNLIT;
-
-    for (int b = 0; b < 6; ++b) {
-        float azimuth = b * (TWO_PI / 6.0f) + 0.25f;
-        Vec3 bDir = (Vec3(std::cos(azimuth), 0.15f, std::sin(azimuth))).normalized();
-        Vec3 bAttach = root + Vec3(0, height * (0.45f + 0.08f * b), 0) + bDir * (spread * 0.42f);
-        TwigClusterGenerator::appendTwigCluster(twigs, bAttach, bDir, twigCfg);
-    }
-    mesh.merge(twigs.toScratchboxMesh());
-
-    mesh.recomputeBounds();
-    return mesh;
-}
-
-// Overhanging Foreground Canopy Boughs
-ScratchboxMesh generateOverhangingForegroundCanopy() {
-    ScratchboxMesh foliage("Overhanging_Foreground_Canopy");
-    foliage.material.name = "PBR_Canopy_Foliage";
-    foliage.material.roughnessFactor = 0.52f;
-    foliage.material.metallicFactor = 0.01f;
-    foliage.material.doubleSided = true;
-    foliage.material.alphaMode = "MASK";
-    foliage.material.alphaCutoff = 0.45f;
-
-    ScratchboxMesh wood("Overhanging_Foreground_Wood");
-    wood.material.name = "PBR_Redwood_Bark";
-
-    // 1. Left foreground framing limb dipping into view (Y = 2.4m to 3.4m, Z = 0.4m to 1.8m)
-    appendConiferNeedleFanLimb(
-        Vec3(-2.4f, 3.5f, 0.4f), Vec3(-0.4f, 2.5f, 1.8f), Vec3(0.85f, -0.35f, 0.50f).normalized(),
-        3.2f, 0.35f, wood, foliage, true
-    );
-    // 2. Right foreground framing limb dipping into view
-    appendConiferNeedleFanLimb(
-        Vec3(3.2f, 3.6f, 0.2f), Vec3(0.5f, 2.6f, 1.6f), Vec3(-0.85f, -0.30f, 0.45f).normalized(),
-        3.0f, 0.35f, wood, foliage, true
-    );
-    // 3. Central overhead drape
-    appendConiferNeedleFanLimb(
-        Vec3(-0.3f, 4.2f, 0.8f), Vec3(0.1f, 3.1f, 2.2f), Vec3(0.15f, -0.55f, 0.82f).normalized(),
-        2.6f, 0.40f, wood, foliage, true
-    );
-    // 4. Low mid-left needle spray reaching into sunlight right above ferns
-    appendConiferNeedleFanLimb(
-        Vec3(-1.9f, 2.4f, 0.8f), Vec3(-0.6f, 2.0f, 1.4f), Vec3(0.90f, -0.25f, 0.35f).normalized(),
-        2.2f, 0.30f, wood, foliage, true
-    );
-    // 5. Low mid-right needle spray
-    appendConiferNeedleFanLimb(
-        Vec3(2.4f, 2.6f, 0.6f), Vec3(0.9f, 2.1f, 1.2f), Vec3(-0.88f, -0.22f, 0.38f).normalized(),
-        2.2f, 0.30f, wood, foliage, true
-    );
-
-    foliage.merge(wood);
-    foliage.recomputeBounds();
-    return foliage;
 }
 
 // ============================================================================
 // 7. Volumetric Atmospheric Crepuscular Sunbeams (God Rays Geometry)
 // ============================================================================
-ScratchboxMesh generateAtmosphericGodRays(const Vec3& sunOrigin, const Vec3& focalCenter, int numRays = 56) {
+// How far a shaft's axis runs from its canopy gap before a trunk or the ground stops the light: the axis is marched in
+// 0.25 m steps against the terrain and each trunk's column (its radius tapering linearly from base to top).
+inline float shaftLengthToFirstBlocker(const Vec3& start, const Vec3& dir, const std::vector<TrunkSpec>& trunks, float maxLength) {
+    constexpr float STEP_M = 0.25f;
+    for (float t = 0.0f; t < maxLength; t += STEP_M) {
+        const Vec3 p = start + dir * t;
+        if (p.y <= getTerrainHeight(p.x, p.z)) return t;
+        for (const TrunkSpec& trunk : trunks) {
+            const float h = p.y - trunk.basePos.y;
+            if (h < 0.0f || h > trunk.height) continue;
+            const float r = trunk.baseRadius + (trunk.topRadius - trunk.baseRadius) * (h / trunk.height);
+            const float dx = p.x - trunk.basePos.x, dz = p.z - trunk.basePos.z;
+            if (dx * dx + dz * dz < r * r) return t;
+        }
+    }
+    return maxLength;
+}
+
+// Crepuscular shafts: the sun is far, so the light through each canopy gap is a near-parallel column as wide as the gap
+// (widening a quarter by the forward-scattering halo), and it ends where a trunk or the ground stops it. A shaft that
+// passed through a trunk would draw the trunk's facets where its wall meets the bark.
+ScratchboxMesh generateAtmosphericGodRays(const Vec3& sunOrigin, const Vec3& focalCenter, const std::vector<TrunkSpec>& trunks,
+                                          int numRays = 56) {
     ScratchboxMesh mesh("Atmospheric_Crepuscular_Sunbeams");
     mesh.material.name = "PBR_Volumetric_GodRays";
     mesh.material.roughnessFactor = 0.99f;
@@ -1107,11 +1049,14 @@ ScratchboxMesh generateAtmosphericGodRays(const Vec3& sunOrigin, const Vec3& foc
         float rDist = 1.0f + 3.6f * std::sin(r * 2.3f);
 
         Vec3 rayStart = sunOrigin + (side * std::cos(rAngle) + up * std::sin(rAngle)) * rDist;
-        float beamLength = (focalCenter - sunOrigin).length() + 22.0f;
+        float beamLength = shaftLengthToFirstBlocker(rayStart, beamDir, trunks, (focalCenter - sunOrigin).length() + 22.0f);
+        if (beamLength < 1.0f) continue;
         float beamRadiusStart = 0.22f + 0.20f * (r % 4);
-        float beamRadiusEnd = 2.6f + 0.85f * (r % 3);
+        float beamRadiusEnd = 1.25f * beamRadiusStart;
 
-        const int raySegments = 8;
+        // 32 sides: the viewer fades a beam toward its outline by its normal against the view, and an 8-sided cone's
+        // interpolated normals stay 22 degrees off edge-on at the outline, which then shows as hard facets in near views
+        const int raySegments = 32;
         uint32_t bIdx = static_cast<uint32_t>(mesh.vertices.size());
 
         for (int i = 0; i < raySegments; ++i) {
@@ -1164,223 +1109,243 @@ int main(int argc, char** argv) {
 
     auto tStart = std::chrono::high_resolution_clock::now();
 
+    // 0. The surfaces: texture library sets at their real size, each tinted to its region of the reference photograph
+    //    (section "Surface Materials"); a missing set or photograph stops the build
+    std::cout << "🎨 Reading the Surface Sets (texture library copies) and Measuring the Reference Photograph...\n";
+    SurfaceSet duff, moss, bark;
+    FernLeaf fernLeaf;
+    MeasuredTarget duffTarget, mossTarget, barkTarget, fernTarget;
+    try {
+        const auto photoBytes = readFileBytes("public/forest_reference.png");
+        auto photo = png::decode(photoBytes.data(), photoBytes.size(), png::OutputFormat::Rgb);
+        if (!photo.ok) throw std::runtime_error("cannot decode public/forest_reference.png: " + photo.error);
+        // the photograph's needle duff (bottom right, clear of ferns), the moss on the nurse log and the right column's
+        // base, the bark of the two near columns (moss-green pixels left out) and the sword fern fronds (their green)
+        duffTarget = measurePhoto(photo.image, {{760, 640, 1000, 715}}, "every pixel", [](float, float, float) { return true; });
+        mossTarget = measurePhoto(photo.image, {{600, 585, 880, 612}, {1040, 560, 1120, 640}}, "every pixel", [](float, float, float) { return true; });
+        barkTarget = measurePhoto(photo.image, {{120, 100, 280, 420}, {990, 40, 1150, 400}}, "green below red (not moss)",
+                                  [](float r, float g, float) { return g < r; });
+        fernTarget = measurePhoto(photo.image, {{30, 560, 380, 700}}, "green over 1.15 x red and 1.3 x blue (fronds)",
+                                  [](float r, float g, float b) { return g > 1.15f * r && g > 1.3f * b; });
+        duff = loadLibraryCopy("Ground071");
+        moss = loadLibraryCopy("Moss001");
+        bark = loadLibraryCopy("bark_willow_02");
+        fernLeaf = chooseFernLeaf(fernTarget);
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Fatal: " << e.what() << "\n";
+        return 1;
+    }
+    // each set takes its region's chromaticity, then its luminance relative to the duff's as the photograph shows them
+    const Vec3 duffTint = tintFactor(duff.meanLinear, duffTarget.meanLinear);
+    const float duffLuminance = luminance(Vec3(duff.meanLinear.x * duffTint.x, duff.meanLinear.y * duffTint.y, duff.meanLinear.z * duffTint.z));
+    auto tintTo = [&](const SurfaceSet& set, const MeasuredTarget& target, float& share) {
+        const Vec3 chroma = tintFactor(set.meanLinear, target.meanLinear);
+        share = luminanceShare(set.meanLinear, chroma, target, duffLuminance, duffTarget);
+        return chroma * share;
+    };
+    float duffShare = 1.0f, mossShare = 1.0f, barkShare = 1.0f, fernShare = 1.0f;
+    const Vec3 mossTint = tintTo(moss, mossTarget, mossShare);
+    const Vec3 barkTint = tintTo(bark, barkTarget, barkShare);
+    const Vec3 fernTint = tintTo(fernLeaf.set, fernTarget, fernShare);
+    // moss on bark: the bark map shifted to the photograph's moss (the moss's chromaticity over the bark's, at most 1)
+    const Vec3 mossOverBark = tintFactor(barkTarget.meanLinear, mossTarget.meanLinear);
+    const Vec4 mossOnBark(mossOverBark.x, mossOverBark.y, mossOverBark.z, 1.0f);
+    for (const auto& [what, set, tint, share] : { std::tuple{"floor", &duff, duffTint, duffShare}, std::tuple{"moss", &moss, mossTint, mossShare},
+                                                  std::tuple{"bark", &bark, barkTint, barkShare}, std::tuple{"fern", &fernLeaf.set, fernTint, fernShare} }) {
+        std::cout << "   " << what << ": " << set->id << " (" << set->publisher << ", " << set->tileU << " x " << set->tileV
+                  << " m, " << set->sizeSource << "), tint " << jsonVec(tint) << " (luminance share " << share << ")\n";
+    }
+    std::cout << "   fern leaf " << fernLeaf.set.id << ": " << fernLeaf.lengthM << " x " << fernLeaf.widthM << " m, cost " << fernLeaf.cost << "\n";
+
     // 1. Woodland Biome Undulating Floor (Expansive 80m x 70m Natural Landscape)
     std::cout << "🌿 Synthesizing Undulating Woodland Floor with Humus & Needle Duff...\n";
-    ScratchboxMesh floor = generateForestFloor(-40.0f, 40.0f, -50.0f, 20.0f, 0.48f);
+    ScratchboxMesh floor = generateForestFloor(duff, -40.0f, 40.0f, -50.0f, 20.0f, 0.48f);
+
+    // The moss: cushions on the floor and tufts on the nurse logs (section 7), one surface of its own
+    ScratchboxMesh mossCushions("Forest_Moss_Cushions");
 
     std::cout << "🌱 Modeling Micro-Topographic Moss Hummocks across the Forest Floor...\n";
-    floor.merge(generateMossHummock(Vec3( 0.05f, 0, -0.55f), 1.6f, 0.55f, 0.45f));
-    floor.merge(generateMossHummock(Vec3(-0.85f, 0, -0.35f), 1.1f, 0.50f, 0.40f));
-    floor.merge(generateMossHummock(Vec3( 0.95f, 0, -0.65f), 1.2f, 0.50f, 0.42f));
-    floor.merge(generateMossHummock(Vec3(-2.8f, 0,  0.4f), 1.5f, 1.2f, 0.42f));
-    floor.merge(generateMossHummock(Vec3(-1.6f, 0,  1.2f), 1.3f, 0.9f, 0.35f));
-    floor.merge(generateMossHummock(Vec3( 2.8f, 0,  0.2f), 1.6f, 1.3f, 0.45f));
-    floor.merge(generateMossHummock(Vec3( 3.8f, 0, -1.2f), 1.4f, 1.0f, 0.38f));
-    floor.merge(generateMossHummock(Vec3(-0.6f, 0, -3.2f), 1.8f, 0.8f, 0.32f));
-    floor.merge(generateMossHummock(Vec3( 1.1f, 0, -3.5f), 1.9f, 0.9f, 0.36f));
-    floor.merge(generateMossHummock(Vec3(-12.0f, 0, -8.0f), 2.2f, 1.6f, 0.45f));
-    floor.merge(generateMossHummock(Vec3(-18.5f, 0, -15.0f), 2.4f, 1.8f, 0.48f));
-    floor.merge(generateMossHummock(Vec3( 14.0f, 0, -6.0f), 2.0f, 1.5f, 0.42f));
-    floor.merge(generateMossHummock(Vec3( 21.0f, 0, -14.0f), 2.5f, 1.7f, 0.46f));
-    floor.merge(generateMossHummock(Vec3(-6.0f, 0, -26.0f), 2.1f, 1.5f, 0.40f));
-    floor.merge(generateMossHummock(Vec3( 8.0f, 0, -28.0f), 2.3f, 1.6f, 0.44f));
+    mossCushions.merge(generateMossHummock(moss, Vec3( 0.05f, 0, -0.55f), 1.6f, 0.55f, 0.45f));
+    mossCushions.merge(generateMossHummock(moss, Vec3(-0.85f, 0, -0.35f), 1.1f, 0.50f, 0.40f));
+    mossCushions.merge(generateMossHummock(moss, Vec3( 0.95f, 0, -0.65f), 1.2f, 0.50f, 0.42f));
+    mossCushions.merge(generateMossHummock(moss, Vec3(-2.8f, 0,  0.4f), 1.5f, 1.2f, 0.42f));
+    mossCushions.merge(generateMossHummock(moss, Vec3(-1.6f, 0,  1.2f), 1.3f, 0.9f, 0.35f));
+    mossCushions.merge(generateMossHummock(moss, Vec3( 2.8f, 0,  0.2f), 1.6f, 1.3f, 0.45f));
+    mossCushions.merge(generateMossHummock(moss, Vec3( 3.8f, 0, -1.2f), 1.4f, 1.0f, 0.38f));
+    mossCushions.merge(generateMossHummock(moss, Vec3(-0.6f, 0, -3.2f), 1.8f, 0.8f, 0.32f));
+    mossCushions.merge(generateMossHummock(moss, Vec3( 1.1f, 0, -3.5f), 1.9f, 0.9f, 0.36f));
+    mossCushions.merge(generateMossHummock(moss, Vec3(-12.0f, 0, -8.0f), 2.2f, 1.6f, 0.45f));
+    mossCushions.merge(generateMossHummock(moss, Vec3(-18.5f, 0, -15.0f), 2.4f, 1.8f, 0.48f));
+    mossCushions.merge(generateMossHummock(moss, Vec3( 14.0f, 0, -6.0f), 2.0f, 1.5f, 0.42f));
+    mossCushions.merge(generateMossHummock(moss, Vec3( 21.0f, 0, -14.0f), 2.5f, 1.7f, 0.46f));
+    mossCushions.merge(generateMossHummock(moss, Vec3(-6.0f, 0, -26.0f), 2.1f, 1.5f, 0.40f));
+    mossCushions.merge(generateMossHummock(moss, Vec3( 8.0f, 0, -28.0f), 2.3f, 1.6f, 0.44f));
 
-    // 2. Trunks & Tree Architecture Mesh Group
+    // 2. Redwood Columns (Forest_Trunks_And_Log); their crowns are grown in section 5
     ScratchboxMesh allTrunks("Forest_Trunks_And_Log");
     allTrunks.material.name = "PBR_Redwood_Bark";
     allTrunks.material.roughnessFactor = 0.92f;
     allTrunks.material.metallicFactor = 0.01f;
 
-    // Canopy Foliage Mesh Group
-    ScratchboxMesh allFoliage("Forest_Canopy_Foliage");
-    allFoliage.material.name = "PBR_Canopy_Foliage";
-    allFoliage.material.roughnessFactor = 0.58f;
-    allFoliage.material.metallicFactor = 0.01f;
-    allFoliage.material.doubleSided = true;
-    allFoliage.material.alphaMode = "MASK";
-    allFoliage.material.alphaCutoff = 0.45f;
+    std::cout << "🌳 Generating Hero Ancient Redwood Columns across Ecological Groves...\n";
 
-    std::cout << "🌳 Generating Hero Ancient Redwood & Oak Trunks across Ecological Groves...\n";
+    // Each redwood: its fluted column and the spread its crown may reach (section 6 shares it with its neighbours)
+    struct Redwood {
+        TrunkSpec trunk;
+        float crownSpreadM;
+    };
 
     // A. HERO FOREGROUND CORRIDOR (Framed for 1:1 National Geographic Alignment)
-
-    // 1. The Monumental Monarch (Hero Ancient Redwood occupying center-right of frame at X = 0.95m, Z = -2.1m)
-    TrunkSpec heroMonarch;
-    heroMonarch.basePos = Vec3(0.95f, 0.0f, -2.1f);
-    heroMonarch.height = 36.0f;
-    heroMonarch.baseRadius = 1.95f;
-    heroMonarch.topRadius = 0.88f;
-    heroMonarch.buttressLobes = 10;
-    heroMonarch.buttressSpread = 1.85f;
-    heroMonarch.leanAngleRad = 1.2f * DEG_TO_RAD;
-    heroMonarch.leanAzimuthRad = -35.0f * DEG_TO_RAD;
-    heroMonarch.hasHeroMoss = true;
-    heroMonarch.furrowDepth = 1.55f;
-    allTrunks.merge(generateProceduralTrunk(heroMonarch));
-    appendConiferBranchesAndCrown(heroMonarch, allTrunks, allFoliage, 18, 0.06f, 6.5f, true);
-
-    // Root buttress runners grounding the Monarch into the humus
-    allTrunks.merge(generateSurfaceRootRunner(Vec3(0.95f, 0, -2.1f), Vec3(-0.4f, 0, -0.6f), 0.42f, 0.10f));
-    allTrunks.merge(generateSurfaceRootRunner(Vec3(0.95f, 0, -2.1f), Vec3( 2.3f, 0, -0.8f), 0.38f, 0.09f));
-    allTrunks.merge(generateSurfaceRootRunner(Vec3(0.95f, 0, -2.1f), Vec3( 0.2f, 0, -4.2f), 0.35f, 0.08f));
-    allTrunks.merge(generateSurfaceRootRunner(Vec3(0.95f, 0, -2.1f), Vec3( 2.4f, 0, -3.8f), 0.32f, 0.07f));
-
-    // 2. Left Sun-Facing Tree (Reaching into sunbeams with low graceful boughs)
-    TrunkSpec leftSunBoughTree;
-    leftSunBoughTree.basePos = Vec3(-1.85f, 0.0f, -4.5f);
-    leftSunBoughTree.height = 29.0f;
-    leftSunBoughTree.baseRadius = 1.15f;
-    leftSunBoughTree.topRadius = 0.58f;
-    leftSunBoughTree.buttressLobes = 6;
-    leftSunBoughTree.buttressSpread = 1.15f;
-    leftSunBoughTree.leanAngleRad = 1.5f * DEG_TO_RAD;
-    leftSunBoughTree.leanAzimuthRad = 45.0f * DEG_TO_RAD;
-    leftSunBoughTree.hasHeroMoss = true;
-    leftSunBoughTree.furrowDepth = 1.25f;
-    allTrunks.merge(generateProceduralTrunk(leftSunBoughTree));
-    appendConiferBranchesAndCrown(leftSunBoughTree, allTrunks, allFoliage, 16, 0.05f, 5.4f, true);
-
-    // 3. Mid-Left Receding Tree 1
-    TrunkSpec midLeft1;
-    midLeft1.basePos = Vec3(-3.2f, 0.0f, -6.5f);
-    midLeft1.height = 28.0f;
-    midLeft1.baseRadius = 0.95f;
-    midLeft1.topRadius = 0.50f;
-    midLeft1.buttressLobes = 5;
-    midLeft1.buttressSpread = 0.85f;
-    midLeft1.leanAngleRad = 1.2f * DEG_TO_RAD;
-    midLeft1.leanAzimuthRad = 30.0f * DEG_TO_RAD;
-    midLeft1.hasHeroMoss = true;
-    midLeft1.furrowDepth = 1.10f;
-    allTrunks.merge(generateProceduralTrunk(midLeft1));
-    appendConiferBranchesAndCrown(midLeft1, allTrunks, allFoliage, 14, 0.06f, 4.8f, true);
-
-    // 4. Far-Left Framing Redwood (Hugging left edge at X = -4.8m, Z = -0.5m)
-    TrunkSpec farLeft;
-    farLeft.basePos = Vec3(-4.8f, 0.0f, -0.5f);
-    farLeft.height = 30.0f;
-    farLeft.baseRadius = 1.40f;
-    farLeft.topRadius = 0.70f;
-    farLeft.buttressLobes = 7;
-    farLeft.buttressSpread = 1.25f;
-    farLeft.leanAngleRad = 1.8f * DEG_TO_RAD;
-    farLeft.leanAzimuthRad = 85.0f * DEG_TO_RAD;
-    farLeft.hasHeroMoss = true;
-    farLeft.furrowDepth = 1.20f;
-    allTrunks.merge(generateProceduralTrunk(farLeft));
-    appendConiferBranchesAndCrown(farLeft, allTrunks, allFoliage, 16, 0.065f, 5.5f, true);
-
-    // 5. Far-Right Foreground Framing Redwood (X = 4.8f, Z = 0.5f)
-    TrunkSpec farRight;
-    farRight.basePos = Vec3(4.8f, 0.0f, 0.5f);
-    farRight.height = 30.0f;
-    farRight.baseRadius = 1.45f;
-    farRight.topRadius = 0.72f;
-    farRight.buttressLobes = 7;
-    farRight.buttressSpread = 1.20f;
-    farRight.leanAngleRad = 2.2f * DEG_TO_RAD;
-    farRight.leanAzimuthRad = -110.0f * DEG_TO_RAD;
-    farRight.hasHeroMoss = true;
-    farRight.furrowDepth = 1.20f;
-    allTrunks.merge(generateProceduralTrunk(farRight));
-    appendConiferBranchesAndCrown(farRight, allTrunks, allFoliage, 16, 0.065f, 5.5f, true);
+    std::vector<Redwood> redwoods = {
+        // 1. The Monumental Monarch (Hero Ancient Redwood occupying center-right of frame at X = 0.95m, Z = -2.1m)
+        { { Vec3( 0.95f, 0.0f, -2.1f), 36.0f, 1.95f, 0.88f, 10, 1.85f, true, 1.55f }, 6.5f },
+        // 2. Left Sun-Facing Tree (Reaching into sunbeams)
+        { { Vec3(-1.85f, 0.0f, -4.5f), 29.0f, 1.15f, 0.58f,  6, 1.15f, true, 1.25f }, 5.4f },
+        // 3. Mid-Left Receding Tree 1
+        { { Vec3(-3.2f,  0.0f, -6.5f), 28.0f, 0.95f, 0.50f,  5, 0.85f, true, 1.10f }, 4.8f },
+        // 4. Far-Left Framing Redwood (Hugging left edge at X = -4.8m, Z = -0.5m)
+        { { Vec3(-4.8f,  0.0f, -0.5f), 30.0f, 1.40f, 0.70f,  7, 1.25f, true, 1.20f }, 5.5f },
+        // 5. Far-Right Foreground Framing Redwood (X = 4.8f, Z = 0.5f)
+        { { Vec3( 4.8f,  0.0f,  0.5f), 30.0f, 1.45f, 0.72f,  7, 1.20f, true, 1.20f }, 5.5f }
+    };
 
     // B. EXPANSIVE WEST & EAST GROVES AND DEEP COLONNADE (Spreading across 80m x 70m)
     std::cout << "🌲 Constructing Distributed Forest Groves across the Landscape...\n";
-    std::vector<TrunkSpec> landscapeTrees = {
+    const std::vector<TrunkSpec> landscapeTrees = {
         // West Grove (Spreading out to X = -35)
-        { Vec3( -8.5f, 0.0f,   2.5f), 28.0f, 0.95f, 0.55f, 5, 0.85f, 1.4f * DEG_TO_RAD,  60.0f * DEG_TO_RAD, true, 1.05f },
-        { Vec3(-11.5f, 0.0f,  -3.5f), 27.0f, 0.85f, 0.48f, 5, 0.75f, 1.2f * DEG_TO_RAD,  45.0f * DEG_TO_RAD, true, 0.95f },
-        { Vec3(-15.0f, 0.0f,   1.0f), 28.0f, 0.90f, 0.52f, 4, 0.80f, 1.8f * DEG_TO_RAD,  70.0f * DEG_TO_RAD, true, 1.00f },
-        { Vec3(-18.5f, 0.0f,  -6.5f), 26.0f, 0.78f, 0.45f, 4, 0.70f, 1.0f * DEG_TO_RAD,  30.0f * DEG_TO_RAD, true, 0.90f },
-        { Vec3(-14.0f, 0.0f, -12.0f), 27.0f, 0.82f, 0.46f, 4, 0.75f, 1.5f * DEG_TO_RAD,  55.0f * DEG_TO_RAD, true, 0.95f },
-        { Vec3(-22.0f, 0.0f, -10.5f), 25.0f, 0.75f, 0.42f, 3, 0.65f, 2.0f * DEG_TO_RAD,  85.0f * DEG_TO_RAD, false, 0.85f },
-        { Vec3(-27.0f, 0.0f, -15.0f), 26.0f, 0.80f, 0.45f, 3, 0.70f, 1.2f * DEG_TO_RAD,  40.0f * DEG_TO_RAD, false, 0.85f },
-        { Vec3(-19.5f, 0.0f, -20.0f), 25.0f, 0.74f, 0.42f, 3, 0.65f, 1.4f * DEG_TO_RAD,  60.0f * DEG_TO_RAD, false, 0.80f },
-        { Vec3(-25.5f, 0.0f, -25.5f), 24.0f, 0.70f, 0.40f, 3, 0.60f, 1.6f * DEG_TO_RAD,  75.0f * DEG_TO_RAD, false, 0.80f },
-        { Vec3(-16.0f, 0.0f, -29.0f), 25.0f, 0.72f, 0.40f, 3, 0.65f, 1.1f * DEG_TO_RAD,  35.0f * DEG_TO_RAD, false, 0.75f },
-        { Vec3(-31.0f, 0.0f, -22.0f), 24.0f, 0.68f, 0.38f, 0, 0.00f, 1.8f * DEG_TO_RAD,  90.0f * DEG_TO_RAD, false, 0.75f },
-        { Vec3(-28.0f, 0.0f, -35.0f), 25.0f, 0.70f, 0.40f, 0, 0.00f, 1.2f * DEG_TO_RAD,  50.0f * DEG_TO_RAD, false, 0.70f },
-        { Vec3(-20.0f, 0.0f, -39.0f), 24.0f, 0.66f, 0.36f, 0, 0.00f, 1.0f * DEG_TO_RAD,  20.0f * DEG_TO_RAD, false, 0.70f },
-        { Vec3(-35.0f, 0.0f, -30.0f), 23.0f, 0.64f, 0.35f, 0, 0.00f, 1.5f * DEG_TO_RAD,  80.0f * DEG_TO_RAD, false, 0.65f },
+        { Vec3( -8.5f, 0.0f,   2.5f), 28.0f, 0.95f, 0.55f, 5, 0.85f, true, 1.05f },
+        { Vec3(-11.5f, 0.0f,  -3.5f), 27.0f, 0.85f, 0.48f, 5, 0.75f, true, 0.95f },
+        { Vec3(-15.0f, 0.0f,   1.0f), 28.0f, 0.90f, 0.52f, 4, 0.80f, true, 1.00f },
+        { Vec3(-18.5f, 0.0f,  -6.5f), 26.0f, 0.78f, 0.45f, 4, 0.70f, true, 0.90f },
+        { Vec3(-14.0f, 0.0f, -12.0f), 27.0f, 0.82f, 0.46f, 4, 0.75f, true, 0.95f },
+        { Vec3(-22.0f, 0.0f, -10.5f), 25.0f, 0.75f, 0.42f, 3, 0.65f, false, 0.85f },
+        { Vec3(-27.0f, 0.0f, -15.0f), 26.0f, 0.80f, 0.45f, 3, 0.70f, false, 0.85f },
+        { Vec3(-19.5f, 0.0f, -20.0f), 25.0f, 0.74f, 0.42f, 3, 0.65f, false, 0.80f },
+        { Vec3(-25.5f, 0.0f, -25.5f), 24.0f, 0.70f, 0.40f, 3, 0.60f, false, 0.80f },
+        { Vec3(-16.0f, 0.0f, -29.0f), 25.0f, 0.72f, 0.40f, 3, 0.65f, false, 0.75f },
+        { Vec3(-31.0f, 0.0f, -22.0f), 24.0f, 0.68f, 0.38f, 0, 0.00f, false, 0.75f },
+        { Vec3(-28.0f, 0.0f, -35.0f), 25.0f, 0.70f, 0.40f, 0, 0.00f, false, 0.70f },
+        { Vec3(-20.0f, 0.0f, -39.0f), 24.0f, 0.66f, 0.36f, 0, 0.00f, false, 0.70f },
+        { Vec3(-35.0f, 0.0f, -30.0f), 23.0f, 0.64f, 0.35f, 0, 0.00f, false, 0.65f },
 
         // East Grove (Spreading out to X = +35)
-        { Vec3(  8.0f, 0.0f,   3.0f), 28.0f, 0.92f, 0.54f, 5, 0.80f, 1.6f * DEG_TO_RAD, -60.0f * DEG_TO_RAD, true, 1.00f },
-        { Vec3( 12.0f, 0.0f,  -1.5f), 27.0f, 0.88f, 0.50f, 5, 0.75f, 1.4f * DEG_TO_RAD, -45.0f * DEG_TO_RAD, true, 0.95f },
-        { Vec3( 16.5f, 0.0f,   2.5f), 28.0f, 0.90f, 0.52f, 4, 0.80f, 1.8f * DEG_TO_RAD, -75.0f * DEG_TO_RAD, true, 0.95f },
-        { Vec3( 14.5f, 0.0f,  -6.5f), 26.0f, 0.80f, 0.45f, 4, 0.70f, 1.2f * DEG_TO_RAD, -30.0f * DEG_TO_RAD, true, 0.90f },
-        { Vec3( 10.5f, 0.0f, -11.0f), 27.0f, 0.82f, 0.46f, 4, 0.75f, 1.5f * DEG_TO_RAD, -55.0f * DEG_TO_RAD, true, 0.95f },
-        { Vec3( 18.5f, 0.0f, -10.0f), 25.0f, 0.76f, 0.42f, 3, 0.65f, 2.0f * DEG_TO_RAD, -80.0f * DEG_TO_RAD, false, 0.85f },
-        { Vec3( 23.0f, 0.0f, -14.5f), 26.0f, 0.78f, 0.44f, 3, 0.70f, 1.5f * DEG_TO_RAD, -65.0f * DEG_TO_RAD, false, 0.85f },
-        { Vec3( 15.5f, 0.0f, -18.0f), 25.0f, 0.72f, 0.40f, 3, 0.65f, 1.1f * DEG_TO_RAD, -40.0f * DEG_TO_RAD, false, 0.80f },
-        { Vec3( 27.0f, 0.0f, -20.0f), 24.0f, 0.70f, 0.38f, 3, 0.60f, 1.8f * DEG_TO_RAD, -85.0f * DEG_TO_RAD, false, 0.80f },
-        { Vec3( 21.0f, 0.0f, -26.0f), 25.0f, 0.72f, 0.40f, 3, 0.65f, 1.3f * DEG_TO_RAD, -50.0f * DEG_TO_RAD, false, 0.75f },
-        { Vec3( 17.0f, 0.0f, -31.0f), 24.0f, 0.68f, 0.38f, 0, 0.00f, 1.0f * DEG_TO_RAD, -30.0f * DEG_TO_RAD, false, 0.75f },
-        { Vec3( 29.0f, 0.0f, -29.0f), 25.0f, 0.70f, 0.40f, 0, 0.00f, 1.6f * DEG_TO_RAD, -70.0f * DEG_TO_RAD, false, 0.70f },
-        { Vec3( 24.0f, 0.0f, -37.0f), 24.0f, 0.66f, 0.36f, 0, 0.00f, 1.2f * DEG_TO_RAD, -45.0f * DEG_TO_RAD, false, 0.70f },
-        { Vec3( 33.0f, 0.0f, -25.0f), 23.0f, 0.64f, 0.35f, 0, 0.00f, 1.7f * DEG_TO_RAD, -85.0f * DEG_TO_RAD, false, 0.65f },
+        { Vec3(  8.0f, 0.0f,   3.0f), 28.0f, 0.92f, 0.54f, 5, 0.80f, true, 1.00f },
+        { Vec3( 12.0f, 0.0f,  -1.5f), 27.0f, 0.88f, 0.50f, 5, 0.75f, true, 0.95f },
+        { Vec3( 16.5f, 0.0f,   2.5f), 28.0f, 0.90f, 0.52f, 4, 0.80f, true, 0.95f },
+        { Vec3( 14.5f, 0.0f,  -6.5f), 26.0f, 0.80f, 0.45f, 4, 0.70f, true, 0.90f },
+        { Vec3( 10.5f, 0.0f, -11.0f), 27.0f, 0.82f, 0.46f, 4, 0.75f, true, 0.95f },
+        { Vec3( 18.5f, 0.0f, -10.0f), 25.0f, 0.76f, 0.42f, 3, 0.65f, false, 0.85f },
+        { Vec3( 23.0f, 0.0f, -14.5f), 26.0f, 0.78f, 0.44f, 3, 0.70f, false, 0.85f },
+        { Vec3( 15.5f, 0.0f, -18.0f), 25.0f, 0.72f, 0.40f, 3, 0.65f, false, 0.80f },
+        { Vec3( 27.0f, 0.0f, -20.0f), 24.0f, 0.70f, 0.38f, 3, 0.60f, false, 0.80f },
+        { Vec3( 21.0f, 0.0f, -26.0f), 25.0f, 0.72f, 0.40f, 3, 0.65f, false, 0.75f },
+        { Vec3( 17.0f, 0.0f, -31.0f), 24.0f, 0.68f, 0.38f, 0, 0.00f, false, 0.75f },
+        { Vec3( 29.0f, 0.0f, -29.0f), 25.0f, 0.70f, 0.40f, 0, 0.00f, false, 0.70f },
+        { Vec3( 24.0f, 0.0f, -37.0f), 24.0f, 0.66f, 0.36f, 0, 0.00f, false, 0.70f },
+        { Vec3( 33.0f, 0.0f, -25.0f), 23.0f, 0.64f, 0.35f, 0, 0.00f, false, 0.65f },
 
         // North & Deep Background Colonnade (Z from -10 to -48 across clearing depth)
-        { Vec3( -1.8f, 0.0f, -12.5f), 26.0f, 0.68f, 0.40f, 3, 0.55f, 1.2f * DEG_TO_RAD,  20.0f * DEG_TO_RAD, true, 0.85f },
-        { Vec3(  3.2f, 0.0f, -14.5f), 25.0f, 0.65f, 0.38f, 3, 0.50f, 1.5f * DEG_TO_RAD, -35.0f * DEG_TO_RAD, true, 0.85f },
-        { Vec3( -4.5f, 0.0f, -16.5f), 26.0f, 0.66f, 0.38f, 3, 0.50f, 1.4f * DEG_TO_RAD,  30.0f * DEG_TO_RAD, true, 0.80f },
-        { Vec3(  1.5f, 0.0f, -18.5f), 25.0f, 0.62f, 0.36f, 3, 0.45f, 1.0f * DEG_TO_RAD, -15.0f * DEG_TO_RAD, true, 0.80f },
-        { Vec3( -3.0f, 0.0f, -22.5f), 25.0f, 0.60f, 0.35f, 0, 0.00f, 1.2f * DEG_TO_RAD,  25.0f * DEG_TO_RAD, false, 0.75f },
-        { Vec3(  3.8f, 0.0f, -25.0f), 24.0f, 0.58f, 0.34f, 0, 0.00f, 1.4f * DEG_TO_RAD, -40.0f * DEG_TO_RAD, false, 0.75f },
-        { Vec3( -0.5f, 0.0f, -28.5f), 25.0f, 0.56f, 0.32f, 0, 0.00f, 0.9f * DEG_TO_RAD,  10.0f * DEG_TO_RAD, false, 0.70f },
-        { Vec3(  2.4f, 0.0f, -33.0f), 24.0f, 0.54f, 0.30f, 0, 0.00f, 1.1f * DEG_TO_RAD, -25.0f * DEG_TO_RAD, false, 0.70f },
-        { Vec3( -4.8f, 0.0f, -37.5f), 25.0f, 0.55f, 0.30f, 0, 0.00f, 1.3f * DEG_TO_RAD,  30.0f * DEG_TO_RAD, false, 0.65f },
-        { Vec3(  1.2f, 0.0f, -43.0f), 24.0f, 0.50f, 0.28f, 0, 0.00f, 0.8f * DEG_TO_RAD, -10.0f * DEG_TO_RAD, false, 0.65f },
-        { Vec3( -2.0f, 0.0f, -47.0f), 24.0f, 0.48f, 0.26f, 0, 0.00f, 0.7f * DEG_TO_RAD,   5.0f * DEG_TO_RAD, false, 0.60f },
-        { Vec3(  4.5f, 0.0f, -48.0f), 23.0f, 0.46f, 0.25f, 0, 0.00f, 1.2f * DEG_TO_RAD, -30.0f * DEG_TO_RAD, false, 0.60f }
+        { Vec3( -1.8f, 0.0f, -12.5f), 26.0f, 0.68f, 0.40f, 3, 0.55f, true, 0.85f },
+        { Vec3(  3.2f, 0.0f, -14.5f), 25.0f, 0.65f, 0.38f, 3, 0.50f, true, 0.85f },
+        { Vec3( -4.5f, 0.0f, -16.5f), 26.0f, 0.66f, 0.38f, 3, 0.50f, true, 0.80f },
+        { Vec3(  1.5f, 0.0f, -18.5f), 25.0f, 0.62f, 0.36f, 3, 0.45f, true, 0.80f },
+        { Vec3( -3.0f, 0.0f, -22.5f), 25.0f, 0.60f, 0.35f, 0, 0.00f, false, 0.75f },
+        { Vec3(  3.8f, 0.0f, -25.0f), 24.0f, 0.58f, 0.34f, 0, 0.00f, false, 0.75f },
+        { Vec3( -0.5f, 0.0f, -28.5f), 25.0f, 0.56f, 0.32f, 0, 0.00f, false, 0.70f },
+        { Vec3(  2.4f, 0.0f, -33.0f), 24.0f, 0.54f, 0.30f, 0, 0.00f, false, 0.70f },
+        { Vec3( -4.8f, 0.0f, -37.5f), 25.0f, 0.55f, 0.30f, 0, 0.00f, false, 0.65f },
+        { Vec3(  1.2f, 0.0f, -43.0f), 24.0f, 0.50f, 0.28f, 0, 0.00f, false, 0.65f },
+        { Vec3( -2.0f, 0.0f, -47.0f), 24.0f, 0.48f, 0.26f, 0, 0.00f, false, 0.60f },
+        { Vec3(  4.5f, 0.0f, -48.0f), 23.0f, 0.46f, 0.25f, 0, 0.00f, false, 0.60f }
     };
-
     for (size_t i = 0; i < landscapeTrees.size(); ++i) {
-        allTrunks.merge(generateProceduralTrunk(landscapeTrees[i]));
-        float spread = 3.6f + 1.2f * (static_cast<float>(i % 4) / 3.0f);
-        int tiers = 8 + (i % 3);
-        appendConiferBranchesAndCrown(landscapeTrees[i], allTrunks, allFoliage, tiers, 0.09f, spread, false);
+        redwoods.push_back({ landscapeTrees[i], 3.6f + 1.2f * (static_cast<float>(i % 4) / 3.0f) });
     }
+
+    // A redwood crown: a narrow cone from about two fifths of the height, widest low down, dark yellow-green foliage
+    const CrownProfile redwoodCrown{ 0.38f, 0.18f, 1.15f, Vec3(0.040f, 0.085f, 0.030f), 0.18f, "coast redwood crown" };
+    std::vector<tile_vegetation::DescribedTree> crowns;
+    std::vector<Vec3> columns;
+    for (size_t i = 0; i < redwoods.size(); ++i) {
+        const TrunkSpec& trunk = redwoods[i].trunk;
+        allTrunks.merge(generateProceduralTrunk(trunk, bark, mossOnBark));
+        crowns.push_back(describeCrown(trunk.basePos, trunk.height + 0.55f, redwoods[i].crownSpreadM, 0.5f * trunk.baseRadius,
+                                       redwoodCrown, static_cast<uint32_t>(i)));
+        columns.push_back(trunk.basePos);
+    }
+    shareCrownGaps(crowns);
+
+    // Root buttress runners grounding the Monarch into the humus
+    allTrunks.merge(generateSurfaceRootRunner(bark, mossOnBark, Vec3(0.95f, 0, -2.1f), Vec3(-0.4f, 0, -0.6f), 0.42f, 0.10f));
+    allTrunks.merge(generateSurfaceRootRunner(bark, mossOnBark, Vec3(0.95f, 0, -2.1f), Vec3( 2.3f, 0, -0.8f), 0.38f, 0.09f));
+    allTrunks.merge(generateSurfaceRootRunner(bark, mossOnBark, Vec3(0.95f, 0, -2.1f), Vec3( 0.2f, 0, -4.2f), 0.35f, 0.08f));
+    allTrunks.merge(generateSurfaceRootRunner(bark, mossOnBark, Vec3(0.95f, 0, -2.1f), Vec3( 2.4f, 0, -3.8f), 0.32f, 0.07f));
 
     // 4. Fallen Mossy Nurse Logs Spanning the Landscape
     std::cout << "🪵 Generating Massive Fallen Mossy Nurse Logs across Landscape Quadrants...\n";
     Vec3 logStart(-1.45f, 0.0f, -0.35f);
     Vec3 logEnd  ( 1.55f, 0.0f, -0.75f);
-    allTrunks.merge(generateFallenNurseLog(logStart, logEnd, 0.52f));
+    allTrunks.merge(generateFallenNurseLog(bark, mossOnBark, logStart, logEnd, 0.52f));
 
     Vec3 log2Start(-3.8f, 0.0f, -4.5f);
     Vec3 log2End  (-1.8f, 0.0f, -6.8f);
-    allTrunks.merge(generateFallenNurseLog(log2Start, log2End, 0.44f));
+    allTrunks.merge(generateFallenNurseLog(bark, mossOnBark, log2Start, log2End, 0.44f));
 
     Vec3 log3Start(-18.0f, 0.0f, -15.0f);
     Vec3 log3End  (-11.5f, 0.0f, -18.0f);
-    allTrunks.merge(generateFallenNurseLog(log3Start, log3End, 0.52f));
+    allTrunks.merge(generateFallenNurseLog(bark, mossOnBark, log3Start, log3End, 0.52f));
 
     Vec3 log4Start(12.0f, 0.0f, -11.0f);
     Vec3 log4End  (17.5f, 0.0f, -14.5f);
-    allTrunks.merge(generateFallenNurseLog(log4Start, log4End, 0.46f));
+    allTrunks.merge(generateFallenNurseLog(bark, mossOnBark, log4Start, log4End, 0.46f));
 
     Vec3 log5Start(-5.0f, 0.0f, -33.0f);
     Vec3 log5End  ( 2.0f, 0.0f, -35.5f);
-    allTrunks.merge(generateFallenNurseLog(log5Start, log5End, 0.55f));
+    allTrunks.merge(generateFallenNurseLog(bark, mossOnBark, log5Start, log5End, 0.55f));
 
-    // Epiphytic Shelf Bracket Polypores on Hero Redwood & Nurse Logs
-    allTrunks.merge(generateShelfPolypores(Vec3(0.55f, getTerrainHeight(0.55f, -1.8f) + 1.2f, -1.8f), Vec3(0.2f, 0, 0.9f), 0.26f));
-    allTrunks.merge(generateShelfPolypores(Vec3(0.15f, getTerrainHeight(0.15f, -2.1f) + 2.2f, -2.1f), Vec3(-0.9f, 0, 0.2f), 0.22f));
-    allTrunks.merge(generateShelfPolypores(Vec3(0.85f, getTerrainHeight(0.85f, -1.9f) + 0.38f, -1.9f), Vec3(0.7f, 0.2f, 0.6f), 0.20f));
-    allTrunks.merge(generateShelfPolypores(Vec3(0.4f, getTerrainHeight(0.4f, -0.6f) + 0.45f, -0.6f), Vec3(-0.4f, 0.2f, 0.9f), 0.24f));
-    allTrunks.merge(generateShelfPolypores(Vec3(-14.5f, getTerrainHeight(-14.5f, -16.5f) + 0.42f, -16.5f), Vec3(0.3f, 0.2f, 0.9f), 0.28f));
-    allTrunks.merge(generateShelfPolypores(Vec3( 14.2f, getTerrainHeight( 14.2f, -12.8f) + 0.40f, -12.8f), Vec3(-0.5f, 0.2f, 0.8f), 0.25f));
+    // Epiphytic Shelf Bracket Polypores on Hero Redwood & Nurse Logs (fungus, not bark: drawn with the undergrowth)
+    ScratchboxMesh polypores("Shelf_Polypores");
+    polypores.merge(generateShelfPolypores(Vec3(0.55f, getTerrainHeight(0.55f, -1.8f) + 1.2f, -1.8f), Vec3(0.2f, 0, 0.9f), 0.26f));
+    polypores.merge(generateShelfPolypores(Vec3(0.15f, getTerrainHeight(0.15f, -2.1f) + 2.2f, -2.1f), Vec3(-0.9f, 0, 0.2f), 0.22f));
+    polypores.merge(generateShelfPolypores(Vec3(0.85f, getTerrainHeight(0.85f, -1.9f) + 0.38f, -1.9f), Vec3(0.7f, 0.2f, 0.6f), 0.20f));
+    polypores.merge(generateShelfPolypores(Vec3(0.4f, getTerrainHeight(0.4f, -0.6f) + 0.45f, -0.6f), Vec3(-0.4f, 0.2f, 0.9f), 0.24f));
+    polypores.merge(generateShelfPolypores(Vec3(-14.5f, getTerrainHeight(-14.5f, -16.5f) + 0.42f, -16.5f), Vec3(0.3f, 0.2f, 0.9f), 0.28f));
+    polypores.merge(generateShelfPolypores(Vec3( 14.2f, getTerrainHeight( 14.2f, -12.8f) + 0.40f, -12.8f), Vec3(-0.5f, 0.2f, 0.8f), 0.25f));
 
-    // 5. Understory Subcanopy Trees & Overhanging Archway
-    std::cout << "🌲 Sprouting Understory Subcanopy Trees...\n";
-    allFoliage.merge(generateUnderstoryTree(Vec3(-1.2f, 0, -4.5f), 5.4f, 3.2f));
-    allFoliage.merge(generateUnderstoryTree(Vec3( 1.5f, 0, -5.2f), 5.2f, 3.0f));
-    allFoliage.merge(generateUnderstoryTree(Vec3(-3.2f, 0, -8.0f), 5.8f, 3.5f));
-    allFoliage.merge(generateUnderstoryTree(Vec3( 2.4f, 0, -9.5f), 5.5f, 3.4f));
+    // 5. Understory Subcanopy Trees, then Every Crown Grown by SB-Veggie (section 6)
+    std::cout << "🌲 Describing Understory Subcanopy Crowns in the Gaps between the Columns...\n";
+    // A broadleaf understory crown: a dome from a third of the height, widest at its middle, brighter green than the redwoods
+    const CrownProfile understoryCrown{ 0.32f, 0.45f, 2.2f, Vec3(0.070f, 0.150f, 0.040f), 0.15f, "understory broadleaf crown" };
+    struct UnderstoryTree { float x, z, heightM, spreadM; };
+    const UnderstoryTree understory[] = {
+        {  0.8f,  -7.5f,  5.4f, 2.2f },
+        {  4.5f,  -8.2f,  5.2f, 2.1f },
+        { -6.2f, -10.75f, 5.8f, 2.4f },
+        {  2.4f,  -9.5f,  5.5f, 2.4f }
+    };
+    std::vector<tile_vegetation::DescribedTree> understoryCrowns;
+    for (size_t i = 0; i < std::size(understory); ++i) {
+        const UnderstoryTree& u = understory[i];
+        understoryCrowns.push_back(describeCrown(Vec3(u.x, 0.0f, u.z), u.heightM, u.spreadM, 0.0f, understoryCrown,
+                                                 static_cast<uint32_t>(crowns.size() + i)));
+    }
+    shareCrownGaps(understoryCrowns, columns);
+    crowns.insert(crowns.end(), understoryCrowns.begin(), understoryCrowns.end());
 
-    std::cout << "🌿 Weaving Overhanging Foreground Canopy Archway...\n";
-    allFoliage.merge(generateOverhangingForegroundCanopy());
+    std::cout << "🌳 Growing " << crowns.size() << " Crowns with SB-Veggie (space colonisation, species & texture libraries)...\n";
+    tile_vegetation::GroveOptions grove;
+    grove.seed = 0x5EED0F0E57ull;
+    grove.speciesIndexPath = "assets/vegetation/species/index.json";
+    grove.textureIndexPath = "assets/textures/trees/index.json";
+    grove.reveal = false;
+    grove.label = "forest_3d_viewer crowns";
+    tile_vegetation::GroveResult grown;
+    try {
+        grown = tile_vegetation::growDescribedTrees(crowns, grove);
+    } catch (const std::exception& e) {
+        std::cerr << "❌ Fatal: SB-Veggie could not grow the forest's crowns: " << e.what() << "\n";
+        return 1;
+    }
 
     // 6. Fern Colonies Mesh Group (High Density - 85+ Colonies)
     ScratchboxMesh allFerns("Forest_Sword_Ferns");
@@ -1414,9 +1379,11 @@ int main(int argc, char** argv) {
         float fx = fernLocations[f].x;
         float fz = fernLocations[f].z;
         float fy = getTerrainHeight(fx, fz);
-        float radius = (f < 6) ? 2.35f : ((f < 12) ? 1.85f : 1.45f);
+        // a clump's radius sets its fronds' length and arch: 1 m makes sword fern fronds 1.1-1.3 m long arching 0.6-1.1 m
+        // high (the reference's ferns, below a standing eye), not 3 m fronds over the bookmarks' cameras
+        float radius = (f < 6) ? 1.05f : ((f < 12) ? 0.95f : 0.85f);
         int fronds = (f < 6) ? 34 : ((f < 12) ? 26 : 20);
-        allFerns.merge(generateSwordFernClump(Vec3(fx, fy, fz), radius, fronds));
+        allFerns.merge(generateSwordFernClump(fernLeaf, Vec3(fx, fy, fz), radius, fronds));
     }
 
     std::cout << "🌿 Seeding Clustered Fern Colonies across the Landscape (Infiniti Keypoint Cluster Engine)...\n";
@@ -1434,9 +1401,9 @@ int main(int argc, char** argv) {
     );
 
     for (const auto& sf : scatteredFerns) {
-        float rad = 1.35f * sf.scale;
+        float rad = 0.85f * sf.scale;
         int numFronds = static_cast<int>(18 * sf.scale);
-        allFerns.merge(generateSwordFernClump(sf.position, rad, std::max(10, numFronds)));
+        allFerns.merge(generateSwordFernClump(fernLeaf, sf.position, rad, std::max(10, numFronds)));
     }
 
     // 7. Woodland Undergrowth (Grass Clumps, Oxalis Sorrel, Nurse Log Ivy & Fallen Wood Litter)
@@ -1448,6 +1415,7 @@ int main(int argc, char** argv) {
     allUnderstory.material.doubleSided = true;
     allUnderstory.material.alphaMode = "MASK";
     allUnderstory.material.alphaCutoff = 0.35f;
+    allUnderstory.merge(polypores);
 
     // Wood Sorrel (Oxalis oregana) ground carpets
     std::cout << "☘️ Spreading Wood Sorrel (Oxalis) Mats around Tree Buttresses...\n";
@@ -1511,20 +1479,26 @@ int main(int argc, char** argv) {
     geometry::Mesh ivyMesh1 = IvyGrowthGenerator::generateIvy(logIvy1);
     allUnderstory.merge(ivyMesh1.toScratchboxMesh());
 
-    // Volumetric 3D Velvet Moss Tufts on Nurse Logs & Buttress Roots
+    // Volumetric 3D Velvet Moss Tufts on Nurse Logs & Buttress Roots: the moss surface, its map projected at its real
+    // size (the tufts' blades stand up: across them diagonally, up them in metres) and their shading kept as a share of
+    // the tufts' base colour
     std::cout << "🌱 Seeding 3D Volumetric Velvet Moss Tufts on Nurse Logs & Hero Roots...\n";
-    geometry::Mesh tufts1 = BotanicalOrganGenerator::generateVolumetricMossTufts(logStart, logEnd, 0.48f, 180);
-    allUnderstory.merge(tufts1.toScratchboxMesh());
-    geometry::Mesh tufts2 = BotanicalOrganGenerator::generateVolumetricMossTufts(log2Start, log2End, 0.44f, 150);
-    allUnderstory.merge(tufts2.toScratchboxMesh());
-    geometry::Mesh tufts3 = BotanicalOrganGenerator::generateVolumetricMossTufts(log3Start, log3End, 0.52f, 160);
-    allUnderstory.merge(tufts3.toScratchboxMesh());
-    geometry::Mesh tufts4 = BotanicalOrganGenerator::generateVolumetricMossTufts(log4Start, log4End, 0.46f, 140);
-    allUnderstory.merge(tufts4.toScratchboxMesh());
-    geometry::Mesh tufts5 = BotanicalOrganGenerator::generateVolumetricMossTufts(Vec3(-2.2f, 0, -0.6f), Vec3(-3.8f, 0,  1.4f), 0.26f, 90);
-    allUnderstory.merge(tufts5.toScratchboxMesh());
-    geometry::Mesh tufts6 = BotanicalOrganGenerator::generateVolumetricMossTufts(Vec3(-2.2f, 0, -0.6f), Vec3(-1.1f, 0,  1.6f), 0.24f, 80);
-    allUnderstory.merge(tufts6.toScratchboxMesh());
+    auto addMossTufts = [&](geometry::Mesh tufts) {
+        const float baseLuminance = luminance(COL_NURSE_LOG_MOSS);
+        for (size_t i = 0; i < tufts.vertices.size(); ++i) {
+            const Vec3& p = tufts.vertices[i];
+            tufts.uvs[i] = Vec2((p.x + p.z) * 0.70710678f / moss.tileU, p.y / moss.tileV);
+            const float k = std::min(1.0f, luminance(tufts.vertexColors[i]) / baseLuminance);
+            tufts.vertexColors[i] = Vec4(k, k, k, 1.0f);
+        }
+        mossCushions.merge(tufts.toScratchboxMesh());
+    };
+    addMossTufts(BotanicalOrganGenerator::generateVolumetricMossTufts(logStart, logEnd, 0.48f, 180));
+    addMossTufts(BotanicalOrganGenerator::generateVolumetricMossTufts(log2Start, log2End, 0.44f, 150));
+    addMossTufts(BotanicalOrganGenerator::generateVolumetricMossTufts(log3Start, log3End, 0.52f, 160));
+    addMossTufts(BotanicalOrganGenerator::generateVolumetricMossTufts(log4Start, log4End, 0.46f, 140));
+    addMossTufts(BotanicalOrganGenerator::generateVolumetricMossTufts(Vec3(-2.2f, 0, -0.6f), Vec3(-3.8f, 0,  1.4f), 0.26f, 90));
+    addMossTufts(BotanicalOrganGenerator::generateVolumetricMossTufts(Vec3(-2.2f, 0, -0.6f), Vec3(-1.1f, 0,  1.6f), 0.24f, 80));
 
     // Fallen Deadwood Branches, Pinecones, Bark Chips, Decaying Fronds & Sub-Centimeter Needle Carpet
     std::cout << "🍂 Laying Sub-Centimeter Fallen Needle Carpet & Woodland Litter...\n";
@@ -1610,15 +1584,40 @@ int main(int argc, char** argv) {
     std::cout << "☀️ Injecting Morning Crepuscular Sunbeams (56 Volumetric God Rays)...\n";
     Vec3 sunOrigin(3.8f, 18.0f, -14.0f);
     Vec3 focalCenter(-1.4f, 1.2f, -5.5f);
-    ScratchboxMesh godRays = generateAtmosphericGodRays(sunOrigin, focalCenter, 56);
+    std::vector<TrunkSpec> shaftBlockers;
+    for (const Redwood& redwood : redwoods) shaftBlockers.push_back(redwood.trunk);
+    ScratchboxMesh godRays = generateAtmosphericGodRays(sunOrigin, focalCenter, shaftBlockers, 56);
 
-    // 9. Assemble Discrete Multi-Mesh Array for GlbWriter
+    // 9. Assemble Discrete Multi-Mesh Array for GlbWriter (the crowns are their own GLB, section 6). The library-textured
+    //    surfaces take their set's map, normal and ORM (roughness from the map: factor 1), their tint as the base colour
+    //    factor, tangents from their real-size UVs, and in their extras the set, its real size and the measurement.
+    auto surface = [](ScratchboxMesh& mesh, const std::string& materialName, const SurfaceSet& set, const MeasuredTarget& target,
+                      const Vec3& tint, float share, const std::string& uv) {
+        mesh.material.name = materialName;
+        mesh.material.baseColorFactor = Vec4(tint.x, tint.y, tint.z, 1.0f);
+        mesh.material.roughnessFactor = 1.0f;
+        mesh.material.metallicFactor = 0.0f;
+        mesh.material.extrasJson = surfaceExtras(set, target, tint, share, uv);
+        computeTangents(mesh);
+    };
+    surface(floor, "PBR_Forest_Floor", duff, duffTarget, duffTint, duffShare, "metres over realSizeM, across the ground (x, z)");
+    surface(allTrunks, "PBR_Redwood_Bark", bark, barkTarget, barkTint, barkShare,
+            "a whole number of tiles around each column, root and log at its mean radius; metres over realSizeM along it");
+    surface(allFerns, "PBR_Sword_Ferns", fernLeaf.set, fernTarget, fernTint, fernShare,
+            "one leaf of the atlas per pinna, at the leaf's own width over length; its opacity cuts the pinna");
+    allFerns.material.alphaCutoff = 0.5f;
+    surface(mossCushions, "PBR_Moss", moss, mossTarget, mossTint, mossShare,
+            "metres over realSizeM: across the ground on the cushions, diagonally across and up the tufts' blades");
+    mossCushions.material.doubleSided = true;   // the tufts' blades are seen from both sides
+    // the undergrowth's small organs (sorrel, grass, ivy, cones, litter, fungi) are drawn in their own vertex colours
+    allUnderstory.material.baseColorFactor = Vec4(1.0f, 1.0f, 1.0f, 1.0f);
+
     std::vector<ScratchboxMesh> subMeshes = {
         floor,          // Index 0: PBR_Forest_Floor
         allTrunks,      // Index 1: PBR_Redwood_Bark
-        allFoliage,     // Index 2: PBR_Canopy_Foliage
-        allFerns,       // Index 3: PBR_Sword_Ferns
-        allUnderstory,  // Index 4: PBR_Woodland_Undergrowth
+        allFerns,       // Index 2: PBR_Sword_Ferns
+        allUnderstory,  // Index 3: PBR_Woodland_Undergrowth
+        mossCushions,   // Index 4: PBR_Moss
         godRays         // Index 5: PBR_Volumetric_GodRays
     };
 
@@ -1632,50 +1631,31 @@ int main(int argc, char** argv) {
     std::cout << "   Submeshes Count: " << subMeshes.size() << "\n";
     std::cout << "   Total Vertices:  " << totalVerts << "\n";
     std::cout << "   Total Triangles: " << totalTris << "\n";
+    std::cout << "   SB-Veggie Crowns: " << grown.statsJson.substr(0, grown.statsJson.find(",\"perTree\"")) << "}\n";
 
-    // 10. Embed Authentic Photo-Derived PBR Texture Maps into GLB
-    std::cout << "\n🎨 Embedding Photo-Derived PBR Texture Maps into glTF Materials...\n";
+    // 10. Embed the surfaces' maps into the GLB's materials (the viewer draws with these)
+    std::cout << "\n🎨 Embedding the Surface Sets' Maps into glTF Materials...\n";
     std::vector<io::EmbeddedTexture> remappedTextures;
-
-    auto addPhotoTexture = [&](const std::string& filename, io::TextureUsage usage, int matIdx) {
-        std::string fullPath = "public/textures/" + filename;
-        auto bytes = loadPngFile(fullPath);
-        if (!bytes.empty()) {
+    auto embed = [&](const SurfaceSet& set, int matIdx) {
+        const std::tuple<const char*, const std::vector<uint8_t>*, const std::string*, io::TextureUsage> maps[] = {
+            { "albedo", &set.albedo, &set.albedoMime, io::TextureUsage::BASE_COLOR },
+            { "normal", &set.normal, &set.normalMime, io::TextureUsage::NORMAL },
+            { "orm", &set.orm, &set.ormMime, io::TextureUsage::ORM } };
+        for (const auto& [role, bytes, mime, usage] : maps) {
             io::EmbeddedTexture t;
-            t.name = filename;
-            t.mimeType = "image/png";
-            t.data = std::move(bytes);
+            t.name = set.id + "_" + role;
+            t.mimeType = *mime;
+            t.data = *bytes;
             t.usage = usage;
             t.materialIndex = matIdx;
             remappedTextures.push_back(t);
-            std::cout << "   ✅ Embedded " << filename << " into Material " << matIdx << " (" << t.data.size() << " bytes)\n";
+            std::cout << "   ✅ Embedded " << t.name << " into Material " << matIdx << " (" << t.data.size() << " bytes)\n";
         }
     };
-
-    // Material 0: PBR_Forest_Floor
-    addPhotoTexture("photo_forest_floor_albedo.png", io::TextureUsage::BASE_COLOR, 0);
-    addPhotoTexture("photo_forest_floor_normal.png", io::TextureUsage::NORMAL, 0);
-    addPhotoTexture("photo_forest_floor_orm.png", io::TextureUsage::METALLIC_ROUGHNESS, 0);
-
-    // Material 1: PBR_Redwood_Bark
-    addPhotoTexture("photo_redwood_bark_albedo.png", io::TextureUsage::BASE_COLOR, 1);
-    addPhotoTexture("photo_redwood_bark_normal.png", io::TextureUsage::NORMAL, 1);
-    addPhotoTexture("photo_redwood_bark_orm.png", io::TextureUsage::METALLIC_ROUGHNESS, 1);
-
-    // Material 2: PBR_Canopy_Foliage
-    addPhotoTexture("photo_canopy_albedo.png", io::TextureUsage::BASE_COLOR, 2);
-    addPhotoTexture("photo_canopy_normal.png", io::TextureUsage::NORMAL, 2);
-    addPhotoTexture("photo_canopy_orm.png", io::TextureUsage::METALLIC_ROUGHNESS, 2);
-
-    // Material 3: PBR_Sword_Ferns
-    addPhotoTexture("photo_fern_albedo.png", io::TextureUsage::BASE_COLOR, 3);
-    addPhotoTexture("photo_fern_normal.png", io::TextureUsage::NORMAL, 3);
-    addPhotoTexture("photo_fern_orm.png", io::TextureUsage::METALLIC_ROUGHNESS, 3);
-
-    // Material 4: PBR_Woodland_Undergrowth
-    addPhotoTexture("photo_moss_albedo.png", io::TextureUsage::BASE_COLOR, 4);
-    addPhotoTexture("photo_moss_normal.png", io::TextureUsage::NORMAL, 4);
-    addPhotoTexture("photo_moss_orm.png", io::TextureUsage::METALLIC_ROUGHNESS, 4);
+    embed(duff, 0);
+    embed(bark, 1);
+    embed(fernLeaf.set, 2);
+    embed(moss, 4);
 
     std::cout << "   Total Embedded Textures: " << remappedTextures.size() << "\n";
 
@@ -1695,19 +1675,26 @@ int main(int argc, char** argv) {
         (void)sysRet;
     }
 
-    std::ofstream outFile(outputPath, std::ios::binary);
-    if (!outFile.is_open()) {
-        std::cerr << "❌ Fatal: Could not open output file " << outputPath << "\n";
-        return 1;
+    // The crowns beside the forest: <output>_trees.glb, and what SB-Veggie grew in <output>_trees.stats.json
+    const std::string stem = outputPath.size() > 4 && outputPath.substr(outputPath.size() - 4) == ".glb" ? outputPath.substr(0, outputPath.size() - 4) : outputPath;
+    const std::string treesPath = stem + "_trees.glb";
+    const std::string treesStatsPath = stem + "_trees.stats.json";
+    const std::pair<const std::string*, const std::vector<uint8_t>*> glbs[] = { { &outputPath, &glbData }, { &treesPath, &grown.glb } };
+    for (const auto& [path, bytes] : glbs) {
+        std::ofstream outFile(*path, std::ios::binary);
+        if (!outFile.is_open()) {
+            std::cerr << "❌ Fatal: Could not open output file " << *path << "\n";
+            return 1;
+        }
+        outFile.write(reinterpret_cast<const char*>(bytes->data()), static_cast<std::streamsize>(bytes->size()));
+        std::cout << "✅ Successfully Exported: " << *path << " (" << bytes->size() << " bytes)\n";
     }
-
-    outFile.write(reinterpret_cast<const char*>(glbData.data()), glbData.size());
-    outFile.close();
+    std::ofstream statsFile(treesStatsPath);
+    statsFile << grown.statsJson << "\n";
 
     auto tEnd = std::chrono::high_resolution_clock::now();
     double ms = std::chrono::duration<double, std::milli>(tEnd - tStart).count();
 
-    std::cout << "✅ Successfully Exported: " << outputPath << " (" << glbData.size() << " bytes)\n";
     std::cout << "⏱️ Procedural Forest Generation Completed in " << ms << " ms.\n";
     std::cout << "================================================================\n";
 

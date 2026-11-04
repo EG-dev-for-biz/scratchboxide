@@ -49,7 +49,7 @@ import { type MassingFace, type MassingNode, type MassingRun } from './native-ma
 import { plainTextures, runNativeMassing, writeMassingLayer, LOW_COVERAGE, type MassingLayerFiles } from './pipeline-e';
 
 // v2: textures carried onto the relief's faces by plane and overlap, not by key (v1 layers carry other faces' textures)
-export const RELIEF_VERSION = 'pipeline-e-relief/v2';
+export const RELIEF_VERSION = 'pipeline-e-relief/v3';  // v3: texels no stage wrote are filled (pipeline-e.ts closeUnsourcedTexels)
 /** The label of what this stage measures (AGENTS.md: `measured`, here averaged from the scan along repeats). */
 export const MEASURED_AVERAGED_LABEL = 'measured';
 /** The label of a typical profile added where the facade clearly has a feature the averages cannot resolve. */

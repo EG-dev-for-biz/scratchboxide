@@ -325,22 +325,26 @@
         fov: 52.0,
         buttonId: 'btnWideshot'
       },
+      // the photo-matched view stands 2.4 m behind the fern bank's front fronds, its field widened to keep the monarch
+      // and the bank the size they had from its old stance inside the bank (nothing in frame within 1 m)
       matched: {
-        pos: new THREE.Vector3(0.0, 1.30, 2.20),
+        pos: new THREE.Vector3(-1.60, 1.50, 4.60),
         target: new THREE.Vector3(0.45, 1.60, -2.10),
-        fov: 46.0,
+        fov: 69.0,
         buttonId: 'btnMatchedView'
       },
+      // the hero and fern views stand in the clearing in front of the fern bank (its fronds reach z = 2.5 m): the
+      // monarch's column rising from the ferns into its crown, and the bank seen from a crouch 2 m off its edge
       hero: {
-        pos: new THREE.Vector3(0.20, 1.15, -0.40),
-        target: new THREE.Vector3(0.95, 1.45, -2.10),
-        fov: 48.0,
+        pos: new THREE.Vector3(2.40, 2.00, 6.20),
+        target: new THREE.Vector3(0.95, 6.50, -2.10),
+        fov: 70.0,
         buttonId: 'btnHeroCloseUp'
       },
       ferns: {
-        pos: new THREE.Vector3(-0.35, 0.95, 0.90),
-        target: new THREE.Vector3(0.0, 0.45, -0.50),
-        fov: 46.0,
+        pos: new THREE.Vector3(-0.80, 1.85, 4.30),
+        target: new THREE.Vector3(-0.30, 0.60, -0.40),
+        fov: 52.0,
         buttonId: 'btnFernCloseUp'
       },
       canopy: {
@@ -349,9 +353,11 @@
         fov: 56.0,
         buttonId: 'btnCanopySunbeams'
       },
+      // the walk stands past the monarch (its old stance was against the monarch's bark and in the fern behind the
+      // nurse log), at standing eye height, looking down the deep colonnade between its trunks
       walk: {
-        pos: new THREE.Vector3(-0.50, 1.35, -1.20),
-        target: new THREE.Vector3(-1.50, 1.40, -12.00),
+        pos: new THREE.Vector3(0.0, 1.60, -6.00),
+        target: new THREE.Vector3(1.00, 1.65, -16.80),
         fov: 48.0,
         buttonId: 'btnWalkPath'
       }
@@ -434,8 +440,13 @@
             float shimmer = 0.88 + 0.12 * sin(uTime * 1.5 + vWorldPosition.x * 0.45 + vWorldPosition.y * 0.35 + vWorldPosition.z * 0.40);
             float dustMotes = 0.94 + 0.06 * sin(uTime * 3.2 + vUv.x * 25.0 + vUv.y * 18.0);
 
+            // 5. Near fade: a shaft's wall within a few metres of the eye fades out. The beams are cones the ground views
+            //    stand in or beside; their near walls, stacked additively, would wash the frame white, where the eye in
+            //    lit air sees only the shafts beyond it
+            float nearFade = smoothstep(1.0, 7.0, length(vViewPosition));
+
             // Ethereal volumetric opacity
-            float alpha = edgeFade * vFade * phase * shimmer * dustMotes * (uIntensity * 0.22);
+            float alpha = edgeFade * vFade * phase * shimmer * dustMotes * nearFade * (uIntensity * 0.22);
 
             // Warm golden solar core transitioning to soft ivory/pale amber edges
             vec3 col = uSunColor * (1.0 + phase * 0.28);
@@ -721,7 +732,9 @@
         controls.enableDamping = true;
         controls.dampingFactor = 0.08;
         controls.screenSpacePanning = true;
-        controls.maxPolarAngle = Math.PI / 2 + 0.06;
+        // a view may look up into the crowns from below its target (the canopy bookmark); the ground is kept by the
+        // camera's height floor in animate()
+        controls.maxPolarAngle = Math.PI - 0.05;
         controls.minDistance = 0.4;
         controls.maxDistance = 75.0;
         controls.zoomSpeed = 1.2;
@@ -971,36 +984,30 @@
         return;
       }
 
-      // 1. Preload Photo-Derived High-Definition PBR Texture Sets
-      const texLoader = new THREE.TextureLoader();
-      const basePath = (window.location.protocol === 'file:') ? 'http://localhost:5173/textures/' : 'textures/';
-
+      // 1. The surfaces' maps, embedded in the GLB's own materials: the floor's duff, the moss and the bark are texture
+      //    library sets and the fern pinnae a leaf atlas, their UVs laid at each set's real size and their tint in the
+      //    material's base colour factor (extras.sbSurface says which set, its size and what it is tinted to). The
+      //    GLB's factors, normal scale and alpha cutoff are drawn as authored.
       const maxAniso = (renderer && renderer.capabilities) ? renderer.capabilities.getMaxAnisotropy() : 16;
-      function loadPbrTex(filename, repeatU, repeatV) {
-        const tex = texLoader.load(basePath + filename);
-        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-        tex.repeat.set(repeatU, repeatV);
-        tex.anisotropy = maxAniso;
-        return tex;
+      function prepareMaps(mat) {
+        for (const tex of [mat.map, mat.normalMap, mat.roughnessMap, mat.metalnessMap, mat.aoMap]) {
+          if (!tex) continue;
+          tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+          tex.anisotropy = maxAniso;
+          tex.needsUpdate = true;
+        }
       }
 
-      const barkAlbedo = loadPbrTex('photo_redwood_bark_albedo.png', 2.0, 6.0);
-      const barkNormal = loadPbrTex('photo_redwood_bark_normal.png', 2.0, 6.0);
-      const barkOrm    = loadPbrTex('photo_redwood_bark_orm.png', 2.0, 6.0);
-
-      const floorAlbedo = loadPbrTex('photo_forest_floor_albedo.png', 12.0, 12.0);
-      const floorNormal = loadPbrTex('photo_forest_floor_normal.png', 12.0, 12.0);
-      const floorOrm    = loadPbrTex('photo_forest_floor_orm.png', 12.0, 12.0);
-
-      const canopyAlbedo = loadPbrTex('photo_canopy_albedo.png', 3.0, 3.0);
-      const canopyNormal = loadPbrTex('photo_canopy_normal.png', 3.0, 3.0);
-
-      const mossAlbedo = loadPbrTex('photo_moss_albedo.png', 4.0, 4.0);
-      const mossNormal = loadPbrTex('photo_moss_normal.png', 4.0, 4.0);
-
-      const fernAlbedo = loadPbrTex('photo_fern_albedo.png', 2.0, 2.0);
-      const fernNormal = loadPbrTex('photo_fern_normal.png', 2.0, 2.0);
-      const fernOrm    = loadPbrTex('photo_fern_orm.png', 2.0, 2.0);
+      // Instanced copies (the SB-Veggie leaf clusters and twigs) carry their placement in instanceMatrix
+      const WORLD_VARYINGS_VERTEX = `#include <worldpos_vertex>
+             vec4 sbWorldPos = vec4(transformed, 1.0);
+             vec3 sbWorldNormal = objectNormal;
+             #ifdef USE_INSTANCING
+               sbWorldPos = instanceMatrix * sbWorldPos;
+               sbWorldNormal = mat3(instanceMatrix) * sbWorldNormal;
+             #endif
+             vWorldNormalVec = normalize(mat3(modelMatrix) * sbWorldNormal);
+             vWorldPosVec = (modelMatrix * sbWorldPos).xyz;`;
 
       // Algorithmic Living Foliage & Subsurface Scattering (SSS) Shader Injector
       function applyLivingFoliageKernel(mat, sssColorHex = 0xffe888, sssIntensity = 0.70) {
@@ -1015,9 +1022,7 @@
             ${shader.vertexShader}
           `.replace(
             '#include <worldpos_vertex>',
-            `#include <worldpos_vertex>
-             vWorldNormalVec = normalize(mat3(modelMatrix) * normal);
-             vWorldPosVec = (modelMatrix * vec4(position, 1.0)).xyz;`
+            WORLD_VARYINGS_VERTEX
           );
 
           shader.fragmentShader = `
@@ -1060,7 +1065,9 @@
              float airlightMelt = pow(sunAlignment, 4.0) * 0.22;
              gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(1.0, 0.92, 0.72), airlightMelt);
 
-             // 6. Multi-Scale Procedural Shader Noise (Macro Structural Grain, Meso Distress, Micro Roughness Jitter)
+             // 6. Multi-Scale Procedural Shader Noise (Macro Structural Grain, Meso Distress, Micro Roughness Jitter), only on
+             //    untextured foliage (the crowns' flat leaves): a leaf map carries its own variation
+             #ifndef USE_MAP
              float macroGrain = sin(vWorldPosVec.x * 0.65) * cos(vWorldPosVec.z * 0.65);
              gl_FragColor.rgb *= (1.0 + 0.08 * macroGrain);
 
@@ -1068,12 +1075,14 @@
              gl_FragColor.rgb *= (1.0 - 0.06 * max(0.0, mesoDistress));
 
              float microJitter = fract(sin(dot(vWorldPosVec.xz * 95.0, vec2(12.9898, 78.233))) * 43758.5453);
-             gl_FragColor.rgb *= (0.94 + 0.12 * microJitter);`
+             gl_FragColor.rgb *= (0.94 + 0.12 * microJitter);
+             #endif`
           );
         };
       }
 
-      // Specular Sun Rim Lighting on Bark & Fallen Logs (Contre-Jour Edge Glow)
+      // Specular Sun Rim Lighting on Bark, Logs and Ground (Contre-Jour Edge Glow). The surface itself (furrows, plates,
+      // needles, wear) is the library set's maps; nothing here paints detail over them.
       function applyBarkSunRimShader(mat, rimStrength = 0.45) {
         mat.onBeforeCompile = (shader) => {
           shader.uniforms.uSunPos = { value: SUN_POSITION };
@@ -1084,9 +1093,7 @@
             ${shader.vertexShader}
           `.replace(
             '#include <worldpos_vertex>',
-            `#include <worldpos_vertex>
-             vWorldNormalVec = normalize(mat3(modelMatrix) * normal);
-             vWorldPosVec = (modelMatrix * vec4(position, 1.0)).xyz;`
+            WORLD_VARYINGS_VERTEX
           );
           shader.fragmentShader = `
             uniform vec3 uSunPos;
@@ -1103,35 +1110,10 @@
              float rimAngle = 1.0 - max(0.0, dot(vWorldNormalVec, vVec));
              float sunFacing = max(0.0, dot(vWorldNormalVec, lVec));
              float rimLight = pow(rimAngle, 3.2) * (0.35 + 0.65 * sunFacing) * uRimStrength;
-             vec3 rimColor = vec3(1.0, 0.94, 0.80) * rimLight;
-             gl_FragColor.rgb += rimColor;
-
-             // 2. Multi-Scale Procedural Shader Noise on Bark & Ground
-             float macroBark = sin(vWorldPosVec.x * 0.45) * cos(vWorldPosVec.z * 0.45);
-             float mesoBark = sin(vWorldPosVec.y * 24.0 + vWorldPosVec.x * 6.0) * cos(vWorldPosVec.z * 8.0);
-             float microBark = fract(sin(dot(vWorldPosVec.xy * 85.0, vec2(12.9898, 78.233))) * 43758.5453);
-             gl_FragColor.rgb *= (1.0 + 0.10 * macroBark);
-             gl_FragColor.rgb *= (0.92 + 0.16 * microBark);
-
-             // 3. Procedural Edge Wear (Pointiness / Curvature Peak Scuffing)
-             float pointiness = clamp((microBark - 0.5) * 2.0 + (mesoBark > 0.35 ? 0.65 : 0.0), 0.0, 1.0);
-             float edgeWear = pow(pointiness, 2.5) * 0.45;
-             vec3 wornHeartwood = vec3(0.55, 0.38, 0.24); // Lighter scuffed heartwood
-             gl_FragColor.rgb = mix(gl_FragColor.rgb, wornHeartwood, edgeWear);
-
-             // 4. Crevice Grime (Ambient Occlusion & Concave Valley Dirt)
-             if (mesoBark < -0.22) {
-               float grimeIntensity = clamp((-mesoBark - 0.22) / 0.55, 0.0, 1.0);
-               vec3 creviceGrime = vec3(0.07, 0.05, 0.03); // Moist dark organic humus
-               gl_FragColor.rgb = mix(gl_FragColor.rgb, creviceGrime, grimeIntensity * 0.70);
-             }
-
-             // 5. Inverted Layer Weight Fresnel Mask & Upward-Facing Dust Accumulation
-             float upwardPlane = pow(max(0.0, vWorldNormalVec.y), 2.8);
-             float invertedFresnel = pow(1.0 - clamp(abs(dot(vWorldNormalVec, vVec)), 0.0, 1.0), 2.8);
-             float settledDustMask = clamp(upwardPlane * 0.75 + invertedFresnel * 0.35, 0.0, 0.70);
-             vec3 settledDustColor = vec3(0.70, 0.66, 0.56); // Spore dust, lint, and needle silt
-             gl_FragColor.rgb = mix(gl_FragColor.rgb, settledDustColor, settledDustMask * 0.28);`
+             // the rim lights the surface's own colour (its albedo, map included), so it brightens the bark at grazing
+             // angles instead of painting it white
+             vec3 rimColor = vec3(1.0, 0.94, 0.80) * rimLight * clamp(diffuseColor.rgb * 3.0, 0.0, 1.0);
+             gl_FragColor.rgb += rimColor;`
           );
         };
       }
@@ -1144,6 +1126,7 @@
 
         let vertCount = 0;
         let triCount = 0;
+        let barkMaterial = null;
 
         gltf.scene.traverse((child) => {
           if (child.isMesh) {
@@ -1160,63 +1143,41 @@
               child.castShadow = true;
               child.receiveShadow = true;
               child.material.vertexColors = true;
-              child.material.map = barkAlbedo;
-              child.material.normalMap = barkNormal;
-              child.material.normalScale = new THREE.Vector2(2.6, 2.6);
-              child.material.roughnessMap = barkOrm;
-              child.material.roughness = 0.88;
-              child.material.metalness = 0.02;
+              prepareMaps(child.material);
+              barkMaterial = barkMaterial || child.material;
               applyBarkSunRimShader(child.material, 0.45);
               child.material.needsUpdate = true;
             } else if (name.includes('Floor')) {
               child.castShadow = false;
               child.receiveShadow = true;
               child.material.vertexColors = true;
-              child.material.map = floorAlbedo;
-              child.material.normalMap = floorNormal;
-              child.material.normalScale = new THREE.Vector2(2.0, 2.0);
-              child.material.roughnessMap = floorOrm;
-              child.material.roughness = 0.92;
-              child.material.metalness = 0.01;
+              prepareMaps(child.material);
               applyBarkSunRimShader(child.material, 0.22);
               child.material.needsUpdate = true;
-            } else if (name.includes('Canopy') || name.includes('Foliage')) {
+            } else if (name.includes('Moss_Cushions')) {
               child.castShadow = true;
               child.receiveShadow = true;
               child.material.vertexColors = true;
-              // Pure vivid chlorophyll vertex colors without grey texture map washing
-              child.material.map = null;
-              child.material.normalMap = null;
-              child.material.roughness = 0.40;
-              child.material.metalness = 0.01;
-              child.material.doubleSided = true;
-              child.material.alphaTest = 0.0;
-              applyLivingFoliageKernel(child.material, 0xfff080, 0.90);
+              prepareMaps(child.material);
+              child.material.side = THREE.DoubleSide;
+              applyBarkSunRimShader(child.material, 0.22);
               child.material.needsUpdate = true;
             } else if (name.includes('Fern')) {
               child.castShadow = true;
               child.receiveShadow = true;
               child.material.vertexColors = true;
-              child.material.map = fernAlbedo;
-              child.material.normalMap = fernNormal;
-              child.material.normalScale = new THREE.Vector2(1.8, 1.8);
-              child.material.roughnessMap = fernOrm;
-              child.material.roughness = 0.42;
-              child.material.metalness = 0.01;
-              child.material.doubleSided = true;
-              child.material.alphaTest = 0.35;
+              prepareMaps(child.material);
+              child.material.side = THREE.DoubleSide;
               applyLivingFoliageKernel(child.material, 0xaaf442, 0.85);
               child.material.needsUpdate = true;
             } else if (name.includes('Undergrowth') || name.includes('Moss') || name.includes('Grass')) {
+              // small organs (sorrel, grass, ivy, cones, litter, fungi) in their own vertex colours, no map
               child.castShadow = true;
               child.receiveShadow = true;
               child.material.vertexColors = true;
-              child.material.map = mossAlbedo;
-              child.material.normalMap = mossNormal;
-              child.material.normalScale = new THREE.Vector2(1.6, 1.6);
               child.material.roughness = 0.65;
               child.material.metalness = 0.01;
-              child.material.doubleSided = true;
+              child.material.side = THREE.DoubleSide;
               child.material.alphaTest = 0.30;
               applyLivingFoliageKernel(child.material, 0x98e850, 0.60);
               child.material.needsUpdate = true;
@@ -1231,21 +1192,396 @@
         });
 
         forestGroup.add(gltf.scene);
+        forestTriangles = Math.round(triCount);
 
         document.getElementById('hudVerts').textContent = vertCount.toLocaleString();
-        document.getElementById('hudTris').textContent = Math.round(triCount).toLocaleString();
-        document.getElementById('hudStatus').textContent = 'RENDERED (60 FPS)';
+        document.getElementById('hudTris').textContent = forestTriangles.toLocaleString();
+        document.getElementById('hudStatus').textContent = 'LOADING SB-VEGGIE CROWNS...';
 
-        window.__renderReady = true;
+        loadCrowns(path.replace(/\.glb$/, '_trees.glb'), barkMaterial);
       }, undefined, (err) => {
         console.error('Error loading forest GLB from ' + path + ':', err);
         if (path.startsWith('http://')) {
           console.log('Retrying with relative path models/forest_hyperreal.glb');
           loadModel('models/forest_hyperreal.glb');
         } else {
-          document.getElementById('hudStatus').textContent = 'LOAD FAILED';
+          document.getElementById('hudStatus').textContent = 'MODEL NOT FOUND: run scripts/generate_forest_procedural_3d.cpp';
         }
       });
+
+      // 3. The crowns' leaves: the leaf atlas SB-Veggie chose for each tree (extras.sbTree.texture.leaves; the native choice
+      //    matches the atlas's blade width to the leaf of the tree's species, so the crowns the species library calls needle
+      //    or scale leaved draw a needle spray and broadleaves draw leaves), drawn as the app's viewport draws it
+      //    (treeTextureMaterials.ts): each card's blade coordinates (TEXCOORD_0) and pick (_LEAF.x) into one cell of the
+      //    atlas, the leaf cut out by its opacity, tinted by the tree's tint. The atlases are the tree texture library the
+      //    app serves to its viewport (/assets/textures/trees/).
+      const TREE_TEXTURES = '/assets/textures/trees/';
+      const LEAF_CELLS_MAX = 24;
+      const LEAF_ATLAS_PX = 1024;
+      const LEAF_STRETCH = 2;          // a narrow leaf may be drawn up to this much wider (DEFAULT_LEAF_STRETCH)
+      const CARD_ZOOM = [1, 1.15, 1.3, 1.3];
+      const ALPHA_GAIN = [1, 1.1, 1.25, 1.25];
+      // how solid a set's leaves are (tree-texture-library.ts leafSolidity): smoothstep of its cells' fill over [0.42, 0.6];
+      // a blade's alpha is lifted with the mip level, a needle spray's porous cover cut at a hashed threshold
+      const SOLID_LEAF_FILL = [0.42, 0.6];
+      function leafSolidity(fill) {
+        const t = Math.min(1, Math.max(0, (fill - SOLID_LEAF_FILL[0]) / (SOLID_LEAF_FILL[1] - SOLID_LEAF_FILL[0])));
+        return t * t * (3 - 2 * t);
+      }
+      // hashed alpha (Wyman and McGuire 2017), as treeTextureMaterials.ts HASHED_ALPHA_FUNCTIONS
+      const HASHED_ALPHA_FUNCTIONS = `
+        float sbHash2( vec2 p ) { return fract( 1.0e4 * sin( 17.0 * p.x + 0.1 * p.y ) * ( 0.1 + abs( sin( 13.0 * p.y + p.x ) ) ) ); }
+        float sbHash3( vec3 p ) { return sbHash2( vec2( sbHash2( p.xy ), p.z ) ); }
+        float sbHashedThreshold( vec3 p ) {
+          float sbScale = 1.0 / max( max( length( dFdx( p ) ), length( dFdy( p ) ) ), 1e-6 );
+          float sbL = log2( sbScale );
+          vec2 sbS = vec2( exp2( floor( sbL ) ), exp2( ceil( sbL ) ) );
+          float sbF = fract( sbL );
+          float sbX = mix( sbHash3( floor( sbS.x * p ) ), sbHash3( floor( sbS.y * p ) ), sbF );
+          float sbA = max( min( sbF, 1.0 - sbF ), 1e-4 );
+          vec3 sbC = vec3( sbX * sbX / ( 2.0 * sbA * ( 1.0 - sbA ) ), ( sbX - 0.5 * sbA ) / ( 1.0 - sbA ), 1.0 - ( 1.0 - sbX ) * ( 1.0 - sbX ) / ( 2.0 * sbA * ( 1.0 - sbA ) ) );
+          float sbT = sbX < 1.0 - sbA ? ( sbX < sbA ? sbC.x : sbC.y ) : sbC.z;
+          return clamp( sbT, 1e-4, 1.0 );
+        }`;
+      const LEAF_ATLAS_VERTEX_PARS = `
+        attribute vec2 _leaf;
+        uniform vec4 uSbCellA[ ${LEAF_CELLS_MAX} ];
+        uniform vec4 uSbCellB[ ${LEAF_CELLS_MAX} ];
+        uniform float uSbCellCount;
+        uniform float uSbLeafStretch;
+        uniform float uSbCardWidth;
+        uniform float uSbZoom;
+        varying vec2 vSbST;
+        varying float vSbBlade;
+        varying vec3 vSbVar;
+        varying vec3 vSbHashPos;`;
+      const LEAF_ATLAS_VERTEX_MAIN = `
+        {
+          int sbI = int( clamp( floor( _leaf.x * uSbCellCount ), 0.0, uSbCellCount - 1.0 ) );
+          vec4 sbA = uSbCellA[ sbI ];
+          vec4 sbB = uSbCellB[ sbI ];
+          float sbR = sbB.z;
+          float sbDrawn = min( max( sbR, uSbCardWidth ), sbR * uSbLeafStretch );
+          float sbF = min( 1.0, uSbCardWidth / sbDrawn );
+          float sbT = uv.y / sbF;
+          float sbS = 0.5 + ( uv.x - 0.5 ) / ( sbF * sbDrawn );
+          sbS = 0.5 + ( sbS - 0.5 ) / uSbZoom;
+          sbT = 0.5 + ( sbT - 0.5 ) / uSbZoom;
+          vSbST = vec2( sbS, sbT );
+          vec2 sbUv = sbA.xy + sbT * sbA.zw + sbS * sbB.xy;
+          #ifdef USE_MAP
+            vMapUv = sbUv;
+          #endif
+          #ifdef USE_NORMALMAP
+            vNormalMapUv = sbUv;
+          #endif
+          vSbBlade = _leaf.y;
+          float sbJ = fract( _leaf.x * 7.31 + 0.13 );
+          #ifdef USE_INSTANCING
+            sbJ = fract( sbJ + fract( sin( dot( floor( instanceMatrix[ 3 ].xyz * 64.0 ), vec3( 12.9898, 78.233, 37.719 ) ) ) * 43758.5453 ) );
+          #endif
+          float sbK = fract( sbJ * 3.71 + 0.29 );
+          vSbVar = vec3( 1.0 + 0.18 * ( sbJ - 0.5 ) * ( 1.0 + 0.4 * ( sbK - 0.5 ) ), 1.0 + 0.18 * ( sbJ - 0.5 ),
+                         1.0 + 0.18 * ( sbJ - 0.5 ) * ( 1.0 - 0.6 * ( sbK - 0.5 ) ) );
+          vSbHashPos = position;
+          #ifdef USE_INSTANCING
+            vSbHashPos += instanceMatrix[ 3 ].xyz;
+          #endif
+        }`;
+      const LEAF_ATLAS_FRAGMENT_PARS = `
+        uniform vec3 uSbStem;
+        uniform float uSbMipScale;
+        uniform float uSbAlphaGain;
+        uniform float uSbSolidity;
+        varying vec2 vSbST;
+        varying float vSbBlade;
+        varying vec3 vSbVar;
+        varying vec3 vSbHashPos;
+        ${HASHED_ALPHA_FUNCTIONS}`;
+      // after map_fragment: a stalk takes the stalk colour; every leaf its own small variation of the tree's tint
+      const LEAF_ATLAS_FRAGMENT_COLOR = `
+        if ( vSbBlade < 0.5 ) diffuseColor.rgb = uSbStem * diffuse;
+        diffuseColor.rgb *= vSbVar;`;
+      // after alphamap_fragment: a blade seen small reads a coarse mip whose edges fall under the cutoff, so its alpha rises
+      // with the mip level (its solid share); a needle spray's averaged alpha is its true cover, cut at a hashed threshold
+      // so it draws that share of its pixels; stalks are opaque; outside its cell a card shows nothing
+      const LEAF_ATLAS_FRAGMENT_ALPHA = `
+        #ifdef USE_MAP
+        {
+          vec2 sbTexels = fwidth( vMapUv ) * vec2( textureSize( map, 0 ) );
+          float sbMip = max( 0.0, log2( max( max( sbTexels.x, sbTexels.y ), 1e-6 ) ) );
+          diffuseColor.a *= ( 1.0 + sbMip * uSbMipScale * uSbSolidity ) * uSbAlphaGain;
+        }
+        #endif
+        {
+          float sbHashed = diffuseColor.a >= sbHashedThreshold( vSbHashPos ) ? 1.0 : 0.0;
+          diffuseColor.a = mix( sbHashed, diffuseColor.a, uSbSolidity );
+        }
+        if ( vSbBlade < 0.5 ) diffuseColor.a = 1.0;
+        else if ( vSbST.x < 0.0 || vSbST.x > 1.0 || vSbST.y < 0.0 || vSbST.y > 1.0 ) diffuseColor.a = 0.0;`;
+
+      function loadImage(url) {
+        return new Promise((resolve, reject) => {
+          const im = new Image();
+          im.onload = () => resolve(im);
+          im.onerror = () => reject(new Error('cannot load ' + url));
+          im.src = url;
+        });
+      }
+
+      // an atlas's colour with its opacity in the alpha (one texture; clear texels take the leaves' mean colour so no
+      // background bleeds into the mips), and its normal map; both clamped, so a cell never wraps into its neighbour
+      async function loadLeafAtlas(entry) {
+        const [colour, opacity] = await Promise.all([loadImage(TREE_TEXTURES + entry.maps.color), loadImage(TREE_TEXTURES + entry.maps.opacity)]);
+        const k = Math.min(1, LEAF_ATLAS_PX / Math.max(colour.width, colour.height));
+        const w = Math.max(1, Math.round(colour.width * k)), h = Math.max(1, Math.round(colour.height * k));
+        const draw = (im) => {
+          const c = document.createElement('canvas');
+          c.width = w; c.height = h;
+          const ctx = c.getContext('2d', { willReadFrequently: true });
+          ctx.drawImage(im, 0, 0, w, h);
+          return { c, ctx, px: ctx.getImageData(0, 0, w, h) };
+        };
+        const col = draw(colour), op = draw(opacity);
+        const d = col.px.data, a = op.px.data;
+        const mean = [0, 0, 0];
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          d[i + 3] = a[i];
+          if (a[i] >= 128) { mean[0] += d[i]; mean[1] += d[i + 1]; mean[2] += d[i + 2]; n++; }
+        }
+        for (let i = 0; i < d.length; i += 4) {
+          if (d[i + 3] < 128 && n) { d[i] = mean[0] / n; d[i + 1] = mean[1] / n; d[i + 2] = mean[2] / n; }
+        }
+        col.ctx.putImageData(col.px, 0, 0);
+        const map = new THREE.CanvasTexture(col.c);
+        map.colorSpace = THREE.SRGBColorSpace;
+        map.anisotropy = maxAniso;
+        const normalMap = entry.maps.normal ? await new THREE.TextureLoader().loadAsync(TREE_TEXTURES + entry.maps.normal) : null;
+        for (const t of [map, normalMap]) if (t) t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+        return { map, normalMap };
+      }
+
+      function leafAtlasMaterial(entry, atlas, tint, level, cardWidth) {
+        const cells = entry.atlas.cells.slice(0, LEAF_CELLS_MAX);
+        const pad = (arr, fill) => arr.concat(new Array(LEAF_CELLS_MAX - arr.length).fill(fill));
+        const slot = Math.max(0, Math.min(3, level | 0));
+        const uniforms = {
+          uSbCellA: { value: pad(cells.map(c => new THREE.Vector4(c.origin[0], c.origin[1], c.along[0], c.along[1])), new THREE.Vector4()) },
+          uSbCellB: { value: pad(cells.map(c => new THREE.Vector4(c.across[0], c.across[1], c.widthM / c.lengthM, 0)), new THREE.Vector4(0, 0, 1, 0)) },
+          uSbCellCount: { value: cells.length },
+          uSbLeafStretch: { value: LEAF_STRETCH },
+          uSbCardWidth: { value: cardWidth },
+          uSbZoom: { value: CARD_ZOOM[slot] },
+          uSbStem: { value: new THREE.Vector3(...entry.colour.meanLinearRgb).multiplyScalar(0.55) },
+          uSbMipScale: { value: 0.4 },
+          uSbAlphaGain: { value: ALPHA_GAIN[slot] },
+          uSbSolidity: { value: leafSolidity(entry.leaf.fill) }
+        };
+        const mat = new THREE.MeshStandardMaterial({
+          name: 'SB_Veggie_Leaves_' + entry.id, map: atlas.map, normalMap: atlas.normalMap, roughness: 0.6, metalness: 0.0,
+          side: THREE.DoubleSide, alphaTest: 0.5, alphaToCoverage: true
+        });
+        mat.color.setRGB(tint[0], tint[1], tint[2]);
+        applyLivingFoliageKernel(mat, 0xfff080, 0.55);
+        const foliage = mat.onBeforeCompile;
+        mat.onBeforeCompile = (shader) => {
+          foliage(shader);
+          Object.assign(shader.uniforms, uniforms);
+          shader.vertexShader = shader.vertexShader
+            .replace('#include <common>', '#include <common>\n' + LEAF_ATLAS_VERTEX_PARS)
+            .replace('#include <uv_vertex>', '#include <uv_vertex>\n' + LEAF_ATLAS_VERTEX_MAIN);
+          shader.fragmentShader = shader.fragmentShader
+            .replace('#include <common>', '#include <common>\n' + LEAF_ATLAS_FRAGMENT_PARS)
+            .replace('#include <map_fragment>', '#include <map_fragment>\n' + LEAF_ATLAS_FRAGMENT_COLOR)
+            .replace('#include <alphamap_fragment>', '#include <alphamap_fragment>\n' + LEAF_ATLAS_FRAGMENT_ALPHA);
+        };
+        mat.customProgramCacheKey = () => 'forestLeafAtlas/2';
+        return mat;
+      }
+
+      // draws each waiting leaf card with its tree's atlas; resolves with the number of cards drawn
+      async function drawLeafAtlases(atlasLeaves, cardWidth) {
+        if (!atlasLeaves.length) return 0;
+        if (!(cardWidth > 0)) throw new Error('the crowns GLB gives no leaf card width (sbTrees.clusterLibrary.leafCard.widthRatio)');
+        const r = await fetch(TREE_TEXTURES + 'index.json');
+        if (!r.ok) throw new Error('the tree texture library answered ' + r.status);
+        const index = await r.json();
+        const entries = new Map((index.leaves || []).map(e => [e.id, e]));
+        const atlases = new Map();
+        for (const id of new Set(atlasLeaves.map(l => l.entry))) {
+          if (!entries.has(id)) throw new Error('the tree texture library has no leaf set ' + id);
+          atlases.set(id, await loadLeafAtlas(entries.get(id)));
+        }
+        const materials = new Map();
+        for (const l of atlasLeaves) {
+          const key = l.entry + '|' + l.tint.map(v => v.toFixed(3)).join(',') + '|' + l.level;
+          if (!materials.has(key)) materials.set(key, leafAtlasMaterial(entries.get(l.entry), atlases.get(l.entry), l.tint, l.level, cardWidth));
+          l.mesh.material = materials.get(key);
+        }
+        return atlasLeaves.length;
+      }
+
+      // 2. The crowns: SB-Veggie trees (the generator's <model>_trees.glb). Each tree node holds its levels of detail
+      //    (extras.sbLod: the distance band each is drawn in); the leaf clusters and twigs are GPU instances.
+      function loadCrowns(treesPath, barkMaterial) {
+        loader.load(treesPath, (trees) => {
+          // the grown wood takes the forest's bark at its real size: each tree's UVs are laid in tiles of the bark SB-Veggie
+          // chose for it (extras.sbTree.texture.bark.tileM), so the forest bark's map repeats tileM / its real size there
+          const barkSurface = barkMaterial && barkMaterial.userData && barkMaterial.userData.sbSurface;
+          const barkRealM = barkSurface && barkSurface.realSizeM ? barkSurface.realSizeM : [1, 1];
+          const woodMaterials = new Map();
+          function woodMaterialFor(tileM) {
+            const key = tileM.map(v => v.toFixed(3)).join(',');
+            if (!woodMaterials.has(key)) {
+              const maps = {};
+              for (const k of ['map', 'normalMap', 'roughnessMap', 'aoMap']) {
+                if (!barkMaterial || !barkMaterial[k]) continue;
+                maps[k] = barkMaterial[k].clone();
+                maps[k].repeat.set(tileM[0] / barkRealM[0], tileM[1] / barkRealM[1]);
+                maps[k].needsUpdate = true;
+              }
+              // the crown geometry has no tangents: three derives them, and glTF's +Y-up normal maps need y flipped there
+              const mat = new THREE.MeshStandardMaterial(Object.assign({
+                name: 'SB_Veggie_Wood', normalScale: new THREE.Vector2(1, -1),
+                color: barkMaterial ? barkMaterial.color.clone() : new THREE.Color().setRGB(0.35, 0.19, 0.12),
+                roughness: maps.roughnessMap ? 1.0 : 0.9, metalness: 0.0
+              }, maps));
+              applyBarkSunRimShader(mat, 0.35);
+              woodMaterials.set(key, mat);
+            }
+            return woodMaterials.get(key);
+          }
+          const leafMaterials = new Map();
+          function leafMaterialFor(rgb) {
+            const key = rgb.map(v => v.toFixed(3)).join(',');
+            if (!leafMaterials.has(key)) {
+              const mat = new THREE.MeshStandardMaterial({
+                name: 'SB_Veggie_Leaves', color: new THREE.Color().setRGB(rgb[0], rgb[1], rgb[2]), roughness: 0.55, metalness: 0.0, side: THREE.DoubleSide
+              });
+              applyLivingFoliageKernel(mat, 0xfff080, 0.55);
+              leafMaterials.set(key, mat);
+            }
+            return leafMaterials.get(key);
+          }
+
+          crownTrees = [];
+          const atlasLeaves = [];   // leaf-card meshes the chosen atlas is drawn on once it has loaded
+          trees.scene.traverse((node) => {
+            const ex = node.userData || {};
+            if (!ex.sbTree || !ex.stem) return;
+            const rgb = (ex.sbTree.colour && ex.sbTree.colour.meanLinearRgb) || [0.05, 0.11, 0.03];
+            const leaves = leafMaterialFor(rgb);
+            const leafTex = ex.sbTree.texture && ex.sbTree.texture.leaves;
+            const barkTex = ex.sbTree.texture && ex.sbTree.texture.bark;
+            const woodMaterial = woodMaterialFor(barkTex && barkTex.tileM ? barkTex.tileM : barkRealM);
+            const levels = [];
+            for (const lod of node.children) {
+              const band = lod.userData && lod.userData.sbLod;
+              if (!band) continue;
+              const foliage = new Set(band.foliagePrimitives || []);
+              let primitive = 0;
+              lod.traverse((o) => {
+                if (!o.isMesh) return;
+                // leaf clusters and crown cards are the instanced children named _c<k> / _card<k>; the far level's
+                // masses are its foliage primitives
+                const isLeaf = /_c\d+$|_card\d+$/.test(o.name) || /_c\d+$|_card\d+$/.test(o.parent && o.parent.name || '') ||
+                  (o.parent === lod || o === lod ? foliage.has(primitive++) : false);
+                o.material = isLeaf ? leaves : woodMaterial;
+                o.castShadow = true;
+                o.receiveShadow = true;
+                // a leaf card (blade coordinates and an atlas pick) waits for its tree's atlas
+                if (isLeaf && leafTex && o.isInstancedMesh && o.geometry.getAttribute('_leaf') && o.geometry.getAttribute('uv')) {
+                  atlasLeaves.push({ mesh: o, entry: leafTex.entry, tint: leafTex.tint, level: band.level });
+                }
+              });
+              // the mid level's crown cards need the leaf atlas the app's viewer bakes; this page draws the near-mid
+              // clusters out to the mid level's range instead
+              const cards = lod.children.some(c => /_card\d+$/.test(c.name));
+              levels.push({ node: lod, level: band.level, maxDistM: band.maxDistM, fadeM: band.fadeM || 0, triangles: band.triangles || 0, cards });
+            }
+            levels.sort((a, b) => a.level - b.level);
+            const drawn = [];
+            for (const l of levels) {
+              if (l.cards && drawn.length) {
+                drawn[drawn.length - 1].maxDistM = l.maxDistM;
+                l.node.visible = false;
+              } else {
+                drawn.push(l);
+              }
+            }
+            const centre = new THREE.Vector3(ex.stem[0], 0.5 * (ex.supportY + ex.apex[1]), ex.stem[1]);
+            crownTrees.push({ levels: drawn, centre, shown: null, pick: 0, dEq: 0 });
+          });
+          forestGroup.add(trees.scene);
+          updateCrownLevels(true);
+
+          const sbTrees = (trees.userData && trees.userData.sbTrees) || (trees.scene.userData && trees.scene.userData.sbTrees) || {};
+          const cardWidth = sbTrees.clusterLibrary && sbTrees.clusterLibrary.leafCard && sbTrees.clusterLibrary.leafCard.widthRatio;
+          document.getElementById('hudStatus').textContent = 'LOADING LEAF ATLASES...';
+          drawLeafAtlases(atlasLeaves, cardWidth).then((n) => {
+            document.getElementById('hudStatus').textContent = 'RENDERED (60 FPS)';
+            window.__leafAtlases = n;
+          }).catch((err) => {
+            // the leaves keep each tree's flat colour
+            console.warn('Leaf atlases not drawn: ' + err.message);
+            document.getElementById('hudStatus').textContent = 'RENDERED (60 FPS) - LEAF ATLASES NOT LOADED';
+            window.__leafAtlases = 0;
+          }).finally(() => { window.__renderReady = true; });
+        }, undefined, (err) => {
+          console.error('Error loading the crowns GLB from ' + treesPath + ':', err);
+          document.getElementById('hudStatus').textContent = 'CROWNS NOT FOUND: run scripts/generate_forest_procedural_3d.cpp';
+        });
+      }
+    }
+
+    // Each tree draws the level whose distance band (its far edge, less half the band's fade) holds its distance, read
+    // through the lens as the app's viewport reads it (tree-lod-math.ts screenEquivalentDistance: the distance at a
+    // 45 degree lens with the same on-screen size); while the crowns ask for more than the app's tree triangle budget,
+    // the farthest trees step down a level first.
+    const CROWN_REFERENCE_FOV_DEG = 45;
+    const CROWN_TRIANGLE_BUDGET = 14000000;
+    let crownTrees = [];
+    let forestTriangles = 0;
+    function updateCrownLevels(force) {
+      if (!crownTrees.length) return;
+      const lens = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / Math.tan(THREE.MathUtils.degToRad(CROWN_REFERENCE_FOV_DEG) / 2);
+      let crownTriangles = 0;
+      for (const tree of crownTrees) {
+        tree.dEq = camera.position.distanceTo(tree.centre) * lens;
+        tree.pick = tree.levels.length - 1;
+        for (let i = 0; i < tree.levels.length; i++) {
+          const l = tree.levels[i];
+          if (tree.dEq < l.maxDistM - 0.5 * l.fadeM) { tree.pick = i; break; }
+        }
+        crownTriangles += tree.levels[tree.pick].triangles;
+      }
+      if (crownTriangles > CROWN_TRIANGLE_BUDGET) {
+        const farthestFirst = crownTrees.slice().sort((a, b) => b.dEq - a.dEq);
+        let stepped = true;
+        while (crownTriangles > CROWN_TRIANGLE_BUDGET && stepped) {
+          stepped = false;
+          for (const tree of farthestFirst) {
+            if (crownTriangles <= CROWN_TRIANGLE_BUDGET) break;
+            if (tree.pick >= tree.levels.length - 1) continue;
+            crownTriangles += tree.levels[tree.pick + 1].triangles - tree.levels[tree.pick].triangles;
+            tree.pick += 1;
+            stepped = true;
+          }
+        }
+      }
+      let changed = force;
+      for (const tree of crownTrees) {
+        const pick = tree.levels[tree.pick];
+        if (pick !== tree.shown) {
+          for (const l of tree.levels) l.node.visible = (l === pick);
+          tree.shown = pick;
+          changed = true;
+        }
+      }
+      if (changed) {
+        document.getElementById('hudTris').textContent = (forestTriangles + crownTriangles).toLocaleString();
+      }
     }
 
     function onWindowResize() {
@@ -1310,6 +1646,10 @@
       if (controls) {
         controls.update();
       }
+      if (camera.position.y < 0.8) {
+        camera.position.y = 0.8;
+      }
+      updateCrownLevels(false);
 
       const camEl = document.getElementById('hudCamPos');
       if (camEl) {

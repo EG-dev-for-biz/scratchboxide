@@ -55,7 +55,7 @@ struct Entry {
     double topShare{0};                    // share of the crown's surface near its apex (see describeCrown)
     int stems{1};                          // 1: one trunk; more: stems leave the ground (grown as a shrub)
     int scaffoldBranches{0};               // primary limbs at the crown break (0: the grower's seeded 2-4)
-    double apicalDominance{0.5};           // 0..1, the leader's momentum over the laterals
+    double apicalDominance{0.5};           // 0..1, the leader's dominance over the laterals (each shoot's momentum, the leader's hold to the apex)
     double branchAngleRad{0.80795};        // the laterals' angle from the leader
     double leafLengthM{0.12}, leafAspect{0.7};  // the leaf (or frond) the leaf set is chosen by
     double hueDeg{110}, hueSpreadDeg{20};  // the foliage's usual hue in the chromaticity plane (0 red, 120 green) and its range

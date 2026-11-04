@@ -9,6 +9,7 @@
 
 import * as React from 'react';
 import { CanvasArtifact, ChatMessage, ChatSession, StudioLayoutMode } from '../canvas-types';
+import { mergeChatSessions, openChatMessagesAfterDiskRead } from '../../../common/chat-session-merge';
 
 /**
  * Central chat/canvas state for the Generative Canvas Studio.
@@ -30,6 +31,8 @@ export type Updater<T> = T | ((prev: T) => T);
 
 export type ChatAction =
     | { type: 'sessions/set'; payload: Updater<ChatSession[]> }
+    /** Chats read from disk: merged into the list, and the open chat brought up to date (openChatMessagesAfterDiskRead). */
+    | { type: 'sessions/fromDisk'; disk: ChatSession[] }
     | { type: 'currentSessionId/set'; payload: Updater<string | undefined> }
     | { type: 'messages/set'; payload: Updater<ChatMessage[]> }
     | { type: 'activeArtifact/set'; payload: Updater<CanvasArtifact | undefined> }
@@ -72,6 +75,30 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     switch (action.type) {
         case 'sessions/set':
             return { ...state, sessions: resolve(action.payload, state.sessions) };
+        case 'sessions/fromDisk': {
+            const sessions = mergeChatSessions(action.disk, state.sessions);
+            const onDisk = action.disk.find(s => s.id === state.currentSessionId);
+            const messages = onDisk && openChatMessagesAfterDiskRead(state.messages, onDisk.messages || []);
+            if (!onDisk || !messages) return { ...state, sessions };
+            // The open copy held nothing disk lacks: it was an older copy, and disk's takes its place as if opened.
+            if (messages === onDisk.messages) {
+                return {
+                    ...state,
+                    sessions,
+                    messages,
+                    activeArtifact: onDisk.activeArtifact,
+                    artifactHistory: onDisk.artifactHistory || (onDisk.activeArtifact ? [onDisk.activeArtifact] : [])
+                };
+            }
+            // What was said here since stays, after what disk held, and so does the artifact on stage.
+            const shown = new Set(state.artifactHistory.map(a => a.id));
+            return {
+                ...state,
+                sessions,
+                messages,
+                artifactHistory: [...state.artifactHistory, ...(onDisk.artifactHistory || []).filter(a => !shown.has(a.id))]
+            };
+        }
         case 'currentSessionId/set':
             return { ...state, currentSessionId: resolve(action.payload, state.currentSessionId) };
         case 'messages/set':
@@ -130,6 +157,22 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 export const selectActiveSession = (state: ChatState): ChatSession | undefined =>
     state.sessions.find(s => s.id === state.currentSessionId) || state.sessions[0];
 
+/** A chat as disk holds it (read, or last written). Compared by reference: every change in the store makes new arrays and objects. */
+export type ChatOnDisk = Pick<ChatSession, 'messages' | 'activeArtifact' | 'artifactHistory' | 'layoutMode'>;
+
+/**
+ * The open chat as it is written to disk, or undefined when there is nothing to write: no open chat, no messages yet
+ * (an untouched new chat), or the chat exactly as disk holds it (`onDisk`), e.g. just read from there.
+ */
+export const selectChatToWrite = (state: ChatState, onDisk?: ChatOnDisk): ChatSession | undefined => {
+    const { sessions, currentSessionId, messages, activeArtifact, artifactHistory, layoutMode } = state;
+    const current = currentSessionId ? sessions.find(s => s.id === currentSessionId) : undefined;
+    if (!current || messages.length === 0) return undefined;
+    if (onDisk && onDisk.messages === messages && onDisk.activeArtifact === activeArtifact
+        && onDisk.artifactHistory === artifactHistory && onDisk.layoutMode === layoutMode) return undefined;
+    return { ...current, messages, activeArtifact, artifactHistory, layoutMode };
+};
+
 /** Ordered list of recorded versions for the active artifact (falls back to the artifact itself). */
 export const selectActiveVersionsList = (state: ChatState): CanvasArtifact[] => {
     if (!state.activeArtifact) return [];
@@ -161,6 +204,7 @@ export interface ChatStore {
     state: ChatState;
     dispatch: React.Dispatch<ChatAction>;
     setSessions: (payload: Updater<ChatSession[]>) => void;
+    mergeSessionsFromDisk: (disk: ChatSession[]) => void;
     setCurrentSessionId: (payload: Updater<string | undefined>) => void;
     setMessages: (payload: Updater<ChatMessage[]>) => void;
     setActiveArtifact: (payload: Updater<CanvasArtifact | undefined>) => void;
@@ -177,6 +221,7 @@ export function useChatStore(initialState: ChatState): ChatStore {
     const [state, dispatch] = React.useReducer(chatReducer, initialState);
 
     const setSessions = React.useCallback((payload: Updater<ChatSession[]>) => dispatch({ type: 'sessions/set', payload }), []);
+    const mergeSessionsFromDisk = React.useCallback((disk: ChatSession[]) => dispatch({ type: 'sessions/fromDisk', disk }), []);
     const setCurrentSessionId = React.useCallback((payload: Updater<string | undefined>) => dispatch({ type: 'currentSessionId/set', payload }), []);
     const setMessages = React.useCallback((payload: Updater<ChatMessage[]>) => dispatch({ type: 'messages/set', payload }), []);
     const setActiveArtifact = React.useCallback((payload: Updater<CanvasArtifact | undefined>) => dispatch({ type: 'activeArtifact/set', payload }), []);
@@ -192,6 +237,7 @@ export function useChatStore(initialState: ChatState): ChatStore {
         state,
         dispatch,
         setSessions,
+        mergeSessionsFromDisk,
         setCurrentSessionId,
         setMessages,
         setActiveArtifact,
@@ -203,7 +249,7 @@ export function useChatStore(initialState: ChatState): ChatStore {
         createSession,
         openSession
     }), [
-        state, setSessions, setCurrentSessionId, setMessages, setActiveArtifact, setArtifactHistory,
+        state, setSessions, mergeSessionsFromDisk, setCurrentSessionId, setMessages, setActiveArtifact, setArtifactHistory,
         setArtifactVersions, setLayoutMode, recordArtifactVersion, activateArtifact, createSession, openSession
     ]);
 }

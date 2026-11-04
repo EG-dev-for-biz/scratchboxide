@@ -11,7 +11,7 @@
     "scaffoldBranches": "primary limbs at the crown break (0: the grower's seeded 2-4)",
     "leafLengthM / leafAspect": "the leaf or frond the leaf set is chosen by (length, width / length)",
     "hueDeg": "[centre, spread] of the foliage's hue in the chromaticity plane (0 red, 60 yellow, 120 green); inside the spread costs nothing",
-    "apicalDominance": "0..1, the leader's momentum over the laterals; the grower stalls on a measured crown above about 0.65 (its branches overshoot the attractors), so a columnar form is expressed by the crown's own measurements, not by a higher value"
+    "apicalDominance": "0..1, the leader's dominance over the laterals: each shoot's momentum along its heading (0.76 x this) and how firmly the leader holds its course through the crown to the apex (smoothstep from 0.45 to 0.60: at 0.45 and below the trunk forks into its scaffold limbs at the crown break, from 0.60 it rises through the crown to the apex); the grower stalls on a measured crown above about 0.65 (its branches overshoot the attractors), so a columnar form is expressed by the crown's own measurements, not by a higher value"
   },
   "entries": [
     { "id": "london_plane", "label": "London plane", "description": "Broad spreading street tree with a tall clear trunk and a wide dome of large palmate leaves.", "heightM": [
@@ -91,6 +91,14 @@
         40
       ], "crownRadiusPerHeight": 0.18, "crownBaseRatio": 0.1, "trunkRadiusPerHeight": 0.015, "topShare": 0.12, "stems": 1, "scaffoldBranches": 0, "apicalDominance": 0.6, "branchAngleRad": 1.3, "leafLengthM": 0.02, "leafAspect": 0.1, "hueDeg": [
         125,
+        18
+      ]
+    },
+    { "id": "coast_redwood", "label": "Coast redwood", "description": "A straight fluted column carrying a narrow cone of short, level-to-drooping limbs from about two fifths of its height, foliage in flat dark sprays.", "heightM": [
+        20,
+        115
+      ], "crownRadiusPerHeight": 0.14, "crownBaseRatio": 0.4, "trunkRadiusPerHeight": 0.025, "topShare": 0.14, "stems": 1, "scaffoldBranches": 7, "apicalDominance": 0.62, "branchAngleRad": 1.4, "leafLengthM": 0.02, "leafAspect": 0.12, "hueDeg": [
+        112,
         18
       ]
     },

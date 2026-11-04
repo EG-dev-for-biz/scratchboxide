@@ -237,6 +237,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const {
         state: chatState,
         setSessions,
+        mergeSessionsFromDisk,
         setCurrentSessionId,
         setMessages,
         setActiveArtifact,
@@ -570,7 +571,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     }, [isConversationMenuOpen]);
 
     // Local Storage Debounced Auto-Persistence for Sessions, Artifacts & History
-    const { persistSessionsImmediately } = usePersistedChatState(chatState, setSessions, appearanceConfig, activeWorkspace.path);
+    const { persistSessionsImmediately } = usePersistedChatState(chatState, setSessions, mergeSessionsFromDisk, appearanceConfig, activeWorkspace.path);
 
     const { handleUpdateArtifact } = useArtifactSync({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions });
 

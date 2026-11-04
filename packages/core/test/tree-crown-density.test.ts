@@ -122,6 +122,63 @@ int main(int argc, char** argv) {
         expect(t0).toBe(0);
         expect(fs.existsSync(path.join(SHOTS, 'measure_half_shell_v0.pgm'))).toBe(true);
     }, 120_000);
+
+    it('counts every drawn triangle: a plain mesh, and a library mesh\'s petioles and sub-shoots as well as its blades', () => {
+        const bin = compileProbe('coverage-drawn', `#include "scratchbox_tree_lod.hpp"
+#include <cstdio>
+using namespace scratchbox; using namespace scratchbox::tree_lod; using math::Vec3; using math::Vec2;
+int main() {
+  CrownEllipsoid ref; ref.centre = Vec3(0, 5, 0); ref.radii = {1, 1, 1}; ref.points = 1;
+  std::vector<Vec3> hull; for (int k = 0; k < 64; ++k) { const double a = 2 * M_PI * k / 64; hull.push_back(Vec3(float(std::cos(a)), 5.0f + float(std::sin(a)), 0)); hull.push_back(Vec3(0, 5.0f + float(std::sin(a)), float(std::cos(a)))); }
+  // a closed lat-long shell of radius 1.05 around the crown, as a plain mesh (a level's wood, the far level's masses)
+  geometry::Mesh shell; const int U = 48, V = 24;
+  for (int j = 0; j <= V; ++j) for (int i = 0; i <= U; ++i) { const double th = M_PI * j / V, ph = 2 * M_PI * i / U;
+    shell.vertices.push_back(Vec3(float(1.05 * std::sin(th) * std::cos(ph)), 5.0f + float(1.05 * std::cos(th)), float(1.05 * std::sin(th) * std::sin(ph)))); }
+  for (int j = 0; j < V; ++j) for (int i = 0; i < U; ++i) { const uint32_t a = j * (U + 1) + i, b = a + 1, c = a + U + 1, d = c + 1; shell.indices.insert(shell.indices.end(), {a, c, b, b, c, d}); }
+  { detail::CoverageViews cv; cv.init(ref, hull, 0.01); cv.addMesh(shell); const auto L = cv.level(); std::printf("shell %.4f %.4f %.4f\\n", L.meanEllipsoid, L.minEllipsoid, L.meanAreaM2); }
+  // a library mesh of two horizontal squares 1 m apart, the first its blade (bladeTri) and the second a petiole, seen from above
+  LibraryMesh m;
+  m.positions = {Vec3(-1.5f, 0, -0.5f), Vec3(-0.5f, 0, -0.5f), Vec3(-0.5f, 0, 0.5f), Vec3(-1.5f, 0, 0.5f), Vec3(0.5f, 0, -0.5f), Vec3(1.5f, 0, -0.5f), Vec3(1.5f, 0, 0.5f), Vec3(0.5f, 0, 0.5f)};
+  m.indices = {0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7};
+  m.bladePos = {m.positions[0], m.positions[1], m.positions[2], m.positions[3]};
+  m.bladeUv = {Vec2(0, 0), Vec2(1, 0), Vec2(1, 1), Vec2(0, 1)};
+  m.bladeTri = {0, 1, 2, 0, 2, 3};
+  ref.radii = {3, 3, 3};
+  Instance in; in.t = Vec3(0, 5, 0); in.s = Vec3(1, 1, 1);
+  detail::CoverageViews blades; blades.init(ref, hull, 0.02); blades.add(m, in);
+  detail::CoverageViews whole; whole.init(ref, hull, 0.02); whole.addWhole(m, in);
+  std::printf("top %zu %zu %.4f\\n", blades.views[8].covAll, whole.views[8].covAll, whole.views[8].covAll * whole.cell * whole.cell);
+  // the library's clusters: their blades' upper sides and the rest (addOther) cover what all their triangles do, in every view
+  const auto lib = buildClusterLibrary(LodParams{});
+  size_t cells = 0, differ = 0, tris = 0, kept = 0;
+  for (const auto& v : lib.variants) for (const LibraryMesh* lm : {&v.level0, &v.nearMid, &v.level1}) {
+    CrownEllipsoid r; r.centre = Vec3(0, 0, 0); const double R = std::max(0.05, lm->reach); r.radii = {R, R, R}; r.points = 1;
+    Instance at; at.q = math::Quat::fromAxisAngle(Vec3(1, 0.3f, 0.2f).normalized(), 0.7f); at.s = Vec3(1, 1, 1);
+    detail::CoverageViews a; a.init(r, lm->support, R / 200); a.addWhole(*lm, at);
+    detail::CoverageViews b; b.init(r, lm->support, R / 200); b.add(*lm, at); b.addOther(*lm, at);
+    for (size_t k = 0; k < a.views.size(); ++k) { cells += a.views[k].covAll; for (size_t c = 0; c < a.views[k].covered.size(); ++c) differ += a.views[k].covered[c] != b.views[k].covered[c]; }
+    tris += lm->indices.size() / 3; kept += (lm->bladeTri.size() + lm->otherTri.size()) / 3;
+  }
+  std::printf("split %zu %zu %zu %zu\\n", cells, differ, tris, kept);
+}`);
+        const out = spawnSync(bin, [], { encoding: 'utf8' });
+        expect(out.status, out.stderr).toBe(0);
+        const lines = out.stdout.trim().split('\n');
+        const [, mean, min, area] = lines[0].split(' ').map(Number);
+        // a closed plain mesh around the crown hides it from every side, and its area is the silhouette's (pi x 1.05^2)
+        expect(mean).toBeGreaterThan(0.99); expect(min).toBeGreaterThan(0.99);
+        expect(area).toBeGreaterThan(Math.PI * 1.05 ** 2 * 0.97); expect(area).toBeLessThan(Math.PI * 1.05 ** 2 * 1.03);
+        const [, blade, all, allM2] = lines[1].split(' ').map(Number);
+        // the blades alone are one 1 m square; every triangle the mesh draws is two
+        expect(all / blade).toBeGreaterThan(1.95); expect(all / blade).toBeLessThan(2.05);
+        expect(allM2).toBeGreaterThan(1.9); expect(allM2).toBeLessThan(2.1);
+        // a level's drawn cover is measured as its blades plus the rest of its triangles (a blade's underside, the same
+        // triangle, left out): on every cluster of the library, the same cells, from far fewer triangles
+        const [, cells, differ, tris, kept] = lines[2].split(' ').map(Number);
+        expect(cells).toBeGreaterThan(1000);
+        expect(differ).toBe(0);
+        expect(kept / tris).toBeLessThan(0.6);
+    }, 120_000);
 });
 
 describe('crown fill by season (TileVegetationService.plant)', () => {
@@ -168,6 +225,19 @@ describe('crown fill by season (TileVegetationService.plant)', () => {
             expect(c.mid.mean).toBeGreaterThan(0.85);
             expect(c.mid.mean).toBeLessThanOrEqual(1);
             expect(c.views).toBe(9);
+            // what each level draws (wood, twigs, petioles and sub-shoots too) covers at least what its blades alone do,
+            // and the far level's trunk, limbs and leaf masses are measured
+            const d = c.drawn;
+            expect(d.level0.mean).toBeGreaterThanOrEqual(c.level0.mean);
+            expect(d.nearMid.mean).toBeGreaterThanOrEqual(c.nearMid.mean);
+            expect(d.mid.mean).toBeGreaterThanOrEqual(c.mid.mean);
+            expect(d.far.mean).toBeGreaterThan(0.3);
+            for (const k of ['level0', 'nearMid', 'mid', 'far']) expect(d[k].mean).toBeLessThanOrEqual(1);
+            // the far masses are spread along the crown surface until the far level covers as much of each view as the near
+            // level draws (or as far as they may spread or draw in)
+            if (d.farBefore.areaM2 < d.level0.areaM2) expect(d.far.areaM2).toBeGreaterThanOrEqual(d.farBefore.areaM2 - 1e-9);
+            if (d.farBefore.areaM2 > d.level0.areaM2) expect(d.far.areaM2).toBeLessThanOrEqual(d.farBefore.areaM2 + 1e-9);
+            if (d.farMassSpread < 2.99 && d.farMassSpread > 0.601) expect(Math.abs(d.far.areaM2 / d.level0.areaM2 - 1)).toBeLessThanOrEqual(0.011);
         }
         const leaves = (p: typeof summer) => p.stats.perTree.reduce((n: number, t: any) => n + t.lod.level0.leaves, 0);
         for (const t of sparse.stats.perTree) {

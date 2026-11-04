@@ -127,6 +127,9 @@ export interface CutoutKind {
     map: number;
     mipScale: number;
     gain: number;
+    /** The leaf set's solidity (leafSolidity, tree-texture-library.ts; absent: 1): its porous share (1 - solidity) is cut
+     *  at a hashed threshold instead of 0.5, as the viewport's leaf shader does, so a needle spray keeps its true cover. */
+    solidity?: number;
     leaf?: { origin: [number, number]; along: [number, number]; across: [number, number]; ks: number; kt: number; zoom: number };
 }
 

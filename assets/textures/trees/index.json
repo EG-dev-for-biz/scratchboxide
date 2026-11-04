@@ -7,7 +7,8 @@
   "leafSize": "Estimated: an atlas's longer side is taken to span 0.40 m (the leaves' sizes relative to each other are as scanned; the absolute scale is an estimate from typical leaf proportions).",
   "barkSize": "Estimated: a bark scan's shorter side is taken to span 0.50 m (the smooth scan shows the trunk's curvature across its width, about one trunk diameter). x runs around the trunk, y along it.",
   "barkRelief": "displacementRange: robust range (2.5-97.5 %) of the displacement map high-passed at 4 cm (the trunk's own curvature removed), in the map's normalised units; normalSlopeMean: mean slope |n_xy| / n_z of the normal map; reliefIndex = displacementRange x normalSlopeMean (0 smooth .. about 0.5 deeply furrowed); ridgeSpacingM: dominant period across the trunk (1.5-25 cm) of the high-passed displacement; furrowDepthM: estimated as normalSlopeMean x ridgeSpacingM / 4 (a triangular ridge profile).",
-  "coverage": "coverage: opaque share of the whole atlas; leaf.fill: median share of a leaf cell's box the leaf covers."
+  "coverage": "coverage: opaque share of the whole atlas; leaf.fill: median share of a leaf cell's box the leaf covers.",
+  "bladeWidth": "leaf.bladeWidthM: the width of the leaf's flat parts, twice its opaque area over its outline's length (the outline counted in pixel edges times pi / 4), the median over the atlas cells: a broad leaf's blade, a needle spray's branchlets and scale leaves. Measured by scripts/measure_tree_leaf_blades.py."
  },
  "leaves": [
   {
@@ -57,7 +58,8 @@
      0.127
     ],
     "aspect": 0.788,
-    "fill": 0.71
+    "fill": 0.71,
+    "bladeWidthM": 0.04384
    },
    "coverage": 0.2989,
    "atlas": {
@@ -223,7 +225,8 @@
      0.1223
     ],
     "aspect": 0.787,
-    "fill": 0.706
+    "fill": 0.706,
+    "bladeWidthM": 0.04379
    },
    "coverage": 0.4156,
    "atlas": {
@@ -443,7 +446,8 @@
      0.1566
     ],
     "aspect": 0.472,
-    "fill": 0.704
+    "fill": 0.704,
+    "bladeWidthM": 0.04205
    },
    "coverage": 0.2881,
    "atlas": {
@@ -609,7 +613,8 @@
      0.1484
     ],
     "aspect": 0.604,
-    "fill": 0.676
+    "fill": 0.676,
+    "bladeWidthM": 0.03012
    },
    "coverage": 0.3231,
    "atlas": {
@@ -775,7 +780,8 @@
      0.1611
     ],
     "aspect": 0.682,
-    "fill": 0.615
+    "fill": 0.615,
+    "bladeWidthM": 0.03731
    },
    "coverage": 0.3321,
    "atlas": {
@@ -941,7 +947,8 @@
      0.1243
     ],
     "aspect": 1.073,
-    "fill": 0.667
+    "fill": 0.667,
+    "bladeWidthM": 0.03557
    },
    "coverage": 0.2349,
    "atlas": {
@@ -1071,7 +1078,8 @@
      0.1516
     ],
     "aspect": 0.264,
-    "fill": 0.686
+    "fill": 0.686,
+    "bladeWidthM": 0.02019
    },
    "coverage": 0.2164,
    "atlas": {
@@ -1237,7 +1245,8 @@
      0.3568
     ],
     "aspect": 0.361,
-    "fill": 0.368
+    "fill": 0.368,
+    "bladeWidthM": 0.00265
    },
    "coverage": 0.2282,
    "atlas": {
@@ -1331,7 +1340,8 @@
      0.0803
     ],
     "aspect": 1.101,
-    "fill": 0.644
+    "fill": 0.644,
+    "bladeWidthM": 0.02126
    },
    "coverage": 0.2307,
    "atlas": {
@@ -1551,7 +1561,8 @@
      0.1516
     ],
     "aspect": 0.491,
-    "fill": 0.703
+    "fill": 0.703,
+    "bladeWidthM": 0.03034
    },
    "coverage": 0.2675,
    "atlas": {
@@ -1717,7 +1728,8 @@
      0.1565
     ],
     "aspect": 0.746,
-    "fill": 0.692
+    "fill": 0.692,
+    "bladeWidthM": 0.05307
    },
    "coverage": 0.3425,
    "atlas": {
@@ -1829,7 +1841,8 @@
      0.0746
     ],
     "aspect": 0.572,
-    "fill": 0.481
+    "fill": 0.481,
+    "bladeWidthM": 0.00833
    },
    "coverage": 0.1582,
    "atlas": {

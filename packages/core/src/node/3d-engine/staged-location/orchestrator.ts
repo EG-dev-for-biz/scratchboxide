@@ -4341,7 +4341,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // J's generated model replaces it (user decision 2026-10-22)
                     ...(request.procedural === true ? {} : { textured: {
                         url: pubTex.url, bytes: pubTex.bytes, ladderRung: r.files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1),
-                        rungShares: r.files.texturedShares, provenance: legend.map(e => ({ source: e.source, label: e.label, method: e.method, coverage: 0 })),
+                        rungShares: r.files.texturedShares, provenance: (r.files.legend ?? legend).map(e => ({ source: e.source, label: e.label, method: e.method, coverage: 0 })),
                         confidenceChannels: 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel', builtAtMs: now(), cached: false
                     } })
                 };
@@ -5006,7 +5006,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [e.layer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(out.files.clayGlb),
                         textured: {
                             url: pubTex.url, bytes: pubTex.bytes, ladderRung: out.files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1),
-                            rungShares: out.files.texturedShares, provenance: out.legend.map(x => ({ source: x.source, label: x.label, method: x.method, coverage: 0, ...(x.chamferPx !== undefined ? { chamferPx: x.chamferPx } : {}), ...(x.lostShare !== undefined ? { lostShare: x.lostShare } : {}) })),
+                            rungShares: out.files.texturedShares, provenance: (out.files.legend ?? out.legend).map(x => ({ source: x.source, label: x.label, method: x.method, coverage: 0, ...(x.chamferPx !== undefined ? { chamferPx: x.chamferPx } : {}), ...(x.lostShare !== undefined ? { lostShare: x.lostShare } : {}) })),
                             confidenceChannels: 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel', builtAtMs: now(), cached: false
                         }
                     };
@@ -5260,7 +5260,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         reveal: { durationMs: 800, stagger: 0, crossfadeFrom: [baseLayer.objectId] }, cached: false, builtAtMs: now(), counts: layerCounts(files.clayGlb),
                         textured: {
                             url: pubTex.url, bytes: pubTex.bytes, ladderRung: files.texturedShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1),
-                            rungShares: files.texturedShares, provenance: (inf?.out.legend ?? r.legend!).map(x => ({ source: x.source, label: x.label, method: x.method, coverage: 0, ...(x.chamferPx !== undefined ? { chamferPx: x.chamferPx } : {}), ...(x.lostShare !== undefined ? { lostShare: x.lostShare } : {}) })),
+                            rungShares: files.texturedShares, provenance: (files.legend ?? inf?.out.legend ?? r.legend!).map(x => ({ source: x.source, label: x.label, method: x.method, coverage: 0, ...(x.chamferPx !== undefined ? { chamferPx: x.chamferPx } : {}), ...(x.lostShare !== undefined ? { lostShare: x.lostShare } : {}) })),
                             confidenceChannels: 'R = index into provenance[], G = weight 0..255, B = ladder rung (TEXTURE_LADDER_RUNGS), A = 255 where a stage produced the texel', builtAtMs: now(), cached: false
                         }
                     };

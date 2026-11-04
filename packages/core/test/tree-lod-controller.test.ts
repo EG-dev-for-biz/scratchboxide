@@ -310,7 +310,7 @@ describe('TreeLodController: triangle estimates and old three-level files', () =
         }
         // crown slots: near 0, mid 2, far 3
         const slots = new Map<number, number>();
-        root.traverse(o => { const m = o as THREE.Mesh; if (m.isMesh && m.userData.sbCrownLeaf) for (let p: THREE.Object3D | null = m; p; p = p.parent) if (p.userData?.sbLod) { slots.set(p.userData.sbLod.level, m.geometry.getAttribute('sbCrownC').getW(0)); break; } });
+        root.traverse(o => { const m = o as THREE.Mesh; if (m.isMesh && m.userData.sbCrownLeaf) for (let p: THREE.Object3D | null = m; p; p = p.parent) if (p.userData?.sbLod) { slots.set(p.userData.sbLod.level, Math.floor(m.geometry.getAttribute('sbCrownC').getW(0))); break; } });
         expect([...slots.entries()].sort((a, b) => a[0] - b[0])).toEqual([[0, 0], [1, 2], [2, 3]]);
         // a jump to the far level still crossfades through mid without a gap in the hash
         for (let i = 0; i < 80; i++) { c.tick(); lod.update(cameraAt(tree, 20)); }

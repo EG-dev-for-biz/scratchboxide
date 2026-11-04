@@ -29,7 +29,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { TreeLodController } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/TreeLodController';
 import {
-    BREAKUP_FRAGMENT_DISCARD, CROWN_FIELD_VERTEX_PARS, CROWN_FRAGMENT_COLOR, CROWN_VERTEX_MAIN, crownLevelFactors, makeCrownVariant, crownLobesInMeshFrame, crownLobeField, crownLobesAt, crownQuadricInMeshFrame, crownShadingUniforms, isCrownVariant, resolveCrownShading, setCrownShadingUniforms, DEFAULT_CROWN_SHADING
+    BREAKUP_FRAGMENT_DISCARD, CROWN_FIELD_VERTEX_PARS, CROWN_FRAGMENT_COLOR, CROWN_RIM_SHARE_PACK, CROWN_VERTEX_MAIN, crownLevelFactors, makeCrownVariant, crownLobesInMeshFrame, crownLobeField, crownLobesAt, crownQuadricInMeshFrame, crownShadingUniforms, isCrownVariant, resolveCrownShading, setCrownShadingUniforms, DEFAULT_CROWN_SHADING
 } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeCrownShading';
 import { isFadeVariant, makeFadeVariant } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeLodFade';
 import { applyClayRenderMode, sharedTreeClayMaterial } from '../src/browser/generative-canvas/primitives/scene3d/clayRenderMode';
@@ -363,8 +363,13 @@ describe('TreeLodController with crown shading', () => {
         for (const m of leaves) {
             expect(m.geometry.getAttribute('sbCrownC')).toBeTruthy();
             expect((m.geometry.getAttribute('sbCrownC') as THREE.InstancedBufferAttribute).isInstancedBufferAttribute).toBe(true);
-            expect(m.geometry.getAttribute('sbCrownC').getW(0)).toBe(levelOf(m));
+            // the slot (its integer part) and the level's rim share in its fraction (crownRimSlot)
+            const w = m.geometry.getAttribute('sbCrownC').getW(0);
+            expect(Math.floor(w)).toBe(levelOf(m));
+            expect(w - Math.floor(w)).toBeLessThanOrEqual(CROWN_RIM_SHARE_PACK + 1e-6);
         }
+        // the rim shares were measured (the leaves lie on or inside their crowns, so some of each level is in the rim band)
+        expect(leaves.some(m => { const w = m.geometry.getAttribute('sbCrownC').getW(0); return w - Math.floor(w) > 0; })).toBe(true);
         // the cluster geometry stays shared: the per-mesh geometries reuse its buffers
         const l0 = leaves.filter(m => levelOf(m) === 0);
         expect(l0[0].geometry).not.toBe(l0[1].geometry);
