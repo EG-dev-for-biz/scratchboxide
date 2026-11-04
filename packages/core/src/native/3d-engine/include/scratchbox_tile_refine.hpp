@@ -138,7 +138,20 @@ struct FacadeFlattenParams {
     double detectOffsetBin{0.05}; // detector cells: 1 degree of azimuth by this much offset (m)
     int detectAzSmooth{2};        // a cell's score sums the cells within +- this many degrees...
     int detectOffsetSmooth{2};    // ...and +- this many offset bins
-    int detectMaxIterations{64};
+    // The search stops when no seed holds a plane of minPlaneArea any more (no live wall area left that could); this is
+    // only a safety cap. It was 64 and every building checked hit it (2026-11-04: Penn 2, the ESB), so walls past the 64th
+    // seed were never flattened, nor rebuilt (the relief and pipeline K frame their facades on these planes).
+    int detectMaxIterations{4096};
+};
+
+// What the wall-plane search found: its seeds tried, whether the cap stopped it, the planes it kept, and the near-vertical
+// faces (and their area) it started from and left on no plane.
+struct WallPlaneSearch {
+    size_t iterations{0};
+    bool capHit{false};
+    size_t planes{0};
+    size_t wallFaces{0}, unassignedFaces{0};
+    double wallAreaM2{0}, unassignedAreaM2{0};
 };
 
 struct TileRefineParams {
@@ -2643,7 +2656,7 @@ private:
     // Wall planes of the faces `kept` at positions Q (see FacadeFlattenParams): (azimuth, offset) density modes of the
     // near-vertical faces, each refit robustly and coplanar ones merged, with their in-plane support boxes
     // ----------------------------------------------------------------------------------------
-    std::vector<WallPlane> detectWallPlanes(const std::vector<V3>& Q, const std::vector<uint32_t>& kept, size_t& detectIterations) const {
+    std::vector<WallPlane> detectWallPlanes(const std::vector<V3>& Q, const std::vector<uint32_t>& kept, size_t& detectIterations, WallPlaneSearch* search = nullptr) const {
         const FacadeFlattenParams& FP = P.flatten;
         const double kPi = 3.14159265358979323846;
         const double cosPar = std::cos(FP.parallelDeg * kPi / 180.0);
@@ -2706,6 +2719,8 @@ private:
             }
         };
         std::vector<WallPlane> planes;
+        std::vector<uint32_t> wallFaces;
+        bool capHit = false;
         {
             // Sequential mode extraction. A cell is 1 degree of azimuth by detectOffsetBin of offset along the cell's
             // horizontal normal; its score is the live face area in the cells within +-detectAzSmooth degrees and
@@ -2720,6 +2735,7 @@ private:
             struct WallFace { uint64_t key; uint32_t t; };
             std::vector<WallFace> wall;
             std::vector<uint64_t> faceCell(F, 0);
+            wallFaces.clear();
             for (uint32_t t : kept) {
                 const double l = nQ[t].norm();
                 if (0.5 * l < FP.sliverArea || std::abs(nQ[t].y / l) >= FP.maxAbsNy) continue;
@@ -2728,6 +2744,7 @@ private:
                 const V3 c = (Q[rawIdx[3 * t]] + Q[rawIdx[3 * t + 1]] + Q[rawIdx[3 * t + 2]]) * (1.0 / 3.0);
                 const uint64_t key = cellKey(ab, std::llround(cellNormal(ab).dot(c) / sb));
                 wall.push_back({key, t});
+                wallFaces.push_back(t);
                 faceCell[t] = key;
             }
             std::sort(wall.begin(), wall.end(), [](const WallFace& a, const WallFace& b) { return a.key < b.key || (a.key == b.key && a.t < b.t); });
@@ -2780,7 +2797,8 @@ private:
             for (size_t i = wall.size(); i-- > 0;) binStart[cellAz(wall[i].key)] = static_cast<uint32_t>(i);
             for (int b = 359; b >= 0; --b) binStart[b] = std::min(binStart[b], binStart[b + 1]);
             const int reachDeg = static_cast<int>(std::ceil(std::acos(cosSeedReach) * 180.0 / kPi)) + 2;
-            for (int iter = 0; iter < FP.detectMaxIterations; ++iter) {
+            for (int iter = 0;; ++iter) {
+                if (iter >= FP.detectMaxIterations) { capHit = true; break; }
                 ++detectIterations;
                 for (uint64_t k : dirty) {
                     Cell& c = cells.find(k)->second;
@@ -2869,6 +2887,19 @@ private:
                 }
                 m.rmsIn = A > 0 ? std::sqrt(s2 / A) : 0;
                 planes.push_back(std::move(m));
+            }
+        }
+        if (search) {
+            std::vector<uint8_t> onPlane(F, 0);
+            for (const auto& pl : planes) for (uint32_t t : pl.inl) onPlane[t] = 1;
+            *search = WallPlaneSearch{};
+            search->iterations = detectIterations;
+            search->capHit = capHit;
+            search->planes = planes.size();
+            for (uint32_t t : wallFaces) {
+                const double a = 0.5 * nQ[t].norm();
+                search->wallFaces++; search->wallAreaM2 += a;
+                if (!onPlane[t]) { search->unassignedFaces++; search->unassignedAreaM2 += a; }
             }
         }
         return planes;
@@ -3111,7 +3142,8 @@ private:
 
         // ---- planes
         size_t detectIterations = 0;
-        const std::vector<WallPlane> planes = detectWallPlanes(Q0, kept, detectIterations);
+        WallPlaneSearch search;
+        const std::vector<WallPlane> planes = detectWallPlanes(Q0, kept, detectIterations, &search);
         flattenPlanes = planes;
         const int K = static_cast<int>(planes.size());
         stage("planes");
@@ -3361,7 +3393,10 @@ private:
         }
         stage("census");
         js << "  \"flatten\": {\"band_m\": " << num(band) << ", \"parallelDeg\": " << num(FP.parallelDeg) << ", \"planes\": " << K
-           << ", \"detectIterations\": " << detectIterations << ", \"groupsMergedByPosition\": " << mergedByPosition
+           << ", \"detectIterations\": " << detectIterations << ", \"detectCapHit\": " << (search.capHit ? "true" : "false")
+           << ", \"detectMaxIterations\": " << FP.detectMaxIterations << ", \"wallFaces\": " << search.wallFaces << ", \"wallArea_m2\": " << num(search.wallAreaM2)
+           << ", \"unassignedWallFaces\": " << search.unassignedFaces << ", \"unassignedWallArea_m2\": " << num(search.unassignedAreaM2)
+           << ", \"groupsMergedByPosition\": " << mergedByPosition
            << ", \"candidateGroups\": " << candGroups << ", \"notOnFacade\": " << notOnFacade << ", \"cornerTooFar\": " << cornerTooFar << ", \"proudBlockGroupsKept\": " << proudBlockKept
            << ", \"movedGroups\": " << movedGroups << ", \"cornerGroups\": " << cornerGroups << ", \"movedVertices\": " << disp.size()
            << ", \"displacement_m\": " << dist(Distribution::of(disp)) << ", \"tJunctions\": " << tj.size() << ", \"tjTouchedGroups\": " << tjTouched
