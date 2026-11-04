@@ -56,8 +56,11 @@ import { invert, pushPull } from './vehicle-removal';
 export const SURFACE_INFILL_VERSION = 'surface-infill/1';
 
 export const SURFACE_INFILL_PARAMS = {
-    /** The chart's texel (m); grown so neither side passes maxSide. */
-    texelM: 0.05, maxSide: 2048,
+    /**
+     * The chart's texel (m): the scan's own photo texel around the region (nothing finer is there to continue), held to
+     * texelM..maxTexelM; grown so neither side passes maxSide.
+     */
+    texelM: 0.05, maxTexelM: 0.2, maxSide: 2048,
     /** The chart reaches this far past the region (m): the clear surface the fill reads and meets. */
     marginM: 6,
     /** Texels this close to the region are filled too (m): the photo there may still show the edge of what was removed. */
@@ -99,6 +102,8 @@ export interface InfillRegionSpec {
     ring: Float32Array;
     /** Which way the surface faces (the side its photo was taken from); up when absent. */
     normalHint?: Vec3;
+    /** Chart it from straight above in plan whatever its slope (vertices then move straight down, as on a street). */
+    plan?: boolean;
     /** A chart fixed by the caller (else fitted to the ring). */
     chart?: InfillChart;
 }
@@ -221,6 +226,33 @@ function trianglesInBox(g: TriangleGrid, t: TileTriangles, lo: Vec3, hi: Vec3): 
         out.push(tr);
     }
     return out;
+}
+
+/**
+ * The scan's photo texel (m) over a region: the median over the textured triangles around its footprint of the side of
+ * one photo pixel on the surface, held to texelM..maxTexelM.
+ */
+function photoTexelM(scan: TileTriangles, grid: TriangleGrid, hole: Float32Array, P: SurfaceInfillParams): number {
+    const lo: Vec3 = [Infinity, Infinity, Infinity], hi: Vec3 = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i + 2 < hole.length; i += 3) for (let j = 0; j < 3; j++) { lo[j] = Math.min(lo[j], hole[i + j]); hi[j] = Math.max(hi[j], hole[i + j]); }
+    if (!(hi[0] >= lo[0])) return P.texelM;
+    const m = 3;
+    const tris = trianglesInBox(grid, scan, [lo[0] - m, lo[1] - m, lo[2] - m], [hi[0] + m, hi[1] + m, hi[2] + m]);
+    const sizes: number[] = [];
+    const Pp = scan.positions, UV = scan.uvs;
+    for (let j = 0; j < tris.length; j += Math.max(1, Math.floor(tris.length / 2000))) {
+        const t = tris[j], ti = scan.texture[t];
+        if (ti < 0 || scan.fill?.[t]) continue;
+        const tex = scan.textures[ti], o = t * 9;
+        const ux = Pp[o + 3] - Pp[o], uy = Pp[o + 4] - Pp[o + 1], uz = Pp[o + 5] - Pp[o + 2], vx = Pp[o + 6] - Pp[o], vy = Pp[o + 7] - Pp[o + 1], vz = Pp[o + 8] - Pp[o + 2];
+        const a3 = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 2;
+        const au = (UV[t * 6 + 2] - UV[t * 6]) * tex.width, av = (UV[t * 6 + 3] - UV[t * 6 + 1]) * tex.height, bu = (UV[t * 6 + 4] - UV[t * 6]) * tex.width, bv = (UV[t * 6 + 5] - UV[t * 6 + 1]) * tex.height;
+        const a2 = Math.abs(au * bv - av * bu) / 2;
+        if (a3 > 1e-6 && a2 > 1e-3) sizes.push(Math.sqrt(a3 / a2));
+    }
+    if (!sizes.length) return P.texelM;
+    sizes.sort((x, y) => x - y);
+    return Math.max(P.texelM, Math.min(P.maxTexelM, sizes[sizes.length >> 1]));
 }
 
 /** The world box of a chart between heights w0..w1 along its normal. */
@@ -473,7 +505,7 @@ function admittedOf(reading: StructureReading, S: InfillSynthesisParams): ((dx: 
 
 async function infillOne(spec: InfillRegionSpec, scan: TileTriangles, grid: TriangleGrid, others: Float32Array[], input: InfillInput, P: SurfaceInfillParams, G: SeamGateParams, S: InfillSynthesisParams, Gm: InfillGeometryParams): Promise<RegionInfill> {
     const t0 = Date.now();
-    const chart = spec.chart ?? fitChart({ ring: spec.ring, hole: spec.hole, texelM: P.texelM, marginM: P.marginM, maxSide: P.maxSide, normalHint: spec.normalHint }, Gm);
+    const chart = spec.chart ?? fitChart({ ring: spec.ring, hole: spec.hole, texelM: photoTexelM(scan, grid, spec.hole, P), marginM: P.marginM, maxSide: P.maxSide, normalHint: spec.normalHint, ...(spec.plan ? { normal: [0, 1, 0] as Vec3 } : {}) }, Gm);
     const model = fitSurfaceModel(spec.ring, chart, Gm);
     const tGeometry = Date.now();
     const W = chart.width, H = chart.height, N = W * H;
