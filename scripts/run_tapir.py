@@ -134,7 +134,9 @@ def main() -> None:
         video_tensor = torch.from_numpy(video_norm)[None] # (1, T, H, W, 3)
         queries_tensor = torch.from_numpy(queries_np)
 
-        device = "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu")
+        # SCRATCHBOX_TORCH_DEVICE pins it (the tests pin the CPU); else CUDA, then Apple's MPS, then the CPU
+        device = os.environ.get("SCRATCHBOX_TORCH_DEVICE", "").strip() or (
+            "cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
         model = model.to(device)
         model.eval()
         _MODELS[resolved_ckpt] = model

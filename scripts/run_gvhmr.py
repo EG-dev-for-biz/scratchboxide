@@ -4,7 +4,7 @@ SbHuman parametric body the performer pipeline builds its avatar from.
 
 Uses the GVHMR checkout and checkpoints (third_party/GVHMR),
 plus PyTorch3D compatibility shim, so no CUDA or compiled PyTorch3D is needed:
-`.cuda()` calls are redirected to --device (mps or cpu).
+`.cuda()` calls are redirected to --device (auto: CUDA when present, else MPS, else the CPU).
 
 Output JSON (consumed by GvhmrBodyService):
   {
@@ -23,7 +23,7 @@ Output JSON (consumed by GvhmrBodyService):
   }
 
 Usage:
-  run_gvhmr.py --video clip.mp4 --out-dir out/ [--device mps] [--max-frames 121]
+  run_gvhmr.py --video clip.mp4 --out-dir out/ [--device auto|cuda|mps|cpu] [--max-frames 121]
       [--gvhmr-root ~/dev/third_party/GVHMR]
   run_gvhmr.py --video clip.mp4 --out-dir out/ --motion-dir data/gvhmr/results/<clip>
       # export from saved GVHMR motion so avatar and generated cameras share one fit
@@ -56,6 +56,19 @@ def trim_clip(video: Path, out: Path, max_frames: int) -> None:
          '-c:v', 'libx264', '-crf', '12', '-pix_fmt', 'yuv420p', str(out)],
         check=True,
     )
+
+
+def resolve_device(device: str) -> str:
+    """auto: SCRATCHBOX_TORCH_DEVICE when set (the tests pin the CPU), else CUDA, then Apple's MPS, then the CPU."""
+    if device != 'auto':
+        return device
+    import torch
+    pinned = os.environ.get('SCRATCHBOX_TORCH_DEVICE', '').strip()
+    if pinned:
+        return pinned
+    if torch.cuda.is_available():
+        return 'cuda'
+    return 'mps' if torch.backends.mps.is_available() else 'cpu'
 
 
 def redirect_cuda(device: str) -> None:
@@ -96,7 +109,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--video', required=True)
     parser.add_argument('--out-dir', required=True)
-    parser.add_argument('--device', default='mps')
+    parser.add_argument('--device', default='auto', help='cuda, mps or cpu; auto picks the first present')
     parser.add_argument('--max-frames', type=int, default=121)
     parser.add_argument('--gvhmr-root', default=None)
     parser.add_argument('--motion-dir', default=None, help='GVHMR result dir (motion.safetensors) to export instead of inferring')
@@ -121,6 +134,7 @@ def main() -> int:
 
     from performer_4d.vendor.pytorch3d_compat import install_if_needed
     install_if_needed()
+    args.device = resolve_device(args.device)
     redirect_cuda(args.device)
     install_stubs()
 

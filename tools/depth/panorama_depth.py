@@ -13,6 +13,10 @@ import numpy as np
 from PIL import Image
 
 def get_device():
+    # SCRATCHBOX_TORCH_DEVICE pins it (the tests pin the CPU); else CUDA, then Apple's MPS, then the CPU
+    pinned = os.environ.get("SCRATCHBOX_TORCH_DEVICE", "").strip()
+    if pinned:
+        return torch.device(pinned)
     if torch.cuda.is_available():
         return torch.device("cuda")
     elif torch.backends.mps.is_available():

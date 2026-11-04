@@ -19,10 +19,10 @@
  *
  * **Where.** `gs://<training bucket>/places/v1/<place key>/` (the bucket the cache mirror already writes, through the
  * same service-account credentials: training-pair-capture.ts defaultTrainingBucket). When that bucket is not configured
- * or cannot be reached, `/Volumes/G-RAID MIRROR/scratchbox-places/<place key>/` (SCRATCHBOX_PLACE_STORE_FALLBACK names
- * another), only when that volume is mounted: a missing mount is never created on the system disk. With neither, the
- * store is `none` and every call reports why and changes nothing. Which one is in use is always reported
- * (PlaceStore.where); opening the store never throws.
+ * or cannot be reached, `/Volumes/G-RAID MIRROR/scratchbox-places/<place key>/` on macOS (SCRATCHBOX_PLACE_STORE_FALLBACK
+ * names another, and is the only fallback elsewhere), only when that volume is mounted: a missing mount is never created on
+ * the system disk. With neither, the store is `none` and every call reports why and changes nothing. Which one is in use is
+ * always reported (PlaceStore.where); opening the store never throws.
  *
  * **What.**
  *   - `manifest.json`: the place's ENU anchor, radius, grown edge and chunk grid, the code version and switches of the
@@ -58,6 +58,7 @@ import { defaultTrainingBucket } from '../../cloud-store/training-pair-capture';
 export const PLACE_STORE_SCHEMA = 'scratchbox.place-store/1';
 export const PLACE_OBJECT_SCHEMA = 'scratchbox.place-object/1';
 export const PLACE_STORE_PREFIX = 'places/v1';
+/** The fallback on macOS: the Mac's G-RAID volume. Elsewhere there is none unless SCRATCHBOX_PLACE_STORE_FALLBACK names one. */
 export const PLACE_STORE_FALLBACK_ROOT = '/Volumes/G-RAID MIRROR/scratchbox-places';
 
 export const PLACE_STORE_PARAMS = {
@@ -153,7 +154,7 @@ export function recordKey(id: string): string {
  * Opens the place's store: the cloud bucket when it answers, else the fallback volume when it is mounted, else none.
  * `bucket` undefined uses the training bucket; null means no cloud bucket. Never throws.
  */
-export async function openPlaceStore(opts: { key: string; bucket?: CloudBucket | null; fallbackRoot?: string; tmpDir?: string; env?: NodeJS.ProcessEnv }): Promise<PlaceStore> {
+export async function openPlaceStore(opts: { key: string; bucket?: CloudBucket | null; fallbackRoot?: string; tmpDir?: string; env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform }): Promise<PlaceStore> {
     const env = opts.env ?? process.env;
     const tmpDir = opts.tmpDir ?? path.join(os.tmpdir(), `sb-place-store-${process.pid}`);
     const base = { key: opts.key, tmpDir };
@@ -175,7 +176,8 @@ export async function openPlaceStore(opts: { key: string; bucket?: CloudBucket |
             why = `${bucket.label} could not be reached (${errorMessage(err)})`;
         }
     }
-    const root = opts.fallbackRoot ?? (env.SCRATCHBOX_PLACE_STORE_FALLBACK?.trim() || PLACE_STORE_FALLBACK_ROOT);
+    const root = opts.fallbackRoot ?? (env.SCRATCHBOX_PLACE_STORE_FALLBACK?.trim() || ((opts.platform ?? process.platform) === 'darwin' ? PLACE_STORE_FALLBACK_ROOT : undefined));
+    if (!root) return { ...base, where: { kind: 'none', label: '', reason: `${why}; no fallback volume on this machine (SCRATCHBOX_PLACE_STORE_FALLBACK names one)` }, prefix: opts.key };
     // the volume must already be there: a missing mount point is never made on the system disk
     const volume = path.dirname(root);
     try {

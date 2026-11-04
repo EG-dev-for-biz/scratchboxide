@@ -24,7 +24,11 @@ export default defineConfig({
         env: {
             SCRATCHBOX_TEST: '1',
             // Tests exercise the chat model's own first call; the routing race (fast-router.ts) is tested on its own.
-            SCRATCHBOX_CHAT_ROUTER: 'off'
+            SCRATCHBOX_CHAT_ROUTER: 'off',
+            // Tests never bill and stay on the CPU, also on a Google Cloud machine with a GPU (deploy/devbox): the torch
+            // sidecars' auto device is pinned to the CPU, and the metadata server's service-account credentials are off
+            SCRATCHBOX_TORCH_DEVICE: 'cpu',
+            METADATA_SERVER_DETECTION: 'none'
         }
     }
 });

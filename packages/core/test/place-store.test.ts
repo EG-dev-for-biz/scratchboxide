@@ -241,6 +241,20 @@ describe('place store', () => {
         expect(r.skipped).toContain('is not available');
         expect(r.objects.added).toBe(0);
     });
+
+    it('off macOS has no fallback volume unless one is named', async () => {
+        const bucket = new MemoryVersionedBucket();
+        bucket.down = true;
+        const unnamed = await openPlaceStore({ key: KEY, bucket, env: {}, platform: 'linux', tmpDir: path.join(tmp, 'scratch') });
+        expect(unnamed.where.kind).toBe('none');
+        expect(unnamed.where.reason).toContain('no fallback volume on this machine');
+        expect(unnamed.where.reason).not.toContain('G-RAID');
+        const volume = path.join(tmp, 'named-volume');
+        fs.mkdirSync(volume);
+        const named = await openPlaceStore({ key: KEY, bucket, env: { SCRATCHBOX_PLACE_STORE_FALLBACK: path.join(volume, 'places') }, platform: 'linux', tmpDir: path.join(tmp, 'scratch') });
+        expect(named.where.kind).toBe('fallback');
+        expect(named.where.label).toBe(`dir://${path.join(volume, 'places')}/${KEY}`);
+    });
 });
 
 describe('a chunked district into the object store and the place store', () => {

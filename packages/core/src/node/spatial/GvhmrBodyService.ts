@@ -139,7 +139,8 @@ export class GvhmrBodyService {
             throw new Error(`GVHMR checkout not found at ${root}; clone GVHMR or set SCRATCHBOX_GVHMR_ROOT`);
         }
         const python = GvhmrBodyService.resolvePythonBinary(options.pythonBinary);
-        const device = options.device || process.env.SCRATCHBOX_GVHMR_DEVICE || (process.platform === 'darwin' ? 'mps' : 'cuda');
+        // auto: the script takes CUDA when present, else MPS, else the CPU
+        const device = options.device || process.env.SCRATCHBOX_GVHMR_DEVICE || 'auto';
         const args = [script, '--video', path.resolve(videoPath), '--out-dir', path.resolve(outputDir), '--device', device, '--gvhmr-root', root];
         if (options.maxFrames) args.push('--max-frames', String(options.maxFrames));
         try {

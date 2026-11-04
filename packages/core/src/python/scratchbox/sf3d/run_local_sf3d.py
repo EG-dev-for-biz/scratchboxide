@@ -346,7 +346,10 @@ def run_sf3d_pipeline(
         elif device == "mps" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             actual_device = "mps"
         elif device == "auto":
-            if torch.cuda.is_available():
+            # SCRATCHBOX_TORCH_DEVICE pins it (the tests pin the CPU); else CUDA, then Apple's MPS, then the CPU
+            if os.environ.get("SCRATCHBOX_TORCH_DEVICE", "").strip():
+                actual_device = os.environ["SCRATCHBOX_TORCH_DEVICE"].strip()
+            elif torch.cuda.is_available():
                 actual_device = "cuda"
             elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
                 actual_device = "mps"
