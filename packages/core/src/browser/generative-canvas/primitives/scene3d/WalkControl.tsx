@@ -61,7 +61,7 @@ export function WalkHud({ session }: { session: () => WalkSession | null }): Rea
         return () => window.clearInterval(id);
     }, [session]);
     if (!stats) return null;
-    const fps = stats.frameMs > 0 ? 1000 / stats.frameMs : 0;
+    const fps = stats.frameP50Ms > 0 ? 1000 / stats.frameP50Ms : 0;
     const dim = { color: '#a1a1aa' };
     return (
         <>
@@ -88,9 +88,11 @@ export function WalkHud({ session }: { session: () => WalkSession | null }): Rea
                     <span style={dim}> · </span>
                     <span data-testid="sb-3d-walk-speed">{fmt(stats.speed)} m/s</span>
                     <span style={dim}> · frame </span>
-                    <span data-testid="sb-3d-walk-frame">{fmt(stats.frameMs)} ms ({fmt(fps, 0)} fps, p95 {fmt(stats.frameP95Ms)})</span>
+                    <span data-testid="sb-3d-walk-frame">
+                        {fmt(stats.frameP50Ms)} ms ({fmt(fps, 0)} fps), p95 {fmt(stats.frameP95Ms)}{stats.stalls ? `, ${stats.stalls} stall${stats.stalls > 1 ? 's' : ''}` : ''}
+                    </span>
                     <span style={dim}> · walk </span>
-                    <span data-testid="sb-3d-walk-cost">{fmt(stats.stepMs, 2)} ms</span>
+                    <span data-testid="sb-3d-walk-cost">{fmt(stats.stepP50Ms, 2)} ms</span>
                 </div>
                 <div style={{ ...dim, fontSize: 10 }}>
                     WASD / arrows move · Shift run · F {stats.mode === 'walk' ? 'fly' : 'walk'}

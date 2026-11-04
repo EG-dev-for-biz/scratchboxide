@@ -107,13 +107,13 @@ describe.skipIf(!stagedChrome.ok)('camera settings panel in the real viewport (h
     afterAll(async () => { await page?.close(); });
 
     test('the camera button sits under frame/fit in the tool strip and opens / closes the panel (mouse, Escape, outside press, keyboard)', async () => {
-        const order = await page.eval<string[]>(`Array.from(document.querySelectorAll('.sb-3d-toolstrip .sb-3d-toolstrip-btn')).slice(0, 5).map(b => b.getAttribute('title') ?? '')`);
-        // the camera button sits in the viewing group after frame/fit (the weather and colour harmony buttons may sit between them)
+        const order = await page.eval<string[]>(`Array.from(document.querySelectorAll('.sb-3d-toolstrip .sb-3d-toolstrip-btn')).slice(0, 6).map(b => b.getAttribute('title') ?? '')`);
+        // the camera button sits in the viewing group after frame/fit (the walk, weather and colour harmony buttons may sit between them)
         const frameAt = order.findIndex(t => /Frame All/.test(t));
         const cameraAt = order.findIndex(t => /^Camera Settings/.test(t));
         expect(frameAt).toBeGreaterThanOrEqual(0);
         expect(cameraAt).toBeGreaterThan(frameAt);
-        expect(cameraAt - frameAt).toBeLessThanOrEqual(3);
+        expect(cameraAt - frameAt).toBeLessThanOrEqual(4);
         await shot('01_toolbar_camera_icon');
 
         await clickTestId('sb-3d-camera-settings');

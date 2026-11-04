@@ -348,11 +348,15 @@ export interface WalkFrameStats extends WalkCollisionStats {
     grounded: boolean;
     falling: boolean;
     overVoid: boolean;
-    /** Frame interval, smoothed, and its 95th percentile over the last 2 s (ms). */
-    frameMs: number;
+    /**
+     * Frame interval over the last STATS_WINDOW frames: median and 95th percentile (ms), and the frames over STALL_MS
+     * among them. A mean would let one stall (a tab switch, a load) stand for every frame.
+     */
+    frameP50Ms: number;
     frameP95Ms: number;
-    /** The walker's own cost a frame (collision, ground, camera), smoothed, and its worst over the last 2 s (ms). */
-    stepMs: number;
+    stalls: number;
+    /** The walker's own cost a frame (collision, ground, camera) over the same frames: median and worst (ms). */
+    stepP50Ms: number;
     stepMaxMs: number;
     feet: [number, number, number];
     pointerLocked: boolean;
@@ -375,6 +379,8 @@ export interface WalkStart { ndc?: THREE.Vector2; fallback?: THREE.Vector3; mode
 
 const REFRESH_MS = 500;
 const STATS_WINDOW = 120;
+/** A frame longer than this is a stall (under 10 fps). */
+const STALL_MS = 100;
 
 /** A walk through the viewport's scene: the walker, its surfaces, the pointer lock and the frame stats. */
 export class WalkSession {
@@ -384,8 +390,6 @@ export class WalkSession {
     private locked = false;
     private readonly frames: number[] = [];
     private readonly steps: number[] = [];
-    private frameMs = 0;
-    private stepMs = 0;
     private speed = 0;
     private running = false;
     private readonly last = new THREE.Vector3();
@@ -480,11 +484,9 @@ export class WalkSession {
             const moved = Math.hypot(f.x - this.last.x, f.z - this.last.z) / Math.min(dt, MAX_DT);
             this.speed += (moved - this.speed) * 0.2;
             push(this.frames, dt * 1000);
-            this.frameMs += (dt * 1000 - this.frameMs) * (this.frameMs ? 0.1 : 1);
         }
         this.running = input.run && (input.forward !== 0 || input.right !== 0);
         push(this.steps, ms);
-        this.stepMs += (ms - this.stepMs) * (this.stepMs ? 0.1 : 1);
     }
 
     /** The orbit view that keeps this view: its pivot on the surface ahead (within 300 m), else 10 m ahead. */
@@ -512,9 +514,10 @@ export class WalkSession {
             grounded: w.grounded,
             falling: w.mode === 'walk' && !w.grounded && !w.overVoid,
             overVoid: w.overVoid,
-            frameMs: this.frameMs,
+            frameP50Ms: percentile(this.frames, 0.5),
             frameP95Ms: percentile(this.frames, 0.95),
-            stepMs: this.stepMs,
+            stalls: this.frames.filter(ms => ms > STALL_MS).length,
+            stepP50Ms: percentile(this.steps, 0.5),
             stepMaxMs: this.steps.length ? Math.max(...this.steps) : 0,
             feet: [f.x, f.y, f.z],
             pointerLocked: this.locked
