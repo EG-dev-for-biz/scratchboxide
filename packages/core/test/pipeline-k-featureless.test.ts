@@ -70,7 +70,7 @@ describe('featureless photo continued from another facade', () => {
     const solid = (v: number) => { const a = new Uint8Array(400); for (let i = 0; i < 100; i++) a.set([v, v + 1, v + 2, 255], i * 4); return a; };
     const all = () => new Uint8Array(100).fill(1);
 
-    it('takes the nearest facade facing the same way at that height, its photo repeating along the wall, never one facing the other way', () => {
+    it('takes the nearest facade facing the same way at that height, its photo repeating along the wall, before one facing the other way', () => {
         // F: facing +z, its photo a smear (90); G: facing +z, 20 m along x at the same height (its photo repeats over F);
         // B: facing -z right behind F (nearer, but its photo would be seen mirrored)
         const F = facade(1, [0, 0, 0], [0, 0, 1], [1, 0, 0]), G = facade(2, [20, 0, 0], [0, 0, 1], [1, 0, 0]), B = facade(3, [0, 0, -1], [0, 0, -1], [-1, 0, 0]);
@@ -97,6 +97,54 @@ describe('featureless photo continued from another facade', () => {
         expect(rep.filled).toBe(1);
         expect(rep.sources).toHaveLength(1);
         for (let y = 0; y < 10; y++) for (let x = 10; x < 30; x++) expect(rgbaF[(y * 40 + x) * 4]).toBe(pier((x + 0.5) * 0.5));
+    });
+
+    it('refills a large dark region from a facade facing the same way, and keeps a window-sized dark patch', () => {
+        // F: facing +z, 10 x 10 m at 1 m texels, light stone (150): its left 5 m dark (a neighbour's shade: 20), and a 2 x 2 m dark window
+        const F = facade(1, [0, 0, 0], [0, 0, 1], [1, 0, 0]), G = facade(2, [20, 0, 0], [0, 0, 1], [1, 0, 0]);
+        const rgba = solid(150);
+        for (let y = 0; y < 10; y++) for (let x = 0; x < 5; x++) rgba.set([20, 20, 20, 255], (y * 10 + x) * 4);
+        for (const [x, y] of [[7, 7], [8, 7], [7, 8], [8, 8]]) rgba.set([20, 20, 20, 255], (y * 10 + x) * 4);
+        const rep = continueFeatureless(new Map([[1, { f: F, rgba, width: 10, height: 10 }], [2, { f: G, rgba: solid(160), width: 10, height: 10 }]])).get(1)!;
+        expect(rep.dark).toBe(50);
+        expect(rep.regions).toBe(1);
+        expect(rep.fromFacades).toEqual({ 2: 50 });
+        expect(rep.fromOpposite).toBeUndefined();
+        for (let y = 0; y < 10; y++) for (let c = 0; c < 5; c++) expect(rgba[(y * 10 + c) * 4]).toBe(160);
+        // the window keeps its photo
+        expect(rgba[(7 * 10 + 7) * 4]).toBe(20);
+    });
+
+    it('keeps a dark feature inside the wall (an entrance bay with wall each side) as photographed', () => {
+        // a 4 m wide dark bay the full height, in the middle of a light 10 m wall
+        const F = facade(1, [0, 0, 0], [0, 0, 1], [1, 0, 0]), G = facade(2, [20, 0, 0], [0, 0, 1], [1, 0, 0]);
+        const rgba = solid(150);
+        for (let y = 0; y < 10; y++) for (let x = 3; x < 7; x++) rgba.set([20, 20, 20, 255], (y * 10 + x) * 4);
+        expect(continueFeatureless(new Map([[1, { f: F, rgba, width: 10, height: 10 }], [2, { f: G, rgba: solid(160), width: 10, height: 10 }]])).get(1)).toBeUndefined();
+        expect(rgba[(5 * 10 + 5) * 4]).toBe(20);
+    });
+
+    it('leaves a facade dark all over (a dark material) as photographed', () => {
+        const F = facade(1, [0, 0, 0], [0, 0, 1], [1, 0, 0]), G = facade(2, [20, 0, 0], [0, 0, 1], [1, 0, 0]);
+        const rgba = solid(20);
+        expect(continueFeatureless(new Map([[1, { f: F, rgba, width: 10, height: 10 }], [2, { f: G, rgba: solid(160), width: 10, height: 10 }]])).get(1)).toBeUndefined();
+        expect(rgba[0]).toBe(20);
+    });
+
+    it('carries over the side facing the other way where nothing facing this way covers the region, read as seen from outside (not mirrored)', () => {
+        // F: facing +z, its left 7 m dark, the rest light; B: behind it facing -z (its axisS -x: left to right as seen from
+        // its own outside), its photo a ramp, darkest at its own left; no other facade facing +z to take from
+        const F = facade(1, [0, 0, 0], [0, 0, 1], [1, 0, 0]), B = facade(3, [0, 0, -30], [0, 0, -1], [-1, 0, 0]);
+        const rgba = solid(150), ramp = new Uint8Array(400);
+        for (let y = 0; y < 10; y++) for (let c = 0; c < 7; c++) rgba.set([20, 20, 20, 255], (y * 10 + c) * 4);
+        for (let y = 0; y < 10; y++) for (let c = 0; c < 10; c++) ramp.set([10 + 20 * c, 10 + 20 * c, 10 + 20 * c, 255], (y * 10 + c) * 4);
+        const rep = continueFeatureless(new Map([[1, { f: F, rgba, width: 10, height: 10 }], [3, { f: B, rgba: ramp, width: 10, height: 10 }]])).get(1)!;
+        expect(rep.dark).toBe(70);
+        expect(rep.fromFacades).toEqual({ 3: 70 });
+        expect(rep.fromOpposite).toBe(70);
+        expect(rep.sources[0].opposite).toBe(true);
+        // F reads left to right as B does from its own outside, aligned on the light photo beside the region: B's column c at F's column c
+        for (let y = 0; y < 10; y++) for (let c = 0; c < 7; c++) expect(rgba[(y * 10 + c) * 4]).toBe(10 + 20 * c);
     });
 
     it("takes nothing from a donor at another height, from the donor's own holes or smear, and keeps the photo then", () => {

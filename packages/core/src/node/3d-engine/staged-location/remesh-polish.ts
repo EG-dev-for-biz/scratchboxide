@@ -68,7 +68,7 @@ export function polishRemesh(input: { clayGlb: string; texturedGlb?: string; cac
         if (cleanup) { step('cleanup', () => { const c = cleanRemesh(clay, tex ? [tex] : []); clay = c.clay; tex = tex ? c.others[0] : undefined; stats.cleanup = c.stats; }); snapshot('cleanup'); }
         if (lattice) {
             const skip = new Set(input.skipFacades ?? []);
-            const l = step('lattice', () => rebuildFacadesOnLattice(clay, tex, input.orthosDir!, FACADE_LATTICE_PARAMS, skip, { stitch: input.seal === true, photoRecess: input.photoRecess === true, ...(input.windowFit ? { windowFit: input.windowFit } : {}), ...(input.wallGrammar ? { wallGrammar: input.wallGrammar } : {}), ...(input.rawScan ? { rawScan: input.rawScan } : {}), ...(input.walls ? { walls: input.walls } : {}), ...(input.revealDepth ? { revealDepth: input.revealDepth } : {}), ...(input.latticeCut && input.seal !== true ? { cut: true } : {}) }));
+            const l = step('lattice', () => rebuildFacadesOnLattice(clay, tex, input.orthosDir!, FACADE_LATTICE_PARAMS, skip, { stitch: input.seal === true, photoRecess: input.photoRecess === true, ...(input.windowFit ? { windowFit: input.windowFit } : {}), ...(input.wallGrammar ? { wallGrammar: input.wallGrammar } : {}), ...(input.rawScan ? { rawScan: input.rawScan } : {}), ...(input.walls ? { walls: input.walls } : {}), ...(input.revealDepth ? { revealDepth: input.revealDepth } : {}), ...(input.latticeCut && input.seal !== true ? { cut: true } : input.photoRecess === true && input.seal !== true ? { edgeCut: true } : {}) }));
             clay = l.clay; tex = l.textured ?? tex; stats.lattice = l.stats; snapshot('lattice');
         }
         if (input.base) {

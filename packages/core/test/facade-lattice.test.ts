@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { applyFacadeLattices, facadeSamples, latticeFacade, photoLattice, rebuildFacadesOnLattice, STRUCTURE, structureExtras, windowBays, windowGrid, windowStrips, WINDOW_STRIPS, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
+import { applyFacadeLattices, FACADE_LATTICE_PARAMS, facadeSamples, wallBacks, latticeFacade, photoLattice, rebuildFacadesOnLattice, STRUCTURE, structureExtras, windowBays, windowGrid, windowStrips, WINDOW_STRIPS, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
 import { assembleGlb, parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { cutScanToLattice, LATTICE_STITCH_PARAMS } from '../src/node/3d-engine/staged-location/pipeline-k/lattice-stitch';
@@ -372,6 +372,72 @@ describe('facades on their photo lattice', () => {
         expect(out.tears.droppedFacades).toEqual([]);
     });
 
+    it("takes off the scan of a wall's back (its inner shell 0.27 m in front, facing in) with the front's rebuild, which alone keeps it", () => {
+        // the scan's inner shell: two long triangles across the whole facade and past it, 0.27 m in front, wound to face -z (into the building)
+        const front = scan();
+        const r = latticeFacade(f, photo(), facadeSamples(front, f))!;
+        const shell = Float32Array.from([-1, -1, 0.27, -1, 10, 0.27, 13, 10, 0.27, -1, -1, 0.27, 13, 10, 0.27, 13, -1, 0.27]);
+        const soup = new Float32Array(front.length + shell.length); soup.set(front); soup.set(shell, front.length);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-'));
+        const file = path.join(dir, 'clay.glb');
+        writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
+        const back: ReliefFacade = { ...f, facadeId: 8, image: 'b.png', centroid: [6, 4.5, 0.27], normal: [0, 0, -1], axisS: [-1, 0, 0], sMin: -7, sMax: 7, tMin: -5.5, tMax: 5.5, orthoSMin: -7, orthoTMax: 5.5 };
+        const shellLive = (backScan?: Array<{ back: ReliefFacade; front: number }>) => {
+            const out = applyFacadeLattices(fs.readFileSync(file), [{ f, r }], false, undefined, backScan ? { backScan } : {});
+            const t = readGlbTriangles(out.glb);
+            let n = 0;
+            for (let k = front.length / 9; k < soup.length / 9; k++) { const i = k * 3; if (!(t.indices[i] === t.indices[i + 1] && t.indices[i + 1] === t.indices[i + 2])) n++; }
+            return n;
+        };
+        // reaching past the rebuilt cells, the shell stays under the coverage rule; as the wall's back it goes, no tear opening
+        expect(shellLive()).toBe(2);
+        expect(shellLive([{ back, front: f.facadeId }])).toBe(0);
+        // a back whose front is not rebuilt here takes nothing
+        expect(shellLive([{ back, front: 99 }])).toBe(2);
+    });
+
+    it('takes off a tile triangle facing the facade that lies mostly over its rebuilt cells, reaching a little past its edge', () => {
+        // each storey band one pair of long triangles across the whole facade and 0.6 m past its left edge (into the next wall),
+        // the photo covering all of the facade: about 95% of each triangle over rebuilt cells
+        const pos: number[] = [];
+        for (let t = 0; t < 9; t += 3) pos.push(-0.6, t, 0, 12, t, 0, 12, t + 3, 0, -0.6, t, 0, 12, t + 3, 0, -0.6, t + 3, 0);
+        const soup = Float32Array.from(pos);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-mostly-'));
+        try {
+            fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades: [f] }));
+            fs.writeFileSync(path.join(dir, f.image), encodePng(W, H, photo().rgba, 4));
+            const file = path.join(dir, 'clay.glb');
+            writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
+            // whole, each reaches 0.6 m past the edge (a gap there if it went): all stay, on the wall plane in front of the recesses
+            const whole = rebuildFacadesOnLattice(fs.readFileSync(file), undefined, dir);
+            expect(whole.stats.rebuilt).toBe(1);
+            expect(whole.stats.removedTriangles).toBe(0);
+            // split 0.3 m inside the facade's edges: the pieces over it go, the 0.3 m strip inside the edge and the 0.6 m beyond stay
+            const edge = rebuildFacadesOnLattice(fs.readFileSync(file), undefined, dir, undefined, undefined, { edgeCut: true });
+            expect(edge.stats.edgeCut!.cutTriangles).toBe(6);
+            expect(edge.stats.removedTriangles).toBeGreaterThan(0);
+            expect(edge.stats.tears.left).toBe(0);
+            let over = 0, beyond = 0, rimArea = 0;
+            const t = readGlbTriangles(edge.clay);
+            const g = parseGlbBytes(edge.clay), lattice = new Set((g.json.nodes ?? []).filter((n: any) => n.extras?.sbFacadeLattice).map((n: any) => n.mesh));
+            (g.json.meshes ?? []).forEach((m: any, mi: number) => { if (lattice.has(mi)) return; for (const p of m.primitives) {
+                const X = readAccessor(g, p.attributes.POSITION).data, I = readAccessor(g, p.indices).data;
+                for (let i = 0; i + 2 < I.length; i += 3) {
+                    if (I[i] === I[i + 1] && I[i + 1] === I[i + 2]) continue;
+                    const a = I[i] * 3, b = I[i + 1] * 3, c = I[i + 2] * 3, cs = (X[a] + X[b] + X[c]) / 3, ct = (X[a + 1] + X[b + 1] + X[c + 1]) / 3;
+                    const A = Math.abs((X[b] - X[a]) * (X[c + 1] - X[a + 1]) - (X[c] - X[a]) * (X[b + 1] - X[a + 1])) / 2;
+                    if (cs < 0) beyond += A; else if (cs > 0.3 && cs < 11.7 && ct > 0.3 && ct < 8.7) over += A; else rimArea += A;
+                }
+            } });
+            expect(t.indices.length).toBeGreaterThan(0);
+            // of the facade's interior (more than edgeInsetM from its edges), at most a few small pieces put back for angled slits
+            expect(over).toBeLessThan(3 * FACADE_LATTICE_PARAMS.obliqueRestoreMaxM2);
+            // the 0.6 m beyond the left edge and the 0.3 m strip inside it (kept to close the crack there) stay: 0.9 m x 9 m at least
+            expect(beyond + rimArea).toBeGreaterThan(0.9 * 9 - 0.05);
+            expect(beyond).toBeGreaterThan(0);
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
     it('with the cut (pipeline K), takes the scan off the rebuilt cells even where its triangles reach past them, and keeps it beyond', () => {
         // the scan as a tile mesh is: each storey band one pair of long triangles across the whole facade, the photo's right third uncovered
         const img = photo();
@@ -517,6 +583,33 @@ describe('facade lattices on a district-sized remesh', () => {
         expect(back.json.meshes).toHaveLength(2);
         const idx = new Uint32Array(back.bin.buffer.slice(back.bin.byteOffset + 36, back.bin.byteOffset + 48));
         expect(Array.from(idx)).toEqual([0, 0, 0]);
+    });
+});
+
+describe('a wall\'s back is not rebuilt (wallBacks)', () => {
+    const fac = (facadeId: number, centroid: number[], normal: number[], axisS: number[], w = 20, h = 20): ReliefFacade => ({
+        facadeId, image: `f${facadeId}.png`, centroid, normal, axisS, axisT: [0, 1, 0], sMin: -w / 2, sMax: w / 2, tMin: -h / 2, tMax: h / 2,
+        pixel: 0.1, width: w * 10, height: h * 10, orthoSMin: -w / 2, orthoTMax: h / 2, coverage: 1
+    });
+    // a 40 x 40 m building: walls on x = +-20 and z = +-20, facing out
+    const walls = [fac(1, [20, 10, 0], [1, 0, 0], [0, 0, -1], 40), fac(2, [-20, 10, 0], [-1, 0, 0], [0, 0, 1], 40), fac(3, [0, 10, 20], [0, 0, 1], [1, 0, 0], 40), fac(4, [0, 10, -20], [0, 0, -1], [-1, 0, 0], 40)];
+
+    it('drops the inner shell standing 0.27 m outside a wall and facing it, keeps the wall', () => {
+        const shell = fac(5, [20.27, 10, 2], [-1, 0, 0], [0, 0, 1], 24);
+        expect([...wallBacks([...walls, shell])]).toEqual([[5, 1]]);
+    });
+
+    it('keeps both faces of a thin wall (back to back) and a facade facing it from across a street', () => {
+        // a parapet: its outer face on x = 20 facing out, its inner face 0.3 m inside it facing in (back to back)
+        const inner = fac(6, [19.7, 10, 0], [-1, 0, 0], [0, 0, 1], 40);
+        // a neighbour's wall 12 m across the street, facing the building
+        const across = fac(7, [32, 10, 0], [-1, 0, 0], [0, 0, 1], 40);
+        expect(wallBacks([...walls, inner, across]).size).toBe(0);
+    });
+
+    it('keeps a face-to-face pair that barely overlaps', () => {
+        const aside = fac(8, [20.2, 10, 35], [-1, 0, 0], [0, 0, 1], 20);
+        expect(wallBacks([...walls, aside]).size).toBe(0);
     });
 });
 

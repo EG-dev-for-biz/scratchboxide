@@ -32,15 +32,32 @@ import type { RectifyJob, RectifyMessage } from './ortho-rectify-worker';
 import { encodePng } from '../png-encode';
 import { stagedBuildingPipelineEnv } from '../staged-switches';
 
-/** The featureless photo refilled region by region: regions found, filled (each from one source at one shift), their texels, and the texels kept as photographed. */
-export interface ContinuedFill { regions: number; filled: number; texels: number; fromFacades: Record<string, number>; kept: number; sources: Array<{ texels: number; from: number; shiftM: number; ringDiff: number }> }
+/**
+ * The featureless (and large dark) photo refilled region by region: regions found, filled (each from one source at one
+ * shift), their texels, the texels kept as photographed; of them, the dark texels and those carried over from a facade
+ * facing the other way.
+ */
+export interface ContinuedFill { regions: number; filled: number; texels: number; fromFacades: Record<string, number>; kept: number; sources: Array<{ texels: number; from: number; shiftM: number; ringDiff: number; opposite?: boolean }>; dark?: number; fromOpposite?: number }
 
 /** A straightened facade photo with its masks: where the photo never reached, and where it is a smear (featureless). */
-export interface FacadeImage { f: ReliefFacade; rgba: Uint8Array; width: number; height: number; uncovered?: Uint8Array; featureless?: Uint8Array }
+export interface FacadeImage { f: ReliefFacade; rgba: Uint8Array; width: number; height: number; uncovered?: Uint8Array; featureless?: Uint8Array; /** Set by continueFeatureless: its large dark regions. */ dark?: Uint8Array }
 
 export const CONTINUE_FEATURELESS = {
-    /** Sources: the facade itself and every other facade whose normal is within this |cos| on the same side (never mirrored). */
-    facingCos: 0.9,
+    /**
+     * Sources: the facade itself and every other facade whose normal is within this |cos| on the same side; where none covers
+     * a region, a facade facing the other way (the building's opposite side, user decision 2026-11-04), read left to right as
+     * seen from outside it as the target is (never mirrored).
+     */
+    facingCos: 0.9, opposite: true,
+    /**
+     * Dark photo (a wall a neighbour shaded, or a capture that never lit it: the de-light lifts it to a grey haze with no
+     * windows): refilled as a smear is, where the luma smoothed over darkSmoothM is under darkRatio of the facade's own
+     * light photo (its darkLightPercentile luma), in regions of at least darkMinM2 and darkMinSideM on both sides, shaped as a
+     * shade falls: from a side of the facade (within darkEdgeM of its left or right edge) over at least darkMinHeight of its
+     * height. A dark feature inside the wall (a window, an entrance bay, a shopfront band) has wall beside it and stays; a
+     * facade dark all over (a dark material) has no light photo to fall short of.
+     */
+    darkSmoothM: 2, darkRatio: 0.45, darkLightPercentile: 0.75, darkMinM2: 25, darkMinSideM: 4, darkEdgeM: 2, darkMinHeight: 0.5,
     /** The ring around a region its source is aligned on (m), and how many of its texels are compared (an even sample). */
     ringM: 1, ringSamples: 400,
     /** How many of the region's texels the cover check samples. */
@@ -52,9 +69,10 @@ export const CONTINUE_FEATURELESS = {
 };
 
 /**
- * Featureless photo (a smear on a wall the photo did not see) refilled region by region, each region from one source at one
- * alignment, so its piers and windows run on unbroken: the region's texels mapped by their points on the wall into a source
- * photo (the facade itself, or another facing the same way, never mirrored), at the same height (never shifted up or down)
+ * Featureless photo (a smear on a wall the photo did not see) and large dark photo (a wall a neighbour shaded or a capture
+ * never lit) refilled region by region, each region from one source at one alignment, so its piers and windows run on unbroken:
+ * the region's texels mapped by their points on the wall into a source photo (the facade itself, or another facing the same
+ * way; where none covers it, one facing the other way, read as seen from outside it), at the same height (never shifted up or down)
  * and shifted along the wall by the amount that best matches the real photo in a ring around the region (mean absolute luma
  * difference); a source repeats along the wall past its edges. The source and shift with the best ring match among those
  * holding real photo over at least minCover of the region are copied in whole; a region no source covers keeps its photo.
@@ -66,15 +84,24 @@ export function continueFeatureless(images: Map<number, FacadeImage>, P = CONTIN
     const src = new Map([...images].map(([id, x]) => [id, Uint8Array.from(x.rgba)]));
     const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     const luma = (a: Uint8Array, j: number) => 0.299 * a[j * 4] + 0.587 * a[j * 4 + 1] + 0.114 * a[j * 4 + 2];
+    // every facade's dark regions first (a dark texel is never copied onto another facade)
+    for (const x of images.values()) x.dark = darkRegions(x, P);
+    const real = (g: FacadeImage, j: number) => src.get(g.f.facadeId)![j * 4 + 3] > 0 && !g.uncovered?.[j] && !g.featureless?.[j] && !g.dark?.[j];
     for (const [id, x] of images) {
-        const { f, rgba, width: W, height: H, featureless } = x;
+        const { f, rgba, width: W, height: H } = x;
+        // the texels to refill: the smear, and the large dark regions
+        const dark = x.dark!;
+        const nDark = dark.reduce((a, v) => a + v, 0);
+        const featureless = x.featureless || nDark ? Uint8Array.from({ length: W * H }, (_, i) => (x.featureless?.[i] || dark[i] ? 1 : 0)) : undefined;
         if (!featureless?.some(v => v)) continue;
-        const real = (g: FacadeImage, j: number) => src.get(g.f.facadeId)![j * 4 + 3] > 0 && !g.uncovered?.[j] && !g.featureless?.[j];
         const rep: ContinuedFill = { regions: 0, filled: 0, texels: 0, fromFacades: {}, kept: 0, sources: [] };
+        if (nDark) rep.dark = nDark;
         const sources = [...images.values()].filter(g => dot(g.f.normal, f.normal) >= P.facingCos);
+        const opposites = P.opposite ? [...images.values()].filter(g => dot(g.f.normal, f.normal) <= -P.facingCos) : [];
         // a texel's point on the wall, in a source's frame: its s (along) and its row (height)
         const pointOf = (i: number) => { const px = i % W, py = (i - px) / W, s = f.orthoSMin + (px + 0.5) * f.pixel, t = f.orthoTMax - (py + 0.5) * f.pixel; return [0, 1, 2].map(k => f.centroid[k] + s * f.axisS[k] + t * f.axisT[k]); };
-        const inSource = (g: FacadeImage, p: number[]) => { const q = [0, 1, 2].map(k => p[k] - g.f.centroid[k]); return { s: dot(q, g.f.axisS), gy: Math.floor((g.f.orthoTMax - dot(q, g.f.axisT)) / g.f.pixel) }; };
+        // a facade facing the other way is read as seen from outside it, left to right as this one is: along the wall reversed
+        const inSource = (g: FacadeImage, p: number[]) => { const q = [0, 1, 2].map(k => p[k] - g.f.centroid[k]); return { s: (opposites.includes(g) ? -1 : 1) * dot(q, g.f.axisS), gy: Math.floor((g.f.orthoTMax - dot(q, g.f.axisT)) / g.f.pixel) }; };
         const sample = (g: FacadeImage, at: { s: number; gy: number }, shiftM: number) => {
             if (at.gy < 0 || at.gy >= g.height) return -1;
             const gx = Math.floor((at.s + shiftM - g.f.orthoSMin) / g.f.pixel), wx = ((gx % g.width) + g.width) % g.width;
@@ -106,7 +133,9 @@ export function continueFeatureless(images: Map<number, FacadeImage>, P = CONTIN
             const regionPick = region.filter((_, k) => k % Math.max(1, Math.ceil(region.length / P.coverSamples)) === 0);
             const ringAt = ringPick.map(pointOf), regionAt = regionPick.map(pointOf);
             let best: { g: FacadeImage; shiftM: number; diff: number } | undefined;
-            for (const g of sources) {
+            for (const g of [...sources, ...opposites]) {
+                // the other side only where no facade facing this way covers the region
+                if (best && opposites.includes(g)) break;
                 const a = src.get(g.f.facadeId)!, ringIn = ringAt.map(p => inSource(g, p)), regionIn = regionAt.map(p => inSource(g, p));
                 const span = g.width * g.f.pixel, step = P.shiftStepPx * g.f.pixel;
                 for (let shiftM = 0; shiftM < span; shiftM += step) {
@@ -134,14 +163,61 @@ export function continueFeatureless(images: Map<number, FacadeImage>, P = CONTIN
             }
             rep.filled++;
             rep.fromFacades[best.g.f.facadeId] = (rep.fromFacades[best.g.f.facadeId] ?? 0) + n;
-            rep.sources.push({ texels: n, from: best.g.f.facadeId, shiftM: Math.round(best.shiftM * 100) / 100, ringDiff: Math.round(best.diff * 10) / 10 });
+            const opposite = opposites.includes(best.g);
+            if (opposite) rep.fromOpposite = (rep.fromOpposite ?? 0) + n;
+            rep.sources.push({ texels: n, from: best.g.f.facadeId, shiftM: Math.round(best.shiftM * 100) / 100, ringDiff: Math.round(best.diff * 10) / 10, ...(opposite ? { opposite } : {}) });
         }
         out.set(id, rep);
     }
     return out;
 }
 
-export const PIPELINE_K_VERSION = `pipeline-k/3(${ORTHO_RECTIFY_VERSION})`;
+/**
+ * A facade's large dark regions: where its luma, box-smoothed over darkSmoothM, is under darkRatio of its light photo (the
+ * darkLightPercentile luma of its covered, unsmeared texels); 4-connected, at least darkMinM2, its bounding box at least
+ * darkMinSideM on both sides, from a side edge (darkEdgeM) over at least darkMinHeight of the facade's height.
+ */
+function darkRegions(x: FacadeImage, P: typeof CONTINUE_FEATURELESS): Uint8Array {
+    const { rgba, width: W, height: H } = x, pixel = x.f.pixel, N = W * H;
+    const out = new Uint8Array(N);
+    const ok = (i: number) => rgba[i * 4 + 3] > 0 && !x.uncovered?.[i] && !x.featureless?.[i] && !(rgba[i * 4] === 128 && rgba[i * 4 + 1] === 128 && rgba[i * 4 + 2] === 128);
+    const L = new Float64Array(N), V = new Float64Array(N);
+    const lit: number[] = [], stride = Math.max(1, Math.floor(N / 20000));
+    for (let i = 0; i < N; i++) if (ok(i)) { L[i] = 0.299 * rgba[i * 4] + 0.587 * rgba[i * 4 + 1] + 0.114 * rgba[i * 4 + 2]; V[i] = 1; if (i % stride === 0) lit.push(L[i]); }
+    if (lit.length < 20) return out;
+    lit.sort((a, b) => a - b);
+    const below = P.darkRatio * lit[Math.min(lit.length - 1, Math.floor(P.darkLightPercentile * lit.length))];
+    // box-smoothed luma over the covered texels (summed-area tables)
+    const r = Math.max(1, Math.round(P.darkSmoothM / 2 / pixel)), SL = new Float64Array((W + 1) * (H + 1)), SV = new Float64Array((W + 1) * (H + 1));
+    for (let y = 0; y < H; y++) for (let xx = 0; xx < W; xx++) { const k = (y + 1) * (W + 1) + xx + 1; SL[k] = L[y * W + xx] + SL[k - 1] + SL[k - W - 1] - SL[k - W - 2]; SV[k] = V[y * W + xx] + SV[k - 1] + SV[k - W - 1] - SV[k - W - 2]; }
+    const box = (S: Float64Array, x0: number, y0: number, x1: number, y1: number) => S[y1 * (W + 1) + x1] - S[y0 * (W + 1) + x1] - S[y1 * (W + 1) + x0] + S[y0 * (W + 1) + x0];
+    const mask = new Uint8Array(N);
+    for (let y = 0; y < H; y++) for (let xx = 0; xx < W; xx++) {
+        const i = y * W + xx;
+        if (!V[i]) continue;
+        const x0 = Math.max(0, xx - r), x1 = Math.min(W, xx + r + 1), y0 = Math.max(0, y - r), y1 = Math.min(H, y + r + 1), n = box(SV, x0, y0, x1, y1);
+        if (n > 0 && box(SL, x0, y0, x1, y1) / n < below) mask[i] = 1;
+    }
+    const seen = new Uint8Array(N);
+    for (let start = 0; start < N; start++) {
+        if (!mask[start] || seen[start]) continue;
+        const region: number[] = [], stack = [start];
+        seen[start] = 1;
+        let x0 = W, x1 = 0, y0 = H, y1 = 0;
+        while (stack.length) {
+            const i = stack.pop()!, px = i % W, py = (i - px) / W;
+            region.push(i); x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
+            for (const k of [px > 0 ? i - 1 : -1, px < W - 1 ? i + 1 : -1, i - W, i + W]) if (k >= 0 && k < N && mask[k] && !seen[k]) { seen[k] = 1; stack.push(k); }
+        }
+        if (region.length * pixel * pixel < P.darkMinM2 || (x1 - x0 + 1) * pixel < P.darkMinSideM || (y1 - y0 + 1) * pixel < P.darkMinSideM) continue;
+        // a shade from a side, over the storeys
+        if (Math.min(x0, W - 1 - x1) * pixel > P.darkEdgeM || y1 - y0 + 1 < P.darkMinHeight * H) continue;
+        for (const i of region) out[i] = 1;
+    }
+    return out;
+}
+
+export const PIPELINE_K_VERSION = `pipeline-k/4(${ORTHO_RECTIFY_VERSION})`;
 
 /** Pipeline K when the request (or SCRATCHBOX_STAGED_BUILDING_PIPELINE) asks for 'k'. */
 export function stagedPipelineK(request: { pipeline?: string }, env: NodeJS.ProcessEnv = process.env): boolean {
@@ -206,7 +282,7 @@ function runWorkers(jobs: RectifyJob[], signal?: AbortSignal): Promise<RectifyMe
 export async function rectifyReliefOrthos(srcDir: string, opts: { params?: OrthoRectifyParams; minCoverage?: number; threads?: number; signal?: AbortSignal } = {}): Promise<RectifiedOrthos> {
     const t0 = Date.now();
     const params = opts.params ?? ORTHO_RECTIFY_PARAMS, minCoverage = opts.minCoverage ?? FACADE_LATTICE_PARAMS.minCoverage;
-    const key = crypto.createHash('sha256').update(JSON.stringify({ v: PIPELINE_K_VERSION, params, minCoverage })).digest('hex').slice(0, 16);
+    const key = crypto.createHash('sha256').update(JSON.stringify({ v: PIPELINE_K_VERSION, params, minCoverage, continued: CONTINUE_FEATURELESS })).digest('hex').slice(0, 16);
     const outDir = path.join(path.dirname(srcDir), `${path.basename(srcDir)}_k_${key}`);
     const reportFile = path.join(outDir, 'rectify.json');
     if (fs.existsSync(reportFile)) {
@@ -244,7 +320,8 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
             if (fs.existsSync(path.join(srcDir, occ))) fs.copyFileSync(path.join(srcDir, occ), path.join(tmp, occ));
         }
         const reports = todo.map(f => msgs.find(m => m.facadeId === f.facadeId) ?? { facadeId: f.facadeId, error: 'no report came back' });
-        // featureless photo the facades' own repeats could not refill: continued from the nearest facade facing the same way
+        // featureless photo the facades' own repeats could not refill, and large dark photo: continued from the nearest
+        // facade facing the same way, else the one facing the other way
         const images = new Map<number, FacadeImage>();
         const mask = (name: string) => { const file = path.join(tmp, name); if (!fs.existsSync(file)) return undefined; const m = decodePng(fs.readFileSync(file)); return Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] > 127 ? 1 : 0)); };
         for (const f of todo) {
@@ -268,7 +345,7 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
             const cont = (rep.holes as typeof rep.holes & { continued?: ContinuedFill }).continued;
             const fromOthers = cont ? Object.values(cont.fromFacades).reduce((a, b) => a + b, 0) : 0;
             const filled = rep.holes.fromRepeats + rep.holes.fromStoreys + rep.holes.fromNearest + fromOthers;
-            if (filled) f.textureFill = { label: 'generated', texels: filled, share: Math.round((filled / (rep.width * rep.height)) * 10000) / 10000, method: `holes filled from the facade's own real texels: ${rep.holes.fromRepeats} at its bay pitch, ${rep.holes.fromStoreys} at its storey pitch, ${rep.holes.fromNearest} from the nearest real texel${rep.holes.featureless ? `; ${rep.holes.featureless} texels of featureless photo (a smear on a wall the photo did not see) found${cont ? `, refilled in ${cont.regions} regions, each whole from one source aligned to the photo around it (${Object.entries(cont.fromFacades).map(([k, v]) => `${Number(k) === f.facadeId ? 'its own photo' : `facade ${k}`}: ${v}`).join(', ')})${cont.kept ? `, ${cont.kept} kept as photographed (no source covers them)` : ''}` : ''}` : ''}` };
+            if (filled) f.textureFill = { label: 'generated', texels: filled, share: Math.round((filled / (rep.width * rep.height)) * 10000) / 10000, method: `holes filled from the facade's own real texels: ${rep.holes.fromRepeats} at its bay pitch, ${rep.holes.fromStoreys} at its storey pitch, ${rep.holes.fromNearest} from the nearest real texel${rep.holes.featureless || cont?.dark ? `; ${rep.holes.featureless ?? 0} texels of featureless photo (a smear on a wall the photo did not see)${cont?.dark ? ` and ${cont.dark} of dark photo (a wall a neighbour shaded or the capture never lit)` : ''} found${cont ? `, refilled in ${cont.regions} regions, each whole from one source aligned to the photo around it (${Object.entries(cont.fromFacades).map(([k, v]) => `${Number(k) === f.facadeId ? 'its own photo' : `facade ${k}`}: ${v}`).join(', ')})${cont.fromOpposite ? `, ${cont.fromOpposite} of them carried over from the building's side facing the other way (where none facing this way covers them; a guess, the photo never saw this wall)` : ''}${cont.kept ? `, ${cont.kept} kept as photographed (no source covers them)` : ''}` : ''}` : ''}` };
         }
         fs.writeFileSync(path.join(tmp, 'facades.json'), JSON.stringify(facadesJson));
         fs.writeFileSync(path.join(tmp, 'rectify.json'), JSON.stringify({ version: PIPELINE_K_VERSION, params, minCoverage, reports }, null, 1));
