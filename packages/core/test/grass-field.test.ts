@@ -201,4 +201,38 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
         // same placement whatever the blades: the clumps are the same
         expect(f.report.instances).toBe(field.report.instances);
     });
+
+    it('writes the instances in square tiles, one node per (variant, tile), each tile holding only its own clumps', () => {
+        const read = (file: string) => {
+            const glb = fs.readFileSync(file), jl = glb.readUInt32LE(12);
+            const json = JSON.parse(glb.subarray(20, 20 + jl).toString('utf8')), bin = glb.subarray(20 + jl + 8);
+            const f32 = (acc: number) => { const a = json.accessors[acc], bv = json.bufferViews[a.bufferView]; return new Float32Array(bin.buffer.slice(bin.byteOffset + bv.byteOffset, bin.byteOffset + bv.byteOffset + bv.byteLength)); };
+            return { json, f32 };
+        };
+        const tiled = path.join(tmp(), 'tiled.glb'), whole = path.join(tmp(), 'whole.glb');
+        const trisTiled = writeGrassFieldGlb(tiled, field, {}, 10), trisWhole = writeGrassFieldGlb(whole, field, {}, 0);
+        expect(trisTiled).toBe(trisWhole);
+        const t = read(tiled), w = read(whole);
+        const live = field.variants.filter(v => v.confidence.length > 0).length;
+        expect(w.json.nodes.length).toBe(live);
+        expect(t.json.meshes.length).toBe(live);
+        expect(t.json.nodes.length).toBeGreaterThan(live * 3);
+        let total = 0;
+        const seen = new Set<string>();
+        for (const node of t.json.nodes) {
+            const { i, k, sizeM } = node.extras.tile;
+            expect(sizeM).toBe(10);
+            const key = `${node.mesh}:${i},${k}`;
+            expect(seen.has(key)).toBe(false);
+            seen.add(key);
+            const tr = t.f32(node.extensions.EXT_mesh_gpu_instancing.attributes.TRANSLATION);
+            for (let q = 0; q < tr.length; q += 3) {
+                expect(Math.floor(tr[q] / 10)).toBe(i);
+                expect(Math.floor(tr[q + 2] / 10)).toBe(k);
+            }
+            expect(node.extras.instances).toBe(tr.length / 3);
+            total += tr.length / 3;
+        }
+        expect(total).toBe(field.report.instances);
+    });
 });

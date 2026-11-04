@@ -28,7 +28,7 @@ import { fetchVectorEvidence, rasterizeEvidence, rasterizeAreas } from '../../..
 import { detectGrass, grassOverlay, type GrassMask } from '../../../3d-engine/staged-location/grass-detect';
 import { classifyGround, type GroundClassification } from '../../../3d-engine/staged-location/ground-classifier';
 import { areaPriorRasters } from '../../../3d-engine/staged-location/ground-area-priors';
-import { buildGrassField, grassFieldGrid, scanTrianglesNear, writeGrassFieldGlb, GRASS_FIELD_VERSION, type GrassFieldParams } from '../../../3d-engine/staged-location/grass-field';
+import { buildGrassField, grassFieldGrid, scanTrianglesNear, writeGrassFieldGlb, GRASS_CHUNK_M, GRASS_FIELD_VERSION, type GrassFieldParams } from '../../../3d-engine/staged-location/grass-field';
 import { GltfBinaryPacker } from '../../../3d-engine/gltf-binary-packer';
 import { encodePng } from '../../../3d-engine/staged-location/png-encode';
 
@@ -49,6 +49,7 @@ export const GRASS_MAP_TOOL_DECLARATION: ToolDeclaration = {
             bladeSegments: { type: 'NUMBER', description: 'Spine segments of a near blade (default 5; fewer is cheaper and straighter).' },
             bladeFarSegments: { type: 'NUMBER', description: 'Spine segments of the widened distant blades (default 2).' },
             bladeMaxClumps: { type: 'NUMBER', description: 'Most clumps grown (default 150000); past it the nearest are kept.' },
+            bladeChunkM: { type: 'NUMBER', description: 'Side of the square tiles the grass is split into so the viewer skips the tiles out of view (default 30 m; 0 = one piece per clump shape).' },
             bladeHeightMinM: { type: 'NUMBER', description: 'Shortest blade length (default 0.06 m).' },
             bladeHeightMaxM: { type: 'NUMBER', description: 'Longest blade length (default 0.14 m). A mown lawn is a few centimetres; a meadow half a metre or more.' },
             bladeSenescence: { type: 'NUMBER', description: '0..1, how far blade tips turn toward straw (default 0.35).' },
@@ -162,7 +163,8 @@ export const grassMapHandler: ToolHandler = async (args, ctx): Promise<ToolHandl
                 colour: { label: 'photo-inferred', method: 'each instance tinted toward its cell\'s lit top-down photo colour; cells under crowns take the nearest seen grass colour' },
                 mask: { ...extras.sb.provenance }, confidence: 0.6
             };
-            const bladeTriangles = writeGrassFieldGlb(bladesFile, field, { sb: { provenance, version: GRASS_FIELD_VERSION, mask: g.version, band: { centre: [centre.x, centre.z], radiusM: bandRadiusM, radiusReachedM: field.report.stats.radiusReachedM } } });
+            const bladeChunkM = typeof args.bladeChunkM === 'number' && args.bladeChunkM >= 0 ? args.bladeChunkM : GRASS_CHUNK_M;
+            const bladeTriangles = writeGrassFieldGlb(bladesFile, field, { sb: { provenance, version: GRASS_FIELD_VERSION, mask: g.version, band: { centre: [centre.x, centre.z], radiusM: bandRadiusM, radiusReachedM: field.report.stats.radiusReachedM } } }, bladeChunkM);
             const s = field.report.stats;
             blades = { glbPath: bladesFile, instances: field.report.instances, triangles: bladeTriangles, centre: [centre.x, centre.z], centreFrom: centre.from, bandRadiusM, report: field.report, provenance };
             bladeLayer = object(`grass-blades-${stamp}`, bladesFile, { source: GRASS_MAP_TOOL_NAME, layer: 'grass-blades', isGround: false, instanceCount: field.report.instances, triangleCount: bladeTriangles, provenance });
