@@ -62,7 +62,8 @@ its height, and where the side outline touches the ground (the tyres). Keep its 
 Judge the drawing before using it:
 - **Ground contacts:** the two contact centres should be one wheelbase apart (within 3 %) at about the axle positions
   of section 3. If they are not, the side drawing is wrong: call the tool once more; if it is wrong again, build
-  from the published hardpoints and the ratios, and say the blueprint was not used.
+  from the published hardpoints and the ratios, and say the blueprint was not used. The contacts only check the
+  drawing: the axles always go at the published wheelbase (a Golf's blueprint read 2.654 m for a published 2.627).
 - **aspectError** over 0.12 on a view means its proportions were drawn wrong before scaling; trust that view's
   outline only for shape, not for heights or widths the published figures give.
 - The outlines are read from generated drawings: published figures win where they disagree, and the outlines are
@@ -216,7 +217,8 @@ is [0.62, 0.63, 0.64]). Convert sRGB as (v/255)^2.2: light silver or grey about 
   its notesText and say how to use it: the upper body's and the glasshouse's top lines follow the side top line
   station by station (one profile key per blueprint station over the bonnet, windscreen, roof and tail), the
   section widths follow the plan half widths (times 2), and the glasshouse's widths follow the front outline above
-  the beltline. Example (2025 Golf GTI; look up
+  the beltline. The A-pillar strips lie inside the front outline too: a strip wider than the cabin there reads as a
+  fin at the windscreen's corners. Example (2025 Golf GTI; look up
   the real figures for the car asked for):
 
 ```

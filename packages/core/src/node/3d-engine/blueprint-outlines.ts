@@ -16,8 +16,9 @@
  *      shown the side view so all three draw the same object; every view on one flat background colour.
  *   2. Silhouette: the background is flood-filled in from the image border (colour distance to the border's median
  *      colour), so only background that touches the border is removed; the largest remaining piece is the object.
- *   3. Scale: each silhouette's bounding box is stretched to the object's overall size (width, height, length, as
- *      given), axis by axis; how far the drawn proportions were off is reported per view (aspectError).
+ *   3. Scale: the side and front silhouettes are stretched to the object's overall size (width, height, length, as
+ *      given), axis by axis; the plan is scaled by the length alone, since a drawn overall width leans on how big
+ *      the protrusions (a car's mirrors) were drawn. How far the drawn proportions were off is reported per view.
  *   4. Outlines, in the object build frame (+Y up from the ground, +Z the object's front, X across, origin at the
  *      middle of its length and width): side top and bottom line per station along Z, plan half width per station
  *      along Z (from the top view), front half width per station up Y (from the front view).
@@ -184,8 +185,9 @@ const round3 = (v: number) => Math.round(v * 1000) / 1000;
 const stationsAlong = (from: number, to: number, count: number) => Array.from({ length: count }, (_, i) => from + (to - from) * i / (count - 1));
 
 /**
- * The outlines of the three silhouettes, scaled to sizeMeters [width, height, length]. The side and top views have
- * the front to the right; the front view is seen head on.
+ * The outlines of the three silhouettes, scaled to sizeMeters [width, height, length]: the side view stretched to the
+ * length and height, the front view to the width and height, the top view by the length alone (its width is the
+ * drawing's own). The side and top views have the front to the right; the front view is seen head on.
  */
 export function outlinesFromSilhouettes(views: { side: Silhouette; top: Silhouette; front: Silhouette }, sizeMeters: Vec3): ObjectOutlines {
     const [W, H, L] = sizeMeters;
@@ -202,11 +204,13 @@ export function outlinesFromSilhouettes(views: { side: Silhouette; top: Silhouet
         const ext = columnExtent(side, colAt(side, z));
         if (ext) sideStations.push({ z: round3(z), top: round3(yOf(ext[0], 'top')), bottom: round3(Math.max(0, yOf(ext[1], 'bottom'))) });
     }
-    const topBox = span(top.box);
+    // the plan is scaled by the length alone: stretched to the overall width, a top view that draws the mirrors small
+    // reads the whole body too wide (on a Golf GTI against its production model: 4.6 cm mean error stretched, 2.3 uniform)
+    const metresPerPlanPixel = L / span(top.box).w;
     const plan: PlanStation[] = [];
     for (const z of stationsAlong(L / 2, -L / 2, LENGTH_STATIONS)) {
         const ext = columnExtent(top, colAt(top, z));
-        if (ext) plan.push({ z: round3(z), halfWidth: round3((ext[1] - ext[0] + 1) / topBox.h * W / 2) });
+        if (ext) plan.push({ z: round3(z), halfWidth: round3((ext[1] - ext[0] + 1) * metresPerPlanPixel / 2) });
     }
     const frontBox = span(front.box);
     const frontStations: FrontStation[] = [];
