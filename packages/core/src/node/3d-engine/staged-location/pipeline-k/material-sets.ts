@@ -27,9 +27,20 @@ import { decodeImageInMemory } from '../tile-texture-transfer';
 import type { RegionClass, RegionSet } from './material-regions';
 import { CHOICE_CANDIDATES, type ChoiceCandidate, type ChoiceRow, type SetChoice } from './material-choice';
 import { finishTarget, type ClassFinish } from './material-finish';
+import { readingKey, type ModelReadingStore } from './model-readings';
 
 /** Prepared map size: a facade texel is several centimetres, so a tile of a metre or two needs few texels. */
 const PREPARED_SIZE = 256;
+
+/**
+ * A set's prepared maps kept in the model readings store (`library-prepared/<sha256>` of this version, the set and the
+ * size: PNG bytes, base64), which goes to the cache mirror and the place store with the readings: a set is fetched from
+ * the library bucket (up to 8K maps, gigabytes a district) and prepared once, and every later build, cloud chunk and
+ * machine takes its few hundred kilobytes from the store.
+ */
+export const PREPARED_VERSION = 'library-prepared/1';
+interface PreparedRecord { normal: string; orm: string }
+export const preparedKey = (id: string) => readingKey('library-prepared', [PREPARED_VERSION, id, PREPARED_SIZE]);
 
 /**
  * The finish a class is ranked toward when the vision model gives no confident reading (material-finish.ts), against the
@@ -75,9 +86,11 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
     choose?: (rows: ChoiceRow[]) => Promise<Array<SetChoice | undefined>>;
     /** Each class's finish read by the vision model (material-finish.ts), before the ranking: the roughness to rank toward and, read confidently as metal, metal sets allowed. */
     finish?: () => Promise<Array<ClassFinish | undefined>>;
+    /** Where prepared maps are kept between builds (PREPARED_VERSION): a set found there is not fetched. */
+    store?: ModelReadingStore;
 } = {}): Promise<RegionSet[]> {
     const repoRoot = opts.repoRoot ?? libraryRepoRoot();
-    let index = loadTextureLibraryIndex(repoRoot);
+    const index = loadTextureLibraryIndex(repoRoot);
     if (!index) throw new Error(`the texture library index has not been built (assets/textures/library/index.json under ${repoRoot})`);
     const notMetal = (e: TextureLibraryEntry) => !(e.metallic !== undefined && e.metallic >= REGION_FINISH.maxMetallic);
     const isMetal = (e: TextureLibraryEntry) => !notMetal(e);
@@ -90,15 +103,10 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
         try { finishes = await opts.finish(); } catch (err) { if (opts.signal?.aborted) throw err; finishWhy = `reading the classes' finish failed: ${err instanceof Error ? err.message : String(err)}`; opts.progress?.(`material regions: ${finishWhy}; every class ranked as matte, not metal`); }
     }
     const targets = classes.map((_, k) => finishTarget(finishes[k], REGION_FINISH));
-    // every set of a facade's scale is ranked by its measured colour: any not yet measured is measured first (once; cached).
-    // Best effort: when the measuring fails, the sets already measured are ranked, and the build says so
-    const unmeasured = index.sets.filter(e => wallScale(e) && !e.colour && !libraryEntryMeasured(repoRoot, e.id));
-    if (unmeasured.length) {
-        opts.progress?.(`material regions: measuring ${unmeasured.length} library sets not yet measured`);
-        try { await measureLibraryEntries(unmeasured, { repoRoot, ...(opts.signal ? { signal: opts.signal } : {}) }); }
-        catch (err) { if (opts.signal?.aborted) throw err; opts.progress?.(`material regions: ${unmeasured.length} library sets could not be measured (${err instanceof Error ? err.message : String(err)}); ranking the sets already measured`); }
-        index = loadTextureLibraryIndex(repoRoot) ?? index;
-    }
+    // every set of a facade's scale is ranked by its measured colour, measured ahead (the committed statistics,
+    // `npm run library:stats`), never the whole library inside a build: a set not yet measured is left out and counted
+    const unmeasured = index.sets.filter(e => anyScale(e) && !e.colour && !libraryEntryMeasured(repoRoot, e.id));
+    if (unmeasured.length) opts.progress?.(`material regions: ${unmeasured.length} library sets of a facade's scale are not measured yet and are left out (npm run library:stats measures them ahead)`);
     const poolAny = index.sets.filter(e => e.colour && anyScale(e)), pool = poolAny.filter(notMetal);
     const poolOf = (k: number) => (targets[k].metal ? poolAny : pool), allowed = (k: number, e: TextureLibraryEntry) => targets[k].metal || notMetal(e);
     if (!pool.length) throw new Error(`no texture library set that is not metal has a measured colour, a real size of at most ${FACADE_TILE.maxM} m and normal and roughness maps`);
@@ -165,7 +173,15 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
         const p = choices[k]?.pick?.pick, id = p ? choices[k]!.candidates[p - 1] : undefined;
         return (id && hits.find(h => h.entry.id === id)) || hits[0];
     });
-    const fetched = await fetchLibrarySets([...new Set(chosen.map(h => h.entry.id))], { repoRoot, ...(opts.signal ? { signal: opts.signal } : {}), ...(opts.progress ? { progress: opts.progress } : {}) });
+    // the prepared maps kept from an earlier build, else the set fetched and prepared now (and kept)
+    const kept = new Map<string, { normal: Uint8Array; orm: Uint8Array }>();
+    for (const id of new Set(chosen.map(h => h.entry.id))) {
+        const rec = opts.store ? await opts.store.get<PreparedRecord>(preparedKey(id)) : undefined;
+        if (rec?.normal && rec.orm) kept.set(id, { normal: Buffer.from(rec.normal, 'base64'), orm: Buffer.from(rec.orm, 'base64') });
+    }
+    const toFetch = [...new Set(chosen.map(h => h.entry.id))].filter(id => !kept.has(id));
+    if (kept.size) opts.progress?.(`material regions: ${kept.size} sets' prepared maps kept from earlier builds${toFetch.length ? `, ${toFetch.length} fetched` : ''}`);
+    const fetched = !toFetch.length ? { sets: [], missing: [] } : await fetchLibrarySets(toFetch, { repoRoot, ...(opts.signal ? { signal: opts.signal } : {}), ...(opts.progress ? { progress: opts.progress } : {}) });
     if (fetched.missing.length) throw new Error(`texture library: ${fetched.missing.map(m => m.reason).join('; ')}`);
     const prepared = new Map<string, { normal: string; orm: string }>();
     const todo: Array<{ id: string; out: string; maps: Record<string, string> }> = [];
@@ -192,15 +208,20 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         fs.rmSync(jobs, { force: true });
         if (!run.success) throw new Error(`preparing the library maps failed: ${run.stderr || run.errorDetails}`);
     }
+    for (const [id, files] of prepared) {
+        const maps = { normal: fs.readFileSync(files.normal), orm: fs.readFileSync(files.orm) };
+        kept.set(id, maps);
+        opts.store?.put(preparedKey(id), { normal: maps.normal.toString('base64'), orm: maps.orm.toString('base64') } satisfies PreparedRecord);
+    }
     return chosen.map((hit, k) => {
-        const files = prepared.get(hit.entry.id)!;
+        const maps = kept.get(hit.entry.id)!;
         return {
             name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
             ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), roughness: targets[k].roughness, metallic: targets[k].metallic, label: 'photo-inferred' as const } } : {}),
             ...(targets[k].metal && isMetal(hit.entry) ? { metal: true } : {}),
             ...(choices[k] ? { choice: { candidates: choices[k]!.candidates, by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick?.seen ? { seen: choices[k]!.pick!.seen } : {}), ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}), ...(choices[k]!.pick?.reused ? { reused: choices[k]!.pick!.reused } : {}), ...(choices[k]!.why ? { why: choices[k]!.why } : {}) } } : {}),
             ...(textured.has(k) ? { harvest: { ...textured.get(k)!, classEnergy: classes[k].texture!.energy, texelM: classes[k].texture!.texelM, grain: `generated: the set's detail finer than the tile's ${Math.round(classes[k].texture!.texelM * 100)} cm texel is its own, below the tile's resolution` } } : {}),
-            normal: decodeImageInMemory(fs.readFileSync(files.normal)), orm: decodeImageInMemory(fs.readFileSync(files.orm))
+            normal: decodeImageInMemory(maps.normal), orm: decodeImageInMemory(maps.orm)
         };
     });
 }
