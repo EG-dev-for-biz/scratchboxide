@@ -44,7 +44,7 @@ const TOOL = 'nano_banana_apply_color_palette';
  * Reads an input image for an image-model call: a data URI, an http(s) URL, or a file path (relative paths resolve
  * against the workspace). `tool` and `arg` name the caller in the error when the image cannot be read.
  */
-async function loadInputImage(
+export async function loadInputImage(
     ref: string,
     workspaceRoot: string | undefined,
     signal: AbortSignal | undefined,

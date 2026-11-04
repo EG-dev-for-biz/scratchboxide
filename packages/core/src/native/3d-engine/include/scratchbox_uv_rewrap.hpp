@@ -965,29 +965,34 @@ inline double boxDist2(const Bvh::Node& n, const V3& p) {
 
 }  // namespace detail
 
-/**
- * Bakes every slot of `source` into the atlas of `target`. In same-mesh mode (`transfer` false) `source` shares the
- * target's triangles and vertices (its uv/tan/nrm arrays are per target vertex); in transfer mode it is another mesh.
- */
-inline BakeResult bake(const BakeMesh& target, const std::vector<float>& targetUvPx, const BakeMesh& source,
-                       const std::vector<std::vector<MaterialSlot>>& materials, const std::vector<Image>& images, const BakeParams& prm) {
-    using clock = std::chrono::steady_clock;
-    BakeResult res;
-    const uint32_t W = prm.width, H = prm.height;
-    const size_t N = size_t(W) * H;
-    const size_t S = prm.slotKind.size();
-    const uint32_t Vt = target.vertexCount(), Vs = source.vertexCount();
-    const size_t Tt = target.idx.size() / 3;
+/** Which triangle answers each atlas texel, and where in it: the bake's raster, shared with passes that shade the same atlas. */
+struct TexelRaster {
+    std::vector<int32_t> owner;   // triangle per texel, -1 empty
+    std::vector<float> bary;      // 2 per texel (b0, b1; b2 = 1 - b0 - b1)
+    std::vector<uint8_t> state;   // 0 empty, 1 interior, 2 edge ring
+    uint64_t interior = 0, edge = 0;
+};
 
-    // 1. raster: owner triangle and barycentrics per texel (interior texels win over the closest-point ring)
-    auto ta = clock::now();
-    std::vector<int32_t> owner(N, -1);
-    std::vector<float> bary(N * 2, 0.0f);
+/**
+ * Rasters triangles `idx` at UVs `uvPx` (texels, 2 per vertex) into a W x H atlas: interior texels take the triangle
+ * whose barycentrics are most inside, and texels outside every triangle but within `ring` texels of one take its
+ * closest point (an exact gutter ring).
+ */
+inline TexelRaster rasterTexels(const std::vector<uint32_t>& idx, const std::vector<float>& uvPx, uint32_t W, uint32_t H, double ring) {
+    const size_t N = size_t(W) * H;
+    const size_t Tt = idx.size() / 3;
+    TexelRaster r;
+    r.owner.assign(N, -1);
+    r.bary.assign(N * 2, 0.0f);
+    r.state.assign(N, 0);
+    std::vector<int32_t>& owner = r.owner;
+    std::vector<float>& bary = r.bary;
+    std::vector<uint8_t>& state = r.state;
     std::vector<float> score(N, -1e30f);
-    std::vector<uint8_t> state(N, 0);  // 0 empty, 1 interior, 2 edge ring, 3 dilated
-    const double ring = std::max(0.0, prm.edgeTexels);
+    ring = std::max(0.0, ring);
+    const std::vector<float>& targetUvPx = uvPx;
     for (size_t t = 0; t < Tt; ++t) {
-        const uint32_t ia = target.idx[t * 3], ib = target.idx[t * 3 + 1], ic = target.idx[t * 3 + 2];
+        const uint32_t ia = idx[t * 3], ib = idx[t * 3 + 1], ic = idx[t * 3 + 2];
         const double A[2] = {targetUvPx[ia * 2], targetUvPx[ia * 2 + 1]}, B[2] = {targetUvPx[ib * 2], targetUvPx[ib * 2 + 1]}, C[2] = {targetUvPx[ic * 2], targetUvPx[ic * 2 + 1]};
         const double den = (B[1] - C[1]) * (A[0] - C[0]) + (C[0] - B[0]) * (A[1] - C[1]);
         if (std::fabs(den) < 1e-14) continue;
@@ -1022,7 +1027,82 @@ inline BakeResult bake(const BakeMesh& target, const std::vector<float>& targetU
             }
         }
     }
-    for (size_t i = 0; i < N; ++i) { if (state[i] == 1) ++res.interiorTexels; else if (state[i] == 2) ++res.edgeTexels; }
+    for (size_t i = 0; i < N; ++i) { if (state[i] == 1) ++r.interior; else if (state[i] == 2) ++r.edge; }
+    return r;
+}
+
+/**
+ * Fills the gutter of every slot: texels with `filled` set are kept, the rest within `gutter` texels of them take the
+ * mean of their filled 8-neighbours (one ring per pass), and whatever is left takes the slot's mean (a flat normal for
+ * normal slots) so mipmaps never bleed towards black. Returns {dilated texels, empty texels}.
+ */
+inline std::pair<uint64_t, uint64_t> dilateSlots(std::vector<std::vector<uint8_t>>& slots, std::vector<uint8_t> filled, uint32_t W, uint32_t H,
+                                                 uint32_t gutter, const std::vector<uint32_t>& slotKind) {
+    const size_t N = size_t(W) * H;
+    const size_t S = slots.size();
+    uint64_t dilated = 0, empty = 0;
+    std::vector<uint32_t> add;
+    for (uint32_t pass = 0; pass < gutter; ++pass) {
+        add.clear();
+        for (uint32_t y = 0; y < H; ++y) for (uint32_t x = 0; x < W; ++x) {
+            const size_t i = size_t(y) * W + x;
+            if (filled[i]) continue;
+            for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
+                int xx = int(x) + dx, yy = int(y) + dy;
+                if ((dx || dy) && xx >= 0 && yy >= 0 && xx < int(W) && yy < int(H) && filled[size_t(yy) * W + xx] == 1) { add.push_back(static_cast<uint32_t>(i)); dy = 2; break; }
+            }
+        }
+        for (uint32_t i : add) {
+            const int x = int(i % W), y = int(i / W);
+            for (size_t s = 0; s < S; ++s) {
+                double acc[4] = {0, 0, 0, 0}; int n = 0;
+                for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
+                    int xx = x + dx, yy = y + dy;
+                    if ((dx || dy) && xx >= 0 && yy >= 0 && xx < int(W) && yy < int(H) && filled[size_t(yy) * W + xx] == 1) {
+                        const uint8_t* q = &slots[s][(size_t(yy) * W + xx) * 4];
+                        for (int k = 0; k < 4; ++k) acc[k] += q[k];
+                        ++n;
+                    }
+                }
+                for (int k = 0; k < 4; ++k) slots[s][size_t(i) * 4 + k] = static_cast<uint8_t>(std::lround(acc[k] / std::max(n, 1)));
+            }
+        }
+        for (uint32_t i : add) filled[i] = 1;
+        dilated += add.size();
+    }
+    for (size_t s = 0; s < S; ++s) {
+        double mean[4] = {0, 0, 0, 0}; uint64_t n = 0;
+        for (size_t i = 0; i < N; ++i) if (filled[i]) { for (int k = 0; k < 4; ++k) mean[k] += slots[s][i * 4 + k]; ++n; }
+        uint8_t m[4];
+        for (int k = 0; k < 4; ++k) m[k] = static_cast<uint8_t>(n ? std::lround(mean[k] / n) : 0);
+        if (s < slotKind.size() && slotKind[s] == kSlotNormal) { m[0] = 128; m[1] = 128; m[2] = 255; m[3] = 255; }
+        for (size_t i = 0; i < N; ++i) if (!filled[i]) std::copy(m, m + 4, &slots[s][i * 4]);
+    }
+    for (size_t i = 0; i < N; ++i) if (!filled[i]) ++empty;
+    return {dilated, empty};
+}
+
+/**
+ * Bakes every slot of `source` into the atlas of `target`. In same-mesh mode (`transfer` false) `source` shares the
+ * target's triangles and vertices (its uv/tan/nrm arrays are per target vertex); in transfer mode it is another mesh.
+ */
+inline BakeResult bake(const BakeMesh& target, const std::vector<float>& targetUvPx, const BakeMesh& source,
+                       const std::vector<std::vector<MaterialSlot>>& materials, const std::vector<Image>& images, const BakeParams& prm) {
+    using clock = std::chrono::steady_clock;
+    BakeResult res;
+    const uint32_t W = prm.width, H = prm.height;
+    const size_t N = size_t(W) * H;
+    const size_t S = prm.slotKind.size();
+    const uint32_t Vt = target.vertexCount(), Vs = source.vertexCount();
+
+    // 1. raster: owner triangle and barycentrics per texel (interior texels win over the closest-point ring)
+    auto ta = clock::now();
+    TexelRaster raster = rasterTexels(target.idx, targetUvPx, W, H, prm.edgeTexels);
+    const std::vector<int32_t>& owner = raster.owner;
+    const std::vector<float>& bary = raster.bary;
+    std::vector<uint8_t>& state = raster.state;
+    res.interiorTexels = raster.interior;
+    res.edgeTexels = raster.edge;
     res.msRaster = std::chrono::duration<double, std::milli>(clock::now() - ta).count();
 
     // 2. transfer: BVH over the source
@@ -1180,44 +1260,9 @@ inline BakeResult bake(const BakeMesh& target, const std::vector<float>& targetU
     auto td = clock::now();
     std::vector<uint8_t> filled(N);
     for (size_t i = 0; i < N; ++i) filled[i] = state[i] ? 1 : 0;
-    std::vector<uint32_t> add;
-    for (uint32_t pass = 0; pass < prm.gutter; ++pass) {
-        add.clear();
-        for (uint32_t y = 0; y < H; ++y) for (uint32_t x = 0; x < W; ++x) {
-            const size_t i = size_t(y) * W + x;
-            if (filled[i]) continue;
-            for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
-                int xx = int(x) + dx, yy = int(y) + dy;
-                if ((dx || dy) && xx >= 0 && yy >= 0 && xx < int(W) && yy < int(H) && filled[size_t(yy) * W + xx] == 1) { add.push_back(static_cast<uint32_t>(i)); dy = 2; break; }
-            }
-        }
-        for (uint32_t i : add) {
-            const int x = int(i % W), y = int(i / W);
-            for (size_t s = 0; s < S; ++s) {
-                double acc[4] = {0, 0, 0, 0}; int n = 0;
-                for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
-                    int xx = x + dx, yy = y + dy;
-                    if ((dx || dy) && xx >= 0 && yy >= 0 && xx < int(W) && yy < int(H) && filled[size_t(yy) * W + xx] == 1) {
-                        const uint8_t* q = &res.slots[s][(size_t(yy) * W + xx) * 4];
-                        for (int k = 0; k < 4; ++k) acc[k] += q[k];
-                        ++n;
-                    }
-                }
-                for (int k = 0; k < 4; ++k) res.slots[s][size_t(i) * 4 + k] = static_cast<uint8_t>(std::lround(acc[k] / std::max(n, 1)));
-            }
-        }
-        for (uint32_t i : add) filled[i] = 1;
-        res.dilatedTexels += add.size();
-    }
-    for (size_t s = 0; s < S; ++s) {
-        double mean[4] = {0, 0, 0, 0}; uint64_t n = 0;
-        for (size_t i = 0; i < N; ++i) if (filled[i]) { for (int k = 0; k < 4; ++k) mean[k] += res.slots[s][i * 4 + k]; ++n; }
-        uint8_t m[4];
-        for (int k = 0; k < 4; ++k) m[k] = static_cast<uint8_t>(n ? std::lround(mean[k] / n) : 0);
-        if (prm.slotKind[s] == kSlotNormal) { m[0] = 128; m[1] = 128; m[2] = 255; m[3] = 255; }
-        for (size_t i = 0; i < N; ++i) if (!filled[i]) std::copy(m, m + 4, &res.slots[s][i * 4]);
-    }
-    for (size_t i = 0; i < N; ++i) if (!filled[i]) ++res.emptyTexels;
+    const auto [dilated, empty] = dilateSlots(res.slots, std::move(filled), W, H, prm.gutter, prm.slotKind);
+    res.dilatedTexels = dilated;
+    res.emptyTexels = empty;
     res.msDilate = std::chrono::duration<double, std::milli>(clock::now() - td).count();
     (void)Vt;
     return res;

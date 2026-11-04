@@ -227,6 +227,8 @@ export interface CloudChunkConfig {
     pollMs: number;
     /** Polls of the execution's state that may fail in a row (the API out of reach a moment) before the chunk is failed. */
     pollMisses: number;
+    /** Tries of each download of the job's outcome and layers before the chunk is failed. */
+    downloadAttempts: number;
 }
 
 /** The runner's settings: SCRATCHBOX_KD_CLOUD_{PROJECT,REGION,JOB,BUCKET}, defaults scoutscan / us-central1 / kd-chunk-job / scoutscan-kd-jobs. */
@@ -240,7 +242,8 @@ export function cloudChunkConfig(env: NodeJS.ProcessEnv = process.env): CloudChu
         vcpu: 8,
         memGiB: 32,
         pollMs: 10_000,
-        pollMisses: 12
+        pollMisses: 12,
+        downloadAttempts: 4
     };
 }
 
@@ -335,6 +338,20 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
         return sent;
     };
 
+    // the executions that built their chunk, by job prefix: a chunk asked for again after its download failed is not built again
+    const built = new Map<string, { execution: string; runId: string; state: CloudExecution }>();
+    // a download cut off (the network out of reach a moment, this machine too loaded to keep up) is tried again, after a
+    // wait growing with each try, before the chunk fails: the job built it, and building it again costs a whole job
+    const download = async (key: string, file: string, signal?: AbortSignal): Promise<boolean> => {
+        for (let attempt = 1; ; attempt++) {
+            try { return await o.bucket.download(key, file); } catch (err) {
+                if (signal?.aborted || attempt >= config.downloadAttempts) throw err;
+                log(`[kd-cloud] downloading ${key} failed (${err instanceof Error ? err.message : String(err)}); tried again (${attempt} of ${config.downloadAttempts})`);
+                await sleep(config.pollMs * attempt, signal);
+            }
+        }
+    };
+
     return async (request, opts) => {
         const signal = opts.signal;
         const progress = (m: string) => opts.onProgress?.(m);
@@ -343,62 +360,70 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
         const prefix = kdChunkJobPrefix(request);
         await libraryStatsSent(request.chunk!.of);
         const keys = kdChunkJobKeys(prefix);
-        const runId = (o.newRunId ?? (() => crypto.randomBytes(4).toString('hex')))();
+        const runId = built.get(prefix)?.runId ?? (o.newRunId ?? (() => crypto.randomBytes(4).toString('hex')))();
         fs.mkdirSync(o.cache.dir, { recursive: true });
         const work = fs.mkdtempSync(path.join(o.cache.dir, '.kd-cloud-'));
         try {
-            // a chunk built again (the orchestrator's retry) starts from no objects of the earlier attempt
-            for (const obj of await o.bucket.list(`${prefix}/`)) await o.bucket.remove(obj.key);
-            const spec: KdChunkJobSpec = { schema: KD_CHUNK_JOB_SCHEMA, runId, request, ...(imageCommit(image) ? { commit: imageCommit(image) } : {}) };
-            const specFile = path.join(work, 'request.json');
-            fs.writeFileSync(specFile, JSON.stringify(spec));
-            await o.bucket.putFile(keys.request, specFile, { contentType: 'application/json' });
-            // its share of the project's model calls: one of the chunks at once and the centre beside them
-            const shares = (opts.atOnce ?? chunkParallel(undefined, undefined, env)) + 1;
-            const budget = modelCallShareEnv(modelCallLimitsFromEnv(env), shares);
-            const execution = await o.jobs.run({ KD_JOB: `gs://${config.bucket}/${prefix}`, ...budget });
-            const short = execution.split('/').pop();
-            const kept = Object.entries(budget).map(([k, v]) => `${k}=${v}`).join(' ');
-            progress(`started in the cloud (${short}, run ${runId})${kept ? `, model calls kept to 1/${shares} of the budget (${kept})` : ''}`);
-            log(`[kd-cloud] chunk ${request.chunk!.index}: execution ${execution}, run ${runId}`);
+            // a chunk whose job already built it (only its download failed) is downloaded again, never built again
+            const launch = async (): Promise<{ execution: string; state: CloudExecution }> => {
+                // a chunk built again (the orchestrator's retry) starts from no objects of the earlier attempt
+                for (const obj of await o.bucket.list(`${prefix}/`)) await o.bucket.remove(obj.key);
+                const spec: KdChunkJobSpec = { schema: KD_CHUNK_JOB_SCHEMA, runId, request, ...(imageCommit(image) ? { commit: imageCommit(image) } : {}) };
+                const specFile = path.join(work, 'request.json');
+                fs.writeFileSync(specFile, JSON.stringify(spec));
+                await o.bucket.putFile(keys.request, specFile, { contentType: 'application/json' });
+                // its share of the project's model calls: one of the chunks at once and the centre beside them
+                const shares = (opts.atOnce ?? chunkParallel(undefined, undefined, env)) + 1;
+                const budget = modelCallShareEnv(modelCallLimitsFromEnv(env), shares);
+                const execution = await o.jobs.run({ KD_JOB: `gs://${config.bucket}/${prefix}`, ...budget });
+                const short = execution.split('/').pop();
+                const kept = Object.entries(budget).map(([k, v]) => `${k}=${v}`).join(' ');
+                progress(`started in the cloud (${short}, run ${runId})${kept ? `, model calls kept to 1/${shares} of the budget (${kept})` : ''}`);
+                log(`[kd-cloud] chunk ${request.chunk!.index}: execution ${execution}, run ${runId}`);
 
-            let seen = 0, state: CloudExecution | undefined;
-            const progressFile = path.join(work, 'progress.jsonl');
-            const readProgress = async () => {
-                try {
-                    if (!(await o.bucket.download(keys.progress, progressFile))) return;
-                    const r = newProgressLines(fs.readFileSync(progressFile, 'utf8'), seen);
-                    seen = r.seen;
-                    for (const l of r.lines) progress(l);
-                } catch { /* the next poll reads it */ }
-            };
-            const cancel = () => o.jobs.cancel(execution).catch(e => log(`[kd-cloud] cancelling ${execution} failed: ${e instanceof Error ? e.message : String(e)}`));
-            try {
-                // a poll that fails is asked again (a moment's timeout must not fail a job that is still building); after
-                // pollMisses in a row the chunk fails, its execution cancelled so a retry does not run beside it
-                let misses = 0;
-                while (true) {
-                    await sleep(config.pollMs, signal);
-                    await readProgress();
+                let seen = 0, state: CloudExecution | undefined;
+                const progressFile = path.join(work, 'progress.jsonl');
+                const readProgress = async () => {
                     try {
-                        state = await o.jobs.get(execution);
-                        misses = 0;
-                    } catch (err) {
-                        if (signal?.aborted) throw err;
-                        if (++misses >= config.pollMisses) { await cancel(); throw err; }
-                        log(`[kd-cloud] chunk ${request.chunk!.index}: reading ${short} failed (${err instanceof Error ? err.message : String(err)}); asked again (${misses} of ${config.pollMisses})`);
-                        continue;
+                        if (!(await o.bucket.download(keys.progress, progressFile))) return;
+                        const r = newProgressLines(fs.readFileSync(progressFile, 'utf8'), seen);
+                        seen = r.seen;
+                        for (const l of r.lines) progress(l);
+                    } catch { /* the next poll reads it */ }
+                };
+                const cancel = () => o.jobs.cancel(execution).catch(e => log(`[kd-cloud] cancelling ${execution} failed: ${e instanceof Error ? e.message : String(e)}`));
+                try {
+                    // a poll that fails is asked again (a moment's timeout must not fail a job that is still building); after
+                    // pollMisses in a row the chunk fails, its execution cancelled so a retry does not run beside it
+                    let misses = 0;
+                    while (true) {
+                        await sleep(config.pollMs, signal);
+                        await readProgress();
+                        try {
+                            state = await o.jobs.get(execution);
+                            misses = 0;
+                        } catch (err) {
+                            if (signal?.aborted) throw err;
+                            if (++misses >= config.pollMisses) { await cancel(); throw err; }
+                            log(`[kd-cloud] chunk ${request.chunk!.index}: reading ${short} failed (${err instanceof Error ? err.message : String(err)}); asked again (${misses} of ${config.pollMisses})`);
+                            continue;
+                        }
+                        if (state.done) break;
                     }
-                    if (state.done) break;
+                } catch (err) {
+                    if (signal?.aborted) {
+                        await cancel();
+                        throw abortReason(signal);
+                    }
+                    throw err;
                 }
-            } catch (err) {
-                if (signal?.aborted) {
-                    await cancel();
-                    throw abortReason(signal);
-                }
-                throw err;
-            }
-            await readProgress();
+                await readProgress();
+                return { execution, state: state! };
+            };
+            const earlier = built.get(prefix);
+            if (earlier) progress(`its job ${earlier.execution.split('/').pop()} built it already: downloading its layers again`);
+            const { execution, state } = earlier ?? await launch();
+            const short = execution.split('/').pop();
             const seconds = state.startMs !== undefined && state.endMs !== undefined ? (state.endMs - state.startMs) / 1000 : undefined;
             const cost = seconds !== undefined ? cloudRunTaskCostUsd(seconds, config.vcpu, config.memGiB) : undefined;
             const record = { execution, image, runId, prefix: `gs://${config.bucket}/${prefix}`, succeeded: state.succeeded, ...(state.message ? { message: state.message } : {}), ...(seconds !== undefined ? { seconds, costUsd: cost } : {}) };
@@ -411,8 +436,9 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
                 throw jobError(e, `the cloud chunk job ${short} failed: ${state.message ?? 'no message'}`);
             }
 
+            built.set(prefix, { execution, runId, state });
             const outFile = path.join(work, 'outcome.json');
-            if (!(await o.bucket.download(keys.outcome, outFile))) throw new Error(`the cloud chunk job ${short} ended without its outcome (${keys.outcome})`);
+            if (!(await download(keys.outcome, outFile, signal))) throw new Error(`the cloud chunk job ${short} ended without its outcome (${keys.outcome})`);
             const job = JSON.parse(fs.readFileSync(outFile, 'utf8')) as KdChunkJobOutcome;
             if (job.schema !== KD_CHUNK_JOB_SCHEMA || !job.outcome) throw new Error(`the cloud chunk job ${short} wrote an outcome this runner cannot read`);
             const outcome = localiseJobPaths(job.outcome, job, { root: o.cache.workspaceRoot, modelsDir: o.cache.modelsDir, cacheDir: o.cache.dir });
@@ -420,7 +446,7 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
             let bytes = 0;
             for (const name of kdChunkLayerFiles(outcome)) {
                 const target = path.join(o.cache.modelsDir, name), tmp = path.join(work, `model-${name}`);
-                if (!(await o.bucket.download(keys.model(name), tmp))) throw new Error(`the cloud chunk job ${short} did not upload its layer ${name}`);
+                if (!(await download(keys.model(name), tmp, signal))) throw new Error(`the cloud chunk job ${short} did not upload its layer ${name}`);
                 bytes += fs.statSync(tmp).size;
                 fs.renameSync(tmp, target);
             }

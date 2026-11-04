@@ -91,6 +91,12 @@ export interface DecalBakeResult { glb: Buffer; decalTriangles: number; widthM: 
 
 /** The decal texture: the image's colour (or `colour`), its alpha the image's own or its distance from white, times strength; a clear border so clamping leaves the outside clear. */
 export function decalTexture(img: RgbaImage8, strength: number, colour?: [number, number, number]): { png: Buffer; width: number; height: number } {
+    const r = decalRgba(img, strength, colour);
+    return { png: encodePng(r.width, r.height, Buffer.from(r.rgba.buffer, r.rgba.byteOffset, r.rgba.byteLength)), width: r.width, height: r.height };
+}
+
+/** decalTexture's pixels (straight alpha), unencoded. */
+export function decalRgba(img: RgbaImage8, strength: number, colour?: [number, number, number]): RgbaImage8 {
     const scale = Math.min(1, DECAL_MAP_SIDE / Math.max(img.width, img.height));
     const w = Math.max(4, Math.round(img.width * scale)), h = Math.max(4, Math.round(img.height * scale));
     const r = resizeRgba(img, w, h);
@@ -108,7 +114,7 @@ export function decalTexture(img: RgbaImage8, strength: number, colour?: [number
         out[i * 4 + 2] = colour ? colour[2] : hasAlpha ? B : un(B);
         out[i * 4 + 3] = border ? 0 : Math.round(Math.max(0, Math.min(1, a * strength)) * 255);
     }
-    return { png: encodePng(w, h, out), width: w, height: h };
+    return { width: w, height: h, rgba: new Uint8Array(out.buffer, out.byteOffset, out.byteLength) };
 }
 
 /** What a decal asset's sidecar records: what it is, how big it is in the world, and where it came from. */
