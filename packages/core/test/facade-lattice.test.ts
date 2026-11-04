@@ -44,12 +44,12 @@ function photo(): { rgba: Uint8Array; width: number; height: number } {
     return { rgba, width: W, height: H };
 }
 
-/** The scan: a 0.25 m grid surface at depth -0.3 in the windows and 0 elsewhere, plus +-6 cm noise, as triangle soup. */
-function scan(): Float32Array {
+/** The scan: a 0.25 m grid surface at depth -0.3 (or `windowZ`) in the windows and 0 elsewhere, plus +-6 cm noise, as triangle soup. */
+function scan(windowZ = -0.3): Float32Array {
     const out: number[] = [];
     let seed = 11;
     const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.12;
-    const z = (s: number, t: number) => (isWindow(s, t) ? -0.3 : 0) + rnd();
+    const z = (s: number, t: number) => (isWindow(s, t) ? windowZ : 0) + rnd();
     for (let s = 0; s < 12; s += 0.25) for (let t = 0; t < 9; t += 0.25) {
         const a = [s, t, z(s, t)], b = [s + 0.25, t, z(s + 0.25, t)], c = [s + 0.25, t + 0.25, z(s + 0.25, t + 0.25)], d = [s, t + 0.25, z(s, t + 0.25)];
         out.push(...a, ...b, ...c, ...a, ...c, ...d);
@@ -522,6 +522,82 @@ describe('facades on their photo lattice', () => {
             if ((soup[i * 3] + soup[i * 3 + 3] + soup[i * 3 + 6]) / 3 > 6.5) liveRight++;
         }
         expect(liveRight).toBeGreaterThan(0);
+        // closed by the scan the rebuild does not draw over, not by giving the facade up
+        expect(out.tears.droppedFacades).toEqual([]);
+    });
+
+    /** The live scan triangles in `glb` (the scan written first, as `soup`) whose centre lies in a window. */
+    const liveInWindows = (glb: Uint8Array, soup: Float32Array) => {
+        const t = readGlbTriangles(glb);
+        let n = 0;
+        for (let i = 0; i < soup.length / 3; i += 3) {
+            if (t.indices[i] === t.indices[i + 1] && t.indices[i + 1] === t.indices[i + 2]) continue;
+            if (isWindow((soup[i * 3] + soup[i * 3 + 3] + soup[i * 3 + 6]) / 3, (soup[i * 3 + 1] + soup[i * 3 + 4] + soup[i * 3 + 7]) / 3)) n++;
+        }
+        return n;
+    };
+    const glbOf = (soup: Float32Array) => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-')), file = path.join(dir, 'clay.glb');
+        writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
+        const bytes = fs.readFileSync(file);
+        fs.rmSync(dir, { recursive: true, force: true });
+        return bytes;
+    };
+    // the flat scan tile_refine leaves: the wall as two large triangles, as the tiles draw a plain wall
+    const coarse = Float32Array.from([0, 0, 0, 12, 0, 0, 12, 9, 0, 0, 0, 0, 12, 9, 0, 0, 9, 0]);
+
+    it('seen from an angle, the rebuild\'s own recesses are no tears, and no flat scan comes back in front of them', () => {
+        // windows recessed 0.9 m (seen at 45 degrees their backs lie 0.64 m deeper than the flat scan there), over a flat scan
+        const deep = latticeFacade(f, photo(), facadeSamples(scan(-0.9), f))!;
+        const flat = scan(0), out = applyFacadeLattices(glbOf(flat), [{ f, r: deep }], false);
+        expect(out.removed).toBeGreaterThan(0.95 * (flat.length / 9));
+        expect(liveInWindows(out.glb, flat)).toBe(0);
+        expect(out.tears.left).toBe(0);
+        expect(out.tears.droppedFacades).toEqual([]);
+        // the wall's two large triangles against the rebuild's many small ones: the angled views see the whole facade, so the
+        // rebuild's far end is not missing from them while the scan's large triangles still reach in
+        const r = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
+        const big = applyFacadeLattices(glbOf(coarse), [{ f, r }], false);
+        expect(big.removed).toBe(2);
+        expect(big.tears.restoredTriangles).toBe(0);
+        expect(big.tears.oblique ?? 0).toBe(0);
+    });
+
+    it('from an angle, never puts the scan back in front of the rebuild: a slit only such scan could close stays reported', () => {
+        const good = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
+        // the reveals of the window at s 0.9-2.1, t 0.7-2.3 left out: seen from an angle, a slit beside its recessed back
+        const keep: number[] = [];
+        for (let q = 0; q < good.indices.length; q += 3) {
+            const p = [0, 1, 2].map(j => [0, 1, 2].map(k => good.positions[good.indices[q + j] * 3 + k]));
+            const n = [(p[1][1] - p[0][1]) * (p[2][2] - p[0][2]) - (p[1][2] - p[0][2]) * (p[2][1] - p[0][1]), (p[1][2] - p[0][2]) * (p[2][0] - p[0][0]) - (p[1][0] - p[0][0]) * (p[2][2] - p[0][2]), (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[1][1] - p[0][1]) * (p[2][0] - p[0][0])];
+            const cs = (p[0][0] + p[1][0] + p[2][0]) / 3, ct = (p[0][1] + p[1][1] + p[2][1]) / 3;
+            const side = Math.abs(n[2]) < 0.1 * Math.hypot(n[0], n[1], n[2]);
+            if (!(side && cs > 0.8 && cs < 2.2 && ct > 0.6 && ct < 2.4)) keep.push(good.indices[q], good.indices[q + 1], good.indices[q + 2]);
+        }
+        expect(keep.length).toBeLessThan(good.indices.length);
+        const slit = { ...good, indices: Uint32Array.from(keep) };
+        const out = applyFacadeLattices(glbOf(coarse), [{ f, r: slit }], false);
+        expect(out.tears.oblique).toBeGreaterThan(0);
+        expect(out.tears.keptInFront).toBeGreaterThan(0);
+        expect(out.tears.obliqueLeft).toBeGreaterThan(0);
+        expect(out.removed).toBe(2);
+        expect(out.tears.left).toBe(0);
+        expect(out.tears.droppedFacades).toEqual([]);
+    });
+
+    it('puts the scan back over a hole seen straight on even where it stands in front of the rebuild, and counts it', () => {
+        const good = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
+        // the rebuild's right half missing; the wall's two large triangles each span its recessed windows on the left
+        const keep: number[] = [];
+        for (let q = 0; q < good.indices.length; q += 3) if (Math.max(...[0, 1, 2].map(j => good.positions[good.indices[q + j] * 3])) <= 6) keep.push(good.indices[q], good.indices[q + 1], good.indices[q + 2]);
+        const torn = { ...good, built: new Uint8Array(good.built.length).fill(1), indices: Uint32Array.from(keep) };
+        const out = applyFacadeLattices(glbOf(coarse), [{ f, r: torn }], false);
+        expect(out.tears.found).toBeGreaterThan(0);
+        expect(out.tears.restoredTriangles).toBe(2);
+        expect(out.tears.restoredInFront).toBe(2);
+        expect(out.tears.droppedFacades).toEqual([]);
+        expect(out.tears.left).toBe(0);
+        expect(out.removed).toBe(0);
     });
 });
 

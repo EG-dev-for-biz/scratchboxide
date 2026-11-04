@@ -33,7 +33,8 @@ export interface OrbitState { theta: number; phi: number; distance: number }
 export const CLICK_TRAVEL_PX = 4;
 /** Orbit distance scales by exp(deltaY * rate) per wheel event: ~12% per 100 px notch at any scale. */
 export const WHEEL_ZOOM_RATE = 0.0012;
-const MIN_ORBIT_DISTANCE = 1;
+/** Close enough to fill the view with a few-centimetre object (a groomed coat, a small prop). */
+const MIN_ORBIT_DISTANCE = 0.05;
 /** Near plane used close-up and in FPS mode (matches createRendererStack). */
 const DEFAULT_NEAR = 0.1;
 const MAX_NEAR = 5;
@@ -73,6 +74,11 @@ export interface ViewportControlContext {
     pointPick?: Ref<((hit: THREE.Intersection | undefined, event: MouseEvent) => void) | null>;
     /** The Edit Splats brush (splatEditTool.ts): in the 'splat' tool mode a primary press on a splat paints a stroke. */
     splatEdit?: Ref<SplatEditTool | null>;
+    /**
+     * In first person a drag turns the view through this (px): the walker (walkMode.ts) places the camera every frame, so
+     * turning the camera itself would be undone. Without it a first-person drag turns the camera.
+     */
+    look?: Ref<((dxPx: number, dyPx: number) => void) | null>;
 
     resolveSelectableObject: (hit: THREE.Object3D, root: THREE.Object3D) => THREE.Object3D;
     selectObject: Ref<(obj: THREE.Object3D | null) => void>;
@@ -114,7 +120,7 @@ const spatial3dOf = (o: THREE.Object3D) => ({
 });
 
 /**
- * Attaches sculpt / transform-gizmo / orbit-FPS pointer handling plus FPS key tracking to the
+ * Attaches sculpt / transform-gizmo / orbit-FPS pointer handling plus held-key tracking to the
  * viewport. Returns a detach function. Attach once per renderer stack.
  *
  * Orbit: left-drag rotates, shift-drag / right-drag / middle-drag pans, the wheel zooms
@@ -375,6 +381,8 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
             rot.theta -= deltaX * 0.005;
             rot.phi -= deltaY * 0.005;
             rot.phi = Math.max(0.05, Math.min(Math.PI - 0.05, rot.phi));
+        } else if (ctx.look?.current) {
+            ctx.look.current(deltaX, deltaY);
         } else {
             // Re-express the current orientation as yaw-pitch (YXZ) before turning it. Only relabelling the order would
             // read lookAt's XYZ angles as YXZ ones: a view facing more than 90 degrees from -Z (x = z = PI in XYZ)
@@ -480,8 +488,10 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
 
         // Click (not drag): select what is under the cursor, or clear a visible selection on a miss.
         // Alt-click selects the whole loaded model instead of the part (its root is a pick-through
-        // container otherwise, and the only target whose move persists to objects[]).
-        if (pendingPick && Math.hypot(e.clientX - downX, e.clientY - downY) < CLICK_TRAVEL_PX) {
+        // container otherwise, and the only target whose move persists to objects[]). A click that takes
+        // the pointer for mouse look (walk mode) selects nothing: the cursor it would pick under is hidden.
+        const pointerLocked = typeof document !== 'undefined' && document.pointerLockElement === container;
+        if (pendingPick && !pointerLocked && Math.hypot(e.clientX - downX, e.clientY - downY) < CLICK_TRAVEL_PX) {
             setRayFromEvent(e);
             const hit = pickSceneHit();
             const pointPick = ctx.pointPick?.current;
@@ -520,8 +530,25 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
     const handleContextMenu = (e: Event) => {
         if (ctx.cameraMode.current === 'orbit') e.preventDefault();
     };
-    const handleKeyDown = (e: KeyboardEvent) => { ctx.keysPressed.current[e.key] = true; };
-    const handleKeyUp = (e: KeyboardEvent) => { ctx.keysPressed.current[e.key] = false; };
+    // Held keys by key and by code (walkMode.ts reads codes: a W held through a Shift press stays one key). Typing in a
+    // field moves nothing, and leaving the window lets every key go (a key released elsewhere never reports its keyup).
+    const typing = (e: KeyboardEvent) => {
+        const el = e.target as HTMLElement | null;
+        const tag = (el?.tagName || '').toLowerCase();
+        return tag === 'input' || tag === 'textarea' || tag === 'select' || !!el?.isContentEditable;
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+        if (typing(e)) return;
+        ctx.keysPressed.current[e.key] = true;
+        if (e.code) ctx.keysPressed.current[e.code] = true;
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+        ctx.keysPressed.current[e.key] = false;
+        if (e.code) ctx.keysPressed.current[e.code] = false;
+    };
+    const handleBlur = () => {
+        for (const k of Object.keys(ctx.keysPressed.current)) ctx.keysPressed.current[k] = false;
+    };
 
     container.addEventListener('mousedown', handleMouseDown);
     container.addEventListener('mousemove', handleMouseMove);
@@ -530,6 +557,7 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
     container.addEventListener('wheel', handleWheel, { passive: false });
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
 
     return () => {
         container.removeEventListener('mousedown', handleMouseDown);
@@ -539,6 +567,7 @@ export function attachViewportControls(stack: RendererStack, ctx: ViewportContro
         container.removeEventListener('wheel', handleWheel);
         window.removeEventListener('keydown', handleKeyDown);
         window.removeEventListener('keyup', handleKeyUp);
+        window.removeEventListener('blur', handleBlur);
     };
 }
 
@@ -550,13 +579,15 @@ function setNearPlane(camera: THREE.PerspectiveCamera, near: number): void {
     }
 }
 
-/** Applies orbit or FPS camera motion for one frame. */
+/**
+ * Applies the orbit camera for one frame. In first person the walker (walkMode.ts) places the camera, walking or flying,
+ * and only the near plane is set here.
+ */
 export function stepCamera(
     camera: THREE.PerspectiveCamera,
     cameraMode: 'orbit' | 'fps',
     orbit: OrbitState,
-    target: THREE.Vector3,
-    keys: Record<string, boolean>
+    target: THREE.Vector3
 ): void {
     if (cameraMode === 'orbit') {
         camera.position.x = target.x + orbit.distance * Math.sin(orbit.phi) * Math.sin(orbit.theta);
@@ -564,19 +595,10 @@ export function stepCamera(
         camera.position.z = target.z + orbit.distance * Math.sin(orbit.phi) * Math.cos(orbit.theta);
         camera.lookAt(target);
         // Depth precision is governed by near/far: keep near proportional to the viewing distance so
-        // km-scale scenes do not z-fight, while close-up work (< 100 m) keeps the default.
-        setNearPlane(camera, THREE.MathUtils.clamp(orbit.distance / 1000, DEFAULT_NEAR, MAX_NEAR));
+        // km-scale scenes do not z-fight, while close-up work (< 100 m) keeps the default; inside 2 m the
+        // near plane follows the camera in (a twentieth of the distance) so a close-up object is not clipped.
+        setNearPlane(camera, orbit.distance < 2 ? orbit.distance / 20 : THREE.MathUtils.clamp(orbit.distance / 1000, DEFAULT_NEAR, MAX_NEAR));
         return;
     }
     setNearPlane(camera, DEFAULT_NEAR);
-    const speed = 0.22;
-    const dir = new THREE.Vector3();
-    camera.getWorldDirection(dir);
-    const right = new THREE.Vector3().crossVectors(camera.up, dir).normalize();
-    if (keys['w'] || keys['W'] || keys['ArrowUp']) camera.position.addScaledVector(dir, speed);
-    if (keys['s'] || keys['S'] || keys['ArrowDown']) camera.position.addScaledVector(dir, -speed);
-    if (keys['a'] || keys['A'] || keys['ArrowLeft']) camera.position.addScaledVector(right, speed);
-    if (keys['d'] || keys['D'] || keys['ArrowRight']) camera.position.addScaledVector(right, -speed);
-    if (keys['q'] || keys['Q']) camera.position.y -= speed * 0.8;
-    if (keys['e'] || keys['E']) camera.position.y += speed * 0.8;
 }

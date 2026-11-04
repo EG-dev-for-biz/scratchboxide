@@ -89,6 +89,26 @@ export const STARTER_BUTTONS: readonly StarterButton[] = [
         ],
     },
     {
+        icon: '🧩',
+        label: '3D Object',
+        makes: '3d-scene',
+        // One object with no real place (user ask, 2026-11-03): the request routes to build_3d_object_from_reference
+        // (prompt-builder.ts, "One specific object or an abstract form"), which draws an internal reference, reads it into
+        // a build spec and builds that one object natively from the engine's operators. Examples only, picked at random
+        // per click, chosen to show different kinds of form (turned, swept, repeated, hard-surface, soft); any object can
+        // still be asked for in chat.
+        prompts: [
+            'Build a textured 3D object of a 1950s chrome espresso machine with its portafilter, steam wand, pressure gauge and drip tray',
+            'Build a textured 3D object of a vintage twin-lens reflex film camera with its viewing hood, focus knob and leather strap lugs',
+            'Build a textured 3D object of an Apollo-style lunar lander with its four splayed landing legs, foil-wrapped descent stage and ascent cabin',
+            'Build a textured 3D object of a cast-iron spiral staircase with its newel post, treads, balusters and curved handrail',
+            'Build a textured 3D object of a brass ship\'s sextant with its arc, index arm, mirrors and telescope',
+            'Build a textured 3D object of a mid-century wooden lounge chair with a moulded plywood shell, leather cushions and a swivel base',
+            'Build a textured 3D object of a steampunk brass telescope on a wooden tripod with gears, rivets and a geared elevation wheel',
+            'Build a textured 3D object of a bioluminescent alien seed pod with ribbed translucent lobes, curling tendrils and glowing spores',
+        ],
+    },
+    {
         icon: '🌐',
         label: '3D World',
         makes: '3d-scene',

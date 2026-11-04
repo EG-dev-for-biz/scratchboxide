@@ -188,7 +188,7 @@ describe('services compile once and pass parameters at run time', () => {
         expect(compileLines().length - before).toBe(1);
         expect(b.compilationTimeMs).toBe(0);
         expect(Buffer.from(a.rgbFloats.buffer).equals(Buffer.from(b.rgbFloats.buffer))).toBe(false);
-    }, 180_000);
+    }, 600_000); // the first sky of a cold machine also precomputes the default medium's tables (about 100 s on 4 cores)
 
     it('de-lighting: a second call with other weights compiles nothing', async () => {
         const lighting = new NativeTileLightingService();
@@ -215,7 +215,7 @@ describe('services compile once and pass parameters at run time', () => {
         expect(a.success && b.success).toBe(true);
         expect(compileLines().length - before).toBe(1);
         expect(b.compilationTimeMs).toBe(0);
-        expect(fs.readdirSync(path.join(dir, 'groom_b')).sort()).toEqual(['cache_groom_b.glb', 'cache_groom_b.ply', 'cache_groom_b.spz']);
+        expect(fs.readdirSync(path.join(dir, 'groom_b')).sort()).toEqual(['cache_groom_b.glb', 'cache_groom_b.ply', 'cache_groom_b.spz', 'cache_groom_b_body.glb']);
         // the GLB export (surfel mesh) is a real glTF binary
         expect(fs.readFileSync(b.glbPath!).readUInt32LE(0)).toBe(0x46546c67);
         expect(fs.readFileSync(a.plyPath!).equals(fs.readFileSync(b.plyPath!))).toBe(false);

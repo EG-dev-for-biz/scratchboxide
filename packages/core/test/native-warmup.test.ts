@@ -22,6 +22,7 @@ import { TileVegetationService } from '../src/node/3d-engine/tile-vegetation-ser
 import { TileRefineService } from '../src/node/3d-engine/tile-refine-service';
 import { ScanFitService } from '../src/node/3d-engine/scan-fit-service';
 import { NativePythonRunnerService } from '../src/node/3d-engine/native-python-runner-service';
+import { NativeSkyService } from '../src/node/3d-engine/native-sky-service';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -42,6 +43,7 @@ describe('warmNativeEngine', () => {
         vi.spyOn(TileRefineService.prototype, 'ensureBinary').mockImplementation(async () => { await track('tile_refine', 5)(); return { path: '/bin/tr', built: false }; });
         vi.spyOn(ScanFitService.prototype, 'ensureBinary').mockImplementation(async () => { await track('scan_fit', 5)(); return '/bin/sf'; });
         vi.spyOn(NativePythonRunnerService.prototype, 'ensureNativeModule').mockImplementation(async () => { await track('python', 1)(); return null; });
+        vi.spyOn(NativeSkyService.prototype, 'warmDefaultSky').mockImplementation(track('sky', 1));
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-warm-'));
         // the staged massing tool (the vector first paint) as a built binary: nothing is compiled here
         const prevMassing = process.env.SCRATCHBOX_STAGED_MASSING_BIN;
@@ -49,13 +51,13 @@ describe('warmNativeEngine', () => {
         try {
             const lines: string[] = [];
             const report = await warmNativeEngine(root, { log: m => lines.push(m), env: {} });
-            expect(report.steps.map(s => s.name)).toEqual(['tile_vegetation', 'tile_refine', 'staged_massing', 'scan_fit', 'scratchbox_native (Python module)']);
-            expect(report.steps.map(s => s.ok)).toEqual([true, true, true, true, true]);
+            expect(report.steps.map(s => s.name)).toEqual(['tile_vegetation', 'tile_refine', 'staged_massing', 'scan_fit', 'scratchbox_native (Python module)', 'sky tables (default medium)']);
+            expect(report.steps.map(s => s.ok)).toEqual([true, true, true, true, true, true]);
             // the fitter is part of this build: it is built in its place in the order, with no note
             expect(report.steps[3].note).toBeUndefined();
-            expect(events).toEqual(['start tile_vegetation', 'end tile_vegetation', 'start tile_refine', 'end tile_refine', 'start scan_fit', 'end scan_fit', 'start python', 'end python']);
+            expect(events).toEqual(['start tile_vegetation', 'end tile_vegetation', 'start tile_refine', 'end tile_refine', 'start scan_fit', 'end scan_fit', 'start python', 'end python', 'start sky', 'end sky']);
             expect(maxActive).toBe(1);
-            expect(lines).toHaveLength(5);
+            expect(lines).toHaveLength(6);
             expect(lines[0]).toMatch(/\[native warm-up\] tile_vegetation: ready \(\d+\.\d s\)/);
             expect(lines[4]).toMatch(/scratchbox_native \(Python module\): ready/);
         } finally {

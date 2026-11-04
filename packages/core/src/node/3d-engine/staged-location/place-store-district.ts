@@ -8,9 +8,13 @@
  ********************************************************************************/
 
 /**
- * A chunked district (pipeline K-D) into the scene object store and the place store, behind SCRATCHBOX_PLACE_STORE=1:
+ * A district (pipeline K-D) and the place store (place-store.ts; on by default, SCRATCHBOX_PLACE_STORE=0 off):
  *
- *  1. **At the join** (auditDistrictForPlace, once the chunks' seams are closed): the joined district is audited
+ *  0. **Before the build** (pullPlaceForRun, as the place resolves): the place's store read without its lease, its
+ *     objects' current versions into this machine's object store and its readings into the reading store (none of the
+ *     objects with SCRATCHBOX_OBJECT_REUSE=0, none of the readings with SCRATCHBOX_CACHE_RESTORE=off); the report is the
+ *     run note `place_pull`.
+ *  1. **At the join** (a chunked district) (auditDistrictForPlace, once the chunks' seams are closed): the joined district is audited
  *     (district-completeness-audit.ts) and each surface layer it draws (the chunks' K twins, the centre's own) gets a
  *     layer-objects manifest (scene-objects.ts) in the run's manifests: one `building/<Google vector feature id>` per
  *     building, its triangles cut by its footprint, from the layer holding most of it (`<id>/<layer>` for the rest of
@@ -21,8 +25,8 @@
  *     `place_audit`. The joined layers have no stage-cache entry, so no objects.json is written beside them: their
  *     manifests live in the run.
  *  2. **After the objects are kept** (syncPlaceAfterObjects, from the scene object store's pass at the build's end): the
- *     run's objects are copied to the place store (place-store.ts) under its lease; the report is the run note
- *     `place_store`.
+ *     run's objects are copied to the place store (place-store.ts) under its lease, with the readings the run and its
+ *     chunks used or wrote (their `model_readings` notes); the report is the run note `place_store`.
  *
  * The objects are kept only while the scene object store is on (scene-objects.ts objectStoreEnabled; SCRATCHBOX_OBJECT_STORE);
  * with it off the audit still runs and its note says so. Neither step ever fails the build (a stopped build's stop passes through).
@@ -38,11 +42,12 @@ import { auditDistrict, DISTRICT_AUDIT_VERSION, type AuditLayer, type DistrictAu
 import { districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
 import { chunkOwner, type DistrictChunkPlan } from './pipeline-k/district-chunks';
 import { DISTRICT_SEAMS_VERSION } from './pipeline-k/district-seams';
+import { MODEL_READINGS_DIR, readingFileOf, type ModelReadingReport } from './pipeline-k/model-readings';
 import {
-    openPlaceStore, placeCodeVersion, placeKey, PLACE_STORE_SCHEMA, syncPlaceObjects,
-    type PlaceChunkGrid, type PlaceCodeVersion, type PlaceManifest, type PlaceSyncReport
+    openPlaceStore, placeCodeVersion, placeKey, PLACE_STORE_SCHEMA, pullPlace, syncPlaceObjects,
+    type PlaceChunkGrid, type PlaceCodeVersion, type PlaceManifest, type PlacePullReport, type PlaceSyncReport
 } from './place-store';
-import { LAYER_OBJECTS_SCHEMA, objectStoreEnabled, type LayerObject, type LayerObjectManifest } from './scene-objects';
+import { LAYER_OBJECTS_SCHEMA, objectReuseEnabled, objectStoreEnabled, type LayerObject, type LayerObjectManifest } from './scene-objects';
 import { sha256File } from './stage-cache';
 import type { VectorEvidence } from './vector-footprints';
 import { selectPaintBuildings } from './vector-first-paint';
@@ -261,12 +266,49 @@ function addManifests(input: DistrictAuditInput, note: PlaceAuditNote, audit: Di
 export interface PlaceStoreOptions { bucket?: CloudBucket | null; fallbackRoot?: string; tmpDir?: string }
 
 /**
+ * Step 0 (see the module doc): the place's store read before a district run builds. `store` is the object store's asset
+ * store (none, no objects); `readingsDir` the run's reading store. Never throws.
+ */
+export async function pullPlaceForRun(input: {
+    place: { lat: number; lng: number };
+    store?: DurableAssetStore;
+    readingsDir?: string;
+    workspace?: string;
+    placeStore?: PlaceStoreOptions;
+    env?: NodeJS.ProcessEnv;
+}): Promise<PlacePullReport> {
+    const env = input.env ?? process.env, key = placeKey(input.place);
+    const store = await openPlaceStore({ key, ...(input.placeStore ?? {}), env });
+    const objectsOff = !objectStoreEnabled(env) ? 'the scene object store is off (SCRATCHBOX_OBJECT_STORE=0)'
+        : !objectReuseEnabled(env) ? 'SCRATCHBOX_OBJECT_REUSE=0: no stored object is taken' : !input.store ? 'this machine has no object store' : undefined;
+    return pullPlace(store, {
+        ...(input.store && !objectsOff ? { objects: new SceneObjectStore(input.store) } : {}), ...(objectsOff ? { objectsOff } : {}),
+        ...(input.readingsDir ? { readingsDir: input.readingsDir } : {}),
+        ...(env.SCRATCHBOX_CACHE_RESTORE?.trim() === 'off' ? { readingsOff: 'SCRATCHBOX_CACHE_RESTORE=off: nothing is read back' } : {}),
+        ...(input.workspace ? { workspace: input.workspace } : {})
+    });
+}
+
+/** The keys the run and its chunks' reading stores used and wrote (their `model_readings` notes; a chunk is named in `district_chunks_joined`). */
+function runReadings(cache: { readRunNote<T>(runId: string, name: string): T | undefined }, runId: string): { used: string[]; written: string[] } {
+    const read = <T>(id: string, name: string): T | undefined => { try { return cache.readRunNote<T>(id, name); } catch { return undefined; } };
+    const chunks = read<{ chunks?: Array<{ runId?: string }> }>(runId, 'district_chunks_joined')?.chunks ?? [];
+    const used = new Set<string>(), written = new Set<string>();
+    for (const id of [runId, ...chunks.map(c => c.runId).filter((x): x is string => !!x)]) {
+        const n = read<Partial<ModelReadingReport>>(id, 'model_readings');
+        for (const k of n?.used ?? []) used.add(k);
+        for (const k of n?.writtenKeys ?? []) written.add(k);
+    }
+    return { used: [...used], written: [...written] };
+}
+
+/**
  * Step 2 (see the module doc): the run's kept objects copied to the place store. Undefined when the run left no
  * `place_audit` note (not a chunked district, or the place store was off). Never throws.
  */
 export async function syncPlaceAfterObjects(input: {
     runId: string;
-    cache: { readRunNote<T>(runId: string, name: string): T | undefined; workspaceRoot: string };
+    cache: { readRunNote<T>(runId: string, name: string): T | undefined; workspaceRoot: string; dir?: string; restoreFile?(rel: string): Promise<boolean> };
     store: DurableAssetStore;
     kept: Array<{ objectKey: string }>;
     placeStore?: PlaceStoreOptions;
@@ -277,14 +319,16 @@ export async function syncPlaceAfterObjects(input: {
     if (note?.schema !== PLACE_AUDIT_SCHEMA) return undefined;
     try {
         const store = await openPlaceStore({ key: note.key, ...(input.placeStore ?? {}), ...(input.env ? { env: input.env } : {}) });
+        const cache = input.cache, readings = cache.dir ? { dir: path.join(cache.dir, MODEL_READINGS_DIR), ...runReadings(cache, input.runId) } : undefined;
         return await syncPlaceObjects(store, {
+            ...(readings && (readings.used.length || readings.written.length) ? { readings: { ...readings, ...(cache.restoreFile ? { restore: (k: string) => cache.restoreFile!(`${MODEL_READINGS_DIR}/${readingFileOf(k)}`) } : {}) } } : {}),
             runId: input.runId, objects: new SceneObjectStore(input.store), objectKeys: input.kept.map(k => k.objectKey),
             anchor: note.anchor, radiusM: note.radiusM, edge: note.edge, chunks: note.chunks, codeVersion: note.codeVersion, switches: note.switches,
             ...(note.audit ? { audit: note.audit } : {}), workspaceRoot: input.cache.workspaceRoot
         });
     } catch (err) {
         const reason = errorMessage(err);
-        return { where: { kind: 'none', label: '', reason }, key: note.key, skipped: reason, objects: { added: 0, promoted: 0, rejected: 0, unchanged: 0 }, decisions: [], blobs: { stored: 0, existing: 0, bytes: 0, missing: [] }, errors: [reason], ms: 0 };
+        return { where: { kind: 'none', label: '', reason }, key: note.key, skipped: reason, objects: { added: 0, promoted: 0, rejected: 0, unchanged: 0 }, decisions: [], blobs: { stored: 0, existing: 0, bytes: 0, missing: [] }, readings: { stored: 0, existing: 0, missing: 0 }, errors: [reason], ms: 0 };
     }
 }
 

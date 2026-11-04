@@ -12,7 +12,7 @@
  * them ready instead of waiting for clang (and, for the Python module, CMake) before its first stage.
  *
  * The order is the request's critical path: tile_vegetation, tile_refine, scan_fit, then the scratchbox_native Python
- * module (the object builder's). Each step runs after the previous one, so the machine is never asked for two cold
+ * module (the object builder's); last, the default sky's precomputed tables, which renders read. Each step runs after the previous one, so the machine is never asked for two cold
  * builds at once, and logs its time. A step that fails is logged and the next step still runs; nothing is thrown.
  *
  * It is called after the API server's listen callback in the standalone server and in the Electron main process, and
@@ -29,6 +29,7 @@ import { getTileVegetationService } from './tile-vegetation-service';
 import { NativePythonRunnerService } from './native-python-runner-service';
 import { loadScanFit } from './scan-fit-loader';
 import { ensureMassingBinary } from './staged-location/pipeline-e/native-massing';
+import { NativeSkyService } from './native-sky-service';
 
 export interface WarmupStep {
     name: string;
@@ -80,7 +81,9 @@ export function nativeWarmupSteps(workspaceRoot: string): WarmupStep[] {
                 const error = await NativePythonRunnerService.getInstance().ensureNativeModule();
                 if (error) throw new Error(error);
             }
-        }
+        },
+        // off the location path: the path tracer, survey stations and skies read these tables (a cold medium is ~25 s)
+        { name: 'sky tables (default medium)', run: async () => { await new NativeSkyService().warmDefaultSky(); } }
     ];
 }
 

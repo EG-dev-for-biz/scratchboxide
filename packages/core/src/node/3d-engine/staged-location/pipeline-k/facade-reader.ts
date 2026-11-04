@@ -51,15 +51,14 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { decodePng } from '../../../texture-processing';
-import { encodePng } from '../png-encode';
+import { decodePngAsync, encodePngAsync } from '../../../png-codec-pool';
 import type { FitFrame, FittedPlane, WindowFitFile, WindowRect } from '../window-fit';
 import { contactSheet, contextFor, parseBrief, briefPrompt, planePlaces, type BuildingBrief, type NamedBuilding, type PlaneFamily } from './facade-reader-brief';
 import { exemplarOf, matchExemplar, mergeMatches, TEMPLATE_PARAMS, type TemplateMatch, type WindowExemplar } from './facade-reader-template';
 import { planePixelsKey, readingKey, type ModelReadingStore } from './model-readings';
 import { kNative } from './native/native-switch';
 import { matchExemplarsNative } from './native/template-match-native';
-import { readOccluded, unreadMask } from './occlusion';
+import { readOccludedAsync, unreadMask } from './occlusion';
 import { PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
 
 export const FACADE_READER_VERSION = 'facade-reader/11';
@@ -366,12 +365,19 @@ export function zoneCrops(L: Float32Array, W: number, zone: ImageRegion, h: numb
  * filled from the facade's repeats.
  */
 export function regionRgba(img: FacadePhoto, r: ImageRegion, scale: number, outlines: WindowRect[] = [], L?: Float32Array): { width: number; height: number; rgba: Uint8Array } {
-    const W = img.width, ow = Math.max(1, Math.round((r.x1 - r.x0) * scale)), oh = Math.max(1, Math.round((r.y1 - r.y0) * scale));
+    const W = img.width, src = img.rgba, ow = Math.max(1, Math.round((r.x1 - r.x0) * scale)), oh = Math.max(1, Math.round((r.y1 - r.y0) * scale));
     const out = new Uint8Array(ow * oh * 4);
-    for (let y = 0; y < oh; y++) for (let x = 0; x < ow; x++) {
-        const sx = Math.min(W - 1, r.x0 + Math.floor(x / scale)), sy = Math.min(img.height - 1, r.y0 + Math.floor(y / scale)), p = (sy * W + sx) * 4, q = (y * ow + x) * 4;
-        if (L && !Number.isFinite(L[sy * W + sx])) { out[q] = out[q + 1] = out[q + 2] = 128; out[q + 3] = 255; continue; }
-        out[q] = img.rgba[p]; out[q + 1] = img.rgba[p + 1]; out[q + 2] = img.rgba[p + 2]; out[q + 3] = 255;
+    // each output column's and row's texel, once
+    const sxs = new Int32Array(ow), sys = new Int32Array(oh);
+    for (let x = 0; x < ow; x++) sxs[x] = Math.min(W - 1, r.x0 + Math.floor(x / scale));
+    for (let y = 0; y < oh; y++) sys[y] = Math.min(img.height - 1, r.y0 + Math.floor(y / scale));
+    for (let y = 0, q = 0; y < oh; y++) {
+        const row = sys[y] * W;
+        for (let x = 0; x < ow; x++, q += 4) {
+            const s = row + sxs[x], p = s * 4;
+            if (L && !Number.isFinite(L[s])) { out[q] = out[q + 1] = out[q + 2] = 128; out[q + 3] = 255; continue; }
+            out[q] = src[p]; out[q + 1] = src[p + 1]; out[q + 2] = src[p + 2]; out[q + 3] = 255;
+        }
     }
     const lw = Math.max(1, Math.round(scale / 2));
     for (const [x0, y0, x1, y1] of outlines) {
@@ -379,24 +385,25 @@ export function regionRgba(img: FacadePhoto, r: ImageRegion, scale: number, outl
         if (Y1 < 0 || Y0 >= oh || X1 < 0 || X0 >= ow) continue;
         for (let y = Math.max(0, Y0); y <= Math.min(oh - 1, Y1); y++) for (let x = Math.max(0, X0); x <= Math.min(ow - 1, X1); x++) {
             if (x - X0 >= lw && X1 - x >= lw && y - Y0 >= lw && Y1 - y >= lw) continue;
-            out.set([255, 0, 255, 255], (y * ow + x) * 4);
+            const q = (y * ow + x) * 4;
+            out[q] = 255; out[q + 1] = 0; out[q + 2] = 255; out[q + 3] = 255;
         }
     }
     return { width: ow, height: oh, rgba: out };
 }
 
-/** regionRgba as a PNG. */
-export function regionPng(img: FacadePhoto, r: ImageRegion, scale: number, outlines: WindowRect[] = [], L?: Float32Array): { png: Buffer; width: number; height: number; rgba: Uint8Array } {
+/** regionRgba as a PNG, encoded on a codec thread (png-codec-pool.ts). */
+export async function regionPng(img: FacadePhoto, r: ImageRegion, scale: number, outlines: WindowRect[] = [], L?: Float32Array): Promise<{ png: Buffer; width: number; height: number; rgba: Uint8Array }> {
     const c = regionRgba(img, r, scale, outlines, L);
-    return { png: encodePng(c.width, c.height, c.rgba, 4), ...c };
+    return { png: await encodePngAsync(c.width, c.height, c.rgba, 4), ...c };
 }
 
-/** Two crops side by side with a white gap, as one PNG. */
-function sideBySide(a: { rgba: Uint8Array; width: number; height: number }, b: { rgba: Uint8Array; width: number; height: number }): Buffer {
+/** Two crops side by side with a white gap, as one PNG (encoded on a codec thread). */
+function sideBySide(a: { rgba: Uint8Array; width: number; height: number }, b: { rgba: Uint8Array; width: number; height: number }): Promise<Buffer> {
     const gap = 16, w = a.width + gap + b.width, h = Math.max(a.height, b.height), out = new Uint8Array(w * h * 4).fill(255);
     for (let y = 0; y < a.height; y++) out.set(a.rgba.subarray(y * a.width * 4, (y + 1) * a.width * 4), y * w * 4);
     for (let y = 0; y < b.height; y++) out.set(b.rgba.subarray(y * b.width * 4, (y + 1) * b.width * 4), (y * w + a.width + gap) * 4);
-    return encodePng(w, h, out, 4);
+    return encodePngAsync(w, h, out, 4);
 }
 
 const scaleFor = (r: ImageRegion, P: FacadeReaderParams) => Math.min(P.maxScale, P.maxSidePx / Math.max(r.x1 - r.x0, r.y1 - r.y0));
@@ -499,7 +506,7 @@ export interface CallTally { calls: number; reused: number }
  * One question about a plane: its image(s), made only when the model is asked; its prompt without the building's context
  * (`bare`) and as told; what each image shows (`about`: its regions, scale and, for a judge, the outlines drawn).
  */
-interface Question { kind: FacadeAskKind; n: number; png: () => Buffer | Buffer[]; bare: string; told?: string; region: ImageRegion; regions?: ImageRegion[]; about: unknown }
+interface Question { kind: FacadeAskKind; n: number; png: () => Promise<Buffer | Buffer[]>; bare: string; told?: string; region: ImageRegion; regions?: ImageRegion[]; about: unknown }
 
 /**
  * Asks a question, or gives back the answer kept for the same question about the same photo: the key is the plane's
@@ -509,10 +516,10 @@ interface Question { kind: FacadeAskKind; n: number; png: () => Buffer | Buffer[
 function asker(ask: FacadeAsk, memory: ReadingMemory | undefined, tally: CallTally): (q: Question) => Promise<string> {
     return async q => {
         const key = memory ? readingKey('facade-reading', [FACADE_READER_PROMPT_VERSION, memory.model, memory.plane, q.kind, q.bare, q.about]) : undefined;
-        const kept = key ? memory!.store.get<FacadeReadingRecord>(key) : undefined;
+        const kept = key ? await memory!.store.get<FacadeReadingRecord>(key) : undefined;
         if (kept && typeof kept.text === 'string' && facadeReplyUsable(q.kind, kept.text, q.n)) { tally.reused++; return kept.text; }
         tally.calls++;
-        const text = await ask(q.png(), q.told ?? q.bare, q.kind, q.region, q.regions);
+        const text = await ask(await q.png(), q.told ?? q.bare, q.kind, q.region, q.regions);
         if (key && facadeReplyUsable(q.kind, text, q.n)) memory!.store.put(key, { schema: 'scratchbox.facade-reading/1', key, kind: q.kind, model: memory!.model, promptVersion: FACADE_READER_PROMPT_VERSION, text, atMs: Date.now() } satisfies FacadeReadingRecord);
         return text;
     };
@@ -541,7 +548,7 @@ export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> 
     else {
         let parsed: ReturnType<typeof parseZones>;
         const scale = Math.min(1, scaleFor(whole, P)), bare = overviewPrompt(W * f.pixel, H * f.pixel, roof);
-        try { parsed = parseZones(await call({ kind: 'overview', n: 1, png: () => regionPng(img, whole, scale, [], L).png, bare, told: told(bare), region: whole, about: [whole, scale] })); }
+        try { parsed = parseZones(await call({ kind: 'overview', n: 1, png: async () => (await regionPng(img, whole, scale, [], L)).png, bare, told: told(bare), region: whole, about: [whole, scale] })); }
         catch (err) { return { record: rec('failed', `the overview failed: ${errText(err)}`.slice(0, 300)) }; }
         if (parsed.conf < P.minConf) return { record: rec('kept', `the model was unsure of the plane's zones (${parsed.conf})`) };
         zones = parsed.zones.filter(z => z.openings).slice(0, P.maxZones).map(z => ({ region: { x0: Math.floor((z.box[0] / 1000) * W), y0: Math.floor((z.box[1] / 1000) * H), x1: Math.ceil((z.box[2] / 1000) * W), y1: Math.ceil((z.box[3] / 1000) * H) }, ...(z.label ? { label: z.label } : {}) }));
@@ -558,7 +565,7 @@ export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> 
     });
     const toRead = work.filter(z => z.read);
     const sizeOf = (z: Zone) => ({ widthM: (z.read!.x1 - z.read!.x0) * f.pixel, heightM: (z.read!.y1 - z.read!.y0) * f.pixel });
-    const cellPng = (z: Zone) => regionPng(img, z.read!, z.scale!, [], L).png;
+    const cellPng = async (z: Zone) => (await regionPng(img, z.read!, z.scale!, [], L)).png;
     const readFailed = (z: Zone, why: string) => { z.zr.why = `the reading failed: ${why}`.slice(0, 300); };
     // the calls: every zone's in one (batchZones), else one a zone, all out at once
     const batches = <T>(zs: T[]) => (P.batchZones ? (zs.length ? [zs] : []) : zs.map(z => [z]));
@@ -571,7 +578,7 @@ export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> 
         }
         const bare = readsPrompt(group.map(sizeOf), roof);
         try {
-            const replies = parseBatch(await call({ kind: 'reads', n: group.length, png: () => group.map(cellPng), bare, told: told(bare), region: group[0].read!, regions: group.map(z => z.read!), about: group.map(z => [z.read, z.scale]) }), group.length, parseReading);
+            const replies = parseBatch(await call({ kind: 'reads', n: group.length, png: () => Promise.all(group.map(cellPng)), bare, told: told(bare), region: group[0].read!, regions: group.map(z => z.read!), about: group.map(z => [z.read, z.scale]) }), group.length, parseReading);
             replies.forEach((r, i) => { if (isFailure(r)) readFailed(group[i], r.failed); else group[i].reading = r; });
         } catch (err) { for (const z of group) readFailed(z, errText(err)); }
     }));
@@ -591,7 +598,7 @@ export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> 
         z.t = t;
         z.kept = [...new Set(t.columnOf)].sort((a, b) => a - b);
         // the judge's picture: the outlines over the read crop and a held-out one
-        z.judged = sideBySide(regionRgba(img, z.read!, z.scale!, t.rects, L), regionRgba(img, z.heldOut ?? z.read!, z.scale!, t.rects, L));
+        z.judged = await sideBySide(regionRgba(img, z.read!, z.scale!, t.rects, L), regionRgba(img, z.heldOut ?? z.read!, z.scale!, t.rects, L));
         review?.(z.judged, `z${work.indexOf(z)}`);
     }
     // 4. the judge: the zones' judged as their unit cells were read
@@ -600,13 +607,13 @@ export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> 
     await Promise.all(batches(toJudge).map(async group => {
         if (group.length === 1) {
             const z = group[0], bare = judgePrompt(z.kept!.length);
-            try { judged.set(z, parseJudgement(await call({ kind: 'judge', n: 1, png: () => z.judged!, bare, region: z.heldOut ?? z.read!, about: shown(z) }))); }
+            try { judged.set(z, parseJudgement(await call({ kind: 'judge', n: 1, png: async () => z.judged!, bare, region: z.heldOut ?? z.read!, about: shown(z) }))); }
             catch (err) { judged.set(z, { failed: errText(err) }); }
             return;
         }
         const bare = judgesPrompt(group.map(z => z.kept!.length));
         try {
-            const replies = parseBatch(await call({ kind: 'judges', n: group.length, png: () => group.map(z => z.judged!), bare, region: group[0].heldOut ?? group[0].read!, regions: group.map(z => z.heldOut ?? z.read!), about: group.map(shown) }), group.length, parseJudgement);
+            const replies = parseBatch(await call({ kind: 'judges', n: group.length, png: async () => group.map(z => z.judged!), bare, region: group[0].heldOut ?? group[0].read!, regions: group.map(z => z.heldOut ?? z.read!), about: group.map(shown) }), group.length, parseJudgement);
             replies.forEach((r, i) => judged.set(group[i], r));
         } catch (err) { for (const z of group) judged.set(z, { failed: errText(err) }); }
     }));
@@ -705,10 +712,10 @@ export async function readFromTemplates(img: FacadePhoto, uncovered: ArrayLike<n
     const { read, heldOut } = zoneCrops(L, W, box, P.readCropM / f.pixel, P);
     if (!read) return undefined;
     const scale = scaleFor(read, P), rects = matches.map(m => m.rect);
-    const judged = sideBySide(regionRgba(img, read, scale, rects, L), regionRgba(img, heldOut ?? read, scale, rects, L));
+    const judged = await sideBySide(regionRgba(img, read, scale, rects, L), regionRgba(img, heldOut ?? read, scale, rects, L));
     review?.(judged, 'template');
     let judge: FacadeJudgement;
-    try { judge = parseJudgement(await asker(ask, memory, tally)({ kind: 'judge', n: 1, png: () => judged, bare: judgePrompt(columns), region: heldOut ?? read, about: [read, heldOut ?? read, scale, rects] })); }
+    try { judge = parseJudgement(await asker(ask, memory, tally)({ kind: 'judge', n: 1, png: async () => judged, bare: judgePrompt(columns), region: heldOut ?? read, about: [read, heldOut ?? read, scale, rects] })); }
     catch { return undefined; }
     if (!judge.accept || judge.conf < P.minConf) return undefined;
     const bad = new Set(judge.badColumns.map(n => n - 1));
@@ -819,12 +826,12 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
     const briefCalls: CallTally = { calls: 0, reused: 0 };
     if (P.brief && frames.length > 1) {
         try {
-            const sheet = contactSheet(orthosDir, frames);
+            const sheet = await contactSheet(orthosDir, frames);
             fs.writeFileSync(path.join(reviewDir, 'brief_sheet.png'), sheet.png);
             // kept by the sheet's own pixels, as a plane's answers are by its photo's
             const sheetMemory = opts.readings ? { ...opts.readings, plane: crypto.createHash('sha256').update(sheet.png).digest('hex') } : undefined;
             const whole = { x0: 0, y0: 0, x1: sheet.width, y1: sheet.height };
-            brief = parseBrief(await asker(limited, sheetMemory, briefCalls)({ kind: 'brief', n: 1, png: () => sheet.png, bare: briefPrompt(sheet.cells, places, opts.building), region: whole, about: sheet.cells }), sheet.cells);
+            brief = parseBrief(await asker(limited, sheetMemory, briefCalls)({ kind: 'brief', n: 1, png: async () => sheet.png, bare: briefPrompt(sheet.cells, places, opts.building), region: whole, about: sheet.cells }), sheet.cells);
             briefNote = { ...brief, cells: sheet.cells.length };
         } catch (err) {
             if (opts.signal?.aborted) throw err;
@@ -854,12 +861,13 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
             const fam = familyOf.get(f.facadeId), st = fam ? families.get(fam) : undefined, isLead = st?.lead === f.facadeId;
             const tally: CallTally = { calls: 0, reused: 0 };
             try {
-                const d = decodePng(fs.readFileSync(path.join(orthosDir, f.image)));
+                // the photo and its masks decoded on the codec threads (png-codec-pool.ts)
+                const d = await decodePngAsync(fs.readFileSync(path.join(orthosDir, f.image)));
                 let uncovered: Uint8Array | undefined;
                 const mf = f.uncoveredMask ? path.join(orthosDir, f.uncoveredMask) : undefined;
-                if (mf && fs.existsSync(mf)) { const m = decodePng(fs.readFileSync(mf)); uncovered = Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] >= 128 ? 1 : 0)); }
+                if (mf && fs.existsSync(mf)) { const m = await decodePngAsync(fs.readFileSync(mf)); uncovered = new Uint8Array(m.width * m.height); for (let k = 0; k < uncovered.length; k++) uncovered[k] = m.rgba[k * 4] >= 128 ? 1 : 0; }
                 // what stood in front of the facade when it was photographed is greyed out of the crops and not tiled from (occlusion.ts)
-                const occluded = readOccluded(orthosDir, f, d.width, d.height);
+                const occluded = await readOccludedAsync(orthosDir, f, d.width, d.height);
                 if (occluded) uncovered = unreadMask(uncovered, occluded, d.width * d.height);
                 const img = { rgba: d.rgba, width: d.width, height: d.height }, review = (png: Buffer, tag: string) => fs.writeFileSync(path.join(reviewDir, `${f.facadeId}_${tag}.png`), png);
                 // the plane's answers kept by its photo and what it may not read (uncovered or occluded)

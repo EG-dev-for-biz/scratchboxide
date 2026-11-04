@@ -142,4 +142,74 @@ describe('/3d/path-trace routes', () => {
             expect(closed.json).toEqual({ success: true, closed: true });
         }
     }, 120_000);
+
+    const postGlb = async (bytes: Buffer) => {
+        const res = await fetch(`${base}/snapshot`, {
+            method: 'POST',
+            headers: { 'X-Scratchbox-Token': token, 'Content-Type': 'model/gltf-binary', Connection: 'close' },
+            body: new Uint8Array(bytes)
+        });
+        return { status: res.status, json: await res.json() };
+    };
+
+    it('refuses a snapshot that is not a GLB, an unknown snapshot id and a still for an unknown session', async () => {
+        const notGlb = await postGlb(Buffer.from('not a glb at all, just text'));
+        expect(notGlb.status).toBe(400);
+        expect(notGlb.json.error).toMatch(/binary GLB/);
+        const unknown = await post('/open', { sbvgUrl: `${VIRTUAL_GEOMETRY_URL_PREFIX}/doesnotexist.sbvg`, snapshotId: 'zz' });
+        expect(unknown.status).toBe(422);
+        const still = await post('/render', { sessionId: 'nope', width: 64, height: 64, camera: { position: [0, 0, 4], target: [0, 0, 0] } });
+        expect(still.status).toBe(404);
+    });
+
+    it('builds a viewport snapshot once, opens it with the camera offset by the file origin, and saves a still in the workspace', async ctx => {
+        // The sphere moved off the origin: the file stores vertices relative to its own centre, which /snapshot reports.
+        const shifted = sphereGlb();
+        const json = JSON.parse(shifted.subarray(20, 20 + shifted.readUInt32LE(12)).toString('utf8'));
+        json.nodes[0].translation = [100, 5, -40];
+        let js = Buffer.from(JSON.stringify(json));
+        js = Buffer.concat([js, Buffer.alloc((4 - js.length % 4) % 4, 0x20)]);
+        const binStart = 20 + shifted.readUInt32LE(12);
+        const bin = shifted.subarray(binStart);
+        const header = Buffer.alloc(12);
+        header.writeUInt32LE(0x46546c67, 0); header.writeUInt32LE(2, 4); header.writeUInt32LE(12 + 8 + js.length + bin.length, 8);
+        const jh = Buffer.alloc(8); jh.writeUInt32LE(js.length, 0); jh.writeUInt32LE(0x4e4f534a, 4);
+        const glb = Buffer.concat([header, jh, js, bin]);
+
+        const first = await postGlb(glb);
+        expect(first.status).toBe(200);
+        expect(first.json.snapshotId).toMatch(/^[0-9a-f]{32}$/);
+        expect(first.json.sbvgUrl.startsWith(`${VIRTUAL_GEOMETRY_URL_PREFIX}/`)).toBe(true);
+        expect(first.json.cached).toBe(false);
+        expect(first.json.origin[0]).toBeCloseTo(100, 3);
+        expect(first.json.origin[1]).toBeCloseTo(5, 3);
+        expect(first.json.origin[2]).toBeCloseTo(-40, 3);
+        const again = await postGlb(glb);
+        expect(again.json).toMatchObject({ snapshotId: first.json.snapshotId, sbvgUrl: first.json.sbvgUrl, cached: true });
+
+        if (!raytracing) return ctx.skip();
+        const opened = await post('/open', { sbvgUrl: first.json.sbvgUrl, snapshotId: first.json.snapshotId, lighting: { sun: { elevationDeg: 40, azimuthDeg: 135 } } });
+        expect(opened.status).toBe(200);
+        expect(opened.json.origin[0]).toBeCloseTo(100, 3);
+        const sessionId: string = opened.json.sessionId;
+        try {
+            // The world camera (100, 5, -36) looking at the sphere's world centre, in file coordinates.
+            const camera = { position: [0, 0, 4], target: [0, 0, 0], verticalFovDeg: 35 };
+            const still = await post('/render', { sessionId, width: 120, height: 80, samplesPerPixel: 16, camera, workspaceRoot, name: 'Snapshot Sphere' });
+            expect(still.status).toBe(200);
+            expect(still.json.path).toMatch(/^renders\/path-traced\/snapshot_sphere-.+\.png$/);
+            const png = fs.readFileSync(path.join(workspaceRoot, still.json.path));
+            expect(png.subarray(1, 4).toString('ascii')).toBe('PNG');
+            expect(png.readUInt32BE(16)).toBe(120);
+            expect(png.readUInt32BE(20)).toBe(80);
+            const record = JSON.parse(fs.readFileSync(path.join(workspaceRoot, still.json.path.replace(/\.png$/, '.json')), 'utf8'));
+            expect(record).toMatchObject({ width: 120, height: 80, samplesPerPixel: 16, denoised: true, lighting: { sun: { elevationDeg: 40, azimuthDeg: 135 } } });
+            // The sphere fills the middle of the frame: the camera reached it through the origin offset (a camera
+            // left in world coordinates would look at empty space 100 m away).
+            expect(record.cut.triangles).toBeGreaterThan(1000);
+            expect(record.geometryCoverage).toBeGreaterThan(0.25);
+        } finally {
+            await post('/close', { sessionId });
+        }
+    }, 180_000);
 });

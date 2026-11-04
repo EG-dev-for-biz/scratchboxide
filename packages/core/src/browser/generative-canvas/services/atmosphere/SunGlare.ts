@@ -16,10 +16,13 @@
  *
  * It is drawn after the scene as a screen-space overlay, scaled by how much of the sun is visible: through cloud (the
  * baked sky's disc at the sun's direction against its cloudless value) and past geometry (a 1° probe render from the
- * camera toward the sun, a few times a second). A sun behind a building or thick cloud has no glare; one at an edge
- * glows over it, as in footage. The measured visibility is eased toward, over VISIBILITY_EASE_SECONDS, never stepped: the
- * probe sees leaves, cornices and window edges slide across the disc, and a glare that jumped with each probe read
- * flickered, worst under depth of field, which spreads every jump over its whole blur disc.
+ * camera toward the sun, every frame, whose open share is counted on the GPU and read there by the overlay: a read-back
+ * would stall the frame). A sun behind a building or thick cloud has no glare; one at an edge glows over it, as in
+ * footage. The geometry visibility drawn trails the measured one by at most VISIBILITY_GLIDE_BAND and glides the rest
+ * over VISIBILITY_EASE_SECONDS: the probe sees leaves, cornices and window edges slide across the disc, and a glare that
+ * jumped with each of them flickered, worst under depth of field, which spreads every jump over its whole blur disc. A
+ * larger change (the sun going behind a wall) is followed at once, and a hidden sun (VISIBILITY_HIDDEN) has no glare
+ * from the frame it is hidden: a glare eased all the way, every 4 frames, glowed on for half a second after it.
  */
 
 import * as THREE from 'three';
@@ -29,11 +32,14 @@ export const GLARE_K = 4.2;
 export const GLARE_N = 2.5;
 /** Angular radius of the sun's disc, degrees. */
 export const SUN_RADIUS_DEG = 0.267;
-/** The geometry probe's side (pixels; the disc covers ~550 of them) and how often it is read. */
+/** The geometry probe's side (pixels; the disc covers ~550 of them). */
 const PROBE_SIZE = 32;
-const PROBE_EVERY_FRAMES = 4;
-/** Time constant (s) of the glide from the shown visibility to the measured one. */
+/** Time constant (s) of the glide from the shown visibility to the measured one, within VISIBILITY_GLIDE_BAND of it. */
 export const VISIBILITY_EASE_SECONDS = 0.2;
+/** How far the shown geometry visibility may trail the measured one: a change within it glides, a larger one is followed at once to it. */
+export const VISIBILITY_GLIDE_BAND = 0.1;
+/** A measured geometry visibility at or below this is a hidden sun (about 5 of the disc's probe pixels open): no glare at once. */
+export const VISIBILITY_HIDDEN = 0.01;
 
 const GLARE_VERTEX = /* glsl */ `
 varying vec2 vNdc;
@@ -46,7 +52,8 @@ const GLARE_FRAGMENT = /* glsl */ `
 uniform mat4 uInvProjection;
 uniform mat4 uCameraWorld;
 uniform vec3 uSunDirection;
-uniform vec3 uSunIrradiance;   // the scene sun's colour x intensity, times strength x visibility
+uniform vec3 uSunIrradiance;   // the scene sun's colour x intensity, times strength x cloud visibility
+uniform sampler2D tVisibility; // the shown geometry visibility (VISIBILITY_FRAGMENT), in red
 varying vec2 vNdc;
 void main() {
     vec4 view = uInvProjection * vec4(vNdc, 1.0, 1.0);
@@ -54,7 +61,7 @@ void main() {
     float theta = degrees(acos(clamp(dot(ray, normalize(uSunDirection)), -1.0, 1.0)));
     // Inside the disc the halo is held at its rim value (the dome draws the disc itself).
     float t = max(theta, ${SUN_RADIUS_DEG.toFixed(3)});
-    vec3 glare = uSunIrradiance * ${GLARE_K.toFixed(2)} * pow(t, -${GLARE_N.toFixed(2)});
+    vec3 glare = uSunIrradiance * texelFetch(tVisibility, ivec2(0), 0).r * ${GLARE_K.toFixed(2)} * pow(t, -${GLARE_N.toFixed(2)});
     gl_FragColor = vec4(min(glare, vec3(6.0e4)), 1.0);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
@@ -64,6 +71,33 @@ const PROBE_SKY_FRAGMENT = /* glsl */ `
 uniform samplerCube uSkyCube;
 uniform vec3 uSunDirection;
 void main() { gl_FragColor = vec4(textureCube(uSkyCube, normalize(uSunDirection)).rgb, 1.0); }`;
+
+// The disc's open share of the probe (white sky, black geometry; the frame is 1.2 disc diameters), and the visibility the
+// glare is drawn with: within VISIBILITY_GLIDE_BAND of the measure it glides, further it is brought to the band's edge,
+// and a hidden sun is 0. Red is the shown visibility, green the measured one.
+const VISIBILITY_FRAGMENT = /* glsl */ `
+uniform sampler2D tProbe;
+uniform sampler2D tShown;
+uniform float uDt;
+uniform bool uReset;
+void main() {
+    const float c = ${((PROBE_SIZE - 1) / 2).toFixed(1)};
+    const float r = ${(PROBE_SIZE / 2 / 1.2).toFixed(4)};
+    float open = 0.0, n = 0.0;
+    for (int y = 0; y < ${PROBE_SIZE}; y++) for (int x = 0; x < ${PROBE_SIZE}; x++) {
+        if (length(vec2(float(x), float(y)) - c) > r) continue;
+        n += 1.0;
+        open += texelFetch(tProbe, ivec2(x, y), 0).r;
+    }
+    float measured = n > 0.0 ? open / n : 1.0;
+    float shown = measured;
+    if (measured <= ${VISIBILITY_HIDDEN.toFixed(3)}) shown = 0.0;
+    else if (!uReset) {
+        shown = clamp(texelFetch(tShown, ivec2(0), 0).r, measured - ${VISIBILITY_GLIDE_BAND.toFixed(3)}, measured + ${VISIBILITY_GLIDE_BAND.toFixed(3)});
+        shown += (measured - shown) * (1.0 - exp(-uDt / ${VISIBILITY_EASE_SECONDS.toFixed(3)}));
+    }
+    gl_FragColor = vec4(shown, measured, 0.0, 1.0);
+}`;
 
 export interface SunGlareInputs {
     sunDirection: () => THREE.Vector3;
@@ -80,24 +114,23 @@ export interface SunGlareInputs {
 
 export class SunGlare {
     readonly mesh: THREE.Mesh;
-    /** Last measured fractions of the sun left visible. */
+    /** Last measured fraction of the sun a cloud leaves visible. */
     cloudVisibility = 1;
-    geometryVisibility = 1;
-    /** The visibility the glare is drawn with: eased toward the measured one (VISIBILITY_EASE_SECONDS). */
-    shownVisibility = -1;
-    private lastEaseMs = 0;
-    /** The cloud visibility eased the same way, for what else dims with cloud (the god rays): never read the raw one. */
+    /** The cloud visibility eased (VISIBILITY_EASE_SECONDS), as the glare and what else dims with cloud (the god rays) read it. */
     shownCloudVisibility = -1;
     private lastCloudEaseMs = 0;
     private readonly material: THREE.ShaderMaterial;
     private readonly probeTarget = new THREE.WebGLRenderTarget(PROBE_SIZE, PROBE_SIZE, { type: THREE.UnsignedByteType });
     private readonly skyTarget = new THREE.WebGLRenderTarget(1, 1, { type: THREE.FloatType });
+    /** The shown geometry visibility, ping-ponged: each frame's pass reads the last one's (VISIBILITY_FRAGMENT). */
+    private readonly visibilityTargets = [0, 1].map(() => new THREE.WebGLRenderTarget(1, 1, { type: THREE.FloatType, depthBuffer: false }));
+    private visibilityIndex = 0;
+    private lastProbeMs = -1;
     private readonly probeCamera = new THREE.PerspectiveCamera(SUN_RADIUS_DEG * 2 * 1.2, 1, 0.1, 1e7);
     private readonly occluderMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
     private readonly skyQuad: { scene: THREE.Scene; camera: THREE.OrthographicCamera; material: THREE.ShaderMaterial };
-    private readonly pixels = new Uint8Array(PROBE_SIZE * PROBE_SIZE * 4);
+    private readonly visibilityQuad: { scene: THREE.Scene; material: THREE.ShaderMaterial };
     private readonly skyPixel = new Float32Array(4);
-    private frame = 0;
     private skyKey = '';
 
     constructor(private readonly inputs: SunGlareInputs, private strength: number) {
@@ -108,7 +141,8 @@ export class SunGlare {
                 uInvProjection: { value: new THREE.Matrix4() },
                 uCameraWorld: { value: new THREE.Matrix4() },
                 uSunDirection: { value: new THREE.Vector3(0, 1, 0) },
-                uSunIrradiance: { value: new THREE.Color(0, 0, 0) }
+                uSunIrradiance: { value: new THREE.Color(0, 0, 0) },
+                tVisibility: { value: null as THREE.Texture | null }
             },
             blending: THREE.AdditiveBlending,
             transparent: true,
@@ -135,15 +169,23 @@ export class SunGlare {
         quad.frustumCulled = false;
         skyScene.add(quad);
         this.skyQuad = { scene: skyScene, camera: new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), material: skyMaterial };
+
+        const visibilityMaterial = new THREE.ShaderMaterial({
+            vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
+            fragmentShader: VISIBILITY_FRAGMENT,
+            uniforms: { tProbe: { value: this.probeTarget.texture }, tShown: { value: null }, uDt: { value: 0 }, uReset: { value: true } },
+            depthTest: false,
+            depthWrite: false
+        });
+        const visibilityScene = new THREE.Scene();
+        const visibilityMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), visibilityMaterial);
+        visibilityMesh.frustumCulled = false;
+        visibilityScene.add(visibilityMesh);
+        this.visibilityQuad = { scene: visibilityScene, material: visibilityMaterial };
     }
 
     setStrength(strength: number): void {
         this.strength = strength;
-    }
-
-    /** Fraction of the sun visible (cloud and geometry), as last measured. */
-    get visibility(): number {
-        return this.cloudVisibility * this.geometryVisibility;
     }
 
     private beforeRender(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera): void {
@@ -163,14 +205,13 @@ export class SunGlare {
             (u.uSunIrradiance.value as THREE.Color).setRGB(0, 0, 0);
             return;
         }
-        if (this.frame++ % PROBE_EVERY_FRAMES === 0) {
-            this.measureCloud(renderer, sun);
-            this.measureGeometry(renderer, scene, camera, sun);
-        }
-        (u.uSunIrradiance.value as THREE.Color).copy(this.inputs.sunIrradiance()).multiplyScalar(this.strength * up * this.ease(this.visibility));
+        const now = performance.now();
+        this.measureCloud(renderer, sun);
+        u.tVisibility.value = this.measureGeometry(renderer, scene, camera, sun, now);
+        (u.uSunIrradiance.value as THREE.Color).copy(this.inputs.sunIrradiance()).multiplyScalar(this.strength * up * this.easedCloudVisibility(now));
     }
 
-    /** The cloud visibility, eased (call once a frame; the first call takes it as it is). */
+    /** The cloud visibility, eased (each call glides by the time since the last; the first takes it as it is). */
     easedCloudVisibility(nowMs: number = performance.now()): number {
         if (this.shownCloudVisibility < 0) { this.shownCloudVisibility = this.cloudVisibility; this.lastCloudEaseMs = nowMs; return this.cloudVisibility; }
         const dt = Math.min(0.5, Math.max(0, (nowMs - this.lastCloudEaseMs) / 1000));
@@ -179,16 +220,7 @@ export class SunGlare {
         return this.shownCloudVisibility;
     }
 
-    /** One step of the glide toward `target` (frame-rate independent; the first measure is taken as it is). */
-    ease(target: number, nowMs: number = performance.now()): number {
-        if (this.shownVisibility < 0) { this.shownVisibility = target; this.lastEaseMs = nowMs; return target; }
-        const dt = Math.min(0.5, Math.max(0, (nowMs - this.lastEaseMs) / 1000));
-        this.lastEaseMs = nowMs;
-        this.shownVisibility += (target - this.shownVisibility) * (1 - Math.exp(-dt / VISIBILITY_EASE_SECONDS));
-        return this.shownVisibility;
-    }
-
-    /** The baked sky's radiance at the sun against the disc's cloudless value. */
+    /** The baked sky's radiance at the sun against the disc's cloudless value (read again only when the sky or sun changes). */
     private measureCloud(renderer: THREE.WebGLRenderer, sun: THREE.Vector3): void {
         const cube = this.inputs.skyCube();
         const key = `${cube.uuid}:${cube.version}:${sun.x.toFixed(5)},${sun.y.toFixed(5)},${sun.z.toFixed(5)}`;
@@ -204,8 +236,11 @@ export class SunGlare {
         this.cloudVisibility = clear > 0 ? Math.min(1, Math.max(0, lum / clear)) : 1;
     }
 
-    /** Share of a 1°-wide view from the camera toward the sun that no geometry covers. */
-    private measureGeometry(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, sun: THREE.Vector3): void {
+    /**
+     * Draws the 1°-wide view from the camera toward the sun (geometry black on white) and the shown visibility from it
+     * (VISIBILITY_FRAGMENT); returns the texture holding it.
+     */
+    private measureGeometry(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, sun: THREE.Vector3, nowMs: number): THREE.Texture {
         const probe = this.probeCamera;
         probe.position.setFromMatrixPosition(camera.matrixWorld);
         probe.lookAt(probe.position.clone().add(sun));
@@ -216,26 +251,37 @@ export class SunGlare {
         hidden.forEach(o => { o.visible = false; });
         const override = scene.overrideMaterial, background = scene.background, fog = scene.fog;
         const clearColor = renderer.getClearColor(new THREE.Color()), clearAlpha = renderer.getClearAlpha();
+        const shadowAuto = renderer.shadowMap.autoUpdate, shadowNeeded = renderer.shadowMap.needsUpdate, matrixAuto = scene.matrixWorldAutoUpdate;
         scene.overrideMaterial = this.occluderMaterial;
         scene.background = null;
         scene.fog = null;
+        // The probe's material is unlit and the frame's matrices are current. Left on, every probe drew every shadow map
+        // again, and the sun's cascades, refitted to the probe's narrow view, were what the passes after the scene draw
+        // (the contact shadows) read.
+        renderer.shadowMap.autoUpdate = false;
+        renderer.shadowMap.needsUpdate = false;
+        scene.matrixWorldAutoUpdate = false;
         renderer.setClearColor(0xffffff, 1);
         this.withTarget(renderer, this.probeTarget, () => { renderer.clear(); renderer.render(scene, probe); });
         renderer.setClearColor(clearColor, clearAlpha);
+        renderer.shadowMap.autoUpdate = shadowAuto;
+        renderer.shadowMap.needsUpdate = shadowNeeded;
+        scene.matrixWorldAutoUpdate = matrixAuto;
         scene.overrideMaterial = override;
         scene.background = background;
         scene.fog = fog;
         hidden.forEach(o => { o.visible = true; });
-        renderer.readRenderTargetPixels(this.probeTarget, 0, 0, PROBE_SIZE, PROBE_SIZE, this.pixels);
-        // Only the disc counts: pixels within its radius of the probe's centre (the frame is 1.2 disc diameters).
-        let open = 0, n = 0;
-        const c = (PROBE_SIZE - 1) / 2, r = (PROBE_SIZE / 2) / 1.2;
-        for (let y = 0; y < PROBE_SIZE; y++) for (let x = 0; x < PROBE_SIZE; x++) {
-            if (Math.hypot(x - c, y - c) > r) continue;
-            n++;
-            open += this.pixels[(y * PROBE_SIZE + x) * 4] / 255;
-        }
-        this.geometryVisibility = n ? open / n : 1;
+
+        const v = this.visibilityQuad.material.uniforms;
+        const previous = this.visibilityTargets[this.visibilityIndex];
+        this.visibilityIndex = 1 - this.visibilityIndex;
+        const next = this.visibilityTargets[this.visibilityIndex];
+        v.tShown.value = previous.texture;
+        v.uReset.value = this.lastProbeMs < 0;
+        v.uDt.value = this.lastProbeMs < 0 ? 0 : Math.min(0.5, Math.max(0, (nowMs - this.lastProbeMs) / 1000));
+        this.lastProbeMs = nowMs;
+        this.withTarget(renderer, next, () => renderer.render(this.visibilityQuad.scene, this.skyQuad.camera));
+        return next.texture;
     }
 
     private withTarget(renderer: THREE.WebGLRenderer, target: THREE.WebGLRenderTarget, draw: () => void): void {
@@ -253,8 +299,11 @@ export class SunGlare {
         this.mesh.geometry.dispose();
         this.skyQuad.material.dispose();
         (this.skyQuad.scene.children[0] as THREE.Mesh).geometry.dispose();
+        this.visibilityQuad.material.dispose();
+        (this.visibilityQuad.scene.children[0] as THREE.Mesh).geometry.dispose();
         this.occluderMaterial.dispose();
         this.probeTarget.dispose();
         this.skyTarget.dispose();
+        this.visibilityTargets.forEach(t => t.dispose());
     }
 }

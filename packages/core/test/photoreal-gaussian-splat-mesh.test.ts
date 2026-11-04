@@ -14,6 +14,7 @@ import {
   type SplatData
 } from '../src/browser/generative-canvas/services/spatial/PhotorealGaussianSplatMesh';
 import { SpatialGenerativeRuntime } from '../src/browser/generative-canvas/services/spatial/SpatialGenerativeRuntime';
+import { computeSceneGeometryBounds } from '../src/browser/generative-canvas/primitives/scene3d/autoFraming';
 
 function createMockSplatBuffer(count: number): ArrayBuffer {
   const buffer = new ArrayBuffer(count * 32);
@@ -62,6 +63,38 @@ describe('PhotorealGaussianSplatMesh & Spatial Engine Integration', () => {
     expect(splatData.bounds?.min[1]).toBe(0);
     expect(splatData.bounds?.max[1]).toBeCloseTo((count - 1) * 0.5, 3);
     expect(splatData.centroid).toBeDefined();
+  });
+
+  it('a small splat object frames by its splats: real geometry bounds, and a contact shadow its own size kept out of framing', () => {
+    // 200 splats on a 0.1 m sphere centred 0.2 m up (a groomed coat's scale)
+    const count = 200;
+    const buffer = new ArrayBuffer(count * 32);
+    const view = new DataView(buffer);
+    for (let i = 0; i < count; i++) {
+      const y = 1 - (2 * (i + 0.5)) / count, r = Math.sqrt(1 - y * y), a = i * 2.399963;
+      const off = i * 32;
+      view.setFloat32(off, 0.1 * r * Math.cos(a), true);
+      view.setFloat32(off + 4, 0.2 + 0.1 * y, true);
+      view.setFloat32(off + 8, 0.1 * r * Math.sin(a), true);
+      for (let k = 0; k < 3; k++) view.setFloat32(off + 12 + 4 * k, 0.003, true);
+      view.setUint8(off + 24, 200); view.setUint8(off + 25, 120); view.setUint8(off + 26, 60); view.setUint8(off + 27, 255);
+      view.setUint8(off + 28, 128); view.setUint8(off + 29, 128); view.setUint8(off + 30, 128); view.setUint8(off + 31, 255);
+    }
+    const splatData = PhotorealGaussianSplatMesh.parseSplatBuffer(buffer);
+    const mesh = new PhotorealGaussianSplatMesh(splatData, { contactShadow: true });
+    const scene = new THREE.Scene();
+    scene.add(mesh);
+    const bounds = computeSceneGeometryBounds(scene);
+    expect(bounds.hasGeometry).toBe(true);
+    // the sphere's own bound (0.1 m radius, a little more for the box corners), not the unit quad's 0.71 m or the shadow's metres
+    expect(bounds.sphere.radius).toBeGreaterThan(0.09);
+    expect(bounds.sphere.radius).toBeLessThan(0.2);
+    expect(bounds.sphere.center.y).toBeCloseTo(0.2, 2);
+    const shadow = mesh.children.find(c => c.name === 'sb-splat-contact-shadow') as THREE.Mesh;
+    shadow.geometry.computeBoundingSphere();
+    // a long directional shadow, but scaled by the object (its plane is 2.5 x the splats' width and depth + height)
+    expect(shadow.geometry.boundingSphere!.radius).toBeLessThan(0.6);
+    expect(shadow.position.y).toBeCloseTo(0.1, 2);
   });
 
   it('constructs instanced geometry and production shader material', () => {

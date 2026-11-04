@@ -70,12 +70,17 @@ export const CANVAS_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'STRING',
                     description: 'Brief 1-2 sentence description of what was synthesized'
                 },
+                payloadJson: {
+                    type: 'STRING',
+                    description: 'The primitive data as one JSON object written out in a string: send it here (it keeps nested objects, such as each scene object\'s content {durableUri, mimeType} and space {spatial3d}). Everything said under payload applies to it; when both are given this one is used.'
+                },
                 payload: {
                     type: 'OBJECT',
-                    description: 'The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData). For "3d-scene", you can supply payload.script (or payload.pythonGenerator.sourceCode) with procedural Python code importing scratchbox as sb to compile native C++20 geometry and stream binary .glb directly into the viewport. If the script fails or writes no model, the call fails with the interpreter\'s error output and nothing is mounted. A mount starts a new canvas artifact, so the scene must declare something the viewport draws (objects whose content.durableUri is a .glb / .gltf model or a .splat / .spz splat, a script, a generator GLB as glbBase64, a splatUrl, a customScript or a geoAnchor {lat, lng} for live tiles); an object the viewport cannot draw, or a geoAnchor that is 0, 0, out of range or not numbers, fails the mount, and payload.customMeshes (client-side primitive meshes) are refused. A first 3D scene is always built in grey clay (renderMode "clay"); while a scene is open its render mode is kept unless you set payload.renderMode, so set "pbr" only when the user asks for colours, textures or materials. For "markdown-document", send payload.sections (or the document as markdown in payload.markdown); a document with neither is not mounted. For "live-code-sandbox", send payload.files as [{name, language, content}] holding the code of the app (one file isEntry: true); a sandbox with no file content is not mounted.'
+                    description: 'Prefer payloadJson: nested objects sent here can arrive empty. The strongly-typed primitive data (Scene3DData, VideoTimelineData, SandboxData, KanbanData, DocumentData, or GraphData). For "3d-scene", you can supply payload.script (or payload.pythonGenerator.sourceCode) with procedural Python code importing scratchbox as sb to compile native C++20 geometry and stream binary .glb directly into the viewport. If the script fails or writes no model, the call fails with the interpreter\'s error output and nothing is mounted. A mount starts a new canvas artifact, so the scene must declare something the viewport draws (objects whose content.durableUri is a .glb / .gltf model or a .splat / .spz splat, a script, a generator GLB as glbBase64, a splatUrl, a customScript or a geoAnchor {lat, lng} for live tiles); an object the viewport cannot draw, or a geoAnchor that is 0, 0, out of range or not numbers, fails the mount, and payload.customMeshes (client-side primitive meshes) are refused. A first 3D scene is always built in grey clay (renderMode "clay"); while a scene is open its render mode is kept unless you set payload.renderMode, so set "pbr" only when the user asks for colours, textures or materials. For "markdown-document", send payload.sections (or the document as markdown in payload.markdown); a document with neither is not mounted. For "live-code-sandbox", send payload.files as [{name, language, content}] holding the code of the app (one file isEntry: true); a sandbox with no file content is not mounted.'
                 }
             },
-            required: ['primitiveType', 'title', 'payload']
+            // payloadJson or payload: the handler says which is missing
+            required: ['primitiveType', 'title']
         }
     },
     {
@@ -265,12 +270,23 @@ export const canvasHandlers: Record<string, ToolHandler> = {
         let title = asString(args.title) || 'Visual Creation';
         let summary = asString(args.summary) || `Synthesized ${title} on visual canvas.`;
         // The payload is the primitive's data as the model wrote it; anything else fails the call so the model can resend it.
-        if (!args.payload || typeof args.payload !== 'object' || Array.isArray(args.payload)) {
-            const got = args.payload === undefined ? 'nothing' : Array.isArray(args.payload) ? 'an array' : `a ${typeof args.payload}`;
-            const error = `payload must be a JSON object holding the ${primitiveType} data; got ${got}. Nothing was mounted.`;
+        // payloadJson (a string) comes first: an untyped OBJECT parameter loses its nested objects in Gemini's function
+        // calling (they arrive as {} or as numbers), so a scene object's content and space only survive written as JSON.
+        let rawPayload: unknown = args.payload;
+        if (typeof args.payloadJson === 'string' && args.payloadJson.trim()) {
+            try {
+                rawPayload = JSON.parse(args.payloadJson);
+            } catch (err) {
+                const error = `payloadJson is not valid JSON (${(err as Error).message}); send the ${primitiveType} data as one JSON object. Nothing was mounted.`;
+                return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
+            }
+        }
+        if (!rawPayload || typeof rawPayload !== 'object' || Array.isArray(rawPayload)) {
+            const got = rawPayload === undefined ? 'nothing' : Array.isArray(rawPayload) ? 'an array' : `a ${typeof rawPayload}`;
+            const error = `payload must be a JSON object holding the ${primitiveType} data (send it written out as payloadJson); got ${got}. Nothing was mounted.`;
             return { status: 'failed', resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` };
         }
-        let payload = args.payload as ArtifactData;
+        let payload = rawPayload as ArtifactData;
 
         const prompt = _ctx?.request?.prompt || '';
 

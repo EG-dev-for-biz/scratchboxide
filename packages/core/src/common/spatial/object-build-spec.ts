@@ -164,6 +164,13 @@ export interface ObjectPartSpec {
     attach?: PartAttachment;
     /** Also emit this part (and what is attached to it) reflected across the plane through the origin with this normal. */
     mirrorPlaneNormal?: Vec3;
+    /**
+     * Radius of the part's rounded edges in metres (sweep and revolve parts): a revolve's sharp corners are filleted and
+     * a sweep's section corners and open ends rounded at it. 0 keeps the edges sharp; omitted, the build uses about 1.5 %
+     * of the part's smallest dimension, clamped to OBJECT_SPEC_LIMITS.minEdgeRadiusMeters..maxEdgeRadiusMeters (and at
+     * most 5 % of a part under 4 cm). Generated, never measured.
+     */
+    edgeRadiusMeters?: number;
     sweep?: SweepOperator;
     revolve?: RevolveOperator;
     replicate?: ReplicateOperator;
@@ -209,6 +216,9 @@ export const OBJECT_SPEC_LIMITS = {
     maxTotalInstances: 4096,
     maxLobes: 64,
     maxBoundingMeters: 1000,
+    /** Edge radius range (object_spec.py EDGE_RADIUS_MIN / EDGE_RADIUS_MAX); 0 is also allowed, for a sharp part. */
+    minEdgeRadiusMeters: 0.002,
+    maxEdgeRadiusMeters: 0.05,
     /** Coordinates beyond this multiple of the largest bounding dimension are a unit mistake (mm or cm for m). */
     coordinateReachFactor: 5
 } as const;
@@ -314,6 +324,7 @@ export const OBJECT_BUILD_SPEC_JSON_SCHEMA: Record<string, unknown> = {
                         required: ['u', 'angleDeg', 'normalOffsetMeters']
                     },
                     mirrorPlaneNormal: vec3('Optional: also emit this part and what is attached to it reflected across the plane through the origin with this normal, e.g. [1,0,0].'),
+                    edgeRadiusMeters: num(`Optional, sweep and revolve parts: radius of the part's rounded edges in metres, as the picture shows them (cast, moulded and worn edges are soft; machined and sheet edges small). 0 keeps them sharp (a blade, a knife edge); omit for the default, about 1.5 % of the part's smallest dimension. At most ${OBJECT_SPEC_LIMITS.maxEdgeRadiusMeters}.`, 0, OBJECT_SPEC_LIMITS.maxEdgeRadiusMeters),
                     sweep: {
                         type: 'object',
                         properties: {
@@ -425,7 +436,7 @@ export const OBJECT_BUILD_SPEC_JSON_SCHEMA: Record<string, unknown> = {
                     }
                 },
                 required: ['id', 'label'],
-                propertyOrdering: ['id', 'label', 'parentId', 'attach', 'mirrorPlaneNormal', 'sweep', 'revolve', 'replicate', 'relief', 'crown']
+                propertyOrdering: ['id', 'label', 'parentId', 'attach', 'mirrorPlaneNormal', 'edgeRadiusMeters', 'sweep', 'revolve', 'replicate', 'relief', 'crown']
             }
         }
     },
@@ -514,6 +525,14 @@ export function validateObjectBuildSpec(input: unknown, options: { requireMateri
             errors.push(`${where}: mirrorPlaneNormal must be a non-zero [x, y, z] vector`);
         }
         const geometric = present.length === 1 && (present[0] === 'sweep' || present[0] === 'revolve');
+        if (given(raw.edgeRadiusMeters)) {
+            const r = raw.edgeRadiusMeters;
+            if (present.length === 1 && !geometric) {
+                errors.push(`${where}: a ${present[0]} part has no edges of its own, so it cannot have an edgeRadiusMeters`);
+            } else if (typeof r !== 'number' || !Number.isFinite(r) || r < 0 || r > OBJECT_SPEC_LIMITS.maxEdgeRadiusMeters) {
+                errors.push(`${where}: edgeRadiusMeters must be 0 (sharp) to ${OBJECT_SPEC_LIMITS.maxEdgeRadiusMeters} metres`);
+            }
+        }
         const crown = present.length === 1 && present[0] === 'crown';
         if (given(raw.material)) {
             if (present.length === 1 && !geometric && !crown) {

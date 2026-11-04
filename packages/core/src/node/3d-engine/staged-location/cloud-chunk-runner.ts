@@ -10,7 +10,8 @@
 /**
  * Pipeline K-D's chunks built in the cloud (SCRATCHBOX_KD_CHUNK_RUNNER=cloud; plan:
  * docs/research/2026-10-29-kd-cloud-chunk-runner-plan.md): the second implementation of the orchestrator's `runChunk`,
- * beside the local worker thread. Each chunk is one Cloud Run job execution (8 vCPU / 32 GiB) running kd-chunk-job.ts:
+ * beside the local worker thread, and by default the centre cell's too (district-chunks.ts kdCentreRunner: the laptop then only
+ * plans, paints, joins and publishes). Each chunk is one Cloud Run job execution (8 vCPU / 32 GiB) running kd-chunk-job.ts:
  *
  *  1. the chunk's request goes to `gs://<bucket>/kd-jobs/<parentRunId>/<chunk>/request.json`, with the run id the chunk
  *     builds under (made here, so its run record is known before it starts);
@@ -224,6 +225,8 @@ export interface CloudChunkConfig {
     vcpu: number;
     memGiB: number;
     pollMs: number;
+    /** Polls of the execution's state that may fail in a row (the API out of reach a moment) before the chunk is failed. */
+    pollMisses: number;
 }
 
 /** The runner's settings: SCRATCHBOX_KD_CLOUD_{PROJECT,REGION,JOB,BUCKET}, defaults scoutscan / us-central1 / kd-chunk-job / scoutscan-kd-jobs. */
@@ -236,7 +239,8 @@ export function cloudChunkConfig(env: NodeJS.ProcessEnv = process.env): CloudChu
         bucket: v('SCRATCHBOX_KD_JOB_BUCKET', 'scoutscan-kd-jobs'),
         vcpu: 8,
         memGiB: 32,
-        pollMs: 10_000
+        pollMs: 10_000,
+        pollMisses: 12
     };
 }
 
@@ -302,10 +306,11 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
     const env = o.env ?? process.env;
     const log = o.log ?? ((m: string) => console.log(m));
     let checked: Promise<string> | undefined;
+    // a failure to read the image (the API out of reach) is asked again by the next chunk; a skewed image stays refused
     const imageChecked = () => checked ??= o.jobs.jobImage().then(image => {
         checkImageSkew(image, (o.head ?? (() => gitHead(__dirname)))(), env);
         return image;
-    });
+    }, err => { checked = undefined; throw err; });
     // once a district, before its first chunk starts; a chunk without them measures what it needs itself
     const statsSent = new Map<string, Promise<void>>();
     const libraryStatsSent = (of: string) => {
@@ -367,16 +372,28 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
                     for (const l of r.lines) progress(l);
                 } catch { /* the next poll reads it */ }
             };
+            const cancel = () => o.jobs.cancel(execution).catch(e => log(`[kd-cloud] cancelling ${execution} failed: ${e instanceof Error ? e.message : String(e)}`));
             try {
+                // a poll that fails is asked again (a moment's timeout must not fail a job that is still building); after
+                // pollMisses in a row the chunk fails, its execution cancelled so a retry does not run beside it
+                let misses = 0;
                 while (true) {
                     await sleep(config.pollMs, signal);
                     await readProgress();
-                    state = await o.jobs.get(execution);
+                    try {
+                        state = await o.jobs.get(execution);
+                        misses = 0;
+                    } catch (err) {
+                        if (signal?.aborted) throw err;
+                        if (++misses >= config.pollMisses) { await cancel(); throw err; }
+                        log(`[kd-cloud] chunk ${request.chunk!.index}: reading ${short} failed (${err instanceof Error ? err.message : String(err)}); asked again (${misses} of ${config.pollMisses})`);
+                        continue;
+                    }
                     if (state.done) break;
                 }
             } catch (err) {
                 if (signal?.aborted) {
-                    await o.jobs.cancel(execution).catch(e => log(`[kd-cloud] cancelling ${execution} failed: ${e instanceof Error ? e.message : String(e)}`));
+                    await cancel();
                     throw abortReason(signal);
                 }
                 throw err;

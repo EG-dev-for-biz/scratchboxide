@@ -18,6 +18,7 @@ The orchestrator does not change. Two small changes outside it:
 
 - `staged-location-tool.ts`: `runChunk` picks the cloud runner when `SCRATCHBOX_KD_CHUNK_RUNNER=cloud` and the job is configured, else stays local; with the cloud runner `prefetchTiles` is left out (the laptop would download leaves nobody reads).
 - `district-chunks.ts` `chunkParallel`: with the cloud runner, the width comes from `SCRATCHBOX_KD_CLOUD_PARALLEL` (default 48, i.e. every chunk at once) instead of the laptop's memory. The centre chunk still builds locally, now with the whole machine.
+  - Update 2026-11-03 (user decision): with the cloud runner the centre cell is a cloud job too, by default (`district-chunks.ts` `kdCentreRunner`; `SCRATCHBOX_KD_CENTRE_RUNNER=local` keeps it on the laptop). The laptop then resolves, plans, paints the vector buildings, joins every chunk in the centre job's frame and publishes; it reads no tiles of its own.
 
 The job side is a new entry point, `staged-location/kd-chunk-job.ts`: read the request, `runStagedLocation(request, createStagedLocationDeps(root))` (the same deps the worker makes), append each progress line to `progress.jsonl` (flushed every 5 s), upload the outcome, the layers' GLBs and the run record, then run the existing `syncCacheDir` so the chunk's stage and native caches reach `cache/v1/` like a local build's do. Exit code 0 only after the outcome is uploaded.
 

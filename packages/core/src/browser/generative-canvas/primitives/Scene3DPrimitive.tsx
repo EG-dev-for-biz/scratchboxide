@@ -156,10 +156,13 @@ import type { CustomShaderDefinition } from './scene3d/syncCustomShaders';
 import { tickObjectAnimations } from './scene3d/objectAnimationRuntime';
 import type { PhysicsRuntimeState } from './scene3d/objectAnimationRuntime';
 import { attachViewportControls, readWorldPose, stepCamera } from './scene3d/attachViewportControls';
+import { WalkSession, type WalkSubMode } from './scene3d/walkMode';
+import { WalkButton, WalkHud } from './scene3d/WalkControl';
 import { syncVectorRoadmapBlueprint } from './scene3d/syncVectorRoadmapBlueprint';
 import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
 import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { WeatherControl } from './scene3d/WeatherPanel';
+import { ScenePathTraceButton, ScenePathTraceLayer } from './scene3d/ScenePathTrace';
 import { SplatEditControl } from './scene3d/SplatEditPanel';
 import { createSplatEditTool, DEFAULT_SPLAT_BRUSH, type SplatBrush, type SplatEditTool } from './scene3d/splatEditTool';
 import { PRIMARY_SPLAT_TARGET, type SplatEditStroke } from '../../../common/spatial/splat-edits';
@@ -665,6 +668,8 @@ import { PhotorealGaussianSplatMesh } from '../services/spatial/PhotorealGaussia
 import { EWA_CUTOFF_SIGMA, EWA_SPLAT_GLSL } from '../../../common/spatial/splat-ewa-projection';
 import { DEFAULT_SCENE_RENDER_MODE } from '../../../common/scene-atmosphere-opt-in';
 import { ViewAsMenu } from './shared/ViewAsMenu';
+import { ObjectBuildLiveOverlay } from './scene3d/ObjectBuildLiveOverlay';
+import { readObjectBuildLive } from '../../../common/object-build-live';
 
 // ==========================================
 // Pluggable Splat Representation (ISplatViewer)
@@ -1625,6 +1630,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const animationFrameIdRef = React.useRef<number | null>(null);
     /** Draws one viewport frame (optics passes when the scene lens configures them); set while the renderer is mounted. */
     const renderFrameRef = React.useRef<(() => void) | null>(null);
+    // Path-traced view (ScenePathTrace.tsx): while its frame covers the viewport, the viewport does not draw its own.
+    const [pathTraceOn, setPathTraceOn] = React.useState(false);
+    const pathTraceShowingRef = React.useRef(false);
     /** Lens distortion and depth of field from scene camera.lens; inactive (no cost) when nothing is configured. */
     const opticsChainRef = React.useRef<ViewportOpticsChain | null>(null);
     const focusControllerRef = React.useRef<ViewportFocusController | null>(null);
@@ -1651,6 +1659,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     });
 
     const keysPressedRef = React.useRef<Record<string, boolean>>({});
+    /** The walk through the scene while the camera is first person, walking or flying (walkMode.ts); null in orbit. */
+    const walkSessionRef = React.useRef<WalkSession | null>(null);
+    /** The pointer over the viewport (client px), for dropping the walker where it points; null when it is elsewhere. */
+    const viewportPointerRef = React.useRef<{ x: number; y: number } | null>(null);
 
     // ---------------------------------------------------------
     // High-Performance WASM Mesh Deformer
@@ -1733,7 +1745,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     }
                 }
             }
-            if (data.cameraMode) setCameraMode(data.cameraMode);
+            // a walk in progress is the viewer's own view: a scene update never ends it
+            if (data.cameraMode && !walkSessionRef.current) setCameraMode(data.cameraMode);
             if (data.toolMode) setToolMode(data.toolMode);
             if (data.sculptSettings) setSculptSettings(prev => ({ ...prev, ...data.sculptSettings }));
             if (data.transformMode) setTransformMode(data.transformMode);
@@ -1925,6 +1938,63 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
     // Latest-value mirrors so the rAF loop / listeners never need to be re-bound
     const cameraModeRef = useLatest(cameraMode);
+
+    // ---- Walk mode (walkMode.ts): first person at street level, walking or flying ----
+    /** Viewport plumbing the walker never meets: cursors, the gizmo and helpers, by flag and identity (never by name). */
+    const walkMeets = React.useCallback((mesh: THREE.Mesh) => {
+        if (mesh === brushCursorMeshRef.current) return false;
+        for (let cur: THREE.Object3D | null = mesh; cur; cur = cur.parent) {
+            if (cur === transformGizmoGroupRef.current || cur.userData?.isHelper || cur.userData?.isGizmo || cur.userData?.handleType) return false;
+        }
+        return true;
+    }, []);
+    /** Leaves first person for the orbit; with `keepView` the orbit keeps the walker's view, pivoting on what it faces. */
+    const endWalk = React.useCallback((keepView: boolean) => {
+        const session = walkSessionRef.current;
+        walkSessionRef.current = null;
+        if (session && keepView) {
+            const view = session.orbitView();
+            cameraTargetRef.current.copy(view.target);
+            cameraRotationRef.current = { theta: view.theta, phi: view.phi, distance: view.distance };
+        }
+        session?.dispose();
+        setCameraMode('orbit');
+    }, []);
+    /**
+     * Enters first person: walking drops the walker on the ground under the pointer (`at` 'pointer', when it is over the
+     * viewport) or the screen centre, else under the orbit pivot; flying starts where the camera is.
+     */
+    const startWalk = React.useCallback((at: 'centre' | 'pointer', mode: WalkSubMode = 'walk') => {
+        const stack = stackRef.current;
+        if (!stack) return;
+        walkSessionRef.current?.dispose();
+        const rect = stack.container.getBoundingClientRect();
+        const p = at === 'pointer' ? viewportPointerRef.current : null;
+        const ndc = p && rect.width > 0 && rect.height > 0
+            ? new THREE.Vector2(((p.x - rect.left) / rect.width) * 2 - 1, -((p.y - rect.top) / rect.height) * 2 + 1)
+            : undefined;
+        const session: WalkSession = new WalkSession({
+            scene: stack.scene,
+            camera: stack.camera,
+            container: stack.container,
+            include: walkMeets,
+            onPointerLockLost: () => { if (walkSessionRef.current === session) endWalk(true); }
+        }, { ndc, fallback: cameraTargetRef.current.clone(), mode });
+        walkSessionRef.current = session;
+        setToolMode('view');
+        setCameraMode('fps');
+        if (mode === 'walk') session.lockPointer();
+    }, [walkMeets, endWalk]);
+    const walkSessionOf = React.useCallback(() => walkSessionRef.current, []);
+    // A scene that asks for the first-person camera (data.cameraMode 'fps') starts flying where its camera is.
+    React.useEffect(() => {
+        if (cameraMode === 'fps' && !walkSessionRef.current) startWalk('centre', 'fly');
+        else if (cameraMode === 'orbit' && walkSessionRef.current) endWalk(true);
+    }, [cameraMode, startWalk, endWalk]);
+    React.useEffect(() => {
+        (window as any).__SB_WALK__ = { session: walkSessionOf, start: startWalk, end: () => endWalk(true) };
+        return () => { delete (window as any).__SB_WALK__; };
+    }, [walkSessionOf, startWalk, endWalk]);
     const hasGeoCoordinatesRef = useLatest(hasGeoCoordinates);
     const isWasmActiveRef = useLatest(isWasmActive);
     const projectCoordsRef = useLatest(projectCoords);
@@ -2112,7 +2182,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 cameraRotationRef.current.phi = rot.phi;
                 cameraRotationRef.current.distance = rot.distance;
             }
-            stepCamera(camera, cameraModeRef.current, cameraRotationRef.current, cameraTargetRef.current, keysPressedRef.current);
+            stepCamera(camera, cameraModeRef.current, cameraRotationRef.current, cameraTargetRef.current);
         };
 
         // Brush cursor ring overlay (positioned on the hovered mesh surface in sculpt mode)
@@ -2164,6 +2234,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             mapPointerNdc: ndc => opticsChainRef.current?.active ? opticsChainRef.current.mapPointerNdc(ndc, camera) : ndc,
             pointPick: focusPickRef,
             splatEdit: splatEditToolRef,
+            look: { current: (dx: number, dy: number) => walkSessionRef.current?.look(dx, dy) },
             resolveSelectableObject,
             selectObject: selectObjectRef,
             mutateSceneData: mutateSceneDataRef,
@@ -2172,6 +2243,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             setSelectedObjectName
         });
         const detachResize = attachViewportResize(stack, (w, h) => aerialPerspectiveRef.current?.setSize(w, h));
+        const trackPointer = (e: MouseEvent) => { viewportPointerRef.current = { x: e.clientX, y: e.clientY }; };
+        const losePointer = () => { viewportPointerRef.current = null; };
+        container.addEventListener('mousemove', trackPointer);
+        container.addEventListener('mouseleave', losePointer);
 
         // ---------------------------------------------------------
         // Core Animation Loop
@@ -2513,8 +2588,14 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     deltaSec
                 );
 
-                // 10. Camera (orbit or FPS)
-                stepCamera(camera, cameraModeRef.current, cameraRotationRef.current, cameraTargetRef.current, keysPressedRef.current);
+                // 10. Camera: the walker in first person (walking or flying, walkMode.ts), else the orbit
+                const walk = walkSessionRef.current;
+                if (walk) {
+                    stepCamera(camera, 'fps', cameraRotationRef.current, cameraTargetRef.current);
+                    walk.step(deltaSec, keysPressedRef.current);
+                } else {
+                    stepCamera(camera, 'orbit', cameraRotationRef.current, cameraTargetRef.current);
+                }
 
                 // 10.5 Update camera heading for Vector Roadmap HUD
                 if (isVectorRoadmapHUDOpenRef.current && now - lastHeadingUpdateTime > 80) {
@@ -2572,10 +2653,12 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     stepSnapshot.sync(flag, stack.scene ?? undefined, externalObjectsMapRef.current);
                     displayFlagWasOn = !!flag;
                 }
-                const timeFrame = !!gpuFrameTimer?.available && treeLodControllers().length > 0;
-                if (timeFrame) gpuFrameTimer!.begin();
-                renderFrame();
-                if (timeFrame) { gpuFrameTimer!.end(); for (const ms of gpuFrameTimer!.poll()) adaptiveBudget!.sample(ms, now); }
+                if (!pathTraceShowingRef.current) {
+                    const timeFrame = !!gpuFrameTimer?.available && treeLodControllers().length > 0;
+                    if (timeFrame) gpuFrameTimer!.begin();
+                    renderFrame();
+                    if (timeFrame) { gpuFrameTimer!.end(); for (const ms of gpuFrameTimer!.poll()) adaptiveBudget!.sample(ms, now); }
+                }
                 updateFocusReticle();
             } catch (frameErr) {
                 if (!hasWarnedFrameErrorRef.current) {
@@ -2597,6 +2680,10 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             stepSnapshot.release();
             detachControls();
             detachResize();
+            container.removeEventListener('mousemove', trackPointer);
+            container.removeEventListener('mouseleave', losePointer);
+            walkSessionRef.current?.dispose();
+            walkSessionRef.current = null;
             if (selectionBoxRef.current) {
                 scene.remove(selectionBoxRef.current);
                 selectionBoxRef.current.dispose();
@@ -2783,7 +2870,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             const dx = px - tx;
             const dy = py - ty;
             const dz = pz - tz;
-            const dist = Math.max(5, Math.sqrt(dx * dx + dy * dy + dz * dz));
+            const dist = Math.max(0.05, Math.sqrt(dx * dx + dy * dy + dz * dz));
             const phi = Math.acos(Math.max(-1, Math.min(1, dy / dist)));
             const theta = Math.atan2(dx, dz);
 
@@ -3794,7 +3881,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         const dx = px - tx;
         const dy = py - ty;
         const dz = pz - tz;
-        const dist = Math.max(5, Math.sqrt(dx * dx + dy * dy + dz * dz));
+        const dist = Math.max(0.05, Math.sqrt(dx * dx + dy * dy + dz * dz));
         const phi = Math.acos(Math.max(-1, Math.min(1, dy / dist)));
         const theta = Math.atan2(dx, dz);
 
@@ -3993,6 +4080,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const handleFitToView = React.useCallback(() => {
         const stack = stackRef.current;
         if (!stack?.scene) return;
+        if (walkSessionRef.current) endWalk(false);
         const bounds = computeSceneGeometryBounds(stack.scene);
         const autoFrame = calculateStandoffCamera(bounds, undefined, {
             fovDegrees: stack.camera.fov,
@@ -4006,7 +4094,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             stack.camera.position.set(autoFrame.position[0], autoFrame.position[1], autoFrame.position[2]);
             stack.camera.lookAt(cameraTargetRef.current);
         }
-    }, []);
+    }, [endWalk]);
 
     React.useEffect(() => {
         const onFit = () => handleFitToView();
@@ -4026,6 +4114,28 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             }
 
             const key = e.key.toLowerCase();
+
+            // Walk mode: Shift+F walks from where the pointer points (else the screen centre) and leaves again. In first
+            // person F flies or walks and Esc leaves; the tool shortcuts wait (W, E, S are movement keys there).
+            if (key === 'f' && e.shiftKey) {
+                e.preventDefault();
+                if (walkSessionRef.current) endWalk(true);
+                else startWalk('pointer');
+                return;
+            }
+            const walk = walkSessionRef.current;
+            if (walk) {
+                if (key === 'escape') {
+                    e.preventDefault();
+                    endWalk(true);
+                } else if (key === 'f') {
+                    e.preventDefault();
+                    if (walk.toggleFly() === 'walk') walk.lockPointer();
+                } else if (e.code === 'Space' || e.code.startsWith('Arrow')) {
+                    e.preventDefault();
+                }
+                return;
+            }
 
             if (key === 'v') {
                 setToolMode('view');
@@ -4073,7 +4183,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         return () => {
             window.removeEventListener('keydown', handleGlobalKeyDown);
         };
-    }, [handleUndo, handleRedo, cameraMode, toolMode, handleFitToView, frameObject]);
+    }, [handleUndo, handleRedo, cameraMode, toolMode, handleFitToView, frameObject, startWalk, endWalk]);
 
     // Synchronize radius changes to cursor ring
     React.useEffect(() => {
@@ -4206,7 +4316,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         generatorError: currentGeneratorError,
         tilesError,
         contentKind: sceneContentKind,
-        hasAuxiliaryContent: !!sceneData.vectorRoadmap?.groundBlueprint || wantsWasmMesh || drawsBiomeTerrain,
+        // an object build still running shows its reference over the empty studio (ObjectBuildLiveOverlay)
+        hasAuxiliaryContent: !!sceneData.vectorRoadmap?.groundBlueprint || wantsWasmMesh || drawsBiomeTerrain || !!readObjectBuildLive(sceneData),
         objectLoadErrors,
         reconnecting: reconnectingFiles,
         undrawableObjects,
@@ -4276,6 +4387,14 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 {/* a span: the frame forces every direct div child to fill it */}
                 <span ref={focusReticleRef} className="sb-3d-focus-reticle" data-testid="sb-3d-focus-reticle" aria-hidden="true" />
                 <ViewportNotice notices={viewportNotices} />
+                <ScenePathTraceLayer
+                    active={pathTraceOn}
+                    scene={() => threeSceneRef.current}
+                    camera={() => threeCameraRef.current}
+                    exclude={() => [transformGizmoGroupRef.current, selectionBoxRef.current, brushCursorMeshRef.current, customGridHelperRef.current]}
+                    title={sceneData.title}
+                    onShowing={showing => { pathTraceShowingRef.current = showing; }}
+                />
             </div>
             {treeLodStatsLine && (
                 <div
@@ -4289,6 +4408,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 </div>
             )}
             {staged.overlay({ bottomInsetPx: isTimelineDrawerOpen ? 255 : 16 })}
+            <ObjectBuildLiveOverlay live={readObjectBuildLive(sceneData)} bottomInsetPx={isTimelineDrawerOpen ? 255 : 76} />
+            {cameraMode === 'fps' && <WalkHud session={walkSessionOf} />}
 
             {/* Precision Creative Vertical Tool Strip (Left Docked - 50% Compact Scale) */}
             <div className="sb-3d-toolstrip absolute top-16 left-3 z-20 flex flex-col items-center gap-0.5 p-1 rounded-xl bg-[#121216]/85 backdrop-blur-2xl border border-white/10 shadow-2xl pointer-events-auto select-none animate-fadeIn">
@@ -4320,6 +4441,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     </svg>
                 </button>
 
+                {/* Walk at street level (Shift+F): WASD / arrows, Shift to run, F to fly or walk, Esc to leave (walkMode.ts) */}
+                <WalkButton active={cameraMode === 'fps'} onToggle={() => (walkSessionRef.current ? endWalk(true) : startWalk('centre'))} />
+
                 {/* Edit splats: a brush that erases, restores or paints the splats, saved with the world (splat-edits.ts) */}
                 {hasSplatContent && (
                     <SplatEditControl
@@ -4335,6 +4459,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
                 {/* Weather: time of day into night, cloud cover, haze, fog (scene-weather.ts) */}
                 <WeatherControl sceneData={sceneData} mutateSceneData={mutateSceneData} />
+
+                {/* Path traced: the scene through the Metal path tracer (ScenePathTrace.tsx) */}
+                <ScenePathTraceButton active={pathTraceOn} onToggle={() => setPathTraceOn(v => !v)} />
 
                 {/* Colour harmony: every hue on the objects moved toward a hue template (color-harmony.ts) */}
                 <ColorHarmonyControl

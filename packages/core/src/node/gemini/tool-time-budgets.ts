@@ -82,6 +82,8 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     location_street_objects: { maxMs: 60 * MIN, idleMs: 15 * MIN },
     // Native cluster LOD build: about 2 s per 170k triangles, longer for multi-million-triangle scans.
     virtual_geometry_open_glb: { maxMs: 12 * MIN },
+    // The same build, then one high-sample render (a 4K still at 1024 spp is about a minute on an M1 Ultra).
+    path_trace_render: { maxMs: 20 * MIN },
     // Several serial image-model calls each.
     panorama_to_3dgs: { maxMs: 15 * MIN },
     mesh_bake_ai_textures: { maxMs: 15 * MIN },
