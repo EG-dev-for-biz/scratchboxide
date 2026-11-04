@@ -53,7 +53,7 @@ export const PathTraceStillButton: React.FC<PathTraceStillButtonProps> = ({ hand
         <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
             <button
                 type="button"
-                className={className}
+                className={`sb-path-trace-still ${className ?? ''}`}
                 style={style}
                 onClick={() => { void render(); }}
                 disabled={state.kind === 'rendering'}

@@ -170,7 +170,7 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
                     </div>
                 )}
                 <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems: 'flex-start' }}>
-                    <button type="button" style={chip} onClick={() => setCapture(c => c + 1)} title="Capture the scene again after it changed" data-testid="scene-path-trace-recapture">
+                    <button type="button" className="sb-path-trace-recapture" style={chip} onClick={() => setCapture(c => c + 1)} title="Capture the scene again after it changed" data-testid="scene-path-trace-recapture">
                         Re-capture
                     </button>
                     {showingFrame && (
