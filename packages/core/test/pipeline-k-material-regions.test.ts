@@ -8,7 +8,8 @@
  ********************************************************************************/
 
 /**
- * Pipeline K's material regions (pipeline-k/material-regions.ts, tile-refine-twin.ts): nothing drawn metal; openings
+ * Pipeline K's material regions (pipeline-k/material-regions.ts, tile-refine-twin.ts): metal drawn only on a set marked
+ * metal (a class read so by the vision model), never on glass; openings
  * only from the window fit (its panes glass, the rest of each window one frame finish), the wall's set everywhere else
  * whatever the colour; the twin written lit with the maps and labels.
  */
@@ -151,6 +152,27 @@ describe('pipeline K material regions', () => {
         }
         expect(plan.materials.find(m => m.material === 2)!.normal).toBeUndefined();
         expect(plan.report.scanPieces.total).toBe(1);
+    });
+
+    it("draws metalness only where the class's set is marked metal (read so by the vision model), from the set, never on glass", () => {
+        const { g, photo, classes } = fittedFacade();
+        const WALL = classes.length - 1;
+        // the wall's set marked metal: its metalness map (full) is drawn on the wall's texels; the panes stay dielectric
+        const marked = sets(classes).map((st, k) => (k === WALL ? { ...st, metal: true } : st));
+        const plan = planMaterialRegions(g, g.json, imagesOf([photo]), classes, marked);
+        const m = plan.materials[0], N = m.orm.width * m.orm.height;
+        let metal = 0, glassMetal = 0;
+        for (let k = 0; k < N; k++) {
+            const glass = m.params.rgba[k * 4] > 0;
+            if (m.orm.rgba[k * 4 + 2]) { metal++; expect(m.params.rgba[k * 4 + 2]).toBe(m.orm.rgba[k * 4 + 2]); }
+            if (glass && m.orm.rgba[k * 4 + 2]) glassMetal++;
+        }
+        expect(metal).toBeGreaterThan(N / 2);
+        expect(glassMetal).toBe(0);
+        expect(plan.report.texels.glass).toBeGreaterThan(0);
+        // unmarked, the same sets draw no metal at all
+        const plain = planMaterialRegions(g, g.json, imagesOf([photo]), classes, sets(classes));
+        expect(metalTexels(plain.materials[0].orm)).toBe(0);
     });
 
     it("draws a fitted window's panes as glass and the rest of it as one frame finish, never metal", () => {

@@ -11,7 +11,8 @@
  * The library sets of pipeline K's material regions (material-regions.ts): for each appearance class, the texture
  * library set nearest its colour as a dielectric surface (REGION_FINISH; searchTextureLibrary among the sets whose colour
  * has been measured, whose publisher gives a real size of a facade's scale (FACADE_TILE) and a normal and roughness map,
- * and that are not metal; with a chooser, the one among its nearest that looks most like it, material-choice.ts), fetched
+ * and that are not metal, unless the vision model read the class confidently as metal, material-finish.ts; ranked toward the
+ * finish it read, else matte; with a chooser, the one among its nearest that looks most like it, material-choice.ts), fetched
  * from the library bucket (fetchLibrarySets) and prepared small by the engine (surface.prepare_material_maps), cached
  * beside the set for later builds.
  */
@@ -25,12 +26,14 @@ import { NativePythonRunnerService } from '../../native-python-runner-service';
 import { decodeImageInMemory } from '../tile-texture-transfer';
 import type { RegionClass, RegionSet } from './material-regions';
 import { CHOICE_CANDIDATES, type ChoiceCandidate, type ChoiceRow, type SetChoice } from './material-choice';
+import { finishTarget, type ClassFinish } from './material-finish';
 
 /** Prepared map size: a facade texel is several centimetres, so a tile of a metre or two needs few texels. */
 const PREPARED_SIZE = 256;
 
 /**
- * The finish every class is ranked toward, against the sets' measured roughness and metalness: matte and not metal,
+ * The finish a class is ranked toward when the vision model gives no confident reading (material-finish.ts), against the
+ * sets' measured roughness and metalness: matte and not metal,
  * whatever its colour (a dark class is weathered or shaded stone as often as anything; a colour never makes a metal). A
  * set measured at maxMetallic or more is left out.
  */
@@ -70,12 +73,23 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
     repoRoot?: string; signal?: AbortSignal; progress?: (m: string) => void;
     /** The pick by appearance (material-choice.ts): given each class's nearest candidates with their previews, the 1-based one per class that looks like it (0 or none: the ranking's nearest; a pick kept for an earlier class that looked the same says so in `reused`). */
     choose?: (rows: ChoiceRow[]) => Promise<Array<SetChoice | undefined>>;
+    /** Each class's finish read by the vision model (material-finish.ts), before the ranking: the roughness to rank toward and, read confidently as metal, metal sets allowed. */
+    finish?: () => Promise<Array<ClassFinish | undefined>>;
 } = {}): Promise<RegionSet[]> {
     const repoRoot = opts.repoRoot ?? libraryRepoRoot();
     let index = loadTextureLibraryIndex(repoRoot);
     if (!index) throw new Error(`the texture library index has not been built (assets/textures/library/index.json under ${repoRoot})`);
     const notMetal = (e: TextureLibraryEntry) => !(e.metallic !== undefined && e.metallic >= REGION_FINISH.maxMetallic);
-    const wallScale = (e: TextureLibraryEntry) => !!e.maps.color && !!e.maps.normal && !!(e.maps.roughness || e.maps.arm) && !!e.realSizeM && Math.max(...e.realSizeM) <= FACADE_TILE.maxM && notMetal(e);
+    const isMetal = (e: TextureLibraryEntry) => !notMetal(e);
+    const anyScale = (e: TextureLibraryEntry) => !!e.maps.color && !!e.maps.normal && !!(e.maps.roughness || e.maps.arm) && !!e.realSizeM && Math.max(...e.realSizeM) <= FACADE_TILE.maxM;
+    const wallScale = (e: TextureLibraryEntry) => anyScale(e) && notMetal(e);
+    // each class's finish: read by the vision model when there is a reading, else the matte dielectric finish; a class read
+    // confidently as metal may take a metal set (user decision, 2026-11-04)
+    let finishes: Array<ClassFinish | undefined> = classes.map(() => undefined), finishWhy: string | undefined;
+    if (opts.finish) {
+        try { finishes = await opts.finish(); } catch (err) { if (opts.signal?.aborted) throw err; finishWhy = `reading the classes' finish failed: ${err instanceof Error ? err.message : String(err)}`; opts.progress?.(`material regions: ${finishWhy}; every class ranked as matte, not metal`); }
+    }
+    const targets = classes.map((_, k) => finishTarget(finishes[k], REGION_FINISH));
     // every set of a facade's scale is ranked by its measured colour: any not yet measured is measured first (once; cached).
     // Best effort: when the measuring fails, the sets already measured are ranked, and the build says so
     const unmeasured = index.sets.filter(e => wallScale(e) && !e.colour && !libraryEntryMeasured(repoRoot, e.id));
@@ -85,22 +99,23 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
         catch (err) { if (opts.signal?.aborted) throw err; opts.progress?.(`material regions: ${unmeasured.length} library sets could not be measured (${err instanceof Error ? err.message : String(err)}); ranking the sets already measured`); }
         index = loadTextureLibraryIndex(repoRoot) ?? index;
     }
-    const pool = index.sets.filter(e => e.colour && wallScale(e));
+    const poolAny = index.sets.filter(e => e.colour && anyScale(e)), pool = poolAny.filter(notMetal);
+    const poolOf = (k: number) => (targets[k].metal ? poolAny : pool), allowed = (k: number, e: TextureLibraryEntry) => targets[k].metal || notMetal(e);
     if (!pool.length) throw new Error(`no texture library set that is not metal has a measured colour, a real size of at most ${FACADE_TILE.maxM} m and normal and roughness maps`);
-    const query = (c: RegionClass) => ({ colorSrgb: c.meanLinear.map(linearToSrgb) as [number, number, number], colorSpreadLab: c.spreadLab, roughness: REGION_FINISH.roughness, metallic: REGION_FINISH.metallic, tileSizeM: FACADE_TILE.wantM });
+    const query = (c: RegionClass) => ({ colorSrgb: c.meanLinear.map(linearToSrgb) as [number, number, number], colorSpreadLab: c.spreadLab, roughness: targets[classes.indexOf(c)].roughness, metallic: targets[classes.indexOf(c)].metallic, tileSizeM: FACADE_TILE.wantM });
     // every class's shortlist measured first, so its normal relief can be ranked (and a set measured as metal left out)
-    const own = classes.map(c => new Set(searchTextureLibrary({ ...index, sets: pool }, { ...query(c), limit: SHORTLIST }).hits.map(h => h.entry.id)));
+    const own = classes.map((c, k) => new Set(searchTextureLibrary({ ...index, sets: poolOf(k) }, { ...query(c), limit: SHORTLIST }).hits.map(h => h.entry.id)));
     const shortlist = new Set(own.flatMap(o => [...o]));
     if (shortlist.size) {
         opts.progress?.(`material regions: measuring ${shortlist.size} candidates`);
-        await measureLibraryEntries(pool.filter(e => shortlist.has(e.id)), { repoRoot, ...(opts.signal ? { signal: opts.signal } : {}) });
+        await measureLibraryEntries(poolAny.filter(e => shortlist.has(e.id)), { repoRoot, ...(opts.signal ? { signal: opts.signal } : {}) });
     }
     const reloaded = (loadTextureLibraryIndex(repoRoot) ?? index).sets;
-    const measured = reloaded.filter(e => shortlist.has(e.id) && e.colour && notMetal(e));
+    const measured = reloaded.filter(e => shortlist.has(e.id) && e.colour);
     const textured = new Map<number, { colourDistance: number; textureDistance: number; setEnergy: number[]; candidates: number }>();
     type Hit = ReturnType<typeof searchTextureLibrary>['hits'][number];
     const ranked = await Promise.all(classes.map(async (c, k): Promise<Hit[]> => {
-        const mine = measured.filter(e => own[k].has(e.id));
+        const mine = measured.filter(e => own[k].has(e.id) && allowed(k, e));
         const nearest = () => searchTextureLibrary({ ...index, sets: mine }, { ...query(c), normalTiltDeg: REGION_FINISH.normalTiltDeg, limit: Math.max(1, CHOICE_CANDIDATES) }).hits;
         if (c.texture) {
             const hits = searchTextureLibrary({ ...index, sets: mine }, { ...query(c), normalTiltDeg: REGION_FINISH.normalTiltDeg, limit: TEXTURE_SHORTLIST }).hits.filter(h => h.entry.realSizeM);
@@ -181,6 +196,8 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         const files = prepared.get(hit.entry.id)!;
         return {
             name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
+            ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), roughness: targets[k].roughness, metallic: targets[k].metallic, label: 'photo-inferred' as const } } : {}),
+            ...(targets[k].metal && isMetal(hit.entry) ? { metal: true } : {}),
             ...(choices[k] ? { choice: { candidates: choices[k]!.candidates, by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick?.seen ? { seen: choices[k]!.pick!.seen } : {}), ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}), ...(choices[k]!.pick?.reused ? { reused: choices[k]!.pick!.reused } : {}), ...(choices[k]!.why ? { why: choices[k]!.why } : {}) } } : {}),
             ...(textured.has(k) ? { harvest: { ...textured.get(k)!, classEnergy: classes[k].texture!.energy, texelM: classes[k].texture!.texelM, grain: `generated: the set's detail finer than the tile's ${Math.round(classes[k].texture!.texelM * 100)} cm texel is its own, below the tile's resolution` } } : {}),
             normal: decodeImageInMemory(fs.readFileSync(files.normal)), orm: decodeImageInMemory(fs.readFileSync(files.orm))

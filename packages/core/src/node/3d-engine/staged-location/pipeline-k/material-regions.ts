@@ -27,8 +27,9 @@
  *     class is weathered or shaded stone as often as anything else, and a colour alone never makes a window or a metal.
  *  3. A library set per class (resolved by the caller: the texture library ranked by the class colour as a dielectric
  *     surface), its roughness and normal drawn at the set's real size over each rebuilt facade (box-filtered to the
- *     facade's texel, so a tile never aliases), and the wall set's mean finish on scan pieces. Nothing is drawn metal: no
- *     reading here tells a metal from a dark stone.
+ *     facade's texel, so a tile never aliases), and the wall set's mean finish on scan pieces. Metalness is drawn only
+ *     for a class the vision model read confidently as metal and whose set is one (RegionSet.metal, material-finish.ts;
+ *     user decision, 2026-11-04); every other class is a dielectric, since colour alone never tells metal from dark stone.
  *  4. Glass: the photo kept as its colour (its reflection is what the photo shows), the roughness of float glass, and the
  *     parameters texture (R glass weight; A the seed of each bay's storey, from the facade's own storey pitch, the viewer's
  *     tilt) the viewer reads for the scene's reflection; it fades in over glassFeatherM from its edge (weight, roughness
@@ -49,7 +50,7 @@ import { bandResponses, TEXTURE_BANDS_M, type TextureEnergy } from './material-h
 import type { FittedPlane } from '../window-fit';
 import { windowStrips } from '../facade-lattice';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/30';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/31';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /** Appearance classes, texels sampled per facade photo, k-means iterations, sampling seed. */
@@ -91,7 +92,7 @@ export interface RegionSet {
     name: string;
     /** Real size of one tile, metres (x, y). */
     realSizeM: [number, number];
-    /** OpenGL tangent-space normal and packed occlusion/roughness/metalness, RGBA8 (its metalness is not drawn). */
+    /** OpenGL tangent-space normal and packed occlusion/roughness/metalness, RGBA8 (its metalness drawn only when `metal`). */
     normal: RgbaImage8; orm: RgbaImage8;
     /** How near the set lies to the class (the library search's distance). */
     distance: number;
@@ -99,6 +100,10 @@ export interface RegionSet {
     harvest?: { colourDistance: number; textureDistance: number; classEnergy: number[]; setEnergy: number[]; texelM: number; candidates: number; grain: string };
     /** The pick by appearance (material-choice.ts): the candidates shown, whether the look or the ranking chose, what the chooser saw and why the ranking's nearest was kept; `reused`: the pick kept for an earlier class shown the same candidates, its colour and how far this class's lies from it (CHOICE_REUSE), not asked again. */
     choice?: { candidates: string[]; by: 'appearance' | 'ranking'; seen?: string; conf?: number; reused?: { meanLab: [number, number, number]; colourUnits: number }; why?: string };
+    /** The class's finish read by the vision model (material-finish.ts), or why there is none, and what the ranking ranked toward. Photo-inferred. */
+    finish?: { read?: { roughness: number; metalness: number; conf: number; seen?: string }; why?: string; roughness: number; metallic: number; label: 'photo-inferred' };
+    /** The class was read confidently as metal and its set is a metal: its metalness is drawn (user decision, 2026-11-04). */
+    metal?: boolean;
 }
 
 export interface MaterialRegionsReport {
@@ -541,10 +546,11 @@ export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext):
     const { g, json, images, classes, sets, P } = ctx;
     const K = classes.length, WALL = K - 1;
     const piece: MaterialPlanPiece = { withWindows: false, panesOnStone: 0, baysOnStone: 0, texels: { total: 0, glass: 0 } };
-    // dielectric everywhere: the set's roughness, metalness 0
-    const write = (orm: RgbaImage8, params: RgbaImage8, k: number, r: number, glassWeight: number, seed = 255) => {
-        orm.rgba[k * 4] = 255; orm.rgba[k * 4 + 1] = Math.round(r * 255); orm.rgba[k * 4 + 2] = 0; orm.rgba[k * 4 + 3] = 255;
-        params.rgba[k * 4] = glassWeight; params.rgba[k * 4 + 2] = 0; params.rgba[k * 4 + 3] = seed;
+    // the set's roughness; metalness 0 unless the class's set is a metal read as such (RegionSet.metal), and never on glass
+    const write = (orm: RgbaImage8, params: RgbaImage8, k: number, r: number, glassWeight: number, seed = 255, m = 0) => {
+        const mb = glassWeight ? 0 : Math.round(Math.max(0, Math.min(1, m)) * 255);
+        orm.rgba[k * 4] = 255; orm.rgba[k * 4 + 1] = Math.round(r * 255); orm.rgba[k * 4 + 2] = mb; orm.rgba[k * 4 + 3] = 255;
+        params.rgba[k * 4] = glassWeight; params.rgba[k * 4 + 2] = mb; params.rgba[k * 4 + 3] = seed;
         piece.texels.total++;
         if (glassWeight) piece.texels.glass++;
     };
@@ -602,7 +608,7 @@ export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext):
         const orm = blank(W, H), nrm = blank(W, H), params = blank(W, H);
         const tileOf = (s: RegionSet) => {
             const tw = Math.max(2, Math.round(s.realSizeM[0] / texelM)), th = Math.max(2, Math.round(s.realSizeM[1] / texelM));
-            return { tw, th, n: shrinkTile(s.normal, tw, th, true), o: shrinkTile(s.orm, tw, th, false) };
+            return { tw, th, n: shrinkTile(s.normal, tw, th, true), o: shrinkTile(s.orm, tw, th, false), metal: s.metal === true };
         };
         const wallTile = tileOf(sets[WALL]), frameTile = frameClass === WALL ? wallTile : tileOf(sets[frameClass]);
         // glass fades in from its edge: weight, roughness and normal blended from the finish it sits in
@@ -616,7 +622,7 @@ export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext):
                 nrm.rgba.set([Math.round((n[0] / l * 0.5 + 0.5) * 255), Math.round((n[1] / l * 0.5 + 0.5) * 255), Math.round((n[2] / l * 0.5 + 0.5) * 255), 255], k * 4);
                 continue;
             }
-            write(orm, params, k, t.o[j + 1], 0);
+            write(orm, params, k, t.o[j + 1], 0, 255, t.metal ? t.o[j + 2] : 0);
             nrm.rgba.set([Math.round(t.n[j] * 255), Math.round(t.n[j + 1] * 255), Math.round(t.n[j + 2] * 255), 255], k * 4);
         }
         piece.withWindows = windowN > 0;
@@ -685,9 +691,10 @@ export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext):
         const orm = blank(W, H), params = blank(W, H);
         const scanTexelM = texelMetres(g, json, mi, img), fw = featherWeights(pane, W, H, scanTexelM > 0 ? P.glassFeatherM / scanTexelM : 1);
         for (let k = 0; k < N; k++) {
-            const r = (pane[k] || win[k] || bayId[k] ? ctx.setMeans[frameClass] : ctx.wallMean)[1];
+            const framed = !!(pane[k] || win[k] || bayId[k]), mean = framed ? ctx.setMeans[frameClass] : ctx.wallMean, r = mean[1];
+            const m = (framed ? sets[frameClass] : sets[WALL]).metal ? mean[2] : 0;
             if (pane[k]) write(orm, params, k, r + (GLASS_ROUGHNESS - r) * fw[k], Math.max(1, Math.round(P.paneGlassWeight * fw[k])), pane[k]);
-            else write(orm, params, k, r, 0);
+            else write(orm, params, k, r, 0, 255, m);
             scan.onPlane += on[k]; scan.inWindows += win[k]; if (pane[k]) scan.inPanes++;
         }
         scan.texels = N;
@@ -756,7 +763,9 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
                 version: MATERIAL_REGIONS_VERSION,
                 baseColor: { label: 'photo-inferred', source: "pipeline K's harmonised photo" },
                 roughness: { label: 'generated', source: `texture library sets per appearance class (${plan.sets.map(s => s.harvest ? `${s.name}, chosen by colour and texture at the tile's texel (tile-only harvest), its finer grain ${s.harvest.grain}` : s.name).join('; ')}); ${pm.rebuilt ? "the wall's set on the structure (piers, bands, parapets; outside the windows where the lattice drew none), the frame class's set in the windows and the bays' infill" : "the wall set's mean finish, the frame class's in the windows of the fitted plane it lies on"}` },
-                metalness: { label: 'generated', source: 'none drawn: no reading here tells a metal from a dark stone' },
+                metalness: plan.sets.some(s => s.metal)
+                    ? { label: 'photo-inferred', source: `drawn from the library set on the classes the vision model read confidently as metal (${plan.sets.filter(s => s.metal).map(s => s.name).join(', ')}; material-finish.ts); none elsewhere` }
+                    : { label: 'generated', source: 'none drawn: no class was read confidently as metal' },
                 ...(pm.normal ? { normal: { label: 'generated', source: 'the same sets tiled at their real size' } } : {}),
                 ...(pm.glass ? { glass: { label: 'photo-inferred', source: "the window fit's panes (window-fit.ts), the photo kept as their colour" }, paneTilt: { label: 'generated', source: "each pane's seed (parameters alpha): the viewer tilts it by a small angle of its own, as real panes sit off their wall's plane" } } : {})
             }
