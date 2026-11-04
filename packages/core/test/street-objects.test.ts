@@ -312,6 +312,15 @@ describe('the spec the measures make', () => {
         const b = cleanBands([{ fromT: 0, toT: 0.5, srgb: [100, 100, 100], roughness: 0.5, metalness: 0 }, { fromT: 0.5, toT: 1, srgb: [102, 101, 99], roughness: 0.5, metalness: 0 }]);
         expect(b).toHaveLength(1);
         expect(b[0].toT).toBe(1);
+        // a stripe inside a body band: the stripe wins its heights, the body keeps the rest (no empty band at the top)
+        const nested = cleanBands([{ fromT: 0, toT: 1, srgb: [40, 40, 40], roughness: 0.4, metalness: 0.9 }, { fromT: 0.8, toT: 0.9, srgb: [240, 240, 235], roughness: 0.3, metalness: 0 }, { fromT: 0.9, toT: 1, srgb: [40, 41, 40], roughness: 0.4, metalness: 0.9 }]);
+        expect(nested.map(b => [b.fromT, b.toT])).toEqual([[0, 0.8], [0.8, 0.9], [0.9, 1]]);
+        expect(nested.every(b => b.toT - b.fromT > 0.05)).toBe(true);
+        const fam1 = { id: 'one/1', heightM: 1, planM: [0.3, 0.3] as [number, number], reason: '', members: [{ clusterId: 1, foot: [0, 0, 0] as V3, heightM: 1, planM: [0.3, 0.3] as [number, number], planHeadingDeg: 0, triangles: 10, radialSymmetry: 0.8, radiusMedianM: 0.15 }] };
+        const prof = { samples: Array.from({ length: 48 }, (_, k) => ({ t: (k + 0.5) / 48, halfWidthM: 0.15, offsetM: 0, views: 1, spread: 0 })), viewSpread: 0, distinctSides: 1, photoOverScan: [1], views: 1 };
+        const sp = streetObjectSpec({ family: fam1, profile: prof, look: { description: 'a bollard', sectionExponent: 2, bands: [{ fromT: 0, toT: 1, srgb: [40, 40, 40], roughness: 0.4, metalness: 0.9 }, { fromT: 0.95, toT: 1, srgb: [240, 240, 235], roughness: 0.3, metalness: 0 }] } });
+        expect(validateObjectBuildSpec(sp.spec)).toEqual([]);
+        expect(sp.spec.parts.map(p => p.id)).toEqual(['band0', 'band1']);
         expect(planHeadingOf([179, 1])).toBeCloseTo(0, 5);
         expect(planHeadingOf([29, 31])).toBeCloseTo(30, 5);
     });

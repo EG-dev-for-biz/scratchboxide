@@ -105,17 +105,31 @@ function materialOf(band: NonNullable<ObjectLook['bands']>[number] | undefined, 
     };
 }
 
-/** Bands sorted, clipped to 0..1, neighbours of nearly one colour merged. */
+/**
+ * The bands as a partition of 0..1: each height takes the narrowest band covering it (a band inside another is the more
+ * specific reading, such as a stripe on a body), a height no band covers takes the nearest band's, and neighbours of nearly
+ * one colour are merged.
+ */
 export function cleanBands(bands: NonNullable<ObjectLook['bands']>, P = OBJECT_SPEC_PARAMS): NonNullable<ObjectLook['bands']> {
-    const s = bands.filter(b => b.toT > b.fromT).map(b => ({ ...b, fromT: Math.max(0, b.fromT), toT: Math.min(1, b.toT) })).filter(b => b.toT - b.fromT > 0.01).sort((a, b) => a.fromT - b.fromT);
-    const out: typeof s = [];
-    for (const b of s) {
-        const last = out[out.length - 1];
-        if (last && deltaE76(srgbToLab(last.srgb), srgbToLab(b.srgb)) < P.bandMergeDeltaE && Math.abs(last.metalness - b.metalness) < 0.5) last.toT = b.toT;
-        else out.push({ ...b });
+    const s = bands.map(b => ({ ...b, fromT: Math.max(0, Math.min(1, b.fromT)), toT: Math.max(0, Math.min(1, b.toT)) })).filter(b => b.toT - b.fromT > 0.01);
+    if (!s.length) return [];
+    const STEPS = 200;
+    const pick: number[] = [];
+    for (let i = 0; i < STEPS; i++) {
+        const t = (i + 0.5) / STEPS;
+        let best = -1;
+        for (let k = 0; k < s.length; k++) if (t >= s[k].fromT && t < s[k].toT && (best < 0 || s[k].toT - s[k].fromT < s[best].toT - s[best].fromT)) best = k;
+        if (best < 0) best = s.reduce((b, x, k) => (Math.min(Math.abs(t - x.fromT), Math.abs(t - x.toT)) < Math.min(Math.abs(t - s[b].fromT), Math.abs(t - s[b].toT)) ? k : b), 0);
+        pick.push(best);
     }
-    if (out.length) { out[0].fromT = 0; out[out.length - 1].toT = 1; for (let i = 1; i < out.length; i++) out[i].fromT = out[i - 1].toT; }
-    return out;
+    const out: typeof s = [];
+    for (let i = 0; i < STEPS; i++) {
+        const b = s[pick[i]], last = out[out.length - 1];
+        const t0 = i / STEPS, t1 = (i + 1) / STEPS;
+        if (last && (last === b || (deltaE76(srgbToLab(last.srgb), srgbToLab(b.srgb)) < P.bandMergeDeltaE && Math.abs(last.metalness - b.metalness) < 0.5))) last.toT = t1;
+        else out.push({ ...b, fromT: t0, toT: t1 });
+    }
+    return out.map(b => ({ ...b, fromT: r3(b.fromT), toT: r3(b.toT) }));
 }
 
 /** The members' common plan heading (0..180, clockwise from north): the mean of the doubled angles, so 179 and 1 agree. */
@@ -190,11 +204,13 @@ export function streetObjectSpec(input: {
         const z0 = b.fromT * H, z1 = b.toT * H;
         const k0 = Math.max(0, Math.floor(b.fromT * N)), k1 = Math.min(N, Math.max(k0 + 1, Math.ceil(b.toT * N)));
         const seg = body.slice(k0, k1);
-        const id = `band${i}`, material = materialOf(bands.length ? b : undefined, P);
-        const link = i ? { parentId: `band${i - 1}`, attach: { u: 1, angleDeg: 0, normalOffsetMeters: 0 } } : {};
+        if (!seg.length) return;
+        const first = !parts.length;
+        const id = `band${parts.length}`, material = materialOf(bands.length ? b : undefined, P);
+        const link = parts.length ? { parentId: `band${parts.length - 1}`, attach: { u: 1, angleDeg: 0, normalOffsetMeters: 0 } } : {};
         if (round) {
             const meridian = meridianOf(seg, z1 - z0, { maxPoints: Math.min(OBJECT_SPEC_LIMITS.maxPoints, 40) });
-            parts.push({ id, label: b.label ?? `band ${i}`, material, ...link, revolve: { axisOrigin: i ? [0, 0, 0] : [0, z0, 0], axisDirection: [0, 1, 0], meridian, smoothing: 0, lobeCount: 0, lobeDepthRatio: 0, helixPitchMeters: 0 } });
+            parts.push({ id, label: b.label ?? `band ${i}`, material, ...link, revolve: { axisOrigin: first ? [0, z0, 0] : [0, 0, 0], axisDirection: [0, 1, 0], meridian, smoothing: 0, lobeCount: 0, lobeDepthRatio: 0, helixPitchMeters: 0 } });
         } else {
             // the photo's taper times the scan's plan section: widths across the plan axis (x) and along it (z)
             const ref = median(body);
@@ -207,7 +223,7 @@ export function streetObjectSpec(input: {
                 return { t: r3(t), widthMeters: r3(Math.max(0.01, sx * s)), heightMeters: r3(Math.max(0.01, sz * s)), exponent: r3(Math.max(0.5, Math.min(12, e))) };
             });
             // a vertical carrier's section has its width along x and its height along z; the twist turns the width onto the plan heading
-            parts.push({ id, label: b.label ?? `band ${i}`, material, ...link, sweep: { controlPoints: i ? [[0, 0, 0], [0, z1 - z0, 0]] : [[0, z0, 0], [0, z1, 0]], closedLoop: false, smoothing: 0, profile, twistDegAlong: [[0, twist], [1, twist]] } });
+            parts.push({ id, label: b.label ?? `band ${i}`, material, ...link, sweep: { controlPoints: first ? [[0, z0, 0], [0, z1, 0]] : [[0, 0, 0], [0, z1 - z0, 0]], closedLoop: false, smoothing: 0, profile, twistDegAlong: [[0, twist], [1, twist]] } });
         }
     });
     if (!round) prov.push({ field: 'plan section size', label: 'photo-inferred', source: 'the scan\'s plan aspect and heading, scaled along the height by the silhouette\'s taper' });

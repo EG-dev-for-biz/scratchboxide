@@ -401,6 +401,18 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
     const kept: Array<{ glb: Buffer; feet: V3[]; id: string; extras: Record<string, unknown> }> = [];
     const eyeJobs: Array<{ rep: FamilyReport; fam: StreetObjectFamily; soup: TileTriangles; side: [number, number] }> = [];
     await pool(families, input.concurrency ?? 4, async fam => {
+        const t0f = Date.now();
+        try { await oneFamily(fam); } catch (err) {
+            if (input.signal?.aborted) throw err;
+            // one family's failure is its own: reported with where it failed, the district carries on
+            const at = (err instanceof Error ? err.stack ?? '' : '').split('\n').find(l => l.includes('street-objects/'))?.trim() ?? '';
+            const rep = reports.find(r => r.id === fam.id);
+            const reason = `the rebuild failed (${err instanceof Error ? err.message : String(err)}${at ? `; ${at}` : ''}); the scan stays`;
+            if (rep) { rep.decision = 'scan-kept'; rep.decisionReason = reason; rep.ms = Date.now() - t0f; }
+            else reports.push({ id: fam.id, members: fam.members, reason: fam.reason, views: [], decision: 'scan-kept', decisionReason: reason, ms: Date.now() - t0f });
+        }
+    });
+    async function oneFamily(fam: StreetObjectFamily): Promise<void> {
         const tf = Date.now();
         const fv = plan.families.find(p => p.familyId === fam.id)!;
         const views = fv.views.filter(v => images.has(v));
@@ -636,7 +648,7 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
         rep.decisionReason = rep.check.reason;
         if (rep.check.keep) kept.push({ glb, feet: family.members.map(m => m.foot), id: fam.id, extras: { sbStreetObject: { family: fam.id, provenance: spec.provenance, check: { iouRebuild: rep.check.iouRebuild, iouScan: rep.check.iouScan, deltaERebuild: rep.check.deltaERebuild, deltaEScan: rep.check.deltaEScan } } } });
         rep.ms = Date.now() - tf;
-    });
+    }
     // ---- the eye-level pairs: the whole family in frame from the side its photos saw it
     if (tileSoup && eyeJobs.length) {
         progress(`drawing ${eyeJobs.length} eye-level before / after pairs`);
