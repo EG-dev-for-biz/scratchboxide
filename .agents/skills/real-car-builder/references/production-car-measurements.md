@@ -32,4 +32,5 @@ published figures of the car asked for.
 
 Body styles: CR-V, WR-V, Seltos, Tiguan and Polestar 3 are SUVs or crossovers; the Golf GTI a five-door hatch;
 the Odyssey and Carnival minivans. The Odyssey model is a low-detail one: its roof start (read off its roof rails)
-is an outlier.
+is an outlier. The tyre fit reads a few per cent high on large wheels: the Polestar 3 model gives 0.83 m where
+its 265/45 R21 tyre is 0.77 m; take tyre sizes from the specification sheet.

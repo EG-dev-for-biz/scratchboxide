@@ -142,6 +142,11 @@ Spend the parts (at most 48) on the body masses first, then wheels and glasshous
 | Surface | Factors |
 |---|---|
 | Body paint | the paint's colour (linear RGB), roughness 0.3-0.45, metalness 0, clearcoat 1 |
+
+Give the named paint's colour in buildNotes as linear RGB, worked out from the colour itself, not read off the
+picture: studio light darkens it (a Polestar Magnesium grey was read as [0.16, 0.17, 0.18]; the production model's
+is [0.62, 0.63, 0.64]). Convert sRGB as (v/255)^2.2: light silver or grey about [0.55, 0.57, 0.58], mid grey
+[0.2, 0.2, 0.21], black [0.01, 0.01, 0.012], white [0.8, 0.8, 0.78], a strong red [0.6, 0.01, 0.01].
 | Side and rear glass | baseColor about [0.02, 0.03, 0.03], roughness 0.04, transmission 0.2-0.4, ior 1.5 (tinted) |
 | Windscreen | as glass, transmission 0.6-0.8 (lighter tint) |
 | Tyre rubber | [0.02, 0.02, 0.02], roughness 0.6-0.7, metalness 0 |
