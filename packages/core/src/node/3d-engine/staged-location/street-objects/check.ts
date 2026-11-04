@@ -10,9 +10,9 @@
 /**
  * Street objects, step 6 (check): is the rebuild closer to what Street View saw than the scan's blob?
  *
- * At each registered view the rebuild and the scan's own triangles of the member are drawn from the view's camera, each
- * behind the rest of the scan (the tile mesh without the member: what stands in front of the object in the scene hides
- * both alike), and compared with the photo's mask of the object (read.ts):
+ * At each registered view the rebuild and the scan's own triangles of the member are drawn whole from the view's camera
+ * (not behind the rest of the scan: the scan and the photo can disagree about what stands in front, and the photo's mask
+ * already leaves out what really hid the object) and compared with the photo's mask of the object (read.ts):
  *   - silhouette IoU: drawn pixels against the mask;
  *   - colour: per height band (the rows the band spans on the member's axis), the CIE76 distance between the photo's median
  *     colour inside the mask and the rebuild's band colour, and between it and the scan's own photo texture as drawn.
@@ -25,7 +25,7 @@
  */
 
 import type { FrameCamera } from '../../../spatial/StreetViewPoseRegistrar';
-import { projectToFrame, renderFrameDepth } from '../../../spatial/StreetViewPoseRegistrar';
+import { projectToFrame } from '../../../spatial/StreetViewPoseRegistrar';
 import type { RenderMesh3D } from '../../../spatial/HeadlessMeshSilhouetteRenderer';
 import { renderTriangles } from '../photo-match-eval';
 import type { RgbaImage8, TileTriangles } from '../tile-texture-transfer';
@@ -137,8 +137,8 @@ function medianLab(xs: Array<[number, number, number]>): [number, number, number
 
 /**
  * One view's check. `photo` is the view's image decoded in memory (full size), `mask` the read's mask of the object
- * (full size). `rebuild` and `scan` are triangle soups in the tile frame (readTileTriangles); `context` is the tile mesh
- * without the member (its depth hides what the scene puts in front).
+ * (full size). `rebuild` and `scan` are triangle soups in the tile frame (readTileTriangles); `context` (the tile mesh
+ * without the member) is not drawn in the scores.
  */
 export function checkView(input: {
     id: string; cam: FrameCamera; photo: RgbaImage8; mask: Uint8Array; rebuild: TileTriangles; scan: TileTriangles; context: RenderMesh3D;
@@ -149,8 +149,9 @@ export function checkView(input: {
     const cam = scaledCamera(input.cam, P.renderScale);
     const W = cam.width, H = cam.height;
     const photoMask = downsampleMask(input.mask, input.photo.width, input.photo.height, W, H);
-    const occ = renderFrameDepth(input.context, cam);
-    const draw = (m: TileTriangles, clay: boolean) => renderTriangles([m], cam, { supersample: 1, occluderDepth: occ, ...(clay ? { clay: true } : {}) });
+    // both arms drawn whole: what the scan has in front can be gone in the photo, or the reverse (a different era), and the
+    // photo's mask already leaves out what really hid the object; so neither arm is hidden by the scan's occluders
+    const draw = (m: TileTriangles, clay: boolean) => renderTriangles([m], cam, { supersample: 1, ...(clay ? { clay: true } : {}) });
     const rb = draw(input.rebuild, true), sc = draw(input.scan, false);
     const sil = (r: { coverage: Float32Array }) => { const o = new Uint8Array(W * H); for (let k = 0; k < o.length; k++) o[k] = r.coverage[k] >= 0.5 ? 1 : 0; return o; };
     const anchor = input.anchor ?? 'foot';

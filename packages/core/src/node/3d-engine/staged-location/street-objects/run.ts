@@ -120,6 +120,8 @@ export interface FamilyReport {
     seen?: { description: string; permanent: boolean; membersAlike?: boolean; pieceCount?: number; markings: string[]; confidence?: number; perView: Array<{ id: string; visible: boolean; sameObject: boolean; footVisible: boolean; hiddenShare: number; maskPixels?: number; pieces?: number; member?: number; note?: string }> };
     /** A long or flat object built from its front outline (front-outline.ts): the view, the boxes, its length and depth. */
     frontOutline?: { view: string; boxes: number; lengthM: number; depthM: number; squareness: number; scale: number };
+    /** Ridges of a row whose other members split into pieces, but no view of which did: kept as scanned. */
+    unsplitKept?: Array<{ clusterId: number; reason: string }>;
     /** A scan ridge the photos showed as several alike pieces, split into members along the scan's line (split.ts). */
     split?: { clusterId: number; pieces: number; reason: string };
     profiles?: Array<Omit<SilhouetteProfile, 'samples'> & { halfWidthsM: number[] }>;
@@ -441,7 +443,9 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
             if (!at) at = alongRayByHeight(cams[k], rv.mask, im.widthPx, im.heightPx, m0.heightM);
             if (!at) continue;
             const near = fam.members.map(m => ({ m, d: Math.hypot(m.foot[0] - at![0], m.foot[2] - at![1]) })).sort((a, b) => a.d - b.d)[0];
-            const tol = Math.max(1.5, 0.12 * views[k].rangeM);
+            // a pose the registration took is good to decimetres; a nominal one to about 2 m and 2 degrees
+            const posed = /^(edges|joint)/.test(methodOf(views[k].panoId));
+            const tol = posed ? Math.max(1.5, 0.12 * views[k].rangeM) : Math.max(3, 0.2 * views[k].rangeM);
             if (near.d <= tol) assigned.set(k, near.m.clusterId);
             else { rv.sameObject = false; rv.error = `its mask stands ${Math.round(near.d * 10) / 10} m from the nearest member (over ${Math.round(tol * 10) / 10} m): something else`; }
         }
@@ -476,6 +480,11 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
                 if (sp) { members.push(...sp.members); splits.push(sp); } else members.push(m);
             }
             if (splits.length) {
+                // a ridge of the row no view split keeps the scan: one copy there would stand for what are likely several
+                const pieceW = Math.max(0.05, ...splits.flatMap(x => x.members.map(m => m.planM[0])));
+                const unsplit = members.filter(m => m.piece === undefined && Math.max(m.planM[0], m.planM[1]) > 2.5 * pieceW);
+                for (const m of unsplit) members.splice(members.indexOf(m), 1);
+                if (unsplit.length) rep.unsplitKept = unsplit.map(m => ({ clusterId: m.clusterId, reason: `a ${Math.round(Math.max(...m.planM) * 100) / 100} m ridge no view showed in pieces (the pieces elsewhere in the row are ${Math.round(pieceW * 100) / 100} m wide): kept as scanned` }));
                 // one ridge split: its pieces are the row; ridges of a row split: the pieces of each, no single pitch
                 const row = fam.members.length === 1 ? splits[0].row : undefined;
                 family = { ...fam, members, planM: median2(members.map(m => m.planM)), reason: `${fam.reason}; ${splits.map(x => x.reason).join('; ')}` };

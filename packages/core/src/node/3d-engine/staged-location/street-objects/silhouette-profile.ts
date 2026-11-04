@@ -262,12 +262,20 @@ export function combineProfiles(profiles: SilhouetteProfile[]): CombinedProfile 
     };
 }
 
-/** Fills each unread height from the nearest read one (the profile is read where the mask is; the rest continues it). */
-export function filledHalfWidths(samples: Array<{ halfWidthM: number }>): number[] {
+/**
+ * Fills each unread height from the read ones beside it: the median of the nearest `k` read heights (the row next to a hidden
+ * span is often cut by what hides it, so one row alone would set the fill; the profile is read where the mask is and the rest
+ * continues it).
+ */
+export function filledHalfWidths(samples: Array<{ halfWidthM: number }>, k = 5): number[] {
     const v = samples.map(s => s.halfWidthM);
     const read = v.map((x, i) => (Number.isFinite(x) ? i : -1)).filter(i => i >= 0);
     if (!read.length) return v.map(() => NaN);
-    return v.map((x, i) => (Number.isFinite(x) ? x : v[read.reduce((b, j) => (Math.abs(j - i) < Math.abs(b - i) ? j : b), read[0])]));
+    return v.map((x, i) => {
+        if (Number.isFinite(x)) return x;
+        const near = read.slice().sort((a, b) => Math.abs(a - i) - Math.abs(b - i)).slice(0, k).map(j => v[j]).sort((a, b) => a - b);
+        return near[near.length >> 1];
+    });
 }
 
 /** Douglas-Peucker on a polyline of [z, r] points: the points within `tol` metres of the simplified line are dropped. */
