@@ -1305,6 +1305,8 @@ function loadMesh(files: Array<string | undefined>): RenderMesh3D {
 /** A district layer published without the kept structure's footprint (keptStructureCarver). */
 const CARVED_URL = /_around_[0-9a-f]{8}\.glb$/;
 
+/** The roads stage's extra time with the kerbs on: at Penn over 210 m their read and photo alone took 2.5 minutes, at a load of 150-300. */
+const ROAD_KERBS_EXTRA_BUDGET_MS = 360_000;
 /** A ground layer published with the scan carved under the streets' kerbs (roadCarver). */
 const ROAD_CARVED_URL = /_road_[0-9a-f]{8}\.glb$/;
 
@@ -3595,6 +3597,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             if (!centrelines.length) { runner.skip('roads', 'no road centreline from Google vector data runs through the extraction'); return; }
             await runner.stage<RoadStageValue>({
                 id: 'roads',
+                // the kerbs are read again on the scan's triangles and coloured from above: 2-5 minutes more over a 200 m district
+                ...(kerbsOn ? { budgetMs: STAGES.roads.budgetMs + ROAD_KERBS_EXTRA_BUDGET_MS } : {}),
                 run: async io => {
                     const tileForRoads = strip ? strip.devegetatedGlb : extraction.texturedGlb;
                     const key = stageKey(kerbsOn ? `roads/v5+${ROAD_KERBS_VERSION}` : 'roads/v5', t.key, strip ? strip.cacheKey : 'scan', crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), roadParams.liftM);
