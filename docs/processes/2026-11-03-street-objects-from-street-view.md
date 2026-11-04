@@ -34,8 +34,20 @@
   * "wheeled suitcase with extended handle", read as not permanent;
   * "yellow metal patio chair", read as not permanent.
 * **Masks.** The segmenter (MediaPipe interactive + GrabCut) runs in memory (`segmentBytes`, the JPEG decoded inside the worker), prompted by the read's tight box. On a synthetic photo, 11,623 of 11,637 post pixels were found in 1.9 s.
-* **A rebuild kept by the check (Penn run 3, `row/154`, bins at a 9.2 m pitch).** Silhouette IoU 0.243 rebuilt against 0.218 scanned; colour ΔE 2.5 against 25.8. The eye-level render shows a clean, dark, flared bin where the scan had a lump. That run had no IoU floor; with the floor (0.3) it would stay scanned. See section 3.
-* **Unit tests.** `packages/core/test/street-objects.test.ts`, 23 tests, no network or model:
+* **Penn, final run (`build/street-objects/d579eca3329e`, head 711a138b).** 41 of 41 images fetched, 3 panos registered, 13 reads (all from the reply cache).
+  * Stainless steel security bollards (`row/56`), rebuilt: silhouette IoU 0.392 against the scan blob's 0.08; colour ΔE 4.5 against 5.0. The scan's 5.2 m ridge was split into the 2 bollards one view shows; the row's two ridges no view split keep the scan.
+  * A weathered beige concrete trash can (`row/277`), rebuilt: IoU 0.313 against 0.047. It is built at its photos' height (0.91 m, photo-inferred), not the blob's 1.43 m.
+  * A stainless stair handrail (`row/17`): the scan stays (IoU 0.009).
+  * A yellow patio chair (`one/36`): read as put out for a while, so not rebuilt.
+  * 16 families not seen: blocked in the scan from every pano, or Street View shows nothing there (the 7th Ave shed era).
+* **Union Square, run 3 (`build/street-objects/e327b5f58475`).**
+  * An ornate cast-iron lamp post (`one/40`): IoU 0.815 against 0.33; ΔE 7.8 against 23.1.
+  * A traffic signal pole with an NYPD camera (`one/230`): IoU 0.387 against 0.191.
+  * A row of ribbed concrete planters (`row/460`): IoU 0.599 against 0.52.
+  * 6 kept as scanned, each with its numbers (a planter whose colour came out further from the photos; one whose silhouette was no closer).
+  * Run 2 had rebuilt the white T-profile flexible bollards: IoU 0.442 against 0.139, ΔE 10.6 against 55.6.
+* **Earlier: Penn run 3's bin row** passed the old rule (IoU 0.243 against 0.218). The IoU floor added since would keep the scan.
+* **Unit tests.** `packages/core/test/street-objects.test.ts`, 25 tests, no network or model:
   * profiles from exact ray-marched silhouettes: radius within 1 cm at 12 m, a 0.25 m pose offset taken up, a 10% scale error cancelled by the scan's height, a hidden foot;
   * a panel's offset;
   * round against flat from two sides;
@@ -43,7 +55,9 @@
   * the split of a melted row (5 posts within 6 cm);
   * a bench's front outline (legs, seat, back);
   * specs through the validator;
-  * the instanced layer GLB.
+  * the instanced layer GLB;
+  * the photos' height rule;
+  * the band partition.
 
 ---
 
@@ -53,6 +67,12 @@
 * **A narrow view along a row sees the nearer members.** Penn's bin row: the photo's bin stood about 13 m away while the view aimed at the member at 22 m, so the mask was twice the rebuild's height. Fixed by casting each mask's foot to the ground and giving the view to the member it stands on (or rejecting it).
 * **"Temporary" given to views that show nothing there.** Fixed: a family no usable view shows is `not-seen`, with the capture months as the era note, before the permanence question.
 * **Weak matches were kept.** The handrail was rebuilt as a solid of revolution and kept at IoU 0.078 against the scan's 0.036. Fixed: a keep needs IoU ≥ 0.3 too, and long objects are built from their front outline.
+* **The scan's occluders were wrong in the photos' era.** At Penn the scan's slab in front of the bollards is gone in the photos, and hid the rebuild's middle in the check. Fixed: both arms are drawn whole; the photo's mask already leaves out what really hid the object.
+* **A hidden foot was filled from one cut row** (a 6 cm stem on a bollard). Fixed: the median of the nearest read heights.
+* **A melted blob's height is not the object's.** The Penn bin's blob is 1.43 m tall; its photos agree on 0.91 m. Fixed: the photos' height is taken, labelled photo-inferred, where the views agree with one another and differ from the scan by more than their poses could err.
+* **Overlapping colour bands crashed a run** ("Cannot read properties of undefined (reading '1')"): a body band plus a stripe inside it left an empty band. Fixed: the bands are a partition of the height, and one family's failure is reported without stopping the district.
+* **Two runs at once stalled in the grounding fetch** with no connection open: the service waits for its OAuth token before any per-image limit applies. Each batch now ends after 180 s, with the reason; the runs were made one at a time.
+* **The machine was at load average 270–550** from other sessions. The registration's joint fit ran out of its budget once; the tool now gives it three times the staged build's time.
 * **The eye-level camera stood inside geometry.** Fixed: it stands on the line from the member back to its pano.
 * **Penn's 7th Ave west sidewalk** is under a sidewalk shed in the tiles. Most clusters there are blocked in the scan from every pano, or Street View shows nothing there. They are reported `not-seen`.
 
