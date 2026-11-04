@@ -55,6 +55,12 @@ export const INFILL_GEOMETRY_PARAMS = {
     extrapolateSlope: 0.15,
     /** Ridge on the local quadric's curvature terms (share of the weight): small, so a surrounded point keeps its curvature. */
     curvatureRidge: 1e-3,
+    /**
+     * The curvature is used only where the quadric's weighted residual is under curvatureGain of the plane's, and it moves
+     * the plane by at most curvatureMinM or curvatureSlope times the reach (a street's crown: 2 % over the half-width), so
+     * the ring's noise never sags a wide region into a bowl.
+     */
+    curvatureGain: 0.7, curvatureMinM: 0.08, curvatureSlope: 0.04,
     /** The model is evaluated on a grid of this cell (m) per level and read bilinearly. */
     gridCellM: 0.25,
     /** A height never leaves its level's ring range by more than this (m): no bulge, no pit. */
@@ -363,8 +369,26 @@ export function fitSurfaceModel(ring: Float32Array, chart: InfillChart, P: Infil
                 wsum += q; wy += q * W[i];
             }
             for (let s = 0; s < 6; s++) M[s * 7] += (s >= 3 ? P.curvatureRidge : 1e-6) * wsum;
+            // the plane alone (the quadric's first three terms), and the quadric only where its curvature is real: it fits
+            // the ring clearly better than the plane, and it moves the plane by no more than a street's crown over the reach
+            const M3 = new Float64Array(9), r3 = new Float64Array(3);
+            for (let s2 = 0; s2 < 3; s2++) { r3[s2] = r[s2]; for (let t = 0; t < 3; t++) M3[s2 * 3 + t] = M[s2 * 6 + t]; }
+            const sol3 = wsum > 1e-9 ? solveN(M3, r3, 3) : undefined;
             const sol = wsum > 1e-9 ? solveN(M, r, 6) : undefined;
-            let h = sol && Number.isFinite(sol[0]) ? sol[0] : wsum > 0 ? wy / wsum : 0;
+            const planeH = sol3 && Number.isFinite(sol3[0]) ? sol3[0] : wsum > 0 ? wy / wsum : 0;
+            let h = planeH;
+            if (sol && Number.isFinite(sol[0]) && sol3) {
+                let e3 = 0, e6 = 0;
+                for (const { i, d2 } of near) {
+                    const q = Math.exp(-d2 / s2), u = (A[i] - a) / sigma, v = (B[i] - b) / sigma;
+                    e3 += q * (W[i] - (sol3[0] + sol3[1] * u + sol3[2] * v)) ** 2;
+                    e6 += q * (W[i] - (sol[0] + sol[1] * u + sol[2] * v + sol[3] * u * u + sol[4] * u * v + sol[5] * v * v)) ** 2;
+                }
+                if (e6 < P.curvatureGain * e3) {
+                    const dev = Math.max(P.curvatureMinM, P.curvatureSlope * sigma);
+                    h = planeH + Math.max(-dev, Math.min(dev, sol[0] - planeH));
+                }
+            }
             // within the ring's range, widening outward at a steep street's grade (no bulge inside, extrapolation outside)
             const reach = P.extrapolateSlope * Math.sqrt(near[0]?.d2 ?? 0);
             h = Math.max(ranges[l][0] - reach, Math.min(ranges[l][1] + reach, h));
