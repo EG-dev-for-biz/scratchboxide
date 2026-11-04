@@ -32,7 +32,8 @@ export interface AnalyticalGroomDescriptors {
  * The groom generator: one binary for every groom. argv: spz ply glb('' for none) guideCount strandCount
  * segmentsPerStrand length rootWidth tipWidth clumping curlRadius curlFrequency waveFrequency waveAmplitude eumelanin
  * pheomelanin centerX centerY centerZ baseRadius harmonicFrequency harmonicAmplitude axialTaper baseR baseG baseB
- * tipR tipG tipB scaleMultiplier opacity (a colour of -1 -1 -1 means none).
+ * tipR tipG tipB scaleMultiplier opacity [bodyGlb bodyR bodyG bodyB] (a colour of -1 -1 -1 means none; the body is
+ * written only when a path is given).
  */
 const GROOM_GENERATOR_SOURCE = `#include <cstdlib>
 #include <iostream>
@@ -106,10 +107,64 @@ int main(int argc, char** argv) {
         }
     }
 
+    // The body the coat grows from: the same harmonic surface the roots sit on, 1.5 % inside it, in the undercoat
+    // colour, so the gaps between strands show skin, not the background.
+    const std::string bodyPath = argc > 32 ? argv[32] : "";
+    if (!bodyPath.empty()) {
+        math::Vec3 bodyColor(f(33), f(34), f(35));
+        geometry::ScratchboxMesh body("groom_body");
+        const int rings = 96, sectors = 192;
+        auto surfacePoint = [&](float th, float ph) {
+            float hf = (harmonicFrequency > 0 && std::abs(harmonicAmplitude) > 1e-5f)
+                ? harmonicAmplitude * std::cos(static_cast<float>(harmonicFrequency) * ph) * std::sin(th) : 0.0f;
+            float r = baseRadius * (1.0f + hf) * (1.0f - axialTaper * std::cos(th)) * 0.985f;
+            return center + math::Vec3(std::sin(th) * std::cos(ph), std::cos(th), std::sin(th) * std::sin(ph)) * r;
+        };
+        for (int i = 0; i <= rings; ++i) {
+            for (int j = 0; j <= sectors; ++j) {
+                float th = 3.14159265f * i / rings, ph = 6.2831853f * j / sectors;
+                math::Vec3 p = surfacePoint(th, ph);
+                body.addVertex(geometry::Vertex(p, (p - center).normalized(), math::Vec2(static_cast<float>(j) / sectors, static_cast<float>(i) / rings)));
+            }
+        }
+        for (int i = 0; i < rings; ++i) {
+            for (int j = 0; j < sectors; ++j) {
+                uint32_t a = i * (sectors + 1) + j, b = a + sectors + 1;
+                body.addTriangle(a, b, a + 1);
+                body.addTriangle(a + 1, b, b + 1);
+            }
+        }
+        body.recomputeSmoothNormals();
+        body.material.baseColorFactor = math::Vec4(bodyColor.x, bodyColor.y, bodyColor.z, 1.0f);
+        body.material.roughnessFactor = 0.9f;
+        body.material.metallicFactor = 0.0f;
+        if (!io::GlbWriter::writeToFile(body, bodyPath)) {
+            std::cerr << "analytical_groom: could not write " << bodyPath << std::endl;
+            return 1;
+        }
+    }
+
     std::cout << "__SPLATS_DONE__ count=" << splats.size() << " strands=" << strands.size() << std::endl;
     return 0;
 }
 `;
+
+/**
+ * The undercoat a groom's body is drawn in (linear RGB): its root colour, given or from its melanin as the native
+ * groomer computes it, darkened to 60 % (skin and the shadowed base of a coat read darker than its strands).
+ */
+export function undercoatColor(groom: { baseColorRgb?: [number, number, number]; eumelanin?: number; pheomelanin?: number }): [number, number, number] {
+    const root = groom.baseColorRgb ?? (() => {
+        const eum = groom.eumelanin ?? 0.6, pheo = groom.pheomelanin ?? 0.2;
+        const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+        return [
+            clamp(Math.exp(-(0.419 * eum + 0.187 * pheo) * 4), 0.05, 0.95),
+            clamp(Math.exp(-(0.697 * eum + 0.403 * pheo) * 4), 0.04, 0.9),
+            clamp(Math.exp(-(1.37 * eum + 1.049 * pheo) * 4), 0.02, 0.85)
+        ] as [number, number, number];
+    })();
+    return root.map(c => +(c * 0.6).toFixed(4)) as [number, number, number];
+}
 
 /**
  * Analytical Groom & 3D Gaussian Splatting Service.
@@ -184,6 +239,10 @@ export class AnalyticalGroomSplatService {
         if (groom.tipColorRgb !== undefined && groom.baseColorRgb === undefined) bad.push('tipColorRgb needs baseColorRgb');
         if (bad.length) throw new MissingInputError(tool, 'valid groom descriptors', bad.join('; '));
 
+        // A full coat by default: strands in proportion to the surface's area (about 400,000 per square metre, clamped
+        // to 20,000..120,000), and a guide for every hundred strands (clamped to 64..1,200).
+        const radius = (surface.baseRadius ?? 0.1) * (1 + Math.abs(surface.harmonicAmplitude ?? 0));
+        const strands = Math.round(Math.min(120000, Math.max(20000, 400000 * 4 * Math.PI * radius * radius)));
         return {
             id: descriptors.id ?? `groom_splat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
             surface: {
@@ -192,8 +251,8 @@ export class AnalyticalGroomSplatService {
                 ...surface
             },
             groom: {
-                guideCount: 64,
-                strandCount: 4096,
+                guideCount: Math.round(Math.min(1200, Math.max(64, strands / 100))),
+                strandCount: strands,
                 segmentsPerStrand: 12,
                 rootWidth: 0.003,
                 tipWidth: 0.0006,
@@ -222,7 +281,7 @@ export class AnalyticalGroomSplatService {
      * (the generator parses floats with strtof, the same float a C++ literal of that text is). Descriptors the
      * contract leaves out take the generator's defaults.
      */
-    public generatorArgs(contract: AnalyticalGroomContract, spzPath: string, plyPath: string, glbPath?: string): string[] {
+    public generatorArgs(contract: AnalyticalGroomContract, spzPath: string, plyPath: string, glbPath?: string, bodyGlbPath?: string): string[] {
         const s = contract.surface;
         const g = contract.groom;
         const splat = contract.splat || {};
@@ -240,7 +299,8 @@ export class AnalyticalGroomSplatService {
             f(center[0], 0), f(center[1], 0), f(center[2], 0),
             f(s.baseRadius, 1.0), i(s.harmonicFrequency, 0), f(s.harmonicAmplitude, 0.0), f(s.axialTaper, 0.0),
             ...rgb(g.baseColorRgb), ...rgb(g.tipColorRgb),
-            f(splat.scaleMultiplier, 1.0), f(splat.opacity, 0.92)
+            f(splat.scaleMultiplier, 1.0), f(splat.opacity, 0.92),
+            ...(bodyGlbPath ? [bodyGlbPath, ...undercoatColor(g).map(c => String(c))] : [])
         ];
     }
 
@@ -264,6 +324,7 @@ export class AnalyticalGroomSplatService {
         const spzPath = path.join(outputDir, `${contract.id}.spz`);
         const plyPath = path.join(outputDir, `${contract.id}.ply`);
         const glbPath = path.join(outputDir, `${contract.id}.glb`);
+        const bodyGlbPath = path.join(outputDir, `${contract.id}_body.glb`);
 
         // 1. One generator binary for every groom, built once through the native build cache.
         let compiled: NativeCompileResult;
@@ -289,7 +350,7 @@ export class AnalyticalGroomSplatService {
         const compilationTimeMs = compiled.cacheHit ? 0 : compiled.compileMs;
 
         // 2. Binary Execution
-        const execResult = await this.compiler.executeBinary(compiled.binaryPath, this.generatorArgs(contract, spzPath, plyPath, glbPath), outputDir);
+        const execResult = await this.compiler.executeBinary(compiled.binaryPath, this.generatorArgs(contract, spzPath, plyPath, glbPath, bodyGlbPath), outputDir);
 
         if (!execResult.success || execResult.exitCode !== 0) {
             return {
@@ -331,6 +392,7 @@ export class AnalyticalGroomSplatService {
             spzBuffer,
             plyPath: finalPlyPath,
             glbPath: finalGlbPath,
+            ...(fs.existsSync(bodyGlbPath) ? { bodyGlbPath } : {}),
             executionTimeMs: execResult.executionTimeMs,
             compilationTimeMs
         };
