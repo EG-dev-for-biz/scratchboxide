@@ -13,7 +13,9 @@
  * build), and a readings store holding both sets' prepared maps (no set is fetched: the bucket is out of reach in tests).
  * A dark class with no finish reading, or an unsure one, takes the concrete, a dielectric; read confidently as metal it
  * takes the panel, marked metal; read as a smooth dielectric (glass) it takes a plain finish, no set; and a set not yet
- * measured is left out, never measured here.
+ * measured is left out, never measured here. A class read confidently whose set the pick by appearance did not confirm
+ * (none looked like it, or no answer) is drawn plain at its read finish (metal when read as metal), never the ranking's
+ * nearest of another kind.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -72,5 +74,34 @@ describe('pipeline K library sets', () => {
         // the unmeasured set is counted and left out, never measured in the build
         expect(progress.some(m => /1 library sets .* not measured yet/.test(m))).toBe(true);
         expect(fs.existsSync(path.join(root, 'build', 'texture-library', 'stats'))).toBe(false);
+    });
+
+    it('draws a confidently read class plain at its read finish when the pick by appearance does not confirm its set', async () => {
+        const { root, store } = library();
+        // read as painted metal, and no candidate looked like it (Penn 2's spandrel class, whose nearest by numbers was a wood)
+        const none = async (rows: unknown[]) => rows.map(() => ({ pick: 0, conf: 70, seen: 'painted metal panel' }));
+        const metal = await resolveRegionSets([dark], { repoRoot: root, store, choose: none, finish: async () => [{ roughness: 0.45, metalness: 0.6, conf: 70, seen: 'dark painted metal spandrel' }] });
+        expect(metal[0].name).toBe('plain (read finish)');
+        expect(metal[0].metal).toBe(true);
+        expect(Array.from(metal[0].orm.rgba.subarray(0, 3))).toEqual([255, 115, 153]);
+        expect(Array.from(metal[0].normal.rgba.subarray(0, 3))).toEqual([128, 128, 255]);
+        expect(metal[0].choice).toMatchObject({ by: 'ranking', why: expect.stringMatching(/read finish drawn plain/) });
+        // read as matte stone, no candidate like it: plain at its roughness, no metalness
+        const stone = await resolveRegionSets([dark], { repoRoot: root, store, choose: none, finish: async () => [{ roughness: 0.8, metalness: 0, conf: 80 }] });
+        expect(stone[0].name).toBe('plain (read finish)');
+        expect(stone[0].metal).toBeUndefined();
+        expect(stone[0].orm.rgba[2]).toBe(0);
+        // an unsure reading keeps the ranking's nearest, as does a class with no reading
+        const unsure = await resolveRegionSets([dark], { repoRoot: root, store, choose: none, finish: async () => [{ roughness: 0.8, metalness: 0, conf: 40 }] });
+        expect(unsure[0].name).toBe('Concrete');
+        const unread = await resolveRegionSets([dark], { repoRoot: root, store, choose: none });
+        expect(unread[0].name).toBe('Concrete');
+        // the pick gave no answer (Penn 2's timed out under load): the confident reading is drawn plain too
+        const failed = await resolveRegionSets([dark], { repoRoot: root, store, choose: async () => { throw new Error('no answer within 90 s'); }, finish: async () => [{ roughness: 0.5, metalness: 0.3, conf: 65 }] });
+        expect(failed[0].name).toBe('plain (read finish)');
+        expect(failed[0].choice?.why).toMatch(/no answer within 90 s.*read finish drawn plain/);
+        // a confirmed pick keeps its set
+        const picked = await resolveRegionSets([dark], { repoRoot: root, store, choose: async (rows: unknown[]) => rows.map(() => ({ pick: 1, conf: 80 })), finish: async () => [{ roughness: 0.8, metalness: 0, conf: 80 }] });
+        expect(picked[0].name).toBe('Concrete');
     });
 });

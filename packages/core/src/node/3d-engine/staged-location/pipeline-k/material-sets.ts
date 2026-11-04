@@ -26,7 +26,7 @@ import { NativePythonRunnerService } from '../../native-python-runner-service';
 import { decodeImageInMemory } from '../tile-texture-transfer';
 import type { RegionClass, RegionSet } from './material-regions';
 import { CHOICE_CANDIDATES, type ChoiceCandidate, type ChoiceRow, type SetChoice } from './material-choice';
-import { finishTarget, type ClassFinish } from './material-finish';
+import { FINISH_READ, finishTarget, type ClassFinish } from './material-finish';
 import { readingKey, type ModelReadingStore } from './model-readings';
 
 /** Prepared map size: a facade texel is several centimetres, so a tile of a metre or two needs few texels. */
@@ -74,13 +74,18 @@ export const FACADE_TILE = { wantM: 2, maxM: 8 } as const;
 
 const linearToSrgb = (c: number) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
 
-/** A class's plain finish (a smooth dielectric read by the vision model): its read roughness, a flat normal, no library grain. */
-function plainSet(roughness: number, read: ClassFinish): RegionSet {
+/**
+ * A class's plain finish, a flat normal and no library grain, at the finish the vision model read: a smooth dielectric
+ * (glass, polished stone), or a class whose set the pick by appearance did not confirm (its metalness drawn when it was
+ * read confidently as metal).
+ */
+function plainSet(roughness: number, metallic: number, read: ClassFinish, choice?: RegionSet['choice']): RegionSet {
     const flat = (rgba: number[]) => ({ width: 4, height: 4, rgba: Uint8Array.from({ length: 64 }, (_, i) => rgba[i % 4]) });
     return {
         name: 'plain (read finish)', realSizeM: [1, 1], distance: 0,
-        normal: flat([128, 128, 255, 255]), orm: flat([255, Math.round(roughness * 255), 0, 255]),
-        finish: { read, roughness, metallic: 0, label: 'photo-inferred' }
+        normal: flat([128, 128, 255, 255]), orm: flat([255, Math.round(roughness * 255), Math.round(metallic * 255), 255]),
+        finish: { read, roughness, metallic, label: 'photo-inferred' },
+        ...(metallic > 0 ? { metal: true } : {}), ...(choice ? { choice } : {})
     };
 }
 
@@ -185,8 +190,13 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
     });
     // the prepared maps kept from an earlier build, else the set fetched and prepared now (and kept)
     const kept = new Map<string, { normal: Uint8Array; orm: Uint8Array }>();
-    // a class read as a smooth dielectric takes a plain finish (material-finish.ts plainBelowRoughness): its set is not used
-    const used = new Set(chosen.filter((_, k) => !targets[k].plain).map(h => h.entry.id));
+    // a class read as a smooth dielectric takes a plain finish (material-finish.ts plainBelowRoughness), and so does a class
+    // read confidently whose set the pick by appearance did not confirm (it found no candidate like the class, or gave no
+    // answer): the nearest by numbers alone is often another kind of surface (Penn 2's metal spandrels and louvres took
+    // Wood080 in three builds of four); its set is not used
+    const unconfirmed = (k: number) => !!opts.choose && !(choices[k]?.pick?.pick ?? 0);
+    const plain = targets.map((t, k) => t.plain || (unconfirmed(k) && !!finishes[k] && finishes[k]!.conf >= FINISH_READ.minConf));
+    const used = new Set(chosen.filter((_, k) => !plain[k]).map(h => h.entry.id));
     for (const id of used) {
         const rec = opts.store ? await opts.store.get<PreparedRecord>(preparedKey(id)) : undefined;
         if (rec?.normal && rec.orm) kept.set(id, { normal: Buffer.from(rec.normal, 'base64'), orm: Buffer.from(rec.orm, 'base64') });
@@ -226,7 +236,7 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         opts.store?.put(preparedKey(id), { normal: maps.normal.toString('base64'), orm: maps.orm.toString('base64') } satisfies PreparedRecord);
     }
     return chosen.map((hit, k): RegionSet => {
-        if (targets[k].plain) return plainSet(targets[k].roughness, finishes[k]!);
+        if (plain[k]) return plainSet(targets[k].roughness, targets[k].metal ? targets[k].metallic : 0, finishes[k]!, targets[k].plain || !choices[k] ? undefined : { candidates: choices[k]!.candidates, by: 'ranking', ...(choices[k]!.pick?.seen ? { seen: choices[k]!.pick!.seen } : {}), ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}), why: `${choices[k]!.pick ? 'none of the candidates looked like the class' : choices[k]!.why ?? 'the pick by appearance gave no answer'}; its read finish drawn plain` });
         const maps = kept.get(hit.entry.id)!;
         return {
             name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
