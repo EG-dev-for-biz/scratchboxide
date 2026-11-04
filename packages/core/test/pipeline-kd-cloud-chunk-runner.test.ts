@@ -222,6 +222,21 @@ describe('pipeline K-D cloud chunk runner', () => {
         expect(fs.existsSync(stale)).toBe(false);
     });
 
+    it('asks for the execution again when a poll fails, and fails the chunk (its execution cancelled) after too many in a row', async () => {
+        const s = setup();
+        const real = s.jobs.get.bind(s.jobs);
+        let fails = 3;
+        s.jobs.get = async (name: string) => { if (fails-- > 0) throw new Error('read ETIMEDOUT'); return real(name); };
+        const out = await s.runChunk(request(), {});
+        expect(out.result.status).toBe('complete');
+        expect(s.jobs.cancelled).toEqual([]);
+
+        const t = setup();
+        t.jobs.get = async () => { throw new Error('read ETIMEDOUT'); };
+        await expect(t.runChunk(request(), {})).rejects.toThrow(/ETIMEDOUT/);
+        expect(t.jobs.cancelled).toEqual([expect.stringMatching(/kd-chunk-job-0$/)]);
+    });
+
     it('a stop cancels the execution and rejects with the stop', async () => {
         const s = setup({ hang: true });
         const ac = new AbortController();

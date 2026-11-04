@@ -176,6 +176,15 @@ export function kdChunkRunner(env: NodeJS.ProcessEnv = process.env): 'local' | '
     return env.SCRATCHBOX_KD_CHUNK_RUNNER?.trim() === 'cloud' ? 'cloud' : 'local';
 }
 
+/**
+ * Where a chunked district's centre cell builds: with the cloud runner, in the cloud as one more chunk job (the hero's query
+ * and address kept, its frame the district's), the build here only planning, painting, joining and publishing; on this
+ * machine otherwise, or with SCRATCHBOX_KD_CENTRE_RUNNER=local.
+ */
+export function kdCentreRunner(env: NodeJS.ProcessEnv = process.env): 'local' | 'cloud' {
+    return kdChunkRunner(env) === 'cloud' && env.SCRATCHBOX_KD_CENTRE_RUNNER?.trim() !== 'local' ? 'cloud' : 'local';
+}
+
 /** This machine's cores: SCRATCHBOX_CPUS when set (a container can report its host's cores, not its own), else what the OS reports. */
 export function machineCores(env: NodeJS.ProcessEnv = process.env): number {
     const n = Number(env.SCRATCHBOX_CPUS);
