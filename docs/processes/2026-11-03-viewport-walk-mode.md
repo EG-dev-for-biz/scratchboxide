@@ -1,7 +1,7 @@
 # Process: Walk and run at street level in the Scene3D viewport, tested on the Penn Station K-D district
 
 > **Recorded:** 2026-11-03
-> **Status:** Verified (walk, run, kerb, wall slide, frame cost, live in the app). Not covered: pointer lock and Esc in a visible window (the pane was hidden throughout), a whole-frame interval on an unloaded Mac
+> **Status:** Verified (walk, run, kerb, wall slide, frame cost, live in the app). Not covered: pointer lock in a visible window (the pane was hidden throughout and synthetic input gets no lock; drag-to-look verified instead), a whole-frame interval on an unloaded Mac
 > **Tags:** `operate-scratchbox` `viewport` `walk-mode` `collision` `bvh` `penn-station`
 > **Target Domain:** Generative Canvas / 3D Viewport
 
@@ -25,6 +25,7 @@ The proof sheet: `docs/screenshots/2026-11-03-viewport-walk-mode-proof-sheet.png
 * **Stepping up a kerb** — walking from the street onto the sidewalk → the feet rise 0.47 m over the scan's sloped kerb, the last 0.15–0.20 m in one frame (live, two passes at the same spot: 1.707 → 1.906 m); the eye eases up over ~0.25 s; bollards on the kerb stop the body.
 * **Sliding along a facade** — W+A, 45° into the Garden's wall → 1.40 m/s until the body meets it, then 0.94 m/s along it, 0.3–0.4 m off the face (the face measured by rays at n ≈ 21.7 m).
 * **Frame cost** — the app's whole frame by GPU timer query (`__SB_VIEWPORT_COST__.measure`, 1451×802, 215 draws, 492k triangles in view): 6.9 / 11.6 ms p50 / p95 on 8th Ave, 5.4 / 7.8 ms on the sidewalk. The walker's own CPU cost a frame (300 steps each): running 0.2 / 0.6 ms, walking 0.4 / 0.8, sliding 0.6 / 1.1 (p50 / p95), worst 4.1 ms; 0–40 triangles tested a step. Collision trees for the whole district: 663 geometries, 649k triangles, 432 ms in all, built only as the walker nears each. Whole live frames ran p50 26–30 ms, p95 ~47 ms with the Mac at load ~760 (other sessions' suites).
+* **Fly, leave, drop under the pointer, drag to look** — `F` (keydown on the window) switched walk → fly → walk; `Escape` ended the walk with the camera unmoved (0 m, 0°), the orbit pivot on the surface 53.6 m ahead, the button and HUD reset; Shift+F with the pointer over the lower right of the street dropped the walker there (grounded, 1.79 m); a 120 px drag without pointer lock turned the view 17.19° (0.0025 rad a pixel).
 * **A first fix found live** — gathering the meshes near the walker checked all 712 meshes' visibility and matrices every step (0.74 ms); it now looks closely only at meshes whose last-measured box comes within 50 m, every box re-measured at the twice-a-second refresh (0.12 ms; refresh 0.8–1.7 ms).
 * **A second fix found live** — the HUD used Tailwind classes the app does not compile (its stylesheet is hand-written); it is styled inline now.
 
