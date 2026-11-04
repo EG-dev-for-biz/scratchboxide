@@ -134,7 +134,22 @@ far out: wheels a metre ahead of the car, pillars floating. So, in buildNotes, s
   mirrored. Each tyre: a root revolve with axisDirection [1, 0, 0], axisOrigin [track/2 - tyreWidth/2, R, axle z],
   meridian over 0..tyreWidth from the rim radius out to R and back; each rim the same with a smaller radius.
 
-Write this plan into buildNotes with the numbers filled in:
+**With a blueprint, loft the masses from it.** Pass blueprintPath to build_3d_object_from_reference: the spec then
+carries the outlines, and a root sweep can be lofted from them with fromBlueprint in place of control points and
+profile keys, every section the drawings' own (side, plan and front at that station). Use that for every body mass
+and keep the operators for the rest. In buildNotes, ask for exactly these parts (numbers filled in):
+
+- **body**: fromBlueprint {yToMeters: beltline + 0.02, clearances: one circle per axle, zMeters the axle's z, yMeters
+  the hub height R, radiusMeters R + the arch gap (0.03-0.05)}: the lower body with round wheel arches.
+- **glasshouse**: fromBlueprint {yFromMeters: beltline - 0.02}, dark glass: the cabin as the drawings shape it.
+- **pillars**: fromBlueprint {yFromMeters: beltline - 0.02, zFromMeters, zToMeters: the pillar's span, insetMeters:
+  -0.005}, in body colour (or gloss black as the picture shows): the B-pillar and the C or D pillar spans from
+  section 4's measurements. They lie on the cabin's own surface, so they cannot stand off it.
+- **roof**: fromBlueprint {fromTopMeters: 0.03, zFromMeters, zToMeters: the roof span, insetMeters: -0.004}, in body
+  colour, unless the picture shows a glass or black roof.
+- Wheels, axles, lamps, grille, mirrors and handles as in the plan below (steps 7-9); skip its steps 1-6.
+
+Without a blueprint, write this plan into buildNotes with the numbers filled in:
 
 1. **Upper body** (one sweep along Z from tail to nose, closed ends, section exponent 3-3.5: a car's shoulders are
    rounded, and 5 or more reads as a slab): its top line is the bonnet, beltline and deck silhouette; its underside
@@ -210,6 +225,7 @@ is [0.62, 0.63, 0.64]). Convert sRGB as (v/255)^2.2: light silver or grey about 
 
 - **request**: short and visual, what the picture should show: year, make, model, generation, body style, trim,
   colour, wheel design. No numbers (they would reach the picture prompt, not the spec).
+- **blueprintPath**: the blueprint's, when section 2b drew one.
 - **dimensionsHintMeters**: [width with mirrors, height, length]. Use the published with-mirrors width, else the
   body width + 0.28 m (estimated). The build is revised until it is within 3 % of this on every axis.
 - **buildNotes**: the hardpoint sheet and the plan from section 4 with every number filled in, each marked
