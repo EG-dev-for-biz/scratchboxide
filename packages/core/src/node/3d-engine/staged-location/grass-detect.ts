@@ -58,6 +58,8 @@ export interface GrassMask {
     mask: Uint8Array;
     /** 0..1 per grass cell (0 elsewhere). */
     confidence: Float32Array;
+    /** The lit photo colour (linear RGB, 3 per cell) of each cell read green; 0 elsewhere and under crowns (nothing seen there). */
+    colour: Float32Array;
     cells: number;
     areaM2: number;
     /** The filled-in part (mask value 2): cells and area, included in `cells` and `areaM2`. */
@@ -75,7 +77,7 @@ export interface GrassMask {
 export function detectGrass(photo: TopDownPhoto, frame: TopDownFrame, ground: GroundModel, P = GRASS_DETECT_PARAMS, evidence?: { water?: Uint8Array; park?: Uint8Array; building?: Uint8Array | Int32Array }): GrassMask {
     const { nx, nz, cellMeters: cellM, x0, z0 } = ground;
     const N = nx * nz;
-    const raw = new Uint8Array(N), score = new Float32Array(N);
+    const raw = new Uint8Array(N), score = new Float32Array(N), colour = new Float32Array(N * 3);
     const stats = { measured: 0, tooHigh: 0, water: 0, notGreen: 0, noColour: 0, speckle: 0 };
     const water = evidence?.water ? grow(evidence.water, nx, nz, Math.round(P.waterMarginM / cellM)) : undefined;
     const per = Math.max(1, Math.round(cellM / photo.texelM));
@@ -103,6 +105,7 @@ export function detectGrass(photo: TopDownPhoto, frame: TopDownFrame, ground: Gr
         const [L, a, b] = col.lab;
         if (a > P.greenA || L < P.minL || L > P.maxL || Math.hypot(a, b) < P.minChroma) { stats.notGreen++; continue; }
         raw[c] = 1;
+        colour.set(col.linearRgb, c * 3);
         const green = Math.min(1, (P.greenA - a) / (P.greenA - P.fullGreenA));
         const low = 1 - Math.max(0, above) / P.maxAboveGroundM;
         score[c] = Math.max(0.05, 0.5 * green + 0.5 * Math.min(1, low * 1.5)) * (0.6 + 0.4 * green);
@@ -156,7 +159,7 @@ export function detectGrass(photo: TopDownPhoto, frame: TopDownFrame, ground: Gr
     for (let c = 0; c < N; c++) { if (mask[c]) cells++; if (mask[c] === 2) under++; }
     patches.sort((p, q) => q.areaM2 - p.areaM2);
     return {
-        version: GRASS_DETECT_VERSION, x0, z0, nx, nz, cellM, mask, confidence, cells, areaM2: cells * cellM * cellM,
+        version: GRASS_DETECT_VERSION, x0, z0, nx, nz, cellM, mask, confidence, colour, cells, areaM2: cells * cellM * cellM,
         underCrown: { cells: under, areaM2: under * cellM * cellM }, patches, stats,
         provenance: { label: 'photo-inferred', method: `ground-level cells (within ${P.maxAboveGroundM} m of the terrain) whose lit top-down colour is vegetation green (CIELAB a* <= ${P.greenA}), majority-filtered, patches >= ${P.minPatchM2} m2${water ? `, outside vector water areas (+${P.waterMarginM} m)` : ', no vector water areas given'}`,
             ...(evidence?.park ? { underCrown: { label: 'generated' as const, method: `inside park outlines, ground hidden by crowns (${filled} cells) continues the nearest surface seen in the same park (grass; a path for ${P.pathReachM} m), lawn beyond` } } : {}) }

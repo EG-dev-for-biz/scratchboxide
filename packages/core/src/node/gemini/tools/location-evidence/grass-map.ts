@@ -12,7 +12,8 @@
  * over the photo-textured 3D tiles. Grass seen from above is photo-inferred; inside Google park outlines, the ground
  * hidden under tree crowns is filled from the nearest seen surface and labelled generated. Google vector water areas
  * are never grass, and buildings are never filled. Without vector data the map still runs, from the scan alone, and
- * says so.
+ * says so. With `blades`, real grass is grown over the mapped grass near a centre as instanced clump meshes
+ * (grass-field.ts), in place of the flat debug layer: blade geometry generated, its colour photo-inferred.
  */
 
 import * as fs from 'fs';
@@ -25,18 +26,25 @@ import { renderTopDownPhoto } from '../../../3d-engine/staged-location/top-down-
 import { readTileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
 import { fetchVectorEvidence, rasterizeEvidence, rasterizeAreas } from '../../../3d-engine/staged-location/vector-footprints';
 import { detectGrass, type GrassMask } from '../../../3d-engine/staged-location/grass-detect';
+import { buildGrassField, grassFieldGrid, scanTrianglesNear, writeGrassFieldGlb, GRASS_FIELD_VERSION, type GrassFieldParams } from '../../../3d-engine/staged-location/grass-field';
 import { GltfBinaryPacker } from '../../../3d-engine/gltf-binary-packer';
 
 export const GRASS_MAP_TOOL_NAME = 'location_grass_map';
 
 export const GRASS_MAP_TOOL_DECLARATION: ToolDeclaration = {
     name: GRASS_MAP_TOOL_NAME,
-    description: 'Map where the ground of a real place is grass and show it in the viewport over the photo-textured Google 3D Tiles. Grass seen from above (ground-level cells whose lit colour is vegetation green) is labelled photo-inferred and drawn green; inside Google park outlines, ground hidden under tree crowns continues the nearest surface seen in the same park (grass, or a path for a few metres) and is labelled generated, drawn cyan. Google vector water areas are never grass and buildings are never filled. Reports the grass area, the filled area, the patches and why other ground was not grass. Use it when the user asks where the grass or lawns are at a place.',
+    description: 'Map where the ground of a real place is grass and show it in the viewport over the photo-textured Google 3D Tiles. Grass seen from above (ground-level cells whose lit colour is vegetation green) is labelled photo-inferred and drawn green; inside Google park outlines, ground hidden under tree crowns continues the nearest surface seen in the same park (grass, or a path for a few metres) and is labelled generated, drawn cyan. Google vector water areas are never grass and buildings are never filled. Reports the grass area, the filled area, the patches and why other ground was not grass. Use it when the user asks where the grass or lawns are at a place. With blades: true it instead grows real 3D grass (instanced blade clumps, generated geometry tinted to the photo colour) over the mapped grass within a band around the place (or the nearest grass to it), never over buildings or water; ground farther out stays the tile photo. Use blades when the user wants 3D grass, lawns or a grass layer they can see up close.',
     parameters: {
         type: 'OBJECT',
         properties: {
             query: { type: 'STRING', description: 'Place name, address or "lat, lng".' },
-            radiusMeters: { type: 'NUMBER', description: 'Radius of the area mapped (default 250 m).' }
+            radiusMeters: { type: 'NUMBER', description: 'Radius of the area mapped (default 250 m).' },
+            blades: { type: 'BOOLEAN', description: 'Grow 3D grass blades (instanced clumps) over the mapped grass instead of the flat map layer (default false).' },
+            bladeBandRadiusM: { type: 'NUMBER', description: 'Radius around the centre within which blades are grown (default 60 m); farther grass stays the tile photo.' },
+            bladeDensityPerM2: { type: 'NUMBER', description: 'Clumps per square metre on fully confident grass (default 4).' },
+            bladeHeightMinM: { type: 'NUMBER', description: 'Shortest blade length (default 0.06 m).' },
+            bladeHeightMaxM: { type: 'NUMBER', description: 'Longest blade length (default 0.14 m). A mown lawn is a few centimetres; a meadow half a metre or more.' },
+            bladeSenescence: { type: 'NUMBER', description: '0..1, how far blade tips turn toward straw (default 0.35).' }
         },
         required: ['query']
     }
@@ -115,16 +123,52 @@ export const grassMapHandler: ToolHandler = async (args, ctx): Promise<ToolHandl
         space: { spatial3d: { x: 0, y: 0, z: 0 } }, time: { startMs: 0, durationMs: 20000 }, lineage: { version: 1 }
     });
     const seenM2 = g.areaM2 - g.underCrown.areaM2;
-    const summary = `Grass at ${place}: ${Math.round(seenM2).toLocaleString()} m² seen from above (photo-inferred, green) and ${Math.round(g.underCrown.areaM2).toLocaleString()} m² filled under park tree crowns (generated, cyan), in ${g.patches.length} patches. Not grass: ${g.stats.tooHigh.toLocaleString()} m² standing above the ground, ${g.stats.water.toLocaleString()} m² water, ${g.stats.notGreen.toLocaleString()} m² ground that is not green. ${vectorNote}.`;
+    let summary = `Grass at ${place}: ${Math.round(seenM2).toLocaleString()} m² seen from above (photo-inferred, green) and ${Math.round(g.underCrown.areaM2).toLocaleString()} m² filled under park tree crowns (generated, cyan), in ${g.patches.length} patches. Not grass: ${g.stats.tooHigh.toLocaleString()} m² standing above the ground, ${g.stats.water.toLocaleString()} m² water, ${g.stats.notGreen.toLocaleString()} m² ground that is not green. ${vectorNote}.`;
+    const layer = object(`grass-map-${stamp}`, out, { source: GRASS_MAP_TOOL_NAME, layer: 'grass', isGround: false, triangleCount: triangles, provenance: extras.sb.provenance });
+    let bladeLayer: ReturnType<typeof object> | undefined, blades: Record<string, unknown> | undefined;
+    if (args.blades === true) {
+        if (!g.cells) summary += ' No blades were grown: no grass was found.';
+        else {
+            ctx.reportProgress?.('Growing the grass blades');
+            const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined;
+            const bandRadiusM = num(args.bladeBandRadiusM) ?? 60;
+            const centre = bladeCentre(g, bandRadiusM);
+            const params: GrassFieldParams = {
+                centreX: centre.x, centreZ: centre.z, bandRadiusM, densityPerM2: num(args.bladeDensityPerM2),
+                bladeHeightMin: num(args.bladeHeightMinM), bladeHeightMax: num(args.bladeHeightMaxM),
+                senescence: typeof args.bladeSenescence === 'number' ? Math.min(1, Math.max(0, args.bladeSenescence)) : undefined
+            };
+            if (params.bladeHeightMin !== undefined && params.bladeHeightMax === undefined) params.bladeHeightMax = Math.max(params.bladeHeightMin, 0.14);
+            if (params.bladeHeightMax !== undefined && params.bladeHeightMin === undefined) params.bladeHeightMin = Math.min(params.bladeHeightMax, 0.06);
+            const near = scanTrianglesNear(scan.mesh.vertices as Float32Array, scan.mesh.indices as Uint32Array, centre.x, centre.z, bandRadiusM + 2);
+            const field = await buildGrassField(grassFieldGrid(g, ground, { building: evidence?.building, water: evidence?.water }, near), out.replace(/\.glb$/i, '_blades'), params, { signal: ctx.signal });
+            const bladesFile = tiles.glbPath.replace(/(_textured)?\.glb$/i, '_grass_blades.glb');
+            const provenance = {
+                label: 'generated', measuredGeometry: false, geometry: { label: 'generated', method: `${GRASS_FIELD_VERSION}: GrassClumpGenerator clumps (V-keel blades, droop, splay, senescent tips), instanced on blue-noise samples over the grass mask, kept with each cell's confidence` },
+                standing: { label: 'measured', method: `each clump stands on the scan's surface where one lies within 0.75 m of the cell surface (${field.report.stats.snapped} clumps); elsewhere on the estimated ground (${field.report.stats.unsnapped}, generated)` },
+                colour: { label: 'photo-inferred', method: 'each instance tinted toward its cell\'s lit top-down photo colour; cells under crowns take the nearest seen grass colour' },
+                mask: { ...extras.sb.provenance }, confidence: 0.6
+            };
+            const bladeTriangles = writeGrassFieldGlb(bladesFile, field, { sb: { provenance, version: GRASS_FIELD_VERSION, mask: g.version, band: { centre: [centre.x, centre.z], radiusM: bandRadiusM, radiusReachedM: field.report.stats.radiusReachedM } } });
+            const s = field.report.stats;
+            blades = { glbPath: bladesFile, instances: field.report.instances, triangles: bladeTriangles, centre: [centre.x, centre.z], centreFrom: centre.from, bandRadiusM, report: field.report, provenance };
+            bladeLayer = object(`grass-blades-${stamp}`, bladesFile, { source: GRASS_MAP_TOOL_NAME, layer: 'grass-blades', isGround: false, instanceCount: field.report.instances, triangleCount: bladeTriangles, provenance });
+            let seenColour = false;
+            for (let c = 0; c < g.mask.length && !seenColour; c++) seenColour = !!g.mask[c] && g.colour[c * 3 + 1] > 0;
+            if (!seenColour) summary += ' No grass was seen from above here, so the blades keep their own neutral tone (no photo colour to tint them toward).';
+            summary += ` Grew ${field.report.instances.toLocaleString()} grass clumps (generated geometry, photo-inferred colour) over ${Math.round(s.bandGrassM2).toLocaleString()} m² of grass within ${bandRadiusM} m of ${centre.from}${s.overBudget ? `; ${s.overBudget.toLocaleString()} farther ones left out past the instance budget (blades reach ${s.radiusReachedM.toFixed(0)} m)` : ''}; ${s.nearExcluded.toLocaleString()} kept clear of buildings and water. Farther ground stays the tile photo.`;
+        }
+    }
     const artifact = {
-        id: `artifact-3d-${stamp}`, type: '3d-scene', title: `${place} (grass map)`, summary, version: 1,
+        id: `artifact-3d-${stamp}`, type: '3d-scene', title: `${place} (${bladeLayer ? 'grass' : 'grass map'})`, summary, version: 1,
         data: {
-            title: `${place} — grass map`, subtitle: 'Photo-textured Google 3D Tiles with the grass layer: green seen from above, cyan filled under park crowns.',
+            title: `${place} — ${bladeLayer ? 'grass' : 'grass map'}`,
+            subtitle: bladeLayer ? 'Photo-textured Google 3D Tiles with 3D grass grown over the mapped lawns near the place.' : 'Photo-textured Google 3D Tiles with the grass layer: green seen from above, cyan filled under park crowns.',
             renderMode: 'shaded', cameraMode: 'orbit', environment: { skybox: 'studio', lighting: 'studio', ground: false },
             groundTileMode: 'photoreal-textured', geoAnchor: tiles.geoAnchor,
             objects: [
                 object(`tile-texture-${stamp}`, tiles.glbPath, { source: 'Google3DTilesFullTexture', isGround: true, metricScale: 1, groundDatumMeters: 0 }),
-                object(`grass-map-${stamp}`, out, { source: GRASS_MAP_TOOL_NAME, layer: 'grass', isGround: false, triangleCount: triangles, provenance: extras.sb.provenance })
+                bladeLayer ?? layer
             ]
         }
     };
@@ -133,7 +177,20 @@ export const grassMapHandler: ToolHandler = async (args, ctx): Promise<ToolHandl
         summaryResult: summary,
         resultPayload: {
             status: 'success', place, geoAnchor: tiles.geoAnchor, glbPath: out, areaM2: g.areaM2, underCrown: g.underCrown, patches: g.patches.slice(0, 20), stats: g.stats,
-            provenance: g.provenance, vector: vectorNote, artifact
+            provenance: g.provenance, vector: vectorNote, ...(blades ? { blades } : {}), artifact
         } as unknown as ToolResultPayload
     };
 };
+
+/** Where the blades are grown around: the place itself when grass lies within the band, else the grass patch nearest it. */
+function bladeCentre(g: GrassMask, bandRadiusM: number): { x: number; z: number; from: string } {
+    let near = false;
+    for (let k = 0; k < g.nz && !near; k++) for (let i = 0; i < g.nx; i++) {
+        if (!g.mask[k * g.nx + i]) continue;
+        const x = g.x0 + (i + 0.5) * g.cellM, z = g.z0 + (k + 0.5) * g.cellM;
+        if (x * x + z * z <= bandRadiusM * bandRadiusM) { near = true; break; }
+    }
+    if (near) return { x: 0, z: 0, from: 'the place' };
+    const p = [...g.patches].sort((a, b) => Math.hypot(...a.centre) - Math.hypot(...b.centre))[0];
+    return { x: p.centre[0], z: p.centre[1], from: `the nearest grass, ${Math.round(Math.hypot(...p.centre))} m from the place` };
+}
