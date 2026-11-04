@@ -25,7 +25,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { applyFacadeLattices, facadeSamples, latticeFacade, type FacadeLatticeResult, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
 import { clipToFootprint, cutScanToLattice, fillOpenLoops, LATTICE_STITCH_PARAMS, stitchLattice, watertightLatticeMesh } from '../src/node/3d-engine/staged-location/pipeline-k/lattice-stitch';
-import { parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
+import { parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { ensureRemeshPolishBinary } from '../src/node/3d-engine/staged-location/remesh-polish-native';
 import { writeStagedGlbFile, type StagedGlbNode } from '../src/node/3d-engine/staged-location/staged-glb-writer';
@@ -142,6 +142,35 @@ describe('lattice cut and stitch: native against TypeScript', () => {
             expect(Buffer.compare(nat.out.glb, ts.out.glb)).toBe(0);
             console.log(`footprint clip (${margin} m), ${ts.out.report.cutTriangles} triangles cut, ${ts.out.report.removedTriangles} removed: TypeScript ${ts.ms.toFixed(0)} ms, native ${nat.ms.toFixed(0)} ms`);
         }
+    }, 300_000);
+
+    it('leaves the rebuilt facades whole when asked (a scan-outline footprint), still clipping the scan, natively and here alike', () => {
+        const withWalls = applyFacadeLattices(Uint8Array.from(scan), facades, false, undefined, { removeScan: false }).glb;
+        // the rebuilt facades' live triangles (the clip makes a removed one degenerate in place)
+        const wallTriangles = (glb: Buffer) => {
+            const g = parseGlbBytes(glb);
+            let n = 0;
+            for (const node of g.json.nodes) {
+                if (!(node.name ?? '').startsWith('FacadeLattice_')) continue;
+                for (const p of g.json.meshes[node.mesh].primitives) {
+                    const I = readAccessor(g, p.indices).data;
+                    for (let t = 0; t + 2 < I.length; t += 3) if (I[t] !== I[t + 1] && I[t + 1] !== I[t + 2] && I[t] !== I[t + 2]) n++;
+                }
+            }
+            return n;
+        };
+        const keepNodes = { keep: (name: string) => name.startsWith('FacadeLattice_'), why: 'test' };
+        const before = wallTriangles(withWalls);
+        const plain = withNative('0', () => clipToFootprint(Uint8Array.from(withWalls), [FOOTPRINT], 0.3));
+        const ts = withNative('0', () => clipToFootprint(Uint8Array.from(withWalls), [FOOTPRINT], 0.3, { keepNodes }));
+        const nat = withNative('1', () => clipToFootprint(Uint8Array.from(withWalls), [FOOTPRINT], 0.3, { keepNodes }));
+        // the footprint crosses the box's left 2 m: a plain clip cuts the front wall there, the kept clip leaves it whole
+        expect(wallTriangles(plain.out.glb)).toBeLessThan(before);
+        expect(wallTriangles(ts.out.glb)).toBe(before);
+        expect(ts.out.report.keptNodes).toBe(facades.length);
+        expect(ts.out.report.removedTriangles).toBeGreaterThan(10);
+        expect(nat.out.report).toEqual(ts.out.report);
+        expect(Buffer.compare(nat.out.glb, ts.out.glb)).toBe(0);
     }, 300_000);
 
     it('textures the fill the same: on a rebuilt wall, at its corners, continued from a wall, or clay', () => {
