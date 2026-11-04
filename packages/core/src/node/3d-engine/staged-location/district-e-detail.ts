@@ -22,12 +22,12 @@
 
 import * as path from 'path';
 import type { VisionModelChain } from '../../gemini/vision-model-chain';
-import type { MassingLayerFiles } from './pipeline-e/pipeline-e';
+import type { MassingLayerFiles, UnsourcedClosure } from './pipeline-e/pipeline-e';
 import { runInferenceE, type InferenceOutcome } from './pipeline-e/inference';
 import { runReliefStage, type ReliefOutcome } from './pipeline-e/relief';
 import type { DistrictMassingLayer } from './district-massing';
 
-export const DISTRICT_E_DETAIL_VERSION = 'district-e-detail/2';
+export const DISTRICT_E_DETAIL_VERSION = 'district-e-detail/3';  // 3: texels no stage wrote are filled (pipeline-e.ts closeUnsourcedTexels)
 
 /** The most walls the facade grammar reads in a district (an isolated building reads 12): the nearest to the place first. */
 export const DISTRICT_GRAMMAR_MAX_FACADES = 48;
@@ -35,6 +35,10 @@ export const DISTRICT_GRAMMAR_MAX_FACADES = 48;
 /** On unless SCRATCHBOX_STAGED_DISTRICT_E_DETAIL=0. */
 export function districtEDetailEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
     return env.SCRATCHBOX_STAGED_DISTRICT_E_DETAIL?.trim() !== '0';
+}
+
+function unsourcedNote(u: UnsourcedClosure): string {
+    return `${u.repeat + u.nearest + u.median} texels on ${u.faces} faces had no source and were filled (generated): ${u.repeat} from their face's repeats, ${u.nearest} from its nearest texel, ${u.median} with its building's median wall colour`;
 }
 
 export interface DistrictDetailResult {
@@ -62,6 +66,7 @@ export async function districtEDetail(input: {
             ...(input.signal ? { signal: input.signal } : {}), ...(input.onProgress ? { onProgress: input.onProgress } : {})
         });
         files = inf.files;
+        if (inf.files.unsourced) notes.push(`inference layer: ${unsourcedNote(inf.files.unsourced)}`);
     } catch (err) {
         if (input.signal?.aborted) throw err;
         notes.push(`inference failed (${(err as Error).message}); the clean massing stands`);
@@ -78,6 +83,7 @@ export async function districtEDetail(input: {
             tilePath: input.scanGlb, isolateGlb: layer.isolateGlb, dir: path.join(input.dir, 'relief'), stage: 'massing', stageKey: input.stageKey,
             ...(input.signal ? { signal: input.signal } : {}), ...(input.onProgress ? { onProgress: input.onProgress } : {})
         });
+        if (rel.files.unsourced) notes.push(`relief layer: ${unsourcedNote(rel.files.unsourced)}`);
         if (rel.geometry.features.some(f => f.built)) files = rel.files;
         else notes.push('measured relief: nothing stood out of the scan significantly; the layer before it stands');
     } catch (err) {

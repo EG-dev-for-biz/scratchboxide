@@ -21,6 +21,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -214,6 +216,96 @@ inline float smithVisibilityCorrelated(float cosV, float cosL, float a2) {
     return 0.5f / (gv + gl);
 }
 
+/**
+ * Directional albedo Ess(cos theta_o, roughness) of this file's single-scatter GGX lobe with F = 1 (height-correlated
+ * Smith, the same alpha floor), for the multiple-scattering compensation. Integrated once by visible-normal quadrature
+ * (each sample's weight is G2 / G1) on a kEssSize x kEssSize grid, cos theta_o and roughness from 0 to 1. The Metal
+ * kernels read the same numbers (ggxEssMetalSource), looked up the same way, so the two tracers stay at parity.
+ * Lazarov's environment-BRDF fit, tried first, under-reads Ess for this lobe: a white rough metal came back at 1.16.
+ */
+constexpr int kEssSize = 32;
+
+inline const std::array<float, kEssSize * kEssSize>& ggxEssTable() {
+    static const std::array<float, kEssSize * kEssSize> table = [] {
+        std::array<float, kEssSize * kEssSize> t{};
+        constexpr int n = 64;
+        for (int j = 0; j < kEssSize; ++j) {
+            const double roughness = double(j) / (kEssSize - 1);
+            const double alpha = std::max(roughness * roughness, 0.002);
+            const double a2 = alpha * alpha;
+            for (int i = 0; i < kEssSize; ++i) {
+                const double mu = std::max(double(i) / (kEssSize - 1), 1e-4);
+                const double wox = std::sqrt(std::max(0.0, 1.0 - mu * mu)), woz = mu;
+                // Visible-normal sampling (Heitz 2018) of the stretched view direction.
+                double vx = alpha * wox, vz = woz;
+                const double vl = std::sqrt(vx * vx + vz * vz);
+                vx /= vl; vz /= vl;
+                const double g1o = 2.0 * woz / (woz + std::sqrt(a2 + (1.0 - a2) * woz * woz));
+                double sum = 0.0;
+                for (int a = 0; a < n; ++a) for (int b = 0; b < n; ++b) {
+                    const double u1 = (a + 0.5) / n, u2 = (b + 0.5) / n;
+                    // t1 = (0, 1, 0) for a view in the xz plane; t2 = vh x t1.
+                    const double t2x = -vz, t2z = vx;
+                    const double r = std::sqrt(u1), phi = 2.0 * 3.14159265358979323846 * u2;
+                    const double p1 = r * std::cos(phi);
+                    double p2 = r * std::sin(phi);
+                    const double sv = 0.5 * (1.0 + vz);
+                    p2 = (1.0 - sv) * std::sqrt(std::max(0.0, 1.0 - p1 * p1)) + sv * p2;
+                    const double pz = std::sqrt(std::max(0.0, 1.0 - p1 * p1 - p2 * p2));
+                    // nh = t1 * p1 + t2 * p2 + vh * pz; then unstretched.
+                    double hx = alpha * (t2x * p2 + vx * pz), hy = alpha * p1, hz = std::max(1e-6, t2z * p2 + vz * pz);
+                    const double hl = std::sqrt(hx * hx + hy * hy + hz * hz);
+                    hx /= hl; hy /= hl; hz /= hl;
+                    const double d = wox * hx + woz * hz;
+                    const double lz = 2.0 * d * hz - woz;
+                    if (lz <= 0.0) continue;
+                    const double gv = lz * std::sqrt(woz * woz * (1.0 - a2) + a2);
+                    const double gl = woz * std::sqrt(lz * lz * (1.0 - a2) + a2);
+                    sum += (2.0 * woz * lz / (gv + gl)) / g1o;
+                }
+                t[static_cast<size_t>(j * kEssSize + i)] = static_cast<float>(std::min(1.0, sum / (n * n)));
+            }
+        }
+        return t;
+    }();
+    return table;
+}
+
+/** Bilinear lookup of ggxEssTable; the Metal ggxEss does the same float arithmetic. */
+inline float ggxEss(float cosV, float roughness) {
+    const auto& t = ggxEssTable();
+    const float x = std::clamp(cosV, 0.0f, 1.0f) * float(kEssSize - 1);
+    const float y = std::clamp(roughness, 0.0f, 1.0f) * float(kEssSize - 1);
+    const int x0 = std::min(static_cast<int>(x), kEssSize - 2), y0 = std::min(static_cast<int>(y), kEssSize - 2);
+    const float fx = x - float(x0), fy = y - float(y0);
+    const float a = t[size_t(y0 * kEssSize + x0)] * (1.0f - fx) + t[size_t(y0 * kEssSize + x0 + 1)] * fx;
+    const float b = t[size_t((y0 + 1) * kEssSize + x0)] * (1.0f - fx) + t[size_t((y0 + 1) * kEssSize + x0 + 1)] * fx;
+    return a * (1.0f - fy) + b * fy;
+}
+
+/** The table and lookup as Metal source, appended to the kernels (which declare ggxEss before using it). */
+inline std::string ggxEssMetalSource() {
+    std::string out = "\nconstant float kGgxEss[" + std::to_string(kEssSize * kEssSize) + "] = {";
+    char buf[32];
+    const auto& t = ggxEssTable();
+    for (size_t i = 0; i < t.size(); ++i) {
+        std::snprintf(buf, sizeof buf, "%s%.9ef", i ? "," : "", double(t[i]));
+        out += buf;
+    }
+    out += "};\n"
+           "float ggxEss(float cosV, float roughness) {\n"
+           "    const int n = " + std::to_string(kEssSize) + ";\n"
+           "    float x = clamp(cosV, 0.0f, 1.0f) * float(n - 1);\n"
+           "    float y = clamp(roughness, 0.0f, 1.0f) * float(n - 1);\n"
+           "    int x0 = min(int(x), n - 2), y0 = min(int(y), n - 2);\n"
+           "    float fx = x - float(x0), fy = y - float(y0);\n"
+           "    float a = kGgxEss[y0 * n + x0] * (1.0f - fx) + kGgxEss[y0 * n + x0 + 1] * fx;\n"
+           "    float b = kGgxEss[(y0 + 1) * n + x0] * (1.0f - fx) + kGgxEss[(y0 + 1) * n + x0 + 1] * fx;\n"
+           "    return a * (1.0f - fy) + b * fy;\n"
+           "}\n";
+    return out;
+}
+
 /** glTF metallic-roughness BSDF: Lambert diffuse plus GGX specular with visible-normal sampling. */
 class MetallicRoughnessBsdf {
 public:
@@ -232,7 +324,11 @@ public:
         const float r2 = s.roughness * -0.572f + 1.04f, r3 = s.roughness * 0.022f - 0.04f;
         const float a004 = std::min(r0 * r0, std::exp2(-9.28f * cosV)) * r0 + r1;
         const float scale = a004 * -1.04f + r2, bias = a004 * 1.04f + r3;
-        float specularWeight = luminance(f0_ * scale + Vec3(bias, bias, bias));
+        // Multiple-scattering compensation (Turquin 2019), as in the Metal kernels: the lobe is scaled by
+        // 1 + f0 (1 / Ess - 1), Ess its directional albedo at F = 1.
+        const float ess = std::clamp(ggxEss(cosV, s.roughness), 0.05f, 1.0f);
+        msScale_ = Vec3(1, 1, 1) + f0_ * (1.0f / ess - 1.0f);
+        float specularWeight = luminance(msScale_ * (f0_ * scale + Vec3(bias, bias, bias)));
         float diffuseWeight = (1.0f - metallic_) * luminance(base_);
         specularProbability_ = std::clamp(specularWeight / std::max(specularWeight + diffuseWeight, 1e-6f), 0.02f, 0.9f);
     }
@@ -242,7 +338,7 @@ public:
         if (l.z <= 0.0f || wo_.z <= 0.0f) return Vec3(0, 0, 0);
         Vec3 h = (wo_ + l).normalized();
         Vec3 f = schlickFresnel(f0_, std::max(wo_.dot(h), 0.0f));
-        Vec3 specular = f * (ggxDistribution(h.z, a2_) * smithVisibilityCorrelated(wo_.z, l.z, a2_));
+        Vec3 specular = msScale_ * f * (ggxDistribution(h.z, a2_) * smithVisibilityCorrelated(wo_.z, l.z, a2_));
         Vec3 diffuse = base_ * ((1.0f - metallic_) / kPi) * (Vec3(1, 1, 1) - f);
         return diffuse + specular;
     }
@@ -298,6 +394,7 @@ private:
     Vec3 n_, t_, b_;
     Vec3 base_;
     Vec3 f0_;
+    Vec3 msScale_;
     Vec3 wo_;
     float metallic_;
     float alpha_{1.0f};

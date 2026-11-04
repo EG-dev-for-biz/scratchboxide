@@ -240,6 +240,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const {
         state: chatState,
         setSessions,
+        mergeSessionsFromDisk,
         setCurrentSessionId,
         setMessages,
         setActiveArtifact,
@@ -573,7 +574,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     }, [isConversationMenuOpen]);
 
     // Local Storage Debounced Auto-Persistence for Sessions, Artifacts & History
-    const { persistSessionsImmediately } = usePersistedChatState(chatState, setSessions, appearanceConfig, activeWorkspace.path, chatOpenCountRef);
+    const { persistSessionsImmediately } = usePersistedChatState(chatState, setSessions, mergeSessionsFromDisk, appearanceConfig, activeWorkspace.path, chatOpenCountRef);
 
     const { handleUpdateArtifact } = useArtifactSync({ activeArtifact, activeWorkspace, artifactHistory, chatOpenCountRef, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions });
 
@@ -1556,7 +1557,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                             flexWrap: 'wrap',
                                             gap: '8px',
                                             justifyContent: 'center',
-                                            maxWidth: '680px',
+                                            maxWidth: '760px',
                                             margin: '20px auto 0 auto'
                                         }}>
                                             {visibleStarterButtons().map(item => (

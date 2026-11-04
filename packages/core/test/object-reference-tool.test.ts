@@ -22,7 +22,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as THREE from 'three';
-import { createObjectReferenceHandlers, OBJECT_REFERENCE_TOOL_DECLARATIONS, SurfaceSampler, yawForHeading } from '../src/node/gemini/tools/object-reference-tools';
+import { createObjectReferenceHandlers, ObjectBuildLiveView, OBJECT_REFERENCE_TOOL_DECLARATIONS, SurfaceSampler, yawForHeading } from '../src/node/gemini/tools/object-reference-tools';
 import { generatorFileIsObject } from '../src/browser/generative-canvas/primitives/Scene3DPrimitive';
 import { withStagedMaterialMode } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/texturedTwins';
 import { TerrainManager } from '../src/browser/generative-canvas/services/TerrainManager';
@@ -726,7 +726,11 @@ describe('build_3d_object_from_reference', () => {
             const mat = glbJson.materials[mesh.primitives[0].material];
             expect(mat.pbrMetallicRoughness.baseColorFactor.slice(0, 3).map((v: number) => +v.toFixed(4))).toEqual([0.05, 0.12, 0.4]);
             expect(mat.pbrMetallicRoughness.roughnessFactor).toBeCloseTo(0.35, 5);
-            expect(mat.extras.scratchbox).toEqual({ partId: mesh.name, provenance: 'generated', description: 'satin blue glaze' });
+            expect(mat.extras.scratchbox).toEqual({
+                partId: mesh.name, provenance: 'generated', description: 'satin blue glaze',
+                // the interpreter's edge radius survives the provenance stamp (the default: none is given in VASE)
+                edge: { radiusMeters: expect.any(Number), source: 'default', provenance: 'generated' }
+            });
         }
         expect(glbJson.asset.extras.scratchbox.materialProvenance.label).toBe('generated');
         expect(artifact.data.objects[0].content.durableUri).toMatch(/^\/models\/.+\.glb$/);
@@ -769,6 +773,66 @@ describe('build_3d_object_from_reference', () => {
         expect(written.filter(file => file.startsWith(TMP) && IMAGE_EXT.test(file))).toEqual([]);
         expect(written.some(file => file.startsWith(MODELS_DIR) && file.endsWith('.glb'))).toBe(true);
     }, 180_000);
+
+    it('shows a studio build while it runs: the reference first, then each pass\'s real build, in the scene the result then fills', async () => {
+        const events: Array<{ stage: any; artifact: any }> = [];
+        const client = fakeClient({ specs: [JSON.stringify(VASE)], differences: ['{"differences": []}'] });
+        const out = await handlerWith(client).run({ request: 'a fluted vase with a knob on top' }, { ...ctx(), emitStage: (stage, artifact) => { events.push({ stage, artifact }); } });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        const final = out.resultPayload.artifact as any;
+
+        expect(events.map(e => e.artifact.data.objectBuildLive.status)).toEqual(['reference', 'checking']);
+        expect(events.map(e => e.stage.seq)).toEqual([1, 2]);
+        for (const e of events) {
+            expect(e.artifact.id).toBe(final.id);
+            expect(e.artifact.type).toBe('3d-scene');
+            expect(e.stage).toMatchObject({ schema: 'scratchbox.stage-event/2', status: 'running', source: 'build_3d_object_from_reference' });
+        }
+        // the reference: inline, the image the model drew, nothing in the scene yet
+        const [reference, pass1] = events.map(e => e.artifact.data);
+        expect(reference.objectBuildLive.referenceUri).toBe(`data:image/png;base64,${REFERENCE_B64}`);
+        expect(reference.objects).toEqual([]);
+        // pass 1: its own GLB, published and framed, while it is checked
+        expect(pass1.objectBuildLive).toMatchObject({ status: 'checking', pass: 1 });
+        const passUri = pass1.objects[0].content.durableUri as string;
+        expect(passUri).toMatch(/^\/models\/.+\.glb$/);
+        const passFile = path.join(MODELS_DIR, path.basename(passUri));
+        expect(fs.readFileSync(passFile).readUInt32LE(0)).toBe(0x46546c67);
+        expect(pass1.camera.position).toHaveLength(3);
+        // also inline, as the finished scene is: the viewport draws it however /models is served, and skips the object
+        // (the file itself is rewritten by the finished build of the same pass, with its record added)
+        expect(Buffer.from(pass1.pythonGenerator.glbBase64, 'base64').readUInt32LE(0)).toBe(0x46546c67);
+        expect(path.basename(pass1.pythonGenerator.glbPath)).toBe(path.basename(passUri));
+        expect(generatorFileIsObject(pass1.pythonGenerator, pass1.objects)).toBe(true);
+        expect(reference.pythonGenerator).toBeUndefined();
+        // the finished scene carries no live state, and no file holds the reference
+        expect(final.data.objectBuildLive).toBeUndefined();
+        expect(JSON.stringify(final)).not.toContain(REFERENCE_B64);
+        for (const file of fs.readdirSync(MODELS_DIR)) expect(fs.readFileSync(path.join(MODELS_DIR, file)).includes(REFERENCE_PNG), file).toBe(false);
+    }, 180_000);
+
+    it('ends the live view of a build that fails: no overlay left running and no reference kept', async () => {
+        const events: Array<{ stage: any; artifact: any }> = [];
+        const client = fakeClient({ specs: ['not json', 'still not json'] });
+        const out = await handlerWith(client).run({ request: 'a fluted vase with a knob on top' }, { ...ctx(), emitStage: (stage, artifact) => { events.push({ stage, artifact }); } });
+        expect(out.status).toBe('failed');
+        expect(events[0].artifact.data.objectBuildLive.status).toBe('reference');
+        const last = events[events.length - 1];
+        expect(last.stage.status).toBe('failed');
+        expect(last.artifact.data.objectBuildLive).toBeUndefined();
+        expect(last.artifact.data.subtitle).toMatch(/^Build failed: /);
+        expect(JSON.stringify(last.artifact)).not.toContain(REFERENCE_B64);
+    }, 180_000);
+
+    it('shows nothing live without a chat turn to show it in, and none for a build staged at a place', () => {
+        const emitted: unknown[] = [];
+        const quiet = new ObjectBuildLiveView({}, 'a vase', MODELS_DIR, false);
+        quiet.reference({ data: REFERENCE_PNG, mimeType: 'image/png' });
+        quiet.end('Build stopped');
+        const unused = new ObjectBuildLiveView({ emitStage: (_s, a) => emitted.push(a) }, 'a vase', MODELS_DIR, false);
+        unused.end('Build stopped');
+        expect(emitted).toEqual([]);
+    });
 
     it('draws the reference in the Scratchbox Studio Style DNA when a source is configured, and says so', async () => {
         const styleCalls: string[] = [];
@@ -1949,10 +2013,13 @@ describe('build_3d_object_from_reference', () => {
         const controller = new AbortController();
         const client = fakeClient({ specs: [JSON.stringify(VASE)] });
         const stop = handlerWith(client, { stageAtLocation: async (args, c) => { setTimeout(() => controller.abort(), 20); return stagedScene(otherUri)(args, c); } });
-        const stopStarted = Date.now();
+        const stopStarted = Date.now(), stopStartedCpu = cpuMs();
         const stopped = await stop.run({ request: 'a vase', location, placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 } }, { ...ctx(), signal: controller.signal });
+        const stopMs = Date.now() - stopStarted;
+        // counted as the one-go read is, so a runner that pauses the process does not stretch it
+        const stopBusyMs = Math.min(stopMs, cpuMs() - stopStartedCpu);
         expect(stopped.resultPayload).toMatchObject({ stage: 'placement', aborted: true, error: 'Stopped by the user.' });
-        expect(Date.now() - stopStarted).toBeLessThan(syncMs);
+        expect(stopBusyMs, `the stop took ${stopBusyMs} ms (${stopMs} ms on the clock) against ${syncBusyMs} ms for the whole read`).toBeLessThan(syncBusyMs);
         // The build starts alongside staging and is stopped when staging or placement fails: it never gets as far as
         // comparing a build with the reference, and nothing is published.
         expect(client.calls.filter(isComparisonCall)).toHaveLength(0);

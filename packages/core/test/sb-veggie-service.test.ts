@@ -185,8 +185,9 @@ describe('SB-Veggie Parametric Botanical Synthesis & Inversion Engine (C++20 & N
         expect(resultWinter.success).toBe(true);
         expect(resultWinter.glbBuffer).toBeDefined();
 
-        // Without leaf cards, vertex count is strictly the watertight trunk/branches template (2568 verts, 4064 tris across 112 joints)
-        expect(resultWinter.telemetry.outputVertices).toBe(2568);
+        // Without leaf cards, vertex count is strictly the watertight trunk/branches template (2993 verts, 4064 tris across
+        // 112 joints; each tube ring has a seam column at u = 1)
+        expect(resultWinter.telemetry.outputVertices).toBe(2993);
         expect(resultWinter.telemetry.outputTriangles).toBe(4064);
 
         if (fs.existsSync(resultWinter.outputGlbPath)) {

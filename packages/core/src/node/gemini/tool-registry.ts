@@ -124,6 +124,8 @@ import {
     textureLibraryHandlers,
     WEATHERING_TOOL_DECLARATIONS,
     WEATHERING_TOOL_HANDLERS,
+    OBJECT_DETAIL_TOOL_DECLARATIONS,
+    objectDetailHandlers,
     HYDRAULIC_EROSION_TOOL_DECLARATIONS,
     HYDRAULIC_EROSION_TOOL_HANDLERS,
     BVH_QUERY_TOOL_DECLARATIONS,
@@ -725,6 +727,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
     registerTools(registry, LENS_TOOL_DECLARATIONS, lensHandlers, 'lens');
     registerTools(registry, BROWSER_TOOL_DECLARATIONS, browserHandlers, 'browser');
     registerTools(registry, WEATHERING_TOOL_DECLARATIONS, WEATHERING_TOOL_HANDLERS, 'workspace');
+    registerTools(registry, OBJECT_DETAIL_TOOL_DECLARATIONS, objectDetailHandlers, 'workspace');
     registerTools(registry, HYDRAULIC_EROSION_TOOL_DECLARATIONS, HYDRAULIC_EROSION_TOOL_HANDLERS, 'workspace');
     // Packs whose handlers are [declaration, handler] pairs; declared in DEFAULT_TOOL_DECLARATIONS and named by the domain packs.
     registerTools(registry, BVH_QUERY_TOOL_DECLARATIONS, handlersByName(bvhQueryHandlers), 'workspace');

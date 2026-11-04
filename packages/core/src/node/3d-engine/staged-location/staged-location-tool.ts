@@ -20,14 +20,18 @@
  *   the final scene. A place that cannot be resolved or has no tile coverage fails the call; nothing else does.
  */
 
-import { cacheMirrorBucket, mirrorCachesInBackground, restoreCacheEntry } from '../../cloud-store/cache-mirror';
+import { cacheMirrorBucket, mirrorCachesInBackground, restoreCacheEntry, restoreCacheFile } from '../../cloud-store/cache-mirror';
+import { GcsCloudBucket } from '../../cloud-store/cloud-bucket';
+import { cloudChunkConfig, CloudRunJobsRest, createCloudChunkRunner, type RunChunk } from './cloud-chunk-runner';
+import { kdChunkRunner } from './pipeline-k/district-chunks';
 import { TOGGLEABLE_STEPS } from '../../../common/staged-build-steps';
 import { solarRoofFromBuildingShape } from './pipeline-e/solar-roof';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as v8 from 'v8';
-import { Worker } from 'worker_threads';
+import { MessageChannel, Worker } from 'worker_threads';
+import { serveCallBudget } from '../../gemini/model-call-budget';
 import { workerTsRegisterSource } from '../../worker-ts-register';
 import { isClientDisconnect, stagedRunRegistry } from './staged-run-registry';
 import type { CanvasArtifact } from '../../../browser/generative-canvas/canvas-types';
@@ -229,9 +233,16 @@ function stoppableFetch(signal: AbortSignal | undefined): typeof fetch | undefin
 
 /** The orchestrator's dependencies wired to the app's own services. */
 export async function createStagedLocationDeps(workspaceRoot: string, options: { signal?: AbortSignal } = {}): Promise<StagedLocationDeps> {
-    // a stage this workspace lacks is read back from the cache mirror's bucket before it runs (SCRATCHBOX_CACHE_RESTORE=off: never)
+    // a stage this workspace lacks is read back from the cache mirror's bucket before it runs, and so is a model's answer
+    // kept as one file (pipeline-k/model-readings.ts) before the model is asked (SCRATCHBOX_CACHE_RESTORE=off: never)
     const mirror = process.env.SCRATCHBOX_CACHE_RESTORE?.trim() === 'off' ? undefined : cacheMirrorBucket();
-    const cache: StageCache = new StageCache({ workspaceRoot, ...(mirror ? { restore: (stage: string, key: string) => restoreCacheEntry(mirror, cache.workspaceRoot, `staged_location/${stage}/${key}`, { modelsDir: cache.modelsDir }) } : {}) });
+    const cache: StageCache = new StageCache({
+        workspaceRoot,
+        ...(mirror ? {
+            restore: (stage: string, key: string) => restoreCacheEntry(mirror, cache.workspaceRoot, `staged_location/${stage}/${key}`, { modelsDir: cache.modelsDir }),
+            restoreFile: (rel: string) => restoreCacheFile(mirror, cache.workspaceRoot, `staged_location/${rel}`)
+        } : {})
+    });
     const gemini = new GeminiClient();
     const vegetation = getTileVegetationService(workspaceRoot);
     const canopy = (vegetation as unknown as { canopy?: (req: { tilePath: string; cellM?: number; signal?: AbortSignal }) => Promise<any> }).canopy;
@@ -332,12 +343,17 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         // search-grounded reference images (the bridges' detail the scan cannot resolve): the Vertex client with the image models
         groundedReferences: async () => (await new GoogleMediaCredentialsService().createVertexClient()) as unknown as GroundedReferenceClient,
         vehicleRemoval: true,
+        // what the residual audit finds standing in a district's streets that nothing explains, out of the tree-stripped scan (street-residue.ts)
+        streetResidue: true,
         // the tile seam stage on the extraction as it arrives (tile-seam-weld-service.ts)
         tileSeams: runTileSeamWeld,
-        // pipeline K-D: the district's leaf tiles fetched ahead of its chunks, into the shared leaf cache
-        prefetchTiles: req => prefetchGoogle3DTileLeaves({ lat: req.lat, lng: req.lng, ...(req.elevation !== undefined ? { elevation: req.elevation } : {}) }, req.radiusM, { ...(req.signal ? { signal: req.signal } : {}), ...(req.onProgress ? { onProgress: req.onProgress } : {}) }),
-        // pipeline K-D: each chunk of a chunked district is a build of its own, on its own worker thread
-        runChunk: (request, o) => runStagedLocationOffThread(request, workspaceRoot, undefined, { ...(o.signal ? { signal: o.signal } : {}), ...(o.onProgress ? { reportProgress: (m: string) => o.onProgress!(m) } : {}) }),
+        // pipeline K-D: each chunk of a chunked district is a build of its own, on its own worker thread, or with
+        // SCRATCHBOX_KD_CHUNK_RUNNER=cloud one Cloud Run job each (cloud-chunk-runner.ts); the district's leaf tiles are
+        // fetched ahead of its chunks into the shared leaf cache only when the chunks build here
+        ...(kdChunkRunner() === 'cloud' ? { runChunk: cloudRunChunk(cache) } : {
+            prefetchTiles: (req: Parameters<NonNullable<StagedLocationDeps['prefetchTiles']>>[0]) => prefetchGoogle3DTileLeaves({ lat: req.lat, lng: req.lng, ...(req.elevation !== undefined ? { elevation: req.elevation } : {}) }, req.radiusM, { ...(req.signal ? { signal: req.signal } : {}), ...(req.onProgress ? { onProgress: req.onProgress } : {}) }),
+            runChunk: (request: StagedLocationRequest, o: { signal?: AbortSignal; onProgress?: (message: string) => void }) => runStagedLocationOffThread(request, workspaceRoot, undefined, { ...(o.signal ? { signal: o.signal } : {}), ...(o.onProgress ? { reportProgress: (m: string) => o.onProgress!(m) } : {}) })
+        }),
         // the texture pass's model texture rung: the image model redraws the tile transfer, kept only past its gate
         // (SCRATCHBOX_TEXTURE_ENHANCE=0 turns the rung off); default mode 'recreate' (user decision, 2026-10-21) removes
         // the scan's own baked shadow/highlight and recovers the material's true colour, gated on structure and
@@ -352,6 +368,25 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
             } : {}),
             ...(lightingCorrectionEnabled() ? { lighting: genAiEnhanceClient(vision.client), lightingModels: lightingModels() } : {})
         } : {}
+    };
+}
+
+/**
+ * The cloud chunk runner on the app's service account: the job bucket (SCRATCHBOX_KD_JOB_BUCKET) and the Cloud Run job
+ * (cloud-chunk-runner.ts cloudChunkConfig), made on the first chunk, so a district without credentials fails its chunks
+ * with that reason (the orchestrator then degrades them) rather than building them here.
+ */
+function cloudRunChunk(cache: StageCache): NonNullable<StagedLocationDeps['runChunk']> {
+    let runner: Promise<RunChunk> | undefined;
+    const make = async (): Promise<RunChunk> => {
+        const config = cloudChunkConfig();
+        const storage = new GoogleMediaCredentialsService().createStorageClient();
+        return createCloudChunkRunner({ cache, config, bucket: new GcsCloudBucket(storage.bucket(config.bucket)), jobs: await CloudRunJobsRest.create(config) });
+    };
+    return async (request, o) => {
+        runner ??= make();
+        runner.catch(() => { runner = undefined; });
+        return (await runner)(request, o);
     };
 }
 
@@ -386,7 +421,12 @@ export type StagedWorkerOut =
     | { kind: 'event'; event: StageEvent; artifact?: CanvasArtifact }
     | { kind: 'progress'; message: string; fraction?: number }
     | { kind: 'done'; outcome: StagedLocationOutcome }
+    /** After `done`: the build's background passes (the scene object store's) have ended, so the worker can go. */
+    | { kind: 'idle' }
     | { kind: 'error'; name: string; message: string; stack?: string; stage?: string; reasonCode?: string };
+
+/** How long a worker that has answered may go on with its background passes before it is terminated (ms). */
+const STAGED_WORKER_IDLE_CAP_MS = 60 * 60_000;
 
 /** SCRATCHBOX_STAGED_WORKER=0 runs the staged build on the server's main thread, as before. */
 export function stagedWorkerEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -403,7 +443,8 @@ require(workerData.entry);
  * runStagedLocation on its own worker thread, with services it makes itself (createStagedLocationDeps on `root`): the
  * same events, outcome and errors, while the server's main thread stays free to stream the chat and serve the layers
  * already committed. The worker gets the server's own heap limit; the signal stops it (the build ends as stopped, and
- * the worker is terminated if it has not ended a few seconds later).
+ * the worker is terminated if it has not ended a few seconds later). Its model calls are kept to this thread's call
+ * budget (model-call-budget.ts serveCallBudget), so every build in the process shares one.
  */
 export function runStagedLocationOffThread(request: StagedLocationRequest, root: string, runId: string | undefined, ctx: StagedLocationContext): Promise<StagedLocationOutcome> {
     const dir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
@@ -411,16 +452,21 @@ export function runStagedLocationOffThread(request: StagedLocationRequest, root:
     if (!entry) return Promise.reject(new Error(`the staged build worker was not found beside ${dir}`));
     const heapMb = Math.floor(v8.getHeapStatistics().heap_size_limit / (1024 * 1024));
     return new Promise<StagedLocationOutcome>((resolve, reject) => {
-        let settled = false, killTimer: NodeJS.Timeout | undefined;
+        let settled = false, killTimer: NodeJS.Timeout | undefined, idleTimer: NodeJS.Timeout | undefined;
+        const budget = new MessageChannel();
+        serveCallBudget(budget.port1);
         const w = new Worker(STAGED_WORKER_BOOTSTRAP, {
             eval: true, resourceLimits: { maxOldGenerationSizeMb: heapMb },
             workerData: {
-                entry, request, root, runId,
+                entry, request, root, runId, modelCallBudget: budget.port2,
                 ...(ctx.remainingMs ? { deadlineAt: Date.now() + ctx.remainingMs() } : {}),
                 ...(ctx.activeArtifact ? { activeArtifact: ctx.activeArtifact } : {}),
                 ...(ctx.retry ? { retry: ctx.retry } : {}), ...(ctx.resume ? { resume: ctx.resume } : {})
-            }
+            },
+            transferList: [budget.port2]
         });
+        // the worker's turns are let go when it ends, whichever way
+        w.once('exit', () => budget.port1.close());
         const finish = (fn: () => void) => {
             if (settled) return;
             settled = true;
@@ -438,7 +484,9 @@ export function runStagedLocationOffThread(request: StagedLocationRequest, root:
         w.on('message', (m: StagedWorkerOut) => {
             if (m.kind === 'event') ctx.emitStage?.(m.event, m.artifact);
             else if (m.kind === 'progress') ctx.reportProgress?.(m.message, m.fraction);
-            else if (m.kind === 'done') finish(() => { resolve(m.outcome); void w.terminate(); });
+            // the result is answered at once; the worker goes once its background passes end (none while the object store is off)
+            else if (m.kind === 'done') finish(() => { resolve(m.outcome); idleTimer = setTimeout(() => void w.terminate(), STAGED_WORKER_IDLE_CAP_MS); idleTimer.unref(); });
+            else if (m.kind === 'idle') { if (idleTimer) clearTimeout(idleTimer); void w.terminate(); }
             else finish(() => {
                 const e = m.name === 'StagedLocationHardFailure' ? new StagedLocationHardFailure((m.stage ?? 'resolve') as StageId, m.reasonCode ?? 'failed', m.message) : Object.assign(new Error(m.message), { name: m.name });
                 if (m.stack) e.stack = m.stack;

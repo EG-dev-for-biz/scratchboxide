@@ -23,6 +23,8 @@ import { shareDeep } from '../texture-worker-protocol';
 import type { ParsedGlb } from '../glb-bytes';
 import type { RgbaImage8 } from '../tile-texture-transfer';
 import type { FittedPlane } from '../window-fit';
+import { kNative } from './native/native-switch';
+import { planMaterialRegionsNative } from './native/material-regions-native';
 import { MATERIAL_REGIONS_PARAMS, materialPlanJobs, mergeMaterialPlan, planMaterialRegions, type MaterialPlanPiece, type MaterialRegionsParams, type MaterialRegionsPlan, type RegionClass, type RegionSet } from './material-regions';
 
 export interface MaterialRegionsWorkerInit {
@@ -57,8 +59,12 @@ function workerEntry(): string {
     throw new MaterialRegionsWorkerError(`material-regions-worker not found beside ${dir}`);
 }
 
-/** planMaterialRegions across `threads` worker threads (one: on this thread); the same plan, its report's ms the wall time. */
+/**
+ * planMaterialRegions across `threads` worker threads (one: on this thread); the same plan, its report's ms the wall time.
+ * When SCRATCHBOX_K_NATIVE runs `regions` (the default), every job in one native run across the cores instead (the same plan).
+ */
 export async function planMaterialRegionsOnThreads(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], sets: RegionSet[], planes: FittedPlane[] = [], P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS, opts: { threads?: number; signal?: AbortSignal } = {}): Promise<MaterialRegionsPlan> {
+    if (kNative('regions')) return planMaterialRegionsNative(g, json, images, classes, sets, planes, P, opts.threads ? { threads: opts.threads } : {});
     const t0 = Date.now();
     const jobs = materialPlanJobs(json, images);
     const threads = Math.min(opts.threads ?? materialRegionsThreads(), jobs.length);

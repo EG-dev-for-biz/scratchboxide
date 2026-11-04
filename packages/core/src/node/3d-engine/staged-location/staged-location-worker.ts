@@ -19,6 +19,7 @@
 import { parentPort, workerData } from 'worker_threads';
 import { runStagedLocation, type StagedLocationContext, type StagedLocationRequest } from './orchestrator';
 import { createStagedLocationDeps, type StagedWorkerIn, type StagedWorkerOut } from './staged-location-tool';
+import { awaitSceneObjectStores } from './scene-objects';
 
 const job = workerData as { request: StagedLocationRequest; root: string; runId?: string; deadlineAt?: number; activeArtifact?: StagedLocationContext['activeArtifact']; retry?: StagedLocationContext['retry']; resume?: StagedLocationContext['resume'] };
 const own = new AbortController();
@@ -41,6 +42,9 @@ void (async () => {
             ...(job.resume ? { resume: job.resume } : {})
         });
         post({ kind: 'done', outcome });
+        // the scene object store's pass (and the place store's after it) runs after the result: the thread stays until it ends
+        await awaitSceneObjectStores();
+        post({ kind: 'idle' });
     } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
         post({ kind: 'error', name: e.name, message: e.message, ...(e.stack ? { stack: e.stack } : {}), ...((e as { stage?: string }).stage ? { stage: (e as { stage?: string }).stage } : {}), ...((e as { reasonCode?: string }).reasonCode ? { reasonCode: (e as { reasonCode?: string }).reasonCode } : {}) });

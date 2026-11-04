@@ -16,6 +16,7 @@
  * Kept off ToolDeclaration on purpose: declarations are sent to Gemini verbatim.
  */
 
+import { FACADE_UPSCALE_EXTRA_MS, facadeUpscaleAsked } from '../3d-engine/staged-location/pipeline-k/facade-upscale';
 import { stagedDistrict } from '../3d-engine/staged-location/staged-switches';
 
 export interface ToolTimeBudget {
@@ -52,7 +53,9 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     google_3d_tiles_get_clay: args => {
         const asked = typeof args.district === 'string' ? args.district : args.pipeline === 'kd' ? 'kd' : undefined;
         const kd = asked !== undefined ? stagedDistrict({ district: asked }) === 'kd' : args.isolate !== true && stagedDistrict({}) === 'kd';
-        return { maxMs: kd ? 362 * MIN : args.isolate === true ? 40 * MIN : 142 * MIN };
+        // pipeline K's facade upscale (opt-in) adds its own time (the run's budget grows by the same)
+        const upscale = facadeUpscaleAsked(args.steps as Record<string, unknown> | undefined) ? FACADE_UPSCALE_EXTRA_MS : 0;
+        return { maxMs: (kd ? 362 * MIN : args.isolate === true ? 40 * MIN : 142 * MIN) + upscale };
     },
     google_3d_tiles_get_full_texture: { maxMs: 40 * MIN },
     google_3d_tiles_clay_blockout_runner: { maxMs: 60 * MIN },
@@ -61,6 +64,9 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     // Image, vision and native build calls with up to two revision passes; with a location it first stages on 3D
     // Tiles (above), which can go a long time between progress reports.
     build_3d_object_from_reference: { maxMs: 50 * MIN },
+    // The UV rewrap and the detail bake (the first call after an engine change also builds both binaries), plus one image
+    // call per painted decal; reports progress before the bake.
+    object_detail_pass: { maxMs: 20 * MIN, idleMs: 12 * MIN },
     // With a place not yet built it extracts and isolates the structure from 3D Tiles first (minutes, cached after), then
     // the grounding fetches, the registration (up to 90 s edges + 120 s joint) and, optionally, the segmenter per view.
     streetview_survey: { maxMs: 40 * MIN, idleMs: 10 * MIN },
@@ -79,6 +85,8 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     location_residual_audit: { maxMs: 15 * MIN },
     // Native cluster LOD build: about 2 s per 170k triangles, longer for multi-million-triangle scans.
     virtual_geometry_open_glb: { maxMs: 12 * MIN },
+    // The same build, then one high-sample render (a 4K still at 1024 spp is about a minute on an M1 Ultra).
+    path_trace_render: { maxMs: 20 * MIN },
     // Several serial image-model calls each.
     panorama_to_3dgs: { maxMs: 15 * MIN },
     mesh_bake_ai_textures: { maxMs: 15 * MIN },

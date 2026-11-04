@@ -21,6 +21,7 @@ import { runTileSeamWeld } from '../../3d-engine/tile-seam-weld-service';
 import { measureVisibleDefects, type VisibleDefectsReport } from '../../3d-engine/staged-location/pipeline-k/visible-defects';
 import { orientRemesh } from '../../3d-engine/staged-location/remesh-orient';
 import { fillOpenLoops } from '../../3d-engine/staged-location/pipeline-k/lattice-stitch';
+import { ensureNativePolishFor } from '../../3d-engine/staged-location/remesh-polish-native';
 import { resolveWithinRoot } from '../../security/path-guard';
 
 export const SCENE_HEALING_TOOL_DECLARATIONS: ToolDeclaration[] = [
@@ -113,6 +114,7 @@ export const sceneHealingHandlers: Record<string, ToolHandler> = {
                 done.orient = o.stats;
             }
             if (steps.includes('holes')) {
+                await ensureNativePolishFor({ infill: true });
                 const f = fillOpenLoops(clay, clay === tex ? [] : [tex]);
                 clay = f.clay; tex = f.others[0] ?? f.clay;
                 done.holes = { loops: f.report.loops, filled: f.report.filled + f.report.clipped3d, leftOpen: f.report.unclosedLoops + f.report.refusedCaps, addedM2: f.report.addedAreaM2, droppedCoveredM2: f.report.droppedCoveredM2, openEdgesAfter: f.report.openAfter };

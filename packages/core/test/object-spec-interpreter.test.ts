@@ -98,6 +98,50 @@ describe('sb.object_spec interpreter', () => {
         expect(height).toBeLessThan(0.7);
     }, 180_000);
 
+    it('edge radius: a revolve\'s rims and a sweep\'s ends round at the part\'s radius, 0 keeps them sharp, and each part records it', async () => {
+        // a 0.2 m radius, 0.4 m tall cylinder and a 0.5 m bar of 0.08 m boxy section, built three ways
+        const cylinder = (r?: number) => ({ id: 'drum', label: 'drum', ...(r === undefined ? {} : { edgeRadiusMeters: r }), revolve: revolve([[0, 0], [0, 0.2], [0.4, 0.2], [0.4, 0]]) });
+        const bar = (r?: number) => ({ id: 'bar', label: 'bar', ...(r === undefined ? {} : { edgeRadiusMeters: r }),
+            sweep: { controlPoints: [[0.6, 0.2, 0], [1.1, 0.2, 0]], closedLoop: false, smoothing: 0, profile: [{ t: 0, widthMeters: 0.08, heightMeters: 0.08, exponent: 6 }] } });
+        const spec = (r?: number): ObjectBuildSpec => ({ subject: 'drum and bar', observations: [], boundingMeters: [1.4, 0.4, 0.4], expectedBodies: 2, parts: [cylinder(r) as any, bar(r) as any] });
+        const sharp = await build('edge_sharp', spec(0));
+        const soft = await build('edge_soft', spec(0.03));
+        const auto = await build('edge_default', spec());
+
+        // the drum's top rim: the full 0.2 m sharp, pulled in by the fillet when rounded (top face at y = 0.4)
+        const rimAt = (soup: { positions: Float32Array }) => Math.max(...radiiAt(soup, 0.4, 0.0005));
+        const drum = (b: Awaited<ReturnType<typeof build>>) => glbToNamedTriangleSoups(b.glb)!.get('drum')!;
+        expect(rimAt(drum(sharp))).toBeCloseTo(0.2, 3);
+        expect(rimAt(drum(soft))).toBeLessThan(0.2 - 0.025);
+        expect(rimAt(drum(soft))).toBeGreaterThan(0.2 - 0.035);
+        const autoRim = rimAt(drum(auto));   // default: 1.5 % of 0.4 m = 6 mm
+        expect(autoRim).toBeLessThan(0.2 - 0.004);
+        expect(autoRim).toBeGreaterThan(0.2 - 0.008);
+        // the bar's end section: full 0.08 m at x = 1.1 sharp, shrunk by twice the radius when rounded
+        const endHalf = (b: Awaited<ReturnType<typeof build>>) => {
+            const s = glbToNamedTriangleSoups(b.glb)!.get('bar')!;
+            let half = 0;
+            for (let i = 0; i < s.positions.length; i += 3) if (Math.abs(s.positions[i] - 1.1) < 1e-4) half = Math.max(half, Math.abs(s.positions[i + 2]));
+            return half;
+        };
+        expect(endHalf(sharp)).toBeGreaterThan(0.039);
+        expect(endHalf(soft)).toBeLessThan(0.04 - 0.025);
+        // rounding adds rows, not a different object: still two bodies, a modest triangle increase
+        expect(soft.connectivity.structureCount).toBe(2);
+        expect(soft.analysis.metrics!.totalTriangles).toBeGreaterThan(sharp.analysis.metrics!.totalTriangles);
+        expect(soft.analysis.metrics!.totalTriangles).toBeLessThan(sharp.analysis.metrics!.totalTriangles * 2);
+        // every surface part records its radius, where it came from, and that it is generated
+        const edges = (b: Awaited<ReturnType<typeof build>>) => {
+            const json = JSON.parse(b.glb.toString('utf8', 20, 20 + b.glb.readUInt32LE(12)));
+            return Object.fromEntries(json.meshes.map((m: any) => [m.name, json.materials[m.primitives[0].material].extras?.scratchbox?.edge]));
+        };
+        expect(edges(soft)).toEqual({ drum: { radiusMeters: 0.03, source: 'spec', provenance: 'generated' }, bar: { radiusMeters: 0.03, source: 'spec', provenance: 'generated' } });
+        expect(edges(sharp).drum).toEqual({ radiusMeters: 0, source: 'spec', provenance: 'generated' });
+        expect(edges(auto).drum).toEqual({ radiusMeters: 0.006, source: 'default', provenance: 'generated' });
+        // the default is clamped: the bar's 8 cm section gives 1.2 mm, raised to the 2 mm floor
+        expect(edges(auto).bar).toEqual({ radiusMeters: 0.002, source: 'default', provenance: 'generated' });
+    }, 300_000);
+
     it('replicate: ring copies (with what is attached to the seed), path copies and a mirrored pair stay joined', async () => {
         const blade = { controlPoints: [[0, 0, 0], [0, 0, 0.6]], closedLoop: false, smoothing: 0,
             profile: [{ t: 0, widthMeters: 0.08, heightMeters: 0.012, exponent: 4 }, { t: 1, widthMeters: 0.14, heightMeters: 0.01, exponent: 4 }] } as any;

@@ -27,11 +27,12 @@ import { Worker } from 'worker_threads';
 import { workerTsRegisterSource } from '../../../worker-ts-register';
 import { FACADE_LATTICE_PARAMS, facadeEligible, wallCoverage, type ReliefFacade } from '../facade-lattice';
 import { decodePng } from '../../../texture-processing';
-import { featurelessMaskName, occludedMaskName, ORTHO_RECTIFY_PARAMS, ORTHO_RECTIFY_VERSION, smoothFillHoles, uncoveredMaskName, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
+import { featurelessMaskName, occludedMaskName, ORTHO_RECTIFY_PARAMS, ORTHO_RECTIFY_VERSION, uncoveredMaskName, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
 import { inpaintFace } from '../pipeline-e/occluders';
 import type { EnhanceModelClient } from '../texture-enhance';
 import type { RectifyJob, RectifyMessage } from './ortho-rectify-worker';
-import { encodePng } from '../png-encode';
+import { remeshWorkersEnabled } from '../remesh-worker-pool';
+import { continueTail, countOf, finishTail, holesOf, startTailWorker, type ContinueResult } from './rectify-tail';
 import { stagedBuildingPipelineEnv, stagedDistrict } from '../staged-switches';
 
 /** The featureless photo refilled region by region: regions found, filled (each from one source at one shift), their texels, and the texels kept as photographed. */
@@ -226,7 +227,7 @@ function runWorkers(jobs: RectifyJob[], signal?: AbortSignal): Promise<RectifyMe
  * The relief orthos of a remesh, straightened and levelled: the facades the lattice rebuild will use (coverage at least
  * its minCoverage) are rectified, the others copied as they are. Cached beside the originals.
  */
-export async function rectifyReliefOrthos(srcDir: string, opts: { params?: OrthoRectifyParams; minCoverage?: number; threads?: number; signal?: AbortSignal; /** The image model for small holes no real source covers (absent: none; the smooth fill takes them). */ inpaint?: { client: EnhanceModelClient; models: string[]; caps?: typeof HOLE_INPAINT } } = {}): Promise<RectifiedOrthos> {
+export async function rectifyReliefOrthos(srcDir: string, opts: { params?: OrthoRectifyParams; minCoverage?: number; threads?: number; signal?: AbortSignal; /** The tail on this thread (tests; SCRATCHBOX_REMESH_WORKERS=0 too). */ inlineTail?: boolean; /** The image model for small holes no real source covers (absent: none; the smooth fill takes them). */ inpaint?: { client: EnhanceModelClient; models: string[]; caps?: typeof HOLE_INPAINT } } = {}): Promise<RectifiedOrthos> {
     const t0 = Date.now();
     const params = opts.params ?? ORTHO_RECTIFY_PARAMS, minCoverage = opts.minCoverage ?? FACADE_LATTICE_PARAMS.minCoverage;
     const caps = opts.inpaint?.caps ?? HOLE_INPAINT;
@@ -267,60 +268,72 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
             fs.copyFileSync(path.join(srcDir, f.image), path.join(tmp, f.image));
             if (fs.existsSync(path.join(srcDir, occ))) fs.copyFileSync(path.join(srcDir, occ), path.join(tmp, occ));
         }
-        const reports = todo.map(f => msgs.find(m => m.facadeId === f.facadeId) ?? { facadeId: f.facadeId, error: 'no report came back' });
-        // featureless photo the facades' own repeats could not refill: continued from the nearest facade facing the same way
+        // the reports without the pixels the workers sent with them (those go to the tail)
+        const reports: RectifiedOrthos['reports'] = todo.map(f => {
+            const m = msgs.find(x => x.facadeId === f.facadeId);
+            if (!m) return { facadeId: f.facadeId, error: 'no report came back' };
+            const { pixels: _pixels, ...rest } = m;
+            return rest;
+        });
+        // featureless photo the facades' own repeats could not refill: continued from the nearest facade facing the same way.
+        // The straightened pixels come back from the workers as they are; only a facade that failed (its original ortho kept)
+        // is read from its file.
         const images = new Map<number, FacadeImage>();
-        const mask = (name: string) => { const file = path.join(tmp, name); if (!fs.existsSync(file)) return undefined; const m = decodePng(fs.readFileSync(file)); return Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] > 127 ? 1 : 0)); };
+        const mask = (name: string) => {
+            const file = path.join(tmp, name);
+            if (!fs.existsSync(file)) return undefined;
+            const m = decodePng(fs.readFileSync(file)), out = new Uint8Array(m.width * m.height);
+            for (let k = 0; k < out.length; k++) out[k] = m.rgba[k * 4] > 127 ? 1 : 0;
+            return out;
+        };
         for (const f of todo) {
+            const px = msgs.find(m => m.facadeId === f.facadeId && !m.error)?.pixels;
+            if (px) { images.set(f.facadeId, { f, rgba: px.rgba, width: px.width, height: px.height, uncovered: px.uncovered, ...(px.featureless ? { featureless: px.featureless } : {}) }); continue; }
             const file = path.join(tmp, f.image);
             if (fs.existsSync(file)) { const d = decodePng(fs.readFileSync(file)); images.set(f.facadeId, { f, rgba: new Uint8Array(d.rgba), width: d.width, height: d.height, uncovered: mask(uncoveredMaskName(f.image)), featureless: mask(featurelessMaskName(f.image)) }); }
         }
-        // the holes the facades' own repeats left (still the exact grey of the uncovered mark): refilled with the smears, each
-        // region whole from one facade facing the same way, aligned to the photo around it
-        const grey = (p: Uint8Array, i: number) => p[i * 4] === 128 && p[i * 4 + 1] === 128 && p[i * 4 + 2] === 128;
-        const holesOf = (x: FacadeImage) => Uint8Array.from({ length: x.width * x.height }, (_, i) => (x.uncovered?.[i] && x.rgba[i * 4 + 3] && grey(x.rgba, i) ? 1 : 0));
-        const count = (m: Uint8Array) => m.reduce((a, b) => a + b, 0);
-        const holes0 = new Map<number, Uint8Array>();
-        for (const [id, x] of images) {
-            const h = holesOf(x);
-            if (!count(h)) continue;
-            holes0.set(id, h);
-            const fl = x.featureless ? Uint8Array.from(x.featureless) : new Uint8Array(h.length);
-            for (let i = 0; i < h.length; i++) if (h[i]) fl[i] = 1;
-            x.featureless = fl;
-        }
-        const continued = continueFeatureless(images);
-        const changed = new Set<number>(continued.keys());
-        for (const [id, c] of continued) {
-            const r = reports.find(y => y.facadeId === id);
-            if (r && 'report' in r && r.report) (r.report.holes as typeof r.report.holes & { continued?: ContinuedFill }).continued = c;
-        }
-        // what no real source covers: small holes inpainted by the image model (capped), and the rest a smooth fill, never
-        // the nearest texel copied across (it draws straight streaks out of the photo's edge)
-        let inpaintCalls = 0;
-        for (const [id, h0] of holes0) {
-            const x = images.get(id)!, N = x.width * x.height;
-            let left = holesOf(x);
-            const fromRegions = count(h0) - count(left);
-            let fromInpaint = 0;
-            if (opts.inpaint && inpaintCalls < caps.maxCalls && count(left)) {
-                const small = smallHoles(left, x.width, x.height, caps.maxHoleTexels);
-                if (count(small)) {
-                    const t = { width: x.width, height: x.height, rgba: x.rgba, source: new Uint8Array(N) };
-                    const r = await inpaintFace(t, small, `k_${key}_${id}`, opts.inpaint.client, opts.inpaint.models, 1, { maxRects: Math.min(caps.maxRects, caps.maxCalls - inpaintCalls), ...(opts.signal ? { signal: opts.signal } : {}) });
-                    inpaintCalls += r.records.filter(rec => (rec as { decision?: string }).decision !== 'skipped').length;
-                    fromInpaint = r.filled;
-                    left = holesOf(x);
-                }
+        // the holes the facades' own repeats left (still the exact grey of the uncovered mark), the featureless continuation,
+        // and later the smooth fill and the PNGs: on a worker thread of their own (rectify-tail.ts), the same functions
+        const tail = opts.inlineTail || !remeshWorkersEnabled() ? undefined : startTailWorker(opts.signal);
+        try {
+            let work = images;
+            let cont: ContinueResult;
+            if (tail) {
+                const r = await tail.send({ op: 'continue', images: work });
+                if (r.op !== 'continue') throw new Error('pipeline K: the orthos\' tail answered out of turn');
+                work = r.images; cont = r.result;
+            } else cont = continueTail(work);
+            for (const [id, c] of cont.continued) {
+                const r = reports.find(y => y.facadeId === id);
+                if (r && 'report' in r && r.report) (r.report.holes as typeof r.report.holes & { continued?: ContinuedFill }).continued = c;
             }
-            const fromSmooth = smoothFillHoles({ width: x.width, height: x.height, rgba: x.rgba }, left);
-            changed.add(id);
-            const r = reports.find(y => y.facadeId === id);
-            if (r && 'report' in r && r.report) Object.assign(r.report.holes, { fromRegions, fromInpaint, fromSmooth });
-        }
-        for (const id of changed) {
-            const x = images.get(id)!;
-            fs.writeFileSync(path.join(tmp, x.f.image), encodePng(x.width, x.height, x.rgba, 4));
+            // what no real source covers: small holes inpainted by the image model (capped), and the rest a smooth fill, never
+            // the nearest texel copied across (it draws straight streaks out of the photo's edge)
+            let inpaintCalls = 0;
+            const fromInpaint = new Map<number, number>();
+            if (opts.inpaint) for (const { id } of cont.holes) {
+                const x = work.get(id)!, N = x.width * x.height, left = holesOf(x);
+                if (inpaintCalls >= caps.maxCalls || !countOf(left)) continue;
+                const small = smallHoles(left, x.width, x.height, caps.maxHoleTexels);
+                if (!countOf(small)) continue;
+                const t = { width: x.width, height: x.height, rgba: x.rgba, source: new Uint8Array(N) };
+                const r = await inpaintFace(t, small, `k_${key}_${id}`, opts.inpaint.client, opts.inpaint.models, 1, { maxRects: Math.min(caps.maxRects, caps.maxCalls - inpaintCalls), ...(opts.signal ? { signal: opts.signal } : {}) });
+                inpaintCalls += r.records.filter(rec => (rec as { decision?: string }).decision !== 'skipped').length;
+                fromInpaint.set(id, r.filled);
+            }
+            const continuedIds = [...cont.continued.keys()], holeIds = cont.holes.map(h => h.id);
+            let fromSmooth: Map<number, number>;
+            if (tail) {
+                const r = await tail.send({ op: 'finish', images: work, dir: tmp, continuedIds, holeIds });
+                if (r.op !== 'finish') throw new Error('pipeline K: the orthos\' tail answered out of turn');
+                fromSmooth = r.fromSmooth;
+            } else fromSmooth = finishTail(work, tmp, continuedIds, holeIds);
+            for (const { id, fromRegions } of cont.holes) {
+                const r = reports.find(y => y.facadeId === id);
+                if (r && 'report' in r && r.report) Object.assign(r.report.holes, { fromRegions, fromInpaint: fromInpaint.get(id) ?? 0, fromSmooth: fromSmooth.get(id) });
+            }
+        } finally {
+            await tail?.close();
         }
         // a facade with an occlusion mask beside it names it (tile_refine named it; a warped one keeps the name)
         for (const f of facadesJson.facades) if (fs.existsSync(path.join(tmp, occludedMaskName(f.image)))) f.occludedMask = occludedMaskName(f.image);

@@ -11,13 +11,13 @@
 import * as THREE from 'three';
 import type { TreeCrownCardsExtras, TreeLodExtras, TreeNodeExtras, TreesGlbRootExtras } from '../../../../../common/spatial/staged-location-contracts';
 import {
-    DEFAULT_TREE_TEXTURE_OPTIONS, MAX_LEAF_CELLS, validateTreeTextureIndex, type TreeBarkTextureEntry, type TreeLeafTextureEntry, type TreeTextureIndex, type TreeTextureOptions
+    DEFAULT_TREE_TEXTURE_OPTIONS, MAX_LEAF_CELLS, leafSolidity, validateTreeTextureIndex, type TreeBarkTextureEntry, type TreeLeafTextureEntry, type TreeTextureIndex, type TreeTextureOptions
 } from '../../../../../common/spatial/tree-texture-library';
 import { texturedLeafPaint, type AtlasPixels } from '../../../../../common/spatial/tree-crown-card-atlas';
 import { setTreeLodTexturedMaterial } from '../clayRenderMode';
 import { setPerMeshAttribute } from './treeCrownShading';
 import { crownSlotOf } from './treeLodMath';
-import { CARD_ALPHA_MIP, CROWN_CARD_ATLAS_PX, CROWN_CARD_MIP_SCALE, bakeCrownCardAtlas, clayLeafPaint, crownCardTexture, crownCardsOf, markCrownCardShader } from './treeCrownCards';
+import { CROWN_CARD_ATLAS_PX, CROWN_CARD_MIP_SCALE, bakeCrownCardAtlas, clayLeafPaint, crownCardTexture, crownCardsOf, markCrownCardShader } from './treeCrownCards';
 
 // shared with the photo-match evaluator's software renderer (common): the options' defaults, the card painter, the atlas pixels
 export { DEFAULT_TREE_TEXTURE_OPTIONS, type LeafSlotFactors, type TreeTextureOptions } from '../../../../../common/spatial/tree-texture-library';
@@ -53,6 +53,28 @@ export const TREE_TINT_ATTRIBUTE = 'sbTreeTint';
 /** Per-mesh attribute of a leaf mesh: x the card zoom, y the alpha gain of its level's detail slot (TreeTextureOptions). */
 export const TREE_CARD_ATTRIBUTE = 'sbTreeCard';
 
+/**
+ * Hashed alpha (Wyman and McGuire, 2017): a threshold per cell of the surface's own space at the pixel's scale (two
+ * scales blended, the blend's distribution made uniform again), so a partly covered texel draws that share of its pixels
+ * in a pattern that holds still as the view moves, with or without multisampling. `p` is a position in the surface's
+ * space (here the mesh position plus its instance's offset).
+ */
+export const HASHED_ALPHA_FUNCTIONS = `
+float sbHash2( vec2 p ) { return fract( 1.0e4 * sin( 17.0 * p.x + 0.1 * p.y ) * ( 0.1 + abs( sin( 13.0 * p.y + p.x ) ) ) ); }
+float sbHash3( vec3 p ) { return sbHash2( vec2( sbHash2( p.xy ), p.z ) ); }
+float sbHashedThreshold( vec3 p ) {
+    float sbScale = 1.0 / max( max( length( dFdx( p ) ), length( dFdy( p ) ) ), 1e-6 );
+    float sbL = log2( sbScale );
+    vec2 sbS = vec2( exp2( floor( sbL ) ), exp2( ceil( sbL ) ) );
+    float sbF = fract( sbL );
+    float sbX = mix( sbHash3( floor( sbS.x * p ) ), sbHash3( floor( sbS.y * p ) ), sbF );
+    float sbA = max( min( sbF, 1.0 - sbF ), 1e-4 );
+    vec3 sbC = vec3( sbX * sbX / ( 2.0 * sbA * ( 1.0 - sbA ) ), ( sbX - 0.5 * sbA ) / ( 1.0 - sbA ), 1.0 - ( 1.0 - sbX ) * ( 1.0 - sbX ) / ( 2.0 * sbA * ( 1.0 - sbA ) ) );
+    float sbT = sbX < 1.0 - sbA ? ( sbX < sbA ? sbC.x : sbC.y ) : sbC.z;
+    return clamp( sbT, 1e-4, 1.0 );
+}
+`;
+
 export const LEAF_VERTEX_PARS = `
 attribute vec2 _leaf;
 attribute vec4 ${TREE_TINT_ATTRIBUTE};
@@ -66,6 +88,7 @@ varying vec2 vSbST;
 varying float vSbBlade;
 varying vec3 vSbTint;
 varying float vSbAlphaGain;
+varying vec3 vSbHashPos;
 `;
 
 /** After uv_vertex: the card's blade coordinates into its leaf cell (mirrors leafAtlasUv), and the leaf's tint. */
@@ -110,6 +133,11 @@ export const LEAF_VERTEX_MAIN = `
                        1.0 + uSbLeafVariation * ( sbJ - 0.5 ),
                        1.0 + uSbLeafVariation * ( sbJ - 0.5 ) * ( 1.0 - 0.6 * ( sbK - 0.5 ) ) );
     vSbTint = ${TREE_TINT_ATTRIBUTE}.rgb * sbVar;
+    // the hashed cut-out's own space: the leaf's place in its cluster, offset per instance
+    vSbHashPos = position;
+#ifdef USE_INSTANCING
+    vSbHashPos += instanceMatrix[ 3 ].xyz;
+#endif
 }
 `;
 
@@ -117,10 +145,13 @@ export const LEAF_FRAGMENT_PARS = `
 uniform vec3 uSbStem;
 uniform float uSbTranslucency;
 uniform float uSbMipScale;
+uniform float uSbSolidity;
 varying vec2 vSbST;
 varying float vSbBlade;
 varying vec3 vSbTint;
 varying float vSbAlphaGain;
+varying vec3 vSbHashPos;
+${HASHED_ALPHA_FUNCTIONS}
 `;
 
 /** After map_fragment: stalks take the stalk colour; everything takes the tree's tint. */
@@ -131,29 +162,51 @@ diffuseColor.rgb *= vSbTint;
 
 /**
  * After alphamap_fragment: stalks are opaque; outside the leaf's cell the card shows nothing. A leaf seen small samples a
- * coarse mip of the opacity map, whose averaged edges fall under the cutoff and would erode the leaf away; the alpha is
- * raised with the mip level the sample reads (uSbMipScale per level), so a distant leaf keeps its coverage, and by its
- * level's alpha gain (vSbAlphaGain).
+ * coarse mip of the opacity map, whose averaged edges fall under the cutoff and would erode a blade away; the alpha is
+ * raised with the mip level the sample reads (uSbMipScale per level, times the set's solidity, leafSolidity), so a distant
+ * blade keeps its coverage, and by its level's alpha gain (vSbAlphaGain). The porous share (1 - solidity: a needle
+ * spray, whose averaged alpha is its true cover) is cut at a hashed threshold, so it draws that share of its pixels
+ * instead of a solid flake.
  */
 export const LEAF_FRAGMENT_ALPHA = `
 #ifdef USE_MAP
 {
     vec2 sbTexels = fwidth( vMapUv ) * vec2( textureSize( map, 0 ) );
     float sbMip = max( 0.0, log2( max( max( sbTexels.x, sbTexels.y ), 1e-6 ) ) );
-    diffuseColor.a *= ( 1.0 + sbMip * uSbMipScale ) * vSbAlphaGain;
+    diffuseColor.a *= ( 1.0 + sbMip * uSbMipScale * uSbSolidity ) * vSbAlphaGain;
 }
 #endif
+{
+    float sbHashed = diffuseColor.a >= sbHashedThreshold( vSbHashPos ) ? 1.0 : 0.0;
+    diffuseColor.a = mix( sbHashed, diffuseColor.a, uSbSolidity );
+}
 if ( vSbBlade < 0.5 ) diffuseColor.a = 1.0;
 else if ( vSbST.x < 0.0 || vSbST.x > 1.0 || vSbST.y < 0.0 || vSbST.y > 1.0 ) diffuseColor.a = 0.0;
 `;
 
+/**
+ * The sun the leaves are lit through: the sky's sun (a SunLight, sunShadowCascades.ts), else the first directional light.
+ * Defines SB_SUN_DIR and SB_SUN_COLOR where there is one.
+ */
+const SUN_FOR_TRANSLUCENCY = `
+#if NUM_SUN_LIGHTS > 0
+#define SB_SUN_DIR sunLights[ 0 ].direction
+#define SB_SUN_COLOR sunLights[ 0 ].color
+#elif NUM_DIR_LIGHTS > 0
+#define SB_SUN_DIR directionalLights[ 0 ].direction
+#define SB_SUN_COLOR directionalLights[ 0 ].color
+#endif
+`;
+
 /** After lights_fragment_end: sunlight arriving from behind the leaf (as seen) passes through it, coloured by the leaf. */
-export const LEAF_FRAGMENT_TRANSLUCENCY = `
-#if NUM_DIR_LIGHTS > 0
+export const LEAF_FRAGMENT_TRANSLUCENCY = `${SUN_FOR_TRANSLUCENCY}
+#ifdef SB_SUN_DIR
 {
-    float sbBack = max( 0.0, dot( - normal, directionalLights[ 0 ].direction ) );
-    reflectedLight.directDiffuse += diffuseColor.rgb * directionalLights[ 0 ].color * ( sbBack * uSbTranslucency * vSbBlade );
+    float sbBack = max( 0.0, dot( - normal, SB_SUN_DIR ) );
+    reflectedLight.directDiffuse += diffuseColor.rgb * SB_SUN_COLOR * ( sbBack * uSbTranslucency * vSbBlade );
 }
+#undef SB_SUN_DIR
+#undef SB_SUN_COLOR
 #endif
 `;
 
@@ -291,11 +344,12 @@ function leafMaterial(e: TreeLeafTextureEntry, url: (f: string) => string, load:
         uSbLeafVariation: { value: o.leafVariation },
         uSbStem: { value: stem },
         uSbTranslucency: { value: o.translucency },
-        uSbMipScale: { value: o.alphaMipScale }
+        uSbMipScale: { value: o.alphaMipScale },
+        uSbSolidity: { value: leafSolidity(e.leaf.fill) }
     };
     mat.name = `sb-tree-leaves-${e.id}`;
     mat.userData = { sbTreeSurface: 'leaves' as TreeSurface, sbTreeTextureEntry: e.id, sbTreeUniforms: uniforms };
-    mat.customProgramCacheKey = () => 'sbTreeLeaves/1';
+    mat.customProgramCacheKey = () => 'sbTreeLeaves/2';
     mat.onBeforeCompile = shader => {
         Object.assign(shader.uniforms, uniforms);
         shader.vertexShader = replaceOrThrow(replaceOrThrow(shader.vertexShader, '#include <common>', LEAF_VERTEX_PARS, 'leaf vertex'), '#include <uv_vertex>', LEAF_VERTEX_MAIN, 'leaf vertex');
@@ -312,6 +366,7 @@ export const CARD_VERTEX_PARS = `
 attribute vec4 ${TREE_TINT_ATTRIBUTE};
 uniform float uSbLeafVariation;
 varying vec3 vSbTint;
+varying vec3 vSbHashPos;
 `;
 /** After uv_vertex: the tree's tint, varied per card (the instance's place). */
 export const CARD_VERTEX_MAIN = `
@@ -321,20 +376,48 @@ export const CARD_VERTEX_MAIN = `
     sbJ = fract( sin( dot( floor( instanceMatrix[ 3 ].xyz * 64.0 ), vec3( 12.9898, 78.233, 37.719 ) ) ) * 43758.5453 );
 #endif
     vSbTint = ${TREE_TINT_ATTRIBUTE}.rgb * ( 1.0 + uSbLeafVariation * ( sbJ - 0.5 ) );
+    vSbHashPos = position;
+#ifdef USE_INSTANCING
+    vSbHashPos += instanceMatrix[ 3 ].xyz;
+#endif
 }
 `;
 export const CARD_FRAGMENT_PARS = `
 uniform float uSbTranslucency;
 uniform float uSbCardMipScale;
+uniform float uSbSolidity;
 varying vec3 vSbTint;
+varying vec3 vSbHashPos;
+${HASHED_ALPHA_FUNCTIONS}
+`;
+/**
+ * After alphamap_fragment on a textured crown card: the cut-out's mip lift (CARD_ALPHA_MIP) for the solid share of its
+ * leaves (leafSolidity), and the porous share cut at a hashed threshold, as the leaves' (LEAF_FRAGMENT_ALPHA).
+ */
+export const CARD_ALPHA_COVER = `
+{
+#if defined( USE_MAP )
+    vec2 sbCardTexels = fwidth( vMapUv ) * vec2( textureSize( map, 0 ) );
+#else
+    vec2 sbCardTexels = vec2( 1.0 );
+#endif
+    float sbCardMip = max( 0.0, log2( max( max( sbCardTexels.x, sbCardTexels.y ), 1e-6 ) ) );
+    diffuseColor.a = min( 1.0, diffuseColor.a * ( 1.0 + sbCardMip * uSbCardMipScale * uSbSolidity ) );
+}
+{
+    float sbHashed = diffuseColor.a >= sbHashedThreshold( vSbHashPos ) ? 1.0 : 0.0;
+    diffuseColor.a = mix( sbHashed, diffuseColor.a, uSbSolidity );
+}
 `;
 /** After lights_fragment_end: sunlight through the leaves of a card lit from behind (as the leaves' term). */
-export const CARD_FRAGMENT_TRANSLUCENCY = `
-#if NUM_DIR_LIGHTS > 0
+export const CARD_FRAGMENT_TRANSLUCENCY = `${SUN_FOR_TRANSLUCENCY}
+#ifdef SB_SUN_DIR
 {
-    float sbBack = max( 0.0, dot( - normal, directionalLights[ 0 ].direction ) );
-    reflectedLight.directDiffuse += diffuseColor.rgb * directionalLights[ 0 ].color * ( sbBack * uSbTranslucency );
+    float sbBack = max( 0.0, dot( - normal, SB_SUN_DIR ) );
+    reflectedLight.directDiffuse += diffuseColor.rgb * SB_SUN_COLOR * ( sbBack * uSbTranslucency );
 }
+#undef SB_SUN_DIR
+#undef SB_SUN_COLOR
 #endif
 `;
 
@@ -349,17 +432,18 @@ function crownCardMaterial(e: TreeLeafTextureEntry, cards: TreeCrownCardsExtras,
         map.needsUpdate = true;
     });
     const mat = new THREE.MeshStandardMaterial({ map, roughness: 0.6, metalness: 0, side: THREE.DoubleSide, alphaTest: 0.5, alphaToCoverage: false });
-    const uniforms = { uSbLeafVariation: { value: o.leafVariation }, uSbTranslucency: { value: o.translucency }, uSbCardMipScale: { value: CROWN_CARD_MIP_SCALE } };
+    const uniforms = { uSbLeafVariation: { value: o.leafVariation }, uSbTranslucency: { value: o.translucency }, uSbCardMipScale: { value: CROWN_CARD_MIP_SCALE },
+        uSbSolidity: { value: leafSolidity(e.leaf.fill) } };
     mat.name = `sb-tree-crown-cards-${e.id}`;
     mat.userData = { sbTreeSurface: 'crown-cards' as TreeSurface, sbTreeTextureEntry: e.id, sbTreeUniforms: uniforms };
-    mat.customProgramCacheKey = () => 'sbTreeCrownCards/1';
+    mat.customProgramCacheKey = () => 'sbTreeCrownCards/2';
     mat.onBeforeCompile = shader => {
         Object.assign(shader.uniforms, uniforms);
         markCrownCardShader(shader);
         shader.vertexShader = replaceOrThrow(replaceOrThrow(shader.vertexShader, '#include <common>', CARD_VERTEX_PARS, 'card vertex'), '#include <uv_vertex>', CARD_VERTEX_MAIN, 'card vertex');
         let f = replaceOrThrow(shader.fragmentShader, '#include <common>', CARD_FRAGMENT_PARS, 'card fragment');
         f = replaceOrThrow(f, '#include <map_fragment>', 'diffuseColor.rgb *= vSbTint;', 'card fragment');
-        f = replaceOrThrow(f, '#include <alphamap_fragment>', CARD_ALPHA_MIP, 'card fragment');
+        f = replaceOrThrow(f, '#include <alphamap_fragment>', CARD_ALPHA_COVER, 'card fragment');
         f = replaceOrThrow(f, '#include <lights_fragment_end>', CARD_FRAGMENT_TRANSLUCENCY, 'card fragment');
         shader.fragmentShader = f;
     };

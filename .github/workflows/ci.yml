@@ -16,144 +16,56 @@ on:
       - 'assets/brand/**'
       - 'ScratchboxIDE logo/**'
   workflow_dispatch:
+  # Nightly: the macOS whole-suite job and the Docker image builds, which pull requests skip.
+  schedule:
+    - cron: '0 8 * * *'
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # The ubuntu-24.04 runner of a private repository has 2 vCPUs: vitest runs one test file at a time there, and renders
+  # headless Chrome and compiles C++ several times slower than on macOS, so the whole suite takes over two hours. Ubuntu
+  # typechecks, lints and builds once and runs the tests in ten shards split by measured time (vitest --shard, split by
+  # vitest.shard-sequencer.ts): the slowest file alone in one, about 14 minutes of tests in each other, so that a runner
+  # a third slower than the one measured still ends inside the limit. These run on every pull request and push.
   verify:
     name: ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # The macos-15 runner takes four test files at a time, so the whole suite fits one job there.
-          - name: Typecheck, lint, test (macos-15)
-            os: macos-15
-            checks: true
-            test: true
-          # The ubuntu-24.04 runner of a private repository has 2 vCPUs: vitest runs one test file at a time there, and
-          # renders headless Chrome and compiles C++ several times slower than on macOS, so the whole suite takes over
-          # two hours. Ubuntu typechecks, lints and builds once and runs the tests in ten shards split by measured time
-          # (vitest --shard, split by vitest.shard-sequencer.ts): the slowest file alone in one, about 14 minutes of tests
-          # in each other, so that a runner a third slower than the one measured still ends inside the limit.
-          - name: Typecheck, lint, build (ubuntu-24.04)
-            os: ubuntu-24.04
-            checks: true
-          - name: Test (ubuntu-24.04, shard 1/10)
-            os: ubuntu-24.04
-            test: true
-            shard: 1/10
-          - name: Test (ubuntu-24.04, shard 2/10)
-            os: ubuntu-24.04
-            test: true
-            shard: 2/10
-          - name: Test (ubuntu-24.04, shard 3/10)
-            os: ubuntu-24.04
-            test: true
-            shard: 3/10
-          - name: Test (ubuntu-24.04, shard 4/10)
-            os: ubuntu-24.04
-            test: true
-            shard: 4/10
-          - name: Test (ubuntu-24.04, shard 5/10)
-            os: ubuntu-24.04
-            test: true
-            shard: 5/10
-          - name: Test (ubuntu-24.04, shard 6/10)
-            os: ubuntu-24.04
-            test: true
-            shard: 6/10
-          - name: Test (ubuntu-24.04, shard 7/10)
-            os: ubuntu-24.04
-            test: true
-            shard: 7/10
-          - name: Test (ubuntu-24.04, shard 8/10)
-            os: ubuntu-24.04
-            test: true
-            shard: 8/10
-          - name: Test (ubuntu-24.04, shard 9/10)
-            os: ubuntu-24.04
-            test: true
-            shard: 9/10
-          - name: Test (ubuntu-24.04, shard 10/10)
-            os: ubuntu-24.04
-            test: true
-            shard: 10/10
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
-    env:
-      SCRATCHBOX_TEST: '1'
-      NODE_OPTIONS: --max_old_space_size=6144
-    steps:
-      - uses: actions/checkout@v4
+          - { name: 'Typecheck, lint, build (ubuntu-24.04)', checks: true, test: false, shard: '' }
+          - { name: 'Test (ubuntu-24.04, shard 1/10)', checks: false, test: true, shard: '1/10' }
+          - { name: 'Test (ubuntu-24.04, shard 2/10)', checks: false, test: true, shard: '2/10' }
+          - { name: 'Test (ubuntu-24.04, shard 3/10)', checks: false, test: true, shard: '3/10' }
+          - { name: 'Test (ubuntu-24.04, shard 4/10)', checks: false, test: true, shard: '4/10' }
+          - { name: 'Test (ubuntu-24.04, shard 5/10)', checks: false, test: true, shard: '5/10' }
+          - { name: 'Test (ubuntu-24.04, shard 6/10)', checks: false, test: true, shard: '6/10' }
+          - { name: 'Test (ubuntu-24.04, shard 7/10)', checks: false, test: true, shard: '7/10' }
+          - { name: 'Test (ubuntu-24.04, shard 8/10)', checks: false, test: true, shard: '8/10' }
+          - { name: 'Test (ubuntu-24.04, shard 9/10)', checks: false, test: true, shard: '9/10' }
+          - { name: 'Test (ubuntu-24.04, shard 10/10)', checks: false, test: true, shard: '10/10' }
+    uses: ./.github/workflows/verify.yml
+    with:
+      os: ubuntu-24.04
+      checks: ${{ matrix.checks }}
+      test: ${{ matrix.test }}
+      shard: ${{ matrix.shard }}
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install
-        run: npm ci
-
-      # The Python 3D engine module (scratchbox_native) is built on the first test run by
-      # vitest.global-setup.ts from .venv (nanobind + cmake); without it the Python engine tests fail.
-      # The Python of the project .venv requirements.txt was pinned from: the committed scratchbox stubs are generated on
-      # it, and an older Python writes its annotations differently (typing.Optional[X], not X | None), failing sb-stubs.test.ts.
-      - uses: actions/setup-python@v5
-        if: matrix.test
-        with:
-          python-version: '3.14'
-
-      # numpy on the PATH python3: the skinning-parity test runs scripts/sbx_skinning.py with it.
-      - name: Python venv for the native engine
-        if: matrix.test
-        run: |
-          python -m venv .venv
-          # PyPI's Linux torch wheel brings the CUDA libraries (several GB) and fills the runner's disk; the tests run
-          # on the CPU, so take the CPU build of the pinned version first (requirements.txt's pin then counts as met).
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            .venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu "$(grep -E '^torch==' requirements.txt)"
-          fi
-          .venv/bin/pip install -r requirements.txt
-          python -m pip install numpy
-
-      # Media tests shell out to ffmpeg (JPEG/video encode) and cwebp (WebP textures); they skip
-      # with a reason when the binary is missing, so install them here to keep CI covering them.
-      - name: System tools for media tests (ffmpeg, cwebp)
-        if: matrix.test
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            sudo apt-get update
-            # libegl1 and libgles2: MediaPipe's native library (pose landmarker, interactive segmenter) links libEGL and
-            # libGLESv2 even when it runs on the CPU, and its Python bindings fail to load without them
-            sudo apt-get install -y --no-install-recommends ffmpeg webp libegl1 libgles2
-          else
-            brew install ffmpeg webp
-          fi
-
-      # The CLI resolves @scratchbox/core through its built dist/, so core must be built before typecheck.
-      - name: Build core
-        run: npm run build:core
-
-      - name: Typecheck
-        if: matrix.checks
-        run: npm run typecheck
-
-      - name: Lint
-        if: matrix.checks
-        run: npm run lint
-
-      - name: Test
-        if: matrix.test
-        env:
-          SHARD: ${{ matrix.shard }}
-        run: npm test -- ${SHARD:+--shard=$SHARD}
-
-      - name: Build
-        if: matrix.checks
-        run: npm run build
+  # The macos-15 runner takes four test files at a time, so the whole suite fits one job there. macOS runners are the
+  # scarcest, and the Ubuntu shards above already run the whole suite, so pull requests skip this job (2026-11-03, the
+  # user's call when CI queued for hours); pushes to main, the nightly run and manual runs keep it.
+  verify-macos:
+    name: Typecheck, lint, test (macos-15)
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/verify.yml
+    with:
+      os: macos-15
+      checks: true
+      test: true
+      heavy: true
 
   docker:
     name: Docker image builds

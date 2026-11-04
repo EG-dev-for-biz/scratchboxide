@@ -150,16 +150,33 @@ describe('textures chosen per tree (plant)', () => {
 
     it('chooses leaves by measured colour and bark by size', () => {
         const byId = new Map(treesOf(json).map(({ tree }) => [tree.id, tree.texture!]));
-        // the chosen leaf set is among the four nearest the measured hue
+        // the leaf's form: a crown the species library matched is matched on its species leaf's blade width too (0: not
+        // matched on width), so its set is chosen among the sets of a like width (within 2.5 times)
+        const ofLikeWidth = (id: number) => {
+            const target = byId.get(id)!.leaves.targetBladeWidthM ?? 0;
+            return target > 0 ? INDEX.leaves.filter(e => Math.abs(Math.log(e.leaf.bladeWidthM! / target)) <= Math.log(2.5)) : INDEX.leaves;
+        };
+        // the chosen leaf set is among the four nearest the measured hue (of those of a like width)
         for (const c of CROWNS.filter(c => c.colour)) {
             const want = c.colour!.meanLinearRgb;
-            const ranked = [...INDEX.leaves].sort((a, b) => hueDiff(a.colour.meanLinearRgb, want) - hueDiff(b.colour.meanLinearRgb, want)).map(e => e.id);
+            const ranked = [...ofLikeWidth(c.id)].sort((a, b) => hueDiff(a.colour.meanLinearRgb, want) - hueDiff(b.colour.meanLinearRgb, want)).map(e => e.id);
             expect(ranked.slice(0, 4), `crown ${c.id}`).toContain(byId.get(c.id)!.leaves.entry);
         }
         // the crown without a colour of its own is chosen by the neighbours' median, which is green here (4 of 6 green)
         const medianWant = [0, 1, 2].map(k => [...CROWNS.filter(c => c.colour).map(c => c.colour!.meanLinearRgb[k])].sort((a, b) => a - b)[3]);
-        const rankedForNone = [...INDEX.leaves].sort((a, b) => hueDiff(a.colour.meanLinearRgb, medianWant) - hueDiff(b.colour.meanLinearRgb, medianWant)).map(e => e.id);
+        const rankedForNone = [...ofLikeWidth(6)].sort((a, b) => hueDiff(a.colour.meanLinearRgb, medianWant) - hueDiff(b.colour.meanLinearRgb, medianWant)).map(e => e.id);
         expect(rankedForNone.slice(0, 4)).toContain(byId.get(6)!.leaves.entry);
+        // a crown matched to needle or scale leaves (a blade width of millimetres) draws the needle spray, the library's
+        // thinnest-bladed set; a crown matched to broad leaves never does
+        const thinnest = INDEX.leaves.reduce((a, b) => (a.leaf.bladeWidthM! <= b.leaf.bladeWidthM! ? a : b)).id;
+        let needled = 0;
+        for (const t of byId.values()) {
+            const target = t.leaves.targetBladeWidthM ?? 0;
+            if (target > 0 && target < 0.004) { needled++; expect(t.leaves.entry).toBe(thinnest); }
+            if (target >= 0.01) expect(t.leaves.entry).not.toBe(thinnest);
+            expect(t.leaves.bladeWidthM).toBe(INDEX.leaves.find(e => e.id === t.leaves.entry)!.leaf.bladeWidthM);
+        }
+        expect(needled).toBeGreaterThanOrEqual(1);
         // a yellow crown gets a yellower set than a green one (red over green of the chosen set's mean)
         const ratio = (id: string) => { const e = INDEX.leaves.find(x => x.id === id)!.colour.meanLinearRgb; return e[0] / e[1]; };
         expect(ratio(byId.get(1)!.leaves.entry)).toBeGreaterThan(ratio(byId.get(0)!.leaves.entry) + 0.3);

@@ -21,14 +21,20 @@
  *     is how much brighter one chunk's photos are than the other's there; one gain per chunk and channel is solved from
  *     every pair by least squares (mean zero over the chunks), so the district keeps its own overall level.
  *     Brightness is levelled in full, hue only by `maxHueShift` (a gain per channel tinted whole chunks).
- *  2. Cut (cutChunkGround): each chunk's ground is cut exactly at the cell lines around what it owns, the pieces kept by
+ *  2. Cut (cutChunkLayer): each chunk's ground is cut exactly at the cell lines around what it owns, the pieces kept by
  *     who owns their middle, every vertex attribute carried, so both copies end on the same line. Where ownership changes
  *     at no cell line (the outline of a building that reaches into the next cell: its own chunk's build may have taken the
  *     street out from under it), a triangle across the change is kept by each chunk owning a corner of it: a sliver of
- *     overlap beside a wall rather than a hole. Who owns a point (seamOwner) is the
- *     plan's owner (district-chunks.ts chunkOwner) where that chunk's ground reaches it, else a chunk whose ground does
- *     (seamCoverage, read from every chunk first): a building far larger than a cell can reach past where its own chunk's
- *     extraction stopped, and its ground there must not be handed to a chunk that has none.
+ *     overlap beside a wall rather than a hole. The district's own edge is the exception: a triangle across the circle,
+ *     where its outside is no chunk's (no building planned whole there), is cut exactly on the circle and only its inside
+ *     kept, the cut points set on the circle, so the district ends on one clean curve and no torn triangle stands past it.
+ *     Who owns a point (seamOwner) is the plan's owner (district-chunks.ts chunkOwner) where that chunk's ground reaches
+ *     it, else a chunk whose ground does (seamCoverage, read from every chunk first): a building far larger than a cell can
+ *     reach past where its own chunk's extraction stopped, and its ground there must not be handed to a chunk that has none.
+ *     SB-Roadie's streets (layer l1r) are cut the same way, by the same owner: each chunk carved its own ground under its
+ *     own streets, so a chunk's coverage is read from its ground and its streets together (with the ground alone, a street
+ *     is no chunk's surface, and a neighbour whose ground was left whole under it would take it). Both chunks measured one
+ *     street on the same tiles, so a street's cut edge is not snapped (3) and its colour not levelled (4, 5).
  *  3. Snap: chunks are cut in a fixed order; each later chunk's vertices on a cell line are moved, along the line and up
  *     or down, onto the nearest edge an earlier chunk left on that line within `snapM`, so the two cuts meet on one curve
  *     (the step between two independent remeshes, a few centimetres, is closed; the cut edges of the earlier chunk stay).
@@ -52,7 +58,7 @@ import { chunkOwner, DISTRICT_CHUNKS_PARAMS, type DistrictChunkPlan } from './di
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- glTF JSON is untyped */
 
-export const DISTRICT_SEAMS_VERSION = 'district-seams/2';
+export const DISTRICT_SEAMS_VERSION = 'district-seams/4';  // 3: the ground cut exactly on the district's circle; 4: SB-Roadie's streets cut by the same owner, read from each chunk's ground and streets
 
 export const DISTRICT_SEAMS_PARAMS = {
     /** How far a later chunk's cut vertex may move onto an earlier chunk's cut edge (m): the step two remeshes leave. */
@@ -132,6 +138,8 @@ export interface SeamCutReport {
     maxSnapM: number;
     /** Primitives without indices, kept as they were. */
     skippedPrimitives: number;
+    /** Triangles cut on the district's circle (their outside, past the edge, left out). */
+    edgeCut: number;
 }
 
 interface SnapIndex { segs: number[]; buckets: Map<number, number[]> }
@@ -167,15 +175,16 @@ function nearestOnEdges(ix: SnapIndex, s: number, y: number, r: number): [number
 }
 
 /**
- * Chunk `index`'s ground (district frame, as joined) cut to what it owns: cut exactly at the cell lines a triangle with
- * corners of different owners crosses, each piece kept by its middle's owner or an owned corner of its own, every attribute
- * carried. With `snapTo` (the
+ * One of chunk `index`'s layers (district frame, as joined: its ground, its streets) cut to what it owns: cut exactly at
+ * the cell lines a triangle with corners of different owners crosses, each piece kept by its middle's owner or an owned
+ * corner of its own, every attribute carried. With `snapTo` (the
  * edges earlier chunks left), its vertices on a cell line are moved onto them. Returns the cut GLB and the edges this cut
  * left on the cell lines (after snapping), for later chunks. Cut the clay and the textured twin with the same `snapTo`:
  * the two share positions, so they are cut and snapped alike. `owner` (default chunkOwner) must be the same for every
  * chunk of the district: seamOwner, from every chunk's coverage, so ground no chunk's build reached is never handed to it.
+ * `subject` names the layer and its provenance in the GLB's note (default the ground, as scanned).
  */
-export function cutChunkGround(bytes: Uint8Array, plan: DistrictChunkPlan, index: number, opts: { snapTo?: SeamEdges; owner?: (x: number, z: number) => number } = {}, P: DistrictSeamsParams = DISTRICT_SEAMS_PARAMS): { glb: Buffer; edges: SeamEdges; report: SeamCutReport } {
+export function cutChunkLayer(bytes: Uint8Array, plan: DistrictChunkPlan, index: number, opts: { snapTo?: SeamEdges; owner?: (x: number, z: number) => number; subject?: string } = {}, P: DistrictSeamsParams = DISTRICT_SEAMS_PARAMS): { glb: Buffer; edges: SeamEdges; report: SeamCutReport } {
     const { snapTo } = opts;
     // a copy: the dropped triangles are collapsed in the index bytes, which must not be the caller's
     const glb = parseGlbBytes(Uint8Array.from(bytes));
@@ -183,7 +192,8 @@ export function cutChunkGround(bytes: Uint8Array, plan: DistrictChunkPlan, index
     const owner = opts.owner ?? chunkOwner(plan), { xs, zs } = cellLines(plan);
     const touchesLine = (x: number, z: number) => Math.abs(nearest(xs, x) - x) < 1e-6 || Math.abs(nearest(zs, z) - z) < 1e-6;
     const snap = snapTo ? snapIndex(snapTo) : undefined;
-    const report: SeamCutReport = { trianglesIn: 0, dropped: 0, cut: 0, keptPieces: 0, snapped: 0, unsnapped: 0, maxSnapM: 0, skippedPrimitives: 0 };
+    const report: SeamCutReport = { trianglesIn: 0, dropped: 0, cut: 0, keptPieces: 0, snapped: 0, unsnapped: 0, maxSnapM: 0, skippedPrimitives: 0, edgeCut: 0 };
+    const R = plan.radiusM, radius = (i: number, X: ArrayLike<number>) => Math.hypot(X[i * 3], X[i * 3 + 2]);
     for (const m of glb.json.meshes ?? []) for (const p of m.primitives ?? []) if ((p.mode ?? 4) === 4 && p.attributes?.POSITION !== undefined && p.indices === undefined) report.skippedPrimitives++;
     const appended: Array<{ pr: PrimRead; polys: Vx[][] }> = [];
     const kill = (pr: PrimRead, t: number) => {
@@ -214,7 +224,10 @@ export function cutChunkGround(bytes: Uint8Array, plan: DistrictChunkPlan, index
             // a corner already on a cell line: the triangle goes through the cut too, so that corner is snapped and its edge
             // on the line recorded like any cut one
             const onLine = !offLine(a) || !offLine(b) || !offLine(c);
-            if (!lx.length && !lz.length && !(onLine && ownsAny)) {
+            // across the district's circle, its outside no chunk's: cut on the circle, never kept whole past it
+            const ra = radius(a, X), rb = radius(b, X), rc = radius(c, X);
+            const acrossEdge = Math.min(ra, rb, rc) < R && Math.max(ra, rb, rc) > R && (oa === -1 || ob === -1 || oc === -1);
+            if (!lx.length && !lz.length && !(onLine && ownsAny) && !acrossEdge) {
                 if (!ownsAny) { kill(pr, t); report.dropped++; }
                 continue;
             }
@@ -225,6 +238,7 @@ export function cutChunkGround(bytes: Uint8Array, plan: DistrictChunkPlan, index
             let polys: Vx[][] = [[va, vb, vc]];
             for (const x of lx) polys = polys.flatMap(poly => split(poly, v => v.p[0] - x, `x${x}`, pr, cache)).filter(q => q.length >= 3);
             for (const z of lz) polys = polys.flatMap(poly => split(poly, v => v.p[2] - z, `z${z}`, pr, cache)).filter(q => q.length >= 3);
+            if (acrossEdge) { polys = polys.flatMap(poly => split(poly, v => Math.hypot(v.p[0], v.p[2]) - R, 'circle', pr, cache)).filter(q => q.length >= 3); report.edgeCut++; }
             const mine = polys.filter(poly => poly.some(v => corner.get(v)) || owner(poly.reduce((s, v) => s + v.p[0], 0) / poly.length, poly.reduce((s, v) => s + v.p[2], 0) / poly.length) === index);
             if (mine.length === polys.length && polys.length === 1 && !onLine) continue;
             kill(pr, t);
@@ -233,6 +247,8 @@ export function cutChunkGround(bytes: Uint8Array, plan: DistrictChunkPlan, index
             report.keptPieces += mine.length;
             kept.push(...mine);
         }
+        // the circle's cut points: set on the circle (each was placed on its edge by its ends' distances, which a circle bends)
+        for (const [k, v] of cache) if (k.endsWith('|circle')) { const d = Math.hypot(v.p[0], v.p[2]); if (d > 0) { v.p[0] *= R / d; v.p[2] *= R / d; } }
         if (kept.length) appended.push({ pr, polys: kept });
     }
     // the cut vertices on a cell line: snapped onto the earlier chunks' edges, then this chunk's own edges recorded
@@ -270,7 +286,7 @@ export function cutChunkGround(bytes: Uint8Array, plan: DistrictChunkPlan, index
         segs.push(u.p[along], u.p[1], w.p[along], w.p[1]);
     }
     report.maxSnapM = Math.round(report.maxSnapM * 1000) / 1000;
-    const out = appendPieces(glb, appended, { sbDistrictSeam: { version: DISTRICT_SEAMS_VERSION, chunk: index, provenance: `as-scanned: the chunk's ground cut at its cell lines, its cut edge moved at most ${P.snapM} m onto its neighbour's` } });
+    const out = appendPieces(glb, appended, { sbDistrictSeam: { version: DISTRICT_SEAMS_VERSION, chunk: index, provenance: `${opts.subject ?? "as-scanned: the chunk's ground"} cut at its cell lines${snapTo ? `, its cut edge moved at most ${P.snapM} m onto its neighbour's` : ''}` } });
     return { glb: out, edges, report };
 }
 
@@ -278,18 +294,22 @@ export function cutChunkGround(bytes: Uint8Array, plan: DistrictChunkPlan, index
 export interface SeamCoverage { x0: number; z0: number; nx: number; nz: number; cellM: number; bits: Uint8Array }
 
 /**
- * Where a chunk's ground (as joined) surely has surface: every grid cell whose middle lies under one of its triangles, or
- * that holds one of its corners, and whose eight neighbours do too. Read once per chunk, before any is cut.
+ * Where a chunk's surfaces (as joined: its ground, and its streets, which its own build carved its ground under) surely
+ * have surface: every grid cell whose middle lies under one of their triangles, or that holds one of their corners, and
+ * whose eight neighbours do too. Read once per chunk, before any is cut.
  */
-export function seamCoverage(bytes: Uint8Array, P: DistrictSeamsParams = DISTRICT_SEAMS_PARAMS): SeamCoverage {
-    const g = parseGlbBytes(bytes), C = P.coverageM;
+export function seamCoverage(bytes: Uint8Array | Uint8Array[], P: DistrictSeamsParams = DISTRICT_SEAMS_PARAMS): SeamCoverage {
+    const C = P.coverageM;
     const prims: Array<{ X: Float64Array; I?: Float64Array }> = [];
     let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
-    for (const m of g.json.meshes ?? []) for (const p of m.primitives ?? []) {
-        if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined) continue;
-        const X = readAccessor(g, p.attributes.POSITION).data;
-        prims.push({ X, ...(p.indices !== undefined ? { I: readAccessor(g, p.indices).data } : {}) });
-        for (let i = 0; i < X.length; i += 3) { x0 = Math.min(x0, X[i]); x1 = Math.max(x1, X[i]); z0 = Math.min(z0, X[i + 2]); z1 = Math.max(z1, X[i + 2]); }
+    for (const b of Array.isArray(bytes) ? bytes : [bytes]) {
+        const g = parseGlbBytes(b);
+        for (const m of g.json.meshes ?? []) for (const p of m.primitives ?? []) {
+            if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined) continue;
+            const X = readAccessor(g, p.attributes.POSITION).data;
+            prims.push({ X, ...(p.indices !== undefined ? { I: readAccessor(g, p.indices).data } : {}) });
+            for (let i = 0; i < X.length; i += 3) { x0 = Math.min(x0, X[i]); x1 = Math.max(x1, X[i]); z0 = Math.min(z0, X[i + 2]); z1 = Math.max(z1, X[i + 2]); }
+        }
     }
     if (!(x1 >= x0)) return { x0: 0, z0: 0, nx: 0, nz: 0, cellM: C, bits: new Uint8Array(0) };
     x0 = Math.floor(x0 / C) * C; z0 = Math.floor(z0 / C) * C;
@@ -330,9 +350,11 @@ const covers = (c: SeamCoverage | undefined, x: number, z: number) => {
 };
 
 /**
- * Who keeps the ground at a plan point, the same for every chunk: its owner (chunkOwner) when the owner's ground reaches
- * it; else the chunk whose cell it lies in, when that one's does (a building that reaches far out of its own cell, past
- * where its chunk's extraction reached); else the first chunk in `order` whose ground does; else the owner (nobody has it).
+ * Who keeps the ground (and the streets) at a plan point, the same for every chunk: its owner (chunkOwner) when the owner's
+ * surfaces reach it; else the chunk whose cell it lies in, when that one's do (a building that reaches far out of its own
+ * cell, past where its chunk's extraction reached); else the first chunk in `order` whose surfaces do; else the owner
+ * (nobody has it). `coverage` is each chunk's seamCoverage of its ground and its streets together: with the ground alone,
+ * a street's carved ground reads as no chunk's surface, and a neighbour whose ground was left whole there takes the street.
  */
 export function seamOwner(plan: DistrictChunkPlan, coverage: Map<number, SeamCoverage>, order: number[]): (x: number, z: number) => number {
     const owner = chunkOwner(plan), half = plan.cellM / 2;

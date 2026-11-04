@@ -1,0 +1,107 @@
+name: Verify
+
+# One verify job (install, build, typecheck, lint, test, build), called by ci.yml once per runner and shard. It lives in
+# its own file so ci.yml can run the macOS whole-suite job outside pull requests without a second copy of these steps.
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        type: string
+        required: true
+      checks:
+        description: Typecheck, lint and build.
+        type: boolean
+        default: false
+      test:
+        description: Run the tests (all of them, or the shard below).
+        type: boolean
+        default: false
+      shard:
+        description: vitest --shard, e.g. 3/10; empty runs every test file.
+        type: string
+        default: ''
+      heavy:
+        description: Also run the tests gated on SCRATCHBOX_HEAVY_TESTS (the 4-order and spectral atmosphere tables).
+        type: boolean
+        default: false
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ${{ inputs.os }}
+    # 60 with the heavy tests (the macOS whole suite with the 4-order and spectral atmosphere tables took 29.5 min on
+    # #49), 40 otherwise.
+    timeout-minutes: ${{ inputs.heavy && 60 || 40 }}
+    env:
+      SCRATCHBOX_TEST: '1'
+      SCRATCHBOX_HEAVY_TESTS: ${{ inputs.heavy && '1' || '' }}
+      NODE_OPTIONS: --max_old_space_size=6144
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # The Python 3D engine module (scratchbox_native) is built on the first test run by
+      # vitest.global-setup.ts from .venv (nanobind + cmake); without it the Python engine tests fail.
+      # The Python of the project .venv requirements.txt was pinned from: the committed scratchbox stubs are generated on
+      # it, and an older Python writes its annotations differently (typing.Optional[X], not X | None), failing sb-stubs.test.ts.
+      - uses: actions/setup-python@v5
+        if: inputs.test
+        with:
+          python-version: '3.14'
+
+      # numpy on the PATH python3: the skinning-parity test runs scripts/sbx_skinning.py with it.
+      - name: Python venv for the native engine
+        if: inputs.test
+        run: |
+          python -m venv .venv
+          # PyPI's Linux torch wheel brings the CUDA libraries (several GB) and fills the runner's disk; the tests run
+          # on the CPU, so take the CPU build of the pinned version first (requirements.txt's pin then counts as met).
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            .venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu "$(grep -E '^torch==' requirements.txt)"
+          fi
+          .venv/bin/pip install -r requirements.txt
+          python -m pip install numpy
+
+      # Media tests shell out to ffmpeg (JPEG/video encode) and cwebp (WebP textures); they skip
+      # with a reason when the binary is missing, so install them here to keep CI covering them.
+      - name: System tools for media tests (ffmpeg, cwebp)
+        if: inputs.test
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update
+            # libegl1 and libgles2: MediaPipe's native library (pose landmarker, interactive segmenter) links libEGL and
+            # libGLESv2 even when it runs on the CPU, and its Python bindings fail to load without them
+            sudo apt-get install -y --no-install-recommends ffmpeg webp libegl1 libgles2
+          else
+            brew install ffmpeg webp
+          fi
+
+      # The CLI resolves @scratchbox/core through its built dist/, so core must be built before typecheck.
+      - name: Build core
+        run: npm run build:core
+
+      - name: Typecheck
+        if: inputs.checks
+        run: npm run typecheck
+
+      - name: Lint
+        if: inputs.checks
+        run: npm run lint
+
+      - name: Test
+        if: inputs.test
+        env:
+          SHARD: ${{ inputs.shard }}
+        run: npm test -- ${SHARD:+--shard=$SHARD}
+
+      - name: Build
+        if: inputs.checks
+        run: npm run build

@@ -32,7 +32,7 @@ import { orthoReferenceCamera, orthoReferenceRecord, type OrthoReference } from 
 import { bearingDeg, type PanoCandidate } from '../src/node/3d-engine/staged-location/streetview-evidence';
 import { buildGroundModel, loadScanMesh, scanToGeodetic } from '../src/node/spatial/StreetViewSurveyPlanner';
 import {
-    collectPanoIds, createPhotoMatchEvaluateHandler, emptyTileAlong, eyeUnderStreet, footprintLookup, heldOutViews, indoorFootprint, nearTriangleFlags, onSurfaceFlags, surfaceCoverShare, surfacesWithin, visibleStagedLayers, HELD_OUT_INDOOR_INSET_M, HELD_OUT_MIN_OUTLINE, HELD_OUT_MIN_VISIBLE, OPEN_PLACE_RADII_M,
+    collectPanoIds, createPhotoMatchEvaluateHandler, emptyTileAlong, eyeUnderStreet, footprintLookup, heldOutViews, indoorFootprint, nearTriangleFlags, onSurfaceFlags, streetProbePoints, surfaceCoverShare, surfacesWithin, visibleStagedLayers, HELD_OUT_INDOOR_INSET_M, HELD_OUT_MIN_OUTLINE, HELD_OUT_MIN_VISIBLE, OPEN_PLACE_RADII_M, STREET_PROBE_SPACING_M,
     PHOTO_MATCH_EVALUATE_TOOL, PHOTO_MATCH_ISOLATE_SURFACE_M, type HeldOutRegistration, type PhotoMatchDeps
 } from '../src/node/gemini/tools/location-evidence/photo-match-evaluate';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
@@ -1171,6 +1171,42 @@ describe('photo_match_evaluate tool', () => {
         expect(held.rejected[0]).toMatch(/^AT_THE_BASE: 16 m, shows 0\.\d\d frame widths of the scan's outline against the sky \(at least 0\.5 needed\): too little for the edge registration to lock onto$/);
         expect(HELD_OUT_MIN_OUTLINE).toBe(0.5);
     });
+
+    it('looks for panos on every street in reach: probes on the open ground leave none of it unreached, and none stand in a building', async () => {
+        // 200 m square: a 70 m block in the middle, streets 20 m wide round it, more blocks beyond (open: the streets only)
+        const nx = 200, nz = 200, open = new Uint8Array(nx * nz);
+        const isStreet = (x: number, z: number) => { const b = (v: number) => Math.abs(v) <= 45 && Math.abs(v) > 35 || Math.abs(v) > 90; return b(x) || b(z) || (Math.abs(x) <= 45 && Math.abs(z) <= 45 && (Math.abs(x) > 35 || Math.abs(z) > 35)); };
+        for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) if (isStreet(i - 100 + 0.5, k - 100 + 0.5)) open[k * nx + i] = 1;
+        const ground = { x0: -100, z0: -100, nx, nz, cellMeters: 1, open };
+        const reach = 90;
+        const probes = streetProbePoints(ground, { x: 0, z: 0 }, reach);
+        expect(STREET_PROBE_SPACING_M).toBeLessThanOrEqual(8 * Math.SQRT2);
+        expect(probes.length).toBeGreaterThan(20);
+        for (const p of probes) {
+            expect(Math.hypot(p.x, p.z)).toBeLessThanOrEqual(reach);
+            // on open ground, or within 3 m of it: never deep inside a block
+            expect([[0, 0], [3, 0], [-3, 0], [0, 3], [0, -3]].some(([dx, dz]) => isStreet(p.x + dx, p.z + dz))).toBe(true);
+        }
+        // every open cell within reach has a probe within 8 m (the metadata lookup's radius): no pano on a street is missed
+        let worst = 0;
+        for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
+            const x = i - 100 + 0.5, z = k - 100 + 0.5;
+            if (!open[k * nx + i] || Math.hypot(x, z) > reach - 8) continue;
+            let d = Infinity; for (const p of probes) d = Math.min(d, Math.hypot(p.x - x, p.z - z));
+            worst = Math.max(worst, d);
+        }
+        expect(worst).toBeLessThanOrEqual(8);
+
+        // the evaluation hands its street probes to the search and reports them
+        const asked: number[] = [];
+        const deps = (): PhotoMatchDeps => { const d = fakeDeps(root); return { ...d, discover: async (o, c, dir, s, points) => { asked.push(points?.length ?? -1); return d.discover(o, c, dir, s, points); } }; };
+        const out = await createPhotoMatchEvaluateHandler(deps)({ views: 1, runs: 1, clay: false }, ctxFor(root, staged.scene));
+        const r = out.resultPayload as any;
+        expect(out.status, JSON.stringify(r).slice(0, 600)).toBe('completed');
+        expect(asked).toHaveLength(1);
+        expect(asked[0]).toBeGreaterThan(0);
+        expect(r.heldOut.search).toMatchObject({ streetProbes: asked[0], spacingM: STREET_PROBE_SPACING_M });
+    }, 120_000);
 
     it('looks at a place with no structure at it: the tile round the place, widened until enough views qualify', async () => {
         // a walled park: a low basin at its centre, a 2.9 m wall 45 m out, streets, then buildings 70 m and more from the place

@@ -1083,6 +1083,26 @@ struct SpaceColonizationConfig {
     float scaffoldAngleFromLeaderRad{0.80795f}; // Mean angle of a scaffold limb from the leader (atan2(0.68, 0.65): the outward : up direction it always had)
     float scaffoldAngleSpreadRad{0.0f};  // Spread of that angle between limbs (uniform, +/-); 0 draws nothing from the random stream
     float trunkLeanShare{0.28f};         // Share of the way to trunkLeanToward (or crownCenter) the trunk has leaned by the crown's height
+    // Excurrence (0..1, continuous; 0 grows exactly as without it): how far the trunk carries on as a leader through the
+    // measured crown and how the laterals leave it. The leader continues this share of the way from the crown break to
+    // leaderTopY (or leaderHold's share, the larger) before colonisation (the scaffold limbs still leave at the break); a
+    // lateral a node sprouts beside the shoot it already carries leaves at scaffoldAngleFromLeaderRad from that shoot
+    // towards its attractors (not along it), and every shoot off the leader is steered this share of the way towards that
+    // angle from the vertical, its tips drooping more (excurrentDroop): a straight stem with short laterals at the
+    // species' angle, a cone's architecture.
+    float excurrence{0.0f};
+    float leaderTopY{std::numeric_limits<float>::quiet_NaN()};  // the crown's top the leader heads for (NaN: the attractors' top)
+    float excurrentSetPointShare{0.6f};  // share of the excurrence a shoot off the leader is steered towards its set-point angle by
+    float excurrentDroop{0.25f};         // tip droop the excurrence adds to cantileverDroop
+    // Leader hold (0..1, continuous; 0 grows exactly as without it): how firmly the trunk's own shoot keeps its course to
+    // the crown's top through the crown, the leader's dominance over its laterals. Without it the trunk ends at the crown
+    // break and the scaffold limb that gathers most twigs becomes the drawn trunk, climbing one side of the crown. With
+    // it the leader is grown on from the break this share of the way to the crown's top (or excurrence's share, the
+    // larger) before colonisation, along the stem's line from the root to the top (leaderTopY above trunkLeanToward, a
+    // measured apex, else above the crown centre); as colonisation carries its tip on, the tip heads for the top by this
+    // share, and the outward arching push and the droop, which turn laterals away from the stem, act on it by the rest.
+    // Below 1 the laterals can still outgrow the leader above its held share: a fork.
+    float leaderHold{0.0f};
     Vec3 trunkLeanToward{std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f}; // When finite, the trunk leans towards this point (a measured apex) instead of crownCenter
 
     // Triangle budget (continuous). 0 = unbounded (the meshing above). When > 0 the grown skeleton is meshed so wood
@@ -1195,6 +1215,7 @@ struct ColonizationReport {
     size_t attractors{0};           // attractors at the start
     size_t attractorsReached{0};    // attractors a node came within the kill radius of
     int trunkNodes{0};              // nodes from the root to the crown break (the scaffold limbs start there)
+    int leaderNodes{0};             // nodes the leader grew on through the crown above the break (SpaceColonizationConfig::excurrence)
     float trunkTopY{0.0f};
     int trunkSeekSteps{0};          // trunk steps grown past clearTrunkHeight to reach the crown (trunkSeeksCrown)
 };
@@ -1332,6 +1353,40 @@ public:
         }
         rep.trunkNodes = static_cast<int>(nodes.size());
         rep.trunkTopY = nodes.back().position.y;
+        const int crownBreakId = nodes.back().id;
+
+        // The crown's top the leader heads for: leaderTopY (else the attractors' top) above the point the trunk leans
+        // towards (a measured apex), else above the crown centre
+        const float leaderHold = std::clamp(cfg.leaderHold, 0.0f, 1.0f);
+        Vec3 leaderTop = std::isfinite(cfg.trunkLeanToward.x) ? cfg.trunkLeanToward : cfg.crownCenter;
+        leaderTop.y = cfg.leaderTopY;
+        if (!std::isfinite(leaderTop.y)) {
+            leaderTop.y = -1e30f;
+            for (const auto& a : attractors) leaderTop.y = std::max(leaderTop.y, a.y);
+        }
+
+        // A tree whose leader holds (or an excurrent one) carries its leader on from the break along the stem's line to the
+        // crown's top (the root to leaderTop), for its share of the way there (at least one step, so its tip is a shoot of
+        // its own that colonisation carries on); colonisation then sprouts the laterals along it
+        const float leaderShare = std::max(std::clamp(cfg.excurrence, 0.0f, 1.0f), leaderHold);
+        if (leaderShare > 0.0f && !cfg.isShrub && !cfg.customAttractors.empty() && cfg.branchStepLength > 0.0f && leaderTop.y > cfg.rootAnchor.y) {
+            const float leaderY = rep.trunkTopY + leaderShare * (leaderTop.y - rep.trunkTopY) - cfg.branchStepLength;
+            while (rep.leaderNodes == 0 || nodes.back().position.y < leaderY) {
+                const float nextY = std::min(nodes.back().position.y + cfg.branchStepLength, leaderTop.y);
+                const Vec3 onLine = cfg.rootAnchor + (leaderTop - cfg.rootAnchor) * ((nextY - cfg.rootAnchor.y) / (leaderTop.y - cfg.rootAnchor.y));
+                const Vec3 stepDir = (onLine - nodes.back().position).normalized();
+                if (stepDir.y <= 0.0f) break;
+                ColonizationNode nextNode;
+                nextNode.id = static_cast<int>(nodes.size());
+                nextNode.parentId = nodes.back().id;
+                nextNode.position = nodes.back().position + stepDir * cfg.branchStepLength;
+                nextNode.growthDir = stepDir;
+                nodes.back().children.push_back(nextNode.id);
+                nodes.push_back(nextNode);
+                ++rep.leaderNodes;
+            }
+        }
+        const int leaderEnd = static_cast<int>(nodes.size());   // ids below this are the trunk and its leader
 
         if (cfg.isShrub) {
             int baseNodeId = nodes.back().id;
@@ -1350,7 +1405,7 @@ public:
             }
         } else if (cfg.scaffoldBranchCount >= 2) {
             // For trees: Sprout primary scaffold limbs that flare outward into distinct crown sectors
-            int crownBaseNodeId = nodes.back().id;
+            int crownBaseNodeId = crownBreakId;
             for (int k = 0; k < cfg.scaffoldBranchCount; ++k) {
                 float angle = (static_cast<float>(k) / static_cast<float>(cfg.scaffoldBranchCount)) * math::TWO_PI + dist0To1(rng) * 0.35f;
                 // Scaffold limb diverges upward and outward at ~50 degrees elevation
@@ -1438,6 +1493,9 @@ public:
         };
         compareNodes(0);
         size_t killChecked = 0;  // nodes from here on have not been kill-checked yet (the first check takes the trunk too)
+        // which nodes are the trunk and its leader (an excurrent tree's leader tip carries it on as it grows)
+        std::vector<uint8_t> onLeader(nodes.size(), 0);
+        for (int i = 0; i < leaderEnd && i < static_cast<int>(onLeader.size()); ++i) onLeader[static_cast<size_t>(i)] = 1;
 
         rep.stop = "iteration_cap";
         int sinceReached = 0;
@@ -1460,6 +1518,7 @@ public:
 
             // Sprout new nodes
             std::vector<ColonizationNode> newNodes;
+            std::vector<uint8_t> newOnLeader;
             for (const auto& pair : nodeAttractionDir) {
                 int nodeId = pair.first;
                 Vec3 avgDir = pair.second / static_cast<float>(nodeAttractionCount[nodeId]);
@@ -1477,7 +1536,9 @@ public:
                 Vec3 axisPt = cfg.rootAnchor + (cfg.crownCenter - cfg.rootAnchor) * tAxis;
                 Vec3 radialVec(nodes[nodeId].position.x - axisPt.x, 0.0f, nodes[nodeId].position.z - axisPt.z);
                 float rDist = std::sqrt(radialVec.x * radialVec.x + radialVec.z * radialVec.z);
-                Vec3 radialDir = (rDist > 0.05f) ? (radialVec / rDist) : Vec3(1, 0, 0);
+                // within 5 cm of the axis "outward" is the way the node's attractors lie (it was +x, the same side for
+                // every tree)
+                Vec3 radialDir = (rDist > 0.05f) ? (radialVec / rDist) : Vec3(avgDir.x, 0.0f, avgDir.z).normalized();
 
                 // Blend attraction direction with previous growth momentum
                 Vec3 prevDir = nodes[nodeId].growthDir;
@@ -1487,13 +1548,47 @@ public:
                 float maxCrownR = std::max(0.5f, std::max(cfg.crownExtents.x, cfg.crownExtents.z));
                 float normR = std::clamp(rDist / maxCrownR, 0.0f, 1.0f);
 
-                Vec3 outwardPush = radialDir * cfg.outwardArchFactor;
+                // the leader's own tip: it heads for the crown's top by the leader hold, and the push and droop that turn
+                // laterals away from the stem act on it by the rest
+                const bool leaderTip = onLeader[static_cast<size_t>(nodeId)] && nodes[nodeId].children.empty();
+                const float lateralShare = leaderTip ? 1.0f - leaderHold : 1.0f;
+
+                Vec3 outwardPush = radialDir * (cfg.outwardArchFactor * lateralShare);
                 Vec3 phototropism(0, 0.10f, 0);
 
                 // Cantilever arching droop (gravity causes outer boughs to gracefully arch downward at perimeter)
-                Vec3 cantileverDroop(0, -cfg.cantileverDroop * normR, 0);
+                const float excurrence = std::clamp(cfg.excurrence, 0.0f, 1.0f);
+                Vec3 cantileverDroop(0, -(cfg.cantileverDroop + cfg.excurrentDroop * excurrence) * normR * lateralShare, 0);
 
                 Vec3 finalDir = (combinedDir + outwardPush + phototropism + cantileverDroop).normalized();
+                if (leaderTip && leaderHold > 0.0f) {
+                    const Vec3 toTop = leaderTop - nodes[nodeId].position;
+                    if (toTop.y > 0.0f) finalDir = (finalDir * (1.0f - leaderHold) + toTop.normalized() * leaderHold).normalized();
+                }
+
+                // a lateral leaving the leader leaves at the species' angle by the leader hold (its attractors lie level with
+                // the leader node that sprouts it, so it would leave level); one beside any other shoot by the excurrence
+                const float departure = onLeader[static_cast<size_t>(nodeId)] ? std::max(excurrence, leaderHold) : excurrence;
+                if (excurrence > 0.0f || departure > 0.0f) {
+                    // the species' angle from the vertical, towards this node's attractors' side
+                    const float theta = cfg.scaffoldAngleFromLeaderRad;
+                    Vec3 side(avgDir.x, 0.0f, avgDir.z);
+                    if (side.lengthSquared() < 1e-8f) side = radialDir;
+                    side = side.normalized();
+                    const Vec3 setPoint = (Vec3(0, std::cos(theta), 0) + side * std::sin(theta)).normalized();
+                    if (!nodes[nodeId].children.empty()) {
+                        // a lateral beside the shoot the node already carries: it leaves at the angle, not along the shoot
+                        const Vec3 axis = nodes[nodeId].growthDir;
+                        Vec3 away = avgDir - axis * avgDir.dot(axis);
+                        away = away.lengthSquared() > 1e-8f ? away.normalized() : side;
+                        const Vec3 angled = (axis * std::cos(theta) + away * std::sin(theta)).normalized();
+                        finalDir = (finalDir * (1.0f - departure) + angled * departure).normalized();
+                    } else if (excurrence > 0.0f && !onLeader[static_cast<size_t>(nodeId)]) {
+                        // a shoot off the leader holds near the angle (plagiotropic), its tip drooping
+                        const float w = excurrence * cfg.excurrentSetPointShare;
+                        finalDir = (finalDir * (1.0f - w) + (setPoint + cantileverDroop) * w).normalized();
+                    }
+                }
 
                 ColonizationNode child;
                 child.id = static_cast<int>(nodes.size() + newNodes.size());
@@ -1501,6 +1596,8 @@ public:
                 child.position = nodes[nodeId].position + finalDir * cfg.branchStepLength;
                 child.growthDir = finalDir;
                 newNodes.push_back(child);
+                // the leader's own tip carries the leader on
+                newOnLeader.push_back(onLeader[static_cast<size_t>(nodeId)] && nodes[nodeId].children.empty() ? 1 : 0);
             }
 
             const size_t firstNew = nodes.size();
@@ -1508,6 +1605,7 @@ public:
                 nodes[n.parentId].children.push_back(n.id);
                 nodes.push_back(n);
             }
+            onLeader.insert(onLeader.end(), newOnLeader.begin(), newOnLeader.end());
             rep.iterations = iter + 1;
 
             if (newNodes.empty()) break;

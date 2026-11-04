@@ -138,6 +138,11 @@ export interface StageCacheOptions {
      * restoreCacheEntry) into its place; true when it is there now. Asked on a miss, before the stage runs.
      */
     restore?: (stage: string, key: string) => Promise<boolean>;
+    /**
+     * Reads a single file this workspace lacks back from elsewhere (cache-mirror.ts restoreCacheFile) to `rel` under the
+     * cache's directory; true when it is there now. For records kept as one file (pipeline-k/model-readings.ts).
+     */
+    restoreFile?: (rel: string) => Promise<boolean>;
 }
 
 export class StageCache {
@@ -146,6 +151,7 @@ export class StageCache {
     readonly modelsDir: string;
     private readonly now: () => number;
     private readonly restore?: (stage: string, key: string) => Promise<boolean>;
+    private readonly restoreFileFrom?: (rel: string) => Promise<boolean>;
     private readonly inFlight = new Map<string, Promise<CachedStage<unknown>>>();
     /** The run publishing through this cache (the orchestrator sets it): published files are recorded under its recipe. */
     activeRunId?: string;
@@ -156,6 +162,18 @@ export class StageCache {
         this.modelsDir = options.modelsDir ? path.resolve(options.modelsDir) : resolveWithinRoot(this.workspaceRoot, path.join('public', 'models'));
         this.now = options.now ?? Date.now;
         if (options.restore) this.restore = options.restore;
+        if (options.restoreFile) this.restoreFileFrom = options.restoreFile;
+    }
+
+    /**
+     * A file under the cache's directory (`rel`, '/'-separated), read back from the bucket when this workspace lacks it;
+     * true when it is here now. A restore that fails is a miss, never the build's failure.
+     */
+    async restoreFile(rel: string): Promise<boolean> {
+        if (fs.existsSync(path.join(this.dir, ...rel.split('/')))) return true;
+        if (!this.restoreFileFrom) return false;
+        try { return await this.restoreFileFrom(rel); }
+        catch (err) { console.warn(`[stage-cache] ${rel} could not be read back from the bucket: ${(err as Error).message}`); return false; }
     }
 
     entryDir(stage: string, key: string): string {

@@ -22,6 +22,8 @@
  *   process concurrent requests for one key share one build.
  * - Header hashes are memoised by (inode, size, mtime, ctime), so a warm key costs one stat per header.
  * - A failed compile throws (NativeBuildError) with the compiler's output; nothing older is used instead.
+ * - compileNativeCachedSync serves a caller that must stay synchronous: the same entry and lock, the thread blocked
+ *   while it waits or compiles.
  * - Every lookup stamps its entry's last use (`<key>/last-used`). The cache is bounded (pruneNativeBuildCache): entries
  *   unused for longer than the age bound go, then the least recently used until the cache is within the size bound.
  *   An entry used within the idle grace, being built (its lock is present) or held in this process is never removed;
@@ -30,7 +32,7 @@
  *   and SCRATCHBOX_NATIVE_BUILD_CACHE_MAX_AGE_DAYS, default 30).
  */
 
-import { execFile, execFileSync } from 'child_process';
+import { execFile, execFileSync, spawnSync } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -257,9 +259,73 @@ function mtimeMs(file: string): number {
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+/** Blocks the thread (for a caller that must stay synchronous). */
+const sleepSync = (ms: number) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 
 /** A lock that cannot be read as a holder (corrupt, or from an older format) is taken over once it is this old. */
 const UNREADABLE_LOCK_GRACE_MS = 10_000;
+
+function readLock(file: string): string | undefined {
+    try {
+        return fs.readFileSync(file, 'utf8');
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * One try at the lock (acquireBuildLock): its release when taken; else how long to wait before the next try (0: at
+ * once, the lock was just released or taken over). Throws once the deadline has passed.
+ */
+function tryBuildLock(lock: string, timeoutMs: number, deadline: number, token: string): (() => void) | number {
+    const tmp = `${lock}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+    fs.writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: Date.now(), token }));
+    try {
+        fs.linkSync(tmp, lock);
+        return () => {
+            const text = readLock(lock);
+            try {
+                if (text !== undefined && JSON.parse(text).token === token) fs.rmSync(lock, { force: true });
+            } catch {
+                // not ours (unreadable): left alone
+            }
+        };
+    } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    } finally {
+        fs.rmSync(tmp, { force: true });
+    }
+    const text = readLock(lock);
+    if (text === undefined) return 0; // released meanwhile
+    let holder: { pid?: number; at?: number } | undefined;
+    try {
+        holder = JSON.parse(text);
+    } catch {
+        holder = undefined;
+    }
+    const age = Date.now() - (holder?.at ?? mtimeMs(lock));
+    const stale = holder ? !processAlive(Number(holder.pid)) || age > timeoutMs : age > UNREADABLE_LOCK_GRACE_MS;
+    if (stale) {
+        const aside = `${lock}.stale-${token}`;
+        try {
+            fs.renameSync(lock, aside);
+        } catch {
+            return 0; // someone else moved it
+        }
+        if (readLock(aside) !== text) {
+            // not the lock judged stale: another process's fresh lock, put back unless a third one holds it now
+            try {
+                fs.linkSync(aside, lock);
+            } catch {
+                // the path is taken again: that holder keeps it
+            }
+        }
+        fs.rmSync(aside, { force: true });
+        return 0;
+    }
+    if (Date.now() > deadline) throw new NativeBuildError(`timed out after ${timeoutMs} ms waiting for process ${holder?.pid ?? '(unknown)'} to build ${path.basename(lock, '.lock')}`, '');
+    return 250;
+}
 
 /**
  * Takes an exclusive lock file, waiting for (or taking over from) another process; returns its release.
@@ -272,61 +338,21 @@ const UNREADABLE_LOCK_GRACE_MS = 10_000;
 export async function acquireBuildLock(lock: string, timeoutMs: number): Promise<() => void> {
     const deadline = Date.now() + timeoutMs;
     const token = `${process.pid}-${crypto.randomBytes(8).toString('hex')}`;
-    const readLock = (file: string): string | undefined => {
-        try {
-            return fs.readFileSync(file, 'utf8');
-        } catch {
-            return undefined;
-        }
-    };
     while (true) {
-        const tmp = `${lock}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
-        fs.writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: Date.now(), token }));
-        try {
-            fs.linkSync(tmp, lock);
-            return () => {
-                const text = readLock(lock);
-                try {
-                    if (text !== undefined && JSON.parse(text).token === token) fs.rmSync(lock, { force: true });
-                } catch {
-                    // not ours (unreadable): left alone
-                }
-            };
-        } catch (err) {
-            if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-        } finally {
-            fs.rmSync(tmp, { force: true });
-        }
-        const text = readLock(lock);
-        if (text === undefined) continue; // released meanwhile
-        let holder: { pid?: number; at?: number } | undefined;
-        try {
-            holder = JSON.parse(text);
-        } catch {
-            holder = undefined;
-        }
-        const age = Date.now() - (holder?.at ?? mtimeMs(lock));
-        const stale = holder ? !processAlive(Number(holder.pid)) || age > timeoutMs : age > UNREADABLE_LOCK_GRACE_MS;
-        if (stale) {
-            const aside = `${lock}.stale-${token}`;
-            try {
-                fs.renameSync(lock, aside);
-            } catch {
-                continue; // someone else moved it
-            }
-            if (readLock(aside) !== text) {
-                // not the lock judged stale: another process's fresh lock, put back unless a third one holds it now
-                try {
-                    fs.linkSync(aside, lock);
-                } catch {
-                    // the path is taken again: that holder keeps it
-                }
-            }
-            fs.rmSync(aside, { force: true });
-            continue;
-        }
-        if (Date.now() > deadline) throw new NativeBuildError(`timed out after ${timeoutMs} ms waiting for process ${holder?.pid ?? '(unknown)'} to build ${path.basename(lock, '.lock')}`, '');
-        await sleep(250);
+        const r = tryBuildLock(lock, timeoutMs, deadline, token);
+        if (typeof r === 'function') return r;
+        if (r) await sleep(r);
+    }
+}
+
+/** acquireBuildLock, blocking the thread while it waits. */
+export function acquireBuildLockSync(lock: string, timeoutMs: number): () => void {
+    const deadline = Date.now() + timeoutMs;
+    const token = `${process.pid}-${crypto.randomBytes(8).toString('hex')}`;
+    while (true) {
+        const r = tryBuildLock(lock, timeoutMs, deadline, token);
+        if (typeof r === 'function') return r;
+        if (r) sleepSync(r);
     }
 }
 
@@ -352,15 +378,50 @@ function runCompiler(argv: string[], args: string[], timeoutMs: number): Promise
     });
 }
 
+function runCompilerSync(argv: string[], args: string[], timeoutMs: number): string {
+    const r = spawnSync(argv[0], [...argv.slice(1), ...args], { timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, windowsHide: true, encoding: 'utf8' });
+    const output = `${r.stderr || ''}${r.stdout ? `\n${r.stdout}` : ''}`.trim();
+    if (r.error || r.status !== 0) throw new NativeBuildError(output || r.error?.message || `exit ${r.status}`, output || r.error?.message || `exit ${r.status}`);
+    return output;
+}
+
+/** A build's temp binary and source (the source written when the spec carries its text) and the compiler's arguments. */
+function prepareBuild(spec: NativeCompileSpec, binaryPath: string): { tmpBin: string; tmpSrc?: string; args: string[] } {
+    removeOrphanedTemps(binaryPath);
+    const tag = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+    const tmpBin = `${binaryPath}.tmp-${tag}`;
+    const tmpSrc = spec.sourceCode !== undefined ? `${binaryPath}.tmp-${tag}.cpp` : undefined;
+    if (tmpSrc) fs.writeFileSync(tmpSrc, spec.sourceCode!, 'utf8');
+    const args = [
+        ...spec.flags,
+        // quoted includes of sourceCode still resolve against the directory it belongs to
+        ...(tmpSrc && spec.sourceDir ? ['-iquote', spec.sourceDir] : []),
+        ...spec.includeDirs.map(d => `-I${d}`),
+        ...(spec.pchPath ? ['-include-pch', spec.pchPath] : []),
+        '-o', tmpBin, tmpSrc ?? spec.sourcePath!,
+        ...(spec.libs ?? [])
+    ];
+    return { tmpBin, ...(tmpSrc ? { tmpSrc } : {}), args };
+}
+
+function buildFailure(spec: NativeCompileSpec, err: unknown): unknown {
+    return err instanceof NativeBuildError ? new NativeBuildError(`could not build ${spec.name}: ${err.compilerOutput.slice(-4000)}`, err.compilerOutput) : err;
+}
+
 const inFlight = new Map<string, Promise<NativeCompileResult>>();
+
+/** Where a spec's binary lives in the cache. */
+function cacheEntry(spec: NativeCompileSpec): { key: string; entryDir: string; binaryPath: string } {
+    const { key } = nativeBuildKey(spec);
+    const entryDir = path.join(spec.cacheRoot ?? nativeBuildCacheRoot(), key);
+    // The entry's binary is named by the key alone: builds that differ only in the name they ask for share it.
+    return { key, entryDir, binaryPath: nativeBuildEntryBinary(path.dirname(entryDir), key) };
+}
 
 /** Returns the cached binary for spec, compiling it first when no process has yet (see the file comment). */
 export async function compileNativeCached(spec: NativeCompileSpec): Promise<NativeCompileResult> {
     const started = Date.now();
-    const { key } = nativeBuildKey(spec);
-    const entryDir = path.join(spec.cacheRoot ?? nativeBuildCacheRoot(), key);
-    // The entry's binary is named by the key alone: builds that differ only in the name they ask for share it.
-    const binaryPath = nativeBuildEntryBinary(path.dirname(entryDir), key);
+    const { key, entryDir, binaryPath } = cacheEntry(spec);
     // stamped before it is looked at again: a prune that renamed the entry aside meanwhile sees the stamp and puts it back,
     // or the binary is gone and is built anew
     if (statFile(binaryPath) && markUsed(entryDir) && statFile(binaryPath)) {
@@ -378,20 +439,7 @@ export async function compileNativeCached(spec: NativeCompileSpec): Promise<Nati
                 markUsed(entryDir);
                 return { binaryPath, key, cacheHit: true, compileMs: Date.now() - started, compilerOutput: '' };
             }
-            removeOrphanedTemps(binaryPath);
-            const tag = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
-            const tmpBin = `${binaryPath}.tmp-${tag}`;
-            const tmpSrc = spec.sourceCode !== undefined ? `${binaryPath}.tmp-${tag}.cpp` : undefined;
-            if (tmpSrc) fs.writeFileSync(tmpSrc, spec.sourceCode!, 'utf8');
-            const args = [
-                ...spec.flags,
-                // quoted includes of sourceCode still resolve against the directory it belongs to
-                ...(tmpSrc && spec.sourceDir ? ['-iquote', spec.sourceDir] : []),
-                ...spec.includeDirs.map(d => `-I${d}`),
-                ...(spec.pchPath ? ['-include-pch', spec.pchPath] : []),
-                '-o', tmpBin, tmpSrc ?? spec.sourcePath!,
-                ...(spec.libs ?? [])
-            ];
+            const { tmpBin, tmpSrc, args } = prepareBuild(spec, binaryPath);
             const compileStart = Date.now();
             try {
                 const output = await runCompiler(compilerArgv(spec.compiler), args, timeoutMs);
@@ -400,10 +448,7 @@ export async function compileNativeCached(spec: NativeCompileSpec): Promise<Nati
                 return { binaryPath, key, cacheHit: false, compileMs: Date.now() - compileStart, compilerOutput: output };
             } catch (err) {
                 fs.rmSync(tmpBin, { force: true });
-                if (err instanceof NativeBuildError) {
-                    throw new NativeBuildError(`could not build ${spec.name}: ${err.compilerOutput.slice(-4000)}`, err.compilerOutput);
-                }
-                throw err;
+                throw buildFailure(spec, err);
             } finally {
                 if (tmpSrc) fs.rmSync(tmpSrc, { force: true });
             }
@@ -419,6 +464,47 @@ export async function compileNativeCached(spec: NativeCompileSpec): Promise<Nati
         inFlight.delete(binaryPath);
     }
     if (!result.cacheHit) maybePruneNativeBuildCache(path.dirname(entryDir));
+    return result;
+}
+
+/**
+ * compileNativeCached for a caller that must stay synchronous: the same cache entry and lock, the thread blocked
+ * while it waits and compiles. When this process is already building the entry asynchronously (it holds the lock and
+ * cannot release it while the thread is blocked), it compiles its own copy and keeps whichever lands first.
+ */
+export function compileNativeCachedSync(spec: NativeCompileSpec): NativeCompileResult {
+    const started = Date.now();
+    const { key, entryDir, binaryPath } = cacheEntry(spec);
+    if (statFile(binaryPath) && markUsed(entryDir) && statFile(binaryPath)) {
+        return { binaryPath, key, cacheHit: true, compileMs: Date.now() - started, compilerOutput: '' };
+    }
+    const timeoutMs = spec.timeoutMs ?? 15 * 60_000;
+    fs.mkdirSync(entryDir, { recursive: true });
+    const release = inFlight.has(binaryPath) ? () => undefined : acquireBuildLockSync(`${binaryPath}.lock`, timeoutMs);
+    let result: NativeCompileResult;
+    try {
+        if (statFile(binaryPath)) {
+            markUsed(entryDir);
+            return { binaryPath, key, cacheHit: true, compileMs: Date.now() - started, compilerOutput: '' };
+        }
+        const { tmpBin, tmpSrc, args } = prepareBuild(spec, binaryPath);
+        const compileStart = Date.now();
+        try {
+            const output = runCompilerSync(compilerArgv(spec.compiler), args, timeoutMs);
+            // an entry is never rewritten: a build that landed meanwhile is kept
+            if (statFile(binaryPath)) fs.rmSync(tmpBin, { force: true }); else fs.renameSync(tmpBin, binaryPath);
+            markUsed(entryDir);
+            result = { binaryPath, key, cacheHit: false, compileMs: Date.now() - compileStart, compilerOutput: output };
+        } catch (err) {
+            fs.rmSync(tmpBin, { force: true });
+            throw buildFailure(spec, err);
+        } finally {
+            if (tmpSrc) fs.rmSync(tmpSrc, { force: true });
+        }
+    } finally {
+        release();
+    }
+    maybePruneNativeBuildCache(path.dirname(entryDir));
     return result;
 }
 

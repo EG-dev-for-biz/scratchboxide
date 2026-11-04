@@ -104,6 +104,8 @@ export interface AnalyticalGroomExecutionResult {
   spzBuffer?: Uint8Array;
   plyPath?: string;
   glbPath?: string;
+  /** The body the coat grows from (the surface, just inside the roots, in the undercoat colour): generated. */
+  bodyGlbPath?: string;
   executionTimeMs: number;
   compilationTimeMs: number;
   error?: string;

@@ -145,7 +145,7 @@ async function runAtmosphericScatteringPipelineTests() {
     assert.strictEqual(shaderMat.uniforms.uMieDirectionalG.value, 0.85);
     // cloudCoverage is sky cover; the shader gets the cumulus layer's plan coverage that shows as that cover.
     assert.strictEqual(shaderMat.uniforms.uCloudCoverage.value, layerCoverageForSkyCover(0.40));
-    assert.ok(layerCoverageForSkyCover(0.40) > 0 && layerCoverageForSkyCover(0.40) < 0.40, 'plan coverage is below sky cover');
+    assert.ok(layerCoverageForSkyCover(0.40) > 0 && layerCoverageForSkyCover(0.40) < 1, 'a partial plan coverage');
     assert.strictEqual(shaderMat.uniforms.uCloudDensity.value, 0.50);
 
     // Dynamic frame tick update

@@ -102,16 +102,21 @@ describe('cloud measurement and coverage mapping', () => {
         expect(c.cloudLuminance![1]).toBeGreaterThan(1);
     });
 
-    it('sky cover maps to a smaller, monotone plan coverage of the cumulus layer', () => {
+    it('sky cover maps to a monotone plan coverage of the cumulus layer, from none to overcast', () => {
         let prev = -1;
         for (let f = 0; f <= 1.0001; f += 0.05) {
             const l = layerCoverageForSkyCover(f);
             expect(l).toBeGreaterThanOrEqual(prev);
-            expect(l).toBeLessThanOrEqual(Math.max(f, 1e-9) + 1e-9);
+            expect(l).toBeGreaterThanOrEqual(0);
+            expect(l).toBeLessThanOrEqual(1);
             prev = l;
         }
         expect(layerCoverageForSkyCover(0)).toBe(0);
         expect(layerCoverageForSkyCover(1)).toBe(1);
-        expect(layerCoverageForSkyCover(0.512)).toBeCloseTo(0.1, 6);
+        // the sparsest skies: cloud sides fill sky, so a little of the layer shows as more of the sky
+        expect(layerCoverageForSkyCover(0.032)).toBeCloseTo(0.01, 6);
+        // the location sky's partly cloudy 0.4: see-through edges show the sky, so about half the layer is cloud
+        expect(layerCoverageForSkyCover(0.392)).toBeCloseTo(0.497, 6);
+        expect(layerCoverageForSkyCover(0.512)).toBeCloseTo(0.673, 6);
     });
 });

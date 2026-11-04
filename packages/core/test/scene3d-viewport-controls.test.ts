@@ -171,11 +171,11 @@ describe('Scene3D viewport controls', () => {
         fire(h.container, 'wheel', { deltaY: -500 });
         expect(h.ctx.orbit.current.distance / 3).toBeCloseTo(Math.exp(-0.6), 6);
 
-        // Zooming back out restores the distance; zooming in is floored at 1 m.
+        // Zooming back out restores the distance; zooming in is floored at 5 cm, close enough for a small object.
         fire(h.container, 'wheel', { deltaY: 500 });
         expect(h.ctx.orbit.current.distance).toBeCloseTo(3, 6);
         fire(h.container, 'wheel', { deltaY: -100000 });
-        expect(h.ctx.orbit.current.distance).toBe(1);
+        expect(h.ctx.orbit.current.distance).toBe(0.05);
     });
 
     it('never pulls a camera that is already beyond the zoom cap inward on zoom-out', () => {
@@ -505,21 +505,32 @@ describe('stepCamera near plane', () => {
         const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 20000);
         const target = new THREE.Vector3(0, 180, 0);
 
-        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 700 }, target, {});
+        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 700 }, target);
         expect(camera.near).toBeCloseTo(0.7, 9);
         expect(camera.position.distanceTo(target)).toBeCloseTo(700, 6);
         const projectionAt700 = camera.projectionMatrix.clone();
 
-        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 710 }, target, {});
+        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 710 }, target);
         expect(camera.near).toBeCloseTo(0.7, 9); // < 5% change: projection not rebuilt
         expect(camera.projectionMatrix.equals(projectionAt700)).toBe(true);
 
-        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 50 }, target, {});
+        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 50 }, target);
         expect(camera.near).toBeCloseTo(0.1, 9);
-        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 12000 }, target, {});
+        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 12000 }, target);
         expect(camera.near).toBe(5);
 
-        stepCamera(camera, 'fps', { theta: 0, phi: 1, distance: 12000 }, target, {});
+        stepCamera(camera, 'fps', { theta: 0, phi: 1, distance: 12000 }, target);
         expect(camera.near).toBeCloseTo(0.1, 9);
+    });
+
+    it('follows the camera in inside 2 m, so a 12 cm object framed from 40 cm is not clipped', () => {
+        const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 20000);
+        const target = new THREE.Vector3(0, 0.17, 0);
+        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 0.4 }, target, {});
+        expect(camera.near).toBeCloseTo(0.02, 9);
+        // the near side of a 0.105 m coat lies in front of the camera, past the near plane
+        expect(0.4 - 0.105).toBeGreaterThan(camera.near);
+        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 2 }, target, {});
+        expect(camera.near).toBeCloseTo(0.1, 9); // meets the default at 2 m
     });
 });

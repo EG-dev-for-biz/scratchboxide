@@ -36,6 +36,48 @@ export function chatArtifactVersionKeys(
     return keys;
 }
 
+interface ChatContent {
+    messages: ReadonlyArray<{ artifacts?: VersionedArtifact[] }>;
+    activeArtifact?: VersionedArtifact;
+    artifactHistory?: ReadonlyArray<VersionedArtifact>;
+}
+
+/** The open chat as its next change is measured against: as opened, as disk holds it once read, or as last written. */
+export interface ChatBaseline {
+    id: string;
+    /** How many times a saved chat had been opened (GenerativeCanvasStudio `chatOpenCountRef`). */
+    opens: number;
+    /** The workspace whose disk copy of the chats had been read; undefined before that read. */
+    root?: string;
+    messages: ChatContent['messages'];
+    artifactKeys: Set<string>;
+}
+
+export type OpenChat = ChatContent & { id: string; opens: number; root?: string };
+
+export function chatBaseline(open: OpenChat): ChatBaseline {
+    return { id: open.id, opens: open.opens, root: open.root, messages: open.messages, artifactKeys: chatArtifactVersionKeys(open.messages, open.activeArtifact, open.artifactHistory) };
+}
+
+/**
+ * Whether the open chat changed since `baseline` (a new message, or an artifact version it did not hold), and the
+ * baseline to measure its next change against. A chat just opened is measured against itself: opening it is not a
+ * change. Once disk's copy is read (`open.root` set; `onDisk`, what disk holds of this chat), it is measured against
+ * that copy: the read is not a change, but an open copy holding what disk lacks (a demo launched before the read, a
+ * message the last write missed) is.
+ */
+export function chatChangeSince(baseline: ChatBaseline | undefined, open: OpenChat, onDisk?: ChatContent): { changed: boolean; baseline: ChatBaseline } {
+    const now = chatBaseline(open);
+    let from = !baseline || baseline.id !== open.id || baseline.opens !== open.opens ? now : baseline;
+    if (open.root !== undefined && from.root !== open.root) {
+        from = onDisk
+            ? { ...from, root: open.root, messages: onDisk.messages || [], artifactKeys: chatArtifactVersionKeys(onDisk.messages || [], onDisk.activeArtifact, onDisk.artifactHistory) }
+            : { ...from, root: open.root };
+    }
+    const changed = now.messages.length > 0 && (now.messages !== from.messages || [...now.artifactKeys].some(k => !from.artifactKeys.has(k)));
+    return { changed, baseline: from };
+}
+
 /**
  * Artifact versions that came from a saved chat as it was opened in this page (useArtifactSync notes them). A scene
  * among them is being looked at: the viewport restores its lost files from the asset store only and offers "Rebuild

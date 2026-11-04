@@ -13,7 +13,7 @@
  * wall's rhythm, generated); and the lattice drawing the grammar's bays as its strips.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { groupWalls, readWallBays, type GrammarFacade, type WallEvidence } from '../src/node/3d-engine/staged-location/wall-grammar';
 import { facadeSamples, latticeFacade, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
 import { buildWallSheets, SHEET_ID_BASE } from '../src/node/3d-engine/staged-location/wall-sheets';
@@ -22,6 +22,10 @@ import { decodePng } from '../src/node/texture-processing';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { ensureRemeshPolishBinary } from '../src/node/3d-engine/staged-location/remesh-polish-native';
+
+// the wall sheets run natively by default (SCRATCHBOX_K_NATIVE): their binary built once for the file
+beforeAll(async () => { await ensureRemeshPolishBinary(); }, 900_000);
 
 const facade = (facadeId: number, cx: number, z: number, width: number, y0: number, y1: number): GrammarFacade => ({
     facadeId, image: `f${facadeId}.png`, centroid: [cx, (y0 + y1) / 2, z], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0],
@@ -46,7 +50,8 @@ describe('the wall grammar', () => {
             covered[k] = 1;
             const inBay = u % 6 >= 1 && u % 6 < 5, band = yy >= 14 && yy < 17, mullion = u % 6 >= 2.7 && u % 6 < 3.3;
             lum[k] = inBay && !band ? 60 : 190;
-            if (inBay && !band && !mullion && yy % 3.5 >= 1 && yy % 3.5 < 2.8) window[k] = 1;
+            // the window fit reads each bay as one strip, spandrels and all (a stack of punched windows is the test below)
+            if (inBay && !band && !mullion) window[k] = 1;
         }
         const e: WallEvidence = { u0: 0, y0: 0, nu, ny, cellM, covered, window, lum };
         const { bays } = readWallBays(e);
@@ -98,6 +103,24 @@ describe('the wall grammar', () => {
         expect(cols).toContain('19-23');
         expect(cols).toContain('7-11');
         expect(bays.every(b => b.u1 - b.u0 < 6)).toBe(true);
+    });
+
+    it('draws no bay over a stack of punched windows in shaded stone, and keeps a strip whose spandrels hold no windows but are no stone', () => {
+        // columns 2 m wide every 4 m, 30 m tall; storeys 3.5 m: windows 2 m tall. The wall is in shade, stone as dark as the
+        // glass, so light cannot tell them apart; on the left (u < 20) the window fit leaves the 1.5 m of stone between
+        // storeys empty (punched windows), on the right it reads each column as one strip
+        const cellM = 0.1, nu = 400, ny = 300;
+        const covered = new Uint8Array(nu * ny).fill(1), window = new Uint8Array(nu * ny), lum = new Float32Array(nu * ny);
+        for (let y = 0; y < ny; y++) for (let x = 0; x < nu; x++) {
+            const u = x * cellM, h = y * cellM, k = y * nu + x, inCol = u % 4 >= 1 && u % 4 < 3;
+            lum[k] = inCol ? 70 : 180;
+            if (inCol && (u >= 20 || h % 3.5 < 2)) window[k] = 1;
+        }
+        const { bays } = readWallBays({ u0: 0, y0: 0, nu, ny, cellM, covered, window, lum });
+        expect(bays.filter(b => b.u0 < 20)).toHaveLength(0);
+        const right = bays.filter(b => b.u0 >= 20);
+        expect(right.length).toBe(5);
+        expect(right.every(b => b.y1 - b.y0 > 25)).toBe(true);
     });
 
     it('lays a wall of two overlapping facades on one sheet: one photo from both, their windows carried, the gap filled and marked', () => {

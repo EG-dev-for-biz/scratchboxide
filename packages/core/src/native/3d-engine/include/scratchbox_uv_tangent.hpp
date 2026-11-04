@@ -34,93 +34,12 @@ using geometry::ScratchboxMesh;
 // ============================================================================
 
 /**
- * Computes 4-component MikkTSpace-compliant orthonormal tangents (Tx, Ty, Tz, handedness +/-1)
- * for each vertex in the mesh. Handedness is defined such that B = sign * cross(N, T).
+ * Computes 4-component orthonormal tangents (Tx, Ty, Tz, handedness +/-1) for each vertex from its UVs, in glTF's
+ * convention (B = sign * cross(N, T) points up the image, toward decreasing v): ScratchboxMesh::computeUvTangents,
+ * the routine the GLB writer also uses for normal-mapped meshes whose tangents are still the Vertex placeholder.
  */
 inline void generateMikkTSpaceTangents(ScratchboxMesh& mesh) {
-    size_t vertCount = mesh.vertices.size();
-    size_t triCount = mesh.indices.size() / 3;
-
-    if (vertCount == 0 || triCount == 0) return;
-
-    std::vector<Vec3> tan1(vertCount, Vec3(0, 0, 0));
-    std::vector<Vec3> tan2(vertCount, Vec3(0, 0, 0));
-
-    for (size_t f = 0; f < triCount; ++f) {
-        uint32_t i0 = mesh.indices[f * 3 + 0];
-        uint32_t i1 = mesh.indices[f * 3 + 1];
-        uint32_t i2 = mesh.indices[f * 3 + 2];
-
-        const Vec3& p0 = mesh.vertices[i0].position;
-        const Vec3& p1 = mesh.vertices[i1].position;
-        const Vec3& p2 = mesh.vertices[i2].position;
-
-        const Vec2& w0 = mesh.vertices[i0].uv;
-        const Vec2& w1 = mesh.vertices[i1].uv;
-        const Vec2& w2 = mesh.vertices[i2].uv;
-
-        Vec3 e1 = p1 - p0;
-        Vec3 e2 = p2 - p0;
-
-        float x1 = w1.x - w0.x;
-        float x2 = w2.x - w0.x;
-        float y1 = w1.y - w0.y;
-        float y2 = w2.y - w0.y;
-
-        float det = (x1 * y2 - x2 * y1);
-        if (std::abs(det) < 1e-7f) {
-            // Degenerate UVs: derive arbitrary tangent perpendicular to normal
-            Vec3 n = (e1.cross(e2)).normalized();
-            Vec3 arb = (std::abs(n.x) > 0.9f) ? Vec3(0, 1, 0) : Vec3(1, 0, 0);
-            Vec3 t = (arb - n * n.dot(arb)).normalized();
-            tan1[i0] += t;
-            tan1[i1] += t;
-            tan1[i2] += t;
-            continue;
-        }
-
-        float r = 1.0f / det;
-        Vec3 sdir((y2 * e1.x - y1 * e2.x) * r,
-                  (y2 * e1.y - y1 * e2.y) * r,
-                  (y2 * e1.z - y1 * e2.z) * r);
-        Vec3 tdir((x1 * e2.x - x2 * e1.x) * r,
-                  (x1 * e2.y - x2 * e1.y) * r,
-                  (x1 * e2.z - x2 * e1.z) * r);
-
-        // Area-weighted accumulation
-        float triArea = 0.5f * (e1.cross(e2)).length();
-        tan1[i0] += sdir * triArea;
-        tan1[i1] += sdir * triArea;
-        tan1[i2] += sdir * triArea;
-
-        tan2[i0] += tdir * triArea;
-        tan2[i1] += tdir * triArea;
-        tan2[i2] += tdir * triArea;
-    }
-
-    for (size_t i = 0; i < vertCount; ++i) {
-        Vec3 n = mesh.vertices[i].normal;
-        if (n.lengthSq() < 1e-6f) n = Vec3(0, 1, 0);
-        else n = n.normalized();
-
-        Vec3 t = tan1[i];
-
-        // Gram-Schmidt orthogonalize: T' = normalize(T - N * (N . T))
-        Vec3 orthoT = t - n * n.dot(t);
-        float lenT = orthoT.length();
-        if (lenT > 1e-6f) {
-            orthoT = orthoT / lenT;
-        } else {
-            // Pick fallback perpendicular vector
-            Vec3 up = (std::abs(n.y) > 0.9f) ? Vec3(0, 0, 1) : Vec3(0, 1, 0);
-            orthoT = (up - n * n.dot(up)).normalized();
-        }
-
-        // Calculate handedness: sign of cross(N, T) . B
-        float handedness = (n.cross(orthoT).dot(tan2[i]) < 0.0f) ? -1.0f : 1.0f;
-
-        mesh.vertices[i].tangent = Vec4(orthoT.x, orthoT.y, orthoT.z, handedness);
-    }
+    mesh.computeUvTangents();
 }
 
 // ============================================================================

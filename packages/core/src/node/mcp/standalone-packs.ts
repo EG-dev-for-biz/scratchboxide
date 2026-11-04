@@ -10,8 +10,8 @@
 /**
  * The tool packs the stdio MCP server serves: every pack the in-app chat registers (tool-registry.ts) whose handlers
  * run on the node side alone, with a workspace root, an abort signal and progress reports. The packs left out need the
- * IDE itself (IDE_ONLY_PACKS: the canvas, the lens and the browser proxy), and their handlers would only throw the
- * standalone context's "requires the IDE" error. Both MCP entry points (scratchbox-mcp.ts, the one .mcp.json runs, and
+ * IDE itself (IDE_ONLY_PACKS: the canvas, the lens, the browser proxy and the open scene), and their handlers would only
+ * throw the standalone context's "requires the IDE" error. Both MCP entry points (scratchbox-mcp.ts, the one .mcp.json runs, and
  * scratchbox-mcp-server.ts) take their tools from here, so there is one list to keep in step with the registry;
  * mcp-pack-drift.test.ts fails when tool-registry.ts registers a pack this file neither serves nor names as IDE-only.
  */
@@ -79,8 +79,12 @@ import {
 
 export interface ToolPack { name: string; declarations: ToolDeclaration[]; handlers: Record<string, ToolHandler> }
 
-/** Packs whose handlers need the running IDE (canvas, lens, browser proxy): never served standalone. */
-export const IDE_ONLY_PACKS: ReadonlyArray<string> = ['CANVAS_TOOL_DECLARATIONS', 'LENS_TOOL_DECLARATIONS', 'BROWSER_TOOL_DECLARATIONS'];
+/**
+ * Packs whose handlers need the running IDE (canvas, lens, browser proxy): never served standalone.
+ * OBJECT_DETAIL_TOOL_DECLARATIONS: object_detail_pass weathers the object in the IDE's open scene and mounts the new
+ * version there (request.activeArtifact), which a standalone MCP call never has.
+ */
+export const IDE_ONLY_PACKS: ReadonlyArray<string> = ['CANVAS_TOOL_DECLARATIONS', 'LENS_TOOL_DECLARATIONS', 'BROWSER_TOOL_DECLARATIONS', 'OBJECT_DETAIL_TOOL_DECLARATIONS'];
 
 /** Every standalone pack, named by its declarations constant (the name tool-registry.ts imports). */
 export const STANDALONE_PACKS: ReadonlyArray<ToolPack> = [

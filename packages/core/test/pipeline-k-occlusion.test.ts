@@ -13,7 +13,7 @@
  * overlap, the sheet takes the member that saw a texel clear.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -24,6 +24,10 @@ import { buildWallSheets } from '../src/node/3d-engine/staged-location/wall-shee
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { continueIntoOccluded, type WindowRect } from '../src/node/3d-engine/staged-location/window-fit';
 import { decodePng } from '../src/node/texture-processing';
+import { ensureRemeshPolishBinary } from '../src/node/3d-engine/staged-location/remesh-polish-native';
+
+// the wall sheets run natively by default (SCRATCHBOX_K_NATIVE): their binary built once for the file
+beforeAll(async () => { await ensureRemeshPolishBinary(); }, 900_000);
 
 const dec = (b: Buffer) => { const d = decodePng(b); return { rgba: d.rgba, width: d.width, height: d.height }; };
 

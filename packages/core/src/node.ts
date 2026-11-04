@@ -265,7 +265,8 @@ export {
     MetalPathTraceStudioLighting,
     MetalPathTraceRequest,
     MetalPathTraceStats,
-    MetalPathTraceResult
+    MetalPathTraceResult,
+    readSbvgOrigin
 } from './node/3d-engine/metal-path-tracer-service';
 export {
     ColmapReconstructionService,
@@ -299,6 +300,21 @@ export {
     type PhysicalSkyOptions,
     type PhysicalSkyResult
 } from './node/3d-engine/native-sky-service';
+export {
+    precomputeAtmosphereLut,
+    evaluateAtmosphereLut,
+    ensureAtmosphereLutBinary,
+    hillaireEarthMedium,
+    viewerSkyMedium,
+    radianceBatch,
+    srgbBatches,
+    AtmosphereLutError,
+    type AtmosphereMedium,
+    type AtmosphereLutPrecompute,
+    type AtmosphereLutResult,
+    type SkyQuery,
+    type SkyQueryResult
+} from './node/3d-engine/atmosphere-lut-service';
 export {
     SplatService,
     SplatConversionOptions,

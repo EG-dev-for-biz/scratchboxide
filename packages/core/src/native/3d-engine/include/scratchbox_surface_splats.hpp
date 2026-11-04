@@ -39,6 +39,9 @@
  *   weak pull to zero, kept when it brings them closer (with or without gains: it is local, so a disagreement elsewhere
  *   does not set it; on 7th Ave 0.60 -> 0.33, and the seam between two stations on the Penn Plaza ground softened).
  *   The report gives the patch difference before, after the gains and after the field, and the gains' residual.
+ * - Sky: a station may carry a sky mask of its image (the caller's, already grown past a footprint's reach). A sample
+ *   that lands on sky in a station is not seen by it: a roof edge the scan draws a little past the photo's roofline
+ *   then takes its colour from a station that shows it, never from the sky behind it.
  * - Shape: a 2DGS surfel on the triangle's plane, in-plane sigma sigmaRatio * s so neighbours overlap with no gap.
  */
 
@@ -60,10 +63,12 @@ namespace surfacesplats {
 using math::Vec3;
 using math::Quat;
 
-/** One station: its image (RGB8, row 0 at the top) and pinhole camera, and its depth (camera-z, EMPTY beyond 1e8). */
+/** One station: its image (RGB8, row 0 at the top) and pinhole camera, its depth (camera-z, EMPTY beyond 1e8), and
+ *  optionally its sky (W x H, nonzero where the image shows sky). */
 struct StationView {
     int W = 0, H = 0;
     std::vector<uint8_t> rgb;
+    std::vector<uint8_t> sky;
     float fx = 1, fy = 1, cx = 0, cy = 0;
     Vec3 eye, right, up, fwd;
     int DW = 0, DH = 0;
@@ -136,7 +141,8 @@ inline float distToSegment(const Vec3& p, const Vec3& a, const Vec3& b) {
     return (p - (a + ab * t)).length();
 }
 
-/** Projection of p into a station: pixel (u, v), camera-z, and whether the station's depth leaves it unoccluded. */
+/** Projection of p into a station: pixel (u, v), camera-z, and whether the station sees it there: not on its sky, and
+ *  unoccluded in its depth. */
 inline bool project(const StationView& s, const Vec3& p, const Params& prm, float& u, float& v, float& z) {
     const Vec3 d = p - s.eye;
     z = d.dot(s.fwd);
@@ -144,6 +150,7 @@ inline bool project(const StationView& s, const Vec3& p, const Params& prm, floa
     u = s.cx + s.fx * d.dot(s.right) / z;
     v = s.cy - s.fy * d.dot(s.up) / z;
     if (u < 0 || v < 0 || u >= s.W - 1 || v >= s.H - 1) return false;
+    if (!s.sky.empty() && s.sky[static_cast<size_t>(std::lround(v)) * s.W + static_cast<size_t>(std::lround(u))]) return false;
     if (!s.depth.empty()) {
         const int du = static_cast<int>(s.dcx + s.dfx * d.dot(s.right) / z), dv = static_cast<int>(s.dcy - s.dfy * d.dot(s.up) / z);
         if (du < 0 || dv < 0 || du >= s.DW || dv >= s.DH) return false;

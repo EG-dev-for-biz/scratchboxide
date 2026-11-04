@@ -21,6 +21,7 @@
  *   colour <gainCos> <maxGainLog> <fieldNx> <fieldNy>         (optional; fieldNx 0 turns the offset field off)
  *   station <rgb8 path> <W> <H> <fx> <fy> <cx> <cy> <eye xyz> <right xyz> <up xyz> <fwd xyz>
  *           <depth f32 path> <DW> <DH> <dfx> <dfy> <dcx> <dcy> <priority>
+ *   sky <u8 path>                                             (optional; W x H, the station above's sky mask)
  *   out <.splat path> <.spz path>
  *
  * Prints a JSON report on stdout.
@@ -87,6 +88,11 @@ int main(int argc, char** argv) {
             if (!readAll(rgbPath, s.rgb, static_cast<size_t>(s.W) * s.H * 3)) { std::cerr << "cannot read the station image " << rgbPath << std::endl; return 3; }
             if (!readAll(depthPath, s.depth, static_cast<size_t>(s.DW) * s.DH)) { std::cerr << "cannot read the station depth " << depthPath << std::endl; return 3; }
             stations.push_back(std::move(s));
+        } else if (key == "sky") {
+            std::string path; in >> path;
+            if (stations.empty()) { std::cerr << "a sky line needs its station line before it" << std::endl; return 2; }
+            auto& s = stations.back();
+            if (!readAll(path, s.sky, static_cast<size_t>(s.W) * s.H)) { std::cerr << "cannot read the station sky " << path << std::endl; return 3; }
         } else if (key == "out") {
             in >> outSplat >> outSpz;
         }

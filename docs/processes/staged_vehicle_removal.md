@@ -1,5 +1,12 @@
 # Vehicles removed from every staged build (Federation Square, Melbourne)
 
+> **Update 2026-11-03 (`vehicle-removal/5`):** steps 3 and 4 below are now the surface infill's
+> (`surface-infill.ts`, `docs/processes/surface_infill_service.md`): the street under a region is its ring's levels (a
+> kerb kept as a step) on local quadrics instead of an inverse-distance surface, and its texels come from the infill's
+> ladder (a registered view, a continuation along the street's measured direction or repeat, its own grain) behind a
+> seam gate, instead of the mirror along the long axis and the strip looks. The stack ceiling and the shell rule are
+> unchanged.
+
 **Date:** 2026-10-22 · **Rule (user, 2026-10-22):** every staged 3D scene build removes all vehicles the Google Photorealistic 3D Tiles scan baked in and patches the street seamlessly (no hole, no lump, no smeared car texture).
 
 ## What runs

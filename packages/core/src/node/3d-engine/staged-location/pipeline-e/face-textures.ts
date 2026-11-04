@@ -95,12 +95,12 @@ export function fillNearest(t: FaceTexture, fillSource: number = SRC.nearestFill
     return filled;
 }
 
-/** Median colour of the covered texels of several textures (subsampled). */
-export function medianColour(textures: FaceTexture[]): [number, number, number] | undefined {
+/** Median colour of the covered texels (`real`: tile-ortho in the base legend) of several textures (subsampled). */
+export function medianColour(textures: FaceTexture[], real: (source: number) => boolean = s => s === SRC.tileOrtho): [number, number, number] | undefined {
     const ch: number[][] = [[], [], []];
     for (const t of textures) {
         const step = Math.max(1, Math.floor((t.width * t.height) / 20000));
-        for (let i = 0; i < t.width * t.height; i += step) if (t.source[i] === SRC.tileOrtho) for (let c = 0; c < 3; c++) ch[c].push(t.rgba[i * 4 + c]);
+        for (let i = 0; i < t.width * t.height; i += step) if (real(t.source[i])) for (let c = 0; c < 3; c++) ch[c].push(t.rgba[i * 4 + c]);
     }
     if (!ch[0].length) return undefined;
     return ch.map(v => { v.sort((a, b) => a - b); return v[v.length >> 1]; }) as [number, number, number];

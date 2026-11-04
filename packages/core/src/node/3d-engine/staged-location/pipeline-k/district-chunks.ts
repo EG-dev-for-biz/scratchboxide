@@ -19,7 +19,10 @@
  *     margin of context (a rectangle, not a circle around it, which took about twice the cell's area). The chunk at the
  *     centre is the run itself.
  *  2. Ownership (ownerOf): a point inside a building's footprint belongs to that building's chunk; any other point to the
- *     cell it lies in; past the radius, to none.
+ *     cell it lies in; past the radius, or inside a building left out, to none. Every building the circle reaches is
+ *     planned whole (one whose middle lies past the circle in the cell of its point nearest the centre); one reaching more
+ *     than `edgeGrowthM` past the circle is left out whole, with its reason, never cut (M2a). The seam stage cuts the
+ *     ground exactly on the circle (district-seams.ts).
  *  3. The join (joinChunkGlb): a chunk's layers, built in the chunk's own tangent frame, are placed in the district's frame
  *     by the exact rigid transform between the two frames (through ECEF), and cut to what the chunk owns: the scan and the
  *     ground triangle by triangle, each kept when its middle or a corner lies in what the chunk keeps (its own, and a band
@@ -36,7 +39,7 @@ import { GoogleTileDistrictCrawler } from '../../../spatial/GoogleTileDistrictCr
 import { assembleGlb, nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint, type Mat4 } from '../glb-bytes';
 import { districtBuildingIndex, type DistrictFootprint } from './district-buildings';
 
-export const DISTRICT_CHUNKS_VERSION = 'district-chunks/2';
+export const DISTRICT_CHUNKS_VERSION = 'district-chunks/3';  // 3: every building the circle reaches is planned whole, or left out (M2a)
 
 export const DISTRICT_CHUNKS_PARAMS = {
     /** The grid's cell (m): small enough that a chunk's extraction stays under the leaf-tile cap in a dense centre. */
@@ -48,7 +51,13 @@ export const DISTRICT_CHUNKS_PARAMS = {
     /** A district this small is one build (m): its whole radius already fits under the leaf-tile cap. */
     minChunkedRadiusM: 140,
     /** Chunk builds at once beside the centre build (fewer when memory is short: a build holds several GB). */
-    parallel: 3
+    parallel: 3,
+    /**
+     * A building the circle reaches but whose middle lies past it is planned whole only when it reaches no more than this
+     * past the circle (m; the staged district's containment growth, orchestrator.ts DISTRICT_CONTAINMENT_MAX_GROWTH_M);
+     * past that it is left out, with its reason, rather than cut at the edge.
+     */
+    edgeGrowthM: 100
 };
 
 export interface DistrictChunk {
@@ -75,6 +84,22 @@ export interface DistrictChunkPlan {
     chunks: DistrictChunk[];
     /** Every footprint the plan assigned, with its chunk: ownership is rebuilt from these (ownerOf). */
     footprints: Array<DistrictFootprint & { chunk: number }>;
+    /** Buildings the circle reaches that reach too far past it to be planned whole: left out (no chunk owns them), with why. */
+    leftOut?: Array<DistrictFootprint & { reason: string }>;
+}
+
+/** The point of a footprint's outline nearest the district's centre and its distance (the centre itself, 0, when inside). */
+function nearestToCentre(loops: Vec2[][]): { p: Vec2; d: number } | undefined {
+    let inside = false, best: { p: Vec2; d: number } | undefined;
+    for (const loop of loops) for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+        const [ax, az] = loop[j], [bx, bz] = loop[i];
+        if ((az > 0) !== (bz > 0) && 0 < ((bx - ax) * (0 - az)) / (bz - az) + ax) inside = !inside;
+        const dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz;
+        const t = l2 > 0 ? Math.max(0, Math.min(1, -(ax * dx + az * dz) / l2)) : 0;
+        const p: Vec2 = [ax + dx * t, az + dz * t], d = Math.hypot(p[0], p[1]);
+        if (!best || d < best.d) best = { p, d };
+    }
+    return inside ? { p: [0, 0], d: 0 } : best;
 }
 
 /** The plan for a district of `radiusM`; undefined when the district is small enough to be one build. */
@@ -92,9 +117,22 @@ export function planDistrictChunks(radiusM: number, buildings: Array<{ id: strin
     const owned: string[][] = cells.map(() => []);
     const box = cells.map(c => ({ x0: c.cx - half, z0: c.cz - half, x1: c.cx + half, z1: c.cz + half }));
     const footprints: DistrictChunkPlan['footprints'] = [];
+    const leftOut: NonNullable<DistrictChunkPlan['leftOut']> = [];
     for (const b of buildings) {
-        if (Math.hypot(b.centroid[0], b.centroid[1]) > radiusM) continue;
-        const k = cellAt(b.centroid[0], b.centroid[1]);
+        // every building the circle reaches is planned whole: in the cell of its middle, or, with its middle past the circle,
+        // the cell of its point nearest the centre; one reaching more than edgeGrowthM past the circle is left out, not cut
+        let at = b.centroid;
+        if (Math.hypot(b.centroid[0], b.centroid[1]) > radiusM) {
+            const near = nearestToCentre(b.loops);
+            if (!near || near.d >= radiusM) continue;
+            const far = Math.max(...b.loops.flat().map(([x, z]) => Math.hypot(x, z)));
+            if (far > radiusM + P.edgeGrowthM) {
+                leftOut.push({ id: b.id, loops: b.loops, reason: `it reaches ${Math.round(far)} m from the centre, more than ${P.edgeGrowthM} m past the district's ${Math.round(radiusM)} m edge: left out whole rather than cut there` });
+                continue;
+            }
+            at = near.p;
+        }
+        const k = cellAt(at[0], at[1]);
         if (k < 0) continue;
         owned[k].push(b.id);
         footprints.push({ id: b.id, loops: b.loops, chunk: k });
@@ -105,7 +143,7 @@ export function planDistrictChunks(radiusM: number, buildings: Array<{ id: strin
         const radius = Math.max(...[[r.x0, r.z0], [r.x1, r.z0], [r.x0, r.z1], [r.x1, r.z1]].map(([x, z]) => Math.hypot(x - c.cx, z - c.cz)));
         return { index: k, cx: c.cx, cz: c.cz, half, rect: r, radiusM: Math.ceil(radius), buildings: owned[k], centre: c.i === 0 && c.j === 0 };
     });
-    return { version: DISTRICT_CHUNKS_VERSION, radiusM, cellM: P.cellM, chunks, footprints };
+    return { version: DISTRICT_CHUNKS_VERSION, radiusM, cellM: P.cellM, chunks, footprints, ...(leftOut.length ? { leftOut } : {}) };
 }
 
 /**
@@ -113,20 +151,51 @@ export function planDistrictChunks(radiusM: number, buildings: Array<{ id: strin
  * its native steps (tile_refine, tile_vegetation, the rectify and window-fit workers), and its time limits grow by the same
  * factor, so a step slowed by sharing the machine is not taken for a failed one (five builds each on every core timed out).
  */
-export function chunkCpuShare(cores = os.cpus().length, P = DISTRICT_CHUNKS_PARAMS): { builds: number; threads: number; slowdown: number } {
-    const builds = chunkParallel(P) + 1;
+export function chunkCpuShare(cores = machineCores(), P = DISTRICT_CHUNKS_PARAMS, env: NodeJS.ProcessEnv = process.env): { builds: number; threads: number; slowdown: number } {
+    // a build alone on its machine: the centre when the chunks run in the cloud, and a chunk in its cloud job
+    const builds = kdChunkRunner(env) === 'cloud' || env.SCRATCHBOX_KD_CHUNK_JOB === '1' ? 1 : chunkParallel(P, os.totalmem(), env) + 1;
     const threads = Math.max(2, Math.floor(cores / builds));
     return { builds, threads, slowdown: Math.max(1, cores / threads) };
 }
 
-/** Chunk builds at once: `parallel`, fewer when memory is short (a district build holds several GB; 24 GB a build). */
-export function chunkParallel(P = DISTRICT_CHUNKS_PARAMS, totalMem = os.totalmem()): number {
+/**
+ * Chunk builds at once: `parallel`, fewer when memory is short (a district build holds several GB; 24 GB a build). With the
+ * cloud runner each chunk has a machine of its own, so the width is SCRATCHBOX_KD_CLOUD_PARALLEL (default 48: every chunk of
+ * a 350 m district at once), set lower when the region's Cloud Run quota does not cover it.
+ */
+export function chunkParallel(P = DISTRICT_CHUNKS_PARAMS, totalMem = os.totalmem(), env: NodeJS.ProcessEnv = process.env): number {
+    if (kdChunkRunner(env) === 'cloud') {
+        const n = Number(env.SCRATCHBOX_KD_CLOUD_PARALLEL);
+        return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 48;
+    }
     return Math.max(1, Math.min(P.parallel, Math.floor(totalMem / (24 * 1024 ** 3)) - 1));
+}
+
+/** Where a chunked district's chunks build: on this machine's worker threads, or one Cloud Run job each (SCRATCHBOX_KD_CHUNK_RUNNER=cloud; cloud-chunk-runner.ts). */
+export function kdChunkRunner(env: NodeJS.ProcessEnv = process.env): 'local' | 'cloud' {
+    return env.SCRATCHBOX_KD_CHUNK_RUNNER?.trim() === 'cloud' ? 'cloud' : 'local';
+}
+
+/**
+ * Where a chunked district's centre cell builds: with the cloud runner, in the cloud as one more chunk job (the hero's query
+ * and address kept, its frame the district's), the build here only planning, painting, joining and publishing; on this
+ * machine otherwise, or with SCRATCHBOX_KD_CENTRE_RUNNER=local.
+ */
+export function kdCentreRunner(env: NodeJS.ProcessEnv = process.env): 'local' | 'cloud' {
+    return kdChunkRunner(env) === 'cloud' && env.SCRATCHBOX_KD_CENTRE_RUNNER?.trim() !== 'local' ? 'cloud' : 'local';
+}
+
+/** This machine's cores: SCRATCHBOX_CPUS when set (a container can report its host's cores, not its own), else what the OS reports. */
+export function machineCores(env: NodeJS.ProcessEnv = process.env): number {
+    const n = Number(env.SCRATCHBOX_CPUS);
+    if (Number.isFinite(n) && n >= 1) return Math.floor(n);
+    return typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
 }
 
 /** Which chunk a plan point belongs to (see the file comment); -1 past the radius. */
 export function chunkOwner(plan: DistrictChunkPlan): (x: number, z: number) => number {
     const inBuilding = districtBuildingIndex(plan.footprints, { marginM: 0, cellM: 20 });
+    const inLeftOut = plan.leftOut?.length ? districtBuildingIndex(plan.leftOut, { marginM: 0, cellM: 20 }) : undefined;
     const half = plan.cellM / 2;
     // the cell by its grid position (a point on a cell line goes to the lower row, then the lower column, as the plan's
     // row-major order has it); a point whose cell is not in the plan falls back to the search
@@ -135,7 +204,7 @@ export function chunkOwner(plan: DistrictChunkPlan): (x: number, z: number) => n
     return (x, z) => {
         const b = inBuilding(x, z);
         if (b >= 0) return plan.footprints[b].chunk;
-        if (Math.hypot(x, z) > plan.radiusM) return -1;
+        if (Math.hypot(x, z) > plan.radiusM || (inLeftOut && inLeftOut(x, z) >= 0)) return -1;
         const k = at.get(`${Math.ceil((x - half) / plan.cellM)},${Math.ceil((z - half) / plan.cellM)}`);
         return k ?? plan.chunks.findIndex(c => Math.abs(x - c.cx) <= half && Math.abs(z - c.cz) <= half);
     };
