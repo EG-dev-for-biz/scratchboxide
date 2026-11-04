@@ -124,6 +124,8 @@ import { synthesizeRoadTextures } from './road-texture';
 import { buildKerbedRoadMesh, measureKerbs, nearStreets, roadKerbsEnabled, scanHeightIndex, writeKerbedRoadsGlb, ROAD_KERBS_VERSION, type FootprintTri, type KerbModelStats } from './road-kerbs';
 import { carveUnderRoads, isRoadCarved, prepareFootprint, ROAD_CARVE_VERSION, type CarveFootprint, type RoadCarveReport } from './road-carve';
 import { flattenRoadsInGlb, flattenTargets, roadFlattenEnabled, ROAD_FLATTEN_PARAMS, ROAD_FLATTEN_VERSION, type RoadFlattenStats } from './road-flatten';
+import { buildStepsMesh, groundStepsEnabled, measureSteps, writeStepsGlb, GROUND_STEPS_VERSION, type FlightModel } from './ground-steps';
+import { streetViewStepCounter } from './step-count-streetview';
 import { LIBRARY_FILL_VERSION, type LibraryFillSpec } from './texture-library-fill';
 import { addLibraryDetail, TWIN_DETAIL_VERSION } from './twin-library-detail';
 import { loadSurfaceLibrary, type SurfaceLibrary } from './surface-materials';
@@ -3578,11 +3580,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         type RoadStageValue = { stats: RoadMesh['stats']; measuredKerbShare: number; photo: { width: number; height: number; texelM: number; ms: number }; markings?: { runs: number; markings: number; dashed: number; solid: number }; kerbs?: KerbModelStats & { triangles: number; footprintM2: number; ms: number } } | undefined;
         // kerbs and gutters as geometry (road-kerbs.ts), the scan carved under them: the surfaces stand at the measured levels
         const kerbsOn = roadKerbsEnabled();
+        // steps, stairs and ramps as geometry (ground-steps.ts), the scan carved under them: their own switch
+        const stepsOn = groundStepsEnabled(), roadsOn = sbRoadieEnabled() || kerbsOn;
         const roadParams = kerbsOn ? { ...ROAD_SURFACE_PARAMS, liftM: 0 } : ROAD_SURFACE_PARAMS;
         const roadsPromise: Promise<unknown> = (async () => {
             if (request.procedural === true) { runner.skip('roads', PROCEDURAL_ONLY); return; }
             if (kIsolate) { runner.skip('roads', PIPELINE_K_ISOLATE); return; }
-            if (!sbRoadieEnabled() && !kerbsOn) { runner.skip('roads', 'SB-Roadie is shelved for now (SCRATCHBOX_STAGED_ROADS=1 to try it; SCRATCHBOX_STAGED_ROAD_KERBS=1 with kerbs and gutters as geometry)'); return; }
+            if (!roadsOn && !stepsOn) { runner.skip('roads', 'SB-Roadie is shelved for now (SCRATCHBOX_STAGED_ROADS=1 to try it; SCRATCHBOX_STAGED_ROAD_KERBS=1 with kerbs and gutters as geometry; SCRATCHBOX_STAGED_STEPS=1 for steps and ramps)'); return; }
             const covered = extraction.coveredRadiusM;
             // the vector evidence the sizing fetched (an isolate), else fetched now for the extraction's cover (a district)
             let vector = t.vector;
@@ -3592,10 +3596,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             }
             if (!vector) { runner.skip('roads', t.vectorError ? `no Google vector data (${t.vectorError})` : 'no Google vector data: no service account is configured for vectortiles.featuretiles'); return; }
             const centrelines = vector.raster.roads.filter(l => l.some(([x, z]) => Math.hypot(x, z) <= covered));
-            if (!centrelines.length) { runner.skip('roads', 'no road centreline from Google vector data runs through the extraction'); return; }
-            await runner.stage<RoadStageValue>({
-                id: 'roads',
-                run: async io => {
+            if (!centrelines.length && !stepsOn) { runner.skip('roads', 'no road centreline from Google vector data runs through the extraction'); return; }
+            // the footprints the carve cuts under: the kerbed streets' and the steps', carved by one transform once both are known
+            const carveTris: FootprintTri[] = [];
+            const roadsRun = async (io: StageIO): Promise<StageResult<RoadStageValue>> => {
                     const tileForRoads = strip ? strip.devegetatedGlb : extraction.texturedGlb;
                     const key = stageKey(kerbsOn ? `roads/v5+${ROAD_KERBS_VERSION}` : 'roads/v5', t.key, strip ? strip.cacheKey : 'scan', crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), roadParams.liftM);
                     run.keys.roads = key;
@@ -3681,6 +3685,21 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     };
                     run.commit(layer, { source: 'GoogleVectorRoads', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true, roads: v.stats.roads, measuredKerbShare: v.measuredKerbShare, photo: v.photo } });
                     return { status: 'committed', source: `${v.stats.roads} streets measured kerb to kerb (${Math.round(100 * v.measuredKerbShare)} % of kerbs found), textured from the tile photo`, layers: [layer], cached: entry.cached };
+            };
+            await runner.stage<RoadStageValue>({
+                id: 'roads',
+                run: async io => {
+                    const r = roadsOn && centrelines.length ? await roadsRun(io) : undefined;
+                    const st = stepsOn ? await stepsRun(io) : undefined;
+                    // the scan carved under every new surface at once (a carved file is not carved again)
+                    if (carveTris.length) installCarve(io);
+                    if (!st) return r!;
+                    if (!r || r.status !== 'committed') {
+                        if (st.status === 'committed') return { ...st, source: r?.status === 'skipped' && r.reason ? `${st.source}; streets: ${r.reason}` : st.source };
+                        return { status: 'skipped', source: '', reason: [r?.status === 'skipped' ? r.reason : roadsOn ? undefined : 'the streets are off', st.status === 'skipped' ? st.reason : undefined].filter(Boolean).join('; ') };
+                    }
+                    if (st.status !== 'committed') return { ...r, source: `${r.source}; steps: ${st.status === 'skipped' ? st.reason : st.status}` };
+                    return { ...r, source: `${r.source}; ${st.source}`, layers: [...(r.layers ?? []), ...(st.layers ?? [])] };
                 }
             }).catch(err => {
                 if (err?.name === 'AbortError') throw err;
@@ -3694,7 +3713,6 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const flat = new Float64Array(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
                 const tris: FootprintTri[] = [];
                 for (let i = 0; i + 9 <= flat.length; i += 9) tris.push(Array.from(flat.subarray(i, i + 9)) as FootprintTri);
-                const records: RoadCarveRecord[] = [];
                 const kerbNote = `${v.stats.roads} street runs, ${v.stats.stations} stations; kerb line ${k.measuredM} m measured, ${k.drawnM} m drawn (${k.fineM} m read on the scan's triangles, ${k.softM} m of it a step the scan smears, drawn at its half-rise crossing; ${k.coarseM} m at SB-Roadie's step; ${k.betweenM} m carried along the line, through ramps and past single samples where an object stands on the kerb); ${k.notDrawnM} m of kerb line with no kerb measured, nothing drawn there; ${k.rampM} m of ramps where the face drops to the road; ${k.corners.drawn} corners on their measured radius (median ${k.corners.radiusP50M ?? '-'} m), ${k.corners.notDrawn} not drawn; ${k.straightJoins.drawn} straight joins across gaps; faces ${k.faceP10M ?? '-'} / ${k.faceP50M ?? '-'} / ${k.faceP90M ?? '-'} m (10th / 50th / 90th percentile); gutters ${k.gutterMeasuredM} m measured, ${k.gutterGeneratedM} m generated (the scan resolves no dip at the face's foot); nosings (a 1 cm chamfer: 1.5 % of the kerb's smallest dimension, 1-5 cm) and kerb tops (0.15 m) generated; the surfaces stand at the measured levels with the scan carved under them`;
                 const layer: StagedLayer = {
                     objectId: layerObjectId(key, 'l1r'), stage: 'roads', layer: 'l1r', order: STAGES.roads.order, url: pub.url, bytes: pub.bytes,
@@ -3709,16 +3727,91 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pub.path)
                 };
                 run.commit(layer, { source: 'GoogleVectorRoads', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true, roads: v.stats.roads, measuredKerbShare: v.measuredKerbShare, photo: v.photo, kerbs: k } });
-                run.layerTransform = chainLayerTransforms(run.layerTransform, roadCarver(cache, roadsMeasured!, prepareFootprint(tris), key8, vector!.buildingAt, records));
+                carveTris.push(...tris);
+                return { status: 'committed' as const, source: `${v.stats.roads} streets with kerbs and gutters: ${k.drawnM} m of kerb drawn of ${k.measuredM} m measured, ${k.corners.drawn} corners; the scan carved under them`, layers: [layer], cached: entry.cached };
+            }
+            // the scan carved under every new surface (the kerbed streets', the steps'): one transform on the ground layers from here
+            // on, and the ground already standing committed again, carved
+            function installCarve(io: StageIO) {
+                const records: RoadCarveRecord[] = [];
+                const key8 = crypto.createHash('sha256').update(Buffer.from(Float64Array.from(carveTris.flat()).buffer)).digest('hex').slice(0, 8);
+                io.progress(`carving the scan under ${carveTris.length.toLocaleString('en-US')} footprint triangles of new surfaces`);
+                run.layerTransform = chainLayerTransforms(run.layerTransform, roadCarver(cache, roadsMeasured ?? [], prepareFootprint(carveTris), key8, vector!.buildingAt, records));
                 const t0 = now();
-                for (const l of run.state.layers.filter(x => !x.retired && x.objectId !== layer.objectId)) {
+                for (const l of run.state.layers.filter(x => !x.retired && x.stage !== 'roads')) {
                     const meta = run.layerMeta[l.objectId];
                     if (meta && (l.layer === 'l2' || meta.isGround)) run.commit({ ...l }, meta);
                 }
-                cache.writeRunNote(runId, 'road_carve', { version: ROAD_CARVE_VERSION, flatten: roadFlattenEnabled() ? ROAD_FLATTEN_VERSION : 'off', footprintTriangles: tris.length, footprintM2: k.footprintM2, atRoadsMs: now() - t0, layers: records });
+                const note = () => ({ version: ROAD_CARVE_VERSION, flatten: roadFlattenEnabled() ? ROAD_FLATTEN_VERSION : 'off', footprintTriangles: carveTris.length, layers: records });
+                cache.writeRunNote(runId, 'road_carve', { ...note(), atRoadsMs: now() - t0 });
                 // later carves (the twin, a ground committed after the roads) are recorded as they happen
-                run.commitListeners.add(() => { if (records.length) cache.writeRunNote(runId, 'road_carve', { version: ROAD_CARVE_VERSION, flatten: roadFlattenEnabled() ? ROAD_FLATTEN_VERSION : 'off', footprintTriangles: tris.length, footprintM2: k.footprintM2, layers: records }); });
-                return { status: 'committed' as const, source: `${v.stats.roads} streets with kerbs and gutters: ${k.drawnM} m of kerb drawn of ${k.measuredM} m measured, ${k.corners.drawn} corners; the scan carved under them`, layers: [layer], cached: entry.cached };
+                run.commitListeners.add(() => { if (records.length) cache.writeRunNote(runId, 'road_carve', note()); });
+            }
+            // steps, stairs and ramps the scan melted (ground-steps.ts): found on the scan, counted on Street View where the scan cannot
+            // tell the steps apart, rebuilt by the step replicated at its pitch, their layer l1s
+            async function stepsRun(io: StageIO): Promise<StageResult<RoadStageValue>> {
+                const tileForSteps = strip ? strip.devegetatedGlb : extraction.texturedGlb;
+                const visionClient = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
+                const counterReady = !!(streetView?.grounding && visionClient);
+                const counterWhy = counterReady ? 'Street View' : `no Street View count (${!streetView?.grounding ? missingCredentials(streetView ?? {}) ?? 'no grounding service' : 'no vision model is configured'})`;
+                const key = stageKey(GROUND_STEPS_VERSION, t.key, strip ? strip.cacheKey : 'scan', covered.toFixed(1), counterReady ? 'streetview' : 'estimate');
+                // the stage's key is the streets' when they ran, else the steps'
+                run.keys.roads ??= key;
+                const key8 = key.slice(0, 8);
+                type StepsValue = { stats: ReturnType<typeof buildStepsMesh>['stats']; flights: Array<Pick<FlightModel, 'id' | 'kind' | 'count' | 'riseM' | 'runEachM' | 'countSource' | 'countNote' | 'slope'> & { totalRiseM: number; lengthM: number; widthM: number; landings: number }>; inclines: number; refused: number } | undefined;
+                const entry = await cache.run<StepsValue>('roads', key, async dir => {
+                    io.progress(`looking for steps and ramps on the ${strip ? 'tree-stripped ' : ''}scan`);
+                    const scan = strip ? loadScanMesh(tileForSteps) : t.scan ?? loadScanMesh(extraction.texturedGlb);
+                    const ground = t.ground ?? buildGroundModel(scan, { cellMeters: 1, water: vector!.waterAt, road: vector!.roadAt });
+                    const h = scanHeightIndex(scan, 1);
+                    const counter = counterReady ? streetViewStepCounter({
+                        origin: { lat: placeValue!.lat, lng: placeValue!.lng, heightMeters: extraction.originEllipsoidalHeightM },
+                        streetView: { ...streetView!, metadataCachePath: path.join(cache.dir, 'streetview', 'metadata.json') }, vision: visionClient!,
+                        groundAt: ground.groundAt, signal: io.signal, chainExtras: chainExtras('roads'), onProgress: m => io.progress(m)
+                    }) : undefined;
+                    const found = await measureSteps(scan, h, { groundAt: ground.groundAt, exclude: (x, z) => Math.hypot(x, z) > covered || vector!.roadAt(x, z), ...(counter ? { counter } : {}) });
+                    const inputs = { tile: path.basename(tileForSteps), covered, counter: counterWhy };
+                    if (!found.flights.length) return { value: { stats: { flights: 0, ramps: 0, steps: 0, triangles: 0, footprintM2: 0 }, flights: [], inclines: found.inclines, refused: found.refused.length }, inputs };
+                    // coloured by the tile photo seen from above (planar), 5 cm a texel, over the flights and a margin
+                    let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+                    for (const f of found.flights) for (const [sv, bv] of [[f.sFoot - 1, f.bMin - 1], [f.sFoot - 1, f.bMax + 1], [f.sTop + 1, f.bMin - 1], [f.sTop + 1, f.bMax + 1]]) {
+                        const x = f.cx + f.ux * sv + f.vx * bv, z = f.cz + f.uz * sv + f.vz * bv;
+                        x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+                    }
+                    const uvFrame = { x0, z0, widthM: Math.max(1, x1 - x0), heightM: Math.max(1, z1 - z0) };
+                    const photo = renderTopDownPhoto(fs.readFileSync(tileForSteps), uvFrame, { texelM: 0.05, maxPx: 4096 });
+                    const mesh = buildStepsMesh(found.flights, undefined, uvFrame);
+                    const flights = found.flights.map(f => ({ id: f.id, kind: f.kind, slope: f.slope, totalRiseM: f.topY - f.footY, lengthM: f.sTop - f.sFoot, widthM: f.bMax - f.bMin, landings: f.landings.length, ...(f.count !== undefined ? { count: f.count, riseM: f.riseM, runEachM: f.runEachM, countSource: f.countSource, countNote: f.countNote } : {}) }));
+                    writeStepsGlb(path.join(dir, 'steps.glb'), mesh, { stats: mesh.stats, flights }, { jpeg: topDownJpeg(photo, 90), width: photo.width, height: photo.height });
+                    fs.writeFileSync(path.join(dir, 'steps.json'), JSON.stringify({ schema: 'scratchbox.ground-steps/1', flights: found.flights, refused: found.refused, inclines: found.inclines }));
+                    fs.writeFileSync(path.join(dir, 'steps_footprint.bin'), Buffer.from(Float64Array.from(mesh.footprint.flat()).buffer));
+                    return { value: { stats: mesh.stats, flights, inclines: found.inclines, refused: found.refused.length }, inputs };
+                }, { publish: (dir, value) => (value?.flights.length ? [{ from: 'steps.glb', as: `${base}_steps_${key8}.glb` }] : []), bypass: bypass('roads') });
+                const v = entry.value;
+                cache.writeRunNote(runId, 'ground_steps', { version: GROUND_STEPS_VERSION, key, cached: entry.cached, counter: counterWhy, ...(v ?? {}) });
+                if (!v?.flights.length) return { status: 'skipped', source: '', reason: `no steps or ramps found on the scan (${v?.inclines ?? 0} incline${v?.inclines === 1 ? '' : 's'} looked at, ${v?.refused ?? 0} not a flight)` };
+                const raw = fs.readFileSync(path.join(entry.dir, 'steps_footprint.bin'));
+                const flat = new Float64Array(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+                for (let i = 0; i + 9 <= flat.length; i += 9) carveTris.push(Array.from(flat.subarray(i, i + 9)) as FootprintTri);
+                const pub = entry.published[0];
+                const sources = [...new Set(v.flights.map(f => f.countSource).filter((x): x is NonNullable<typeof x> => !!x))];
+                const flightsNote = v.flights.map(f => f.kind === 'ramp'
+                    ? `a ramp rising ${f.totalRiseM.toFixed(2)} m over ${f.lengthM.toFixed(1)} m (1:${(1 / f.slope).toFixed(0)}), ${f.widthM.toFixed(1)} m wide`
+                    : `a flight of ${f.count} steps rising ${f.totalRiseM.toFixed(2)} m over ${f.lengthM.toFixed(1)} m, ${f.widthM.toFixed(1)} m wide: ${((f.riseM ?? 0) * 100).toFixed(1)} cm rise, ${((f.runEachM ?? 0) * 100).toFixed(1)} cm run (${f.countSource}: ${f.countNote})${f.landings ? `, ${f.landings} landing${f.landings === 1 ? '' : 's'}` : ''}`).join('; ');
+                const layer: StagedLayer = {
+                    objectId: layerObjectId(key, 'l1s'), stage: 'roads', layer: 'l1s', order: STAGES.roads.order, url: pub.url, bytes: pub.bytes,
+                    provenance: {
+                        label: 'measured', measuredGeometry: true,
+                        method: 'Steps and ramps as geometry (ground-steps.ts): inclines found on the scan, their extent, levels, slope and landings read on its triangles; each flight one step profile replicated at its pitch (the scan\'s, else the count Street View gives, else an estimated rise), each ramp a plane through its slope; nosings by the bevel rule and the sides generated; coloured by the tile photo seen from above',
+                        sources: [{ kind: 'tile-extraction', id: `extract:${t.key.slice(0, 8)}` }, ...(sources.includes('photo-inferred') ? [{ kind: 'streetview-grounding' as const, id: `steps:${key8}` }] : [])],
+                        note: `${v.stats.flights} flight${v.stats.flights === 1 ? '' : 's'} (${v.stats.steps} steps), ${v.stats.ramps} ramp${v.stats.ramps === 1 ? '' : 's'}: ${flightsNote}; the scan carved under them`
+                    },
+                    provenanceLabels: ['measured', ...sources.filter(x => x !== 'measured'), ...(sources.includes('generated') ? [] : ['generated' as const])], supersedes: [], revealAfter: [],
+                    reveal: { durationMs: 1200, stagger: 0.2, crossfadeFrom: [] },
+                    cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pub.path)
+                };
+                run.commit(layer, { source: 'Google3DTilesSteps', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true, steps: v.stats } });
+                return { status: 'committed', source: `${v.stats.flights} flight${v.stats.flights === 1 ? '' : 's'} of steps and ${v.stats.ramps} ramp${v.stats.ramps === 1 ? '' : 's'} rebuilt from the scan`, layers: [layer], cached: entry.cached };
             }
         })();
         siblings.push(roadsPromise);
