@@ -233,6 +233,33 @@ describe('pipeline K-D: the seam stage, one chunk at a time', () => {
         }
     });
 
+    it("cuts the streets on the line where one chunk's ground was left whole under them: coverage reads each chunk's streets too", () => {
+        const identity = Float64Array.from([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+        const y = (x: number, z: number) => 0.01 * x + 0.002 * z;
+        const sa = ground(40, 80, -4, 4, 0.5, y, 90), sb = ground(40.2, 80.2, -4, 4, 0.8, y, 90);
+        // the centre's ground was never carved under its streets (as a K-D centre's, whose ground the territory clip renamed);
+        // the east chunk carved its own
+        const ga = ground(40, 63, -10, 10, 0.5, y, 100), gb = joinChunkGlb(ground(57, 80, -10, 10, 0.5, y, 100), identity, (x, z) => Math.abs(z) > 4).glb;
+        const ja = joinChunkGlb(sa, identity, chunkTerritory(plan, centre, 3)).glb, jb = joinChunkGlb(sb, identity, chunkTerritory(plan, east, 3)).glb;
+        const cutWith = (coverage: Map<number, ReturnType<typeof seamCoverage>>) => {
+            const owner = seamOwner(plan, coverage, [centre, east]);
+            return [triangles(cutChunkLayer(ja, plan, centre, { owner }).glb), triangles(cutChunkLayer(jb, plan, east, { owner }).glb)];
+        };
+        // with the grounds alone, the centre's whole ground takes the east chunk's street past the line, up to where its
+        // coverage ends: the cut lands off the line, where a triangle across it is kept by both
+        const [oa] = cutWith(new Map([[centre, seamCoverage(ga)], [east, seamCoverage(gb)]]));
+        expect(Math.max(...oa.flat().map(p => p[0]))).toBeGreaterThan(62);
+        // with each chunk's streets read with its ground, the east chunk's street is its surface: the cut is on the line
+        const [ta, tb] = cutWith(new Map([[centre, seamCoverage([ga, ja])], [east, seamCoverage([gb, jb])]]));
+        expect(Math.max(...ta.flat().map(p => p[0]))).toBeLessThanOrEqual(60 + 1e-9);
+        expect(Math.min(...tb.flat().map(p => p[0]))).toBeGreaterThanOrEqual(60 - 1e-9);
+        expect(planArea(ta)).toBeCloseTo(20 * 8, 3);
+        expect(planArea(tb)).toBeCloseTo(20.2 * 8, 3);
+        // and the centre's ground goes no further than the line where the east chunk has its street
+        const owner = seamOwner(plan, new Map([[centre, seamCoverage([ga, ja])], [east, seamCoverage([gb, jb])]]), [centre, east]);
+        for (const [x, , z] of triangles(cutChunkLayer(ga, plan, centre, { owner }).glb).flat()) if (Math.abs(z) < 3.5) expect(x).toBeLessThanOrEqual(60 + 1e-9);
+    });
+
     it("gives each triangle's cut corner that triangle's own UVs across a UV seam", () => {
         // two triangles sharing the edge (62, -1)-(58, 1) by position only: each its own vertices, its own photo island
         const pos = [58, 0, -1, 62, 0, -1, 58, 0, 1, 62, 0, -1, 62, 0, 1, 58, 0, 1];
