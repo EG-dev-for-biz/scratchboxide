@@ -187,9 +187,9 @@ describe('a streamed reply', () => {
 
 describe('the studio', () => {
     it('offers only the starter buttons that make a 3D scene or a timeline', () => {
-        expect(visibleStarterButtons().map(b => b.label)).toEqual(['Interactive App', '3D Scene', '3D Building', '3D World', 'Video NLE']);
+        expect(visibleStarterButtons().map(b => b.label)).toEqual(['Interactive App', '3D Scene', '3D Building', '3D Object', '3D World', 'Video NLE']);
         scopeOn();
-        expect(visibleStarterButtons().map(b => b.label)).toEqual(['3D Scene', '3D Building', '3D World', 'Video NLE']);
+        expect(visibleStarterButtons().map(b => b.label)).toEqual(['3D Scene', '3D Building', '3D Object', '3D World', 'Video NLE']);
     });
 
     it('restores a saved document or sandbox mode as chat, and leaves 3D, video and companions alone', () => {

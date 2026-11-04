@@ -1553,7 +1553,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                                             flexWrap: 'wrap',
                                             gap: '8px',
                                             justifyContent: 'center',
-                                            maxWidth: '680px',
+                                            maxWidth: '760px',
                                             margin: '20px auto 0 auto'
                                         }}>
                                             {visibleStarterButtons().map(item => (
