@@ -2017,9 +2017,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             await new Promise(r => setImmediate(r));
                         }
                         const { gains, fields, report: colour } = solveSeamGains(samples, plan);
-                        // who keeps each point, the same for every chunk: ground a chunk's build never reached goes to one whose did
+                        // who keeps each point, the same for every chunk: ground a chunk's build never reached goes to one whose did.
+                        // A chunk's streets count as its surface: each chunk carved its own ground under its own streets
+                        const streets = shown.filter(l => l.layer === 'l1r' && !hiddenNow.has(l.objectId)).sort((a, b) => dist(a) - dist(b));
                         const coverage = new Map<number, SeamCoverage>();
-                        for (const g of grounds) { coverage.set(chunkOf(g), seamCoverage(read(g.url))); await new Promise(r => setImmediate(r)); }
+                        for (const g of grounds) {
+                            const c = chunkOf(g);
+                            coverage.set(c, seamCoverage([read(g.url), ...streets.filter(s => chunkOf(s) === c).map(s => read(s.url))]));
+                            await new Promise(r => setImmediate(r));
+                        }
                         const seamOwnerOf = seamOwner(plan, coverage, grounds.map(chunkOf));
                         // 2-4. each chunk's ground cut at its cell lines, snapped onto the chunks before it, its gain applied
                         const edges: SeamEdges = new Map();
@@ -2058,13 +2064,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             await new Promise(r => setImmediate(r));
                         }
                         // 5. SB-Roadie's streets (l1r): each joined with the seam band past its cell like the ground, so a street crossing
-                        // a cell line was drawn twice there. Each chunk carved its own ground under its own streets, so a street is kept
-                        // by whoever keeps the ground there (seamOwnerOf), cut exactly at the cell lines; both chunks measured it on the
-                        // same tiles, so its cut edge stays where it was measured (no snap) and its colour as drawn (no gain)
-                        const streets = shown.filter(l => l.layer === 'l1r' && !hiddenNow.has(l.objectId)).sort((a, b) => dist(a) - dist(b));
+                        // a cell line was drawn twice there. A street is kept by whoever keeps the ground there (seamOwnerOf), cut exactly
+                        // at the cell lines; both chunks measured it on the same tiles, so its cut edge stays where it was measured (no
+                        // snap) and its colour as drawn (no gain)
                         const roads: Array<{ chunk: number; objectId: string; clay: SeamCutReport; textured?: SeamCutReport }> = [];
-                        for (const s of streets) {
+                        for (const listed of streets) {
                             if (io.signal.aborted) throw io.signal.reason ?? abortError();
+                            // as it stands now: a street may have been committed again since it was listed (coloured again from a
+                            // ground committed above), and the cut keeps that
+                            const s = run.state.layers.find(l => l.objectId === listed.objectId) ?? listed;
                             const c = chunkOf(s), meta = run.layerMeta[s.objectId];
                             io.progress(`cutting chunk ${c}'s streets at its cell lines (${roads.length + 1} of ${streets.length})`);
                             const key8 = crypto.createHash('sha256').update(`${runId}:${DISTRICT_SEAMS_VERSION}:${s.url}`).digest('hex').slice(0, 8);
