@@ -88,7 +88,11 @@ export const OBJECT_REFERENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 dimensionsHintMeters: {
                     type: 'ARRAY',
                     items: { type: 'NUMBER' },
-                    description: 'Optional [width, height, depth] in metres when the user gave a size (new builds only; with specJson, set sizes in the spec).'
+                    description: 'Optional [width, height, depth] in metres when the user gave a size, or the object is a real, catalogued thing whose published size you know (new builds only; with specJson, set sizes in the spec). It is the overall extent of everything built, mirrors and other protrusions included, and a build that misses it by more than 3 % on any axis is revised toward it.'
+                },
+                buildNotes: {
+                    type: 'STRING',
+                    description: 'Optional, new builds only: measured facts and construction notes the build spec must follow and a picture cannot give, such as published measurements, where features sit along the object, counts, and how the parts go together. They reach the spec reader and every revision, never the reference picture, and they win where they disagree with the picture. Keep request short and visual; put numbers here.'
                 },
                 location: {
                     type: 'STRING',
@@ -1049,6 +1053,8 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
             if (!request) return failed('build_3d_object_from_reference needs a request describing what to build.');
             const dimensions = parseDimensions(args.dimensionsHintMeters);
             if (dimensions === 'invalid') return failed('dimensionsHintMeters must be three positive numbers [width, height, depth] in metres.');
+            if (args.buildNotes !== undefined && args.buildNotes !== null && typeof args.buildNotes !== 'string') return failed('buildNotes must be text.');
+            const buildNotes = typeof args.buildNotes === 'string' && args.buildNotes.trim() ? args.buildNotes.trim() : undefined;
             let givenSpec: unknown;
             if (args.specJson !== undefined && args.specJson !== null && args.specJson !== '') {
                 if (typeof args.specJson !== 'string') return failed('specJson must be the spec as JSON text.', { stage: 'build-spec' });
@@ -1058,6 +1064,7 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                     return failed(`specJson is not valid JSON: ${errorMessage(err)}`, { stage: 'build-spec' });
                 }
                 if (dimensions) return failed('dimensionsHintMeters is for new builds; with specJson, set the sizes in the spec itself.', { stage: 'build-spec' });
+                if (buildNotes) return failed('buildNotes is for new builds; with specJson, make the change in the spec itself.', { stage: 'build-spec' });
             }
             const location = typeof args.location === 'string' && args.location.trim() ? args.location.trim() : undefined;
             const placementArgs = parsePlacement(args.placement);
@@ -1227,6 +1234,7 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                             request,
                             requestedModel: ctx.request?.model || undefined,
                             dimensionsHintMeters: dimensions,
+                            ...(buildNotes ? { buildNotes } : {}),
                             clay,
                             signal: buildSignal,
                             reportProgress: ctx.reportProgress,

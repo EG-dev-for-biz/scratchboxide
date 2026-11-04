@@ -28,7 +28,7 @@ import { withStagedMaterialMode } from '../src/browser/generative-canvas/primiti
 import { TerrainManager } from '../src/browser/generative-canvas/services/TerrainManager';
 import { glbToTriangleSoup, mergeTriangleSoups } from '../src/node/3d-engine/part-connectivity';
 import { renderReviewViews } from '../src/node/3d-engine/visual-review';
-import { REFERENCE_IMAGE_MODEL, buildObjectFromSpec, objectBuildSpecPatchJsonSchema, schemaInstruction, type ChatModelSource, type GenerateContentClient, type ReferenceObjectBuilderDeps } from '../src/node/3d-engine/reference-object-builder';
+import { REFERENCE_IMAGE_MODEL, buildObjectFromSpec, describeProblems, type ObjectBuildChecks, objectBuildSpecPatchJsonSchema, schemaInstruction, type ChatModelSource, type GenerateContentClient, type ReferenceObjectBuilderDeps } from '../src/node/3d-engine/reference-object-builder';
 import { activeObjectBuildContext } from '../src/node/gemini/prompt-builder';
 import { OBJECT_BUILD_SPEC_JSON_SCHEMA, objectBuildSpecJsonSchema, type ObjectBuildSpec, type PartMaterial } from '../src/common/spatial/object-build-spec';
 
@@ -1114,6 +1114,57 @@ describe('build_3d_object_from_reference', () => {
         expect(build.resultPass).toBe(3);
         expect(build.remainingDifferences).toEqual([{ partId: 'knob', problem: left, confidence: 'high' }]);
         expect(out.summaryResult).toContain(`Differences from the reference that remain in pass 3: "part "knob": ${left}"`);
+    }, 180_000);
+
+    it('sends buildNotes to the spec read and every revision, never to the reference picture or the comparison', async () => {
+        const notes = 'Published: body diameter 0.36 m; the knob sits on the rim, 0.06 m tall.';
+        const client = fakeClient({ specs: [JSON.stringify(VASE)], differences: [highDifference('The knob should be taller.', 'knob')] });
+        const out = await handlerWith(client).run({ request: 'a fluted vase with a knob on top', buildNotes: notes });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        const specCalls = client.calls.filter(isSpecCall);
+        expect(specCalls.length).toBeGreaterThanOrEqual(2); // the first read and at least one revision
+        for (const call of specCalls) {
+            expect(askedText(call)).toContain(`the notes are right):\n${notes}`);
+            expect(askedText(call)).toContain('A part the build notes place at object coordinates is a root part at exactly those coordinates');
+        }
+        // without notes the conventions carry neither the notes section nor its root-part rule
+        const plain = fakeClient({ specs: [JSON.stringify(VASE)] });
+        expect((await handlerWith(plain).run({ request: 'a fluted vase with a knob on top' })).status).toBe('completed');
+        for (const call of plain.calls.filter(isSpecCall)) expect(askedText(call)).not.toMatch(/Build notes|A part the build notes place/);
+        expect(JSON.stringify(client.calls.find(c => c.config?.responseModalities)!.contents)).not.toContain(notes);
+        for (const call of client.calls.filter(isComparisonCall)) expect(askedText(call)).not.toContain(notes);
+    }, 180_000);
+
+    it('refuses buildNotes that are not text, and buildNotes with a given spec', async () => {
+        const { run } = handlerWith(fakeClient({}));
+        expect((await run({ request: 'the vase', buildNotes: 42 })).resultPayload.error).toBe('buildNotes must be text.');
+        expect((await run({ request: 'the vase', specJson: JSON.stringify(VASE), buildNotes: 'taller' })).resultPayload.error)
+            .toBe('buildNotes is for new builds; with specJson, make the change in the spec itself.');
+    });
+
+    it('raises no size problem within 3 % (or 2 cm) of the size the user gave, and one per missed axis beyond it', () => {
+        const checks = (built: [number, number, number]): ObjectBuildChecks => ({
+            vertexCount: 1, triangleCount: 1, parts: [], missingParts: [], detachedParts: [], differences: [],
+            connectivity: { passed: true, bodies: 1, expectedBodies: 1, floatingParts: [], toleranceMeters: 0.002 },
+            builtBoundingMeters: built
+        });
+        const spec = { ...VASE, boundingMeters: [2.07, 1.47, 4.29] as [number, number, number] };
+        expect(describeProblems(checks([2.1, 1.46, 4.2]), spec, undefined, [2.07, 1.47, 4.29])).toEqual([]);
+        expect(describeProblems(checks([2.07, 1.6, 3.9]), spec)).toEqual([]);
+        const [problem, ...rest] = describeProblems(checks([2.07, 1.6, 3.9]), spec, undefined, [2.07, 1.47, 4.29]);
+        expect(rest).toEqual([]);
+        expect(problem).toContain('height (Y) is 1.600 m, over the given 1.47 m by 8.8 %; depth (Z) is 3.900 m, under the given 4.29 m by 9.1 %');
+        expect(problem).not.toContain('width (X)');
+    });
+
+    it('revises a build that misses the size the user gave by more than 3 %, naming the axis and the numbers', async () => {
+        const client = fakeClient({ specs: [JSON.stringify(VASE)] });
+        const out = await handlerWith(client).run({ request: 'a fluted vase with a knob on top', dimensionsHintMeters: [0.36, 0.9, 0.36] });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        const revision = client.calls.find(c => askedText(c).includes('Correct the current build spec'));
+        expect(revision).toBeDefined();
+        expect(askedText(revision!)).toMatch(/The user gave the size as 0\.36 x 0\.9 x 0\.36 m \(width x height x depth\) and the build misses it: height \(Y\) is 0\.\d{3} m, under the given 0\.9 m by \d+\.\d %/);
+        expect(askedText(revision!)).not.toMatch(/width \(X\) is|depth \(Z\) is/);
     }, 180_000);
 
     it('returns the last build that passed every check, and says so, when a revision cannot be built', async () => {

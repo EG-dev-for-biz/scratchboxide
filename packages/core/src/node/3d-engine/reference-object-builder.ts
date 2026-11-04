@@ -133,6 +133,12 @@ export interface ReferenceObjectBuildRequest {
     requestedModel?: string;
     dimensionsHintMeters?: Vec3;
     /**
+     * Facts the spec reader builds to and the picture does not show: published measurements, positions along the
+     * object, counts, and how its parts go together. Sent with the build spec and every revision, never to the
+     * reference picture or the comparison, and they win over the picture where the two disagree.
+     */
+    buildNotes?: string;
+    /**
      * True when the user asked for clay (untextured grey): the reference is drawn as clay, no materials are read and
      * every part is studio clay. Otherwise each part gets the material read from a full-colour reference.
      */
@@ -546,7 +552,7 @@ export function materialConventions(): string {
 }
 
 /** The rules every spec follows. Sent with the first request and again with every revision, which is stateless. */
-export function specConventions(dimensionsHintMeters?: Vec3, options: { materials?: boolean } = {}): string {
+export function specConventions(dimensionsHintMeters?: Vec3, options: { materials?: boolean; notes?: string } = {}): string {
     const size = dimensionsHintMeters
         ? `The user gave its size as about ${dimensionsHintMeters.map(d => `${d} m`).join(' x ')} (width x height x depth).`
         : 'Size it to its real-world scale.';
@@ -567,11 +573,17 @@ export function specConventions(dimensionsHintMeters?: Vec3, options: { material
         `- edgeRadiusMeters (sweep and revolve parts): how rounded the part's edges look in the picture, in metres. Real edges are rarely razor-sharp: cast, moulded and worn edges are soft, machined and sheet edges small. Omit it for the default (about 1.5 % of the part's smallest dimension); 0 only for a part meant to be sharp, such as a blade; at most ${OBJECT_SPEC_LIMITS.maxEdgeRadiusMeters}.`,
         '- Spend parts on the main mass first, then the secondary assemblies, then small details; use as many parts as the object needs.',
         ...(options.materials ? [materialConventions()] : []),
-        `- observations: short notes on proportions, counts and how the parts join${options.materials ? ', and the materials you see' : ''}.`
+        `- observations: short notes on proportions, counts and how the parts join${options.materials ? ', and the materials you see' : ''}.`,
+        ...(options.notes?.trim() ? [
+            '- A part the build notes place at object coordinates is a root part at exactly those coordinates (absolute, not attached), overlapping the parts it joins by a few centimetres: roots that overlap or touch count as one piece in expectedBodies. Attach only the details whose place the notes give relative to another part.',
+            '',
+            'Build notes (measured facts and construction notes from the conversation; where they disagree with the picture, the notes are right):',
+            options.notes.trim()
+        ] : [])
     ].join('\n');
 }
 
-export function buildSpecPrompt(request: string, dimensionsHintMeters?: Vec3, options: { materials?: boolean } = {}): string {
+export function buildSpecPrompt(request: string, dimensionsHintMeters?: Vec3, options: { materials?: boolean; notes?: string } = {}): string {
     return [
         `The image is a reference picture of: ${request}`,
         `Reverse-engineer it into a build spec for a procedural modeller${options.materials ? ', with the surface material of every part' : ''}. Reply with JSON matching the schema.`,
@@ -598,7 +610,7 @@ export function buildComparisonPrompt(request: string, spec: ObjectBuildSpec): s
 /** How a patch reply is written, for the revision and correction prompts. */
 const PATCH_REPLY_RULES = 'Reply with only what changes, as JSON matching the schema: in parts, each part you add or change, complete (it replaces the part with the same id; a new id adds a part); in removePartIds, the ids of parts to drop; boundingMeters, expectedBodies or observations only when they change. Parts you leave out stay exactly as they are.';
 
-export function buildRevisionPrompt(request: string, spec: ObjectBuildSpec, problems: string[], dimensionsHintMeters?: Vec3, options: { materials?: boolean; patch?: boolean } = {}): string {
+export function buildRevisionPrompt(request: string, spec: ObjectBuildSpec, problems: string[], dimensionsHintMeters?: Vec3, options: { materials?: boolean; patch?: boolean; notes?: string } = {}): string {
     return [
         `Image 1 is the reference picture of: ${request}. Image 2 is a clay render of the current build.`,
         options.patch
@@ -1543,7 +1555,7 @@ async function checkBuild(
     const checks: ObjectBuildChecks = { ...measured, differences };
     return {
         pass, spec, build, render: render!, checks, partBounds, meshes,
-        problems: describeProblems(checks, spec, partBounds),
+        problems: describeProblems(checks, spec, partBounds, input.dimensionsHintMeters),
         ...(comparisonError ? { comparisonError } : {}),
         ...(materials ? { material: materials.check } : {}),
         ...(materials?.fixedSpec ? { materialFixedSpec: materials.fixedSpec } : {})
@@ -1608,8 +1620,15 @@ function differenceProblem(d: ReferenceDifference): string {
     return `${d.partId ? `Part "${d.partId}": ` : ''}${d.problem}`;
 }
 
-/** What the vision model must fix after a pass; empty when nothing is left to fix. */
-export function describeProblems(checks: ObjectBuildChecks, spec: ObjectBuildSpec, partBounds?: PartBounds): string[] {
+/** How far a build may miss the size the user gave, on any axis, before it goes back for revision (and at least SIZE_HINT_MIN_METERS). */
+export const SIZE_HINT_TOLERANCE = 0.03;
+const SIZE_HINT_MIN_METERS = 0.02;
+
+/**
+ * What the vision model must fix after a pass; empty when nothing is left to fix. With the size the user gave
+ * (sizeHintMeters), a build that misses it on any axis by more than SIZE_HINT_TOLERANCE is a problem too.
+ */
+export function describeProblems(checks: ObjectBuildChecks, spec: ObjectBuildSpec, partBounds?: PartBounds, sizeHintMeters?: Vec3): string[] {
     const problems: string[] = [];
     for (const id of checks.missingParts) {
         problems.push(`Part "${id}" produced no usable geometry; give it a real size and shape.`);
@@ -1638,6 +1657,19 @@ export function describeProblems(checks: ObjectBuildChecks, spec: ObjectBuildSpe
     });
     if (offSize) {
         problems.push(`The built object measures ${checks.builtBoundingMeters.join(' x ')} m but boundingMeters says ${spec.boundingMeters.join(' x ')} m; make the parts and the stated size agree.`);
+    }
+    if (sizeHintMeters) {
+        const axes = ['width (X)', 'height (Y)', 'depth (Z)'];
+        const misses = sizeHintMeters.flatMap((want, k) => {
+            const built = checks.builtBoundingMeters[k];
+            const off = built - want;
+            return Math.abs(off) > Math.max(SIZE_HINT_TOLERANCE * want, SIZE_HINT_MIN_METERS)
+                ? [`${axes[k]} is ${built.toFixed(3)} m, ${off > 0 ? 'over' : 'under'} the given ${want} m by ${(Math.abs(off) / want * 100).toFixed(1)} %`]
+                : [];
+        });
+        if (misses.length) {
+            problems.push(`The user gave the size as ${sizeHintMeters.join(' x ')} m (width x height x depth) and the build misses it: ${misses.join('; ')}. Move and resize the parts that set that extent so the whole object fits the given size, keeping the proportions the user or build notes state.`);
+        }
     }
     return problems;
 }
@@ -1837,7 +1869,7 @@ export async function buildObjectFromReference(
         progress(`Reading the reference into a build spec with ${vision.current}`, 0.2);
         const firstSpec = await requestBuildableSpec(vision, [{
             role: 'user',
-            parts: [referencePart(reference), { text: buildSpecPrompt(input.request, input.dimensionsHintMeters, { materials: !clay }) }]
+            parts: [referencePart(reference), { text: buildSpecPrompt(input.request, input.dimensionsHintMeters, { materials: !clay, notes: input.buildNotes }) }]
         }], deps, input.signal, progress, clay);
         let current = await checkBuild(1, firstSpec.spec, firstSpec.build, input, vision, reference, clay);
         const passes: ObjectBuildPass[] = [passRecord(current, 'reference', firstSpec)];
@@ -1870,7 +1902,7 @@ export async function buildObjectFromReference(
                     parts: [
                         referencePart(reference),
                         imagePart(current.render, 'image/png'),
-                        { text: buildRevisionPrompt(input.request, current.materialFixedSpec ?? current.spec, [...current.problems, ...fixes.map(materialCorrectionNote)], input.dimensionsHintMeters, { materials: !clay, patch: deps.patchReplies !== false }) }
+                        { text: buildRevisionPrompt(input.request, current.materialFixedSpec ?? current.spec, [...current.problems, ...fixes.map(materialCorrectionNote)], input.dimensionsHintMeters, { materials: !clay, patch: deps.patchReplies !== false, notes: input.buildNotes }) }
                     ]
                 }], deps, input.signal, progress, clay, current.materialFixedSpec ?? current.spec);
                 const checked = await checkBuild(pass, revised.spec, revised.build, input, vision, reference, clay);
