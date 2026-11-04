@@ -672,9 +672,9 @@ function mergeStats(parts: Array<{ s: UvDistortionStats; w: number }>): UvDistor
     if (!(W > 0)) return emptyStats();
     return {
         stretchRms: Math.sqrt(parts.reduce((a, p) => a + p.w * p.s.stretchRms ** 2, 0) / W),
-        stretchMax: Math.max(...parts.map(p => p.s.stretchMax)),
+        stretchMax: parts.reduce((m, p) => Math.max(m, p.s.stretchMax), -Infinity),
         areaRms: Math.sqrt(parts.reduce((a, p) => a + p.w * p.s.areaRms ** 2, 0) / W),
-        areaMax: Math.max(...parts.map(p => p.s.areaMax)),
+        areaMax: parts.reduce((m, p) => Math.max(m, p.s.areaMax), -Infinity),
         flippedTriangles: parts.reduce((a, p) => a + p.s.flippedTriangles, 0)
     };
 }
@@ -1084,7 +1084,7 @@ export async function unwrapRewrapGlb(mode: UvRewrapMode, input: Buffer | Uint8A
             if (triArea3D[t] > 1e-12) dens.push({ d: Math.sqrt(a2 / triArea3D[t]), w: triArea3D[t] });
         }
         at.texelDensity = densityStats(dens);
-        densityAll.push(...dens);
+        for (const d of dens) densityAll.push(d);   // one per triangle: a spread overflows the call stack on large meshes
         uvAreaAll += nat.utilisation * nat.width * nat.height; atlasAreaAll += nat.width * nat.height;
 
         // per primitive: output vertices in first-use order
