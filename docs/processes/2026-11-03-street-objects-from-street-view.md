@@ -34,7 +34,13 @@
   * "wheeled suitcase with extended handle", read as not permanent;
   * "yellow metal patio chair", read as not permanent.
 * **Masks.** The segmenter (MediaPipe interactive + GrabCut) runs in memory (`segmentBytes`, the JPEG decoded inside the worker), prompted by the read's tight box. On a synthetic photo, 11,623 of 11,637 post pixels were found in 1.9 s.
-* **Penn, final run (`build/street-objects/d579eca3329e`, head 711a138b).** 41 of 41 images fetched, 3 panos registered, 13 reads (all from the reply cache).
+* **Penn, 8th Ave at the Farley Building (2026-11-04, the user's walk-mode block).**
+  * **The build:** staged at 40.7506, -73.9952 (`"query": "40.75060, -73.99520"`, `district: "scan"`, trees on), stopped once its district audit was written. A first build queried as "8th Ave & W 32nd St" geocoded to the 14 St / 8 Av station and was stopped.
+  * **The audit:** 951 clusters. The bollard rows come out as rows: 20, 16 and 15 members at about 1.52 m pitch.
+  * **The tool run:** 44 of 66 images, 5 panos registered.
+  * **Rebuilt:** a row of 15 yellow bollards with a dark ring near the top (IoU 0.623 against the scan's 0.184; ΔE 20.1 against 22.5), and a stainless bollard (0.727 against 0.395; ΔE 13.8 against 17.5).
+  * **Kept as scanned under MAIN's both-scores rule:** three objects with better silhouettes but colours further from the photos.
+* **Penn, 7th Ave, final run (`build/street-objects/d579eca3329e`, head 711a138b).** 41 of 41 images fetched, 3 panos registered, 13 reads (all from the reply cache).
   * Stainless steel security bollards (`row/56`), rebuilt: silhouette IoU 0.392 against the scan blob's 0.08; colour ΔE 4.5 against 5.0. The scan's 5.2 m ridge was split into the 2 bollards one view shows; the row's two ridges no view split keep the scan.
   * A weathered beige concrete trash can (`row/277`), rebuilt: IoU 0.313 against 0.047. It is built at its photos' height (0.91 m, photo-inferred), not the blob's 1.43 m.
   * A stainless stair handrail (`row/17`): the scan stays (IoU 0.009).
@@ -47,6 +53,7 @@
   * 6 kept as scanned, each with its numbers (a planter whose colour came out further from the photos; one whose silhouette was no closer).
   * Run 2 had rebuilt the white T-profile flexible bollards: IoU 0.442 against 0.139, ΔE 10.6 against 55.6.
 * **Earlier: Penn run 3's bin row** passed the old rule (IoU 0.243 against 0.218). The IoU floor added since would keep the scan.
+* **The keep rule (MAIN, 2026-11-03):** the reference is the Street View crop. The rebuild must beat the scan's blob on both silhouette IoU (and reach at least 0.3) and colour ΔE, both measured. The saved Penn and Union Square runs, re-judged under it from their recorded scores, keep the same decisions.
 * **Unit tests.** `packages/core/test/street-objects.test.ts`, 25 tests, no network or model:
   * profiles from exact ray-marched silhouettes: radius within 1 cm at 12 m, a 0.25 m pose offset taken up, a 10% scale error cancelled by the scan's height, a hidden foot;
   * a panel's offset;
