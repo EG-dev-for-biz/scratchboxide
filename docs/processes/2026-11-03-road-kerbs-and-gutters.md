@@ -71,8 +71,9 @@ often the building line, so that side's scan is kept and only the measured kerb 
 
 One profile is swept along each run. Across, from left to right, it holds:
 
-- each kerb: the kerb top (0.15 m behind the face, at the measured sidewalk level), a 45° nosing (2 cm, at most half the
-  face), the face itself (from the kerb top down to the gutter's invert), and the gutter;
+- each kerb: the kerb top (0.15 m behind the face, at the measured sidewalk level), a 45° nosing, the face itself (from
+  the kerb top down to the gutter's invert), and the gutter. The nosing follows the user's bevel rule: 1.5 % of the
+  kerb's smallest dimension, clamped to 1–5 cm (so 1 cm), and at most half the face;
 - the carriageway, through SB-Roadie's measured camber;
 - the same kerb parts mirrored on the other side, and a median's kerbs when one is measured.
 

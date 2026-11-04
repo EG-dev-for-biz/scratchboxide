@@ -69,8 +69,7 @@ export const ROAD_KERB_PARAMS = {
     gutterWidthM: 0.3, gutterDepthM: 0.025,
     /** The kerb top drawn behind the face (generated width, m); the scan's own sidewalk continues beyond it. */
     kerbTopM: 0.15,
-    /** The face's arris chamfered at 45 degrees, this size (generated, m), at most half the face. */
-    nosingM: 0.02,
+    /** The face's arris chamfered at 45 degrees by frontBevelM of the kerb's smallest dimension (generated), at most half the face. */
     /** The kerb line along a run: a local line fitted over this far either way (m), residuals past lineTrimM (m) dropped ... */
     lineHalfM: 8, lineTrimM: 0.25,
     /** ... except at a stretch's last two samples, where a kerb that bends off it by more than this (m) stays where the scan puts it (into a corner). */
@@ -90,6 +89,15 @@ export const ROAD_KERB_PARAMS = {
     joinMaxLevelM: 0.3
 };
 export type RoadKerbParams = typeof ROAD_KERB_PARAMS;
+
+/**
+ * The bevel of a built element's front edge (user decision, 2026-11-03): about 1.5 % of the element's smallest dimension,
+ * clamped to 1-5 cm. A kerb (a face and a top of some 15 cm) gets 1 cm; a flight of steps metres high a few centimetres.
+ * Generated: the scan resolves no arris.
+ */
+export function frontBevelM(smallestDimensionM: number): number {
+    return Math.max(0.01, Math.min(0.05, 0.015 * Math.max(0, smallestDimensionM)));
+}
 
 /** The scan's surface at a plan point (its highest triangle there), NaN where it has none. */
 export type HeightAt = (x: number, z: number) => number;
@@ -791,7 +799,7 @@ interface Profile { pts: ProfilePt[]; seg: Array<{ part: KerbPart; label: KerbLa
 
 /** A kerb's points from its raised side to the road side: back, arris top, arris on the face, foot, gutter edge (d along `toward`). */
 function kerbPoints(faceD: number, toward: 1 | -1, k: { topY: number; footY: number; gutter: { widthM: number } }, edgeY: number, P: RoadKerbParams, prefix: string, back = true): ProfilePt[] {
-    const nosing = Math.max(0, Math.min(P.nosingM, (k.topY - k.footY) / 2));
+    const face = k.topY - k.footY, nosing = Math.max(0, Math.min(frontBevelM(Math.min(face, P.kerbTopM)), face / 2));
     return [
         ...(back ? [{ d: faceD + toward * P.kerbTopM, y: k.topY, key: `${prefix}.back` }] : []),
         { d: faceD + toward * nosing, y: k.topY, key: `${prefix}.arrisTop` },
@@ -1011,7 +1019,7 @@ export const KERB_PART_METHOD: Record<string, string> = {
     'gutter:measured': "a gutter whose width and depth are the dip the scan shows at the kerb's foot",
     'gutter:generated': "a plausible gutter (0.3 m wide, 2.5 cm deep) where the scan resolves no dip at the kerb's foot",
     'face:measured': "the kerb face where the scan steps up, its height the measured rise (plus the gutter's depth); a ramp's where the face drops to the road",
-    'nosing:generated': "a 2 cm chamfer on the kerb's arris: the scan does not resolve it",
+    'nosing:generated': "a 45-degree chamfer on the kerb's arris, 1.5 % of the kerb's smallest dimension clamped to 1-5 cm (1 cm): the scan does not resolve it",
     'top:generated': "the kerb's top, 0.15 m wide behind the face at the sidewalk level the scan shows (its width not resolved by the scan)",
     'top:measured': "a median's top at the level the scan shows",
     'sidewalk:measured': 'the sidewalk SB-Roadie measured beyond the kerb, at its level'
