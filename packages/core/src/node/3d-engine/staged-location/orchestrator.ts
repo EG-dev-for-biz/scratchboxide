@@ -205,10 +205,11 @@ import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
-import { districtBuildingIndex, districtFootprints } from './pipeline-k/district-buildings';
+import { districtBuildingIndex, districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
 import { chunkCpuShare, chunkOwner, chunkParallel, kdCentreRunner, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, planDistrictChunks, type DistrictChunkPlan, type TileFrame } from './pipeline-k/district-chunks';
 import { auditDistrictForPlace, placeStoreEnabled, pullPlaceForRun, syncPlaceAfterObjects } from './place-store-district';
 import { PLACE_STORE_PARAMS } from './place-store';
+import { kdLookCode, showBestVersions } from './place-store-best';
 import { addSeamEdges, applySeamGain, cutChunkLayer, DISTRICT_SEAMS_PARAMS, DISTRICT_SEAMS_VERSION, sampleSeamColour, seamCoverage, seamOwner, solveSeamGains, type SeamCoverage, type SeamCutReport, type SeamEdges, type SeamSamples } from './pipeline-k/district-seams';
 import * as os from 'os';
 import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
@@ -2105,7 +2106,26 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // the vector buildings shown past the centre build's tiles stand in only where no chunk was joined
                 if (joined === todo.length) for (const l of run.state.layers.filter(x => (x.layer === 'l0o' || (centreInCloud && x.layer === 'l0')) && !x.retired)) run.commit({ ...l, retired: true }, run.layerMeta[l.objectId]);
                 // the place store (place-store-district.ts; SCRATCHBOX_PLACE_STORE=0 off): the joined district audited, its buildings listed for the object store
-                if (placeStoreEnabled() && here) cache.writeRunNote(runId, 'place_audit', await auditDistrictForPlace({ runId, place: placeValue!, originEllipsoidalHeightM: here.originEllipsoidalHeightM, plan, layers: run.state.layers, manifests: run.objectManifests, modelsDir: cache.modelsDir, workspaceRoot: cache.workspaceRoot, request, ...(deps.vectorEvidence ? { vectorEvidence: deps.vectorEvidence } : {}), signal: io.signal, progress: m => io.progress(m) }));
+                const footprints: DistrictFootprint[] = [];
+                if (placeStoreEnabled() && here) cache.writeRunNote(runId, 'place_audit', await auditDistrictForPlace({ runId, place: placeValue!, originEllipsoidalHeightM: here.originEllipsoidalHeightM, plan, layers: run.state.layers, manifests: run.objectManifests, footprintsOut: footprints, modelsDir: cache.modelsDir, workspaceRoot: cache.workspaceRoot, request, ...(deps.vectorEvidence ? { vectorEvidence: deps.vectorEvidence } : {}), signal: io.signal, progress: m => io.progress(m) }));
+                // each building shown at its best (place-store-best.ts): one whose version here is worse than its stored one stands as that
+                // the frame the run's objects are kept in: this build's extraction, else (the centre in the cloud) the centre job's
+                const objectsFrame = tiles ? objectFrameOf(tiles.extraction) : cloudScan ? objectFrameOf(cloudScanOf(cloudScan)) : undefined;
+                if (placeStoreEnabled() && footprints.length && objectsFrame) {
+                    if (placePull) await Promise.race([placePull, new Promise(r => setTimeout(r, PLACE_STORE_PARAMS.pullWaitMs).unref())]);
+                    const best = showBestVersions({
+                        runId, frame: objectsFrame, layers: run.state.layers, manifests: run.objectManifests, footprints, store: defaultDurableAssetStore(),
+                        look: kdLookCode(process.env, request.steps), modelsDir: cache.modelsDir, outDir: path.join(cache.dir, 'district-best'), publish: (file, name) => cache.publishFile(file, name)
+                    });
+                    for (const b of best.layers) {
+                        // the layer as built is kept by the superseding one: the run's own versions are still stored (as history where worse)
+                        run.objectManifests.set(b.layer.objectId, b.manifest);
+                        run.commit(b.layer, run.layerMeta[b.original.objectId]);
+                        committed.push(b.layer);
+                        run.emit('chunks', 'running', { message: `${b.layer.layer}: ${b.layer.provenance.note?.split('; ').pop() ?? 'buildings shown from an earlier run'}`, layers: [b.layer] }, true);
+                    }
+                    cache.writeRunNote(runId, 'place_best', best.report);
+                }
                 const failed = todo.length - joined;
                 return {
                     status: failed || degradations.length ? 'degraded' : 'committed', value: { chunks: plan.chunks.length, joined, failed }, layers: committed, degradations,
@@ -2140,6 +2160,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 rebuild: { droppedNotResolvable: 0, sourceLimits: scanOut.result.sourceLimits }
             });
             // no training pairs from here: the centre job's raw scan stays in the cloud (its caches go to the training bucket)
+            // the place's versions are in the object store before this run's are offered to it (as the finish below does)
+            if (placePull) await Promise.race([placePull, new Promise(r => setTimeout(r, PLACE_STORE_PARAMS.pullWaitMs).unref())]);
             keepSceneObjects(run, cache, outcome, scan, request.query, { isolate: false });
             return outcome;
         }
