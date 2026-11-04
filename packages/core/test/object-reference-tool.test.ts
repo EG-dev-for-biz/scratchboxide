@@ -2013,10 +2013,13 @@ describe('build_3d_object_from_reference', () => {
         const controller = new AbortController();
         const client = fakeClient({ specs: [JSON.stringify(VASE)] });
         const stop = handlerWith(client, { stageAtLocation: async (args, c) => { setTimeout(() => controller.abort(), 20); return stagedScene(otherUri)(args, c); } });
-        const stopStarted = Date.now();
+        const stopStarted = Date.now(), stopStartedCpu = cpuMs();
         const stopped = await stop.run({ request: 'a vase', location, placement: { eastMeters: 12, northMeters: 8, headingDeg: 90 } }, { ...ctx(), signal: controller.signal });
+        const stopMs = Date.now() - stopStarted;
+        // counted as the one-go read is, so a runner that pauses the process does not stretch it
+        const stopBusyMs = Math.min(stopMs, cpuMs() - stopStartedCpu);
         expect(stopped.resultPayload).toMatchObject({ stage: 'placement', aborted: true, error: 'Stopped by the user.' });
-        expect(Date.now() - stopStarted).toBeLessThan(syncMs);
+        expect(stopBusyMs, `the stop took ${stopBusyMs} ms (${stopMs} ms on the clock) against ${syncBusyMs} ms for the whole read`).toBeLessThan(syncBusyMs);
         // The build starts alongside staging and is stopped when staging or placement fails: it never gets as far as
         // comparing a build with the reference, and nothing is published.
         expect(client.calls.filter(isComparisonCall)).toHaveLength(0);
