@@ -726,7 +726,11 @@ describe('build_3d_object_from_reference', () => {
             const mat = glbJson.materials[mesh.primitives[0].material];
             expect(mat.pbrMetallicRoughness.baseColorFactor.slice(0, 3).map((v: number) => +v.toFixed(4))).toEqual([0.05, 0.12, 0.4]);
             expect(mat.pbrMetallicRoughness.roughnessFactor).toBeCloseTo(0.35, 5);
-            expect(mat.extras.scratchbox).toEqual({ partId: mesh.name, provenance: 'generated', description: 'satin blue glaze' });
+            expect(mat.extras.scratchbox).toEqual({
+                partId: mesh.name, provenance: 'generated', description: 'satin blue glaze',
+                // the interpreter's edge radius survives the provenance stamp (the default: none is given in VASE)
+                edge: { radiusMeters: expect.any(Number), source: 'default', provenance: 'generated' }
+            });
         }
         expect(glbJson.asset.extras.scratchbox.materialProvenance.label).toBe('generated');
         expect(artifact.data.objects[0].content.durableUri).toMatch(/^\/models\/.+\.glb$/);
