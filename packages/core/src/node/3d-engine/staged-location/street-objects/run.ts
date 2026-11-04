@@ -535,6 +535,10 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
             }
         }
         spec ??= streetObjectSpec({ family, profile: combined, look: reading.look, panelRightDir: [leadCam.right[0], leadCam.right[2]], radialSymmetry: fam.members[0].radialSymmetry });
+        // members of a row no view showed get the look of those seen (alike in the scan, at a steady pitch): generated, said so
+        const seenIds = new Set(usable.map(u => cidOf(u.k)));
+        const unseen = family.members.filter(m => !seenIds.has(m.clusterId)).length;
+        if (unseen) spec.provenance.push({ field: 'look of unseen members', label: 'generated', source: `the look read from ${family.members.length - unseen} member${family.members.length - unseen === 1 ? '' : 's'} given to ${unseen} alike member${unseen === 1 ? '' : 's'} no view showed`, reason: 'no registered view saw them clear; they stand in the same row, alike in height and plan' });
         if (split) spec.provenance = spec.provenance.map(p => (p.field === 'placement' ? { field: 'placement', label: 'photo-inferred', source: 'each piece\'s foot cast from the registered Street View pose onto the scan\'s line through the ridge (the line, its height and its support measured)' } : p));
         rep.spec = spec;
         let glb: Buffer;
