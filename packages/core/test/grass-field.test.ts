@@ -281,4 +281,35 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
         for (let q = 0; q < u.texture.length; q += 4) sd += (u.texture[q] / 255 - mean) ** 2;
         expect(Math.sqrt(sd / (u.texture.length / 4))).toBeGreaterThan(0.05);
     });
+
+    it('blends the photo colour between cells: no 1 m squares in the underlayer or the blade tints', async () => {
+        // a 20 x 20 m lawn, its west half one green and its east half another; no clumps' contact shade in the way
+        const n = 20, M = n * n, mask = new Uint8Array(M).fill(1), colour = new Float32Array(M * 3);
+        for (let k = 0; k < n; k++) for (let i = 0; i < n; i++) colour.set(i < 10 ? [0.04, 0.10, 0.03] : [0.10, 0.14, 0.05], (k * n + i) * 3);
+        const g: GrassFieldGrid = {
+            nx: n, nz: n, x0: -10, z0: -10, cellM: 1, mask, exclude: new Uint8Array(M), confidence: new Float32Array(M).fill(1),
+            surfaceY: new Float32Array(M).fill(0), colour
+        };
+        const f = await buildGrassField(g, tmp(), { densityPerM2: 2, bandRadiusM: 30, underlayerRadiusM: 30, contactShade: 0, pixelAngle: 0 });
+        const u = f.underlayer;
+        // along the row z = 0 (inside the lawn, away from its edges), the red channel west to east
+        const row: Array<[number, number]> = [];
+        for (let q = 0; q < u.positions.length / 3; q++) if (Math.abs(u.positions[q * 3 + 2]) < 1e-4 && Math.abs(u.positions[q * 3]) <= 4) row.push([u.positions[q * 3], u.colours[q * 4]]);
+        row.sort((a, b) => a[0] - b[0]);
+        const lo = row[0][1], hi = row[row.length - 1][1];
+        expect(hi).toBeGreaterThan(lo * 2);
+        // the change is spread over the metre between the two cell centres: no vertex-to-vertex step holds most of it
+        let maxStep = 0;
+        for (let q = 1; q < row.length; q++) maxStep = Math.max(maxStep, Math.abs(row[q][1] - row[q - 1][1]));
+        expect(maxStep).toBeLessThan((hi - lo) * 0.3);
+        // halfway between the centres of the two cells at the boundary (x = 0), halfway between the colours
+        const mid = row.find(r => Math.abs(r[0]) < 1e-4)!;
+        expect(mid[1]).toBeCloseTo((lo + hi) / 2, 2);
+        // the blade tints blend the same way: a clump near the boundary takes a colour between the two
+        const tints: Array<[number, number]> = [];
+        for (const v of f.variants) for (let q = 0; q < v.confidence.length; q++) if (Math.abs(v.translation[q * 3]) < 0.4) tints.push([v.translation[q * 3], v.tint[q * 3] / (1 + 0)]);
+        expect(tints.length).toBeGreaterThan(0);
+        const strictlyBetween = tints.filter(([, r]) => r > 0.04 / 0.8 * 1.09 && r < 0.10 / 0.8 * 0.91).length;
+        expect(strictlyBetween).toBeGreaterThan(0);
+    });
 });

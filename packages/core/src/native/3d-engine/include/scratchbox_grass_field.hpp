@@ -380,6 +380,34 @@ private:
         return false;
     }
 
+    /**
+     * `value(cell)` at (x, z), bilinear between the centres of the four cells around it that `ok(cell)` accepts (their
+     * weights renormalised), else the own cell's: colours and fades vary smoothly instead of stepping cell by cell.
+     */
+    template <class Value, class Ok>
+    double cellLerp(double x, double z, int own, Value value, Ok ok) const {
+        const double fx = (x - g_.x0) / g_.cellM - 0.5, fz = (z - g_.z0) / g_.cellM - 0.5;
+        const long i = long(std::floor(fx)), k = long(std::floor(fz));
+        const double tx = fx - i, tz = fz - k;
+        double sum = 0, w = 0;
+        for (int dk = 0; dk < 2; ++dk) for (int di = 0; di < 2; ++di) {
+            const long ii = i + di, kk = k + dk;
+            if (ii < 0 || kk < 0 || ii >= long(g_.nx) || kk >= long(g_.nz)) continue;
+            const int c = int(kk * g_.nx + ii);
+            if (!ok(c)) continue;
+            const double wt = (di ? tx : 1 - tx) * (dk ? tz : 1 - tz);
+            sum += wt * value(c); w += wt;
+        }
+        return w > 1e-6 ? sum / w : value(own);
+    }
+
+    bool hasColour(int c) const { return g_.mask[c] && (g_.colour[size_t(c) * 3] > 0 || g_.colour[size_t(c) * 3 + 1] > 0 || g_.colour[size_t(c) * 3 + 2] > 0); }
+
+    /** The photo colour at (x, z), bilinear between the grass cells with a colour. */
+    void colourAt(double x, double z, int own, double out[3]) const {
+        for (int q = 0; q < 3; ++q) out[q] = cellLerp(x, z, own, [&](int c) { return double(g_.colour[size_t(c) * 3 + q]); }, [&](int c) { return hasColour(c); });
+    }
+
     /** The surface height at (x, z): bilinear between the centres of the grass cells around it, else its own cell's. */
     double surfaceAt(double x, double z, int own) const {
         const double fx = (x - g_.x0) / g_.cellM - 0.5, fz = (z - g_.z0) / g_.cellM - 0.5;
@@ -464,13 +492,16 @@ private:
             if ((x - cx) * (x - cx) + (z - cz) * (z - cz) > R * R) continue;
             const int c = cellOf(x, z);
             if (!grass(c)) continue;
-            const float* col = &g_.colour[size_t(c) * 3];
-            if (!(col[0] > 0 || col[1] > 0 || col[2] > 0)) continue;
+            if (!hasColour(c)) continue;
+            double col[3];
+            colourAt(x, z, c, col);
             const double est = surfaceAt(x, z, c), sy = scanAt(x, z, c, est);
             const double y = (std::isfinite(sy) ? sy : est) + p_.underlayerLiftM;
             // shade: the lower grass, deeper where clumps stand; fading to the photo colour at the grass edge
             const double rim = std::clamp((R - std::sqrt((x - cx) * (x - cx) + (z - cz) * (z - cz))) / std::max(1e-3, R * p_.underlayerRadialFade), 0.0, 1.0);
-            const double inside = std::clamp(edge[size_t(c)] * double(g_.cellM) / std::max(1e-3, p_.underlayerFadeM), 0.0, 1.0) * rim;
+            // cells from the grass edge, interpolated over every cell (the non-grass ones at 0), so the fade is smooth
+            const double edgeCells = cellLerp(x, z, c, [&](int e) { return double(edge[size_t(e)]); }, [](int) { return true; });
+            const double inside = std::clamp((edgeCells - 0.5) * double(g_.cellM) / std::max(1e-3, p_.underlayerFadeM), 0.0, 1.0) * rim;
             int count = 0;
             for (int dz = -1; dz <= 1; ++dz) for (int dx = -1; dx <= 1; ++dx) {
                 auto it = near.find(key(x + dx * cr, z + dz * cr));
@@ -555,9 +586,10 @@ private:
                 in.t[0] = float(x); in.t[1] = float(std::isfinite(scanY) ? scanY : est); in.t[2] = float(z);
                 in.r[0] = 0; in.r[1] = float(std::sin(yaw / 2)); in.r[2] = 0; in.r[3] = float(std::cos(yaw / 2));
                 in.s[0] = float(sc); in.s[1] = float(hy); in.s[2] = float(sc);
-                const float* rgb = &g_.colour[size_t(c) * 3];
+                double rgb[3];
+                colourAt(x, z, c, rgb);
                 const double tint = 1 + p_.tintJitter * (2 * hash01(ua, ub, salt + 47) - 1);
-                const bool has = rgb[0] > 0 || rgb[1] > 0 || rgb[2] > 0;
+                const bool has = hasColour(c);
                 for (int q = 0; q < 3; ++q) {
                     // no photo colour: the clump's own tone (white tint)
                     const double lin = has ? rgb[q] / kMidTone : 1.0;
