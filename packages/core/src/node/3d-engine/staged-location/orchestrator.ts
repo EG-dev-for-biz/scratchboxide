@@ -206,7 +206,8 @@ import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSIO
 import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
 import { districtBuildingIndex, districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
-import { chunkCpuShare, chunkOwner, chunkParallel, kdCentreRunner, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, planDistrictChunks, type DistrictChunkPlan, type TileFrame } from './pipeline-k/district-chunks';
+import { chunkCpuShare, chunkOwner, chunkParallel, kdCentreRunner, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
+import { createChunkJoiner } from './pipeline-k/chunk-join-worker';
 import { auditDistrictForPlace, placeStoreEnabled, pullPlaceForRun, syncPlaceAfterObjects } from './place-store-district';
 import { PLACE_STORE_PARAMS } from './place-store';
 import { kdLookCode, showBestVersions } from './place-store-best';
@@ -650,7 +651,7 @@ export interface StagedLocationDeps {
     /** Pipeline K-D: every leaf tile of the district's radius fetched into the shared leaf cache while the chunks build; absent = each chunk fetches its own. */
     prefetchTiles?: (req: { lat: number; lng: number; elevation?: number; radiusM: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void }) => Promise<{ leaves: number; downloaded: number; ms: number }>;
     /** Pipeline K-D: one chunk of a chunked district built on its own (its own worker, staged-location-tool.ts); absent = no chunking. */
-    runChunk?: (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void; atOnce?: number }) => Promise<StagedLocationOutcome>;
+    runChunk?: (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void; atOnce?: number; /** What the chunk keeps, for a build that cuts its own layers (the cloud job); one that does not sends them uncut. */ cut?: KdChunkCutSpec }) => Promise<StagedLocationOutcome>;
 }
 
 export interface StagedLocationContext {
@@ -664,6 +665,8 @@ export interface StagedLocationContext {
     retry?: { runId: string; stage: StageId };
     /** A resume: the run to rebuild as recorded; cached stages are reused, nothing is bypassed. */
     resume?: { runId: string };
+    /** The run's frame (the outcome's compat.frame) as soon as its tiles are in: a chunked district's centre job publishes it to the others. */
+    onFrame?: (frame: TileFrame) => void;
 }
 
 /** No real data exists to show: the place could not be resolved, or the tiles do not cover it. */
@@ -1362,6 +1365,22 @@ function chainLayerTransforms(a: StagedRun['layerTransform'], b: StagedRun['laye
     return (layer, meta) => b(a(layer, meta), meta);
 }
 
+/** What joining one chunk took here, from its outcome in hand to its last layer published (the chunks stage's report). */
+interface ChunkJoinRecord {
+    files: number;
+    /** Layer files that came cut by the chunk's own build (the cloud job), and those cut here. */
+    cutByJob: number;
+    cutHere: number;
+    /** Bytes read (as downloaded) and written, and the bytes the compaction dropped (in the job, or here). */
+    bytesIn: number;
+    bytesOut: number;
+    droppedBytes: number;
+    /** On the join's worker thread (read; check, or cut, place and compact; write), and publishing on this thread. */
+    workerMs: number;
+    publishMs: number;
+    ms: number;
+}
+
 /** A layer file joined into a chunked district (published under this suffix): never cut again. */
 const CHUNK_URL = /_kd\d+_[0-9a-f]{8}\.glb$/;
 
@@ -1896,7 +1915,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     .then(r => { prefetch = r; }, err => { if (!io.signal.aborted) prefetch = { error: errorMessage(err) }; }) : Promise.resolve();
                 const committed: StagedLayer[] = [];
                 const degradations: DegradationRecord[] = [];
-                const report: Array<{ index: number; radiusM: number; buildings: number; status: string; runId?: string; layers?: number; truncated?: boolean; ms: number; error?: string }> = [];
+                const report: Array<{ index: number; radiusM: number; buildings: number; status: string; runId?: string; layers?: number; truncated?: boolean; ms: number; error?: string; join?: ChunkJoinRecord }> = [];
+                // the chunks' layers checked and written (cut, placed and compacted when they came uncut) on a worker thread, not this one
+                const joiner = createChunkJoiner();
                 // the vector buildings shown past the centre build's tiles stand in only where no chunk has been joined yet: as each
                 // chunk joins, the placeholders it owns are taken out (the layer republished without them, whole buildings by their middle)
                 const joinedChunks = new Set<number>(), replacedPlaceholders = new Set<string>();
@@ -1937,7 +1958,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             place: { lat: ll.lat, lng: ll.lng, formattedAddress: c.centre ? placeValue!.formattedAddress : `${placeValue!.formattedAddress} (chunk ${c.index})` },
                             ...(request.enhance !== undefined ? { enhance: request.enhance } : {}), ...(request.steps ? { steps: request.steps } : {}),
                             chunk: { of: runId, index: c.index, rect: { x0: c.rect.x0 - c.cx, z0: c.rect.z0 - c.cz, x1: c.rect.x1 - c.cx, z1: c.rect.z1 - c.cz } }
-                        }, { signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce });
+                        }, {
+                            signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce,
+                            // the district's frame when known already (the centre built here); else the centre job publishes it to the
+                            // others (district-chunks.ts cutChunkLayer)
+                            cut: { version: KD_CHUNK_CUT_VERSION, plan, district: here ? { ...here } : { lat: placeValue!.lat, lng: placeValue!.lng }, bandM: DISTRICT_CHUNKS_PARAMS.seamBandM }
+                        });
                         if (!out.compat.frame) throw new Error('the chunk did not report its frame');
                         if (c.centre) {
                             here = out.compat.frame;
@@ -1951,27 +1977,35 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             here = (await centreFrame.promise) ?? { lat: placeValue!.lat, lng: placeValue!.lng, originEllipsoidalHeightM: out.compat.frame.originEllipsoidalHeightM };
                             cloudScan ??= out;
                         }
+                        const tJoin = now();
                         const m = frameTransform(out.compat.frame, here);
-                        const mine = (x: number, z: number) => owner(x, z) === c.index, band = chunkTerritory(plan, c.index, DISTRICT_CHUNKS_PARAMS.seamBandM);
                         const layers = ((out.result.artifact as { data?: { stagedBuild?: { layers?: StagedLayer[] } } } | undefined)?.data?.stagedBuild?.layers ?? []);
                         const hidden = new Set(layers.filter(l => !l.retired).flatMap(l => l.supersedes));
                         const take = layers.filter(l => !l.retired && !hidden.has(l.objectId) && l.stage !== 'vector');
                         const dir = path.join(cache.dir, 'district-chunks');
                         fs.mkdirSync(dir, { recursive: true });
-                        const joinFile = (url: string, whole: boolean) => {
+                        const join: ChunkJoinRecord = { files: 0, cutByJob: 0, cutHere: 0, bytesIn: 0, bytesOut: 0, droppedBytes: 0, workerMs: 0, publishMs: 0, ms: 0 };
+                        const joinFile = async (url: string, whole: boolean) => {
                             const source = path.join(cache.modelsDir, path.basename(url));
                             if (!fs.existsSync(source)) return undefined;
-                            const r = joinChunkGlb(fs.readFileSync(source), m, whole ? mine : band, { whole });
                             const name = `${path.basename(url, '.glb')}_kd${c.index}_${crypto.createHash('sha256').update(`${runId}:${url}`).digest('hex').slice(0, 8)}.glb`;
-                            fs.writeFileSync(path.join(dir, name), r.glb);
-                            return { ...cache.publishFile(path.join(dir, name), name), kept: r.keptTriangles };
+                            let t = now();
+                            const r: ChunkLayerJoinResult = await joiner.join({ source, target: path.join(dir, name), transform: Array.from(m), whole, of: runId, chunk: c.index, plan, bandM: DISTRICT_CHUNKS_PARAMS.seamBandM });
+                            join.workerMs += now() - t;
+                            t = now();
+                            const pub = cache.publishFile(path.join(dir, name), name);
+                            join.publishMs += now() - t;
+                            join.files++;
+                            if (r.cutBy === 'job') join.cutByJob++; else join.cutHere++;
+                            join.bytesIn += r.bytesIn; join.bytesOut += r.bytesOut; join.droppedBytes += r.droppedBytes;
+                            return { ...pub, kept: r.keptTriangles };
                         };
                         const batch: StagedLayer[] = [];
                         for (const l of take) {
                             const whole = l.stage === 'trees';
-                            const clay = joinFile(l.url, whole);
+                            const clay = await joinFile(l.url, whole);
                             if (!clay || !clay.kept) continue;
-                            const tex = l.textured ? joinFile(l.textured.url, whole) : undefined;
+                            const tex = l.textured ? await joinFile(l.textured.url, whole) : undefined;
                             const layer: StagedLayer = {
                                 ...l, objectId: `${l.objectId}-kd${c.index}`, url: clay.url, bytes: clay.bytes, counts: { vertices: l.counts.vertices, triangles: clay.kept },
                                 supersedes: [], revealAfter: [], reveal: { ...l.reveal, crossfadeFrom: [] },
@@ -1984,8 +2018,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         committed.push(...batch);
                         joined++;
                         retirePlaceholders(c.index);
+                        join.ms = now() - tJoin;
+                        io.progress(`chunk ${c.index}: joined in ${(join.ms / 1000).toFixed(1)} s (${join.files} files, ${(join.bytesIn / 1e6).toFixed(0)} MB in, ${join.cutByJob} cut by its build${join.cutHere ? `, ${join.cutHere} cut here` : ''})`);
                         const truncated = out.result.stages.some(s => s.stage === 'tiles' && s.status === 'degraded');
-                        report.push({ index: c.index, radiusM: c.radiusM, buildings: c.buildings.length, status: out.result.status, ...(out.runId ? { runId: out.runId } : {}), layers: batch.length, truncated, ms: now() - t0 });
+                        report.push({ index: c.index, radiusM: c.radiusM, buildings: c.buildings.length, status: out.result.status, ...(out.runId ? { runId: out.runId } : {}), layers: batch.length, truncated, ms: now() - t0, join });
                         if (truncated) degradations.push(run.degrade(record('chunks', 'chunk_truncated', {
                             part: { description: `chunk ${c.index} of the district` }, intended: `its ${Math.round(c.radiusM)} m at leaf LOD`, fellTo: 'as far as its leaf tiles reach',
                             provenanceAfter: PROVENANCE.asScanned, reason: `chunk ${c.index}'s extraction reached the leaf-tile cap before its own radius`, transient: false, runId, now: now()
@@ -2007,8 +2043,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                 };
                 const width = Math.min(parallel, todo.length);
-                await Promise.all(Array.from({ length: width }, async () => { while (next < todo.length) await one(todo[next++], width); }));
-                if (retry.length) { let k = 0; const again = Math.min(parallel, retry.length); await Promise.all(Array.from({ length: again }, async () => { while (k < retry.length) await one(retry[k++], again, true); })); }
+                try {
+                    await Promise.all(Array.from({ length: width }, async () => { while (next < todo.length) await one(todo[next++], width); }));
+                    if (retry.length) { let k = 0; const again = Math.min(parallel, retry.length); await Promise.all(Array.from({ length: again }, async () => { while (k < retry.length) await one(retry[k++], again, true); })); }
+                } finally {
+                    await joiner.close();
+                }
                 // ---- the seam stage over the joined ground (scene-healing §3.1; pipeline-k/district-seams.ts), one chunk at a time:
                 // the chunks' photos levelled to one another by a gain per chunk, fitted where they meet; each chunk's ground cut
                 // exactly at the cell lines around what it owns, and its cut edge moved onto the edge the chunks before it left
@@ -2359,6 +2399,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         });
         persist();
         tilesSettle(tiles.value ? { extraction: tiles.value.extraction, key: tiles.value.key } : undefined);
+        if (tiles.value) ctx.onFrame?.({ lat: placeValue!.lat, lng: placeValue!.lng, originEllipsoidalHeightM: tiles.value.extraction.originEllipsoidalHeightM });
         if (tiles.status === 'stopped' || !tiles.value) throw new StagedLocationHardFailure('tiles', 'run_deadline', `The run reached its time limit before any tiles were extracted, so there is nothing to show.`);
         const t = tiles.value;
 
