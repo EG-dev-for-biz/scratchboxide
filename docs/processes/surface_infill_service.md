@@ -80,9 +80,30 @@
 
 ---
 
-## 4. Proof sheets (docs/screenshots/surface_infill_2026-11-03/, gitignored)
+## 4. Proof sheets (docs/screenshots/surface_infill_2026-11-03/, gitignored; sent to the chat)
 
-Filled in below from the runs.
+Offline dev runs on real extractions at 13de10e4. Vehicle regions were rebuilt from the vehicle step's recorded readings
+(no model call), with PR 2's vertex moves; tree caps come from the strip's devegetated.glb. Both fills are measured by
+the same seam gate in the same chart, as written into the GLB.
+
+| Place (regions) | Gate passed: today's → infill | Median rim ΔE00 | Median fine detail (floor 0.5) |
+|---|---|---|---|
+| Penn Station's streets, K-D chunk 93a2d05b (30 vehicle regions) | 16 → 20 (in-chart 25) | 2.36 → 1.47 | 0.83 → 0.80 |
+| Trafalgar Square, a plaza (40 largest of 290 vehicle regions) | 32 → 31 (in-chart 34) | 2.03 → 1.15 | 0.81 → 0.70 |
+| Trafalgar Square, tree caps (30 largest of 1,151) | 16 → 17 (in-chart 19) | 3.99 → 2.12 | 1.16 → 1.04 |
+| Fixtures (lane street, paving, gravel, kerb street) | all pass; every rung as the surface measures | 0.14-1.74 | 0.80-1.16 |
+
+What the pictures show:
+- Penn: a queue of cars and a red bus lane come out with their lane lines and the red continued (today's fill smears
+  them). A semi truck's lot is mostly clean, with a few dark lumps of the trucks' roofs left standing; in PR 2 the
+  vertices that move are decided against the ring's surface as before, which fixes that.
+- Trafalgar: an enclosed courtyard car park (326 m²) has no clear surface within reach. Both fills fall to flat grey;
+  the infill only because no library was handed in (the vehicle step should pass the surface library). One region of
+  parked cars fails the infill's sharpness floor (0.47) where today's smear passes.
+- Tree caps: grass and paving continue under the cut crowns where the strip's own fill leaves flat grey blocks; the
+  join to the ground around halves (rim 4.0 → 2.1).
+- The infill's gate is stricter than what today's fills show: a share of its own passes (in-chart) is lost when the fill
+  is written into the scan's atlas at its own resolution (25 → 20 at Penn).
 
 ---
 
