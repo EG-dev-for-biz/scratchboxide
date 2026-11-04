@@ -119,8 +119,11 @@ import { segmentOwnershipViews } from './ownership-masks';
 import { buildGroundModel, geodeticToScan, loadScanMesh, scanToGeodetic, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
 import { removeVehicles, vehicleRemovalEnabled, vehicleRemovalParams, visionVehicleBatchJudge, visionVehicleJudge, VEHICLE_REMOVAL_VERSION, type VehicleRemovalReport } from './vehicle-removal';
 import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, PROCEDURAL_ROADS_VERSION, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
-import { renderTopDownPhoto } from './top-down-photo';
+import { renderTopDownPhoto, topDownJpeg } from './top-down-photo';
 import { synthesizeRoadTextures } from './road-texture';
+import { buildKerbedRoadMesh, measureKerbs, nearStreets, roadKerbsEnabled, scanHeightIndex, writeKerbedRoadsGlb, ROAD_KERBS_VERSION, type FootprintTri, type KerbModelStats } from './road-kerbs';
+import { carveUnderRoads, isRoadCarved, prepareFootprint, ROAD_CARVE_VERSION, type CarveFootprint, type RoadCarveReport } from './road-carve';
+import { flattenRoadsInGlb, flattenTargets, roadFlattenEnabled, ROAD_FLATTEN_PARAMS, ROAD_FLATTEN_VERSION, type RoadFlattenStats } from './road-flatten';
 import { LIBRARY_FILL_VERSION, type LibraryFillSpec } from './texture-library-fill';
 import { addLibraryDetail, TWIN_DETAIL_VERSION } from './twin-library-detail';
 import { loadSurfaceLibrary, type SurfaceLibrary } from './surface-materials';
@@ -1308,6 +1311,9 @@ function loadMesh(files: Array<string | undefined>): RenderMesh3D {
 /** A district layer published without the kept structure's footprint (keptStructureCarver). */
 const CARVED_URL = /_around_[0-9a-f]{8}\.glb$/;
 
+/** A ground layer published with the scan carved under the streets' kerbs (roadCarver). */
+const ROAD_CARVED_URL = /_road_[0-9a-f]{8}\.glb$/;
+
 /** What the district layers lost to the kept structure, per layer (the result's activeScene.footprintHidden). */
 const FOOTPRINT_REPORTS = new WeakMap<StagedRun, { footprint?: StructureFootprint; error?: string; layers: Array<{ objectId: string; removedTriangles: number; keptTriangles: number }> }>();
 
@@ -1429,6 +1435,61 @@ function keptStructureCarver(run: StagedRun, cache: StageCache, base: string): (
             ...layer, url: pub.url, bytes: pub.bytes,
             counts: { vertices: layer.counts.vertices, triangles: out.keptTriangles },
             provenance: { ...layer.provenance, note: layer.provenance.note ? `${layer.provenance.note}; ${note}` : note }
+        };
+    };
+}
+
+/** What the streets' carve did to a ground layer's file (the run note road_carve). */
+interface RoadCarveRecord { objectId: string; url: string; textured: boolean; report: RoadCarveReport; flatten?: RoadFlattenStats; ms: number }
+
+/**
+ * The layer transform of a build whose streets were drawn with kerbs and gutters (road-kerbs.ts): the shown ground (the
+ * remesh, or whatever layer is the ground) and its textured twin are republished with the scan's streets just outside the
+ * new surfaces settled onto SB-Roadie's levels (road-flatten.ts), then carved under them (road-carve.ts), so nothing of the
+ * scan pokes through. Each file is carved once; a file carved already (a later commit adding the twin, the seam stage's cut
+ * of a carved ground) is left as it is, and a chunk's own layers come carved by its own build.
+ */
+function roadCarver(cache: StageCache, roads: RoadSurface[], footprint: CarveFootprint, key8: string, buildingAt: ((x: number, z: number) => number) | undefined, records: RoadCarveRecord[]): (layer: StagedLayer, meta: StagedLayerObjectMeta) => StagedLayer {
+    const done = new Map<string, { url: string; bytes: number; kept: number } | undefined>();
+    const target = roadFlattenEnabled() ? flattenTargets(roads, ROAD_FLATTEN_PARAMS, { liftM: 0, ...(buildingAt ? { buildingAt } : {}) }) : undefined;
+    const carve = (url: string, objectId: string, textured: boolean) => {
+        if (!url.startsWith('/models/') || ROAD_CARVED_URL.test(url)) return undefined;
+        if (done.has(url)) return done.get(url);
+        const source = path.join(cache.modelsDir, path.basename(url));
+        let r: { url: string; bytes: number; kept: number } | undefined;
+        if (fs.existsSync(source)) {
+            const t0 = Date.now();
+            let bytes: Uint8Array = fs.readFileSync(source);
+            if (!isRoadCarved(bytes)) {
+                const flat = target ? flattenRoadsInGlb(bytes, target) : undefined;
+                if (flat) bytes = flat.glb;
+                const out = carveUnderRoads(bytes, footprint);
+                const dir = path.join(cache.dir, 'road-carve');
+                fs.mkdirSync(dir, { recursive: true });
+                const name = `${path.basename(url, '.glb')}_road_${key8}.glb`;
+                fs.writeFileSync(path.join(dir, name), out.glb);
+                const pub = cache.publishFile(path.join(dir, name), name);
+                r = { url: pub.url, bytes: pub.bytes, kept: layerCounts(path.join(dir, name)).triangles };
+                records.push({ objectId, url, textured, report: out.report, ...(flat ? { flatten: flat.stats } : {}), ms: Date.now() - t0 });
+            }
+        }
+        done.set(url, r);
+        return r;
+    };
+    return (layer, meta) => {
+        const ground = layer.layer === 'l2' || meta.isGround === true;
+        if (!ground || meta.source !== 'Google3DTilesClay' || meta.vegetation || (meta.extra as { chunk?: number } | undefined)?.chunk !== undefined || CHUNK_URL.test(layer.url)) return layer;
+        const c = carve(layer.url, layer.objectId, false), ct = layer.textured ? carve(layer.textured.url, layer.objectId, true) : undefined;
+        if (!c && !ct) return layer;
+        const rec = records.filter(x => x.objectId === layer.objectId && !x.textured).pop()?.report;
+        const note = rec && !layer.provenance.note?.includes(ROAD_CARVE_VERSION)
+            ? `the scan carved under the streets' new surfaces (${ROAD_CARVE_VERSION}): ${rec.removed.toLocaleString('en-US')} triangles removed and ${rec.cut.toLocaleString('en-US')} cut at their outline (${Math.round(rec.removedAreaM2)} m²), ${rec.standing} pieces standing on them kept; its rim set onto their edge (${rec.pinned} points, at most ${rec.maxPinM} m), ${rec.curtainTriangles} curtain triangles (generated) where it stood further`
+            : undefined;
+        return {
+            ...layer,
+            ...(c ? { url: c.url, bytes: c.bytes, counts: { vertices: layer.counts.vertices, triangles: c.kept } } : {}),
+            ...(layer.textured && ct ? { textured: { ...layer.textured, url: ct.url, bytes: ct.bytes } } : {}),
+            ...(note ? { provenance: { ...layer.provenance, note: layer.provenance.note ? `${layer.provenance.note}; ${note}` : note } } : {})
         };
     };
 }
@@ -3624,11 +3685,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
 
         // ---------------- roads (SB-Roadie: Google's road centrelines measured kerb to kerb on the tree-stripped scan; runs beside the remesh) ----------------
         let roadsMeasured: RoadSurface[] | undefined;
-        type RoadStageValue = { stats: RoadMesh['stats']; measuredKerbShare: number; photo: { width: number; height: number; texelM: number; ms: number }; markings?: { runs: number; markings: number; dashed: number; solid: number } } | undefined;
+        type RoadStageValue = { stats: RoadMesh['stats']; measuredKerbShare: number; photo: { width: number; height: number; texelM: number; ms: number }; markings?: { runs: number; markings: number; dashed: number; solid: number }; kerbs?: KerbModelStats & { triangles: number; footprintM2: number; ms: number } } | undefined;
+        // kerbs and gutters as geometry (road-kerbs.ts), the scan carved under them: the surfaces stand at the measured levels
+        const kerbsOn = roadKerbsEnabled();
+        const roadParams = kerbsOn ? { ...ROAD_SURFACE_PARAMS, liftM: 0 } : ROAD_SURFACE_PARAMS;
         const roadsPromise: Promise<unknown> = (async () => {
             if (request.procedural === true) { runner.skip('roads', PROCEDURAL_ONLY); return; }
             if (kIsolate) { runner.skip('roads', PIPELINE_K_ISOLATE); return; }
-            if (!sbRoadieEnabled()) { runner.skip('roads', 'SB-Roadie is shelved for now (SCRATCHBOX_STAGED_ROADS=1 to try it)'); return; }
+            if (!sbRoadieEnabled() && !kerbsOn) { runner.skip('roads', 'SB-Roadie is shelved for now (SCRATCHBOX_STAGED_ROADS=1 to try it; SCRATCHBOX_STAGED_ROAD_KERBS=1 with kerbs and gutters as geometry)'); return; }
             const covered = extraction.coveredRadiusM;
             // the vector evidence the sizing fetched (an isolate), else fetched now for the extraction's cover (a district)
             let vector = t.vector;
@@ -3643,7 +3707,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 id: 'roads',
                 run: async io => {
                     const tileForRoads = strip ? strip.devegetatedGlb : extraction.texturedGlb;
-                    const key = stageKey('roads/v5', t.key, strip ? strip.cacheKey : 'scan', crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), ROAD_SURFACE_PARAMS.liftM);
+                    const key = stageKey(kerbsOn ? `roads/v5+${ROAD_KERBS_VERSION}` : 'roads/v5', t.key, strip ? strip.cacheKey : 'scan', crypto.createHash('sha256').update(JSON.stringify(centrelines)).digest('hex').slice(0, 16), covered.toFixed(1), roadParams.liftM);
                     run.keys.roads = key;
                     const key8 = key.slice(0, 8);
                     const entry = await cache.run<RoadStageValue>('roads', key, async dir => {
@@ -3660,8 +3724,34 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             .map(c => ({ x: Number(c.stem[0]), z: Number(c.stem[1]), radiusM: (c.sectorRadii as number[]).reduce((a, b) => a + b, 0) / 16 })) : [];
                         const roads = measureRoadSurfaces({
                             roads: centrelines, grid, within: (x, z) => Math.hypot(x, z) <= covered, ...(canopy ? { exclude: canopy } : {}), buildingAt: vector!.buildingAt, groundAt: ground.groundAt, avoid
-                        });
+                        }, roadParams);
                         if (!roads.length) return { value: undefined, inputs: { centrelines: centrelines.length, covered, noRoadResurfaced: true } };
+                        if (kerbsOn) {
+                            // every kerb read again on the scan's own triangles near the streets, swept with its gutter, joined at the crossings
+                            const t0 = Date.now();
+                            io.progress(`reading ${roads.length} street${roads.length === 1 ? '' : 's'}' kerbs on the scan's triangles`);
+                            const near = nearStreets(roads, roadParams.maxHalfWidthM + 6);
+                            const h = scanHeightIndex(scan, 1, tri => near(scan.triCentroid[tri * 3], scan.triCentroid[tri * 3 + 2]));
+                            const model = measureKerbs(roads, h, roadParams);
+                            // coloured by the tile photo itself seen from above (planar texture coordinates): the new surfaces continue the
+                            // scan's own photo at the carve's rim, crossings and markings included
+                            const mesh = buildKerbedRoadMesh(model);
+                            const stations = roads.reduce((n, r) => n + r.stations.length, 0);
+                            const measuredKerbShare = stations ? roads.reduce((n, r) => n + r.measuredKerbShare * r.stations.length, 0) / stations : 0;
+                            io.progress(`colouring ${mesh.stats.samples} street samples from the tile photo seen from above`);
+                            const photo = renderTopDownPhoto(fs.readFileSync(tileForRoads), mesh.uvFrame, { texelM: 0.1, maxPx: 4096 });
+                            const kerbs = { ...model.stats, triangles: mesh.stats.triangles, footprintM2: mesh.stats.footprintM2, ms: Date.now() - t0 };
+                            // the legacy stats the layer's note and the tool read, from the same streets
+                            const legacy = buildRoadMesh(roads, roadParams).stats;
+                            writeKerbedRoadsGlb(path.join(dir, 'roads.glb'), mesh, {
+                                stats: legacy, kerbs, measuredKerbShare, liftM: 0,
+                                source: 'SB-Roadie with kerbs and gutters as geometry: Google vector road centrelines; kerbs, levels and camber measured on the tree-stripped photo tiles, each kerb read again on the scan\'s triangles; coloured by the tile photo seen from above'
+                            }, { jpeg: topDownJpeg(photo, 90), width: photo.width, height: photo.height });
+                            fs.writeFileSync(path.join(dir, 'roads.json'), JSON.stringify({ schema: 'scratchbox.road-surfaces/1', roads }));
+                            fs.writeFileSync(path.join(dir, 'kerbs.json'), JSON.stringify({ schema: 'scratchbox.road-kerbs/1', model }));
+                            fs.writeFileSync(path.join(dir, 'footprint.bin'), Buffer.from(Float64Array.from(mesh.footprint.flat()).buffer));
+                            return { value: { stats: { ...legacy, triangles: mesh.stats.triangles }, measuredKerbShare, photo: { width: photo.width, height: photo.height, texelM: photo.texelM, ms: photo.ms }, kerbs }, inputs: { centrelines: centrelines.length, covered, tile: path.basename(tileForRoads), kerbs: ROAD_KERBS_VERSION } };
+                        }
                         const planar = buildRoadMesh(roads);
                         const stations = roads.reduce((n, r) => n + r.stations.length, 0);
                         const measuredKerbShare = stations ? roads.reduce((n, r) => n + r.measuredKerbShare * r.stations.length, 0) / stations : 0;
@@ -3685,6 +3775,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     roadsMeasured = (JSON.parse(fs.readFileSync(path.join(entry.dir, 'roads.json'), 'utf8')) as { roads: RoadSurface[] }).roads;
                     const pub = entry.published[0];
                     const v = entry.value;
+                    if (kerbsOn && v.kerbs) return commitKerbedRoads(v, entry, pub, key, key8);
                     const measured = v.measuredKerbShare >= 0.5;
                     const layer: StagedLayer = {
                         objectId: layerObjectId(key, 'l1r'), stage: 'roads', layer: 'l1r', order: STAGES.roads.order, url: pub.url, bytes: pub.bytes,
@@ -3706,6 +3797,39 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 run.emit('roads', 'failed', { reason: errorMessage(err) });
                 return undefined;
             });
+            // the kerbed streets' layer, and the scan carved under them from here on (the ground already standing carved now)
+            function commitKerbedRoads(v: NonNullable<RoadStageValue>, entry: { dir: string; cached: boolean; builtAtMs: number }, pub: { url: string; bytes: number; path: string }, key: string, key8: string) {
+                const k = v.kerbs!;
+                const raw = fs.readFileSync(path.join(entry.dir, 'footprint.bin'));
+                const flat = new Float64Array(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
+                const tris: FootprintTri[] = [];
+                for (let i = 0; i + 9 <= flat.length; i += 9) tris.push(Array.from(flat.subarray(i, i + 9)) as FootprintTri);
+                const records: RoadCarveRecord[] = [];
+                const kerbNote = `${v.stats.roads} street runs, ${v.stats.stations} stations; kerb line ${k.measuredM} m measured, ${k.drawnM} m drawn (${k.fineM} m read on the scan's triangles, ${k.softM} m of it a step the scan smears, drawn at its half-rise crossing; ${k.coarseM} m at SB-Roadie's step; ${k.betweenM} m carried along the line, through ramps and past single samples where an object stands on the kerb); ${k.notDrawnM} m of kerb line with no kerb measured, nothing drawn there; ${k.rampM} m of ramps where the face drops to the road; ${k.corners.drawn} corners on their measured radius (median ${k.corners.radiusP50M ?? '-'} m), ${k.corners.notDrawn} not drawn; ${k.straightJoins.drawn} straight joins across gaps; faces ${k.faceP10M ?? '-'} / ${k.faceP50M ?? '-'} / ${k.faceP90M ?? '-'} m (10th / 50th / 90th percentile); gutters ${k.gutterMeasuredM} m measured, ${k.gutterGeneratedM} m generated (the scan resolves no dip at the face's foot); nosings (a 1 cm chamfer: 1.5 % of the kerb's smallest dimension, 1-5 cm) and kerb tops (0.15 m) generated; the surfaces stand at the measured levels with the scan carved under them`;
+                const layer: StagedLayer = {
+                    objectId: layerObjectId(key, 'l1r'), stage: 'roads', layer: 'l1r', order: STAGES.roads.order, url: pub.url, bytes: pub.bytes,
+                    provenance: {
+                        label: 'measured', measuredGeometry: true, confidence: v.measuredKerbShare,
+                        method: 'SB-Roadie with kerbs and gutters as geometry (road-kerbs.ts): one profile swept along each Google vector road centreline through the levels and camber read low on the tree-stripped photo tiles; each kerb read again across its line on the scan\'s triangles (its face, its rise, a gutter\'s dip, a ramp), the kerbs joined around corners on the radius rays across them measure, the carriageway only between two measured kerbs; coloured by the tile photo seen from above (its own texels)',
+                        sources: [{ kind: 'vector-tiles', id: `roads:${key8}` }, { kind: 'tile-extraction', id: `extract:${t.key.slice(0, 8)}` }],
+                        note: kerbNote
+                    },
+                    provenanceLabels: ['measured', 'generated'], supersedes: [], revealAfter: [],
+                    reveal: { durationMs: 1500, stagger: 0.3, crossfadeFrom: [] },
+                    cached: entry.cached, builtAtMs: entry.builtAtMs, counts: layerCounts(pub.path)
+                };
+                run.commit(layer, { source: 'GoogleVectorRoads', resolvedAddress: placeValue!.formattedAddress, extra: { selfTextured: true, roads: v.stats.roads, measuredKerbShare: v.measuredKerbShare, photo: v.photo, kerbs: k } });
+                run.layerTransform = chainLayerTransforms(run.layerTransform, roadCarver(cache, roadsMeasured!, prepareFootprint(tris), key8, vector!.buildingAt, records));
+                const t0 = now();
+                for (const l of run.state.layers.filter(x => !x.retired && x.objectId !== layer.objectId)) {
+                    const meta = run.layerMeta[l.objectId];
+                    if (meta && (l.layer === 'l2' || meta.isGround)) run.commit({ ...l }, meta);
+                }
+                cache.writeRunNote(runId, 'road_carve', { version: ROAD_CARVE_VERSION, flatten: roadFlattenEnabled() ? ROAD_FLATTEN_VERSION : 'off', footprintTriangles: tris.length, footprintM2: k.footprintM2, atRoadsMs: now() - t0, layers: records });
+                // later carves (the twin, a ground committed after the roads) are recorded as they happen
+                run.commitListeners.add(() => { if (records.length) cache.writeRunNote(runId, 'road_carve', { version: ROAD_CARVE_VERSION, flatten: roadFlattenEnabled() ? ROAD_FLATTEN_VERSION : 'off', footprintTriangles: tris.length, footprintM2: k.footprintM2, layers: records }); });
+                return { status: 'committed' as const, source: `${v.stats.roads} streets with kerbs and gutters: ${k.drawnM} m of kerb drawn of ${k.measuredM} m measured, ${k.corners.drawn} corners; the scan carved under them`, layers: [layer], cached: entry.cached };
+            }
         })();
         siblings.push(roadsPromise);
 
