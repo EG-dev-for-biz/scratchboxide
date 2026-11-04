@@ -222,6 +222,11 @@ def validate(spec):
                 errors.append("%s: a %s part has no edges of its own, so it cannot have an edgeRadiusMeters" % (where, present[0]))
             elif not _is_num(r) or r < 0 or r > EDGE_RADIUS_MAX:
                 errors.append("%s: edgeRadiusMeters must be 0 (sharp) to %g metres" % (where, EDGE_RADIUS_MAX))
+        if _given(part, "cuts"):
+            if len(present) == 1 and present[0] not in ("sweep", "revolve"):
+                errors.append("%s: a %s part has no solid of its own to cut, so it cannot have cuts" % (where, present[0]))
+            else:
+                _validate_cuts(part["cuts"], where, errors)
         if _given(part, "material"):
             if len(present) == 1 and present[0] in ("replicate", "relief"):
                 errors.append("%s: a %s part has no surface of its own, so it cannot have a material" % (where, present[0]))
@@ -303,6 +308,154 @@ def validate(spec):
             seen.append(cur)
             cur = by_id[cur]["replicate"].get("seedPartId")
     return errors
+
+
+def _validate_cuts(cuts, where, errors):
+    """part.cuts: 1-16 boxes or cylinders, in object coordinates, subtracted from the part's solid."""
+    if not isinstance(cuts, list) or not 1 <= len(cuts) <= 16:
+        errors.append("%s: cuts must be 1-16 boxes or cylinders" % where)
+        return
+    for i, cut in enumerate(cuts):
+        at = "%s: cuts[%d]" % (where, i)
+        kinds = [k for k in ("box", "cylinder") if isinstance(cut, dict) and _given(cut, k)]
+        if len(kinds) != 1:
+            errors.append("%s must have exactly one of box, cylinder" % at)
+            continue
+        if _given(cut, "mirrorPlaneNormal") and (not _is_vec(cut["mirrorPlaneNormal"], 3) or _length(cut["mirrorPlaneNormal"]) < _EPS):
+            errors.append("%s: mirrorPlaneNormal must be a non-zero [x, y, z] vector" % at)
+        if kinds[0] == "box":
+            b = cut["box"]
+            if not isinstance(b, dict) or not _is_vec(b.get("centerMeters"), 3) or not _is_vec(b.get("sizeMeters"), 3) or any(v <= 0 for v in b["sizeMeters"]):
+                errors.append("%s: box needs centerMeters and sizeMeters, every size above 0" % at)
+            elif _given(b, "rotationDeg") and not _is_vec(b["rotationDeg"], 3):
+                errors.append("%s: box.rotationDeg must be [x, y, z] degrees" % at)
+        else:
+            c = cut["cylinder"]
+            if not isinstance(c, dict) or not _is_vec(c.get("startMeters"), 3) or not _is_vec(c.get("endMeters"), 3) or not _is_num(c.get("radiusMeters")) or c["radiusMeters"] <= 0:
+                errors.append("%s: cylinder needs startMeters, endMeters and a radiusMeters above 0" % at)
+            elif _length(_sub(c["endMeters"], c["startMeters"])) < 1e-6:
+                errors.append("%s: cylinder startMeters and endMeters coincide" % at)
+
+
+def _cut_solid(sb, cut, shift_y, mirror=None):
+    """The closed mesh of one cut in the built object's frame (lifted with it by shift_y), reflected across `mirror`."""
+    vec3 = sb.math.Vec3
+    uv0 = sb.math.Vec2(0.0, 0.0)
+    white = sb.math.Vec4(1.0, 1.0, 1.0, 1.0)
+
+    def place(p):
+        p = (float(p[0]), float(p[1]) + shift_y, float(p[2]))
+        if mirror is not None:
+            n = _unit(mirror, "cut mirror")
+            p = _sub(p, _mul(n, 2.0 * _dot(p, n)))
+        return p
+
+    pts, tris = [], []
+    if _given(cut, "box"):
+        b = cut["box"]
+        c, size = b["centerMeters"], b["sizeMeters"]
+        rot = b.get("rotationDeg") or [0.0, 0.0, 0.0]
+        for sx in (-1, 1):
+            for sy in (-1, 1):
+                for sz in (-1, 1):
+                    q = (sx * size[0] / 2.0, sy * size[1] / 2.0, sz * size[2] / 2.0)
+                    for axis, deg in zip(((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)), rot):
+                        if deg:
+                            q = _rotate(q, axis, math.radians(deg))
+                    pts.append(place(_add(c, q)))
+        # corners indexed by (x, y, z) bits; each face wound outward
+        faces = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+        for a, b_, c_, d in faces:
+            tris += [(a, b_, c_), (a, c_, d)]
+    else:
+        cy = cut["cylinder"]
+        a0, a1, r = cy["startMeters"], cy["endMeters"], float(cy["radiusMeters"])
+        axis = _unit(_sub(a1, a0), "cut cylinder axis")
+        u = _unit(_cross(axis, _perpendicular_reference(axis)), "cut cylinder frame")
+        v = _cross(axis, u)
+        seg = 32
+        for end in (a0, a1):
+            for k in range(seg):
+                t = 2.0 * math.pi * k / seg
+                pts.append(place(_add(end, _add(_mul(u, r * math.cos(t)), _mul(v, r * math.sin(t))))))
+        pts.append(place(a0))
+        pts.append(place(a1))
+        c0, c1 = 2 * seg, 2 * seg + 1
+        for k in range(seg):
+            k2 = (k + 1) % seg
+            tris += [(k, k2, seg + k2), (k, seg + k2, seg + k), (c0, k2, k), (c1, seg + k, seg + k2)]
+    if mirror is not None:
+        tris = [(a, c_, b_) for a, b_, c_ in tris]   # a reflection turns every face inside out
+    mesh = sb.geometry.Mesh("cut")
+    centre = _mul(_add_all(pts), 1.0 / len(pts))
+    for p in pts:
+        n = _sub(p, centre)
+        n = _unit(n, "cut normal") if _length(n) > 1e-12 else (0.0, 1.0, 0.0)
+        mesh.add_vertex(vec3(p[0], p[1], p[2]), vec3(n[0], n[1], n[2]), uv0, white)
+    for a, b_, c_ in tris:
+        mesh.add_triangle(a, b_, c_)
+    mesh.recompute_bounds()
+    return mesh
+
+
+CUT_CREASE_DEG = 35.0
+
+
+def _creased_mesh(sb, name, mesh):
+    """
+    A cut part rebuilt with shared vertices: the boolean leaves every triangle its own corners and flat normals, so
+    corners at one position are welded and their normals averaged over the faces within CUT_CREASE_DEG of each
+    other. Panels shade smoothly again; the cut's edges, where faces meet at a sharper angle, stay crisp.
+    """
+    import array
+    flat = array.array("f")
+    flat.frombytes(mesh.get_positions_flat())
+    idx = list(mesh.indices)
+    pts = [(flat[i], flat[i + 1], flat[i + 2]) for i in range(0, len(flat), 3)]
+    cos_crease = math.cos(math.radians(CUT_CREASE_DEG))
+    face_n = []
+    for t in range(0, len(idx), 3):
+        a, b, c = pts[idx[t]], pts[idx[t + 1]], pts[idx[t + 2]]
+        n = _cross(_sub(b, a), _sub(c, a))
+        ln = _length(n)
+        face_n.append(_mul(n, 1.0 / ln) if ln > 1e-18 else None)
+    key = lambda p: (round(p[0], 5), round(p[1], 5), round(p[2], 5))
+    # corners at each welded position, then grouped by facing within the crease angle
+    corners = {}
+    for t in range(len(face_n)):
+        if face_n[t] is None:
+            continue
+        for k in range(3):
+            corners.setdefault(key(pts[idx[3 * t + k]]), []).append(t)
+    out = sb.geometry.Mesh(name)
+    uv0 = sb.math.Vec2(0.0, 0.0)
+    white = sb.math.Vec4(1.0, 1.0, 1.0, 1.0)
+    slot = {}
+    for pkey, faces in corners.items():
+        groups = []
+        for t in faces:
+            n = face_n[t]
+            for g in groups:
+                if _dot(g[0], n) >= cos_crease:
+                    g[1].append(t)
+                    break
+            else:
+                groups.append((n, [t]))
+        for lead, members in groups:
+            s_ = (0.0, 0.0, 0.0)
+            for t in members:
+                s_ = _add(s_, face_n[t])
+            nrm = _unit(s_, "cut normal") if _length(s_) > 1e-12 else lead
+            vid = out.vertex_count
+            out.add_vertex(sb.math.Vec3(pkey[0], pkey[1], pkey[2]), sb.math.Vec3(nrm[0], nrm[1], nrm[2]), uv0, white)
+            for t in members:
+                slot[(t, pkey)] = vid
+    for t in range(len(face_n)):
+        if face_n[t] is None:
+            continue
+        out.add_triangle(*[slot[(t, key(pts[idx[3 * t + k]]))] for k in range(3)])
+    out.recompute_bounds()
+    return out
 
 
 def _validate_crown(crown, where, errors, in_reach):
@@ -1944,6 +2097,7 @@ def build(spec, clay=False):
     materials = {} if clay else dict((p["id"], p.get("material")) for p in spec["parts"])
     # each surface part's edge radius, recorded on its material (generated: chosen for the look, never measured)
     edges = dict((p["id"], edge_radius(p)) for p in spec["parts"] if p.get("sweep") or p.get("revolve"))
+    cuts_of = dict((p["id"], p.get("cuts")) for p in spec["parts"] if p.get("cuts"))
     occlusion = _occlusion(sb, built)
     for (owner, positions, normals, triangles), occ in zip(built, occlusion):
         mesh = sb.geometry.Mesh(owner)
@@ -1953,13 +2107,24 @@ def build(spec, clay=False):
         for a, b, c in triangles:
             mesh.add_triangle(a, b, c)
         mesh.recompute_bounds()
+        # the part's cuts, subtracted from its solid by the native boolean (the mesh_edit tool's), in the built frame
+        cuts = cuts_of.get(owner) or []
+        for cut in cuts:
+            for mirror in [None] + ([cut["mirrorPlaneNormal"]] if _given(cut, "mirrorPlaneNormal") else []):
+                mesh = sb.geometry.boolean_mesh(mesh, _cut_solid(sb, cut, shift_y, mirror), "subtract")
+        if cuts:
+            mesh = _creased_mesh(sb, owner, mesh)
         # Assigned directly, not through apply_material, which also paints the base colour into the vertex colours:
         # glTF viewers multiply COLOR_0 by baseColorFactor, which would square every colour. The vertex colour carries
         # only the grey ambient occlusion, which darkens creases without changing the part's colour.
         mesh.material = part_material(sb, owner, materials.get(owner))
+        extras = {}
         if owner in edges:
             radius, source = edges[owner]
-            mesh.material.extras_json = json.dumps({"scratchbox": {"edge": {
-                "radiusMeters": round(radius, 4), "source": source, "provenance": "generated"}}})
+            extras["edge"] = {"radiusMeters": round(radius, 4), "source": source, "provenance": "generated"}
+        if cuts:
+            extras["cuts"] = {"count": len(cuts), "provenance": "generated"}
+        if extras:
+            mesh.material.extras_json = json.dumps({"scratchbox": extras})
         scene.add_mesh(mesh)
     return scene

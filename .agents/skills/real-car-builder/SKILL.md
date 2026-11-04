@@ -155,6 +155,11 @@ and keep the operators for the rest. In buildNotes, ask for exactly these parts 
   line toward +X, up that side, over the top and down the other side, as a share of the ring's perimeter: a point at
   height y on the +X side is at about v = (half width + y - bottom) / perimeter, with perimeter about 2 x (2 x half
   width + height); the -X side is 1 - v. A door line is a curve at roughly constant u from the sill to the beltline.
+- **Openings** (the grille, lower intakes, the diffuser, exhaust outlets) are cuts on the lofted body: part.cuts, boxes
+  (or cylinders for round outlets) in object coordinates, mirrorPlaneNormal [1, 0, 0] for a left/right pair. Make each
+  a pocket 0.05-0.15 m deep into the nose or tail, as wide and tall as the picture shows it, never through the whole
+  body. The pocket's walls take the body's paint, so set a dark part at its back: a grille or mesh panel (a thin sweep,
+  black plastic or dark chrome) 1-2 cm in front of the pocket's floor.
 - Wheels, axles, lamps, grille, mirrors and handles as in the plan below (steps 7-9); skip its steps 1-6.
 
 Without a blueprint, write this plan into buildNotes with the numbers filled in:

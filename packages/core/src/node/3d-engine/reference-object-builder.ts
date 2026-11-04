@@ -1776,7 +1776,9 @@ export function stampMaterialProvenance(glb: Buffer, spec: ObjectBuildSpec, prov
                     ...(material.extras?.scratchbox || {}),
                     partId: mesh.name,
                     provenance: own ? provenance.label : 'clay',
-                    ...(own && part?.material?.description ? { description: part.material.description } : {})
+                    ...(own && part?.material?.description ? { description: part.material.description } : {}),
+                    // openings cut from the part (spec cuts) are generated geometry, whatever the surface's label
+                    ...(part?.cuts?.length ? { cuts: { count: part.cuts.length, provenance: 'generated' } } : {})
                 }
             };
         }

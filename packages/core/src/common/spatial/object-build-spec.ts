@@ -180,11 +180,24 @@ export interface ObjectPartSpec {
      * most 5 % of a part under 4 cm). Generated, never measured.
      */
     edgeRadiusMeters?: number;
+    /**
+     * Solids subtracted from this part (a sweep or revolve) once it is built, in object coordinates: openings,
+     * pockets and slots the operators cannot leave (an intake, a grille opening, a vent). Generated, never measured.
+     */
+    cuts?: PartCut[];
     sweep?: SweepOperator;
     revolve?: RevolveOperator;
     replicate?: ReplicateOperator;
     relief?: ReliefOperator;
     crown?: CrownOperator;
+}
+
+/** One solid cut from a part: a box (centre, size, optional rotation) or a cylinder (axis ends, radius). */
+export interface PartCut {
+    box?: { centerMeters: Vec3; sizeMeters: Vec3; rotationDeg?: Vec3 };
+    cylinder?: { startMeters: Vec3; endMeters: Vec3; radiusMeters: number };
+    /** Also cut the solid reflected across the plane through the origin with this normal, e.g. [1, 0, 0]. */
+    mirrorPlaneNormal?: Vec3;
 }
 
 export interface ObjectBuildSpec {
@@ -386,6 +399,26 @@ export const OBJECT_BUILD_SPEC_JSON_SCHEMA: Record<string, unknown> = {
                         required: ['u', 'angleDeg', 'normalOffsetMeters']
                     },
                     mirrorPlaneNormal: vec3('Optional: also emit this part and what is attached to it reflected across the plane through the origin with this normal, e.g. [1,0,0].'),
+                    cuts: {
+                        type: 'array', maxItems: 16,
+                        description: 'Optional, sweep and revolve parts: solids subtracted from this part once built, in object coordinates (absolute, also for a child): an opening, pocket or slot the operators cannot leave, such as an intake, a grille opening or a vent. Exactly one of box or cylinder each.',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                box: {
+                                    type: 'object',
+                                    properties: { centerMeters: vec3('Centre, object coordinates.'), sizeMeters: vec3('Size along X, Y, Z before rotation.'), rotationDeg: vec3('Optional rotation about X, then Y, then Z, degrees.') },
+                                    required: ['centerMeters', 'sizeMeters']
+                                },
+                                cylinder: {
+                                    type: 'object',
+                                    properties: { startMeters: vec3('One end of the axis.'), endMeters: vec3('The other end.'), radiusMeters: num('Radius.', 0) },
+                                    required: ['startMeters', 'endMeters', 'radiusMeters']
+                                },
+                                mirrorPlaneNormal: vec3('Optional: also cut the reflection across the plane through the origin with this normal, e.g. [1,0,0] for a left/right pair.')
+                            }
+                        }
+                    },
                     edgeRadiusMeters: num(`Optional, sweep and revolve parts: radius of the part's rounded edges in metres, as the picture shows them (cast, moulded and worn edges are soft; machined and sheet edges small). 0 keeps them sharp (a blade, a knife edge); omit for the default, about 1.5 % of the part's smallest dimension. At most ${OBJECT_SPEC_LIMITS.maxEdgeRadiusMeters}.`, 0, OBJECT_SPEC_LIMITS.maxEdgeRadiusMeters),
                     sweep: {
                         type: 'object',
@@ -596,6 +629,10 @@ export function validateObjectBuildSpec(input: unknown, options: { requireMateri
                 errors.push(`${where}: edgeRadiusMeters must be 0 (sharp) to ${OBJECT_SPEC_LIMITS.maxEdgeRadiusMeters} metres`);
             }
         }
+        if (given(raw.cuts)) {
+            if (present.length === 1 && !geometric) errors.push(`${where}: a ${present[0]} part has no solid of its own to cut, so it cannot have cuts`);
+            else validateCuts(raw.cuts, where, errors);
+        }
         const crown = present.length === 1 && present[0] === 'crown';
         if (given(raw.material)) {
             if (present.length === 1 && !geometric && !crown) {
@@ -707,6 +744,39 @@ export function validateObjectBuildSpec(input: unknown, options: { requireMateri
         }
     }
     return errors;
+}
+
+function validateCuts(cuts: unknown, where: string, errors: string[]): void {
+    if (!Array.isArray(cuts) || cuts.length < 1 || cuts.length > 16) {
+        errors.push(`${where}: cuts must be 1-16 boxes or cylinders`);
+        return;
+    }
+    cuts.forEach((cut, i) => {
+        const at = `${where}: cuts[${i}]`;
+        const kinds = isRecord(cut) ? (['box', 'cylinder'] as const).filter(k => given(cut[k])) : [];
+        if (kinds.length !== 1) {
+            errors.push(`${at} must have exactly one of box, cylinder`);
+            return;
+        }
+        const c = cut as Record<string, unknown>;
+        if (given(c.mirrorPlaneNormal) && !isNonZeroVec3(c.mirrorPlaneNormal)) errors.push(`${at}: mirrorPlaneNormal must be a non-zero [x, y, z] vector`);
+        if (kinds[0] === 'box') {
+            const b = c.box;
+            if (!isRecord(b) || !isVec3(b.centerMeters) || !isVec3(b.sizeMeters) || (b.sizeMeters as number[]).some(v => v <= 0)) {
+                errors.push(`${at}: box needs centerMeters and sizeMeters, every size above 0`);
+            } else if (given(b.rotationDeg) && !isVec3(b.rotationDeg)) {
+                errors.push(`${at}: box.rotationDeg must be [x, y, z] degrees`);
+            }
+        } else {
+            const cy = c.cylinder;
+            if (!isRecord(cy) || !isVec3(cy.startMeters) || !isVec3(cy.endMeters) || !isFiniteNumber(cy.radiusMeters) || cy.radiusMeters <= 0) {
+                errors.push(`${at}: cylinder needs startMeters, endMeters and a radiusMeters above 0`);
+            } else {
+                const [a, b2] = [cy.startMeters as Vec3, cy.endMeters as Vec3];
+                if (Math.hypot(a[0] - b2[0], a[1] - b2[1], a[2] - b2[2]) < 1e-6) errors.push(`${at}: cylinder startMeters and endMeters coincide`);
+            }
+        }
+    });
 }
 
 function isVec3(v: unknown): v is Vec3 {
