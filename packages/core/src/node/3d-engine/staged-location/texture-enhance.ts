@@ -60,6 +60,8 @@ export interface EnhanceModelRequest {
     image: { mimeType: 'image/png'; bytes: Uint8Array; width: number; height: number };
     /** Real Street View views of the same surface, PNG crops. */
     references: Array<{ panoId: string; mimeType: 'image/png' | 'image/jpeg'; bytes: Uint8Array }>;
+    /** The answer's size ('1K', '2K', '4K'), when the model takes one; else the model's own. */
+    imageSize?: string;
     signal?: AbortSignal;
 }
 
@@ -89,7 +91,7 @@ export function genAiEnhanceClient(genai: unknown): EnhanceModelClient {
         const answer = await generateImageWithModels(genai, {
             models: request.models,
             contents: [{ role: 'user', parts }],
-            imageConfig: { aspectRatio: nearestImageAspectRatio(request.image.width, request.image.height) },
+            imageConfig: { aspectRatio: nearestImageAspectRatio(request.image.width, request.image.height), ...(request.imageSize ? { imageSize: request.imageSize } : {}) },
             signal: request.signal
         });
         console.log(`[image-call] ${answer.modelUsed} answered in ${Date.now() - started} ms (${request.image.width} x ${request.image.height}, ${request.references.length} reference photo(s))`);

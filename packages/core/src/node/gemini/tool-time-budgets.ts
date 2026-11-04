@@ -16,6 +16,7 @@
  * Kept off ToolDeclaration on purpose: declarations are sent to Gemini verbatim.
  */
 
+import { FACADE_UPSCALE_EXTRA_MS, facadeUpscaleAsked } from '../3d-engine/staged-location/pipeline-k/facade-upscale';
 import { stagedDistrict } from '../3d-engine/staged-location/staged-switches';
 
 export interface ToolTimeBudget {
@@ -52,7 +53,9 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     google_3d_tiles_get_clay: args => {
         const asked = typeof args.district === 'string' ? args.district : args.pipeline === 'kd' ? 'kd' : undefined;
         const kd = asked !== undefined ? stagedDistrict({ district: asked }) === 'kd' : args.isolate !== true && stagedDistrict({}) === 'kd';
-        return { maxMs: kd ? 362 * MIN : args.isolate === true ? 40 * MIN : 142 * MIN };
+        // pipeline K's facade upscale (opt-in) adds its own time (the run's budget grows by the same)
+        const upscale = facadeUpscaleAsked(args.steps as Record<string, unknown> | undefined) ? FACADE_UPSCALE_EXTRA_MS : 0;
+        return { maxMs: (kd ? 362 * MIN : args.isolate === true ? 40 * MIN : 142 * MIN) + upscale };
     },
     google_3d_tiles_get_full_texture: { maxMs: 40 * MIN },
     google_3d_tiles_clay_blockout_runner: { maxMs: 60 * MIN },
