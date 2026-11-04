@@ -52,7 +52,10 @@ import {
     type SpecObjectBuildResult,
     type VisionModelUse
 } from '../../3d-engine/reference-object-builder';
-import { glbToTriangleSoup, glbToTriangleSoupAsync, runInSlices, runToEnd, type GlbInstanceMode, type TriangleSoup } from '../../3d-engine/part-connectivity';
+import { glbToTriangleSoup, glbToTriangleSoupAsync, glbWorldBounds, runInSlices, runToEnd, type GlbInstanceMode, type TriangleSoup } from '../../3d-engine/part-connectivity';
+import type { ObjectBuildLive } from '../../../common/object-build-live';
+import type { StageEvent } from '../../../common/spatial/staged-location-contracts';
+import type { CanvasArtifact } from '../../../browser/generative-canvas/canvas-types';
 import { implausibleLayerBounds } from '../../3d-engine/layer-bounds-guard';
 import { errorMessage } from '../gemini-client';
 import { materialModeOf, withStagedMaterialMode, type StagedMaterialModeFields } from '../../../browser/generative-canvas/primitives/scene3d/stagedBuild/texturedTwins';
@@ -244,6 +247,91 @@ function frameCamera(bounds: Vec3, base: Vec3, yawDeg: number): { position: Vec3
         target[2] + distance * Math.cos(el) * Math.cos(az)
     ];
     return { position: position.map(v => +v.toFixed(3)) as Vec3, target: target.map(v => +v.toFixed(3)) as Vec3, fov };
+}
+
+/**
+ * Shows a studio object build while it runs (common/object-build-live.ts): the internal reference as soon as it is
+ * drawn, then each pass's own native build, published like the finished one, while that pass is checked. Every view is
+ * one 3D-scene artifact with the id the finished build then takes, so the canvas updates one scene in place. Without
+ * emitStage (no live chat turn) it does nothing.
+ */
+export class ObjectBuildLiveView {
+    readonly artifactId = `artifact-3d-${Date.now()}`;
+    private readonly startedAtMs = Date.now();
+    private readonly runId = `object-build-${this.startedAtMs}`;
+    private seq = 0;
+    private referenceUri?: string;
+
+    constructor(private readonly ctx: Pick<ToolContext, 'emitStage'>, private readonly title: string, private readonly modelsDir: string, private readonly clay: boolean) {}
+
+    reference(image: { data: Buffer; mimeType: string }): void {
+        if (!this.ctx.emitStage) return;
+        // inline, never on disk: the live scene carries it only until the finished scene (same id) replaces it
+        this.referenceUri = `data:${image.mimeType};base64,${image.data.toString('base64')}`;
+        this.emit({ status: 'reference', message: 'Reference drawn (generated); reading it into a build spec' });
+    }
+
+    passBuilt(pass: { pass: number; glb: Buffer; glbPath: string }): void {
+        if (!this.ctx.emitStage) return;
+        const fileName = path.basename(pass.glbPath);
+        fs.mkdirSync(this.modelsDir, { recursive: true });
+        fs.writeFileSync(path.join(this.modelsDir, fileName), pass.glb);
+        const b = glbWorldBounds(pass.glb);
+        const size: Vec3 = b ? [b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]] : [1, 1, 1];
+        this.emit({ status: 'checking', pass: pass.pass, message: pass.pass === 1 ? 'First build from the reference; checking it' : `Pass ${pass.pass} built; checking it against the reference` }, { uri: `/models/${fileName}`, size });
+    }
+
+    /**
+     * The build ended without a result (failed or stopped) after the live view showed something: the scene keeps the
+     * last pass it showed, or none, with the reason and without the live overlay or the reference, so nothing is left
+     * spinning or holding the reference.
+     */
+    end(reason: string): void {
+        if (!this.ctx.emitStage || this.seq === 0) return;
+        this.referenceUri = undefined;
+        this.emit({ status: 'checking', message: reason }, this.lastModel, 'failed');
+    }
+
+    private lastModel?: { uri: string; size: Vec3; pass?: number };
+
+    private emit(live: Omit<ObjectBuildLive, 'startedAtMs' | 'referenceUri'>, model?: { uri: string; size: Vec3; pass?: number }, ended?: 'failed'): void {
+        const now = Date.now();
+        if (model && !ended) this.lastModel = { ...model, pass: live.pass };
+        const objectBuildLive: ObjectBuildLive = { ...live, startedAtMs: this.startedAtMs, ...(this.referenceUri ? { referenceUri: this.referenceUri } : {}) };
+        const stage: StageEvent = {
+            schema: 'scratchbox.stage-event/2', runId: this.runId, seq: ++this.seq, stage: 'object-build', order: 0, status: ended ?? 'running',
+            title: live.message, source: 'build_3d_object_from_reference', degradations: [], timings: { startedAtMs: this.startedAtMs, cached: false, ms: now - this.startedAtMs, ...(ended ? { endedAtMs: now } : {}) }
+        };
+        const pass = model?.pass ?? live.pass;
+        const objects = model ? [{
+            id: `live-pass-${pass}`,
+            content: { type: '3d-model', durableUri: model.uri, mimeType: 'model/gltf-binary', metadata: { role: 'hero', description: ended ? `${this.title} (pass ${pass}; the build did not finish)` : `${this.title} (pass ${pass}, being checked)`, source: OBJECT_BUILD_SOURCE, metricScale: 1.0, groundSnapped: true } },
+            space: { spatial3d: { x: 0, y: 0, z: 0 } },
+            time: { startMs: 0, durationMs: 20000 },
+            lineage: { version: 1 }
+        }] : [];
+        const artifact = {
+            id: this.artifactId,
+            type: '3d-scene',
+            title: this.title,
+            summary: live.message,
+            version: 1,
+            data: {
+                title: this.title,
+                subtitle: live.message,
+                worldBranch: 'procedural/object-from-reference',
+                sceneType: 'custom',
+                renderMode: this.clay ? 'clay' : 'pbr',
+                ...(this.clay ? { clayPreset: 'studio-grey' } : {}),
+                cameraMode: 'orbit',
+                ...(model ? { camera: frameCamera(model.size, [0, 0, 0], 0) } : {}),
+                environment: { skybox: 'studio', lighting: 'studio', ground: false },
+                objects,
+                ...(ended ? {} : { objectBuildLive })
+            }
+        } as unknown as CanvasArtifact;
+        this.ctx.emitStage!(stage, artifact);
+    }
 }
 
 /**
@@ -1108,6 +1196,7 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
 
             let built: BuiltObject;
             let site: Site | undefined;
+            let live: ObjectBuildLiveView | undefined;
             try {
                 if (givenSpec !== undefined) {
                     // A given spec costs no model call: build and check it before any billed staging call.
@@ -1124,6 +1213,8 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                     const buildSignal = ctx.signal ? AbortSignal.any([ctx.signal, buildStop.signal]) : buildStop.signal;
                     let building: Promise<ReferenceObjectBuildResult> | undefined;
                     let buildSettled: Promise<void> | undefined;
+                    // a studio build shows its reference and each pass while it runs; a staged one shows its staging
+                    if (!location) live = new ObjectBuildLiveView(ctx, request, modelsDir, clay);
                     const startBuild = () => {
                         if (building) return building;
                         building = (deps.build ?? buildObjectFromReference)({
@@ -1132,7 +1223,8 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                             dimensionsHintMeters: dimensions,
                             clay,
                             signal: buildSignal,
-                            reportProgress: ctx.reportProgress
+                            reportProgress: ctx.reportProgress,
+                            ...(live ? { onReferenceImage: (image: { data: Buffer; mimeType: string }) => live!.reference(image), onPassBuilt: (pass: { pass: number; glb: Buffer; glbPath: string }) => live!.passBuilt(pass) } : {})
                         }, deps.builder);
                         // Observed at once, so a build that fails while staging runs is not an unhandled rejection.
                         buildSettled = building.then(() => undefined, () => undefined);
@@ -1154,6 +1246,7 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                     built = fromReference(await startBuild());
                 }
             } catch (err) {
+                live?.end(err instanceof ReferenceObjectBuildError && err.details.aborted ? 'Build stopped' : `Build failed: ${errorMessage(err)}`.slice(0, 200));
                 if (err instanceof ReferenceObjectBuildError) {
                     return failed(err.message, { ...err.details, stage: err.stage });
                 }
@@ -1170,7 +1263,8 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
             }
             const staged = site?.staged;
 
-            // Publish the GLB where the viewport serves models; the reference never touches disk.
+            // Publish the GLB where the viewport serves models (a studio build's live view has already written its pass
+            // builds there, to show while it ran); the reference never touches disk.
             const fileName = path.basename(built.glbPath);
             const publishedPath = path.join(modelsDir, fileName);
             try {
@@ -1293,7 +1387,8 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                 };
             } else {
                 artifact = {
-                    id: `artifact-3d-${Date.now()}`,
+                    // the scene the live view showed becomes the finished one
+                    id: live?.artifactId ?? `artifact-3d-${Date.now()}`,
                     type: '3d-scene',
                     title: subject,
                     summary: summaryLine,

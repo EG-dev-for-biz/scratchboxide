@@ -137,6 +137,15 @@ export interface ReferenceObjectBuildRequest {
     clay?: boolean;
     signal?: AbortSignal;
     reportProgress?: (message: string, fraction?: number) => void;
+    /** Called once with the internal reference as soon as it is drawn, so a viewer can show it while the build runs. */
+    onReferenceImage?: (image: { data: Buffer; mimeType: string }) => void;
+    /** Called with each pass's native build as soon as it exists, before that pass is checked. */
+    onPassBuilt?: (pass: { pass: number; glb: Buffer; glbPath: string }) => void;
+}
+
+/** Calls a viewer hook; a hook that throws is ignored, so showing the build never fails it. */
+function notify<T>(hook: ((value: T) => void) | undefined, value: T): void {
+    try { hook?.(value); } catch { /* the preview is only a view of the build */ }
 }
 
 /**
@@ -1492,6 +1501,7 @@ async function checkBuild(
     reference: ReferenceImage,
     clay = false
 ): Promise<CheckedPass> {
+    notify(input.onPassBuilt, { pass, glb: build.glb, glbPath: build.glbPath });
     input.reportProgress?.(`Checking pass ${pass}: every part built and attached, and comparing it with the reference`);
     // The comparisons need only the renders, which need only the read-back meshes: they start as soon as the meshes
     // are read and run while the connectivity analysis does. A measuring failure stops them.
@@ -1568,6 +1578,7 @@ async function materialOnlyPass(
         await materialComparing;
         throw new ReferenceObjectBuildError('build', `The material corrections could not be built: ${built.specProblems.join('; ')}`, { errors: built.specProblems });
     }
+    notify(input.onPassBuilt, { pass, glb: built.glb, glbPath: built.glbPath });
     const materials = await materialComparing;
     rethrowMaterialStop(materials, input.signal);
     return {
@@ -1816,6 +1827,7 @@ export async function buildObjectFromReference(
         uploadedName = prepared.uploadedName;
         const reference = prepared.reference;
         imageModel = { ...imageModel, answered: generated.answered };
+        notify(input.onReferenceImage, { data: generated.image.data, mimeType: generated.image.mimeType });
 
         progress(`Reading the reference into a build spec with ${vision.current}`, 0.2);
         const firstSpec = await requestBuildableSpec(vision, [{
