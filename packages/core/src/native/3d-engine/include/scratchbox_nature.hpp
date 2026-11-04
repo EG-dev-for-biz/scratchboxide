@@ -2621,7 +2621,8 @@ struct GrassClumpConfig {
     float bladeWidthBase{0.032f};        // Width at basal sheath
     float bladeWidthMid{0.038f};         // Width at mid-lamina flare
     float keelDepth{0.014f};             // V-creased cross-section depth (splits specular highlights)
-    int segmentsPerBlade{7};             // Spine segments for smooth Bézier curvature (minimum 4)
+    int segmentsPerBlade{7};             // Spine segments for smooth Bézier curvature (at least minSegments)
+    int minSegments{4};                  // Fewest spine segments allowed (1-2 for distant blades whose curve is not seen)
     float gravityDroop{0.45f};           // Gravitropic droop factor bending tips toward ground
     float radialSplay{0.65f};            // Outward flaring factor for peripheral blades
     float curlStochasticity{0.25f};      // Stochastic axial curl and twist along blade spine
@@ -2666,7 +2667,7 @@ public:
         std::uniform_real_distribution<float> dist0To1(0.0f, 1.0f);
         std::uniform_real_distribution<float> distMinus1To1(-1.0f, 1.0f);
 
-        int validSegments = std::max(4, cfg.segmentsPerBlade);
+        int validSegments = std::max(std::max(1, cfg.minSegments), cfg.segmentsPerBlade);
 
         for (int b = 0; b < cfg.bladeCount; ++b) {
             // 1. Root dispersion inside clump using uniform disk sampling
