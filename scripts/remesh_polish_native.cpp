@@ -40,11 +40,11 @@
  *          f64 filled, f64 edge, u32 n, u8[n] the PNG ([cells]: one per lattice cell, row by row).
  *
  *   remesh_polish_native lattice-audit <threads>
- *     in:  "SBLA" u32 version (1), u32 nParams, f64[nParams], u32 flags (1: same facing only), u32 n, f32[n] the scan's
+ *     in:  "SBLA" u32 version (2), u32 nParams, f64[nParams], u32 flags (1: same facing only), u32 n, f32[n] the scan's
  *          indexed triangles, u32 nFacades, per facade i32 id, f64[19] frame, u32 n, f64[n] s, u32 n, f64[n] t,
  *          u8[cells] built, u32 n, f32[n] positions, u32 n, u32[n] indices.
  *     out: u32 nTri, i32[nTri] the facade claiming each triangle (-1: kept), f64 found, f64 restored, f64 left,
- *          f64 obliqueLeft, u32 hasOblique, f64 oblique, u32 n, i32[n] the facades dropped, in the order dropped.
+ *          f64 obliqueLeft, u32 hasOblique, f64 oblique, f64 keptInFront, f64 restoredInFront, u32 n, i32[n] the facades dropped, in the order dropped.
  *
  *   remesh_polish_native wall-grammar <threads>
  *     in:  "SBWG" u32 version (1), u32 nParams, f64[nParams] (scratchbox_wall_grammar.hpp Params), u32 nWalls, per wall
@@ -329,7 +329,7 @@ int lattice(unsigned threads) {
 }
 
 int latticeAudit(unsigned threads) {
-    expectMagic("SBLA", 1);
+    expectMagic("SBLA", 2);
     const auto params = facade_lattice::Params::from(readDoubles(readOne<uint32_t>()));
     const uint32_t flags = readOne<uint32_t>();
     const auto soup = readFloats();
@@ -354,6 +354,8 @@ int latticeAudit(unsigned threads) {
     writeOne<double>(r.obliqueLeft);
     writeOne<uint32_t>(r.hasOblique ? 1 : 0);
     writeOne<double>(r.oblique);
+    writeOne<double>(r.keptInFront);
+    writeOne<double>(r.restoredInFront);
     std::vector<int32_t> dropped(r.dropped.begin(), r.dropped.end());
     writeArray(dropped);
     std::fflush(stdout);

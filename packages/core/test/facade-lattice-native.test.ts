@@ -12,7 +12,8 @@
  * synthetic building: four facades read four ways (the photo's own grid; window strips with a raw scan's relief, an
  * uncovered patch and the repeat texture; one row of fitted windows partly over transparent texels, recessed by the
  * contrast rule; the wall grammar's bays with a depth read from Street View), as rebuildFacadesOnLattice runs it whole,
- * cut and stitched, and two torn rebuilds through applyFacadeLattices. Both give the same stats, the same GLB JSON (the provenance extras included) bar
+ * cut and stitched, two torn rebuilds through applyFacadeLattices, and its audit over deep recesses seen from the side and
+ * over flat walls of two large triangles (whole, and with a hole only scan in front of the rebuild could close). Both give the same stats, the same GLB JSON (the provenance extras included) bar
  * the image byte lengths, the same vertices, normals, UVs and indices to 1e-6, and the same texture pixels.
  * The binary is compiled with the real clang++; nothing here reaches a network or a credential.
  */
@@ -85,6 +86,19 @@ const noise = () => (rnd() - 0.5) * 0.08;
 const flatScan = () => boxSoup((_f, u, v) => (inWindow(u, v) ? -0.25 : 0) + noise());
 // the scan before: the front's window columns (its bays) 0.2 m behind its piers
 const rawScan = () => boxSoup((f, u, v) => (inWindow(u, v) ? -0.35 : f.facadeId === 0 && u % 3 > 0.9 && u % 3 < 2.1 ? -0.2 : 0) + noise());
+// the windows 0.9 m deep
+const deepScan = () => boxSoup((_f, u, v) => (inWindow(u, v) ? -0.9 : 0) + noise());
+/** The box's walls flat, each as two large triangles (as the tiles draw a plain wall), and its roof. */
+function coarseSoup(): Float32Array {
+    const out: number[] = [];
+    for (const f of FACADES) {
+        const at = (s: number, t: number) => [0, 1, 2].map(k => f.centroid[k] + s * f.axisS[k] + t * f.axisT[k]);
+        const a = at(f.sMin, f.tMin), b = at(f.sMax, f.tMin), c = at(f.sMax, f.tMax), d = at(f.sMin, f.tMax);
+        out.push(...a, ...b, ...c, ...a, ...c, ...d);
+    }
+    out.push(0, 15, 0, 0, 15, 12, 16, 15, 12, 0, 15, 0, 16, 15, 12, 16, 15, 0);
+    return Float32Array.from(out);
+}
 
 function writeGlb(file: string, soup: Float32Array) {
     writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
@@ -203,6 +217,39 @@ describe('facade lattice: native against TypeScript', () => {
             expect(nat.out.tears).toEqual(ts.out.tears);
             expect(nat.out.removed).toBe(ts.out.removed);
             expect(Buffer.compare(nat.out.glb, ts.out.glb)).toBe(0);
+        }
+    }, 300_000);
+
+    it('audits the same where the rebuild\'s recesses are seen from the side and where the scan would come back in front of it', () => {
+        const f = FACADES[0], img = decodePng(fs.readFileSync(path.join(dir, f.image)));
+        const lattice = (soup: Float32Array) => latticeFacade(f, { rgba: new Uint8Array(img.rgba), width: img.width, height: img.height }, facadeSamples(soup, f))!;
+        const deep = lattice(deepScan()), good = lattice(flatScan());
+        const keep: number[] = [];
+        for (let q = 0; q < good.indices.length; q += 3) if (Math.max(...[0, 1, 2].map(j => good.positions[good.indices[q + j] * 3])) <= 8) keep.push(good.indices[q], good.indices[q + 1], good.indices[q + 2]);
+        const torn = { ...good, built: new Uint8Array(good.built.length).fill(1), indices: Uint32Array.from(keep) };
+        // and with the faces at right angles to the wall left out over its lower left storey: slits seen only from an angle
+        const s0 = f.centroid[0] + f.sMin * f.axisS[0], keepSides: number[] = [];
+        for (let q = 0; q < good.indices.length; q += 3) {
+            const p = [0, 1, 2].map(j => [0, 1, 2].map(k => good.positions[good.indices[q + j] * 3 + k]));
+            const nz = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[1][1] - p[0][1]) * (p[2][0] - p[0][0]), nl = Math.hypot((p[1][1] - p[0][1]) * (p[2][2] - p[0][2]) - (p[1][2] - p[0][2]) * (p[2][1] - p[0][1]), (p[1][2] - p[0][2]) * (p[2][0] - p[0][0]) - (p[1][0] - p[0][0]) * (p[2][2] - p[0][2]), nz);
+            const cx = (p[0][0] + p[1][0] + p[2][0]) / 3, cy = (p[0][1] + p[1][1] + p[2][1]) / 3;
+            if (!(Math.abs(nz) < 0.1 * nl && cx < s0 + 6 && cy < 3)) keepSides.push(good.indices[q], good.indices[q + 1], good.indices[q + 2]);
+        }
+        const slit = { ...good, indices: Uint32Array.from(keepSides) };
+        // the deep recesses over the flat scan; the rebuild over the flat walls' large triangles: whole, with a hole seen straight
+        // on (the scan comes back, in front), and with slits seen only from an angle (it does not)
+        const cases: Array<[string, Float32Array, typeof good]> = [['deep', boxSoup(() => noise()), deep], ['coarse', coarseSoup(), good], ['coarse-torn', coarseSoup(), torn], ['coarse-slit', coarseSoup(), slit]];
+        for (const [name, soup, r] of cases) {
+            const file = path.join(dir, `${name}.glb`);
+            writeGlb(file, soup);
+            const ts = withNative('0', () => applyFacadeLattices(fs.readFileSync(file), [{ f, r }], false));
+            const nat = withNative('1', () => applyFacadeLattices(fs.readFileSync(file), [{ f, r }], false));
+            expect(nat.out.tears).toEqual(ts.out.tears);
+            expect(nat.out.removed).toBe(ts.out.removed);
+            expect(Buffer.compare(nat.out.glb, ts.out.glb)).toBe(0);
+            expect(ts.out.tears.droppedFacades).toEqual([]);
+            if (name === 'coarse-torn') expect(ts.out.tears.restoredInFront).toBeGreaterThan(0);
+            if (name === 'coarse-slit') expect(ts.out.tears.keptInFront).toBeGreaterThan(0);
         }
     }, 300_000);
 });
