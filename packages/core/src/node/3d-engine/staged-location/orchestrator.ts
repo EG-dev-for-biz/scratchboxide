@@ -2066,8 +2066,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // at the cell lines; both chunks measured it on the same tiles, so its cut edge stays where it was measured (no
                         // snap) and its colour as drawn (no gain)
                         const roads: Array<{ chunk: number; objectId: string; clay: SeamCutReport; textured?: SeamCutReport }> = [];
-                        for (const s of streets) {
+                        for (const listed of streets) {
                             if (io.signal.aborted) throw io.signal.reason ?? abortError();
+                            // as it stands now: a street may have been committed again since it was listed (coloured again from a
+                            // ground committed above), and the cut keeps that
+                            const s = run.state.layers.find(l => l.objectId === listed.objectId) ?? listed;
                             const c = chunkOf(s), meta = run.layerMeta[s.objectId];
                             io.progress(`cutting chunk ${c}'s streets at its cell lines (${roads.length + 1} of ${streets.length})`);
                             const key8 = crypto.createHash('sha256').update(`${runId}:${DISTRICT_SEAMS_VERSION}:${s.url}`).digest('hex').slice(0, 8);
