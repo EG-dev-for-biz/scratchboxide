@@ -505,21 +505,21 @@ describe('stepCamera near plane', () => {
         const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 20000);
         const target = new THREE.Vector3(0, 180, 0);
 
-        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 700 }, target, {});
+        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 700 }, target);
         expect(camera.near).toBeCloseTo(0.7, 9);
         expect(camera.position.distanceTo(target)).toBeCloseTo(700, 6);
         const projectionAt700 = camera.projectionMatrix.clone();
 
-        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 710 }, target, {});
+        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 710 }, target);
         expect(camera.near).toBeCloseTo(0.7, 9); // < 5% change: projection not rebuilt
         expect(camera.projectionMatrix.equals(projectionAt700)).toBe(true);
 
-        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 50 }, target, {});
+        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 50 }, target);
         expect(camera.near).toBeCloseTo(0.1, 9);
-        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 12000 }, target, {});
+        stepCamera(camera, 'orbit', { theta: 0.7, phi: 1.1, distance: 12000 }, target);
         expect(camera.near).toBe(5);
 
-        stepCamera(camera, 'fps', { theta: 0, phi: 1, distance: 12000 }, target, {});
+        stepCamera(camera, 'fps', { theta: 0, phi: 1, distance: 12000 }, target);
         expect(camera.near).toBeCloseTo(0.1, 9);
     });
 });
