@@ -14,6 +14,10 @@
  * the scene's own, read as it is drawn. What the tracer cannot take (points, lines, shader materials, splats) is
  * counted, not approximated, and the caller says so.
  *
+ * The scene's point, spot and directional lights go into the GLB as KHR_lights_punctual at their world placement
+ * (the tracer samples them with its light tree), except the atmosphere's sun, which is the tracer's own sun. Area
+ * lights have no glTF form and are counted as not traced.
+ *
  * Also the light and camera of the view, in the tracer's terms: the atmospheric sun's direction as elevation and
  * azimuth (the helper's convention: azimuth 0 toward -Z, 90 toward +X), else the neutral studio dome.
  */
@@ -36,7 +40,9 @@ export interface PathTraceSnapshotStats {
     meshes: number;
     triangles: number;
     instancesExpanded: number;
-    skipped: { points: number; lines: number; shaderMaterials: number; instancesOverCap: number; empty: number };
+    /** Point, spot and directional lights written as KHR_lights_punctual. */
+    lights: number;
+    skipped: { points: number; lines: number; shaderMaterials: number; instancesOverCap: number; empty: number; areaLights: number };
     exportMs: number;
     bytes: number;
 }
@@ -60,6 +66,45 @@ function triangleCount(geometry: THREE.BufferGeometry): number {
     const position = geometry.getAttribute('position');
     if (!position) return 0;
     return Math.floor((index ? index.count : position.count) / 3);
+}
+
+/**
+ * A copy of a point, spot or directional light at its world placement, aimed as it shines (glTF lights shine down
+ * their node's -Z, and three's lights look down -Z at their target), or null for any other kind of light.
+ */
+function exportLight(light: THREE.Light): THREE.Light | null {
+    const l = light as THREE.Light & { isPointLight?: boolean; isSpotLight?: boolean; isDirectionalLight?: boolean };
+    let out: THREE.PointLight | THREE.SpotLight | THREE.DirectionalLight;
+    if (l.isSpotLight) {
+        const spot = light as THREE.SpotLight;
+        out = new THREE.SpotLight(spot.color, spot.intensity, spot.distance, spot.angle, spot.penumbra, spot.decay);
+    } else if (l.isPointLight) {
+        const point = light as THREE.PointLight;
+        out = new THREE.PointLight(point.color, point.intensity, point.distance, point.decay);
+    } else if (l.isDirectionalLight) {
+        out = new THREE.DirectionalLight(light.color, light.intensity);
+    } else {
+        return null;
+    }
+    out.name = light.name;
+    const position = new THREE.Vector3().setFromMatrixPosition(light.matrixWorld);
+    out.position.copy(position);
+    const target = (light as THREE.SpotLight | THREE.DirectionalLight).target as THREE.Object3D | undefined;
+    if (target && !l.isPointLight) {
+        target.updateMatrixWorld();
+        const aim = new THREE.Vector3().setFromMatrixPosition(target.matrixWorld);
+        if (aim.distanceToSquared(position) > 0) out.lookAt(aim);
+    }
+    out.updateMatrix();
+    out.matrixAutoUpdate = false;
+    const aimed = out as THREE.SpotLight | THREE.DirectionalLight;
+    if (aimed.target) {
+        // The exporter keeps a light's direction when its target is a child one unit down its -Z.
+        aimed.target.position.set(0, 0, -1);
+        aimed.target.updateMatrix();
+        out.add(aimed.target);
+    }
+    return out;
 }
 
 /** A material the exporter writes as glTF metallic-roughness; shader materials have no glTF reading and are refused. */
@@ -94,8 +139,8 @@ export async function snapshotSceneForPathTrace(scene: THREE.Scene, exclude: Arr
     const started = performance.now();
     const excluded = new Set(exclude.filter((o): o is THREE.Object3D => !!o));
     const stats: PathTraceSnapshotStats = {
-        meshes: 0, triangles: 0, instancesExpanded: 0,
-        skipped: { points: 0, lines: 0, shaderMaterials: 0, instancesOverCap: 0, empty: 0 },
+        meshes: 0, triangles: 0, instancesExpanded: 0, lights: 0,
+        skipped: { points: 0, lines: 0, shaderMaterials: 0, instancesOverCap: 0, empty: 0, areaLights: 0 },
         exportMs: 0, bytes: 0
     };
     scene.updateMatrixWorld(true);
@@ -124,13 +169,23 @@ export async function snapshotSceneForPathTrace(scene: THREE.Scene, exclude: Arr
     let instancedTriangles = 0;
     const instanceMatrix = new THREE.Matrix4();
     const world = new THREE.Matrix4();
+    const lights: THREE.Light[] = [];
     scene.traverse(o => {
         if (excluded.has(o)) return;
-        const obj = o as THREE.Object3D & { isPoints?: boolean; isLine?: boolean; isSprite?: boolean; isMesh?: boolean; isInstancedMesh?: boolean };
-        if (!obj.isPoints && !obj.isLine && !obj.isSprite && !obj.isMesh) return;
+        const obj = o as THREE.Object3D & { isPoints?: boolean; isLine?: boolean; isSprite?: boolean; isMesh?: boolean; isInstancedMesh?: boolean; isLight?: boolean; isRectAreaLight?: boolean };
+        if (!obj.isPoints && !obj.isLine && !obj.isSprite && !obj.isMesh && !obj.isLight) return;
         let excludedAncestor = false;
         for (let p = o.parent; p; p = p.parent) if (excluded.has(p)) { excludedAncestor = true; break; }
         if (excludedAncestor || !visibleInWorld(o)) return;
+        if (obj.isLight) {
+            const light = o as THREE.Light;
+            // The atmosphere's sun is the tracer's own sun (pathTraceLightingOf); ambient and hemisphere light is the dome's.
+            if (SUN_LIGHT_NAMES.has(light.name) || !(light.intensity > 0)) return;
+            if (obj.isRectAreaLight) { stats.skipped.areaLights++; return; }
+            const copy = exportLight(light);
+            if (copy) lights.push(copy);
+            return;
+        }
         if (obj.isPoints || obj.isSprite) { stats.skipped.points++; return; }
         if (obj.isLine) { stats.skipped.lines++; return; }
         const mesh = o as THREE.Mesh;
@@ -151,6 +206,8 @@ export async function snapshotSceneForPathTrace(scene: THREE.Scene, exclude: Arr
         }
         place(geometry, mesh.material, mesh.matrixWorld, mesh.name);
     });
+    for (const light of lights) root.add(light);
+    stats.lights = lights.length;
 
     const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
     // Colour maps of opaque materials go as JPEG (far smaller and quicker to encode); the rest stay PNG.
