@@ -21,6 +21,7 @@ import { SPLIT_BLOCK_TOOL_DECLARATION, splitBlockHandler } from './location-evid
 import { RESIDUAL_AUDIT_TOOL_DECLARATION, residualAuditHandler } from './location-evidence/residual-audit';
 import { FIT_OBJECT_TOOL_DECLARATION, fitObjectHandler } from './location-evidence/fit-object';
 import { GRASS_MAP_TOOL_DECLARATION, grassMapHandler } from './location-evidence/grass-map';
+import { STREET_OBJECTS_TOOL_DECLARATION, streetObjectsHandler } from './location-evidence/street-objects';
 
 export const LOCATION_EVIDENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     BUILDING_SHAPE_TOOL_DECLARATION,
@@ -30,7 +31,8 @@ export const LOCATION_EVIDENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     SPLIT_BLOCK_TOOL_DECLARATION,
     RESIDUAL_AUDIT_TOOL_DECLARATION,
     FIT_OBJECT_TOOL_DECLARATION,
-    GRASS_MAP_TOOL_DECLARATION
+    GRASS_MAP_TOOL_DECLARATION,
+    STREET_OBJECTS_TOOL_DECLARATION
 ];
 
 export const locationEvidenceHandlers: Record<string, ToolHandler> = {
@@ -41,5 +43,6 @@ export const locationEvidenceHandlers: Record<string, ToolHandler> = {
     [SPLIT_BLOCK_TOOL_DECLARATION.name]: splitBlockHandler,
     [RESIDUAL_AUDIT_TOOL_DECLARATION.name]: residualAuditHandler,
     [FIT_OBJECT_TOOL_DECLARATION.name]: fitObjectHandler,
-    [GRASS_MAP_TOOL_DECLARATION.name]: grassMapHandler
+    [GRASS_MAP_TOOL_DECLARATION.name]: grassMapHandler,
+    [STREET_OBJECTS_TOOL_DECLARATION.name]: streetObjectsHandler
 };
