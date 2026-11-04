@@ -1478,7 +1478,9 @@ function roadCarver(cache: StageCache, roads: RoadSurface[], footprint: CarveFoo
     };
     return (layer, meta) => {
         const ground = layer.layer === 'l2' || meta.isGround === true;
-        if (!ground || meta.source !== 'Google3DTilesClay' || meta.vegetation || (meta.extra as { chunk?: number } | undefined)?.chunk !== undefined || CHUNK_URL.test(layer.url)) return layer;
+        // a chunk joined from another build (meta.extra.chunk) was carved by that build; the centre's own ground, clipped to
+        // its territory first (published as _kd0_), is carved here like any other
+        if (!ground || meta.source !== 'Google3DTilesClay' || meta.vegetation || (meta.extra as { chunk?: number } | undefined)?.chunk !== undefined) return layer;
         const c = carve(layer.url, layer.objectId, false), ct = layer.textured ? carve(layer.textured.url, layer.objectId, true) : undefined;
         if (!c && !ct) return layer;
         const rec = records.filter(x => x.objectId === layer.objectId && !x.textured).pop()?.report;
@@ -3738,16 +3740,20 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             // the new surfaces coloured again from the ground's textured twin once it is in: its de-lit photo, seen from above, is
             // what the ground around them shows (the tile photo they were first coloured with is darker), so they meet it without a
             // seam of colour; the twin they read is the one before the carve, which still has the ground under them
-            if ((kerbsOn || stepsOn) && run.state.layers.some(l => !l.retired && l.stage === 'roads' && (l.layer === 'l1r' || l.layer === 'l1s'))) {
+            // only this build's own: in a chunked district a joined chunk's streets come coloured by their own build, and a joined
+            // or seam-cut ground covers its own cell only
+            const own = (l: StagedLayer) => (run.layerMeta[l.objectId]?.extra as { chunk?: number } | undefined)?.chunk === undefined;
+            const ownSurfaces = () => run.state.layers.filter(x => !x.retired && x.stage === 'roads' && (x.layer === 'l1r' || x.layer === 'l1s') && own(x));
+            if ((kerbsOn || stepsOn) && ownSurfaces().length) {
                 const seen = new Set<string>(), records: Array<{ layer: string; twin: string; ms: number; cached: boolean } | { layer: string; twin: string; failed: string }> = [];
                 const recolour = (ground: StagedLayer) => {
                     const meta = run.layerMeta[ground.objectId];
-                    if (!(ground.layer === 'l2' || meta?.isGround) || !ground.textured?.url || meta?.vegetation) return;
+                    if (!(ground.layer === 'l2' || meta?.isGround) || !ground.textured?.url || meta?.vegetation || !own(ground) || !(ground.stage === 'remesh' || ground.stage === 'tiles')) return;
                     const twin = path.join(cache.modelsDir, path.basename(ground.textured.url).replace(/_road_[0-9a-f]{8}(?=\.glb$)/, ''));
                     if (seen.has(twin) || !fs.existsSync(twin)) return;
                     seen.add(twin);
                     const tag = crypto.createHash('sha256').update(path.basename(twin)).digest('hex').slice(0, 8);
-                    for (const l of run.state.layers.filter(x => !x.retired && x.stage === 'roads' && (x.layer === 'l1r' || x.layer === 'l1s'))) {
+                    for (const l of ownSurfaces()) {
                         try {
                             const r = recolourFromTwin(cache, l, twin, tag);
                             if (!r) continue;
