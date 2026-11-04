@@ -265,6 +265,11 @@ describe('a district', () => {
             const groundLayer = sb.layers.find((l: any) => l.layer === 'l2' && !l.retired);
             expect(groundLayer.url).toMatch(/_road_[0-9a-f]{8}\.glb$/);
             expect(groundLayer.provenance.note).toMatch(/carved under the streets' new surfaces/);
+            // the streets coloured again from the ground's textured twin once it was in
+            expect(groundLayer.textured?.url).toMatch(/_road_[0-9a-f]{8}\.glb$/);
+            expect(roadsLayer.url).toMatch(/_tw[0-9a-f]{8}\.glb$/);
+            expect(roadsLayer.provenance.note).toMatch(/coloured again from the ground's textured twin/);
+            expect(s.cache.readRunNote<{ records: Array<{ layer: string; ms?: number }> }>(sb.runId, 'road_recolour')!.records[0]).toMatchObject({ layer: 'l1r' });
             const note = s.cache.readRunNote<{ layers: Array<{ report: { removed: number; pinned: number } }> }>(sb.runId, 'road_carve')!;
             expect(note.layers.length).toBeGreaterThan(0);
             expect(note.layers[0].report.removed).toBeGreaterThan(100);

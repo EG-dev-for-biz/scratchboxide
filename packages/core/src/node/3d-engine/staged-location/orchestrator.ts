@@ -3717,16 +3717,20 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             // the new surfaces coloured again from the ground's textured twin once it is in: its de-lit photo, seen from above, is
             // what the ground around them shows (the tile photo they were first coloured with is darker), so they meet it without a
             // seam of colour; the twin they read is the one before the carve, which still has the ground under them
-            if (kerbsOn && run.state.layers.some(l => !l.retired && l.stage === 'roads' && l.layer === 'l1r')) {
+            // only this build's own: in a chunked district a joined chunk's streets come coloured by their own build, and a joined
+            // or seam-cut ground covers its own cell only
+            const own = (l: StagedLayer) => (run.layerMeta[l.objectId]?.extra as { chunk?: number } | undefined)?.chunk === undefined;
+            const ownStreets = () => run.state.layers.filter(x => !x.retired && x.stage === 'roads' && x.layer === 'l1r' && own(x));
+            if (kerbsOn && ownStreets().length) {
                 const seen = new Set<string>(), records: Array<{ layer: string; twin: string; ms: number; cached: boolean } | { layer: string; twin: string; failed: string }> = [];
                 const recolour = (ground: StagedLayer) => {
                     const meta = run.layerMeta[ground.objectId];
-                    if (!(ground.layer === 'l2' || meta?.isGround) || !ground.textured?.url || meta?.vegetation) return;
+                    if (!(ground.layer === 'l2' || meta?.isGround) || !ground.textured?.url || meta?.vegetation || !own(ground) || !(ground.stage === 'remesh' || ground.stage === 'tiles')) return;
                     const twin = path.join(cache.modelsDir, path.basename(ground.textured.url).replace(/_road_[0-9a-f]{8}(?=\.glb$)/, ''));
                     if (seen.has(twin) || !fs.existsSync(twin)) return;
                     seen.add(twin);
                     const tag = crypto.createHash('sha256').update(path.basename(twin)).digest('hex').slice(0, 8);
-                    for (const l of run.state.layers.filter(x => !x.retired && x.stage === 'roads' && x.layer === 'l1r')) {
+                    for (const l of ownStreets()) {
                         try {
                             const r = recolourFromTwin(cache, l, twin, tag);
                             if (!r) continue;
