@@ -122,6 +122,45 @@ describe('specs with fromBlueprint parts', () => {
         expect(withBp.required).toEqual([]);
     });
 
+    it('takes relief like any sweep: u along the length from the rear, v round the ring from the bottom centre toward +X', async () => {
+        const slab = { id: 'slab', label: 'body', sweep: { fromBlueprint: { yFromMeters: 0.3, yToMeters: 1.0 } } };
+        const grooves = { id: 'grooves', label: 'shut lines', relief: {
+            targetPartId: 'slab', widthMeters: 0.03, depthMeters: -0.02, sharpness: 0.8,
+            curves: [[[0.5, 0], [0.5, 1]], [[0.75, 0.2], [0.85, 0.2]]]   // a ring at mid-length; a short line low on the +X side, toward the front
+        } };
+        const built = await buildObjectFromSpec({ ...spec([slab, grooves]), boundingMeters: [1.8, 0.7, 4.0] }, {}, { buildTimeoutMs: 120_000, outputDir: path.join(TMP, 'relief') });
+        expect(built.checks.missingParts).toEqual([]);
+        const soup = glbToTriangleSoup(built.glb, { colors: false })!;
+        // the widest |x| of the vertices in a thin slice across the body, on one side
+        const widest = (z: number, side: 1 | -1, yLo: number, yHi: number) => {
+            let w = 0;
+            for (let i = 0; i < soup.positions.length; i += 3) {
+                const x = soup.positions[i], y = soup.positions[i + 1], zz = soup.positions[i + 2];
+                if (Math.abs(zz - z) < 0.01 && y >= yLo && y <= yHi && Math.sign(x) === side) w = Math.max(w, Math.abs(x));
+            }
+            return w;
+        };
+        // the slab (0.3-1.0 m in the blueprint) is grounded by the build: it stands from 0 to 0.7 m
+        // the ring: at mid-length (z 0) the body is cut in on both sides; elsewhere it is the full 0.9
+        expect(widest(-0.6, 1, 0, 0.7)).toBeCloseTo(0.9, 2);
+        expect(widest(0, 1, 0, 0.7)).toBeLessThan(0.892);   // a 2 cm groove, read within a centimetre of its centre
+        expect(widest(0, -1, 0, 0.7)).toBeLessThan(0.892);
+        // the short groove: u 0.75-0.85 is z 1.0-1.4 (u runs from the rear, z -2, to the front, z 2); v 0.2 is a fifth of
+        // the way round the ring from its bottom centre, 0.1 m up the +X side (0.4 m in the blueprint)
+        // the narrowest side-wall vertex at the groove's own height over its span (a band would also catch the wall beside it)
+        const narrowest = (side: 1 | -1, within: number) => {
+            let w = Infinity;
+            for (let i = 0; i < soup.positions.length; i += 3) {
+                const x = soup.positions[i], y = soup.positions[i + 1], zz = soup.positions[i + 2];
+                if (zz > 1.1 && zz < 1.3 && Math.abs(y - 0.1) < within && Math.sign(x) === side && Math.abs(x) > 0.5) w = Math.min(w, Math.abs(x));
+            }
+            return w;
+        };
+        expect(narrowest(1, 0.005)).toBeCloseTo(0.88, 2);
+        // the -X side has no extra columns there (only the groove asks for them): its wall stays whole
+        expect(narrowest(-1, 0.06)).toBeCloseTo(0.9, 2);
+    }, 300_000);
+
     it('builds natively: a body with round arches and a cabin whose outlines match the blueprint', async () => {
         const cabin = { id: 'cabin', label: 'cabin', sweep: { fromBlueprint: { yFromMeters: 0.97 } } };
         // four tyres (0.2 m wide, radius 0.33) stand it on the ground at its real height; they clear the arches

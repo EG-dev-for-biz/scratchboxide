@@ -772,8 +772,10 @@ def _rmf_frames(points, closed, up_hint, field="sweep.controlPoints"):
 def _build_loft(part, origin, edge, relief_ops):
     """
     A sweep straight along +Z through measured rings (sweep.sections, from a blueprint): each ring a closed list of
-    [x, y] points in the plane at its z, all rings the same length and starting at corresponding points. The rings are
-    the surface's rows, densified between sections no further apart than `edge`; the ends are capped flat.
+    [x, y] points in the plane at its z, all rings the same length and starting at corresponding points. Rows are
+    rings at u along the length (the sections, rows between them no further apart than `edge`, and rows a relief
+    asks for); columns are points at v round the ring (the rings' own, and columns a relief asks for), each read off
+    the rings by linear interpolation. The ends are capped flat.
     """
     secs = sorted(part["sweep"]["sections"], key=lambda sec: sec["z"])
     count = len(secs[0]["points"])
@@ -781,39 +783,58 @@ def _build_loft(part, origin, edge, relief_ops):
     total = z1 - z0
     if total < 1e-6:
         raise SpecError('part "%s" sweep.sections: the sections have no length along z' % part["id"])
-    rings = [[(float(x), float(y), float(sec["z"])) for x, y in sec["points"]] for sec in secs]
-    rows, us = [], []
-    for k in range(len(rings)):
-        a = rings[k]
-        rows.append([_add(origin, p) for p in a])
-        us.append((a[0][2] - z0) / total)
-        if k + 1 < len(rings):
-            b = rings[k + 1]
-            steps = int(math.ceil((b[0][2] - a[0][2]) / max(edge, 1e-6)))
+    rings = [[(float(x), float(y)) for x, y in sec["points"]] for sec in secs]
+    zs = [float(sec["z"]) for sec in secs]
+    perimeter = sum(sum(math.hypot(r[(j + 1) % count][0] - r[j][0], r[(j + 1) % count][1] - r[j][1]) for j in range(count)) for r in rings) / len(rings)
+    extra_u, extra_v = _relief_refinement(relief_ops, total, perimeter)
+
+    us = set()
+    for k in range(len(zs)):
+        us.add((zs[k] - z0) / total)
+        if k + 1 < len(zs):
+            steps = int(math.ceil((zs[k + 1] - zs[k]) / max(edge, 1e-6)))
             for s_ in range(1, steps):
-                w = s_ / float(steps)
-                rows.append([_add(origin, _lerp(pa, pb, w)) for pa, pb in zip(a, b)])
-                us.append((a[0][2] + (b[0][2] - a[0][2]) * w - z0) / total)
-    _check_grid_budget(part["id"], len(rows), count)
+                us.add((zs[k] + (zs[k + 1] - zs[k]) * s_ / float(steps) - z0) / total)
+    us = sorted(us | set(u for u in extra_u if 0.0 <= u <= 1.0))
+    vs = sorted(set([j / float(count) for j in range(count)] + [v for v in extra_v if 0.0 <= v < 1.0]))
+    _check_grid_budget(part["id"], len(us), len(vs))
+
+    def ring_at(u):
+        z = z0 + u * total
+        k = max(0, min(len(zs) - 2, _bisect(zs, z)))
+        w = (z - zs[k]) / (zs[k + 1] - zs[k]) if zs[k + 1] > zs[k] else 0.0
+        w = min(1.0, max(0.0, w))
+        return z, [_lerp(a, b, w) for a, b in zip(rings[k], rings[k + 1])]
+
+    def point_at(ring, v):
+        f = v * count
+        j = int(math.floor(f)) % count
+        return _lerp(ring[j], ring[(j + 1) % count], f - math.floor(f))
+
+    rows = []
+    for u in us:
+        z, ring = ring_at(u)
+        rows.append([_add(origin, (p[0], p[1], z)) for p in (point_at(ring, v) for v in vs)])
+    n = len(vs)
     surface = _Surface("sweep", part["id"])
-    surface.us, surface.vs, surface.closed_u, surface.length = us, [j / float(count) for j in range(count)], False, total
-    centres = [_mul(_add_all(row), 1.0 / count) for row in rows]
+    surface.us, surface.vs, surface.closed_u, surface.length = us, vs, False, total
+    centres = [_mul(_add_all(row), 1.0 / n) for row in rows]
     for i, row in enumerate(rows):
         prev_row, next_row = rows[max(i - 1, 0)], rows[min(i + 1, len(rows) - 1)]
         out = []
-        for j in range(count):
+        for j in range(n):
             along = _sub(next_row[j], prev_row[j])
-            around = _sub(row[(j + 1) % count], row[(j - 1) % count])
-            n = _cross(around, along)
-            if _length(n) < 1e-12:
-                n = _sub(row[j], centres[i])
-            if _dot(n, _sub(row[j], centres[i])) < 0:
-                n = _mul(n, -1.0)
-            out.append(_unit(n, "loft normal") if _length(n) > 1e-12 else (0.0, 1.0, 0.0))
+            around = _sub(row[(j + 1) % n], row[(j - 1) % n])
+            nrm = _cross(around, along)
+            if _length(nrm) < 1e-12:
+                nrm = _sub(row[j], centres[i])
+            if _dot(nrm, _sub(row[j], centres[i])) < 0:
+                nrm = _mul(nrm, -1.0)
+            out.append(_unit(nrm, "loft normal") if _length(nrm) > 1e-12 else (0.0, 1.0, 0.0))
         surface.rows.append(row)
         surface.normals_out.append(out)
         surface.pole.append(False)
-        surface.circumference.append(sum(_length(_sub(row[(j + 1) % count], row[j])) for j in range(count)))
+        surface.circumference.append(sum(_length(_sub(row[(j + 1) % n], row[j])) for j in range(n)))
     surface.caps = [(0, centres[0], (0.0, 0.0, -1.0)), (len(rows) - 1, centres[-1], (0.0, 0.0, 1.0))]
     surface._loft = True
     surface._centres = centres
@@ -838,11 +859,12 @@ def _loft_point(surface, u, angle_deg):
     us = surface.us
     i = max(0, min(len(us) - 2, _bisect(us, u)))
     w = (u - us[i]) / (us[i + 1] - us[i]) if us[i + 1] > us[i] else 0.0
-    count = len(surface.vs)
-    v = (angle_deg / 360.0) % 1.0 * count
-    j = int(math.floor(v)) % count
-    f = v - math.floor(v)
-    jn = (j + 1) % count
+    vs = surface.vs
+    v = (angle_deg / 360.0) % 1.0
+    j = max(0, min(len(vs) - 1, _bisect(vs, v)))
+    jn = (j + 1) % len(vs)
+    span = (vs[jn] - vs[j]) % 1.0 or 1.0
+    f = ((v - vs[j]) % 1.0) / span
     p_i = _lerp(surface.rows[i][j], surface.rows[i][jn], f)
     p_n = _lerp(surface.rows[i + 1][j], surface.rows[i + 1][jn], f)
     n_i = _lerp(surface.normals_out[i][j], surface.normals_out[i][jn], f)

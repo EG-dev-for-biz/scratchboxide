@@ -149,6 +149,12 @@ and keep the operators for the rest. In buildNotes, ask for exactly these parts 
   section 4's measurements. They lie on the cabin's own surface, so they cannot stand off it.
 - **roof**: fromBlueprint {fromTopMeters: 0.04, zFromMeters, zToMeters: the roof span, insetMeters: -0.004}, in body
   colour (gloss black or glass as the picture shows): 4 cm deep, so it overlaps the glasshouse's top by 1 cm.
+- **Shut lines and shallow outlines** (doors, bonnet, tailgate, an intake's rim) are relief on the lofted part,
+  grooves of width 0.004-0.006 m and depth -0.004 m. On a lofted part u runs along the car from its rearmost station
+  (0) to its frontmost (1): u = (z - z rear) / (z front - z rear). v runs round each ring from the bottom of its centre
+  line toward +X, up that side, over the top and down the other side, as a share of the ring's perimeter: a point at
+  height y on the +X side is at about v = (half width + y - bottom) / perimeter, with perimeter about 2 x (2 x half
+  width + height); the -X side is 1 - v. A door line is a curve at roughly constant u from the sill to the beltline.
 - Wheels, axles, lamps, grille, mirrors and handles as in the plan below (steps 7-9); skip its steps 1-6.
 
 Without a blueprint, write this plan into buildNotes with the numbers filled in:
