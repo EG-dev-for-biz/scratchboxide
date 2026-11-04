@@ -117,7 +117,7 @@ import { VISION_CALL_POLICY, VisionModelChain, type VisionGenAIClient } from '..
 import { budgetedClient, ModelCallMeter } from '../../gemini/model-call-budget';
 import { segmentOwnershipViews } from './ownership-masks';
 import { buildGroundModel, geodeticToScan, loadScanMesh, scanToGeodetic, surfaceModel, type GeodeticOrigin, type GroundModel, type ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
-import { removeStreetResidue, streetResidueEnabled, writeStreetResidue, STREET_RESIDUE_VERSION, type StreetResidueReport } from './street-residue';
+import { carriagewayLevelAt, removeStreetResidue, streetResidueEnabled, writeStreetResidue, STREET_RESIDUE_VERSION, type StreetResidueReport } from './street-residue';
 import { SURFACE_INFILL_VERSION } from './surface-infill';
 import { removeVehicles, vehicleRemovalEnabled, vehicleRemovalParams, visionVehicleBatchJudge, visionVehicleJudge, VEHICLE_REMOVAL_VERSION, type VehicleRemovalReport } from './vehicle-removal';
 import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, PROCEDURAL_ROADS_VERSION, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
@@ -3539,8 +3539,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const ground = buildGroundModel(scan, { cellMeters: 1, water: look.waterAt, road: look.roadAt });
                     const within = (x: number, z: number) => Math.hypot(x, z) <= covered;
                     const audit = await auditDistrict({ scan, ground, buildingAt: look.buildingAt, waterAt: look.waterAt, within, dir: path.join(dir, 'residual_audit'), ...(ctx.signal ? { signal: ctx.signal } : {}), idPrefix: `residue/${key.slice(0, 8)}` });
+                    // the carriageways, measured kerb to kerb on the stripped scan: a lump is taken only on one
+                    const centrelines = look.raster.roads.filter(l => l.some(([x, z]) => Math.hypot(x, z) <= covered));
+                    const roads = centrelines.length ? measureRoadSurfaces({ roads: centrelines, grid: { ...surfaceModel(scan, 0.5), cellM: 0.5 }, within, buildingAt: look.buildingAt, groundAt: ground.groundAt }) : [];
                     const r = await removeStreetResidue({
-                        glb: fs.readFileSync(stripped.devegetatedGlb), scan, ground, audit, keep, look: { buildingAt: look.buildingAt, waterAt: look.waterAt, roadAt: look.roadAt, within },
+                        glb: fs.readFileSync(stripped.devegetatedGlb), scan, ground, audit, keep, carriageway: carriagewayLevelAt(roads), look: { buildingAt: look.buildingAt, waterAt: look.waterAt, roadAt: look.roadAt, within },
                         recordsDir: path.join(dir, 'infill'), ...(ctx.signal ? { signal: ctx.signal } : {})
                     });
                     const changed = r.report.floating.triangles > 0 || r.report.lumps.length > 0;

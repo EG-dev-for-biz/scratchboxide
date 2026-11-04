@@ -10,9 +10,10 @@
 /**
  * Street residue (street-residue.ts) on a synthetic street with the native residual audit (no network, no model): a lane
  * street photographed at 5 cm a texel, a crumpled brown pile melted into it over the dashed line, a second pile under a
- * fixture the vehicle step's model read, two bollards, and a needle shard hanging in the air. The pile is patched (its
- * vertices down on the street, its texels the street's own), the shard deleted, and the bollards and the read fixture kept
- * byte for byte; the spike rule reads a twisting section and not a post's.
+ * fixture the vehicle step's model read, a third off the carriageway, two bollards, and a needle shard hanging in the air.
+ * The pile is patched (its vertices down on the street, its texels the street's own), the shard deleted, and the bollards,
+ * the read fixture and the pile off the carriageway kept byte for byte; the spike rule reads a twisting section and not a
+ * post's; the carriageway band is each road's median, not one station's stray kerb.
  */
 
 import * as fs from 'fs';
@@ -24,18 +25,22 @@ import { assembleGlb, parseGlbBytes, readAccessor } from '../src/node/3d-engine/
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 import { auditDistrict } from '../src/node/3d-engine/staged-location/district-residual-audit';
-import { removeStreetResidue, sectionReversals, selectStreetResidue, STREET_RESIDUE_PARAMS } from '../src/node/3d-engine/staged-location/street-residue';
+import { carriagewayLevelAt, removeStreetResidue, sectionReversals, selectStreetResidue, STREET_RESIDUE_PARAMS } from '../src/node/3d-engine/staged-location/street-residue';
+import type { RoadStation, RoadSurface } from '../src/node/3d-engine/staged-location/road-surfaces';
 import { loadScanMesh, type GroundModel } from '../src/node/spatial/StreetViewSurveyPlanner';
 import { HALF, inLump, laneStreet, lumpBump, noise, STEP, TEX, type Lump } from './surface-infill-fixtures';
 
 type P3 = [number, number, number];
 const PILE: Lump = { cx: -4, cz: 2.6, ax: 2.2, az: 1.1, h: 1.35, colour: [128, 84, 52] };
 const READ: Lump = { cx: 6, cz: -6, ax: 1.6, az: 1.0, h: 1.2, colour: [128, 84, 52] };
+/** Off the carriageway (a plaza beyond the kerb line at |z| = 10). */
+const OFF: Lump = { cx: -6, cz: -12, ax: 1.8, az: 1.0, h: 1.2, colour: [128, 84, 52] };
+const CARRIAGEWAY_HALF = 10;
 const BOLLARDS: Array<[number, number]> = [[-5.5, 5.6], [-3, 5.6]];
 const BOLLARD_HALF = 0.15, BOLLARD_TOP = 1.3;
 const ground = (x: number, z: number) => laneStreet.ground(x, z);
 /** The scan's surface: the street with both piles melted in, crumpled (a melted car is no smooth dome). */
-const scanY = (x: number, z: number) => ground(x, z) + Math.max(...[PILE, READ].map(l => { const b = lumpBump(l, x, z); return b > 0 ? Math.max(0, b + 0.22 * noise(x, z, 0.35, 5)) : 0; }));
+const scanY = (x: number, z: number) => ground(x, z) + Math.max(...[PILE, READ, OFF].map(l => { const b = lumpBump(l, x, z); return b > 0 ? Math.max(0, b + 0.22 * noise(x, z, 0.35, 5)) : 0; }));
 
 /** The street as a textured grid mesh, and the bollards and the shard as a second primitive in their own grey photo. */
 function streetGlb(): Buffer {
@@ -78,7 +83,7 @@ function streetGlb(): Buffer {
     const rgba = new Uint8Array(TEX * TEX * 4);
     for (let k = 0; k < TEX; k++) for (let i = 0; i < TEX; i++) {
         const x = -HALF + ((i + 0.5) / TEX) * 2 * HALF, z = -HALF + ((k + 0.5) / TEX) * 2 * HALF;
-        const l = [PILE, READ].find(q => inLump(q, x, z, 0.1));
+        const l = [PILE, READ, OFF].find(q => inLump(q, x, z, 0.1));
         const c = l ? l.colour.map(v => v + 18 * noise(x, z, 0.1, 3)) : laneStreet.truth(x, z);
         rgba.set([c[0], c[1], c[2], 255], (k * TEX + i) * 4);
     }
@@ -118,7 +123,24 @@ describe('street residue', () => {
         expect(sectionReversals([0.15, 0.29, 0.39, 0.22, 0.1, 0.32, 0.44, 0.55, 0.58, 0.37], tol)).toBeGreaterThanOrEqual(STREET_RESIDUE_PARAMS.spikeMinReversals);
     });
 
-    it('patches the pile, deletes the floating shard, and keeps the bollards and the fixture the model read', async () => {
+    it('takes each road\'s median band across its centreline and the nearest station\'s level, not one station\'s stray kerb', () => {
+        const station = (x: number, right: number): RoadStation => ({
+            x, z: 0.5, tx: 1, tz: 0, nx: 0, nz: 1, profile: [10.1, 10.05, 10, 10.05, 10.1], samples: 40, shiftM: 0.5,
+            left: { halfWidthM: 4, kerb: 'measured' }, right: { halfWidthM: right, kerb: 'measured' }
+        });
+        const road: RoadSurface = { id: 'road_0', stations: [station(0, 4), station(2, 9), station(4, 4)], lengthM: 4, measuredKerbShare: 1, dropped: { noSurface: 0, aboveGround: 0, uneven: 0, noKerb: 0, underTree: 0 } };
+        const at = carriagewayLevelAt([road]);
+        // the band: the line shifted 0.5 m, 4 m either side (left on the normal's negative side), whatever station 2 read
+        expect(at(2, 0.5)).toBeCloseTo(10, 5);
+        expect(at(2, 4.4)).toBeGreaterThan(10);
+        expect(at(2, -3.4)).toBeGreaterThan(10);
+        expect(at(2, 6)).toBeNaN();
+        expect(at(2, -4)).toBeNaN();
+        // past the last station by more than carriagewayAlongM: no band
+        expect(at(4 + STREET_RESIDUE_PARAMS.carriagewayAlongM + 1, 0.5)).toBeNaN();
+    });
+
+    it('patches the pile, deletes the floating shard, and keeps the bollards, the fixture the model read and the pile off the carriageway', async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'street-residue-'));
         const before = streetGlb();
         const file = path.join(dir, 'stripped.glb');
@@ -129,7 +151,9 @@ describe('street residue', () => {
         const audit = await auditDistrict({ scan, ground: g, buildingAt: () => 0, within, dir: path.join(dir, 'audit') });
         const keep = [{ lo: [READ.cx - READ.ax, READ.cz - READ.az] as [number, number], hi: [READ.cx + READ.ax, READ.cz + READ.az] as [number, number] }];
         // the selection: the pile a lump, the shard floating, the bollards slender, the read pile a fixture
-        const sel = selectStreetResidue(audit.audit.clusters, keep);
+        const carriageway = (x: number, z: number) => (Math.abs(z) < CARRIAGEWAY_HALF ? ground(x, z) : NaN);
+        const onCarriageway = (c: { lo: number[]; hi: number[] }) => Math.abs((c.lo[2] + c.hi[2]) / 2) < CARRIAGEWAY_HALF;
+        const sel = selectStreetResidue(audit.audit.clusters, keep, STREET_RESIDUE_PARAMS, onCarriageway);
         const at = (x: number, z: number) => audit.audit.clusters.filter(c => c.lo[0] - 0.3 < x && c.hi[0] + 0.3 > x && c.lo[2] - 0.3 < z && c.hi[2] + 0.3 > z).map(c => c.id);
         expect(sel.lumps).toHaveLength(1);
         expect(sel.lumps[0].kind).toBe('lump');
@@ -139,7 +163,10 @@ describe('street residue', () => {
         const kept = new Map(sel.kept.map(k => [k.id, k.why] as const));
         for (const [x, z] of BOLLARDS) for (const id of at(x, z)) expect(kept.get(id)).toBe('slender');
         for (const id of at(READ.cx, READ.cz)) expect(kept.get(id)).toBe('fixture');
-        const { glb, report } = await removeStreetResidue({ glb: before, scan, ground: g, audit, keep, look: { within } });
+        expect(at(OFF.cx, OFF.cz).length).toBeGreaterThan(0);
+        for (const id of at(OFF.cx, OFF.cz)) expect(kept.get(id)).toBe('off the carriageway');
+        const { glb, report } = await removeStreetResidue({ glb: before, scan, ground: g, audit, keep, carriageway, look: { within } });
+        expect(report.lumps.map(l => l.clusters)).toEqual(sel.lumps.map(l => l.clusters));
         expect(report.floating.triangles).toBe(2);
         expect(report.lumps).toHaveLength(1);
         const g0 = parseGlbBytes(before), g1 = parseGlbBytes(glb);
@@ -154,7 +181,7 @@ describe('street residue', () => {
             const x = p0[v], z = p0[v + 2];
             if (inLump(PILE, x, z)) { inPile++; worst = Math.max(worst, Math.abs(p1[v + 1] - ground(x, z))); }
             else if (!inLump(PILE, x, z, 2.5) && p1[v + 1] !== p0[v + 1]) changedFar++;
-            if (inLump(READ, x, z, -0.3)) { readTotal++; if (p1[v + 1] === p0[v + 1]) readKept++; }
+            for (const l of [READ, OFF]) if (inLump(l, x, z, -0.3)) { readTotal++; if (p1[v + 1] === p0[v + 1]) readKept++; }
         }
         expect(inPile).toBeGreaterThan(100);
         expect(worst).toBeLessThan(0.03);

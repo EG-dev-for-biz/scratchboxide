@@ -17,13 +17,18 @@
  * - Floating: a cluster the audit calls a scan artefact because it touches nothing (its floating score, its gap to the
  *   ground and the buildings) and that no cluster left standing comes near: its triangles are deleted. Nothing rests on
  *   it, so no surface opens.
- * - A lump: a cluster wider than it is tall, at most a vehicle's height above what supports it, joined with the
- *   neighbouring clusters the audit split the same melted pile into, whose area-weighted real-object score stays under the
- *   audit's own bar and that overlaps no fixture the vehicle step's model read: its cells are patched as the vehicle step
+ * - A lump: a cluster on the measured carriageway (a road's kerb-to-kerb band, at its level: never a roof, a deck or a
+ *   plaza, where the low structures the vector footprints miss stand), wider than it is tall, at most a vehicle's height
+ *   above what supports it, joined with the neighbouring clusters the audit split the same melted pile into, whose
+ *   area-weighted real-object score stays under the audit's own bar and that overlaps no fixture the vehicle step's model
+ *   read: its cells are patched as the vehicle step
  *   patches a vehicle (vehicle-removal.ts: the region and its skirt, the ring, the stacks; every vertex moved down onto
  *   the infill's surface; the texels from the infill's ladder behind its seam gate).
- * - Stays: anything slender (taller than it is wide: a bollard, a post, a pole, a hydrant), anything the audit calls a
- *   real object on its own, anything over a fixture the model read, anything building-sized or taller than a vehicle.
+ * - A spike: a slender cluster whose section swings up its height (the scan's twisted sheet, not a post), neither real
+ *   nor an upright by the audit's measures, wherever it stands: patched the same way.
+ * - Stays: anything slender with a steady section (a bollard, a post, a pole, a hydrant), anything off the carriageway
+ *   that is not a spike, anything the audit calls a real object on its own, anything over a fixture the model read,
+ *   anything building-sized or taller than a vehicle.
  *
  * Labels: the deleted triangles are reported; a patched lump's heights are generated (nothing was measured under it) and
  * its texels carry the infill's labels, all in the GLB's root extras (sbStreetResidue).
@@ -34,6 +39,7 @@ import * as path from 'path';
 import type { GroundModel, ScanMesh } from '../../spatial/StreetViewSurveyPlanner';
 import { assembleGlb, nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint } from './glb-bytes';
 import { readTileTriangles } from './tile-texture-transfer';
+import type { RoadSurface } from './road-surfaces';
 import { BUILDING_PART_MIN, RESIDUAL_AUDIT_THRESHOLDS, type AuditedCluster } from './residual-audit';
 import { UPRIGHT, type DistrictAuditResult } from './district-residual-audit';
 import { applyInfillToGlb, cellsToTriangles, infillExtras, infillRegions, writeInfillRecords, type InfillRegionSpec, type RegionInfill } from './surface-infill';
@@ -50,6 +56,11 @@ export const STREET_RESIDUE_PARAMS = {
     floatingGapM: 0.25,
     /** ...and no cluster that stays comes within this of it (box to box): a part the scan detached from a standing thing stays with it. */
     floatingClearM: 0.5,
+    /** A lump lies on the carriageway when at least this share of its plan samples does, and it stands within `carriagewayLevelM` of the carriageway's level. */
+    carriagewayShare: 0.6,
+    carriagewayLevelM: 0.5,
+    /** A point takes the band of the nearest measured station along its road within this (stations drop out where the street is cluttered). */
+    carriagewayAlongM: 30,
     /** A lump's height above what supports it over its larger plan extent, at most: a bollard (2.4 on Penn's 8th Ave) or a post is taller than it is wide. */
     lumpMaxSlenderness: 1.2,
     /** A lump stands at most this above what supports it (a vehicle's height; taller is not a remnant on the street). */
@@ -89,7 +100,7 @@ export function streetResidueEnabled(env: NodeJS.ProcessEnv = process.env): bool
 type Box2 = { lo: [number, number]; hi: [number, number] };
 
 /** Why a cluster stays (the measure that keeps it). */
-export type ResidueKept = 'slender' | 'real' | 'fixture' | 'building-sized' | 'tall' | 'small' | 'on the street' | 'near a standing cluster';
+export type ResidueKept = 'slender' | 'real' | 'fixture' | 'building-sized' | 'tall' | 'small' | 'off the carriageway' | 'on the street' | 'near a standing cluster' | 'under what stays';
 
 export interface ResidueLump {
     id: number;
@@ -139,6 +150,40 @@ const overlapShare = (a: Box2, b: Box2) => {
     return ix > 0 && iz > 0 ? (ix * iz) / area : 0;
 };
 
+/**
+ * The measured carriageway (road-surfaces.ts measureRoadSurfaces): the level of the street at a plan point, NaN off every
+ * carriageway. Each road's band is the median over its stations of where the measured carriageway lies across its vector
+ * centreline (the station's shift less its left kerb, plus its right kerb; road-surfaces.ts reads the left kerb on the
+ * normal's negative side), so one station's kerb read on a parked car or a bollard does not move it; a point takes the band and the level of the nearest station along its road (within
+ * `carriagewayAlongM`), and a median strip under the line is not carriageway.
+ */
+export function carriagewayLevelAt(roads: RoadSurface[], P: StreetResidueParams = STREET_RESIDUE_PARAMS): (x: number, z: number) => number {
+    const median = (v: number[]) => { const a = [...v].sort((p, q) => p - q); return a.length ? a[Math.floor(a.length / 2)] : NaN; };
+    const stations = roads.flatMap(r => {
+        const lo = median(r.stations.map(s => s.shiftM - s.left.halfWidthM)), hi = median(r.stations.map(s => s.shiftM + s.right.halfWidthM));
+        return r.stations.map(s => ({ s, lo, hi, vx: s.x - s.shiftM * s.nx, vz: s.z - s.shiftM * s.nz }));
+    });
+    const CELL = 16, cells = new Map<string, typeof stations>();
+    for (const q of stations) { const k = `${Math.floor(q.vx / CELL)},${Math.floor(q.vz / CELL)}`; let a = cells.get(k); if (!a) cells.set(k, a = []); a.push(q); }
+    const reach = Math.ceil((P.carriagewayAlongM + 20) / CELL);
+    return (x, z) => {
+        let best = Infinity, level = NaN;
+        const ci = Math.floor(x / CELL), ck = Math.floor(z / CELL);
+        for (let dk = -reach; dk <= reach; dk++) for (let di = -reach; di <= reach; di++) for (const q of cells.get(`${ci + di},${ck + dk}`) ?? []) {
+            const dx = x - q.vx, dz = z - q.vz, along = dx * q.s.tx + dz * q.s.tz, across = dx * q.s.nx + dz * q.s.nz;
+            if (Math.abs(along) > P.carriagewayAlongM || Math.abs(along) >= best || across < q.lo || across > q.hi) continue;
+            const m = q.s.median, c = across - q.s.shiftM;
+            if (m && c > -m.leftEdgeM && c < m.rightEdgeM) continue;
+            best = Math.abs(along);
+            // the station's profile, left kerb (the normal's negative side) to right kerb across it
+            const f = Math.max(-1, Math.min(1, c < 0 ? c / Math.max(q.s.left.halfWidthM, 1e-3) : c / Math.max(q.s.right.halfWidthM, 1e-3)));
+            const t = (f + 1) * 2, i = Math.min(3, Math.floor(t)), w = t - i;
+            level = (1 - w) * q.s.profile[i] + w * q.s.profile[i + 1];
+        }
+        return level;
+    };
+}
+
 /** A spike by the audit's measures: its section swings up its height, and the audit calls it neither real nor an upright. */
 function spiky(c: AuditedCluster, P: StreetResidueParams): boolean {
     if (c.verdict === 'real-object' || (c.scores?.real ?? 0) >= RESIDUAL_AUDIT_THRESHOLDS.realMin) return false;
@@ -149,7 +194,7 @@ function spiky(c: AuditedCluster, P: StreetResidueParams): boolean {
 }
 
 /** Which of the audit's clusters go (floating, lumps, spikes) and why each other one stays. Measures only. */
-export function selectStreetResidue(clusters: AuditedCluster[], keep: Box2[] = [], P: StreetResidueParams = STREET_RESIDUE_PARAMS): ResidueSelection {
+export function selectStreetResidue(clusters: AuditedCluster[], keep: Box2[] = [], P: StreetResidueParams = STREET_RESIDUE_PARAMS, onCarriageway: (c: AuditedCluster) => boolean = () => false): ResidueSelection {
     const why = new Map<number, ResidueKept>();
     const floatingFirst = clusters.filter(c => c.verdict === 'scan-artefact' && (c.scores?.floating ?? 0) >= P.floatingMin && (c.attachment?.minGapToSolidM ?? 0) >= P.floatingGapM);
     const floatingIds = new Set(floatingFirst.map(c => c.id));
@@ -167,6 +212,7 @@ export function selectStreetResidue(clusters: AuditedCluster[], keep: Box2[] = [
             return false;
         }
         if (h > P.lumpMaxHeightM) { why.set(c.id, 'tall'); return false; }
+        if (!onCarriageway(c)) { why.set(c.id, 'off the carriageway'); return false; }
         return true;
     });
     const parent = eligible.map((_, i) => i);
@@ -318,6 +364,8 @@ export interface StreetResidueInput {
     look?: VehicleLookups;
     /** The fixtures the vehicle step's model read (permanent things): a lump over one stays. */
     keep?: Box2[];
+    /** The carriageway's level at a plan point, NaN off it (carriagewayLevelAt over the measured roads): lumps are taken only on it. Absent: no lump is. */
+    carriageway?: (x: number, z: number) => number;
     P?: StreetResidueParams;
     vehicleP?: VehicleRemovalParams;
     /** Writes each patch's infill records here. */
@@ -335,7 +383,17 @@ export async function removeStreetResidue(input: StreetResidueInput): Promise<St
     const log = input.log ?? (() => undefined);
     const clusters = input.audit.audit.clusters;
     const byId = new Map(clusters.map(c => [c.id, c] as const));
-    const sel = selectStreetResidue(clusters, input.keep ?? [], P);
+    // a cluster on the carriageway: most of its plan samples on a road's band, standing at that band's level
+    const onCarriageway = (c: AuditedCluster): boolean => {
+        if (!input.carriageway) return false;
+        const levels: number[] = [];
+        let n = 0;
+        for (const t of scanTriangles(input.audit, c)) sampleTriangle(input.scan, t, Math.max(P.sampleM, 0.25), (x, z) => { n++; const y = input.carriageway!(x, z); if (y === y) levels.push(y); });
+        if (!n || levels.length < P.carriagewayShare * n) return false;
+        const support = typeof c.attachment?.supportY === 'number' && Number.isFinite(c.attachment.supportY) ? c.attachment.supportY : c.lo[1];
+        return Math.abs(support - [...levels].sort((a, b) => a - b)[Math.floor(levels.length / 2)]) <= P.carriagewayLevelM;
+    };
+    const sel = selectStreetResidue(clusters, input.keep ?? [], P, onCarriageway);
     const keptCounts: StreetResidueReport['kept'] = {};
     for (const k of sel.kept) keptCounts[k.why] = (keptCounts[k.why] ?? 0) + 1;
     const report: StreetResidueReport = { schema: 'scratchbox.street-residue/1', version: STREET_RESIDUE_VERSION, clusters: clusters.length, floating: { clusters: sel.floating, triangles: 0 }, lumps: [], kept: keptCounts, notes: [], ms: 0 };
@@ -389,7 +447,11 @@ export async function removeStreetResidue(input: StreetResidueInput): Promise<St
         const byGroup = new Map(infill.map(r => [r.id as number, r] as const));
         const surface = (gid: number, x: number, z: number) => { const r = byGroup.get(gid); if (!r) return NaN; const c = r.chart; return c.origin[1] + r.model.heightAt(x - c.origin[0], z - c.origin[2]); };
         const moved = patchVehiclesInGlb(glb, region, { surface, P: VP });
-        report.lumps = sel.lumps.map(l => {
+        // a lump whose cells all lie under what stays has nothing to patch: it stays, and is counted so
+        const patched = sel.lumps.filter(l => region.groups.some(g => lumpOfGroup[g.id].includes(l.id)));
+        for (const l of sel.lumps) if (!patched.includes(l)) keptCounts['under what stays'] = (keptCounts['under what stays'] ?? 0) + l.clusters.length;
+        sel.lumps = patched;
+        report.lumps = patched.map(l => {
             const regions = region.groups.filter(g => lumpOfGroup[g.id].includes(l.id)).map(g => g.id);
             const fills = regions.map(gid => byGroup.get(gid)!).filter(Boolean);
             return {
@@ -411,7 +473,8 @@ export async function removeStreetResidue(input: StreetResidueInput): Promise<St
         report.patch = { ...moved.stats, paintedTexels: painted.stats.paintedTexels, repaintedImages: painted.stats.repaintedImages };
     }
     const area = r2(sel.lumps.reduce((s, l) => s + l.planM2, 0)), spikes = sel.lumps.filter(l => l.kind === 'spike').length;
-    report.notes.push(`street residue: of ${clusters.length} clusters the residual audit found standing in the streets, ${sel.floating.length} floating artefacts deleted (${cut.removedTriangles} triangles), ${sel.lumps.length - spikes} lumps and ${spikes} spikes (${area} m²) patched by the surface infill; ${sel.kept.length} stay (${Object.entries(keptCounts).map(([k, n]) => `${n} ${k}`).join(', ') || 'none'})`);
+    const stay = Object.values(keptCounts).reduce((a, b) => a + (b ?? 0), 0);
+    report.notes.push(`street residue: of ${clusters.length} clusters the residual audit found standing in the streets, ${sel.floating.length} floating artefacts deleted (${cut.removedTriangles} triangles), ${sel.lumps.length - spikes} lumps and ${spikes} spikes (${area} m²) patched by the surface infill; ${stay} stay (${Object.entries(keptCounts).map(([k, n]) => `${n} ${k}`).join(', ') || 'none'})`);
     report.ms = Date.now() - t0;
     return { glb, report, infill };
 }

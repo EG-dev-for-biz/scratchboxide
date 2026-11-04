@@ -30,8 +30,12 @@
   "unsure" (real 0.32, upright score under the bar). Its slice sizes swing 0.15, 0.39, 0.10, 0.58 m going up.
 * The bollards are 57 clusters, unsure or real, every one slender (height over plan 2.4) with a constant cross-section
   (constancy 0.87-1.0, every slice the same size).
-* A carriageway mask cannot tell them apart here: the measured kerbs (`measureRoadSurfaces`) jump 3 m across between
-  stations, and the pile and the bollards are 2 m apart. The rule is therefore the clusters' own shape, not where they stand.
+* Per-station kerbs cannot tell them apart: the measured kerbs (`measureRoadSurfaces`) jump 3 m across between stations,
+  and the pile and the bollards are 2 m apart. So the shape decides what goes (the bollards are slender with a steady
+  section; the pile is wide and low) and the carriageway only decides where a lump may be taken.
+* The carriageway gate is needed: on the Penn centre chunk the shape rule alone picked 38 lumps (950 m²) on the build's
+  own audit, among them rooftop units, kiosk and shed roofs and a stair entrance (low structures the vector footprints
+  miss). Gated on each road's median kerb-to-kerb band at its level, the same chunk gives 7, all residue on carriageways.
 
 ---
 
@@ -40,19 +44,24 @@
 * **`selectStreetResidue`** (measures only, no names):
   * floating: an audit artefact touching nothing (floating score >= 0.5, gap to the ground and buildings >= 0.25 m) that
     no cluster left standing comes within 0.5 m of: deleted;
-  * a lump: clusters wider than tall (height over plan <= 1.2), at most 2.5 m, joined when their plan boxes lie within
+  * a lump: clusters on the carriageway (at least 60 % of their plan samples inside a road's band, standing within 0.5 m
+    of its level; the band is the median over the road's stations of the measured carriageway across its centreline,
+    carried to the nearest station within 30 m, a median strip excluded: `carriagewayLevelAt`), wider than tall (height
+    over plan <= 1.2), at most 2.5 m, joined when their plan boxes lie within
     0.75 m (the audit splits one melted pile), area-weighted real score under the audit's 0.6, at least 1.5 m² in plan,
     over no fixture the vehicle step's model read: patched;
   * a spike: a slender cluster whose section turns from growing to shrinking at least 3 times over at least 6 slices (a
-    post keeps one section; a sign on a pole steps out and back once), neither real nor an upright: patched;
+    post keeps one section; a sign on a pole steps out and back once), neither real nor an upright, wherever it stands:
+    patched;
   * a piece inside a removed cluster's own box goes with it unless the audit calls it real;
-  * everything else stays, with the measure that keeps it (slender, real, fixture, tall, small, near a standing cluster).
+  * everything else stays, with the measure that keeps it (slender, real, fixture, tall, small, off the carriageway, near
+    a standing cluster, or under what stays when a lump's cells all lie under kept clusters).
 * **`removeStreetResidue`**: deletes the floating triangles by their world centroids; patches lumps and spikes with the
   vehicle step's own machinery (`vehicleCandidates` grid, the cells as carriageway debris, `vehicleRegion`'s skirt,
   `measureRings`, `measureStacks`, `patchVehiclesInGlb`) and the surface infill (`infillRegions`, `applyInfillToGlb`
   painted by plan); what stays is kept out of every region. Root extras `sbStreetResidue` (the infill's record nested).
 * **Orchestrator**: in a district, after the tree strip, `deps.streetResidue` (true in the app's deps) and vector data:
-  the audit on the stripped scan, the residue taken out, and `strip.devegetatedGlb` replaced for every later stage (cache
+  the audit on the stripped scan, its roads measured kerb to kerb, the residue taken out, and `strip.devegetatedGlb` replaced for every later stage (cache
   key `street-residue/1` + audit + infill versions + the strip key + the fixtures read). A failure leaves the stripped
   scan as it is, with a run note. `SCRATCHBOX_STREET_RESIDUE=0` turns it off.
 
@@ -63,9 +72,10 @@
 * **Unit** (`street-residue.test.ts`, native audit, no network): a lane street at 5 cm a texel with a crumpled brown pile
   over its dashed line, a second pile under a fixture the model read, two bollards and a hanging needle shard. The pile is
   one lump, the shard floating, the bollards slender, the read pile a fixture; the shard's 2 triangles deleted; the
-  bollards' and the read pile's vertices unchanged; the pile's vertices within 3 cm of the street; no vertex 2.5 m past
-  it moved; under 3 % of its core texels still brown; `sbStreetResidue` written. The spike rule's section reading on a
-  post, a sign on a pole and #71's sizes.
+  bollards' and the read pile's vertices unchanged; a third pile off the carriageway kept ('off the carriageway'); the
+  pile's vertices within 3 cm of the street; no vertex 2.5 m past it moved; under 3 % of its core texels still brown;
+  `sbStreetResidue` written. The spike rule's section reading on a post, a sign on a pole and #71's sizes. The band: a
+  road's median kerbs, not one station's stray one; no band past the last station by more than 30 m.
 * **Offline, Penn K-D chunk 8** (sheet `docs/screenshots/surface_infill_2026-11-03/farley_block_residue_before_after.jpg`):
 
 | | Clusters | Result |
@@ -75,7 +85,13 @@
 | Floating | 79 clusters, 161 needle triangles 1.4-3.8 m up | deleted (they draw almost nothing) |
 | Kept | 56 slender (the bollards), 6 tall, 2 small, 12 near a standing cluster | unchanged |
 
-  Whole chunk: 19.6 s on the shared machine (load average ~390).
+  Whole chunk: 19.6 s on the shared machine (load average ~390); with the gate (roads measured, 0.7 s) the same pile and
+  spike are taken.
+* **Offline, Penn K-D centre chunk** (sheet `centre_chunk_residue_before_after.jpg`, same folder): the audit on its
+  published layer (601 clusters), 3 road runs measured; 7 lumps on carriageways (90.6 m²), 5 patched (every fill passed
+  the seam gate, rim ΔE00 1.2-2.0), 2 kept under clusters that stay; 105 floating artefacts deleted (175 triangles); 76
+  clusters kept off the carriageway. By eye: shards and melted lumps on the street, one on the avenue whose lane line
+  continues; nothing that reads as a fixture. 257 s at load ~400.
 
 ---
 
