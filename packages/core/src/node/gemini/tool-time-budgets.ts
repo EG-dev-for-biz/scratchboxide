@@ -61,6 +61,9 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     // Image, vision and native build calls with up to two revision passes; with a location it first stages on 3D
     // Tiles (above), which can go a long time between progress reports.
     build_3d_object_from_reference: { maxMs: 50 * MIN },
+    // The UV rewrap and the detail bake (the first call after an engine change also builds both binaries), plus one image
+    // call per painted decal; reports progress before the bake.
+    object_detail_pass: { maxMs: 20 * MIN, idleMs: 12 * MIN },
     // With a place not yet built it extracts and isolates the structure from 3D Tiles first (minutes, cached after), then
     // the grounding fetches, the registration (up to 90 s edges + 120 s joint) and, optionally, the segmenter per view.
     streetview_survey: { maxMs: 40 * MIN, idleMs: 10 * MIN },
