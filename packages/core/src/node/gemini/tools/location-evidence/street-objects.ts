@@ -54,7 +54,7 @@ export const STREET_OBJECTS_TOOL_DECLARATION: ToolDeclaration = {
         'The district residual audit says where each object stands and how tall it is (measured); alike objects repeating along a line at a steady pitch are one family, built once and placed at every member. ' +
         'Registered Google Street View views that see each family clear (the Maps Imagery Grounding API; images held in memory, never written) are read once by the vision model: what it is, its colours and finishes, ' +
         'its masks; its profile along the height is measured from those silhouettes and scaled to the scan\'s height (photo-inferred), then built natively from solids of revolution or vertical sweeps and panels. ' +
-        'Each rebuild is drawn at the photos\' poses and kept only when its silhouette IoU beats the scan blob\'s and its colour is no further from the photos; otherwise the scan stays, with the numbers. ' +
+        'Each rebuild and the scan\'s blob are drawn at the photos\' poses and scored against the photos (silhouette IoU and colour); the rebuild is kept only where it beats the blob on both, otherwise the scan stays, with both scores. ' +
         'Report-only: writes the rebuilt GLBs, one GLB with the kept ones placed at their members, and a report (per object: what Street View saw, the IoU and colour numbers, the provenance of every number); the build itself is not changed. ' +
         'Give auditJson (the scene_inventory run note\'s audit: district_audit.json), scanGlb (the tree-stripped scan it read), tileGlb (the full textured tile) and lat, lng (the build\'s anchor).',
     parameters: {

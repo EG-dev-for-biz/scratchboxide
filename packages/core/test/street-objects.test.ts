@@ -379,7 +379,7 @@ describe('the view aim, the read\'s masks, the keep rule and the instanced layer
         expect(parseFamilyReading('not json', [])).toHaveProperty('error');
     });
 
-    it('keeps a rebuild only when its silhouette beats the scan\'s and its colour is no further', () => {
+    it('keeps a rebuild only when it beats the scan\'s blob on both: silhouette and colour', () => {
         const v = (iouRebuild: number, iouScan: number, dR: number, dS: number) => ({ view: 'v', photoPixels: 1000, iouRebuild, iouScan, deltaERebuild: dR, deltaEScan: dS });
         expect(judgeFamily([v(0.8, 0.5, 6, 9), v(0.7, 0.55, 7, 8)]).keep).toBe(true);
         expect(judgeFamily([v(0.4, 0.5, 6, 9)]).keep).toBe(false);
@@ -388,6 +388,9 @@ describe('the view aim, the read\'s masks, the keep rule and the instanced layer
         expect(c.reason).toMatch(/colour/);
         expect(judgeFamily([]).keep).toBe(false);
         // beating a blob that barely matches is not enough: under the floor, the scan stays
+        // the colour must be closer, and measured: an equal colour, or one that could not be measured, keeps the scan
+        expect(judgeFamily([v(0.8, 0.5, 9, 9)]).keep).toBe(false);
+        expect(judgeFamily([v(0.8, 0.5, NaN, 9)]).reason).toMatch(/could not both be measured/);
         const low = judgeFamily([v(0.2, 0.05, 5, 9)]);
         expect(low.keep).toBe(false);
         expect(low.reason).toMatch(/under IoU 0.3/);
