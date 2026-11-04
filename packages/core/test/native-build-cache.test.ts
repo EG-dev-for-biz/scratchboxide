@@ -188,7 +188,7 @@ describe('services compile once and pass parameters at run time', () => {
         expect(compileLines().length - before).toBe(1);
         expect(b.compilationTimeMs).toBe(0);
         expect(Buffer.from(a.rgbFloats.buffer).equals(Buffer.from(b.rgbFloats.buffer))).toBe(false);
-    }, 180_000);
+    }, 600_000); // the first sky of a cold machine also precomputes the default medium's tables (about 100 s on 4 cores)
 
     it('de-lighting: a second call with other weights compiles nothing', async () => {
         const lighting = new NativeTileLightingService();

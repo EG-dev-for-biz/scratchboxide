@@ -24,7 +24,10 @@ export default defineConfig({
         env: {
             SCRATCHBOX_TEST: '1',
             // Tests exercise the chat model's own first call; the routing race (fast-router.ts) is tested on its own.
-            SCRATCHBOX_CHAT_ROUTER: 'off'
+            SCRATCHBOX_CHAT_ROUTER: 'off',
+            // The native sky's tables at one scattering order (a 0.2 s precompute, not 25-100 s per machine) outside the
+            // heavy run, which checks the four-order sky (native-tile-path-tracer.test.ts).
+            ...(process.env.SCRATCHBOX_HEAVY_TESTS ? {} : { SCRATCHBOX_SKY_SCATTERING_ORDERS: '1' })
         }
     }
 });
