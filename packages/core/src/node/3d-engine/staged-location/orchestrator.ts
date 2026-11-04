@@ -200,7 +200,8 @@ import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
 import { districtBuildingIndex, districtFootprints } from './pipeline-k/district-buildings';
 import { chunkCpuShare, chunkOwner, chunkParallel, kdCentreRunner, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, planDistrictChunks, type DistrictChunkPlan, type TileFrame } from './pipeline-k/district-chunks';
-import { auditDistrictForPlace, placeStoreEnabled, syncPlaceAfterObjects } from './place-store-district';
+import { auditDistrictForPlace, placeStoreEnabled, pullPlaceForRun, syncPlaceAfterObjects } from './place-store-district';
+import { PLACE_STORE_PARAMS } from './place-store';
 import { addSeamEdges, applySeamGain, cutChunkGround, DISTRICT_SEAMS_PARAMS, DISTRICT_SEAMS_VERSION, sampleSeamColour, seamCoverage, seamOwner, solveSeamGains, type SeamCoverage, type SeamCutReport, type SeamEdges, type SeamSamples } from './pipeline-k/district-seams';
 import * as os from 'os';
 import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
@@ -671,6 +672,8 @@ interface RunRecord {
 /** The payload beside the contract result, for consumers of the previous result shape (the object builder). */
 export interface StagedLocationOutcome {
     result: StagedLocationResult;
+    /** The run's id (its records under staged_location/runs/<runId>/): a district's chunks are found by it. */
+    runId?: string;
     compat: {
         remesh: { ok: boolean; url?: string; error?: string };
         resolvedAddress: string;
@@ -1534,6 +1537,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         cache.writeRunRecord(runId, rec);
     };
     let placeValue: ResolvedPlace | undefined;
+    let placePull: Promise<void> | undefined;
     // every stage promise the call starts is settled before it returns or throws, so none runs on, or rejects unseen, after it
     const siblings: Array<Promise<unknown>> = [];
     // the tiles' extraction, for the stages that start before it and finish after it (the vector first paint)
@@ -1569,6 +1573,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         });
         if (resolved.status === 'stopped' || !resolved.value) throw new StagedLocationHardFailure('resolve', 'run_deadline', `The run reached its time limit before the place was resolved, so there is nothing to show.`);
         placeValue = resolved.value;
+        // a district run reads its place's store first (place-store.ts pullPlace): the place's objects into the object store,
+        // its readings into the reading store; read in the background, waited for before the run's objects are kept
+        if (kdDistrict && !request.chunk && placeStoreEnabled()) placePull = pullPlaceForRun({ place: placeValue, store: defaultDurableAssetStore(), readingsDir: path.join(cache.dir, MODEL_READINGS_DIR), workspace: cache.workspaceRoot })
+            .then(r => { cache.writeRunNote(runId, 'place_pull', r); }, () => undefined);
         run.state.place = { query: request.query, resolvedAddress: placeValue.formattedAddress, lat: placeValue.lat, lng: placeValue.lng, ...(placeValue.alternatives?.length ? { alternatives: placeValue.alternatives } : {}) };
         persist();
         // pipeline K-D: a district larger than one build reaches is cut into chunks (pipeline-k/district-chunks.ts); this build is the
@@ -1786,7 +1794,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     .then(r => { prefetch = r; }, err => { if (!io.signal.aborted) prefetch = { error: errorMessage(err) }; }) : Promise.resolve();
                 const committed: StagedLayer[] = [];
                 const degradations: DegradationRecord[] = [];
-                const report: Array<{ index: number; radiusM: number; buildings: number; status: string; layers?: number; truncated?: boolean; ms: number; error?: string }> = [];
+                const report: Array<{ index: number; radiusM: number; buildings: number; status: string; runId?: string; layers?: number; truncated?: boolean; ms: number; error?: string }> = [];
                 // the vector buildings shown past the centre build's tiles stand in only where no chunk has been joined yet: as each
                 // chunk joins, the placeholders it owns are taken out (the layer republished without them, whole buildings by their middle)
                 const joinedChunks = new Set<number>(), replacedPlaceholders = new Set<string>();
@@ -1875,7 +1883,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         joined++;
                         retirePlaceholders(c.index);
                         const truncated = out.result.stages.some(s => s.stage === 'tiles' && s.status === 'degraded');
-                        report.push({ index: c.index, radiusM: c.radiusM, buildings: c.buildings.length, status: out.result.status, layers: batch.length, truncated, ms: now() - t0 });
+                        report.push({ index: c.index, radiusM: c.radiusM, buildings: c.buildings.length, status: out.result.status, ...(out.runId ? { runId: out.runId } : {}), layers: batch.length, truncated, ms: now() - t0 });
                         if (truncated) degradations.push(run.degrade(record('chunks', 'chunk_truncated', {
                             part: { description: `chunk ${c.index} of the district` }, intended: `its ${Math.round(c.radiusM)} m at leaf LOD`, fellTo: 'as far as its leaf tiles reach',
                             provenanceAfter: PROVENANCE.asScanned, reason: `chunk ${c.index}'s extraction reached the leaf-tile cap before its own radius`, transient: false, runId, now: now()
@@ -1984,7 +1992,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 cache.writeRunNote(runId, 'district_chunks_joined', { version: DISTRICT_CHUNKS_VERSION, parallel, chunks: report, ...(seams ? { seams } : {}), ...(prefetch ? { prefetch } : {}) });
                 // the vector buildings shown past the centre build's tiles stand in only where no chunk was joined
                 if (joined === todo.length) for (const l of run.state.layers.filter(x => (x.layer === 'l0o' || (centreInCloud && x.layer === 'l0')) && !x.retired)) run.commit({ ...l, retired: true }, run.layerMeta[l.objectId]);
-                // the place store (place-store-district.ts, SCRATCHBOX_PLACE_STORE=1): the joined district audited, its buildings listed for the object store
+                // the place store (place-store-district.ts; SCRATCHBOX_PLACE_STORE=0 off): the joined district audited, its buildings listed for the object store
                 if (placeStoreEnabled() && here) cache.writeRunNote(runId, 'place_audit', await auditDistrictForPlace({ runId, place: placeValue!, originEllipsoidalHeightM: here.originEllipsoidalHeightM, plan, layers: run.state.layers, manifests: run.objectManifests, modelsDir: cache.modelsDir, workspaceRoot: cache.workspaceRoot, request, ...(deps.vectorEvidence ? { vectorEvidence: deps.vectorEvidence } : {}), signal: io.signal, progress: m => io.progress(m) }));
                 const failed = todo.length - joined;
                 return {
@@ -6275,6 +6283,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             request, place: placeValue, extraction, structure, sizedTo: t.sizedTo, remeshed: remeshedNow, groundFile: groundOverride?.groundFile ?? remesh.value?.groundFile, groundLayerId: groundOverride?.groundLayerId ?? remesh.value?.groundLayerId ?? currentL1()?.objectId,
             trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, ...(textureValue ? { textures: textureValue } : {}), now, persist
         });
+        // the place's versions are in the object store before this run's are offered to it (a pull still out keeps reading)
+        if (placePull) await Promise.race([placePull, new Promise(r => setTimeout(r, PLACE_STORE_PARAMS.pullWaitMs).unref())]);
         keepSceneObjects(run, cache, outcome, extraction, request.query, { isolate: !!request.isolate, place: placeValue ? { name: placeValue.formattedAddress || request.query, lat: placeValue.lat, lng: placeValue.lng } : undefined });
         return outcome;
     } catch (err) {
@@ -6586,6 +6596,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
     run.close();
     return {
         result,
+        runId: run.runId,
         compat: {
             remesh: f.remeshed || f.remeshedElsewhere ? { ok: true, url: remeshLayer?.url } : { ok: false, error: (run.state.degradations.find(d => d.stage === 'remesh' && d.reasonCode === 'remesh_failed') ?? run.state.degradations.find(d => d.stage === 'remesh'))?.reason ?? 'the remesh did not run' },
             resolvedAddress: f.place.formattedAddress,
