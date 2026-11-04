@@ -36,7 +36,7 @@ import { OBJECT_BUILD_SOURCE } from '../../../common/spatial/object-build-spec';
 import { defaultDurableAssetStore, type DurableAssetStore } from '../../asset-store/durable-asset-store';
 import { locationHashOf, objectDirOf, objectInputHash, objectKeyOf, SceneObjectStore, type ObjectFrame } from '../../asset-store/scene-object-store';
 import { decalRgba, generateDecalImage } from '../../3d-engine/asset-decal';
-import { OBJECT_DETAIL_PASS_VERSION, runObjectDetailPass, type ObjectDecal, type ObjectWear, type PartWearOverride, type Rgb, type Xyz } from '../../3d-engine/object-detail-pass';
+import { exactPositionBounds, OBJECT_DETAIL_PASS_VERSION, runObjectDetailPass, type ObjectDecal, type ObjectWear, type PartWearOverride, type Rgb, type Xyz } from '../../3d-engine/object-detail-pass';
 import { decodeImageInMemory, type RgbaImage8 } from '../../3d-engine/staged-location/tile-texture-transfer';
 import { GoogleMediaCredentialsService } from '../../google-media-credentials-service';
 import { encodePng } from '../../texture-processing';
@@ -255,8 +255,9 @@ export async function runObjectDetailTool(args: Record<string, unknown>, ctx: To
         return fs.readFileSync(file);
     };
 
-    // the object as built, kept as the first version (later passes read the kept copy)
-    const asBuiltGlb = readGlb(prior?.asBuilt.uri ?? String(target.content.durableUri));
+    // the object as built, kept as the first version (later passes read the kept copy); its POSITION bounds measured
+    // from its data, as the store requires (the engine's writer rounds them)
+    const asBuiltGlb = exactPositionBounds(readGlb(prior?.asBuilt.uri ?? String(target.content.durableUri)));
     const asBuiltSha = prior?.asBuilt.sha256 ?? sha(asBuiltGlb);
     const built = keep(asBuiltGlb, objectInputHash('as built', asBuiltSha), 'the object as built', { builtAs: String(meta.objectBuild ? 'build_3d_object_from_reference' : meta.source ?? 'generated') }, 'object-build');
     const asBuilt = { uri: built.uri, sha256: asBuiltSha };

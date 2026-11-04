@@ -26,7 +26,7 @@ import * as path from 'path';
 import { spawn } from 'child_process';
 import { compileNativeCached, defaultNativeFlags, NativeBuildError } from './native-build-cache';
 import { findUvAtlasRepoRoot } from './staged-location/texture-uv';
-import { nodeWorldMatrices, parseGlbBytes, readAccessor, type Mat4, type ParsedGlb } from './staged-location/glb-bytes';
+import { assembleGlb, nodeWorldMatrices, parseGlbBytes, readAccessor, type Mat4, type ParsedGlb } from './staged-location/glb-bytes';
 import { decodeImageInMemory, type RgbaImage8 } from './staged-location/tile-texture-transfer';
 import { isSbVeggieNode } from './part-connectivity';
 import { GlbWriter, unwrapRewrapGlb, type UvRewrapReport } from '../spatial/UvAtlasRewrap';
@@ -289,13 +289,37 @@ function frame(facing: Xyz, up?: Xyz): { N: Xyz; R: Xyz; U: Xyz } {
     return { N, R, U: cr(N, R) };
 }
 
+/**
+ * The GLB with every POSITION accessor's min/max measured from its data (the JSON alone changes). The engine's GLB
+ * writer rounds them to six significant digits, which glTF validators and the scene object store's check refuse.
+ */
+export function exactPositionBounds(input: Buffer | Uint8Array): Buffer {
+    const glb = parseGlbBytes(input instanceof Uint8Array ? input : new Uint8Array(input));
+    let changed = false;
+    const done = new Set<number>();
+    for (const mesh of glb.json.meshes ?? []) for (const p of mesh.primitives ?? []) {
+        const ai = p.attributes?.POSITION;
+        const a = ai !== undefined ? glb.json.accessors?.[ai] : undefined;
+        if (!a || done.has(ai) || a.type !== 'VEC3' || a.componentType !== 5126 || a.sparse || a.bufferView === undefined) continue;
+        done.add(ai);
+        const data = readAccessor(glb, ai).data;
+        const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+        for (let i = 0; i < data.length; i++) { const c = i % 3; if (data[i] < min[c]) min[c] = data[i]; if (data[i] > max[c]) max[c] = data[i]; }
+        if (!data.length || (JSON.stringify(a.min) === JSON.stringify(min) && JSON.stringify(a.max) === JSON.stringify(max))) continue;
+        a.min = min; a.max = max;
+        changed = true;
+    }
+    return changed ? assembleGlb(glb.json, glb.bin) : Buffer.from(input);
+}
+
 // =============================================================================
 // Main
 // =============================================================================
 
-export async function runObjectDetailPass(input: Buffer | Uint8Array, options: ObjectDetailOptions = {}): Promise<ObjectDetailResult> {
+export async function runObjectDetailPass(rawInput: Buffer | Uint8Array, options: ObjectDetailOptions = {}): Promise<ObjectDetailResult> {
     const t0 = performance.now();
-    const src = parseGlbBytes(input instanceof Uint8Array ? input : new Uint8Array(input));
+    const input = exactPositionBounds(rawInput);
+    const src = parseGlbBytes(new Uint8Array(input.buffer, input.byteOffset, input.byteLength));
     const srcJson = src.json;
     if (!(srcJson.meshes ?? []).length) throw new Error('the GLB has no meshes to weather');
     const left = leftNodes(srcJson);

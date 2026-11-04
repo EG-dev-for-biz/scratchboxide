@@ -11,8 +11,9 @@
  * object_detail_pass on an open object scene (object-detail-tools.ts), with a private asset store and models folder:
  * - the scene is updated in place to draw the new version: the object's file, the generator's file name and inline
  *   copy (so the viewport draws it once, live and after a reload), data.objectBuild.detailPass;
- * - versions are kept in the scene object store: the object as built is version 1, each new recipe a new version, the
- *   same recipe the version it already made, and restoreVersion shows version 1 again, byte for byte;
+ * - versions are kept in the scene object store: the object as built is version 1 (its engine-rounded POSITION bounds,
+ *   which the store's check refuses, measured from the data), each new recipe a new version, the same recipe the
+ *   version it already made, and restoreVersion shows version 1 again;
  * - decals are added to the recipe and wear is not baked twice;
  * - scanned or measured objects and scenes without a generated object are refused with the reason.
  */
@@ -26,7 +27,9 @@ import { SceneObjectStore } from '../src/node/asset-store/scene-object-store';
 import { OBJECT_BUILD_SOURCE } from '../src/common/spatial/object-build-spec';
 import { createObjectDetailHandlers, OBJECT_DETAIL_TOOL } from '../src/node/gemini/tools/object-detail-tools';
 import { createDefaultToolRegistry } from '../src/node/gemini/tool-registry';
-import { parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
+import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
+import { checkGlbBytes } from '../src/node/3d-engine/staged-location/glb-integrity';
+import { exactPositionBounds } from '../src/node/3d-engine/object-detail-pass';
 import type { ToolContext } from '../src/node/gemini/tools/types';
 import { buildFixtureGlb } from './helpers/uv-rewrap-fixtures';
 import { encodePng } from '../src/node/texture-processing';
@@ -54,14 +57,22 @@ function box(name: string, size: [number, number, number], center: [number, numb
     return { positions, normals, indices, material, name };
 }
 
+/** The engine's GLB writer rounds POSITION min/max to six significant digits; the store's check refuses that. */
+function engineRounded(glb: Buffer): Buffer {
+    const g = parseGlbBytes(new Uint8Array(glb));
+    for (const a of g.json.accessors) if (a.min) { a.min = a.min.map((x: number) => Number(x.toPrecision(6))); a.max = a.max.map((x: number) => Number(x.toPrecision(6))); }
+    return assembleGlb(g.json, g.bin);
+}
+
 function objectScene(models: string, id = 'hero-1') {
-    const glb = buildFixtureGlb({
-        primitives: [box('body', [0.6, 0.6, 0.6], [0, 0.4, 0], 0), box('base', [1, 0.1, 1], [0, 0.05, 0], 1)],
+    const glb = engineRounded(buildFixtureGlb({
+        primitives: [box('body', [0.61234567, 0.61234567, 0.61234567], [0, 1.050724, 0], 0), box('base', [1, 0.1, 1], [0, 0.05, 0], 1)],
         materials: [
             { name: 'gold_foil', pbrMetallicRoughness: { baseColorFactor: [0.9, 0.55, 0.12, 1], roughnessFactor: 0.3, metallicFactor: 1 } },
             { name: 'white_paint', pbrMetallicRoughness: { baseColorFactor: [0.8, 0.8, 0.78, 1], roughnessFactor: 0.6, metallicFactor: 0 } }
         ]
-    });
+    }));
+    expect(checkGlbBytes(glb).ok).toBe(false);
     fs.mkdirSync(models, { recursive: true });
     fs.writeFileSync(path.join(models, 'object_1.glb'), glb);
     const hero = {
@@ -138,10 +149,13 @@ describe('object_detail_pass on the open scene', () => {
         expect(r3.resultPayload.version).toBe(3);
         expect(r3.resultPayload.timings).toBeUndefined();
 
-        // version 1 is the object as built, byte for byte
+        // version 1 is the object as built: the same bytes but for its POSITION bounds, measured from the data
         const r4 = await tool({ restoreVersion: 1 }, ctxOf(r3.resultPayload.artifact));
         const h4 = hero(r4.resultPayload.artifact as any);
-        expect(fs.readFileSync(path.join(models, h4.content.durableUri.replace('/models/', ''))).equals(built)).toBe(true);
+        const v1 = fs.readFileSync(path.join(models, h4.content.durableUri.replace('/models/', '')));
+        expect(v1.equals(exactPositionBounds(built))).toBe(true);
+        expect(checkGlbBytes(v1).ok).toBe(true);
+        expect(Buffer.from(parseGlbBytes(new Uint8Array(v1)).bin).equals(Buffer.from(parseGlbBytes(new Uint8Array(built)).bin))).toBe(true);
         expect(h4.content.metadata.detailPass.version).toBe(1);
         expect(objects.current(key)!.version).toBe(1);
         await expect(tool({ restoreVersion: 9 }, ctxOf(r4.resultPayload.artifact))).rejects.toThrow(/no version 9.*kept: 1, 2, 3/);
