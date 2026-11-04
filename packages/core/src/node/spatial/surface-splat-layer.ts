@@ -15,7 +15,9 @@
  *
  * This prepares what the native builder (scripts/mesh_to_surface_splats.cpp, scratchbox_surface_splats.hpp) reads: the
  * scan's triangles the hulls keep (splat-containment.ts: no pits, no car lumps, nothing above the scan), each station's
- * image at the size its camera was baked for, and its depth for the occlusion test, rendered from the same mesh.
+ * image at the size its camera was baked for, its depth for the occlusion test, rendered from the same mesh, and its
+ * sky (segmentSky, the Street View registration's own, above the camera's horizon only), so a roof edge is never
+ * coloured from the sky behind it.
  */
 
 import * as fs from 'fs-extra';
@@ -27,6 +29,8 @@ import { HeadlessMeshSilhouetteRenderer } from './HeadlessMeshSilhouetteRenderer
 import type { SurveyStationRenderService } from './SurveyStationRenderService';
 import { buildScanHulls, keptByHulls, ContainmentReason } from './splat-containment';
 import { glbRaycaster } from './street-view-stations';
+import { buildValidMask, segmentSky } from './StreetViewPoseRegistrar';
+import { dilateMask } from '../3d-engine/staged-location/streetview-ownership';
 import { decodePng, resampleRgba } from '../texture-processing';
 import { NativeCppCompilerService } from '../3d-engine/native-compiler-service';
 import { buildNativeIfStale } from '../3d-engine/native-build';
@@ -44,6 +48,26 @@ export const SURFACE_UNSEEN = { spacingM: 1.0, maxDistM: 40 };
 const LUMP_MAX_RISE_M = 4;
 /** The station depth used for the occlusion test is rendered at this fraction of the image's size. */
 const DEPTH_SCALE = 0.25;
+/**
+ * A station's sky is grown by this many pixels before the builder reads it: a sample's colour is read over a footprint
+ * around its pixel, and at a roofline 50 m from a 7th Ave station (fx about 2,700 px) that reaches about 3 px.
+ */
+const SKY_GROW_PX = 4;
+
+/**
+ * A station's sky: what segmentSky reads as sky in its photo, above the station camera's horizon only, grown by
+ * SKY_GROW_PX. Sky shows only above the horizon, and a roof edge seen against it stands above it too, while what the
+ * segmenter takes for sky below it is pale pavement or a storefront (7th Ave, 2026-11-02: strips of pavement in 4 of 33
+ * station photos; an overhead station's pale roofs all lie below its horizon).
+ */
+function stationSky(rgba: Uint8Array | Buffer, W: number, H: number, cam: { fx: number; fy: number; cx: number; cy: number; right: number[]; up: number[]; forward: number[] }): Uint8Array {
+    const sky = segmentSky(rgba, W, H, buildValidMask(W, H, { watermarkBottomPx: 0 }));
+    for (let y = 0; y < H; y++) {
+        const rowUp = cam.forward[1] - cam.up[1] * (y - cam.cy) / cam.fy;
+        for (let x = 0; x < W; x++) if (sky[y * W + x] && rowUp + cam.right[1] * (x - cam.cx) / cam.fx <= 0) sky[y * W + x] = 0;
+    }
+    return dilateMask(sky, W, H, SKY_GROW_PX);
+}
 
 export interface SurfaceLayerStation {
     /** The station as baked (its aligned pose): its depth is rendered from it. */
@@ -68,6 +92,8 @@ export interface SurfaceLayerRequest {
     outSpz: string;
     workDir: string;
     budget?: number;
+    /** Mask each station's sky so no sample is coloured from it (default true; false reads every pixel, as before). */
+    skyMask?: boolean;
     signal?: AbortSignal;
 }
 
@@ -98,6 +124,8 @@ export interface SurfaceLayerReport {
     seams: { pairs: number; inliers: number; medianAll: number; before: number; afterGain: number; after: number; gainResidual: number; gainsKept: boolean; fieldKept: boolean };
     /** Per station, per channel (r, g, b); all 1 when no gain was applied. */
     gains: number[][];
+    /** Per station, the share of its image masked as sky (above its horizon, grown); 0 when the sky is not masked. */
+    skyShares: number[];
     ms: number;
 }
 
@@ -139,8 +167,9 @@ export async function buildSurfaceSplatLayer(req: SurfaceLayerRequest): Promise<
         const trisPath = path.join(req.workDir, 'tris.f32');
         await fs.writeFile(trisPath, Buffer.from(kept.buffer, 0, k * 4));
 
-        // each station: its image at its baked camera's size, and its depth for the occlusion test
+        // each station: its image at its baked camera's size, its depth for the occlusion test, and its sky
         const lines: string[] = [];
+        const skyShares: number[] = [];
         for (const [i, s] of req.stations.entries()) {
             if (req.signal?.aborted) throw req.signal.reason ?? new Error('stopped');
             const pose = await fs.readJson(s.posePath) as { fx: number; fy: number; cx: number; cy: number; eye: number[]; right: number[]; up: number[]; forward: number[] };
@@ -156,6 +185,14 @@ export async function buildSurfaceSplatLayer(req: SurfaceLayerRequest): Promise<
             await fs.writeFile(depthPath, Buffer.from(d.depth.buffer, d.depth.byteOffset, d.depth.byteLength));
             const f = (xs: number[]) => xs.map(x => x.toFixed(6)).join(' ');
             lines.push(`station ${rgbPath} ${W} ${H} ${pose.fx} ${pose.fy} ${pose.cx} ${pose.cy} ${f(pose.eye)} ${f(pose.right)} ${f(pose.up)} ${f(pose.forward)} ${depthPath} ${DW} ${DH} ${d.intrinsics.fx} ${d.intrinsics.fy} ${d.intrinsics.cx} ${d.intrinsics.cy} ${s.priority}`);
+            if (req.skyMask === false) { skyShares.push(0); continue; }
+            const sky = stationSky(rgba, W, H, pose);
+            let skyPx = 0;
+            for (let p = 0; p < sky.length; p++) skyPx += sky[p];
+            skyShares.push(skyPx / sky.length);
+            const skyPath = path.join(req.workDir, `s${i}.sky.u8`);
+            await fs.writeFile(skyPath, sky);
+            lines.push(`sky ${skyPath}`);
         }
 
         const c = req.corridor;
@@ -176,8 +213,8 @@ export async function buildSurfaceSplatLayer(req: SurfaceLayerRequest): Promise<
             includeDir: new NativeCppCompilerService().getSdkIncludePath(), libs: ['-lz']
         });
         const { stdout } = await execFileAsync(binary, [manifestPath], { maxBuffer: 16 * 1024 * 1024, ...(req.signal ? { signal: req.signal } : {}) });
-        const out = JSON.parse(stdout.trim().split('\n').pop()!) as Omit<SurfaceLayerReport, 'keptTriangles' | 'flattenedTriangles'>;
-        return { ...out, triangles: triCount, keptTriangles, flattenedTriangles };
+        const out = JSON.parse(stdout.trim().split('\n').pop()!) as Omit<SurfaceLayerReport, 'keptTriangles' | 'flattenedTriangles' | 'skyShares'>;
+        return { ...out, triangles: triCount, keptTriangles, flattenedTriangles, skyShares };
     } finally {
         await fs.remove(req.workDir).catch(() => undefined);
     }
