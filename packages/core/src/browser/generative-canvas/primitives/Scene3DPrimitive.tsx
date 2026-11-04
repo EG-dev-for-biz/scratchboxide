@@ -665,6 +665,8 @@ import { PhotorealGaussianSplatMesh } from '../services/spatial/PhotorealGaussia
 import { EWA_CUTOFF_SIGMA, EWA_SPLAT_GLSL } from '../../../common/spatial/splat-ewa-projection';
 import { DEFAULT_SCENE_RENDER_MODE } from '../../../common/scene-atmosphere-opt-in';
 import { ViewAsMenu } from './shared/ViewAsMenu';
+import { ObjectBuildLiveOverlay } from './scene3d/ObjectBuildLiveOverlay';
+import { readObjectBuildLive } from '../../../common/object-build-live';
 
 // ==========================================
 // Pluggable Splat Representation (ISplatViewer)
@@ -4206,7 +4208,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         generatorError: currentGeneratorError,
         tilesError,
         contentKind: sceneContentKind,
-        hasAuxiliaryContent: !!sceneData.vectorRoadmap?.groundBlueprint || wantsWasmMesh || drawsBiomeTerrain,
+        // an object build still running shows its reference over the empty studio (ObjectBuildLiveOverlay)
+        hasAuxiliaryContent: !!sceneData.vectorRoadmap?.groundBlueprint || wantsWasmMesh || drawsBiomeTerrain || !!readObjectBuildLive(sceneData),
         objectLoadErrors,
         reconnecting: reconnectingFiles,
         undrawableObjects,
@@ -4289,6 +4292,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 </div>
             )}
             {staged.overlay({ bottomInsetPx: isTimelineDrawerOpen ? 255 : 16 })}
+            <ObjectBuildLiveOverlay live={readObjectBuildLive(sceneData)} bottomInsetPx={isTimelineDrawerOpen ? 255 : 76} />
 
             {/* Precision Creative Vertical Tool Strip (Left Docked - 50% Compact Scale) */}
             <div className="sb-3d-toolstrip absolute top-16 left-3 z-20 flex flex-col items-center gap-0.5 p-1 rounded-xl bg-[#121216]/85 backdrop-blur-2xl border border-white/10 shadow-2xl pointer-events-auto select-none animate-fadeIn">
