@@ -661,7 +661,7 @@ export class TaskCapabilityResolver {
                 canSolveNatively = true;
                 primaryNativeEngine = 'python-3d-engine';
                 nativeCapabilities.push('Real-world places: google_3d_tiles_get_clay (geocoded, remeshed Google 3D Tiles in studio grey clay)');
-                nativeCapabilities.push('Objects and abstract forms: build_3d_object_from_reference (internal Nano Banana Lite reference, Gemini vision build spec, native Python build in clay)');
+                nativeCapabilities.push('Objects and abstract forms: build_3d_object_from_reference (an internal Nano Banana Lite reference, or a real photo of the object via referenceImageUrl; Gemini vision build spec; native Python build)');
                 nativeCapabilities.push('Model-written procedural scripts: execute_3d_python_script (import scratchbox as sb)');
                 nativeCapabilities.push('Binary glTF 2.0 (.glb) streaming to Three.js viewport');
                 rationale = 'Native 3D tools cover places, objects and scripts; the agent picks the one the request calls for.';

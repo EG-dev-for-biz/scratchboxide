@@ -13,8 +13,13 @@ export interface ObjectBuildLive {
     message: string;
     /** The pass whose build the scene shows (1 is the first build from the reference). */
     pass?: number;
-    /** The internal reference image as a data: URL (it is never written to disk), drawn by an image model: provenance generated. */
+    /**
+     * The reference image as a data: URL (it is never written to disk): drawn by an image model (provenance generated),
+     * or, for a build from a photo, the object cut out of that photo.
+     */
     referenceUri?: string;
+    /** What the reference is, shown under it (absent: an internal reference drawn by an image model). */
+    referenceCaption?: string;
     startedAtMs: number;
 }
 
@@ -29,6 +34,7 @@ export function readObjectBuildLive(data: unknown): ObjectBuildLive | undefined 
         message: live.message,
         startedAtMs: live.startedAtMs,
         ...(typeof live.pass === 'number' ? { pass: live.pass } : {}),
-        ...(typeof live.referenceUri === 'string' ? { referenceUri: live.referenceUri } : {})
+        ...(typeof live.referenceUri === 'string' ? { referenceUri: live.referenceUri } : {}),
+        ...(typeof live.referenceCaption === 'string' ? { referenceCaption: live.referenceCaption } : {})
     };
 }

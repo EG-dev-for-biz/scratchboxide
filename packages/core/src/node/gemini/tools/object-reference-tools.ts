@@ -12,7 +12,10 @@
  * (reference-object-builder.ts), each part with its own PBR material factors read from the full-colour reference
  * (inferred from a generated image, and labelled so), shown in the viewport's 'pbr' mode; or, when the user asks
  * for clay, all studio clay in 'clay' mode. Given specJson instead (an edit of an earlier build's spec), it rebuilds that spec
- * exactly, with no reference image and no model call.
+ * exactly, with no reference image and no model call. Given referenceImageUrl (a real photograph of the object, such as
+ * a Street View grounding image of a bench at a place), nothing is drawn: the object is cut out of the photo and read
+ * from it, its materials labelled photo-inferred and the parts the photo cannot show generated; the size comes from
+ * dimensionsHintMeters or heightHintMeters, and the result says where it came from (sizeSource).
  *
  * With a location, the object is staged on the same geocoded, remeshed clay tiles that google_3d_tiles_get_clay
  * returns, at the placement the model gives relative to the place's anchor, with the camera framed on the object.
@@ -58,6 +61,7 @@ import type { StageEvent } from '../../../common/spatial/staged-location-contrac
 import type { CanvasArtifact } from '../../../browser/generative-canvas/canvas-types';
 import { implausibleLayerBounds } from '../../3d-engine/layer-bounds-guard';
 import { errorMessage } from '../gemini-client';
+import { loadInputImage } from './nano-banana-tools';
 import { materialModeOf, withStagedMaterialMode, type StagedMaterialModeFields } from '../../../browser/generative-canvas/primitives/scene3d/stagedBuild/texturedTwins';
 import { OBJECT_BUILD_SOURCE, type BuiltObjectRecord, type ObjectBuildSpec, type Vec3 } from '../../../common/spatial/object-build-spec';
 
@@ -65,11 +69,12 @@ export const OBJECT_REFERENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'build_3d_object_from_reference',
         description: 'Build one specific object or an abstract form (a single prop, vehicle, creature, character, piece of furniture, sculpture or artifact) as native 3D geometry with a physical material on every part (colour, roughness, metalness, transmission, clearcoat, emission), or all in studio grey clay when the user asks for clay. ' +
-            `It draws an internal reference picture with Nano Banana Lite (${REFERENCE_IMAGE_MODEL}; never shown or saved), reads it with the chat's model into a metric build spec of swept, revolved, replicated and relief parts with each part's material, builds that in the native Python engine, and checks that every part is built and attached and that the build's shape matches the reference (up to two revisions). The materials are read from a generated picture, so they are inferred, not measured (factor values only, no texture maps). ` +
+            `Unless given a photo (referenceImageUrl, below), it draws an internal reference picture with Nano Banana Lite (${REFERENCE_IMAGE_MODEL}; never shown or saved), reads it with the chat's model into a metric build spec of swept, revolved, replicated and relief parts with each part's material, builds that in the native Python engine, and checks that every part is built and attached and that the build's shape matches the reference (up to two revisions). The materials are read from a generated picture, so they are inferred, not measured (factor values only, no texture maps). ` +
             'It builds one object per call, not a place or a scene: for an imagined environment, a landscape or several objects with no real place, write a script for execute_3d_python_script; for a real place alone, use google_3d_tiles_get_clay. To stand the object at a real place, pass location and placement. ' +
             'Several objects at one real place take one call each with the same location and each its own placement: when the active scene is an object build staged at that location, the call reuses its tiles and adds the new object beside the objects already built there. When the active scene already shows the place (google_3d_tiles_get_clay staged it, or objects were built there) and the object belongs in that scene, pass addToActiveScene: true to add it there without staging the place again. ' +
             'The object must fit where it is placed: a spot under a tree crown or on another object fails before anything is built, and a build that would pass through a crown, a trunk, another object or a wall of the tiles fails with its spec and the nearest spots where it fits. ' +
-            'To change an object it built (its shape, its size, or a base or plinth added as parts), pass specJson: the edited spec from that object\'s metadata.objectBuild.spec (or the result\'s data.objectBuild.spec). That spec is built exactly as given, with no new reference and no comparison; at a place, pass the same location, its placement (or a new one to move it) and replaceObjectId set to that object\'s id.',
+            'To change an object it built (its shape, its size, or a base or plinth added as parts), pass specJson: the edited spec from that object\'s metadata.objectBuild.spec (or the result\'s data.objectBuild.spec). That spec is built exactly as given, with no new reference and no comparison; at a place, pass the same location, its placement (or a new one to move it) and replaceObjectId set to that object\'s id. ' +
+            'To rebuild a real object from a real photograph of it (a bench, bin, newsstand or sign seen at a place), pass referenceImageUrl: nothing is drawn; the object (referenceTarget, else the request) is found in the photo, cut out of it and read from it, and every check compares the build with the photo from where it was taken. Its materials are photo-inferred and the parts the photo does not show are generated, both labelled. A photo has no scale: pass the size you have, a height measured in the scan (heightHintMeters) or [width, height, depth] (dimensionsHintMeters), with sizeSource saying where it came from; the build is held to it. Only a real photograph: a Street View image only as streetview_grounding_image returns it (or streetview_survey\'s images), never a plain Street View fetch; never an image a model drew or restyled (survey_beautify_station, generate_image), which would be passed off as the real object.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -88,7 +93,23 @@ export const OBJECT_REFERENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 dimensionsHintMeters: {
                     type: 'ARRAY',
                     items: { type: 'NUMBER' },
-                    description: 'Optional [width, height, depth] in metres when the user gave a size (new builds only; with specJson, set sizes in the spec).'
+                    description: 'Optional [width, height, depth] in metres when the user gave a size or it was measured (new builds only; with specJson, set sizes in the spec). Say where it came from in sizeSource.'
+                },
+                heightHintMeters: {
+                    type: 'NUMBER',
+                    description: 'Optional: the object\'s height in metres when only that is known (measured in the scan, or the user said it); the rest is sized in proportion. dimensionsHintMeters wins when both are given.'
+                },
+                sizeSource: {
+                    type: 'STRING',
+                    description: 'With a size hint: where it came from, in a few words, e.g. "measured in the scan (location_residual_audit cluster 14)" or "as the user said". Shown with the size in the result and written into the GLB.'
+                },
+                referenceImageUrl: {
+                    type: 'STRING',
+                    description: 'Optional: a real photograph of the object to build from, instead of a drawn reference (a workspace path, URL or data URI; PNG or JPEG). Only a photograph: for Street View, the file streetview_grounding_image saved; never a generated or restyled image. New builds only.'
+                },
+                referenceTarget: {
+                    type: 'STRING',
+                    description: 'With referenceImageUrl: which object in the photo to build, in words that single it out (e.g. "the green newsstand left of the lamp post"); defaults to request.'
                 },
                 location: {
                     type: 'STRING',
@@ -265,13 +286,13 @@ export class ObjectBuildLiveView {
     private seq = 0;
     private referenceUri?: string;
 
-    constructor(private readonly ctx: Pick<ToolContext, 'emitStage'>, private readonly title: string, private readonly modelsDir: string, private readonly clay: boolean) {}
+    constructor(private readonly ctx: Pick<ToolContext, 'emitStage'>, private readonly title: string, private readonly modelsDir: string, private readonly clay: boolean, private readonly fromPhoto = false) {}
 
     reference(image: { data: Buffer; mimeType: string }): void {
         if (!this.ctx.emitStage) return;
         // inline, never on disk: the live scene carries it only until the finished scene (same id) replaces it
         this.referenceUri = `data:${image.mimeType};base64,${image.data.toString('base64')}`;
-        this.emit({ status: 'reference', message: 'Reference drawn (generated); reading it into a build spec' });
+        this.emit({ status: 'reference', message: this.fromPhoto ? 'Object cut out of the photo; reading it into a build spec' : 'Reference drawn (generated); reading it into a build spec' });
     }
 
     passBuilt(pass: { pass: number; glb: Buffer; glbPath: string }): void {
@@ -297,10 +318,13 @@ export class ObjectBuildLiveView {
 
     private lastModel?: LiveModel;
 
-    private emit(live: Omit<ObjectBuildLive, 'startedAtMs' | 'referenceUri'>, model?: LiveModel, ended?: 'failed'): void {
+    private emit(live: Omit<ObjectBuildLive, 'startedAtMs' | 'referenceUri' | 'referenceCaption'>, model?: LiveModel, ended?: 'failed'): void {
         const now = Date.now();
         if (model && !ended) this.lastModel = { ...model, pass: live.pass };
-        const objectBuildLive: ObjectBuildLive = { ...live, startedAtMs: this.startedAtMs, ...(this.referenceUri ? { referenceUri: this.referenceUri } : {}) };
+        const objectBuildLive: ObjectBuildLive = {
+            ...live, startedAtMs: this.startedAtMs,
+            ...(this.referenceUri ? { referenceUri: this.referenceUri, ...(this.fromPhoto ? { referenceCaption: 'Cut out of a real photo · materials photo-inferred' } : {}) } : {})
+        };
         const stage: StageEvent = {
             schema: 'scratchbox.stage-event/2', runId: this.runId, seq: ++this.seq, stage: 'object-build', order: 0, status: ended ?? 'running',
             title: live.message, source: 'build_3d_object_from_reference', degradations: [], timings: { startedAtMs: this.startedAtMs, cached: false, ms: now - this.startedAtMs, ...(ended ? { endedAtMs: now } : {}) }
@@ -914,7 +938,7 @@ function materialFacts(clay: boolean, materials: MaterialProvenance, spec: Objec
         return `${p.id}${m.description ? ` "${m.description}"` : ''} (metalness ${m.metalness}, roughness ${m.roughness}${m.transmission > 0 ? `, transmission ${m.transmission}` : ''}${m.emissive ? ', emissive' : ''})`;
     };
     return {
-        record: { clay, materials: { label: materials.label, note: materials.note, ...(materials.clayParts.length ? { clayParts: materials.clayParts } : {}) } },
+        record: { clay, materials: { label: materials.label, note: materials.note, ...(materials.clayParts.length ? { clayParts: materials.clayParts } : {}), ...(materials.generatedParts?.length ? { generatedParts: materials.generatedParts } : {}) } },
         line: clay
             ? 'Every part is studio clay, as asked.'
             : `${materials.note}${parts.length ? ` Surfaces: ${parts.slice(0, 12).map(describe).join('; ')}${parts.length > 12 ? `; and ${parts.length - 12} more` : ''}.` : ''}`
@@ -940,6 +964,16 @@ function materialCheckLine(result: ReferenceObjectBuildResult): string {
     return [corrected.length || !last.error ? fixedLine : '', remaining].filter(Boolean).join(' ');
 }
 
+/** The result's sentence on where the reference came from: drawn internally, or cut out of a real photo. */
+function referenceLine(result: ReferenceObjectBuildResult, backendName: string): string {
+    const read = `spec read by ${describeVisionModel(result.visionModel)}, via ${backendName}`;
+    const photo = result.photo;
+    if (!photo) return `Reference drawn internally by ${result.imageModel ? describeImageModel(result.imageModel) : 'an image model'} (not saved or shown); ${read}.`;
+    const found = photo.locator ? `found by ${photo.locator.model} ("${photo.locator.label}") and ` : '';
+    const view = photo.view ? ` The comparisons render the build from where the photo was taken (${Math.round(photo.view.azimuthDeg)} degrees round from its front, ${Math.round(photo.view.elevationDeg)} above level).` : '';
+    return `Built from a real photo (${photo.source}): ${JSON.stringify(photo.target)} ${found}cut out by ${photo.segmenter} (${(photo.areaFraction * 100).toFixed(1)}% of the photo) onto a plain backdrop, in memory; no reference was drawn; ${read}.${view}`;
+}
+
 function fromReference(result: ReferenceObjectBuildResult): BuiltObject {
     const backendName = result.backend === 'vertex' ? 'Vertex AI' : result.backend === 'api-key' ? 'the Gemini API key' : 'an injected client';
     const lastPass = result.passes[result.passes.length - 1].pass;
@@ -960,9 +994,11 @@ function fromReference(result: ReferenceObjectBuildResult): BuiltObject {
         glbPath: result.glbPath,
         checks: result.checks,
         record: {
-            source: 'reference',
+            source: result.photo ? 'photo' : 'reference',
             ...materialFacts(result.clay, result.materials, result.spec).record,
-            imageModel: result.imageModel,
+            ...(result.imageModel ? { imageModel: result.imageModel } : {}),
+            ...(result.photo ? { photo: result.photo } : {}),
+            size: result.size,
             visionModel: result.visionModel,
             backend: result.backend,
             passes: result.passes,
@@ -979,7 +1015,8 @@ function fromReference(result: ReferenceObjectBuildResult): BuiltObject {
             result.revisionFailed
                 ? `Revision pass ${result.revisionFailed.pass} failed (${result.revisionFailed.stage}: ${result.revisionFailed.reason}), so the result is pass ${result.resultPass}, the last build that passed every check.`
                 : result.resultPass !== lastPass ? `The result is pass ${result.resultPass}.` : '',
-            `Reference drawn internally by ${describeImageModel(result.imageModel)} (not saved or shown); spec read by ${describeVisionModel(result.visionModel)}, via ${backendName}.`,
+            referenceLine(result, backendName),
+            `Size: ${result.size.builtMeters.join(' x ')} m (width x height x depth). ${result.size.note}`,
             materialFacts(result.clay, result.materials, result.spec).line,
             ...compared,
             materialCheckLine(result),
@@ -1083,6 +1120,27 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
             const clay = args.clay === true;
             if (addToActiveScene && !location) {
                 return failed('addToActiveScene adds the object to the place the active scene shows: pass that place as location, and a placement.');
+            }
+            if (args.heightHintMeters !== undefined && args.heightHintMeters !== null && !(typeof args.heightHintMeters === 'number' && Number.isFinite(args.heightHintMeters) && args.heightHintMeters > 0)) {
+                return failed('heightHintMeters must be a positive number of metres.');
+            }
+            const heightHint = typeof args.heightHintMeters === 'number' ? args.heightHintMeters : undefined;
+            const sizeSource = typeof args.sizeSource === 'string' && args.sizeSource.trim() ? args.sizeSource.trim() : undefined;
+            const photoRef = typeof args.referenceImageUrl === 'string' && args.referenceImageUrl.trim() ? args.referenceImageUrl.trim() : undefined;
+            const photoTarget = typeof args.referenceTarget === 'string' && args.referenceTarget.trim() ? args.referenceTarget.trim() : undefined;
+            if (givenSpec !== undefined && (photoRef || heightHint !== undefined)) {
+                return failed('referenceImageUrl and heightHintMeters are for new builds; with specJson, the spec is built exactly as given.', { stage: 'build-spec' });
+            }
+            if (photoTarget && !photoRef) return failed('referenceTarget names the object to cut out of referenceImageUrl: pass the photo with it.');
+            // The photo is read before anything is staged or billed: a path, URL or data URI that gives no image fails here.
+            let photo: ReferenceObjectBuildRequest['photo'];
+            if (photoRef) {
+                try {
+                    const image = await loadInputImage(photoRef, ctx.workspaceRoot, ctx.signal, 'build_3d_object_from_reference', 'referenceImageUrl');
+                    photo = { data: image.data, mimeType: image.mimeType, source: photoRef.startsWith('data:') ? 'an inline data URI' : photoRef, ...(photoTarget ? { target: photoTarget } : {}) };
+                } catch (err) {
+                    return failed(`referenceImageUrl could not be read: ${errorMessage(err)}`, { stage: 'reference-image' });
+                }
             }
 
             const modelsDir = deps.publicModelsDir ?? path.resolve(repoRoot(), 'public/models');
@@ -1220,13 +1278,16 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                     let building: Promise<ReferenceObjectBuildResult> | undefined;
                     let buildSettled: Promise<void> | undefined;
                     // a studio build shows its reference and each pass while it runs; a staged one shows its staging
-                    if (!location) live = new ObjectBuildLiveView(ctx, request, modelsDir, clay);
+                    if (!location) live = new ObjectBuildLiveView(ctx, request, modelsDir, clay, !!photo);
                     const startBuild = () => {
                         if (building) return building;
                         building = (deps.build ?? buildObjectFromReference)({
                             request,
                             requestedModel: ctx.request?.model || undefined,
                             dimensionsHintMeters: dimensions,
+                            ...(heightHint !== undefined ? { heightHintMeters: heightHint } : {}),
+                            ...(sizeSource ? { sizeSource } : {}),
+                            ...(photo ? { photo } : {}),
                             clay,
                             signal: buildSignal,
                             reportProgress: ctx.reportProgress,

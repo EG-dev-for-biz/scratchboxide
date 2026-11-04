@@ -40,6 +40,14 @@
  *      so; it never discards a build that passed every check. A build that never passed every check is rejected,
  *      never mounted. A failure after the vision model was chosen names that model, and the chat's model it
  *      stands in for when they differ.
+ * From a photo (request.photo): a real photograph of the object replaces stage 1. The object is found in it and cut
+ * out onto the same #808080 backdrop (photo-reference.ts: the vision model's box, the app's segmenter, in memory), and
+ * nothing is drawn. The spec read also says where the camera stood (photoView) and which parts the photo does not
+ * show; every comparison renders the build from that viewpoint. Materials read from the photo are photo-inferred;
+ * parts the photo does not show (out of its view of the build, or named as hidden) are generated, in the result and
+ * the GLB. A photo has no scale: the size comes from the caller (dimensionsHintMeters or heightHintMeters, with where
+ * it came from), is held by the checks, and is otherwise the vision model's estimate, labelled so. An object the
+ * photo does not show fails; no reference is drawn instead.
  * buildObjectFromSpec builds a given spec (an edit of an earlier one) through stages 3 and 4 only, with no model call:
  * it fails with every problem listed instead of revising. A stop kills the Python process and ends the build at the
  * stage it reached. Nothing here reads part labels or ids for meaning: ids only pair spec parts with their meshes.
@@ -83,6 +91,8 @@ import { renderReviewViews } from './visual-review';
 import { materialPreviewMeshes, renderMaterialPreview } from './material-preview-render';
 import { downscaleForVision } from '../vision-image-downscale';
 import { generateStyleDnaImage, studioMcpConfigFromEnv, type StudioImagePresets } from '../scratchbox-studio/studio-mcp-client';
+import { cutOutReference, decodePhoto, partsOutOfView, segmenterPhotoCutter, type PhotoCutter, type PhotoMask, type PhotoView } from './photo-reference';
+import { SegmentTargetNotFoundError } from '../../common/errors/pipeline-errors';
 
 /** Nano Banana Lite: the reference model for clay builds, and when the Style DNA source is not configured or fails. */
 export const REFERENCE_IMAGE_MODEL = 'gemini-3.1-flash-lite-image';
@@ -131,6 +141,15 @@ export interface ReferenceObjectBuildRequest {
     /** The model the chat request named, if any; unset means the chat's own default model. */
     requestedModel?: string;
     dimensionsHintMeters?: Vec3;
+    /** The object's height in metres when that alone is known (measured in a scan, or given); dimensionsHintMeters wins. */
+    heightHintMeters?: number;
+    /** Where the size hint came from, in a few words (a measurement, the user's words); shown in the result and the GLB. */
+    sizeSource?: string;
+    /**
+     * A real photograph of the object to build from, in place of a drawn reference: `target` (else the request) is
+     * found in it and cut out. Only a photograph: never an image a model drew or restyled.
+     */
+    photo?: { data: Buffer; mimeType: string; /** Where it came from, as the caller named it (shown in the result). */ source: string; target?: string };
     /**
      * True when the user asked for clay (untextured grey): the reference is drawn as clay, no materials are read and
      * every part is studio clay. Otherwise each part gets the material read from a full-colour reference.
@@ -138,7 +157,7 @@ export interface ReferenceObjectBuildRequest {
     clay?: boolean;
     signal?: AbortSignal;
     reportProgress?: (message: string, fraction?: number) => void;
-    /** Called once with the internal reference as soon as it is drawn, so a viewer can show it while the build runs. */
+    /** Called once with the internal reference (or the photo's cut-out) as soon as it exists, so a viewer can show it while the build runs. */
     onReferenceImage?: (image: { data: Buffer; mimeType: string }) => void;
     /** Called with each pass's native build as soon as it exists, before that pass is checked. */
     onPassBuilt?: (pass: { pass: number; glb: Buffer; glbPath: string }) => void;
@@ -151,15 +170,54 @@ function notify<T>(hook: ((value: T) => void) | undefined, value: T): void {
 
 /**
  * Where the part materials of a build came from. `generated`: read by the vision model from the reference image an
- * image model drew (inferred, never measured); `as-given`: written in the spec the caller passed; `clay`: none.
+ * image model drew (inferred, never measured); `photo-inferred`: read from a real photograph of the object (its
+ * generatedParts, which the photo does not show, are generated); `as-given`: written in the spec the caller passed;
+ * `clay`: none.
  */
 export interface MaterialProvenance {
     /** Legend key (nothing branches on it). */
-    label: 'generated' | 'as-given' | 'clay' | (string & {});
+    label: 'generated' | 'photo-inferred' | 'as-given' | 'clay' | (string & {});
     /** One sentence saying how the materials were obtained, for the result and the GLB extras. */
     note: string;
     /** Sweep and revolve parts with no material, built in studio clay (a spec without them, or a part left out). */
     clayParts: string[];
+    /** Parts of a photo build the photo does not show: their shape and material are generated, not photo-inferred. */
+    generatedParts?: string[];
+}
+
+/**
+ * Where a build's size came from. `as-given`: the size hint the caller passed (its source says how it was had, e.g.
+ * measured in a scan); `generated`: the vision model's estimate of such an object's real size (a photo has no scale).
+ */
+export interface SizeProvenance {
+    label: 'as-given' | 'generated' | (string & {});
+    /** The hint as given: [width, height, depth], or a height alone. */
+    hintMeters?: Vec3;
+    heightMeters?: number;
+    /** One sentence: where the size came from. */
+    note: string;
+    /** The built object's size, [width, height, depth] in metres. */
+    builtMeters: Vec3;
+}
+
+/** A photo build's reference: the photo, what found and cut the object, and what the photo shows of the build. */
+export interface PhotoReferenceUse {
+    source: string;
+    target: string;
+    /** The vision model that boxed the object, and its words for what it found. */
+    locator?: { model: string; label: string };
+    segmenter: string;
+    /** The object's share of the photo and its box in it ([x0, y0, x1, y1], 0..1). */
+    areaFraction: number;
+    bbox: [number, number, number, number];
+    /** Side of the square cut-out the spec read and the comparisons see. */
+    cutOutPx: number;
+    /** Where the camera stood, seen from the object, as the spec read gave it; the comparisons render from here. */
+    view?: PhotoView;
+    /** Parts the spec read named as not shown by the photo (hidden, or cut off by its frame). */
+    unseenParts: string[];
+    /** Parts a camera at `view` does not see in the build (its back, what the build itself hides). */
+    outOfViewParts: string[];
 }
 
 export interface ReferenceObjectBuilderDeps {
@@ -189,6 +247,11 @@ export interface ReferenceObjectBuilderDeps {
      * A source that fails falls back to REFERENCE_IMAGE_MODEL, and the result says why (imageModel.fallbackReason).
      */
     styleReference?: StyleReferenceSource | null;
+    /**
+     * Finds the object in a photo build's photo and cuts its mask (segmenterPhotoCutter by default: the chat's vision
+     * model boxes it, ObjectSegmenterService.segmentBytes cuts it, in memory).
+     */
+    cutPhoto?: PhotoCutter;
 }
 
 /** Draws the reference for a request in a house style; `answered` names what drew it (shown in provenance). */
@@ -383,7 +446,12 @@ export interface ReferenceObjectBuildResult {
     sourceCode: string;
     glb: Buffer;
     glbPath: string;
-    imageModel: ModelUse;
+    /** What drew the reference; absent for a photo build, whose reference is the photo (`photo`). */
+    imageModel?: ModelUse;
+    /** Set for a photo build: the photo, what cut the object out of it, and what it shows of the build. */
+    photo?: PhotoReferenceUse;
+    /** Where the build's size came from; also written into the GLB's asset extras. */
+    size: SizeProvenance;
     visionModel: VisionModelUse;
     backend: 'vertex' | 'api-key' | 'injected';
     passes: ObjectBuildPass[];
@@ -466,6 +534,15 @@ interface ReferenceImage {
     mimeType: string;
     /** The image as an uploaded file (Gemini API Files), sent by reference instead of inline on every later call. */
     part?: Part;
+    /** Set for a photo build: the prompts say it is a real photograph cut out of its surroundings. */
+    photo?: boolean;
+    /** Where the camera stood (a photo build, once the spec read gave it); the comparisons render from here. */
+    view?: PhotoView;
+}
+
+/** The view the comparisons render from: the photo's, else the drawn reference's three-quarter view. */
+function comparisonView(reference: ReferenceImage): { label: string; azimuthDeg: number; elevationDeg: number } {
+    return reference.view ? { label: 'the photo\'s viewpoint', ...reference.view } : THREE_QUARTER_VIEW[0];
 }
 
 /** The reference as a content part: its uploaded file when it has one, else inline. */
@@ -535,23 +612,47 @@ export function buildReferenceImagePrompt(request: string, options: { clay?: boo
 }
 
 /** How materials are read, added to the conventions of a build that is not clay. */
-export function materialConventions(): string {
+export function materialConventions(options: { photo?: boolean } = {}): string {
     return [
-        '- material: every sweep and revolve part has one, read from the picture (replicate copies and mirrored parts use their source part\'s; replicate and relief parts have none; a crown part may give its foliage colour as baseColor). Describe the surface itself, not the studio light: ignore highlights, reflections and shading when reading colour.',
+        `- material: every sweep and revolve part has one, read from the picture (replicate copies and mirrored parts use their source part's; replicate and relief parts have none; a crown part may give its foliage colour as baseColor). ${options.photo
+            ? 'Describe the surface itself, not the daylight: ignore cast shadows, highlights, sky reflections and the colour of the light when reading colour; dirt and wear count only where they cover the surface. A part the photo does not show takes the material such a part has on such an object.'
+            : 'Describe the surface itself, not the studio light: ignore highlights, reflections and shading when reading colour.'}`,
         '  baseColor is LINEAR RGB 0..1, not sRGB: convert each sRGB channel v/255 to about (v/255)^2.2 (sRGB 128 is 0.22, sRGB 200 is 0.6, sRGB 240 is 0.87). For a metal it is the metal\'s tint (steel about [0.56, 0.57, 0.58], brass [0.91, 0.78, 0.42], copper [0.95, 0.64, 0.54]).',
         '  roughness 0 mirror-smooth .. 1 chalky; metalness 1 only for bare metal, 0 for paint (even metallic paint), plastic, glass, stone, wood and organic matter; transmission 0 opaque, about 0.9-1 for clear glass, clear plastic or liquid (baseColor then tints what is seen through it); ior only for see-through parts (glass about 1.5, water 1.33); clearcoat for glossy lacquer, car paint or varnish; emissive (linear RGB) with emissiveStrength only for parts that glow.',
         '  A part takes the surface that covers most of it; where the finish changes, split the shape into parts so each has one surface.'
     ].join('\n');
 }
 
+/** How a spec is told the object's size. */
+export interface SpecSizeHint {
+    /** The object's height alone, when only that is known. */
+    heightMeters?: number;
+    /** Where the size came from (shown with it); without it a dimensions hint is the user's. */
+    sizeSource?: string;
+}
+
+/** The size sentence of the conventions. */
+function sizeConvention(dimensionsHintMeters: Vec3 | undefined, options: SpecSizeHint & { photo?: boolean }): string {
+    if (dimensionsHintMeters) {
+        return options.sizeSource
+            ? `Its size is about ${dimensionsHintMeters.map(d => `${d} m`).join(' x ')} (width x height x depth), ${options.sizeSource}: build it to that size.`
+            : `The user gave its size as about ${dimensionsHintMeters.map(d => `${d} m`).join(' x ')} (width x height x depth).`;
+    }
+    if (options.heightMeters !== undefined) {
+        return `It is ${options.heightMeters} m tall${options.sizeSource ? `, ${options.sizeSource}` : ''}: build it to that height and size the rest in proportion to the picture.`;
+    }
+    return options.photo ? 'A photo has no scale: size it to the real-world size of such an object.' : 'Size it to its real-world scale.';
+}
+
 /** The rules every spec follows. Sent with the first request and again with every revision, which is stateless. */
-export function specConventions(dimensionsHintMeters?: Vec3, options: { materials?: boolean } = {}): string {
-    const size = dimensionsHintMeters
-        ? `The user gave its size as about ${dimensionsHintMeters.map(d => `${d} m`).join(' x ')} (width x height x depth).`
-        : 'Size it to its real-world scale.';
+export function specConventions(dimensionsHintMeters?: Vec3, options: { materials?: boolean; photo?: boolean } & SpecSizeHint = {}): string {
+    const size = sizeConvention(dimensionsHintMeters, options);
+    const front = options.photo
+        ? '+Z toward the object\'s own front (the side people face or use, the face of a sign; when it has none, the side the photo shows most)'
+        : '+Z toward its front (the side facing the viewer)';
     return [
         'Conventions',
-        `- Metres. +Y up, +X to the object's right, +Z toward its front (the side facing the viewer). The origin is the centre of where the object meets the ground; nothing goes below y = 0. ${size}`,
+        `- Metres. +Y up, +X to the object's right, ${front}. The origin is the centre of where the object meets the ground; nothing goes below y = 0. ${size}`,
         '- Describe the whole object, including sides the image hides: infer them from symmetry and from how such objects are built.',
         '- Build it from parts. Every part has exactly one operator block:',
         '  sweep: a cross-section swept along a smooth carrier through controlPoints. profile keys (t from 0 at the first control point to 1 at the last) give the section width (sideways), height (along the section\'s up direction) and superellipse exponent (2 round, 4 or more boxy, below 2 pinched); keys interpolate linearly, so use several keys to taper and swell. smoothing 0 = straight segments, 1 = smooth curve. closedLoop joins the end to the start. twistDegAlong turns the section about the carrier; modulation adds periodic ribs.',
@@ -565,18 +666,85 @@ export function specConventions(dimensionsHintMeters?: Vec3, options: { material
         '- mirrorPlaneNormal also emits a part and what is attached to it reflected across the plane through the origin with that normal, e.g. [1, 0, 0] for a left/right pair.',
         `- edgeRadiusMeters (sweep and revolve parts): how rounded the part's edges look in the picture, in metres. Real edges are rarely razor-sharp: cast, moulded and worn edges are soft, machined and sheet edges small. Omit it for the default (about 1.5 % of the part's smallest dimension); 0 only for a part meant to be sharp, such as a blade; at most ${OBJECT_SPEC_LIMITS.maxEdgeRadiusMeters}.`,
         '- Spend parts on the main mass first, then the secondary assemblies, then small details; use as many parts as the object needs.',
-        ...(options.materials ? [materialConventions()] : []),
-        `- observations: short notes on proportions, counts and how the parts join${options.materials ? ', and the materials you see' : ''}.`
+        ...(options.materials ? [materialConventions({ photo: options.photo })] : []),
+        `- observations: short notes on proportions, counts and how the parts join${options.materials ? ', and the materials you see' : ''}.`,
+        ...(options.photo ? [PHOTO_FIELD_CONVENTIONS] : [])
     ].join('\n');
 }
 
-export function buildSpecPrompt(request: string, dimensionsHintMeters?: Vec3, options: { materials?: boolean } = {}): string {
+/** What a photo build's spec read also answers, outside the spec. */
+const PHOTO_FIELD_CONVENTIONS = [
+    '- photoView: where the camera stood when the photo was taken, seen from the object in the axes above: azimuthDeg around +Y from its front (+Z) toward its right (+X) (0 straight in front, 90 its right side, 180 behind, -90 its left side) and elevationDeg above level (0 level with its middle, 30 looking down on it, negative looking up at it).',
+    '- unseenPartIds: the ids of parts the photo does not show at all (behind the object, hidden by what stood in front, cut off by the frame); [] when it shows every part.'
+].join('\n');
+
+/** The opening of a request that reads a photo build's cut-out. */
+function photoReferenceLine(request: string, image = 'The image'): string {
+    return `${image} is a real photograph of: ${request}, cut out of its surroundings onto a plain #808080 backdrop (grey inside its outline is where something in front hid it or the frame cut it off).`;
+}
+
+export function buildSpecPrompt(request: string, dimensionsHintMeters?: Vec3, options: { materials?: boolean; photo?: boolean } & SpecSizeHint = {}): string {
     return [
-        `The image is a reference picture of: ${request}`,
-        `Reverse-engineer it into a build spec for a procedural modeller${options.materials ? ', with the surface material of every part' : ''}. Reply with JSON matching the schema.`,
+        options.photo ? photoReferenceLine(request) : `The image is a reference picture of: ${request}`,
+        `Reverse-engineer it into a build spec for a procedural modeller${options.materials ? ', with the surface material of every part' : ''}${options.photo ? ', and say where the camera stood' : ''}. Reply with JSON matching the schema.`,
         '',
         specConventions(dimensionsHintMeters, options)
     ].join('\n');
+}
+
+/** The spec schema of a photo build's read: the spec, where the camera stood, and the parts the photo does not show. */
+export function photoSpecJsonSchema(schema: Record<string, unknown>, options: { patch?: boolean } = {}): Record<string, unknown> {
+    const s = schema as { properties: Record<string, unknown>; required?: string[]; propertyOrdering?: string[] };
+    return {
+        ...s,
+        properties: {
+            ...s.properties,
+            photoView: {
+                type: 'object',
+                description: options.patch ? 'Only when it changes: where the camera stood, seen from the object.' : 'Where the camera stood, seen from the object.',
+                properties: {
+                    azimuthDeg: { type: 'number', description: 'Around +Y from the front (+Z) toward the right (+X), -180..180.' },
+                    elevationDeg: { type: 'number', description: 'Above level, -89..89.', minimum: -89, maximum: 89 }
+                },
+                required: ['azimuthDeg', 'elevationDeg']
+            },
+            unseenPartIds: { type: 'array', items: { type: 'string' }, description: options.patch ? 'Only when it changes: ids of parts the photo does not show.' : 'Ids of parts the photo does not show.' }
+        },
+        ...(options.patch ? {} : { required: [...(s.required ?? []), 'photoView', 'unseenPartIds'] }),
+        ...(s.propertyOrdering ? { propertyOrdering: [...s.propertyOrdering.filter(k => k !== 'parts'), 'photoView', 'parts', 'unseenPartIds'] } : {})
+    };
+}
+
+/** What a photo build's spec read said outside the spec, carried across its passes. */
+interface PhotoRead {
+    view?: PhotoView;
+    unseen: string[];
+}
+
+/**
+ * Takes photoView and unseenPartIds off a reply (they are not part of the spec) into `read`; returns the reply without
+ * them and the problems with them. photoView is required until one has been had.
+ */
+export function takePhotoFields(value: unknown, read: PhotoRead): { value: unknown; problems: string[] } {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return { value, problems: [] };
+    const { photoView, unseenPartIds, ...rest } = value as Record<string, unknown>;
+    const problems: string[] = [];
+    if (photoView !== undefined) {
+        const v = photoView as Record<string, unknown> | null;
+        const az = v && typeof v.azimuthDeg === 'number' && Number.isFinite(v.azimuthDeg) ? v.azimuthDeg : undefined;
+        const el = v && typeof v.elevationDeg === 'number' && Number.isFinite(v.elevationDeg) ? v.elevationDeg : undefined;
+        if (az === undefined || el === undefined || el < -89 || el > 89) {
+            problems.push('photoView must be {"azimuthDeg": a number, "elevationDeg": a number from -89 to 89}: where the camera stood, seen from the object');
+        } else {
+            read.view = { azimuthDeg: ((az % 360) + 540) % 360 - 180, elevationDeg: el };
+        }
+    }
+    if (!read.view && !problems.length) problems.push('photoView is missing: give where the camera stood, seen from the object, as {"azimuthDeg", "elevationDeg"}');
+    if (unseenPartIds !== undefined) {
+        if (!Array.isArray(unseenPartIds) || unseenPartIds.some(id => typeof id !== 'string')) problems.push('unseenPartIds must be a list of part ids');
+        else read.unseen = [...new Set(unseenPartIds as string[])];
+    }
+    return { value: rest, problems };
 }
 
 /** The spec without its material blocks: what the shape comparison needs to know. */
@@ -584,11 +752,13 @@ function shapeOnly(spec: ObjectBuildSpec): ObjectBuildSpec {
     return { ...spec, parts: spec.parts.map(({ material: _m, ...part }) => part) };
 }
 
-export function buildComparisonPrompt(request: string, spec: ObjectBuildSpec): string {
+export function buildComparisonPrompt(request: string, spec: ObjectBuildSpec, options: { photo?: boolean } = {}): string {
     return [
-        `Image 1 is the reference picture of: ${request}`,
-        'Image 2 is an untextured clay render of the 3D model built from the spec below, seen from a similar three-quarter view.',
-        'Compare shapes only, not colour, material, lighting or background. List clear differences: missing or extra parts, wrong counts, wrong proportions, sizes or positions, parts that are detached, crossing or pointing the wrong way. Give the spec part id when one applies.',
+        options.photo ? photoReferenceLine(request, 'Image 1') : `Image 1 is the reference picture of: ${request}`,
+        options.photo
+            ? 'Image 2 is an untextured clay render of the 3D model built from the spec below, seen from about where the photo was taken (the photo\'s lens and framing differ).'
+            : 'Image 2 is an untextured clay render of the 3D model built from the spec below, seen from a similar three-quarter view.',
+        `Compare shapes only, not colour, material, lighting or background${options.photo ? ', and only what the photo shows (not what is hidden or cut off)' : ''}. List clear differences: missing or extra parts, wrong counts, wrong proportions, sizes or positions, parts that are detached, crossing or pointing the wrong way. Give the spec part id when one applies.`,
         'confidence is exactly "high" or "low": "high" only when a difference is unmistakable, otherwise "low". Reply with an empty list when the shapes match.',
         `Spec:\n${JSON.stringify(shapeOnly(spec))}`
     ].join('\n');
@@ -597,9 +767,11 @@ export function buildComparisonPrompt(request: string, spec: ObjectBuildSpec): s
 /** How a patch reply is written, for the revision and correction prompts. */
 const PATCH_REPLY_RULES = 'Reply with only what changes, as JSON matching the schema: in parts, each part you add or change, complete (it replaces the part with the same id; a new id adds a part); in removePartIds, the ids of parts to drop; boundingMeters, expectedBodies or observations only when they change. Parts you leave out stay exactly as they are.';
 
-export function buildRevisionPrompt(request: string, spec: ObjectBuildSpec, problems: string[], dimensionsHintMeters?: Vec3, options: { materials?: boolean; patch?: boolean } = {}): string {
+export function buildRevisionPrompt(request: string, spec: ObjectBuildSpec, problems: string[], dimensionsHintMeters?: Vec3, options: { materials?: boolean; patch?: boolean; photo?: boolean } & SpecSizeHint = {}): string {
     return [
-        `Image 1 is the reference picture of: ${request}. Image 2 is a clay render of the current build.`,
+        options.photo
+            ? `${photoReferenceLine(request, 'Image 1')} Image 2 is a clay render of the current build from about where the photo was taken.`
+            : `Image 1 is the reference picture of: ${request}. Image 2 is a clay render of the current build.`,
         options.patch
             ? `Correct the current build spec, following the conventions below: fix every problem listed and keep the parts that are right unchanged. ${PATCH_REPLY_RULES}`
             : 'Return the complete corrected build spec as JSON matching the schema, following the conventions below. Fix every problem listed and keep the parts that are right unchanged.',
@@ -914,7 +1086,7 @@ async function compareToReference(
 ): Promise<ReferenceDifference[]> {
     const contents: Content[] = [{
         role: 'user',
-        parts: [referencePart(reference), imagePart(render, 'image/png'), { text: buildComparisonPrompt(request, spec) }]
+        parts: [referencePart(reference), imagePart(render, 'image/png'), { text: buildComparisonPrompt(request, spec, { photo: reference.photo }) }]
     }];
     const first = await callJson(vision, contents, DIFFERENCES_JSON_SCHEMA, 'checks', 'shape-compare', signal);
     const parsed = parseDifferences(first);
@@ -939,11 +1111,11 @@ function describePartMaterials(spec: ObjectBuildSpec): string {
     }).join('\n');
 }
 
-export function buildMaterialComparisonPrompt(request: string, spec: ObjectBuildSpec): string {
+export function buildMaterialComparisonPrompt(request: string, spec: ObjectBuildSpec, options: { photo?: boolean } = {}): string {
     return [
-        `Image 1 is the reference picture of: ${request}`,
-        'Image 2 is a render of the 3D model built from it, each part in the material listed below, on the same plain #808080 backdrop under neutral white studio light, from a similar three-quarter view. The renderer is simple: it shows base colour, roughness, metalness, see-through transmission, clearcoat and glow, but no texture maps, printed patterns, wear, dirt, shadows or refraction, and the shapes may differ from the reference.',
-        'Compare the surface of each part only: not shape, size, position, count, patterns, fine detail, wear or lighting. List a part when its surface clearly differs from the same part in the reference: a wrong colour or brightness, matte where it should be glossy or the reverse, metal where it should not be or the reverse, opaque where it should be see-through or the reverse, glowing where it should not or the reverse.',
+        options.photo ? photoReferenceLine(request, 'Image 1') : `Image 1 is the reference picture of: ${request}`,
+        `Image 2 is a render of the 3D model built from it, each part in the material listed below, on the same plain #808080 backdrop under neutral white studio light, from ${options.photo ? 'about where the photo was taken' : 'a similar three-quarter view'}. The renderer is simple: it shows base colour, roughness, metalness, see-through transmission, clearcoat and glow, but no texture maps, printed patterns, wear, dirt, shadows or refraction, and the shapes may differ from the reference.`,
+        `Compare the surface of each part only: not shape, size, position, count, patterns, fine detail, wear or lighting${options.photo ? ' (the photo is in daylight, with its shadows and sky reflections: judge the surface under them, and skip parts the photo does not show)' : ''}. List a part when its surface clearly differs from the same part in the reference: a wrong colour or brightness, matte where it should be glossy or the reverse, metal where it should not be or the reverse, opaque where it should be see-through or the reverse, glowing where it should not or the reverse.`,
         'For each, give partId (one of the ids below), the problem in a few words, and a correction holding only the factors that should change, at their corrected values: baseColor LINEAR RGB 0..1 (an sRGB channel v/255 is about (v/255)^2.2 linear; for a metal, its tint), roughness 0 mirror .. 1 chalky, metalness 1 only for bare metal, transmission 0 opaque .. about 0.9-1 clear, ior, clearcoat 0..1, emissive LINEAR RGB with emissiveStrength for a glow.',
         'confidence is exactly "high" or "low": "high" only when the difference is unmistakable, otherwise "low". Reply with an empty list when the surfaces match.',
         `Parts and their current materials:\n${describePartMaterials(spec)}`
@@ -1005,7 +1177,7 @@ async function compareMaterialsToReference(
 ): Promise<MaterialDifference[]> {
     const contents: Content[] = [{
         role: 'user',
-        parts: [referencePart(reference), imagePart(render, 'image/png'), { text: buildMaterialComparisonPrompt(request, spec) }]
+        parts: [referencePart(reference), imagePart(render, 'image/png'), { text: buildMaterialComparisonPrompt(request, spec, { photo: reference.photo }) }]
     }];
     const first = await callJson(vision, contents, MATERIAL_DIFFERENCES_JSON_SCHEMA, 'checks', 'material-compare', signal);
     const parsed = parseMaterialDifferences(first);
@@ -1215,6 +1387,8 @@ interface BuildableSpec {
  * Problems the validator or the interpreter finds get one corrective re-ask that quotes all of them, answered with a
  * patch on the spec that failed when patch replies are on (a reply that was not a spec at all gets a complete re-ask);
  * a spec that still cannot be built fails (build-spec for validator problems, build for the interpreter's).
+ * A photo build's replies also carry photoView and unseenPartIds, taken off into `photo` (a missing photoView is a
+ * problem like any other until one has been had).
  */
 async function requestBuildableSpec(
     vision: VisionModel,
@@ -1223,18 +1397,21 @@ async function requestBuildableSpec(
     signal?: AbortSignal,
     reportProgress?: (message: string) => void,
     clay = false,
-    base?: ObjectBuildSpec
+    base?: ObjectBuildSpec,
+    photo?: PhotoRead
 ): Promise<BuildableSpec> {
-    const fullSchema = objectBuildSpecJsonSchema({ materials: !clay });
-    const patchSchema = objectBuildSpecPatchJsonSchema({ materials: !clay });
+    const fullSchema = photo ? photoSpecJsonSchema(objectBuildSpecJsonSchema({ materials: !clay })) : objectBuildSpecJsonSchema({ materials: !clay });
+    const patchSchema = photo ? photoSpecJsonSchema(objectBuildSpecPatchJsonSchema({ materials: !clay }), { patch: true }) : objectBuildSpecPatchJsonSchema({ materials: !clay });
     const patching = deps.patchReplies !== false;
     type Attempt = { build?: NativeBuild; spec?: ObjectBuildSpec; candidate?: ObjectBuildSpec; problems: string[]; from: 'build-spec' | 'build'; timedOut?: boolean; normalized?: string[] };
     const attempt = async (reply: JsonReply, patchOn?: ObjectBuildSpec): Promise<Attempt> => {
         if (reply.parseError) return { problems: [reply.parseError], from: 'build-spec' };
         let value: unknown = reply.value;
+        const photoFields = photo ? takePhotoFields(value, photo) : undefined;
+        if (photoFields) value = photoFields.value;
         if (patchOn) {
-            const merged = applySpecPatch(patchOn, reply.value);
-            if (!merged.spec) return { problems: merged.problems, from: 'build-spec', candidate: patchOn };
+            const merged = applySpecPatch(patchOn, value);
+            if (!merged.spec) return { problems: [...merged.problems, ...(photoFields?.problems ?? [])], from: 'build-spec', candidate: patchOn };
             value = merged.spec;
         }
         // Child geometry that does not start at its attach point is moved there (a translation, recorded), rather
@@ -1244,7 +1421,7 @@ async function requestBuildableSpec(
         const moved = normalized.notes.length ? { normalized: normalized.notes } : {};
         // A reply that has a parts list can be patched in a correction even when it is not valid yet.
         const candidate = value && typeof value === 'object' && Array.isArray((value as { parts?: unknown }).parts) ? value as ObjectBuildSpec : undefined;
-        const errors = validateObjectBuildSpec(value, { requireMaterials: !clay });
+        const errors = [...validateObjectBuildSpec(value, { requireMaterials: !clay }), ...(photoFields?.problems ?? [])];
         if (errors.length) return { problems: errors, from: 'build-spec', ...(candidate ? { candidate } : {}), ...moved };
         const spec = value as ObjectBuildSpec;
         const built = await runBuild(spec, deps, signal, reportProgress, clay, vision.clock);
@@ -1472,7 +1649,7 @@ async function checkMaterials(
     try {
         const byId = new Map(spec.parts.map(p => [p.id, p]));
         const render = timedRender(vision.clock, 'material-render', () => renderMaterialPreview(
-            materialPreviewMeshes(meshes, id => byId.get(id)?.material), THREE_QUARTER_VIEW[0], 512));
+            materialPreviewMeshes(meshes, id => byId.get(id)?.material), comparisonView(reference), 512));
         const differences = await compareMaterialsToReference(vision, input.request, reference, render, spec, signal);
         const fixed = applyMaterialCorrections(spec, differences);
         return { check: { pass, differences, applied: fixed.applied, notApplied: fixed.notApplied }, ...(fixed.spec ? { fixedSpec: fixed.spec } : {}) };
@@ -1513,7 +1690,7 @@ async function checkBuild(
     let comparing: Promise<{ differences: ReferenceDifference[]; error?: unknown }> | undefined;
     let materialComparing: Promise<Awaited<ReturnType<typeof checkMaterials>>> | undefined;
     const startComparison = (soup: TriangleSoup, meshes: Map<string, TriangleSoup>) => {
-        render = timedRender(vision.clock, 'render', () => renderReviewViews(soup, 512, { views: THREE_QUARTER_VIEW })[0].png);
+        render = timedRender(vision.clock, 'render', () => renderReviewViews(soup, 512, { views: [comparisonView(reference)] })[0].png);
         comparing = compareToReference(vision, input.request, reference, render, spec, compareSignal)
             .then(differences => ({ differences }), error => ({ differences: [], error }));
         if (!clay) materialComparing = checkMaterials(pass, spec, meshes, input, vision, reference, compareSignal);
@@ -1540,9 +1717,11 @@ async function checkBuild(
     }
     if (materials) rethrowMaterialStop(materials, input.signal);
     const checks: ObjectBuildChecks = { ...measured, differences };
+    // a photo has no scale, so a photo build is held to the size it was given
+    const sizeProblems = reference.photo ? sizeHintProblems(checks.builtBoundingMeters, { dimensionsMeters: input.dimensionsHintMeters, heightMeters: input.heightHintMeters, source: input.sizeSource }) : [];
     return {
         pass, spec, build, render: render!, checks, partBounds, meshes,
-        problems: describeProblems(checks, spec, partBounds),
+        problems: [...describeProblems(checks, spec, partBounds), ...sizeProblems],
         ...(comparisonError ? { comparisonError } : {}),
         ...(materials ? { material: materials.check } : {}),
         ...(materials?.fixedSpec ? { materialFixedSpec: materials.fixedSpec } : {})
@@ -1605,6 +1784,30 @@ function partsAt(center: Vec3, partBounds?: PartBounds): string[] {
 /** Problems that come from the comparison with the reference, as opposed to the measured checks. */
 function differenceProblem(d: ReferenceDifference): string {
     return `${d.partId ? `Part "${d.partId}": ` : ''}${d.problem}`;
+}
+
+/** How far a photo build may stray from the size it was given: its height, and its plan sides (in either order). */
+export const SIZE_HINT_TOLERANCE = { height: 0.1, plan: 0.25 };
+
+/**
+ * A photo build's size against the size it was given: its height within SIZE_HINT_TOLERANCE.height, and with full
+ * dimensions its two plan sides within .plan (sorted, so the object's front may face either axis). Empty when it fits.
+ */
+export function sizeHintProblems(builtMeters: Vec3, hint: { dimensionsMeters?: Vec3; heightMeters?: number; source?: string }): string[] {
+    const problems: string[] = [];
+    const from = hint.source ? ` (${hint.source})` : '';
+    const height = hint.dimensionsMeters?.[1] ?? hint.heightMeters;
+    if (height !== undefined && Math.abs(builtMeters[1] / height - 1) > SIZE_HINT_TOLERANCE.height) {
+        problems.push(`The build is ${builtMeters[1]} m tall but the object is ${height} m tall${from}; scale every part so it stands ${height} m tall.`);
+    }
+    if (hint.dimensionsMeters) {
+        const built = [builtMeters[0], builtMeters[2]].sort((a, b) => a - b);
+        const given = [hint.dimensionsMeters[0], hint.dimensionsMeters[2]].sort((a, b) => a - b);
+        if (built.some((v, k) => Math.abs(v / given[k] - 1) > SIZE_HINT_TOLERANCE.plan)) {
+            problems.push(`The build's plan is ${builtMeters[0]} x ${builtMeters[2]} m but the object's is about ${hint.dimensionsMeters[0]} x ${hint.dimensionsMeters[2]} m${from}; make its width and depth agree.`);
+        }
+    }
+    return problems;
 }
 
 /** What the vision model must fix after a pass; empty when nothing is left to fix. */
@@ -1683,11 +1886,23 @@ export interface SpecObjectBuildResult {
     buildMs: number;
 }
 
-/** How a build's materials are labelled: read from the generated reference, as written in a given spec, or clay. */
-export function describeMaterialProvenance(spec: ObjectBuildSpec, how: { clay: boolean; source: 'reference' | 'spec'; imageModel?: string; visionModel?: string }): MaterialProvenance {
+/**
+ * How a build's materials are labelled: read from the generated reference, read from a real photo (its parts the photo
+ * does not show generated), as written in a given spec, or clay.
+ */
+export function describeMaterialProvenance(spec: ObjectBuildSpec, how: { clay: boolean; source: 'reference' | 'photo' | 'spec'; imageModel?: string; visionModel?: string; photoSource?: string; generatedParts?: string[] }): MaterialProvenance {
     if (how.clay) return { label: 'clay', note: 'Clay build: every part is studio clay, no materials were read.', clayParts: [] };
     const clayParts = partsWithoutMaterial(spec);
     const missing = clayParts.length ? ` Parts without a material are studio clay: ${clayParts.join(', ')}.` : '';
+    if (how.source === 'photo') {
+        const generatedParts = (how.generatedParts ?? []).filter(id => !clayParts.includes(id));
+        return {
+            label: 'photo-inferred',
+            note: `Part materials (colour, roughness, metalness, transmission, ior, clearcoat, emission) were read by ${how.visionModel ?? 'the vision model'} from a real photograph of the object${how.photoSource ? ` (${how.photoSource})` : ''}, cut out of its surroundings: photo-inferred, not measured. Factors only, no texture maps.${generatedParts.length ? ` Parts the photo does not show are generated (inferred from the rest of the object and how such objects are built): ${generatedParts.join(', ')}.` : ''}${missing}`,
+            clayParts,
+            generatedParts
+        };
+    }
     if (how.source === 'reference') {
         return {
             label: 'generated',
@@ -1704,10 +1919,11 @@ export function describeMaterialProvenance(spec: ObjectBuildSpec, how: { clay: b
 
 /**
  * The GLB with each material's provenance in its extras (materials[i].extras.scratchbox: provenance, note, the part
- * it belongs to and the spec's description) and the build's in asset.extras.scratchbox.materialProvenance. Geometry
- * and the binary chunk are unchanged.
+ * it belongs to and the spec's description) and the build's in asset.extras.scratchbox.materialProvenance (with
+ * `assetExtras`, such as the size's provenance, beside it). A photo build's parts the photo does not show are labelled
+ * generated. Geometry and the binary chunk are unchanged.
  */
-export function stampMaterialProvenance(glb: Buffer, spec: ObjectBuildSpec, provenance: MaterialProvenance): Buffer {
+export function stampMaterialProvenance(glb: Buffer, spec: ObjectBuildSpec, provenance: MaterialProvenance, assetExtras: Record<string, unknown> = {}): Buffer {
     if (glb.length < 20 || glb.toString('utf8', 0, 4) !== 'glTF' || glb.readUInt32LE(16) !== 0x4E4F534A) return glb;
     const jsonLength = glb.readUInt32LE(12);
     const json = JSON.parse(glb.toString('utf8', 20, 20 + jsonLength));
@@ -1724,13 +1940,14 @@ export function stampMaterialProvenance(glb: Buffer, spec: ObjectBuildSpec, prov
                     // the interpreter's own entries (the part's edge radius) stay
                     ...(material.extras?.scratchbox || {}),
                     partId: mesh.name,
-                    provenance: own ? provenance.label : 'clay',
+                    provenance: !own ? 'clay' : provenance.generatedParts?.includes(mesh.name) ? 'generated' : provenance.label,
                     ...(own && part?.material?.description ? { description: part.material.description } : {})
                 }
             };
         }
     }
-    json.asset = { ...(json.asset || {}), extras: { ...(json.asset?.extras || {}), scratchbox: { ...(json.asset?.extras?.scratchbox || {}), materialProvenance: { label: provenance.label, note: provenance.note } } } };
+    const materialProvenance = { label: provenance.label, note: provenance.note, ...(provenance.generatedParts?.length ? { generatedParts: provenance.generatedParts } : {}) };
+    json.asset = { ...(json.asset || {}), extras: { ...(json.asset?.extras || {}), scratchbox: { ...(json.asset?.extras?.scratchbox || {}), materialProvenance, ...assetExtras } } };
     let text = JSON.stringify(json);
     while (Buffer.byteLength(text) % 4) text += ' ';
     const jsonChunk = Buffer.from(text, 'utf8');
@@ -1745,8 +1962,8 @@ export function stampMaterialProvenance(glb: Buffer, spec: ObjectBuildSpec, prov
 }
 
 /** The build with its material provenance stamped into the GLB in memory and on disk. */
-function stampBuild(build: NativeBuild, spec: ObjectBuildSpec, provenance: MaterialProvenance): NativeBuild {
-    const glb = stampMaterialProvenance(build.glb, spec, provenance);
+function stampBuild(build: NativeBuild, spec: ObjectBuildSpec, provenance: MaterialProvenance, assetExtras?: Record<string, unknown>): NativeBuild {
+    const glb = stampMaterialProvenance(build.glb, spec, provenance, assetExtras);
     if (glb !== build.glb) fs.writeFileSync(build.glbPath, glb);
     return { ...build, glb };
 }
@@ -1788,8 +2005,72 @@ export async function buildObjectFromSpec(
 }
 
 /**
- * Builds a request as native clay geometry from an internal reference image. Throws ReferenceObjectBuildError
- * for any stage that cannot do what it was asked.
+ * The object cut out of a photo build's photo onto the backdrop, and what cut it. The photo must decode here (PNG or
+ * JPEG) and hold the target; otherwise the build fails at 'reference-image' with the reason, and nothing is drawn.
+ */
+async function cutOutPhoto(
+    photo: NonNullable<ReferenceObjectBuildRequest['photo']>,
+    target: string,
+    cutter: PhotoCutter,
+    signal?: AbortSignal
+): Promise<{ image: ReferenceImage; use: PhotoReferenceUse }> {
+    let pixels: ReturnType<typeof decodePhoto>;
+    try {
+        pixels = decodePhoto(photo.data);
+    } catch (err) {
+        throw new ReferenceObjectBuildError('reference-image', errorMessage(err), { code: 'bad_photo' });
+    }
+    let mask: PhotoMask;
+    let cut: ReturnType<typeof cutOutReference>;
+    try {
+        mask = await cutter({ data: photo.data, mimeType: photo.mimeType }, target, signal);
+        cut = cutOutReference(pixels, mask);
+    } catch (err) {
+        throwIfAborted(signal, 'reference-image');
+        throw new ReferenceObjectBuildError('reference-image',
+            `${JSON.stringify(target)} could not be cut out of the photo: ${errorMessage(err)}. Nothing was drawn in its place.`,
+            { code: err instanceof SegmentTargetNotFoundError ? 'target_not_found' : 'cutout_failed' });
+    }
+    return {
+        image: { data: cut.data, mimeType: cut.mimeType, photo: true },
+        use: {
+            source: photo.source.length > 300 ? `${photo.source.slice(0, 300)}...` : photo.source,
+            target,
+            ...(mask.locator ? { locator: mask.locator } : {}),
+            segmenter: mask.segmenter,
+            areaFraction: mask.areaFraction,
+            bbox: cut.bbox,
+            cutOutPx: cut.sizePx,
+            unseenParts: [],
+            outOfViewParts: []
+        }
+    };
+}
+
+/** Where a build's size came from: the hint the caller gave (and its source), else the vision model's estimate. */
+export function describeSize(input: Pick<ReferenceObjectBuildRequest, 'dimensionsHintMeters' | 'heightHintMeters' | 'sizeSource'>, builtMeters: Vec3, how: { photo: boolean; visionModel?: string }): SizeProvenance {
+    const dims = input.dimensionsHintMeters, height = input.heightHintMeters;
+    if (dims || height !== undefined) {
+        return {
+            label: 'as-given',
+            ...(dims ? { hintMeters: dims } : { heightMeters: height }),
+            note: `Sized to ${dims ? `about ${dims.join(' x ')} m (width x height x depth)` : `${height} m tall`}, ${input.sizeSource?.trim() || 'as the request gave it'}.`,
+            builtMeters
+        };
+    }
+    const model = how.visionModel ?? 'the vision model';
+    return {
+        label: 'generated',
+        note: how.photo
+            ? `A photo has no scale, and no size was given: ${model} estimated it from what such an object measures (generated).`
+            : `Sized by ${model} to such an object's real-world scale (generated).`,
+        builtMeters
+    };
+}
+
+/**
+ * Builds a request as native geometry from an internal reference image, or from a real photo of the object
+ * (input.photo). Throws ReferenceObjectBuildError for any stage that cannot do what it was asked.
  */
 export async function buildObjectFromReference(
     input: ReferenceObjectBuildRequest,
@@ -1808,36 +2089,55 @@ export async function buildObjectFromReference(
     const vision = new VisionModel(client, candidates, requestedModel ? 'request' : 'chat-default', deps, input.signal, clock);
 
     const clay = input.clay === true;
+    const photo = input.photo;
+    const sizeHint: SpecSizeHint = { ...(input.heightHintMeters !== undefined ? { heightMeters: input.heightHintMeters } : {}), ...(input.sizeSource?.trim() ? { sizeSource: input.sizeSource.trim() } : {}) };
+    // what a photo build's spec read says outside the spec: where the camera stood, the parts the photo does not show
+    const photoRead: PhotoRead | undefined = photo ? { unseen: [] } : undefined;
+    let photoUse: PhotoReferenceUse | undefined;
     // a build in materials draws its reference in the workspace's Style DNA when Scratchbox Studio is configured; clay keeps the plain model
-    const styleSource = clay ? undefined : deps.styleReference === null ? undefined : (deps.styleReference ?? styleDnaReferenceSource());
-    let imageModel: ModelUse = { requested: styleSource ? 'scratchbox-studio/style-dna' : REFERENCE_IMAGE_MODEL, answered: '' };
-    progress(styleSource ? 'Drawing an internal reference in the Scratchbox Studio Style DNA' : `Drawing an internal reference with ${REFERENCE_IMAGE_MODEL}`, 0.05);
-    let generated: { image: ReferenceImage; answered: string } | undefined = await clock.time('reference-image', async () => {
-        if (styleSource) {
-            try {
-                const s = await styleSource(input.request, input.signal);
-                return { image: { data: s.data, mimeType: s.mimeType }, answered: s.answered };
-            } catch (err) {
-                if (input.signal?.aborted) throw err;
-                imageModel = { ...imageModel, fallbackReason: `the Style DNA reference could not be had (${errorMessage(err)}); drawn by ${REFERENCE_IMAGE_MODEL} instead` };
-                progress(`Style DNA reference unavailable; drawing it with ${REFERENCE_IMAGE_MODEL}`, 0.06);
+    const styleSource = clay || photo ? undefined : deps.styleReference === null ? undefined : (deps.styleReference ?? styleDnaReferenceSource());
+    let imageModel: ModelUse | undefined = photo ? undefined : { requested: styleSource ? 'scratchbox-studio/style-dna' : REFERENCE_IMAGE_MODEL, answered: '' };
+    let generated: { image: ReferenceImage; answered: string } | undefined;
+    if (photo) {
+        // a real photo replaces the drawn reference: the object is cut out of it, nothing is drawn
+        const target = photo.target?.trim() || input.request.trim();
+        progress(`Finding ${JSON.stringify(target)} in the photo and cutting it out`, 0.05);
+        const cut = await clock.time('photo-cutout', () => cutOutPhoto(photo, target, deps.cutPhoto ?? segmenterPhotoCutter(chat, requestedModel), input.signal),
+            c => (c.use.locator ? { model: c.use.locator.model } : {}));
+        photoUse = cut.use;
+        generated = { image: cut.image, answered: 'photo' };
+    } else {
+        progress(styleSource ? 'Drawing an internal reference in the Scratchbox Studio Style DNA' : `Drawing an internal reference with ${REFERENCE_IMAGE_MODEL}`, 0.05);
+        generated = await clock.time('reference-image', async () => {
+            if (styleSource) {
+                try {
+                    const s = await styleSource(input.request, input.signal);
+                    return { image: { data: s.data, mimeType: s.mimeType }, answered: s.answered };
+                } catch (err) {
+                    if (input.signal?.aborted) throw err;
+                    imageModel = { ...imageModel!, fallbackReason: `the Style DNA reference could not be had (${errorMessage(err)}); drawn by ${REFERENCE_IMAGE_MODEL} instead` };
+                    progress(`Style DNA reference unavailable; drawing it with ${REFERENCE_IMAGE_MODEL}`, 0.06);
+                }
             }
-        }
-        return generateReferenceImage(client, input.request, deps, input.signal, clay);
-    }, g => ({ model: g.answered }));
+            return generateReferenceImage(client, input.request, deps, input.signal, clay);
+        }, g => ({ model: g.answered }));
+    }
     let uploadedName: string | undefined;
     try {
         const prepared = await clock.time('reference-prep', () => prepareReferenceForReading(client as FilesCapableClient, generated!.image, input.signal));
         uploadedName = prepared.uploadedName;
-        const reference = prepared.reference;
-        imageModel = { ...imageModel, answered: generated.answered };
+        let reference: ReferenceImage = { ...prepared.reference, ...(photo ? { photo: true } : {}) };
+        if (imageModel) imageModel = { ...imageModel, answered: generated.answered };
         notify(input.onReferenceImage, { data: generated.image.data, mimeType: generated.image.mimeType });
+        /** A photo build's comparisons render from where the spec read says the camera stood. */
+        const withPhotoView = () => { if (photoRead?.view) reference = { ...reference, view: photoRead.view }; };
 
-        progress(`Reading the reference into a build spec with ${vision.current}`, 0.2);
+        progress(`Reading the ${photo ? 'photo' : 'reference'} into a build spec with ${vision.current}`, 0.2);
         const firstSpec = await requestBuildableSpec(vision, [{
             role: 'user',
-            parts: [referencePart(reference), { text: buildSpecPrompt(input.request, input.dimensionsHintMeters, { materials: !clay }) }]
-        }], deps, input.signal, progress, clay);
+            parts: [referencePart(reference), { text: buildSpecPrompt(input.request, input.dimensionsHintMeters, { materials: !clay, photo: !!photo, ...sizeHint }) }]
+        }], deps, input.signal, progress, clay, undefined, photoRead);
+        withPhotoView();
         let current = await checkBuild(1, firstSpec.spec, firstSpec.build, input, vision, reference, clay);
         const passes: ObjectBuildPass[] = [passRecord(current, 'reference', firstSpec)];
         const checkedPasses = new Map<number, CheckedPass>([[1, current]]);
@@ -1869,9 +2169,10 @@ export async function buildObjectFromReference(
                     parts: [
                         referencePart(reference),
                         imagePart(current.render, 'image/png'),
-                        { text: buildRevisionPrompt(input.request, current.materialFixedSpec ?? current.spec, [...current.problems, ...fixes.map(materialCorrectionNote)], input.dimensionsHintMeters, { materials: !clay, patch: deps.patchReplies !== false }) }
+                        { text: buildRevisionPrompt(input.request, current.materialFixedSpec ?? current.spec, [...current.problems, ...fixes.map(materialCorrectionNote)], input.dimensionsHintMeters, { materials: !clay, patch: deps.patchReplies !== false, photo: !!photo, ...sizeHint }) }
                     ]
-                }], deps, input.signal, progress, clay, current.materialFixedSpec ?? current.spec);
+                }], deps, input.signal, progress, clay, current.materialFixedSpec ?? current.spec, photoRead);
+                withPhotoView();
                 const checked = await checkBuild(pass, revised.spec, revised.build, input, vision, reference, clay);
                 passes.push(passRecord(checked, 'revision', revised));
                 checkedPasses.set(pass, checked);
@@ -1930,8 +2231,25 @@ export async function buildObjectFromReference(
             }
             : undefined;
         const visionModel = vision.use();
-        const materials = describeMaterialProvenance(accepted.spec, { clay, source: 'reference', imageModel: imageModel.answered, visionModel: visionModel.used });
-        const stamped = stampBuild(accepted.build, accepted.spec, materials);
+        if (photoUse && photoRead) {
+            // what the photo shows of the returned build: parts out of its view (measured on the build from where the
+            // camera stood) and parts the spec read named as hidden are generated, the rest photo-inferred
+            const surfaces = new Set(accepted.spec.parts.filter(p => p.sweep || p.revolve).map(p => p.id));
+            photoUse = {
+                ...photoUse,
+                ...(photoRead.view ? { view: photoRead.view } : {}),
+                unseenParts: photoRead.unseen.filter(id => surfaces.has(id)),
+                outOfViewParts: photoRead.view ? partsOutOfView(accepted.meshes, photoRead.view).filter(id => surfaces.has(id)) : []
+            };
+        }
+        const materials = photoUse
+            ? describeMaterialProvenance(accepted.spec, { clay, source: 'photo', visionModel: visionModel.used, photoSource: photoUse.source, generatedParts: [...new Set([...photoUse.outOfViewParts, ...photoUse.unseenParts])] })
+            : describeMaterialProvenance(accepted.spec, { clay, source: 'reference', imageModel: imageModel?.answered, visionModel: visionModel.used });
+        const size = describeSize(input, accepted.checks.builtBoundingMeters, { photo: !!photo, visionModel: visionModel.used });
+        const stamped = stampBuild(accepted.build, accepted.spec, materials, {
+            sizeProvenance: size,
+            ...(photoUse ? { photoReference: { source: photoUse.source, target: photoUse.target, view: photoUse.view, unseenParts: photoUse.unseenParts, outOfViewParts: photoUse.outOfViewParts, segmenter: photoUse.segmenter, locator: photoUse.locator } } : {})
+        });
         return {
             spec: accepted.spec,
             clay,
@@ -1939,7 +2257,9 @@ export async function buildObjectFromReference(
             sourceCode: stamped.sourceCode,
             glb: stamped.glb,
             glbPath: stamped.glbPath,
-            imageModel,
+            ...(imageModel ? { imageModel } : {}),
+            ...(photoUse ? { photo: photoUse } : {}),
+            size,
             visionModel,
             backend,
             passes,

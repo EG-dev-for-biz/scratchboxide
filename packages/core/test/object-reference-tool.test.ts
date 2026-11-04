@@ -28,14 +28,23 @@ import { withStagedMaterialMode } from '../src/browser/generative-canvas/primiti
 import { TerrainManager } from '../src/browser/generative-canvas/services/TerrainManager';
 import { glbToTriangleSoup, mergeTriangleSoups } from '../src/node/3d-engine/part-connectivity';
 import { renderReviewViews } from '../src/node/3d-engine/visual-review';
-import { REFERENCE_IMAGE_MODEL, buildObjectFromSpec, objectBuildSpecPatchJsonSchema, schemaInstruction, type ChatModelSource, type GenerateContentClient, type ReferenceObjectBuilderDeps } from '../src/node/3d-engine/reference-object-builder';
+import { REFERENCE_IMAGE_MODEL, buildObjectFromSpec, objectBuildSpecPatchJsonSchema, photoSpecJsonSchema, schemaInstruction, type ChatModelSource, type GenerateContentClient, type ReferenceObjectBuilderDeps } from '../src/node/3d-engine/reference-object-builder';
+import type { PhotoCutter } from '../src/node/3d-engine/photo-reference';
+import { SegmentTargetNotFoundError } from '../src/common/errors/pipeline-errors';
+import { decodePng } from '../src/node/texture-processing';
+import * as jpeg from 'jpeg-js';
 import { activeObjectBuildContext } from '../src/node/gemini/prompt-builder';
 import { OBJECT_BUILD_SPEC_JSON_SCHEMA, objectBuildSpecJsonSchema, type ObjectBuildSpec, type PartMaterial } from '../src/common/spatial/object-build-spec';
 
 /** The spec schema a build with materials states (the default); a clay build states OBJECT_BUILD_SPEC_JSON_SCHEMA. */
 const SPEC_SCHEMA = objectBuildSpecJsonSchema({ materials: true });
 /** Every schema a spec request (a complete spec, or a patch in a correction or revision) may state. */
-const SPEC_SCHEMAS = [SPEC_SCHEMA, OBJECT_BUILD_SPEC_JSON_SCHEMA, objectBuildSpecPatchJsonSchema({ materials: true }), objectBuildSpecPatchJsonSchema({ materials: false })].map(schemaInstruction);
+const SPEC_SCHEMAS = [
+    SPEC_SCHEMA, OBJECT_BUILD_SPEC_JSON_SCHEMA, objectBuildSpecPatchJsonSchema({ materials: true }), objectBuildSpecPatchJsonSchema({ materials: false }),
+    // a photo build's reads also ask where the camera stood and which parts the photo does not show
+    photoSpecJsonSchema(SPEC_SCHEMA), photoSpecJsonSchema(OBJECT_BUILD_SPEC_JSON_SCHEMA),
+    photoSpecJsonSchema(objectBuildSpecPatchJsonSchema({ materials: true }), { patch: true }), photoSpecJsonSchema(objectBuildSpecPatchJsonSchema({ materials: false }), { patch: true })
+].map(schemaInstruction);
 const asksForSpec = (text: string) => SPEC_SCHEMAS.some(s => text.includes(s));
 import { NativePythonRunnerService, type PythonExecutionResult } from '../src/node/3d-engine/native-python-runner-service';
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
@@ -207,6 +216,7 @@ function handlerWith(client: GenerateContentClient | undefined, extra: {
     buildTimeoutMs?: number;
     prepareEngine?: () => Promise<string | null>;
     styleReference?: ReferenceObjectBuilderDeps['styleReference'];
+    cutPhoto?: PhotoCutter;
 } = {}) {
     const pythonRuns: string[] = [];
     const runPython = extra.runPython ?? ((script: string, options: any) => NativePythonRunnerService.getInstance().runScript(script, options));
@@ -219,7 +229,8 @@ function handlerWith(client: GenerateContentClient | undefined, extra: {
             ...(extra.buildTimeoutMs ? { buildTimeoutMs: extra.buildTimeoutMs } : {}),
             ...(extra.prepareEngine ? { prepareEngine: extra.prepareEngine } : {}),
             // a developer's own SCRATCHBOX_MCP_* never reaches these tests: the Studio source only when a test passes one
-            styleReference: extra.styleReference ?? null
+            styleReference: extra.styleReference ?? null,
+            ...(extra.cutPhoto ? { cutPhoto: extra.cutPhoto } : {})
         },
         stageAtLocation: extra.stageAtLocation,
         publicModelsDir: MODELS_DIR
@@ -791,6 +802,8 @@ describe('build_3d_object_from_reference', () => {
         // the reference: inline, the image the model drew, nothing in the scene yet
         const [reference, pass1] = events.map(e => e.artifact.data);
         expect(reference.objectBuildLive.referenceUri).toBe(`data:image/png;base64,${REFERENCE_B64}`);
+        // a drawn reference carries no caption of its own: the viewer labels it generated
+        expect(reference.objectBuildLive.referenceCaption).toBeUndefined();
         expect(reference.objects).toEqual([]);
         // pass 1: its own GLB, published and framed, while it is checked
         expect(pass1.objectBuildLive).toMatchObject({ status: 'checking', pass: 1 });
@@ -2040,5 +2053,210 @@ describe('build_3d_object_from_reference', () => {
         expect(front(90)).toEqual([1, 0]);   // east is +x
         expect(front(180)).toEqual([0, 1]);  // south is +z
         expect(front(270)).toEqual([-1, 0]); // west is -x
+    });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// From a real photo
+// ---------------------------------------------------------------------------------------------------------------------
+
+/**
+ * The fixture photo, a 200 x 150 JPEG: sky over pavement, a dark green litter bin (x 80..119, y 50..129) and a yellow
+ * pole standing in front of it (x 95..99). PHOTO_MASK is the bin as the segmenter would cut it: without the pole.
+ */
+const PHOTO_W = 200, PHOTO_H = 150;
+const BIN_GREEN = [30, 90, 40];
+const PHOTO_MASK = (() => {
+    const m = new Uint8Array(PHOTO_W * PHOTO_H);
+    for (let y = 50; y < 130; y++) for (let x = 80; x < 120; x++) if (x < 95 || x >= 100) m[y * PHOTO_W + x] = 1;
+    return m;
+})();
+const PHOTO_JPEG = (() => {
+    const data = Buffer.alloc(PHOTO_W * PHOTO_H * 4);
+    for (let y = 0; y < PHOTO_H; y++) {
+        for (let x = 0; x < PHOTO_W; x++) {
+            let c = y < 75 ? [135, 180, 230] : [110, 110, 105];
+            if (x >= 80 && x < 120 && y >= 50 && y < 130) c = BIN_GREEN;
+            if (x >= 95 && x < 100) c = [230, 200, 40];
+            data.set([...c, 255], (y * PHOTO_W + x) * 4);
+        }
+    }
+    return Buffer.from(jpeg.encode({ data, width: PHOTO_W, height: PHOTO_H }, 95).data);
+})();
+const PHOTO_DATA_URI = `data:image/jpeg;base64,${PHOTO_JPEG.toString('base64')}`;
+
+/** A cutter standing in for the vision model's box and the segmenter: the bin's mask, and what it was asked. */
+function fixtureCutter(): PhotoCutter & { asked: Array<{ target: string; bytes: Buffer }> } {
+    const asked: Array<{ target: string; bytes: Buffer }> = [];
+    const cut = (async (photo, target) => {
+        asked.push({ target, bytes: photo.data });
+        return { mask: PHOTO_MASK, width: PHOTO_W, height: PHOTO_H, areaFraction: 2800 / (PHOTO_W * PHOTO_H), locator: { model: CHAT_MODEL, label: 'green litter bin' }, segmenter: 'mediapipe-interactive-segmenter-legacy (magic_touch.tflite)' };
+    }) as PhotoCutter & { asked: typeof asked };
+    cut.asked = asked;
+    return cut;
+}
+
+const BIN_PAINT: PartMaterial = { description: 'dark green powder-coated steel', baseColor: [0.012, 0.1, 0.02], roughness: 0.55, metalness: 0, transmission: 0 };
+const BIN_STEEL: PartMaterial = { description: 'galvanised steel', baseColor: [0.56, 0.57, 0.58], roughness: 0.45, metalness: 1, transmission: 0 };
+
+/** The bin as the photo shows it from the front: a body, a lid on top, and a bracket plate on its back the photo cannot see. */
+const BIN: ObjectBuildSpec = {
+    subject: 'green litter bin', observations: ['round body', 'domed lid', 'bracket plate on the back'], boundingMeters: [0.6, 0.955, 0.63], expectedBodies: 1,
+    parts: [
+        { id: 'body', label: 'body', material: BIN_PAINT, revolve: revolve([[0, 0], [0, 0.3], [0.9, 0.3], [0.9, 0]]) },
+        { id: 'lid', label: 'lid', material: BIN_PAINT, parentId: 'body', attach: { u: 1, angleDeg: 0, normalOffsetMeters: -0.005 }, revolve: revolve([[-0.01, 0], [-0.01, 0.31], [0.04, 0.3], [0.06, 0]]) },
+        { id: 'backplate', label: 'bracket plate', material: BIN_STEEL, parentId: 'body', attach: { u: 0.5, angleDeg: 180, normalOffsetMeters: -0.01 }, revolve: revolve([[-0.01, 0], [-0.01, 0.1], [0.03, 0.1], [0.03, 0]], { axisDirection: [0, 0, -1] }) }
+    ]
+};
+
+/** The spec read's answer for a photo: the spec, where the camera stood (in front, a little above), the parts it hides. */
+const photoReply = (spec: ObjectBuildSpec, unseen: string[] = []) => JSON.stringify({ ...spec, photoView: { azimuthDeg: 0, elevationDeg: 12 }, unseenPartIds: unseen });
+
+describe('build_3d_object_from_reference from a real photo', () => {
+    it('builds from the cut-out of the photo: nothing drawn, materials photo-inferred, the hidden back generated, the size from the hint', async () => {
+        const watched = [path.join(REPO_ROOT, 'build'), path.join(REPO_ROOT, 'public'), path.join(REPO_ROOT, '.scratchbox'), TMP];
+        const before = filesIn(watched);
+        const client = fakeClient({ specs: [photoReply(BIN)] });
+        const cutter = fixtureCutter();
+        let styleAsked = 0;
+        const out = await handlerWith(client, { cutPhoto: cutter, styleReference: async () => { styleAsked++; throw new Error('unused'); } }).run({
+            request: 'the green litter bin on the corner', referenceImageUrl: PHOTO_DATA_URI, referenceTarget: 'the green litter bin behind the yellow pole',
+            heightHintMeters: 0.95, sizeSource: 'measured in the scan (residual audit cluster 7)'
+        });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+
+        // The drawing step is skipped: no image model and no Style DNA source is asked; the cutter got the photo's own bytes.
+        expect(client.calls.filter(c => c.config?.responseModalities)).toEqual([]);
+        expect(styleAsked).toBe(0);
+        expect(cutter.asked).toEqual([{ target: 'the green litter bin behind the yellow pole', bytes: PHOTO_JPEG }]);
+
+        // The spec read saw the cut-out, not the photo: a square on #808080, the bin's green, no pole, sky or pavement.
+        const specCall = client.calls.find(isSpecCall)!;
+        const sent = specCall.contents[0].parts.find((p: any) => p.inlineData);
+        expect(sent.inlineData.mimeType).toBe('image/png');
+        expect(sent.inlineData.data).not.toBe(PHOTO_JPEG.toString('base64'));
+        const seen = decodePng(Buffer.from(sent.inlineData.data, 'base64'));
+        expect(seen.width).toBe(seen.height);
+        expect([...seen.rgba.subarray(0, 3)]).toEqual([128, 128, 128]);
+        let bin = 0, other = 0;
+        for (let i = 0; i < seen.rgba.length; i += 4) {
+            const c = [seen.rgba[i], seen.rgba[i + 1], seen.rgba[i + 2]];
+            if (c.every(v => v === 128)) continue;
+            if (c.every((v, k) => Math.abs(v - BIN_GREEN[k]) <= 24)) bin++; else other++;
+        }
+        expect(bin).toBeGreaterThan(0.3 * seen.width * seen.height);
+        expect(other).toBeLessThan(0.02 * seen.width * seen.height);
+        const specText = askedText(specCall);
+        expect(specText).toContain('is a real photograph of: the green litter bin on the corner, cut out of its surroundings');
+        expect(specText).toContain('It is 0.95 m tall, measured in the scan (residual audit cluster 7): build it to that height');
+        expect(specText).toContain('photoView');
+        // The comparisons are told the render is from the photo's viewpoint.
+        expect(askedText(client.calls.find(isComparisonCall)!)).toContain('from about where the photo was taken');
+        expect(askedText(client.calls.find(isMaterialCall)!)).toContain('the photo is in daylight');
+
+        // Provenance: photo-inferred materials, the back plate (out of the photo's view of the build) generated.
+        const build = (out.resultPayload.artifact as any).data.objectBuild;
+        expect(build.source).toBe('photo');
+        expect(build.imageModel).toBeUndefined();
+        expect(build.materials).toMatchObject({ label: 'photo-inferred', generatedParts: ['backplate'] });
+        expect(build.materials.note).toContain('from a real photograph of the object (an inline data URI)');
+        expect(build.photo).toMatchObject({
+            source: 'an inline data URI', target: 'the green litter bin behind the yellow pole', locator: { model: CHAT_MODEL, label: 'green litter bin' },
+            view: { azimuthDeg: 0, elevationDeg: 12 }, unseenParts: [], outOfViewParts: ['backplate']
+        });
+        const glb = fs.readFileSync(String(out.resultPayload.glbPath));
+        const glbJson = JSON.parse(glb.toString('utf8', 20, 20 + glb.readUInt32LE(12)));
+        const provenance = Object.fromEntries(glbJson.meshes.map((m: any) => [m.name, glbJson.materials[m.primitives[0].material].extras.scratchbox.provenance]));
+        expect(provenance).toEqual({ body: 'photo-inferred', lid: 'photo-inferred', backplate: 'generated' });
+        expect(glbJson.asset.extras.scratchbox.photoReference).toMatchObject({ source: 'an inline data URI', outOfViewParts: ['backplate'] });
+
+        // Size: from the hint, said where it came from, and the build stands at it.
+        expect(build.size).toMatchObject({ label: 'as-given', heightMeters: 0.95, note: 'Sized to 0.95 m tall, measured in the scan (residual audit cluster 7).' });
+        expect(build.size.builtMeters[1]).toBeCloseTo(0.955, 2);
+        expect(glbJson.asset.extras.scratchbox.sizeProvenance.label).toBe('as-given');
+        expect(build.openProblems).toBeUndefined();
+        expect(out.summaryResult).toContain('Built from a real photo (an inline data URI): "the green litter bin behind the yellow pole" found by gemini-4-argon ("green litter bin") and cut out by mediapipe-interactive-segmenter-legacy');
+        expect(out.summaryResult).toContain('no reference was drawn');
+        expect(out.summaryResult).toContain('Size: ');
+        expect(out.summaryResult).toContain('Parts the photo does not show are generated');
+
+        // Neither the photo nor its cut-out is written anywhere, nor returned.
+        const payloadJson = JSON.stringify(out.resultPayload);
+        expect(payloadJson).not.toContain(PHOTO_JPEG.toString('base64').slice(0, 200));
+        expect(payloadJson).not.toContain(sent.inlineData.data.slice(0, 200));
+        const written = [...filesIn(watched).entries()].filter(([file, mtime]) => before.get(file) !== mtime).map(([file]) => file)
+            .filter(file => !file.includes(`${path.sep}test-results${path.sep}`));
+        expect(written.filter(file => fs.readFileSync(file).includes(PHOTO_JPEG.subarray(0, 4096)))).toEqual([]);
+        expect(written.filter(file => file.startsWith(TMP) && IMAGE_EXT.test(file))).toEqual([]);
+    }, 180_000);
+
+    it('holds the build to the measured size: a build off it is revised, and what is left is reported', async () => {
+        const photoFile = path.join(TMP, 'grounding-bin.jpg');
+        fs.writeFileSync(photoFile, PHOTO_JPEG);
+        // the reader keeps answering the same bin, 0.955 m tall, while the scan says 1.5 m
+        const client = fakeClient({ specs: [photoReply(BIN, ['backplate']), asPatch(BIN, BIN)] });
+        const out = await handlerWith(client, { cutPhoto: fixtureCutter() }).run({
+            request: 'the green litter bin', referenceImageUrl: photoFile, heightHintMeters: 1.5, sizeSource: 'measured in the scan'
+        });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        const build = (out.resultPayload.artifact as any).data.objectBuild;
+        expect(build.passes).toHaveLength(3);
+        const revisions = client.calls.filter(isSpecCall).slice(1).map(askedText);
+        expect(revisions.length).toBeGreaterThanOrEqual(2);
+        for (const text of revisions) expect(text).toContain('but the object is 1.5 m tall (measured in the scan); scale every part so it stands 1.5 m tall.');
+        expect(build.openProblems).toEqual([expect.stringContaining('but the object is 1.5 m tall (measured in the scan)')]);
+        expect(out.summaryResult).toContain('Also unresolved: The build is 0.95');
+        // the reader's own word on a hidden part makes it generated too
+        expect(build.photo).toMatchObject({ source: photoFile, unseenParts: ['backplate'] });
+        expect(build.materials.generatedParts).toEqual(['backplate']);
+    }, 240_000);
+
+    it('fails, drawing nothing, when the object is not in the photo or the photo cannot be read', async () => {
+        const client = fakeClient({ specs: [photoReply(BIN)] });
+        const notThere = handlerWith(client, { cutPhoto: async () => { throw new SegmentTargetNotFoundError('vfx_segment_subject', '"a newsstand"', 'gemini-4-argon found nothing matching it'); } });
+        const out = await notThere.run({ request: 'a newsstand', referenceImageUrl: PHOTO_DATA_URI });
+        expect(out.status).toBe('failed');
+        expect(out.resultPayload).toMatchObject({ stage: 'reference-image', code: 'target_not_found' });
+        expect(String(out.resultPayload.error)).toContain('"a newsstand" could not be cut out of the photo');
+        expect(String(out.resultPayload.error)).toContain('Nothing was drawn in its place.');
+        expect(client.calls).toEqual([]);
+        expect(notThere.pythonRuns).toEqual([]);
+
+        const missing = await handlerWith(client, { cutPhoto: fixtureCutter() }).run({ request: 'a bin', referenceImageUrl: path.join(TMP, 'no-such-photo.jpg') });
+        expect(missing).toMatchObject({ status: 'failed', resultPayload: { stage: 'reference-image' } });
+        expect(String(missing.resultPayload.error)).toContain('referenceImageUrl could not be read');
+
+        const notImage = await handlerWith(client, { cutPhoto: fixtureCutter() }).run({ request: 'a bin', referenceImageUrl: 'data:text/plain;base64,aGVsbG8=' });
+        expect(String(notImage.resultPayload.error)).toContain('is not a JPEG, PNG or WebP image');
+
+        const withSpec = await handlerWith(client).run({ request: 'the bin', specJson: JSON.stringify(BIN), referenceImageUrl: PHOTO_DATA_URI });
+        expect(withSpec).toMatchObject({ status: 'failed', resultPayload: { stage: 'build-spec' } });
+        const targetAlone = await handlerWith(client).run({ request: 'the bin', referenceTarget: 'the bin' });
+        expect(String(targetAlone.resultPayload.error)).toContain('referenceTarget names the object to cut out of referenceImageUrl');
+        expect(client.calls).toEqual([]);
+    }, 60_000);
+
+    it('shows the cut-out while it builds, captioned as cut out of a real photo, never as drawn by an image model', async () => {
+        const events: Array<{ stage: any; artifact: any }> = [];
+        const client = fakeClient({ specs: [photoReply(BIN)] });
+        const out = await handlerWith(client, { cutPhoto: fixtureCutter() }).run(
+            { request: 'the green litter bin', referenceImageUrl: PHOTO_DATA_URI, heightHintMeters: 0.95 },
+            { ...ctx(), emitStage: (stage, artifact) => { events.push({ stage, artifact }); } });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        const first = events[0].artifact.data.objectBuildLive;
+        expect(first.status).toBe('reference');
+        expect(first.message).toBe('Object cut out of the photo; reading it into a build spec');
+        expect(first.referenceCaption).toBe('Cut out of a real photo · materials photo-inferred');
+        // the live view shows the cut-out the spec read saw, not the photo
+        expect(first.referenceUri).toMatch(/^data:image\/png;base64,/);
+        expect(first.referenceUri).not.toContain(PHOTO_JPEG.toString('base64').slice(0, 200));
+    }, 180_000);
+
+    it('declares the photo route for the agent', () => {
+        const decl = OBJECT_REFERENCE_TOOL_DECLARATIONS.find(d => d.name === 'build_3d_object_from_reference')!;
+        const props = (decl.parameters as any).properties;
+        expect(Object.keys(props)).toEqual(expect.arrayContaining(['referenceImageUrl', 'referenceTarget', 'heightHintMeters', 'sizeSource']));
+        expect(decl.description).toContain('streetview_grounding_image');
+        expect(decl.description).toContain('never an image a model drew or restyled (survey_beautify_station');
     });
 });
