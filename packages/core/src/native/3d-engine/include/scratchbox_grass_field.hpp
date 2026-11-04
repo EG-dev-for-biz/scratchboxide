@@ -60,11 +60,11 @@ using nature::GrassClumpGenerator;
 
 struct Params {
     // placement
-    double densityPerM2 = 4.0;      // clumps per m2 on a cell of confidence 1
+    double densityPerM2 = 8.0;      // clumps per m2 on a cell of confidence 1
     double minConfidence = 0.0;     // cells below are left bare
     double centreX = 0.0, centreZ = 0.0;
     double bandRadiusM = 60.0;      // ground farther from the centre stays the tile photo
-    double maxInstances = 60000;
+    double maxInstances = 150000;
     double edgeMarginM = 0.05;      // extra clearance from an excluded cell, past the clump's reach
     double snapM = 0.75;            // farthest the scan's surface may lie from the cell surface and still carry a clump
     double jitter = 0.85;           // share of a stratum a sample may move (1 = anywhere in it)
@@ -74,10 +74,11 @@ struct Params {
     double variants = 4;
     double seed = 1;
     // clump shape (GrassClumpConfig, continuous)
-    double bladeCount = 22, clumpRadius = 0.11;
+    double bladeCount = 30, clumpRadius = 0.11;
     double bladeHeightMin = 0.06, bladeHeightMax = 0.14;
     double bladeWidthBase = 0.004, bladeWidthMid = 0.005, keelDepth = 0.0015;
-    double segmentsPerBlade = 5;
+    double segmentsPerBlade = 5;      // spine segments of the near blades (ring 0)
+    double farSegmentsPerBlade = 2;   // spine segments of the widened blades (rings 1 and out), whose curve is not seen
     double gravityDroop = 0.3, radialSplay = 0.5, curlStochasticity = 0.25, centerHeightBias = 0.3;
     double clumpNormalBlend = 0.35;
     double senescence = 0.35;       // how far the tip goes toward straw (0 = all green)
@@ -90,7 +91,7 @@ struct Params {
         SB_GF_P(densityPerM2) SB_GF_P(minConfidence) SB_GF_P(centreX) SB_GF_P(centreZ) SB_GF_P(bandRadiusM) SB_GF_P(maxInstances)
         SB_GF_P(edgeMarginM) SB_GF_P(snapM) SB_GF_P(jitter) SB_GF_P(scaleMin) SB_GF_P(scaleMax) SB_GF_P(heightJitter) SB_GF_P(tintJitter)
         SB_GF_P(variants) SB_GF_P(seed) SB_GF_P(bladeCount) SB_GF_P(clumpRadius) SB_GF_P(bladeHeightMin) SB_GF_P(bladeHeightMax)
-        SB_GF_P(bladeWidthBase) SB_GF_P(bladeWidthMid) SB_GF_P(keelDepth) SB_GF_P(segmentsPerBlade) SB_GF_P(gravityDroop)
+        SB_GF_P(bladeWidthBase) SB_GF_P(bladeWidthMid) SB_GF_P(keelDepth) SB_GF_P(segmentsPerBlade) SB_GF_P(farSegmentsPerBlade) SB_GF_P(gravityDroop)
         SB_GF_P(radialSplay) SB_GF_P(curlStochasticity) SB_GF_P(centerHeightBias) SB_GF_P(clumpNormalBlend) SB_GF_P(senescence)
         SB_GF_P(pixelAngle) SB_GF_P(maxWidthScale)
 #undef SB_GF_P
@@ -288,7 +289,9 @@ private:
         c.bladeHeightMin = float(p_.bladeHeightMin + span * 0.4 * a);
         c.bladeHeightMax = float(p_.bladeHeightMax - span * 0.4 * (1 - a));
         c.bladeWidthBase = float(p_.bladeWidthBase * widthScale); c.bladeWidthMid = float(p_.bladeWidthMid * widthScale); c.keelDepth = float(p_.keelDepth * widthScale);
-        c.segmentsPerBlade = std::max(4, int(std::lround(p_.segmentsPerBlade)));
+        // the near blades keep their curve; the widened distant ones, seen a pixel or two wide, need only a bend
+        c.minSegments = 1;
+        c.segmentsPerBlade = std::max(1, int(std::lround(widthScale > 1 ? p_.farSegmentsPerBlade : p_.segmentsPerBlade)));
         c.gravityDroop = float(p_.gravityDroop); c.radialSplay = float(p_.radialSplay);
         c.curlStochasticity = float(p_.curlStochasticity); c.centerHeightBias = float(p_.centerHeightBias);
         c.clumpNormalBlend = float(p_.clumpNormalBlend);

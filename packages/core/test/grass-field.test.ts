@@ -162,10 +162,8 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
 
     it('widens and thins the blades ring by ring with distance from the centre, so they stay about a pixel wide', async () => {
         const width = (v: GrassField['variants'][number]) => {
-            // the widest cross-section of a blade: left and right margin vertices of its first row
-            let w = 0;
-            for (let q = 0; q + 2 < 9; q += 3) w = Math.max(w, Math.hypot(v.positions[q * 3] - v.positions[(q + 2) * 3], v.positions[q * 3 + 2] - v.positions[(q + 2) * 3 + 2]));
-            return w;
+            // the first blade's base: its left and right margin vertices (0 and 2), bladeWidthBase x the ring's scale apart
+            return Math.hypot(v.positions[0] - v.positions[6], v.positions[1] - v.positions[7], v.positions[2] - v.positions[8]);
         };
         const byRing = new Map<number, GrassField['variants']>();
         for (const v of field.variants) byRing.set(v.ring, [...(byRing.get(v.ring) ?? []), v]);
@@ -174,9 +172,8 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
             expect(vs[0].widthScale).toBe(2 ** r);
             if (r > 0) {
                 expect(width(vs[0])).toBeGreaterThan(width(byRing.get(r - 1)![0]) * 1.5);
-                // fewer blades (22, 11, 6, then the floor of 3): fewer vertices per clump
-                if (r <= 3) expect(vs[0].positions.length).toBeLessThan(byRing.get(r - 1)![0].positions.length);
-                else expect(vs[0].positions.length).toBe(byRing.get(r - 1)![0].positions.length);
+                // fewer blades (30, 15, 8, 4, then the floor of 3), and the distant ones with fewer segments: fewer vertices per clump
+                expect(vs[0].positions.length).toBeLessThan(byRing.get(r - 1)![0].positions.length);
             }
         }
         // each instance in the ring its distance asks for: the pixel at d metres spans d x 0.0015, a near blade 5 mm
@@ -191,5 +188,17 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
         expect(flat.report.instances).toBeGreaterThanOrEqual(field.report.instances);
         expect(flat.report.instances - field.report.instances).toBeLessThan(field.report.instances * 0.01);
         expect(flat.report.instancedTriangles).toBeGreaterThan(field.report.instancedTriangles);
+    });
+
+    it('takes blades per clump and segments as parameters: near blades keep their curve, distant ones are cheap', async () => {
+        // a blade of n segments is 3n + 1 vertices and 4(n - 1) + 2 triangles
+        const f = await buildGrassField(grid, tmp(), { densityPerM2: 4, bandRadiusM: 200, bladeCount: 40, segmentsPerBlade: 6, farSegmentsPerBlade: 1 });
+        const near = f.variants.find(v => v.ring === 0)!, far = f.variants.find(v => v.ring === 1)!;
+        expect(near.positions.length / 3).toBe(40 * (3 * 6 + 1));
+        expect(near.indices.length / 3).toBe(40 * (4 * 5 + 2));
+        expect(far.positions.length / 3).toBe(20 * (3 * 1 + 1));
+        expect(far.indices.length / 3).toBe(20 * 2);
+        // same placement whatever the blades: the clumps are the same
+        expect(f.report.instances).toBe(field.report.instances);
     });
 });

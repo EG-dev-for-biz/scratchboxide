@@ -44,7 +44,11 @@ export const GRASS_MAP_TOOL_DECLARATION: ToolDeclaration = {
             radiusMeters: { type: 'NUMBER', description: 'Radius of the area mapped (default 250 m).' },
             blades: { type: 'BOOLEAN', description: 'Grow 3D grass blades (instanced clumps) over the mapped grass instead of the flat map layer (default false).' },
             bladeBandRadiusM: { type: 'NUMBER', description: 'Radius around the centre within which blades are grown (default 60 m); farther grass stays the tile photo.' },
-            bladeDensityPerM2: { type: 'NUMBER', description: 'Clumps per square metre on fully confident grass (default 4).' },
+            bladeDensityPerM2: { type: 'NUMBER', description: 'Clumps per square metre on fully confident grass (default 8).' },
+            bladesPerClump: { type: 'NUMBER', description: 'Blades in each near clump (default 30); farther clumps hold fewer, wider ones. Blades per square metre near the viewer = density x this.' },
+            bladeSegments: { type: 'NUMBER', description: 'Spine segments of a near blade (default 5; fewer is cheaper and straighter).' },
+            bladeFarSegments: { type: 'NUMBER', description: 'Spine segments of the widened distant blades (default 2).' },
+            bladeMaxClumps: { type: 'NUMBER', description: 'Most clumps grown (default 150000); past it the nearest are kept.' },
             bladeHeightMinM: { type: 'NUMBER', description: 'Shortest blade length (default 0.06 m).' },
             bladeHeightMaxM: { type: 'NUMBER', description: 'Longest blade length (default 0.14 m). A mown lawn is a few centimetres; a meadow half a metre or more.' },
             bladeSenescence: { type: 'NUMBER', description: '0..1, how far blade tips turn toward straw (default 0.35).' },
@@ -143,6 +147,7 @@ export const grassMapHandler: ToolHandler = async (args, ctx): Promise<ToolHandl
             const params: GrassFieldParams = {
                 centreX: centre.x, centreZ: centre.z, bandRadiusM, densityPerM2: num(args.bladeDensityPerM2),
                 bladeHeightMin: num(args.bladeHeightMinM), bladeHeightMax: num(args.bladeHeightMaxM),
+                bladeCount: num(args.bladesPerClump), segmentsPerBlade: num(args.bladeSegments), farSegmentsPerBlade: num(args.bladeFarSegments), maxInstances: num(args.bladeMaxClumps),
                 senescence: typeof args.bladeSenescence === 'number' ? Math.min(1, Math.max(0, args.bladeSenescence)) : undefined,
                 pixelAngle: typeof args.bladePixelAngle === 'number' && args.bladePixelAngle >= 0 ? args.bladePixelAngle : undefined
             };

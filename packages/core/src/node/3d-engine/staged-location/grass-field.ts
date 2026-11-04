@@ -44,7 +44,7 @@ export interface GrassFieldParams {
     edgeMarginM?: number; snapM?: number; jitter?: number; scaleMin?: number; scaleMax?: number; heightJitter?: number; tintJitter?: number;
     variants?: number; seed?: number;
     bladeCount?: number; clumpRadius?: number; bladeHeightMin?: number; bladeHeightMax?: number;
-    bladeWidthBase?: number; bladeWidthMid?: number; keelDepth?: number; segmentsPerBlade?: number;
+    bladeWidthBase?: number; bladeWidthMid?: number; keelDepth?: number; segmentsPerBlade?: number; farSegmentsPerBlade?: number;
     gravityDroop?: number; radialSplay?: number; curlStochasticity?: number; centerHeightBias?: number;
     clumpNormalBlend?: number; senescence?: number;
     /** Radians a pixel spans: blades are widened ring by ring so they stay about a pixel wide away from the centre (0: one ring). */
