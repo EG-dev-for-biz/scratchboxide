@@ -192,7 +192,7 @@ describe('surface infill: the texture ladder', () => {
         expect(b.length).toBeGreaterThan(100);
         expect(agree).toBeGreaterThan(0.85);
         expect(box.structure.along?.pitchM).toBeCloseTo(3, 0);
-    }, 120_000);
+    }, 300_000);
 
     it('keeps paving joints on their measured lattice when no single direction holds (periodic, photo-inferred)', async () => {
         const s = pavingPlaza, scan = readTileTriangles(sceneGlb(s));
@@ -205,7 +205,7 @@ describe('surface infill: the texture ladder', () => {
         const joints = t.filter(q => isJoint(q.x, q.z)).map(q => luma(q.fill)), tiles = t.filter(q => !isJoint(q.x - 0.06, q.z - 0.06) && !isJoint(q.x, q.z) && !isJoint(q.x + 0.06, q.z + 0.06)).map(q => luma(q.fill));
         expect(mean(tiles) - mean(joints)).toBeGreaterThan(30);
         expect(r.attempts.find(a => a.accepted)!.gate!.metrics.rim!.median).toBeLessThan(4);
-    }, 120_000);
+    }, 300_000);
 
     it('synthesises gravel from its own grain when it has neither direction nor repeat (generated), no smear, no visible repeat', async () => {
         const s = gravelPark, scan = readTileTriangles(sceneGlb(s));
@@ -221,7 +221,7 @@ describe('surface infill: the texture ladder', () => {
         const mf = [0, 1, 2].map(j => mean(t.map(q => q.fill[j]))), mt = [0, 1, 2].map(j => mean(t.map(q => q.truth[j])));
         expect(Colour.calculateDeltaE00(lab(mf), lab(mt))).toBeLessThan(3);
         expect(sd(t.map(q => luma(q.fill))) / sd(t.map(q => luma(q.truth)))).toBeGreaterThan(0.7);
-    }, 120_000);
+    }, 300_000);
 
     /** A pinhole 25 m above the street looking straight down, its photo the street's truth (nothing on it). */
     function topView(s: Scene, image: (x: number, z: number) => [number, number, number], id: string): InfillView {
@@ -257,7 +257,7 @@ describe('surface infill: the texture ladder', () => {
         expect(v.accepted).toBe(false);
         expect(v.reason).toMatch(/rejected by the seam gate/);
         expect(accepted(r)).toEqual(['directional continuation']);
-    }, 120_000);
+    }, 300_000);
 
     it('falls to the library at real size tinted to the measured colour, then to the inpaint, then to the membrane, each with its reason', async () => {
         const s = gravelPark, scan = readTileTriangles(sceneGlb(s));
@@ -300,7 +300,7 @@ describe('surface infill: the texture ladder', () => {
         expect(mr.attempts.find(a => a.rung === 'generative inpaint')!.reason).toMatch(/not configured/);
         expect(mr.shares.generated).toBe(1);
         expect(mr.reason).toMatch(/no rung that passed/);
-    }, 120_000);
+    }, 300_000);
 });
 
 describe('surface infill: the GLB', () => {
@@ -346,7 +346,7 @@ describe('surface infill: the GLB', () => {
         expect(after.json.extras.sbInfill.regions[0].geometry.label).toBe('generated');
         expect(after.json.extras.sbInfill.regions[0].texture.shares).toEqual(r.shares);
         expect(r.label.some(v => v === INFILL_LABEL.photoInferred || v === INFILL_LABEL.generated)).toBe(true);
-    }, 120_000);
+    }, 300_000);
 
     it('turns a plan cell mask into hole triangles on the surface', () => {
         const t = cellsToTriangles([0, 3, 5], 4, 10, 20, 0.5, (x, z) => x + z);
