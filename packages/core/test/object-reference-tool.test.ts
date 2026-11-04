@@ -795,6 +795,12 @@ describe('build_3d_object_from_reference', () => {
         const passFile = path.join(MODELS_DIR, path.basename(passUri));
         expect(fs.readFileSync(passFile).readUInt32LE(0)).toBe(0x46546c67);
         expect(pass1.camera.position).toHaveLength(3);
+        // also inline, as the finished scene is: the viewport draws it however /models is served, and skips the object
+        // (the file itself is rewritten by the finished build of the same pass, with its record added)
+        expect(Buffer.from(pass1.pythonGenerator.glbBase64, 'base64').readUInt32LE(0)).toBe(0x46546c67);
+        expect(path.basename(pass1.pythonGenerator.glbPath)).toBe(path.basename(passUri));
+        expect(generatorFileIsObject(pass1.pythonGenerator, pass1.objects)).toBe(true);
+        expect(reference.pythonGenerator).toBeUndefined();
         // the finished scene carries no live state, and no file holds the reference
         expect(final.data.objectBuildLive).toBeUndefined();
         expect(JSON.stringify(final)).not.toContain(REFERENCE_B64);

@@ -255,6 +255,9 @@ function frameCamera(bounds: Vec3, base: Vec3, yawDeg: number): { position: Vec3
  * one 3D-scene artifact with the id the finished build then takes, so the canvas updates one scene in place. Without
  * emitStage (no live chat turn) it does nothing.
  */
+/** A pass's build as the live view shows it: its published file, its inline bytes and its size for framing. */
+interface LiveModel { uri: string; size: Vec3; glb: Buffer; glbPath: string; pass?: number }
+
 export class ObjectBuildLiveView {
     readonly artifactId = `artifact-3d-${Date.now()}`;
     private readonly startedAtMs = Date.now();
@@ -278,7 +281,7 @@ export class ObjectBuildLiveView {
         fs.writeFileSync(path.join(this.modelsDir, fileName), pass.glb);
         const b = glbWorldBounds(pass.glb);
         const size: Vec3 = b ? [b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]] : [1, 1, 1];
-        this.emit({ status: 'checking', pass: pass.pass, message: pass.pass === 1 ? 'First build from the reference; checking it' : `Pass ${pass.pass} built; checking it against the reference` }, { uri: `/models/${fileName}`, size });
+        this.emit({ status: 'checking', pass: pass.pass, message: pass.pass === 1 ? 'First build from the reference; checking it' : `Pass ${pass.pass} built; checking it against the reference` }, { uri: `/models/${fileName}`, size, glb: pass.glb, glbPath: pass.glbPath });
     }
 
     /**
@@ -292,9 +295,9 @@ export class ObjectBuildLiveView {
         this.emit({ status: 'checking', message: reason }, this.lastModel, 'failed');
     }
 
-    private lastModel?: { uri: string; size: Vec3; pass?: number };
+    private lastModel?: LiveModel;
 
-    private emit(live: Omit<ObjectBuildLive, 'startedAtMs' | 'referenceUri'>, model?: { uri: string; size: Vec3; pass?: number }, ended?: 'failed'): void {
+    private emit(live: Omit<ObjectBuildLive, 'startedAtMs' | 'referenceUri'>, model?: LiveModel, ended?: 'failed'): void {
         const now = Date.now();
         if (model && !ended) this.lastModel = { ...model, pass: live.pass };
         const objectBuildLive: ObjectBuildLive = { ...live, startedAtMs: this.startedAtMs, ...(this.referenceUri ? { referenceUri: this.referenceUri } : {}) };
@@ -327,6 +330,9 @@ export class ObjectBuildLiveView {
                 ...(model ? { camera: frameCamera(model.size, [0, 0, 0], 0) } : {}),
                 environment: { skybox: 'studio', lighting: 'studio', ground: false },
                 objects,
+                // inline like the finished scene's: the viewport draws it and skips the object naming the same file,
+                // so the pass shows wherever /models is served from
+                ...(model ? { pythonGenerator: { enabled: true, filename: 'object_spec_build.py', glbBase64: model.glb.toString('base64'), glbPath: model.glbPath, lastCompiledTimeMs: now } } : {}),
                 ...(ended ? {} : { objectBuildLive })
             }
         } as unknown as CanvasArtifact;

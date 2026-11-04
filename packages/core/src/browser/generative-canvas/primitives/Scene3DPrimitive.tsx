@@ -4208,7 +4208,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         generatorError: currentGeneratorError,
         tilesError,
         contentKind: sceneContentKind,
-        hasAuxiliaryContent: !!sceneData.vectorRoadmap?.groundBlueprint || wantsWasmMesh || drawsBiomeTerrain,
+        // an object build still running shows its reference over the empty studio (ObjectBuildLiveOverlay)
+        hasAuxiliaryContent: !!sceneData.vectorRoadmap?.groundBlueprint || wantsWasmMesh || drawsBiomeTerrain || !!readObjectBuildLive(sceneData),
         objectLoadErrors,
         reconnecting: reconnectingFiles,
         undrawableObjects,
