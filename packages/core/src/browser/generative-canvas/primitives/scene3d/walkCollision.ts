@@ -317,7 +317,13 @@ const _segPoint = new THREE.Vector3();
 const _triPoint = new THREE.Vector3();
 const _normal = new THREE.Vector3();
 const _box = new THREE.Box3();
+const _wide = new THREE.Box3();
 const _instance = new THREE.Matrix4();
+/**
+ * Every mesh is measured at each refresh (twice a second); between refreshes only those whose boxes come within this
+ * many metres of the walker's reach are (m). A mesh moving under 100 m/s cannot come closer unmeasured.
+ */
+const STALE_MARGIN = 50;
 const _hitOut = { triangle: -1 };
 
 /** The scene's triangles as the walker meets them. */
@@ -341,13 +347,18 @@ export class WalkCollisionWorld {
         return isDrawnSurface(object) && visibleAllTheWay(object) && this.include(object);
     }
 
-    /** Re-reads the scene's drawn meshes (meshes added since, a layer shown): the walker calls this twice a second. */
+    /**
+     * Re-reads the scene's drawn meshes (meshes added since, a layer shown) and measures every one where it now stands:
+     * the walker calls this twice a second.
+     */
     refresh(): void {
         const seen = new Set<THREE.Mesh>();
         this.root.traverseVisible(o => {
             if (!isDrawnSurface(o) || !this.include(o)) return;
             seen.add(o);
-            if (!this.entries.has(o)) this.entries.set(o, { mesh: o, seen: new THREE.Matrix4().set(NaN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), instanceVersion: -1, box: new THREE.Box3(), colliders: [] });
+            let e = this.entries.get(o);
+            if (!e) this.entries.set(o, e = { mesh: o, seen: new THREE.Matrix4().set(NaN, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), instanceVersion: -1, box: new THREE.Box3(), colliders: [] });
+            this.measure(e);
         });
         for (const mesh of this.entries.keys()) if (!seen.has(mesh)) this.entries.delete(mesh);
         this.stats.meshes = this.entries.size;
@@ -385,8 +396,11 @@ export class WalkCollisionWorld {
         this.near = [];
         this.gathered = true;
         this.stats.trianglesTested = 0;
+        // a mesh is looked at closely only when its box as last measured comes within STALE_MARGIN of the reach: on a
+        // district that skips the visibility and matrix checks of all but the few meshes around the walker
+        _wide.copy(box).expandByScalar(STALE_MARGIN);
         for (const e of this.entries.values()) {
-            if (!visibleAllTheWay(e.mesh)) continue;
+            if (!e.box.intersectsBox(_wide) || !visibleAllTheWay(e.mesh)) continue;
             this.measure(e);
             if (!e.box.intersectsBox(box)) continue;
             for (const c of e.colliders) if (c.box.intersectsBox(box)) this.near.push(c);

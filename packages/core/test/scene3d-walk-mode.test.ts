@@ -272,6 +272,19 @@ describe('walk mode: walls', () => {
         walk(w, 4, FORWARD);
         expect(w.feet.z).toBeCloseTo(-3 + 0.1 + WALK_DEFAULTS.radius, 2);
     });
+
+    it('meets a mesh that moved into its way since the scene was last read', () => {
+        const scene = sceneOf(floor(-50, -50, 50, 50));
+        const pole = meshOf(box([-0.1, 0, -0.1], [0.1, 3, 0.1]));
+        pole.position.set(20, 0, 0);
+        scene.add(pole);
+        scene.updateMatrixWorld(true);
+        const w = walkerIn(scene);
+        pole.position.set(0, 0, -3);
+        pole.updateMatrixWorld(true);
+        walk(w, 4, FORWARD);
+        expect(w.feet.z).toBeCloseTo(-3 + 0.1 + WALK_DEFAULTS.radius, 2);
+    });
 });
 
 describe('walk mode: flying', () => {

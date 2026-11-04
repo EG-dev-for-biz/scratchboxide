@@ -62,26 +62,37 @@ export function WalkHud({ session }: { session: () => WalkSession | null }): Rea
     }, [session]);
     if (!stats) return null;
     const fps = stats.frameMs > 0 ? 1000 / stats.frameMs : 0;
+    const dim = { color: '#a1a1aa' };
     return (
         <>
             <div
-                className="sb-3d-walk-crosshair absolute left-1/2 top-1/2 z-30 w-1.5 h-1.5 -ml-[3px] -mt-[3px] rounded-full bg-white/85 ring-1 ring-black/40 pointer-events-none"
+                className="sb-3d-walk-crosshair"
                 aria-hidden="true"
+                style={{
+                    position: 'absolute', left: '50%', top: '50%', zIndex: 30, width: 6, height: 6, margin: '-3px 0 0 -3px', borderRadius: '50%',
+                    background: 'rgba(255, 255, 255, 0.85)', boxShadow: '0 0 0 1px rgba(0, 0, 0, 0.45)', pointerEvents: 'none'
+                }}
             />
             <div
                 data-testid="sb-3d-walk-hud"
-                className="sb-3d-walk-hud absolute left-1/2 bottom-4 z-30 -translate-x-1/2 flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl bg-black/70 backdrop-blur-md border border-white/10 text-[11px] font-mono text-zinc-100 shadow-lg pointer-events-none select-none whitespace-nowrap"
+                className="sb-3d-walk-hud"
+                style={{
+                    position: 'absolute', left: '50%', bottom: 64, zIndex: 30, transform: 'translateX(-50%)', display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', gap: 2, padding: '6px 12px', borderRadius: 10, background: 'rgba(0, 0, 0, 0.72)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)', color: '#f4f4f5', fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 11,
+                    lineHeight: 1.35, whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none'
+                }}
             >
                 <div>
-                    <span data-testid="sb-3d-walk-state" className="text-sky-300">{stateLabel(stats)}</span>
-                    <span className="text-zinc-400"> · </span>
+                    <span data-testid="sb-3d-walk-state" style={{ color: '#7dd3fc' }}>{stateLabel(stats)}</span>
+                    <span style={dim}> · </span>
                     <span data-testid="sb-3d-walk-speed">{fmt(stats.speed)} m/s</span>
-                    <span className="text-zinc-400"> · frame </span>
+                    <span style={dim}> · frame </span>
                     <span data-testid="sb-3d-walk-frame">{fmt(stats.frameMs)} ms ({fmt(fps, 0)} fps, p95 {fmt(stats.frameP95Ms)})</span>
-                    <span className="text-zinc-400"> · walk </span>
+                    <span style={dim}> · walk </span>
                     <span data-testid="sb-3d-walk-cost">{fmt(stats.stepMs, 2)} ms</span>
                 </div>
-                <div className="text-[10px] text-zinc-400">
+                <div style={{ ...dim, fontSize: 10 }}>
                     WASD / arrows move · Shift run · F {stats.mode === 'walk' ? 'fly' : 'walk'}
                     {stats.mode === 'fly' ? ' · E / Q up and down' : ''} · Esc leave
                     {stats.pointerLocked ? '' : ' · drag or click to look'}

@@ -471,17 +471,17 @@ export class WalkSession {
         const t0 = now();
         if (t0 - this.lastRefresh > REFRESH_MS) { this.world.refresh(); this.lastRefresh = t0; }
         const input = walkInputOf(keys);
+        const f = this.walker.feet;
+        this.last.copy(f);
         this.walker.step(dt, input);
         this.walker.applyTo(this.opts.camera);
         const ms = now() - t0;
-        const f = this.walker.feet;
         if (dt > 0) {
             const moved = Math.hypot(f.x - this.last.x, f.z - this.last.z) / Math.min(dt, MAX_DT);
             this.speed += (moved - this.speed) * 0.2;
             push(this.frames, dt * 1000);
             this.frameMs += (dt * 1000 - this.frameMs) * (this.frameMs ? 0.1 : 1);
         }
-        this.last.copy(f);
         this.running = input.run && (input.forward !== 0 || input.right !== 0);
         push(this.steps, ms);
         this.stepMs += (ms - this.stepMs) * (this.stepMs ? 0.1 : 1);
