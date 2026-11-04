@@ -21,7 +21,7 @@
  *     is how much brighter one chunk's photos are than the other's there; one gain per chunk and channel is solved from
  *     every pair by least squares (mean zero over the chunks), so the district keeps its own overall level.
  *     Brightness is levelled in full, hue only by `maxHueShift` (a gain per channel tinted whole chunks).
- *  2. Cut (cutChunkGround): each chunk's ground is cut exactly at the cell lines around what it owns, the pieces kept by
+ *  2. Cut (cutChunkLayer): each chunk's ground is cut exactly at the cell lines around what it owns, the pieces kept by
  *     who owns their middle, every vertex attribute carried, so both copies end on the same line. Where ownership changes
  *     at no cell line (the outline of a building that reaches into the next cell: its own chunk's build may have taken the
  *     street out from under it), a triangle across the change is kept by each chunk owning a corner of it: a sliver of
@@ -31,6 +31,9 @@
  *     Who owns a point (seamOwner) is the plan's owner (district-chunks.ts chunkOwner) where that chunk's ground reaches
  *     it, else a chunk whose ground does (seamCoverage, read from every chunk first): a building far larger than a cell can
  *     reach past where its own chunk's extraction stopped, and its ground there must not be handed to a chunk that has none.
+ *     SB-Roadie's streets (layer l1r) are cut the same way, by the same owner: each chunk carved its own ground under its
+ *     own streets, so a street belongs to whoever keeps the ground beside it. Both chunks measured one street on the same
+ *     tiles, so a street's cut edge is not snapped (3) and its colour not levelled (4, 5).
  *  3. Snap: chunks are cut in a fixed order; each later chunk's vertices on a cell line are moved, along the line and up
  *     or down, onto the nearest edge an earlier chunk left on that line within `snapM`, so the two cuts meet on one curve
  *     (the step between two independent remeshes, a few centimetres, is closed; the cut edges of the earlier chunk stay).
@@ -54,7 +57,7 @@ import { chunkOwner, DISTRICT_CHUNKS_PARAMS, type DistrictChunkPlan } from './di
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- glTF JSON is untyped */
 
-export const DISTRICT_SEAMS_VERSION = 'district-seams/3';  // 3: the ground cut exactly on the district's circle
+export const DISTRICT_SEAMS_VERSION = 'district-seams/4';  // 3: the ground cut exactly on the district's circle; 4: SB-Roadie's streets cut by the same owner
 
 export const DISTRICT_SEAMS_PARAMS = {
     /** How far a later chunk's cut vertex may move onto an earlier chunk's cut edge (m): the step two remeshes leave. */
@@ -171,15 +174,16 @@ function nearestOnEdges(ix: SnapIndex, s: number, y: number, r: number): [number
 }
 
 /**
- * Chunk `index`'s ground (district frame, as joined) cut to what it owns: cut exactly at the cell lines a triangle with
- * corners of different owners crosses, each piece kept by its middle's owner or an owned corner of its own, every attribute
- * carried. With `snapTo` (the
+ * One of chunk `index`'s layers (district frame, as joined: its ground, its streets) cut to what it owns: cut exactly at
+ * the cell lines a triangle with corners of different owners crosses, each piece kept by its middle's owner or an owned
+ * corner of its own, every attribute carried. With `snapTo` (the
  * edges earlier chunks left), its vertices on a cell line are moved onto them. Returns the cut GLB and the edges this cut
  * left on the cell lines (after snapping), for later chunks. Cut the clay and the textured twin with the same `snapTo`:
  * the two share positions, so they are cut and snapped alike. `owner` (default chunkOwner) must be the same for every
  * chunk of the district: seamOwner, from every chunk's coverage, so ground no chunk's build reached is never handed to it.
+ * `subject` names the layer and its provenance in the GLB's note (default the ground, as scanned).
  */
-export function cutChunkGround(bytes: Uint8Array, plan: DistrictChunkPlan, index: number, opts: { snapTo?: SeamEdges; owner?: (x: number, z: number) => number } = {}, P: DistrictSeamsParams = DISTRICT_SEAMS_PARAMS): { glb: Buffer; edges: SeamEdges; report: SeamCutReport } {
+export function cutChunkLayer(bytes: Uint8Array, plan: DistrictChunkPlan, index: number, opts: { snapTo?: SeamEdges; owner?: (x: number, z: number) => number; subject?: string } = {}, P: DistrictSeamsParams = DISTRICT_SEAMS_PARAMS): { glb: Buffer; edges: SeamEdges; report: SeamCutReport } {
     const { snapTo } = opts;
     // a copy: the dropped triangles are collapsed in the index bytes, which must not be the caller's
     const glb = parseGlbBytes(Uint8Array.from(bytes));
@@ -281,7 +285,7 @@ export function cutChunkGround(bytes: Uint8Array, plan: DistrictChunkPlan, index
         segs.push(u.p[along], u.p[1], w.p[along], w.p[1]);
     }
     report.maxSnapM = Math.round(report.maxSnapM * 1000) / 1000;
-    const out = appendPieces(glb, appended, { sbDistrictSeam: { version: DISTRICT_SEAMS_VERSION, chunk: index, provenance: `as-scanned: the chunk's ground cut at its cell lines, its cut edge moved at most ${P.snapM} m onto its neighbour's` } });
+    const out = appendPieces(glb, appended, { sbDistrictSeam: { version: DISTRICT_SEAMS_VERSION, chunk: index, provenance: `${opts.subject ?? "as-scanned: the chunk's ground"} cut at its cell lines${snapTo ? `, its cut edge moved at most ${P.snapM} m onto its neighbour's` : ''}` } });
     return { glb: out, edges, report };
 }
 
