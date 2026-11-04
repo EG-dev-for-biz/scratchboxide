@@ -35,7 +35,7 @@ import { frontBevelM, type FootprintTri, type HeightAt } from './road-kerbs';
 import type { RoadMeshPart } from './road-surfaces';
 import { writeStagedGlbFile } from './staged-glb-writer';
 
-export const GROUND_STEPS_VERSION = 'ground-steps/1';
+export const GROUND_STEPS_VERSION = 'ground-steps/2';
 
 /** SCRATCHBOX_STAGED_STEPS=1 rebuilds the steps and ramps the scan melted (and carves under them). Off until the user judges it. */
 export function groundStepsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -58,10 +58,13 @@ export const GROUND_STEPS_PARAMS = {
     maxLengthM: 40,
     /** Cross-sections every this across (m), each read every sectionStepM along, past each end by sectionPastM. */
     sectionSpacingM: 0.75, sectionStepM: 0.03, sectionPastM: 1.5,
-    /** A section's foot and top: the ground just past each end of the incline (levelFromM to levelToM past it), level within
-     *  levelSpreadM (10th to 90th percentile; a wall beside the incline, or a street climbing on, is not level), its rise within
-     *  riseAgreeM or riseAgreeShare of the incline's own, and the ends it fits within endSlackM of the incline's extent. */
+    /** A section's foot and top: the walkable ground just past each end of the incline (levelFromM to levelToM past it, the
+     *  top up to coverReachM further under a roof), level within levelSpreadM (10th to 90th percentile; a wall beside the
+     *  incline, or a street climbing on, is not level), its rise within riseAgreeM or riseAgreeShare of the incline's own
+     *  (plus what a run on under a roof adds), and the ends it fits within endSlackM of them. */
     levelFromM: 0.2, levelToM: 0.9, levelSpreadM: 0.12, riseAgreeM: 0.35, riseAgreeShare: 0.35, endSlackM: 1.0,
+    /** How far a flight may run on past where the scan's top surface shows it, under a portico's roof or a canopy (m). */
+    coverReachM: 6,
     /** An incline at least this wide (m), read on at least minSections sections. */
     minWidthM: 1.2, minSections: 2,
     /** A step: its run and its rise between these (m). */
@@ -225,17 +228,36 @@ export function readIncline(id: string, inc: ReturnType<typeof findInclines>[num
     const nb = Math.max(1, Math.floor((b1 - b0) / P.sectionSpacingM));
     for (let q = 0; q < nb; q++) {
         const b = nb === 1 ? (b0 + b1) / 2 : b0 + (b1 - b0) * (q + 0.5) / nb;
+        // the walkable surface along the section: before the foot the surface nearest the foot's level, on the incline the
+        // scan's top surface (where it was found; a sheet the scan has under a stair is not it), past it the surface nearest
+        // the last sample, so a flight is read on under a portico's roof or a canopy; a jump of more than a riser (a wall, a
+        // roof) is a gap
         const s: number[] = [], hs: number[] = [];
-        for (let a = a0 - P.sectionPastM; a <= a1 + P.sectionPastM + 1e-9; a += P.sectionStepM) {
-            const y = h(inc.cx + ux * a + vx * b, inc.cz + uz * a + vz * b);
-            if (y === y) { s.push(a); hs.push(y); }
+        let last = inc.lo;
+        for (let a = a0 - P.sectionPastM; a <= a1 + P.sectionPastM + P.coverReachM + 1e-9; a += P.sectionStepM) {
+            const x = inc.cx + ux * a + vx * b, z = inc.cz + uz * a + vz * b;
+            const y = a < a0 ? h(x, z, inc.lo) : a <= a1 ? h(x, z) : h(x, z, last);
+            if (!(y === y) || Math.abs(y - last) > P.maxRiseEachM + 0.1) continue;
+            s.push(a); hs.push(y); last = y;
         }
-        // the foot and the top: level ground just past either end (a wall or a roof past the top is no top)
-        const below = hs.filter((_, i) => s[i] <= a0 - P.levelFromM && s[i] >= a0 - P.levelToM), above = hs.filter((_, i) => s[i] >= a1 + P.levelFromM && s[i] <= a1 + P.levelToM);
-        if (below.length < 5 || above.length < 5) continue;
-        if (quantile(below, 0.9) - quantile(below, 0.1) > P.levelSpreadM || quantile(above, 0.9) - quantile(above, 0.1) > P.levelSpreadM) continue;
-        const foot = quantile(below, 0.5), top = quantile(above, 0.5), rise = top - foot;
-        if (!(rise >= P.minRiseM) || Math.abs(rise - ownRise) > Math.max(P.riseAgreeM, P.riseAgreeShare * ownRise)) continue;
+        const level = (from: number, to: number) => {
+            const w = hs.filter((_, i) => s[i] >= from && s[i] <= to);
+            return w.length >= 5 && quantile(w, 0.9) - quantile(w, 0.1) <= P.levelSpreadM ? quantile(w, 0.5) : NaN;
+        };
+        // the foot: level ground just before the incline; the top: the first level ground past where the incline still rose on
+        // the scan's top surface (a1), within coverReachM more where it goes on under a roof
+        const foot = level(a0 - P.levelToM, a0 - P.levelFromM);
+        const win = P.levelToM - P.levelFromM;
+        let top = NaN, topAt = NaN;
+        for (let a = a1 + P.levelFromM; a <= a1 + P.levelFromM + P.coverReachM + 1e-9; a += 0.1) {
+            const y = level(a, a + win);
+            if (y === y && y > foot + P.minRiseM) { top = y; topAt = a; break; }
+        }
+        if (!(foot === foot) || !(top === top)) continue;
+        const rise = top - foot, under = Math.max(0, topAt - (a1 + P.levelFromM));
+        // its rise is the incline's own, more only by what the run on under a roof adds at the incline's own slope
+        const ownSlope = ownRise / Math.max(0.5, a1 - a0), slack = Math.max(P.riseAgreeM, P.riseAgreeShare * ownRise);
+        if (!(rise >= P.minRiseM) || rise < ownRise - slack || rise > ownRise + slack + 1.2 * ownSlope * under) continue;
         // the incline's line, through its middle 80 % of rise
         const mid = s.map((v, i) => [v, hs[i]]).filter(([, y]) => y > foot + 0.1 * rise && y < top - 0.1 * rise);
         if (mid.length < 6) continue;
@@ -244,7 +266,7 @@ export function readIncline(id: string, inc: ReturnType<typeof findInclines>[num
         // an incline on this section, not a wall's single step beside it: sloped like one and at least half a metre long
         if (!(beta >= P.minSlope && beta <= P.maxSlope)) continue;
         const sFoot = ms + (foot - my) / beta, sTop = ms + (top - my) / beta;
-        if (!(sTop - sFoot >= 0.5) || sFoot < a0 - P.endSlackM || sTop > a1 + P.endSlackM) continue;
+        if (!(sTop - sFoot >= 0.5) || sFoot < a0 - P.endSlackM || sTop > topAt + P.endSlackM) continue;
         // the residual about the line inside the incline: a staircase the scan resolves repeats at the step's pitch
         const inner = s.map((v, i) => i).filter(i => s[i] > sFoot + 0.1 * (sTop - sFoot) && s[i] < sTop - 0.1 * (sTop - sFoot));
         const { lag, rho } = pitchOf(inner.map(i => s[i]), inner.map(i => hs[i] - (my + beta * (s[i] - ms))), P);

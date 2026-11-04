@@ -101,11 +101,14 @@ export function frontBevelM(smallestDimensionM: number): number {
 }
 
 /** The scan's surface at a plan point (its highest triangle there), NaN where it has none. */
-export type HeightAt = (x: number, z: number) => number;
+/** The scan's height over a point; with `nearY`, the surface nearest that level instead of the highest (a roof over it ignored). */
+export type HeightAt = (x: number, z: number, nearY?: number) => number;
 
 /**
  * The scan's triangles as a plan lookup (CSR bins of `cellM`): the highest surface over a point, read on the triangles
- * themselves (barycentric), not a cell grid. `include` limits it to some triangles (those near the streets).
+ * themselves (barycentric), not a cell grid; or, given a level, the walkable surface nearest it (a landing under a portico,
+ * not the portico's roof; a triangle steeper than 60 degrees is a wall's or a post's, not walked on). `include` limits it to
+ * some triangles (those near the streets).
  */
 export function scanHeightIndex(scan: ScanMesh, cellM = 1, include?: (triangle: number) => boolean): HeightAt {
     const V = scan.mesh.vertices, I = scan.mesh.indices;
@@ -122,7 +125,7 @@ export function scanHeightIndex(scan: ScanMesh, cellM = 1, include?: (triangle: 
     for (let c = 0; c < nx * nz; c++) counts[c + 1] += counts[c];
     const tris = new Uint32Array(counts[nx * nz]), fill = counts.slice(0, nx * nz);
     for (let t = 0; t < scan.triCount; t++) if (!include || include(t)) bin(t, c => { tris[fill[c]++] = t; });
-    return (x, z) => {
+    return (x, z, nearY) => {
         const i = Math.floor((x - x0) / cellM), k = Math.floor((z - z0) / cellM);
         if (i < 0 || k < 0 || i >= nx || k >= nz) return NaN;
         const c = k * nx + i;
@@ -136,7 +139,12 @@ export function scanHeightIndex(scan: ScanMesh, cellM = 1, include?: (triangle: 
             const u = (px * cz - pz * cx) / det, v = (bx * pz - bz * px) / det;
             if (u < -1e-9 || v < -1e-9 || u + v > 1 + 1e-9) continue;
             const y = V[a + 1] + u * (V[b + 1] - V[a + 1]) + v * (V[cc + 1] - V[a + 1]);
-            if (!(best >= y)) best = y;
+            if (nearY === undefined) { if (!(best >= y)) best = y; continue; }
+            // walkable: its plan area at least half its area (a slope under 60 degrees)
+            const by = V[b + 1] - V[a + 1], cy = V[cc + 1] - V[a + 1];
+            const n = Math.hypot(by * cz - bz * cy, bz * cx - bx * cz, det);
+            if (Math.abs(det) < 0.5 * n) continue;
+            if (!(Math.abs(best - nearY) <= Math.abs(y - nearY))) best = y;
         }
         return best;
     };
