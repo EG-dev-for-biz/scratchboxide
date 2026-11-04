@@ -24,6 +24,8 @@ export interface AtmosphereParameters {
     ozoneDensity?: number;
     sunAngularDiameterDeg?: number;
     sunIntensity?: number;
+    /** Lambertian ground albedo the higher scattering orders bounce off (default 0.1). */
+    groundAlbedo?: number;
 }
 
 export interface PhysicalSkyOptions {
@@ -62,7 +64,7 @@ const SKY_RUNNER_SOURCE = `
 using namespace scratchbox;
 
 // argv: out sunX sunY sunZ observerAltitude airDensity dustDensity ozoneDensity sunAngularDiameterDeg sunIntensity
-//       azimuthResolution elevationResolution width height (floats are decimal text, parsed like a C++ literal)
+//       azimuthResolution elevationResolution width height [groundAlbedo] (floats are decimal text, parsed like a C++ literal)
 int main(int argc, char** argv) {
     if (argc < 15) return 1;
     const char* outPath = argv[1];
@@ -77,6 +79,7 @@ int main(int argc, char** argv) {
     params.ozoneDensity = f(8);
     params.sunAngularDiameterDeg = f(9);
     params.sunIntensity = f(10);
+    if (argc > 15) params.groundAlbedo = f(15);
 
     sky::PhysicalSky sky(sunDir, params, n(11), n(12));
 
@@ -155,8 +158,10 @@ int main(int argc, char** argv) {
 `;
 
 /**
- * Service orchestrating native C++20 physical atmospheric single-scattering
- * (Rayleigh/Mie/Ozone) sky generation from scratchbox_sky.hpp.
+ * Service orchestrating native C++20 physical sky generation from scratchbox_sky.hpp: every
+ * order of Rayleigh/Mie scattering and ozone absorption, read from Bruneton's precomputed
+ * tables (precomputed once per medium and cached on disk; the first sky of a new medium
+ * pays the precompute, about 25 s on 16 cores).
  *
  * Replaces client-side Three.js GLSL heuristic sky shaders with physically-grounded
  * precomputed equirectangular radiance environments.
@@ -166,6 +171,15 @@ export class NativeSkyService {
 
     constructor(customIncludePath?: string) {
         this.compiler = new NativeCppCompilerService(customIncludePath);
+    }
+
+    /**
+     * Builds the sky runner and precomputes the default medium's tables into the disk cache, so the first path-traced
+     * render, survey station or sky on a new machine does not pay the precompute (the server's native warm-up, last).
+     */
+    public async warmDefaultSky(): Promise<void> {
+        const result = await this.generatePhysicalSkyEquirectangular({ sunDirection: [0, 1, 0], width: 8, height: 4, azimuthResolution: 8, elevationResolution: 8 });
+        if (!result.success) throw new Error(result.error ?? 'the sky runner failed');
     }
 
     /**
@@ -193,6 +207,7 @@ export class NativeSkyService {
         const ozoneDen = options.params?.ozoneDensity ?? 1.0;
         const sunAng = options.params?.sunAngularDiameterDeg ?? 0.545;
         const sunInt = options.params?.sunIntensity ?? 1.0;
+        const albedo = options.params?.groundAlbedo ?? 0.1;
 
         try {
             const compiled = await compileNativeCached({
@@ -206,7 +221,7 @@ export class NativeSkyService {
             // Plain decimal text, parsed with strtof: the same float a C++ literal of that text would be.
             const num = (v: number) => String(v);
             const args = [outBinPath, num(sunX), num(sunY), num(sunZ), num(obsAlt), num(airDen), num(dustDen), num(ozoneDen),
-                num(sunAng), num(sunInt), String(Math.trunc(azimRes)), String(Math.trunc(elevRes)), String(Math.trunc(width)), String(Math.trunc(height))];
+                num(sunAng), num(sunInt), String(Math.trunc(azimRes)), String(Math.trunc(elevRes)), String(Math.trunc(width)), String(Math.trunc(height)), num(albedo)];
             const execStart = Date.now();
             await execFileAsync(compiled.binaryPath, args, { cwd: tmpDir });
             const executionTimeMs = Date.now() - execStart;
