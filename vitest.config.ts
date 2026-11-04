@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config';
+import os from 'os';
 import path from 'path';
 import DurationShardSequencer from './vitest.shard-sequencer';
 
@@ -23,6 +24,9 @@ export default defineConfig({
         sequence: { sequencer: DurationShardSequencer },
         env: {
             SCRATCHBOX_TEST: '1',
+            // The place store (place-store.ts) is on by default; its fallback volume is absolute, outside the tests' own
+            // home: here it names a volume that is never mounted, so no test writes to a real one.
+            SCRATCHBOX_PLACE_STORE_FALLBACK: path.join(os.tmpdir(), `sb-test-no-volume-${process.pid}`, 'scratchbox-places'),
             // Tests exercise the chat model's own first call; the routing race (fast-router.ts) is tested on its own.
             SCRATCHBOX_CHAT_ROUTER: 'off'
         }
