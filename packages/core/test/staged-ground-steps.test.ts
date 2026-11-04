@@ -10,7 +10,8 @@
 /**
  * Steps and ramps as geometry (ground-steps.ts) on synthetic scans: a flight of ten 15 cm by 35 cm steps the scan resolves
  * (counted from the scan), the same flight melted into a smooth incline (counted by Street View, else estimated), a 1:12
- * ramp, a flight with a landing, a long street on a hill (no flight), the replicated rebuild, and the scan carved under it.
+ * ramp, a flight with a landing, a long street on a hill and an incline under a canopy (no flight each), the replicated rebuild,
+ * and the scan carved under it.
  */
 
 import { describe, it, expect, afterAll } from 'vitest';
@@ -119,6 +120,16 @@ describe('a ramp, a landing, a street on a hill', () => {
         // the rebuild puts it there, level, between the two runs
         const mesh = buildStepsMesh([f]);
         expect(mesh.parts.has('landing:measured')).toBe(true);
+    });
+
+    it('leaves an incline alone when what stands past its top is no top: a canopy over it, a rise unlike its own', async () => {
+        // the melted flight, but a canopy 12 m up starts 0.3 m past its top: the scan's top surface there is the canopy, level, and
+        // read as the flight's top it would make a 12 m flight of the 1.5 m incline
+        const s = scanOf('canopy', (x, z) => (x >= LEN + 0.3 && x < LEN + 8 ? 12 : melted(x, z)), -3, LEN + 10, -5, 5, 0.05);
+        const r = await measureSteps(s.scan, s.h);
+        expect(r.inclines).toBe(1);
+        expect(r.flights.length).toBe(0);
+        expect(r.refused[0].reason).toMatch(/rise as the incline itself does/);
     });
 
     it('leaves a long street on a hill alone (the road\'s own)', async () => {
