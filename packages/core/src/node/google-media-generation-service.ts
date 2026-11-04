@@ -120,6 +120,15 @@ class ModelCallFailure extends Error {
     }
 }
 
+/**
+ * The answer's image among a reply's parts: the last one that is not a thought. Gemini 3 Pro Image sends 1K draft
+ * images (thought: true) before its answer at the size asked for; the first image part is a draft.
+ */
+export function finalImagePart<P extends { inlineData?: { data?: string; mimeType?: string }; thought?: boolean }>(parts: readonly P[] | undefined): P | undefined {
+    const images = (parts ?? []).filter(part => part?.inlineData?.data);
+    return images.filter(part => !part.thought).pop() ?? images.pop();
+}
+
 /** Runs one model-service call; a failure is marked as a model failure (see {@link ModelCallFailure}). */
 async function modelCall<T>(call: () => Promise<T>): Promise<T> {
     try {
@@ -176,7 +185,7 @@ export async function generateImageWithModels(client: any, request: ImageModelRe
                     throw new ModelCallFailure(new Error(`Safety filter blocked prompt: ${response.promptFeedback.blockReason}`));
                 }
                 parts = response?.candidates?.[0]?.content?.parts || [];
-                imagePart = parts.find((part: any) => part?.inlineData?.data);
+                imagePart = finalImagePart(parts);
             }
             if (!imagePart) {
                 const finishReason = response?.candidates?.[0]?.finishReason;

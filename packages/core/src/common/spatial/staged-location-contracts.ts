@@ -727,6 +727,11 @@ export interface StagedNodeExtras {
         ids: { primitiveId?: string; surfaceId?: string; slotId?: string; elementId?: string; crownId?: number; leafId?: string; degradationId?: string };
         /** A recut copy of a surface (recessed relief) hides the surface node it replaces. */
         replacesSurfaceIds?: string[];
+        /**
+         * Shown from a version kept by an earlier run (place-store-best.ts): the object, the version, the run it came from,
+         * and why it stands in place of this run's.
+         */
+        storedVersion?: { objectKey: string; version: number; runId?: string; reason: string };
         fitError?: ResidualStats;
         counts: { vertices: number; triangles: number; lines?: number };
     };

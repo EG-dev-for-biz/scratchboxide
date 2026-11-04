@@ -293,6 +293,27 @@ function readLayer(bytes: Uint8Array): LayerSoup {
 }
 
 /** The base-colour image of a glTF texture, decoded, with its wrap modes; undefined when it cannot be read in memory. */
+/**
+ * Each building's triangles of one layer, by node and as glb-subset.ts numbers them: the footprint (grown by the
+ * building margin) holding each triangle's middle, as auditDistrict gives its owners; an instanced node's are left out.
+ */
+export function cutLayerByFootprints(bytes: Uint8Array, buildings: DistrictFootprint[], P: DistrictAuditParams = DISTRICT_AUDIT_PARAMS): Map<string, Map<number, Set<number>>> {
+    const soup = readLayer(bytes), ownerOf = districtBuildingIndex(buildings, { marginM: P.buildingMarginM, cellM: 20 });
+    const out = new Map<string, Map<number, Set<number>>>();
+    for (let t = 0; t < soup.n; t++) {
+        if (soup.nodeTri[t] < 0) continue;
+        const pos = soup.pos, b = ownerOf((pos[t * 9] + pos[t * 9 + 3] + pos[t * 9 + 6]) / 3, (pos[t * 9 + 2] + pos[t * 9 + 5] + pos[t * 9 + 8]) / 3);
+        if (b < 0) continue;
+        const id = buildings[b].id;
+        let byNode = out.get(id);
+        if (!byNode) out.set(id, byNode = new Map());
+        let tris = byNode.get(soup.node[t]);
+        if (!tris) byNode.set(soup.node[t], tris = new Set());
+        tris.add(soup.nodeTri[t]);
+    }
+    return out;
+}
+
 function textureImage(glb: ParsedGlb, index: number): { img: RgbaImage8; repeatS: boolean; repeatT: boolean } | undefined {
     const tex = glb.json.textures?.[index];
     const image = tex !== undefined ? glb.json.images?.[tex.source] : undefined;

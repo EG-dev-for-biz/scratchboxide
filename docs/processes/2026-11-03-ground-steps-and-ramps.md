@@ -1,9 +1,9 @@
 # Steps, stairs and ramps as geometry, and the scan carved under them
 
 **Date:** 2026-11-03
-**Status:** Unit-tested on synthetic flights and run through a whole staged build in the orchestrator test. Not yet built
-live in the app (the load average stayed at 250-500, against the no-builds-above-100 rule), no proof sheet yet, and
-not yet judged by the user.
+**Status:** Unit-tested, run through a whole staged build in the orchestrator test, and built live and uncached at Farley
+(run `daafc303`: the grand steps, 33 steps counted on Street View) and Federation Square (run `9ad011dc`) on 2026-11-04.
+Before/after sheet made; not yet judged by the user.
 **Branch:** `feat/ground-steps`, stacked on `feat/road-kerbs-gutters` (it reuses that branch's carve, `road-carve.ts`,
 and its bevel rule, `frontBevelM`).
 **Switch:** `SCRATCHBOX_STAGED_STEPS=1`, off by default. It turns the roads stage on with it, with or without the
@@ -34,8 +34,20 @@ Cells outside the extraction's cover and within 3 m of a Google road centreline 
 ### 2. Reading each one (`readIncline`)
 
 Cross-sections every 0.75 m across the incline, each read every 3 cm along its slope on the scan's own triangles
-(barycentric, `scanHeightIndex`) and 1.5 m past each end. A section counts when its slope is in range, it runs at least
-0.5 m, and it is within 40 % of the median section. From them:
+(barycentric, `scanHeightIndex`). Each is read on the walkable surface:
+
+- **before the foot:** the surface nearest the foot's level;
+- **on the incline:** the scan's top surface, where the incline was found (the scan can hold a second sheet under a stair);
+- **past the top:** the surface nearest the last sample, so a flight is read on under a portico's roof or a canopy, up to
+  6 m further. A jump of more than a riser (a wall, a roof) is a gap, never part of the flight.
+
+A section counts when:
+
+- it has level ground (within 12 cm) just before its foot and at its top;
+- its rise is the incline's own (within 35 cm or 35 %), more only by what a run on under a roof adds at its slope;
+- its slope is in range, it runs at least 0.5 m, and it is within 40 % of the median section.
+
+A flight needs two such sections and 1.2 m of width. From them:
 
 - **the extent and levels:** where the incline starts and ends (percentiles over the sections), and the levels at its
   foot and top;
@@ -54,12 +66,14 @@ Cross-sections every 0.75 m across the incline, each read every 3 cm along its s
 
 ### 4. Counting a melted flight on Street View (`step-count-streetview.ts`)
 
-- The free metadata query finds panos around the flight (in front of its foot and off either side).
-- The nearest within 5-45 m that sees it from the side, and the nearest that sees it from the front, are fetched
-  through the Maps Imagery Grounding API. At most two, in memory only, as `streetview-evidence.ts` has them.
+- The free metadata query finds panos around the flight: at two distances in front of its foot across its width, and off
+  either side. Only Google's own captures count (the nearest pano to a point is often a visitor's photosphere).
+- The nearest within 5-45 m that sees it from the side, then from the front, then the next nearest, are fetched through
+  the Maps Imagery Grounding API. At most four, in memory only, as `streetview-evidence.ts` has them; the API refuses
+  some panos.
 - A vision model counts the risers on each, told what the scan measured (the rise, the length, the width).
 - Two counts within one of each other give the larger (a riser hidden is likelier than one invented). Two further apart
-  give no count, with the reason.
+  give no count, with the reason. Three or more give their median.
 
 ### 5. The rebuild (`buildStepsMesh`)
 
@@ -92,31 +106,80 @@ Every part is its own node with its label. Nothing here names a kind of stair.
 - The run note `ground_steps` records every flight, how many inclines were looked at and refused, and why there was no
   Street View count.
 - With `SCRATCHBOX_STAGED_ROAD_KERBS` off and the steps on, the roads stage runs the steps alone.
+- When the ground's textured twin commits, the steps (like the kerbed streets) are coloured again from it, seen from above
+  at their own level, so they meet the ground around them without a seam of colour (`road_recolour` run note). Only the
+  build's own ground and its own layers count: a K-D chunk joined from another build arrives coloured by that build.
+- The roads stage has 5 more minutes with the steps on (6 with the kerbs).
 
 ## Evidence
 
-- **`staged-ground-steps.test.ts`** (9 tests, credentials unreachable):
+- **`staged-ground-steps.test.ts`** (11 tests, credentials unreachable):
   - a resolved flight: 10 steps counted from the scan;
   - a melted flight: Street View's count gives photo-inferred steps; with no count, a generated estimate with its reason;
   - a 1:12 ramp reads as a ramp;
   - a landing is found;
   - a street on a hill is refused;
+  - a flight under a canopy is read to its own 1.5 m top, not the canopy's 12 m (with the top surface read past the
+    ends, it made a 75-step flight);
+  - a flight running on under a portico's roof is read to its real top (with the top surface read past the ends, it was
+    refused);
   - the rebuild: risers face downhill, treads up, the nosing follows the bevel rule, and the labels are in the GLB;
   - the carve under a flight;
   - Street View reply parsing and combining.
 - **`staged-location-orchestrator.test.ts`:** a melted 1.2 m flight runs through a whole staged build with the switch on.
-  It is rebuilt as `l1s` with an estimated count (no Street View in the test), and the shown ground is carved under it.
-- **Not done:**
-  - a live uncached build at Farley's steps and at a second flight;
-  - the before/after sheet at walk-mode eye height.
+  It is rebuilt as `l1s` with an estimated count (no Street View in the test), coloured again from the ground's twin, and
+  the shown ground is carved under it.
 
-  Farley's steps are in none of the extractions on disk: the Penn K-D smoke run's ground ends at 8th Avenue's west
-  sidewalk, and the Penn Station extraction is cut at 72 m. They need a fresh tile extraction at about 40.7503,
-  -73.9957, which waits for the load average to fall under 100.
+### Live builds (2026-11-03/04, my own instance on ports 4310-4312, both switches on)
+
+- **Penn, 7th Ave & W 33rd St (run `02c4e917`, the first version):** 35 "flights" and 23 ramps, 3,702 steps, where the
+  scan has a handful. A section's foot and top were read anywhere past the incline on the scan's top surface, so a
+  canopy or roof over the top made a 1 m incline a 10-70 m flight, its fitted line running up to 166 m. The roads stage
+  also ran past its 240 s limit. Fixed by the walkable-surface reading above and the longer limit. Replayed on the same
+  scan: 95 inclines, 10 kept, all small ramps and stoops (0.3-1.7 m).
+- **"8th Avenue & West 32nd Street" (run `efaabcf3`):** the geocoder resolved it to the Port Authority Bus Terminal
+  (8th Ave & 40th-42nd St), not Farley. 3 small flights and 7 ramps.
+- **Farley, 421 8th Ave (run `3c27c2ef`):** the grand steps were refused. The scan's top surface shows them only up to the
+  portico's roof, so the "top" past them was the roof 18 m up. With the walkable-surface reading, replayed on the same
+  scan, they are one flight: 4.98 m over 13.4 m, 83 m wide, read on 55 sections, about 31 steps at an estimated 16 cm.
+- **Street View counts:** none yet. At Penn the stage ran out of time on the first flight; at Farley the two flights
+  counted (before the fix) stood mid-block, where no pano reaches.
+
+- **Federation Square (run `d10c8f6e`, ground-steps/2):** 22 flights and 12 ramps, among them a 103 m wide slope of 2.5 m
+  turned into 16 "steps" with 91 cm treads, where nothing counted it. Now an estimate whose treads would be longer than a
+  step's (0.7 m) draws the slope instead.
+- **Farley (run `6f8aa209`, ground-steps/2):** the grand steps were refused again. In a build they joined the gentler
+  street cells in front of them into one incline reaching 21 m into the avenue, so its foot was read in the street; and
+  the walk along each section started from the incline's lowest cell, skipping a first sample more than a riser above it
+  and every one after. An incline now keeps only cells at least half its median slope, and the first sample is taken as
+  it is.
+- **Street View counts:** at Farley its three metadata points each found a visitor's photosphere, not a Google capture;
+  at Federation Square the grounding API refused the two Google panos picked (403). It now looks at eight points and
+  fetches up to four views.
+
+**The uncached builds on the final code:**
+
+| | Farley, 421 8th Ave (`daafc303`) | Federation Square (`9ad011dc`) |
+|---|---|---|
+| Inclines looked at / kept | 67 / 3 flights, 6 ramps | 142 / 17 flights, 23 ramps |
+| The flight shown | the grand steps: 4.98 m over 13.4 m (20 degrees), 83.0 m wide | `incline_109`: 4.88 m over 11.3 m, 10.7 m wide; `incline_102`: 2.99 m over 9.7 m, 43.1 m wide |
+| Its count | 33, photo-inferred: 3 Street View views counted 33, 32, 33 | 31 and 19, generated: estimated at 16 cm (that run predates the counter's fix; its Street View gave 403s or no pano) |
+| Each step | 15.1 cm rise, 40.7 cm run | 15.7 / 36.5 cm and 15.7 / 50.9 cm |
+
+**The sheet** (`docs/screenshots/road-kerbs_2026-11-04/steps-sheet.jpg`, gitignored; also in the shared notes):
+before/after, textured and clay, from in front of each flight at walk-mode eye height and from above. In clay the melted
+slopes become evenly pitched treads between their cheeks; the textured flights match the scene. **Visible limits:**
+the risers take the photo seen from above, so they show vertical streaks; the treads keep the scan's own photo bands.
 
 ## Known gaps
 
 - **Street View counting is untested on real images.** The counter is tested on its parsing and combining only.
 - **Steps that turn:** no test has a flight whose direction turns (a curved or dog-leg stair). Each incline gets one
   uphill direction, so such a flight may be refused by the coherence test.
-- **Cost:** the carve runs synchronously in the commit, as for the kerbs.
+- **Cost:** the carve runs synchronously in the commit, as for the kerbs. So does the recolour: 13-22 s a layer at Farley.
+- **The Street View metadata cache:** flights are counted four at a time, and each count reads the metadata cache file at
+  its start and writes it at its end, so concurrent counts can drop each other's entries. The cost is repeated
+  (free) metadata lookups, not wrong counts.
+- **Flights inside a block:** a "flight" on a building (a roof's slope near the ground model) has no pano within reach;
+  its count is estimated, and it is drawn. A test against Google's vector footprints would keep only flights outside
+  buildings, but a footprint that includes its steps would lose them.

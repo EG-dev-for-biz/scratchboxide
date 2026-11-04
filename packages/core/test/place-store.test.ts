@@ -21,6 +21,9 @@ import {
     type PlaceStore, type PlaceSync
 } from '../src/node/3d-engine/staged-location/place-store';
 import { auditDistrictForPlace, pullPlaceForRun, syncPlaceAfterObjects, type PlaceAuditNote } from '../src/node/3d-engine/staged-location/place-store-district';
+import { kdLookCode, showBestVersions } from '../src/node/3d-engine/staged-location/place-store-best';
+import type { DistrictFootprint } from '../src/node/3d-engine/staged-location/pipeline-k/district-buildings';
+import { parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { fileReadingStore, readingFileOf, readingKey } from '../src/node/3d-engine/staged-location/pipeline-k/model-readings';
 import { storeSceneObjects, type LayerObjectManifest } from '../src/node/3d-engine/staged-location/scene-objects';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
@@ -348,7 +351,7 @@ describe('a district run reads its place first', () => {
 });
 
 describe('a chunked district into the object store and the place store', () => {
-    it('lists each joined building with its audit, keeps it as an object, and copies it to the place; a worse rebuild stays history', async () => {
+    it('lists each joined building with its audit, keeps it as an object, and copies it to the place; a worse rebuild stays history and is shown from the stored version', async () => {
         const bucket = new MemoryVersionedBucket();
         const ws = path.join(tmp, 'ws'), modelsDir = path.join(ws, 'public', 'models');
         fs.mkdirSync(modelsDir, { recursive: true });
@@ -375,14 +378,21 @@ describe('a chunked district into the object store and the place store', () => {
         const build = async (runId: string, roofless: boolean) => {
             const layers = [layerOf(`stg-${runId}-l2`, 'remesh', scan(Number(runId.slice(-1)), roofless), 'remeshed')];
             const manifests = new Map<string, LayerObjectManifest>();
+            const footprints: DistrictFootprint[] = [];
             const note: PlaceAuditNote = await auditDistrictForPlace({
                 runId, place: { lat: FRAME.lat, lng: FRAME.lng, formattedAddress: 'Penn Station' }, originEllipsoidalHeightM: FRAME.ellipsoidalHeightM, plan, layers, manifests,
-                modelsDir, workspaceRoot: ws, request: { query: 'Penn Station', district: 'kd', radiusM: 150 }, env
+                modelsDir, workspaceRoot: ws, request: { query: 'Penn Station', district: 'kd', radiusM: 150 }, env, footprintsOut: footprints
             });
             notes.set(`${runId}/place_audit`, note);
+            // as the orchestrator does after the audit: each building shown at its best, the superseding layer carrying the manifest
+            const best = showBestVersions({
+                runId, frame: FRAME, layers, manifests, footprints, store: durable, look: kdLookCode(env), modelsDir, outDir: path.join(tmp, 'best'), env,
+                publish: (file, name) => { fs.copyFileSync(file, path.join(modelsDir, name)); return { url: `/models/${name}`, bytes: fs.statSync(file).size }; }
+            });
+            for (const b of best.layers) { layers.push(b.layer); manifests.set(b.layer.objectId, b.manifest); }
             const kept = await storeSceneObjects({ store: durable, runId, sceneId: 'scene', frame: FRAME, layers, manifests, modelsDir, scene: null, workspace: ws });
             const synced = await syncPlaceAfterObjects({ runId, cache, store: durable, kept: kept.kept, placeStore: { bucket, fallbackRoot: path.join(tmp, 'no-volume', 'x'), tmpDir: path.join(tmp, 'scratch') }, env });
-            return { note, manifests, kept, synced: synced! };
+            return { note, manifests, kept, synced: synced!, best, layers };
         };
 
         const first = await build('run-1', false);
@@ -400,6 +410,9 @@ describe('a chunked district into the object store and the place store', () => {
         expect(objects.read(whole.objectKey)!.record.measures!.areaM2.value).toBeCloseTo(4 * 10 * 10 + 100, 3);
         expect(first.synced.where.kind).toBe('cloud');
         expect(first.synced.objects.added).toBe(3);
+        expect(first.best.report.substituted).toEqual([]);
+        // each building records the footprint and the look code it was drawn with
+        expect(manifest.objects.find(o => o.identity === 'b-whole')!.inputs).toMatchObject({ layer: 'l2', look: kdLookCode(env), footprintSha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
         expect((await loadPlaceManifest(await cloudStore(bucket)))!.manifest.audit).toMatchObject({ buildings: 2 });
 
         // the next run loses a roof: that building's new version stays history, here and in the place
@@ -412,6 +425,14 @@ describe('a chunked district into the object store and the place store', () => {
         expect(objects.current(roofless.objectKey)!.runId).toBe('run-1');
         expect(second.synced.objects).toMatchObject({ unchanged: 1, promoted: 2, rejected: 0 });
         expect((await loadPlaceObject(await cloudStore(bucket), roofless.objectKey))!.current).toBe(first.kept.kept.find(k => k.identity === 'b-roofless')!.inputHash);
+        // and the district shows the roofed version run 1 kept, labelled, in a layer superseding the one built
+        expect(second.best.report.substituted).toEqual([expect.objectContaining({ id: 'b-roofless', version: 1, runId: 'run-1' })]);
+        expect(second.best.report.substituted[0].reason).toContain('holes 0 -> 1');
+        const shown = second.layers.find(l => l.objectId === 'stg-run-2-l2-best')!;
+        expect(shown.supersedes).toEqual(['stg-run-2-l2']);
+        const glb = parseGlbBytes(fs.readFileSync(path.join(modelsDir, path.basename(shown.url))));
+        const stored = (glb.json.nodes as Array<{ extras?: { sb?: { storedVersion?: { runId: string } } } }>).filter(n => n.extras?.sb?.storedVersion);
+        expect(stored.map(n => n.extras!.sb!.storedVersion!.runId)).toEqual(['run-1']);
     });
 
     it('audits without listing objects when the object store is switched off, and says why', async () => {

@@ -123,7 +123,7 @@ import { removeVehicles, vehicleRemovalEnabled, vehicleRemovalParams, visionVehi
 import { buildRoadMesh, measureRoadSurfaces, sbRoadieEnabled, writeRoadsGlb, PROCEDURAL_ROADS_VERSION, ROAD_SURFACE_PARAMS, type RoadMesh, type RoadSurface } from './road-surfaces';
 import { renderTopDownPhoto, topDownJpeg } from './top-down-photo';
 import { synthesizeRoadTextures } from './road-texture';
-import { buildKerbedRoadMesh, measureKerbs, nearStreets, roadKerbsEnabled, scanHeightIndex, writeKerbedRoadsGlb, ROAD_KERBS_VERSION, type FootprintTri, type KerbModelStats } from './road-kerbs';
+import { buildKerbedRoadMesh, measureKerbs, nearStreets, planarFrameOf, roadKerbsEnabled, scanHeightIndex, withGlbImage, writeKerbedRoadsGlb, ROAD_KERBS_VERSION, type FootprintTri, type KerbModelStats } from './road-kerbs';
 import { carveUnderRoads, isRoadCarved, prepareFootprint, ROAD_CARVE_VERSION, type CarveFootprint, type RoadCarveReport } from './road-carve';
 import { flattenRoadsInGlb, flattenTargets, roadFlattenEnabled, ROAD_FLATTEN_PARAMS, ROAD_FLATTEN_VERSION, type RoadFlattenStats } from './road-flatten';
 import { buildStepsMesh, groundStepsEnabled, measureSteps, writeStepsGlb, GROUND_STEPS_VERSION, type FlightModel } from './ground-steps';
@@ -205,13 +205,15 @@ import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
-import { districtBuildingIndex, districtFootprints } from './pipeline-k/district-buildings';
+import { districtBuildingIndex, districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
 import { chunkCpuShare, chunkOwner, chunkParallel, kdCentreRunner, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, planDistrictChunks, type DistrictChunkPlan, type TileFrame } from './pipeline-k/district-chunks';
 import { auditDistrictForPlace, placeStoreEnabled, pullPlaceForRun, syncPlaceAfterObjects } from './place-store-district';
 import { PLACE_STORE_PARAMS } from './place-store';
+import { kdLookCode, showBestVersions } from './place-store-best';
 import { addSeamEdges, applySeamGain, cutChunkLayer, DISTRICT_SEAMS_PARAMS, DISTRICT_SEAMS_VERSION, sampleSeamColour, seamCoverage, seamOwner, solveSeamGains, type SeamCoverage, type SeamCutReport, type SeamEdges, type SeamSamples } from './pipeline-k/district-seams';
 import * as os from 'os';
 import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
+import { FACADE_UPSCALE_EXTRA_MS, FACADE_UPSCALE_MODELS, FACADE_UPSCALE_VERSION, facadeUpscaleAsked, facadeUpscaleProvenance, upscaleFacadeTextures } from './pipeline-k/facade-upscale';
 import { detailBakeProvenance, TILE_DETAIL_BAKE_VERSION, type TileDetailBakeReport } from '../../spatial/tile-detail-bake';
 import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visible-defects';
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
@@ -1322,6 +1324,10 @@ function loadMesh(files: Array<string | undefined>): RenderMesh3D {
 /** A district layer published without the kept structure's footprint (keptStructureCarver). */
 const CARVED_URL = /_around_[0-9a-f]{8}\.glb$/;
 
+/** The roads stage's extra time with the kerbs on: at Penn over 210 m their read and photo alone took 2.5 minutes, at a load of 150-300. */
+const ROAD_KERBS_EXTRA_BUDGET_MS = 360_000;
+/** And with the steps on: the inclines read, and each melted flight's two Street View views counted, four flights at a time. */
+const GROUND_STEPS_EXTRA_BUDGET_MS = 300_000;
 /** A ground layer published with the scan carved under the streets' kerbs (roadCarver). */
 const ROAD_CARVED_URL = /_road_[0-9a-f]{8}\.glb$/;
 
@@ -1489,7 +1495,9 @@ function roadCarver(cache: StageCache, roads: RoadSurface[], footprint: CarveFoo
     };
     return (layer, meta) => {
         const ground = layer.layer === 'l2' || meta.isGround === true;
-        if (!ground || meta.source !== 'Google3DTilesClay' || meta.vegetation || (meta.extra as { chunk?: number } | undefined)?.chunk !== undefined || CHUNK_URL.test(layer.url)) return layer;
+        // a chunk joined from another build (meta.extra.chunk) was carved by that build; the centre's own ground, clipped to
+        // its territory first (published as _kd0_), is carved here like any other
+        if (!ground || meta.source !== 'Google3DTilesClay' || meta.vegetation || (meta.extra as { chunk?: number } | undefined)?.chunk !== undefined) return layer;
         const c = carve(layer.url, layer.objectId, false), ct = layer.textured ? carve(layer.textured.url, layer.objectId, true) : undefined;
         if (!c && !ct) return layer;
         const rec = records.filter(x => x.objectId === layer.objectId && !x.textured).pop()?.report;
@@ -1503,6 +1511,28 @@ function roadCarver(cache: StageCache, roads: RoadSurface[], footprint: CarveFoo
             ...(note ? { provenance: { ...layer.provenance, note: layer.provenance.note ? `${layer.provenance.note}; ${note}` : note } } : {})
         };
     };
+}
+
+/** A new surface's layer (the kerbed streets, the steps) with its photo seen from above taken again from `twinFile` over the
+ *  same planar frame its texture coordinates read, at its own level; undefined when its file is gone or its texture is not
+ *  planar. */
+function recolourFromTwin(cache: StageCache, layer: StagedLayer, twinFile: string, tag: string): { url: string; bytes: number; ms: number; cached: boolean } | undefined {
+    const source = path.join(cache.modelsDir, path.basename(layer.url));
+    if (!fs.existsSync(source)) return undefined;
+    const t0 = Date.now();
+    const name = `${path.basename(layer.url, '.glb').replace(/_tw[0-9a-f]{8}$/, '')}_tw${tag}.glb`;
+    const dir = path.join(cache.dir, 'road-carve'), file = path.join(dir, name);
+    const cached = fs.existsSync(file);
+    if (!cached) {
+        const bytes = fs.readFileSync(source);
+        const frame = planarFrameOf(bytes);
+        if (!frame) return undefined;
+        const photo = renderTopDownPhoto(fs.readFileSync(twinFile), frame, { texelM: Math.max(0.05, Math.max(frame.widthM, frame.heightM) / 4096), maxPx: 4096, referenceY: frame.meanY });
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, withGlbImage(bytes, topDownJpeg(photo, 90)));
+    }
+    const pub = cache.publishFile(file, name);
+    return { url: pub.url, bytes: pub.bytes, ms: Date.now() - t0, cached };
 }
 
 /** The result's account of the active scene: what was kept and what was taken out, by object id. */
@@ -1570,7 +1600,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     const artifactId = stagedArtifactId(runId, intoActive?.id);
     const run = new StagedRun(runId, request, ctx, now, artifactId, intoActive);
     runningStages = () => STAGE_IDS.filter(id => run.summary(id).status === 'running');
-    const runner = new Runner(run, ctx, now, request.isolate ? RUN_BUDGET_MS : stagedPipelineKD(request) && !request.chunk ? CHUNKED_DISTRICT_RUN_BUDGET_MS : DISTRICT_RUN_BUDGET_MS);
+    const runner = new Runner(run, ctx, now, (request.isolate ? RUN_BUDGET_MS : stagedPipelineKD(request) && !request.chunk ? CHUNKED_DISTRICT_RUN_BUDGET_MS : DISTRICT_RUN_BUDGET_MS) + (facadeUpscaleAsked(request.steps) ? FACADE_UPSCALE_EXTRA_MS : 0));
     runner.proceduralOnly = request.procedural === true;
     // a procedural-only build never lists the other stages, not even as pending before they are skipped
     if (runner.proceduralOnly) for (const s of run.state.stages) if (!PROCEDURAL_STAGES.has(s.stage)) s.outOfScope = true;
@@ -2015,9 +2045,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             await new Promise(r => setImmediate(r));
                         }
                         const { gains, fields, report: colour } = solveSeamGains(samples, plan);
-                        // who keeps each point, the same for every chunk: ground a chunk's build never reached goes to one whose did
+                        // who keeps each point, the same for every chunk: ground a chunk's build never reached goes to one whose did.
+                        // A chunk's streets count as its surface: each chunk carved its own ground under its own streets
+                        const streets = shown.filter(l => l.layer === 'l1r' && !hiddenNow.has(l.objectId)).sort((a, b) => dist(a) - dist(b));
                         const coverage = new Map<number, SeamCoverage>();
-                        for (const g of grounds) { coverage.set(chunkOf(g), seamCoverage(read(g.url))); await new Promise(r => setImmediate(r)); }
+                        for (const g of grounds) {
+                            const c = chunkOf(g);
+                            coverage.set(c, seamCoverage([read(g.url), ...streets.filter(s => chunkOf(s) === c).map(s => read(s.url))]));
+                            await new Promise(r => setImmediate(r));
+                        }
                         const seamOwnerOf = seamOwner(plan, coverage, grounds.map(chunkOf));
                         // 2-4. each chunk's ground cut at its cell lines, snapped onto the chunks before it, its gain applied
                         const edges: SeamEdges = new Map();
@@ -2056,13 +2092,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             await new Promise(r => setImmediate(r));
                         }
                         // 5. SB-Roadie's streets (l1r): each joined with the seam band past its cell like the ground, so a street crossing
-                        // a cell line was drawn twice there. Each chunk carved its own ground under its own streets, so a street is kept
-                        // by whoever keeps the ground there (seamOwnerOf), cut exactly at the cell lines; both chunks measured it on the
-                        // same tiles, so its cut edge stays where it was measured (no snap) and its colour as drawn (no gain)
-                        const streets = shown.filter(l => l.layer === 'l1r' && !hiddenNow.has(l.objectId)).sort((a, b) => dist(a) - dist(b));
+                        // a cell line was drawn twice there. A street is kept by whoever keeps the ground there (seamOwnerOf), cut exactly
+                        // at the cell lines; both chunks measured it on the same tiles, so its cut edge stays where it was measured (no
+                        // snap) and its colour as drawn (no gain)
                         const roads: Array<{ chunk: number; objectId: string; clay: SeamCutReport; textured?: SeamCutReport }> = [];
-                        for (const s of streets) {
+                        for (const listed of streets) {
                             if (io.signal.aborted) throw io.signal.reason ?? abortError();
+                            // as it stands now: a street may have been committed again since it was listed (coloured again from a
+                            // ground committed above), and the cut keeps that
+                            const s = run.state.layers.find(l => l.objectId === listed.objectId) ?? listed;
                             const c = chunkOf(s), meta = run.layerMeta[s.objectId];
                             io.progress(`cutting chunk ${c}'s streets at its cell lines (${roads.length + 1} of ${streets.length})`);
                             const key8 = crypto.createHash('sha256').update(`${runId}:${DISTRICT_SEAMS_VERSION}:${s.url}`).digest('hex').slice(0, 8);
@@ -2105,7 +2143,26 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // the vector buildings shown past the centre build's tiles stand in only where no chunk was joined
                 if (joined === todo.length) for (const l of run.state.layers.filter(x => (x.layer === 'l0o' || (centreInCloud && x.layer === 'l0')) && !x.retired)) run.commit({ ...l, retired: true }, run.layerMeta[l.objectId]);
                 // the place store (place-store-district.ts; SCRATCHBOX_PLACE_STORE=0 off): the joined district audited, its buildings listed for the object store
-                if (placeStoreEnabled() && here) cache.writeRunNote(runId, 'place_audit', await auditDistrictForPlace({ runId, place: placeValue!, originEllipsoidalHeightM: here.originEllipsoidalHeightM, plan, layers: run.state.layers, manifests: run.objectManifests, modelsDir: cache.modelsDir, workspaceRoot: cache.workspaceRoot, request, ...(deps.vectorEvidence ? { vectorEvidence: deps.vectorEvidence } : {}), signal: io.signal, progress: m => io.progress(m) }));
+                const footprints: DistrictFootprint[] = [];
+                if (placeStoreEnabled() && here) cache.writeRunNote(runId, 'place_audit', await auditDistrictForPlace({ runId, place: placeValue!, originEllipsoidalHeightM: here.originEllipsoidalHeightM, plan, layers: run.state.layers, manifests: run.objectManifests, footprintsOut: footprints, modelsDir: cache.modelsDir, workspaceRoot: cache.workspaceRoot, request, ...(deps.vectorEvidence ? { vectorEvidence: deps.vectorEvidence } : {}), signal: io.signal, progress: m => io.progress(m) }));
+                // each building shown at its best (place-store-best.ts): one whose version here is worse than its stored one stands as that
+                // the frame the run's objects are kept in: this build's extraction, else (the centre in the cloud) the centre job's
+                const objectsFrame = tiles ? objectFrameOf(tiles.extraction) : cloudScan ? objectFrameOf(cloudScanOf(cloudScan)) : undefined;
+                if (placeStoreEnabled() && footprints.length && objectsFrame) {
+                    if (placePull) await Promise.race([placePull, new Promise(r => setTimeout(r, PLACE_STORE_PARAMS.pullWaitMs).unref())]);
+                    const best = showBestVersions({
+                        runId, frame: objectsFrame, layers: run.state.layers, manifests: run.objectManifests, footprints, store: defaultDurableAssetStore(),
+                        look: kdLookCode(process.env, request.steps), modelsDir: cache.modelsDir, outDir: path.join(cache.dir, 'district-best'), publish: (file, name) => cache.publishFile(file, name)
+                    });
+                    for (const b of best.layers) {
+                        // the layer as built is kept by the superseding one: the run's own versions are still stored (as history where worse)
+                        run.objectManifests.set(b.layer.objectId, b.manifest);
+                        run.commit(b.layer, run.layerMeta[b.original.objectId]);
+                        committed.push(b.layer);
+                        run.emit('chunks', 'running', { message: `${b.layer.layer}: ${b.layer.provenance.note?.split('; ').pop() ?? 'buildings shown from an earlier run'}`, layers: [b.layer] }, true);
+                    }
+                    cache.writeRunNote(runId, 'place_best', best.report);
+                }
                 const failed = todo.length - joined;
                 return {
                     status: failed || degradations.length ? 'degraded' : 'committed', value: { chunks: plan.chunks.length, joined, failed }, layers: committed, degradations,
@@ -2140,6 +2197,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 rebuild: { droppedNotResolvable: 0, sourceLimits: scanOut.result.sourceLimits }
             });
             // no training pairs from here: the centre job's raw scan stays in the cloud (its caches go to the training bucket)
+            // the place's versions are in the object store before this run's are offered to it (as the finish below does)
+            if (placePull) await Promise.race([placePull, new Promise(r => setTimeout(r, PLACE_STORE_PARAMS.pullWaitMs).unref())]);
             keepSceneObjects(run, cache, outcome, scan, request.query, { isolate: false });
             return outcome;
         }
@@ -3265,6 +3324,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // the swatch detail bake: the building's survey swatches (AI Beautify, one image call per station) baked into the
                 // twin's atlases as the detail band the tile cannot carry (generated); off by default, SCRATCHBOX_K_DETAIL_BAKE=1 or the node graph on
                 const detailBakeOn = kTwin && !!deps.pipelineK?.detailBake && stepOn('twin.detailBake', process.env.SCRATCHBOX_K_DETAIL_BAKE?.trim() === '1');
+                // the facade upscale: each rebuilt facade's photo given fine detail by an image model, only where its answer still
+                // matches the photo (pipeline-k/facade-upscale.ts, generated); off by default, SCRATCHBOX_K_FACADE_UPSCALE=1 or the node graph on
+                const facadeUpscaleOn = kTwin && facadeUpscaleAsked(request.steps);
                 // the view relight: the photos evened out from image-model relights of rendered views (pipeline-k/view-relight.ts);
                 // off by default, SCRATCHBOX_K_VIEW_RELIGHT=1 or the node graph on; needs the lighting model client
                 const relightClient = harmonizeOn && stepOn('twin.viewRelight', process.env.SCRATCHBOX_K_VIEW_RELIGHT?.trim() === '1') ? deps.textures?.lighting : undefined;
@@ -3339,7 +3401,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // a class shown the same candidates as one chosen before (another building, chunk or run) and of its colour takes that pick; only the rest are asked
                 const chooseSets = askSets ? async (rows: ChoiceRow[], swatches: { png: Buffer; spanM?: number }): Promise<Array<SetChoice | undefined>> => (await chooseWithMemory(rows, swatches, askSets, modelReadings ? { store: modelReadings, model: FACADE_READER_MODEL_KEY } : undefined)).picks : undefined;
                 const grammarFile = kOrthos ? path.join(kOrthos, WALL_GRAMMAR_FILE) : undefined;
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, upwardLift ? `upLift:${upwardLift}` : '', target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '', readerAsk ? `${FACADE_READER_VERSION}:${TWIN_READER_VERSION}:${JSON.stringify(FACADE_READER_PARAMS)}` : '', nameClasses ? MATERIAL_NAMING_VERSION : '', chooseSets ? MATERIAL_CHOICE_VERSION : '');
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, upwardLift ? `upLift:${upwardLift}` : '', target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', facadeUpscaleOn ? `${FACADE_UPSCALE_VERSION}:${visionAvailable ? 'image' : 'none'}` : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '', readerAsk ? `${FACADE_READER_VERSION}:${TWIN_READER_VERSION}:${JSON.stringify(FACADE_READER_PARAMS)}` : '', nameClasses ? MATERIAL_NAMING_VERSION : '', chooseSets ? MATERIAL_CHOICE_VERSION : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions']; materialClasses?: TileRefineTwin['materialClasses'] }>('textures', key, async dir => {
                     const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(upwardLift ? { upwardShadowLift: upwardLift } : {}), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0, ...(kdBuildings ? { buildingOf: districtBuildingIndex(kdBuildings) } : {}), ...(process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' && extraction.geometryGlb && fs.existsSync(extraction.geometryGlb) ? { skyContext: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)) } : {}) } } : {}), ...(relightClient ? { viewRelight: { client: relightClient, models: lightingModels(), params: viewRelightEnvParams().params, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`) } } : {}), ...roofShadowOpts, ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m), ...(chooseSets && swatches ? { choose: (rows: ChoiceRow[]) => chooseSets(rows, swatches) } : {}) }), planes, ...(planesFor ? { planesFor } : {}), ...(nameClasses ? { nameClasses } : {}) } } : {}) } : enhance || roofShadowOn ? {
                         ...(enhance ? { recreate: {
@@ -3396,6 +3458,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         if (db.report.replaced) { twinGlb = db.glb; provenance = [...provenance, detailBakeProvenance(db.report)]; }
                         io.progress(db.report.replaced ? `swatch detail baked into ${db.report.replaced} of ${db.report.images} atlases (${Math.round(100 * db.report.coverage)}% of the surface, generated)` : `no swatch detail baked: ${db.report.skipped}`);
                         cache.writeRunNote(runId, 'pipeline_k_detail_bake', { layer: target.layer.layer, ...db.report });
+                    }
+                    if (kTwin && !facadeUpscaleOn) logStep('twin.facadeUpscale', 'skipped');
+                    if (facadeUpscaleOn) {
+                        logStep('twin.facadeUpscale', 'running');
+                        const fu = await upscaleFacadeTextures(twinGlb, { ...(visionAvailable ? { client: genAiEnhanceClient(visionAvailable.client) } : {}), models: FACADE_UPSCALE_MODELS, ...(modelReadings ? { store: modelReadings } : {}), signal: io.signal, progress: (m: string) => io.progress(m) });
+                        logStep('twin.facadeUpscale', fu.report.upscaled ? 'done' : 'skipped');
+                        if (fu.report.upscaled) { twinGlb = fu.glb; provenance = [...provenance, facadeUpscaleProvenance(fu.report)]; }
+                        io.progress(fu.report.upscaled ? `facade upscale: ${fu.report.upscaled} of ${fu.report.facades} rebuilt facades given fine detail (${fu.report.calls} image calls, ${fu.report.cached} tiles saved before; generated)` : `no facade upscaled: ${fu.report.skipped}`);
+                        cache.writeRunNote(runId, 'pipeline_k_facade_upscale', { layer: target.layer.layer, ...fu.report });
                     }
                     fs.writeFileSync(path.join(dir, 'twin.glb'), twinGlb);
                     return { value: { rungShares: twin.rungShares, provenance, ladderRung: twin.ladderRung, triangles: twin.triangles, ...(twin.harmonize ? { harmonize: twin.harmonize } : {}), ...(twin.materialRegions ? { materialRegions: twin.materialRegions } : {}), ...(twin.materialClasses ? { materialClasses: twin.materialClasses } : {}) } };
@@ -3796,7 +3867,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             const stations = roads.reduce((n, r) => n + r.stations.length, 0);
                             const measuredKerbShare = stations ? roads.reduce((n, r) => n + r.measuredKerbShare * r.stations.length, 0) / stations : 0;
                             io.progress(`colouring ${mesh.stats.samples} street samples from the tile photo seen from above`);
-                            const photo = renderTopDownPhoto(fs.readFileSync(tileForRoads), mesh.uvFrame, { texelM: 0.1, maxPx: 4096 });
+                            const photo = renderTopDownPhoto(fs.readFileSync(tileForRoads), mesh.uvFrame, { texelM: 0.1, maxPx: 4096, referenceY: (mesh.minY + mesh.maxY) / 2 });
                             const kerbs = { ...model.stats, triangles: mesh.stats.triangles, footprintM2: mesh.stats.footprintM2, ms: Date.now() - t0 };
                             // the legacy stats the layer's note and the tool read, from the same streets
                             const legacy = buildRoadMesh(roads, roadParams).stats;
@@ -3851,6 +3922,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             };
             await runner.stage<RoadStageValue>({
                 id: 'roads',
+                // the kerbs are read again on the scan's triangles and coloured from above: 2-5 minutes more over a 200 m district;
+                // the steps are found and read on it, their melted flights counted on Street View
+                ...(kerbsOn || stepsOn ? { budgetMs: STAGES.roads.budgetMs + (kerbsOn ? ROAD_KERBS_EXTRA_BUDGET_MS : 0) + (stepsOn ? GROUND_STEPS_EXTRA_BUDGET_MS : 0) } : {}),
                 run: async io => {
                     const r = roadsOn && centrelines.length ? await roadsRun(io) : undefined;
                     const st = stepsOn ? await stepsRun(io) : undefined;
@@ -3869,6 +3943,39 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 run.emit('roads', 'failed', { reason: errorMessage(err) });
                 return undefined;
             });
+            // the new surfaces coloured again from the ground's textured twin once it is in: its de-lit photo, seen from above, is
+            // what the ground around them shows (the tile photo they were first coloured with is darker), so they meet it without a
+            // seam of colour; the twin they read is the one before the carve, which still has the ground under them
+            // only this build's own: in a chunked district a joined chunk's streets come coloured by their own build, and a joined
+            // or seam-cut ground covers its own cell only
+            const own = (l: StagedLayer) => (run.layerMeta[l.objectId]?.extra as { chunk?: number } | undefined)?.chunk === undefined;
+            const ownSurfaces = () => run.state.layers.filter(x => !x.retired && x.stage === 'roads' && (x.layer === 'l1r' || x.layer === 'l1s') && own(x));
+            if ((kerbsOn || stepsOn) && ownSurfaces().length) {
+                const seen = new Set<string>(), records: Array<{ layer: string; twin: string; ms: number; cached: boolean } | { layer: string; twin: string; failed: string }> = [];
+                const recolour = (ground: StagedLayer) => {
+                    const meta = run.layerMeta[ground.objectId];
+                    if (!(ground.layer === 'l2' || meta?.isGround) || !ground.textured?.url || meta?.vegetation || !own(ground) || !(ground.stage === 'remesh' || ground.stage === 'tiles')) return;
+                    const twin = path.join(cache.modelsDir, path.basename(ground.textured.url).replace(/_road_[0-9a-f]{8}(?=\.glb$)/, ''));
+                    if (seen.has(twin) || !fs.existsSync(twin)) return;
+                    seen.add(twin);
+                    const tag = crypto.createHash('sha256').update(path.basename(twin)).digest('hex').slice(0, 8);
+                    for (const l of ownSurfaces()) {
+                        try {
+                            const r = recolourFromTwin(cache, l, twin, tag);
+                            if (!r) continue;
+                            records.push({ layer: l.layer, twin: path.basename(twin), ms: r.ms, cached: r.cached });
+                            const why = `coloured again from the ground's textured twin seen from above (its de-lit photo), so it meets the ground around it without a seam of colour`;
+                            run.commit({ ...l, url: r.url, bytes: r.bytes, provenance: { ...l.provenance, ...(l.provenance.note?.includes(why) ? {} : { note: l.provenance.note ? `${l.provenance.note}; ${why}` : why }) } }, run.layerMeta[l.objectId]);
+                        } catch (err) {
+                            if (isAbort(err)) throw err;
+                            records.push({ layer: l.layer, twin: path.basename(twin), failed: errorMessage(err) });
+                        }
+                    }
+                    cache.writeRunNote(runId, 'road_recolour', { records });
+                };
+                for (const l of run.state.layers.filter(x => !x.retired)) recolour(l);
+                run.commitListeners.add(recolour);
+            }
             // the kerbed streets' layer, and the scan carved under them from here on (the ground already standing carved now)
             function commitKerbedRoads(v: NonNullable<RoadStageValue>, entry: { dir: string; cached: boolean; builtAtMs: number }, pub: { url: string; bytes: number; path: string }, key: string, key8: string) {
                 const k = v.kerbs!;
@@ -3942,7 +4049,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
                     }
                     const uvFrame = { x0, z0, widthM: Math.max(1, x1 - x0), heightM: Math.max(1, z1 - z0) };
-                    const photo = renderTopDownPhoto(fs.readFileSync(tileForSteps), uvFrame, { texelM: 0.05, maxPx: 4096 });
+                    const photo = renderTopDownPhoto(fs.readFileSync(tileForSteps), uvFrame, { texelM: 0.05, maxPx: 4096, referenceY: found.flights.reduce((t, f) => t + (f.footY + f.topY) / 2, 0) / found.flights.length });
                     const mesh = buildStepsMesh(found.flights, undefined, uvFrame);
                     const flights = found.flights.map(f => ({ id: f.id, kind: f.kind, slope: f.slope, totalRiseM: f.topY - f.footY, lengthM: f.sTop - f.sFoot, widthM: f.bMax - f.bMin, landings: f.landings.length, ...(f.count !== undefined ? { count: f.count, riseM: f.riseM, runEachM: f.runEachM, countSource: f.countSource, countNote: f.countNote } : {}) }));
                     writeStepsGlb(path.join(dir, 'steps.glb'), mesh, { stats: mesh.stats, flights }, { jpeg: topDownJpeg(photo, 90), width: photo.width, height: photo.height });

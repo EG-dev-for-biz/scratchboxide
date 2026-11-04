@@ -32,8 +32,9 @@
  *     it, else a chunk whose ground does (seamCoverage, read from every chunk first): a building far larger than a cell can
  *     reach past where its own chunk's extraction stopped, and its ground there must not be handed to a chunk that has none.
  *     SB-Roadie's streets (layer l1r) are cut the same way, by the same owner: each chunk carved its own ground under its
- *     own streets, so a street belongs to whoever keeps the ground beside it. Both chunks measured one street on the same
- *     tiles, so a street's cut edge is not snapped (3) and its colour not levelled (4, 5).
+ *     own streets, so a chunk's coverage is read from its ground and its streets together (with the ground alone, a street
+ *     is no chunk's surface, and a neighbour whose ground was left whole under it would take it). Both chunks measured one
+ *     street on the same tiles, so a street's cut edge is not snapped (3) and its colour not levelled (4, 5).
  *  3. Snap: chunks are cut in a fixed order; each later chunk's vertices on a cell line are moved, along the line and up
  *     or down, onto the nearest edge an earlier chunk left on that line within `snapM`, so the two cuts meet on one curve
  *     (the step between two independent remeshes, a few centimetres, is closed; the cut edges of the earlier chunk stay).
@@ -57,7 +58,7 @@ import { chunkOwner, DISTRICT_CHUNKS_PARAMS, type DistrictChunkPlan } from './di
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- glTF JSON is untyped */
 
-export const DISTRICT_SEAMS_VERSION = 'district-seams/4';  // 3: the ground cut exactly on the district's circle; 4: SB-Roadie's streets cut by the same owner
+export const DISTRICT_SEAMS_VERSION = 'district-seams/4';  // 3: the ground cut exactly on the district's circle; 4: SB-Roadie's streets cut by the same owner, read from each chunk's ground and streets
 
 export const DISTRICT_SEAMS_PARAMS = {
     /** How far a later chunk's cut vertex may move onto an earlier chunk's cut edge (m): the step two remeshes leave. */
@@ -293,18 +294,22 @@ export function cutChunkLayer(bytes: Uint8Array, plan: DistrictChunkPlan, index:
 export interface SeamCoverage { x0: number; z0: number; nx: number; nz: number; cellM: number; bits: Uint8Array }
 
 /**
- * Where a chunk's ground (as joined) surely has surface: every grid cell whose middle lies under one of its triangles, or
- * that holds one of its corners, and whose eight neighbours do too. Read once per chunk, before any is cut.
+ * Where a chunk's surfaces (as joined: its ground, and its streets, which its own build carved its ground under) surely
+ * have surface: every grid cell whose middle lies under one of their triangles, or that holds one of their corners, and
+ * whose eight neighbours do too. Read once per chunk, before any is cut.
  */
-export function seamCoverage(bytes: Uint8Array, P: DistrictSeamsParams = DISTRICT_SEAMS_PARAMS): SeamCoverage {
-    const g = parseGlbBytes(bytes), C = P.coverageM;
+export function seamCoverage(bytes: Uint8Array | Uint8Array[], P: DistrictSeamsParams = DISTRICT_SEAMS_PARAMS): SeamCoverage {
+    const C = P.coverageM;
     const prims: Array<{ X: Float64Array; I?: Float64Array }> = [];
     let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
-    for (const m of g.json.meshes ?? []) for (const p of m.primitives ?? []) {
-        if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined) continue;
-        const X = readAccessor(g, p.attributes.POSITION).data;
-        prims.push({ X, ...(p.indices !== undefined ? { I: readAccessor(g, p.indices).data } : {}) });
-        for (let i = 0; i < X.length; i += 3) { x0 = Math.min(x0, X[i]); x1 = Math.max(x1, X[i]); z0 = Math.min(z0, X[i + 2]); z1 = Math.max(z1, X[i + 2]); }
+    for (const b of Array.isArray(bytes) ? bytes : [bytes]) {
+        const g = parseGlbBytes(b);
+        for (const m of g.json.meshes ?? []) for (const p of m.primitives ?? []) {
+            if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined) continue;
+            const X = readAccessor(g, p.attributes.POSITION).data;
+            prims.push({ X, ...(p.indices !== undefined ? { I: readAccessor(g, p.indices).data } : {}) });
+            for (let i = 0; i < X.length; i += 3) { x0 = Math.min(x0, X[i]); x1 = Math.max(x1, X[i]); z0 = Math.min(z0, X[i + 2]); z1 = Math.max(z1, X[i + 2]); }
+        }
     }
     if (!(x1 >= x0)) return { x0: 0, z0: 0, nx: 0, nz: 0, cellM: C, bits: new Uint8Array(0) };
     x0 = Math.floor(x0 / C) * C; z0 = Math.floor(z0 / C) * C;
@@ -345,9 +350,11 @@ const covers = (c: SeamCoverage | undefined, x: number, z: number) => {
 };
 
 /**
- * Who keeps the ground at a plan point, the same for every chunk: its owner (chunkOwner) when the owner's ground reaches
- * it; else the chunk whose cell it lies in, when that one's does (a building that reaches far out of its own cell, past
- * where its chunk's extraction reached); else the first chunk in `order` whose ground does; else the owner (nobody has it).
+ * Who keeps the ground (and the streets) at a plan point, the same for every chunk: its owner (chunkOwner) when the owner's
+ * surfaces reach it; else the chunk whose cell it lies in, when that one's do (a building that reaches far out of its own
+ * cell, past where its chunk's extraction reached); else the first chunk in `order` whose surfaces do; else the owner
+ * (nobody has it). `coverage` is each chunk's seamCoverage of its ground and its streets together: with the ground alone,
+ * a street's carved ground reads as no chunk's surface, and a neighbour whose ground was left whole there takes the street.
  */
 export function seamOwner(plan: DistrictChunkPlan, coverage: Map<number, SeamCoverage>, order: number[]): (x: number, z: number) => number {
     const owner = chunkOwner(plan), half = plan.cellM / 2;
