@@ -34,3 +34,17 @@ Body styles: CR-V, WR-V, Seltos, Tiguan and Polestar 3 are SUVs or crossovers; t
 the Odyssey and Carnival minivans. The Odyssey model is a low-detail one: its roof start (read off its roof rails)
 is an outlier. The tyre fit reads a few per cent high on large wheels: the Polestar 3 model gives 0.83 m where
 its 265/45 R21 tyre is 0.77 m; take tyre sizes from the specification sheet.
+
+## Cabin section and side glass
+
+Widths are of the cabin through the middle of the wheelbase, as a share of body width W; side-glass ends are along
+the car from the axle named (positive forward). The Odyssey's glass ends read off its low-detail mesh.
+
+| | CR-V 26 | Odyssey 26 | WR-V | Carnival | Seltos 22 | Polestar3 27 | Golf GTI 25 | Tiguan 25 |
+|---|---|---|---|---|---|---|---|---|
+| Cabin width at the beltline / W | 0.88 | 0.91 | 0.86 | 0.87 | 0.88 | 0.90 | 0.91 | 0.90 |
+| Cabin width halfway up the glass / W | 0.78 | 0.80 | 0.74 | 0.78 | 0.76 | 0.75 | 0.77 | 0.77 |
+| Cabin width 5 cm under the roof / W | 0.67 | 0.52 | 0.62 | 0.62 | 0.66 | 0.64 | 0.65 | 0.64 |
+| Side glass front end from the front axle | -0.70 | -0.40 | -0.51 | -0.50 | -0.64 | -0.91 | -0.61 | -0.68 |
+| Side glass rear end from the rear axle | -0.81 | -0.91 | -0.43 | -0.83 | -0.58 | -0.78 | +0.07 | +0.02 |
+| Rear pillar length at the beltline | 0.13 | 0.23 | 0.25 | 0.19 | 0.20 | 0.13 | 0.71 | 0.83 |

@@ -80,3 +80,25 @@
 2. New chat: "Build a 3D model of a 2025 Volkswagen Golf GTI in Kings Red Metallic."
 3. The agent loads real-car-builder, searches for the published dimensions and calls build_3d_object_from_reference
    with a short request, dimensionsHintMeters and buildNotes; read the result's size and the tyre and axle parts.
+
+## 6. Shape pass (2026-11-04, afternoon)
+
+The skill's body and cabin plan rewritten from the v2 specs: the cabin was a constant-width box (exponent 5), the
+body a slab (exponent 5.5), the ends full-height walls and the C-pillar a 0.35 m panel. New cabin and side-glass
+measurements from the eight models went into the reference (cabin about 0.90 / 0.77 / 0.65 W at the beltline,
+halfway up the glass and 5 cm under the roof; rear pillar 0.13-0.25 m where the side glass runs past the rear axle,
+0.71-0.83 m where it stops at it).
+
+* **v3 (Golf):** cabin centred below the beltline per the first rewrite: the cabin tapered, but its section reached
+  0.02 m and showed through the arches and under the sills; the C-pillar, a panel laid on the cabin, stood off it as
+  a fin.
+* **v4:** the cabin built like the body (its bottom at the arch tops, its top on the roofline, width 0.88 W,
+  exponent 3) and the pillars as slices of the cabin. Golf: 2.088 x 1.469 x 4.360 m, wheelbase 2.631, cabin about
+  0.81 W tapering to 0.62 W at the roof, C-pillar 0.65 m at the beltline, nothing through the arches; by eye no
+  better than v2 (the cabin reads as one dark slab, the pillar paint too dark to show; the app check 62/100, "like
+  a stretched wagon"). Polestar 3: 4.99 x 2.17 x 1.63 m, wheelbase 2.985, the paint now [0.62, 0.63, 0.64] (the
+  production model's Magnesium; v2 [0.16, 0.17, 0.18]), the cabin tapering in the front view and the roof sloping
+  to the tail; the nose too pointed in plan and the front bumper a block. The agent's own specJson follow-ups on
+  the Polestar failed once and were still running when this was recorded.
+* **Next:** a blueprint fit (orthographic views of the car scaled to its published size, silhouettes read into
+  buildNotes, a side-view comparison), from the blueprint-matching method of car modelling tutorials.
