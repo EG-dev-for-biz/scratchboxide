@@ -71,6 +71,9 @@ describe('loft sections', () => {
         expect(roof.every(r => r.z >= -1.0001 && r.z <= 0.5001)).toBe(true);
         expect(Math.min(...roof.flatMap(r => r.points.map(p => p[1])))).toBeCloseTo(1.46, 2);
         expect(loftSections(BLUEPRINT, { yFromMeters: 1.6 })).toEqual([]);
+        // glass that stops under a 4 cm roof band: its top is 4 cm under the outline, so the two never share a surface
+        const glass = loftSections(BLUEPRINT, { yFromMeters: 0.97, clearTopMeters: 0.04 });
+        expect(Math.max(...glass.find(r => Math.abs(r.z) < 0.03)!.points.map(p => p[1]))).toBeCloseTo(1.46, 2);
     });
 });
 
@@ -101,7 +104,7 @@ describe('specs with fromBlueprint parts', () => {
     });
 
     it('lofts the same rings in the engine as in TypeScript, to the last digit', async () => {
-        const looks = [{}, { yToMeters: 1.0, clearances: ARCHES }, { fromTopMeters: 0.04, zFromMeters: -1.0, zToMeters: 0.5, insetMeters: -0.004 }];
+        const looks = [{}, { yToMeters: 1.0, clearances: ARCHES }, { fromTopMeters: 0.04, zFromMeters: -1.0, zToMeters: 0.5, insetMeters: -0.004 }, { yFromMeters: 0.97, clearTopMeters: 0.04, insetMeters: 0.015 }];
         const run = await NativePythonRunnerService.getInstance().runScript(
             `import json\nimport scratchbox as sb\nprint("RINGS" + json.dumps([sb.object_spec.loft_sections(${JSON.stringify(BLUEPRINT)}, l) for l in ${JSON.stringify(looks)}]))\n`,
             { timeoutMs: 120_000, outputDir: TMP });
@@ -115,7 +118,7 @@ describe('specs with fromBlueprint parts', () => {
         expect(sweepOf(objectBuildSpecJsonSchema({ materials: true })).properties.fromBlueprint).toBeUndefined();
         expect(sweepOf(objectBuildSpecJsonSchema({ materials: true })).required).toEqual(['controlPoints', 'closedLoop', 'smoothing', 'profile']);
         const withBp = sweepOf(objectBuildSpecJsonSchema({ materials: true, blueprint: true }));
-        expect(Object.keys(withBp.properties.fromBlueprint.properties)).toEqual(['yFromMeters', 'yToMeters', 'fromTopMeters', 'zFromMeters', 'zToMeters', 'insetMeters', 'clearances']);
+        expect(Object.keys(withBp.properties.fromBlueprint.properties)).toEqual(['yFromMeters', 'yToMeters', 'fromTopMeters', 'clearTopMeters', 'zFromMeters', 'zToMeters', 'insetMeters', 'clearances']);
         expect(withBp.required).toEqual([]);
     });
 

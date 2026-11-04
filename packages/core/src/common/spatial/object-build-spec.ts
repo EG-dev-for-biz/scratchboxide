@@ -328,6 +328,7 @@ function withBlueprintSweeps(base: any): any {
                                         yFromMeters: m('Lowest height kept.'),
                                         yToMeters: m('Highest height kept.'),
                                         fromTopMeters: m('Keep only this depth under the outline\'s top at each station (a roof panel).'),
+                                        clearTopMeters: m('Stop this far under the outline\'s top at each station (glass under a roof panel lofted above it).'),
                                         zFromMeters: m('Rearmost station kept.'),
                                         zToMeters: m('Frontmost station kept.'),
                                         insetMeters: m('Shrink the half width by this much; negative grows it.'),

@@ -1589,6 +1589,8 @@ def loft_sections(outlines, loft=None):
             hi = min(hi, loft["yToMeters"])
         if loft.get("fromTopMeters") is not None:
             lo = max(lo, st["top"] - loft["fromTopMeters"])
+        if loft.get("clearTopMeters") is not None:
+            hi = min(hi, st["top"] - loft["clearTopMeters"])
         for c in loft.get("clearances") or []:
             dz = z - c["zMeters"]
             if abs(dz) < c["radiusMeters"]:

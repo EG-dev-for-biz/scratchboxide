@@ -141,12 +141,14 @@ and keep the operators for the rest. In buildNotes, ask for exactly these parts 
 
 - **body**: fromBlueprint {yToMeters: beltline + 0.02, clearances: one circle per axle, zMeters the axle's z, yMeters
   the hub height R, radiusMeters R + the arch gap (0.03-0.05)}: the lower body with round wheel arches.
-- **glasshouse**: fromBlueprint {yFromMeters: beltline - 0.02}, dark glass: the cabin as the drawings shape it.
+- **glasshouse**: fromBlueprint {yFromMeters: beltline - 0.02, insetMeters: 0.015, clearTopMeters: 0.03}, dark glass:
+  the cabin as the drawings shape it, set 1.5 cm in so the windows sit behind the pillars, and stopping under the roof
+  panel (a glass top sharing the roof's surface flickers against it).
 - **pillars**: fromBlueprint {yFromMeters: beltline - 0.02, zFromMeters, zToMeters: the pillar's span, insetMeters:
   -0.005}, in body colour (or gloss black as the picture shows): the B-pillar and the C or D pillar spans from
   section 4's measurements. They lie on the cabin's own surface, so they cannot stand off it.
-- **roof**: fromBlueprint {fromTopMeters: 0.03, zFromMeters, zToMeters: the roof span, insetMeters: -0.004}, in body
-  colour, unless the picture shows a glass or black roof.
+- **roof**: fromBlueprint {fromTopMeters: 0.04, zFromMeters, zToMeters: the roof span, insetMeters: -0.004}, in body
+  colour (gloss black or glass as the picture shows): 4 cm deep, so it overlaps the glasshouse's top by 1 cm.
 - Wheels, axles, lamps, grille, mirrors and handles as in the plan below (steps 7-9); skip its steps 1-6.
 
 Without a blueprint, write this plan into buildNotes with the numbers filled in:

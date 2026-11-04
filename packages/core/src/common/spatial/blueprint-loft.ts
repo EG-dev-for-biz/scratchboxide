@@ -50,6 +50,8 @@ export interface BlueprintLoft {
     yToMeters?: number;
     /** Keep only heights within this many metres of the side outline's top at each station (a roof panel). */
     fromTopMeters?: number;
+    /** Stop this many metres under the side outline's top at each station (glass under a roof panel lofted above it). */
+    clearTopMeters?: number;
     /** Keep only stations from zFromMeters to zToMeters along the length. */
     zFromMeters?: number;
     zToMeters?: number;
@@ -124,6 +126,7 @@ export function loftSections(outlines: ObjectOutlines, loft: BlueprintLoft = {})
         if (loft.yFromMeters !== undefined) lo = Math.max(lo, loft.yFromMeters);
         if (loft.yToMeters !== undefined) hi = Math.min(hi, loft.yToMeters);
         if (loft.fromTopMeters !== undefined) lo = Math.max(lo, s.top - loft.fromTopMeters);
+        if (loft.clearTopMeters !== undefined) hi = Math.min(hi, s.top - loft.clearTopMeters);
         for (const c of loft.clearances ?? []) {
             const dz = s.z - c.zMeters;
             if (Math.abs(dz) < c.radiusMeters) lo = Math.max(lo, c.yMeters + Math.sqrt(c.radiusMeters * c.radiusMeters - dz * dz));
@@ -156,12 +159,13 @@ export function validateBlueprintLoft(loft: unknown, where: string): string[] {
     const errors: string[] = [];
     if (typeof loft !== 'object' || loft === null || Array.isArray(loft)) return [`${where}: sweep.fromBlueprint must be an object`];
     const l = loft as Record<string, unknown>;
-    for (const k of ['yFromMeters', 'yToMeters', 'fromTopMeters', 'zFromMeters', 'zToMeters', 'insetMeters']) {
+    for (const k of ['yFromMeters', 'yToMeters', 'fromTopMeters', 'clearTopMeters', 'zFromMeters', 'zToMeters', 'insetMeters']) {
         if (l[k] !== undefined && !isNum(l[k])) errors.push(`${where}: sweep.fromBlueprint.${k} must be a number of metres`);
     }
     if (isNum(l.yFromMeters) && isNum(l.yToMeters) && l.yToMeters <= l.yFromMeters) errors.push(`${where}: sweep.fromBlueprint.yToMeters must be above yFromMeters`);
     if (isNum(l.zFromMeters) && isNum(l.zToMeters) && l.zToMeters <= l.zFromMeters) errors.push(`${where}: sweep.fromBlueprint.zToMeters must be ahead of zFromMeters`);
     if (isNum(l.fromTopMeters) && l.fromTopMeters <= 0) errors.push(`${where}: sweep.fromBlueprint.fromTopMeters must be greater than 0`);
+    if (isNum(l.clearTopMeters) && l.clearTopMeters <= 0) errors.push(`${where}: sweep.fromBlueprint.clearTopMeters must be greater than 0`);
     if (l.clearances !== undefined) {
         if (!Array.isArray(l.clearances) || l.clearances.length > 16) {
             errors.push(`${where}: sweep.fromBlueprint.clearances must be at most 16 circles`);
