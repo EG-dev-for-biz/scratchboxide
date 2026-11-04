@@ -60,6 +60,7 @@ import { implausibleLayerBounds } from '../../3d-engine/layer-bounds-guard';
 import { errorMessage } from '../gemini-client';
 import { materialModeOf, withStagedMaterialMode, type StagedMaterialModeFields } from '../../../browser/generative-canvas/primitives/scene3d/stagedBuild/texturedTwins';
 import { OBJECT_BUILD_SOURCE, type BuiltObjectRecord, type ObjectBuildSpec, type Vec3 } from '../../../common/spatial/object-build-spec';
+import { validateOutlines, type ObjectOutlines } from '../../../common/spatial/blueprint-loft';
 
 export const OBJECT_REFERENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
@@ -89,6 +90,10 @@ export const OBJECT_REFERENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'ARRAY',
                     items: { type: 'NUMBER' },
                     description: 'Optional [width, height, depth] in metres when the user gave a size, or the object is a real, catalogued thing whose published size you know (new builds only; with specJson, set sizes in the spec). It is the overall extent of everything built, mirrors and other protrusions included, and a build that misses it by more than 3 % on any axis is revised toward it.'
+                },
+                blueprintPath: {
+                    type: 'STRING',
+                    description: 'Optional, new builds only: the blueprintPath object_blueprint_outlines returned for this object. The spec then carries its outlines, and the main masses can be lofted from them (sweep.fromBlueprint), so they follow the drawings section by section; a later specJson keeps them.'
                 },
                 buildNotes: {
                     type: 'STRING',
@@ -1055,6 +1060,18 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
             if (dimensions === 'invalid') return failed('dimensionsHintMeters must be three positive numbers [width, height, depth] in metres.');
             if (args.buildNotes !== undefined && args.buildNotes !== null && typeof args.buildNotes !== 'string') return failed('buildNotes must be text.');
             const buildNotes = typeof args.buildNotes === 'string' && args.buildNotes.trim() ? args.buildNotes.trim() : undefined;
+            let blueprint: ObjectOutlines | undefined;
+            if (typeof args.blueprintPath === 'string' && args.blueprintPath.trim()) {
+                const file = path.resolve(ctx.workspaceRoot || process.cwd(), args.blueprintPath.trim());
+                if (!file.startsWith(path.resolve(ctx.workspaceRoot || process.cwd()) + path.sep) || !fs.existsSync(file)) return failed(`No blueprint at ${args.blueprintPath}.`);
+                try {
+                    blueprint = JSON.parse(fs.readFileSync(file, 'utf8')).outlines;
+                } catch (err) {
+                    return failed(`${args.blueprintPath} is not a blueprint: ${errorMessage(err)}`);
+                }
+                const problems = validateOutlines(blueprint);
+                if (problems.length) return failed(`${args.blueprintPath} is not a blueprint: ${problems.join('; ')}`);
+            }
             let givenSpec: unknown;
             if (args.specJson !== undefined && args.specJson !== null && args.specJson !== '') {
                 if (typeof args.specJson !== 'string') return failed('specJson must be the spec as JSON text.', { stage: 'build-spec' });
@@ -1065,6 +1082,7 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                 }
                 if (dimensions) return failed('dimensionsHintMeters is for new builds; with specJson, set the sizes in the spec itself.', { stage: 'build-spec' });
                 if (buildNotes) return failed('buildNotes is for new builds; with specJson, make the change in the spec itself.', { stage: 'build-spec' });
+                if (blueprint) return failed('blueprintPath is for new builds; a spec from a blueprint build already carries its outlines.', { stage: 'build-spec' });
             }
             const location = typeof args.location === 'string' && args.location.trim() ? args.location.trim() : undefined;
             const placementArgs = parsePlacement(args.placement);
@@ -1235,6 +1253,7 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                             requestedModel: ctx.request?.model || undefined,
                             dimensionsHintMeters: dimensions,
                             ...(buildNotes ? { buildNotes } : {}),
+                            ...(blueprint ? { blueprint } : {}),
                             clay,
                             signal: buildSignal,
                             reportProgress: ctx.reportProgress,

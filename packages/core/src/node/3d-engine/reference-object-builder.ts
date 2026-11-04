@@ -83,6 +83,7 @@ import { renderReviewViews } from './visual-review';
 import { materialPreviewMeshes, renderMaterialPreview } from './material-preview-render';
 import { downscaleForVision } from '../vision-image-downscale';
 import { finalImagePart } from '../google-media-generation-service';
+import type { ObjectOutlines } from '../../common/spatial/blueprint-loft';
 import { generateStyleDnaImage, studioMcpConfigFromEnv, type StudioImagePresets } from '../scratchbox-studio/studio-mcp-client';
 
 /** Nano Banana Lite: the reference model for clay builds, and when the Style DNA source is not configured or fails. */
@@ -138,6 +139,11 @@ export interface ReferenceObjectBuildRequest {
      * reference picture or the comparison, and they win over the picture where the two disagree.
      */
     buildNotes?: string;
+    /**
+     * The object's blueprint outlines (object_blueprint_outlines): every spec read for this build carries them, and
+     * root sweeps may be lofted from them (fromBlueprint) in place of control points and profile keys.
+     */
+    blueprint?: ObjectOutlines;
     /**
      * True when the user asked for clay (untextured grey): the reference is drawn as clay, no materials are read and
      * every part is studio clay. Otherwise each part gets the material read from a full-colour reference.
@@ -552,7 +558,7 @@ export function materialConventions(): string {
 }
 
 /** The rules every spec follows. Sent with the first request and again with every revision, which is stateless. */
-export function specConventions(dimensionsHintMeters?: Vec3, options: { materials?: boolean; notes?: string } = {}): string {
+export function specConventions(dimensionsHintMeters?: Vec3, options: { materials?: boolean; notes?: string; blueprint?: boolean } = {}): string {
     const size = dimensionsHintMeters
         ? `The user gave its size as about ${dimensionsHintMeters.map(d => `${d} m`).join(' x ')} (width x height x depth).`
         : 'Size it to its real-world scale.';
@@ -574,6 +580,9 @@ export function specConventions(dimensionsHintMeters?: Vec3, options: { material
         '- Spend parts on the main mass first, then the secondary assemblies, then small details; use as many parts as the object needs.',
         ...(options.materials ? [materialConventions()] : []),
         `- observations: short notes on proportions, counts and how the parts join${options.materials ? ', and the materials you see' : ''}.`,
+        ...(options.blueprint ? [
+            '- fromBlueprint: this object has a blueprint (its side, plan and front outlines at scale). A root sweep may give fromBlueprint in place of controlPoints, closedLoop, smoothing and profile: it is lofted straight along Z through the blueprint\'s stations, each section the blueprint\'s outline there (between the side outline\'s bottom and top, no wider than the plan, and at each height no wider than the front outline), so the part follows the drawings exactly. Narrow the slice with yFromMeters / yToMeters (a height band, e.g. the body below the beltline and the glasshouse above it), fromTopMeters (a thin band under the top, e.g. a roof panel), zFromMeters / zToMeters (a span along the length, e.g. a pillar), insetMeters (narrower; negative wider) and clearances (circles the underside is lifted over, e.g. a wheel arch: the hub\'s z and height and the tyre radius plus the arch gap). Use it for the main masses; build wheels, lamps, mirrors and other details with the usual operators.'
+        ] : []),
         ...(options.notes?.trim() ? [
             '- A part the build notes place at object coordinates is a root part at exactly those coordinates (absolute, not attached), overlapping the parts it joins by a few centimetres: roots that overlap or touch count as one piece in expectedBodies. Attach only the details whose place the notes give relative to another part.',
             '',
@@ -583,7 +592,7 @@ export function specConventions(dimensionsHintMeters?: Vec3, options: { material
     ].join('\n');
 }
 
-export function buildSpecPrompt(request: string, dimensionsHintMeters?: Vec3, options: { materials?: boolean; notes?: string } = {}): string {
+export function buildSpecPrompt(request: string, dimensionsHintMeters?: Vec3, options: { materials?: boolean; notes?: string; blueprint?: boolean } = {}): string {
     return [
         `The image is a reference picture of: ${request}`,
         `Reverse-engineer it into a build spec for a procedural modeller${options.materials ? ', with the surface material of every part' : ''}. Reply with JSON matching the schema.`,
@@ -592,9 +601,15 @@ export function buildSpecPrompt(request: string, dimensionsHintMeters?: Vec3, op
     ].join('\n');
 }
 
+/** The spec without its blueprint outlines (the build carries them; a prompt does not need them again). */
+function withoutOutlines(spec: ObjectBuildSpec): ObjectBuildSpec {
+    const { blueprint: _b, ...rest } = spec;
+    return rest;
+}
+
 /** The spec without its material blocks: what the shape comparison needs to know. */
 function shapeOnly(spec: ObjectBuildSpec): ObjectBuildSpec {
-    return { ...spec, parts: spec.parts.map(({ material: _m, ...part }) => part) };
+    return { ...withoutOutlines(spec), parts: spec.parts.map(({ material: _m, ...part }) => part) };
 }
 
 export function buildComparisonPrompt(request: string, spec: ObjectBuildSpec): string {
@@ -610,7 +625,7 @@ export function buildComparisonPrompt(request: string, spec: ObjectBuildSpec): s
 /** How a patch reply is written, for the revision and correction prompts. */
 const PATCH_REPLY_RULES = 'Reply with only what changes, as JSON matching the schema: in parts, each part you add or change, complete (it replaces the part with the same id; a new id adds a part); in removePartIds, the ids of parts to drop; boundingMeters, expectedBodies or observations only when they change. Parts you leave out stay exactly as they are.';
 
-export function buildRevisionPrompt(request: string, spec: ObjectBuildSpec, problems: string[], dimensionsHintMeters?: Vec3, options: { materials?: boolean; patch?: boolean; notes?: string } = {}): string {
+export function buildRevisionPrompt(request: string, spec: ObjectBuildSpec, problems: string[], dimensionsHintMeters?: Vec3, options: { materials?: boolean; patch?: boolean; notes?: string; blueprint?: boolean } = {}): string {
     return [
         `Image 1 is the reference picture of: ${request}. Image 2 is a clay render of the current build.`,
         options.patch
@@ -621,7 +636,7 @@ export function buildRevisionPrompt(request: string, spec: ObjectBuildSpec, prob
         '',
         `Problems:\n${problems.map(p => `- ${p}`).join('\n')}`,
         '',
-        `Current spec:\n${JSON.stringify(spec)}`
+        `Current spec:\n${JSON.stringify(withoutOutlines(spec))}`
     ].join('\n');
 }
 
@@ -630,7 +645,7 @@ export function buildCorrectionPrompt(errors: string[], options: { patch?: boole
 }
 
 /** The schema of a patch reply: the parts that change (the spec's own part schema), the ids to drop, and the top-level fields that change. */
-export function objectBuildSpecPatchJsonSchema(options: { materials: boolean }): Record<string, unknown> {
+export function objectBuildSpecPatchJsonSchema(options: { materials: boolean; blueprint?: boolean }): Record<string, unknown> {
     const full = objectBuildSpecJsonSchema(options) as { properties: Record<string, any> };
     return {
         type: 'object',
@@ -1236,10 +1251,11 @@ async function requestBuildableSpec(
     signal?: AbortSignal,
     reportProgress?: (message: string) => void,
     clay = false,
-    base?: ObjectBuildSpec
+    base?: ObjectBuildSpec,
+    blueprint?: ObjectOutlines
 ): Promise<BuildableSpec> {
-    const fullSchema = objectBuildSpecJsonSchema({ materials: !clay });
-    const patchSchema = objectBuildSpecPatchJsonSchema({ materials: !clay });
+    const fullSchema = objectBuildSpecJsonSchema({ materials: !clay, blueprint: blueprint !== undefined });
+    const patchSchema = objectBuildSpecPatchJsonSchema({ materials: !clay, blueprint: blueprint !== undefined });
     const patching = deps.patchReplies !== false;
     type Attempt = { build?: NativeBuild; spec?: ObjectBuildSpec; candidate?: ObjectBuildSpec; problems: string[]; from: 'build-spec' | 'build'; timedOut?: boolean; normalized?: string[] };
     const attempt = async (reply: JsonReply, patchOn?: ObjectBuildSpec): Promise<Attempt> => {
@@ -1254,6 +1270,8 @@ async function requestBuildableSpec(
         // than sent back for a whole corrective re-ask.
         const normalized = normalizeChildOrigins(value);
         value = normalized.value;
+        // the blueprint travels with every spec of the build, so its fromBlueprint parts can be lofted (and rebuilt later)
+        if (blueprint && value && typeof value === 'object' && !Array.isArray(value)) value = { ...(value as object), blueprint };
         const moved = normalized.notes.length ? { normalized: normalized.notes } : {};
         // A reply that has a parts list can be patched in a correction even when it is not valid yet.
         const candidate = value && typeof value === 'object' && Array.isArray((value as { parts?: unknown }).parts) ? value as ObjectBuildSpec : undefined;
@@ -1869,8 +1887,8 @@ export async function buildObjectFromReference(
         progress(`Reading the reference into a build spec with ${vision.current}`, 0.2);
         const firstSpec = await requestBuildableSpec(vision, [{
             role: 'user',
-            parts: [referencePart(reference), { text: buildSpecPrompt(input.request, input.dimensionsHintMeters, { materials: !clay, notes: input.buildNotes }) }]
-        }], deps, input.signal, progress, clay);
+            parts: [referencePart(reference), { text: buildSpecPrompt(input.request, input.dimensionsHintMeters, { materials: !clay, notes: input.buildNotes, blueprint: input.blueprint !== undefined }) }]
+        }], deps, input.signal, progress, clay, undefined, input.blueprint);
         let current = await checkBuild(1, firstSpec.spec, firstSpec.build, input, vision, reference, clay);
         const passes: ObjectBuildPass[] = [passRecord(current, 'reference', firstSpec)];
         const checkedPasses = new Map<number, CheckedPass>([[1, current]]);
@@ -1902,9 +1920,9 @@ export async function buildObjectFromReference(
                     parts: [
                         referencePart(reference),
                         imagePart(current.render, 'image/png'),
-                        { text: buildRevisionPrompt(input.request, current.materialFixedSpec ?? current.spec, [...current.problems, ...fixes.map(materialCorrectionNote)], input.dimensionsHintMeters, { materials: !clay, patch: deps.patchReplies !== false, notes: input.buildNotes }) }
+                        { text: buildRevisionPrompt(input.request, current.materialFixedSpec ?? current.spec, [...current.problems, ...fixes.map(materialCorrectionNote)], input.dimensionsHintMeters, { materials: !clay, patch: deps.patchReplies !== false, notes: input.buildNotes, blueprint: input.blueprint !== undefined }) }
                     ]
-                }], deps, input.signal, progress, clay, current.materialFixedSpec ?? current.spec);
+                }], deps, input.signal, progress, clay, current.materialFixedSpec ?? current.spec, input.blueprint);
                 const checked = await checkBuild(pass, revised.spec, revised.build, input, vision, reference, clay);
                 passes.push(passRecord(checked, 'revision', revised));
                 checkedPasses.set(pass, checked);

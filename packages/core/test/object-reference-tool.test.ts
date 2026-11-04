@@ -35,7 +35,8 @@ import { OBJECT_BUILD_SPEC_JSON_SCHEMA, objectBuildSpecJsonSchema, type ObjectBu
 /** The spec schema a build with materials states (the default); a clay build states OBJECT_BUILD_SPEC_JSON_SCHEMA. */
 const SPEC_SCHEMA = objectBuildSpecJsonSchema({ materials: true });
 /** Every schema a spec request (a complete spec, or a patch in a correction or revision) may state. */
-const SPEC_SCHEMAS = [SPEC_SCHEMA, OBJECT_BUILD_SPEC_JSON_SCHEMA, objectBuildSpecPatchJsonSchema({ materials: true }), objectBuildSpecPatchJsonSchema({ materials: false })].map(schemaInstruction);
+const SPEC_SCHEMAS = [SPEC_SCHEMA, OBJECT_BUILD_SPEC_JSON_SCHEMA, objectBuildSpecPatchJsonSchema({ materials: true }), objectBuildSpecPatchJsonSchema({ materials: false }),
+    objectBuildSpecJsonSchema({ materials: true, blueprint: true }), objectBuildSpecPatchJsonSchema({ materials: true, blueprint: true })].map(schemaInstruction);
 const asksForSpec = (text: string) => SPEC_SCHEMAS.some(s => text.includes(s));
 import { NativePythonRunnerService, type PythonExecutionResult } from '../src/node/3d-engine/native-python-runner-service';
 import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
@@ -1141,6 +1142,34 @@ describe('build_3d_object_from_reference', () => {
         expect((await run({ request: 'the vase', specJson: JSON.stringify(VASE), buildNotes: 'taller' })).resultPayload.error)
             .toBe('buildNotes is for new builds; with specJson, make the change in the spec itself.');
     });
+
+    it('with blueprintPath, offers fromBlueprint to the reader, carries the outlines in every spec and builds a lofted part', async () => {
+        // a 1 m long, 0.4 m wide, 0.3 m tall box's outlines, as object_blueprint_outlines saves them
+        const stations = Array.from({ length: 11 }, (_, i) => 0.5 - i * 0.1);
+        const outlines = {
+            sizeMeters: [0.4, 0.3, 1.0],
+            side: stations.map(z => ({ z, top: 0.3, bottom: 0 })),
+            plan: stations.map(z => ({ z, halfWidth: 0.2 })),
+            front: [0, 0.1, 0.2, 0.3].map(y => ({ y, halfWidth: 0.2 })),
+            groundContacts: []
+        };
+        const rel = 'test-results/blueprint-tool-test.json';
+        fs.mkdirSync(path.join(REPO_ROOT, 'test-results'), { recursive: true });
+        fs.writeFileSync(path.join(REPO_ROOT, rel), JSON.stringify({ outlines }));
+        const lofted = { subject: 'a box', observations: [], boundingMeters: [0.4, 0.3, 1.0], expectedBodies: 1, parts: [{ id: 'hull', label: 'hull', material: GLAZE, sweep: { fromBlueprint: { insetMeters: 0.01 } } }] };
+        const client = fakeClient({ specs: [JSON.stringify(lofted)] });
+        const out = await handlerWith(client).run({ request: 'a box', blueprintPath: rel });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        const specCall = client.calls.find(isSpecCall)!;
+        expect(askedText(specCall)).toContain('fromBlueprint: this object has a blueprint');
+        expect(askedText(specCall)).toContain('"fromBlueprint"'); // in the schema the reply follows
+        const spec = (out.resultPayload.artifact as any).data.objectBuild.spec;
+        expect(spec.blueprint).toEqual(outlines);
+        expect(spec.parts[0].sweep).toEqual({ fromBlueprint: { insetMeters: 0.01 } }); // the stored spec keeps the block, not the rings
+        expect((await handlerWith(fakeClient({})).run({ request: 'a box', blueprintPath: 'test-results/none.json' })).resultPayload.error).toBe('No blueprint at test-results/none.json.');
+        expect((await handlerWith(fakeClient({})).run({ request: 'a box', specJson: JSON.stringify(spec), blueprintPath: rel })).resultPayload.error)
+            .toBe('blueprintPath is for new builds; a spec from a blueprint build already carries its outlines.');
+    }, 180_000);
 
     it('raises no size problem within 3 % (or 2 cm) of the size the user gave, and one per missed axis beyond it', () => {
         const checks = (built: [number, number, number]): ObjectBuildChecks => ({
