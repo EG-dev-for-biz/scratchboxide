@@ -56,6 +56,7 @@ import {
     partsWithoutMaterial,
     validateObjectBuildSpec,
     validatePartMaterial,
+    OBJECT_SPEC_LIMITS,
     PART_MATERIAL_JSON_SCHEMA,
     type ObjectBuildSpec,
     type PartMaterial,
@@ -562,6 +563,7 @@ export function specConventions(dimensionsHintMeters?: Vec3, options: { material
         '- Angle 0 around a revolve points toward +Z (or +X when the axis is along Z) and angle 90 toward axisDirection x (angle-0 direction): for an upright axis 0 is front, 90 right, 180 back, 270 left. Angle 0 around a sweep is the section\'s up direction (toward +Y, or +Z for a vertical carrier) and 90 is the carrier direction x up.',
         '- Root parts (no parentId) use absolute coordinates. Use one root unless the object really is several separate pieces; expectedBodies is how many separate pieces you intend (usually 1). Every child must touch its parent.',
         '- mirrorPlaneNormal also emits a part and what is attached to it reflected across the plane through the origin with that normal, e.g. [1, 0, 0] for a left/right pair.',
+        `- edgeRadiusMeters (sweep and revolve parts): how rounded the part's edges look in the picture, in metres. Real edges are rarely razor-sharp: cast, moulded and worn edges are soft, machined and sheet edges small. Omit it for the default (about 1.5 % of the part's smallest dimension); 0 only for a part meant to be sharp, such as a blade; at most ${OBJECT_SPEC_LIMITS.maxEdgeRadiusMeters}.`,
         '- Spend parts on the main mass first, then the secondary assemblies, then small details; use as many parts as the object needs.',
         ...(options.materials ? [materialConventions()] : []),
         `- observations: short notes on proportions, counts and how the parts join${options.materials ? ', and the materials you see' : ''}.`
@@ -1719,6 +1721,8 @@ export function stampMaterialProvenance(glb: Buffer, spec: ObjectBuildSpec, prov
             material.extras = {
                 ...(material.extras || {}),
                 scratchbox: {
+                    // the interpreter's own entries (the part's edge radius) stay
+                    ...(material.extras?.scratchbox || {}),
                     partId: mesh.name,
                     provenance: own ? provenance.label : 'clay',
                     ...(own && part?.material?.description ? { description: part.material.description } : {})
