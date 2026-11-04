@@ -303,6 +303,49 @@ Lazarov's environment-BRDF fit used as Ess overshot to 1.16, so the table replac
 
 **Not done.** No live check in the app yet. The snapshot re-encodes textures in the browser, so big staged builds will be slow to capture: the server should assemble the scene from its saved JSON instead, keeping the browser snapshot only for content that exists only there. Mac only.
 
+## Phase 14 (2026-11-04): the scene's own lights, a light tree and MIS
+
+Until now the only light either tracer sampled was the sun. Emissive surfaces counted only when a BSDF ray happened to hit them, and the GLB's lamps were not read at all.
+
+**What the tracers sample now** (`scratchbox_light_tree.hpp`, shared by both tracers and ported line for line into the Metal kernels):
+- **Emissive triangles of the traced cut.** Emission is the factor times `KHR_materials_emissive_strength` times the emissive texture, which the loader now reads.
+- **`KHR_lights_punctual` point, spot and directional lights**, in glTF units (candela, lux), with the spec's cone falloff and range window.
+- **Selection.** Local lights sit in a power and orientation bounding tree (Estevez and Kulla 2018: binned SAOH build, conservative importance, depth capped at 40 levels). Distant lights are picked beside its root. One light is drawn per vertex by walking the tree with one random number.
+- **Weighting.** A triangle light's sample is weighted against the BSDF by the power heuristic. A BSDF ray that finds an emitter is weighted with the selection pdf recomputed at the previous vertex (`selectPdf`, walked up from the light's leaf), so no light is counted twice. At the last bounce the light sample takes full weight. Delta lights (point, spot, distant) take no weight.
+- **Emitter power.** Each emitter's power in the tree is its own emission read at seven points times its area. A triangle that reads zero is left out, which is always safe: BSDF rays still find it and count it in full.
+- **Emission is two-sided**, as the tracers have always shaded it.
+- **Indirect clamp.** Emitter light found at bounce 1 or later now goes through the same indirect clamp as the sun.
+
+**Emission at coarse LOD (`.sbvg` version 6).** The coarse levels' baked material carried colour and normals but no emission, so an emitter vanished wherever the cut chose a coarse cluster. Flat grids simplify with zero error, so that happened even at a 0.01 px threshold: the test room's cut was 7,690 of 12,160 leaf triangles. Each re-textured level now also bakes an emission atlas: linear radiance over its own peak, sRGB PNG `<stem>.emission<level>.png`, peak stored in the atlas table. The driver turns it into the level material's emissive texture and factor. The browser reader and the C++ reader accept version 6.
+
+**CPU reference under the studio dome.** `render::Environment` (sky, or uniform dome radiance) lets the CPU backend render without a sun, so lamp-lit scenes have a reference.
+
+**Viewport and switches.**
+- **Snapshot.** `pathTraceSnapshot.ts` writes the viewport's point, spot and directional lights into the GLB at their world placement. The atmosphere's sun stays the tracer's own sun. Area lights have no glTF form and are listed as not traced.
+- **Comparison switch.** `lighting.sampleLights: false` turns light sampling off: BSDF rays alone, no punctual lights.
+- **Stats.** `stats.lights` and the session's view event report what was sampled.
+
+**Measured** (M1 Ultra, machine load 200-380, so timings are not comparable to earlier phases; `packages/core/test/metal-path-tracer.test.ts`, "Path tracer scene lights"):
+
+| Check | Result |
+| :--- | :--- |
+| Panel only, studio dome off, 2048 spp: light sampling against BSDF rays alone | mean ratio 1.0016 (unbiased both ways) |
+| Same, 16 spp, relative RMSE on lit surfaces (pixels seeing the panel left out) | 0.976 with the light tree + MIS, 4.028 BSDF only: 4.1x lower |
+| Panel + point + spot + directional, 128 spp, GPU against CPU | same cut, rays within 0.5%, mean ratio 1.0000, block error under 2% |
+| Point light at 1 m against 2 m | 3.9-4.1x (inverse square) |
+| Twice the intensity | 2.00x |
+| Spot aimed down, centre inside the inner cone | equals the point light of the same intensity |
+| Spot aimed away | exactly 0 |
+| 4 lux directional straight down against a 4 cd point 1 m up | within 3% |
+
+Proof sheet: `docs/screenshots/path_tracer_scene_lights_2026-11-04.png`. The existing tracer tests still pass (furnace, sun parity, checkerboard parity, denoise parity, sampler, coarse atlases, resident session).
+
+**Not done.**
+- The light sampling leaves a few fireflies at 16 spp, from paths that reach the panel through the rough metal sphere.
+- With a bounce cut, emissive triangles come from that cut. With `bounceShadowRays: false`, shadow rays to those coarse emitters trace the fine cut and can be blocked by the fine emitter itself.
+- Viewport point/spot export not yet checked live in the app.
+- Glass and transmission, participating media, and the material extensions are the next phases.
+
 ## Next (plan)
 
 - Metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share.
