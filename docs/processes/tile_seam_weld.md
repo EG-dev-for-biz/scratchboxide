@@ -166,7 +166,7 @@ On the district extraction: the fixed passes 50 s, the adaptive close 115 s, the
 
 ## 9. Seam tone feather (tile-seams/5, 2026-11-05)
 
-**Status: measured offline on the ESB and the Penn district extraction, rendered before and after; on by default (`SCRATCHBOX_TILE_SEAM_TONE=0` off), for extractions whose leaves carry their boxes (the crawler now writes each leaf's tileset box into its node, `extras.sb.tile.box`).**
+**Status: measured offline on the ESB and the Penn district extraction, rendered before and after; opt-in (`SCRATCHBOX_TILE_SEAM_TONE=1`; the default is the user's decision: on Penn 2 it raised pipeline K's untextured share 1.56% → 1.78%), for extractions whose leaves carry their boxes (the crawler now writes each leaf's tileset box into its node, `extras.sb.tile.box`).**
 
 What a facade seam shows (§8) is the two tiles' photos. Three things were tried; one ships.
 
@@ -184,7 +184,7 @@ What a facade seam shows (§8) is the two tiles' photos. Three things were tried
 
 ## 10. The tiles' caps removed (tile-seams/6, 2026-11-05)
 
-**Status: verified in uncached pipeline K builds of the ESB, in clay, against a control of the same code with the caps kept; on by default (`SCRATCHBOX_TILE_SEAM_CAPS=0` off), for extractions whose leaves carry their boxes. Penn 2 is too noisy run to run to say anything.**
+**Status: opt-in (`SCRATCHBOX_TILE_SEAM_CAPS=1`), for extractions whose leaves carry their boxes. Built and compared in uncached pipeline K builds of the ESB, in clay, against a control of the same code with the caps kept: clean on two of the four tower cuts looked at, a regression on one, unsure on one. Penn 2 is too noisy run to run to say anything.**
 
 Judged in clay, a finished K building shows a row of slots across every bay at each Google tile cut. A ray through a slot hits a scan piece facing straight up, 14 cm in front of the rebuilt bay: the tile's cap, the strip each leaf carries in its cut plane (a ring about a metre wide inside the wall, about 500 m² at each ESB tower cut, half facing up, half down). K recesses the bays behind the scan's wall plane and never removes the cap (it faces up, not the facade), so it stands out across them. On the raw scan the caps are inside the surface and nothing shows (§8).
 
@@ -201,6 +201,13 @@ ESB, uncached builds (holes / untextured / largest hole region):
 |---|---|---|
 | ESB | 0.70% / 0.38% / 28.5 m², complete | 0.75% / 0.32% / 28.2 m², complete |
 
-ESB scan: 20,448 m² of caps removed; 10–31 m² left at each tower cut (was about 500). In clay (sheet `docs/screenshots/2026-11-05-esb-tile-caps-clay.jpg`): the slots are gone on the west and north faces at 215.9 m and the south face at 143 m; on the east face at 179.5 m the row of slots is gone and one dark slit shows a little lower where two rebuilt pieces do not meet (it was behind the cap before). Holes rise 0.05 pt.
+ESB scan: 20,448 m² of caps removed; 10–31 m² left at each tower cut (was about 500). In clay (sheet `docs/screenshots/2026-11-05-esb-tile-caps-clay.jpg`), face by face:
+
+- **West and north faces at 215.9 m:** the slots are gone and nothing new appears.
+- **East face at 179.5 m: a regression.** The row of slots is gone, and a wide dark slit crosses four bays: more visible than what it replaced. A ray through it hits the rebuilt facade itself (`FacadeLattice_10008`) 1.1 m deeper than the rows above and below, with a horizontal face in it: pipeline K built a metre-deep groove at the cut's height. In the control the facade there is flush. Why K recesses there once the cap is gone is not traced (the likely cause: its recess depth is measured from the scan, and at the cut the two leaves' walls do not meet, so with the cap gone the measure runs through the gap).
+- **South face at 143 m: unsure.** The three slots are gone; a dark vertical gap and an offset panel left of centre show that the control does not have, and the two builds' framing differs slightly, so it is not counted as fixed.
+- **A rougher central recess** at 45° in the caps-removed build (whole-building sheet `2026-11-05-esb-clay-whole-caps.jpg`): not traced.
+
+Holes rise 0.05 pt. So the pass stays opt-in until the groove is understood: either the two leaves' walls are joined across the cut before K reads them, or K's depth measure skips the cut.
 
 Penn 2 says nothing either way: with the same code and the caps kept, two builds gave holes 1.37% and 1.66% and a largest hole of 223 and 312 m² (its ownership vote and a standing fault at one corner vary run to run); with the caps removed, 1.31% and 1.79%.

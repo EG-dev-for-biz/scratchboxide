@@ -543,7 +543,7 @@ class BuildResolver {
         const dir = path.dirname(note.raw);
         let raw: TilesValue | undefined;
         try { raw = (JSON.parse(fs.readFileSync(path.join(dir, 'done.json'), 'utf8')) as { value?: TilesValue }).value; } catch { return undefined; }
-        const tag = `${note.version.replace(/\W/g, '_')}${note.tJunctions ? '' : '_notj'}${note.overlapTrim ? '' : '_noov'}${note.adaptive && typeof note.adaptive === 'object' ? '_ad' : ''}${note.tone === false ? '_notone' : ''}${note.capTrim === false ? '_caps' : ''}`;
+        const tag = `${note.version.replace(/\W/g, '_')}${note.tJunctions ? '' : '_notj'}${note.overlapTrim ? '' : '_noov'}${note.adaptive && typeof note.adaptive === 'object' ? '_ad' : ''}${note.tone && typeof note.tone === 'object' ? '_tone' : ''}${note.capTrim && typeof note.capTrim === 'object' ? '_capless' : ''}`;
         const value = raw && { ...raw, texturedGlb: `textured_${tag}.glb`, geometryGlb: `geometry_${tag}.glb` };
         return value && fs.existsSync(path.join(dir, value.texturedGlb)) && fs.existsSync(path.join(dir, value.geometryGlb)) ? { dir, value } : undefined;
     }

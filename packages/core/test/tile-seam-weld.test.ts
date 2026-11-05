@@ -30,7 +30,7 @@
  *  10. agreed gaps no close may move are bridged by the strip fill, drawn with a material labelled generated;
  *  11. the node -> tile file the service writes for the CLI;
  *  12. the tone feather: two tiles' photos of one wall, cut across by their boxes, levelled toward each other at the cut,
- *      faded out away from it, labelled, and left alone without boxes or when switched off;
+ *      faded out away from it, labelled, and left alone without boxes or when not asked for;
  *  13. the cap trim: the strips two tiles carry back to back in their shared cut plane go, the walls stay.
  */
 
@@ -481,7 +481,7 @@ describe('tile_seam_weld tone feather: two tiles\' photos levelled toward each o
         const input = path.join(WORK, 'tone.glb'), output = path.join(WORK, 'tone_welded.glb');
         writeGlb(input, [wallTile(0, 0), wallTile(5, 1)], [grey(110), grey(150)],
             [{ leafId: 'a', geometricErrorM: 2, box: boxOf(0) }, { leafId: 'b', geometricErrorM: 2, box: boxOf(5) }], { localToEcef: IDENTITY });
-        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, threads: 2, repoRoot: REPO });
+        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, tone: true, threads: 2, repoRoot: REPO });
         const t = r.tone!;
         expect(t.tilesBoxed).toBe(2);
         expect(t.cuts).toBe(1);
@@ -502,12 +502,12 @@ describe('tile_seam_weld tone feather: two tiles\' photos levelled toward each o
         const ascending = [...a.rows].sort((p, q) => q.d - p.d).map(x => x.v);
         for (let i = 1; i < ascending.length; i++) expect(ascending[i]).toBeGreaterThanOrEqual(ascending[i - 1] - 0.5);
         for (const m of [a.material, b.material]) expect(m.extras?.scratchbox?.method).toBe('tile seam tone feather (fitted levels, generated)');
-        // switched off, or with no boxes, the photos are left as they came
-        const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'tone_off.glb'), tone: false, threads: 2, repoRoot: REPO });
+        // not asked for, or with no boxes, the photos are left as they came
+        const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'tone_off.glb'), threads: 2, repoRoot: REPO });
         expect(off.tone).toBeUndefined();
         const noBox = path.join(WORK, 'tone_nobox.glb');
         writeGlb(noBox, [wallTile(0, 0), wallTile(5, 1)], [grey(110), grey(150)], [{ leafId: 'a' }, { leafId: 'b' }], { localToEcef: IDENTITY });
-        const nb = await runTileSeamWeld({ inputGlb: noBox, outputGlb: path.join(WORK, 'tone_nobox_welded.glb'), threads: 2, repoRoot: REPO });
+        const nb = await runTileSeamWeld({ inputGlb: noBox, outputGlb: path.join(WORK, 'tone_nobox_welded.glb'), tone: true, threads: 2, repoRoot: REPO });
         expect(nb.tone).toBeUndefined();
         for (const { rows } of rowMeans(path.join(WORK, 'tone_off.glb'))) expect(new Set(rows.map(x => Math.round(x.v))).size).toBe(1);
     });
@@ -522,15 +522,15 @@ describe('tile_seam_weld tone feather: two tiles\' photos levelled toward each o
         writeGlb(input, [a, b], [], tiles, { localToEcef: IDENTITY });
         const horizontal = (file: string) => triangles(file).filter(t => t.every(p => Math.abs(p[1] - 5) < 1e-4)).length;
         expect(horizontal(input)).toBe(64);
-        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, threads: 2, repoRoot: REPO });
+        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, caps: true, threads: 2, repoRoot: REPO });
         expect(r.capTrim).toMatchObject({ sharedFaces: 2, candidates: 64, trianglesDropped: 64 });
         expect(r.capTrim!.areaM2).toBeCloseTo(40, 3);
         expect(horizontal(output)).toBe(0);
         expect(triangles(output).length).toBe(200);   // the two walls, whole
         expect(r.cuts).toHaveLength(1);
         expect(r.cuts![0]).toMatchObject({ o: 5 });
-        // switched off, the caps stay
-        const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'caps_off.glb'), caps: false, threads: 2, repoRoot: REPO });
+        // not asked for, the caps stay
+        const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'caps_off.glb'), threads: 2, repoRoot: REPO });
         expect(off.capTrim).toBeUndefined();
         expect(horizontal(path.join(WORK, 'caps_off.glb'))).toBeGreaterThan(0);
     });

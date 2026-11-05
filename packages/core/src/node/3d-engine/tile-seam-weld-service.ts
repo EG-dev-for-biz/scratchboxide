@@ -26,10 +26,10 @@
  *     across the seam meets the other within 3 cm); a close that would turn a triangle by more than 25° is taken back;
  *  5. strip fill: agreed gaps a close would have distorted are bridged by thin triangles, drawn with a copy of the tile's
  *     material labelled generated (extras.scratchbox.provenance, photoInferredFill).
- *  0. cap trim (first, where the extraction gives each leaf's box): a leaf arrives cut along its box and capped, so two
+ *  0. cap trim (first, when asked, where the extraction gives each leaf's box): a leaf arrives cut along its box and capped, so two
  *     leaves carry strips back to back in their shared cut plane; both go. Inside the surface on the raw scan, they stand
  *     out as a slot across every recessed bay of a rebuilt facade at each cut's height.
- *  6. tone feather (always, where the extraction gives each leaf's box): on the surfaces crossing every cut two leaves'
+ *  6. tone feather (when asked, where the extraction gives each leaf's box): on the surfaces crossing every cut two leaves'
  *     boxes share, the two photos' colour is levelled toward each other, half the step each, faded out over 2.5 m, and the
  *     photos written back in their own format; labelled generated (extras.scratchbox.method).
  * The seam audit (always) measures the open border inside the extraction's cut border by its gap to the nearest other tile's,
@@ -78,9 +78,9 @@ export interface TileSeamWeldRequest {
     maxTurnDeg?: number;
     /** With the adaptive close: bridge the agreed gaps it could not move without distortion (generated triangles; default true). */
     stripFill?: boolean;
-    /** Level the tiles' photos' colour toward each other across every cut their boxes share (default true; needs boxes). */
+    /** Level the tiles' photos' colour toward each other across every cut their boxes share (default false; needs boxes). */
     tone?: boolean;
-    /** Remove the caps two tiles carry back to back in a shared cut plane (default true; needs boxes). */
+    /** Remove the caps two tiles carry back to back in a shared cut plane (default false; needs boxes). */
     caps?: boolean;
     /** A leaf's geometric error (m) when its node states none (e.g. the extraction's largest); none: such tiles pair at toleranceM. */
     defaultGeometricErrorM?: number;
@@ -314,8 +314,8 @@ export async function runTileSeamWeld(req: TileSeamWeldRequest): Promise<TileSea
     if (req.tJunctions === false) args.push('--no-tjunctions');
     if (req.adaptive !== true) args.push('--no-adaptive');
     if (req.stripFill === false) args.push('--no-fill');
-    if (req.tone === false) args.push('--no-tone');
-    if (req.caps === false) args.push('--no-caps');
+    if (req.tone !== true) args.push('--no-tone');
+    if (req.caps !== true) args.push('--no-caps');
     if (req.adaptiveCapM !== undefined) args.push('--adaptive-cap', String(req.adaptiveCapM));
     if (req.maxTurnDeg !== undefined) args.push('--max-turn-deg', String(req.maxTurnDeg));
     if (req.threads !== undefined) args.push('--threads', String(req.threads));
