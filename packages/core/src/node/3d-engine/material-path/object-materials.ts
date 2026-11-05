@@ -305,7 +305,7 @@ export async function runObjectMaterialPath(input: Buffer | Uint8Array, options:
     if (anyRelief && options.displace !== false) {
         const params: HeightReliefParams = {
             ...HEIGHT_RELIEF_PARAMS, bandM: undefined, cellM: Math.max(1, 2 * diag), edgeMinM: Math.max(0.003, texelM), edgeMaxM: Math.max(0.02, 0.05 * diag),
-            toleranceM: heightCapM / 20, minRecessM: heightCapM / 30, maxTriangles: P.maxTriangles, showWithinM: Math.max(4, 6 * diag)
+            toleranceM: heightCapM / 20, minRecessM: heightCapM / 30, fadeM: Math.max(0.005, Math.min(0.08, 0.02 * diag)), maxTriangles: P.maxTriangles, showWithinM: Math.max(4, 6 * diag)
         };
         options.progress?.('object materials: displacing the parts by their materials\' height');
         const hr = await applyHeightRelief(glb, params, { ...(options.native?.threads ? { threads: options.native.threads } : {}), ...(options.signal ? { signal: options.signal } : {}) });
