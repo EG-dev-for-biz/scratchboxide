@@ -181,6 +181,8 @@ describe('specs with fromBlueprint parts', () => {
         expect(flush).toBeCloseTo(0.9, 2);              // the outline stays where it was
         expect(sunk).toBeLessThan(flush - 0.02);         // sunk by up to 3 cm where the grid says
         expect(sunk).toBeGreaterThan(flush - 0.031);
+        const json = JSON.parse(built.glb.subarray(20, 20 + built.glb.readUInt32LE(12)).toString('utf8'));
+        expect(json.materials.map((m: any) => m.extras?.scratchbox?.depthRelief).find(Boolean)).toEqual({ meters: 0.03, model: 'test', provenance: 'photo-inferred' });
     }, 300_000);
 
     it('builds natively: a body with round arches and a cabin whose outlines match the blueprint', async () => {

@@ -1778,7 +1778,10 @@ export function stampMaterialProvenance(glb: Buffer, spec: ObjectBuildSpec, prov
                     provenance: own ? provenance.label : 'clay',
                     ...(own && part?.material?.description ? { description: part.material.description } : {}),
                     // openings cut from the part (spec cuts) are generated geometry, whatever the surface's label
-                    ...(part?.cuts?.length ? { cuts: { count: part.cuts.length, provenance: 'generated' } } : {})
+                    ...(part?.cuts?.length ? { cuts: { count: part.cuts.length, provenance: 'generated' } } : {}),
+                    // the blueprint's depth relief laid into a lofted part is read from its drawings by the depth model
+                    ...(part?.sweep?.fromBlueprint?.reliefMeters && spec.blueprint?.relief
+                        ? { depthRelief: { meters: part.sweep.fromBlueprint.reliefMeters, model: spec.blueprint.relief.model, provenance: 'photo-inferred' } } : {})
                 }
             };
         }
