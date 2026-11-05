@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { CONFIRM_IOU, CROP_HALF_M, decideFootprint, PARTIAL_AREA_RATIO, footprintConfirmed, footprintModelUnavailable, growFootprintModel, kFootprint, modelSeed, rasterArea, rasterIoU, runFootprintModel, MERGED_AREA_RATIO, type FootprintModelResult } from '../src/node/3d-engine/staged-location/footprint-model';
+import { CONFIRM_IOU, CROP_HALF_M, decideFootprint, PARTIAL_AREA_RATIO, footprintConfirmed, footprintModelUnavailable, growFootprintModel, kCutConfirmedEnabled, kFootprint, modelSeed, rasterArea, rasterIoU, runFootprintModel, MERGED_AREA_RATIO, type FootprintModelResult } from '../src/node/3d-engine/staged-location/footprint-model';
 import type { Vec2 } from '../src/common/spatial/staged-location-contracts';
 import { inRing } from '../src/node/3d-engine/staged-location/pipeline-e/massing-spec';
 
@@ -108,6 +108,10 @@ describe('kFootprint (pipeline K\'s footprint, judged against the tiles)', () =>
         expect(d.use).toBe('vector');
         expect(d.iouWithVector!).toBeLessThan(CONFIRM_IOU);
         expect(kFootprint([google], d, model, 0.87, scan)).toMatchObject({ from: 'scan', trusted: false, loops: [scan] });
+    });
+    it('cuts a scan that does not fit a confirmed footprint only when asked (SCRATCHBOX_K_CUT_CONFIRMED=1)', () => {
+        expect(kCutConfirmedEnabled({})).toBe(false);
+        expect(kCutConfirmedEnabled({ SCRATCHBOX_K_CUT_CONFIRMED: '1' })).toBe(true);
     });
     it('keeps Google\'s outline, untrusted, without a sure model reading; the scan\'s without either', () => {
         const google: Vec2[] = [[0, 0], [50, 0], [50, 30], [0, 30]];

@@ -203,7 +203,7 @@ import { recordDiscoveredObjects } from '../../asset-store/object-catalog';
 import { genAiEnhanceClient, type EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
-import { CROP_HALF_M, FOOTPRINT_MODEL_TOKEN, FOOTPRINT_MODEL_VERSION, decideFootprint, kFootprint, modelSeed, type FootprintDecision, type GrownFootprintResult, type KFootprint, type growFootprintModel } from './footprint-model';
+import { CROP_HALF_M, FOOTPRINT_MODEL_TOKEN, FOOTPRINT_MODEL_VERSION, decideFootprint, kCutConfirmedEnabled, kFootprint, modelSeed, type FootprintDecision, type GrownFootprintResult, type KFootprint, type growFootprintModel } from './footprint-model';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
@@ -2667,7 +2667,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         })();
         const eBuildings = modelFootprint ? [modelFootprint] : vectorBuildings;
         /** Pipeline K's footprint, judged against the tiles (footprint-model.ts kFootprint); undefined outside an isolated K build. */
-        const kFoot: KFootprint | undefined = pipelineK && structure ? kFootprint(vectorPlan.loops, footprintDecision, footprintReading?.ring, footprintReading?.meanProbInside, structure.outline) : undefined;
+        const kFoot: KFootprint | undefined = pipelineK && structure ? (() => {
+            const k = kFootprint(vectorPlan.loops, footprintDecision, footprintReading?.ring, footprintReading?.meanProbInside, structure.outline);
+            // a confirmed footprint cuts a scan that does not fit it only when asked (kCutConfirmedEnabled): the cut sides stay open
+            return k.trusted && !kCutConfirmedEnabled() ? { ...k, trusted: false, reason: `${k.reason}; not cut where the scan does not fit it (SCRATCHBOX_K_CUT_CONFIRMED=1 cuts it)` } : k;
+        })() : undefined;
         // the shape program trial (SCRATCHBOX_STAGED_SHAPE_PROGRAM) shapes from the tree-free scan: a vector footprint only
         // bounds the height map where the two agree, so a footprint that disagrees (or none) does not send the build back
         const shapeMode = pipelineE ? stagedShapeProgram() : undefined;

@@ -314,6 +314,16 @@ export function footprintConfirmed(d: FootprintDecision | undefined): boolean {
     return !!d && (d.use === 'model' || (d.iouWithVector ?? 0) >= CONFIRM_IOU);
 }
 
+/**
+ * A scan that does not fit a confirmed footprint is cut to it only with SCRATCHBOX_K_CUT_CONFIRMED=1: that misfit is the
+ * neighbours the isolate (or the district fallback) took in, and cutting them away leaves the shared walls open with no
+ * party wall to close them (off, user decision 2026-10-28). Measured 2026-11-04 (docs/processes/2026-11-04-footprint-model-
+ * restored.md): SoHo 1007492 17% -> 46% and 1079536 19% -> 44% of the building seen through holes when cut.
+ */
+export function kCutConfirmedEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.SCRATCHBOX_K_CUT_CONFIRMED?.trim() === '1';
+}
+
 /** What pipeline K's base cleanup and clip stand on (kFootprint). */
 export interface KFootprint {
     loops: Vec2[][];
