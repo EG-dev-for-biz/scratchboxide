@@ -254,7 +254,9 @@ export function recessOf(root: THREE.Object3D, mat: THREE.Material): THREE.Vecto
     return out;
 }
 
-function rawTexture(tex: THREE.Texture, nearest: boolean, repeatT: boolean): THREE.Texture {
+function rawTexture(tex: THREE.Texture | null | undefined, nearest: boolean, repeatT: boolean): THREE.Texture {
+    // GLTFLoader gives null for a texture whose image did not decode
+    if (!tex) throw new Error("one of the reading's textures did not decode");
     tex.colorSpace = THREE.NoColorSpace;
     tex.magFilter = nearest ? THREE.NearestFilter : THREE.LinearFilter;
     tex.minFilter = nearest ? THREE.NearestFilter : THREE.LinearFilter;
