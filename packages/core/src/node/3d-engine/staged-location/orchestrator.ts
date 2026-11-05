@@ -2316,11 +2316,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // T-junctions split, then tile by tile the adaptive close and the strip fill), cached beside it; every later stage
                 // reads the welded scan, the raw extraction stays as it came
                 if (deps.tileSeams && process.env.SCRATCHBOX_TILE_SEAMS?.trim() !== '0') {
-                    // the passes on unless switched off (SCRATCHBOX_TILE_SEAM_TJUNCTIONS=0, SCRATCHBOX_TILE_SEAM_OVERLAP=0,
-                    // SCRATCHBOX_TILE_SEAM_ADAPTIVE=0, which also turns off the strip fill); the cache name says which ran
+                    // the passes on unless switched off (SCRATCHBOX_TILE_SEAM_TJUNCTIONS=0, SCRATCHBOX_TILE_SEAM_OVERLAP=0); the adaptive
+                    // close and strip fill only when asked (SCRATCHBOX_TILE_SEAM_ADAPTIVE=1: on the ESB, Penn 2 and a Penn district they
+                    // closed 30-142 points for up to 2 min, the seams left being capped cut planes); the cache name says which ran
                     const tj = process.env.SCRATCHBOX_TILE_SEAM_TJUNCTIONS?.trim() !== '0', ov = process.env.SCRATCHBOX_TILE_SEAM_OVERLAP?.trim() !== '0';
-                    const ad = process.env.SCRATCHBOX_TILE_SEAM_ADAPTIVE?.trim() !== '0';
-                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}${ad ? '' : '_noad'}`, dir = path.dirname(raw.texturedGlb);
+                    const ad = process.env.SCRATCHBOX_TILE_SEAM_ADAPTIVE?.trim() === '1';
+                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}${ad ? '_ad' : ''}`, dir = path.dirname(raw.texturedGlb);
                     const tex = path.join(dir, `textured_${tag}.glb`), clay = path.join(dir, `geometry_${tag}.glb`), report = path.join(dir, `seams_${tag}.json`);
                     try {
                         if (!(fs.existsSync(tex) && fs.existsSync(clay) && fs.existsSync(report))) {

@@ -19,14 +19,14 @@
  *  3. T-junctions: a border position lying on another tile's edge moves onto it and the edge is split there.
  * UVs are carried (interpolated along a split edge); materials and images pass through.
  *
- * Then, by source tile (each glTF node's: its leaf id, else the node; carried through every pass):
+ * Then, by source tile (each glTF node's: its leaf id, else the node; carried through every pass), when asked (adaptive):
  *  4. adaptive close: a border position and the nearest open border of another tile close up to the smaller of the two
  *     tiles' stated geometric errors (the crawler writes each leaf's into its node, extras.sb.tile), capped at 30 cm, only
  *     where the two surfaces agree there (normals within 8°, borders parallel within 20°, no step: each surface carried
  *     across the seam meets the other within 3 cm); a close that would turn a triangle by more than 25° is taken back;
  *  5. strip fill: agreed gaps a close would have distorted are bridged by thin triangles, drawn with a copy of the tile's
  *     material labelled generated (extras.scratchbox.provenance, photoInferredFill).
- * The seam audit measures the open border inside the extraction's cut border by its gap to the nearest other tile's,
+ * The seam audit (always) measures the open border inside the extraction's cut border by its gap to the nearest other tile's,
  * before, after the fixed passes (1-3) and after all of them.
  */
 
@@ -64,13 +64,13 @@ export interface TileSeamWeldRequest {
     overlapTrim?: boolean;
     /** Close T-junctions: a border position on another tile's edge moved onto it and the edge split there (default true). */
     tJunctions?: boolean;
-    /** Close, tile by tile, the gaps the fixed passes leave, up to the pair's stated geometric error where the surfaces agree (default true). */
+    /** Close, tile by tile, the gaps the fixed passes leave, up to the pair's stated geometric error where the surfaces agree (default false). */
     adaptive?: boolean;
     /** The adaptive close goes no further than this (default 0.30 m; (0, 1]). */
     adaptiveCapM?: number;
     /** An adaptive close turning a triangle by more than this (degrees) is taken back and left to the strip fill (default 25). */
     maxTurnDeg?: number;
-    /** Bridge the agreed gaps the adaptive close could not move without distortion (generated triangles; default true). */
+    /** With the adaptive close: bridge the agreed gaps it could not move without distortion (generated triangles; default true). */
     stripFill?: boolean;
     /** A leaf's geometric error (m) when its node states none (e.g. the extraction's largest); none: such tiles pair at toleranceM. */
     defaultGeometricErrorM?: number;
@@ -273,7 +273,7 @@ export async function runTileSeamWeld(req: TileSeamWeldRequest): Promise<TileSea
     if (req.dropSlivers === false) args.push('--no-drop');
     if (req.overlapTrim === false) args.push('--no-overlap-trim');
     if (req.tJunctions === false) args.push('--no-tjunctions');
-    if (req.adaptive === false) args.push('--no-adaptive');
+    if (req.adaptive !== true) args.push('--no-adaptive');
     if (req.stripFill === false) args.push('--no-fill');
     if (req.adaptiveCapM !== undefined) args.push('--adaptive-cap', String(req.adaptiveCapM));
     if (req.maxTurnDeg !== undefined) args.push('--max-turn-deg', String(req.maxTurnDeg));

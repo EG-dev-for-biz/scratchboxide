@@ -296,7 +296,7 @@ describe('tile_seam_weld by source tile: the seam audit, the adaptive close and 
     async function weldTiles(name: string, chunks: Chunk[], errorM: number | undefined, opts: Partial<TileSeamWeldRequest> = {}) {
         const input = path.join(WORK, `${name}.glb`), output = path.join(WORK, `${name}_welded.glb`);
         writeGlb(input, chunks, [], chunks.map((_, i) => ({ leafId: `leaf-${i}`, geometricErrorM: errorM })));
-        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, threads: 2, repoRoot: REPO, ...opts });
+        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, threads: 2, repoRoot: REPO, adaptive: true, ...opts });
         return { r, output };
     }
     // two ground tiles meeting at x = 10, B starting 15 cm on: A in 0.5 m cells, B in 0.758 m cells (their border points interleave)
