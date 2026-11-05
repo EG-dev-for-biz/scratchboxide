@@ -358,20 +358,25 @@ describe('facades on their photo lattice', () => {
         for (let v = 0; v < r.positions.length; v += 3) maxS = Math.max(maxS, r.positions[v]);
         expect(maxS).toBeLessThanOrEqual(8.5);
         expect(r.built.some(v => !v)).toBe(true);
-        // the scan's triangles there stay live; the covered ones are replaced
+        // the scan's triangles there stay live, and so does the scan within sideKeepM of that outline (what closes a corner there);
+        // the covered ones further in are replaced
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-'));
         const file = path.join(dir, 'clay.glb');
         writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
         const out = applyFacadeLattices(fs.readFileSync(file), [{ f, r }], false);
         const t = readGlbTriangles(out.glb);
-        let liveUncovered = 0, liveCovered = 0;
+        const outline = r.s[r.built.findIndex(v => !v) % (r.s.length - 1)];
+        let liveUncovered = 0, liveCovered = 0, liveBeside = 0;
         for (let i = 0; i < soup.length / 3; i += 3) {
             if (t.indices[i] === t.indices[i + 1] && t.indices[i + 1] === t.indices[i + 2]) continue;
             const cs = (soup[i * 3] + soup[i * 3 + 3] + soup[i * 3 + 6]) / 3;
-            if (cs > 8.5) liveUncovered++; else if (cs < 7.5) liveCovered++;
+            if (cs > 8.5) liveUncovered++;
+            else if (cs < outline - FACADE_LATTICE_PARAMS.sideKeepM - 0.5) liveCovered++;
+            else if (cs < outline && cs > outline - FACADE_LATTICE_PARAMS.sideKeepM + 0.25) liveBeside++;
         }
         expect(liveUncovered).toBeGreaterThan(0);
         expect(liveCovered).toBe(0);
+        expect(liveBeside).toBeGreaterThan(0);
         expect(out.tears.left).toBe(0);
         expect(out.tears.droppedFacades).toEqual([]);
     });

@@ -48,7 +48,7 @@ import { nativePolishThreads, runNativeLattice, runNativeLatticeAudit, type Nati
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const FACADE_LATTICE_VERSION = 'facade-lattice/21';
+export const FACADE_LATTICE_VERSION = 'facade-lattice/24';
 /** The cut (rebuildFacadesOnLattice opts.cut): the scan split at the rebuilt cells' lines before the removals and the tear audit. */
 export const LATTICE_CUT_VERSION = 'lattice-cut/5';
 
@@ -104,6 +104,13 @@ export const FACADE_LATTICE_PARAMS = {
      * comes back, and so does one under a tear seen straight on (on the ESB those are seams and corners the rebuild leaves open).
      */
     restoreFrontM: 0.05,
+    /**
+     * Scan with a corner within this (m), along s, of a rebuilt facade's side outline inside its lattice (a rebuilt cell beside
+     * one that is not) is never removed: where the facade turns a corner no step is drawn past its rebuilt cells, and the
+     * scan across the corner is what closes it. The walls closed inside themselves no longer leave the tear audit slits to put
+     * that scan back by (Penn 2: a 1 m by 97 m slot at the west face's south corner, seen at 180 and 225 degrees).
+     */
+    sideKeepM: 1,
     /**
      * Rebuilt cells of equal depth merge into faces at most this on a side (m), and the steps along one line into stretches at
      * most this long (latticeSurface): lean, while the steps after the lattice that judge a triangle by its centre (the base
@@ -290,7 +297,7 @@ export function latticeParamVector(P: typeof FACADE_LATTICE_PARAMS = FACADE_LATT
     const views = [P.auditYawDeg, -P.auditYawDeg, P.auditPitchDeg, -P.auditPitchDeg].flatMap(deg => [deg, Math.cos((deg * Math.PI) / 180), Math.sin((deg * Math.PI) / 180)]);
     return [
         P.minCoverage, P.minWallM2, P.peakK, P.minLineGapM, P.depthBandM, P.facingCos, P.sampleM, P.minSamples, P.minDepthM, P.maxDepthM, P.stepM,
-        P.minMeasuredShare, P.minCellPhotoShare, P.auditPixelM, P.tearDepthM, P.auditYawDeg, P.auditPitchDeg, P.auditBeyondM, P.restoreFrontM,
+        P.minMeasuredShare, P.minCellPhotoShare, P.auditPixelM, P.tearDepthM, P.auditYawDeg, P.auditPitchDeg, P.auditBeyondM, P.restoreFrontM, P.sideKeepM,
         PHOTO_RECESS.contrastLo, PHOTO_RECESS.contrastHi, PHOTO_RECESS.recessMin, PHOTO_RECESS.recessMax, PHOTO_RECESS.minRepeats,
         WINDOW_GRID.lineContrast, WINDOW_GRID.cellContrast, WINDOW_GRID.minRepeats,
         WINDOW_STRIPS.overlap, WINDOW_STRIPS.maxGapM, WINDOW_STRIPS.minWindows, WINDOW_STRIPS.minStripM, WINDOW_STRIPS.mullionRatio, WINDOW_STRIPS.windowInsetM,
@@ -952,6 +959,23 @@ function overBuilt(x: number, y: number, z: number, f: ReliefFacade, r: FacadeLa
 }
 
 /**
+ * Does a corner of a triangle lie over a rebuilt cell of facade (f, r) within sideKeepM, along s, of a cell in the same row that
+ * is not rebuilt (FACADE_LATTICE_PARAMS.sideKeepM).
+ */
+function nearSideOutline(a: number[], b: number[], c: number[], f: ReliefFacade, r: FacadeLatticeResult, P = FACADE_LATTICE_PARAMS): boolean {
+    const ns = r.s.length - 1, nt = r.t.length - 1;
+    for (const p of [a, b, c]) {
+        const m = [p[0] - f.centroid[0], p[1] - f.centroid[1], p[2] - f.centroid[2]], sv = dot(m, f.axisS), tv = dot(m, f.axisT);
+        if (sv < r.s[0] || sv > r.s[ns] || tv < r.t[0] || tv > r.t[nt]) continue;
+        const row = cellIndex(tv, r.t), at = cellIndex(sv, r.s);
+        if (!r.built[row * ns + at]) continue;
+        for (let x = at; x >= 0 && sv - r.s[x + 1] <= P.sideKeepM; x--) if (!r.built[row * ns + x]) return true;
+        for (let x = at; x < ns && r.s[x] - sv <= P.sideKeepM; x++) if (!r.built[row * ns + x]) return true;
+    }
+    return false;
+}
+
+/**
  * Is the whole of a triangle covered by rebuilt cells (of any facade): sampled at most every sampleM over its area, every
  * sample over a built cell. A triangle only partly over the rebuilt surface is kept, so removing it never opens a tear.
  */
@@ -1159,7 +1183,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
             let first = -1, ok = true;
             for (let fi = 0; fi < facadesIn.length && ok; fi++) {
                 if (dropped.has(fi) || !facesFacade(a, b, c, facadesIn[fi].f, P, opts.sameFacing === true) || !centreInRect(a, b, c, facadesIn[fi])) continue;
-                if (coveredByRebuild(a, b, c, [facadesIn[fi]], P)) { if (first < 0) first = fi; } else ok = false;
+                if (coveredByRebuild(a, b, c, [facadesIn[fi]], P) && !nearSideOutline(a, b, c, facadesIn[fi].f, facadesIn[fi].r, P)) { if (first < 0) first = fi; } else ok = false;
             }
             if (ok && first >= 0) claim[k] = first;
         }

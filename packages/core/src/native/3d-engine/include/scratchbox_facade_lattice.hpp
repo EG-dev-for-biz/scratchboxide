@@ -60,7 +60,7 @@ constexpr double kInf = std::numeric_limits<double>::infinity();
 /** FACADE_LATTICE_PARAMS, PHOTO_RECESS, WINDOW_GRID, WINDOW_STRIPS, STRUCTURE and REPEAT_TEXTURE in order (facade-lattice.ts latticeParamVector). */
 struct Params {
     double minCoverage, minWallM2, peakK, minLineGapM, depthBandM, facingCos, sampleM, minSamples, minDepthM, maxDepthM, stepM,
-        minMeasuredShare, minCellPhotoShare, auditPixelM, tearDepthM, auditYawDeg, auditPitchDeg, auditBeyondM, restoreFrontM;
+        minMeasuredShare, minCellPhotoShare, auditPixelM, tearDepthM, auditYawDeg, auditPitchDeg, auditBeyondM, restoreFrontM, sideKeepM;
     double recessContrastLo, recessContrastHi, recessMin, recessMax, recessMinRepeats;
     double gridLineContrast, gridCellContrast, gridMinRepeats;
     double stripOverlap, stripMaxGapM, stripMinWindows, stripMinStripM, stripMullionRatio, stripWindowInsetM;
@@ -72,12 +72,12 @@ struct Params {
     /** The surface's merged faces and steps at most this on a side (m). */
     double mergeMaxM;
 
-    static constexpr size_t kCount = 19 + 5 + 3 + 6 + 3 + 7 + 1 + 12 + 1;
+    static constexpr size_t kCount = 20 + 5 + 3 + 6 + 3 + 7 + 1 + 12 + 1;
     static Params from(const std::vector<double>& v) {
         if (v.size() != kCount) throw std::runtime_error("the lattice takes " + std::to_string(kCount) + " parameters, got " + std::to_string(v.size()));
         Params p;
         double* const fields[] = {&p.minCoverage, &p.minWallM2, &p.peakK, &p.minLineGapM, &p.depthBandM, &p.facingCos, &p.sampleM, &p.minSamples, &p.minDepthM, &p.maxDepthM, &p.stepM,
-            &p.minMeasuredShare, &p.minCellPhotoShare, &p.auditPixelM, &p.tearDepthM, &p.auditYawDeg, &p.auditPitchDeg, &p.auditBeyondM, &p.restoreFrontM,
+            &p.minMeasuredShare, &p.minCellPhotoShare, &p.auditPixelM, &p.tearDepthM, &p.auditYawDeg, &p.auditPitchDeg, &p.auditBeyondM, &p.restoreFrontM, &p.sideKeepM,
             &p.recessContrastLo, &p.recessContrastHi, &p.recessMin, &p.recessMax, &p.recessMinRepeats,
             &p.gridLineContrast, &p.gridCellContrast, &p.gridMinRepeats,
             &p.stripOverlap, &p.stripMaxGapM, &p.stripMinWindows, &p.stripMinStripM, &p.stripMullionRatio, &p.stripWindowInsetM,
@@ -1358,6 +1358,21 @@ inline bool overBuilt(double px, double py, double pz, const AuditFacade& x, con
     return x.built[static_cast<size_t>(cellIndex(tv, x.t)) * (x.s.size() - 1) + static_cast<size_t>(cellIndex(sv, x.s))] != 0;
 }
 
+/** nearSideOutline: a corner of the triangle over a rebuilt cell within sideKeepM, along s, of a cell in its row that is not rebuilt. */
+inline bool nearSideOutline(const Vec3& a, const Vec3& b, const Vec3& c, const AuditFacade& x, const Params& P) {
+    const long ns = static_cast<long>(x.s.size()) - 1, nt = static_cast<long>(x.t.size()) - 1;
+    for (const Vec3* p : {&a, &b, &c}) {
+        const Vec3 m{(*p)[0] - x.f.centroid[0], (*p)[1] - x.f.centroid[1], (*p)[2] - x.f.centroid[2]};
+        const double sv = dot(m, x.f.axisS), tv = dot(m, x.f.axisT);
+        if (sv < x.s[0] || sv > x.s[static_cast<size_t>(ns)] || tv < x.t[0] || tv > x.t[static_cast<size_t>(nt)]) continue;
+        const long row = cellIndex(tv, x.t), at = cellIndex(sv, x.s);
+        if (!x.built[static_cast<size_t>(row * ns + at)]) continue;
+        for (long q = at; q >= 0 && sv - x.s[static_cast<size_t>(q + 1)] <= P.sideKeepM; --q) if (!x.built[static_cast<size_t>(row * ns + q)]) return true;
+        for (long q = at; q < ns && x.s[static_cast<size_t>(q)] - sv <= P.sideKeepM; ++q) if (!x.built[static_cast<size_t>(row * ns + q)]) return true;
+    }
+    return false;
+}
+
 inline bool coveredByRebuild(const Vec3& a, const Vec3& b, const Vec3& c, const AuditFacade& x, const Params& P) {
     const double longest = js::max(js::max(js::hypot({b[0] - a[0], b[1] - a[1], b[2] - a[2]}), js::hypot({c[0] - a[0], c[1] - a[1], c[2] - a[2]})), js::hypot({c[0] - b[0], c[1] - b[1], c[2] - b[2]}));
     const double steps = js::min(40, js::max(1, std::ceil(longest / P.sampleM)));
@@ -1422,7 +1437,7 @@ inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<Au
                 bool ok = true;
                 for (size_t fi = 0; fi < F && ok; ++fi) {
                     if (dropped[fi] || !facesFacade(a, b, cc, facades[fi].f, P, sameFacing) || !centreInRect(a, b, cc, facades[fi])) continue;
-                    if (coveredByRebuild(a, b, cc, facades[fi], P)) { if (first < 0) first = static_cast<int>(fi); }
+                    if (coveredByRebuild(a, b, cc, facades[fi], P) && !nearSideOutline(a, b, cc, facades[fi], P)) { if (first < 0) first = static_cast<int>(fi); }
                     else ok = false;
                 }
                 R.claim[k] = ok && first >= 0 ? first : -1;
