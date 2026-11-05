@@ -369,10 +369,26 @@ Measured live in the app (example room, view 1465x1172 traced at about 1073x859,
 
 **Also fixed.** The status box covered the left third of every traced frame: a viewport-wide rule (`.sb-3d-viewport-frame > div`) stretched it to full size. It is an `aside` now and lists the lights it captured.
 
+**Moving the camera.** Before, the traced frame stayed frozen over a paused viewport for the whole drag: a view was sent only after an 80 ms pause, and the frame then restarted from scratch.
+
+Now the client checks the camera every display frame:
+- **While it moves,** the traced overlay hides on the first frame of the move and the viewport's own renderer shows the motion. No view is sent, and a still-converging old view is paused (`POST /3d/path-trace/pause`, the helper's `pause` op) to free the GPU.
+- **After 100 ms at rest,** one view is sent. Its first frame (1 spp, denoised with the previous view's light reprojected) fades in over 160 ms.
+
+Measured on an orbit:
+
+| Event | Time |
+| :--- | :--- |
+| Overlay hidden | 84 ms, the same frame as the first raster draw |
+| Raster during the move | about 60 frames/s |
+| View sent | 100 ms after the camera stopped (answered in 30-40 ms) |
+| First traced frame | about 100 ms later, faded in by 160 ms after that |
+| 256 spp | about 450 ms after the view |
+
 **Not done.**
 - The first click still builds the snapshot's full LOD file (minutes under load).
-- A camera move restarts at full traced size (no low-resolution preview while moving).
 - Frame buffers are still reallocated on every view.
+- The raster and the traced image differ in light (studio rig against dome plus lamps), so the hand-over shows a change of light.
 
 ## Next (plan)
 
