@@ -59,6 +59,12 @@ struct SceneMaterial {
     bool doubleSided{false};
     bool unlit{false};
     /**
+     * glTF alphaMode MASK: a surface is there only where the base colour's alpha (the factor's w times the texture's
+     * alpha) reaches alphaCutoff (cut-out leaves, fences, cards). BLEND and OPAQUE surfaces are traced as opaque.
+     */
+    bool alphaMask{false};
+    float alphaCutoff{0.5f};
+    /**
      * material.extras.scratchbox.photoInferredFill: its texture is a fill a stage laid over surfaces the photo does not
      * cover (the tree strip's caps and skirts), carried from real neighbouring texels: not the scan's own photo, whatever
      * its pixels, and consumers that bake or measure the scan's photo must not count it as such.
@@ -370,6 +376,8 @@ private:
                 }
             }
             sm.doubleSided = m["doubleSided"].type == io::GlbJsonValue::Bool && m["doubleSided"].b;
+            sm.alphaMask = m["alphaMode"].asString("OPAQUE") == "MASK";
+            sm.alphaCutoff = m["alphaCutoff"].asFloat(0.5f);
             sm.unlit = m["extensions"].has("KHR_materials_unlit");
             scene.materials.push_back(sm);
         }
@@ -383,6 +391,11 @@ private:
         const auto& views = ctx.root["bufferViews"];
         const auto& list = ctx.root["images"].arr;
         std::vector<SceneImage> images(list.size());
+        // Base colour images of alpha-masked materials keep their alpha (decoded RGBA); the rest decode as RGB.
+        std::vector<bool> keepAlpha(list.size(), false);
+        for (const SceneMaterial& m : scene.materials) {
+            if (m.alphaMask && m.baseColorImage >= 0 && m.baseColorImage < static_cast<int>(list.size())) keepAlpha[static_cast<size_t>(m.baseColorImage)] = true;
+        }
         auto decodeOne = [&](size_t index) {
             const auto& img = list[index];
             SceneImage& si = images[index];
@@ -412,7 +425,7 @@ private:
                 si.error = decoded.error;
                 si.pixels = std::move(decoded.image);
             } else if (isPng) {
-                auto decoded = png::decode(bytes, size, png::OutputFormat::Rgb);
+                auto decoded = png::decode(bytes, size, keepAlpha[index] ? png::OutputFormat::Rgba : png::OutputFormat::Rgb);
                 si.decoded = decoded.ok;
                 si.error = decoded.error;
                 si.pixels = std::move(decoded.image);

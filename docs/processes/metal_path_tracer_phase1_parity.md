@@ -419,6 +419,29 @@ The Penn Station district (the 11-03 build: its 777,516-triangle textured distri
 
 Screenshot: `docs/screenshots/path_tracer_penn_district_sun_2026-11-04.jpg`.
 
+## Phase 17 (2026-11-04): alpha-masked surfaces (cut-out leaves and cards)
+
+**The gap.** The viewport draws tree crowns as cards and leaves cut out by an alpha map with an alpha test. The cut-outs were lost twice on the way to the tracer:
+- **In the snapshot.** glTF has no alpha map, so three's exporter wrote `alphaMode: MASK` with nothing to test.
+- **In the tracer.** It decoded every texture as RGB, never read `alphaMode`, and treated every triangle as opaque.
+
+**Now.**
+- **Snapshot** (`withAlphaInColour`). A cut-out material's alpha map is folded into a copy of its base colour texture (the map's green channel as alpha). Without a colour map it becomes a white texture with the cut-out. The exporter then writes `MASK` at the material's alpha test.
+- **Loader.** It reads `alphaMode`/`alphaCutoff` and decodes masked base colour PNGs as RGBA.
+- **CPU tracer.** Rays and shadow rays pass texels where the base colour factor's alpha times the texture's alpha falls below the cutoff (`surfaceAt`, `raycastSurface`, `occluded`).
+- **Metal tracer.** Geometry is built non-opaque. When a material is masked, closest-hit and shadow rays run an `intersection_query` that commits only candidates that are there (`traceClosest`, `occludedRay`). Without masked materials the plain intersectors run as before.
+
+**Measured** (`metal-path-tracer.test.ts`, "alpha-masked surfaces"):
+- **Shadow.** A card cut out in alternate cells, under a 45° directional light, leaves the floor in its shadow at 0.500 of the open floor on both the GPU and the CPU. An opaque card leaves 0.000.
+- **Sight.** Seen from above, the floor shows through half of the card.
+- **Live capture.** In the live page, a card built like the tree system's (an 8-bit `DataTexture` alpha map, alpha test 0.5) went through `snapshotSceneForPathTrace` as a PNG base colour with `MASK` and traced with a checkered shadow. Sheet: `docs/screenshots/path_tracer_alpha_cutout_2026-11-04.png`.
+
+**Not done.**
+- **Penn trees.** The Penn district's trees were not checked with cards: from every view reached, the viewport drew them as far batches (no cut-outs), and its camera reset when moved by script.
+- **Coarse LOD levels.** Their atlases carry no alpha, so cut-outs hold only in single-level files (viewport snapshots) and at leaf clusters.
+- **Unmasked paths.** ReSTIR, guided sky, ReSTIR GI and the primary raster pass still treat everything as opaque.
+- **Shader-only effects.** The viewport's crown shading and LOD dither are not captured.
+
 ## Next (plan)
 
 - Metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share.
