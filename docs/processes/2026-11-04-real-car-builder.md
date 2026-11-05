@@ -192,3 +192,26 @@ Candidate next steps:
   - sample the grid at the drawing's resolution in the loft, with no pooling;
   - add stations near the nose;
   - use the depth map only to place step 4's openings, not as a surface field.
+
+## 9. Blueprint stretched to the axles (2026-11-04, night)
+
+**Status: Verified offline; small gain. No live build was run (machine load above 300).**
+
+What was built (commit d9d7f461):
+- `object_blueprint_outlines` takes `axleZMeters` [front, rear].
+- The side and plan drawings are read through a three-piece linear stretch along the length: tail to rear wheel, wheel to wheel, front wheel to nose. It puts the drawn ground contacts on the given axles, and the bumpers stay at the ends. Side-view openings map back through the same stretch.
+- It is refused, with the reason, when fewer than two contacts are read or the drawn wheels are more than 12 % off the wheelbase.
+- It is recorded as `outlines.lengthWarp` and labelled generated. The real-car skill passes the axles from its hardpoints.
+
+Checked offline on the two Polestar 3 drawings already made (no new image calls), against the production model. Mean error in cm, roofline / underside / plan / front, for the two drawings:
+
+| Read | Drawing 1 | Drawing 2 |
+|---|---|---|
+| As drawn (wheels at z 1.593 / −1.501) | 5.6 / 5.7 / 1.6 / 8.1 | 5.3 / 6.2 / 2.3 / 6.6 |
+| Stretched to a guessed even overhang split (±1.4925) | 5.9 / 5.5 / 1.6 / 8.1 | 5.8 / 5.9 / 1.9 / 6.6 |
+| Stretched to the production model's axles (1.532 / −1.439) | 5.8 / 5.0 / 1.6 / 8.1 | 5.6 / 5.3 / 2.1 / 6.6 |
+| The same, scaled to the production model's height (1.662 m) | 3.8 / 4.5 / 1.6 / 4.3 | 3.4 / 4.8 / 2.1 / 3.9 |
+
+- **The stretch works as intended.** The drawn wheels land on the axles, and with the right axles the underside improves by about 1 cm. The roofline does not improve, and with a guessed overhang split it gets about 0.4 cm worse.
+- **Most of the Polestar's error is height, not length.** The published height it was scaled to (1.614 m) is 4.8 cm less than the production model's (1.662 m). With that height the roofline error falls from 5.6 to 3.8 cm and the front width from 8.1 to 4.3 cm. Which figure is right for this trim (roof rails, an antenna, a different suspension) is not settled. The drawing was not at fault there.
+- The production model's axles sit 4.7 cm forward of centre (front overhang 0.904 m). The skill's median split (0.5 of the overhangs) puts them centred, so a published front overhang matters.
