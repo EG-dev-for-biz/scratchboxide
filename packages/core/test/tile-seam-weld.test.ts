@@ -28,7 +28,9 @@
  *   9. pairs whose surfaces do not agree (a step, a wall standing at the border) and a gap beyond the tiles' stated error
  *      are left as they are;
  *  10. agreed gaps no close may move are bridged by the strip fill, drawn with a material labelled generated;
- *  11. the node -> tile file the service writes for the CLI.
+ *  11. the node -> tile file the service writes for the CLI;
+ *  12. the tone feather: two tiles' photos of one wall, cut across by their boxes, levelled toward each other at the cut,
+ *      faded out away from it, labelled, and left alone without boxes or when switched off.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -400,5 +402,112 @@ describe('tile_seam_weld by source tile: the seam audit, the adaptive close and 
         ] };
         expect(tileSeamTilesFile(json)).toBe('5\n0 0\n1 2.01\n2 0\n1 2.01\n3 0\n');
         expect(tileSeamTilesFile(json, 4)).toBe('5\n0 4\n1 2.01\n2 4\n1 2.01\n3 4\n');
+        // a box comes in the scan's frame: ECEF -> local by the document's localToEcef (here a quarter turn about y and a shift)
+        const framed = { extras: { localToEcef: [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 100, 200, 300, 1] }, nodes: [{ mesh: 0, extras: { sb: { ids: { leafId: 'x' }, tile: { box: [101, 202, 303, 2, 0, 0, 0, 3, 0, 0, 0, 4] } } } }] };
+        const line = tileSeamTilesFile(framed).split('\n')[1].split(' ').map(Number);
+        expect(line.slice(0, 2)).toEqual([0, 0]);
+        // local = R^T (ecef - t): R's columns are local x -> (0, 0, -1), y -> (0, 1, 0), z -> (1, 0, 0)
+        expect(line.slice(2)).toEqual([-3, 2, 1, 0, 0, 2, 0, 3, 0, -4, 0, 0]);
+    });
+});
+
+describe('tile_seam_weld tone feather: two tiles\' photos levelled toward each other across the cut their boxes share', () => {
+    beforeAll(() => {
+        fs.mkdirSync(WORK, { recursive: true });
+        buildDriver();
+        process.env.SCRATCHBOX_TILE_SEAM_WELD_BIN = BIN;
+    });
+
+    // a wall in z = 0 facing +z, x 0..10: tile A below y = 5, tile B above, each with its own uniform photo (64 x 64 texels)
+    const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    const wallTile = (y0: number, image: number): Chunk => {
+        const c: Chunk = { ...quad([0, y0, 0], [10, 0, 0], [0, 5, 0], 10, 5), image };
+        c.uvs = [];
+        for (let i = 0; i < c.positions.length; i += 3) c.uvs.push(c.positions[i] / 10, 1 - (c.positions[i + 1] - y0) / 5);
+        return c;
+    };
+    const grey = (v: number) => encodePng(64, 64, new Uint8Array(64 * 64 * 3).fill(v));
+    const boxOf = (y0: number) => [5, y0 + 2.5, 0, 5, 0, 0, 0, 2.5, 0, 0, 0, 1];
+    /** The mean grey of each tile's photo in rows of texels, by the row's distance from the cut (m). */
+    function rowMeans(file: string) {
+        const doc = parseGlbBytes(fs.readFileSync(file));
+        const out: Array<{ material: any; rows: Array<{ d: number; v: number }> }> = [];
+        for (const m of doc.json.meshes) for (const pr of m.primitives) {
+            const mat = doc.json.materials[pr.material];
+            const img = doc.json.images[doc.json.textures[mat.pbrMetallicRoughness.baseColorTexture.index].source];
+            const view = doc.json.bufferViews[img.bufferView];
+            const bytes = Buffer.from(doc.bin.buffer, doc.bin.byteOffset + (view.byteOffset ?? 0), view.byteLength);
+            const P = readAccessor(doc, pr.attributes.POSITION).data;
+            let ySum = 0;
+            for (let i = 1; i < P.length; i += 3) ySum += P[i];
+            const below = ySum / (P.length / 3) < 5;   // tile A lies below the cut, B above it
+            const px = decodePngRgb(bytes);
+            const rows: Array<{ d: number; v: number }> = [];
+            for (let y = 0; y < px.height; y++) {
+                let sum = 0;
+                for (let x = 0; x < px.width; x++) sum += px.data[(y * px.width + x) * 3];
+                // v = 1 - (wy - y0) / 5: A's row y sits at world y = 5 (1 - (y + 0.5) / 64); its distance from the cut is 5 - that
+                const wy = 5 * (1 - (y + 0.5) / px.height);
+                rows.push({ d: below ? 5 - wy : wy, v: sum / px.width });
+            }
+            out.push({ material: mat, rows });
+        }
+        return out;
+    }
+    function decodePngRgb(png: Buffer): { width: number; height: number; data: Uint8Array } {
+        const zlibMod = require('zlib') as typeof import('zlib');
+        let o = 8, w = 0, h = 0; const idat: Buffer[] = [];
+        while (o < png.length) {
+            const len = png.readUInt32BE(o), type = png.toString('ascii', o + 4, o + 8), data = png.subarray(o + 8, o + 8 + len);
+            if (type === 'IHDR') { w = data.readUInt32BE(0); h = data.readUInt32BE(4); }
+            if (type === 'IDAT') idat.push(data);
+            o += 12 + len;
+        }
+        const raw = zlibMod.inflateSync(Buffer.concat(idat)), stride = w * 3, out = new Uint8Array(w * h * 3);
+        for (let y = 0; y < h; y++) {
+            const f = raw[y * (stride + 1)], line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
+            for (let i = 0; i < stride; i++) {
+                const a = i >= 3 ? out[y * stride + i - 3] : 0, b = y > 0 ? out[(y - 1) * stride + i] : 0, c = i >= 3 && y > 0 ? out[(y - 1) * stride + i - 3] : 0;
+                const pa = Math.abs(b - c), pb = Math.abs(a - c), pc = Math.abs(a + b - 2 * c);
+                const pred = f === 1 ? a : f === 2 ? b : f === 3 ? ((a + b) >> 1) : f === 4 ? (pa <= pb && pa <= pc ? a : pb <= pc ? b : c) : 0;
+                out[y * stride + i] = (line[i] + pred) & 255;
+            }
+        }
+        return { width: w, height: h, data: out };
+    }
+
+    it('levels the two photos toward each other at the cut, fades out over the band, and labels them', async () => {
+        const input = path.join(WORK, 'tone.glb'), output = path.join(WORK, 'tone_welded.glb');
+        writeGlb(input, [wallTile(0, 0), wallTile(5, 1)], [grey(110), grey(150)],
+            [{ leafId: 'a', geometricErrorM: 2, box: boxOf(0) }, { leafId: 'b', geometricErrorM: 2, box: boxOf(5) }], { localToEcef: IDENTITY });
+        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, threads: 2, repoRoot: REPO });
+        const t = r.tone!;
+        expect(t.tilesBoxed).toBe(2);
+        expect(t.cuts).toBe(1);
+        expect(t.binsMatched).toBeGreaterThanOrEqual(4);
+        expect(t.imagesChanged).toBe(2);
+        expect(t.dEBefore[0]).toBeGreaterThan(12);   // grey 110 against grey 150 (within the gain cap of either side)
+        expect(t.dEAfter[0]).toBeLessThan(t.dEBefore[0] * 0.5);
+        const [a, b] = rowMeans(output).sort((p, q) => p.rows[0].v - q.rows[0].v);
+        const near = (rows: Array<{ d: number; v: number }>) => rows.filter(x => x.d < 0.3).reduce((s, x) => s + x.v, 0) / rows.filter(x => x.d < 0.3).length;
+        const far = (rows: Array<{ d: number; v: number }>) => rows.filter(x => x.d > 3).reduce((s, x) => s + x.v, 0) / rows.filter(x => x.d > 3).length;
+        // at the cut the two meet near the middle (the geometric mean in linear light, about grey 131); 3 m away each is as it was
+        expect(near(b.rows) - near(a.rows)).toBeLessThan(6);
+        expect(near(a.rows)).toBeGreaterThan(124);
+        expect(near(b.rows)).toBeLessThan(138);
+        expect(Math.abs(far(a.rows) - 110)).toBeLessThanOrEqual(1);
+        expect(Math.abs(far(b.rows) - 150)).toBeLessThanOrEqual(1);
+        // the photos rise monotonically toward each other across the band (no step inside a tile)
+        const ascending = [...a.rows].sort((p, q) => q.d - p.d).map(x => x.v);
+        for (let i = 1; i < ascending.length; i++) expect(ascending[i]).toBeGreaterThanOrEqual(ascending[i - 1] - 0.5);
+        for (const m of [a.material, b.material]) expect(m.extras?.scratchbox?.method).toBe('tile seam tone feather (fitted levels, generated)');
+        // switched off, or with no boxes, the photos are left as they came
+        const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'tone_off.glb'), tone: false, threads: 2, repoRoot: REPO });
+        expect(off.tone).toBeUndefined();
+        const noBox = path.join(WORK, 'tone_nobox.glb');
+        writeGlb(noBox, [wallTile(0, 0), wallTile(5, 1)], [grey(110), grey(150)], [{ leafId: 'a' }, { leafId: 'b' }], { localToEcef: IDENTITY });
+        const nb = await runTileSeamWeld({ inputGlb: noBox, outputGlb: path.join(WORK, 'tone_nobox_welded.glb'), threads: 2, repoRoot: REPO });
+        expect(nb.tone).toBeUndefined();
+        for (const { rows } of rowMeans(path.join(WORK, 'tone_off.glb'))) expect(new Set(rows.map(x => Math.round(x.v))).size).toBe(1);
     });
 });

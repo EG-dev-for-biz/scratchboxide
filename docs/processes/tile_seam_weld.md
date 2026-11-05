@@ -163,3 +163,21 @@ No difference a build shows. A full chunked district (pipeline K-D) was not buil
 ### Cost
 
 On the district extraction: the fixed passes 50 s, the adaptive close 115 s, the fill 7 s, the audits about a second each (with other builds loading the machine). With the adaptive close off by default, the stage costs what tile-seams/3 did plus the audit.
+
+## 9. Seam tone feather (tile-seams/5, 2026-11-05)
+
+**Status: measured offline on the ESB and the Penn district extraction, rendered before and after; on by default (`SCRATCHBOX_TILE_SEAM_TONE=0` off), for extractions whose leaves carry their boxes (the crawler now writes each leaf's tileset box into its node, `extras.sb.tile.box`).**
+
+What a facade seam shows (§8) is the two tiles' photos. Three things were tried; one ships.
+
+- **Tone feather (shipped, `featherSeamTone`).** The cuts are the planes where two leaves' boxes share a face (neighbouring faces lie 5–10 cm apart; 808 cuts on the ESB, 1,602 on the district). On the surfaces crossing a cut (never a cap lying in it), each tile's photo is read within 1 m of the cut in 2 m bins along it, by facing; where both sides read a bin the two mean colours are levelled toward their geometric mean, half the step each, smoothed over neighbouring bins, interpolated between bin centres, faded out over 2.5 m, capped at 1.6x per channel. Texels an atlas draws at two places more than 0.5 m apart are never touched. The photos are written back in their own format (a native baseline JPEG encoder, `jpeg::encode`, keeps them JPEG; as PNG the ESB scan grew 18 → 46 MB, as JPEG 18 → 22 MB). Labelled `generated` on the material (`extras.scratchbox.method`).
+
+| | median / p90 CIELAB step across the seam, before → after | photos changed | time |
+|---|---|---|---|
+| ESB (136 tiles) | 4.14 / 18.6 → 2.12 / 9.6 | 187 | 1.0 s |
+| Penn district r210 (234 boxed tiles) | 3.35 / 15.0 → 1.61 / 7.9 | 303 | 1.1 s |
+
+  In renders the change is modest: a softer tone change at the cuts, 2–10% of a facade view's pixels moved by more than 3 levels.
+
+- **Sideways registration (tried, not shipped).** Grey profiles parallel to each cut, either side, cross-correlated per 4 m of seam: the two sides already correlate at 0.89–0.99 at no shift on the ESB's walls; 27 of 236 segments had a clear peak elsewhere. Rendered, nothing visible changed.
+- **Row phase across the cut (tried, not shipped).** Each side's rhythm perpendicular to the cut (storeys, bays) read out to 12 m, the period from both sides' autocorrelation, each side's phase at it, and half the phase difference moved into each side over a band four times the move. On the ESB 86 wall segments had a rhythm on both sides; the tile photos (256–512 texels for ~30 m) are too soft and too different in viewpoint for it to be reliable: rendered, moves landed in triangle-shaped patches and swapped window content rather than continuing it. What still reads as a seam is the two photos themselves (different sharpness, different viewpoint), which no levelling or shift of either photo fixes.

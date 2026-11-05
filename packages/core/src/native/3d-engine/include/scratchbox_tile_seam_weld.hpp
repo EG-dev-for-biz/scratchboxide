@@ -51,7 +51,8 @@
  * errors, capped, only where the two surfaces agree (same facing, parallel borders, no step: each surface carried across
  * the seam meets the other); the strip fill (fillStrips) bridges, with thin triangles labelled generated, the agreed gaps a
  * move would have distorted. The seam audit (auditSeams) measures the open border by its gap to the nearest other tile,
- * inside the extraction's cut border, before and after.
+ * inside the extraction's cut border, before and after. Last, the seam tone feather (featherSeamTone) levels the two tiles'
+ * photos' colour toward each other on the surfaces crossing every cut their boxes share, faded out over a band.
  * Why it runs where it runs: scratchbox_scan_rectifier.hpp's own D1 weld (weldEpsilon, 1 mm) is far
  * tighter than a 1-3 cm tile seam, and its D4 orientation-family vote and D5 planar regions run four
  * stages before its own D8 seam close (tJunctionTolerance, 3 cm), so even inside the rectifier the
@@ -65,6 +66,9 @@
  */
 
 #include "scratchbox_geometry.hpp"
+#include "scratchbox_gltf_scene.hpp"
+#include "scratchbox_jpeg.hpp"
+#include "scratchbox_png.hpp"
 #include "scratchbox_scan_rectifier.hpp"
 
 #include <algorithm>
@@ -75,8 +79,11 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <limits>
+#include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace scratchbox {
@@ -310,6 +317,57 @@ struct TileSeamFillStats {
     /** Open edges with an agreed partner on both ends that were not filled (a fill triangle would have folded). */
     size_t refused{0};
 };
+
+// ============================================================================
+// Seam tone feather: the two tiles' photos levelled toward each other across every cut two tiles share
+// ============================================================================
+/** A source tile's bounding box in the mesh's frame: its centre and three half-axes (the tileset's, taken into the frame). */
+struct TileBox { V3 c; V3 h[3]; bool valid{false}; };
+
+struct TileSeamToneParams {
+    /** Two boxes' faces are one cut when their planes lie within this (the tileset's boxes are 5-10 cm loose). */
+    double faceMatchM{0.12};
+    /** Each side's tone is read from its photo within this of the cut (a tile's photo is coarse: 256-512 texels for ~30 m). */
+    double sampleM{1.0};
+    /** The levelling fades to nothing this far from the cut, on each side. */
+    double bandM{2.5};
+    /** Bins along the cut (m): the tone step is read and levelled per bin, so it may change along the seam. */
+    double binM{2.0};
+    /** Only surfaces crossing the cut (|normal . cut normal| below this) are levelled: never a cap lying in the cut. */
+    double crossCos{0.5};
+    /** A bin is levelled only when each side read at least this many texels in it. */
+    size_t minTexels{8};
+    /** No channel is scaled by more than this either way. */
+    double maxGain{1.6};
+    /** A levelled photo that came as a JPEG is written back as one at this quality. */
+    int jpegQuality{92};
+    int threads{0};
+};
+
+struct TileSeamToneStats {
+    size_t cuts{0};
+    size_t binsMatched{0};
+    size_t imagesChanged{0};
+    size_t texelsChanged{0};
+    /** The photos rewritten (scene.images indices). */
+    std::vector<uint32_t> changedImages;
+    double maxGain{1};
+    /** The CIELAB step between the two sides' mean colours per matched bin, weighted by texels: before and after. */
+    double dEBeforeP50{0}, dEBeforeP90{0}, dEAfterP50{0}, dEAfterP90{0};
+};
+
+namespace tone_detail {
+inline double toLinear(double c) { return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); }
+inline double toSrgb(double c) { c = std::clamp(c, 0.0, 1.0); return c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1.0 / 2.4) - 0.055; }
+inline std::array<double, 3> lab(const std::array<double, 3>& rgbLinear) {
+    const double X = 0.4124 * rgbLinear[0] + 0.3576 * rgbLinear[1] + 0.1805 * rgbLinear[2];
+    const double Y = 0.2126 * rgbLinear[0] + 0.7152 * rgbLinear[1] + 0.0722 * rgbLinear[2];
+    const double Z = 0.0193 * rgbLinear[0] + 0.1192 * rgbLinear[1] + 0.9505 * rgbLinear[2];
+    auto f = [](double t) { return t > 0.008856 ? std::cbrt(t) : 7.787 * t + 16.0 / 116.0; };
+    const double fx = f(X / 0.9505), fy = f(Y), fz = f(Z / 1.089);
+    return {116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)};
+}
+}  // namespace tone_detail
 
 // ============================================================================
 // Kernel
@@ -1610,6 +1668,356 @@ public:
     static std::string fillStatsJson(const TileSeamFillStats& s) {
         char b[64]; std::snprintf(b, sizeof b, "%.2f", s.areaM2);
         return "\"edgesFilled\": " + std::to_string(s.edgesFilled) + ", \"triangles\": " + std::to_string(s.triangles) + ", \"areaM2\": " + b + ", \"refused\": " + std::to_string(s.refused);
+    }
+
+private:
+    /**
+     * The cuts two tiles share, and what the photo passes need to read and write the photos near them: each cut is the
+     * plane halfway between two boxes' faces that face each other within faceMatchM and whose rectangles overlap, facing out
+     * of the lower tile; each photo's texels are located in the world (the first place a triangle draws each), and a texel
+     * drawn at two places more than sharedM apart (an atlas reusing it) is marked shared: the passes never write it.
+     */
+    struct SeamCut { uint32_t tile[2]; V3 u, c, a, b; double o; };
+    struct SeamCuts {
+        std::vector<SeamCut> cuts;
+        std::vector<std::vector<std::pair<uint32_t, int>>> cutsOf;   // per tile: (cut, side)
+        std::vector<std::vector<uint32_t>> trisOf;                   // per tile with a cut: its triangles
+        std::vector<int32_t> imageOfTri;                             // per triangle: its photo (scene.images), -1 none
+        std::vector<std::vector<float>> texelAt;                     // per photo: world position per texel (NaN: no triangle draws it)
+        std::vector<std::vector<uint8_t>> texelShared;
+    };
+    static SeamCuts seamCuts(const gltf::GltfScene& scene, const std::vector<uint32_t>& triTile, const std::vector<TileBox>& boxes, double faceMatchM, int threadsWanted) {
+        SeamCuts sc;
+        const auto& mesh = scene.mesh;
+        const size_t F = mesh.indices.size() / 3;
+        auto vp = [&](uint32_t v) { const auto& q = mesh.vertices[v].position; return V3{q.x, q.y, q.z}; };
+        struct Face { uint32_t tile; V3 u, c, a, b; double o, ha, hb; };
+        std::vector<Face> faces;
+        for (uint32_t t = 0; t < boxes.size(); ++t) {
+            const TileBox& B = boxes[t];
+            if (!B.valid) continue;
+            for (int k = 0; k < 3; ++k) for (int s = -1; s <= 1; s += 2) {
+                const double hk = B.h[k].norm();
+                if (!(hk > 1e-6)) continue;
+                Face f;
+                f.tile = t; f.u = B.h[k] * (s / hk); f.c = B.c + B.h[k] * s; f.o = f.u.dot(f.c);
+                f.a = B.h[(k + 1) % 3]; f.b = B.h[(k + 2) % 3]; f.ha = f.a.norm(); f.hb = f.b.norm();
+                if (f.ha > 1e-9) f.a = f.a * (1.0 / f.ha);
+                if (f.hb > 1e-9) f.b = f.b * (1.0 / f.hb);
+                faces.push_back(f);
+            }
+        }
+        auto overlaps = [](const Face& f, const Face& g) {
+            double lo[2] = {1e300, 1e300}, hi[2] = {-1e300, -1e300};
+            for (int i = -1; i <= 1; i += 2) for (int j = -1; j <= 1; j += 2) {
+                const V3 q = g.c + g.a * (i * g.ha) + g.b * (j * g.hb) - f.c;
+                const double x = q.dot(f.a), y = q.dot(f.b);
+                lo[0] = std::min(lo[0], x); hi[0] = std::max(hi[0], x); lo[1] = std::min(lo[1], y); hi[1] = std::max(hi[1], y);
+            }
+            return lo[0] < f.ha && hi[0] > -f.ha && lo[1] < f.hb && hi[1] > -f.hb;
+        };
+        for (size_t i = 0; i < faces.size(); ++i) for (size_t j = 0; j < faces.size(); ++j) {
+            const Face& f = faces[i]; const Face& g = faces[j];
+            if (f.tile >= g.tile || f.u.dot(g.u) > -0.995 || std::abs(f.o + g.o) > faceMatchM || !overlaps(f, g)) continue;
+            SeamCut c;
+            c.tile[0] = f.tile; c.tile[1] = g.tile; c.u = f.u; c.o = 0.5 * (f.o - g.o); c.a = f.a; c.b = f.b; c.c = f.c - f.u * (f.o - c.o);
+            sc.cuts.push_back(c);
+        }
+        sc.cutsOf.assign(boxes.size(), {});
+        for (uint32_t k = 0; k < sc.cuts.size(); ++k) { sc.cutsOf[sc.cuts[k].tile[0]].push_back({k, 0}); sc.cutsOf[sc.cuts[k].tile[1]].push_back({k, 1}); }
+        sc.trisOf.assign(boxes.size(), {});
+        sc.imageOfTri.assign(F, -1);
+        std::vector<std::vector<uint32_t>> trisOfImage(scene.images.size());
+        for (size_t t = 0; t < F; ++t) {
+            const uint32_t m = t < scene.triangleMaterial.size() ? scene.triangleMaterial[t] : UINT32_MAX;
+            if (m < scene.materials.size()) {
+                const int im = scene.materials[m].baseColorImage;
+                if (im >= 0 && im < static_cast<int>(scene.images.size()) && scene.images[static_cast<size_t>(im)].decoded) {
+                    sc.imageOfTri[t] = im;
+                    trisOfImage[static_cast<size_t>(im)].push_back(static_cast<uint32_t>(t));
+                }
+            }
+            if (triTile[t] < boxes.size() && !sc.cutsOf[triTile[t]].empty()) sc.trisOf[triTile[t]].push_back(static_cast<uint32_t>(t));
+        }
+        const double sharedM = 0.5;
+        sc.texelAt.assign(scene.images.size(), {});
+        sc.texelShared.assign(scene.images.size(), {});
+        std::vector<uint32_t> used;
+        for (uint32_t i = 0; i < scene.images.size(); ++i) if (!trisOfImage[i].empty()) used.push_back(i);
+        scan_rectifier::detail::parallelFor(used.size(), scan_rectifier::detail::resolveThreads(threadsWanted), 1, [&](size_t a0, size_t a1, unsigned) {
+            for (size_t ui = a0; ui < a1; ++ui) {
+                const uint32_t im = used[ui];
+                const auto& img = scene.images[im].pixels;
+                auto& at = sc.texelAt[im];
+                auto& sh = sc.texelShared[im];
+                at.assign(static_cast<size_t>(img.width) * img.height * 3, std::numeric_limits<float>::quiet_NaN());
+                sh.assign(static_cast<size_t>(img.width) * img.height, 0);
+                for (uint32_t t : trisOfImage[im]) {
+                    const uint32_t i0 = mesh.indices[3 * t], i1 = mesh.indices[3 * t + 1], i2 = mesh.indices[3 * t + 2];
+                    const V3 P0 = vp(i0), P1 = vp(i1), P2 = vp(i2);
+                    const auto& u0 = mesh.vertices[i0].uv; const auto& u1 = mesh.vertices[i1].uv; const auto& u2 = mesh.vertices[i2].uv;
+                    const double W = img.width, H = img.height;
+                    const double x0 = u0.x * W, y0 = u0.y * H, x1 = u1.x * W, y1 = u1.y * H, x2 = u2.x * W, y2 = u2.y * H;
+                    const double den = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+                    const int xa = std::max(0, static_cast<int>(std::floor(std::min({x0, x1, x2})))), xb = std::min(img.width - 1, static_cast<int>(std::ceil(std::max({x0, x1, x2}))));
+                    const int ya = std::max(0, static_cast<int>(std::floor(std::min({y0, y1, y2})))), yb = std::min(img.height - 1, static_cast<int>(std::ceil(std::max({y0, y1, y2}))));
+                    if (xb < xa || yb < ya || static_cast<int64_t>(xb - xa + 1) * (yb - ya + 1) > 4'000'000) continue;
+                    // a triangle with (almost) no texture area draws one texel or a line of them everywhere it stands
+                    const bool flat = std::abs(den) < 1e-9;
+                    for (int y = ya; y <= yb; ++y) for (int x = xa; x <= xb; ++x) {
+                        V3 q;
+                        if (flat) q = (P0 + P1 + P2) * (1.0 / 3.0);
+                        else {
+                            const double px = x + 0.5, py = y + 0.5;
+                            const double l1 = ((px - x0) * (y2 - y0) - (x2 - x0) * (py - y0)) / den, l2 = ((x1 - x0) * (py - y0) - (px - x0) * (y1 - y0)) / den, l0 = 1 - l1 - l2;
+                            if (l0 < -0.02 || l1 < -0.02 || l2 < -0.02) continue;
+                            q = P0 * l0 + P1 * l1 + P2 * l2;
+                        }
+                        const size_t ti = static_cast<size_t>(y) * img.width + x;
+                        float* a = &at[ti * 3];
+                        if (std::isnan(a[0])) { a[0] = static_cast<float>(q.x); a[1] = static_cast<float>(q.y); a[2] = static_cast<float>(q.z); continue; }
+                        const double dx = a[0] - q.x, dy = a[1] - q.y, dz = a[2] - q.z;
+                        if (dx * dx + dy * dy + dz * dz > sharedM * sharedM) sh[ti] = 1;
+                    }
+                }
+            }
+        });
+        return sc;
+    }
+    /** One texel of a surface crossing a cut, within the band on its own side. */
+    struct BandTexel { uint32_t cut; int side; double d; V3 q, n; uint32_t tri; int image; int x, y; size_t texel; };
+    /** Visits every texel of every triangle of `tile` that crosses one of its cuts (|n . u| <= crossCos) within maxD on its own side. */
+    static void visitBand(const gltf::GltfScene& scene, const SeamCuts& sc, uint32_t tile, double maxD, double crossCos, const std::function<void(const BandTexel&)>& fn) {
+        const auto& mesh = scene.mesh;
+        auto vp = [&](uint32_t v) { const auto& q = mesh.vertices[v].position; return V3{q.x, q.y, q.z}; };
+        for (uint32_t t : sc.trisOf[tile]) {
+            const int im = sc.imageOfTri[t];
+            if (im < 0) continue;
+            const auto& img = scene.images[static_cast<size_t>(im)].pixels;
+            const uint32_t i0 = mesh.indices[3 * t], i1 = mesh.indices[3 * t + 1], i2 = mesh.indices[3 * t + 2];
+            const V3 P0 = vp(i0), P1 = vp(i1), P2 = vp(i2);
+            V3 n = (P1 - P0).cross(P2 - P0);
+            if (!(n.norm() > 1e-12)) continue;
+            n = n.normalized();
+            for (const auto& [k, side] : sc.cutsOf[tile]) {
+                const SeamCut& C = sc.cuts[k];
+                if (std::abs(n.dot(C.u)) > crossCos) continue;
+                const double sg = side == 0 ? -1.0 : 1.0;   // own side: inside the lower tile is below the plane
+                const double d0 = sg * (C.u.dot(P0) - C.o), d1 = sg * (C.u.dot(P1) - C.o), d2 = sg * (C.u.dot(P2) - C.o);
+                if (std::min({d0, d1, d2}) > maxD || std::max({d0, d1, d2}) < -0.3) continue;
+                const auto& u0 = mesh.vertices[i0].uv; const auto& u1 = mesh.vertices[i1].uv; const auto& u2 = mesh.vertices[i2].uv;
+                const double W = img.width, H = img.height;
+                const double x0 = u0.x * W, y0 = u0.y * H, x1 = u1.x * W, y1 = u1.y * H, x2 = u2.x * W, y2 = u2.y * H;
+                const double den = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+                if (std::abs(den) < 1e-9) continue;
+                const int xa = std::max(0, static_cast<int>(std::floor(std::min({x0, x1, x2})))), xb = std::min(img.width - 1, static_cast<int>(std::ceil(std::max({x0, x1, x2}))));
+                const int ya = std::max(0, static_cast<int>(std::floor(std::min({y0, y1, y2})))), yb = std::min(img.height - 1, static_cast<int>(std::ceil(std::max({y0, y1, y2}))));
+                if (static_cast<int64_t>(xb - xa + 1) * (yb - ya + 1) > 4'000'000) continue;
+                for (int y = ya; y <= yb; ++y) for (int x = xa; x <= xb; ++x) {
+                    const double px = x + 0.5, py = y + 0.5;
+                    const double l1 = ((px - x0) * (y2 - y0) - (x2 - x0) * (py - y0)) / den, l2 = ((x1 - x0) * (py - y0) - (px - x0) * (y1 - y0)) / den, l0 = 1 - l1 - l2;
+                    if (l0 < 0 || l1 < 0 || l2 < 0) continue;
+                    const size_t texel = static_cast<size_t>(y) * img.width + x;
+                    if (sc.texelShared[static_cast<size_t>(im)][texel]) continue;
+                    const V3 q = P0 * l0 + P1 * l1 + P2 * l2;
+                    const double d = sg * (C.u.dot(q) - C.o);
+                    if (d > maxD || d < -0.3) continue;
+                    fn(BandTexel{k, side, std::max(0.0, d), q, n, t, im, x, y, texel});
+                }
+            }
+        }
+    }
+    /** Which way a surface crossing a cut faces, in eighths of a turn in the cut's plane. */
+    static int facingOctant(const SeamCut& C, const V3& n) {
+        return static_cast<int>(std::floor((std::atan2(n.dot(C.b), n.dot(C.a)) + M_PI) / (M_PI / 4.0))) & 7;
+    }
+    static std::vector<uint32_t> tilesWithCuts(const SeamCuts& sc) {
+        std::vector<uint32_t> out;
+        for (uint32_t t = 0; t < sc.trisOf.size(); ++t) if (!sc.trisOf[t].empty()) out.push_back(t);
+        return out;
+    }
+
+public:
+    /**
+     * Seam tone feather: on every surface crossing a cut two tiles share (seamCuts), each tile's photo is read within sampleM
+     * of the cut, in binM bins along it and by which way the surface faces. Where both sides read a bin, the two mean
+     * colours (linear RGB) are levelled toward their geometric mean, half the step each, the correction smoothed over
+     * neighbouring bins, faded to nothing over bandM from the cut (raised cosine), and capped at maxGain per texel. The
+     * texels are rewritten in each tile's photo (re-encoded in its own format); geometry and UVs are untouched. The levels are fitted,
+     * so a stage reports them as generated; the photo's detail stays the photo's.
+     */
+    static TileSeamToneStats featherSeamTone(gltf::GltfScene& scene, const std::vector<uint32_t>& triTile, const std::vector<TileBox>& boxes, const TileSeamToneParams& p = {}) {
+        using namespace tone_detail;
+        TileSeamToneStats st;
+        if (triTile.size() != scene.mesh.indices.size() / 3) return st;
+        const SeamCuts sc = seamCuts(scene, triTile, boxes, p.faceMatchM, p.threads);
+        st.cuts = sc.cuts.size();
+        if (sc.cuts.empty()) return st;
+        const unsigned threads = scan_rectifier::detail::resolveThreads(p.threads);
+        const std::vector<uint32_t> tiles = tilesWithCuts(sc);
+        // bins: (cut, ia, ib, facing) -> per side sums
+        auto binKey = [&](uint32_t cut, int64_t ia, int64_t ib, int oct) {
+            return (static_cast<uint64_t>(cut) << 40) | (static_cast<uint64_t>((ia + 32768) & 0xFFFF) << 24) | (static_cast<uint64_t>((ib + 32768) & 0xFFFF) << 8) | static_cast<uint64_t>(oct);
+        };
+        auto keyOf = [&](const BandTexel& b) {
+            const SeamCut& C = sc.cuts[b.cut];
+            const V3 r = b.q - C.c;
+            return binKey(b.cut, static_cast<int64_t>(std::floor(r.dot(C.a) / p.binM)), static_cast<int64_t>(std::floor(r.dot(C.b) / p.binM)), facingOctant(C, b.n));
+        };
+        struct Sum { double r{0}, g{0}, b{0}; size_t n{0}; };
+        using BinMap = std::unordered_map<uint64_t, std::array<Sum, 2>>;
+        auto sample = [&]() {
+            std::vector<BinMap> local(threads);
+            scan_rectifier::detail::parallelFor(tiles.size(), threads, 1, [&](size_t i0, size_t i1, unsigned th) {
+                for (size_t i = i0; i < i1; ++i) visitBand(scene, sc, tiles[i], p.sampleM, p.crossCos, [&](const BandTexel& b) {
+                    const auto& img = scene.images[static_cast<size_t>(b.image)].pixels;
+                    const uint8_t* px = &img.data[b.texel * static_cast<size_t>(img.channels)];
+                    Sum& s = local[th][keyOf(b)][static_cast<size_t>(b.side)];
+                    s.r += toLinear(px[0] / 255.0); s.g += toLinear(px[img.channels >= 3 ? 1 : 0] / 255.0); s.b += toLinear(px[img.channels >= 3 ? 2 : 0] / 255.0); ++s.n;
+                });
+            });
+            BinMap all;
+            for (auto& m : local) for (auto& [k, v] : m) for (int s = 0; s < 2; ++s) { auto& a = all[k][static_cast<size_t>(s)]; a.r += v[static_cast<size_t>(s)].r; a.g += v[static_cast<size_t>(s)].g; a.b += v[static_cast<size_t>(s)].b; a.n += v[static_cast<size_t>(s)].n; }
+            return all;
+        };
+        auto stepPercentiles = [&](const BinMap& bins, const std::vector<uint64_t>& keys, double& p50, double& p90) {
+            std::vector<std::pair<double, double>> de;   // (dE, weight)
+            double wsum = 0;
+            for (uint64_t k : keys) {
+                auto it = bins.find(k);
+                if (it == bins.end() || it->second[0].n < p.minTexels || it->second[1].n < p.minTexels) continue;
+                const auto& A = it->second[0]; const auto& B = it->second[1];
+                const auto la = lab({A.r / A.n, A.g / A.n, A.b / A.n}), lb = lab({B.r / B.n, B.g / B.n, B.b / B.n});
+                const double w = static_cast<double>(std::min(A.n, B.n));
+                de.push_back({std::sqrt((la[0] - lb[0]) * (la[0] - lb[0]) + (la[1] - lb[1]) * (la[1] - lb[1]) + (la[2] - lb[2]) * (la[2] - lb[2])), w});
+                wsum += w;
+            }
+            std::sort(de.begin(), de.end());
+            p50 = p90 = 0;
+            double acc = 0;
+            bool got50 = false;
+            for (const auto& [v, w] : de) { acc += w; if (!got50 && acc >= 0.5 * wsum) { p50 = v; got50 = true; } if (acc >= 0.9 * wsum) { p90 = v; break; } }
+        };
+        // ---- read both sides, and the levelling per bin (half the step each way, in log space)
+        const BinMap before = sample();
+        std::vector<uint64_t> matched;
+        std::unordered_map<uint64_t, std::array<double, 3>> rawLg;   // side 0 gets +lg, side 1 -lg
+        const double cap = std::log(p.maxGain);
+        for (const auto& [k, v] : before) {
+            if (v[0].n < p.minTexels || v[1].n < p.minTexels) continue;
+            matched.push_back(k);
+            auto lg = [&](double a, double b) { return std::clamp(0.5 * (std::log(std::max(b, 1e-4)) - std::log(std::max(a, 1e-4))), -cap, cap); };
+            rawLg[k] = {lg(v[0].r / v[0].n, v[1].r / v[1].n), lg(v[0].g / v[0].n, v[1].g / v[1].n), lg(v[0].b / v[0].n, v[1].b / v[1].n)};
+        }
+        std::sort(matched.begin(), matched.end());
+        st.binsMatched = matched.size();
+        stepPercentiles(before, matched, st.dEBeforeP50, st.dEBeforeP90);
+        auto unpack = [](uint64_t k, uint32_t& cut, int64_t& ia, int64_t& ib, int& oct) {
+            cut = static_cast<uint32_t>(k >> 40); ia = static_cast<int64_t>((k >> 24) & 0xFFFF) - 32768; ib = static_cast<int64_t>((k >> 8) & 0xFFFF) - 32768; oct = static_cast<int>(k & 0xFF);
+        };
+        // a bin's levelling: its own and its neighbours' (one bin either way, same facing), weighted by texels, its own twice;
+        // worked out before the threads for every bin a band texel can reach (the cache is read-only below)
+        std::unordered_map<uint64_t, std::array<double, 3>> level;
+        {
+            std::unordered_set<uint64_t> keys;
+            for (uint64_t k : matched) {
+                uint32_t cut; int64_t ia, ib; int oct;
+                unpack(k, cut, ia, ib, oct);
+                const int reach = static_cast<int>(std::ceil(p.bandM / p.binM)) + 1;
+                for (int64_t da = -reach; da <= reach; ++da) for (int64_t db = -reach; db <= reach; ++db) keys.insert(binKey(cut, ia + da, ib + db, oct));
+            }
+            for (uint64_t key : keys) {
+                uint32_t cut; int64_t ia, ib; int oct;
+                unpack(key, cut, ia, ib, oct);
+                double w = 0;
+                std::array<double, 3> out{0, 0, 0};
+                for (int64_t da = -1; da <= 1; ++da) for (int64_t db = -1; db <= 1; ++db) {
+                    auto it = rawLg.find(binKey(cut, ia + da, ib + db, oct));
+                    if (it == rawLg.end()) continue;
+                    const auto& s = before.at(it->first);
+                    const double ww = static_cast<double>(std::min(s[0].n, s[1].n)) * (da == 0 && db == 0 ? 2.0 : 1.0);
+                    for (int c = 0; c < 3; ++c) out[static_cast<size_t>(c)] += it->second[static_cast<size_t>(c)] * ww;
+                    w += ww;
+                }
+                if (!(w > 0)) continue;
+                for (auto& v : out) v /= w;
+                level[key] = out;
+            }
+        }
+        // ---- apply: per photo a log-gain per texel, each cut counted once per texel, the total capped, then rewritten
+        std::vector<std::vector<float>> acc(scene.images.size());
+        std::vector<std::unordered_set<uint64_t>> applied(scene.images.size());   // (texel, cut) pairs counted
+        std::vector<std::mutex> imageLock(scene.images.size());
+        scan_rectifier::detail::parallelFor(tiles.size(), threads, 1, [&](size_t i0, size_t i1, unsigned) {
+            for (size_t i = i0; i < i1; ++i) visitBand(scene, sc, tiles[i], p.bandM, p.crossCos, [&](const BandTexel& b) {
+                // the levelling between the four nearest bin centres (bilinear, over those that have one), so it never steps at a bin's edge
+                const SeamCut& C = sc.cuts[b.cut];
+                const V3 r = b.q - C.c;
+                const double fa = r.dot(C.a) / p.binM - 0.5, fb = r.dot(C.b) / p.binM - 0.5;
+                const int64_t ia = static_cast<int64_t>(std::floor(fa)), ib = static_cast<int64_t>(std::floor(fb));
+                const double wa = fa - static_cast<double>(ia), wb = fb - static_cast<double>(ib);
+                const int oct = facingOctant(C, b.n);
+                std::array<double, 3> lg{0, 0, 0};
+                double wsum = 0;
+                for (int da = 0; da <= 1; ++da) for (int db = 0; db <= 1; ++db) {
+                    auto it = level.find(binKey(b.cut, ia + da, ib + db, oct));
+                    if (it == level.end()) continue;
+                    const double w = (da ? wa : 1 - wa) * (db ? wb : 1 - wb);
+                    for (int c = 0; c < 3; ++c) lg[static_cast<size_t>(c)] += w * it->second[static_cast<size_t>(c)];
+                    wsum += w;
+                }
+                if (!(wsum > 1e-6)) return;
+                for (auto& v : lg) v /= wsum;
+                const double w = 0.5 * (1.0 + std::cos(M_PI * std::min(b.d / p.bandM, 1.0)));
+                const double sg = b.side == 0 ? 1.0 : -1.0;
+                std::lock_guard<std::mutex> lock(imageLock[static_cast<size_t>(b.image)]);
+                auto& a = acc[static_cast<size_t>(b.image)];
+                const auto& img = scene.images[static_cast<size_t>(b.image)].pixels;
+                if (a.empty()) a.assign(static_cast<size_t>(img.width) * img.height * 3, std::numeric_limits<float>::quiet_NaN());
+                if (!applied[static_cast<size_t>(b.image)].insert((static_cast<uint64_t>(b.texel) << 24) | b.cut).second) return;
+                float* t = &a[b.texel * 3];
+                if (std::isnan(t[0])) t[0] = t[1] = t[2] = 0.0f;
+                for (int c = 0; c < 3; ++c) t[c] += static_cast<float>(sg * w * lg[static_cast<size_t>(c)]);
+            });
+        });
+        double maxGainSeen = 1.0;
+        for (size_t im = 0; im < scene.images.size(); ++im) {
+            if (acc[im].empty()) continue;
+            auto& img = scene.images[im].pixels;
+            const size_t N = static_cast<size_t>(img.width) * img.height;
+            size_t changed = 0;
+            for (size_t t = 0; t < N; ++t) {
+                if (std::isnan(acc[im][t * 3])) continue;
+                uint8_t* px = &img.data[t * static_cast<size_t>(img.channels)];
+                bool any = false;
+                for (int c = 0; c < std::min(3, img.channels); ++c) {
+                    const double g = std::exp(std::clamp(static_cast<double>(acc[im][t * 3 + static_cast<size_t>(c)]), -cap, cap));
+                    maxGainSeen = std::max(maxGainSeen, std::max(g, 1.0 / g));
+                    const int v = std::clamp(static_cast<int>(std::lround(255.0 * toSrgb(toLinear(px[c] / 255.0) * g))), 0, 255);
+                    if (v != px[c]) any = true;
+                    px[c] = static_cast<uint8_t>(v);
+                }
+                if (any) ++changed;
+            }
+            if (changed) {
+                ++st.imagesChanged;
+                st.changedImages.push_back(static_cast<uint32_t>(im));
+                st.texelsChanged += changed;
+                // written back in the format it came in (a JPEG stays a JPEG, at about its size)
+                if (scene.images[im].mimeType == "image/jpeg") scene.images[im].encoded = jpeg::encode(img, p.jpegQuality);
+                else { scene.images[im].encoded = png::encode(img, 6); scene.images[im].mimeType = "image/png"; }
+            }
+        }
+        st.maxGain = maxGainSeen;
+        const BinMap after = sample();
+        stepPercentiles(after, matched, st.dEAfterP50, st.dEAfterP90);
+        return st;
+    }
+    static std::string toneStatsJson(const TileSeamToneStats& s) {
+        char b[256];
+        std::snprintf(b, sizeof b, "\"cuts\": %zu, \"binsMatched\": %zu, \"imagesChanged\": %zu, \"texelsChanged\": %zu, \"maxGain\": %.4f, \"dEBefore\": [%.2f, %.2f], \"dEAfter\": [%.2f, %.2f]",
+                      s.cuts, s.binsMatched, s.imagesChanged, s.texelsChanged, s.maxGain, s.dEBeforeP50, s.dEBeforeP90, s.dEAfterP50, s.dEAfterP90);
+        return b;
     }
 
     /** The stats as a JSON object body (no braces), for CLI reports. */
