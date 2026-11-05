@@ -16,6 +16,7 @@ import {
     getSunVectorFromAngles
 } from '../atmosphere';
 import { sunAtLocalSolarTime } from './nature-atmosphere-operators';
+import { cloudShadowsRequested } from '../atmosphere/scene-weather';
 import type { Scene3DData, SceneCameraLens, SceneLensDistortion, SceneFilmGrain, SceneLensFlare, SceneLensDiffusion } from '../../canvas-types';
 import { planViewportOptics, distortionMaxAspect } from '../../primitives/scene3d/viewportOptics';
 import { FOCUS_MODES_DRAWN, effectiveFocusMode, isFocusPoint } from '../../primitives/scene3d/viewportFocus';
@@ -399,11 +400,14 @@ export const LIGHTING_CAMERA_OPERATORS: OperatorDefinition[] = [
                     fogDensity: params.fogDensity ?? existingAtmo.fogDensity,
 
                     // Terrain cloud shadows parameters (Strictly opt-in with volumetric clouds)
-                    cloudShadowsEnabled: params.cloudShadowsEnabled ?? existingAtmo.cloudShadowsEnabled ?? false,
+                    // the sky's own cloud shadows carry over only when they were asked for, not the weather's (scene-weather.ts)
+                    cloudShadowsEnabled: params.cloudShadowsEnabled ?? (existingAtmo.cloudShadowsEnabled === true && cloudShadowsRequested(existingAtmo)),
                     cloudShadowIntensity: params.cloudShadowIntensity ?? existingAtmo.cloudShadowIntensity ?? 0.0,
                     cloudShadowScale: params.cloudShadowScale ?? existingAtmo.cloudShadowScale ?? 0.015,
                     atmosphereShadowLength: params.atmosphereShadowLength ?? existingAtmo.atmosphereShadowLength ?? 1.0,
-                    windVector: params.windVector ?? existingAtmo.windVector ?? [0.05, 0.02]
+                    windVector: params.windVector ?? existingAtmo.windVector ?? [0.05, 0.02],
+                    // a sky the weather wrote records a request, which the weather keeps (scene-weather.ts cloudShadowsRequested)
+                    ...(existingAtmo.weather ? { weather: { ...existingAtmo.weather, cloudShadows: params.cloudShadowsEnabled ?? cloudShadowsRequested(existingAtmo) } } : {})
                 };
             }
 

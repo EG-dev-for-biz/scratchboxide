@@ -18,7 +18,7 @@ import { buildThreeJsLightingRig, isSceneLightingRig } from './lightingRigs';
 import type { AtmosphereHandle, RendererStack, Scene3DRenderMode } from './types';
 import { removeAndDispose } from './types';
 import { hasExplicitSun } from '../../../../common/scene-atmosphere-opt-in';
-import { hazeRangeM } from '../../services/atmosphere/scene-weather';
+import { cloudShadowsRequested, hazeRangeM } from '../../services/atmosphere/scene-weather';
 import { CascadedSunLight, isCascadedSunShadow } from './sunShadowCascades';
 import { ContactAmbientOcclusion } from './contactAmbientOcclusion';
 import { ContactShadows } from './contactShadows';
@@ -391,6 +391,9 @@ export function syncAtmosphere(
         const atmoConfig = (typeof input.atmosphericScattering === 'object' && input.atmosphericScattering !== null)
             ? input.atmosphericScattering
             : {};
+        // cloud shadows only when asked for: a scene saved with the weather's own (on with the cloud cover until
+        // 2026-11-04) draws none (scene-weather.ts cloudShadowsRequested)
+        const cloudShadowsOn = atmoConfig.cloudShadowsEnabled === true && cloudShadowsRequested(atmoConfig);
         // the shadow reach: the config's own (atmosphere_configure_scene sizes it to the scene), else the content's radius
         const configured = typeof atmoConfig.sunShadowRadiusMeters === 'number' && atmoConfig.sunShadowRadiusMeters > 0
             ? atmoConfig.sunShadowRadiusMeters
@@ -417,7 +420,7 @@ export function syncAtmosphere(
                     turbidity: atmoConfig.turbidity ?? 1.5,
                     mieDirectionalG: atmoConfig.mieDirectionalG ?? 0.82,
                     albedoScale: atmoConfig.albedoScale ?? 1.1,
-                    cloudShadowsEnabled: atmoConfig.cloudShadowsEnabled === true,
+                    cloudShadowsEnabled: cloudShadowsOn,
                     cloudShadowIntensity: atmoConfig.cloudShadowIntensity ?? 0.65,
                     cloudShadowScale: atmoConfig.cloudShadowScale ?? 0.015,
                     atmosphereShadowLength: atmoConfig.atmosphereShadowLength ?? 1.0,
@@ -437,7 +440,7 @@ export function syncAtmosphere(
             }
         }
 
-        if (atmoConfig.cloudShadowsEnabled === true) {
+        if (cloudShadowsOn) {
             terrainCloudShadows = createTerrainCloudShadows({
                 cloudShadowsEnabled: true,
                 cloudShadowIntensity: atmoConfig.cloudShadowIntensity ?? 0.65,

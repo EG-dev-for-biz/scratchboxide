@@ -15,9 +15,10 @@
 import { describe, expect, it } from 'vitest';
 import type { GraphNode, Scene3DData } from '../src/browser/generative-canvas/canvas-types';
 import {
-    LOCATION_SCENE_WEATHER, afternoonTimeForSunElevation, applySceneWeather, clearSceneWeather, formatTimeOfDay, normalizeWeather, readSceneWeather, weatherPhase, weatherSun,
-    withLocationSceneWeather
+    LOCATION_SCENE_WEATHER, afternoonTimeForSunElevation, applySceneWeather, clearSceneWeather, cloudShadowsRequested, formatTimeOfDay, normalizeWeather, readSceneWeather, weatherPhase,
+    weatherSun, withLocationSceneWeather
 } from '../src/browser/generative-canvas/services/atmosphere/scene-weather';
+import { NATURE_ATMOSPHERE_OPERATORS } from '../src/browser/generative-canvas/services/operators/nature-atmosphere-operators';
 import { applySceneNodeParam, sceneNodeFields } from '../src/browser/generative-canvas/scene-node-params';
 import { sceneOptsIntoAtmosphere } from '../src/common/scene-atmosphere-opt-in';
 import { morphScene3DToNodeGraph } from '../src/browser/generative-canvas/primitive-transformer-engine';
@@ -54,7 +55,8 @@ describe('scene weather', () => {
         expect(sceneOptsIntoAtmosphere(s)).toBe(true);
         expect(s.environment!.skybox).toBe('sky');
         expect(a.cloudCoverage).toBe(0.6);
-        expect(a.cloudShadowsEnabled).toBe(true);
+        // the weather's clouds cast no 2D noise shadows over the scene: only a request turns them on
+        expect(a.cloudShadowsEnabled).toBe(false);
         expect(a.turbidity).toBeCloseTo(6, 6);
         expect(a.fogDensity).toBeCloseTo(0.02, 6);
         expect(a.sunElevation).toBeCloseTo(weatherSun(normalizeWeather({ timeOfDay: 20 })).elevationDeg, 6);
@@ -160,7 +162,7 @@ describe('a real place\'s opening sky (user decision 2026-11-02)', () => {
         expect(readSceneWeather(s)).toMatchObject({ cloudCover: LOCATION_SCENE_WEATHER.cloudCover, haze: LOCATION_SCENE_WEATHER.haze, fog: 0, date: '2026-11-02' });
         expect(weatherSun(readSceneWeather(s)!, nyc).elevationDeg).toBeCloseTo(LOCATION_SCENE_WEATHER.sunElevationDeg, 2);
         expect(s.environment?.skybox).toBe('sky');
-        expect((s.features as any).atmosphericScattering).toMatchObject({ enabled: true, cloudCoverage: 0.4, cloudShadowsEnabled: true, latitude: nyc.lat, longitude: nyc.lng });
+        expect((s.features as any).atmosphericScattering).toMatchObject({ enabled: true, cloudCoverage: 0.4, cloudShadowsEnabled: false, latitude: nyc.lat, longitude: nyc.lng });
         expect((s.features as any).atmosphericScattering.aerialPerspectiveEnabled).toBe(true);
         // a splat world gets the sky without the haze pass, which would tone-map its depthless splats a second time
         const world = withLocationSceneWeather({ ...place(), splatUrl: '/tilesets/w/fused.spz' } as Scene3DData, '2026-11-02');
@@ -178,5 +180,33 @@ describe('a real place\'s opening sky (user decision 2026-11-02)', () => {
         expect(withLocationSceneWeather(cleared, '2026-11-03')).toBe(cleared);
         // setting a weather again lifts the mark
         expect((applySceneWeather(cleared, { cloudCover: 0.2 }) as { weatherCleared?: boolean }).weatherCleared).toBeUndefined();
+    });
+});
+
+describe('cloud shadows only on request (user decision 2026-11-04)', () => {
+    const atmo = (s: Scene3DData) => (s.features as any).atmosphericScattering;
+
+    it('a scene saved with the weather\'s own cloud shadows (on with the cloud cover until 2026-11-04) draws none', () => {
+        const saved = { cloudShadowsEnabled: true, cloudCoverage: 0.4, weather: { version: 'scene-weather/1', sun: 'ephemeris' } };
+        expect(cloudShadowsRequested(saved)).toBe(false);
+        // the same flag from a request made without the weather is kept
+        expect(cloudShadowsRequested({ cloudShadowsEnabled: true })).toBe(true);
+        expect(cloudShadowsRequested({ cloudShadowsEnabled: false })).toBe(false);
+        expect(cloudShadowsRequested(undefined)).toBe(false);
+    });
+
+    it('a request survives the weather changing, a clear sky in between included', () => {
+        const scene = applySceneWeather(studio(), { cloudCover: 0.5 });
+        const op = NATURE_ATMOSPHERE_OPERATORS.find(o => o.name === 'sb_configure_terrain_cloud_shadows')!;
+        op.execute({ getSceneData: () => scene } as any, { enabled: true });
+        expect(atmo(scene).weather.cloudShadows).toBe(true);
+        expect(cloudShadowsRequested(atmo(scene))).toBe(true);
+        const clear = applySceneWeather(scene, { cloudCover: 0 });
+        expect(atmo(clear).cloudShadowsEnabled).toBe(false);
+        const cloudy = applySceneWeather(clear, { cloudCover: 0.6 });
+        expect(atmo(cloudy).cloudShadowsEnabled).toBe(true);
+        // and turning them off is a request too
+        op.execute({ getSceneData: () => cloudy } as any, { enabled: false });
+        expect(atmo(applySceneWeather(cloudy, { cloudCover: 0.7 })).cloudShadowsEnabled).toBe(false);
     });
 });
