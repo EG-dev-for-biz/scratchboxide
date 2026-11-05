@@ -30,7 +30,7 @@ import type { RegionClass, RegionSet } from './surface-classes';
 import { CHOICE_CANDIDATES, type ChoiceCandidate, type ChoiceRow, type SetChoice } from './material-choice';
 import { drawFinish, energyFit, finishMaps, finishTarget, grainOf, OPENING_FINISH, patternFit, type ClassFinish } from './material-finish';
 import { loadSetFitModel, setFitGrain } from './material-set-fit';
-import { heightRecessMap } from './material-height';
+import { HEIGHT_RELIEF, heightRecessMap } from './material-height';
 import { readingKey, type ModelReadingStore } from '../staged-location/pipeline-k/model-readings';
 
 /** Prepared map size: a facade texel is several centimetres, so a tile of a metre or two needs few texels. */
@@ -89,6 +89,8 @@ export async function resolveClassSets(classes: RegionClass[], tile: TileScale, 
     finish?: () => Promise<Array<ClassFinish | undefined>>;
     /** Where prepared maps are kept between builds (PREPARED_VERSION): a set found there is not fetched. */
     store?: ModelReadingStore;
+    /** The deepest recess a set's height is drawn at, metres (default HEIGHT_RELIEF.capM: a facade's; a small object's is less). */
+    heightCapM?: number;
 } = {}): Promise<RegionSet[]> {
     const repoRoot = opts.repoRoot ?? libraryRepoRoot();
     const index = loadTextureLibraryIndex(repoRoot);
@@ -245,7 +247,7 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         const drawn = finishMaps(decodeImageInMemory(maps.orm), decodeImageInMemory(maps.normal), df.finish, grainOf(pick) * fitOf(k, hit).grain);
         // its height at its real depth, by the share of the normal relief drawn (material-height.ts)
         const hp = heightPreviews.get(hit.entry.id);
-        const height = hp && hit.entry.heightDepthM ? heightRecessMap(hp, hit.entry.heightDepthM, drawn.drawn?.relief ?? 1, hit.entry.heightDepthSource ?? 'unknown') : undefined;
+        const height = hp && hit.entry.heightDepthM ? heightRecessMap(hp, hit.entry.heightDepthM, drawn.drawn?.relief ?? 1, hit.entry.heightDepthSource ?? 'unknown', opts.heightCapM ? { ...HEIGHT_RELIEF, capM: opts.heightCapM } : HEIGHT_RELIEF) : undefined;
         return {
             name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
             ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: targets[k].roughness, metallic: targets[k].metallic, ...(drawn.drawn ? { drawn: drawn.drawn } : {}), label: 'photo-inferred' as const } } : drawn.drawn ? { finish: { ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: drawn.drawn.roughness, metallic: drawn.drawn.metallic, drawn: drawn.drawn, label: 'photo-inferred' as const } } : {}),

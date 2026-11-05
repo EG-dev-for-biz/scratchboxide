@@ -11,7 +11,8 @@
  * Real height on a finished GLB (user ask, 2026-11-05: "real height, it moves the actual geometry"): the surfaces whose
  * material carries a relief (extras.sbMaterial.relief: a class map and a metric frame; the classes' recess tiles in the
  * asset's sbMaterialRelief, written by pipeline K's material regions) get a near level of detail whose triangles are
- * tessellated and displaced by that relief in the native engine (height-displace-native.ts).
+ * tessellated and displaced by that relief in the native engine (height-displace-native.ts). A material outside a staged
+ * twin carries the same record as extras.sbRelief (an object's parts: material-path/object-materials.ts).
  *
  *  - Which surfaces: only those with the relief extras, which the material path writes for rebuilt facades (FacadeLattice
  *    nodes) and generated objects. A scan's own pieces carry none and are never moved (AGENTS.md section 2: inferred
@@ -87,6 +88,9 @@ export const heightReliefProvenance = (r: Pick<HeightReliefReport, 'areaM2' | 'm
     coverage: totalAreaM2 > 0 ? Math.min(1, r.areaM2 / totalAreaM2) : 0
 });
 
+/** A material's relief: its own extras.sbRelief (any surface), or a staged twin's extras.sbMaterial.relief. */
+const reliefExtrasOf = (m: any): { classTexture: number; uvMetres: [number, number]; displaced?: boolean; weights?: boolean } | undefined => m?.extras?.sbRelief ?? m?.extras?.sbMaterial?.relief;
+
 interface ReliefAsset { depthM: number; tiles: Array<null | { class: number; texture: number; sizeM: [number, number] }> }
 
 function imageBytesOf(g: ParsedGlb, texture: number): Uint8Array {
@@ -126,7 +130,7 @@ export async function applyHeightRelief(bytes: Uint8Array, P: HeightReliefParams
     for (const [ni, node] of (json.nodes ?? []).entries()) {
         if (node.mesh === undefined) continue;
         for (const prim of json.meshes[node.mesh].primitives ?? []) {
-            const relief = json.materials?.[prim.material]?.extras?.sbMaterial?.relief;
+            const relief = reliefExtrasOf(json.materials?.[prim.material]);
             if (!relief || relief.displaced || (prim.mode ?? 4) !== 4 || prim.indices === undefined || prim.attributes?.POSITION === undefined || prim.attributes.NORMAL === undefined) continue;
             const texCoord = json.materials[prim.material].pbrMetallicRoughness?.baseColorTexture?.texCoord ?? 0;
             const uvAcc = prim.attributes[`TEXCOORD_${texCoord}`];
@@ -215,7 +219,7 @@ export async function applyHeightRelief(bytes: Uint8Array, P: HeightReliefParams
         let mat = displacedMaterial.get(s.material);
         if (mat === undefined) {
             const src = json.materials[s.material];
-            json.materials.push({ ...JSON.parse(JSON.stringify(src)), name: `${src.name ?? `material_${s.material}`}_displaced`, extras: { ...(src.extras ?? {}), sbMaterial: { ...src.extras.sbMaterial, relief: { ...src.extras.sbMaterial.relief, displaced: true } } } });
+            json.materials.push({ ...JSON.parse(JSON.stringify(src)), name: `${src.name ?? `material_${s.material}`}_displaced`, extras: src.extras.sbRelief ? { ...src.extras, sbRelief: { ...src.extras.sbRelief, displaced: true } } : { ...src.extras, sbMaterial: { ...src.extras.sbMaterial, relief: { ...src.extras.sbMaterial.relief, displaced: true } } } });
             mat = json.materials.length - 1;
             displacedMaterial.set(s.material, mat);
         }

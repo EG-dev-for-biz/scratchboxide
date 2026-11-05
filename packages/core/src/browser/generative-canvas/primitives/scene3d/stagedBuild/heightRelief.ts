@@ -45,7 +45,9 @@ interface GltfLike {
 }
 
 const reliefOf = (m: THREE.Material | undefined): ReliefMaterial | undefined => {
-    const r = (m?.userData as { sbMaterial?: { relief?: ReliefMaterial } } | undefined)?.sbMaterial?.relief;
+    // a staged twin's material carries it under sbMaterial; any other surface (an object's part) as sbRelief
+    const u = m?.userData as { sbRelief?: ReliefMaterial; sbMaterial?: { relief?: ReliefMaterial } } | undefined;
+    const r = u?.sbRelief ?? u?.sbMaterial?.relief;
     return r && typeof r.classTexture === 'number' && Array.isArray(r.uvMetres) ? r : undefined;
 };
 
@@ -334,7 +336,7 @@ export async function prepareHeightRelief(gltf: GltfLike): Promise<number> {
                     .replace('#include <aomap_fragment>', FRAGMENT_AO);
             };
             mat.customProgramCacheKey = () => `${priorKey?.call(mat) ?? ''}|sb-relief-v3:${relief.displaced ? 'd' : 'p'}${relief.weights ? 'w' : ''}`;
-            mat.userData.sbRelief = uniforms;
+            mat.userData.sbReliefUniforms = uniforms;
             mat.needsUpdate = true;
             patched++;
         } catch (err) {

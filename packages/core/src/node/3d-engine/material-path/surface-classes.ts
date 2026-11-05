@@ -98,3 +98,70 @@ export function formatRegionClasses(C: ArrayLike<number>[], count: ArrayLike<num
     });
 }
 
+
+/** A library map box-filtered to a tile of tw x th texels (each texel the mean of the source texels it covers). */
+function shrinkTile(src: RgbaImage8, tw: number, th: number, normal: boolean): Float32Array {
+    const out = new Float32Array(tw * th * 3);
+    for (let ty = 0; ty < th; ty++) for (let tx = 0; tx < tw; tx++) {
+        const x0 = Math.floor((tx * src.width) / tw), x1 = Math.max(x0 + 1, Math.floor(((tx + 1) * src.width) / tw));
+        const y0 = Math.floor((ty * src.height) / th), y1 = Math.max(y0 + 1, Math.floor(((ty + 1) * src.height) / th));
+        const s = [0, 0, 0];
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) for (let c = 0; c < 3; c++) s[c] += src.rgba[(y * src.width + x) * 4 + c] / 255;
+        const n = (x1 - x0) * (y1 - y0);
+        let v = s.map(c => c / n);
+        if (normal) { const d = v.map(c => c * 2 - 1), l = Math.hypot(d[0], d[1], d[2]) || 1; v = d.map(c => (c / l) * 0.5 + 0.5); }
+        out.set(v, (ty * tw + tx) * 3);
+    }
+    return out;
+}
+
+/**
+ * How much of the relief each texel takes, into a class map's green channel (0..255): none on a texel beside another
+ * class, rising to all of it CLASS_BORDER_FADE_M away (a city-block distance in texels), so two materials meet level
+ * instead of stepping from one set's recess to the other's. A surface of one class is 255 throughout.
+ */
+export const CLASS_BORDER_FADE_M = 0.12;
+export function classBorderWeights(cls: Uint8Array, W: number, H: number, texelM: number, rgba: Uint8Array): void {
+    const N = W * H, FAR = 65535, d = new Uint16Array(N).fill(FAR);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const k = y * W + x, c = cls[k];
+        if ((x > 0 && cls[k - 1] !== c) || (x + 1 < W && cls[k + 1] !== c) || (y > 0 && cls[k - W] !== c) || (y + 1 < H && cls[k + W] !== c)) d[k] = 0;
+    }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const k = y * W + x;
+        if (x > 0 && d[k - 1] + 1 < d[k]) d[k] = d[k - 1] + 1;
+        if (y > 0 && d[k - W] + 1 < d[k]) d[k] = d[k - W] + 1;
+    }
+    for (let y = H - 1; y >= 0; y--) for (let x = W - 1; x >= 0; x--) {
+        const k = y * W + x;
+        if (x + 1 < W && d[k + 1] + 1 < d[k]) d[k] = d[k + 1] + 1;
+        if (y + 1 < H && d[k + W] + 1 < d[k]) d[k] = d[k + W] + 1;
+    }
+    for (let k = 0; k < N; k++) rgba[k * 4 + 1] = d[k] === FAR ? 255 : Math.round(255 * Math.min(1, (d[k] * texelM) / CLASS_BORDER_FADE_M));
+}
+
+/**
+ * A surface's maps from its texels' classes: each texel's class's set tiled at the set's real size, box-filtered to the
+ * surface's texel (`texelM` metres, so a tile never aliases): occlusion, roughness and metalness (ORM) and the normal;
+ * and, when any set has a height, each texel's class (r and b the class index) with the share of the relief it takes
+ * (g: classBorderWeights), which place the sets' recess tiles.
+ * `cls` is one class a texel, row-major; `present[c]` the texels class c holds (a class with none is not tiled).
+ */
+export function drawClassSets(cls: Uint8Array, W: number, H: number, texelM: number, sets: RegionSet[], present: number[]): { orm: RgbaImage8; normal: RgbaImage8; classes?: RgbaImage8 } {
+    const blank = (): RgbaImage8 => ({ width: W, height: H, rgba: new Uint8Array(W * H * 4) });
+    const tiles = sets.map((s, c) => {
+        if (!present[c]) return undefined;
+        const tw = Math.max(2, Math.round(s.realSizeM[0] / texelM)), th = Math.max(2, Math.round(s.realSizeM[1] / texelM));
+        return { tw, th, n: shrinkTile(s.normal, tw, th, true), o: shrinkTile(s.orm, tw, th, false) };
+    });
+    const orm = blank(), nrm = blank();
+    const cmap = sets.some(s => !!s.height) ? blank() : undefined;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const k = y * W + x, t = tiles[cls[k]]!, j = ((y % t.th) * t.tw + (x % t.tw)) * 3;
+        orm.rgba.set([Math.round(t.o[j] * 255), Math.round(t.o[j + 1] * 255), Math.round(t.o[j + 2] * 255), 255], k * 4);
+        nrm.rgba.set([Math.round(t.n[j] * 255), Math.round(t.n[j + 1] * 255), Math.round(t.n[j + 2] * 255), 255], k * 4);
+        if (cmap) cmap.rgba.set([cls[k], 255, cls[k], 255], k * 4);
+    }
+    if (cmap) classBorderWeights(cls, W, H, texelM, cmap.rgba);
+    return { orm, normal: nrm, ...(cmap ? { classes: cmap } : {}) };
+}

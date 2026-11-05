@@ -33,7 +33,10 @@ import type { RgbaImage8 } from '../staged-location/tile-texture-transfer';
 
 export const MATERIAL_HEIGHT_VERSION = 'material-height/1';
 
-export const HEIGHT_RELIEF = {
+/** How a set's height is drawn (see HEIGHT_RELIEF for a facade's values). */
+export interface HeightReliefRule { capM: number; topPercentile: number; minDepthM: number; size: number }
+
+export const HEIGHT_RELIEF: HeightReliefRule = {
     /** The deepest recess drawn, metres: what a height map's 0 means everywhere it is written. */
     capM: 0.03,
     /** The share of a set's height texels at or below its surface level (see the file comment). */
@@ -42,7 +45,7 @@ export const HEIGHT_RELIEF = {
     minDepthM: 0.0005,
     /** The map's size, pixels a side (the regions' other prepared maps are this size at most). */
     size: 256
-} as const;
+};
 
 /** What a set's height was drawn at, for the report and the GLB extras. */
 export interface DrawnHeight {
@@ -59,7 +62,7 @@ export interface DrawnHeight {
  * A set's height map (its red channel, any size) as the recess map the regions tile (see the file comment): box-filtered
  * to `size` a side, each texel 255 x (1 - recess / capM). Undefined when the drawn relief is too shallow to show.
  */
-export function heightRecessMap(height: RgbaImage8, depthM: number, relief: number, source: string, R: typeof HEIGHT_RELIEF = HEIGHT_RELIEF): { map: RgbaImage8; drawn: DrawnHeight } | undefined {
+export function heightRecessMap(height: RgbaImage8, depthM: number, relief: number, source: string, R: HeightReliefRule = HEIGHT_RELIEF): { map: RgbaImage8; drawn: DrawnHeight } | undefined {
     if (!(depthM > 0) || !(relief > 0)) return undefined;
     // every tile the same square size (the viewer stacks them in one texture array); its real size keeps its aspect
     const w = R.size, h = R.size;
@@ -85,4 +88,17 @@ export function heightRecessMap(height: RgbaImage8, depthM: number, relief: numb
     if (max < R.minDepthM) return undefined;
     const r4 = (x: number) => Math.round(x * 1e4) / 1e4;
     return { map: { width: w, height: h, rgba }, drawn: { depthM: r4(depthM), source, relief: Math.round(relief * 100) / 100, maxRecessM: r4(max), meanRecessM: r4(sum / (w * h)), label: 'generated' } };
+}
+
+/**
+ * The classes' recess tiles as a model's asset record (asset.extras.sbMaterialRelief), stored once: the viewer's parallax
+ * and the native displacement sample them by each surface's class map (height-relief.ts, heightRelief.ts). `sets[k]` is
+ * class k's set; a class without a height is null. `addTexture` stores a tile and returns its texture index.
+ */
+export function reliefAssetExtras(sets: Array<{ name: string; realSizeM: [number, number]; height?: RgbaImage8; heightDrawn?: DrawnHeight }>, depthM: number, addTexture: (img: RgbaImage8, name: string) => number): Record<string, unknown> {
+    return {
+        schema: 'scratchbox.material-relief/1', version: MATERIAL_HEIGHT_VERSION, depthM, label: 'generated',
+        about: `each class's library set's height as a recess below the surface it is drawn on: a tile's 255 is the surface, 0 a recess of ${depthM} m; tiled at sizeM, placed by each material's class map (extras.sbMaterial.relief on a staged twin, extras.sbRelief elsewhere)`,
+        tiles: sets.map((st, k) => (st.height && st.heightDrawn ? { class: k, set: st.name, texture: addTexture(st.height, `relief_${st.name}`), sizeM: st.realSizeM, ...st.heightDrawn } : null))
+    };
 }
