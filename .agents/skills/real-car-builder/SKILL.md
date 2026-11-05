@@ -61,9 +61,8 @@ its height, and where the side outline touches the ground (the tyres). Keep its 
 and side drawings (grille, intakes, vents, outlets, the side windows), each traced by the object segmenter, as extents
 in metres (front view: x and y; side view: z and y). Those are where the cuts and the window slices go (section 4):
 an opening in the front view is a cut at that x and y, from the nose back as deep as the part is; the side windows' z
-spans set the pillars between them. Pass depth: true as well: the app's depth model reads where the front and side
-drawings sink inside their outlines (intakes, a recessed grille, glass behind its frame, wheel faces) and saves it with
-the outlines as relief (photo-inferred, shape only, no scale); a lofted part lays it in with reliefMeters (section 4).
+spans set the pillars between them. Leave depth off: its relief is too smooth and shallow to show on a car (a live
+Golf build at the 5 cm maximum looked the same as without it); recesses are cuts and relief curves.
 
 Judge the drawing before using it:
 - **Ground contacts:** the two contact centres should be one wheelbase apart (within 3 %) at about the axle positions
@@ -146,11 +145,8 @@ profile keys, every section the drawings' own (side, plan and front at that stat
 and keep the operators for the rest. In buildNotes, ask for exactly these parts (numbers filled in):
 
 - **body**: fromBlueprint {yToMeters: beltline + 0.02, clearances: one circle per axle, zMeters the axle's z, yMeters
-  the hub height R, radiusMeters R + the arch gap (0.03-0.05), reliefMeters: 0.025 when the blueprint has relief}:
-  the lower body with round wheel arches, its intakes and grille sunk up to 2.5 cm where the drawings sink. Relief
-  only moves the surface inward along its normal; the outline stays the blueprint's. Real openings stay cuts.
-- **glasshouse**: fromBlueprint {yFromMeters: beltline - 0.02, insetMeters: 0.015, clearTopMeters: 0.03, reliefMeters:
-  0.02 when the blueprint has relief}, dark glass:
+  the hub height R, radiusMeters R + the arch gap (0.03-0.05)}: the lower body with round wheel arches.
+- **glasshouse**: fromBlueprint {yFromMeters: beltline - 0.02, insetMeters: 0.015, clearTopMeters: 0.03}, dark glass:
   the cabin as the drawings shape it, set 1.5 cm in so the windows sit behind the pillars, and stopping under the roof
   panel (a glass top sharing the roof's surface flickers against it).
 - **pillars**: fromBlueprint {yFromMeters: beltline - 0.02, zFromMeters, zToMeters: the pillar's span, insetMeters:

@@ -187,7 +187,7 @@ Mean outline error against the production Golf (`golf_gti_my25_lights_on.glb`). 
   - The real recesses that read on a car (grille, intakes, window reveals) are sharp-edged steps that a smooth field of at most 5 cm cannot draw. They need cuts (step 3) or relief curves (step 2).
 
 Candidate next steps:
-- Take `depth: true` out of the skill until the relief shows, and keep the code.
+- Done (user decision, 2026-11-04): `depth: true` and `reliefMeters` are out of the skill, which now tells the agent to leave depth off; the code stays.
 - If it is pursued:
   - sample the grid at the drawing's resolution in the loft, with no pooling;
   - add stations near the nose;
