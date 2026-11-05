@@ -18,7 +18,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { BUILD_STEPS, TOGGLEABLE_STEPS } from '../src/common/staged-build-steps';
-import { FACADE_UPSCALE_EXTRA_MS, FACADE_UPSCALE_PARAMS, facadeUpscaleAsked, facadeUpscaleProvenance, tileStarts, transferDetail, upscaleFacadeTextures, upscaleFactor } from '../src/node/3d-engine/staged-location/pipeline-k/facade-upscale';
+import { FACADE_UPSCALE_DISTRICT_PARAMS, FACADE_UPSCALE_EXTRA_MS, FACADE_UPSCALE_PARAMS, facadeUpscaleAsked, facadeUpscaleProvenance, tileStarts, transferDetail, upscaleFacadeTextures, upscaleFactor } from '../src/node/3d-engine/staged-location/pipeline-k/facade-upscale';
 import { memoryReadingStore } from '../src/node/3d-engine/staged-location/pipeline-k/model-readings';
 import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
@@ -238,6 +238,27 @@ describe('facade upscale: the twin', () => {
         const base = resolveToolTimeBudget('google_3d_tiles_get_clay', isolate, 5 * 60_000).maxMs;
         expect(resolveToolTimeBudget('google_3d_tiles_get_clay', { ...isolate, steps: { 'twin.facadeUpscale': true } }, 5 * 60_000).maxMs).toBe(base + FACADE_UPSCALE_EXTRA_MS);
         expect(facadeUpscaleAsked({ 'twin.facadeUpscale': false })).toBe(false);
+        // a district: on by default, the node graph and the environment still decide
+        const env = process.env.SCRATCHBOX_K_FACADE_UPSCALE;
+        try {
+            delete process.env.SCRATCHBOX_K_FACADE_UPSCALE;
+            expect(facadeUpscaleAsked(undefined, { district: true })).toBe(true);
+            expect(facadeUpscaleAsked(undefined)).toBe(false);
+            expect(facadeUpscaleAsked({ 'twin.facadeUpscale': false }, { district: true })).toBe(false);
+            process.env.SCRATCHBOX_K_FACADE_UPSCALE = '0';
+            expect(facadeUpscaleAsked(undefined, { district: true })).toBe(false);
+            process.env.SCRATCHBOX_K_FACADE_UPSCALE = '1';
+            expect(facadeUpscaleAsked(undefined)).toBe(true);
+            // a district's capped upscale adds no time to its budget
+            delete process.env.SCRATCHBOX_K_FACADE_UPSCALE;
+            const district = { query: 'x', isolate: false };
+            expect(resolveToolTimeBudget('google_3d_tiles_get_clay', { ...district, steps: { 'twin.facadeUpscale': true } }, 5 * 60_000).maxMs).toBe(resolveToolTimeBudget('google_3d_tiles_get_clay', district, 5 * 60_000).maxMs);
+        } finally {
+            if (env === undefined) delete process.env.SCRATCHBOX_K_FACADE_UPSCALE; else process.env.SCRATCHBOX_K_FACADE_UPSCALE = env;
+        }
+        // a district chunk's cap: a dozen calls and six minutes
+        expect(FACADE_UPSCALE_DISTRICT_PARAMS.maxCalls).toBe(12);
+        expect(FACADE_UPSCALE_DISTRICT_PARAMS.maxMs).toBe(6 * 60_000);
         expect(facadeUpscaleAsked(undefined)).toBe(process.env.SCRATCHBOX_K_FACADE_UPSCALE?.trim() === '1');
     });
 
