@@ -56,3 +56,10 @@ The finish prompt now asks, for the classes inside fitted windows, for the finis
 | holes | 1.28% / 0.72% | 1.28% / 0.72% |
 
 Sheet: `k-one-material-closeups-v3.jpg`. Still open: a faint dotted pattern on Penn 2's dark spandrel panels in this build (the look-pick confirmed Metal015 at high confidence, so the model allowed 89% of its grain); the look-pick's choice varies from build to build.
+
+## Update: no sheen on stonework, no set pattern in glass (branch 612109d7)
+Two faults the user saw on an ESB build of this branch:
+- **A metallic sheen on grey stone piers.** The darkest outside class (20% of the texels) holds the shadowed limestone with the aluminium spandrels; it was read as cast aluminium (metalness 0.8, confidence 75) and drawn metal throughout. `settleFinishes` now keeps a metal read only when the share of that colour (CIELAB a, b within 4) read metal is at least the share read dielectric; else the class takes the finish of its nearest dielectric class in lightness. On the rebuilt ESB the class is drawn at roughness 0.8, metalness 0 (`shadeOf` 1). Penn 2, mostly read metal, keeps metalness 0.5-0.7.
+- **Bicycle and pedestrian symbols in the glass reflections.** The opening classes took road-marking sets (the library's only smooth sets), whose roughness and occlusion maps carry the markings; the relief was flattened for a smooth read but the variation was not. `finishMaps` now draws occlusion, roughness and metalness variation as far as the relief. On the rebuilt ESB the glass class on RoadLines015 is drawn at 1% of the set's pattern.
+
+Sheet: `k-sheen-and-glass-pattern-fix.jpg`. Penn 2's rebuild drew isolate l2v again (the ownership vote), so its hole share (1.97%) is not comparable with the l2 builds.
