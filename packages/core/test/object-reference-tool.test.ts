@@ -208,6 +208,7 @@ function handlerWith(client: GenerateContentClient | undefined, extra: {
     buildTimeoutMs?: number;
     prepareEngine?: () => Promise<string | null>;
     styleReference?: ReferenceObjectBuilderDeps['styleReference'];
+    detailPass?: (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolHandlerOutcome>;
 } = {}) {
     const pythonRuns: string[] = [];
     const runPython = extra.runPython ?? ((script: string, options: any) => NativePythonRunnerService.getInstance().runScript(script, options));
@@ -223,6 +224,7 @@ function handlerWith(client: GenerateContentClient | undefined, extra: {
             styleReference: extra.styleReference ?? null
         },
         stageAtLocation: extra.stageAtLocation,
+        ...(extra.detailPass ? { detailPass: extra.detailPass } : {}),
         publicModelsDir: MODELS_DIR
     });
     return { run: (args: Record<string, unknown>, c: ToolContext = ctx()) => handlers.build_3d_object_from_reference(args, c), pythonRuns };
@@ -1043,6 +1045,31 @@ describe('build_3d_object_from_reference', () => {
         const reask = askedText(client.calls.filter(isSpecCall)[1]);
         expect(reask).toContain('part "vase": material is required');
         expect(String(out.resultPayload.error)).toContain('part "knob": material.roughness must be between 0 and 1');
+    }, 180_000);
+
+    it('runs the material path as its last step when asked: on the built object, never in clay, a failure said and the object kept', async () => {
+        const calls: Array<{ args: Record<string, unknown>; objects: number }> = [];
+        const detailPass = async (args: Record<string, unknown>, c: ToolContext) => {
+            const active = c.request!.activeArtifact as any;
+            calls.push({ args, objects: active.data.objects.length });
+            return { status: 'completed' as const, summaryResult: 'Made version 2 of "the vase": each part\'s detected material; object materials: 1 classes on 1 materials (vase -> Marble012), labelled generated, in 1.0 s.', resultPayload: { artifact: { ...active, version: active.version + 1, data: { ...active.data, materialPathRan: true } } } };
+        };
+        const { run } = handlerWith(undefined, { detailPass });
+        const out = await run({ request: 'the vase', specJson: JSON.stringify(VASE), materials: true });
+        expect(out.status, String(out.resultPayload.error)).toBe('completed');
+        expect(calls).toEqual([{ args: { objectId: out.resultPayload.objectId, materials: true }, objects: 1 }]);
+        expect((out.resultPayload.artifact as any).data.materialPathRan).toBe(true);
+        expect(String(out.summaryResult)).toContain('Its parts then took their detected materials (1 classes on 1 materials (vase -> Marble012))');
+        // not asked, or in clay: not run
+        await run({ request: 'the vase', specJson: JSON.stringify(VASE) });
+        await run({ request: 'the vase in clay', specJson: JSON.stringify(VASE), clay: true, materials: true });
+        expect(calls).toHaveLength(1);
+        // a failure is said and the object as built is what the scene shows
+        const failing = handlerWith(undefined, { detailPass: async () => { throw new Error('no texture library set for appearance class 0'); } });
+        const kept = await failing.run({ request: 'the vase', specJson: JSON.stringify(VASE), materials: true });
+        expect(kept.status).toBe('completed');
+        expect(String(kept.summaryResult)).toContain('materials were not detected (the object is shown as built, with its part factors): no texture library set for appearance class 0');
+        expect((kept.resultPayload.artifact as any).data.objects).toHaveLength(1);
     }, 180_000);
 
     it('a given spec keeps its materials, labelled as given; clay: true rebuilds it in clay', async () => {
