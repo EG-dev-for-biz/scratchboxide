@@ -12,8 +12,8 @@
  * where it still shows a hole.
  *
  *  0. Shards: scan pieces left floating once the walls they hung from were rebuilt or clipped (small, touching no wall,
- *     roof, fill or the ground), and larger scan sheets hanging in the air (the building's winding number outside on both
- *     sides of most of their triangles: a skin with no solid behind it), are dropped; the core then shows where they hung.
+ *     roof, fill or the ground), and larger crumpled scan sheets hanging in the air (the building's winding number outside
+ *     on both sides of most of their triangles: a skin with no solid behind it; a flat piece is kept as a wall), are dropped; the core then shows where they hung.
  *  1. Joins (corner-join.ts): rebuilt facades that stop short of each other where they meet are joined.
  *  2. The inner core (inner-core.ts): a closed solid behind every surface, so a hole shows a textured face, not the inside.
  *  3. The gate (visible-defects.ts): the building seen from its twelve views. While it shows hole regions of at least
@@ -62,7 +62,10 @@ export const OUTSIDE_CLOSURE_PARAMS = {
      *  building, with no solid behind it. The winding number is read sheetStepM in front of and behind each; the surface
      *  itself adds +-1/2 to the two, so their mean is the rest of the building's: about 1/2 beside a wall of a closed shell,
      *  about 0 for a sheet in the air (under sheetOutsideW). */
-    sheetMaxM2: 400, sheetSamples: 24, sheetStepM: 0.3, sheetOutsideW: 0.2, sheetShare: 0.75
+    sheetMaxM2: 400, sheetSamples: 24, sheetStepM: 0.3, sheetOutsideW: 0.2, sheetShare: 0.75,
+    /** ...and only a crumpled one: its area-weighted normals agree less than this (|sum of a n| / sum of a). A flat piece is a
+     *  wall, even where the scan left no solid behind it (an open side), and stays. */
+    sheetFlatMin: 0.6
 };
 export type OutsideClosureParams = typeof OUTSIDE_CLOSURE_PARAMS;
 
@@ -180,7 +183,8 @@ export function findShards(bytes: Uint8Array, groundY: number | undefined, P: Ou
     const triArea = (t: number) => { const p = soup.pos.subarray(t * 9, t * 9 + 9), e1 = [p[3] - p[0], p[4] - p[1], p[5] - p[2]], e2 = [p[6] - p[0], p[7] - p[1], p[8] - p[2]]; return Math.hypot(e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]) / 2; };
     // sheets in the air: the building's outside on both sides of the piece (its winding number, natively)
     {
-        const cand = [...area].filter(([r, a]) => a >= P.shardMaxM2 && a < P.sheetMaxM2 && !(groundY !== undefined && members.get(r)!.some(t => Math.min(soup.pos[t * 9 + 1], soup.pos[t * 9 + 4], soup.pos[t * 9 + 7]) - groundY <= P.shardContactM))).map(([r]) => r);
+        const coherence = (r: number) => { const v = [0, 0, 0]; let A = 0; for (const t of members.get(r)!) { const p = soup.pos.subarray(t * 9, t * 9 + 9), e1 = [p[3] - p[0], p[4] - p[1], p[5] - p[2]], e2 = [p[6] - p[0], p[7] - p[1], p[8] - p[2]], n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]]; v[0] += n[0]; v[1] += n[1]; v[2] += n[2]; A += Math.hypot(n[0], n[1], n[2]); } return A > 0 ? Math.hypot(v[0], v[1], v[2]) / A : 1; };
+        const cand = [...area].filter(([r, a]) => a >= P.shardMaxM2 && a < P.sheetMaxM2 && !(groundY !== undefined && members.get(r)!.some(t => Math.min(soup.pos[t * 9 + 1], soup.pos[t * 9 + 4], soup.pos[t * 9 + 7]) - groundY <= P.shardContactM)) && coherence(r) < P.sheetFlatMin).map(([r]) => r);
         const q: number[] = [], owner: number[] = [];
         for (const r of cand) {
             const samples = [...members.get(r)!].sort((a, b) => triArea(b) - triArea(a)).slice(0, P.sheetSamples);

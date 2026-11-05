@@ -292,16 +292,20 @@ describe('floating scan pieces', () => {
         expect(area('FacadeLattice_1')).toBeCloseTo(100, 3);
     });
 
-    it('drops a scan sheet sticking out of the building into the air, and keeps the building', () => {
-        // a closed scan box with a 10 m x 10 m sheet hung off its +x face's top edge, sticking out sideways
+    it('drops a crumpled scan sheet sticking out of the building into the air, keeps a flat one and the building', () => {
+        // a closed scan box with a crumpled sheet (a zigzag of steep folds, 1 m out and 3 m across each) hung off its +x face
         const b = box(0, 20, 0, 16, 20);
-        const sheet = quad([20, 20, 3], [10, 0, 0], [0, -10, 0]);
+        const sheet: V[] = [];
+        for (let i = 0; i < 10; i++) sheet.push(...quad([20 + i, 20, 3 + 3 * (i % 2)], [1, 0, i % 2 ? -3 : 3], [0, -10, 0]));
         const bytes = glb([{ name: 'scan', tris: b }, { name: 'scan_sheet', tris: sheet }]);
         const s = findShards(bytes, 0);
         expect(s.sheets).toBe(1);
-        expect(s.sheetAreaM2).toBeCloseTo(100, 3);
+        expect(s.sheetAreaM2).toBeCloseTo(100 * Math.sqrt(10), 2);
         const out = dropTriangles(bytes, s.keys);
         expect(nodeTris(out, 'scan_sheet').every(t => Math.hypot(...cross(sub(t[1], t[0]), sub(t[2], t[0]))) === 0)).toBe(true);
         expect(nodeTris(out, 'scan').filter(t => Math.hypot(...cross(sub(t[1], t[0]), sub(t[2], t[0]))) > 0).length).toBe(b.length / 3);
+        // the same place, a flat 10 m x 10 m piece: a wall with nothing behind it (an open side) stays
+        const flat = glb([{ name: 'scan', tris: b }, { name: 'scan_sheet', tris: quad([20, 20, 3], [10, 0, 0], [0, -10, 0]) }]);
+        expect(findShards(flat, 0).sheets).toBe(0);
     });
 });
