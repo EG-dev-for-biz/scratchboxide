@@ -26,7 +26,9 @@
  * A rebuilt facade (pipeline K's FacadeLattice_* nodes) whose frame tile_refine measured facing out (its outward reading
  * decided, facade-lattice.ts ReliefFacade.outward) is built facing out cell by cell and is never turned: it still hides what
  * lies behind it in the views. Turning by these views took a strip of cells off a wall wherever its facing ray slipped past
- * the building (Penn 2: 1,012 m² of rebuilt facades left or made facing in).
+ * the building (Penn 2: 1,012 m² of rebuilt facades left or made facing in). A rebuilt facade left undecided (a wall
+ * enclosed on both sides) is one plane built facing one way: it is turned whole when most of its area would turn, else
+ * left whole (the ESB's F34 had 102 of its 810 m² turned).
  */
 
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor, type ParsedGlb } from './glb-bytes';
@@ -152,7 +154,7 @@ export function rayMeets(pos: Float32Array, o: number[], d: number[], self: numb
     return false;
 }
 
-interface Soup { pos: Float32Array; /** Per triangle: 1 when it may not be turned (a rebuilt facade measured facing out). */ locked: Uint8Array }
+interface Soup { pos: Float32Array; /** Per triangle: 1 when it may not be turned (a rebuilt facade measured facing out). */ locked: Uint8Array; /** Per triangle: the mesh of an undecided rebuilt facade it belongs to (turned whole or not at all), else -1. */ facade: Int32Array }
 
 /** A node's mesh is a rebuilt facade whose frame tile_refine measured facing out. */
 function measuredOut(extras: any): boolean {
@@ -161,9 +163,9 @@ function measuredOut(extras: any): boolean {
 
 /** Every triangle of a GLB (tile_refine writes no node transforms), in mesh and primitive order. */
 function soupOf(g: ParsedGlb): Soup {
-    const out: number[] = [], locked: number[] = [];
-    const keep = new Set<number>();
-    for (const n of g.json.nodes ?? []) if (n.mesh !== undefined && measuredOut(n.extras)) keep.add(n.mesh);
+    const out: number[] = [], locked: number[] = [], facade: number[] = [];
+    const keep = new Set<number>(), whole = new Set<number>();
+    for (const n of g.json.nodes ?? []) if (n.mesh !== undefined) { if (measuredOut(n.extras)) keep.add(n.mesh); else if (n.extras?.sbFacadeLattice) whole.add(n.mesh); }
     // the infill's caps (sbSeal) are faced out by their own test (lattice-stitch.ts fillOpenLoops) and left out: a cap lying on a
     // scan piece wins its depth ties, so the piece would never be seen from behind and never turned
     const fill = new Set<number>();
@@ -172,9 +174,9 @@ function soupOf(g: ParsedGlb): Soup {
         if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined) continue;
         const P = readAccessor(g, p.attributes.POSITION).data, I = p.indices !== undefined ? readAccessor(g, p.indices).data : undefined;
         const n = I ? I.length : P.length / 3;
-        for (let t = 0; t + 2 < n; t += 3) { locked.push(keep.has(mi) ? 1 : 0); for (let k = 0; k < 3; k++) { const v = I ? I[t + k] : t + k; out.push(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]); } }
+        for (let t = 0; t + 2 < n; t += 3) { locked.push(keep.has(mi) ? 1 : 0); facade.push(whole.has(mi) ? mi : -1); for (let k = 0; k < 3; k++) { const v = I ? I[t + k] : t + k; out.push(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]); } }
     }
-    return { pos: Float32Array.from(out), locked: Uint8Array.from(locked) };
+    return { pos: Float32Array.from(out), locked: Uint8Array.from(locked), facade: Int32Array.from(facade) };
 }
 
 /** Per triangle, the pixels where it is the nearest surface seen from the front and from behind, in one view (added to `front`, `back`). */
@@ -238,6 +240,10 @@ export function findInwardTriangles(clayBytes: Uint8Array, P: RemeshOrientParams
     const keys = new Set<string>();
     let area = 0, facingOut = 0, grid: RayGrid | undefined;
     const measured = s.locked.reduce((a, v) => a + v, 0);
+    const triArea = (t: number) => { const p = s.pos.subarray(t * 9, t * 9 + 9); const ux = p[3] - p[0], uy = p[4] - p[1], uz = p[5] - p[2], vx = p[6] - p[0], vy = p[7] - p[1], vz = p[8] - p[2]; return Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 2; };
+    // an undecided rebuilt facade's area, all of it and the part found to turn
+    const facadeArea = new Map<number, number>(), facadeTurn = new Map<number, number>();
+    for (let t = 0; t < n; t++) if (s.facade[t] >= 0) facadeArea.set(s.facade[t], (facadeArea.get(s.facade[t]) ?? 0) + triArea(t));
     for (let t = 0; t < n; t++) {
         if (s.locked[t]) continue;
         if (back[t] < P.minBackPixels || front[t] > P.maxFrontShare * back[t]) continue;
@@ -249,8 +255,16 @@ export function findInwardTriangles(clayBytes: Uint8Array, P: RemeshOrientParams
         const o = [(p[0] + p[3] + p[6]) / 3, (p[1] + p[4] + p[7]) / 3, (p[2] + p[5] + p[8]) / 3];
         grid ??= rayGrid(s.pos);
         if (!rayMeetsGrid(grid, o, [nx / l, ny / l, nz / l], t, P.rayStartM)) { facingOut++; continue; }
+        if (s.facade[t] >= 0) { facadeTurn.set(s.facade[t], (facadeTurn.get(s.facade[t]) ?? 0) + l / 2); continue; }
         keys.add(triKey(p, P.matchM));
         area += l / 2;
+    }
+    // an undecided rebuilt facade turns whole when most of it would, else not at all
+    for (let t = 0; t < n; t++) {
+        const f = s.facade[t];
+        if (f < 0 || !((facadeTurn.get(f) ?? 0) > 0.5 * (facadeArea.get(f) ?? 0))) continue;
+        keys.add(triKey(s.pos.subarray(t * 9, t * 9 + 9), P.matchM));
+        area += triArea(t);
     }
     return { keys, stats: { triangles: n, turned: keys.size, turnedAreaM2: Math.round(area), facingOut, measuredOut: measured, ms: Date.now() - t0 } };
 }

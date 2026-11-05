@@ -151,4 +151,17 @@ describe('remesh turned to face outward', () => {
         expect(all600.stats.turned).toBe(600);
         expect(turnTriangles(kept, all600.keys).turned).toBe(0);
     });
+
+    it('turns an undecided rebuilt facade whole or not at all, by the share of it that would turn', () => {
+        // one undecided FacadeLattice node: the inward +x side (300 m², would turn) with the outward -x side and top (400 m²)
+        const all = box(true), node: number[] = [], rest: number[] = [];
+        const on = (t: number, k: number, v: number) => [0, 3, 6].every(o => Math.abs(all[t + o + k] - v) < 1e-6);
+        for (let t = 0; t < all.length; t += 9) (on(t, 0, 10) || on(t, 0, 0) || on(t, 1, 30) ? node : rest).push(...all.subarray(t, t + 9));
+        const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'orient-')), 'scan.glb');
+        writeStagedGlbFile(file, [
+            { name: 'scan', positions: Float32Array.from(rest), indices: Uint32Array.from({ length: rest.length / 3 }, (_, i) => i) },
+            { name: 'FacadeLattice_4', positions: Float32Array.from(node), indices: Uint32Array.from({ length: node.length / 3 }, (_, i) => i), extras: { sbFacadeLattice: { facadeId: 4, outward: { openFront: 0, openBack: 0, turned: false, decided: false } } } }
+        ], {});
+        expect(findInwardTriangles(fs.readFileSync(file)).stats.turned).toBe(0);
+    });
 });
