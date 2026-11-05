@@ -12,7 +12,8 @@
  *
  *   npx vite-node scripts/material_set_fit.ts find   --roots <dir>[,<dir>...] --out <runs.json>
  *   npx vite-node scripts/material_set_fit.ts dataset --runs <runs.json> --out <rows.jsonl>     (resumable: a run done is skipped)
- *   npx vite-node scripts/material_set_fit.ts train  --rows <rows.jsonl> [--write]              (scores leave-one-building-out; --write saves the model)
+ *   npx vite-node scripts/material_set_fit.ts train  --rows <rows.jsonl> [--runs <runs.json>] [--write]   (scores leave-one-building-out by
+ *                                                    the runs file's buildings; --write saves the model)
  *
  * find: every run note pipeline_k_materials.json under the roots whose classes were shown candidates by the pick by
  * appearance, paired with the finished twin its pipeline_k_model.json names, when that file is still on disk.
@@ -48,12 +49,19 @@ function findRuns(roots: string[]): Array<{ note: string; twin: string; building
                     const d = JSON.parse(fs.readFileSync(note, 'utf8'));
                     if (!d.classes?.some((c: any) => c.choice?.candidates?.length)) continue;
                     const model = JSON.parse(fs.readFileSync(path.join(dir, 'pipeline_k_model.json'), 'utf8'));
-                    const root = note.includes('/.scratchbox/') ? note.split('/.scratchbox/')[0] : path.dirname(path.dirname(dir));
+                    // a run kept by the benchmark (<out>/<side>/<place>/run) names its checkout in the result beside it
+                    let checkout: string | undefined;
+                    try { checkout = JSON.parse(fs.readFileSync(path.join(dir, '..', 'result.json'), 'utf8')).checkout; } catch { /* not a benchmark run */ }
+                    const root = checkout ?? (note.includes('/.scratchbox/') ? note.split('/.scratchbox/')[0] : path.dirname(path.dirname(dir)));
                     const glbs = [...JSON.stringify(model).matchAll(/"(\/[^"]+\.glb)"/g)].map(m => m[1]);
                     const twin = glbs.flatMap(g => [g, path.join(root, 'public', g)]).find(f => fs.existsSync(f));
                     if (!twin) continue;
-                    const base = path.basename(twin) === 'twin.glb' ? path.basename(path.dirname(twin)) : path.basename(twin);
-                    out.push({ note, twin, building: base.replace(/_iso.*$/, '').replace(/_l2.*$/, '').replace(/_(new_york|ny)(_|$).*/, '').slice(0, 40) });
+                    // the building: its place's coordinates (stages.json), rounded to about 150 m, so one building asked for by
+                    // different names is one group when buildings are held out
+                    const st = fs.existsSync(path.join(dir, 'stages.json')) ? fs.readFileSync(path.join(dir, 'stages.json'), 'utf8') : '';
+                    const lat = /"lat"\s*:\s*(-?[\d.]+)/.exec(st)?.[1], lng = /"lng"\s*:\s*(-?[\d.]+)/.exec(st)?.[1];
+                    const building = lat && lng ? `${(Math.round(Number(lat) * 750) / 750).toFixed(4)},${(Math.round(Number(lng) * 750) / 750).toFixed(4)}` : path.basename(twin);
+                    out.push({ note, twin, building });
                 } catch { /* no model note or twin */ }
             }
         }
@@ -136,8 +144,20 @@ function score(rows: Row[], p: (r: Row) => number): { top1: number; rankTop1: nu
     return { top1: n ? top / n : NaN, rankTop1: n ? rankTop / n : NaN, auc: pos.length && neg.length ? wins / (pos.length * neg.length) : NaN, classes: n };
 }
 
-function train(rowsFile: string, write: boolean): void {
-    const rows = fs.readFileSync(rowsFile, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l) as Row).filter(r => r.w > 0 && r.x.length === SET_FIT_FEATURES.length);
+function train(rowsFile: string, write: boolean, runsFile?: string): void {
+    const all = fs.readFileSync(rowsFile, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l) as Row).filter(r => r.w > 0 && r.x.length === SET_FIT_FEATURES.length);
+    // one decision per building and class: a building rebuilt many times repeats its classes' picks (same colour, same
+    // candidates, same pick), which would weigh it by how often it was built
+    const byClass = new Map<string, Row[]>();
+    // the buildings as a runs file (find) names them now, when given
+    if (runsFile) { const by = new Map((JSON.parse(fs.readFileSync(runsFile, 'utf8')) as Array<{ note: string; building: string }>).map(r => [r.note, r.building])); for (const r of all) r.building = by.get(r.run) ?? r.building; }
+    for (const r of all) { const k = `${r.run}#${r.cls}`; (byClass.get(k) ?? byClass.set(k, []).get(k)!).push(r); }
+    const seen = new Set<string>(), rows: Row[] = [];
+    for (const rs of byClass.values()) {
+        const key = `${rs[0].building}|${rs.map(r => `${r.candidate}${r.picked ? '*' : ''}`).join(',')}|${rs[0].x.slice(1, 4).map(v => v.toFixed(1)).join(',')}`;
+        if (seen.has(key)) continue;
+        seen.add(key); rows.push(...rs);
+    }
     const buildings = [...new Set(rows.map(r => r.building))];
     console.log(`${rows.length} rows, ${rows.filter(r => r.picked).length} picks, ${buildings.length} buildings: ${buildings.join(', ')}`);
     // leave one building out: each building scored by a model fitted on the others
@@ -173,6 +193,6 @@ const cmd = process.argv[2];
 (async () => {
     if (cmd === 'find') { const runs = findRuns(arg('roots')!.split(',')); fs.writeFileSync(arg('out')!, JSON.stringify(runs, null, 1)); console.log(`${runs.length} runs with a twin on disk`); }
     else if (cmd === 'dataset') await dataset(arg('runs')!, arg('out')!);
-    else if (cmd === 'train') train(arg('rows')!, process.argv.includes('--write'));
+    else if (cmd === 'train') train(arg('rows')!, process.argv.includes('--write'), arg('runs'));
     else { console.error('usage: find | dataset | train (see the file comment)'); process.exit(2); }
 })();

@@ -59,8 +59,9 @@ describe('pipeline K library sets', () => {
         const metal = await resolveRegionSets([dark], { repoRoot: root, store, finish: async () => [{ roughness: 0.35, metalness: 0.95, conf: 60, seen: 'anodized aluminium panel' }] });
         expect(metal[0].name).toBe('Panel');
         expect(metal[0].finish?.read?.seen).toBe('anodized aluminium panel');
-        // the set's own maps, from the store: the panel's metalness (blue) is drawn as the set has it
-        expect(Array.from(metal[0].orm.rgba.subarray(0, 3))).toEqual([255, 89, 242]);
+        // the set's own maps, from the store: the panel's metalness (blue) drawn as read (0.95), its roughness read 0.35
+        // drawn smoother (0.245: material-finish.ts drawnRoughness)
+        expect(Array.from(metal[0].orm.rgba.subarray(0, 3))).toEqual([255, 62, 242]);
         // read as smooth glass: a library set all the same, never a plain finish
         const glass = await resolveRegionSets([dark], { repoRoot: root, store, finish: async () => [{ roughness: 0.05, metalness: 0, conf: 80, seen: 'dark tinted glass' }] });
         expect(['Concrete', 'Panel']).toContain(glass[0].name);
