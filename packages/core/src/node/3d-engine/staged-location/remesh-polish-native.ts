@@ -26,6 +26,7 @@
  *  - `infill`: pipeline-k/lattice-stitch.ts fillOpenLoops (scratchbox_open_loop_fill.hpp);
  *  - `fill-texture`: pipeline-k/lattice-stitch.ts appendTexturedTriangles' routes (scratchbox_fill_texture.hpp), the
  *    texturing of the fill, seal and stitch in the twin, triangles and pieces in chunks.
+ * and one with no TypeScript twin: the inner core (pipeline-k/inner-core.ts, scratchbox_inner_core.hpp), columns of voxels a task.
  *
  * Data goes over stdin as raw little-endian buffers (a header, then arrays), never PNG; the window fit's facades are
  * streamed as they are decoded and fitted as they arrive. The pool's size is the caller's: a chunked district's builds
@@ -72,8 +73,9 @@ export function ensureRemeshPolishBinary(repoRoot = findTileRefineRepoRoot()): P
 }
 
 /** The polish input's native steps built before it runs: the lattice (its cut and stitch), the clip and the infill (or seal, and their textured fill) run synchronously and cannot compile. */
-export async function ensureNativePolishFor(input: { infill?: boolean; seal?: boolean; lattice?: boolean; orthosDir?: string; clip?: boolean; base?: unknown }): Promise<void> {
-    if (((input.infill || input.seal) && (kNative('infill') || kNative('fill-texture'))) || (input.clip && input.base && kNative('clip')) || (input.orthosDir && input.lattice !== false && (kNative('lattice') || kNative('cut') || kNative('stitch') || kNative('fill-texture')))) await ensureRemeshPolishBinary();
+export async function ensureNativePolishFor(input: { infill?: boolean; seal?: boolean; lattice?: boolean; orthosDir?: string; clip?: boolean; base?: unknown; closure?: unknown }): Promise<void> {
+    // the inner core is native only
+    if (input.closure || ((input.infill || input.seal) && (kNative('infill') || kNative('fill-texture'))) || (input.clip && input.base && kNative('clip')) || (input.orthosDir && input.lattice !== false && (kNative('lattice') || kNative('cut') || kNative('stitch') || kNative('fill-texture')))) await ensureRemeshPolishBinary();
 }
 
 /** The wall grammar's native reading built before it runs: readWallGrammar runs synchronously and cannot compile. */
@@ -480,4 +482,20 @@ export function runNativeFillTexture(params: number[], walls: NativeWallMap[], p
     });
     r.done('fill-texture');
     return { textured: true, repeatOrder, parts };
+}
+
+// ------------------------------------------------------------------------------------------------ the inner core
+
+/** pipeline-k/inner-core.ts's solid natively (scratchbox_inner_core.hpp): its report, closed surface and each triangle's photo source. */
+export function runNativeInnerCore(params: number[], soup: Float32Array, kind: Uint8Array, footprint: Vec2[][], groundY: number | undefined, regions: Array<{ c: number[]; r: number }>, threads: number): { report: Record<string, unknown>; positions: Float64Array; indices: Uint32Array; source: Int32Array; route: Uint8Array } {
+    const w = new Writer().magic('SBIC').u32(1).u32(params.length).f64s(params).u32(soup.length).f32s(soup).raw(kind).u32(footprint.length);
+    for (const loop of footprint) w.u32(loop.length).f64s(loop.flatMap(p => [p[0], p[1]]));
+    w.f64s([groundY ?? Number.NaN]).u32(regions.length).f64s(regions.flatMap(g => [g.c[0], g.c[1], g.c[2], g.r]));
+    const r = new Reader(runSync('inner-core', w.take(), threads));
+    const report = JSON.parse(r.str()) as Record<string, unknown>;
+    const positions = r.f64s(r.u32()), indices = r.u32s(r.u32());
+    const n = indices.length / 3, source = new Int32Array(n), route = new Uint8Array(n);
+    for (let t = 0; t < n; t++) { source[t] = r.i32(); route[t] = r.u8s(1)[0]; }
+    r.done('inner-core');
+    return { report, positions, indices, source, route };
 }
