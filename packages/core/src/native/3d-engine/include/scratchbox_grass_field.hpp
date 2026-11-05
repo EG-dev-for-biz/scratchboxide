@@ -34,7 +34,14 @@
  *     scan's surface, in the cell's photo colour darkened to `underlayerShade` (the dense lower grass seen from above) and
  *     further by `contactShade` where clumps stand, fading back to the photo colour over `underlayerFadeM` at the grass
  *     edge and over the last `underlayerRadialFade` of its radius, and carrying a tiling blade-detail texture (strokes at
- *     blade scale, `detailTileM` a tile).
+ *     blade scale, `detailTileM` a tile);
+ *   - shells (the fur method) for the near ground: `shellLayers` copies of the underlayer within `shellRadiusM`, stacked
+ *     up to `shellHeightM`, sharing one texture of blade cross-sections (`shellBladesPerM2`, gathered in tufts, each a
+ *     flat sliver in its own direction; `shellTileM` a tile) whose alpha is the height the blade at each texel reaches
+ *     (tapering); layer i is drawn where that height passes i / shellLayers (glTF alpha mask, cutoff per layer), so many
+ *     thousand blade cross-sections per m2 cost a few triangles; tone climbs from `shellBottomTone` of the underlayer's
+ *     to `shellTopTone` of it at the top, with a slow brightness swell that hides the tile's repeat; vertex alpha
+ *     thins them out at the rim and the grass edge. Needs the underlayer (they are built on its lattice).
  *
  * Every shape quantity is a continuous parameter: blade height and width, keel depth, droop, splay, curl, clump radius,
  * senescence; nothing selects a grass kind.
@@ -45,7 +52,8 @@
  * triangles over the band (x y z per corner; 0 triangles = no snapping).
  *
  * Output: underlayer.bin (positions f32x3, normals f32x3, colours f32x4, uvs f32x2, indices u32) and detail.rgba (the
- * detail texture, RGBA8), counts in report.json's `underlayer`; mesh.bin (per variant: positions f32x3, normals f32x3, colours f32x4, indices u32) and instances.bin (per
+ * detail texture, RGBA8), counts in report.json's `underlayer`; shells.bin (the same layout, layer after layer, each
+ * layer's indices a run of report.json's `shells.indicesPerLayer`) and shell.rgba; mesh.bin (per variant: positions f32x3, normals f32x3, colours f32x4, indices u32) and instances.bin (per
  * variant: translation f32x3, rotation f32x4 (x y z w), scale f32x3, colour f32x3, confidence f32: its cell's mask
  * confidence), laid out as report.json says.
  */
@@ -107,6 +115,17 @@ struct Params {
     double contactRadiusM = 0.3;
     double underlayerFadeM = 1.5;   // at the grass edge the shade fades back to the photo colour over this
     double detailTexPx = 256, detailTileM = 0.5;
+    // shells
+    double shellRadiusM = 12;       // 0 = none; within the underlayer
+    double shellLayers = 12;
+    double shellHeightM = 0.09;
+    double shellBladesPerM2 = 8000;
+    double shellTileM = 1.0, shellTexPx = 1024;
+    double shellTuftsPerM2 = 40, shellTuftRadiusM = 0.08, shellTuftShare = 0.25;  // blades gathered in tufts
+    // tone of the bottom and top layers relative to the underlayer's (the floor they stand on): flat layers catch the
+    // overhead light fully where an upright blade catches less, so they stay at or below the floor's tone
+    double shellBottomTone = 0.8, shellTopTone = 1.0;
+    double shellToneNoise = 0.12, shellNoiseCellM = 0.7;                          // slow brightness swell
     double pixelAngle = 0.0015;     // radians a pixel spans (about 1 px at 1000 px over 60 degrees); 0 = no rings
     double maxWidthScale = 16;      // widest blade, as a multiple of the near blade
 
@@ -120,6 +139,8 @@ struct Params {
         SB_GF_P(pixelAngle) SB_GF_P(maxWidthScale) SB_GF_P(rootShade) SB_GF_P(occlusionHeight)
         SB_GF_P(underlayerRadiusM) SB_GF_P(underlayerSpacingM) SB_GF_P(underlayerLiftM) SB_GF_P(underlayerShade)
         SB_GF_P(contactShade) SB_GF_P(contactRadiusM) SB_GF_P(underlayerFadeM) SB_GF_P(underlayerRadialFade) SB_GF_P(detailTexPx) SB_GF_P(detailTileM)
+        SB_GF_P(shellRadiusM) SB_GF_P(shellLayers) SB_GF_P(shellHeightM) SB_GF_P(shellBladesPerM2) SB_GF_P(shellTileM) SB_GF_P(shellTexPx)
+        SB_GF_P(shellTuftsPerM2) SB_GF_P(shellTuftRadiusM) SB_GF_P(shellTuftShare) SB_GF_P(shellBottomTone) SB_GF_P(shellTopTone) SB_GF_P(shellToneNoise) SB_GF_P(shellNoiseCellM)
 #undef SB_GF_P
         throw std::runtime_error("unknown parameter " + k);
     }
@@ -176,6 +197,18 @@ struct Underlayer {
     std::vector<uint8_t> texture;
     int texPx = 0;
     double areaM2 = 0, textureMean = 0;
+    // per vertex, for the shells: the photo colour, how far inside the grass (0..1), the distance from the centre
+    std::vector<float> photo, inside, dist;
+};
+
+/** The shells: layer after layer in one vertex array, each layer's triangles a run of `indicesPerLayer`. */
+struct Shells {
+    std::vector<float> positions, normals, colours, uvs;
+    std::vector<uint32_t> indices;
+    std::vector<uint8_t> texture;
+    int texPx = 0, layers = 0;
+    size_t indicesPerLayer = 0;
+    double areaM2 = 0, textureMean = 0, bladesPerM2 = 0;
 };
 
 struct Stats {
@@ -221,6 +254,17 @@ public:
         bucketScan();
         place(nv, nr);
         underlayer();
+        shells();
+    }
+
+    const Shells& shellLayers() const { return shells_; }
+
+    void writeShells(const std::string& meshFile, const std::string& texFile) const {
+        std::ofstream m(meshFile, std::ios::binary), t(texFile, std::ios::binary);
+        if (!m || !t) throw std::runtime_error("cannot write " + meshFile);
+        for (const auto* a : {&shells_.positions, &shells_.normals, &shells_.colours, &shells_.uvs}) m.write(reinterpret_cast<const char*>(a->data()), std::streamsize(a->size() * 4));
+        m.write(reinterpret_cast<const char*>(shells_.indices.data()), std::streamsize(shells_.indices.size() * 4));
+        t.write(reinterpret_cast<const char*>(shells_.texture.data()), std::streamsize(shells_.texture.size()));
     }
 
     const Underlayer& under() const { return under_; }
@@ -276,7 +320,10 @@ public:
           << ",\"overBudget\":" << s.overBudget << ",\"snapped\":" << s.snapped << ",\"unsnapped\":" << s.unsnapped << ",\"expected\":" << s.expected << ",\"bandGrassM2\":" << s.bandGrassM2
           << ",\"radiusReachedM\":" << s.radiusReachedM << "},\"underlayer\":{\"vertices\":" << under_.positions.size() / 3
           << ",\"indices\":" << under_.indices.size() << ",\"texPx\":" << under_.texPx << ",\"tileM\":" << p_.detailTileM
-          << ",\"areaM2\":" << under_.areaM2 << ",\"textureMean\":" << under_.textureMean << "}}";
+          << ",\"areaM2\":" << under_.areaM2 << ",\"textureMean\":" << under_.textureMean << "},\"shells\":{\"layers\":" << shells_.layers
+          << ",\"vertices\":" << shells_.positions.size() / 3 << ",\"indices\":" << shells_.indices.size() << ",\"indicesPerLayer\":" << shells_.indicesPerLayer
+          << ",\"texPx\":" << shells_.texPx << ",\"tileM\":" << p_.shellTileM << ",\"heightM\":" << p_.shellHeightM << ",\"areaM2\":" << shells_.areaM2
+          << ",\"textureMean\":" << shells_.textureMean << ",\"bladesPerM2\":" << shells_.bladesPerM2 << "}}";
         return j.str();
     }
 
@@ -286,6 +333,7 @@ private:
     std::vector<Variant> variants_;
     Stats stats_;
     Underlayer under_;
+    Shells shells_;
     // the scan's triangles bucketed by grid cell (every cell a triangle's plan bounds touch)
     std::vector<uint32_t> bucketStart_, bucketTris_;
 
@@ -512,6 +560,9 @@ private:
             const double shade = (1 - inside * (1 - p_.underlayerShade)) * (1 - inside * p_.contactShade * contact);
             // the texture multiplies by its mean; the vertex colour carries the rest
             const double k = shade / std::max(0.1, U.textureMean);
+            U.photo.insert(U.photo.end(), {float(col[0]), float(col[1]), float(col[2])});
+            U.inside.push_back(float(inside));
+            U.dist.push_back(float(std::sqrt((x - cx) * (x - cx) + (z - cz) * (z - cz))));
             vid[size_t(b - b0) * W + (a - a0)] = int64_t(U.positions.size() / 3);
             U.positions.insert(U.positions.end(), {float(x), float(y), float(z)});
             U.normals.insert(U.normals.end(), {0.f, 1.f, 0.f});
@@ -535,6 +586,109 @@ private:
             const double dx = (std::isfinite(r) ? r : y0) - (std::isfinite(l) ? l : y0), dz = (std::isfinite(u) ? u : y0) - (std::isfinite(d) ? d : y0);
             const double span = 2 * sp, nx = -dx / span, nz = -dz / span, len = std::sqrt(nx * nx + 1 + nz * nz);
             U.normals[size_t(v) * 3] = float(nx / len); U.normals[size_t(v) * 3 + 1] = float(1 / len); U.normals[size_t(v) * 3 + 2] = float(nz / len);
+        }
+    }
+
+    /**
+     * The shells' blade cross-sections: per texel, the height (0..1) the blade standing there reaches, tapering from its
+     * base (so higher layers cut thinner slivers). Blades grow in tufts (`shellTuftShare` of them around tuft centres) and
+     * each cross-section is a flat sliver in its own direction, as a blade seen from above, not a round dot. RGB is near
+     * white with a per-blade variation (the tone is the vertex colour's); alpha the height. Wraps at its edges.
+     */
+    void shellTexture() {
+        const int n = std::clamp(int(std::lround(p_.shellTexPx)), 16, 4096);
+        const double tile = std::max(0.02, p_.shellTileM), pxPerM = n / tile;
+        std::vector<float> h(size_t(n) * n, 0.f), lum(size_t(n) * n, 1.f);
+        const long blades = std::max(1L, long(std::lround(p_.shellBladesPerM2 * tile * tile)));
+        const long tufts = std::max(1L, long(std::lround(p_.shellTuftsPerM2 * tile * tile)));
+        const double tuftR = p_.shellTuftRadiusM * pxPerM;
+        const uint64_t salt = uint64_t(p_.seed) + 4242;
+        for (long q = 0; q < blades; ++q) {
+            double cx, cy;
+            if (hash01(q, 6, salt) < p_.shellTuftShare) {
+                // around a tuft centre, denser toward it
+                const long t = long(hash01(q, 7, salt) * tufts) % tufts;
+                const double a = hash01(q, 8, salt) * 2 * math::PI, r = tuftR * hash01(q, 9, salt) * hash01(q, 10, salt);
+                cx = hash01(t, 11, salt) * n + std::cos(a) * r; cy = hash01(t, 12, salt) * n + std::sin(a) * r;
+            } else { cx = hash01(q, 1, salt) * n; cy = hash01(q, 2, salt) * n; }
+            const double top = 0.4 + 0.6 * hash01(q, 3, salt);
+            // a sliver: blade width along its own direction, a keel's thickness across it
+            const double len = std::max(1.0, 0.5 * p_.bladeWidthMid * (0.8 + 0.8 * hash01(q, 4, salt)) * pxPerM * 1.4);
+            const double thick = std::max(0.7, len * 0.3);
+            const double ang = hash01(q, 5, salt) * math::PI, ca = std::cos(ang), sa = std::sin(ang);
+            const float shade = float(0.85 + 0.15 * hash01(q, 13, salt));
+            const int r = int(std::ceil(len));
+            for (int dy = -r; dy <= r; ++dy) for (int dx = -r; dx <= r; ++dx) {
+                const double u = (dx * ca + dy * sa) / len, v = (-dx * sa + dy * ca) / thick, d = u * u + v * v;
+                if (d >= 1) continue;
+                const int x = ((int(std::floor(cx)) + dx) % n + n) % n, y = ((int(std::floor(cy)) + dy) % n + n) % n;
+                const float hv = float(top * (1 - std::sqrt(d)));
+                if (hv > h[size_t(y) * n + x]) { h[size_t(y) * n + x] = hv; lum[size_t(y) * n + x] = shade; }
+            }
+        }
+        auto& S = shells_;
+        S.texPx = n; S.bladesPerM2 = blades / (tile * tile);
+        S.texture.resize(size_t(n) * n * 4);
+        double sum = 0, cnt = 0;
+        for (size_t i = 0; i < h.size(); ++i) {
+            const uint8_t b = uint8_t(std::lround(lum[i] * 255));
+            S.texture[i * 4] = b; S.texture[i * 4 + 1] = b; S.texture[i * 4 + 2] = b;
+            S.texture[i * 4 + 3] = uint8_t(std::lround(std::clamp(double(h[i]), 0.0, 1.0) * 255));
+            if (h[i] > 0) { sum += lum[i]; cnt += 1; }
+        }
+        // the mean over the texels a blade covers: the ones a layer draws
+        S.textureMean = cnt > 0 ? sum / cnt : 1;
+    }
+
+    /** Smooth value noise (0..1) on a lattice of `cellM`: low-frequency variation that breaks a texture's repeat. */
+    double valueNoise(double x, double z, double cellM, uint64_t salt) const {
+        const double fx = x / cellM, fz = z / cellM;
+        const long i = long(std::floor(fx)), k = long(std::floor(fz));
+        const double tx = fx - i, tz = fz - k, sx = tx * tx * (3 - 2 * tx), sz = tz * tz * (3 - 2 * tz);
+        auto v = [&](long a, long b) { return hash01(uint64_t(a), uint64_t(b), salt); };
+        return (v(i, k) * (1 - sx) + v(i + 1, k) * sx) * (1 - sz) + (v(i, k + 1) * (1 - sx) + v(i + 1, k + 1) * sx) * sz;
+    }
+
+    void shells() {
+        const int L = std::max(0, int(std::lround(p_.shellLayers)));
+        const double R = p_.shellRadiusM;
+        if (!(R > 0) || L < 1 || under_.indices.empty()) return;
+        shellTexture();
+        const auto& U = under_;
+        auto& S = shells_;
+        const size_t nu = U.positions.size() / 3;
+        std::vector<int64_t> map(nu, -1);
+        std::vector<uint32_t> keep;
+        for (size_t v = 0; v < nu; ++v) if (U.dist[v] <= R) { map[v] = int64_t(keep.size()); keep.push_back(uint32_t(v)); }
+        std::vector<uint32_t> tri;
+        for (size_t t = 0; t + 2 < U.indices.size(); t += 3) {
+            const int64_t a = map[U.indices[t]], b = map[U.indices[t + 1]], c = map[U.indices[t + 2]];
+            if (a < 0 || b < 0 || c < 0) continue;
+            tri.insert(tri.end(), {uint32_t(a), uint32_t(b), uint32_t(c)});
+        }
+        if (tri.empty()) return;
+        S.layers = L; S.indicesPerLayer = tri.size();
+        S.areaM2 = U.areaM2 * double(tri.size()) / double(U.indices.size());
+        const double r0 = std::clamp(p_.rootShade, 0.0, 1.0), fade = std::max(1e-3, R * 0.3);
+        for (int i = 0; i < L; ++i) {
+            const double f = double(i + 1) / L, lift = f * p_.shellHeightM;
+            // tone relative to the floor: darker at the bottom (deeper in the grass), the floor's own at the top, so from above
+            // the shells match the ground around them and never glow over it
+            const double t = std::clamp(f / std::max(1e-3, p_.occlusionHeight), 0.0, 1.0), floor = std::max(r0, p_.underlayerShade);
+            const double lo = floor * p_.shellBottomTone, hi = floor * p_.shellTopTone, tone = lo + (hi - lo) * t * t * (3 - 2 * t);
+            const uint32_t base = uint32_t(S.positions.size() / 3);
+            for (uint32_t v : keep) {
+                S.positions.insert(S.positions.end(), {U.positions[v * 3], float(U.positions[v * 3 + 1] + lift), U.positions[v * 3 + 2]});
+                S.normals.insert(S.normals.end(), {U.normals[v * 3], U.normals[v * 3 + 1], U.normals[v * 3 + 2]});
+                // a slow brightness swell across the lawn, so the texture's tile does not read as a repeat
+                const double swell = 1 + p_.shellToneNoise * (2 * valueNoise(U.positions[v * 3], U.positions[v * 3 + 2], p_.shellNoiseCellM, uint64_t(p_.seed) + 77) - 1);
+                const double k = tone * swell / std::max(0.1, S.textureMean);
+                // thinner toward the rim and the grass edge: the mask compares texture alpha x this to the layer's cutoff
+                const double alpha = std::clamp(double(U.inside[v]), 0.0, 1.0) * std::clamp((R - U.dist[v]) / fade, 0.0, 1.0);
+                S.colours.insert(S.colours.end(), {float(std::min(1.0, U.photo[v * 3] * k)), float(std::min(1.0, U.photo[v * 3 + 1] * k)), float(std::min(1.0, U.photo[v * 3 + 2] * k)), float(alpha)});
+                S.uvs.insert(S.uvs.end(), {float(U.positions[v * 3] / p_.shellTileM), float(U.positions[v * 3 + 2] / p_.shellTileM)});
+            }
+            for (uint32_t q : tri) S.indices.push_back(base + q);
         }
     }
 

@@ -125,7 +125,7 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
         }
         const file = path.join(tmp(), 'blades.glb');
         const tris = writeGrassFieldGlb(file, field, { sb: { provenance: { label: 'generated', colour: { label: 'photo-inferred' } } } });
-        expect(tris).toBe(field.report.instancedTriangles + field.underlayer.indices.length / 3);
+        expect(tris).toBe(field.report.instancedTriangles + field.underlayer.indices.length / 3 + field.shells.indices.length / 3);
         const glb = fs.readFileSync(file);
         expect(glb.readUInt32LE(0)).toBe(0x46546c67);
         const json = JSON.parse(glb.subarray(20, 20 + glb.readUInt32LE(12)).toString('utf8'));
@@ -135,7 +135,7 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
         expect(under).toHaveLength(1);
         expect(json.materials[json.meshes[under[0].mesh].primitives[0].material].pbrMetallicRoughness.baseColorTexture.index).toBe(0);
         expect(json.images[0].mimeType).toBe('image/png');
-        const counts = json.nodes.filter((n: { name: string }) => n.name !== 'grass underlayer').map((n: { extensions: { EXT_mesh_gpu_instancing: { attributes: Record<string, number> } } }) => {
+        const counts = json.nodes.filter((n: { name: string }) => n.name !== 'grass underlayer' && n.name !== 'grass shells').map((n: { extensions: { EXT_mesh_gpu_instancing: { attributes: Record<string, number> } } }) => {
             const a = n.extensions.EXT_mesh_gpu_instancing.attributes;
             expect(Object.keys(a).sort()).toEqual(['ROTATION', 'SCALE', 'TRANSLATION', '_COLOR_0', '_CONFIDENCE']);
             return json.accessors[a.TRANSLATION].count;
@@ -219,13 +219,13 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
         expect(trisTiled).toBe(trisWhole);
         const t = read(tiled), w = read(whole);
         const live = field.variants.filter(v => v.confidence.length > 0).length;
-        // plus the underlayer, one node and one mesh in both
-        expect(w.json.nodes.length).toBe(live + 1);
-        expect(t.json.meshes.length).toBe(live + 1);
+        // plus the underlayer and the shells, one node and one mesh each, in both
+        expect(w.json.nodes.length).toBe(live + 2);
+        expect(t.json.meshes.length).toBe(live + 2);
         expect(t.json.nodes.length).toBeGreaterThan(live * 3);
         let total = 0;
         const seen = new Set<string>();
-        for (const node of t.json.nodes.filter((n: { name: string }) => n.name !== 'grass underlayer')) {
+        for (const node of t.json.nodes.filter((n: { name: string }) => n.name !== 'grass underlayer' && n.name !== 'grass shells')) {
             const { i, k, sizeM } = node.extras.tile;
             expect(sizeM).toBe(10);
             const key = `${node.mesh}:${i},${k}`;
@@ -290,7 +290,7 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
             nx: n, nz: n, x0: -10, z0: -10, cellM: 1, mask, exclude: new Uint8Array(M), confidence: new Float32Array(M).fill(1),
             surfaceY: new Float32Array(M).fill(0), colour
         };
-        const f = await buildGrassField(g, tmp(), { densityPerM2: 2, bandRadiusM: 30, underlayerRadiusM: 30, contactShade: 0, pixelAngle: 0 });
+        const f = await buildGrassField(g, tmp(), { densityPerM2: 2, bandRadiusM: 30, underlayerRadiusM: 30, contactShade: 0, shellRadiusM: 0, pixelAngle: 0 });
         const u = f.underlayer;
         // along the row z = 0 (inside the lawn, away from its edges), the red channel west to east
         const row: Array<[number, number]> = [];
@@ -311,5 +311,49 @@ describe('grass field (native, instanced clumps over a grass mask)', () => {
         expect(tints.length).toBeGreaterThan(0);
         const strictlyBetween = tints.filter(([, r]) => r > 0.04 / 0.8 * 1.09 && r < 0.10 / 0.8 * 0.91).length;
         expect(strictlyBetween).toBeGreaterThan(0);
+    });
+
+    it('stacks shells over the near lawn: layers climbing to the blade height, each cutting the blade cross-sections at its height', () => {
+        const sh = field.shells, u = field.underlayer;
+        expect(sh.layers).toBe(12);
+        expect(sh.indices.length).toBe(12 * sh.indicesPerLayer);
+        const per = sh.positions.length / 3 / 12;
+        // the bottom layer: the underlayer's vertices within 12 m, lifted one twelfth of 9 cm
+        for (let q = 0; q < per; q++) {
+            const x = sh.positions[q * 3], z = sh.positions[q * 3 + 2];
+            expect(Math.hypot(x, z)).toBeLessThanOrEqual(12 + 1e-4);
+            expect(inRect(x, z, FULL) || inRect(x, z, HALF)).toBe(true);
+            // each layer straight above the one below, 0.75 cm higher
+            for (let l = 1; l < 12; l++) expect(sh.positions[(l * per + q) * 3 + 1] - sh.positions[((l - 1) * per + q) * 3 + 1]).toBeCloseTo(0.09 / 12, 5);
+            // fully thinned out at the rim
+            if (Math.hypot(x, z) > 12 - 0.05) expect(sh.colours[q * 4 + 3]).toBeLessThan(0.05);
+        }
+        expect(u.positions.length / 3).toBeGreaterThan(per);
+        // tone climbs up the layers, from 0.8 of the floor's (the underlayer's) tone at the bottom to the floor's own at the top
+        expect(sh.colours[(11 * per) * 4 + 1] / sh.colours[1]).toBeCloseTo(1 / 0.8, 1);
+        // the bottom layer matches the underlayer under it (same vertex, same shade before the texture's mean)
+        // the texture: a 1 m tile of flat slivers, near-white, a few blades per tuft; not round dots
+        expect(sh.texPx).toBe(1024);
+        expect(sh.tileM).toBe(1);
+        let minLum = 255;
+        for (let q = 0; q < sh.texture.length; q += 4) if (sh.texture[q + 3] > 0) minLum = Math.min(minLum, sh.texture[q]);
+        expect(minLum).toBeGreaterThanOrEqual(Math.floor(0.85 * 255));
+        // the cross-sections: the share of texels a layer keeps falls with height; about 8000 blades per m2
+        expect(sh.bladesPerM2).toBeGreaterThan(7900);
+        const share = (cut: number) => { let n = 0; for (let q = 3; q < sh.texture.length; q += 4) if (sh.texture[q] / 255 >= cut) n++; return n / (sh.texture.length / 4); };
+        const low = share(0.5 / 12), mid = share(5.5 / 12), high = share(10.5 / 12);
+        expect(low).toBeGreaterThan(mid);
+        expect(mid).toBeGreaterThan(high);
+        // twelve layers of the bottom share hide most of the ground seen from above
+        expect(1 - (1 - low) ** 12).toBeGreaterThan(0.6);
+        expect(high).toBeGreaterThan(0);
+        // in the GLB: one primitive per layer, alpha masks with rising cutoffs
+        const file = path.join(tmp(), 'shells.glb');
+        writeGrassFieldGlb(file, field, {});
+        const glb = fs.readFileSync(file), json = JSON.parse(glb.subarray(20, 20 + glb.readUInt32LE(12)).toString('utf8'));
+        const mesh = json.meshes[json.nodes.find((n: { name: string }) => n.name === 'grass shells').mesh];
+        const cuts = mesh.primitives.map((p: { material: number }) => json.materials[p.material]).map((m: { alphaMode: string; alphaCutoff: number }) => { expect(m.alphaMode).toBe('MASK'); return m.alphaCutoff; });
+        expect(cuts).toHaveLength(12);
+        for (let l = 1; l < 12; l++) expect(cuts[l]).toBeGreaterThan(cuts[l - 1]);
     });
 });

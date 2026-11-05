@@ -568,7 +568,7 @@ const ROUTES = ['clay: no photo', "the rebuilt wall's own photo at that spot", "
  * Does a ray meet a triangle of the mesh: from o along unit d, within maxM. The triangles are binned in a grid of cells and the
  * ray walks the cells it passes (Amanatides-Woo), testing each cell's triangles once (Moller-Trumbore).
  */
-function rayIndex(pos: number[][], tris: number[][], C = 2): (o: number[], d: number[], maxM: number) => boolean {
+export function rayIndex(pos: number[][], tris: number[][], C = 2): (o: number[], d: number[], maxM: number, skip?: (t: number) => boolean) => boolean {
     const grid = new Map<string, number[]>();
     tris.forEach((f, t) => {
         const [a, b, c] = f.map(v => pos[v]);
@@ -586,13 +586,13 @@ function rayIndex(pos: number[][], tris: number[][], C = 2): (o: number[], d: nu
         const tt = dot(e2, q) / det;
         return tt > 0 && tt <= maxM;
     };
-    return (o, d, maxM) => {
+    return (o, d, maxM, skip) => {
         const cell = o.map(x => Math.floor(x / C)), step = d.map(x => (x > 0 ? 1 : x < 0 ? -1 : 0));
         const tMax = [0, 1, 2].map(k => (d[k] === 0 ? Infinity : ((cell[k] + (d[k] > 0 ? 1 : 0)) * C - o[k]) / d[k]));
         const tDelta = [0, 1, 2].map(k => (d[k] === 0 ? Infinity : C / Math.abs(d[k])));
         const seen = new Set<number>();
         for (let guard = 0; guard < 10000; guard++) {
-            for (const t of grid.get(`${cell[0]},${cell[1]},${cell[2]}`) ?? []) { if (seen.has(t)) continue; seen.add(t); if (hit(t, o, d, maxM)) return true; }
+            for (const t of grid.get(`${cell[0]},${cell[1]},${cell[2]}`) ?? []) { if (seen.has(t)) continue; seen.add(t); if (skip?.(t)) continue; if (hit(t, o, d, maxM)) return true; }
             const k = tMax[0] < tMax[1] ? (tMax[0] < tMax[2] ? 0 : 2) : tMax[1] < tMax[2] ? 1 : 2;
             if (tMax[k] > maxM) return false;
             cell[k] += step[k]; tMax[k] += tDelta[k];
