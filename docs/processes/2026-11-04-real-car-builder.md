@@ -143,3 +143,51 @@ z 0.20-0.92, painting over the front side window (the skill now says A-pillars a
 check scored it 52/100 and reported surface rippling round the windscreen and doors, not confirmed in the outline
 renders. An earlier run had its drawing rejected because a drawn ground line joined the tyres (fixed). Step 5 (depth
 relief) not built: no torch here.
+
+## 8. Step 5: depth relief from the drawings (2026-11-04, night)
+
+**Status: Needs Fix: built and labelled, but the hollows do not show.**
+
+What was built (commits 8c004667, 8fab0ad2):
+- `object_blueprint_outlines` takes `depth: true`.
+  - Depth Anything V2 Small (`PanoramaDepthService`, local, about 4.5 s for the first view and 0.5 s after) reads the front and side drawings.
+  - Where each drawing sinks inside its outline, relative to a masked local average, becomes a 0 to −1 grid saved with the outlines (`blueprint-depth.ts`).
+  - A band as wide as the blur, just inside the outline, is left out, so the depth jump to the background is not read as a sink.
+- A `fromBlueprint` part takes the grid with `reliefMeters` (at most 0.05). It moves the part's front- and side-facing surface along its normal, and the outline never moves.
+- The GLB extras label it `depthRelief {meters, model, provenance: 'photo-inferred'}`.
+- Tests: a synthetic depth map, the tool saving both grids, and a native slab whose side sinks 2–3 cm only where the grid says.
+
+Live run: port 3470, the request "Build a 3D model of a 2025 Volkswagen Golf GTI in Kings Red Metallic."
+- The agent passed `depth: true`. The relief came from the depth model, with grid minima of −0.99 on the side and −0.89 on the front.
+- The agent built the body with `reliefMeters` 0.012 and the glasshouse with 0.010.
+- The final GLB carries the photo-inferred labels.
+
+Mean outline error against the production Golf (`golf_gti_my25_lights_on.glb`). Each row is measured against the production model, except "Build vs its blueprint", which is measured against that run's own drawing.
+
+| Model | Side top | Side bottom | Plan half width | Front half width |
+|---|---|---|---|---|
+| This run's blueprint | 1.1 cm | 1.9 cm | 1.8 cm | 1.8 cm |
+| Step 5 build | 3.1 cm | 6.7 cm | 2.1 cm | 2.3 cm |
+| Same spec, relief removed | 3.1 cm | 6.7 cm | 2.1 cm | 2.3 cm |
+| Build vs its blueprint | 2.1 cm | 4.6 cm | 2.7 cm | 1.4 cm |
+| Earlier loft build | 0.8 cm | 2.1 cm | 1.3 cm | 1.3 cm |
+| Earlier hollows build | 1.3 cm | 2.5 cm | 1.4 cm | 2.4 cm |
+
+- **The relief changes no outline.** The build with it and the same spec rebuilt without it measure identically.
+- **This run's regression is the agent's part choices.** A side skirt reaches down near the ground, exhaust pipes stand out past the rear, and there are roof extras. The drawing was good.
+- **The hollows are not visible.**
+  - Vertex by vertex, at 1.0 cm the glasshouse moved at most 0.47 cm.
+  - Rebuilt at the 5 cm maximum it moved at most 2.37 cm (mean 0.72 cm over the vertices that moved).
+  - Renders under low grazing light, relief off and on, look the same (`docs/screenshots/golf_relief_onoff.png`, `golf_relief_max.png`; full sheet `golf_depth_sheet.png`).
+- **Why:**
+  - The grid is coarse and smoothed (48 × 36 front, 96 × 36 side, a blur radius of 4 % of the view).
+  - A sink wider than the blur reads mostly at its rim.
+  - A loft's nose has few front-facing vertices, because its last ring is the cap.
+  - The real recesses that read on a car (grille, intakes, window reveals) are sharp-edged steps that a smooth field of at most 5 cm cannot draw. They need cuts (step 3) or relief curves (step 2).
+
+Candidate next steps:
+- Take `depth: true` out of the skill until the relief shows, and keep the code.
+- If it is pursued:
+  - sample the grid at the drawing's resolution in the loft, with no pooling;
+  - add stations near the nose;
+  - use the depth map only to place step 4's openings, not as a surface field.
