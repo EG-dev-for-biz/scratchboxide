@@ -34,6 +34,7 @@ import { HeadlessMeshSilhouetteRenderer } from '../src/node/spatial/HeadlessMesh
 import type { TriangleSoup } from '../src/node/3d-engine/part-connectivity';
 import type { ToolContext } from '../src/node/gemini/tools/types';
 import { boxToMeters, findOpenings, parseRegions } from '../src/node/3d-engine/blueprint-openings';
+import { reliefGrid } from '../src/node/3d-engine/blueprint-depth';
 import { ObjectSegmenterService } from '../src/node/video/ObjectSegmenterService';
 import { resolveRepoPython } from '../src/node/process/repo-python';
 
@@ -222,7 +223,7 @@ describe('object_blueprint_outlines', () => {
     it('is declared with its two modes', () => {
         const d = BLUEPRINT_OUTLINE_TOOL_DECLARATIONS[0];
         expect(d.name).toBe('object_blueprint_outlines');
-        expect(Object.keys((d.parameters as any).properties)).toEqual(['subject', 'sizeMeters', 'blueprintPath', 'compareGlbPath', 'model', 'openings']);
+        expect(Object.keys((d.parameters as any).properties)).toEqual(['subject', 'sizeMeters', 'blueprintPath', 'compareGlbPath', 'model', 'depth', 'openings']);
     });
 
     let blueprintPath = '';
@@ -330,4 +331,48 @@ describe('openings read from the drawings', () => {
         expect(Math.abs(traced.height[0] - 0.35)).toBeLessThan(0.05);
         expect(Math.abs(traced.height[1] - 0.55)).toBeLessThan(0.05);
     }, 180_000);
+});
+
+describe('relief read from a drawing\'s depth', () => {
+    it('keeps the sinks inside the outline and ignores the depth jump at its edge', () => {
+        // a 200 x 100 drawing: the object fills x 20-180, y 10-90; a 30 x 20 patch inside it lies 0.3 deeper
+        const w = 200, h = 100;
+        const rgba = Buffer.alloc(w * h * 4);
+        const depths = new Float32Array(w * h);
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+            const i = y * w + x, inside = x >= 20 && x < 180 && y >= 10 && y < 90;
+            rgba[i * 4] = inside ? 200 : 255; rgba[i * 4 + 1] = inside ? 30 : 0; rgba[i * 4 + 2] = inside ? 30 : 255; rgba[i * 4 + 3] = 255;
+            depths[i] = inside ? (x >= 85 && x < 115 && y >= 40 && y < 60 ? 1.3 : 1.0) : 5.0;   // the background is far
+        }
+        const g = reliefGrid(depths, silhouetteOf({ width: w, height: h, rgba }), 16, 8);
+        const at = (cx: number, cy: number) => g.values[cy * 16 + cx];
+        // a sink wider than the local average reads strongest at its rim, but the whole patch reads as sunk
+        expect(Math.min(...g.values)).toBeLessThan(-0.3);
+        expect(at(7, 3)).toBeLessThan(-0.15);           // the sunken patch, in the middle of the grid
+        expect(at(0, 0)).toBe(0);                       // the outline's corner: its depth jump left out
+        expect(at(15, 7)).toBe(0);
+        expect(at(3, 3)).toBe(0);                       // flush surface
+    });
+
+    it('saves the front and side grids with the outlines when asked (a stand-in depth map)', async () => {
+        const boxes = carBoxes();
+        const png = (view: 'side' | 'top' | 'front') => { const v = viewOf(boxes, view); return HeadlessMeshSilhouetteRenderer.encodePng(v.width, v.height, v.rgba).toString('base64'); };
+        const client = { models: { generateContent: async (params: any) => {
+            const text = params.contents[0].parts.map((p: any) => p.text || '').join('');
+            const view = /side elevation/.test(text) ? 'side' : /plan view/.test(text) ? 'top' : 'front';
+            return { candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: png(view) } }] }, finishReason: 'STOP' }], modelVersion: params.model } as any;
+        } } };
+        const ws = fs.mkdtempSync(path.join(TMP, 'depth-'));
+        const run = createBlueprintOutlineHandlers({
+            client: async () => client as any, sleep: async () => undefined,
+            depth: async (imagePath) => { const v = viewOf(boxes, /front/.test(imagePath) ? 'front' : 'side'); const d = new Float32Array(v.width * v.height).fill(1); d[Math.floor(v.height / 2) * v.width + Math.floor(v.width / 2)] = 1.5; return { depths: d, width: v.width, height: v.height, model: 'stand-in depth' }; }
+        }).object_blueprint_outlines;
+        const out = await run({ subject: 'a test car', sizeMeters: SIZE, depth: true }, { workspaceRoot: ws, request: { prompt: 'x' } } as any);
+        const saved = JSON.parse(fs.readFileSync(path.join(ws, (out.resultPayload as any).blueprintPath), 'utf8'));
+        expect(saved.outlines.relief.model).toBe('stand-in depth');
+        expect(saved.outlines.relief.front.values).toHaveLength(48 * 36);
+        expect(saved.outlines.relief.side.values).toHaveLength(96 * 36);
+        expect(Math.min(...saved.outlines.relief.side.values)).toBeLessThan(0);
+        expect(out.summaryResult).toContain('photo-inferred relief');
+    });
 });

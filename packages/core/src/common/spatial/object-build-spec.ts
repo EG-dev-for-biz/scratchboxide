@@ -345,6 +345,7 @@ function withBlueprintSweeps(base: any): any {
                                         zFromMeters: m('Rearmost station kept.'),
                                         zToMeters: m('Frontmost station kept.'),
                                         insetMeters: m('Shrink the half width by this much; negative grows it.'),
+                                        reliefMeters: m('Optional, only when the blueprint has relief: lay where its drawings sink (intakes, a recessed grille, glass behind its frame) into this part\'s front- and side-facing surface, the deepest sinks this many metres deep (at most 0.05). Photo-inferred; the outline does not move.'),
                                         clearances: {
                                             type: 'array',
                                             items: {

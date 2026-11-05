@@ -118,7 +118,7 @@ describe('specs with fromBlueprint parts', () => {
         expect(sweepOf(objectBuildSpecJsonSchema({ materials: true })).properties.fromBlueprint).toBeUndefined();
         expect(sweepOf(objectBuildSpecJsonSchema({ materials: true })).required).toEqual(['controlPoints', 'closedLoop', 'smoothing', 'profile']);
         const withBp = sweepOf(objectBuildSpecJsonSchema({ materials: true, blueprint: true }));
-        expect(Object.keys(withBp.properties.fromBlueprint.properties)).toEqual(['yFromMeters', 'yToMeters', 'fromTopMeters', 'clearTopMeters', 'zFromMeters', 'zToMeters', 'insetMeters', 'clearances']);
+        expect(Object.keys(withBp.properties.fromBlueprint.properties)).toEqual(['yFromMeters', 'yToMeters', 'fromTopMeters', 'clearTopMeters', 'zFromMeters', 'zToMeters', 'insetMeters', 'reliefMeters', 'clearances']);
         expect(withBp.required).toEqual([]);
     });
 
@@ -159,6 +159,28 @@ describe('specs with fromBlueprint parts', () => {
         expect(narrowest(1, 0.005)).toBeCloseTo(0.88, 2);
         // the -X side has no extra columns there (only the groove asks for them): its wall stays whole
         expect(narrowest(-1, 0.06)).toBeCloseTo(0.9, 2);
+    }, 300_000);
+
+    it('lays the blueprint\'s relief into a lofted part\'s sides, at most reliefMeters deep, and leaves the rest in place', async () => {
+        // a side grid sunk (-1) only over z -0.33..0.33 and 0.5-1.0 m up, flush elsewhere
+        const cols = 24, rows = 6;
+        const values = Array.from({ length: cols * rows }, (_, i) => { const c = i % cols, r = Math.floor(i / cols); return c >= 10 && c < 14 && r >= 2 && r < 4 ? -1 : 0; });
+        const bp = { ...BLUEPRINT, relief: { side: { cols, rows, values }, model: 'test' } };
+        const slab = { id: 'slab', label: 'body', sweep: { fromBlueprint: { yFromMeters: 0.3, yToMeters: 1.0, reliefMeters: 0.03 } } };
+        expect(validateObjectBuildSpec({ ...spec([slab]), blueprint: bp })).toEqual([]);
+        expect(validateObjectBuildSpec({ ...spec([{ ...slab, sweep: { fromBlueprint: { reliefMeters: 0.2 } } }]), blueprint: bp })).toContainEqual(expect.stringMatching(/reliefMeters must be 0 to 0.05/));
+        const built = await buildObjectFromSpec({ ...spec([slab]), blueprint: bp, boundingMeters: [1.8, 0.7, 4.0] }, {}, { buildTimeoutMs: 120_000, outputDir: path.join(TMP, 'depth') });
+        const soup = glbToTriangleSoup(built.glb, { colors: false })!;
+        // the slab is grounded on its own, so the blueprint's 0.5-1.0 m is 0.2-0.7 m here
+        let sunk = Infinity, flush = -Infinity;
+        for (let i = 0; i < soup.positions.length; i += 3) {
+            const x = Math.abs(soup.positions[i]), y = soup.positions[i + 1], z = soup.positions[i + 2];
+            if (y > 0.3 && y < 0.6 && Math.abs(z) < 0.15 && x > 0.8) sunk = Math.min(sunk, x);
+            if (y > 0.3 && y < 0.6 && Math.abs(z) > 1.0 && Math.abs(z) < 1.5) flush = Math.max(flush, x);
+        }
+        expect(flush).toBeCloseTo(0.9, 2);              // the outline stays where it was
+        expect(sunk).toBeLessThan(flush - 0.02);         // sunk by up to 3 cm where the grid says
+        expect(sunk).toBeGreaterThan(flush - 0.031);
     }, 300_000);
 
     it('builds natively: a body with round arches and a cabin whose outlines match the blueprint', async () => {

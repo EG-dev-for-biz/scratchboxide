@@ -34,7 +34,23 @@ export interface ObjectOutlines {
     front: FrontStation[];
     /** Runs along Z where the side bottom line touches the ground, front first. */
     groundContacts: Array<{ zFrom: number; zTo: number; zCentre: number }>;
+    /** Where the drawn surface sinks inside the outline (blueprint-depth.ts), photo-inferred: front and side grids. */
+    relief?: { front?: ReliefGrid; side?: ReliefGrid; model?: string };
 }
+
+/**
+ * A view's sinks over its silhouette's box: cols x rows cells, row-major from the top, 0 flush to -1 the deepest.
+ * The front view's columns run from the viewer's left (the object's +X side) to its right; the side view's from the
+ * object's rear to its front.
+ */
+export interface ReliefGrid {
+    cols: number;
+    rows: number;
+    values: number[];
+}
+
+/** The deepest a blueprint's relief is laid into a lofted surface, metres. */
+export const MAX_RELIEF_METERS = 0.05;
 
 /** A circle (in the side view) the part's underside is lifted over: a wheel arch around a hub, a tunnel, an opening. */
 export interface LoftClearance {
@@ -59,6 +75,8 @@ export interface BlueprintLoft {
     insetMeters?: number;
     /** Circles the underside is lifted over. */
     clearances?: LoftClearance[];
+    /** Lay the blueprint's relief into the part's front- and side-facing surface, its deepest sinks this deep. */
+    reliefMeters?: number;
 }
 
 /** One ring of a loft: closed, in the plane at z, [x, y] in object metres, the same count in every ring. */
@@ -166,6 +184,9 @@ export function validateBlueprintLoft(loft: unknown, where: string): string[] {
     if (isNum(l.zFromMeters) && isNum(l.zToMeters) && l.zToMeters <= l.zFromMeters) errors.push(`${where}: sweep.fromBlueprint.zToMeters must be ahead of zFromMeters`);
     if (isNum(l.fromTopMeters) && l.fromTopMeters <= 0) errors.push(`${where}: sweep.fromBlueprint.fromTopMeters must be greater than 0`);
     if (isNum(l.clearTopMeters) && l.clearTopMeters <= 0) errors.push(`${where}: sweep.fromBlueprint.clearTopMeters must be greater than 0`);
+    if (l.reliefMeters !== undefined && (!isNum(l.reliefMeters) || l.reliefMeters < 0 || l.reliefMeters > MAX_RELIEF_METERS)) {
+        errors.push(`${where}: sweep.fromBlueprint.reliefMeters must be 0 to ${MAX_RELIEF_METERS} metres`);
+    }
     if (l.clearances !== undefined) {
         if (!Array.isArray(l.clearances) || l.clearances.length > 16) {
             errors.push(`${where}: sweep.fromBlueprint.clearances must be at most 16 circles`);
@@ -190,6 +211,14 @@ export function validateOutlines(o: unknown): string[] {
     if (!okStations(r.side, ['z', 'top', 'bottom'])) errors.push('blueprint.side must be at least two {z, top, bottom} stations');
     if (!okStations(r.plan, ['z', 'halfWidth'])) errors.push('blueprint.plan must be at least two {z, halfWidth} stations');
     if (!okStations(r.front, ['y', 'halfWidth'])) errors.push('blueprint.front must be at least two {y, halfWidth} stations');
+    const relief = r.relief as Record<string, unknown> | undefined;
+    for (const view of ['front', 'side'] as const) {
+        const g = relief?.[view] as Record<string, unknown> | undefined;
+        if (g === undefined) continue;
+        if (!g || !Number.isInteger(g.cols) || !Number.isInteger(g.rows) || !Array.isArray(g.values) || g.values.length !== (g.cols as number) * (g.rows as number) || !g.values.every(v => isNum(v) && v <= 0 && v >= -1)) {
+            errors.push(`blueprint.relief.${view} must be cols x rows values from -1 to 0`);
+        }
+    }
     return errors;
 }
 

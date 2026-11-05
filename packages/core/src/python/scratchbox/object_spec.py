@@ -1375,6 +1375,49 @@ def _check_grid_budget(pid, rows, cols):
 # Relief and modulation: offsets applied along the outward normal in (u, v)
 # ---------------------------------------------------------------------------
 
+def _sample_grid(grid, u, v):
+    """Bilinear sample of a relief grid at (u across, v down) in 0..1 of its box; 0 outside it."""
+    if grid is None or not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
+        return 0.0
+    cols, rows, vals = grid["cols"], grid["rows"], grid["values"]
+    x, y = u * cols - 0.5, v * rows - 0.5
+    x0, y0 = int(math.floor(x)), int(math.floor(y))
+    fx, fy = x - x0, y - y0
+
+    def at(cx, cy):
+        return vals[min(rows - 1, max(0, cy)) * cols + min(cols - 1, max(0, cx))]
+    top = at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx
+    bottom = at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx
+    return top * (1 - fy) + bottom * fy
+
+
+def _depth_relief_offsets(surface, depth):
+    """
+    A blueprint's relief (photo-inferred sinks, 0 to -1) laid into a lofted surface along its outward normal: a vertex
+    facing the front takes the front grid at its (x, y), one facing sideways the side grid at its (z, y), blended by
+    how squarely it faces each; top, bottom and rear faces have no drawing and keep their place. At most `meters` deep.
+    """
+    W, H, L = depth["sizeMeters"]
+    meters = float(depth["meters"])
+    front, side = depth.get("front"), depth.get("side")
+    ramp = lambda c: min(1.0, max(0.0, (c - 0.3) / 0.4))
+    offsets = []
+    for i in range(len(surface.us)):
+        row = []
+        for j in range(len(surface.vs)):
+            p, n = surface.rows[i][j], surface.normals_out[i][j]
+            wf, ws = ramp(n[2]), ramp(abs(n[0]))
+            v = 1.0 - p[1] / H
+            d = 0.0
+            if wf > 0 and front:
+                d = min(d, wf * _sample_grid(front, 0.5 - p[0] / W, v))   # the front view's left is the object's +X
+            if ws > 0 and side:
+                d = min(d, ws * _sample_grid(side, p[2] / L + 0.5, v))
+            row.append(d * meters)
+        offsets.append(row)
+    return offsets
+
+
 def _relief_refinement(relief_ops, length, perimeter):
     """
     Extra u or v samples near relief curves so each groove or bead gets about three samples across. Each segment
@@ -1810,6 +1853,11 @@ def expand_blueprint(spec):
             raise SpecError(['part "%s": its slice of the blueprint (sweep.fromBlueprint) leaves fewer than two sections; widen its height band or span' % p.get("id")])
         rest = dict((k, v) for k, v in sw.items() if k != "fromBlueprint")
         rest["sections"] = sections
+        relief = outlines.get("relief") or {}
+        meters = sw["fromBlueprint"].get("reliefMeters")
+        if meters and (relief.get("front") or relief.get("side")):
+            rest["depthRelief"] = {"meters": float(meters), "sizeMeters": outlines["sizeMeters"],
+                                   "front": relief.get("front"), "side": relief.get("side")}
         q = dict(p)
         q["sweep"] = rest
         parts.append(q)
@@ -1892,6 +1940,9 @@ def _build_meshes(spec):
                 raise SpecError(missed)
             if mod:
                 fields.append(_modulation_offsets(surface, mod))
+            depth = by_id[pid].get("sweep", {}).get("depthRelief") if by_id[pid].get("sweep") else None
+            if depth:
+                fields.append(_depth_relief_offsets(surface, depth))
             if fields:
                 offsets = [[0.0] * len(surface.vs) for _ in surface.us]
                 for field in fields:

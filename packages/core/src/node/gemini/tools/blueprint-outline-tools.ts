@@ -36,6 +36,14 @@ import { encodePngAsync } from '../../png-codec-pool';
 import { GeminiClient, errorMessage } from '../gemini-client';
 import { findOpenings, type BlueprintOpening, type NormBox } from '../../3d-engine/blueprint-openings';
 import { ObjectSegmenterService } from '../../video/ObjectSegmenterService';
+import { PanoramaDepthService } from '../../spatial/PanoramaDepthService';
+import { reliefGrid, RELIEF_GRID } from '../../3d-engine/blueprint-depth';
+
+/** The app's depth model on a drawing: relative planar depth at the drawing's size. */
+async function defaultDepth(imagePath: string, outDir: string): Promise<{ depths: Float32Array; width: number; height: number; model: string }> {
+    const d = await new PanoramaDepthService().generateImageDepth(imagePath, { outDir });
+    return { depths: d.depths, width: d.width, height: d.height, model: d.modelUsed };
+}
 
 /** The object segmenter's extent of the region in a box (normalised); fails on an empty mask. */
 async function defaultSegment(imagePath: string, box: NormBox, outputDir: string, signal?: AbortSignal): Promise<NormBox> {
@@ -77,6 +85,10 @@ export const BLUEPRINT_OUTLINE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     type: 'STRING',
                     description: 'Optional image model for the views; omitted, the standard image model, then Nano Banana Lite.'
                 },
+                depth: {
+                    type: 'BOOLEAN',
+                    description: 'Optional, for a new blueprint: also read where the front and side drawings sink inside the outline (intakes, a recessed grille, glass behind its frame) with the app\'s depth model (Depth Anything V2 Small, local, not billed), as relief grids saved with the outlines (photo-inferred). A part lofted from the blueprint takes them with fromBlueprint.reliefMeters.'
+                },
                 openings: {
                     type: 'BOOLEAN',
                     description: 'Optional, for a new blueprint: also read the areas set into the surface (openings, recessed panels, grilles, vents, glass behind frames) from the front and side drawings, each boxed by a vision model (one more billed call) and traced by the object segmenter, as extents in metres in the build frame (labelled generated): the places to cut or set glass.'
@@ -90,6 +102,8 @@ export interface BlueprintOutlineToolDeps {
     client?: () => Promise<GenerateContentClient | undefined>;
     /** Traces a region inside a box of a drawing (normalised); the object segmenter by default. */
     segment?: (imagePath: string, box: NormBox, outputDir: string, signal?: AbortSignal) => Promise<NormBox>;
+    /** Relative depth of a drawing (row-major, its own size); the app's depth model by default. */
+    depth?: (imagePath: string, outDir: string) => Promise<{ depths: Float32Array; width: number; height: number; model: string }>;
     /** Where public/models lives (scene paths "/models/..." resolve there); default the repository's. */
     publicDir?: string;
     sleep?: (ms: number) => Promise<void>;
@@ -200,6 +214,25 @@ export function createBlueprintOutlineHandlers(deps: BlueprintOutlineToolDeps = 
                     openingsNote = `The openings could not be read: ${errorMessage(err)}`;
                 }
             }
+            let depthNote: string | undefined;
+            if (args.depth === true) {
+                ctx.reportProgress?.('Reading where the front and side drawings sink, with the depth model', 0.85);
+                const depthOf = deps.depth ?? defaultDepth;
+                try {
+                    const relief: NonNullable<ObjectOutlines['relief']> = {};
+                    for (const name of ['front', 'side'] as const) {
+                        const v = views.find(x => x.view === name)!;
+                        const d = await depthOf(files[name], path.join(dir, 'depth'));
+                        if (d.width !== v.silhouette.width || d.height !== v.silhouette.height) throw new Error(`the depth map is ${d.width} x ${d.height} for a ${v.silhouette.width} x ${v.silhouette.height} drawing`);
+                        const [cols, rows] = RELIEF_GRID[name];
+                        relief[name] = reliefGrid(d.depths, v.silhouette, cols, rows);
+                        relief.model = d.model;
+                    }
+                    outlines.relief = relief;
+                } catch (err) {
+                    depthNote = `The relief could not be read: ${errorMessage(err)}`;
+                }
+            }
             const aspectError = Object.fromEntries(views.map(v => [v.view, v.aspectError]));
             const provenance = { label: 'generated', note: `Outlines read from orthographic views drawn by ${[...new Set(views.map(v => v.model))].join(', ')} and scaled to the given size; not measured.` };
             const blueprintFile = path.join(dir, 'blueprint.json');
@@ -212,12 +245,14 @@ export function createBlueprintOutlineHandlers(deps: BlueprintOutlineToolDeps = 
                     status: 'success', subject, sizeMeters: size, blueprintPath: rel(blueprintFile),
                     files: Object.fromEntries(Object.entries(files).map(([k, f]) => [k, rel(f)])),
                     aspectError, outlines, notesText, provenance,
-                    ...(openings ? { openings } : {}), ...(openingsNote ? { openingsNote } : {})
+                    ...(openings ? { openings } : {}), ...(openingsNote ? { openingsNote } : {}),
+                    ...(depthNote ? { depthNote } : {})
                 },
                 summaryResult: [
                     `Drew the side, top and front views of ${subject} and read their outlines at ${size.join(' x ')} m (blueprint ${rel(blueprintFile)}).`,
                     `Drawn proportions before scaling: side ${aspectError.side}, top ${aspectError.top}, front ${aspectError.front}.`,
                     offScale.length ? `Not to scale: ${offScale.map(v => `${v.view} (${(v.aspectError * 100).toFixed(0)} %)`).join(', ')}; its outline is stretched to the size, so read it with care.` : '',
+                    outlines.relief ? `Read where the front and side drawings sink with ${outlines.relief.model} (photo-inferred relief, saved with the outlines; lofted parts take it with reliefMeters).` : (depthNote ?? ''),
                     openings ? `Read ${openings.length} opening${openings.length === 1 ? '' : 's'} (${openings.filter(o => o.traced).length} traced by the segmenter): ${openings.slice(0, 12).map(o => `${o.label} (${o.view}, ${o.view === 'front' ? 'x' : 'z'} ${o.across[0]}..${o.across[1]}, y ${o.height[0]}..${o.height[1]})`).join('; ')}.` : (openingsNote ?? ''),
                     outlines.groundContacts.length
                         ? `Touches the ground at z ${outlines.groundContacts.map(c => c.zCentre).join(', ')} m${outlines.groundContacts.length > 1 ? `, the outermost contacts ${(outlines.groundContacts[0].zCentre - outlines.groundContacts[outlines.groundContacts.length - 1].zCentre).toFixed(3)} m apart (check it against a published spacing, such as a wheelbase)` : ''}.`
