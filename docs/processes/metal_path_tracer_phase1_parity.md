@@ -390,6 +390,35 @@ Measured on an orbit:
 - Frame buffers are still reallocated on every view.
 - The raster and the traced image differ in light (studio rig against dome plus lamps), so the hand-over shows a change of light.
 
+## Phase 16 (2026-11-04): a district in the viewport, first click and light changes
+
+The Penn Station district (the 11-03 build: its 777,516-triangle textured district layer, trees and terrain; 811,626 triangles and 1,457 textures in all) opened as a 3D scene and traced in the viewport.
+
+**Two capture failures fixed first.**
+- **Pixel-buffer textures.** The GLTF exporter draws the maps it packs or converts on a canvas without checking their image, and the viewport's tree textures are DataTextures. Such textures are now written from a canvas of their pixels.
+- **Quantized meshes.** The trees layer is `KHR_mesh_quantization`, which the builder refuses. Such geometry is now written as a float copy.
+
+**Then the costs**, at machine load about 100 throughout:
+
+| | Before | After |
+| :--- | :--- | :--- |
+| First click: upload and build | 275 s (full LOD pyramid, atlases) | 44 s (single level, `--single-level`) |
+| Open (texture decode) | 53 s | 7.0 s (parallel decode) |
+| First view | 1.0 s | 0.35 s |
+| Switching the sun on | full rebuild and reopen (5.5 min) | `/lights` 22 ms, first sunlit frame 1.1 s, 256 spp 5.0 s |
+
+**How.**
+- **Lights beside the snapshot.** The scene's lights are no longer in the snapshot GLB: `pathTraceLightsOf` lists them for `/open`.
+- **Relighting.** The layer watches the sun and lights and sends a change to `POST /3d/path-trace/lights`, which relights the open session in place.
+- **Single-level build.** Snapshots build as the leaf clusters only.
+- **Parallel decode.** `GlbSceneReader` decodes images in parallel.
+
+**Not done.**
+- The first click still uploads a 147 MB GLB, and the browser export takes about 5 s.
+- A session reopened for the same snapshot decodes its textures again.
+
+Screenshot: `docs/screenshots/path_tracer_penn_district_sun_2026-11-04.jpg`.
+
 ## Next (plan)
 
 - Metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share.
