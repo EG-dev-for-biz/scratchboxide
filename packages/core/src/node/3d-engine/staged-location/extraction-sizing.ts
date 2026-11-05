@@ -18,8 +18,10 @@
  *     nearest the geocoded point, searched within 30 m: tile_refine's own isolate rule, so the probe and the remesh
  *     pick one structure. The seed cell is what tile_refine and scan_fit are given as their anchor. With Google vector
  *     buildings at hand the seed is chosen by footprint instead (chooseFootprint): the footprint under the place, else
- *     the one holding or nearest a named POI whose name shares words with the request, else the one whose centroid is
- *     nearest the place within the containment cap; the component grows from the tallest raised cell inside it. A chosen
+ *     the one surrounding it (a courtyard), else the one holding or nearest a named POI most of whose name the request
+ *     holds, else the one whose centroid is nearest the place within the containment cap; the component grows from the
+ *     tallest raised cell inside it. A building over a vector tile edge is one footprint (vector-footprints.ts
+ *     mergeTilePieces), and a road inside a footprint runs under the building, never cutting it. A chosen
  *     footprint the probe does not reach widens the extraction to it (a place that geocodes to its gate, not its house).
  *  5. While the structure comes within 3 m of the extraction's edge, extract again by coordinates at (farthest
  *     footprint point) + max(8 m, 0.25 × its diagonal): at most 3 rounds, never past 150 m (the leaf cache serves the
@@ -95,11 +97,12 @@ export interface StructurePickResult {
 
 /**
  * How the building footprint the pick seeds on was chosen: `under-place` (the footprint covers the geocoded point),
- * `poi-name` (it holds, or is the nearest to, a named POI sharing words with the request), `nearest` (its centroid is the
+ * `around-place` (it surrounds the geocoded point: a courtyard),
+ * `poi-name` (it holds, or is the nearest to, a named POI most of whose name the request holds), `nearest` (its centroid is the
  * nearest to the place). Distances are from the geocoded point (m); `note` is the sentence the stage notes carry.
  */
 export interface FootprintChoice {
-    by: 'under-place' | 'poi-name' | 'nearest' | (string & {});
+    by: 'under-place' | 'around-place' | 'poi-name' | 'nearest' | (string & {});
     featureId: string;
     /** The feature index + 1 in the evidence (FootprintLookup.buildingAt's value). */
     target: number;
@@ -117,11 +120,44 @@ export function placeWords(text: string | undefined): string[] {
     return [...new Set(text.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').split(/[^a-z0-9]+/).filter(w => w.length >= 3))];
 }
 
+/** Directions a footprint must stand in, all round a point, to surround it (a courtyard, a light well). */
+export const FOOTPRINT_SURROUND_RAYS = 16;
+/** How far (m) each of those directions is followed from the point. */
+export const FOOTPRINT_SURROUND_REACH_M = 60;
+/** At least this share of a POI's name words must be in the request for the POI to name the place. */
+export const POI_NAME_SHARE_MIN = 0.5;
+
+/** Whether every one of FOOTPRINT_SURROUND_RAYS directions from (x, z) meets one of the loops within `reachM`. */
+function surroundedBy(parts: Vec2[][][], x: number, z: number, reachM = FOOTPRINT_SURROUND_REACH_M): boolean {
+    for (let r = 0; r < FOOTPRINT_SURROUND_RAYS; r++) {
+        const th = (2 * Math.PI * r) / FOOTPRINT_SURROUND_RAYS, dx = Math.cos(th) * reachM, dz = Math.sin(th) * reachM;
+        let hit = false;
+        for (const part of parts) {
+            for (const loop of part) {
+                for (let i = 0, j = loop.length - 1; i < loop.length && !hit; j = i++) {
+                    const [ax, az] = loop[j], [bx, bz] = loop[i], ex = bx - ax, ez = bz - az;
+                    const den = dx * ez - dz * ex;
+                    if (den === 0) continue;
+                    const t = ((ax - x) * ez - (az - z) * ex) / den, u = ((ax - x) * dz - (az - z) * dx) / den;
+                    hit = t >= 0 && t <= 1 && u >= 0 && u <= 1;
+                }
+                if (hit) break;
+            }
+            if (hit) break;
+        }
+        if (!hit) return false;
+    }
+    return true;
+}
+
 /**
  * The building footprint the pick seeds on, from the vector buildings within reach: the footprint under the place; else
- * the footprint that holds (or, failing that, is nearest to) the POI whose name shares the most words with the request
- * (plain token overlap, no landmark dictionary); else the footprint whose centroid is nearest the place within `maxM`.
- * Undefined when no footprint qualifies. Nothing is read from a type code: a footprint is loops, a POI a point and a name.
+ * the one that surrounds it (a place geocoded into its own courtyard: in every direction the footprint stands within
+ * FOOTPRINT_SURROUND_REACH_M); else the footprint that holds or surrounds (or, failing that, is nearest to) the POI whose
+ * name the request names best: the share of the POI's name words the request holds, at least POI_NAME_SHARE_MIN (plain
+ * token overlap, no landmark dictionary: a hotel whose long name shares only the city with the request does not name
+ * it); else the footprint whose centroid is nearest the place within `maxM`. Undefined when no footprint qualifies.
+ * Nothing is read from a type code: a footprint is loops, a POI a point and a name.
  */
 export function chooseFootprint(opts: {
     buildings: Array<{ id: string; parts: Vec2[][][] }>;
@@ -132,17 +168,24 @@ export function chooseFootprint(opts: {
 }): FootprintChoice | undefined {
     const a = opts.anchor ?? { x: 0, z: 0 };
     const maxM = opts.maxM ?? CONTAINMENT_MAX_RADIUS_M;
-    type Cand = { i: number; id: string; centroid: { x: number; z: number }; distanceM: number; reachM: number; contains(x: number, z: number): boolean };
+    type Cand = { i: number; id: string; centroid: { x: number; z: number }; distanceM: number; reachM: number; contains(x: number, z: number): boolean; surrounds(x: number, z: number): boolean };
     const cands: Cand[] = [];
     opts.buildings.forEach((b, i) => {
-        let sx = 0, sz = 0, n = 0, reach = 0;
-        for (const part of b.parts) for (const loop of part) for (const [x, z] of loop) reach = Math.max(reach, Math.hypot(x - a.x, z - a.z));
+        let sx = 0, sz = 0, n = 0, reach = 0, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+        for (const part of b.parts) for (const loop of part) for (const [x, z] of loop) {
+            reach = Math.max(reach, Math.hypot(x - a.x, z - a.z));
+            x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+        }
         for (const part of b.parts) for (const [x, z] of part[0] ?? []) { sx += x; sz += z; n++; }
         if (!n) return;
         const centroid = { x: sx / n, z: sz / n };
         const distanceM = Math.hypot(centroid.x - a.x, centroid.z - a.z);
         if (distanceM > maxM) return;
-        cands.push({ i, id: b.id, centroid, distanceM, reachM: reach, contains: (x, z) => b.parts.some(part => pointInLoops(part, x, z)) });
+        cands.push({
+            i, id: b.id, centroid, distanceM, reachM: reach, contains: (x, z) => b.parts.some(part => pointInLoops(part, x, z)),
+            // (only a footprint whose extent holds the point can surround it)
+            surrounds: (x, z) => x > x0 && x < x1 && z > z0 && z < z1 && surroundedBy(b.parts, x, z)
+        });
     });
     if (!cands.length) return undefined;
     const r3 = (v: number) => Math.round(v * 1000) / 1000;
@@ -156,19 +199,26 @@ export function chooseFootprint(opts: {
     });
     const under = cands.find(c => c.contains(a.x, a.z));
     if (under) return make(under, 'under-place', 'because it covers the geocoded point');
+    // (the nearest first: of two footprints round the point, the inner one is the building whose courtyard it is)
+    const byDistance = [...cands].sort((p, q) => p.distanceM - q.distanceM);
+    const around = byDistance.find(c => c.surrounds(a.x, a.z));
+    if (around) return make(around, 'around-place', 'because it surrounds the geocoded point (a courtyard)');
     const words = placeWords(opts.placeName);
     if (words.length && opts.pois?.length) {
-        let best: { c: Cand; overlap: number; name: string; holds: boolean } | undefined;
+        let best: { c: Cand; overlap: number; share: number; nameWords: number; name: string; holds: boolean } | undefined;
         for (const poi of opts.pois) {
             if (!poi.name || Math.hypot(poi.x - a.x, poi.z - a.z) > maxM) continue;
-            const overlap = placeWords(poi.name).filter(w => words.includes(w)).length;
-            if (!overlap) continue;
-            const holding = cands.find(c => c.contains(poi.x, poi.z));
+            const named = placeWords(poi.name);
+            const overlap = named.filter(w => words.includes(w)).length;
+            const share = named.length ? overlap / named.length : 0;
+            if (!overlap || share < POI_NAME_SHARE_MIN) continue;
+            const holding = cands.find(c => c.contains(poi.x, poi.z)) ?? byDistance.find(c => c.surrounds(poi.x, poi.z));
             const c = holding ?? cands.reduce((m, q) => (Math.hypot(q.centroid.x - poi.x, q.centroid.z - poi.z) < Math.hypot(m.centroid.x - poi.x, m.centroid.z - poi.z) ? q : m));
-            const cand = { c, overlap, name: poi.name, holds: !!holding };
-            if (!best || overlap > best.overlap || (overlap === best.overlap && (Number(cand.holds) > Number(best.holds) || (cand.holds === best.holds && c.distanceM < best.c.distanceM)))) best = cand;
+            const cand = { c, overlap, share, nameWords: named.length, name: poi.name, holds: !!holding };
+            const better = !best || share > best.share || (share === best.share && (overlap > best.overlap || (overlap === best.overlap && (Number(cand.holds) > Number(best.holds) || (cand.holds === best.holds && c.distanceM < best.c.distanceM)))));
+            if (better) best = cand;
         }
-        if (best) return make(best.c, 'poi-name', `because it ${best.holds ? 'holds' : 'is the footprint nearest'} the POI named '${best.name}', which shares ${best.overlap} word${best.overlap === 1 ? '' : 's'} with the place name`, best.name);
+        if (best) return make(best.c, 'poi-name', `because it ${best.holds ? 'holds' : 'is the footprint nearest'} the POI named '${best.name}', ${best.overlap} of whose ${best.nameWords} name word${best.nameWords === 1 ? '' : 's'} the place name holds`, best.name);
     }
     const nearest = cands.reduce((m, c) => (c.distanceM < m.distanceM ? c : m));
     return make(nearest, 'nearest', `as the footprint nearest the geocoded point (${Math.round(nearest.distanceM)} m to its centroid${cands.length > 1 ? `, of ${cands.length} within ${Math.round(maxM)} m` : ''})`);
@@ -575,8 +625,9 @@ export function pickStructure(scan: ScanMesh, ground: GroundModel, opts: PickOpt
         if (top[c] === top[c] && ground.ground[c] === ground.ground[c]) above[c] = top[c] - ground.ground[c];
         tall[c] = above[c] >= minH ? 1 : 0;
         // a road corridor is never structure: raised scan over the street (a tree row, a gantry, facades the scan melted
-        // across it) cannot join the buildings on either side
-        if (tall[c] && opts.roadAt?.(cx(c), cz(c))) tall[c] = 0;
+        // across it) cannot join the buildings on either side. A road inside a building's footprint runs under it (through
+        // its portals, a viaduct through its base): what stands over it there is the building, kept whole
+        if (tall[c] && opts.roadAt?.(cx(c), cz(c)) && !opts.footprints?.buildingAt(cx(c), cz(c))) tall[c] = 0;
     }
     // tree canopy the structure encloses (a roof garden) is part of it: canopy cells the grid border cannot reach without
     // crossing tall cells are tall. Canopy under a land-use area (a park, a forest, a lot: any area, whatever its code) is
