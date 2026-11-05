@@ -48,10 +48,18 @@ describe('pipeline K material finish', () => {
         expect(g.reduce((a, b) => a + b, 0) / N).toBeCloseTo(0.08, 2);
         expect([drawnRoughness(0.2), drawnRoughness(0.05), drawnRoughness(0.3), drawnRoughness(0.8)].map(v => Math.round(v * 1000) / 1000)).toEqual([0.08, 0.08, 0.18, 0.8]);
         expect([drawnMetalness(0.1), drawnMetalness(0.2), drawnMetalness(0.8)].map(v => Math.round(v * 1000) / 1000)).toEqual([0.02, 0.08, 0.8]);
-        expect(Math.max(...g) / Math.min(...g)).toBeCloseTo(230 / 153, 0);
+        // the set's roughness pattern is drawn as far as its relief (9% here): a smooth surface is even, not figured
+        expect(Math.max(...g) - Math.min(...g)).toBeLessThan(0.01);
+        // a matte read keeps the set's pattern whole
+        const matte = finishMaps(orm, normal, { roughness: 0.75, metalness: 0, conf: 85 });
+        expect(matte.orm.rgba[5] / matte.orm.rgba[1]).toBeCloseTo(230 / 153, 1);
         expect(tilt(glass.normal)).toBeLessThan(tilt(normal) / 5);
         expect(glass.drawn).toEqual({ roughness: 0.08, metallic: 0, relief: 0.09, grain: 1 });
         expect(glass.orm.rgba[0]).toBe(230);
+        // an occlusion map with a figure in it (road markings) is drawn even on a smooth read too
+        const figured = { ...orm, rgba: orm.rgba.map((v, i) => (i % 4 === 0 ? (i % 8 ? 255 : 120) : v)) };
+        const drawnAo = finishMaps(figured, normal, { roughness: 0.1, metalness: 0, conf: 90 }).orm;
+        expect(Math.abs(drawnAo.rgba[0] - drawnAo.rgba[4])).toBeLessThan(8);
         // read as painted metal: metalness drawn even where the set had none; a matte read keeps the full relief
         expect(finishMaps(orm, normal, { roughness: 0.4, metalness: 0.8, conf: 70 }).orm.rgba[2]).toBe(204);
         expect(finishMaps(orm, normal, { roughness: 0.15, metalness: 0.1, conf: 70 }).orm.rgba[2]).toBe(5);

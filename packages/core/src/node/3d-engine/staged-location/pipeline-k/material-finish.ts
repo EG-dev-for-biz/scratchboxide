@@ -189,7 +189,8 @@ export function grainOf(pick: { by: 'appearance' | 'ranking'; conf?: number } | 
  * and drawnMetalness) with a confident
  * reading (a set with no metalness takes the read value even) and the set's own without; the tangent-space normal is
  * tilted toward flat by `grain` and, with a confident reading, by the square of the read roughness over reliefFullAt. Occlusion (red)
- * is kept. Returns new images (the inputs when nothing changes).
+ * keeps its mean. The occlusion, roughness and metalness variation is drawn as far as the relief is (`relief`): a surface
+ * read smooth is drawn even as well as flat. Returns new images (the inputs when nothing changes).
  */
 export function finishMaps(orm: { width: number; height: number; rgba: Uint8Array }, normal: { width: number; height: number; rgba: Uint8Array }, f: ClassFinish | undefined, grain = 1, R = FINISH_READ): { orm: typeof orm; normal: typeof normal; drawn?: DrawnFinish } {
     const sure = !!f && f.conf >= R.minConf;
@@ -200,13 +201,20 @@ export function finishMaps(orm: { width: number; height: number; rgba: Uint8Arra
     const gMean = g / n / 255, bMean = b / n / 255;
     const rTo = sure ? drawnRoughness(f!.roughness, R) : gMean, mTo = sure ? drawnMetalness(f!.metalness, R) : bMean;
     const o = orm.rgba.slice(), clamp8 = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
-    // the deviation scaled with the mean (a set's grain is proportional to its level), then by the grain to draw
-    const remap = (v: number, mean: number, to: number) => (mean > 0 ? (to + grain * (v / 255 - mean) * (to / mean)) * 255 : to * 255);
+    // how much of the set's own pattern is drawn: the grain, and with a confident reading the square of the read roughness
+    // over reliefFullAt, on every map alike: a surface read smooth is drawn even as well as flat (the road markings in a
+    // smooth library set's roughness and occlusion maps showed in the Empire State Building's glass reflections)
+    const relief = Math.max(0, Math.min(1, grain * (sure ? Math.min(1, (f!.roughness / R.reliefFullAt) ** 2) : 1))), nn = normal.rgba.slice();
+    let a = 0;
+    for (let k = 0; k < n; k++) a += orm.rgba[k * 4];
+    const aMean = a / n / 255;
+    // the deviation scaled with the mean (a set's grain is proportional to its level), then by the pattern to draw
+    const remap = (v: number, mean: number, to: number) => (mean > 0 ? (to + relief * (v / 255 - mean) * (to / mean)) * 255 : to * 255);
     for (let k = 0; k < n; k++) {
+        o[k * 4] = clamp8(remap(orm.rgba[k * 4], aMean, aMean));
         o[k * 4 + 1] = clamp8(remap(orm.rgba[k * 4 + 1], gMean, rTo));
         o[k * 4 + 2] = clamp8(remap(orm.rgba[k * 4 + 2], bMean, mTo));
     }
-    const relief = Math.max(0, Math.min(1, grain * (sure ? Math.min(1, (f!.roughness / R.reliefFullAt) ** 2) : 1))), nn = normal.rgba.slice();
     for (let k = 0; k < normal.width * normal.height; k++) {
         const x = (normal.rgba[k * 4] / 255) * 2 - 1, y = (normal.rgba[k * 4 + 1] / 255) * 2 - 1, z = (normal.rgba[k * 4 + 2] / 255) * 2 - 1;
         const tx = x * relief, ty = y * relief, tz = z * relief + (1 - relief), l = Math.hypot(tx, ty, tz) || 1;
