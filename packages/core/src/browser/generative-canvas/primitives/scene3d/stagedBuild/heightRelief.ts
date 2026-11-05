@@ -173,6 +173,19 @@ interface ReliefCell { start: number; count: number; near: THREE.Object3D; centr
 interface ReliefSurface { mesh: THREE.Mesh; showWithinM: number; cells: ReliefCell[]; first: number }
 const surfaces = new Set<ReliefSurface>();
 const local = new THREE.Vector3();
+/** Each prepared model's depth uniform with the depth it was given, so the relief can be switched off and on (setHeightReliefEnabled). */
+const depths = new Set<{ uniform: { value: number }; depthM: number }>();
+let enabled = true;
+
+/**
+ * Switches every model's relief off or on (the parallax, the fine normal, the recess shading and the displaced cells), for
+ * a before/after at one camera; the materials' own normal maps stay. Returns the relief surfaces and materials it reached.
+ */
+export function setHeightReliefEnabled(on: boolean): { surfaces: number; materials: number } {
+    enabled = on;
+    for (const d of depths) d.uniform.value = on ? d.depthM : 0;
+    return { surfaces: surfaces.size, materials: depths.size };
+}
 
 /** Which of a surface's index runs are drawn: all of it, less the cells whose displaced copy is shown. */
 function applyRuns(s: ReliefSurface): void {
@@ -198,7 +211,7 @@ export function updateHeightReliefLods(camera: THREE.Camera): number {
         s.mesh.worldToLocal(local.setFromMatrixPosition(camera.matrixWorld));
         let changed = false;
         for (const c of s.cells) {
-            const d = local.distanceTo(c.centre) - c.radius, want = s.mesh.visible && d < s.showWithinM * (c.shown ? 1.15 : 1);
+            const d = local.distanceTo(c.centre) - c.radius, want = enabled && s.mesh.visible && d < s.showWithinM * (c.shown ? 1.15 : 1);
             if (want !== c.shown) { c.shown = want; c.near.visible = want; changed = true; }
             if (c.shown) shown++;
         }
@@ -270,6 +283,10 @@ export async function prepareHeightRelief(gltf: GltfLike): Promise<number> {
     tiles.magFilter = THREE.LinearFilter; tiles.minFilter = THREE.LinearMipmapLinearFilter; tiles.generateMipmaps = true;
     tiles.needsUpdate = true;
     const fade = new THREE.Vector2(RELIEF_FADE.nearM, RELIEF_FADE.farM);
+    // one depth for the model, shared by its materials
+    const depth = { uniform: { value: enabled ? asset.depthM : 0 }, depthM: asset.depthM };
+    depths.add(depth);
+    tiles.addEventListener('dispose', () => depths.delete(depth));
     let patched = 0;
     for (const mat of mats) {
         const relief = reliefOf(mat)!;
@@ -279,7 +296,7 @@ export async function prepareHeightRelief(gltf: GltfLike): Promise<number> {
             cls.wrapS = THREE.ClampToEdgeWrapping; cls.wrapT = THREE.ClampToEdgeWrapping; cls.needsUpdate = true;
             const uniforms = {
                 uSbReliefClass: { value: cls }, uSbReliefTiles: { value: tiles }, uSbReliefSize: { value: sizes },
-                uSbReliefUvM: { value: new THREE.Vector2(relief.uvMetres[0], relief.uvMetres[1]) }, uSbReliefDepth: { value: asset.depthM }, uSbReliefFade: { value: fade }
+                uSbReliefUvM: { value: new THREE.Vector2(relief.uvMetres[0], relief.uvMetres[1]) }, uSbReliefDepth: depth.uniform, uSbReliefFade: { value: fade }
             };
             mat.defines = { ...(mat.defines ?? {}), SB_RELIEF: '', ...(relief.displaced ? { SB_RELIEF_DISPLACED: '' } : {}) };
             const prior = mat.onBeforeCompile, priorKey = mat.customProgramCacheKey;
