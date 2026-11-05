@@ -47,7 +47,7 @@ import { viewRelight, type ViewRelightParams, type ViewRelightReport } from './p
 import { roofShadowLift, type RoofShadowReport } from './pipeline-k/roof-shadow';
 import { evaluateShadowLift, type ShadowLiftQaReport } from './pipeline-k/shadow-lift-qa';
 import { skyDelight, type SkyDelightReport } from './pipeline-k/sky-delight';
-import { classSwatchSheet, describeMaterialRegions, readRegionClasses, writeMaterialRegions, type MaterialRegionsPlan, type MaterialRegionsReport, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
+import { classRepeatSizes, classSwatchSheet, describeMaterialRegions, readRegionClasses, writeMaterialRegions, type MaterialRegionsPlan, type MaterialRegionsReport, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { planMaterialRegionsOnThreads } from './pipeline-k/material-regions-pool';
 import { materialClassesExtras, type ClassWords, type MaterialClassesExtras } from './pipeline-k/material-naming';
 import {
@@ -299,6 +299,8 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
         const classes = regionClasses = readRegionClasses(json, finalImage, undefined, opts.materialRegions.harvest ? { g } : undefined);
         if (!classes) regionsSkipped = 'no rebuilt facade photo to read appearance classes from';
         else {
+            // each class's repeat size, so a set's pattern is drawn only as far as it fits the element it repeats on
+            classRepeatSizes(g, json, finalImage, classes);
             const sheet = classSwatchSheet(json, finalImage, classes, { g });
             if (sheet) swatches = { png: encodePng(sheet.width, sheet.height, sheet.rgba, 4), ...(sheet.spanM ? { spanM: sheet.spanM } : {}) };
             let sets: RegionSet[] | undefined;

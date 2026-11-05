@@ -19,7 +19,8 @@
  * metal gate, no glass layer); a confident reading also sets the finish those maps are drawn at (finishMaps): the set's
  * roughness and metalness scaled to the read values, its grain kept, and its normal relief by the square of the read
  * roughness (reliefFullAt), so a surface read smooth and reflective (window glass) is drawn smooth and nearly flat (user, 2026-11-05);
- * and the set's grain is drawn only as far as the pick by appearance confirmed the set (grainFullAtConf).
+ * and the set's grain is drawn only as far as the pick by appearance confirmed the set (grainFullAtConf) and as far as its
+ * tile fits the element its class repeats on (patternFit).
  * Labelled photo-inferred.
  */
 
@@ -88,6 +89,16 @@ export function finishTarget(f: ClassFinish | undefined, matte: { roughness: num
 
 /** What finishMaps drew: the mean roughness and metalness, the share of the set's normal relief kept, and of its grain. */
 export interface DrawnFinish { roughness: number; metallic: number; relief: number; grain: number }
+
+/**
+ * How far a set's own pattern fits the element its class repeats on (RegionClass.repeatM, metres; the set's tile its real
+ * size): in full when one tile fits within the element's shorter side, else in proportion (a 2 m fence tile on a 1 m
+ * spandrel repeats out of step with it: half its grain). 1 for a class that holds no repeated element.
+ */
+export function patternFit(repeatM: number | undefined, tileM: [number, number]): number {
+    if (!(repeatM && repeatM > 0)) return 1;
+    return Math.max(0, Math.min(1, repeatM / Math.max(tileM[0], tileM[1])));
+}
 
 /** The share of a set's grain to draw from the pick by appearance (FINISH_READ.grainFullAtConf): undefined pick = no chooser. */
 export function grainOf(pick: { by: 'appearance' | 'ranking'; conf?: number } | undefined, R = FINISH_READ): number {

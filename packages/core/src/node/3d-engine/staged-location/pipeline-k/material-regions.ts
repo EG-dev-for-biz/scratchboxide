@@ -23,7 +23,12 @@
  *  3. Each texel's class: its nearest class in CIELAB among its region's (inside an opening or not; a scan piece is all
  *     outside), then the majority over a square of regionSmoothM about it (so a material reads as a region, never as texel
  *     speckle).
- *  4. Maps: on each rebuilt facade, each texel's class's set tiled at the set's real size, box-filtered to the facade's
+ *  4. Repeats: a building's materials follow its architecture and repeat with it. Each fitted window's unit cell (the
+ *     window and half the gap to its neighbours in its row and column: its glass, frame, mullions, the spandrel and the
+ *     piers' halves) is a repeat of every other of its size (a family); each position of the cell takes the class most
+ *     of the family's repeats hold there, so one bay never reads metal while the bays beside it read glass, and a frame
+ *     stays a frame on every window (photo-inferred). The texels outside every unit cell keep their own class.
+ *  5. Maps: on each rebuilt facade, each texel's class's set tiled at the set's real size, box-filtered to the facade's
  *     texel (so a tile never aliases): occlusion, roughness and metalness (ORM) and the normal, as the set has them; on
  *     scan pieces, whose atlases carry no metric frame for a tile, each texel's class's set's mean ORM.
  *
@@ -52,7 +57,12 @@ export const MATERIAL_REGIONS_PARAMS = {
      */
     regionSmoothM: 0.15,
     /** The square's largest half-side, texels (on a scan atlas of coarse texels the square stays a few texels). */
-    regionSmoothMaxTexels: 32
+    regionSmoothMaxTexels: 32,
+    /**
+     * Repeats (see the file comment, 4): a window's unit cell repeats another when both sides are within repeatTolerance of
+     * the family's first; a family is folded with at least minRepeats members, each cell cut into repeatGrid x repeatGrid.
+     */
+    repeatTolerance: 0.1, minRepeats: 3, repeatGrid: 24
 };
 export type MaterialRegionsParams = typeof MATERIAL_REGIONS_PARAMS;
 
@@ -71,6 +81,8 @@ export interface RegionClass {
     openings: boolean;
     /** The tile-only harvest (material-harvest.ts): the class's texture energy on the facade photos, and on how many facades it holds at least 5%. Photo-inferred. */
     texture?: TextureEnergy; facades?: number;
+    /** The median shorter side (m) of the repeated elements (windows' unit cells) this class holds most of (classRepeatSizes); none when it holds none. */
+    repeatM?: number;
 }
 
 /** One class's library set, resolved by the caller: maps prepared small (the engine's prepare_material_maps). */
@@ -94,7 +106,7 @@ export interface MaterialRegionsReport {
     version: string;
     classes: Array<Pick<RegionClass, 'index' | 'meanLab' | 'share' | 'wall' | 'openings' | 'texture' | 'facades'> & { set: string; distance: number; harvest?: RegionSet['harvest']; choice?: RegionSet['choice']; finish?: RegionSet['finish'] }>;
     /** The rebuilt facades: each one's texel and the share of its texels each class (by index) holds. */
-    facades: { total: number; perFacade: Array<{ mesh: string; texelM: number; classShares: number[] }> };
+    facades: { total: number; perFacade: Array<{ mesh: string; texelM: number; classShares: number[]; /** The share of its texels the fold over its repeats changed (see the file comment, 4). */ foldedShare: number }> };
     scanPieces: { total: number };
     /** Every planned texel, and how many each class holds (by index). */
     texels: { total: number; perClass: number[] };
@@ -350,6 +362,110 @@ const blank = (W: number, H: number): RgbaImage8 => ({ width: W, height: H, rgba
 
 
 /**
+ * A rebuilt facade's repeated elements (see the file comment, 4): each fitted window's unit cell (u0 v0 u1 v1, its photo's
+ * UVs) and its family, families of fewer than minRepeats left out. Gaps are to the nearest window beside it (overlapping it
+ * by half its height) and above or below it (by half its width); a window with no neighbour on a side takes the other side's.
+ */
+export function repeatElements(windows: number[] | undefined, P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS): { rects: number[]; family: number[] } {
+    const w: number[][] = [];
+    for (let i = 0; i + 3 < (windows?.length ?? 0); i += 4) w.push(windows!.slice(i, i + 4));
+    const overlap = (a0: number, a1: number, b0: number, b1: number) => Math.min(a1, b1) - Math.max(a0, b0);
+    const cells = w.map(([u0, v0, u1, v1]) => {
+        let left = Infinity, right = Infinity, up = Infinity, down = Infinity;
+        for (const [p0, q0, p1, q1] of w) {
+            if (overlap(v0, v1, q0, q1) > 0.5 * (v1 - v0)) { if (p1 <= u0) left = Math.min(left, u0 - p1); if (p0 >= u1) right = Math.min(right, p0 - u1); }
+            if (overlap(u0, u1, p0, p1) > 0.5 * (u1 - u0)) { if (q1 <= v0) up = Math.min(up, v0 - q1); if (q0 >= v1) down = Math.min(down, q0 - v1); }
+        }
+        const h = (a: number, b: number) => (Number.isFinite(a) ? a : Number.isFinite(b) ? b : 0) / 2;
+        return [Math.max(0, u0 - h(left, right)), Math.max(0, v0 - h(up, down)), Math.min(1, u1 + h(right, left)), Math.min(1, v1 + h(down, up))];
+    });
+    const fam: number[] = [], heads: number[][] = [];
+    for (const c of cells) {
+        const cw = c[2] - c[0], ch = c[3] - c[1];
+        let f = heads.findIndex(([hw, hh]) => Math.abs(cw - hw) <= P.repeatTolerance * hw && Math.abs(ch - hh) <= P.repeatTolerance * hh);
+        if (f < 0) { f = heads.length; heads.push([cw, ch]); }
+        fam.push(f);
+    }
+    const size = heads.map((_, f) => fam.filter(x => x === f).length), keep = new Map<number, number>();
+    size.forEach((n, f) => { if (n >= P.minRepeats) keep.set(f, keep.size); });
+    const rects: number[] = [], family: number[] = [];
+    cells.forEach((c, i) => { if (keep.has(fam[i])) { rects.push(...c); family.push(keep.get(fam[i])!); } });
+    return { rects, family };
+}
+
+/**
+ * Each class's repeat size (RegionClass.repeatM): on every rebuilt facade, each repeated element's (repeatElements) texels
+ * sampled every 3rd texel each way and classed by their nearest class among their region's, the element given to the
+ * class most of them hold; per class the median of its elements' shorter sides in metres. Sets classes[k].repeatM.
+ */
+export function classRepeatSizes(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS): void {
+    const { rebuilt } = photoMaterials(json), cand = regionCandidates(classes), sizes = classes.map(() => [] as number[]);
+    for (const [mi, mesh] of rebuilt) {
+        const img = images.get(photoOf(json, mi)!.image);
+        if (!img) continue;
+        const texelM = texelMetres(g, json, mi, img), el = repeatElements(fittedWindows(json, mesh), P), open = maskOf(json, mesh, img);
+        if (!(texelM > 0) || !el.family.length) continue;
+        const { width: W, height: H, rgba } = img;
+        for (let e = 0; e < el.family.length; e++) {
+            const r = el.rects.slice(e * 4, e * 4 + 4), x0 = Math.max(0, Math.floor(r[0] * W)), y0 = Math.max(0, Math.floor(r[1] * H)), x1 = Math.min(W, Math.ceil(r[2] * W)), y1 = Math.min(H, Math.ceil(r[3] * H));
+            const n = new Array<number>(classes.length).fill(0);
+            for (let y = y0; y < y1; y += 3) for (let x = x0; x < x1; x += 3) {
+                const k = y * W + x;
+                if (!rgba[k * 4 + 3]) continue;
+                const L = labOf(rgba[k * 4], rgba[k * 4 + 1], rgba[k * 4 + 2]);
+                let best = 0, bd = Infinity;
+                for (const c of cand[open?.[k] ? 1 : 0]) { const m = classes[c].meanLab, d = (L[0] - m[0]) ** 2 + (L[1] - m[1]) ** 2 + (L[2] - m[2]) ** 2; if (d < bd) { bd = d; best = c; } }
+                n[best]++;
+            }
+            const top = n.indexOf(Math.max(...n));
+            if (n[top] > 0) sizes[top].push(Math.min(x1 - x0, y1 - y0) * texelM);
+        }
+    }
+    classes.forEach((c, k) => {
+        const v = sizes[k].sort((a, b) => a - b);
+        if (v.length) c.repeatM = Math.round(v[v.length >> 1] * 100) / 100; else delete c.repeatM;
+    });
+}
+
+/**
+ * Folds the classes over the repeats (see the file comment, 4): each element's texels (floor at its start, ceil at its
+ * end) vote, by their place in a grid x grid cutting of the element, for their family's class there; then each texel of
+ * an element (the first element holding it) takes its cell's winner (the most votes, the lowest index on a tie). Changes
+ * `cls` in place; returns how many texels changed.
+ */
+export function foldRepeats(cls: Uint8Array, W: number, H: number, K: number, el: { rects: number[]; family: number[] }, grid: number): number {
+    const F = el.family.length ? Math.max(...el.family) + 1 : 0;
+    if (!F) return 0;
+    const votes = new Uint32Array(F * grid * grid * K);
+    const spans = el.family.map((_, e) => {
+        const r = el.rects.slice(e * 4, e * 4 + 4);
+        return [Math.max(0, Math.floor(r[0] * W)), Math.max(0, Math.floor(r[1] * H)), Math.min(W, Math.ceil(r[2] * W)), Math.min(H, Math.ceil(r[3] * H))];
+    });
+    const cellOf = (x: number, y: number, s: number[]) => Math.min(grid - 1, Math.floor(((y - s[1]) * grid) / (s[3] - s[1]))) * grid + Math.min(grid - 1, Math.floor(((x - s[0]) * grid) / (s[2] - s[0])));
+    spans.forEach((s, e) => {
+        if (s[2] - s[0] < 2 || s[3] - s[1] < 2) return;
+        const base = el.family[e] * grid * grid;
+        for (let y = s[1]; y < s[3]; y++) for (let x = s[0]; x < s[2]; x++) votes[(base + cellOf(x, y, s)) * K + cls[y * W + x]]++;
+    });
+    const winner = new Uint8Array(F * grid * grid);
+    for (let c = 0; c < F * grid * grid; c++) { let b = 0; for (let k = 1; k < K; k++) if (votes[c * K + k] > votes[c * K + b]) b = k; winner[c] = b; }
+    const done = new Uint8Array(W * H);
+    let changed = 0;
+    spans.forEach((s, e) => {
+        if (s[2] - s[0] < 2 || s[3] - s[1] < 2) return;
+        const base = el.family[e] * grid * grid;
+        for (let y = s[1]; y < s[3]; y++) for (let x = s[0]; x < s[2]; x++) {
+            const k = y * W + x;
+            if (done[k]) continue;
+            done[k] = 1;
+            const c = winner[base + cellOf(x, y, s)];
+            if (cls[k] !== c) { cls[k] = c; changed++; }
+        }
+    });
+    return changed;
+}
+
+/**
  * Each texel's class (see the file comment): its nearest class in CIELAB among its region's (`open`: 1 inside an opening;
  * an empty texel none), then the class most of the (2r+1)-square about it holds, the texel's own on a tie, else the lowest
  * index; a square of empty texels takes the wall. Counted one class at a time with running sums, so memory stays a few
@@ -441,6 +557,7 @@ export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext):
     const texelM = texelMetres(g, json, mi, img);
     if (job.kind === 'rebuilt' && !(texelM > 0)) return piece;
     const cls = regionClassMap(img, classes, regionRadius(texelM, P), job.kind === 'rebuilt' ? maskOf(json, job.mesh, img) : undefined);
+    const folded = job.kind === 'rebuilt' ? foldRepeats(cls, W, H, K, repeatElements(fittedWindows(json, job.mesh!), P), P.repeatGrid) : 0;
     for (let k = 0; k < N; k++) piece.classTexels[cls[k]]++;
     const orm = blank(W, H);
     if (job.kind === 'rebuilt') {
@@ -457,7 +574,7 @@ export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext):
             nrm.rgba.set([Math.round(t.n[j] * 255), Math.round(t.n[j + 1] * 255), Math.round(t.n[j + 2] * 255), 255], k * 4);
         }
         const r3 = (v: number) => Math.round(v * 1000) / 1000;
-        piece.facade = { mesh: job.mesh!, texelM: Math.round(texelM * 1e4) / 1e4, classShares: piece.classTexels.map(n => r3(n / N)) };
+        piece.facade = { mesh: job.mesh!, texelM: Math.round(texelM * 1e4) / 1e4, classShares: piece.classTexels.map(n => r3(n / N)), foldedShare: r3(folded / N) };
         piece.planned = { material: mi, orm, normal: nrm, rebuilt: true };
         return piece;
     }

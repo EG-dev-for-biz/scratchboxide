@@ -280,20 +280,64 @@ inline std::vector<float> shrinkTile(const Image& src, int tw, int th, bool norm
     return out;
 }
 
+/** foldRepeats: the classes folded over each repeat family's elements (u0 v0 u1 v1 each, with its family); returns the texels changed. */
+inline double foldRepeats(std::vector<uint8_t>& cls, int W, int H, int K, const std::vector<double>& rects, const std::vector<uint32_t>& family, int grid) {
+    uint32_t F = 0;
+    for (const auto f : family) F = std::max(F, f + 1);
+    if (!F) return 0;
+    std::vector<uint32_t> votes(static_cast<size_t>(F) * grid * grid * K, 0);
+    struct Span { int x0, y0, x1, y1; };
+    std::vector<Span> spans(family.size());
+    for (size_t e = 0; e < family.size(); e++) {
+        const double* r = &rects[e * 4];
+        spans[e] = { static_cast<int>(std::max(0.0, std::floor(r[0] * W))), static_cast<int>(std::max(0.0, std::floor(r[1] * H))),
+                     static_cast<int>(std::min(static_cast<double>(W), std::ceil(r[2] * W))), static_cast<int>(std::min(static_cast<double>(H), std::ceil(r[3] * H))) };
+    }
+    auto cellOf = [&](int x, int y, const Span& s) {
+        const int cy = std::min(grid - 1, static_cast<int>(std::floor((static_cast<double>(y - s.y0) * grid) / (s.y1 - s.y0))));
+        const int cx = std::min(grid - 1, static_cast<int>(std::floor((static_cast<double>(x - s.x0) * grid) / (s.x1 - s.x0))));
+        return static_cast<size_t>(cy) * grid + cx;
+    };
+    for (size_t e = 0; e < family.size(); e++) {
+        const Span& s = spans[e];
+        if (s.x1 - s.x0 < 2 || s.y1 - s.y0 < 2) continue;
+        const size_t base = static_cast<size_t>(family[e]) * grid * grid;
+        for (int y = s.y0; y < s.y1; y++) for (int x = s.x0; x < s.x1; x++) votes[(base + cellOf(x, y, s)) * K + cls[static_cast<size_t>(y) * W + x]]++;
+    }
+    std::vector<uint8_t> winner(static_cast<size_t>(F) * grid * grid);
+    for (size_t c = 0; c < winner.size(); c++) { int b = 0; for (int k = 1; k < K; k++) if (votes[c * K + k] > votes[c * K + b]) b = k; winner[c] = static_cast<uint8_t>(b); }
+    std::vector<uint8_t> done(static_cast<size_t>(W) * H, 0);
+    double changed = 0;
+    for (size_t e = 0; e < family.size(); e++) {
+        const Span& s = spans[e];
+        if (s.x1 - s.x0 < 2 || s.y1 - s.y0 < 2) continue;
+        const size_t base = static_cast<size_t>(family[e]) * grid * grid;
+        for (int y = s.y0; y < s.y1; y++) for (int x = s.x0; x < s.x1; x++) {
+            const size_t k = static_cast<size_t>(y) * W + x;
+            if (done[k]) continue;
+            done[k] = 1;
+            const uint8_t c = winner[base + cellOf(x, y, s)];
+            if (cls[k] != c) { cls[k] = c; changed++; }
+        }
+    }
+    return changed;
+}
+
 // ---- planMaterialJob ----
 
 /** One class's library set: its tile's real size and its normal and occlusion/roughness/metalness maps. */
 struct RegionSet { double realSizeX = 1, realSizeY = 1; Image normal, orm; };
 
 /** What every job reads: the classes' CIELAB means, their sets and each set's mean ORM (3 per set). */
-struct PlanContext { std::vector<double> meanLab; std::vector<uint8_t> openings; int wall = 0; std::vector<RegionSet> sets; std::vector<double> setMeans; };
+struct PlanContext { std::vector<double> meanLab; std::vector<uint8_t> openings; int wall = 0, grid = 24; std::vector<RegionSet> sets; std::vector<double> setMeans; };
 
 /** A job: its photo, metres per texel, whether it is a rebuilt facade (else a scan piece) and the square's half-side. */
-struct PlanJob { const Image* img = nullptr; double texelM = 0; bool rebuilt = false; int radius = 1; std::vector<uint8_t> open; };
+struct PlanJob { const Image* img = nullptr; double texelM = 0; bool rebuilt = false; int radius = 1; std::vector<uint8_t> open; std::vector<double> elements; std::vector<uint32_t> family; };
 
 struct PlanResult {
     int width = 0, height = 0;
     std::vector<double> classTexels;
+    double folded = 0;
     std::vector<uint8_t> orm, normal;
 };
 
@@ -304,7 +348,8 @@ inline PlanResult planJob(const PlanJob& job, const PlanContext& ctx) {
     PlanResult r;
     r.width = W; r.height = H;
     r.classTexels.assign(K, 0);
-    const auto cls = regionClassMap(img, ctx.meanLab, ctx.openings, ctx.wall, job.radius, job.open);
+    auto cls = regionClassMap(img, ctx.meanLab, ctx.openings, ctx.wall, job.radius, job.open);
+    if (job.rebuilt) r.folded = foldRepeats(cls, W, H, K, job.elements, job.family, ctx.grid);
     for (size_t k = 0; k < N; k++) r.classTexels[cls[k]]++;
     r.orm.assign(N * 4, 0);
     if (job.rebuilt) {

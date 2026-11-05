@@ -25,7 +25,7 @@ import { readAccessor, type ParsedGlb } from '../../glb-bytes';
 import type { RgbaImage8 } from '../../tile-texture-transfer';
 import { bandResponses, TEXTURE_BANDS_M } from '../material-harvest';
 import {
-    formatRegionClasses, MATERIAL_REGIONS_PARAMS, materialPlanContext, materialPlanJobs, mergeMaterialPlan, regionRadius,
+    formatRegionClasses, MATERIAL_REGIONS_PARAMS, repeatElements, materialPlanContext, materialPlanJobs, mergeMaterialPlan, regionRadius,
     type MaterialPlanContext, type MaterialPlanJob, type MaterialPlanPiece, type MaterialRegionsParams, type MaterialRegionsPlan, type RegionClass, type RegionSet
 } from '../material-regions';
 
@@ -47,7 +47,7 @@ export interface MaterialRegionsNativeOptions {
 
 const CLI_SOURCE = path.join('scripts', 'material_regions_native.cpp');
 const INCLUDE_DIR = path.join('packages', 'core', 'src', 'native', '3d-engine', 'include');
-const MAGIC = 0x524d4253, VERSION = 4;
+const MAGIC = 0x524d4253, VERSION = 5;
 const MODE = { tables: 0, classes: 1, harvest: 2, plan: 3 } as const;
 
 /** The repository root: the first directory up from here (or the working directory) holding the CLI driver. */
@@ -325,11 +325,14 @@ export async function planMaterialJobsNative(jobs: MaterialPlanJob[], ctx: Mater
     const r = await run(MODE.plan, w => {
         w.u32(table.list.length);
         for (const img of table.list) w.image(img);
-        w.u32(K).f64s(classes.flatMap(c => c.meanLab)).bytes(Uint8Array.from(classes, c => (c.openings ? 1 : 0))).u32(Math.max(0, classes.findIndex(c => c.wall)));
+        w.u32(K).f64s(classes.flatMap(c => c.meanLab)).bytes(Uint8Array.from(classes, c => (c.openings ? 1 : 0))).u32(Math.max(0, classes.findIndex(c => c.wall))).u32(P.repeatGrid);
         for (let k = 0; k < K; k++) w.f64(sets[k].realSizeM[0]).f64(sets[k].realSizeM[1]).image(sets[k].normal).image(sets[k].orm);
         w.f64s(ctx.setMeans.slice(0, K).flat());
         w.u32(work.length);
-        for (const p of work) w.u32(p.job.kind === 'rebuilt' ? 0 : 1).u32(p.image).f64(p.texelM).u32(regionRadius(p.texelM, P)).rects(p.job.kind === 'rebuilt' ? fittedWindows(json, p.job.mesh) : []);
+        for (const p of work) {
+            const rebuilt = p.job.kind === 'rebuilt', el = rebuilt ? repeatElements(fittedWindows(json, p.job.mesh), P) : { rects: [], family: [] };
+            w.u32(rebuilt ? 0 : 1).u32(p.image).f64(p.texelM).u32(regionRadius(p.texelM, P)).rects(rebuilt ? fittedWindows(json, p.job.mesh) : []).rects(el.rects).bytes(new Uint8Array(Uint32Array.from(el.family).buffer));
+        }
     }, opts);
     if (r.u32() !== work.length) throw new MaterialRegionsNativeError('invalid_output', 'material_regions_native returned the wrong number of jobs');
     const r3 = (v: number) => Math.round(v * 1000) / 1000;
@@ -339,10 +342,11 @@ export async function planMaterialJobsNative(jobs: MaterialPlanJob[], ctx: Mater
         if (kind !== (rebuilt ? 0 : 1) || W !== p.img.width || H !== p.img.height) throw new MaterialRegionsNativeError('invalid_output', 'material_regions_native returned a job that does not match its request');
         const piece = pieces[p.at];
         piece.classTexels = Array.from(r.f64s(K));
+        const folded = r.f64();
         const orm = { width: W, height: H, rgba: r.bytes(N * 4) };
         if (rebuilt) {
             const normal = { width: W, height: H, rgba: r.bytes(N * 4) };
-            piece.facade = { mesh: p.job.mesh!, texelM: Math.round(p.texelM * 1e4) / 1e4, classShares: piece.classTexels.map(n => r3(n / N)) };
+            piece.facade = { mesh: p.job.mesh!, texelM: Math.round(p.texelM * 1e4) / 1e4, classShares: piece.classTexels.map(n => r3(n / N)), foldedShare: r3(folded / N) };
             piece.planned = { material: p.job.material, orm, normal, rebuilt: true };
         } else piece.planned = { material: p.job.material, orm, rebuilt: false };
     }
