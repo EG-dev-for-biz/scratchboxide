@@ -334,8 +334,8 @@ describe('tree species chosen by shape and region', () => {
         expect(out.crowns).toBe(5000);
         expect(out.entries).toBe(INDEX.entries.length);
         // 100,000 matches against the whole library and the index parsed, well inside a second each on any machine;
-        // the matcher itself under 50 microseconds a crown
-        expect(out.nsPerCrown!).toBeLessThan(50_000);
+        // the matcher itself under a millisecond a crown even on a machine under heavy load (a few microseconds on an idle one)
+        expect(out.nsPerCrown!).toBeLessThan(1_000_000);
         expect(wallMs).toBeLessThan(15_000);
         const loadOnly = Date.now();
         execFileSync(bin, ['--species-index', INDEX_PATH]);

@@ -1139,6 +1139,55 @@ struct SpaceColonizationConfig {
     // measured surface; its highest cell lies above them): the leaf masses may rise to it
     float foliageTop{std::numeric_limits<float>::quiet_NaN()};
 
+    // ---- Growth forms (all continuous; every one at its default grows exactly the tree it grew without it) ----
+    // Momentum release (0..1): a shoot with much momentum (growthMomentumFactor) cannot turn to an attractor beside it,
+    // passes it, and colonisation stalls with the crown half reached. With this, the momentum a node gives its next step
+    // falls by this share as the nearest attractor pulling it comes within momentumReleaseReach steps: it keeps its
+    // course across open crown and turns in to what it has reached.
+    float momentumRelease{0.0f};
+    float momentumReleaseReach{8.0f};
+    // Trunk seeking (0..1, with trunkSeeksCrown): the share of each seeking step taken along the stem's line (the root to
+    // the crown's top) instead of straight at the nearest attractor. A crown that begins above the trunk has its nearest
+    // attractors on its lower rim, off the stem: at 0 the trunk bends over to them and the leader then cuts back to the
+    // stem's line (a kink); at 1 the trunk climbs its own line until the crown is in sight.
+    float trunkSeekAlongStem{0.0f};
+    // Whorls: with whorlBranches > 0 the leader is grown to the crown's top and carries its laterals in tiers, this many
+    // evenly round it every whorlSpacing metres of leader (each tier turned by the golden angle), leaving at
+    // scaffoldAngleFromLeaderRad; no lateral leaves the leader between tiers and no scaffold limbs fork at the break.
+    // Each lateral then grows out to the crown's own surface, so in a pointed crown the tiers shorten to the top.
+    int whorlBranches{0};
+    float whorlSpacing{0.0f};
+    // Lateral angle (broadleaf architecture): a lateral that leaves a shoot which already carries on (not the leader)
+    // leaves it at scaffoldAngleFromLeaderRad + lateralAngleOrderGainRad x the shoot's order, by this share (0: as the
+    // attractors pull it). Steep and held gives ascending, broom-like limbs; wide and held, level spreading ones.
+    float lateralAngleHold{0.0f};
+    float lateralAngleOrderGainRad{0.0f};
+    // Weeping. shootDroop: a downward pull on every shoot off the leader, growing with the shoot's own length (full at
+    // shootDroopLength metres from where it left its parent) and with its order (half on the limbs that leave the trunk):
+    // long thin shoots hang, short stout ones do not. pendulousTailShare: when colonisation is done, every tip hangs a
+    // tail of twigs straight down for this share of its height above the crown base (the curtain of a weeping crown).
+    float shootDroop{0.0f};
+    float shootDroopLength{2.0f};
+    float pendulousTailShare{0.0f};
+    // Rosette: with rosetteLeaves > 0 the tree is a single unbranched stem carrying this many long compound leaves in a
+    // terminal rosette, and nothing else: no scaffold limbs, no colonisation. Each leaf is an arching rachis (skeleton
+    // nodes marked with their leaf) fitted to the crown's own footprint: the most upright leave near the vertical, the
+    // lowest at scaffoldAngleFromLeaderRad from it, each bending down along its length by rosetteArch (0 straight, 1 a
+    // quarter turn and more on the lowest). The budgeted meshing draws leafletsPerSide leaflets on each side of each
+    // rachis over the last leafletSpanShare of it (1: pinnate, along the whole leaf; towards 0: palmate, all from its
+    // end, fanned), each leafletLengthShare of the leaf long at its longest and leafletAngleRad from the rachis.
+    int rosetteLeaves{0};
+    float rosetteLeafLength{0.0f};       // metres as the species gives it; the crown's footprint sets the drawn length
+    float rosetteArch{0.5f};
+    int leafletsPerSide{24};
+    float leafletSpanShare{1.0f};
+    float leafletLengthShare{0.22f};
+    float leafletAngleRad{0.95f};
+    float leafletWidthShare{0.14f};      // a leaflet's width over its length
+    // Crown openness (0..1): the leaf masses are drawn smaller by up to 0.4 of their size and up to 0.5 of those that are
+    // not on the measured surface are left out, so the limbs show through. 0: every mass as the budget placed it.
+    float crownOpenness{0.0f};
+
     static SpaceColonizationConfig fromBlobTelemetry(const BotanicalBlobTelemetry& tel) {
         SpaceColonizationConfig cfg;
         cfg.customAttractors = tel.conformalAttractors;
@@ -1176,6 +1225,10 @@ struct ColonizationNode {
     Vec3 growthDir{0, 1, 0};
     float radius{0.025f};
     std::vector<int> children;
+    int order{0};              // 0 the trunk and its leader, 1 a limb that leaves it, 2 a lateral of that, ...
+    float shootLength{0.0f};   // metres along its own shoot from where that shoot left its parent
+    int rosetteLeaf{-1};       // the rosette leaf whose rachis it is on (SpaceColonizationConfig::rosetteLeaves), else -1
+    int tail{-1};              // the hanging tail it is on (SpaceColonizationConfig::pendulousTailShare: the tip it hangs from), else -1
 };
 
 /** What the budgeted meshing produced for one tree (triangleBudget > 0). */
@@ -1274,6 +1327,12 @@ public:
             if (a.y < lowestAttractorY) lowestAttractorY = a.y;
         }
 
+        if (cfg.rosetteLeaves > 0 && !attractors.empty() && cfg.branchStepLength > 0.0f) {
+            growRosette(cfg, attractors, nodes, rep);
+            finishRadii(cfg, nodes);
+            return nodes;
+        }
+
         float trunkKillY;
         if (cfg.isShrub) {
             // Shrubs branch almost immediately above the root collar (e.g. 0.15m)
@@ -1341,6 +1400,22 @@ public:
                 if (dir.y < 0.0f) dir.y = 0.0f;
                 if (dir.lengthSquared() < 1e-12f) break;
                 dir = dir.normalized();
+                if (cfg.trunkSeekAlongStem > 0.0f) {
+                    // along the stem's own line to the crown's top, by its share
+                    Vec3 top = std::isfinite(cfg.trunkLeanToward.x) ? cfg.trunkLeanToward : cfg.crownCenter;
+                    top.y = cfg.leaderTopY;
+                    if (!std::isfinite(top.y)) { top.y = -1e30f; for (const auto& a : attractors) top.y = std::max(top.y, a.y); }
+                    if (top.y > tip.y + 1e-4f) {
+                        const float nextY = std::min(tip.y + cfg.branchStepLength, top.y);
+                        const Vec3 onLine = cfg.rootAnchor + (top - cfg.rootAnchor) * ((nextY - cfg.rootAnchor.y) / std::max(1e-6f, top.y - cfg.rootAnchor.y));
+                        const Vec3 along = onLine - tip;
+                        if (along.lengthSquared() > 1e-12f) {
+                            const float w = std::clamp(cfg.trunkSeekAlongStem, 0.0f, 1.0f);
+                            const Vec3 mixed = dir * (1.0f - w) + along.normalized() * w;
+                            if (mixed.lengthSquared() > 1e-12f) dir = mixed.normalized();
+                        }
+                    }
+                }
                 ColonizationNode nextNode;
                 nextNode.id = static_cast<int>(nodes.size());
                 nextNode.parentId = nodes.back().id;
@@ -1368,7 +1443,8 @@ public:
         // A tree whose leader holds (or an excurrent one) carries its leader on from the break along the stem's line to the
         // crown's top (the root to leaderTop), for its share of the way there (at least one step, so its tip is a shoot of
         // its own that colonisation carries on); colonisation then sprouts the laterals along it
-        const float leaderShare = std::max(std::clamp(cfg.excurrence, 0.0f, 1.0f), leaderHold);
+        const bool whorled = cfg.whorlBranches > 0 && cfg.whorlSpacing > 0.0f && !cfg.isShrub && !cfg.customAttractors.empty();
+        const float leaderShare = whorled ? 1.0f : std::max(std::clamp(cfg.excurrence, 0.0f, 1.0f), leaderHold);
         if (leaderShare > 0.0f && !cfg.isShrub && !cfg.customAttractors.empty() && cfg.branchStepLength > 0.0f && leaderTop.y > cfg.rootAnchor.y) {
             const float leaderY = rep.trunkTopY + leaderShare * (leaderTop.y - rep.trunkTopY) - cfg.branchStepLength;
             while (rep.leaderNodes == 0 || nodes.back().position.y < leaderY) {
@@ -1388,7 +1464,35 @@ public:
         }
         const int leaderEnd = static_cast<int>(nodes.size());   // ids below this are the trunk and its leader
 
-        if (cfg.isShrub) {
+        if (whorled) {
+            // tiers of laterals along the leader from the crown break up, each a stub colonisation carries out to the crown
+            const float golden = 2.39996323f;
+            float sinceTier = cfg.whorlSpacing;   // the first tier at the break
+            float turn = hashUnit(cfg.seed, 9101u, 0u) * math::TWO_PI;
+            for (int n = crownBreakId; n < leaderEnd - 1; ++n) {
+                if (n > crownBreakId) sinceTier += (nodes[static_cast<size_t>(n)].position - nodes[static_cast<size_t>(n - 1)].position).length();
+                if (sinceTier + 1e-4f < cfg.whorlSpacing) continue;
+                sinceTier = 0.0f;
+                const Vec3 axis = nodes[static_cast<size_t>(n)].growthDir;
+                Vec3 u = std::abs(axis.y) < 0.95f ? Vec3(0, 1, 0).cross(axis) : Vec3(1, 0, 0).cross(axis);
+                u = u.normalized();
+                const Vec3 v = axis.cross(u).normalized();
+                for (int k = 0; k < cfg.whorlBranches; ++k) {
+                    const float a = turn + math::TWO_PI * static_cast<float>(k) / static_cast<float>(cfg.whorlBranches);
+                    const Vec3 dir = (axis * std::cos(cfg.scaffoldAngleFromLeaderRad) + (u * std::cos(a) + v * std::sin(a)) * std::sin(cfg.scaffoldAngleFromLeaderRad)).normalized();
+                    ColonizationNode stub;
+                    stub.id = static_cast<int>(nodes.size());
+                    stub.parentId = n;
+                    stub.position = nodes[static_cast<size_t>(n)].position + dir * cfg.branchStepLength;
+                    stub.growthDir = dir;
+                    stub.order = 1;
+                    stub.shootLength = cfg.branchStepLength;
+                    nodes[static_cast<size_t>(n)].children.push_back(stub.id);
+                    nodes.push_back(stub);
+                }
+                turn += golden;
+            }
+        } else if (cfg.isShrub) {
             int baseNodeId = nodes.back().id;
             // Sprout 4 basal outward radial shoots angled ~35-50 degrees
             for (int k = 0; k < 4; ++k) {
@@ -1400,6 +1504,8 @@ public:
                 stemNode.parentId = baseNodeId;
                 stemNode.position = nodes[baseNodeId].position + radialDir * cfg.branchStepLength;
                 stemNode.growthDir = radialDir;
+                stemNode.order = 1;
+                stemNode.shootLength = cfg.branchStepLength;
                 nodes[baseNodeId].children.push_back(stemNode.id);
                 nodes.push_back(stemNode);
             }
@@ -1418,6 +1524,8 @@ public:
                 scaffoldNode.parentId = crownBaseNodeId;
                 scaffoldNode.position = nodes[crownBaseNodeId].position + scaffoldDir * cfg.branchStepLength;
                 scaffoldNode.growthDir = scaffoldDir;
+                scaffoldNode.order = 1;
+                scaffoldNode.shootLength = cfg.branchStepLength;
                 nodes[crownBaseNodeId].children.push_back(scaffoldNode.id);
                 nodes.push_back(scaffoldNode);
             }
@@ -1467,6 +1575,7 @@ public:
         auto compareNodes = [&](size_t from) {
             for (size_t n = from; n < nodes.size(); ++n) {
                 const ColonizationNode& node = nodes[n];
+                if (whorled && static_cast<int>(n) < leaderEnd && !node.children.empty()) continue;
                 forAttractorsNear(node.position, [&](uint32_t i) {
                     float d2 = 0.0f;
                     if (sees(node, attractors[i], d2) && d2 < bestD2[i]) {
@@ -1505,6 +1614,7 @@ public:
             // Map each node to accumulated attraction direction and count
             std::unordered_map<int, Vec3> nodeAttractionDir;
             std::unordered_map<int, int> nodeAttractionCount;
+            std::unordered_map<int, float> nodeNearestD2;   // only read with momentumRelease
 
             // Each attractor pulls its nearest seeing node (in attractor order, as the sums are taken)
             for (size_t i = 0; i < A; ++i) {
@@ -1512,6 +1622,11 @@ public:
                 Vec3 dir = (attractors[i] - nodes[bestNode[i]].position).normalized();
                 nodeAttractionDir[bestNode[i]] += dir;
                 nodeAttractionCount[bestNode[i]]++;
+                if (cfg.momentumRelease > 0.0f) {
+                    auto it = nodeNearestD2.find(bestNode[i]);
+                    if (it == nodeNearestD2.end()) nodeNearestD2.emplace(bestNode[i], bestD2[i]);
+                    else it->second = std::min(it->second, bestD2[i]);
+                }
             }
 
             if (nodeAttractionDir.empty()) { rep.stop = "no_attractor_within_perception"; break; }
@@ -1542,7 +1657,12 @@ public:
 
                 // Blend attraction direction with previous growth momentum
                 Vec3 prevDir = nodes[nodeId].growthDir;
-                Vec3 combinedDir = prevDir * cfg.growthMomentumFactor + avgDir * (1.0f - cfg.growthMomentumFactor);
+                float momentum = cfg.growthMomentumFactor;
+                if (cfg.momentumRelease > 0.0f) {
+                    const float near = std::sqrt(std::max(0.0f, nodeNearestD2[nodeId])) / std::max(1e-4f, cfg.momentumReleaseReach * cfg.branchStepLength);
+                    momentum *= 1.0f - std::clamp(cfg.momentumRelease, 0.0f, 1.0f) * (1.0f - std::clamp(near, 0.0f, 1.0f));
+                }
+                Vec3 combinedDir = prevDir * momentum + avgDir * (1.0f - momentum);
 
                 // Outward centrifugal arching push
                 float maxCrownR = std::max(0.5f, std::max(cfg.crownExtents.x, cfg.crownExtents.z));
@@ -1590,11 +1710,36 @@ public:
                     }
                 }
 
+                // the shoot this step belongs to: the node's own when it is its tip, else a new lateral of the next order
+                const bool carriesOn = nodes[nodeId].children.empty();
+                const int childOrder = carriesOn ? nodes[nodeId].order : nodes[nodeId].order + 1;
+                const float childShoot = (carriesOn ? nodes[nodeId].shootLength : 0.0f) + cfg.branchStepLength;
+                if (cfg.lateralAngleHold > 0.0f && !carriesOn && !onLeader[static_cast<size_t>(nodeId)]) {
+                    // a lateral leaves its parent shoot at the species' angle for its order, towards its attractors' side
+                    const float theta = std::clamp(cfg.scaffoldAngleFromLeaderRad + cfg.lateralAngleOrderGainRad * static_cast<float>(nodes[nodeId].order), 0.05f, 1.55f);
+                    const Vec3 axis = nodes[nodeId].growthDir;
+                    Vec3 away = avgDir - axis * avgDir.dot(axis);
+                    if (away.lengthSquared() < 1e-8f) away = radialDir - axis * radialDir.dot(axis);
+                    if (away.lengthSquared() > 1e-8f) {
+                        const Vec3 angled = (axis * std::cos(theta) + away.normalized() * std::sin(theta)).normalized();
+                        const float w = std::clamp(cfg.lateralAngleHold, 0.0f, 1.0f);
+                        finalDir = (finalDir * (1.0f - w) + angled * w).normalized();
+                    }
+                }
+                if (cfg.shootDroop > 0.0f && childOrder >= 1 && !leaderTip) {
+                    const float along = std::clamp(childShoot / std::max(1e-3f, cfg.shootDroopLength), 0.0f, 1.0f);
+                    const float w = cfg.shootDroop * along * (childOrder >= 2 ? 1.0f : 0.5f);
+                    const Vec3 drooped = finalDir + Vec3(0, -w, 0);
+                    if (drooped.lengthSquared() > 1e-8f) finalDir = drooped.normalized();
+                }
+
                 ColonizationNode child;
                 child.id = static_cast<int>(nodes.size() + newNodes.size());
                 child.parentId = nodeId;
                 child.position = nodes[nodeId].position + finalDir * cfg.branchStepLength;
                 child.growthDir = finalDir;
+                child.order = childOrder;
+                child.shootLength = childShoot;
                 newNodes.push_back(child);
                 // the leader's own tip carries the leader on
                 newOnLeader.push_back(onLeader[static_cast<size_t>(nodeId)] && nodes[nodeId].children.empty() ? 1 : 0);
@@ -1620,7 +1765,15 @@ public:
         if (aliveCount == 0) rep.stop = "all_attractors_reached";
         rep.attractorsReached = A - aliveCount;
 
-        // 4. Propagate Branch Radii via Leonardo da Vinci's Rule: r_parent^p = sum(r_child^p)
+        if (cfg.pendulousTailShare > 0.0f && cfg.branchStepLength > 0.0f) hangTails(cfg, nodes, leaderEnd);
+        finishRadii(cfg, nodes);
+        return nodes;
+    }
+
+private:
+    /** Radii by Leonardo da Vinci's rule (r_parent^p = sum r_child^p) from the tips in, then the root flare. */
+    static void finishRadii(const SpaceColonizationConfig& cfg, std::vector<ColonizationNode>& nodes) {
+        // Propagate Branch Radii via Leonardo da Vinci's Rule: r_parent^p = sum(r_child^p)
         for (int i = static_cast<int>(nodes.size()) - 1; i >= 0; --i) {
             if (nodes[i].children.empty()) {
                 nodes[i].radius = cfg.tipRadius;
@@ -1647,9 +1800,160 @@ public:
                 }
             }
         }
-        return nodes;
     }
 
+    /**
+     * The curtain of a weeping crown (pendulousTailShare): every tip off the leader hangs a chain of twigs down for that
+     * share of its height above the crown base (varied 0.3..1 per tip, most of them short), its heading turning from the tip's own to
+     * straight down over the first metre or so, never below the crown base.
+     */
+    static void hangTails(const SpaceColonizationConfig& cfg, std::vector<ColonizationNode>& nodes, int leaderEnd) {
+        const float crownBase = cfg.rootAnchor.y + cfg.clearTrunkHeight;
+        const size_t grown = nodes.size();
+        const float step = cfg.branchStepLength;
+        for (size_t i = static_cast<size_t>(std::max(0, leaderEnd)); i < grown; ++i) {
+            if (!nodes[i].children.empty() || nodes[i].order < 1) continue;
+            const float room = nodes[i].position.y - crownBase;
+            const float h = hashUnit(cfg.seed, 9201u, static_cast<uint32_t>(i));
+            const float length = std::clamp(cfg.pendulousTailShare, 0.0f, 1.0f) * room * (0.3f + 0.7f * h * h);
+            const int steps = static_cast<int>(std::floor(length / step));
+            int parent = static_cast<int>(i);
+            Vec3 dir = nodes[i].growthDir;
+            for (int k = 0; k < steps; ++k) {
+                // turn towards straight down: half of what is left of the turn each step
+                dir = (dir * 0.5f + Vec3(0, -1, 0) * 0.5f).normalized();
+                ColonizationNode t;
+                t.id = static_cast<int>(nodes.size());
+                t.parentId = parent;
+                t.position = nodes[static_cast<size_t>(parent)].position + dir * step;
+                if (t.position.y < crownBase) break;
+                t.growthDir = dir;
+                t.order = nodes[i].order + 1;
+                t.shootLength = static_cast<float>(k + 1) * step;
+                t.tail = static_cast<int>(i);
+                nodes[static_cast<size_t>(parent)].children.push_back(t.id);
+                nodes.push_back(t);
+                parent = t.id;
+            }
+        }
+    }
+
+    /**
+     * A rosette tree (rosetteLeaves): the stem straight up its line to the rosette's centre, then one arching rachis per
+     * leaf. The leaves are fitted to the crown the attractors describe: its footprint in 16 sectors round the stem sets
+     * how far each reaches, its top how high the most upright rise, the crown base how low the lowest hang.
+     */
+    static void growRosette(const SpaceColonizationConfig& cfg, const std::vector<Vec3>& attractors, std::vector<ColonizationNode>& nodes, ColonizationReport& rep) {
+        const float step = cfg.branchStepLength;
+        Vec3 top = std::isfinite(cfg.trunkLeanToward.x) ? cfg.trunkLeanToward : cfg.crownCenter;
+        top.y = cfg.leaderTopY;
+        float attractorTop = -1e30f;
+        std::array<float, 16> reach{};
+        for (const auto& a : attractors) {
+            attractorTop = std::max(attractorTop, a.y);
+            const float dx = a.x - top.x, dz = a.z - top.z;
+            float& r = reach[static_cast<size_t>(static_cast<int>(std::floor((std::atan2(dz, dx) + math::PI) / math::TWO_PI * 16.0f)) & 15)];
+            r = std::max(r, std::sqrt(dx * dx + dz * dz));
+        }
+        if (!std::isfinite(top.y)) top.y = attractorTop;
+        float meanReach = 0.0f;
+        int have = 0;
+        for (float r : reach) if (r > 0.0f) { meanReach += r; ++have; }
+        meanReach = have ? meanReach / static_cast<float>(have) : std::max(cfg.crownExtents.x, cfg.crownExtents.z);
+        for (float& r : reach) if (!(r > 0.0f)) r = meanReach;
+        const float crownBase = cfg.rootAnchor.y + cfg.clearTrunkHeight;
+        const float depth = std::max(step, top.y - crownBase);
+        const int n = cfg.rosetteLeaves;
+        const float arch = std::clamp(cfg.rosetteArch, 0.0f, 1.5f);
+        const float spread = std::clamp(cfg.scaffoldAngleFromLeaderRad, 0.2f, 1.5f);
+        const int segs = 12;
+        // one leaf of unit length launched at `fromVertical` in the x-y plane: where its rachis runs (x out, y up)
+        auto shape = [&](float fromVertical, float lowness, std::array<Vec3, 13>& pts) {
+            float angle = fromVertical;
+            Vec3 p(0, 0, 0);
+            pts[0] = p;
+            // it bends down along its length, the lower leaves more, most towards the tip
+            const float total = arch * (0.55f + 1.25f * lowness) * 1.5708f;
+            for (int k = 1; k <= segs; ++k) {
+                const float t = static_cast<float>(k) / static_cast<float>(segs);
+                angle = fromVertical + total * t * t;
+                p += Vec3(std::sin(angle), std::cos(angle), 0) * (1.0f / static_cast<float>(segs));
+                pts[static_cast<size_t>(k)] = p;
+            }
+        };
+        std::array<Vec3, 13> lowest{}, upright{};
+        shape(spread, 1.0f, lowest);
+        shape(0.12f, 0.0f, upright);
+        float lowestOut = 0.0f, lowestDrop = 0.0f;
+        for (const auto& q : lowest) { lowestOut = std::max(lowestOut, q.x); lowestDrop = std::min(lowestDrop, q.y); }
+        float uprightRise = 0.0f;
+        for (const auto& q : upright) uprightRise = std::max(uprightRise, q.y);
+        // the leaf's length: the lowest leaves reach the footprint (the crown's spread is what was measured; where that
+        // makes the upright leaves taller than the crown is deep, they are held at its top and the hanging ones at its base)
+        float length = meanReach / std::max(0.2f, lowestOut);
+        length = std::max(length, 2.0f * step);
+        (void)depth;
+        (void)lowestDrop;
+        const float centreY = std::clamp(top.y - uprightRise * length, crownBase, top.y - step);
+
+        // the stem: straight up its line (the root to the point under the crown's top)
+        const Vec3 centre(top.x, centreY, top.z);
+        const float stemLength = (centre - cfg.rootAnchor).length();
+        const int stemSteps = std::max(1, static_cast<int>(std::ceil(stemLength / step)));
+        const Vec3 stemDir = stemLength > 1e-6f ? (centre - cfg.rootAnchor) / stemLength : Vec3(0, 1, 0);
+        for (int k = 1; k <= stemSteps; ++k) {
+            ColonizationNode nx;
+            nx.id = static_cast<int>(nodes.size());
+            nx.parentId = nodes.back().id;
+            nx.position = cfg.rootAnchor + (centre - cfg.rootAnchor) * (static_cast<float>(k) / static_cast<float>(stemSteps));
+            nx.growthDir = stemDir;
+            nodes.back().children.push_back(nx.id);
+            nodes.push_back(nx);
+        }
+        rep.trunkNodes = static_cast<int>(nodes.size());
+        rep.trunkTopY = nodes.back().position.y;
+        const int centreId = nodes.back().id;
+        const float golden = 2.39996323f;
+        const float turn0 = hashUnit(cfg.seed, 9301u, 0u) * math::TWO_PI;
+        for (int k = 0; k < n; ++k) {
+            // the youngest stand near the vertical, the oldest lie at the spread angle: evenly through between
+            const float lowness = n > 1 ? static_cast<float>(k) / static_cast<float>(n - 1) : 1.0f;
+            const float fromVertical = 0.12f + (spread - 0.12f) * std::sqrt(lowness);
+            const float az = turn0 + golden * static_cast<float>(k);
+            const Vec3 out(std::cos(az), 0, std::sin(az));
+            std::array<Vec3, 13> pts{};
+            shape(fromVertical, lowness, pts);
+            const float sector = reach[static_cast<size_t>(static_cast<int>(std::floor((std::atan2(out.z, out.x) + math::PI) / math::TWO_PI * 16.0f)) & 15)];
+            const float len = length * std::clamp(sector / std::max(1e-3f, meanReach), 0.6f, 1.4f) * (0.9f + 0.2f * hashUnit(cfg.seed, 9302u, static_cast<uint32_t>(k)));
+            int parent = centreId;
+            for (int j = 1; j <= segs; ++j) {
+                ColonizationNode nx;
+                nx.id = static_cast<int>(nodes.size());
+                nx.parentId = parent;
+                nx.position = centre + (out * pts[static_cast<size_t>(j)].x + Vec3(0, pts[static_cast<size_t>(j)].y, 0)) * len;
+                nx.position.y = std::clamp(nx.position.y, crownBase, std::max(crownBase, top.y));
+                nx.growthDir = (nx.position - nodes[static_cast<size_t>(parent)].position).normalized();
+                nx.order = 1;
+                nx.shootLength = len * static_cast<float>(j) / static_cast<float>(segs);
+                nx.rosetteLeaf = k;
+                nodes[static_cast<size_t>(parent)].children.push_back(nx.id);
+                nodes.push_back(nx);
+                parent = nx.id;
+            }
+        }
+        // what the leaves reach of the crown, as colonisation reports it
+        const float kill = cfg.killRadius * 1.25f;
+        size_t reached = 0;
+        for (const auto& a : attractors) {
+            for (size_t i = static_cast<size_t>(centreId); i < nodes.size(); ++i) {
+                if ((nodes[i].position - a).lengthSquared() < kill * kill) { ++reached; break; }
+            }
+        }
+        rep.attractorsReached = reached;
+        rep.stop = "rosette";
+    }
+
+public:
     /**
      * Meshes a skeleton growSkeleton grew from `cfg` within cfg.triangleBudget (> 0): the same meshes
      * generateTreeComponents gives for that budget, without growing the skeleton again.
@@ -2222,6 +2526,82 @@ public:
 
 private:
     /**
+     * The leaflets of a rosette tree's leaves (SpaceColonizationConfig::rosetteLeaves): on each rachis (the skeleton
+     * nodes marked with their leaf), leafletsPerSide flat blades a side over the last leafletSpanShare of it, each a
+     * quad of two triangles (so the foliage is one four-vertex piece per leaflet, as a leaf mass is one icosphere). A
+     * leaflet leaves the rachis at leafletAngleRad towards its tip in the leaf's own plane (with a short span the angles
+     * fan from the rachis outwards: a palmate leaf), hangs a little with the leaf's arch, and is longest a third of the
+     * way along its span. Fewer leaflets a side when half the foliage's budget holds fewer.
+     */
+    static void meshRosetteLeaflets(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& g, size_t foliageBudget, float growthDen,
+                                    geometry::Mesh& foliage, TreeBudgetReport& rep, MeshGrowth* growth) {
+        std::vector<std::vector<int>> leaves(static_cast<size_t>(cfg.rosetteLeaves));
+        for (size_t i = 0; i < g.size(); ++i) {
+            const int k = g[i].rosetteLeaf;
+            if (k < 0 || k >= cfg.rosetteLeaves) continue;
+            if (leaves[static_cast<size_t>(k)].empty() && g[i].parentId >= 0) leaves[static_cast<size_t>(k)].push_back(g[i].parentId);
+            leaves[static_cast<size_t>(k)].push_back(static_cast<int>(i));
+        }
+        size_t drawn = 0;
+        for (const auto& l : leaves) drawn += l.size() >= 2 ? 1 : 0;
+        if (drawn == 0) return;
+        // half the foliage's budget at most: a leaflet here is a flat piece, and this mesh is also the far level of a tree whose
+        // nearer levels must stay the heavier ones
+        const int perSide = std::min(std::max(1, cfg.leafletsPerSide), static_cast<int>((foliageBudget / 2) / (4 * drawn)));
+        if (perSide < 1) return;
+        const float span = std::clamp(cfg.leafletSpanShare, 0.02f, 1.0f);
+        const float arch = std::clamp(cfg.rosetteArch, 0.0f, 1.5f);
+        size_t pieces = 0;
+        for (const auto& l : leaves) {
+            if (l.size() < 2) continue;
+            std::vector<float> arc(l.size(), 0.0f);
+            for (size_t j = 1; j < l.size(); ++j) arc[j] = arc[j - 1] + (g[static_cast<size_t>(l[j])].position - g[static_cast<size_t>(l[j - 1])].position).length();
+            const float length = arc.back();
+            if (!(length > 1e-4f)) continue;
+            for (int side = 0; side < 2; ++side) {
+                for (int k = 0; k < perSide; ++k) {
+                    const float u = (static_cast<float>(k) + 0.5f) / static_cast<float>(perSide);   // along the span, 0 its start
+                    const float at = (1.0f - span + span * u) * length;
+                    size_t j = 1;
+                    while (j + 1 < l.size() && arc[j] < at) ++j;
+                    const Vec3 a = g[static_cast<size_t>(l[j - 1])].position, b = g[static_cast<size_t>(l[j])].position;
+                    const float t = std::clamp((at - arc[j - 1]) / std::max(1e-6f, arc[j] - arc[j - 1]), 0.0f, 1.0f);
+                    const Vec3 p = a + (b - a) * t;
+                    const Vec3 along = (b - a).normalized();
+                    Vec3 across = along.cross(Vec3(0, 1, 0));
+                    if (across.lengthSquared() < 1e-6f) across = along.cross(Vec3(1, 0, 0));
+                    across = across.normalized() * (side == 0 ? 1.0f : -1.0f);
+                    // pinnate: one angle all along; palmate (a short span): fanned from along the rachis out to twice the angle
+                    const float angle = cfg.leafletAngleRad * (span + (1.0f - span) * 2.0f * u);
+                    Vec3 dir = along * std::cos(angle) + across * std::sin(angle) + Vec3(0, -0.35f * arch, 0);
+                    dir = dir.normalized();
+                    const float profile = std::pow(std::max(0.0f, std::sin(math::PI * (0.12f + 0.80f * u))), 0.6f);
+                    const float len = cfg.leafletLengthShare * length * (span + (1.0f - span) * 1.6f) * profile;
+                    const float half = 0.5f * cfg.leafletWidthShare * len;
+                    const Vec3 normal = dir.cross(along).lengthSquared() > 1e-8f ? dir.cross(along).normalized() : Vec3(0, 1, 0);
+                    const uint32_t base = static_cast<uint32_t>(foliage.vertices.size());
+                    const Vec3 tip = p + dir * len;
+                    for (const Vec3& v : {p - along * half, p + along * half, tip + along * (0.35f * half), tip - along * (0.35f * half)}) {
+                        foliage.vertices.push_back(v);
+                        foliage.normals.push_back(normal.y < 0.0f ? normal * -1.0f : normal);
+                        foliage.vertexColors.push_back(cfg.leafColor);
+                    }
+                    foliage.uvs.push_back(Vec2(0.0f, 0.0f));
+                    foliage.uvs.push_back(Vec2(1.0f, 0.0f));
+                    foliage.uvs.push_back(Vec2(1.0f, 1.0f));
+                    foliage.uvs.push_back(Vec2(0.0f, 1.0f));
+                    for (uint32_t idx : {0u, 1u, 2u, 0u, 2u, 3u}) foliage.indices.push_back(base + idx);
+                    if (growth) growth->foliage.insert(growth->foliage.end(), 4, static_cast<float>(l[j]) / growthDen);
+                    ++pieces;
+                }
+            }
+        }
+        rep.foliageClumps = pieces;
+        rep.trianglesPerClump = 2;
+        rep.foliageTriangles = foliage.indices.size() / 3;
+    }
+
+    /**
      * Meshes a grown skeleton within cfg.triangleBudget. Wood: chains of single-child nodes are simplified
      * (Douglas-Peucker, tolerance a fraction of the local radius), each kept segment is a tube whose side count grows
      * with sqrt(radius), and segments that start thinner than a bisected radius are pruned; the trunk chain is always
@@ -2419,10 +2799,31 @@ private:
         std::vector<Vec3> pts;
         std::vector<uint32_t> ptsNode;  // the leaf node each point is (its id: when it grew)
         const std::vector<uint8_t> leafy = leafyNodes(cfg, g, twigRadius, &radius);
+        // hanging tails (pendulousTailShare): each is drawn as one strand of leaves, not gathered into the crown's masses
+        struct Strand { Vec3 top, bottom; uint32_t node; };
+        std::vector<Strand> strands;
+        {
+            std::unordered_map<int, size_t> byTip;
+            for (size_t i = 0; i < N; ++i) {
+                if (g[i].tail < 0) continue;
+                auto it = byTip.find(g[i].tail);
+                if (it == byTip.end()) {
+                    byTip.emplace(g[i].tail, strands.size());
+                    strands.push_back({g[static_cast<size_t>(g[i].tail)].position, g[i].position, static_cast<uint32_t>(i)});
+                } else if (g[i].position.y < strands[it->second].bottom.y) {
+                    strands[it->second].bottom = g[i].position;
+                    strands[it->second].node = static_cast<uint32_t>(i);
+                }
+            }
+        }
         for (size_t i = 0; i < N; ++i) {
-            if (leafy[i]) { pts.push_back(g[i].position); ptsNode.push_back(static_cast<uint32_t>(i)); }
+            if (leafy[i] && g[i].tail < 0) { pts.push_back(g[i].position); ptsNode.push_back(static_cast<uint32_t>(i)); }
         }
         const size_t foliageBudget = budget > rep.woodTriangles ? budget - rep.woodTriangles : 0;
+        if (cfg.rosetteLeaves > 0) {
+            meshRosetteLeaflets(cfg, g, foliageBudget, growthDen, foliage, rep, growth);
+            return;
+        }
         if (pts.empty() || foliageBudget < 20) return;
         const LeafEnvelope env = LeafEnvelope::of(cfg);
         // the masses that bring the measured surface within reach, all of them (the budget may hold fewer)
@@ -2434,7 +2835,19 @@ private:
         std::vector<uint32_t> sphereTris;
         unitIcosphere(level, sphere, sphereTris);
         const size_t tpc = sphereTris.size() / 3;
-        const size_t massesHeld = foliageBudget / tpc;
+        // the strands take up to 0.4 of the leaf masses the budget holds (every n-th tail when there are more)
+        size_t strandsHeld = 0;
+        if (!strands.empty()) {
+            strandsHeld = std::min(strands.size(), static_cast<size_t>(0.4 * static_cast<double>(foliageBudget / tpc)));
+            if (strandsHeld < strands.size() && strandsHeld > 0) {
+                std::vector<Strand> kept;
+                for (size_t k = 0; k < strandsHeld; ++k) kept.push_back(strands[k * strands.size() / strandsHeld]);
+                strands.swap(kept);
+            } else if (strandsHeld == 0) {
+                strands.clear();
+            }
+        }
+        const size_t massesHeld = foliageBudget / tpc - strandsHeld;
 
         struct Cell { Vec3 sum{0, 0, 0}; uint32_t n{0}; };
         auto gather = [&](const std::vector<Vec3>& from, float v, std::vector<Cell>& out) {
@@ -2469,7 +2882,7 @@ private:
         rep.trianglesPerClump = static_cast<int>(tpc);
         const float clumpRadius = 0.62f * v;
 
-        struct Mass { Vec3 center; float size; };
+        struct Mass { Vec3 center; float size; float strandHalf{0.0f}; uint32_t strandNode{0}; };   // strandHalf > 0: a hanging strand, this half-length
         std::vector<Mass> masses;
         // the surface masses (their centres were moved into the crown for the largest size they may be drawn)
         const float surfaceNominal = surfaceMassNominal(cfg, env);
@@ -2503,7 +2916,11 @@ private:
                     gather(rest, w, cells);
                 }
                 if (cells.size() <= left) {
+                    const float open = std::clamp(cfg.crownOpenness, 0.0f, 1.0f);
+                    size_t ci = 0;
                     for (const auto& c : cells) {
+                        // an open crown leaves out up to half of the masses that are not on its measured surface
+                        if (open > 0.0f && hashUnit(cfg.seed ^ 0x0BE2u, static_cast<uint32_t>(ci++), 7u) < 0.5f * open) continue;
                         const float size = leafMassSize(cfg, env, masses.size(), clumpRadius);
                         masses.push_back({env.keepIn(c.sum / static_cast<float>(c.n), size), size});
                     }
@@ -2511,11 +2928,32 @@ private:
             }
         }
 
+        if (cfg.crownOpenness > 0.0f) {
+            // ... and draws every mass smaller, so there is air between them
+            const float shrink = 1.0f - 0.4f * std::clamp(cfg.crownOpenness, 0.0f, 1.0f);
+            for (auto& m : masses) m.size *= shrink;
+        }
+        // the hanging strands: one mass each, as long as its tail and a twelfth as wide (no thinner than 0.10 m)
+        for (const auto& st : strands) {
+            const float half = 0.5f * (st.top - st.bottom).length();
+            if (!(half > 1e-3f)) continue;
+            Mass m{(st.top + st.bottom) * 0.5f, std::max(0.10f, 0.08f * 2.0f * half)};
+            m.strandHalf = half;
+            m.strandNode = st.node;
+            masses.push_back(m);
+        }
         for (size_t ci = 0; ci < masses.size(); ++ci) {
             const uint32_t base = static_cast<uint32_t>(foliage.vertices.size());
             for (size_t k = 0; k < sphere.size(); ++k) {
                 const float jitter = 1.0f + kLeafJitterAmp * (hashUnit(cfg.seed, static_cast<uint32_t>(ci), static_cast<uint32_t>(k)) - 0.5f);
                 const Vec3 d = sphere[k];
+                if (masses[ci].strandHalf > 0.0f) {
+                    foliage.vertices.push_back(masses[ci].center + Vec3(d.x * masses[ci].size * jitter, d.y * masses[ci].strandHalf, d.z * masses[ci].size * jitter));
+                    foliage.normals.push_back(Vec3(d.x, 0.2f * d.y, d.z).normalized());
+                    foliage.uvs.push_back(Vec2(0.5f + 0.5f * d.x, 0.5f + 0.5f * d.z));
+                    foliage.vertexColors.push_back(cfg.leafColor);
+                    continue;
+                }
                 foliage.vertices.push_back(masses[ci].center + Vec3(d.x, d.y * kLeafSquash, d.z) * (masses[ci].size * jitter));
                 foliage.normals.push_back(Vec3(d.x, d.y / kLeafSquash, d.z).normalized());
                 foliage.uvs.push_back(Vec2(0.5f + 0.5f * d.x, 0.5f + 0.5f * d.z));
@@ -2528,7 +2966,7 @@ private:
         if (growth && !masses.empty()) {
             // each mass appears once the last leaf node it holds has grown (the nearest leaf node when it holds none)
             float cell = 1e-3f;
-            for (const auto& m : masses) cell = std::max(cell, m.size * kLeafJitterMax);
+            for (const auto& m : masses) if (!(m.strandHalf > 0.0f)) cell = std::max(cell, m.size * kLeafJitterMax);
             auto key = [&](const Vec3& p, int dx, int dy, int dz) {
                 const int64_t a = static_cast<int64_t>(std::floor(p.x / cell)) + dx, b = static_cast<int64_t>(std::floor(p.y / cell)) + dy, c = static_cast<int64_t>(std::floor(p.z / cell)) + dz;
                 return (static_cast<uint64_t>(a & 0x1FFFFF) << 42) | (static_cast<uint64_t>(b & 0x1FFFFF) << 21) | static_cast<uint64_t>(c & 0x1FFFFF);
@@ -2537,6 +2975,10 @@ private:
             for (uint32_t k = 0; k < pts.size(); ++k) grid[key(pts[k], 0, 0, 0)].push_back(k);
             growth->foliage.reserve(foliage.vertices.size());
             for (const auto& m : masses) {
+                if (m.strandHalf > 0.0f) {
+                    growth->foliage.insert(growth->foliage.end(), sphere.size(), static_cast<float>(m.strandNode) / growthDen);
+                    continue;
+                }
                 const float hold2 = (m.size * kLeafJitterMax) * (m.size * kLeafJitterMax);
                 long held = -1;
                 for (int dz = -1; dz <= 1; ++dz) for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {

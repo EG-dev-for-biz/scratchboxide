@@ -107,6 +107,21 @@ struct Entry {
     double autumnHueDeg{0}, autumnHueSpreadDeg{0};
     // Where its numbers come from, and which of the fields the conventions call published are estimates for this entry.
     std::vector<std::string> sources, estimated;
+    // Growth form (all continuous, all optional; at these defaults a tree grows exactly as it did without them; see
+    // nature::SpaceColonizationConfig for what each does):
+    int whorlBranches{0};                  // laterals in each tier round the leader (0: no tiers)
+    double whorlSpacingPerHeight{0};       // leader between tiers / height
+    double weeping{0};                     // 0..1: how far its shoots hang (droop along the shoot, hanging tails at the tips)
+    int rosetteLeaves{0};                  // leaves in a terminal rosette on an unbranched stem (0: a branching tree)
+    double leafArch{0.5};                  // how far a rosette leaf bends down along its length (0 straight)
+    int leafletsPerSide{24};               // leaflets on each side of a rosette leaf's rachis
+    double leafletSpanShare{1};            // share of the rachis that carries leaflets, from its tip (1 pinnate, towards 0 palmate)
+    double leafletLengthShare{0.22};       // longest leaflet / leaf length
+    double leafletAngleRad{0.95};          // a leaflet's angle from the rachis
+    double branchAngleHold{0};             // 0..1: how firmly a lateral leaves its parent shoot at the branch angle
+    double branchAngleOrderGainRad{0};     // change of that angle per branch order
+    double internodeLengthPerHeight{0};    // growth step / height (0: the grower's own)
+    double crownOpenness{0};               // 0..1: how much air the crown has between its leaf masses
 };
 
 /**
@@ -353,6 +368,28 @@ inline Library parseIndex(const std::string& text) {
             E.autumnHueDeg = detail::number(autumn[0], E.id + ".autumnHueDeg[0]", -180, 360);
             E.autumnHueSpreadDeg = detail::number(autumn[1], E.id + ".autumnHueDeg[1]", 0, 180);
         }
+        auto optional = [&](const char* key, double lo, double hi, double& into) { if (detail::present(e[key])) into = detail::number(e[key], E.id + "." + key, lo, hi); };
+        auto optionalCount = [&](const char* key, double lo, double hi, int& into) {
+            if (!detail::present(e[key])) return;
+            const double v = detail::number(e[key], E.id + "." + key, lo, hi);
+            if (v != std::floor(v)) throw SpeciesIndexError(E.id + "." + key + " must be a whole number");
+            into = static_cast<int>(v);
+        };
+        optionalCount("whorlBranches", 0, 12, E.whorlBranches);
+        optional("whorlSpacingPerHeight", 0.005, 0.3, E.whorlSpacingPerHeight);
+        if ((E.whorlBranches > 0) != (E.whorlSpacingPerHeight > 0)) throw SpeciesIndexError(E.id + " gives one of whorlBranches and whorlSpacingPerHeight without the other");
+        optional("weeping", 0, 1, E.weeping);
+        optionalCount("rosetteLeaves", 0, 60, E.rosetteLeaves);
+        optional("leafArch", 0, 1.5, E.leafArch);
+        optionalCount("leafletsPerSide", 1, 80, E.leafletsPerSide);
+        optional("leafletSpanShare", 0.02, 1, E.leafletSpanShare);
+        optional("leafletLengthShare", 0.02, 1, E.leafletLengthShare);
+        optional("leafletAngleRad", 0.05, 1.55, E.leafletAngleRad);
+        optional("branchAngleHold", 0, 1, E.branchAngleHold);
+        optional("branchAngleOrderGainRad", -0.5, 0.5, E.branchAngleOrderGainRad);
+        optional("internodeLengthPerHeight", 0.004, 0.08, E.internodeLengthPerHeight);
+        optional("crownOpenness", 0, 1, E.crownOpenness);
+        if (E.rosetteLeaves > 0 && (E.whorlBranches > 0 || E.stems > 1)) throw SpeciesIndexError(E.id + ": a rosette (rosetteLeaves) is one unbranched stem; it cannot have whorls or several stems");
         E.sources = detail::strings(e["sources"], E.id + ".sources", 1);
         E.estimated = detail::strings(e["estimated"], E.id + ".estimated", 0);
         lib.entries.push_back(E);

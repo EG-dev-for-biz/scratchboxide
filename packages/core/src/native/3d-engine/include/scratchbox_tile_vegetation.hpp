@@ -751,6 +751,7 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
     double baseRatio = G.crownBaseRatio, trunkPerHeight = G.trunkRadiusPerHeight;
     double apical = G.morphology.apicalDominance, branchAngle = G.morphology.branchAngleMeanRad;
     int scaffold = 0;
+    const tree_species::Entry* form = nullptr;   // the matched entry, for its growth-form fields
     if (G.species) {
         auto d = tree_species::describeCrown(c.apex, support, c.sectorRadii, c.samples, c.colourKnown ? &c.colourMean : nullptr, G.speciesChoice);
         d.latAbsDeg = G.latAbsDeg;
@@ -764,6 +765,7 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
             branchAngle = e.branchAngleRad;
             scaffold = e.scaffoldBranches;
             g.stems = e.stems;
+            form = &e;
         }
     }
     if (std::isfinite(c.trunkRadiusPerHeight)) trunkPerHeight = c.trunkRadiusPerHeight;
@@ -852,7 +854,8 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
     // a narrow crown (mean radius under a quarter of its height) gets proportionally finer growth: with the step, kill and
     // perception radii a wider crown needs, its attractors lie inside the trunk's own reach and the tree is a bare pole
     const double narrow = std::clamp(radius / (0.25 * H), 0.4, 1.0);
-    const double step = std::max(0.12, (G.morphology.internodeLengthM > 0.0f ? static_cast<double>(G.morphology.internodeLengthM) : std::clamp(H / 40.0, 0.2, 0.6)) * narrow);
+    const double step = std::max(0.12, (G.morphology.internodeLengthM > 0.0f ? static_cast<double>(G.morphology.internodeLengthM)
+                                        : form && form->internodeLengthPerHeight > 0 ? std::clamp(form->internodeLengthPerHeight * H, 0.12, 0.9) : std::clamp(H / 40.0, 0.2, 0.6)) * narrow);
     cfg.branchStepLength = static_cast<float>(step);
     cfg.trunkLeanToward = c.apex;
     cfg.trunkLeanShare = static_cast<float>(G.trunkLeanShare);
@@ -870,6 +873,29 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
         cfg.leaderHold = static_cast<float>(g.leaderHold);
         cfg.excurrence = static_cast<float>(g.excurrence);
         cfg.leaderTopY = static_cast<float>(g.apexTargetY);
+        // a shoot with more momentum than any entry had before (apical dominance over 0.62) passed the attractors beside
+        // it and colonisation stalled: its momentum is released as it nears them, by how far past 0.62 it is
+        cfg.momentumRelease = static_cast<float>(smooth(0.62, 0.72, apical));
+        // a crown that begins above the trunk: a tree whose leader holds climbs its own line to it, not over to its rim
+        cfg.trunkSeekAlongStem = static_cast<float>(g.leaderHold);
+    }
+    if (form) {
+        // the entry's growth form (continuous; each at its default leaves the tree as it grew without it)
+        cfg.whorlBranches = form->whorlBranches;
+        cfg.whorlSpacing = static_cast<float>(form->whorlSpacingPerHeight * H);
+        cfg.shootDroop = static_cast<float>(0.9 * form->weeping);
+        cfg.shootDroopLength = static_cast<float>(std::max(0.5, 0.12 * H));
+        cfg.pendulousTailShare = static_cast<float>(0.85 * form->weeping);
+        cfg.rosetteLeaves = form->rosetteLeaves;
+        cfg.rosetteLeafLength = static_cast<float>(form->leafLengthM);
+        cfg.rosetteArch = static_cast<float>(form->leafArch);
+        cfg.leafletsPerSide = form->leafletsPerSide;
+        cfg.leafletSpanShare = static_cast<float>(form->leafletSpanShare);
+        cfg.leafletLengthShare = static_cast<float>(form->leafletLengthShare);
+        cfg.leafletAngleRad = static_cast<float>(form->leafletAngleRad);
+        cfg.lateralAngleHold = static_cast<float>(form->branchAngleHold);
+        cfg.lateralAngleOrderGainRad = static_cast<float>(form->branchAngleOrderGainRad);
+        cfg.crownOpenness = static_cast<float>(form->crownOpenness);
     }
     // stems from the ground: the trunk forks just above the root collar and the scaffold limbs are the stems
     cfg.isShrub = g.stems > 1;

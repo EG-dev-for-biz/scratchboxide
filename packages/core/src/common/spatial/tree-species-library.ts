@@ -65,6 +65,31 @@ export interface TreeSpeciesEntry {
     sources: string[];
     /** Fields that are an estimate for this entry, each with how it was derived. */
     estimated?: string[];
+    // Growth form (continuous, all optional; at their defaults the tree grows as it does without them):
+    /** Laterals in each tier round a single leader grown to the crown's top (0: no tiers); given with whorlSpacingPerHeight. */
+    whorlBranches?: number;
+    /** Leader between tiers / height. */
+    whorlSpacingPerHeight?: number;
+    /** 0..1: how far the shoots hang (a pull down along each shoot, and tails of twigs from the tips to the crown base). */
+    weeping?: number;
+    /** Leaves in a terminal rosette on one unbranched stem (0: a branching tree). Not with whorls or several stems. */
+    rosetteLeaves?: number;
+    /** How far a rosette leaf bends down along its length (0 straight). */
+    leafArch?: number;
+    leafletsPerSide?: number;
+    /** Share of the rachis that carries leaflets, from its tip: 1 pinnate, towards 0 palmate. */
+    leafletSpanShare?: number;
+    /** Longest leaflet / leaf length. */
+    leafletLengthShare?: number;
+    leafletAngleRad?: number;
+    /** 0..1: how firmly a lateral leaves its parent shoot at branchAngleRad. */
+    branchAngleHold?: number;
+    /** Change of that angle per branch order (rad). */
+    branchAngleOrderGainRad?: number;
+    /** Growth step / height (omitted: the grower's own). */
+    internodeLengthPerHeight?: number;
+    /** 0..1: air between the crown's leaf masses. */
+    crownOpenness?: number;
 }
 
 /** One box of the index's coarse place table (see the index's conventions.regions): an estimate of a place's climate, never a measurement. */
@@ -178,6 +203,27 @@ export function validateTreeSpeciesIndex(doc: unknown): string[] {
         if ((e.leafOutMonth === undefined) !== (e.leafFallMonth === undefined)) out.push(`${e.id} gives one of leafOutMonth and leafFallMonth without the other`);
         else if (e.leafOutMonth !== undefined && (!num(e.leafOutMonth, 1, 13) || !num(e.leafFallMonth, e.leafOutMonth, 13))) out.push(`${e.id}.leafOutMonth and leafFallMonth must be months in [1, 13], leaf-out first`);
         if (e.autumnHueDeg !== undefined && (!Array.isArray(e.autumnHueDeg) || e.autumnHueDeg.length !== 2 || !num(e.autumnHueDeg[0], -180, 360) || !num(e.autumnHueDeg[1], 0, 180))) out.push(`${e.id}.autumnHueDeg must be [centre, spread]`);
+        const optional = (k: keyof TreeSpeciesEntry, lo: number, hi: number, whole = false) => {
+            const v = e[k];
+            if (v === undefined) return;
+            if (!num(v, lo, hi)) out.push(`${e.id}.${k} must be a number in [${lo}, ${hi}]`);
+            else if (whole && !Number.isInteger(v)) out.push(`${e.id}.${k} must be a whole number`);
+        };
+        optional('whorlBranches', 0, 12, true);
+        optional('whorlSpacingPerHeight', 0.005, 0.3);
+        if (((e.whorlBranches ?? 0) > 0) !== ((e.whorlSpacingPerHeight ?? 0) > 0)) out.push(`${e.id} gives one of whorlBranches and whorlSpacingPerHeight without the other`);
+        optional('weeping', 0, 1);
+        optional('rosetteLeaves', 0, 60, true);
+        optional('leafArch', 0, 1.5);
+        optional('leafletsPerSide', 1, 80, true);
+        optional('leafletSpanShare', 0.02, 1);
+        optional('leafletLengthShare', 0.02, 1);
+        optional('leafletAngleRad', 0.05, 1.55);
+        optional('branchAngleHold', 0, 1);
+        optional('branchAngleOrderGainRad', -0.5, 0.5);
+        optional('internodeLengthPerHeight', 0.004, 0.08);
+        optional('crownOpenness', 0, 1);
+        if ((e.rosetteLeaves ?? 0) > 0 && ((e.whorlBranches ?? 0) > 0 || e.stems > 1)) out.push(`${e.id}: a rosette (rosetteLeaves) is one unbranched stem; it cannot have whorls or several stems`);
         if (!strings(e.sources, 1)) out.push(`${e.id}.sources must name at least one source`);
         if (e.estimated !== undefined && !strings(e.estimated, 0)) out.push(`${e.id}.estimated must be a list of non-empty strings`);
     }

@@ -11,7 +11,7 @@
     "scaffoldBranches": "primary limbs at the crown break (0: the grower's seeded 2-4; used for a continuous leader with whorls). Derived from the habit described, not published",
     "leafLengthM / leafAspect": "the leaf or frond the leaf set is chosen by (length, width / length), the middle of the published range; for a compound leaf, its leaflet",
     "hueDeg": "[centre, spread] of the foliage's hue in the chromaticity plane (0 red, 60 yellow, 120 green); inside the spread costs nothing. An estimate from the sources' colour words (yellow-green 85-100, mid green 105-112, dark or glossy green 115-122, blue-green needles 125-128)",
-    "apicalDominance": "0..1, the leader's dominance over the laterals: each shoot's momentum along its heading (0.76 x this) and how firmly the leader holds its course through the crown to the apex (smoothstep from 0.45 to 0.60: at 0.45 and below the trunk forks into its scaffold limbs at the crown break, from 0.60 it rises through the crown to the apex); the grower stalls on a measured crown above about 0.65 (its branches overshoot the attractors), so a columnar form is expressed by the crown's own measurements, not by a higher value. Derived from the habit described (a central leader 0.58-0.62, an oval 0.5-0.55, a rounded crown 0.38-0.45, a spreading or umbrella crown 0.25-0.35, a palm 0.2)",
+    "apicalDominance": "0..1, the leader's dominance over the laterals: each shoot's momentum along its heading (0.76 x this) and how firmly the leader holds its course through the crown to the apex (smoothstep from 0.45 to 0.60: at 0.45 and below the trunk forks into its scaffold limbs at the crown break, from 0.60 it rises through the crown to the apex); the grower stalls on a measured crown above about 0.65 (its branches overshoot the attractors), so a columnar form is expressed by the crown's own measurements, not by a higher value (2026-11-05: above 0.62 the grower now releases a shoot's momentum as it nears its attractors, so higher values no longer stall; no entry uses one yet). Derived from the habit described (a central leader 0.58-0.62, an oval 0.5-0.55, a rounded crown 0.38-0.45, a spreading or umbrella crown 0.25-0.35, a palm 0.2)",
     "branchAngleRad": "the laterals' angle from the leader. Derived from the habit described (fastigiate 0.25-0.3, ascending 0.5-0.7, spreading 0.8-1.0, level or drooping 1.1-1.4)",
     "latRangesDeg": "signed latitude bands [south, north] (south negative) the entry grows outdoors in; a place outside every band costs by its distance to the nearest (4 degrees costs 1). Derived from the hardiness span and the plantings the sources describe, not published; absent: uncosted. latAbsRangeDeg [min, max] is the older symmetric form and is still read",
     "usdaZones": "[coldest, warmest] published USDA hardiness zones (halves allowed: 9B is 9.5). Read as the annual extreme minimum temperature the entry lives through: zone z spans -51.1 + 5.56 (z - 1) to -51.1 + 5.56 z degrees C. A place colder than the first or with a warmer winter than the last costs by the difference (5 degrees C costs 1). The published warm limit is an eastern North American heat limit; where a species is native or common in a milder maritime winter the warm end is raised and the entry says so under estimated",
@@ -20,6 +20,7 @@
     "leafRetention": "the share of its foliage kept through the leafless season, 0 deciduous to 1 evergreen",
     "leafOutMonth / leafFallMonth": "months (1 = January, fractional) the leaves open and have fallen at 40 degrees north near sea level; leafPresence moves them 4 days per degree of latitude (Hopkins' bioclimatic law, 1918) and half a year south of the equator. An estimate for every entry, from the order in which the species leaf and drop in the north-eastern United States, not a published table. Not read by the grower yet",
     "autumnHueDeg": "[centre, spread] of the foliage's hue before it falls (red 5-15, orange 25-35, yellow 52-60); from the sources' autumn colour words. The photo a crown's hue was measured in may be of any season, so the match costs nothing for a hue anywhere on the arc from hueDeg to autumnHueDeg (the short way round, the spreads blended along it). Not read by the grower yet",
+    "growthForm": "continuous fields the grower reads, all optional, each at its default leaving the tree as it grows without it. whorlBranches / whorlSpacingPerHeight: laterals in each tier round a single leader that is grown to the crown's top, and the leader between tiers over the height (a conifer's annual whorls; the count is the sources' where they give one, the spacing an estimate from annual height growth). weeping 0..1: how far the shoots hang (a pull down that grows along each shoot, and tails of twigs hanging from the tips to the crown base). rosetteLeaves: leaves in a terminal rosette on one unbranched stem (a palm; the sources' count, cut where the estimated note says so); leafArch: how far each bends down along its length; leafletsPerSide, leafletSpanShare (1 pinnate, leaflets along the whole rachis; towards 0 palmate, all from its end), leafletLengthShare, leafletAngleRad: its leaflets. branchAngleHold 0..1 and branchAngleOrderGainRad: how firmly a lateral leaves its parent shoot at branchAngleRad, and how that angle changes per branch order. internodeLengthPerHeight: the growth step over the height (the grower takes 0.025 by itself). Read and applied, but no entry gives one yet: a step that is not the grower's own changes how many leaf stations the nearer levels of detail carry against the far one (a finer step left the mid level with fewer triangles than the far level), which has to be settled in the level-of-detail builder first. crownOpenness 0..1: air between the leaf masses. Except the counts, every one is an estimate from the habit the sources describe, not a published number",
     "sources": "where the entry's numbers come from. Height, spread, zones and leaf size are the sources' figures (entered from the references as cited; 2026-11-05: Callery pear, zelkova, jacaranda, coconut palm, mesquite and rain tree were re-read against the references online, the rest were not re-read that day)",
     "estimated": "fields the conventions call published that are an estimate for this entry, each with how it was derived",
     "regions": "a coarse table of the world's planted regions as latitude/longitude boxes (lonDeg [west, east]; membership falls off over regionEdgeDeg past a box). minWinterTempC is the annual extreme minimum at the box's [south edge, north edge], interpolated by latitude, at referenceElevationM (above it the standard atmosphere's 6.5 degrees C per km is taken off); aridityIndex is one value for the box. Both are fits made by hand for this library to the published hardiness zones of the cities named in fitTo (USDA Plant Hardiness Zone Map 2023 for the United States; the commonly cited zone of each city elsewhere) and to the UNEP aridity classes: an estimate of a place's climate from its latitude, longitude and elevation, good to about one hardiness zone, never a measurement. A caller that has a measured winter minimum or aridity index for the place passes it and the table is not used for it"
@@ -674,6 +675,8 @@
         "as_japan_korea": 0.5
       },
       "leafRetention": 1,
+      "whorlBranches": 5,
+      "whorlSpacingPerHeight": 0.03,
       "sources": [
         "proportions entered in this library in 2026-10 with no source recorded",
         "Missouri Botanical Garden Plant Finder, Picea abies: height, spread, hardiness zones, habit (zones 2-7; 40-60 ft by 25-30 ft)"
@@ -778,12 +781,19 @@
         "au_temperate": 0.4
       },
       "leafRetention": 1,
+      "rosetteLeaves": 40,
+      "leafArch": 0.45,
+      "leafletsPerSide": 36,
+      "leafletSpanShare": 0.9,
+      "leafletLengthShare": 0.12,
+      "leafletAngleRad": 0.8,
       "sources": [
         "proportions entered in this library in 2026-10 with no source recorded",
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Phoenix dactylifera: height, spread, crown shape, leaf length, hardiness zones (zones 9-11)"
       ],
       "estimated": [
-        "latRangesDeg: the band this entry carried as latAbsRangeDeg [0, 33], widened 2 degrees for the Mediterranean plantings"
+        "latRangesDeg: the band this entry carried as latAbsRangeDeg [0, 33], widened 2 degrees for the Mediterranean plantings",
+        "rosetteLeaves: 40 drawn; a crown carries 100 and more (the count is cut for the triangle budget)"
       ]
     },
     {
@@ -818,6 +828,12 @@
         "as_south": 0.3
       },
       "leafRetention": 1,
+      "rosetteLeaves": 26,
+      "leafArch": 0.35,
+      "leafletsPerSide": 14,
+      "leafletSpanShare": 0.4,
+      "leafletLengthShare": 0.4,
+      "leafletAngleRad": 0.55,
       "sources": [
         "proportions entered in this library in 2026-10 with no source recorded",
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Washingtonia robusta: height, spread, crown shape, leaf length, hardiness zones (zones 9-11; 60-90 ft by 10-15 ft)"
@@ -991,7 +1007,7 @@
       "stems": 1,
       "scaffoldBranches": 5,
       "apicalDominance": 0.4,
-      "branchAngleRad": 0.6,
+      "branchAngleRad": 0.5,
       "leafLengthM": 0.07,
       "leafAspect": 0.45,
       "hueDeg": [110, 15],
@@ -1011,6 +1027,7 @@
       "leafOutMonth": 4.7,
       "leafFallMonth": 11.0,
       "autumnHueDeg": [30, 30],
+      "branchAngleHold": 0.7,
       "sources": [
         "Missouri Botanical Garden Plant Finder, Zelkova serrata: height, spread, hardiness zones, habit (50-80 ft, zones 5-8)",
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Zelkova serrata: height, spread, crown shape, leaf length, hardiness zones (spread 50-75 ft; street cultivars narrower)",
@@ -1051,6 +1068,8 @@
       "leafOutMonth": 5.0,
       "leafFallMonth": 11.6,
       "autumnHueDeg": [15, 25],
+      "branchAngleHold": 0.6,
+      "branchAngleOrderGainRad": 0.1,
       "sources": [
         "Missouri Botanical Garden Plant Finder, Quercus palustris: height, spread, hardiness zones, habit (50-70 ft by 40-60 ft, zones 4-8)",
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Quercus palustris: height, spread, crown shape, leaf length, hardiness zones",
@@ -1261,7 +1280,7 @@
       "stems": 1,
       "scaffoldBranches": 4,
       "apicalDominance": 0.42,
-      "branchAngleRad": 0.5,
+      "branchAngleRad": 0.45,
       "leafLengthM": 0.11,
       "leafAspect": 0.5,
       "hueDeg": [110, 14],
@@ -1278,6 +1297,8 @@
       "leafOutMonth": 4.7,
       "leafFallMonth": 11.0,
       "autumnHueDeg": [58, 10],
+      "branchAngleHold": 0.6,
+      "weeping": 0.2,
       "sources": [
         "Missouri Botanical Garden Plant Finder, Ulmus americana: height, spread, hardiness zones, habit (60-80 ft by 40-70 ft, zones 2-9)",
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Ulmus americana: height, spread, crown shape, leaf length, hardiness zones",
@@ -1495,6 +1516,7 @@
       "leafOutMonth": 5.2,
       "leafFallMonth": 10.6,
       "autumnHueDeg": [58, 10],
+      "crownOpenness": 0.4,
       "sources": [
         "Missouri Botanical Garden Plant Finder, Robinia pseudoacacia: height, spread, hardiness zones, habit (30-50 ft by 20-35 ft, zones 3-8)",
         "Mitchell 1974, A Field Guide to the Trees of Britain and Northern Europe (Collins), Robinia pseudoacacia: height, habit, leaf length (to 25 m)"
@@ -1542,13 +1564,13 @@
       "description": "An upright oval, irregular when young, of opposite pinnate leaves; yellow early in autumn.",
       "heightM": [6, 21],
       "crownRadiusPerHeight": 0.355,
-      "crownBaseRatio": 0.3,
+      "crownBaseRatio": 0.35,
       "trunkRadiusPerHeight": 0.02,
       "topShare": 0.5,
       "stems": 1,
       "scaffoldBranches": 4,
       "apicalDominance": 0.5,
-      "branchAngleRad": 0.75,
+      "branchAngleRad": 0.6,
       "leafLengthM": 0.1,
       "leafAspect": 0.35,
       "hueDeg": [108, 14],
@@ -1565,6 +1587,9 @@
       "leafOutMonth": 5.1,
       "leafFallMonth": 10.4,
       "autumnHueDeg": [55, 10],
+      "branchAngleHold": 0.6,
+      "branchAngleOrderGainRad": 0.1,
+      "crownOpenness": 0.45,
       "sources": [
         "Missouri Botanical Garden Plant Finder, Fraxinus pennsylvanica: height, spread, hardiness zones, habit (50-70 ft by 35-50 ft, zones 3-9)",
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Fraxinus pennsylvanica: height, spread, crown shape, leaf length, hardiness zones",
@@ -1603,6 +1628,8 @@
       "leafOutMonth": 4.6,
       "leafFallMonth": 11.2,
       "autumnHueDeg": [25, 12],
+      "whorlBranches": 4,
+      "whorlSpacingPerHeight": 0.03,
       "sources": [
         "Missouri Botanical Garden Plant Finder, Metasequoia glyptostroboides: height, spread, hardiness zones, habit (70-100 ft by 15-25 ft, zones 4-8)",
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Metasequoia glyptostroboides: height, spread, crown shape, leaf length, hardiness zones"
@@ -1635,6 +1662,8 @@
         "eu_central": 0.3
       },
       "leafRetention": 1,
+      "whorlBranches": 5,
+      "whorlSpacingPerHeight": 0.045,
       "sources": [
         "Missouri Botanical Garden Plant Finder, Pinus strobus: height, spread, hardiness zones, habit (50-80 ft by 20-40 ft, zones 3-8)",
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Pinus strobus: height, spread, crown shape, leaf length, hardiness zones"
@@ -1792,6 +1821,7 @@
       "leafOutMonth": 4.5,
       "leafFallMonth": 10.8,
       "autumnHueDeg": [58, 8],
+      "branchAngleHold": 0.9,
       "sources": [
         "Missouri Botanical Garden Plant Finder, Populus nigra 'Italica': height, spread, hardiness zones, habit (40-60 ft by 10-15 ft, zones 3-9)",
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Populus nigra 'Italica': height, spread, crown shape, leaf length, hardiness zones"
@@ -1836,6 +1866,9 @@
       "leafOutMonth": 4.0,
       "leafFallMonth": 11.7,
       "autumnHueDeg": [58, 10],
+      "weeping": 0.9,
+      "branchAngleHold": 0.4,
+      "crownOpenness": 0.45,
       "sources": [
         "Missouri Botanical Garden Plant Finder, Salix babylonica: height, spread, hardiness zones, habit (30-50 ft by 30-50 ft, zones 6-8)",
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Salix babylonica: height, spread, crown shape, leaf length, hardiness zones"
@@ -1911,6 +1944,7 @@
         "au_temperate": 0.4
       },
       "leafRetention": 1,
+      "branchAngleHold": 0.7,
       "sources": [
         "Missouri Botanical Garden Plant Finder, Cedrus libani: height, spread, hardiness zones, habit (40-60 ft by 40-60 ft, larger with age; zones 6-7)",
         "Mitchell 1974, A Field Guide to the Trees of Britain and Northern Europe (Collins), Cedrus libani: height, habit, leaf length (to 40 m)"
@@ -1925,13 +1959,13 @@
       "description": "A dense, regular oval of fine ascending branches and pleated leaves, often kept as a narrow street form.",
       "heightM": [6, 25],
       "crownRadiusPerHeight": 0.35,
-      "crownBaseRatio": 0.2,
+      "crownBaseRatio": 0.15,
       "trunkRadiusPerHeight": 0.02,
       "topShare": 0.45,
       "stems": 1,
       "scaffoldBranches": 5,
       "apicalDominance": 0.55,
-      "branchAngleRad": 0.6,
+      "branchAngleRad": 0.45,
       "leafLengthM": 0.09,
       "leafAspect": 0.5,
       "hueDeg": [112, 12],
@@ -1949,6 +1983,8 @@
       "leafOutMonth": 4.6,
       "leafFallMonth": 11.0,
       "autumnHueDeg": [55, 12],
+      "branchAngleHold": 0.8,
+      "branchAngleOrderGainRad": -0.03,
       "sources": [
         "Missouri Botanical Garden Plant Finder, Carpinus betulus: height, spread, hardiness zones, habit (40-60 ft by 30-40 ft, zones 4-8)",
         "Mitchell 1974, A Field Guide to the Trees of Britain and Northern Europe (Collins), Carpinus betulus: height, habit, leaf length"
@@ -1992,7 +2028,7 @@
       "description": "A small, compact, round evergreen head of glossy dark leaves on a short straight trunk; the street tree of southern Spain.",
       "heightM": [2.5, 9],
       "crownRadiusPerHeight": 0.4,
-      "crownBaseRatio": 0.35,
+      "crownBaseRatio": 0.4,
       "trunkRadiusPerHeight": 0.02,
       "topShare": 0.58,
       "stems": 1,
@@ -2019,6 +2055,7 @@
         "as_east_continental": 0.4
       },
       "leafRetention": 1,
+      "branchAngleHold": 0.3,
       "sources": [
         "Morton 1987, Fruits of Warm Climates, Sour Orange (Citrus aurantium): height 3-9 m, leaf 6.5-13.75 cm by 3.75-10 cm, cold tolerance"
       ],
@@ -2094,6 +2131,7 @@
         "nz": 0.3
       },
       "leafRetention": 0.3,
+      "crownOpenness": 0.5,
       "sources": [
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Jacaranda mimosifolia: height, spread, crown shape, leaf length, hardiness zones (ST-317: 25-40 ft by 45-60 ft, zones 9B-11)",
         "Missouri Botanical Garden Plant Finder, Jacaranda mimosifolia: height, spread, hardiness zones, habit (25-50 ft by 15-30 ft)"
@@ -2151,13 +2189,13 @@
       "description": "A dense, dark, rounded evergreen dome of long leathery leaves on a stout short trunk.",
       "heightM": [4, 30],
       "crownRadiusPerHeight": 0.47,
-      "crownBaseRatio": 0.25,
-      "trunkRadiusPerHeight": 0.025,
+      "crownBaseRatio": 0.2,
+      "trunkRadiusPerHeight": 0.035,
       "topShare": 0.58,
       "stems": 1,
       "scaffoldBranches": 4,
       "apicalDominance": 0.4,
-      "branchAngleRad": 0.85,
+      "branchAngleRad": 1.05,
       "leafLengthM": 0.25,
       "leafAspect": 0.2,
       "hueDeg": [118, 14],
@@ -2176,6 +2214,8 @@
         "na_southeast": 0.3
       },
       "leafRetention": 1,
+      "branchAngleHold": 0.5,
+      "crownOpenness": 0.05,
       "sources": [
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Mangifera indica: height, spread, crown shape, leaf length, hardiness zones (30-45 ft by 30-40 ft, zones 10B-11)",
         "Orwa et al. 2009, Agroforestree Database 4.0 (World Agroforestry Centre), Mangifera indica: height, crown, leaf dimensions (to 30 m)"
@@ -2211,6 +2251,12 @@
         "au_interior_north": 0.5
       },
       "leafRetention": 1,
+      "rosetteLeaves": 16,
+      "leafArch": 0.6,
+      "leafletsPerSide": 40,
+      "leafletSpanShare": 0.9,
+      "leafletLengthShare": 0.2,
+      "leafletAngleRad": 0.95,
       "sources": [
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Roystonea regia: height, spread, crown shape, leaf length, hardiness zones (50-80 ft by 15-25 ft, zones 10-11)"
       ],
@@ -2247,12 +2293,19 @@
         "au_interior_north": 0.6
       },
       "leafRetention": 1,
+      "rosetteLeaves": 28,
+      "leafArch": 0.75,
+      "leafletsPerSide": 40,
+      "leafletSpanShare": 0.85,
+      "leafletLengthShare": 0.2,
+      "leafletAngleRad": 1.0,
       "sources": [
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Cocos nucifera: height, spread, crown shape, leaf length, hardiness zones (ST-177: 50-60 ft by 15-25 ft, zones 10B-11)",
         "Orwa et al. 2009, Agroforestree Database 4.0 (World Agroforestry Centre), Cocos nucifera: height, crown, leaf dimensions (to 30 m, fronds 4-6 m)"
       ],
       "estimated": [
-        "usdaZones: warm end raised to 13, native to equatorial coasts"
+        "usdaZones: warm end raised to 13, native to equatorial coasts",
+        "leafletsPerSide: 40 drawn; a leaf carries about 100 a side"
       ]
     },
     {
@@ -2284,6 +2337,7 @@
         "au_interior_north": 0.5
       },
       "leafRetention": 0.8,
+      "branchAngleHold": 0.5,
       "sources": [
         "Staples & Elevitch 2006, Samanea saman (rain tree), Species Profiles for Pacific Island Agroforestry: 15-25 m tall, crown typically 30 m across",
         "NParks Flora & Fauna Web (Singapore), Samanea saman: 20-30 m tall, crown 20-30 m"
@@ -2325,6 +2379,8 @@
         "af_southern": 0.5
       },
       "leafRetention": 0.3,
+      "branchAngleHold": 0.5,
+      "crownOpenness": 0.3,
       "sources": [
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Delonix regia: height, spread, crown shape, leaf length, hardiness zones (35-40 ft by 40-60 ft, zones 10B-11)"
       ],
@@ -2432,6 +2488,7 @@
         "na_southwest": 0.4
       },
       "leafRetention": 0.95,
+      "branchAngleHold": 0.5,
       "sources": [
         "Missouri Botanical Garden Plant Finder, Quercus virginiana: height, spread, hardiness zones, habit (40-80 ft by 60-100 ft, zones 8-10)",
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Quercus virginiana: height, spread, crown shape, leaf length, hardiness zones"
@@ -2506,6 +2563,8 @@
         "as_southeast_monsoon": 0.3
       },
       "leafRetention": 1,
+      "whorlBranches": 5,
+      "whorlSpacingPerHeight": 0.05,
       "sources": [
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Araucaria heterophylla: height, spread, crown shape, leaf length, hardiness zones (60-80 ft by 12-20 ft, zones 10-11)"
       ],
@@ -2539,6 +2598,8 @@
         "as_south": 0.4
       },
       "leafRetention": 0.7,
+      "branchAngleHold": 0.6,
+      "crownOpenness": 0.4,
       "sources": [
         "Orwa et al. 2009, Agroforestree Database 4.0 (World Agroforestry Centre), Acacia (Vachellia) tortilis: height, crown, leaf dimensions (4-21 m; flat-topped umbrella crown; leaflets 1-2 mm)"
       ],
@@ -2554,13 +2615,13 @@
       "description": "A low, open, rounded crown of drooping feathery leaves on crooked limbs from a short, often divided trunk.",
       "heightM": [3, 10],
       "crownRadiusPerHeight": 0.5,
-      "crownBaseRatio": 0.25,
+      "crownBaseRatio": 0.15,
       "trunkRadiusPerHeight": 0.03,
       "topShare": 0.6,
-      "stems": 1,
+      "stems": 3,
       "scaffoldBranches": 4,
       "apicalDominance": 0.3,
-      "branchAngleRad": 0.9,
+      "branchAngleRad": 1.0,
       "leafLengthM": 0.04,
       "leafAspect": 0.12,
       "hueDeg": [100, 15],
@@ -2579,13 +2640,18 @@
         "au_interior_north": 0.4
       },
       "leafRetention": 0.2,
+      "branchAngleHold": 0.5,
+      "branchAngleOrderGainRad": 0.1,
+      "weeping": 0.3,
+      "crownOpenness": 0.7,
       "sources": [
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Prosopis glandulosa: height, spread, crown shape, leaf length, hardiness zones (ST-502: 30 ft by 30 ft, rounded)",
         "USDA NRCS Plant Guide, Honey mesquite (Prosopis glandulosa): range, leaflets"
       ],
       "estimated": [
         "usdaZones: from its native range, Kansas to northern Mexico",
-        "leafRetention: winter-deciduous, late to leaf; months not given"
+        "leafRetention: winter-deciduous, late to leaf; months not given",
+        "stems: 3, \"often multi-trunked\" in the sources; no count published"
       ]
     },
     {
@@ -2621,6 +2687,8 @@
       "leafOutMonth": 4.5,
       "leafFallMonth": 11.0,
       "autumnHueDeg": [52, 10],
+      "whorlBranches": 5,
+      "whorlSpacingPerHeight": 0.035,
       "sources": [
         "Missouri Botanical Garden Plant Finder, Larix decidua: height, spread, hardiness zones, habit (60-100 ft by 20-30 ft, zones 2-6)",
         "Mitchell 1974, A Field Guide to the Trees of Britain and Northern Europe (Collins), Larix decidua: height, habit, leaf length"
@@ -2654,6 +2722,9 @@
         "eu_central": 0.3
       },
       "leafRetention": 1,
+      "whorlBranches": 4,
+      "whorlSpacingPerHeight": 0.03,
+      "weeping": 0.15,
       "sources": [
         "Missouri Botanical Garden Plant Finder, Tsuga canadensis: height, spread, hardiness zones, habit (40-70 ft by 25-35 ft, zones 3-7)",
         "Gilman & Watson 1993-94, US Forest Service / University of Florida IFAS fact sheet series (ST-), Tsuga canadensis: height, spread, crown shape, leaf length, hardiness zones"
@@ -2691,6 +2762,8 @@
         "na_northeast": 0.4
       },
       "leafRetention": 1,
+      "whorlBranches": 5,
+      "whorlSpacingPerHeight": 0.03,
       "sources": [
         "Missouri Botanical Garden Plant Finder, Pseudotsuga menziesii: height, spread, hardiness zones, habit (40-80 ft by 12-20 ft in cultivation, zones 4-6)",
         "Burns & Honkala 1990, Silvics of North America vol. 1 (USDA Agriculture Handbook 654), Pseudotsuga menziesii: to 75 m and more on the coast"
