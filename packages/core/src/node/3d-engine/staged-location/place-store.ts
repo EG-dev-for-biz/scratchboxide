@@ -246,6 +246,24 @@ export async function loadPlaceObject(store: PlaceStore, objectKey: string): Pro
     return (await readJson<PlaceObjectRecord>(store, objectRecordKey(store, objectKey)))?.value;
 }
 
+const microEditPlanKey = (store: PlaceStore, buildingId: string) => `${store.prefix}/micro-edits/${recordKey(buildingId)}.json`;
+
+/**
+ * A building's micro-edit plan (micro-edits.ts) and the generation it was read at; undefined when it has none yet. The
+ * plan lives at `micro-edits/<building id>.json` beside the place's objects.
+ */
+export async function loadMicroEditPlan<T>(store: PlaceStore, buildingId: string): Promise<{ plan: T; generation: string } | undefined> {
+    if (!store.bucket) return undefined;
+    const r = await readJson<T>(store, microEditPlanKey(store, buildingId));
+    return r ? { plan: r.value, generation: r.generation } : undefined;
+}
+
+/** Writes the plan only over `generation` (NO_GENERATION when it had none): of two runs that read one plan, one write lands. */
+export async function saveMicroEditPlan(store: PlaceStore, buildingId: string, plan: unknown, generation: string = NO_GENERATION): Promise<{ generation: string } | 'conflict'> {
+    if (!store.bucket) throw new Error(store.where.reason ?? 'no place store');
+    return writeJson(store, microEditPlanKey(store, buildingId), plan, generation);
+}
+
 export type LeaseResult = { ok: true; generation: string; manifest: PlaceManifest; lease: PlaceLease } | { ok: false; reason: string; heldBy?: PlaceLease };
 
 /**
