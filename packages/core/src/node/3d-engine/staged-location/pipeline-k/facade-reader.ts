@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 /**
- * The facade reader: a vision agent deduces each plane's openings and their glass, and judges its own result.
+ * The facade reader: a vision agent deduces each plane's openings, and judges its own result.
  *
  * Brightness rules cannot say where a building's windows are: on a tower each window is lit its own way (sky, blinds, a
  * lamp), glass is darker than stone on one wall and lighter than dark spandrels on the next. A vision model sees them. Per
@@ -19,8 +19,7 @@
  *     as boxes in per-mille of the plane;
  *  2. unit cell: per zone with openings, a full-resolution crop of it (the best-covered part, up to readCropM tall). The
  *     model gives every row of openings it sees, each window on its own (a bay of two windows is two openings), with its
- *     pane splits, and the zone's glass in its own words and as numbers (how see-through and how reflective, its tint,
- *     whether it is an opaque panel);
+ *     pane splits, and in a few words what lies between its rows;
  *  3. tiling: the zone is filled from the model's cell: its columns at their read places, its rows repeated through the
  *     zone at the read storey pitch (the pitch measured over the whole zone where it repeats three times or more: the
  *     strongest repeat of the image near the read pitch, whichever way the brightness goes), only where the photo covers
@@ -42,9 +41,9 @@
  * does not change the photo), so a rebuild or a later run asks only about the planes whose photo changed.
  *
  * The reading needs only the photos, so it runs beside the window fit (readPlanes); its openings and their equal-split
- * panes then replace the window fit's for that plane in window_fit.json (mergeReadings) (the window fit's
- * own kept as `structural`), with each zone's glass beside them, so the wall grammar, the lattice and the material regions
- * read them as they read the window fit's. Photo-inferred: the model reads and judges, the photo places. The model's
+ * panes then replace the window fit's for that plane in its own window_fit.json (mergeReadings) (the window fit's
+ * own kept as `structural`). On the finished exterior (twin-reader.ts) nothing is drawn from them: the records, the brief and
+ * what lies between the windows are told to the material reads. Photo-inferred: the model reads and judges, the photo places. The model's
  * words are labels only; what the build uses are its numbers.
  */
 
@@ -52,7 +51,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { decodePngAsync, encodePngAsync } from '../../../png-codec-pool';
-import type { FitFrame, FittedPlane, WindowFitFile, WindowRect } from '../window-fit';
+import type { FitFrame, WindowFitFile, WindowRect } from '../window-fit';
 import { contactSheet, contextFor, parseBrief, briefPrompt, planePlaces, type BuildingBrief, type NamedBuilding, type PlaneFamily } from './facade-reader-brief';
 import { exemplarOf, matchExemplar, mergeMatches, TEMPLATE_PARAMS, type TemplateMatch, type WindowExemplar } from './facade-reader-template';
 import { planePixelsKey, readingKey, type ModelReadingStore } from './model-readings';
@@ -61,7 +60,7 @@ import { matchExemplarsNative } from './native/template-match-native';
 import { readOccludedAsync, unreadMask } from './occlusion';
 import { PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
 
-export const FACADE_READER_VERSION = 'facade-reader/11';
+export const FACADE_READER_VERSION = 'facade-reader/12';
 /** The prompts' version, in every kept reading's key (with the prompt's own text): a change to what is asked asks again. */
 export const FACADE_READER_PROMPT_VERSION = 'facade-reader-prompts/1';
 
@@ -119,13 +118,10 @@ export type FacadeAsk = (png: Buffer | Buffer[], prompt: string, kind: FacadeAsk
 /** A zone of the plane with one pattern of openings or none, in per-mille of the plane. */
 export interface FacadeZone { box: [number, number, number, number]; openings: boolean; label?: string }
 
-/** The zone's glass as the model sees it: its words (a label) and its numbers (what the build uses). */
-export interface GlassReading { label?: string; transparency: number; reflectivity: number; tint?: string; opaque: boolean }
-
-/** The model's reading of a crop: rows of openings, in per-mille of the crop (0 top/left, 1000 bottom/right), and the glass. */
+/** The model's reading of a crop: rows of openings, in per-mille of the crop (0 top/left, 1000 bottom/right). */
 export interface FacadeReading {
     rows: Array<{ y: [number, number]; openings: Array<{ x: [number, number]; panes: number }> }>;
-    glass?: GlassReading; between?: string; conf: number; notes?: string;
+    between?: string; conf: number; notes?: string;
 }
 
 export interface FacadeJudgement { accept: boolean; badColumns: number[]; conf: number; notes?: string }
@@ -134,7 +130,7 @@ export interface ZoneRecord {
     label?: string; region: ImageRegion; outcome: 'drawn' | 'none' | 'rejected' | 'failed'; why: string;
     reading?: { rows: number; openings: number; conf: number; notes?: string; between?: string };
     fit?: { pitchPx: number; pitchM: number; measured: boolean; /** The storey pitch taken from the building's wide walls (readPlanes' guide). */ guided?: boolean; columns: number; rows: number; openings: number };
-    glass?: GlassReading; judge?: FacadeJudgement;
+    judge?: FacadeJudgement;
     /** Drawn from the family's window found again in this photo (facade-reader-template.ts), not read: from which plane, how many matched, how many filled in on their grid. */
     template?: { fromPlane: number; matches: number; gridFilled: number };
 }
@@ -167,15 +163,15 @@ export function overviewPrompt(widthM: number, heightM: number, roof = false): s
     ].join('\n');
 }
 
-/** What a reading gives for one image (readPrompt, readsPrompt): its rows of openings, each window on its own, then its glass. */
+/** What a reading gives for one image (readPrompt, readsPrompt): its rows of openings, each window on its own. */
 const readRules = (roof: boolean) => [
     `List every ${roof ? 'line' : 'horizontal row'} of openings you can see (windows, glazed panels, doors, rooflights, any glazed or open bay): one row is the openings that share a top and a bottom edge${roof ? '' : ' (usually one storey)'}. For each row give:`,
     '- "y": [top, bottom] of its openings in per-mille of the image height (0 = top edge, 1000 = bottom edge), on the glass, not the frame, the spandrel or the sill;',
     '- "openings": each opening from left to right as {"x": [left, right] in per-mille of the image width, "panes": how many side-by-side panes vertical mullions divide it into (1 if undivided)}.',
     'Each window on its own: a bay or a frame holding two or three windows side by side is two or three openings, never one. Openings never overlap; never continue a pattern into grey areas or past the image edge; leave out a row the image edge cuts.',
-    'Also give "glass": {"label": a few words on the glass (e.g. clear, tinted, mirrored, frosted, or an opaque panel), "transparency": 0..1, "reflectivity": 0..1, "tint": its colour as #rrggbb, "opaque": true when the openings are panels, not glass}; "between": a few words on what lies between the rows; "conf": 0..100; "notes": one short sentence.'
+    'Also give "between": a few words on what lies between the rows; "conf": 0..100; "notes": one short sentence.'
 ];
-const READ_REPLY = '"rows":[{"y":[t,b],"openings":[{"x":[l,r],"panes":1}]}],"glass":{"label":"...","transparency":0.5,"reflectivity":0.3,"tint":"#6b7a80","opaque":false},"between":"...","conf":0,"notes":"..."';
+const READ_REPLY = '"rows":[{"y":[t,b],"openings":[{"x":[l,r],"panes":1}]}],"between":"...","conf":0,"notes":"..."';
 
 export function readPrompt(widthM: number, heightM: number, roof = false): string {
     return [where(widthM, heightM, roof, true), ...readRules(roof), `Answer with JSON only: {${READ_REPLY}}`].join('\n');
@@ -227,7 +223,6 @@ const jsonOf = (text: string): any => {
 const pm = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= -50 && v <= 1050;
 const clampPm = (v: number) => Math.max(0, Math.min(1000, v));
 const confOf = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 50);
-const unit = (v: unknown, fallback: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : fallback);
 
 /** Parses and checks an overview; throws on anything malformed. */
 export function parseZones(text: string): { zones: FacadeZone[]; conf: number } {
@@ -259,12 +254,7 @@ export function parseReading(text: string): FacadeReading {
         const y0 = clampPm(Math.min(r.y[0], r.y[1])), y1 = clampPm(Math.max(r.y[0], r.y[1]));
         if (y1 > y0 && openings.length) rows.push({ y: [y0, y1], openings });
     }
-    const g = j.glass && typeof j.glass === 'object' ? j.glass : undefined;
-    const glass: GlassReading | undefined = g ? {
-        ...(typeof g.label === 'string' ? { label: g.label.slice(0, 60) } : {}), transparency: unit(g.transparency, 0.5), reflectivity: unit(g.reflectivity, 0.3),
-        ...(typeof g.tint === 'string' && /^#[0-9a-f]{6}$/i.test(g.tint) ? { tint: g.tint.toLowerCase() } : {}), opaque: g.opaque === true
-    } : undefined;
-    return { rows, ...(glass ? { glass } : {}), ...(typeof j.between === 'string' ? { between: j.between.slice(0, 80) } : {}), conf: confOf(j.conf), ...(typeof j.notes === 'string' ? { notes: j.notes.slice(0, 200) } : {}) };
+    return { rows, ...(typeof j.between === 'string' ? { between: j.between.slice(0, 80) } : {}), conf: confOf(j.conf), ...(typeof j.notes === 'string' ? { notes: j.notes.slice(0, 200) } : {}) };
 }
 
 export function parseJudgement(text: string): FacadeJudgement {
@@ -527,11 +517,11 @@ function asker(ask: FacadeAsk, memory: ReadingMemory | undefined, tally: CallTal
 
 /**
  * The agent on one plane (see the file comment): overview, a unit cell per zone, the zone tiled, judged. The record says
- * what each zone came to; the openings, panes and glass zones are returned when any zone was drawn. With `memory`, an
+ * what each zone came to; the openings and panes are returned when any zone was drawn. With `memory`, an
  * answer kept for the same question about the same photo is given back instead of a call; `tally` counts both (a
  * plane's template attempt and its reading share one).
  */
-export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> | undefined, f: FacadeFrame, ask: FacadeAsk, P: FacadeReaderParams = FACADE_READER_PARAMS, review?: (png: Buffer, tag: string) => void, guide?: { pitchM: number } | Promise<{ pitchM: number } | undefined>, context = '', memory?: ReadingMemory, tally: CallTally = { calls: 0, reused: 0 }): Promise<{ record: FacadeReadRecord; rects?: WindowRect[]; panes?: WindowRect[]; glass?: Array<{ region: ImageRegion; glass: GlassReading }>; exemplars?: WindowExemplar[] }> {
+export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> | undefined, f: FacadeFrame, ask: FacadeAsk, P: FacadeReaderParams = FACADE_READER_PARAMS, review?: (png: Buffer, tag: string) => void, guide?: { pitchM: number } | Promise<{ pitchM: number } | undefined>, context = '', memory?: ReadingMemory, tally: CallTally = { calls: 0, reused: 0 }): Promise<{ record: FacadeReadRecord; rects?: WindowRect[]; panes?: WindowRect[]; exemplars?: WindowExemplar[] }> {
     const t0 = Date.now(), W = img.width, H = img.height, roof = f.kind === 'roof';
     const rec = (outcome: FacadeReadRecord['outcome'], why: string, zones?: ZoneRecord[]): FacadeReadRecord => ({ facadeId: f.facadeId, outcome, why, ...(zones ? { zones } : {}), calls: tally.calls, ...(tally.reused ? { reused: tally.reused } : {}), ms: Date.now() - t0 });
     const L = luminanceOf(img, uncovered);
@@ -587,7 +577,6 @@ export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> 
         const reading = z.reading, zr = z.zr;
         if (!reading) continue;
         zr.reading = { rows: reading.rows.length, openings: reading.rows.reduce((a, r) => a + r.openings.length, 0), conf: reading.conf, ...(reading.notes ? { notes: reading.notes } : {}), ...(reading.between ? { between: reading.between } : {}) };
-        if (reading.glass) zr.glass = reading.glass;
         if (reading.conf < P.minConf) { zr.outcome = 'none'; zr.why = `the model was unsure of its reading (${reading.conf})`; continue; }
         if (!reading.rows.length) { zr.outcome = 'none'; zr.why = 'the model saw no openings in the zone'; continue; }
         // a narrow face's tiling waits here for the building's storey pitch (every wide wall read)
@@ -618,7 +607,7 @@ export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> 
         } catch (err) { for (const z of group) judged.set(z, { failed: errText(err) }); }
     }));
     // 5. each judged zone: its accepted columns drawn, and its window kept for its family's other planes
-    const drawZone = (z: Zone): { zr: ZoneRecord; rects: WindowRect[]; panes: WindowRect[]; glass?: { region: ImageRegion; glass: GlassReading }; exemplar?: WindowExemplar } => {
+    const drawZone = (z: Zone): { zr: ZoneRecord; rects: WindowRect[]; panes: WindowRect[]; exemplar?: WindowExemplar } => {
         const zr = z.zr, rects: WindowRect[] = [], panes: WindowRect[] = [], j = judged.get(z), t = z.t, kept = z.kept!;
         if (!t || !j) return { zr, rects, panes };
         if (isFailure(j)) { zr.why = `the judgement failed: ${j.failed}`.slice(0, 300); return { zr, rects, panes }; }
@@ -642,16 +631,15 @@ export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> 
         let exemplar: WindowExemplar | undefined;
         for (const { r, i } of byMiddle) { exemplar = exemplarOf({ L, W, H, pixel: f.pixel }, r, t.columns[t.columnOf[i]].panes, f.facadeId, z.label); if (exemplar) break; }
         if (exemplar && t.rows.length > 1 && t.pitch > 0) exemplar.pitchM = t.pitch * f.pixel;
-        return { zr, rects, panes, ...(z.reading!.glass ? { glass: { region: z.region, glass: z.reading!.glass } } : {}), ...(exemplar ? { exemplar } : {}) };
+        return { zr, rects, panes, ...(exemplar ? { exemplar } : {}) };
     };
     // each zone's result in zone order
     const results = work.map(drawZone);
     const zoneRecs = results.map(r => r.zr), rects = results.flatMap(r => r.rects), panes = results.flatMap(r => r.panes);
-    const glassZones = results.flatMap(r => (r.glass ? [r.glass] : []));
     const drawnZones = zoneRecs.filter(z => z.outcome === 'drawn');
     if (!drawnZones.length) return { record: rec('kept', zoneRecs.map(z => `${z.label ?? 'zone'}: ${z.why}`).join('; ').slice(0, 400) || 'no zone drawn', zoneRecs) };
     const exemplars = results.flatMap(r => (r.exemplar ? [r.exemplar] : []));
-    return { record: rec('replaced', `${rects.length} openings in ${drawnZones.length} of ${zoneRecs.length} zones`, zoneRecs), rects, panes, glass: glassZones, ...(exemplars.length ? { exemplars } : {}) };
+    return { record: rec('replaced', `${rects.length} openings in ${drawnZones.length} of ${zoneRecs.length} zones`, zoneRecs), rects, panes, ...(exemplars.length ? { exemplars } : {}) };
 }
 
 /**
@@ -659,7 +647,7 @@ export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> 
  * the matches gathered into columns and judged on two crops as a reading's outlines are. Undefined when too few match or
  * the judge does not accept them (the plane is then read). Its judge is kept and given back as readFacade's answers are.
  */
-export async function readFromTemplates(img: FacadePhoto, uncovered: ArrayLike<number> | undefined, f: FacadeFrame, family: { name: string; exemplars: WindowExemplar[]; glass?: GlassReading; /** The lead's openings per covered square metre. */ density?: number }, ask: FacadeAsk, P: FacadeReaderParams = FACADE_READER_PARAMS, review?: (png: Buffer, tag: string) => void, memory?: ReadingMemory, tally: CallTally = { calls: 0, reused: 0 }): Promise<{ record: FacadeReadRecord; rects: WindowRect[]; panes: WindowRect[]; glass?: Array<{ region: ImageRegion; glass: GlassReading }> } | undefined> {
+export async function readFromTemplates(img: FacadePhoto, uncovered: ArrayLike<number> | undefined, f: FacadeFrame, family: { name: string; exemplars: WindowExemplar[]; /** The lead's openings per covered square metre. */ density?: number }, ask: FacadeAsk, P: FacadeReaderParams = FACADE_READER_PARAMS, review?: (png: Buffer, tag: string) => void, memory?: ReadingMemory, tally: CallTally = { calls: 0, reused: 0 }): Promise<{ record: FacadeReadRecord; rects: WindowRect[]; panes: WindowRect[]; } | undefined> {
     const t0 = Date.now(), W = img.width, H = img.height;
     const L = luminanceOf(img, uncovered);
     // the photo's matches of each exemplar give its grid (facade-reader-template.ts): the columns they stand in, at least a
@@ -729,12 +717,12 @@ export async function readFromTemplates(img: FacadePhoto, uncovered: ArrayLike<n
     if (!outRects.length || (family.density !== undefined && outRects.length < P.templateDensity * family.density * coveredM2)) return undefined;
     const from = family.exemplars[0].fromPlane, gridFilled = 0;
     const zr: ZoneRecord = {
-        label: `${family.name}: plane ${from}'s window`, region: box, outcome: 'drawn', judge, ...(family.glass ? { glass: family.glass } : {}),
+        label: `${family.name}: plane ${from}'s window`, region: box, outcome: 'drawn', judge,
         why: `${outRects.length} openings on the grid plane ${from}'s window was found in, in ${columns - bad.size} columns${bad.size ? `; ${bad.size} columns rejected by the judge` : ''}`,
         template: { fromPlane: from, matches: matches.length, gridFilled }
     };
     const record: FacadeReadRecord = { facadeId: f.facadeId, outcome: 'replaced', why: zr.why, zones: [zr], family: family.name, calls: tally.calls, ...(tally.reused ? { reused: tally.reused } : {}), ms: Date.now() - t0 };
-    return { record, rects: outRects, panes, ...(family.glass ? { glass: [{ region: box, glass: family.glass }] } : {}) };
+    return { record, rects: outRects, panes };
 }
 
 /** The area the photo covers (m²). */
@@ -744,8 +732,8 @@ export function coveredAreaM2(L: Float32Array, pixel: number): number {
     return n * pixel * pixel;
 }
 
-/** One plane's drawn openings, panes and glass zones, in its photo's pixels. */
-export interface PlaneReading { facadeId: number; width: number; height: number; rects: WindowRect[]; panes: WindowRect[]; glass?: Array<{ region: ImageRegion; glass: GlassReading }> }
+/** One plane's drawn openings and panes, in its photo's pixels. */
+export interface PlaneReading { facadeId: number; width: number; height: number; rects: WindowRect[]; panes: WindowRect[] }
 
 export interface FacadeReaderFile {
     version: string; params: FacadeReaderParams; ms: number; facades: FacadeReadRecord[];
@@ -842,7 +830,7 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
     for (const fam of brief?.families ?? []) for (const id of fam.planes) familyOf.set(id, fam);
     // a family's lead (its first plane in queue order) is read; its other planes wait for it, then look for its accepted
     // windows in their own photo (facade-reader-template.ts) and are read only where they do not hold
-    type FamilyState = { lead: number; exemplars: WindowExemplar[]; glass?: GlassReading; density?: number; done: Promise<void>; settle: () => void };
+    type FamilyState = { lead: number; exemplars: WindowExemplar[]; density?: number; done: Promise<void>; settle: () => void };
     const families = new Map<PlaneFamily, FamilyState>();
     for (const f of queue) {
         const fam = familyOf.get(f.facadeId);
@@ -872,16 +860,16 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
                 const img = { rgba: d.rgba, width: d.width, height: d.height }, review = (png: Buffer, tag: string) => fs.writeFileSync(path.join(reviewDir, `${f.facadeId}_${tag}.png`), png);
                 // the plane's answers kept by its photo and what it may not read (uncovered or occluded)
                 const memory = opts.readings ? { ...opts.readings, plane: planePixelsKey(img, uncovered) } : undefined;
-                let r: { record: FacadeReadRecord; rects?: WindowRect[]; panes?: WindowRect[]; glass?: Array<{ region: ImageRegion; glass: GlassReading }>; exemplars?: WindowExemplar[] } | undefined;
+                let r: { record: FacadeReadRecord; rects?: WindowRect[]; panes?: WindowRect[]; exemplars?: WindowExemplar[] } | undefined;
                 if (P.template && st && fam && !isLead) {
                     await st.done;
-                    if (st.exemplars.length) r = await readFromTemplates(img, uncovered, f, { name: fam.name, exemplars: st.exemplars, ...(st.glass ? { glass: st.glass } : {}), ...(st.density !== undefined ? { density: st.density } : {}) }, limited, P, review, memory, tally);
+                    if (st.exemplars.length) r = await readFromTemplates(img, uncovered, f, { name: fam.name, exemplars: st.exemplars, ...(st.density !== undefined ? { density: st.density } : {}) }, limited, P, review, memory, tally);
                 }
                 r ??= await readFacade(img, uncovered, f, limited, P, review, wide(f) ? undefined : guideRead, P.brief ? contextFor(brief, places.get(f.facadeId), fam, opts.building) : '', memory, tally);
                 if (fam) r.record.family = fam.name;
-                if (isLead && r.exemplars && r.rects) { st!.exemplars = r.exemplars; st!.glass = r.glass?.[0]?.glass; st!.density = r.rects.length / Math.max(1, coveredAreaM2(luminanceOf(img, uncovered), f.pixel)); }
+                if (isLead && r.exemplars && r.rects) { st!.exemplars = r.exemplars; st!.density = r.rects.length / Math.max(1, coveredAreaM2(luminanceOf(img, uncovered), f.pixel)); }
                 records.push(r.record);
-                if (r.rects && r.panes) readings.push({ facadeId: f.facadeId, width: d.width, height: d.height, rects: r.rects, panes: r.panes, ...(r.glass?.length ? { glass: r.glass } : {}) });
+                if (r.rects && r.panes) readings.push({ facadeId: f.facadeId, width: d.width, height: d.height, rects: r.rects, panes: r.panes });
             } catch (err) {
                 if (opts.signal?.aborted) { settleGuide(undefined); throw err; }
                 records.push({ facadeId: f.facadeId, outcome: 'failed', why: (err instanceof Error ? err.message : String(err)).slice(0, 300), calls: tally.calls, ...(tally.reused ? { reused: tally.reused } : {}), ms: 0 });
@@ -907,24 +895,12 @@ export function mergeReadings(orthosDir: string, fit: WindowFitFile, readings: P
         let entry = fit.facades.find(e => e.facadeId === r.facadeId);
         if (entry && 'error' in entry) continue;
         if (!entry) { entry = { facadeId: r.facadeId, width: r.width, height: r.height, rects: [], panes: [], bands: [], ms: 0 }; fit.facades.push(entry); }
-        const e = entry as Extract<WindowFitFile['facades'][number], { rects: WindowRect[] }> & { structural?: { rects: WindowRect[]; panes?: WindowRect[]; generated?: WindowRect[] }; reader?: string; glass?: PlaneReading['glass'] };
+        const e = entry as Extract<WindowFitFile['facades'][number], { rects: WindowRect[] }> & { structural?: { rects: WindowRect[]; panes?: WindowRect[]; generated?: WindowRect[] }; reader?: string };
         if (e.reader !== FACADE_READER_VERSION) e.structural = { rects: e.rects, ...(e.panes ? { panes: e.panes } : {}), ...(e.generated ? { generated: e.generated } : {}) };
         e.rects = r.rects; e.panes = r.panes; delete e.generated; e.reader = FACADE_READER_VERSION;
-        if (r.glass) e.glass = r.glass; else delete e.glass;
     }
     (fit as WindowFitFile & { reader?: string }).reader = FACADE_READER_VERSION;
     fs.writeFileSync(path.join(orthosDir, 'window_fit.json'), JSON.stringify(fit));
     return fit;
 }
 
-/** The planes past the walls (planes.json) whose openings the reader placed, as fitted planes for the material regions' scan pieces. */
-export function readerPlanesOf(orthosDir: string): FittedPlane[] {
-    const pf = path.join(orthosDir, PLANES_FILE), wf = path.join(orthosDir, 'window_fit.json');
-    if (!fs.existsSync(pf) || !fs.existsSync(wf)) return [];
-    const fit = JSON.parse(fs.readFileSync(wf, 'utf8')) as WindowFitFile;
-    return (JSON.parse(fs.readFileSync(pf, 'utf8')) as PlaneOrthosFile).planes.flatMap(f => {
-        const e = fit.facades.find(x => x.facadeId === f.facadeId);
-        if (!e || 'error' in e || !e.rects.length || e.width !== f.width || e.height !== f.height) return [];
-        return [{ facadeId: f.facadeId, centroid: f.centroid, normal: f.normal, axisS: f.axisS, axisT: f.axisT, orthoSMin: f.orthoSMin, orthoTMax: f.orthoTMax, pixel: f.pixel, width: f.width, height: f.height, windows: e.rects, panes: e.panes ?? [] }];
-    });
-}

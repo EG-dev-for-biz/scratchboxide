@@ -9,8 +9,8 @@
 
 /**
  * The tile-only material harvest: texture energy measured at the tile's texel (bands it cannot resolve left out), a library
- * set measured as the tiles would show it, and appearance classes read from the wall alone (fitted windows left out) with
- * their texture.
+ * set measured as the tiles would show it, and appearance classes read from every texel (the windows a material like any
+ * other, user decision 2026-11-05) with their texture.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -89,14 +89,15 @@ describe('appearance classes from the wall alone', () => {
         return { json: g.json, g, img };
     }
 
-    it('leaves the fitted windows out and measures each class\'s texture at the facade\'s texel; the colour-only reading keeps them', () => {
+    it('reads the windows as a class of their own, as the colour-only reading does, and measures each class\'s texture at the facade\'s texel', () => {
         const { json, g, img } = scene();
         const images = new Map([[0, { ...img, rgba: img.rgba.slice() }]]);
         const plain = readRegionClasses(json, images)!;
         const harvested = readRegionClasses(json, images, undefined, { g })!;
-        // the windows (L about 10) are a class of the colour-only reading, and none of the harvest's
+        // the windows (L about 10) are a class of both readings: a detected material like the wall
         expect(Math.min(...plain.map(c => c.meanLab[0]))).toBeLessThan(20);
-        expect(Math.min(...harvested.map(c => c.meanLab[0]))).toBeGreaterThan(50);
+        expect(Math.min(...harvested.map(c => c.meanLab[0]))).toBeLessThan(20);
+        expect(harvested.find(c => c.meanLab[0] < 20)!.texture!.energy.some(Number.isFinite)).toBe(true);
         const wall = harvested.find(c => c.wall)!;
         expect(wall.texture!.texelM).toBeCloseTo(PX, 3);
         expect(wall.texture!.energy.some(Number.isFinite)).toBe(true);

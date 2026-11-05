@@ -50,12 +50,12 @@ function facade(width = W, height = H, grey = GREY_ROWS, seed = 12345): FacadePh
 /** Each zone's own columns, by where its middle stands down a 60 m wall, so an answer drawn in the wrong zone shows. */
 const zoneOf = (r: ImageRegion) => { const c = (r.y0 + r.y1) / 2; return c < 240 ? 0 : c < 420 ? 1 : 2; };
 const ZONE_COLS = [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9]];
-const TINT = ['#100000', '#200000', '#300000'];
+const BETWEEN = ['granite base', 'brick shaft', 'copper crown'];
 
 /**
  * A stand-in model that answers a question the same way whether it comes alone or in a batch: the overview splits a
  * 300 px wall into three zones (a 200 px one into two); a reading gives every whole row of its zone's own columns (those
- * the image holds) and its zone's tint; the judge accepts, the middle zone's first column rejected. A batch's entries
+ * the image holds) and its zone's words between the rows; the judge accepts, the middle zone's first column rejected. A batch's entries
  * come back last first, each with its number.
  */
 function oracle(opts: { leaveOut?: number; garble?: number } = {}): { ask: FacadeAsk; calls: string[] } {
@@ -67,7 +67,7 @@ function oracle(opts: { leaveOut?: number; garble?: number } = {}): { ask: Facad
             if (t < r.y0 || b > r.y1) continue;
             rows.push({ y: [((t - r.y0) / ch) * 1000, ((b - r.y0) / ch) * 1000], openings: ZONE_COLS[zoneOf(r)].map(i => cols[i]).filter(([, c]) => c <= r.x1).map(([a, c]) => ({ x: [((a - r.x0) / cw) * 1000, ((c - r.x0) / cw) * 1000], panes: 2 })) });
         }
-        return { rows, glass: { label: 'stand-in', transparency: 0.6, reflectivity: 0.3, tint: TINT[zoneOf(r)], opaque: false }, conf: 85 };
+        return { rows, between: BETWEEN[zoneOf(r)], conf: 85 };
     };
     const judgement = (r: ImageRegion) => ({ accept: true, badColumns: zoneOf(r) === 1 ? [1] : [], conf: 80 });
     const batch = (regions: ImageRegion[], one: (r: ImageRegion) => object) => JSON.stringify({ zones: regions.map((r, i) => ({ zone: i + 1, ...one(r) })).filter((_, i) => i !== opts.leaveOut).map((z, i) => (i === opts.garble ? { zone: z.zone, rows: 'x' } : z)).reverse() });
@@ -122,8 +122,7 @@ describe('pipeline K model calls', () => {
         expect(r1.record.zones).toEqual(r0.record.zones);
         expect(r1.rects).toEqual(r0.rects);
         expect(r1.panes).toEqual(r0.panes);
-        expect(r1.glass).toEqual(r0.glass);
-        // every zone drawn from its own answer: its own columns (the middle zone less the column its judge rejected) and its tint
+        // every zone drawn from its own answer: its own columns (the middle zone less the column its judge rejected) and its words
         expect(r1.record.zones!.map(z => z.outcome)).toEqual(['drawn', 'drawn', 'drawn']);
         r1.record.zones!.forEach((z, k) => {
             const inZone = r1.rects!.filter(r => (r[1] + r[3]) / 2 >= z.region.y0 && (r[1] + r[3]) / 2 < z.region.y1);
@@ -131,7 +130,7 @@ describe('pipeline K model calls', () => {
             expect(inZone.length).toBeGreaterThan(0);
             for (const r of inZone) expect(want.some(x => Math.abs(r[0] - x) <= 1)).toBe(true);
             expect(new Set(inZone.map(r => Math.round(r[0])))).toEqual(new Set(want));
-            expect(r1.glass!.find(g => g.region.y0 === z.region.y0)!.glass.tint).toBe(TINT[k]);
+            expect(z.reading?.between).toBe(BETWEEN[k]);
         });
     });
 

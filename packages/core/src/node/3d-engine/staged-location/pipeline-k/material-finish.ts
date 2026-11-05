@@ -13,28 +13,19 @@
  * metalness (0 a dielectric: stone, brick, concrete, render, paint, glass; 1 bare, anodized or coated metal) and the
  * model's confidence. Numbers, not names: the ranking reads the numbers, never words (AGENTS.md section 1).
  *
- * The ranking uses a reading only as confident as FINISH_READ asks: its roughness at minConf, and metal (the class's sets
- * drawn with their metalness) only at metalConf with metalness at least metalAt. Below that a class keeps the matte
- * dielectric finish (REGION_FINISH), as before the user's decision of 2026-11-04 (a class the model reads as metal panel
- * is drawn as one; the old rule "nothing is drawn metal" stood while no reading could tell a metal from a dark stone).
- * A class read as a smooth dielectric (plainBelowRoughness) takes a plain finish, no set. Labelled photo-inferred.
+ * The ranking ranks toward a reading's roughness and metalness when it is at least FINISH_READ.minConf confident, else
+ * toward the matte dielectric finish (REGION_FINISH). Every class takes the set the ranking and the pick by appearance
+ * choose, drawn with all of its maps (user decision, 2026-11-05: one material path for every surface; no plain finish, no
+ * metal gate, no glass layer). Labelled photo-inferred.
  */
 
 import type { RegionClass } from './material-regions';
 
-export const MATERIAL_FINISH_VERSION = 'material-finish/1';
+export const MATERIAL_FINISH_VERSION = 'material-finish/2';
 
 export const FINISH_READ = {
-    /** A reading's roughness ranks the class's sets at this confidence (0..100) and above. */
-    minConf: 50,
-    /** Metal: the class's sets may be metal, and are drawn with their metalness, at this confidence and metalness. */
-    metalConf: 70, metalAt: 0.5,
-    /**
-     * A class read confidently (minConf) as a dielectric this smooth or smoother (glass, polished stone, gloss paint) takes no
-     * library set: a plain finish at its read roughness with a flat normal. The library's sets this smooth are snow, foam
-     * and road paint (Penn 2's dark glass took Snow005), whose grain is no part of a smooth facade.
-     */
-    plainBelowRoughness: 0.3
+    /** A reading's roughness and metalness rank the class's sets at this confidence (0..100) and above. */
+    minConf: 50
 } as const;
 
 export interface ClassFinish { roughness: number; metalness: number; conf: number; seen?: string }
@@ -73,9 +64,7 @@ export function parseClassFinish(text: string, rows = 0): Array<ClassFinish | un
     return out;
 }
 
-/** What the ranking takes from a reading: the roughness to rank toward, the metalness, and whether metal sets may be used. */
-export function finishTarget(f: ClassFinish | undefined, matte: { roughness: number; metallic: number }, R = FINISH_READ): { roughness: number; metallic: number; metal: boolean; plain: boolean } {
-    const metal = !!f && f.conf >= R.metalConf && f.metalness >= R.metalAt;
-    const sure = !!f && f.conf >= R.minConf;
-    return { roughness: sure ? f!.roughness : matte.roughness, metallic: metal ? f!.metalness : matte.metallic, metal, plain: sure && f!.metalness < R.metalAt && f!.roughness <= R.plainBelowRoughness };
+/** What the ranking ranks toward: the reading's roughness and metalness when it is confident enough, else the matte finish. */
+export function finishTarget(f: ClassFinish | undefined, matte: { roughness: number; metallic: number }, R = FINISH_READ): { roughness: number; metallic: number } {
+    return f && f.conf >= R.minConf ? { roughness: f.roughness, metallic: f.metalness } : { roughness: matte.roughness, metallic: matte.metallic };
 }

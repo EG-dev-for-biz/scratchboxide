@@ -20,12 +20,12 @@ const port = parentPort;
 if (!port) throw new Error('material-regions-worker.ts runs only as a worker thread');
 
 const init = (workerData as { init: MaterialRegionsWorkerInit }).init;
-const ctx = materialPlanContext({ json: init.json, bin: init.bin }, init.json, init.images, init.classes, init.sets, init.planes, init.P);
+const ctx = materialPlanContext({ json: init.json, bin: init.bin }, init.json, init.images, init.classes, init.sets, init.P);
 
 port.on('message', (msg: { i: number; job: MaterialPlanJob }) => {
     try {
         const piece = planMaterialJob(msg.job, ctx);
-        const p = piece.planned, transfer = p ? [p.orm.rgba.buffer, p.params.rgba.buffer, ...(p.normal ? [p.normal.rgba.buffer] : [])] : [];
+        const p = piece.planned, transfer = p ? [p.orm.rgba.buffer, ...(p.normal ? [p.normal.rgba.buffer] : [])] : [];
         port.postMessage({ i: msg.i, piece }, transfer as never);
     } catch (err) {
         port.postMessage({ i: msg.i, error: err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err) });

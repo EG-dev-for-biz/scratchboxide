@@ -81,11 +81,16 @@ these three being too strong, too weak, the wrong colour or not occluded where i
 ## 5. In Scratchbox
 
 - **Rigs:** `lighting_configure_gaffer_rig` builds photographic key-fill-rim rigs at real stop ratios around a subject.
-- **Staged buildings (pipeline K):** the viewer draws the glass. `reflectionProbe.ts` captures the environment (its
-  fallback sky is what the probe sees where no geometry was drawn); `stagedBuild/facadeMaterialLook.ts` applies it to
-  the texels read as glass, by their weight, with the pane tilt, the roughness floor and specular anti-aliasing. The
-  sky dome and sun come from the scene's atmosphere (`syncAtmosphere.ts`). Changes to glass light go there, measured
-  with section 4 on the Empire State Building in sun and in shade.
+- **Staged buildings (pipeline K):** one material path for every surface (user decision, 2026-11-05): each texel's
+  detected material carries its library set's occlusion, roughness, metalness and normal, and the viewer reflects the
+  scene's probe on every texel by those numbers alone; there is no separate glass layer, glass weight or pane tilt.
+  `reflectionProbe.ts` captures the environment (its fallback sky is what the probe sees where no geometry was drawn);
+  `stagedBuild/facadeMaterialLook.ts` applies it, with the ground below the horizon (`GROUND_ALBEDO`), the probe's
+  diffuse light left out and specular anti-aliasing. The sky dome and sun come from the scene's atmosphere
+  (`syncAtmosphere.ts`). Changes to facade light go there, measured with section 4 on the Empire State Building in sun
+  and in shade.
+- The measurements below were taken while pipeline K still drew a glass layer (weight, pane tilt, recess occlusion); they
+  stay as the record of what the probe and the sky do, not as a description of today's shader.
 - **Measured on the Empire State Building (2026-10-28, late afternoon sun at 36°, view settled):**
   - the glass probe holds **no** sun disc in this scene (its brightest texel 0.85 with or without the disc removed), and
     the sky dome's cosine-weighted mean radiance already equals the sky light's (0.1096 vs 0.1095: the scene derives the

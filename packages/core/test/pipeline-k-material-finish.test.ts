@@ -9,8 +9,8 @@
 
 /**
  * Each appearance class's finish read by the vision model (pipeline-k/material-finish.ts): the reply parsed into numbers
- * per row, and what the ranking takes from it: the roughness only at minConf, metal only at metalConf and metalness metalAt;
- * below that the matte dielectric finish it had before.
+ * per row, and what the ranking ranks toward: the read roughness and metalness at minConf, else the matte dielectric finish.
+ * No reading gates a set: every class takes the set the ranking and the pick choose.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -27,17 +27,13 @@ describe('pipeline K material finish', () => {
         expect(() => parseClassFinish('no json', 3)).toThrow();
     });
 
-    it('takes metal only from a confident metal reading, and the roughness from a confident one; else the matte dielectric finish', () => {
+    it('ranks toward the read roughness and metalness when confident, else the matte dielectric finish', () => {
         const matte = { roughness: REGION_FINISH.roughness, metallic: REGION_FINISH.metallic };
-        expect(finishTarget(undefined, matte)).toEqual({ ...matte, metal: false, plain: false });
-        expect(finishTarget({ roughness: 0.35, metalness: 0.9, conf: FINISH_READ.metalConf }, matte)).toEqual({ roughness: 0.35, metallic: 0.9, metal: true, plain: false });
-        // sure enough of the roughness, not of the metal
-        expect(finishTarget({ roughness: 0.35, metalness: 0.9, conf: FINISH_READ.metalConf - 1 }, matte)).toEqual({ roughness: 0.35, metallic: 0, metal: false, plain: false });
-        // a confident smooth dielectric (glass, polished stone): a plain finish, no library set
-        expect(finishTarget({ roughness: 0.3, metalness: 0.1, conf: 95 }, matte)).toEqual({ roughness: 0.3, metallic: 0, metal: false, plain: true });
-        expect(finishTarget({ roughness: 0.6, metalness: 0.1, conf: 95 }, matte)).toEqual({ roughness: 0.6, metallic: 0, metal: false, plain: false });
-        // unsure of everything: matte as before
-        expect(finishTarget({ roughness: 0.2, metalness: 1, conf: FINISH_READ.minConf - 1 }, matte)).toEqual({ ...matte, metal: false, plain: false });
+        expect(finishTarget(undefined, matte)).toEqual(matte);
+        expect(finishTarget({ roughness: 0.35, metalness: 0.9, conf: FINISH_READ.minConf }, matte)).toEqual({ roughness: 0.35, metallic: 0.9 });
+        expect(finishTarget({ roughness: 0.05, metalness: 0, conf: 95 }, matte)).toEqual({ roughness: 0.05, metallic: 0 });
+        expect(finishTarget({ roughness: 0.2, metalness: 1, conf: FINISH_READ.minConf - 1 }, matte)).toEqual(matte);
+        expect(Object.keys(FINISH_READ)).toEqual(['minConf']);
     });
 
     it('asks for numbers per row, never a material category to route on', () => {

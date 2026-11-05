@@ -94,7 +94,7 @@ export function prepareTexturedTwinModel(gltf: GltfLike, opts: { twin?: boolean 
     // library materials (procedural surfaces) flagged for hex-tiling: their repeat broken up in the shader
     applyStochasticTiling(gltf.scene);
     const parser = gltf.parser;
-    // the facade material reading (glass, coursing) on the same surfaces, when the twin carries it
+    // the material extras (the facade probe, a texture pass's glass and coursing) on the same surfaces, when the twin carries them
     const facade = prepareFacadeMaterials(gltf).catch(() => 0);
     if (byIndex.size === 0 || !parser) return facade.then(() => 0);
     return facade.then(() => Promise.all([...byIndex].map(async ([idx, mats]) => {

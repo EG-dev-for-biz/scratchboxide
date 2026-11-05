@@ -10,21 +10,21 @@
 /**
  * The building's materials, saved with it (user ask, 2026-10-30): its appearance classes (material-regions.ts), each named
  * in words by a vision model that sees patches of it (classSwatchSheet) and is told the building, its brief and what the
- * facade reader saw between and in the windows, with its colour, the library set chosen for it and where each of those came
- * from; and the glass the reader saw. Written into the twin's GLB as `asset.extras.sbMaterialClasses`, so the building
+ * facade reader saw between the windows, with its colour, the library set chosen for it and where each of those came
+ * from. Written into the twin's GLB as `asset.extras.sbMaterialClasses`, so the building
  * carries its own material map wherever it goes.
  *
  * The words are labels (open vocabulary): nothing in the build branches on them. Provenance: the colour and the words are
  * photo-inferred (read from the photos), the library set generated (chosen to look like it).
  */
 
-import type { FacadeReadRecord, GlassReading } from './facade-reader';
+import type { FacadeReadRecord } from './facade-reader';
 import type { RegionClass } from './material-regions';
 
-export const MATERIAL_NAMING_VERSION = 'material-naming/1';
+export const MATERIAL_NAMING_VERSION = 'material-naming/2';
 
 /** What the namer is told beside the swatches. */
-export interface NamingContext { building?: string; brief?: string; between?: string[]; glass?: string[] }
+export interface NamingContext { building?: string; brief?: string; between?: string[] }
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 
@@ -34,7 +34,6 @@ export function namingPrompt(classes: Array<Pick<RegionClass, 'meanLab' | 'share
         ...classes.map((c, k) => `- row ${k + 1}: ${pct(c.share)} of the facades' texels, lightness ${Math.round(c.meanLab[0])} of 100${c.wall ? ', the lightest (the wall)' : ''}`),
         ...(ctx.brief ? [`The building, as an architect described it from its photos: ${ctx.brief}`] : []),
         ...(ctx.between?.length ? [`Between its windows a reader saw: ${ctx.between.join('; ')}.`] : []),
-        ...(ctx.glass?.length ? [`Its glass a reader saw as: ${ctx.glass.join('; ')}.`] : []),
         'Name the material each row shows, in a few words, as a facade expert would (what it is and its finish), from the patches first and the description second. A row that is no one material (shadow, a mix, sky reflected) says so.',
         'Give for each row "row", "words" and "conf" (0..100). Answer with JSON only: {"classes":[{"row":1,"words":"...","conf":0}]}'
     ].join('\n');
@@ -58,24 +57,6 @@ export function parseClassWords(text: string, rows = 0): Array<ClassWords | unde
     return out;
 }
 
-export interface GlassSeen { words: string; planes: number; transparency: number; reflectivity: number; tint?: string; opaque: boolean }
-
-/** The glass the reader saw, by its words: on how many planes, its numbers averaged (the commonest first). */
-export function glassSeen(records: FacadeReadRecord[]): GlassSeen[] {
-    const by = new Map<string, { planes: Set<number>; g: GlassReading[] }>();
-    for (const r of records) for (const z of r.zones ?? []) {
-        if (z.outcome !== 'drawn' || !z.glass) continue;
-        const words = z.glass.label ?? (z.glass.opaque ? 'opaque panel' : 'glass');
-        const e = by.get(words) ?? { planes: new Set<number>(), g: [] };
-        e.planes.add(r.facadeId); e.g.push(z.glass); by.set(words, e);
-    }
-    const avg = (v: number[]) => Math.round((v.reduce((s, x) => s + x, 0) / v.length) * 100) / 100;
-    return [...by.entries()].map(([words, e]) => {
-        const tints = e.g.map(g => g.tint).filter((t): t is string => !!t), tint = tints.sort((x, y) => tints.filter(t => t === y).length - tints.filter(t => t === x).length)[0];
-        return { words, planes: e.planes.size, transparency: avg(e.g.map(g => g.transparency)), reflectivity: avg(e.g.map(g => g.reflectivity)), ...(tint ? { tint } : {}), opaque: e.g.filter(g => g.opaque).length > e.g.length / 2 };
-    }).sort((x, y) => y.planes - x.planes);
-}
-
 /** What the reader saw between the windows, its commonest words first (at most `n`). */
 export function betweenSeen(records: FacadeReadRecord[], n = 5): string[] {
     const count = new Map<string, number>();
@@ -94,15 +75,14 @@ export interface MaterialClassEntry {
 export interface MaterialClassesExtras {
     schema: 'scratchbox.material-classes/1'; version: string;
     classes: MaterialClassEntry[];
-    glass?: Array<GlassSeen & { label: 'photo-inferred'; source: string }>;
     /** Why the classes carry no words, when they do not. */
     unnamed?: string;
 }
 
 const hex = (linear: [number, number, number]) => '#' + linear.map(v => { const s = v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055; return Math.round(Math.max(0, Math.min(1, s)) * 255).toString(16).padStart(2, '0'); }).join('');
 
-/** The classes as saved with the building: each with its colour, its library set and (when named) its words, and the reader's glass. */
-export function materialClassesExtras(classes: Array<RegionClass & { set: string; distance: number; choice?: { by: 'appearance' | 'ranking'; seen?: string } }>, words: Array<ClassWords | undefined> | undefined, glass: GlassSeen[] = [], unnamed?: string): MaterialClassesExtras {
+/** The classes as saved with the building: each with its colour, its library set and (when named) its words. */
+export function materialClassesExtras(classes: Array<RegionClass & { set: string; distance: number; choice?: { by: 'appearance' | 'ranking'; seen?: string } }>, words: Array<ClassWords | undefined> | undefined, unnamed?: string): MaterialClassesExtras {
     return {
         schema: 'scratchbox.material-classes/1', version: MATERIAL_NAMING_VERSION,
         classes: classes.map((c, k) => ({
@@ -111,7 +91,6 @@ export function materialClassesExtras(classes: Array<RegionClass & { set: string
             set: { name: c.set, distance: Math.round(c.distance * 1000) / 1000, label: 'generated', ...(c.choice ? { by: c.choice.by, ...(c.choice.seen ? { seen: c.choice.seen } : {}) } : {}) },
             ...(words?.[k] ? { words: { text: words[k]!.words, conf: words[k]!.conf, label: 'photo-inferred', source: 'a vision model naming patches of the class, told the building, its brief and what the facade reader saw' } } : {})
         })),
-        ...(glass.length ? { glass: glass.map(g => ({ ...g, label: 'photo-inferred' as const, source: "the facade reader's glass readings, by their words" })) } : {}),
         ...(unnamed ? { unnamed } : {})
     };
 }

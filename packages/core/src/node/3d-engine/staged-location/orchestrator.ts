@@ -90,7 +90,7 @@ import { ensureNativePolishFor, ensureNativeWallGrammar, ensureNativeWallSheets 
 import type { PolishJobInput } from './remesh-worker';
 import { remeshCleanupEnabled } from './remesh-cleanup';
 import { remeshOrientEnabled } from './remesh-orient';
-import { fittedPlanesOf, fittedWindowRects, fitWindowsForOrthos, openingSegmenter, segmentSummary, WINDOW_FIT_FILE, WINDOW_FIT_VERSION, type OrthoFacade, type WindowFitEntry, type WindowFitFile, type WindowFitParams } from './window-fit';
+import { fittedWindowRects, fitWindowsForOrthos, openingSegmenter, segmentSummary, WINDOW_FIT_FILE, WINDOW_FIT_VERSION, type OrthoFacade, type WindowFitEntry, type WindowFitFile, type WindowFitParams } from './window-fit';
 import { readWallGrammar, WALL_GRAMMAR_FILE, WALL_GRAMMAR_VERSION, type WallGrammarFile } from './wall-grammar';
 import { buildWallSheets, WALL_SHEETS_VERSION, type WallSheet } from './wall-sheets';
 import { decodePng as decodePngForGrammar } from '../../texture-processing';
@@ -224,7 +224,7 @@ import { FACADE_READER_MODEL, FACADE_READER_MODEL_KEY, FACADE_READER_PARAMS, FAC
 import { readOnTwin, TWIN_READER_VERSION } from './pipeline-k/twin-reader';
 import { CHOICE_SPAN_M, candidateSheetPng, choicePrompt, chooseWithMemory, MATERIAL_CHOICE_VERSION, parseChoices, type ChoiceRow, type SetChoice } from './pipeline-k/material-choice';
 import { fileReadingStore, MODEL_READINGS_DIR, readingKey, type ModelReadingStore } from './pipeline-k/model-readings';
-import { betweenSeen, glassSeen, MATERIAL_NAMING_VERSION, namingPrompt, parseClassWords } from './pipeline-k/material-naming';
+import { betweenSeen, MATERIAL_NAMING_VERSION, namingPrompt, parseClassWords } from './pipeline-k/material-naming';
 import { finishPrompt, MATERIAL_FINISH_VERSION, parseClassFinish, type ClassFinish } from './pipeline-k/material-finish';
 import type { FacadeReadRecord } from './pipeline-k/facade-reader';
 import { shadowLiftQaPng } from './pipeline-k/shadow-lift-qa';
@@ -3386,13 +3386,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const roofShadowOpts = roofShadowOn ? { roofShadow: { ...(extraction.geometryGlb && fs.existsSync(extraction.geometryGlb) ? { context: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)) } : {}), progress: (m: string) => io.progress(`textures: ${m}`) } } : {};
                 if (kTwin && !roofShadowOn) logStep('twin.roofShadow', 'skipped');
                 if (kTwin && !materialSets) cache.writeRunNote(runId, 'pipeline_k_materials', { skipped: deps.pipelineK?.materialSets ? 'off (SCRATCHBOX_K_MATERIAL_REGIONS=0 or the node graph)' : 'no texture library in this build\'s services' });
-                // the window fit's planes, whose windows material regions draws on the scan pieces lying on them
                 const kOrthos = materialSets ? cache.readRunNote<{ orthosDir?: string }>(runId, 'pipeline_k')?.orthosDir : undefined;
                 const fitFile = kOrthos ? path.join(kOrthos, WINDOW_FIT_FILE) : undefined;
-                const planes = kOrthos ? fittedPlanesOf(kOrthos) : [];
                 // the facade reader on the finished exterior (pipeline-k/twin-reader.ts): after the twin's de-light, roof shadow and
-                // harmonising, every plane read on the photos as they will be shown; its openings draw the glass in place of the
-                // window fit's where it drew. tile_refine's flat scan (beside the K orthos) gives the other planes their frames
+                // harmonising, every plane read on the photos as they will be shown; what it saw (the brief, what lies between the
+                // windows) is told to the finish read, the pick by look and the namer below. tile_refine's flat scan (beside the K
+                // orthos) gives the other planes their frames
                 const flatGlb = kOrthos ? path.join(path.dirname(kOrthos), 'textured.glb') : undefined;
                 const readerAsk = kOrthos && flatGlb && fs.existsSync(flatGlb) && stepOn('remesh.facadeRead', process.env.SCRATCHBOX_K_FACADE_READ?.trim() !== '0') ? facadeReaderAsk(io.signal, 'textures') : undefined;
                 // what the reader saw, for the namer of the building's materials below
@@ -3400,40 +3399,38 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // the reader's answers and the material choices kept beside the stage caches, so a rebuild or a later run asks
                 // only about what changed (pipeline-k/model-readings.ts); a retry of the stage asks again, as its reply cache does
                 const modelReadings = bypass('textures') ? undefined : modelReadingsStore();
-                const planesFor = readerAsk ? async (finalImage: Map<number, RgbaImage8>, json: any) => {
+                const readExterior = readerAsk ? async (finalImage: Map<number, RgbaImage8>, json: any): Promise<void> => {
                     try {
-                        const tr = await readOnTwin({ orthosDir: kOrthos!, flatGlb: flatGlb!, twinJson: json, finalImage, fitted: planes, ask: readerAsk, building: { name: request.query, ...(run.state.place?.resolvedAddress ? { address: run.state.place.resolvedAddress } : {}) }, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`), ...(modelReadings ? { readings: { store: modelReadings, model: FACADE_READER_MODEL_KEY } } : {}) });
+                        const tr = await readOnTwin({ orthosDir: kOrthos!, flatGlb: flatGlb!, twinJson: json, finalImage, ask: readerAsk, building: { name: request.query, ...(run.state.place?.resolvedAddress ? { address: run.state.place.resolvedAddress } : {}) }, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`), ...(modelReadings ? { readings: { store: modelReadings, model: FACADE_READER_MODEL_KEY } } : {}) });
                         const recs = tr.records.facades, by = (o: string) => recs.filter(x => x.outcome === o).length;
                         readerSeen = { records: recs, ...(tr.records.brief && 'building' in tr.records.brief ? { brief: tr.records.brief.building } : {}) };
                         cache.writeRunNote(runId, 'pipeline_k_facade_reader', { version: FACADE_READER_VERSION, on: TWIN_READER_VERSION, ...tr.report, read: recs.length, replaced: by('replaced'), kept: by('kept'), skipped: by('skipped'), failed: by('failed'), unread: tr.records.unread, ms: tr.records.ms, ...(tr.records.calls ? { calls: tr.records.calls } : {}), ...(tr.records.brief ? { brief: tr.records.brief } : {}), reviewDir: path.join(tr.report.dir, 'facade_reader'), records: recs });
-                        run.note(PROVENANCE.photoInferred, `facade reader (${FACADE_READER_VERSION}) on the finished exterior: of ${recs.length} planes read, ${by('replaced')} had their openings placed by a vision model's reading (told the building and its families), fitted to the photo and judged; they draw the glass, the window fit's elsewhere`);
-                        return tr.planes;
+                        run.note(PROVENANCE.photoInferred, `facade reader (${FACADE_READER_VERSION}) on the finished exterior: of ${recs.length} planes read, ${by('replaced')} had their openings placed by a vision model's reading (told the building and its families), fitted to the photo and judged; recorded and told to the material reads, nothing drawn from them`);
                     } catch (err) {
                         if (isAbort(err) || io.signal.aborted) throw err;
                         cache.writeRunNote(runId, 'pipeline_k_facade_reader', { version: FACADE_READER_VERSION, on: TWIN_READER_VERSION, failed: true, reason: errorMessage(err) });
-                        return planes;
                     }
                 } : undefined;
                 // the building's materials named from a picture of each appearance class (pipeline-k/material-naming.ts), told the
-                // building, its brief and what the reader saw between and in its windows; saved with the twin
+                // building, its brief and what the reader saw between its windows; saved with the twin
                 const nameClasses = materialSets && visionAvailable ? async (classes: RegionClass[], swatches: Buffer) => {
-                    const seen = readerSeen?.records ?? [], glass = glassSeen(seen);
+                    const seen = readerSeen?.records ?? [];
                     try {
                         const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: [...new Set([FACADE_READER_MODEL.model, ...visionAvailable.candidates])], signal: io.signal, ...chainExtras('textures'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                         const replyText = (res: { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> }) => (res.candidates?.[0]?.content?.parts ?? []).filter(q => !q.thought).map(q => q.text ?? '').join('');
-                        const prompt = namingPrompt(classes, { building: [request.query, run.state.place?.resolvedAddress].filter(Boolean).join(', '), ...(readerSeen?.brief ? { brief: readerSeen.brief } : {}), between: betweenSeen(seen), glass: glass.map(g => g.words) });
+                        const prompt = namingPrompt(classes, { building: [request.query, run.state.place?.resolvedAddress].filter(Boolean).join(', '), ...(readerSeen?.brief ? { brief: readerSeen.brief } : {}), between: betweenSeen(seen) });
                         const res = await chain.generate({ contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: swatches.toString('base64') } }, { text: prompt }] }], config: { responseMimeType: 'application/json', temperature: 0, abortSignal: io.signal } },
                             { stage: 'grammar', ...VISION_CALL_POLICY.grammar, thinkingBudget: FACADE_READER_MODEL.thinkingBudget, valid: x => { try { parseClassWords(replyText(x), classes.length); return true; } catch { return false; } } });
                         const words = parseClassWords(replyText(res.response), classes.length);
                         res.remember();
-                        return { words, glass };
+                        return { words };
                     } catch (err) {
                         if (isAbort(err) || io.signal.aborted) throw err;
-                        return { glass, unnamed: `naming the classes failed: ${errorMessage(err)}` };
+                        return { unnamed: `naming the classes failed: ${errorMessage(err)}` };
                     }
                 } : undefined;
                 // each class's finish read from the classes' swatch sheet before the sets are ranked (pipeline-k/material-finish.ts):
-                // roughness and metalness as numbers with a confidence; a class read confidently as metal may take a metal set
+                // roughness and metalness as numbers with a confidence, which the ranking ranks toward
                 const readFinish = materialSets && visionAvailable ? async (classes: RegionClass[], swatches: Buffer): Promise<Array<ClassFinish | undefined>> => {
                     const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: [...new Set([FACADE_READER_MODEL.model, ...visionAvailable.candidates])], signal: io.signal, ...chainExtras('textures'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                     const replyText = (res: { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> }) => (res.candidates?.[0]?.content?.parts ?? []).filter(q => !q.thought).map(q => q.text ?? '').join('');
@@ -3467,7 +3464,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const grammarFile = kOrthos ? path.join(kOrthos, WALL_GRAMMAR_FILE) : undefined;
                 const key = stageKey(TILE_REFINE_TWIN_VERSION, upwardLift ? `upLift:${upwardLift}` : '', target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets && visionAvailable ? MATERIAL_FINISH_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', facadeUpscaleOn ? `${FACADE_UPSCALE_VERSION}:${visionAvailable ? 'image' : 'none'}${upscaleDistrict ? ':district' : ''}` : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '', readerAsk ? `${FACADE_READER_VERSION}:${TWIN_READER_VERSION}:${JSON.stringify(FACADE_READER_PARAMS)}` : '', nameClasses ? MATERIAL_NAMING_VERSION : '', chooseSets ? MATERIAL_CHOICE_VERSION : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions']; materialClasses?: TileRefineTwin['materialClasses'] }>('textures', key, async dir => {
-                    const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(upwardLift ? { upwardShadowLift: upwardLift } : {}), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0, ...(kdBuildings ? { buildingOf: districtBuildingIndex(kdBuildings) } : {}), ...(process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' && extraction.geometryGlb && fs.existsSync(extraction.geometryGlb) ? { skyContext: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)) } : {}) } } : {}), ...(relightClient ? { viewRelight: { client: relightClient, models: lightingModels(), params: viewRelightEnvParams().params, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`) } } : {}), ...roofShadowOpts, ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m), ...(chooseSets && swatches ? { choose: (rows: ChoiceRow[]) => chooseSets(rows, swatches) } : {}), ...(readFinish && swatches ? { finish: () => readFinish(classes, swatches.png) } : {}), ...(modelReadings ? { store: modelReadings } : {}) }), planes, ...(planesFor ? { planesFor } : {}), ...(nameClasses ? { nameClasses } : {}) } } : {}) } : enhance || roofShadowOn ? {
+                    const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(upwardLift ? { upwardShadowLift: upwardLift } : {}), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0, ...(kdBuildings ? { buildingOf: districtBuildingIndex(kdBuildings) } : {}), ...(process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' && extraction.geometryGlb && fs.existsSync(extraction.geometryGlb) ? { skyContext: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)) } : {}) } } : {}), ...(relightClient ? { viewRelight: { client: relightClient, models: lightingModels(), params: viewRelightEnvParams().params, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`) } } : {}), ...roofShadowOpts, ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m), ...(chooseSets && swatches ? { choose: (rows: ChoiceRow[]) => chooseSets(rows, swatches) } : {}), ...(readFinish && swatches ? { finish: () => readFinish(classes, swatches.png) } : {}), ...(modelReadings ? { store: modelReadings } : {}) }), ...(readExterior ? { readExterior } : {}), ...(nameClasses ? { nameClasses } : {}) } } : {}) } : enhance || roofShadowOn ? {
                         ...(enhance ? { recreate: {
                             client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}),
                             budgetMs: TILE_REFINE_RECREATE_BUDGET_MS
@@ -4468,7 +4465,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             const windowSegmentOn = process.env.SCRATCHBOX_K_WINDOW_SEGMENT?.trim() === '1';
                             const windowSegment = windowSegmentOn ? openingSegmenter(deps.textures?.segment ?? segmenterTool()) : undefined;
                             // the facade reader reads every plane on the finished exterior, in the texture stage (pipeline-k/twin-reader.ts,
-                            // user decision 2026-10-30), and draws the glass; the window recesses stay this window fit's
+                            // user decision 2026-10-30) for the material reads; nothing is drawn from it, the openings are this window fit's
                             const readerOn = !!(visionAvailable && stepOn('remesh.facadeRead', process.env.SCRATCHBOX_K_FACADE_READ?.trim() !== '0'));
                             // with the reader on, the segmenter takes only the walls its gates leave unread (as readPlanes filters them:
                             // shorter than minHeightM, narrower than minWallWidthM or under minCoverage covered); the reader would

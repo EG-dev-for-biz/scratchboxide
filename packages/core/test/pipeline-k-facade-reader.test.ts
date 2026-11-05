@@ -11,7 +11,7 @@
  * The facade reader (pipeline-k/facade-reader.ts), a vision agent, against a stand-in model on a synthetic facade of
  * punched windows: the overview's zones, the unit cell tiled through its zone at the measured pitch (whichever way the
  * glass is lit), the judge's rejection keeping the window fit's reading, nothing drawn where the photo never reached,
- * the glass reading kept with the zone; window_fit.json takes the openings and keeps the window fit's own.
+ * no glass asked or kept (user decision, 2026-11-05); window_fit.json takes the openings and keeps the window fit's own.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -62,7 +62,7 @@ function standIn(accept = true): { ask: FacadeAsk; calls: string[] } {
             if (t < region.y0 || b > region.y1) continue;
             rows.push({ y: [((t + 3 - region.y0) / ch) * 1000, ((b - 2 - region.y0) / ch) * 1000], openings: cols.map(([a, c]) => ({ x: [((a + 3 - region.x0) / cw) * 1000, ((c - 2 - region.x0) / cw) * 1000], panes: 2 })) });
         }
-        return JSON.stringify({ rows, glass: { label: 'clear, slightly green', transparency: 0.7, reflectivity: 0.25, tint: '#7A8F88', opaque: false }, between: 'stone spandrels', conf: 85, notes: 'punched windows over spandrels' });
+        return JSON.stringify({ rows, between: 'stone spandrels', conf: 85, notes: 'punched windows over spandrels' });
     };
     return { ask, calls };
 }
@@ -86,7 +86,7 @@ function checkOpenings(rects: Array<[number, number, number, number]>, tol: numb
 }
 
 describe('pipeline K facade reader (vision agent)', () => {
-    it('reads the zones, tiles the unit cell down its zone at the measured pitch, two panes an opening, and keeps the glass', async () => {
+    it('reads the zones, tiles the unit cell down its zone at the measured pitch, two panes an opening', async () => {
         const { ask, calls } = standIn();
         const r = await readFacade(facade(), undefined, frame, ask);
         expect(calls).toEqual(['overview', 'read', 'judge']);
@@ -97,7 +97,7 @@ describe('pipeline K facade reader (vision agent)', () => {
         expect(z.fit!.columns).toBe(10);
         checkOpenings(r.rects!, 3.5);
         expect(r.panes!.length).toBe(2 * r.rects!.length);
-        expect(r.glass![0].glass).toMatchObject({ transparency: 0.7, reflectivity: 0.25, tint: '#7a8f88', opaque: false });
+        expect('glass' in r).toBe(false);
     });
 
     it('tiles a facade whose windows are each lit their own way (darker and lighter than the wall) the same way', async () => {
@@ -169,7 +169,7 @@ describe('pipeline K facade reader (vision agent)', () => {
         expect(() => parseZones('{"zones":[{"box":[0,0,1000]}]}')).toThrow();
         const r = parseReading('x {"rows":[{"y":[100,200],"openings":[{"x":[10,20],"panes":3}]}],"glass":{"transparency":4,"tint":"blue"},"conf":70} y');
         expect(r.rows[0].openings[0].panes).toBe(3);
-        expect(r.glass).toEqual({ transparency: 1, reflectivity: 0.3, opaque: false });
+        expect('glass' in r).toBe(false);
     });
 
     it('reads a narrow window-column wall (3 m wide) before any roof, and leaves out a roof under 6 m', async () => {
@@ -296,7 +296,7 @@ describe('pipeline K facade reader (vision agent)', () => {
         } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     });
 
-    it("writes the openings and the glass into window_fit.json, the window fit's own kept, and reads once", async () => {
+    it("writes the openings into window_fit.json, the window fit's own kept, and reads once", async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'facade-reader-'));
         try {
             const img = facade();
@@ -312,7 +312,7 @@ describe('pipeline K facade reader (vision agent)', () => {
             expect(e.reader).toBe(FACADE_READER_VERSION);
             expect(e.structural.rects).toEqual([strip]);
             expect(e.rects.length).toBeGreaterThan(100);
-            expect(e.glass[0].glass.label).toBe('clear, slightly green');
+            expect(e.glass).toBeUndefined();
             expect(first.records.facades[0].outcome).toBe('replaced');
             expect(fs.readdirSync(path.join(dir, 'facade_reader'))).toContain('7_z0.png');
             const again = await readPlanes(dir, ask);

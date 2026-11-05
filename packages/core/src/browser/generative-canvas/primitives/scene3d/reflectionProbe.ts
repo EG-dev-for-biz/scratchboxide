@@ -8,8 +8,8 @@
  ********************************************************************************/
 
 /**
- * One reflection probe capture, shared by the place reflections (placeReflections.ts) and the facade material reading's
- * glass (stagedBuild/facadeMaterialLook.ts): a cube render of the scene from a point, prefiltered (PMREM), with a labelled
+ * One reflection probe capture, shared by the place reflections (placeReflections.ts) and the staged twins' facades
+ * (stagedBuild/facadeMaterialLook.ts): a cube render of the scene from a point, prefiltered (PMREM), with a labelled
  * fallback sky gradient in the directions where no geometry was drawn. The fallback is the capture's background only
  * for the duration of the capture (restored before it returns): never the viewport background, never a visible sky.
  */

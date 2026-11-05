@@ -8,24 +8,22 @@
  ********************************************************************************/
 
 /**
- * The viewer side of the facade material reading (texture pass, facade-materials.ts): a textured twin whose material
- * carries extras.sbMaterial is drawn with what the reading measured.
+ * The viewer side of the staged builds' material extras (extras.sbMaterial): a textured twin whose material carries them
+ * is drawn with the scene's own reflection probe: a cube render of the scene from the layer's centre with the layer's own
+ * extent clipped away by the near plane (so the probe sees the street, the neighbours and the sky, not the building's
+ * inside), prefiltered (PMREM) and set as the material's environment. It moves with the camera like a reflection, never
+ * painted on. Where a reflection points below the horizon it sees ground of GROUND_ALBEDO under the scene's sky and sun,
+ * never brighter (whatever the probe drew there); the probe's diffuse light is left out (the scene's sky fill already lights
+ * the photos), and the roughness rises where the normal varies within a pixel (specular anti-aliasing), so a distant
+ * facade does not shimmer.
  *
- *  - Glass texels come with their own roughness and metalness (the twin's metallicRoughness texture) and a dark measured
- *    interior as base colour; their reflection is the scene's own environment: a cube render of the scene from the layer's
- *    centre with the layer's own extent clipped away by the near plane (so the probe sees the street, the neighbours and
- *    the sky, not the building's inside), prefiltered (PMREM) and set as the material's environment. It moves with the
- *    camera like a reflection, never painted on. Glass reflects it scaled by its weight (parameters R / 255, the
- *    reading's confidence), metal texels (parameters B > 0) whole; every other texel the scene's direct light only. A
- *    pane of glass with a seed (parameters alpha 1..254, pipeline K's fitted panes) is tilted by up to PANE_TILT_DEG of
- *    its own, so a facade's panes catch the sun light's (shadowed) highlight one by one; the tilt fades out as a pane
- *    shrinks to under a pixel, its spread handed to the roughness, and the roughness rises where the normal varies
- *    within a pixel (specular anti-aliasing),
- *    so distant glass does not shimmer. Where a pane's reflection points below the horizon it sees ground of
- *    GLASS_GROUND_ALBEDO under the scene's sky and sun, never brighter (whatever the probe drew there), and a pane recessed
- *    behind its piers (recessOf: the structure's relief over its bay's width) loses the grazing part of its reflection to
- *    the reveals (gaffer skill, section 2).
- *  - Measured coursing: the kernel's course profile (a tangent-space normal over one pitch) is applied by world height at
+ *  - Without a parameters texture (pipeline K's material regions, one material path for every surface; user decision,
+ *    2026-11-05): every texel reflects the probe by its own roughness and metalness (the twin's metallic-roughness
+ *    texture, from the library set of its detected material), nothing gated on a kind of surface.
+ *  - With a parameters texture (the facade material reading of the texture pass, facade-materials.ts, and pipeline E's
+ *    openings): texels read as glass reflect it scaled by their weight (parameters R / 255, the reading's confidence), with a
+ *    roughness floor (GLASS_MIN_ROUGHNESS); metal texels (B > 0) whole; every other texel the scene's direct light only.
+ *    Measured coursing: the kernel's course profile (a tangent-space normal over one pitch) is applied by world height at
  *    each reading's pitch and phase, where the parameters texture (G = reading + 1) says so; the relief fades out where a
  *    course is smaller than a pixel. Albedo is untouched.
  *
@@ -47,7 +45,7 @@ interface GltfLike {
     parser?: { getDependency: (type: string, index: number) => Promise<unknown> };
 }
 
-/** Provenance source of the reading's texels (facade-materials.ts FACADE_MATERIAL_SOURCE). */
+/** Provenance source of the texture pass's reading texels (facade-materials.ts FACADE_MATERIAL_SOURCE). */
 export const FACADE_MATERIAL_SOURCE = 'facade-material-reading';
 
 /** The most coursing readings one material carries (the uniform array's size). */
@@ -59,13 +57,10 @@ export function sbMaterialOf(m: THREE.Material | undefined): SbMaterialExtras | 
     return e && typeof e === 'object' ? e : undefined;
 }
 
-/** Whether a material carries the reading (glass or coursing). */
+/** Whether a material carries the extras (and so takes the probe). */
 export function hasFacadeMaterial(m: THREE.Material | undefined): boolean {
     return !!(m && (m.userData as Record<string, unknown>)[FACADE_MATERIAL_KEY]);
 }
-
-/** The largest tilt of a pane of glass off its wall's plane (degrees; generated: real panes sit a degree or two off it). */
-export const PANE_TILT_DEG = 1.5;
 
 const VERTEX_DECL = 'varying vec3 vSbWPos;';
 const VERTEX_BODY = 'vSbWPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;';
@@ -75,23 +70,21 @@ uniform sampler2D uSbMatParams;
 uniform sampler2D uSbCourses;
 uniform vec4 uSbCourse[ ${MAX_COURSES} ];
 uniform float uSbCourseWidth;
-uniform vec2 uSbParamsSize;
-uniform vec2 uSbRecess;
 uniform float uSbGroundAlbedo;
 `;
 /**
  * The least roughness glass is drawn with (generated): window glass in place carries dust, film and the slight waviness
  * of float glass, so its reflection is always a touch diffused, never the measured 0.05 of clean float glass alone. 0.12
  * spread the sun's image over a dozen bays as one soft ball (Empire State Building, 2026-10-28: glint pixels 1,117 at
- * 0.12, 575 at 0.08 with the panes' tilts kept, the largest piece 33% of them, 27% at 0.08).
+ * 0.12, 575 at 0.08, the largest piece 33% of them, 27% at 0.08).
  */
 export const GLASS_MIN_ROUGHNESS = 0.08;
 
-/** The ground's albedo a pane reflects below the horizon (generated: asphalt and stone, 0.1-0.2; gaffer skill, section 1). */
-export const GLASS_GROUND_ALBEDO = 0.15;
+/** The ground's albedo a surface reflects below the horizon (generated: asphalt and stone, 0.1-0.2; gaffer skill, section 1). */
+export const GROUND_ALBEDO = 0.15;
 
 /**
- * Before the lights: the glass roughness floor (GLASS_MIN_ROUGHNESS), then specular anti-aliasing: where the shading
+ * Before the lights: with a parameters texture the glass roughness floor (GLASS_MIN_ROUGHNESS), then specular anti-aliasing: where the shading
  * normal changes faster than a pixel can show (pane edges, relief, distant facades), the roughness rises by the normal's
  * spread over the pixel (Kaplanyan-Tokuyoshi), so a smooth surface the pixel cannot resolve settles into an even sheen
  * instead of shimmering as the view moves.
@@ -99,15 +92,12 @@ export const GLASS_GROUND_ALBEDO = 0.15;
 const FRAGMENT_SPECULAR_AA = `
     {
         // glass in place is never a perfect mirror (dust, film, the waviness of float glass): a floor on its roughness
-        #if defined( USE_MAP )
+        #if defined( USE_MAP ) && defined( SB_PARAMS )
         if ( texture2D( uSbMatParams, vMapUv ).r > 0.0 ) roughnessFactor = max( roughnessFactor, ${GLASS_MIN_ROUGHNESS.toFixed(3)} );
         #endif
         vec3 sbDn = fwidth( normal );
         float sbVar = clamp( 0.5 * dot( sbDn, sbDn ), 0.0, 0.18 );
         roughnessFactor = min( 1.0, sqrt( roughnessFactor * roughnessFactor + sbVar ) );
-        // the panes' tilts a pixel can no longer show (see the tilt below) widen its lobe instead, as the average of the
-        // tilted panes it covers would: GGX alpha (roughness squared) about the largest tilt's slope
-        roughnessFactor = max( roughnessFactor, sbTiltLost * sqrt( tan( radians( ${PANE_TILT_DEG.toFixed(2)} ) ) ) );
     }
 #include <lights_physical_fragment>
 `;
@@ -115,7 +105,6 @@ const FRAGMENT_SPECULAR_AA = `
 /** After the normal maps: the measured courses' relief, by world height. */
 const FRAGMENT_COURSES = `
 #include <normal_fragment_maps>
-float sbTiltLost = 0.0;
 #if defined( USE_MAP ) && defined( SB_COURSES )
     {
         vec4 sbParams = texture2D( uSbMatParams, vMapUv );
@@ -139,46 +128,21 @@ float sbTiltLost = 0.0;
         }
     }
 #endif
-#if defined( USE_MAP )
-    {
-        // a pane of glass with a seed (parameters alpha 1..254) sits tilted by a small angle of its own, so the panes of a
-        // facade catch the sun one by one instead of all at one angle
-        vec4 sbPane = texture2D( uSbMatParams, vMapUv );
-        float sbSeed = floor( sbPane.a * 255.0 + 0.5 );
-        // a pane under a pixel across (far away) would flip between reflections as the view moves: the tilt fades out as
-        // the pane shrinks from 2.5 pixels to 1 (a pane is ~10 of the parameters texture's texels) and its spread goes to
-        // the roughness (sbTiltLost), so distant glass reads as one even sheet, while panes a few pixels across still catch
-        // the sun one by one rather than as one ball
-        vec2 sbTexels = fwidth( vMapUv ) * uSbParamsSize;
-        float sbFootprint = max( sbTexels.x, sbTexels.y );
-        float sbTiltFade = 1.0 - smoothstep( 4.0, 10.0, sbFootprint );
-        if ( sbPane.r > 0.0 && sbSeed >= 1.0 && sbSeed <= 254.0 ) sbTiltLost = 1.0 - sbTiltFade;
-        if ( sbPane.r > 0.0 && sbSeed >= 1.0 && sbSeed <= 254.0 && sbTiltFade > 0.0 ) {
-            vec3 sbUp = normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz );
-            vec3 sbB = sbUp - normal * dot( sbUp, normal );
-            float sbBl = length( sbB );
-            if ( sbBl > 0.3 ) {
-                sbB /= sbBl;
-                vec3 sbT = cross( sbB, normal );
-                float sbAz = sbSeed * 2.39996, sbTilt = sbTiltFade * radians( ${PANE_TILT_DEG.toFixed(2)} ) * sqrt( fract( sbSeed * 0.618034 ) );
-                normal = normalize( normal + tan( sbTilt ) * ( cos( sbAz ) * sbT + sin( sbAz ) * sbB ) );
-            }
-        }
-    }
-#endif
 `;
 /**
- * The environment reflects only on the texels read as glass (params R > 0, scaled by that weight) or metal (B > 0): the
- * walls keep exactly the lighting they had (no environment term), so the reading changes nothing on them but their relief.
+ * The probe's reflection: without parameters every texel by its own roughness and metalness; with them only the texels read
+ * as glass (params R > 0, scaled by that weight) or metal (B > 0), the walls keeping exactly the lighting they had.
  */
 const FRAGMENT_ENV_GATE = `
 #include <lights_fragment_maps>
-#if defined( USE_MAP ) && defined( USE_ENVMAP )
+#if defined( USE_ENVMAP )
     {
-        // metal sees the environment whole (a metal's look is its reflection); glass by its weight (the reading's
-        // confidence: a pane at half weight reflects half); other texels the scene's direct light only
+        #if defined( USE_MAP ) && defined( SB_PARAMS )
         vec4 sbP = texture2D( uSbMatParams, vMapUv );
         float sbEnv = sbP.b > 0.0 ? 1.0 : sbP.r;
+        #else
+        float sbEnv = 1.0;
+        #endif
         // below the horizon a reflection sees the ground (gaffer skill, section 2): no brighter than ground of albedo
         // uSbGroundAlbedo under the scene's sky and sun would send back, whatever the probe drew there
         if ( uSbGroundAlbedo > 0.0 ) {
@@ -196,63 +160,17 @@ const FRAGMENT_ENV_GATE = `
             float sbAbove = smoothstep( -0.03, 0.03, sbRwG.y );
             radiance = mix( min( radiance, sbGround ), radiance, sbAbove );
         }
-        // specular occlusion (gaffer skill, section 2): a pane sits at the back of its bay, recessed uSbRecess.x bay widths
-        // (y: window heights) behind the piers, so a reflection leaving it at a grazing angle meets the reveal, not the sky.
-        // The share of the pane that sees out along the reflection, across and up the facade (its unperturbed normal)
-        if ( sbP.r > 0.0 && ( uSbRecess.x > 0.0 || uSbRecess.y > 0.0 ) ) {
-            vec3 sbRw = inverseTransformDirection( reflect( - geometryViewDir, normal ), viewMatrix );
-            // the face's own normal (before the pane tilt and any normal map), from the surface's screen derivatives, outward
-            vec3 sbFn = normalize( cross( dFdx( vViewPosition ), dFdy( vViewPosition ) ) );
-            if ( dot( sbFn, normal ) < 0.0 ) sbFn = - sbFn;
-            vec3 sbNw = inverseTransformDirection( sbFn, viewMatrix );
-            vec3 sbTw = cross( vec3( 0.0, 1.0, 0.0 ), sbNw );
-            float sbTl = length( sbTw );
-            if ( sbTl > 0.3 ) {
-                sbTw /= sbTl;
-                vec3 sbBw = cross( sbNw, sbTw );
-                float sbRn = max( dot( sbRw, sbNw ), 1e-3 );
-                float sbVis = clamp( 1.0 - uSbRecess.x * abs( dot( sbRw, sbTw ) ) / sbRn, 0.0, 1.0 )
-                            * clamp( 1.0 - uSbRecess.y * abs( dot( sbRw, sbBw ) ) / sbRn, 0.0, 1.0 );
-                radiance *= sbVis;
-            }
-        }
-        // the probe's diffuse light only on metal: glass and stone are already lit by the scene's sky fill (the hemisphere
-        // light), so adding the probe's irradiance lit a glass texel's photo colour twice
+        // the probe's diffuse light only on metal read by the parameters: every photo is already lit by the scene's sky
+        // fill (the hemisphere light), so adding the probe's irradiance lit its colour twice (a metal's diffuse is ~0 anyway)
+        #if defined( USE_MAP ) && defined( SB_PARAMS )
         iblIrradiance *= sbP.b > 0.0 ? 1.0 : 0.0;
+        #else
+        iblIrradiance *= 0.0;
+        #endif
         radiance *= sbEnv;
     }
 #endif
 `;
-
-/**
- * How deep a facade's glass sits in its bays, in bay widths (x) and window heights (y), for the specular occlusion: the
- * structure's relief (sbFacadeLattice.structure.reliefM, the pier-to-bay depth) over the median bay's width, the bays read
- * in the photo's UVs and turned into metres by the mesh's own UV scale. The bays run the facade's height (window strips),
- * so y stays 0. (0, 0) where the facade has no structure (a scan piece, a facade without bays): no occlusion drawn.
- */
-export function recessOf(root: THREE.Object3D, mat: THREE.Material): THREE.Vector2 {
-    let out = new THREE.Vector2(0, 0);
-    root.traverse(o => {
-        const mesh = o as THREE.Mesh;
-        if (out.x > 0 || !mesh.isMesh || !(Array.isArray(mesh.material) ? mesh.material.includes(mat) : mesh.material === mat)) return;
-        const lat = (mesh.userData?.sbFacadeLattice ?? mesh.parent?.userData?.sbFacadeLattice) as { structure?: { reliefM?: number; bays?: number[] } } | undefined;
-        const relief = lat?.structure?.reliefM, bays = lat?.structure?.bays;
-        const pos = mesh.geometry.getAttribute('position'), uv = mesh.geometry.getAttribute('uv');
-        if (!(relief && relief > 0) || !bays || bays.length < 4 || !pos || !uv) return;
-        // metres per u: the mesh's horizontal extent over its u range (the lattice maps the facade's width onto u linearly)
-        let u0 = Infinity, u1 = -Infinity;
-        for (let i = 0; i < uv.count; i++) { const u = uv.getX(i); if (u < u0) u0 = u; if (u > u1) u1 = u; }
-        const box = new THREE.Box3().setFromBufferAttribute(pos as THREE.BufferAttribute).applyMatrix4(mesh.matrixWorld);
-        const widthM = Math.hypot(box.max.x - box.min.x, box.max.z - box.min.z);
-        if (!(u1 > u0) || !(widthM > 0)) return;
-        const widths: number[] = [];
-        for (let i = 0; i + 3 < bays.length; i += 4) widths.push(Math.abs(bays[i + 2] - bays[i]) * widthM / (u1 - u0));
-        widths.sort((a, b) => a - b);
-        const bayM = widths[widths.length >> 1];
-        if (bayM > 0.2) out = new THREE.Vector2(relief / bayM, 0);
-    });
-    return out;
-}
 
 function rawTexture(tex: THREE.Texture, nearest: boolean, repeatT: boolean): THREE.Texture {
     tex.colorSpace = THREE.NoColorSpace;
@@ -285,38 +203,32 @@ export async function prepareFacadeMaterials(gltf: GltfLike): Promise<number> {
             const courseTex = typeof ex.courseTexture === 'number' ? rawTexture(await parser.getDependency('texture', ex.courseTexture) as THREE.Texture, false, true) : undefined;
             const courses = (ex.courses ?? []).slice(0, MAX_COURSES);
             mat.userData[FACADE_MATERIAL_KEY] = true;
-            if (params) {
-                const withCourses = !!courseTex && courses.length > 0;
-                const uniforms = {
-                    uSbMatParams: { value: params },
-                    uSbCourses: { value: courseTex ?? params },
-                    uSbCourse: { value: Array.from({ length: MAX_COURSES }, (_, i) => new THREE.Vector4(courses[i]?.pitchM ?? 1, courses[i]?.phaseM ?? 0, 0, 0)) },
-                    uSbCourseWidth: { value: (courseTex?.image as { width?: number } | undefined)?.width ?? Math.max(4, courses.length * 4) },
-                    uSbParamsSize: { value: new THREE.Vector2((params.image as { width?: number } | undefined)?.width ?? 1, (params.image as { height?: number } | undefined)?.height ?? 1) },
-                    uSbRecess: { value: recessOf(gltf.scene, mat) },
-                    // the ground a vertical pane reflects below the horizon: street and stone (generated: a typical albedo)
-                    uSbGroundAlbedo: { value: GLASS_GROUND_ALBEDO }
-                };
-                // the glass's recess, kept on the material (a view that re-reads the facade's bays can update it)
-                mat.userData.sbRecess = uniforms.uSbRecess;
-                mat.userData.sbGroundAlbedo = uniforms.uSbGroundAlbedo;
-                if (withCourses) mat.defines = { ...(mat.defines ?? {}), SB_COURSES: '' };
-                const prior = mat.onBeforeCompile;
-                mat.onBeforeCompile = (shader, renderer) => {
-                    prior?.call(mat, shader, renderer);
-                    Object.assign(shader.uniforms, uniforms);
-                    shader.vertexShader = shader.vertexShader
-                        .replace('#include <common>', `#include <common>\n${VERTEX_DECL}`)
-                        .replace('#include <begin_vertex>', `#include <begin_vertex>\n${VERTEX_BODY}`);
-                    shader.fragmentShader = shader.fragmentShader
-                        .replace('#include <common>', `#include <common>\n${FRAGMENT_DECL}`)
-                        .replace('#include <normal_fragment_maps>', FRAGMENT_COURSES)
-                        .replace('#include <lights_physical_fragment>', FRAGMENT_SPECULAR_AA)
-                        .replace('#include <lights_fragment_maps>', FRAGMENT_ENV_GATE);
-                };
-                mat.customProgramCacheKey = () => `sb-facade-v8:${withCourses ? courses.length : 0}`;
-                mat.needsUpdate = true;
-            }
+            const withParams = !!params, withCourses = withParams && !!courseTex && courses.length > 0;
+            const uniforms = {
+                uSbMatParams: { value: params ?? null },
+                uSbCourses: { value: courseTex ?? params ?? null },
+                uSbCourse: { value: Array.from({ length: MAX_COURSES }, (_, i) => new THREE.Vector4(courses[i]?.pitchM ?? 1, courses[i]?.phaseM ?? 0, 0, 0)) },
+                uSbCourseWidth: { value: (courseTex?.image as { width?: number } | undefined)?.width ?? Math.max(4, courses.length * 4) },
+                // the ground a surface reflects below the horizon: street and stone (generated: a typical albedo)
+                uSbGroundAlbedo: { value: GROUND_ALBEDO }
+            };
+            mat.userData.sbGroundAlbedo = uniforms.uSbGroundAlbedo;
+            mat.defines = { ...(mat.defines ?? {}), ...(withParams ? { SB_PARAMS: '' } : {}), ...(withCourses ? { SB_COURSES: '' } : {}) };
+            const prior = mat.onBeforeCompile;
+            mat.onBeforeCompile = (shader, renderer) => {
+                prior?.call(mat, shader, renderer);
+                Object.assign(shader.uniforms, uniforms);
+                shader.vertexShader = shader.vertexShader
+                    .replace('#include <common>', `#include <common>\n${VERTEX_DECL}`)
+                    .replace('#include <begin_vertex>', `#include <begin_vertex>\n${VERTEX_BODY}`);
+                shader.fragmentShader = shader.fragmentShader
+                    .replace('#include <common>', `#include <common>\n${FRAGMENT_DECL}`)
+                    .replace('#include <normal_fragment_maps>', FRAGMENT_COURSES)
+                    .replace('#include <lights_physical_fragment>', FRAGMENT_SPECULAR_AA)
+                    .replace('#include <lights_fragment_maps>', FRAGMENT_ENV_GATE);
+            };
+            mat.customProgramCacheKey = () => `sb-facade-v9:${withParams ? 'p' : 'n'}:${withCourses ? courses.length : 0}`;
+            mat.needsUpdate = true;
             patched++;
         } catch (err) {
             console.warn('[staged textures] the facade material textures did not load; the surface keeps the plain photo:', err);
