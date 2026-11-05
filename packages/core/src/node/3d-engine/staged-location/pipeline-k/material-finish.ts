@@ -16,7 +16,10 @@
  * The ranking ranks toward a reading's roughness and metalness when it is at least FINISH_READ.minConf confident, else
  * toward the matte dielectric finish (REGION_FINISH). Every class takes the set the ranking and the pick by appearance
  * choose, drawn with all of its maps (user decision, 2026-11-05: one material path for every surface; no plain finish, no
- * metal gate, no glass layer). Labelled photo-inferred.
+ * metal gate, no glass layer); a confident reading also sets the finish those maps are drawn at (finishMaps): the set's
+ * roughness and metalness scaled to the read values, its grain kept, and its normal relief in proportion to the read
+ * roughness, so a surface read smooth and reflective (window glass) is drawn smooth and nearly flat (user, 2026-11-05).
+ * Labelled photo-inferred.
  */
 
 import type { RegionClass } from './material-regions';
@@ -24,8 +27,13 @@ import type { RegionClass } from './material-regions';
 export const MATERIAL_FINISH_VERSION = 'material-finish/2';
 
 export const FINISH_READ = {
-    /** A reading's roughness and metalness rank the class's sets at this confidence (0..100) and above. */
-    minConf: 50
+    /** A reading's roughness and metalness rank the class's sets, and set its drawn finish, at this confidence (0..100) and above. */
+    minConf: 50,
+    /**
+     * The set's normal relief drawn in full at this read roughness and above, and scaled down in proportion below it: a
+     * surface read smooth (window glass about 0.05, polished stone 0.3) is drawn nearly flat, whatever grain its set has.
+     */
+    reliefFullAt: 0.5
 } as const;
 
 export interface ClassFinish { roughness: number; metalness: number; conf: number; seen?: string }
@@ -67,4 +75,34 @@ export function parseClassFinish(text: string, rows = 0): Array<ClassFinish | un
 /** What the ranking ranks toward: the reading's roughness and metalness when it is confident enough, else the matte finish. */
 export function finishTarget(f: ClassFinish | undefined, matte: { roughness: number; metallic: number }, R = FINISH_READ): { roughness: number; metallic: number } {
     return f && f.conf >= R.minConf ? { roughness: f.roughness, metallic: f.metalness } : { roughness: matte.roughness, metallic: matte.metallic };
+}
+
+/** What finishMaps drew: the mean roughness and metalness and the share of the set's normal relief kept. */
+export interface DrawnFinish { roughness: number; metallic: number; relief: number }
+
+/**
+ * A class's set maps drawn at its read finish (see the file comment): with no confident reading, the set's maps as they
+ * are; else each texel's roughness (ORM green) and metalness (blue) scaled so their means are the read values (a set with
+ * no metalness takes the read value even), and the tangent-space normal tilted toward flat by the read roughness over
+ * reliefFullAt. Occlusion (red) is kept. Returns new images; the inputs are not changed.
+ */
+export function finishMaps(orm: { width: number; height: number; rgba: Uint8Array }, normal: { width: number; height: number; rgba: Uint8Array }, f: ClassFinish | undefined, R = FINISH_READ): { orm: typeof orm; normal: typeof normal; drawn?: DrawnFinish } {
+    if (!f || f.conf < R.minConf) return { orm, normal };
+    const n = orm.width * orm.height;
+    let g = 0, b = 0;
+    for (let k = 0; k < n; k++) { g += orm.rgba[k * 4 + 1]; b += orm.rgba[k * 4 + 2]; }
+    const gMean = g / n / 255, bMean = b / n / 255;
+    const o = orm.rgba.slice(), clamp8 = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+    for (let k = 0; k < n; k++) {
+        o[k * 4 + 1] = clamp8(gMean > 0 ? orm.rgba[k * 4 + 1] * (f.roughness / gMean) : f.roughness * 255);
+        o[k * 4 + 2] = clamp8(bMean > 0 ? orm.rgba[k * 4 + 2] * (f.metalness / bMean) : f.metalness * 255);
+    }
+    const relief = Math.max(0, Math.min(1, f.roughness / R.reliefFullAt)), nn = normal.rgba.slice();
+    for (let k = 0; k < normal.width * normal.height; k++) {
+        const x = (normal.rgba[k * 4] / 255) * 2 - 1, y = (normal.rgba[k * 4 + 1] / 255) * 2 - 1, z = (normal.rgba[k * 4 + 2] / 255) * 2 - 1;
+        const tx = x * relief, ty = y * relief, tz = z * relief + (1 - relief), l = Math.hypot(tx, ty, tz) || 1;
+        nn[k * 4] = clamp8((tx / l * 0.5 + 0.5) * 255); nn[k * 4 + 1] = clamp8((ty / l * 0.5 + 0.5) * 255); nn[k * 4 + 2] = clamp8((tz / l * 0.5 + 0.5) * 255);
+    }
+    const r2 = (v: number) => Math.round(v * 100) / 100;
+    return { orm: { ...orm, rgba: o }, normal: { ...normal, rgba: nn }, drawn: { roughness: r2(f.roughness), metallic: r2(f.metalness), relief: r2(relief) } };
 }

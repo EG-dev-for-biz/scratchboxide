@@ -26,7 +26,7 @@ import { NativePythonRunnerService } from '../../native-python-runner-service';
 import { decodeImageInMemory } from '../tile-texture-transfer';
 import type { RegionClass, RegionSet } from './material-regions';
 import { CHOICE_CANDIDATES, type ChoiceCandidate, type ChoiceRow, type SetChoice } from './material-choice';
-import { finishTarget, type ClassFinish } from './material-finish';
+import { finishMaps, finishTarget, type ClassFinish } from './material-finish';
 import { readingKey, type ModelReadingStore } from './model-readings';
 
 /** Prepared map size: a facade texel is several centimetres, so a tile of a metre or two needs few texels. */
@@ -209,12 +209,14 @@ for j in json.load(open(${JSON.stringify(jobs)})):
     }
     return chosen.map((hit, k): RegionSet => {
         const maps = kept.get(hit.entry.id)!;
+        // the set drawn at the class's read finish (material-finish.ts finishMaps): smooth where it was read smooth
+        const drawn = finishMaps(decodeImageInMemory(maps.orm), decodeImageInMemory(maps.normal), finishes[k]);
         return {
             name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
-            ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), roughness: targets[k].roughness, metallic: targets[k].metallic, label: 'photo-inferred' as const } } : {}),
+            ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), roughness: targets[k].roughness, metallic: targets[k].metallic, ...(drawn.drawn ? { drawn: drawn.drawn } : {}), label: 'photo-inferred' as const } } : {}),
             ...(choices[k] ? { choice: { candidates: choices[k]!.candidates, by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick?.seen ? { seen: choices[k]!.pick!.seen } : {}), ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}), ...(choices[k]!.pick?.reused ? { reused: choices[k]!.pick!.reused } : {}), ...(choices[k]!.why ? { why: choices[k]!.why } : {}) } } : {}),
             ...(textured.has(k) ? { harvest: { ...textured.get(k)!, classEnergy: classes[k].texture!.energy, texelM: classes[k].texture!.texelM, grain: `generated: the set's detail finer than the tile's ${Math.round(classes[k].texture!.texelM * 100)} cm texel is its own, below the tile's resolution` } } : {}),
-            normal: decodeImageInMemory(maps.normal), orm: decodeImageInMemory(maps.orm)
+            normal: drawn.normal, orm: drawn.orm
         };
     });
 }

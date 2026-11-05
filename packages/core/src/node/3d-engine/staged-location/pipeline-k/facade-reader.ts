@@ -62,7 +62,7 @@ import { PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
 
 export const FACADE_READER_VERSION = 'facade-reader/12';
 /** The prompts' version, in every kept reading's key (with the prompt's own text): a change to what is asked asks again. */
-export const FACADE_READER_PROMPT_VERSION = 'facade-reader-prompts/1';
+export const FACADE_READER_PROMPT_VERSION = 'facade-reader-prompts/2';
 
 /** The reader's vision model: fast, cheap and good enough at reading openings (benchmarked 2026-10-29 on the ESB's tower crops against gemini-4-argon and gemini-3.5-flash-lite); the app's other vision models are the fallback. */
 export const FACADE_READER_MODEL = { model: 'gemini-3.8-flash', thinkingBudget: 512 } as const;
