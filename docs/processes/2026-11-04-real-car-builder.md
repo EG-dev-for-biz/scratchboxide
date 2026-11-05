@@ -170,15 +170,16 @@ Mean outline error against the production Golf (`golf_gti_my25_lights_on.glb`). 
 | Step 5 build | 3.1 cm | 6.7 cm | 2.1 cm | 2.3 cm |
 | Same spec, relief removed | 3.1 cm | 6.7 cm | 2.1 cm | 2.3 cm |
 | Build vs its blueprint | 2.1 cm | 4.6 cm | 2.7 cm | 1.4 cm |
+| Agent's final, after its own fix pass | 1.8 cm | 2.1 cm | 1.5 cm | 1.9 cm |
 | Earlier loft build | 0.8 cm | 2.1 cm | 1.3 cm | 1.3 cm |
 | Earlier hollows build | 1.3 cm | 2.5 cm | 1.4 cm | 2.4 cm |
 
 - **The relief changes no outline.** The build with it and the same spec rebuilt without it measure identically.
-- **This run's regression is the agent's part choices.** A side skirt reaches down near the ground, exhaust pipes stand out past the rear, and there are roof extras. The drawing was good.
+- **The first pass's regression is the agent's part choices, and its own fix pass recovered it** (final 1.8 / 2.1 / 1.5 / 1.9 cm, near the earlier hollows build). A side skirt reaches down near the ground, exhaust pipes stand out past the rear, and there are roof extras. The drawing was good.
 - **The hollows are not visible.**
   - Vertex by vertex, at 1.0 cm the glasshouse moved at most 0.47 cm.
   - Rebuilt at the 5 cm maximum it moved at most 2.37 cm (mean 0.72 cm over the vertices that moved).
-  - Renders under low grazing light, relief off and on, look the same (`docs/screenshots/golf_relief_onoff.png`, `golf_relief_max.png`; full sheet `golf_depth_sheet.png`).
+  - Renders under low grazing light, relief off and on, look the same (`docs/screenshots/golf_step5_sheet.png`, `golf_relief_onoff.png`, `golf_relief_max.png`).
 - **Why:**
   - The grid is coarse and smoothed (48 × 36 front, 96 × 36 side, a blur radius of 4 % of the view).
   - A sink wider than the blur reads mostly at its rim.
