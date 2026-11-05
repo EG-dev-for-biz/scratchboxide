@@ -13,7 +13,10 @@
  * that shorten up a cone; a rosette of arching compound leaves on an unbranched stem; shoots that droop and tails that
  * hang; laterals held at an angle that changes with their order; the momentum release that ends the high-apical stall;
  * the trunk that climbs its own line to a crown that begins above it; an open crown. And that with none of them set
- * the generator grows the tree it grew before it had them, bit for bit.
+ * the generator grows the tree it grew before it had them, bit for bit. And through the whole grower (tile_vegetation
+ * grow, its levels of detail): a rosette's fronds are drawn at the near, near-mid and mid levels, every form's levels get
+ * lighter with distance, stems from the ground reach a crown that begins above them, and a rosette is fitted to an uneven
+ * crown.
  *
  * Every parameter is a number; nothing here names a kind of tree to the grower. Nothing reaches a network.
  */
@@ -24,6 +27,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { validateTreeSpeciesIndex, type TreeSpeciesEntry, type TreeSpeciesIndex } from '../src/common/spatial/tree-species-library';
+import { TileVegetationService } from '../src/node/3d-engine/tile-vegetation-service';
+import { parseGlb, readAccessor } from './helpers/clay-glb-render';
 
 const REPO = fs.realpathSync(path.resolve(__dirname, '../../..'));
 const INCLUDE = path.join(REPO, 'packages/core/src/native/3d-engine/include');
@@ -186,13 +191,16 @@ describe('fronds: a rosette of compound leaves on an unbranched stem', () => {
         const centre = stem[stem.length - 1];
         // the stem is a single chain: every node of it but its top has exactly one child, and its top has the leaves
         expect(stem.slice(0, -1).every(n => n.children === 1)).toBe(true);
-        expect(centre.children).toBe(14);
+        // the species' 14 leaves, and up to half as many again sent to the parts of the dome's surface they leave unreached
+        const leafCount = new Set(t.nodes.filter(n => n.rosetteLeaf >= 0).map(n => n.rosetteLeaf)).size;
+        expect(leafCount).toBeGreaterThanOrEqual(14);
+        expect(leafCount).toBeLessThanOrEqual(21);
+        expect(centre.children).toBe(leafCount);
         expect(centre.y).toBeGreaterThanOrEqual(t.crown.crownBaseY - 1e-3);
         expect(Math.max(...stem.map(horizontal))).toBeLessThan(0.05);
         // nothing forks anywhere else, and no wood but the stem stands below the crown base
         const leafNodes = t.nodes.filter(n => n.rosetteLeaf >= 0);
         expect(leafNodes.every(n => n.children <= 1)).toBe(true);
-        expect(new Set(leafNodes.map(n => n.rosetteLeaf)).size).toBe(14);
         expect(leafNodes.every(n => n.y >= t.crown.crownBaseY - 1e-3)).toBe(true);
         expect(t.colonisation.stop).toBe('rosette');
         // the leaves reach the crown's footprint and stay within its height
@@ -202,8 +210,8 @@ describe('fronds: a rosette of compound leaves on an unbranched stem', () => {
         expect(Math.max(...leafNodes.map(n => n.y))).toBeLessThanOrEqual(18 + 0.3);
         // drawn as leaflets: two triangles each, a side's worth on both sides of every leaf, none below the crown
         expect(t.mesh.trianglesPerPiece).toBe(2);
-        expect(t.mesh.foliagePieces).toBe(14 * 2 * 24);
-        expect(t.mesh.foliageTriangles).toBe(14 * 2 * 24 * 2);
+        expect(t.mesh.foliagePieces).toBe(leafCount * 2 * 24);
+        expect(t.mesh.foliageTriangles).toBe(leafCount * 2 * 24 * 2);
     });
 
     it('arch bends the leaves down along their length; without it they stand straight', () => {
@@ -213,6 +221,7 @@ describe('fronds: a rosette of compound leaves on an unbranched stem', () => {
         // a straight leaf's nodes lie on one line from the stem's top; an arched one's tip hangs below that line
         const sag = (t: Probe) => {
             const out: number[] = [];
+            // (the species' own 14; the leaves sent after the crown's surface run straight at it)
             for (let leaf = 0; leaf < 14; leaf++) {
                 const chain = t.nodes.filter(n => n.rosetteLeaf === leaf);
                 const first = chain[0], centre = t.nodes[first.parent], tip = chain[chain.length - 1];
@@ -232,12 +241,15 @@ describe('fronds: a rosette of compound leaves on an unbranched stem', () => {
         expect(Math.min(...baseReach(pinnate))).toBeLessThan(0.5);
         expect(Math.min(...baseReach(palmate))).toBeGreaterThan(Math.min(...baseReach(pinnate)) + 0.5);
         expect(mean(baseReach(palmate))).toBeGreaterThan(mean(baseReach(pinnate)));
-        expect(probe({ ...PALM, 'rosette-leaves': 12, 'leaflets-per-side': 10 }).mesh.foliagePieces).toBe(12 * 2 * 10);
+        const ten = probe({ ...PALM, 'rosette-leaves': 12, 'leaflets-per-side': 10 });
+        expect(ten.mesh.foliagePieces).toBe(new Set(ten.nodes.filter(n => n.rosetteLeaf >= 0).map(n => n.rosetteLeaf)).size * 2 * 10);
         // a budget that holds fewer draws fewer a side, never more triangles than it has
         const tight = probe({ ...PALM, 'rosette-leaves': 12, 'leaflets-per-side': 40, budget: 1200 });
         expect(tight.mesh.woodTriangles + tight.mesh.foliageTriangles).toBeLessThanOrEqual(1200);
         expect(tight.mesh.foliagePieces).toBeGreaterThan(0);
         expect(tight.mesh.foliagePieces).toBeLessThan(12 * 2 * 40);
+        // half the foliage's budget at most, so the far level it is stays lighter than the nearer ones
+        expect(tight.mesh.foliageTriangles).toBeLessThanOrEqual((1200 - tight.mesh.woodTriangles) / 2);
     });
 });
 
@@ -422,4 +434,145 @@ describe('the growth-form fields in the species library', () => {
             expect(src, field).toContain(`form->${field}`);
         }
     });
+});
+
+describe('stems from the ground and uneven crowns', () => {
+    it('stems from the ground grow on to a crown that begins out of their sight, as a single trunk does', () => {
+        // a tall crown whose leaves begin far up: from a fork at the root collar nothing is in sight
+        const HIGH = { height: 14, radius: 5, 'crown-base-ratio': 0.15, 'crown-starts-at': 0.9, 'stems-from-ground': 1 };
+        const t = probe(HIGH);
+        expect(t.colonisation.trunkSeekSteps).toBeGreaterThan(4);
+        expect(t.colonisation.attractorsReached / t.crown.attractors).toBeGreaterThan(0.9);
+        expect(t.mesh.foliageTriangles).toBeGreaterThan(0);
+        // the stems leave the root collar
+        const fork = t.nodes.findIndex(n => n.children >= 4);
+        expect(fork).toBeGreaterThanOrEqual(0);
+        expect(t.nodes[fork].y).toBeLessThan(0.5);
+        // a crown that is in sight from the fork grows exactly as it did (the seeking never starts)
+        const low = probe({ height: 3, radius: 2, 'crown-base-ratio': 0.05, 'stems-from-ground': 1 });
+        expect(low.colonisation.trunkSeekSteps).toBe(0);
+        expect(low.colonisation.attractorsReached / low.crown.attractors).toBeGreaterThan(0.9);
+    });
+
+    it('a rosette is fitted to an uneven crown: a lump out to one side is reached by a leaf', () => {
+        const PALM = { height: 18, radius: 3.6, 'crown-base-ratio': 0.8, 'top-exponent': 2.2, 'branch-angle': 1.2, 'rosette-leaves': 10 };
+        const even = probe(PALM);
+        // on the even crown nothing reaches out to where the lump will be
+        expect(Math.min(...even.nodes.map(n => Math.hypot(n.x - 6.5, n.y - 16, n.z)))).toBeGreaterThan(2.0);
+        expect(new Set(even.nodes.filter(n => n.rosetteLeaf >= 0).map(n => n.rosetteLeaf)).size).toBeLessThanOrEqual(15);
+        // a ball of crown 6.5 m out to one side, well past the fronds
+        const uneven = probe({ ...PALM, 'lump-x': 6.5, 'lump-y': 16, 'lump-r': 1.2 });
+        const leaves = new Set(uneven.nodes.filter(n => n.rosetteLeaf >= 0).map(n => n.rosetteLeaf)).size;
+        expect(leaves).toBeGreaterThan(10);
+        expect(leaves).toBeLessThanOrEqual(15);   // never more than half as many again
+        // a leaf reaches the lump: the one in its sector grown out to it (the footprint sets each leaf's length), or one sent after it
+        const near = Math.min(...uneven.nodes.filter(n => n.rosetteLeaf >= 0).map(n => Math.hypot(n.x - 6.5, n.y - 16, n.z)));
+        expect(near).toBeLessThan(1.5);
+        // still one unbranched stem
+        expect(uneven.nodes.filter(n => n.rosetteLeaf === -1).slice(0, -1).every(n => n.children === 1)).toBe(true);
+        // and its leaflets are drawn on every leaf
+        expect(uneven.mesh.foliagePieces).toBe(leaves * 2 * 24);
+    });
+});
+
+describe('levels of detail of every form (tile_vegetation grow)', () => {
+    let bin: string;
+    const entryOf = (id: string): TreeSpeciesEntry => INDEX.entries.find(e => e.id === id)!;
+    interface Levels { triangles: number[]; foliagePrimitives: (number[] | undefined)[]; frondSpread: number[]; frondTop: number[]; instanced: boolean[]; leaves: any }
+
+    /** One described crown grown with one pinned entry through the default path; its four levels, near to far. */
+    function grow(id: string, tree: Record<string, unknown>): Levels {
+        const dir = fs.mkdtempSync(path.join(work, 'lod-'));
+        fs.writeFileSync(path.join(dir, 'index.json'), JSON.stringify({ ...INDEX, entries: [entryOf(id)] }));
+        fs.writeFileSync(path.join(dir, 'trees.json'), JSON.stringify({ schema: 'scratchbox.sb-veggie-trees/1', trees: [tree] }));
+        execFileSync(bin, ['grow', '--trees', path.join(dir, 'trees.json'), '--out', path.join(dir, 'trees.glb'), '--stats', path.join(dir, 'stats.json'), '--seed', '5eed', '--quantize', '0',
+            '--species-index', path.join(dir, 'index.json'), '--species-index-label', 'pinned',
+            '--texture-index', path.join(REPO, 'assets/textures/trees/index.json'), '--texture-index-label', 'assets/textures/trees/index.json'], { stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
+        const { json, bin: buffer } = parseGlb(fs.readFileSync(path.join(dir, 'trees.glb')));
+        const tree0 = json.nodes.find((n: any) => n.extras?.sbTree);
+        const levels = (tree0.children as number[]).map(i => json.nodes[i]).filter((n: any) => n.extras?.sbLod).sort((a: any, b: any) => a.extras.sbLod.level - b.extras.sbLod.level);
+        const out: Levels = { triangles: [], foliagePrimitives: [], frondSpread: [], frondTop: [], instanced: [], leaves: tree0.extras.sbTree.texture?.leaves };
+        for (const n of levels) {
+            const lod = n.extras.sbLod;
+            out.triangles.push(lod.triangles);
+            out.foliagePrimitives.push(lod.foliagePrimitives);
+            out.instanced.push(lod.instanced);
+            // the level's own leaves (the primitives its extras list): how far they spread from the stem and how high they stand
+            let spread = 0, top = -Infinity;
+            for (const pi of lod.foliagePrimitives ?? []) {
+                const { data } = readAccessor(json, buffer, json.meshes[n.mesh].primitives[pi].attributes.POSITION);
+                for (let v = 0; v < data.length; v += 3) {
+                    spread = Math.max(spread, Math.hypot(data[v], data[v + 2]));
+                    top = Math.max(top, data[v + 1]);
+                }
+            }
+            out.frondSpread.push(spread);
+            out.frondTop.push(top);
+        }
+        return out;
+    }
+
+    beforeAll(async () => {
+        bin = await new TileVegetationService({ workspaceRoot: work, repoRoot: REPO }).ensureBinary();
+    }, 900_000);
+
+    const DOME = { heightM: 18, crownRadiusM: 3.6, crownTopExponent: 2.2, crownWidestAt: 0.5 };
+
+    it('a rosette\'s fronds are each level\'s own leaves: at the near, near-mid and mid levels with the crown\'s spread, fewer leaflets each level out', () => {
+        const rosettes = INDEX.entries.filter(e => (e.rosetteLeaves ?? 0) > 0);
+        expect(rosettes.length).toBeGreaterThanOrEqual(4);
+        for (const e of rosettes) {
+            const L = grow(e.id, DOME);
+            expect(L.triangles, e.id).toHaveLength(4);
+            // every level lists its leaves as its second primitive (the first is the wood)
+            for (let k = 0; k < 4; k++) expect(L.foliagePrimitives[k], `${e.id} level ${k}`).toEqual([1]);
+            // the mid level keeps the crown's spread and height: within a tenth of the near level's, and most of the crown's radius
+            expect(L.frondSpread[2], e.id).toBeGreaterThan(0.9 * L.frondSpread[0]);
+            expect(L.frondSpread[2], e.id).toBeGreaterThan(0.7 * DOME.crownRadiusM);
+            expect(L.frondSpread[3], e.id).toBeGreaterThan(0.9 * L.frondSpread[0]);
+            expect(Math.abs(L.frondTop[2] - L.frondTop[0]), e.id).toBeLessThan(0.5);
+            // lighter with distance, and the mid level is not a bare trunk
+            for (let k = 0; k < 3; k++) expect(L.triangles[k], `${e.id}: ${L.triangles.join(' > ')}`).toBeGreaterThan(L.triangles[k + 1]);
+            expect(L.triangles[2], e.id).toBeGreaterThan(500);
+        }
+    }, 900_000);
+
+    it('every form\'s levels get lighter with distance: near > near-mid > mid > far', () => {
+        // one entry of each form the library has, each on a crown of its own shape
+        const cases: [string, Record<string, number>][] = [
+            ['spruce', { heightM: 18, crownRadiusM: 3.2, crownTopExponent: 1, crownWidestAt: 0 }],
+            ['douglas_fir', { heightM: 14, crownRadiusM: 2.25, crownTopExponent: 1, crownWidestAt: 0.05 }],
+            ['norfolk_island_pine', { heightM: 25, crownRadiusM: 2.9, crownTopExponent: 1, crownWidestAt: 0 }],
+            ['weeping_willow', { heightM: 12, crownRadiusM: 6, crownTopExponent: 2.2, crownWidestAt: 0.5 }],
+            ['mesquite', { heightM: 7, crownRadiusM: 3.5, crownTopExponent: 2.2, crownWidestAt: 0.4 }],
+            ['green_ash', { heightM: 15, crownRadiusM: 5.3, crownTopExponent: 2, crownWidestAt: 0.45 }],
+            ['hornbeam', { heightM: 15, crownRadiusM: 5.2, crownTopExponent: 1.8, crownWidestAt: 0.4 }],
+            ['umbrella_acacia', { heightM: 9, crownRadiusM: 4.5, crownTopExponent: 2, crownWidestAt: 0.5 }],
+            ['red_oak', { heightM: 18, crownRadiusM: 9, crownTopExponent: 2.2, crownWidestAt: 0.45 }],
+            ['shrub', { heightM: 2.5, crownRadiusM: 2, crownTopExponent: 2, crownWidestAt: 0.4 }],
+            ['date_palm', { heightM: 12, crownRadiusM: 4 }],
+            ['coconut_palm', { heightM: 25, crownRadiusM: 4.5, crownTopExponent: 2.2, crownWidestAt: 0.5 }]
+        ];
+        for (const [id, tree] of cases) {
+            const L = grow(id, tree);
+            for (let k = 0; k < 3; k++) expect(L.triangles[k], `${id}: ${L.triangles.join(' > ')}`).toBeGreaterThan(L.triangles[k + 1]);
+            // a branching tree's leaves are the library's instanced clusters and cards; only its far level has leaves of its own
+            if (!(entryOf(id).rosetteLeaves ?? 0)) {
+                expect(L.foliagePrimitives.slice(0, 3), id).toEqual([undefined, undefined, undefined]);
+                expect(L.instanced[0], id).toBe(true);
+            }
+        }
+    }, 900_000);
+
+    it('a needle finer than the texture library\'s finest is still drawn as a needle', () => {
+        // a needle under a millimetre wide, finer than any leaf set: it takes the finest set, not broad leaves
+        const fine = INDEX.entries.find(e => e.leafLengthM * e.leafAspect < 0.001 && e.leafLengthM < 0.1 && e.stems === 1)!;
+        expect(fine).toBeDefined();
+        // (with the dark green a conifer's crown measures: the leaf set is chosen by colour and width together)
+        const L = grow(fine.id, { heightM: 24, crownRadiusM: 3.7, crownTopExponent: 1, crownWidestAt: 0, leafLinearRgb: [0.02, 0.045, 0.028] });
+        const textures = JSON.parse(fs.readFileSync(path.join(REPO, 'assets/textures/trees/index.json'), 'utf8')) as { leaves: Array<{ id: string; leaf: { bladeWidthM: number } }> };
+        const thinnest = Math.min(...textures.leaves.map(e => e.leaf.bladeWidthM));
+        expect(L.leaves.targetBladeWidthM).toBe(thinnest);
+        expect(L.leaves.bladeWidthM).toBe(thinnest);
+    }, 900_000);
 });

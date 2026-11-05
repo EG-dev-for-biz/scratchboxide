@@ -49,13 +49,8 @@ describe('botanical_synthesize_tree (SB-Veggie, space colonisation)', () => {
         expect(r.levelTriangles).toHaveLength(4);
         expect(r.triangles).toBe(r.levelTriangles[3]);
         expect(r.provenance).toContain('generated');
-        // near > near-mid > mid > far. By shape alone (the tool is given no place) this dome is nearest the library's date palm,
-        // which since 2026-11-05 grows as a rosette of fronds: the level-of-detail builder's mid level is built from leaf
-        // stations and does not draw fronds yet, so it carries fewer triangles than the far level's leaflets. Known gap,
-        // reported with the growth forms; the mid against the far level is asserted for every tree that is not a rosette.
-        const speciesIndex = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../../assets/vegetation/species/index.json'), 'utf8'));
-        const rosette = (speciesIndex.entries.find((e: any) => e.id === (r.species ?? r.trees?.[0]?.species)?.entry)?.rosetteLeaves ?? 0) > 0;
-        for (let k = 0; k < (rosette ? 2 : 3); k++) expect(r.levelTriangles[k]).toBeGreaterThan(r.levelTriangles[k + 1]);
+        // near > near-mid > mid > far
+        for (let k = 0; k < 3; k++) expect(r.levelTriangles[k]).toBeGreaterThan(r.levelTriangles[k + 1]);
         // the leaf masses stay inside the requested crown even at a coarse budget
         expect(Math.abs(r.grown.heightMeters - 12)).toBeLessThan(1.0);
         expect(r.grown.crownSpreadMeters).toBeGreaterThan(0.85 * 8);

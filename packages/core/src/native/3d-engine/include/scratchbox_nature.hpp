@@ -1509,6 +1509,52 @@ public:
                 nodes[baseNodeId].children.push_back(stemNode.id);
                 nodes.push_back(stemNode);
             }
+            // A measured crown may begin higher than any of these can see (stems from the ground under a tall crown): then
+            // nothing would grow at all. With trunkSeeksCrown each stem grows on, rising and leaning the way it set out, half
+            // towards the attractor nearest it, until one is in sight, as a single trunk does. Only when no node sees any:
+            // a shrub whose crown is in sight grows exactly as it did.
+            if (cfg.trunkSeeksCrown && !cfg.customAttractors.empty() && !attractors.empty() && cfg.branchStepLength > 0.0f) {
+                auto anySees = [&](const ColonizationNode& node) {
+                    float d2 = 0.0f;
+                    for (const auto& a : attractors) if (sees(node, a, d2)) return true;
+                    return false;
+                };
+                bool inSight = false;
+                for (const auto& node : nodes) if (anySees(node)) { inSight = true; break; }
+                if (!inSight) {
+                    const int firstStem = static_cast<int>(nodes.size()) - 4;
+                    for (int s = 0; s < 4; ++s) {
+                        int tip = firstStem + s;
+                        float nearestD = 1e30f;
+                        for (const auto& a : attractors) nearestD = std::min(nearestD, (a - nodes[static_cast<size_t>(tip)].position).length());
+                        const int maxSteps = static_cast<int>(std::ceil(nearestD / cfg.branchStepLength)) + 2;
+                        for (int k = 0; k < maxSteps && !anySees(nodes[static_cast<size_t>(tip)]); ++k) {
+                            const Vec3 p = nodes[static_cast<size_t>(tip)].position;
+                            Vec3 nearest = attractors.front();
+                            float best = 1e30f;
+                            for (const auto& a : attractors) {
+                                const float d2 = (a - p).lengthSquared();
+                                if (d2 < best) { best = d2; nearest = a; }
+                            }
+                            Vec3 to = nearest - p;
+                            if (to.y < 0.0f) to.y = 0.0f;
+                            if (to.lengthSquared() < 1e-12f) break;
+                            const Vec3 dir = (nodes[static_cast<size_t>(tip)].growthDir * 0.5f + to.normalized() * 0.5f).normalized();
+                            ColonizationNode nx;
+                            nx.id = static_cast<int>(nodes.size());
+                            nx.parentId = tip;
+                            nx.position = p + dir * cfg.branchStepLength;
+                            nx.growthDir = dir;
+                            nx.order = 1;
+                            nx.shootLength = nodes[static_cast<size_t>(tip)].shootLength + cfg.branchStepLength;
+                            nodes[static_cast<size_t>(tip)].children.push_back(nx.id);
+                            nodes.push_back(nx);
+                            tip = nx.id;
+                            ++rep.trunkSeekSteps;
+                        }
+                    }
+                }
+            }
         } else if (cfg.scaffoldBranchCount >= 2) {
             // For trees: Sprout primary scaffold limbs that flare outward into distinct crown sectors
             int crownBaseNodeId = crownBreakId;
@@ -1939,6 +1985,65 @@ private:
                 nodes[static_cast<size_t>(parent)].children.push_back(nx.id);
                 nodes.push_back(nx);
                 parent = nx.id;
+            }
+        }
+        // A measured crown is not a clean rosette: where part of its surface lies beyond every leaf (a lump on one side),
+        // a further leaf is sent straight at the surface point farthest from any rachis, bending a little, until none is
+        // farther than 2.2 kill radii (about the reach a regrown crown is judged by) or half as many leaves again have
+        // been added. The crown's surface is the highest attractor of each column a kill radius wide (the attractors
+        // beneath it are the crown's depth, which a rosette does not fill). The measured crown leads: the rosette is
+        // fitted to it, and a crown it still cannot fill is reported as not regrown.
+        {
+            const float reachOk = 2.2f * cfg.killRadius;
+            const int extraMax = std::max(2, n / 2);
+            const float column = std::max({cfg.killRadius, step, 1e-3f});
+            std::unordered_map<uint64_t, size_t> columnTop;
+            for (size_t a = 0; a < attractors.size(); ++a) {
+                const int64_t cx = static_cast<int64_t>(std::floor(attractors[a].x / column)), cz = static_cast<int64_t>(std::floor(attractors[a].z / column));
+                const uint64_t key = (static_cast<uint64_t>(cx & 0xFFFFFFFF) << 32) | static_cast<uint64_t>(cz & 0xFFFFFFFF);
+                auto it = columnTop.find(key);
+                if (it == columnTop.end()) columnTop.emplace(key, a);
+                else if (attractors[a].y > attractors[it->second].y) it->second = a;
+            }
+            std::vector<float> nearest(attractors.size(), -1.0f);   // -1: not on the surface, never a target
+            for (const auto& kv : columnTop) nearest[kv.second] = 1e30f;
+            auto absorb = [&](size_t from) {
+                for (size_t a = 0; a < attractors.size(); ++a) {
+                    if (nearest[a] < 0.0f) continue;
+                    for (size_t i = from; i < nodes.size(); ++i) nearest[a] = std::min(nearest[a], (nodes[i].position - attractors[a]).lengthSquared());
+                }
+            };
+            absorb(static_cast<size_t>(centreId));
+            for (int extra = 0; extra < extraMax; ++extra) {
+                size_t worst = 0;
+                for (size_t a = 1; a < attractors.size(); ++a) if (nearest[a] > nearest[worst]) worst = a;
+                if (!(nearest[worst] > reachOk * reachOk)) break;
+                const Vec3 to = attractors[worst] - centre;
+                const float len = to.length();
+                if (!(len > step)) break;
+                const Vec3 dir = to / len;
+                // a shallow arch above the straight line, a tenth of its length at the middle
+                Vec3 side = dir.cross(Vec3(0, 1, 0));
+                Vec3 lift = side.lengthSquared() > 1e-6f ? side.normalized().cross(dir).normalized() : Vec3(1, 0, 0);
+                if (lift.y < 0.0f) lift = lift * -1.0f;
+                const size_t firstNew = nodes.size();
+                int parent = centreId;
+                for (int j = 1; j <= segs; ++j) {
+                    const float t = static_cast<float>(j) / static_cast<float>(segs);
+                    ColonizationNode nx;
+                    nx.id = static_cast<int>(nodes.size());
+                    nx.parentId = parent;
+                    nx.position = centre + dir * (len * t) + lift * (0.4f * arch * 0.1f * len * 4.0f * t * (1.0f - t));
+                    nx.position.y = std::clamp(nx.position.y, crownBase, std::max(crownBase, top.y));
+                    nx.growthDir = (nx.position - nodes[static_cast<size_t>(parent)].position).normalized();
+                    nx.order = 1;
+                    nx.shootLength = len * t;
+                    nx.rosetteLeaf = n + extra;
+                    nodes[static_cast<size_t>(parent)].children.push_back(nx.id);
+                    nodes.push_back(nx);
+                    parent = nx.id;
+                }
+                absorb(firstNew);
             }
         }
         // what the leaves reach of the crown, as colonisation reports it
@@ -2531,24 +2636,27 @@ private:
      * quad of two triangles (so the foliage is one four-vertex piece per leaflet, as a leaf mass is one icosphere). A
      * leaflet leaves the rachis at leafletAngleRad towards its tip in the leaf's own plane (with a short span the angles
      * fan from the rachis outwards: a palmate leaf), hangs a little with the leaf's arch, and is longest a third of the
-     * way along its span. Fewer leaflets a side when half the foliage's budget holds fewer.
+     * way along its span. `perSide` is how many a side are drawn (the budgeted meshing draws as many as half its foliage
+     * budget holds, the levels of detail more: scratchbox_tree_lod.hpp); `growth`, when given, takes each vertex's growth
+     * value (its rachis node's id over growthDen). Returns the leaflets drawn.
      */
-    static void meshRosetteLeaflets(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& g, size_t foliageBudget, float growthDen,
-                                    geometry::Mesh& foliage, TreeBudgetReport& rep, MeshGrowth* growth) {
-        std::vector<std::vector<int>> leaves(static_cast<size_t>(cfg.rosetteLeaves));
+public:
+    /** The leaves of a rosette tree's skeleton: the species' own and any sent after an uneven measured crown (growRosette). */
+    static size_t rosetteLeafCount(const std::vector<ColonizationNode>& g) {
+        int most = -1;
+        for (const auto& nd : g) most = std::max(most, nd.rosetteLeaf);
+        return static_cast<size_t>(most + 1);
+    }
+    static size_t meshRosetteLeaflets(const SpaceColonizationConfig& cfg, const std::vector<ColonizationNode>& g, int perSide, float growthDen,
+                                      geometry::Mesh& foliage, std::vector<float>* growth) {
+        std::vector<std::vector<int>> leaves(rosetteLeafCount(g));
         for (size_t i = 0; i < g.size(); ++i) {
             const int k = g[i].rosetteLeaf;
-            if (k < 0 || k >= cfg.rosetteLeaves) continue;
+            if (k < 0) continue;
             if (leaves[static_cast<size_t>(k)].empty() && g[i].parentId >= 0) leaves[static_cast<size_t>(k)].push_back(g[i].parentId);
             leaves[static_cast<size_t>(k)].push_back(static_cast<int>(i));
         }
-        size_t drawn = 0;
-        for (const auto& l : leaves) drawn += l.size() >= 2 ? 1 : 0;
-        if (drawn == 0) return;
-        // half the foliage's budget at most: a leaflet here is a flat piece, and this mesh is also the far level of a tree whose
-        // nearer levels must stay the heavier ones
-        const int perSide = std::min(std::max(1, cfg.leafletsPerSide), static_cast<int>((foliageBudget / 2) / (4 * drawn)));
-        if (perSide < 1) return;
+        if (perSide < 1) return 0;
         const float span = std::clamp(cfg.leafletSpanShare, 0.02f, 1.0f);
         const float arch = std::clamp(cfg.rosetteArch, 0.0f, 1.5f);
         size_t pieces = 0;
@@ -2591,15 +2699,14 @@ private:
                     foliage.uvs.push_back(Vec2(1.0f, 1.0f));
                     foliage.uvs.push_back(Vec2(0.0f, 1.0f));
                     for (uint32_t idx : {0u, 1u, 2u, 0u, 2u, 3u}) foliage.indices.push_back(base + idx);
-                    if (growth) growth->foliage.insert(growth->foliage.end(), 4, static_cast<float>(l[j]) / growthDen);
+                    if (growth) growth->insert(growth->end(), 4, static_cast<float>(l[j]) / growthDen);
                     ++pieces;
                 }
             }
         }
-        rep.foliageClumps = pieces;
-        rep.trianglesPerClump = 2;
-        rep.foliageTriangles = foliage.indices.size() / 3;
+        return pieces;
     }
+private:
 
     /**
      * Meshes a grown skeleton within cfg.triangleBudget. Wood: chains of single-child nodes are simplified
@@ -2821,7 +2928,12 @@ private:
         }
         const size_t foliageBudget = budget > rep.woodTriangles ? budget - rep.woodTriangles : 0;
         if (cfg.rosetteLeaves > 0) {
-            meshRosetteLeaflets(cfg, g, foliageBudget, growthDen, foliage, rep, growth);
+            // as many leaflets a side as half the foliage's budget holds: a leaflet here is a flat piece, and this mesh is also the
+            // far level of a tree whose nearer levels must stay the heavier ones
+            const int perSide = std::min(std::max(1, cfg.leafletsPerSide), static_cast<int>((foliageBudget / 2) / (4 * std::max<size_t>(1, rosetteLeafCount(g)))));
+            rep.foliageClumps = meshRosetteLeaflets(cfg, g, perSide, growthDen, foliage, growth ? &growth->foliage : nullptr);
+            rep.trianglesPerClump = 2;
+            rep.foliageTriangles = foliage.indices.size() / 3;
             return;
         }
         if (pts.empty() || foliageBudget < 20) return;

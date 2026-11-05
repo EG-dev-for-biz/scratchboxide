@@ -309,6 +309,9 @@ inline Choice choose(const Library& lib, const TreeAppearance& t, const ChoicePa
         double lo = std::numeric_limits<double>::infinity(), hi = 0;
         for (const auto& e : lib.leaves) { lo = std::min(lo, e.bladeWidthM); hi = std::max(hi, e.bladeWidthM); }
         if (lo > 0 && t.leafWidthHintM >= lo / C.bladeWidthReach && t.leafWidthHintM <= hi * C.bladeWidthReach) widthHint = t.leafWidthHintM;
+        // a leaf finer still than the library's finest (a larch's needle, under a millimetre) is no less a needle: it is
+        // matched to the finest, not left to be chosen by colour and size alone (which drew it broad leaves)
+        else if (lo > 0 && t.leafWidthHintM < lo / C.bladeWidthReach) widthHint = lo;
     }
     out.targetBladeWidthM = widthHint;
     std::vector<double> lc(lib.leaves.size());

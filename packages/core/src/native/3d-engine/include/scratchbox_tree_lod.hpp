@@ -1207,6 +1207,7 @@ struct TreeLodInput {
     double cutoutAspect{0.0};                    // ... and its leaf's width / length
     double atlasLeafLengthM{0.0};                // ... and its leaf's real length (0: none; the cards take it, LodParams::atlasLeafMaxM)
     geometry::Mesh* farFoliage{nullptr};         // the far level's leaf masses (nature::meshWithinBudget): measured, and spread to the near level's cover (LodParams farMass*) (null: neither)
+    size_t farPieces{0};                         // how many equal pieces (leaf masses, strands, leaflets) farFoliage holds (TreeBudgetReport::foliageClumps); 0: unknown, never trimmed
 };
 
 /** What the leaves of a tree cover of its measured crown, seen from outside (LodParams coverage*, detail::CoverageViews). */
@@ -1283,10 +1284,24 @@ struct TreeLod {
     double msWood{0}, msTwigs{0}, msStations{0}, msRepair{0}, msFill{0}, msMeasure{0}, msCards{0}, msDrawn{0};   // where the build's time went
     double msNearMidCards{0}, msCoreCards{0};
     std::string error;
-    /** Triangles drawn at the near level / the mid level / the near-mid level (wood, twigs, clusters and cards, instances expanded). */
-    size_t drawnLevel0() const { return woodTriangles + twigTriangles + level0.clusterTriangles + 2 * coreCardCount(); }
-    size_t drawnLevel1() const { return woodTriangles + (midCards() ? 2 * cardCount() : level1.clusterTriangles); }
-    size_t drawnNearMid() const { return woodTriangles + (nearMidCards() ? 2 * nearMidCardCount() : nearMid.clusterTriangles); }
+    // A rosette tree's leaves (nature::SpaceColonizationConfig::rosetteLeaves > 0): the leaflets of its arching rachises,
+    // drawn as the tree's own mesh at the near (0), near-mid (1) and mid (2) levels, fewer leaflets a side each level out
+    // and more at each than the far level's (frondLeafletsPerSide). Such a tree carries no leaf clusters and no cards:
+    // its fronds are its foliage at every distance, so its crown keeps its spread and outline.
+    std::array<geometry::Mesh, 3> fronds;
+    std::array<std::vector<float>, 3> frondGrowth;
+    std::array<int, 4> frondLeafletsPerSide{};   // near, near-mid, mid, far
+    size_t frondTriangles(int level) const { return fronds[static_cast<size_t>(level)].indices.size() / 3; }
+    bool hasFronds() const { return !fronds[0].indices.empty(); }
+    // Every level draws fewer triangles than the one nearer it (near > near-mid > mid > far), whatever the tree's form:
+    // when a level would not, the least of what the farther one draws is left out: its last-placed cards (the greedy
+    // placement puts the ones that cover most first), or the last of the far level's leaf masses (the meshing puts the
+    // ones on the measured surface first). How many of each were left out to keep the order:
+    size_t orderDroppedNearMidCards{0}, orderDroppedMidCards{0}, orderDroppedFarPieces{0};
+    /** Triangles drawn at the near level / the mid level / the near-mid level (wood, twigs, clusters, cards and fronds, instances expanded). */
+    size_t drawnLevel0() const { return woodTriangles + twigTriangles + level0.clusterTriangles + 2 * coreCardCount() + frondTriangles(0); }
+    size_t drawnLevel1() const { return woodTriangles + (midCards() ? 2 * cardCount() : level1.clusterTriangles) + frondTriangles(2); }
+    size_t drawnNearMid() const { return woodTriangles + (nearMidCards() ? 2 * nearMidCardCount() : nearMid.clusterTriangles) + frondTriangles(1); }
     /** Triangles of the far level given its blob leaf masses: the trunk and main limbs and the masses. */
     size_t drawnFar(size_t blobTriangles) const { return farWoodTriangles + blobTriangles; }
 };
@@ -1941,8 +1956,11 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
         (void)i;
     };
 
-    // the request's season, times the crown's own (its measured colour)
-    const double psi = std::clamp(P.psiSeason, 0.0, 1.0) * std::clamp(in.leafiness, 0.0, 1.0);
+    // the request's season, times the crown's own (its measured colour). A rosette tree's leaves are its fronds, drawn
+    // below as its own mesh: it places no leaf cluster on its rachises (as a bare tree places none)
+    const bool rosette = cfg.rosetteLeaves > 0;
+    const double seasonPsi = std::clamp(P.psiSeason, 0.0, 1.0) * std::clamp(in.leafiness, 0.0, 1.0);
+    const double psi = rosette ? 0.0 : seasonPsi;
     std::vector<uint32_t> stations;
     if (psi > 0.0) {
         for (uint32_t i : order) {
@@ -2249,7 +2267,7 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
             // draws (the whole area, inside the crown's silhouette or not: what a viewer sees), out as far as its leaves reach
             const double target = T.coverage.drawnLevel0.meanAreaM2;
             auto relErr = [&](const CoverageLevel& c) { return c.meanAreaM2 / target - 1.0; };
-            if (P.farMassCoverMatch && target > 0 && !in.farFoliage->indices.empty() && std::abs(relErr(T.coverage.drawnFar)) > P.farMassCoverTolerance) {
+            if (P.farMassCoverMatch && !rosette && target > 0 && !in.farFoliage->indices.empty() && std::abs(relErr(T.coverage.drawnFar)) > P.farMassCoverTolerance) {
                 std::vector<double> leafOut;
                 for (size_t k = 0; k < T.clusters.size() && k < lib.variants.size(); ++k)
                     for (const auto& c : T.clusters[k])
@@ -2288,6 +2306,75 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
         }
     }
     T.msDrawn = msSince(tPhase);
+
+    // ---- a rosette's fronds at the near, near-mid and mid levels ----
+    if (rosette && seasonPsi > 0.0) {
+        // the far level's leaflets a side (what the budgeted meshing drew), and more at each level nearer: at least one more
+        // and half as many again, the near level never fewer than the species gives
+        const size_t leaves = std::max<size_t>(1, nat::SpaceColonizationTreeGenerator::rosetteLeafCount(sk));
+        const int farSide = in.farFoliage && !in.farFoliage->indices.empty() ? std::max(1, static_cast<int>((in.farFoliage->indices.size() / 6) / (2 * leaves)))
+                                                                              : std::max(1, cfg.leafletsPerSide / 4);
+        auto more = [](int n) { return std::max(n + 1, static_cast<int>(std::ceil(1.5 * n))); };
+        const int midSide = more(farSide), nearMidSide = more(midSide), nearSide = std::max(more(nearMidSide), cfg.leafletsPerSide);
+        T.frondLeafletsPerSide = {nearSide, nearMidSide, midSide, farSide};
+        const int perSide[3] = {nearSide, nearMidSide, midSide};
+        LeafLevelMeasure* measures[3] = {&T.level0, &T.nearMid, &T.level1};
+        for (int k = 0; k < 3; ++k) {
+            geometry::Mesh& m = T.fronds[static_cast<size_t>(k)];
+            m = geometry::Mesh("Tree_Fronds");
+            const size_t pieces = nat::SpaceColonizationTreeGenerator::meshRosetteLeaflets(cfg, sk, perSide[k], growthDen, m, &T.frondGrowth[static_cast<size_t>(k)]);
+            for (const auto& v : m.vertices) m.bounds.expand(v);
+            // what the level's leaves are and reach: its leaflets, against the measured surface
+            LeafLevelMeasure& L = *measures[k];
+            L.leaves = pieces;
+            L.leafTriangles = m.indices.size() / 3;
+            L.samples = surface.size();
+            L.reached = L.reachedStrict = 0;
+            detail::PointGrid grid;
+            if (!m.vertices.empty()) grid.build(m.vertices, std::max(1.0, in.reachRadius));
+            for (const auto& s : surface) {
+                const double d = m.vertices.empty() ? 1e30 : grid.nearest(s);
+                if (d <= in.reachRadius) ++L.reached;
+                if (d <= P.strictReachM) ++L.reachedStrict;
+            }
+            for (const auto& v : m.vertices) {
+                L.topY = std::max(L.topY, static_cast<double>(v.y));
+                const double dx = v.x - in.stemX, dz = v.z - in.stemZ;
+                double& far = L.spread[static_cast<size_t>(detail::sectorOf(dx, dz))];
+                far = std::max(far, std::hypot(dx, dz));
+            }
+        }
+    }
+
+    // ---- every level lighter than the one nearer it ----
+    {
+        auto dropLast = [](std::vector<std::vector<Instance>>& set) {
+            size_t most = 0;
+            for (size_t k = 1; k < set.size(); ++k) if (set[k].size() > set[most].size()) most = k;
+            if (set.empty() || set[most].empty()) return false;
+            set[most].pop_back();
+            return true;
+        };
+        // the near-mid level's cards against the near level, then the mid level's against the near-mid
+        while (T.nearMidCards() && T.drawnNearMid() >= T.drawnLevel0() && dropLast(T.nearMidCardSet)) ++T.orderDroppedNearMidCards;
+        while (T.midCards() && T.cardCount() > 1 && T.drawnLevel1() >= T.drawnNearMid() && dropLast(T.cards)) ++T.orderDroppedMidCards;
+        // the far level's pieces against the mid level (never the last piece: the far level keeps a leaf)
+        if (in.farFoliage && in.farPieces > 1 && !in.farFoliage->indices.empty() && in.farFoliage->vertices.size() % in.farPieces == 0 && (in.farFoliage->indices.size() / 3) % in.farPieces == 0) {
+            geometry::Mesh& far = *in.farFoliage;
+            const size_t vpp = far.vertices.size() / in.farPieces, tpp = far.indices.size() / 3 / in.farPieces;
+            size_t pieces = in.farPieces;
+            const size_t mid = T.drawnLevel1();
+            while (pieces > 1 && T.farWoodTriangles + pieces * tpp >= mid) --pieces;
+            if (pieces < in.farPieces) {
+                T.orderDroppedFarPieces = in.farPieces - pieces;
+                far.vertices.resize(pieces * vpp);
+                if (far.normals.size() >= pieces * vpp) far.normals.resize(pieces * vpp);
+                if (far.uvs.size() >= pieces * vpp) far.uvs.resize(pieces * vpp);
+                if (far.vertexColors.size() >= pieces * vpp) far.vertexColors.resize(pieces * vpp);
+                far.indices.resize(pieces * tpp * 3);
+            }
+        }
+    }
 }
 
 /** The crown ellipsoid of a tree's level-0 leaves: the hull points of each placed cluster, in the tree's frame. */

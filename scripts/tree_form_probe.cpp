@@ -17,12 +17,15 @@
  *                   [--momentum-release R] [--trunk-seek-along-stem S] [--whorl-branches N --whorl-spacing M]
  *                   [--lateral-angle-hold H] [--lateral-angle-order-gain RAD] [--shoot-droop D] [--tail-share S]
  *                   [--rosette-leaves N] [--rosette-arch A] [--leaflets-per-side N] [--leaflet-span S] [--crown-openness O]
- *                   [--nodes 1]
+ *                   [--stems-from-ground 1] [--lump-x M --lump-y M --lump-r M]
+ *                   [--nodes 1] [--foliage 1]
  *
  * The crown: a surface of revolution of the given height and radius above crown-base-ratio x height, widest at widest-at
  * of its depth, its upper profile (1 - u^n)^(1/n) (1 a cone, 2 a dome), sampled every 0.5 m, with attractors under each
  * sample down to crown-starts-at of the way from the crown base to that sample (0: to the base). Everything not given
  * a flag is the generator's default, so with no form flag the tree is the one the generator grew before it had them.
+ * --stems-from-ground 1 grows it as several stems from the root collar (isShrub); --lump-* adds a ball of crown off to
+ * one side (an uneven measured crown).
  */
 
 #include "scratchbox_nature.hpp"
@@ -74,6 +77,15 @@ int main(int argc, char** argv) {
             for (double y = top; y >= bottom - 1e-9; y -= spacing) cfg.customAttractors.push_back(math::Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)));
         }
     }
+    if (a.count("lump-r")) {
+        const double lx = real("lump-x", R), ly = real("lump-y", widest), lr = real("lump-r", 1.5);
+        for (double x = -lr; x <= lr + 1e-9; x += spacing) for (double y = -lr; y <= lr + 1e-9; y += spacing) for (double z = -lr; z <= lr + 1e-9; z += spacing) {
+            if (x * x + y * y + z * z > lr * lr) continue;
+            const math::Vec3 p(static_cast<float>(lx + x), static_cast<float>(ly + y), static_cast<float>(z));
+            cfg.customAttractors.push_back(p);
+            if (y >= 0) cfg.foliageSurface.push_back(p);
+        }
+    }
     for (const auto& p : cfg.customAttractors) {
         lo.x = std::min(lo.x, p.x); lo.y = std::min(lo.y, p.y); lo.z = std::min(lo.z, p.z);
         hi.x = std::max(hi.x, p.x); hi.y = std::max(hi.y, p.y); hi.z = std::max(hi.z, p.z);
@@ -99,6 +111,7 @@ int main(int argc, char** argv) {
     cfg.maxIterations = static_cast<int>(std::ceil(3.0 * (H + R) / step));
     cfg.stallIterations = static_cast<int>(std::ceil(2.0 * cfg.perceptionRadius / step)) + 2;
     cfg.trunkSeeksCrown = true;
+    cfg.isShrub = real("stems-from-ground", 0) > 0;
     cfg.leavesOnCrownBranches = true;
     cfg.rootFlareHeight = static_cast<float>(std::min(0.8, 0.06 * H));
     cfg.seed = static_cast<uint32_t>(real("seed", 1234));
