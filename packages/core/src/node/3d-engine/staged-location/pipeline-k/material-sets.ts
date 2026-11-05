@@ -27,6 +27,7 @@ import { decodeImageInMemory } from '../tile-texture-transfer';
 import type { RegionClass, RegionSet } from './material-regions';
 import { CHOICE_CANDIDATES, type ChoiceCandidate, type ChoiceRow, type SetChoice } from './material-choice';
 import { energyFit, finishMaps, finishTarget, grainOf, patternFit, type ClassFinish } from './material-finish';
+import { loadSetFitModel, setFitGrain } from './material-set-fit';
 import { readingKey, type ModelReadingStore } from './model-readings';
 
 /** Prepared map size: a facade texel is several centimetres, so a tile of a metre or two needs few texels. */
@@ -214,12 +215,22 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         const bytes = await libraryColourPreview(hit.entry, repoRoot, opts.signal).catch(() => undefined);
         return bytes ? libraryTextureEnergy(decodeImageInMemory(bytes), hit.entry.realSizeM, t.texelM).energy : undefined;
     }));
+    // the set-fit regressor learned from the finished buildings (material-set-fit.ts), when committed: the chosen set's
+    // grain by its predicted fit, in place of the hand-set tile and energy caps
+    const fitModel = loadSetFitModel(repoRoot);
+    const fitOf = (k: number, hit: (typeof chosen)[number]) => {
+        if (!fitModel) return { grain: patternFit(classes[k].repeatM, hit.entry.realSizeM!) * energyFit(classes[k].photoTexture?.energy, setEnergy[k]) };
+        const read = finishes[k] && finishes[k]!.conf >= 50 ? { roughness: finishes[k]!.roughness, metalness: finishes[k]!.metalness } : undefined;
+        const g = setFitGrain(fitModel, { meanLab: classes[k].meanLab, openings: classes[k].openings, ...(classes[k].photoTexture ? { photoEnergy: classes[k].photoTexture!.energy } : {}), ...(classes[k].repeatM ? { repeatM: classes[k].repeatM } : {}), ...(read ? { read } : {}) },
+            { rank: Math.max(0, ranked[k].indexOf(hit)), ...(hit.entry.colour?.meanLab ? { colourLab: hit.entry.colour.meanLab as [number, number, number] } : {}), ...(hit.entry.roughnessMean !== undefined ? { roughness: hit.entry.roughnessMean } : {}), ...(hit.entry.metallic !== undefined ? { metallic: hit.entry.metallic } : {}), ...(hit.entry.normalTiltRmsDeg !== undefined ? { normalTiltDeg: hit.entry.normalTiltRmsDeg } : {}), ...(hit.entry.realSizeM ? { tileM: hit.entry.realSizeM } : {}), ...(setEnergy[k] ? { energy: setEnergy[k] } : {}) });
+        return { grain: g, model: fitModel.version };
+    };
     return chosen.map((hit, k): RegionSet => {
         const maps = kept.get(hit.entry.id)!;
         // the set drawn at the class's read finish (material-finish.ts finishMaps): smooth where it was read smooth, and its
         // grain only as far as the pick by appearance confirmed it
         const pick = choices[k] ? { by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}) } : undefined;
-        const drawn = finishMaps(decodeImageInMemory(maps.orm), decodeImageInMemory(maps.normal), finishes[k], grainOf(pick) * patternFit(classes[k].repeatM, hit.entry.realSizeM!) * energyFit(classes[k].photoTexture?.energy, setEnergy[k]));
+        const drawn = finishMaps(decodeImageInMemory(maps.orm), decodeImageInMemory(maps.normal), finishes[k], grainOf(pick) * fitOf(k, hit).grain);
         return {
             name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
             ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), roughness: targets[k].roughness, metallic: targets[k].metallic, ...(drawn.drawn ? { drawn: drawn.drawn } : {}), label: 'photo-inferred' as const } } : drawn.drawn ? { finish: { roughness: drawn.drawn.roughness, metallic: drawn.drawn.metallic, drawn: drawn.drawn, label: 'photo-inferred' as const } } : {}),

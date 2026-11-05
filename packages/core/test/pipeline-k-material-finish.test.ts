@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { energyFit, FINISH_READ, finishMaps, finishPrompt, finishTarget, grainOf, parseClassFinish, patternFit } from '../src/node/3d-engine/staged-location/pipeline-k/material-finish';
+import { drawnRoughness, energyFit, FINISH_READ, finishMaps, finishPrompt, finishTarget, grainOf, parseClassFinish, patternFit } from '../src/node/3d-engine/staged-location/pipeline-k/material-finish';
 import { REGION_FINISH } from '../src/node/3d-engine/staged-location/pipeline-k/material-sets';
 
 describe('pipeline K material finish', () => {
@@ -42,13 +42,14 @@ describe('pipeline K material finish', () => {
         const tilt = (img: typeof normal) => Math.max(...Array.from({ length: N }, (_, k) => Math.abs(img.rgba[k * 4] - 128)));
         // no confident reading: the set as it is
         expect(finishMaps(orm, normal, { roughness: 0.05, metalness: 0, conf: FINISH_READ.minConf - 1 }).orm).toBe(orm);
-        // read as smooth reflective glass: roughness about 0.05 with the grain's ratio, a hundredth of the relief, no metalness
-        const glass = finishMaps(orm, normal, { roughness: 0.05, metalness: 0, conf: 85 });
+        // read as smooth reflective glass (0.15): drawn smoother still (0.045) with the grain's ratio, a tenth of the relief, no metalness
+        const glass = finishMaps(orm, normal, { roughness: 0.15, metalness: 0, conf: 85 });
         const g = Array.from({ length: N }, (_, k) => glass.orm.rgba[k * 4 + 1] / 255);
-        expect(g.reduce((a, b) => a + b, 0) / N).toBeCloseTo(0.05, 2);
+        expect(g.reduce((a, b) => a + b, 0) / N).toBeCloseTo(0.045, 2);
+        expect([drawnRoughness(0.2), drawnRoughness(0.05), drawnRoughness(0.3), drawnRoughness(0.8)].map(v => Math.round(v * 1000) / 1000)).toEqual([0.08, 0.03, 0.18, 0.8]);
         expect(Math.max(...g) / Math.min(...g)).toBeCloseTo(230 / 153, 0);
         expect(tilt(glass.normal)).toBeLessThan(tilt(normal) / 5);
-        expect(glass.drawn).toEqual({ roughness: 0.05, metallic: 0, relief: 0.01, grain: 1 });
+        expect(glass.drawn).toEqual({ roughness: 0.05, metallic: 0, relief: 0.09, grain: 1 });
         expect(glass.orm.rgba[0]).toBe(230);
         // read as painted metal: metalness drawn even where the set had none; a matte read keeps the full relief
         expect(finishMaps(orm, normal, { roughness: 0.4, metalness: 0.8, conf: 70 }).orm.rgba[2]).toBe(204);

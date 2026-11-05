@@ -43,8 +43,20 @@ export const FINISH_READ = {
      * confirmed none: a set chosen by numbers alone is often another kind of surface (a fence's pattern on Penn 2's
      * spandrels), so only its finish is drawn, not its pattern. With no pick by appearance in the build, in full.
      */
-    grainFullAtConf: 70
+    grainFullAtConf: 70,
+    /**
+     * The drawn roughness of a smooth read (user ask, 2026-11-05: "give glass less roughness"): below smoothBelow the read
+     * roughness r is drawn as r x r / smoothBelow, never under minRoughness, so a surface read smooth is drawn smoother
+     * still (glass read 0.2 drawn 0.08, 0.15 drawn 0.045; polished stone 0.3 drawn 0.18), and a matte read (0.5 and up)
+     * as read. The vision reads put window glass at 0.1-0.25, rougher than glass in place; one curve for every class.
+     */
+    smoothBelow: 0.5, minRoughness: 0.03
 } as const;
+
+/** The roughness a read is drawn at (FINISH_READ.smoothBelow): smooth reads drawn smoother, matte ones as read. */
+export function drawnRoughness(read: number, R = FINISH_READ): number {
+    return Math.max(R.minRoughness, read < R.smoothBelow ? (read * read) / R.smoothBelow : read);
+}
 
 export interface ClassFinish { roughness: number; metalness: number; conf: number; seen?: string }
 
@@ -121,7 +133,8 @@ export function grainOf(pick: { by: 'appearance' | 'ranking'; conf?: number } | 
 
 /**
  * A class's set maps drawn at its read finish and grain (see the file comment). Each texel's roughness (ORM green) and
- * metalness (blue) is its mean plus `grain` of its deviation from it, the mean being the read value with a confident
+ * metalness (blue) is its mean plus `grain` of its deviation from it, the mean being the read value (the roughness through
+ * drawnRoughness) with a confident
  * reading (a set with no metalness takes the read value even) and the set's own without; the tangent-space normal is
  * tilted toward flat by `grain` and, with a confident reading, by the square of the read roughness over reliefFullAt. Occlusion (red)
  * is kept. Returns new images (the inputs when nothing changes).
@@ -133,7 +146,7 @@ export function finishMaps(orm: { width: number; height: number; rgba: Uint8Arra
     let g = 0, b = 0;
     for (let k = 0; k < n; k++) { g += orm.rgba[k * 4 + 1]; b += orm.rgba[k * 4 + 2]; }
     const gMean = g / n / 255, bMean = b / n / 255;
-    const rTo = sure ? f!.roughness : gMean, mTo = sure ? f!.metalness : bMean;
+    const rTo = sure ? drawnRoughness(f!.roughness, R) : gMean, mTo = sure ? f!.metalness : bMean;
     const o = orm.rgba.slice(), clamp8 = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
     // the deviation scaled with the mean (a set's grain is proportional to its level), then by the grain to draw
     const remap = (v: number, mean: number, to: number) => (mean > 0 ? (to + grain * (v / 255 - mean) * (to / mean)) * 255 : to * 255);
