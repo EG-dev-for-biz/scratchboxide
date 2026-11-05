@@ -47,7 +47,8 @@
         {
             "slug": "faneuil-hall",
             "name": "Faneuil Hall",
-            "query": "Faneuil Hall, Boston, MA 02109",
+            "query": "42.360050, -71.056200",
+            "note": "Pinned by coordinates: the name resolves to Faneuil Hall Marketplace and builds Quincy Market (run 2026-11-05).",
             "kind": "brick low-rise",
             "why": "A free-standing four-storey brick hall with a pitched roof and cupola, in another city's tiles."
         },
