@@ -86,7 +86,7 @@ export const WRAPPER_STEPS = new Set(['remesh.polish', 'textures.waitRebuildGram
 export const TOGGLEABLE_STEPS = new Map<string, string>([
     ['remesh.occlusion', 'a facade texel behind a tree, an awning or a neighbour is read as wall like any other'],
     ['remesh.windowFit', 'the facades are opened by their bay rhythm and the lattice\'s own window cells'],
-    ['remesh.facadeRead', 'the material reads are told no brief of the building and nothing of what lies between its windows'],
+    ['remesh.facadeRead', 'the window geometry stays as the window fit read it, and the material reads are told no brief of the building'],
     ['remesh.revealDepth', 'the recesses follow the photo-contrast rule'],
     ['polish.cleanup', 'the lattice works on the remesh as tile_refine left it'],
     ['polish.lattice', 'the facades stay as scanned'],

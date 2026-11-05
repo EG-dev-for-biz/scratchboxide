@@ -220,7 +220,7 @@ import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visi
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
 import { VIEW_RELIGHT_VERSION, viewRelightEnvParams } from './pipeline-k/view-relight';
 import { ROOF_SHADOW_VERSION, roofShadowAuditPng } from './pipeline-k/roof-shadow';
-import { FACADE_READER_MODEL, FACADE_READER_MODEL_KEY, FACADE_READER_PARAMS, FACADE_READER_VERSION, facadeReplyUsable, type FacadeAsk } from './pipeline-k/facade-reader';
+import { FACADE_READER_MODEL, FACADE_READER_MODEL_KEY, FACADE_READER_PARAMS, FACADE_READER_VERSION, facadeReplyUsable, mergeReadings, readPlanes, type FacadeAsk } from './pipeline-k/facade-reader';
 import { readOnTwin, TWIN_READER_VERSION } from './pipeline-k/twin-reader';
 import { CHOICE_SPAN_M, candidateSheetPng, choicePrompt, chooseWithMemory, MATERIAL_CHOICE_VERSION, parseChoices, type ChoiceRow, type SetChoice } from './pipeline-k/material-choice';
 import { fileReadingStore, MODEL_READINGS_DIR, readingKey, type ModelReadingStore } from './pipeline-k/model-readings';
@@ -4464,8 +4464,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             // bills per call (docs/research/2026-10-27-sb-fenestra-window-fit-design.md, section 1, evidence 6)
                             const windowSegmentOn = process.env.SCRATCHBOX_K_WINDOW_SEGMENT?.trim() === '1';
                             const windowSegment = windowSegmentOn ? openingSegmenter(deps.textures?.segment ?? segmenterTool()) : undefined;
-                            // the facade reader reads every plane on the finished exterior, in the texture stage (pipeline-k/twin-reader.ts,
-                            // user decision 2026-10-30) for the material reads; nothing is drawn from it, the openings are this window fit's
+                            // the facade reader reads the straightened photos here for the window geometry (below), and every plane on the
+                            // finished exterior in the texture stage for the material reads (pipeline-k/twin-reader.ts, user decision 2026-10-30)
                             const readerOn = !!(visionAvailable && stepOn('remesh.facadeRead', process.env.SCRATCHBOX_K_FACADE_READ?.trim() !== '0'));
                             // with the reader on, the segmenter takes only the walls its gates leave unread (as readPlanes filters them:
                             // shorter than minHeightM, narrower than minWallWidthM or under minCoverage covered); the reader would
@@ -4477,8 +4477,31 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             const onThreads = remeshWorkersEnabled();
                             const fitOnThreads = (facades: OrthoFacade[], P: WindowFitParams) =>
                                 runRemeshJobs<WindowFitEntry>(facades.map(facade => ({ kind: 'windowFacade' as const, orthosDir: k.orthosDir, facade, params: P })), { threads: cpuShare ? Math.min(cpuShare.threads, remeshWorkerThreads()) : remeshWorkerThreads(), order: facades.map((_, i) => i).sort((a, b) => facades[b].width * facades[b].height - facades[a].width * facades[a].height || a - b), signal: io.signal });
+                            // the facade reader on the straightened photos, beside the window fit (it needs only the photos): its accepted
+                            // openings and pane splits drive the window geometry (user decision, 2026-11-05), merged into the fit below
+                            const geometryAsk = readerOn ? facadeReaderAsk(io.signal, 'remesh') : undefined;
+                            const geometryReadings = bypass('remesh') ? undefined : modelReadingsStore();
+                            const geometryRead = geometryAsk ? timed('facadeRead', () => readPlanes(k.orthosDir, geometryAsk, { signal: io.signal, progress: m => io.progress(`pipeline K: ${m}`), building: { name: request.query, ...(run.state.place?.resolvedAddress ? { address: run.state.place.resolvedAddress } : {}) }, ...(geometryReadings ? { readings: { store: geometryReadings, model: FACADE_READER_MODEL_KEY } } : {}) })) : undefined;
+                            // awaited after the window fit; a failure is handled there
+                            geometryRead?.catch(() => undefined);
+                            if (!geometryRead) logStep('remesh.facadeRead', 'skipped');
                             const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal, ...(cpuShare ? { concurrency: cpuShare.threads } : {}), ...(windowSegment ? { segment: windowSegment } : {}), ...(segmentScope ? { segmentScope } : {}), ...(onThreads ? { fitFacades: fitOnThreads } : {}) }));
                             windowFit = wf.file;
+                            // the reader's openings in place of the window fit's inside the zones it drew; the window fit's stand
+                            // elsewhere (planes unread, zones rejected); the wall grammar, wall sheets and lattice below read the merged fit
+                            if (geometryRead) {
+                                try {
+                                    const fr = await geometryRead;
+                                    const m = mergeReadings(k.orthosDir, wf.fit, fr.records.readings).merged;
+                                    const recs = fr.records.facades, by = (o: string) => recs.filter(x => x.outcome === o).length;
+                                    notes.write('pipeline_k_window_reader', { version: FACADE_READER_VERSION, on: 'the straightened facade photos', cached: fr.cached, read: recs.length, replaced: by('replaced'), kept: by('kept'), skipped: by('skipped'), failed: by('failed'), unread: fr.records.unread, ms: fr.records.ms, ...(fr.records.calls ? { calls: fr.records.calls } : {}), merged: m });
+                                    notes.note(PROVENANCE.photoInferred, `facade reader (${FACADE_READER_VERSION}) on the straightened photos: ${m.readerWindows} openings on ${m.planes} of ${recs.length} planes read drive the window geometry, in place of ${m.replacedFitWindows} of the window fit's; ${m.keptFitWindows} of the window fit's kept on those planes outside the zones it drew, and all of them on the rest`);
+                                } catch (err) {
+                                    if (isAbort(err) || io.signal.aborted) throw err;
+                                    notes.write('pipeline_k_window_reader', { version: FACADE_READER_VERSION, failed: true, reason: errorMessage(err) });
+                                    notes.note(PROVENANCE.photoInferred, `the facade reader on the straightened photos failed (${errorMessage(err)}); the window geometry is the window fit's`);
+                                }
+                            }
                             // the bay grammar read per wall, from all the photos of each wall's facades together (wall-grammar.ts)
                             try {
                                 const wg = await timed('wallGrammar', async () => { await ensureNativeWallGrammar(); return onThreads ? runRemeshJob<{ file: string; grammar: WallGrammarFile }>({ kind: 'wallGrammar', orthosDir: k.orthosDir, fit: wf.fit, ...(cpuShare ? { threads: cpuShare.threads } : {}) }, { signal: io.signal }) : readWallGrammar(k.orthosDir, wf.fit, b => { const d = decodePngForGrammar(b); return { rgba: d.rgba, width: d.width, height: d.height }; }, undefined, cpuShare ? { threads: cpuShare.threads } : {}); });

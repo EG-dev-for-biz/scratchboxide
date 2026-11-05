@@ -60,7 +60,7 @@ import { matchExemplarsNative } from './native/template-match-native';
 import { readOccludedAsync, unreadMask } from './occlusion';
 import { PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
 
-export const FACADE_READER_VERSION = 'facade-reader/12';
+export const FACADE_READER_VERSION = 'facade-reader/13';
 /** The prompts' version, in every kept reading's key (with the prompt's own text): a change to what is asked asks again. */
 export const FACADE_READER_PROMPT_VERSION = 'facade-reader-prompts/2';
 
@@ -732,8 +732,8 @@ export function coveredAreaM2(L: Float32Array, pixel: number): number {
     return n * pixel * pixel;
 }
 
-/** One plane's drawn openings and panes, in its photo's pixels. */
-export interface PlaneReading { facadeId: number; width: number; height: number; rects: WindowRect[]; panes: WindowRect[] }
+/** One plane's drawn openings and panes, in its photo's pixels, and the zones it drew them in (the reader's word stands there; elsewhere on the plane the window fit's does: mergeReadings). */
+export interface PlaneReading { facadeId: number; width: number; height: number; rects: WindowRect[]; panes: WindowRect[]; drawn: ImageRegion[] }
 
 export interface FacadeReaderFile {
     version: string; params: FacadeReaderParams; ms: number; facades: FacadeReadRecord[];
@@ -869,7 +869,7 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
                 if (fam) r.record.family = fam.name;
                 if (isLead && r.exemplars && r.rects) { st!.exemplars = r.exemplars; st!.density = r.rects.length / Math.max(1, coveredAreaM2(luminanceOf(img, uncovered), f.pixel)); }
                 records.push(r.record);
-                if (r.rects && r.panes) readings.push({ facadeId: f.facadeId, width: d.width, height: d.height, rects: r.rects, panes: r.panes });
+                if (r.rects && r.panes) readings.push({ facadeId: f.facadeId, width: d.width, height: d.height, rects: r.rects, panes: r.panes, drawn: (r.record.zones ?? []).filter(z => z.outcome === 'drawn').map(z => z.region) });
             } catch (err) {
                 if (opts.signal?.aborted) { settleGuide(undefined); throw err; }
                 records.push({ facadeId: f.facadeId, outcome: 'failed', why: (err instanceof Error ? err.message : String(err)).slice(0, 300), calls: tally.calls, ...(tally.reused ? { reused: tally.reused } : {}), ms: 0 });
@@ -887,20 +887,33 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
 }
 
 /**
- * The readings written into window_fit.json in place of the window fit's openings for those planes (the window fit's own
- * kept as `structural`; a plane the window fit never saw, a roof, gets an entry of its own). Returns the merged fit.
+ * The readings written into window_fit.json, so the wall grammar, the wall sheets and the lattice (its window cells, their
+ * recesses and panes) are built from them (user decision, 2026-11-05: the reader's openings drive the window geometry). On
+ * a plane the reader drew, its openings stand inside the zones it drew (PlaneReading.drawn) and the window fit's are kept
+ * outside them (a zone the judge rejected, a part it read no openings in); a plane the reader gave nothing for keeps the
+ * window fit's whole; a plane the window fit never saw gets an entry of its own. The window fit's own reading is kept as
+ * `structural`. Returns the merged fit and what was merged.
  */
-export function mergeReadings(orthosDir: string, fit: WindowFitFile, readings: PlaneReading[]): WindowFitFile {
+export function mergeReadings(orthosDir: string, fit: WindowFitFile, readings: PlaneReading[]): WindowFitFile & { merged: { planes: number; readerWindows: number; keptFitWindows: number; replacedFitWindows: number } } {
+    const merged = { planes: 0, readerWindows: 0, keptFitWindows: 0, replacedFitWindows: 0 };
+    const inside = (r: WindowRect, zones: ImageRegion[]) => { const cx = (r[0] + r[2]) / 2, cy = (r[1] + r[3]) / 2; return zones.some(z => cx >= z.x0 && cx < z.x1 && cy >= z.y0 && cy < z.y1); };
     for (const r of readings) {
         let entry = fit.facades.find(e => e.facadeId === r.facadeId);
         if (entry && 'error' in entry) continue;
         if (!entry) { entry = { facadeId: r.facadeId, width: r.width, height: r.height, rects: [], panes: [], bands: [], ms: 0 }; fit.facades.push(entry); }
         const e = entry as Extract<WindowFitFile['facades'][number], { rects: WindowRect[] }> & { structural?: { rects: WindowRect[]; panes?: WindowRect[]; generated?: WindowRect[] }; reader?: string };
-        if (e.reader !== FACADE_READER_VERSION) e.structural = { rects: e.rects, ...(e.panes ? { panes: e.panes } : {}), ...(e.generated ? { generated: e.generated } : {}) };
-        e.rects = r.rects; e.panes = r.panes; delete e.generated; e.reader = FACADE_READER_VERSION;
+        // the window fit's own reading: as first merged over, else the entry as it stands
+        if (!e.reader || !e.structural) e.structural = { rects: e.rects, ...(e.panes ? { panes: e.panes } : {}), ...(e.generated ? { generated: e.generated } : {}) };
+        const own = e.structural, zones = r.drawn ?? [];
+        const keep = (v: WindowRect[] | undefined) => (v ?? []).filter(x => !inside(x, zones));
+        const keptRects = keep(own.rects), keptGenerated = keep(own.generated);
+        e.rects = [...r.rects, ...keptRects]; e.panes = [...r.panes, ...keep(own.panes)];
+        if (keptGenerated.length) e.generated = keptGenerated; else delete e.generated;
+        e.reader = FACADE_READER_VERSION;
+        merged.planes++; merged.readerWindows += r.rects.length; merged.keptFitWindows += keptRects.length; merged.replacedFitWindows += own.rects.length - keptRects.length;
     }
     (fit as WindowFitFile & { reader?: string }).reader = FACADE_READER_VERSION;
     fs.writeFileSync(path.join(orthosDir, 'window_fit.json'), JSON.stringify(fit));
-    return fit;
+    return Object.assign(fit, { merged });
 }
 
