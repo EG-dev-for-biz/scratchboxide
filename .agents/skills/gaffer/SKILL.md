@@ -96,8 +96,8 @@ these three being too strong, too weak, the wrong colour or not occluded where i
     the sky dome's cosine-weighted mean radiance already equals the sky light's (0.1096 vs 0.1095: the scene derives the
     hemisphere light from the sky). The sky is brightest in the hazy band just above the horizon (about 0.85, 8 times
     the mean), and a vertical pane mostly reflects that band: on shaded glass the environment is 58% of what it shows;
-  - dark ground below the horizon (`GLASS_GROUND_ALBEDO`, 0.15) cuts the environment on shaded glass 7%; the recess
-    occlusion (`recessOf`, rebuilt facades with a structure only) about 1% more; walls unchanged. Both kept;
+  - dark ground below the horizon (now `GROUND_ALBEDO`, 0.15) cut the environment on shaded glass 7%; the recess
+    occlusion (since removed with the glass layer) about 1% more; walls unchanged;
   - a capture hook that drew the sky without its sun and at the sky light's strength changed nothing here and cost a
     full sky re-bake per capture: not kept.
   - **the sun's glint read as one soft, banded ball** (2026-10-28, sun 34 degrees up, camera 260 m out on the sun's side):
