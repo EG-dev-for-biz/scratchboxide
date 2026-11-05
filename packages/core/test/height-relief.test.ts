@@ -9,8 +9,8 @@
 
 /**
  * Real height (height-displace-native.ts over scratchbox_height_displace.hpp, and height-relief.ts on a GLB): a surface
- * tessellated where its material's relief needs it and moved inward by exactly that relief, its border closed by risers,
- * within a triangle limit; and on a GLB, only the surfaces that carry a relief, only the band asked, the surface's own
+ * tessellated where its material's relief needs it and moved inward by exactly that relief, fading to nothing at its
+ * border so it meets its neighbours, within a triangle limit; and on a GLB, only the surfaces that carry a relief, only the band asked, the surface's own
  * triangles all kept, the displaced cells added as labelled child nodes.
  */
 
@@ -44,7 +44,7 @@ const recessAt = (t: ReliefTile, u: number, uvM: number) => {
 describe('height displacement kernel', () => {
     it('moves every vertex inward by its material\'s relief, and nothing outward', async () => {
         const tile = grooveTile(), w = 2, h = 1;
-        const r = await displaceByHeight({ tiles: [tile], classMaps: [], patches: [{ ...wall(w, h), constClass: 0, uvMetres: [w, h] }], depthM: DEPTH, edgeMinM: 0.01, edgeMaxM: 0.25, toleranceM: 0.001, maxTriangles: 200000 });
+        const r = await displaceByHeight({ tiles: [tile], classMaps: [], patches: [{ ...wall(w, h), constClass: 0, uvMetres: [w, h] }], depthM: DEPTH, edgeMinM: 0.01, edgeMaxM: 0.25, toleranceM: 0.001, fadeM: 0, maxTriangles: 200000 });
         const p = r.patches[0];
         expect(p.surfaceTriangles).toBeGreaterThan(200);
         expect(p.maxRecessM).toBeCloseTo(DEPTH * 0.6, 3);
@@ -53,9 +53,9 @@ describe('height displacement kernel', () => {
             const z = p.positions[v * 3 + 2];
             expect(z).toBeLessThanOrEqual(1e-6);
             deepest = Math.max(deepest, -z);
-            // each vertex sits at the plane (a riser's top) or at the relief under its UV
+            // each vertex sits at the relief under its UV
             const want = recessAt(tile, p.uvs[v * 2], w);
-            expect(Math.min(Math.abs(-z - want), Math.abs(z))).toBeLessThan(1e-4);
+            expect(Math.abs(-z - want)).toBeLessThan(1e-4);
             // and never leaves its place in the plane
             expect(Math.abs(p.positions[v * 3] - p.uvs[v * 2] * w)).toBeLessThan(1e-4);
         }
@@ -64,13 +64,13 @@ describe('height displacement kernel', () => {
 
     it('spends its triangles on the relief: a flat class stays as it was, a groove is resolved', async () => {
         const tile = grooveTile();
-        const flat = await displaceByHeight({ tiles: [undefined], classMaps: [], patches: [{ ...wall(1, 1), constClass: 0, uvMetres: [1, 1] }], depthM: DEPTH, edgeMinM: 0.01, edgeMaxM: 2, toleranceM: 0.001, maxTriangles: 200000 });
+        const flat = await displaceByHeight({ tiles: [undefined], classMaps: [], patches: [{ ...wall(1, 1), constClass: 0, uvMetres: [1, 1] }], depthM: DEPTH, edgeMinM: 0.01, edgeMaxM: 2, toleranceM: 0.001, fadeM: 0, maxTriangles: 200000 });
         expect(flat.patches[0].surfaceTriangles).toBe(2);
         expect(flat.patches[0].riserTriangles).toBe(0);
         expect(flat.patches[0].maxRecessM).toBe(0);
         // by a class map: the left half grooved, the right half without relief
         const map = { width: 2, height: 1, classes: Uint8Array.from([0, 1]) };
-        const both = await displaceByHeight({ tiles: [tile, undefined], classMaps: [map], patches: [{ ...wall(2, 1), classMap: 0, uvMetres: [2, 1] }], depthM: DEPTH, edgeMinM: 0.01, edgeMaxM: 0.25, toleranceM: 0.001, maxTriangles: 200000 });
+        const both = await displaceByHeight({ tiles: [tile, undefined], classMaps: [map], patches: [{ ...wall(2, 1), classMap: 0, uvMetres: [2, 1] }], depthM: DEPTH, edgeMinM: 0.01, edgeMaxM: 0.25, toleranceM: 0.001, fadeM: 0, maxTriangles: 200000 });
         const p = both.patches[0];
         let left = 0, right = 0;
         for (let t = 0; t < p.surfaceTriangles; t++) { const u = (p.uvs[p.indices[t * 3] * 2] + p.uvs[p.indices[t * 3 + 1] * 2] + p.uvs[p.indices[t * 3 + 2] * 2]) / 3; if (u < 0.5) left++; else right++; }
@@ -78,25 +78,48 @@ describe('height displacement kernel', () => {
         for (let v = 0; v < p.positions.length / 3; v++) if (p.uvs[v * 2] > 0.55) expect(Math.abs(p.positions[v * 3 + 2])).toBeLessThan(1e-6);
     });
 
-    it('closes its border with risers back to where the edge stood', async () => {
-        // the groove runs out through the top and bottom edges: the border is recessed there
-        const r = await displaceByHeight({ tiles: [grooveTile()], classMaps: [], patches: [{ ...wall(1, 1), constClass: 0, uvMetres: [1, 1] }], depthM: DEPTH, edgeMinM: 0.01, edgeMaxM: 0.25, toleranceM: 0.001, maxTriangles: 200000 });
+    it('meets its neighbours: the displacement fades to nothing at the border, and seams cut for a hard edge stay closed', async () => {
+        // the groove runs out through the top and bottom edges
+        const req = { tiles: [grooveTile()], classMaps: [], depthM: DEPTH, edgeMinM: 0.01, edgeMaxM: 0.25, toleranceM: 0.001, fadeM: 0.08, maxTriangles: 200000 };
+        const r = await displaceByHeight({ ...req, patches: [{ ...wall(1, 1), constClass: 0, uvMetres: [1, 1] }] });
         const p = r.patches[0];
-        expect(p.riserTriangles).toBeGreaterThan(0);
-        expect(p.indices.length / 3).toBe(p.surfaceTriangles + p.riserTriangles);
-        // every recessed vertex on the outline has a twin at the plane
-        const atPlane = new Set<string>();
-        for (let v = 0; v < p.positions.length / 3; v++) if (Math.abs(p.positions[v * 3 + 2]) < 1e-6) atPlane.add(`${p.positions[v * 3].toFixed(4)},${p.positions[v * 3 + 1].toFixed(4)}`);
+        expect(p.riserTriangles).toBe(0);
+        expect(p.indices.length / 3).toBe(p.surfaceTriangles);
+        let deepest = 0;
         for (let v = 0; v < p.positions.length / 3; v++) {
             const x = p.positions[v * 3], y = p.positions[v * 3 + 1], z = p.positions[v * 3 + 2];
-            if (z < -1e-4 && (y < 1e-6 || y > 1 - 1e-6)) expect(atPlane.has(`${x.toFixed(4)},${y.toFixed(4)}`)).toBe(true);
+            // on the outline nothing moved; well inside, the groove is at its depth
+            if (x < 1e-6 || x > 1 - 1e-6 || y < 1e-6 || y > 1 - 1e-6) expect(Math.abs(z)).toBeLessThan(1e-6);
+            if (y > 0.2 && y < 0.8) deepest = Math.max(deepest, -z);
         }
+        expect(deepest).toBeCloseTo(DEPTH * 0.6, 3);
+        // the same wall given as two quads that share no vertex index (doubled along x = 0.5): welded, so its middle moves as one
+        const half = (x0: number) => [x0, 0, 0, x0 + 0.5, 0, 0, x0 + 0.5, 1, 0, x0, 1, 0];
+        const two = { positions: new Float32Array([...half(0), ...half(0.5)]), normals: new Float32Array(Array.from({ length: 8 }, () => [0, 0, 1]).flat()), uvs: new Float32Array([0, 1, 0.5, 1, 0.5, 0, 0, 0, 0.5, 1, 1, 1, 1, 0, 0.5, 0]), indices: new Uint32Array([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]) };
+        const w = (await displaceByHeight({ ...req, patches: [{ ...two, constClass: 0, uvMetres: [1, 1] }] })).patches[0];
+        let mid = 0;
+        for (let v = 0; v < w.positions.length / 3; v++) if (Math.abs(w.positions[v * 3] - 0.5) < 0.02 && w.positions[v * 3 + 1] > 0.3 && w.positions[v * 3 + 1] < 0.7) mid = Math.max(mid, -w.positions[v * 3 + 2]);
+        expect(mid).toBeCloseTo(DEPTH * 0.6, 3);
+    });
+
+    it('takes the share of the relief a class map gives each texel, and reads a grain finer than its triangles as flat', async () => {
+        const req = { tiles: [grooveTile()], depthM: DEPTH, edgeMinM: 0.01, edgeMaxM: 0.25, toleranceM: 0.001, fadeM: 0, maxTriangles: 200000 };
+        // the right half of the wall takes none of the relief
+        const map = { width: 2, height: 1, classes: Uint8Array.from([0, 0]), weights: Uint8Array.from([255, 0]) };
+        const p = (await displaceByHeight({ ...req, classMaps: [map], patches: [{ ...wall(2, 1), classMap: 0, uvMetres: [2, 1] }] })).patches[0];
+        let left = 0, right = 0;
+        for (let v = 0; v < p.positions.length / 3; v++) { const z = -p.positions[v * 3 + 2]; if (p.uvs[v * 2] < 0.4) left = Math.max(left, z); if (p.uvs[v * 2] > 0.6) right = Math.max(right, z); }
+        expect(left).toBeGreaterThan(DEPTH * 0.3);
+        expect(right).toBeLessThan(1e-6);
+        // with triangles no finer than half a metre, a 12 cm groove is below what they carry: far shallower, not a facet
+        const coarse = (await displaceByHeight({ ...req, classMaps: [], edgeMinM: 0.5, edgeMaxM: 0.5, patches: [{ ...wall(2, 1), constClass: 0, uvMetres: [2, 1] }] })).patches[0];
+        expect(coarse.maxRecessM).toBeLessThan(DEPTH * 0.6 * 0.5);
     });
 
     it('keeps every patch within the triangle limit by raising the least edge for all', async () => {
-        const req = { tiles: [grooveTile()], classMaps: [], patches: [0, 1, 2].map(() => ({ ...wall(3, 2), constClass: 0, uvMetres: [3, 2] as [number, number] })), depthM: DEPTH, edgeMaxM: 0.25, toleranceM: 0.0005 };
+        const req = { tiles: [grooveTile()], classMaps: [], patches: [0, 1, 2].map(() => ({ ...wall(3, 2), constClass: 0, uvMetres: [3, 2] as [number, number] })), depthM: DEPTH, edgeMaxM: 0.25, toleranceM: 0.0005, fadeM: 0 };
         const fine = await displaceByHeight({ ...req, edgeMinM: 0.005, maxTriangles: 5_000_000 });
-        const total = (r: typeof fine) => r.patches.reduce((a, p) => a + p.surfaceTriangles + p.riserTriangles, 0);
+        const total = (r: typeof fine) => r.patches.reduce((a, p) => a + p.surfaceTriangles, 0);
         const limit = Math.round(total(fine) / 4);
         const capped = await displaceByHeight({ ...req, edgeMinM: 0.005, maxTriangles: limit });
         expect(total(capped)).toBeLessThanOrEqual(limit);

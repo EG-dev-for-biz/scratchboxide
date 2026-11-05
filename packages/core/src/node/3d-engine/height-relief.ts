@@ -25,7 +25,10 @@
  *    model as before (the displaced copies lie behind the surface, being recesses). The app's viewer (heightRelief.ts)
  *    draws a cell's displaced copy in place of its run when the camera is within showWithinM, so the triangle count on
  *    screen stays bounded.
- *  - Bounded: all displaced cells together hold at most maxTriangles; the kernel coarsens every cell alike until they do.
+ *  - Bounded: all displaced cells together hold at most maxTriangles; the kernel coarsens every cell alike until they do,
+ *    reading the relief low-passed to the triangles' size (a grain finer than a triangle stays in the shading).
+ *  - Joined: a cell's displacement fades to nothing at its border, and the relief fades toward a class's border (the
+ *    class map's green channel, when the material says `weights`), so cells and materials meet without a gap or a step.
  *
  * Everything added is labelled generated in the extras: the near nodes, the report on the asset, the provenance entry.
  */
@@ -34,7 +37,7 @@ import { assembleGlb, accessorLayout, isIdentity, nodeWorldMatrices, parseGlbByt
 import { decodeImageInMemory } from './staged-location/tile-texture-transfer';
 import { displaceByHeight, type DisplacePatch, type ReliefClassMap, type ReliefTile } from './height-displace-native';
 
-export const HEIGHT_RELIEF_VERSION = 'height-relief/1';
+export const HEIGHT_RELIEF_VERSION = 'height-relief/2';
 
 export const HEIGHT_RELIEF_PARAMS = {
     /** Only what stands within this of the lowest relief surface is displaced (m); undefined: everything. */
@@ -43,6 +46,8 @@ export const HEIGHT_RELIEF_PARAMS = {
     cellM: 4,
     /** The kernel's edge lengths and tolerance (m): see scratchbox_height_displace.hpp. */
     edgeMinM: 0.012, edgeMaxM: 0.3, toleranceM: 0.0015,
+    /** The displacement fades to nothing over this distance from a cell's border and its seams (m), so cells meet without a gap. */
+    fadeM: 0.08,
     /** All displaced cells together (triangles). */
     maxTriangles: 900_000,
     /** A cell whose deepest recess is under this is left as it is (m). */
@@ -56,7 +61,7 @@ export interface HeightReliefReport {
     version: string;
     /** Surfaces (primitives) with a relief, those given displaced cells, and the cells. */
     surfaces: number; displacedSurfaces: number; cells: number;
-    /** The cells' triangles before, and their displaced copies' (surface and risers). */
+    /** The cells' triangles before, and their displaced copies' (riserTriangles is 0: a cell's border fades instead). */
     baseTriangles: number; nearTriangles: number; riserTriangles: number;
     /** The least edge asked and used (raised to fit maxTriangles), m. */
     edgeMinAskedM: number; edgeMinUsedM: number;
@@ -90,12 +95,12 @@ function imageBytesOf(g: ParsedGlb, texture: number): Uint8Array {
     return g.bin.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength);
 }
 
-/** One channel of an embedded texture, a byte a texel. */
-function redOf(g: ParsedGlb, texture: number): { width: number; height: number; values: Uint8Array } {
+/** An embedded texture's red channel, a byte a texel, and its green. */
+function redOf(g: ParsedGlb, texture: number): { width: number; height: number; values: Uint8Array; green: Uint8Array } {
     const img = decodeImageInMemory(imageBytesOf(g, texture));
-    const values = new Uint8Array(img.width * img.height);
-    for (let i = 0; i < values.length; i++) values[i] = img.rgba[i * 4];
-    return { width: img.width, height: img.height, values };
+    const values = new Uint8Array(img.width * img.height), green = new Uint8Array(img.width * img.height);
+    for (let i = 0; i < values.length; i++) { values[i] = img.rgba[i * 4]; green[i] = img.rgba[i * 4 + 1]; }
+    return { width: img.width, height: img.height, values, green };
 }
 
 /**
@@ -111,7 +116,7 @@ export async function applyHeightRelief(bytes: Uint8Array, P: HeightReliefParams
     const asset = json.asset?.extras?.sbMaterialRelief as ReliefAsset | undefined;
     if (!asset?.tiles?.some(t => t) || !(asset.depthM > 0)) return skip('the model carries no material relief (no class\'s set has a height)');
 
-    const tiles: Array<ReliefTile | undefined> = asset.tiles.map(t => (t ? { ...redOf(g, t.texture), sizeM: t.sizeM } : undefined));
+    const tiles: Array<ReliefTile | undefined> = asset.tiles.map(t => { if (!t) return undefined; const r = redOf(g, t.texture); return { width: r.width, height: r.height, values: r.values, sizeM: t.sizeM }; });
     const world = nodeWorldMatrices(json);
     // every primitive whose material has a relief, with its node
     interface Surface { node: number; mesh: number; prim: any; material: number; classMap: number; uvMetres: [number, number]; pos: Float64Array; nrm: Float64Array; uv: Float64Array; idx: Float64Array; cells: Map<string, number[]> }
@@ -129,7 +134,7 @@ export async function applyHeightRelief(bytes: Uint8Array, P: HeightReliefParams
             // metres are the world's: a scaled node would stretch the relief
             const m = world[ni], sx = Math.hypot(m[0], m[1], m[2]), sy = Math.hypot(m[4], m[5], m[6]), sz = Math.hypot(m[8], m[9], m[10]);
             if (Math.abs(sx - 1) > 1e-3 || Math.abs(sy - 1) > 1e-3 || Math.abs(sz - 1) > 1e-3) continue;
-            if (!mapOfTexture.has(relief.classTexture)) { const c = redOf(g, relief.classTexture); mapOfTexture.set(relief.classTexture, classMaps.length); classMaps.push({ width: c.width, height: c.height, classes: c.values }); }
+            if (!mapOfTexture.has(relief.classTexture)) { const c = redOf(g, relief.classTexture); mapOfTexture.set(relief.classTexture, classMaps.length); classMaps.push({ width: c.width, height: c.height, classes: c.values, ...(relief.weights ? { weights: c.green } : {}) }); }
             const s: Surface = { node: ni, mesh: node.mesh, prim, material: prim.material, classMap: mapOfTexture.get(relief.classTexture)!, uvMetres: relief.uvMetres, pos: readAccessor(g, prim.attributes.POSITION).data, nrm: readAccessor(g, prim.attributes.NORMAL).data, uv: readAccessor(g, uvAcc).data, idx: readAccessor(g, prim.indices).data, cells: new Map() };
             surfaces.push(s);
             for (let v = 0; v < s.pos.length; v += 3) ground = Math.min(ground, isIdentity(m) ? s.pos[v + 1] : transformPoint(m, s.pos[v], s.pos[v + 1], s.pos[v + 2])[1]);
@@ -175,7 +180,7 @@ export async function applyHeightRelief(bytes: Uint8Array, P: HeightReliefParams
     }
     if (!cells.length) return skip('no relief surface stands within the band');
     opts.signal?.throwIfAborted();
-    const res = await displaceByHeight({ tiles, classMaps, patches: cells.map(c => c.patch), depthM: asset.depthM, edgeMinM: P.edgeMinM, edgeMaxM: P.edgeMaxM, toleranceM: P.toleranceM, maxTriangles: P.maxTriangles, ...(opts.threads ? { threads: opts.threads } : {}) });
+    const res = await displaceByHeight({ tiles, classMaps, patches: cells.map(c => c.patch), depthM: asset.depthM, edgeMinM: P.edgeMinM, edgeMaxM: P.edgeMaxM, toleranceM: P.toleranceM, fadeM: P.fadeM, maxTriangles: P.maxTriangles, ...(opts.threads ? { threads: opts.threads } : {}) });
     opts.signal?.throwIfAborted();
     report.edgeMinUsedM = Math.round(res.edgeMinM * 1e4) / 1e4;
 

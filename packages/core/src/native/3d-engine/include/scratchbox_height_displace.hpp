@@ -26,8 +26,11 @@
  *    joined, and flat stretches (a brick's face, a pane) keep their few triangles while joints and grooves get the detail.
  *  - Displacement: each vertex moves against its normal by the recess at its UV. Normals and UVs are kept (the material's
  *    normal map shades the relief as it does on the undisplaced surface).
- *  - Risers: every edge the patch does not share (its border, and seams where vertices are doubled for a hard edge) gets
- *    a strip from the displaced edge back to where the edge stood, so no gap opens beside an undisplaced neighbour.
+ *  - Borders: the displacement fades to nothing over fadeM toward every edge the patch does not share (its outline, and
+ *    seams where the surface is cut for a hard edge or a UV chart), so the patch meets its neighbours, displaced or not,
+ *    without a gap, a step or a fin. Vertices that are one point of the surface are welded first.
+ *  - The field is read at the detail the triangles can carry: the caller hands tiles low-passed to the least edge
+ *    (lowPass), so a grain finer than a triangle is left to the shading instead of aliasing into facets.
  *
  * Any surface with UVs and a metric frame takes it: a rebuilt facade, a generated object's part. It is never run on
  * measured geometry (the callers choose the surfaces: pipeline-k/height-relief.ts).
@@ -36,6 +39,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <unordered_map>
 #include <vector>
 
@@ -44,8 +48,8 @@ namespace scratchbox::height_displace {
 /** A recess tile: 255 the surface, 0 a recess of the field's depth; it repeats every sizeX x sizeY metres. */
 struct Tile { int w = 0, h = 0; std::vector<uint8_t> v; double sizeX = 1, sizeY = 1; bool has() const { return w > 0 && h > 0; } };
 
-/** One class a texel over the patch's UVs (clamped at the border). */
-struct ClassMap { int w = 0, h = 0; std::vector<uint8_t> c; };
+/** One class a texel over the patch's UVs (clamped at the border), and optionally how much of the relief each texel takes (0..255: it fades out toward a class's border, where two materials meet). */
+struct ClassMap { int w = 0, h = 0; std::vector<uint8_t> c, weight; };
 
 struct Field {
     const std::vector<Tile>* tiles = nullptr;
@@ -58,11 +62,18 @@ struct Field {
 
     double recess(double u, double v) const {
         int c = constClass;
+        double share = 1;
         if (map) {
             const int x = std::clamp(static_cast<int>(std::floor(u * map->w)), 0, map->w - 1), y = std::clamp(static_cast<int>(std::floor(v * map->h)), 0, map->h - 1);
             c = map->c[static_cast<size_t>(y) * map->w + x];
+            if (!map->weight.empty()) {
+                // bilinear between texel centres, clamped
+                const double gx = u * map->w - 0.5, gy = v * map->h - 0.5, x0g = std::floor(gx), y0g = std::floor(gy), bx = gx - x0g, by = gy - y0g;
+                auto at = [&](double xi, double yi) { return static_cast<double>(map->weight[static_cast<size_t>(std::clamp(static_cast<int>(yi), 0, map->h - 1)) * map->w + std::clamp(static_cast<int>(xi), 0, map->w - 1)]); };
+                share = ((at(x0g, y0g) * (1 - bx) + at(x0g + 1, y0g) * bx) * (1 - by) + (at(x0g, y0g + 1) * (1 - bx) + at(x0g + 1, y0g + 1) * bx) * by) / 255.0;
+            }
         }
-        if (c < 0 || c >= static_cast<int>(tiles->size()) || !(*tiles)[c].has()) return 0;
+        if (share <= 0 || c < 0 || c >= static_cast<int>(tiles->size()) || !(*tiles)[c].has()) return 0;
         const Tile& t = (*tiles)[c];
         // bilinear between texel centres, the tile repeating (as a repeat-wrapped linear sampler reads it)
         const double fx = (u * uvMetresX / t.sizeX) * t.w - 0.5, fy = (v * uvMetresY / t.sizeY) * t.h - 0.5;
@@ -71,9 +82,31 @@ struct Field {
         const int x0 = wrap(x0f, t.w), x1 = wrap(x0f + 1, t.w), y0 = wrap(y0f, t.h), y1 = wrap(y0f + 1, t.h);
         const double a = t.v[static_cast<size_t>(y0) * t.w + x0], b = t.v[static_cast<size_t>(y0) * t.w + x1], d = t.v[static_cast<size_t>(y1) * t.w + x0], e = t.v[static_cast<size_t>(y1) * t.w + x1];
         const double val = (a * (1 - ax) + b * ax) * (1 - ay) + (d * (1 - ax) + e * ax) * ay;
-        return depthM * (1 - val / 255.0);
+        return depthM * share * (1 - val / 255.0);
     }
 };
+
+/** A tile low-passed to `metres` (a box of that width, the tile repeating): what triangles of that edge can carry. */
+inline Tile lowPass(const Tile& t, double metres) {
+    if (!t.has()) return t;
+    Tile out = t;
+    const int rx = static_cast<int>(std::floor(metres / (t.sizeX / t.w) / 2)), ry = static_cast<int>(std::floor(metres / (t.sizeY / t.h) / 2));
+    if (rx < 1 && ry < 1) return out;
+    std::vector<double> tmp(static_cast<size_t>(t.w) * t.h);
+    auto wrap = [](int i, int n) { const int k = i % n; return k < 0 ? k + n : k; };
+    const int kx = std::min(rx, t.w / 2), ky = std::min(ry, t.h / 2);
+    for (int y = 0; y < t.h; y++) for (int x = 0; x < t.w; x++) {
+        double s = 0;
+        for (int d = -kx; d <= kx; d++) s += t.v[static_cast<size_t>(y) * t.w + wrap(x + d, t.w)];
+        tmp[static_cast<size_t>(y) * t.w + x] = s / (2 * kx + 1);
+    }
+    for (int y = 0; y < t.h; y++) for (int x = 0; x < t.w; x++) {
+        double s = 0;
+        for (int d = -ky; d <= ky; d++) s += tmp[static_cast<size_t>(wrap(y + d, t.h)) * t.w + x];
+        out.v[static_cast<size_t>(y) * t.w + x] = static_cast<uint8_t>(std::lround(s / (2 * ky + 1)));
+    }
+    return out;
+}
 
 struct Mesh { std::vector<float> pos, nrm, uv; std::vector<uint32_t> idx; };
 
@@ -84,11 +117,13 @@ struct Params {
     double toleranceM = 0.0015;
     /** Tessellation stops adding triangles past this (the patch is then coarser than asked, and says so). */
     uint32_t maxTriangles = 400000;
+    /** The displacement fades to nothing over this distance from the patch's border and its seams, metres. */
+    double fadeM = 0.08;
 };
 
 struct Result {
     Mesh mesh;
-    /** The surface's triangles (before the risers), the risers' triangles, and whether the triangle limit stopped the tessellation. */
+    /** The surface's triangles, 0 (no risers are made: the border fades), and whether the triangle limit stopped the tessellation. */
     uint32_t surfaceTriangles = 0, riserTriangles = 0;
     bool limited = false;
     /** The deepest and the mean recess of the vertices, metres. */
@@ -103,9 +138,45 @@ inline uint64_t edgeKey(uint32_t a, uint32_t b) { return a < b ? (static_cast<ui
 inline Result displace(const Mesh& src, const Field& field, const Params& P) {
     Result out;
     Mesh& m = out.mesh;
-    m = src;
+    // vertices that are one point of the surface (same place, normal and UV) are one vertex, so triangles that meet there
+    // split and move together; a seam (a hard edge, a UV cut) stays a border
+    {
+        const size_t Vs = src.pos.size() / 3;
+        if (src.nrm.size() != Vs * 3 || src.uv.size() != Vs * 2) return out;
+        struct Key { int64_t q[8]; bool operator==(const Key& o) const { return std::memcmp(q, o.q, sizeof(q)) == 0; } };
+        struct Hash { size_t operator()(const Key& k) const { uint64_t h = 1469598103934665603ull; for (const int64_t v : k.q) { h ^= static_cast<uint64_t>(v); h *= 1099511628211ull; } return static_cast<size_t>(h); } };
+        std::unordered_map<Key, uint32_t, Hash> seen;
+        std::vector<uint32_t> to(Vs);
+        auto q = [](double v, double step) { return static_cast<int64_t>(std::llround(v / step)); };
+        for (size_t i = 0; i < Vs; i++) {
+            const Key k{{ q(src.pos[i * 3], 1e-5), q(src.pos[i * 3 + 1], 1e-5), q(src.pos[i * 3 + 2], 1e-5), q(src.nrm[i * 3], 1e-3), q(src.nrm[i * 3 + 1], 1e-3), q(src.nrm[i * 3 + 2], 1e-3), q(src.uv[i * 2], 1e-6), q(src.uv[i * 2 + 1], 1e-6) }};
+            auto it = seen.find(k);
+            if (it == seen.end()) {
+                it = seen.emplace(k, static_cast<uint32_t>(m.pos.size() / 3)).first;
+                for (int c = 0; c < 3; c++) { m.pos.push_back(src.pos[i * 3 + c]); m.nrm.push_back(src.nrm[i * 3 + c]); }
+                m.uv.push_back(src.uv[i * 2]); m.uv.push_back(src.uv[i * 2 + 1]);
+            }
+            to[i] = it->second;
+        }
+        m.idx.reserve(src.idx.size());
+        for (size_t t = 0; t + 2 < src.idx.size(); t += 3) {
+            const uint32_t a = to[src.idx[t]], b = to[src.idx[t + 1]], c = to[src.idx[t + 2]];
+            if (a != b && b != c && a != c) { m.idx.push_back(a); m.idx.push_back(b); m.idx.push_back(c); }
+        }
+    }
+    // the border: every edge one triangle alone has (the patch's outline and its seams), as segments
+    std::vector<float> border;
+    {
+        std::unordered_map<uint64_t, uint32_t> uses;
+        for (size_t t = 0; t + 2 < m.idx.size(); t += 3) for (int k = 0; k < 3; k++) uses[detail::edgeKey(m.idx[t + k], m.idx[t + (k + 1) % 3])]++;
+        for (size_t t = 0; t + 2 < m.idx.size(); t += 3) for (int k = 0; k < 3; k++) {
+            const uint32_t a = m.idx[t + k], b = m.idx[t + (k + 1) % 3];
+            if (uses[detail::edgeKey(a, b)] != 1) continue;
+            for (int c = 0; c < 3; c++) border.push_back(m.pos[a * 3 + c]);
+            for (int c = 0; c < 3; c++) border.push_back(m.pos[b * 3 + c]);
+        }
+    }
     const size_t V0 = m.pos.size() / 3;
-    if (m.nrm.size() != V0 * 3 || m.uv.size() != V0 * 2) return out;
     std::vector<double> rec(V0);
     for (size_t i = 0; i < V0; i++) rec[i] = field.recess(m.uv[i * 2], m.uv[i * 2 + 1]);
 
@@ -181,12 +252,25 @@ inline Result displace(const Mesh& src, const Field& field, const Params& P) {
     }
     out.surfaceTriangles = static_cast<uint32_t>(m.idx.size() / 3);
 
-    // displace against the normals; where each vertex stood is kept for the risers
+    // displace against the normals, fading to nothing at the border (so the patch meets whatever lies beside it, displaced
+    // or not, without a gap or a step)
     const size_t V = m.pos.size() / 3;
-    const std::vector<float> stood = m.pos;
     double sum = 0;
     for (size_t i = 0; i < V; i++) {
-        const double r = rec[i];
+        double r = rec[i];
+        if (r > 0 && P.fadeM > 0 && !border.empty()) {
+            double d2 = INFINITY;
+            const double px = m.pos[i * 3], py = m.pos[i * 3 + 1], pz = m.pos[i * 3 + 2];
+            for (size_t e = 0; e + 5 < border.size(); e += 6) {
+                const double ax = border[e], ay = border[e + 1], az = border[e + 2], bx = border[e + 3] - ax, by = border[e + 4] - ay, bz = border[e + 5] - az;
+                const double l2 = bx * bx + by * by + bz * bz, t = l2 > 0 ? std::clamp(((px - ax) * bx + (py - ay) * by + (pz - az) * bz) / l2, 0.0, 1.0) : 0.0;
+                const double dx = px - (ax + bx * t), dy = py - (ay + by * t), dz = pz - (az + bz * t);
+                d2 = std::min(d2, dx * dx + dy * dy + dz * dz);
+                if (d2 == 0) break;
+            }
+            const double f = std::clamp(std::sqrt(d2) / P.fadeM, 0.0, 1.0);
+            r *= f * f * (3 - 2 * f);
+        }
         const double nx = m.nrm[i * 3], ny = m.nrm[i * 3 + 1], nz = m.nrm[i * 3 + 2], l = std::sqrt(nx * nx + ny * ny + nz * nz);
         if (r > 0 && l > 1e-12) {
             m.pos[i * 3] = static_cast<float>(m.pos[i * 3] - nx / l * r);
@@ -197,31 +281,6 @@ inline Result displace(const Mesh& src, const Field& field, const Params& P) {
         sum += r;
     }
     out.meanRecessM = V ? sum / static_cast<double>(V) : 0;
-
-    // risers along every edge one triangle alone has
-    std::unordered_map<uint64_t, uint32_t> uses;
-    uses.reserve(m.idx.size());
-    const size_t T = m.idx.size() / 3;
-    for (size_t t = 0; t < T; t++) for (int k = 0; k < 3; k++) uses[detail::edgeKey(m.idx[t * 3 + k], m.idx[t * 3 + (k + 1) % 3])]++;
-    std::unordered_map<uint32_t, uint32_t> top; // a border vertex -> its copy where it stood
-    auto topOf = [&](uint32_t i) {
-        auto it = top.find(i);
-        if (it != top.end()) return it->second;
-        const uint32_t v = static_cast<uint32_t>(m.pos.size() / 3);
-        for (int k = 0; k < 3; k++) { m.pos.push_back(stood[i * 3 + k]); m.nrm.push_back(m.nrm[i * 3 + k]); }
-        for (int k = 0; k < 2; k++) m.uv.push_back(m.uv[i * 2 + k]);
-        top.emplace(i, v);
-        return v;
-    };
-    constexpr double EPS = 1e-5;
-    for (size_t t = 0; t < T; t++) for (int k = 0; k < 3; k++) {
-        const uint32_t a = m.idx[t * 3 + k], b = m.idx[t * 3 + (k + 1) % 3];
-        if (uses[detail::edgeKey(a, b)] != 1 || (rec[a] <= EPS && rec[b] <= EPS)) continue;
-        const uint32_t a0 = topOf(a), b0 = topOf(b);
-        m.idx.push_back(b); m.idx.push_back(a); m.idx.push_back(a0);
-        m.idx.push_back(b); m.idx.push_back(a0); m.idx.push_back(b0);
-        out.riserTriangles += 2;
-    }
     return out;
 }
 

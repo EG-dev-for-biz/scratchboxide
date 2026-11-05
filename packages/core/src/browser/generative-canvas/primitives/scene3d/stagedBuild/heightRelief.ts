@@ -33,11 +33,11 @@ export const RELIEF_FADE = { nearM: 30, farM: 70 } as const;
 /** The most classes a model's relief may hold (the uniform array's size). */
 export const MAX_RELIEF_CLASSES = 8;
 /** How far a recess of the full depth dims the ambient light (0 none, 1 black). */
-export const RELIEF_OCCLUSION = 0.45;
+export const RELIEF_OCCLUSION = 0.3;
 const TILE_SIZE = 256;
 
 interface ReliefAsset { depthM: number; tiles: Array<null | { class: number; texture: number; sizeM: [number, number] }> }
-interface ReliefMaterial { classTexture: number; uvMetres: [number, number]; displaced?: boolean }
+interface ReliefMaterial { classTexture: number; uvMetres: [number, number]; displaced?: boolean; /** The class map's green channel is the share of the relief each texel takes (it fades toward a class's border). */ weights?: boolean }
 
 interface GltfLike {
     scene: THREE.Object3D;
@@ -93,6 +93,19 @@ const FRAGMENT_MARCH = `
                 vec2 sbScale = uSbReliefUvM / uSbReliefSize[ sbCi ];
                 vec2 sbTdx = sbDux * sbScale, sbTdy = sbDuy * sbScale;
                 float sbDepth = uSbReliefDepth * sbFade;
+                #ifdef SB_RELIEF_WEIGHTS
+                {
+                    // the share of the relief here (the class map's green, read between its texels: the map itself is
+                    // sampled nearest, for the class)
+                    vec2 sbTs = vec2( textureSize( uSbReliefClass, 0 ) );
+                    vec2 sbG = sbUv0 * sbTs - 0.5;
+                    ivec2 sbI = ivec2( floor( sbG ) ), sbMax = ivec2( sbTs ) - 1;
+                    vec2 sbA = fract( sbG );
+                    float sbW00 = texelFetch( uSbReliefClass, clamp( sbI, ivec2( 0 ), sbMax ), 0 ).g, sbW10 = texelFetch( uSbReliefClass, clamp( sbI + ivec2( 1, 0 ), ivec2( 0 ), sbMax ), 0 ).g;
+                    float sbW01 = texelFetch( uSbReliefClass, clamp( sbI + ivec2( 0, 1 ), ivec2( 0 ), sbMax ), 0 ).g, sbW11 = texelFetch( uSbReliefClass, clamp( sbI + ivec2( 1, 1 ), ivec2( 0 ), sbMax ), 0 ).g;
+                    sbDepth *= mix( mix( sbW00, sbW10, sbA.x ), mix( sbW01, sbW11, sbA.x ), sbA.y );
+                }
+                #endif
                 float sbHit = 1.0 - textureGrad( uSbReliefTiles, vec3( sbUv0 * sbScale, sbLayer ), sbTdx, sbTdy ).r;
                 #ifndef SB_RELIEF_DISPLACED
                 {
@@ -122,7 +135,7 @@ const FRAGMENT_MARCH = `
                 vec2 sbSlope = vec2( sbRx, sbRy ) * sbDepth / ( 2.0 * sbE.x * uSbReliefSize[ sbCi ] );
                 float sbSign = sbDet < 0.0 ? - 1.0 : 1.0;
                 sbReliefTilt = normalize( sbTg * sbSign ) * sbSlope.x + normalize( sbBg * sbSign ) * sbSlope.y;
-                sbReliefAo = 1.0 - ${RELIEF_OCCLUSION.toFixed(2)} * sbHit * sbFade;
+                sbReliefAo = 1.0 - ${RELIEF_OCCLUSION.toFixed(2)} * sbHit * sbDepth / uSbReliefDepth;
             }
         }
     }
@@ -298,7 +311,7 @@ export async function prepareHeightRelief(gltf: GltfLike): Promise<number> {
                 uSbReliefClass: { value: cls }, uSbReliefTiles: { value: tiles }, uSbReliefSize: { value: sizes },
                 uSbReliefUvM: { value: new THREE.Vector2(relief.uvMetres[0], relief.uvMetres[1]) }, uSbReliefDepth: depth.uniform, uSbReliefFade: { value: fade }
             };
-            mat.defines = { ...(mat.defines ?? {}), SB_RELIEF: '', ...(relief.displaced ? { SB_RELIEF_DISPLACED: '' } : {}) };
+            mat.defines = { ...(mat.defines ?? {}), SB_RELIEF: '', ...(relief.displaced ? { SB_RELIEF_DISPLACED: '' } : {}), ...(relief.weights ? { SB_RELIEF_WEIGHTS: '' } : {}) };
             const prior = mat.onBeforeCompile, priorKey = mat.customProgramCacheKey;
             mat.onBeforeCompile = (shader, renderer) => {
                 prior?.call(mat, shader, renderer);
@@ -309,7 +322,7 @@ export async function prepareHeightRelief(gltf: GltfLike): Promise<number> {
                     .replace('#include <normal_fragment_maps>', FRAGMENT_NORMAL)
                     .replace('#include <aomap_fragment>', FRAGMENT_AO);
             };
-            mat.customProgramCacheKey = () => `${priorKey?.call(mat) ?? ''}|sb-relief-v1:${relief.displaced ? 'd' : 'p'}`;
+            mat.customProgramCacheKey = () => `${priorKey?.call(mat) ?? ''}|sb-relief-v2:${relief.displaced ? 'd' : 'p'}${relief.weights ? 'w' : ''}`;
             mat.userData.sbRelief = uniforms;
             mat.needsUpdate = true;
             patched++;
