@@ -324,11 +324,12 @@ struct TileBox { V3 c; V3 h[3]; bool valid{false}; };
 
 /** The cap removal (TileSeamWeld::trimCapsByBox): continuous metric tolerances only. */
 struct TileCapParams {
-    /** A cap lies within this of its box face (the tileset's boxes bound the cut a few centimetres loose). */
-    double capPlaneM{0.15};
+    /** A cap lies within this of its box face (most boxes bound the cut within centimetres; some stand half a metre loose,
+     *  so two neighbours' boxes overlap by a metre). What makes it a cap is the neighbour's cap behind it, not this. */
+    double capPlaneM{0.75};
     double capFacingCos{0.97};
     /** Two boxes' faces are one cut when their planes lie within this. */
-    double faceMatchM{0.12};
+    double faceMatchM{1.2};
     /** The neighbour's cap backs this one within this. */
     double backingM{0.30};
     int threads{0};
