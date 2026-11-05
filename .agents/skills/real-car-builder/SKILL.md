@@ -150,7 +150,9 @@ and keep the operators for the rest. In buildNotes, ask for exactly these parts 
   panel (a glass top sharing the roof's surface flickers against it).
 - **pillars**: fromBlueprint {yFromMeters: beltline - 0.02, zFromMeters, zToMeters: the pillar's span, insetMeters:
   -0.005}, in body colour (or gloss black as the picture shows): the B-pillar and the C or D pillar spans from
-  section 4's measurements. They lie on the cabin's own surface, so they cannot stand off it.
+  section 4's measurements. They lie on the cabin's own surface, so they cannot stand off it. Never the A-pillar: a
+  slice is a vertical band, and the A-pillar leans with the windscreen, so a slice over its span paints over the
+  front side window (a live Golf build did). The A-pillars are thin strips along the windscreen's edges.
 - **roof**: fromBlueprint {fromTopMeters: 0.04, zFromMeters, zToMeters: the roof span, insetMeters: -0.004}, in body
   colour (gloss black or glass as the picture shows): 4 cm deep, so it overlaps the glasshouse's top by 1 cm.
 - **Shut lines and shallow outlines** (doors, bonnet, tailgate, an intake's rim) are relief on the lofted part,

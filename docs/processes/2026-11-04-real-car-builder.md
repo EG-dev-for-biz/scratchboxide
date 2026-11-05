@@ -102,3 +102,44 @@ halfway up the glass and 5 cm under the roof; rear pillar 0.13-0.25 m where the 
   the Polestar failed once and were still running when this was recorded.
 * **Next:** a blueprint fit (orthographic views of the car scaled to its published size, silhouettes read into
   buildNotes, a side-view comparison), from the blueprint-matching method of car modelling tutorials.
+
+## 7. Blueprint step and lofted bodies (2026-11-04, evening)
+
+**Blueprint** (`object_blueprint_outlines`): orthographic side, top and front views drawn by the standard image model
+and read into outlines at the published size. Against the user's production Golf GTI the drawn outlines are within
+0.6-1.4 cm (roofline), 1.3-2.5 cm (underside), 2.3-4.6 cm (plan) and 1.4-2.7 cm (front) on average over three
+drawings. The Polestar 3 drawings are worse: the side view comes out about 10 % out of proportion and the drawn
+wheelbase 3.7 % long (3.094 m for 2.985), twice. A drawn ground line joined the tyres on one Golf drawing (fixed:
+thin horizontal runs are removed before the background is flooded in).
+
+**Loft** (`sweep.fromBlueprint`): the body, cabin, pillars and roof lofted through the blueprint's sections. Mean
+distance from the user's production model (roofline / underside / plan / front, cm; spans off by more than 6-7 cm):
+
+| Build | Golf GTI | Polestar 3 |
+|---|---|---|
+| v2 (hardpoint notes) | 3.9 / 7.9 / 5.8 / 2.6; 14 | 5.9 / 8.0 / 6.2 / 3.6; 15 |
+| v4 (shape pass) | 3.6 / 7.5 / 4.8 / 2.3; 13 | 7.5 / 9.2 / 4.3 / 3.8; 17 |
+| blueprint, keyed sweeps | 3.0 / 3.6 / 2.9 / 8.0; 9 | 5.7 / 5.0 / 4.0 / 5.5; 11 |
+| **blueprint, lofted** | **1.1 / 2.5 / 1.4 / 1.2; 6** | 5.3 / 6.6 / 3.6 / 6.0; 14 |
+
+The loft reproduces its blueprint faithfully, so it is exactly as good as the drawing: on the Golf it beats every
+other build on every outline; on the Polestar it carries the drawing's own error. The first live loft inlined its
+rings in the build script (555k characters); the engine now expands the blocks itself (parity-tested).
+
+**Hollows plan** (from a forked session, agreed with the user): 1 inset glass under a roof band (clearTopMeters);
+2 relief on lofted parts (tested natively; a groove along the car fell between ring points until the loft sampled
+the rows and columns a relief asks for); 3 cuts saved in the spec (part.cuts, native boolean, creased normals,
+labelled generated); 4 openings read from the drawings (vision boxes traced by the object segmenter, in metres);
+5 photo-inferred depth relief: not built, because this machine's Python has no torch or transformers and the
+Depth Anything V2 Small weights are not downloaded (the user's call to install).
+
+**Steps 1-4 live** (Golf GTI, one request, the agent unaided: blueprint with openings 47 s, lofted build 450 s,
+one compare-and-fix round 78 s): the agent used every step (glasshouse inset 2 cm under a roof band, pillars and roof
+proud of it, 9 relief shut lines on the lofted body, cut openings at the nose, 8 openings read and all traced by the
+segmenter). Against the production model: 1.7 / 2.9 / 1.6 / 2.1 cm, 5 off-spans (the loft before the hollows: 1.1 /
+2.5 / 1.4 / 1.2 cm, 6), a difference within the run-to-run spread of the blueprint drawings themselves. The front view
+shows the lower intake as an opening and no roof flicker. Wrong: the agent made the A-pillar a body-colour slice over
+z 0.20-0.92, painting over the front side window (the skill now says A-pillars are never slices). The app's own vision
+check scored it 52/100 and reported surface rippling round the windscreen and doors, not confirmed in the outline
+renders. An earlier run had its drawing rejected because a drawn ground line joined the tyres (fixed). Step 5 (depth
+relief) not built: no torch here.
