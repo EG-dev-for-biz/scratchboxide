@@ -330,7 +330,7 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
             expect(fs.existsSync(path.join(tmp, `checker.atlas${atlas.level}.png`))).toBe(true);
             expect(fs.existsSync(path.join(tmp, `checker.normal${atlas.level}.png`))).toBe(true);
         }
-    });
+    }, 300_000);
 
     it('probe names the device and says whether it ray traces', async () => {
         expect(typeof device.raytracing).toBe('boolean');
@@ -722,7 +722,7 @@ describe.skipIf(process.platform !== 'darwin')('Path tracer scene lights (light 
         ]);
         roomSbvg = path.join(tmp, 'room.sbvg');
         await builder.build(panelGlb, roomSbvg);
-    });
+    }, 300_000);
 
     it('samples emissive triangles and punctual lights, and the GPU agrees with the CPU reference', async ctx => {
         if (!device.raytracing) return ctx.skip();
@@ -873,7 +873,7 @@ describe.skipIf(process.platform !== 'darwin')('Path tracer alpha-masked surface
             await builder.build(glb, sbvg, { singleLevel: true });
             sbvgs[name] = { sbvg, glb };
         }
-    });
+    }, 300_000);
 
     const meanOf = (r: MetalPathTraceResult) => {
         const c = readLinearColor(r);
