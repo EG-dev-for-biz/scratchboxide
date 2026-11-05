@@ -148,7 +148,8 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
                 data-testid="path-trace-overlay"
                 style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', pointerEvents: 'none', zIndex: 30, visibility: showingFrame ? 'visible' : 'hidden' }}
             />
-            <div style={hud} data-testid="scene-path-trace-hud">
+            {/* An aside, not a div: the viewport frame stretches every child div over itself (.sb-3d-viewport-frame > div). */}
+            <aside style={hud} data-testid="scene-path-trace-hud">
                 <div style={{ fontWeight: 600, color: '#fff' }}>Metal path tracer{status?.device ? ` · ${status.device}` : ''}</div>
                 {stage && <div>{stage}</div>}
                 {error && <div style={{ color: '#fcd34d', whiteSpace: 'pre-wrap' }}>{error}</div>}
@@ -166,7 +167,8 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
                 {snapshot && (
                     <div style={{ color: 'rgba(255,255,255,0.75)' }}>
                         Scene captured {snapshot.at.toLocaleTimeString()}: {fmt(snapshot.stats.meshes)} meshes, {fmt(snapshot.stats.triangles)} triangles
-                        {snapshot.stats.instancesExpanded ? ` (${fmt(snapshot.stats.instancesExpanded)} instances)` : ''}, {(snapshot.stats.bytes / 1048576).toFixed(1)} MB
+                        {snapshot.stats.instancesExpanded ? ` (${fmt(snapshot.stats.instancesExpanded)} instances)` : ''}
+                        {snapshot.stats.lights ? `, ${snapshot.stats.lights} light${snapshot.stats.lights === 1 ? '' : 's'}` : ''}, {(snapshot.stats.bytes / 1048576).toFixed(1)} MB
                         {snapshot.cached ? ', build reused' : ''} · {snapshot.lighting}. {skippedNote(snapshot.stats)}
                     </div>
                 )}
@@ -183,7 +185,7 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
                         />
                     )}
                 </div>
-            </div>
+            </aside>
         </>
     );
 }
