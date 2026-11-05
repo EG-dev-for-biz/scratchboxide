@@ -10,15 +10,17 @@
 
 import * as THREE from 'three';
 import type { TreeCrownCardsExtras } from '../../../../../common/spatial/staged-location-contracts';
-import { CROWN_CARD_ATLAS_PX, CROWN_CARD_MIP_SCALE, crownCardMaskPixels } from '../../../../../common/spatial/tree-crown-card-atlas';
+import { CROWN_CARD_MIP_SCALE, crownCardAtlasPx, crownCardMaskPixels } from '../../../../../common/spatial/tree-crown-card-atlas';
 import { CLAY_SURFACE } from '../clayRenderMode';
 
 // the bake itself lives in common (the photo-match evaluator's software renderer samples the same cut-out)
-export { CROWN_CARD_ATLAS_PX, CROWN_CARD_MIP_SCALE, bakeCrownCardAtlas, clayLeafPaint, crownCardMaskPixels, crownCardsOf, type CrownCardLeafPaint } from '../../../../../common/spatial/tree-crown-card-atlas';
+export { CROWN_CARD_ATLAS_PX, CROWN_CARD_MIP_SCALE, crownCardAtlasPx, bakeCrownCardAtlas, clayLeafPaint, crownCardMaskPixels, crownCardsOf, type CrownCardLeafPaint } from '../../../../../common/spatial/tree-crown-card-atlas';
 
 /**
  * Crown cards: a tree's mid level drawn as a few large cards over its crown (scratchbox_tree_lod.hpp placeCrownCards), in
- * place of the mid leaf clusters. A card is one quad of a library mesh (`crownCards.meshes[k]`) whose TEXCOORD_0 spans cell
+ * place of the mid leaf clusters; its near-mid level as smaller cards of open leaf sprays (placeNearMidCards), in place of
+ * the near-mid clusters; and core cards beneath the near level's leaves (placeCoreCards: the dense inner foliage, which
+ * the textured pass shades, treeTextureMaterials.ts coreCardShade). A card is one quad of a library mesh (`crownCards.meshes[k]`) whose TEXCOORD_0 spans cell
  * k of a card atlas; the trees GLB lists each cell's leaves (`crownCards.cells`: centre, axis, length, pick), and the viewer
  * bakes the atlas from that list here, so the cut-out drawn is the one the writer measured:
  *
@@ -29,7 +31,7 @@ export { CROWN_CARD_ATLAS_PX, CROWN_CARD_MIP_SCALE, bakeCrownCardAtlas, clayLeaf
  * Cards cut out with a plain alpha test, not alpha to coverage: a card's lifted mip alpha sits between the cutoff and 1 over
  * much of the card, and alpha to coverage writes that alpha into the frame, where the page shows through as bright specks.
  *
- * A card mesh is a leaf mesh of the mid level: the controller gives it the crown attributes and the crown and dither
+ * A card mesh is a leaf mesh of its level: the controller gives it the crown attributes and the crown and dither
  * variants as for any leaf cluster (they are clones, so the cut-out carries over), and the shadow map copies the material's
  * alphaMap / map and alpha test into the depth pass, so cards cast the leaves' shadow, not a square.
  */
@@ -66,7 +68,7 @@ const masks = new Map<string, THREE.DataTexture>();
 export function crownCardMask(cards: TreeCrownCardsExtras): THREE.DataTexture {
     const key = keyOf(cards);
     let t = masks.get(key);
-    if (!t) masks.set(key, t = crownCardTexture(crownCardMaskPixels(cards, CROWN_CARD_ATLAS_PX), CROWN_CARD_ATLAS_PX, false));
+    if (!t) { const px = crownCardAtlasPx(cards); masks.set(key, t = crownCardTexture(crownCardMaskPixels(cards, px), px, false)); }
     return t;
 }
 

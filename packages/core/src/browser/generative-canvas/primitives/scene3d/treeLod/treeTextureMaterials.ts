@@ -17,7 +17,7 @@ import { texturedLeafPaint, type AtlasPixels } from '../../../../../common/spati
 import { setTreeLodTexturedMaterial } from '../clayRenderMode';
 import { setPerMeshAttribute } from './treeCrownShading';
 import { crownSlotOf } from './treeLodMath';
-import { CROWN_CARD_ATLAS_PX, CROWN_CARD_MIP_SCALE, bakeCrownCardAtlas, clayLeafPaint, crownCardTexture, crownCardsOf, markCrownCardShader } from './treeCrownCards';
+import { CROWN_CARD_MIP_SCALE, crownCardAtlasPx, bakeCrownCardAtlas, clayLeafPaint, crownCardTexture, crownCardsOf, markCrownCardShader } from './treeCrownCards';
 
 // shared with the photo-match evaluator's software renderer (common): the options' defaults, the card painter, the atlas pixels
 export { DEFAULT_TREE_TEXTURE_OPTIONS, type LeafSlotFactors, type TreeTextureOptions } from '../../../../../common/spatial/tree-texture-library';
@@ -32,12 +32,16 @@ export { texturedLeafPaint, type AtlasPixels } from '../../../../../common/spati
  *   into the alpha, one texture) and normal map, at most leafAtlasPx on the GPU. A card carries its blade coordinates (TEXCOORD_0) and a pick (`_LEAF`.x) that chooses one leaf cell
  *   of the atlas; the vertex stage maps it there (leafAtlasUv in tree-texture-library.ts, the same mapping), and the
  *   fragment stage cuts the leaf out with alpha to coverage. The colour is tinted to the tree's measured crown colour (a
- *   per-mesh attribute, the tint the writer chose) with a small variation per leaf and per cluster, and a cheap backlight
- *   term lets sunlight through thin leaves seen against it. Stalks and sub-shoots are opaque and tinted.
- * - Crown cards (the mid level's cut-out cards, treeCrownCards.ts): a card atlas baked from the chosen leaf set's cells by
- *   the GLB's card layout (each leaf its pick's image, at the clay leaf's area), tinted like the leaves, varied per card,
- *   with the leaves' sunlight-through term; the clay mask stands in until the leaf atlas has loaded.
- * - The far level's leaf masses: the measured crown colour (the writer's massColourLinear) with gentle noise.
+ *   per-mesh attribute, the tint the writer chose) with a variation per leaf and per cluster (the tree's own, from the
+ *   spread of its crown's colour in the photo, where the writer recorded one), and a translucency term lets sunlight
+ *   through leaves lit from behind, yellower than their reflected colour and gathered toward the sun (translucencyFragment).
+ *   Stalks and sub-shoots are opaque and tinted.
+ * - Crown cards (the cut-out cards of the mid and near-mid levels and the near level's core cards, treeCrownCards.ts): a
+ *   card atlas baked from the chosen leaf set's cells by the GLB's card layout (each leaf its pick's image, at the clay
+ *   leaf's area), tinted like the leaves, varied per card, with the leaves' translucency term; a core card (a card of the
+ *   near level) is shaded by coreCardShade; the clay mask stands in until the leaf atlas has loaded.
+ * - The far level's leaf masses: the measured crown colour (the writer's massColourLinear) with gentle noise, and a share
+ *   of the translucency term (massTranslucency).
  * - Wood and twigs: the chosen bark's maps, in UVs the writer laid out in the bark's real-world tiles, tinted lightly.
  *
  * Textures load once per library and every tree of every scene shares them; one material per library entry, so a tree's
@@ -129,9 +133,11 @@ export const LEAF_VERTEX_MAIN = `
     sbJ = fract( sbJ + fract( sin( dot( floor( instanceMatrix[ 3 ].xyz * 64.0 ), vec3( 12.9898, 78.233, 37.719 ) ) ) * 43758.5453 ) );
 #endif
     float sbK = fract( sbJ * 3.71 + 0.29 );
-    vec3 sbVar = vec3( 1.0 + uSbLeafVariation * ( sbJ - 0.5 ) * ( 1.0 + 0.4 * ( sbK - 0.5 ) ),
-                       1.0 + uSbLeafVariation * ( sbJ - 0.5 ),
-                       1.0 + uSbLeafVariation * ( sbJ - 0.5 ) * ( 1.0 - 0.6 * ( sbK - 0.5 ) ) );
+    // the tree's own variation (the spread of its crown's colour in the photo, sbTreeCard.z) where it has one
+    float sbVarAmp = ${TREE_CARD_ATTRIBUTE}.z > 0.0 ? ${TREE_CARD_ATTRIBUTE}.z : uSbLeafVariation;
+    vec3 sbVar = vec3( 1.0 + sbVarAmp * ( sbJ - 0.5 ) * ( 1.0 + 0.4 * ( sbK - 0.5 ) ),
+                       1.0 + sbVarAmp * ( sbJ - 0.5 ),
+                       1.0 + sbVarAmp * ( sbJ - 0.5 ) * ( 1.0 - 0.6 * ( sbK - 0.5 ) ) );
     vSbTint = ${TREE_TINT_ATTRIBUTE}.rgb * sbVar;
     // the hashed cut-out's own space: the leaf's place in its cluster, offset per instance
     vSbHashPos = position;
@@ -144,6 +150,7 @@ export const LEAF_VERTEX_MAIN = `
 export const LEAF_FRAGMENT_PARS = `
 uniform vec3 uSbStem;
 uniform float uSbTranslucency;
+uniform vec4 uSbTransShape;
 uniform float uSbMipScale;
 uniform float uSbSolidity;
 varying vec2 vSbST;
@@ -198,17 +205,26 @@ const SUN_FOR_TRANSLUCENCY = `
 #endif
 `;
 
-/** After lights_fragment_end: sunlight arriving from behind the leaf (as seen) passes through it, coloured by the leaf. */
-export const LEAF_FRAGMENT_TRANSLUCENCY = `${SUN_FOR_TRANSLUCENCY}
+/**
+ * After lights_fragment_end: sunlight arriving from behind the surface (as seen) passes through it. What comes through is
+ * the leaf's colour times the transmission tint (uSbTransShape.rgb: yellower than the reflected colour), and it gathers
+ * toward the sun: 0.5 + cos^focus (uSbTransShape.w) of the angle between the line of sight and the sun, so leaves seen
+ * against the sun glow and leaves seen side-on only lose their black undersides. The diffuse colour already carries the
+ * crown's occlusion and inner darkening (treeCrownShading), so the core transmits less than the rim. `share` scales it
+ * (a leaf's blade flag; 1.0 elsewhere).
+ */
+export const translucencyFragment = (share: string): string => `${SUN_FOR_TRANSLUCENCY}
 #ifdef SB_SUN_DIR
 {
     float sbBack = max( 0.0, dot( - normal, SB_SUN_DIR ) );
-    reflectedLight.directDiffuse += diffuseColor.rgb * SB_SUN_COLOR * ( sbBack * uSbTranslucency * vSbBlade );
+    float sbToward = pow( max( 0.0, dot( - normalize( vViewPosition ), SB_SUN_DIR ) ), max( uSbTransShape.w, 0.1 ) );
+    reflectedLight.directDiffuse += diffuseColor.rgb * uSbTransShape.rgb * SB_SUN_COLOR * ( sbBack * uSbTranslucency * ( 0.5 + sbToward ) * ${share} );
 }
 #undef SB_SUN_DIR
 #undef SB_SUN_COLOR
 #endif
 `;
+export const LEAF_FRAGMENT_TRANSLUCENCY = translucencyFragment('vSbBlade');
 
 export const TINT_VERTEX_PARS = `
 attribute vec4 ${TREE_TINT_ATTRIBUTE};
@@ -221,6 +237,8 @@ vSbPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;
 `;
 export const TINT_FRAGMENT_PARS = `
 uniform float uSbNoise;
+uniform float uSbTranslucency;
+uniform vec4 uSbTransShape;
 varying vec3 vSbTint;
 varying vec3 vSbPos;
 float sbHash( vec3 p ) { return fract( sin( dot( p, vec3( 127.1, 311.7, 74.7 ) ) ) * 43758.5453 ); }
@@ -344,12 +362,13 @@ function leafMaterial(e: TreeLeafTextureEntry, url: (f: string) => string, load:
         uSbLeafVariation: { value: o.leafVariation },
         uSbStem: { value: stem },
         uSbTranslucency: { value: o.translucency },
+        uSbTransShape: { value: new THREE.Vector4(...o.translucencyTint, o.translucencyFocus) },
         uSbMipScale: { value: o.alphaMipScale },
         uSbSolidity: { value: leafSolidity(e.leaf.fill) }
     };
     mat.name = `sb-tree-leaves-${e.id}`;
     mat.userData = { sbTreeSurface: 'leaves' as TreeSurface, sbTreeTextureEntry: e.id, sbTreeUniforms: uniforms };
-    mat.customProgramCacheKey = () => 'sbTreeLeaves/2';
+    mat.customProgramCacheKey = () => 'sbTreeLeaves/3';
     mat.onBeforeCompile = shader => {
         Object.assign(shader.uniforms, uniforms);
         shader.vertexShader = replaceOrThrow(replaceOrThrow(shader.vertexShader, '#include <common>', LEAF_VERTEX_PARS, 'leaf vertex'), '#include <uv_vertex>', LEAF_VERTEX_MAIN, 'leaf vertex');
@@ -375,7 +394,9 @@ export const CARD_VERTEX_MAIN = `
 #ifdef USE_INSTANCING
     sbJ = fract( sin( dot( floor( instanceMatrix[ 3 ].xyz * 64.0 ), vec3( 12.9898, 78.233, 37.719 ) ) ) * 43758.5453 );
 #endif
-    vSbTint = ${TREE_TINT_ATTRIBUTE}.rgb * ( 1.0 + uSbLeafVariation * ( sbJ - 0.5 ) );
+    // a card's tint carries the tree's own variation in w (the spread of its crown's colour in the photo; 0: the library's)
+    float sbVarAmp = ${TREE_TINT_ATTRIBUTE}.w > 0.0 ? ${TREE_TINT_ATTRIBUTE}.w : uSbLeafVariation;
+    vSbTint = ${TREE_TINT_ATTRIBUTE}.rgb * ( 1.0 + sbVarAmp * ( sbJ - 0.5 ) );
     vSbHashPos = position;
 #ifdef USE_INSTANCING
     vSbHashPos += instanceMatrix[ 3 ].xyz;
@@ -384,6 +405,7 @@ export const CARD_VERTEX_MAIN = `
 `;
 export const CARD_FRAGMENT_PARS = `
 uniform float uSbTranslucency;
+uniform vec4 uSbTransShape;
 uniform float uSbCardMipScale;
 uniform float uSbSolidity;
 varying vec3 vSbTint;
@@ -410,33 +432,25 @@ export const CARD_ALPHA_COVER = `
 }
 `;
 /** After lights_fragment_end: sunlight through the leaves of a card lit from behind (as the leaves' term). */
-export const CARD_FRAGMENT_TRANSLUCENCY = `${SUN_FOR_TRANSLUCENCY}
-#ifdef SB_SUN_DIR
-{
-    float sbBack = max( 0.0, dot( - normal, SB_SUN_DIR ) );
-    reflectedLight.directDiffuse += diffuseColor.rgb * SB_SUN_COLOR * ( sbBack * uSbTranslucency );
-}
-#undef SB_SUN_DIR
-#undef SB_SUN_COLOR
-#endif
-`;
+export const CARD_FRAGMENT_TRANSLUCENCY = translucencyFragment('1.0');
 
 function crownCardMaterial(e: TreeLeafTextureEntry, cards: TreeCrownCardsExtras, ready: AtlasReady, o: TreeTextureOptions): THREE.MeshStandardMaterial {
     // until the leaf atlas is in, the clay cut-out in the leaf set's mean colour
     const mean = e.colour.meanLinearRgb.map(c => Math.round(255 * Math.pow(Math.min(1, Math.max(0, c)), 1 / 2.2)));
-    const placeholder = bakeCrownCardAtlas(cards, CROWN_CARD_ATLAS_PX, clayLeafPaint(cards));
+    const atlasPx = crownCardAtlasPx(cards);
+    const placeholder = bakeCrownCardAtlas(cards, atlasPx, clayLeafPaint(cards));
     for (let i = 0; i < placeholder.length; i += 4) { placeholder[i] = mean[0]; placeholder[i + 1] = mean[1]; placeholder[i + 2] = mean[2]; }
-    const map = crownCardTexture(placeholder, CROWN_CARD_ATLAS_PX, true);
+    const map = crownCardTexture(placeholder, atlasPx, true);
     ready.then(px => {
-        map.image = { data: bakeCrownCardAtlas(cards, CROWN_CARD_ATLAS_PX, texturedLeafPaint(e, px, cards.clayLeafAspect)), width: CROWN_CARD_ATLAS_PX, height: CROWN_CARD_ATLAS_PX } as unknown as typeof map.image;
+        map.image = { data: bakeCrownCardAtlas(cards, atlasPx, texturedLeafPaint(e, px, cards.clayLeafAspect)), width: atlasPx, height: atlasPx } as unknown as typeof map.image;
         map.needsUpdate = true;
     });
     const mat = new THREE.MeshStandardMaterial({ map, roughness: 0.6, metalness: 0, side: THREE.DoubleSide, alphaTest: 0.5, alphaToCoverage: false });
-    const uniforms = { uSbLeafVariation: { value: o.leafVariation }, uSbTranslucency: { value: o.translucency }, uSbCardMipScale: { value: CROWN_CARD_MIP_SCALE },
+    const uniforms = { uSbLeafVariation: { value: o.leafVariation }, uSbTranslucency: { value: o.translucency }, uSbTransShape: { value: new THREE.Vector4(...o.translucencyTint, o.translucencyFocus) }, uSbCardMipScale: { value: CROWN_CARD_MIP_SCALE },
         uSbSolidity: { value: leafSolidity(e.leaf.fill) } };
     mat.name = `sb-tree-crown-cards-${e.id}`;
     mat.userData = { sbTreeSurface: 'crown-cards' as TreeSurface, sbTreeTextureEntry: e.id, sbTreeUniforms: uniforms };
-    mat.customProgramCacheKey = () => 'sbTreeCrownCards/2';
+    mat.customProgramCacheKey = () => 'sbTreeCrownCards/3';
     mat.onBeforeCompile = shader => {
         Object.assign(shader.uniforms, uniforms);
         markCrownCardShader(shader);
@@ -450,16 +464,20 @@ function crownCardMaterial(e: TreeLeafTextureEntry, cards: TreeCrownCardsExtras,
     return mat;
 }
 
-function tintedMaterial(params: THREE.MeshStandardMaterialParameters, surface: TreeSurface, noise: number, name: string): THREE.MeshStandardMaterial {
+/** `translucency` > 0 (the far masses): sunlight through the surface lit from behind, as the leaves' term; 0 (bark): none. */
+function tintedMaterial(params: THREE.MeshStandardMaterialParameters, surface: TreeSurface, noise: number, name: string, translucency = 0,
+                        o: Pick<TreeTextureOptions, 'translucencyTint' | 'translucencyFocus'> = DEFAULT_TREE_TEXTURE_OPTIONS): THREE.MeshStandardMaterial {
     const mat = new THREE.MeshStandardMaterial(params);
-    const uniforms = { uSbNoise: { value: noise } };
+    const uniforms = { uSbNoise: { value: noise }, uSbTranslucency: { value: translucency }, uSbTransShape: { value: new THREE.Vector4(...o.translucencyTint, o.translucencyFocus) } };
     mat.name = name;
     mat.userData = { sbTreeSurface: surface, sbTreeUniforms: uniforms };
-    mat.customProgramCacheKey = () => 'sbTreeTinted/1';
+    mat.customProgramCacheKey = () => `sbTreeTinted/2/${translucency > 0 ? 't' : 'o'}`;
     mat.onBeforeCompile = shader => {
         Object.assign(shader.uniforms, uniforms);
         shader.vertexShader = replaceOrThrow(replaceOrThrow(shader.vertexShader, '#include <common>', TINT_VERTEX_PARS, 'tinted vertex'), '#include <project_vertex>', TINT_VERTEX_MAIN, 'tinted vertex');
-        shader.fragmentShader = replaceOrThrow(replaceOrThrow(shader.fragmentShader, '#include <common>', TINT_FRAGMENT_PARS, 'tinted fragment'), '#include <map_fragment>', TINT_FRAGMENT_COLOR, 'tinted fragment');
+        let f = replaceOrThrow(replaceOrThrow(shader.fragmentShader, '#include <common>', TINT_FRAGMENT_PARS, 'tinted fragment'), '#include <map_fragment>', TINT_FRAGMENT_COLOR, 'tinted fragment');
+        if (translucency > 0) f = replaceOrThrow(f, '#include <lights_fragment_end>', translucencyFragment('1.0'), 'tinted fragment');
+        shader.fragmentShader = f;
     };
     return mat;
 }
@@ -492,7 +510,7 @@ export class TreeTextureLibrary {
         const problems = validateTreeTextureIndex(index);
         if (problems.length) throw new Error(`the tree texture index is not usable: ${problems.slice(0, 5).join('; ')}`);
         this.options = { ...DEFAULT_TREE_TEXTURE_OPTIONS, ...options };
-        this.masses = tintedMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0 }, 'masses', this.options.massNoise, 'sb-tree-masses');
+        this.masses = tintedMaterial({ color: 0xffffff, roughness: 0.85, metalness: 0 }, 'masses', this.options.massNoise, 'sb-tree-masses', this.options.massTranslucency, this.options);
     }
 
     private url = (f: string): string => this.baseUrl.replace(/\/?$/, '/') + f;
@@ -636,7 +654,10 @@ export function applyTreeTextures(root: THREE.Object3D, lib: TreeTextureLibrary)
                 if (cards && cluster && cardMeshes.has(cluster)) {
                     const mat = hasUv ? lib.crownCardMaterial(tex.leaves.entry, cards) : undefined;
                     if (!mat) return;
-                    setPerMeshAttribute(m, 'sbTreeTint', [...tex.leaves.tint, 1]);
+                    // a card of the near level is a core card (the dense inner foliage behind its leaves): shaded
+                    const shade = leafSlotOf(m) === 0 ? lib.options.coreCardShade : 1;
+                    setPerMeshAttribute(m, 'sbTreeTint', [tex.leaves.tint[0] * shade, tex.leaves.tint[1] * shade, tex.leaves.tint[2] * shade, tex.leaves.variation ?? 0]);
+                    if (shade !== 1) m.userData.sbCoreCard = true;
                     setTreeLodTexturedMaterial(m, mat);
                     stats.cardMeshes++;
                     return;
@@ -645,7 +666,7 @@ export function applyTreeTextures(root: THREE.Object3D, lib: TreeTextureLibrary)
                     if (!hasUv || !g.getAttribute('_leaf')) return;
                     setPerMeshAttribute(m, 'sbTreeTint', [...tex.leaves.tint, cardWidth]);
                     const slot = leafSlotOf(m);
-                    setPerMeshAttribute(m, TREE_CARD_ATTRIBUTE, [lib.options.cardZoom[slot] ?? 1, lib.options.alphaGain[slot] ?? 1, 0, 0]);
+                    setPerMeshAttribute(m, TREE_CARD_ATTRIBUTE, [lib.options.cardZoom[slot] ?? 1, lib.options.alphaGain[slot] ?? 1, tex.leaves.variation ?? 0, 0]);
                     setTreeLodTexturedMaterial(m, leaves);
                     stats.leafMeshes++;
                 } else if (hasUv) {

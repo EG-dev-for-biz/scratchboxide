@@ -571,25 +571,30 @@ describe('SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME on a park', () => {
         return crowns.length;
     }
 
-    it('holds the unbudgeted frame estimate of a park-scale planting, which reaches the viewport budget, and catches bands that reach farther', async () => {
+    it('holds the unbudgeted frame estimate of a park-scale planting well under the viewport budget, and catches levels that grow with bands that reach farther', async () => {
         const count = writePark(path.join(root, 'park_crowns.json'));
         expect(count).toBeGreaterThan(350);
         const park = await vegetation.plant({ crownsPath: 'park_crowns.json', sceneTriangleCap: SCENE_TREE_TRIANGLE_CAP, seed: '9a7c' });
         const f = park.stats.lodFrames;
         expect(park.stats.trees).toBe(count);
-        // park scale (measured: median 9.8 M, p95 12.9 M, max 14.4 M): views that reach the viewport's budget, and a p95 within
-        // reach of the ceiling, so a level that grows or a band that reaches farther crosses it
-        expect(f.max).toBeGreaterThan(0.8 * DEFAULT_TREE_TRIANGLE_BUDGET);
-        expect(f.p95).toBeGreaterThan(0.5 * SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME);
-        expect(f.max, `lodFrames ${JSON.stringify({ median: f.median, p95: f.p95, max: f.max })}`).toBeLessThanOrEqual(SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME);
-        // the same park with the near-mid and mid levels reaching twice as far breaks the ceiling: the check is live
-        const longer = await vegetation.plant({ crownsPath: 'park_crowns.json', sceneTriangleCap: SCENE_TREE_TRIANGLE_CAP, seed: '9a7c', params: { lodNearMidPerHeight: 12, lodNearMidMax: 200, lodFarPerHeight: 16, lodFarMax: 280 } });
+        // park scale with the near-mid level drawn as leaf cards (measured: median 1.7 M, p95 3.1 M, max 4.5 M): no view asks
+        // for half the viewport's budget (with the near-mid level as leaf clusters: median 8.0 M, p95 11.2 M, max 12.5 M)
+        expect(f.max, `lodFrames ${JSON.stringify({ median: f.median, p95: f.p95, max: f.max })}`).toBeLessThan(0.5 * DEFAULT_TREE_TRIANGLE_BUDGET);
+        expect(f.max).toBeLessThanOrEqual(SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME);
+        // every tree at the near-mid level costs under a tenth of what its leaf clusters did
+        const clusters = await vegetation.plant({ crownsPath: 'park_crowns.json', sceneTriangleCap: SCENE_TREE_TRIANGLE_CAP, seed: '9a7c', params: { nearMidCards: 0, coreCards: 0 } });
+        expect(f.allNearMid).toBeLessThan(0.1 * clusters.stats.lodFrames.allNearMid);
+        expect(clusters.stats.lodFrames.max).toBeGreaterThan(0.8 * DEFAULT_TREE_TRIANGLE_BUDGET);
+        // the ceiling's check is live: the same park with a level that grows (the near-mid level as leaf clusters) and the
+        // near-mid and mid levels reaching twice as far breaks it
+        const longer = await vegetation.plant({ crownsPath: 'park_crowns.json', sceneTriangleCap: SCENE_TREE_TRIANGLE_CAP, seed: '9a7c',
+            params: { nearMidCards: 0, coreCards: 0, lodNearMidPerHeight: 12, lodNearMidMax: 200, lodFarPerHeight: 16, lodFarMax: 280 } });
         expect(longer.stats.lodFrames.max).toBeGreaterThan(SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME);
         // the measurements, for the record (test-results/ is git-ignored)
         const out = path.join(REPO, 'test-results', 'screenshots', 'tree_budget_tune');
         fs.mkdirSync(out, { recursive: true });
         const pick = (x: any) => ({ trees: x.trees, poses: x.lodFrames.poses, median: x.lodFrames.median, p95: x.lodFrames.p95, max: x.lodFrames.max });
-        fs.writeFileSync(path.join(out, 'park_lodframes.json'), JSON.stringify({ ceiling: SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME, viewportBudget: DEFAULT_TREE_TRIANGLE_BUDGET, park: pick(park.stats), longerBands: pick(longer.stats) }, null, 1));
+        fs.writeFileSync(path.join(out, 'park_lodframes.json'), JSON.stringify({ ceiling: SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME, viewportBudget: DEFAULT_TREE_TRIANGLE_BUDGET, park: pick(park.stats), nearMidClusters: pick(clusters.stats), longerBands: pick(longer.stats) }, null, 1));
     }, 600_000);
 });
 
