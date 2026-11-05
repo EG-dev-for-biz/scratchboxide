@@ -97,7 +97,10 @@ function sets(classes: RegionClass[], S: number): RegionSet[] {
     return classes.map((c, k) => {
         const orm = { width: S, height: S, rgba: new Uint8Array(S * S * 4) }, normal = { width: S, height: S, rgba: new Uint8Array(S * S * 4) };
         for (let i = 0; i < S * S; i++) { orm.rgba.set([200 + (i % 5) * 9, 90 + k * 35 + (i % 7) * 3, k * 50 + (i % 9) * 4, 255], i * 4); normal.rgba.set([118 + (i % 23), 140 - (i % 17), 230 + (i % 11), 255], i * 4); }
-        return { name: `TestSet${c.index}`, realSizeM: [0.8 + k * 0.45, 1.1 + k * 0.3], normal, orm, distance: k };
+        // every other set with a recess map (material-height.ts), of its own size: a facade mixes classes with and without
+        const H = S + 3, height = { width: H, height: H, rgba: new Uint8Array(H * H * 4) };
+        for (let i = 0; i < H * H; i++) { const v = 255 - ((i * 7 + k * 13) % 97); height.rgba.set([v, v, v, 255], i * 4); }
+        return { name: `TestSet${c.index}`, realSizeM: [0.8 + k * 0.45, 1.1 + k * 0.3], normal, orm, distance: k, ...(k % 2 ? { height } : {}) };
     });
 }
 
@@ -105,9 +108,9 @@ function sets(classes: RegionClass[], S: number): RegionSet[] {
 const firstDiff = (a: Uint8Array, b: Uint8Array) => { if (a.length !== b.length) return 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return i; return -1; };
 
 function expectSamePiece(native: MaterialPlanPiece, ts: MaterialPlanPiece): void {
-    const strip = (p: MaterialPlanPiece) => ({ ...p, planned: p.planned && { ...p.planned, orm: undefined, normal: undefined } });
+    const strip = (p: MaterialPlanPiece) => ({ ...p, planned: p.planned && { ...p.planned, orm: undefined, normal: undefined, height: undefined } });
     expect(strip(native)).toEqual(strip(ts));
-    for (const key of ['orm', 'normal'] as const) {
+    for (const key of ['orm', 'normal', 'height'] as const) {
         const a = native.planned?.[key], b = ts.planned?.[key];
         expect(!!a).toBe(!!b);
         if (a && b) { expect([a.width, a.height]).toEqual([b.width, b.height]); expect(firstDiff(a.rgba, b.rgba)).toBe(-1); }

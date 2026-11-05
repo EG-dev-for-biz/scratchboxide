@@ -14,13 +14,13 @@
  * vision model read, material-finish.ts, else matte, REGION_FINISH; with a chooser, the one among its nearest that looks
  * most like it, material-choice.ts). Every class takes its set whole, all its maps drawn (user decision, 2026-11-05), fetched
  * from the library bucket (fetchLibrarySets) and prepared small by the engine (surface.prepare_material_maps), cached
- * beside the set for later builds.
+ * beside the set for later builds; and its height (material-height.ts), from its publisher's preview, at its real depth.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { searchTextureLibrary, type TextureLibraryEntry } from '../../../../common/spatial/texture-library-index';
-import { fetchLibrarySets, libraryColourPreview, libraryEntryMeasured, loadTextureLibraryIndex, measureLibraryEntries } from '../../texture-library';
+import { fetchLibrarySets, libraryColourPreview, libraryEntryMeasured, libraryPreview, loadTextureLibraryIndex, measureLibraryEntries } from '../../texture-library';
 import { libraryTextureEnergy, textureDistance } from './material-harvest';
 import { NativePythonRunnerService } from '../../native-python-runner-service';
 import { decodeImageInMemory } from '../tile-texture-transfer';
@@ -28,6 +28,7 @@ import type { RegionClass, RegionSet } from './material-regions';
 import { CHOICE_CANDIDATES, type ChoiceCandidate, type ChoiceRow, type SetChoice } from './material-choice';
 import { drawFinish, energyFit, finishMaps, finishTarget, grainOf, OPENING_FINISH, patternFit, type ClassFinish } from './material-finish';
 import { loadSetFitModel, setFitGrain } from './material-set-fit';
+import { heightRecessMap } from './material-height';
 import { readingKey, type ModelReadingStore } from './model-readings';
 
 /** Prepared map size: a facade texel is several centimetres, so a tile of a metre or two needs few texels. */
@@ -212,6 +213,14 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         kept.set(id, maps);
         opts.store?.put(preparedKey(id), { normal: maps.normal.toString('base64'), orm: maps.orm.toString('base64') } satisfies PreparedRecord);
     }
+    // each chosen set's height map (its publisher's preview: the map its depth was estimated on), for the sets with a depth
+    const heightPreviews = new Map<string, ReturnType<typeof decodeImageInMemory>>();
+    for (const id of used) {
+        const entry = chosen.find(h => h.entry.id === id)!.entry;
+        if (!entry.maps.height || !entry.heightDepthM) continue;
+        const bytes = await libraryPreview(entry, 'height', repoRoot, opts.signal).catch(() => undefined);
+        if (bytes) heightPreviews.set(id, decodeImageInMemory(bytes));
+    }
     // each chosen set's texture energy at its class's texel, against the photo's (material-finish.ts energyFit)
     const setEnergy = await Promise.all(chosen.map(async (hit, k) => {
         const t = classes[k].photoTexture;
@@ -236,12 +245,16 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         const pick = choices[k] ? { by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}) } : undefined;
         const df = drawFinish(finishes[k], classes[k].openings);
         const drawn = finishMaps(decodeImageInMemory(maps.orm), decodeImageInMemory(maps.normal), df.finish, grainOf(pick) * fitOf(k, hit).grain);
+        // its height at its real depth, by the share of the normal relief drawn (material-height.ts)
+        const hp = heightPreviews.get(hit.entry.id);
+        const height = hp && hit.entry.heightDepthM ? heightRecessMap(hp, hit.entry.heightDepthM, drawn.drawn?.relief ?? 1, hit.entry.heightDepthSource ?? 'unknown') : undefined;
         return {
             name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
             ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: targets[k].roughness, metallic: targets[k].metallic, ...(drawn.drawn ? { drawn: drawn.drawn } : {}), label: 'photo-inferred' as const } } : drawn.drawn ? { finish: { ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: drawn.drawn.roughness, metallic: drawn.drawn.metallic, drawn: drawn.drawn, label: 'photo-inferred' as const } } : {}),
             ...(choices[k] ? { choice: { candidates: choices[k]!.candidates, by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick?.seen ? { seen: choices[k]!.pick!.seen } : {}), ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}), ...(choices[k]!.pick?.reused ? { reused: choices[k]!.pick!.reused } : {}), ...(choices[k]!.why ? { why: choices[k]!.why } : {}) } } : {}),
             ...(textured.has(k) ? { harvest: { ...textured.get(k)!, classEnergy: classes[k].texture!.energy, texelM: classes[k].texture!.texelM, grain: `generated: the set's detail finer than the tile's ${Math.round(classes[k].texture!.texelM * 100)} cm texel is its own, below the tile's resolution` } } : {}),
-            normal: drawn.normal, orm: drawn.orm
+            normal: drawn.normal, orm: drawn.orm,
+            ...(height ? { height: height.map, heightDrawn: height.drawn } : {})
         };
     });
 }

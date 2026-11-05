@@ -27,6 +27,7 @@ import * as path from 'path';
 import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
 import { NativePythonRunnerService } from './native-python-runner-service';
 import { ESTIMATED_SIZES_FILE, type EstimatedSizes } from './texture-library-sizes';
+import { withHeightDepth, loadLibraryHeights } from './texture-library-heights';
 import type { TextureLibraryColour, TextureLibraryEntry, TextureLibraryIndex } from '../../common/spatial/texture-library-index';
 
 export interface LibrarySetMaps {
@@ -37,6 +38,8 @@ export interface LibrarySetMaps {
     metalness?: string;
     /** Poly Haven's packed map: R occlusion, G roughness, B metalness. */
     arm?: string;
+    /** The height (displacement) map; fetched only when asked for (fetchLibrarySets `height`). */
+    height?: string;
 }
 
 export interface LibrarySet {
@@ -63,7 +66,8 @@ const ROLE_PATTERNS: ReadonlyArray<{ role: keyof LibrarySetMaps; pattern: RegExp
     { role: 'roughness', pattern: /_(Roughness|rough)[_.]/i },
     { role: 'ao', pattern: /_(AmbientOcclusion|ao)[_.]/i },
     { role: 'metalness', pattern: /_(Metalness|metal)[_.]/i },
-    { role: 'arm', pattern: /_arm[_.]/i }
+    { role: 'arm', pattern: /_arm[_.]/i },
+    { role: 'height', pattern: /_(Displacement|disp|height)[_.]/i }
 ];
 const CATALOG_TTL_MS = 7 * 24 * 3600 * 1000;
 
@@ -173,13 +177,14 @@ export function loadTextureLibraryIndex(repoRoot: string): TextureLibraryIndex |
     try { measured = fs.readdirSync(statsDir(repoRoot)).filter(f => f.endsWith('.json')); } catch { /* nothing measured yet */ }
     const estimates = estimatedSizes(path.join(path.dirname(file), ESTIMATED_SIZES_FILE));
     const bundled = bundledStats(repoRoot);
-    if (!measured.length && !estimates && !bundled.size) return indexCache.index;
+    const heights = loadLibraryHeights(repoRoot);
+    if (!measured.length && !estimates && !bundled.size && !heights) return indexCache.index;
     // the committed bundle first, each set's own file over it
     const stats = new Map<string, MeasuredStats>(bundled);
     for (const f of measured) {
         try { stats.set(f.slice(0, -5), JSON.parse(fs.readFileSync(path.join(statsDir(repoRoot), f), 'utf8')) as MeasuredStats); } catch { /* a half-written file: measured again when needed */ }
     }
-    return { ...indexCache.index, sets: indexCache.index.sets.map(e => withEstimatedSize(withStats(e, stats.get(e.id)), estimates)) };
+    return { ...indexCache.index, sets: indexCache.index.sets.map(e => withHeightDepth(withEstimatedSize(withStats(e, stats.get(e.id)), estimates), heights)) };
 }
 
 let sizesCache: { file: string; mtimeMs: number; doc: EstimatedSizes } | undefined;
@@ -227,7 +232,8 @@ async function polyHavenPreviews(id: string, signal?: AbortSignal): Promise<NonN
         // the packed map carries the metalness (its blue channel); a separate roughness map, when listed, overrides its green
         ...(jpg('arm') ? { arm: jpg('arm') } : {}),
         ...(jpg('Rough') ? { roughness: jpg('Rough') } : {}),
-        ...(jpg('Metal') ? { metalness: jpg('Metal') } : {})
+        ...(jpg('Metal') ? { metalness: jpg('Metal') } : {}),
+        ...(jpg('Displacement') ? { height: jpg('Displacement') } : {})
     };
 }
 
@@ -236,12 +242,18 @@ async function polyHavenPreviews(id: string, signal?: AbortSignal): Promise<NonN
  * measures a set's texture from (pipeline-k/material-harvest.ts). Undefined when the publisher lists none.
  */
 export async function libraryColourPreview(entry: TextureLibraryEntry, repoRoot: string, signal?: AbortSignal): Promise<Uint8Array | undefined> {
+    return libraryPreview(entry, 'color', repoRoot, signal);
+}
+
+/** A set's preview map of one role (its publisher's 1K JPEG), cached under build/texture-library/previews; undefined when the publisher lists none. */
+export async function libraryPreview(entry: TextureLibraryEntry, role: 'color' | 'normal' | 'height', repoRoot: string, signal?: AbortSignal): Promise<Uint8Array | undefined> {
     const dir = path.join(repoRoot, 'build', 'texture-library', 'previews');
-    const file = path.join(dir, `${entry.id}.jpg`);
+    const file = path.join(dir, role === 'color' ? `${entry.id}.jpg` : `${entry.id}_${role}.jpg`);
     if (fs.existsSync(file)) return fs.readFileSync(file);
-    const previews = entry.previews?.color ? entry.previews : entry.publisher === 'Poly Haven' ? await polyHavenPreviews(entry.id, signal) : {};
-    if (!previews.color) return undefined;
-    const r = await fetchRetry(previews.color, signal);
+    const previews = entry.previews?.[role] ? entry.previews : entry.publisher === 'Poly Haven' ? await polyHavenPreviews(entry.id, signal) : {};
+    const url = previews[role];
+    if (!url) return undefined;
+    const r = await fetchRetry(url, signal);
     if (!r.ok) return undefined;
     const bytes = new Uint8Array(await r.arrayBuffer());
     fs.mkdirSync(dir, { recursive: true });
@@ -352,7 +364,7 @@ export function libraryBucket(): string {
     return process.env.GCS_TEXTURE_BUCKET || 'scratchbox-library-training-textures';
 }
 
-/** The role a library file plays, or undefined for files a GLB material does not use (displacement, DX normals, previews,
+/** The role a library file plays, or undefined for files the app does not use (DX normals, previews,
  * .blend/.usdc/.mtlx, half-uploaded `.part` maps). */
 export function mapRole(objectName: string): keyof LibrarySetMaps | undefined {
     if (!/\.(png|jpe?g)$/i.test(objectName)) return undefined;
@@ -395,7 +407,7 @@ async function loadCatalog(storage: ReturnType<GoogleMediaCredentialsService['cr
 }
 
 /** Fetches the named sets' maps into `cacheDir` (default build/texture-library under `repoRoot`). */
-export async function fetchLibrarySets(names: string[], opts: { repoRoot: string; cacheDir?: string; signal?: AbortSignal; progress?: (m: string) => void }): Promise<LibraryFetch> {
+export async function fetchLibrarySets(names: string[], opts: { repoRoot: string; cacheDir?: string; signal?: AbortSignal; progress?: (m: string) => void; /** Also fetch each set's height map (a GLB material has no slot for it: only the callers that draw relief ask). */ height?: boolean }): Promise<LibraryFetch> {
     const bucket = libraryBucket();
     const cacheDir = opts.cacheDir ?? path.join(opts.repoRoot, 'build', 'texture-library');
     const storage = new GoogleMediaCredentialsService().createStorageClient();
@@ -416,6 +428,7 @@ export async function fetchLibrarySets(names: string[], opts: { repoRoot: string
         for (const f of files) {
             const role = mapRole(f.name);
             const size = Number(f.metadata.size ?? 0);
+            if (role === 'height' && !opts.height) continue;
             if (role && (!chosen.has(role) || size < chosen.get(role)!.size)) chosen.set(role, { name: f.name, size });
         }
         if (!chosen.has('color')) {
