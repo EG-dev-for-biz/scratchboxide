@@ -3861,6 +3861,15 @@ inline std::vector<uint8_t> PhotometricRelief::writeTexturedGlb(const gltf::Gltf
             s << ",\"emissiveFactor\":[" << detail::fmt(sm.emissiveFactor.x) << "," << detail::fmt(sm.emissiveFactor.y) << "," << detail::fmt(sm.emissiveFactor.z) << "]";
         if (sm.doubleSided) s << ",\"doubleSided\":true";
         if (sm.unlit) { s << ",\"extensions\":{\"KHR_materials_unlit\":{}}"; anyUnlit = true; }
+        // a fill's labels pass through (the reader keeps them on the material)
+        if (sm.photoInferredFill || !sm.provenance.empty() || !sm.method.empty()) {
+            s << ",\"extras\":{\"scratchbox\":{";
+            bool first = true;
+            if (sm.photoInferredFill) { s << "\"photoInferredFill\":true"; first = false; }
+            if (!sm.provenance.empty()) { s << (first ? "" : ",") << "\"provenance\":\"" << sm.provenance << "\""; first = false; }
+            if (!sm.method.empty()) s << (first ? "" : ",") << "\"method\":\"" << sm.method << "\"";
+            s << "}}";
+        }
         s << "}";
         materials.push_back(s.str());
     }
