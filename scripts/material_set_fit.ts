@@ -31,6 +31,8 @@ import { libraryColourPreview, loadTextureLibraryIndex } from '../packages/core/
 import { fitSetFit, SET_FIT_FEATURES, SET_FIT_MODEL_FILE, SET_FIT_VERSION, setFitFeatures, type SetFitModel } from '../packages/core/src/node/3d-engine/staged-location/pipeline-k/material-set-fit';
 
 const REPO = path.resolve(__dirname, '..');
+/** Places this close (degrees, about 400 m) are one building when buildings are held out. */
+const PLACE_JOIN_DEG = 0.004;
 const arg = (k: string) => { const i = process.argv.indexOf(`--${k}`); return i > 0 ? process.argv[i + 1] : undefined; };
 
 interface Row { run: string; building: string; cls: number; candidate: string; x: number[]; y: number; w: number; picked: boolean }
@@ -151,6 +153,16 @@ function train(rowsFile: string, write: boolean, runsFile?: string): void {
     const byClass = new Map<string, Row[]>();
     // the buildings as a runs file (find) names them now, when given
     if (runsFile) { const by = new Map((JSON.parse(fs.readFileSync(runsFile, 'utf8')) as Array<{ note: string; building: string }>).map(r => [r.note, r.building])); for (const r of all) r.building = by.get(r.run) ?? r.building; }
+    // places within PLACE_JOIN_DEG of each other (single linkage) are one building: one asked for by different names or
+    // corners resolves to points a few hundred metres apart
+    const keys = [...new Set(all.map(r => r.building))], ll = keys.map(k => k.split(',').map(Number));
+    const parent = keys.map((_, i) => i), find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    for (let i = 0; i < keys.length; i++) for (let j = i + 1; j < keys.length; j++) {
+        const [a, b] = [ll[i], ll[j]];
+        if (a.length === 2 && b.length === 2 && a.every(Number.isFinite) && b.every(Number.isFinite) && Math.hypot(a[0] - b[0], a[1] - b[1]) <= PLACE_JOIN_DEG) parent[find(i)] = find(j);
+    }
+    const group = new Map(keys.map((k, i) => [k, keys[find(i)]]));
+    for (const r of all) r.building = group.get(r.building)!;
     for (const r of all) { const k = `${r.run}#${r.cls}`; (byClass.get(k) ?? byClass.set(k, []).get(k)!).push(r); }
     const seen = new Set<string>(), rows: Row[] = [];
     for (const rs of byClass.values()) {
