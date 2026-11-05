@@ -151,7 +151,7 @@ export function massingProvenance(node: Pick<MassingNode, 'kind' | 'provenance' 
     if (node.provenance === SHAPE_PROGRAM_TOKEN) return { label: 'photo-inferred', measuredGeometry: false, confidence: 0.6, method: 'shape program trial: the structure read by a vision model from a contact sheet of the tree-free scan (one call, structured output), as continuous geometric operators; every numeric handle fitted to the scan\'s height map and oblique silhouettes (measured)', sources: [{ kind: 'tile-extraction', id: 'isolate' }, { kind: 'stage-output', id: 'shape-program' }] };
     // the footprint model's outline (footprint-model.ts) where Google's footprint was missing, partial or merged the
     // neighbours: read from the photo tiles by a learned model, so photo-inferred; its confidence is the model's mean probability
-    if (node.provenance.startsWith(FOOTPRINT_MODEL_TOKEN)) {
+    if (node.provenance?.startsWith(FOOTPRINT_MODEL_TOKEN)) {
         const c = Number(/-c([0-9.]+)$/.exec(node.provenance)?.[1]);
         return { label: 'photo-inferred', measuredGeometry: false, confidence: Number.isFinite(c) ? Math.max(0, Math.min(1, c)) : 0.5, method: `footprint model (${FOOTPRINT_MODEL_VERSION}): the building's outline read from the photo tiles' top-down height and colour by a U-Net (measured on unseen NYC and Amsterdam buildings), where Google's vector footprint was missing, partial or merged the neighbours; extruded to the scan's measured height`, sources: [{ kind: 'tile-extraction', id: 'isolate' }, { kind: 'stage-output', id: 'footprint-model' }], note: `plan IoU with the scan ${massing.check.iou}, roof ${massing.check.heightErrMedianM} m off the scan (median)` };
     }
