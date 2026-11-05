@@ -57,6 +57,7 @@ import type { ObjectBuildLive } from '../../../common/object-build-live';
 import type { StageEvent } from '../../../common/spatial/staged-location-contracts';
 import type { CanvasArtifact } from '../../../browser/generative-canvas/canvas-types';
 import { implausibleLayerBounds } from '../../3d-engine/layer-bounds-guard';
+import { OBJECT_DETAIL_TOOL, objectDetailHandlers } from './object-detail-tools';
 import { errorMessage } from '../gemini-client';
 import { materialModeOf, withStagedMaterialMode, type StagedMaterialModeFields } from '../../../browser/generative-canvas/primitives/scene3d/stagedBuild/texturedTwins';
 import { OBJECT_BUILD_SOURCE, type BuiltObjectRecord, type ObjectBuildSpec, type Vec3 } from '../../../common/spatial/object-build-spec';
@@ -81,6 +82,10 @@ export const OBJECT_REFERENCE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 clay: {
                     type: 'BOOLEAN',
                     description: 'True only when the user asked for clay (grey, untextured, a blockout or a shape study): every part is studio clay, no materials are read and the scene shows clay. Omit it otherwise: the object gets its materials and the scene shows them, except that a clay view chosen on the active scene it is added to stays (staged_location_material_mode with mode "textured" shows the materials when the user asks for them).'
+                },
+                materials: {
+                    type: 'BOOLEAN',
+                    description: 'True runs the material path on the built object as its last step (object_detail_pass materials: true): every part takes a detected material from the texture library by its colour, its roughness and metalness and the object\'s real size, with the set\'s roughness, normal and height at real size; the part\'s colour unchanged. Not with clay. Generated.'
                 },
                 specJson: {
                     type: 'STRING',
@@ -134,6 +139,8 @@ export interface ObjectReferenceToolDeps {
     stageAtLocation?: ToolHandler;
     /** Where the built GLB is published for the viewport (/models/...), and where staged /models/ files are read. */
     publicModelsDir?: string;
+    /** The material path as the build's last step (default object_detail_pass's handler). */
+    detailPass?: ToolHandler;
 }
 
 /**
@@ -1454,6 +1461,19 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
                 };
             }
 
+            // the material path as the build's last step, when asked (the arg, or SCRATCHBOX_OBJECT_MATERIALS=1): a new
+            // version of the object with every part's detected material; a failure is said, the object as built kept
+            let materialsLine = '';
+            if (!clay && (args.materials === true || (args.materials === undefined && process.env.SCRATCHBOX_OBJECT_MATERIALS === '1'))) {
+                try {
+                    const r = await (deps.detailPass ?? objectDetailHandlers[OBJECT_DETAIL_TOOL])({ objectId: heroId, materials: true }, { ...ctx, request: { ...(ctx.request ?? {}), activeArtifact: artifact } } as unknown as ToolContext);
+                    const next = (r.resultPayload as { artifact?: Record<string, unknown> } | undefined)?.artifact;
+                    if (next) { artifact = next; materialsLine = `Its parts then took their detected materials (${String(r.summaryResult ?? '').split('; object materials: ')[1]?.split(', labelled generated')[0] ?? 'object_detail_pass materials'}); restoreVersion 1 of object_detail_pass shows it as built.`; }
+                } catch (err) {
+                    if (ctx.signal?.aborted) throw err;
+                    materialsLine = `Its parts' materials were not detected (the object is shown as built, with its part factors): ${errorMessage(err)}`;
+                }
+            }
             const named = (o: any) => `"${o.content?.metadata?.description || o.id}" (${o.id})`;
             const placeLine = staged && placement && site
                 ? [
@@ -1473,6 +1493,7 @@ export function createObjectReferenceHandlers(deps: ObjectReferenceToolDeps = {}
             const summary = [
                 `Built "${subject}" as native ${clay ? 'clay ' : ''}geometry${clay ? '' : ' with a material per part'}: ${checks.vertexCount.toLocaleString()} vertices, ${checks.triangleCount.toLocaleString()} triangles, ${checks.parts.filter(p => p.built).length} of ${checks.parts.length} listed parts built and attached, ${bodiesNote}, ${checks.builtBoundingMeters.join(' x ')} m, ${howBuilt}`,
                 ...builtLines,
+                materialsLine,
                 placeLine,
                 editLine
             ].filter(Boolean).join(' ');
