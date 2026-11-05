@@ -187,6 +187,23 @@ inline Vec3 sampleTexture(const texture::ImageBuffer& img, const Vec2& uv, int w
     return top * (1.0f - ty) + bottom * ty;
 }
 
+/** Bilinear lookup of a texture's alpha (its fourth channel; 1 for a texture without one). The Metal kernels match it. */
+inline float sampleAlpha(const texture::ImageBuffer& img, const Vec2& uv, int wrapS, int wrapT) {
+    if (img.channels != 4 || img.width <= 0 || img.height <= 0) return 1.0f;
+    float fx = std::clamp(uv.x, -1e5f, 1e5f) * img.width - 0.5f;
+    float fy = std::clamp(uv.y, -1e5f, 1e5f) * img.height - 0.5f;
+    if (!std::isfinite(fx) || !std::isfinite(fy)) return 1.0f;
+    float x0f = std::floor(fx), y0f = std::floor(fy);
+    float tx = fx - x0f, ty = fy - y0f;
+    int x0 = static_cast<int>(x0f), y0 = static_cast<int>(y0f);
+    int xa = wrapCoordinate(x0, img.width, wrapS), xb = wrapCoordinate(x0 + 1, img.width, wrapS);
+    int ya = wrapCoordinate(y0, img.height, wrapT), yb = wrapCoordinate(y0 + 1, img.height, wrapT);
+    auto fetch = [&](int x, int y) { return img.data[(static_cast<size_t>(y) * img.width + x) * 4 + 3] * (1.0f / 255.0f); };
+    float top = fetch(xa, ya) * (1.0f - tx) + fetch(xb, ya) * tx;
+    float bottom = fetch(xa, yb) * (1.0f - tx) + fetch(xb, yb) * tx;
+    return top * (1.0f - ty) + bottom * ty;
+}
+
 /** Bilinear lookup of an sRGB-encoded colour texture, filtered in linear space. */
 inline Vec3 sampleTextureLinear(const texture::ImageBuffer& img, const Vec2& uv, int wrapS, int wrapT) {
     return sampleTexture(img, uv, wrapS, wrapT, true);
@@ -412,7 +429,9 @@ private:
 } // namespace detail
 
 /**
- * Unidirectional Monte Carlo path tracer over a flattened glTF scene: next-event estimation of the
+ * Unidirectional Monte Carlo path tracer over a flattened glTF scene. Surfaces of alpha-masked materials (glTF
+ * MASK) are there only where their base colour's alpha reaches the cutoff: rays and shadow rays pass the rest.
+ * Next-event estimation of the
  * solar disc and of the scene's own lights (emissive triangles and glTF punctual lights, one picked per
  * vertex from the light tree of scratchbox_light_tree.hpp and weighted against the BSDF by the power
  * heuristic), sky dome or studio dome lighting on escape, distance-based aerial perspective, and a ground
@@ -431,6 +450,7 @@ public:
             mesh_.addVertex(local);
         }
         bvh_.build(mesh_);
+        buildAlphaMask();
         estimateGround();
         for (const gltf::SceneLight& l : scene.lights) {
             gltf::SceneLight local = l;
@@ -454,6 +474,7 @@ public:
         clayAlbedo_ = albedo;
         clayRoughness_ = std::clamp(roughness, 0.02f, 1.0f);
         clayMetallic_ = std::clamp(metallic, 0.0f, 1.0f);
+        buildAlphaMask();
         buildLights();
     }
 
@@ -649,10 +670,66 @@ private:
         float depth{0.0f};
     };
 
+    /** Which triangles are alpha-masked (none under the clay material, which is never cut out). */
+    void buildAlphaMask() {
+        const size_t triCount = mesh_.indices.size() / 3;
+        maskTri_.assign(triCount, 0);
+        anyMask_ = false;
+        if (clay_) return;
+        for (size_t t = 0; t < triCount && t < scene_.triangleMaterial.size(); ++t) {
+            if (scene_.materials[scene_.triangleMaterial[t]].alphaMask) {
+                maskTri_[t] = 1;
+                anyMask_ = true;
+            }
+        }
+    }
+
+    /** Whether triangle `tri` is there at barycentrics (u, v): always, unless its alpha-masked base colour is cut out there. */
+    bool surfaceAt(uint32_t tri, float u, float v) const {
+        if (!anyMask_ || tri >= maskTri_.size() || !maskTri_[tri]) return true;
+        const auto& mat = scene_.materials[scene_.triangleMaterial[tri]];
+        float alpha = mat.baseColorFactor.w;
+        if (mat.baseColorImage >= 0 && mat.baseColorImage < static_cast<int>(scene_.images.size())) {
+            const auto& image = scene_.images[static_cast<size_t>(mat.baseColorImage)];
+            if (image.decoded) {
+                const auto& v0 = mesh_.vertices[mesh_.indices[tri * 3]];
+                const auto& v1 = mesh_.vertices[mesh_.indices[tri * 3 + 1]];
+                const auto& v2 = mesh_.vertices[mesh_.indices[tri * 3 + 2]];
+                const float w = 1.0f - u - v;
+                Vec2 uv(v0.uv.x * w + v1.uv.x * u + v2.uv.x * v, v0.uv.y * w + v1.uv.y * u + v2.uv.y * v);
+                alpha *= detail::sampleAlpha(image.pixels, uv, mat.wrapS, mat.wrapT);
+            }
+        }
+        return alpha >= mat.alphaCutoff;
+    }
+
+    /** Cut-out hits a ray passes before giving up (a dense canopy seen edge-on). */
+    static constexpr int kMaxAlphaSkips = 64;
+
+    /** The nearest surface along the ray: a cut-out texel of a masked triangle is passed and the ray continues past it. */
+    bool raycastSurface(const Vec3& origin, const Vec3& dir, bvh::RayHit& out) const {
+        if (!anyMask_) return bvh_.raycast(Ray(origin, dir), out);
+        Vec3 o = origin;
+        float travelled = 0.0f;
+        for (int k = 0; k < kMaxAlphaSkips; ++k) {
+            bvh::RayHit rh;
+            if (!bvh_.raycast(Ray(o, dir), rh)) return false;
+            if (surfaceAt(rh.triangleIndex, rh.u, rh.v)) {
+                out = rh;
+                out.t = travelled + rh.t;
+                return true;
+            }
+            const float step = rh.t + 1e-4f;
+            travelled += step;
+            o = o + dir * step;
+        }
+        return false;
+    }
+
     Hit intersect(const Vec3& origin, const Vec3& dir) const {
         Hit hit;
         bvh::RayHit rh;
-        if (bvh_.raycast(Ray(origin, dir), rh)) {
+        if (raycastSurface(origin, dir, rh)) {
             hit.valid = true;
             hit.t = rh.t;
             hit.position = rh.position;
@@ -726,7 +803,13 @@ private:
 
     /** Whether anything (the scene or the ground plane) lies on the segment from `o` along `d` before `tMax`. */
     bool occluded(const Vec3& o, const Vec3& d, float tMax) const {
-        if (bvh_.raycastAny(Ray(o, d), tMax)) return true;
+        if (!anyMask_) {
+            if (bvh_.raycastAny(Ray(o, d), tMax)) return true;
+        } else {
+            // Cut-out texels let the light through: a shadow ray stops only at a surface that is there.
+            bvh::RayHit rh;
+            if (raycastSurface(o, d, rh) && rh.t < tMax) return true;
+        }
         if (groundEnabled_ && d.y < -1e-6f) {
             const float t = (groundLocalY_ - o.y) / d.y;
             if (t > detail::kRayEpsilon && t < tMax) return true;
@@ -954,9 +1037,8 @@ private:
                 Vec3 wi = sky->sampleSunDirection(s1, s2);
                 float cosShading = surface.shadingNormal.dot(wi);
                 if (cosShading > 0.0f && surface.geometricNormal.dot(wi) > 0.0f) {
-                    Ray shadowRay(surface.position + surface.geometricNormal * detail::kRayEpsilon, wi);
                     ++rayCount;
-                    if (!bvh_.raycastAny(shadowRay, 1e9f)) {
+                    if (!occluded(surface.position + surface.geometricNormal * detail::kRayEpsilon, wi, 1e9f)) {
                         accumulate(radiance, throughput * bsdf.eval(wi) * frame.sunIrradiance * cosShading, bounce, settings.clampIndirect);
                     }
                 }
@@ -1050,6 +1132,8 @@ private:
     std::vector<gltf::SceneLight> punctual_;
     lights::LightSet lights_;
     bool lightSampling_{true};
+    std::vector<uint8_t> maskTri_;
+    bool anyMask_{false};
     bool groundEnabled_;
     Vec3 origin_;
     geometry::ScratchboxMesh mesh_;

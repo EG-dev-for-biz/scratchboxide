@@ -488,7 +488,8 @@ public:
                     } else {
                         dst[0] = dst[1] = dst[2] = src[0];
                     }
-                    dst[3] = 255;
+                    // Alpha only for the images that keep it (alpha-masked base colours); the rest read opaque.
+                    dst[3] = px.channels == 4 ? src[3] : 255;
                 }
                 // Stored as given; colour maps are sRGB-decoded in the kernel, data maps are not.
                 MTLTextureDescriptor* desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
@@ -516,6 +517,7 @@ public:
 
             std::vector<MaterialRecord> records;
             records.reserve(scene.materials.size() + 1);
+            bool alphaMasked = false;
             auto imageRef = [&](int image) { return image >= 0 && image < static_cast<int>(textureOf.size()) ? textureOf[static_cast<size_t>(image)] : -1; };
             for (const gltf::SceneMaterial& m : scene.materials) {
                 MaterialRecord r;
@@ -543,6 +545,9 @@ public:
                 r.emissiveImage = imageRef(m.emissiveImage);
                 r.emissiveWrapS = m.emissiveWrapS;
                 r.emissiveWrapT = m.emissiveWrapT;
+                r.alphaMask = m.alphaMask ? 1 : 0;
+                r.alphaCutoff = m.alphaCutoff;
+                alphaMasked = alphaMasked || m.alphaMask;
                 records.push_back(r);
             }
             defaultMaterial_ = static_cast<uint32_t>(records.size());
@@ -552,6 +557,7 @@ public:
             textureRefBuffer_ = [device_ newBufferWithBytes:refs.data() length:refs.size() * sizeof(uint64_t) options:MTLResourceStorageModeShared];
             if (!materialBuffer_ || !textureRefBuffer_) throw Error("could not allocate the material buffers");
             hasMaterials_ = true;
+            alphaMasked_ = alphaMasked;
             sceneMaterials_ = scene.materials;
             // The emissive textures stay on the host too: the light tree reads each emitter's power from them.
             emissiveImages_.assign(scene.images.size(), texture::ImageBuffer{});
@@ -655,6 +661,7 @@ public:
         u.restirGi = restirGi_ ? 1 : 0;
         u.giSpatial = giSpatial_;
         ensureLights(!uniformMaterial);
+        u.alphaTested = !uniformMaterial && alphaMasked_ ? 1 : 0;
         u.localLights = lightSet_.localCount;
         u.distantLights = lightSet_.distantCount;
 
@@ -1133,7 +1140,8 @@ private:
         geometry.indexBuffer = b.indices;
         geometry.indexType = MTLIndexTypeUInt32;
         geometry.triangleCount = static_cast<NSUInteger>(indices.size() / 3);
-        geometry.opaque = YES;
+        // Non-opaque, so intersection queries see alpha-masked candidates; the plain intersectors force opacity.
+        geometry.opaque = NO;
         MTLPrimitiveAccelerationStructureDescriptor* descriptor = [MTLPrimitiveAccelerationStructureDescriptor descriptor];
         descriptor.geometryDescriptors = @[geometry];
         descriptor.usage = preferFastBuild_ ? MTLAccelerationStructureUsagePreferFastBuild : MTLAccelerationStructureUsageNone;
@@ -1321,6 +1329,7 @@ private:
     uint32_t defaultMaterial_{0};
     uint64_t textureBytes_{0};
     bool hasMaterials_{false};
+    bool alphaMasked_{false};
     std::vector<gltf::SceneMaterial> sceneMaterials_;
     std::vector<texture::ImageBuffer> emissiveImages_;
     std::vector<gltf::SceneLight> punctual_;

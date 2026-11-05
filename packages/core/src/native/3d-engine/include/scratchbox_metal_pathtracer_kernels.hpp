@@ -89,7 +89,10 @@ struct Uniforms {
      * The scene's lights (render::lights::LightSet, buffers 22-24): local lights in the tree, then distant ones.
      * The emissive triangles are those of the geometry bounce rays trace (the bounce cut when there is one).
      */
-    uint32_t localLights{0}, distantLights{0}, pad14{0}, pad15{0};
+    uint32_t localLights{0}, distantLights{0};
+    /** 1 when some material is alpha-masked: closest-hit and shadow rays then test the cut-out (intersection queries). */
+    uint32_t alphaTested{0};
+    uint32_t pad15{0};
 };
 static_assert(sizeof(Uniforms) == 4 * 76, "Uniforms must stay a flat array of 4-byte scalars");
 
@@ -206,8 +209,11 @@ struct MaterialRecord {
     int32_t wrapS{10497}, wrapT{10497}, normalImage{-1}, normalWrapS{10497};
     int32_t normalWrapT{10497}, mrImage{-1}, mrWrapS{10497}, mrWrapT{10497};
     int32_t occlusionImage{-1}, emissiveImage{-1}, emissiveWrapS{10497}, emissiveWrapT{10497};
+    /** glTF alphaMode MASK (1) and its cutoff: the surface is there where baseColor.w times the texture's alpha reaches it. */
+    float alphaCutoff{0.5f};
+    int32_t alphaMask{0}, pad3{0}, pad4{0};
 };
-static_assert(sizeof(MaterialRecord) == 96, "MaterialRecord layout is shared with the Metal kernels");
+static_assert(sizeof(MaterialRecord) == 112, "MaterialRecord layout is shared with the Metal kernels");
 
 /** What pt_display reads: the frame's size and samples, whether to show the denoised colour, and the exposure scale. */
 struct DisplayUniforms {
@@ -285,7 +291,7 @@ struct Uniforms {
     uint bounceShadowRays, restir, restirCandidates, restirSpatial;
     uint guided, guideTile, guideBands, guideSectors;
     uint guideSamples, restirGi, giSpatial, pad13;
-    uint localLights, distantLights, pad14, pad15;
+    uint localLights, distantLights, alphaTested, pad15;
 };
 
 struct GiSample {
@@ -350,6 +356,8 @@ struct MaterialRecord {
     int wrapS, wrapT, normalImage, normalWrapS;
     int normalWrapT, mrImage, mrWrapS, mrWrapT;
     int occlusionImage, emissiveImage, emissiveWrapS, emissiveWrapT;
+    float alphaCutoff;
+    int alphaMask, pad3, pad4;
 };
 
 // ---- Scene lights (port of scratchbox_light_tree.hpp) -------------------------------------------
@@ -1002,6 +1010,89 @@ inline float3 triangleEmission(constant Uniforms& u, device const Vertex* verts,
     return e;
 }
 
+/** Bilinear lookup of a texture's alpha (port of detail::sampleAlpha; textures without alpha read 1). */
+inline float sampleAlpha(texture2d<float> img, float2 uv, int wrapS, int wrapT) {
+    int w = (int)img.get_width(), h = (int)img.get_height();
+    if (w <= 0 || h <= 0) return 1.0f;
+    float fx = clamp(uv.x, -1e5f, 1e5f) * (float)w - 0.5f;
+    float fy = clamp(uv.y, -1e5f, 1e5f) * (float)h - 0.5f;
+    if (!isfinite(fx) || !isfinite(fy)) return 1.0f;
+    float x0f = floor(fx), y0f = floor(fy);
+    float tx = fx - x0f, ty = fy - y0f;
+    int x0 = (int)x0f, y0 = (int)y0f;
+    int xa = wrapCoordinate(x0, w, wrapS), xb = wrapCoordinate(x0 + 1, w, wrapS);
+    int ya = wrapCoordinate(y0, h, wrapT), yb = wrapCoordinate(y0 + 1, h, wrapT);
+    float top = img.read(uint2(xa, ya)).a * (1.0f - tx) + img.read(uint2(xb, ya)).a * tx;
+    float bottom = img.read(uint2(xa, yb)).a * (1.0f - tx) + img.read(uint2(xb, yb)).a * tx;
+    return top * (1.0f - ty) + bottom * ty;
+}
+
+/** Port of PathTracer::surfaceAt: false where an alpha-masked triangle's base colour is cut out. */
+inline bool surfaceAt(constant Uniforms& u, device const Vertex* verts, Geometry g, device const MaterialRecord* materials,
+                      device const TextureRef* textures, uint tri, float2 bary) {
+    if (u.alphaTested == 0u || u.useMaterials == 0u) return true;
+    uint matId = g.triMaterials[tri];
+    if (matId == kNoMaterial) matId = u.defaultMaterial;
+    device const MaterialRecord& m = materials[matId];
+    if (m.alphaMask == 0) return true;
+    float alpha = m.baseColor[3];
+    if (m.baseColorImage >= 0) {
+        uint i0 = g.idx[tri * 3], i1 = g.idx[tri * 3 + 1], i2 = g.idx[tri * 3 + 2];
+        float2 uv = f2(verts[i0].uv) * (1.0f - bary.x - bary.y) + f2(verts[i1].uv) * bary.x + f2(verts[i2].uv) * bary.y;
+        alpha *= sampleAlpha(textures[m.baseColorImage].tex, uv, m.wrapS, m.wrapT);
+    }
+    return alpha >= m.alphaCutoff;
+}
+
+/** What an alpha test reads: the vertex, material and texture tables. */
+struct SceneTables {
+    device const Vertex* verts;
+    device const MaterialRecord* materials;
+    device const TextureRef* textures;
+};
+
+/**
+ * The nearest surface along a ray. With alpha-masked materials in the scene the geometry is non-opaque and an
+ * intersection query commits only candidates that are there (surfaceAt), so the ray passes cut-out texels; without
+ * them the plain intersector runs, as before.
+ */
+inline intersection_result<triangle_data> traceClosest(constant Uniforms& u, ray r, Geometry g, thread intersector<triangle_data>& closest, SceneTables t) {
+    if (u.alphaTested == 0u) return closest.intersect(r, g.accel);
+    intersection_params params;
+    params.assume_geometry_type(geometry_type::triangle);
+    intersection_query<triangle_data> q(r, g.accel, params);
+    while (q.next()) {
+        if (q.get_candidate_intersection_type() == intersection_type::triangle
+            && surfaceAt(u, t.verts, g, t.materials, t.textures, q.get_candidate_primitive_id(), q.get_candidate_triangle_barycentric_coord())) {
+            q.commit_triangle_intersection();
+        }
+    }
+    intersection_result<triangle_data> hit;
+    hit.type = q.get_committed_intersection_type();
+    if (hit.type == intersection_type::triangle) {
+        hit.distance = q.get_committed_distance();
+        hit.primitive_id = q.get_committed_primitive_id();
+        hit.triangle_barycentric_coord = q.get_committed_triangle_barycentric_coord();
+    }
+    return hit;
+}
+
+/** Whether a shadow ray meets a surface that is there (cut-out texels let the light through). */
+inline bool occludedRay(constant Uniforms& u, ray r, Geometry g, thread intersector<triangle_data>& any, SceneTables t) {
+    if (u.alphaTested == 0u) return any.intersect(r, g.accel).type != intersection_type::none;
+    intersection_params params;
+    params.assume_geometry_type(geometry_type::triangle);
+    params.accept_any_intersection(true);
+    intersection_query<triangle_data> q(r, g.accel, params);
+    while (q.next()) {
+        if (q.get_candidate_intersection_type() == intersection_type::triangle
+            && surfaceAt(u, t.verts, g, t.materials, t.textures, q.get_candidate_primitive_id(), q.get_candidate_triangle_barycentric_coord())) {
+            q.commit_triangle_intersection();
+        }
+    }
+    return q.get_committed_intersection_type() != intersection_type::none;
+}
+
 /**
  * One light sample at a vertex (port of PathTracer::sampleLight): a light picked from the tree, a point on it,
  * and the contribution before its shadow ray, weighted against the BSDF when the path goes on (`mis`).
@@ -1347,6 +1438,7 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
     const bool sampleLights = lights.localCount + lights.distantCount > 0u;
     // Emissive triangles are those of the geometry bounce rays trace; light samples read their materials there.
     const Geometry lightGeo = u.useBounceAccel != 0u ? bounceGeo : primary;
+    const SceneTables tables{verts, materials, textures};
     const uint dimStride = sampleLights ? 9u : 6u;
     // The previous vertex, for weighting emission a BSDF ray finds against the light sample taken there.
     float3 prevPosition = float3(0.0f), prevNormal = float3(0.0f, 1.0f, 0.0f);
@@ -1383,7 +1475,7 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
         if (!resolved) {
             ++rays;
             ray r(origin, dir, rayStart, 1e9f);
-            hit = closest.intersect(r, geo.accel);
+            hit = traceClosest(u, r, geo, closest, tables);
         }
         if (hit.type == intersection_type::none) {
             float3 skyLight = sky ? skyRadiance(u, lut, dir) : f3(u.studioRadiance);
@@ -1471,8 +1563,7 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
                 const bool coarseShadow = u.useBounceAccel != 0u && u.bounceShadowRays != 0u;
                 const Geometry shadowGeo = coarseShadow ? bounceGeo : primary;
                 ray shadow(surface.position + surface.geometricNormal * (coarseShadow ? coarseOffset : kRayEpsilon), wi, 1e-4f, 1e9f);
-                intersection_result<triangle_data> blocker = any.intersect(shadow, shadowGeo.accel);
-                if (blocker.type == intersection_type::none) {
+                if (!occludedRay(u, shadow, shadowGeo, any, tables)) {
                     float3 sunLight = throughput * bsdfEval(bsdf, wi) * f3(u.sunIrradiance) * cosShading;
                     if (giActive) accumulate(giRadiance, sunLight, bounce, u.clampIndirect);
                     else accumulate(radiance, sunLight, bounce, u.clampIndirect);
@@ -1491,8 +1582,7 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
                 const bool coarseShadow = u.useBounceAccel != 0u && u.bounceShadowRays != 0u;
                 const Geometry shadowGeo = coarseShadow ? bounceGeo : primary;
                 ray shadow(surface.position + surface.geometricNormal * (coarseShadow ? coarseOffset : kRayEpsilon), wi, 1e-4f, tMax);
-                intersection_result<triangle_data> blocker = any.intersect(shadow, shadowGeo.accel);
-                if (blocker.type == intersection_type::none) {
+                if (!occludedRay(u, shadow, shadowGeo, any, tables)) {
                     if (giActive) accumulate(giRadiance, contribution, bounce, u.clampIndirect);
                     else accumulate(radiance, contribution, bounce, u.clampIndirect);
                 }
