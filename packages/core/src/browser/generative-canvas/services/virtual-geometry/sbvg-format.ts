@@ -15,13 +15,14 @@
 
 export const SBVG_MAGIC = 0x47564253; // 'SBVG'
 /**
- * Version the builder writes. Version 5 names a baked normal atlas per re-textured level beside the
+ * Version the builder writes. Version 6 names a baked emission atlas per re-textured level and the peak
+ * radiance it is scaled by, so coarse levels keep their emitters. Version 5 names a baked normal atlas per re-textured level beside the
  * colour atlas of version 4 (whose atlas table names the PNGs of the re-textured coarse levels, one
  * material each, appended after the glTF materials); version 3 vertices carry a uv and every level
  * block ends with one material index per triangle; version 2 has 64-bit level block offsets;
  * versions 1 to 4 are still read.
  */
-export const SBVG_VERSION = 5;
+export const SBVG_VERSION = 6;
 export const SBVG_HEADER_BYTES = 128;
 export const SBVG_LEVEL_WORDS = 16;
 /** Level row size of version 1 files (32-bit block offset and length at words 9 and 10). */
@@ -103,8 +104,8 @@ export function parseSbvgHeader(bytes: Uint8Array): SbvgHeader {
     const f = (word: number) => view.getFloat32(word * 4, true);
     if (u(0) !== SBVG_MAGIC) throw new SbvgFormatError('sbvg: bad magic (not a virtual geometry file)');
     const version = u(1);
-    if (version < 1 || version > 5) {
-        throw new SbvgFormatError(`sbvg: unsupported version ${version} (this reader handles 1 to 5); rebuild the file from its GLB`);
+    if (version < 1 || version > 6) {
+        throw new SbvgFormatError(`sbvg: unsupported version ${version} (this reader handles 1 to 6); rebuild the file from its GLB`);
     }
     const vertexBytes = sbvgFileVertexFloats(version) * 4;
     const materialBytesPerTriangle = version >= 3 ? 4 : 0;

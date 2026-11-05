@@ -13,6 +13,7 @@
 #include "scratchbox_bvh.hpp"
 #include "scratchbox_denoise.hpp"
 #include "scratchbox_gltf_scene.hpp"
+#include "scratchbox_light_tree.hpp"
 #include "scratchbox_sky.hpp"
 #include "scratchbox_view_transform.hpp"
 #include <algorithm>
@@ -58,6 +59,12 @@ struct RenderSettings {
     ShadingMode mode{ShadingMode::Relit};
     float clampIndirect{10.0f};  // luminance cap on indirect contributions; 0 disables
     uint32_t seed{1};
+};
+
+/** What lights the scene besides its own lights: the physical sun and sky, or (with no sky) a uniform studio dome. */
+struct Environment {
+    const sky::PhysicalSky* sky{nullptr};
+    Vec3 studioRadiance{1.0f, 1.0f, 1.0f};
 };
 
 struct RenderOutput {
@@ -406,8 +413,10 @@ private:
 
 /**
  * Unidirectional Monte Carlo path tracer over a flattened glTF scene: next-event estimation of the
- * solar disc, sky dome lighting on escape, distance-based aerial perspective, and a ground plane at
- * the scene's measured street level so the surroundings of a tile are not an empty void.
+ * solar disc and of the scene's own lights (emissive triangles and glTF punctual lights, one picked per
+ * vertex from the light tree of scratchbox_light_tree.hpp and weighted against the BSDF by the power
+ * heuristic), sky dome or studio dome lighting on escape, distance-based aerial perspective, and a ground
+ * plane at the scene's measured street level so the surroundings of a tile are not an empty void.
  */
 class PathTracer {
 public:
@@ -423,6 +432,12 @@ public:
         }
         bvh_.build(mesh_);
         estimateGround();
+        for (const gltf::SceneLight& l : scene.lights) {
+            gltf::SceneLight local = l;
+            local.position = l.position - origin_;
+            punctual_.push_back(local);
+        }
+        buildLights();
     }
 
     // The BVH keeps a pointer to mesh_, so the tracer must stay at a fixed address.
@@ -439,6 +454,16 @@ public:
         clayAlbedo_ = albedo;
         clayRoughness_ = std::clamp(roughness, 0.02f, 1.0f);
         clayMetallic_ = std::clamp(metallic, 0.0f, 1.0f);
+        buildLights();
+    }
+
+    /** The lights next-event estimation samples (the clay material emits nothing, so then only punctual lights). */
+    const lights::LightSet& lightSet() const { return lights_; }
+
+    /** Off: no light samples, and emission is found by BSDF rays alone (the tracer before its light tree). */
+    void setLightSampling(bool enabled) {
+        lightSampling_ = enabled;
+        buildLights();
     }
     size_t triangleCount() const { return mesh_.indices.size() / 3; }
     size_t bvhNodeCount() const { return bvh_.getNodeCount(); }
@@ -465,6 +490,10 @@ public:
     }
 
     RenderOutput render(const CameraSpec& worldCamera, const sky::PhysicalSky& sky, const RenderSettings& settings) const {
+        return render(worldCamera, Environment{&sky, Vec3(0, 0, 0)}, settings);
+    }
+
+    RenderOutput render(const CameraSpec& worldCamera, const Environment& environment, const RenderSettings& settings) const {
         auto start = std::chrono::steady_clock::now();
         const int w = std::max(1, settings.width);
         const int h = std::max(1, settings.height);
@@ -495,13 +524,19 @@ public:
         const float focusDistance = worldCamera.focusDistance > 0.0f ? worldCamera.focusDistance : (camTarget - camPos).length();
 
         Frame frame;
-        frame.sky = &sky;
+        frame.sky = environment.sky;
+        frame.studioRadiance = environment.studioRadiance;
         frame.settings = &settings;
-        frame.sunIrradiance = sky.sunIrradiance();
-        frame.sunVisible = detail::luminance(frame.sunIrradiance) > 1e-8f;
-        frame.hazeExtinction = sky.hazeExtinction();
-        Vec3 horizontalIrradiance = frame.sunIrradiance * std::max(0.0f, sky.sunDirection().y) + sky.skyIrradianceHorizontal();
-        frame.bakedRadianceScale = detail::luminance(horizontalIrradiance) / detail::kPi;
+        if (const sky::PhysicalSky* sky = environment.sky) {
+            frame.sunIrradiance = sky->sunIrradiance();
+            frame.sunVisible = detail::luminance(frame.sunIrradiance) > 1e-8f;
+            frame.hazeExtinction = sky->hazeExtinction();
+            Vec3 horizontalIrradiance = frame.sunIrradiance * std::max(0.0f, sky->sunDirection().y) + sky->skyIrradianceHorizontal();
+            frame.bakedRadianceScale = detail::luminance(horizontalIrradiance) / detail::kPi;
+        } else {
+            // A uniform dome of radiance L puts pi L on a horizontal surface, so baked radiance scales by L.
+            frame.bakedRadianceScale = detail::luminance(environment.studioRadiance);
+        }
 
         const int tileSize = 16;
         const int tilesX = (w + tileSize - 1) / tileSize;
@@ -585,11 +620,13 @@ public:
 
 private:
     struct Frame {
+        /** Null under the studio dome. */
         const sky::PhysicalSky* sky{nullptr};
+        Vec3 studioRadiance{1, 1, 1};
         const RenderSettings* settings{nullptr};
-        Vec3 sunIrradiance;
+        Vec3 sunIrradiance{0, 0, 0};
         bool sunVisible{false};
-        Vec3 hazeExtinction;
+        Vec3 hazeExtinction{0, 0, 0};
         float bakedRadianceScale{1.0f};
     };
 
@@ -656,6 +693,99 @@ private:
         return base;
     }
 
+    /** Emitted radiance of a triangle at barycentrics (u, v): the factor (with its strength) times the emissive texture. */
+    Vec3 triangleEmission(uint32_t tri, float u, float v) const {
+        const auto& mat = scene_.materials[scene_.triangleMaterial[tri]];
+        Vec3 e = mat.emissiveFactor;
+        if (detail::luminance(e) <= 0.0f) return Vec3(0, 0, 0);
+        if (mat.emissiveImage >= 0 && mat.emissiveImage < static_cast<int>(scene_.images.size())) {
+            const auto& image = scene_.images[static_cast<size_t>(mat.emissiveImage)];
+            if (image.decoded) {
+                const auto& v0 = mesh_.vertices[mesh_.indices[tri * 3]];
+                const auto& v1 = mesh_.vertices[mesh_.indices[tri * 3 + 1]];
+                const auto& v2 = mesh_.vertices[mesh_.indices[tri * 3 + 2]];
+                const float w = 1.0f - u - v;
+                Vec2 uv(v0.uv.x * w + v1.uv.x * u + v2.uv.x * v, v0.uv.y * w + v1.uv.y * u + v2.uv.y * v);
+                e = e * detail::sampleTextureLinear(image.pixels, uv, mat.emissiveWrapS, mat.emissiveWrapT);
+            }
+        }
+        return e;
+    }
+
+    void buildLights() {
+        if (!lightSampling_) {
+            lights_ = lights::LightSet{};
+            lights_.triangleLight.assign(mesh_.indices.size() / 3, lights::kNoLight);
+            return;
+        }
+        lights_ = lights::buildLightSet(
+            [&](uint32_t i) { return mesh_.vertices[i].position; }, mesh_.indices,
+            [&](size_t t, float u, float v) { return triangleEmission(static_cast<uint32_t>(t), u, v); },
+            punctual_, !clay_);
+    }
+
+    /** Whether anything (the scene or the ground plane) lies on the segment from `o` along `d` before `tMax`. */
+    bool occluded(const Vec3& o, const Vec3& d, float tMax) const {
+        if (bvh_.raycastAny(Ray(o, d), tMax)) return true;
+        if (groundEnabled_ && d.y < -1e-6f) {
+            const float t = (groundLocalY_ - o.y) / d.y;
+            if (t > detail::kRayEpsilon && t < tMax) return true;
+        }
+        return false;
+    }
+
+    /**
+     * One light sample at a vertex: a light picked from the tree, a point on it (uniform by area on a triangle),
+     * a shadow ray, and the result weighted against the BSDF by the power heuristic when the path goes on (`mis`),
+     * else in full. Delta lights (points, spots, distant) take no weight.
+     */
+    void sampleLight(const detail::SurfacePoint& surface, const detail::MetallicRoughnessBsdf& bsdf, const Vec3& throughput,
+                     float uSelect, float u1, float u2, bool mis, int bounce, float clampIndirect, Vec3& radiance, size_t& rayCount) const {
+        uint32_t index = lights::kNoLight;
+        const float select = lights::pickLight(lights_, surface.position, surface.shadingNormal, uSelect, index);
+        if (!(select > 0.0f)) return;
+        const lights::LightRecord& light = lights_.records[index];
+        Vec3 wi, incident;
+        float distance = 1e9f, lightPdf = 0.0f;
+        if (light.kind == lights::kTriangleLight) {
+            const float su = std::sqrt(u1);
+            const float bu = su * (1.0f - u2), bv = su * u2;
+            const Vec3 e1 = lights::vec(light.e1), e2 = lights::vec(light.e2);
+            const Vec3 y = lights::vec(light.p0) + e1 * bu + e2 * bv;
+            const Vec3 v = y - surface.position;
+            const float d2 = v.lengthSquared();
+            if (!(d2 > 1e-12f)) return;
+            distance = std::sqrt(d2);
+            wi = v / distance;
+            const float cosLight = std::abs(e1.cross(e2).normalized().dot(wi));
+            if (cosLight < 1e-6f) return;
+            const Vec3 emitted = triangleEmission(light.triangle, bu, bv);
+            if (!(detail::luminance(emitted) > 0.0f)) return;
+            lightPdf = select * d2 / (light.area * cosLight);
+            incident = emitted / lightPdf;
+        } else if (light.kind == lights::kPointLight) {
+            const Vec3 v = lights::vec(light.p0) - surface.position;
+            const float d2 = v.lengthSquared();
+            if (!(d2 > 1e-12f)) return;
+            distance = std::sqrt(d2);
+            wi = v / distance;
+            incident = lights::vec(light.intensity) * (lights::pointFalloff(light, wi, distance) / (d2 * select));
+        } else {
+            wi = -lights::vec(light.e1);
+            incident = lights::vec(light.intensity) / select;
+        }
+        const float cosShading = surface.shadingNormal.dot(wi);
+        if (cosShading <= 0.0f || surface.geometricNormal.dot(wi) <= 0.0f) return;
+        const Vec3 f = bsdf.eval(wi);
+        const float weight = mis && lightPdf > 0.0f ? lights::powerHeuristic(lightPdf, bsdf.pdf(wi)) : 1.0f;
+        const Vec3 contribution = throughput * f * incident * (cosShading * weight);
+        if (!(detail::maxComponent(contribution) > 0.0f)) return;
+        ++rayCount;
+        const float tMax = distance < 1e9f ? std::max(distance - 2.0f * detail::kRayEpsilon, 1e-4f) : 1e9f;
+        if (occluded(surface.position + surface.geometricNormal * detail::kRayEpsilon, wi, tMax)) return;
+        accumulate(radiance, contribution, bounce, clampIndirect);
+    }
+
     detail::SurfacePoint shade(const Hit& hit, const Vec3& dir) const {
         detail::SurfacePoint s;
         s.position = hit.position;
@@ -686,7 +816,7 @@ private:
             s.baseColor = triangleAlbedo(hit.triangle, hit.u, hit.v);
             s.metallic = std::clamp(mat.metallicFactor, 0.0f, 1.0f);
             s.roughness = std::clamp(mat.roughnessFactor, 0.02f, 1.0f);
-            s.emission = mat.emissiveFactor;
+            s.emission = triangleEmission(hit.triangle, hit.u, hit.v);
 
             // Metallic-Roughness map sampling
             if (mat.metallicRoughnessImage >= 0 && mat.metallicRoughnessImage < static_cast<int>(scene_.images.size())) {
@@ -767,17 +897,21 @@ private:
     }
 
     PathSample tracePath(Vec3 origin, Vec3 dir, detail::Pcg32& rng, const Frame& frame, size_t& rayCount) const {
-        const sky::PhysicalSky& sky = *frame.sky;
+        const sky::PhysicalSky* sky = frame.sky;
         const RenderSettings& settings = *frame.settings;
         PathSample result;
         Vec3 radiance(0, 0, 0);
         Vec3 throughput(1, 1, 1);
+        const bool sampleLights = !lights_.empty();
+        // The previous vertex, for weighting emission a BSDF ray finds against the light sample taken there.
+        Vec3 prevPosition(0, 0, 0), prevNormal(0, 1, 0);
+        float prevBsdfPdf = 0.0f;
         for (int bounce = 0;; ++bounce) {
             ++rayCount;
             Hit hit = intersect(origin, dir);
             if (!hit.valid) {
-                Vec3 skyLight = sky.skyRadiance(dir);
-                if (bounce == 0) skyLight += sky.sunDiscRadiance(dir);
+                Vec3 skyLight = sky ? sky->skyRadiance(dir) : frame.studioRadiance;
+                if (sky && bounce == 0) skyLight += sky->sunDiscRadiance(dir);
                 accumulate(radiance, throughput * skyLight, bounce, settings.clampIndirect);
                 break;
             }
@@ -789,21 +923,35 @@ private:
                 result.depth = hit.t;
             }
 
-            Vec3 opticalDepth = frame.hazeExtinction * hit.t;
-            Vec3 transmittance(std::exp(-opticalDepth.x), std::exp(-opticalDepth.y), std::exp(-opticalDepth.z));
-            accumulate(radiance, throughput * (sky.horizonRadiance(dir) * (Vec3(1, 1, 1) - transmittance)), bounce, settings.clampIndirect);
-            throughput = throughput * transmittance;
+            if (sky) {
+                Vec3 opticalDepth = frame.hazeExtinction * hit.t;
+                Vec3 transmittance(std::exp(-opticalDepth.x), std::exp(-opticalDepth.y), std::exp(-opticalDepth.z));
+                accumulate(radiance, throughput * (sky->horizonRadiance(dir) * (Vec3(1, 1, 1) - transmittance)), bounce, settings.clampIndirect);
+                throughput = throughput * transmittance;
+            }
 
             if (settings.mode == ShadingMode::Baked) {
                 radiance += throughput * surface.baseColor * frame.bakedRadianceScale;
                 break;
             }
-            radiance += throughput * surface.emission;
+            const uint32_t emitter = hit.ground ? lights::kNoLight : lights_.triangleLight[hit.triangle];
+            if (bounce == 0 || emitter == lights::kNoLight) {
+                radiance += throughput * surface.emission;
+            } else {
+                // Found by the BSDF ray of the previous vertex, which also sampled the lights: weight the two.
+                const float cosLight = std::abs(surface.geometricNormal.dot(dir));
+                const float lightPdf = cosLight > 1e-6f
+                    ? lights::selectPdf(lights_, prevPosition, prevNormal, emitter) * hit.t * hit.t / (lights_.records[emitter].area * cosLight)
+                    : 0.0f;
+                accumulate(radiance, throughput * surface.emission * lights::powerHeuristic(prevBsdfPdf, lightPdf), bounce, settings.clampIndirect);
+            }
 
             const Vec3 wo = -dir;
             detail::MetallicRoughnessBsdf bsdf(surface, wo);
             if (frame.sunVisible) {
-                Vec3 wi = sky.sampleSunDirection(rng.next(), rng.next());
+                const float s1 = rng.next();
+                const float s2 = rng.next();
+                Vec3 wi = sky->sampleSunDirection(s1, s2);
                 float cosShading = surface.shadingNormal.dot(wi);
                 if (cosShading > 0.0f && surface.geometricNormal.dot(wi) > 0.0f) {
                     Ray shadowRay(surface.position + surface.geometricNormal * detail::kRayEpsilon, wi);
@@ -813,10 +961,19 @@ private:
                     }
                 }
             }
+            if (sampleLights) {
+                const float uSelect = rng.next();
+                const float u1 = rng.next();
+                const float u2 = rng.next();
+                sampleLight(surface, bsdf, throughput, uSelect, u1, u2, bounce < settings.maxBounces, bounce, settings.clampIndirect, radiance, rayCount);
+            }
 
             if (bounce >= settings.maxBounces) break;
             Vec3 wi, weight;
             if (!bsdf.sample(rng, wi, weight) || surface.geometricNormal.dot(wi) <= 0.0f) break;
+            prevPosition = surface.position;
+            prevNormal = surface.shadingNormal;
+            prevBsdfPdf = bsdf.pdf(wi);
             throughput = throughput * weight;
             if (bounce >= 2) {
                 float q = std::min(0.95f, detail::maxComponent(throughput));
@@ -890,6 +1047,9 @@ private:
     }
 
     const gltf::GltfScene& scene_;
+    std::vector<gltf::SceneLight> punctual_;
+    lights::LightSet lights_;
+    bool lightSampling_{true};
     bool groundEnabled_;
     Vec3 origin_;
     geometry::ScratchboxMesh mesh_;

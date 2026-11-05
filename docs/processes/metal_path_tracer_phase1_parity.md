@@ -303,6 +303,122 @@ Lazarov's environment-BRDF fit used as Ess overshot to 1.16, so the table replac
 
 **Not done.** No live check in the app yet. The snapshot re-encodes textures in the browser, so big staged builds will be slow to capture: the server should assemble the scene from its saved JSON instead, keeping the browser snapshot only for content that exists only there. Mac only.
 
+## Phase 14 (2026-11-04): the scene's own lights, a light tree and MIS
+
+Until now the only light either tracer sampled was the sun. Emissive surfaces counted only when a BSDF ray happened to hit them, and the GLB's lamps were not read at all.
+
+**What the tracers sample now** (`scratchbox_light_tree.hpp`, shared by both tracers and ported line for line into the Metal kernels):
+- **Emissive triangles of the traced cut.** Emission is the factor times `KHR_materials_emissive_strength` times the emissive texture, which the loader now reads.
+- **`KHR_lights_punctual` point, spot and directional lights**, in glTF units (candela, lux), with the spec's cone falloff and range window.
+- **Selection.** Local lights sit in a power and orientation bounding tree (Estevez and Kulla 2018: binned SAOH build, conservative importance, depth capped at 40 levels). Distant lights are picked beside its root. One light is drawn per vertex by walking the tree with one random number.
+- **Weighting.** A triangle light's sample is weighted against the BSDF by the power heuristic. A BSDF ray that finds an emitter is weighted with the selection pdf recomputed at the previous vertex (`selectPdf`, walked up from the light's leaf), so no light is counted twice. At the last bounce the light sample takes full weight. Delta lights (point, spot, distant) take no weight.
+- **Emitter power.** Each emitter's power in the tree is its own emission read at seven points times its area. A triangle that reads zero is left out, which is always safe: BSDF rays still find it and count it in full.
+- **Emission is two-sided**, as the tracers have always shaded it.
+- **Indirect clamp.** Emitter light found at bounce 1 or later now goes through the same indirect clamp as the sun.
+
+**Emission at coarse LOD (`.sbvg` version 6).** The coarse levels' baked material carried colour and normals but no emission, so an emitter vanished wherever the cut chose a coarse cluster. Flat grids simplify with zero error, so that happened even at a 0.01 px threshold: the test room's cut was 7,690 of 12,160 leaf triangles. Each re-textured level now also bakes an emission atlas: linear radiance over its own peak, sRGB PNG `<stem>.emission<level>.png`, peak stored in the atlas table. The driver turns it into the level material's emissive texture and factor. The browser reader and the C++ reader accept version 6.
+
+**CPU reference under the studio dome.** `render::Environment` (sky, or uniform dome radiance) lets the CPU backend render without a sun, so lamp-lit scenes have a reference.
+
+**Viewport and switches.**
+- **Snapshot.** `pathTraceSnapshot.ts` writes the viewport's point, spot and directional lights into the GLB at their world placement. The atmosphere's sun stays the tracer's own sun. Area lights have no glTF form and are listed as not traced.
+- **Comparison switch.** `lighting.sampleLights: false` turns light sampling off: BSDF rays alone, no punctual lights.
+- **Stats.** `stats.lights` and the session's view event report what was sampled.
+
+**Measured** (M1 Ultra, machine load 200-380, so timings are not comparable to earlier phases; `packages/core/test/metal-path-tracer.test.ts`, "Path tracer scene lights"):
+
+| Check | Result |
+| :--- | :--- |
+| Panel only, studio dome off, 2048 spp: light sampling against BSDF rays alone | mean ratio 1.0016 (unbiased both ways) |
+| Same, 16 spp, relative RMSE on lit surfaces (pixels seeing the panel left out) | 0.976 with the light tree + MIS, 4.028 BSDF only: 4.1x lower |
+| Panel + point + spot + directional, 128 spp, GPU against CPU | same cut, rays within 0.5%, mean ratio 1.0000, block error under 2% |
+| Point light at 1 m against 2 m | 3.9-4.1x (inverse square) |
+| Twice the intensity | 2.00x |
+| Spot aimed down, centre inside the inner cone | equals the point light of the same intensity |
+| Spot aimed away | exactly 0 |
+| 4 lux directional straight down against a 4 cd point 1 m up | within 3% |
+
+Proof sheet: `docs/screenshots/path_tracer_scene_lights_2026-11-04.png`. The existing tracer tests still pass (furnace, sun parity, checkerboard parity, denoise parity, sampler, coarse atlases, resident session).
+
+**Not done.**
+- The light sampling leaves a few fireflies at 16 spp, from paths that reach the panel through the rough metal sphere.
+- With a bounce cut, emissive triangles come from that cut. With `bounceShadowRays: false`, shadow rays to those coarse emitters trace the fine cut and can be blocked by the fine emitter itself.
+- Viewport point/spot export not yet checked live in the app.
+- Glass and transmission, participating media, and the material extensions are the next phases.
+
+## Phase 15 (2026-11-04): the viewport's frame transport
+
+Measured live in the app (example room, view 1465x1172 traced at about 1073x859, GPU at 97-99% from other work on the machine both times), in the 30 s after a small orbit:
+
+| | Before | After |
+| :--- | :--- | :--- |
+| Samples per pixel reached | 54 (still converging) | 256 (finished at 3.4 s) |
+| Frame downloads / distinct frames | 178 / 27 (85% duplicates) | 9 / 9 |
+| Frame requests in flight at once | up to 94 | 1 |
+| Bytes downloaded | 1.2 GB | 37 MB |
+| View request | 1.9 s | 88 ms |
+| GPU busy | 0.87 s of 30 s | 2.6 s of 3.4 s |
+
+**What changed.**
+- **Client.** One frame request at a time, and each request names the newest view sent (`seq`), so the server never sends a frame of an older view.
+- **Server.** Each frame is read from the helper's file once, when the helper announces it, and served from memory.
+- **Frame writes.** The helper writes a converging frame each time the samples double (1, 2, 4, ...), at least every half second and never closer than 40 ms. Before, it wrote one every batch.
+- **On the GPU.** The frame is denoised, exposed and AgX-mapped on the GPU (`pt_display`, a port of `view::toDisplayImage`), and only the bytes are read back. The full per-pixel readback is gone, and exposure is metered once per view.
+- **Size.** Converging frames go out at the traced size (the viewer scales them). Only the finished frame is MetalFX-upscaled to the view.
+- **Pipelining.** Sample command buffers are committed without waiting: two run while the next is encoded, and every read of the frame drains them first.
+
+**Also fixed.** The status box covered the left third of every traced frame: a viewport-wide rule (`.sb-3d-viewport-frame > div`) stretched it to full size. It is an `aside` now and lists the lights it captured.
+
+**Moving the camera.** Before, the traced frame stayed frozen over a paused viewport for the whole drag: a view was sent only after an 80 ms pause, and the frame then restarted from scratch.
+
+Now the client checks the camera every display frame:
+- **While it moves,** the traced overlay hides on the first frame of the move and the viewport's own renderer shows the motion. No view is sent, and a still-converging old view is paused (`POST /3d/path-trace/pause`, the helper's `pause` op) to free the GPU.
+- **After 100 ms at rest,** one view is sent. Its first frame (1 spp, denoised with the previous view's light reprojected) fades in over 160 ms.
+
+Measured on an orbit:
+
+| Event | Time |
+| :--- | :--- |
+| Overlay hidden | 84 ms, the same frame as the first raster draw |
+| Raster during the move | about 60 frames/s |
+| View sent | 100 ms after the camera stopped (answered in 30-40 ms) |
+| First traced frame | about 100 ms later, faded in by 160 ms after that |
+| 256 spp | about 450 ms after the view |
+
+**Not done.**
+- The first click still builds the snapshot's full LOD file (minutes under load).
+- Frame buffers are still reallocated on every view.
+- The raster and the traced image differ in light (studio rig against dome plus lamps), so the hand-over shows a change of light.
+
+## Phase 16 (2026-11-04): a district in the viewport, first click and light changes
+
+The Penn Station district (the 11-03 build: its 777,516-triangle textured district layer, trees and terrain; 811,626 triangles and 1,457 textures in all) opened as a 3D scene and traced in the viewport.
+
+**Two capture failures fixed first.**
+- **Pixel-buffer textures.** The GLTF exporter draws the maps it packs or converts on a canvas without checking their image, and the viewport's tree textures are DataTextures. Such textures are now written from a canvas of their pixels.
+- **Quantized meshes.** The trees layer is `KHR_mesh_quantization`, which the builder refuses. Such geometry is now written as a float copy.
+
+**Then the costs**, at machine load about 100 throughout:
+
+| | Before | After |
+| :--- | :--- | :--- |
+| First click: upload and build | 275 s (full LOD pyramid, atlases) | 44 s (single level, `--single-level`) |
+| Open (texture decode) | 53 s | 7.0 s (parallel decode) |
+| First view | 1.0 s | 0.35 s |
+| Switching the sun on | full rebuild and reopen (5.5 min) | `/lights` 22 ms, first sunlit frame 1.1 s, 256 spp 5.0 s |
+
+**How.**
+- **Lights beside the snapshot.** The scene's lights are no longer in the snapshot GLB: `pathTraceLightsOf` lists them for `/open`.
+- **Relighting.** The layer watches the sun and lights and sends a change to `POST /3d/path-trace/lights`, which relights the open session in place.
+- **Single-level build.** Snapshots build as the leaf clusters only.
+- **Parallel decode.** `GlbSceneReader` decodes images in parallel.
+
+**Not done.**
+- The first click still uploads a 147 MB GLB, and the browser export takes about 5 s.
+- A session reopened for the same snapshot decodes its textures again.
+
+Screenshot: `docs/screenshots/path_tracer_penn_district_sun_2026-11-04.jpg`.
+
 ## Next (plan)
 
 - Metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share.

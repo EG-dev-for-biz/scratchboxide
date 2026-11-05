@@ -66,10 +66,19 @@ export interface MetalPathTraceStudioLighting {
     studio: { radiance?: [number, number, number] };
 }
 
+/**
+ * Beside the sun and sky or the dome, the scene's own lights (the materials GLB's emissive materials and its
+ * KHR_lights_punctual lights) are sampled from a light tree and weighted against the BSDF. `sampleLights: false`
+ * leaves them to be found by BSDF rays alone (no punctual lights then), for comparison.
+ */
+export interface MetalPathTraceSceneLights {
+    sampleLights?: boolean;
+}
+
 export interface MetalPathTraceRequest {
     sbvgPath: string;
     outputDir: string;
-    /** "metal" (default) traces on the GPU; "cpu" traces the same cut with render::PathTracer (sun lighting only). */
+    /** "metal" (default) traces on the GPU; "cpu" traces the same cut with render::PathTracer, the reference. */
     backend?: 'metal' | 'cpu';
     width?: number;
     height?: number;
@@ -81,11 +90,13 @@ export interface MetalPathTraceRequest {
     threads?: number;
     lod?: { thresholdPx?: number; near?: number; finestLevel?: number };
     /** Default: the neutral studio dome. */
-    lighting?: MetalPathTraceSunLighting | MetalPathTraceStudioLighting;
+    lighting?: (MetalPathTraceSunLighting | MetalPathTraceStudioLighting) & MetalPathTraceSceneLights;
     /** One uniform material (linear RGB albedo); default is the studio clay. Ignored when `materials` is given. */
     material?: { albedo?: [number, number, number]; roughness?: number; metallic?: number };
     /** Shade with the materials and textures of the GLB the .sbvg (version 3) was built from, by the material ids it carries. */
     materials?: { glbPath: string };
+    /** The scene's punctual lights (in the GLB's coordinates); given, they stand in for the materials GLB's own. */
+    lights?: MetalPathTracePunctualLight[];
     /** Filter the render (GPU a-trous on the metal backend, the CPU filter on the cpu backend). */
     denoise?: boolean;
     /** With denoise on the metal backend, also run the CPU filter on the same raw frame and write denoised_cpu.f32. */
@@ -123,6 +134,8 @@ export interface MetalPathTraceStats {
     samplesPerPixel: number;
     maxBounces: number;
     lighting: 'sky' | 'studio';
+    /** The lights sampled: emissive triangles of the cut, point and spot lights, distant lights, and the tree's nodes. */
+    lights: MetalPathTraceLightStats;
     file: { clusters: number; levels: number; vertices: number; leafTriangles: number; atlases: number };
     cut: { clusters: number; triangles: number; thresholdPx: number; finestLevel: number };
     /** Closest-hit and shadow rays traced, counted by the kernels. */
@@ -179,6 +192,14 @@ export interface MetalPathTraceStats {
     camera: { position: [number, number, number]; target: [number, number, number]; up: [number, number, number]; verticalFovDeg: number };
 }
 
+export interface MetalPathTraceLightStats {
+    sampling: boolean;
+    triangles: number;
+    points: number;
+    distant: number;
+    treeNodes: number;
+}
+
 export interface MetalPathTraceResult {
     beautyPngPath: string;
     /** float32 scene-linear RGB per pixel, row-major (readLinearColor). */
@@ -193,11 +214,30 @@ export interface MetalPathTraceResult {
     executionMs: number;
 }
 
+/**
+ * A punctual light in the materials GLB's world coordinates (gltf::SceneLight): a point light has no cone
+ * (outerConeAngle pi), a spot has one, a distant light shines along `direction` from infinity. `intensity` is the
+ * colour times the intensity: candela for point and spot, lux for distant.
+ */
+export interface MetalPathTracePunctualLight {
+    position: [number, number, number];
+    /** The unit direction the light travels (a spot's axis, a distant light's rays). */
+    direction: [number, number, number];
+    intensity: [number, number, number];
+    /** 0: no range. */
+    range?: number;
+    innerConeAngle?: number;
+    outerConeAngle?: number;
+    distant?: boolean;
+}
+
 export interface MetalPathTraceSessionOpen {
     sbvgPath: string;
     /** The GLB the .sbvg was built from, for its materials and textures; without it every triangle is `material`. */
     glbPath?: string;
-    lighting?: MetalPathTraceSunLighting | MetalPathTraceStudioLighting;
+    lighting?: (MetalPathTraceSunLighting | MetalPathTraceStudioLighting) & MetalPathTraceSceneLights;
+    /** The scene's punctual lights; given, they stand in for the GLB's own (a viewport snapshot carries none). */
+    lights?: MetalPathTracePunctualLight[];
     material?: { albedo?: [number, number, number]; roughness?: number; metallic?: number };
 }
 
@@ -240,6 +280,8 @@ export interface MetalPathTraceViewStarted {
     sampler: 'sobol' | 'pcg';
     cut: { clusters: number; triangles: number; thresholdPx: number; rebuilt: boolean; cutMs: number; accelerationBuildMs: number };
     lighting: 'sky' | 'studio';
+    /** The lights the view's frame samples. */
+    lights: MetalPathTraceLightStats;
     targetSpp: number;
 }
 
@@ -259,10 +301,16 @@ export interface MetalPathTraceFrame {
     denoiseMs: number;
     /** Pixels that took illumination from the previous view's history. */
     historyPixels: number;
-    /** Size the frame was traced at; smaller than width x height when a renderScale below 1 was asked for. */
+    /** Size the frame was traced at; smaller than the view when a renderScale below 1 was asked for. */
     renderWidth: number;
     renderHeight: number;
-    /** GPU time of the MetalFX upscale, 0 when the frame was traced at full size. */
+    /**
+     * The view's size. While a frame is still converging it is sent at the traced size (width x height equal
+     * renderWidth x renderHeight) for the viewer to scale; the finished frame is MetalFX-upscaled to this size.
+     */
+    displayWidth: number;
+    displayHeight: number;
+    /** GPU time of the MetalFX upscale, 0 when the frame was not upscaled. */
     upscaleMs: number;
     done: boolean;
 }
@@ -275,6 +323,8 @@ export class MetalPathTraceSession extends EventEmitter {
     private child: ChildProcess | null = null;
     private pending: Array<{ event: string; resolve: (v: any) => void; reject: (e: Error) => void }> = [];
     private latest: MetalPathTraceFrame | null = null;
+    /** The newest frame's pixels, read once when the helper announces it (the helper rewrites the file per frame). */
+    private latestRgba: Buffer | null = null;
     private view: MetalPathTraceViewStarted | null = null;
     private exited: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     private stderr = '';
@@ -301,18 +351,11 @@ export class MetalPathTraceSession extends EventEmitter {
         return this.view;
     }
 
-    /** The newest frame's pixels, re-read from the frame file; null before the first frame. */
+    /** The newest frame's pixels (held in memory since the helper announced it); null before the first frame. */
     readFrame(): { meta: MetalPathTraceFrame; rgba: Buffer } | null {
         const meta = this.latest;
-        if (!meta) return null;
-        let rgba: Buffer;
-        try {
-            rgba = fs.readFileSync(meta.path);
-        } catch {
-            return null;
-        }
-        if (rgba.length !== meta.width * meta.height * 4) return null;
-        return { meta, rgba };
+        if (!meta || !this.latestRgba) return null;
+        return { meta, rgba: this.latestRgba };
     }
 
     async start(): Promise<void> {
@@ -340,6 +383,7 @@ export class MetalPathTraceSession extends EventEmitter {
             sbvgPath: path.resolve(request.sbvgPath),
             ...(request.glbPath ? { glbPath: path.resolve(request.glbPath) } : {}),
             ...(request.lighting ? { lighting: request.lighting } : {}),
+            ...(request.lights ? { lights: request.lights } : {}),
             ...(request.material ? { material: request.material } : {})
         }, 'opened');
         this.opened = opened;
@@ -351,6 +395,26 @@ export class MetalPathTraceSession extends EventEmitter {
     async setView(view: MetalPathTraceView): Promise<MetalPathTraceViewStarted> {
         this.lastUsed = Date.now();
         return this.command({ op: 'view', ...view }, 'view');
+    }
+
+    /**
+     * Replaces the light (sun and sky or dome, and the punctual lights) without reopening: no geometry is rebuilt
+     * and no texture decoded again. The current frame keeps its old light; the next view samples the new one.
+     */
+    async setLights(update: { lighting?: MetalPathTraceSessionOpen['lighting']; lights?: MetalPathTracePunctualLight[] }): Promise<{ lights: number }> {
+        this.lastUsed = Date.now();
+        const reply = await this.command({ op: 'lights', ...(update.lighting ? { lighting: update.lighting } : {}), ...(update.lights ? { lights: update.lights } : {}) }, 'lights');
+        if (this.openRequest) {
+            if (update.lighting) this.openRequest.lighting = update.lighting;
+            if (update.lights) this.openRequest.lights = update.lights;
+        }
+        return reply;
+    }
+
+    /** Stops sampling the current view (the camera is moving); its newest frame stays readable, the next view resumes. */
+    async pause(): Promise<{ spp: number }> {
+        this.lastUsed = Date.now();
+        return this.command({ op: 'pause' }, 'paused');
     }
 
     close(): void {
@@ -373,8 +437,19 @@ export class MetalPathTraceSession extends EventEmitter {
         const event = msg?.event;
         if (event === 'frame') {
             if (this.view && msg.seq === this.view.seq) {
-                this.latest = msg as MetalPathTraceFrame;
-                this.emit('frame', this.latest);
+                const frame = msg as MetalPathTraceFrame;
+                let rgba: Buffer | null = null;
+                try {
+                    rgba = fs.readFileSync(frame.path);
+                } catch {
+                    rgba = null;
+                }
+                // A newer frame may already have replaced the file: then wait for its own event.
+                if (rgba && rgba.length === frame.width * frame.height * 4) {
+                    this.latest = frame;
+                    this.latestRgba = rgba;
+                    this.emit('frame', frame);
+                }
             }
             return;
         }
@@ -390,6 +465,7 @@ export class MetalPathTraceSession extends EventEmitter {
         if (event === 'view') {
             this.view = msg as MetalPathTraceViewStarted;
             this.latest = null;
+            this.latestRgba = null;
         } else if (event === 'opened') {
             this.opened = msg as MetalPathTraceOpened;
         }
@@ -523,6 +599,7 @@ export class MetalPathTracerService {
             if (!fs.existsSync(request.materials.glbPath)) throw new MetalPathTracerError(`materials GLB not found: ${request.materials.glbPath}`);
             config.materials = { glbPath: path.resolve(request.materials.glbPath) };
         }
+        if (request.lights) config.lights = request.lights;
         if (request.camera) config.camera = request.camera;
         if (request.exposureEv !== undefined) config.exposure = request.exposureEv;
         const configPath = path.join(request.outputDir, 'render_config.json');

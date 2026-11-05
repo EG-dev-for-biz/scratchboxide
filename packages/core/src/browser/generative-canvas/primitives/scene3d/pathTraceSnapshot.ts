@@ -14,6 +14,10 @@
  * the scene's own, read as it is drawn. What the tracer cannot take (points, lines, shader materials, splats) is
  * counted, not approximated, and the caller says so.
  *
+ * The scene's point, spot and directional lights are not in the GLB: pathTraceLightsOf lists them for the session
+ * (the tracer samples them with its light tree), so a change of light leaves the geometry file and its build as
+ * they were. The atmosphere's sun is the tracer's own sun. Area lights have no punctual form and are counted.
+ *
  * Also the light and camera of the view, in the tracer's terms: the atmospheric sun's direction as elevation and
  * azimuth (the helper's convention: azimuth 0 toward -Z, 90 toward +X), else the neutral studio dome.
  */
@@ -36,7 +40,14 @@ export interface PathTraceSnapshotStats {
     meshes: number;
     triangles: number;
     instancesExpanded: number;
-    skipped: { points: number; lines: number; shaderMaterials: number; instancesOverCap: number; empty: number };
+    /** Point, spot and directional lights the scene had (sent beside the GLB, see pathTraceLightsOf). */
+    lights: number;
+    /** Textures held as 8-bit pixel buffers (DataTextures), written out from a canvas of their pixels. */
+    texturesConverted: number;
+    /** Meshes whose vertex data was quantized (integer positions, normals or uvs), written out as float copies. */
+    geometriesDequantized: number;
+    /** `textures`: texture slots left out because their image is neither a picture nor an 8-bit pixel buffer. */
+    skipped: { points: number; lines: number; shaderMaterials: number; instancesOverCap: number; empty: number; areaLights: number; textures: number };
     exportMs: number;
     bytes: number;
 }
@@ -60,6 +71,171 @@ function triangleCount(geometry: THREE.BufferGeometry): number {
     const position = geometry.getAttribute('position');
     if (!position) return 0;
     return Math.floor((index ? index.count : position.count) / 3);
+}
+
+/**
+ * A punctual light as the tracer takes it (MetalPathTracePunctualLight, the GLB's world coordinates): position,
+ * the direction it shines (three's lights look from their position at their target), colour times intensity
+ * (candela, or lux for a directional light), range and spot cone (three's penumbra softening the inner cone).
+ */
+export interface PathTraceLight {
+    position: [number, number, number];
+    direction: [number, number, number];
+    intensity: [number, number, number];
+    range?: number;
+    innerConeAngle?: number;
+    outerConeAngle?: number;
+    distant?: boolean;
+}
+
+/** A point, spot or directional light as the tracer takes it, or null for any other kind of light. */
+function tracedLight(light: THREE.Light): PathTraceLight | null {
+    const l = light as THREE.Light & { isPointLight?: boolean; isSpotLight?: boolean; isDirectionalLight?: boolean };
+    if (!l.isPointLight && !l.isSpotLight && !l.isDirectionalLight) return null;
+    const position = new THREE.Vector3().setFromMatrixPosition(light.matrixWorld);
+    const direction = new THREE.Vector3(0, 0, -1);
+    const target = (light as THREE.SpotLight | THREE.DirectionalLight).target as THREE.Object3D | undefined;
+    if (target && !l.isPointLight) {
+        target.updateMatrixWorld();
+        const aim = new THREE.Vector3().setFromMatrixPosition(target.matrixWorld).sub(position);
+        if (aim.lengthSq() > 0) direction.copy(aim.normalize());
+    }
+    const c = light.color;
+    const out: PathTraceLight = {
+        position: [position.x, position.y, position.z],
+        direction: [direction.x, direction.y, direction.z],
+        intensity: [c.r * light.intensity, c.g * light.intensity, c.b * light.intensity]
+    };
+    if (l.isDirectionalLight) out.distant = true;
+    else {
+        const distance = (light as THREE.PointLight).distance;
+        if (distance > 0) out.range = distance;
+    }
+    if (l.isSpotLight) {
+        const spot = light as THREE.SpotLight;
+        out.outerConeAngle = spot.angle;
+        out.innerConeAngle = (1 - spot.penumbra) * spot.angle;
+    }
+    return out;
+}
+
+/**
+ * The scene's point, spot and directional lights for the tracer, apart from the atmosphere's sun (the tracer's own
+ * sun, pathTraceLightingOf) and anything hidden or excluded; area lights are counted, having no punctual form.
+ * Sent beside the snapshot rather than in it, so a change of light neither changes the geometry file nor rebuilds it.
+ */
+export function pathTraceLightsOf(scene: THREE.Scene, exclude: Array<THREE.Object3D | null | undefined> = []): { lights: PathTraceLight[]; areaLights: number } {
+    const excluded = new Set(exclude.filter((o): o is THREE.Object3D => !!o));
+    const lights: PathTraceLight[] = [];
+    let areaLights = 0;
+    scene.traverse(o => {
+        const obj = o as THREE.Object3D & { isLight?: boolean; isRectAreaLight?: boolean };
+        if (!obj.isLight) return;
+        for (let p: THREE.Object3D | null = o; p; p = p.parent) if (excluded.has(p)) return;
+        if (!visibleInWorld(o)) return;
+        const light = o as THREE.Light;
+        // Ambient and hemisphere light is the dome's.
+        if (SUN_LIGHT_NAMES.has(light.name) || !(light.intensity > 0)) return;
+        if (obj.isRectAreaLight) { areaLights++; return; }
+        const traced = tracedLight(light);
+        if (traced) lights.push(traced);
+    });
+    return { lights, areaLights };
+}
+
+/**
+ * The geometry with float32 vertex attributes: a quantized one (KHR_mesh_quantization's integer positions, normals
+ * or uvs, normalized or not, interleaved or not) is copied with every value read back as a float, since the
+ * virtual geometry builder reads float positions only. The scene's own geometry is never changed.
+ */
+function floatGeometry(geometry: THREE.BufferGeometry): THREE.BufferGeometry | null {
+    const names = Object.keys(geometry.attributes);
+    const quantized = names.some(n => {
+        const a = geometry.attributes[n] as THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+        return !((a as THREE.BufferAttribute).array instanceof Float32Array) || (a as THREE.InterleavedBufferAttribute).isInterleavedBufferAttribute;
+    });
+    if (!quantized) return null;
+    const out = new THREE.BufferGeometry();
+    for (const n of names) {
+        const a = geometry.attributes[n] as THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+        const values = new Float32Array(a.count * a.itemSize);
+        for (let i = 0; i < a.count; i++) {
+            for (let k = 0; k < a.itemSize; k++) values[i * a.itemSize + k] = a.getComponent(i, k);
+        }
+        out.setAttribute(n, new THREE.BufferAttribute(values, a.itemSize));
+    }
+    const index = geometry.getIndex();
+    if (index) out.setIndex(index);
+    for (const g of geometry.groups) out.addGroup(g.start, g.count, g.materialIndex);
+    out.boundingBox = geometry.boundingBox;
+    out.boundingSphere = geometry.boundingSphere;
+    return out;
+}
+
+/** Texture slots of three's materials that the exporter reads. */
+const TEXTURE_SLOTS = ['map', 'emissiveMap', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'alphaMap', 'bumpMap', 'displacementMap', 'lightMap'] as const;
+
+/** An image the exporter can draw on a canvas (it packs and converts maps that way without checking). */
+function drawableImage(image: unknown): boolean {
+    if (typeof HTMLImageElement !== 'undefined' && image instanceof HTMLImageElement) return image.complete && image.naturalWidth > 0;
+    return (typeof HTMLCanvasElement !== 'undefined' && image instanceof HTMLCanvasElement)
+        || (typeof ImageBitmap !== 'undefined' && image instanceof ImageBitmap)
+        || (typeof OffscreenCanvas !== 'undefined' && image instanceof OffscreenCanvas);
+}
+
+/** An 8-bit pixel buffer (a DataTexture's image: 1, 2, 3 or 4 channels) as an RGBA canvas, rows as stored; else null. */
+function canvasOfPixels(image: unknown): HTMLCanvasElement | null {
+    const img = image as { data?: unknown; width?: number; height?: number } | null;
+    if (!img || !(img.data instanceof Uint8Array || img.data instanceof Uint8ClampedArray)) return null;
+    const width = img.width ?? 0, height = img.height ?? 0;
+    const pixels = width * height;
+    if (!(pixels > 0)) return null;
+    const channels = img.data.length / pixels;
+    if (![1, 2, 3, 4].includes(channels)) return null;
+    const rgba = new Uint8ClampedArray(pixels * 4);
+    for (let p = 0; p < pixels; p++) {
+        const s = p * channels;
+        const r = img.data[s];
+        rgba[p * 4] = r;
+        rgba[p * 4 + 1] = channels >= 3 ? img.data[s + 1] : r;
+        rgba[p * 4 + 2] = channels >= 3 ? img.data[s + 2] : r;
+        rgba[p * 4 + 3] = channels === 4 ? img.data[s + 3] : channels === 2 ? img.data[s + 1] : 255;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    canvas.getContext('2d')!.putImageData(new ImageData(rgba, width, height), 0, 0);
+    return canvas;
+}
+
+/**
+ * The material with every texture the exporter can draw: a pixel-buffer texture is replaced by a copy drawn from a
+ * canvas of its pixels, and one that is neither (a float buffer, an image not loaded) is left out and counted. The
+ * scene's own material is never changed: a copy is made when a slot changes.
+ */
+function withDrawableTextures(material: THREE.Material, stats: PathTraceSnapshotStats, replaced: Map<THREE.Texture, THREE.Texture | null>): THREE.Material {
+    let out: THREE.Material | null = null;
+    const slots = material as unknown as Record<string, THREE.Texture | null | undefined>;
+    for (const slot of TEXTURE_SLOTS) {
+        const tex = slots[slot];
+        if (!tex || !(tex as THREE.Texture).isTexture || (tex as THREE.CompressedTexture).isCompressedTexture || drawableImage(tex.image)) continue;
+        if (!replaced.has(tex)) {
+            const canvas = canvasOfPixels(tex.image);
+            if (canvas) {
+                const copy = tex.clone();
+                copy.image = canvas;
+                copy.needsUpdate = true;
+                replaced.set(tex, copy);
+                stats.texturesConverted++;
+            } else {
+                replaced.set(tex, null);
+                stats.skipped.textures++;
+            }
+        }
+        out ??= material.clone();
+        (out as unknown as Record<string, THREE.Texture | null>)[slot] = replaced.get(tex) ?? null;
+    }
+    return out ?? material;
 }
 
 /** A material the exporter writes as glTF metallic-roughness; shader materials have no glTF reading and are refused. */
@@ -94,19 +270,33 @@ export async function snapshotSceneForPathTrace(scene: THREE.Scene, exclude: Arr
     const started = performance.now();
     const excluded = new Set(exclude.filter((o): o is THREE.Object3D => !!o));
     const stats: PathTraceSnapshotStats = {
-        meshes: 0, triangles: 0, instancesExpanded: 0,
-        skipped: { points: 0, lines: 0, shaderMaterials: 0, instancesOverCap: 0, empty: 0 },
+        meshes: 0, triangles: 0, instancesExpanded: 0, lights: 0, texturesConverted: 0, geometriesDequantized: 0,
+        skipped: { points: 0, lines: 0, shaderMaterials: 0, instancesOverCap: 0, empty: 0, areaLights: 0, textures: 0 },
         exportMs: 0, bytes: 0
     };
     scene.updateMatrixWorld(true);
     const root = new THREE.Group();
     root.name = 'sb-path-trace-snapshot';
     const converted = new Map<THREE.Material, THREE.Material | null>();
+    const replacedTextures = new Map<THREE.Texture, THREE.Texture | null>();
     const materialFor = (m: THREE.Material): THREE.Material | null => {
-        if (!converted.has(m)) converted.set(m, exportMaterial(m));
+        if (!converted.has(m)) {
+            const exported = exportMaterial(m);
+            converted.set(m, exported ? withDrawableTextures(exported, stats, replacedTextures) : null);
+        }
         return converted.get(m)!;
     };
-    const place = (geometry: THREE.BufferGeometry, material: THREE.Material | THREE.Material[], world: THREE.Matrix4, name: string) => {
+    const floatCopies = new Map<THREE.BufferGeometry, THREE.BufferGeometry | null>();
+    const geometryFor = (g: THREE.BufferGeometry): THREE.BufferGeometry => {
+        if (!floatCopies.has(g)) {
+            const copy = floatGeometry(g);
+            if (copy) stats.geometriesDequantized++;
+            floatCopies.set(g, copy);
+        }
+        return floatCopies.get(g) ?? g;
+    };
+    const place = (sourceGeometry: THREE.BufferGeometry, material: THREE.Material | THREE.Material[], world: THREE.Matrix4, name: string) => {
+        const geometry = geometryFor(sourceGeometry);
         const mats = Array.isArray(material) ? material.map(materialFor) : materialFor(material);
         if (Array.isArray(mats) ? mats.some(m => m === null) : mats === null) {
             stats.skipped.shaderMaterials++;
@@ -126,11 +316,12 @@ export async function snapshotSceneForPathTrace(scene: THREE.Scene, exclude: Arr
     const world = new THREE.Matrix4();
     scene.traverse(o => {
         if (excluded.has(o)) return;
-        const obj = o as THREE.Object3D & { isPoints?: boolean; isLine?: boolean; isSprite?: boolean; isMesh?: boolean; isInstancedMesh?: boolean };
-        if (!obj.isPoints && !obj.isLine && !obj.isSprite && !obj.isMesh) return;
+        const obj = o as THREE.Object3D & { isPoints?: boolean; isLine?: boolean; isSprite?: boolean; isMesh?: boolean; isInstancedMesh?: boolean; isLight?: boolean; isRectAreaLight?: boolean };
+        if (!obj.isPoints && !obj.isLine && !obj.isSprite && !obj.isMesh && !obj.isLight) return;
         let excludedAncestor = false;
         for (let p = o.parent; p; p = p.parent) if (excluded.has(p)) { excludedAncestor = true; break; }
         if (excludedAncestor || !visibleInWorld(o)) return;
+        if (obj.isLight) return; // lights go beside the snapshot (pathTraceLightsOf)
         if (obj.isPoints || obj.isSprite) { stats.skipped.points++; return; }
         if (obj.isLine) { stats.skipped.lines++; return; }
         const mesh = o as THREE.Mesh;
@@ -151,6 +342,9 @@ export async function snapshotSceneForPathTrace(scene: THREE.Scene, exclude: Arr
         }
         place(geometry, mesh.material, mesh.matrixWorld, mesh.name);
     });
+    const sceneLights = pathTraceLightsOf(scene, exclude);
+    stats.lights = sceneLights.lights.length;
+    stats.skipped.areaLights = sceneLights.areaLights;
 
     const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
     // Colour maps of opaque materials go as JPEG (far smaller and quicker to encode); the rest stay PNG.
@@ -170,6 +364,8 @@ export async function snapshotSceneForPathTrace(scene: THREE.Scene, exclude: Arr
     } finally {
         for (const t of jpegMarked) delete t.userData.mimeType;
         for (const [src, out] of converted) if (out && out !== src) out.dispose();
+        for (const copy of replacedTextures.values()) copy?.dispose();
+        for (const copy of floatCopies.values()) copy?.dispose();
     }
 }
 

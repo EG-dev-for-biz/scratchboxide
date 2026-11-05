@@ -11,7 +11,7 @@
 #define SCRATCHBOX_SBVG_READER_HPP
 
 /**
- * Reader for the .sbvg cluster LOD files scratchbox_virtual_geometry.hpp writes (versions 2 and 3),
+ * Reader for the .sbvg cluster LOD files scratchbox_virtual_geometry.hpp writes (versions 2 to 6),
  * and the per-cluster LOD cut a renderer takes from one.
  *
  * The cut rule is the one in cluster-selection.ts and VirtualGeometryRenderer's cull pass: a cluster
@@ -61,6 +61,9 @@ struct Atlas {
     std::string imagePath;
     /** Version 5: the level's baked normal map (glTF encoding, in each triangle's tangent frame); empty when none. */
     std::string normalImagePath;
+    /** Version 6: the level's emitted radiance over emissionScale (sRGB PNG); empty when the level emits nothing. */
+    std::string emissionImagePath;
+    float emissionScale{0.0f};
 };
 
 struct File {
@@ -113,8 +116,8 @@ inline File readFile(const std::string& path) {
     if (word(0) != vgeo::kSbvgMagic) throw FormatError(path + ": not an .sbvg file");
     File file;
     file.version = word(1);
-    if (file.version < 2 || file.version > 5) {
-        throw FormatError(path + ": .sbvg version " + std::to_string(file.version) + " (this reader handles versions 2 to 5)");
+    if (file.version < 2 || file.version > 6) {
+        throw FormatError(path + ": .sbvg version " + std::to_string(file.version) + " (this reader handles versions 2 to 6)");
     }
     const uint32_t fileVertexFloats = file.version >= 3 ? vgeo::kSbvgVertexFloats : 6;
     const bool hasMaterials = file.version >= 3;
@@ -218,8 +221,16 @@ inline File readFile(const std::string& path) {
             std::string name, normalName;
             readName(name);
             if (file.version >= 5) readName(normalName);
+            std::string emissionName;
+            if (file.version >= 6) {
+                readName(emissionName);
+                if ((w + 1) * 4 > bytes.size()) throw FormatError(path + ": atlas table is truncated");
+                atlas.emissionScale = fword(w);
+                w += 1;
+            }
             atlas.imagePath = (std::filesystem::path(dir) / name).string();
             if (!normalName.empty()) atlas.normalImagePath = (std::filesystem::path(dir) / normalName).string();
+            if (!emissionName.empty()) atlas.emissionImagePath = (std::filesystem::path(dir) / emissionName).string();
             if (atlas.materialId != file.materialCount + a) throw FormatError(path + ": atlas material ids are not consecutive");
             file.atlases.push_back(atlas);
         }
