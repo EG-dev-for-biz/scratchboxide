@@ -26,3 +26,20 @@ The sheet of close-ups is `k-one-material-closeups.jpg` in the side-session note
 - **Penn 2's spandrels still show a library pattern.** The look-pick confirms Fence004 or MetalPlates sets, and the photo-energy cap does not bring their grain down: the facade's window rhythm gives the photo high band energy.
 - **Penn 2's glass inside the fitted windows reads rougher than main's plain 0.2.** The opening classes there are window interiors and blinds, and the curtain wall's glazing class sits outside the fitted windows.
 - **The ownership vote drew isolate l2v on both final Penn 2 builds.** It is a vision vote before textures, unrelated to this change.
+
+## Update, later on 2026-11-05: glass as main, and the set-fit model (branch 9b2ace84)
+- **Glass as main drew it:** a confident smooth read is drawn smoother (`drawnRoughness`: below 0.5, r x r / 0.5, at least 0.08) and its low metalness lower (`drawnMetalness`), so a class read as glass is drawn at roughness 0.08, flat, with almost no metalness. The user chose no extra reflective boost.
+- **The set-fit model** (`material-set-fit.ts`, `assets/textures/library/set-fit-model.json`, `scripts/material_set_fit.ts`): a logistic fit on 138 finished builds of 10 buildings (4,010 class and candidate rows, 310 look-pick decisions), features measured on the finished twins. Leave-one-building-out: its first choice is the look-pick's 26.8% of the time against the ranking's 3.5%, AUC 0.68. In a build it scales the chosen set's grain, in place of the tile and energy caps.
+
+| uncached, isolate l2 on both sides | main f4989130 | branch 9b2ace84 |
+|---|---|---|
+| Penn 2 repeat spread | 0.231 | 0.099 |
+| Penn 2 in windows, roughness / metalness | 0.08 / 0.06 | 0.53 / 0.05 |
+| Penn 2 around windows, roughness / metalness | 0.38 / 0.12 | 0.28 / 0.26 |
+| ESB repeat spread | 0.168 | 0.029 |
+| ESB in windows, roughness / metalness | 0.14 / 0.08 | 0.19 / 0.04 |
+| holes | 1.28% / 0.72% | 1.28% / 0.72% |
+
+Sheet: `k-one-material-closeups-v2.jpg` in the side-session notes folder. The fence pattern on Penn 2's dark panels is gone; a faint plate pattern remains on its mid-grey panels (the look-pick confirmed that set, drawn at 45% grain).
+
+Still open: Penn 2's fitted windows are drawn matte (roughness 0.5-0.6). The vision model reads the two classes inside them as interior recesses and blinds, not glass, so the smooth-read curve does not apply there. The benchmark's `result.json` for a place can keep an older build's commit and model after a rebuild (seen on feat/penn2); the run folder and the twin were the new build's.
