@@ -11,6 +11,8 @@
  * Pipeline K's outside closure, last in the polish: the finished building closed from outside, then looked at and repaired
  * where it still shows a hole.
  *
+ *  0. Shards: scan pieces left floating once the walls they hung from were rebuilt or clipped (small, touching no wall,
+ *     roof, fill or the ground) are dropped; the core then shows where they hung.
  *  1. Joins (corner-join.ts): rebuilt facades that stop short of each other where they meet are joined.
  *  2. The inner core (inner-core.ts): a closed solid behind every surface, so a hole shows a textured face, not the inside.
  *  3. The gate (visible-defects.ts): the building seen from its twelve views. While it shows hole regions of at least
@@ -27,7 +29,7 @@
  */
 
 import type { Vec2 } from '../../../../common/spatial/staged-location-contracts';
-import { parseGlbBytes } from '../glb-bytes';
+import { accessorLayout, assembleGlb, nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint } from '../glb-bytes';
 import { addInnerCore, appendNode, describeInnerCore, readSoup, type AppendPrim, type CoreRegion, type InnerCoreReport } from './inner-core';
 import { describeCornerJoin, joinFacadeCorners, type CornerJoinReport } from './corner-join';
 import { rayIndex } from './lattice-stitch';
@@ -50,7 +52,9 @@ export const OUTSIDE_CLOSURE_PARAMS = {
     /** A scan triangle put back must have a rebuilt wall within this (m) in front of each of its corners. */
     restoreBehindM: 2,
     /** ...and lie within the footprint plus this (m), when there is one. */
-    restoreMarginM: 0.3
+    restoreMarginM: 0.3,
+    /** Shards: a scan piece (edge-connected) under this area (m²) touching no other surface, nor the ground, within shardContactM (m) floats: it goes. */
+    shardMaxM2: 40, shardContactM: 0.05
 };
 export type OutsideClosureParams = typeof OUTSIDE_CLOSURE_PARAMS;
 
@@ -61,6 +65,8 @@ export interface ClosureRound { round: number; regions: number; restoredTriangle
 
 export interface OutsideClosureReport {
     version: string;
+    /** Floating scan pieces dropped: how many, their triangles and area (m²). */
+    shards?: { pieces: number; triangles: number; areaM2: number };
     joins?: CornerJoinReport; core?: InnerCoreReport;
     /** The building as it came (before), after the joins and the core (closed), and as handed on (after). */
     before?: HolesSummary; closed?: HolesSummary; after?: HolesSummary;
@@ -127,17 +133,118 @@ export function restoreScan(cur: { clay: Uint8Array; tex?: Uint8Array }, pre: { 
     return { clay, ...(tex ? { tex } : {}), triangles: picked.length, areaM2: Math.round(area * 100) / 100 };
 }
 
+const isScanNode = (n: any) => n?.mesh !== undefined && !Object.keys(n.extras ?? {}).some(k => k.startsWith('sb'));
+
+/**
+ * Scan pieces that float: edge-connected scan triangles (nodes no later step made) under shardMaxM2 whose every corner is
+ * further than shardContactM from any other surface and from the ground. Returned as triangle keys (corners rounded to 1 mm).
+ */
+export function findShards(bytes: Uint8Array, groundY: number | undefined, P: OutsideClosureParams = OUTSIDE_CLOSURE_PARAMS): { keys: Set<string>; pieces: number; triangles: number; areaM2: number } {
+    const g = parseGlbBytes(bytes), names = (g.json.nodes ?? []).map((n: any) => n);
+    const soup = readSoup(g);
+    const k3 = (x: number, y: number, z: number) => `${Math.round(x * 1000)},${Math.round(y * 1000)},${Math.round(z * 1000)}`;
+    const nT = soup.node.length, scan = new Uint8Array(nT);
+    for (let t = 0; t < nT; t++) scan[t] = isScanNode(names[soup.node[t]]) ? 1 : 0;
+    // edge-connected pieces of the scan
+    const parent = Int32Array.from({ length: nT }, (_, i) => i);
+    const find = (a: number): number => { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; };
+    const edgeOwner = new Map<string, number>();
+    const corner = (t: number, k: number) => k3(soup.pos[t * 9 + k * 3], soup.pos[t * 9 + k * 3 + 1], soup.pos[t * 9 + k * 3 + 2]);
+    for (let t = 0; t < nT; t++) {
+        if (!scan[t]) continue;
+        const c = [corner(t, 0), corner(t, 1), corner(t, 2)];
+        for (let k = 0; k < 3; k++) {
+            const a = c[k], b = c[(k + 1) % 3], e = a < b ? `${a}|${b}` : `${b}|${a}`;
+            const o = edgeOwner.get(e);
+            if (o === undefined) edgeOwner.set(e, t); else parent[find(t)] = find(o);
+        }
+    }
+    const area = new Map<number, number>(), members = new Map<number, number[]>();
+    for (let t = 0; t < nT; t++) {
+        if (!scan[t]) continue;
+        const p = soup.pos.subarray(t * 9, t * 9 + 9), e1 = [p[3] - p[0], p[4] - p[1], p[5] - p[2]], e2 = [p[6] - p[0], p[7] - p[1], p[8] - p[2]];
+        const r = find(t);
+        area.set(r, (area.get(r) ?? 0) + Math.hypot(e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]) / 2);
+        (members.get(r) ?? members.set(r, []).get(r)!).push(t);
+    }
+    const small = [...area].filter(([, a]) => a < P.shardMaxM2).map(([r]) => r);
+    const out = { keys: new Set<string>(), pieces: 0, triangles: 0, areaM2: 0 };
+    if (!small.length) return out;
+    // every triangle in a 1 m grid, for what lies near a piece's corners
+    const C = 1, grid = new Map<string, number[]>();
+    for (let t = 0; t < nT; t++) {
+        const p = soup.pos.subarray(t * 9, t * 9 + 9);
+        const lo = [0, 1, 2].map(k => Math.floor((Math.min(p[k], p[k + 3], p[k + 6]) - P.shardContactM) / C)), hi = [0, 1, 2].map(k => Math.floor((Math.max(p[k], p[k + 3], p[k + 6]) + P.shardContactM) / C));
+        if ((hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1) > 2000) continue;
+        for (let x = lo[0]; x <= hi[0]; x++) for (let y = lo[1]; y <= hi[1]; y++) for (let z = lo[2]; z <= hi[2]; z++) { const k = `${x},${y},${z}`; const l = grid.get(k); if (l) l.push(t); else grid.set(k, [t]); }
+    }
+    const near = (q: number[], t: number) => {
+        const p = soup.pos.subarray(t * 9, t * 9 + 9), a = [p[0], p[1], p[2]], b = [p[3], p[4], p[5]], c = [p[6], p[7], p[8]];
+        const sub = (u: number[], v: number[]) => [u[0] - v[0], u[1] - v[1], u[2] - v[2]], d3 = (u: number[], v: number[]) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+        const ab = sub(b, a), ac = sub(c, a), n = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]], nl = Math.hypot(n[0], n[1], n[2]);
+        if (nl > 0) {
+            const u = n.map(x => x / nl), dd = d3(sub(q, a), u), r = sub(q, u.map(x => x * dd));
+            if (Math.abs(dd) <= P.shardContactM && [[a, b], [b, c], [c, a]].every(([x, y]) => { const cr = sub(y, x), rr = sub(r, x); return d3([cr[1] * rr[2] - cr[2] * rr[1], cr[2] * rr[0] - cr[0] * rr[2], cr[0] * rr[1] - cr[1] * rr[0]], u) >= 0; })) return true;
+        }
+        for (const [x, y] of [[a, b], [b, c], [c, a]]) { const e = sub(y, x), s = Math.max(0, Math.min(1, d3(sub(q, x), e) / (d3(e, e) || 1))); if (Math.hypot(...sub(q, [x[0] + e[0] * s, x[1] + e[1] * s, x[2] + e[2] * s])) <= P.shardContactM) return true; }
+        return false;
+    };
+    for (const r of small) {
+        const list = members.get(r)!, mine = new Set(list);
+        let touches = false;
+        for (const t of list) {
+            for (let k = 0; k < 3 && !touches; k++) {
+                const q = [soup.pos[t * 9 + k * 3], soup.pos[t * 9 + k * 3 + 1], soup.pos[t * 9 + k * 3 + 2]];
+                if (groundY !== undefined && q[1] - groundY <= P.shardContactM) { touches = true; break; }
+                for (const o of grid.get(`${Math.floor(q[0] / C)},${Math.floor(q[1] / C)},${Math.floor(q[2] / C)}`) ?? []) if (!mine.has(o) && near(q, o)) { touches = true; break; }
+            }
+            if (touches) break;
+        }
+        if (touches) continue;
+        out.pieces++; out.triangles += list.length; out.areaM2 += area.get(r)!;
+        for (const t of list) out.keys.add([corner(t, 0), corner(t, 1), corner(t, 2)].sort().join('|'));
+    }
+    out.areaM2 = Math.round(out.areaM2 * 100) / 100;
+    return out;
+}
+
+/** The scan's triangles with these keys made degenerate (as the cleanup removes them), in one GLB. */
+export function dropTriangles(bytes: Uint8Array, keys: Set<string>): Buffer {
+    if (!keys.size) return Buffer.from(bytes);
+    const g = parseGlbBytes(Buffer.from(bytes)), json = g.json, world = nodeWorldMatrices(json), dv = new DataView(g.bin.buffer, g.bin.byteOffset, g.bin.byteLength);
+    const k3 = (p: number[]) => `${Math.round(p[0] * 1000)},${Math.round(p[1] * 1000)},${Math.round(p[2] * 1000)}`;
+    (json.nodes ?? []).forEach((n: any, ni: number) => {
+        if (!isScanNode(n)) return;
+        for (const p of json.meshes[n.mesh]?.primitives ?? []) {
+            if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined || p.indices === undefined) continue;
+            const X = readAccessor(g, p.attributes.POSITION).data, il = accessorLayout(json, p.indices);
+            const size = il.componentType === 5125 ? 4 : il.componentType === 5123 ? 2 : 1;
+            const rd = (i: number) => size === 4 ? dv.getUint32(il.base + i * il.stride, true) : size === 2 ? dv.getUint16(il.base + i * il.stride, true) : dv.getUint8(il.base + i * il.stride);
+            const wr = (i: number, v: number) => { if (size === 4) dv.setUint32(il.base + i * il.stride, v, true); else if (size === 2) dv.setUint16(il.base + i * il.stride, v, true); else dv.setUint8(il.base + i * il.stride, v); };
+            for (let t = 0; t + 2 < il.count; t += 3) {
+                const v = [rd(t), rd(t + 1), rd(t + 2)];
+                const key = v.map(i => k3(transformPoint(world[ni], X[i * 3], X[i * 3 + 1], X[i * 3 + 2]))).sort().join('|');
+                if (keys.has(key)) { wr(t + 1, v[0]); wr(t + 2, v[0]); }
+            }
+        }
+    });
+    return assembleGlb(json, g.bin);
+}
+
 /** The joins, the core and the gate with its repair rounds (see the file's comment). */
 export function closeOutside(input: { clay: Uint8Array; tex?: Uint8Array; pre?: { clay: Uint8Array; tex?: Uint8Array }; footprint?: Vec2[][]; groundY?: number; threads?: number; joins?: boolean; core?: boolean; repair?: boolean }, P: OutsideClosureParams = OUTSIDE_CLOSURE_PARAMS): { clay: Buffer; tex?: Buffer; report: OutsideClosureReport } {
     const report: OutsideClosureReport = { version: OUTSIDE_CLOSURE_VERSION, rounds: [], remaining: [], restoredTriangles: 0 };
     const VP = { ...VISIBLE_DEFECTS_PARAMS, holeRegionsReported: P.regionsRead };
+    // floating scan pieces go first, from the clay and the textured copy alike (the gate's before is the building as it came)
+    const shardKeys = findShards(input.tex ?? input.clay, input.groundY, P);
+    report.shards = { pieces: shardKeys.pieces, triangles: shardKeys.triangles, areaM2: shardKeys.areaM2 };
     const measure = (b: Uint8Array) => measureVisibleDefects(b, VP);
     // the gate needs the textured copy: the clay has no inside to show
     const gate = input.repair !== false && !!input.tex;
     if (gate) report.before = holesSummary(measure(input.tex!));
     // one pass of the closure from the input, with what the repair rounds have found so far
     const build = (regions: CoreRegion[], restore: CoreRegion[]) => {
-        let clay: Buffer = Buffer.from(input.clay), tex: Buffer | undefined = input.tex ? Buffer.from(input.tex) : undefined;
+        let clay: Buffer = dropTriangles(input.clay, shardKeys.keys), tex: Buffer | undefined = input.tex ? dropTriangles(input.tex, shardKeys.keys) : undefined;
         let joins: CornerJoinReport | undefined, core: InnerCoreReport | undefined, restored = { triangles: 0, areaM2: 0 };
         if (input.joins !== false) { const j = joinFacadeCorners(clay, tex ? [tex] : [], undefined, { regions }); clay = j.clay; tex = j.others[0]; joins = j.report; }
         if (restore.length && input.pre) { const r = restoreScan({ clay, ...(tex ? { tex } : {}) }, input.pre, restore, input.footprint, P); clay = r.clay; tex = r.tex ?? tex; restored = r; }
@@ -173,6 +280,7 @@ const pct = (x: number) => `${(x * 100).toFixed(2)}%`;
 /** One line for the build's notes. */
 export function describeOutsideClosure(r: OutsideClosureReport): string {
     const parts: string[] = [];
+    if (r.shards?.pieces) parts.push(`${r.shards.pieces} floating scan pieces dropped (${r.shards.triangles} triangles, ${r.shards.areaM2} m²: touching no wall, roof, fill or the ground)`);
     if (r.joins) parts.push(describeCornerJoin(r.joins));
     if (r.core) parts.push(describeInnerCore(r.core));
     if (r.before && r.after) {

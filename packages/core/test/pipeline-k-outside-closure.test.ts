@@ -15,7 +15,8 @@
  *  - a hole in a wall is seen less once the core stands behind it, and the gate reports it before and after;
  *  - two rebuilt facades stopping short of their corner are joined on the corner line, both strips on the same points, and
  *    their near corners welded; no strip where one overshoots the corner, or where a surface facing out already stands behind;
- *  - the scan is put back only behind a rebuilt wall.
+ *  - the scan is put back only behind a rebuilt wall;
+ *  - a scan piece floating free (touching no surface nor the ground) is dropped; one hanging from a wall is kept.
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -23,7 +24,7 @@ import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-locatio
 import { ensureRemeshPolishBinary } from '../src/node/3d-engine/staged-location/remesh-polish-native';
 import { addInnerCore, INNER_CORE_PARAMS, readSoup } from '../src/node/3d-engine/staged-location/pipeline-k/inner-core';
 import { joinFacadeCorners } from '../src/node/3d-engine/staged-location/pipeline-k/corner-join';
-import { closeOutside, restoreScan } from '../src/node/3d-engine/staged-location/pipeline-k/outside-closure';
+import { closeOutside, dropTriangles, findShards, restoreScan } from '../src/node/3d-engine/staged-location/pipeline-k/outside-closure';
 import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from '../src/node/3d-engine/staged-location/pipeline-k/visible-defects';
 
 type V = [number, number, number];
@@ -269,5 +270,24 @@ describe('scan put back', () => {
         expect(parseGlbBytes(r.tex!).json.nodes.find((n: any) => n.name === 'ScanRestored').extras.sbScanRestored.provenance.label).toBe('measured');
         // outside every region: nothing
         expect(restoreScan({ clay: cur, tex: cur }, { clay: pre, tex: pre }, [{ c: [100, 0, 0], r: 1 }], undefined).triangles).toBe(0);
+    });
+});
+
+describe('floating scan pieces', () => {
+    it('drops a small scan piece touching nothing, keeps one touching a wall or the ground', () => {
+        const wall = facade(1, [0, 10], [10, 10], 10, [0, 1]);
+        const floating: Part = { name: 'scan_a', tris: quad([3, 5, 12], [1, 0, 0], [0, 1, 0]) };
+        const hanging: Part = { name: 'scan_b', tris: quad([6, 5, 10], [0, 0, 1], [0, 1, 0]) };
+        const grounded: Part = { name: 'scan_c', tris: quad([3, 0, 14], [1, 0, 0], [0, 1, 0]) };
+        const bytes = glb([wall, floating, hanging, grounded]);
+        const s = findShards(bytes, 0);
+        expect(s.pieces).toBe(1);
+        expect(s.areaM2).toBeCloseTo(1, 4);
+        const out = dropTriangles(bytes, s.keys);
+        const area = (name: string) => nodeTris(out, name).reduce((a, t) => a + Math.hypot(...cross(sub(t[1], t[0]), sub(t[2], t[0]))) / 2, 0);
+        expect(area('scan_a')).toBe(0);
+        expect(area('scan_b')).toBeCloseTo(1, 4);
+        expect(area('scan_c')).toBeCloseTo(1, 4);
+        expect(area('FacadeLattice_1')).toBeCloseTo(100, 3);
     });
 });
