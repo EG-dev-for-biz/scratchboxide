@@ -99,10 +99,10 @@ def main(out):
     d.text((PAD, 12), 'Building benchmark: pipeline K, uncached', font=f_title, fill=INK)
     for i, side in enumerate(sides):
         rs = [r for r in manifest['results'] if r['side'] == side]
-        commit = rs[0]['commit'][:8] if rs else '?'
-        dirty = ' + uncommitted app code' if rs and rs[0].get('dirtyAppCode') else ''
+        commit = (manifest.get('appCommits') or {}).get(side) or (rs[0]['commit'][:8] if rs else '?')
+        dirty = ' + uncommitted app code' if any(r.get('dirtyAppCode') for r in rs) else ''
         x = PAD + LABEL_W + i * (block_w + PAD)
-        d.text((x, 46), f'{side} @ {commit}{dirty}', font=f_head, fill=INK)
+        d.text((x, 46), f'{side}: app code at {commit}{dirty}', font=f_head, fill=INK)
     y = head_h
     md = ['| Building | Kind | Side | Outcome | Holes | Untextured | Generated | Build time | Model $ (priced) | Run |', '|---|---|---|---|---|---|---|---|---|---|']
     for slug in slugs:
@@ -144,7 +144,11 @@ def main(out):
             outcome = r['outcome'] + ('' if r.get('cacheEmptiedBeforeBuild') else ' (NOT uncached)')
             d.text((x, cy), f"{outcome}   run {r.get('runId') or '—'}   {r.get('triangles') or 0:,} triangles", font=f_body, fill=WORSE if r['outcome'] == 'failed' else INK)
             cy += 20
+            # no pipeline K model: the outside check that ran was the remeshed scan's, so its numbers are not K's
+            scan_only = not r.get('model')
             parts = [('holes', r.get('holeShare')), ('untextured', r.get('untexturedShare')), ('generated', gen)]
+            if scan_only:
+                parts = [('scan holes', r.get('holeShare')), ('scan untextured', r.get('untexturedShare'))]
             cx = x
             for name, v in parts:
                 t = f'{name} {pct(v)}'
@@ -178,7 +182,7 @@ def main(out):
             for line in wrap(d, notes, f_small, block_w)[:3]:
                 d.text((x, cy), line, font=f_small, fill=MUTED)
                 cy += 15
-            md.append(f"| {place['name']} | {place['kind']} | {side} | {r['outcome']} | {pct(r.get('holeShare'))} | {pct(r.get('untexturedShare'))} | {pct(gen)} | {minutes(r.get('buildMs'))} | {'—' if not r.get('modelCalls') else '$%.2f' % r['modelCalls']['estimatedUsd']} | {r.get('runId') or '—'} |")
+            md.append(f"| {place['name']} | {place['kind']} | {side} | {r['outcome']}{' (no K model; shares are the scan’s)' if scan_only else ''} | {pct(r.get('holeShare'))} | {pct(r.get('untexturedShare'))} | {pct(gen)} | {minutes(r.get('buildMs'))} | {'—' if not r.get('modelCalls') else '$%.2f' % r['modelCalls']['estimatedUsd']} | {r.get('runId') or '—'} |")
         y += row_h
         d.line([PAD, y - PAD // 2, W - PAD, y - PAD // 2], fill=(220, 220, 218))
     legend = ("Views look toward headings 45, 135, 225 and 315 at a 15-degree pitch, the texture as baked (path tracer). holes: building pixels showing a wall's back or the sky through it; untextured: pixels drawn with no photo (clay); "

@@ -552,7 +552,14 @@ function sheet(outDir: string, places: Place[]): void {
         if (JSON.stringify([r.outcome, r.degradations, r.modelCalls]) !== before) fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(r, null, 1));
     }
     const sides = readJson(path.join(outDir, 'sides.json')) as Side[] | undefined;
-    const manifest = { places: places.map(p => p.slug), sides: sides?.map(s => s.label) ?? [...new Set(results(outDir).map(r => r.side))], results: results(outDir) };
+    const all = results(outDir);
+    const labels = sides?.map(s => s.label) ?? [...new Set(all.map(r => r.side))];
+    // per side, the last commit that changed the app (not this script, its tests or docs): the code the builds ran
+    const appCommits = Object.fromEntries(labels.map(label => {
+        const checkout = sides?.find(s => s.label === label)?.checkout ?? all.find(r => r.side === label)?.checkout;
+        try { return [label, checkout ? git(checkout, 'log', '-1', '--format=%h', '--', 'packages', ':(exclude,glob)packages/*/test/**', 'desktop-app') : '']; } catch { return [label, '']; }
+    }));
+    const manifest = { places: places.map(p => p.slug), sides: labels, appCommits, results: all };
     fs.writeFileSync(path.join(outDir, 'sheet.json'), JSON.stringify(manifest, null, 1));
     childProcess.execFileSync('python3', [path.join(REPO, 'scripts', 'benchmark_buildings_sheet.py'), outDir], { stdio: 'inherit' });
 }
