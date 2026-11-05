@@ -375,7 +375,7 @@ inline PaneGlass paneGlass(const Image& img, const std::vector<double>& meanLab,
 // ---- planMaterialJob ----
 
 /** One class's library set: its tile's real size and its normal and occlusion/roughness/metalness maps. */
-struct RegionSet { double realSizeX = 1, realSizeY = 1; Image normal, orm; };
+struct RegionSet { double realSizeX = 1, realSizeY = 1; Image normal, orm; /** The recess map (material-height.ts): width 0 when the set has none. */ Image height; };
 
 /** What every job reads: the classes' CIELAB means, their sets and each set's mean ORM (3 per set). */
 struct PlanContext { std::vector<double> meanLab; std::vector<uint8_t> openings; int wall = 0, grid = 24; double paneWallShare = 0.5, glassR = 0.08, glassM = 0; std::vector<RegionSet> sets; std::vector<double> setMeans; };
@@ -388,6 +388,8 @@ struct PlanResult {
     std::vector<double> classTexels;
     double folded = 0, glass = 0, panesOnStone = 0, paneWallTexels = 0;
     std::vector<uint8_t> orm, normal;
+    /** The recess below a rebuilt facade's plane: empty when none of its classes' sets has a height. */
+    std::vector<uint8_t> recess;
 };
 
 inline PlanResult planJob(const PlanJob& job, const PlanContext& ctx) {
@@ -402,7 +404,7 @@ inline PlanResult planJob(const PlanJob& job, const PlanContext& ctx) {
     for (size_t k = 0; k < N; k++) r.classTexels[cls[k]]++;
     r.orm.assign(N * 4, 0);
     if (job.rebuilt) {
-        struct Tile { int tw = 0, th = 0; std::vector<float> n, o; };
+        struct Tile { int tw = 0, th = 0; std::vector<float> n, o, h; };
         std::vector<Tile> tiles(K);
         for (int c = 0; c < K; c++) {
             if (r.classTexels[c] == 0) continue;
@@ -410,16 +412,21 @@ inline PlanResult planJob(const PlanJob& job, const PlanContext& ctx) {
             Tile& t = tiles[c];
             t.tw = static_cast<int>(std::max(2.0, js::round(s.realSizeX / job.texelM))); t.th = static_cast<int>(std::max(2.0, js::round(s.realSizeY / job.texelM)));
             t.n = shrinkTile(s.normal, t.tw, t.th, true); t.o = shrinkTile(s.orm, t.tw, t.th, false);
+            if (s.height.width > 0) t.h = shrinkTile(s.height, t.tw, t.th, false);
         }
         r.normal.assign(N * 4, 0);
         const PaneGlass pg = job.panes.empty() ? PaneGlass{} : paneGlass(img, ctx.meanLab, ctx.openings, ctx.wall, job.panes, ctx.paneWallShare);
         const uint8_t glassR = js::toUint8(js::round(ctx.glassR * 255)), glassM = js::toUint8(js::round(ctx.glassM * 255));
         r.panesOnStone = pg.stone; r.paneWallTexels = pg.wallTexels;
+        bool anyHeight = false;
+        for (const auto& t : tiles) if (!t.h.empty()) anyHeight = true;
+        if (anyHeight) r.recess.assign(N * 4, 0);
         for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
             const size_t k = static_cast<size_t>(y) * W + x;
             if (!pg.glass.empty() && pg.glass[k]) {
                 r.orm[k * 4] = 255; r.orm[k * 4 + 1] = glassR; r.orm[k * 4 + 2] = glassM; r.orm[k * 4 + 3] = 255;
                 r.normal[k * 4] = 128; r.normal[k * 4 + 1] = 128; r.normal[k * 4 + 2] = 255; r.normal[k * 4 + 3] = 255;
+                if (anyHeight) { r.recess[k * 4] = 255; r.recess[k * 4 + 1] = 255; r.recess[k * 4 + 2] = 255; r.recess[k * 4 + 3] = 255; }
                 r.glass++;
                 continue;
             }
@@ -430,6 +437,10 @@ inline PlanResult planJob(const PlanJob& job, const PlanContext& ctx) {
                 r.normal[k * 4 + c] = js::toUint8(js::round(static_cast<double>(t.n[j + c]) * 255));
             }
             r.orm[k * 4 + 3] = 255; r.normal[k * 4 + 3] = 255;
+            if (anyHeight) {
+                const uint8_t v = t.h.empty() ? 255 : js::toUint8(js::round(static_cast<double>(t.h[j]) * 255));
+                r.recess[k * 4] = v; r.recess[k * 4 + 1] = v; r.recess[k * 4 + 2] = v; r.recess[k * 4 + 3] = 255;
+            }
         }
         return r;
     }
