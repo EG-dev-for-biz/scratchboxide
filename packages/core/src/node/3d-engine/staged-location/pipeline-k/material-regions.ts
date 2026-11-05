@@ -366,7 +366,7 @@ const blank = (W: number, H: number): RgbaImage8 => ({ width: W, height: H, rgba
  * UVs) and its family, families of fewer than minRepeats left out. Gaps are to the nearest window beside it (overlapping it
  * by half its height) and above or below it (by half its width); a window with no neighbour on a side takes the other side's.
  */
-export function repeatElements(windows: number[] | undefined, P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS): { rects: number[]; family: number[] } {
+export function repeatElements(windows: number[] | undefined, P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS): { rects: number[]; family: number[]; /** Each kept element's window, u0 v0 u1 v1. */ windows: number[] } {
     const w: number[][] = [];
     for (let i = 0; i + 3 < (windows?.length ?? 0); i += 4) w.push(windows!.slice(i, i + 4));
     const overlap = (a0: number, a1: number, b0: number, b1: number) => Math.min(a1, b1) - Math.max(a0, b0);
@@ -388,15 +388,16 @@ export function repeatElements(windows: number[] | undefined, P: MaterialRegions
     }
     const size = heads.map((_, f) => fam.filter(x => x === f).length), keep = new Map<number, number>();
     size.forEach((n, f) => { if (n >= P.minRepeats) keep.set(f, keep.size); });
-    const rects: number[] = [], family: number[] = [];
-    cells.forEach((c, i) => { if (keep.has(fam[i])) { rects.push(...c); family.push(keep.get(fam[i])!); } });
-    return { rects, family };
+    const rects: number[] = [], family: number[] = [], kept: number[] = [];
+    cells.forEach((c, i) => { if (keep.has(fam[i])) { rects.push(...c); family.push(keep.get(fam[i])!); kept.push(...w[i]); } });
+    return { rects, family, windows: kept };
 }
 
 /**
- * Each class's repeat size (RegionClass.repeatM): on every rebuilt facade, each repeated element's (repeatElements) texels
- * sampled every 3rd texel each way and classed by their nearest class among their region's, the element given to the
- * class most of them hold; per class the median of its elements' shorter sides in metres. Sets classes[k].repeatM.
+ * Each class's repeat size (RegionClass.repeatM): on every rebuilt facade, each repeated element (repeatElements) sampled
+ * every 3rd texel each way, each texel classed by its nearest class among its region's; the window given to the opening
+ * class most of its texels hold, and its unit cell, less the window, to the outside class most of the rest hold; per class
+ * the median of the shorter sides (m) of what it was given. Sets classes[k].repeatM.
  */
 export function classRepeatSizes(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS): void {
     const { rebuilt } = photoMaterials(json), cand = regionCandidates(classes), sizes = classes.map(() => [] as number[]);
@@ -406,19 +407,22 @@ export function classRepeatSizes(g: ParsedGlb, json: any, images: Map<number, Rg
         const texelM = texelMetres(g, json, mi, img), el = repeatElements(fittedWindows(json, mesh), P), open = maskOf(json, mesh, img);
         if (!(texelM > 0) || !el.family.length) continue;
         const { width: W, height: H, rgba } = img;
+        const span = (r: number[]) => [Math.max(0, Math.floor(r[0] * W)), Math.max(0, Math.floor(r[1] * H)), Math.min(W, Math.ceil(r[2] * W)), Math.min(H, Math.ceil(r[3] * H))];
         for (let e = 0; e < el.family.length; e++) {
-            const r = el.rects.slice(e * 4, e * 4 + 4), x0 = Math.max(0, Math.floor(r[0] * W)), y0 = Math.max(0, Math.floor(r[1] * H)), x1 = Math.min(W, Math.ceil(r[2] * W)), y1 = Math.min(H, Math.ceil(r[3] * H));
-            const n = new Array<number>(classes.length).fill(0);
-            for (let y = y0; y < y1; y += 3) for (let x = x0; x < x1; x += 3) {
+            const cell = span(el.rects.slice(e * 4, e * 4 + 4)), win = span(el.windows.slice(e * 4, e * 4 + 4));
+            const inWin = new Array<number>(classes.length).fill(0), outWin = new Array<number>(classes.length).fill(0);
+            for (let y = cell[1]; y < cell[3]; y += 3) for (let x = cell[0]; x < cell[2]; x += 3) {
                 const k = y * W + x;
                 if (!rgba[k * 4 + 3]) continue;
                 const L = labOf(rgba[k * 4], rgba[k * 4 + 1], rgba[k * 4 + 2]);
                 let best = 0, bd = Infinity;
                 for (const c of cand[open?.[k] ? 1 : 0]) { const m = classes[c].meanLab, d = (L[0] - m[0]) ** 2 + (L[1] - m[1]) ** 2 + (L[2] - m[2]) ** 2; if (d < bd) { bd = d; best = c; } }
-                n[best]++;
+                (x >= win[0] && x < win[2] && y >= win[1] && y < win[3] ? inWin : outWin)[best]++;
             }
-            const top = n.indexOf(Math.max(...n));
-            if (n[top] > 0) sizes[top].push(Math.min(x1 - x0, y1 - y0) * texelM);
+            for (const [n, s] of [[inWin, win], [outWin, cell]] as const) {
+                const top = n.indexOf(Math.max(...n));
+                if (n[top] > 0) sizes[top].push(Math.min(s[2] - s[0], s[3] - s[1]) * texelM);
+            }
         }
     }
     classes.forEach((c, k) => {

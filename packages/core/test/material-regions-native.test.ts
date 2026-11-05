@@ -160,7 +160,8 @@ describe('pipeline K material regions, native kernel', () => {
             const ts = planMaterialJob(job, ctx), native = await planMaterialJobNative(job, ctx);
             expectSamePiece(native, ts);
             // the facade with openings reaches the opening classes; the others and the scan piece only the outside ones
-            if (job.mesh === 'facade_lattice_1') expect(ts.classTexels.slice(4).every(n => n > 0)).toBe(true);
+            if (job.mesh === 'facade_lattice_1') expect(ts.classTexels.slice(4).some(n => n > 0)).toBe(true);
+            if (job.mesh === 'facade_lattice_1') expect(ts.facade!.foldedShare).toBeGreaterThan(0);
             else expect(ts.classTexels.slice(4).every(n => n === 0)).toBe(true);
         }
         expectSamePlan(await planMaterialRegionsNative(sc.g, sc.json, sc.images, classes, st), planMaterialRegions(sc.g, sc.json, sc.images, classes, st));

@@ -17,7 +17,7 @@
 import { describe, expect, it } from 'vitest';
 import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { planMaterialRegions, readRegionClasses, regionClassMap, regionRadius, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
+import { classRepeatSizes, foldRepeats, planMaterialRegions, readRegionClasses, regionClassMap, regionRadius, repeatElements, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
 import { planMaterialRegionsOnThreads } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions-pool';
 import { tileRefineTwin } from '../src/node/3d-engine/staged-location/tile-refine-twin';
 import { decodeImageInMemory, type RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
@@ -166,6 +166,40 @@ describe('pipeline K material regions', () => {
         const opening = new Set(classes.filter(c => c.openings).map(c => ormOf(c).join()));
         expect(opening.has(pane.slice(0, 3).join())).toBe(true);
         expect(opening.has(panel.slice(0, 3).join())).toBe(false);
+    });
+    it("follows the facade's repeats: a bay whose glass reads another colour takes its family's material, and each class knows its repeat size", () => {
+        // a 20 x 20 m curtain wall: 2 x 2 m windows of dark glass every 5 m and 4 m, one of them reflecting the sky (lighter)
+        const W = 200, H = 200, rgba = new Uint8Array(W * H * 4), windows: number[] = [];
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) rgba.set([...(x % 50 < 10 ? [200, 196, 188] : [92, 96, 100]), 255], (y * W + x) * 4);
+        for (let b = 0; b < 4; b++) for (let st = 0; st < 5; st++) {
+            const x0 = b * 50 + 20, y0 = st * 40 + 10, sky = b === 1 && st === 2;
+            for (let y = y0; y < y0 + 20; y++) for (let x = x0; x < x0 + 20; x++) rgba.set([...(sky ? [150, 170, 185] : [30, 34, 42]), 255], (y * W + x) * 4);
+            windows.push(x0 / W, y0 / H, (x0 + 20) / W, (y0 + 20) / H);
+        }
+        const el = repeatElements(windows);
+        expect(el.family.length).toBe(20);
+        // the unit cells: half the 30 px gap to each neighbour, half the 20 px gap above and below: one 50 x 40 px repeat
+        expect(el.rects.slice(4 * 5, 4 * 5 + 4).map(v => Math.round(v * W))).toEqual([55, 0, 105, 40]);
+        const extras = { sbFacadeLattice: { facadeId: 1, windows: { uv: windows } } };
+        const g = parseGlbBytes(scene([{ mesh: 'facade_lattice_1', corners: wall(0, 20, 20), uv: FULL_UV, material: 0, extras }], [{ width: W, height: H, rgba }]));
+        const images = imagesOf([{ width: W, height: H, rgba }]);
+        const classes = readRegionClasses(g.json, images)!;
+        // per texel the sky pane is another class than the other panes; folded over its repeats it is theirs
+        const open = new Uint8Array(W * H);
+        for (let k = 0; k + 3 < windows.length; k += 4) for (let y = Math.floor(windows[k + 1] * H); y < Math.ceil(windows[k + 3] * H); y++) open.fill(1, y * W + Math.floor(windows[k] * W), y * W + Math.ceil(windows[k + 2] * W));
+        const cls = regionClassMap({ width: W, height: H, rgba }, classes, 1, open);
+        const skyAt = 100 * W + 80, darkAt = 100 * W + 30;
+        expect(cls[skyAt]).not.toBe(cls[darkAt]);
+        const changed = foldRepeats(cls, W, H, classes.length, el, 24);
+        expect(changed).toBeGreaterThan(0);
+        expect(cls[skyAt]).toBe(cls[darkAt]);
+        const plan = planMaterialRegions(g, g.json, images, classes, sets(classes));
+        expect(at(plan.materials[0].orm, 80, 100)).toEqual(at(plan.materials[0].orm, 30, 100));
+        expect(plan.report.facades.perFacade[0].foldedShare).toBeGreaterThan(0);
+        // the glass class knows its window's shorter side (2 m at 0.1 m a texel), the panels' class its unit cell's (4 m)
+        classRepeatSizes(g, g.json, images, classes);
+        expect(classes[cls[darkAt]].repeatM).toBe(2);
+        expect(classes[regionClassMap({ width: W, height: H, rgba }, classes, 1, open)[20 * W + 45]].repeatM).toBe(4);
     });
     it('draws a speckle under regionSmoothM as the surface around it; a blot a metre across keeps its own set', () => {
         const W = 100, H = 100, rgba = new Uint8Array(W * H * 4);

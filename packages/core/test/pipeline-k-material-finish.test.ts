@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { FINISH_READ, finishMaps, finishPrompt, finishTarget, grainOf, parseClassFinish } from '../src/node/3d-engine/staged-location/pipeline-k/material-finish';
+import { FINISH_READ, finishMaps, finishPrompt, finishTarget, grainOf, parseClassFinish, patternFit } from '../src/node/3d-engine/staged-location/pipeline-k/material-finish';
 import { REGION_FINISH } from '../src/node/3d-engine/staged-location/pipeline-k/material-sets';
 
 describe('pipeline K material finish', () => {
@@ -61,6 +61,10 @@ describe('pipeline K material finish', () => {
         expect(grainOf({ by: 'appearance', conf: 35 })).toBe(0.5);
         expect(grainOf(undefined)).toBe(1);
         expect(finishMaps(orm, normal, undefined, grainOf(undefined)).orm).toBe(orm);
+        // a set's tile larger than the element its class repeats on: its grain in proportion; no element, in full
+        expect(patternFit(1, [2, 2])).toBe(0.5);
+        expect(patternFit(3, [2, 1])).toBe(1);
+        expect(patternFit(undefined, [8, 8])).toBe(1);
         // the inputs are not changed
         expect(orm.rgba[1]).toBe(153);
     });
