@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { drawFinish, drawnMetalness, drawnRoughness, energyFit, FINISH_READ, finishMaps, finishPrompt, finishTarget, grainOf, parseClassFinish, patternFit } from '../src/node/3d-engine/staged-location/pipeline-k/material-finish';
+import { settleFinishes, drawFinish, drawnMetalness, drawnRoughness, energyFit, FINISH_READ, finishMaps, finishPrompt, finishTarget, grainOf, parseClassFinish, patternFit } from '../src/node/3d-engine/staged-location/pipeline-k/material-finish';
 import { REGION_FINISH } from '../src/node/3d-engine/staged-location/pipeline-k/material-sets';
 
 describe('pipeline K material finish', () => {
@@ -48,10 +48,18 @@ describe('pipeline K material finish', () => {
         expect(g.reduce((a, b) => a + b, 0) / N).toBeCloseTo(0.08, 2);
         expect([drawnRoughness(0.2), drawnRoughness(0.05), drawnRoughness(0.3), drawnRoughness(0.8)].map(v => Math.round(v * 1000) / 1000)).toEqual([0.08, 0.08, 0.18, 0.8]);
         expect([drawnMetalness(0.1), drawnMetalness(0.2), drawnMetalness(0.8)].map(v => Math.round(v * 1000) / 1000)).toEqual([0.02, 0.08, 0.8]);
-        expect(Math.max(...g) / Math.min(...g)).toBeCloseTo(230 / 153, 0);
+        // the set's roughness pattern is drawn as far as its relief (9% here): a smooth surface is even, not figured
+        expect(Math.max(...g) - Math.min(...g)).toBeLessThan(0.01);
+        // a matte read keeps the set's pattern whole
+        const matte = finishMaps(orm, normal, { roughness: 0.75, metalness: 0, conf: 85 });
+        expect(matte.orm.rgba[5] / matte.orm.rgba[1]).toBeCloseTo(230 / 153, 1);
         expect(tilt(glass.normal)).toBeLessThan(tilt(normal) / 5);
         expect(glass.drawn).toEqual({ roughness: 0.08, metallic: 0, relief: 0.09, grain: 1 });
         expect(glass.orm.rgba[0]).toBe(230);
+        // an occlusion map with a figure in it (road markings) is drawn even on a smooth read too
+        const figured = { ...orm, rgba: orm.rgba.map((v, i) => (i % 4 === 0 ? (i % 8 ? 255 : 120) : v)) };
+        const drawnAo = finishMaps(figured, normal, { roughness: 0.1, metalness: 0, conf: 90 }).orm;
+        expect(Math.abs(drawnAo.rgba[0] - drawnAo.rgba[4])).toBeLessThan(8);
         // read as painted metal: metalness drawn even where the set had none; a matte read keeps the full relief
         expect(finishMaps(orm, normal, { roughness: 0.4, metalness: 0.8, conf: 70 }).orm.rgba[2]).toBe(204);
         expect(finishMaps(orm, normal, { roughness: 0.15, metalness: 0.1, conf: 70 }).orm.rgba[2]).toBe(5);
@@ -89,6 +97,26 @@ describe('pipeline K material finish', () => {
         expect(finishPrompt(rows)).toMatch(/row 2: .*inside the window openings/);
         expect(finishPrompt(rows)).toMatch(/finish of that pane itself/);
         expect(finishPrompt(rows.slice(0, 1))).not.toMatch(/pane itself/);
+    });
+
+    it("draws no metal on a class whose colour the building mostly reads dielectric: it is that material in shade; a building that mostly reads metal keeps it", () => {
+        const cls = (L: number, a: number, b: number, share: number, openings = false) => ({ meanLab: [L, a, b] as [number, number, number], share, openings });
+        // the Empire State Building's classes: the darkest read cast aluminium (it also holds the limestone in shadow), three read limestone
+        const esb = [cls(41.08, 0.94, 0.5, 0.202), cls(50.49, 1.7, 1.44, 0.246), cls(60.88, 2.34, 3.11, 0.23), cls(72.81, 2.73, 5.85, 0.126), cls(39.59, 1.02, 0.27, 0.101, true)];
+        const esbRead = [{ roughness: 0.45, metalness: 0.8, conf: 75, seen: 'cast aluminum spandrel panels' }, { roughness: 0.7, metalness: 0, conf: 85 }, { roughness: 0.75, metalness: 0, conf: 90 }, { roughness: 0.7, metalness: 0, conf: 90 }, { roughness: 0.05, metalness: 0, conf: 85 }];
+        const settled = settleFinishes(esb, esbRead);
+        // the dark class takes the shaded limestone's finish (its nearest in lightness), its own words and confidence kept
+        expect(settled[0]).toEqual({ roughness: 0.7, metalness: 0, conf: 75, seen: 'cast aluminum spandrel panels', shadeOf: 1 });
+        expect(settled.slice(1)).toEqual(esbRead.slice(1));
+        // Penn 2: three classes read metal hold most of the surface, one reads a smooth dielectric: the metal stands
+        const penn = [cls(37.41, 0.85, -0.3, 0.137), cls(44.43, 0.97, -0.19, 0.24), cls(51.67, 1.21, 0.38, 0.442), cls(64.09, 1.37, 1.03, 0.137)];
+        const pennRead = [{ roughness: 0.5, metalness: 0.8, conf: 75 }, { roughness: 0.45, metalness: 0.8, conf: 80 }, { roughness: 0.5, metalness: 0.7, conf: 80 }, { roughness: 0.3, metalness: 0.2, conf: 65 }];
+        expect(settleFinishes(penn, pennRead)).toEqual(pennRead);
+        // a metal of another colour than the wall (a copper roof beside limestone: far in a, b) stands; an unsure dielectric read does not outvote it
+        expect(settleFinishes([cls(45, 14, 22, 0.1), cls(70, 2, 5, 0.9)], [{ roughness: 0.4, metalness: 0.9, conf: 80 }, { roughness: 0.7, metalness: 0, conf: 90 }])[0]!.metalness).toBe(0.9);
+        expect(settleFinishes([cls(41, 1, 0.5, 0.2), cls(50, 1.7, 1.4, 0.8)], [{ roughness: 0.4, metalness: 0.9, conf: 80 }, { roughness: 0.7, metalness: 0, conf: 30 }])[0]!.metalness).toBe(0.9);
+        // an opening class is settled among the opening classes only
+        expect(settleFinishes([cls(41, 1, 0.5, 0.1, true), cls(50, 1.7, 1.4, 0.9)], [{ roughness: 0.4, metalness: 0.9, conf: 80 }, { roughness: 0.7, metalness: 0, conf: 90 }])[0]!.metalness).toBe(0.9);
     });
 
     it('asks for numbers per row, never a material category to route on', () => {

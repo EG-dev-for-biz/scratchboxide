@@ -19,6 +19,8 @@
  * metal gate, no glass layer); a confident reading also sets the finish those maps are drawn at (finishMaps): the set's
  * roughness and metalness scaled to the read values, its grain kept, and its normal relief by the square of the read
  * roughness (reliefFullAt), so a surface read smooth and reflective (window glass) is drawn smooth and nearly flat (user, 2026-11-05);
+ * a metal read is settled against the other classes' first (settleFinishes: a class of the colour the building mostly
+ * reads dielectric is that material in shade, never drawn metal);
  * and the set's grain is drawn only as far as the pick by appearance confirmed the set (grainFullAtConf) and as far as its
  * tile fits the element its class repeats on (patternFit) and its pattern is borne out by the photo (energyFit).
  * Labelled photo-inferred.
@@ -52,8 +54,35 @@ export const FINISH_READ = {
      * smoother drawn 0.08, its hedged 0.1-0.2 metalness drawn 0.02-0.08; polished stone read 0.3 drawn 0.18; a matte or
      * metal read (0.5 and up) as read. One curve for every class.
      */
-    smoothBelow: 0.5, minRoughness: 0.08
+    smoothBelow: 0.5, minRoughness: 0.08,
+    /**
+     * Shade twins (user, 2026-11-05: "we are assigning a shine to too many things, this stone work should not have a sheen
+     * at all"): a class is a colour cluster, so a wall's shaded parts fall in a darker class with whatever else is that
+     * dark (the Empire State Building's shadowed limestone with its aluminium spandrels), and one metal read was drawn on
+     * all of it. Classes of one region within shadeChroma of each other (CIELAB a, b distance: lightness left out) are one
+     * colour lit differently; a class read metal (metalness at least metalAt) keeps it only when, among those, the share
+     * read metal is at least the share read dielectric; else it is the dielectric majority's material in shade.
+     */
+    shadeChroma: 4, metalAt: 0.5
 } as const;
+
+/**
+ * Settles the classes' readings against each other (FINISH_READ.shadeChroma): a class confidently read metal whose colour
+ * the building's surface mostly reads dielectric takes the finish of its nearest such class in lightness (that material in
+ * shade), keeping its own confidence and words, with `shadeOf` naming the class. Readings are returned in class order.
+ */
+export function settleFinishes(classes: Array<{ meanLab: [number, number, number]; share: number; openings?: boolean }>, finishes: Array<ClassFinish | undefined>, R = FINISH_READ): Array<(ClassFinish & { shadeOf?: number }) | undefined> {
+    const sure = (k: number) => !!finishes[k] && finishes[k]!.conf >= R.minConf;
+    const metal = (k: number) => finishes[k]!.metalness >= R.metalAt;
+    return finishes.map((f, k) => {
+        if (!f || !sure(k) || !metal(k)) return f;
+        const near = classes.map((_, j) => j).filter(j => sure(j) && !!classes[j].openings === !!classes[k].openings && Math.hypot(classes[j].meanLab[1] - classes[k].meanLab[1], classes[j].meanLab[2] - classes[k].meanLab[2]) <= R.shadeChroma);
+        const metalShare = near.filter(metal).reduce((a, j) => a + classes[j].share, 0), others = near.filter(j => !metal(j));
+        if (!others.length || metalShare >= others.reduce((a, j) => a + classes[j].share, 0)) return f;
+        const twin = others.reduce((a, j) => (Math.abs(classes[j].meanLab[0] - classes[k].meanLab[0]) < Math.abs(classes[a].meanLab[0] - classes[k].meanLab[0]) ? j : a));
+        return { ...f, roughness: finishes[twin]!.roughness, metalness: finishes[twin]!.metalness, shadeOf: twin };
+    });
+}
 
 /** The roughness a read is drawn at (FINISH_READ.smoothBelow): smooth reads drawn smoother, matte ones as read. */
 export function drawnRoughness(read: number, R = FINISH_READ): number {
@@ -160,7 +189,8 @@ export function grainOf(pick: { by: 'appearance' | 'ranking'; conf?: number } | 
  * and drawnMetalness) with a confident
  * reading (a set with no metalness takes the read value even) and the set's own without; the tangent-space normal is
  * tilted toward flat by `grain` and, with a confident reading, by the square of the read roughness over reliefFullAt. Occlusion (red)
- * is kept. Returns new images (the inputs when nothing changes).
+ * keeps its mean. The occlusion, roughness and metalness variation is drawn as far as the relief is (`relief`): a surface
+ * read smooth is drawn even as well as flat. Returns new images (the inputs when nothing changes).
  */
 export function finishMaps(orm: { width: number; height: number; rgba: Uint8Array }, normal: { width: number; height: number; rgba: Uint8Array }, f: ClassFinish | undefined, grain = 1, R = FINISH_READ): { orm: typeof orm; normal: typeof normal; drawn?: DrawnFinish } {
     const sure = !!f && f.conf >= R.minConf;
@@ -171,13 +201,20 @@ export function finishMaps(orm: { width: number; height: number; rgba: Uint8Arra
     const gMean = g / n / 255, bMean = b / n / 255;
     const rTo = sure ? drawnRoughness(f!.roughness, R) : gMean, mTo = sure ? drawnMetalness(f!.metalness, R) : bMean;
     const o = orm.rgba.slice(), clamp8 = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
-    // the deviation scaled with the mean (a set's grain is proportional to its level), then by the grain to draw
-    const remap = (v: number, mean: number, to: number) => (mean > 0 ? (to + grain * (v / 255 - mean) * (to / mean)) * 255 : to * 255);
+    // how much of the set's own pattern is drawn: the grain, and with a confident reading the square of the read roughness
+    // over reliefFullAt, on every map alike: a surface read smooth is drawn even as well as flat (the road markings in a
+    // smooth library set's roughness and occlusion maps showed in the Empire State Building's glass reflections)
+    const relief = Math.max(0, Math.min(1, grain * (sure ? Math.min(1, (f!.roughness / R.reliefFullAt) ** 2) : 1))), nn = normal.rgba.slice();
+    let a = 0;
+    for (let k = 0; k < n; k++) a += orm.rgba[k * 4];
+    const aMean = a / n / 255;
+    // the deviation scaled with the mean (a set's grain is proportional to its level), then by the pattern to draw
+    const remap = (v: number, mean: number, to: number) => (mean > 0 ? (to + relief * (v / 255 - mean) * (to / mean)) * 255 : to * 255);
     for (let k = 0; k < n; k++) {
+        o[k * 4] = clamp8(remap(orm.rgba[k * 4], aMean, aMean));
         o[k * 4 + 1] = clamp8(remap(orm.rgba[k * 4 + 1], gMean, rTo));
         o[k * 4 + 2] = clamp8(remap(orm.rgba[k * 4 + 2], bMean, mTo));
     }
-    const relief = Math.max(0, Math.min(1, grain * (sure ? Math.min(1, (f!.roughness / R.reliefFullAt) ** 2) : 1))), nn = normal.rgba.slice();
     for (let k = 0; k < normal.width * normal.height; k++) {
         const x = (normal.rgba[k * 4] / 255) * 2 - 1, y = (normal.rgba[k * 4 + 1] / 255) * 2 - 1, z = (normal.rgba[k * 4 + 2] / 255) * 2 - 1;
         const tx = x * relief, ty = y * relief, tz = z * relief + (1 - relief), l = Math.hypot(tx, ty, tz) || 1;
