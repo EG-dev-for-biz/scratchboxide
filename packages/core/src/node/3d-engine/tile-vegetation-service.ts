@@ -238,6 +238,11 @@ export const SCENE_TREE_TRIANGLE_CAP = 1_500_000;
  * near-mid band at 6 x tree height (25-100 m) and the mid band at 8 x (60-140 m), Washington Square (591 trees): median
  * 1.66 M, p95 10.5 M, max 16.7 M; the synthetic park of location-clay-pipeline.test.ts (372 trees): median 9.8 M, p95
  * 12.9 M, max 14.4 M, and a max of 44 M with both bands twice as long.
+ *
+ * Since the near-mid level is drawn as leaf cards (2026-11-05, scratchbox_tree_lod.hpp nearMidCards*: about 1,500 triangles
+ * a tree where its leaf clusters took about 80,000), the same measures are: Washington Square Park (610 trees) median
+ * 0.25 M, p95 3.0 M, max 8.6 M (with leaf clusters 1.1 M, 10.4 M, 20.3 M); the synthetic park median 1.7 M, p95 3.1 M, max
+ * 4.5 M (with leaf clusters 8.0 M, 11.2 M, 12.5 M, and a max of 29.6 M with both bands twice as long).
  */
 export const SCENE_TREE_DRAWN_TRIANGLES_PER_FRAME = 20_000_000;
 export const SCENE_TREE_DRAWN_TRIANGLES_PER_LEVEL = { level0: 5_000_000, level1: 4_000_000, level2: 3_000_000 } as const;

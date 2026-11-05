@@ -148,7 +148,10 @@ describe('trees at four levels', () => {
             expect(Math.max(wp.max[0] - wp.min[0], wp.max[2] - wp.min[2])).toBeGreaterThan(0.5 * radius);
             // the near-mid and mid levels share the near level's wood mesh, and draw no twigs: leaf clusters at near-mid, crown cards at mid
             expect(levels[1].mesh).toBe(levels[0].mesh); expect(levels[2].mesh).toBe(levels[0].mesh);
-            for (const ci of levels[1].children) expect(json.nodes[ci].extras.sbCluster.clusterMesh).toMatch(/leaf_cluster/);
+            // (the near-mid level its clumped leaf cards where the tree has them, else its leaf clusters; the near level keeps
+            // its leaf clusters and adds core cards beneath them)
+            for (const ci of levels[1].children) expect(json.nodes[ci].extras.sbCluster.clusterMesh).toMatch(/leaf_cluster|crown_card/);
+            expect(levels[0].children.some((ci: number) => /leaf_cluster/.test(json.nodes[ci].extras.sbCluster.clusterMesh))).toBe(true);
             for (const ci of levels[2].children) expect(json.nodes[ci].extras.sbCluster.clusterMesh).toMatch(/leaf_cluster|crown_card/);
             // bands: each handover centred on lodBandsFor's distance, neighbours overlapping (no gap), handovers in order
             const H = t.extras.heightAboveSupportM as number;
