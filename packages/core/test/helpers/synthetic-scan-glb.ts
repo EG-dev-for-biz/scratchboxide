@@ -54,8 +54,12 @@ export function encodePng(width: number, height: number, rgb: Uint8Array): Buffe
     return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 
-/** Writes the chunks as one mesh; `images` (PNG bytes) texture the chunks that name one, the rest are plain grey. */
-export function writeGlb(file: string, chunks: Chunk[], images: Buffer[] = []): void {
+/**
+ * Writes the chunks as one mesh; `images` (PNG bytes) texture the chunks that name one, the rest are plain grey. With
+ * `tiles` (one per chunk), each chunk is a mesh and node of its own, as the tile crawler writes a leaf: its leaf id and
+ * stated geometric error in the node's extras.sb.
+ */
+export function writeGlb(file: string, chunks: Chunk[], images: Buffer[] = [], tiles?: Array<{ leafId: string; geometricErrorM?: number }>): void {
     const parts: Buffer[] = [];
     let offset = 0;
     const bufferViews: object[] = [], accessors: object[] = [], primitives: object[] = [];
@@ -90,7 +94,12 @@ export function writeGlb(file: string, chunks: Chunk[], images: Buffer[] = []): 
         textures: images.map((_, i) => ({ source: i, sampler: 0 })),
         materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.7, 0.7, 0.7, 1] } }, ...images.map((_, i) => ({ pbrMetallicRoughness: { baseColorTexture: { index: i } } }))]
     } : {};
-    const doc = { asset: { version: '2.0' }, buffers: [{ byteLength: bin.length }], bufferViews, accessors, meshes: [{ primitives }], nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }], scene: 0, ...textures };
+    const perTile = tiles && tiles.length === chunks.length;
+    const meshes = perTile ? primitives.map(p => ({ primitives: [p] })) : [{ primitives }];
+    const nodes = perTile
+        ? tiles!.map((t, i) => ({ mesh: i, extras: { sb: { ids: { leafId: t.leafId }, ...(t.geometricErrorM !== undefined ? { tile: { geometricErrorM: t.geometricErrorM } } : {}) } } }))
+        : [{ mesh: 0 }];
+    const doc = { asset: { version: '2.0' }, buffers: [{ byteLength: bin.length }], bufferViews, accessors, meshes, nodes, scenes: [{ nodes: nodes.map((_, i) => i) }], scene: 0, ...textures };
     let js = Buffer.from(JSON.stringify(doc));
     js = Buffer.concat([js, Buffer.alloc((4 - (js.length % 4)) % 4, 0x20)]);
     const header = Buffer.alloc(12); header.write('glTF', 0); header.writeUInt32LE(2, 4); header.writeUInt32LE(12 + 8 + js.length + 8 + bin.length, 8);

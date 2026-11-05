@@ -22,6 +22,10 @@
  *
  * usage: tile_seam_weld --input <scan.glb> [--out <welded.glb>] [--out-clay <welded_clay.glb>] [--stats <stats.json>]
  *                       [--tolerance M] [--no-drop] [--no-overlap-trim] [--no-tjunctions] [--threads N]
+ *                       [--tiles <tiles.txt>] [--adaptive-cap M] [--max-turn-deg D] [--no-adaptive] [--no-fill] [--audit-only]
+ *
+ * --tiles names each glTF node's source tile and its stated geometric error (a line "<nodes>", then one "<tile> <errorM>"
+ * line per node, errorM <= 0 when unknown); without it each node is its own tile and states no error.
  */
 
 #include "scratchbox_gltf_scene.hpp"
@@ -42,6 +46,7 @@
 using scratchbox::tile_seam_weld::TileSeamWeld;
 using scratchbox::tile_seam_weld::TileSeamWeldParams;
 using scratchbox::tile_seam_weld::TileSeamCloseParams;
+using scratchbox::tile_seam_weld::TileSeamAdaptiveParams;
 
 static void usage() {
     std::cerr <<
@@ -53,7 +58,13 @@ static void usage() {
         "  --overlap-tolerance M  a border triangle within M of a lower piece's surface everywhere is an overlap (default: the tolerance)\n"
         "  --no-tjunctions    leave border positions lying on another piece's edge interior as they are\n"
         "  --threads N        worker threads (default: all cores)\n"
-        "  --contacts-csv F   write every welded position (x y z, tile frame) with its gap in metres, for inspection\n";
+        "  --contacts-csv F   write every welded position (x y z, tile frame) with its gap in metres, for inspection\n"
+        "  --tiles F          each node's source tile and stated geometric error (see the header)\n"
+        "  --adaptive-cap M   the adaptive close goes no further than M (default 0.30)\n"
+        "  --max-turn-deg D   an adaptive close turning a triangle by more than D degrees is left to the strip fill (default 25)\n"
+        "  --no-adaptive      no adaptive close (the fixed passes only)\n"
+        "  --no-fill          no strip fill\n"
+        "  --audit-only       measure the scan's seams and write the report; no pass runs\n";
 }
 
 /** The scene's mesh as the GLB writers take it: positions welded on bit-identical float3 (as tile_refine's own pass-through). */
@@ -102,10 +113,11 @@ static bool writeBytes(const std::string& file, const std::vector<uint8_t>& byte
 }
 
 int main(int argc, char** argv) {
-    std::string input, out, outClay, statsPath, contactsCsv;
+    std::string input, out, outClay, statsPath, contactsCsv, tilesPath;
     TileSeamWeldParams p;
     TileSeamCloseParams cp;
-    bool drop = true, trim = true, tjunctions = true;
+    TileSeamAdaptiveParams ap;
+    bool drop = true, trim = true, tjunctions = true, adaptive = true, fill = true, auditOnly = false;
     double overlapTol = -1;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -122,24 +134,66 @@ int main(int argc, char** argv) {
         else if (a == "--overlap-tolerance") overlapTol = std::atof(next().c_str());
         else if (a == "--no-tjunctions") tjunctions = false;
         else if (a == "--contacts-csv") contactsCsv = next();
+        else if (a == "--tiles") tilesPath = next();
+        else if (a == "--adaptive-cap") ap.capM = std::atof(next().c_str());
+        else if (a == "--max-turn-deg") ap.maxTurnDeg = std::atof(next().c_str());
+        else if (a == "--no-adaptive") adaptive = false;
+        else if (a == "--no-fill") fill = false;
+        else if (a == "--audit-only") auditOnly = true;
         else if (a == "--help" || a == "-h") { usage(); return 0; }
         else { std::cerr << "unknown argument " << a << "\n"; usage(); return 2; }
     }
     if (input.empty()) { usage(); return 2; }
     if (!(p.weldToleranceM > 0.0) || p.weldToleranceM > 1.0) { std::cerr << "--tolerance must be in (0, 1] metres\n"; return 2; }
     if (!drop) { p.sliverAspectMin = 1e300; p.dropStripPieces = false; }
+    if (!(ap.capM > 0.0) || ap.capM > 1.0) { std::cerr << "--adaptive-cap must be in (0, 1] metres\n"; return 2; }
+    if (!(ap.maxTurnDeg >= 0.0) || ap.maxTurnDeg > 180.0) { std::cerr << "--max-turn-deg must be in [0, 180]\n"; return 2; }
 
     const auto t0 = std::chrono::steady_clock::now();
     auto scene = scratchbox::gltf::GlbSceneReader::readFile(input);
     if (!scene.ok) { std::cerr << "tile_seam_weld: cannot read " << input << ": " << scene.error << "\n"; return 1; }
     const size_t inputTriangles = scene.mesh.indices.size() / 3;
+    // each triangle's source tile: its node's, as the tiles file names it (else the node itself), and each tile's stated error
+    std::vector<uint32_t> triTile(inputTriangles, 0);
+    std::vector<double> tileError;
+    size_t nodesNamed = 0;
+    {
+        std::vector<uint32_t> nodeTile;
+        std::vector<double> nodeError;
+        if (!tilesPath.empty()) {
+            std::ifstream tf(tilesPath);
+            size_t n = 0;
+            if (!(tf >> n)) { std::cerr << "tile_seam_weld: cannot read " << tilesPath << "\n"; return 1; }
+            nodeTile.resize(n); nodeError.resize(n);
+            for (size_t i = 0; i < n; ++i) if (!(tf >> nodeTile[i] >> nodeError[i])) { std::cerr << "tile_seam_weld: " << tilesPath << " is short\n"; return 1; }
+            nodesNamed = n;
+        }
+        uint32_t maxTile = 0;
+        for (size_t t = 0; t < inputTriangles; ++t) {
+            const uint32_t node = t < scene.triangleNode.size() ? scene.triangleNode[t] : 0u;
+            triTile[t] = node < nodeTile.size() ? nodeTile[node] : node;
+            maxTile = std::max(maxTile, triTile[t]);
+        }
+        tileError.assign(static_cast<size_t>(maxTile) + 1, -1.0);
+        for (size_t node = 0; node < nodeTile.size(); ++node) if (nodeTile[node] < tileError.size() && nodeError[node] > 0) tileError[nodeTile[node]] = nodeError[node];
+    }
+    size_t tilesWithError = 0;
+    for (double e : tileError) if (e > 0) ++tilesWithError;
+    const auto mask = TileSeamWeld::cutMask(scene.mesh);
+    const auto auditBefore = TileSeamWeld::auditSeams(scene.mesh, triTile, mask, {});
+    if (auditOnly) {
+        std::string js = "{\"ok\": true, \"input\": \"" + input + "\", \"inputTriangles\": " + std::to_string(inputTriangles) + ", \"seamAudit\": {\"before\": {" + TileSeamWeld::auditJson(auditBefore) + "}}}\n";
+        if (!statsPath.empty()) { std::ofstream st(statsPath); st << js; }
+        std::cout << js;
+        return 0;
+    }
     const auto t1 = std::chrono::steady_clock::now();
 
     cp.toleranceM = p.weldToleranceM;
     cp.overlapToleranceM = overlapTol >= 0 ? overlapTol : p.weldToleranceM;
     cp.threads = p.threads;
     scratchbox::tile_seam_weld::TileSeamTrimStats trimStats;
-    if (trim) trimStats = TileSeamWeld::trimOverlaps(scene.mesh, {&scene.triangleMaterial}, cp);
+    if (trim) trimStats = TileSeamWeld::trimOverlaps(scene.mesh, {&scene.triangleMaterial, &triTile}, cp);
     // each vertex's piece before the weld joins pieces (the T-junction closure tells pieces apart by it); the trim joins nothing
     auto vertexPiece = TileSeamWeld::vertexPieces(scene.mesh);
     std::vector<scratchbox::geometry::Vec3> before;
@@ -156,9 +210,38 @@ int main(int argc, char** argv) {
             if (d > 1e-9) c << a.x << ',' << a.y << ',' << a.z << ',' << d << '\n';
         }
     }
-    TileSeamWeld::compactDropped(scene.mesh, r.keepTriangle, {&scene.triangleMaterial});
+    TileSeamWeld::compactDropped(scene.mesh, r.keepTriangle, {&scene.triangleMaterial, &triTile});
     scratchbox::tile_seam_weld::TileSeamTJunctionStats tjStats;
-    if (tjunctions) tjStats = TileSeamWeld::closeTJunctions(scene.mesh, {&scene.triangleMaterial}, cp, &vertexPiece);
+    if (tjunctions) tjStats = TileSeamWeld::closeTJunctions(scene.mesh, {&scene.triangleMaterial, &triTile}, cp, &vertexPiece);
+    const auto auditFixed = TileSeamWeld::auditSeams(scene.mesh, triTile, mask, {});
+    const auto tFixed = std::chrono::steady_clock::now();
+    // the adaptive close and the strip fill: tile by tile, up to the pair's stated error, where the surfaces agree
+    ap.baseToleranceM = p.weldToleranceM;
+    ap.threads = p.threads;
+    scratchbox::tile_seam_weld::TileSeamAdaptiveStats adStats;
+    if (adaptive) adStats = TileSeamWeld::closeAdaptive(scene.mesh, triTile, tileError, {&scene.triangleMaterial}, ap);
+    const auto tAdaptive = std::chrono::steady_clock::now();
+    scratchbox::tile_seam_weld::TileSeamFillStats fillStats;
+    if (adaptive && fill) {
+        size_t first = 0;
+        fillStats = TileSeamWeld::fillStrips(scene.mesh, triTile, tileError, {&scene.triangleMaterial}, ap, &first);
+        // the bridge is generated: each fill triangle drawn with a labelled copy of its tile's material
+        std::unordered_map<uint32_t, uint32_t> fillMaterial;
+        for (size_t t = first; t < scene.triangleMaterial.size(); ++t) {
+            const uint32_t m = scene.triangleMaterial[t];
+            auto it = fillMaterial.find(m);
+            if (it == fillMaterial.end()) {
+                auto copy = m < scene.materials.size() ? scene.materials[m] : scratchbox::gltf::SceneMaterial{};
+                copy.photoInferredFill = true;
+                copy.provenance = "generated";
+                copy.method = "tile seam strip fill";
+                scene.materials.push_back(copy);
+                it = fillMaterial.emplace(m, static_cast<uint32_t>(scene.materials.size() - 1)).first;
+            }
+            scene.triangleMaterial[t] = it->second;
+        }
+    }
+    const auto auditAfter = TileSeamWeld::auditSeams(scene.mesh, triTile, mask, {});
     const auto t2 = std::chrono::steady_clock::now();
 
     const double creaseDeg = 30.0;
@@ -181,7 +264,12 @@ int main(int argc, char** argv) {
         ", \"dropSlivers\": " + (drop ? "true" : "false") + ", \"seamWeld\": {" + TileSeamWeld::statsJson(r.stats) + "}" +
         (trim ? ", \"overlapTrim\": {" + TileSeamWeld::trimStatsJson(trimStats) + "}" : std::string()) +
         (tjunctions ? ", \"tJunctions\": {" + TileSeamWeld::tJunctionStatsJson(tjStats) + "}" : std::string()) +
-        ", \"ms\": {\"load\": " + std::to_string(ms(t0, t1)) + ", \"weld\": " + std::to_string(ms(t1, t2)) + ", \"write\": " + std::to_string(ms(t2, t3)) + "}}\n";
+        (adaptive ? ", \"adaptive\": {\"capM\": " + std::to_string(ap.capM) + ", " + TileSeamWeld::adaptiveStatsJson(adStats) + "}" : std::string()) +
+        (adaptive && fill ? ", \"stripFill\": {" + TileSeamWeld::fillStatsJson(fillStats) + "}" : std::string()) +
+        ", \"tiles\": {\"count\": " + std::to_string(auditBefore.tiles) + ", \"nodesNamed\": " + std::to_string(nodesNamed) + ", \"withStatedError\": " + std::to_string(tilesWithError) + "}" +
+        ", \"seamAudit\": {\"before\": {" + TileSeamWeld::auditJson(auditBefore) + "}, \"afterFixed\": {" + TileSeamWeld::auditJson(auditFixed) + "}, \"after\": {" + TileSeamWeld::auditJson(auditAfter) + "}}" +
+        ", \"ms\": {\"load\": " + std::to_string(ms(t0, t1)) + ", \"weld\": " + std::to_string(ms(t1, t2)) + ", \"fixed\": " + std::to_string(ms(t1, tFixed)) +
+        ", \"adaptive\": " + std::to_string(ms(tFixed, tAdaptive)) + ", \"fill\": " + std::to_string(ms(tAdaptive, t2)) + ", \"write\": " + std::to_string(ms(t2, t3)) + "}}\n";
     if (!statsPath.empty()) {
         std::ofstream s(statsPath);
         if (!s) { std::cerr << "tile_seam_weld: cannot write " << statsPath << "\n"; return 1; }

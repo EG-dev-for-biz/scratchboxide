@@ -48,6 +48,8 @@ export class ProjectArtifactController {
     private engine: ProjectArtifactGraphEngine;
     private persistTimer: ReturnType<typeof setTimeout> | undefined;
     private workspaceRoot: string | undefined;
+    /** The project's load from the server, once asked for: a save waits for it (see initialize). */
+    private loading: Promise<void> | undefined;
 
     constructor(
         readonly projectId: string,
@@ -71,7 +73,12 @@ export class ProjectArtifactController {
 
     async initialize(sessions: ChatSession[], workspaceRoot?: string): Promise<ProjectArtifactGraph> {
         this.workspaceRoot = workspaceRoot;
-        const loaded = await this.client.load(this.projectId, workspaceRoot);
+        // a change made while the project is still loading (the load can queue behind a scene's model downloads for minutes)
+        // is saved once it has: saved before, the store refuses it (the project was not loaded from the server) and the
+        // change is kept only in the browser
+        const load = this.client.load(this.projectId, workspaceRoot);
+        this.loading = load.then(() => undefined, () => undefined);
+        const loaded = await load;
         this.engine = new ProjectArtifactGraphEngine(loaded);
         this.ensureDefaultCapabilities();
         migrateCanvasSessions(loaded, sessions, this.actor);
@@ -152,6 +159,7 @@ export class ProjectArtifactController {
             clearTimeout(this.persistTimer);
             this.persistTimer = undefined;
         }
+        await this.loading;
         await this.client.save(this.graph, workspaceRoot || this.workspaceRoot);
     }
 
@@ -160,7 +168,7 @@ export class ProjectArtifactController {
             clearTimeout(this.persistTimer);
         }
         this.persistTimer = setTimeout(() => {
-            this.client.save(this.graph, this.workspaceRoot).catch(error => console.warn('Failed to persist project artifact graph', error));
+            (this.loading ?? Promise.resolve()).then(() => this.client.save(this.graph, this.workspaceRoot)).catch(error => console.warn('Failed to persist project artifact graph', error));
         }, 250);
     }
 
