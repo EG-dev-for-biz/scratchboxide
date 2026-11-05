@@ -78,6 +78,9 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
     const [error, setError] = React.useState<string | null>(null);
     const [snapshot, setSnapshot] = React.useState<{ stats: PathTraceSnapshotStats; cached: boolean; lighting: string; at: Date } | null>(null);
     const [status, setStatus] = React.useState<PathTraceStatus | null>(null);
+    // While the camera moves the traced frame fades out and the viewport's own renderer shows the motion.
+    const [moving, setMoving] = React.useState(false);
+    const movingRef = React.useRef(false);
     const latest = React.useRef({ scene, camera, exclude, onShowing });
     latest.current = { scene, camera, exclude, onShowing };
 
@@ -120,7 +123,13 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
                     onStatus: st => {
                         if (cancelled) return;
                         setStatus(st);
-                        if (st.spp > 0) latest.current.onShowing(true);
+                        if (st.spp > 0 && !movingRef.current) latest.current.onShowing(true);
+                    },
+                    onMotion: m => {
+                        if (cancelled) return;
+                        movingRef.current = m;
+                        setMoving(m);
+                        latest.current.onShowing(!m);
                     }
                 });
                 handleRef.current = handle;
@@ -146,7 +155,11 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
             <canvas
                 ref={overlayRef}
                 data-testid="path-trace-overlay"
-                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', pointerEvents: 'none', zIndex: 30, visibility: showingFrame ? 'visible' : 'hidden' }}
+                style={{
+                    position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', pointerEvents: 'none', zIndex: 30,
+                    visibility: showingFrame ? 'visible' : 'hidden',
+                    opacity: moving ? 0 : 1, transition: moving ? 'none' : 'opacity 160ms ease-out'
+                }}
             />
             {/* An aside, not a div: the viewport frame stretches every child div over itself (.sb-3d-viewport-frame > div). */}
             <aside style={hud} data-testid="scene-path-trace-hud">

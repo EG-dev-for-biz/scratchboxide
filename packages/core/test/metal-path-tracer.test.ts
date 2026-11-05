@@ -638,7 +638,17 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
             expect(scaledFrame).toMatchObject({ renderWidth: 80, renderHeight: 60, width: 160, height: 120, displayWidth: 160, displayHeight: 120 });
             expect(scaledFrame.upscaleMs).toBeGreaterThan(0);
             expect(session.readFrame()!.rgba.length).toBe(160 * 120 * 4);
-            // A view with a bad size is refused without killing the session.
+            // Pausing (the viewer's camera is moving) stops the samples: no frame of the view follows the reply.
+            const busy = await session.setView({ ...view, targetSpp: 1_000_000, camera: { ...sphereCamera, position: [0.06, 0.5, 4] } });
+            await new Promise<void>((resolve, reject) => {
+                const timer = setTimeout(() => reject(new Error('no frame before the pause')), 20_000);
+                session.on('frame', f => { if (f.seq === busy.seq) { clearTimeout(timer); resolve(); } });
+            });
+            const paused = await session.pause();
+            expect(paused).toMatchObject({ seq: busy.seq });
+            await new Promise(r => setTimeout(r, 800));
+            expect(session.latestFrame()!.spp).toBeLessThanOrEqual(paused.spp);
+                        // A view with a bad size is refused without killing the session.
             await expect(session.setView({ ...view, width: 2 })).rejects.toThrow(/between 8 and 8192/);
             expect(session.alive).toBe(true);
         } finally {

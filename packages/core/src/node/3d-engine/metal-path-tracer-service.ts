@@ -375,6 +375,12 @@ export class MetalPathTraceSession extends EventEmitter {
         return this.command({ op: 'view', ...view }, 'view');
     }
 
+    /** Stops sampling the current view (the camera is moving); its newest frame stays readable, the next view resumes. */
+    async pause(): Promise<{ spp: number }> {
+        this.lastUsed = Date.now();
+        return this.command({ op: 'pause' }, 'paused');
+    }
+
     close(): void {
         if (!this.child || this.exited) return;
         try {

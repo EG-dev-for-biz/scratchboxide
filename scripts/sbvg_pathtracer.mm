@@ -552,6 +552,7 @@ int renderOnce(const std::string& configPath) {
  *       the eye moved more than a tenth of the scene radius or the LOD parameters changed
  *       -> {"event":"view","seq",..} then {"event":"frame","seq","spp","rays","gpuMs",..} as samples accumulate;
  *       each frame event means <dir>/frame.rgba holds the display-ready image (width * height * 4 bytes)
+ *   {"op":"pause"}  stops sampling the current view (the camera is moving) -> {"event":"paused","seq","spp"}
  *   {"op":"close"}  (or EOF) exits.
  * Errors come back as {"event":"error","message":..}; a failed open leaves the session without a file.
  */
@@ -663,6 +664,7 @@ private:
             const std::string op = cmd["op"].asString("");
             if (op == "open") open(cmd);
             else if (op == "view") view(cmd);
+            else if (op == "pause") pause();
             else if (op == "close") closed_ = true;
             else throw std::runtime_error("unknown op: " + op);
         } catch (const std::exception& e) {
@@ -801,6 +803,12 @@ private:
           << ",\"lighting\":" << jsonString(lighting_.lighting.mode == metalpt::Lighting::Mode::Sky ? "sky" : "studio")
           << ",\"lights\":" << lightsJson(tracer_->lightSet(), tracer_->lightSampling()) << ",\"targetSpp\":" << targetSpp_ << "}";
         emit(s.str());
+    }
+
+    /** Stops sampling (the viewer's camera is moving); the newest frame stays, and the next view starts afresh. */
+    void pause() {
+        frameActive_ = false;
+        emit("{\"event\":\"paused\",\"seq\":" + std::to_string(seq_) + ",\"spp\":" + std::to_string(tracer_ ? tracer_->samplesPerPixel() : 0) + "}");
     }
 
     /**

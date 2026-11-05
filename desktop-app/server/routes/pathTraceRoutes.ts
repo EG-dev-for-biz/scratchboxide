@@ -279,6 +279,20 @@ export function createPathTraceRouter(service: MetalPathTracerService, ctx: Rout
         }
     });
 
+    router.post('/pause', async (req: Request, res: Response) => {
+        const session = sessions.get(String((req.body || {}).sessionId ?? ''));
+        if (!session || !session.alive) {
+            res.status(404).json({ success: false, error: 'unknown or closed path tracing session; open it again' });
+            return;
+        }
+        try {
+            const paused = await session.pause();
+            res.json({ success: true, ...paused });
+        } catch (err) {
+            fail(res, err);
+        }
+    });
+
     router.post('/close', (req: Request, res: Response) => {
         const id = String((req.body || {}).sessionId ?? '');
         const session = sessions.get(id);
