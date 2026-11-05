@@ -43,3 +43,16 @@ The sheet of close-ups is `k-one-material-closeups.jpg` in the side-session note
 Sheet: `k-one-material-closeups-v2.jpg` in the side-session notes folder. The fence pattern on Penn 2's dark panels is gone; a faint plate pattern remains on its mid-grey panels (the look-pick confirmed that set, drawn at 45% grain).
 
 Still open: Penn 2's fitted windows are drawn matte (roughness 0.5-0.6). The vision model reads the two classes inside them as interior recesses and blinds, not glass, so the smooth-read curve does not apply there. The benchmark's `result.json` for a place can keep an older build's commit and model after a rebuild (seen on feat/penn2); the run folder and the twin were the new build's.
+
+## Update: window openings as the pane (branch 03d25b29)
+The finish prompt now asks, for the classes inside fitted windows, for the finish of the pane that closes the opening, and such a class with no confident reading is drawn at the opening prior (a smooth dielectric). On Penn 2 the vision model then read both opening classes as window glazing at confidence 85-90.
+
+| uncached, isolate l2 on both sides | main f4989130 | branch 03d25b29 |
+|---|---|---|
+| Penn 2 in windows, roughness / metalness | 0.08 / 0.06 | 0.09 / 0.02 |
+| Penn 2 repeat spread | 0.231 | 0.094 |
+| ESB in windows, roughness / metalness | 0.14 / 0.08 | 0.11 / 0.06 |
+| ESB repeat spread | 0.168 | 0.040 |
+| holes | 1.28% / 0.72% | 1.28% / 0.72% |
+
+Sheet: `k-one-material-closeups-v3.jpg`. Still open: a faint dotted pattern on Penn 2's dark spandrel panels in this build (the look-pick confirmed Metal015 at high confidence, so the model allowed 89% of its grain); the look-pick's choice varies from build to build.
