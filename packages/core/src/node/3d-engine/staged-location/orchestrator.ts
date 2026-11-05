@@ -203,6 +203,7 @@ import { recordDiscoveredObjects } from '../../asset-store/object-catalog';
 import { genAiEnhanceClient, type EnhanceModelClient } from './texture-enhance';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
+import { CROP_HALF_M, FOOTPRINT_MODEL_TOKEN, FOOTPRINT_MODEL_VERSION, decideFootprint, kFootprint, modelSeed, type FootprintDecision, type GrownFootprintResult, type KFootprint, type growFootprintModel } from './footprint-model';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
@@ -437,6 +438,7 @@ export function scanDerivedFootprint(structure: Pick<StructurePickResult, 'outli
 export function footprintSource(buildings: ReadonlyArray<Pick<VectorBuilding, 'provenance'>>): string {
     if (buildings.length && buildings.every(b => b.provenance === undefined)) return 'Google vector footprint';
     if (!buildings.length || buildings.some(b => b.provenance === SCAN_FOOTPRINT_TOKEN)) return 'scan outline';
+    if (buildings.some(b => b.provenance?.startsWith(FOOTPRINT_MODEL_TOKEN))) return 'footprint model outline (photo-inferred)';
     return [...new Set(buildings.map(b => b.provenance ?? 'Google vector footprint'))].join(' + ');
 }
 
@@ -626,6 +628,13 @@ export interface StagedLocationDeps {
      * app's deps (createStagedLocationDeps) provide them; without them a procedural build degrades with that reason.
      */
     pipelineI?: { generator: () => StationImageGenerator; model: (name?: string) => ModelClient };
+    /**
+     * The footprint model (footprint-model.ts): the building's outline read from the photo tiles, taken where the vector
+     * footprint is missing, partial or merges the neighbours, and the judge of whether the tiles confirm it (pipeline K's
+     * footprint). The app's deps provide it (unavailable, and saying why, without its weights); stand-in deps leave it out
+     * and the footprint stays as it was.
+     */
+    footprintModel?: { grow: typeof growFootprintModel; unavailable: () => string | undefined };
     /** Vector building footprints near a place (facade grammar's independent check); default: Google vector feature tiles. */
     footprints?: (place: { lat: number; lng: number }, radiusM: number) => Promise<FootprintSource>;
     /** Builds a figure spec natively and returns its GLB (metres, +Y up, front +Z, origin at the centre of its base); the reference object builder's native build by default. */
@@ -2609,9 +2618,56 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         // it stays undefined, not {used:false}, when none was attempted at all (no credentials, vector-less test
         // fixtures) — the scan fallback only replaces a lookup that genuinely ran and found nothing, never a lookup
         // that was never tried, so it does not change behaviour anywhere vector evidence is simply not in the picture.
-        const eBuildings = structure?.vectorFootprint?.used && t.vector
+        const vectorBuildings = structure?.vectorFootprint?.used && t.vector
             ? t.vector.raster.buildings.filter(b => structure.vectorFootprint!.featureIds.includes(b.id))
             : (() => { const b = structure?.vectorFootprint && !structure.vectorFootprint.used ? scanDerivedFootprint(structure) : undefined; return b ? [b] : []; })();
+        // the footprint model (footprint-model.ts) reads the structure's outline from the photo tiles, at the place (else
+        // inside Google's outline of the structure: modelSeed), window by window past its 64 m crop: where Google's vector footprint is missing, partial or
+        // merges the neighbours its outline stands in (labelled photo-inferred), and it judges whether the tiles confirm
+        // Google's outline (pipeline K's footprint, kFootprint)
+        let footprintDecision: FootprintDecision | undefined, footprintReading: GrownFootprintResult | undefined;
+        /** Google's outline of the structure as loops (a modelled building traced from above), [] when the scan's stands in. */
+        const vectorPlan = structure?.vectorFootprint?.used ? footprintLoops(vectorBuildings) : { loops: [] as Vec2[][], modelled: false };
+        const modelFootprint = await (async (): Promise<VectorBuilding | undefined> => {
+            if (!structure || !deps.footprintModel) return undefined;
+            const why = deps.footprintModel.unavailable();
+            if (why) { run.note(PROVENANCE.photoInferred, `footprint model not used: ${why}`); return undefined; }
+            try {
+                // the windows need the tiles CROP_HALF_M (plus the native window's margin) past the structure: the build's own
+                // extraction when it reaches that far, else a wider cut around the place, cached like every extraction
+                // the place in the build's frame (its extraction is anchored there or near it)
+                const placeAt = anchorOffset({ lat: placeValue!.lat, lng: placeValue!.lng, elevation: extraction.originEllipsoidalHeightM }, { lat: extraction.geoAnchor.lat, lng: extraction.geoAnchor.lng, elevation: extraction.originEllipsoidalHeightM });
+                const seed = modelSeed([placeAt[0], placeAt[2]], vectorPlan.loops);
+                const b = structure.bounds, extent = [[b.minX, b.minZ], [b.maxX, b.minZ], [b.minX, b.maxZ], [b.maxX, b.maxZ], seed, ...vectorPlan.loops.flat()];
+                const reach = Math.max(...extent.map(([x, z]) => Math.hypot(x, z))) + CROP_HALF_M + 16;
+                const own = extraction.coveredRadiusM >= reach;
+                const cut = own ? extraction : (await extractCached(Math.min(reach, 200), { signal: ctx.signal ?? new AbortController().signal, progress: () => undefined })).extraction;
+                // the cut's frame against the build's (the same when the build's own extraction is read)
+                const toBuild = own ? [0, 0, 0] : anchorOffset({ lat: cut.geoAnchor.lat, lng: cut.geoAnchor.lng, elevation: cut.originEllipsoidalHeightM }, { lat: extraction.geoAnchor.lat, lng: extraction.geoAnchor.lng, elevation: extraction.originEllipsoidalHeightM });
+                const at: Vec2 = [seed[0] - toBuild[0], seed[1] - toBuild[2]];
+                const key = stageKey(FOOTPRINT_MODEL_VERSION, cut.texturedGlb, at[0].toFixed(2), at[1].toFixed(2));
+                const workDir = path.join(cache.dir, 'footprint_model', key.slice(0, 24));
+                const res = await deps.footprintModel.grow({ texturedGlb: cut.texturedGlb, seed: at, workDir, ...(ctx.signal ? { signal: ctx.signal } : {}) });
+                const shift = (r: Vec2[]) => r.map(p => [p[0] + toBuild[0], p[1] + toBuild[2]] as Vec2);
+                if (res.ring) res.ring = shift(res.ring);
+                for (const w of res.windows) { w.at = [w.at[0] + toBuild[0], w.at[1] + toBuild[2]]; if (w.result.ring) w.result.ring = shift(w.result.ring); }
+                footprintReading = res;
+                const d = decideFootprint(vectorPlan.loops.length ? vectorPlan.loops : undefined, res);
+                footprintDecision = d;
+                cache.writeRunNote(runId, 'footprint_model', { version: FOOTPRINT_MODEL_VERSION, place: [placeAt[0], placeAt[2]], seed, cut: own ? 'the build\'s extraction' : cut.texturedGlb, toBuild: [toBuild[0], toBuild[2]], workDir, vectorLoops: vectorPlan.loops, vectorModelled: vectorPlan.modelled, decision: d, ring: res.ring ?? null, areaM2: res.areaM2 ?? null, meanProbInside: res.meanProbInside ?? null, truncated: res.truncated, windows: res.windows.map(w => ({ at: w.at, ok: w.result.ok, areaM2: w.result.areaM2 ?? null, meanProbInside: w.result.meanProbInside ?? null })) });
+                run.note(PROVENANCE.photoInferred, `footprint model (${FOOTPRINT_MODEL_VERSION}, ${res.windows.length} window${res.windows.length === 1 ? '' : 's'}): ${d.use === 'model' ? 'used' : 'not used'}: ${d.reason}`);
+                if (d.use !== 'model' || !res.ring) return undefined;
+                return { id: 'footprint-model', parts: [], extruded: [{ loops: [res.ring], heightM: structure.heightM }], provenance: `${FOOTPRINT_MODEL_TOKEN}-c${(res.meanProbInside ?? 0).toFixed(2)}` };
+            } catch (err) {
+                if (isAbort(err) || ctx.signal?.aborted) throw err;
+                run.note(PROVENANCE.photoInferred, `footprint model failed, the footprint stays as it was: ${errorMessage(err)}`);
+                cache.writeRunNote(runId, 'footprint_model', { version: FOOTPRINT_MODEL_VERSION, failed: true, reason: errorMessage(err) });
+                return undefined;
+            }
+        })();
+        const eBuildings = modelFootprint ? [modelFootprint] : vectorBuildings;
+        /** Pipeline K's footprint, judged against the tiles (footprint-model.ts kFootprint); undefined outside an isolated K build. */
+        const kFoot: KFootprint | undefined = pipelineK && structure ? kFootprint(vectorPlan.loops, footprintDecision, footprintReading?.ring, footprintReading?.meanProbInside, structure.outline) : undefined;
         // the shape program trial (SCRATCHBOX_STAGED_SHAPE_PROGRAM) shapes from the tree-free scan: a vector footprint only
         // bounds the height map where the two agree, so a footprint that disagrees (or none) does not send the build back
         const shapeMode = pipelineE ? stagedShapeProgram() : undefined;
@@ -4572,14 +4628,17 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             {
                 // pipeline K: the base cleaned by the structure's footprint (Google's vector footprint, else the scan's own outline),
                 // named by where its loops come from
-                const kBase = pipelineK && isolateMode && structure ? (() => {
-                    const vec = footprintLoops(eBuildings);
-                    return vec.loops.length ? { loops: vec.loops, source: `${footprintSource(eBuildings)}${vec.modelled ? ' (modelled building, traced from above)' : ''}` } : { loops: [structure.outline], source: 'scan outline' };
+                // judged against the tiles where the footprint model read them (kFootprint): Google's outline where the tiles confirm
+                // it, the model's where it stands in for Google's, else the scan's outline
+                const kBase = pipelineK && isolateMode && structure && kFoot ? (() => {
+                    if (kFoot.from === 'scan') return { loops: kFoot.loops, source: 'scan outline', trusted: false, why: kFoot.reason };
+                    if (kFoot.from === 'model') return { loops: kFoot.loops, source: 'footprint model outline (photo-inferred)', trusted: kFoot.trusted, why: kFoot.reason };
+                    return { loops: kFoot.loops, source: `${footprintSource(vectorBuildings)}${vectorPlan.modelled ? ' (modelled building, traced from above)' : ''}${kFoot.trusted ? ', confirmed by the tiles' : ''}`, trusted: kFoot.trusted, why: kFoot.reason };
                 })() : undefined;
                 const kLoops = kBase?.loops;
                 // pipeline K's polish (the lattice, clip and infill: a minute and more) on a worker thread, in a heap of its own
                 // (remesh-worker-pool.ts), unless SCRATCHBOX_REMESH_WORKERS=0; a lighter polish stays here, short of a thread's start
-                const polishInput: PolishJobInput = { clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: stepOn('polish.lattice', true), photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(wallGrammar ? { wallGrammar } : {}), ...(wallSheets ? { walls: wallSheets } : {}), ...(pipelineK && r.rawClayGlb ? { rawScan: r.rawClayGlb } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops && stepOn('polish.base', true) ? { base: { loops: kLoops, groundY: structure!.groundY, ...(kBase?.source === 'scan outline' ? { scanOutline: true } : {}) } } : {}), ...(pipelineK && stepOn('polish.seal', process.env.SCRATCHBOX_K_SEAL?.trim() === '1') ? { seal: true } : {}), ...(pipelineK && stepOn('polish.clip', process.env.SCRATCHBOX_K_CLIP?.trim() !== '0') ? { clip: true } : {}), ...(pipelineK && stepOn('polish.infill', process.env.SCRATCHBOX_K_INFILL?.trim() !== '0') ? { infill: true } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_LATTICE_CUT?.trim() === '1' ? { latticeCut: true } : {}), ...(cpuShare ? { threads: cpuShare.threads } : {}), cleanup: stepOn('polish.cleanup', remeshCleanupEnabled()), orient: stepOn('polish.orient', remeshOrientEnabled()) };
+                const polishInput: PolishJobInput = { clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: stepOn('polish.lattice', true), photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(wallGrammar ? { wallGrammar } : {}), ...(wallSheets ? { walls: wallSheets } : {}), ...(pipelineK && r.rawClayGlb ? { rawScan: r.rawClayGlb } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops && stepOn('polish.base', true) ? { base: { loops: kLoops, groundY: structure!.groundY, ...(kBase?.source === 'scan outline' ? { scanOutline: true } : {}), ...(kBase?.trusted ? { trusted: true } : {}) } } : {}), ...(pipelineK && stepOn('polish.seal', process.env.SCRATCHBOX_K_SEAL?.trim() === '1') ? { seal: true } : {}), ...(pipelineK && stepOn('polish.clip', process.env.SCRATCHBOX_K_CLIP?.trim() !== '0') ? { clip: true } : {}), ...(pipelineK && stepOn('polish.infill', process.env.SCRATCHBOX_K_INFILL?.trim() !== '0') ? { infill: true } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_LATTICE_CUT?.trim() === '1' ? { latticeCut: true } : {}), ...(cpuShare ? { threads: cpuShare.threads } : {}), cleanup: stepOn('polish.cleanup', remeshCleanupEnabled()), orient: stepOn('polish.orient', remeshOrientEnabled()) };
                 const onPolishStep = (step: string, state: 'running' | 'done' | 'failed') => logStep(`polish.${step}`, state);
                 // the native infill runs inside the synchronous polish, so its binary is built first (remesh-polish-native.ts)
                 const pol = await timed('polish', async () => { await ensureNativePolishFor(polishInput); return pipelineK && remeshWorkersEnabled() ? runRemeshJob<PolishedRemesh>({ kind: 'polish', input: polishInput }, { signal: io.signal, onStep: onPolishStep }) : polishRemesh({ ...polishInput, onStep: onPolishStep }); });
@@ -4598,7 +4657,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         notes.write('pipeline_k_streetview_score', { failed: true, reason: errorMessage(err) });
                     }
                 }
-                if (kBase) notes.write('pipeline_k_base', { loops: kBase.loops, groundY: structure!.groundY, footprint: kBase.source, report: pol.stats.base ?? null });
+                if (kBase) notes.write('pipeline_k_base', { loops: kBase.loops, groundY: structure!.groundY, footprint: kBase.source, trusted: kBase.trusted, why: kBase.why, report: pol.stats.base ?? null });
                 if (pol.clayGlb !== r.clayGlb) {
                     notes.note(PROVENANCE.remeshed, `remesh polish (${REMESH_POLISH_VERSION}): ${describePolish(pol.stats)}`);
                     r = { ...r, cacheKey: pol.cacheKey, clayGlb: pol.clayGlb, ...(pol.texturedGlb ? { texturedGlb: pol.texturedGlb } : {}) };
@@ -4695,9 +4754,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         if (district) remeshRequest = districtRequest;
                         isolateDegradations.push(run.degrade(record('remesh', 'isolate_mismatch', {
                             part: { description: 'the isolated structure' }, intended: 'a scan-fitted rebuild of the structure picked',
-                            fellTo: district ? 'the remeshed district around it, whole, without a rebuild' : 'the isolated remesh, without a rebuild',
+                            fellTo: district ? (pipelineK && kFoot?.trusted ? 'the remeshed district around it, cut to the footprint the tiles confirm, without a rebuild' : 'the remeshed district around it, whole, without a rebuild') : 'the isolated remesh, without a rebuild',
                             provenanceAfter: PROVENANCE.remeshed,
-                            reason: district ? `${mismatch}, so the district around it is shown whole instead of a partial isolate, and nothing is rebuilt`
+                            reason: district ? (pipelineK && kFoot?.trusted ? `${mismatch}, so the district around it is remeshed and cut to the ${kFoot.from === 'model' ? 'footprint model\'s outline' : 'Google footprint'}, which the tiles confirm, instead of a partial isolate; nothing is rebuilt` : `${mismatch}, so the district around it is shown whole instead of a partial isolate, and nothing is rebuilt`)
                                 : `${mismatch}; remeshing the district failed too (${errorMessage(districtErr)}), so the isolated remesh stands, without a rebuild`,
                             ...(districtErr ? { cause: districtErr } : {}), transient: false, runId, now: now()
                         })));

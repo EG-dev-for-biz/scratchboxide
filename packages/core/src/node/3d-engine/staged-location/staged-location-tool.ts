@@ -60,6 +60,7 @@ import { StageCache, stagedWorkspaceRoot } from './stage-cache';
 import { reportStagedSwitchProblems, RETIRED_PIPELINE_LETTERS, STAGED_DISTRICT_MODES, stagedBuildingPipelineEnv } from './staged-switches';
 import { genAiEnhanceClient } from './texture-enhance';
 import { lightingCorrectionEnabled, lightingModels } from './texture-lighting';
+import { footprintModelUnavailable, growFootprintModel } from './footprint-model';
 import { bakeTileDetail, defaultSwatchServices, subjectSwatchLibrary } from '../../spatial/tile-detail-bake';
 import {
     STAGE_IDS, runStagedLocation, StagedLocationHardFailure, type StageId, type StagedExtraction, type StagedLocationContext, type StagedLocationDeps,
@@ -267,6 +268,8 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         // seed) or Trellis (I, best of six seeds) on Fal.ai makes the model; made on first use, so a build without FAL_KEY
         // fails pipeline I/J with that reason
         pipelineI: { generator: () => createDefaultStationImageGenerator({ workspaceRoot: cache.dir }), model: (name?: string) => name === 'meshy' ? createFalMeshyClient() : createFalTrellisClient() },
+        // the footprint model: the building's outline from the photo tiles, and the judge of whether they confirm Google's
+        footprintModel: { grow: growFootprintModel, unavailable: footprintModelUnavailable },
         // pipeline K's material regions: a texture library set per appearance class, fetched from the library bucket
         // and the swatch detail bake (off unless asked): the building's survey swatches baked into the twin's atlases
         pipelineK: {
