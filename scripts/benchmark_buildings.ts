@@ -84,6 +84,8 @@ interface BuildResult {
     generated?: GeneratedShare;
     triangles?: number;
     model?: string;
+    /** The run's own count of its model calls (model_calls.json): spend where the app has a price, tokens where it has none. */
+    modelCalls?: { requests: number; failed: number; estimatedUsd: number; unpriced: Array<{ model: string; promptTokens: number; outputTokens: number }> };
     views: Array<{ headingDeg: number; png: string }>;
     loadAtStart: number;
 }
@@ -347,6 +349,16 @@ function measureGenerated(glbBytes: Uint8Array): GeneratedShare & { triangles: n
     return { share: areaM2 > 0 ? generatedM2 / areaM2 : 0, areaM2: Math.round(areaM2), generatedM2: Math.round(generatedM2), byKind, triangles };
 }
 
+/** The run's model calls, read from its copied records. */
+function modelCalls(r: BuildResult, runDir: string): void {
+    const m = readJson(path.join(runDir, 'model_calls.json'));
+    if (!m) return;
+    r.modelCalls = {
+        requests: m.requests, failed: m.failed, estimatedUsd: m.estimatedUsd ?? 0,
+        unpriced: (m.unpriced ?? []).map((model: string) => ({ model, promptTokens: m.byModel?.[model]?.promptTokens ?? 0, outputTokens: (m.byModel?.[model]?.outputTokens ?? 0) + (m.byModel?.[model]?.thinkingTokens ?? 0) }))
+    };
+}
+
 /** The outcome and the degradations, as the tool reported them (its status, and each degradation's stage and reason). */
 function fromToolResult(r: BuildResult, result: any): void {
     const payload = result?.resultPayload ?? {};
@@ -416,6 +428,7 @@ async function buildOne(side: Side, place: Place, outDir: string, opts: { keepCa
         base.runId = runId;
         const run = path.join(side.checkout, '.scratchbox', 'cache', 'staged_location', 'runs', runId);
         fs.cpSync(run, path.join(dir, 'run'), { recursive: true });
+        modelCalls(base, path.join(dir, 'run'));
         const rec = readJson(path.join(run, 'stages.json'));
         base.resolvedAddress = rec?.place?.formattedAddress;
         base.stages = rec?.statuses;
@@ -459,7 +472,8 @@ function appendLedger(checkout: string, r: BuildResult, resultFile: string): voi
             features: {
                 holeShare: r.holeShare, untexturedShare: r.untexturedShare, maxViewHoleShare: r.maxViewHoleShare, maxViewUntexturedShare: r.maxViewUntexturedShare,
                 largestHoleRegionM2: r.largestHoleRegionM2, generatedShare: r.generated?.share, surfaceAreaM2: r.generated?.areaM2, triangles: r.triangles,
-                buildMs: r.buildMs, wallMs: r.wallMs, loadAtStart: r.loadAtStart
+                buildMs: r.buildMs, wallMs: r.wallMs, loadAtStart: r.loadAtStart,
+                modelRequests: r.modelCalls?.requests, modelFailed: r.modelCalls?.failed, modelUsd: r.modelCalls?.estimatedUsd, unpricedModels: r.modelCalls?.unpriced
             },
             decision: { uncached: r.cacheEmptiedBeforeBuild, timelineCached: r.timelineCached, degraded: r.degradations ?? [], defectsFlagged: r.defectsFlagged },
             proof: { result: resultFile, runRecord: r.runId ? path.join(path.dirname(resultFile), 'run', 'stages.json') : undefined, model: r.model }
@@ -496,10 +510,11 @@ function sheet(outDir: string, places: Place[]): void {
         const dir = path.join(outDir, r.side, r.place.slug);
         const tool = readJson(path.join(dir, 'tool_result.json'));
         if (!tool || r.outcome === 'failed' && !r.runId) continue;
-        const before = JSON.stringify([r.outcome, r.degradations]);
+        const before = JSON.stringify([r.outcome, r.degradations, r.modelCalls]);
         fromToolResult(r, tool);
         if (!r.model && r.outcome !== 'failed') r.outcome = 'failed';
-        if (JSON.stringify([r.outcome, r.degradations]) !== before) fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(r, null, 1));
+        modelCalls(r, path.join(dir, 'run'));
+        if (JSON.stringify([r.outcome, r.degradations, r.modelCalls]) !== before) fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(r, null, 1));
     }
     const sides = readJson(path.join(outDir, 'sides.json')) as Side[] | undefined;
     const manifest = { places: places.map(p => p.slug), sides: sides?.map(s => s.label) ?? [...new Set(results(outDir).map(r => r.side))], results: results(outDir) };

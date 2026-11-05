@@ -13,7 +13,7 @@ import sys
 from PIL import Image, ImageDraw, ImageFont
 
 VIEW_W, VIEW_H = 200, 250
-CAPTION_H = 118
+CAPTION_H = 136
 LABEL_W = 230
 PAD = 10
 BG = (246, 246, 244)
@@ -104,7 +104,7 @@ def main(out):
         x = PAD + LABEL_W + i * (block_w + PAD)
         d.text((x, 46), f'{side} @ {commit}{dirty}', font=f_head, fill=INK)
     y = head_h
-    md = ['| Building | Kind | Side | Outcome | Holes | Untextured | Generated | Build time | Run |', '|---|---|---|---|---|---|---|---|---|']
+    md = ['| Building | Kind | Side | Outcome | Holes | Untextured | Generated | Build time | Model $ (priced) | Run |', '|---|---|---|---|---|---|---|---|---|---|']
     for slug in slugs:
         first = next(by[(s, slug)] for s in sides if (s, slug) in by)
         place = first['place']
@@ -162,6 +162,11 @@ def main(out):
             if base is not r and base is not None:
                 dt, col = delta(base.get('buildMs'), r.get('buildMs'), scale=1 / 60000, unit='min')
                 d.text((x + d.textlength(t, font=f_body), cy + 1), dt, font=f_small, fill=col)
+            mc = r.get('modelCalls')
+            if mc:
+                unpriced = ', '.join(f"{u['model']} {u['promptTokens'] / 1000:.0f}k in / {u['outputTokens'] / 1000:.0f}k out unpriced" for u in mc.get('unpriced', []))
+                cy += 18
+                d.text((x, cy), f"model calls {mc['requests']} ({mc['failed']} failed), ${mc['estimatedUsd']:.2f} priced" + (f"; {unpriced}" if unpriced else ''), font=f_small, fill=MUTED)
             cy += 20
             # the outside check's summary first (what is wrong where), then the degraded stages counted by stage
             counts = {}
@@ -173,7 +178,7 @@ def main(out):
             for line in wrap(d, notes, f_small, block_w)[:3]:
                 d.text((x, cy), line, font=f_small, fill=MUTED)
                 cy += 15
-            md.append(f"| {place['name']} | {place['kind']} | {side} | {r['outcome']} | {pct(r.get('holeShare'))} | {pct(r.get('untexturedShare'))} | {pct(gen)} | {minutes(r.get('buildMs'))} | {r.get('runId') or '—'} |")
+            md.append(f"| {place['name']} | {place['kind']} | {side} | {r['outcome']} | {pct(r.get('holeShare'))} | {pct(r.get('untexturedShare'))} | {pct(gen)} | {minutes(r.get('buildMs'))} | {'—' if not r.get('modelCalls') else '$%.2f' % r['modelCalls']['estimatedUsd']} | {r.get('runId') or '—'} |")
         y += row_h
         d.line([PAD, y - PAD // 2, W - PAD, y - PAD // 2], fill=(220, 220, 218))
     legend = ("Views look toward headings 45, 135, 225 and 315 at a 15-degree pitch, the texture as baked (path tracer). holes: building pixels showing a wall's back or the sky through it; untextured: pixels drawn with no photo (clay); "
