@@ -346,6 +346,14 @@ function measureGenerated(glbBytes: Uint8Array): GeneratedShare & { triangles: n
     return { share: areaM2 > 0 ? generatedM2 / areaM2 : 0, areaM2: Math.round(areaM2), generatedM2: Math.round(generatedM2), byKind, triangles };
 }
 
+/** The outcome and the degradations, as the tool reported them (its status, and each degradation's stage and reason). */
+function fromToolResult(r: BuildResult, result: any): void {
+    const payload = result?.resultPayload ?? {};
+    r.outcome = typeof payload.status === 'string' ? payload.status : (result?.success ? 'complete' : 'failed');
+    if (!result?.success) r.reason = result?.error?.message ?? 'the tool failed';
+    if (Array.isArray(payload.degradations)) r.degradations = payload.degradations.map((d: any) => `${d.stage}: ${d.reason ?? d.reasonCode}`);
+}
+
 async function renderViews(glbPath: string, dir: string, log: (s: string) => void): Promise<Array<{ headingDeg: number; png: string }>> {
     const tracer = new NativeTilePathTracerService();
     const views: Array<{ headingDeg: number; png: string }> = [];
@@ -394,10 +402,8 @@ async function buildOne(side: Side, place: Place, outDir: string, opts: { keepCa
         server = await startServer(side.checkout, path.join(dir, 'server.log'));
         const out = await runBuild(server, side.checkout, place, path.join(dir, 'progress.log'));
         runIds = out.runIds;
-        const payload = out.result?.resultPayload ?? {};
-        base.outcome = typeof payload.outcome === 'string' ? payload.outcome : (out.result?.success ? 'complete' : 'failed');
-        if (!out.result?.success) base.reason = out.result?.error?.message ?? 'the tool failed';
-        fs.writeFileSync(path.join(dir, 'tool_result.json'), JSON.stringify(out.result, null, 1).slice(0, 2_000_000));
+        fs.writeFileSync(path.join(dir, 'tool_result.json'), JSON.stringify(out.result, null, 1));
+        fromToolResult(base, out.result);
     } catch (err) {
         base.reason = (err as Error).message;
     } finally {
@@ -416,7 +422,6 @@ async function buildOne(side: Side, place: Place, outDir: string, opts: { keepCa
         const finish = timeline.find((t: any) => t.stage === 'finish');
         if (finish) base.buildMs = finish.tMs;
         base.timelineCached = timeline.filter((t: any) => t.cached && t.stage !== 'finish').map((t: any) => t.stage);
-        base.degradations = timeline.filter((t: any) => t.status === 'degraded').map((t: any) => `${t.stage}: ${t.reason ?? t.reasonCode ?? 'degraded'}`);
         const seen = readJson(path.join(run, 'pipeline_k_visible_defects_textured.json')) ?? readJson(path.join(run, 'pipeline_k_visible_defects.json'));
         if (seen) Object.assign(base, {
             holeShare: seen.holeShare, untexturedShare: seen.clayShare, maxViewHoleShare: seen.maxViewHoleShare, maxViewUntexturedShare: seen.maxViewClayShare,
@@ -485,6 +490,16 @@ function results(outDir: string): BuildResult[] {
 }
 
 function sheet(outDir: string, places: Place[]): void {
+    // results written before fromToolResult existed (or by an older copy of this script) are read again from the tool's own answer
+    for (const r of results(outDir)) {
+        const dir = path.join(outDir, r.side, r.place.slug);
+        const tool = readJson(path.join(dir, 'tool_result.json'));
+        if (!tool || r.outcome === 'failed' && !r.runId) continue;
+        const before = JSON.stringify([r.outcome, r.degradations]);
+        fromToolResult(r, tool);
+        if (!r.model && r.outcome !== 'failed') r.outcome = 'failed';
+        if (JSON.stringify([r.outcome, r.degradations]) !== before) fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(r, null, 1));
+    }
     const sides = readJson(path.join(outDir, 'sides.json')) as Side[] | undefined;
     const manifest = { places: places.map(p => p.slug), sides: sides?.map(s => s.label) ?? [...new Set(results(outDir).map(r => r.side))], results: results(outDir) };
     fs.writeFileSync(path.join(outDir, 'sheet.json'), JSON.stringify(manifest, null, 1));

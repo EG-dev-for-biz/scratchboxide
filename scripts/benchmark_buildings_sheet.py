@@ -96,7 +96,7 @@ def main(out):
     img = Image.new('RGB', (W, H), BG)
     d = ImageDraw.Draw(img)
     f_title, f_head, f_body, f_small = font(26, True), font(17, True), font(14), font(12)
-    d.text((PAD, 12), 'Building benchmark: pipeline K, uncached, four views (headings 45/135/225/315, pitch 15)', font=f_title, fill=INK)
+    d.text((PAD, 12), 'Building benchmark: pipeline K, uncached', font=f_title, fill=INK)
     for i, side in enumerate(sides):
         rs = [r for r in manifest['results'] if r['side'] == side]
         commit = rs[0]['commit'][:8] if rs else '?'
@@ -170,7 +170,7 @@ def main(out):
             md.append(f"| {place['name']} | {place['kind']} | {side} | {r['outcome']} | {pct(r.get('holeShare'))} | {pct(r.get('untexturedShare'))} | {pct(gen)} | {minutes(r.get('buildMs'))} | {r.get('runId') or '—'} |")
         y += row_h
         d.line([PAD, y - PAD // 2, W - PAD, y - PAD // 2], fill=(220, 220, 218))
-    legend = ("holes: building pixels showing a wall's back or the sky through it; untextured: pixels drawn with no photo (clay); "
+    legend = ("Views look toward headings 45, 135, 225 and 315 at a 15-degree pitch, the texture as baked (path tracer). holes: building pixels showing a wall's back or the sky through it; untextured: pixels drawn with no photo (clay); "
               "both from the build's own outside check of the finished twin over all its views. generated: share of surface area whose colour "
               "is not a photo of that spot (filled photo holes, window repeats, base skirt, seal). Changes are against the first side.")
     ly = H - 50
