@@ -32,7 +32,7 @@ import * as THREE from 'three';
 export const RELIEF_FADE = { nearM: 30, farM: 70 } as const;
 /** The most classes a model's relief may hold (the uniform array's size). */
 export const MAX_RELIEF_CLASSES = 8;
-/** How far a recess of the full depth dims the ambient light (0 none, 1 black). */
+/** How far the deepest grooves dim the ambient light (0 none, 1 black): a recess a quarter of the depth below its tile's mean, and deeper. */
 export const RELIEF_OCCLUSION = 0.3;
 const TILE_SIZE = 256;
 
@@ -55,6 +55,7 @@ precision highp sampler2DArray;
 uniform sampler2D uSbReliefClass;
 uniform sampler2DArray uSbReliefTiles;
 uniform vec2 uSbReliefSize[ ${MAX_RELIEF_CLASSES} ];
+uniform float uSbReliefMean[ ${MAX_RELIEF_CLASSES} ];
 uniform vec2 uSbReliefUvM;
 uniform float uSbReliefDepth;
 uniform vec2 uSbReliefFade;
@@ -135,7 +136,9 @@ const FRAGMENT_MARCH = `
                 vec2 sbSlope = vec2( sbRx, sbRy ) * sbDepth / ( 2.0 * sbE.x * uSbReliefSize[ sbCi ] );
                 float sbSign = sbDet < 0.0 ? - 1.0 : 1.0;
                 sbReliefTilt = normalize( sbTg * sbSign ) * sbSlope.x + normalize( sbBg * sbSign ) * sbSlope.y;
-                sbReliefAo = 1.0 - ${RELIEF_OCCLUSION.toFixed(2)} * sbHit * sbDepth / uSbReliefDepth;
+                // a groove is darker than the surface around it: the recess beyond its tile's mean (a class that lies
+                // deeper as a whole is not in shade)
+                sbReliefAo = 1.0 - ${RELIEF_OCCLUSION.toFixed(2)} * clamp( ( sbHit - uSbReliefMean[ sbCi ] ) * 4.0, 0.0, 1.0 ) * sbDepth / uSbReliefDepth;
             }
         }
     }
@@ -282,11 +285,16 @@ export async function prepareHeightRelief(gltf: GltfLike): Promise<number> {
     const layers = Math.min(MAX_RELIEF_CLASSES, asset.tiles.length);
     const data = new Uint8Array(TILE_SIZE * TILE_SIZE * layers).fill(255);
     const sizes = Array.from({ length: MAX_RELIEF_CLASSES }, () => new THREE.Vector2(0, 0));
+    const means = new Array<number>(MAX_RELIEF_CLASSES).fill(0);
     try {
         for (let k = 0; k < layers; k++) {
             const t = asset.tiles[k];
             if (!t) continue;
-            data.set(redOf(await parser.getDependency('texture', t.texture) as THREE.Texture, TILE_SIZE), k * TILE_SIZE * TILE_SIZE);
+            const red = redOf(await parser.getDependency('texture', t.texture) as THREE.Texture, TILE_SIZE);
+            data.set(red, k * TILE_SIZE * TILE_SIZE);
+            let sum = 0;
+            for (let i = 0; i < red.length; i++) sum += 255 - red[i];
+            means[k] = sum / (red.length * 255);
             sizes[k].set(t.sizeM[0], t.sizeM[1]);
         }
     } catch (err) {
@@ -311,7 +319,7 @@ export async function prepareHeightRelief(gltf: GltfLike): Promise<number> {
             cls.colorSpace = THREE.NoColorSpace; cls.magFilter = THREE.NearestFilter; cls.minFilter = THREE.NearestFilter; cls.generateMipmaps = false;
             cls.wrapS = THREE.ClampToEdgeWrapping; cls.wrapT = THREE.ClampToEdgeWrapping; cls.needsUpdate = true;
             const uniforms = {
-                uSbReliefClass: { value: cls }, uSbReliefTiles: { value: tiles }, uSbReliefSize: { value: sizes },
+                uSbReliefClass: { value: cls }, uSbReliefTiles: { value: tiles }, uSbReliefSize: { value: sizes }, uSbReliefMean: { value: means },
                 uSbReliefUvM: { value: new THREE.Vector2(relief.uvMetres[0], relief.uvMetres[1]) }, uSbReliefDepth: depth.uniform, uSbReliefFade: { value: fade }
             };
             mat.defines = { ...(mat.defines ?? {}), SB_RELIEF: '', ...(relief.displaced ? { SB_RELIEF_DISPLACED: '' } : {}), ...(relief.weights ? { SB_RELIEF_WEIGHTS: '' } : {}) };
@@ -325,7 +333,7 @@ export async function prepareHeightRelief(gltf: GltfLike): Promise<number> {
                     .replace('#include <normal_fragment_maps>', FRAGMENT_NORMAL)
                     .replace('#include <aomap_fragment>', FRAGMENT_AO);
             };
-            mat.customProgramCacheKey = () => `${priorKey?.call(mat) ?? ''}|sb-relief-v2:${relief.displaced ? 'd' : 'p'}${relief.weights ? 'w' : ''}`;
+            mat.customProgramCacheKey = () => `${priorKey?.call(mat) ?? ''}|sb-relief-v3:${relief.displaced ? 'd' : 'p'}${relief.weights ? 'w' : ''}`;
             mat.userData.sbRelief = uniforms;
             mat.needsUpdate = true;
             patched++;
