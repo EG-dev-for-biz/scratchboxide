@@ -186,8 +186,10 @@ export function createPathTraceRouter(service: MetalPathTracerService, ctx: Rout
             res.status(204).end();
             return;
         }
+        // Nothing new: the client has this frame, or the frame belongs to a view older than the one it asked for.
         const after = String(req.query.after ?? '');
-        if (after === `${frame.seq}.${frame.spp}`) {
+        const seq = Number(req.query.seq);
+        if (after === `${frame.seq}.${frame.spp}` || (Number.isFinite(seq) && frame.seq < seq)) {
             res.status(204).end();
             return;
         }
@@ -200,7 +202,9 @@ export function createPathTraceRouter(service: MetalPathTracerService, ctx: Rout
             'Content-Type': 'application/octet-stream',
             'Cache-Control': 'no-store',
             // The page runs on another origin in development; without this the browser hides the frame headers.
-            'Access-Control-Expose-Headers': 'X-Frame-Seq, X-Frame-Spp, X-Frame-Rays, X-Frame-Gpu-Ms, X-Frame-Width, X-Frame-Height, X-Frame-Done, X-Frame-Denoised, X-Frame-Denoise-Ms, X-Frame-History, X-Frame-Render-Width, X-Frame-Render-Height, X-Frame-Upscale-Ms',
+            'Access-Control-Expose-Headers': 'X-Frame-Seq, X-Frame-Spp, X-Frame-Rays, X-Frame-Gpu-Ms, X-Frame-Width, X-Frame-Height, X-Frame-Display-Width, X-Frame-Display-Height, X-Frame-Done, X-Frame-Denoised, X-Frame-Denoise-Ms, X-Frame-History, X-Frame-Render-Width, X-Frame-Render-Height, X-Frame-Upscale-Ms',
+            'X-Frame-Display-Width': String(read.meta.displayWidth ?? read.meta.width),
+            'X-Frame-Display-Height': String(read.meta.displayHeight ?? read.meta.height),
             'X-Frame-Render-Width': String(read.meta.renderWidth ?? read.meta.width),
             'X-Frame-Render-Height': String(read.meta.renderHeight ?? read.meta.height),
             'X-Frame-Upscale-Ms': Number(read.meta.upscaleMs ?? 0).toFixed(3),

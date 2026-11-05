@@ -209,6 +209,13 @@ struct MaterialRecord {
 };
 static_assert(sizeof(MaterialRecord) == 96, "MaterialRecord layout is shared with the Metal kernels");
 
+/** What pt_display reads: the frame's size and samples, whether to show the denoised colour, and the exposure scale. */
+struct DisplayUniforms {
+    uint32_t width{0}, height{0}, spp{1}, fromDenoised{0};
+    float scale{1.0f}, pad0{0}, pad1{0}, pad2{0};
+};
+static_assert(sizeof(DisplayUniforms) == 32, "DisplayUniforms layout is shared with the Metal kernels");
+
 /** Denoiser settings and the two views temporal reuse reprojects between (mirrors denoise::DenoiseSettings). */
 struct DenoiseUniforms {
     uint32_t width{0}, height{0}, spp{1}, step{1};
@@ -1800,6 +1807,47 @@ kernel void restir_spatial(device const Reservoir* in [[buffer(0)]], device Rese
     r.W = r.pHat > 0.0f ? r.wSum / ((float)r.M * r.pHat) : 0.0f;
     r.dir[0] = chosen.x; r.dir[1] = chosen.y; r.dir[2] = chosen.z;
     out[pixel] = r;
+}
+
+// ---- Display (port of view::toDisplayImage: exposure, then the AgX view transform) -------------------
+struct DisplayUniforms {
+    uint width, height, spp, fromDenoised;
+    float scale, pad0, pad1, pad2;
+};
+
+inline float agxContrast(float x) {
+    float x2 = x * x;
+    float x4 = x2 * x2;
+    return 15.5f * x4 * x2 - 40.14f * x4 * x + 31.96f * x4 - 6.868f * x2 * x + 0.4298f * x2 + 0.1191f * x - 0.00232f;
+}
+
+inline float3 agxDisplay(float3 rgb) {
+    const float minEv = -12.47393f, maxEv = 4.026069f;
+    float3 v = float3(0.842479062253094f * rgb.x + 0.0784335999999992f * rgb.y + 0.0792237451477643f * rgb.z,
+                      0.0423282422610123f * rgb.x + 0.878468636469772f * rgb.y + 0.0791661274605434f * rgb.z,
+                      0.0423756549057051f * rgb.x + 0.0784336f * rgb.y + 0.879142973793104f * rgb.z);
+    for (int c = 0; c < 3; ++c) {
+        float x = log2(max(v[c], 1e-10f));
+        x = (clamp(x, minEv, maxEv) - minEv) / (maxEv - minEv);
+        v[c] = agxContrast(x);
+    }
+    float3 o = float3(1.19687900512017f * v.x - 0.0980208811401368f * v.y - 0.0990297440797205f * v.z,
+                      -0.0528968517574562f * v.x + 1.15190312990417f * v.y - 0.0989611768448433f * v.z,
+                      -0.0529716355144438f * v.x - 0.0980434501171241f * v.y + 1.15107367264116f * v.z);
+    return clamp(o, 0.0f, 1.0f);
+}
+
+/** The frame as the viewer shows it: the denoised colour or the accumulated mean, exposed and AgX-mapped, as RGBA8. */
+kernel void pt_display(device const PixelState* pixels [[buffer(0)]], device const float* denoised [[buffer(1)]],
+                       constant DisplayUniforms& d [[buffer(2)]], texture2d<float, access::write> out [[texture(0)]],
+                       uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= d.width || gid.y >= d.height) return;
+    uint i = gid.y * d.width + gid.x;
+    float3 c = d.fromDenoised != 0u
+        ? float3(denoised[i * 3], denoised[i * 3 + 1], denoised[i * 3 + 2])
+        : float3(pixels[i].color[0], pixels[i].color[1], pixels[i].color[2]) / (float)max(d.spp, 1u);
+    c = float3(isfinite(c.x) ? c.x : 0.0f, isfinite(c.y) ? c.y : 0.0f, isfinite(c.z) ? c.z : 0.0f);
+    out.write(float4(agxDisplay(c * d.scale), 1.0f), gid);
 }
 )METAL";
 

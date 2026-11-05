@@ -280,10 +280,16 @@ export interface MetalPathTraceFrame {
     denoiseMs: number;
     /** Pixels that took illumination from the previous view's history. */
     historyPixels: number;
-    /** Size the frame was traced at; smaller than width x height when a renderScale below 1 was asked for. */
+    /** Size the frame was traced at; smaller than the view when a renderScale below 1 was asked for. */
     renderWidth: number;
     renderHeight: number;
-    /** GPU time of the MetalFX upscale, 0 when the frame was traced at full size. */
+    /**
+     * The view's size. While a frame is still converging it is sent at the traced size (width x height equal
+     * renderWidth x renderHeight) for the viewer to scale; the finished frame is MetalFX-upscaled to this size.
+     */
+    displayWidth: number;
+    displayHeight: number;
+    /** GPU time of the MetalFX upscale, 0 when the frame was not upscaled. */
     upscaleMs: number;
     done: boolean;
 }
@@ -296,6 +302,8 @@ export class MetalPathTraceSession extends EventEmitter {
     private child: ChildProcess | null = null;
     private pending: Array<{ event: string; resolve: (v: any) => void; reject: (e: Error) => void }> = [];
     private latest: MetalPathTraceFrame | null = null;
+    /** The newest frame's pixels, read once when the helper announces it (the helper rewrites the file per frame). */
+    private latestRgba: Buffer | null = null;
     private view: MetalPathTraceViewStarted | null = null;
     private exited: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     private stderr = '';
@@ -322,18 +330,11 @@ export class MetalPathTraceSession extends EventEmitter {
         return this.view;
     }
 
-    /** The newest frame's pixels, re-read from the frame file; null before the first frame. */
+    /** The newest frame's pixels (held in memory since the helper announced it); null before the first frame. */
     readFrame(): { meta: MetalPathTraceFrame; rgba: Buffer } | null {
         const meta = this.latest;
-        if (!meta) return null;
-        let rgba: Buffer;
-        try {
-            rgba = fs.readFileSync(meta.path);
-        } catch {
-            return null;
-        }
-        if (rgba.length !== meta.width * meta.height * 4) return null;
-        return { meta, rgba };
+        if (!meta || !this.latestRgba) return null;
+        return { meta, rgba: this.latestRgba };
     }
 
     async start(): Promise<void> {
@@ -394,8 +395,19 @@ export class MetalPathTraceSession extends EventEmitter {
         const event = msg?.event;
         if (event === 'frame') {
             if (this.view && msg.seq === this.view.seq) {
-                this.latest = msg as MetalPathTraceFrame;
-                this.emit('frame', this.latest);
+                const frame = msg as MetalPathTraceFrame;
+                let rgba: Buffer | null = null;
+                try {
+                    rgba = fs.readFileSync(frame.path);
+                } catch {
+                    rgba = null;
+                }
+                // A newer frame may already have replaced the file: then wait for its own event.
+                if (rgba && rgba.length === frame.width * frame.height * 4) {
+                    this.latest = frame;
+                    this.latestRgba = rgba;
+                    this.emit('frame', frame);
+                }
             }
             return;
         }
@@ -411,6 +423,7 @@ export class MetalPathTraceSession extends EventEmitter {
         if (event === 'view') {
             this.view = msg as MetalPathTraceViewStarted;
             this.latest = null;
+            this.latestRgba = null;
         } else if (event === 'opened') {
             this.opened = msg as MetalPathTraceOpened;
         }

@@ -42,6 +42,7 @@
 #include "scratchbox_sky.hpp"
 #include <chrono>
 #include <cstring>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -141,6 +142,8 @@ public:
             dnBlurPso_ = makePipeline(library, "dn_blur");
             dnAtrousPso_ = makePipeline(library, "dn_atrous");
             dnFinishPso_ = makePipeline(library, "dn_finish");
+            displayPso_ = makePipeline(library, "pt_display");
+            inFlight_ = dispatch_semaphore_create(kMaxInFlight);
             {
                 MTLRenderPipelineDescriptor* desc = [MTLRenderPipelineDescriptor new];
                 desc.vertexFunction = [library newFunctionWithName:@"vis_vertex"];
@@ -175,6 +178,15 @@ public:
             sobolBuffer_ = [device_ newBufferWithBytes:sobol.data() length:sobol.size() * sizeof(uint32_t) options:MTLResourceStorageModeShared];
         }
     }
+
+    // Sample passes still running hold `this` in their completion handlers.
+    ~MetalPathTracer() {
+        if (!inFlight_) return;
+        for (int k = 0; k < kMaxInFlight; ++k) dispatch_semaphore_wait(inFlight_, DISPATCH_TIME_FOREVER);
+        for (int k = 0; k < kMaxInFlight; ++k) dispatch_semaphore_signal(inFlight_);
+    }
+    MetalPathTracer(const MetalPathTracer&) = delete;
+    MetalPathTracer& operator=(const MetalPathTracer&) = delete;
 
     const std::string& deviceName() const { return deviceName_; }
     double accelerationBuildMs() const { return accelerationBuildMs_; }
@@ -327,27 +339,13 @@ public:
         if (rgba.size() != static_cast<size_t>(width) * height * 4) throw Error("upscale input is not width * height * 4 bytes");
         if (outWidth < width || outHeight < height) throw Error("MetalFX spatial scaling only enlarges");
         @autoreleasepool {
-            if (!scaler_ || scaler_.inputWidth != static_cast<NSUInteger>(width) || scaler_.inputHeight != static_cast<NSUInteger>(height)
-                || scaler_.outputWidth != static_cast<NSUInteger>(outWidth) || scaler_.outputHeight != static_cast<NSUInteger>(outHeight)) {
-                MTLFXSpatialScalerDescriptor* desc = [MTLFXSpatialScalerDescriptor new];
-                desc.colorTextureFormat = MTLPixelFormatRGBA8Unorm;
-                desc.outputTextureFormat = MTLPixelFormatRGBA8Unorm;
-                desc.inputWidth = static_cast<NSUInteger>(width);
-                desc.inputHeight = static_cast<NSUInteger>(height);
-                desc.outputWidth = static_cast<NSUInteger>(outWidth);
-                desc.outputHeight = static_cast<NSUInteger>(outHeight);
-                desc.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;
-                scaler_ = [desc newSpatialScalerWithDevice:device_];
-                if (!scaler_) throw Error("MetalFX spatial scaler is not available on this device");
-                MTLTextureDescriptor* in = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:desc.inputWidth height:desc.inputHeight mipmapped:NO];
+            ensureScaler(width, height, outWidth, outHeight);
+            if (!scaleIn_ || scaleIn_.width != static_cast<NSUInteger>(width) || scaleIn_.height != static_cast<NSUInteger>(height)) {
+                MTLTextureDescriptor* in = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:static_cast<NSUInteger>(width) height:static_cast<NSUInteger>(height) mipmapped:NO];
                 in.usage = MTLTextureUsageShaderRead;
                 in.storageMode = MTLStorageModeShared;
                 scaleIn_ = [device_ newTextureWithDescriptor:in];
-                MTLTextureDescriptor* out = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:desc.outputWidth height:desc.outputHeight mipmapped:NO];
-                out.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
-                out.storageMode = MTLStorageModeShared;
-                scaleOut_ = [device_ newTextureWithDescriptor:out];
-                if (!scaleIn_ || !scaleOut_) throw Error("could not allocate the upscale textures");
+                if (!scaleIn_) throw Error("could not allocate the upscale textures");
             }
             [scaleIn_ replaceRegion:MTLRegionMake2D(0, 0, static_cast<NSUInteger>(width), static_cast<NSUInteger>(height)) mipmapLevel:0 withBytes:rgba.data() bytesPerRow:static_cast<NSUInteger>(width) * 4];
             scaler_.colorTexture = scaleIn_;
@@ -365,6 +363,99 @@ public:
     }
 
     double upscaleGpuMs() const { return upscaleSeconds_ * 1000.0; }
+
+    /**
+     * The current frame as the viewer shows it, display-ready 8-bit RGBA, made on the GPU: the denoised colour
+     * (after denoiseGpu) or the accumulated mean, at 2^exposureEv, through the AgX view transform
+     * (view::toDisplayImage's), MetalFX-upscaled when out differs from the traced size. One command buffer;
+     * only the bytes come back. upscaleGpuMs() is the scaler's share when it ran, else 0.
+     */
+    std::vector<uint8_t> displayRgba(bool denoised, float exposureEv, int outWidth, int outHeight) {
+        if (!framePixels_) throw Error("beginFrame was not called");
+        if (denoised && !dnColor_) throw Error("denoiseGpu was not called for this frame");
+        drain();
+        const int w = frameWidth_, h = frameHeight_;
+        if (outWidth < w || outHeight < h) throw Error("the display size is smaller than the traced frame");
+        @autoreleasepool {
+            if (!displayTex_ || displayTex_.width != static_cast<NSUInteger>(w) || displayTex_.height != static_cast<NSUInteger>(h)) {
+                MTLTextureDescriptor* desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:static_cast<NSUInteger>(w) height:static_cast<NSUInteger>(h) mipmapped:NO];
+                desc.usage = MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
+                desc.storageMode = MTLStorageModeShared;
+                displayTex_ = [device_ newTextureWithDescriptor:desc];
+                if (!displayTex_) throw Error("could not allocate the display texture");
+            }
+            const bool scale = outWidth != w || outHeight != h;
+            if (scale) ensureScaler(w, h, outWidth, outHeight);
+            DisplayUniforms d;
+            d.width = static_cast<uint32_t>(w);
+            d.height = static_cast<uint32_t>(h);
+            d.spp = static_cast<uint32_t>(std::max(1, frameSpp_));
+            d.fromDenoised = denoised ? 1 : 0;
+            d.scale = std::exp2(exposureEv);
+            id<MTLCommandBuffer> commands = [queue_ commandBuffer];
+            id<MTLComputeCommandEncoder> encoder = [commands computeCommandEncoder];
+            [encoder setComputePipelineState:displayPso_];
+            [encoder setBuffer:framePixels_ offset:0 atIndex:0];
+            [encoder setBuffer:(denoised ? dnColor_ : framePixels_) offset:0 atIndex:1];
+            [encoder setBytes:&d length:sizeof(d) atIndex:2];
+            [encoder setTexture:displayTex_ atIndex:0];
+            [encoder dispatchThreads:MTLSizeMake(static_cast<NSUInteger>(w), static_cast<NSUInteger>(h), 1) threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
+            [encoder endEncoding];
+            if (scale) {
+                scaler_.colorTexture = displayTex_;
+                scaler_.outputTexture = scaleOut_;
+                [scaler_ encodeToCommandBuffer:commands];
+            }
+            [commands commit];
+            [commands waitUntilCompleted];
+            if (commands.error) throw Error(std::string("display pass failed: ") + commands.error.localizedDescription.UTF8String);
+            upscaleSeconds_ = scale ? commands.GPUEndTime - commands.GPUStartTime : 0.0;
+            id<MTLTexture> src = scale ? scaleOut_ : displayTex_;
+            std::vector<uint8_t> out(static_cast<size_t>(outWidth) * outHeight * 4);
+            [src getBytes:out.data() bytesPerRow:static_cast<NSUInteger>(outWidth) * 4 fromRegion:MTLRegionMake2D(0, 0, static_cast<NSUInteger>(outWidth), static_cast<NSUInteger>(outHeight)) mipmapLevel:0];
+            return out;
+        }
+    }
+
+    /** The counters a frame reports (rays, NaN samples, geometry coverage), without reading back the image. */
+    struct FrameCounters {
+        uint64_t rays{0};
+        uint64_t nanSamples{0};
+        float coverage{0.0f};
+    };
+    FrameCounters frameCounters() const {
+        if (!framePixels_) throw Error("beginFrame was not called");
+        drain();
+        const size_t n = static_cast<size_t>(frameWidth_) * frameHeight_;
+        const PixelState* state = static_cast<const PixelState*>(framePixels_.contents);
+        const uint32_t spp = static_cast<uint32_t>(std::max(1, frameSpp_));
+        FrameCounters c;
+        size_t covered = 0;
+        for (size_t i = 0; i < n; ++i) {
+            c.rays += state[i].rays;
+            c.nanSamples += state[i].nan;
+            if (state[i].hits * 2 >= spp) ++covered;
+        }
+        c.coverage = n ? static_cast<float>(covered) / static_cast<float>(n) : 0.0f;
+        return c;
+    }
+
+    /** The current frame's scene-linear colour (denoised after denoiseGpu, else the mean), for metering exposure. */
+    std::vector<Vec3> frameColor(bool denoised) const {
+        if (!framePixels_) throw Error("beginFrame was not called");
+        drain();
+        const size_t n = static_cast<size_t>(frameWidth_) * frameHeight_;
+        std::vector<Vec3> out(n);
+        if (denoised && dnColor_) {
+            const float* c = static_cast<const float*>(dnColor_.contents);
+            for (size_t i = 0; i < n; ++i) out[i] = Vec3(c[i * 3], c[i * 3 + 1], c[i * 3 + 2]);
+        } else {
+            const PixelState* state = static_cast<const PixelState*>(framePixels_.contents);
+            const float inv = 1.0f / static_cast<float>(std::max(1, frameSpp_));
+            for (size_t i = 0; i < n; ++i) out[i] = Vec3(state[i].color[0], state[i].color[1], state[i].color[2]) * inv;
+        }
+        return out;
+    }
     uint32_t bounceTriangleCount() const { return bounceAccel_ ? bounceTriangleCount_ : 0; }
     double bounceBuildMs() const { return bounceAccel_ ? bounceBuildMs_ : 0.0; }
 
@@ -489,10 +580,13 @@ public:
         return readback();
     }
 
-    /** Samples accumulated since beginFrame. */
+    /** Samples accumulated since beginFrame (committed; the last kMaxInFlight passes may still be running). */
     int samplesPerPixel() const { return frameSpp_; }
-    /** GPU time of the accumulation since beginFrame, in ms. */
-    double frameGpuMs() const { return frameGpuSeconds_ * 1000.0; }
+    /** GPU time of the accumulation since beginFrame, in ms (of the passes that have finished). */
+    double frameGpuMs() const {
+        std::lock_guard<std::mutex> lock(gpuTimeMutex_);
+        return frameGpuSeconds_ * 1000.0;
+    }
 
     /**
      * Starts a progressive frame: allocates the accumulation buffer for the view and seeds every pixel's
@@ -502,6 +596,7 @@ public:
                     const Material* uniformMaterial) {
         if (!accel_) throw Error("setGeometry was not called");
         if (lighting.mode == Lighting::Mode::Sky && !lighting.sky) throw Error("Sky lighting needs a PhysicalSky");
+        drain();
         if (!uniformMaterial && !hasMaterials_) throw Error("setMaterials was not called and no uniform material was given");
         if (!uniformMaterial) {
             for (uint32_t id : triMaterials_) {
@@ -653,7 +748,11 @@ public:
         }
     }
 
-    /** Adds `passes` samples to every pixel of the current frame, in one command buffer. */
+    /**
+     * Adds `passes` samples to every pixel of the current frame, in one command buffer. It returns once the
+     * buffer is committed: up to kMaxInFlight run on the GPU while the next is encoded, and every read of the
+     * frame (readback, denoise, display, counters, the next beginFrame) waits for them first.
+     */
     void samplePasses(int passes) {
         if (!framePixels_) throw Error("beginFrame was not called");
         @autoreleasepool {
@@ -727,14 +826,37 @@ public:
                     std::swap(reservoirA_, reservoirB_);
                 }
             }
-            submit(commands);
+            dispatch_semaphore_wait(inFlight_, DISPATCH_TIME_FOREVER);
+            dispatch_semaphore_t inFlight = inFlight_;
+            [commands addCompletedHandler:^(id<MTLCommandBuffer> done) {
+                {
+                    std::lock_guard<std::mutex> lock(gpuTimeMutex_);
+                    if (done.error) asyncError_ = std::string("GPU render failed: ") + done.error.localizedDescription.UTF8String;
+                    frameGpuSeconds_ += done.GPUEndTime - done.GPUStartTime;
+                }
+                dispatch_semaphore_signal(inFlight);
+            }];
+            [commands commit];
             frameSpp_ += std::max(1, passes);
+        }
+    }
+
+    /** Waits until no sample passes are running; rethrows a failure one of them reported. */
+    void drain() const {
+        for (int k = 0; k < kMaxInFlight; ++k) dispatch_semaphore_wait(inFlight_, DISPATCH_TIME_FOREVER);
+        for (int k = 0; k < kMaxInFlight; ++k) dispatch_semaphore_signal(inFlight_);
+        std::lock_guard<std::mutex> lock(gpuTimeMutex_);
+        if (!asyncError_.empty()) {
+            const std::string message = asyncError_;
+            asyncError_.clear();
+            throw Error(message);
         }
     }
 
     /** The current frame's image: the mean of the samples so far, with the guide buffers and counts. */
     render::RenderOutput readback() const {
         if (!framePixels_) throw Error("beginFrame was not called");
+        drain();
         const int w = frameWidth_, h = frameHeight_;
         const int spp = std::max(1, frameSpp_);
         const size_t n = static_cast<size_t>(w) * h;
@@ -770,7 +892,7 @@ public:
             }
         }
         out.geometryCoverage = static_cast<float>(covered) / static_cast<float>(n);
-        out.renderMs = frameGpuSeconds_ * 1000.0;
+        out.renderMs = frameGpuMs();
         giMeanCandidates_ = frameGi_ ? static_cast<double>(giCandidates) / (static_cast<double>(n) * spp) : 0.0;
         return out;
     }
@@ -784,7 +906,18 @@ public:
      * this view first and the result is kept for the next commit. denoiseGpuMs() is the filter's GPU time.
      */
     std::vector<Vec3> denoise(const DenoiseOptions& options) {
+        denoiseGpu(options);
+        const size_t n = static_cast<size_t>(frameWidth_) * frameHeight_;
+        std::vector<Vec3> out(n);
+        const float* c = static_cast<const float*>(dnColor_.contents);
+        for (size_t i = 0; i < n; ++i) out[i] = Vec3(c[i * 3], c[i * 3 + 1], c[i * 3 + 2]);
+        return out;
+    }
+
+    /** denoise without copying the result out: it stays on the GPU for displayRgba (and frameColor). */
+    void denoiseGpu(const DenoiseOptions& options) {
         if (!framePixels_) throw Error("beginFrame was not called");
+        drain();
         const int w = frameWidth_, h = frameHeight_;
         const size_t n = static_cast<size_t>(w) * h;
         @autoreleasepool {
@@ -848,10 +981,6 @@ public:
             historyPixels_ = 0;
             const uint32_t* hits = static_cast<const uint32_t*>(historyHits_.contents);
             for (size_t i = 0; i < n; ++i) historyPixels_ += hits[i];
-            std::vector<Vec3> out(n);
-            const float* c = static_cast<const float*>(dnColor_.contents);
-            for (size_t i = 0; i < n; ++i) out[i] = Vec3(c[i * 3], c[i * 3 + 1], c[i * 3 + 2]);
-            return out;
         }
     }
 
@@ -981,6 +1110,7 @@ private:
         [commands waitUntilCompleted];
         if (commands.error) throw Error(std::string("visibility pass failed: ") + commands.error.localizedDescription.UTF8String);
         rasterSeconds_ = commands.GPUEndTime - commands.GPUStartTime;
+        std::lock_guard<std::mutex> lock(gpuTimeMutex_);
         frameGpuSeconds_ += rasterSeconds_;
     }
 
@@ -1044,7 +1174,29 @@ private:
         [commands commit];
         [commands waitUntilCompleted];
         if (commands.error) throw Error(std::string("GPU render failed: ") + commands.error.localizedDescription.UTF8String);
+        std::lock_guard<std::mutex> lock(gpuTimeMutex_);
         frameGpuSeconds_ += commands.GPUEndTime - commands.GPUStartTime;
+    }
+
+    /** The MetalFX scaler and its output texture for in -> out (rebuilt when either size changes). */
+    void ensureScaler(int width, int height, int outWidth, int outHeight) {
+        if (scaler_ && scaler_.inputWidth == static_cast<NSUInteger>(width) && scaler_.inputHeight == static_cast<NSUInteger>(height)
+            && scaler_.outputWidth == static_cast<NSUInteger>(outWidth) && scaler_.outputHeight == static_cast<NSUInteger>(outHeight)) return;
+        MTLFXSpatialScalerDescriptor* desc = [MTLFXSpatialScalerDescriptor new];
+        desc.colorTextureFormat = MTLPixelFormatRGBA8Unorm;
+        desc.outputTextureFormat = MTLPixelFormatRGBA8Unorm;
+        desc.inputWidth = static_cast<NSUInteger>(width);
+        desc.inputHeight = static_cast<NSUInteger>(height);
+        desc.outputWidth = static_cast<NSUInteger>(outWidth);
+        desc.outputHeight = static_cast<NSUInteger>(outHeight);
+        desc.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;
+        scaler_ = [desc newSpatialScalerWithDevice:device_];
+        if (!scaler_) throw Error("MetalFX spatial scaler is not available on this device");
+        MTLTextureDescriptor* out = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:desc.outputWidth height:desc.outputHeight mipmapped:NO];
+        out.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
+        out.storageMode = MTLStorageModeShared;
+        scaleOut_ = [device_ newTextureWithDescriptor:out];
+        if (!scaleOut_) throw Error("could not allocate the upscale textures");
     }
 
     static void put(float* dst, const Vec3& v) {
@@ -1099,6 +1251,13 @@ private:
     id<MTLComputePipelineState> dnBlurPso_{nil};
     id<MTLComputePipelineState> dnAtrousPso_{nil};
     id<MTLComputePipelineState> dnFinishPso_{nil};
+    id<MTLComputePipelineState> displayPso_{nil};
+    id<MTLTexture> displayTex_{nil};
+    /** Sample command buffers allowed on the GPU at once (encoding the next overlaps running the last). */
+    static constexpr int kMaxInFlight = 2;
+    dispatch_semaphore_t inFlight_{nullptr};
+    mutable std::mutex gpuTimeMutex_;
+    mutable std::string asyncError_;
     id<MTLBuffer> dnA_{nil};
     id<MTLBuffer> dnB_{nil};
     id<MTLBuffer> dnBlurred_{nil};

@@ -584,6 +584,8 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
             });
             expect(frames[frames.length - 1]).toBe(12);
             for (let i = 1; i < frames.length; i++) expect(frames[i]).toBeGreaterThan(frames[i - 1]);
+            // Converging frames are written as the samples double (and at least every half second), not every batch.
+            expect(frames.length).toBeLessThanOrEqual(8);
             const read = session.readFrame();
             expect(read).not.toBeNull();
             expect(read!.rgba.length).toBe(160 * 120 * 4);
@@ -622,11 +624,18 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
             // Half-size tracing with a MetalFX upscale still delivers the view-sized frame.
             const scaled = await session.setView({ ...view, renderScale: 0.5, sampler: 'pcg' });
             expect(scaled).toMatchObject({ renderWidth: 80, renderHeight: 60, renderScale: 0.5, sampler: 'pcg', width: 160, height: 120 });
+            const converging: any[] = [];
             const scaledFrame = await new Promise<any>((resolve, reject) => {
                 const timer = setTimeout(() => reject(new Error('no upscaled frame')), 20_000);
-                session.on('frame', f => { if (f.seq === scaled.seq && f.done) { clearTimeout(timer); resolve(f); } });
+                session.on('frame', f => {
+                    if (f.seq !== scaled.seq) return;
+                    if (!f.done) converging.push(f);
+                    else { clearTimeout(timer); resolve(f); }
+                });
             });
-            expect(scaledFrame).toMatchObject({ renderWidth: 80, renderHeight: 60, width: 160, height: 120 });
+            // Frames still converging go out at the traced size for the viewer to scale; only the finished one is upscaled.
+            for (const f of converging) expect(f).toMatchObject({ width: 80, height: 60, displayWidth: 160, displayHeight: 120, upscaleMs: 0 });
+            expect(scaledFrame).toMatchObject({ renderWidth: 80, renderHeight: 60, width: 160, height: 120, displayWidth: 160, displayHeight: 120 });
             expect(scaledFrame.upscaleMs).toBeGreaterThan(0);
             expect(session.readFrame()!.rgba.length).toBe(160 * 120 * 4);
             // A view with a bad size is refused without killing the session.

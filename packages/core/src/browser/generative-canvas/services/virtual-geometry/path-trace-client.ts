@@ -126,6 +126,8 @@ export function startPathTraceOverlay(options: PathTraceOverlayOptions): PathTra
     let lastFrameTag = '';
     let frameSeq = 0;
     let done = false;
+    // One frame request at a time: a request still answering (a frame is several MB) is never doubled up.
+    let polling = false;
     let status: PathTraceStatus | null = null;
     const offscreen = document.createElement('canvas');
 
@@ -168,7 +170,7 @@ export function startPathTraceOverlay(options: PathTraceOverlayOptions): PathTra
         }
     };
 
-    const draw = (rgba: ArrayBuffer, width: number, height: number) => {
+    const draw = (rgba: ArrayBuffer, width: number, height: number, displayWidth: number, displayHeight: number) => {
         if (offscreen.width !== width || offscreen.height !== height) {
             offscreen.width = width;
             offscreen.height = height;
@@ -177,19 +179,22 @@ export function startPathTraceOverlay(options: PathTraceOverlayOptions): PathTra
         const ctx = overlay.getContext('2d');
         if (!octx || !ctx) return;
         octx.putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
-        // The overlay's backing store matches the frame (device pixels), so the frame is drawn 1:1.
-        if (overlay.width !== width || overlay.height !== height) {
-            overlay.width = width;
-            overlay.height = height;
+        // The overlay's backing store is the view's device pixels: a finished (upscaled) frame is drawn 1:1, a
+        // converging one, sent at its traced size, is scaled up here.
+        if (overlay.width !== displayWidth || overlay.height !== displayHeight) {
+            overlay.width = displayWidth;
+            overlay.height = displayHeight;
         }
         ctx.imageSmoothingEnabled = true;
         ctx.drawImage(offscreen, 0, 0, overlay.width, overlay.height);
     };
 
     const pollFrame = async () => {
-        if (cancelled || !sessionId || done) return;
+        if (cancelled || !sessionId || done || polling) return;
+        polling = true;
         try {
-            const res = await fetch(`/3d/path-trace/frame?sessionId=${encodeURIComponent(sessionId)}&after=${encodeURIComponent(lastFrameTag)}`);
+            // `seq`: frames of a view older than the newest one sent are not wanted, so the server does not send them.
+            const res = await fetch(`/3d/path-trace/frame?sessionId=${encodeURIComponent(sessionId)}&seq=${frameSeq}&after=${encodeURIComponent(lastFrameTag)}`);
             if (cancelled) return;
             if (res.status === 204) return;
             if (!res.ok) throw new Error(`frame failed (HTTP ${res.status})`);
@@ -202,9 +207,12 @@ export function startPathTraceOverlay(options: PathTraceOverlayOptions): PathTra
             if (cancelled || rgba.byteLength !== width * height * 4) return;
             lastFrameTag = `${seq}.${spp}`;
             done = res.headers.get('X-Frame-Done') === '1';
-            draw(rgba, width, height);
+            const displayWidth = Number(res.headers.get('X-Frame-Display-Width') ?? width);
+            const displayHeight = Number(res.headers.get('X-Frame-Display-Height') ?? height);
+            draw(rgba, width, height, displayWidth, displayHeight);
             show({
-                spp, rays: Number(res.headers.get('X-Frame-Rays')), gpuMs: Number(res.headers.get('X-Frame-Gpu-Ms')), width, height,
+                spp, rays: Number(res.headers.get('X-Frame-Rays')), gpuMs: Number(res.headers.get('X-Frame-Gpu-Ms')),
+                width: displayWidth, height: displayHeight,
                 denoised: res.headers.get('X-Frame-Denoised') === '1', denoiseMs: Number(res.headers.get('X-Frame-Denoise-Ms') ?? 0),
                 historyPixels: Number(res.headers.get('X-Frame-History') ?? 0),
                 renderWidth: Number(res.headers.get('X-Frame-Render-Width') ?? width), renderHeight: Number(res.headers.get('X-Frame-Render-Height') ?? height),
@@ -212,6 +220,8 @@ export function startPathTraceOverlay(options: PathTraceOverlayOptions): PathTra
             });
         } catch (err: any) {
             if (!cancelled) show({ message: err?.message ?? String(err) });
+        } finally {
+            polling = false;
         }
     };
 

@@ -616,6 +616,8 @@ private:
     float renderScale_{1.0f};
     int outWidth_{0}, outHeight_{0};
     std::chrono::steady_clock::time_point lastWrite_;
+    /** A converging frame is written when the samples reach this (doubling), or half a second after the last. */
+    int nextWriteSpp_{1};
 
     bool frameActive() const { return frameActive_ && tracer_ && tracer_->samplesPerPixel() < targetSpp_; }
 
@@ -789,6 +791,7 @@ private:
         frameActive_ = true;
         ++seq_;
         lastWrite_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+        nextWriteSpp_ = 1;
         std::ostringstream s;
         s.precision(9);
         s << "{\"event\":\"view\",\"seq\":" << seq_ << ",\"width\":" << outWidth << ",\"height\":" << outHeight
@@ -800,61 +803,63 @@ private:
         emit(s.str());
     }
 
-    /** One batch of samples, then the frame file when enough time passed or the target is reached. */
+    /**
+     * One batch of samples (committed, not waited for: the GPU runs it while the next is encoded), then a frame
+     * when one is due: the finished frame, or a converging one each time the samples double (1, 2, 4, ...) and at
+     * least every half second, never closer than 40 ms. Each frame costs a denoise, a display pass and a file.
+     */
     void step() {
         const int spp = tracer_->samplesPerPixel();
         const int passes = spp < 8 ? 1 : spp < 64 ? 2 : 4;
         tracer_->samplePasses(std::min(passes, targetSpp_ - spp));
         const auto now = std::chrono::steady_clock::now();
-        const bool done = tracer_->samplesPerPixel() >= targetSpp_;
+        const int reached = tracer_->samplesPerPixel();
+        const bool done = reached >= targetSpp_;
         const double sinceWrite = std::chrono::duration<double, std::milli>(now - lastWrite_).count();
-        if (!done && sinceWrite < 40.0) return;
+        const bool due = done || (sinceWrite >= 40.0 && reached >= nextWriteSpp_) || sinceWrite >= 500.0;
+        if (!due) return;
         writeFrame();
         lastWrite_ = std::chrono::steady_clock::now();
+        nextWriteSpp_ = std::max(reached + 1, 2 * reached);
         if (done) frameActive_ = false;
     }
 
+    /**
+     * The frame on the GPU: denoised, exposed and AgX-mapped there (view::toDisplayImage's transform), and only
+     * the bytes read back. A converging frame goes out at its traced size for the viewer to scale; the finished
+     * one is MetalFX-upscaled to the view. Exposure is metered once per view, from its first frame.
+     */
     void writeFrame() {
-        const render::RenderOutput out = tracer_->readback();
-        std::vector<Vec3> color = out.color;
         double denoiseMs = 0.0;
         uint32_t historyPixels = 0;
         if (denoise_) {
             metalpt::DenoiseOptions options;
             options.temporal = temporal_;
-            color = tracer_->denoise(options);
+            tracer_->denoiseGpu(options);
             denoiseMs = tracer_->denoiseGpuMs();
             historyPixels = tracer_->historyPixels();
         }
         if (!exposureSet_) {
-            exposureEv_ = view::autoExposureEv(color);
+            exposureEv_ = view::autoExposureEv(tracer_->frameColor(denoise_));
             exposureSet_ = true;
         }
-        const texture::ImageBuffer image = view::toDisplayImage(color, out.width, out.height, exposureEv_, view::AgxLook::Base);
-        std::vector<uint8_t> rgba(static_cast<size_t>(out.width) * out.height * 4);
-        for (size_t p = 0; p < static_cast<size_t>(out.width) * out.height; ++p) {
-            const uint8_t* src = image.data.data() + p * image.channels;
-            uint8_t* dst = rgba.data() + p * 4;
-            dst[0] = src[0];
-            dst[1] = image.channels >= 3 ? src[1] : src[0];
-            dst[2] = image.channels >= 3 ? src[2] : src[0];
-            dst[3] = 255;
-        }
-        double upscaleMs = 0.0;
-        if (out.width != outWidth_ || out.height != outHeight_) {
-            rgba = tracer_->upscaleRgba(rgba, out.width, out.height, outWidth_, outHeight_);
-            upscaleMs = tracer_->upscaleGpuMs();
-        }
+        const bool finished = tracer_->samplesPerPixel() >= targetSpp_;
+        const bool upscale = finished && (width_ != outWidth_ || height_ != outHeight_);
+        const int frameWidth = upscale ? outWidth_ : width_, frameHeight = upscale ? outHeight_ : height_;
+        const std::vector<uint8_t> rgba = tracer_->displayRgba(denoise_, exposureEv_, frameWidth, frameHeight);
+        const double upscaleMs = upscale ? tracer_->upscaleGpuMs() : 0.0;
+        const metalpt::MetalPathTracer::FrameCounters counters = tracer_->frameCounters();
         const std::filesystem::path tmp = dir_ / "frame.rgba.tmp";
         const std::filesystem::path final = dir_ / "frame.rgba";
         if (!writeBytes(tmp, rgba.data(), rgba.size())) throw std::runtime_error("failed to write " + tmp.string());
         std::filesystem::rename(tmp, final);
         std::ostringstream s;
         s.precision(9);
-        s << "{\"event\":\"frame\",\"seq\":" << seq_ << ",\"spp\":" << tracer_->samplesPerPixel() << ",\"rays\":" << out.rays
-          << ",\"gpuMs\":" << tracer_->frameGpuMs() << ",\"width\":" << outWidth_ << ",\"height\":" << outHeight_
-          << ",\"renderWidth\":" << out.width << ",\"renderHeight\":" << out.height << ",\"upscaleMs\":" << upscaleMs
-          << ",\"coverage\":" << out.geometryCoverage << ",\"exposureEv\":" << exposureEv_ << ",\"path\":" << jsonString(final.string())
+        s << "{\"event\":\"frame\",\"seq\":" << seq_ << ",\"spp\":" << tracer_->samplesPerPixel() << ",\"rays\":" << counters.rays
+          << ",\"gpuMs\":" << tracer_->frameGpuMs() << ",\"width\":" << frameWidth << ",\"height\":" << frameHeight
+          << ",\"displayWidth\":" << outWidth_ << ",\"displayHeight\":" << outHeight_
+          << ",\"renderWidth\":" << width_ << ",\"renderHeight\":" << height_ << ",\"upscaleMs\":" << upscaleMs
+          << ",\"coverage\":" << counters.coverage << ",\"exposureEv\":" << exposureEv_ << ",\"path\":" << jsonString(final.string())
           << ",\"denoised\":" << (denoise_ ? "true" : "false") << ",\"denoiseMs\":" << denoiseMs << ",\"historyPixels\":" << historyPixels
           << ",\"done\":" << (tracer_->samplesPerPixel() >= targetSpp_ ? "true" : "false") << "}";
         emit(s.str());
