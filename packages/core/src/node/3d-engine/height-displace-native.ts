@@ -32,8 +32,8 @@ export class HeightDisplaceError extends Error {
 /** A recess tile: one byte a texel, 255 the surface and 0 a recess of the request's depth; it repeats every sizeM. */
 export interface ReliefTile { width: number; height: number; values: Uint8Array; sizeM: [number, number] }
 
-/** One class a texel over a patch's UVs. */
-export interface ReliefClassMap { width: number; height: number; classes: Uint8Array }
+/** One class a texel over a patch's UVs, and optionally the share of the relief each texel takes (0..255: it fades toward a class's border). */
+export interface ReliefClassMap { width: number; height: number; classes: Uint8Array; weights?: Uint8Array }
 
 export interface DisplacePatch {
     positions: Float32Array; normals: Float32Array; uvs: Float32Array; indices: Uint32Array;
@@ -52,6 +52,8 @@ export interface DisplaceRequest {
     depthM: number;
     /** No edge split shorter than edgeMinM; every edge longer than edgeMaxM split; between, where the relief leaves the edge's chord by more than toleranceM. */
     edgeMinM: number; edgeMaxM: number; toleranceM: number;
+    /** The displacement fades to nothing over this distance from a patch's border and seams, metres. */
+    fadeM: number;
     /** All patches together hold at most this many triangles: the least edge is raised until they do. */
     maxTriangles: number;
     threads?: number; timeoutMs?: number;
@@ -67,7 +69,7 @@ export interface DisplaceResult { edgeMinM: number; patches: DisplacedPatch[] }
 
 const CLI_SOURCE = path.join('scripts', 'height_displace_native.cpp');
 const INCLUDE_DIR = path.join('packages', 'core', 'src', 'native', '3d-engine', 'include');
-const MAGIC = 0x44484253, VERSION = 1;
+const MAGIC = 0x44484253, VERSION = 2;
 
 function repoRoot(): string {
     for (const start of [__dirname, process.cwd()]) {
@@ -110,13 +112,13 @@ export async function displaceByHeight(req: DisplaceRequest): Promise<DisplaceRe
     const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sb-height-displace-'));
     try {
         const reqFile = path.join(dir, 'request.bin'), resFile = path.join(dir, 'result.bin');
-        const parts: Uint8Array[] = [u32(MAGIC, VERSION, Math.max(0, Math.floor(req.threads ?? 0))), f64(req.depthM, req.edgeMinM, req.edgeMaxM, req.toleranceM), u32(req.maxTriangles), u32(req.tiles.length)];
+        const parts: Uint8Array[] = [u32(MAGIC, VERSION, Math.max(0, Math.floor(req.threads ?? 0))), f64(req.depthM, req.edgeMinM, req.edgeMaxM, req.toleranceM, req.fadeM), u32(req.maxTriangles), u32(req.tiles.length)];
         for (const t of req.tiles) {
             if (t && t.values.length !== t.width * t.height) throw new HeightDisplaceError('run_failed', `a relief tile's values (${t.values.length}) do not match its ${t.width} x ${t.height} size`);
             parts.push(u32(t?.width ?? 0, t?.height ?? 0), t?.values ?? new Uint8Array(0), f64(t?.sizeM[0] ?? 1, t?.sizeM[1] ?? 1));
         }
         parts.push(u32(req.classMaps.length));
-        for (const c of req.classMaps) parts.push(u32(c.width, c.height), c.classes);
+        for (const c of req.classMaps) parts.push(u32(c.width, c.height), c.classes, Uint8Array.of(c.weights ? 1 : 0), c.weights ?? new Uint8Array(0));
         parts.push(u32(req.patches.length));
         for (const p of req.patches) {
             const V = p.positions.length / 3;

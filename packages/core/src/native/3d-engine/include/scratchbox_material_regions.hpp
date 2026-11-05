@@ -372,6 +372,31 @@ inline PaneGlass paneGlass(const Image& img, const std::vector<double>& meanLab,
     return r;
 }
 
+/** classBorderWeights: the share of the relief each texel takes, into a class map's green channel (see material-regions.ts). */
+inline void classBorderWeights(const std::vector<uint8_t>& cls, int W, int H, double texelM, std::vector<uint8_t>& rgba) {
+    constexpr double FADE_M = 0.12;
+    constexpr uint16_t FAR = 65535;
+    const size_t N = static_cast<size_t>(W) * H;
+    std::vector<uint16_t> d(N, FAR);
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+        const size_t k = static_cast<size_t>(y) * W + x;
+        const uint8_t c = cls[k];
+        if ((x > 0 && cls[k - 1] != c) || (x + 1 < W && cls[k + 1] != c) || (y > 0 && cls[k - W] != c) || (y + 1 < H && cls[k + W] != c)) d[k] = 0;
+    }
+    // a Uint16Array store: FAR + 1 is never stored (the comparison fails first), as in the TypeScript
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+        const size_t k = static_cast<size_t>(y) * W + x;
+        if (x > 0 && d[k - 1] + 1 < d[k]) d[k] = static_cast<uint16_t>(d[k - 1] + 1);
+        if (y > 0 && d[k - W] + 1 < d[k]) d[k] = static_cast<uint16_t>(d[k - W] + 1);
+    }
+    for (int y = H - 1; y >= 0; y--) for (int x = W - 1; x >= 0; x--) {
+        const size_t k = static_cast<size_t>(y) * W + x;
+        if (x + 1 < W && d[k + 1] + 1 < d[k]) d[k] = static_cast<uint16_t>(d[k + 1] + 1);
+        if (y + 1 < H && d[k + W] + 1 < d[k]) d[k] = static_cast<uint16_t>(d[k + W] + 1);
+    }
+    for (size_t k = 0; k < N; k++) rgba[k * 4 + 1] = d[k] == FAR ? 255 : js::toUint8(js::round(255 * std::min(1.0, (d[k] * texelM) / FADE_M)));
+}
+
 // ---- planMaterialJob ----
 
 /** One class's library set: its tile's real size and its normal and occlusion/roughness/metalness maps. */
@@ -438,8 +463,9 @@ inline PlanResult planJob(const PlanJob& job, const PlanContext& ctx) {
                 r.normal[k * 4 + c] = js::toUint8(js::round(static_cast<double>(t.n[j + c]) * 255));
             }
             r.orm[k * 4 + 3] = 255; r.normal[k * 4 + 3] = 255;
-            if (ctx.classMap) { r.classes[k * 4] = cls[k]; r.classes[k * 4 + 1] = cls[k]; r.classes[k * 4 + 2] = cls[k]; r.classes[k * 4 + 3] = 255; }
+            if (ctx.classMap) { r.classes[k * 4] = cls[k]; r.classes[k * 4 + 1] = 255; r.classes[k * 4 + 2] = cls[k]; r.classes[k * 4 + 3] = 255; }
         }
+        if (ctx.classMap) classBorderWeights(cls, W, H, job.texelM, r.classes);
         return r;
     }
     for (size_t k = 0; k < N; k++) {

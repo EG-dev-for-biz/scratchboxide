@@ -15,15 +15,16 @@
  *
  * Layout: little-endian, packed, no padding.
  *
- * Request: u32 magic 0x44484253 ("SBHD"), u32 version 1, u32 threads (0: every core);
- *   f64 depthM, f64 edgeMinM, f64 edgeMaxM, f64 toleranceM, u32 maxTriangles (all patches together);
+ * Request: u32 magic 0x44484253 ("SBHD"), u32 version 2, u32 threads (0: every core);
+ *   f64 depthM, f64 edgeMinM, f64 edgeMaxM, f64 toleranceM, f64 fadeM, u32 maxTriangles (all patches together);
  *   u32 tileCount, per tile: u32 w, u32 h (0 0: the class has no relief), u8 v[w * h], f64 sizeX, f64 sizeY;
- *   u32 mapCount, per class map: u32 w, u32 h, u8 class[w * h];
+ *   u32 mapCount, per class map: u32 w, u32 h, u8 class[w * h], u8 hasWeight, u8 weight[w * h] when it has (the share of the
+ *     relief each texel takes, 0..255);
  *   u32 patchCount, per patch: u32 map (0xFFFFFFFF: none, the next field the class of the whole patch), u32 constClass,
  *     f64 uvMetresX, f64 uvMetresY, u32 V, f32 pos[V * 3], f32 nrm[V * 3], f32 uv[V * 2], u32 I, u32 idx[I].
  *
  * Result: u32 magic, u32 version, f64 edgeMinM (as used: raised until the patches fit maxTriangles), u32 patchCount,
- *   per patch: u32 surfaceTriangles, u32 riserTriangles, u8 limited, f64 maxRecessM, f64 meanRecessM,
+ *   per patch: u32 surfaceTriangles, u32 riserTriangles (0: the border fades instead), u8 limited, f64 maxRecessM, f64 meanRecessM,
  *     u32 V, f32 pos[V * 3], f32 nrm[V * 3], f32 uv[V * 2], u32 I, u32 idx[I].
  * Exit 0 on success; otherwise a message on stderr and a non-zero exit.
  */
@@ -42,7 +43,7 @@
 
 namespace hd = scratchbox::height_displace;
 
-static constexpr uint32_t MAGIC = 0x44484253u, VERSION = 1;
+static constexpr uint32_t MAGIC = 0x44484253u, VERSION = 2;
 
 struct Reader {
     std::vector<uint8_t> buf;
@@ -95,7 +96,7 @@ int main(int argc, char** argv) {
         const uint32_t threads = in.get<uint32_t>();
         hd::Params P;
         const double depthM = in.get<double>();
-        P.edgeMinM = in.get<double>(); P.edgeMaxM = in.get<double>(); P.toleranceM = in.get<double>();
+        P.edgeMinM = in.get<double>(); P.edgeMaxM = in.get<double>(); P.toleranceM = in.get<double>(); P.fadeM = in.get<double>();
         const uint32_t maxTriangles = in.get<uint32_t>();
         if (!(depthM > 0) || !(P.edgeMinM > 0) || !(P.edgeMaxM >= P.edgeMinM) || !(P.toleranceM > 0) || !maxTriangles) throw std::runtime_error("depth, edge lengths, tolerance and the triangle limit must be positive");
 
@@ -111,6 +112,7 @@ int main(int argc, char** argv) {
             c.w = static_cast<int>(in.get<uint32_t>()); c.h = static_cast<int>(in.get<uint32_t>());
             if (c.w < 1 || c.h < 1) throw std::runtime_error("an empty class map");
             in.array(c.c, static_cast<size_t>(c.w) * c.h);
+            if (in.get<uint8_t>()) in.array(c.weight, static_cast<size_t>(c.w) * c.h);
         }
         std::vector<Patch> patches(in.get<uint32_t>());
         for (auto& p : patches) {
@@ -136,9 +138,14 @@ int main(int argc, char** argv) {
             q.edgeMinM = edgeMin; q.edgeMaxM = std::max(P.edgeMaxM, edgeMin);
             // a patch alone may hold the whole allowance; the sum decides
             q.maxTriangles = maxTriangles;
+            // the field at the detail triangles of this edge can carry
+            std::vector<hd::Tile> filtered(tiles.size());
+            for (size_t i = 0; i < tiles.size(); i++) filtered[i] = hd::lowPass(tiles[i], edgeMin);
+            for (auto& p : patches) p.field.tiles = &filtered;
             parallelFor(patches.size(), threads, [&](size_t i) { rs[i] = hd::displace(patches[i].mesh, patches[i].field, q); });
             uint64_t total = 0;
             for (const auto& r : rs) total += r.surfaceTriangles + r.riserTriangles;
+            for (auto& p : patches) p.field.tiles = &tiles;
             if (total <= maxTriangles) break;
             edgeMin *= 1.4;
         }

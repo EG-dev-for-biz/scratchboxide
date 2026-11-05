@@ -55,7 +55,7 @@ import type { RgbaImage8 } from '../tile-texture-transfer';
 import { bandResponses, TEXTURE_BANDS_M, type TextureEnergy } from './material-harvest';
 import { HEIGHT_RELIEF, MATERIAL_HEIGHT_VERSION, type DrawnHeight } from './material-height';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/33';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/34';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /**
@@ -144,7 +144,7 @@ interface PlannedMaterial {
     material: number;
     orm: RgbaImage8; normal?: RgbaImage8;
     /**
-     * Each texel's class (r, g, b the class index, a 255) and the photo's texel (m), on a rebuilt facade when any class's
+     * Each texel's class (r and b the class index; g the share of the relief it takes, classBorderWeights) and the photo's texel (m), on a rebuilt facade when any class's
      * set has a height: with the sets' recess tiles (RegionSet.height) the relief under every texel at the tile's own
      * resolution, far finer than the facade's texel.
      */
@@ -603,6 +603,31 @@ export function regionClassMap(img: RgbaImage8, classes: RegionClass[], r: numbe
 export const regionRadius = (texelM: number, P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS) =>
     texelM > 0 ? Math.max(1, Math.min(P.regionSmoothMaxTexels, Math.round(P.regionSmoothM / texelM))) : 1;
 
+/**
+ * How much of the relief each texel takes, into a class map's green channel (0..255): none on a texel beside another
+ * class, rising to all of it CLASS_BORDER_FADE_M away (a city-block distance in texels), so two materials meet level
+ * instead of stepping from one set's recess to the other's. A surface of one class is 255 throughout.
+ */
+export const CLASS_BORDER_FADE_M = 0.12;
+export function classBorderWeights(cls: Uint8Array, W: number, H: number, texelM: number, rgba: Uint8Array): void {
+    const N = W * H, FAR = 65535, d = new Uint16Array(N).fill(FAR);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const k = y * W + x, c = cls[k];
+        if ((x > 0 && cls[k - 1] !== c) || (x + 1 < W && cls[k + 1] !== c) || (y > 0 && cls[k - W] !== c) || (y + 1 < H && cls[k + W] !== c)) d[k] = 0;
+    }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const k = y * W + x;
+        if (x > 0 && d[k - 1] + 1 < d[k]) d[k] = d[k - 1] + 1;
+        if (y > 0 && d[k - W] + 1 < d[k]) d[k] = d[k - W] + 1;
+    }
+    for (let y = H - 1; y >= 0; y--) for (let x = W - 1; x >= 0; x--) {
+        const k = y * W + x;
+        if (x + 1 < W && d[k + 1] + 1 < d[k]) d[k] = d[k + 1] + 1;
+        if (y + 1 < H && d[k + W] + 1 < d[k]) d[k] = d[k + W] + 1;
+    }
+    for (let k = 0; k < N; k++) rgba[k * 4 + 1] = d[k] === FAR ? 255 : Math.round(255 * Math.min(1, (d[k] * texelM) / CLASS_BORDER_FADE_M));
+}
+
 /** One material's share of the plan: a rebuilt facade's photo, or a scan piece's (each photo planned once, the first material using it). */
 export interface MaterialPlanJob { kind: 'rebuilt' | 'scan'; material: number; mesh?: string }
 
@@ -669,9 +694,10 @@ export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext):
             if (gl?.[k]) { orm.rgba.set([255, glassR, glassM, 255], k * 4); nrm.rgba.set([128, 128, 255, 255], k * 4); cmap?.rgba.set([NO_RELIEF_CLASS, NO_RELIEF_CLASS, NO_RELIEF_CLASS, 255], k * 4); piece.glass++; continue; }
             orm.rgba.set([Math.round(t.o[j] * 255), Math.round(t.o[j + 1] * 255), Math.round(t.o[j + 2] * 255), 255], k * 4);
             nrm.rgba.set([Math.round(t.n[j] * 255), Math.round(t.n[j + 1] * 255), Math.round(t.n[j + 2] * 255), 255], k * 4);
-            if (cmap) cmap.rgba.set([cls[k], cls[k], cls[k], 255], k * 4);
+            if (cmap) cmap.rgba.set([cls[k], 255, cls[k], 255], k * 4);
         }
         piece.panesOnStone = pg?.stone ?? 0; piece.paneWallTexels = pg?.wallTexels ?? 0;
+        if (cmap) classBorderWeights(cls, W, H, texelM, cmap.rgba);
         const r3 = (v: number) => Math.round(v * 1000) / 1000;
         piece.facade = { mesh: job.mesh!, texelM: Math.round(texelM * 1e4) / 1e4, classShares: piece.classTexels.map(n => r3(n / N)), foldedShare: r3(folded / N), panes: pg?.panes ?? 0, glassShare: r3(piece.glass / N) };
         piece.planned = { material: mi, orm, normal: nrm, ...(cmap ? { classes: cmap, texelM } : {}), rebuilt: true, glass: piece.glass > 0 };
@@ -737,7 +763,7 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
         m.occlusionTexture = { index: orm };
         if (pm.normal) m.normalTexture = { index: addTexture(pm.normal, 'image/jpeg', `${name}_normal`) };
         // the relief: this facade's class map and metric frame; the classes' recess tiles are stored once (below)
-        const relief = pm.classes && pm.texelM ? { classTexture: addTexture(pm.classes, 'image/png', `${name}_classes`), uvMetres: [r4(pm.classes.width * pm.texelM), r4(pm.classes.height * pm.texelM)] } : undefined;
+        const relief = pm.classes && pm.texelM ? { classTexture: addTexture(pm.classes, 'image/png', `${name}_classes`), weights: true, uvMetres: [r4(pm.classes.width * pm.texelM), r4(pm.classes.height * pm.texelM)] } : undefined;
         if (relief) anyRelief = true;
         m.extras = {
             ...(m.extras ?? {}),
