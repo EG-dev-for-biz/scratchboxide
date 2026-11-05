@@ -56,7 +56,7 @@ function measure(file: string) {
         facades++;
         const { width: W, height: H } = orm;
         const at = (img: RgbaImage8, x: number, y: number, c: number) => img.rgba[(Math.min(img.height - 1, Math.floor((y * img.height) / H)) * img.width + Math.min(img.width - 1, Math.floor((x * img.width) / W))) * 4 + c] / 255;
-        const tilt = (x: number, y: number) => { if (!nrm) return 0; const nz = at(nrm, x, y, 2) * 2 - 1; return (Math.acos(Math.max(-1, Math.min(1, nz))) * 180) / Math.PI; };
+        const tilt = (x: number, y: number) => { if (!nrm) return 0; const nx = at(nrm, x, y, 0) * 2 - 1, ny = at(nrm, x, y, 1) * 2 - 1, nz = at(nrm, x, y, 2) * 2 - 1; return (Math.atan2(Math.hypot(nx, ny), Math.max(1e-6, nz)) * 180) / Math.PI; };
         const span = (r: number[]) => [Math.max(0, Math.floor(r[0] * W)), Math.max(0, Math.floor(r[1] * H)), Math.min(W, Math.ceil(r[2] * W)), Math.min(H, Math.ceil(r[3] * H))];
         const F = Math.max(...el.family) + 1;
         families += F;
