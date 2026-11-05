@@ -181,3 +181,26 @@ What a facade seam shows (§8) is the two tiles' photos. Three things were tried
 
 - **Sideways registration (tried, not shipped).** Grey profiles parallel to each cut, either side, cross-correlated per 4 m of seam: the two sides already correlate at 0.89–0.99 at no shift on the ESB's walls; 27 of 236 segments had a clear peak elsewhere. Rendered, nothing visible changed.
 - **Row phase across the cut (tried, not shipped).** Each side's rhythm perpendicular to the cut (storeys, bays) read out to 12 m, the period from both sides' autocorrelation, each side's phase at it, and half the phase difference moved into each side over a band four times the move. On the ESB 86 wall segments had a rhythm on both sides; the tile photos (256–512 texels for ~30 m) are too soft and too different in viewpoint for it to be reliable: rendered, moves landed in triangle-shaped patches and swapped window content rather than continuing it. What still reads as a seam is the two photos themselves (different sharpness, different viewpoint), which no levelling or shift of either photo fixes.
+
+## 10. The tiles' caps removed (tile-seams/6, 2026-11-05)
+
+**Status: verified in uncached pipeline K builds of the ESB, in clay, against a control of the same code with the caps kept; on by default (`SCRATCHBOX_TILE_SEAM_CAPS=0` off), for extractions whose leaves carry their boxes. Penn 2 is too noisy run to run to say anything.**
+
+Judged in clay, a finished K building shows a row of slots across every bay at each Google tile cut. A ray through a slot hits a scan piece facing straight up, 14 cm in front of the rebuilt bay: the tile's cap, the strip each leaf carries in its cut plane (a ring about a metre wide inside the wall, about 500 m² at each ESB tower cut, half facing up, half down). K recesses the bays behind the scan's wall plane and never removes the cap (it faces up, not the facade), so it stands out across them. On the raw scan the caps are inside the surface and nothing shows (§8).
+
+`trimCapsByBox`, first of the seam stage's passes: a triangle goes when it faces along a box face its leaf shares with another leaf (two faces within 1.2 m: some boxes stand half a metre loose of their cut, so two neighbours' boxes overlap by a metre), lies within 0.75 m of that face, and the neighbour's cap lies behind it within 10 cm, facing the other way, under its centroid.
+
+What was tried on the way:
+- **Marking a band along each cut in K's facade photos** (as uncovered, then as occluded), on the theory that K read the photos' meeting line as openings: as uncovered, K kept the scan's wall triangles across the band and with them the scan in place of the rebuild (flat walls); as occluded, the facades were rebuilt and the slots stayed. Reverted.
+- **Caps within 15 cm of the box face:** 14,629 m² removed on the ESB scan, but only 14–48% of the cap area at the tower cuts (loose boxes); the west face's slots stayed.
+- **Caps within 0.75 m, backed within 30 cm:** the cuts clean, but the ESB build opened a 75 m² hole near its top setbacks (3 x 24.5 m): the two faces of a thin wall standing along a cut, one in each leaf, are back to back like two caps. Backing within 10 cm (two leaves' caps lie centimetres apart; a wall's faces its thickness apart) removes 58 m² less and the hole is gone.
+
+ESB, uncached builds (holes / untextured / largest hole region):
+
+| | caps kept (control) | caps removed |
+|---|---|---|
+| ESB | 0.70% / 0.38% / 28.5 m², complete | 0.75% / 0.32% / 28.2 m², complete |
+
+ESB scan: 20,448 m² of caps removed; 10–31 m² left at each tower cut (was about 500). In clay (sheet `docs/screenshots/2026-11-05-esb-tile-caps-clay.jpg`): the slots are gone on the west and north faces at 215.9 m and the south face at 143 m; on the east face at 179.5 m the row of slots is gone and one dark slit shows a little lower where two rebuilt pieces do not meet (it was behind the cap before). Holes rise 0.05 pt.
+
+Penn 2 says nothing either way: with the same code and the caps kept, two builds gave holes 1.37% and 1.66% and a largest hole of 223 and 312 m² (its ownership vote and a standing fault at one corner vary run to run); with the caps removed, 1.31% and 1.79%.
