@@ -257,7 +257,14 @@ describe('trees at four levels', () => {
         const planted = await svc.plant({ crownsPath: writeCrowns('fork.json', CROWNS.slice(0, 3)), triangleBudget: 12000, seed: 'abc' });
         const ratios = planted.stats.perTree.map((t: any) => t.crownBaseRatio as number);
         expect(new Set(ratios.map((r: number) => r.toFixed(4))).size).toBe(3);
-        for (const r of ratios) expect(Math.abs(r - 0.35)).toBeLessThanOrEqual(0.1 + 1e-9);
+        // each within the seeded spread (0.10) of the ratio it grows with: its matched species entry's, else the growth's 0.35
+        const speciesIndex = JSON.parse(fs.readFileSync(path.join(REPO, 'assets/vegetation/species/index.json'), 'utf8')) as { entries: Array<{ id: string; crownBaseRatio: number }> };
+        const grownNodes: any[] = parseGlb(fs.readFileSync(planted.treesGlb)).json.nodes.filter((n: any) => n.extras?.sbTree);
+        planted.stats.perTree.forEach((t: any, i: number) => {
+            const matched = grownNodes.find(n => n.extras.sbTree.id === t.crownId)?.extras.sbTree.species?.entry as string | undefined;
+            const own = speciesIndex.entries.find(e => e.id === matched)?.crownBaseRatio ?? 0.35;
+            expect(Math.abs(ratios[i] - own), `${matched}`).toBeLessThanOrEqual(0.1 + 1e-9);
+        });
     }, 300_000);
 });
 

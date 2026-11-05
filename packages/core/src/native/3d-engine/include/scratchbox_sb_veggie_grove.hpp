@@ -205,6 +205,7 @@ struct GroveOptions {
     bool reveal{true};
     double psiSeason{1.0};
     double latAbsDeg{std::numeric_limits<double>::quiet_NaN()};
+    tree_species::Place place;                 // where the trees stand, for the species choice's region cost (unknown: by shape alone)
     // A described crown is not a scan to match: a tree whose leaves fill this share of it is planted (the scan's 0.9 is for
     // deciding which measured crowns to remove); what it fills is its provenance confidence.
     double minSurfaceReached{0.75};
@@ -242,6 +243,7 @@ inline GroveResult growDescribedTrees(const std::vector<DescribedTree>& trees, c
     P.growth.seed = o.seed;
     P.growth.minSurfaceReached = std::clamp(o.minSurfaceReached, 0.0, 1.0);
     P.growth.latAbsDeg = o.latAbsDeg;
+    P.growth.speciesChoice.place = o.place;
     P.lod = o.lod;
     P.quantize = o.quantize;
     P.reveal = o.reveal;

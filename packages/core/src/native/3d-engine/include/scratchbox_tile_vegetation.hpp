@@ -751,6 +751,7 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
     double baseRatio = G.crownBaseRatio, trunkPerHeight = G.trunkRadiusPerHeight;
     double apical = G.morphology.apicalDominance, branchAngle = G.morphology.branchAngleMeanRad;
     int scaffold = 0;
+    const tree_species::Entry* form = nullptr;   // the matched entry, for its growth-form fields
     if (G.species) {
         auto d = tree_species::describeCrown(c.apex, support, c.sectorRadii, c.samples, c.colourKnown ? &c.colourMean : nullptr, G.speciesChoice);
         d.latAbsDeg = G.latAbsDeg;
@@ -764,6 +765,7 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
             branchAngle = e.branchAngleRad;
             scaffold = e.scaffoldBranches;
             g.stems = e.stems;
+            form = &e;
         }
     }
     if (std::isfinite(c.trunkRadiusPerHeight)) trunkPerHeight = c.trunkRadiusPerHeight;
@@ -852,7 +854,8 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
     // a narrow crown (mean radius under a quarter of its height) gets proportionally finer growth: with the step, kill and
     // perception radii a wider crown needs, its attractors lie inside the trunk's own reach and the tree is a bare pole
     const double narrow = std::clamp(radius / (0.25 * H), 0.4, 1.0);
-    const double step = std::max(0.12, (G.morphology.internodeLengthM > 0.0f ? static_cast<double>(G.morphology.internodeLengthM) : std::clamp(H / 40.0, 0.2, 0.6)) * narrow);
+    const double step = std::max(0.12, (G.morphology.internodeLengthM > 0.0f ? static_cast<double>(G.morphology.internodeLengthM)
+                                        : form && form->internodeLengthPerHeight > 0 ? std::clamp(form->internodeLengthPerHeight * H, 0.12, 0.9) : std::clamp(H / 40.0, 0.2, 0.6)) * narrow);
     cfg.branchStepLength = static_cast<float>(step);
     cfg.trunkLeanToward = c.apex;
     cfg.trunkLeanShare = static_cast<float>(G.trunkLeanShare);
@@ -870,6 +873,29 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
         cfg.leaderHold = static_cast<float>(g.leaderHold);
         cfg.excurrence = static_cast<float>(g.excurrence);
         cfg.leaderTopY = static_cast<float>(g.apexTargetY);
+        // a shoot with more momentum than any entry had before (apical dominance over 0.62) passed the attractors beside
+        // it and colonisation stalled: its momentum is released as it nears them, by how far past 0.62 it is
+        cfg.momentumRelease = static_cast<float>(smooth(0.62, 0.72, apical));
+        // a crown that begins above the trunk: a tree whose leader holds climbs its own line to it, not over to its rim
+        cfg.trunkSeekAlongStem = static_cast<float>(g.leaderHold);
+    }
+    if (form) {
+        // the entry's growth form (continuous; each at its default leaves the tree as it grew without it)
+        cfg.whorlBranches = form->whorlBranches;
+        cfg.whorlSpacing = static_cast<float>(form->whorlSpacingPerHeight * H);
+        cfg.shootDroop = static_cast<float>(0.9 * form->weeping);
+        cfg.shootDroopLength = static_cast<float>(std::max(0.5, 0.12 * H));
+        cfg.pendulousTailShare = static_cast<float>(0.85 * form->weeping);
+        cfg.rosetteLeaves = form->rosetteLeaves;
+        cfg.rosetteLeafLength = static_cast<float>(form->leafLengthM);
+        cfg.rosetteArch = static_cast<float>(form->leafArch);
+        cfg.leafletsPerSide = form->leafletsPerSide;
+        cfg.leafletSpanShare = static_cast<float>(form->leafletSpanShare);
+        cfg.leafletLengthShare = static_cast<float>(form->leafletLengthShare);
+        cfg.leafletAngleRad = static_cast<float>(form->leafletAngleRad);
+        cfg.lateralAngleHold = static_cast<float>(form->branchAngleHold);
+        cfg.lateralAngleOrderGainRad = static_cast<float>(form->branchAngleOrderGainRad);
+        cfg.crownOpenness = static_cast<float>(form->crownOpenness);
     }
     // stems from the ground: the trunk forks just above the root collar and the scaffold limbs are the stems
     cfg.isShrub = g.stems > 1;
@@ -4843,7 +4869,8 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
       << ",\"excurrentTopShareLo\":" << json::numPrecise(P.growth.excurrentTopShareLo) << ",\"excurrentTopShareHi\":" << json::numPrecise(P.growth.excurrentTopShareHi)
       << ",\"excurrentApicalLo\":" << json::numPrecise(P.growth.excurrentApicalLo) << ",\"excurrentApicalHi\":" << json::numPrecise(P.growth.excurrentApicalHi) << "},\n";
     // the species library the crowns were grown with (plant must grow them with the same one)
-    if (P.growth.species) s << "\"species\":{\"schema\":" << json::str(P.growth.species->schema) << ",\"index\":" << json::str(P.growth.speciesIndex) << ",\"entries\":" << P.growth.species->entries.size() << "},\n";
+    if (P.growth.species) s << "\"species\":{\"schema\":" << json::str(P.growth.species->schema) << ",\"index\":" << json::str(P.growth.speciesIndex) << ",\"entries\":" << P.growth.species->entries.size()
+                             << ",\"place\":" << tree_species::placeJson(*P.growth.species, P.growth.speciesChoice, P.growth.latAbsDeg) << "},\n";
     s << "\"crowns\":[";
     for (size_t i = 0; i < r.crowns.size(); ++i) {
         const auto& c = r.crowns[i];
@@ -5416,12 +5443,21 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
                     in.barkTileAlongM = static_cast<float>(bark.tileAlongM);
                 }
                 in.farFoliage = &m.foliage;   // the far level's leaf masses, for its drawn coverage
+                in.farPieces = m.report.foliageClumps;
                 const auto tLod = std::chrono::steady_clock::now();
                 tree_lod::buildTreeLod(tr.lod, in, *R.library);
                 tr.lodMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tLod).count();
                 if (!tr.lod.error.empty()) { errors[i] = "crown " + std::to_string(tr.crownId) + ": " + tr.lod.error; return; }
                 tr.hasLod = true;
-                if (tr.lod.coverage.farMassSpread != 1.0) {
+                if (tr.lod.orderDroppedFarPieces > 0) {
+                    // the far level gave up its last pieces so that it stays lighter than the mid level: the report and the
+                    // growth values follow the mesh the GLB holds
+                    m.report.foliageClumps -= std::min(m.report.foliageClumps, tr.lod.orderDroppedFarPieces);
+                    m.report.foliageTriangles = m.foliage.indices.size() / 3;
+                    if (tr.growth.foliage.size() > m.foliage.vertices.size()) tr.growth.foliage.resize(m.foliage.vertices.size());
+                    tr.report = m.report;
+                }
+                if (tr.lod.coverage.farMassSpread != 1.0 || tr.lod.orderDroppedFarPieces > 0) {
                     // the masses it delivers were spread: what they reach is measured again, on the masses the GLB holds
                     m.reach = measureFoliage(m.foliage, m.report.foliageClumps, g.surface, g.reachRadius);
                     tr.leaves = m.reach;
@@ -5811,8 +5847,23 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                 for (const auto& t : L.wood.uvs) uv.push_back({t.x, t.y});
             }
             l0.frameGroup = l3.frameGroup = base;
-            l1.meshFrom = l0.name;
-            l2.meshFrom = l0.name;
+            // a rosette tree's fronds are each level's own leaves: its second primitive, beside the wood the levels share
+            const bool fronds = L.hasFronds();
+            if (fronds) {
+                l0.primitives.push_back(primitiveOf(L.fronds[0], L.frondGrowth[0]));
+                l1.frameGroup = l2.frameGroup = base;   // they reuse the wood's buffers: one quantisation cube
+                for (staged_glb::StagedNode* lv : {&l1, &l2}) {
+                    staged_glb::StagedPrimitive woodRef;
+                    woodRef.reuseNode = l0.name;
+                    woodRef.reuseIndex = 0;
+                    lv->primitives.push_back(std::move(woodRef));
+                    lv->primitives.push_back(primitiveOf(L.fronds[lv == &l1 ? 1 : 2], L.frondGrowth[lv == &l1 ? 1 : 2]));
+                }
+            } else {
+                l1.meshFrom = l0.name;
+                l2.meshFrom = l0.name;
+            }
+            const std::string frondPrims = fronds ? std::string(",\"foliagePrimitives\":[1]") : std::string();
             for (size_t k = 0; k < L.twigs.size(); ++k) {
                 if (L.twigs[k].empty()) continue;
                 staged_glb::StagedNode tw;
@@ -5859,9 +5910,9 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
             cardNodes(l1, L.nearMidCardSet, "_lod1_card", 0x4E4D00ull);
             cardNodes(l0, L.coreCardSet, "_lod0_core", 0xC0DE00ull);
             const bool instanced0 = !l0.children.empty(), instanced1 = !l1.children.empty(), instanced2 = !l2.children.empty();
-            l0.extrasJson = lodExtras(0, 0.0, d0 + 0.5 * fade, fade, L.drawnLevel0(), instanced0);
-            l1.extrasJson = lodExtras(1, d0 - 0.5 * fade, dNM + 0.5 * fadeNM, fadeNM, L.drawnNearMid(), instanced1);
-            l2.extrasJson = lodExtras(2, dNM - 0.5 * fadeNM, d1 + 0.5 * fade1, fade1, L.drawnLevel1(), instanced2);
+            l0.extrasJson = lodExtras(0, 0.0, d0 + 0.5 * fade, fade, L.drawnLevel0(), instanced0, frondPrims);
+            l1.extrasJson = lodExtras(1, d0 - 0.5 * fade, dNM + 0.5 * fadeNM, fadeNM, L.drawnNearMid(), instanced1, frondPrims);
+            l2.extrasJson = lodExtras(2, dNM - 0.5 * fadeNM, d1 + 0.5 * fade1, fade1, L.drawnLevel1(), instanced2, frondPrims);
             // level 3: its own wood, the trunk and main limbs (a few hundred triangles; a viewer shows them through the holes it opens
             // in the masses), and the blob masses meshCrown builds on the same skeleton
             size_t level3Wood = L.farWoodTriangles;
