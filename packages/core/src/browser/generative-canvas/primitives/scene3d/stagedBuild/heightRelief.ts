@@ -79,7 +79,7 @@ const FRAGMENT_MARCH = `
         vec2 sbUv0 = vMapUv;
         float sbFade = 1.0 - smoothstep( uSbReliefFade.x, uSbReliefFade.y, length( vViewPosition ) );
         int sbCi = int( floor( texture2D( uSbReliefClass, sbUv0 ).r * 255.0 + 0.5 ) );
-        if ( sbFade > 0.0 && sbCi < ${MAX_RELIEF_CLASSES} && uSbReliefSize[ sbCi ].x > 0.0 ) {
+        if ( sbFade > 0.0 && uSbReliefDepth > 0.0 && sbCi < ${MAX_RELIEF_CLASSES} && uSbReliefSize[ sbCi ].x > 0.0 ) {
             vec3 sbP = - vViewPosition;
             vec3 sbDpx = dFdx( sbP ), sbDpy = dFdy( sbP );
             vec2 sbDux = dFdx( sbUv0 ), sbDuy = dFdy( sbUv0 );
@@ -247,6 +247,9 @@ function registerLods(scene: THREE.Object3D): number {
             const near = mesh.children.find(k => k.name === c.near);
             if (!near) continue;
             near.visible = false;
+            // a displaced cell is lit like the flat surface it stands in for: it casts no shadow of its own (millimetres of
+            // relief against a shadow map's texel are acne, not shadow; the parallax beyond it casts none either)
+            near.traverse(n => { n.castShadow = false; });
             cells.push({ start: c.start, count: c.count, near, centre: new THREE.Vector3(c.centre[0], c.centre[1], c.centre[2]), radius: c.radius, shown: false });
         }
         if (!cells.length) return;
