@@ -70,6 +70,10 @@ struct SceneMaterial {
      * its pixels, and consumers that bake or measure the scan's photo must not count it as such.
      */
     bool photoInferredFill{false};
+    /** material.extras.scratchbox.provenance: the provenance label a stage gave the surfaces drawn with it (e.g. "generated"); empty when none. */
+    std::string provenance;
+    /** material.extras.scratchbox.method: what made those surfaces, when a stage said. */
+    std::string method;
 };
 
 /**
@@ -109,6 +113,8 @@ struct GltfScene {
     std::string error;
     geometry::ScratchboxMesh mesh;
     std::vector<uint32_t> triangleMaterial;
+    /** The glTF node each triangle came from (index into the document's nodes), in mesh.indices order. */
+    std::vector<uint32_t> triangleNode;
     std::vector<SceneMaterial> materials;
     std::vector<SceneImage> images;
     std::vector<SceneLight> lights;
@@ -307,6 +313,8 @@ private:
                 sm.baseColorFactor = Vec4(factor[0].asFloat(1), factor[1].asFloat(1), factor[2].asFloat(1), factor[3].asFloat(1));
             }
             sm.photoInferredFill = m["extras"]["scratchbox"]["photoInferredFill"].b;
+            sm.provenance = m["extras"]["scratchbox"]["provenance"].asString("");
+            sm.method = m["extras"]["scratchbox"]["method"].asString("");
             sm.metallicFactor = pbr["metallicFactor"].asFloat(1.0f);
             sm.roughnessFactor = pbr["roughnessFactor"].asFloat(1.0f);
             int textureIndex = pbr["baseColorTexture"]["index"].asInt(-1);
@@ -528,13 +536,13 @@ private:
         if (meshIndex >= 0 && meshIndex < static_cast<int>(meshes.arr.size())) {
             Mat4 normalXf = normalMatrix(world);
             for (const auto& prim : meshes[static_cast<size_t>(meshIndex)]["primitives"].arr) {
-                appendPrimitive(ctx, scene, prim, world, normalXf);
+                appendPrimitive(ctx, scene, prim, world, normalXf, static_cast<uint32_t>(nodeIndex));
             }
         }
         for (const auto& child : node["children"].arr) walkNode(ctx, scene, child.asInt(-1), world, depth + 1);
     }
 
-    static void appendPrimitive(Context& ctx, GltfScene& scene, const io::GlbJsonValue& prim, const Mat4& world, const Mat4& normalXf) {
+    static void appendPrimitive(Context& ctx, GltfScene& scene, const io::GlbJsonValue& prim, const Mat4& world, const Mat4& normalXf, uint32_t nodeIndex) {
         if (prim["mode"].asInt(4) != 4) return;
         const auto& attrs = prim["attributes"];
         Accessor pos = accessor(ctx, attrs["POSITION"].asInt(-1));
@@ -593,6 +601,7 @@ private:
             if (a >= pos.count || b >= pos.count || c >= pos.count) continue;
             scene.mesh.addTriangle(base + a, base + b, base + c);
             scene.triangleMaterial.push_back(static_cast<uint32_t>(materialIndex));
+            scene.triangleNode.push_back(nodeIndex);
         }
 
         if (!hasNormals) {

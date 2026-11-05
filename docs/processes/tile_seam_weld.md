@@ -118,3 +118,48 @@ The stage: 51,550 positions welded (largest move 2.2 cm), 24,918 T-junctions spl
 What it does not close: gaps over 3 cm (tree crowns and roofs against the ground tiles), and most overlap. The trim only drops triangles lying wholly over the other tile, and most overlapping strips are crossed by larger, partly covered triangles. Closing those needs a cut along the other tile's rim. Steps, grooves and colour jumps across seams are not touched yet.
 
 Tests: `tile-seam-weld.test.ts` adds interleaved border points closed into each other's edges (no seam edge left open; 6 splits) and the overlap trim (a 10 cm column lying 1 cm over the neighbour dropped, then welded).
+
+## 8. Seam audit by source tile, adaptive close and strip fill (tile-seams/4, 2026-11-05)
+
+**Status: measured offline on three extractions and in uncached benchmark builds (ESB, Penn 2). The audit always runs; the adaptive close and strip fill are off by default (`SCRATCHBOX_TILE_SEAM_ADAPTIVE=1` on).**
+
+What was added (`scratchbox_tile_seam_weld.hpp`, `scripts/tile_seam_weld.cpp`, `tile-seam-weld-service.ts`):
+
+- **Source tiles.** Each triangle's tile (its node's leaf id; the reader now keeps each triangle's glTF node) is carried through every pass. The crawler writes each leaf's stated geometric error into its node (`extras.sb.tile.geometricErrorM`); the service passes node → tile and error to the CLI (`--tiles`).
+- **Seam audit** (`auditSeams`): open edge length inside the extraction's cut border (an edge whose plan neighbourhood, 2 m, has a cell no triangle covers is the cut, not a seam), by the gap from its midpoint to the nearest open edge of a different tile: under 3 cm, 3–10, 10–30, 30–100 cm, none within 1 m. Measured before, after the fixed passes and after all of them; written to the run's `tile_seams` note and its run note.
+- **Adaptive close** (`closeAdaptive`): a border position and the nearest open border of another tile close up to the smaller of the two tiles' stated errors, capped at 30 cm, only where the surfaces agree (normals within 8°, borders parallel within 20°, each surface carried across the seam meets the other within 3 cm + 5% of the distance). Position rounds move the higher-ranked tile; split rounds split the other tile's edge at the point. A close that turns a triangle by more than 25° is taken back.
+- **Strip fill** (`fillStrips`): agreed gaps no close may move are bridged by thin triangles in a copy of the tile's material labelled `generated` (`extras.scratchbox.provenance`, `photoInferredFill`).
+
+### What the audit found
+
+Open seam length (km) by gap band (under 3 cm / 3–10 / 10–30 / 30–100 cm / none within 1 m):
+
+| Extraction | Raw | After the 3 cm passes (tile-seams/3) | After the adaptive close |
+|---|---|---|---|
+| ESB (198 k triangles, 136 tiles) | 25.4 / 13.1 / 10.6 / 9.1 / 54.5 | 8.3 / 12.4 / 10.7 / 8.3 / 56.0 | 8.4 / 12.5 / 10.6 / 8.3 / 56.0 |
+| Penn 2 (266 k triangles) | 41.0 / 19.7 / 14.3 / 12.9 / 59.6 | 12.2 / 18.8 / 14.9 / 13.6 / 61.7 | 12.2 / 18.8 / 14.9 / 13.6 / 61.7 |
+| Penn district, 7th Ave & W 33rd, r210 (780 k triangles, 581 tiles) | 105.1 / 49.6 / 37.0 / 29.2 / 143.2 | 31.3 / 47.5 / 37.9 / 29.4 / 148.0 | 31.3 / 47.5 / 37.8 / 29.4 / 148.1 |
+
+The adaptive close changes almost nothing (30, 75 and 142 points closed; nothing for the strip fill). The reason is what the remaining seams are:
+
+- **Every tile arrives cut along its box and capped.** Where two tiles meet, each carries a strip lying in the shared cut plane, back to back with the other's (the ESB's horizontal cuts every 36.46 m up the tower; vertical cuts 29 and 38 m apart). Of the district's 56,010 border contacts within 30 cm, 22,988 have surfaces facing 150–180° apart and 26,863 more 30–150° (cap against wall); about 1,000 are within 8°. A seam between two tiles' walls runs wall → cap → cap → wall; of the edges two tiles share, 84% fold by more than 20° (median 90°), against 39% inside a tile.
+- **They are not holes.** The outside check of the ESB tower above 100 m at 3 cm pixels: see-through 0.715% raw, 0.714% after the 3 cm passes (the rest is the crop line).
+- **Removing the caps does not help yet.** Caps lie within 2 m of their tile's box face (12,093 of 14,848 m² within 10 cm), so they can be removed exactly by the leaves' boxes (tried offline: 14,629 m² removed). Renders at the band cuts look the same, the open seam length moves between bands, and tower holes rise to 0.726%. Not built.
+- **What a facade seam actually shows is the photo.** At each cut the two tiles' photos do not line up (piers step sideways by tens of centimetres, window rows break) and their tone differs: the median CIELAB step across a seam is 5.6 (ESB) / 4.9 (district), against 2.2–2.3 between neighbouring triangles inside a tile. Lining the photos up and levelling the tone across tile seams is the next step.
+
+### Chunk borders
+
+A leaf straddling a district chunk line is extracted by both chunks and cut exactly at the line (`district-seams.ts`, the later chunk's cut snapped within 25 cm onto the earlier one's): an ownership cut of one geometry, not a tile seam, so it needs none of this.
+
+### Benchmark builds (uncached, pipeline K, `scripts/benchmark_buildings.ts`, main f4989130 against this branch with the adaptive close on)
+
+| | main | branch |
+|---|---|---|
+| ESB | complete, holes 0.716%, untextured 0.37%, 13.4 min | complete, holes 0.715%, untextured 0.37%, 13.2 min |
+| Penn 2 | degraded, holes 1.28%, untextured 1.56%, 8.7 min | degraded, holes 1.32%, untextured 1.59%, 6.7 min |
+
+No difference a build shows. A full chunked district (pipeline K-D) was not built; the district figures above are the stage run on its own on an existing Penn extraction.
+
+### Cost
+
+On the district extraction: the fixed passes 50 s, the adaptive close 115 s, the fill 7 s, the audits about a second each (with other builds loading the machine). With the adaptive close off by default, the stage costs what tile-seams/3 did plus the audit.
