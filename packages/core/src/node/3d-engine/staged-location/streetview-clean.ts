@@ -17,7 +17,8 @@
  * before this step existed.
  *
  * The clean copy is a REFERENCE (what an image model is shown), never a measurement: texels projected from a photo and the
- * real-data-only evidence tools keep the raw capture; a clean copy only sits alongside it.
+ * real-data-only evidence tools keep the raw capture; a clean copy only sits alongside it. The one exception is pipeline K's
+ * street band (pipeline-k/street-band.ts): a texel no raw photo sees clear may take the copy's filled pixel, labelled generated.
  */
 
 import * as crypto from 'crypto';
