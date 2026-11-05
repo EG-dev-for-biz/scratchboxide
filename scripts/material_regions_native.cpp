@@ -17,14 +17,15 @@
  * Layout: little-endian, packed, no padding. u8/u32/i32/f32/f64 as named; an `image` is u32 width, u32 height,
  * u8 rgba[width * height * 4]; a `rects` is u32 count, f64 values[count] (u0 v0 u1 v1 each, in the photo's UVs).
  *
- * Request header: u32 magic 0x524D4253 ("SBMR"), u32 version 1, u32 mode, u32 threads (0: every core).
+ * Request header: u32 magic 0x524D4253 ("SBMR"), u32 version 2, u32 mode, u32 threads (0: every core).
  *  mode 0, the colour tables: nothing more.
  *  mode 1, appearance classes (readRegionClasses' k-means): u32 imageCount, image[imageCount]; u32 photoCount, then per
  *    photo u32 image, u8 hasExcluded, rects excluded; then u32 samplesPerPhoto, u32 seed, u32 K, u32 iterations, f64 wL.
  *  mode 2, the harvest's texels: u32 imageCount, image[imageCount]; u32 K, f64 meanLab[K * 3], f64 wL; u32 photoCount,
  *    then per photo u32 image, u8 hasExcluded, rects excluded.
  *  mode 3, planMaterialJob for a batch of jobs: u32 imageCount, image[imageCount]; u32 K, f64 meanLab[K * 3];
- *    per set (K): f64 realSizeX, f64 realSizeY, image normal, image orm; f64 setMeanG[K], f64 wallMeanG;
+ *    per set (K): f64 realSizeX, f64 realSizeY, f64 metal (1: its metalness drawn), image normal, image orm;
+ *    f64 setMeanG[K], f64 wallMeanG, f64 setMeanB[K], f64 wallMeanB;
  *    f64 paneWallShare, glassFeatherM, paneGlassWeight, glassRoughness;
  *    u32 planeCount, per plane: u32 width, u32 height, f64 orthoSMin, orthoTMax, pixel, u8 storeyOk, f64 pitch, phase,
  *    u8 win[w * h], i32 bay[w * h], i32 pane[w * h], u32 panedCount, i32 panedBays[panedCount];
@@ -58,7 +59,7 @@
 
 namespace mr = scratchbox::material_regions;
 
-static constexpr uint32_t MAGIC = 0x524D4253u, VERSION = 1;
+static constexpr uint32_t MAGIC = 0x524D4253u, VERSION = 2;
 
 struct Reader {
     std::vector<uint8_t> buf;
@@ -172,9 +173,11 @@ int main(int argc, char** argv) {
             if (K < 1 || K > 255) throw std::runtime_error("classes must be 1..255");
             in.array(ctx.meanLab, static_cast<size_t>(K) * 3);
             ctx.sets.resize(K);
-            for (auto& s : ctx.sets) { s.realSizeX = in.f64(); s.realSizeY = in.f64(); s.normal = in.image(); s.orm = in.image(); }
+            for (auto& s : ctx.sets) { s.realSizeX = in.f64(); s.realSizeY = in.f64(); s.metal = in.f64() != 0; s.normal = in.image(); s.orm = in.image(); }
             in.array(ctx.setMeanG, K);
             ctx.wallMeanG = in.f64();
+            in.array(ctx.setMeanB, K);
+            ctx.wallMeanB = in.f64();
             ctx.P.paneWallShare = in.f64(); ctx.P.glassFeatherM = in.f64(); ctx.P.paneGlassWeight = in.f64(); ctx.P.glassRoughness = in.f64();
             std::vector<mr::PlaneRaster> planes(in.u32());
             for (auto& p : planes) {
