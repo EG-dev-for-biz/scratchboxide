@@ -4843,7 +4843,8 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
       << ",\"excurrentTopShareLo\":" << json::numPrecise(P.growth.excurrentTopShareLo) << ",\"excurrentTopShareHi\":" << json::numPrecise(P.growth.excurrentTopShareHi)
       << ",\"excurrentApicalLo\":" << json::numPrecise(P.growth.excurrentApicalLo) << ",\"excurrentApicalHi\":" << json::numPrecise(P.growth.excurrentApicalHi) << "},\n";
     // the species library the crowns were grown with (plant must grow them with the same one)
-    if (P.growth.species) s << "\"species\":{\"schema\":" << json::str(P.growth.species->schema) << ",\"index\":" << json::str(P.growth.speciesIndex) << ",\"entries\":" << P.growth.species->entries.size() << "},\n";
+    if (P.growth.species) s << "\"species\":{\"schema\":" << json::str(P.growth.species->schema) << ",\"index\":" << json::str(P.growth.speciesIndex) << ",\"entries\":" << P.growth.species->entries.size()
+                             << ",\"place\":" << tree_species::placeJson(*P.growth.species, P.growth.speciesChoice, P.growth.latAbsDeg) << "},\n";
     s << "\"crowns\":[";
     for (size_t i = 0; i < r.crowns.size(); ++i) {
         const auto& c = r.crowns[i];

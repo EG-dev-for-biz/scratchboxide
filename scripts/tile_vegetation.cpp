@@ -173,12 +173,28 @@ static void readSpeciesIndex(const Args& a, GrowthParams& G) {
     G.speciesIndex = a.has("species-index-label") ? a.str("species-index-label") : a.str("species-index");
 }
 
+/**
+ * The build's place for the species choice's region cost (scratchbox_tree_species.hpp): --lat-deg (signed) and --lon-deg,
+ * --elevation-m, and a measured --min-winter-temp-c or --aridity-index when the caller has one. Absent: unknown, uncosted.
+ */
+static void readSpeciesPlace(const Args& a, tree_species::Place& place) {
+    place.latDeg = a.num("lat-deg", place.latDeg);
+    place.lonDeg = a.num("lon-deg", place.lonDeg);
+    place.elevationM = a.num("elevation-m", place.elevationM);
+    place.minWinterTempC = a.num("min-winter-temp-c", place.minWinterTempC);
+    place.aridityIndex = a.num("aridity-index", place.aridityIndex);
+    if (std::isfinite(place.latDeg) && std::abs(place.latDeg) > 90) throw VegetationError("bad_request", "--lat-deg must be in [-90, 90]");
+    if (std::isfinite(place.lonDeg) && std::abs(place.lonDeg) > 180) throw VegetationError("bad_request", "--lon-deg must be in [-180, 180]");
+    if (std::isfinite(place.aridityIndex) && !(place.aridityIndex > 0)) throw VegetationError("bad_request", "--aridity-index must be > 0");
+}
+
 static void readGrowthFlags(const Args& a, GrowthParams& G) {
     // the caller asked for this ratio itself: a species match (scratchbox_tree_species.hpp) does not override it
     if (a.has("crown-base-ratio")) { G.crownBaseRatio = a.num("crown-base-ratio", G.crownBaseRatio); G.crownBaseRatioExplicit = true; }
     if (a.has("trunk-radius-per-height")) { G.trunkRadiusPerHeight = a.num("trunk-radius-per-height", G.trunkRadiusPerHeight); G.trunkRadiusPerHeightExplicit = true; }
     // the build's own |latitude|, for the species choice's climate cost (scratchbox_tree_species.hpp); absent: uncosted
     G.latAbsDeg = a.num("lat-abs-deg", G.latAbsDeg);
+    readSpeciesPlace(a, G.speciesChoice.place);
     G.shellDepth = a.num("shell-depth", G.shellDepth);
     G.wallClearance = a.num("wall-clearance", G.wallClearance);
     if (G.wallClearance < 0) throw VegetationError("bad_request", "--wall-clearance must be >= 0");
@@ -735,6 +751,7 @@ static int runGrow(const Args& a) {
     o.psiSeason = a.num("psi-season", o.psiSeason);
     if (o.psiSeason < 0 || o.psiSeason > 1) throw VegetationError("bad_request", "--psi-season must be in [0, 1]");
     o.latAbsDeg = a.num("lat-abs-deg", o.latAbsDeg);
+    readSpeciesPlace(a, o.place);
     o.minSurfaceReached = a.num("min-surface-reached", o.minSurfaceReached);
     o.stageKey = a.str("stage-key");
     if (doc["label"].type == io::GlbJsonValue::String) o.label = doc["label"].str.substr(0, 200);

@@ -119,6 +119,18 @@ export interface TileVegetationStripParams {
     trunkRadiusPerHeight?: number;
     /** This build's own |latitude| (0..90): costs a species entry whose own latAbsRangeDeg does not reach it (scratchbox_tree_species.hpp), so a crown's shape alone cannot match a climate-limited species (a palm) outside where it grows. Omitted: uncosted. */
     latAbsDeg?: number;
+    /**
+     * The build's place, for the species choice's region cost (scratchbox_tree_species.hpp): signed latitude and
+     * longitude (degrees), elevation above sea level (m), and a measured annual extreme minimum temperature (degrees C)
+     * or aridity index (precipitation / potential evapotranspiration) when the caller has one; without those two the
+     * species index's region table estimates them from the latitude, longitude and elevation. A species implausible
+     * at the place costs more and is never excluded. Omitted: uncosted. treeSpeciesPlaceParams builds these.
+     */
+    latDeg?: number;
+    lonDeg?: number;
+    elevationM?: number;
+    minWinterTempC?: number;
+    aridityIndex?: number;
     shellDepth?: number;
     /** Seeded per crown: its crown base ratio varies by +/- this (0.10), the scaffold limbs' mean angle by +/- branchAngleSpread (0.20 rad), and the trunk leans trunkLean (0.45) of the way to the measured apex's offset. */
     crownBaseSpread?: number;
@@ -162,6 +174,18 @@ export interface TileVegetationPlantParams {
     trunkRadiusPerHeight?: number;
     /** This build's own |latitude| (0..90): costs a species entry whose own latAbsRangeDeg does not reach it (scratchbox_tree_species.hpp), so a crown's shape alone cannot match a climate-limited species (a palm) outside where it grows. Omitted: uncosted. Must be the same value strip was given, since it decided which crowns regrow with which species. */
     latAbsDeg?: number;
+    /**
+     * The build's place, for the species choice's region cost (scratchbox_tree_species.hpp): signed latitude and
+     * longitude (degrees), elevation above sea level (m), and a measured annual extreme minimum temperature (degrees C)
+     * or aridity index (precipitation / potential evapotranspiration) when the caller has one; without those two the
+     * species index's region table estimates them from the latitude, longitude and elevation. A species implausible
+     * at the place costs more and is never excluded. Omitted: uncosted. treeSpeciesPlaceParams builds these. Must be the same values strip was given.
+     */
+    latDeg?: number;
+    lonDeg?: number;
+    elevationM?: number;
+    minWinterTempC?: number;
+    aridityIndex?: number;
     woodShare?: number;
     shellDepth?: number;
     crownBaseSpread?: number;

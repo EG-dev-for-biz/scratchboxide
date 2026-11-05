@@ -76,6 +76,7 @@ import {
     type VisionModelUse
 } from '../../../common/spatial/staged-location-contracts';
 import { glbMeshCounts, plantTrees, summarizeTrees, type LocationClayTrees } from '../location-clay-pipeline';
+import { treeSpeciesPlaceParams } from '../../../common/spatial/tree-species-library';
 import { TileVegetationError, type TileVegetationPlantRequest, type TileVegetationPlantResult, type TileVegetationStripRequest, type TileVegetationStripResult } from '../tile-vegetation-service';
 import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service';
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorBuilding, type VectorEvidence } from './vector-footprints';
@@ -3794,7 +3795,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 run: async io => {
                     // the same climate cost plantTrees is given below, so a crown's regrowability check and its final
                     // geometry pick the same species (scratchbox_tree_species.hpp; user report, 2026-10-21).
-                    const r = await deps.vegetation.strip({ tilePath: extraction.texturedGlb, signal: io.signal, params: { latAbsDeg: Math.abs(run.geoAnchor.lat) }, ...(roi ? { roi } : {}) });
+                    const r = await deps.vegetation.strip({ tilePath: extraction.texturedGlb, signal: io.signal, params: treeSpeciesPlaceParams(run.geoAnchor), ...(roi ? { roi } : {}) });
                     run.keys['trees-measure'] = r.cacheKey;
                     run.cacheStatus['trees-measure'] = r.cached ? 'hit' : 'miss';
                     const removed = Number(r.stats?.triangles?.removed ?? 0);
@@ -6100,7 +6101,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // a crown's shape alone can match a climate-limited species (a palm) regardless of where the
                         // build actually is; this build's own measured latitude costs that match down (user report,
                         // 2026-10-21, with a screenshot: a thin, tall "palm-shaped" tree in New York).
-                        latAbsDeg: Math.abs(run.geoAnchor.lat),
+                        // and its signed place, for the species choice's region cost (the same strip was given)
+                        place: treeSpeciesPlaceParams(run.geoAnchor),
                         supportMeshPath: isolateMode ? remeshed.clayGlb : undefined,
                         groundMeshPath: remeshed.clayGlb,
                         signal: io.signal
