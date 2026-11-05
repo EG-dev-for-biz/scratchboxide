@@ -80,7 +80,9 @@ async function main() {
 
     // the plan: the place store first, else a local file
     const planFile = arg('plan-file') ? path.resolve(arg('plan-file')!) : undefined;
-    const store = flag('no-store') ? undefined : await openPlaceStore({ key: placeKey({ lat, lng }), tmpDir: path.join(out, 'place_tmp') });
+    // the place's store: by default the run's own point; --place names the place's anchor (a district's), so the plan sits beside its objects
+    const place = arg('place') ? (([plat, plng]) => ({ lat: plat, lng: plng }))(arg('place')!.split(',').map(Number)) : { lat, lng };
+    const store = flag('no-store') ? undefined : await openPlaceStore({ key: placeKey(place), tmpDir: path.join(out, 'place_tmp') });
     if (store) log(`place store: ${store.where.kind} ${store.where.label}${store.where.reason ? ` (${store.where.reason})` : ''}`);
     let plan: MicroEditPlan | undefined, generation: string | undefined;
     if (store?.bucket) {
@@ -91,22 +93,41 @@ async function main() {
     plan ??= emptyPlan(buildingId, label);
     log(`plan: ${keptEdits(plan).length} kept edits, ${plan.runs.length} runs before`);
 
-    // the held-out photo: a Static Maps satellite crop per unit (zoom 21), registered on the tile photo once
+    // the held-out photo: a Static Maps satellite image (never read by a proposal). A roof seen off-nadir leans tens of
+    // metres from its footprint, so the lean is found first on a wide zoom-19 image against the tile photo of the roof;
+    // then each unit's zoom-21 crop is fetched where the lean puts it and registered again within 1.5 m
+    const planImageAt = async (cx: number, cz: number, zoom: number): Promise<PlanImage> => {
+        const g = toAnchor(frame, cx, 0, cz);
+        const ref = await fetchOrthoReference({ lat: g.lat, lng: g.lng, zoom, sizePx: 640, scale: 2, apiKey });
+        costs.staticMaps = (costs.staticMaps ?? 0) + 1;
+        const [x, , z] = fromAnchor(frame, { lat: g.lat, lng: g.lng, hM: frame.ellipsoidalHeightM });
+        return { image: ref.image, x0: x - ref.widthM / 2, z0: z - ref.heightM / 2, pixelM: ref.pixelM };
+    };
+    let fx0 = Infinity, fx1 = -Infinity, fz0 = Infinity, fz1 = -Infinity;
+    for (const part of footprint) for (const [x, z] of part[0]) { fx0 = Math.min(fx0, x); fx1 = Math.max(fx1, x); fz0 = Math.min(fz0, z); fz1 = Math.max(fz1, z); }
+    const roofTop = topY(tris, (fx0 + fx1) / 2, (fz0 + fz1) / 2, Math.max(fx1 - fx0, fz1 - fz0) / 2);
+    let leanP: Promise<[number, number] | undefined> | undefined;
+    const lean = () => leanP ??= (async () => {
+        const wide = await planImageAt(0, 0, 19);
+        const coarse = tileCropAround(tris, 0, 0, 30, 0.5, roofTop);
+        const reg = registerPlanImage(wide, coarse, 30);
+        log(`held-out lean: the satellite's roof lies (${reg.shiftM.join(', ')}) m from the tile photo's (NCC ${reg.ncc}, zoom 19, +-30 m)`);
+        return reg.ncc >= 0.3 ? reg.shiftM : undefined;
+    })().catch(err => { log(`held-out lean failed: ${(err as Error).message}`); return undefined; });
     const held = new Map<string, Promise<PlanImage | undefined>>();
     const satelliteFor = (cx: number, cz: number): Promise<PlanImage | undefined> => {
-        const key = `${Math.round(cx / 15)},${Math.round(cz / 15)}`;
+        const key = `${Math.round(cx / 10)},${Math.round(cz / 10)}`;
         let p = held.get(key);
         if (!p) {
             p = (async () => {
-                const g = toAnchor(frame, Math.round(cx / 15) * 15, 0, Math.round(cz / 15) * 15);
-                const ref = await fetchOrthoReference({ lat: g.lat, lng: g.lng, zoom: 21, sizePx: 640, scale: 2, apiKey });
-                costs.staticMaps = (costs.staticMaps ?? 0) + 1;
-                const [x, , z] = fromAnchor(frame, { lat: g.lat, lng: g.lng, hM: frame.ellipsoidalHeightM });
-                const image: PlanImage = { image: ref.image, x0: x - ref.widthM / 2, z0: z - ref.heightM / 2, pixelM: ref.pixelM };
-                // registered on a coarse, wide tile crop around it
-                const coarse = tileCropAround(tris, x, z, 12, 0.08, topY(tris, x, z));
-                const reg = registerPlanImage(image, coarse, 3);
-                log(`held-out satellite at (${x.toFixed(1)}, ${z.toFixed(1)}): ${ref.pixelM.toFixed(3)} m/px, registered shift (${reg.shiftM.join(', ')}) m, NCC ${reg.ncc}`);
+                const l = await lean();
+                if (!l) return undefined;
+                const gx = Math.round(cx / 10) * 10, gz = Math.round(cz / 10) * 10;
+                const image = await planImageAt(gx + l[0], gz + l[1], 21);
+                const fine = tileCropAround(tris, gx, gz, 8, 0.06, roofTop);
+                const reg = registerPlanImage(image, fine, 1.5, l);
+                log(`held-out satellite at (${gx}, ${gz}): ${image.pixelM.toFixed(3)} m/px, registered shift (${reg.shiftM.join(', ')}) m, NCC ${reg.ncc}`);
+                if (reg.ncc < 0.3) return undefined;
                 return { ...image, x0: image.x0 - reg.shiftM[0], z0: image.z0 - reg.shiftM[1] };
             })().catch(err => { log(`held-out satellite failed: ${(err as Error).message}`); return undefined; });
             held.set(key, p);
@@ -120,10 +141,18 @@ async function main() {
     };
 
     const soup = tris.positions;
+    const compares = new Map<string, import('../packages/core/src/node/3d-engine/staged-location/micro-edits').HeldOutComparison>();
     const result = await runMicroEditPass({
         plan, runId, frame, scan: soup, footprint, workDir: path.join(out, 'work'),
         tileCrop: (cx, cz, half, texelM, refY) => tileCropAround(tris, cx, cz, half, texelM, refY),
         heldOut,
+        onCompare: c => {
+            const dir = path.join(out, 'compare');
+            fs.mkdirSync(dir, { recursive: true });
+            for (const [name, img] of [['tile', c.tile], ['heldout', c.heldOut], ['before', c.before], ['after', c.after]] as const) fs.writeFileSync(path.join(dir, `${c.key}_${name}.png`), encodePng(img.width, img.height, img.rgba, 4));
+            compares.set(c.key, c);
+        },
+        ...(arg('focus') ? { focus: (([cx, cz, radiusM]) => ({ cx, cz, radiusM }))(arg('focus')!.split(',').map(Number)) } : {}),
         params: { ...(arg('edits') ? { maxEditsPerRun: Number(arg('edits')) } : {}) }
     });
     const { report } = result;

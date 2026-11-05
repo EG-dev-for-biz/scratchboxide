@@ -61,7 +61,7 @@ import type { ObjectFrame } from '../../asset-store/scene-object-store';
 import { compileNativeCached, defaultNativeFlags, NativeBuildError } from '../native-build-cache';
 import { findTileRefineRepoRoot } from '../tile-refine-service';
 import {
-    angularPeriod, buildHeightMap, cropKey, drawModelTopDown, findRoundUnits, heldOutScore, pointsDigest, pointsNear, radialPeriod, sampleScanPoints,
+    angularPeriod, buildHeightMap, cropKey, drawModelTopDown, findRoundUnits, heldOutScore, ownPoints, pointsDigest, pointsNear, radialPeriod, sampleScanPoints,
     strongestRingStep, topNear, type HeightMap, type ModelPart, type RoundUnit, type ScanPoints, type TopDownCrop
 } from './micro-edit-evidence';
 import { writeStagedGlbFile, type StagedGlbNode } from './staged-glb-writer';
@@ -73,7 +73,7 @@ export const MICRO_EDIT_PARAMS = {
     /** Edits kept per run (1 to 3). */
     maxEditsPerRun: 1,
     /** Proposals verified per run at most (the rest wait for the next run). */
-    maxProposalsPerRun: 4,
+    maxProposalsPerRun: 8,
     // a nudge
     maxNudgeM: 0.1,
     maxNudgeRel: 0.1,
@@ -83,12 +83,16 @@ export const MICRO_EDIT_PARAMS = {
     /** A kept parameter is nudged when its own measurement now differs by more than this share and this much. */
     nudgeNoiseRel: 0.04,
     nudgeNoiseM: 0.02,
-    // a new primitive
+    // a new primitive: surface moved past changeTolM at most the larger of maxChangedAreaM2 and maxChangedShare of the
+    // unit's own surface (a few m2 on a 1 m unit; a recess across a 7 m fan's floor is half of that fan's surface)
     maxChangedAreaM2: 4,
+    maxChangedShare: 0.5,
     changeTolM: 0.05,
     maxDisplacementM: 0.15,
-    /** A new solid against the scan it replaces (its fit residual). */
+    /** A new solid against the scan it replaces (its fit residual), and the departure from it counted as moved: a solid
+     *  fitted to the scan's own copy of a unit only moves what lies past the tiles' resolution. */
     maxRootDisplacementM: 0.3,
+    rootChangeTolM: 0.3,
     // the scan
     subResolutionM: 0.2,
     subResolutionTolM: 0.02,
@@ -99,7 +103,7 @@ export const MICRO_EDIT_PARAMS = {
     ssimTol: 0.005,
     gradientTol: 0.01,
     // the bounds
-    volumeTolM: 0.1,
+    volumeTolM: 0.15,
     volumeReachM: 0.4,
     // expiry
     contradictRmsM: 0.3,
@@ -115,7 +119,7 @@ export const MICRO_EDIT_PARAMS = {
     // geometry
     sinkM: 0.05,
     segments: 96,
-    scanSpacingM: 0.08
+    scanSpacingM: 0.1
 };
 export type MicroEditParams = typeof MICRO_EDIT_PARAMS;
 
@@ -315,12 +319,16 @@ export function composeUnits(plan: MicroEditPlan, extra?: MicroEdit, P: Pick<Mic
         const children = kept.filter(e => e.kind === 'primitive' && e.parent === root.key).sort((a, b) => a.rung - b.rung || (a.key < b.key ? -1 : 1));
         const R = rp.radiusM, Hh = rp.heightM, sink = rp.sinkM ?? 0;
         const meridian: Array<[number, number]> = [[R, -sink], [R, Hh]];
+        // an open top the scan measured: the rim, the inner wall, the floor
+        const open = (rp.innerRadiusM ?? 0) > 0 && (rp.openDepthM ?? 0) > 0;
+        const topR = open ? Math.min(rp.innerRadiusM, R - 0.02) : R, topY = open ? Hh - rp.openDepthM : Hh;
+        if (open) meridian.push([topR, Hh]);
         const recess = children.find(c => c.primitive === 'revolution-recess');
         if (recess) {
             const q = effectiveParams(view, recess);
-            const rr = Math.min(q.radiusM, R - 0.01), floor = Hh - q.depthM;
-            meridian.push([rr, Hh], [rr * (q.floorShare ?? 0.95), floor], [0, floor]);
-        } else meridian.push([0, Hh]);
+            const rr = Math.min(q.radiusM, topR - 0.01), floor = topY - q.depthM;
+            meridian.push([rr, topY], [rr * (q.floorShare ?? 0.95), floor], [0, floor]);
+        } else meridian.push([topR, topY], [0, topY]);
         const lines = [`part ${root.key}`, `rev 0 0 ${P.segments} 0 0 1 0 0 ${meridian.length} ${meridian.map(([r, y]) => `${fmt(r)} ${fmt(y)}`).join(' ')}`];
         const edits = [root.key, ...(recess ? [recess.key] : [])];
         for (const c of children) {
@@ -553,11 +561,59 @@ export function insideFootprint(footprint: Footprint, x: number, z: number): boo
     return footprint.some(loops => insideLoops(loops, x, z));
 }
 
-/** The first vertex of `parts` outside the footprint or above the scan's top nearby, as a reason; undefined when all are in. */
-export function outsideBounds(parts: ModelPart[], footprint: Footprint, heights: HeightMap, P: Pick<MicroEditParams, 'volumeTolM' | 'volumeReachM'> = MICRO_EDIT_PARAMS): string | undefined {
+/**
+ * The footprint rasterised at `cellM` (each part filled even-odd by scanlines at the cells' centres, the parts OR-ed): a
+ * footprint of thousands of parts (a modelled volume's triangles) tested in constant time. A point is inside when its
+ * cell's centre is.
+ */
+export class FootprintMask {
+    readonly x0: number; readonly z0: number; readonly nx: number; readonly nz: number;
+    private readonly bits: Uint8Array;
+    constructor(footprint: Footprint, readonly cellM = 0.1) {
+        let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+        for (const part of footprint) for (const loop of part) for (const [x, z] of loop) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+        if (!Number.isFinite(x0)) { x0 = z0 = 0; x1 = z1 = 0; }
+        this.x0 = x0 - cellM; this.z0 = z0 - cellM;
+        this.nx = Math.max(1, Math.ceil((x1 - x0) / cellM) + 2); this.nz = Math.max(1, Math.ceil((z1 - z0) / cellM) + 2);
+        this.bits = new Uint8Array(this.nx * this.nz);
+        for (const part of footprint) {
+            let pz0 = Infinity, pz1 = -Infinity;
+            for (const loop of part) for (const [, z] of loop) { pz0 = Math.min(pz0, z); pz1 = Math.max(pz1, z); }
+            const r0 = Math.max(0, Math.floor((pz0 - this.z0) / cellM)), r1 = Math.min(this.nz - 1, Math.ceil((pz1 - this.z0) / cellM));
+            for (let row = r0; row <= r1; row++) {
+                const zc = this.z0 + (row + 0.5) * cellM;
+                const xs: number[] = [];
+                for (const loop of part) for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+                    const [xi, zi] = loop[i], [xj, zj] = loop[j];
+                    if ((zi > zc) !== (zj > zc)) xs.push(((xj - xi) * (zc - zi)) / (zj - zi) + xi);
+                }
+                xs.sort((p, q) => p - q);
+                for (let k = 0; k + 1 < xs.length; k += 2) {
+                    const c0 = Math.max(0, Math.ceil((xs[k] - this.x0) / cellM - 0.5)), c1 = Math.min(this.nx - 1, Math.floor((xs[k + 1] - this.x0) / cellM - 0.5));
+                    for (let c = c0; c <= c1; c++) this.bits[row * this.nx + c] = 1;
+                }
+            }
+        }
+    }
+    inside(x: number, z: number): boolean {
+        const c = Math.floor((x - this.x0) / this.cellM), r = Math.floor((z - this.z0) / this.cellM);
+        return c >= 0 && r >= 0 && c < this.nx && r < this.nz && this.bits[r * this.nx + c] === 1;
+    }
+}
+
+/** A measured unit's envelope: the space its scanned walls and rim enclose (a hollow's air included). */
+export interface UnitEnvelope { cx: number; cz: number; r: number; baseY: number; topY: number }
+
+/**
+ * The first vertex of `parts` outside the footprint or outside the scanned volume, as a reason; undefined when all are in.
+ * The scanned volume is what the scan's surfaces bound: under the scan's own top nearby, or inside the envelope of a
+ * measured unit (a kept solid's walls and rim), whose hollow the height map reads as its floor.
+ */
+export function outsideBounds(parts: ModelPart[], footprint: Footprint | FootprintMask, heights: HeightMap, P: Pick<MicroEditParams, 'volumeTolM' | 'volumeReachM'> = MICRO_EDIT_PARAMS, envelopes: UnitEnvelope[] = []): string | undefined {
     for (const p of parts) for (let v = 0; v < p.positions.length; v += 3) {
         const x = p.positions[v], y = p.positions[v + 1], z = p.positions[v + 2];
-        if (!insideFootprint(footprint, x, z)) return `a vertex at (${x.toFixed(2)}, ${z.toFixed(2)}) lies outside the footprint`;
+        if (!(footprint instanceof FootprintMask ? footprint.inside(x, z) : insideFootprint(footprint, x, z))) return `a vertex at (${x.toFixed(2)}, ${z.toFixed(2)}) lies outside the footprint`;
+        if (envelopes.some(e => Math.hypot(x - e.cx, z - e.cz) <= e.r + 1e-6 && y >= e.baseY - P.volumeTolM - 0.1 && y <= e.topY + P.volumeTolM)) continue;
         const top = topNear(heights, x, z, P.volumeReachM);
         if (!(top > -Infinity)) return `a vertex at (${x.toFixed(2)}, ${z.toFixed(2)}) stands where the scan has no surface`;
         if (y > top + P.volumeTolM) return `a vertex at (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)}) stands ${(y - top).toFixed(2)} m above the scan's top within ${P.volumeReachM} m`;
@@ -583,8 +639,14 @@ export interface MicroEditPassInput {
     footprint: Footprint;
     workDir: string;
     params?: Partial<MicroEditParams>;
+    /** New solids only where their axis lies in this disc (the operator's chosen part of the roof); detail on kept ones anywhere. */
+    focus?: { cx: number; cz: number; radiusM: number };
+    /** Each held-out comparison as drawn: the model before and after, the held-out photo and the tile photo (for sheets). */
+    onCompare?: (c: HeldOutComparison) => void;
     now?: () => number;
 }
+
+export interface HeldOutComparison { key: string; tile: TopDownCrop; heldOut: TopDownCrop; before: { width: number; height: number; rgba: Uint8Array }; after: { width: number; height: number; rgba: Uint8Array }; centre: [number, number]; radiusM: number }
 
 export interface UnitReport {
     root: string;
@@ -631,10 +693,17 @@ export async function runMicroEditPass(input: MicroEditPassInput): Promise<{ pla
     // the scan over the footprint
     let bx0 = Infinity, bx1 = -Infinity, bz0 = Infinity, bz1 = -Infinity;
     for (const part of input.footprint) for (const loop of part) for (const [x, z] of loop) { bx0 = Math.min(bx0, x); bx1 = Math.max(bx1, x); bz0 = Math.min(bz0, z); bz1 = Math.max(bz1, z); }
-    const pts = sampleScanPoints(input.scan, P.scanSpacingM, (x, _y, z) => x >= bx0 - 1 && x <= bx1 + 1 && z >= bz0 - 1 && z <= bz1 + 1);
+    // the scan over the footprint (a triangle whose centre lies on it, or within a metre of its edge: a unit's side)
+    const mask = new FootprintMask(input.footprint);
+    const near = (x: number, z: number) => mask.inside(x, z) || mask.inside(x + 1, z) || mask.inside(x - 1, z) || mask.inside(x, z + 1) || mask.inside(x, z - 1);
+    const pts = sampleScanPoints(input.scan, P.scanSpacingM, (x, _y, z) => near(x, z));
     const heights = buildHeightMap(pts, { x0: bx0 - 1, z0: bz0 - 1, x1: bx1 + 1, z1: bz1 + 1 });
     const scanIndex = new SurfaceIndex(input.scan.length / 9 > 0 ? soupWithin(input.scan, bx0 - 2, bz0 - 2, bx1 + 2, bz1 + 2) : input.scan);
-    const found = findRoundUnits(pts, heights, (x, z) => insideFootprint(input.footprint, x, z));
+    const found = findRoundUnits(pts, heights, (x, z) => mask.inside(x, z));
+
+    // every unit known (found now, or kept): a scan point belongs to the nearest of them (by distance beyond its wall)
+    const others: Array<{ cx: number; cz: number; r: number }> = found.units.map(u => ({ cx: u.cx, cz: u.cz, r: u.r }));
+    for (const e of keptEdits(plan)) if (e.kind === 'primitive' && e.primitive === 'revolution') { const o = fromAnchor(input.frame, e.anchor); others.push({ cx: o[0], cz: o[2], r: effectiveParams(plan, e).radiusM }); }
 
     // replay: the previous run's kept edits, unchanged
     let dirN = 0;
@@ -649,7 +718,7 @@ export async function runMicroEditPass(input: MicroEditPassInput): Promise<{ pla
     for (const u of replayed) {
         const root = plan.edits.find(e => e.key === u.root)!;
         const rp = effectiveParams(plan, root);
-        const zone = pointsNear(pts, u.origin[0], u.origin[2], rp.radiusM + 0.3, u.origin[1] + 0.15 * rp.heightM);
+        const zone = ownPoints(pts, { cx: u.origin[0], cz: u.origin[2], r: rp.radiusM }, others, 0.3, u.origin[1] + 0.15 * rp.heightM);
         let reason: string | undefined;
         if (zone.count < 10) reason = `the new scan shows nothing standing here (${zone.count} points above 15% of its height within its radius)`;
         else {
@@ -676,29 +745,38 @@ export async function runMicroEditPass(input: MicroEditPassInput): Promise<{ pla
     const queue: Proposal[] = [];
     const roots = keptEdits(plan).filter(e => e.kind === 'primitive' && e.primitive === 'revolution').sort((a, b) => (a.key < b.key ? -1 : 1));
     for (const root of roots) {
-        const next = nextRung(plan, root, cropFor(root), pts, input.frame, P);
+        let next = nextRung(plan, root, cropFor(root), pts, input.frame, P);
+        // a ring the photo shows but the checks refused, on the same evidence: an open top goes on to its sweeps
+        if (next?.rung === 1) {
+            const k = editKey(next as MicroEdit, P), d = evidenceDigest(next.evidence);
+            if (plan.rejected.some(r => r.key === k && r.evidenceDigest === d)) next = nextRung(plan, root, cropFor(root), pts, input.frame, P, true) ?? next;
+        }
         if (next) queue.push(next);
     }
     for (const root of roots) queue.push(...nudgesFor(plan, root, cropFor(root), found.units, input.frame, P));
-    for (const u of found.units) {
+    // new solids, most confident first (round and seen all round), then by place
+    const ranked = [...found.units].sort((a, b) => (b.sectorShare * (1 - b.rmsRel / ROUND_REL)) - (a.sectorShare * (1 - a.rmsRel / ROUND_REL)) || a.cx - b.cx || a.cz - b.cz);
+    for (const u of ranked) {
+        if (input.focus && Math.hypot(u.cx - input.focus.cx, u.cz - input.focus.cz) > input.focus.radiusM) continue;
         const anchor = toAnchor(input.frame, u.cx, u.baseY, u.cz);
         const near = plan.edits.some(e => e.kind === 'primitive' && e.primitive === 'revolution' && e.status === 'kept' && distanceM(e.anchor, anchor) <= P.matchRootM);
         if (near) continue;
-        const zone = pointsNear(pts, u.cx, u.cz, u.r + 0.3, u.baseY + 0.05);
+        const zone = ownPoints(pts, u, others, 0.3, u.baseY + 0.05);
         queue.push({
             kind: 'primitive', primitive: 'revolution', rung: 0, anchor,
-            params: { radiusM: round(u.r, 4), heightM: round(u.topY - u.baseY, 4), sinkM: P.sinkM },
-            paramProvenance: { radiusM: 'measured', heightM: 'measured', sinkM: 'generated' },
+            params: { radiusM: round(u.r, 4), heightM: round(u.topY - u.baseY, 4), sinkM: P.sinkM, ...(u.inner ? { innerRadiusM: round(u.inner.radiusM, 4), openDepthM: round(u.topY - u.inner.floorY, 4) } : {}) },
+            paramProvenance: { radiusM: 'measured', heightM: 'measured', sinkM: 'generated', ...(u.inner ? { innerRadiusM: 'measured' as const, openDepthM: 'measured' as const } : {}) },
             provenance: 'measured',
             confidence: round(Math.max(0, Math.min(1, (1 - u.rmsRel / Math.max(1e-6, ROUND_REL))) * u.sectorShare), 3),
             evidence: {
                 scan: { points: zone.count, digest: pointsDigest(zone), rmsM: round(u.rmsM, 4), rmsRel: round(u.rmsRel, 4), sectorShare: round(u.sectorShare, 3) },
-                reasons: { radiusM: 'a circle fitted to the scan\'s side points', heightM: 'the scan\'s 95th percentile height over its support', sinkM: `sunk ${P.sinkM * 100} cm into the roof so no gap shows (an estimate of surface that is never seen: not counted in the edit's label)` }
+                reasons: { ...(u.inner ? { innerRadiusM: `a circle fitted to the scan's inner wall (RMS ${u.inner.rmsM.toFixed(3)} m)`, openDepthM: 'the rim\'s top over the median of the floor the scan measures inside it' } : {}), radiusM: `a circle fitted to the scan's outer wall (${u.found === 'circle-vote' ? 'one of several circles its raised cells vote for' : 'the whole raised component'})`, heightM: 'the scan\'s 95th percentile height over its support', sinkM: `sunk ${P.sinkM * 100} cm into the roof so no gap shows (an estimate of surface that is never seen: not counted in the edit's label)` }
             }
         });
     }
 
     let kept = 0, tried = 0;
+    void others;
     for (const raw of queue) {
         if (kept >= P.maxEditsPerRun || tried >= P.maxProposalsPerRun) break;
         const prop = finishProposal(raw, P);
@@ -709,7 +787,7 @@ export async function runMicroEditPass(input: MicroEditPassInput): Promise<{ pla
         if (before) { record.skipped.push({ key: prop.key, reason: `rejected in run ${before.runId} on the same evidence: ${before.reason}` }); proposals.push({ key: prop.key, kind: prop.kind, ...(prop.primitive ? { primitive: prop.primitive } : {}), rung: prop.rung, verdict: 'skipped', reason: `rejected before on the same evidence (${before.reason})` }); continue; }
         tried++;
         record.proposed.push(prop.key);
-        const v = await verifyProposal({ plan, proposal: prop, frame: input.frame, pts, heights, scanIndex, footprint: input.footprint, cropFor, heldOut: input.heldOut, dir: work(), P });
+        const v = await verifyProposal({ plan, proposal: prop, frame: input.frame, pts, others, heights, scanIndex, footprint: mask, cropFor, ...(input.onCompare ? { onCompare: input.onCompare } : {}), heldOut: input.heldOut, dir: work(), P });
         const base = { key: prop.key, kind: prop.kind, ...(prop.primitive ? { primitive: prop.primitive } : {}), rung: prop.rung, ...(prop.parent ? { parent: prop.parent } : {}) };
         if (v.reason) {
             plan.rejected.push({ key: prop.key, kind: prop.kind, ...(prop.primitive ? { primitive: prop.primitive } : {}), ...(prop.parent ? { parent: prop.parent } : {}), rung: prop.rung, params: prop.params, ...(prop.nudge ? { nudge: prop.nudge } : {}), evidenceDigest: digest, runId: input.runId, atMs: now(), reason: v.reason, ...(v.metrics ? { metrics: v.metrics } : {}) });
@@ -759,27 +837,36 @@ function distanceM(a: GeoAnchor, b: GeoAnchor): number {
 }
 
 /** The next rung of a kept solid's detail ladder, from the photo (and the scan where it resolves a depth); undefined when done. */
-export function nextRung(plan: MicroEditPlan, root: MicroEdit, crop: TopDownCrop, pts: ScanPoints, frame: ObjectFrame, P: MicroEditParams = MICRO_EDIT_PARAMS): Proposal | undefined {
+export function nextRung(plan: MicroEditPlan, root: MicroEdit, crop: TopDownCrop, pts: ScanPoints, frame: ObjectFrame, P: MicroEditParams = MICRO_EDIT_PARAMS, skipRing = false): Proposal | undefined {
     const kids = keptEdits(plan).filter(e => e.kind === 'primitive' && e.parent === root.key);
-    const rung = kids.reduce((m, e) => Math.max(m, e.rung), 0) + 1;
+    const has = (r: number) => kids.some(k => k.rung === r);
     const rp = effectiveParams(plan, root);
     const o = fromAnchor(frame, root.anchor);
     const [ax, ay, az] = o;
     const R = rp.radiusM, H = rp.heightM;
+    // the top the ladder works in: the measured floor of an open top, else the solid's top
+    const open = (rp.innerRadiusM ?? 0) > 0 && (rp.openDepthM ?? 0) > 0;
+    const topR = open ? rp.innerRadiusM : R, topH = open ? H - rp.openDepthM : H;
     const key = cropKey(crop, ax, az, R);
     const recess = kids.find(k => k.primitive === 'revolution-recess');
-    const common = { kind: 'primitive' as const, parent: root.key, rung, anchor: root.anchor, provenance: 'generated' as ProvenanceLabel };
+    let rung = has(1) || has(2) ? (has(2) ? 3 : 2) : 1;
+    if (has(3)) return undefined;
+    const common = () => ({ kind: 'primitive' as const, parent: root.key, rung, anchor: root.anchor, provenance: 'generated' as ProvenanceLabel });
     if (rung === 1) {
-        const step = strongestRingStep(crop, ax, az, 0.3 * R, Math.max(0.3 * R, R - 0.04));
-        if (!step || step.snr < P.ringMinSnr || Math.abs(step.step) < P.ringMinStep) return undefined;
+        const step = strongestRingStep(crop, ax, az, 0.3 * topR, Math.max(0.3 * topR, topR - 0.04));
+        if (skipRing || !step || step.snr < P.ringMinSnr || Math.abs(step.step) < P.ringMinStep) {
+            // no ring in the photo: an open top the scan measured holds the next rung's sweeps; a solid top does not
+            if (!open) return undefined;
+            rung = 2;
+        } else {
         const radiusM = round(step.radiusM, 4);
         // the scan's dish: its top points inside the ring against those on the rim
-        const top = pointsNear(pts, ax, az, R, ay + 0.5 * H);
+        const top = pointsNear(pts, ax, az, topR, ay + topH - 0.5 * Math.min(H, 1));
         const inner: number[] = [], rim: number[] = [];
         for (let i = 0; i < top.count; i++) {
             if (top.n[i * 3 + 1] < 0.8) continue;
             const r = Math.hypot(top.p[i * 3] - ax, top.p[i * 3 + 2] - az);
-            if (r < 0.8 * radiusM) inner.push(top.p[i * 3 + 1]); else if (r > radiusM + 0.05 && r < R - 0.02) rim.push(top.p[i * 3 + 1]);
+            if (r < 0.8 * radiusM) inner.push(top.p[i * 3 + 1]); else if (r > radiusM + 0.05 && r < topR - 0.02) rim.push(top.p[i * 3 + 1]);
         }
         const dish = inner.length >= 5 && rim.length >= 5 ? mean(rim) - mean(inner) : NaN;
         // the scan's own roughness on the top: a dip smaller than twice it is one the scan can neither show nor rule out
@@ -787,7 +874,7 @@ export function nextRung(plan: MicroEditPlan, root: MicroEdit, crop: TopDownCrop
         const measured = Number.isFinite(dish) && dish >= Math.max(0.03, 2 * sigma);
         const depthM = round(Math.min(P.maxDisplacementM, measured ? dish : Math.max(0.02, Math.min(0.2 * radiusM, 2 * sigma))), 4);
         return {
-            ...common, primitive: 'revolution-recess',
+            ...common(), primitive: 'revolution-recess',
             params: { radiusM, depthM, floorShare: 0.95 },
             paramProvenance: { radiusM: 'photo-inferred', depthM: measured ? 'measured' : 'generated', floorShare: 'generated' },
             confidence: round(Math.min(1, step.snr / (3 * P.ringMinSnr)), 3),
@@ -800,42 +887,47 @@ export function nextRung(plan: MicroEditPlan, root: MicroEdit, crop: TopDownCrop
                 }
             }
         };
+        }
     }
-    if (!recess) return undefined;
-    const q = effectiveParams(plan, recess);
-    const rr = q.radiusM, floorY = H - q.depthM;
+    if (!recess && !open) return undefined;
+    // the space the sweeps turn in: a measured open top's hollow (its floor up to the rim), else the recess
+    const q = recess ? effectiveParams(plan, recess) : { radiusM: topR, depthM: 0 };
+    const rr = q.radiusM, floorY = recess ? topH - q.depthM : topH;
+    const space = open ? { y0: floorY, depth: Math.min(1, H - floorY) } : { y0: floorY, depth: q.depthM };
     if (rung === 2) {
         const per = angularPeriod(crop, ax, az, 0.35 * rr, 0.85 * rr, 2, 12);
         if (!per) return undefined;
         const sig = per.significance >= P.periodMinSignificance;
         const rmid = 0.6 * rr, gap = (Math.PI * rmid) / per.count;
-        const halfWidthM = round(Math.max(0.02, Math.min(0.8 * gap, per.duty * gap)), 4);
+        // the spoke's width: its peak's width at half height over one folded period, at the annulus' middle radius
+        const halfWidthM = round(Math.max(0.02, Math.min(0.8 * gap, per.peakShare * gap)), 4);
         // the pitch stays inside the recess: the profile's rise (half width x sin pitch) at most 40% of its depth
-        const pitchRad = round(Math.min(0.45, Math.asin(Math.min(1, (0.4 * q.depthM) / halfWidthM))), 4);
+        const pitchRad = round(Math.min(0.45, Math.asin(Math.min(1, (0.4 * space.depth) / halfWidthM))), 4);
         return {
-            ...common, primitive: 'radial-sweeps',
-            params: { count: per.count, innerRadiusM: round(Math.max(0.05, 0.18 * rr), 4), outerRadiusM: round(0.94 * rr, 4), halfWidthM, halfThicknessM: 0.006, pitchRad, phaseRad: round(per.phase, 5), yM: round(floorY + 0.4 * q.depthM, 4) },
+            ...common(), primitive: 'radial-sweeps',
+            params: { count: per.count, innerRadiusM: round(Math.max(0.05, 0.18 * rr), 4), outerRadiusM: round(0.94 * rr, 4), halfWidthM, halfThicknessM: 0.006, pitchRad, phaseRad: round(per.phase, 5), yM: round(space.y0 + 0.4 * space.depth, 4) },
             paramProvenance: { count: sig ? 'photo-inferred' : 'generated', phaseRad: sig ? 'photo-inferred' : 'generated', halfWidthM: sig ? 'photo-inferred' : 'generated', innerRadiusM: 'generated', outerRadiusM: 'generated', halfThicknessM: 'generated', pitchRad: 'generated', yM: 'generated' },
             confidence: round(Math.min(1, per.significance / (3 * P.periodMinSignificance)), 3),
             evidence: {
-                photo: { cropKey: key, texelM: crop.texelM, measures: { count: per.count, phaseRad: round(per.phase, 4), significance: round(per.significance, 2), duty: round(per.duty, 3) } },
+                photo: { cropKey: key, texelM: crop.texelM, measures: { count: per.count, phaseRad: round(per.phase, 4), significance: round(per.significance, 2), duty: round(per.duty, 3), peakShare: round(per.peakShare, 3) } },
                 reasons: {
+                    halfWidthM: sig ? `the width at half height of the photo's folded angular peak (${(per.peakShare * 100).toFixed(0)}% of a period)` : 'an estimate',
                     count: sig ? `the photo's strongest angular period inside the recess (${per.significance.toFixed(1)} x the spectrum's median)` : `no angular period stands out (${per.significance.toFixed(1)} x the median, below ${P.periodMinSignificance}); the strongest count, an estimate`,
                     pitchRad: 'the photo straight down cannot show a pitch; an estimate of up to 26 degrees, as much as the recess holds',
                     innerRadiusM: 'an estimate: a hub of 18% of the recess radius',
                     halfThicknessM: 'an estimate below the scan\'s and the photo\'s resolution',
-                    yM: 'an estimate: 40% of the way up the recess'
+                    yM: open ? 'an estimate: 40% of the way up the hollow the scan measures' : 'an estimate: 40% of the way up the recess'
                 }
             }
         };
     }
     if (rung === 3) {
-        const per = radialPeriod(crop, ax, az, 0.15 * rr, 0.97 * rr, 0.025, 0.15);
+        const per = radialPeriod(crop, ax, az, 0.15 * topR, 0.97 * topR, 0.025, 0.15);
         const sig = !!per && per.significance >= P.periodMinSignificance;
         const pitchM = round(sig ? per!.pitchM : 0.05, 4), wire = 0.004;
         return {
-            ...common, primitive: 'concentric-sweeps',
-            params: { pitchM, wireRadiusM: wire, innerRadiusM: round(Math.max(pitchM, 0.12 * rr), 4), outerRadiusM: round(0.97 * rr, 4), spokes: 4, yM: round(H + wire, 4) },
+            ...common(), primitive: 'concentric-sweeps',
+            params: { pitchM, wireRadiusM: wire, innerRadiusM: round(Math.max(pitchM, 0.12 * topR), 4), outerRadiusM: round(0.97 * topR, 4), spokes: 4, yM: round(H + wire, 4) },
             paramProvenance: { pitchM: sig ? 'photo-inferred' : 'generated', wireRadiusM: 'generated', innerRadiusM: 'generated', outerRadiusM: 'generated', spokes: 'generated', yM: 'generated' },
             confidence: round(sig ? Math.min(1, per!.significance / (3 * P.periodMinSignificance)) : 0.2, 3),
             evidence: {
@@ -875,11 +967,13 @@ interface VerifyInput {
     proposal: Proposal & { key: string };
     frame: ObjectFrame;
     pts: ScanPoints;
+    others: Array<{ cx: number; cz: number; r: number }>;
     heights: HeightMap;
     scanIndex: SurfaceIndex;
-    footprint: Footprint;
+    footprint: FootprintMask;
     cropFor: (root: MicroEdit) => TopDownCrop;
     heldOut?: (grid: TopDownCrop) => Promise<TopDownCrop | undefined>;
+    onCompare?: (c: HeldOutComparison) => void;
     dir: string;
     P: MicroEditParams;
 }
@@ -904,21 +998,33 @@ export async function verifyProposal(v: VerifyInput): Promise<{ reason?: string;
     const o = afterUnit.origin;
     const rp = effectiveParams(view, root);
     // the bounds: footprint and scanned volume
-    const out = outsideBounds(afterUnit.parts, v.footprint, v.heights, P);
+    // a detail on a kept, measured solid may fill the space the solid's own scanned walls enclose
+    const envelopes: UnitEnvelope[] = prop.rung === 0 ? [] : [{ cx: o[0], cz: o[2], r: rp.radiusM, baseY: o[1], topY: o[1] + rp.heightM }];
+    const out = outsideBounds(afterUnit.parts, v.footprint, v.heights, P, envelopes);
     if (out) return { reason: `out of bounds: ${out}`, note: '' };
     // the step's size: surface moved against the current model (the scan where no edit stands yet)
     const beforeIndex = beforeUnit ? new SurfaceIndex(partSoup(beforeUnit.parts)) : undefined;
-    const change = surfaceChange(afterUnit.parts, beforeIndex ?? v.scanIndex, P.changeTolM);
+    const changeTol = prop.rung === 0 ? P.rootChangeTolM : P.changeTolM;
+    const change = surfaceChange(afterUnit.parts, beforeIndex ?? v.scanIndex, changeTol);
     const maxDisp = prop.rung === 0 ? P.maxRootDisplacementM : prop.kind === 'nudge' ? P.maxNudgeM + P.changeTolM : P.maxDisplacementM;
     const sizeMetrics = { changedAreaM2: change.changedAreaM2, displacementP95M: change.p95M };
-    if (change.changedAreaM2 > P.maxChangedAreaM2) return { reason: `step too large: it moves ${change.changedAreaM2.toFixed(2)} m2 of surface by more than ${P.changeTolM * 100} cm (at most ${P.maxChangedAreaM2} m2)`, note: '', metrics: sizeMetrics };
-    if (change.p95M > maxDisp) return { reason: `step too large: its surface moves ${change.p95M.toFixed(3)} m (95th percentile; at most ${maxDisp} m)`, note: '', metrics: sizeMetrics };
+    const unitArea = (beforeUnit ?? afterUnit).parts.find(p => p.id === root.key)?.areaM2 ?? 0;
+    const areaLimit = round(Math.max(P.maxChangedAreaM2, P.maxChangedShare * unitArea), 2);
+    if (change.changedAreaM2 > areaLimit) return { reason: `step too large: it moves ${change.changedAreaM2.toFixed(2)} m2 of surface by more than ${changeTol * 100} cm (at most ${areaLimit} m2: ${P.maxChangedAreaM2} m2 or ${P.maxChangedShare * 100}% of the unit's ${unitArea.toFixed(1)} m2)`, note: '', metrics: sizeMetrics };
+    // a part that moves existing surface is held to its displacement; a separate thin part added (sweeps) to its own thickness
+    const added = prop.primitive === 'radial-sweeps' || prop.primitive === 'concentric-sweeps';
+    const thickness = 2 * Math.max(prop.params.halfThicknessM ?? 0, prop.params.wireRadiusM ?? 0);
+    if (added) {
+        const t = thickness;
+        if (t > P.maxDisplacementM) return { reason: `step too large: the added part is ${t.toFixed(3)} m thick (at most ${P.maxDisplacementM} m)`, note: '', metrics: sizeMetrics };
+    } else if (change.p95M > maxDisp) return { reason: `step too large: its surface moves ${change.p95M.toFixed(3)} m (95th percentile; at most ${maxDisp} m)`, note: '', metrics: sizeMetrics };
     // the scan
-    const zone = pointsNear(v.pts, o[0], o[2], rp.radiusM + 0.3, o[1] - 0.3);
+    const zone = ownPoints(v.pts, { cx: o[0], cz: o[2], r: rp.radiusM }, v.others, 0.3, o[1] - 0.3);
     if (zone.count < 10) return { reason: `the scan has ${zone.count} points here`, note: '', metrics: sizeMetrics };
     const sb = rmsOf(scanDistances(zone, beforeIndex, o[1]), zone.a);
     const sa = rmsOf(scanDistances(zone, new SurfaceIndex(partSoup(afterUnit.parts)), o[1]), zone.a);
-    const subRes = beforeUnit !== undefined && change.p95M < P.subResolutionM;
+    // below the scan's resolution: a surface moved less than it, or an added part thinner than it
+    const subRes = beforeUnit !== undefined && (added ? thickness < P.subResolutionM : change.p95M < P.subResolutionM);
     const scanRule: 'improves' | 'within-resolution' = subRes ? 'within-resolution' : 'improves';
     // the held-out photo
     const crop = v.cropFor(root);
@@ -928,8 +1034,10 @@ export async function verifyProposal(v: VerifyInput): Promise<{ reason?: string;
     let heldPixels = 0;
     if (held) {
         const zoneR = rp.radiusM + 0.4;
-        const b = heldOutScore(drawModelTopDown([support, ...(beforeUnit?.parts ?? [])], crop).image, held, o[0], o[2], zoneR);
-        const a = heldOutScore(drawModelTopDown([support, ...afterUnit.parts], crop).image, held, o[0], o[2], zoneR);
+        const bi = drawModelTopDown([support, ...(beforeUnit?.parts ?? [])], crop).image, ai = drawModelTopDown([support, ...afterUnit.parts], crop).image;
+        const b = heldOutScore(bi, held, o[0], o[2], zoneR);
+        const a = heldOutScore(ai, held, o[0], o[2], zoneR);
+        v.onCompare?.({ key: prop.key, tile: crop, heldOut: held, before: bi, after: ai, centre: [o[0], o[2]], radiusM: zoneR });
         pb = b; pa = a; heldPixels = Math.min(a.pixels, b.pixels);
     }
     const metrics: MicroEdit['metrics'] = {
@@ -942,14 +1050,16 @@ export async function verifyProposal(v: VerifyInput): Promise<{ reason?: string;
     } else if (sa.rms > sb.rms - P.minGainM) return { reason: `the scan: RMS ${sb.rms.toFixed(3)} -> ${sa.rms.toFixed(3)} m, no better`, note: '', metrics };
     if (prop.rung === 0 && (sa.rms > P.maxFitRmsM || sa.within15 < P.minWithin15)) return { reason: `the scan: the solid explains its points to ${sa.rms.toFixed(3)} m RMS, ${(sa.within15 * 100).toFixed(0)}% within 15 cm (needs ${P.maxFitRmsM} m, ${P.minWithin15 * 100}%)`, note: '', metrics };
     if (!held) return { reason: 'no held-out photo to verify it against', note: '', metrics };
-    if (heldPixels < 50) return { reason: `the held-out photo covers ${heldPixels} pixels of the unit`, note: '', metrics };
-    // a model drawn flat has no variance: it correlates with nothing (0), not unscorable
+    if (heldPixels < 30) return { reason: `the held-out photo covers ${heldPixels} pixels of the unit at its scoring scale`, note: '', metrics };
+    // a model drawn flat has no variance: it correlates with nothing (0), not unscorable; with no edges before, there are
+    // none to keep, so the gradient criterion then does not apply (SSIM still does)
+    const gradientBefore = pb.gradientNcc !== null;
     pb = { ssim: pb.ssim ?? 0, gradientNcc: pb.gradientNcc ?? 0 };
     pa = { ssim: pa.ssim ?? 0, gradientNcc: pa.gradientNcc ?? 0 };
     metrics.before.photoSsim = pb.ssim; metrics.before.photoGradientNcc = pb.gradientNcc;
     metrics.after.photoSsim = pa.ssim; metrics.after.photoGradientNcc = pa.gradientNcc;
     if (pa.ssim! < pb.ssim! - P.ssimTol) return { reason: `the held-out photo: SSIM ${pb.ssim!.toFixed(4)} -> ${pa.ssim!.toFixed(4)}, worse`, note: '', metrics };
-    if (pa.gradientNcc! < pb.gradientNcc! - P.gradientTol) return { reason: `the held-out photo: gradient correlation ${pb.gradientNcc!.toFixed(4)} -> ${pa.gradientNcc!.toFixed(4)}, worse`, note: '', metrics };
+    if (gradientBefore && pa.gradientNcc! < pb.gradientNcc! - P.gradientTol) return { reason: `the held-out photo: gradient correlation ${pb.gradientNcc!.toFixed(4)} -> ${pa.gradientNcc!.toFixed(4)}, worse`, note: '', metrics };
     const note = `scan RMS ${sb.rms.toFixed(3)} -> ${sa.rms.toFixed(3)} m (${scanRule}); held-out SSIM ${pb.ssim!.toFixed(4)} -> ${pa.ssim!.toFixed(4)}, gradient ${pb.gradientNcc!.toFixed(4)} -> ${pa.gradientNcc!.toFixed(4)}; ${change.changedAreaM2.toFixed(2)} m2 moved, 95th percentile ${change.p95M.toFixed(3)} m`;
     return { note, metrics };
 }

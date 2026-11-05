@@ -24,7 +24,7 @@ import { DirectoryCloudBucket } from '../src/node/cloud-store/cloud-bucket';
 import type { TopDownCrop } from '../src/node/3d-engine/staged-location/micro-edit-evidence';
 import { buildHeightMap, findRoundUnits, sampleScanPoints } from '../src/node/3d-engine/staged-location/micro-edit-evidence';
 import {
-    buildUnits, clampNudge, composeUnits, editKey, emptyPlan, keptEdits, MICRO_EDIT_PARAMS, nudgeWithinBounds, outsideBounds, replayHash, runMicroEditPass, supportDisc,
+    buildUnits, clampNudge, composeUnits, editKey, emptyPlan, FootprintMask, insideFootprint, keptEdits, MICRO_EDIT_PARAMS, nudgeWithinBounds, outsideBounds, replayHash, runMicroEditPass, supportDisc,
     toAnchor, type Footprint, type MicroEditPlan
 } from '../src/node/3d-engine/staged-location/micro-edits';
 import { loadMicroEditPlan, openPlaceStore, saveMicroEditPlan } from '../src/node/3d-engine/staged-location/place-store';
@@ -165,6 +165,61 @@ describe('micro-edits: the round units the scan measures', () => {
         expect(u.r).toBeLessThan(1.04);
         expect(u.topY - u.baseY).toBeGreaterThan(1.1);
         expect(f.rejected['sides not round']).toBe(1);
+    });
+});
+
+/** Two hollow rings touching (each an open octagonal wall 0.9 m high, 0.3 m thick, around a floor on the roof). */
+function touchingRings(): Float32Array {
+    const tris: number[] = [];
+    const tri = (a: number[], b: number[], c: number[]) => tris.push(...a, ...b, ...c);
+    for (let z = -10; z < 10; z += 0.5) for (let x = -10; x < 10; x += 0.5) {
+        tri([x, ROOF_Y, z], [x + 0.5, ROOF_Y, z], [x + 0.5, ROOF_Y, z + 0.5]);
+        tri([x, ROOF_Y, z], [x + 0.5, ROOF_Y, z + 0.5], [x, ROOF_Y, z + 0.5]);
+    }
+    let k = 0;
+    for (const [cx, cz] of [[-1.9, 0], [1.9, 0]]) {
+        const wall = (r: number) => {
+            const rows = 4;
+            const ring = (y: number) => Array.from({ length: 8 }, (_, s) => { const th = (s * Math.PI) / 4 + Math.PI / 8, rr = r + 0.01 * noise(k++, 5); return [cx + rr * Math.cos(th), y, cz + rr * Math.sin(th)]; });
+            const rs = Array.from({ length: rows + 1 }, (_, j) => ring(ROOF_Y + (0.9 * j) / rows));
+            for (let j = 0; j < rows; j++) for (let s = 0; s < 8; s++) { const a = rs[j][s], b = rs[j][(s + 1) % 8], c = rs[j + 1][(s + 1) % 8], d = rs[j + 1][s]; tri(a, b, c); tri(a, c, d); }
+            return rs[rows];
+        };
+        const outer = wall(1.9), inner = wall(1.6);
+        for (let s = 0; s < 8; s++) { tri(outer[s], outer[(s + 1) % 8], inner[(s + 1) % 8]); tri(outer[s], inner[(s + 1) % 8], inner[s]); }
+    }
+    return new Float32Array(tris);
+}
+
+describe('micro-edits: units that touch, open tops, and a footprint of many parts', () => {
+    it('finds two touching hollow rings as two units, each with its inner wall and floor measured', () => {
+        const pts = sampleScanPoints(touchingRings(), 0.06);
+        const h = buildHeightMap(pts, { x0: -11, z0: -11, x1: 11, z1: 11 });
+        const f = findRoundUnits(pts, h, () => true);
+        expect(f.units.length, JSON.stringify(f.rejected)).toBe(2);
+        for (const u of f.units) {
+            expect(u.found).toBe('circle-vote');
+            expect(Math.abs(Math.abs(u.cx) - 1.9)).toBeLessThan(0.1);
+            // an octagon with corners at 1.9 m: its outer wall lies between 1.76 and 1.9 m from the axis
+            expect(u.r).toBeGreaterThan(1.7);
+            expect(u.r).toBeLessThan(1.95);
+            expect(u.inner!.radiusM).toBeGreaterThan(1.4);
+            expect(u.inner!.radiusM).toBeLessThan(u.r - 0.1);
+            expect(u.topY - u.inner!.floorY).toBeGreaterThan(0.8);
+        }
+    });
+
+    it('rasterises a footprint of many parts to the same answer as the polygons, cell centre by cell centre', () => {
+        const parts: Footprint = [];
+        for (let i = 0; i < 40; i++) { const x = (i % 8) * 2.5, z = Math.floor(i / 8) * 2.5; parts.push([[[x, z], [x + 2, z], [x + 1, z + 2]]]); }
+        parts.push([[[-5, -5], [-1, -5], [-1, -1], [-5, -1]], [[-4, -4], [-2, -4], [-2, -2], [-4, -2]]]);
+        const m = new FootprintMask(parts, 0.1);
+        let disagree = 0, n = 0;
+        for (let z = m.z0 + 0.05; z < m.z0 + m.nz * 0.1; z += 0.1) for (let x = m.x0 + 0.05; x < m.x0 + m.nx * 0.1; x += 0.1) { n++; if (m.inside(x, z) !== insideFootprint(parts, x, z)) disagree++; }
+        expect(n).toBeGreaterThan(10000);
+        expect(disagree / n).toBeLessThan(0.002);
+        expect(m.inside(-3, -3)).toBe(false); // the hole
+        expect(m.inside(-4.5, -4.5)).toBe(true);
     });
 });
 

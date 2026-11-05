@@ -49,32 +49,47 @@ export interface ScanPoints {
 }
 
 /**
- * Samples every triangle (positions: 9 floats each) whose centroid passes `keep` on a barycentric lattice whose step is
- * about `spacingM`: deterministic, so the same scan gives the same points.
+ * Samples every triangle (positions: 9 floats each) whose centroid passes `keep`: about one point per `spacingM`^2 of its
+ * area (at least one, at most 4096), on a fixed low-discrepancy sequence over the triangle (deterministic, so the same scan
+ * gives the same points).
  */
 export function sampleScanPoints(positions: Float32Array, spacingM: number, keep?: (x: number, y: number, z: number) => boolean): ScanPoints {
-    const p: number[] = [], n: number[] = [], a: number[] = [];
-    for (let t = 0; t < positions.length / 9; t++) {
+    const nt = positions.length / 9;
+    const counts = new Uint16Array(nt);
+    let total = 0;
+    for (let t = 0; t < nt; t++) {
         const o = t * 9;
-        const A = [positions[o], positions[o + 1], positions[o + 2]], B = [positions[o + 3], positions[o + 4], positions[o + 5]], C = [positions[o + 6], positions[o + 7], positions[o + 8]];
-        const cx = (A[0] + B[0] + C[0]) / 3, cy = (A[1] + B[1] + C[1]) / 3, cz = (A[2] + B[2] + C[2]) / 3;
+        const cx = (positions[o] + positions[o + 3] + positions[o + 6]) / 3, cy = (positions[o + 1] + positions[o + 4] + positions[o + 7]) / 3, cz = (positions[o + 2] + positions[o + 5] + positions[o + 8]) / 3;
         if (keep && !keep(cx, cy, cz)) continue;
-        const u = [B[0] - A[0], B[1] - A[1], B[2] - A[2]], v = [C[0] - A[0], C[1] - A[1], C[2] - A[2]];
-        const nx = u[1] * v[2] - u[2] * v[1], ny = u[2] * v[0] - u[0] * v[2], nz = u[0] * v[1] - u[1] * v[0];
-        const nl = Math.hypot(nx, ny, nz);
-        if (nl < 1e-12) continue;
+        const ux = positions[o + 3] - positions[o], uy = positions[o + 4] - positions[o + 1], uz = positions[o + 5] - positions[o + 2];
+        const vx = positions[o + 6] - positions[o], vy = positions[o + 7] - positions[o + 1], vz = positions[o + 8] - positions[o + 2];
+        const area = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 2;
+        if (area < 1e-10) continue;
+        counts[t] = Math.max(1, Math.min(4096, Math.round(area / (spacingM * spacingM))));
+        total += counts[t];
+    }
+    const p = new Float32Array(total * 3), n = new Float32Array(total * 3), a = new Float32Array(total);
+    let k = 0;
+    // the R2 sequence folded into the triangle
+    const g = 1.32471795724474602596, a1 = 1 / g, a2 = 1 / (g * g);
+    for (let t = 0; t < nt; t++) {
+        const c = counts[t];
+        if (!c) continue;
+        const o = t * 9;
+        const ux = positions[o + 3] - positions[o], uy = positions[o + 4] - positions[o + 1], uz = positions[o + 5] - positions[o + 2];
+        const vx = positions[o + 6] - positions[o], vy = positions[o + 7] - positions[o + 1], vz = positions[o + 8] - positions[o + 2];
+        const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, nl = Math.hypot(nx, ny, nz);
         const area = nl / 2;
-        const edge = Math.max(Math.hypot(u[0], u[1], u[2]), Math.hypot(v[0], v[1], v[2]), Math.hypot(B[0] - C[0], B[1] - C[1], B[2] - C[2]));
-        const k = Math.max(1, Math.min(64, Math.ceil(edge / spacingM)));
-        const pts: Array<[number, number]> = [];
-        for (let i = 0; i < k; i++) for (let j = 0; i + j < k; j++) pts.push([(i + 1 / 3) / k, (j + 1 / 3) / k]);
-        for (const [s, r] of pts) {
-            p.push(A[0] + s * u[0] + r * v[0], A[1] + s * u[1] + r * v[1], A[2] + s * u[2] + r * v[2]);
-            n.push(nx / nl, ny / nl, nz / nl);
-            a.push(area / pts.length);
+        for (let i = 0; i < c; i++) {
+            let s = c === 1 ? 1 / 3 : (0.5 + a1 * (i + 1)) % 1, r = c === 1 ? 1 / 3 : (0.5 + a2 * (i + 1)) % 1;
+            if (s + r > 1) { s = 1 - s; r = 1 - r; }
+            p[k * 3] = positions[o] + s * ux + r * vx; p[k * 3 + 1] = positions[o + 1] + s * uy + r * vy; p[k * 3 + 2] = positions[o + 2] + s * uz + r * vz;
+            n[k * 3] = nx / nl; n[k * 3 + 1] = ny / nl; n[k * 3 + 2] = nz / nl;
+            a[k] = area / c;
+            k++;
         }
     }
-    return { p: new Float32Array(p), n: new Float32Array(n), a: new Float32Array(a), count: a.length };
+    return { p, n, a, count: total };
 }
 
 /** The points within `radiusM` (in plan) of (cx, cz) and above `minY`. */
@@ -114,7 +129,7 @@ export const ROUND_UNIT_PARAMS = {
     /** A cell stands up when its top is this far above its support (m). */
     minRiseM: 0.35,
     minAreaM2: 0.6,
-    maxAreaM2: 40,
+    maxAreaM2: 120,
     /** Side points: |normal y| below this, between these shares of the unit's height. */
     sideNormalY: 0.5,
     sideBand: [0.15, 0.85] as [number, number],
@@ -122,8 +137,21 @@ export const ROUND_UNIT_PARAMS = {
     maxRmsRel: 0.05,
     /** Seen all round: share of 16 angular sectors holding side points. */
     minSectorShare: 0.7,
-    /** The component's cells fill its circle's area within this ratio range. */
-    fillRange: [0.6, 1.4] as [number, number],
+    /** Its circle's perimeter stands proud (raised cells within a cell or two) along at least this share. */
+    minPerimeter: 0.7,
+    /** An open top: the floor this far below the rim at least (m; the tiles' resolution). */
+    minOpenDepthM: 0.2,
+    /** Two walls (an inner and an outer) when the side points' distances split into means this far apart (m). */
+    minWallGapM: 0.12,
+    /** The floor is read from surfaces at most this far below the support (m). */
+    floorBelowSupportM: 1.0,
+    /** Components larger than this are not one unit, and circle votes there would be a roof's worth (m2). */
+    maxComponentM2: 1500,
+    /** Circle votes: the radii searched (m), the least share of a perimeter that must vote, and the most circles taken. */
+    voteMinRadiusM: 0.5,
+    voteMaxRadiusM: 6,
+    minVoteScore: 0.6,
+    maxCirclesPerComponent: 24,
     /** The unit's top is this percentile of its points' heights. */
     topPercentile: 0.95
 };
@@ -232,23 +260,171 @@ function solve3(A: number[][], b: number[]): number[] | undefined {
 }
 
 export interface RoundUnit {
-    cx: number; cz: number; r: number;
+    cx: number; cz: number;
+    /** The outer wall's radius (m). */
+    r: number;
     /** The support it stands on and its top (m, tile frame). */
     baseY: number; topY: number;
-    /** Radial RMS of its side points (m) and over the radius. */
+    /** Radial RMS of its outer wall's points (m) and over the radius. */
     rmsM: number; rmsRel: number;
-    sectorShare: number; fill: number;
+    sectorShare: number;
+    /** Share of its circle's perimeter the raised cells cover. */
+    perimeter: number;
     sidePoints: number;
+    /** An open top the scan resolves: an inner wall at `radiusM` around a floor at `floorY`, its own fit's RMS. */
+    inner?: { radiusM: number; floorY: number; rmsM: number; sectorShare: number };
+    /** How it was found: the whole raised component is the unit, or a circle among several in one component. */
+    found: 'component' | 'circle-vote';
 }
 
-/** Units standing on the support inside `inside(x, z)` whose sides the scan measures as round (see ROUND_UNIT_PARAMS). */
-export function findRoundUnits(pts: ScanPoints, h: HeightMap, inside: (x: number, z: number) => boolean, P = ROUND_UNIT_PARAMS): { units: RoundUnit[]; components: number; rejected: Record<string, number> } {
+/** Round, seen all round and standing proud along its whole perimeter: the measures a candidate circle must pass. */
+function measureCircle(pts: ScanPoints, allIds: number[], h: HeightMap, raisedAt: (x: number, z: number) => boolean, circle: { cx: number; cz: number; r: number }, support: number, P: typeof ROUND_UNIT_PARAMS, others: Array<{ cx: number; cz: number; r: number }> = []): RoundUnit | string {
+    // its own points: none that lie nearer a neighbouring candidate circle's wall (a touching neighbour's: a circle beside it,
+    // not one overlapping it, which is another vote for the same unit)
+    const wallDist = (c: { cx: number; cz: number; r: number }, i: number) => Math.abs(Math.hypot(pts.p[i * 3] - c.cx, pts.p[i * 3 + 2] - c.cz) - c.r);
+    const beside = others.filter(o => o !== circle && Math.hypot(o.cx - circle.cx, o.cz - circle.cz) > 0.8 * (o.r + circle.r));
+    const ids = beside.length ? allIds.filter(i => { const d = wallDist(circle, i); return !beside.some(o => wallDist(o, i) < d && Math.hypot(pts.p[i * 3] - o.cx, pts.p[i * 3 + 2] - o.cz) < o.r + 0.6); }) : allIds;
+    // its points: those within half a metre of its rim band, or inside it
+    const heights: number[] = [];
+    for (const i of ids) {
+        const d = Math.hypot(pts.p[i * 3] - circle.cx, pts.p[i * 3 + 2] - circle.cz);
+        if (d <= circle.r + 0.3 && pts.p[i * 3 + 1] > support) heights.push(pts.p[i * 3 + 1]);
+    }
+    heights.sort((p, q) => p - q);
+    if (heights.length < 10) return 'too few points';
+    const topY = heights[Math.floor(P.topPercentile * (heights.length - 1))];
+    const H = topY - support;
+    if (H < P.minRiseM) return 'too low';
+    const band = (lo: number, hi: number) => {
+        const xs: number[] = [], zs: number[] = [];
+        for (const i of ids) {
+            const x = pts.p[i * 3], y = pts.p[i * 3 + 1], z = pts.p[i * 3 + 2];
+            if (Math.abs(pts.n[i * 3 + 1]) >= P.sideNormalY) continue;
+            if (y < support + P.sideBand[0] * H || y > support + P.sideBand[1] * H) continue;
+            const d = Math.hypot(x - circle.cx, z - circle.cz);
+            if (d >= lo && d <= hi) { xs.push(x); zs.push(z); }
+        }
+        return { xs, zs };
+    };
+    const sectors = (xs: number[], zs: number[], c: { cx: number; cz: number }) => {
+        const s = new Set<number>();
+        for (let i = 0; i < xs.length; i++) s.add(Math.floor(((Math.atan2(zs[i] - c.cz, xs[i] - c.cx) + Math.PI) / (2 * Math.PI)) * 16) % 16);
+        return s.size / 16;
+    };
+    // the walls: the side points about the circle, their common centre first; split by distance from it into an outer and
+    // an inner wall when two walls stand there (two-means on the distance, the means apart by more than minWallGapM)
+    const all = band(Math.max(0.2, 0.3 * circle.r), circle.r + 0.6);
+    const centre = fitCircle(all.xs, all.zs);
+    if (!centre) return 'no side points to fit';
+    const d = all.xs.map((x, i) => Math.hypot(x - centre.cx, all.zs[i] - centre.cz));
+    let t = median(d.slice()), lo = 0, hi = 0;
+    for (let it = 0; it < 20; it++) {
+        const l = d.filter(v => v < t), u = d.filter(v => v >= t);
+        if (!l.length || !u.length) break;
+        lo = l.reduce((a, b) => a + b, 0) / l.length; hi = u.reduce((a, b) => a + b, 0) / u.length;
+        const nt = (lo + hi) / 2;
+        if (Math.abs(nt - t) < 1e-4) break;
+        t = nt;
+    }
+    const pick = (keep: (v: number) => boolean) => { const xs: number[] = [], zs: number[] = []; d.forEach((v, i) => { if (keep(v)) { xs.push(all.xs[i]); zs.push(all.zs[i]); } }); return { xs, zs }; };
+    const twoWalls = hi - lo > P.minWallGapM && d.filter(v => v < t).length >= 12 && d.filter(v => v >= t).length >= 12;
+    const w = twoWalls ? pick(v => v >= t && v <= t + 0.6) : pick(v => Math.abs(v - centre.r) <= 0.6);
+    const outer = fitCircle(w.xs, w.zs);
+    if (!outer) return 'no side points to fit';
+    const rmsRel = outer.rms / Math.max(1e-6, outer.r);
+    const sectorShare = sectors(w.xs, w.zs, outer);
+    if (rmsRel > P.maxRmsRel) return 'sides not round';
+    if (sectorShare < P.minSectorShare) return 'sides not seen all round';
+    // standing proud all along its perimeter
+    let on = 0;
+    const steps = Math.max(16, Math.round((2 * Math.PI * outer.r) / h.cellM));
+    for (let k = 0; k < steps; k++) {
+        const th = (2 * Math.PI * k) / steps;
+        let hit = false;
+        for (const dr of [-2, -1, 0, 1]) { if (raisedAt(outer.cx + (outer.r + dr * h.cellM) * Math.cos(th), outer.cz + (outer.r + dr * h.cellM) * Math.sin(th))) { hit = true; break; } }
+        if (hit) on++;
+    }
+    const perimeter = on / steps;
+    if (perimeter < P.minPerimeter) return 'does not stand proud along its perimeter';
+    // an open top: an inner wall the scan resolves, and a floor below the rim
+    let inner: RoundUnit['inner'];
+    const iw = twoWalls ? pick(v => v < t && v >= t - 0.4) : { xs: [] as number[], zs: [] as number[] };
+    const innerFit = iw.xs.length >= 12 ? fitCircle(iw.xs, iw.zs) : undefined;
+    if (innerFit && Math.hypot(innerFit.cx - outer.cx, innerFit.cz - outer.cz) < 0.2 * outer.r && innerFit.r < outer.r - 0.05 && innerFit.rms / innerFit.r <= P.maxRmsRel && sectors(iw.xs, iw.zs, innerFit) >= P.minSectorShare) {
+        // the floor: the height map's cells inside the inner wall (the highest surface there), near the unit's own support
+        const floor: number[] = [];
+        const reach = 0.8 * innerFit.r, c0x = Math.floor((outer.cx - reach - h.x0) / h.cellM), c1x = Math.ceil((outer.cx + reach - h.x0) / h.cellM);
+        const c0z = Math.floor((outer.cz - reach - h.z0) / h.cellM), c1z = Math.ceil((outer.cz + reach - h.z0) / h.cellM);
+        for (let iz = Math.max(0, c0z); iz <= Math.min(h.nz - 1, c1z); iz++) for (let ix = Math.max(0, c0x); ix <= Math.min(h.nx - 1, c1x); ix++) {
+            const y = h.top[iz * h.nx + ix];
+            if (!(y > -Infinity) || y < support - P.floorBelowSupportM || y > topY) continue;
+            if (Math.hypot(h.x0 + (ix + 0.5) * h.cellM - outer.cx, h.z0 + (iz + 0.5) * h.cellM - outer.cz) < reach) floor.push(y);
+        }
+        const floorY = median(floor);
+        if (floor.length >= 10 && topY - floorY >= P.minOpenDepthM) inner = { radiusM: innerFit.r, floorY, rmsM: innerFit.rms, sectorShare: sectors(iw.xs, iw.zs, innerFit) };
+    }
+    return { cx: outer.cx, cz: outer.cz, r: outer.r, baseY: support, topY, rmsM: outer.rms, rmsRel, sectorShare, perimeter, sidePoints: w.xs.length, ...(inner ? { inner } : {}), found: 'component' };
+}
+
+/**
+ * Circles in a component's raised cells: each raised cell votes for the centres at each radius around it (one vote per
+ * centre bin and radius); a bin's score is the share of its circle's perimeter that voted. Peaks are taken best first,
+ * never one whose centre lies inside a circle already taken.
+ */
+function circleVotes(cells: number[], h: HeightMap, P: typeof ROUND_UNIT_PARAMS): Array<{ cx: number; cz: number; r: number; score: number }> {
+    const c = h.cellM;
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const k of cells) { const x = k % h.nx, z = (k - x) / h.nx; x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+    const W = x1 - x0 + 1, D = z1 - z0 + 1;
+    const rMin = Math.max(2, Math.round(P.voteMinRadiusM / c)), rMax = Math.min(Math.round(P.voteMaxRadiusM / c), Math.ceil(Math.max(W, D) / 2));
+    if (rMax < rMin) return [];
+    const nr = rMax - rMin + 1;
+    const acc = new Uint16Array(W * D * nr);
+    const stamp = new Int32Array(W * D * nr).fill(-1);
+    cells.forEach((k, ci) => {
+        const x = (k % h.nx) - x0, z = Math.floor(k / h.nx) - z0;
+        for (let ri = 0; ri < nr; ri++) {
+            const r = rMin + ri, steps = Math.max(8, Math.round(2 * Math.PI * r));
+            for (let s = 0; s < steps; s++) {
+                const th = (2 * Math.PI * s) / steps;
+                const ux = Math.round(x - r * Math.cos(th)), uz = Math.round(z - r * Math.sin(th));
+                if (ux < 0 || uz < 0 || ux >= W || uz >= D) continue;
+                const b = (uz * W + ux) * nr + ri;
+                if (stamp[b] === ci) continue;
+                stamp[b] = ci;
+                acc[b]++;
+            }
+        }
+    });
+    const peaks: Array<{ cx: number; cz: number; r: number; score: number }> = [];
+    for (let b = 0; b < acc.length; b++) {
+        if (!acc[b]) continue;
+        const ri = b % nr, cell = (b - ri) / nr, ux = cell % W, uz = (cell - ux) / W, r = rMin + ri;
+        const score = acc[b] / (2 * Math.PI * r);
+        if (score >= P.minVoteScore) peaks.push({ cx: h.x0 + (x0 + ux + 0.5) * c, cz: h.z0 + (z0 + uz + 0.5) * c, r: r * c, score });
+    }
+    peaks.sort((a, b) => b.score - a.score || b.r - a.r);
+    const taken: typeof peaks = [];
+    for (const p of peaks) {
+        if (taken.some(t => Math.hypot(t.cx - p.cx, t.cz - p.cz) < Math.max(t.r, p.r) * 0.8)) continue;
+        taken.push(p);
+        if (taken.length >= P.maxCirclesPerComponent) break;
+    }
+    return taken;
+}
+
+/** Units standing on the support inside `inside(x, z)` whose walls the scan measures as round (see ROUND_UNIT_PARAMS). */
+export function findRoundUnits(pts: ScanPoints, h: HeightMap, inside: (x: number, z: number) => boolean, P = ROUND_UNIT_PARAMS, trace?: (c: Record<string, number | string>) => void): { units: RoundUnit[]; components: number; rejected: Record<string, number> } {
     const { nx, nz, cellM } = h;
     const raised = new Uint8Array(nx * nz);
     for (let z = 0; z < nz; z++) for (let x = 0; x < nx; x++) {
         const k = z * nx + x;
         if (h.top[k] > -Infinity && h.top[k] - h.support[k] >= P.minRiseM && inside(h.x0 + (x + 0.5) * cellM, h.z0 + (z + 0.5) * cellM)) raised[k] = 1;
     }
+    const raisedAt = (x: number, z: number) => {
+        const ix = Math.floor((x - h.x0) / cellM), iz = Math.floor((z - h.z0) / cellM);
+        return ix >= 0 && iz >= 0 && ix < nx && iz < nz && raised[iz * nx + ix] === 1;
+    };
     const label = new Int32Array(nx * nz).fill(-1);
     const comps: number[][] = [];
     for (let k = 0; k < nx * nz; k++) {
@@ -269,12 +445,12 @@ export function findRoundUnits(pts: ScanPoints, h: HeightMap, inside: (x: number
     const rejected: Record<string, number> = {};
     const reject = (why: string) => { rejected[why] = (rejected[why] ?? 0) + 1; };
     const units: RoundUnit[] = [];
-    // points per component (a point belongs to the component of its cell or of a 4-neighbour: side points sit at the edge)
+    // points per component: a point belongs to the component of a cell within two cells of its own (side and floor points)
     const byComp = new Map<number, number[]>();
     for (let i = 0; i < pts.count; i++) {
         const ix = Math.floor((pts.p[i * 3] - h.x0) / cellM), iz = Math.floor((pts.p[i * 3 + 2] - h.z0) / cellM);
         let c = -1;
-        for (const [dx, dz] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        for (let r = 0; r <= 2 && c < 0; r++) for (let dz = -r; dz <= r && c < 0; dz++) for (let dx = -r; dx <= r; dx++) {
             const xx = ix + dx, zz = iz + dz;
             if (xx < 0 || zz < 0 || xx >= nx || zz >= nz) continue;
             if (label[zz * nx + xx] >= 0) { c = label[zz * nx + xx]; break; }
@@ -287,36 +463,52 @@ export function findRoundUnits(pts: ScanPoints, h: HeightMap, inside: (x: number
     comps.forEach((cells, ci) => {
         const area = cells.length * cellM * cellM;
         if (area < P.minAreaM2) return reject('smaller than the least area');
-        if (area > P.maxAreaM2) return reject('larger than the largest area');
+        if (area > P.maxComponentM2) return reject('larger than the largest area');
         const ids = byComp.get(ci) ?? [];
+        // the component's points inside its own cells' bounds (a hollow unit's floor lies inside its ring)
         const support = median(cells.map(c => h.support[c]));
-        const heights = ids.map(i => pts.p[i * 3 + 1]).filter(y => y > support).sort((p, q) => p - q);
-        if (heights.length < 10) return reject('too few points');
-        const topY = heights[Math.floor(P.topPercentile * (heights.length - 1))];
-        const H = topY - support;
-        if (H < P.minRiseM) return reject('too low');
+        // the whole component first: its side points' circle
         const xs: number[] = [], zs: number[] = [];
-        for (const i of ids) {
-            const y = pts.p[i * 3 + 1];
-            if (Math.abs(pts.n[i * 3 + 1]) >= P.sideNormalY) continue;
-            if (y < support + P.sideBand[0] * H || y > support + P.sideBand[1] * H) continue;
-            xs.push(pts.p[i * 3]); zs.push(pts.p[i * 3 + 2]);
-        }
-        const c = fitCircle(xs, zs);
-        if (!c) return reject('no side points to fit');
-        const rmsRel = c.rms / Math.max(1e-6, c.r);
-        const sectors = new Set<number>();
-        for (let i = 0; i < xs.length; i++) sectors.add(Math.floor(((Math.atan2(zs[i] - c.cz, xs[i] - c.cx) + Math.PI) / (2 * Math.PI)) * 16) % 16);
-        const sectorShare = sectors.size / 16;
-        const fill = area / (Math.PI * c.r * c.r);
-        if (rmsRel > P.maxRmsRel) return reject('sides not round');
-        if (sectorShare < P.minSectorShare) return reject('sides not seen all round');
-        if (fill < P.fillRange[0] || fill > P.fillRange[1]) return reject('does not fill its circle');
-        if (!inside(c.cx, c.cz)) return reject('axis outside the footprint');
-        units.push({ cx: c.cx, cz: c.cz, r: c.r, baseY: support, topY, rmsM: c.rms, rmsRel, sectorShare, fill, sidePoints: xs.length });
+        for (const i of ids) if (Math.abs(pts.n[i * 3 + 1]) < P.sideNormalY && pts.p[i * 3 + 1] > support + P.minRiseM * 0.5) { xs.push(pts.p[i * 3]); zs.push(pts.p[i * 3 + 2]); }
+        const whole = fitCircle(xs, zs);
+        const tryCircle = (c: { cx: number; cz: number; r: number }, found: RoundUnit['found'], others: Array<{ cx: number; cz: number; r: number }> = []) => {
+            if (c.r < P.voteMinRadiusM * 0.8 || c.r > P.voteMaxRadiusM * 1.2) return 'outside the radius range';
+            if (!inside(c.cx, c.cz)) return 'axis outside the footprint';
+            const u = measureCircle(pts, ids, h, raisedAt, c, support, P, others);
+            trace?.({ found, cx: round(c.cx, 2), cz: round(c.cz, 2), r: round(c.r, 2), verdict: typeof u === 'string' ? u : 'unit', ...(typeof u === 'string' ? {} : { R: round(u.r, 3), rmsRel: round(u.rmsRel, 4), sectors: u.sectorShare, perimeter: round(u.perimeter, 2), inner: u.inner ? round(u.inner.radiusM, 3) : 0, depth: u.inner ? round(u.topY - u.inner.floorY, 3) : 0 }) });
+            if (typeof u !== 'string') units.push({ ...u, found });
+            return typeof u === 'string' ? u : undefined;
+        };
+        const first = whole && Math.PI * whole.r * whole.r <= P.maxAreaM2 ? tryCircle(whole, 'component') : 'larger than the largest area';
+        if (first === undefined) return;
+        // several units in one component (touching rings, a unit on a plinth): the circles its raised cells vote for
+        const circles = circleVotes(cells, h, P);
+        let any = false;
+        for (const c of circles) if (tryCircle(c, 'circle-vote', circles) === undefined) any = true;
+        if (!any) reject(first);
     });
-    units.sort((a, b) => (a.cx - b.cx) || (a.cz - b.cz));
-    return { units, components: comps.length, rejected };
+    // two votes may find one unit twice: keep the one seen most round
+    units.sort((a, b) => a.rmsRel - b.rmsRel);
+    const kept: RoundUnit[] = [];
+    for (const u of units) if (!kept.some(k => Math.hypot(k.cx - u.cx, k.cz - u.cz) < 0.5 * Math.min(k.r, u.r))) kept.push(u);
+    kept.sort((a, b) => (a.cx - b.cx) || (a.cz - b.cz));
+    return { units: kept, components: comps.length, rejected };
+}
+
+/** The scan point indices that belong to `unit` rather than to any of `others` (nearest by distance beyond its radius), within `reachM` of its wall. */
+export function ownPoints(pts: ScanPoints, unit: { cx: number; cz: number; r: number }, others: Array<{ cx: number; cz: number; r: number }>, reachM: number, minY = -Infinity): ScanPoints {
+    const idx: number[] = [];
+    for (let i = 0; i < pts.count; i++) {
+        const x = pts.p[i * 3], y = pts.p[i * 3 + 1], z = pts.p[i * 3 + 2];
+        if (y < minY) continue;
+        const d = Math.hypot(x - unit.cx, z - unit.cz) - unit.r;
+        if (d > reachM) continue;
+        if (others.some(o => (o.cx !== unit.cx || o.cz !== unit.cz) && Math.hypot(x - o.cx, z - o.cz) - o.r < d)) continue;
+        idx.push(i);
+    }
+    const p = new Float32Array(idx.length * 3), n = new Float32Array(idx.length * 3), a = new Float32Array(idx.length);
+    idx.forEach((i, k) => { for (let c = 0; c < 3; c++) { p[k * 3 + c] = pts.p[i * 3 + c]; n[k * 3 + c] = pts.n[i * 3 + c]; } a[k] = pts.a[i]; });
+    return { p, n, a, count: idx.length };
 }
 
 function median(v: number[]): number {
@@ -418,7 +610,13 @@ export function strongestRingStep(crop: TopDownCrop, cx: number, cz: number, loM
     return best;
 }
 
-export interface Period { count: number; phase: number; significance: number; duty: number }
+export interface Period {
+    count: number; phase: number; significance: number;
+    /** Share of the circle brighter than the mean. */
+    duty: number;
+    /** The profile folded over one period: the share of the period its peak spans above half its height (a spoke's width). */
+    peakShare: number;
+}
 
 /**
  * The strongest angular period of the luminance over the annulus [r0M, r1M] about (cx, cz), for counts in [kMin, kMax]:
@@ -450,7 +648,20 @@ export function angularPeriod(crop: TopDownCrop, cx: number, cz: number, r0M: nu
     const rest = power.slice(1).map(x => x.p).sort((a, b) => a - b);
     const med = Math.max(1e-9, rest.length ? rest[rest.length >> 1] : 1e-9);
     const duty = prof.filter(v => v > mean).length / bins;
-    return { count: power[0].k, phase: power[0].phase, significance: power[0].p / med, duty };
+    // fold over one period (phase-aligned so the peak sits at 0) and measure the peak's width at half its height
+    const K = power[0].k, foldBins = 72;
+    const fold = new Float64Array(foldBins), cnt = new Float64Array(foldBins);
+    for (let b = 0; b < bins; b++) {
+        const th = (2 * Math.PI * (b + 0.5)) / bins;
+        let ph = (K * (th - power[0].phase)) / (2 * Math.PI);
+        ph -= Math.floor(ph);
+        const fb = Math.min(foldBins - 1, Math.floor(ph * foldBins));
+        fold[fb] += prof[b]; cnt[fb]++;
+    }
+    for (let i = 0; i < foldBins; i++) fold[i] = cnt[i] ? fold[i] / cnt[i] : mean;
+    const fmax = Math.max(...fold), fmin = Math.min(...fold), half = (fmax + fmin) / 2;
+    const peakShare = fold.filter(v => v >= half).length / foldBins;
+    return { count: K, phase: power[0].phase, significance: power[0].p / med, duty, peakShare };
 }
 
 /** The strongest radial period (m) of the luminance between r0M and r1M about (cx, cz), with its significance. */
@@ -486,10 +697,15 @@ export function radialPeriod(crop: TopDownCrop, cx: number, cz: number, r0M: num
 /** A mesh part of the model: its surface and its id. */
 export interface ModelPart { id: string; positions: Float32Array; normals: Float32Array; indices: Uint32Array }
 
-/** Per pixel of `grid`: the index of the part whose surface is highest there (-1 none), and that surface's normal y. */
-export function rasterPartsTopDown(parts: ModelPart[], grid: { x0: number; z0: number; texelM: number; width: number; height: number }): { part: Int32Array; normalY: Float32Array; height: Float32Array } {
+/**
+ * Per pixel of `grid`: the part whose surface is highest there (-1 none), that surface's normal y, its height, and its
+ * surface group: the triangles of one part at one height (`groupHeightM` bands) facing one way (up, sideways, down), so a
+ * rim, a floor and a recess of one solid are told apart.
+ */
+export function rasterPartsTopDown(parts: ModelPart[], grid: { x0: number; z0: number; texelM: number; width: number; height: number }, groupHeightM = 0.05): { part: Int32Array; normalY: Float32Array; height: Float32Array; group: Int32Array; groups: number } {
     const W = grid.width, H = grid.height;
-    const part = new Int32Array(W * H).fill(-1), normalY = new Float32Array(W * H), height = new Float32Array(W * H).fill(-Infinity);
+    const part = new Int32Array(W * H).fill(-1), normalY = new Float32Array(W * H), height = new Float32Array(W * H).fill(-Infinity), group = new Int32Array(W * H).fill(-1);
+    const groupIds = new Map<string, number>();
     parts.forEach((m, pi) => {
         for (let t = 0; t + 2 < m.indices.length; t += 3) {
             const ia = m.indices[t] * 3, ib = m.indices[t + 1] * 3, ic = m.indices[t + 2] * 3;
@@ -501,6 +717,9 @@ export function rasterPartsTopDown(parts: ModelPart[], grid: { x0: number; z0: n
             // the face's normal y (the vertices' mean, unit)
             const nx = m.normals[ia] + m.normals[ib] + m.normals[ic], ny = m.normals[ia + 1] + m.normals[ib + 1] + m.normals[ic + 1], nz = m.normals[ia + 2] + m.normals[ib + 2] + m.normals[ic + 2];
             const fny = ny / Math.max(1e-9, Math.hypot(nx, ny, nz));
+            const gkey = `${pi}:${Math.round((ay + by + cy) / 3 / groupHeightM)}:${fny > 0.5 ? 1 : fny < -0.5 ? -1 : 0}`;
+            let g = groupIds.get(gkey);
+            if (g === undefined) groupIds.set(gkey, g = groupIds.size);
             const x0 = Math.max(0, Math.floor(Math.min(ax, bx, cx))), x1 = Math.min(W - 1, Math.ceil(Math.max(ax, bx, cx)));
             const z0 = Math.max(0, Math.floor(Math.min(az, bz, cz))), z1 = Math.min(H - 1, Math.ceil(Math.max(az, bz, cz)));
             for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
@@ -508,33 +727,35 @@ export function rasterPartsTopDown(parts: ModelPart[], grid: { x0: number; z0: n
                 const w0 = ((bz - cz) * (px - cx) + (cx - bx) * (pz - cz)) / den, w1 = ((cz - az) * (px - cx) + (ax - cx) * (pz - cz)) / den, w2 = 1 - w0 - w1;
                 if (w0 < -1e-9 || w1 < -1e-9 || w2 < -1e-9) continue;
                 const y = w0 * ay + w1 * by + w2 * cy, k = z * W + x;
-                if (y > height[k]) { height[k] = y; part[k] = pi; normalY[k] = fny; }
+                if (y > height[k]) { height[k] = y; part[k] = pi; normalY[k] = fny; group[k] = g; }
             }
         }
     });
-    return { part, normalY, height };
+    return { part, normalY, height, group, groups: groupIds.size };
 }
 
 /**
- * The model drawn top-down over `context` (a crop of the same grid): each part in the median colour of the context
- * pixels it shows, times (0.8 + 0.2 |normal y|), so a wall or a slope seen from above reads darker; context elsewhere.
+ * The model drawn top-down over `context` (a crop of the same grid): each surface group (rasterPartsTopDown) in the median
+ * colour of the context pixels it shows, times (0.8 + 0.2 |normal y|), so a wall or a slope seen from above reads darker;
+ * context elsewhere. Its structure is what is drawn: a rim apart from a floor, blades apart from what is under them.
  * Returns the image and how many pixels each part shows.
  */
 export function drawModelTopDown(parts: ModelPart[], context: TopDownCrop): { image: DecodedImage; shown: number[] } {
     const W = context.width, H = context.height;
     const r = rasterPartsTopDown(parts, { x0: context.x0, z0: context.z0, texelM: context.texelM, width: W, height: H });
-    const samples: number[][][] = parts.map(() => [[], [], []]);
-    for (let k = 0; k < W * H; k++) if (r.part[k] >= 0) for (let c = 0; c < 3; c++) samples[r.part[k]][c].push(context.rgba[k * 4 + c]);
+    const samples: number[][][] = Array.from({ length: r.groups }, () => [[], [], []]);
+    const shown = parts.map(() => 0);
+    for (let k = 0; k < W * H; k++) if (r.group[k] >= 0) { shown[r.part[k]]++; for (let c = 0; c < 3; c++) samples[r.group[k]][c].push(context.rgba[k * 4 + c]); }
     const colour = samples.map(s => s.map(ch => { const v = ch.slice().sort((p, q) => p - q); return v.length ? v[v.length >> 1] : 128; }));
     const rgba = new Uint8Array(context.rgba);
     for (let k = 0; k < W * H; k++) {
-        const p = r.part[k];
-        if (p < 0) continue;
+        const g = r.group[k];
+        if (g < 0) continue;
         const shade = 0.8 + 0.2 * Math.abs(r.normalY[k]);
-        for (let c = 0; c < 3; c++) rgba[k * 4 + c] = Math.max(0, Math.min(255, Math.round(colour[p][c] * shade)));
+        for (let c = 0; c < 3; c++) rgba[k * 4 + c] = Math.max(0, Math.min(255, Math.round(colour[g][c] * shade)));
         rgba[k * 4 + 3] = 255;
     }
-    return { image: { width: W, height: H, rgba }, shown: samples.map(s => s[0].length) };
+    return { image: { width: W, height: H, rgba }, shown };
 }
 
 function luminanceImage(img: DecodedImage): Float32Array {
@@ -555,17 +776,33 @@ function gradientMagnitude(L: Float32Array, w: number, h: number): Float32Array 
 
 export interface HeldOutScore { ssim: number | null; gradientNcc: number | null; pixels: number }
 
-/** The model image against the held-out photo (same grid) inside the disc of `radiusM` about (cx, cz). */
-export function heldOutScore(model: DecodedImage, heldOut: TopDownCrop, cx: number, cz: number, radiusM: number): HeldOutScore {
-    const W = heldOut.width, H = heldOut.height;
+/** The scale the held-out comparison is made at (m a pixel): about what the photos resolve, so an ideal edge is not scored against a blurred one. */
+export const HELD_OUT_SCALE_M = 0.1;
+
+/**
+ * The model image against the held-out photo (same grid) inside the disc of `radiusM` about (cx, cz), both box-averaged
+ * to `scaleM` a pixel first.
+ */
+export function heldOutScore(model: DecodedImage, heldOut: TopDownCrop, cx: number, cz: number, radiusM: number, scaleM = HELD_OUT_SCALE_M): HeldOutScore {
+    const f = Math.max(1, Math.round(scaleM / heldOut.texelM));
+    const W = Math.floor(heldOut.width / f), H = Math.floor(heldOut.height / f), texel = heldOut.texelM * f;
+    const down = (img: { rgba: Uint8Array; width: number }) => {
+        const out = new Float32Array(W * H);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            let s = 0;
+            for (let v = 0; v < f; v++) for (let u = 0; u < f; u++) { const k = ((y * f + v) * img.width + x * f + u) * 4; s += lum(img.rgba[k], img.rgba[k + 1], img.rgba[k + 2]); }
+            out[y * W + x] = s / (f * f);
+        }
+        return out;
+    };
     const mask = new Uint8Array(W * H);
     let pixels = 0;
     for (let z = 0; z < H; z++) for (let x = 0; x < W; x++) {
-        if (Math.hypot(heldOut.x0 + (x + 0.5) * heldOut.texelM - cx, heldOut.z0 + (z + 0.5) * heldOut.texelM - cz) <= radiusM) { mask[z * W + x] = 1; pixels++; }
+        if (Math.hypot(heldOut.x0 + (x + 0.5) * texel - cx, heldOut.z0 + (z + 0.5) * texel - cz) <= radiusM) { mask[z * W + x] = 1; pixels++; }
     }
-    const La = luminanceImage(model), Lb = luminanceImage({ width: W, height: H, rgba: heldOut.rgba });
+    const La = down(model), Lb = down(heldOut);
     const ssim = maskedSsim(La, Lb, W, H, mask);
-    const gradientNcc = maskedNcc(gradientMagnitude(La, W, H), gradientMagnitude(Lb, W, H), mask, 50);
+    const gradientNcc = maskedNcc(gradientMagnitude(La, W, H), gradientMagnitude(Lb, W, H), mask, 30);
     return { ssim: ssim === null ? null : round(ssim, 5), gradientNcc: gradientNcc === null ? null : round(gradientNcc, 5), pixels };
 }
 
@@ -592,25 +829,35 @@ export function resamplePlanImage(source: PlanImage, grid: { x0: number; z0: num
 }
 
 /**
- * The plan shift (m) that registers `source` on the tile photo `tile` (best normalised correlation of luminance over
- * shifts up to `searchM`, coarse then fine, in steps of the tile's texel). Run it on a coarse, wide tile crop: the
- * shift then applies to every finer crop of the same place.
+ * The plan shift (m) that registers `source` on the tile photo `tile`: the best normalised correlation of luminance over
+ * every shift up to `searchM` in steps of the tile's texel. `source` is resampled once onto the tile's grid grown by the
+ * search; each shift then reads it at an integer offset. A tall roof's lean in an off-nadir image is tens of metres: run a
+ * wide search on a coarse crop first, then a narrow one on a fine crop.
  */
-export function registerPlanImage(source: PlanImage, tile: TopDownCrop, searchM = 2): { shiftM: [number, number]; ncc: number } {
-    const Lt = luminanceImage(tile);
-    const steps = Math.max(1, Math.round(searchM / tile.texelM)), stride = Math.max(1, Math.round(steps / 6));
+export function registerPlanImage(source: PlanImage, tile: TopDownCrop, searchM = 2, offsetM: [number, number] = [0, 0]): { shiftM: [number, number]; ncc: number } {
+    const s = Math.max(1, Math.round(searchM / tile.texelM));
+    const W = tile.width, H = tile.height, GW = W + 2 * s, GH = H + 2 * s;
+    const grown = resamplePlanImage(source, { x0: tile.x0 - s * tile.texelM, z0: tile.z0 - s * tile.texelM, texelM: tile.texelM, width: GW, height: GH }, offsetM[0], offsetM[1]);
+    const Lg = luminanceImage(grown), Lt = luminanceImage(tile);
     let best = { i: 0, j: 0, ncc: -Infinity };
-    const tryShift = (i: number, j: number) => {
-        const c = resamplePlanImage(source, tile, i * tile.texelM, j * tile.texelM);
-        const mask = new Uint8Array(tile.width * tile.height);
-        for (let k = 0; k < mask.length; k++) mask[k] = c.rgba[k * 4 + 3] ? 1 : 0;
-        const v = maskedNcc(Lt, luminanceImage(c), mask, 200);
-        if (v !== null && v > best.ncc) best = { i, j, ncc: v };
-    };
-    for (let j = -steps; j <= steps; j += stride) for (let i = -steps; i <= steps; i += stride) tryShift(i, j);
-    const ci = best.i, cj = best.j;
-    if (stride > 1) for (let j = cj - stride + 1; j < cj + stride; j++) for (let i = ci - stride + 1; i < ci + stride; i++) if (Math.abs(i) <= steps && Math.abs(j) <= steps && (i !== ci || j !== cj)) tryShift(i, j);
-    return { shiftM: [round(best.i * tile.texelM, 3), round(best.j * tile.texelM, 3)], ncc: round(best.ncc, 4) };
+    for (let j = -s; j <= s; j++) for (let i = -s; i <= s; i++) {
+        let n = 0, sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
+        for (let y = 0; y < H; y++) {
+            const gy = y + s + j;
+            for (let x = 0; x < W; x++) {
+                const gk = gy * GW + x + s + i;
+                if (!grown.rgba[gk * 4 + 3]) continue;
+                const a = Lt[y * W + x], b = Lg[gk];
+                n++; sa += a; sb += b; saa += a * a; sbb += b * b; sab += a * b;
+            }
+        }
+        if (n < 200) continue;
+        const va = saa - (sa * sa) / n, vb = sbb - (sb * sb) / n;
+        if (va <= 1e-9 || vb <= 1e-9) continue;
+        const ncc = (sab - (sa * sb) / n) / Math.sqrt(va * vb);
+        if (ncc > best.ncc) best = { i, j, ncc };
+    }
+    return { shiftM: [round(offsetM[0] + best.i * tile.texelM, 3), round(offsetM[1] + best.j * tile.texelM, 3)], ncc: round(best.ncc, 4) };
 }
 
 const round = (v: number, d: number) => Math.round(v * 10 ** d) / 10 ** d;
