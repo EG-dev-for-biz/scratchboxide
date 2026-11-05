@@ -330,8 +330,10 @@ struct TileCapParams {
     double capFacingCos{0.97};
     /** Two boxes' faces are one cut when their planes lie within this. */
     double faceMatchM{1.2};
-    /** The neighbour's cap backs this one within this. */
-    double backingM{0.30};
+    /** The neighbour's cap backs this one within this: two tiles' caps lie in one cut plane, centimetres apart. Kept well
+     *  under a wall's thickness: the two faces of a thin wall or parapet standing along a cut, one in each tile, are also
+     *  back to back near a shared box face, and must stay. */
+    double backingM{0.10};
     int threads{0};
 };
 struct TileCapStats { size_t sharedFaces{0}; size_t candidates{0}; size_t trianglesDropped{0}; double areaM2{0}; };
