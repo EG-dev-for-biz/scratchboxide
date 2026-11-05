@@ -181,7 +181,7 @@ export interface RectifiedOrthos {
     reports: Array<{ facadeId: number; report?: OrthoRectifyReport; error?: string }>;
     cached: boolean;
     ms: number;
-    /** The bands along Google tile cuts marked unread before straightening (markTileCutBands): facades and texels. */
+    /** The bands along Google tile cuts written into the facades' occlusion masks before straightening (tileCutBandMask). */
     tileCutBands?: { facades: number; texels: number };
 }
 
@@ -192,8 +192,8 @@ export interface RectifiedOrthos {
 export interface TileCut { u: number[]; o: number; c: number[]; a: number[]; b: number[]; ha: number; hb: number }
 
 export const TILE_CUT_BAND = {
-    /** Texels within this of a cut (m, either side) are unread: where two tiles' photos meet they do not line up, and the window
-     *  fit and the recess rule read the line as a row of openings (slots across every bay in clay). */
+    /** Texels within this of a cut (m, either side) are read past: where two tiles' photos meet they do not line up, and the
+     *  window fit and the recess rule read the line as a row of openings (slots across every bay in clay). */
     bandM: 0.2,
     /** Only a facade crossing the cut (|normal . cut normal| below this) is marked. */
     crossCos: 0.5,
@@ -202,38 +202,36 @@ export const TILE_CUT_BAND = {
 };
 
 /**
- * Marks, in a facade ortho (RGBA, tile_refine's frame: column x at s = orthoSMin + (x + 0.5) pixel, row y at t = orthoTMax -
- * (y + 0.5) pixel), every photographed texel within bandM of a Google tile cut crossing the facade as one the photo did not
- * reach (the exact grey the rectify reads as uncovered, ortho-rectify.ts UNCOVERED). The straightening, the window fit, the
- * wall grammar, the facade reader and the recess rule then read past it, the lattice and its rhythm continue over it, and
- * its texels are filled from the facade's own repeats (generated). Returns the texels marked.
+ * The texels of a facade ortho (tile_refine's frame: column x at s = orthoSMin + (x + 0.5) pixel, row y at t = orthoTMax -
+ * (y + 0.5) pixel) within bandM of a Google tile cut crossing the facade: 1 there, 0 elsewhere, and how many. They are
+ * written into the facade's occlusion mask as fully blocked, so the window fit, the wall grammar and the facade reader read
+ * past them and the lattice and its rhythm continue over them, while the facade is still rebuilt there with its photo (a
+ * band marked as photo it never reached would also keep the scan's wall triangles across it, and the rebuild with them).
  */
-export function markTileCutBands(img: { width: number; height: number; rgba: Uint8Array }, f: ReliefFacade, cuts: readonly TileCut[], P = TILE_CUT_BAND): number {
+export function tileCutBandMask(f: ReliefFacade, width: number, height: number, cuts: readonly TileCut[], P = TILE_CUT_BAND): { mask: Uint8Array; count: number } {
     const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    const at = (s: number, t: number) => [0, 1, 2].map(k => f.centroid[k] + s * f.axisS[k] + t * f.axisT[k]);
-    const s0 = f.orthoSMin, s1 = f.orthoSMin + img.width * f.pixel, t1 = f.orthoTMax, t0 = f.orthoTMax - img.height * f.pixel;
-    let marked = 0;
+    const mask = new Uint8Array(width * height);
+    const s0 = f.orthoSMin, s1 = f.orthoSMin + width * f.pixel, t1 = f.orthoTMax, t0 = f.orthoTMax - height * f.pixel;
+    let count = 0;
     for (const c of cuts) {
         if (Math.abs(dot(c.u, f.normal)) > P.crossCos) continue;
         // distance to the cut, and the two in-rectangle coordinates, are each linear in (s, t): value = v0 + s vs + t vt
-        const lin = (dir: number[], off: number) => { const p0 = at(0, 0); return { v0: dot(dir, p0) - off, vs: dot(dir, f.axisS), vt: dot(dir, f.axisT) }; };
+        const lin = (dir: number[], off: number) => ({ v0: dot(dir, f.centroid) - off, vs: dot(dir, f.axisS), vt: dot(dir, f.axisT) });
         const d = lin(c.u, c.o), ra = lin(c.a, dot(c.a, c.c)), rb = lin(c.b, dot(c.b, c.c));
         const corners = [[s0, t0], [s0, t1], [s1, t0], [s1, t1]].map(([s, t]) => d.v0 + s * d.vs + t * d.vt);
         if (Math.min(...corners) > P.bandM || Math.max(...corners) < -P.bandM) continue;
-        for (let y = 0; y < img.height; y++) {
+        for (let y = 0; y < height; y++) {
             const t = f.orthoTMax - (y + 0.5) * f.pixel;
-            for (let x = 0; x < img.width; x++) {
-                const s = f.orthoSMin + (x + 0.5) * f.pixel;
-                if (Math.abs(d.v0 + s * d.vs + t * d.vt) > P.bandM) continue;
+            for (let x = 0; x < width; x++) {
+                const s = f.orthoSMin + (x + 0.5) * f.pixel, k = y * width + x;
+                if (mask[k] || Math.abs(d.v0 + s * d.vs + t * d.vt) > P.bandM) continue;
                 if (Math.abs(ra.v0 + s * ra.vs + t * ra.vt) > c.ha + P.marginM || Math.abs(rb.v0 + s * rb.vs + t * rb.vt) > c.hb + P.marginM) continue;
-                const k = (y * img.width + x) * 4;
-                if (img.rgba[k + 3] === 0 || (img.rgba[k] === 128 && img.rgba[k + 1] === 128 && img.rgba[k + 2] === 128)) continue;
-                img.rgba[k] = img.rgba[k + 1] = img.rgba[k + 2] = 128;
-                marked++;
+                mask[k] = 1;
+                count++;
             }
         }
     }
-    return marked;
+    return { mask, count };
 }
 
 const BOOTSTRAP = `
@@ -281,7 +279,7 @@ function runWorkers(jobs: RectifyJob[], signal?: AbortSignal): Promise<RectifyMe
  * The relief orthos of a remesh, straightened and levelled: the facades the lattice rebuild will use (coverage at least
  * its minCoverage) are rectified, the others copied as they are. Cached beside the originals.
  */
-export async function rectifyReliefOrthos(srcDir: string, opts: { params?: OrthoRectifyParams; minCoverage?: number; threads?: number; signal?: AbortSignal; /** The tail on this thread (tests; SCRATCHBOX_REMESH_WORKERS=0 too). */ inlineTail?: boolean; /** The image model for small holes no real source covers (absent: none; the smooth fill takes them). */ inpaint?: { client: EnhanceModelClient; models: string[]; caps?: typeof HOLE_INPAINT }; /** The Google tile cuts in the scan's frame: a band along each is marked unread before straightening (markTileCutBands). */ tileCuts?: readonly TileCut[] } = {}): Promise<RectifiedOrthos> {
+export async function rectifyReliefOrthos(srcDir: string, opts: { params?: OrthoRectifyParams; minCoverage?: number; threads?: number; signal?: AbortSignal; /** The tail on this thread (tests; SCRATCHBOX_REMESH_WORKERS=0 too). */ inlineTail?: boolean; /** The image model for small holes no real source covers (absent: none; the smooth fill takes them). */ inpaint?: { client: EnhanceModelClient; models: string[]; caps?: typeof HOLE_INPAINT }; /** The Google tile cuts in the scan's frame: a band along each is read past (tileCutBandMask). */ tileCuts?: readonly TileCut[] } = {}): Promise<RectifiedOrthos> {
     const t0 = Date.now();
     const params = opts.params ?? ORTHO_RECTIFY_PARAMS, minCoverage = opts.minCoverage ?? FACADE_LATTICE_PARAMS.minCoverage;
     const caps = opts.inpaint?.caps ?? HOLE_INPAINT;
@@ -311,7 +309,8 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
             const occ = occludedMaskName(f.image);
             if (!todo.includes(f) && fs.existsSync(path.join(srcDir, occ))) fs.copyFileSync(path.join(srcDir, occ), path.join(tmp, occ));
         }
-        // the bands along Google tile cuts, marked unread in a copy of each photo the workers read (their occlusion masks beside)
+        // the bands along Google tile cuts, written into the occlusion mask beside each photo the workers read (fully blocked;
+        // the photos as they are)
         let readDir = srcDir;
         let tileCutBands: RectifiedOrthos['tileCutBands'];
         if (cuts) {
@@ -319,13 +318,22 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
             fs.mkdirSync(readDir, { recursive: true });
             tileCutBands = { facades: 0, texels: 0 };
             for (const f of todo) {
-                const png = decodePng(fs.readFileSync(path.join(srcDir, f.image)));
-                const img = { width: png.width, height: png.height, rgba: new Uint8Array(png.rgba) };
-                const marked = markTileCutBands(img, f, cuts);
-                if (marked) { tileCutBands.facades++; tileCutBands.texels += marked; fs.writeFileSync(path.join(readDir, f.image), encodePng(img.width, img.height, img.rgba, 4)); }
-                else fs.copyFileSync(path.join(srcDir, f.image), path.join(readDir, f.image));
+                fs.copyFileSync(path.join(srcDir, f.image), path.join(readDir, f.image));
                 const occ = occludedMaskName(f.image);
-                if (fs.existsSync(path.join(srcDir, occ))) fs.copyFileSync(path.join(srcDir, occ), path.join(readDir, occ));
+                // the photo's own size, from its PNG header
+                const head = Buffer.alloc(24), fd = fs.openSync(path.join(srcDir, f.image), 'r');
+                try { fs.readSync(fd, head, 0, 24, 0); } finally { fs.closeSync(fd); }
+                const width = head.readUInt32BE(16), height = head.readUInt32BE(20);
+                const band = tileCutBandMask(f, width, height, cuts);
+                if (!band.count) {
+                    if (fs.existsSync(path.join(srcDir, occ))) fs.copyFileSync(path.join(srcDir, occ), path.join(readDir, occ));
+                    continue;
+                }
+                const had = fs.existsSync(path.join(srcDir, occ)) ? decodePng(fs.readFileSync(path.join(srcDir, occ))) : undefined;
+                const out = new Uint8Array(width * height);
+                for (let k = 0; k < out.length; k++) out[k] = band.mask[k] ? 255 : had && had.width === width && had.height === height ? had.rgba[k * 4] : 0;
+                fs.writeFileSync(path.join(readDir, occ), encodePng(width, height, out, 1));
+                tileCutBands.facades++; tileCutBands.texels += band.count;
             }
         }
         // largest first, dealt round the threads
