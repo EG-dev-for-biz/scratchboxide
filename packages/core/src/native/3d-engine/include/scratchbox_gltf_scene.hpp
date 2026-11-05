@@ -17,11 +17,13 @@
 #include "scratchbox_math.hpp"
 #include "scratchbox_texture.hpp"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace scratchbox {
@@ -373,24 +375,29 @@ private:
         }
     }
 
+    /**
+     * Images are decoded in parallel (each is independent: a district's GLB carries hundreds), into their own
+     * slots, so the result is the same as decoding them in order.
+     */
     static void readImages(const Context& ctx, GltfScene& scene) {
         const auto& views = ctx.root["bufferViews"];
-        for (const auto& img : ctx.root["images"].arr) {
-            SceneImage si;
+        const auto& list = ctx.root["images"].arr;
+        std::vector<SceneImage> images(list.size());
+        auto decodeOne = [&](size_t index) {
+            const auto& img = list[index];
+            SceneImage& si = images[index];
             si.mimeType = img["mimeType"].asString("");
             int viewIndex = img["bufferView"].asInt(-1);
             if (viewIndex < 0 || viewIndex >= static_cast<int>(views.arr.size()) || !ctx.bin) {
                 si.error = "image is not embedded in the GLB binary chunk";
-                scene.images.push_back(std::move(si));
-                continue;
+                return;
             }
             const auto& view = views[static_cast<size_t>(viewIndex)];
             size_t offset = view["byteOffset"].asSizeT(0);
             size_t size = view["byteLength"].asSizeT(0);
             if (offset + size > ctx.binLength) {
                 si.error = "image bufferView is out of range";
-                scene.images.push_back(std::move(si));
-                continue;
+                return;
             }
             const uint8_t* bytes = ctx.bin + offset;
             bool isJpeg = si.mimeType == "image/jpeg" || (size > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8);
@@ -412,8 +419,21 @@ private:
             } else {
                 si.error = "unsupported image type: " + (si.mimeType.empty() ? std::string("unknown") : si.mimeType);
             }
-            scene.images.push_back(std::move(si));
+        };
+        const unsigned workers = static_cast<unsigned>(std::min<size_t>(list.size(), std::max(1u, std::min(std::thread::hardware_concurrency(), 16u))));
+        if (workers <= 1) {
+            for (size_t i = 0; i < list.size(); ++i) decodeOne(i);
+        } else {
+            std::atomic<size_t> next{0};
+            std::vector<std::thread> pool;
+            for (unsigned w = 0; w < workers; ++w) {
+                pool.emplace_back([&] {
+                    for (size_t i = next++; i < list.size(); i = next++) decodeOne(i);
+                });
+            }
+            for (auto& t : pool) t.join();
         }
+        for (auto& si : images) scene.images.push_back(std::move(si));
     }
 
     static Mat4 localMatrix(const io::GlbJsonValue& node) {
