@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { drawnMetalness, drawnRoughness, energyFit, FINISH_READ, finishMaps, finishPrompt, finishTarget, grainOf, parseClassFinish, patternFit } from '../src/node/3d-engine/staged-location/pipeline-k/material-finish';
+import { drawFinish, drawnMetalness, drawnRoughness, energyFit, FINISH_READ, finishMaps, finishPrompt, finishTarget, grainOf, parseClassFinish, patternFit } from '../src/node/3d-engine/staged-location/pipeline-k/material-finish';
 import { REGION_FINISH } from '../src/node/3d-engine/staged-location/pipeline-k/material-sets';
 
 describe('pipeline K material finish', () => {
@@ -74,6 +74,21 @@ describe('pipeline K material finish', () => {
         expect(energyFit(undefined, [1])).toBe(1);
         // the inputs are not changed
         expect(orm.rgba[1]).toBe(153);
+    });
+
+    it('draws a class inside the window openings as the pane that closes them when no reading is confident, and asks about the pane', () => {
+        // no reading, or an unsure one: the opening prior inside the openings, the set's own outside them
+        expect(drawFinish(undefined, true)).toEqual({ finish: { roughness: 0.08, metalness: 0, conf: FINISH_READ.minConf }, prior: true });
+        expect(drawFinish({ roughness: 0.6, metalness: 0, conf: FINISH_READ.minConf - 1 }, true).prior).toBe(true);
+        expect(drawFinish(undefined, false)).toEqual({ prior: false });
+        // a confident reading stands, inside the openings too (an opaque infill read rough)
+        const infill = { roughness: 0.7, metalness: 0, conf: 80 };
+        expect(drawFinish(infill, true)).toEqual({ finish: infill, prior: false });
+        // the prompt asks for the pane's finish on the openings' rows only when there are any
+        const rows = [{ meanLab: [70, 0, 0] as [number, number, number], share: 0.8, wall: true }, { meanLab: [40, 0, 0] as [number, number, number], share: 0.2, wall: false, openings: true }];
+        expect(finishPrompt(rows)).toMatch(/row 2: .*inside the window openings/);
+        expect(finishPrompt(rows)).toMatch(/finish of that pane itself/);
+        expect(finishPrompt(rows.slice(0, 1))).not.toMatch(/pane itself/);
     });
 
     it('asks for numbers per row, never a material category to route on', () => {

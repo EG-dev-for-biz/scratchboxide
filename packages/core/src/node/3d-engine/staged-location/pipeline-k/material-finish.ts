@@ -26,7 +26,7 @@
 
 import type { RegionClass } from './material-regions';
 
-export const MATERIAL_FINISH_VERSION = 'material-finish/2';
+export const MATERIAL_FINISH_VERSION = 'material-finish/3';
 
 export const FINISH_READ = {
     /** A reading's roughness and metalness rank the class's sets, and set its drawn finish, at this confidence (0..100) and above. */
@@ -80,6 +80,8 @@ export function finishPrompt(classes: Array<Pick<RegionClass, 'meanLab' | 'share
         '- "conf": 0..100, how sure you are of the material; a row that is no one material (shadow, a mix, reflected sky) gets a low conf;',
         '- "seen": the material in a few words.',
         'A dark colour alone is not metal: only say metal when the patches show it (sheen, panel joints, mullion profiles).',
+        // a window opening's surface is the pane that closes it: the photo there shows what lies behind or mirrored in it
+        ...(classes.some(c => c.openings) ? ['A row marked "inside the window openings" is photographed through or off the pane that closes the opening: estimate the finish of that pane itself (the glazing, or an opaque infill panel when the patches show one), not of the blinds, rooms, shadows or reflections seen in it.'] : []),
         'Answer with JSON only: {"classes":[{"row":1,"roughness":0.8,"metalness":0,"conf":0,"seen":"..."}]}'
     ].join('\n');
 }
@@ -99,6 +101,20 @@ export function parseClassFinish(text: string, rows = 0): Array<ClassFinish | un
         out[k] = { roughness, metalness, conf: typeof c.conf === 'number' && Number.isFinite(c.conf) ? Math.max(0, Math.min(100, c.conf)) : 0, ...(typeof c.seen === 'string' && c.seen.trim() ? { seen: c.seen.trim().slice(0, 80) } : {}) };
     }
     return out;
+}
+
+/**
+ * The finish of a class inside the window openings with no confident reading (user ask, 2026-11-05: window openings glass
+ * smooth, as main drew them): what closes a fitted window is a pane, so its prior is a smooth dielectric, drawn as a
+ * confident smooth read is (finishMaps), where a class outside the openings falls back to matte (REGION_FINISH). A
+ * confident reading (an opaque infill read rough) stands. Labelled generated.
+ */
+export const OPENING_FINISH = { roughness: 0.08, metalness: 0 } as const;
+
+/** The finish a class is drawn at: its confident reading, else the opening prior inside the openings, else none (the set's own). */
+export function drawFinish(f: ClassFinish | undefined, openings: boolean | undefined, R = FINISH_READ): { finish?: ClassFinish; prior: boolean } {
+    if (f && f.conf >= R.minConf) return { finish: f, prior: false };
+    return openings ? { finish: { ...OPENING_FINISH, conf: R.minConf }, prior: true } : { prior: false };
 }
 
 /** What the ranking ranks toward: the reading's roughness and metalness when it is confident enough, else the matte finish. */

@@ -26,7 +26,7 @@ import { NativePythonRunnerService } from '../../native-python-runner-service';
 import { decodeImageInMemory } from '../tile-texture-transfer';
 import type { RegionClass, RegionSet } from './material-regions';
 import { CHOICE_CANDIDATES, type ChoiceCandidate, type ChoiceRow, type SetChoice } from './material-choice';
-import { energyFit, finishMaps, finishTarget, grainOf, patternFit, type ClassFinish } from './material-finish';
+import { drawFinish, energyFit, finishMaps, finishTarget, grainOf, OPENING_FINISH, patternFit, type ClassFinish } from './material-finish';
 import { loadSetFitModel, setFitGrain } from './material-set-fit';
 import { readingKey, type ModelReadingStore } from './model-readings';
 
@@ -73,6 +73,9 @@ export const FACADE_TILE = { wantM: 2, maxM: 8 } as const;
 
 const linearToSrgb = (c: number) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
 
+/** Said of a class inside the window openings drawn at the opening prior (material-finish.ts OPENING_FINISH). */
+const PRIOR_WHY = 'no confident reading of a class inside the window openings: drawn as the pane that closes them, a smooth dielectric (generated)';
+
 /** The repository root (the library index and cache live under it). */
 export function libraryRepoRoot(): string {
     return process.env.SCRATCHBOX_ROOT || (fs.existsSync(path.resolve(process.cwd(), 'packages')) ? process.cwd() : path.resolve(process.cwd(), '..'));
@@ -97,7 +100,8 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
     if (opts.finish) {
         try { finishes = await opts.finish(); } catch (err) { if (opts.signal?.aborted) throw err; finishWhy = `reading the classes' finish failed: ${err instanceof Error ? err.message : String(err)}`; opts.progress?.(`material regions: ${finishWhy}; every class ranked toward the matte finish`); }
     }
-    const targets = classes.map((_, k) => finishTarget(finishes[k], REGION_FINISH));
+    // an opening class with no confident reading is ranked toward the opening prior (a smooth dielectric), any other toward matte
+    const targets = classes.map((c, k) => finishTarget(finishes[k], c.openings ? { roughness: OPENING_FINISH.roughness, metallic: OPENING_FINISH.metalness } : REGION_FINISH));
     // every set of a facade's scale is ranked by its measured colour, measured ahead (the committed statistics,
     // `npm run library:stats`), never the whole library inside a build: a set not yet measured is left out and counted
     const unmeasured = index.sets.filter(e => anyScale(e) && !e.colour && !libraryEntryMeasured(repoRoot, e.id));
@@ -230,10 +234,11 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         // the set drawn at the class's read finish (material-finish.ts finishMaps): smooth where it was read smooth, and its
         // grain only as far as the pick by appearance confirmed it
         const pick = choices[k] ? { by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}) } : undefined;
-        const drawn = finishMaps(decodeImageInMemory(maps.orm), decodeImageInMemory(maps.normal), finishes[k], grainOf(pick) * fitOf(k, hit).grain);
+        const df = drawFinish(finishes[k], classes[k].openings);
+        const drawn = finishMaps(decodeImageInMemory(maps.orm), decodeImageInMemory(maps.normal), df.finish, grainOf(pick) * fitOf(k, hit).grain);
         return {
             name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
-            ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), roughness: targets[k].roughness, metallic: targets[k].metallic, ...(drawn.drawn ? { drawn: drawn.drawn } : {}), label: 'photo-inferred' as const } } : drawn.drawn ? { finish: { roughness: drawn.drawn.roughness, metallic: drawn.drawn.metallic, drawn: drawn.drawn, label: 'photo-inferred' as const } } : {}),
+            ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: targets[k].roughness, metallic: targets[k].metallic, ...(drawn.drawn ? { drawn: drawn.drawn } : {}), label: 'photo-inferred' as const } } : drawn.drawn ? { finish: { ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: drawn.drawn.roughness, metallic: drawn.drawn.metallic, drawn: drawn.drawn, label: 'photo-inferred' as const } } : {}),
             ...(choices[k] ? { choice: { candidates: choices[k]!.candidates, by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick?.seen ? { seen: choices[k]!.pick!.seen } : {}), ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}), ...(choices[k]!.pick?.reused ? { reused: choices[k]!.pick!.reused } : {}), ...(choices[k]!.why ? { why: choices[k]!.why } : {}) } } : {}),
             ...(textured.has(k) ? { harvest: { ...textured.get(k)!, classEnergy: classes[k].texture!.energy, texelM: classes[k].texture!.texelM, grain: `generated: the set's detail finer than the tile's ${Math.round(classes[k].texture!.texelM * 100)} cm texel is its own, below the tile's resolution` } } : {}),
             normal: drawn.normal, orm: drawn.orm
