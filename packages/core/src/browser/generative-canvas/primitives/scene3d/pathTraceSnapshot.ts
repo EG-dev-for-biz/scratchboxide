@@ -46,6 +46,8 @@ export interface PathTraceSnapshotStats {
     texturesConverted: number;
     /** Meshes whose vertex data was quantized (integer positions, normals or uvs), written out as float copies. */
     geometriesDequantized: number;
+    /** Cut-out materials whose alphaMap was folded into the base colour's alpha (glTF has no alpha map; MASK reads it there). */
+    alphaMapsFolded: number;
     /** `textures`: texture slots left out because their image is neither a picture nor an 8-bit pixel buffer. */
     skipped: { points: number; lines: number; shaderMaterials: number; instancesOverCap: number; empty: number; areaLights: number; textures: number };
     exportMs: number;
@@ -238,6 +240,70 @@ function withDrawableTextures(material: THREE.Material, stats: PathTraceSnapshot
     return out ?? material;
 }
 
+/** An image drawn on a canvas at a size, flipped vertically when its texture's row order differs from the output's. */
+function drawInto(ctx: CanvasRenderingContext2D, image: CanvasImageSource, width: number, height: number, flip: boolean): void {
+    ctx.save();
+    if (flip) {
+        ctx.translate(0, height);
+        ctx.scale(1, -1);
+    }
+    ctx.drawImage(image, 0, 0, width, height);
+    ctx.restore();
+}
+
+/**
+ * A cut-out material (alphaMap with an alpha test) with its alpha moved where glTF keeps it: a copy of the base colour
+ * texture whose alpha is the alphaMap's green channel (as three reads it), or a white texture carrying only the cut-out
+ * when there is no colour map (the material's colour still tints it). The exporter then writes alphaMode MASK at the
+ * material's alphaTest. Both maps are taken to share their uvs, as the viewport's cut-out cards and leaves do.
+ */
+function withAlphaInColour(material: THREE.Material, stats: PathTraceSnapshotStats, folded: Map<string, THREE.Texture>): THREE.Material {
+    const m = material as THREE.MeshStandardMaterial;
+    const alphaMap = m.alphaMap;
+    if (!alphaMap || !(m.alphaTest > 0) || !drawableImage(alphaMap.image)) return material;
+    const map = m.map && drawableImage(m.map.image) ? m.map : null;
+    const key = `${map?.uuid ?? 'none'}|${alphaMap.uuid}`;
+    let texture = folded.get(key);
+    if (!texture) {
+        const alphaImage = alphaMap.image as { width: number; height: number };
+        const width = Math.max(alphaImage.width, (map?.image as { width?: number } | undefined)?.width ?? 0);
+        const height = Math.max(alphaImage.height, (map?.image as { height?: number } | undefined)?.height ?? 0);
+        const outFlipY = map ? map.flipY : alphaMap.flipY;
+        const colour = document.createElement('canvas');
+        colour.width = width;
+        colour.height = height;
+        const cctx = colour.getContext('2d', { willReadFrequently: true })!;
+        if (map) drawInto(cctx, map.image as CanvasImageSource, width, height, map.flipY !== outFlipY);
+        else { cctx.fillStyle = '#ffffff'; cctx.fillRect(0, 0, width, height); }
+        const mask = document.createElement('canvas');
+        mask.width = width;
+        mask.height = height;
+        const mctx = mask.getContext('2d', { willReadFrequently: true })!;
+        drawInto(mctx, alphaMap.image as CanvasImageSource, width, height, alphaMap.flipY !== outFlipY);
+        const rgba = cctx.getImageData(0, 0, width, height);
+        const a = mctx.getImageData(0, 0, width, height).data;
+        for (let i = 0; i < rgba.data.length; i += 4) rgba.data[i + 3] = a[i + 1];
+        cctx.putImageData(rgba, 0, 0);
+        const source = map ?? alphaMap;
+        texture = new THREE.CanvasTexture(colour);
+        texture.flipY = outFlipY;
+        texture.wrapS = source.wrapS;
+        texture.wrapT = source.wrapT;
+        texture.offset.copy(source.offset);
+        texture.repeat.copy(source.repeat);
+        texture.rotation = source.rotation;
+        texture.center.copy(source.center);
+        texture.channel = source.channel;
+        texture.colorSpace = map ? map.colorSpace : THREE.SRGBColorSpace;
+        folded.set(key, texture);
+        stats.alphaMapsFolded++;
+    }
+    const out = material.clone() as THREE.MeshStandardMaterial;
+    out.map = texture;
+    out.alphaMap = null;
+    return out;
+}
+
 /** A material the exporter writes as glTF metallic-roughness; shader materials have no glTF reading and are refused. */
 function exportMaterial(material: THREE.Material): THREE.Material | null {
     const m = material as THREE.Material & { isShaderMaterial?: boolean; isMeshStandardMaterial?: boolean; isMeshBasicMaterial?: boolean };
@@ -270,7 +336,7 @@ export async function snapshotSceneForPathTrace(scene: THREE.Scene, exclude: Arr
     const started = performance.now();
     const excluded = new Set(exclude.filter((o): o is THREE.Object3D => !!o));
     const stats: PathTraceSnapshotStats = {
-        meshes: 0, triangles: 0, instancesExpanded: 0, lights: 0, texturesConverted: 0, geometriesDequantized: 0,
+        meshes: 0, triangles: 0, instancesExpanded: 0, lights: 0, texturesConverted: 0, geometriesDequantized: 0, alphaMapsFolded: 0,
         skipped: { points: 0, lines: 0, shaderMaterials: 0, instancesOverCap: 0, empty: 0, areaLights: 0, textures: 0 },
         exportMs: 0, bytes: 0
     };
@@ -279,10 +345,11 @@ export async function snapshotSceneForPathTrace(scene: THREE.Scene, exclude: Arr
     root.name = 'sb-path-trace-snapshot';
     const converted = new Map<THREE.Material, THREE.Material | null>();
     const replacedTextures = new Map<THREE.Texture, THREE.Texture | null>();
+    const foldedAlpha = new Map<string, THREE.Texture>();
     const materialFor = (m: THREE.Material): THREE.Material | null => {
         if (!converted.has(m)) {
             const exported = exportMaterial(m);
-            converted.set(m, exported ? withDrawableTextures(exported, stats, replacedTextures) : null);
+            converted.set(m, exported ? withAlphaInColour(withDrawableTextures(exported, stats, replacedTextures), stats, foldedAlpha) : null);
         }
         return converted.get(m)!;
     };
@@ -365,6 +432,7 @@ export async function snapshotSceneForPathTrace(scene: THREE.Scene, exclude: Arr
         for (const t of jpegMarked) delete t.userData.mimeType;
         for (const [src, out] of converted) if (out && out !== src) out.dispose();
         for (const copy of replacedTextures.values()) copy?.dispose();
+        for (const copy of foldedAlpha.values()) copy.dispose();
         for (const copy of floatCopies.values()) copy?.dispose();
     }
 }
