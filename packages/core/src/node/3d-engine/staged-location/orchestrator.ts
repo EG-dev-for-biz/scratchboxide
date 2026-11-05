@@ -214,7 +214,7 @@ import { kdLookCode, showBestVersions } from './place-store-best';
 import { addSeamEdges, applySeamGain, cutChunkLayer, DISTRICT_SEAMS_PARAMS, DISTRICT_SEAMS_VERSION, sampleSeamColour, seamCoverage, seamOwner, solveSeamGains, type SeamCoverage, type SeamCutReport, type SeamEdges, type SeamSamples } from './pipeline-k/district-seams';
 import * as os from 'os';
 import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
-import { FACADE_UPSCALE_EXTRA_MS, FACADE_UPSCALE_MODELS, FACADE_UPSCALE_VERSION, facadeUpscaleAsked, facadeUpscaleProvenance, upscaleFacadeTextures } from './pipeline-k/facade-upscale';
+import { FACADE_UPSCALE_DISTRICT_PARAMS, FACADE_UPSCALE_EXTRA_MS, FACADE_UPSCALE_MODELS, FACADE_UPSCALE_PARAMS, FACADE_UPSCALE_VERSION, facadeUpscaleAsked, facadeUpscaleProvenance, upscaleFacadeTextures } from './pipeline-k/facade-upscale';
 import { detailBakeProvenance, TILE_DETAIL_BAKE_VERSION, type TileDetailBakeReport } from '../../spatial/tile-detail-bake';
 import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visible-defects';
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
@@ -231,6 +231,8 @@ import { shadowLiftQaPng } from './pipeline-k/shadow-lift-qa';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
 import { PROJECT_MAX_RELIEF_M, pipelineIRefineEnabled, refinePipelineI, type RefineOutcome } from './pipeline-i/refine';
+import { defaultWorldCacheBucket } from '../../cloud-store/world-cache';
+import { publishDistrictWorld } from '../../cloud-store/district-world';
 import { captureBuildingTrainingInBackground, sweepPendingBuildingTraining, type BuildingTrainingCaptureInput } from '../../cloud-store/building-training-capture';
 import { captureTrainingPairsInBackground } from '../../cloud-store/training-pair-capture';
 import { sceneTrainingPairs } from './scene-training-pairs';
@@ -1620,7 +1622,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     const artifactId = stagedArtifactId(runId, intoActive?.id);
     const run = new StagedRun(runId, request, ctx, now, artifactId, intoActive);
     runningStages = () => STAGE_IDS.filter(id => run.summary(id).status === 'running');
-    const runner = new Runner(run, ctx, now, (request.isolate ? RUN_BUDGET_MS : stagedPipelineKD(request) && !request.chunk ? CHUNKED_DISTRICT_RUN_BUDGET_MS : DISTRICT_RUN_BUDGET_MS) + (facadeUpscaleAsked(request.steps) ? FACADE_UPSCALE_EXTRA_MS : 0));
+    const runner = new Runner(run, ctx, now, (request.isolate ? RUN_BUDGET_MS : stagedPipelineKD(request) && !request.chunk ? CHUNKED_DISTRICT_RUN_BUDGET_MS : DISTRICT_RUN_BUDGET_MS) + (request.isolate && facadeUpscaleAsked(request.steps) ? FACADE_UPSCALE_EXTRA_MS : 0));
     runner.proceduralOnly = request.procedural === true;
     // a procedural-only build never lists the other stages, not even as pending before they are skipped
     if (runner.proceduralOnly) for (const s of run.state.stages) if (!PROCEDURAL_STAGES.has(s.stage)) s.outOfScope = true;
@@ -2234,6 +2236,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             cache.writeRunNote(runId, 'model_calls', modelCalls.report());
             const outcome = finishRun(run, {
                 request, place: placeValue, extraction: scan, sizedTo: 'request', remeshedElsewhere: true, now, persist,
+                keep: { modelsDir: cache.modelsDir, note: (name, value) => cache.writeRunNote(runId, name, value) },
                 ...(scanOut.compat.groundGlbPath ? { groundFile: scanOut.compat.groundGlbPath } : {}), ...(scanOut.compat.trees ? { trees: scanOut.compat.trees } : {}),
                 rebuild: { droppedNotResolvable: 0, sourceLimits: scanOut.result.sourceLimits }
             });
@@ -3367,8 +3370,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // twin's atlases as the detail band the tile cannot carry (generated); off by default, SCRATCHBOX_K_DETAIL_BAKE=1 or the node graph on
                 const detailBakeOn = kTwin && !!deps.pipelineK?.detailBake && stepOn('twin.detailBake', process.env.SCRATCHBOX_K_DETAIL_BAKE?.trim() === '1');
                 // the facade upscale: each rebuilt facade's photo given fine detail by an image model, only where its answer still
-                // matches the photo (pipeline-k/facade-upscale.ts, generated); off by default, SCRATCHBOX_K_FACADE_UPSCALE=1 or the node graph on
-                const facadeUpscaleOn = kTwin && facadeUpscaleAsked(request.steps);
+                // matches the photo (pipeline-k/facade-upscale.ts, generated); on by default for a district (K-D, capped per chunk),
+                // off for a single building; SCRATCHBOX_K_FACADE_UPSCALE=1/0 or the node graph sets it
+                const upscaleDistrict = kdDistrict && !request.isolate;
+                const facadeUpscaleOn = kTwin && facadeUpscaleAsked(request.steps, { district: upscaleDistrict });
                 // the view relight: the photos evened out from image-model relights of rendered views (pipeline-k/view-relight.ts);
                 // off by default, SCRATCHBOX_K_VIEW_RELIGHT=1 or the node graph on; needs the lighting model client
                 const relightClient = harmonizeOn && stepOn('twin.viewRelight', process.env.SCRATCHBOX_K_VIEW_RELIGHT?.trim() === '1') ? deps.textures?.lighting : undefined;
@@ -3460,7 +3465,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // a class shown the same candidates as one chosen before (another building, chunk or run) and of its colour takes that pick; only the rest are asked
                 const chooseSets = askSets ? async (rows: ChoiceRow[], swatches: { png: Buffer; spanM?: number }): Promise<Array<SetChoice | undefined>> => (await chooseWithMemory(rows, swatches, askSets, modelReadings ? { store: modelReadings, model: FACADE_READER_MODEL_KEY } : undefined)).picks : undefined;
                 const grammarFile = kOrthos ? path.join(kOrthos, WALL_GRAMMAR_FILE) : undefined;
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, upwardLift ? `upLift:${upwardLift}` : '', target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets && visionAvailable ? MATERIAL_FINISH_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', facadeUpscaleOn ? `${FACADE_UPSCALE_VERSION}:${visionAvailable ? 'image' : 'none'}` : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '', readerAsk ? `${FACADE_READER_VERSION}:${TWIN_READER_VERSION}:${JSON.stringify(FACADE_READER_PARAMS)}` : '', nameClasses ? MATERIAL_NAMING_VERSION : '', chooseSets ? MATERIAL_CHOICE_VERSION : '');
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, upwardLift ? `upLift:${upwardLift}` : '', target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets && visionAvailable ? MATERIAL_FINISH_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', facadeUpscaleOn ? `${FACADE_UPSCALE_VERSION}:${visionAvailable ? 'image' : 'none'}${upscaleDistrict ? ':district' : ''}` : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '', readerAsk ? `${FACADE_READER_VERSION}:${TWIN_READER_VERSION}:${JSON.stringify(FACADE_READER_PARAMS)}` : '', nameClasses ? MATERIAL_NAMING_VERSION : '', chooseSets ? MATERIAL_CHOICE_VERSION : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions']; materialClasses?: TileRefineTwin['materialClasses'] }>('textures', key, async dir => {
                     const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(upwardLift ? { upwardShadowLift: upwardLift } : {}), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0, ...(kdBuildings ? { buildingOf: districtBuildingIndex(kdBuildings) } : {}), ...(process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' && extraction.geometryGlb && fs.existsSync(extraction.geometryGlb) ? { skyContext: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)) } : {}) } } : {}), ...(relightClient ? { viewRelight: { client: relightClient, models: lightingModels(), params: viewRelightEnvParams().params, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`) } } : {}), ...roofShadowOpts, ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m), ...(chooseSets && swatches ? { choose: (rows: ChoiceRow[]) => chooseSets(rows, swatches) } : {}), ...(readFinish && swatches ? { finish: () => readFinish(classes, swatches.png) } : {}), ...(modelReadings ? { store: modelReadings } : {}) }), planes, ...(planesFor ? { planesFor } : {}), ...(nameClasses ? { nameClasses } : {}) } } : {}) } : enhance || roofShadowOn ? {
                         ...(enhance ? { recreate: {
@@ -3521,7 +3526,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (kTwin && !facadeUpscaleOn) logStep('twin.facadeUpscale', 'skipped');
                     if (facadeUpscaleOn) {
                         logStep('twin.facadeUpscale', 'running');
-                        const fu = await upscaleFacadeTextures(twinGlb, { ...(visionAvailable ? { client: genAiEnhanceClient(visionAvailable.client) } : {}), models: FACADE_UPSCALE_MODELS, ...(modelReadings ? { store: modelReadings } : {}), signal: io.signal, progress: (m: string) => io.progress(m) });
+                        const fu = await upscaleFacadeTextures(twinGlb, { ...(visionAvailable ? { client: genAiEnhanceClient(visionAvailable.client) } : {}), models: FACADE_UPSCALE_MODELS, ...(modelReadings ? { store: modelReadings } : {}), signal: io.signal, progress: (m: string) => io.progress(m) }, upscaleDistrict ? FACADE_UPSCALE_DISTRICT_PARAMS : FACADE_UPSCALE_PARAMS);
                         logStep('twin.facadeUpscale', fu.report.upscaled ? 'done' : 'skipped');
                         if (fu.report.upscaled) { twinGlb = fu.glb; provenance = [...provenance, facadeUpscaleProvenance(fu.report)]; }
                         io.progress(fu.report.upscaled ? `facade upscale: ${fu.report.upscaled} of ${fu.report.facades} rebuilt facades given fine detail (${fu.report.calls} image calls, ${fu.report.cached} tiles saved before; generated)` : `no facade upscaled: ${fu.report.skipped}`);
@@ -6759,7 +6764,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         if (readingStore) cache.writeRunNote(runId, 'model_readings', readingStore.report());
         const outcome = finishRun(run, {
             request, place: placeValue, extraction, structure, sizedTo: t.sizedTo, remeshed: remeshedNow, groundFile: groundOverride?.groundFile ?? remesh.value?.groundFile, groundLayerId: groundOverride?.groundLayerId ?? remesh.value?.groundLayerId ?? currentL1()?.objectId,
-            trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, ...(textureValue ? { textures: textureValue } : {}), now, persist
+            trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, ...(textureValue ? { textures: textureValue } : {}), now, persist,
+            keep: { modelsDir: cache.modelsDir, note: (name, value) => cache.writeRunNote(runId, name, value) }
         });
         // the place's versions are in the object store before this run's are offered to it (a pull still out keeps reading)
         if (placePull) await Promise.race([placePull, new Promise(r => setTimeout(r, PLACE_STORE_PARAMS.pullWaitMs).unref())]);
@@ -6931,6 +6937,34 @@ interface FinishInput {
     textures?: TextureStageValue;
     now: () => number;
     persist: () => void;
+    /** Where this run's models were published, and its run notes: a finished district is kept as a world and backed up (backupDistrictWorld). */
+    keep?: { modelsDir: string; note: (name: string, value: unknown) => void };
+}
+
+/** A district's world name: its place and its run, e.g. `district_2_penn_plaza_new_york_8e3a912b`. */
+export function districtWorldSlug(query: string, runId: string): string {
+    return `district_${query.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80)}_${runId}`;
+}
+
+/**
+ * Every finished district (not one isolated building) kept as a world in the folder that serves /tilesets beside the
+ * published models, and backed up to the cloud world cache, so it opens again on any machine (user ask, 2026-11-04;
+ * cloud-store/district-world.ts). In the background: the build's result never waits on the upload, and a failure is a run
+ * note, never a failed build. Only with a world cache bucket (SCRATCHBOX_WORLD_CACHE_BUCKET or cloud-store.json; none in
+ * tests), and not with SCRATCHBOX_DISTRICT_BACKUP=0.
+ */
+function backupDistrictWorld(f: FinishInput, runId: string, artifact: CanvasArtifact | undefined): void {
+    if (f.request.isolate || !artifact || !f.keep || process.env.SCRATCHBOX_DISTRICT_BACKUP?.trim() === '0') return;
+    const bucket = defaultWorldCacheBucket();
+    if (!bucket) return;
+    const keep = f.keep, slug = districtWorldSlug(f.request.query, runId);
+    const started = Date.now();
+    void publishDistrictWorld({
+        artifact: artifact as unknown as { data?: Record<string, unknown> }, modelsDir: keep.modelsDir, slug, runId, bucket,
+        worldsDir: path.join(path.dirname(keep.modelsDir), 'tilesets'),
+        title: `${f.place.formattedAddress} district (${runId})`, log: m => console.log(m)
+    }).then(r => keep.note('district_world', { slug, models: r.models, bytes: r.bytes, ...(r.stored ? { stored: r.stored } : {}), ms: Date.now() - started }))
+        .catch(err => keep.note('district_world', { slug, failed: errorMessage(err), ms: Date.now() - started }));
 }
 
 function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
@@ -7070,6 +7104,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
     const result: StagedLocationResult = { ...base, artifact: artifact ?? null, digest, summary };
     // the finish event carries the final scene
     run.emitFinish(status === 'complete' ? 'committed' : 'degraded', digest);
+    backupDistrictWorld(f, run.runId, artifact);
     f.persist();
     run.close();
     return {
