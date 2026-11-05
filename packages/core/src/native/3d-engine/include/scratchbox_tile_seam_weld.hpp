@@ -1840,9 +1840,11 @@ private:
 public:
     /**
      * Seam tone feather: on every surface crossing a cut two tiles share (seamCuts), each tile's photo is read within sampleM
-     * of the cut, in binM bins along it and by which way the surface faces. Where both sides read a bin, the two mean
+     * of the cut, in binM bins along it (whichever way the surface faces: binning by facing split a facade's triangles
+     * along a bin's edge, each side levelled its own way). Where both sides read a bin, the two mean
      * colours (linear RGB) are levelled toward their geometric mean, half the step each, the correction smoothed over
-     * neighbouring bins, faded to nothing over bandM from the cut (raised cosine), and capped at maxGain per texel. The
+     * neighbouring bins, interpolated between bin centres (a bin with none counting as none, so it fades out where the read
+     * ends), faded to nothing over bandM from the cut (raised cosine), and capped at maxGain per texel. The
      * texels are rewritten in each tile's photo (re-encoded in its own format); geometry and UVs are untouched. The levels are fitted,
      * so a stage reports them as generated; the photo's detail stays the photo's.
      */
@@ -1862,7 +1864,7 @@ public:
         auto keyOf = [&](const BandTexel& b) {
             const SeamCut& C = sc.cuts[b.cut];
             const V3 r = b.q - C.c;
-            return binKey(b.cut, static_cast<int64_t>(std::floor(r.dot(C.a) / p.binM)), static_cast<int64_t>(std::floor(r.dot(C.b) / p.binM)), facingOctant(C, b.n));
+            return binKey(b.cut, static_cast<int64_t>(std::floor(r.dot(C.a) / p.binM)), static_cast<int64_t>(std::floor(r.dot(C.b) / p.binM)), 0);
         };
         struct Sum { double r{0}, g{0}, b{0}; size_t n{0}; };
         using BinMap = std::unordered_map<uint64_t, std::array<Sum, 2>>;
@@ -1956,18 +1958,17 @@ public:
                 const double fa = r.dot(C.a) / p.binM - 0.5, fb = r.dot(C.b) / p.binM - 0.5;
                 const int64_t ia = static_cast<int64_t>(std::floor(fa)), ib = static_cast<int64_t>(std::floor(fb));
                 const double wa = fa - static_cast<double>(ia), wb = fb - static_cast<double>(ib);
-                const int oct = facingOctant(C, b.n);
                 std::array<double, 3> lg{0, 0, 0};
-                double wsum = 0;
+                bool any = false;
+                // a bin with no levelling counts as none, so the levelling fades out over a bin where the read ends
                 for (int da = 0; da <= 1; ++da) for (int db = 0; db <= 1; ++db) {
-                    auto it = level.find(binKey(b.cut, ia + da, ib + db, oct));
+                    auto it = level.find(binKey(b.cut, ia + da, ib + db, 0));
                     if (it == level.end()) continue;
                     const double w = (da ? wa : 1 - wa) * (db ? wb : 1 - wb);
                     for (int c = 0; c < 3; ++c) lg[static_cast<size_t>(c)] += w * it->second[static_cast<size_t>(c)];
-                    wsum += w;
+                    any = true;
                 }
-                if (!(wsum > 1e-6)) return;
-                for (auto& v : lg) v /= wsum;
+                if (!any) return;
                 const double w = 0.5 * (1.0 + std::cos(M_PI * std::min(b.d / p.bandM, 1.0)));
                 const double sg = b.side == 0 ? 1.0 : -1.0;
                 std::lock_guard<std::mutex> lock(imageLock[static_cast<size_t>(b.image)]);
