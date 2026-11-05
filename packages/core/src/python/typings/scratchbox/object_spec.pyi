@@ -31,17 +31,19 @@ or substituted. Labels and material descriptions are never read.
 import scratchbox.world
 import typing
 
-__all__ = ['AO_INTENSITY', 'AO_REACH_SHARE', 'AO_SAMPLES', 'CREASE_DEGREES', 'EDGE_RADIUS_MAX', 'EDGE_RADIUS_MAX_SHARE', 'EDGE_RADIUS_MIN', 'EDGE_RADIUS_SHARE', 'EDGE_ROUND_MAX_SHARE', 'MAX_TRIANGLES', 'PART_VERTEX_CAP', 'SpecError', 'TARGET_VERTICES', 'build', 'build_meshes', 'crown_trees', 'edge_radius', 'json', 'math', 'part_material', 'validate']
+__all__ = ['AO_INTENSITY', 'AO_REACH_SHARE', 'AO_SAMPLES', 'CREASE_DEGREES', 'CUT_CREASE_DEG', 'EDGE_RADIUS_MAX', 'EDGE_RADIUS_MAX_SHARE', 'EDGE_RADIUS_MIN', 'EDGE_RADIUS_SHARE', 'EDGE_ROUND_MAX_SHARE', 'LOFT_RING_POINTS', 'MAX_TRIANGLES', 'PART_VERTEX_CAP', 'SpecError', 'TARGET_VERTICES', 'build', 'build_meshes', 'crown_trees', 'edge_radius', 'expand_blueprint', 'json', 'loft_sections', 'math', 'part_material', 'validate']
 
 AO_INTENSITY: float
 AO_REACH_SHARE: float
 AO_SAMPLES: int
 CREASE_DEGREES: float
+CUT_CREASE_DEG: float
 EDGE_RADIUS_MAX: float
 EDGE_RADIUS_MAX_SHARE: float
 EDGE_RADIUS_MIN: float
 EDGE_RADIUS_SHARE: float
 EDGE_ROUND_MAX_SHARE: float
+LOFT_RING_POINTS: int
 MAX_TRIANGLES: int
 PART_VERTEX_CAP: int
 
@@ -80,7 +82,15 @@ def edge_radius(part) -> (tuple[float, typing.Literal['spec']] | tuple[float, ty
     and to at most EDGE_RADIUS_MAX_SHARE of it.
     """
 
+
+def expand_blueprint(spec):
+    """The spec with every sweep.fromBlueprint turned into rings (sweep.sections) from spec["blueprint"]."""
+
 import json
+
+def loft_sections(outlines, loft=None):
+    """The rings of a blueprint loft, rear to front (blueprint-loft.ts loftSections)."""
+
 import math
 
 def part_material(sb, pid, material):
