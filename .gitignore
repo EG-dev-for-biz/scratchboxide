@@ -147,3 +147,6 @@ scripts/run_sb_veggie
 scripts/run_tile_cleanup_pipeline
 # Downloaded model weights (tools/depth/fetch_depth_model.py); never committed
 /.model-cache/
+
+# a district kept as a world links here (scripts/publish_district_world.ts); the link and its models stay out of git
+public/tilesets/penn_station_district_2_penn_plaza

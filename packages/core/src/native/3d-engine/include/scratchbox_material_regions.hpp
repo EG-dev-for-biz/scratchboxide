@@ -360,13 +360,14 @@ inline void forTexelsOf(const double* uv, int W, int H, F&& visit) {
 
 // ---- planMaterialJob ----
 
-/** One class's library set: its tile's real size and its normal and occlusion/roughness/metalness maps. */
-struct RegionSet { double realSizeX = 1, realSizeY = 1; Image normal, orm; };
+/** One class's library set: its tile's real size and its normal and occlusion/roughness/metalness maps; `metal`: the class
+ * was read confidently as metal and its set is one, so its metalness is drawn (else none). */
+struct RegionSet { double realSizeX = 1, realSizeY = 1; bool metal = false; Image normal, orm; };
 
 struct PlanParams { double paneWallShare = 0.5, glassFeatherM = 0.15, paneGlassWeight = 128, glassRoughness = 0.05; };
 
 /** What every job reads: the classes' CIELAB means, their sets, the sets' mean roughness (G) and the params. */
-struct PlanContext { std::vector<double> meanLab; std::vector<RegionSet> sets; std::vector<double> setMeanG; double wallMeanG = 0; PlanParams P; };
+struct PlanContext { std::vector<double> meanLab; std::vector<RegionSet> sets; std::vector<double> setMeanG; double wallMeanG = 0; std::vector<double> setMeanB; double wallMeanB = 0; PlanParams P; };
 
 /** A rebuilt facade's job: its photo, metres per texel and its lattice's rects (u0 v0 u1 v1 each). */
 struct RebuiltJob { const Image* img = nullptr; double texelM = 0; std::vector<double> fitted, panes, runs, bays; };
@@ -419,11 +420,11 @@ inline RebuiltResult planRebuilt(const RebuiltJob& job, const PlanContext& ctx) 
     }
     r.frameClass = frameClass;
 
-    struct Tile { int tw, th; std::vector<float> n, o; };
+    struct Tile { int tw, th; std::vector<float> n, o; bool metal = false; };
     auto tileOf = [&](const RegionSet& s) {
         Tile t;
         t.tw = static_cast<int>(std::max(2.0, js::round(s.realSizeX / texelM))); t.th = static_cast<int>(std::max(2.0, js::round(s.realSizeY / texelM)));
-        t.n = shrinkTile(s.normal, t.tw, t.th, true); t.o = shrinkTile(s.orm, t.tw, t.th, false);
+        t.n = shrinkTile(s.normal, t.tw, t.th, true); t.o = shrinkTile(s.orm, t.tw, t.th, false); t.metal = s.metal;
         return t;
     };
     const Tile wallTile = tileOf(ctx.sets[WALL]);
@@ -431,9 +432,11 @@ inline RebuiltResult planRebuilt(const RebuiltJob& job, const PlanContext& ctx) 
     const Tile& frameTile = frameClass == WALL ? wallTile : frameOwn;
     const auto fw = featherWeights(pane, W, H, ctx.P.glassFeatherM / texelM);
     r.orm.assign(N * 4, 0); r.normal.assign(N * 4, 0); r.params.assign(N * 4, 0);
-    auto write = [&](size_t k, double rough, double glassWeight, double seed) {
-        r.orm[k * 4] = 255; r.orm[k * 4 + 1] = js::toUint8(js::round(rough * 255)); r.orm[k * 4 + 2] = 0; r.orm[k * 4 + 3] = 255;
-        r.params[k * 4] = js::toUint8(glassWeight); r.params[k * 4 + 2] = 0; r.params[k * 4 + 3] = js::toUint8(seed);
+    // the set's roughness; metalness 0 unless the class's set is a metal read as such (RegionSet::metal), and never on glass
+    auto write = [&](size_t k, double rough, double glassWeight, double seed, double metal = 0) {
+        const uint8_t mb = glassWeight != 0 ? 0 : js::toUint8(js::round(std::max(0.0, std::min(1.0, metal)) * 255));
+        r.orm[k * 4] = 255; r.orm[k * 4 + 1] = js::toUint8(js::round(rough * 255)); r.orm[k * 4 + 2] = mb; r.orm[k * 4 + 3] = 255;
+        r.params[k * 4] = js::toUint8(glassWeight); r.params[k * 4 + 2] = mb; r.params[k * 4 + 3] = js::toUint8(seed);
         r.texels++;
         if (glassWeight != 0) r.glass++;
     };
@@ -452,7 +455,7 @@ inline RebuiltResult planRebuilt(const RebuiltJob& job, const PlanContext& ctx) 
             r.normal[k * 4 + 3] = 255;
             continue;
         }
-        write(k, t.o[j + 1], 0, 255);
+        write(k, t.o[j + 1], 0, 255, t.metal ? t.o[j + 2] : 0);
         for (int c = 0; c < 3; c++) r.normal[k * 4 + c] = js::toUint8(js::round(static_cast<double>(t.n[j + c]) * 255));
         r.normal[k * 4 + 3] = 255;
     }
@@ -524,11 +527,14 @@ inline ScanResult planScan(const ScanJob& job, const std::vector<PlaneRaster>& p
     const auto fw = featherWeights(pane, W, H, job.texelM > 0 ? ctx.P.glassFeatherM / job.texelM : 1);
     r.orm.assign(N * 4, 0); r.params.assign(N * 4, 0);
     for (size_t k = 0; k < N; k++) {
-        const double rough = pane[k] || win[k] || bayId[k] ? ctx.setMeanG[frameClass] : ctx.wallMeanG;
+        const bool framedK = pane[k] || win[k] || bayId[k];
+        const double rough = framedK ? ctx.setMeanG[frameClass] : ctx.wallMeanG;
+        const double metal = (framedK ? ctx.sets[frameClass] : ctx.sets[WALL]).metal ? (framedK ? ctx.setMeanB[frameClass] : ctx.wallMeanB) : 0;
+        const uint8_t mb = pane[k] ? 0 : js::toUint8(js::round(std::max(0.0, std::min(1.0, metal)) * 255));
         const double gw = pane[k] ? std::max(1.0, js::round(ctx.P.paneGlassWeight * fw[k])) : 0;
         const double v = pane[k] ? rough + (ctx.P.glassRoughness - rough) * fw[k] : rough;
-        r.orm[k * 4] = 255; r.orm[k * 4 + 1] = js::toUint8(js::round(v * 255)); r.orm[k * 4 + 2] = 0; r.orm[k * 4 + 3] = 255;
-        r.params[k * 4] = js::toUint8(gw); r.params[k * 4 + 2] = 0; r.params[k * 4 + 3] = pane[k] ? pane[k] : 255;
+        r.orm[k * 4] = 255; r.orm[k * 4 + 1] = js::toUint8(js::round(v * 255)); r.orm[k * 4 + 2] = mb; r.orm[k * 4 + 3] = 255;
+        r.params[k * 4] = js::toUint8(gw); r.params[k * 4 + 2] = mb; r.params[k * 4 + 3] = pane[k] ? pane[k] : 255;
         r.texels++;
         if (gw != 0) r.glass++;
         r.onPlane += on[k]; r.inWindows += win[k]; if (pane[k]) { r.inPanes++; r.anyGlass = true; }

@@ -49,7 +49,7 @@ export interface MaterialRegionsNativeOptions {
 
 const CLI_SOURCE = path.join('scripts', 'material_regions_native.cpp');
 const INCLUDE_DIR = path.join('packages', 'core', 'src', 'native', '3d-engine', 'include');
-const MAGIC = 0x524d4253, VERSION = 1;
+const MAGIC = 0x524d4253, VERSION = 2;
 const MODE = { tables: 0, classes: 1, harvest: 2, plan: 3 } as const;
 
 /** The repository root: the first directory up from here (or the working directory) holding the CLI driver. */
@@ -392,8 +392,9 @@ export async function planMaterialJobsNative(jobs: MaterialPlanJob[], ctx: Mater
         w.u32(table.list.length);
         for (const img of table.list) w.image(img);
         w.u32(K).f64s(classes.flatMap(c => c.meanLab));
-        for (let k = 0; k < K; k++) w.f64(sets[k].realSizeM[0]).f64(sets[k].realSizeM[1]).image(sets[k].normal).image(sets[k].orm);
+        for (let k = 0; k < K; k++) w.f64(sets[k].realSizeM[0]).f64(sets[k].realSizeM[1]).f64(sets[k].metal ? 1 : 0).image(sets[k].normal).image(sets[k].orm);
         w.f64s(ctx.setMeans.slice(0, K).map(m => m[1])).f64(ctx.wallMean[1]);
+        w.f64s(ctx.setMeans.slice(0, K).map(m => m[2])).f64(ctx.wallMean[2]);
         w.f64(P.paneWallShare).f64(P.glassFeatherM).f64(P.paneGlassWeight).f64(GLASS_ROUGHNESS);
         w.u32(planes.length);
         for (const ra of planes) {
