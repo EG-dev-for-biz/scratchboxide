@@ -69,8 +69,11 @@ export function parseRegions(text: string): Array<{ view: 'front' | 'side'; labe
     });
 }
 
-/** A normalised box in a view, in metres in the build frame, by the outlines' scaling (sizeMeters [W, H, L]). */
-export function boxToMeters(view: 'front' | 'side', box: NormBox, s: Silhouette, sizeMeters: Vec3): { across: [number, number]; height: [number, number] } {
+/**
+ * A normalised box in a view, in metres in the build frame, by the outlines' scaling (sizeMeters [W, H, L]); a side
+ * view's z goes through fromDrawnZ when the outlines were stretched along the length (their lengthWarp).
+ */
+export function boxToMeters(view: 'front' | 'side', box: NormBox, s: Silhouette, sizeMeters: Vec3, fromDrawnZ: (z: number) => number = z => z): { across: [number, number]; height: [number, number] } {
     const [W, H, L] = sizeMeters;
     const w = s.box.x1 - s.box.x0 + 1, h = s.box.y1 - s.box.y0 + 1;
     const px = (f: number) => f * s.width, py = (f: number) => f * s.height;
@@ -78,7 +81,7 @@ export function boxToMeters(view: 'front' | 'side', box: NormBox, s: Silhouette,
     const r = (v: number) => Math.round(v * 1000) / 1000;
     const height: [number, number] = [r(up(box[3])), r(up(box[1]))];
     if (view === 'side') {
-        const z = (f: number) => Math.max(-L / 2, Math.min(L / 2, (px(f) - s.box.x0) / w * L - L / 2));
+        const z = (f: number) => fromDrawnZ(Math.max(-L / 2, Math.min(L / 2, (px(f) - s.box.x0) / w * L - L / 2)));
         return { across: [r(z(box[0])), r(z(box[2]))], height };
     }
     // the front view faces the object: its right (+X) is on the viewer's left
@@ -89,6 +92,8 @@ export function boxToMeters(view: 'front' | 'side', box: NormBox, s: Silhouette,
 export interface FindOpeningsDeps {
     /** Traces the region in a box of the image at imagePath; resolves to its extent as a normalised box. */
     segment: (imagePath: string, box: NormBox) => Promise<NormBox>;
+    /** The drawing's z to the build frame's, when the outlines were stretched along the length. */
+    fromDrawnZ?: (z: number) => number;
     models?: string[];
     signal?: AbortSignal;
 }
@@ -131,7 +136,7 @@ export async function findOpenings(
         } catch (err) {
             note = `not traced (${(err as Error)?.message || err}); the vision model's box stands`;
         }
-        const m = boxToMeters(region.view, box, view.silhouette, sizeMeters);
+        const m = boxToMeters(region.view, box, view.silhouette, sizeMeters, deps.fromDrawnZ);
         openings.push({ view: region.view, label: region.label, ...m, traced, ...(note ? { note } : {}), provenance: 'generated' });
     }
     return { openings, model };

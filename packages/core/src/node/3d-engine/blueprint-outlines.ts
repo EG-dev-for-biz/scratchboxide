@@ -200,13 +200,15 @@ const stationsAlong = (from: number, to: number, count: number) => Array.from({ 
  * length and height, the front view to the width and height, the top view by the length alone (its width is the
  * drawing's own). The side and top views have the front to the right; the front view is seen head on.
  */
-export function outlinesFromSilhouettes(views: { side: Silhouette; top: Silhouette; front: Silhouette }, sizeMeters: Vec3): ObjectOutlines {
+export function outlinesFromSilhouettes(views: { side: Silhouette; top: Silhouette; front: Silhouette }, sizeMeters: Vec3, warp?: LengthWarp): ObjectOutlines {
     const [W, H, L] = sizeMeters;
     const { side, top, front } = views;
     const span = (b: Silhouette['box']) => ({ w: b.x1 - b.x0 + 1, h: b.y1 - b.y0 + 1 });
 
-    // a station's column: z runs from -L/2 at the box's left edge to +L/2 at its right edge (the front)
-    const colAt = (s: Silhouette, z: number) => Math.min(s.box.x1, Math.max(s.box.x0, Math.round(s.box.x0 + (z / L + 0.5) * (span(s.box).w - 1))));
+    // a station's column: z runs from -L/2 at the box's left edge to +L/2 at its right edge (the front), read through
+    // the length warp when there is one (the build-frame z mapped to where the drawing has it)
+    const drawnZ = warp ? (z: number) => warpZ(warp.knots, z, 'z', 'drawnZ') : (z: number) => z;
+    const colAt = (s: Silhouette, z: number) => Math.min(s.box.x1, Math.max(s.box.x0, Math.round(s.box.x0 + (drawnZ(z) / L + 0.5) * (span(s.box).w - 1))));
     const sideBox = span(side.box);
     const yOf = (row: number, edge: 'top' | 'bottom') => (side.box.y1 - row + (edge === 'top' ? 1 : 0)) / sideBox.h * H;
 
@@ -230,7 +232,48 @@ export function outlinesFromSilhouettes(views: { side: Silhouette; top: Silhouet
         const ext = rowExtent(front, row);
         if (ext) frontStations.push({ y: round3(y), halfWidth: round3((ext[1] - ext[0] + 1) / frontBox.w * W / 2) });
     }
-    return { sizeMeters, side: sideStations, plan, front: frontStations, groundContacts: groundContacts(sideStations, H) };
+    return { sizeMeters, side: sideStations, plan, front: frontStations, groundContacts: groundContacts(sideStations, H), ...(warp ? { lengthWarp: warp } : {}) };
+}
+
+export type LengthWarp = NonNullable<ObjectOutlines['lengthWarp']>;
+type Knot = LengthWarp['knots'][number];
+
+/** Piecewise linear through the knots (sorted by both z and drawnZ), from one coordinate to the other. */
+export function warpZ(knots: Knot[], v: number, from: keyof Knot, to: keyof Knot): number {
+    for (let i = 1; i < knots.length; i++) {
+        const a = knots[i - 1], b = knots[i];
+        if (v <= b[from] || i === knots.length - 1) {
+            const t = (v - a[from]) / (b[from] - a[from] || 1);
+            return a[to] + t * (b[to] - a[to]);
+        }
+    }
+    return v;
+}
+
+/** How far a drawn contact spacing may be from the target spacing before the drawing is judged wrong, not stretched. */
+export const MAX_AXLE_STRETCH = 0.12;
+
+/**
+ * The stretch along the length that puts a drawing's outermost ground contacts (read from its unwarped outlines)
+ * at the given positions, the ends staying at the ends: three linear pieces, tail to rear contact, between the
+ * contacts, front contact to nose. Refused, with the reason, when fewer than two contacts were read, when a target
+ * lies outside the length, or when the drawn spacing is more than MAX_AXLE_STRETCH off the target spacing (that
+ * drawing is wrong, not merely out of scale).
+ */
+export function axleWarp(outlines: ObjectOutlines, axleZ: [number, number]): { warp: LengthWarp } | { reason: string } {
+    const L = outlines.sizeMeters[2];
+    const [front, rear] = axleZ[0] > axleZ[1] ? axleZ : [axleZ[1], axleZ[0]];
+    const c = outlines.groundContacts;
+    if (c.length < 2) return { reason: `only ${c.length} ground contact${c.length === 1 ? ' was' : 's were'} read from the side view` };
+    if (!(rear > -L / 2 && front < L / 2)) return { reason: `the axles (z ${front}, ${rear}) are not inside the length (${L} m)` };
+    const drawnFront = c[0].zCentre, drawnRear = c[c.length - 1].zCentre;
+    const stretch = (front - rear) / (drawnFront - drawnRear) - 1;
+    if (!(drawnFront > drawnRear) || Math.abs(stretch) > MAX_AXLE_STRETCH) {
+        return { reason: `the drawn contacts are ${round3(drawnFront - drawnRear)} m apart for ${round3(front - rear)} m (more than ${MAX_AXLE_STRETCH * 100} % off): the drawing is wrong, not merely out of scale` };
+    }
+    const knots = [{ z: -L / 2, drawnZ: -L / 2 }, { z: rear, drawnZ: drawnRear }, { z: front, drawnZ: drawnFront }, { z: L / 2, drawnZ: L / 2 }]
+        .map(k => ({ z: round3(k.z), drawnZ: round3(k.drawnZ) }));
+    return { warp: { knots, note: `side and plan stretched along the length so the drawn ground contacts (z ${drawnFront}, ${drawnRear}) land on the given axles (z ${round3(front)}, ${round3(rear)}): the wheelbase ${round3(stretch * 100)} %, the overhangs to match; generated` } };
 }
 
 /** Runs of side stations whose bottom line touches the ground, front first. */
@@ -423,7 +466,8 @@ export function outlinesAsNotes(o: ObjectOutlines): string {
         `side, z: top/bottom: ${every(o.side, 4).map(s => `${s.z}: ${s.top}/${s.bottom}`).join('; ')}`,
         `plan, z: half width: ${every(o.plan, 4).map(s => `${s.z}: ${s.halfWidth}`).join('; ')}`,
         `front, y: half width: ${every(o.front, 2).map(s => `${s.y}: ${s.halfWidth}`).join('; ')}`,
-        o.groundContacts.length ? `ground contacts along z (from/to, centre): ${o.groundContacts.map(c => `${c.zFrom}/${c.zTo} (${c.zCentre})`).join('; ')}` : 'ground contacts: none read'
+        o.groundContacts.length ? `ground contacts along z (from/to, centre): ${o.groundContacts.map(c => `${c.zFrom}/${c.zTo} (${c.zCentre})`).join('; ')}` : 'ground contacts: none read',
+        ...(o.lengthWarp ? [o.lengthWarp.note] : [])
     ].join('\n');
 }
 

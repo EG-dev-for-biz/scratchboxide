@@ -36,6 +36,11 @@ export interface ObjectOutlines {
     groundContacts: Array<{ zFrom: number; zTo: number; zCentre: number }>;
     /** Where the drawn surface sinks inside the outline (blueprint-depth.ts), photo-inferred: front and side grids. */
     relief?: { front?: ReliefGrid; side?: ReliefGrid; model?: string };
+    /**
+     * How the side and plan drawings were stretched along the length so their ground contacts land at given positions
+     * (a car's published axles): build-frame z against the drawing's own z at each knot, ends included. Generated.
+     */
+    lengthWarp?: { knots: Array<{ z: number; drawnZ: number }>; note: string };
 }
 
 /**

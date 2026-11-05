@@ -57,7 +57,11 @@ load object_blueprint_outlines with load_tools and call it with subject (the sam
 request) and sizeMeters [width with mirrors, height, length] (the build's dimensionsHintMeters). It draws the three
 orthographic views (three billed image calls), scales them to that size and returns the outlines in the build frame:
 the side top and bottom line and the plan half width every few centimetres along the car, the front half width up
-its height, and where the side outline touches the ground (the tyres). Keep its blueprintPath for the check. Pass openings: true: it also reads the areas set into the body from the front
+its height, and where the side outline touches the ground (the tyres). Work out the axles first (section 3: front
+axle z = L/2 - front overhang, rear axle z = front axle z - wheelbase) and pass them as axleZMeters [front, rear]: the
+side and plan drawings are then stretched along the length so their wheels land on the published axles, the bumpers
+staying at the ends (an image model draws a car's wheelbase a few per cent off: a Polestar 3 twice at 3.094 m for
+2.985). Keep its blueprintPath for the check. Pass openings: true: it also reads the areas set into the body from the front
 and side drawings (grille, intakes, vents, outlets, the side windows), each traced by the object segmenter, as extents
 in metres (front view: x and y; side view: z and y). Those are where the cuts and the window slices go (section 4):
 an opening in the front view is a cut at that x and y, from the nose back as deep as the part is; the side windows' z
@@ -65,10 +69,11 @@ spans set the pillars between them. Leave depth off: its relief is too smooth an
 Golf build at the 5 cm maximum looked the same as without it); recesses are cuts and relief curves.
 
 Judge the drawing before using it:
-- **Ground contacts:** the two contact centres should be one wheelbase apart (within 3 %) at about the axle positions
-  of section 3. If they are not, the side drawing is wrong: call the tool once more; if it is wrong again, build
-  from the published hardpoints and the ratios, and say the blueprint was not used. The contacts only check the
-  drawing: the axles always go at the published wheelbase (a Golf's blueprint read 2.654 m for a published 2.627).
+- **Ground contacts:** with axleZMeters the summary says the drawing was stretched to the axles, and the contacts
+  then sit on them. If it says it was not stretched (fewer than two contacts read, or the drawn wheels more than 12 %
+  off the wheelbase), the side drawing is wrong: call the tool once more; if it is wrong again, build from the
+  published hardpoints and the ratios, and say the blueprint was not used. The axles always go at the published
+  wheelbase.
 - **aspectError** over 0.12 on a view means its proportions were drawn wrong before scaling; trust that view's
   outline only for shape, not for heights or widths the published figures give.
 - The outlines are read from generated drawings: published figures win where they disagree, and the outlines are

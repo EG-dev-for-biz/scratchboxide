@@ -26,6 +26,8 @@ import {
     outlinesFromTriangles,
     overlayOf,
     ASPECT_WARNING,
+    axleWarp,
+    warpZ,
     type ObjectOutlines,
     type Vec3
 } from '../../3d-engine/blueprint-outlines';
@@ -88,6 +90,11 @@ export const BLUEPRINT_OUTLINE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 depth: {
                     type: 'BOOLEAN',
                     description: 'Optional, for a new blueprint: also read where the front and side drawings sink inside the outline (intakes, a recessed grille, glass behind its frame) with the app\'s depth model (Depth Anything V2 Small, local, not billed), as relief grids saved with the outlines (photo-inferred). A part lofted from the blueprint takes them with fromBlueprint.reliefMeters.'
+                },
+                axleZMeters: {
+                    type: 'ARRAY',
+                    items: { type: 'NUMBER' },
+                    description: 'Optional, for a new blueprint of an object on wheels or legs: where its two outermost ground contacts belong along the length, [front, rear] z in metres in the build frame (a car\'s published axles: front z = length/2 - front overhang, rear z = front z - wheelbase). The side and plan drawings are then stretched along the length so their drawn contacts land there, the ends staying at the ends (labelled generated). Refused, with the reason, when the drawn contacts are more than 12 % off that spacing: that drawing is wrong, not merely out of scale.'
                 },
                 openings: {
                     type: 'BOOLEAN',
@@ -184,7 +191,22 @@ export function createBlueprintOutlineHandlers(deps: BlueprintOutlineToolDeps = 
                 return failed(`The blueprint could not be drawn: ${errorMessage(err)}`);
             }
             const byView = Object.fromEntries(views.map(v => [v.view, v.silhouette])) as Parameters<typeof outlinesFromSilhouettes>[0];
-            const outlines = outlinesFromSilhouettes(byView, size);
+            let outlines = outlinesFromSilhouettes(byView, size);
+            const axles = args.axleZMeters;
+            if (axles !== undefined && !(Array.isArray(axles) && axles.length === 2 && axles.every(n => typeof n === 'number' && Number.isFinite(n)) && axles[0] !== axles[1])) {
+                return failed('axleZMeters must be two different numbers [front, rear] z in metres.');
+            }
+            let warpNote: string | undefined;
+            let drawnContacts: ObjectOutlines['groundContacts'] | undefined;
+            if (axles) {
+                const fit = axleWarp(outlines, axles as [number, number]);
+                if ('warp' in fit) {
+                    drawnContacts = outlines.groundContacts;
+                    outlines = outlinesFromSilhouettes(byView, size, fit.warp);
+                } else {
+                    warpNote = `Not stretched to the axles: ${fit.reason}.`;
+                }
+            }
 
             const dir = path.join(ctx.workspaceRoot || process.cwd(), 'output', 'blueprints', `${Date.now()}`);
             fs.mkdirSync(dir, { recursive: true });
@@ -205,8 +227,10 @@ export function createBlueprintOutlineHandlers(deps: BlueprintOutlineToolDeps = 
                 let n = 0;
                 const segment = deps.segment ?? defaultSegment;
                 try {
+                    const knots = outlines.lengthWarp?.knots;
                     const read = await findOpenings(client, subject, { front: view('front'), side: view('side') }, size, {
                         segment: (imagePath, box) => segment(imagePath, box, path.join(dir, 'masks', String(n++)), ctx.signal),
+                        ...(knots ? { fromDrawnZ: (z: number) => Math.round(warpZ(knots, z, 'drawnZ', 'z') * 1000) / 1000 } : {}),
                         signal: ctx.signal
                     });
                     openings = read.openings;
@@ -246,11 +270,13 @@ export function createBlueprintOutlineHandlers(deps: BlueprintOutlineToolDeps = 
                     files: Object.fromEntries(Object.entries(files).map(([k, f]) => [k, rel(f)])),
                     aspectError, outlines, notesText, provenance,
                     ...(openings ? { openings } : {}), ...(openingsNote ? { openingsNote } : {}),
-                    ...(depthNote ? { depthNote } : {})
+                    ...(depthNote ? { depthNote } : {}),
+                    ...(drawnContacts ? { drawnGroundContacts: drawnContacts } : {}), ...(warpNote ? { warpNote } : {})
                 },
                 summaryResult: [
                     `Drew the side, top and front views of ${subject} and read their outlines at ${size.join(' x ')} m (blueprint ${rel(blueprintFile)}).`,
                     `Drawn proportions before scaling: side ${aspectError.side}, top ${aspectError.top}, front ${aspectError.front}.`,
+                    outlines.lengthWarp ? `Stretched along the length to the axles: ${outlines.lengthWarp.note}.` : (warpNote ?? ''),
                     offScale.length ? `Not to scale: ${offScale.map(v => `${v.view} (${(v.aspectError * 100).toFixed(0)} %)`).join(', ')}; its outline is stretched to the size, so read it with care.` : '',
                     outlines.relief ? `Read where the front and side drawings sink with ${outlines.relief.model} (photo-inferred relief, saved with the outlines; lofted parts take it with reliefMeters).` : (depthNote ?? ''),
                     openings ? `Read ${openings.length} opening${openings.length === 1 ? '' : 's'} (${openings.filter(o => o.traced).length} traced by the segmenter): ${openings.slice(0, 12).map(o => `${o.label} (${o.view}, ${o.view === 'front' ? 'x' : 'z'} ${o.across[0]}..${o.across[1]}, y ${o.height[0]}..${o.height[1]})`).join('; ')}.` : (openingsNote ?? ''),

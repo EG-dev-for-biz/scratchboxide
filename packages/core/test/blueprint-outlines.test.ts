@@ -35,6 +35,7 @@ import type { TriangleSoup } from '../src/node/3d-engine/part-connectivity';
 import type { ToolContext } from '../src/node/gemini/tools/types';
 import { boxToMeters, findOpenings, parseRegions } from '../src/node/3d-engine/blueprint-openings';
 import { reliefGrid } from '../src/node/3d-engine/blueprint-depth';
+import { axleWarp, warpZ } from '../src/node/3d-engine/blueprint-outlines';
 import { ObjectSegmenterService } from '../src/node/video/ObjectSegmenterService';
 import { resolveRepoPython } from '../src/node/process/repo-python';
 
@@ -223,7 +224,7 @@ describe('object_blueprint_outlines', () => {
     it('is declared with its two modes', () => {
         const d = BLUEPRINT_OUTLINE_TOOL_DECLARATIONS[0];
         expect(d.name).toBe('object_blueprint_outlines');
-        expect(Object.keys((d.parameters as any).properties)).toEqual(['subject', 'sizeMeters', 'blueprintPath', 'compareGlbPath', 'model', 'depth', 'openings']);
+        expect(Object.keys((d.parameters as any).properties)).toEqual(['subject', 'sizeMeters', 'blueprintPath', 'compareGlbPath', 'model', 'depth', 'axleZMeters', 'openings']);
     });
 
     let blueprintPath = '';
@@ -374,5 +375,35 @@ describe('relief read from a drawing\'s depth', () => {
         expect(saved.outlines.relief.side.values).toHaveLength(96 * 36);
         expect(Math.min(...saved.outlines.relief.side.values)).toBeLessThan(0);
         expect(out.summaryResult).toContain('photo-inferred relief');
+    });
+});
+
+describe('a drawing stretched along its length to the axles', () => {
+    const views = () => ({ side: silhouetteOf(viewOf(carBoxes(), 'side')), top: silhouetteOf(viewOf(carBoxes(), 'top')), front: silhouetteOf(viewOf(carBoxes(), 'front')) });
+
+    it('puts the drawn wheels on the given axles, the ends staying at the ends', () => {
+        const drawn = outlinesFromSilhouettes(views(), SIZE);
+        const fit = axleWarp(drawn, [1.2, -1.4]);        // a 2.6 m wheelbase where 2.6 is drawn, shifted 10 cm back
+        if (!('warp' in fit)) throw new Error(fit.reason);
+        expect(fit.warp.knots).toEqual([{ z: -2, drawnZ: -2 }, { z: -1.4, drawnZ: -1.3 }, { z: 1.2, drawnZ: 1.3 }, { z: 2, drawnZ: 2 }]);
+        const warped = outlinesFromSilhouettes(views(), SIZE, fit.warp);
+        const centres = warped.groundContacts.map(c => c.zCentre);
+        expect(centres[0]).toBeCloseTo(1.2, 1);
+        expect(centres[1]).toBeCloseTo(-1.4, 1);
+        expect(warped.side[0].z).toBe(2);                              // the nose station still at the nose
+        expect(warped.side[warped.side.length - 1].z).toBe(-2);
+        // the cabin (drawn z -1.2..0.6) moves with the middle piece: its front edge from 0.6 to about 0.5
+        const cabinFront = Math.max(...warped.side.filter(st => st.top > 1.2).map(st => st.z));
+        expect(cabinFront).toBeGreaterThan(0.45);
+        expect(cabinFront).toBeLessThan(0.56);
+        expect(warped.lengthWarp?.note).toMatch(/generated/);
+        expect(warpZ(fit.warp.knots, 1.25, 'drawnZ', 'z')).toBeCloseTo(1.15, 3);   // a side-view opening's z (the middle piece shifts 10 cm back), back to the build frame
+    });
+
+    it('refuses a drawing whose wheel spacing is far off, or one with fewer than two contacts', () => {
+        const drawn = outlinesFromSilhouettes(views(), SIZE);
+        expect(axleWarp(drawn, [1.6, -1.6])).toEqual({ reason: expect.stringMatching(/2\.6 m apart for 3\.2 m .*drawing is wrong/) });
+        expect(axleWarp({ ...drawn, groundContacts: drawn.groundContacts.slice(0, 1) }, [1.2, -1.4])).toEqual({ reason: expect.stringMatching(/only 1 ground contact was read/) });
+        expect(axleWarp(drawn, [2.1, -1.4])).toEqual({ reason: expect.stringMatching(/not inside the length/) });
     });
 });
