@@ -31,7 +31,7 @@ export const BUILD_RESULTS: Record<string, string> = {
     place: 'the place', tiles: 'tile mesh', surveyPhotos: 'Street View photos', canopy: 'canopy',
     scanClay: 'remeshed scan', orthos: 'facade orthophotos', straightOrthos: 'straightened facade photos', occlusion: 'occlusion masks', windows: 'windows', planeReadings: 'openings read by the vision agent',
     depth: 'window depth', cleanClay: 'cleaned scan', latticeClay: 'facades rebuilt', baseClay: 'base cleaned',
-    sealedClay: 'sealed shell', finalClay: 'final model', score: 'relief score', holes: 'holes seen',
+    sealedClay: 'sealed shell', closedClay: 'closed from outside', finalClay: 'final model', score: 'relief score', holes: 'holes seen',
     ownerViews: 'ownership views', ownerMasks: 'ownership vote', votedClay: 'voted remesh', registeredPoses: 'registered photos', treeStrip: 'trees', delit: 'de-lit photos',
     harmonised: 'harmonised photos', materials: 'material maps', partyWall: 'party wall', facadeDetail: 'upscaled facade photos', late: 'later layers', published: 'scene'
 };
@@ -55,6 +55,7 @@ export const BUILD_STEPS: BuildStepSpec[] = [
     { key: 'polish.infill', stage: 'remesh', title: 'Fill the openings', needs: ['baseClay'], makes: ['baseClay'] },
     { key: 'polish.seal', stage: 'remesh', title: 'Seal (cut and stitch)', needs: ['baseClay'], makes: ['sealedClay'] },
     { key: 'polish.orient', stage: 'remesh', title: 'Turn inward faces outward', needs: ['baseClay'], makes: ['finalClay'] },
+    { key: 'polish.closure', stage: 'remesh', title: 'Close from outside: joins, inner core, hole repair', needs: ['finalClay', 'cleanClay'], makes: ['finalClay'] },
     { key: 'remesh.streetViewScore', stage: 'remesh', title: 'Relief score against Street View', needs: ['scanClay', 'finalClay', 'surveyPhotos'], makes: ['score'] },
     { key: 'remesh.visibleDefects', stage: 'remesh', title: 'Holes seen from outside', needs: ['finalClay'], makes: ['holes'] },
     { key: 'ownership', stage: 'ownership', title: 'Ownership vote', needs: ['tiles', 'finalClay'], makes: ['ownerMasks'] },
@@ -94,6 +95,7 @@ export const TOGGLEABLE_STEPS = new Map<string, string>([
     ['polish.infill', 'the openings the clip leaves stay open'],
     ['polish.seal', 'the shell is left open'],
     ['polish.orient', 'inward-facing scan pieces stay as they are'],
+    ['polish.closure', 'rebuilt facades are not joined where they meet, no inner core stands behind the holes and the holes found are not repaired'],
     ['remesh.streetViewScore', 'no relief score against Street View'],
     ['remesh.visibleDefects', 'holes are not looked for'],
     ['evidence', 'no Street View close-ups or their registration (a 3D Building reads neither)'],
