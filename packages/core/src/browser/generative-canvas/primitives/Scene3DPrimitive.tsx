@@ -205,7 +205,7 @@ import { carryStagedChoice, carryTwinObjects, twinSourceOf, type StagedMaterialM
 import { prepareTexturedTwinModel } from './scene3d/stagedBuild/texturedTwinModel';
 import { drawPhotoTwinsLit } from './scene3d/stagedBuild/litPhotoTwins';
 import { refreshFacadeReflections } from './scene3d/stagedBuild/facadeMaterialLook';
-import { updateHeightReliefLods } from './scene3d/stagedBuild/heightRelief';
+import { setHeightReliefEnabled, updateHeightReliefLods } from './scene3d/stagedBuild/heightRelief';
 
 // Aircraft helpers live in services/mesh/aircraft.ts (single source of truth, shared with the
 // transformer engine's sandbox template); re-exported here to keep the public API stable.
@@ -2173,6 +2173,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         (window as any).__SB_3D_STACK__ = stack;
         (window as any).__SB_3D_SCENE_DATA__ = sceneData;
         (window as any).__SB_3D_CAMERA_TARGET__ = cameraTargetRef;
+        // the materials' relief off and on at one camera (heightRelief.ts): a before/after for a proof sheet
+        (window as any).__SB_SET_HEIGHT_RELIEF__ = setHeightReliefEnabled;
         (window as any).__SB_3D_CAMERA_ROTATION__ = cameraRotationRef;
         // Loaded models by object id, including detached (inactive variant) ones kept for instant switching.
         (window as any).__SB_3D_EXTERNAL_OBJECTS__ = externalObjectsMapRef.current;
