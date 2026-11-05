@@ -42,8 +42,11 @@ const LEDGER_SCHEMA = 'scratchbox.run-ledger.benchmark/1';
 const OWNED_MARK = '.benchmark-owned';
 /** The four views: compass headings the camera looks toward, all at one pitch, framed by the tracer on the model. */
 const VIEW_HEADINGS = [45, 135, 225, 315];
-// distanceScale 1 fits the model's whole bounding sphere (0.8 cut the top off a slender tower); the sheet crops the margin
-const VIEW = { pitchDeg: 15, verticalFovDeg: 35, distanceScale: 1, width: 640, height: 800, spp: 16 };
+/**
+ * Each camera is placed from the model's own box (the tracer's auto framing cut the top off slender towers): aimed at the
+ * box's centre, back far enough that the box's sphere fits the narrower field of view; the sheet crops the margin.
+ */
+const VIEW = { pitchDeg: 15, verticalFovDeg: 35, width: 640, height: 800, spp: 16 };
 const SERVER_READY_MS = 240_000;
 /** A build that has not finished in this long is stopped and recorded as failed (the ESB takes about 20 minutes). */
 const BUILD_LIMIT_MS = 90 * 60_000;
@@ -367,8 +370,40 @@ function fromToolResult(r: BuildResult, result: any): void {
     if (Array.isArray(payload.degradations)) r.degradations = payload.degradations.map((d: any) => `${d.stage}: ${d.reason ?? d.reasonCode}`);
 }
 
+/** The model's world-space box (the glTF frame: +X east, +Y up, north toward -Z). */
+function modelBox(glbBytes: Uint8Array): { min: number[]; max: number[] } {
+    const glb = parseGlbBytes(glbBytes);
+    const world = nodeWorldMatrices(glb.json);
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    (glb.json.nodes ?? []).forEach((node: any, n: number) => {
+        if (node.mesh === undefined) return;
+        for (const prim of glb.json.meshes[node.mesh].primitives ?? []) {
+            const a = glb.json.accessors[prim.attributes?.POSITION];
+            if (!a?.min || !a?.max) continue;
+            for (let c = 0; c < 8; c++) {
+                const p = transformPoint(world[n], c & 1 ? a.max[0] : a.min[0], c & 2 ? a.max[1] : a.min[1], c & 4 ? a.max[2] : a.min[2]);
+                for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], p[k]); max[k] = Math.max(max[k], p[k]); }
+            }
+        }
+    });
+    return { min, max };
+}
+
+/** A camera looking toward a compass heading (clockwise from north) at VIEW's pitch, framing the box's sphere. */
+function viewCamera(box: { min: number[]; max: number[] }, headingDeg: number) {
+    const centre = [0, 1, 2].map(k => (box.min[k] + box.max[k]) / 2) as [number, number, number];
+    const radius = Math.hypot(box.max[0] - box.min[0], box.max[1] - box.min[1], box.max[2] - box.min[2]) / 2;
+    const h = headingDeg * Math.PI / 180, p = VIEW.pitchDeg * Math.PI / 180;
+    const vFov = VIEW.verticalFovDeg * Math.PI / 180, hFov = 2 * Math.atan(Math.tan(vFov / 2) * VIEW.width / VIEW.height);
+    const distance = 1.05 * radius / Math.sin(Math.min(vFov, hFov) / 2);
+    const look = [Math.sin(h) * Math.cos(p), -Math.sin(p), -Math.cos(h) * Math.cos(p)];
+    const position = centre.map((c, k) => c - look[k] * distance) as [number, number, number];
+    return { position, target: centre, verticalFovDeg: VIEW.verticalFovDeg };
+}
+
 async function renderViews(glbPath: string, dir: string, log: (s: string) => void, force = false): Promise<Array<{ headingDeg: number; png: string }>> {
     const tracer = new NativeTilePathTracerService();
+    const box = modelBox(fs.readFileSync(glbPath));
     const views: Array<{ headingDeg: number; png: string }> = [];
     for (const headingDeg of VIEW_HEADINGS) {
         const png = path.join(dir, `view_${headingDeg}.png`);
@@ -379,7 +414,7 @@ async function renderViews(glbPath: string, dir: string, log: (s: string) => voi
                 // a fixed sun: baked mode shows the texture as captured, so the sun only shades the ground-free studio
                 sun: { elevationDeg: 45, azimuthDeg: 135 },
                 width: VIEW.width, height: VIEW.height, samplesPerPixel: VIEW.spp, maxBounces: 2, shadingMode: 'baked', denoise: true, groundPlane: false,
-                camera: { auto: { headingDeg, pitchDeg: VIEW.pitchDeg, verticalFovDeg: VIEW.verticalFovDeg, distanceScale: VIEW.distanceScale } }
+                camera: viewCamera(box, headingDeg)
             });
             if (!r.success || !fs.existsSync(r.beautyPngPath)) { log(`view ${headingDeg}: the tracer failed`); continue; }
             fs.copyFileSync(r.beautyPngPath, png);
