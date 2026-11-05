@@ -2314,26 +2314,40 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     value = { extraction: x.extraction, key: x.key, sizedTo: radiusM > baseRadiusM ? 'district-containment' : 'request', rounds: 1, cached: x.cached, builtAtMs: x.builtAtMs };
                 }
                 // the tile seams closed as the extraction arrives (tile-seam-weld-service.ts: overlaps trimmed, positions welded,
-                // T-junctions split), cached beside it; every later stage reads the welded scan, the raw extraction stays as it came
+                // T-junctions split, then tile by tile the adaptive close and the strip fill), cached beside it; every later stage
+                // reads the welded scan, the raw extraction stays as it came
                 if (deps.tileSeams && process.env.SCRATCHBOX_TILE_SEAMS?.trim() !== '0') {
-                    // the passes on unless switched off (SCRATCHBOX_TILE_SEAM_TJUNCTIONS=0, SCRATCHBOX_TILE_SEAM_OVERLAP=0); the cache name says which ran
+                    // the passes on unless switched off (SCRATCHBOX_TILE_SEAM_TJUNCTIONS=0, SCRATCHBOX_TILE_SEAM_OVERLAP=0); the adaptive
+                    // close and strip fill only when asked (SCRATCHBOX_TILE_SEAM_ADAPTIVE=1: on the ESB, Penn 2 and a Penn district they
+                    // closed 30-142 points for up to 2 min, the seams left being capped cut planes); the cache name says which ran
                     const tj = process.env.SCRATCHBOX_TILE_SEAM_TJUNCTIONS?.trim() !== '0', ov = process.env.SCRATCHBOX_TILE_SEAM_OVERLAP?.trim() !== '0';
-                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}`, dir = path.dirname(raw.texturedGlb);
+                    const ad = process.env.SCRATCHBOX_TILE_SEAM_ADAPTIVE?.trim() === '1';
+                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}${ad ? '_ad' : ''}`, dir = path.dirname(raw.texturedGlb);
                     const tex = path.join(dir, `textured_${tag}.glb`), clay = path.join(dir, `geometry_${tag}.glb`), report = path.join(dir, `seams_${tag}.json`);
                     try {
                         if (!(fs.existsSync(tex) && fs.existsSync(clay) && fs.existsSync(report))) {
                             // written under temporary names and renamed: a build reading the same extraction never sees half a file
                             const sfx = `.tmp-${process.pid}-${Date.now()}`;
-                            const r = await deps.tileSeams({ inputGlb: raw.texturedGlb, outputGlb: tex + sfx, outputClayGlb: clay + sfx, tJunctions: tj, overlapTrim: ov, timeoutMs: 600_000 });
+                            const r = await deps.tileSeams({ inputGlb: raw.texturedGlb, outputGlb: tex + sfx, outputClayGlb: clay + sfx, tJunctions: tj, overlapTrim: ov, adaptive: ad, defaultGeometricErrorM: raw.leafGeometricErrorM, timeoutMs: 600_000 });
                             fs.renameSync(tex + sfx, tex); fs.renameSync(clay + sfx, clay);
                             fs.writeFileSync(report, JSON.stringify({ version: TILE_SEAMS_VERSION, ...r }));
                         }
                         const r = JSON.parse(fs.readFileSync(report, 'utf8')) as TileSeamWeldResult;
-                        const sw = r.seamWeld, tjs = r.tJunctions, ot = r.overlapTrim;
-                        cache.writeRunNote(runId, 'tile_seams', { version: TILE_SEAMS_VERSION, raw: raw.texturedGlb, inputTriangles: r.inputTriangles, outputTriangles: r.outputTriangles, toleranceM: r.toleranceM, seamWeld: sw, ...(ot ? { overlapTrim: ot } : {}), ...(tjs ? { tJunctions: tjs } : {}) });
-                        run.note(PROVENANCE.asScanned, `tile seams closed (${TILE_SEAMS_VERSION}, within ${Math.round(r.toleranceM * 100)} cm, nothing moved further): ` +
+                        const sw = r.seamWeld, tjs = r.tJunctions, ot = r.overlapTrim, ac = r.adaptive, sf = r.stripFill, au = r.seamAudit;
+                        cache.writeRunNote(runId, 'tile_seams', {
+                            version: TILE_SEAMS_VERSION, raw: raw.texturedGlb, inputTriangles: r.inputTriangles, outputTriangles: r.outputTriangles, toleranceM: r.toleranceM, seamWeld: sw,
+                            ...(ot ? { overlapTrim: ot } : {}), ...(tjs ? { tJunctions: tjs } : {}), ...(ac ? { adaptive: ac } : { adaptive: false }), ...(sf ? { stripFill: sf } : {}),
+                            ...(r.tiles ? { tiles: r.tiles } : {}), ...(au ? { seamAudit: au } : {}), ms: r.ms
+                        });
+                        // open seam length (km) under 3 cm / 3-10 / 10-30 / 30-100 cm / no other tile within 1 m
+                        const km = (a: { bandLengthM: number[] }) => a.bandLengthM.map(v => (v / 1000).toFixed(1)).join(' / ');
+                        run.note(PROVENANCE.asScanned, `tile seams closed (${TILE_SEAMS_VERSION}, within ${Math.round(r.toleranceM * 100)} cm` +
+                            `${ac ? `, and up to ${Math.round(ac.maxToleranceM * 100)} cm where the two tiles' surfaces agree` : ''}, nothing moved further): ` +
                             `${ot ? `${Math.round(ot.areaM2)} m² of doubled surface trimmed, ` : ''}${sw.groupsWelded.toLocaleString('en-US')} border points welded to the next tile's, ` +
-                            `${tjs ? `${tjs.closed.toLocaleString('en-US')} T-junctions split into the next tile's edge, ` : ''}${sw.trianglesDropped.toLocaleString('en-US')} collapsed slivers dropped; the raw extraction is kept as it came`);
+                            `${tjs ? `${tjs.closed.toLocaleString('en-US')} T-junctions split into the next tile's edge, ` : ''}${sw.trianglesDropped.toLocaleString('en-US')} collapsed slivers dropped` +
+                            `${ac ? `; ${(ac.splitsClosed + ac.vertexMoves).toLocaleString('en-US')} wider gaps closed of ${ac.agreed.toLocaleString('en-US')} where the surfaces agree (${ac.candidates.toLocaleString('en-US')} looked at)` : ''}` +
+                            `${sf && sf.triangles ? `; ${sf.areaM2.toFixed(1)} m² of strip bridged (generated)` : ''}` +
+                            `${au ? `; open seam km by gap (<3 / 3-10 / 10-30 / 30-100 cm / none within 1 m) ${km(au.before)} before, ${km(au.after)} after` : ''}; the raw extraction is kept as it came`);
                         value.extraction = { ...raw, texturedGlb: tex, geometryGlb: clay };
                         // later stages key on the tiles key: the welded scan is another input; the sizing's scan was the raw one
                         value.key = stageKey(value.key, tag);
@@ -3527,10 +3541,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (kTwin && !facadeUpscaleOn) logStep('twin.facadeUpscale', 'skipped');
                     if (facadeUpscaleOn) {
                         logStep('twin.facadeUpscale', 'running');
-                        const fu = await upscaleFacadeTextures(twinGlb, { ...(visionAvailable ? { client: genAiEnhanceClient(visionAvailable.client) } : {}), models: FACADE_UPSCALE_MODELS, ...(modelReadings ? { store: modelReadings } : {}), signal: io.signal, progress: (m: string) => io.progress(m) }, upscaleDistrict ? FACADE_UPSCALE_DISTRICT_PARAMS : FACADE_UPSCALE_PARAMS);
+                        const fu = await upscaleFacadeTextures(twinGlb, { ...(visionAvailable ? { client: genAiEnhanceClient(visionAvailable.client) } : {}), models: FACADE_UPSCALE_MODELS, ...(modelReadings ? { store: modelReadings } : {}), place: { lat: extraction.geoAnchor.lat, lng: extraction.geoAnchor.lng, heightMeters: extraction.originEllipsoidalHeightM }, signal: io.signal, progress: (m: string) => io.progress(m) }, upscaleDistrict ? FACADE_UPSCALE_DISTRICT_PARAMS : FACADE_UPSCALE_PARAMS);
                         logStep('twin.facadeUpscale', fu.report.upscaled ? 'done' : 'skipped');
                         if (fu.report.upscaled) { twinGlb = fu.glb; provenance = [...provenance, facadeUpscaleProvenance(fu.report)]; }
-                        io.progress(fu.report.upscaled ? `facade upscale: ${fu.report.upscaled} of ${fu.report.facades} rebuilt facades given fine detail (${fu.report.calls} image calls, ${fu.report.cached} tiles saved before; generated)` : `no facade upscaled: ${fu.report.skipped}`);
+                        io.progress(fu.report.upscaled ? `facade upscale: ${fu.report.upscaled} of ${fu.report.facades} rebuilt facades given fine detail (${fu.report.reused ? `${fu.report.reused} from their kept best upscale, ` : ''}${fu.report.calls} image calls, ${fu.report.cached} tiles saved before; generated)` : `no facade upscaled: ${fu.report.skipped}`);
                         cache.writeRunNote(runId, 'pipeline_k_facade_upscale', { layer: target.layer.layer, ...fu.report });
                     }
                     fs.writeFileSync(path.join(dir, 'twin.glb'), twinGlb);

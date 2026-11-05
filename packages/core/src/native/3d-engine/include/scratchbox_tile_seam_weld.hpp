@@ -45,6 +45,13 @@
  * piece go, ring by ring; where a border position lies on the interior of another piece's border edge (a T-junction,
  * half the seams of a district extraction), it moves onto the edge and the edge's triangle is split at it, so the pieces
  * share the point. The staged location runs all three on the extraction as it arrives (tile-seam-weld-service.ts).
+ *
+ * Then, tile by tile (each triangle's source tile carried through every pass as a side array, triangleTile): the adaptive
+ * close (closeAdaptive) takes the gaps the fixed 3 cm passes leave, up to the smaller of the two tiles' stated geometric
+ * errors, capped, only where the two surfaces agree (same facing, parallel borders, no step: each surface carried across
+ * the seam meets the other); the strip fill (fillStrips) bridges, with thin triangles labelled generated, the agreed gaps a
+ * move would have distorted. The seam audit (auditSeams) measures the open border by its gap to the nearest other tile,
+ * inside the extraction's cut border, before and after.
  * Why it runs where it runs: scratchbox_scan_rectifier.hpp's own D1 weld (weldEpsilon, 1 mm) is far
  * tighter than a 1-3 cm tile seam, and its D4 orientation-family vote and D5 planar regions run four
  * stages before its own D8 seam close (tJunctionTolerance, 3 cm), so even inside the rectifier the
@@ -203,6 +210,105 @@ struct TileSeamTJunctionStats {
     size_t deferred{0};
     size_t roundsRun{0};
     double maxMoveM{0};
+};
+
+/**
+ * The seam audit (TileSeamWeld::auditSeams): every open edge (a position-space edge one triangle uses) inside the cut border,
+ * by its gap to the nearest open edge of a different source tile. The cut border is where the extraction itself ends: an
+ * open edge whose plan neighbourhood (within cutMarginM) holds a cell no triangle covers is the cut, not a seam.
+ */
+struct TileSeamAuditParams {
+    double cutCellM{1.0};
+    double cutMarginM{2.0};
+    /** Gaps are looked for this far; an edge with no other tile's open edge within it is in the last band. */
+    double searchM{1.0};
+    int threads{0};
+};
+
+/** Band edges of the audit in metres: [0, 3 cm), [3, 10 cm), [10, 30 cm), [30 cm, 1 m), none within searchM. */
+constexpr double kSeamAuditBandsM[4] = {0.03, 0.10, 0.30, 1.0};
+
+struct TileSeamAudit {
+    /** Open edge length (m) inside the cut border, by gap band (kSeamAuditBandsM, then none within searchM). */
+    std::array<double, 5> bandLengthM{};
+    std::array<size_t, 5> bandEdges{};
+    /** Open edge length on the cut border (left out of the bands). */
+    double atCutM{0};
+    size_t openEdges{0};
+    size_t tiles{0};
+};
+
+/** The plan cells the extraction covers (TileSeamWeld::cutMask), taken once from the input so before and after are judged alike. */
+struct TileSeamCutMask {
+    double cellM{1.0};
+    int64_t x0{0}, z0{0};
+    int64_t w{0}, h{0};
+    std::vector<uint8_t> covered;
+    bool at(int64_t ix, int64_t iz) const { return ix >= x0 && iz >= z0 && ix < x0 + w && iz < z0 + h && covered[static_cast<size_t>((iz - z0) * w + (ix - x0))]; }
+};
+
+/**
+ * The adaptive close (TileSeamWeld::closeAdaptive), after the fixed passes: a border position of one tile and the nearest
+ * open border of another tile close up to the smaller of the two tiles' stated geometric errors, capped, only where the two
+ * surfaces agree there. Continuous metric tolerances only.
+ */
+struct TileSeamAdaptiveParams {
+    /** The tolerance of a pair where either tile states no geometric error (the fixed passes' own). */
+    double baseToleranceM{0.03};
+    /** Never further than this, whatever the tiles state. */
+    double capM{0.30};
+    /** Each side's surface is read from its own triangles within this of the seam point. */
+    double surfaceRadiusM{0.75};
+    /** The two surfaces face the same way within this. */
+    double normalTolDeg{8.0};
+    /** The two open borders run parallel within this. */
+    double parallelTolDeg{20.0};
+    /** No step: each side's surface, carried across the seam, passes within stepTolM + stepSlope x the distance of the other's. */
+    double stepTolM{0.03};
+    double stepSlope{0.05};
+    /** A close is refused (left to the strip fill) when it turns a triangle by more than this, or inside out (0: every close is). */
+    double maxTurnDeg{25.0};
+    double endGuardM{0.002};
+    double sharedM{1e-5};
+    int rounds{6};
+    int threads{0};
+};
+
+struct TileSeamAdaptiveStats {
+    /** Border positions with another tile's open border within their pair's tolerance (first round). */
+    size_t candidates{0};
+    size_t agreed{0};
+    size_t refusedNormal{0};
+    size_t refusedParallel{0};
+    size_t refusedStep{0};
+    size_t refusedNoSurface{0};
+    /** Contacts (first round) by the angle between the two surfaces: [0, 2, 5, 8, 15, 30, 90, 150, 180] degrees. */
+    std::array<size_t, 8> normalAngleHist{};
+    /** Agreed contacts (first round) by gap: [0, 3 cm), [3, 10 cm), [10, 30 cm), 30 cm and over. */
+    std::array<size_t, 4> agreedByGap{};
+    /** Points split into another tile's edge (the edge's tile moved to the point). */
+    size_t splitsClosed{0};
+    size_t edgesSplit{0};
+    size_t trianglesAdded{0};
+    /** Positions moved onto another tile's position. */
+    size_t vertexMoves{0};
+    size_t trianglesCollapsed{0};
+    /** Closes the distortion guard took back (left for the strip fill). */
+    size_t guardRefused{0};
+    size_t roundsRun{0};
+    double maxMoveM{0};
+    double meanMoveM{0};
+    /** The pair tolerances used: how many contacts came from tiles stating an error, and the largest tolerance used. */
+    size_t pairsWithStatedError{0};
+    double maxToleranceM{0};
+};
+
+struct TileSeamFillStats {
+    size_t edgesFilled{0};
+    size_t triangles{0};
+    double areaM2{0};
+    /** Open edges with an agreed partner on both ends that were not filled (a fill triangle would have folded). */
+    size_t refused{0};
 };
 
 // ============================================================================
@@ -845,6 +951,665 @@ public:
             if (!splitsThisRound) break;
         }
         return st;
+    }
+
+    // ------------------------------------------------------------------------
+    // Seam audit, adaptive close and strip fill: tile-aware (each triangle's source tile, triangleTile, carried through
+    // every pass as a side array), where the passes above only tell connected pieces apart.
+    // ------------------------------------------------------------------------
+private:
+    /** Open edges (position space, used by one triangle) with the triangle that owns each, and each position's open edges. */
+    struct OpenBorder {
+        struct E { uint32_t a, b, tri; };
+        std::vector<E> edges;
+        std::vector<uint32_t> start, list;   // CSR: a position's open edges
+    };
+    static OpenBorder openBorder(const geometry::ScratchboxMesh& mesh, const Topology& topo) {
+        OpenBorder ob;
+        const size_t F = mesh.indices.size() / 3, G = topo.gpos.size();
+        std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> info;
+        info.reserve(F * 3);
+        for (size_t t = 0; t < F; ++t) for (int k = 0; k < 3; ++k) {
+            const uint32_t a = topo.groupOf[mesh.indices[3 * t + k]], b = topo.groupOf[mesh.indices[3 * t + (k + 1) % 3]];
+            if (a == b) continue;
+            auto& e = info[(static_cast<uint64_t>(std::min(a, b)) << 32) | std::max(a, b)];
+            e.first++;
+            e.second = static_cast<uint32_t>(t);
+        }
+        for (const auto& kv : info) if (kv.second.first == 1) ob.edges.push_back({static_cast<uint32_t>(kv.first >> 32), static_cast<uint32_t>(kv.first & 0xffffffffu), kv.second.second});
+        // a fixed order (the map's is not), so every run of a scan gives the same result
+        std::sort(ob.edges.begin(), ob.edges.end(), [](const OpenBorder::E& x, const OpenBorder::E& y) { return x.a != y.a ? x.a < y.a : x.b < y.b; });
+        ob.start.assign(G + 1, 0);
+        for (const auto& e : ob.edges) { ob.start[e.a + 1]++; ob.start[e.b + 1]++; }
+        for (size_t g = 0; g < G; ++g) ob.start[g + 1] += ob.start[g];
+        ob.list.resize(ob.start[G]);
+        std::vector<uint32_t> fill(ob.start.begin(), ob.start.end() - 1);
+        for (uint32_t i = 0; i < ob.edges.size(); ++i) { ob.list[fill[ob.edges[i].a]++] = i; ob.list[fill[ob.edges[i].b]++] = i; }
+        return ob;
+    }
+    static constexpr uint32_t kMixedTile = UINT32_MAX;
+    /** Each position's tile: the tile of every triangle using it, or kMixedTile when triangles of several tiles share it. */
+    static std::vector<uint32_t> groupTiles(const geometry::ScratchboxMesh& mesh, const Topology& topo, const std::vector<uint32_t>& triTile) {
+        std::vector<uint32_t> gt(topo.gpos.size(), kMixedTile - 1);
+        const size_t F = mesh.indices.size() / 3;
+        for (size_t t = 0; t < F; ++t) for (int k = 0; k < 3; ++k) {
+            uint32_t& g = gt[topo.groupOf[mesh.indices[3 * t + k]]];
+            const uint32_t tt = t < triTile.size() ? triTile[t] : 0u;
+            if (g == kMixedTile - 1) g = tt; else if (g != tt) g = kMixedTile;
+        }
+        return gt;
+    }
+    static double pointSegment(const V3& x, const V3& a, const V3& b, double* sOut = nullptr) {
+        const V3 ab = b - a;
+        const double ll = ab.dot(ab);
+        double s = ll > 1e-18 ? std::clamp((x - a).dot(ab) / ll, 0.0, 1.0) : 0.0;
+        if (sOut) *sOut = s;
+        return (x - (a + ab * s)).norm();
+    }
+
+public:
+    /** The plan cells (x, z: the frame is y up) any triangle of the mesh covers, at cellM. */
+    static TileSeamCutMask cutMask(const geometry::ScratchboxMesh& mesh, double cellM = 1.0) {
+        TileSeamCutMask m;
+        m.cellM = std::max(cellM, 1e-3);
+        if (mesh.vertices.empty()) return m;
+        double minX = 1e300, minZ = 1e300, maxX = -1e300, maxZ = -1e300;
+        for (const auto& v : mesh.vertices) { minX = std::min(minX, double(v.position.x)); maxX = std::max(maxX, double(v.position.x)); minZ = std::min(minZ, double(v.position.z)); maxZ = std::max(maxZ, double(v.position.z)); }
+        auto ci = [&](double v) { return static_cast<int64_t>(std::floor(v / m.cellM)); };
+        m.x0 = ci(minX); m.z0 = ci(minZ);
+        m.w = ci(maxX) - m.x0 + 1; m.h = ci(maxZ) - m.z0 + 1;
+        if (m.w <= 0 || m.h <= 0 || m.w * m.h > 400'000'000) { m.w = m.h = 0; return m; }
+        m.covered.assign(static_cast<size_t>(m.w * m.h), 0);
+        const size_t F = mesh.indices.size() / 3;
+        for (size_t t = 0; t < F; ++t) {
+            const auto& a = mesh.vertices[mesh.indices[3 * t]].position;
+            const auto& b = mesh.vertices[mesh.indices[3 * t + 1]].position;
+            const auto& c = mesh.vertices[mesh.indices[3 * t + 2]].position;
+            const int64_t x0 = ci(std::min({a.x, b.x, c.x})), x1 = ci(std::max({a.x, b.x, c.x})), z0 = ci(std::min({a.z, b.z, c.z})), z1 = ci(std::max({a.z, b.z, c.z}));
+            if ((x1 - x0 + 1) * (z1 - z0 + 1) > 4096) {
+                for (const auto* p : {&a, &b, &c}) m.covered[static_cast<size_t>((ci(p->z) - m.z0) * m.w + (ci(p->x) - m.x0))] = 1;
+                continue;
+            }
+            for (int64_t z = z0; z <= z1; ++z) for (int64_t x = x0; x <= x1; ++x) m.covered[static_cast<size_t>((z - m.z0) * m.w + (x - m.x0))] = 1;
+        }
+        return m;
+    }
+
+    /**
+     * The seam audit: open edge length inside the cut border by the gap to the nearest open edge of a different tile
+     * (measured from the edge's midpoint). Reads the mesh; changes nothing.
+     */
+    static TileSeamAudit auditSeams(const geometry::ScratchboxMesh& mesh, const std::vector<uint32_t>& triTile, const TileSeamCutMask& mask, const TileSeamAuditParams& p = {}) {
+        TileSeamAudit au;
+        const Topology topo = topology(mesh);
+        const OpenBorder ob = openBorder(mesh, topo);
+        au.openEdges = ob.edges.size();
+        {
+            std::vector<uint32_t> ts(triTile.begin(), triTile.end());
+            std::sort(ts.begin(), ts.end());
+            au.tiles = static_cast<size_t>(std::unique(ts.begin(), ts.end()) - ts.begin());
+        }
+        auto tileOf = [&](uint32_t e) { const uint32_t t = ob.edges[e].tri; return t < triTile.size() ? triTile[t] : 0u; };
+        const double cell = std::max(p.searchM, 1e-3);
+        auto ci = [&](double v) { return static_cast<int64_t>(std::floor(v / cell)); };
+        std::unordered_map<int64_t, std::vector<uint32_t>, scan_rectifier::detail::CellKeyHash> grid;
+        for (uint32_t i = 0; i < ob.edges.size(); ++i) {
+            const V3 a = topo.gpos[ob.edges[i].a], b = topo.gpos[ob.edges[i].b];
+            const int64_t x0 = ci(std::min(a.x, b.x)), x1 = ci(std::max(a.x, b.x)), y0 = ci(std::min(a.y, b.y)), y1 = ci(std::max(a.y, b.y)), z0 = ci(std::min(a.z, b.z)), z1 = ci(std::max(a.z, b.z));
+            if ((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > 4096) continue;
+            for (int64_t x = x0; x <= x1; ++x) for (int64_t y = y0; y <= y1; ++y) for (int64_t z = z0; z <= z1; ++z) grid[scan_rectifier::detail::cellKey(x, y, z)].push_back(i);
+        }
+        const int64_t marginCells = static_cast<int64_t>(std::ceil(p.cutMarginM / mask.cellM));
+        auto atCut = [&](const V3& m) {
+            if (mask.covered.empty()) return false;
+            const int64_t ix = static_cast<int64_t>(std::floor(m.x / mask.cellM)), iz = static_cast<int64_t>(std::floor(m.z / mask.cellM));
+            for (int64_t dz = -marginCells; dz <= marginCells; ++dz) for (int64_t dx = -marginCells; dx <= marginCells; ++dx)
+                if (!mask.at(ix + dx, iz + dz)) return true;
+            return false;
+        };
+        const unsigned threads = scan_rectifier::detail::resolveThreads(p.threads);
+        std::vector<int8_t> band(ob.edges.size(), -1);
+        scan_rectifier::detail::parallelFor(ob.edges.size(), threads, 512, [&](size_t i0, size_t i1, unsigned) {
+            for (size_t i = i0; i < i1; ++i) {
+                const V3 a = topo.gpos[ob.edges[i].a], b = topo.gpos[ob.edges[i].b], m = (a + b) * 0.5;
+                if (atCut(m)) continue;
+                const uint32_t mine = tileOf(static_cast<uint32_t>(i));
+                double best = 1e300;
+                const int64_t cx = ci(m.x), cy = ci(m.y), cz = ci(m.z);
+                for (int64_t dx = -1; dx <= 1; ++dx) for (int64_t dy = -1; dy <= 1; ++dy) for (int64_t dz = -1; dz <= 1; ++dz) {
+                    auto it = grid.find(scan_rectifier::detail::cellKey(cx + dx, cy + dy, cz + dz));
+                    if (it == grid.end()) continue;
+                    for (uint32_t j : it->second) {
+                        if (tileOf(j) == mine) continue;
+                        best = std::min(best, pointSegment(m, topo.gpos[ob.edges[j].a], topo.gpos[ob.edges[j].b]));
+                    }
+                }
+                int8_t k = 4;
+                for (int8_t j = 0; j < 4; ++j) if (best < kSeamAuditBandsM[j] && best <= p.searchM) { k = j; break; }
+                band[i] = k;
+            }
+        });
+        for (size_t i = 0; i < ob.edges.size(); ++i) {
+            const double L = (topo.gpos[ob.edges[i].a] - topo.gpos[ob.edges[i].b]).norm();
+            if (band[i] < 0) { au.atCutM += L; continue; }
+            au.bandLengthM[static_cast<size_t>(band[i])] += L;
+            au.bandEdges[static_cast<size_t>(band[i])]++;
+        }
+        return au;
+    }
+    static std::string auditJson(const TileSeamAudit& a) {
+        auto num = [](double v) { char b[64]; std::snprintf(b, sizeof b, "%.1f", v); return std::string(b); };
+        std::string js = "\"bandEdgesM\": [0, 0.03, 0.1, 0.3, 1], \"bandLengthM\": [";
+        for (size_t k = 0; k < 5; ++k) js += (k ? ", " : "") + num(a.bandLengthM[k]);
+        js += "], \"bandEdges\": [";
+        for (size_t k = 0; k < 5; ++k) js += (k ? ", " : "") + std::to_string(a.bandEdges[k]);
+        js += "], \"atCutM\": " + num(a.atCutM) + ", \"openEdges\": " + std::to_string(a.openEdges) + ", \"tiles\": " + std::to_string(a.tiles);
+        return js;
+    }
+
+private:
+    /** A tile's surface near a point: its triangles' area-weighted normal and centroid within a radius. */
+    struct LocalSurface { V3 n, c; double area{0}; };
+    struct TriGrid {
+        double cell{1};
+        std::unordered_map<int64_t, std::vector<uint32_t>, scan_rectifier::detail::CellKeyHash> cells;
+        std::vector<V3> centroid, areaNormal;   // areaNormal: the cross product (twice the area, along the normal)
+    };
+    static TriGrid triGrid(const geometry::ScratchboxMesh& mesh, double cellM) {
+        TriGrid tg;
+        tg.cell = std::max(cellM, 1e-3);
+        const size_t F = mesh.indices.size() / 3;
+        tg.centroid.resize(F); tg.areaNormal.resize(F);
+        auto vp = [&](uint32_t v) { const auto& q = mesh.vertices[v].position; return V3{q.x, q.y, q.z}; };
+        for (size_t t = 0; t < F; ++t) {
+            const V3 a = vp(mesh.indices[3 * t]), b = vp(mesh.indices[3 * t + 1]), c = vp(mesh.indices[3 * t + 2]);
+            tg.centroid[t] = (a + b + c) * (1.0 / 3.0);
+            tg.areaNormal[t] = (b - a).cross(c - a);
+            const V3& g = tg.centroid[t];
+            tg.cells[scan_rectifier::detail::cellKey(static_cast<int64_t>(std::floor(g.x / tg.cell)), static_cast<int64_t>(std::floor(g.y / tg.cell)), static_cast<int64_t>(std::floor(g.z / tg.cell)))].push_back(static_cast<uint32_t>(t));
+        }
+        return tg;
+    }
+    static LocalSurface surfaceNear(const TriGrid& tg, const std::vector<uint32_t>& triTile, uint32_t tile, const V3& x, double radius) {
+        LocalSurface s;
+        V3 n, c;
+        const int64_t cx = static_cast<int64_t>(std::floor(x.x / tg.cell)), cy = static_cast<int64_t>(std::floor(x.y / tg.cell)), cz = static_cast<int64_t>(std::floor(x.z / tg.cell));
+        for (int64_t dx = -1; dx <= 1; ++dx) for (int64_t dy = -1; dy <= 1; ++dy) for (int64_t dz = -1; dz <= 1; ++dz) {
+            auto it = tg.cells.find(scan_rectifier::detail::cellKey(cx + dx, cy + dy, cz + dz));
+            if (it == tg.cells.end()) continue;
+            for (uint32_t t : it->second) {
+                if ((t < triTile.size() ? triTile[t] : 0u) != tile) continue;
+                if ((tg.centroid[t] - x).norm() > radius) continue;
+                const double a = tg.areaNormal[t].norm();
+                n += tg.areaNormal[t];
+                c += tg.centroid[t] * a;
+                s.area += a;
+            }
+        }
+        if (s.area > 1e-12) { s.n = n.normalized(); s.c = c * (1.0 / s.area); s.area *= 0.5; }
+        return s;
+    }
+    /** 0 agreed; 1 no surface; 2 normals; 3 not parallel; 4 a step. */
+    static int agreement(const LocalSurface& A, const LocalSurface& B, const std::vector<V3>& dirsA, const std::vector<V3>& dirsB, const TileSeamAdaptiveParams& p) {
+        if (!(A.area > 1e-6) || !(B.area > 1e-6) || A.n.norm() < 0.5 || B.n.norm() < 0.5) return 1;
+        if (A.n.dot(B.n) < std::cos(p.normalTolDeg * M_PI / 180.0)) return 2;
+        double best = 0;
+        for (const V3& u : dirsA) for (const V3& v : dirsB) best = std::max(best, std::abs(u.dot(v)));
+        if (best < std::cos(p.parallelTolDeg * M_PI / 180.0)) return 3;
+        const V3 d = B.c - A.c;
+        const double along = (d - A.n * d.dot(A.n)).norm();
+        const double allowed = p.stepTolM + p.stepSlope * along;
+        if (std::abs(d.dot(A.n)) > allowed || std::abs(d.dot(B.n)) > allowed) return 4;
+        return 0;
+    }
+    static double pairTolerance(uint32_t ta, uint32_t tb, const std::vector<double>& tileErrorM, const TileSeamAdaptiveParams& p, bool* stated = nullptr) {
+        const double ea = ta < tileErrorM.size() ? tileErrorM[ta] : -1.0, eb = tb < tileErrorM.size() ? tileErrorM[tb] : -1.0;
+        const bool s = ea > 0 && eb > 0;
+        if (stated) *stated = s;
+        return s ? std::min(p.capM, std::min(ea, eb)) : std::min(p.capM, p.baseToleranceM);
+    }
+    /** A total order on tiles: the larger stated error first, then the higher id. The higher-ranked tile moves or fills. */
+    static bool ranksAbove(uint32_t ta, uint32_t tb, const std::vector<double>& tileErrorM) {
+        const double ea = ta < tileErrorM.size() ? tileErrorM[ta] : -1.0, eb = tb < tileErrorM.size() ? tileErrorM[tb] : -1.0;
+        return ea != eb ? ea > eb : ta > tb;
+    }
+    /** One contact: a border position and the nearest open border of another tile within the pair's tolerance. */
+    struct Contact {
+        uint32_t edge{UINT32_MAX};   // the other tile's open edge (OpenBorder index)
+        uint32_t vertex{UINT32_MAX}; // set when the nearest point is that edge's end (a position)
+        uint32_t tile{0};
+        double s{0}, d{1e300};
+        V3 q;
+        int agree{-1};
+        /** The angle between the two surfaces' normals (degrees; -1 when either side has no surface). */
+        double normalDeg{-1};
+    };
+    struct Contacts {
+        Topology topo;
+        OpenBorder ob;
+        std::vector<uint32_t> gTile;
+        std::vector<Contact> at;   // per position
+        std::vector<uint32_t> border;   // positions on an open edge with a single tile
+    };
+    static Contacts findContacts(const geometry::ScratchboxMesh& mesh, const std::vector<uint32_t>& triTile, const std::vector<double>& tileErrorM, const TileSeamAdaptiveParams& p, unsigned threads) {
+        Contacts c;
+        c.topo = topology(mesh);
+        c.ob = openBorder(mesh, c.topo);
+        c.gTile = groupTiles(mesh, c.topo, triTile);
+        const size_t G = c.topo.gpos.size();
+        c.at.assign(G, Contact{});
+        auto edgeTile = [&](uint32_t e) { const uint32_t t = c.ob.edges[e].tri; return t < triTile.size() ? triTile[t] : 0u; };
+        const double reach = std::max(std::max(p.capM, p.baseToleranceM), 1e-3);
+        auto ci = [&](double v) { return static_cast<int64_t>(std::floor(v / reach)); };
+        std::unordered_map<int64_t, std::vector<uint32_t>, scan_rectifier::detail::CellKeyHash> grid;
+        for (uint32_t i = 0; i < c.ob.edges.size(); ++i) {
+            const V3 a = c.topo.gpos[c.ob.edges[i].a], b = c.topo.gpos[c.ob.edges[i].b];
+            const int64_t x0 = ci(std::min(a.x, b.x) - reach), x1 = ci(std::max(a.x, b.x) + reach), y0 = ci(std::min(a.y, b.y) - reach), y1 = ci(std::max(a.y, b.y) + reach), z0 = ci(std::min(a.z, b.z) - reach), z1 = ci(std::max(a.z, b.z) + reach);
+            if ((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > 4096) continue;
+            for (int64_t x = x0; x <= x1; ++x) for (int64_t y = y0; y <= y1; ++y) for (int64_t z = z0; z <= z1; ++z) grid[scan_rectifier::detail::cellKey(x, y, z)].push_back(i);
+        }
+        for (uint32_t g = 0; g < G; ++g) if (c.ob.start[g + 1] > c.ob.start[g] && c.gTile[g] != kMixedTile) c.border.push_back(g);
+        const TriGrid tg = triGrid(mesh, p.surfaceRadiusM);
+        auto dirsOf = [&](uint32_t g) {
+            std::vector<V3> d;
+            for (uint32_t k = c.ob.start[g]; k < c.ob.start[g + 1]; ++k) { const auto& e = c.ob.edges[c.ob.list[k]]; d.push_back((c.topo.gpos[e.b] - c.topo.gpos[e.a]).normalized()); }
+            return d;
+        };
+        scan_rectifier::detail::parallelFor(c.border.size(), threads, 256, [&](size_t i0, size_t i1, unsigned) {
+            for (size_t i = i0; i < i1; ++i) {
+                const uint32_t g = c.border[i];
+                const V3 x = c.topo.gpos[g];
+                const uint32_t mine = c.gTile[g];
+                auto it = grid.find(scan_rectifier::detail::cellKey(ci(x.x), ci(x.y), ci(x.z)));
+                if (it == grid.end()) continue;
+                Contact best;
+                for (uint32_t e : it->second) {
+                    const uint32_t et = edgeTile(e);
+                    if (et == mine) continue;
+                    const auto& E = c.ob.edges[e];
+                    const double tol = pairTolerance(mine, et, tileErrorM, p);
+                    double s;
+                    const V3 A = c.topo.gpos[E.a], B = c.topo.gpos[E.b];
+                    const double d = pointSegment(x, A, B, &s);
+                    if (d > tol) continue;
+                    const double L = (B - A).norm();
+                    const double da = (x - A).norm(), db = (x - B).norm();
+                    Contact h;
+                    h.edge = e; h.tile = et; h.s = s;
+                    if (s * L <= p.endGuardM || (1.0 - s) * L <= p.endGuardM || std::min(da, db) <= d + p.endGuardM) {
+                        h.vertex = da <= db ? E.a : E.b;
+                        h.d = std::min(da, db);
+                        h.q = c.topo.gpos[h.vertex];
+                        if (h.d > tol) continue;
+                    } else { h.d = d; h.q = A + (B - A) * s; }
+                    if (h.d < best.d || (h.d == best.d && (h.vertex != UINT32_MAX) > (best.vertex != UINT32_MAX))) best = h;
+                }
+                if (best.edge == UINT32_MAX) continue;
+                const LocalSurface sa = surfaceNear(tg, triTile, mine, x, p.surfaceRadiusM), sb = surfaceNear(tg, triTile, best.tile, best.q, p.surfaceRadiusM);
+                const auto& E = c.ob.edges[best.edge];
+                std::vector<V3> db = best.vertex != UINT32_MAX ? dirsOf(best.vertex) : std::vector<V3>{(c.topo.gpos[E.b] - c.topo.gpos[E.a]).normalized()};
+                best.agree = agreement(sa, sb, dirsOf(g), db, p);
+                if (sa.area > 1e-6 && sb.area > 1e-6) best.normalDeg = std::acos(std::clamp(sa.n.dot(sb.n), -1.0, 1.0)) * 180.0 / M_PI;
+                c.at[g] = best;
+            }
+        });
+        return c;
+    }
+
+public:
+    /**
+     * Adaptive close, after the fixed passes: for every border position of one tile, the nearest open border of another
+     * tile within the pair's tolerance (the smaller of the two tiles' stated geometric errors, capped at capM; the base
+     * tolerance when either states none), and only where the two surfaces agree there (normals within normalTolDeg, the
+     * borders parallel within parallelTolDeg, each surface carried across the seam passing the other's within the step
+     * tolerance). Rounds alternate:
+     *  - positions: a position whose nearest is another tile's position moves onto it, the higher-ranked tile (ranksAbove)
+     *    moving; triangles that collapse go;
+     *  - splits: a position on the interior of another tile's edge splits that edge there, the new vertex exactly at the
+     *    position (the edge's tile yields, by at most the pair's tolerance); UVs, normal and colour interpolated along it.
+     * A close that would turn a triangle inside out or by more than maxTurnDeg is taken back and counted (guardRefused).
+     * triTile is the per-triangle tile, kept in lockstep with every other side array passed.
+     */
+    static TileSeamAdaptiveStats closeAdaptive(geometry::ScratchboxMesh& mesh, std::vector<uint32_t>& triTile, const std::vector<double>& tileErrorM,
+                                               std::vector<std::vector<uint32_t>*> sideArrays, const TileSeamAdaptiveParams& p = {}) {
+        TileSeamAdaptiveStats st;
+        sideArrays.push_back(&triTile);
+        const unsigned threads = scan_rectifier::detail::resolveThreads(p.threads);
+        const double maxTurnCos = std::cos(p.maxTurnDeg * M_PI / 180.0);
+        double sumMove = 0; size_t nMoves = 0;
+        int idle = 0;
+        for (int round = 0; round < p.rounds; ++round) {
+            const bool positionsRound = round % 2 == 0;
+            Contacts c = findContacts(mesh, triTile, tileErrorM, p, threads);
+            const Topology& topo = c.topo;
+            const size_t G = topo.gpos.size(), F = mesh.indices.size() / 3;
+            if (round == 0) {
+                for (uint32_t g : c.border) {
+                    const Contact& h = c.at[g];
+                    if (h.edge == UINT32_MAX) continue;
+                    ++st.candidates;
+                    bool stated;
+                    const double tol = pairTolerance(c.gTile[g], h.tile, tileErrorM, p, &stated);
+                    if (stated) ++st.pairsWithStatedError;
+                    st.maxToleranceM = std::max(st.maxToleranceM, tol);
+                    if (h.normalDeg >= 0) { static constexpr double e[7] = {2, 5, 8, 15, 30, 90, 150}; size_t b = 7; for (size_t k = 0; k < 7; ++k) if (h.normalDeg < e[k]) { b = k; break; } st.normalAngleHist[b]++; }
+                    switch (h.agree) {
+                        case 0: ++st.agreed; st.agreedByGap[h.d < 0.03 ? 0 : h.d < 0.10 ? 1 : h.d < 0.30 ? 2 : 3]++; break;
+                        case 1: ++st.refusedNoSurface; break;
+                        case 2: ++st.refusedNormal; break;
+                        case 3: ++st.refusedParallel; break;
+                        default: ++st.refusedStep; break;
+                    }
+                }
+            }
+            std::vector<uint32_t> memberStart(G + 1, 0), members(mesh.vertices.size());
+            for (uint32_t v = 0; v < mesh.vertices.size(); ++v) memberStart[topo.groupOf[v] + 1]++;
+            for (size_t g = 0; g < G; ++g) memberStart[g + 1] += memberStart[g];
+            { std::vector<uint32_t> fill(memberStart.begin(), memberStart.end() - 1); for (uint32_t v = 0; v < mesh.vertices.size(); ++v) members[fill[topo.groupOf[v]]++] = v; }
+            auto vp = [&](uint32_t v) { const auto& q = mesh.vertices[v].position; return V3{q.x, q.y, q.z}; };
+            auto setGroup = [&](uint32_t g, const geometry::Vec3& to) { for (uint32_t m = memberStart[g]; m < memberStart[g + 1]; ++m) mesh.vertices[members[m]].position = to; };
+            // maxTurnDeg 0: no close moves anything, every agreed gap is left to the strip fill
+            auto turnsBad = [&](const V3& n0, const V3& n1) {
+                const double l0 = n0.norm(), l1 = n1.norm();
+                if (!(l0 > 1e-14)) return false;
+                if (!(p.maxTurnDeg > 0.0)) return true;
+                if (!(l1 > 1e-14)) return true;
+                return n0.dot(n1) < maxTurnCos * l0 * l1;
+            };
+            size_t changed = 0;
+            if (positionsRound) {
+                // a position-to-position contact moves its higher-ranked side onto the other (whichever side found it); a
+                // position with several such contacts takes its nearest; a target never moves in the same round
+                std::vector<uint8_t> mover(G, 0), target(G, 0);
+                std::vector<uint32_t> onto(G, UINT32_MAX);
+                std::vector<double> ontoD(G, 1e300);
+                for (uint32_t g : c.border) {
+                    const Contact& h = c.at[g];
+                    if (h.agree != 0 || h.vertex == UINT32_MAX || c.gTile[h.vertex] == kMixedTile) continue;
+                    const bool gMoves = ranksAbove(c.gTile[g], h.tile, tileErrorM);
+                    const uint32_t m = gMoves ? g : h.vertex, to = gMoves ? h.vertex : g;
+                    if (h.d < ontoD[m] || (h.d == ontoD[m] && to < onto[m])) { onto[m] = to; ontoD[m] = h.d; }
+                }
+                for (uint32_t g = 0; g < G; ++g) if (onto[g] != UINT32_MAX) { mover[g] = 1; target[onto[g]] = 1; }
+                for (uint32_t g = 0; g < G; ++g) if (mover[g] && target[g]) mover[g] = 0;
+                std::vector<uint8_t> touched(F, 0);
+                std::vector<V3> n0(F);
+                for (uint32_t g = 0; g < G; ++g) if (mover[g]) setGroup(g, mesh.vertices[members[memberStart[onto[g]]]].position);
+                for (size_t t = 0; t < F; ++t) {
+                    const uint32_t g0 = topo.groupOf[mesh.indices[3 * t]], g1 = topo.groupOf[mesh.indices[3 * t + 1]], g2 = topo.groupOf[mesh.indices[3 * t + 2]];
+                    if (!(mover[g0] || mover[g1] || mover[g2])) continue;
+                    touched[t] = 1;
+                    n0[t] = (topo.gpos[g1] - topo.gpos[g0]).cross(topo.gpos[g2] - topo.gpos[g0]);
+                }
+                auto collapsed = [&](size_t t) {
+                    const V3 a = vp(mesh.indices[3 * t]), b = vp(mesh.indices[3 * t + 1]), cc = vp(mesh.indices[3 * t + 2]);
+                    return (a - b).norm() < 1e-7 || (b - cc).norm() < 1e-7 || (cc - a).norm() < 1e-7;
+                };
+                for (int pass = 0; pass < 4; ++pass) {
+                    size_t rev = 0;
+                    for (size_t t = 0; t < F; ++t) {
+                        if (!touched[t] || collapsed(t)) continue;
+                        const uint32_t i0 = mesh.indices[3 * t], i1 = mesh.indices[3 * t + 1], i2 = mesh.indices[3 * t + 2];
+                        if (!turnsBad(n0[t], (vp(i1) - vp(i0)).cross(vp(i2) - vp(i0)))) continue;
+                        for (uint32_t v : {i0, i1, i2}) {
+                            const uint32_t g = topo.groupOf[v];
+                            if (!mover[g]) continue;
+                            const V3& o = topo.gpos[g];
+                            setGroup(g, geometry::Vec3(static_cast<float>(o.x), static_cast<float>(o.y), static_cast<float>(o.z)));
+                            mover[g] = 0;
+                            ++rev;
+                        }
+                    }
+                    st.guardRefused += rev;
+                    if (!rev) break;
+                }
+                std::vector<uint8_t> keep(F, kFlagKeep);
+                size_t drops = 0;
+                for (size_t t = 0; t < F; ++t) if (touched[t] && collapsed(t)) { keep[t] = kFlagHidden; ++drops; }
+                for (uint32_t g = 0; g < G; ++g) if (mover[g]) {
+                    ++st.vertexMoves; ++changed;
+                    sumMove += ontoD[g]; ++nMoves;
+                    st.maxMoveM = std::max(st.maxMoveM, ontoD[g]);
+                }
+                st.trianglesCollapsed += drops;
+                compactDropped(mesh, keep, sideArrays);
+            } else {
+                // splits: per edge its points in order along it; one split per triangle a round
+                std::unordered_map<uint32_t, std::vector<uint32_t>> byEdge;
+                std::vector<uint32_t> order;
+                for (uint32_t g : c.border) {
+                    const Contact& h = c.at[g];
+                    if (h.agree != 0 || h.vertex != UINT32_MAX) continue;
+                    auto& v = byEdge[h.edge];
+                    if (v.empty()) order.push_back(h.edge);
+                    v.push_back(g);
+                }
+                std::sort(order.begin(), order.end());
+                std::vector<uint8_t> splitTri(F, 0);
+                std::vector<uint32_t> newIdx;
+                std::vector<std::vector<uint32_t>> newSide(sideArrays.size());
+                for (uint32_t ei : order) {
+                    const auto& E = c.ob.edges[ei];
+                    const uint32_t t = E.tri;
+                    if (splitTri[t]) continue;
+                    int k = -1;
+                    for (int j = 0; j < 3; ++j) {
+                        const uint32_t ga = topo.groupOf[mesh.indices[3 * t + j]], gb = topo.groupOf[mesh.indices[3 * t + (j + 1) % 3]];
+                        if ((ga == E.a && gb == E.b) || (ga == E.b && gb == E.a)) { k = j; break; }
+                    }
+                    if (k < 0) continue;
+                    const uint32_t va = mesh.indices[3 * t + k], vb = mesh.indices[3 * t + (k + 1) % 3], vc = mesh.indices[3 * t + (k + 2) % 3];
+                    const V3 A = vp(va), B = vp(vb), Cc = vp(vc), AB = B - A;
+                    const V3 nOrig = AB.cross(Cc - A);
+                    std::vector<std::pair<double, uint32_t>> along;
+                    for (uint32_t g : byEdge[ei]) along.push_back({std::clamp((topo.gpos[g] - A).dot(AB) / AB.dot(AB), 0.0, 1.0), g});
+                    std::sort(along.begin(), along.end());
+                    // drop the points whose fan pieces would turn too far, the farthest first, until the rest fan cleanly
+                    for (;;) {
+                        size_t worst = SIZE_MAX;
+                        double worstD = -1;
+                        for (size_t j = 0; j <= along.size(); ++j) {
+                            const V3 P = j == 0 ? A : topo.gpos[along[j - 1].second];
+                            const V3 Q = j == along.size() ? B : topo.gpos[along[j].second];
+                            if (!turnsBad(nOrig, (Q - P).cross(Cc - P))) continue;
+                            for (size_t jj : {j, j + 1}) {
+                                if (jj == 0 || jj > along.size()) continue;
+                                const double d = c.at[along[jj - 1].second].d;
+                                if (d > worstD) { worstD = d; worst = jj - 1; }
+                            }
+                        }
+                        if (worst == SIZE_MAX) break;
+                        along.erase(along.begin() + static_cast<std::ptrdiff_t>(worst));
+                        ++st.guardRefused;
+                    }
+                    if (along.empty()) continue;
+                    std::vector<uint32_t> chain{va};
+                    for (const auto& [s, g] : along) {
+                        geometry::Vertex nv = mesh.vertices[va];
+                        const auto& ua = mesh.vertices[va];
+                        const auto& ub = mesh.vertices[vb];
+                        const float fs = static_cast<float>(s), fr = 1.0f - fs;
+                        nv.position = mesh.vertices[members[memberStart[g]]].position;
+                        nv.uv = geometry::Vec2(ua.uv.x * fr + ub.uv.x * fs, ua.uv.y * fr + ub.uv.y * fs);
+                        nv.uv1 = geometry::Vec2(ua.uv1.x * fr + ub.uv1.x * fs, ua.uv1.y * fr + ub.uv1.y * fs);
+                        geometry::Vec3 nn(ua.normal.x * fr + ub.normal.x * fs, ua.normal.y * fr + ub.normal.y * fs, ua.normal.z * fr + ub.normal.z * fs);
+                        const float nl = std::sqrt(nn.x * nn.x + nn.y * nn.y + nn.z * nn.z);
+                        nv.normal = nl > 0 ? geometry::Vec3(nn.x / nl, nn.y / nl, nn.z / nl) : ua.normal;
+                        nv.color = geometry::Vec4(ua.color.x * fr + ub.color.x * fs, ua.color.y * fr + ub.color.y * fs, ua.color.z * fr + ub.color.z * fs, ua.color.w * fr + ub.color.w * fs);
+                        chain.push_back(static_cast<uint32_t>(mesh.vertices.size()));
+                        mesh.vertices.push_back(nv);
+                        const double d = c.at[g].d;
+                        sumMove += d; ++nMoves;
+                        st.maxMoveM = std::max(st.maxMoveM, d);
+                    }
+                    chain.push_back(vb);
+                    mesh.indices[3 * t + 0] = chain[0]; mesh.indices[3 * t + 1] = chain[1]; mesh.indices[3 * t + 2] = vc;
+                    for (size_t j = 1; j + 1 < chain.size(); ++j) {
+                        newIdx.push_back(chain[j]); newIdx.push_back(chain[j + 1]); newIdx.push_back(vc);
+                        for (size_t si = 0; si < sideArrays.size(); ++si) if (sideArrays[si] && t < sideArrays[si]->size()) newSide[si].push_back((*sideArrays[si])[t]);
+                        ++st.trianglesAdded;
+                    }
+                    splitTri[t] = 1;
+                    ++st.edgesSplit;
+                    st.splitsClosed += along.size();
+                    changed += along.size();
+                }
+                mesh.indices.insert(mesh.indices.end(), newIdx.begin(), newIdx.end());
+                for (size_t si = 0; si < sideArrays.size(); ++si) if (sideArrays[si]) sideArrays[si]->insert(sideArrays[si]->end(), newSide[si].begin(), newSide[si].end());
+            }
+            st.roundsRun = static_cast<size_t>(round + 1);
+            idle = changed ? 0 : idle + 1;
+            if (idle >= 2) break;
+        }
+        st.meanMoveM = nMoves ? sumMove / static_cast<double>(nMoves) : 0.0;
+        return st;
+    }
+
+    /**
+     * Strip fill, last: an open edge of one tile whose both ends have agreed contacts with the same other tile, which the
+     * closes above left open (a move there would have distorted the surface), is bridged by thin triangles from the edge to
+     * the other tile's border positions along it (its ends' nearest, and those projecting between them), wound as the
+     * edge's own triangle across it. Only the higher-ranked tile of a pair fills, so a gap is bridged once. The new
+     * triangles are appended at the end of mesh.indices (from *firstFill); their side values are the edge triangle's (the
+     * caller relabels their material: the bridge is generated, not scanned). UVs are the edge's own, interpolated along it.
+     */
+    static TileSeamFillStats fillStrips(geometry::ScratchboxMesh& mesh, std::vector<uint32_t>& triTile, const std::vector<double>& tileErrorM,
+                                        std::vector<std::vector<uint32_t>*> sideArrays, const TileSeamAdaptiveParams& p, size_t* firstFill) {
+        TileSeamFillStats st;
+        sideArrays.push_back(&triTile);
+        if (firstFill) *firstFill = mesh.indices.size() / 3;
+        const unsigned threads = scan_rectifier::detail::resolveThreads(p.threads);
+        Contacts c = findContacts(mesh, triTile, tileErrorM, p, threads);
+        const Topology& topo = c.topo;
+        const TriGrid tg = triGrid(mesh, p.surfaceRadiusM);
+        auto vp = [&](uint32_t v) { const auto& q = mesh.vertices[v].position; return V3{q.x, q.y, q.z}; };
+        // a position's float position, exactly (the fill shares the other tile's positions bit for bit)
+        std::vector<uint32_t> anyVertex(topo.gpos.size(), UINT32_MAX);
+        for (uint32_t v = 0; v < mesh.vertices.size(); ++v) if (anyVertex[topo.groupOf[v]] == UINT32_MAX) anyVertex[topo.groupOf[v]] = v;
+        // the other tiles' border positions in a grid, to find those projecting along an edge
+        const double reach = std::max(std::max(p.capM, p.baseToleranceM), 1e-3);
+        auto ci = [&](double v) { return static_cast<int64_t>(std::floor(v / reach)); };
+        std::unordered_map<int64_t, std::vector<uint32_t>, scan_rectifier::detail::CellKeyHash> gGrid;
+        for (uint32_t g : c.border) gGrid[scan_rectifier::detail::cellKey(ci(topo.gpos[g].x), ci(topo.gpos[g].y), ci(topo.gpos[g].z))].push_back(g);
+        // the nearest position of the other tile: the contact's own position, or the nearer end of its edge
+        auto partner = [&](uint32_t g) -> uint32_t {
+            const Contact& h = c.at[g];
+            if (h.edge == UINT32_MAX || h.agree != 0) return UINT32_MAX;
+            if (h.vertex != UINT32_MAX) return h.vertex;
+            const auto& E = c.ob.edges[h.edge];
+            const uint32_t n = (topo.gpos[E.a] - topo.gpos[g]).norm() <= (topo.gpos[E.b] - topo.gpos[g]).norm() ? E.a : E.b;
+            return (topo.gpos[n] - topo.gpos[g]).norm() <= pairTolerance(c.gTile[g], h.tile, tileErrorM, p) ? n : UINT32_MAX;
+        };
+        std::vector<uint32_t> newIdx;
+        std::vector<std::vector<uint32_t>> newSide(sideArrays.size());
+        for (const auto& E : c.ob.edges) {
+            const uint32_t t = E.tri, tA = t < triTile.size() ? triTile[t] : 0u;
+            if (c.gTile[E.a] != tA || c.gTile[E.b] != tA) continue;
+            const uint32_t pa = partner(E.a), pb = partner(E.b);
+            if (pa == UINT32_MAX || pb == UINT32_MAX) continue;
+            const uint32_t tB = c.at[E.a].tile;
+            if (c.at[E.b].tile != tB || c.gTile[pa] != tB || c.gTile[pb] != tB) continue;
+            if (!ranksAbove(tA, tB, tileErrorM)) continue;
+            // the edge as its triangle winds it: a -> b; the fill runs across it b -> a
+            int k = -1;
+            for (int j = 0; j < 3; ++j) if (topo.groupOf[mesh.indices[3 * t + j]] == E.a && topo.groupOf[mesh.indices[3 * t + (j + 1) % 3]] == E.b) { k = j; break; }
+            uint32_t va, vb;
+            if (k >= 0) { va = mesh.indices[3 * t + k]; vb = mesh.indices[3 * t + (k + 1) % 3]; }
+            else {
+                for (int j = 0; j < 3; ++j) if (topo.groupOf[mesh.indices[3 * t + j]] == E.b && topo.groupOf[mesh.indices[3 * t + (j + 1) % 3]] == E.a) { k = j; break; }
+                if (k < 0) continue;
+                va = mesh.indices[3 * t + k]; vb = mesh.indices[3 * t + (k + 1) % 3];
+            }
+            const V3 A = vp(va), B = vp(vb), AB = B - A;
+            const double ll = AB.dot(AB);
+            if (!(ll > 1e-12)) continue;
+            auto sOf = [&](uint32_t g) { return (topo.gpos[g] - A).dot(AB) / ll; };
+            const uint32_t qa = topo.groupOf[va] == E.a ? pa : pb, qb = topo.groupOf[va] == E.a ? pb : pa;
+            const double s0 = sOf(qa), s1 = sOf(qb);
+            if (!(s1 > s0)) continue;
+            const double tol = pairTolerance(tA, tB, tileErrorM, p);
+            std::vector<std::pair<double, uint32_t>> q{{s0, qa}};
+            {
+                const V3 lo{std::min(A.x, B.x) - tol, std::min(A.y, B.y) - tol, std::min(A.z, B.z) - tol}, hi{std::max(A.x, B.x) + tol, std::max(A.y, B.y) + tol, std::max(A.z, B.z) + tol};
+                if ((ci(hi.x) - ci(lo.x) + 1) * (ci(hi.y) - ci(lo.y) + 1) * (ci(hi.z) - ci(lo.z) + 1) > 4096) continue;
+                for (int64_t x = ci(lo.x); x <= ci(hi.x); ++x) for (int64_t y = ci(lo.y); y <= ci(hi.y); ++y) for (int64_t z = ci(lo.z); z <= ci(hi.z); ++z) {
+                    auto it = gGrid.find(scan_rectifier::detail::cellKey(x, y, z));
+                    if (it == gGrid.end()) continue;
+                    for (uint32_t g : it->second) {
+                        if (c.gTile[g] != tB || g == qa || g == qb) continue;
+                        const double s = sOf(g);
+                        if (!(s > s0 && s < s1)) continue;
+                        if (pointSegment(topo.gpos[g], A, B) > tol) continue;
+                        q.push_back({s, g});
+                    }
+                }
+            }
+            q.push_back({s1, qb});
+            std::sort(q.begin() + 1, q.end() - 1);
+            // the edge's own surface, to orient and check the bridge
+            const LocalSurface sa = surfaceNear(tg, triTile, tA, (A + B) * 0.5, p.surfaceRadiusM);
+            if (!(sa.area > 1e-6)) { ++st.refused; continue; }
+            // polygon b -> a -> q0 .. qm, fanned from b
+            std::vector<std::array<V3, 3>> tris;
+            std::vector<std::array<int, 3>> ref;   // -1 a, -2 b, j >= 0 q[j]
+            bool ok = true;
+            auto P = [&](int r) { return r == -1 ? A : r == -2 ? B : topo.gpos[q[static_cast<size_t>(r)].second]; };
+            std::vector<int> ring{-1};
+            for (int j = 0; j < static_cast<int>(q.size()); ++j) ring.push_back(j);
+            for (size_t j = 0; j + 1 < ring.size(); ++j) {
+                const V3 a = P(-2), b = P(ring[j]), cc = P(ring[j + 1]);
+                const V3 n = (b - a).cross(cc - a);
+                if (n.norm() < 1e-8) continue;
+                if (n.normalized().dot(sa.n) < -0.1) { ok = false; break; }
+                ref.push_back({-2, ring[j], ring[j + 1]});
+            }
+            if (!ok || ref.empty()) { ++st.refused; continue; }
+            auto vertexFor = [&](int r) -> uint32_t {
+                if (r == -1) return va;
+                if (r == -2) return vb;
+                const auto [s, g] = q[static_cast<size_t>(r)];
+                geometry::Vertex nv = mesh.vertices[va];
+                const auto& ua = mesh.vertices[va];
+                const auto& ub = mesh.vertices[vb];
+                const float fs = static_cast<float>(std::clamp(s, 0.0, 1.0)), fr = 1.0f - fs;
+                nv.position = mesh.vertices[anyVertex[g]].position;
+                nv.uv = geometry::Vec2(ua.uv.x * fr + ub.uv.x * fs, ua.uv.y * fr + ub.uv.y * fs);
+                nv.uv1 = geometry::Vec2(ua.uv1.x * fr + ub.uv1.x * fs, ua.uv1.y * fr + ub.uv1.y * fs);
+                nv.normal = geometry::Vec3(static_cast<float>(sa.n.x), static_cast<float>(sa.n.y), static_cast<float>(sa.n.z));
+                mesh.vertices.push_back(nv);
+                return static_cast<uint32_t>(mesh.vertices.size() - 1);
+            };
+            std::unordered_map<int, uint32_t> made;
+            auto vid = [&](int r) { auto it = made.find(r); if (it != made.end()) return it->second; const uint32_t v = vertexFor(r); made[r] = v; return v; };
+            for (const auto& r : ref) {
+                newIdx.push_back(vid(r[0])); newIdx.push_back(vid(r[1])); newIdx.push_back(vid(r[2]));
+                for (size_t si = 0; si < sideArrays.size(); ++si) if (sideArrays[si] && t < sideArrays[si]->size()) newSide[si].push_back((*sideArrays[si])[t]);
+                st.areaM2 += 0.5 * (P(r[1]) - P(r[0])).cross(P(r[2]) - P(r[0])).norm();
+                ++st.triangles;
+            }
+            ++st.edgesFilled;
+        }
+        mesh.indices.insert(mesh.indices.end(), newIdx.begin(), newIdx.end());
+        for (size_t si = 0; si < sideArrays.size(); ++si) if (sideArrays[si]) sideArrays[si]->insert(sideArrays[si]->end(), newSide[si].begin(), newSide[si].end());
+        return st;
+    }
+    static std::string adaptiveStatsJson(const TileSeamAdaptiveStats& s) {
+        auto num = [](double v) { char b[64]; std::snprintf(b, sizeof b, "%.6g", v); return std::string(b); };
+        std::string js = "\"candidates\": " + std::to_string(s.candidates) + ", \"agreed\": " + std::to_string(s.agreed) +
+            ", \"refusedNormal\": " + std::to_string(s.refusedNormal) + ", \"refusedParallel\": " + std::to_string(s.refusedParallel) +
+            ", \"refusedStep\": " + std::to_string(s.refusedStep) + ", \"refusedNoSurface\": " + std::to_string(s.refusedNoSurface) + ", \"agreedByGap\": [";
+        for (size_t k = 0; k < 4; ++k) js += (k ? ", " : "") + std::to_string(s.agreedByGap[k]);
+        js += "], \"normalAngleEdgesDeg\": [0, 2, 5, 8, 15, 30, 90, 150, 180], \"normalAngleHist\": [";
+        for (size_t k = 0; k < 8; ++k) js += (k ? ", " : "") + std::to_string(s.normalAngleHist[k]);
+        js += "], \"splitsClosed\": " + std::to_string(s.splitsClosed) + ", \"edgesSplit\": " + std::to_string(s.edgesSplit) + ", \"trianglesAdded\": " + std::to_string(s.trianglesAdded) +
+            ", \"vertexMoves\": " + std::to_string(s.vertexMoves) + ", \"trianglesCollapsed\": " + std::to_string(s.trianglesCollapsed) + ", \"guardRefused\": " + std::to_string(s.guardRefused) +
+            ", \"roundsRun\": " + std::to_string(s.roundsRun) + ", \"maxMoveM\": " + num(s.maxMoveM) + ", \"meanMoveM\": " + num(s.meanMoveM) +
+            ", \"pairsWithStatedError\": " + std::to_string(s.pairsWithStatedError) + ", \"maxToleranceM\": " + num(s.maxToleranceM);
+        return js;
+    }
+    static std::string fillStatsJson(const TileSeamFillStats& s) {
+        char b[64]; std::snprintf(b, sizeof b, "%.2f", s.areaM2);
+        return "\"edgesFilled\": " + std::to_string(s.edgesFilled) + ", \"triangles\": " + std::to_string(s.triangles) + ", \"areaM2\": " + b + ", \"refused\": " + std::to_string(s.refused);
     }
 
     /** The stats as a JSON object body (no braces), for CLI reports. */

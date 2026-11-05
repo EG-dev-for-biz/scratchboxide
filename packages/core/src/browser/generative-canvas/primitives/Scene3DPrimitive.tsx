@@ -194,7 +194,7 @@ import {
 } from './scene3d/selection';
 import { groupVariantSets, resolveActiveVariants, variantSetKeyOf } from './scene3d/variantSets';
 import type { VectorRoadmapConfig } from '../canvas-types';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { createGltfLoader } from './scene3d/resilientGltfLoader';
 import { applyWeatheringLayer } from './scene3d/weatheringLayer';
 import { CINEMATIC_RIGS, computeSceneBudgetTelemetry } from './scene3d/lightingRigs';
 import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
@@ -2496,7 +2496,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         let displayFlagWasOn = false;
         let compiledRootCache: THREE.Object3D | undefined;
         // a build step's snapshot under the flag (the model as it stood after that step)
-        const stepSnapshot = new StepSnapshotView(url => new GLTFLoader().loadAsync(resolveExternalModelUri(url)).then(g => g.scene));
+        const stepSnapshot = new StepSnapshotView(url => createGltfLoader().loadAsync(resolveExternalModelUri(url)).then(g => g.scene));
         const animate = () => {
             try {
                 const now = performance.now();
@@ -3114,7 +3114,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             for (let i = 0; i < binaryStr.length; i++) {
                 bytes[i] = binaryStr.charCodeAt(i);
             }
-            const loader = new GLTFLoader();
+            const loader = createGltfLoader();
             pendingGeneratedGlbParsesRef.current++;
             loader.parse(bytes.buffer, '', (gltf) => {
                 pendingGeneratedGlbParsesRef.current--;
@@ -3345,7 +3345,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             }
         };
 
-        const loader = new GLTFLoader();
+        const loader = createGltfLoader();
 
         objects.forEach(obj => {
             const rawUri = obj.content?.durableUri;

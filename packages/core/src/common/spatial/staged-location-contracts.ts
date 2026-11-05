@@ -725,6 +725,8 @@ export interface StagedNodeExtras {
         /** Moldings: t = arc length / carrierLengthM. */
         sweep?: { carrierLengthM: number; closed: boolean; tAttribute: '_REVEAL.y' };
         ids: { primitiveId?: string; surfaceId?: string; slotId?: string; elementId?: string; crownId?: number; leafId?: string; degradationId?: string };
+        /** A Google 3D Tiles leaf: the geometric error its tileset states for it (m). The tile seam stage welds up to it. */
+        tile?: { geometricErrorM: number };
         /** A recut copy of a surface (recessed relief) hides the surface node it replaces. */
         replacesSurfaceIds?: string[];
         /**
