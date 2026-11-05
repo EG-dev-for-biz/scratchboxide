@@ -10,7 +10,7 @@
 /**
  * CLI of the grass field (scratchbox_grass_field.hpp): reads an SBGF grid (grass mask, exclusions, confidence, surface
  * height, photo colour), builds the clump variants and places their instances, and writes report.json, mesh.bin,
- * instances.bin, underlayer.bin and detail.rgba into the out dir. Prints {"ok":true,...} or {"ok":false,"error":...} and exits non-zero on failure.
+ * instances.bin, underlayer.bin, detail.rgba, shells.bin and shell.rgba into the out dir. Prints {"ok":true,...} or {"ok":false,"error":...} and exits non-zero on failure.
  *
  *   grass_field <input.sbgf> <outDir> [key=value ...]
  *
@@ -48,6 +48,7 @@ int main(int argc, char** argv) {
         }
         field.writeMesh(out + "/mesh.bin", out + "/instances.bin");
         field.writeUnderlayer(out + "/underlayer.bin", out + "/detail.rgba");
+        field.writeShells(out + "/shells.bin", out + "/shell.rgba");
         size_t n = 0;
         for (const auto& v : field.variants()) n += v.instances.size();
         std::cout << "{\"ok\":true,\"instances\":" << n << "}" << std::endl;
