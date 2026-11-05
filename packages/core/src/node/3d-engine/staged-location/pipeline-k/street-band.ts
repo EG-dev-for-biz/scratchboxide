@@ -91,6 +91,8 @@ export const STREET_BAND_PARAMS = {
     topFeatherM: 0.5,
     /** A photo that qualifies on fewer texels than this gives none to the band (a few texels are not a texture). */
     minTexels: 400,
+    /** A connected patch of photo texels smaller than this (m^2) is dropped: an island of photo in the tile photo reads as a mistake. */
+    minIslandM2: 1.5,
     /** Texels no photo sees clear may come from a photo's obstruction-free copy (generated). */
     cleanFill: true
 };
@@ -126,8 +128,10 @@ export interface StreetBandFacade {
 
 export interface StreetBandReport {
     version: string; facades: number; banded: number;
-    /** The band's surface (m^2), and the share of it textured from Street View (photo-inferred) and from the obstruction-free copies (generated). */
+    /** The band's surface on the rebuilt facades (m^2), and the share of it textured from Street View (photo-inferred) and from the obstruction-free copies (generated). */
     bandAreaM2: number; photoShare: number; cleanShare: number;
+    /** All the twin's wall surface below the band's top (m^2: the rebuilt facades' and the scan's own, faces within 60 degrees of vertical), and the share of it from Street View. */
+    lowWallAreaM2: number; lowWallPhotoShare: number;
     /** Views offered, those with a refined pose, and the panos whose texels were used, with their capture dates. */
     views: number; refinedViews: number; panosUsed: Array<{ panoId: string; date?: string; texels: number }>;
     /** Bands read back from the store, and bands projected now. */
@@ -319,6 +323,9 @@ function shifted<T extends Uint8Array | Float32Array>(a: T, W: number, H: number
     return out;
 }
 
+/** What each gate of projectView turns a texel away for, in the refusal's words. */
+const GATE_WORDS = { facing: 'face away or graze past the incidence limit', frame: 'fall outside the photo', owner: 'are not the structure in the photo (something in front, or the cut-out missed them)', depth: 'are hidden behind other surfaces', coarse: 'are seen no finer than the tile photo' };
+
 /** The photo layer of a band: its colour, how much of it each texel takes (0..1), and where each texel's colour came from. */
 export interface BandLayer {
     W: number; H: number;
@@ -349,7 +356,11 @@ export function projectBand(g: BandGrid, base: Uint8Array, views: StreetBandView
         const r0 = projectView(g, v, depth, tilePixelM, P);
         let valid = erode(r0.valid, W, H, erodePx), n = 0;
         for (let i = 0; i < N; i++) n += valid[i];
-        if (n < P.minTexels) return;
+        if (n < P.minTexels) {
+            const why = Object.entries(r0.rejected).filter(([, c]) => c > 0).sort((a, b) => b[1] - a[1]).map(([k, c]) => `${c} ${GATE_WORDS[k as keyof typeof GATE_WORDS]}`).join(', ');
+            layer.refused.push({ panoId: v.panoId, why: `it truly sees ${n} of the band's texels (under ${P.minTexels})${why ? `: ${why}` : ''}` });
+            return;
+        }
         // the photo must show this facade: its structure against the tile photo's, at the best shift (the pose's residual)
         const ag = structuralAgreement(r0.rgba, valid, base, g.has, W, H, g.pixelM);
         const atLimit = !!ag && (Math.abs(ag.dx) >= R || Math.abs(ag.dy) >= R);
@@ -361,6 +372,8 @@ export function projectBand(g: BandGrid, base: Uint8Array, views: StreetBandView
         valid = shifted(valid, W, H, ag.dx, ag.dy, 1);
         for (let i = 0; i < N; i++) if (!g.has[i]) valid[i] = 0;
         const gain = exposureGain(r.rgba, valid, base, g.has);
+        // a photo whose exposure cannot be matched to the tile photo shows another surface or another light: it would stand out
+        if (!gain) { layer.refused.push({ panoId: v.panoId, why: 'its exposure cannot be matched to the tile photo (too few pairs, or a gain outside 0.5-2 in some channel)' }); return; }
         if (gain) for (let i = 0; i < N; i++) if (valid[i]) for (let c = 0; c < 3; c++) r.rgba[i * 4 + c] = linearToSrgb8(lin(r.rgba[i * 4 + c]) * gain[c]);
         const d = insideDistance(valid, W, H, featherPx), feather = new Float32Array(N);
         for (let i = 0; i < N; i++) feather[i] = valid[i] ? Math.min(1, d[i] / featherPx) : 0;
@@ -394,6 +407,20 @@ export function projectBand(g: BandGrid, base: Uint8Array, views: StreetBandView
         layer.kind[i] = agree ? 2 : 1;
         layer.pano[i] = taken[best].k + 1;
         counts.set(taken[best].k, (counts.get(taken[best].k) ?? 0) + 1);
+    }
+    // islands: a connected patch of photo texels under minIslandM2 is dropped
+    const minIsland = Math.max(1, Math.round(P.minIslandM2 / (g.pixelM * g.pixelM))), seen = new Uint8Array(N), stack: number[] = [], comp: number[] = [];
+    for (let s0 = 0; s0 < N; s0++) {
+        if (!layer.kind[s0] || seen[s0]) continue;
+        comp.length = 0; stack.push(s0); seen[s0] = 1;
+        while (stack.length) {
+            const i = stack.pop()!, x = i % W;
+            comp.push(i);
+            for (const j of [x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1, i - W, i + W]) if (j >= 0 && j < N && layer.kind[j] && !seen[j]) { seen[j] = 1; stack.push(j); }
+        }
+        if (comp.length >= minIsland) continue;
+        // layer.pano holds the view's index + 1 here (renumbered into the panos list below)
+        for (const i of comp) { const k = layer.pano[i] - 1; counts.set(k, (counts.get(k) ?? 1) - 1); layer.kind[i] = 0; layer.pano[i] = 0; layer.weight[i] = 0; layer.rgba.fill(0, i * 4, i * 4 + 4); }
     }
     // what no photo sees clear: the photos' obstruction-free copies (generated), exposure matched as their photo was
     if (P.cleanFill) for (const r of taken) {
@@ -642,7 +669,7 @@ export async function textureStreetBand(twin: Uint8Array, opts: {
 }, P: StreetBandParams = STREET_BAND_PARAMS): Promise<{ glb: Buffer; report: StreetBandReport }> {
     const plan = planStreetBands(twin, opts.groundY, opts.panoSet, P);
     const { glb: g, bands } = plan, json = g.json;
-    const report: StreetBandReport = { version: STREET_BAND_VERSION, facades: plan.perFacade.length, banded: 0, bandAreaM2: 0, photoShare: 0, cleanShare: 0, views: 0, refinedViews: 0, panosUsed: [], stored: 0, projected: 0, perFacade: plan.perFacade };
+    const report: StreetBandReport = { version: STREET_BAND_VERSION, facades: plan.perFacade.length, banded: 0, bandAreaM2: 0, photoShare: 0, cleanShare: 0, lowWallAreaM2: Math.round(lowWallArea(g, opts.groundY + P.bandTopM)), lowWallPhotoShare: 0, views: 0, refinedViews: 0, panosUsed: [], stored: 0, projected: 0, perFacade: plan.perFacade };
     const unchanged = (skipped: string) => ({ glb: Buffer.from(twin), report: { ...report, skipped } });
     if (!plan.perFacade.length) return unchanged('no rebuilt facade in this model');
     if (!bands.length) return unchanged(plan.perFacade.find(f => f.skipped)?.skipped ?? 'no band to texture');
@@ -676,7 +703,8 @@ export async function textureStreetBand(twin: Uint8Array, opts: {
                 const layer = projectBand(b.grid, b.base, facing, depthOf, b.tilePixelM, P);
                 layers.set(b, layer);
                 report.projected++;
-                opts.store?.put(b.key, storeLayer(layer));
+                // only a layer some photo gave is kept: a band no photo reached (the registration failed, a view refused) is asked again next time
+                if (layer.panos.some(p => p.texels)) opts.store?.put(b.key, storeLayer(layer));
                 opts.progress?.(`street band: ${b.row.node}: ${layer.panos.filter(p => p.texels).length} photos give its lowest ${P.bandTopM} m${layer.refused.length ? `, ${layer.refused.length} refused` : ''}`);
             }
         }
@@ -714,7 +742,7 @@ export async function textureStreetBand(twin: Uint8Array, opts: {
         for (let i = 0; i < N; i++) { if (!grid.has[i]) continue; bandTexels++; if (layer.kind[i] === 1) photo++; else if (layer.kind[i] === 2) { photo++; multi++; } else if (layer.kind[i] === 3) clean++; }
         area += bandTexels * texelArea;
         Object.assign(row, { photoTexels: photo, multiTexels: multi, cleanTexels: clean, panos: layer.panos, refused: layer.refused });
-        if (!photo && !clean) { row.skipped = layer.panos.length ? 'no photo texel kept' : layer.refused.length ? `every photo refused (${layer.refused[0].why})` : 'no registered photo sees its band'; continue; }
+        if (!photo && !clean) { row.skipped = layer.panos.length ? 'no photo texel kept' : layer.refused.length ? `every photo refused (${(layer.refused.find(r => !r.why.startsWith('its pose is not refined')) ?? layer.refused[0]).why})` : 'no registered photo sees its band'; continue; }
         photoArea += photo * texelArea; cleanArea += clean * texelArea;
         for (const p of layer.panos) { const u = used.get(p.panoId) ?? { ...(p.date ? { date: p.date } : {}), texels: 0 }; u.texels += p.texels; used.set(p.panoId, u); }
         const texture = finishBand(grid, b.base, layer, P);
@@ -773,9 +801,27 @@ export async function textureStreetBand(twin: Uint8Array, opts: {
     report.bandAreaM2 = Math.round(area);
     report.photoShare = area ? +(photoArea / area).toFixed(4) : 0;
     report.cleanShare = area ? +(cleanArea / area).toFixed(4) : 0;
+    report.lowWallPhotoShare = report.lowWallAreaM2 ? +(photoArea / report.lowWallAreaM2).toFixed(4) : 0;
     report.panosUsed = [...used].map(([panoId, u]) => ({ panoId, ...u })).filter(p => p.texels);
     if (!report.banded) return { glb: Buffer.from(twin), report: { ...report, skipped: plan.perFacade.find(f => f.skipped)?.skipped ?? 'no band textured' } };
     return { glb: compactGlb(json, g.bin, newViews), report };
+}
+
+/** The area (m^2) of every triangle of the model below yTop (by its centroid) whose face is within 60 degrees of vertical. */
+export function lowWallArea(g: ReturnType<typeof parseGlbBytes>, yTop: number): number {
+    let area = 0;
+    for (const m of g.json.meshes ?? []) for (const p of m.primitives ?? []) {
+        if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined) continue;
+        const P = readAccessor(g, p.attributes.POSITION).data, I = p.indices !== undefined ? readAccessor(g, p.indices).data : Float64Array.from({ length: P.length / 3 }, (_, i) => i);
+        for (let t = 0; t + 2 < I.length; t += 3) {
+            const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+            if ((P[a + 1] + P[b + 1] + P[c + 1]) / 3 > yTop) continue;
+            const e1 = [P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2]], e2 = [P[c] - P[a], P[c + 1] - P[a + 1], P[c + 2] - P[a + 2]];
+            const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]], l = Math.hypot(n[0], n[1], n[2]);
+            if (l > 0 && Math.abs(n[1]) / l < 0.5) area += l / 2;
+        }
+    }
+    return area;
 }
 
 /**

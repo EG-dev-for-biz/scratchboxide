@@ -14,8 +14,8 @@
  * and a 6x finer base colour that follows the fine pattern far better than the tile photo did, matched to the tile photo's
  * exposure and joined to it at the top; the part above keeps the facade's photo. The labels name the pano and its date.
  * A photo whose pose is off by 3 m is refused by its structure, one with a nominal pose is never used, the texels a bus
- * hides come from the photo's obstruction-free copy (generated), and a second run reads the band back from the store
- * with no image asked.
+ * hides come from the photo's obstruction-free copy (generated), a photo whose exposure cannot be matched is refused,
+ * and a second run reads the band back from the store with no image asked.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -199,6 +199,12 @@ describe('street band: a facade textured from a registered photo', () => {
         const px = Math.floor(((7 / WALL_W - b.entry.uvRect[0]) / (b.entry.uvRect[2] - b.entry.uvRect[0])) * L.width), py = Math.floor(((1 - 1.5 / WALL_H - b.entry.uvRect[1]) / (b.entry.uvRect[3] - b.entry.uvRect[1])) * L.height);
         expect(L.rgba[(py * L.width + px) * 4 + 1]).toBe(3);
         expect(b.entry.shares.generated).toBeGreaterThan(0);
+    }, 60_000);
+
+    it('refuses a photo whose exposure cannot be matched to the tile photo', async () => {
+        const { report } = await textureStreetBand(twin(), { groundY: 0, panoSet: ['dark'], views: async () => [photo(10, { panoId: 'dark', exposure: 0.2 })] });
+        expect(report.banded).toBe(0);
+        expect(report.perFacade[0].refused?.[0].why).toMatch(/exposure cannot be matched/);
     }, 60_000);
 
     it('leaves the twin unchanged when no photo is refined, and says why', async () => {
