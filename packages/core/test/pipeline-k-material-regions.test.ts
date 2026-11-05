@@ -147,6 +147,26 @@ describe('pipeline K material regions', () => {
         expect(shares.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 2);
         expect(plan.report.texels.perClass.reduce((a, b) => a + b, 0)).toBe(plan.report.texels.total);
     });
+    it('reads the materials inside the window openings apart from those outside, so a pane and a panel of one colour are two', () => {
+        // a 20 x 20 m wall of grey panels with grey glass of the same colour in 2 x 2 m windows (fitted), and light piers
+        const W = 200, H = 200, rgba = new Uint8Array(W * H * 4), windows: number[] = [];
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) rgba.set([...(x % 50 < 10 ? [200, 196, 188] : [92, 96, 100]), 255], (y * W + x) * 4);
+        for (let b = 0; b < 4; b++) for (let st = 0; st < 5; st++) windows.push((b * 50 + 20) / W, (st * 40 + 10) / H, (b * 50 + 40) / W, (st * 40 + 30) / H);
+        const extras = { sbFacadeLattice: { facadeId: 1, windows: { uv: windows } } };
+        const g = parseGlbBytes(scene([{ mesh: 'facade_lattice_1', corners: wall(0, 20, 20), uv: FULL_UV, material: 0, extras }], [{ width: W, height: H, rgba }]));
+        const images = imagesOf([{ width: W, height: H, rgba }]);
+        const classes = readRegionClasses(g.json, images)!;
+        expect(classes.filter(c => c.openings)).toHaveLength(2);
+        expect(classes.find(c => c.wall)!.openings).toBe(false);
+        const plan = planMaterialRegions(g, g.json, images, classes, sets(classes));
+        const orm = plan.materials[0].orm;
+        // the glass (inside a window) and the panel (outside) share a colour but not a material
+        const pane = at(orm, 30, 20), panel = at(orm, 45, 20);
+        expect(pane).not.toEqual(panel);
+        const opening = new Set(classes.filter(c => c.openings).map(c => ormOf(c).join()));
+        expect(opening.has(pane.slice(0, 3).join())).toBe(true);
+        expect(opening.has(panel.slice(0, 3).join())).toBe(false);
+    });
     it('draws a speckle under regionSmoothM as the surface around it; a blot a metre across keeps its own set', () => {
         const W = 100, H = 100, rgba = new Uint8Array(W * H * 4);
         for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {

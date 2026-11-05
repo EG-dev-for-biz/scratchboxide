@@ -28,10 +28,10 @@ export interface NamingContext { building?: string; brief?: string; between?: st
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 
-export function namingPrompt(classes: Array<Pick<RegionClass, 'meanLab' | 'share' | 'wall'>>, ctx: NamingContext = {}): string {
+export function namingPrompt(classes: Array<Pick<RegionClass, 'meanLab' | 'share' | 'wall'> & { openings?: boolean }>, ctx: NamingContext = {}): string {
     return [
         `Each row of this image is one appearance class of the outside of ${ctx.building ?? 'a building'}: patches of its photographed surfaces where that class covers most of the patch (straightened, de-lit photos).`,
-        ...classes.map((c, k) => `- row ${k + 1}: ${pct(c.share)} of the facades' texels, lightness ${Math.round(c.meanLab[0])} of 100${c.wall ? ', the lightest (the wall)' : ''}`),
+        ...classes.map((c, k) => `- row ${k + 1}: ${pct(c.share)} of the facades' texels, lightness ${Math.round(c.meanLab[0])} of 100${c.wall ? ', the lightest (the wall)' : ''}${c.openings ? ', inside the window openings' : ''}`),
         ...(ctx.brief ? [`The building, as an architect described it from its photos: ${ctx.brief}`] : []),
         ...(ctx.between?.length ? [`Between its windows a reader saw: ${ctx.between.join('; ')}.`] : []),
         'Name the material each row shows, in a few words, as a facade expert would (what it is and its finish), from the patches first and the description second. A row that is no one material (shadow, a mix, sky reflected) says so.',

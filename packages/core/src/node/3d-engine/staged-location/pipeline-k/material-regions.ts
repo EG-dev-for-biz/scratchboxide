@@ -15,11 +15,14 @@
  * for every surface (user decision, 2026-11-05): no glass layer, no metal gate, no plain finish.
  *
  *  1. Appearance classes: k-means in CIELAB on texels sampled from the rebuilt facades' photos, one set of classes for the
- *     whole building (every texel sampled: windows, spandrels and walls alike). The lightest class is labelled the wall.
+ *     whole building, read apart inside the window openings (the lattice's fitted windows: glass, frames, blinds) and
+ *     outside them (walls, spandrels, piers), so a glass and a panel of one colour are two materials. The lightest class
+ *     outside is labelled the wall.
  *  2. A library set per class (resolved by the caller, material-sets.ts: ranked by the class's colour and the finish the
  *     vision model read, then picked by its look among the nearest).
- *  3. Each texel's class: its nearest class in CIELAB, then the majority over a square of regionSmoothM about it (so a
- *     material reads as a region, never as texel speckle), whatever the window fit or the lattice found there.
+ *  3. Each texel's class: its nearest class in CIELAB among its region's (inside an opening or not; a scan piece is all
+ *     outside), then the majority over a square of regionSmoothM about it (so a material reads as a region, never as texel
+ *     speckle).
  *  4. Maps: on each rebuilt facade, each texel's class's set tiled at the set's real size, box-filtered to the facade's
  *     texel (so a tile never aliases): occlusion, roughness and metalness (ORM) and the normal, as the set has them; on
  *     scan pieces, whose atlases carry no metric frame for a tile, each texel's class's set's mean ORM.
@@ -38,8 +41,11 @@ import { bandResponses, TEXTURE_BANDS_M, type TextureEnergy } from './material-h
 export const MATERIAL_REGIONS_VERSION = 'material-regions/32';
 
 export const MATERIAL_REGIONS_PARAMS = {
-    /** Appearance classes, texels sampled per facade photo, k-means iterations, sampling seed. */
-    classes: 4, samplesPerPhoto: 40000, iterations: 40, seed: 7,
+    /**
+     * Appearance classes outside the window openings and inside them (the rebuilt facades' fitted windows), texels sampled
+     * per facade photo, k-means iterations, sampling seed.
+     */
+    classes: 4, openingClasses: 2, samplesPerPhoto: 40000, iterations: 40, seed: 7,
     /**
      * A texel takes the class most of the square within this of it holds (m; at least one texel): a material is a region of
      * the surface, under a mullion's width, so shading speckle and a photo seam never flip one texel's finish.
@@ -59,8 +65,10 @@ export interface RegionClass {
     meanLab: [number, number, number]; meanLinear: [number, number, number]; spreadLab: [number, number, number];
     /** Share of the sampled facade texels. */
     share: number;
-    /** The lightest class (a label only: every class is drawn with its own set wherever its texels are). */
+    /** The lightest class outside the openings (a label only: every class is drawn with its own set wherever its texels are). */
     wall: boolean;
+    /** Read from the texels inside the window openings, and drawn only there (else outside them). */
+    openings: boolean;
     /** The tile-only harvest (material-harvest.ts): the class's texture energy on the facade photos, and on how many facades it holds at least 5%. Photo-inferred. */
     texture?: TextureEnergy; facades?: number;
 }
@@ -79,12 +87,12 @@ export interface RegionSet {
     /** The pick by appearance (material-choice.ts): the candidates shown, whether the look or the ranking chose, what the chooser saw and why the ranking's nearest was kept; `reused`: the pick kept for an earlier class shown the same candidates, its colour and how far this class's lies from it (CHOICE_REUSE), not asked again. */
     choice?: { candidates: string[]; by: 'appearance' | 'ranking'; seen?: string; conf?: number; reused?: { meanLab: [number, number, number]; colourUnits: number }; why?: string };
     /** The class's finish read by the vision model (material-finish.ts), or why there is none, and what the ranking ranked toward. Photo-inferred. */
-    finish?: { read?: { roughness: number; metalness: number; conf: number; seen?: string }; why?: string; roughness: number; metallic: number; /** The finish the set's maps were drawn at (material-finish.ts finishMaps), when the reading was confident. */ drawn?: { roughness: number; metallic: number; relief: number }; label: 'photo-inferred' };
+    finish?: { read?: { roughness: number; metalness: number; conf: number; seen?: string }; why?: string; roughness: number; metallic: number; /** The finish and grain the set's maps were drawn at (material-finish.ts finishMaps), when either changed them. */ drawn?: { roughness: number; metallic: number; relief: number; grain: number }; label: 'photo-inferred' };
 }
 
 export interface MaterialRegionsReport {
     version: string;
-    classes: Array<Pick<RegionClass, 'index' | 'meanLab' | 'share' | 'wall' | 'texture' | 'facades'> & { set: string; distance: number; harvest?: RegionSet['harvest']; choice?: RegionSet['choice']; finish?: RegionSet['finish'] }>;
+    classes: Array<Pick<RegionClass, 'index' | 'meanLab' | 'share' | 'wall' | 'openings' | 'texture' | 'facades'> & { set: string; distance: number; harvest?: RegionSet['harvest']; choice?: RegionSet['choice']; finish?: RegionSet['finish'] }>;
     /** The rebuilt facades: each one's texel and the share of its texels each class (by index) holds. */
     facades: { total: number; perFacade: Array<{ mesh: string; texelM: number; classShares: number[] }> };
     scanPieces: { total: number };
@@ -169,32 +177,43 @@ function photoMaterials(json: any): { rebuilt: Map<number, string>; other: Set<n
     return { rebuilt, other };
 }
 
-/**
- * The building's appearance classes, from its rebuilt facades' photos (image index -> photo); undefined when it has no
- * rebuilt facade (nothing gives the classes a metric photo to come from).
- */
-export function readRegionClasses(json: any, images: Map<number, RgbaImage8>, P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS, harvest?: { g: ParsedGlb }): RegionClass[] | undefined {
-    const { rebuilt } = photoMaterials(json);
-    const rnd = sampler(P.seed), X: number[] = [];
-    for (const mi of rebuilt.keys()) {
-        const img = images.get(photoOf(json, mi)!.image);
-        if (!img) continue;
-        const N = img.width * img.height, take = Math.min(N, P.samplesPerPhoto);
-        for (let s = 0; s < take; s++) {
-            const q = Math.floor(rnd() * N), p = q * 4;
-            if (!img.rgba[p + 3]) continue;
-            X.push(...labOf(img.rgba[p], img.rgba[p + 1], img.rgba[p + 2]));
-        }
+/** A rebuilt facade's fitted windows (window-fit.ts, as facade-lattice.ts wrote them: sbFacadeLattice.windows.uv, u0 v0 u1 v1 each). */
+function fittedWindows(json: any, meshName: string): number[] | undefined {
+    const mi = (json.meshes ?? []).findIndex((m: any) => m.name === meshName);
+    const uv = (json.nodes ?? []).find((n: any) => n.mesh === mi && n.extras?.sbFacadeLattice?.windows)?.extras.sbFacadeLattice.windows.uv;
+    return Array.isArray(uv) && uv.length % 4 === 0 && uv.length ? uv : undefined;
+}
+
+/** The openings' texels of a photo (1 inside a rect, u0 v0 u1 v1 each: floor at the start, ceil at the end); none without rects. */
+export function openingMask(rects: number[] | undefined, W: number, H: number): Uint8Array | undefined {
+    if (!rects?.length) return undefined;
+    const m = new Uint8Array(W * H);
+    for (let k = 0; k + 3 < rects.length; k += 4) {
+        const x0 = Math.max(0, Math.floor(rects[k] * W)), y0 = Math.max(0, Math.floor(rects[k + 1] * H)), x1 = Math.min(W, Math.ceil(rects[k + 2] * W)), y1 = Math.min(H, Math.ceil(rects[k + 3] * H));
+        for (let y = y0; y < y1; y++) m.fill(1, y * W + x0, y * W + x1);
     }
-    // the harvest weighs lightness at half: one material lit two ways, or split by a photo seam, stays one class
-    const wL = harvest ? 0.5 : 1;
-    const n = X.length / 3, K = P.classes;
-    if (n < K * 10) return undefined;
+    return m;
+}
+
+/** A material's photo's openings mask (rebuilt facades only; a scan piece's atlas has none). */
+function maskOf(json: any, mesh: string | undefined, img: RgbaImage8): Uint8Array | undefined {
+    return mesh ? openingMask(fittedWindows(json, mesh), img.width, img.height) : undefined;
+}
+
+/** Each region's class indices, outside (0) and inside (1) the openings; a region with none takes every class. */
+export function regionCandidates(classes: Array<Pick<RegionClass, 'openings'>>): [number[], number[]] {
+    const all = classes.map((_, k) => k), out = all.filter(k => !classes[k].openings), inn = all.filter(k => classes[k].openings);
+    return [out.length ? out : all, inn.length ? inn : all];
+}
+
+/** The lightness-seeded CIELAB k-means of samples X (L a b each): the centres and each sample's centre. */
+function kMeansLab(X: number[], K: number, iterations: number, wL: number): { C: number[][]; lab: Int32Array } {
+    const n = X.length / 3;
     // seeds spread over lightness, so the classes come out ordered and the result does not depend on a draw
     const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => X[a * 3] - X[b * 3]);
     let C = Array.from({ length: K }, (_, k) => { const i = order[Math.floor(((k + 0.5) / K) * n)]; return [X[i * 3], X[i * 3 + 1], X[i * 3 + 2]]; });
     const lab = new Int32Array(n);
-    for (let it = 0; it < P.iterations; it++) {
+    for (let it = 0; it < iterations; it++) {
         const sum = Array.from({ length: K }, () => [0, 0, 0, 0]);
         for (let i = 0; i < n; i++) {
             let best = 0, bd = Infinity;
@@ -203,12 +222,15 @@ export function readRegionClasses(json: any, images: Map<number, RgbaImage8>, P:
         }
         C = C.map((c, k) => sum[k][3] ? [sum[k][0] / sum[k][3], sum[k][1] / sum[k][3], sum[k][2] / sum[k][3]] : c);
     }
+    return { C, lab };
+}
+
+/** The classes of one region from its k-means' centres, member counts and squared deviations, ordered by lightness, indexed from `first`. */
+export function formatRegionClasses(C: ArrayLike<number>[], count: ArrayLike<number>, sd: ArrayLike<number>[], total: number, first: number, openings: boolean): RegionClass[] {
     const idx = C.map((_, k) => k).sort((a, b) => C[a][0] - C[b][0]);
-    const classes: RegionClass[] = idx.map((k, rank) => {
-        let cnt = 0;
-        const sd = [0, 0, 0];
-        for (let i = 0; i < n; i++) if (lab[i] === k) { cnt++; for (let c = 0; c < 3; c++) sd[c] += (X[i * 3 + c] - C[k][c]) ** 2; }
-        const [L, a, b] = C[k];
+    return idx.map((k, rank) => {
+        const cnt = count[k];
+        const [L, a, b] = [C[k][0], C[k][1], C[k][2]];
         // back to linear sRGB for the library query (CIELAB D65 inverted)
         const fy = (L + 16) / 116, fx = fy + a / 500, fz = fy - b / 200;
         const inv = (t: number) => (t ** 3 > 0.008856 ? t ** 3 : (t - 16 / 116) / 7.787);
@@ -216,11 +238,44 @@ export function readRegionClasses(json: any, images: Map<number, RgbaImage8>, P:
         const lin: [number, number, number] = [3.2406 * Xw - 1.5372 * Yw - 0.4986 * Zw, -0.9689 * Xw + 1.8758 * Yw + 0.0415 * Zw, 0.0557 * Xw - 0.204 * Yw + 1.057 * Zw].map(v => Math.max(0, Math.min(1, v))) as [number, number, number];
         const r2 = (v: number) => Math.round(v * 100) / 100;
         return {
-            index: rank, meanLab: [r2(L), r2(a), r2(b)], meanLinear: lin.map(r2) as [number, number, number],
-            spreadLab: sd.map(v => r2(Math.sqrt(v / Math.max(1, cnt)))) as [number, number, number],
-            share: Math.round((cnt / n) * 1000) / 1000, wall: rank === K - 1
+            index: first + rank, meanLab: [r2(L), r2(a), r2(b)], meanLinear: lin.map(r2) as [number, number, number],
+            spreadLab: [0, 1, 2].map(c => r2(Math.sqrt(sd[k][c] / Math.max(1, cnt)))) as [number, number, number],
+            share: Math.round((cnt / total) * 1000) / 1000, wall: !openings && rank === idx.length - 1, openings
         };
     });
+}
+
+/**
+ * The building's appearance classes, from its rebuilt facades' photos (image index -> photo): the classes outside the
+ * window openings first (index order), then those inside them; undefined when it has no rebuilt facade (nothing gives the
+ * classes a metric photo to come from). The openings get classes of their own only with at least ten samples a class.
+ */
+export function readRegionClasses(json: any, images: Map<number, RgbaImage8>, P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS, harvest?: { g: ParsedGlb }): RegionClass[] | undefined {
+    const { rebuilt } = photoMaterials(json);
+    const rnd = sampler(P.seed), X: [number[], number[]] = [[], []];
+    for (const [mi, mesh] of rebuilt) {
+        const img = images.get(photoOf(json, mi)!.image);
+        if (!img) continue;
+        const N = img.width * img.height, take = Math.min(N, P.samplesPerPhoto), open = maskOf(json, mesh, img);
+        for (let s = 0; s < take; s++) {
+            const q = Math.floor(rnd() * N), p = q * 4;
+            if (!img.rgba[p + 3]) continue;
+            X[open?.[q] ? 1 : 0].push(...labOf(img.rgba[p], img.rgba[p + 1], img.rgba[p + 2]));
+        }
+    }
+    // the harvest weighs lightness at half: one material lit two ways, or split by a photo seam, stays one class
+    const wL = harvest ? 0.5 : 1;
+    const n0 = X[0].length / 3, n1 = X[1].length / 3, total = n0 + n1;
+    if (n0 < P.classes * 10) return undefined;
+    const classes: RegionClass[] = [];
+    for (const [r, K] of [[0, P.classes], [1, P.openingClasses]] as const) {
+        const n = X[r].length / 3;
+        if (!K || n < K * 10) continue;
+        const { C, lab } = kMeansLab(X[r], K, P.iterations, wL);
+        const count = new Array<number>(K).fill(0), sd = Array.from({ length: K }, () => [0, 0, 0]);
+        for (let k = 0; k < K; k++) for (let i = 0; i < n; i++) if (lab[i] === k) { count[k]++; for (let c = 0; c < 3; c++) sd[k][c] += (X[r][i * 3 + c] - C[k][c]) ** 2; }
+        classes.push(...formatRegionClasses(C, count, sd, total, classes.length, r === 1));
+    }
     if (harvest) harvestTextures(harvest.g, json, images, rebuilt, classes, wL);
     return classes;
 }
@@ -233,13 +288,13 @@ export function readRegionClasses(json: any, images: Map<number, RgbaImage8>, P:
 function harvestTextures(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, rebuilt: Map<number, string>, classes: RegionClass[], wL: number): void {
     const K = classes.length, B = TEXTURE_BANDS_M.length;
     const sq = Array.from({ length: K }, () => new Float64Array(B)), lum = Array.from({ length: K }, () => new Float64Array(B)), cnt = Array.from({ length: K }, () => new Float64Array(B));
-    const texelSum = new Float64Array(K), texelN = new Float64Array(K), facades = new Int32Array(K);
-    for (const [mi] of rebuilt) {
+    const texelSum = new Float64Array(K), texelN = new Float64Array(K), facades = new Int32Array(K), cand = regionCandidates(classes);
+    for (const [mi, mesh] of rebuilt) {
         const img = images.get(photoOf(json, mi)!.image);
         if (!img) continue;
         const texelM = texelMetres(g, json, mi, img);
         if (!(texelM > 0)) continue;
-        const N = img.width * img.height, valid = new Uint8Array(N), L = new Float32Array(N), cls = new Int8Array(N).fill(-1);
+        const N = img.width * img.height, valid = new Uint8Array(N), L = new Float32Array(N), cls = new Int8Array(N).fill(-1), open = maskOf(json, mesh, img);
         const share = new Float64Array(K);
         for (let i = 0; i < N; i++) {
             const p = i * 4;
@@ -248,7 +303,7 @@ function harvestTextures(g: ParsedGlb, json: any, images: Map<number, RgbaImage8
             L[i] = lumaOf(img.rgba, p);
             const lab = labOf(img.rgba[p], img.rgba[p + 1], img.rgba[p + 2]);
             let best = 0, bd = Infinity;
-            for (let k = 0; k < K; k++) { const c = classes[k].meanLab, d = (wL * (lab[0] - c[0])) ** 2 + (lab[1] - c[1]) ** 2 + (lab[2] - c[2]) ** 2; if (d < bd) { bd = d; best = k; } }
+            for (const k of cand[open?.[i] ? 1 : 0]) { const c = classes[k].meanLab, d = (wL * (lab[0] - c[0])) ** 2 + (lab[1] - c[1]) ** 2 + (lab[2] - c[2]) ** 2; if (d < bd) { bd = d; best = k; } }
             cls[i] = best; share[best]++;
         }
         const total = share.reduce((a, b) => a + b, 0);
@@ -295,21 +350,23 @@ const blank = (W: number, H: number): RgbaImage8 => ({ width: W, height: H, rgba
 
 
 /**
- * Each texel's class (see the file comment): its nearest class in CIELAB (an empty texel none), then the class most of the
- * (2r+1)-square about it holds, the texel's own on a tie, else the lowest index; a square of empty texels takes the last
- * (the lightest). Counted one class at a time with running sums, so memory stays a few bytes a texel.
+ * Each texel's class (see the file comment): its nearest class in CIELAB among its region's (`open`: 1 inside an opening;
+ * an empty texel none), then the class most of the (2r+1)-square about it holds, the texel's own on a tie, else the lowest
+ * index; a square of empty texels takes the wall. Counted one class at a time with running sums, so memory stays a few
+ * bytes a texel.
  */
-export function regionClassMap(img: RgbaImage8, classes: RegionClass[], r: number): Uint8Array {
-    const { width: W, height: H, rgba } = img, K = classes.length, N = W * H, NONE = 255;
+export function regionClassMap(img: RgbaImage8, classes: RegionClass[], r: number, open?: Uint8Array): Uint8Array {
+    const { width: W, height: H, rgba } = img, K = classes.length, N = W * H, NONE = 255, cand = regionCandidates(classes);
+    const wall = Math.max(0, classes.findIndex(c => c.wall));
     const raw = new Uint8Array(N);
     for (let k = 0; k < N; k++) {
         if (!rgba[k * 4 + 3]) { raw[k] = NONE; continue; }
         const [L, a, b] = labOf(rgba[k * 4], rgba[k * 4 + 1], rgba[k * 4 + 2]);
         let best = 0, bd = Infinity;
-        for (let c = 0; c < K; c++) { const m = classes[c].meanLab, d = (L - m[0]) ** 2 + (a - m[1]) ** 2 + (b - m[2]) ** 2; if (d < bd) { bd = d; best = c; } }
+        for (const c of cand[open?.[k] ? 1 : 0]) { const m = classes[c].meanLab, d = (L - m[0]) ** 2 + (a - m[1]) ** 2 + (b - m[2]) ** 2; if (d < bd) { bd = d; best = c; } }
         raw[k] = best;
     }
-    const best = new Uint8Array(N).fill(K - 1), bestN = new Uint16Array(N), rawN = new Uint16Array(N), row = new Uint16Array(N), cnt = new Uint16Array(N);
+    const best = new Uint8Array(N).fill(wall), bestN = new Uint16Array(N), rawN = new Uint16Array(N), row = new Uint16Array(N), cnt = new Uint16Array(N);
     for (let c = 0; c < K; c++) {
         // running counts of class c along each row, then down each column, over the square's half-side r
         for (let y = 0; y < H; y++) {
@@ -383,7 +440,7 @@ export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext):
     const { width: W, height: H } = img, N = W * H;
     const texelM = texelMetres(g, json, mi, img);
     if (job.kind === 'rebuilt' && !(texelM > 0)) return piece;
-    const cls = regionClassMap(img, classes, regionRadius(texelM, P));
+    const cls = regionClassMap(img, classes, regionRadius(texelM, P), job.kind === 'rebuilt' ? maskOf(json, job.mesh, img) : undefined);
     for (let k = 0; k < N; k++) piece.classTexels[cls[k]]++;
     const orm = blank(W, H);
     if (job.kind === 'rebuilt') {
@@ -418,7 +475,7 @@ export function mergeMaterialPlan(json: any, classes: RegionClass[], sets: Regio
     const { rebuilt, other } = photoMaterials(json);
     const report: MaterialRegionsReport = {
         version: MATERIAL_REGIONS_VERSION,
-        classes: classes.map((c, k) => ({ index: c.index, meanLab: c.meanLab, share: c.share, wall: c.wall, set: sets[k].name, distance: Math.round(sets[k].distance * 100) / 100, ...(sets[k].harvest ? { harvest: sets[k].harvest } : {}), ...(sets[k].choice ? { choice: sets[k].choice } : {}), ...(sets[k].finish ? { finish: sets[k].finish } : {}), ...(c.texture ? { texture: c.texture, facades: c.facades } : {}) })),
+        classes: classes.map((c, k) => ({ index: c.index, meanLab: c.meanLab, share: c.share, wall: c.wall, openings: c.openings, set: sets[k].name, distance: Math.round(sets[k].distance * 100) / 100, ...(sets[k].harvest ? { harvest: sets[k].harvest } : {}), ...(sets[k].choice ? { choice: sets[k].choice } : {}), ...(sets[k].finish ? { finish: sets[k].finish } : {}), ...(c.texture ? { texture: c.texture, facades: c.facades } : {}) })),
         facades: { total: rebuilt.size, perFacade: [] }, scanPieces: { total: other.size }, texels: { total: 0, perClass: classes.map(() => 0) }, ms
     };
     const planned: PlannedMaterial[] = [];
@@ -486,35 +543,37 @@ export function classSwatchSheet(json: any, images: Map<number, RgbaImage8>, cla
     const patch = opts.patch ?? 24, per = opts.perClass ?? 6, zoom = opts.zoom ?? 4, gap = 8;
     const { rebuilt } = photoMaterials(json);
     const texel = new Map<RgbaImage8, number>();
-    const photos = [...rebuilt.keys()].map(mi => { const img = images.get(photoOf(json, mi)!.image); if (img && opts.g && !texel.has(img)) texel.set(img, texelMetres(opts.g, json, mi, img)); return img; }).filter((x): x is RgbaImage8 => !!x && x.width > patch && x.height > patch);
+    const photos = [...rebuilt].map(([mi, mesh]) => { const img = images.get(photoOf(json, mi)!.image); if (img && opts.g && !texel.has(img)) texel.set(img, texelMetres(opts.g, json, mi, img)); return img ? { img, open: maskOf(json, mesh, img) } : undefined; }).filter((x): x is { img: RgbaImage8; open: Uint8Array | undefined } => !!x && x.img.width > patch && x.img.height > patch);
     if (!photos.length || !classes.length) return undefined;
-    const nearest = (r: number, g: number, b: number) => { const L = labOf(r, g, b); let best = 0, bd = Infinity; classes.forEach((c, k) => { const d = (L[0] - c.meanLab[0]) ** 2 + (L[1] - c.meanLab[1]) ** 2 + (L[2] - c.meanLab[2]) ** 2; if (d < bd) { bd = d; best = k; } }); return best; };
-    const found: Array<Array<{ img: RgbaImage8; x: number; y: number }>> = classes.map(() => []);
+    const cand = regionCandidates(classes);
+    const nearest = (r: number, g: number, b: number, inside: boolean) => { const L = labOf(r, g, b); let best = 0, bd = Infinity; for (const k of cand[inside ? 1 : 0]) { const c = classes[k].meanLab, d = (L[0] - c[0]) ** 2 + (L[1] - c[1]) ** 2 + (L[2] - c[2]) ** 2; if (d < bd) { bd = d; best = k; } } return best; };
+    const found: Array<Array<{ img: RgbaImage8; x: number; y: number; size: number }>> = classes.map(() => []);
     const rnd = sampler(opts.seed ?? 11);
-    for (let tries = 0; tries < 4000 && found.some(f => f.length < per); tries++) {
-        const img = photos[tries % photos.length], x = Math.floor(rnd() * (img.width - patch)), y = Math.floor(rnd() * (img.height - patch));
+    // patches of the full size and of half of it, in turn: an opening is often narrower than a full patch
+    for (let tries = 0; tries < 6000 && found.some(f => f.length < per); tries++) {
+        const { img, open } = photos[tries % photos.length], size = tries % 2 ? patch >> 1 : patch, x = Math.floor(rnd() * (img.width - size)), y = Math.floor(rnd() * (img.height - size));
         const count = new Array<number>(classes.length).fill(0);
         let covered = 0;
-        for (let yy = y; yy < y + patch; yy += 2) for (let xx = x; xx < x + patch; xx += 2) { const q = (yy * img.width + xx) * 4; if (!img.rgba[q + 3]) continue; covered++; count[nearest(img.rgba[q], img.rgba[q + 1], img.rgba[q + 2])]++; }
-        if (covered < 0.9 * (patch / 2) ** 2) continue;
+        for (let yy = y; yy < y + size; yy += 2) for (let xx = x; xx < x + size; xx += 2) { const t = yy * img.width + xx, q = t * 4; if (!img.rgba[q + 3]) continue; covered++; count[nearest(img.rgba[q], img.rgba[q + 1], img.rgba[q + 2], !!open?.[t])]++; }
+        if (covered < 0.9 * (size / 2) ** 2) continue;
         const k = count.indexOf(Math.max(...count));
-        if (count[k] >= 0.7 * covered && found[k].length < per) found[k].push({ img, x, y });
+        if (count[k] >= 0.7 * covered && found[k].length < per) found[k].push({ img, x, y, size });
     }
     const cell = patch * zoom, W = per * (cell + gap) + gap, H = classes.length * (cell + gap) + gap, out = new Uint8Array(W * H * 4).fill(255);
     found.forEach((row, r) => row.forEach((p, c) => {
         for (let y = 0; y < cell; y++) for (let x = 0; x < cell; x++) {
-            const sq = ((p.y + Math.floor(y / zoom)) * p.img.width + p.x + Math.floor(x / zoom)) * 4, dq = ((gap + r * (cell + gap) + y) * W + gap + c * (cell + gap) + x) * 4;
+            const sq = ((p.y + Math.floor((y * p.size) / cell)) * p.img.width + p.x + Math.floor((x * p.size) / cell)) * 4, dq = ((gap + r * (cell + gap) + y) * W + gap + c * (cell + gap) + x) * 4;
             out[dq] = p.img.rgba[sq]; out[dq + 1] = p.img.rgba[sq + 1]; out[dq + 2] = p.img.rgba[sq + 2]; out[dq + 3] = 255;
         }
     }));
-    const spans = found.flat().map(p => patch * (texel.get(p.img) ?? 0)).filter(v => v > 0).sort((a, b) => a - b);
+    const spans = found.flat().map(p => p.size * (texel.get(p.img) ?? 0)).filter(v => v > 0).sort((a, b) => a - b);
     return { width: W, height: H, rgba: out, ...(spans.length ? { spanM: spans[spans.length >> 1] } : {}) };
 }
 
 /** One line for the build's notes. */
 export function describeMaterialRegions(r: MaterialRegionsReport): string {
     const pct = (a: number) => (r.texels.total ? `${Math.round((100 * a) / r.texels.total)}%` : '0%');
-    return `material regions: ${r.classes.length} appearance classes (${r.classes.map((c, k) => `${c.wall ? 'lightest' : 'L ' + Math.round(c.meanLab[0])} -> ${c.set}, ${pct(r.texels.perClass[k] ?? 0)} of texels`).join('; ')}); ` +
+    return `material regions: ${r.classes.length} appearance classes (${r.classes.map((c, k) => `${c.openings ? 'in openings ' : ''}${c.wall ? 'lightest' : 'L ' + Math.round(c.meanLab[0])} -> ${c.set}, ${pct(r.texels.perClass[k] ?? 0)} of texels`).join('; ')}); ` +
         `every texel its class's set: ${r.facades.total} rebuilt facades tiled at the sets' real size, ${r.scanPieces.total} scan pieces the sets' mean finish; ` +
         `occlusion, roughness, metalness and normal generated from the library, colour the photo (${r.ms} ms)`;
 }

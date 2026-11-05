@@ -17,8 +17,9 @@
  * toward the matte dielectric finish (REGION_FINISH). Every class takes the set the ranking and the pick by appearance
  * choose, drawn with all of its maps (user decision, 2026-11-05: one material path for every surface; no plain finish, no
  * metal gate, no glass layer); a confident reading also sets the finish those maps are drawn at (finishMaps): the set's
- * roughness and metalness scaled to the read values, its grain kept, and its normal relief in proportion to the read
- * roughness, so a surface read smooth and reflective (window glass) is drawn smooth and nearly flat (user, 2026-11-05).
+ * roughness and metalness scaled to the read values, its grain kept, and its normal relief by the square of the read
+ * roughness (reliefFullAt), so a surface read smooth and reflective (window glass) is drawn smooth and nearly flat (user, 2026-11-05);
+ * and the set's grain is drawn only as far as the pick by appearance confirmed the set (grainFullAtConf).
  * Labelled photo-inferred.
  */
 
@@ -30,20 +31,28 @@ export const FINISH_READ = {
     /** A reading's roughness and metalness rank the class's sets, and set its drawn finish, at this confidence (0..100) and above. */
     minConf: 50,
     /**
-     * The set's normal relief drawn in full at this read roughness and above, and scaled down in proportion below it: a
-     * surface read smooth (window glass about 0.05, polished stone 0.3) is drawn nearly flat, whatever grain its set has.
+     * The set's normal relief drawn in full at this read roughness and above, and by the square of the read roughness over
+     * it below: a surface read smooth (window glass about 0.05-0.15, under 10%; polished stone 0.3, 36%) is drawn nearly
+     * flat, whatever grain its set has.
      */
-    reliefFullAt: 0.5
+    reliefFullAt: 0.5,
+    /**
+     * The set's grain (its roughness and metalness variation and its normal relief) drawn in full when the pick by
+     * appearance confirmed the set at this confidence (0..100) and above, in proportion below it, and not at all when it
+     * confirmed none: a set chosen by numbers alone is often another kind of surface (a fence's pattern on Penn 2's
+     * spandrels), so only its finish is drawn, not its pattern. With no pick by appearance in the build, in full.
+     */
+    grainFullAtConf: 70
 } as const;
 
 export interface ClassFinish { roughness: number; metalness: number; conf: number; seen?: string }
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 
-export function finishPrompt(classes: Array<Pick<RegionClass, 'meanLab' | 'share' | 'wall'>>, ctx: { building?: string; brief?: string } = {}): string {
+export function finishPrompt(classes: Array<Pick<RegionClass, 'meanLab' | 'share' | 'wall'> & { openings?: boolean }>, ctx: { building?: string; brief?: string } = {}): string {
     return [
         `Each row of this image is one appearance class of the outside of ${ctx.building ?? 'a building'}: patches of its photographed surfaces where that class covers most of the patch (straightened, de-lit photos).`,
-        ...classes.map((c, k) => `- row ${k + 1}: ${pct(c.share)} of the facades' texels, lightness ${Math.round(c.meanLab[0])} of 100${c.wall ? ', the lightest (the wall)' : ''}`),
+        ...classes.map((c, k) => `- row ${k + 1}: ${pct(c.share)} of the facades' texels, lightness ${Math.round(c.meanLab[0])} of 100${c.wall ? ', the lightest (the wall)' : ''}${c.openings ? ', inside the window openings' : ''}`),
         ...(ctx.brief ? [`The building, as an architect described it from its photos: ${ctx.brief}`] : []),
         'For each row, estimate the surface finish of the real material it shows, as a facade expert would from the patches:',
         '- "roughness": 0 a mirror, 1 fully matte (polished stone about 0.3, glass 0.05, painted metal panel 0.4, concrete or brick about 0.85);',
@@ -77,32 +86,43 @@ export function finishTarget(f: ClassFinish | undefined, matte: { roughness: num
     return f && f.conf >= R.minConf ? { roughness: f.roughness, metallic: f.metalness } : { roughness: matte.roughness, metallic: matte.metallic };
 }
 
-/** What finishMaps drew: the mean roughness and metalness and the share of the set's normal relief kept. */
-export interface DrawnFinish { roughness: number; metallic: number; relief: number }
+/** What finishMaps drew: the mean roughness and metalness, the share of the set's normal relief kept, and of its grain. */
+export interface DrawnFinish { roughness: number; metallic: number; relief: number; grain: number }
+
+/** The share of a set's grain to draw from the pick by appearance (FINISH_READ.grainFullAtConf): undefined pick = no chooser. */
+export function grainOf(pick: { by: 'appearance' | 'ranking'; conf?: number } | undefined, R = FINISH_READ): number {
+    if (!pick) return 1;
+    return pick.by === 'appearance' ? Math.max(0, Math.min(1, (pick.conf ?? R.grainFullAtConf) / R.grainFullAtConf)) : 0;
+}
 
 /**
- * A class's set maps drawn at its read finish (see the file comment): with no confident reading, the set's maps as they
- * are; else each texel's roughness (ORM green) and metalness (blue) scaled so their means are the read values (a set with
- * no metalness takes the read value even), and the tangent-space normal tilted toward flat by the read roughness over
- * reliefFullAt. Occlusion (red) is kept. Returns new images; the inputs are not changed.
+ * A class's set maps drawn at its read finish and grain (see the file comment). Each texel's roughness (ORM green) and
+ * metalness (blue) is its mean plus `grain` of its deviation from it, the mean being the read value with a confident
+ * reading (a set with no metalness takes the read value even) and the set's own without; the tangent-space normal is
+ * tilted toward flat by `grain` and, with a confident reading, by the square of the read roughness over reliefFullAt. Occlusion (red)
+ * is kept. Returns new images (the inputs when nothing changes).
  */
-export function finishMaps(orm: { width: number; height: number; rgba: Uint8Array }, normal: { width: number; height: number; rgba: Uint8Array }, f: ClassFinish | undefined, R = FINISH_READ): { orm: typeof orm; normal: typeof normal; drawn?: DrawnFinish } {
-    if (!f || f.conf < R.minConf) return { orm, normal };
+export function finishMaps(orm: { width: number; height: number; rgba: Uint8Array }, normal: { width: number; height: number; rgba: Uint8Array }, f: ClassFinish | undefined, grain = 1, R = FINISH_READ): { orm: typeof orm; normal: typeof normal; drawn?: DrawnFinish } {
+    const sure = !!f && f.conf >= R.minConf;
+    if (!sure && grain >= 1) return { orm, normal };
     const n = orm.width * orm.height;
     let g = 0, b = 0;
     for (let k = 0; k < n; k++) { g += orm.rgba[k * 4 + 1]; b += orm.rgba[k * 4 + 2]; }
     const gMean = g / n / 255, bMean = b / n / 255;
+    const rTo = sure ? f!.roughness : gMean, mTo = sure ? f!.metalness : bMean;
     const o = orm.rgba.slice(), clamp8 = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+    // the deviation scaled with the mean (a set's grain is proportional to its level), then by the grain to draw
+    const remap = (v: number, mean: number, to: number) => (mean > 0 ? (to + grain * (v / 255 - mean) * (to / mean)) * 255 : to * 255);
     for (let k = 0; k < n; k++) {
-        o[k * 4 + 1] = clamp8(gMean > 0 ? orm.rgba[k * 4 + 1] * (f.roughness / gMean) : f.roughness * 255);
-        o[k * 4 + 2] = clamp8(bMean > 0 ? orm.rgba[k * 4 + 2] * (f.metalness / bMean) : f.metalness * 255);
+        o[k * 4 + 1] = clamp8(remap(orm.rgba[k * 4 + 1], gMean, rTo));
+        o[k * 4 + 2] = clamp8(remap(orm.rgba[k * 4 + 2], bMean, mTo));
     }
-    const relief = Math.max(0, Math.min(1, f.roughness / R.reliefFullAt)), nn = normal.rgba.slice();
+    const relief = Math.max(0, Math.min(1, grain * (sure ? Math.min(1, (f!.roughness / R.reliefFullAt) ** 2) : 1))), nn = normal.rgba.slice();
     for (let k = 0; k < normal.width * normal.height; k++) {
         const x = (normal.rgba[k * 4] / 255) * 2 - 1, y = (normal.rgba[k * 4 + 1] / 255) * 2 - 1, z = (normal.rgba[k * 4 + 2] / 255) * 2 - 1;
         const tx = x * relief, ty = y * relief, tz = z * relief + (1 - relief), l = Math.hypot(tx, ty, tz) || 1;
         nn[k * 4] = clamp8((tx / l * 0.5 + 0.5) * 255); nn[k * 4 + 1] = clamp8((ty / l * 0.5 + 0.5) * 255); nn[k * 4 + 2] = clamp8((tz / l * 0.5 + 0.5) * 255);
     }
     const r2 = (v: number) => Math.round(v * 100) / 100;
-    return { orm: { ...orm, rgba: o }, normal: { ...normal, rgba: nn }, drawn: { roughness: r2(f.roughness), metallic: r2(f.metalness), relief: r2(relief) } };
+    return { orm: { ...orm, rgba: o }, normal: { ...normal, rgba: nn }, drawn: { roughness: r2(rTo), metallic: r2(mTo), relief: r2(relief), grain: r2(grain) } };
 }

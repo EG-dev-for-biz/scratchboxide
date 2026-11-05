@@ -80,8 +80,11 @@ function glbOf(prims: Prim[], imageCount: number): ParsedGlb {
 function scene(size: number, px: number, grid: number) {
     const m = size * px;
     const photos = [1, 2, 3, 4].map(s => facadePhoto(size, size, px, s));
+    // facade 1's fitted windows (sbFacadeLattice.windows.uv): its panes, so the classes are read inside and outside them
+    const windows: number[] = [];
+    for (let b = 0; b * 5 < m; b++) for (let st = 0; st * 3.5 < m; st++) for (const x0 of [1.9, 3.6]) windows.push((b * 5 + x0) / m, (st * 3.5 + 0.8) / m, Math.min(1, (b * 5 + x0 + 1) / m), Math.min(1, (st * 3.5 + 2.6) / m));
     const g = glbOf([
-        { name: 'facade_lattice_1', ...wallGrid(0, m, m, 0, 2), material: 0 },
+        { name: 'facade_lattice_1', ...wallGrid(0, m, m, 0, 2), material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: windows } } } },
         { name: 'facade_lattice_2', ...wallGrid(m + 5, m, m, 0, 2), material: 1 },
         { name: 'facade_lattice_3', ...wallGrid(2 * m + 10, m, m, 0, 2), material: 2 },
         { name: 'scan_piece', ...wallGrid(0, m, m, -0.3, grid), material: 3 }
@@ -135,7 +138,8 @@ describe('pipeline K material regions, native kernel', () => {
     it('reads the same appearance classes, with and without the tile-only harvest', async () => {
         const sc = scene(384, 0.06, 24);
         const ts = readRegionClasses(sc.json, sc.images)!;
-        expect(ts).toHaveLength(4);
+        // four classes outside the openings and two inside them
+        expect(ts.map(c => c.openings)).toEqual([false, false, false, false, true, true]);
         expect(await readRegionClassesNative(sc.json, sc.images)).toEqual(ts);
         const tsH = readRegionClasses(sc.json, sc.images, MATERIAL_REGIONS_PARAMS, { g: sc.g })!;
         expect(tsH.some(c => c.texture)).toBe(true);
@@ -155,8 +159,9 @@ describe('pipeline K material regions, native kernel', () => {
         for (const job of jobs) {
             const ts = planMaterialJob(job, ctx), native = await planMaterialJobNative(job, ctx);
             expectSamePiece(native, ts);
-            // the fixture reaches every class and the transparent texels (no photo: no vote)
-            expect(ts.classTexels.filter(n => n > 0).length).toBe(4);
+            // the facade with openings reaches the opening classes; the others and the scan piece only the outside ones
+            if (job.mesh === 'facade_lattice_1') expect(ts.classTexels.slice(4).every(n => n > 0)).toBe(true);
+            else expect(ts.classTexels.slice(4).every(n => n === 0)).toBe(true);
         }
         expectSamePlan(await planMaterialRegionsNative(sc.g, sc.json, sc.images, classes, st), planMaterialRegions(sc.g, sc.json, sc.images, classes, st));
         // a wider square (a finer texel's radius): the same majority

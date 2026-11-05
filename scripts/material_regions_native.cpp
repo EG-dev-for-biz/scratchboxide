@@ -17,19 +17,21 @@
  * Layout: little-endian, packed, no padding. u8/u32/i32/f32/f64 as named; an `image` is u32 width, u32 height,
  * u8 rgba[width * height * 4].
  *
- * Request header: u32 magic 0x524D4253 ("SBMR"), u32 version 3, u32 mode, u32 threads (0: every core).
+ * Request header: u32 magic 0x524D4253 ("SBMR"), u32 version 4, u32 mode, u32 threads (0: every core).
+ *  A `rects` is u32 count, f64 values[count] (u0 v0 u1 v1 each, in the photo's UVs): a photo's window openings.
  *  mode 0, the colour tables: nothing more.
- *  mode 1, appearance classes (readRegionClasses' k-means): u32 imageCount, image[imageCount]; u32 photoCount, u32
- *    image[photoCount]; then u32 samplesPerPhoto, u32 seed, u32 K, u32 iterations, f64 wL.
- *  mode 2, the harvest's texels: u32 imageCount, image[imageCount]; u32 K, f64 meanLab[K * 3], f64 wL; u32 photoCount,
- *    u32 image[photoCount].
- *  mode 3, planMaterialJob for a batch of jobs: u32 imageCount, image[imageCount]; u32 K, f64 meanLab[K * 3];
- *    per set (K): f64 realSizeX, f64 realSizeY, image normal, image orm; f64 setMeans[K * 3] (each set's mean ORM);
- *    u32 jobCount, per job: u32 kind (0 rebuilt facade, 1 scan piece), u32 image, f64 texelM, u32 radius.
+ *  mode 1, appearance classes (readRegionClasses' k-means): u32 imageCount, image[imageCount]; u32 photoCount, per photo
+ *    u32 image, rects openings; then u32 samplesPerPhoto, u32 seed, u32 K, u32 Kopen, u32 iterations, f64 wL.
+ *  mode 2, the harvest's texels: u32 imageCount, image[imageCount]; u32 K, f64 meanLab[K * 3], u8 openings[K], f64 wL;
+ *    u32 photoCount, per photo u32 image, rects openings.
+ *  mode 3, planMaterialJob for a batch of jobs: u32 imageCount, image[imageCount]; u32 K, f64 meanLab[K * 3],
+ *    u8 openings[K], u32 wall; per set (K): f64 realSizeX, f64 realSizeY, image normal, image orm; f64 setMeans[K * 3];
+ *    u32 jobCount, per job: u32 kind (0 rebuilt facade, 1 scan piece), u32 image, f64 texelM, u32 radius, rects openings.
  *
  * Result header: u32 magic, u32 version, u32 mode.
  *  mode 0: f32 srgb8ToLinear[256], f64 lab[32768 * 3] (labOf's buckets, key (r >> 3) << 10 | (g >> 3) << 5 | b >> 3).
- *  mode 1: u32 n (samples), u8 ok; when ok f64 C[K * 3], f64 count[K], f64 sd[K * 3] (centres by k-means index).
+ *  mode 1: per region (outside, then inside the openings): u32 n (samples), u8 ok; when ok f64 C[Kr * 3], f64 count[Kr],
+ *    f64 sd[Kr * 3] (centres by k-means index).
  *  mode 2: u32 photoCount, per photo u32 N, u8 valid[N], f32 L[N], i8 cls[N].
  *  mode 3: u32 jobCount, per job: u32 kind, u32 width, u32 height, f64 classTexels[K], u8 orm[w * h * 4], and for
  *    kind 0 u8 normal[w * h * 4].
@@ -52,7 +54,7 @@
 
 namespace mr = scratchbox::material_regions;
 
-static constexpr uint32_t MAGIC = 0x524D4253u, VERSION = 3;
+static constexpr uint32_t MAGIC = 0x524D4253u, VERSION = 4;
 
 struct Reader {
     std::vector<uint8_t> buf;
@@ -63,6 +65,7 @@ struct Reader {
     double f64() { return get<double>(); }
     uint8_t u8() { return get<uint8_t>(); }
     template <typename T> void array(std::vector<T>& out, size_t n) { need(n * sizeof(T)); out.resize(n); if (n) std::memcpy(out.data(), buf.data() + at, n * sizeof(T)); at += n * sizeof(T); }
+    std::vector<double> rects() { std::vector<double> r; array(r, u32()); return r; }
     mr::Image image() {
         mr::Image img;
         img.width = static_cast<int>(u32()); img.height = static_cast<int>(u32());
@@ -131,24 +134,26 @@ int main(int argc, char** argv) {
         } else if (mode == 1 || mode == 2) {
             const auto images = readImages(in);
             std::vector<double> meanLab;
+            std::vector<uint8_t> openings;
             double wL = 1;
             uint32_t K = 0;
-            if (mode == 2) { K = in.u32(); in.array(meanLab, static_cast<size_t>(K) * 3); wL = in.f64(); }
+            if (mode == 2) { K = in.u32(); in.array(meanLab, static_cast<size_t>(K) * 3); in.array(openings, K); wL = in.f64(); }
             std::vector<mr::SampledPhoto> photos(in.u32());
-            for (auto& ph : photos) ph.img = &imageAt(images, in.u32());
+            for (auto& ph : photos) { ph.img = &imageAt(images, in.u32()); ph.open = mr::openingMask(in.rects(), ph.img->width, ph.img->height); }
             if (mode == 1) {
                 const uint32_t samples = in.u32(), seed = in.u32();
                 K = in.u32();
-                const uint32_t iterations = in.u32();
+                const uint32_t Kopen = in.u32(), iterations = in.u32();
                 wL = in.f64();
-                if (K < 1 || K > 255) throw std::runtime_error("classes must be 1..255");
-                const auto r = mr::appearanceKMeans(photos, static_cast<int>(samples), seed, static_cast<int>(K), static_cast<int>(iterations), wL);
-                out.put(static_cast<uint32_t>(r.n)); out.put(static_cast<uint8_t>(r.ok ? 1 : 0));
-                if (r.ok) { out.array(r.C); out.array(r.count); out.array(r.sd); }
+                if (K < 1 || K + Kopen > 255) throw std::runtime_error("classes must be 1..255");
+                for (const auto& r : mr::appearanceKMeans(photos, static_cast<int>(samples), seed, static_cast<int>(K), static_cast<int>(Kopen), static_cast<int>(iterations), wL)) {
+                    out.put(static_cast<uint32_t>(r.n)); out.put(static_cast<uint8_t>(r.ok ? 1 : 0));
+                    if (r.ok) { out.array(r.C); out.array(r.count); out.array(r.sd); }
+                }
             } else {
                 if (K < 1 || K > 127) throw std::runtime_error("classes must be 1..127");
                 std::vector<mr::HarvestTexels> h(photos.size());
-                parallelFor(photos.size(), threads, [&](size_t i) { h[i] = mr::harvestClassify(*photos[i].img, meanLab, wL); });
+                parallelFor(photos.size(), threads, [&](size_t i) { h[i] = mr::harvestClassify(*photos[i].img, photos[i].open, meanLab, openings, wL); });
                 out.put(static_cast<uint32_t>(photos.size()));
                 for (const auto& t : h) { out.put(static_cast<uint32_t>(t.valid.size())); out.array(t.valid); out.array(t.L); out.array(t.cls); }
             }
@@ -158,6 +163,9 @@ int main(int argc, char** argv) {
             const uint32_t K = in.u32();
             if (K < 1 || K > 255) throw std::runtime_error("classes must be 1..255");
             in.array(ctx.meanLab, static_cast<size_t>(K) * 3);
+            in.array(ctx.openings, K);
+            ctx.wall = static_cast<int>(in.u32());
+            if (ctx.wall >= static_cast<int>(K)) throw std::runtime_error("wall class out of range");
             ctx.sets.resize(K);
             for (auto& s : ctx.sets) { s.realSizeX = in.f64(); s.realSizeY = in.f64(); s.normal = in.image(); s.orm = in.image(); }
             in.array(ctx.setMeans, static_cast<size_t>(K) * 3);
@@ -171,6 +179,7 @@ int main(int argc, char** argv) {
                 j.texelM = in.f64();
                 j.radius = static_cast<int>(in.u32());
                 if (j.radius < 1 || j.radius > 120) throw std::runtime_error("radius must be 1..120");
+                j.open = mr::openingMask(in.rects(), j.img->width, j.img->height);
                 if (j.rebuilt && !(j.texelM > 0)) throw std::runtime_error("a rebuilt facade needs its texel size");
             }
             std::vector<mr::PlanResult> rs(jobCount);

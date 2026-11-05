@@ -25,7 +25,7 @@ import { readAccessor, type ParsedGlb } from '../../glb-bytes';
 import type { RgbaImage8 } from '../../tile-texture-transfer';
 import { bandResponses, TEXTURE_BANDS_M } from '../material-harvest';
 import {
-    MATERIAL_REGIONS_PARAMS, materialPlanContext, materialPlanJobs, mergeMaterialPlan, regionRadius,
+    formatRegionClasses, MATERIAL_REGIONS_PARAMS, materialPlanContext, materialPlanJobs, mergeMaterialPlan, regionRadius,
     type MaterialPlanContext, type MaterialPlanJob, type MaterialPlanPiece, type MaterialRegionsParams, type MaterialRegionsPlan, type RegionClass, type RegionSet
 } from '../material-regions';
 
@@ -47,7 +47,7 @@ export interface MaterialRegionsNativeOptions {
 
 const CLI_SOURCE = path.join('scripts', 'material_regions_native.cpp');
 const INCLUDE_DIR = path.join('packages', 'core', 'src', 'native', '3d-engine', 'include');
-const MAGIC = 0x524d4253, VERSION = 3;
+const MAGIC = 0x524d4253, VERSION = 4;
 const MODE = { tables: 0, classes: 1, harvest: 2, plan: 3 } as const;
 
 /** The repository root: the first directory up from here (or the working directory) holding the CLI driver. */
@@ -96,6 +96,7 @@ class RequestWriter {
     f64(v: number): this { this.room(8); this.head.setFloat64(this.at, v, true); this.at += 8; return this; }
     bytes(b: Uint8Array): this { this.flush(); this.parts.push(b); return this; }
     f64s(v: ArrayLike<number>): this { return this.bytes(new Uint8Array(Float64Array.from(v).buffer)); }
+    rects(v: ArrayLike<number>): this { return this.u32(v.length).f64s(v); }
     image(img: RgbaImage8): this {
         if (img.rgba.length !== img.width * img.height * 4) throw new MaterialRegionsNativeError('run_failed', `an image's pixels (${img.rgba.length} bytes) do not match its ${img.width} x ${img.height} size`);
         return this.u32(img.width).u32(img.height).bytes(img.rgba);
@@ -204,6 +205,14 @@ function texelMetres(g: ParsedGlb, json: any, material: number, img: RgbaImage8)
     return texels > 0 ? Math.sqrt(world / texels) : 0;
 }
 
+/** A rebuilt facade's fitted windows (sbFacadeLattice.windows.uv), its photo's openings: none when it has none. */
+function fittedWindows(json: any, meshName: string | undefined): number[] {
+    if (!meshName) return [];
+    const mi = (json.meshes ?? []).findIndex((m: any) => m.name === meshName);
+    const uv = (json.nodes ?? []).find((n: any) => n.mesh === mi && n.extras?.sbFacadeLattice?.windows)?.extras.sbFacadeLattice.windows.uv;
+    return Array.isArray(uv) && uv.length % 4 === 0 ? uv : [];
+}
+
 // ---- readRegionClasses ----
 
 /** labOf's tables as the kernel computes them: SRGB8_TO_LINEAR and the 32768 CIELAB buckets (key (r>>3)<<10 | (g>>3)<<5 | b>>3). */
@@ -217,41 +226,32 @@ export async function materialRegionsNativeColourTables(opts: MaterialRegionsNat
 /** readRegionClasses (material-regions.ts) with its sampling, k-means and harvest texels on the native kernel: the same classes. */
 export async function readRegionClassesNative(json: any, images: Map<number, RgbaImage8>, P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS, harvest?: { g: ParsedGlb }, opts: MaterialRegionsNativeOptions = {}): Promise<RegionClass[] | undefined> {
     const { rebuilt } = photoMaterials(json);
-    const table = imageTable(), photos: number[] = [];
-    for (const mi of rebuilt.keys()) {
+    const table = imageTable(), photos: Array<{ image: number; open: number[] }> = [];
+    for (const [mi, mesh] of rebuilt) {
         const img = images.get(photoOf(json, mi)!.image);
         if (!img) continue;
-        photos.push(table.add(img));
+        photos.push({ image: table.add(img), open: fittedWindows(json, mesh) });
     }
-    const wL = harvest ? 0.5 : 1, K = P.classes;
+    const wL = harvest ? 0.5 : 1;
     const r = await run(MODE.classes, w => {
         w.u32(table.list.length);
         for (const img of table.list) w.image(img);
         w.u32(photos.length);
-        for (const ph of photos) w.u32(ph);
-        w.u32(P.samplesPerPhoto).u32(P.seed >>> 0).u32(K).u32(P.iterations).f64(wL);
+        for (const ph of photos) w.u32(ph.image).rects(ph.open);
+        w.u32(P.samplesPerPhoto).u32(P.seed >>> 0).u32(P.classes).u32(P.openingClasses).u32(P.iterations).f64(wL);
     }, opts);
-    const n = r.u32(), ok = r.u8() === 1;
-    if (!ok) { r.done(); return undefined; }
-    const Cf = r.f64s(K * 3), count = r.f64s(K), sdf = r.f64s(K * 3);
-    r.done();
-    const C = Array.from({ length: K }, (_, k) => [Cf[k * 3], Cf[k * 3 + 1], Cf[k * 3 + 2]]);
-    // the classes' formatting, as readRegionClasses does it
-    const idx = C.map((_, k) => k).sort((a, b) => C[a][0] - C[b][0]);
-    const classes: RegionClass[] = idx.map((k, rank) => {
-        const cnt = count[k], sd = [sdf[k * 3], sdf[k * 3 + 1], sdf[k * 3 + 2]];
-        const [L, a, b] = C[k];
-        const fy = (L + 16) / 116, fx = fy + a / 500, fz = fy - b / 200;
-        const inv = (t: number) => (t ** 3 > 0.008856 ? t ** 3 : (t - 16 / 116) / 7.787);
-        const Xw = inv(fx) * 0.95047, Yw = inv(fy), Zw = inv(fz) * 1.08883;
-        const lin: [number, number, number] = [3.2406 * Xw - 1.5372 * Yw - 0.4986 * Zw, -0.9689 * Xw + 1.8758 * Yw + 0.0415 * Zw, 0.0557 * Xw - 0.204 * Yw + 1.057 * Zw].map(v => Math.max(0, Math.min(1, v))) as [number, number, number];
-        const r2 = (v: number) => Math.round(v * 100) / 100;
-        return {
-            index: rank, meanLab: [r2(L), r2(a), r2(b)], meanLinear: lin.map(r2) as [number, number, number],
-            spreadLab: sd.map(v => r2(Math.sqrt(v / Math.max(1, cnt)))) as [number, number, number],
-            share: Math.round((cnt / n) * 1000) / 1000, wall: rank === K - 1
-        };
+    // each region's k-means (outside, then inside the openings), formatted as readRegionClasses does it
+    const regions = [P.classes, P.openingClasses].map(K => {
+        const n = r.u32(), ok = r.u8() === 1;
+        if (!ok) return { n };
+        const Cf = r.f64s(K * 3), count = r.f64s(K), sdf = r.f64s(K * 3);
+        const at = (v: Float64Array, k: number) => [v[k * 3], v[k * 3 + 1], v[k * 3 + 2]];
+        return { n, C: Array.from({ length: K }, (_, k) => at(Cf, k)), count, sd: Array.from({ length: K }, (_, k) => at(sdf, k)) };
     });
+    r.done();
+    if (!regions[0].C) return undefined;
+    const total = regions[0].n + regions[1].n, classes: RegionClass[] = [];
+    regions.forEach((g, i) => { if (g.C) classes.push(...formatRegionClasses(g.C, g.count!, g.sd!, total, classes.length, i === 1)); });
     if (harvest) await harvestTexturesNative(harvest.g, json, images, rebuilt, classes, wL, opts);
     return classes;
 }
@@ -261,21 +261,21 @@ async function harvestTexturesNative(g: ParsedGlb, json: any, images: Map<number
     const K = classes.length, B = TEXTURE_BANDS_M.length;
     const sq = Array.from({ length: K }, () => new Float64Array(B)), lum = Array.from({ length: K }, () => new Float64Array(B)), cnt = Array.from({ length: K }, () => new Float64Array(B));
     const texelSum = new Float64Array(K), texelN = new Float64Array(K), facades = new Int32Array(K);
-    const table = imageTable(), photos: Array<{ img: RgbaImage8; image: number; texelM: number }> = [];
-    for (const [mi] of rebuilt) {
+    const table = imageTable(), photos: Array<{ img: RgbaImage8; image: number; texelM: number; open: number[] }> = [];
+    for (const [mi, mesh] of rebuilt) {
         const img = images.get(photoOf(json, mi)!.image);
         if (!img) continue;
         const texelM = texelMetres(g, json, mi, img);
         if (!(texelM > 0)) continue;
-        photos.push({ img, image: table.add(img), texelM });
+        photos.push({ img, image: table.add(img), texelM, open: fittedWindows(json, mesh) });
     }
     if (photos.length) {
         const r = await run(MODE.harvest, w => {
             w.u32(table.list.length);
             for (const img of table.list) w.image(img);
-            w.u32(K).f64s(classes.flatMap(c => c.meanLab)).f64(wL);
+            w.u32(K).f64s(classes.flatMap(c => c.meanLab)).bytes(Uint8Array.from(classes, c => (c.openings ? 1 : 0))).f64(wL);
             w.u32(photos.length);
-            for (const ph of photos) w.u32(ph.image);
+            for (const ph of photos) w.u32(ph.image).rects(ph.open);
         }, opts);
         if (r.u32() !== photos.length) throw new MaterialRegionsNativeError('invalid_output', 'material_regions_native returned the wrong number of harvest photos');
         const read = photos.map(ph => {
@@ -325,11 +325,11 @@ export async function planMaterialJobsNative(jobs: MaterialPlanJob[], ctx: Mater
     const r = await run(MODE.plan, w => {
         w.u32(table.list.length);
         for (const img of table.list) w.image(img);
-        w.u32(K).f64s(classes.flatMap(c => c.meanLab));
+        w.u32(K).f64s(classes.flatMap(c => c.meanLab)).bytes(Uint8Array.from(classes, c => (c.openings ? 1 : 0))).u32(Math.max(0, classes.findIndex(c => c.wall)));
         for (let k = 0; k < K; k++) w.f64(sets[k].realSizeM[0]).f64(sets[k].realSizeM[1]).image(sets[k].normal).image(sets[k].orm);
         w.f64s(ctx.setMeans.slice(0, K).flat());
         w.u32(work.length);
-        for (const p of work) w.u32(p.job.kind === 'rebuilt' ? 0 : 1).u32(p.image).f64(p.texelM).u32(regionRadius(p.texelM, P));
+        for (const p of work) w.u32(p.job.kind === 'rebuilt' ? 0 : 1).u32(p.image).f64(p.texelM).u32(regionRadius(p.texelM, P)).rects(p.job.kind === 'rebuilt' ? fittedWindows(json, p.job.mesh) : []);
     }, opts);
     if (r.u32() !== work.length) throw new MaterialRegionsNativeError('invalid_output', 'material_regions_native returned the wrong number of jobs');
     const r3 = (v: number) => Math.round(v * 1000) / 1000;
