@@ -338,6 +338,54 @@ struct TileCapParams {
 };
 struct TileCapStats { size_t sharedFaces{0}; size_t candidates{0}; size_t trianglesDropped{0}; double areaM2{0}; };
 
+/**
+ * The step blend (TileSeamWeld::blendCutSteps) and the per-cut scores (measureCuts). At a cut, the two tiles' walls sit at
+ * slightly different depths: seen in the cut plane, each tile's rim (its open border along the cut, once the caps are gone)
+ * traces the same outline, a few centimetres to decimetres apart. That offset is the surface step.
+ */
+struct TileSeamBlendParams {
+    /** Two boxes' faces are one cut when their planes lie within this (loose boxes overlap by up to a metre). */
+    double faceMatchM{1.2};
+    /** A rim is an open border edge of a surface crossing the cut (|normal . cut normal| <= crossCos) within this of the cut plane. */
+    double bandM{1.0};
+    double marginM{0.5};
+    double crossCos{0.5};
+    /** A step is matched and moved only within the smaller of the two tiles' stated errors, capped at this (m). */
+    double capM{0.5};
+    /** The two rims run parallel where they are matched (in the cut plane). */
+    double parallelCos{0.866};
+    /** Each side moves half the step at its rim, faded to nothing this far from it along the cut's normal (raised cosine). */
+    double falloffM{1.5};
+    /** A vertex follows the rim point nearest it in the cut plane, when that lies within this (the same wall). */
+    double wallReachM{0.6};
+    /** A move turning a triangle by more than this, or inside out, is taken back. */
+    double maxTurnDeg{25.0};
+    int threads{0};
+};
+
+/** One cut's score: what a seam there measures (continuous measures only). */
+struct TileSeamCutScore {
+    uint32_t tiles[2]{0, 0};
+    V3 u;
+    double o{0};
+    /** Open border length of the two tiles along the cut (m), and how much of it found the other tile's rim. */
+    double rimLengthM{0};
+    double matchedLengthM{0};
+    /** The surface step between the two rims in the cut plane (m): median and 90th percentile over matched rim points. */
+    double stepP50M{0}, stepP90M{0};
+    /** The gap between the two rims along the cut's normal (m, median of absolute values): open when positive, overlapping too. */
+    double gapP50M{0};
+};
+
+struct TileSeamBlendStats {
+    size_t cuts{0};
+    size_t cutsMatched{0};
+    size_t positionsMoved{0};
+    size_t reverted{0};
+    double maxMoveM{0};
+    std::vector<TileSeamCutScore> before, after;
+};
+
 // ============================================================================
 // Seam tone feather: the two tiles' photos levelled toward each other across every cut two tiles share
 // ============================================================================
@@ -2167,6 +2215,226 @@ public:
         stepPercentiles(after, matched, st.dEAfterP50, st.dEAfterP90);
         return st;
     }
+private:
+    /** A rim point matched to the other tile's rim: its position group and the in-plane vector to the other rim. */
+    struct RimMatch { uint32_t g; V3 step; double gap; double len; };
+    struct CutRims { std::vector<RimMatch> side[2]; double rimLen{0}; };
+    /**
+     * Per cut: each tile's rim (open border edges of surfaces crossing the cut, near its plane, inside its rectangle), and
+     * for every rim point the nearest point of the other tile's rim in the cut plane, when within the pair's tolerance and
+     * running parallel there.
+     */
+    static std::vector<CutRims> matchRims(const geometry::ScratchboxMesh& mesh, const std::vector<uint32_t>& triTile, const std::vector<SeamCut>& cuts,
+                                          const std::vector<double>& tileErrorM, const TileSeamBlendParams& p, const Topology& topo, const OpenBorder& ob, unsigned threads) {
+        std::vector<CutRims> out(cuts.size());
+        auto vp = [&](uint32_t v) { const auto& q = mesh.vertices[v].position; return V3{q.x, q.y, q.z}; };
+        // each tile's open border edges on surfaces (their owner triangle's normal kept)
+        struct RimEdge { uint32_t a, b; V3 n; };
+        std::unordered_map<uint32_t, std::vector<RimEdge>> edgesOfTile;
+        for (const auto& e : ob.edges) {
+            const uint32_t t = e.tri, tile = t < triTile.size() ? triTile[t] : 0u;
+            const V3 A = vp(mesh.indices[3 * t]), B = vp(mesh.indices[3 * t + 1]), C = vp(mesh.indices[3 * t + 2]);
+            V3 n = (B - A).cross(C - A);
+            if (!(n.norm() > 1e-12)) continue;
+            edgesOfTile[tile].push_back({e.a, e.b, n.normalized()});
+        }
+        scan_rectifier::detail::parallelFor(cuts.size(), threads, 4, [&](size_t k0, size_t k1, unsigned) {
+            for (size_t k = k0; k < k1; ++k) {
+                const SeamCut& C = cuts[k];
+                const double ea = C.tile[0] < tileErrorM.size() ? tileErrorM[C.tile[0]] : -1.0, eb = C.tile[1] < tileErrorM.size() ? tileErrorM[C.tile[1]] : -1.0;
+                if (!(ea > 0 && eb > 0)) continue;
+                const double tol = std::min(p.capM, std::min(ea, eb));
+                struct Seg { uint32_t ga, gb; double ax, ay, bx, by, ha, hb; };
+                std::vector<Seg> rim[2];
+                for (int s = 0; s < 2; ++s) {
+                    auto it = edgesOfTile.find(C.tile[s]);
+                    if (it == edgesOfTile.end()) continue;
+                    for (const RimEdge& e : it->second) {
+                        if (std::abs(e.n.dot(C.u)) > p.crossCos) continue;
+                        const V3 A = topo.gpos[e.a] - C.c, B = topo.gpos[e.b] - C.c;
+                        const double ha = A.dot(C.u) + (C.u.dot(C.c) - C.o), hb = B.dot(C.u) + (C.u.dot(C.c) - C.o);
+                        if (std::abs(ha) > p.bandM || std::abs(hb) > p.bandM) continue;
+                        const double ax = A.dot(C.a), ay = A.dot(C.b), bx = B.dot(C.a), by = B.dot(C.b);
+                        if (std::abs(ax) > C.ha + p.marginM || std::abs(ay) > C.hb + p.marginM || std::abs(bx) > C.ha + p.marginM || std::abs(by) > C.hb + p.marginM) continue;
+                        // an edge running along the cut's normal is a wall's side, not its rim
+                        const double l2 = std::hypot(bx - ax, by - ay);
+                        if (l2 < 0.5 * (topo.gpos[e.b] - topo.gpos[e.a]).norm()) continue;
+                        rim[s].push_back({e.a, e.b, ax, ay, bx, by, ha, hb});
+                        out[k].rimLen += l2;
+                    }
+                }
+                if (rim[0].empty() || rim[1].empty()) continue;
+                for (int s = 0; s < 2; ++s) {
+                    const auto& mine = rim[s]; const auto& other = rim[1 - s];
+                    std::unordered_map<uint32_t, RimMatch> best;
+                    for (const Seg& e : mine) {
+                        const double tx = e.bx - e.ax, ty = e.by - e.ay, tl = std::hypot(tx, ty);
+                        if (!(tl > 1e-9)) continue;
+                        for (int end = 0; end < 2; ++end) {
+                            const uint32_t g = end ? e.gb : e.ga;
+                            const double px = end ? e.bx : e.ax, py = end ? e.by : e.ay, ph = end ? e.hb : e.ha;
+                            double bd = tol, qx = 0, qy = 0, qh = 0;
+                            bool found = false;
+                            for (const Seg& o : other) {
+                                const double ox = o.bx - o.ax, oy = o.by - o.ay, ol2 = ox * ox + oy * oy;
+                                if (!(ol2 > 1e-12)) continue;
+                                if (std::abs(tx * ox + ty * oy) < p.parallelCos * tl * std::sqrt(ol2)) continue;
+                                const double t = std::clamp(((px - o.ax) * ox + (py - o.ay) * oy) / ol2, 0.0, 1.0);
+                                const double cx = o.ax + ox * t, cy = o.ay + oy * t, d = std::hypot(px - cx, py - cy);
+                                if (d < bd) { bd = d; qx = cx; qy = cy; qh = o.ha + (o.hb - o.ha) * t; found = true; }
+                            }
+                            if (!found) continue;
+                            auto it = best.find(g);
+                            if (it != best.end() && it->second.step.norm() <= bd) { it->second.len += 0.5 * tl; continue; }
+                            const double carried = it != best.end() ? it->second.len : 0.0;
+                            best[g] = RimMatch{g, C.a * (qx - px) + C.b * (qy - py), qh - ph, carried + 0.5 * tl};
+                        }
+                    }
+                    for (auto& kv : best) out[k].side[s].push_back(kv.second);
+                    std::sort(out[k].side[s].begin(), out[k].side[s].end(), [](const RimMatch& x, const RimMatch& y) { return x.g < y.g; });
+                }
+            }
+        });
+        return out;
+    }
+    static std::vector<TileSeamCutScore> scoreCuts(const std::vector<SeamCut>& cuts, const std::vector<CutRims>& rims) {
+        std::vector<TileSeamCutScore> out;
+        for (size_t k = 0; k < cuts.size(); ++k) {
+            if (!(rims[k].rimLen > 0)) continue;
+            TileSeamCutScore sc;
+            sc.tiles[0] = cuts[k].tile[0]; sc.tiles[1] = cuts[k].tile[1]; sc.u = cuts[k].u; sc.o = cuts[k].o;
+            sc.rimLengthM = rims[k].rimLen;
+            std::vector<double> steps, gaps;
+            for (int s = 0; s < 2; ++s) for (const RimMatch& m : rims[k].side[s]) { steps.push_back(m.step.norm()); gaps.push_back(std::abs(m.gap)); sc.matchedLengthM += m.len; }
+            auto pct = [](std::vector<double>& v, double q) { if (v.empty()) return 0.0; const size_t i = std::min(v.size() - 1, static_cast<size_t>(q * static_cast<double>(v.size()))); std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(i), v.end()); return v[i]; };
+            sc.stepP50M = pct(steps, 0.5); sc.stepP90M = pct(steps, 0.9); sc.gapP50M = pct(gaps, 0.5);
+            out.push_back(sc);
+        }
+        return out;
+    }
+
+public:
+    /** The per-cut scores of the mesh as it is (rim length, how much of it finds the other tile's rim, step and gap). */
+    static std::vector<TileSeamCutScore> measureCuts(const geometry::ScratchboxMesh& mesh, const std::vector<uint32_t>& triTile, const std::vector<TileBox>& boxes,
+                                                     const std::vector<double>& tileErrorM, const TileSeamBlendParams& p = {}) {
+        const std::vector<SeamCut> cuts = boxCuts(boxes, p.faceMatchM);
+        const Topology topo = topology(mesh);
+        const OpenBorder ob = openBorder(mesh, topo);
+        return scoreCuts(cuts, matchRims(mesh, triTile, cuts, tileErrorM, p, topo, ob, scan_rectifier::detail::resolveThreads(p.threads)));
+    }
+
+    /**
+     * Step blend: at every cut, each tile's surface moves toward the other's by half the step measured at its rim (in the
+     * cut plane, so along the wall's own normal mostly), faded to nothing over falloffM from the rim along the cut's
+     * normal: the two walls meet on one surface at the cut and keep their own away from it, so no ridge is left there. A
+     * vertex follows the matched rim point nearest it in the cut plane (within wallReachM: the same wall). Nothing moves
+     * further than half the pair's tolerance (the smaller of the two tiles' stated errors, capped); a move turning a
+     * triangle by more than maxTurnDeg is taken back. Positions only: UVs, materials and topology are untouched.
+     */
+    static TileSeamBlendStats blendCutSteps(geometry::ScratchboxMesh& mesh, const std::vector<uint32_t>& triTile, const std::vector<TileBox>& boxes,
+                                            const std::vector<double>& tileErrorM, const TileSeamBlendParams& p = {}) {
+        TileSeamBlendStats st;
+        const unsigned threads = scan_rectifier::detail::resolveThreads(p.threads);
+        const std::vector<SeamCut> cuts = boxCuts(boxes, p.faceMatchM);
+        st.cuts = cuts.size();
+        const Topology topo = topology(mesh);
+        const OpenBorder ob = openBorder(mesh, topo);
+        const std::vector<CutRims> rims = matchRims(mesh, triTile, cuts, tileErrorM, p, topo, ob, threads);
+        st.before = scoreCuts(cuts, rims);
+        const size_t G = topo.gpos.size(), F = mesh.indices.size() / 3;
+        const std::vector<uint32_t> gTile = groupTiles(mesh, topo, triTile);
+        // each tile's positions, to find those near a cut
+        std::unordered_map<uint32_t, std::vector<uint32_t>> groupsOfTile;
+        for (uint32_t g = 0; g < G; ++g) if (gTile[g] != kMixedTile && gTile[g] != kMixedTile - 1) groupsOfTile[gTile[g]].push_back(g);
+        std::vector<V3> disp(G);
+        std::vector<std::mutex> lockOf(64);
+        scan_rectifier::detail::parallelFor(cuts.size(), threads, 4, [&](size_t k0, size_t k1, unsigned) {
+            for (size_t k = k0; k < k1; ++k) {
+                const SeamCut& C = cuts[k];
+                for (int s = 0; s < 2; ++s) {
+                    const auto& ms = rims[k].side[s];
+                    if (ms.empty()) continue;
+                    auto it = groupsOfTile.find(C.tile[s]);
+                    if (it == groupsOfTile.end()) continue;
+                    // the matched rim points in the cut plane, with their height along the normal
+                    struct R { double x, y, h; V3 step; };
+                    std::vector<R> rs;
+                    rs.reserve(ms.size());
+                    for (const RimMatch& m : ms) { const V3 d = topo.gpos[m.g] - C.c; rs.push_back({d.dot(C.a), d.dot(C.b), d.dot(C.u), m.step}); }
+                    for (uint32_t g : it->second) {
+                        const V3 d = topo.gpos[g] - C.c;
+                        const double h = d.dot(C.u) + (C.u.dot(C.c) - C.o);
+                        if (std::abs(h) > p.bandM + p.falloffM) continue;
+                        const double x = d.dot(C.a), y = d.dot(C.b);
+                        if (std::abs(x) > C.ha + p.marginM + p.wallReachM || std::abs(y) > C.hb + p.marginM + p.wallReachM) continue;
+                        double bd = p.wallReachM; const R* br = nullptr;
+                        for (const R& r : rs) { const double dd = std::hypot(x - r.x, y - r.y); if (dd < bd) { bd = dd; br = &r; } }
+                        if (!br) continue;
+                        const double along = std::abs(d.dot(C.u) - br->h);
+                        if (along >= p.falloffM) continue;
+                        const double w = 0.5 * (1.0 + std::cos(M_PI * along / p.falloffM));
+                        std::lock_guard<std::mutex> lock(lockOf[g % lockOf.size()]);
+                        disp[g] += br->step * (0.5 * w);
+                    }
+                }
+            }
+        });
+        // no position further than half the cap (two cuts meeting at a corner add up)
+        for (uint32_t g = 0; g < G; ++g) { const double l = disp[g].norm(); if (l > 0.5 * p.capM) disp[g] = disp[g] * (0.5 * p.capM / l); }
+        // apply, and take back the moves that turn a triangle too far
+        std::vector<uint32_t> memberStart(G + 1, 0), members(mesh.vertices.size());
+        for (uint32_t v = 0; v < mesh.vertices.size(); ++v) memberStart[topo.groupOf[v] + 1]++;
+        for (size_t g = 0; g < G; ++g) memberStart[g + 1] += memberStart[g];
+        { std::vector<uint32_t> fill(memberStart.begin(), memberStart.end() - 1); for (uint32_t v = 0; v < mesh.vertices.size(); ++v) members[fill[topo.groupOf[v]]++] = v; }
+        const double maxTurnCos = std::cos(p.maxTurnDeg * M_PI / 180.0);
+        for (int pass = 0; pass < 3; ++pass) {
+            size_t rev = 0;
+            for (size_t t = 0; t < F; ++t) {
+                const uint32_t g0 = topo.groupOf[mesh.indices[3 * t]], g1 = topo.groupOf[mesh.indices[3 * t + 1]], g2 = topo.groupOf[mesh.indices[3 * t + 2]];
+                if (disp[g0].norm() == 0 && disp[g1].norm() == 0 && disp[g2].norm() == 0) continue;
+                const V3 n0 = (topo.gpos[g1] - topo.gpos[g0]).cross(topo.gpos[g2] - topo.gpos[g0]);
+                const V3 a = topo.gpos[g0] + disp[g0], b = topo.gpos[g1] + disp[g1], c = topo.gpos[g2] + disp[g2];
+                const V3 n1 = (b - a).cross(c - a);
+                const double l0 = n0.norm(), l1 = n1.norm();
+                if (!(l0 > 1e-14)) continue;
+                if (l1 > 1e-14 && n0.dot(n1) >= maxTurnCos * l0 * l1) continue;
+                for (uint32_t g : {g0, g1, g2}) if (disp[g].norm() > 0) { disp[g] = V3{}; ++rev; }
+            }
+            st.reverted += rev;
+            if (!rev) break;
+        }
+        for (uint32_t g = 0; g < G; ++g) {
+            const double l = disp[g].norm();
+            if (!(l > 1e-6)) continue;
+            const V3 to = topo.gpos[g] + disp[g];
+            for (uint32_t m = memberStart[g]; m < memberStart[g + 1]; ++m) mesh.vertices[members[m]].position = geometry::Vec3(static_cast<float>(to.x), static_cast<float>(to.y), static_cast<float>(to.z));
+            ++st.positionsMoved;
+            st.maxMoveM = std::max(st.maxMoveM, l);
+        }
+        st.after = measureCuts(mesh, triTile, boxes, tileErrorM, p);
+        for (const auto& sc : st.before) if (sc.matchedLengthM > 0) ++st.cutsMatched;
+        return st;
+    }
+    /** The scores as a JSON array, and their totals (length-weighted) for a one-line report. */
+    static std::string cutScoresJson(const std::vector<TileSeamCutScore>& v) {
+        std::string js = "[";
+        for (size_t i = 0; i < v.size(); ++i) {
+            const auto& s = v[i];
+            char b[320];
+            std::snprintf(b, sizeof b, "%s{\"tiles\": [%u, %u], \"u\": [%.3f, %.3f, %.3f], \"o\": %.3f, \"rimLengthM\": %.2f, \"matchedLengthM\": %.2f, \"stepP50M\": %.4f, \"stepP90M\": %.4f, \"gapP50M\": %.4f}",
+                          i ? ", " : "", s.tiles[0], s.tiles[1], s.u.x, s.u.y, s.u.z, s.o, s.rimLengthM, s.matchedLengthM, s.stepP50M, s.stepP90M, s.gapP50M);
+            js += b;
+        }
+        return js + "]";
+    }
+    static std::string cutTotalsJson(const std::vector<TileSeamCutScore>& v) {
+        double rim = 0, matched = 0, step = 0, gap = 0, worst = 0;
+        for (const auto& s : v) { rim += s.rimLengthM; matched += s.matchedLengthM; step += s.stepP50M * s.matchedLengthM; gap += s.gapP50M * s.matchedLengthM; worst = std::max(worst, s.stepP90M); }
+        char b[256];
+        std::snprintf(b, sizeof b, "\"cuts\": %zu, \"rimLengthM\": %.1f, \"matchedLengthM\": %.1f, \"meanStepM\": %.4f, \"meanGapM\": %.4f, \"worstStepP90M\": %.4f", v.size(), rim, matched, matched > 0 ? step / matched : 0.0, matched > 0 ? gap / matched : 0.0, worst);
+        return b;
+    }
+
     /** The cuts two tiles' boxes share, as a JSON array (the mesh's frame), for the stages after the seam stage. */
     static std::string cutsJson(const std::vector<TileBox>& boxes, double faceMatchM = TileSeamToneParams{}.faceMatchM) {
         auto v3 = [](const V3& v) { char b[96]; std::snprintf(b, sizeof b, "[%.4f, %.4f, %.4f]", v.x, v.y, v.z); return std::string(b); };

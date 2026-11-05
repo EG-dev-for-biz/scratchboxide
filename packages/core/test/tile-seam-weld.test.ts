@@ -31,7 +31,9 @@
  *  11. the node -> tile file the service writes for the CLI;
  *  12. the tone feather: two tiles' photos of one wall, cut across by their boxes, levelled toward each other at the cut,
  *      faded out away from it, labelled, and left alone without boxes or when not asked for;
- *  13. the cap trim: the strips two tiles carry back to back in their shared cut plane go, the walls stay.
+ *  13. the cap trim: the strips two tiles carry back to back in their shared cut plane go, the walls stay;
+ *  14. the step blend and the per-cut scores: two walls 6 cm apart in depth at their cut meet on one surface there, each
+ *      moved half way and not at all 1.5 m from the cut, and the weld then closes them.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -533,5 +535,37 @@ describe('tile_seam_weld tone feather: two tiles\' photos levelled toward each o
         const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'caps_off.glb'), threads: 2, repoRoot: REPO });
         expect(off.capTrim).toBeUndefined();
         expect(horizontal(path.join(WORK, 'caps_off.glb'))).toBeGreaterThan(0);
+    });
+
+    it('fades the step between two tiles\' walls out either side of their cut, scores the cut before and after, and the weld closes it', async () => {
+        // tile A: a wall in z = 0 below y = 5; tile B: the wall above, standing 6 cm proud (z = 0.06); 0.5 m cells
+        const a = quad([0, 0, 0], [10, 0, 0], [0, 5, 0], 20, 10), b = quad([0, 5, 0.06], [10, 0, 0], [0, 5, 0], 20, 10);
+        const tiles = [{ leafId: 'a', geometricErrorM: 2, box: [5, 2.5, 0, 5, 0, 0, 0, 2.5, 0, 0, 0, 1] }, { leafId: 'b', geometricErrorM: 2, box: [5, 7.5, 0, 5, 0, 0, 0, 2.5, 0, 0, 0, 1] }];
+        const input = path.join(WORK, 'blend.glb'), output = path.join(WORK, 'blend_welded.glb');
+        writeGlb(input, [a, b], [], tiles, { localToEcef: IDENTITY });
+        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, blend: true, threads: 2, repoRoot: REPO });
+        const cs = r.cutScores!;
+        expect(cs.afterCaps.cuts).toBe(1);
+        expect(cs.afterCaps.meanStepM).toBeCloseTo(0.06, 3);
+        expect(cs.afterCaps.rimLengthM).toBeCloseTo(20, 1);       // both rims, 10 m each
+        expect(cs.afterBlend!.meanStepM).toBeLessThan(0.002);
+        expect(r.stepBlend).toMatchObject({ cutsMatched: 1, reverted: 0 });
+        expect(r.stepBlend!.maxMoveM).toBeCloseTo(0.03, 3);        // each side half the step
+        // at the cut both walls stand at z = 0.03; 1.5 m and more from it each stands where it was; in between it fades
+        const P = distinct(positions(output));
+        for (const p of P.filter(q => near(q[1], 5))) expect(p[2]).toBeCloseTo(0.03, 3);
+        for (const p of P.filter(q => q[1] <= 3.5 + 1e-6)) expect(Math.abs(p[2])).toBeLessThan(1e-5);
+        for (const p of P.filter(q => q[1] >= 6.5 - 1e-6)) expect(p[2]).toBeCloseTo(0.06, 5);
+        const mid = P.filter(q => near(q[1], 4.5)).map(q => q[2]);
+        expect(Math.min(...mid)).toBeGreaterThan(0.015);
+        expect(Math.max(...mid)).toBeLessThan(0.03);
+        // the two rims now coincide, so the weld joins them: no open edge is left along the cut
+        expect(openEdges(triangles(output)).filter(e => e.every(q => near(q[1], 5)))).toHaveLength(0);
+        expect(cs.final.rimLengthM).toBe(0);
+        // not asked for: the step stays and the cut stays open
+        const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'blend_off.glb'), threads: 2, repoRoot: REPO });
+        expect(off.stepBlend).toBeUndefined();
+        expect(off.cutScores!.final.meanStepM).toBeCloseTo(0.06, 3);
+        expect(openEdges(triangles(path.join(WORK, 'blend_off.glb'))).filter(e => e.every(q => near(q[1], 5) )).length).toBeGreaterThan(0);
     });
 });
