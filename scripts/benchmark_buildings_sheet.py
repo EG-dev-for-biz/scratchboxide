@@ -163,7 +163,13 @@ def main(out):
                 dt, col = delta(base.get('buildMs'), r.get('buildMs'), scale=1 / 60000, unit='min')
                 d.text((x + d.textlength(t, font=f_body), cy + 1), dt, font=f_small, fill=col)
             cy += 20
-            notes = r.get('reason') or '; '.join(r.get('degradations') or []) or (r.get('defectsWhy') or '')
+            # the outside check's summary first (what is wrong where), then the degraded stages counted by stage
+            counts = {}
+            for dg in r.get('degradations') or []:
+                st = dg.split(':', 1)[0]
+                counts[st] = counts.get(st, 0) + 1
+            staged = ', '.join(f'{st} x{n}' if n > 1 else st for st, n in counts.items())
+            notes = r.get('reason') or ' '.join(x for x in [r.get('defectsWhy') or '', f'Degraded: {staged}.' if staged else ''] if x)
             for line in wrap(d, notes, f_small, block_w)[:3]:
                 d.text((x, cy), line, font=f_small, fill=MUTED)
                 cy += 15

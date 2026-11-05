@@ -7,7 +7,7 @@
  *   npx vite-node scripts/benchmark_buildings.ts plan  [--places a,b]
  *   npx vite-node scripts/benchmark_buildings.ts run   --side main=<checkout> [--side feat=<checkout>] --out <dir>
  *                                                      [--places a,b] [--retry-failed] [--keep-caches] [--max-load 100]
- *   npx vite-node scripts/benchmark_buildings.ts views --out <dir>      (re-render any missing views)
+ *   npx vite-node scripts/benchmark_buildings.ts views --out <dir>      (re-render missing views; --force all of them)
  *   npx vite-node scripts/benchmark_buildings.ts sheet --out <dir>      (the sheet from whatever results exist)
  *   npx vite-node scripts/benchmark_buildings.ts measure --glb <model>  (one model's generated share)
  *
@@ -42,7 +42,8 @@ const LEDGER_SCHEMA = 'scratchbox.run-ledger.benchmark/1';
 const OWNED_MARK = '.benchmark-owned';
 /** The four views: compass headings the camera looks toward, all at one pitch, framed by the tracer on the model. */
 const VIEW_HEADINGS = [45, 135, 225, 315];
-const VIEW = { pitchDeg: 15, verticalFovDeg: 35, distanceScale: 0.8, width: 640, height: 800, spp: 16 };
+// distanceScale 1 fits the model's whole bounding sphere (0.8 cut the top off a slender tower); the sheet crops the margin
+const VIEW = { pitchDeg: 15, verticalFovDeg: 35, distanceScale: 1, width: 640, height: 800, spp: 16 };
 const SERVER_READY_MS = 240_000;
 /** A build that has not finished in this long is stopped and recorded as failed (the ESB takes about 20 minutes). */
 const BUILD_LIMIT_MS = 90 * 60_000;
@@ -354,12 +355,12 @@ function fromToolResult(r: BuildResult, result: any): void {
     if (Array.isArray(payload.degradations)) r.degradations = payload.degradations.map((d: any) => `${d.stage}: ${d.reason ?? d.reasonCode}`);
 }
 
-async function renderViews(glbPath: string, dir: string, log: (s: string) => void): Promise<Array<{ headingDeg: number; png: string }>> {
+async function renderViews(glbPath: string, dir: string, log: (s: string) => void, force = false): Promise<Array<{ headingDeg: number; png: string }>> {
     const tracer = new NativeTilePathTracerService();
     const views: Array<{ headingDeg: number; png: string }> = [];
     for (const headingDeg of VIEW_HEADINGS) {
         const png = path.join(dir, `view_${headingDeg}.png`);
-        if (!fs.existsSync(png)) {
+        if (force || !fs.existsSync(png)) {
             const work = path.join(dir, `.trace_${headingDeg}`);
             const r = await tracer.render({
                 glbPath, outputDir: work,
@@ -524,9 +525,11 @@ async function main(): Promise<void> {
     if (cmd === 'views') {
         for (const r of results(outDir)) {
             const dir = path.join(outDir, r.side, r.place.slug);
-            const model = readJson(path.join(dir, 'run', 'pipeline_k_model.json'))?.model;
-            if (!model || !fs.existsSync(model)) { console.log(`${r.side}/${r.place.slug}: its model is gone (the cache was dropped); nothing to render`); continue; }
-            r.views = await renderViews(model, dir, s => console.log(`${r.side}/${r.place.slug}: ${s}`));
+            // the build's cache copy when it was kept, else the copy the build published under the checkout's public/
+            const note = readJson(path.join(dir, 'run', 'pipeline_k_model.json'));
+            const model = [note?.model, ...(note?.url ? [path.join(r.checkout, 'public', note.url), path.join(r.checkout, 'desktop-app', 'public', note.url)] : [])].find(f => f && fs.existsSync(f));
+            if (!model) { console.log(`${r.side}/${r.place.slug}: its model is gone; nothing to render`); continue; }
+            r.views = await renderViews(model, dir, s => console.log(`${r.side}/${r.place.slug}: ${s}`), flags.has('force'));
             fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(r, null, 1));
         }
         return sheet(outDir, places);
