@@ -107,7 +107,7 @@ export function streetBandTop(face: MassingFace): number {
     return Math.max(0, Math.min(face.height, Math.floor((face.orthoTMax - tTop) / face.pixel)));
 }
 
-function warpAt(w: NonNullable<ProjectionView['warp']>, W: number, H: number, x: number, y: number): [number, number] {
+export function warpAt(w: NonNullable<ProjectionView['warp']>, W: number, H: number, x: number, y: number): [number, number] {
     const fx = Math.max(0, Math.min(w.gw - 1, (x / W) * (w.gw - 1))), fy = Math.max(0, Math.min(w.gh - 1, (y / H) * (w.gh - 1)));
     const i0 = Math.min(w.gw - 2, Math.floor(fx)), j0 = Math.min(w.gh - 2, Math.floor(fy)), a = fx - i0, b = fy - j0;
     const at = (arr: Float32Array, i: number, j: number) => arr[j * w.gw + i];

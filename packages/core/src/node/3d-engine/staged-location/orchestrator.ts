@@ -215,6 +215,8 @@ import { addSeamEdges, applySeamGain, cutChunkLayer, DISTRICT_SEAMS_PARAMS, DIST
 import * as os from 'os';
 import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
 import { FACADE_UPSCALE_EXTRA_MS, FACADE_UPSCALE_MODELS, FACADE_UPSCALE_VERSION, facadeUpscaleAsked, facadeUpscaleProvenance, upscaleFacadeTextures } from './pipeline-k/facade-upscale';
+import { STREET_BAND_EXTRA_MS, STREET_BAND_PARAMS, STREET_BAND_VERSION, streetBandAsked, streetBandProvenance, textureStreetBand, type StreetBandView } from './pipeline-k/street-band';
+import { contextOutsideOutline, mergeMeshes, STREET_BAND_VIEWS } from './pipeline-k/street-band-survey';
 import { detailBakeProvenance, TILE_DETAIL_BAKE_VERSION, type TileDetailBakeReport } from '../../spatial/tile-detail-bake';
 import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visible-defects';
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
@@ -1620,7 +1622,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     const artifactId = stagedArtifactId(runId, intoActive?.id);
     const run = new StagedRun(runId, request, ctx, now, artifactId, intoActive);
     runningStages = () => STAGE_IDS.filter(id => run.summary(id).status === 'running');
-    const runner = new Runner(run, ctx, now, (request.isolate ? RUN_BUDGET_MS : stagedPipelineKD(request) && !request.chunk ? CHUNKED_DISTRICT_RUN_BUDGET_MS : DISTRICT_RUN_BUDGET_MS) + (facadeUpscaleAsked(request.steps) ? FACADE_UPSCALE_EXTRA_MS : 0));
+    const runner = new Runner(run, ctx, now, (request.isolate ? RUN_BUDGET_MS : stagedPipelineKD(request) && !request.chunk ? CHUNKED_DISTRICT_RUN_BUDGET_MS : DISTRICT_RUN_BUDGET_MS) + (facadeUpscaleAsked(request.steps) ? FACADE_UPSCALE_EXTRA_MS : 0) + (streetBandAsked(request.steps) ? STREET_BAND_EXTRA_MS : 0));
     runner.proceduralOnly = request.procedural === true;
     // a procedural-only build never lists the other stages, not even as pending before they are skipped
     if (runner.proceduralOnly) for (const s of run.state.stages) if (!PROCEDURAL_STAGES.has(s.stage)) s.outOfScope = true;
@@ -3369,6 +3371,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // the facade upscale: each rebuilt facade's photo given fine detail by an image model, only where its answer still
                 // matches the photo (pipeline-k/facade-upscale.ts, generated); off by default, SCRATCHBOX_K_FACADE_UPSCALE=1 or the node graph on
                 const facadeUpscaleOn = kTwin && facadeUpscaleAsked(request.steps);
+                // the street band: the rebuilt facades' lowest storeys textured from registered Street View photos (pipeline-k/street-band.ts,
+                // photo-inferred); off by default, SCRATCHBOX_K_STREET_BAND=1 or the node graph on; a single building only (its structure and survey)
+                const streetBandOn = kTwin && isolateMode && !!structure && !!t.ground && streetBandAsked(request.steps);
                 // the view relight: the photos evened out from image-model relights of rendered views (pipeline-k/view-relight.ts);
                 // off by default, SCRATCHBOX_K_VIEW_RELIGHT=1 or the node graph on; needs the lighting model client
                 const relightClient = harmonizeOn && stepOn('twin.viewRelight', process.env.SCRATCHBOX_K_VIEW_RELIGHT?.trim() === '1') ? deps.textures?.lighting : undefined;
@@ -3460,7 +3465,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // a class shown the same candidates as one chosen before (another building, chunk or run) and of its colour takes that pick; only the rest are asked
                 const chooseSets = askSets ? async (rows: ChoiceRow[], swatches: { png: Buffer; spanM?: number }): Promise<Array<SetChoice | undefined>> => (await chooseWithMemory(rows, swatches, askSets, modelReadings ? { store: modelReadings, model: FACADE_READER_MODEL_KEY } : undefined)).picks : undefined;
                 const grammarFile = kOrthos ? path.join(kOrthos, WALL_GRAMMAR_FILE) : undefined;
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, upwardLift ? `upLift:${upwardLift}` : '', target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets && visionAvailable ? MATERIAL_FINISH_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', facadeUpscaleOn ? `${FACADE_UPSCALE_VERSION}:${visionAvailable ? 'image' : 'none'}` : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '', readerAsk ? `${FACADE_READER_VERSION}:${TWIN_READER_VERSION}:${JSON.stringify(FACADE_READER_PARAMS)}` : '', nameClasses ? MATERIAL_NAMING_VERSION : '', chooseSets ? MATERIAL_CHOICE_VERSION : '');
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, upwardLift ? `upLift:${upwardLift}` : '', target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets && visionAvailable ? MATERIAL_FINISH_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', facadeUpscaleOn ? `${FACADE_UPSCALE_VERSION}:${visionAvailable ? 'image' : 'none'}` : '', streetBandOn ? `${STREET_BAND_VERSION}:${JSON.stringify(STREET_BAND_PARAMS)}:${STREET_BAND_VIEWS}:${deps.textures?.enhance ? 'clean' : 'raw'}` : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '', readerAsk ? `${FACADE_READER_VERSION}:${TWIN_READER_VERSION}:${JSON.stringify(FACADE_READER_PARAMS)}` : '', nameClasses ? MATERIAL_NAMING_VERSION : '', chooseSets ? MATERIAL_CHOICE_VERSION : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions']; materialClasses?: TileRefineTwin['materialClasses'] }>('textures', key, async dir => {
                     const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(upwardLift ? { upwardShadowLift: upwardLift } : {}), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0, ...(kdBuildings ? { buildingOf: districtBuildingIndex(kdBuildings) } : {}), ...(process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' && extraction.geometryGlb && fs.existsSync(extraction.geometryGlb) ? { skyContext: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)) } : {}) } } : {}), ...(relightClient ? { viewRelight: { client: relightClient, models: lightingModels(), params: viewRelightEnvParams().params, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`) } } : {}), ...roofShadowOpts, ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m), ...(chooseSets && swatches ? { choose: (rows: ChoiceRow[]) => chooseSets(rows, swatches) } : {}), ...(readFinish && swatches ? { finish: () => readFinish(classes, swatches.png) } : {}), ...(modelReadings ? { store: modelReadings } : {}) }), planes, ...(planesFor ? { planesFor } : {}), ...(nameClasses ? { nameClasses } : {}) } } : {}) } : enhance || roofShadowOn ? {
                         ...(enhance ? { recreate: {
@@ -3526,6 +3531,55 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         if (fu.report.upscaled) { twinGlb = fu.glb; provenance = [...provenance, facadeUpscaleProvenance(fu.report)]; }
                         io.progress(fu.report.upscaled ? `facade upscale: ${fu.report.upscaled} of ${fu.report.facades} rebuilt facades given fine detail (${fu.report.calls} image calls, ${fu.report.cached} tiles saved before; generated)` : `no facade upscaled: ${fu.report.skipped}`);
                         cache.writeRunNote(runId, 'pipeline_k_facade_upscale', { layer: target.layer.layer, ...fu.report });
+                    }
+                    if (kTwin && !streetBandOn) logStep('twin.streetBand', 'skipped');
+                    if (streetBandOn) {
+                        logStep('twin.streetBand', 'running');
+                        const sv = streetView ?? {};
+                        const segmenter = process.env.SCRATCHBOX_TEXTURE_OWNERSHIP === '0' ? false : deps.textures?.segmenter
+                            ?? objectSegmenter(visionAvailable ? { modelSource: { getGenAIClient: async () => visionAvailable.client, getModelCandidates: () => visionAvailable.candidates } } : {});
+                        const missing = missingCredentials(sv);
+                        let surveyNote: Record<string, unknown> | undefined;
+                        const sb = missing || !segmenter
+                            ? { glb: Buffer.from(twinGlb), report: undefined, skipped: missing ?? 'no segmenter for the ownership masks (SCRATCHBOX_TEXTURE_OWNERSHIP=0)' }
+                            : await (async () => {
+                                const found = await discoverOnce();
+                                const usable = found.panos.filter(p => !sv.refusedPanos?.has(p.panoId));
+                                // the built mesh as the views see it: the twin with the tile mesh around it (the structure's own scan cut away)
+                                const twinFile = path.join(dir, 'street_band_twin.glb');
+                                fs.writeFileSync(twinFile, twinGlb);
+                                const twinMesh = sceneToRenderMesh(readGlbScene(twinFile));
+                                fs.rmSync(twinFile, { force: true });
+                                const context = contextOutsideOutline(sceneToRenderMesh(readGlbScene(extraction.geometryGlb)), structure!.outline);
+                                const depthMesh = mergeMeshes(twinMesh, context);
+                                const views = async (): Promise<StreetBandView[]> => {
+                                    io.progress(`textures: street band: surveying the lowest storeys with Street View (${usable.length} Google panos near)`);
+                                    const got = await registeredSurveyViews({
+                                        site: { structure: structure!, ground: t.ground!, unmaskedTop: t.unmaskedTop ?? t.ground!.top }, panos: usable, maxViews: STREET_BAND_VIEWS, streetLevel: true,
+                                        sv: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() }, tileMeshFiles: [extraction.geometryGlb], structureMesh: twinMesh,
+                                        context, segment: segmenter, ...(visionAvailable ? { target: request.query } : {}),
+                                        // the obstruction-free copies in memory only (no cacheDir: a cleaned photo is still a Street View image)
+                                        ...(deps.textures?.enhance ? { clean: { client: deps.textures.enhance, models: [LIGHTING_MODEL_FULL, LIGHTING_MODEL_LITE] } } : {}),
+                                        signal: io.signal, onProgress: m => io.progress(`textures: street band: ${m}`)
+                                    });
+                                    if (got.images.length) run.state.attribution = [...new Set([...run.state.attribution, 'Street View ©Google'])];
+                                    surveyNote = {
+                                        images: got.images.length, views: got.views.map(v => ({ panoId: v.panoId, faceId: v.faceId, date: v.captureDate ?? null, registration: v.registration, ownership: v.ownership?.status, ownedPixels: v.ownerMask?.reduce((a, x) => a + (x ? 1 : 0), 0) ?? 0, ...(v.clean ? { clean: v.clean } : {}) })),
+                                        refusals: got.refusals, failures: got.failures, registrationError: got.registrationError, registration: got.registration, ms: got.ms, panosNear: usable.length
+                                    };
+                                    return got.views;
+                                };
+                                const r = await textureStreetBand(twinGlb, { groundY: structure!.groundY, panoSet: usable.map(p => p.panoId), views, depthMesh, ...(modelReadings ? { store: modelReadings } : {}), signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`) });
+                                return { ...r, skipped: r.report.skipped };
+                            })().catch((err: unknown) => {
+                                if (isAbort(err) || io.signal.aborted) throw err;
+                                return { glb: Buffer.from(twinGlb), report: undefined, skipped: `the street band failed: ${errorMessage(err)}` };
+                            });
+                        const banded = sb.report?.banded ?? 0;
+                        logStep('twin.streetBand', banded ? 'done' : 'skipped');
+                        if (banded && sb.report) { twinGlb = sb.glb; provenance = [...provenance, streetBandProvenance(sb.report)]; }
+                        io.progress(banded && sb.report ? `street band: ${banded} rebuilt facades' lowest ${STREET_BAND_PARAMS.bandTopM} m from Street View (${Math.round(100 * sb.report.photoShare)}% of ${sb.report.bandAreaM2} m² photo-inferred, ${Math.round(100 * sb.report.cleanShare)}% from obstruction-free copies, generated; ${sb.report.panosUsed.length} panos, ${sb.report.stored} bands read back)` : `no street band: ${sb.skipped}`);
+                        cache.writeRunNote(runId, 'pipeline_k_street_band', { layer: target.layer.layer, ...(sb.report ?? { version: STREET_BAND_VERSION }), ...(sb.skipped ? { skipped: sb.skipped } : {}), ...(surveyNote ? { survey: surveyNote } : {}) });
                     }
                     fs.writeFileSync(path.join(dir, 'twin.glb'), twinGlb);
                     return { value: { rungShares: twin.rungShares, provenance, ladderRung: twin.ladderRung, triangles: twin.triangles, ...(twin.harmonize ? { harmonize: twin.harmonize } : {}), ...(twin.materialRegions ? { materialRegions: twin.materialRegions } : {}), ...(twin.materialClasses ? { materialClasses: twin.materialClasses } : {}) } };

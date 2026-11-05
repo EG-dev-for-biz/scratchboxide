@@ -17,6 +17,7 @@
  */
 
 import { FACADE_UPSCALE_EXTRA_MS, facadeUpscaleAsked } from '../3d-engine/staged-location/pipeline-k/facade-upscale';
+import { STREET_BAND_EXTRA_MS, streetBandAsked } from '../3d-engine/staged-location/pipeline-k/street-band';
 import { stagedDistrict } from '../3d-engine/staged-location/staged-switches';
 
 export interface ToolTimeBudget {
@@ -55,7 +56,9 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
         const kd = asked !== undefined ? stagedDistrict({ district: asked }) === 'kd' : args.isolate !== true && stagedDistrict({}) === 'kd';
         // pipeline K's facade upscale (opt-in) adds its own time (the run's budget grows by the same)
         const upscale = facadeUpscaleAsked(args.steps as Record<string, unknown> | undefined) ? FACADE_UPSCALE_EXTRA_MS : 0;
-        return { maxMs: (kd ? 362 * MIN : args.isolate === true ? 40 * MIN : 142 * MIN) + upscale };
+        // and its street band (opt-in): the Street View survey and the projection
+        const band = streetBandAsked(args.steps as Record<string, unknown> | undefined) ? STREET_BAND_EXTRA_MS : 0;
+        return { maxMs: (kd ? 362 * MIN : args.isolate === true ? 40 * MIN : 142 * MIN) + upscale + band };
     },
     google_3d_tiles_get_full_texture: { maxMs: 40 * MIN },
     google_3d_tiles_clay_blockout_runner: { maxMs: 60 * MIN },

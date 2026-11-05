@@ -245,8 +245,11 @@ export function recessOf(root: THREE.Object3D, mat: THREE.Material): THREE.Vecto
         const box = new THREE.Box3().setFromBufferAttribute(pos as THREE.BufferAttribute).applyMatrix4(mesh.matrixWorld);
         const widthM = Math.hypot(box.max.x - box.min.x, box.max.z - box.min.z);
         if (!(u1 > u0) || !(widthM > 0)) return;
+        // a street band's primitive (pipeline-k/street-band.ts) reads a crop of the photo: its u spans uvRect's share of the photo's
+        const rect = (mat.userData?.sbStreetBand as { uvRect?: number[] } | undefined)?.uvRect;
+        const span = rect && rect[2] > rect[0] ? rect[2] - rect[0] : 1;
         const widths: number[] = [];
-        for (let i = 0; i + 3 < bays.length; i += 4) widths.push(Math.abs(bays[i + 2] - bays[i]) * widthM / (u1 - u0));
+        for (let i = 0; i + 3 < bays.length; i += 4) widths.push(Math.abs(bays[i + 2] - bays[i]) * widthM / ((u1 - u0) * span));
         widths.sort((a, b) => a - b);
         const bayM = widths[widths.length >> 1];
         if (bayM > 0.2) out = new THREE.Vector2(relief / bayM, 0);

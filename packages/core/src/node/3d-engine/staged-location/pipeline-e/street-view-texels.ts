@@ -85,7 +85,7 @@ export interface StreetViewTexelRecord {
 
 const lum = (r: number, g: number, b: number) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
 
-function erode(mask: Uint8Array, W: number, H: number, r: number): Uint8Array {
+export function erode(mask: Uint8Array, W: number, H: number, r: number): Uint8Array {
     if (r <= 0) return mask.slice();
     const tmp = new Uint8Array(W * H).fill(1), out = new Uint8Array(W * H).fill(1);
     for (let y = 0; y < H; y++) {
@@ -106,7 +106,7 @@ function erode(mask: Uint8Array, W: number, H: number, r: number): Uint8Array {
 }
 
 /** Distance (texels, chessboard) of each texel of `mask` to its nearest texel outside it, capped at `cap`. */
-function insideDistance(mask: Uint8Array, W: number, H: number, cap: number): Float32Array {
+export function insideDistance(mask: Uint8Array, W: number, H: number, cap: number): Float32Array {
     const d = new Float32Array(W * H).fill(0);
     for (let i = 0; i < W * H; i++) d[i] = mask[i] ? cap : 0;
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {

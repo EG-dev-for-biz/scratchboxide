@@ -33,7 +33,7 @@ export const BUILD_RESULTS: Record<string, string> = {
     depth: 'window depth', cleanClay: 'cleaned scan', latticeClay: 'facades rebuilt', baseClay: 'base cleaned',
     sealedClay: 'sealed shell', finalClay: 'final model', score: 'relief score', holes: 'holes seen',
     ownerViews: 'ownership views', ownerMasks: 'ownership vote', votedClay: 'voted remesh', registeredPoses: 'registered photos', treeStrip: 'trees', delit: 'de-lit photos',
-    harmonised: 'harmonised photos', materials: 'material maps', partyWall: 'party wall', facadeDetail: 'upscaled facade photos', late: 'later layers', published: 'scene'
+    harmonised: 'harmonised photos', materials: 'material maps', partyWall: 'party wall', facadeDetail: 'upscaled facade photos', streetBand: 'street-level facade photos', late: 'later layers', published: 'scene'
 };
 
 /** Pipeline K's steps, in run order. */
@@ -71,6 +71,7 @@ export const BUILD_STEPS: BuildStepSpec[] = [
     { key: 'twin.partyWall', stage: 'textures', title: 'Party wall', needs: ['harmonised', 'baseClay'], makes: ['partyWall'] },
     { key: 'twin.detailBake', stage: 'textures', title: 'Swatch detail', needs: ['harmonised', 'tiles'], makes: ['detail'] },
     { key: 'twin.facadeUpscale', stage: 'textures', title: 'Upscale the facade photos', needs: ['harmonised', 'latticeClay'], makes: ['facadeDetail'] },
+    { key: 'twin.streetBand', stage: 'textures', title: 'Street View on the lowest storeys', needs: ['harmonised', 'latticeClay'], makes: ['streetBand'] },
     { key: 'textures.lateLayers', stage: 'textures', title: 'Textures of later layers', needs: ['materials'], makes: ['late'] },
     { key: 'textures-late', stage: 'textures-late', title: 'Textures of later layers', needs: ['materials'], makes: ['late'] }
 ];
@@ -103,5 +104,6 @@ export const TOGGLEABLE_STEPS = new Map<string, string>([
     ['twin.materials', 'no roughness, metal or glass maps: the photos only'],
     ['twin.partyWall', 'the party wall stays untextured'],
     ['twin.detailBake', 'the photo atlases keep the tile\'s own resolution, no swatch detail'],
-    ['twin.facadeUpscale', 'the rebuilt facades keep their photo\'s own resolution (about 15 cm a texel), no image-model detail']
+    ['twin.facadeUpscale', 'the rebuilt facades keep their photo\'s own resolution (about 15 cm a texel), no image-model detail'],
+    ['twin.streetBand', 'the lowest storeys keep the tile photo (about 15 cm a texel, grazing and smeared at street level), no Street View texels']
 ]);
