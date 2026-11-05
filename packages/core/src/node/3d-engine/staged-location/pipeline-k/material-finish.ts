@@ -19,6 +19,8 @@
  * metal gate, no glass layer); a confident reading also sets the finish those maps are drawn at (finishMaps): the set's
  * roughness and metalness scaled to the read values, its grain kept, and its normal relief by the square of the read
  * roughness (reliefFullAt), so a surface read smooth and reflective (window glass) is drawn smooth and nearly flat (user, 2026-11-05);
+ * a metal read is settled against the other classes' first (settleFinishes: a class of the colour the building mostly
+ * reads dielectric is that material in shade, never drawn metal);
  * and the set's grain is drawn only as far as the pick by appearance confirmed the set (grainFullAtConf) and as far as its
  * tile fits the element its class repeats on (patternFit) and its pattern is borne out by the photo (energyFit).
  * Labelled photo-inferred.
@@ -52,8 +54,35 @@ export const FINISH_READ = {
      * smoother drawn 0.08, its hedged 0.1-0.2 metalness drawn 0.02-0.08; polished stone read 0.3 drawn 0.18; a matte or
      * metal read (0.5 and up) as read. One curve for every class.
      */
-    smoothBelow: 0.5, minRoughness: 0.08
+    smoothBelow: 0.5, minRoughness: 0.08,
+    /**
+     * Shade twins (user, 2026-11-05: "we are assigning a shine to too many things, this stone work should not have a sheen
+     * at all"): a class is a colour cluster, so a wall's shaded parts fall in a darker class with whatever else is that
+     * dark (the Empire State Building's shadowed limestone with its aluminium spandrels), and one metal read was drawn on
+     * all of it. Classes of one region within shadeChroma of each other (CIELAB a, b distance: lightness left out) are one
+     * colour lit differently; a class read metal (metalness at least metalAt) keeps it only when, among those, the share
+     * read metal is at least the share read dielectric; else it is the dielectric majority's material in shade.
+     */
+    shadeChroma: 4, metalAt: 0.5
 } as const;
+
+/**
+ * Settles the classes' readings against each other (FINISH_READ.shadeChroma): a class confidently read metal whose colour
+ * the building's surface mostly reads dielectric takes the finish of its nearest such class in lightness (that material in
+ * shade), keeping its own confidence and words, with `shadeOf` naming the class. Readings are returned in class order.
+ */
+export function settleFinishes(classes: Array<{ meanLab: [number, number, number]; share: number; openings?: boolean }>, finishes: Array<ClassFinish | undefined>, R = FINISH_READ): Array<(ClassFinish & { shadeOf?: number }) | undefined> {
+    const sure = (k: number) => !!finishes[k] && finishes[k]!.conf >= R.minConf;
+    const metal = (k: number) => finishes[k]!.metalness >= R.metalAt;
+    return finishes.map((f, k) => {
+        if (!f || !sure(k) || !metal(k)) return f;
+        const near = classes.map((_, j) => j).filter(j => sure(j) && !!classes[j].openings === !!classes[k].openings && Math.hypot(classes[j].meanLab[1] - classes[k].meanLab[1], classes[j].meanLab[2] - classes[k].meanLab[2]) <= R.shadeChroma);
+        const metalShare = near.filter(metal).reduce((a, j) => a + classes[j].share, 0), others = near.filter(j => !metal(j));
+        if (!others.length || metalShare >= others.reduce((a, j) => a + classes[j].share, 0)) return f;
+        const twin = others.reduce((a, j) => (Math.abs(classes[j].meanLab[0] - classes[k].meanLab[0]) < Math.abs(classes[a].meanLab[0] - classes[k].meanLab[0]) ? j : a));
+        return { ...f, roughness: finishes[twin]!.roughness, metalness: finishes[twin]!.metalness, shadeOf: twin };
+    });
+}
 
 /** The roughness a read is drawn at (FINISH_READ.smoothBelow): smooth reads drawn smoother, matte ones as read. */
 export function drawnRoughness(read: number, R = FINISH_READ): number {
