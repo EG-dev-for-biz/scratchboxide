@@ -61,7 +61,16 @@ export interface PathTraceOverlayOptions {
     onStatus: (status: PathTraceStatus) => void;
     /** Called once the session is open, before the first view (e.g. to pause the viewport's own renderer). */
     onOpened?: (opened: PathTraceOpened) => void;
+    /**
+     * Called with true when the camera (or the view's size) starts changing, and with false once the first frame of
+     * the view it came to rest at is drawn. While it moves no view is sent: the viewport's own renderer should show
+     * the motion, and the traced frame comes back when the camera has been still for REST_MS.
+     */
+    onMotion?: (moving: boolean) => void;
 }
+
+/** How long the camera must hold still before a traced view is sent for it. */
+export const REST_MS = 100;
 
 export interface PathTraceOpened {
     sessionId: string;
@@ -86,6 +95,11 @@ export interface PathTraceStill {
 
 export interface PathTraceOverlayHandle {
     stop(): void;
+    /**
+     * New light for the open session (POST /lights: the sun and sky or dome, and the punctual lights), then the
+     * current view again so the frame restarts under it. No capture, no build, no texture decoded again.
+     */
+    relight(update: { lighting?: unknown; lights?: unknown[] }): Promise<void>;
     /** Renders one denoised still of the current view into the workspace; resolves with its workspace path. */
     renderStill(options?: PathTraceStillOptions): Promise<PathTraceStill>;
 }
@@ -120,12 +134,21 @@ export function startPathTraceOverlay(options: PathTraceOverlayOptions): PathTra
     let cancelled = false;
     let sessionId: string | null = null;
     let sentView = '';
-    let viewTimer: number | null = null;
     let ticker: number | null = null;
+    let motionFrame: number | null = null;
     let lastCameraTag = '';
+    let stillSince = 0;
+    let moving = false;
+    // Whether a view went out since the camera last moved: until then frames of the old view are not drawn.
+    let viewSinceMotion = false;
+    // Bumped on every camera change, so a view request that returns after a newer move does not count.
+    let motionGen = 0;
+    let sendingView = false;
     let lastFrameTag = '';
     let frameSeq = 0;
     let done = false;
+    // One frame request at a time: a request still answering (a frame is several MB) is never doubled up.
+    let polling = false;
     let status: PathTraceStatus | null = null;
     const offscreen = document.createElement('canvas');
 
@@ -155,20 +178,36 @@ export function startPathTraceOverlay(options: PathTraceOverlayOptions): PathTra
             renderScale: size.renderScale
         };
         const tag = JSON.stringify(body);
-        if (tag === sentView) return;
+        if (tag === sentView) {
+            // Back where the last view was: its frame still stands.
+            setMoving(false);
+            return;
+        }
         sentView = tag;
+        const gen = motionGen;
+        sendingView = true;
         try {
             const started = await post('view', body);
             if (cancelled) return;
             frameSeq = started.seq;
+            if (gen === motionGen) viewSinceMotion = true;
             done = false;
             show({ triangles: started.cut.triangles, clusters: started.cut.clusters, spp: 0, rays: 0, gpuMs: 0, width: size.width, height: size.height, message: undefined });
         } catch (err: any) {
+            setMoving(false);
             if (!cancelled) show({ message: err?.message ?? String(err) });
+        } finally {
+            sendingView = false;
         }
     };
 
-    const draw = (rgba: ArrayBuffer, width: number, height: number) => {
+    const setMoving = (next: boolean) => {
+        if (moving === next) return;
+        moving = next;
+        options.onMotion?.(next);
+    };
+
+    const draw = (rgba: ArrayBuffer, width: number, height: number, displayWidth: number, displayHeight: number) => {
         if (offscreen.width !== width || offscreen.height !== height) {
             offscreen.width = width;
             offscreen.height = height;
@@ -177,19 +216,22 @@ export function startPathTraceOverlay(options: PathTraceOverlayOptions): PathTra
         const ctx = overlay.getContext('2d');
         if (!octx || !ctx) return;
         octx.putImageData(new ImageData(new Uint8ClampedArray(rgba), width, height), 0, 0);
-        // The overlay's backing store matches the frame (device pixels), so the frame is drawn 1:1.
-        if (overlay.width !== width || overlay.height !== height) {
-            overlay.width = width;
-            overlay.height = height;
+        // The overlay's backing store is the view's device pixels: a finished (upscaled) frame is drawn 1:1, a
+        // converging one, sent at its traced size, is scaled up here.
+        if (overlay.width !== displayWidth || overlay.height !== displayHeight) {
+            overlay.width = displayWidth;
+            overlay.height = displayHeight;
         }
         ctx.imageSmoothingEnabled = true;
         ctx.drawImage(offscreen, 0, 0, overlay.width, overlay.height);
     };
 
     const pollFrame = async () => {
-        if (cancelled || !sessionId || done) return;
+        if (cancelled || !sessionId || done || polling) return;
+        polling = true;
         try {
-            const res = await fetch(`/3d/path-trace/frame?sessionId=${encodeURIComponent(sessionId)}&after=${encodeURIComponent(lastFrameTag)}`);
+            // `seq`: frames of a view older than the newest one sent are not wanted, so the server does not send them.
+            const res = await fetch(`/3d/path-trace/frame?sessionId=${encodeURIComponent(sessionId)}&seq=${frameSeq}&after=${encodeURIComponent(lastFrameTag)}`);
             if (cancelled) return;
             if (res.status === 204) return;
             if (!res.ok) throw new Error(`frame failed (HTTP ${res.status})`);
@@ -202,9 +244,13 @@ export function startPathTraceOverlay(options: PathTraceOverlayOptions): PathTra
             if (cancelled || rgba.byteLength !== width * height * 4) return;
             lastFrameTag = `${seq}.${spp}`;
             done = res.headers.get('X-Frame-Done') === '1';
-            draw(rgba, width, height);
+            const displayWidth = Number(res.headers.get('X-Frame-Display-Width') ?? width);
+            const displayHeight = Number(res.headers.get('X-Frame-Display-Height') ?? height);
+            draw(rgba, width, height, displayWidth, displayHeight);
+            setMoving(false);
             show({
-                spp, rays: Number(res.headers.get('X-Frame-Rays')), gpuMs: Number(res.headers.get('X-Frame-Gpu-Ms')), width, height,
+                spp, rays: Number(res.headers.get('X-Frame-Rays')), gpuMs: Number(res.headers.get('X-Frame-Gpu-Ms')),
+                width: displayWidth, height: displayHeight,
                 denoised: res.headers.get('X-Frame-Denoised') === '1', denoiseMs: Number(res.headers.get('X-Frame-Denoise-Ms') ?? 0),
                 historyPixels: Number(res.headers.get('X-Frame-History') ?? 0),
                 renderWidth: Number(res.headers.get('X-Frame-Render-Width') ?? width), renderHeight: Number(res.headers.get('X-Frame-Render-Height') ?? height),
@@ -212,6 +258,8 @@ export function startPathTraceOverlay(options: PathTraceOverlayOptions): PathTra
             });
         } catch (err: any) {
             if (!cancelled) show({ message: err?.message ?? String(err) });
+        } finally {
+            polling = false;
         }
     };
 
@@ -225,15 +273,30 @@ export function startPathTraceOverlay(options: PathTraceOverlayOptions): PathTra
             show({ device: opened.device, materials: m.source === 'glb' ? `${m.count} materials · ${m.texturesUploaded} textures` : 'clay (no source GLB)', message: undefined });
             options.onOpened?.({ sessionId: opened.sessionId, device: opened.device, origin: opened.origin, materials: m });
             await sendView();
-            ticker = window.setInterval(() => {
+            lastCameraTag = JSON.stringify({ v: options.getView(), size: frameSize(), t: options.thresholdPx?.() });
+            // The camera is checked every display frame, so the viewport takes over on the first frame of a move.
+            const watchCamera = () => {
                 if (cancelled) return;
+                const now = performance.now();
                 const tag = JSON.stringify({ v: options.getView(), size: frameSize(), t: options.thresholdPx?.() });
                 if (tag !== lastCameraTag) {
+                    // Moving: hand the screen to the viewport's renderer and send nothing until the camera rests.
                     lastCameraTag = tag;
-                    if (viewTimer !== null) window.clearTimeout(viewTimer);
-                    viewTimer = window.setTimeout(() => { void sendView(); }, 80);
+                    stillSince = now;
+                    motionGen++;
+                    viewSinceMotion = false;
+                    // The view it left is no longer wanted: free the GPU for the viewport while the camera moves.
+                    if (!moving && !done && sessionId) void post('pause', { sessionId }).catch(() => undefined);
+                    setMoving(true);
+                } else if (moving && !viewSinceMotion && !sendingView && now - stillSince >= REST_MS) {
+                    void sendView();
                 }
-                void pollFrame();
+                motionFrame = window.requestAnimationFrame(watchCamera);
+            };
+            motionFrame = window.requestAnimationFrame(watchCamera);
+            ticker = window.setInterval(() => {
+                if (cancelled) return;
+                if (!moving || viewSinceMotion) void pollFrame();
             }, 50);
         } catch (err: any) {
             if (!cancelled) show({ message: err?.message ?? String(err) });
@@ -244,9 +307,16 @@ export function startPathTraceOverlay(options: PathTraceOverlayOptions): PathTra
         stop() {
             cancelled = true;
             if (ticker !== null) window.clearInterval(ticker);
-            if (viewTimer !== null) window.clearTimeout(viewTimer);
+            if (motionFrame !== null) window.cancelAnimationFrame(motionFrame);
             overlay.getContext('2d')?.clearRect(0, 0, overlay.width, overlay.height);
             if (sessionId) void post('close', { sessionId }).catch(() => undefined);
+        },
+        async relight(update) {
+            if (!sessionId) throw new Error('the path tracer is not open yet');
+            await post('lights', { sessionId, ...update });
+            if (cancelled) return;
+            sentView = '';
+            await sendView();
         },
         async renderStill(still: PathTraceStillOptions = {}) {
             if (!sessionId) throw new Error('the path tracer is not open yet');

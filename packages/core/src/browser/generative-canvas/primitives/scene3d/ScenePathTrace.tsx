@@ -18,7 +18,7 @@ import * as React from 'react';
 import type * as THREE from 'three';
 import { startPathTraceOverlay, type PathTraceOverlayHandle, type PathTraceStatus } from '../../services/virtual-geometry/path-trace-client';
 import { PathTraceStillButton } from './PathTraceStillButton';
-import { pathTraceLightingOf, pathTraceViewOf, snapshotSceneForPathTrace, type PathTraceSnapshotStats } from './pathTraceSnapshot';
+import { pathTraceLightingOf, pathTraceLightsOf, pathTraceViewOf, snapshotSceneForPathTrace, type PathTraceSnapshotStats } from './pathTraceSnapshot';
 
 export function ScenePathTraceButton({ active, onToggle }: { active: boolean; onToggle: () => void }): React.ReactElement {
     return (
@@ -66,6 +66,8 @@ function skippedNote(s: PathTraceSnapshotStats): string {
     if (s.skipped.lines) parts.push(`${s.skipped.lines} line object${s.skipped.lines === 1 ? '' : 's'}`);
     if (s.skipped.shaderMaterials) parts.push(`${s.skipped.shaderMaterials} mesh${s.skipped.shaderMaterials === 1 ? '' : 'es'} with custom shaders`);
     if (s.skipped.instancesOverCap) parts.push(`${fmt(s.skipped.instancesOverCap)} instances past the 30M-triangle cap`);
+    if (s.skipped.areaLights) parts.push(`${s.skipped.areaLights} area light${s.skipped.areaLights === 1 ? '' : 's'}`);
+    if (s.skipped.textures) parts.push(`${s.skipped.textures} texture${s.skipped.textures === 1 ? '' : 's'} that are not 8-bit images`);
     return parts.length ? `Not traced: ${parts.join(', ')}.` : '';
 }
 
@@ -77,6 +79,9 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
     const [error, setError] = React.useState<string | null>(null);
     const [snapshot, setSnapshot] = React.useState<{ stats: PathTraceSnapshotStats; cached: boolean; lighting: string; at: Date } | null>(null);
     const [status, setStatus] = React.useState<PathTraceStatus | null>(null);
+    // While the camera moves the traced frame fades out and the viewport's own renderer shows the motion.
+    const [moving, setMoving] = React.useState(false);
+    const movingRef = React.useRef(false);
     const latest = React.useRef({ scene, camera, exclude, onShowing });
     latest.current = { scene, camera, exclude, onShowing };
 
@@ -85,6 +90,7 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
         if (!active || !overlay) return;
         let cancelled = false;
         let handle: PathTraceOverlayHandle | null = null;
+        let relightTimer: number | null = null;
         setError(null);
         setStatus(null);
         setSnapshot(null);
@@ -102,6 +108,8 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
                 if (!res.ok || !built.success) throw new Error(built.error || `snapshot failed (HTTP ${res.status})`);
                 if (cancelled) return;
                 const lighting = pathTraceLightingOf(s);
+                const sceneLights = pathTraceLightsOf(s, latest.current.exclude()).lights;
+                let sentLight = JSON.stringify({ lighting, sceneLights });
                 setSnapshot({
                     stats: snap.stats, cached: !!built.cached, at: new Date(),
                     lighting: 'sun' in lighting ? `sun ${lighting.sun.elevationDeg.toFixed(0)}° up, azimuth ${lighting.sun.azimuthDeg.toFixed(0)}°` : 'studio dome'
@@ -110,7 +118,7 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
                 const origin = built.origin as [number, number, number];
                 handle = startPathTraceOverlay({
                     overlay,
-                    open: { sbvgUrl: built.sbvgUrl, snapshotId: built.snapshotId, lighting },
+                    open: { sbvgUrl: built.sbvgUrl, snapshotId: built.snapshotId, lighting, lights: sceneLights },
                     getView: () => {
                         const cam = latest.current.camera();
                         return cam ? pathTraceViewOf(cam, origin) : null;
@@ -119,10 +127,33 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
                     onStatus: st => {
                         if (cancelled) return;
                         setStatus(st);
-                        if (st.spp > 0) latest.current.onShowing(true);
+                        if (st.spp > 0 && !movingRef.current) latest.current.onShowing(true);
+                    },
+                    onMotion: m => {
+                        if (cancelled) return;
+                        movingRef.current = m;
+                        setMoving(m);
+                        latest.current.onShowing(!m);
                     }
                 });
                 handleRef.current = handle;
+                // The light is watched apart from the geometry: a change of sun, dome or lamp relights the open
+                // session (no capture, no build) and restarts the frame.
+                relightTimer = window.setInterval(() => {
+                    const sc = latest.current.scene();
+                    if (cancelled || !sc || !handle) return;
+                    const nextLighting = pathTraceLightingOf(sc);
+                    const nextLights = pathTraceLightsOf(sc, latest.current.exclude()).lights;
+                    const tag = JSON.stringify({ lighting: nextLighting, sceneLights: nextLights });
+                    if (tag === sentLight) return;
+                    sentLight = tag;
+                    setSnapshot(prev => prev && {
+                        ...prev,
+                        stats: { ...prev.stats, lights: nextLights.length },
+                        lighting: 'sun' in nextLighting ? `sun ${nextLighting.sun.elevationDeg.toFixed(0)}° up, azimuth ${nextLighting.sun.azimuthDeg.toFixed(0)}°` : 'studio dome'
+                    });
+                    handle.relight({ lighting: nextLighting, lights: nextLights }).catch(err => { if (!cancelled) setError(err?.message ?? String(err)); });
+                }, 500);
             } catch (err: any) {
                 if (!cancelled) {
                     setStage(null);
@@ -132,6 +163,7 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
         })();
         return () => {
             cancelled = true;
+            if (relightTimer !== null) window.clearInterval(relightTimer);
             handle?.stop();
             handleRef.current = null;
             latest.current.onShowing(false);
@@ -145,9 +177,14 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
             <canvas
                 ref={overlayRef}
                 data-testid="path-trace-overlay"
-                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', pointerEvents: 'none', zIndex: 30, visibility: showingFrame ? 'visible' : 'hidden' }}
+                style={{
+                    position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', pointerEvents: 'none', zIndex: 30,
+                    visibility: showingFrame ? 'visible' : 'hidden',
+                    opacity: moving ? 0 : 1, transition: moving ? 'none' : 'opacity 160ms ease-out'
+                }}
             />
-            <div style={hud} data-testid="scene-path-trace-hud">
+            {/* An aside, not a div: the viewport frame stretches every child div over itself (.sb-3d-viewport-frame > div). */}
+            <aside style={hud} data-testid="scene-path-trace-hud">
                 <div style={{ fontWeight: 600, color: '#fff' }}>Metal path tracer{status?.device ? ` · ${status.device}` : ''}</div>
                 {stage && <div>{stage}</div>}
                 {error && <div style={{ color: '#fcd34d', whiteSpace: 'pre-wrap' }}>{error}</div>}
@@ -165,7 +202,8 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
                 {snapshot && (
                     <div style={{ color: 'rgba(255,255,255,0.75)' }}>
                         Scene captured {snapshot.at.toLocaleTimeString()}: {fmt(snapshot.stats.meshes)} meshes, {fmt(snapshot.stats.triangles)} triangles
-                        {snapshot.stats.instancesExpanded ? ` (${fmt(snapshot.stats.instancesExpanded)} instances)` : ''}, {(snapshot.stats.bytes / 1048576).toFixed(1)} MB
+                        {snapshot.stats.instancesExpanded ? ` (${fmt(snapshot.stats.instancesExpanded)} instances)` : ''}
+                        {snapshot.stats.lights ? `, ${snapshot.stats.lights} light${snapshot.stats.lights === 1 ? '' : 's'}` : ''}, {(snapshot.stats.bytes / 1048576).toFixed(1)} MB
                         {snapshot.cached ? ', build reused' : ''} · {snapshot.lighting}. {skippedNote(snapshot.stats)}
                     </div>
                 )}
@@ -182,7 +220,7 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
                         />
                     )}
                 </div>
-            </div>
+            </aside>
         </>
     );
 }

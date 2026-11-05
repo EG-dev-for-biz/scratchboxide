@@ -130,6 +130,12 @@ export interface AtmosphericScatteringConfig {
     /** Thin cloud decks drawn as stacked curved shells, behind the volumetric layer. Strictly opt-in: none by default. */
     cloudLayers?: CloudShellLayer[];
     kelvinTemperature?: number;
+    /**
+     * By day the lights are white-balanced as a camera would be, to the sun and sky together, so the textures keep their
+     * own colour (AtmosphericSkyDome.ts daylightWhiteBalance). false keeps the raw sun colour (a low sun's orange cast).
+     * Golden hour, twilight, night and a chosen kelvinTemperature are never balanced.
+     */
+    whiteBalance?: boolean;
     wavelengthDispersion?: [number, number, number];
 
     // Aerial Perspective & Depth Inscattering
