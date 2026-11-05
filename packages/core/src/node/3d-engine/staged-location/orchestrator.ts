@@ -73,12 +73,13 @@ import {
     type StagedTexturedVariant,
     type StagedLocationResult,
     type StripRoi,
+    type Vec2,
     type VisionModelUse
 } from '../../../common/spatial/staged-location-contracts';
 import { glbMeshCounts, plantTrees, summarizeTrees, type LocationClayTrees } from '../location-clay-pipeline';
 import { TileVegetationError, type TileVegetationPlantRequest, type TileVegetationPlantResult, type TileVegetationStripRequest, type TileVegetationStripResult } from '../tile-vegetation-service';
 import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service';
-import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorBuilding, type VectorEvidence } from './vector-footprints';
+import { buildingPlanLoops, evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorBuilding, type VectorEvidence } from './vector-footprints';
 import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type DistrictStreetAuditSummary } from './district-residual-audit';
 import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, type InventoryCrown, type SceneInventorySummary } from './scene-inventory';
 import { buildDistrictMassingLayer, districtFootprint, districtMassingEnabled, DISTRICT_MASSING_PARAMS, DISTRICT_MASSING_VERSION, DISTRICT_TEXEL_M, massDistrict, planeFirstEnabled, proceduralDistrictEnabled } from './district-massing';
@@ -437,6 +438,16 @@ export function footprintSource(buildings: ReadonlyArray<Pick<VectorBuilding, 'p
     if (buildings.length && buildings.every(b => b.provenance === undefined)) return 'Google vector footprint';
     if (!buildings.length || buildings.some(b => b.provenance === SCAN_FOOTPRINT_TOKEN)) return 'scan outline';
     return [...new Set(buildings.map(b => b.provenance ?? 'Google vector footprint'))].join(' + ');
+}
+
+/**
+ * The structure's footprint as plan loops, from every building it is made of (vector-footprints.ts buildingPlanLoops):
+ * extruded outlines, a modelled 3D building traced from above, else plan-only footprints. `modelled` when any loop was
+ * traced from a modelled building. Empty when none of them has a plan (the caller falls back to the scan's outline).
+ */
+export function footprintLoops(buildings: ReadonlyArray<Pick<VectorBuilding, 'extruded' | 'volumes'>>): { loops: Vec2[][]; modelled: boolean } {
+    const plans = buildings.map(b => buildingPlanLoops(b));
+    return { loops: plans.flatMap(p => p.loops), modelled: plans.some(p => p.modelled && p.loops.length > 0) };
 }
 
 export const STAGE_IDS = Object.keys(STAGES) as StageId[];
@@ -4331,7 +4342,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // district around it (for the hidden-wall test), all in the scene's frame
                 // footprint loops from extruded parts only: a modelled volume's parts are its triangles seen from above, not
                 // an outline, so without extruded parts the structure's own outline (the pick's) stands in
-                const planLoops = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
+                const planLoops = footprintLoops(eBuildings).loops;
                 cache.writeRunNote(runId, 'structure_scan', { schema: 'scratchbox.structure-scan/1', scanGlb: refined.rawClayGlb, districtGlb: tilePath, groundY: picked.pick.groundY, plan: planLoops.length ? planLoops : [structure!.outline], planSource: planLoops.length ? footprintSource(eBuildings) : 'scan outline', place: placeValue?.formattedAddress ?? request.query });
                 // Solar roof facets, in the tile frame
                 let solar: Array<{ pitchDeg: number; azimuthDeg: number; planeHeightMsl: number; center: { lat: number; lng: number }; areaM2: number; x: number; z: number; y: number }> = [];
@@ -4562,8 +4573,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // pipeline K: the base cleaned by the structure's footprint (Google's vector footprint, else the scan's own outline),
                 // named by where its loops come from
                 const kBase = pipelineK && isolateMode && structure ? (() => {
-                    const vec = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
-                    return vec.length ? { loops: vec, source: footprintSource(eBuildings) } : { loops: [structure.outline], source: 'scan outline' };
+                    const vec = footprintLoops(eBuildings);
+                    return vec.loops.length ? { loops: vec.loops, source: `${footprintSource(eBuildings)}${vec.modelled ? ' (modelled building, traced from above)' : ''}` } : { loops: [structure.outline], source: 'scan outline' };
                 })() : undefined;
                 const kLoops = kBase?.loops;
                 // pipeline K's polish (the lattice, clip and infill: a minute and more) on a worker thread, in a heap of its own

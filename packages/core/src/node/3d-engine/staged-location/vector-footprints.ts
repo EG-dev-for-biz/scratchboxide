@@ -18,6 +18,7 @@
 
 import { geodeticToScan } from '../../spatial/StreetViewSurveyPlanner';
 import type { FootprintPrior, Vec2 } from '../../../common/spatial/staged-location-contracts';
+import { cellsFootprint, inRing } from './pipeline-e/massing-spec';
 
 /**
  * A building: every boundary loop of its parts (outer rings and holes, filled even-odd per part), and its height.
@@ -266,4 +267,59 @@ export function footprintPriorFor(buildings: VectorBuilding[], featureIds: strin
         ...(heights.length ? { heightM: Math.max(...heights) } : {}),
         neighbours: neighbours.map(b => ({ id: b.id, parts: b.parts, ...(Number.isFinite(b.heightM) && (b.heightM as number) > 0 ? { heightM: b.heightM } : {}) }))
     };
+}
+
+/** The cell (m) a building's plan is traced on (buildingPlanLoops): its outline stands within one of them outside the model's. */
+export const BUILDING_PLAN_CELL_M = 0.2;
+/** A traced piece of plan smaller than this (m²) is a sliver of the model, not a part of the building. */
+const MIN_PLAN_PIECE_M2 = 4;
+
+/**
+ * A building's plan as outline loops, whatever form Google gives it in: its extruded parts' outer rings; a modelled 3D
+ * building (its `volumes`, which carry no outline of their own: Penn 2 and the ESB come this way) traced from above, the
+ * union of its triangles with any extruded parts on BUILDING_PLAN_CELL_M cells, one loop per connected piece, grown by one
+ * cell so the outline never falls inside the model; else its plan-only 2D footprints. Holes (a courtyard) are not kept:
+ * the loops bound the building, they do not hollow it. Empty when the building has no plan at all.
+ */
+export function buildingPlanLoops(b: Pick<VectorBuilding, 'extruded' | 'volumes'>, cellM = BUILDING_PLAN_CELL_M): { loops: Vec2[][]; modelled: boolean } {
+    const outer = (planOnly: boolean) => (b.extruded ?? []).filter(p => !!p.planOnly === planOnly).map(p => p.loops[0]).filter(l => l && l.length >= 3);
+    const parts = outer(false);
+    if (!b.volumes?.length) return { loops: parts.length ? parts : outer(true), modelled: false };
+    const cells = new Set<number>();
+    const W = 1 << 15, key = (i: number, j: number) => (i + W / 2) * W + (j + W / 2);
+    const fill = (pts: Vec2[], inside: (x: number, z: number) => boolean) => {
+        let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+        for (const [x, z] of pts) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+        for (let i = Math.floor(x0 / cellM); i <= Math.floor(x1 / cellM); i++) for (let j = Math.floor(z0 / cellM); j <= Math.floor(z1 / cellM); j++) {
+            if (inside((i + 0.5) * cellM, (j + 0.5) * cellM)) cells.add(key(i, j));
+        }
+    };
+    for (const v of b.volumes) for (let t = 0; t + 2 < v.indices.length; t += 3) {
+        const [a, c, d] = [v.indices[t], v.indices[t + 1], v.indices[t + 2]].map(k => [v.vertices[k][0], v.vertices[k][2]] as Vec2);
+        const area = (c[0] - a[0]) * (d[1] - a[1]) - (d[0] - a[0]) * (c[1] - a[1]);
+        if (Math.abs(area) < 1e-6) continue;  // a wall seen edge-on from above
+        const side = (p: Vec2, q: Vec2, x: number, z: number) => ((q[0] - p[0]) * (z - p[1]) - (x - p[0]) * (q[1] - p[1])) * Math.sign(area) >= 0;
+        fill([a, c, d], (x, z) => side(a, c, x, z) && side(c, d, x, z) && side(d, a, x, z));
+    }
+    for (const ring of parts) fill(ring, (x, z) => inRing(x, z, ring));
+    // grown by one cell (8 neighbours): a cell centre test leaves up to one cell of the model's edge outside the cells
+    const grown = new Set<number>(cells);
+    for (const k of cells) { const i = Math.floor(k / W), j = k - i * W; for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) grown.add((i + di) * W + (j + dj)); }
+    // each 4-connected piece traced on its own (cellsFootprint keeps only the largest ring of what it is given)
+    const loops: Vec2[][] = [];
+    const seen = new Set<number>();
+    for (const k0 of grown) {
+        if (seen.has(k0)) continue;
+        const piece = new Set<string>(), stack = [k0];
+        seen.add(k0);
+        while (stack.length) {
+            const k = stack.pop()!, i = Math.floor(k / W), j = k - i * W;
+            piece.add(`${i - W / 2},${j - W / 2}`);
+            for (const n of [k - W, k + W, k - 1, k + 1]) if (grown.has(n) && !seen.has(n)) { seen.add(n); stack.push(n); }
+        }
+        if (piece.size * cellM * cellM < MIN_PLAN_PIECE_M2) continue;
+        const ring = cellsFootprint(piece);
+        if (ring) loops.push(ring.map(([x, z]) => [x * cellM, z * cellM] as Vec2));
+    }
+    return loops.length ? { loops, modelled: true } : { loops: parts.length ? parts : outer(true), modelled: false };
 }
