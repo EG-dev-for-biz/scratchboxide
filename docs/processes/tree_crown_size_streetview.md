@@ -2,7 +2,7 @@
 
 - **Date:** 2026-10-20
 - **Domain:** Generative Canvas / staged locations / tile vegetation
-- **Status:** Verified for step 1 (crown-size correction). Step 2, a cheaper near-mid level, is not done; the run stopped on a usage limit.
+- **Status:** Verified for step 1 (crown-size correction). Step 2, a cheaper near-mid level, was not done here (the run stopped on a usage limit); it was done on 2026-11-05, see `2026-11-05-trees-look-real.md`.
 
 ## Question
 Rendered crowns in the Washington Square Arch district (591 trees) looked smaller and lighter than the real crowns in Street View. Do the 3D tiles underestimate crown size?

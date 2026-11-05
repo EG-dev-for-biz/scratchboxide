@@ -22,7 +22,7 @@
  *
  * Cut-outs: what the viewport draws alpha-tested is cut out here by the same pixels (TileTriangles.cutout, drawn by
  * photo-match-eval.ts renderTriangles):
- * - crown cards (the mid level's cards, `sbTrees.crownCards`): the card atlas baked from the GLB's layout
+ * - crown cards (the mid and near-mid levels' cards and the near level's core cards, `sbTrees.crownCards`): the card atlas baked from the GLB's layout
  *   (common/spatial/tree-crown-card-atlas.ts, as treeCrownCards.ts bakes it): the clay ellipses in clay, and for a textured
  *   tree in textured renders the chosen leaf set's cells at each leaf's pick (as treeTextureMaterials.ts bakes it);
  * - leaf clusters of a textured tree in textured renders: the library leaf set's opacity at the cell each card's pick
@@ -38,7 +38,7 @@ import * as path from 'path';
 import { treesLodLevelCount, type TreeCrownCardsExtras, type TreeLodExtras, type TreeNodeExtras, type TreesGlbRootExtras } from '../../../common/spatial/staged-location-contracts';
 import type { PinholeCamera } from '../../../common/spatial/texture-pass-contracts';
 import { crownSlotOf, fovealWeight, resolveTreeLodView, sphereFovealRadius, treeLevelForView, type LodBand, type TreeLodViewInput, type TreeLodViewOptions } from '../../../common/spatial/tree-lod-math';
-import { CROWN_CARD_ATLAS_PX, CROWN_CARD_MIP_SCALE, bakeCrownCardAtlas, crownCardMaskPixels, crownCardsOf, texturedLeafPaint, type AtlasPixels } from '../../../common/spatial/tree-crown-card-atlas';
+import { CROWN_CARD_MIP_SCALE, crownCardAtlasPx, bakeCrownCardAtlas, crownCardMaskPixels, crownCardsOf, texturedLeafPaint, type AtlasPixels } from '../../../common/spatial/tree-crown-card-atlas';
 import {
     DEFAULT_TREE_TEXTURE_OPTIONS, MAX_LEAF_CELLS, leafCardFit, leafCellIndex, leafSolidity, validateTreeTextureIndex, type TreeLeafTextureEntry, type TreeTextureIndex
 } from '../../../common/spatial/tree-texture-library';
@@ -230,10 +230,10 @@ function libraryAt(indexFile: string): { index: TreeTextureIndex; atlas(e: TreeL
 
 /** Card atlases as alpha maps, per layout (and leaf set), shared by every file read in the process. */
 const cardMaps = new Map<string, CutoutAlphaMap>();
-function cardMap(key: string, make: () => Uint8Array): CutoutAlphaMap {
+function cardMap(key: string, side: number, make: () => Uint8Array): CutoutAlphaMap {
     let m = cardMaps.get(key);
     // the card textures are clamped and 4x anisotropic (treeCrownCards.ts crownCardTexture)
-    if (!m) { const px = make(); cardMaps.set(key, m = alphaMap(CROWN_CARD_ATLAS_PX, CROWN_CARD_ATLAS_PX, i => px[i * 4 + 3], 4)); }
+    if (!m) { const px = make(); cardMaps.set(key, m = alphaMap(side, side, i => px[i * 4 + 3], 4)); }
     return m;
 }
 
@@ -267,7 +267,7 @@ function treeCutouts(root: TreesGlbRootExtras, all: TaggedTileTriangles, levels:
         return k;
     };
     const layoutKey = cards ? JSON.stringify([cards.cols, cards.rows, cards.clayLeafAspect, cards.cells]) : '';
-    const clayCard = (c: TreeCrownCardsExtras) => kind('card:clay', () => ({ map: -1, mipScale: CROWN_CARD_MIP_SCALE, gain: 1, alpha: cardMap(layoutKey, () => crownCardMaskPixels(c)) }));
+    const clayCard = (c: TreeCrownCardsExtras) => kind('card:clay', () => ({ map: -1, mipScale: CROWN_CARD_MIP_SCALE, gain: 1, alpha: cardMap(layoutKey, crownCardAtlasPx(c), () => crownCardMaskPixels(c)) }));
     const entries = new Map<string, TreeLeafTextureEntry | undefined>();
     const entryFor = (id: string | undefined): TreeLeafTextureEntry | undefined => {
         if (!lib || !id) return undefined;
@@ -289,7 +289,7 @@ function treeCutouts(root: TreesGlbRootExtras, all: TaggedTileTriangles, levels:
             // a textured tree's cards wear its leaf set's card atlas; any other tree's are masked by the clay cut-out
             textured[t] = e
                 ? kind(`card:${e.id}`, () => ({ map: -1, mipScale: CROWN_CARD_MIP_SCALE * leafSolidity(e.leaf.fill), gain: 1, solidity: leafSolidity(e.leaf.fill),
-                    alpha: cardMap(`${layoutKey}|${e.id}`, () => bakeCrownCardAtlas(cards, CROWN_CARD_ATLAS_PX, texturedLeafPaint(e, lib!.atlas(e), cards.clayLeafAspect))) }))
+                    alpha: cardMap(`${layoutKey}|${e.id}`, crownCardAtlasPx(cards), () => bakeCrownCardAtlas(cards, crownCardAtlasPx(cards), texturedLeafPaint(e, lib!.atlas(e), cards.clayLeafAspect))) }))
                 : clay[t];
             continue;
         }

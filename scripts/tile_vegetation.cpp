@@ -112,6 +112,10 @@ static void usage() {
         "    --crown-correction PATH   photo-inferred crown widths and bases (scratchbox.crown-correction/1), applied before growing\n"
         "    --crown-cards 0|1 (1) --crown-card-side-per-reach V (2) --crown-card-coverage-share V (1)   the mid level as large leaf-spray cards\n"
         "                                    (side V cluster reaches) placed until they cover V x what the mid clusters would\n"
+        "    --card-target-share V (1)  every card set also aims at V x the crown's Beer-Lambert target (0: its clusters' cover alone)\n"
+        "    --near-mid-cards 0|1 (1) --near-mid-card-leaf-scale V (1.3)   the near-mid level as clumped leaf cards (their leaves V x the blades)\n"
+        "    --core-cards 0|1 (1) --core-card-leaf-scale V (1.25) --core-card-inset-per-reach V (0.9)   cards inset beneath the\n"
+        "                                    near level's leaves where the crown still shows through them (its dark core)\n"
         "    --hero-roi-json PATH      a scratchbox.strip-roi/1 polygon: a tree whose stem lies inside it holds full (near)\n"
         "                              quality at any realistic distance instead of its own height-scaled bands\n"
         "                              (--hero-full-quality-m, default 3000); the GPU-adaptive viewport budget still applies\n"
@@ -469,6 +473,14 @@ static int runPlant(const Args& a) {
     P.treeLod.crownCardCoverageShare = a.num("crown-card-coverage-share", P.treeLod.crownCardCoverageShare);
     if (!(P.treeLod.crownCardSidePerReach > 0) || !(P.treeLod.crownCardCoverageShare > 0)) throw VegetationError("bad_request", "--crown-card-side-per-reach and --crown-card-coverage-share must be > 0");
     P.treeLod.nearMidAreaGain = a.num("near-mid-area-gain", P.treeLod.nearMidAreaGain);
+    P.treeLod.cardTargetShare = a.num("card-target-share", P.treeLod.cardTargetShare);
+    P.treeLod.nearMidCards = a.num("near-mid-cards", P.treeLod.nearMidCards ? 1 : 0) != 0;
+    P.treeLod.nearMidCardLeafScale = a.num("near-mid-card-leaf-scale", P.treeLod.nearMidCardLeafScale);
+    P.treeLod.coreCards = a.num("core-cards", P.treeLod.coreCards ? 1 : 0) != 0;
+    P.treeLod.coreCardLeafScale = a.num("core-card-leaf-scale", P.treeLod.coreCardLeafScale);
+    P.treeLod.coreCardInsetPerReach = a.num("core-card-inset-per-reach", P.treeLod.coreCardInsetPerReach);
+    if (P.treeLod.cardTargetShare < 0 || !(P.treeLod.nearMidCardLeafScale > 0) || !(P.treeLod.coreCardLeafScale > 0) || P.treeLod.coreCardInsetPerReach < 0)
+        throw VegetationError("bad_request", "--card-target-share and --core-card-inset-per-reach must be >= 0, --near-mid-card-leaf-scale and --core-card-leaf-scale > 0");
     if (P.treeLod.coverageLeafAreaIndex < 0 || P.treeLod.coverageMaxFillShare < 0) throw VegetationError("bad_request", "--coverage-leaf-area-index and --coverage-max-fill-share must be >= 0");
     if (!(P.treeLod.level1AreaGain > 0) || !(P.treeLod.nearMidAreaGain > 0)) throw VegetationError("bad_request", "--mid-area-gain and --near-mid-area-gain must be > 0");
     P.treeLod.farWoodTrianglesPerHeightM = a.num("far-wood-triangles-per-height", P.treeLod.farWoodTrianglesPerHeightM);
@@ -687,6 +699,8 @@ static int runPlant(const Args& a) {
               << ", \"ms\": " << json::num(t.lodMs) << ", \"msWood\": " << json::num(L.msWood) << ", \"msTwigs\": " << json::num(L.msTwigs) << ", \"msStations\": " << json::num(L.msStations)
               << ", \"msRepair\": " << json::num(L.msRepair) << ", \"msFill\": " << json::num(L.msFill) << ", \"msMeasure\": " << json::num(L.msMeasure) << ", \"msCards\": " << json::num(L.msCards) << ", \"msDrawn\": " << json::num(L.msDrawn)
               << (L.midCards() ? ", \"crownCards\": " + detail::crownCardsJson(L, true) : std::string())
+              << (L.nearMidCards() ? ", \"nearMidCards\": " + detail::cardSetJson(L.nearMidCardCount(), L.nearMidCardSideM, L.nearMidCardCandidates, L.msNearMidCards) : std::string())
+              << (L.coreCardCount() ? ", \"coreCards\": " + detail::cardSetJson(L.coreCardCount(), L.coreCardSideM, L.coreCardCandidates, L.msCoreCards) : std::string())
               << ", \"coverage\": " << detail::coverageJson(L.coverage) << "}";
         }
         s << "}";

@@ -17,8 +17,12 @@
 import type { TreeCrownCardsExtras, TreesGlbRootExtras } from './staged-location-contracts';
 import { MAX_LEAF_CELLS, leafCellIndex, type TreeLeafTextureEntry } from './tree-texture-library';
 
-/** Atlas side (px) the cards are baked at (cells of ATLAS_PX / cols across). */
+/** Atlas side (px) a 2 x 2 card atlas is baked at (cells of ATLAS_PX / cols across). */
 export const CROWN_CARD_ATLAS_PX = 512;
+/** A cell's side (px) in a baked atlas. */
+export const CROWN_CARD_CELL_PX = 256;
+/** Atlas side (px) a layout's cards are baked at: every cell CROWN_CARD_CELL_PX on its longer side, whatever the grid. */
+export const crownCardAtlasPx = (cards: Pick<TreeCrownCardsExtras, 'cols' | 'rows'>): number => CROWN_CARD_CELL_PX * Math.max(1, cards.cols, cards.rows);
 /** How much a card's alpha rises per mip level of its mask (as the leaves' alphaMipScale), so a distant card does not erode. */
 export const CROWN_CARD_MIP_SCALE = 0.4;
 
@@ -98,7 +102,7 @@ export const clayLeafPaint = (cards: TreeCrownCardsExtras) => (): CrownCardLeafP
  * green channel, and the bake fills a cell's empty pixels with its leaves' colour (white for clay), so the bake itself used
  * as an alphaMap would be opaque over the whole card.
  */
-export function crownCardMaskPixels(cards: TreeCrownCardsExtras, px: number = CROWN_CARD_ATLAS_PX): Uint8Array {
+export function crownCardMaskPixels(cards: TreeCrownCardsExtras, px: number = crownCardAtlasPx(cards)): Uint8Array {
     const out = bakeCrownCardAtlas(cards, px, clayLeafPaint(cards));
     for (let i = 0; i < out.length; i += 4) out[i] = out[i + 1] = out[i + 2] = out[i + 3];
     return out;
