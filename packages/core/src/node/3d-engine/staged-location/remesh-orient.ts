@@ -22,11 +22,16 @@
  *
  * The turns are found on the clay and applied to every GLB of the same remesh (the clay and tile_refine's textured twin,
  * the same surface split by photo material), matched by the triangle's corners.
+ *
+ * A rebuilt facade (pipeline K's FacadeLattice_* nodes) whose frame tile_refine measured facing out (its outward reading
+ * decided, facade-lattice.ts ReliefFacade.outward) is built facing out cell by cell and is never turned: it still hides what
+ * lies behind it in the views. Turning by these views took a strip of cells off a wall wherever its facing ray slipped past
+ * the building (Penn 2: 1,012 m² of rebuilt facades left or made facing in).
  */
 
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor, type ParsedGlb } from './glb-bytes';
 
-export const REMESH_ORIENT_VERSION = 'remesh-orient/4';
+export const REMESH_ORIENT_VERSION = 'remesh-orient/5';
 
 /** On unless SCRATCHBOX_STAGED_REMESH_ORIENT=0. */
 export function remeshOrientEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -51,7 +56,7 @@ export const REMESH_ORIENT_PARAMS = {
 };
 export type RemeshOrientParams = typeof REMESH_ORIENT_PARAMS;
 
-export interface RemeshOrientStats { triangles: number; turned: number; turnedAreaM2: number; /** Seen from behind but facing open air (a real outer surface, a hole's far side): left. */ facingOut: number; ms: number }
+export interface RemeshOrientStats { triangles: number; turned: number; turnedAreaM2: number; /** Seen from behind but facing open air (a real outer surface, a hole's far side): left. */ facingOut: number; /** Triangles of rebuilt facades measured facing out: never turned. */ measuredOut: number; ms: number }
 
 /**
  * A uniform grid over the soup's triangles (each listed in every cell its box touches), walked cell by cell along a ray
@@ -147,11 +152,18 @@ export function rayMeets(pos: Float32Array, o: number[], d: number[], self: numb
     return false;
 }
 
-interface Soup { pos: Float32Array }
+interface Soup { pos: Float32Array; /** Per triangle: 1 when it may not be turned (a rebuilt facade measured facing out). */ locked: Uint8Array }
+
+/** A node's mesh is a rebuilt facade whose frame tile_refine measured facing out. */
+function measuredOut(extras: any): boolean {
+    return extras?.sbFacadeLattice?.outward?.decided === true;
+}
 
 /** Every triangle of a GLB (tile_refine writes no node transforms), in mesh and primitive order. */
 function soupOf(g: ParsedGlb): Soup {
-    const out: number[] = [];
+    const out: number[] = [], locked: number[] = [];
+    const keep = new Set<number>();
+    for (const n of g.json.nodes ?? []) if (n.mesh !== undefined && measuredOut(n.extras)) keep.add(n.mesh);
     // the infill's caps (sbSeal) are faced out by their own test (lattice-stitch.ts fillOpenLoops) and left out: a cap lying on a
     // scan piece wins its depth ties, so the piece would never be seen from behind and never turned
     const fill = new Set<number>();
@@ -160,9 +172,9 @@ function soupOf(g: ParsedGlb): Soup {
         if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined) continue;
         const P = readAccessor(g, p.attributes.POSITION).data, I = p.indices !== undefined ? readAccessor(g, p.indices).data : undefined;
         const n = I ? I.length : P.length / 3;
-        for (let t = 0; t + 2 < n; t += 3) for (let k = 0; k < 3; k++) { const v = I ? I[t + k] : t + k; out.push(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]); }
+        for (let t = 0; t + 2 < n; t += 3) { locked.push(keep.has(mi) ? 1 : 0); for (let k = 0; k < 3; k++) { const v = I ? I[t + k] : t + k; out.push(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]); } }
     }
-    return { pos: Float32Array.from(out) };
+    return { pos: Float32Array.from(out), locked: Uint8Array.from(locked) };
 }
 
 /** Per triangle, the pixels where it is the nearest surface seen from the front and from behind, in one view (added to `front`, `back`). */
@@ -225,7 +237,9 @@ export function findInwardTriangles(clayBytes: Uint8Array, P: RemeshOrientParams
     if (P.topDown) look(s, 0, 90, P, front, back);
     const keys = new Set<string>();
     let area = 0, facingOut = 0, grid: RayGrid | undefined;
+    const measured = s.locked.reduce((a, v) => a + v, 0);
     for (let t = 0; t < n; t++) {
+        if (s.locked[t]) continue;
         if (back[t] < P.minBackPixels || front[t] > P.maxFrontShare * back[t]) continue;
         const p = s.pos.subarray(t * 9, t * 9 + 9);
         const ux = p[3] - p[0], uy = p[4] - p[1], uz = p[5] - p[2], vx = p[6] - p[0], vy = p[7] - p[1], vz = p[8] - p[2];
@@ -238,7 +252,7 @@ export function findInwardTriangles(clayBytes: Uint8Array, P: RemeshOrientParams
         keys.add(triKey(p, P.matchM));
         area += l / 2;
     }
-    return { keys, stats: { triangles: n, turned: keys.size, turnedAreaM2: Math.round(area), facingOut, ms: Date.now() - t0 } };
+    return { keys, stats: { triangles: n, turned: keys.size, turnedAreaM2: Math.round(area), facingOut, measuredOut: measured, ms: Date.now() - t0 } };
 }
 
 function triKey(p: ArrayLike<number>, m: number): string {
@@ -252,9 +266,9 @@ export function turnTriangles(bytes: Uint8Array, keys: Set<string>, P: RemeshOri
     if (!keys.size) return { glb: Buffer.from(bytes), turned: 0 };
     const json = g.json, dv = new DataView(g.bin.buffer, g.bin.byteOffset, g.bin.byteLength);
     let turned = 0;
-    // the infill's caps keep their own facing (soupOf)
+    // the infill's caps keep their own facing (soupOf), and so do rebuilt facades measured facing out
     const fill = new Set<number>();
-    for (const n of json.nodes ?? []) if (n.mesh !== undefined && n.extras?.sbSeal) fill.add(n.mesh);
+    for (const n of json.nodes ?? []) if (n.mesh !== undefined && (n.extras?.sbSeal || measuredOut(n.extras))) fill.add(n.mesh);
     for (const [mi, m] of (json.meshes ?? []).entries()) for (const p of fill.has(mi) ? [] : m.primitives ?? []) {
         if ((p.mode ?? 4) !== 4 || p.attributes?.POSITION === undefined || p.indices === undefined) continue;
         const pos = readAccessor(g, p.attributes.POSITION).data;
