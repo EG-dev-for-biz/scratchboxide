@@ -200,7 +200,8 @@ describe('photo-match evaluator: tree leaves and crown cards cut out as the view
         const g = readTreesLodGlb(glb)!;
         const native = (planted.stats.perTree[0] as any).lod.coverage;
         // the near level's leaf blades (the triangles a textured render cuts out), drawn in clay as their outlines
-        const near = treeLevel(g, 0, 0, (_c, tex) => tex >= 0);
+        // (not its core cards, which are cut out in clay as well)
+        const near = treeLevel(g, 0, 0, (c, tex) => tex >= 0 && c < 0);
         const cut = near.cutout!;
         const leafTris = cut.textured.reduce((s, k) => s + (k >= 0 ? 1 : 0), 0);
         expect(leafTris).toBe(near.texture.length);
