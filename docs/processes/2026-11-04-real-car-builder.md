@@ -215,3 +215,21 @@ Checked offline on the two Polestar 3 drawings already made (no new image calls)
 - **The stretch works as intended.** The drawn wheels land on the axles, and with the right axles the underside improves by about 1 cm. The roofline does not improve, and with a guessed overhang split it gets about 0.4 cm worse.
 - **Most of the Polestar's error is height, not length.** The published height it was scaled to (1.614 m) is 4.8 cm less than the production model's (1.662 m). With that height the roofline error falls from 5.6 to 3.8 cm and the front width from 8.1 to 4.3 cm. Which figure is right for this trim (roof rails, an antenna, a different suspension) is not settled. The drawing was not at fault there.
 - The production model's axles sit 4.7 cm forward of centre (front overhang 0.904 m). The skill's median split (0.5 of the overhangs) puts them centred, so a published front overhang matters.
+
+**Live Polestar 3 build (2026-11-04, about 17:30, ports 3480–3482, load under 100).** The request was "Build a 3D model of a 2027 Polestar 3 in Magnesium grey."
+- The agent passed `axleZMeters` [1.519, −1.466], from a published front overhang of 0.931 m.
+- This drawing's wheels were drawn 1.6 % too far apart. The stretch put them on the axles.
+- The agent built and checked several passes, and its final follows its blueprint closely: roofline 0.6 cm, underside 0.5 cm, plan 2.1 cm, front 2.9 cm.
+
+Mean error against the production model, in cm (sheet: `docs/screenshots/ps_axle_sheet.png`):
+
+| Model | Roofline | Underside | Plan | Front |
+|---|---|---|---|---|
+| This drawing, unstretched | 5.8 | 5.6 | 3.7 | 5.2 |
+| This drawing, stretched | 6.2 | 5.3 | 3.7 | 5.2 |
+| The agent's final build | 6.8 | 5.7 | 1.7 | 4.2 |
+| Earlier loft build | 5.3 | 6.6 | 3.6 | 6.1 |
+
+- **Better:** the wheel arches now sit on the axles, and plan and front width improved.
+- **Not better:** the roofline. It is set by the drawing's height: scaled to the published 1.614 m, it sits about 5 cm under the 1.662 m production model.
+- **Next step:** settle which height is right for this trim. The stretch has done what it can on this car.
