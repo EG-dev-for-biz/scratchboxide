@@ -18,7 +18,7 @@ import { GoogleVectorTileService } from '../packages/core/src/node/spatial/Googl
 import { fetchVectorEvidence } from '../packages/core/src/node/3d-engine/staged-location/vector-footprints';
 import { readTileTriangles, type TileTriangles } from '../packages/core/src/node/3d-engine/staged-location/tile-texture-transfer';
 import { drawModelTopDown, registerPlanImage, resamplePlanImage, tileCropAround, type PlanImage, type TopDownCrop } from '../packages/core/src/node/3d-engine/staged-location/micro-edit-evidence';
-import { effectiveParams, emptyPlan, fromAnchor, insideFootprint, keptEdits, microEditContains, runMicroEditPass, supportDisc, toAnchor, writeMicroEditGlb, type BuiltUnit, type Footprint, type MicroEditPlan } from '../packages/core/src/node/3d-engine/staged-location/micro-edits';
+import { buildUnits, composeUnits, effectiveParams, emptyPlan, fromAnchor, insideFootprint, keptEdits, microEditContains, runMicroEditPass, supportDisc, toAnchor, writeMicroEditGlb, type BuiltUnit, type Footprint, type MicroEditPlan } from '../packages/core/src/node/3d-engine/staged-location/micro-edits';
 import { fetchOrthoReference } from '../packages/core/src/node/3d-engine/staged-location/ortho-reference';
 import { drawText, renderTriangles } from '../packages/core/src/node/3d-engine/staged-location/photo-match-eval';
 import { encodePng } from '../packages/core/src/node/3d-engine/staged-location/png-encode';
@@ -53,18 +53,27 @@ async function main() {
     const log = (m: string) => console.log(`${((Date.now() - t0) / 1000).toFixed(1).padStart(7)} s  ${m}`);
     const costs: Record<string, number> = {};
 
-    // a fresh extraction: an empty leaf cache for this run
-    const cacheDir = path.join(out, 'tiles_cache');
-    fs.rmSync(cacheDir, { recursive: true, force: true });
-    const crawler = new GoogleTileDistrictCrawler({ apiKey, cacheDir, concurrency: 8 });
-    const anchor = { lat, lng, heightGuessM: 0 };
-    const { leaves, session, requests } = await crawler.collectLeafTiles(anchor, radius);
-    const buffers = await crawler.downloadLeaves(leaves, session);
-    costs.tileRootSessions = 1;
-    log(`tiles: ${requests} tileset requests, ${leaves.length} leaves, ${(buffers.reduce((s, b) => s + b.length, 0) / 1e6).toFixed(1)} MB`);
-    const district = GoogleTileDistrictCrawler.buildDistrictGlb(buffers.flatMap(b => GoogleTileDistrictCrawler.parseLeafGlbPrimitives(b)), anchor, { name: runId });
-    const glbPath = path.join(out, 'extraction.glb');
-    fs.writeFileSync(glbPath, district.glb);
+    // a fresh extraction: an empty leaf cache for this run (--resheet: the run's own extraction, to redraw its sheet)
+    const resheet = flag('resheet');
+    let district: { glb: Buffer; triangleCount: number; originEllipsoidalHeightM: number };
+    let leavesCount: number;
+    if (resheet) {
+        const prior = JSON.parse(fs.readFileSync(path.join(out, 'report.json'), 'utf8'));
+        district = { glb: fs.readFileSync(path.join(out, 'extraction.glb')), triangleCount: prior.extraction.triangles, originEllipsoidalHeightM: prior.frame.ellipsoidalHeightM };
+        leavesCount = prior.extraction.leaves;
+    } else {
+        const cacheDir = path.join(out, 'tiles_cache');
+        fs.rmSync(cacheDir, { recursive: true, force: true });
+        const crawler = new GoogleTileDistrictCrawler({ apiKey, cacheDir, concurrency: 8 });
+        const anchor = { lat, lng, heightGuessM: 0 };
+        const { leaves, session, requests } = await crawler.collectLeafTiles(anchor, radius);
+        const buffers = await crawler.downloadLeaves(leaves, session);
+        costs.tileRootSessions = 1;
+        log(`tiles: ${requests} tileset requests, ${leaves.length} leaves, ${(buffers.reduce((s, b) => s + b.length, 0) / 1e6).toFixed(1)} MB`);
+        district = GoogleTileDistrictCrawler.buildDistrictGlb(buffers.flatMap(b => GoogleTileDistrictCrawler.parseLeafGlbPrimitives(b)), anchor, { name: runId });
+        leavesCount = leaves.length;
+        fs.writeFileSync(path.join(out, 'extraction.glb'), district.glb);
+    }
     const tris = readTileTriangles(new Uint8Array(district.glb));
     const frame = { lat, lng, ellipsoidalHeightM: district.originEllipsoidalHeightM, axes: 'x east, y up, z south (metres)' };
     log(`extraction: ${district.triangleCount} triangles, origin ${district.originEllipsoidalHeightM.toFixed(2)} m ellipsoidal`);
@@ -140,6 +149,15 @@ async function main() {
         return img ? resamplePlanImage(img, grid) : undefined;
     };
 
+    if (resheet) {
+        const done = JSON.parse(fs.readFileSync(path.join(out, 'plan.json'), 'utf8')) as MicroEditPlan;
+        const rep = JSON.parse(fs.readFileSync(path.join(out, 'report.json'), 'utf8'));
+        const units = await buildUnits(composeUnits(done), frame, path.join(out, 'work', 'resheet'));
+        const n = done.runs.findIndex(r => r.runId === rep.run.runId) + 1;
+        fs.writeFileSync(path.join(out, 'sheet.png'), await renderSheet(done, units, rep, tris, heldOut, `${label.toUpperCase()} - RUN ${n} (${rep.run.runId})`));
+        log(`sheet redrawn: ${path.join(out, 'sheet.png')}; costs ${JSON.stringify(costs)}`);
+        return;
+    }
     const soup = tris.positions;
     const compares = new Map<string, import('../packages/core/src/node/3d-engine/staged-location/micro-edits').HeldOutComparison>();
     const result = await runMicroEditPass({
@@ -168,7 +186,7 @@ async function main() {
         const w = await saveMicroEditPlan(store, buildingId, result.plan, generation);
         log(w === 'conflict' ? 'place store: another run wrote the plan first; this run\'s edits are in plan.json only' : 'place store: plan saved');
     }
-    fs.writeFileSync(path.join(out, 'report.json'), JSON.stringify({ ...report, buildingId, frame, costs, extraction: { leaves: leaves.length, triangles: district.triangleCount } }, null, 1));
+    fs.writeFileSync(path.join(out, 'report.json'), JSON.stringify({ ...report, buildingId, frame, costs, extraction: { leaves: leavesCount, triangles: district.triangleCount } }, null, 1));
 
     // the layer
     const colourOf = (part: { positions: Float32Array; normals: Float32Array; indices: Uint32Array; id: string }) => {
@@ -260,9 +278,9 @@ async function renderSheet(plan: MicroEditPlan, units: BuiltUnit[], report: Awai
         const m = p.metrics;
         const metric = m?.before && m?.after ? `  SCAN RMS ${m.before.scanRmsM.toFixed(3)}>${m.after.scanRmsM.toFixed(3)} M (${(m.scanRule ?? '').toUpperCase()})  SSIM ${fmtN(m.before.photoSsim)}>${fmtN(m.after.photoSsim)}  GRAD ${fmtN(m.before.photoGradientNcc)}>${fmtN(m.after.photoGradientNcc)}  MOVED ${m.changedAreaM2?.toFixed(2)} M2 P95 ${m.displacementP95M?.toFixed(3)} M` : '';
         textLines.push({ text: `${p.verdict.toUpperCase()} ${(p.primitive ?? p.kind).toUpperCase()} RUNG ${p.rung} ${p.key}${metric}`, colour: p.verdict === 'kept' ? [170, 255, 170] : p.verdict === 'rejected' ? [255, 170, 120] : [180, 180, 180] });
-        if (p.verdict !== 'kept') textLines.push({ text: `    ${p.reason.slice(0, 190)}`, colour: [200, 200, 200] });
+        if (p.verdict !== 'kept') textLines.push({ text: `    ${p.reason}`, colour: [200, 200, 200] });
     }
-    for (const x of r.retired) textLines.push({ text: `RETIRED ${x.key}: ${x.reason.slice(0, 170)}`, colour: [255, 140, 140] });
+    for (const x of r.retired) textLines.push({ text: `RETIRED ${x.key}: ${x.reason}`, colour: [255, 140, 140] });
     textLines.push({ text: 'THE PLAN (KEPT, IN ORDER):', colour: [255, 236, 160] });
     keptEdits(plan).forEach((e, i) => {
         const p = e.kind === 'nudge' ? { [e.nudge!.param]: e.nudge!.to } : e.params;
@@ -270,6 +288,11 @@ async function renderSheet(plan: MicroEditPlan, units: BuiltUnit[], report: Awai
         textLines.push({ text: `${i + 1}. ${(e.primitive ?? 'NUDGE').toUpperCase()} ${e.key} RUN ${e.proposedBy.runId} ${e.provenance.toUpperCase()} CONF ${e.confidence.toFixed(2)}: ${ps}`, colour: [220, 230, 255] });
     });
     const W = cols.length * tile + (cols.length + 1) * gap;
+    // wrap the text to the sheet's width (12 px a character at scale 2)
+    const perLine = Math.floor((W - 2 * gap) / 12);
+    const wrapped: typeof textLines = [];
+    for (const l of textLines) for (let i = 0; i < l.text.length; i += perLine) wrapped.push({ text: (i ? '    ' : '') + l.text.slice(i, i + perLine), colour: l.colour });
+    textLines.length = 0; textLines.push(...wrapped);
     const titleH = 40, rowH = tile + labelH + gap, textH = textLines.length * 18 + 16;
     const H = titleH + Math.max(1, shown.length) * rowH + textH + gap;
     const rgb = new Uint8Array(W * H * 3).fill(24);
