@@ -233,3 +233,13 @@ Mean error against the production model, in cm (sheet: `docs/screenshots/ps_axle
 - **Better:** the wheel arches now sit on the axles, and plan and front width improved.
 - **Not better:** the roofline. It is set by the drawing's height: scaled to the published 1.614 m, it sits about 5 cm under the 1.662 m production model.
 - **Next step:** settle which height is right for this trim. The stretch has done what it can on this car.
+
+**The Polestar 3's height (checked 2026-11-04).**
+- **Published heights:** 1,614 mm is the most common figure. Polestar's Irish sheet and Autotijd give it for the Long Range Dual Motor. Polestar's New Zealand sheet gives 1,614 mm for the Performance version with air suspension and 1,622 mm for the Rear and Dual Motor. CarExpert gives 1,627 mm as its "from" figure.
+- **The production model is 1,662 mm,** 35-48 mm above every published figure, so the model disagrees, not the published height.
+  - Its highest point is the panoramic glass roof's crown. It has no roof rails and no antenna.
+  - Its tyres are about 0.825 m across (radius 0.4125 m), where the 265/45 R21 the trim wears is 0.772 m. That alone lifts the whole car about 2.7 cm.
+  - The rest (about 1-2 cm) is the artist's ride height.
+- **What follows:**
+  - The app keeps the published height for the trim asked for. The skill now says heights differ by trim and suspension, and to name which figure it used.
+  - Roofline errors against this model include about 4-5 cm that are the model's own. Scaled to the model's height the drawings read 3.4-3.8 cm, the fairer measure of their shape.

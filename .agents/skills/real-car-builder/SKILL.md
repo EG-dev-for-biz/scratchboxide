@@ -47,7 +47,8 @@ in millimetres:
 | Tyre size for the trim, e.g. 235/40 R19 | Tyre diameter = rim inches x 25.4 + 2 x width x aspect/100 (235/40 R19 = 482.6 + 188 = 671 mm) |
 | Ground clearance | Optional |
 
-Never invent a published number. Where one is missing, use the ratio in section 3 and mark it **estimated** in
+Heights differ by trim and suspension (a Polestar 3 is published at 1,614 mm with air suspension and 1,622 or
+1,627 mm on others): use the figure for the trim asked for, else the most common one, and say which. Never invent a published number. Where one is missing, use the ratio in section 3 and mark it **estimated** in
 buildNotes. Keep the sources for the reply.
 
 ### 2b. Draw the blueprint
