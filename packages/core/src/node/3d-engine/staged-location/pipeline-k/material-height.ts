@@ -23,8 +23,9 @@
  *    little height as it gets normal relief.
  *  - Capped at HEIGHT_RELIEF.capM, a few centimetres: surface relief, never massing.
  *
- * The result is one 8-bit map a set, 255 the surface and 0 a recess of capM, which the regions tile at the set's real
- * size exactly as they tile its occlusion and roughness. Labelled generated (a library set's relief, at an estimated
+ * The result is one small 8-bit tile a set, 255 the surface and 0 a recess of capM, stored once in the building's GLB and
+ * placed by each rebuilt facade's class map at the set's real size (material-regions.ts, 6): a tile of a metre or two at
+ * `size` pixels is millimetres a texel, where a facade's own photo has several centimetres, so joints and courses survive. Labelled generated (a library set's relief, at an estimated
  * depth); it never moves a measured surface (AGENTS.md section 2): the scan's own pieces take none.
  */
 
@@ -39,7 +40,7 @@ export const HEIGHT_RELIEF = {
     topPercentile: 0.98,
     /** A set whose deepest drawn recess is under this (metres) is drawn without a height: nothing a pixel could show. */
     minDepthM: 0.0005,
-    /** The map's size, pixels a side at most (the regions' other prepared maps are this size). */
+    /** The map's size, pixels a side (the regions' other prepared maps are this size at most). */
     size: 256
 } as const;
 
@@ -56,16 +57,16 @@ export interface DrawnHeight {
 
 /**
  * A set's height map (its red channel, any size) as the recess map the regions tile (see the file comment): box-filtered
- * to at most `size` a side, each texel 255 x (1 - recess / capM). Undefined when the drawn relief is too shallow to show.
+ * to `size` a side, each texel 255 x (1 - recess / capM). Undefined when the drawn relief is too shallow to show.
  */
 export function heightRecessMap(height: RgbaImage8, depthM: number, relief: number, source: string, R: typeof HEIGHT_RELIEF = HEIGHT_RELIEF): { map: RgbaImage8; drawn: DrawnHeight } | undefined {
     if (!(depthM > 0) || !(relief > 0)) return undefined;
-    const scale = Math.min(1, R.size / Math.max(height.width, height.height));
-    const w = Math.max(2, Math.round(height.width * scale)), h = Math.max(2, Math.round(height.height * scale));
+    // every tile the same square size (the viewer stacks them in one texture array); its real size keeps its aspect
+    const w = R.size, h = R.size;
     const v = new Float64Array(w * h);
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-        const x0 = Math.floor((x * height.width) / w), x1 = Math.max(x0 + 1, Math.floor(((x + 1) * height.width) / w));
-        const y0 = Math.floor((y * height.height) / h), y1 = Math.max(y0 + 1, Math.floor(((y + 1) * height.height) / h));
+        const x0 = Math.min(height.width - 1, Math.floor((x * height.width) / w)), x1 = Math.min(height.width, Math.max(x0 + 1, Math.floor(((x + 1) * height.width) / w)));
+        const y0 = Math.min(height.height - 1, Math.floor((y * height.height) / h)), y1 = Math.min(height.height, Math.max(y0 + 1, Math.floor(((y + 1) * height.height) / h)));
         let s = 0;
         for (let yy = y0; yy < y1; yy++) for (let xx = x0; xx < x1; xx++) s += height.rgba[(yy * height.width + xx) * 4];
         v[y * w + x] = s / ((x1 - x0) * (y1 - y0) * 255);

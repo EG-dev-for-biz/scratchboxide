@@ -325,11 +325,12 @@ export async function planMaterialJobsNative(jobs: MaterialPlanJob[], ctx: Mater
         work.push({ at, job, img, image: table.add(img), texelM });
     }
     if (!work.length) return pieces;
+    const wantClasses = sets.some(s => !!s.height);
     const r = await run(MODE.plan, w => {
         w.u32(table.list.length);
         for (const img of table.list) w.image(img);
-        w.u32(K).f64s(classes.flatMap(c => c.meanLab)).bytes(Uint8Array.from(classes, c => (c.openings ? 1 : 0))).u32(Math.max(0, classes.findIndex(c => c.wall))).u32(P.repeatGrid).f64(P.paneWallShare).f64(GLASS.roughness).f64(GLASS.metalness);
-        for (let k = 0; k < K; k++) { w.f64(sets[k].realSizeM[0]).f64(sets[k].realSizeM[1]).image(sets[k].normal).image(sets[k].orm).u8(sets[k].height ? 1 : 0); if (sets[k].height) w.image(sets[k].height!); }
+        w.u32(K).f64s(classes.flatMap(c => c.meanLab)).bytes(Uint8Array.from(classes, c => (c.openings ? 1 : 0))).u32(Math.max(0, classes.findIndex(c => c.wall))).u32(P.repeatGrid).f64(P.paneWallShare).f64(GLASS.roughness).f64(GLASS.metalness).u8(wantClasses ? 1 : 0);
+        for (let k = 0; k < K; k++) w.f64(sets[k].realSizeM[0]).f64(sets[k].realSizeM[1]).image(sets[k].normal).image(sets[k].orm);
         w.f64s(ctx.setMeans.slice(0, K).flat());
         w.u32(work.length);
         for (const p of work) {
@@ -351,9 +352,9 @@ export async function planMaterialJobsNative(jobs: MaterialPlanJob[], ctx: Mater
         const orm = { width: W, height: H, rgba: r.bytes(N * 4) };
         if (rebuilt) {
             const normal = { width: W, height: H, rgba: r.bytes(N * 4) };
-            const height = r.u8() === 1 ? { width: W, height: H, rgba: r.bytes(N * 4) } : undefined;
+            const classMap = wantClasses ? { width: W, height: H, rgba: r.bytes(N * 4) } : undefined;
             piece.facade = { mesh: p.job.mesh!, texelM: Math.round(p.texelM * 1e4) / 1e4, classShares: piece.classTexels.map(n => r3(n / N)), foldedShare: r3(folded / N), panes: fittedPanes(json, p.job.mesh).length / 4, glassShare: r3(piece.glass / N) };
-            piece.planned = { material: p.job.material, orm, normal, ...(height ? { height } : {}), rebuilt: true, glass: piece.glass > 0 };
+            piece.planned = { material: p.job.material, orm, normal, ...(classMap ? { classes: classMap, texelM: p.texelM } : {}), rebuilt: true, glass: piece.glass > 0 };
         } else piece.planned = { material: p.job.material, orm, rebuilt: false, glass: false };
     }
     r.done();

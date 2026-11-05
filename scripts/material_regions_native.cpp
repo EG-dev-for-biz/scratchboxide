@@ -25,7 +25,7 @@
  *  mode 2, the harvest's texels: u32 imageCount, image[imageCount]; u32 K, f64 meanLab[K * 3], u8 openings[K], f64 wL;
  *    u32 photoCount, per photo u32 image, rects openings.
  *  mode 3, planMaterialJob for a batch of jobs: u32 imageCount, image[imageCount]; u32 K, f64 meanLab[K * 3],
- *    u8 openings[K], u32 wall, u32 repeatGrid, f64 paneWallShare, f64 glassRoughness, f64 glassMetalness; per set (K): f64 realSizeX, f64 realSizeY, image normal, image orm, u8 hasHeight, image height when it has; f64 setMeans[K * 3];
+ *    u8 openings[K], u32 wall, u32 repeatGrid, f64 paneWallShare, f64 glassRoughness, f64 glassMetalness, u8 classMap; per set (K): f64 realSizeX, f64 realSizeY, image normal, image orm; f64 setMeans[K * 3];
  *    u32 jobCount, per job: u32 kind (0 rebuilt facade, 1 scan piece), u32 image, f64 texelM, u32 radius, rects openings,
  *    rects repeat elements (their unit cells), u32 family[elements], rects panes (kind 0; the glass in the fitted windows).
  *
@@ -35,7 +35,7 @@
  *    f64 sd[Kr * 3] (centres by k-means index).
  *  mode 2: u32 photoCount, per photo u32 N, u8 valid[N], f32 L[N], i8 cls[N].
  *  mode 3: u32 jobCount, per job: u32 kind, u32 width, u32 height, f64 classTexels[K], f64 folded, f64 glass, f64 panesOnStone, f64 paneWallTexels,
- *    u8 orm[w * h * 4], and for kind 0 u8 normal[w * h * 4], u8 hasHeight, u8 height[w * h * 4] when it has.
+ *    u8 orm[w * h * 4], and for kind 0 u8 normal[w * h * 4], and with classMap u8 classes[w * h * 4] (each texel's class in r, g and b; 255 a glass texel, no relief).
  * Exit 0 on success; otherwise a message on stderr and a non-zero exit.
  */
 
@@ -170,8 +170,9 @@ int main(int argc, char** argv) {
             ctx.grid = static_cast<int>(in.u32());
             if (ctx.grid < 1 || ctx.grid > 256) throw std::runtime_error("repeat grid must be 1..256");
             ctx.paneWallShare = in.f64(); ctx.glassR = in.f64(); ctx.glassM = in.f64();
+            ctx.classMap = in.u8() != 0;
             ctx.sets.resize(K);
-            for (auto& s : ctx.sets) { s.realSizeX = in.f64(); s.realSizeY = in.f64(); s.normal = in.image(); s.orm = in.image(); if (in.u8()) s.height = in.image(); }
+            for (auto& s : ctx.sets) { s.realSizeX = in.f64(); s.realSizeY = in.f64(); s.normal = in.image(); s.orm = in.image(); }
             in.array(ctx.setMeans, static_cast<size_t>(K) * 3);
             const uint32_t jobCount = in.u32();
             std::vector<mr::PlanJob> jobs(jobCount);
@@ -198,7 +199,7 @@ int main(int argc, char** argv) {
                 out.put(static_cast<uint32_t>(jobs[i].rebuilt ? 0 : 1));
                 out.put(static_cast<uint32_t>(r.width)); out.put(static_cast<uint32_t>(r.height));
                 out.array(r.classTexels); out.put(r.folded); out.put(r.glass); out.put(r.panesOnStone); out.put(r.paneWallTexels); out.array(r.orm);
-                if (jobs[i].rebuilt) { out.array(r.normal); out.put(static_cast<uint8_t>(r.recess.empty() ? 0 : 1)); out.array(r.recess); }
+                if (jobs[i].rebuilt) { out.array(r.normal); out.array(r.classes); }
                 r = mr::PlanResult{};
             }
         } else {

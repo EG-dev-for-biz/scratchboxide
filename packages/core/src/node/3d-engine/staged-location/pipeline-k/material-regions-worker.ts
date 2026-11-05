@@ -25,7 +25,7 @@ const ctx = materialPlanContext({ json: init.json, bin: init.bin }, init.json, i
 port.on('message', (msg: { i: number; job: MaterialPlanJob }) => {
     try {
         const piece = planMaterialJob(msg.job, ctx);
-        const p = piece.planned, transfer = p ? [p.orm.rgba.buffer, ...(p.normal ? [p.normal.rgba.buffer] : []), ...(p.height ? [p.height.rgba.buffer] : [])] : [];
+        const p = piece.planned, transfer = p ? [p.orm.rgba.buffer, ...(p.normal ? [p.normal.rgba.buffer] : []), ...(p.classes ? [p.classes.rgba.buffer] : [])] : [];
         port.postMessage({ i: msg.i, piece }, transfer as never);
     } catch (err) {
         port.postMessage({ i: msg.i, error: err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err) });
