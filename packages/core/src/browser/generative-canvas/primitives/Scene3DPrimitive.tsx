@@ -205,6 +205,7 @@ import { carryStagedChoice, carryTwinObjects, twinSourceOf, type StagedMaterialM
 import { prepareTexturedTwinModel } from './scene3d/stagedBuild/texturedTwinModel';
 import { drawPhotoTwinsLit } from './scene3d/stagedBuild/litPhotoTwins';
 import { refreshFacadeReflections } from './scene3d/stagedBuild/facadeMaterialLook';
+import { updateHeightReliefLods } from './scene3d/stagedBuild/heightRelief';
 
 // Aircraft helpers live in services/mesh/aircraft.ts (single source of truth, shared with the
 // transformer engine's sandbox template); re-exported here to keep the public API stable.
@@ -2629,6 +2630,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
                 // 12.9 Tree levels of detail: per-tree level, dither and culling for loaded trees GLBs (before the render).
                 updateTreeLods(now);
+
+                // 12.92 Material relief: the displaced cells near the camera drawn in place of their flat triangles (heightRelief.ts).
+                updateHeightReliefLods(camera);
 
                 // 12.95 Place reflections: re-rendered only once a material change in the scene has settled (placeReflections.ts).
                 placeReflections.tick(now);

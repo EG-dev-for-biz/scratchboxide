@@ -108,9 +108,9 @@ function sets(classes: RegionClass[], S: number): RegionSet[] {
 const firstDiff = (a: Uint8Array, b: Uint8Array) => { if (a.length !== b.length) return 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return i; return -1; };
 
 function expectSamePiece(native: MaterialPlanPiece, ts: MaterialPlanPiece): void {
-    const strip = (p: MaterialPlanPiece) => ({ ...p, planned: p.planned && { ...p.planned, orm: undefined, normal: undefined, height: undefined } });
+    const strip = (p: MaterialPlanPiece) => ({ ...p, planned: p.planned && { ...p.planned, orm: undefined, normal: undefined, classes: undefined } });
     expect(strip(native)).toEqual(strip(ts));
-    for (const key of ['orm', 'normal', 'height'] as const) {
+    for (const key of ['orm', 'normal', 'classes'] as const) {
         const a = native.planned?.[key], b = ts.planned?.[key];
         expect(!!a).toBe(!!b);
         if (a && b) { expect([a.width, a.height]).toEqual([b.width, b.height]); expect(firstDiff(a.rgba, b.rgba)).toBe(-1); }

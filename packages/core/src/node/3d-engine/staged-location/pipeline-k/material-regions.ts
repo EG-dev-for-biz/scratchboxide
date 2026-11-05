@@ -29,9 +29,12 @@
  *     of the family's repeats hold there, so one bay never reads metal while the bays beside it read glass, and a frame
  *     stays a frame on every window (photo-inferred). The texels outside every unit cell keep their own class.
  *  5. Maps: on each rebuilt facade, each texel's class's set tiled at the set's real size, box-filtered to the facade's
- *     texel (so a tile never aliases): occlusion, roughness and metalness (ORM), the normal, and the height as a recess
- *     below the facade's plane (material-height.ts), as the set has them; on scan pieces, whose atlases carry no metric
- *     frame for a tile, each texel's class's set's mean ORM, and no height (a measured surface is never moved).
+ *     texel (so a tile never aliases): occlusion, roughness and metalness (ORM) and the normal, as the set has them; on
+ *     scan pieces, whose atlases carry no metric frame for a tile, each texel's class's set's mean ORM.
+ *  6. Height: each class's set's height as a recess below the rebuilt facade's plane (material-height.ts), one small tile
+ *     a class at the tile's own resolution (millimetres a texel, where the facade's photo has centimetres), with each
+ *     facade's class map and metric frame to place it. The viewer's parallax and the near displacement
+ *     (height-relief.ts) read them. Scan pieces take none: a measured surface is never moved.
  *
  * Labels: base colour photo-inferred (the photo, never relit or lifted: it is the evidence of how the building looks); each
  * texel's material photo-inferred (its class); occlusion, roughness, metalness, normal and height generated (library sets).
@@ -43,7 +46,7 @@ import { SRGB8_TO_LINEAR } from '../../../../common/spatial/photogrammetric-deli
 import { linearRgbToLab } from '../../../../common/spatial/texture-library-index';
 import type { RgbaImage8 } from '../tile-texture-transfer';
 import { bandResponses, TEXTURE_BANDS_M, type TextureEnergy } from './material-harvest';
-import { HEIGHT_RELIEF, type DrawnHeight } from './material-height';
+import { HEIGHT_RELIEF, MATERIAL_HEIGHT_VERSION, type DrawnHeight } from './material-height';
 
 export const MATERIAL_REGIONS_VERSION = 'material-regions/33';
 
@@ -126,8 +129,12 @@ export interface MaterialRegionsReport {
 interface PlannedMaterial {
     material: number;
     orm: RgbaImage8; normal?: RgbaImage8;
-    /** The recess below the facade's plane (rebuilt facades whose classes' sets have a height; see RegionSet.height). */
-    height?: RgbaImage8;
+    /**
+     * Each texel's class (r, g, b the class index, a 255) and the photo's texel (m), on a rebuilt facade when any class's
+     * set has a height: with the sets' recess tiles (RegionSet.height) the relief under every texel at the tile's own
+     * resolution, far finer than the facade's texel.
+     */
+    classes?: RgbaImage8; texelM?: number;
     rebuilt: boolean;
 }
 
@@ -584,20 +591,20 @@ export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext):
         const tiles = sets.map((s, c) => {
             if (!piece.classTexels[c]) return undefined;
             const tw = Math.max(2, Math.round(s.realSizeM[0] / texelM)), th = Math.max(2, Math.round(s.realSizeM[1] / texelM));
-            return { tw, th, n: shrinkTile(s.normal, tw, th, true), o: shrinkTile(s.orm, tw, th, false), h: s.height ? shrinkTile(s.height, tw, th, false) : undefined };
+            return { tw, th, n: shrinkTile(s.normal, tw, th, true), o: shrinkTile(s.orm, tw, th, false) };
         });
         const nrm = blank(W, H);
-        // the recess below the facade's plane, where a class's set has a height (the surface, 255, where it has none)
-        const hgt = tiles.some(t => t?.h) ? blank(W, H) : undefined;
+        // each texel's class, for the relief (the sets' recess tiles are sampled by it, at their own resolution)
+        const cmap = sets.some(s => !!s.height) ? blank(W, H) : undefined;
         for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
             const k = y * W + x, t = tiles[cls[k]]!, j = ((y % t.th) * t.tw + (x % t.tw)) * 3;
             orm.rgba.set([Math.round(t.o[j] * 255), Math.round(t.o[j + 1] * 255), Math.round(t.o[j + 2] * 255), 255], k * 4);
             nrm.rgba.set([Math.round(t.n[j] * 255), Math.round(t.n[j + 1] * 255), Math.round(t.n[j + 2] * 255), 255], k * 4);
-            if (hgt) { const v = t.h ? Math.round(t.h[j] * 255) : 255; hgt.rgba.set([v, v, v, 255], k * 4); }
+            if (cmap) cmap.rgba.set([cls[k], cls[k], cls[k], 255], k * 4);
         }
         const r3 = (v: number) => Math.round(v * 1000) / 1000;
         piece.facade = { mesh: job.mesh!, texelM: Math.round(texelM * 1e4) / 1e4, classShares: piece.classTexels.map(n => r3(n / N)), foldedShare: r3(folded / N) };
-        piece.planned = { material: mi, orm, normal: nrm, ...(hgt ? { height: hgt } : {}), rebuilt: true };
+        piece.planned = { material: mi, orm, normal: nrm, ...(cmap ? { classes: cmap, texelM } : {}), rebuilt: true };
         return piece;
     }
     // scan pieces: each texel's class's set's mean ORM
@@ -640,10 +647,13 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
 /**
  * Writes a plan's maps into the GLB's materials: lit (KHR_materials_unlit removed), the metallic-roughness texture (its
  * red the occlusion, also the occlusion texture), the normal on rebuilt facades, and the extras: sbMaterial (the viewer's
- * reflection probe, every texel by its own roughness and metalness) and the maps' provenance. `addTexture` stores an image
+ * reflection probe, every texel by its own roughness and metalness; and the relief: the facade's class map and metric
+ * frame, with the classes' recess tiles in the asset's sbMaterialRelief) and the maps' provenance. `addTexture` stores an image
  * and returns its texture index.
  */
 export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTexture: (img: RgbaImage8, mimeType: 'image/png' | 'image/jpeg', name: string) => number, provenanceIndices: number[]): void {
+    const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
+    let anyRelief = false;
     const sets = plan.sets.map(s => (s.harvest ? `${s.name}, chosen by colour and texture at the tile's texel (tile-only harvest), its finer grain ${s.harvest.grain}` : s.name)).join('; ');
     for (const pm of plan.materials) {
         const m = json.materials[pm.material];
@@ -655,17 +665,31 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
         pbr.metallicRoughnessTexture = { index: orm };
         m.occlusionTexture = { index: orm };
         if (pm.normal) m.normalTexture = { index: addTexture(pm.normal, 'image/jpeg', `${name}_normal`) };
-        // glTF has no height slot: the texture is named in the extras, lossless (a JPEG's blocks would show as steps)
-        const height = pm.height ? { texture: addTexture(pm.height, 'image/png', `${name}_height`), depthM: HEIGHT_RELIEF.capM } : undefined;
+        // the relief: this facade's class map and metric frame; the classes' recess tiles are stored once (below)
+        const relief = pm.classes && pm.texelM ? { classTexture: addTexture(pm.classes, 'image/png', `${name}_classes`), uvMetres: [r4(pm.classes.width * pm.texelM), r4(pm.classes.height * pm.texelM)] } : undefined;
+        if (relief) anyRelief = true;
         m.extras = {
             ...(m.extras ?? {}),
-            sbMaterial: { schema: 'scratchbox.staged-material/1', provenanceIndices, ...(height ? { height } : {}) },
+            sbMaterial: { schema: 'scratchbox.staged-material/1', provenanceIndices, ...(relief ? { relief } : {}) },
             sbMaterialRegions: {
                 version: MATERIAL_REGIONS_VERSION,
                 baseColor: { label: 'photo-inferred', source: "pipeline K's harmonised photo" },
                 material: { label: 'photo-inferred', source: `each texel's appearance class (CIELAB, the majority within ${MATERIAL_REGIONS_PARAMS.regionSmoothM} m)` },
-                ...(height ? { height: { label: 'generated', source: `the height map of each texel's class's set, tiled at the set's real size, as a recess below the rebuilt plane: 255 the plane, 0 a recess of ${HEIGHT_RELIEF.capM} m (${plan.sets.filter(st => st.heightDrawn).map(st => `${st.name} ${Math.round(st.heightDrawn!.maxRecessM * 1000)} mm of a depth ${st.heightDrawn!.source}`).join('; ')}); the viewer's parallax and the near displacement read it, the scan's own pieces never` } } : {}),
+                ...(relief ? { height: { label: 'generated', source: `each texel's class's set's height map, tiled at the set's real size, as a recess of at most ${HEIGHT_RELIEF.capM} m below the rebuilt plane (${plan.sets.filter(st => st.heightDrawn).map(st => `${st.name} ${Math.round(st.heightDrawn!.maxRecessM * 1000)} mm, its depth ${st.heightDrawn!.source}`).join('; ')}); the scan's own pieces take none` } } : {}),
                 maps: { label: 'generated', source: `the texture library set of each texel's class (${sets}): ${pm.rebuilt ? 'occlusion, roughness, metalness and normal tiled at the set\'s real size' : "the set's mean occlusion, roughness and metalness"}` }
+            }
+        };
+    }
+    // the classes' recess tiles, once for the building: the viewer's parallax and the near displacement sample them by each
+    // facade's class map (height-relief.ts, heightRelief.ts)
+    if (anyRelief) {
+        json.asset = json.asset ?? { version: '2.0' };
+        json.asset.extras = {
+            ...(json.asset.extras ?? {}),
+            sbMaterialRelief: {
+                schema: 'scratchbox.material-relief/1', version: MATERIAL_HEIGHT_VERSION, depthM: HEIGHT_RELIEF.capM, label: 'generated',
+                about: `each class's library set's height as a recess below the surface it is drawn on: a tile's 255 is the surface, 0 a recess of ${HEIGHT_RELIEF.capM} m; tiled at sizeM, placed by each material's class map (extras.sbMaterial.relief)`,
+                tiles: plan.sets.map((st, k) => (st.height && st.heightDrawn ? { class: k, set: st.name, texture: addTexture(st.height, 'image/png', `relief_${st.name}`), sizeM: st.realSizeM, ...st.heightDrawn } : null))
             }
         };
     }

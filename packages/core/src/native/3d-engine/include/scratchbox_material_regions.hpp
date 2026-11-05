@@ -326,10 +326,10 @@ inline double foldRepeats(std::vector<uint8_t>& cls, int W, int H, int K, const 
 // ---- planMaterialJob ----
 
 /** One class's library set: its tile's real size and its normal and occlusion/roughness/metalness maps. */
-struct RegionSet { double realSizeX = 1, realSizeY = 1; Image normal, orm; /** The recess map (material-height.ts): width 0 when the set has none. */ Image height; };
+struct RegionSet { double realSizeX = 1, realSizeY = 1; Image normal, orm; };
 
 /** What every job reads: the classes' CIELAB means, their sets and each set's mean ORM (3 per set). */
-struct PlanContext { std::vector<double> meanLab; std::vector<uint8_t> openings; int wall = 0, grid = 24; std::vector<RegionSet> sets; std::vector<double> setMeans; };
+struct PlanContext { std::vector<double> meanLab; std::vector<uint8_t> openings; int wall = 0, grid = 24; /** Whether a rebuilt facade's job also returns each texel's class (the relief's class map). */ bool classMap = false; std::vector<RegionSet> sets; std::vector<double> setMeans; };
 
 /** A job: its photo, metres per texel, whether it is a rebuilt facade (else a scan piece) and the square's half-side. */
 struct PlanJob { const Image* img = nullptr; double texelM = 0; bool rebuilt = false; int radius = 1; std::vector<uint8_t> open; std::vector<double> elements; std::vector<uint32_t> family; };
@@ -339,8 +339,8 @@ struct PlanResult {
     std::vector<double> classTexels;
     double folded = 0;
     std::vector<uint8_t> orm, normal;
-    /** The recess below a rebuilt facade's plane: empty when none of its classes' sets has a height. */
-    std::vector<uint8_t> recess;
+    /** Each texel's class (r, g, b the class index, a 255) of a rebuilt facade, when the context asks for it. */
+    std::vector<uint8_t> classes;
 };
 
 inline PlanResult planJob(const PlanJob& job, const PlanContext& ctx) {
@@ -355,7 +355,7 @@ inline PlanResult planJob(const PlanJob& job, const PlanContext& ctx) {
     for (size_t k = 0; k < N; k++) r.classTexels[cls[k]]++;
     r.orm.assign(N * 4, 0);
     if (job.rebuilt) {
-        struct Tile { int tw = 0, th = 0; std::vector<float> n, o, h; };
+        struct Tile { int tw = 0, th = 0; std::vector<float> n, o; };
         std::vector<Tile> tiles(K);
         for (int c = 0; c < K; c++) {
             if (r.classTexels[c] == 0) continue;
@@ -363,12 +363,9 @@ inline PlanResult planJob(const PlanJob& job, const PlanContext& ctx) {
             Tile& t = tiles[c];
             t.tw = static_cast<int>(std::max(2.0, js::round(s.realSizeX / job.texelM))); t.th = static_cast<int>(std::max(2.0, js::round(s.realSizeY / job.texelM)));
             t.n = shrinkTile(s.normal, t.tw, t.th, true); t.o = shrinkTile(s.orm, t.tw, t.th, false);
-            if (s.height.width > 0) t.h = shrinkTile(s.height, t.tw, t.th, false);
         }
         r.normal.assign(N * 4, 0);
-        bool anyHeight = false;
-        for (const auto& t : tiles) if (!t.h.empty()) anyHeight = true;
-        if (anyHeight) r.recess.assign(N * 4, 0);
+        if (ctx.classMap) r.classes.assign(N * 4, 0);
         for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
             const size_t k = static_cast<size_t>(y) * W + x;
             const Tile& t = tiles[cls[k]];
@@ -378,10 +375,7 @@ inline PlanResult planJob(const PlanJob& job, const PlanContext& ctx) {
                 r.normal[k * 4 + c] = js::toUint8(js::round(static_cast<double>(t.n[j + c]) * 255));
             }
             r.orm[k * 4 + 3] = 255; r.normal[k * 4 + 3] = 255;
-            if (anyHeight) {
-                const uint8_t v = t.h.empty() ? 255 : js::toUint8(js::round(static_cast<double>(t.h[j]) * 255));
-                r.recess[k * 4] = v; r.recess[k * 4 + 1] = v; r.recess[k * 4 + 2] = v; r.recess[k * 4 + 3] = 255;
-            }
+            if (ctx.classMap) { r.classes[k * 4] = cls[k]; r.classes[k * 4 + 1] = cls[k]; r.classes[k * 4 + 2] = cls[k]; r.classes[k * 4 + 3] = 255; }
         }
         return r;
     }
