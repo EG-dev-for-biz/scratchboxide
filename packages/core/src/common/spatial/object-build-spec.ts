@@ -31,6 +31,8 @@
  * material (factors only, no texture maps); a clay build ignores them and gives every part studio clay.
  */
 
+import { validateBlueprintLoft, validateOutlines, type BlueprintLoft, type LoftSection, type ObjectOutlines } from './blueprint-loft';
+
 export type Vec3 = [number, number, number];
 
 /** Where a child meets its parent: `u` along the parent (0..1), `angleDeg` around it, then along the surface normal. */
@@ -59,6 +61,13 @@ export interface SweepOperator {
     twistDegAlong?: Array<[number, number]>;
     /** Periodic radial ribbing along (and optionally around) the sweep. */
     modulation?: { amplitudeMeters: number; cyclesPerMeter: number; cyclesAround: number };
+    /**
+     * In place of controlPoints and profile: the slice of the spec's blueprint this part is lofted from, straight along
+     * Z through the blueprint's stations (blueprint-loft.ts). A root part only; the spec must carry blueprint.
+     */
+    fromBlueprint?: BlueprintLoft;
+    /** The rings a fromBlueprint block expands to for the build (never authored; not kept in a stored spec). */
+    sections?: LoftSection[];
 }
 
 export interface RevolveOperator {
@@ -171,11 +180,24 @@ export interface ObjectPartSpec {
      * most 5 % of a part under 4 cm). Generated, never measured.
      */
     edgeRadiusMeters?: number;
+    /**
+     * Solids subtracted from this part (a sweep or revolve) once it is built, in object coordinates: openings,
+     * pockets and slots the operators cannot leave (an intake, a grille opening, a vent). Generated, never measured.
+     */
+    cuts?: PartCut[];
     sweep?: SweepOperator;
     revolve?: RevolveOperator;
     replicate?: ReplicateOperator;
     relief?: ReliefOperator;
     crown?: CrownOperator;
+}
+
+/** One solid cut from a part: a box (centre, size, optional rotation) or a cylinder (axis ends, radius). */
+export interface PartCut {
+    box?: { centerMeters: Vec3; sizeMeters: Vec3; rotationDeg?: Vec3 };
+    cylinder?: { startMeters: Vec3; endMeters: Vec3; radiusMeters: number };
+    /** Also cut the solid reflected across the plane through the origin with this normal, e.g. [1, 0, 0]. */
+    mirrorPlaneNormal?: Vec3;
 }
 
 export interface ObjectBuildSpec {
@@ -186,6 +208,8 @@ export interface ObjectBuildSpec {
     expectedBodies: number;
     observations: string[];
     parts: ObjectPartSpec[];
+    /** The object's blueprint outlines (object_blueprint_outlines), which fromBlueprint parts are lofted from. */
+    blueprint?: ObjectOutlines;
 }
 
 /**
@@ -271,8 +295,8 @@ export const PART_MATERIAL_JSON_SCHEMA: Record<string, unknown> = {
  * schema cannot state, such as "exactly one operator block per part", are enforced by `validateObjectBuildSpec`.
  * With `materials: false` (a clay build) parts have no material block to fill.
  */
-export function objectBuildSpecJsonSchema(options: { materials: boolean }): Record<string, unknown> {
-    const base = OBJECT_BUILD_SPEC_JSON_SCHEMA as any;
+export function objectBuildSpecJsonSchema(options: { materials: boolean; blueprint?: boolean }): Record<string, unknown> {
+    const base = options.blueprint ? withBlueprintSweeps(OBJECT_BUILD_SPEC_JSON_SCHEMA as any) : OBJECT_BUILD_SPEC_JSON_SCHEMA as any;
     if (!options.materials) return base;
     const items = base.properties.parts.items;
     return {
@@ -285,6 +309,58 @@ export function objectBuildSpecJsonSchema(options: { materials: boolean }): Reco
                     ...items,
                     properties: { ...items.properties, material: PART_MATERIAL_JSON_SCHEMA },
                     propertyOrdering: [...items.propertyOrdering, 'material']
+                }
+            }
+        }
+    };
+}
+
+/** The schema with a sweep's fromBlueprint block, which stands in for its controlPoints and profile. */
+function withBlueprintSweeps(base: any): any {
+    const items = base.properties.parts.items;
+    const sweep = items.properties.sweep;
+    const m = (d: string) => num(d);
+    return {
+        ...base,
+        properties: {
+            ...base.properties,
+            parts: {
+                ...base.properties.parts,
+                items: {
+                    ...items,
+                    properties: {
+                        ...items.properties,
+                        sweep: {
+                            ...sweep,
+                            properties: {
+                                ...sweep.properties,
+                                fromBlueprint: {
+                                    type: 'object',
+                                    description: 'Root parts only, in place of controlPoints and profile: loft this part straight along Z through the blueprint\'s stations, each section the blueprint\'s outline there. Every field is optional and narrows the slice.',
+                                    properties: {
+                                        yFromMeters: m('Lowest height kept.'),
+                                        yToMeters: m('Highest height kept.'),
+                                        fromTopMeters: m('Keep only this depth under the outline\'s top at each station (a roof panel).'),
+                                        clearTopMeters: m('Stop this far under the outline\'s top at each station (glass under a roof panel lofted above it).'),
+                                        zFromMeters: m('Rearmost station kept.'),
+                                        zToMeters: m('Frontmost station kept.'),
+                                        insetMeters: m('Shrink the half width by this much; negative grows it.'),
+                                        reliefMeters: m('Optional, only when the blueprint has relief: lay where its drawings sink (intakes, a recessed grille, glass behind its frame) into this part\'s front- and side-facing surface, the deepest sinks this many metres deep (at most 0.05). Photo-inferred; the outline does not move.'),
+                                        clearances: {
+                                            type: 'array',
+                                            items: {
+                                                type: 'object',
+                                                properties: { zMeters: m('Circle centre along the length.'), yMeters: m('Circle centre height.'), radiusMeters: m('Circle radius.') },
+                                                required: ['zMeters', 'yMeters', 'radiusMeters']
+                                            },
+                                            description: 'Circles (side view) the underside is lifted over, such as a wheel arch round its hub.'
+                                        }
+                                    }
+                                }
+                            },
+                            required: []
+                        }
+                    }
                 }
             }
         }
@@ -324,6 +400,26 @@ export const OBJECT_BUILD_SPEC_JSON_SCHEMA: Record<string, unknown> = {
                         required: ['u', 'angleDeg', 'normalOffsetMeters']
                     },
                     mirrorPlaneNormal: vec3('Optional: also emit this part and what is attached to it reflected across the plane through the origin with this normal, e.g. [1,0,0].'),
+                    cuts: {
+                        type: 'array', maxItems: 16,
+                        description: 'Optional, sweep and revolve parts: solids subtracted from this part once built, in object coordinates (absolute, also for a child): an opening, pocket or slot the operators cannot leave, such as an intake, a grille opening or a vent. Exactly one of box or cylinder each.',
+                        items: {
+                            type: 'object',
+                            properties: {
+                                box: {
+                                    type: 'object',
+                                    properties: { centerMeters: vec3('Centre, object coordinates.'), sizeMeters: vec3('Size along X, Y, Z before rotation.'), rotationDeg: vec3('Optional rotation about X, then Y, then Z, degrees.') },
+                                    required: ['centerMeters', 'sizeMeters']
+                                },
+                                cylinder: {
+                                    type: 'object',
+                                    properties: { startMeters: vec3('One end of the axis.'), endMeters: vec3('The other end.'), radiusMeters: num('Radius.', 0) },
+                                    required: ['startMeters', 'endMeters', 'radiusMeters']
+                                },
+                                mirrorPlaneNormal: vec3('Optional: also cut the reflection across the plane through the origin with this normal, e.g. [1,0,0] for a left/right pair.')
+                            }
+                        }
+                    },
                     edgeRadiusMeters: num(`Optional, sweep and revolve parts: radius of the part's rounded edges in metres, as the picture shows them (cast, moulded and worn edges are soft; machined and sheet edges small). 0 keeps them sharp (a blade, a knife edge); omit for the default, about 1.5 % of the part's smallest dimension. At most ${OBJECT_SPEC_LIMITS.maxEdgeRadiusMeters}.`, 0, OBJECT_SPEC_LIMITS.maxEdgeRadiusMeters),
                     sweep: {
                         type: 'object',
@@ -494,6 +590,7 @@ export function validateObjectBuildSpec(input: unknown, options: { requireMateri
         errors.push('parts must be a non-empty array');
         return errors;
     }
+    if (given(spec.blueprint)) errors.push(...validateOutlines(spec.blueprint));
     if (spec.parts.length > OBJECT_SPEC_LIMITS.maxParts) {
         errors.push(`parts has ${spec.parts.length} entries; at most ${OBJECT_SPEC_LIMITS.maxParts} are allowed`);
     }
@@ -532,6 +629,10 @@ export function validateObjectBuildSpec(input: unknown, options: { requireMateri
             } else if (typeof r !== 'number' || !Number.isFinite(r) || r < 0 || r > OBJECT_SPEC_LIMITS.maxEdgeRadiusMeters) {
                 errors.push(`${where}: edgeRadiusMeters must be 0 (sharp) to ${OBJECT_SPEC_LIMITS.maxEdgeRadiusMeters} metres`);
             }
+        }
+        if (given(raw.cuts)) {
+            if (present.length === 1 && !geometric) errors.push(`${where}: a ${present[0]} part has no solid of its own to cut, so it cannot have cuts`);
+            else validateCuts(raw.cuts, where, errors);
         }
         const crown = present.length === 1 && present[0] === 'crown';
         if (given(raw.material)) {
@@ -592,7 +693,7 @@ export function validateObjectBuildSpec(input: unknown, options: { requireMateri
         }
 
         const isChild = given(part.parentId);
-        if (op === 'sweep') validateSweep(part.sweep, where, isChild, errors, pointInReach);
+        if (op === 'sweep') validateSweep(part.sweep, where, isChild, errors, pointInReach, given(spec.blueprint));
         if (op === 'revolve') validateRevolve(part.revolve, where, isChild, errors, pointInReach);
         if (op === 'replicate') validateReplicate(part.replicate, id, where, byId, operatorOf, errors, pointInReach);
         if (op === 'relief') validateRelief(part.relief, where, byId, operatorOf, errors, reach);
@@ -644,6 +745,39 @@ export function validateObjectBuildSpec(input: unknown, options: { requireMateri
         }
     }
     return errors;
+}
+
+function validateCuts(cuts: unknown, where: string, errors: string[]): void {
+    if (!Array.isArray(cuts) || cuts.length < 1 || cuts.length > 16) {
+        errors.push(`${where}: cuts must be 1-16 boxes or cylinders`);
+        return;
+    }
+    cuts.forEach((cut, i) => {
+        const at = `${where}: cuts[${i}]`;
+        const kinds = isRecord(cut) ? (['box', 'cylinder'] as const).filter(k => given(cut[k])) : [];
+        if (kinds.length !== 1) {
+            errors.push(`${at} must have exactly one of box, cylinder`);
+            return;
+        }
+        const c = cut as Record<string, unknown>;
+        if (given(c.mirrorPlaneNormal) && !isNonZeroVec3(c.mirrorPlaneNormal)) errors.push(`${at}: mirrorPlaneNormal must be a non-zero [x, y, z] vector`);
+        if (kinds[0] === 'box') {
+            const b = c.box;
+            if (!isRecord(b) || !isVec3(b.centerMeters) || !isVec3(b.sizeMeters) || (b.sizeMeters as number[]).some(v => v <= 0)) {
+                errors.push(`${at}: box needs centerMeters and sizeMeters, every size above 0`);
+            } else if (given(b.rotationDeg) && !isVec3(b.rotationDeg)) {
+                errors.push(`${at}: box.rotationDeg must be [x, y, z] degrees`);
+            }
+        } else {
+            const cy = c.cylinder;
+            if (!isRecord(cy) || !isVec3(cy.startMeters) || !isVec3(cy.endMeters) || !isFiniteNumber(cy.radiusMeters) || cy.radiusMeters <= 0) {
+                errors.push(`${at}: cylinder needs startMeters, endMeters and a radiusMeters above 0`);
+            } else {
+                const [a, b2] = [cy.startMeters as Vec3, cy.endMeters as Vec3];
+                if (Math.hypot(a[0] - b2[0], a[1] - b2[1], a[2] - b2[2]) < 1e-6) errors.push(`${at}: cylinder startMeters and endMeters coincide`);
+            }
+        }
+    });
 }
 
 function isVec3(v: unknown): v is Vec3 {
@@ -773,10 +907,17 @@ function validateSweep(
     where: string,
     isChild: boolean,
     errors: string[],
-    pointInReach: (p: number[], where: string, field: string) => void
+    pointInReach: (p: number[], where: string, field: string) => void,
+    hasBlueprint = false
 ): void {
     if (!isRecord(sweep)) {
         errors.push(`${where}: sweep must be an object`);
+        return;
+    }
+    if (given(sweep.fromBlueprint)) {
+        errors.push(...validateBlueprintLoft(sweep.fromBlueprint, where));
+        if (isChild) errors.push(`${where}: a sweep lofted fromBlueprint is a root part, in object coordinates; remove parentId and attach`);
+        if (!hasBlueprint) errors.push(`${where}: sweep.fromBlueprint needs the spec's blueprint outlines, and this spec has none`);
         return;
     }
     const pts = sweep.controlPoints;
