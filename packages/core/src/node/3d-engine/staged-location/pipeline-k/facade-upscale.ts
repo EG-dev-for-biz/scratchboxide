@@ -25,6 +25,15 @@
  *  4. The detail's amplitude is capped at softRatio times the photo's own local contrast (contrastFloor at least), so a
  *     soft patch (a smear, a sign the photo cannot read) gains at most grain, never letters or edges the photo lacks.
  *
+ * Kept per facade, not only per tile: with the place's frame (`place`) each facade has an identity of its own, its centre
+ * on the ground (latitude, longitude, height, to about a metre) and its size, and the best upscale it has had is kept
+ * under it (`facade-upscale-best/<sha256>`: the tile answers it is made of, and its score, the share of its detail the
+ * faithfulness mask keeps). A facade with a kept upscale always has it loaded, whatever the photo's pixels are now: the
+ * kept answer, resized to the photo, goes through the same detail transfer, so only what still matches the photo is
+ * used. The model is asked again only when the kept one now keeps less than reuseMinKept of its detail (the photo moved
+ * on), and the new answer replaces it only when it scores higher; past the build's call budget the kept one is used as it
+ * scores. So a place's facades only get better from build to build.
+ *
  * The upscaled texture is labelled generated (sbFacadeUpscale in the node's extras: the model, the factor, the share of
  * detail kept, the mean difference), and the twin's provenance gains one entry. A facade too small, one whose texture
  * cannot grow by minFactor within maxTexels, one past the build's call budget, and every facade when no image model is
@@ -38,8 +47,11 @@ import { encodePng } from '../png-encode';
 import { resizeRgba, type EnhanceModelClient } from '../texture-enhance';
 import { decodeImageInMemory, type RgbaImage8 } from '../tile-texture-transfer';
 import { readingKey, type ModelReadingStore } from './model-readings';
+import { scanToGeodetic, type GeodeticOrigin } from '../../../spatial/StreetViewSurveyPlanner';
 
 export const FACADE_UPSCALE_VERSION = 'facade-upscale/2';
+/** The per-facade best record's version (facade-upscale-best/<sha256>). */
+export const FACADE_UPSCALE_BEST_VERSION = 'facade-upscale-best/1';
 
 /** The image models asked, in order: the one the 2026-11-03 Penn test used first. */
 export const FACADE_UPSCALE_MODELS = ['gemini-3-pro-image', 'gemini-3.1-flash-image'];
@@ -57,6 +69,8 @@ export const FACADE_UPSCALE_PARAMS = {
     /** Photo texels a model call covers (a square), and the overlap of neighbouring tiles, feathered. */
     tilePx: 1024,
     overlapPx: 48,
+    /** A kept upscale is used without asking the model again while it keeps at least this share of its detail on the photo. */
+    reuseMinKept: 0.5,
     /** Model calls a build may make (answers read back from the store are free and not counted). */
     maxCalls: 48,
     /** Model calls in flight at once, and facades worked on at once (each answer takes about 40 s). */
@@ -105,10 +119,14 @@ export interface FacadeUpscaleFacade {
     /** Share of the detail kept after the faithfulness mask (0..1), the mean shrunk-back difference, and the share of texels whose detail the contrast cap limited. */
     keptShare?: number; meanDeltaE?: number; cappedShare?: number;
     model?: string; skipped?: string;
+    /** The kept best upscale was loaded (no call), and its score on this photo; or it was kept over a worse new answer. */
+    reused?: 'kept' | 'kept-over-new'; bestKeptShare?: number;
 }
 
 export interface FacadeUpscaleReport {
     version: string; facades: number; upscaled: number; calls: number; cached: number;
+    /** Facades given their kept best upscale, and facades whose best record was written (new or better). */
+    reused?: number; bestWritten?: number;
     perFacade: FacadeUpscaleFacade[];
     /** The upscaled facades' share of the rebuilt facades' texels (photo resolution), for the provenance entry. */
     coverage: number;
@@ -280,29 +298,18 @@ interface StoredAnswer { model: string; mimeType: string; data: string }
  * The model's answer for the whole photo at W*F x H*F: its tiles asked (or read back from the store) and blended,
  * feathered across their overlaps. Throws when a call fails.
  */
-async function upscaleByTiles(photo: RgbaImage8, F: number, opts: { client: EnhanceModelClient; models: string[]; store?: ModelReadingStore; signal?: AbortSignal; label: string; limit: Limit }, P: FacadeUpscaleParams): Promise<{ ai: RgbaImage8; calls: number; cached: number; model?: string }> {
-    const W = photo.width, H = photo.height, T = Math.min(P.tilePx, Math.max(W, H)), OW = W * F, OH = H * F, OT = T * F;
-    const xs = tileStarts(W, T, P.overlapPx), ys = tileStarts(H, T, P.overlapPx);
+/** The tile grid a photo is cut into: the tile side and each tile's top-left corner (photo px). */
+function tileGrid(W: number, H: number, P: FacadeUpscaleParams): { T: number; starts: Array<readonly [number, number]> } {
+    const T = Math.min(P.tilePx, Math.max(W, H)), xs = tileStarts(W, T, P.overlapPx), ys = tileStarts(H, T, P.overlapPx);
+    return { T, starts: ys.flatMap(y0 => xs.map(x0 => [x0, y0] as const)) };
+}
+
+/** The tiles' answers blended into one image of the photo times F, feathered across the overlaps. */
+function blendTiles(W: number, H: number, F: number, T: number, starts: Array<readonly [number, number]>, answers: StoredAnswer[], P: FacadeUpscaleParams): RgbaImage8 {
+    const OW = W * F, OH = H * F, OT = T * F, ramp = P.overlapPx * F;
     const acc = new Float32Array(OW * OH * 3), wsum = new Float32Array(OW * OH);
-    const ramp = P.overlapPx * F;
-    let calls = 0, cached = 0, model: string | undefined;
-    // the tiles' answers (the build's call limit gates the model calls), then blended in order
-    const starts = ys.flatMap(y0 => xs.map(x0 => [x0, y0] as const));
-    const answers = await Promise.all(starts.map(async ([x0, y0]): Promise<StoredAnswer> => {
-        const png = encodePng(T, T, squareCrop(photo, x0, y0, T).rgba, 4);
-        const key = readingKey('facade-upscale', [FACADE_UPSCALE_VERSION, PROMPT_KEY, opts.models.join(','), imageSizeFor(OT), png]);
-        const kept = opts.store ? await opts.store.get<StoredAnswer>(key) : undefined;
-        if (kept) { cached++; return kept; }
-        const answer = await opts.limit(() => opts.client({ label: `${opts.label}@${x0},${y0}`, models: opts.models, prompt: facadeUpscalePrompt(), image: { mimeType: 'image/png', bytes: png, width: T, height: T }, references: [], imageSize: imageSizeFor(OT), ...(opts.signal ? { signal: opts.signal } : {}) }));
-        calls++;
-        const stored = { model: answer.modelUsed, mimeType: answer.mimeType, data: Buffer.from(answer.bytes).toString('base64') };
-        opts.store?.put(key, stored);
-        return stored;
-    }));
     starts.forEach(([x0, y0], k) => {
-        const stored = answers[k];
-        model ??= stored.model;
-        const tile = resizeRgba(decodeImageInMemory(Buffer.from(stored.data, 'base64')), OT, OT);
+        const tile = resizeRgba(decodeImageInMemory(Buffer.from(answers[k].data, 'base64')), OT, OT);
         // the tile's weight: 1 inside, falling to 0 across an overlap with a neighbour (never at the image's own edge)
         const left = x0 > 0, top = y0 > 0, right = x0 + T < W, bottom = y0 + T < H;
         const cw = Math.min(OT, OW - x0 * F), ch = Math.min(OT, OH - y0 * F);
@@ -321,7 +328,51 @@ async function upscaleByTiles(photo: RgbaImage8, F: number, opts: { client: Enha
         const w = wsum[i] || 1;
         rgba[i * 4] = Math.round(acc[i * 3] / w); rgba[i * 4 + 1] = Math.round(acc[i * 3 + 1] / w); rgba[i * 4 + 2] = Math.round(acc[i * 3 + 2] / w); rgba[i * 4 + 3] = 255;
     }
-    return { ai: { width: OW, height: OH, rgba }, calls, cached, ...(model ? { model } : {}) };
+    return { width: OW, height: OH, rgba };
+}
+
+async function upscaleByTiles(photo: RgbaImage8, F: number, opts: { client: EnhanceModelClient; models: string[]; store?: ModelReadingStore; signal?: AbortSignal; label: string; limit: Limit }, P: FacadeUpscaleParams): Promise<{ ai: RgbaImage8; calls: number; cached: number; model?: string; tileKeys: string[]; T: number }> {
+    const W = photo.width, H = photo.height, { T, starts } = tileGrid(W, H, P), OT = T * F;
+    let calls = 0, cached = 0;
+    // the tiles' answers (the build's call limit gates the model calls), then blended in order
+    const tileKeys: string[] = [];
+    const answers = await Promise.all(starts.map(async ([x0, y0], k): Promise<StoredAnswer> => {
+        const png = encodePng(T, T, squareCrop(photo, x0, y0, T).rgba, 4);
+        const key = readingKey('facade-upscale', [FACADE_UPSCALE_VERSION, PROMPT_KEY, opts.models.join(','), imageSizeFor(OT), png]);
+        tileKeys[k] = key;
+        const kept = opts.store ? await opts.store.get<StoredAnswer>(key) : undefined;
+        if (kept) { cached++; return kept; }
+        const answer = await opts.limit(() => opts.client({ label: `${opts.label}@${x0},${y0}`, models: opts.models, prompt: facadeUpscalePrompt(), image: { mimeType: 'image/png', bytes: png, width: T, height: T }, references: [], imageSize: imageSizeFor(OT), ...(opts.signal ? { signal: opts.signal } : {}) }));
+        calls++;
+        const stored = { model: answer.modelUsed, mimeType: answer.mimeType, data: Buffer.from(answer.bytes).toString('base64') };
+        opts.store?.put(key, stored);
+        return stored;
+    }));
+    const model = answers.find(a => a.model)?.model;
+    return { ai: blendTiles(W, H, F, T, starts, answers, P), calls, cached, ...(model ? { model } : {}), tileKeys, T };
+}
+
+/** A facade's kept best upscale (facade-upscale-best/<sha256>): the tile answers it is made of, on the photo it was made from. */
+interface BestUpscale { version: string; from: [number, number]; factor: number; tilePx: number; tileKeys: string[]; keptShare: number; meanDeltaE: number; model?: string }
+
+/**
+ * A facade's identity across builds: its centre on the ground (latitude and longitude to 1e-5 degrees, about a metre;
+ * height to a metre) and its horizontal and vertical size (to a metre), from its mesh's bounds in the place's frame.
+ */
+export function facadeIdentityKey(place: GeodeticOrigin, min: number[], max: number[], models: string[]): string {
+    const c = scanToGeodetic(place, (min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2);
+    const span = Math.hypot(max[0] - min[0], max[2] - min[2]), rise = max[1] - min[1];
+    return readingKey('facade-upscale-best', [FACADE_UPSCALE_BEST_VERSION, PROMPT_KEY, models.join(','), Math.round(c.lat * 1e5), Math.round(c.lng * 1e5), Math.round(c.alt), Math.round(span), Math.round(rise)]);
+}
+
+/** The kept best upscale rebuilt and resized to the photo times F; undefined when any of its tiles is gone. */
+async function loadBest(best: BestUpscale, W: number, H: number, F: number, store: ModelReadingStore, P: FacadeUpscaleParams): Promise<RgbaImage8 | undefined> {
+    const [bw, bh] = best.from, { starts } = tileGrid(bw, bh, { ...P, tilePx: best.tilePx });
+    if (starts.length !== best.tileKeys.length) return undefined;
+    const answers = await Promise.all(best.tileKeys.map(k => store.get<StoredAnswer>(k)));
+    if (answers.some(a => !a)) return undefined;
+    const ai = blendTiles(bw, bh, best.factor, Math.min(best.tilePx, Math.max(bw, bh)), starts, answers as StoredAnswer[], P);
+    return ai.width === W * F && ai.height === H * F ? ai : resizeRgba(ai, W * F, H * F);
 }
 
 /** The model calls a photo needs at its factor. */
@@ -341,11 +392,11 @@ export const facadeUpscaleProvenance = (report: Pick<FacadeUpscaleReport, 'cover
  * Upscales the rebuilt facades' textures in a twin (see the file comment). Never throws for a facade: a failed call
  * leaves that facade as its photo, with the reason; an abort propagates.
  */
-export async function upscaleFacadeTextures(twin: Uint8Array, opts: { client?: EnhanceModelClient; models?: string[]; store?: ModelReadingStore; signal?: AbortSignal; progress?: (m: string) => void }, P: FacadeUpscaleParams = FACADE_UPSCALE_PARAMS): Promise<{ glb: Buffer; report: FacadeUpscaleReport }> {
+export async function upscaleFacadeTextures(twin: Uint8Array, opts: { client?: EnhanceModelClient; models?: string[]; store?: ModelReadingStore; /** The twin's frame on the ground: with it (and a store) each facade's best upscale is kept and always loaded. */ place?: GeodeticOrigin; signal?: AbortSignal; progress?: (m: string) => void }, P: FacadeUpscaleParams = FACADE_UPSCALE_PARAMS): Promise<{ glb: Buffer; report: FacadeUpscaleReport }> {
     const g = parseGlbBytes(twin), json = g.json;
     const models = opts.models ?? FACADE_UPSCALE_MODELS;
     // each rebuilt facade: its node, its base colour image, and its lowest point (for the order)
-    const found: Array<{ facadeId: number; node: any; image: number; bottom: number }> = [];
+    const found: Array<{ facadeId: number; node: any; image: number; bottom: number; min?: number[]; max?: number[] }> = [];
     for (const node of json.nodes ?? []) {
         const name: string = node.name ?? '';
         if (!name.startsWith('FacadeLattice_') || node.mesh === undefined) continue;
@@ -354,9 +405,9 @@ export async function upscaleFacadeTextures(twin: Uint8Array, opts: { client?: E
         const image = tex !== undefined ? json.textures?.[tex]?.source : undefined;
         if (image === undefined || json.images?.[image]?.bufferView === undefined) continue;
         const pos = prim.attributes?.POSITION !== undefined ? json.accessors?.[prim.attributes.POSITION] : undefined;
-        found.push({ facadeId: node.extras?.sbFacadeLattice?.facadeId ?? Number(name.slice('FacadeLattice_'.length)), node, image, bottom: pos?.min?.[1] ?? 0 });
+        found.push({ facadeId: node.extras?.sbFacadeLattice?.facadeId ?? Number(name.slice('FacadeLattice_'.length)), node, image, bottom: pos?.min?.[1] ?? 0, ...(pos?.min && pos?.max ? { min: pos.min, max: pos.max } : {}) });
     }
-    const report: FacadeUpscaleReport = { version: FACADE_UPSCALE_VERSION, facades: found.length, upscaled: 0, calls: 0, cached: 0, perFacade: [], coverage: 0 };
+    const report: FacadeUpscaleReport = { version: FACADE_UPSCALE_VERSION, facades: found.length, upscaled: 0, calls: 0, cached: 0, reused: 0, bestWritten: 0, perFacade: [], coverage: 0 };
     const unchanged = (skipped: string) => ({ glb: Buffer.from(twin), report: { ...report, skipped } });
     if (!found.length) return unchanged('no rebuilt facade in this model');
     if (!opts.client) return unchanged('no image model client in this build\'s services');
@@ -398,9 +449,36 @@ export async function upscaleFacadeTextures(twin: Uint8Array, opts: { client?: E
             const late = Date.now() > deadline, allowCalls = work[k].allowCalls && !late;
             if (late && work[k].allowCalls) row.skipped = `not started within the step's ${Math.round(P.maxMs / 60_000)} min`;
             try {
-                const up = await upscaleByTiles(img, F, { client: allowCalls ? opts.client! : denied, models, ...(opts.store ? { store: opts.store } : {}), ...(opts.signal ? { signal: opts.signal } : {}), label: f.node.name, limit }, P);
+                // the facade's kept best, loaded onto this photo through the detail transfer (only what still matches is used)
+                const store = opts.store, bestKey = opts.place && store && f.min && f.max ? facadeIdentityKey(opts.place, f.min, f.max, models) : undefined;
+                const best = bestKey ? await store!.get<BestUpscale>(bestKey) : undefined;
+                const bestAi = best && best.version === FACADE_UPSCALE_BEST_VERSION ? await loadBest(best, img.width, img.height, F, store!, P) : undefined;
+                const kept = bestAi ? transferDetail(img, bestAi, F, P) : undefined;
+                let t: ReturnType<typeof transferDetail>, up: { calls: number; cached: number; model?: string };
+                if (kept && (kept.keptShare >= P.reuseMinKept || !allowCalls)) {
+                    // still a good fit, or no call allowed: the kept one, as it scores, without asking again
+                    t = kept; up = { calls: 0, cached: best!.tileKeys.length, ...(best!.model ? { model: best!.model } : {}) };
+                    Object.assign(row, { reused: 'kept' as const, bestKeptShare: +kept.keptShare.toFixed(3) });
+                    report.reused!++;
+                } else {
+                    const fresh = await upscaleByTiles(img, F, { client: allowCalls ? opts.client! : denied, models, ...(store ? { store } : {}), ...(opts.signal ? { signal: opts.signal } : {}), label: f.node.name, limit }, P);
+                    const tNew = transferDetail(img, fresh.ai, F, P);
+                    // the better of the kept and the new, by the share of detail kept on this photo (then the smaller difference)
+                    const keepOld = !!kept && (kept.keptShare > tNew.keptShare || (kept.keptShare === tNew.keptShare && kept.meanDeltaE <= tNew.meanDeltaE));
+                    if (keepOld) {
+                        t = kept!; up = { calls: fresh.calls, cached: fresh.cached, ...(best!.model ? { model: best!.model } : {}) };
+                        Object.assign(row, { reused: 'kept-over-new' as const, bestKeptShare: +kept!.keptShare.toFixed(3) });
+                        report.reused!++;
+                    } else {
+                        t = tNew; up = fresh;
+                        if (bestKey) {
+                            const record: BestUpscale = { version: FACADE_UPSCALE_BEST_VERSION, from: [img.width, img.height], factor: F, tilePx: fresh.T, tileKeys: fresh.tileKeys, keptShare: +tNew.keptShare.toFixed(4), meanDeltaE: +tNew.meanDeltaE.toFixed(3), ...(fresh.model ? { model: fresh.model } : {}) };
+                            store!.put(bestKey, record);
+                            report.bestWritten!++;
+                        }
+                    }
+                }
                 delete row.skipped;
-                const t = transferDetail(img, up.ai, F, P);
                 const opaque = t.image.rgba.every((v, i) => i % 4 !== 3 || v === 255);
                 const rgb = opaque ? new Uint8Array(t.image.width * t.image.height * 3) : t.image.rgba;
                 if (opaque) for (let i = 0; i < t.image.width * t.image.height; i++) { rgb[i * 3] = t.image.rgba[i * 4]; rgb[i * 3 + 1] = t.image.rgba[i * 4 + 1]; rgb[i * 3 + 2] = t.image.rgba[i * 4 + 2]; }

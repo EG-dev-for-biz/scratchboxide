@@ -262,8 +262,8 @@ describe('inner-crown darkening and textured cards (shader chunks)', () => {
         expect(CROWN_VERTEX_PARS).toContain('uniform vec2 uSbCrownInner;');
         expect(CROWN_VERTEX_MAIN).toMatch(/sbInnerM = clamp\( 1\.0 - sqrt\(/);
         expect(CROWN_VERTEX_MAIN).toContain('vSbCrownOcc *= 1.0 - uSbCrownInner.x * ( 1.0 - exp( - sbInnerM / max( uSbCrownInner.y, 0.05 ) ) );');
-        // the darkening is subtle by default and adjustable
-        expect(DEFAULT_CROWN_SHADING.innerDarkening).toBeGreaterThan(0); expect(DEFAULT_CROWN_SHADING.innerDarkening).toBeLessThanOrEqual(0.4);
+        // the darkening leaves the core lit by default (a real crown's core is dark, not black) and is adjustable
+        expect(DEFAULT_CROWN_SHADING.innerDarkening).toBeGreaterThan(0); expect(DEFAULT_CROWN_SHADING.innerDarkening).toBeLessThanOrEqual(0.7);
         const o = resolveCrownShading({ innerDarkening: 0.5, innerDepthM: 2 });
         setCrownShadingUniforms(o);
         expect(crownShadingUniforms().uSbCrownInner.value.toArray()).toEqual([0.5, 2]);

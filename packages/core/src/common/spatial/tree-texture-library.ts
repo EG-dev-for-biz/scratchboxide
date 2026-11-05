@@ -111,6 +111,23 @@ export interface TreeTextureOptions {
     leafVariation: number;
     /** Strength of the sunlight seen through a leaf lit from behind. */
     translucency: number;
+    /**
+     * The colour of light that has passed through a leaf, as a multiplier of the leaf's own colour: a blade absorbs blue (and
+     * red) far more than green, so what comes through is yellower and more saturated than what it reflects.
+     */
+    translucencyTint: [number, number, number];
+    /**
+     * How sharply the transmitted light gathers toward the sun's direction: it is 0.5 + cos^focus of the angle between the
+     * line of sight and the sun, so a crown seen against the sun glows three times as much as one seen side-on.
+     */
+    translucencyFocus: number;
+    /** The same term on the far level's leaf masses (their crown-blended normals): a backlit distant crown keeps a lit rim. */
+    massTranslucency: number;
+    /**
+     * The near level's core cards (the dense inner foliage seen through the gaps of the leaves, scratchbox_tree_lod.hpp
+     * coreCards): their colour times this, on top of the crown's inner darkening. Light that reaches the core has passed the shell.
+     */
+    coreCardShade: number;
     /** Amplitude of the far masses' colour noise. */
     massNoise: number;
     /** How much wider than its atlas aspect a narrow leaf may be drawn (tree-texture-library.ts DEFAULT_LEAF_STRETCH). */
@@ -131,7 +148,7 @@ export interface TreeTextureOptions {
     alphaGain: LeafSlotFactors;
 }
 
-export const DEFAULT_TREE_TEXTURE_OPTIONS: Readonly<TreeTextureOptions> = Object.freeze({ leafVariation: 0.18, translucency: 0.45, massNoise: 0.16, leafStretch: DEFAULT_LEAF_STRETCH, alphaMipScale: 0.4, leafAtlasPx: 1024,
+export const DEFAULT_TREE_TEXTURE_OPTIONS: Readonly<TreeTextureOptions> = Object.freeze({ leafVariation: 0.18, translucency: 0.5, translucencyTint: [1.0, 1.12, 0.55] as [number, number, number], translucencyFocus: 3, massTranslucency: 0.35, coreCardShade: 0.7, massNoise: 0.16, leafStretch: DEFAULT_LEAF_STRETCH, alphaMipScale: 0.4, leafAtlasPx: 1024,
     cardZoom: [1, 1.15, 1.3, 1.3] as LeafSlotFactors, alphaGain: [1, 1.1, 1.25, 1.25] as LeafSlotFactors });
 
 const finite = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);

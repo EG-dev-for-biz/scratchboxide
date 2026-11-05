@@ -180,6 +180,10 @@ inline Library parseIndex(const std::string& text) {
 struct MeasuredColour {
     bool known{false};
     RGB meanLinear{0, 0, 0};
+    // the standard deviation of the photo's colour over the crown's cells (crowns.json colour.spreadLinearRgb), when the
+    // tree's own crown was measured: how much its leaves' colour varies (ChoiceParams variation*)
+    bool spreadKnown{false};
+    RGB spreadLinear{0, 0, 0};
     std::string source{"none"};
 };
 
@@ -226,6 +230,14 @@ struct ChoiceParams {
     // the tint is the measured crown colour over the entry's mean, per channel: the leaves come out the scan's colour.
     // Only a ratio past these is held (a near-black channel of an entry, or a crown measured far darker than any leaf set)
     double tintChannelMin{0.05}, tintChannelMax{8.0};
+    // The leaves' colour variation from the tree's own crown: a viewer draws each leaf at the tint times
+    // 1 + variation x (u - 0.5), u uniform (a relative standard deviation of variation / sqrt(12)). The photo's relative
+    // spread over the crown's cells (the luminance of the spread over the luminance of the mean) holds the leaves' own
+    // variation and the light and shade across the crown, which the viewer's lighting draws itself; variationShareOfSpread
+    // of it is taken as the leaves' (a quarter: most of a sunlit crown's spread seen from above is light and shade), within
+    // [variationMin, variationMax].
+    double variationShareOfSpread{0.25};
+    double variationMin{0.08}, variationMax{0.45};
     // bark: the tree's size share s = mean of ln(H / youngH) / ln(oldH / youngH) and (r - youngR) / (oldR - youngR), both in [0, 1]
     double youngHeightM{5}, oldHeightM{28};
     double youngTrunkRadiusM{0.06}, oldTrunkRadiusM{0.45};
@@ -239,6 +251,7 @@ struct Choice {
     size_t leaf{0}, bark{0};
     RGB leafTint{1, 1, 1}, barkTint{1, 1, 1};
     RGB massColourLinear{0, 0, 0};       // the far level's leaf masses: the chosen leaves' mean colour under the tint
+    double leafVariation{0};             // the leaves' colour variation from the crown's measured spread (0: not measured; ChoiceParams variation*)
     double targetLeafLengthM{0};
     double targetBladeWidthM{0};         // the species leaf's blade width the leaves were matched to (0: not used)
     double sizeShare{0};                 // 0 young .. 1 old (the bark's target)
@@ -296,6 +309,9 @@ inline Choice choose(const Library& lib, const TreeAppearance& t, const ChoicePa
         double lo = std::numeric_limits<double>::infinity(), hi = 0;
         for (const auto& e : lib.leaves) { lo = std::min(lo, e.bladeWidthM); hi = std::max(hi, e.bladeWidthM); }
         if (lo > 0 && t.leafWidthHintM >= lo / C.bladeWidthReach && t.leafWidthHintM <= hi * C.bladeWidthReach) widthHint = t.leafWidthHintM;
+        // a leaf finer still than the library's finest (a larch's needle, under a millimetre) is no less a needle: it is
+        // matched to the finest, not left to be chosen by colour and size alone (which drew it broad leaves)
+        else if (lo > 0 && t.leafWidthHintM < lo / C.bladeWidthReach) widthHint = lo;
     }
     out.targetBladeWidthM = widthHint;
     std::vector<double> lc(lib.leaves.size());
@@ -328,6 +344,10 @@ inline Choice choose(const Library& lib, const TreeAppearance& t, const ChoicePa
         }
     }
     for (int k = 0; k < 3; ++k) out.massColourLinear[static_cast<size_t>(k)] = L.meanLinear[static_cast<size_t>(k)] * out.leafTint[static_cast<size_t>(k)];
+    if (t.colour.known && t.colour.spreadKnown) {
+        const double ym = luminance(t.colour.meanLinear), ys = luminance(t.colour.spreadLinear);
+        if (ym > 1e-6) out.leafVariation = std::clamp(C.variationShareOfSpread * (ys / ym) * std::sqrt(12.0), C.variationMin, C.variationMax);
+    }
     // ---- bark ----
     out.sizeShare = sizeShare(t, C);
     out.targetRelief = lib.reliefMin + out.sizeShare * (lib.reliefMax - lib.reliefMin);

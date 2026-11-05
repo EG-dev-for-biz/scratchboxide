@@ -751,6 +751,7 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
     double baseRatio = G.crownBaseRatio, trunkPerHeight = G.trunkRadiusPerHeight;
     double apical = G.morphology.apicalDominance, branchAngle = G.morphology.branchAngleMeanRad;
     int scaffold = 0;
+    const tree_species::Entry* form = nullptr;   // the matched entry, for its growth-form fields
     if (G.species) {
         auto d = tree_species::describeCrown(c.apex, support, c.sectorRadii, c.samples, c.colourKnown ? &c.colourMean : nullptr, G.speciesChoice);
         d.latAbsDeg = G.latAbsDeg;
@@ -764,6 +765,7 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
             branchAngle = e.branchAngleRad;
             scaffold = e.scaffoldBranches;
             g.stems = e.stems;
+            form = &e;
         }
     }
     if (std::isfinite(c.trunkRadiusPerHeight)) trunkPerHeight = c.trunkRadiusPerHeight;
@@ -852,7 +854,8 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
     // a narrow crown (mean radius under a quarter of its height) gets proportionally finer growth: with the step, kill and
     // perception radii a wider crown needs, its attractors lie inside the trunk's own reach and the tree is a bare pole
     const double narrow = std::clamp(radius / (0.25 * H), 0.4, 1.0);
-    const double step = std::max(0.12, (G.morphology.internodeLengthM > 0.0f ? static_cast<double>(G.morphology.internodeLengthM) : std::clamp(H / 40.0, 0.2, 0.6)) * narrow);
+    const double step = std::max(0.12, (G.morphology.internodeLengthM > 0.0f ? static_cast<double>(G.morphology.internodeLengthM)
+                                        : form && form->internodeLengthPerHeight > 0 ? std::clamp(form->internodeLengthPerHeight * H, 0.12, 0.9) : std::clamp(H / 40.0, 0.2, 0.6)) * narrow);
     cfg.branchStepLength = static_cast<float>(step);
     cfg.trunkLeanToward = c.apex;
     cfg.trunkLeanShare = static_cast<float>(G.trunkLeanShare);
@@ -870,6 +873,29 @@ inline CrownGrowth growCrownAttempt(const CrownShape& c, const GrowthParams& G, 
         cfg.leaderHold = static_cast<float>(g.leaderHold);
         cfg.excurrence = static_cast<float>(g.excurrence);
         cfg.leaderTopY = static_cast<float>(g.apexTargetY);
+        // a shoot with more momentum than any entry had before (apical dominance over 0.62) passed the attractors beside
+        // it and colonisation stalled: its momentum is released as it nears them, by how far past 0.62 it is
+        cfg.momentumRelease = static_cast<float>(smooth(0.62, 0.72, apical));
+        // a crown that begins above the trunk: a tree whose leader holds climbs its own line to it, not over to its rim
+        cfg.trunkSeekAlongStem = static_cast<float>(g.leaderHold);
+    }
+    if (form) {
+        // the entry's growth form (continuous; each at its default leaves the tree as it grew without it)
+        cfg.whorlBranches = form->whorlBranches;
+        cfg.whorlSpacing = static_cast<float>(form->whorlSpacingPerHeight * H);
+        cfg.shootDroop = static_cast<float>(0.9 * form->weeping);
+        cfg.shootDroopLength = static_cast<float>(std::max(0.5, 0.12 * H));
+        cfg.pendulousTailShare = static_cast<float>(0.85 * form->weeping);
+        cfg.rosetteLeaves = form->rosetteLeaves;
+        cfg.rosetteLeafLength = static_cast<float>(form->leafLengthM);
+        cfg.rosetteArch = static_cast<float>(form->leafArch);
+        cfg.leafletsPerSide = form->leafletsPerSide;
+        cfg.leafletSpanShare = static_cast<float>(form->leafletSpanShare);
+        cfg.leafletLengthShare = static_cast<float>(form->leafletLengthShare);
+        cfg.leafletAngleRad = static_cast<float>(form->leafletAngleRad);
+        cfg.lateralAngleHold = static_cast<float>(form->branchAngleHold);
+        cfg.lateralAngleOrderGainRad = static_cast<float>(form->branchAngleOrderGainRad);
+        cfg.crownOpenness = static_cast<float>(form->crownOpenness);
     }
     // stems from the ground: the trunk forks just above the root collar and the scaffold limbs are the stems
     cfg.isShrub = g.stems > 1;
@@ -4843,7 +4869,8 @@ inline std::string crownsJson(const StripResult& r, const StripParams& P) {
       << ",\"excurrentTopShareLo\":" << json::numPrecise(P.growth.excurrentTopShareLo) << ",\"excurrentTopShareHi\":" << json::numPrecise(P.growth.excurrentTopShareHi)
       << ",\"excurrentApicalLo\":" << json::numPrecise(P.growth.excurrentApicalLo) << ",\"excurrentApicalHi\":" << json::numPrecise(P.growth.excurrentApicalHi) << "},\n";
     // the species library the crowns were grown with (plant must grow them with the same one)
-    if (P.growth.species) s << "\"species\":{\"schema\":" << json::str(P.growth.species->schema) << ",\"index\":" << json::str(P.growth.speciesIndex) << ",\"entries\":" << P.growth.species->entries.size() << "},\n";
+    if (P.growth.species) s << "\"species\":{\"schema\":" << json::str(P.growth.species->schema) << ",\"index\":" << json::str(P.growth.speciesIndex) << ",\"entries\":" << P.growth.species->entries.size()
+                             << ",\"place\":" << tree_species::placeJson(*P.growth.species, P.growth.speciesChoice, P.growth.latAbsDeg) << "},\n";
     s << "\"crowns\":[";
     for (size_t i = 0; i < r.crowns.size(); ++i) {
         const auto& c = r.crowns[i];
@@ -5376,6 +5403,11 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
                     tr.look.colour.known = true;
                     tr.look.colour.source = "measured";
                     for (size_t k = 0; k < 3; ++k) tr.look.colour.meanLinear[k] = std::max(0.0, col[k].num);
+                    const auto& spread = cj["colour"]["spreadLinearRgb"];
+                    if (spread.type == io::GlbJsonValue::Array && spread.arr.size() == 3 && spread[0].type == io::GlbJsonValue::Number) {
+                        tr.look.colour.spreadKnown = true;
+                        for (size_t k = 0; k < 3; ++k) tr.look.colour.spreadLinear[k] = std::max(0.0, spread[k].num);
+                    }
                 } else {
                     tr.look.colour = fallbackColour;
                 }
@@ -5411,12 +5443,21 @@ inline PlantResult plant(const io::GlbJsonValue& crownsDoc, const PlantParams& P
                     in.barkTileAlongM = static_cast<float>(bark.tileAlongM);
                 }
                 in.farFoliage = &m.foliage;   // the far level's leaf masses, for its drawn coverage
+                in.farPieces = m.report.foliageClumps;
                 const auto tLod = std::chrono::steady_clock::now();
                 tree_lod::buildTreeLod(tr.lod, in, *R.library);
                 tr.lodMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tLod).count();
                 if (!tr.lod.error.empty()) { errors[i] = "crown " + std::to_string(tr.crownId) + ": " + tr.lod.error; return; }
                 tr.hasLod = true;
-                if (tr.lod.coverage.farMassSpread != 1.0) {
+                if (tr.lod.orderDroppedFarPieces > 0) {
+                    // the far level gave up its last pieces so that it stays lighter than the mid level: the report and the
+                    // growth values follow the mesh the GLB holds
+                    m.report.foliageClumps -= std::min(m.report.foliageClumps, tr.lod.orderDroppedFarPieces);
+                    m.report.foliageTriangles = m.foliage.indices.size() / 3;
+                    if (tr.growth.foliage.size() > m.foliage.vertices.size()) tr.growth.foliage.resize(m.foliage.vertices.size());
+                    tr.report = m.report;
+                }
+                if (tr.lod.coverage.farMassSpread != 1.0 || tr.lod.orderDroppedFarPieces > 0) {
                     // the masses it delivers were spread: what they reach is measured again, on the masses the GLB holds
                     m.reach = measureFoliage(m.foliage, m.report.foliageClumps, g.surface, g.reachRadius);
                     tr.leaves = m.reach;
@@ -5624,6 +5665,8 @@ inline std::string coverageJson(const tree_lod::CoverageReport& c) {
     if (c.measured) {
         o += ",\"level0Before\":" + lv(c.level0Before) + ",\"level0\":" + lv(c.level0) + ",\"nearMid\":" + lv(c.nearMid) + ",\"mid\":" + lv(c.mid);
         if (c.cardTarget > 0) o += ",\"midClusters\":" + lv(c.midClusters) + ",\"cardTarget\":" + json::num(c.cardTarget);
+        if (c.nearMidCardTarget > 0) o += ",\"nearMidClusters\":" + lv(c.nearMidClusters) + ",\"nearMidCardTarget\":" + json::num(c.nearMidCardTarget);
+        if (c.coreCardTarget > 0) o += ",\"level0Core\":" + lv(c.level0Core) + ",\"coreCardTarget\":" + json::num(c.coreCardTarget);
         if (c.level0Cutout.meanEllipsoid > 0 || c.midCutout.meanEllipsoid > 0)
             o += ",\"cutout\":{\"level0\":" + lv(c.level0Cutout) + ",\"mid\":" + lv(c.midCutout) + (c.cardTarget > 0 ? ",\"midClusters\":" + lv(c.midClustersCutout) : std::string()) + "}";
         o += ",\"drawn\":{\"level0\":" + lv(c.drawnLevel0) + ",\"nearMid\":" + lv(c.drawnNearMid) + ",\"mid\":" + lv(c.drawnMid) +
@@ -5637,6 +5680,12 @@ inline std::string coverageJson(const tree_lod::CoverageReport& c) {
 inline std::string crownCardsJson(const tree_lod::TreeLod& L, bool withTime = false) {
     return "{\"cards\":" + std::to_string(L.cardCount()) + ",\"triangles\":" + std::to_string(2 * L.cardCount()) + ",\"sideM\":" + json::num(L.cardSideM) +
            ",\"candidates\":" + std::to_string(L.cardCandidates) + (withTime ? ",\"ms\":" + json::num(L.msCards) : std::string()) + "}";
+}
+
+/** One of a tree's other card sets (the near-mid level's clumped leaf cards, the near level's core cards), as crownCardsJson. */
+inline std::string cardSetJson(size_t cards, double sideM, size_t candidates, double ms = -1) {
+    return "{\"cards\":" + std::to_string(cards) + ",\"triangles\":" + std::to_string(2 * cards) + ",\"sideM\":" + json::num(sideM) +
+           ",\"candidates\":" + std::to_string(candidates) + (ms >= 0 ? ",\"ms\":" + json::num(ms) : std::string()) + "}";
 }
 
 /** `,"colour":{...}` of a tree's extras: its crown's colour as the tile's photo shows it (crowns.json), or nothing. */
@@ -5658,13 +5707,20 @@ inline std::string treeTextureMembers(const PlantedTree& tr, const tree_textures
     auto rgb = [](const tree_textures::RGB& c) { return "[" + json::num(c[0]) + "," + json::num(c[1]) + "," + json::num(c[2]) + "]"; };
     const auto& L = lib.leaves[t.leaf];
     const auto& B = lib.bark[t.bark];
-    return ",\"texture\":{\"leaves\":{\"entry\":" + json::str(L.id) + ",\"tint\":" + rgb(t.leafTint) + ",\"leafLengthM\":" + json::num(L.leafLengthM) +
+    // what the colour on the leaves is: read from the tree's own crown in the tile's photo (photo-inferred: the reading is
+    // measured, the leaves wearing it are grown), or a fill with its reason (generated)
+    const std::string tintProvenance = t.colourSource == "measured"
+        ? std::string("{\"label\":\"photo-inferred\",\"reason\":\"the tint takes the leaf set's mean colour to this crown's own colour in the tile's photo, and the variation follows its spread there; the leaves wearing it are grown\"}")
+        : t.colourSource == "neighbours"
+            ? std::string("{\"label\":\"generated\",\"reason\":\"this crown has no measured colour: the tint is the median of the planting's measured crowns\"}")
+            : std::string("{\"label\":\"generated\",\"reason\":\"no crown of this planting has a measured colour: the tint is the library's leaf-on prior\"}");
+    return ",\"texture\":{\"leaves\":{\"entry\":" + json::str(L.id) + ",\"tint\":" + rgb(t.leafTint) + (t.leafVariation > 0 ? ",\"variation\":" + json::num(t.leafVariation) : std::string()) + ",\"leafLengthM\":" + json::num(L.leafLengthM) +
            ",\"targetLeafLengthM\":" + json::num(t.targetLeafLengthM) + ",\"bladeWidthM\":" + json::num(L.bladeWidthM) +
            ",\"targetBladeWidthM\":" + json::num(t.targetBladeWidthM) + ",\"cost\":" + json::num(t.leafCost) + ",\"provenance\":\"library\"}" +
            ",\"bark\":{\"entry\":" + json::str(B.id) + ",\"tint\":" + rgb(t.barkTint) + ",\"tileM\":[" + json::num(B.tileAroundM) + "," + json::num(B.tileAlongM) + "]" +
            ",\"reliefIndex\":" + json::num(B.reliefIndex) + ",\"targetReliefIndex\":" + json::num(t.targetRelief) + ",\"sizeShare\":" + json::num(t.sizeShare) +
            ",\"cost\":" + json::num(t.barkCost) + ",\"provenance\":\"library\"}" +
-           ",\"massColourLinear\":" + rgb(t.massColourLinear) + ",\"colourProvenance\":" + json::str(t.colourSource) + "}";
+           ",\"massColourLinear\":" + rgb(t.massColourLinear) + ",\"colourProvenance\":" + json::str(t.colourSource) + ",\"tintProvenance\":" + tintProvenance + "}";
 }
 
 /** A crown kept as scanned: its status says so, and it has a measured footprint to outline. */
@@ -5791,8 +5847,23 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                 for (const auto& t : L.wood.uvs) uv.push_back({t.x, t.y});
             }
             l0.frameGroup = l3.frameGroup = base;
-            l1.meshFrom = l0.name;
-            l2.meshFrom = l0.name;
+            // a rosette tree's fronds are each level's own leaves: its second primitive, beside the wood the levels share
+            const bool fronds = L.hasFronds();
+            if (fronds) {
+                l0.primitives.push_back(primitiveOf(L.fronds[0], L.frondGrowth[0]));
+                l1.frameGroup = l2.frameGroup = base;   // they reuse the wood's buffers: one quantisation cube
+                for (staged_glb::StagedNode* lv : {&l1, &l2}) {
+                    staged_glb::StagedPrimitive woodRef;
+                    woodRef.reuseNode = l0.name;
+                    woodRef.reuseIndex = 0;
+                    lv->primitives.push_back(std::move(woodRef));
+                    lv->primitives.push_back(primitiveOf(L.fronds[lv == &l1 ? 1 : 2], L.frondGrowth[lv == &l1 ? 1 : 2]));
+                }
+            } else {
+                l1.meshFrom = l0.name;
+                l2.meshFrom = l0.name;
+            }
+            const std::string frondPrims = fronds ? std::string(",\"foliagePrimitives\":[1]") : std::string();
             for (size_t k = 0; k < L.twigs.size(); ++k) {
                 if (L.twigs[k].empty()) continue;
                 staged_glb::StagedNode tw;
@@ -5817,25 +5888,31 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                     si.sameDataAs = c0.name;
                     n.instances.push_back(std::move(si));
                 };
-                sameAs(c1, "_lod1_c", v.nearMid.name);
+                if (!L.nearMidCards()) sameAs(c1, "_lod1_c", v.nearMid.name);
                 if (!L.midCards()) sameAs(c2, "_lod2_c", v.level1.name);
                 l0.children.push_back(std::move(c0));
-                l1.children.push_back(std::move(c1));
+                if (!L.nearMidCards()) l1.children.push_back(std::move(c1));
                 if (!L.midCards()) l2.children.push_back(std::move(c2));
             }
-            // the mid level's crown cards (when the tree has them, in place of the mid clusters): one node per atlas cell
-            for (size_t k = 0; k < L.cards.size() && k < lib.cards.size(); ++k) {
-                if (L.cards[k].empty()) continue;
-                staged_glb::StagedNode cn;
-                cn.name = base + "_lod2_card" + std::to_string(k);
-                cn.extrasJson = clusterExtras(lib.cards[k].name, 0xCA4Dull + k);
-                cn.instances.push_back(instancesOf(L.cards[k], lib.cards[k].name));
-                l2.children.push_back(std::move(cn));
-            }
+            // the card sets, one node per atlas cell: the mid level's crown cards and the near-mid level's clumped leaf cards (each
+            // in place of that level's clusters), the near level's core cards (beside its clusters)
+            auto cardNodes = [&](staged_glb::StagedNode& level, const std::vector<std::vector<tree_lod::Instance>>& set, const std::string& tag, uint64_t salt) {
+                for (size_t k = 0; k < set.size() && k < lib.cards.size(); ++k) {
+                    if (set[k].empty()) continue;
+                    staged_glb::StagedNode cn;
+                    cn.name = base + tag + std::to_string(k);
+                    cn.extrasJson = clusterExtras(lib.cards[k].name, salt + k);
+                    cn.instances.push_back(instancesOf(set[k], lib.cards[k].name));
+                    level.children.push_back(std::move(cn));
+                }
+            };
+            cardNodes(l2, L.cards, "_lod2_card", 0xCA4Dull);
+            cardNodes(l1, L.nearMidCardSet, "_lod1_card", 0x4E4D00ull);
+            cardNodes(l0, L.coreCardSet, "_lod0_core", 0xC0DE00ull);
             const bool instanced0 = !l0.children.empty(), instanced1 = !l1.children.empty(), instanced2 = !l2.children.empty();
-            l0.extrasJson = lodExtras(0, 0.0, d0 + 0.5 * fade, fade, L.drawnLevel0(), instanced0);
-            l1.extrasJson = lodExtras(1, d0 - 0.5 * fade, dNM + 0.5 * fadeNM, fadeNM, L.drawnNearMid(), instanced1);
-            l2.extrasJson = lodExtras(2, dNM - 0.5 * fadeNM, d1 + 0.5 * fade1, fade1, L.drawnLevel1(), instanced2);
+            l0.extrasJson = lodExtras(0, 0.0, d0 + 0.5 * fade, fade, L.drawnLevel0(), instanced0, frondPrims);
+            l1.extrasJson = lodExtras(1, d0 - 0.5 * fade, dNM + 0.5 * fadeNM, fadeNM, L.drawnNearMid(), instanced1, frondPrims);
+            l2.extrasJson = lodExtras(2, dNM - 0.5 * fadeNM, d1 + 0.5 * fade1, fade1, L.drawnLevel1(), instanced2, frondPrims);
             // level 3: its own wood, the trunk and main limbs (a few hundred triangles; a viewer shows them through the holes it opens
             // in the masses), and the blob masses meshCrown builds on the same skeleton
             size_t level3Wood = L.farWoodTriangles;
@@ -5870,6 +5947,8 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                          ",\"far\":{\"woodTriangles\":" + std::to_string(L.farWoodTriangles) + ",\"woodPrunedBelowRadiusM\":" + json::num(L.farWoodPrunedBelowRadiusM) +
                          ",\"drawnTriangles\":" + std::to_string(L.drawnFar(tr.foliage.indices.size() / 3)) + "}" +
                          ",\"fillStations\":" + std::to_string(L.coverage.fillStations) + (L.midCards() ? ",\"crownCards\":" + detail::crownCardsJson(L) : std::string()) +
+                         (L.nearMidCards() ? ",\"nearMidCards\":" + detail::cardSetJson(L.nearMidCardCount(), L.nearMidCardSideM, L.nearMidCardCandidates) : std::string()) +
+                         (L.coreCardCount() ? ",\"coreCards\":" + detail::cardSetJson(L.coreCardCount(), L.coreCardSideM, L.coreCardCandidates) : std::string()) +
                          ",\"coverage\":" + detail::coverageJson(L.coverage) + (heroTree ? ",\"hero\":true" : std::string()) + "}";
             // the crown envelope of the delivered leaves (tree node frame = the tile frame): a viewer shades the leaves with its normals
             std::string crownJson;
@@ -6025,7 +6104,7 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
         }
         // the crown cards (the mid level's leaves where a tree has them): leaf meshes of the mid level only
         bool anyCards = false;
-        for (const auto& t : R.trees) if (t.hasLod && t.lod.midCards()) { anyCards = true; break; }
+        for (const auto& t : R.trees) if (t.hasLod && t.lod.anyCards()) { anyCards = true; break; }
         std::string cardsJson;
         if (anyCards) {
             std::string names, cells;
@@ -6040,6 +6119,7 @@ inline std::vector<uint8_t> writeTreesGlb(const PlantResult& R, const io::GlbJso
                 cells += (cells.empty() ? "" : ",") + std::string("[") + leaves + "]";
             }
             cardsJson = ",\"crownCards\":{\"schema\":\"scratchbox.crown-cards/1\",\"meshes\":[" + names + "],\"cols\":" + std::to_string(lib.cardLayout.cols) + ",\"rows\":" + std::to_string(lib.cardLayout.rows) +
+                        ",\"denseCells\":" + std::to_string(lib.cardLayout.denseCells) +
                         ",\"clayLeafAspect\":" + json::num(lib.params.morphology.blade.widthRatio) +
                         ",\"leaf\":\"[u, v, angle, length, pick]: an ellipse centred (u, v) in the card's cell ([0, 1]^2, s across, t up; TEXCOORD_0 = ((col + s) / cols, (row + t) / rows)), its long axis at angle (rad from +s), length long, length x aspect wide (clay: clayLeafAspect); textured, the leaf cell's image is drawn in a box along the same axis with the cell's own aspect, scaled so the cell's fill covers the clay ellipse's area (box length = length x sqrt((pi / 4) x clayLeafAspect / (fill x aspect))); pick in [0, 1) chooses its leaf image and shade; drawn in list order\"" +
                         ",\"cells\":[" + cells + "]}";

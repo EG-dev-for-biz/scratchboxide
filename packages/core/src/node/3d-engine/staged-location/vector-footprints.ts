@@ -31,6 +31,8 @@ export interface VectorBuilding {
     /** Overrides buildMassing's part/mesh provenance token for this building (default: unset, the spec's own token) —
      *  for a building not actually from Google's vector data (e.g. orchestrator.ts's scanDerivedFootprint). */
     provenance?: string;
+    /** The tile features this building was put together from when it crosses tile edges (mergeTilePieces); `id` is the largest's. */
+    pieces?: string[];
 }
 
 export interface VectorEvidence {
@@ -75,6 +77,83 @@ function tileOf(lat: number, lng: number, z: number): { x: number; y: number } {
     return { x: Math.floor(((lng + 180) / 360) * n), y: Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n) };
 }
 
+/** The [lng, lat] corner of tile (x, y) at zoom z (its north-west corner; x + 1, y + 1 give the others). */
+function tileCorner(x: number, y: number, z: number): [number, number] {
+    const n = 2 ** z;
+    return [(x / n) * 360 - 180, (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n))) * 180) / Math.PI];
+}
+
+/** Of a piece's plan drawn past its own tile, at least this share must lie on another tile's piece for the two to be one building. */
+export const TILE_PIECE_COVER_MIN = 0.5;
+/** A piece must draw at least this much plan past its tile (m²) for that overhang to say which building it is. */
+export const TILE_PIECE_SPILL_MIN_M2 = 4;
+
+/** Plan cells (1 m, cell centres inside) of a building's parts, as keys of a grid wide enough for any extraction. */
+function planCells(b: VectorBuilding): Set<number> {
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const part of b.parts) for (const loop of part) for (const [x, z] of loop) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
+    const out = new Set<number>();
+    if (!(x1 >= x0 && z1 >= z0)) return out;
+    const g: EvidenceGrid = { x0: Math.floor(x0), z0: Math.floor(z0), nx: Math.floor(x1) - Math.floor(x0) + 1, nz: Math.floor(z1) - Math.floor(z0) + 1, cellMeters: 1 };
+    const m = new Uint8Array(g.nx * g.nz);
+    for (const part of b.parts) fillLoops(part, g, m, 1);
+    for (let c = 0; c < m.length; c++) if (m[c]) out.add(cellKeyOf(g.x0 + (c % g.nx), g.z0 + ((c / g.nx) | 0)));
+    return out;
+}
+
+const CELL_KEY_SPAN = 1 << 16;
+function cellKeyOf(i: number, k: number): number { return (i + CELL_KEY_SPAN / 2) * CELL_KEY_SPAN + (k + CELL_KEY_SPAN / 2); }
+function cellOfKey(key: number): [number, number] { const i = Math.floor(key / CELL_KEY_SPAN); return [i - CELL_KEY_SPAN / 2, key - i * CELL_KEY_SPAN - CELL_KEY_SPAN / 2]; }
+
+function inRing(ring: Vec2[], x: number, z: number): boolean {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const [ax, az] = ring[i], [bx, bz] = ring[j];
+        if ((az > z) !== (bz > z) && x < ax + ((z - az) / (bz - az)) * (bx - ax)) inside = !inside;
+    }
+    return inside;
+}
+
+/**
+ * One building per building, whatever tiles it crosses. Google's feature tiles clip a building at each tile's edge with a
+ * margin, so a building over an edge comes as one feature per tile, overlapping along the edge (the Flatiron's modelled
+ * volume as two, each drawn about 25 m past its tile): left apart, the last one drawn takes the cells they share and the
+ * pick treats the other piece as a neighbour's party wall. A piece's plan drawn past its own tile is ground another tile
+ * owns, and that tile draws the building there again: two pieces from different tiles are one building when at least
+ * TILE_PIECE_COVER_MIN of what either draws past its tile (TILE_PIECE_SPILL_MIN_M2 or more) lies on the other. Buildings
+ * that only meet at a party wall draw nothing on each other and stay apart. The merged building keeps the id of its
+ * largest piece and lists every piece's id in `pieces`.
+ */
+export function mergeTilePieces(pieces: Array<{ building: VectorBuilding; tile: Vec2[] }>): VectorBuilding[] {
+    const n = pieces.length;
+    const cells = pieces.map(p => planCells(p.building));
+    const spill = pieces.map((p, i) => { const s: number[] = []; if (p.tile.length >= 3) for (const k of cells[i]) { const [ci, ck] = cellOfKey(k); if (!inRing(p.tile, ci + 0.5, ck + 0.5)) s.push(k); } return s; });
+    const box = cells.map(cs => { let a = Infinity, b = -Infinity; for (const k of cs) { a = Math.min(a, k); b = Math.max(b, k); } return [a, b]; });
+    const parent = pieces.map((_, i) => i);
+    const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    const covers = (i: number, j: number) => spill[i].length >= TILE_PIECE_SPILL_MIN_M2 && spill[i].filter(k => cells[j].has(k)).length >= TILE_PIECE_COVER_MIN * spill[i].length;
+    const tileKey = (t: Vec2[]) => t.map(([x, z]) => `${x.toFixed(3)},${z.toFixed(3)}`).join(';');
+    const tiles = pieces.map(p => tileKey(p.tile));
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+        // (the keys order cells by column, so disjoint key ranges are disjoint plans)
+        if (tiles[i] === tiles[j] || box[i][1] < box[j][0] || box[j][1] < box[i][0]) continue;
+        if (covers(i, j) || covers(j, i)) parent[find(i)] = find(j);
+    }
+    const groups = new Map<number, number[]>();
+    for (let i = 0; i < n; i++) { const r = find(i); groups.set(r, [...(groups.get(r) ?? []), i]); }
+    return [...groups.values()].map(members => {
+        if (members.length === 1) return pieces[members[0]].building;
+        const lead = members.reduce((m, i) => (cells[i].size > cells[m].size ? i : m));
+        const bs = [lead, ...members.filter(i => i !== lead)].map(i => pieces[i].building);
+        const heights = bs.map(b => b.heightM).filter((h): h is number => Number.isFinite(h));
+        const extruded = bs.flatMap(b => b.extruded ?? []), volumes = bs.flatMap(b => b.volumes ?? []);
+        return {
+            id: bs[0].id, parts: bs.flatMap(b => b.parts), ...(heights.length ? { heightM: Math.max(...heights) } : {}),
+            ...(extruded.length ? { extruded } : {}), ...(volumes.length ? { volumes } : {}), pieces: bs.flatMap(b => b.pieces ?? [b.id])
+        };
+    });
+}
+
 /**
  * The vector evidence within `radiusM` of (lat, lng), in the scan frame of that origin. `fetchTile` is
  * GoogleVectorTileService.fetchVectorTile (or a test's stand-in); a failing tile fails the call (the caller records it).
@@ -100,6 +179,12 @@ export async function fetchVectorEvidence(opts: {
     const landuse: NonNullable<VectorEvidence['landuse']> = [];
     const pois: NonNullable<VectorEvidence['pois']> = [];
     const typesOf = (props: Record<string, unknown> | undefined): string[] => Array.isArray(props?.types) ? (props!.types as unknown[]).filter((t): t is string => typeof t === 'string') : [];
+    const tileOfFeature = new Map<string, Vec2[]>();
+    tiles.forEach((t, ti) => {
+        const { x, y } = coords[ti];
+        const quad = [tileCorner(x, y, z), tileCorner(x + 1, y, z), tileCorner(x + 1, y + 1, z), tileCorner(x, y + 1, z)].map(toScan);
+        for (const f of [...t.buildings, ...(t.buildingFootprints2D ?? []), ...(t.modeledVolumes ?? [])]) tileOfFeature.set(featureOf(f.id), quad);
+    });
     for (const t of tiles) {
         const planOnly = new Set(t.buildingFootprints2D ?? []);
         for (const p of [...t.buildings, ...(t.buildingFootprints2D ?? [])]) {
@@ -137,7 +222,9 @@ export async function fetchVectorEvidence(opts: {
             pois.push({ x, z, types: typesOf(p.properties), ...(name ? { name } : {}) });
         }
     }
-    return { buildings: [...byFeature.values()], water, roads, roadTypes, rails, landuse, pois, tiles: tiles.length, zoom: z };
+    // a building over a tile edge comes once per tile: its pieces put together again
+    const buildings = mergeTilePieces([...byFeature.values()].map(b => ({ building: b, tile: tileOfFeature.get(b.id) ?? [] })));
+    return { buildings, water, roads, roadTypes, rails, landuse, pois, tiles: tiles.length, zoom: z };
 }
 
 export interface EvidenceGrid { x0: number; z0: number; nx: number; nz: number; cellMeters: number }

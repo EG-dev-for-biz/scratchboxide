@@ -76,6 +76,7 @@ import {
     type VisionModelUse
 } from '../../../common/spatial/staged-location-contracts';
 import { glbMeshCounts, plantTrees, summarizeTrees, type LocationClayTrees } from '../location-clay-pipeline';
+import { treeSpeciesPlaceParams } from '../../../common/spatial/tree-species-library';
 import { TileVegetationError, type TileVegetationPlantRequest, type TileVegetationPlantResult, type TileVegetationStripRequest, type TileVegetationStripResult } from '../tile-vegetation-service';
 import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service';
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorBuilding, type VectorEvidence } from './vector-footprints';
@@ -3546,10 +3547,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (kTwin && !facadeUpscaleOn) logStep('twin.facadeUpscale', 'skipped');
                     if (facadeUpscaleOn) {
                         logStep('twin.facadeUpscale', 'running');
-                        const fu = await upscaleFacadeTextures(twinGlb, { ...(visionAvailable ? { client: genAiEnhanceClient(visionAvailable.client) } : {}), models: FACADE_UPSCALE_MODELS, ...(modelReadings ? { store: modelReadings } : {}), signal: io.signal, progress: (m: string) => io.progress(m) }, upscaleDistrict ? FACADE_UPSCALE_DISTRICT_PARAMS : FACADE_UPSCALE_PARAMS);
+                        const fu = await upscaleFacadeTextures(twinGlb, { ...(visionAvailable ? { client: genAiEnhanceClient(visionAvailable.client) } : {}), models: FACADE_UPSCALE_MODELS, ...(modelReadings ? { store: modelReadings } : {}), place: { lat: extraction.geoAnchor.lat, lng: extraction.geoAnchor.lng, heightMeters: extraction.originEllipsoidalHeightM }, signal: io.signal, progress: (m: string) => io.progress(m) }, upscaleDistrict ? FACADE_UPSCALE_DISTRICT_PARAMS : FACADE_UPSCALE_PARAMS);
                         logStep('twin.facadeUpscale', fu.report.upscaled ? 'done' : 'skipped');
                         if (fu.report.upscaled) { twinGlb = fu.glb; provenance = [...provenance, facadeUpscaleProvenance(fu.report)]; }
-                        io.progress(fu.report.upscaled ? `facade upscale: ${fu.report.upscaled} of ${fu.report.facades} rebuilt facades given fine detail (${fu.report.calls} image calls, ${fu.report.cached} tiles saved before; generated)` : `no facade upscaled: ${fu.report.skipped}`);
+                        io.progress(fu.report.upscaled ? `facade upscale: ${fu.report.upscaled} of ${fu.report.facades} rebuilt facades given fine detail (${fu.report.reused ? `${fu.report.reused} from their kept best upscale, ` : ''}${fu.report.calls} image calls, ${fu.report.cached} tiles saved before; generated)` : `no facade upscaled: ${fu.report.skipped}`);
                         cache.writeRunNote(runId, 'pipeline_k_facade_upscale', { layer: target.layer.layer, ...fu.report });
                     }
                     fs.writeFileSync(path.join(dir, 'twin.glb'), twinGlb);
@@ -3814,7 +3815,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 run: async io => {
                     // the same climate cost plantTrees is given below, so a crown's regrowability check and its final
                     // geometry pick the same species (scratchbox_tree_species.hpp; user report, 2026-10-21).
-                    const r = await deps.vegetation.strip({ tilePath: extraction.texturedGlb, signal: io.signal, params: { latAbsDeg: Math.abs(run.geoAnchor.lat) }, ...(roi ? { roi } : {}) });
+                    const r = await deps.vegetation.strip({ tilePath: extraction.texturedGlb, signal: io.signal, params: treeSpeciesPlaceParams(run.geoAnchor), ...(roi ? { roi } : {}) });
                     run.keys['trees-measure'] = r.cacheKey;
                     run.cacheStatus['trees-measure'] = r.cached ? 'hit' : 'miss';
                     const removed = Number(r.stats?.triangles?.removed ?? 0);
@@ -6120,7 +6121,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // a crown's shape alone can match a climate-limited species (a palm) regardless of where the
                         // build actually is; this build's own measured latitude costs that match down (user report,
                         // 2026-10-21, with a screenshot: a thin, tall "palm-shaped" tree in New York).
-                        latAbsDeg: Math.abs(run.geoAnchor.lat),
+                        // and its signed place, for the species choice's region cost (the same strip was given)
+                        place: treeSpeciesPlaceParams(run.geoAnchor),
                         supportMeshPath: isolateMode ? remeshed.clayGlb : undefined,
                         groundMeshPath: remeshed.clayGlb,
                         signal: io.signal
