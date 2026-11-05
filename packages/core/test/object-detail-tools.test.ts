@@ -181,4 +181,34 @@ describe('object_detail_pass on the open scene', () => {
         await expect(tool({ objectId: 'tiles-1' }, ctxOf(scanned))).rejects.toThrow(/scanned or measured content/);
         await expect(tool({}, ctxOf(scanned))).rejects.toThrow(/no generated object/);
     });
+
+    it('runs the material path as part of the object\'s recipe: alone on a clean object, after the wear on a weathered one, kept until changed', async () => {
+        const models = path.join(root, 'm', 'public', 'models');
+        const store = new DurableAssetStore(path.join(root, 'm', 'home'));
+        const calls: number[] = [];
+        // the path itself is tested in object-material-path.test.ts: here, where it runs and what it is given
+        const objectMaterials = (async (glb: Buffer | Uint8Array) => {
+            calls.push(parseGlbBytes(new Uint8Array(glb)).json.materials.filter((m: any) => m.extras?.sbDetailPass).length);
+            return { glb: Buffer.from(glb), report: { version: 'object-material-path/1', label: 'generated', objectSizeM: [1, 1, 1], texelM: 0.01, tile: { wantM: 1, maxM: 4 }, heightCapM: 0.01, classes: [], materials: [], ms: 1 } };
+        }) as never;
+        const tool = createObjectDetailHandlers({ publicModelsDir: models, assetStore: () => store, targetTexels: 256 * 256, objectMaterials })[OBJECT_DETAIL_TOOL];
+        const { artifact } = objectScene(models);
+        // materials alone: no wear is added, the path is given the object as built
+        const r1 = await tool({ materials: true }, ctxOf(artifact));
+        const a1 = r1.resultPayload.artifact as any;
+        expect(r1.resultPayload.recipe).toMatchObject({ wear: null, decals: [], materials: true });
+        expect(calls).toEqual([0]);
+        expect(r1.summaryResult).toMatch(/each part's detected material/);
+        expect(r1.resultPayload.materialPath).toBeDefined();
+        // weathering later: the materials stay in the recipe and run on the weathered object
+        const r2 = await tool({ weathering: { edgeWear: 0.7 } }, ctxOf(a1));
+        expect(r2.resultPayload.recipe.materials).toBe(true);
+        expect(calls[1]).toBe(2);
+        expect(r2.resultPayload.version).toBeGreaterThan(r1.resultPayload.version as number);
+        // and false removes them
+        const r3 = await tool({ materials: false }, ctxOf(r2.resultPayload.artifact));
+        expect(r3.resultPayload.recipe.materials).toBeUndefined();
+        expect(calls.length).toBe(2);
+        await expect(tool({ materials: false }, ctxOf(objectScene(path.join(root, 'm2', 'public', 'models')).artifact))).resolves.toBeDefined();
+    }, TIMEOUT);
 });

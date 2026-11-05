@@ -22,7 +22,8 @@
  *     object's own size; with a chooser, picked by its look among the nearest.
  *  4. Maps: on each atlas, each texel's class's set tiled at the set's real size: occlusion, roughness and metalness, and
  *     the normal. The colour is never touched: the part's colour, or its photo, stays the colour. A material that already
- *     has a metallic-roughness or a normal map keeps it.
+ *     has a metallic-roughness or a normal map keeps it (a part the detail pass weathered keeps its weathered finish and
+ *     is classed by its as-built factors, which that pass keeps in its extras).
  *  5. Height: the classes' recess tiles on the asset and each material's class map and metric frame (extras.sbRelief),
  *     capped by the object's size (a recess never deeper than a hundredth of its diagonal, at most 3 cm), then the
  *     native displacement over the whole object (height-relief.ts), drawn up close.
@@ -38,7 +39,7 @@ import { encodePng } from '../staged-location/png-encode';
 import { SRGB8_TO_LINEAR } from '../../../common/spatial/photogrammetric-delight';
 import { linearRgbToLab } from '../../../common/spatial/texture-library-index';
 import { isSbVeggieNode } from '../part-connectivity';
-import { GlbWriter, unwrapRewrapGlb } from '../../spatial/UvAtlasRewrap';
+import { unwrapRewrapGlb } from '../../spatial/UvAtlasRewrap';
 import { encodeRgbaToJpeg } from '../../image-codec-ffmpeg';
 import { applyHeightRelief, HEIGHT_RELIEF_PARAMS, type HeightReliefParams, type HeightReliefReport } from '../height-relief';
 import { resolveClassSets, type TileScale } from './class-sets';
@@ -187,10 +188,15 @@ export async function runObjectMaterialPath(input: Buffer | Uint8Array, options:
         const W = at.width, H = at.height, N = W * H;
         const prims = (json.meshes as any[]).flatMap((mesh, k) => (leftMeshes.has(k) ? [] : (mesh.primitives ?? []).filter((d: any) => d.material === mi && d.attributes?.TEXCOORD_0 !== undefined)));
         const cover = coverage(g, prims, W, H);
-        const factor = (pbr.baseColorFactor ?? [1, 1, 1, 1]) as number[];
-        const photo = texture(pbr.baseColorTexture?.index);
+        // a part the detail pass weathered keeps its as-built factors in its extras: its class is read from those, not
+        // from its weathered maps (dirt is not the part's material)
+        const asBuilt = m.extras?.sbDetailPass?.before as { baseColorFactor?: number[]; roughnessFactor?: number; metallicFactor?: number; hadBaseColorTexture?: boolean } | undefined;
+        const part = asBuilt && !asBuilt.hadBaseColorTexture ? asBuilt : undefined;
+        const factor = (part?.baseColorFactor ?? pbr.baseColorFactor ?? [1, 1, 1, 1]) as number[];
+        const photo = part ? undefined : texture(pbr.baseColorTexture?.index);
+        const rough = part ? part.roughnessFactor : pbr.roughnessFactor, metal = part ? part.metallicFactor : pbr.metallicFactor;
         // the part's own finish, when its material states one (glTF's defaults say nothing)
-        const finish: ClassFinish | undefined = pbr.roughnessFactor !== undefined || pbr.metallicFactor !== undefined ? { roughness: clamp(pbr.roughnessFactor ?? 1, 0, 1), metalness: clamp(pbr.metallicFactor ?? 1, 0, 1), conf: 100, seen: 'the part\'s own material factors' } : undefined;
+        const finish: ClassFinish | undefined = rough !== undefined || metal !== undefined ? { roughness: clamp(rough ?? 1, 0, 1), metalness: clamp(metal ?? 1, 0, 1), conf: 100, seen: 'the part\'s own material factors' } : undefined;
         // the covered texels' colours (the photo times the factor, or the factor alone)
         const X: number[] = [], rnd = (() => { let s = P.seed >>> 0; return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296); })();
         const colourAt = (k: number): [number, number, number] => {
@@ -235,13 +241,24 @@ export async function runObjectMaterialPath(input: Buffer | Uint8Array, options:
     options.signal?.throwIfAborted();
 
     // 4. the maps on each material, 5. the relief
-    const writer = new GlbWriter(g), out = writer.json;
-    out.samplers ??= []; out.textures ??= [];
+    // the GLB appended to in place (a writer that drops what no material slot names would drop the relief's textures,
+    // which only the extras name)
+    const out = JSON.parse(JSON.stringify(json));
+    const chunks: Uint8Array[] = [g.bin];
+    let binLength = g.bin.length;
+    const addImage = (bytes: Uint8Array, mimeType: string, name: string): number => {
+        if (binLength % 4) { const pad = new Uint8Array(4 - (binLength % 4)); chunks.push(pad); binLength += pad.length; }
+        out.bufferViews.push({ buffer: 0, byteOffset: binLength, byteLength: bytes.byteLength });
+        chunks.push(bytes); binLength += bytes.byteLength;
+        out.images.push({ bufferView: out.bufferViews.length - 1, mimeType, name });
+        return out.images.length - 1;
+    };
+    out.samplers ??= []; out.textures ??= []; out.images ??= []; out.bufferViews ??= [];
     out.samplers.push({ magFilter: 9729, minFilter: 9987, wrapS: 33071, wrapT: 33071 });
     const clampSampler = out.samplers.length - 1;
     out.samplers.push({ magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 });
     const repeatSampler = out.samplers.length - 1;
-    const addTexture = (bytes: Uint8Array, mime: string, name: string, sampler: number) => { out.textures.push({ sampler, source: writer.addImage(bytes, mime, name), name }); return out.textures.length - 1; };
+    const addTexture = (bytes: Uint8Array, mime: string, name: string, sampler: number) => { out.textures.push({ sampler, source: addImage(bytes, mime, name), name }); return out.textures.length - 1; };
     const png = (img: RgbaImage8) => encodePng(img.width, img.height, img.rgba, 4);
     const jpeg = (img: RgbaImage8) => encodeRgbaToJpeg(img.rgba, img.width, img.height, { quality: 92, chroma: '444' });
     const anyRelief = sets.some(s => !!s.height);
@@ -277,7 +294,12 @@ export async function runObjectMaterialPath(input: Buffer | Uint8Array, options:
         out.asset.extras = { ...(out.asset.extras ?? {}), sbMaterialRelief: reliefAssetExtras(sets, heightCapM, (img, name) => addTexture(png(img), 'image/png', name, repeatSampler)) };
     }
     report.classes = classes.map((c, k) => ({ index: c.index, from: classFrom[k].from, material: classFrom[k].material, meanLab: c.meanLab, share: c.share, set: sets[k].name, distance: Math.round(sets[k].distance * 100) / 100, ...(sets[k].finish ? { finish: sets[k].finish } : {}), ...(sets[k].choice ? { choice: sets[k].choice } : {}), ...(sets[k].heightDrawn ? { height: sets[k].heightDrawn } : {}) }));
-    let glb: Uint8Array = writer.finish();
+    if (binLength % 4) { const pad = new Uint8Array(4 - (binLength % 4)); chunks.push(pad); binLength += pad.length; }
+    out.buffers = [{ byteLength: binLength }];
+    const packed = new Uint8Array(binLength);
+    let at = 0;
+    for (const c of chunks) { packed.set(c, at); at += c.byteLength; }
+    let glb: Uint8Array = assembleGlb(out, packed);
 
     // the whole object's relief displaced in the engine, drawn up close
     if (anyRelief && options.displace !== false) {

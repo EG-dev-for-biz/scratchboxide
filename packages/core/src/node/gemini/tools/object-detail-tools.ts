@@ -37,6 +37,7 @@ import { defaultDurableAssetStore, type DurableAssetStore } from '../../asset-st
 import { locationHashOf, objectDirOf, objectInputHash, objectKeyOf, SceneObjectStore, type ObjectFrame } from '../../asset-store/scene-object-store';
 import { decalRgba, generateDecalImage } from '../../3d-engine/asset-decal';
 import { exactPositionBounds, OBJECT_DETAIL_PASS_VERSION, runObjectDetailPass, type ObjectDecal, type ObjectWear, type PartWearOverride, type Rgb, type Xyz } from '../../3d-engine/object-detail-pass';
+import { describeObjectMaterials, OBJECT_MATERIAL_PATH_VERSION, runObjectMaterialPath, type ObjectMaterialReport } from '../../3d-engine/material-path/object-materials';
 import { decodeImageInMemory, type RgbaImage8 } from '../../3d-engine/staged-location/tile-texture-transfer';
 import { GoogleMediaCredentialsService } from '../../google-media-credentials-service';
 import { encodePng } from '../../texture-processing';
@@ -77,7 +78,7 @@ const WEAR_PROPERTIES: Record<string, ToolParameterSchema> = {
 
 export const OBJECT_DETAIL_TOOL_DECLARATIONS: ToolDeclaration[] = [{
     name: OBJECT_DETAIL_TOOL,
-    description: 'Weathers a generated 3D object part by part and lays decals on its parts, as a new version of the object that the open scene shows at once. Every part keeps its own material (colour, roughness, metalness, emission, transmission, any maps); wear is added where the geometry puts it: edge wear on convex edges, grime in cavities and creases, streaks under overhangs, dust on up-facing surfaces, sun fade by exposure. Strengths are numbers, and each part can take more or less of each, and what its worn edges show (e.g. bare metal under paint). Decals (lettering, numbers, stripes, logos, labels, stains) are projected onto the parts named and no other, from an image (e.g. a decal_generate asset) or painted from a description (one billed image call each); the weathering itself makes no image call. Every pass starts from the object as built with the object\'s whole recipe (the weathering given replaces the previous one, decals are added), so wear never compounds; restoreVersion shows any earlier version again. Only for objects the app generated (build_3d_object_from_reference, or a script made from no scan): scanned or measured content is refused. Everything it adds is labelled generated.',
+    description: 'Weathers a generated 3D object part by part and lays decals on its parts, as a new version of the object that the open scene shows at once. Every part keeps its own material (colour, roughness, metalness, emission, transmission, any maps); wear is added where the geometry puts it: edge wear on convex edges, grime in cavities and creases, streaks under overhangs, dust on up-facing surfaces, sun fade by exposure. Strengths are numbers, and each part can take more or less of each, and what its worn edges show (e.g. bare metal under paint). Decals (lettering, numbers, stripes, logos, labels, stains) are projected onto the parts named and no other, from an image (e.g. a decal_generate asset) or painted from a description (one billed image call each); the weathering itself makes no image call. materials: true also gives every part a detected material from the texture library, as a building\'s facades get (its roughness, metalness, occlusion and normal maps at real size and its height as real relief; the colour unchanged). Every pass starts from the object as built with the object\'s whole recipe (the weathering given replaces the previous one, decals are added), so wear never compounds; restoreVersion shows any earlier version again. Only for objects the app generated (build_3d_object_from_reference, or a script made from no scan): scanned or measured content is refused. Everything it adds is labelled generated.',
     parameters: {
         type: 'OBJECT',
         properties: {
@@ -124,6 +125,7 @@ export const OBJECT_DETAIL_TOOL_DECLARATIONS: ToolDeclaration[] = [{
                     required: ['parts', 'facing', 'sizeM']
                 }
             },
+            materials: { type: 'BOOLEAN', description: 'Optional: true gives every part a detected material from the texture library (the material path that pipeline K runs on a building\'s facades): each part, or each colour of a part that carries a photo, is matched to a library set by its colour, its roughness and metalness and the object\'s real size, and takes the set\'s roughness, metalness, occlusion and normal maps tiled at real size and its height (parallax in the viewport, displaced geometry up close). The part\'s colour is never changed. false removes it. Kept across later calls until changed. Generated.' },
             replaceDecals: { type: 'BOOLEAN', description: 'Optional: the decals given replace the object\'s earlier ones (default: added to them).' },
             restoreVersion: { type: 'NUMBER', description: 'Optional: show this kept version again (1 is the object as built), baking nothing.' }
         }
@@ -139,7 +141,7 @@ interface DecalRecord {
     opacity?: number; maxAngleDeg?: number; roughness?: number; metalness?: number;
     image: { uri: string; sha256: string }; label: 'generated' | 'photo-inferred'; method: string;
 }
-export interface DetailRecipe { wear: ObjectWear | null; parts: PartWearOverride[]; decals: DecalRecord[] }
+export interface DetailRecipe { wear: ObjectWear | null; parts: PartWearOverride[]; decals: DecalRecord[]; /** The material path on the object (material-path/object-materials.ts): each part's library set, maps and height. */ materials?: boolean }
 interface VersionRecord { version: number; uri: string; sha256: string; note: string; createdAtMs: number }
 export interface DetailPassMetadata {
     label: 'generated';
@@ -158,6 +160,9 @@ export interface ObjectDetailDeps {
     assetStore?: () => DurableAssetStore | undefined;
     /** Texels the object's atlases share (default OBJECT_DETAIL_TARGET_TEXELS). */
     targetTexels?: number;
+    /** The material path on the object (default runObjectMaterialPath) and its pick by appearance (default none: the ranking's nearest). */
+    objectMaterials?: typeof runObjectMaterialPath;
+    materialChoose?: NonNullable<Parameters<typeof runObjectMaterialPath>[1]>['choose'];
 }
 
 function repoRoot(): string {
@@ -286,17 +291,19 @@ export async function runObjectDetailTool(args: Record<string, unknown>, ctx: To
     const wearArg = args.weathering && typeof args.weathering === 'object' ? args.weathering as Record<string, unknown> : undefined;
     const decalArgs = Array.isArray(args.decals) ? args.decals as Record<string, unknown>[] : [];
     const partArgs = Array.isArray(args.parts) ? args.parts as Record<string, unknown>[] : undefined;
-    const wear: ObjectWear | null = wearArg ? readWear(wearArg) : before.wear ?? (decalArgs.length ? null : {});
+    // with only materials asked (no weathering, no decals, none before), no wear is added
+    const wear: ObjectWear | null = wearArg ? readWear(wearArg) : before.wear ?? (decalArgs.length || args.materials === true ? null : {});
     const parts: PartWearOverride[] = partArgs ? partArgs.map(readPart) : before.parts;
     const imageCalls = { count: 0, models: new Set<string>() };
     const newDecals: DecalRecord[] = [];
     for (const [k, d] of decalArgs.entries()) newDecals.push(await readDecal(d, k, ctx, imageCalls, dirUri, writeServed, store));
-    const recipe: DetailRecipe = { wear, parts, decals: [...(args.replaceDecals === true ? [] : before.decals), ...newDecals] };
-    if (!recipe.wear && !recipe.decals.length) throw new InvalidInputError(OBJECT_DETAIL_TOOL, 'weathering', 'nothing to add: give weathering or decals, or restoreVersion');
+    const materials = typeof args.materials === 'boolean' ? args.materials : !!before.materials;
+    const recipe: DetailRecipe = { wear, parts, decals: [...(args.replaceDecals === true ? [] : before.decals), ...newDecals], ...(materials ? { materials: true } : {}) };
+    if (!recipe.wear && !recipe.decals.length && !recipe.materials) throw new InvalidInputError(OBJECT_DETAIL_TOOL, 'weathering', 'nothing to add: give weathering, decals or materials, or restoreVersion');
 
-    const inputHash = objectInputHash(OBJECT_DETAIL_PASS_VERSION, asBuilt.sha256, recipe);
+    const inputHash = objectInputHash(OBJECT_DETAIL_PASS_VERSION, asBuilt.sha256, recipe, ...(recipe.materials ? [OBJECT_MATERIAL_PATH_VERSION] : []));
     const existing = objectStore?.find(objectKey, inputHash);
-    let glb: Buffer, report: Awaited<ReturnType<typeof runObjectDetailPass>>['report'] | undefined;
+    let glb: Buffer, report: Awaited<ReturnType<typeof runObjectDetailPass>>['report'] | undefined, materialReport: ObjectMaterialReport | undefined;
     if (existing) {
         glb = readGlb(existing.glbPath);
     } else {
@@ -310,8 +317,17 @@ export async function runObjectDetailTool(args: Record<string, unknown>, ctx: To
                 ...(d.roughness !== undefined ? { roughness: d.roughness } : {}), ...(d.metalness !== undefined ? { metalness: d.metalness } : {}), label: d.label, method: d.method };
         });
         try {
-            const r = await runObjectDetailPass(asBuiltGlb, { wear: recipe.wear, parts: recipe.parts, decals, ...(deps.targetTexels ? { targetTexels: deps.targetTexels } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) });
-            glb = r.glb; report = r.report;
+            glb = asBuiltGlb;
+            if (recipe.wear || recipe.decals.length) {
+                const r = await runObjectDetailPass(asBuiltGlb, { wear: recipe.wear, parts: recipe.parts, decals, ...(deps.targetTexels ? { targetTexels: deps.targetTexels } : {}), ...(ctx.signal ? { signal: ctx.signal } : {}) });
+                glb = r.glb; report = r.report;
+            }
+            // the material path last: its relief is placed in the atlas the object ends with
+            if (recipe.materials) {
+                ctx.reportProgress?.('Detecting each part\'s material');
+                const mp = await (deps.objectMaterials ?? runObjectMaterialPath)(glb, { ...(ctx.signal ? { signal: ctx.signal } : {}), progress: (m: string) => ctx.reportProgress?.(m), ...(deps.materialChoose ? { choose: deps.materialChoose } : {}) });
+                glb = mp.glb; materialReport = mp.report;
+            }
         } catch (err) {
             throw new InvalidInputError(OBJECT_DETAIL_TOOL, 'objectId', (err as Error).message);
         }
@@ -323,7 +339,7 @@ export async function runObjectDetailTool(args: Record<string, unknown>, ctx: To
     const seconds = (Date.now() - t0) / 1000;
     const partLine = report ? report.parts.filter(p => p.texels > 0).map(p => `${p.part} ${pct(p.edgeWear)} edge, ${pct(p.grime)} grime${p.dust > 0.005 ? `, ${pct(p.dust)} dust` : ''}${p.decal > 0.001 ? `, ${pct(p.decal)} decal` : ''}`).join('; ') : '';
     const summary = [
-        `${existing ? 'Showing the kept' : 'Made'} version ${kept.version} of ${describe(target)}: ${describeRecipe(recipe)}, each part on its own material${report ? ` (${partLine})` : ''}, labelled generated, in ${seconds.toFixed(1)} s${imageCalls.count ? ` with ${imageCalls.count} billed image call${imageCalls.count === 1 ? '' : 's'} for decals` : ', no image call'}.`,
+        `${existing ? 'Showing the kept' : 'Made'} version ${kept.version} of ${describe(target)}: ${describeRecipe(recipe)}, each part on its own material${report ? ` (${partLine})` : ''}${materialReport ? `; ${describeObjectMaterials(materialReport)}` : ''}, labelled generated, in ${seconds.toFixed(1)} s${imageCalls.count ? ` with ${imageCalls.count} billed image call${imageCalls.count === 1 ? '' : 's'} for decals` : ', no image call'}.`,
         `Versions kept: ${dp.versions.map(v => `${v.version}${v.version === built.version ? ' (as built)' : ''}`).join(', ')}; restoreVersion shows any of them again.`
     ].join(' ');
     return {
@@ -333,6 +349,7 @@ export async function runObjectDetailTool(args: Record<string, unknown>, ctx: To
             success: true, objectId: identity, version: kept.version, versions: dp.versions, reusedVersion: !!existing, modelUri: kept.uri, glbPath: fileOf(kept.uri),
             recipe, seconds, imageCalls: imageCalls.count, ...(imageCalls.models.size ? { imageModels: [...imageCalls.models] } : {}),
             ...(report ? { parts: report.parts, materials: report.materials, decals: report.decals, left: report.left, timings: report.timings } : {}),
+            ...(materialReport ? { materialPath: materialReport } : {}),
             provenance: { label: 'generated' }, artifact
         }
     };
@@ -348,6 +365,7 @@ function describeRecipe(r: DetailRecipe): string {
     const w = r.wear;
     const layers = w ? (['edgeWear', 'grime', 'streaks', 'dust', 'sunFade'] as const).map(k => [k, w[k]] as const).filter(([, v]) => v === undefined || v > 0).map(([k, v]) => `${k}${v === undefined ? '' : ` ${v}`}`) : [];
     const parts = [layers.length ? `weathering (${layers.join(', ')})` : w ? 'no weathering' : '', r.decals.length ? `${r.decals.length} decal${r.decals.length === 1 ? '' : 's'}` : ''].filter(Boolean);
+    if (r.materials) parts.push('each part\'s detected material');
     return parts.join(' and ') || 'as built';
 }
 
