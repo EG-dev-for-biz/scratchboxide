@@ -33,7 +33,9 @@
  *      faded out away from it, labelled, and left alone without boxes or when not asked for;
  *  13. the cap trim: the strips two tiles carry back to back in their shared cut plane go, the walls stay;
  *  14. the step blend and the per-cut scores: two walls 6 cm apart in depth at their cut meet on one surface there, each
- *      moved half way and not at all 1.5 m from the cut, and the weld then closes them.
+ *      moved half way and not at all 1.5 m from the cut, and the weld then closes them;
+ *  15. the rim zip: two rims 8 cm apart at their cut, their vertices not facing each other, meet on one line and are
+ *      joined; the move is reported per cut; beyond the tiles' stated error nothing moves.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -567,5 +569,41 @@ describe('tile_seam_weld tone feather: two tiles\' photos levelled toward each o
         expect(off.stepBlend).toBeUndefined();
         expect(off.cutScores!.final.meanStepM).toBeCloseTo(0.06, 3);
         expect(openEdges(triangles(path.join(WORK, 'blend_off.glb'))).filter(e => e.every(q => near(q[1], 5) )).length).toBeGreaterThan(0);
+    });
+
+    it('zips the two tiles\' rims at their cut onto one line within their stated error, reports the move per cut, and the weld closes it', async () => {
+        // tile A: a wall in z = 0 up to y = 4.96; tile B: the wall from y = 5.04, standing 2 cm proud, its columns half a cell along
+        const a = quad([0, 0, 0], [10, 0, 0], [0, 4.96, 0], 20, 10), b = quad([0.25, 5.04, 0.02], [9.5, 0, 0], [0, 4.96, 0], 19, 10);
+        const boxes = (e: number) => [{ leafId: 'a', geometricErrorM: e, box: [5, 2.5, 0, 5, 0, 0, 0, 2.5, 0, 0, 0, 1] }, { leafId: 'b', geometricErrorM: e, box: [5, 7.5, 0, 5, 0, 0, 0, 2.5, 0, 0, 0, 1] }];
+        const input = path.join(WORK, 'zip.glb'), output = path.join(WORK, 'zip_welded.glb');
+        writeGlb(input, [a, b], [], boxes(2), { localToEcef: IDENTITY });
+        const cutEdges = (file: string) => openEdges(triangles(file)).filter(e => e.every(q => Math.abs(q[1] - 5) < 0.1 && q[0] > 0.3 && q[0] < 9.7));
+        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, zip: true, threads: 2, repoRoot: REPO });
+        const z = r.rimZip!;
+        expect(z).toMatchObject({ cuts: 1, cutsZipped: 1, reverted: 0, beyondError: 0 });
+        expect(z.positionsMoved).toBe(41);                          // 21 rim points below, 20 above
+        // the rims are 8 cm apart along the cut's normal and 2 cm in depth: each point goes half that way
+        expect(z.perCut).toHaveLength(1);
+        expect(z.perCut[0].points).toBe(41);
+        expect(z.perCut[0].meanMoveM).toBeCloseTo(Math.hypot(0.04, 0.01), 3);
+        expect(z.maxMoveM).toBeCloseTo(Math.hypot(0.04, 0.01), 3);
+        expect(r.cutScores!.afterCaps.meanGapM).toBeCloseTo(0.08, 3);
+        expect(r.cutScores!.afterZip!.meanGapM).toBeLessThan(0.001);
+        expect(r.cutScores!.afterZip!.meanStepM).toBeLessThan(0.001);
+        // both rims on the line y = 5, z = 0.01, and joined: no open edge along the cut between the walls' ends
+        for (const p of distinct(positions(output)).filter(q => Math.abs(q[1] - 5) < 0.1)) { expect(p[1]).toBeCloseTo(5, 3); expect(p[2]).toBeCloseTo(0.01, 3); }
+        expect(cutEdges(output)).toHaveLength(0);
+        // away from the rim nothing moved
+        for (const p of distinct(positions(output)).filter(q => q[1] < 4.5)) expect(Math.abs(p[2])).toBeLessThan(1e-6);
+        // not asked for: the rims stay 8 cm apart and open
+        const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'zip_off.glb'), threads: 2, repoRoot: REPO });
+        expect(off.rimZip).toBeUndefined();
+        expect(cutEdges(path.join(WORK, 'zip_off.glb')).length).toBeGreaterThan(0);
+        // tiles stating 5 cm of error: the 8 cm way is beyond it, and nothing moves
+        const tight = path.join(WORK, 'zip_tight.glb');
+        writeGlb(tight, [a, b], [], boxes(0.05), { localToEcef: IDENTITY });
+        const t = await runTileSeamWeld({ inputGlb: tight, outputGlb: path.join(WORK, 'zip_tight_welded.glb'), zip: true, threads: 2, repoRoot: REPO });
+        expect(t.rimZip).toMatchObject({ positionsMoved: 0, cutsZipped: 0 });
+        expect(cutEdges(path.join(WORK, 'zip_tight_welded.glb')).length).toBeGreaterThan(0);
     });
 });

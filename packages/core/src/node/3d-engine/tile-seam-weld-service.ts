@@ -31,6 +31,8 @@
  *     out as a slot across every recessed bay of a rebuilt facade at each cut's height.
  *  0b. step blend (when asked, after the caps): each tile's wall moves toward the other's by half the step measured at
  *     its rim, faded out over 1.5 m, within the smaller of the two tiles' stated errors capped at 50 cm.
+ *  0c. rim zip (when asked, after the blend): each tile's rim point at a cut moves halfway to the other tile's rim, when
+ *     its whole way there is within the smaller of the two tiles' stated errors capped at 50 cm, so passes 2 and 3 join them.
  *  6. tone feather (when asked, where the extraction gives each leaf's box): on the surfaces crossing every cut two leaves'
  *     boxes share, the two photos' colour is levelled toward each other, half the step each, faded out over 2.5 m, and the
  *     photos written back in their own format; labelled generated (extras.scratchbox.method).
@@ -46,7 +48,7 @@ import { compileNativeCached, defaultNativeFlags, NativeBuildError, placeCachedB
 import { findTileRefineRepoRoot } from './tile-refine-service';
 
 /** The seam stage's version: names its cached outputs beside the extraction, so a change to any pass rebuilds them. */
-export const TILE_SEAMS_VERSION = 'tile-seams/6';
+export const TILE_SEAMS_VERSION = 'tile-seams/7';
 
 export type TileSeamWeldErrorCode = 'bad_request' | 'build_failed' | 'run_failed' | 'invalid_output';
 
@@ -86,6 +88,8 @@ export interface TileSeamWeldRequest {
     caps?: boolean;
     /** Fade the step between the two tiles' walls out either side of each cut (default false; needs boxes and stated errors). */
     blend?: boolean;
+    /** Bring the two tiles' rims at each cut onto one line, for the weld to join (default false; needs boxes and stated errors). */
+    zip?: boolean;
     /** A leaf's geometric error (m) when its node states none (e.g. the extraction's largest); none: such tiles pair at toleranceM. */
     defaultGeometricErrorM?: number;
     /** Worker threads (default: all cores). */
@@ -158,6 +162,10 @@ export interface TileSeamFillStats { edgesFilled: number; triangles: number; are
  */
 /** The cap trim's counts (TileCapStats): box faces two leaves share, triangles lying on one, those removed (backed by the neighbour's) and their area. */
 export interface TileSeamCapStats { sharedFaces: number; candidates: number; trianglesDropped: number; areaM2: number }
+/** One cut's rim zip: its rim points moved, and how far (m). */
+export interface TileSeamCutMove { tiles: [number, number]; u: [number, number, number]; o: number; points: number; meanMoveM: number; maxMoveM: number }
+/** The rim zip's counts (TileSeamZipStats); beyondError: rim points further from the other rim than the pair's tolerance, left. */
+export interface TileSeamZipStats { cuts: number; cutsZipped: number; positionsMoved: number; beyondError: number; reverted: number; maxMoveM: number; perCut: TileSeamCutMove[] }
 /** The step blend's counts (TileSeamBlendStats). */
 export interface TileSeamBlendStats { cuts: number; cutsMatched: number; positionsMoved: number; reverted: number; maxMoveM: number }
 /** One cut's score (TileSeamCutScore): its two tiles, its plane, the open rim along it, how much found the other rim, the step and the gap. */
@@ -182,8 +190,9 @@ export interface TileSeamWeldResult {
     tone?: TileSeamToneStats;
     capTrim?: TileSeamCapStats;
     stepBlend?: TileSeamBlendStats;
+    rimZip?: TileSeamZipStats;
     /** The per-cut scores: as the scan came, after the caps went, after the step blend, at the end; and cut by cut. */
-    cutScores?: { raw: TileSeamCutTotals; afterCaps: TileSeamCutTotals; afterBlend?: TileSeamCutTotals; final: TileSeamCutTotals; perCutAfterCaps: TileSeamCutScore[]; perCutFinal: TileSeamCutScore[] };
+    cutScores?: { raw: TileSeamCutTotals; afterCaps: TileSeamCutTotals; afterBlend?: TileSeamCutTotals; afterZip?: TileSeamCutTotals; final: TileSeamCutTotals; perCutAfterCaps: TileSeamCutScore[]; perCutFinal: TileSeamCutScore[] };
     /** The cuts two leaves' boxes share (when the extraction gives boxes): what the stages after read as the tiles' seams. */
     cuts?: TileSeamCut[];
     /** The source tiles: how many, how many nodes the stage named, how many state a geometric error. */
@@ -239,6 +248,7 @@ export function parseTileSeamWeldReport(text: string): Omit<TileSeamWeldResult, 
         ...(raw.tone && Number.isFinite(raw.tone.cuts) && Array.isArray(raw.tone.dEBefore) ? { tone: raw.tone as TileSeamToneStats } : {}),
         ...(raw.capTrim && Number.isFinite(raw.capTrim.trianglesDropped) ? { capTrim: raw.capTrim as TileSeamCapStats } : {}),
         ...(raw.stepBlend && Number.isFinite(raw.stepBlend.positionsMoved) ? { stepBlend: raw.stepBlend as TileSeamBlendStats } : {}),
+        ...(raw.rimZip && Number.isFinite(raw.rimZip.positionsMoved) && Array.isArray(raw.rimZip.perCut) ? { rimZip: raw.rimZip as TileSeamZipStats } : {}),
         ...(raw.cutScores && Number.isFinite(raw.cutScores.final?.rimLengthM) && Array.isArray(raw.cutScores.perCutFinal) ? { cutScores: raw.cutScores } : {}),
         ...(Array.isArray(raw.cuts) ? { cuts: (raw.cuts as TileSeamCut[]).filter(c => Number.isFinite(c?.o) && Array.isArray(c.u) && c.u.length === 3) } : {}),
         ...(raw.tiles && Number.isFinite(raw.tiles.count) ? { tiles: raw.tiles } : {}),
@@ -332,6 +342,7 @@ export async function runTileSeamWeld(req: TileSeamWeldRequest): Promise<TileSea
     if (req.tone !== true) args.push('--no-tone');
     if (req.caps !== true) args.push('--no-caps');
     if (req.blend !== true) args.push('--no-blend');
+    if (req.zip !== true) args.push('--no-zip');
     if (req.adaptiveCapM !== undefined) args.push('--adaptive-cap', String(req.adaptiveCapM));
     if (req.maxTurnDeg !== undefined) args.push('--max-turn-deg', String(req.maxTurnDeg));
     if (req.threads !== undefined) args.push('--threads', String(req.threads));

@@ -386,6 +386,27 @@ struct TileSeamBlendStats {
     std::vector<TileSeamCutScore> before, after;
 };
 
+/** One cut's rim zip: how many rim points moved and how far (m). */
+struct TileSeamCutMove {
+    uint32_t tiles[2]{0, 0};
+    V3 u;
+    double o{0};
+    size_t points{0};
+    double meanMoveM{0}, maxMoveM{0};
+};
+
+struct TileSeamZipStats {
+    size_t cuts{0};
+    size_t cutsZipped{0};
+    size_t positionsMoved{0};
+    /** Rim points whose way to the other rim is longer than the pair's tolerance: left where they are. */
+    size_t beyondError{0};
+    size_t reverted{0};
+    double maxMoveM{0};
+    std::vector<TileSeamCutMove> perCut;
+    std::vector<TileSeamCutScore> before, after;
+};
+
 // ============================================================================
 // Seam tone feather: the two tiles' photos levelled toward each other across every cut two tiles share
 // ============================================================================
@@ -492,7 +513,7 @@ public:
      * slivers for removal. Does not touch UVs, normals, colour or material; does not remove vertices
      * (only triangles); does not run a solver.
      */
-    static TileSeamWeldResult weldAndMarkSlivers(geometry::ScratchboxMesh& mesh, const TileSeamWeldParams& p = {}) {
+    static TileSeamWeldResult weldAndMarkSlivers(geometry::ScratchboxMesh& mesh, const TileSeamWeldParams& p = {}, const std::vector<uint32_t>* vertexPiece = nullptr) {
         TileSeamWeldResult res;
         const size_t V = mesh.vertices.size();
         const size_t F = mesh.indices.size() / 3;
@@ -531,7 +552,13 @@ public:
 
         // ---- 2. pieces: connected components of groups through triangle edges
         std::vector<uint32_t> piece(G);
-        {
+        if (vertexPiece && vertexPiece->size() == V) {
+            // the pieces as they were before a pass brought two of them onto the same points (the step blend, the rim zip):
+            // by connectivity they would now be one, and the rest of their shared border would never be welded
+            uint32_t top = 0;
+            for (size_t g = 0; g < G; ++g) { piece[g] = (*vertexPiece)[members[memberStart[g]]]; top = std::max(top, piece[g] + 1); }
+            res.stats.pieceCount = top;
+        } else {
             scan_rectifier::detail::UnionFind uf(G);
             for (size_t t = 0; t < F; ++t) {
                 const uint32_t a = groupOf[mesh.indices[3 * t]], b = groupOf[mesh.indices[3 * t + 1]], c = groupOf[mesh.indices[3 * t + 2]];
@@ -2244,7 +2271,7 @@ private:
                 const double ea = C.tile[0] < tileErrorM.size() ? tileErrorM[C.tile[0]] : -1.0, eb = C.tile[1] < tileErrorM.size() ? tileErrorM[C.tile[1]] : -1.0;
                 if (!(ea > 0 && eb > 0)) continue;
                 const double tol = std::min(p.capM, std::min(ea, eb));
-                struct Seg { uint32_t ga, gb; double ax, ay, bx, by, ha, hb; };
+                struct Seg { uint32_t ga, gb; double ax, ay, bx, by, ha, hb, nx, ny; };
                 std::vector<Seg> rim[2];
                 for (int s = 0; s < 2; ++s) {
                     auto it = edgesOfTile.find(C.tile[s]);
@@ -2259,7 +2286,7 @@ private:
                         // an edge running along the cut's normal is a wall's side, not its rim
                         const double l2 = std::hypot(bx - ax, by - ay);
                         if (l2 < 0.5 * (topo.gpos[e.b] - topo.gpos[e.a]).norm()) continue;
-                        rim[s].push_back({e.a, e.b, ax, ay, bx, by, ha, hb});
+                        rim[s].push_back({e.a, e.b, ax, ay, bx, by, ha, hb, e.n.dot(C.a), e.n.dot(C.b)});
                         out[k].rimLen += l2;
                     }
                 }
@@ -2273,15 +2300,23 @@ private:
                         for (int end = 0; end < 2; ++end) {
                             const uint32_t g = end ? e.gb : e.ga;
                             const double px = end ? e.bx : e.ax, py = end ? e.by : e.ay, ph = end ? e.hb : e.ha;
-                            double bd = tol, qx = 0, qy = 0, qh = 0;
+                            double bd = tol, bw = 1e300, qx = 0, qy = 0, qh = 0;
                             bool found = false;
                             for (const Seg& o : other) {
                                 const double ox = o.bx - o.ax, oy = o.by - o.ay, ol2 = ox * ox + oy * oy;
                                 if (!(ol2 > 1e-12)) continue;
                                 if (std::abs(tx * ox + ty * oy) < p.parallelCos * tl * std::sqrt(ol2)) continue;
+                                // the two faces of a thin wall run parallel a few centimetres apart: a rim meets one facing its own way
+                                if (e.nx * o.nx + e.ny * o.ny <= 0) continue;
                                 const double t = std::clamp(((px - o.ax) * ox + (py - o.ay) * oy) / ol2, 0.0, 1.0);
                                 const double cx = o.ax + ox * t, cy = o.ay + oy * t, d = std::hypot(px - cx, py - cy);
-                                if (d < bd) { bd = d; qx = cx; qy = cy; qh = o.ha + (o.hb - o.ha) * t; found = true; }
+                                // the other rim is the one nearest in space: an opening's edge further up the same wall lies as near in the cut plane
+                                const double oh = o.ha + (o.hb - o.ha) * t, w = std::hypot(d, oh - ph);
+                                if (!(d < tol && w < bw)) continue;
+                                bw = w;
+                                // past the other rim's end the way there is across it only, never along it (a rim is not stretched to reach)
+                                const double across = ((px - cx) * -oy + (py - cy) * ox) / ol2;
+                                bd = d; qx = px - across * -oy; qy = py - across * ox; qh = oh; found = true;
                             }
                             if (!found) continue;
                             auto it = best.find(g);
@@ -2296,6 +2331,39 @@ private:
             }
         });
         return out;
+    }
+    /** Moves each position by disp, taking back (to nothing) the moves that turn a triangle by more than maxTurnDeg or inside out. */
+    static void applyMoves(geometry::ScratchboxMesh& mesh, const Topology& topo, std::vector<V3>& disp, double maxTurnDeg, size_t& moved, size_t& reverted, double& maxMoveM) {
+        const size_t G = topo.gpos.size(), F = mesh.indices.size() / 3;
+        std::vector<uint32_t> memberStart(G + 1, 0), members(mesh.vertices.size());
+        for (uint32_t v = 0; v < mesh.vertices.size(); ++v) memberStart[topo.groupOf[v] + 1]++;
+        for (size_t g = 0; g < G; ++g) memberStart[g + 1] += memberStart[g];
+        { std::vector<uint32_t> fill(memberStart.begin(), memberStart.end() - 1); for (uint32_t v = 0; v < mesh.vertices.size(); ++v) members[fill[topo.groupOf[v]]++] = v; }
+        const double maxTurnCos = std::cos(maxTurnDeg * M_PI / 180.0);
+        for (int pass = 0; pass < 3; ++pass) {
+            size_t rev = 0;
+            for (size_t t = 0; t < F; ++t) {
+                const uint32_t g0 = topo.groupOf[mesh.indices[3 * t]], g1 = topo.groupOf[mesh.indices[3 * t + 1]], g2 = topo.groupOf[mesh.indices[3 * t + 2]];
+                if (disp[g0].norm() == 0 && disp[g1].norm() == 0 && disp[g2].norm() == 0) continue;
+                const V3 n0 = (topo.gpos[g1] - topo.gpos[g0]).cross(topo.gpos[g2] - topo.gpos[g0]);
+                const V3 a = topo.gpos[g0] + disp[g0], b = topo.gpos[g1] + disp[g1], c = topo.gpos[g2] + disp[g2];
+                const V3 n1 = (b - a).cross(c - a);
+                const double l0 = n0.norm(), l1 = n1.norm();
+                if (!(l0 > 1e-14)) continue;
+                if (l1 > 1e-14 && n0.dot(n1) >= maxTurnCos * l0 * l1) continue;
+                for (uint32_t g : {g0, g1, g2}) if (disp[g].norm() > 0) { disp[g] = V3{}; ++rev; }
+            }
+            reverted += rev;
+            if (!rev) break;
+        }
+        for (uint32_t g = 0; g < G; ++g) {
+            const double l = disp[g].norm();
+            if (!(l > 1e-6)) continue;
+            const V3 to = topo.gpos[g] + disp[g];
+            for (uint32_t m = memberStart[g]; m < memberStart[g + 1]; ++m) mesh.vertices[members[m]].position = geometry::Vec3(static_cast<float>(to.x), static_cast<float>(to.y), static_cast<float>(to.z));
+            ++moved;
+            maxMoveM = std::max(maxMoveM, l);
+        }
     }
     static std::vector<TileSeamCutScore> scoreCuts(const std::vector<SeamCut>& cuts, const std::vector<CutRims>& rims) {
         std::vector<TileSeamCutScore> out;
@@ -2381,39 +2449,73 @@ public:
         });
         // no position further than half the cap (two cuts meeting at a corner add up)
         for (uint32_t g = 0; g < G; ++g) { const double l = disp[g].norm(); if (l > 0.5 * p.capM) disp[g] = disp[g] * (0.5 * p.capM / l); }
-        // apply, and take back the moves that turn a triangle too far
-        std::vector<uint32_t> memberStart(G + 1, 0), members(mesh.vertices.size());
-        for (uint32_t v = 0; v < mesh.vertices.size(); ++v) memberStart[topo.groupOf[v] + 1]++;
-        for (size_t g = 0; g < G; ++g) memberStart[g + 1] += memberStart[g];
-        { std::vector<uint32_t> fill(memberStart.begin(), memberStart.end() - 1); for (uint32_t v = 0; v < mesh.vertices.size(); ++v) members[fill[topo.groupOf[v]]++] = v; }
-        const double maxTurnCos = std::cos(p.maxTurnDeg * M_PI / 180.0);
-        for (int pass = 0; pass < 3; ++pass) {
-            size_t rev = 0;
-            for (size_t t = 0; t < F; ++t) {
-                const uint32_t g0 = topo.groupOf[mesh.indices[3 * t]], g1 = topo.groupOf[mesh.indices[3 * t + 1]], g2 = topo.groupOf[mesh.indices[3 * t + 2]];
-                if (disp[g0].norm() == 0 && disp[g1].norm() == 0 && disp[g2].norm() == 0) continue;
-                const V3 n0 = (topo.gpos[g1] - topo.gpos[g0]).cross(topo.gpos[g2] - topo.gpos[g0]);
-                const V3 a = topo.gpos[g0] + disp[g0], b = topo.gpos[g1] + disp[g1], c = topo.gpos[g2] + disp[g2];
-                const V3 n1 = (b - a).cross(c - a);
-                const double l0 = n0.norm(), l1 = n1.norm();
-                if (!(l0 > 1e-14)) continue;
-                if (l1 > 1e-14 && n0.dot(n1) >= maxTurnCos * l0 * l1) continue;
-                for (uint32_t g : {g0, g1, g2}) if (disp[g].norm() > 0) { disp[g] = V3{}; ++rev; }
-            }
-            st.reverted += rev;
-            if (!rev) break;
-        }
-        for (uint32_t g = 0; g < G; ++g) {
-            const double l = disp[g].norm();
-            if (!(l > 1e-6)) continue;
-            const V3 to = topo.gpos[g] + disp[g];
-            for (uint32_t m = memberStart[g]; m < memberStart[g + 1]; ++m) mesh.vertices[members[m]].position = geometry::Vec3(static_cast<float>(to.x), static_cast<float>(to.y), static_cast<float>(to.z));
-            ++st.positionsMoved;
-            st.maxMoveM = std::max(st.maxMoveM, l);
-        }
+        applyMoves(mesh, topo, disp, p.maxTurnDeg, st.positionsMoved, st.reverted, st.maxMoveM);
         st.after = measureCuts(mesh, triTile, boxes, tileErrorM, p);
         for (const auto& sc : st.before) if (sc.matchedLengthM > 0) ++st.cutsMatched;
         return st;
+    }
+    /**
+     * Rim zip: at every cut, each tile's rim point moves halfway to the point of the other tile's rim it was matched to (in
+     * the cut plane and along the cut's normal), so the two rims lie on one line and the vertex weld and the T-junction
+     * split that follow join them. A point moves only when its whole way to the other rim is within the pair's tolerance
+     * (the smaller of the two tiles' stated errors, capped): a wider opening is left for what it is. Rims are matched only
+     * where they run parallel and face the same way, so a thin wall's two faces stay apart. A move turning a triangle by
+     * more than maxTurnDeg is taken back. Rim positions only: UVs, materials and topology are untouched.
+     */
+    static TileSeamZipStats zipCutRims(geometry::ScratchboxMesh& mesh, const std::vector<uint32_t>& triTile, const std::vector<TileBox>& boxes,
+                                       const std::vector<double>& tileErrorM, const TileSeamBlendParams& p = {}) {
+        TileSeamZipStats st;
+        const unsigned threads = scan_rectifier::detail::resolveThreads(p.threads);
+        const std::vector<SeamCut> cuts = boxCuts(boxes, p.faceMatchM);
+        st.cuts = cuts.size();
+        const Topology topo = topology(mesh);
+        const OpenBorder ob = openBorder(mesh, topo);
+        const std::vector<CutRims> rims = matchRims(mesh, triTile, cuts, tileErrorM, p, topo, ob, threads);
+        st.before = scoreCuts(cuts, rims);
+        const size_t G = topo.gpos.size();
+        std::vector<V3> disp(G);
+        std::vector<uint32_t> count(G, 0);
+        for (size_t k = 0; k < cuts.size(); ++k) {
+            const SeamCut& C = cuts[k];
+            const double ea = C.tile[0] < tileErrorM.size() ? tileErrorM[C.tile[0]] : -1.0, eb = C.tile[1] < tileErrorM.size() ? tileErrorM[C.tile[1]] : -1.0;
+            if (!(ea > 0 && eb > 0)) continue;
+            const double tol = std::min(p.capM, std::min(ea, eb));
+            for (int s = 0; s < 2; ++s) for (const RimMatch& m : rims[k].side[s]) {
+                const V3 way = m.step + C.u * m.gap;
+                if (way.norm() > tol) { ++st.beyondError; continue; }
+                disp[m.g] += way * 0.5;
+                count[m.g]++;
+            }
+        }
+        // a point on two cuts (a corner) takes the mean of its two moves
+        for (uint32_t g = 0; g < G; ++g) if (count[g] > 1) disp[g] = disp[g] * (1.0 / count[g]);
+        applyMoves(mesh, topo, disp, p.maxTurnDeg, st.positionsMoved, st.reverted, st.maxMoveM);
+        for (size_t k = 0; k < cuts.size(); ++k) {
+            TileSeamCutMove mv;
+            mv.tiles[0] = cuts[k].tile[0]; mv.tiles[1] = cuts[k].tile[1]; mv.u = cuts[k].u; mv.o = cuts[k].o;
+            double sum = 0;
+            for (int s = 0; s < 2; ++s) for (const RimMatch& m : rims[k].side[s]) {
+                const double l = disp[m.g].norm();
+                if (!(l > 1e-6)) continue;
+                ++mv.points; sum += l; mv.maxMoveM = std::max(mv.maxMoveM, l);
+            }
+            if (!mv.points) continue;
+            mv.meanMoveM = sum / static_cast<double>(mv.points);
+            st.perCut.push_back(mv);
+        }
+        st.cutsZipped = st.perCut.size();
+        st.after = measureCuts(mesh, triTile, boxes, tileErrorM, p);
+        return st;
+    }
+    static std::string zipStatsJson(const TileSeamZipStats& s) {
+        std::string js = "\"cuts\": " + std::to_string(s.cuts) + ", \"cutsZipped\": " + std::to_string(s.cutsZipped) + ", \"positionsMoved\": " + std::to_string(s.positionsMoved) +
+            ", \"beyondError\": " + std::to_string(s.beyondError) + ", \"reverted\": " + std::to_string(s.reverted) + ", \"maxMoveM\": " + std::to_string(s.maxMoveM) + ", \"perCut\": [";
+        for (size_t i = 0; i < s.perCut.size(); ++i) {
+            const auto& m = s.perCut[i];
+            js += std::string(i ? ", " : "") + "{\"tiles\": [" + std::to_string(m.tiles[0]) + ", " + std::to_string(m.tiles[1]) + "], \"u\": [" + std::to_string(m.u.x) + ", " + std::to_string(m.u.y) + ", " + std::to_string(m.u.z) +
+                "], \"o\": " + std::to_string(m.o) + ", \"points\": " + std::to_string(m.points) + ", \"meanMoveM\": " + std::to_string(m.meanMoveM) + ", \"maxMoveM\": " + std::to_string(m.maxMoveM) + "}";
+        }
+        return js + "]";
     }
     /** The scores as a JSON array, and their totals (length-weighted) for a one-line report. */
     static std::string cutScoresJson(const std::vector<TileSeamCutScore>& v) {

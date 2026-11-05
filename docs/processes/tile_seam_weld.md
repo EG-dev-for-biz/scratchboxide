@@ -204,10 +204,31 @@ ESB, uncached builds (holes / untextured / largest hole region):
 ESB scan: 20,448 m² of caps removed; 10–31 m² left at each tower cut (was about 500). In clay (sheet `docs/screenshots/2026-11-05-esb-tile-caps-clay.jpg`), face by face:
 
 - **West and north faces at 215.9 m:** the slots are gone and nothing new appears.
-- **East face at 179.5 m: a regression.** The row of slots is gone, and a wide dark slit crosses four bays: more visible than what it replaced. A ray through it hits the rebuilt facade itself (`FacadeLattice_10008`) 1.1 m deeper than the rows above and below, with a horizontal face in it: pipeline K built a metre-deep groove at the cut's height. In the control the facade there is flush. Why K recesses there once the cap is gone is not traced (the likely cause: its recess depth is measured from the scan, and at the cut the two leaves' walls do not meet, so with the cap gone the measure runs through the gap).
-- **South face at 143 m: unsure.** The three slots are gone; a dark vertical gap and an offset panel left of centre show that the control does not have, and the two builds' framing differs slightly, so it is not counted as fixed.
+- **East face near 179.5 m: not the cut (traced 2026-11-05).** The dark band there lies about 3.3 m below the cut, at 175.5-176.4 m, on the rebuilt facade (`FacadeLattice`). It is in builds with the caps kept too: main and two branch builds have it at 175.5-176.0 m, 0.52 m deep; the first caps-removed build had none, the second one 0.80 m deep, a build with the caps removed and the step blend none. Pipeline K rebuilds that part of the east face differently on every build, so one pair of builds cannot say what the caps do there (sheet `docs/screenshots/2026-11-05-esb-cuts-clay-four-builds.jpg`).
+- **South face at 143 m: pipeline K's sheet edge (traced 2026-11-05).** The scan within 5 m is whole after the caps go (wall 20.3 to 21.4 m², return wall 8.0 to 10.3 m², the caps 10.3 m² to none). In the finished model the near wall's rebuilt sheet has a jagged left edge with scan pieces left on it (`relief_m96`, `relief_m97`). The cause inside pipeline K is not traced.
 - **A rougher central recess** at 45° in the caps-removed build (whole-building sheet `2026-11-05-esb-clay-whole-caps.jpg`): not traced.
 
-Holes rise 0.05 pt. So the pass stays opt-in until the groove is understood: either the two leaves' walls are joined across the cut before K reads them, or K's depth measure skips the cut.
+Holes rise 0.05 pt. The pass stays opt-in: the two faces above are pipeline K's and vary from build to build, so the caps' effect on a finished building is judged on the scan's per-cut scores (section 11) and on two builds an arm, not on one pair.
 
 Penn 2 says nothing either way: with the same code and the caps kept, two builds gave holes 1.37% and 1.66% and a largest hole of 223 and 312 m² (its ownership vote and a standing fault at one corner vary run to run); with the caps removed, 1.31% and 1.79%.
+
+## 11. Per-cut scores, step blend and rim zip (tile-seams/7, 2026-11-05)
+
+**Status: the scores are always in the report (where the extraction gives each leaf's box and stated error); the step blend (`SCRATCHBOX_TILE_SEAM_BLEND=1`) and the rim zip (`SCRATCHBOX_TILE_SEAM_ZIP=1`) are opt-in. Fresh extractions only (older ones carry no boxes). Scan-level numbers below; no finished-building benchmark of the zip yet.**
+
+- **Scores** (`measureCuts`, in the report as `cutScores`: raw, after the caps, after the blend, after the zip, final, and cut by cut): each tile's rim at a cut (open border of a surface crossing the cut, within 1 m of its plane), how much of it finds the other tile's rim (nearest in space, running parallel, facing the same way, within the smaller of the two tiles' stated errors capped at 50 cm), the step between the two rims in the cut plane and the gap along the cut's normal.
+- **Step blend** (`blendCutSteps`): each wall moves half the step at its rim, faded out over 1.5 m.
+- **Rim zip** (`zipCutRims`): each rim point moves halfway to the other rim, across it only, when its whole way there is within the pair's tolerance; a move turning a triangle more than 25° is taken back; the report gives the move per cut (`rimZip.perCut`: points, mean and largest move). The weld and the T-junction split then join the rims, telling pieces apart as they were before the blend and the zip (two rims brought onto the same points are otherwise one piece, and the rest of their border is never welded: the first version left more rim open than no zip at all).
+
+ESB scan (198,462 triangles, 839 cuts with a rim, caps removed in every arm):
+
+| | open rim at the cuts | of it matched | mean gap of the matched | audit: open under 3 cm / 3-10 cm |
+|---|---|---|---|---|
+| after the caps, before the weld | 83.6 km | 27.0 km | 2.4 cm | |
+| caps only, final | 38.0 km | 11.0 km | 2.1 cm | 10.8 / 10.4 km |
+| + zip, final | 34.6 km | 9.1 km | 1.8 cm | 12.3 / 8.4 km |
+| + blend and zip, final | 30.8 km | 6.9 km | 1.9 cm | 10.5 / 7.8 km |
+
+The zip moved 15,539 rim points on 306 cuts (largest move 24.7 cm, 603 taken back, 269 beyond the tiles' error); right after it the matched rims stand 4 mm apart (2.4 cm before).
+
+**What it does not do yet.** A third of the matched rim is still open after the weld, with or without the zip, though it stands within the weld's 3 cm: the weld and the T-junction split leave it, and why is not traced (telling pieces apart by tile as well made it worse: 39.6 km). The 25 km of unmatched rim has no other tile's rim within reach. No clay sheet was made for this step: a 1-3 cm opening does not show at a building's scale, and a finished building's cuts are pipeline K's to draw.
