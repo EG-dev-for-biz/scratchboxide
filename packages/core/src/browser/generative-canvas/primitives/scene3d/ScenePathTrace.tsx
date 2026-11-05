@@ -67,6 +67,7 @@ function skippedNote(s: PathTraceSnapshotStats): string {
     if (s.skipped.shaderMaterials) parts.push(`${s.skipped.shaderMaterials} mesh${s.skipped.shaderMaterials === 1 ? '' : 'es'} with custom shaders`);
     if (s.skipped.instancesOverCap) parts.push(`${fmt(s.skipped.instancesOverCap)} instances past the 30M-triangle cap`);
     if (s.skipped.areaLights) parts.push(`${s.skipped.areaLights} area light${s.skipped.areaLights === 1 ? '' : 's'}`);
+    if (s.skipped.textures) parts.push(`${s.skipped.textures} texture${s.skipped.textures === 1 ? '' : 's'} that are not 8-bit images`);
     return parts.length ? `Not traced: ${parts.join(', ')}.` : '';
 }
 
