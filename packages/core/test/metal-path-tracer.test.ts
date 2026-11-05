@@ -26,8 +26,8 @@ import { requireAsset, withReason } from './helpers/requirements';
 const FLATIRON_GLB = 'desktop-app/public/models/flatiron_building_40.7411_-73.9897_full_texture.glb';
 const flatironGlb = requireAsset(FLATIRON_GLB, 'a Google Photorealistic 3D Tiles capture of the Flatiron district (needs Google Map Tiles API access)');
 
-/** An 8-bit RGB PNG (one IDAT, filter 0 on every row). */
-function encodePng(width: number, height: number, rgb: Uint8Array): Buffer {
+/** An 8-bit RGB (or, with `channels` 4, RGBA) PNG (one IDAT, filter 0 on every row). */
+function encodePng(width: number, height: number, rgb: Uint8Array, channels: 3 | 4 = 3): Buffer {
     const crcTable = new Uint32Array(256);
     for (let n = 0; n < 256; n++) {
         let c = n;
@@ -47,9 +47,10 @@ function encodePng(width: number, height: number, rgb: Uint8Array): Buffer {
     };
     const ihdr = Buffer.alloc(13);
     ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4);
-    ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
-    const raw = Buffer.alloc((width * 3 + 1) * height);
-    for (let y = 0; y < height; y++) raw.set(rgb.subarray(y * width * 3, (y + 1) * width * 3), y * (width * 3 + 1) + 1);
+    ihdr[8] = 8; ihdr[9] = channels === 4 ? 6 : 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+    const row = width * channels;
+    const raw = Buffer.alloc((row + 1) * height);
+    for (let y = 0; y < height; y++) raw.set(rgb.subarray(y * row, (y + 1) * row), y * (row + 1) + 1);
     return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
 
@@ -124,19 +125,22 @@ interface GlbMesh {
     positions: number[];
     indices: number[];
     material: number;
+    /** TEXCOORD_0, two per vertex. */
+    uvs?: number[];
 }
 
 /** A grid of (nu + 1) x (nv + 1) vertices spanning origin + s*u + t*v for s, t in [0, 1], wound so its normal is u x v. */
 function gridMesh(origin: number[], u: number[], v: number[], nu: number, nv: number, material: number): GlbMesh {
-    const positions: number[] = [], indices: number[] = [];
+    const positions: number[] = [], indices: number[] = [], uvs: number[] = [];
     for (let j = 0; j <= nv; j++) for (let i = 0; i <= nu; i++) {
         for (let k = 0; k < 3; k++) positions.push(origin[k] + u[k] * i / nu + v[k] * j / nv);
+        uvs.push(i / nu, j / nv);
     }
     for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
         const a = j * (nu + 1) + i, b = a + 1, c = a + nu + 1, d = c + 1;
         indices.push(a, b, d, a, d, c);
     }
-    return { positions, indices, material };
+    return { positions, indices, material, uvs };
 }
 
 function sphereMesh(center: number[], radius: number, material: number, rings = 32, segments = 64): GlbMesh {
@@ -155,8 +159,11 @@ function sphereMesh(center: number[], radius: number, material: number, rings = 
     return { positions, indices, material };
 }
 
-/** A GLB of meshes (one node each), glTF materials and KHR_lights_punctual lights (each light a node at `translation`, aimed by `rotation`). */
-function writeSceneGlb(file: string, meshes: GlbMesh[], materials: object[], lights: Array<{ def: object; translation?: number[]; rotation?: number[] }> = []): void {
+/**
+ * A GLB of meshes (one node each), glTF materials, KHR_lights_punctual lights (each light a node at `translation`, aimed
+ * by `rotation`) and PNG images (texture k is image k; a material names it as `baseColorTexture: { index: k }`).
+ */
+function writeSceneGlb(file: string, meshes: GlbMesh[], materials: object[], lights: Array<{ def: object; translation?: number[]; rotation?: number[] }> = [], images: Buffer[] = []): void {
     const chunks: Buffer[] = [];
     const bufferViews: any[] = [], accessors: any[] = [];
     let offset = 0;
@@ -173,7 +180,13 @@ function writeSceneGlb(file: string, meshes: GlbMesh[], materials: object[], lig
         for (let k = 0; k < p.length; k++) { min[k % 3] = Math.min(min[k % 3], p[k]); max[k % 3] = Math.max(max[k % 3], p[k]); }
         accessors.push({ bufferView: view(Buffer.from(p.buffer)), componentType: 5126, count: p.length / 3, type: 'VEC3', min, max });
         accessors.push({ bufferView: view(Buffer.from(i.buffer)), componentType: 5125, count: i.length, type: 'SCALAR' });
-        gltfMeshes.push({ primitives: [{ attributes: { POSITION: accessors.length - 2 }, indices: accessors.length - 1, material: m.material }] });
+        const attributes: Record<string, number> = { POSITION: accessors.length - 2 };
+        if (m.uvs) {
+            const t = new Float32Array(m.uvs);
+            accessors.push({ bufferView: view(Buffer.from(t.buffer)), componentType: 5126, count: t.length / 2, type: 'VEC2' });
+            attributes.TEXCOORD_0 = accessors.length - 1;
+        }
+        gltfMeshes.push({ primitives: [{ attributes, indices: accessors.length - (m.uvs ? 2 : 1), material: m.material }] });
         nodes.push({ mesh: gltfMeshes.length - 1 });
     }
     for (let k = 0; k < lights.length; k++) {
@@ -185,6 +198,12 @@ function writeSceneGlb(file: string, meshes: GlbMesh[], materials: object[], lig
         extensionsUsed: ['KHR_materials_emissive_strength', ...(lights.length ? ['KHR_lights_punctual'] : [])]
     };
     if (lights.length) json.extensions = { KHR_lights_punctual: { lights: lights.map(l => l.def) } };
+    if (images.length) {
+        json.images = images.map(png => ({ bufferView: view(png), mimeType: 'image/png' }));
+        json.samplers = [{ wrapS: 10497, wrapT: 10497 }];
+        json.textures = images.map((_, k) => ({ source: k, sampler: 0 }));
+    }
+    json.buffers[0].byteLength = offset;
     const bin = Buffer.concat(chunks);
     let js = Buffer.from(JSON.stringify(json));
     js = Buffer.concat([js, Buffer.alloc((4 - js.length % 4) % 4, 0x20)]);
@@ -311,7 +330,7 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
             expect(fs.existsSync(path.join(tmp, `checker.atlas${atlas.level}.png`))).toBe(true);
             expect(fs.existsSync(path.join(tmp, `checker.normal${atlas.level}.png`))).toBe(true);
         }
-    });
+    }, 300_000);
 
     it('probe names the device and says whether it ray traces', async () => {
         expect(typeof device.raytracing).toBe('boolean');
@@ -703,7 +722,7 @@ describe.skipIf(process.platform !== 'darwin')('Path tracer scene lights (light 
         ]);
         roomSbvg = path.join(tmp, 'room.sbvg');
         await builder.build(panelGlb, roomSbvg);
-    });
+    }, 300_000);
 
     it('samples emissive triangles and punctual lights, and the GPU agrees with the CPU reference', async ctx => {
         if (!device.raytracing) return ctx.skip();
@@ -808,5 +827,98 @@ describe.skipIf(process.platform !== 'darwin')('Path tracer scene lights (light 
         // A directional light of 4 lux straight down equals a 4 cd point light 1 m above.
         expect(sun / near).toBeGreaterThan(0.97);
         expect(sun / near).toBeLessThan(1.03);
+    });
+});
+
+describe.skipIf(process.platform !== 'darwin')('Path tracer alpha-masked surfaces (cut-out leaves and cards)', () => {
+    const service = new MetalPathTracerService();
+    const builder = new VirtualGeometryBuildService();
+    let tmp = '';
+    let device: MetalDeviceInfo;
+    const dark = { studio: { radiance: [0, 0, 0] as [number, number, number] } };
+    const finest = { thresholdPx: 0.01 };
+    // A 1 m card 1 m above a white floor, lit only by a directional light at 45 degrees: its shadow falls 1 m to +x.
+    const toward = [1 / Math.SQRT2, -1 / Math.SQRT2, 0];
+    const light = [{ def: { type: 'directional', intensity: 3 }, rotation: aimRotation(toward) }];
+    // 64 x 64, green, opaque in alternate 8 px cells: half of every cell row cut out.
+    const checker = (() => {
+        const px = new Uint8Array(64 * 64 * 4);
+        for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+            px.set([40, 200, 60, ((x >> 3) + (y >> 3)) % 2 === 0 ? 255 : 0], (y * 64 + x) * 4);
+        }
+        return encodePng(64, 64, px, 4);
+    })();
+    const floorMat = { pbrMetallicRoughness: { baseColorFactor: [0.8, 0.8, 0.8, 1], metallicFactor: 0, roughnessFactor: 1 } };
+    const cardMat = (mask: boolean) => ({
+        pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1], baseColorTexture: { index: 0 }, metallicFactor: 0, roughnessFactor: 1 },
+        doubleSided: true, ...(mask ? { alphaMode: 'MASK', alphaCutoff: 0.5 } : {})
+    });
+    const sbvgs: Record<string, { sbvg: string; glb: string }> = {};
+
+    beforeAll(async () => {
+        tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-pt-alpha-'));
+        device = await service.probe();
+        if (!device.raytracing) return;
+        const floor = gridMesh([-3, 0, 3], [6, 0, 0], [0, 0, -6], 32, 32, 0);
+        const card = gridMesh([-0.5, 1, 0.5], [1, 0, 0], [0, 0, -1], 8, 8, 1);
+        for (const [name, meshes, mats] of [
+            ['open', [floor], [floorMat]],
+            ['mask', [floor, card], [floorMat, cardMat(true)]],
+            ['opaque', [floor, card], [floorMat, cardMat(false)]]
+        ] as Array<[string, GlbMesh[], object[]]>) {
+            const glb = path.join(tmp, `${name}.glb`);
+            writeSceneGlb(glb, meshes, mats, light, name === 'open' ? [] : [checker]);
+            const sbvg = path.join(tmp, `${name}.sbvg`);
+            // Single level, as viewport snapshots are: the re-textured coarse levels' atlases carry no alpha.
+            await builder.build(glb, sbvg, { singleLevel: true });
+            sbvgs[name] = { sbvg, glb };
+        }
+    }, 300_000);
+
+    const meanOf = (r: MetalPathTraceResult) => {
+        const c = readLinearColor(r);
+        let sum = 0;
+        for (let i = 0; i < c.length; i += 3) sum += luminance(c, i);
+        return sum / (c.length / 3);
+    };
+    const render = (name: string, at: 'shadow' | 'card', backend: 'metal' | 'cpu' = 'metal') => service.render({
+        sbvgPath: sbvgs[name].sbvg, materials: { glbPath: sbvgs[name].glb }, outputDir: path.join(tmp, `${name}_${at}_${backend}`), backend,
+        width: 64, height: 64, samplesPerPixel: 16, maxBounces: 0, seed: 3, lighting: dark, lod: finest,
+        // Straight down (the files are centred on their bounds: y less the origin's), at the shadow or at the card.
+        camera: { position: [at === 'shadow' ? 1 : 0, 3, 0], target: [at === 'shadow' ? 1 : 0, -0.5, 0], up: [0, 0, -1], verticalFovDeg: 12 }
+    });
+
+    it('lets light through the cut-out texels: a half-open card casts half a shadow, an opaque one a whole one, on both tracers', async ctx => {
+        if (!device.raytracing) return ctx.skip();
+        const open = meanOf(await render('open', 'shadow'));
+        const maskGpu = await render('mask', 'shadow');
+        const maskCpu = await render('mask', 'shadow', 'cpu');
+        const opaque = meanOf(await render('opaque', 'shadow'));
+        const halfGpu = meanOf(maskGpu) / open, halfCpu = meanOf(maskCpu) / open;
+        // eslint-disable-next-line no-console
+        console.log(`[alpha] floor in the card's shadow, of the open floor: cut-out ${halfGpu.toFixed(3)} (CPU ${halfCpu.toFixed(3)}), opaque ${(opaque / open).toFixed(3)}`);
+        expect(open).toBeGreaterThan(0);
+        expect(halfGpu).toBeGreaterThan(0.4);
+        expect(halfGpu).toBeLessThan(0.6);
+        expect(Math.abs(halfGpu - halfCpu)).toBeLessThan(0.02);
+        expect(opaque / open).toBeLessThan(0.02);
+    });
+
+    it('lets sight through the cut-out texels: the floor shows through half the card', async ctx => {
+        if (!device.raytracing) return ctx.skip();
+        // The floor is grey (r = g = b), the card green: count the pixels that read as floor.
+        const floorShare = (r: MetalPathTraceResult) => {
+            const c = readLinearColor(r);
+            let floor = 0;
+            for (let i = 0; i < c.length; i += 3) if (c[i + 1] < 1.5 * c[i] + 1e-6) floor++;
+            return floor / (c.length / 3);
+        };
+        const mask = floorShare(await render('mask', 'card'));
+        const maskCpu = floorShare(await render('mask', 'card', 'cpu'));
+        const opaque = floorShare(await render('opaque', 'card'));
+        expect(mask).toBeGreaterThan(0.35);
+        expect(mask).toBeLessThan(0.65);
+        expect(Math.abs(mask - maskCpu)).toBeLessThan(0.05);
+        expect(opaque).toBeLessThan(0.05);
     });
 });

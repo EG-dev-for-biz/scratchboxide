@@ -68,6 +68,8 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     // The UV rewrap and the detail bake (the first call after an engine change also builds both binaries), plus one image
     // call per painted decal; reports progress before the bake.
     object_detail_pass: { maxMs: 20 * MIN, idleMs: 12 * MIN },
+    // Three image calls (the side view, then the top and front views together), each retried on transient errors.
+    object_blueprint_outlines: { maxMs: 10 * MIN, idleMs: 5 * MIN },
     // With a place not yet built it extracts and isolates the structure from 3D Tiles first (minutes, cached after), then
     // the grounding fetches, the registration (up to 90 s edges + 120 s joint) and, optionally, the segmenter per view.
     streetview_survey: { maxMs: 40 * MIN, idleMs: 10 * MIN },

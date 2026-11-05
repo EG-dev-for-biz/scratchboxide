@@ -222,6 +222,11 @@ def validate(spec):
                 errors.append("%s: a %s part has no edges of its own, so it cannot have an edgeRadiusMeters" % (where, present[0]))
             elif not _is_num(r) or r < 0 or r > EDGE_RADIUS_MAX:
                 errors.append("%s: edgeRadiusMeters must be 0 (sharp) to %g metres" % (where, EDGE_RADIUS_MAX))
+        if _given(part, "cuts"):
+            if len(present) == 1 and present[0] not in ("sweep", "revolve"):
+                errors.append("%s: a %s part has no solid of its own to cut, so it cannot have cuts" % (where, present[0]))
+            else:
+                _validate_cuts(part["cuts"], where, errors)
         if _given(part, "material"):
             if len(present) == 1 and present[0] in ("replicate", "relief"):
                 errors.append("%s: a %s part has no surface of its own, so it cannot have a material" % (where, present[0]))
@@ -305,6 +310,154 @@ def validate(spec):
     return errors
 
 
+def _validate_cuts(cuts, where, errors):
+    """part.cuts: 1-16 boxes or cylinders, in object coordinates, subtracted from the part's solid."""
+    if not isinstance(cuts, list) or not 1 <= len(cuts) <= 16:
+        errors.append("%s: cuts must be 1-16 boxes or cylinders" % where)
+        return
+    for i, cut in enumerate(cuts):
+        at = "%s: cuts[%d]" % (where, i)
+        kinds = [k for k in ("box", "cylinder") if isinstance(cut, dict) and _given(cut, k)]
+        if len(kinds) != 1:
+            errors.append("%s must have exactly one of box, cylinder" % at)
+            continue
+        if _given(cut, "mirrorPlaneNormal") and (not _is_vec(cut["mirrorPlaneNormal"], 3) or _length(cut["mirrorPlaneNormal"]) < _EPS):
+            errors.append("%s: mirrorPlaneNormal must be a non-zero [x, y, z] vector" % at)
+        if kinds[0] == "box":
+            b = cut["box"]
+            if not isinstance(b, dict) or not _is_vec(b.get("centerMeters"), 3) or not _is_vec(b.get("sizeMeters"), 3) or any(v <= 0 for v in b["sizeMeters"]):
+                errors.append("%s: box needs centerMeters and sizeMeters, every size above 0" % at)
+            elif _given(b, "rotationDeg") and not _is_vec(b["rotationDeg"], 3):
+                errors.append("%s: box.rotationDeg must be [x, y, z] degrees" % at)
+        else:
+            c = cut["cylinder"]
+            if not isinstance(c, dict) or not _is_vec(c.get("startMeters"), 3) or not _is_vec(c.get("endMeters"), 3) or not _is_num(c.get("radiusMeters")) or c["radiusMeters"] <= 0:
+                errors.append("%s: cylinder needs startMeters, endMeters and a radiusMeters above 0" % at)
+            elif _length(_sub(c["endMeters"], c["startMeters"])) < 1e-6:
+                errors.append("%s: cylinder startMeters and endMeters coincide" % at)
+
+
+def _cut_solid(sb, cut, shift_y, mirror=None):
+    """The closed mesh of one cut in the built object's frame (lifted with it by shift_y), reflected across `mirror`."""
+    vec3 = sb.math.Vec3
+    uv0 = sb.math.Vec2(0.0, 0.0)
+    white = sb.math.Vec4(1.0, 1.0, 1.0, 1.0)
+
+    def place(p):
+        p = (float(p[0]), float(p[1]) + shift_y, float(p[2]))
+        if mirror is not None:
+            n = _unit(mirror, "cut mirror")
+            p = _sub(p, _mul(n, 2.0 * _dot(p, n)))
+        return p
+
+    pts, tris = [], []
+    if _given(cut, "box"):
+        b = cut["box"]
+        c, size = b["centerMeters"], b["sizeMeters"]
+        rot = b.get("rotationDeg") or [0.0, 0.0, 0.0]
+        for sx in (-1, 1):
+            for sy in (-1, 1):
+                for sz in (-1, 1):
+                    q = (sx * size[0] / 2.0, sy * size[1] / 2.0, sz * size[2] / 2.0)
+                    for axis, deg in zip(((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)), rot):
+                        if deg:
+                            q = _rotate(q, axis, math.radians(deg))
+                    pts.append(place(_add(c, q)))
+        # corners indexed by (x, y, z) bits; each face wound outward
+        faces = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
+        for a, b_, c_, d in faces:
+            tris += [(a, b_, c_), (a, c_, d)]
+    else:
+        cy = cut["cylinder"]
+        a0, a1, r = cy["startMeters"], cy["endMeters"], float(cy["radiusMeters"])
+        axis = _unit(_sub(a1, a0), "cut cylinder axis")
+        u = _unit(_cross(axis, _perpendicular_reference(axis)), "cut cylinder frame")
+        v = _cross(axis, u)
+        seg = 32
+        for end in (a0, a1):
+            for k in range(seg):
+                t = 2.0 * math.pi * k / seg
+                pts.append(place(_add(end, _add(_mul(u, r * math.cos(t)), _mul(v, r * math.sin(t))))))
+        pts.append(place(a0))
+        pts.append(place(a1))
+        c0, c1 = 2 * seg, 2 * seg + 1
+        for k in range(seg):
+            k2 = (k + 1) % seg
+            tris += [(k, k2, seg + k2), (k, seg + k2, seg + k), (c0, k2, k), (c1, seg + k, seg + k2)]
+    if mirror is not None:
+        tris = [(a, c_, b_) for a, b_, c_ in tris]   # a reflection turns every face inside out
+    mesh = sb.geometry.Mesh("cut")
+    centre = _mul(_add_all(pts), 1.0 / len(pts))
+    for p in pts:
+        n = _sub(p, centre)
+        n = _unit(n, "cut normal") if _length(n) > 1e-12 else (0.0, 1.0, 0.0)
+        mesh.add_vertex(vec3(p[0], p[1], p[2]), vec3(n[0], n[1], n[2]), uv0, white)
+    for a, b_, c_ in tris:
+        mesh.add_triangle(a, b_, c_)
+    mesh.recompute_bounds()
+    return mesh
+
+
+CUT_CREASE_DEG = 35.0
+
+
+def _creased_mesh(sb, name, mesh):
+    """
+    A cut part rebuilt with shared vertices: the boolean leaves every triangle its own corners and flat normals, so
+    corners at one position are welded and their normals averaged over the faces within CUT_CREASE_DEG of each
+    other. Panels shade smoothly again; the cut's edges, where faces meet at a sharper angle, stay crisp.
+    """
+    import array
+    flat = array.array("f")
+    flat.frombytes(mesh.get_positions_flat())
+    idx = list(mesh.indices)
+    pts = [(flat[i], flat[i + 1], flat[i + 2]) for i in range(0, len(flat), 3)]
+    cos_crease = math.cos(math.radians(CUT_CREASE_DEG))
+    face_n = []
+    for t in range(0, len(idx), 3):
+        a, b, c = pts[idx[t]], pts[idx[t + 1]], pts[idx[t + 2]]
+        n = _cross(_sub(b, a), _sub(c, a))
+        ln = _length(n)
+        face_n.append(_mul(n, 1.0 / ln) if ln > 1e-18 else None)
+    key = lambda p: (round(p[0], 5), round(p[1], 5), round(p[2], 5))
+    # corners at each welded position, then grouped by facing within the crease angle
+    corners = {}
+    for t in range(len(face_n)):
+        if face_n[t] is None:
+            continue
+        for k in range(3):
+            corners.setdefault(key(pts[idx[3 * t + k]]), []).append(t)
+    out = sb.geometry.Mesh(name)
+    uv0 = sb.math.Vec2(0.0, 0.0)
+    white = sb.math.Vec4(1.0, 1.0, 1.0, 1.0)
+    slot = {}
+    for pkey, faces in corners.items():
+        groups = []
+        for t in faces:
+            n = face_n[t]
+            for g in groups:
+                if _dot(g[0], n) >= cos_crease:
+                    g[1].append(t)
+                    break
+            else:
+                groups.append((n, [t]))
+        for lead, members in groups:
+            s_ = (0.0, 0.0, 0.0)
+            for t in members:
+                s_ = _add(s_, face_n[t])
+            nrm = _unit(s_, "cut normal") if _length(s_) > 1e-12 else lead
+            vid = out.vertex_count
+            out.add_vertex(sb.math.Vec3(pkey[0], pkey[1], pkey[2]), sb.math.Vec3(nrm[0], nrm[1], nrm[2]), uv0, white)
+            for t in members:
+                slot[(t, pkey)] = vid
+    for t in range(len(face_n)):
+        if face_n[t] is None:
+            continue
+        out.add_triangle(*[slot[(t, key(pts[idx[3 * t + k]]))] for k in range(3)])
+    out.recompute_bounds()
+    return out
+
+
 def _validate_crown(crown, where, errors, in_reach):
     if not isinstance(crown, dict):
         errors.append("%s: crown must be an object" % where)
@@ -334,9 +487,40 @@ def _validate_crown(crown, where, errors, in_reach):
             errors.append("%s: crown.trunkRadiusMeters must be more than 0 and under 0.2 of heightMeters" % where)
 
 
+def _validate_sections(sweep, where, is_child, errors, in_reach):
+    """A loft's rings: 2-128 sections at increasing z, each the same number (8-256) of [x, y] points."""
+    secs = sweep["sections"]
+    if is_child:
+        errors.append("%s: a lofted sweep (sections) is a root part, in object coordinates" % where)
+    if not isinstance(secs, list) or not 2 <= len(secs) <= 128:
+        errors.append("%s: sweep.sections must have 2-128 sections" % where)
+        return
+    count = None
+    last_z = None
+    for i, sec in enumerate(secs):
+        pts = sec.get("points") if isinstance(sec, dict) else None
+        if not isinstance(sec, dict) or not _is_num(sec.get("z")) or not isinstance(pts, list) or not 8 <= len(pts) <= 256 \
+                or not all(_is_vec(p, 2) for p in pts):
+            errors.append("%s: sweep.sections[%d] must be {z, points: 8-256 [x, y]}" % (where, i))
+            return
+        if count is not None and len(pts) != count:
+            errors.append("%s: every sweep.sections ring must have the same number of points" % where)
+            return
+        count = len(pts)
+        if last_z is not None and sec["z"] <= last_z:
+            errors.append("%s: sweep.sections must run in increasing z" % where)
+            return
+        last_z = sec["z"]
+        for p in pts:
+            in_reach((p[0], p[1], sec["z"]), where, "sweep.sections[%d]" % i)
+
+
 def _validate_sweep(sweep, where, is_child, errors, in_reach):
     if not isinstance(sweep, dict):
         errors.append("%s: sweep must be an object" % where)
+        return
+    if "sections" in sweep:
+        _validate_sections(sweep, where, is_child, errors, in_reach)
         return
     pts = sweep.get("controlPoints")
     if not isinstance(pts, list) or not 2 <= len(pts) <= 64 or not all(_is_vec(p, 3) for p in pts):
@@ -738,8 +922,113 @@ def _rmf_frames(points, closed, up_hint, field="sweep.controlPoints"):
     return tangents, normals
 
 
+def _build_loft(part, origin, edge, relief_ops):
+    """
+    A sweep straight along +Z through measured rings (sweep.sections, from a blueprint): each ring a closed list of
+    [x, y] points in the plane at its z, all rings the same length and starting at corresponding points. Rows are
+    rings at u along the length (the sections, rows between them no further apart than `edge`, and rows a relief
+    asks for); columns are points at v round the ring (the rings' own, and columns a relief asks for), each read off
+    the rings by linear interpolation. The ends are capped flat.
+    """
+    secs = sorted(part["sweep"]["sections"], key=lambda sec: sec["z"])
+    count = len(secs[0]["points"])
+    z0, z1 = float(secs[0]["z"]), float(secs[-1]["z"])
+    total = z1 - z0
+    if total < 1e-6:
+        raise SpecError('part "%s" sweep.sections: the sections have no length along z' % part["id"])
+    rings = [[(float(x), float(y)) for x, y in sec["points"]] for sec in secs]
+    zs = [float(sec["z"]) for sec in secs]
+    perimeter = sum(sum(math.hypot(r[(j + 1) % count][0] - r[j][0], r[(j + 1) % count][1] - r[j][1]) for j in range(count)) for r in rings) / len(rings)
+    extra_u, extra_v = _relief_refinement(relief_ops, total, perimeter)
+
+    us = set()
+    for k in range(len(zs)):
+        us.add((zs[k] - z0) / total)
+        if k + 1 < len(zs):
+            steps = int(math.ceil((zs[k + 1] - zs[k]) / max(edge, 1e-6)))
+            for s_ in range(1, steps):
+                us.add((zs[k] + (zs[k + 1] - zs[k]) * s_ / float(steps) - z0) / total)
+    us = sorted(us | set(u for u in extra_u if 0.0 <= u <= 1.0))
+    vs = sorted(set([j / float(count) for j in range(count)] + [v for v in extra_v if 0.0 <= v < 1.0]))
+    _check_grid_budget(part["id"], len(us), len(vs))
+
+    def ring_at(u):
+        z = z0 + u * total
+        k = max(0, min(len(zs) - 2, _bisect(zs, z)))
+        w = (z - zs[k]) / (zs[k + 1] - zs[k]) if zs[k + 1] > zs[k] else 0.0
+        w = min(1.0, max(0.0, w))
+        return z, [_lerp(a, b, w) for a, b in zip(rings[k], rings[k + 1])]
+
+    def point_at(ring, v):
+        f = v * count
+        j = int(math.floor(f)) % count
+        return _lerp(ring[j], ring[(j + 1) % count], f - math.floor(f))
+
+    rows = []
+    for u in us:
+        z, ring = ring_at(u)
+        rows.append([_add(origin, (p[0], p[1], z)) for p in (point_at(ring, v) for v in vs)])
+    n = len(vs)
+    surface = _Surface("sweep", part["id"])
+    surface.us, surface.vs, surface.closed_u, surface.length = us, vs, False, total
+    centres = [_mul(_add_all(row), 1.0 / n) for row in rows]
+    for i, row in enumerate(rows):
+        prev_row, next_row = rows[max(i - 1, 0)], rows[min(i + 1, len(rows) - 1)]
+        out = []
+        for j in range(n):
+            along = _sub(next_row[j], prev_row[j])
+            around = _sub(row[(j + 1) % n], row[(j - 1) % n])
+            nrm = _cross(around, along)
+            if _length(nrm) < 1e-12:
+                nrm = _sub(row[j], centres[i])
+            if _dot(nrm, _sub(row[j], centres[i])) < 0:
+                nrm = _mul(nrm, -1.0)
+            out.append(_unit(nrm, "loft normal") if _length(nrm) > 1e-12 else (0.0, 1.0, 0.0))
+        surface.rows.append(row)
+        surface.normals_out.append(out)
+        surface.pole.append(False)
+        surface.circumference.append(sum(_length(_sub(row[(j + 1) % n], row[j])) for j in range(n)))
+    surface.caps = [(0, centres[0], (0.0, 0.0, -1.0)), (len(rows) - 1, centres[-1], (0.0, 0.0, 1.0))]
+    surface._loft = True
+    surface._centres = centres
+    return surface
+
+
+def _add_all(points):
+    x = y = z = 0.0
+    for p in points:
+        x += p[0]
+        y += p[1]
+        z += p[2]
+    return (x, y, z)
+
+
+def _loft_point(surface, u, angle_deg):
+    """Attach point and outward normal on a loft: its rings interpolated at u, at angle_deg around them."""
+    if u <= 1e-9:
+        return surface._centres[0], (0.0, 0.0, -1.0)
+    if u >= 1 - 1e-9:
+        return surface._centres[-1], (0.0, 0.0, 1.0)
+    us = surface.us
+    i = max(0, min(len(us) - 2, _bisect(us, u)))
+    w = (u - us[i]) / (us[i + 1] - us[i]) if us[i + 1] > us[i] else 0.0
+    vs = surface.vs
+    v = (angle_deg / 360.0) % 1.0
+    j = max(0, min(len(vs) - 1, _bisect(vs, v)))
+    jn = (j + 1) % len(vs)
+    span = (vs[jn] - vs[j]) % 1.0 or 1.0
+    f = ((v - vs[j]) % 1.0) / span
+    p_i = _lerp(surface.rows[i][j], surface.rows[i][jn], f)
+    p_n = _lerp(surface.rows[i + 1][j], surface.rows[i + 1][jn], f)
+    n_i = _lerp(surface.normals_out[i][j], surface.normals_out[i][jn], f)
+    n_n = _lerp(surface.normals_out[i + 1][j], surface.normals_out[i + 1][jn], f)
+    return _lerp(p_i, p_n, w), _unit(_lerp(n_i, n_n, w), "loft normal")
+
+
 def _build_sweep(part, origin, edge, relief_ops):
     sw = part["sweep"]
+    if "sections" in sw:
+        return _build_loft(part, origin, edge, relief_ops)
     closed = bool(sw["closedLoop"])
     smoothing = float(sw["smoothing"])
     ctrl = [_add(origin, tuple(float(x) for x in p)) for p in sw["controlPoints"]]
@@ -879,6 +1168,8 @@ def _part_extent(part):
         mer = part["revolve"]["meridian"]
         zs = [float(p[0]) for p in mer]
         dims = [2.0 * max(float(p[1]) for p in mer), max(zs) - min(zs)]
+    elif part.get("sweep") and "sections" in part["sweep"]:
+        dims = [_loft_extent(part["sweep"])[0]]
     elif part.get("sweep"):
         sw = part["sweep"]
         dims = [min(min(float(k["widthMeters"]), float(k["heightMeters"])) for k in sw["profile"])]
@@ -1066,6 +1357,8 @@ def _revolve_point(surface, u, angle_deg):
 
 
 def _surface_point(surface, u, angle_deg):
+    if getattr(surface, "_loft", False):
+        return _loft_point(surface, u, angle_deg)
     if surface.kind == "sweep":
         return _sweep_point(surface, u, angle_deg)
     return _revolve_point(surface, u, angle_deg)
@@ -1081,6 +1374,49 @@ def _check_grid_budget(pid, rows, cols):
 # ---------------------------------------------------------------------------
 # Relief and modulation: offsets applied along the outward normal in (u, v)
 # ---------------------------------------------------------------------------
+
+def _sample_grid(grid, u, v):
+    """Bilinear sample of a relief grid at (u across, v down) in 0..1 of its box; 0 outside it."""
+    if grid is None or not (0.0 <= u <= 1.0 and 0.0 <= v <= 1.0):
+        return 0.0
+    cols, rows, vals = grid["cols"], grid["rows"], grid["values"]
+    x, y = u * cols - 0.5, v * rows - 0.5
+    x0, y0 = int(math.floor(x)), int(math.floor(y))
+    fx, fy = x - x0, y - y0
+
+    def at(cx, cy):
+        return vals[min(rows - 1, max(0, cy)) * cols + min(cols - 1, max(0, cx))]
+    top = at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx
+    bottom = at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx
+    return top * (1 - fy) + bottom * fy
+
+
+def _depth_relief_offsets(surface, depth):
+    """
+    A blueprint's relief (photo-inferred sinks, 0 to -1) laid into a lofted surface along its outward normal: a vertex
+    facing the front takes the front grid at its (x, y), one facing sideways the side grid at its (z, y), blended by
+    how squarely it faces each; top, bottom and rear faces have no drawing and keep their place. At most `meters` deep.
+    """
+    W, H, L = depth["sizeMeters"]
+    meters = float(depth["meters"])
+    front, side = depth.get("front"), depth.get("side")
+    ramp = lambda c: min(1.0, max(0.0, (c - 0.3) / 0.4))
+    offsets = []
+    for i in range(len(surface.us)):
+        row = []
+        for j in range(len(surface.vs)):
+            p, n = surface.rows[i][j], surface.normals_out[i][j]
+            wf, ws = ramp(n[2]), ramp(abs(n[0]))
+            v = 1.0 - p[1] / H
+            d = 0.0
+            if wf > 0 and front:
+                d = min(d, wf * _sample_grid(front, 0.5 - p[0] / W, v))   # the front view's left is the object's +X
+            if ws > 0 and side:
+                d = min(d, ws * _sample_grid(side, p[2] / L + 0.5, v))
+            row.append(d * meters)
+        offsets.append(row)
+    return offsets
+
 
 def _relief_refinement(relief_ops, length, perimeter):
     """
@@ -1307,7 +1643,22 @@ def _vertex_normals(mesh):
 # Spec -> geometry
 # ---------------------------------------------------------------------------
 
+def _loft_extent(sw):
+    """(smallest ring size, mean ring perimeter, length along z) of a loft's sections."""
+    sizes, perims = [], []
+    for sec in sw["sections"]:
+        pts = sec["points"]
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        sizes.append(min(max(xs) - min(xs), max(ys) - min(ys)))
+        perims.append(sum(math.hypot(pts[(j + 1) % len(pts)][0] - pts[j][0], pts[(j + 1) % len(pts)][1] - pts[j][1]) for j in range(len(pts))))
+    zs = [sec["z"] for sec in sw["sections"]]
+    return min(sizes), sum(perims) / len(perims), max(zs) - min(zs)
+
+
 def _estimate_area(part):
+    if part.get("sweep") and "sections" in part["sweep"]:
+        _, perim, length = _loft_extent(part["sweep"])
+        return length * perim
     if part.get("sweep"):
         sw = part["sweep"]
         pts = sw["controlPoints"]
@@ -1384,8 +1735,140 @@ def build_meshes(spec):
     return _build_meshes(spec)[0]
 
 
+# ---------------------------------------------------------------------------
+# Blueprint lofts: sweep.fromBlueprint expanded into rings (the same slicing as blueprint-loft.ts loftSections)
+# ---------------------------------------------------------------------------
+
+LOFT_RING_POINTS = 48
+_LOFT_SIDE_LEVELS = 16
+_LOFT_MIN_SLICE = 0.01
+_LOFT_MAX_SECTIONS = 128
+
+
+def _round4(v):
+    # JavaScript's Math.round (halves toward +infinity), so the rings match blueprint-loft.ts to the last digit
+    return math.floor(v * 1e4 + 0.5) / 1e4 + 0.0
+
+
+def _interp_stations(stations, at, key, value):
+    if not stations:
+        return None
+    srt = sorted(stations, key=key)
+    if at <= key(srt[0]):
+        return value(srt[0])
+    if at >= key(srt[-1]):
+        return value(srt[-1])
+    for a, b in zip(srt, srt[1:]):
+        if at <= key(b):
+            w = (at - key(a)) / ((key(b) - key(a)) or 1.0)
+            return value(a) + (value(b) - value(a)) * w
+    return None
+
+
+def _resample_ring(points, count):
+    closed = list(points) + [points[0]]
+    acc = [0.0]
+    for i in range(1, len(closed)):
+        acc.append(acc[-1] + math.hypot(closed[i][0] - closed[i - 1][0], closed[i][1] - closed[i - 1][1]))
+    total = acc[-1]
+    out = []
+    seg = 1
+    for k in range(count):
+        s_ = total * k / count
+        while seg < len(acc) - 1 and acc[seg] < s_:
+            seg += 1
+        w = (s_ - acc[seg - 1]) / ((acc[seg] - acc[seg - 1]) or 1.0)
+        a, b = closed[seg - 1], closed[seg]
+        out.append([_round4(a[0] + (b[0] - a[0]) * w), _round4(a[1] + (b[1] - a[1]) * w)])
+    return out
+
+
+def loft_sections(outlines, loft=None):
+    """The rings of a blueprint loft, rear to front (blueprint-loft.ts loftSections)."""
+    loft = loft or {}
+    front = outlines["front"]
+
+    def front_half(y):
+        v = _interp_stations(front, y, lambda s: s["y"], lambda s: s["halfWidth"])
+        return v if v is not None else 0.0
+
+    sections = []
+    for st in sorted(outlines["side"], key=lambda s: s["z"]):
+        z = st["z"]
+        if loft.get("zFromMeters") is not None and z < loft["zFromMeters"] - 1e-9:
+            continue
+        if loft.get("zToMeters") is not None and z > loft["zToMeters"] + 1e-9:
+            continue
+        plan = _interp_stations(outlines["plan"], z, lambda p: p["z"], lambda p: p["halfWidth"]) or 0.0
+        lo, hi = st["bottom"], st["top"]
+        if loft.get("yFromMeters") is not None:
+            lo = max(lo, loft["yFromMeters"])
+        if loft.get("yToMeters") is not None:
+            hi = min(hi, loft["yToMeters"])
+        if loft.get("fromTopMeters") is not None:
+            lo = max(lo, st["top"] - loft["fromTopMeters"])
+        if loft.get("clearTopMeters") is not None:
+            hi = min(hi, st["top"] - loft["clearTopMeters"])
+        for c in loft.get("clearances") or []:
+            dz = z - c["zMeters"]
+            if abs(dz) < c["radiusMeters"]:
+                lo = max(lo, c["yMeters"] + math.sqrt(c["radiusMeters"] ** 2 - dz * dz))
+        if hi - lo < _LOFT_MIN_SLICE:
+            continue
+        inset = loft.get("insetMeters") or 0.0
+        ys = [lo + (hi - lo) * i / (_LOFT_SIDE_LEVELS - 1) for i in range(_LOFT_SIDE_LEVELS)]
+        halves = [min(plan, front_half(y)) - inset for y in ys]
+        if max(halves) < _LOFT_MIN_SLICE:
+            continue
+        h = [max(v, _LOFT_MIN_SLICE / 2) for v in halves]
+        ring = [(0.0, lo)] + [(h[i], ys[i]) for i in range(len(ys))] + [(0.0, hi)] + [(-h[i], ys[i]) for i in range(len(ys) - 1, -1, -1)]
+        sections.append({"z": _round4(z), "points": _resample_ring(ring, LOFT_RING_POINTS)})
+    if len(sections) > _LOFT_MAX_SECTIONS:
+        keep = []
+        for i in range(_LOFT_MAX_SECTIONS):
+            k = int(math.floor(i * (len(sections) - 1) / float(_LOFT_MAX_SECTIONS - 1) + 0.5))
+            if k not in keep:
+                keep.append(k)
+        sections = [sections[k] for k in keep]
+    return sections
+
+
+def expand_blueprint(spec):
+    """The spec with every sweep.fromBlueprint turned into rings (sweep.sections) from spec["blueprint"]."""
+    if not isinstance(spec, dict) or not isinstance(spec.get("parts"), list):
+        return spec
+    if not any(isinstance(p, dict) and isinstance(p.get("sweep"), dict) and "fromBlueprint" in p["sweep"] for p in spec["parts"]):
+        return spec
+    outlines = spec.get("blueprint")
+    if not isinstance(outlines, dict):
+        raise SpecError(["the spec has parts with sweep.fromBlueprint but no blueprint outlines to loft them from"])
+    parts = []
+    for p in spec["parts"]:
+        sw = p.get("sweep") if isinstance(p, dict) else None
+        if not isinstance(sw, dict) or "fromBlueprint" not in sw:
+            parts.append(p)
+            continue
+        sections = loft_sections(outlines, sw["fromBlueprint"])
+        if len(sections) < 2:
+            raise SpecError(['part "%s": its slice of the blueprint (sweep.fromBlueprint) leaves fewer than two sections; widen its height band or span' % p.get("id")])
+        rest = dict((k, v) for k, v in sw.items() if k != "fromBlueprint")
+        rest["sections"] = sections
+        relief = outlines.get("relief") or {}
+        meters = sw["fromBlueprint"].get("reliefMeters")
+        if meters and (relief.get("front") or relief.get("side")):
+            rest["depthRelief"] = {"meters": float(meters), "sizeMeters": outlines["sizeMeters"],
+                                   "front": relief.get("front"), "side": relief.get("side")}
+        q = dict(p)
+        q["sweep"] = rest
+        parts.append(q)
+    out = dict((k, v) for k, v in spec.items() if k != "blueprint")
+    out["parts"] = parts
+    return out
+
+
 def _build_meshes(spec):
     """build_meshes, and the lift every part (and every crown's trunk base) was given so the lowest point rests on y = 0."""
+    spec = expand_blueprint(spec)
     problems = validate(spec)
     if problems:
         raise SpecError(problems)
@@ -1457,6 +1940,9 @@ def _build_meshes(spec):
                 raise SpecError(missed)
             if mod:
                 fields.append(_modulation_offsets(surface, mod))
+            depth = by_id[pid].get("sweep", {}).get("depthRelief") if by_id[pid].get("sweep") else None
+            if depth:
+                fields.append(_depth_relief_offsets(surface, depth))
             if fields:
                 offsets = [[0.0] * len(surface.vs) for _ in surface.us]
                 for field in fields:
@@ -1653,6 +2139,7 @@ def build(spec, clay=False):
     import scratchbox as sb
     vec3 = sb.math.Vec3
     scene = sb.Scene()
+    spec = expand_blueprint(spec)
     built, shift_y = _build_meshes(spec)   # validates first
     # crown parts are SB-Veggie trees, grown natively when the scene is written (studio clay or not: a tree's
     # leaves and bark come from the tree texture library by its foliage colour)
@@ -1661,6 +2148,7 @@ def build(spec, clay=False):
     materials = {} if clay else dict((p["id"], p.get("material")) for p in spec["parts"])
     # each surface part's edge radius, recorded on its material (generated: chosen for the look, never measured)
     edges = dict((p["id"], edge_radius(p)) for p in spec["parts"] if p.get("sweep") or p.get("revolve"))
+    cuts_of = dict((p["id"], p.get("cuts")) for p in spec["parts"] if p.get("cuts"))
     occlusion = _occlusion(sb, built)
     for (owner, positions, normals, triangles), occ in zip(built, occlusion):
         mesh = sb.geometry.Mesh(owner)
@@ -1670,13 +2158,24 @@ def build(spec, clay=False):
         for a, b, c in triangles:
             mesh.add_triangle(a, b, c)
         mesh.recompute_bounds()
+        # the part's cuts, subtracted from its solid by the native boolean (the mesh_edit tool's), in the built frame
+        cuts = cuts_of.get(owner) or []
+        for cut in cuts:
+            for mirror in [None] + ([cut["mirrorPlaneNormal"]] if _given(cut, "mirrorPlaneNormal") else []):
+                mesh = sb.geometry.boolean_mesh(mesh, _cut_solid(sb, cut, shift_y, mirror), "subtract")
+        if cuts:
+            mesh = _creased_mesh(sb, owner, mesh)
         # Assigned directly, not through apply_material, which also paints the base colour into the vertex colours:
         # glTF viewers multiply COLOR_0 by baseColorFactor, which would square every colour. The vertex colour carries
         # only the grey ambient occlusion, which darkens creases without changing the part's colour.
         mesh.material = part_material(sb, owner, materials.get(owner))
+        extras = {}
         if owner in edges:
             radius, source = edges[owner]
-            mesh.material.extras_json = json.dumps({"scratchbox": {"edge": {
-                "radiusMeters": round(radius, 4), "source": source, "provenance": "generated"}}})
+            extras["edge"] = {"radiusMeters": round(radius, 4), "source": source, "provenance": "generated"}
+        if cuts:
+            extras["cuts"] = {"count": len(cuts), "provenance": "generated"}
+        if extras:
+            mesh.material.extras_json = json.dumps({"scratchbox": extras})
         scene.add_mesh(mesh)
     return scene
