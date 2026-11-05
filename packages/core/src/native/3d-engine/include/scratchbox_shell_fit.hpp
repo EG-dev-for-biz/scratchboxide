@@ -19,10 +19,15 @@
  *   1. skin      the triangles a ray can reach from outside (rays that leave the scan without hitting it), each turned to
  *                face the side it was seen from; hidden inner layers take no part;
  *   2. planes    area-weighted region growing over the skin, coplanar regions merged, least-squares refit; planes within
- *                `snapDeg` of vertical or level are made exactly so; kept by support area (`minPlaneAreaM2`, `maxPlanes`);
+ *                `snapDeg` of vertical or level are made exactly so, and a plane within `alignDeg` of a larger plane's
+ *                direction takes it (two fits of one warped wall never cross); kept by support area (`minPlaneAreaM2`,
+ *                `maxPlanes`);
  *   3. cells     an adaptive binary space partition of the bounding volume (its floor at the ground datum): a convex
  *                cell is split by the plane with the most support area inside it, until no plane has `minSplitAreaM2`
- *                there. A plane therefore cuts only where its own scan passes;
+ *                there. A plane therefore cuts only where its own scan passes. Such a cell can still hold both solid and
+ *                air (a shaft under a top no plane explains), so a cell whose sample points vote both ways is split again:
+ *                by the fitted plane, continued into it, that best parts its inside samples from its outside ones, else by a
+ *                plane placed between them (no scan of its own: its faces come out generated);
  *   4. labels    each cell is inside or outside: rays from points in the cell vote by the side of the skin they first
  *                meet (its back: inside; its front, or nothing: outside; nothing below: no vote, the scan is open at the
  *                bottom), then a minimum cut over the cell graph, where cutting a face costs its area less the share of
@@ -36,6 +41,11 @@
  * provenance label: `measured` where that share reaches `measuredShare`, else `generated` (the solver closed a gap; the
  * reason is that no scan lies within the tolerance). Nothing here names a kind of building or part: the inputs are
  * triangles and tolerances in metres, the outputs planes, cells and distances.
+ *
+ * Known limits of the prototype (2026-11-05, ESB and 2 Penn Plaza): tapered and round parts no plane explains become
+ * a prism between placed planes (the ESB's mast) or stay residual; thin open structures (a canopy) are residual, not solid;
+ * a gap with no plane beyond it is closed at the bounding volume's margin; a few edges where two cells meet only along
+ * a line are non-manifold (reported, not repaired); facade relief under `growDistM` is flattened away.
  *
  * Frame: y up, metres (the tile frame).
  */
