@@ -30,7 +30,8 @@
  *  10. agreed gaps no close may move are bridged by the strip fill, drawn with a material labelled generated;
  *  11. the node -> tile file the service writes for the CLI;
  *  12. the tone feather: two tiles' photos of one wall, cut across by their boxes, levelled toward each other at the cut,
- *      faded out away from it, labelled, and left alone without boxes or when switched off.
+ *      faded out away from it, labelled, and left alone without boxes or when switched off;
+ *  13. the cap trim: the strips two tiles carry back to back in their shared cut plane go, the walls stay.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -509,5 +510,28 @@ describe('tile_seam_weld tone feather: two tiles\' photos levelled toward each o
         const nb = await runTileSeamWeld({ inputGlb: noBox, outputGlb: path.join(WORK, 'tone_nobox_welded.glb'), threads: 2, repoRoot: REPO });
         expect(nb.tone).toBeUndefined();
         for (const { rows } of rowMeans(path.join(WORK, 'tone_off.glb'))) expect(new Set(rows.map(x => Math.round(x.v))).size).toBe(1);
+    });
+
+    it('removes the caps two tiles carry back to back in their shared cut plane, and keeps the walls', async () => {
+        // tile A: the wall below y = 5 and its cap (facing up, 2 m back from the wall); tile B: the wall above and its cap (facing down)
+        const join = (a: Chunk, b: Chunk): Chunk => ({ positions: [...a.positions, ...b.positions], indices: [...a.indices, ...b.indices.map(i => i + a.positions.length / 3)] });
+        const a = join(quad([0, 0, 0], [10, 0, 0], [0, 5, 0], 10, 5), flat(0, 10, -2, 0, 5, 4));
+        const b = join(quad([0, 5, 0], [10, 0, 0], [0, 5, 0], 10, 5), quad([0, 5, -2], [10, 0, 0], [0, 0, 2], 4, 4));
+        const tiles = [{ leafId: 'a', geometricErrorM: 2, box: [5, 2.5, -1, 5, 0, 0, 0, 2.5, 0, 0, 0, 1] }, { leafId: 'b', geometricErrorM: 2, box: [5, 7.5, -1, 5, 0, 0, 0, 2.5, 0, 0, 0, 1] }];
+        const input = path.join(WORK, 'caps.glb'), output = path.join(WORK, 'caps_welded.glb');
+        writeGlb(input, [a, b], [], tiles, { localToEcef: IDENTITY });
+        const horizontal = (file: string) => triangles(file).filter(t => t.every(p => Math.abs(p[1] - 5) < 1e-4)).length;
+        expect(horizontal(input)).toBe(64);
+        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, threads: 2, repoRoot: REPO });
+        expect(r.capTrim).toMatchObject({ sharedFaces: 2, candidates: 64, trianglesDropped: 64 });
+        expect(r.capTrim!.areaM2).toBeCloseTo(40, 3);
+        expect(horizontal(output)).toBe(0);
+        expect(triangles(output).length).toBe(200);   // the two walls, whole
+        expect(r.cuts).toHaveLength(1);
+        expect(r.cuts![0]).toMatchObject({ o: 5 });
+        // switched off, the caps stay
+        const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'caps_off.glb'), caps: false, threads: 2, repoRoot: REPO });
+        expect(off.capTrim).toBeUndefined();
+        expect(horizontal(path.join(WORK, 'caps_off.glb'))).toBeGreaterThan(0);
     });
 });

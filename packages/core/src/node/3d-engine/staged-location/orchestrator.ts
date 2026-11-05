@@ -94,7 +94,7 @@ import { fittedPlanesOf, fittedWindowRects, fitWindowsForOrthos, openingSegmente
 import { readWallGrammar, WALL_GRAMMAR_FILE, WALL_GRAMMAR_VERSION, type WallGrammarFile } from './wall-grammar';
 import { buildWallSheets, WALL_SHEETS_VERSION, type WallSheet } from './wall-sheets';
 import { decodePng as decodePngForGrammar } from '../../texture-processing';
-import { TILE_SEAMS_VERSION, type TileSeamCut, type TileSeamWeldRequest, type TileSeamWeldResult } from '../tile-seam-weld-service';
+import { TILE_SEAMS_VERSION, type TileSeamWeldRequest, type TileSeamWeldResult } from '../tile-seam-weld-service';
 import { measureRevealDepth, REVEAL_DEPTH_VERSION, type RevealFacade, type RevealView } from './reveal-depth';
 import { streetViewClayScores, visibleDefects } from './remesh-scores';
 import { decodeJpegInMemory } from './photo-palette';
@@ -204,7 +204,7 @@ import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { stagedModelService } from './staged-switches';
-import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD, TILE_CUT_BAND } from './pipeline-k/pipeline-k';
+import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
 import { districtBuildingIndex, districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
 import { chunkCpuShare, chunkOwner, chunkParallel, kdCentreRunner, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
 import { createChunkJoiner } from './pipeline-k/chunk-join-worker';
@@ -1608,8 +1608,6 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     // the vision model's answers kept between builds (pipeline-k/model-readings.ts), one store a run; one this workspace
     // lacks is read back from the cache mirror's bucket before the model is asked (stage-cache.ts restoreFile)
     let readingStore: ReturnType<typeof fileReadingStore> | undefined;
-    /** The Google tile cuts of the run's extraction (the tile seam stage's report), for pipeline K to read past. */
-    let tileSeamCuts: TileSeamCut[] | undefined;
     const modelReadingsStore = () => (readingStore ??= fileReadingStore(path.join(cache.dir, MODEL_READINGS_DIR), { restore: rel => cache.restoreFile(`${MODEL_READINGS_DIR}/${rel}`) }));
     const runId = deps.newRunId?.() ?? crypto.randomBytes(4).toString('hex');
     cache.activeRunId = runId;
@@ -2325,27 +2323,30 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const ad = process.env.SCRATCHBOX_TILE_SEAM_ADAPTIVE?.trim() === '1';
                     // the tiles' photos levelled toward each other across their cuts unless switched off (SCRATCHBOX_TILE_SEAM_TONE=0)
                     const tn = process.env.SCRATCHBOX_TILE_SEAM_TONE?.trim() !== '0';
-                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}${ad ? '_ad' : ''}${tn ? '' : '_notone'}`, dir = path.dirname(raw.texturedGlb);
+                    // the caps two tiles carry in a shared cut plane removed unless switched off (SCRATCHBOX_TILE_SEAM_CAPS=0)
+                    const cp = process.env.SCRATCHBOX_TILE_SEAM_CAPS?.trim() !== '0';
+                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}${ad ? '_ad' : ''}${tn ? '' : '_notone'}${cp ? '' : '_caps'}`, dir = path.dirname(raw.texturedGlb);
                     const tex = path.join(dir, `textured_${tag}.glb`), clay = path.join(dir, `geometry_${tag}.glb`), report = path.join(dir, `seams_${tag}.json`);
                     try {
                         if (!(fs.existsSync(tex) && fs.existsSync(clay) && fs.existsSync(report))) {
                             // written under temporary names and renamed: a build reading the same extraction never sees half a file
                             const sfx = `.tmp-${process.pid}-${Date.now()}`;
-                            const r = await deps.tileSeams({ inputGlb: raw.texturedGlb, outputGlb: tex + sfx, outputClayGlb: clay + sfx, tJunctions: tj, overlapTrim: ov, adaptive: ad, tone: tn, defaultGeometricErrorM: raw.leafGeometricErrorM, timeoutMs: 600_000 });
+                            const r = await deps.tileSeams({ inputGlb: raw.texturedGlb, outputGlb: tex + sfx, outputClayGlb: clay + sfx, tJunctions: tj, overlapTrim: ov, adaptive: ad, tone: tn, caps: cp, defaultGeometricErrorM: raw.leafGeometricErrorM, timeoutMs: 600_000 });
                             fs.renameSync(tex + sfx, tex); fs.renameSync(clay + sfx, clay);
                             fs.writeFileSync(report, JSON.stringify({ version: TILE_SEAMS_VERSION, ...r }));
                         }
                         const r = JSON.parse(fs.readFileSync(report, 'utf8')) as TileSeamWeldResult;
-                        const sw = r.seamWeld, tjs = r.tJunctions, ot = r.overlapTrim, ac = r.adaptive, sf = r.stripFill, au = r.seamAudit, tf = r.tone;
+                        const sw = r.seamWeld, tjs = r.tJunctions, ot = r.overlapTrim, ac = r.adaptive, sf = r.stripFill, au = r.seamAudit, tf = r.tone, ct = r.capTrim;
                         cache.writeRunNote(runId, 'tile_seams', {
                             version: TILE_SEAMS_VERSION, raw: raw.texturedGlb, inputTriangles: r.inputTriangles, outputTriangles: r.outputTriangles, toleranceM: r.toleranceM, seamWeld: sw,
                             ...(ot ? { overlapTrim: ot } : {}), ...(tjs ? { tJunctions: tjs } : {}), ...(ac ? { adaptive: ac } : { adaptive: false }), ...(sf ? { stripFill: sf } : {}),
-                            ...(r.tiles ? { tiles: r.tiles } : {}), ...(au ? { seamAudit: au } : {}), ...(tf ? { tone: tf } : tn ? {} : { tone: false }), ms: r.ms
+                            ...(r.tiles ? { tiles: r.tiles } : {}), ...(au ? { seamAudit: au } : {}), ...(tf ? { tone: tf } : tn ? {} : { tone: false }), ...(ct ? { capTrim: ct } : cp ? {} : { capTrim: false }), ms: r.ms
                         });
                         // open seam length (km) under 3 cm / 3-10 / 10-30 / 30-100 cm / no other tile within 1 m
                         const km = (a: { bandLengthM: number[] }) => a.bandLengthM.map(v => (v / 1000).toFixed(1)).join(' / ');
                         run.note(PROVENANCE.asScanned, `tile seams closed (${TILE_SEAMS_VERSION}, within ${Math.round(r.toleranceM * 100)} cm` +
                             `${ac ? `, and up to ${Math.round(ac.maxToleranceM * 100)} cm where the two tiles' surfaces agree` : ''}, nothing moved further): ` +
+                            `${ct && ct.trianglesDropped ? `${Math.round(ct.areaM2).toLocaleString('en-US')} m² of the tiles' caps (the strips two tiles carry back to back in a shared cut plane) removed, ` : ''}` +
                             `${ot ? `${Math.round(ot.areaM2)} m² of doubled surface trimmed, ` : ''}${sw.groupsWelded.toLocaleString('en-US')} border points welded to the next tile's, ` +
                             `${tjs ? `${tjs.closed.toLocaleString('en-US')} T-junctions split into the next tile's edge, ` : ''}${sw.trianglesDropped.toLocaleString('en-US')} collapsed slivers dropped` +
                             `${ac ? `; ${(ac.splitsClosed + ac.vertexMoves).toLocaleString('en-US')} wider gaps closed of ${ac.agreed.toLocaleString('en-US')} where the surfaces agree (${ac.candidates.toLocaleString('en-US')} looked at)` : ''}` +
@@ -2425,11 +2426,6 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         if (tiles.value) ctx.onFrame?.({ lat: placeValue!.lat, lng: placeValue!.lng, originEllipsoidalHeightM: tiles.value.extraction.originEllipsoidalHeightM });
         if (tiles.status === 'stopped' || !tiles.value) throw new StagedLocationHardFailure('tiles', 'run_deadline', `The run reached its time limit before any tiles were extracted, so there is nothing to show.`);
         const t = tiles.value;
-        // the tile cuts the seam stage found, from its report beside the welded scan (cached or not)
-        try {
-            const tex = t.extraction.texturedGlb, report = path.join(path.dirname(tex), path.basename(tex).replace(/^textured_/, 'seams_').replace(/\.glb$/, '.json'));
-            if (path.basename(tex).startsWith('textured_') && fs.existsSync(report)) tileSeamCuts = (JSON.parse(fs.readFileSync(report, 'utf8')) as TileSeamWeldResult).cuts;
-        } catch { tileSeamCuts = undefined; }
 
         // ---------------- vehicles (vehicle-removal.ts): every later stage builds on the scan without them ----------------
         /** The vehicle step's report once it has committed: its readings of fixtures keep the street residue off them. */
@@ -4476,10 +4472,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // the facades' small holes no real source covers: inpainted by the image model when the build has one
                         // (capped per build, pipeline-k.ts HOLE_INPAINT); SCRATCHBOX_K_HOLE_INPAINT=0 off
                         const holeInpaint = deps.textures?.enhance && process.env.SCRATCHBOX_K_HOLE_INPAINT?.trim() !== '0' ? { client: deps.textures.enhance, models: [LIGHTING_MODEL_LITE] } : undefined;
-                        // a band along each Google tile cut unread (the two tiles' photos meet there unaligned); SCRATCHBOX_K_TILE_CUT_BANDS=0 off
-                        const tileCuts = process.env.SCRATCHBOX_K_TILE_CUT_BANDS?.trim() !== '0' ? tileSeamCuts : undefined;
-                        const k = await timed('pipelineK', () => rectifyReliefOrthos(r.reliefOrthosDir!, { signal: io.signal, ...(cpuShare ? { threads: cpuShare.threads } : {}), ...(holeInpaint ? { inpaint: holeInpaint } : {}), ...(tileCuts?.length ? { tileCuts } : {}) }));
-                        if (k.tileCutBands?.texels) notes.note(PROVENANCE.generated, `pipeline K: a band of ${TILE_CUT_BAND.bandM * 100} cm either side of the Google tile cuts crossing ${k.tileCutBands.facades} facades read past (${k.tileCutBands.texels.toLocaleString('en-US')} texels: the two tiles' photos meet there unaligned): the windows and the wall's rhythm continued over it from the facade's repeats (generated), the photo kept`);
+                        const k = await timed('pipelineK', () => rectifyReliefOrthos(r.reliefOrthosDir!, { signal: io.signal, ...(cpuShare ? { threads: cpuShare.threads } : {}), ...(holeInpaint ? { inpaint: holeInpaint } : {}) }));
                         orthosKey = `${PIPELINE_K_VERSION}:${k.key}`;
                         r = { ...r, reliefOrthosDir: k.orthosDir };
                         notes.write('pipeline_k', { version: PIPELINE_K_VERSION, orthosDir: k.orthosDir, cached: k.cached, ms: k.ms, reports: k.reports });

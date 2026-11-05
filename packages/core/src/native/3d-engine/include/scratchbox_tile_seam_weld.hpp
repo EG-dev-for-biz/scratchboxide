@@ -51,7 +51,8 @@
  * errors, capped, only where the two surfaces agree (same facing, parallel borders, no step: each surface carried across
  * the seam meets the other); the strip fill (fillStrips) bridges, with thin triangles labelled generated, the agreed gaps a
  * move would have distorted. The seam audit (auditSeams) measures the open border by its gap to the nearest other tile,
- * inside the extraction's cut border, before and after. Last, the seam tone feather (featherSeamTone) levels the two tiles'
+ * inside the extraction's cut border, before and after. First of all, where the tiles' boxes are known, the caps two tiles
+ * carry back to back in a shared cut plane are removed (trimCapsByBox). Last, the seam tone feather (featherSeamTone) levels the two tiles'
  * photos' colour toward each other on the surfaces crossing every cut their boxes share, faded out over a band.
  * Why it runs where it runs: scratchbox_scan_rectifier.hpp's own D1 weld (weldEpsilon, 1 mm) is far
  * tighter than a 1-3 cm tile seam, and its D4 orientation-family vote and D5 planar regions run four
@@ -318,11 +319,25 @@ struct TileSeamFillStats {
     size_t refused{0};
 };
 
+/** A source tile's bounding box in the mesh's frame: its centre and three half-axes (the tileset's, taken into the frame). */
+struct TileBox { V3 c; V3 h[3]; bool valid{false}; };
+
+/** The cap removal (TileSeamWeld::trimCapsByBox): continuous metric tolerances only. */
+struct TileCapParams {
+    /** A cap lies within this of its box face (the tileset's boxes bound the cut a few centimetres loose). */
+    double capPlaneM{0.15};
+    double capFacingCos{0.97};
+    /** Two boxes' faces are one cut when their planes lie within this. */
+    double faceMatchM{0.12};
+    /** The neighbour's cap backs this one within this. */
+    double backingM{0.30};
+    int threads{0};
+};
+struct TileCapStats { size_t sharedFaces{0}; size_t candidates{0}; size_t trianglesDropped{0}; double areaM2{0}; };
+
 // ============================================================================
 // Seam tone feather: the two tiles' photos levelled toward each other across every cut two tiles share
 // ============================================================================
-/** A source tile's bounding box in the mesh's frame: its centre and three half-axes (the tileset's, taken into the frame). */
-struct TileBox { V3 c; V3 h[3]; bool valid{false}; };
 
 struct TileSeamToneParams {
     /** Two boxes' faces are one cut when their planes lie within this (the tileset's boxes are 5-10 cm loose). */
@@ -800,6 +815,131 @@ public:
             compactDropped(mesh, keep, sideArrays);
         }
         (void)V;
+        return st;
+    }
+
+    /**
+     * Cap removal, first: a tile arrives cut along its box and capped, so where two tiles' boxes share a face, each tile
+     * carries a strip lying in that face, back to back with the other's. The strips are inside the surface and stand
+     * between the two walls the cut divides, so the walls never meet: from outside the seam reads as a hairline lip.
+     * A triangle goes when it lies on a face its tile's box shares with another tile's box (facing along the face's normal
+     * within capFacingCos, every corner within capPlaneM of the face) and the other tile backs it there (a triangle of it
+     * lying on the same face, facing the other way, within backingM of this one's centroid, which projects inside it).
+     * Both tiles' caps go together. On the raw scan nothing shows (the caps are inside); in a rebuilt building the facade's
+     * bays are recessed behind the scan's wall plane and each cap stands out across them as a slot at the cut's height. tileBoxes: per tile, its box's centre and three half-axes in the mesh's frame (empty half-axes:
+     * no box, nothing removed for that tile). Removes triangles only (side arrays in lockstep).
+     */
+    static TileCapStats trimCapsByBox(geometry::ScratchboxMesh& mesh, std::vector<std::vector<uint32_t>*> sideArrays, const std::vector<uint32_t>& triTileIn,
+                                      const std::vector<TileBox>& boxes, const TileCapParams& p = {}) {
+        TileCapStats st;
+        const std::vector<uint32_t> triTile = triTileIn;
+        const size_t F = mesh.indices.size() / 3;
+        if (triTile.size() != F) return st;
+        auto vp = [&](uint32_t v) { const auto& q = mesh.vertices[v].position; return V3{q.x, q.y, q.z}; };
+        // the faces of every box: outward unit normal u, offset o (u . x = o), its centre and in-plane half extents
+        struct Face { uint32_t tile; V3 u, c, a, b; double o, ha, hb; std::vector<uint32_t> nbr; };
+        std::vector<Face> faces;
+        std::vector<std::vector<uint32_t>> facesOf(boxes.size());
+        for (uint32_t t = 0; t < boxes.size(); ++t) {
+            const TileBox& B = boxes[t];
+            if (!B.valid) continue;
+            for (int k = 0; k < 3; ++k) for (int s = -1; s <= 1; s += 2) {
+                const double hk = B.h[k].norm();
+                if (!(hk > 1e-6)) continue;
+                Face f;
+                f.tile = t;
+                f.u = B.h[k] * (s / hk);
+                f.c = B.c + B.h[k] * s;
+                f.o = f.u.dot(f.c);
+                f.a = B.h[(k + 1) % 3]; f.b = B.h[(k + 2) % 3];
+                f.ha = f.a.norm(); f.hb = f.b.norm();
+                if (f.ha > 1e-9) f.a = f.a * (1.0 / f.ha);
+                if (f.hb > 1e-9) f.b = f.b * (1.0 / f.hb);
+                facesOf[t].push_back(static_cast<uint32_t>(faces.size()));
+                faces.push_back(f);
+            }
+        }
+        // shared: another box's face on the same plane, facing the other way, whose rectangle overlaps this one's
+        auto overlaps = [](const Face& f, const Face& g) {
+            // g's rectangle corners in f's in-plane axes, against f's half extents
+            double lo[2] = {1e300, 1e300}, hi[2] = {-1e300, -1e300};
+            for (int i = -1; i <= 1; i += 2) for (int j = -1; j <= 1; j += 2) {
+                const V3 q = g.c + g.a * (i * g.ha) + g.b * (j * g.hb) - f.c;
+                const double x = q.dot(f.a), y = q.dot(f.b);
+                lo[0] = std::min(lo[0], x); hi[0] = std::max(hi[0], x); lo[1] = std::min(lo[1], y); hi[1] = std::max(hi[1], y);
+            }
+            const double m = 0.05;
+            return lo[0] < f.ha - m && hi[0] > -f.ha + m && lo[1] < f.hb - m && hi[1] > -f.hb + m;
+        };
+        for (auto& f : faces) {
+            for (const auto& g : faces) {
+                if (g.tile == f.tile || f.u.dot(g.u) > -0.995 || std::abs(f.o + g.o) > p.faceMatchM) continue;
+                if (overlaps(f, g)) f.nbr.push_back(g.tile);
+            }
+            if (!f.nbr.empty()) ++st.sharedFaces;
+        }
+        // candidates: triangles lying on one of their tile's shared faces
+        std::vector<int32_t> onFace(F, -1);
+        for (size_t t = 0; t < F; ++t) {
+            const uint32_t tile = triTile[t];
+            if (tile >= facesOf.size()) continue;
+            const V3 a = vp(mesh.indices[3 * t]), b = vp(mesh.indices[3 * t + 1]), c = vp(mesh.indices[3 * t + 2]);
+            V3 n = (b - a).cross(c - a);
+            const double nl = n.norm();
+            if (!(nl > 1e-12)) continue;
+            n = n * (1.0 / nl);
+            for (uint32_t fi : facesOf[tile]) {
+                const Face& f = faces[fi];
+                if (f.nbr.empty() || std::abs(n.dot(f.u)) < p.capFacingCos) continue;
+                if (std::abs(f.u.dot(a) - f.o) > p.capPlaneM || std::abs(f.u.dot(b) - f.o) > p.capPlaneM || std::abs(f.u.dot(c) - f.o) > p.capPlaneM) continue;
+                onFace[t] = static_cast<int32_t>(fi);
+                ++st.candidates;
+                break;
+            }
+        }
+        // backing: a neighbour's candidate on a matching face, facing the other way, under this one's centroid
+        const double cell = std::max(1.0, p.backingM);
+        auto ci = [&](double v) { return static_cast<int64_t>(std::floor(v / cell)); };
+        std::unordered_map<int64_t, std::vector<uint32_t>, scan_rectifier::detail::CellKeyHash> grid;
+        for (size_t t = 0; t < F; ++t) {
+            if (onFace[t] < 0) continue;
+            const V3 a = vp(mesh.indices[3 * t]), b = vp(mesh.indices[3 * t + 1]), c = vp(mesh.indices[3 * t + 2]);
+            const int64_t x0 = ci(std::min({a.x, b.x, c.x}) - p.backingM), x1 = ci(std::max({a.x, b.x, c.x}) + p.backingM), y0 = ci(std::min({a.y, b.y, c.y}) - p.backingM), y1 = ci(std::max({a.y, b.y, c.y}) + p.backingM), z0 = ci(std::min({a.z, b.z, c.z}) - p.backingM), z1 = ci(std::max({a.z, b.z, c.z}) + p.backingM);
+            if ((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > 4096) continue;
+            for (int64_t x = x0; x <= x1; ++x) for (int64_t y = y0; y <= y1; ++y) for (int64_t z = z0; z <= z1; ++z) grid[scan_rectifier::detail::cellKey(x, y, z)].push_back(static_cast<uint32_t>(t));
+        }
+        std::vector<uint8_t> drop(F, 0);
+        const unsigned threads = scan_rectifier::detail::resolveThreads(p.threads);
+        scan_rectifier::detail::parallelFor(F, threads, 1024, [&](size_t i0, size_t i1, unsigned) {
+            for (size_t t = i0; t < i1; ++t) {
+                if (onFace[t] < 0) continue;
+                const Face& f = faces[static_cast<size_t>(onFace[t])];
+                const V3 a = vp(mesh.indices[3 * t]), b = vp(mesh.indices[3 * t + 1]), c = vp(mesh.indices[3 * t + 2]);
+                const V3 g = (a + b + c) * (1.0 / 3.0);
+                const V3 n = (b - a).cross(c - a).normalized();
+                auto it = grid.find(scan_rectifier::detail::cellKey(ci(g.x), ci(g.y), ci(g.z)));
+                if (it == grid.end()) continue;
+                for (uint32_t u : it->second) {
+                    if (triTile[u] == triTile[t] || std::find(f.nbr.begin(), f.nbr.end(), triTile[u]) == f.nbr.end()) continue;
+                    const V3 ua = vp(mesh.indices[3 * u]), ub = vp(mesh.indices[3 * u + 1]), uc = vp(mesh.indices[3 * u + 2]);
+                    const V3 m = (ub - ua).cross(uc - ua).normalized();
+                    if (m.dot(n) > -p.capFacingCos) continue;
+                    const double d = (g - ua).dot(m);
+                    if (std::abs(d) > p.backingM) continue;
+                    const V3 r = g - m * d;
+                    if ((ub - ua).cross(r - ua).dot(m) < 0 || (uc - ub).cross(r - ub).dot(m) < 0 || (ua - uc).cross(r - uc).dot(m) < 0) continue;
+                    drop[t] = 1;
+                    break;
+                }
+            }
+        });
+        std::vector<uint8_t> keep(F, kFlagKeep);
+        for (size_t t = 0; t < F; ++t) if (drop[t]) {
+            keep[t] = kFlagHidden; ++st.trianglesDropped;
+            const V3 a = vp(mesh.indices[3 * t]), b = vp(mesh.indices[3 * t + 1]), c = vp(mesh.indices[3 * t + 2]);
+            st.areaM2 += 0.5 * (b - a).cross(c - a).norm();
+        }
+        if (st.trianglesDropped) compactDropped(mesh, keep, sideArrays);
         return st;
     }
 

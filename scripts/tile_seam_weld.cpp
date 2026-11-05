@@ -22,7 +22,7 @@
  *
  * usage: tile_seam_weld --input <scan.glb> [--out <welded.glb>] [--out-clay <welded_clay.glb>] [--stats <stats.json>]
  *                       [--tolerance M] [--no-drop] [--no-overlap-trim] [--no-tjunctions] [--threads N]
- *                       [--tiles <tiles.txt>] [--adaptive-cap M] [--max-turn-deg D] [--no-adaptive] [--no-fill] [--no-tone] [--audit-only]
+ *                       [--tiles <tiles.txt>] [--adaptive-cap M] [--max-turn-deg D] [--no-adaptive] [--no-fill] [--no-caps] [--no-tone] [--audit-only]
  *
  * --tiles names each glTF node's source tile and its stated geometric error (a line "<nodes>", then one "<tile> <errorM>"
  * line per node, errorM <= 0 when unknown, optionally followed by the tile's box in the scan's frame: centre and three half-axes);
@@ -66,6 +66,7 @@ static void usage() {
         "  --max-turn-deg D   an adaptive close turning a triangle by more than D degrees is left to the strip fill (default 25)\n"
         "  --no-adaptive      no adaptive close (the fixed passes only)\n"
         "  --no-fill          no strip fill\n"
+        "  --no-caps          keep the caps two tiles carry back to back in their shared cut plane (needs boxes in the tiles file)\n"
         "  --no-tone          do not level the tiles' photos' colour across their cuts (needs boxes in the tiles file)\n"
         "  --audit-only       measure the scan's seams and write the report; no pass runs\n";
 }
@@ -120,7 +121,7 @@ int main(int argc, char** argv) {
     TileSeamWeldParams p;
     TileSeamCloseParams cp;
     TileSeamAdaptiveParams ap;
-    bool drop = true, trim = true, tjunctions = true, adaptive = true, fill = true, tone = true, auditOnly = false;
+    bool drop = true, trim = true, tjunctions = true, adaptive = true, fill = true, tone = true, caps = true, auditOnly = false;
     double overlapTol = -1;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -143,6 +144,7 @@ int main(int argc, char** argv) {
         else if (a == "--no-adaptive") adaptive = false;
         else if (a == "--no-fill") fill = false;
         else if (a == "--no-tone") tone = false;
+        else if (a == "--no-caps") caps = false;
         else if (a == "--audit-only") auditOnly = true;
         else if (a == "--help" || a == "-h") { usage(); return 0; }
         else { std::cerr << "unknown argument " << a << "\n"; usage(); return 2; }
@@ -211,6 +213,11 @@ int main(int argc, char** argv) {
     cp.overlapToleranceM = overlapTol >= 0 ? overlapTol : p.weldToleranceM;
     cp.threads = p.threads;
     scratchbox::tile_seam_weld::TileSeamTrimStats trimStats;
+    // the caps two tiles carry back to back in a shared cut plane, by the tiles' boxes
+    scratchbox::tile_seam_weld::TileCapStats capStats;
+    bool anyBox = false;
+    for (const auto& b : tileBox) anyBox = anyBox || b.valid;
+    if (caps && anyBox) { scratchbox::tile_seam_weld::TileCapParams kp; kp.threads = p.threads; capStats = TileSeamWeld::trimCapsByBox(scene.mesh, {&scene.triangleMaterial, &triTile}, triTile, tileBox, kp); }
     if (trim) trimStats = TileSeamWeld::trimOverlaps(scene.mesh, {&scene.triangleMaterial, &triTile}, cp);
     // each vertex's piece before the weld joins pieces (the T-junction closure tells pieces apart by it); the trim joins nothing
     auto vertexPiece = TileSeamWeld::vertexPieces(scene.mesh);
@@ -296,6 +303,7 @@ int main(int argc, char** argv) {
     std::string js = "{\"ok\": true, \"input\": \"" + input + "\", \"inputTriangles\": " + std::to_string(inputTriangles) +
         ", \"outputTriangles\": " + std::to_string(outputTriangles) + ", \"toleranceM\": " + std::to_string(p.weldToleranceM) +
         ", \"dropSlivers\": " + (drop ? "true" : "false") + ", \"seamWeld\": {" + TileSeamWeld::statsJson(r.stats) + "}" +
+        (caps && anyBox ? ", \"capTrim\": {\"sharedFaces\": " + std::to_string(capStats.sharedFaces) + ", \"candidates\": " + std::to_string(capStats.candidates) + ", \"trianglesDropped\": " + std::to_string(capStats.trianglesDropped) + ", \"areaM2\": " + std::to_string(capStats.areaM2) + "}" : std::string()) +
         (trim ? ", \"overlapTrim\": {" + TileSeamWeld::trimStatsJson(trimStats) + "}" : std::string()) +
         (tjunctions ? ", \"tJunctions\": {" + TileSeamWeld::tJunctionStatsJson(tjStats) + "}" : std::string()) +
         (adaptive ? ", \"adaptive\": {\"capM\": " + std::to_string(ap.capM) + ", " + TileSeamWeld::adaptiveStatsJson(adStats) + "}" : std::string()) +
