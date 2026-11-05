@@ -181,6 +181,8 @@ describe('/3d/path-trace routes', () => {
         expect(first.json.snapshotId).toMatch(/^[0-9a-f]{32}$/);
         expect(first.json.sbvgUrl.startsWith(`${VIRTUAL_GEOMETRY_URL_PREFIX}/`)).toBe(true);
         expect(first.json.cached).toBe(false);
+        // Traced whole: the leaf clusters only, no LOD pyramid and no atlases.
+        expect(first.json.summary).toMatchObject({ levelCount: 1, atlasCount: 0 });
         expect(first.json.origin[0]).toBeCloseTo(100, 3);
         expect(first.json.origin[1]).toBeCloseTo(5, 3);
         expect(first.json.origin[2]).toBeCloseTo(-40, 3);
@@ -208,6 +210,21 @@ describe('/3d/path-trace routes', () => {
             // left in world coordinates would look at empty space 100 m away).
             expect(record.cut.triangles).toBeGreaterThan(1000);
             expect(record.geometryCoverage).toBeGreaterThan(0.25);
+
+            // A change of light reaches the open session with no capture and no build: a point light given in the
+            // GLB's world coordinates is moved into the file's by its origin, and the next view samples it.
+            const relit = await post('/lights', { sessionId, lighting: { studio: { radiance: [0, 0, 0] } }, lights: [{ position: [100, 5, -36], direction: [0, 0, -1], intensity: [20, 20, 20] }] });
+            expect(relit.status).toBe(200);
+            expect(relit.json).toMatchObject({ success: true, lights: 1 });
+            const view = await post('/view', { sessionId, width: 64, height: 48, camera, targetSpp: 4 });
+            expect(view.status).toBe(200);
+            expect(view.json.lights).toMatchObject({ sampling: true, points: 1, distant: 0 });
+            expect(view.json.lighting).toBe('studio');
+            const lampStill = await post('/render', { sessionId, width: 64, height: 48, samplesPerPixel: 8, camera, workspaceRoot, name: 'Lamp Sphere' });
+            expect(lampStill.status).toBe(200);
+            // Lit by the lamp alone in a black dome: the sphere is bright, the background black.
+            const lampRecord = JSON.parse(fs.readFileSync(path.join(workspaceRoot, lampStill.json.path.replace(/\.png$/, '.json')), 'utf8'));
+            expect(lampRecord.lighting).toMatchObject({ studio: { radiance: [0, 0, 0] } });
         } finally {
             await post('/close', { sessionId });
         }

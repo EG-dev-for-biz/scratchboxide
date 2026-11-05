@@ -30,7 +30,8 @@ import { RouteContext } from './types';
  *
  * POST /snapshot  body: a binary GLB (model/gltf-binary) of what a viewport shows
  *     -> { success, snapshotId, sbvgUrl, origin, cached, summary }  (built once per content; the newest 24 are kept)
- * POST /open   { sbvgUrl, sourceGlbPath?, workspaceRoot?, snapshotId?, lighting?, material? }
+ * POST /open   { sbvgUrl, sourceGlbPath?, workspaceRoot?, snapshotId?, lighting?, lights?, material? }
+ * POST /lights { sessionId, lighting?, lights? }  replaces the light without reopening (no rebuild); the next view uses it
  *     -> { success, sessionId, device, file, materials }        (503 with the reason when there is no ray tracing device)
  * POST /view   { sessionId, width, height, camera, lod?, maxBounces?, targetSpp? }
  *     -> { success, seq, cut, lighting, targetSpp }
@@ -120,7 +121,8 @@ export function createPathTraceRouter(service: MetalPathTracerService, ctx: Rout
                 fs.renameSync(`${file}.tmp`, file);
             }
             pruneSnapshots();
-            const built = await getVirtualGeometryBuildService().buildServed(file);
+            // Traced whole: the leaf clusters only, without the LOD pyramid and atlases that cost most of a build.
+            const built = await getVirtualGeometryBuildService().buildServed(file, { singleLevel: true });
             res.json({ success: true, snapshotId, sbvgUrl: built.sbvgUrl, origin: readSbvgOrigin(built.sbvgPath), cached: built.cached, summary: built.summary });
         } catch (err) {
             fail(res, err);
@@ -146,6 +148,7 @@ export function createPathTraceRouter(service: MetalPathTracerService, ctx: Rout
                 sbvgPath,
                 ...(glbPath ? { glbPath } : {}),
                 ...(body.lighting ? { lighting: body.lighting } : {}),
+                ...(Array.isArray(body.lights) ? { lights: body.lights } : {}),
                 ...(body.material ? { material: body.material } : {})
             });
             const sessionId = `pt${nextId++}`;
@@ -255,6 +258,7 @@ export function createPathTraceRouter(service: MetalPathTracerService, ctx: Rout
                 optimizations: { sampler: 'sobol' },
                 camera: body.camera,
                 ...(open.lighting ? { lighting: open.lighting } : {}),
+                ...(open.lights ? { lights: open.lights } : {}),
                 ...(open.glbPath ? { materials: { glbPath: open.glbPath } } : open.material ? { material: open.material } : {}),
                 ...(exposureEv !== undefined ? { exposureEv } : {})
             });
@@ -274,6 +278,24 @@ export function createPathTraceRouter(service: MetalPathTracerService, ctx: Rout
             fs.writeFileSync(target.replace(/\.png$/, '.json'), JSON.stringify(record, null, 2), 'utf8');
             fs.rmSync(outputDir, { recursive: true, force: true });
             res.json({ success: true, path: relative, stats: record });
+        } catch (err) {
+            fail(res, err);
+        }
+    });
+
+    router.post('/lights', async (req: Request, res: Response) => {
+        const body = req.body || {};
+        const session = sessions.get(String(body.sessionId ?? ''));
+        if (!session || !session.alive) {
+            res.status(404).json({ success: false, error: 'unknown or closed path tracing session; open it again' });
+            return;
+        }
+        try {
+            const updated = await session.setLights({
+                ...(body.lighting ? { lighting: body.lighting } : {}),
+                ...(Array.isArray(body.lights) ? { lights: body.lights } : {})
+            });
+            res.json({ success: true, ...updated });
         } catch (err) {
             fail(res, err);
         }

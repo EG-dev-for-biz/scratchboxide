@@ -259,6 +259,28 @@ std::vector<gltf::SceneLight> lightsInFile(const gltf::GltfScene& scene, const s
     return out;
 }
 
+/**
+ * Punctual lights given as JSON (MetalPathTracePunctualLight: position, direction, intensity, range, cone angles,
+ * distant), in the GLB's world coordinates, into the file's coordinates.
+ */
+std::vector<gltf::SceneLight> parseLights(const Json& list, const sbvg::File& file) {
+    const Vec3 origin(static_cast<float>(file.origin[0]), static_cast<float>(file.origin[1]), static_cast<float>(file.origin[2]));
+    std::vector<gltf::SceneLight> out;
+    for (const Json& l : list.arr) {
+        gltf::SceneLight light;
+        light.position = vec3Or(l["position"], Vec3(0, 0, 0)) - origin;
+        const Vec3 d = vec3Or(l["direction"], Vec3(0, 0, -1));
+        light.direction = d.lengthSquared() > 1e-20f ? d.normalized() : Vec3(0, 0, -1);
+        light.intensity = vec3Or(l["intensity"], Vec3(0, 0, 0));
+        light.range = std::max(0.0f, numberOr(l["range"], 0.0f));
+        light.outerConeAngle = std::clamp(numberOr(l["outerConeAngle"], 3.14159265f), 0.0f, 3.14159265f);
+        light.innerConeAngle = std::clamp(numberOr(l["innerConeAngle"], 0.0f), 0.0f, light.outerConeAngle);
+        light.distant = boolOr(l["distant"], false);
+        out.push_back(light);
+    }
+    return out;
+}
+
 std::string lightsJson(const render::lights::LightSet& set, bool sampling) {
     std::ostringstream s;
     s << "{\"sampling\":" << (sampling ? "true" : "false") << ",\"triangles\":" << set.triangleLights << ",\"points\":" << set.pointLights
@@ -364,7 +386,9 @@ int renderOnce(const std::string& configPath) {
         MaterialSource source;
         if (sceneMaterials) source = loadMaterials(materialsGlb, file, boolOr(config["materials"]["atlasNormals"], true));
         const bool sampleLights = boolOr(config["lighting"]["sampleLights"], true);
-        const std::vector<gltf::SceneLight> punctual = sampleLights && sceneMaterials ? lightsInFile(source.scene, file) : std::vector<gltf::SceneLight>{};
+        const std::vector<gltf::SceneLight> punctual = !sampleLights ? std::vector<gltf::SceneLight>{}
+            : config.has("lights") ? parseLights(config["lights"], file)
+            : sceneMaterials ? lightsInFile(source.scene, file) : std::vector<gltf::SceneLight>{};
         render::lights::LightSet usedLights;
 
         render::RenderOutput out;
@@ -552,6 +576,7 @@ int renderOnce(const std::string& configPath) {
  *       the eye moved more than a tenth of the scene radius or the LOD parameters changed
  *       -> {"event":"view","seq",..} then {"event":"frame","seq","spp","rays","gpuMs",..} as samples accumulate;
  *       each frame event means <dir>/frame.rgba holds the display-ready image (width * height * 4 bytes)
+ *   {"op":"lights","lighting"?:{..},"lights"?:[..]}  replaces the light (no rebuild) -> {"event":"lights","lights"}
  *   {"op":"pause"}  stops sampling the current view (the camera is moving) -> {"event":"paused","seq","spp"}
  *   {"op":"close"}  (or EOF) exits.
  * Errors come back as {"event":"error","message":..}; a failed open leaves the session without a file.
@@ -665,6 +690,7 @@ private:
             if (op == "open") open(cmd);
             else if (op == "view") view(cmd);
             else if (op == "pause") pause();
+            else if (op == "lights") setLights(cmd);
             else if (op == "close") closed_ = true;
             else throw std::runtime_error("unknown op: " + op);
         } catch (const std::exception& e) {
@@ -692,7 +718,8 @@ private:
         if (!tracer_) tracer_ = std::make_unique<metalpt::MetalPathTracer>();
         if (sceneMaterials_) tracer_->setMaterials(source_.scene);
         const bool sampleLights = boolOr(cmd["lighting"]["sampleLights"], true);
-        tracer_->setLights(sampleLights && sceneMaterials_ ? lightsInFile(source_.scene, file_) : std::vector<gltf::SceneLight>{});
+        tracer_->setLights(cmd.has("lights") ? parseLights(cmd["lights"], file_)
+                           : sceneMaterials_ ? lightsInFile(source_.scene, file_) : std::vector<gltf::SceneLight>{});
         tracer_->setLightSampling(sampleLights);
         opened_ = true;
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -803,6 +830,19 @@ private:
           << ",\"lighting\":" << jsonString(lighting_.lighting.mode == metalpt::Lighting::Mode::Sky ? "sky" : "studio")
           << ",\"lights\":" << lightsJson(tracer_->lightSet(), tracer_->lightSampling()) << ",\"targetSpp\":" << targetSpp_ << "}";
         emit(s.str());
+    }
+
+    /**
+     * New light for the open file: the sun and sky or dome (`lighting`) and the punctual lights (`lights`), each
+     * kept when absent. Nothing is rebuilt; the next view samples it.
+     */
+    void setLights(const Json& cmd) {
+        if (!opened_) throw std::runtime_error("open a file before lights");
+        if (cmd.has("lighting")) lightingConfig_ = serialize(cmd["lighting"]);
+        const bool sampleLights = boolOr(parseJson(lightingConfig_)["sampleLights"], true);
+        if (cmd.has("lights")) tracer_->setLights(parseLights(cmd["lights"], file_));
+        tracer_->setLightSampling(sampleLights);
+        emit("{\"event\":\"lights\",\"lights\":" + std::to_string(cmd["lights"].arr.size()) + "}");
     }
 
     /** Stops sampling (the viewer's camera is moving); the newest frame stays, and the next view starts afresh. */

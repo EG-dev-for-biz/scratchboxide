@@ -95,6 +95,8 @@ export interface MetalPathTraceRequest {
     material?: { albedo?: [number, number, number]; roughness?: number; metallic?: number };
     /** Shade with the materials and textures of the GLB the .sbvg (version 3) was built from, by the material ids it carries. */
     materials?: { glbPath: string };
+    /** The scene's punctual lights (in the GLB's coordinates); given, they stand in for the materials GLB's own. */
+    lights?: MetalPathTracePunctualLight[];
     /** Filter the render (GPU a-trous on the metal backend, the CPU filter on the cpu backend). */
     denoise?: boolean;
     /** With denoise on the metal backend, also run the CPU filter on the same raw frame and write denoised_cpu.f32. */
@@ -212,11 +214,30 @@ export interface MetalPathTraceResult {
     executionMs: number;
 }
 
+/**
+ * A punctual light in the materials GLB's world coordinates (gltf::SceneLight): a point light has no cone
+ * (outerConeAngle pi), a spot has one, a distant light shines along `direction` from infinity. `intensity` is the
+ * colour times the intensity: candela for point and spot, lux for distant.
+ */
+export interface MetalPathTracePunctualLight {
+    position: [number, number, number];
+    /** The unit direction the light travels (a spot's axis, a distant light's rays). */
+    direction: [number, number, number];
+    intensity: [number, number, number];
+    /** 0: no range. */
+    range?: number;
+    innerConeAngle?: number;
+    outerConeAngle?: number;
+    distant?: boolean;
+}
+
 export interface MetalPathTraceSessionOpen {
     sbvgPath: string;
     /** The GLB the .sbvg was built from, for its materials and textures; without it every triangle is `material`. */
     glbPath?: string;
     lighting?: (MetalPathTraceSunLighting | MetalPathTraceStudioLighting) & MetalPathTraceSceneLights;
+    /** The scene's punctual lights; given, they stand in for the GLB's own (a viewport snapshot carries none). */
+    lights?: MetalPathTracePunctualLight[];
     material?: { albedo?: [number, number, number]; roughness?: number; metallic?: number };
 }
 
@@ -362,6 +383,7 @@ export class MetalPathTraceSession extends EventEmitter {
             sbvgPath: path.resolve(request.sbvgPath),
             ...(request.glbPath ? { glbPath: path.resolve(request.glbPath) } : {}),
             ...(request.lighting ? { lighting: request.lighting } : {}),
+            ...(request.lights ? { lights: request.lights } : {}),
             ...(request.material ? { material: request.material } : {})
         }, 'opened');
         this.opened = opened;
@@ -373,6 +395,20 @@ export class MetalPathTraceSession extends EventEmitter {
     async setView(view: MetalPathTraceView): Promise<MetalPathTraceViewStarted> {
         this.lastUsed = Date.now();
         return this.command({ op: 'view', ...view }, 'view');
+    }
+
+    /**
+     * Replaces the light (sun and sky or dome, and the punctual lights) without reopening: no geometry is rebuilt
+     * and no texture decoded again. The current frame keeps its old light; the next view samples the new one.
+     */
+    async setLights(update: { lighting?: MetalPathTraceSessionOpen['lighting']; lights?: MetalPathTracePunctualLight[] }): Promise<{ lights: number }> {
+        this.lastUsed = Date.now();
+        const reply = await this.command({ op: 'lights', ...(update.lighting ? { lighting: update.lighting } : {}), ...(update.lights ? { lights: update.lights } : {}) }, 'lights');
+        if (this.openRequest) {
+            if (update.lighting) this.openRequest.lighting = update.lighting;
+            if (update.lights) this.openRequest.lights = update.lights;
+        }
+        return reply;
     }
 
     /** Stops sampling the current view (the camera is moving); its newest frame stays readable, the next view resumes. */
@@ -563,6 +599,7 @@ export class MetalPathTracerService {
             if (!fs.existsSync(request.materials.glbPath)) throw new MetalPathTracerError(`materials GLB not found: ${request.materials.glbPath}`);
             config.materials = { glbPath: path.resolve(request.materials.glbPath) };
         }
+        if (request.lights) config.lights = request.lights;
         if (request.camera) config.camera = request.camera;
         if (request.exposureEv !== undefined) config.exposure = request.exposureEv;
         const configPath = path.join(request.outputDir, 'render_config.json');

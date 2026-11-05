@@ -18,7 +18,7 @@ import * as React from 'react';
 import type * as THREE from 'three';
 import { startPathTraceOverlay, type PathTraceOverlayHandle, type PathTraceStatus } from '../../services/virtual-geometry/path-trace-client';
 import { PathTraceStillButton } from './PathTraceStillButton';
-import { pathTraceLightingOf, pathTraceViewOf, snapshotSceneForPathTrace, type PathTraceSnapshotStats } from './pathTraceSnapshot';
+import { pathTraceLightingOf, pathTraceLightsOf, pathTraceViewOf, snapshotSceneForPathTrace, type PathTraceSnapshotStats } from './pathTraceSnapshot';
 
 export function ScenePathTraceButton({ active, onToggle }: { active: boolean; onToggle: () => void }): React.ReactElement {
     return (
@@ -90,6 +90,7 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
         if (!active || !overlay) return;
         let cancelled = false;
         let handle: PathTraceOverlayHandle | null = null;
+        let relightTimer: number | null = null;
         setError(null);
         setStatus(null);
         setSnapshot(null);
@@ -107,6 +108,8 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
                 if (!res.ok || !built.success) throw new Error(built.error || `snapshot failed (HTTP ${res.status})`);
                 if (cancelled) return;
                 const lighting = pathTraceLightingOf(s);
+                const sceneLights = pathTraceLightsOf(s, latest.current.exclude()).lights;
+                let sentLight = JSON.stringify({ lighting, sceneLights });
                 setSnapshot({
                     stats: snap.stats, cached: !!built.cached, at: new Date(),
                     lighting: 'sun' in lighting ? `sun ${lighting.sun.elevationDeg.toFixed(0)}° up, azimuth ${lighting.sun.azimuthDeg.toFixed(0)}°` : 'studio dome'
@@ -115,7 +118,7 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
                 const origin = built.origin as [number, number, number];
                 handle = startPathTraceOverlay({
                     overlay,
-                    open: { sbvgUrl: built.sbvgUrl, snapshotId: built.snapshotId, lighting },
+                    open: { sbvgUrl: built.sbvgUrl, snapshotId: built.snapshotId, lighting, lights: sceneLights },
                     getView: () => {
                         const cam = latest.current.camera();
                         return cam ? pathTraceViewOf(cam, origin) : null;
@@ -134,6 +137,23 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
                     }
                 });
                 handleRef.current = handle;
+                // The light is watched apart from the geometry: a change of sun, dome or lamp relights the open
+                // session (no capture, no build) and restarts the frame.
+                relightTimer = window.setInterval(() => {
+                    const sc = latest.current.scene();
+                    if (cancelled || !sc || !handle) return;
+                    const nextLighting = pathTraceLightingOf(sc);
+                    const nextLights = pathTraceLightsOf(sc, latest.current.exclude()).lights;
+                    const tag = JSON.stringify({ lighting: nextLighting, sceneLights: nextLights });
+                    if (tag === sentLight) return;
+                    sentLight = tag;
+                    setSnapshot(prev => prev && {
+                        ...prev,
+                        stats: { ...prev.stats, lights: nextLights.length },
+                        lighting: 'sun' in nextLighting ? `sun ${nextLighting.sun.elevationDeg.toFixed(0)}° up, azimuth ${nextLighting.sun.azimuthDeg.toFixed(0)}°` : 'studio dome'
+                    });
+                    handle.relight({ lighting: nextLighting, lights: nextLights }).catch(err => { if (!cancelled) setError(err?.message ?? String(err)); });
+                }, 500);
             } catch (err: any) {
                 if (!cancelled) {
                     setStage(null);
@@ -143,6 +163,7 @@ export function ScenePathTraceLayer({ active, scene, camera, exclude, title, onS
         })();
         return () => {
             cancelled = true;
+            if (relightTimer !== null) window.clearInterval(relightTimer);
             handle?.stop();
             handleRef.current = null;
             latest.current.onShowing(false);

@@ -95,6 +95,11 @@ export interface PathTraceStill {
 
 export interface PathTraceOverlayHandle {
     stop(): void;
+    /**
+     * New light for the open session (POST /lights: the sun and sky or dome, and the punctual lights), then the
+     * current view again so the frame restarts under it. No capture, no build, no texture decoded again.
+     */
+    relight(update: { lighting?: unknown; lights?: unknown[] }): Promise<void>;
     /** Renders one denoised still of the current view into the workspace; resolves with its workspace path. */
     renderStill(options?: PathTraceStillOptions): Promise<PathTraceStill>;
 }
@@ -305,6 +310,13 @@ export function startPathTraceOverlay(options: PathTraceOverlayOptions): PathTra
             if (motionFrame !== null) window.cancelAnimationFrame(motionFrame);
             overlay.getContext('2d')?.clearRect(0, 0, overlay.width, overlay.height);
             if (sessionId) void post('close', { sessionId }).catch(() => undefined);
+        },
+        async relight(update) {
+            if (!sessionId) throw new Error('the path tracer is not open yet');
+            await post('lights', { sessionId, ...update });
+            if (cancelled) return;
+            sentView = '';
+            await sendView();
         },
         async renderStill(still: PathTraceStillOptions = {}) {
             if (!sessionId) throw new Error('the path tracer is not open yet');

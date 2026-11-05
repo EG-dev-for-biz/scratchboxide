@@ -14,9 +14,9 @@
  * the scene's own, read as it is drawn. What the tracer cannot take (points, lines, shader materials, splats) is
  * counted, not approximated, and the caller says so.
  *
- * The scene's point, spot and directional lights go into the GLB as KHR_lights_punctual at their world placement
- * (the tracer samples them with its light tree), except the atmosphere's sun, which is the tracer's own sun. Area
- * lights have no glTF form and are counted as not traced.
+ * The scene's point, spot and directional lights are not in the GLB: pathTraceLightsOf lists them for the session
+ * (the tracer samples them with its light tree), so a change of light leaves the geometry file and its build as
+ * they were. The atmosphere's sun is the tracer's own sun. Area lights have no punctual form and are counted.
  *
  * Also the light and camera of the view, in the tracer's terms: the atmospheric sun's direction as elevation and
  * azimuth (the helper's convention: azimuth 0 toward -Z, 90 toward +X), else the neutral studio dome.
@@ -40,7 +40,7 @@ export interface PathTraceSnapshotStats {
     meshes: number;
     triangles: number;
     instancesExpanded: number;
-    /** Point, spot and directional lights written as KHR_lights_punctual. */
+    /** Point, spot and directional lights the scene had (sent beside the GLB, see pathTraceLightsOf). */
     lights: number;
     /** Textures held as 8-bit pixel buffers (DataTextures), written out from a canvas of their pixels. */
     texturesConverted: number;
@@ -74,42 +74,73 @@ function triangleCount(geometry: THREE.BufferGeometry): number {
 }
 
 /**
- * A copy of a point, spot or directional light at its world placement, aimed as it shines (glTF lights shine down
- * their node's -Z, and three's lights look down -Z at their target), or null for any other kind of light.
+ * A punctual light as the tracer takes it (MetalPathTracePunctualLight, the GLB's world coordinates): position,
+ * the direction it shines (three's lights look from their position at their target), colour times intensity
+ * (candela, or lux for a directional light), range and spot cone (three's penumbra softening the inner cone).
  */
-function exportLight(light: THREE.Light): THREE.Light | null {
+export interface PathTraceLight {
+    position: [number, number, number];
+    direction: [number, number, number];
+    intensity: [number, number, number];
+    range?: number;
+    innerConeAngle?: number;
+    outerConeAngle?: number;
+    distant?: boolean;
+}
+
+/** A point, spot or directional light as the tracer takes it, or null for any other kind of light. */
+function tracedLight(light: THREE.Light): PathTraceLight | null {
     const l = light as THREE.Light & { isPointLight?: boolean; isSpotLight?: boolean; isDirectionalLight?: boolean };
-    let out: THREE.PointLight | THREE.SpotLight | THREE.DirectionalLight;
-    if (l.isSpotLight) {
-        const spot = light as THREE.SpotLight;
-        out = new THREE.SpotLight(spot.color, spot.intensity, spot.distance, spot.angle, spot.penumbra, spot.decay);
-    } else if (l.isPointLight) {
-        const point = light as THREE.PointLight;
-        out = new THREE.PointLight(point.color, point.intensity, point.distance, point.decay);
-    } else if (l.isDirectionalLight) {
-        out = new THREE.DirectionalLight(light.color, light.intensity);
-    } else {
-        return null;
-    }
-    out.name = light.name;
+    if (!l.isPointLight && !l.isSpotLight && !l.isDirectionalLight) return null;
     const position = new THREE.Vector3().setFromMatrixPosition(light.matrixWorld);
-    out.position.copy(position);
+    const direction = new THREE.Vector3(0, 0, -1);
     const target = (light as THREE.SpotLight | THREE.DirectionalLight).target as THREE.Object3D | undefined;
     if (target && !l.isPointLight) {
         target.updateMatrixWorld();
-        const aim = new THREE.Vector3().setFromMatrixPosition(target.matrixWorld);
-        if (aim.distanceToSquared(position) > 0) out.lookAt(aim);
+        const aim = new THREE.Vector3().setFromMatrixPosition(target.matrixWorld).sub(position);
+        if (aim.lengthSq() > 0) direction.copy(aim.normalize());
     }
-    out.updateMatrix();
-    out.matrixAutoUpdate = false;
-    const aimed = out as THREE.SpotLight | THREE.DirectionalLight;
-    if (aimed.target) {
-        // The exporter keeps a light's direction when its target is a child one unit down its -Z.
-        aimed.target.position.set(0, 0, -1);
-        aimed.target.updateMatrix();
-        out.add(aimed.target);
+    const c = light.color;
+    const out: PathTraceLight = {
+        position: [position.x, position.y, position.z],
+        direction: [direction.x, direction.y, direction.z],
+        intensity: [c.r * light.intensity, c.g * light.intensity, c.b * light.intensity]
+    };
+    if (l.isDirectionalLight) out.distant = true;
+    else {
+        const distance = (light as THREE.PointLight).distance;
+        if (distance > 0) out.range = distance;
+    }
+    if (l.isSpotLight) {
+        const spot = light as THREE.SpotLight;
+        out.outerConeAngle = spot.angle;
+        out.innerConeAngle = (1 - spot.penumbra) * spot.angle;
     }
     return out;
+}
+
+/**
+ * The scene's point, spot and directional lights for the tracer, apart from the atmosphere's sun (the tracer's own
+ * sun, pathTraceLightingOf) and anything hidden or excluded; area lights are counted, having no punctual form.
+ * Sent beside the snapshot rather than in it, so a change of light neither changes the geometry file nor rebuilds it.
+ */
+export function pathTraceLightsOf(scene: THREE.Scene, exclude: Array<THREE.Object3D | null | undefined> = []): { lights: PathTraceLight[]; areaLights: number } {
+    const excluded = new Set(exclude.filter((o): o is THREE.Object3D => !!o));
+    const lights: PathTraceLight[] = [];
+    let areaLights = 0;
+    scene.traverse(o => {
+        const obj = o as THREE.Object3D & { isLight?: boolean; isRectAreaLight?: boolean };
+        if (!obj.isLight) return;
+        for (let p: THREE.Object3D | null = o; p; p = p.parent) if (excluded.has(p)) return;
+        if (!visibleInWorld(o)) return;
+        const light = o as THREE.Light;
+        // Ambient and hemisphere light is the dome's.
+        if (SUN_LIGHT_NAMES.has(light.name) || !(light.intensity > 0)) return;
+        if (obj.isRectAreaLight) { areaLights++; return; }
+        const traced = tracedLight(light);
+        if (traced) lights.push(traced);
+    });
+    return { lights, areaLights };
 }
 
 /**
@@ -283,7 +314,6 @@ export async function snapshotSceneForPathTrace(scene: THREE.Scene, exclude: Arr
     let instancedTriangles = 0;
     const instanceMatrix = new THREE.Matrix4();
     const world = new THREE.Matrix4();
-    const lights: THREE.Light[] = [];
     scene.traverse(o => {
         if (excluded.has(o)) return;
         const obj = o as THREE.Object3D & { isPoints?: boolean; isLine?: boolean; isSprite?: boolean; isMesh?: boolean; isInstancedMesh?: boolean; isLight?: boolean; isRectAreaLight?: boolean };
@@ -291,15 +321,7 @@ export async function snapshotSceneForPathTrace(scene: THREE.Scene, exclude: Arr
         let excludedAncestor = false;
         for (let p = o.parent; p; p = p.parent) if (excluded.has(p)) { excludedAncestor = true; break; }
         if (excludedAncestor || !visibleInWorld(o)) return;
-        if (obj.isLight) {
-            const light = o as THREE.Light;
-            // The atmosphere's sun is the tracer's own sun (pathTraceLightingOf); ambient and hemisphere light is the dome's.
-            if (SUN_LIGHT_NAMES.has(light.name) || !(light.intensity > 0)) return;
-            if (obj.isRectAreaLight) { stats.skipped.areaLights++; return; }
-            const copy = exportLight(light);
-            if (copy) lights.push(copy);
-            return;
-        }
+        if (obj.isLight) return; // lights go beside the snapshot (pathTraceLightsOf)
         if (obj.isPoints || obj.isSprite) { stats.skipped.points++; return; }
         if (obj.isLine) { stats.skipped.lines++; return; }
         const mesh = o as THREE.Mesh;
@@ -320,8 +342,9 @@ export async function snapshotSceneForPathTrace(scene: THREE.Scene, exclude: Arr
         }
         place(geometry, mesh.material, mesh.matrixWorld, mesh.name);
     });
-    for (const light of lights) root.add(light);
-    stats.lights = lights.length;
+    const sceneLights = pathTraceLightsOf(scene, exclude);
+    stats.lights = sceneLights.lights.length;
+    stats.skipped.areaLights = sceneLights.areaLights;
 
     const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
     // Colour maps of opaque materials go as JPEG (far smaller and quicker to encode); the rest stay PNG.
