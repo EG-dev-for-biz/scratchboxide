@@ -2312,7 +2312,9 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
         // the far level's leaflets a side (what the budgeted meshing drew), and more at each level nearer: at least one more
         // and half as many again, the near level never fewer than the species gives
         const size_t leaves = std::max<size_t>(1, nat::SpaceColonizationTreeGenerator::rosetteLeafCount(sk));
-        const int farSide = in.farFoliage && !in.farFoliage->indices.empty() ? std::max(1, static_cast<int>((in.farFoliage->indices.size() / 6) / (2 * leaves)))
+        const size_t farPiecesNow = in.farFoliage ? in.farFoliage->indices.size() / 6 : 0;   // leaflets and rachis ribbons, two triangles each
+        const size_t ribbons = static_cast<size_t>(nat::SpaceColonizationTreeGenerator::kRachisRibbons) * leaves;
+        const int farSide = farPiecesNow > ribbons ? std::max(1, static_cast<int>((farPiecesNow - ribbons) / (2 * leaves)))
                                                                               : std::max(1, cfg.leafletsPerSide / 4);
         auto more = [](int n) { return std::max(n + 1, static_cast<int>(std::ceil(1.5 * n))); };
         const int midSide = more(farSide), nearMidSide = more(midSide), nearSide = std::max(more(nearMidSide), cfg.leafletsPerSide);

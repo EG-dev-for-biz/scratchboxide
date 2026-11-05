@@ -2633,14 +2633,16 @@ private:
     /**
      * The leaflets of a rosette tree's leaves (SpaceColonizationConfig::rosetteLeaves): on each rachis (the skeleton
      * nodes marked with their leaf), leafletsPerSide flat blades a side over the last leafletSpanShare of it, each a
-     * quad of two triangles (so the foliage is one four-vertex piece per leaflet, as a leaf mass is one icosphere). A
+     * quad of two triangles (so the foliage is one four-vertex piece per leaflet, as a leaf mass is one icosphere), and
+     * the rachis itself as kRachisRibbons such pieces. A
      * leaflet leaves the rachis at leafletAngleRad towards its tip in the leaf's own plane (with a short span the angles
      * fan from the rachis outwards: a palmate leaf), hangs a little with the leaf's arch, and is longest a third of the
-     * way along its span. `perSide` is how many a side are drawn (the budgeted meshing draws as many as half its foliage
+     * way along its span. `perSide` is how many a side are drawn (the budgeted meshing draws as many as its foliage
      * budget holds, the levels of detail more: scratchbox_tree_lod.hpp); `growth`, when given, takes each vertex's growth
      * value (its rachis node's id over growthDen). Returns the leaflets drawn.
      */
 public:
+    static constexpr int kRachisRibbons = 4;   // flat pieces a rosette leaf's rachis is drawn as (meshRosetteLeaflets)
     /** The leaves of a rosette tree's skeleton: the species' own and any sent after an uneven measured crown (growRosette). */
     static size_t rosetteLeafCount(const std::vector<ColonizationNode>& g) {
         int most = -1;
@@ -2666,6 +2668,40 @@ public:
             for (size_t j = 1; j < l.size(); ++j) arc[j] = arc[j - 1] + (g[static_cast<size_t>(l[j])].position - g[static_cast<size_t>(l[j - 1])].position).length();
             const float length = arc.back();
             if (!(length > 1e-4f)) continue;
+            // the rachis itself, as kRachisRibbons flat pieces along it (a twentieth of the leaf wide at its base, tapering):
+            // the wood of a far level keeps only the trunk, and a leaf whose midrib is not drawn reads as loose leaflets
+            for (int k = 0; k < kRachisRibbons; ++k) {
+                const float at0 = length * static_cast<float>(k) / static_cast<float>(kRachisRibbons), at1 = length * static_cast<float>(k + 1) / static_cast<float>(kRachisRibbons);
+                auto pointAt = [&](float at, Vec3& along) {
+                    size_t j = 1;
+                    while (j + 1 < l.size() && arc[j] < at) ++j;
+                    const Vec3 a = g[static_cast<size_t>(l[j - 1])].position, b = g[static_cast<size_t>(l[j])].position;
+                    along = (b - a).normalized();
+                    return a + (b - a) * std::clamp((at - arc[j - 1]) / std::max(1e-6f, arc[j] - arc[j - 1]), 0.0f, 1.0f);
+                };
+                Vec3 t0, t1;
+                const Vec3 p0 = pointAt(at0, t0), p1 = pointAt(at1, t1);
+                Vec3 across = t0.cross(Vec3(0, 1, 0));
+                if (across.lengthSquared() < 1e-6f) across = t0.cross(Vec3(1, 0, 0));
+                across = across.normalized();
+                const float w0 = 0.025f * length * (1.0f - 0.8f * static_cast<float>(k) / static_cast<float>(kRachisRibbons));
+                const float w1 = 0.025f * length * (1.0f - 0.8f * static_cast<float>(k + 1) / static_cast<float>(kRachisRibbons));
+                Vec3 normal = across.cross(t0);
+                normal = normal.lengthSquared() > 1e-8f ? normal.normalized() : Vec3(0, 1, 0);
+                const uint32_t base = static_cast<uint32_t>(foliage.vertices.size());
+                for (const Vec3& v : {p0 - across * w0, p0 + across * w0, p1 + across * w1, p1 - across * w1}) {
+                    foliage.vertices.push_back(v);
+                    foliage.normals.push_back(normal.y < 0.0f ? normal * -1.0f : normal);
+                    foliage.vertexColors.push_back(cfg.leafColor);
+                }
+                foliage.uvs.push_back(Vec2(0.0f, 0.0f));
+                foliage.uvs.push_back(Vec2(1.0f, 0.0f));
+                foliage.uvs.push_back(Vec2(1.0f, 1.0f));
+                foliage.uvs.push_back(Vec2(0.0f, 1.0f));
+                for (uint32_t idx : {0u, 1u, 2u, 0u, 2u, 3u}) foliage.indices.push_back(base + idx);
+                if (growth) growth->insert(growth->end(), 4, static_cast<float>(l[std::min(l.size() - 1, static_cast<size_t>(1 + k * (l.size() - 1) / kRachisRibbons))]) / growthDen);
+                ++pieces;
+            }
             for (int side = 0; side < 2; ++side) {
                 for (int k = 0; k < perSide; ++k) {
                     const float u = (static_cast<float>(k) + 0.5f) / static_cast<float>(perSide);   // along the span, 0 its start
@@ -2685,7 +2721,9 @@ public:
                     dir = dir.normalized();
                     const float profile = std::pow(std::max(0.0f, std::sin(math::PI * (0.12f + 0.80f * u))), 0.6f);
                     const float len = cfg.leafletLengthShare * length * (span + (1.0f - span) * 1.6f) * profile;
-                    const float half = 0.5f * cfg.leafletWidthShare * len;
+                    // as wide as the species' leaflet, or wide enough that the fewer leaflets of a farther level still close the
+                    // leaf's blade (0.8 of the gap between them along the rachis)
+                    const float half = 0.5f * std::max(cfg.leafletWidthShare * len, 0.8f * span * length / static_cast<float>(perSide));
                     const Vec3 normal = dir.cross(along).lengthSquared() > 1e-8f ? dir.cross(along).normalized() : Vec3(0, 1, 0);
                     const uint32_t base = static_cast<uint32_t>(foliage.vertices.size());
                     const Vec3 tip = p + dir * len;
@@ -2928,9 +2966,11 @@ private:
         }
         const size_t foliageBudget = budget > rep.woodTriangles ? budget - rep.woodTriangles : 0;
         if (cfg.rosetteLeaves > 0) {
-            // as many leaflets a side as half the foliage's budget holds: a leaflet here is a flat piece, and this mesh is also the
-            // far level of a tree whose nearer levels must stay the heavier ones
-            const int perSide = std::min(std::max(1, cfg.leafletsPerSide), static_cast<int>((foliageBudget / 2) / (4 * std::max<size_t>(1, rosetteLeafCount(g)))));
+            // as many leaflets a side as the foliage's budget holds, after each leaf's rachis (this mesh is also the far level of
+            // a tree: its nearer levels draw more a side than this, scratchbox_tree_lod.hpp, so they stay the heavier ones)
+            const size_t leavesDrawn = std::max<size_t>(1, rosetteLeafCount(g));
+            const size_t forLeaflets = foliageBudget > 2 * kRachisRibbons * leavesDrawn ? foliageBudget - 2 * kRachisRibbons * leavesDrawn : 0;
+            const int perSide = std::min(std::max(1, cfg.leafletsPerSide), std::max(1, static_cast<int>(forLeaflets / (4 * leavesDrawn))));
             rep.foliageClumps = meshRosetteLeaflets(cfg, g, perSide, growthDen, foliage, growth ? &growth->foliage : nullptr);
             rep.trianglesPerClump = 2;
             rep.foliageTriangles = foliage.indices.size() / 3;

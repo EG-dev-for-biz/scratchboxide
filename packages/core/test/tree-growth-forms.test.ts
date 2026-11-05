@@ -184,6 +184,7 @@ describe('spire: tiers of laterals on a single leader', () => {
 
 describe('fronds: a rosette of compound leaves on an unbranched stem', () => {
     const PALM = { height: 18, radius: 3.6, 'crown-base-ratio': 0.8, 'top-exponent': 2.2, 'branch-angle': 1.2 };
+    const RACHIS = 4;   // the pieces each leaf's rachis is drawn as (kRachisRibbons), before its leaflets
 
     it('has no branch below the crown: one stem, then every leaf from its top', () => {
         const t = probe({ ...PALM, 'rosette-leaves': 14 });
@@ -208,10 +209,10 @@ describe('fronds: a rosette of compound leaves on an unbranched stem', () => {
         expect(reach).toBeGreaterThan(0.6 * 3.6);
         expect(reach).toBeLessThan(1.5 * 3.6);
         expect(Math.max(...leafNodes.map(n => n.y))).toBeLessThanOrEqual(18 + 0.3);
-        // drawn as leaflets: two triangles each, a side's worth on both sides of every leaf, none below the crown
+        // drawn as flat pieces of two triangles: each leaf's rachis as 4, and a side's worth of leaflets on both its sides
         expect(t.mesh.trianglesPerPiece).toBe(2);
-        expect(t.mesh.foliagePieces).toBe(leafCount * 2 * 24);
-        expect(t.mesh.foliageTriangles).toBe(leafCount * 2 * 24 * 2);
+        expect(t.mesh.foliagePieces).toBe(leafCount * (2 * 24 + RACHIS));
+        expect(t.mesh.foliageTriangles).toBe(leafCount * (2 * 24 + RACHIS) * 2);
     });
 
     it('arch bends the leaves down along their length; without it they stand straight', () => {
@@ -236,20 +237,22 @@ describe('fronds: a rosette of compound leaves on an unbranched stem', () => {
 
     it('leaflets: a full span lines the whole rachis (pinnate), a short one gathers them at its end (palmate); the count follows the parameter and the budget', () => {
         const pinnate = probe({ ...PALM, 'rosette-leaves': 12, 'leaflet-span': 1 }), palmate = probe({ ...PALM, 'rosette-leaves': 12, 'leaflet-span': 0.2 });
-        // each leaflet is four vertices; its first two are its base on the rachis
-        const baseReach = (t: Probe) => t.foliage.filter((_, i) => i % 4 === 0).map(v => Math.hypot(v[0], v[2]));
+        // each piece is four vertices, its first two its base on the rachis; a leaf's pieces are its rachis, then its leaflets
+        const baseReach = (t: Probe) => {
+            const perLeaf = t.mesh.foliagePieces / new Set(t.nodes.filter(n => n.rosetteLeaf >= 0).map(n => n.rosetteLeaf)).size;
+            return t.foliage.filter((_, i) => i % 4 === 0 && Math.floor(i / 4) % perLeaf >= RACHIS).map(v => Math.hypot(v[0], v[2]));
+        };
         expect(Math.min(...baseReach(pinnate))).toBeLessThan(0.5);
         expect(Math.min(...baseReach(palmate))).toBeGreaterThan(Math.min(...baseReach(pinnate)) + 0.5);
         expect(mean(baseReach(palmate))).toBeGreaterThan(mean(baseReach(pinnate)));
         const ten = probe({ ...PALM, 'rosette-leaves': 12, 'leaflets-per-side': 10 });
-        expect(ten.mesh.foliagePieces).toBe(new Set(ten.nodes.filter(n => n.rosetteLeaf >= 0).map(n => n.rosetteLeaf)).size * 2 * 10);
+        expect(ten.mesh.foliagePieces).toBe(new Set(ten.nodes.filter(n => n.rosetteLeaf >= 0).map(n => n.rosetteLeaf)).size * (2 * 10 + RACHIS));
         // a budget that holds fewer draws fewer a side, never more triangles than it has
         const tight = probe({ ...PALM, 'rosette-leaves': 12, 'leaflets-per-side': 40, budget: 1200 });
         expect(tight.mesh.woodTriangles + tight.mesh.foliageTriangles).toBeLessThanOrEqual(1200);
         expect(tight.mesh.foliagePieces).toBeGreaterThan(0);
         expect(tight.mesh.foliagePieces).toBeLessThan(12 * 2 * 40);
-        // half the foliage's budget at most, so the far level it is stays lighter than the nearer ones
-        expect(tight.mesh.foliageTriangles).toBeLessThanOrEqual((1200 - tight.mesh.woodTriangles) / 2);
+
     });
 });
 
@@ -471,7 +474,7 @@ describe('stems from the ground and uneven crowns', () => {
         // still one unbranched stem
         expect(uneven.nodes.filter(n => n.rosetteLeaf === -1).slice(0, -1).every(n => n.children === 1)).toBe(true);
         // and its leaflets are drawn on every leaf
-        expect(uneven.mesh.foliagePieces).toBe(leaves * 2 * 24);
+        expect(uneven.mesh.foliagePieces).toBe(leaves * (2 * 24 + 4));
     });
 });
 
