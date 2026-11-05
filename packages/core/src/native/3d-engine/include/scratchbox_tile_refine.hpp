@@ -138,10 +138,11 @@ struct FacadeFlattenParams {
     double detectOffsetBin{0.05}; // detector cells: 1 degree of azimuth by this much offset (m)
     int detectAzSmooth{2};        // a cell's score sums the cells within +- this many degrees...
     int detectOffsetSmooth{2};    // ...and +- this many offset bins
-    // The search stops when no seed holds a plane of minPlaneArea any more (no live wall area left that could); this is
-    // only a safety cap. It was 64 and every building checked hit it (2026-11-04: Penn 2, the ESB), so walls past the 64th
-    // seed were never flattened, nor rebuilt (the relief and pipeline K frame their facades on these planes).
-    int detectMaxIterations{4096};
+    // Seeds tried at most; the search also stops when no seed holds a plane of minPlaneArea any more. Every building
+    // checked hits this cap (detectCapHit; 2026-11-04: Penn 2 leaves 22% of its wall area on no plane, the ESB 17%), but
+    // uncapped (--flatten-max-iterations 4096: 118 and 195 planes, 14.5% and 9.3% unassigned) Penn 2's visible holes rose
+    // from 2.11% to 2.78%, so it stays until the extra planes' flattening is understood.
+    int detectMaxIterations{64};
 };
 
 // What the wall-plane search found: its seeds tried, whether the cap stopped it, the planes it kept, and the near-vertical

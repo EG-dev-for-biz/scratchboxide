@@ -138,7 +138,7 @@ static void usage() {
         "  --no-flatten            skip the facade flatten\n"
         "  --flatten-parallel-deg DEG  facade flatten: a face lies along a plane within DEG (default 30)\n"
         "  --flatten-min-area M2   facade flatten: smallest wall plane flattened onto (default 25)\n"
-        "  --flatten-max-iterations N  facade flatten: the wall-plane search's safety cap on seeds tried (default 4096; it stops\n"
+        "  --flatten-max-iterations N  facade flatten: seeds the wall-plane search tries at most (default 64; it also stops\n"
         "                          when no seed holds a plane of the smallest area)\n"
         "  --flatten-corner-deg DEG  facade flatten: planes at least DEG apart meet in a corner line (default 15)\n"
         "  --thumbs DIR            write raw-vs-output thumbnails (aerial, hero facade, street) into DIR\n"
