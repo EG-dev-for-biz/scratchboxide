@@ -12,7 +12,8 @@
  * where it still shows a hole.
  *
  *  0. Shards: scan pieces left floating once the walls they hung from were rebuilt or clipped (small, touching no wall,
- *     roof, fill or the ground) are dropped; the core then shows where they hung.
+ *     roof, fill or the ground), and larger scan sheets hanging in the air (the building's winding number outside on both
+ *     sides of most of their triangles: a skin with no solid behind it), are dropped; the core then shows where they hung.
  *  1. Joins (corner-join.ts): rebuilt facades that stop short of each other where they meet are joined.
  *  2. The inner core (inner-core.ts): a closed solid behind every surface, so a hole shows a textured face, not the inside.
  *  3. The gate (visible-defects.ts): the building seen from its twelve views. While it shows hole regions of at least
@@ -30,9 +31,10 @@
 
 import type { Vec2 } from '../../../../common/spatial/staged-location-contracts';
 import { accessorLayout, assembleGlb, nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint } from '../glb-bytes';
-import { addInnerCore, appendNode, describeInnerCore, readSoup, type AppendPrim, type CoreRegion, type InnerCoreReport } from './inner-core';
+import { addInnerCore, appendNode, describeInnerCore, INNER_CORE_PARAMS, innerCoreParamVector, readSoup, type AppendPrim, type CoreRegion, type InnerCoreReport } from './inner-core';
 import { describeCornerJoin, joinFacadeCorners, type CornerJoinReport } from './corner-join';
 import { rayIndex } from './lattice-stitch';
+import { nativePolishThreads, runNativeInnerCore } from '../remesh-polish-native';
 import { outsideFootprint } from './base-cleanup';
 import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS, type HoleRegion, type VisibleDefectsReport } from './visible-defects';
 
@@ -54,7 +56,13 @@ export const OUTSIDE_CLOSURE_PARAMS = {
     /** ...and lie within the footprint plus this (m), when there is one. */
     restoreMarginM: 0.3,
     /** Shards: a scan piece (edge-connected) under this area (m²) touching no other surface, nor the ground, within shardContactM (m) floats: it goes. */
-    shardMaxM2: 40, shardContactM: 0.05
+    shardMaxM2: 40, shardContactM: 0.05,
+    /** Sheets in the air: a scan piece under sheetMaxM2 (m²), not on the ground, whose sampled triangles (its sheetSamples
+     *  largest) have the building's outside on both sides on at least sheetShare of them: a skin of scan hanging off the
+     *  building, with no solid behind it. The winding number is read sheetStepM in front of and behind each; the surface
+     *  itself adds +-1/2 to the two, so their mean is the rest of the building's: about 1/2 beside a wall of a closed shell,
+     *  about 0 for a sheet in the air (under sheetOutsideW). */
+    sheetMaxM2: 400, sheetSamples: 24, sheetStepM: 0.3, sheetOutsideW: 0.2, sheetShare: 0.75
 };
 export type OutsideClosureParams = typeof OUTSIDE_CLOSURE_PARAMS;
 
@@ -66,7 +74,7 @@ export interface ClosureRound { round: number; regions: number; restoredTriangle
 export interface OutsideClosureReport {
     version: string;
     /** Floating scan pieces dropped: how many, their triangles and area (m²). */
-    shards?: { pieces: number; triangles: number; areaM2: number };
+    shards?: { pieces: number; triangles: number; areaM2: number; /** Larger pieces hanging in the air (the building's outside on both sides). */ sheets: number; sheetAreaM2: number };
     joins?: CornerJoinReport; core?: InnerCoreReport;
     /** The building as it came (before), after the joins and the core (closed), and as handed on (after). */
     before?: HolesSummary; closed?: HolesSummary; after?: HolesSummary;
@@ -139,7 +147,7 @@ const isScanNode = (n: any) => n?.mesh !== undefined && !Object.keys(n.extras ??
  * Scan pieces that float: edge-connected scan triangles (nodes no later step made) under shardMaxM2 whose every corner is
  * further than shardContactM from any other surface and from the ground. Returned as triangle keys (corners rounded to 1 mm).
  */
-export function findShards(bytes: Uint8Array, groundY: number | undefined, P: OutsideClosureParams = OUTSIDE_CLOSURE_PARAMS): { keys: Set<string>; pieces: number; triangles: number; areaM2: number } {
+export function findShards(bytes: Uint8Array, groundY: number | undefined, P: OutsideClosureParams = OUTSIDE_CLOSURE_PARAMS, threads?: number): { keys: Set<string>; pieces: number; triangles: number; areaM2: number; sheets: number; sheetAreaM2: number } {
     const g = parseGlbBytes(bytes), names = (g.json.nodes ?? []).map((n: any) => n);
     const soup = readSoup(g);
     const k3 = (x: number, y: number, z: number) => `${Math.round(x * 1000)},${Math.round(y * 1000)},${Math.round(z * 1000)}`;
@@ -168,7 +176,34 @@ export function findShards(bytes: Uint8Array, groundY: number | undefined, P: Ou
         (members.get(r) ?? members.set(r, []).get(r)!).push(t);
     }
     const small = [...area].filter(([, a]) => a < P.shardMaxM2).map(([r]) => r);
-    const out = { keys: new Set<string>(), pieces: 0, triangles: 0, areaM2: 0 };
+    const out = { keys: new Set<string>(), pieces: 0, triangles: 0, areaM2: 0, sheets: 0, sheetAreaM2: 0 };
+    const triArea = (t: number) => { const p = soup.pos.subarray(t * 9, t * 9 + 9), e1 = [p[3] - p[0], p[4] - p[1], p[5] - p[2]], e2 = [p[6] - p[0], p[7] - p[1], p[8] - p[2]]; return Math.hypot(e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]) / 2; };
+    // sheets in the air: the building's outside on both sides of the piece (its winding number, natively)
+    {
+        const cand = [...area].filter(([r, a]) => a >= P.shardMaxM2 && a < P.sheetMaxM2 && !(groundY !== undefined && members.get(r)!.some(t => Math.min(soup.pos[t * 9 + 1], soup.pos[t * 9 + 4], soup.pos[t * 9 + 7]) - groundY <= P.shardContactM))).map(([r]) => r);
+        const q: number[] = [], owner: number[] = [];
+        for (const r of cand) {
+            const samples = [...members.get(r)!].sort((a, b) => triArea(b) - triArea(a)).slice(0, P.sheetSamples);
+            for (const t of samples) {
+                const p = soup.pos.subarray(t * 9, t * 9 + 9), c = [(p[0] + p[3] + p[6]) / 3, (p[1] + p[4] + p[7]) / 3, (p[2] + p[5] + p[8]) / 3];
+                const e1 = [p[3] - p[0], p[4] - p[1], p[5] - p[2]], e2 = [p[6] - p[0], p[7] - p[1], p[8] - p[2]], n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]], l = Math.hypot(n[0], n[1], n[2]);
+                if (!(l > 0)) continue;
+                for (const st of [P.sheetStepM, -P.sheetStepM]) q.push(c[0] + (n[0] / l) * st, c[1] + (n[1] / l) * st, c[2] + (n[2] / l) * st);
+                owner.push(r);
+            }
+        }
+        if (owner.length) {
+            const w = runNativeInnerCore(innerCoreParamVector(INNER_CORE_PARAMS), soup.pos, soup.kind, [], undefined, [], threads ?? nativePolishThreads(), { points: q, only: true }).winding;
+            const tally = new Map<number, [number, number]>();
+            owner.forEach((r, i) => { const o = tally.get(r) ?? [0, 0]; o[1]++; if (Math.abs((w[i * 2] + w[i * 2 + 1]) / 2) < P.sheetOutsideW) o[0]++; tally.set(r, o); });
+            for (const [r, [outside, n]] of tally) {
+                if (outside < P.sheetShare * n) continue;
+                out.sheets++; out.sheetAreaM2 += area.get(r)!; out.triangles += members.get(r)!.length;
+                for (const t of members.get(r)!) out.keys.add([corner(t, 0), corner(t, 1), corner(t, 2)].sort().join('|'));
+            }
+            out.sheetAreaM2 = Math.round(out.sheetAreaM2 * 100) / 100;
+        }
+    }
     if (!small.length) return out;
     // every triangle in a 1 m grid, for what lies near a piece's corners
     const C = 1, grid = new Map<string, number[]>();
@@ -236,8 +271,8 @@ export function closeOutside(input: { clay: Uint8Array; tex?: Uint8Array; pre?: 
     const report: OutsideClosureReport = { version: OUTSIDE_CLOSURE_VERSION, rounds: [], remaining: [], restoredTriangles: 0 };
     const VP = { ...VISIBLE_DEFECTS_PARAMS, holeRegionsReported: P.regionsRead };
     // floating scan pieces go first, from the clay and the textured copy alike (the gate's before is the building as it came)
-    const shardKeys = findShards(input.tex ?? input.clay, input.groundY, P);
-    report.shards = { pieces: shardKeys.pieces, triangles: shardKeys.triangles, areaM2: shardKeys.areaM2 };
+    const shardKeys = findShards(input.tex ?? input.clay, input.groundY, P, input.threads);
+    report.shards = { pieces: shardKeys.pieces, triangles: shardKeys.triangles, areaM2: shardKeys.areaM2, sheets: shardKeys.sheets, sheetAreaM2: shardKeys.sheetAreaM2 };
     const measure = (b: Uint8Array) => measureVisibleDefects(b, VP);
     // the gate needs the textured copy: the clay has no inside to show
     const gate = input.repair !== false && !!input.tex;
@@ -280,7 +315,7 @@ const pct = (x: number) => `${(x * 100).toFixed(2)}%`;
 /** One line for the build's notes. */
 export function describeOutsideClosure(r: OutsideClosureReport): string {
     const parts: string[] = [];
-    if (r.shards?.pieces) parts.push(`${r.shards.pieces} floating scan pieces dropped (${r.shards.triangles} triangles, ${r.shards.areaM2} m²: touching no wall, roof, fill or the ground)`);
+    if (r.shards?.pieces || r.shards?.sheets) parts.push(`${r.shards.pieces} floating scan pieces (${r.shards.areaM2} m², touching no wall, roof, fill or the ground) and ${r.shards.sheets} scan sheets hanging in the air (${r.shards.sheetAreaM2} m², the building's outside on both sides) dropped`);
     if (r.joins) parts.push(describeCornerJoin(r.joins));
     if (r.core) parts.push(describeInnerCore(r.core));
     if (r.before && r.after) {

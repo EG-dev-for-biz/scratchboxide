@@ -94,9 +94,11 @@
  *     in:  "SBIC" u32 version (1), u32 nParams, f64[nParams] (scratchbox_inner_core.hpp paramVector), u32 n, f32[n] the
  *          building's triangles (world space), u8[n/9] each one's kind (0 untextured, 1 photo, 2 rebuilt wall), u32 nLoops,
  *          per loop u32 n, f64[n*2] (the footprint, plan x z; none: no limit), f64 groundY (NaN: none), u32 nRegions,
- *          f64[4*nRegions] (centre, radius: where the core may come closer).
+ *          f64[4*nRegions] (centre, radius: where the core may come closer), u32 queriesOnly (1: no core), u32 nQ, f64[3*nQ]
+ *          points whose winding number is wanted.
  *     out: u32 jsonLen, the report's JSON, u32 n, f64[n] positions, u32 n, u32[n] indices, then per triangle i32 source
- *          (the triangle it takes its photo from, -1 none) and u8 route (0 none, 1 rebuilt wall, 2 other photo).
+ *          (the triangle it takes its photo from, -1 none) and u8 route (0 none, 1 rebuilt wall, 2 other photo); u32 nQ,
+ *          f64[nQ] the winding numbers.
  *
  * Build: clang++ -std=c++20 -O3 -I packages/core/src/native/3d-engine/include scripts/remesh_polish_native.cpp -o build/3d-native/remesh_polish_native -lz
  */
@@ -633,6 +635,9 @@ int innerCore(unsigned threads) {
     in.groundY = readOne<double>();
     const auto rv = readDoubles(static_cast<size_t>(readOne<uint32_t>()) * 4);
     for (size_t i = 0; i + 3 < rv.size(); i += 4) in.regions.push_back({{rv[i], rv[i + 1], rv[i + 2]}, rv[i + 3]});
+    in.queriesOnly = readOne<uint32_t>() != 0;
+    const auto qv = readDoubles(static_cast<size_t>(readOne<uint32_t>()) * 3);
+    for (size_t i = 0; i + 2 < qv.size(); i += 3) in.queries.push_back({qv[i], qv[i + 1], qv[i + 2]});
     FixedThreadPool pool(threads);
     const auto r = inner_core::build(in, params, pool);
     char buf[1024];
@@ -644,6 +649,7 @@ int innerCore(unsigned threads) {
     writeArray(r.positions);
     writeArray(r.indices);
     for (size_t i = 0; i < r.source.size(); ++i) { writeOne<int32_t>(r.source[i]); writeOne<uint8_t>(r.route[i]); }
+    writeArray(r.winding);
     std::fflush(stdout);
     return 0;
 }

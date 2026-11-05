@@ -487,15 +487,17 @@ export function runNativeFillTexture(params: number[], walls: NativeWallMap[], p
 // ------------------------------------------------------------------------------------------------ the inner core
 
 /** pipeline-k/inner-core.ts's solid natively (scratchbox_inner_core.hpp): its report, closed surface and each triangle's photo source. */
-export function runNativeInnerCore(params: number[], soup: Float32Array, kind: Uint8Array, footprint: Vec2[][], groundY: number | undefined, regions: Array<{ c: number[]; r: number }>, threads: number): { report: Record<string, unknown>; positions: Float64Array; indices: Uint32Array; source: Int32Array; route: Uint8Array } {
+export function runNativeInnerCore(params: number[], soup: Float32Array, kind: Uint8Array, footprint: Vec2[][], groundY: number | undefined, regions: Array<{ c: number[]; r: number }>, threads: number, queries?: { points: ArrayLike<number>; only: boolean }): { report: Record<string, unknown>; positions: Float64Array; indices: Uint32Array; source: Int32Array; route: Uint8Array; winding: Float64Array } {
     const w = new Writer().magic('SBIC').u32(1).u32(params.length).f64s(params).u32(soup.length).f32s(soup).raw(kind).u32(footprint.length);
     for (const loop of footprint) w.u32(loop.length).f64s(loop.flatMap(p => [p[0], p[1]]));
     w.f64s([groundY ?? Number.NaN]).u32(regions.length).f64s(regions.flatMap(g => [g.c[0], g.c[1], g.c[2], g.r]));
+    w.u32(queries?.only ? 1 : 0).u32((queries?.points.length ?? 0) / 3).f64s(queries?.points ?? []);
     const r = new Reader(runSync('inner-core', w.take(), threads));
     const report = JSON.parse(r.str()) as Record<string, unknown>;
     const positions = r.f64s(r.u32()), indices = r.u32s(r.u32());
     const n = indices.length / 3, source = new Int32Array(n), route = new Uint8Array(n);
     for (let t = 0; t < n; t++) { source[t] = r.i32(); route[t] = r.u8s(1)[0]; }
+    const winding = r.f64s(r.u32());
     r.done('inner-core');
-    return { report, positions, indices, source, route };
+    return { report, positions, indices, source, route, winding };
 }

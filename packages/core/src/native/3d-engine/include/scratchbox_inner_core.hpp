@@ -25,6 +25,9 @@
  * Inside a repair region (a hole the outside check found, the core missing behind it) minInsetM and regionWindingMin stand
  * in for insetM and windingMin.
  *
+ * The same winding number answers point queries (outside-closure.ts: a scan sheet with the building's outside on both
+ * sides hangs in the air).
+ *
  * Every voxel face toward a voxel not kept is drawn facing out, its corners shared on the grid, so the result is closed
  * whatever its shape (a face shared by two kept voxels is not drawn). Each face is also given the surface it takes its photo
  * from: the nearest rebuilt wall facing within facingMin of it, else the nearest other photo-textured surface, within
@@ -92,6 +95,9 @@ struct Input {
     /** The ground (m); NaN: the building's lowest point. */
     double groundY = std::numeric_limits<double>::quiet_NaN();
     std::vector<Region> regions;
+    /** Points whose winding number is wanted (outside-closure.ts: which side of a scan piece the building is on), and whether only those. */
+    std::vector<Vec3> queries;
+    bool queriesOnly = false;
 };
 
 struct Output {
@@ -107,6 +113,8 @@ struct Output {
     double minClearanceM = 0;
     double facesWall = 0, facesPhoto = 0, facesNone = 0;
     int nx = 0, ny = 0, nz = 0;
+    /** The building's winding number at each query point. */
+    std::vector<double> winding;
 };
 
 namespace detail {
@@ -301,7 +309,13 @@ inline Output build(const Input& in, const Params& P, FixedThreadPool& pool) {
         const float* f = &in.soup[i * 9];
         tris[i] = {{{f[0], f[1], f[2]}}, {{f[3], f[4], f[5]}}, {{f[6], f[7], f[8]}}};
     }
-    if (!nt) return out;
+    if (!nt) { out.winding.assign(in.queries.size(), 0); return out; }
+    if (!in.queries.empty() || in.queriesOnly) {
+        const Bvh qb(tris);
+        out.winding.assign(in.queries.size(), 0);
+        pool.forEach(in.queries.size(), [&](size_t i) { out.winding[i] = qb.winding(in.queries[i], P.farRatio); });
+        if (in.queriesOnly) return out;
+    }
     // the grid's angle: the upright surfaces' plan normals, by area, at four times their angle (so walls at right angles agree)
     double c4 = 0, s4 = 0;
     for (const Tri& t : tris) {

@@ -16,7 +16,8 @@
  *  - two rebuilt facades stopping short of their corner are joined on the corner line, both strips on the same points, and
  *    their near corners welded; no strip where one overshoots the corner, or where a surface facing out already stands behind;
  *  - the scan is put back only behind a rebuilt wall;
- *  - a scan piece floating free (touching no surface nor the ground) is dropped; one hanging from a wall is kept.
+ *  - a scan piece floating free (touching no surface nor the ground) is dropped; one hanging from a wall is kept; a larger
+ *    scan sheet sticking out of the building into the air (outside on both sides) is dropped, the building's own walls kept.
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -289,5 +290,18 @@ describe('floating scan pieces', () => {
         expect(area('scan_b')).toBeCloseTo(1, 4);
         expect(area('scan_c')).toBeCloseTo(1, 4);
         expect(area('FacadeLattice_1')).toBeCloseTo(100, 3);
+    });
+
+    it('drops a scan sheet sticking out of the building into the air, and keeps the building', () => {
+        // a closed scan box with a 10 m x 10 m sheet hung off its +x face's top edge, sticking out sideways
+        const b = box(0, 20, 0, 16, 20);
+        const sheet = quad([20, 20, 3], [10, 0, 0], [0, -10, 0]);
+        const bytes = glb([{ name: 'scan', tris: b }, { name: 'scan_sheet', tris: sheet }]);
+        const s = findShards(bytes, 0);
+        expect(s.sheets).toBe(1);
+        expect(s.sheetAreaM2).toBeCloseTo(100, 3);
+        const out = dropTriangles(bytes, s.keys);
+        expect(nodeTris(out, 'scan_sheet').every(t => Math.hypot(...cross(sub(t[1], t[0]), sub(t[2], t[0]))) === 0)).toBe(true);
+        expect(nodeTris(out, 'scan').filter(t => Math.hypot(...cross(sub(t[1], t[0]), sub(t[2], t[0]))) > 0).length).toBe(b.length / 3);
     });
 });
