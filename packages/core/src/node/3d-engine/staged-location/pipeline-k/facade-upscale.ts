@@ -75,13 +75,25 @@ export const FACADE_UPSCALE_PARAMS = {
 
 export type FacadeUpscaleParams = typeof FACADE_UPSCALE_PARAMS;
 
-/** The time a build's own budget and its chat tool's limit grow by when the upscale is on: its maxMs plus the facades in flight. */
+/**
+ * A district's chunk (pipeline K-D), where the upscale is on by default (user decision, 2026-11-04): a dozen calls and six
+ * minutes a chunk, the lowest facades first, so a 21-chunk district asks at most about 250 tiles the first time (about
+ * $35-60) and nothing for tiles already answered; within its run's own budget.
+ */
+export const FACADE_UPSCALE_DISTRICT_PARAMS: FacadeUpscaleParams = { ...FACADE_UPSCALE_PARAMS, maxCalls: 12, maxMs: 6 * 60_000 };
+
+/** The time a single building's own budget and its chat tool's limit grow by when the upscale is on: its maxMs plus the facades in flight. */
 export const FACADE_UPSCALE_EXTRA_MS = 20 * 60_000;
 
-/** Whether a build asks for the upscale: the node graph's switch when set, else SCRATCHBOX_K_FACADE_UPSCALE=1. */
-export function facadeUpscaleAsked(steps: Record<string, unknown> | undefined): boolean {
+/**
+ * Whether a build runs the upscale: the node graph's switch when set, else SCRATCHBOX_K_FACADE_UPSCALE (1 on, 0 off), else
+ * on for a district (K-D, its chunks too) and off for a single building.
+ */
+export function facadeUpscaleAsked(steps: Record<string, unknown> | undefined, opts: { district?: boolean } = {}): boolean {
     const asked = steps?.['twin.facadeUpscale'];
-    return typeof asked === 'boolean' ? asked : process.env.SCRATCHBOX_K_FACADE_UPSCALE?.trim() === '1';
+    if (typeof asked === 'boolean') return asked;
+    const env = process.env.SCRATCHBOX_K_FACADE_UPSCALE?.trim();
+    return env === '1' ? true : env === '0' ? false : opts.district === true;
 }
 
 export interface FacadeUpscaleFacade {
