@@ -147,6 +147,8 @@ export interface TileSeamFillStats { edgesFilled: number; triangles: number; are
  * The tone feather's counts (TileSeamToneStats): the cuts two leaves' boxes share, the bins along them both sides read, the
  * photos and texels changed, the largest gain, and the CIELAB step between the two sides per bin (p50, p90) before and after.
  */
+/** A cut two leaves' boxes share, in the scan's frame: the plane u . x = o and the lower tile's face rectangle on it. */
+export interface TileSeamCut { tiles: number[]; u: number[]; o: number; c: number[]; a: number[]; b: number[]; ha: number; hb: number }
 export interface TileSeamToneStats { tilesBoxed: number; cuts: number; binsMatched: number; imagesChanged: number; texelsChanged: number; maxGain: number; dEBefore: number[]; dEAfter: number[] }
 
 export interface TileSeamWeldResult {
@@ -161,6 +163,8 @@ export interface TileSeamWeldResult {
     adaptive?: TileSeamAdaptiveStats;
     stripFill?: TileSeamFillStats;
     tone?: TileSeamToneStats;
+    /** The cuts two leaves' boxes share (when the extraction gives boxes): what the stages after read as the tiles' seams. */
+    cuts?: TileSeamCut[];
     /** The source tiles: how many, how many nodes the stage named, how many state a geometric error. */
     tiles?: { count: number; nodesNamed: number; withStatedError: number };
     /** Before any pass, after the fixed passes (overlap trim, weld, T-junctions), and after all of them. */
@@ -212,6 +216,7 @@ export function parseTileSeamWeldReport(text: string): Omit<TileSeamWeldResult, 
         ...(raw.adaptive && Number.isFinite(raw.adaptive.candidates) ? { adaptive: raw.adaptive as TileSeamAdaptiveStats } : {}),
         ...(raw.stripFill && Number.isFinite(raw.stripFill.triangles) ? { stripFill: raw.stripFill as TileSeamFillStats } : {}),
         ...(raw.tone && Number.isFinite(raw.tone.cuts) && Array.isArray(raw.tone.dEBefore) ? { tone: raw.tone as TileSeamToneStats } : {}),
+        ...(Array.isArray(raw.cuts) ? { cuts: (raw.cuts as TileSeamCut[]).filter(c => Number.isFinite(c?.o) && Array.isArray(c.u) && c.u.length === 3) } : {}),
         ...(raw.tiles && Number.isFinite(raw.tiles.count) ? { tiles: raw.tiles } : {}),
         ...(isAudit(raw.seamAudit?.before) && isAudit(raw.seamAudit?.afterFixed) && isAudit(raw.seamAudit?.after) ? { seamAudit: raw.seamAudit } : {}),
         ms: { load: Number(raw.ms?.load) || 0, weld: Number(raw.ms?.weld) || 0, write: Number(raw.ms?.write) || 0, fixed: Number(raw.ms?.fixed) || 0, adaptive: Number(raw.ms?.adaptive) || 0, fill: Number(raw.ms?.fill) || 0, tone: Number(raw.ms?.tone) || 0 }

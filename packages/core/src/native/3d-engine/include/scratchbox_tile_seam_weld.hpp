@@ -1677,7 +1677,9 @@ private:
      * of the lower tile; each photo's texels are located in the world (the first place a triangle draws each), and a texel
      * drawn at two places more than sharedM apart (an atlas reusing it) is marked shared: the passes never write it.
      */
-    struct SeamCut { uint32_t tile[2]; V3 u, c, a, b; double o; };
+    /** A cut: the plane halfway between two boxes' facing faces (u . x = o, u out of the lower tile), and the lower tile's
+     *  face rectangle on it (centre c, in-plane axes a, b, half extents ha, hb). */
+    struct SeamCut { uint32_t tile[2]; V3 u, c, a, b; double o, ha, hb; };
     struct SeamCuts {
         std::vector<SeamCut> cuts;
         std::vector<std::vector<std::pair<uint32_t, int>>> cutsOf;   // per tile: (cut, side)
@@ -1686,11 +1688,9 @@ private:
         std::vector<std::vector<float>> texelAt;                     // per photo: world position per texel (NaN: no triangle draws it)
         std::vector<std::vector<uint8_t>> texelShared;
     };
-    static SeamCuts seamCuts(const gltf::GltfScene& scene, const std::vector<uint32_t>& triTile, const std::vector<TileBox>& boxes, double faceMatchM, int threadsWanted) {
-        SeamCuts sc;
-        const auto& mesh = scene.mesh;
-        const size_t F = mesh.indices.size() / 3;
-        auto vp = [&](uint32_t v) { const auto& q = mesh.vertices[v].position; return V3{q.x, q.y, q.z}; };
+    /** The cuts two boxes share: faces facing each other within faceMatchM whose rectangles overlap (the tile seam stage's cuts). */
+    static std::vector<SeamCut> boxCuts(const std::vector<TileBox>& boxes, double faceMatchM) {
+        std::vector<SeamCut> cuts;
         struct Face { uint32_t tile; V3 u, c, a, b; double o, ha, hb; };
         std::vector<Face> faces;
         for (uint32_t t = 0; t < boxes.size(); ++t) {
@@ -1721,8 +1721,18 @@ private:
             if (f.tile >= g.tile || f.u.dot(g.u) > -0.995 || std::abs(f.o + g.o) > faceMatchM || !overlaps(f, g)) continue;
             SeamCut c;
             c.tile[0] = f.tile; c.tile[1] = g.tile; c.u = f.u; c.o = 0.5 * (f.o - g.o); c.a = f.a; c.b = f.b; c.c = f.c - f.u * (f.o - c.o);
-            sc.cuts.push_back(c);
+            c.ha = f.ha; c.hb = f.hb;
+            cuts.push_back(c);
         }
+        return cuts;
+    }
+
+    static SeamCuts seamCuts(const gltf::GltfScene& scene, const std::vector<uint32_t>& triTile, const std::vector<TileBox>& boxes, double faceMatchM, int threadsWanted) {
+        SeamCuts sc;
+        const auto& mesh = scene.mesh;
+        const size_t F = mesh.indices.size() / 3;
+        auto vp = [&](uint32_t v) { const auto& q = mesh.vertices[v].position; return V3{q.x, q.y, q.z}; };
+        sc.cuts = boxCuts(boxes, faceMatchM);
         sc.cutsOf.assign(boxes.size(), {});
         for (uint32_t k = 0; k < sc.cuts.size(); ++k) { sc.cutsOf[sc.cuts[k].tile[0]].push_back({k, 0}); sc.cutsOf[sc.cuts[k].tile[1]].push_back({k, 1}); }
         sc.trisOf.assign(boxes.size(), {});
@@ -2013,6 +2023,18 @@ public:
         const BinMap after = sample();
         stepPercentiles(after, matched, st.dEAfterP50, st.dEAfterP90);
         return st;
+    }
+    /** The cuts two tiles' boxes share, as a JSON array (the mesh's frame), for the stages after the seam stage. */
+    static std::string cutsJson(const std::vector<TileBox>& boxes, double faceMatchM = TileSeamToneParams{}.faceMatchM) {
+        auto v3 = [](const V3& v) { char b[96]; std::snprintf(b, sizeof b, "[%.4f, %.4f, %.4f]", v.x, v.y, v.z); return std::string(b); };
+        std::string js = "[";
+        bool first = true;
+        for (const SeamCut& c : boxCuts(boxes, faceMatchM)) {
+            char b[96]; std::snprintf(b, sizeof b, ", \"o\": %.4f, \"ha\": %.3f, \"hb\": %.3f}", c.o, c.ha, c.hb);
+            js += (first ? "" : ", ") + std::string("{\"tiles\": [") + std::to_string(c.tile[0]) + ", " + std::to_string(c.tile[1]) + "], \"u\": " + v3(c.u) + ", \"c\": " + v3(c.c) + ", \"a\": " + v3(c.a) + ", \"b\": " + v3(c.b) + b;
+            first = false;
+        }
+        return js + "]";
     }
     static std::string toneStatsJson(const TileSeamToneStats& s) {
         char b[256];
