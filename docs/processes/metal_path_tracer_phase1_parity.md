@@ -346,6 +346,34 @@ Proof sheet: `docs/screenshots/path_tracer_scene_lights_2026-11-04.png`. The exi
 - Viewport point/spot export not yet checked live in the app.
 - Glass and transmission, participating media, and the material extensions are the next phases.
 
+## Phase 15 (2026-11-04): the viewport's frame transport
+
+Measured live in the app (example room, view 1465x1172 traced at about 1073x859, GPU at 97-99% from other work on the machine both times), in the 30 s after a small orbit:
+
+| | Before | After |
+| :--- | :--- | :--- |
+| Samples per pixel reached | 54 (still converging) | 256 (finished at 3.4 s) |
+| Frame downloads / distinct frames | 178 / 27 (85% duplicates) | 9 / 9 |
+| Frame requests in flight at once | up to 94 | 1 |
+| Bytes downloaded | 1.2 GB | 37 MB |
+| View request | 1.9 s | 88 ms |
+| GPU busy | 0.87 s of 30 s | 2.6 s of 3.4 s |
+
+**What changed.**
+- **Client.** One frame request at a time, and each request names the newest view sent (`seq`), so the server never sends a frame of an older view.
+- **Server.** Each frame is read from the helper's file once, when the helper announces it, and served from memory.
+- **Frame writes.** The helper writes a converging frame each time the samples double (1, 2, 4, ...), at least every half second and never closer than 40 ms. Before, it wrote one every batch.
+- **On the GPU.** The frame is denoised, exposed and AgX-mapped on the GPU (`pt_display`, a port of `view::toDisplayImage`), and only the bytes are read back. The full per-pixel readback is gone, and exposure is metered once per view.
+- **Size.** Converging frames go out at the traced size (the viewer scales them). Only the finished frame is MetalFX-upscaled to the view.
+- **Pipelining.** Sample command buffers are committed without waiting: two run while the next is encoded, and every read of the frame drains them first.
+
+**Also fixed.** The status box covered the left third of every traced frame: a viewport-wide rule (`.sb-3d-viewport-frame > div`) stretched it to full size. It is an `aside` now and lists the lights it captured.
+
+**Not done.**
+- The first click still builds the snapshot's full LOD file (minutes under load).
+- A camera move restarts at full traced size (no low-resolution preview while moving).
+- Frame buffers are still reallocated on every view.
+
 ## Next (plan)
 
 - Metallic-roughness atlases; a quad-aware pairing to lift the 81% paired share.
