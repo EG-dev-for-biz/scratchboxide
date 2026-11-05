@@ -231,6 +231,8 @@ import { shadowLiftQaPng } from './pipeline-k/shadow-lift-qa';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
 import { PROJECT_MAX_RELIEF_M, pipelineIRefineEnabled, refinePipelineI, type RefineOutcome } from './pipeline-i/refine';
+import { defaultWorldCacheBucket } from '../../cloud-store/world-cache';
+import { publishDistrictWorld } from '../../cloud-store/district-world';
 import { captureBuildingTrainingInBackground, sweepPendingBuildingTraining, type BuildingTrainingCaptureInput } from '../../cloud-store/building-training-capture';
 import { captureTrainingPairsInBackground } from '../../cloud-store/training-pair-capture';
 import { sceneTrainingPairs } from './scene-training-pairs';
@@ -2234,6 +2236,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             cache.writeRunNote(runId, 'model_calls', modelCalls.report());
             const outcome = finishRun(run, {
                 request, place: placeValue, extraction: scan, sizedTo: 'request', remeshedElsewhere: true, now, persist,
+                keep: { modelsDir: cache.modelsDir, note: (name, value) => cache.writeRunNote(runId, name, value) },
                 ...(scanOut.compat.groundGlbPath ? { groundFile: scanOut.compat.groundGlbPath } : {}), ...(scanOut.compat.trees ? { trees: scanOut.compat.trees } : {}),
                 rebuild: { droppedNotResolvable: 0, sourceLimits: scanOut.result.sourceLimits }
             });
@@ -6760,7 +6763,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         if (readingStore) cache.writeRunNote(runId, 'model_readings', readingStore.report());
         const outcome = finishRun(run, {
             request, place: placeValue, extraction, structure, sizedTo: t.sizedTo, remeshed: remeshedNow, groundFile: groundOverride?.groundFile ?? remesh.value?.groundFile, groundLayerId: groundOverride?.groundLayerId ?? remesh.value?.groundLayerId ?? currentL1()?.objectId,
-            trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, ...(textureValue ? { textures: textureValue } : {}), now, persist
+            trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, ...(textureValue ? { textures: textureValue } : {}), now, persist,
+            keep: { modelsDir: cache.modelsDir, note: (name, value) => cache.writeRunNote(runId, name, value) }
         });
         // the place's versions are in the object store before this run's are offered to it (a pull still out keeps reading)
         if (placePull) await Promise.race([placePull, new Promise(r => setTimeout(r, PLACE_STORE_PARAMS.pullWaitMs).unref())]);
@@ -6932,6 +6936,34 @@ interface FinishInput {
     textures?: TextureStageValue;
     now: () => number;
     persist: () => void;
+    /** Where this run's models were published, and its run notes: a finished district is kept as a world and backed up (backupDistrictWorld). */
+    keep?: { modelsDir: string; note: (name: string, value: unknown) => void };
+}
+
+/** A district's world name: its place and its run, e.g. `district_2_penn_plaza_new_york_8e3a912b`. */
+export function districtWorldSlug(query: string, runId: string): string {
+    return `district_${query.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80)}_${runId}`;
+}
+
+/**
+ * Every finished district (not one isolated building) kept as a world in the folder that serves /tilesets beside the
+ * published models, and backed up to the cloud world cache, so it opens again on any machine (user ask, 2026-11-04;
+ * cloud-store/district-world.ts). In the background: the build's result never waits on the upload, and a failure is a run
+ * note, never a failed build. Only with a world cache bucket (SCRATCHBOX_WORLD_CACHE_BUCKET or cloud-store.json; none in
+ * tests), and not with SCRATCHBOX_DISTRICT_BACKUP=0.
+ */
+function backupDistrictWorld(f: FinishInput, runId: string, artifact: CanvasArtifact | undefined): void {
+    if (f.request.isolate || !artifact || !f.keep || process.env.SCRATCHBOX_DISTRICT_BACKUP?.trim() === '0') return;
+    const bucket = defaultWorldCacheBucket();
+    if (!bucket) return;
+    const keep = f.keep, slug = districtWorldSlug(f.request.query, runId);
+    const started = Date.now();
+    void publishDistrictWorld({
+        artifact: artifact as unknown as { data?: Record<string, unknown> }, modelsDir: keep.modelsDir, slug, runId, bucket,
+        worldsDir: path.join(path.dirname(keep.modelsDir), 'tilesets'),
+        title: `${f.place.formattedAddress} district (${runId})`, log: m => console.log(m)
+    }).then(r => keep.note('district_world', { slug, models: r.models, bytes: r.bytes, ...(r.stored ? { stored: r.stored } : {}), ms: Date.now() - started }))
+        .catch(err => keep.note('district_world', { slug, failed: errorMessage(err), ms: Date.now() - started }));
 }
 
 function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
@@ -7071,6 +7103,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
     const result: StagedLocationResult = { ...base, artifact: artifact ?? null, digest, summary };
     // the finish event carries the final scene
     run.emitFinish(status === 'complete' ? 'committed' : 'degraded', digest);
+    backupDistrictWorld(f, run.runId, artifact);
     f.persist();
     run.close();
     return {
