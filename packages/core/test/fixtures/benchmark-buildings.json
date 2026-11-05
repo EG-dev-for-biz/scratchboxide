@@ -1,0 +1,83 @@
+{
+    "schema": "scratchbox.benchmark-places/1",
+    "about": "The user's own benchmark places for single-building builds (pipeline K): one real building per kind of shape the pipeline has to handle, so a change proven on one kind is checked on the others. Test data for scripts/benchmark_buildings.ts; no product code reads it. The kind is a label for the sheet only.",
+    "places": [
+        {
+            "slug": "penn2",
+            "name": "Penn 2",
+            "query": "Two Penn Plaza, 2 Pennsylvania Plaza, New York, NY 10121",
+            "kind": "standing benchmark: tower over the Penn Station rail yard",
+            "why": "The user's district target; a glass tower built over the station's tracks, next to Madison Square Garden."
+        },
+        {
+            "slug": "esb",
+            "name": "Empire State Building",
+            "query": "Empire State Building, 350 Fifth Avenue, New York",
+            "kind": "standing benchmark: stepped stone tower",
+            "why": "The user's building and texture benchmark; setbacks, a podium block and a 100 m corner strip that has opened before."
+        },
+        {
+            "slug": "lever-house",
+            "name": "Lever House",
+            "query": "Lever House, 390 Park Avenue, New York, NY 10022",
+            "kind": "tower on a podium",
+            "why": "A thin glass slab standing on a one-storey podium with an open courtyard under it: the podium's roof and the slab's base meet."
+        },
+        {
+            "slug": "30-rock",
+            "name": "30 Rockefeller Plaza",
+            "query": "30 Rockefeller Plaza, New York, NY 10112",
+            "kind": "stepped setbacks",
+            "why": "A slab whose narrow ends step back many times up its height: many short terraces and small faces."
+        },
+        {
+            "slug": "apthorp",
+            "name": "The Apthorp",
+            "query": "The Apthorp, 2211 Broadway, New York, NY 10024",
+            "kind": "courtyard block",
+            "why": "A whole-block apartment house round a large inner courtyard: inner facades the street cameras never see."
+        },
+        {
+            "slug": "flatiron",
+            "name": "Flatiron Building",
+            "query": "Flatiron Building, 175 Fifth Avenue, New York, NY 10010",
+            "kind": "angled facade",
+            "why": "A triangular plan with a 25-degree prow and a gently curved narrow end: facades that are not at right angles."
+        },
+        {
+            "slug": "faneuil-hall",
+            "name": "Faneuil Hall",
+            "query": "Faneuil Hall, Boston, MA 02109",
+            "kind": "brick low-rise",
+            "why": "A free-standing four-storey brick hall with a pitched roof and cupola, in another city's tiles."
+        },
+        {
+            "slug": "nypl",
+            "name": "New York Public Library, Stephen A. Schwarzman Building",
+            "query": "New York Public Library, 476 Fifth Avenue, New York, NY 10018",
+            "kind": "ornate stone",
+            "why": "A low Beaux-Arts marble building with columns, deep porticos and statuary: relief the lattice must not flatten."
+        },
+        {
+            "slug": "seagram",
+            "name": "Seagram Building",
+            "query": "Seagram Building, 375 Park Avenue, New York, NY 10152",
+            "kind": "glass box",
+            "why": "A plain bronze-and-glass curtain-wall box set back on its plaza: mostly glass, a regular grid, little stone."
+        },
+        {
+            "slug": "helmsley",
+            "name": "Helmsley Building",
+            "query": "Helmsley Building, 230 Park Avenue, New York, NY 10169",
+            "kind": "over a road and rail cut",
+            "why": "Park Avenue's viaduct runs through its arched portals above the Grand Central tracks: a building with roads through it."
+        },
+        {
+            "slug": "steinway",
+            "name": "Steinway Tower",
+            "query": "Steinway Tower, 111 West 57th Street, New York, NY 10019",
+            "kind": "narrow infill",
+            "why": "An 18 m wide supertall pressed between neighbours, on a landmark base: isolation from walls it shares."
+        }
+    ]
+}
