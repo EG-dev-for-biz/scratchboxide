@@ -81,6 +81,8 @@ export interface RegionClass {
     openings: boolean;
     /** The tile-only harvest (material-harvest.ts): the class's texture energy on the facade photos, and on how many facades it holds at least 5%. Photo-inferred. */
     texture?: TextureEnergy; facades?: number;
+    /** The class's texture energy as the photos show it, measured for every class (classPhotoTextures): what a library set's grain is held to. Photo-inferred. */
+    photoTexture?: TextureEnergy;
     /** The median shorter side (m) of the repeated elements (windows' unit cells) this class holds most of (classRepeatSizes); none when it holds none. */
     repeatM?: number;
 }
@@ -297,7 +299,7 @@ export function readRegionClasses(json: any, images: Map<number, RgbaImage8>, P:
  * responses of its texels, summed per class (each texel's nearest class, lightness
  * weighed as the classes were); and on how many facades each class holds at least 5% of the wall.
  */
-function harvestTextures(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, rebuilt: Map<number, string>, classes: RegionClass[], wL: number): void {
+function harvestTextures(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, rebuilt: Map<number, string>, classes: RegionClass[], wL: number, put: (c: RegionClass, texture: TextureEnergy, facades: number) => void = (c, t, f) => { c.texture = t; c.facades = f; }): void {
     const K = classes.length, B = TEXTURE_BANDS_M.length;
     const sq = Array.from({ length: K }, () => new Float64Array(B)), lum = Array.from({ length: K }, () => new Float64Array(B)), cnt = Array.from({ length: K }, () => new Float64Array(B));
     const texelSum = new Float64Array(K), texelN = new Float64Array(K), facades = new Int32Array(K), cand = regionCandidates(classes);
@@ -331,9 +333,13 @@ function harvestTextures(g: ParsedGlb, json: any, images: Map<number, RgbaImage8
     }
     classes.forEach((c, k) => {
         if (!texelN[k]) return;
-        c.texture = { texelM: Math.round((texelSum[k] / texelN[k]) * 1e4) / 1e4, energy: Array.from({ length: B }, (_, b) => { if (!cnt[k][b]) return NaN; const m = lum[k][b] / cnt[k][b]; return m > 0 ? Math.round((sq[k][b] / cnt[k][b] / (m * m)) * 1e6) / 1e6 : NaN; }) };
-        c.facades = facades[k];
+        put(c, { texelM: Math.round((texelSum[k] / texelN[k]) * 1e4) / 1e4, energy: Array.from({ length: B }, (_, b) => { if (!cnt[k][b]) return NaN; const m = lum[k][b] / cnt[k][b]; return m > 0 ? Math.round((sq[k][b] / cnt[k][b] / (m * m)) * 1e6) / 1e6 : NaN; }) }, facades[k]);
     });
+}
+
+/** Every class's texture energy as the rebuilt facades' photos show it (RegionClass.photoTexture), as the harvest measures it. */
+export function classPhotoTextures(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, classes: RegionClass[]): void {
+    harvestTextures(g, json, images, photoMaterials(json).rebuilt, classes, 1, (c, t) => { c.photoTexture = t; });
 }
 
 /** A library map box-filtered to a tile of tw x th texels (each texel the mean of the source texels it covers). */

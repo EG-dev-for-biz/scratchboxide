@@ -20,7 +20,7 @@
  * roughness and metalness scaled to the read values, its grain kept, and its normal relief by the square of the read
  * roughness (reliefFullAt), so a surface read smooth and reflective (window glass) is drawn smooth and nearly flat (user, 2026-11-05);
  * and the set's grain is drawn only as far as the pick by appearance confirmed the set (grainFullAtConf) and as far as its
- * tile fits the element its class repeats on (patternFit).
+ * tile fits the element its class repeats on (patternFit) and its pattern is borne out by the photo (energyFit).
  * Labelled photo-inferred.
  */
 
@@ -98,6 +98,19 @@ export interface DrawnFinish { roughness: number; metallic: number; relief: numb
 export function patternFit(repeatM: number | undefined, tileM: [number, number]): number {
     if (!(repeatM && repeatM > 0)) return 1;
     return Math.max(0, Math.min(1, repeatM / Math.max(tileM[0], tileM[1])));
+}
+
+/**
+ * How far a set's own pattern is borne out by the photos (RegionClass.photoTexture against the set's texture energy at the
+ * class's texel, material-harvest.ts): the square root of the class's energy over the set's on the bands both resolve,
+ * capped at 1, so a set is never drawn with more grain than the photo shows (a fence's pattern on a plain panel). 1 when
+ * either is unmeasured.
+ */
+export function energyFit(photo: number[] | undefined, set: number[] | undefined): number {
+    if (!photo || !set) return 1;
+    let p = 0, s = 0;
+    for (let b = 0; b < Math.min(photo.length, set.length); b++) if (Number.isFinite(photo[b]) && Number.isFinite(set[b])) { p += photo[b]; s += set[b]; }
+    return s > 0 ? Math.max(0, Math.min(1, Math.sqrt(p / s))) : 1;
 }
 
 /** The share of a set's grain to draw from the pick by appearance (FINISH_READ.grainFullAtConf): undefined pick = no chooser. */

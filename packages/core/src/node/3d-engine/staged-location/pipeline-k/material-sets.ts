@@ -26,7 +26,7 @@ import { NativePythonRunnerService } from '../../native-python-runner-service';
 import { decodeImageInMemory } from '../tile-texture-transfer';
 import type { RegionClass, RegionSet } from './material-regions';
 import { CHOICE_CANDIDATES, type ChoiceCandidate, type ChoiceRow, type SetChoice } from './material-choice';
-import { finishMaps, finishTarget, grainOf, patternFit, type ClassFinish } from './material-finish';
+import { energyFit, finishMaps, finishTarget, grainOf, patternFit, type ClassFinish } from './material-finish';
 import { readingKey, type ModelReadingStore } from './model-readings';
 
 /** Prepared map size: a facade texel is several centimetres, so a tile of a metre or two needs few texels. */
@@ -207,12 +207,19 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         kept.set(id, maps);
         opts.store?.put(preparedKey(id), { normal: maps.normal.toString('base64'), orm: maps.orm.toString('base64') } satisfies PreparedRecord);
     }
+    // each chosen set's texture energy at its class's texel, against the photo's (material-finish.ts energyFit)
+    const setEnergy = await Promise.all(chosen.map(async (hit, k) => {
+        const t = classes[k].photoTexture;
+        if (!t || !hit.entry.realSizeM) return undefined;
+        const bytes = await libraryColourPreview(hit.entry, repoRoot, opts.signal).catch(() => undefined);
+        return bytes ? libraryTextureEnergy(decodeImageInMemory(bytes), hit.entry.realSizeM, t.texelM).energy : undefined;
+    }));
     return chosen.map((hit, k): RegionSet => {
         const maps = kept.get(hit.entry.id)!;
         // the set drawn at the class's read finish (material-finish.ts finishMaps): smooth where it was read smooth, and its
         // grain only as far as the pick by appearance confirmed it
         const pick = choices[k] ? { by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}) } : undefined;
-        const drawn = finishMaps(decodeImageInMemory(maps.orm), decodeImageInMemory(maps.normal), finishes[k], grainOf(pick) * patternFit(classes[k].repeatM, hit.entry.realSizeM!));
+        const drawn = finishMaps(decodeImageInMemory(maps.orm), decodeImageInMemory(maps.normal), finishes[k], grainOf(pick) * patternFit(classes[k].repeatM, hit.entry.realSizeM!) * energyFit(classes[k].photoTexture?.energy, setEnergy[k]));
         return {
             name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
             ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), roughness: targets[k].roughness, metallic: targets[k].metallic, ...(drawn.drawn ? { drawn: drawn.drawn } : {}), label: 'photo-inferred' as const } } : drawn.drawn ? { finish: { roughness: drawn.drawn.roughness, metallic: drawn.drawn.metallic, drawn: drawn.drawn, label: 'photo-inferred' as const } } : {}),
