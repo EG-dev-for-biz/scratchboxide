@@ -53,8 +53,9 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     google_3d_tiles_get_clay: args => {
         const asked = typeof args.district === 'string' ? args.district : args.pipeline === 'kd' ? 'kd' : undefined;
         const kd = asked !== undefined ? stagedDistrict({ district: asked }) === 'kd' : args.isolate !== true && stagedDistrict({}) === 'kd';
-        // pipeline K's facade upscale (opt-in) adds its own time (the run's budget grows by the same)
-        const upscale = facadeUpscaleAsked(args.steps as Record<string, unknown> | undefined) ? FACADE_UPSCALE_EXTRA_MS : 0;
+        // pipeline K's facade upscale on a single building adds its own time (the run's budget grows by the same); a
+        // district's capped upscale fits its own budget
+        const upscale = args.isolate === true && facadeUpscaleAsked(args.steps as Record<string, unknown> | undefined) ? FACADE_UPSCALE_EXTRA_MS : 0;
         return { maxMs: (kd ? 362 * MIN : args.isolate === true ? 40 * MIN : 142 * MIN) + upscale };
     },
     google_3d_tiles_get_full_texture: { maxMs: 40 * MIN },
