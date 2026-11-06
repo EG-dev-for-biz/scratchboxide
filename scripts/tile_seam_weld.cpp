@@ -305,6 +305,9 @@ int main(int argc, char** argv) {
     scratchbox::tile_seam_weld::TileSeamToneStats toneStats;
     size_t tilesBoxed = 0;
     for (const auto& b : tileBox) if (b.valid) ++tilesBoxed;
+    // how far the two tiles' photos would have to slide along each cut to line up (a measure only), as the scan came
+    scratchbox::tile_seam_weld::TileSeamOffsetStats offsetStats;
+    if (tilesBoxed) { scratchbox::tile_seam_weld::TileSeamOffsetParams op; op.threads = p.threads; offsetStats = TileSeamWeld::measureSeamOffsets(scene, triTile, tileBox, op); }
     if ((tone || balance) && tilesBoxed) {
         scratchbox::tile_seam_weld::TileSeamToneParams tp;
         tp.threads = p.threads;
@@ -345,6 +348,7 @@ int main(int argc, char** argv) {
         (adaptive && fill ? ", \"stripFill\": {" + TileSeamWeld::fillStatsJson(fillStats) + "}" : std::string()) +
         ((tone || balance) && tilesBoxed ? ", \"tone\": {\"tilesBoxed\": " + std::to_string(tilesBoxed) + ", \"feather\": " + (tone ? "true" : "false") + ", " + TileSeamWeld::toneStatsJson(toneStats) + "}" : std::string()) +
         (tilesBoxed ? ", \"cuts\": " + TileSeamWeld::cutsJson(tileBox) : std::string()) +
+        (tilesBoxed ? ", \"photoOffset\": {" + TileSeamWeld::offsetStatsJson(offsetStats) + "}" : std::string()) +
         (blend && anyBox ? ", \"stepBlend\": {\"cuts\": " + std::to_string(blendStats.cuts) + ", \"cutsMatched\": " + std::to_string(blendStats.cutsMatched) + ", \"positionsMoved\": " + std::to_string(blendStats.positionsMoved) +
             ", \"reverted\": " + std::to_string(blendStats.reverted) + ", \"maxMoveM\": " + std::to_string(blendStats.maxMoveM) + "}" : std::string()) +
         (zip && anyBox ? ", \"rimZip\": {" + TileSeamWeld::zipStatsJson(zipStats) + "}" : std::string()) +

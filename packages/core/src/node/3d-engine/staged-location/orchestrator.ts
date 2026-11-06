@@ -2350,7 +2350,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         cache.writeRunNote(runId, 'tile_seams', {
                             version: TILE_SEAMS_VERSION, raw: raw.texturedGlb, inputTriangles: r.inputTriangles, outputTriangles: r.outputTriangles, toleranceM: r.toleranceM, seamWeld: sw,
                             ...(ot ? { overlapTrim: ot } : {}), ...(tjs ? { tJunctions: tjs } : {}), ...(ac ? { adaptive: ac } : { adaptive: false }), ...(sf ? { stripFill: sf } : {}),
-                            ...(r.tiles ? { tiles: r.tiles } : {}), ...(au ? { seamAudit: au } : {}), ...(tf ? { tone: tf } : {}), ...(ct ? { capTrim: ct } : {}), ...(r.stepBlend ? { stepBlend: r.stepBlend } : {}), ...(r.rimZip ? { rimZip: r.rimZip } : {}), ...(r.reweld ? { reweld: r.reweld } : {}), ...(r.cutScores ? { cutScores: r.cutScores } : {}), ms: r.ms
+                            ...(r.tiles ? { tiles: r.tiles } : {}), ...(au ? { seamAudit: au } : {}), ...(tf ? { tone: tf } : {}), ...(ct ? { capTrim: ct } : {}), ...(r.stepBlend ? { stepBlend: r.stepBlend } : {}), ...(r.rimZip ? { rimZip: r.rimZip } : {}), ...(r.reweld ? { reweld: r.reweld } : {}), ...(r.photoOffset ? { photoOffset: r.photoOffset } : {}), ...(r.cutScores ? { cutScores: r.cutScores } : {}), ms: r.ms
                         });
                         // open seam length (km) under 3 cm / 3-10 / 10-30 / 30-100 cm / no other tile within 1 m
                         const km = (a: { bandLengthM: number[] }) => a.bandLengthM.map(v => (v / 1000).toFixed(1)).join(' / ');

@@ -254,3 +254,20 @@ The mean log gain is -0.016 and -0.015 (no drift). Before the fit was made robus
 
 **Reading.** The tiles carry no exposure offset of their own to take out: neighbouring leaves are textured from one source, and the step at a cut is what each side's photo shows there (resolution, where a window falls, a shadow's edge), which one gain per tile cannot move. A tile also holds faces lit differently, so its cuts disagree with each other whatever gain it takes. What the balance does move is a few outlying cuts (the 90th percentile). The remaining colour work is the photo line-up across a cut, not levels.
 
+## 13. Picture offset across the cuts: measured, no line-up built (2026-11-06)
+
+**Status: a measure in every report (`photoOffset`, where the extraction gives each leaf's box); nothing is moved. A second look at the sideways registration of section 9, with the same answer.**
+
+`measureSeamOffsets`: on each wall crossing a cut, a grey profile is read either side along the wall (0.15 m cells, a leaf photo's texel; within 0.2 m of the cut; in 8 m segments by the wall's facing), and the two profiles are correlated at every shift up to 0.8 m, the peak placed between cells by a parabola. A segment counts when both sides read 16 cells in common and each carries a picture (4 grey levels of spread); it is "off" when its best correlation is at least 0.6, 0.05 above the one at no shift, and a cell or more away. Per cut: segments, segments off, correlation at no shift, shift in metres and in texels.
+
+| scan (texel 0.155 m) | segments with a picture | correlation at no shift (median / 10th) | best shift (median / 90th) | segments off |
+|---|---|---|---|---|
+| ESB | 1,020 | 0.66 / -0.14 | 0.11 m (0.7 texel) / 0.75 m | 189 (19%), median 0.27 m, +0.15 correlation |
+| Penn Station district | 1,676 | 0.70 / 0.00 | 0.10 m (0.6 texel) / 0.63 m | 385 (23%), median 0.22 m, +0.14 correlation |
+
+Both rows are with the caps removed; with them kept far fewer segments read both sides (ESB 202, correlation 0.51, shift 0.15 m). The measure adds 0.3 s (ESB) and 0.6 s (district) to the stage.
+
+The strip's width decides what is read: a metre either side the two tiles show different storeys and correlate at 0.25 (ESB) with a best shift anywhere in reach; at 0.35 m 0.58; at 0.2 m 0.66. So the measure reads the strip at the cut only.
+
+**Reading.** The typical cut needs less than a texel: the two photos stand where they should, to the photos' own resolution (15 cm a texel). About a fifth of the segments prefer a shift of one to two texels for a modest gain in correlation; with profiles of 16-53 cells, some of those are a repeat of the wall matching one bay along, not a misplaced photo. Moving a photo by a texel or two cannot sharpen a seam between photos this coarse, and section 9's try (the same shifts applied) changed nothing in renders. No line-up pass is built: the measure stays so a scan with a real offset shows it.
+

@@ -411,6 +411,50 @@ struct TileSeamZipStats {
     std::vector<TileSeamCutScore> before, after;
 };
 
+/**
+ * Picture offset across the cuts (TileSeamWeld::measureSeamOffsets): how far one tile's photo would have to slide along
+ * a cut to line up with the other's. On each wall crossing a cut, a grey profile is read either side along the wall
+ * (cellM cells, within sampleM of the cut, in segmentM pieces), and the two profiles are correlated at every shift up
+ * to maxShiftM. A segment counts when both sides read at least minCells cells in common and carry a picture (contrast).
+ */
+struct TileSeamOffsetParams {
+    double faceMatchM{0.12};
+    /** The strip read either side of the cut: narrow, so both sides show the same part of the wall (a metre away they show
+     *  different storeys, and correlate at 0.25 where a 0.2 m strip correlates at 0.66). */
+    double sampleM{0.2};
+    double crossCos{0.5};
+    /** A profile cell along the wall: about a leaf photo's texel (0.155 m on the ESB and the Penn district). */
+    double cellM{0.15};
+    double segmentM{8.0};
+    double maxShiftM{0.8};
+    size_t minCells{16};
+    /** A profile with less spread than this (grey levels) carries no picture to line up. */
+    double minContrast{4.0};
+    /** A segment is off when its best correlation is at least this, stands this much above the one at no shift, and lies a cell or more away. */
+    double clearNcc{0.6};
+    double clearGain{0.05};
+    int threads{0};
+};
+struct TileSeamCutOffset {
+    uint32_t tiles[2]{0, 0};
+    V3 u;
+    double o{0};
+    size_t segments{0}, segmentsOff{0};
+    /** Median over the cut's segments: correlation at no shift, the best shift's size (m, and in the photos' texels). */
+    double nccAtZeroP50{0}, shiftP50M{0}, shiftP50Texels{0};
+};
+struct TileSeamOffsetStats {
+    size_t cuts{0};
+    /** Segments read on both sides, those with a picture, and those whose best match is clearly off no shift. */
+    size_t segmentsRead{0}, segments{0}, segmentsOff{0};
+    double nccAtZeroP50{0}, nccAtZeroP10{0};
+    double shiftP50M{0}, shiftP90M{0}, shiftP50Texels{0}, shiftP90Texels{0};
+    /** Among the segments that are off: their shift's median (m) and the correlation gained by it. */
+    double offShiftP50M{0}, offGainP50{0};
+    double texelP50M{0};
+    std::vector<TileSeamCutOffset> perCut;
+};
+
 // ============================================================================
 // Seam tone feather: the two tiles' photos levelled toward each other across every cut two tiles share
 // ============================================================================
@@ -2364,6 +2408,125 @@ public:
         const BinMap after = sample();
         stepPercentiles(after, matched, st.dEAfterP50, st.dEAfterP90);
         return st;
+    }
+    /** The picture offset across every cut two tiles share (TileSeamOffsetParams): a measure only, nothing is changed. */
+    static TileSeamOffsetStats measureSeamOffsets(const gltf::GltfScene& scene, const std::vector<uint32_t>& triTile, const std::vector<TileBox>& boxes, const TileSeamOffsetParams& p = {}) {
+        TileSeamOffsetStats st;
+        if (triTile.size() != scene.mesh.indices.size() / 3) return st;
+        const SeamCuts sc = seamCuts(scene, triTile, boxes, p.faceMatchM, p.threads);
+        st.cuts = sc.cuts.size();
+        if (sc.cuts.empty()) return st;
+        const int cellsPer = std::max(8, static_cast<int>(std::lround(p.segmentM / p.cellM)));
+        struct Seg { std::vector<double> sum[2]; std::vector<uint32_t> n[2]; double texArea{0}; size_t texels{0}; };
+        std::unordered_map<uint64_t, Seg> segs;   // (cut, facing, piece along the wall)
+        for (uint32_t tile : tilesWithCuts(sc)) visitBand(scene, sc, tile, p.sampleM, p.crossCos, [&](const BandTexel& b) {
+            const SeamCut& C = sc.cuts[b.cut];
+            const int oct = facingOctant(C, b.n);
+            // along the wall in the cut's plane, by the facing's own direction (the same for both tiles' triangles of it)
+            const double th = (oct + 0.5) * (M_PI / 4.0) - M_PI;
+            const V3 t = C.a * (-std::sin(th)) + C.b * std::cos(th);
+            const double sAlong = (b.q - C.c).dot(t) / p.cellM;
+            const int64_t cell = static_cast<int64_t>(std::floor(sAlong)), piece = cell >= 0 ? cell / cellsPer : -((-cell + cellsPer - 1) / cellsPer);
+            Seg& sg = segs[(static_cast<uint64_t>(b.cut) << 32) | (static_cast<uint64_t>(oct) << 28) | static_cast<uint64_t>((piece + (1 << 20)) & 0xFFFFFFF)];
+            if (sg.sum[0].empty()) for (int k = 0; k < 2; ++k) { sg.sum[k].assign(static_cast<size_t>(cellsPer), 0.0); sg.n[k].assign(static_cast<size_t>(cellsPer), 0u); }
+            const size_t i = static_cast<size_t>(cell - piece * cellsPer);
+            const auto& img = scene.images[static_cast<size_t>(b.image)].pixels;
+            const uint8_t* px = &img.data[b.texel * static_cast<size_t>(img.channels)];
+            const double grey = img.channels >= 3 ? 0.299 * px[0] + 0.587 * px[1] + 0.114 * px[2] : px[0];
+            sg.sum[b.side][i] += grey; sg.n[b.side][i]++;
+            // the texel's size on the surface, from its triangle (area in the world over area in texels)
+            const auto& mesh = scene.mesh;
+            const uint32_t i0 = mesh.indices[3 * b.tri], i1 = mesh.indices[3 * b.tri + 1], i2 = mesh.indices[3 * b.tri + 2];
+            auto vp = [&](uint32_t v) { const auto& q = mesh.vertices[v].position; return V3{q.x, q.y, q.z}; };
+            const double aw = 0.5 * (vp(i1) - vp(i0)).cross(vp(i2) - vp(i0)).norm();
+            const auto& u0 = mesh.vertices[i0].uv; const auto& u1 = mesh.vertices[i1].uv; const auto& u2 = mesh.vertices[i2].uv;
+            const double at = 0.5 * std::abs((u1.x - u0.x) * (u2.y - u0.y) - (u2.x - u0.x) * (u1.y - u0.y)) * img.width * img.height;
+            if (at > 1e-9) { sg.texArea += aw / at; sg.texels++; }
+        });
+        auto pct = [](std::vector<double> v, double q) { if (v.empty()) return 0.0; std::sort(v.begin(), v.end()); return v[std::min(v.size() - 1, static_cast<size_t>(q * static_cast<double>(v.size())))]; };
+        const int maxShift = std::max(1, static_cast<int>(std::lround(p.maxShiftM / p.cellM)));
+        std::vector<double> zero, shiftM, shiftTex, offShift, offGain, texM;
+        struct PerCut { std::vector<double> zero, shiftM, shiftTex; size_t off{0}; };
+        std::unordered_map<uint32_t, PerCut> byCut;
+        std::vector<uint64_t> keys;
+        for (const auto& kv : segs) keys.push_back(kv.first);
+        std::sort(keys.begin(), keys.end());
+        for (uint64_t key : keys) {
+            const Seg& sg = segs[key];
+            std::vector<double> a(static_cast<size_t>(cellsPer), std::numeric_limits<double>::quiet_NaN()), b = a;
+            size_t both = 0;
+            for (int i = 0; i < cellsPer; ++i) {
+                if (sg.n[0][static_cast<size_t>(i)]) a[static_cast<size_t>(i)] = sg.sum[0][static_cast<size_t>(i)] / sg.n[0][static_cast<size_t>(i)];
+                if (sg.n[1][static_cast<size_t>(i)]) b[static_cast<size_t>(i)] = sg.sum[1][static_cast<size_t>(i)] / sg.n[1][static_cast<size_t>(i)];
+                if (sg.n[0][static_cast<size_t>(i)] && sg.n[1][static_cast<size_t>(i)]) ++both;
+            }
+            if (both < p.minCells) continue;
+            ++st.segmentsRead;
+            // correlation of a against b slid by k cells; NaN when too few cells overlap or either has no spread
+            auto ncc = [&](int k, double* spreadA = nullptr, double* spreadB = nullptr) {
+                double sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0; size_t n = 0;
+                for (int i = 0; i < cellsPer; ++i) {
+                    const int j = i + k;
+                    if (j < 0 || j >= cellsPer) continue;
+                    const double x = a[static_cast<size_t>(i)], y = b[static_cast<size_t>(j)];
+                    if (std::isnan(x) || std::isnan(y)) continue;
+                    sa += x; sb += y; saa += x * x; sbb += y * y; sab += x * y; ++n;
+                }
+                if (n < p.minCells) return std::numeric_limits<double>::quiet_NaN();
+                const double va = saa / n - (sa / n) * (sa / n), vb = sbb / n - (sb / n) * (sb / n);
+                if (spreadA) *spreadA = std::sqrt(std::max(va, 0.0));
+                if (spreadB) *spreadB = std::sqrt(std::max(vb, 0.0));
+                if (!(va > 1e-6 && vb > 1e-6)) return std::numeric_limits<double>::quiet_NaN();
+                return (sab / n - (sa / n) * (sb / n)) / std::sqrt(va * vb);
+            };
+            double spA = 0, spB = 0;
+            const double z = ncc(0, &spA, &spB);
+            if (std::isnan(z) || spA < p.minContrast || spB < p.minContrast) continue;
+            int bk = 0; double bv = z;
+            std::vector<double> at(static_cast<size_t>(2 * maxShift + 1), std::numeric_limits<double>::quiet_NaN());
+            for (int k = -maxShift; k <= maxShift; ++k) { const double v = ncc(k); at[static_cast<size_t>(k + maxShift)] = v; if (!std::isnan(v) && v > bv) { bv = v; bk = k; } }
+            // the peak between cells, by the parabola through it and its neighbours
+            double sub = 0;
+            if (bk > -maxShift && bk < maxShift) {
+                const double l = at[static_cast<size_t>(bk - 1 + maxShift)], r = at[static_cast<size_t>(bk + 1 + maxShift)];
+                if (!std::isnan(l) && !std::isnan(r) && (l - 2 * bv + r) < -1e-9) sub = std::clamp(0.5 * (l - r) / (l - 2 * bv + r), -0.5, 0.5);
+            }
+            const double shift = std::abs((bk + sub) * p.cellM), tex = sg.texels ? std::sqrt(sg.texArea / static_cast<double>(sg.texels)) : 0.0;
+            const bool off = bv >= p.clearNcc && bv - z >= p.clearGain && std::abs(bk) >= 1;
+            ++st.segments;
+            zero.push_back(z); shiftM.push_back(shift); if (tex > 0) { shiftTex.push_back(shift / tex); texM.push_back(tex); }
+            PerCut& pc = byCut[static_cast<uint32_t>(key >> 32)];
+            pc.zero.push_back(z); pc.shiftM.push_back(shift); if (tex > 0) pc.shiftTex.push_back(shift / tex);
+            if (off) { ++st.segmentsOff; ++pc.off; offShift.push_back(shift); offGain.push_back(bv - z); }
+        }
+        st.nccAtZeroP50 = pct(zero, 0.5); st.nccAtZeroP10 = pct(zero, 0.1);
+        st.shiftP50M = pct(shiftM, 0.5); st.shiftP90M = pct(shiftM, 0.9); st.shiftP50Texels = pct(shiftTex, 0.5); st.shiftP90Texels = pct(shiftTex, 0.9);
+        st.offShiftP50M = pct(offShift, 0.5); st.offGainP50 = pct(offGain, 0.5); st.texelP50M = pct(texM, 0.5);
+        std::vector<uint32_t> cutIds;
+        for (const auto& kv : byCut) cutIds.push_back(kv.first);
+        std::sort(cutIds.begin(), cutIds.end());
+        for (uint32_t k : cutIds) {
+            const PerCut& pc = byCut[k];
+            TileSeamCutOffset c;
+            c.tiles[0] = sc.cuts[k].tile[0]; c.tiles[1] = sc.cuts[k].tile[1]; c.u = sc.cuts[k].u; c.o = sc.cuts[k].o;
+            c.segments = pc.zero.size(); c.segmentsOff = pc.off;
+            c.nccAtZeroP50 = pct(pc.zero, 0.5); c.shiftP50M = pct(pc.shiftM, 0.5); c.shiftP50Texels = pct(pc.shiftTex, 0.5);
+            st.perCut.push_back(c);
+        }
+        return st;
+    }
+    static std::string offsetStatsJson(const TileSeamOffsetStats& s) {
+        char b[640];
+        std::snprintf(b, sizeof b, "\"cuts\": %zu, \"segmentsRead\": %zu, \"segments\": %zu, \"segmentsOff\": %zu, \"nccAtZero\": [%.3f, %.3f], \"shiftM\": [%.3f, %.3f], \"shiftTexels\": [%.2f, %.2f], \"offShiftP50M\": %.3f, \"offGainP50\": %.3f, \"texelP50M\": %.3f, \"perCut\": [",
+                      s.cuts, s.segmentsRead, s.segments, s.segmentsOff, s.nccAtZeroP50, s.nccAtZeroP10, s.shiftP50M, s.shiftP90M, s.shiftP50Texels, s.shiftP90Texels, s.offShiftP50M, s.offGainP50, s.texelP50M);
+        std::string js = b;
+        for (size_t i = 0; i < s.perCut.size(); ++i) {
+            const auto& c = s.perCut[i];
+            std::snprintf(b, sizeof b, "%s{\"tiles\": [%u, %u], \"u\": [%.4f, %.4f, %.4f], \"o\": %.3f, \"segments\": %zu, \"segmentsOff\": %zu, \"nccAtZero\": %.3f, \"shiftM\": %.3f, \"shiftTexels\": %.2f}",
+                          i ? ", " : "", c.tiles[0], c.tiles[1], c.u.x, c.u.y, c.u.z, c.o, c.segments, c.segmentsOff, c.nccAtZeroP50, c.shiftP50M, c.shiftP50Texels);
+            js += b;
+        }
+        return js + "]";
     }
 private:
     /** A rim point matched to the other tile's rim: its position group and the in-plane vector to the other rim. */

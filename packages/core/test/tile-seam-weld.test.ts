@@ -36,6 +36,8 @@
  *      moved half way and not at all 1.5 m from the cut, and the weld then closes them;
  *  15. the rim zip: two rims 8 cm apart at their cut, their vertices not facing each other, meet on one line and are
  *      joined; the move is reported per cut; beyond the tiles' stated error nothing moves;
+ *  18. the picture offset: a photo two texels along the cut from its neighbour's is measured as 0.31 m off; the same
+ *      photo either side as none;
  *  17. the tone balance: three tiles' photos up one wall brought to one level by a gain each, fitted over both cuts;
  *  16. the zip's rounds: rim points the other rim has no point for (its edges 5 m long) come onto those edges, which are
  *      split there.
@@ -657,5 +659,36 @@ describe('tile_seam_weld tone feather: two tiles\' photos levelled toward each o
         // not asked for, the photos stay as they came
         const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'balance_off.glb'), threads: 2, repoRoot: REPO });
         expect(off.tone).toBeUndefined();
+    });
+
+    it('measures how far the two tiles\' photos stand apart along their cut', async () => {
+        // one wall, two tiles; each photo is columns of grey with no period (64 texels over 10 m: 0.156 m a texel)
+        const column = (i: number) => 60 + ((i * 2654435761) >>> 24) % 140;
+        const stripes = (shift: number) => { const d = new Uint8Array(64 * 64 * 3); for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) d.fill(column(x + shift), (y * 64 + x) * 3, (y * 64 + x) * 3 + 3); return encodePng(64, 64, d); };
+        const tiles = [{ leafId: 'a', geometricErrorM: 2, box: boxOf(0) }, { leafId: 'b', geometricErrorM: 2, box: boxOf(5) }];
+        const run = async (name: string, shift: number) => {
+            const input = path.join(WORK, `${name}.glb`);
+            writeGlb(input, [wallTile(0, 0), wallTile(5, 1)], [stripes(0), stripes(shift)], tiles, { localToEcef: IDENTITY });
+            return (await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, `${name}_welded.glb`), threads: 2, repoRoot: REPO })).photoOffset!;
+        };
+        // the same columns either side: they line up as they are
+        const same = await run('offset_same', 0);
+        expect(same.cuts).toBe(1);
+        expect(same.segments).toBeGreaterThanOrEqual(1);
+        expect(same.segmentsOff).toBe(0);
+        expect(same.nccAtZero[0]).toBeGreaterThan(0.95);
+        expect(same.shiftM[0]).toBeLessThan(0.03);
+        // the upper photo two texels along: 0.31 m, found, and counted as off
+        const moved = await run('offset_moved', 2);
+        expect(moved.segmentsOff).toBe(moved.segments);
+        expect(moved.nccAtZero[0]).toBeLessThan(0.5);
+        expect(moved.shiftM[0]).toBeGreaterThan(0.26);
+        expect(moved.shiftM[0]).toBeLessThan(0.36);
+        // a texel here is 0.156 m along the wall by 0.078 m up it: 0.110 m by its area, so 0.31 m is 2.8 texels
+        expect(moved.texelP50M).toBeCloseTo(Math.sqrt(50) / 64, 2);
+        expect(moved.shiftTexels[0]).toBeGreaterThan(2.4);
+        expect(moved.shiftTexels[0]).toBeLessThan(3.2);
+        expect(moved.perCut).toHaveLength(1);
+        expect(moved.perCut[0].segmentsOff).toBe(moved.segments);
     });
 });

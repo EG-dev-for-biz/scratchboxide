@@ -172,6 +172,17 @@ export interface TileSeamCapStats { sharedFaces: number; candidates: number; tri
 export interface TileSeamCutMove { tiles: [number, number]; u: [number, number, number]; o: number; points: number; meanMoveM: number; maxMoveM: number }
 /** The rim zip's counts (TileSeamZipStats); beyondError: rim points further from the other rim than the pair's tolerance, left. */
 export interface TileSeamZipStats { cuts: number; cutsZipped: number; positionsMoved: number; beyondError: number; reverted: number; maxMoveM: number; perCut: TileSeamCutMove[] }
+/**
+ * The picture offset across the cuts (TileSeamOffsetStats), as the scan came: on each wall crossing a cut, how far one
+ * tile's photo would have to slide along the cut to line up with the other's (grey profiles either side, correlated).
+ * [median, 10th percentile] for nccAtZero; [median, 90th percentile] for the shifts. A measure only.
+ */
+export interface TileSeamPhotoOffset {
+    cuts: number; segmentsRead: number; segments: number; segmentsOff: number;
+    nccAtZero: [number, number]; shiftM: [number, number]; shiftTexels: [number, number];
+    offShiftP50M: number; offGainP50: number; texelP50M: number;
+    perCut: Array<{ tiles: [number, number]; u: [number, number, number]; o: number; segments: number; segmentsOff: number; nccAtZero: number; shiftM: number; shiftTexels: number }>;
+}
 /** The step blend's counts (TileSeamBlendStats). */
 export interface TileSeamBlendStats { cuts: number; cutsMatched: number; positionsMoved: number; reverted: number; maxMoveM: number }
 /** One cut's score (TileSeamCutScore): its two tiles, its plane, the open rim along it, how much found the other rim, the step and the gap. */
@@ -202,6 +213,7 @@ export interface TileSeamWeldResult {
     capTrim?: TileSeamCapStats;
     stepBlend?: TileSeamBlendStats;
     rimZip?: TileSeamZipStats;
+    photoOffset?: TileSeamPhotoOffset;
     /** With the zip: the weld and the T-junction split run again while they still join something (at most three more passes). */
     reweld?: { passes: number; groupsWelded: number; trianglesDropped: number; tJunctionsClosed: number };
     /** The per-cut scores: as the scan came, after the caps went, after the step blend, at the end; and cut by cut. */
@@ -263,6 +275,7 @@ export function parseTileSeamWeldReport(text: string): Omit<TileSeamWeldResult, 
         ...(raw.stepBlend && Number.isFinite(raw.stepBlend.positionsMoved) ? { stepBlend: raw.stepBlend as TileSeamBlendStats } : {}),
         ...(raw.rimZip && Number.isFinite(raw.rimZip.positionsMoved) && Array.isArray(raw.rimZip.perCut) ? { rimZip: raw.rimZip as TileSeamZipStats } : {}),
         ...(raw.reweld && Number.isFinite(raw.reweld.passes) ? { reweld: raw.reweld } : {}),
+        ...(raw.photoOffset && Number.isFinite(raw.photoOffset.segments) && Array.isArray(raw.photoOffset.perCut) ? { photoOffset: raw.photoOffset as TileSeamPhotoOffset } : {}),
         ...(raw.cutScores && Number.isFinite(raw.cutScores.final?.rimLengthM) && Array.isArray(raw.cutScores.perCutFinal) ? { cutScores: raw.cutScores } : {}),
         ...(Array.isArray(raw.cuts) ? { cuts: (raw.cuts as TileSeamCut[]).filter(c => Number.isFinite(c?.o) && Array.isArray(c.u) && c.u.length === 3) } : {}),
         ...(raw.tiles && Number.isFinite(raw.tiles.count) ? { tiles: raw.tiles } : {}),
