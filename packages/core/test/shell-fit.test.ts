@@ -248,4 +248,27 @@ describe('shell fit: one closed solid from a scan with gaps', () => {
         expect(Math.abs(m.unsupportedAreaM2 - 400)).toBeLessThan(25);
         expect(m.scanWithin05Share).toBeGreaterThan(0.999);
     }, 60_000);
+
+    it('reports every plane candidate\'s direction agreement and spread, and the plane test leaves a flat block\'s solid as it was', async () => {
+        const scanPath = path.join(TMP, 'clean_test.glb'), offPath = path.join(TMP, 'clean_off.json'), onPath = path.join(TMP, 'clean_on.json');
+        fs.writeFileSync(scanPath, steppedBlock({ hole: false, mast: false }).glb());
+        await run(['--input', scanPath, '--report', offPath, '--threads', '2']);
+        await run(['--input', scanPath, '--report', onPath, '--threads', '2', '--set', 'minNormalResultant', '0.985', '--set', 'maxPlaneRmsM', '0.14']);
+        const off = JSON.parse(fs.readFileSync(offPath, 'utf8')), on = JSON.parse(fs.readFileSync(onPath, 'utf8'));
+        // off by default: every candidate is reported and none rejected
+        expect(off.planeCandidates.length).toBe(off.metrics.planesFitted);
+        expect(off.metrics.planesRejected).toBe(0);
+        // the block's faces are flat under 3 cm of noise: their scan agrees in direction and lies within centimetres of its plane
+        const faces = off.planeCandidates.filter((c: any) => c.areaM2 >= 12);
+        expect(faces.length).toBe(8);   // the base and tower walls at x = 0 and at z = 0 are one plane each
+        for (const c of faces) {
+            expect(c.normalResultant).toBeGreaterThan(0.99);
+            expect(c.rmsM).toBeLessThan(0.05);
+            expect(c.rejected).toBe(false);
+        }
+        // on: no face of the block is rejected, and the solid is the same
+        expect(on.planeCandidates.filter((c: any) => c.areaM2 >= 12 && c.rejected).length).toBe(0);
+        expect(on.metrics.boundaryEdges).toBe(0);
+        expect(Math.abs(on.metrics.shellVolumeM3 - off.metrics.shellVolumeM3) / off.metrics.shellVolumeM3).toBeLessThan(0.005);
+    }, 60_000);
 });

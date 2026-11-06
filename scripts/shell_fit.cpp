@@ -53,6 +53,7 @@ static std::string metricsJson(const sf::Metrics& m, const sf::Params& p) {
         .i("hiddenTriangles", static_cast<long long>(m.hiddenTriangles)).i("apronTriangles", static_cast<long long>(m.apronTriangles))
         .n("skinAreaM2", m.skinAreaM2).n("hiddenAreaM2", m.hiddenAreaM2).n("apronAreaM2", m.apronAreaM2).n("groundY", m.groundY)
         .i("planesFitted", static_cast<long long>(m.planesFitted)).i("planesKept", static_cast<long long>(m.planesKept))
+        .i("planesRejected", static_cast<long long>(m.planesRejected)).n("rejectedAreaM2", m.rejectedAreaM2)
         .n("planeAssignedAreaShare", m.planeAssignedAreaShare)
         .i("supportCells", static_cast<long long>(m.supportCells)).i("refineSplits", static_cast<long long>(m.refineSplits)).i("separatorPlanes", static_cast<long long>(m.separatorPlanes))
         .i("cells", static_cast<long long>(m.cells)).i("insideCells", static_cast<long long>(m.insideCells)).i("interfaces", static_cast<long long>(m.interfaces))
@@ -74,6 +75,7 @@ static std::string metricsJson(const sf::Metrics& m, const sf::Params& p) {
     o.raw("ms", ms.text());
     sg::json::Object tol;
     tol.n("supportTolM", p.supportTolM).n("measuredShare", p.measuredShare).n("residualTolM", p.residualTolM).n("growDistM", p.growDistM)
+        .n("minNormalResultant", p.minNormalResultant).n("maxPlaneRmsM", p.maxPlaneRmsM)
         .n("minPlaneAreaM2", p.minPlaneAreaM2).i("maxPlanes", p.maxPlanes).n("minSplitAreaM2", p.minSplitAreaM2)
         .n("unaryWeight", p.unaryWeight).n("unsupportedCutCost", p.unsupportedCutCost).n("supportedCutCost", p.supportedCutCost);
     o.raw("params", tol.text());
@@ -108,6 +110,8 @@ int main(int argc, char** argv) {
                 else if (k == "snapDeg") p.snapDeg = v;
                 else if (k == "alignDeg") p.alignDeg = v;
                 else if (k == "minPlaneAreaM2") p.minPlaneAreaM2 = v;
+                else if (k == "minNormalResultant") p.minNormalResultant = v;
+                else if (k == "maxPlaneRmsM") p.maxPlaneRmsM = v;
                 else if (k == "maxPlanes") p.maxPlanes = static_cast<int>(v);
                 else if (k == "minSplitAreaM2") p.minSplitAreaM2 = v;
                 else if (k == "marginM") p.marginM = v;
@@ -226,7 +230,15 @@ int main(int argc, char** argv) {
                 .n("scanWithin05Share", c.scanWithin05Share).n("scanWithin15Share", c.scanWithin15Share).n("scanRmsM", c.scanRmsM).n("scanP95M", c.scanP95M);
             compare = ",\"compare\":" + o.text();
         }
-        const std::string report = "{\"ok\":true,\"version\":\"shell-fit/1\",\"input\":" + sg::json::str(input) + ",\"metrics\":" + mjson + compare + ",\"faces\":" + sg::json::array(faceRows) + "}\n";
+        std::vector<std::string> candidateRows;
+        for (const auto& c : r.planeCandidates) {
+            sg::json::Object row;
+            row.raw("normal", "[" + sg::json::num(c.n.x) + "," + sg::json::num(c.n.y) + "," + sg::json::num(c.n.z) + "]")
+                .raw("centroid", "[" + sg::json::num(c.o.x) + "," + sg::json::num(c.o.y) + "," + sg::json::num(c.o.z) + "]")
+                .n("areaM2", c.areaM2).n("normalResultant", c.normalResultant).n("rmsM", c.rmsM).b("rejected", c.rejected);
+            candidateRows.push_back(row.text());
+        }
+        const std::string report = "{\"ok\":true,\"version\":\"shell-fit/1\",\"input\":" + sg::json::str(input) + ",\"metrics\":" + mjson + compare + ",\"faces\":" + sg::json::array(faceRows) + ",\"planeCandidates\":" + sg::json::array(candidateRows) + "}\n";
         if (!reportPath.empty()) {
             std::ofstream out(reportPath);
             if (!out) throw std::runtime_error("cannot write " + reportPath);

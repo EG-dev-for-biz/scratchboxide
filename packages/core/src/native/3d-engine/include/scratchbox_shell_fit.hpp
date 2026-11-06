@@ -21,7 +21,15 @@
  *   2. planes    area-weighted region growing over the skin, coplanar regions merged, least-squares refit; planes within
  *                `snapDeg` of vertical or level are made exactly so, and a plane within `alignDeg` of a larger plane's
  *                direction takes it (two fits of one warped wall never cross); kept by support area (`minPlaneAreaM2`,
- *                `maxPlanes`);
+ *                `maxPlanes`). Every merged region is tested as a plane before the snap and reported (planeCandidates):
+ *                how well its triangles agree in direction (the length of their area-weighted mean unit normal) and how
+ *                far its scan lies from its least-squares plane (area-weighted RMS); `minNormalResultant` and
+ *                `maxPlaneRmsM` reject a region that fails, leaving its scan to the other planes and the residual. Off by
+ *                default: on the ESB, Flatiron and Dakota scans (2026-11-06) region growing's own `growDistM` already
+ *                keeps curved regions small, so no region reads as curved; the mast and crown are many small facets each
+ *                flat (agreement 0.97-1.0, RMS mostly under 0.15 m), and what a 0.985 / 0.14 m test rejects is rough real
+ *                planes (the Dakota's 10,185 m2 roof at 0.18 m RMS, an ESB wall of 1,413 m2 at 0.175 m), with small,
+ *                mixed effects on the solid;
  *   3. cells     an adaptive binary space partition of the bounding volume (its floor at the ground datum): a convex
  *                cell is split by the plane with the most support area inside it, until no plane has `minSplitAreaM2`
  *                there. A plane therefore cuts only where its own scan passes. Such a cell can still hold both solid and
@@ -43,7 +51,8 @@
  * triangles and tolerances in metres, the outputs planes, cells and distances.
  *
  * Known limits of the prototype (2026-11-05, ESB and 2 Penn Plaza): tapered and round parts no plane explains become
- * a prism between placed planes (the ESB's mast) or stay residual; thin open structures (a canopy) are residual, not solid;
+ * a prism between placed planes (the ESB's mast) or stay residual (a per-region flatness test does not prevent this:
+ * the facets are flat; the round part has to be found as a whole, as scratchbox_revolution_fit.hpp does); thin open structures (a canopy) are residual, not solid;
  * a gap with no plane beyond it is closed at the bounding volume's margin; a few edges where two cells meet only along
  * a line are non-manifold (reported, not repaired); facade relief under `growDistM` is flattened away.
  *
@@ -105,6 +114,8 @@ struct Params {
     double mergeDistM{0.3};        // ... and this offset
     double snapDeg{3.0};           // planes this close to vertical or level are made exactly so
     double alignDeg{5.0};          // a plane this close to a larger plane's direction takes that direction
+    double minNormalResultant{0.0};// a plane's scan must agree in direction: the area-weighted mean of its triangles' unit normals at least this long
+    double maxPlaneRmsM{1e9};      // ... and lie this close to it (area-weighted RMS distance of its scan from its least-squares plane)
     double minPlaneAreaM2{12.0};   // a plane needs this much supporting scan
     int maxPlanes{600};            // the planes kept, largest support first
     double minSplitAreaM2{4.0};    // a plane splits a cell only with this much of its support inside the cell
@@ -147,6 +158,8 @@ struct Metrics {
     double skinAreaM2{0}, hiddenAreaM2{0}, apronAreaM2{0};
     double groundY{0};
     size_t planesFitted{0}, planesKept{0};
+    size_t planesRejected{0};           // fitted regions whose scan does not agree in direction or lies too far from its plane
+    double rejectedAreaM2{0};
     double planeAssignedAreaShare{0};   // skin area lying on a kept plane
     size_t cells{0}, insideCells{0}, interfaces{0};
     size_t supportCells{0};            // cells after the support-driven partition, before the refinement
@@ -171,6 +184,9 @@ struct Metrics {
 
 struct Result {
     std::vector<Plane> planes;                 // the 6 bounding planes first, then the fitted ones
+    /** Every fitted region tested as a plane: its direction agreement and its spread, and whether it was kept as a candidate. */
+    struct PlaneCandidate { V3 n, o; double areaM2{0}, normalResultant{0}, rmsM{0}; bool rejected{false}; };
+    std::vector<PlaneCandidate> planeCandidates;
     std::vector<V3> shellPositions;            // welded: the shell is a closed indexed mesh
     std::vector<uint32_t> shellIndices;        // sorted by face
     std::vector<ShellFace> faces;
@@ -625,7 +641,7 @@ public:
                     if (a != b) edgeTris[edgeKey(a, b)].push_back(static_cast<uint32_t>(t));
                 }
             }
-            struct Region { V3 n, o, sumN; double area{0}; std::vector<uint32_t> tris; };
+            struct Region { V3 n, o, sumN; double area{0}, rmsM{0}, resultant{0}; std::vector<uint32_t> tris; };
             std::vector<Region> regions;
             std::vector<int> reg(nt, -1);
             std::vector<uint32_t> order;
@@ -692,11 +708,36 @@ public:
                     const double dv[3] = {d.x, d.y, d.z};
                     for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) cov[i][j] += ta[t] * dv[i] * dv[j];
                 }
-                V3 n = smallestEigenvector(cov);
+                double work[3][3];   // the eigen solver diagonalises its matrix in place; the scatter is read again below
+                for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) work[i][j] = cov[i][j];
+                V3 n = smallestEigenvector(work);
                 if (n.dot(m.sumN) < 0) n = n * -1.0;
+                // the plane test, before the snap moves the normal: how far the scan lies from its own least-squares plane
+                // (the smallest eigenvalue of the weighted scatter is the weighted mean squared distance) and how well its
+                // triangles agree in direction (the length of their area-weighted mean unit normal: 1 for a flat patch, less
+                // for a curved, tapered or crumpled one, which region growing at growAngleDeg can still gather into one region)
+                {
+                    const double nc[3] = {n.x, n.y, n.z};
+                    double q = 0;
+                    for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) q += nc[i] * cov[i][j] * nc[j];
+                    m.rmsM = std::sqrt(std::max(0.0, q) / w);
+                    m.resultant = m.area > 0 ? m.sumN.length() / m.area : 0;
+                }
                 if (std::abs(n.y) < sinSnap) n = V3(n.x, 0, n.z).normalized();
                 else if (std::abs(n.y) > cosSnap) n = V3(0, n.y > 0 ? 1 : -1, 0);
                 m.n = n; m.o = c;
+            }
+            {
+                // a region whose scan is not flat is not a plane: it is left to the other planes and, where none explains
+                // it, to the residual scan (measured), never cut into the cells as a facet that stands for nothing
+                std::vector<Region> flat;
+                for (auto& m : merged) {
+                    const bool rejected = m.resultant < p.minNormalResultant || m.rmsM > p.maxPlaneRmsM;
+                    R.planeCandidates.push_back({m.n, m.o, m.area, m.resultant, m.rmsM, rejected});
+                    if (rejected) { M.planesRejected++; M.rejectedAreaM2 += m.area; }
+                    else flat.push_back(std::move(m));
+                }
+                merged.swap(flat);
             }
             std::sort(merged.begin(), merged.end(), [](const Region& a, const Region& b) { return a.area > b.area; });
             {
