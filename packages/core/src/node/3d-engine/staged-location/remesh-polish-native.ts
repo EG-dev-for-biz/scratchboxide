@@ -241,7 +241,7 @@ function frame(w: Writer, f: NativeLatticeFrame): Writer {
 function rects(w: Writer, rs: readonly Rect4[] | undefined): Writer { return w.u32(rs?.length ?? 0).f64s((rs ?? []).flatMap(r => [r[0], r[1], r[2], r[3]])); }
 
 /** One facade for the native lattice: latticeFacade's arguments, its photo and mask by file, and the repeat texture's windows in texels. */
-export interface NativeLatticeJob { f: NativeLatticeFrame; image: string; mask?: string; fitted?: readonly Rect4[]; bays?: readonly Rect4[]; recessM?: number; rectsPx?: readonly Rect4[] }
+export interface NativeLatticeJob { f: NativeLatticeFrame; image: string; mask?: string; /** The texels the image model inpainted (facade-lattice.ts photoLattice reads them as uncovered). */ inpainted?: string; fitted?: readonly Rect4[]; bays?: readonly Rect4[]; recessM?: number; rectsPx?: readonly Rect4[] }
 /** One facade's native lattice (undefined: latticeFacade's undefined) and its repeat texture, when it drew any texel. */
 export interface NativeLatticeOut {
     /** The photo's size. */
@@ -256,12 +256,12 @@ export interface NativeLatticeOut {
 
 /** facade-lattice.ts's per-facade work natively: decoded, sampled from the scan (and the raw scan), latticed, rebuilt and retextured. */
 export function runNativeLattice(params: number[], opts: { photoRecess: boolean; whole: boolean }, soup: Float32Array, rawSoup: Float32Array | undefined, jobs: NativeLatticeJob[], threads: number): NativeLatticeOut[] {
-    const w = new Writer().magic('SBLF').u32(1).u32(params.length).f64s(params).u32((opts.photoRecess ? 1 : 0) | (opts.whole ? 2 : 0));
+    const w = new Writer().magic('SBLF').u32(2).u32(params.length).f64s(params).u32((opts.photoRecess ? 1 : 0) | (opts.whole ? 2 : 0));
     w.u32(soup.length).f32s(soup).u32(rawSoup ? 1 : 0).u32(rawSoup?.length ?? 0);
     if (rawSoup) w.f32s(rawSoup);
     w.u32(jobs.length);
     for (const j of jobs) {
-        frame(w, j.f).str(j.image).str(j.mask ?? '');
+        frame(w, j.f).str(j.image).str(j.mask ?? '').str(j.inpainted ?? '');
         rects(w, j.fitted).u32(j.bays ? 1 : 0);
         rects(w, j.bays).u32(j.recessM !== undefined ? 1 : 0).f64s([j.recessM !== undefined ? Number(j.recessM) : 0]);
         rects(w, j.rectsPx);

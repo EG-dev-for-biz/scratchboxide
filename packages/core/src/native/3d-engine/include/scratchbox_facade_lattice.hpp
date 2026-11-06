@@ -102,7 +102,7 @@ struct Image {
 /** One facade to rebuild: rebuildFacadesOnLattice's arguments to latticeFacade, and its repeat texture's windows. */
 struct FacadeJob {
     Frame f;
-    std::string image, mask;
+    std::string image, mask, inpainted;
     std::vector<Rect> fitted;
     bool hasBays = false;
     std::vector<Rect> bays;
@@ -439,18 +439,18 @@ inline std::string cm(double v) { return js::toString(js::round(v * 100)); }
 
 /** latticeFacade, with the scan's (and the raw scan's) samples drawn first. */
 inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::vector<double>& samples, const Params& P, const std::vector<uint8_t>* uncovered, bool photoRecess,
-                                   const std::vector<Rect>& fitted, bool hasRecess, double recessM, const std::vector<Rect>* bays, const std::vector<double>* reliefSamples, bool buildWhereMeasured) {
+                                   const std::vector<Rect>& fitted, bool hasRecess, double recessM, const std::vector<Rect>* bays, const std::vector<double>* reliefSamples, bool buildWhereMeasured, const std::vector<uint8_t>* inpainted = nullptr) {
     LatticeResult res;
     const std::vector<Rect> strips = photoRecess ? (bays ? *bays : (!fitted.empty() ? windowStrips(fitted, P) : std::vector<Rect>{})) : std::vector<Rect>{};
     std::vector<Rect> lines = fitted;
     lines.insert(lines.end(), strips.begin(), strips.end());
     const std::vector<double> L = luminance(img);
     std::vector<double> s, t;
-    // a texel the photo did not reach is read as the uncovered grey it was before the hole fill (photoLattice and
-    // UNCOVERED_LUMINANCE in facade-lattice.ts): the fill draws no lines
-    if (uncovered) {
+    // a texel the image model inpainted is read as the uncovered grey it was before (photoLattice and UNCOVERED_LUMINANCE in
+    // facade-lattice.ts): the model draws a hole differently every build, and its edges drew no line the photo shows
+    if (inpainted) {
         std::vector<double> Lp = L;
-        for (size_t k = 0; k < Lp.size() && k < uncovered->size(); ++k) if ((*uncovered)[k] && finite(Lp[k])) Lp[k] = 128.0;
+        for (size_t k = 0; k < Lp.size() && k < inpainted->size(); ++k) if ((*inpainted)[k] && finite(Lp[k])) Lp[k] = 128.0;
         photoLattice(img, Lp, f, P, s, t);
     } else photoLattice(img, L, f, P, s, t);
     if (!lines.empty()) {
@@ -845,10 +845,18 @@ inline FacadeOut rebuildFacade(const FacadeJob& job, const std::vector<float>& s
         for (size_t k = 0; k < static_cast<size_t>(m.W) * m.H; ++k) maskStore[k] = m.rgba[k * 4] > 127 ? 1 : 0;
         mask = &maskStore;
     }
+    std::vector<uint8_t> inpaintedStore;
+    const std::vector<uint8_t>* inpainted = nullptr;
+    if (!job.inpainted.empty()) {
+        const Image m = readPng(job.inpainted);
+        inpaintedStore.assign(std::max(static_cast<size_t>(m.W) * m.H, static_cast<size_t>(img.W) * img.H), 0);
+        for (size_t k = 0; k < static_cast<size_t>(m.W) * m.H; ++k) inpaintedStore[k] = m.rgba[k * 4] > 127 ? 1 : 0;
+        inpainted = &inpaintedStore;
+    }
     const std::vector<double> samples = facadeSamples(soup, job.f, P);
     std::vector<double> relief;
     if (rawSoup) relief = facadeSamples(*rawSoup, job.f, P);
-    o.r = latticeFacade(job.f, img, samples, P, mask, photoRecess, job.fitted, job.hasRecess, job.recessM, job.hasBays ? &job.bays : nullptr, rawSoup ? &relief : nullptr, whole);
+    o.r = latticeFacade(job.f, img, samples, P, mask, photoRecess, job.fitted, job.hasRecess, job.recessM, job.hasBays ? &job.bays : nullptr, rawSoup ? &relief : nullptr, whole, inpainted);
     if (o.r.ok && !o.r.strips.empty() && !job.rectsPx.empty()) {
         const Frame& f = job.f;
         std::vector<Rect> stripsPx;

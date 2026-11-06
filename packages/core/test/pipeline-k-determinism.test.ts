@@ -11,7 +11,7 @@
  * Pipeline K builds the same model from the same scan and the same model answers (docs/processes/k_determinism.md).
  * Two ESB builds with their vision and image answers replayed came out byte for byte the same; two live builds differed
  * only where an answer did. These tests hold what made the live builds differ:
- * - the lattice's lines are read from the photo, never from the hole fill (an image model's inpaint, different each time);
+ * - the lattice draws no line from the texels the image model inpainted (a different picture each time it is asked);
  * - the lattice rebuild, run twice on a synthetic scan, gives the same bytes;
  * - the hole inpaint and the ownership outlines are kept in the model readings store, so a second build with an empty
  *   stage cache takes the same answers (and the ownership vote's 30 s cut never drops a view answered before);
@@ -79,26 +79,34 @@ describe('pipeline K is repeatable: the lattice', () => {
     const hole = new Uint8Array(W * H);
     for (let y = 25; y < 70; y++) for (let x = 63; x < 96; x++) hole[y * W + x] = 1;
 
-    it("reads its lines from the photo alone: two fills of the photo's holes give the same lines and the same rebuild", () => {
+    it("draws no line from the image model's inpaint: two inpaints of the photo's holes give the same lines and the same rebuild", () => {
         const a = photo(hole, rng(1)), b = photo(hole, rng(2));
         expect(Buffer.from(a.rgba).equals(Buffer.from(b.rgba))).toBe(false);
-        // the fills differ texel by texel (noise draws edges everywhere); read as the uncovered grey, they draw no line
+        // the inpaints differ texel by texel (noise draws edges everywhere); read as the uncovered grey, they draw no line
         expect(photoLattice(a, F, undefined, hole)).toEqual(photoLattice(b, F, undefined, hole));
         const samples = facadeSamples(scan(), F);
-        const ra = latticeFacade(F, a, samples, undefined, hole, true)!, rb = latticeFacade(F, b, samples, undefined, hole, true)!;
+        const ra = latticeFacade(F, a, samples, undefined, hole, true, undefined, undefined, undefined, undefined, false, hole)!;
+        const rb = latticeFacade(F, b, samples, undefined, hole, true, undefined, undefined, undefined, undefined, false, hole)!;
         expect(ra.s).toEqual(rb.s);
         expect(ra.t).toEqual(rb.t);
         expect(Buffer.from(ra.positions.buffer).equals(Buffer.from(rb.positions.buffer))).toBe(true);
         expect(Array.from(ra.indices)).toEqual(Array.from(rb.indices));
-        // the photo's own edge against the hole is still a line: the window's right edge at s 5.1 stands beside the hole
+        // the photo's own window edges outside the hole are still lines (the window at s 3.9..5.1)
         expect(ra.s.some(v => Math.abs(v - 5.1) <= 0.15)).toBe(true);
-        // without the mask the fills' noise drew lines of its own, and the two rebuilds differed
+        // without the mask the inpaints' noise drew lines of its own, and the two rebuilds differed
         expect(photoLattice(a, F)).not.toEqual(photoLattice(b, F));
+    });
+
+    it("keeps the lines the facade's own fill draws: a hole filled from its repeats still carries the window rhythm", () => {
+        // the same hole filled from the facade's repeats (the photo's own pattern, the same every build) and not inpainted
+        const lines = photoLattice(photo(), F);
+        expect(lines.s.some(v => Math.abs(v - 8.1) <= 0.15)).toBe(true);
+        expect(photoLattice(photo(), F, undefined, new Uint8Array(W * H))).toEqual(lines);
     });
 
     it('rebuilds the same facade twice to the same bytes', () => {
         const samples = facadeSamples(scan(), F);
-        const runs = [0, 1].map(() => latticeFacade(F, photo(hole, rng(5)), samples, undefined, hole, true, [[3.9, 3.7, 5.1, 5.3], [0.9, 0.7, 2.1, 2.3]])!);
+        const runs = [0, 1].map(() => latticeFacade(F, photo(hole, rng(5)), samples, undefined, hole, true, [[3.9, 3.7, 5.1, 5.3], [0.9, 0.7, 2.1, 2.3]], undefined, undefined, undefined, false, hole)!);
         expect(runs[0].cells).toBeGreaterThan(0);
         expect(Buffer.from(runs[0].positions.buffer).equals(Buffer.from(runs[1].positions.buffer))).toBe(true);
         expect(Buffer.from(runs[0].uv.buffer).equals(Buffer.from(runs[1].uv.buffer))).toBe(true);
@@ -158,6 +166,10 @@ describe('pipeline K is repeatable: the answers that shape it are kept', () => {
         expect(first.calls).toBeGreaterThan(0);
         expect(a.r.reports[0].report?.holes.fromInpaint).toBeGreaterThan(0);
         expect(store.puts).toBe(1);
+        // the inpainted texels are named beside the photo, for the lattice
+        const written = JSON.parse(fs.readFileSync(path.join(a.r.orthosDir, 'facades.json'), 'utf8')).facades[0];
+        expect(written.inpaintedMask).toBe('facade_0_inpainted.png');
+        expect(fs.existsSync(path.join(a.r.orthosDir, written.inpaintedMask))).toBe(true);
         // a second build, its stage cache empty (another folder): the model is not asked, the photo is the same bytes
         const b = await run('inpaint-b', second, store);
         expect(second.calls).toBe(0);

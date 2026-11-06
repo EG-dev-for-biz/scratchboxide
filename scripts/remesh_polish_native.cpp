@@ -30,7 +30,7 @@
  *     in:  "SBLF" u32 version (1), u32 nParams, f64[nParams] (scratchbox_facade_lattice.hpp Params), u32 flags (1: the
  *          photo's recess, 2: whole walls), u32 n, f32[n] the scan's triangles, u32 hasRaw, u32 n, f32[n] the raw scan's,
  *          u32 nFacades, per facade i32 id, f64[19] frame (centroid, normal, axisS, axisT, sMin, sMax, tMin, tMax, pixel,
- *          orthoSMin, orthoTMax), str image, str mask (u32 length, bytes; empty: none), u32 n, f64[4n] fitted windows,
+ *          orthoSMin, orthoTMax), str image, str mask (u32 length, bytes; empty: none), str inpainted mask (empty: none), u32 n, f64[4n] fitted windows,
  *          u32 hasBays, u32 n, f64[4n] bays, u32 hasRecess, f64 recessM, u32 n, f64[4n] the windows in texels.
  *     out: per facade in order, u32 ok, u32 W, u32 H (the photo's size), then when ok its lattice: u32 n, f64[n] s, u32 n, f64[n] t, i32 cells, f64
  *          measuredShare, f64[cells] depth, u32 hasPhotoRecess, i32 photoRecessCells, u32 n, f64[4n] strips, i32
@@ -264,7 +264,7 @@ void writeArray(const std::vector<T>& v) { writeOne<uint32_t>(static_cast<uint32
 void writeString(const std::string& v) { writeOne<uint32_t>(static_cast<uint32_t>(v.size())); writeExact(v.data(), v.size()); }
 
 int lattice(unsigned threads) {
-    expectMagic("SBLF", 1);
+    expectMagic("SBLF", 2);
     const auto params = facade_lattice::Params::from(readDoubles(readOne<uint32_t>()));
     const uint32_t flags = readOne<uint32_t>();
     const auto soup = readFloats();
@@ -275,6 +275,7 @@ int lattice(unsigned threads) {
         j.f = readFrame();
         j.image = readString();
         j.mask = readString();
+        j.inpainted = readString();
         j.fitted = readRects();
         j.hasBays = readOne<uint32_t>() != 0;
         j.bays = readRects();
