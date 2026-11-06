@@ -36,18 +36,21 @@
 import type { FittedPlane } from './window-fit';
 import * as jpegJs from 'jpeg-js';
 import { TEXTURE_LADDER_RUNGS, TEXTURE_RUNG_CLAY } from '../../../common/spatial/texture-pass-contracts';
-import { delightLinearRgb, linearToSrgb255, PHOTOGRAMMETRIC_DELIGHT, SRGB8_TO_LINEAR } from '../../../common/spatial/photogrammetric-delight';
+import { PHOTOGRAMMETRIC_DELIGHT } from '../../../common/spatial/photogrammetric-delight';
 import { IMAGE_MODEL_PRIORITY } from '../../../common/media-generation-protocol';
 import { MediaModelUnavailableError } from '../../../common/errors/pipeline-errors';
 import { assembleGlb, parseGlbBytes, readAccessor } from './glb-bytes';
 import { encodePng } from './png-encode';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { decodeImageInMemory, type RgbaImage8 } from './tile-texture-transfer';
-import { harmonizeTextures, surfaceClassMasks, TEXEL_ROOF, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
+import type { TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
+import type { DistrictFootprint } from './pipeline-k/district-buildings';
+import { twinPhotoPasses } from './pipeline-k/twin-photo-thread';
+import type { TwinFinishOptions } from './pipeline-k/twin-photo-passes';
 import { viewRelight, type ViewRelightParams, type ViewRelightReport } from './pipeline-k/view-relight';
-import { roofShadowLift, type RoofShadowReport } from './pipeline-k/roof-shadow';
-import { evaluateShadowLift, type ShadowLiftQaReport } from './pipeline-k/shadow-lift-qa';
-import { skyDelight, type SkyDelightReport } from './pipeline-k/sky-delight';
+import type { RoofShadowReport } from './pipeline-k/roof-shadow';
+import type { ShadowLiftQaReport } from './pipeline-k/shadow-lift-qa';
+import type { SkyDelightReport } from './pipeline-k/sky-delight';
 import { classSwatchSheet, describeMaterialRegions, readRegionClasses, writeMaterialRegions, type MaterialRegionsPlan, type MaterialRegionsReport, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { planMaterialRegionsOnThreads } from './pipeline-k/material-regions-pool';
 import { materialClassesExtras, type ClassWords, type GlassSeen, type MaterialClassesExtras } from './pipeline-k/material-naming';
@@ -112,25 +115,6 @@ const png = (img: RgbaImage8): Uint8Array => encodePng(img.width, img.height, Bu
 /** One embedded photo, decoded and de-lit, ready to encode or to try recreating. */
 interface ImageJob { originalIndex: number; name: string; mimeType: string; delit: RgbaImage8; }
 
-/** Roof texels (pipeline K): highlights compressed, no shadow lift (a roof photographed from the air is lit; a dark one is a dark material). */
-const ROOF_DELIGHT = { shadowLift: 0, highlightCompress: PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress };
-
-/**
- * `upward` (pipeline K-D): the upward surfaces seen from above (roofs, terraces, streets, plazas; a texel any of them draws)
- * and the shadow lift they take, in place of ROOF_DELIGHT's none: a district's ground is mostly in its buildings' baked
- * shadows. It is the same brightness curve as the walls', so it lifts a dark material as much as a shadow; hence gentler.
- */
-function delightImage(decoded: RgbaImage8, surface?: Uint8Array, upward?: { mask: Uint8Array; shadowLift: number }): RgbaImage8 {
-    const out = new Uint8Array(decoded.rgba.length);
-    const upParams = upward ? { shadowLift: upward.shadowLift, highlightCompress: PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress } : undefined;
-    for (let p = 0; p < decoded.rgba.length; p += 4) {
-        const params = upParams && upward!.mask[p >> 2] === TEXEL_ROOF ? upParams : surface?.[p >> 2] === TEXEL_ROOF ? ROOF_DELIGHT : PHOTOGRAMMETRIC_DELIGHT.defaults;
-        const [lr, lg, lb] = delightLinearRgb(SRGB8_TO_LINEAR[decoded.rgba[p]], SRGB8_TO_LINEAR[decoded.rgba[p + 1]], SRGB8_TO_LINEAR[decoded.rgba[p + 2]], params);
-        out[p] = Math.round(linearToSrgb255(lr)); out[p + 1] = Math.round(linearToSrgb255(lg)); out[p + 2] = Math.round(linearToSrgb255(lb)); out[p + 3] = decoded.rgba[p + 3];
-    }
-    return { width: decoded.width, height: decoded.height, rgba: out };
-}
-
 function encodeAs(img: RgbaImage8, mimeType: string): Uint8Array {
     const rgbaBuf = Buffer.from(img.rgba.buffer, img.rgba.byteOffset, img.rgba.byteLength);
     return mimeType === 'image/jpeg' ? new Uint8Array(jpegJs.encode({ data: rgbaBuf, width: img.width, height: img.height }, 90).data) : encodePng(img.width, img.height, rgbaBuf, 4);
@@ -183,7 +167,7 @@ function resizeToExact(img: RgbaImage8, width: number, height: number): RgbaImag
 }
 
 /** The twin of tile_refine's photo-textured output `texturedGlb` (its bytes) for the layer `layerKey`. */
-export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { /** Each step as it starts and finishes (the run's step log). */ onStep?: (step: string, state: 'running' | 'done' | 'failed') => void; recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ harmonize?: { groundY: number; /** The tile extraction with its neighbours (same frame): the sky de-light's occluders. */ skyContext?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }; /** A district (K-D): the building a point stands in (plan x, z; -1 for none), so colours are matched per building. */ buildingOf?: (x: number, z: number) => number }; /** false: the photos are already de-lit (a chunked district's welded ground, its chunks' twins joined): harmonised as they are. */ delight?: boolean; /** Pipeline K-D: the shadow lift of the upward surfaces seen from above (0 or absent: none, as for a building's roofs). */ upwardShadowLift?: number; /** Pipeline K (with harmonize): the photos relit from rendered views of the building (pipeline-k/view-relight.ts) before harmonising. */ viewRelight?: { client: EnhanceModelClient; models: string[]; params?: Partial<ViewRelightParams>; signal?: AbortSignal; progress?: (message: string) => void }; /** The mesh's cast shadow on its roofs and terraces lifted (pipeline-k/roof-shadow.ts), before any harmonising: pipeline K or a district. */ roofShadow?: { /** The tile extraction with its neighbours (same frame): their shadows on the lower terraces. */ context?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }; progress?: (message: string) => void }; /** Pipeline K: roughness, metalness and normal under the photos by appearance region (pipeline-k/material-regions.ts), one library set per class. */ materialRegions?: { /** The library set per class; given the classes' swatch sheet (classSwatchSheet: PNG, its patches' real size) when there is one, for a pick by their look. */ sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => Promise<RegionSet[]>; /** The tile-only harvest (material-harvest.ts): classes read from the wall alone, with their texture, for a pick by colour and texture. */ harvest?: boolean; /** The window fit's planes (window-fit.ts fittedPlanesOf): their windows drawn on the scan pieces lying on them. */ planes?: FittedPlane[]; /** The planes read on the harmonised photos (pipeline-k/twin-reader.ts): given the photos by image index and the glTF, the planes to draw instead of `planes`. */ planesFor?: (finalImage: Map<number, RgbaImage8>, json: any) => Promise<FittedPlane[]>; /** The classes named in words from a picture of them (pipeline-k/material-naming.ts), and the glass seen; its reason when it named none. */ nameClasses?: (classes: RegionClass[], swatches: Buffer) => Promise<{ words?: Array<ClassWords | undefined>; glass?: GlassSeen[]; unnamed?: string }> } }): Promise<TileRefineTwin> {
+export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { /** Each step as it starts and finishes (the run's step log). */ onStep?: (step: string, state: 'running' | 'done' | 'failed') => void; recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ harmonize?: { groundY: number; /** The tile extraction with its neighbours (same frame): the sky de-light's occluders. */ skyContext?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }; /** A district (K-D): its buildings' footprints (pipeline-k/district-buildings.ts), so colours are matched per building. */ buildings?: DistrictFootprint[] }; /** false: the photos are already de-lit (a chunked district's welded ground, its chunks' twins joined): harmonised as they are. */ delight?: boolean; /** Pipeline K-D: the shadow lift of the upward surfaces seen from above (0 or absent: none, as for a building's roofs). */ upwardShadowLift?: number; /** Pipeline K (with harmonize): the photos relit from rendered views of the building (pipeline-k/view-relight.ts) before harmonising. */ viewRelight?: { client: EnhanceModelClient; models: string[]; params?: Partial<ViewRelightParams>; signal?: AbortSignal; progress?: (message: string) => void }; /** The mesh's cast shadow on its roofs and terraces lifted (pipeline-k/roof-shadow.ts), before any harmonising: pipeline K or a district. */ roofShadow?: { /** The tile extraction with its neighbours (same frame): their shadows on the lower terraces. */ context?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }; progress?: (message: string) => void }; /** Pipeline K: roughness, metalness and normal under the photos by appearance region (pipeline-k/material-regions.ts), one library set per class. */ materialRegions?: { /** The library set per class; given the classes' swatch sheet (classSwatchSheet: PNG, its patches' real size) when there is one, for a pick by their look. */ sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => Promise<RegionSet[]>; /** The tile-only harvest (material-harvest.ts): classes read from the wall alone, with their texture, for a pick by colour and texture. */ harvest?: boolean; /** The window fit's planes (window-fit.ts fittedPlanesOf): their windows drawn on the scan pieces lying on them. */ planes?: FittedPlane[]; /** The planes read on the harmonised photos (pipeline-k/twin-reader.ts): given the photos by image index and the glTF, the planes to draw instead of `planes`. */ planesFor?: (finalImage: Map<number, RgbaImage8>, json: any) => Promise<FittedPlane[]>; /** The classes named in words from a picture of them (pipeline-k/material-naming.ts), and the glass seen; its reason when it named none. */ nameClasses?: (classes: RegionClass[], swatches: Buffer) => Promise<{ words?: Array<ClassWords | undefined>; glass?: GlassSeen[]; unnamed?: string }> } }): Promise<TileRefineTwin> {
     const g = parseGlbBytes(texturedGlb);
     const json = JSON.parse(JSON.stringify(g.json));
     const materials: any[] = json.materials ?? (json.materials = []);
@@ -214,77 +198,70 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     json.images = json.images ?? [];
     json.textures = json.textures ?? [];
 
-    // Stage 1 (always): decode and de-light every embedded photo. Stage 2 (opts.recreate given): try an image-model
-    // recreate on top of the de-lit baseline, gated, concurrency-bounded and time-budgeted.
-    const decodedImages: Array<{ i: number; im: any; decoded: RgbaImage8 }> = [];
-    json.images.forEach((im: any, i: number) => {
-        if (im.bufferView === undefined || (im.mimeType !== 'image/jpeg' && im.mimeType !== 'image/png')) return;
-        const view = json.bufferViews[im.bufferView];
-        const raw = g.bin.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength);
-        try { decodedImages.push({ i, im, decoded: decodeImageInMemory(raw) }); } catch { /* not decodable: left as it is */ }
-    });
-    // pipeline K: which texels are roof, seen from above (their de-light and colour match differ from the walls')
-    const surfaces = opts?.harmonize || opts?.roofShadow ? surfaceClassMasks(g, json, new Map(decodedImages.map(d => [d.i, d.decoded]))) : undefined;
-    let roofTexels = 0;
-    if (surfaces) for (const m of surfaces.values()) for (let k = 0; k < m.length; k++) if (m[k] === TEXEL_ROOF) roofTexels++;
-    // the upward surfaces' own mask (a texel any upward surface draws), for their shadow lift
+    // The texel passes (decode, surface masks, de-light; then the roof-shadow lift, its QA, the sky de-light, harmonising) run
+    // on the twin's photo thread (pipeline-k/twin-photo-thread.ts), so this thread stays free for its model calls and the
+    // stages beside it. Between them, on this thread, the passes that need a model client: recreate and the view relight.
     const upLift = opts?.delight !== false && (opts?.upwardShadowLift ?? 0) > 0 ? opts!.upwardShadowLift! : 0;
-    const upMasks = upLift ? surfaceClassMasks(g, json, new Map(decodedImages.map(d => [d.i, d.decoded])), undefined, { sharedTexel: 'up' }) : undefined;
-    const jobs: ImageJob[] = decodedImages.map(({ i, im, decoded }) => {
-        const up = upMasks?.get(i);
-        return { originalIndex: i, name: im.name ?? `image_${i}`, mimeType: im.mimeType, delit: opts?.delight === false ? decoded : delightImage(decoded, surfaces?.get(i), up ? { mask: up, shadowLift: upLift } : undefined) };
-    });
-
+    const passes = twinPhotoPasses(g, json);
+    let surfaces: Map<number, Uint8Array> | undefined, roofTexels = 0;
+    const jobs: ImageJob[] = [];
     const finalImage = new Map<number, RgbaImage8>();
-    for (const job of jobs) finalImage.set(job.originalIndex, job.delit);
     let recreate: TileRefineRecreateReport | undefined;
-    if (opts?.recreate && jobs.length) {
-        const ro = opts.recreate;
-        const models = ro.models?.length ? ro.models : [...IMAGE_MODEL_PRIORITY];
-        const deadline = ro.budgetMs !== undefined ? Date.now() + ro.budgetMs : undefined;
-        let attempted = 0, accepted = 0, rejected = 0, failed = 0, timedOut = 0;
-        const modelsUsed = new Set<string>();
-        let next = 0;
-        const worker = async () => {
-            while (next < jobs.length) {
-                const job = jobs[next++];
-                if (ro.signal?.aborted) throw ro.signal.reason instanceof Error ? ro.signal.reason : new Error('tile-refine recreate aborted');
-                if (deadline !== undefined && Date.now() >= deadline) { timedOut++; continue; }
-                attempted++;
-                const r = await recreateOne(job, ro, models);
-                if (r.modelUsed) modelsUsed.add(r.modelUsed);
-                if (r.decision === 'accepted') accepted++; else if (r.decision === 'rejected') rejected++; else failed++;
-                finalImage.set(job.originalIndex, r.image);
-            }
-        };
-        await Promise.all(Array.from({ length: Math.max(1, Math.min(ro.concurrency ?? 12, jobs.length)) }, worker));
-        recreate = { attempted, accepted, rejected, failed, timedOut, modelsUsed: Array.from(modelsUsed) };
-    }
-
-    // pipeline K: one colour across the photos (after the de-light, on the pixels that will be shown)
     let harmonize: TextureHarmonizeReport | undefined;
     let relight: ViewRelightReport | undefined;
-    if (opts?.harmonize && opts.viewRelight && finalImage.size) {
-        const vr = opts.viewRelight;
-        opts.onStep?.('viewRelight', 'running');
-        relight = await viewRelight(g, json, finalImage, { client: vr.client, models: vr.models, groundY: opts.harmonize.groundY, ...(surfaces ? { surfaces } : {}), ...(vr.params ? { params: vr.params } : {}), ...(vr.signal ? { signal: vr.signal } : {}), ...(vr.progress ? { progress: vr.progress } : {}) });
-        opts.onStep?.('viewRelight', 'done');
-    }
     let roofShadow: RoofShadowReport | undefined, roofShadowQa: ShadowLiftQaReport | undefined;
-    if (opts?.roofShadow && surfaces && finalImage.size) {
-        opts.onStep?.('roofShadow', 'running');
-        const beforeLift = new Map(finalImage);
-        roofShadow = await roofShadowLift(g, json, finalImage, surfaces, { ...(opts.roofShadow.context ? { context: opts.roofShadow.context } : {}), ...(opts.roofShadow.progress ? { progress: opts.roofShadow.progress } : {}) });
-        opts.onStep?.('roofShadow', 'done');
-        if (roofShadow.applied) {
-            opts.onStep?.('roofShadowQa', 'running');
-            roofShadowQa = evaluateShadowLift(g, json, beforeLift, finalImage, { surfaces });
-            opts.onStep?.('roofShadowQa', 'done');
-        }
-    }
     let sky: SkyDelightReport | undefined;
-    if (opts?.harmonize && finalImage.size && process.env.SCRATCHBOX_K_SKY_DELIGHT === '1') { opts.onStep?.('sky de-light', 'running'); sky = skyDelight(g, json, finalImage, surfaces, opts.harmonize.skyContext); opts.onStep?.('sky de-light', 'done'); }
-    if (opts?.harmonize && finalImage.size) { opts.onStep?.('harmonize', 'running'); harmonize = harmonizeTextures(g, json, finalImage, opts.harmonize.groundY, undefined, surfaces, opts.harmonize.buildingOf ? { buildingOf: opts.harmonize.buildingOf } : {}); opts.onStep?.('harmonize', 'done'); }
+    try {
+        // Stage 1 (always): decode and de-light every embedded photo (pipeline K: roofs seen from above apart). Stage 2
+        // (opts.recreate given): try an image-model recreate on top of the de-lit baseline, gated, concurrency-bounded and time-budgeted.
+        const prepared = await passes.prepare({ delight: opts?.delight !== false, surfaces: !!(opts?.harmonize || opts?.roofShadow), upLift });
+        surfaces = prepared.surfaces;
+        roofTexels = prepared.roofTexels;
+        for (const p of prepared.photos) jobs.push({ originalIndex: p.i, name: p.name, mimeType: p.mimeType, delit: p.delit });
+        for (const job of jobs) finalImage.set(job.originalIndex, job.delit);
+        if (opts?.recreate && jobs.length) {
+            const ro = opts.recreate;
+            const models = ro.models?.length ? ro.models : [...IMAGE_MODEL_PRIORITY];
+            const deadline = ro.budgetMs !== undefined ? Date.now() + ro.budgetMs : undefined;
+            let attempted = 0, accepted = 0, rejected = 0, failed = 0, timedOut = 0;
+            const modelsUsed = new Set<string>();
+            let next = 0;
+            const worker = async () => {
+                while (next < jobs.length) {
+                    const job = jobs[next++];
+                    if (ro.signal?.aborted) throw ro.signal.reason instanceof Error ? ro.signal.reason : new Error('tile-refine recreate aborted');
+                    if (deadline !== undefined && Date.now() >= deadline) { timedOut++; continue; }
+                    attempted++;
+                    const r = await recreateOne(job, ro, models);
+                    if (r.modelUsed) modelsUsed.add(r.modelUsed);
+                    if (r.decision === 'accepted') accepted++; else if (r.decision === 'rejected') rejected++; else failed++;
+                    finalImage.set(job.originalIndex, r.image);
+                }
+            };
+            await Promise.all(Array.from({ length: Math.max(1, Math.min(ro.concurrency ?? 12, jobs.length)) }, worker));
+            recreate = { attempted, accepted, rejected, failed, timedOut, modelsUsed: Array.from(modelsUsed) };
+        }
+
+        // pipeline K: one colour across the photos (after the de-light, on the pixels that will be shown)
+        if (opts?.harmonize && opts.viewRelight && finalImage.size) {
+            const vr = opts.viewRelight;
+            opts.onStep?.('viewRelight', 'running');
+            relight = await viewRelight(g, json, finalImage, { client: vr.client, models: vr.models, groundY: opts.harmonize.groundY, ...(surfaces ? { surfaces } : {}), ...(vr.params ? { params: vr.params } : {}), ...(vr.signal ? { signal: vr.signal } : {}), ...(vr.progress ? { progress: vr.progress } : {}) });
+            opts.onStep?.('viewRelight', 'done');
+        }
+        // the roof-shadow lift and its QA, the sky de-light and harmonising, on the photo thread (pipeline-k/twin-photo-passes.ts finishTwinPhotos)
+        const finish: TwinFinishOptions = {
+            ...(opts?.roofShadow && surfaces ? { roofShadow: opts.roofShadow.context ? { context: opts.roofShadow.context } : {} } : {}),
+            ...(opts?.harmonize && process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? { sky: opts.harmonize.skyContext ? { context: opts.harmonize.skyContext } : {} } : {}),
+            ...(opts?.harmonize ? { harmonize: { groundY: opts.harmonize.groundY, ...(opts.harmonize.buildings ? { buildings: opts.harmonize.buildings } : {}) } } : {})
+        };
+        if (finalImage.size && (finish.roofShadow || finish.sky || finish.harmonize)) {
+            const done = await passes.finish(finalImage, surfaces, finish, { ...(opts?.onStep ? { onStep: opts.onStep } : {}), ...(opts?.roofShadow?.progress ? { progress: opts.roofShadow.progress } : {}) });
+            if (done.images !== finalImage) { finalImage.clear(); for (const [i, img] of done.images) finalImage.set(i, img); }
+            surfaces = done.surfaces;
+            ({ roofShadow, roofShadowQa, sky, harmonize } = done.report);
+        }
+    } finally { passes.close(); }
 
     // pipeline K: material regions on the harmonised photos (accepted glass edits them before they are encoded)
     let regionsPlan: MaterialRegionsPlan | undefined, regionsSkipped: string | undefined, regionClasses: RegionClass[] | undefined, swatches: { png: Buffer; spanM?: number } | undefined;
