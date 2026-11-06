@@ -22,7 +22,7 @@
  *
  * usage: tile_seam_weld --input <scan.glb> [--out <welded.glb>] [--out-clay <welded_clay.glb>] [--stats <stats.json>]
  *                       [--tolerance M] [--no-drop] [--no-overlap-trim] [--no-tjunctions] [--threads N]
- *                       [--tiles <tiles.txt>] [--adaptive-cap M] [--max-turn-deg D] [--no-adaptive] [--no-fill] [--no-caps] [--no-blend] [--no-zip] [--no-tone] [--audit-only]
+ *                       [--tiles <tiles.txt>] [--adaptive-cap M] [--max-turn-deg D] [--no-adaptive] [--no-fill] [--no-caps] [--no-blend] [--no-zip] [--no-tone] [--no-balance] [--audit-only]
  *
  * --tiles names each glTF node's source tile and its stated geometric error (a line "<nodes>", then one "<tile> <errorM>"
  * line per node, errorM <= 0 when unknown, optionally followed by the tile's box in the scan's frame: centre and three half-axes);
@@ -69,6 +69,7 @@ static void usage() {
         "  --no-zip           leave the two tiles' rims at a cut where they are (needs boxes in the tiles file)\n"
         "  --no-blend         leave the step between two tiles' walls at their cut as it is (needs boxes in the tiles file)\n"
         "  --no-caps          keep the caps two tiles carry back to back in their shared cut plane (needs boxes in the tiles file)\n"
+        "  --no-balance       do not fit one colour gain per tile over all the cuts (needs boxes in the tiles file)\n"
         "  --no-tone          do not level the tiles' photos' colour across their cuts (needs boxes in the tiles file)\n"
         "  --audit-only       measure the scan's seams and write the report; no pass runs\n";
 }
@@ -123,7 +124,7 @@ int main(int argc, char** argv) {
     TileSeamWeldParams p;
     TileSeamCloseParams cp;
     TileSeamAdaptiveParams ap;
-    bool drop = true, trim = true, tjunctions = true, adaptive = true, fill = true, tone = true, caps = true, blend = true, zip = true, auditOnly = false;
+    bool drop = true, trim = true, tjunctions = true, adaptive = true, fill = true, tone = true, caps = true, blend = true, zip = true, balance = true, auditOnly = false;
     double overlapTol = -1;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -146,6 +147,7 @@ int main(int argc, char** argv) {
         else if (a == "--no-adaptive") adaptive = false;
         else if (a == "--no-fill") fill = false;
         else if (a == "--no-tone") tone = false;
+        else if (a == "--no-balance") balance = false;
         else if (a == "--no-caps") caps = false;
         else if (a == "--no-blend") blend = false;
         else if (a == "--no-zip") zip = false;
@@ -303,16 +305,18 @@ int main(int argc, char** argv) {
     scratchbox::tile_seam_weld::TileSeamToneStats toneStats;
     size_t tilesBoxed = 0;
     for (const auto& b : tileBox) if (b.valid) ++tilesBoxed;
-    if (tone && tilesBoxed) {
+    if ((tone || balance) && tilesBoxed) {
         scratchbox::tile_seam_weld::TileSeamToneParams tp;
         tp.threads = p.threads;
+        tp.feather = tone;
+        tp.balance = balance;
         toneStats = TileSeamWeld::featherSeamTone(scene, triTile, tileBox, tp);
         // the levelled photos carry what levelled them (the levels are fitted; the photo's detail stays the photo's)
         std::vector<uint8_t> levelled(scene.images.size(), 0);
         for (uint32_t i : toneStats.changedImages) levelled[i] = 1;
         for (auto& m : scene.materials)
             if (m.baseColorImage >= 0 && static_cast<size_t>(m.baseColorImage) < levelled.size() && levelled[static_cast<size_t>(m.baseColorImage)] && m.method.empty())
-                m.method = "tile seam tone feather (fitted levels, generated)";
+                m.method = balance && tone ? "tile tone balance and seam tone feather (fitted levels, generated)" : balance ? "tile tone balance (fitted gain per tile, generated)" : "tile seam tone feather (fitted levels, generated)";
     }
     const auto t2 = std::chrono::steady_clock::now();
 
@@ -339,7 +343,7 @@ int main(int argc, char** argv) {
         (tjunctions ? ", \"tJunctions\": {" + TileSeamWeld::tJunctionStatsJson(tjStats) + "}" : std::string()) +
         (adaptive ? ", \"adaptive\": {\"capM\": " + std::to_string(ap.capM) + ", " + TileSeamWeld::adaptiveStatsJson(adStats) + "}" : std::string()) +
         (adaptive && fill ? ", \"stripFill\": {" + TileSeamWeld::fillStatsJson(fillStats) + "}" : std::string()) +
-        (tone && tilesBoxed ? ", \"tone\": {\"tilesBoxed\": " + std::to_string(tilesBoxed) + ", " + TileSeamWeld::toneStatsJson(toneStats) + "}" : std::string()) +
+        ((tone || balance) && tilesBoxed ? ", \"tone\": {\"tilesBoxed\": " + std::to_string(tilesBoxed) + ", \"feather\": " + (tone ? "true" : "false") + ", " + TileSeamWeld::toneStatsJson(toneStats) + "}" : std::string()) +
         (tilesBoxed ? ", \"cuts\": " + TileSeamWeld::cutsJson(tileBox) : std::string()) +
         (blend && anyBox ? ", \"stepBlend\": {\"cuts\": " + std::to_string(blendStats.cuts) + ", \"cutsMatched\": " + std::to_string(blendStats.cutsMatched) + ", \"positionsMoved\": " + std::to_string(blendStats.positionsMoved) +
             ", \"reverted\": " + std::to_string(blendStats.reverted) + ", \"maxMoveM\": " + std::to_string(blendStats.maxMoveM) + "}" : std::string()) +

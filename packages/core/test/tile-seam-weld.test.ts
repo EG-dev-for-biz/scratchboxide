@@ -36,6 +36,7 @@
  *      moved half way and not at all 1.5 m from the cut, and the weld then closes them;
  *  15. the rim zip: two rims 8 cm apart at their cut, their vertices not facing each other, meet on one line and are
  *      joined; the move is reported per cut; beyond the tiles' stated error nothing moves;
+ *  17. the tone balance: three tiles' photos up one wall brought to one level by a gain each, fitted over both cuts;
  *  16. the zip's rounds: rim points the other rim has no point for (its edges 5 m long) come onto those edges, which are
  *      split there.
  */
@@ -628,5 +629,33 @@ describe('tile_seam_weld tone feather: two tiles\' photos levelled toward each o
         // the long edges are split at the other rim's points: no open edge is left along the cut
         expect(openEdges(triangles(output)).filter(e => e.every(q => Math.abs(q[1] - 5) < 0.01))).toHaveLength(0);
         expect(r.cutScores!.final.rimLengthM).toBe(0);
+    });
+
+    it('balances the tiles\' tone over all their cuts at once: one gain per tile, no overall drift, labelled', async () => {
+        // three tiles up one wall, their photos grey 110, 130 and 150: two cuts, fitted together
+        const input = path.join(WORK, 'balance.glb'), output = path.join(WORK, 'balance_welded.glb');
+        writeGlb(input, [wallTile(0, 0), wallTile(5, 1), wallTile(10, 2)], [grey(110), grey(130), grey(150)],
+            [{ leafId: 'a', geometricErrorM: 2, box: boxOf(0) }, { leafId: 'b', geometricErrorM: 2, box: boxOf(5) }, { leafId: 'c', geometricErrorM: 2, box: boxOf(10) }], { localToEcef: IDENTITY });
+        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, balance: true, threads: 2, repoRoot: REPO });
+        const t = r.tone!;
+        expect(t.feather).toBe(false);
+        expect(t.balance).toMatchObject({ tiles: 3, cuts: 2 });
+        expect(Math.abs(t.balance!.meanLogGain)).toBeLessThan(0.01);      // what one tile gains the others give
+        expect(t.balance!.maxGain).toBeGreaterThan(1.25);                 // the darkest and the brightest move about a third each
+        expect(t.balance!.maxGain).toBeLessThan(1.6);
+        expect(t.dEBefore[0]).toBeGreaterThan(6);
+        expect(t.balance!.dEAfter[0]).toBeLessThan(1.5);
+        expect(t.imagesChanged).toBeGreaterThanOrEqual(2);                // the middle tile is near the scan's level already
+        // each photo is one level throughout (a gain, no feather), and the three now agree near the middle one's
+        const levels = rowMeans(output).map(m => m.rows.map(x => x.v));
+        expect(levels).toHaveLength(3);
+        for (const rows of levels) expect(Math.max(...rows) - Math.min(...rows)).toBeLessThanOrEqual(1);
+        const means = levels.map(rows => rows.reduce((a, b) => a + b, 0) / rows.length);
+        expect(Math.max(...means) - Math.min(...means)).toBeLessThan(4);
+        for (const m of means) expect(Math.abs(m - 130)).toBeLessThan(4);
+        expect(rowMeans(output).filter(m => m.material.extras?.scratchbox?.method === 'tile tone balance (fitted gain per tile, generated)').length).toBe(t.imagesChanged);
+        // not asked for, the photos stay as they came
+        const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'balance_off.glb'), threads: 2, repoRoot: REPO });
+        expect(off.tone).toBeUndefined();
     });
 });

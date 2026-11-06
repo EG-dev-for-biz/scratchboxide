@@ -238,3 +238,19 @@ The zip moved 15,861 rim points on 306 cuts (largest move 48 cm, inside the 50 c
 **The weld and the split repeated** (with the zip, at most three more passes, while the weld still joins something; `reweld` in the report). The 4.1 km of matched rim left open at points the two tiles already shared was mostly slivers along the cuts and corners where four tiles meet: the first weld pairs such points two by two and leaves the pairs a few millimetres apart, and a sliver's two long edges both count as open rim. On the ESB two more passes weld 287 points, drop 114 slivers and close 16 T-junctions, and the open rim at the cuts falls from 26.3 to 17.7 km. Checked on the written scan apart from the stage's own scores: surface area 434,478 to 434,131 m² (0.08% less), all open edges 96.8 to 87.3 km, edges shared by three or more triangles 15,776 to 15,849. The stage takes 3.0 s (1.7 s without the zip).
 
 **What it does not do yet.** 3.2 km of matched rim is still open (mean gap 2.1 cm, mean step 1.9 cm: mostly moves the zip took back, and points beyond the tiles' error). Telling pieces apart by tile as well was tried and is worse (the split closes fewer); more split rounds alone change nothing. The 14.5 km of unmatched rim has no other tile's rim within reach. No clay sheet was made for this step: a 1-3 cm opening does not show at a building's scale, and a finished building's cuts are pipeline K's to draw; no finished building has been built with the zip.
+
+## 12. Tone balance per tile (tile-seams/8, 2026-11-06)
+
+**Status: opt-in (`SCRATCHBOX_TILE_SEAM_BALANCE=1`), built and tested, and measured as no help on Google's tiles: the feather (section 9) does the work. Scan-level numbers; no finished building.**
+
+One gain per tile and channel for the whole scan, fitted over all the cuts at once and applied to the tile's whole photos, before the feather (`TileSeamToneParams.balance`, inside `featherSeamTone`): each cut's step is the weighted median of its bins' log ratio of the two sides' mean colours (linear RGB); the fit is weighted least squares on g(tile 0) - g(tile 1) = step, refitted six times with each cut's weight cut down by how far it stands from the fit (Huber, 0.05 log gain), with a weak pull of every gain toward none (2% of a tile's cut weight) that pins the scan's overall level; gains capped at 1.6. Labelled generated (`extras.scratchbox.method`). The report gives tiles, cuts in the fit, the largest gain, the mean log gain (the drift) and the step after the balance.
+
+| scan | step at the cuts as it came (ΔE median / 90th) | balance only | feather only | balance, then feather |
+|---|---|---|---|---|
+| ESB (136 tiles, 808 cuts, 225 in the fit) | 3.59 / 16.13 | 3.59 / 14.68 | 2.44 / 8.74 | 2.45 / 8.49 |
+| Penn Station district (234 tiles, 1,602 cuts, 509 in the fit) | 2.82 / 12.08 | 2.78 / 11.52 | 1.96 / 7.90 | 1.96 / 7.90 |
+
+The mean log gain is -0.016 and -0.015 (no drift). Before the fit was made robust (plain means and least squares) it raised the ESB's median to 3.98.
+
+**Reading.** The tiles carry no exposure offset of their own to take out: neighbouring leaves are textured from one source, and the step at a cut is what each side's photo shows there (resolution, where a window falls, a shadow's edge), which one gain per tile cannot move. A tile also holds faces lit differently, so its cuts disagree with each other whatever gain it takes. What the balance does move is a few outlying cuts (the 90th percentile). The remaining colour work is the photo line-up across a cut, not levels.
+

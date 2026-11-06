@@ -37,6 +37,9 @@
  *  6. tone feather (when asked, where the extraction gives each leaf's box): on the surfaces crossing every cut two leaves'
  *     boxes share, the two photos' colour is levelled toward each other, half the step each, faded out over 2.5 m, and the
  *     photos written back in their own format; labelled generated (extras.scratchbox.method).
+ *  6a. tone balance (when asked, before the feather): one gain per tile and channel, fitted over all the cuts at once
+ *     (least squares on the two sides' mean colours per cut, pulled weakly toward no gain so the scan's level does not
+ *     drift), applied to the tile's whole photos; labelled generated.
  * The seam audit (always) measures the open border inside the extraction's cut border by its gap to the nearest other tile's,
  * before, after the fixed passes (1-3) and after all of them.
  */
@@ -49,7 +52,7 @@ import { compileNativeCached, defaultNativeFlags, NativeBuildError, placeCachedB
 import { findTileRefineRepoRoot } from './tile-refine-service';
 
 /** The seam stage's version: names its cached outputs beside the extraction, so a change to any pass rebuilds them. */
-export const TILE_SEAMS_VERSION = 'tile-seams/7';
+export const TILE_SEAMS_VERSION = 'tile-seams/8';
 
 export type TileSeamWeldErrorCode = 'bad_request' | 'build_failed' | 'run_failed' | 'invalid_output';
 
@@ -85,6 +88,8 @@ export interface TileSeamWeldRequest {
     stripFill?: boolean;
     /** Level the tiles' photos' colour toward each other across every cut their boxes share (default false; needs boxes). */
     tone?: boolean;
+    /** Fit one colour gain per tile over all the cuts at once and apply it to the tile's photos, before the feather (default false; needs boxes). */
+    balance?: boolean;
     /** Remove the caps two tiles carry back to back in a shared cut plane (default false; needs boxes). */
     caps?: boolean;
     /** Fade the step between the two tiles' walls out either side of each cut (default false; needs boxes and stated errors). */
@@ -175,7 +180,12 @@ export interface TileSeamCutScore { tiles: number[]; u: number[]; o: number; rim
 export interface TileSeamCutTotals { cuts: number; rimLengthM: number; matchedLengthM: number; meanStepM: number; meanGapM: number; worstStepP90M: number }
 /** A cut two leaves' boxes share, in the scan's frame: the plane u . x = o and the lower tile's face rectangle on it. */
 export interface TileSeamCut { tiles: number[]; u: number[]; o: number; c: number[]; a: number[]; b: number[]; ha: number; hb: number }
-export interface TileSeamToneStats { tilesBoxed: number; cuts: number; binsMatched: number; imagesChanged: number; texelsChanged: number; maxGain: number; dEBefore: number[]; dEAfter: number[] }
+export interface TileSeamToneStats { tilesBoxed: number; cuts: number; binsMatched: number; imagesChanged: number; texelsChanged: number; maxGain: number; dEBefore: number[]; dEAfter: number[];
+    /** False when only the balance ran. */
+    feather?: boolean;
+    /** The tone balance: tiles given a gain, cuts in the fit, the largest gain, the mean log gain (the scan's drift), and the step after it. */
+    balance?: { tiles: number; cuts: number; maxGain: number; meanLogGain: number; dEAfter: number[] };
+}
 
 export interface TileSeamWeldResult {
     inputTriangles: number;
@@ -344,6 +354,7 @@ export async function runTileSeamWeld(req: TileSeamWeldRequest): Promise<TileSea
     if (req.adaptive !== true) args.push('--no-adaptive');
     if (req.stripFill === false) args.push('--no-fill');
     if (req.tone !== true) args.push('--no-tone');
+    if (req.balance !== true) args.push('--no-balance');
     if (req.caps !== true) args.push('--no-caps');
     if (req.blend !== true) args.push('--no-blend');
     if (req.zip !== true) args.push('--no-zip');
