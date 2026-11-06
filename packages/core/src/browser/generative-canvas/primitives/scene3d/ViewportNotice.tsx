@@ -12,7 +12,7 @@ import type { SceneContentKind } from './types';
 import type { GeneratorRunError } from './generatorRun';
 
 export interface ViewportNoticeEntry {
-    kind: 'webgl-error' | 'generator-error' | 'tiles-error' | 'object-load-error' | 'reconnecting' | 'undrawable-objects' | 'optics' | 'focus' | 'empty' | 'asset-recovery';
+    kind: 'webgl-error' | 'generator-error' | 'tiles-error' | 'object-load-error' | 'reconnecting' | 'undrawable-objects' | 'optics' | 'focus' | 'empty' | 'asset-recovery' | 'beautify-error';
     title: string;
     detail?: string;
     /** 0..1 of a running step, when known. */
@@ -53,6 +53,8 @@ export interface ViewportNoticeInput {
     /** Lens values in camera.lens the viewport does not draw, and why (ViewportOpticsChain status). */
     opticsIssues?: string[];
     assetRecovery?: ViewportRecoveryNotice;
+    /** The tool rail's quick AI Beautify failed (QuickBeautifyButton.tsx): its reason, until dismissed or run again. */
+    beautifyError?: { message: string; onDismiss: () => void };
 }
 
 const listOf = (items: string[]) => items.slice(0, 6).join('\n') + (items.length > 6 ? `\n… and ${items.length - 6} more` : '');
@@ -86,6 +88,9 @@ export function resolveViewportNotice(input: ViewportNoticeInput): ViewportNotic
             ...(recovery.running ? { action: { label: 'Cancel', onClick: recovery.onCancel } }
                 : recovery.onRebuild ? { action: { label: 'Rebuild this location', onClick: recovery.onRebuild } } : {})
         });
+    }
+    if (input.beautifyError) {
+        notices.push({ kind: 'beautify-error', title: 'AI Beautify failed', detail: input.beautifyError.message, action: { label: 'Dismiss', onClick: input.beautifyError.onDismiss } });
     }
     const loadErrors = input.objectLoadErrors || [];
     if (loadErrors.length > 0) {
