@@ -17,6 +17,7 @@ import * as path from 'path';
 import { parentPort, workerData } from 'worker_threads';
 import { decodePng } from '../../../texture-processing';
 import { encodePng } from '../png-encode';
+import { rectifyOverlayName, renderRectifyOverlay } from './rectify-overlay';
 import { featurelessMaskName, occludedMaskName, rectifyOrtho, uncoveredMaskName, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
 
 export interface RectifyJob { srcDir: string; outDir: string; facades: Array<{ facadeId: number; image: string; pixel: number }>; params: OrthoRectifyParams }
@@ -30,12 +31,15 @@ for (const f of job.facades) {
         const occFile = path.join(job.srcDir, occludedMaskName(f.image));
         const occPng = fs.existsSync(occFile) ? decodePng(fs.readFileSync(occFile)) : undefined;
         const occ = occPng && occPng.width === png.width && occPng.height === png.height ? Uint8Array.from({ length: png.width * png.height }, (_, k) => occPng.rgba[k * 4]) : undefined;
-        const r = rectifyOrtho({ width: png.width, height: png.height, rgba: new Uint8Array(png.rgba) }, f.pixel, job.params, occ);
+        const input = { width: png.width, height: png.height, rgba: new Uint8Array(png.rgba) };
+        const r = rectifyOrtho(input, f.pixel, job.params, occ);
         fs.writeFileSync(path.join(job.outDir, f.image), encodePng(r.image.width, r.image.height, r.image.rgba, 4));
         // where the photo did not reach (its holes are filled in the ortho): the facade rebuild reads coverage from this
         fs.writeFileSync(path.join(job.outDir, uncoveredMaskName(f.image)), encodePng(r.image.width, r.image.height, r.uncovered.map(v => (v ? 255 : 0)), 1));
         if (r.occluded) fs.writeFileSync(path.join(job.outDir, occludedMaskName(f.image)), encodePng(r.image.width, r.image.height, r.occluded, 1));
         if (r.featureless.some(v => v)) fs.writeFileSync(path.join(job.outDir, featurelessMaskName(f.image)), encodePng(r.image.width, r.image.height, r.featureless.map(v => (v ? 255 : 0)), 1));
+        // what the straightening read (diagnostic; nothing reads it): a failed overlay never fails the facade
+        try { const o = renderRectifyOverlay(input, r, occ); fs.writeFileSync(path.join(job.outDir, rectifyOverlayName(f.image)), encodePng(o.width, o.height, o.rgb, 3)); } catch (err) { console.warn(`ortho-rectify: overlay for ${f.image} not written: ${(err as Error).message}`); }
         parentPort!.postMessage({ facadeId: f.facadeId, report: r.report } satisfies RectifyMessage);
     } catch (err) {
         parentPort!.postMessage({ facadeId: f.facadeId, error: (err as Error).message } satisfies RectifyMessage);

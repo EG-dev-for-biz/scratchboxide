@@ -22,6 +22,8 @@ import * as path from 'path';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { fillHoles, horizontalPeriod, levelSmears, ORTHO_RECTIFY_PARAMS, rectifyOrtho, traceLines, type Rgba } from '../src/node/3d-engine/staged-location/pipeline-k/ortho-rectify';
 import { rectifyReliefOrthos } from '../src/node/3d-engine/staged-location/pipeline-k/pipeline-k';
+import { rectifyOverlayName, renderRectifyOverlay } from '../src/node/3d-engine/staged-location/pipeline-k/rectify-overlay';
+import { decodePng } from '../src/node/texture-processing';
 
 const PX = 0.075, W = 240, H = 480;
 const PITCH = 3 / PX, STOREY = 3.5 / PX;
@@ -106,6 +108,31 @@ describe('pipeline K ortho rectifier', () => {
         expect(r.report.holes.fromRepeats).toBeGreaterThan(0.8 * r.report.holes.uncovered);
     });
 
+    it('draws what the straightening read: traces on the input, a green frame round a kept warp, the dropped peaks', () => {
+        const r = rectifyOrtho(bent, PX, { ...ORTHO_RECTIFY_PARAMS, smearK: 1e9 });
+        expect(r.report.warp.kept).toBe(true);
+        expect(r.trace.lines.length).toBe(r.report.lines.vertical + r.report.lines.horizontal);
+        expect(r.trace.after).toHaveLength(r.trace.lines.length);
+        expect(r.trace.rejected.every(p => ['border', 'no-edge', 'no-segment'].includes(p.why))).toBe(true);
+        const o = renderRectifyOverlay(bent, r);
+        expect(o.width).toBeGreaterThan(2 * W);
+        expect(o.rgb.length).toBe(o.width * o.height * 3);
+        const header = o.height - H, at = (x: number, y: number) => Array.from(o.rgb.subarray(((header + y) * o.width + x) * 3, ((header + y) * o.width + x) * 3 + 3));
+        // a traced pier (yellow: red and green high, blue low) at its traced sample on the left panel
+        const v = r.trace.lines.find(l => l.axis === 'v' && l.weight.some(w => w > 0.8))!;
+        const k = v.weight.findIndex(w => w > 0.8);
+        const [pr, pg, pb] = at(Math.round(v.across[k]), Math.round(v.along[k]));
+        expect(pr).toBeGreaterThan(150); expect(pg).toBeGreaterThan(130); expect(pb).toBeLessThan(90);
+        // the right panel framed green (kept)
+        const right = o.width - W, [fr, fg, fb] = at(right + (W >> 1), 0);
+        expect(fg).toBeGreaterThan(200); expect(fr).toBeLessThan(100); expect(fb).toBeLessThan(120);
+        // a facade nothing straightened: framed red
+        const plain = rectifyOrtho(truth, PX, { ...ORTHO_RECTIFY_PARAMS, smearK: 1e9 });
+        const p = renderRectifyOverlay(truth, plain), ph = p.height - H, q = ((ph * p.width) + (p.width - W) + (W >> 1)) * 3;
+        expect(plain.report.warp.kept).toBe(false);
+        expect(p.rgb[q]).toBeGreaterThan(200); expect(p.rgb[q + 1]).toBeLessThan(100);
+    });
+
     it('fills holes from the facade\'s own repeats, close to what the photo would have shown', () => {
         const img = { ...truth, rgba: new Uint8Array(truth.rgba) };
         // a wedge-shaped hole across two bays, exact grey
@@ -163,6 +190,11 @@ describe('pipeline K ortho rectifier', () => {
         expect(fs.readFileSync(path.join(r.orthosDir, 'facade_0.png')).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
         expect(fs.readFileSync(path.join(r.orthosDir, 'facade_0.png')).equals(fs.readFileSync(path.join(src, 'facade_0.png')))).toBe(false);
         expect(JSON.parse(fs.readFileSync(path.join(r.orthosDir, 'facades.json'), 'utf8')).facades).toHaveLength(2);
+        // the straightening's overlay beside the rectified ortho, input and result side by side under a header
+        const overlay = decodePng(fs.readFileSync(path.join(r.orthosDir, rectifyOverlayName('facade_0.png'))));
+        expect(overlay.width).toBeGreaterThan(2 * W);
+        expect(overlay.height).toBeGreaterThan(H);
+        expect(fs.existsSync(path.join(r.orthosDir, rectifyOverlayName('facade_1.png')))).toBe(false);
         const again = await rectifyReliefOrthos(src, { threads: 1 });
         expect(again.cached).toBe(true);
         expect(again.orthosDir).toBe(r.orthosDir);
