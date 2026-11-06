@@ -446,8 +446,8 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
     lines.insert(lines.end(), strips.begin(), strips.end());
     const std::vector<double> L = luminance(img);
     std::vector<double> s, t;
-    // a texel the image model inpainted is read as the uncovered grey it was before (photoLattice and UNCOVERED_LUMINANCE in
-    // facade-lattice.ts): the model draws a hole differently every build, and its edges drew no line the photo shows
+    // a hole sent to the image model is read as the uncovered grey it was before (photoLattice and UNCOVERED_LUMINANCE in
+    // facade-lattice.ts): the model draws it differently every build, and its edges drew no line the photo shows
     if (inpainted) {
         std::vector<double> Lp = L;
         for (size_t k = 0; k < Lp.size() && k < inpainted->size(); ++k) if ((*inpainted)[k] && finite(Lp[k])) Lp[k] = 128.0;

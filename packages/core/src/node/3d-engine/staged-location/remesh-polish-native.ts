@@ -241,7 +241,7 @@ function frame(w: Writer, f: NativeLatticeFrame): Writer {
 function rects(w: Writer, rs: readonly Rect4[] | undefined): Writer { return w.u32(rs?.length ?? 0).f64s((rs ?? []).flatMap(r => [r[0], r[1], r[2], r[3]])); }
 
 /** One facade for the native lattice: latticeFacade's arguments, its photo and mask by file, and the repeat texture's windows in texels. */
-export interface NativeLatticeJob { f: NativeLatticeFrame; image: string; mask?: string; /** The texels the image model inpainted (facade-lattice.ts photoLattice reads them as uncovered). */ inpainted?: string; fitted?: readonly Rect4[]; bays?: readonly Rect4[]; recessM?: number; rectsPx?: readonly Rect4[] }
+export interface NativeLatticeJob { f: NativeLatticeFrame; image: string; mask?: string; /** The holes sent to the image model (facade-lattice.ts photoLattice reads them as uncovered). */ inpainted?: string; fitted?: readonly Rect4[]; bays?: readonly Rect4[]; recessM?: number; rectsPx?: readonly Rect4[] }
 /** One facade's native lattice (undefined: latticeFacade's undefined) and its repeat texture, when it drew any texel. */
 export interface NativeLatticeOut {
     /** The photo's size. */

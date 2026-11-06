@@ -126,7 +126,7 @@ export interface ReliefFacade {
     uncoveredMask?: string;
     /** tile_refine's occlusion mask beside the image (pipeline-k/occlusion.ts), with its mean and occluded share. */
     occludedMask?: string; occlusionMean?: number; occludedShare?: number;
-    /** Pipeline K: the texels the image model inpainted (pipeline-k.ts inpaintedMaskName), which photoLattice reads as uncovered. */
+    /** Pipeline K: the holes sent to the image model (pipeline-k.ts inpaintedMaskName: its fill and the smooth fill after it), which photoLattice reads as uncovered. */
     inpaintedMask?: string;
     /**
      * tile_refine's outward reading (photometric_relief orientOutward): the share of a ray fan open in front of the facade (along
@@ -351,15 +351,15 @@ function peaks(p: Float64Array, k: number, sep: number): number[] {
 }
 
 /** The facade's lattice lines in its plane's frame (metres): s from left to right, t from bottom to top, bounds included. */
-/** The luminance photoLattice reads for a texel the image model inpainted: tile_refine's uncovered grey (128), as before any fill. */
+/** The luminance photoLattice reads for a hole sent to the image model: tile_refine's uncovered grey (128), as before any fill. */
 export const UNCOVERED_LUMINANCE = 128;
 
 export function photoLattice(img: { rgba: Uint8Array; width: number; height: number }, f: ReliefFacade, P = FACADE_LATTICE_PARAMS, inpainted?: Uint8Array): { s: number[]; t: number[] } {
     const { width: w, height: h } = img, px = f.pixel;
-    // a texel the image model inpainted is read as the uncovered grey it was before (UNCOVERED_LUMINANCE): the model draws a
-    // hole differently every time it is asked, and its edges moved the lines, the cells and their recesses from build to build
-    // of the same scan. The facade's own fills (its repeats, a facade facing the same way, the smooth fill) are the same
-    // every build and keep drawing the rhythm they continue
+    // a hole sent to the image model is read as the uncovered grey it was before (UNCOVERED_LUMINANCE): the model draws it
+    // differently every time it is asked (and the smooth fill closes what it leaves from that), and its edges moved the lines,
+    // the cells and their recesses from build to build of the same scan. The facade's own fills (its repeats, a facade facing
+    // the same way) are the same every build and keep drawing the rhythm they continue
     const L = (x: number, y: number) => { const k = y * w + x, i = k * 4; return img.rgba[i + 3] ? (inpainted?.[k] ? UNCOVERED_LUMINANCE : 0.3 * img.rgba[i] + 0.59 * img.rgba[i + 1] + 0.11 * img.rgba[i + 2]) : NaN; };
     const rowE = new Float64Array(h), colE = new Float64Array(w);
     for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {

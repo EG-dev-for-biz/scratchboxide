@@ -319,6 +319,11 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
                 const small = smallHoles(left, x.width, x.height, caps.maxHoleTexels);
                 if (!countOf(small)) continue;
                 const maxRects = Math.min(caps.maxRects, caps.maxCalls - inpaintCalls);
+                // the holes sent to the model: what it draws there, and the smooth fill closing what it leaves, change with its
+                // answer; named for the lattice whatever it answers (decided before it is asked, so the same every build)
+                const sent: number[] = [];
+                for (let i = 0; i < N; i++) if (small[i]) sent.push(i);
+                inpaintedAt.set(id, Uint32Array.from(sent));
                 // the image model draws the holes a little differently every time it is asked: its fill is kept by the facade's
                 // pixels and holes, so a later build of the same facade takes the same fill (generated either way)
                 const store = opts.inpaint.readings;
@@ -329,7 +334,6 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
                     for (let j = 0; j < at.length; j++) { const i = at[j]; x.rgba[i * 4] = rgb[j * 3]; x.rgba[i * 4 + 1] = rgb[j * 3 + 1]; x.rgba[i * 4 + 2] = rgb[j * 3 + 2]; x.rgba[i * 4 + 3] = 255; }
                     inpaintCalls += kept.calls;
                     fromInpaint.set(id, at.length);
-                    inpaintedAt.set(id, at);
                     continue;
                 }
                 const t = { width: x.width, height: x.height, rgba: x.rgba, source: new Uint8Array(N) };
@@ -339,7 +343,6 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
                 fromInpaint.set(id, r.filled);
                 const at: number[] = [], rgb: number[] = [];
                 for (let i = 0; i < N; i++) if (t.source[i]) { at.push(i); rgb.push(x.rgba[i * 4], x.rgba[i * 4 + 1], x.rgba[i * 4 + 2]); }
-                if (at.length) inpaintedAt.set(id, Uint32Array.from(at));
                 if (rKey) store!.put(rKey, { schema: 'scratchbox.k-hole-inpaint/1', key: rKey, models: opts.inpaint.models, calls, texels: Buffer.from(Uint32Array.from(at).buffer).toString('base64'), rgb: Buffer.from(rgb).toString('base64'), atMs: Date.now() } satisfies HoleInpaintRecord);
             }
             const continuedIds = [...cont.continued.keys()], holeIds = cont.holes.map(h => h.id);
@@ -353,8 +356,8 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
                 const r = reports.find(y => y.facadeId === id);
                 if (r && 'report' in r && r.report) Object.assign(r.report.holes, { fromRegions, fromInpaint: fromInpaint.get(id) ?? 0, fromSmooth: fromSmooth.get(id) });
             }
-            // the texels the image model drew, named beside the photo: the lattice reads its lines past them (facade-lattice.ts
-            // photoLattice), the model drawing them differently every time it is asked
+            // the holes the image model was asked to draw (its fill and the smooth fill after it), named beside the photo: the
+            // lattice reads its lines past them (facade-lattice.ts photoLattice), the model drawing them differently every time
             for (const [id, at] of inpaintedAt) {
                 const x = work.get(id)!, m = new Uint8Array(x.width * x.height);
                 for (const i of at) m[i] = 255;
@@ -390,7 +393,7 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
 }
 
 /** The holes (1) that are 4-connected regions of at most `max` texels. */
-/** The mask of the texels the image model inpainted, beside a facade's photo (255: inpainted). */
+/** The mask of the holes sent to the image model (its fill there, and the smooth fill closing what it left), beside a facade's photo (255). */
 export const inpaintedMaskName = (image: string): string => image.replace(/\.png$/i, '') + '_inpainted.png';
 
 /** The hole fills' record version in the model readings store. */
