@@ -269,9 +269,22 @@ export async function deriveCriteria(client: GateModelClient, request: string, m
     return criteria;
 }
 
-/** The newest files first, at most MAX_REVIEWED_FILES. */
+/**
+ * The files a review looks at: the newest version of each file name (a mask redone three times is one deliverable),
+ * newest first, at most MAX_REVIEWED_FILES, and always the turn's first file, which is often the plate the rest were
+ * made from (2026-11-06: a car's later mattes pushed its photo out, and the review failed "the photo is missing").
+ */
 export function filesToReview(paths: string[]): string[] {
-    return [...paths].reverse().slice(0, MAX_REVIEWED_FILES);
+    const newestByName = new Map<string, string>();
+    for (const p of paths) {
+        const name = path.basename(p);
+        newestByName.delete(name);
+        newestByName.set(name, p);
+    }
+    const distinct = [...newestByName.values()].reverse();
+    if (distinct.length <= MAX_REVIEWED_FILES) return distinct;
+    const first = newestByName.get(path.basename(paths[0]))!;
+    return [...distinct.filter(p => p !== first).slice(0, MAX_REVIEWED_FILES - 1), first];
 }
 
 export interface ReviewInput {

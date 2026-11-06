@@ -91,8 +91,15 @@ describe('which files a turn made', () => {
         expect(found).toEqual([png, glb]);
     });
 
-    it('reviews the newest files first, at most four', () => {
-        expect(filesToReview(['a', 'b', 'c', 'd', 'e'])).toEqual(['e', 'd', 'c', 'b']);
+    it('reviews the newest files first, at most four, always keeping the turn\'s first file', () => {
+        expect(filesToReview(['/x/a.png', '/x/b.png', '/x/c.png'])).toEqual(['/x/c.png', '/x/b.png', '/x/a.png']);
+        expect(filesToReview(['/x/plate.png', '/x/b.png', '/x/c.png', '/x/d.png', '/x/e.png'])).toEqual(['/x/e.png', '/x/d.png', '/x/c.png', '/x/plate.png']);
+    });
+
+    it('counts a file redone several times once, at its newest version', () => {
+        // the car turn: the plate, then a matte and a cut-out redone in three folders
+        const turn = ['/g/plate.png', '/g/v1/matte_0000.png', '/g/v1/cutout_0000.png', '/g/v2/matte_0000.png', '/g/v2/cutout_0000.png', '/g/v3/matte_0000.png', '/g/v3/cutout_0000.png'];
+        expect(filesToReview(turn)).toEqual(['/g/v3/cutout_0000.png', '/g/v3/matte_0000.png', '/g/plate.png']);
     });
 });
 
