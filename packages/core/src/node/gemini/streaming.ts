@@ -54,6 +54,9 @@ import { LOAD_TOOLS_NAME } from './tool-catalog';
 import { describeRouteOutcome, raceRoutedCall, routerConfig, type StartStream } from './fast-router';
 import { ContextCacheManager, type ContextCacheTarget } from './context-cache';
 import { AgentVerificationService, extractGeometryVerificationInput, type GeometryVerificationOptions } from './agent-verification-service';
+import * as path from 'path';
+import { MAX_GATE_ROUNDS, deliverablePathsFromResult, deriveCriteria, filesToReview, formatReviewFeedback, formatReviewNotice, gateScratchDir, measureDeliverable, qualityGateEnabled, reviewDeliverables, unmetVerdicts } from './quality-gate';
+import { resolveRepoRoot } from './tools/nano-banana-tools';
 import { ChatTurnTimer } from './chat-turn-telemetry';
 
 export type StreamEventSink = (event: GeminiStreamEvent) => void;
@@ -659,6 +662,17 @@ export class StreamingEngine {
         let pendingGeometryVerification: GeometryVerificationOptions | undefined;
         let verificationAttempts = 0;
         const maxVerificationAttempts = 2;
+        // The quality gate (quality-gate.ts): the files this turn's tools made, the bar read from the request (set
+        // when the first file appears, before anything made is looked at), and the review rounds used.
+        const gateFiles: string[] = [];
+        let gateCriteria: Promise<string[]> | undefined;
+        let gateRounds = 0;
+        let gateClosed = !qualityGateEnabled() || request.mode === 'plan';
+        const gateRoots = (() => {
+            const repo = resolveRepoRoot();
+            const ws = this.toolContext(request).workspaceRoot;
+            return [...new Set([ws, repo, path.join(repo, 'public')].filter(Boolean))];
+        })();
 
         let accumulatedText = '';
         const accumulatedThoughts: string[] = [];
@@ -750,6 +764,15 @@ export class StreamingEngine {
                     const geomInput = extractGeometryVerificationInput(resultPayload);
                     if (geomInput) {
                         pendingGeometryVerification = geomInput;
+                    }
+                    if (!gateClosed) {
+                        for (const file of deliverablePathsFromResult(resultPayload, gateRoots)) {
+                            if (!gateFiles.includes(file)) gateFiles.push(file);
+                        }
+                        if (gateFiles.length && !gateCriteria) {
+                            gateCriteria = deriveCriteria(this.client, request.prompt);
+                            gateCriteria.catch(() => undefined);
+                        }
                     }
                 }
 
@@ -1001,6 +1024,33 @@ export class StreamingEngine {
                             });
                             continue;
                         }
+                    }
+                }
+
+                // The quality gate: an independent reviewer checks the files this turn made against the bar
+                if (!gateClosed && gateFiles.length && gateCriteria) {
+                    const claims = turnText || accumulatedText;
+                    onEvent({ type: 'status', text: 'Independent review: checking the result against the request...', modelUsed: model });
+                    let review;
+                    try {
+                        const criteria = await gateCriteria;
+                        const scratch = gateScratchDir();
+                        const deliverables = await Promise.all(filesToReview(gateFiles).map(f => measureDeliverable(f, scratch)));
+                        review = await reviewDeliverables(this.client, { request: request.prompt, criteria, deliverables, claims });
+                    } catch (err) {
+                        review = { status: 'unavailable' as const, criteria: [], error: `the bar could not be set: ${(err as Error).message}`, modelUsed: model, files: [] };
+                    }
+                    const notice = formatReviewNotice(review, gateRounds + 1);
+                    accumulatedText += notice;
+                    onEvent({ type: 'delta', text: notice, modelUsed: model });
+                    if (unmetVerdicts(review).length) {
+                        gateRounds++;
+                        const lastRound = gateRounds >= MAX_GATE_ROUNDS;
+                        // after the last round the agent only reports: no further review
+                        if (lastRound) gateClosed = true;
+                        payload.contents.push({ role: 'model', parts: [{ text: claims || '(no reply text)' }] });
+                        payload.contents.push({ role: 'user', parts: [{ text: formatReviewFeedback(review, lastRound) }] });
+                        continue;
                     }
                 }
 
