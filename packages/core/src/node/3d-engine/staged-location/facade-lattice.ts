@@ -47,7 +47,7 @@ import { nativePolishThreads, runNativeLattice, runNativeLatticeAudit, type Nati
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const FACADE_LATTICE_VERSION = 'facade-lattice/20';
+export const FACADE_LATTICE_VERSION = 'facade-lattice/21';
 /** The cut (rebuildFacadesOnLattice opts.cut): the scan split at the rebuilt cells' lines before the removals and the tear audit. */
 export const LATTICE_CUT_VERSION = 'lattice-cut/5';
 
@@ -126,6 +126,8 @@ export interface ReliefFacade {
     uncoveredMask?: string;
     /** tile_refine's occlusion mask beside the image (pipeline-k/occlusion.ts), with its mean and occluded share. */
     occludedMask?: string; occlusionMean?: number; occludedShare?: number;
+    /** Pipeline K: the holes sent to the image model (pipeline-k.ts inpaintedMaskName: its fill and the smooth fill after it), which photoLattice reads as uncovered. */
+    inpaintedMask?: string;
     /**
      * tile_refine's outward reading (photometric_relief orientOutward): the share of a ray fan open in front of the facade (along
      * its normal) and behind it, whether its frame was turned against the scan's winding to face out, and whether one side won
@@ -349,9 +351,16 @@ function peaks(p: Float64Array, k: number, sep: number): number[] {
 }
 
 /** The facade's lattice lines in its plane's frame (metres): s from left to right, t from bottom to top, bounds included. */
-export function photoLattice(img: { rgba: Uint8Array; width: number; height: number }, f: ReliefFacade, P = FACADE_LATTICE_PARAMS): { s: number[]; t: number[] } {
+/** The luminance photoLattice reads for a hole sent to the image model: tile_refine's uncovered grey (128), as before any fill. */
+export const UNCOVERED_LUMINANCE = 128;
+
+export function photoLattice(img: { rgba: Uint8Array; width: number; height: number }, f: ReliefFacade, P = FACADE_LATTICE_PARAMS, inpainted?: Uint8Array): { s: number[]; t: number[] } {
     const { width: w, height: h } = img, px = f.pixel;
-    const L = (x: number, y: number) => { const i = (y * w + x) * 4; return img.rgba[i + 3] ? 0.3 * img.rgba[i] + 0.59 * img.rgba[i + 1] + 0.11 * img.rgba[i + 2] : NaN; };
+    // a hole sent to the image model is read as the uncovered grey it was before (UNCOVERED_LUMINANCE): the model draws it
+    // differently every time it is asked (and the smooth fill closes what it leaves from that), and its edges moved the lines,
+    // the cells and their recesses from build to build of the same scan. The facade's own fills (its repeats, a facade facing
+    // the same way) are the same every build and keep drawing the rhythm they continue
+    const L = (x: number, y: number) => { const k = y * w + x, i = k * 4; return img.rgba[i + 3] ? (inpainted?.[k] ? UNCOVERED_LUMINANCE : 0.3 * img.rgba[i] + 0.59 * img.rgba[i + 1] + 0.11 * img.rgba[i + 2]) : NaN; };
     const rowE = new Float64Array(h), colE = new Float64Array(w);
     for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
         const gy = Math.abs(L(x, y + 1) - L(x, y - 1)), gx = Math.abs(L(x + 1, y) - L(x - 1, y));
@@ -404,13 +413,14 @@ export function facadeSamples(soup: Float32Array, f: ReliefFacade, P = FACADE_LA
 const median = (a: number[]) => { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 
 /** The facade on its lattice: cell depths (measured, averaged along repeats) and the rebuilt surface in world space. */
-export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: number; height: number }, samples: Float64Array, P = FACADE_LATTICE_PARAMS, uncovered?: Uint8Array, photoRecess = false, fitted?: Array<[number, number, number, number]>, recessM?: number, bays?: Array<[number, number, number, number]>, reliefSamples?: Float64Array, buildWhereMeasured = false): FacadeLatticeResult | undefined {
+export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: number; height: number }, samples: Float64Array, P = FACADE_LATTICE_PARAMS, uncovered?: Uint8Array, photoRecess = false, fitted?: Array<[number, number, number, number]>, recessM?: number, bays?: Array<[number, number, number, number]>, reliefSamples?: Float64Array, buildWhereMeasured = false, inpainted?: Uint8Array): FacadeLatticeResult | undefined {
     // pipeline K with a window fit: the lattice is drawn on the fitted windows, which are its window cells, and with the photo's
     // recess on, on their strips too (each window column recessed whole between its piers): the wall grammar's bays when it
     // read this facade's wall (wall-grammar.ts), else the strips of its own windows
     const strips = photoRecess ? (bays ?? (fitted?.length ? windowStrips(fitted) : [])) : [];
     const lines = [...(fitted ?? []), ...strips];
-    const { s, t } = lines.length ? fittedLattice(photoLattice(img, f, P), lines, f, P) : photoLattice(img, f, P);
+    const photo = photoLattice(img, f, P, inpainted);
+    const { s, t } = lines.length ? fittedLattice(photo, lines, f, P) : photo;
     const ns = s.length - 1, nt = t.length - 1;
     if (ns < 1 || nt < 1) return undefined;
     const cellOf = (v: number, edges: number[]) => { let lo = 0, hi = edges.length - 1; if (v < edges[0] || v > edges[hi]) return -1; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (edges[m] <= v) lo = m; else hi = m; } return lo; };
@@ -1085,12 +1095,13 @@ export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Ui
         // a depth read from Street View is used only when it is confident and resolved from flush; else the contrast rule
         const read = planeRects?.length ? reveal?.facades[String(f.facadeId)] : undefined;
         const depth = trustedReveal(read, reveal?.params) ? read : undefined;
-        return [{ f, sheet, file, mask: maskFile && fs.existsSync(maskFile) ? maskFile : undefined, rects, planeRects, depth, bays: sheet ? sheet.bays : grammarBays(grammar, f.facadeId) }];
+        const inpaintedFile = !sheet && f.inpaintedMask ? path.join(orthosDir, f.inpaintedMask) : undefined;
+        return [{ f, sheet, file, mask: maskFile && fs.existsSync(maskFile) ? maskFile : undefined, inpainted: inpaintedFile && fs.existsSync(inpaintedFile) ? inpaintedFile : undefined, rects, planeRects, depth, bays: sheet ? sheet.bays : grammarBays(grammar, f.facadeId) }];
     });
     // each facade latticed and rebuilt, and with window strips its photo redrawn from its own repeats (generated): sharper,
     // evener, its holes filled. Natively all at once, one facade a task; else here, one after another
     const latticed: Array<{ r?: FacadeLatticeResult; tex: () => Uint8Array; width: number; height: number }> = kNative('lattice')
-        ? runNativeLattice(latticeParamVector(P), { photoRecess: opts.photoRecess === true, whole }, soup, rawSoup, jobs.map((j): NativeLatticeJob => ({ f: j.f, image: j.file, ...(j.mask ? { mask: j.mask } : {}), ...(j.planeRects ? { fitted: j.planeRects } : {}), ...(j.bays ? { bays: j.bays } : {}), ...(j.depth?.depthM !== undefined ? { recessM: j.depth.depthM } : {}), ...(j.rects ? { rectsPx: j.rects } : {}) })), opts.threads ?? nativePolishThreads()).map((o, i) => {
+        ? runNativeLattice(latticeParamVector(P), { photoRecess: opts.photoRecess === true, whole }, soup, rawSoup, jobs.map((j): NativeLatticeJob => ({ f: j.f, image: j.file, ...(j.mask ? { mask: j.mask } : {}), ...(j.inpainted ? { inpainted: j.inpainted } : {}), ...(j.planeRects ? { fitted: j.planeRects } : {}), ...(j.bays ? { bays: j.bays } : {}), ...(j.depth?.depthM !== undefined ? { recessM: j.depth.depthM } : {}), ...(j.rects ? { rectsPx: j.rects } : {}) })), opts.threads ?? nativePolishThreads()).map((o, i) => {
             const x = o.lattice, f = jobs[i].f;
             const r0: FacadeLatticeResult | undefined = x ? { facadeId: f.facadeId, s: x.s, t: x.t, cells: x.cells, measuredShare: x.measuredShare, depth: Array.from({ length: x.t.length - 1 }, (_, b) => Array.from(x.depth.subarray(b * (x.s.length - 1), (b + 1) * (x.s.length - 1)))), ...(x.photoRecessCells !== undefined ? { photoRecessCells: x.photoRecessCells } : {}), ...(x.strips.length ? { strips: x.strips, stripCells: x.stripCells } : {}), ...(x.structure ? { structure: { cells: x.structure.cells, reliefM: x.structure.reliefM, reliefFrom: x.structure.reliefFrom as 'measured' | 'photo-inferred' | 'generated', reason: x.structure.reason } } : {}), built: x.built, windows: x.windows, cellU: x.cellU, cellV: x.cellV, positions: x.positions, normals: x.normals, uv: x.uv, indices: x.indices } : undefined;
             const rep = o.repeat;
@@ -1102,7 +1113,8 @@ export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Ui
             const png = fs.readFileSync(j.file);
             const img = decodePng(png);
             const mask = j.mask ? (() => { const m = decodePng(fs.readFileSync(j.mask)); return Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] > 127 ? 1 : 0)); })() : undefined;
-            const r0 = latticeFacade(f, { rgba: new Uint8Array(img.rgba), width: img.width, height: img.height }, facadeSamples(soup, f, P), P, mask, opts.photoRecess === true, j.planeRects, j.depth?.depthM, j.bays, rawSoup ? facadeSamples(rawSoup, f, P) : undefined, whole);
+            const inpainted = j.inpainted ? (() => { const m = decodePng(fs.readFileSync(j.inpainted)); return Uint8Array.from({ length: m.width * m.height }, (_, k) => (m.rgba[k * 4] > 127 ? 1 : 0)); })() : undefined;
+            const r0 = latticeFacade(f, { rgba: new Uint8Array(img.rgba), width: img.width, height: img.height }, facadeSamples(soup, f, P), P, mask, opts.photoRecess === true, j.planeRects, j.depth?.depthM, j.bays, rawSoup ? facadeSamples(rawSoup, f, P) : undefined, whole, inpainted);
             let r = r0, tex: Uint8Array = png;
             if (r0?.strips?.length && j.rects?.length) {
                 const toPx = (st: [number, number, number, number]): [number, number, number, number] => [(st[0] - f.orthoSMin) / f.pixel, (f.orthoTMax - st[3]) / f.pixel, (st[2] - f.orthoSMin) / f.pixel, (f.orthoTMax - st[1]) / f.pixel];

@@ -236,6 +236,9 @@ async function runHeadless(argv: string[]): Promise<void> {
     const runs = Number(arg('runs', '1'));
     const query = arg('query', 'Washington Square Arch');
     const root = process.env.SCRATCHBOX_ROOT || process.cwd();
+    // the build runs in this thread: on its own worker thread (stagedWorkerEnabled) its vision client and Street View
+    // service are made there, where this process's patches do not reach, and nothing would be served or recorded
+    if (active) process.env.SCRATCHBOX_STAGED_WORKER = '0';
     // the server loads the Maps key from secrets.json itself; headless, pano discovery needs it in the environment
     if (!process.env.GOOGLE_MAPS_API_KEY) {
         try {
