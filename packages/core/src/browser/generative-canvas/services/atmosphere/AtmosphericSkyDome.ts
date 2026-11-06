@@ -675,6 +675,26 @@ export function groundBounceColor(profile: { isGoldenHour: boolean; isNight: boo
 }
 
 /**
+ * A camera's daylight white balance: per-channel gains that make the light falling on a level grey surface (the sun at its
+ * elevation plus the sky) neutral, at the same luminance. Applied to the sun and the sky light alike, a sunlit face keeps
+ * a little warmth and a shaded one a little blue, as in a photograph, instead of the raw beam's cast (a sun 20 degrees
+ * up through light haze is about 4,000 K, (1, 0.67, 0.35) against the display's D65 white) tinting every texture.
+ * Undefined when there is no light to balance.
+ */
+export function daylightWhiteBalance(sun: THREE.Color, sunIntensity: number, elevationDeg: number, sky: THREE.Color, skyIntensity: number): THREE.Color | undefined {
+    const level = Math.max(0, Math.sin((elevationDeg * Math.PI) / 180)) * sunIntensity;
+    const e = [sun.r * level + sky.r * skyIntensity, sun.g * level + sky.g * skyIntensity, sun.b * level + sky.b * skyIntensity];
+    const y = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
+    if (!(y > 1e-9) || e.some(c => !(c > 1e-9))) return undefined;
+    return new THREE.Color(y / e[0], y / e[1], y / e[2]);
+}
+
+/** Whether the lights are white-balanced: by day only, unless the config chose a colour or turned it off. */
+export function whiteBalanced(profile: Pick<DiurnalLightingProfile, 'isGoldenHour' | 'isTwilight' | 'isNight'>, config: Pick<AtmosphericScatteringConfig, 'kelvinTemperature' | 'whiteBalance'>): boolean {
+    return config.whiteBalance !== false && !config.kelvinTemperature && !profile.isGoldenHour && !profile.isTwilight && !profile.isNight;
+}
+
+/**
  * The direct sun's colour. A `kelvinTemperature` in the config is a chosen colour and keeps the phase-tinted blackbody;
  * otherwise, while the disc is up, it is the profile's spectral beam (blackbody sun through Rayleigh, aerosol and ozone).
  * After sunset the phase tint stands in for the sky light that is left.
@@ -1034,6 +1054,16 @@ export function createAtmosphericSkyDome(
         sunLight.shadow.radius = diurnalProfile.shadowSoftness ?? 1;
     }
     scene.add(sunLight);
+    // the camera's white balance (daylightWhiteBalance), after every light's own colour is set; the dome and the sun's
+    // disc keep their colour, as the sky does in a photograph balanced for the ground
+    const applyWhiteBalance = (elevDeg: number) => {
+        if (!whiteBalanced(diurnalProfile, config)) return;
+        const gains = daylightWhiteBalance(sunLight.color, sunLight.intensity, elevDeg, hemiLight.color, hemiLight.intensity);
+        if (!gains) return;
+        sunLight.color.multiply(gains);
+        hemiLight.color.multiply(gains);
+        hemiLight.groundColor.multiply(gains);
+    };
 
     // Night light: a cool moonlight, opposite the sun and well up, and a floor under the sky light, fading in from 2° to
     // 12° below the horizon, so a night scene reads as moonlit (dim, blue, soft shadows) rather than black. The moon's
@@ -1075,6 +1105,7 @@ export function createAtmosphericSkyDome(
         (uniforms.uGroundRadiance.value as THREE.Color).setRGB(1, 1, 1).multiplyScalar(0.15 * groundE / Math.PI);
     };
     applyNightLight(initialElev, sunDirection);
+    applyWhiteBalance(initialElev);
 
     // Update function applying solar angles
     const applySolarState = (elevDeg: number, azimDeg: number, customProfile?: any) => {
@@ -1106,6 +1137,7 @@ export function createAtmosphericSkyDome(
         hemiLight.groundColor.copy(groundBounceColor(diurnalProfile, elevDeg, hemiKelvin));
         applyPhysicalSky(elevDeg);
         applyNightLight(elevDeg, sunDirection);
+        applyWhiteBalance(elevDeg);
     };
 
     return {

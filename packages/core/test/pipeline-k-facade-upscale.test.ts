@@ -18,7 +18,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { BUILD_STEPS, TOGGLEABLE_STEPS } from '../src/common/staged-build-steps';
-import { FACADE_UPSCALE_EXTRA_MS, FACADE_UPSCALE_PARAMS, facadeUpscaleAsked, facadeUpscaleProvenance, tileStarts, transferDetail, upscaleFacadeTextures, upscaleFactor } from '../src/node/3d-engine/staged-location/pipeline-k/facade-upscale';
+import { FACADE_UPSCALE_DISTRICT_PARAMS, FACADE_UPSCALE_EXTRA_MS, FACADE_UPSCALE_PARAMS, facadeIdentityKey, facadeUpscaleAsked, facadeUpscaleProvenance, tileStarts, transferDetail, upscaleFacadeTextures, upscaleFactor } from '../src/node/3d-engine/staged-location/pipeline-k/facade-upscale';
 import { memoryReadingStore } from '../src/node/3d-engine/staged-location/pipeline-k/model-readings';
 import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
@@ -218,6 +218,64 @@ describe('facade upscale: the twin', () => {
         expect(out.report.perFacade[0].keptShare).toBeGreaterThan(0.95);
     });
 
+    describe('the best upscale kept per facade, and always loaded (user decision 2026-11-05)', () => {
+        const place = { lat: 40.7503, lng: -73.9917, heightMeters: -30 };
+        const answering = (amp: number, asked: EnhanceModelRequest[]) => async (req: EnhanceModelRequest) => {
+            asked.push(req);
+            const up = enlargeWithChecker(decodeImageInMemory(req.image.bytes), 4, amp);
+            return { bytes: encodePng(up.width, up.height, up.rgba, 4), mimeType: 'image/png', modelUsed: 'fake-image', requestedModels: req.models, skippedModels: [], modelNote: 'fake' };
+        };
+        /** The photo a later build sees: the same facade with its texels nudged (a new de-light or tile set), so no tile's pixels match. */
+        const nudged = (() => { const p = facadePhoto(64, 48); for (let i = 0; i < p.rgba.length; i += 4) p.rgba[i] = Math.min(255, p.rgba[i] + 2); return encodePng(64, 48, p.rgba, 4); })();
+
+        it('names a facade by where it stands and its size, not by its pixels', () => {
+            const a = facadeIdentityKey(place, [0, 0, 0], [10, 6, 0], ['m']);
+            expect(facadeIdentityKey(place, [0.1, 0.05, 0.1], [10.1, 6.05, 0.1], ['m'])).toBe(a);
+            expect(facadeIdentityKey(place, [20, 0, 0], [30, 6, 0], ['m'])).not.toBe(a);
+            expect(facadeIdentityKey(place, [0, 0, 0], [10, 9, 0], ['m'])).not.toBe(a);
+        });
+
+        it("loads the kept upscale onto a changed photo without asking the model again", async () => {
+            const store = memoryReadingStore(), asked: EnhanceModelRequest[] = [];
+            const first = await upscaleFacadeTextures(twin(png), { client: answering(3, asked), store, place });
+            expect(first.report.calls).toBe(1);
+            expect(first.report.bestWritten).toBe(1);
+            const never = async () => { throw new Error('must not be called'); };
+            const later = await upscaleFacadeTextures(twin(nudged), { client: never, store, place });
+            expect(later.report.calls).toBe(0);
+            expect(later.report.reused).toBe(1);
+            expect(later.report.perFacade[0].reused).toBe('kept');
+            expect(later.report.perFacade[0].keptShare).toBeGreaterThan(0.9);
+            expect(later.report.upscaled).toBe(1);
+            // without the place, the changed photo's tiles are new and would be asked for
+            const unkept = await upscaleFacadeTextures(twin(nudged), { client: answering(3, asked), store });
+            expect(unkept.report.calls).toBe(1);
+        });
+
+        it('asks again when the kept one no longer fits, keeps the new one only when it scores higher', async () => {
+            const store = memoryReadingStore(), asked: EnhanceModelRequest[] = [];
+            await upscaleFacadeTextures(twin(png), { client: answering(3, asked), store, place });
+            // a strict reuse bar makes the kept one "not fit": the model is asked again for the changed photo
+            const strict = { ...FACADE_UPSCALE_PARAMS, reuseMinKept: 1.01 };
+            // the new answer is redrawn (a large offset everywhere): it scores lower than the kept one, which stays
+            const worse = async (req: EnhanceModelRequest) => {
+                asked.push(req);
+                const t = decodeImageInMemory(req.image.bytes), up = enlargeWithChecker(t, 4, 3);
+                for (let i = 0; i < up.rgba.length; i += 4) if ((i / 4) % 7 < 3) { up.rgba[i] = 255 - up.rgba[i]; up.rgba[i + 1] = 255 - up.rgba[i + 1]; }
+                return { bytes: encodePng(up.width, up.height, up.rgba, 4), mimeType: 'image/png', modelUsed: 'fake-image', requestedModels: req.models, skippedModels: [], modelNote: 'fake' };
+            };
+            const n = asked.length;
+            const r = await upscaleFacadeTextures(twin(nudged), { client: worse, store, place }, strict);
+            expect(asked.length).toBe(n + 1);
+            expect(r.report.perFacade[0].reused).toBe('kept-over-new');
+            expect(r.report.bestWritten).toBe(0);
+            // past the call budget the kept one is used as it scores, however strict the bar
+            const none = await upscaleFacadeTextures(twin(nudged), { client: async () => { throw new Error('no'); }, store, place }, { ...strict, maxCalls: 0 });
+            expect(none.report.perFacade[0].reused).toBe('kept');
+            expect(none.report.upscaled).toBe(1);
+        });
+    });
+
     it('leaves the twin as it was, with the reason, without a client or past the call budget', async () => {
         const none = await upscaleFacadeTextures(twin(png), {});
         expect(none.report.upscaled).toBe(0);
@@ -238,6 +296,27 @@ describe('facade upscale: the twin', () => {
         const base = resolveToolTimeBudget('google_3d_tiles_get_clay', isolate, 5 * 60_000).maxMs;
         expect(resolveToolTimeBudget('google_3d_tiles_get_clay', { ...isolate, steps: { 'twin.facadeUpscale': true } }, 5 * 60_000).maxMs).toBe(base + FACADE_UPSCALE_EXTRA_MS);
         expect(facadeUpscaleAsked({ 'twin.facadeUpscale': false })).toBe(false);
+        // a district: on by default, the node graph and the environment still decide
+        const env = process.env.SCRATCHBOX_K_FACADE_UPSCALE;
+        try {
+            delete process.env.SCRATCHBOX_K_FACADE_UPSCALE;
+            expect(facadeUpscaleAsked(undefined, { district: true })).toBe(true);
+            expect(facadeUpscaleAsked(undefined)).toBe(false);
+            expect(facadeUpscaleAsked({ 'twin.facadeUpscale': false }, { district: true })).toBe(false);
+            process.env.SCRATCHBOX_K_FACADE_UPSCALE = '0';
+            expect(facadeUpscaleAsked(undefined, { district: true })).toBe(false);
+            process.env.SCRATCHBOX_K_FACADE_UPSCALE = '1';
+            expect(facadeUpscaleAsked(undefined)).toBe(true);
+            // a district's capped upscale adds no time to its budget
+            delete process.env.SCRATCHBOX_K_FACADE_UPSCALE;
+            const district = { query: 'x', isolate: false };
+            expect(resolveToolTimeBudget('google_3d_tiles_get_clay', { ...district, steps: { 'twin.facadeUpscale': true } }, 5 * 60_000).maxMs).toBe(resolveToolTimeBudget('google_3d_tiles_get_clay', district, 5 * 60_000).maxMs);
+        } finally {
+            if (env === undefined) delete process.env.SCRATCHBOX_K_FACADE_UPSCALE; else process.env.SCRATCHBOX_K_FACADE_UPSCALE = env;
+        }
+        // a district chunk's cap: a dozen calls and six minutes
+        expect(FACADE_UPSCALE_DISTRICT_PARAMS.maxCalls).toBe(12);
+        expect(FACADE_UPSCALE_DISTRICT_PARAMS.maxMs).toBe(6 * 60_000);
         expect(facadeUpscaleAsked(undefined)).toBe(process.env.SCRATCHBOX_K_FACADE_UPSCALE?.trim() === '1');
     });
 

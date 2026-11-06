@@ -16,11 +16,14 @@
 #include "scratchbox_png.hpp"
 #include "scratchbox_math.hpp"
 #include "scratchbox_texture.hpp"
+#include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace scratchbox {
@@ -36,7 +39,11 @@ struct SceneMaterial {
     Vec4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
     float metallicFactor{1.0f};
     float roughnessFactor{1.0f};
+    /** Emitted radiance: emissiveFactor times KHR_materials_emissive_strength, before the emissive texture. */
     Vec3 emissiveFactor{0.0f, 0.0f, 0.0f};
+    int emissiveImage{-1};
+    int emissiveWrapS{10497};
+    int emissiveWrapT{10497};
     int baseColorImage{-1};
     int wrapS{10497};  // glTF sampler wrap mode: 10497 repeat, 33071 clamp, 33648 mirrored repeat
     int wrapT{10497};
@@ -52,11 +59,39 @@ struct SceneMaterial {
     bool doubleSided{false};
     bool unlit{false};
     /**
+     * glTF alphaMode MASK: a surface is there only where the base colour's alpha (the factor's w times the texture's
+     * alpha) reaches alphaCutoff (cut-out leaves, fences, cards). BLEND and OPAQUE surfaces are traced as opaque.
+     */
+    bool alphaMask{false};
+    float alphaCutoff{0.5f};
+    /**
      * material.extras.scratchbox.photoInferredFill: its texture is a fill a stage laid over surfaces the photo does not
      * cover (the tree strip's caps and skirts), carried from real neighbouring texels: not the scan's own photo, whatever
      * its pixels, and consumers that bake or measure the scan's photo must not count it as such.
      */
     bool photoInferredFill{false};
+    /** material.extras.scratchbox.provenance: the provenance label a stage gave the surfaces drawn with it (e.g. "generated"); empty when none. */
+    std::string provenance;
+    /** material.extras.scratchbox.method: what made those surfaces, when a stage said. */
+    std::string method;
+};
+
+/**
+ * A KHR_lights_punctual light at its node's world transform. A point light has no cone (outerConeAngle pi);
+ * a spot has one; a directional light is distant. Intensity is the light's colour times its intensity:
+ * candela for point and spot, lux for directional.
+ */
+struct SceneLight {
+    std::string name;
+    Vec3 position{0.0f, 0.0f, 0.0f};
+    /** The unit direction the light travels (the node's -Z). */
+    Vec3 direction{0.0f, 0.0f, -1.0f};
+    Vec3 intensity{1.0f, 1.0f, 1.0f};
+    /** 0: no range. */
+    float range{0.0f};
+    float innerConeAngle{0.0f};
+    float outerConeAngle{3.14159265358979323846f};
+    bool distant{false};
 };
 
 struct SceneImage {
@@ -78,8 +113,11 @@ struct GltfScene {
     std::string error;
     geometry::ScratchboxMesh mesh;
     std::vector<uint32_t> triangleMaterial;
+    /** The glTF node each triangle came from (index into the document's nodes), in mesh.indices order. */
+    std::vector<uint32_t> triangleNode;
     std::vector<SceneMaterial> materials;
     std::vector<SceneImage> images;
+    std::vector<SceneLight> lights;
     AABB bounds;
     size_t primitiveCount{0};
     size_t nodeCount{0};
@@ -275,6 +313,8 @@ private:
                 sm.baseColorFactor = Vec4(factor[0].asFloat(1), factor[1].asFloat(1), factor[2].asFloat(1), factor[3].asFloat(1));
             }
             sm.photoInferredFill = m["extras"]["scratchbox"]["photoInferredFill"].b;
+            sm.provenance = m["extras"]["scratchbox"]["provenance"].asString("");
+            sm.method = m["extras"]["scratchbox"]["method"].asString("");
             sm.metallicFactor = pbr["metallicFactor"].asFloat(1.0f);
             sm.roughnessFactor = pbr["roughnessFactor"].asFloat(1.0f);
             int textureIndex = pbr["baseColorTexture"]["index"].asInt(-1);
@@ -330,30 +370,55 @@ private:
             if (emissive.arr.size() == 3) {
                 sm.emissiveFactor = Vec3(emissive[0].asFloat(0), emissive[1].asFloat(0), emissive[2].asFloat(0));
             }
+            sm.emissiveFactor = sm.emissiveFactor * std::max(0.0f, m["extensions"]["KHR_materials_emissive_strength"]["emissiveStrength"].asFloat(1.0f));
+            const auto& emTex = m["emissiveTexture"];
+            int emTexIdx = emTex["index"].asInt(-1);
+            if (emTexIdx >= 0 && emTexIdx < static_cast<int>(textures.arr.size())) {
+                const auto& tex = textures[static_cast<size_t>(emTexIdx)];
+                sm.emissiveImage = tex["source"].asInt(-1);
+                int samplerIndex = tex["sampler"].asInt(-1);
+                if (samplerIndex >= 0 && samplerIndex < static_cast<int>(samplers.arr.size())) {
+                    const auto& sampler = samplers[static_cast<size_t>(samplerIndex)];
+                    sm.emissiveWrapS = sampler["wrapS"].asInt(10497);
+                    sm.emissiveWrapT = sampler["wrapT"].asInt(10497);
+                }
+            }
             sm.doubleSided = m["doubleSided"].type == io::GlbJsonValue::Bool && m["doubleSided"].b;
+            sm.alphaMask = m["alphaMode"].asString("OPAQUE") == "MASK";
+            sm.alphaCutoff = m["alphaCutoff"].asFloat(0.5f);
             sm.unlit = m["extensions"].has("KHR_materials_unlit");
             scene.materials.push_back(sm);
         }
     }
 
+    /**
+     * Images are decoded in parallel (each is independent: a district's GLB carries hundreds), into their own
+     * slots, so the result is the same as decoding them in order.
+     */
     static void readImages(const Context& ctx, GltfScene& scene) {
         const auto& views = ctx.root["bufferViews"];
-        for (const auto& img : ctx.root["images"].arr) {
-            SceneImage si;
+        const auto& list = ctx.root["images"].arr;
+        std::vector<SceneImage> images(list.size());
+        // Base colour images of alpha-masked materials keep their alpha (decoded RGBA); the rest decode as RGB.
+        std::vector<bool> keepAlpha(list.size(), false);
+        for (const SceneMaterial& m : scene.materials) {
+            if (m.alphaMask && m.baseColorImage >= 0 && m.baseColorImage < static_cast<int>(list.size())) keepAlpha[static_cast<size_t>(m.baseColorImage)] = true;
+        }
+        auto decodeOne = [&](size_t index) {
+            const auto& img = list[index];
+            SceneImage& si = images[index];
             si.mimeType = img["mimeType"].asString("");
             int viewIndex = img["bufferView"].asInt(-1);
             if (viewIndex < 0 || viewIndex >= static_cast<int>(views.arr.size()) || !ctx.bin) {
                 si.error = "image is not embedded in the GLB binary chunk";
-                scene.images.push_back(std::move(si));
-                continue;
+                return;
             }
             const auto& view = views[static_cast<size_t>(viewIndex)];
             size_t offset = view["byteOffset"].asSizeT(0);
             size_t size = view["byteLength"].asSizeT(0);
             if (offset + size > ctx.binLength) {
                 si.error = "image bufferView is out of range";
-                scene.images.push_back(std::move(si));
-                continue;
+                return;
             }
             const uint8_t* bytes = ctx.bin + offset;
             bool isJpeg = si.mimeType == "image/jpeg" || (size > 2 && bytes[0] == 0xFF && bytes[1] == 0xD8);
@@ -368,15 +433,28 @@ private:
                 si.error = decoded.error;
                 si.pixels = std::move(decoded.image);
             } else if (isPng) {
-                auto decoded = png::decode(bytes, size, png::OutputFormat::Rgb);
+                auto decoded = png::decode(bytes, size, keepAlpha[index] ? png::OutputFormat::Rgba : png::OutputFormat::Rgb);
                 si.decoded = decoded.ok;
                 si.error = decoded.error;
                 si.pixels = std::move(decoded.image);
             } else {
                 si.error = "unsupported image type: " + (si.mimeType.empty() ? std::string("unknown") : si.mimeType);
             }
-            scene.images.push_back(std::move(si));
+        };
+        const unsigned workers = static_cast<unsigned>(std::min<size_t>(list.size(), std::max(1u, std::min(std::thread::hardware_concurrency(), 16u))));
+        if (workers <= 1) {
+            for (size_t i = 0; i < list.size(); ++i) decodeOne(i);
+        } else {
+            std::atomic<size_t> next{0};
+            std::vector<std::thread> pool;
+            for (unsigned w = 0; w < workers; ++w) {
+                pool.emplace_back([&] {
+                    for (size_t i = next++; i < list.size(); i = next++) decodeOne(i);
+                });
+            }
+            for (auto& t : pool) t.join();
         }
+        for (auto& si : images) scene.images.push_back(std::move(si));
     }
 
     static Mat4 localMatrix(const io::GlbJsonValue& node) {
@@ -423,23 +501,48 @@ private:
         return n;
     }
 
+    static SceneLight readLight(const io::GlbJsonValue& def, const Mat4& world) {
+        SceneLight light;
+        light.name = def["name"].asString("");
+        const std::string type = def["type"].asString("point");
+        const auto& color = def["color"];
+        Vec3 c(1.0f, 1.0f, 1.0f);
+        if (color.arr.size() == 3) c = Vec3(color[0].asFloat(1), color[1].asFloat(1), color[2].asFloat(1));
+        light.intensity = c * std::max(0.0f, def["intensity"].asFloat(1.0f));
+        light.range = std::max(0.0f, def["range"].asFloat(0.0f));
+        light.position = world.transformPoint(Vec3(0.0f, 0.0f, 0.0f));
+        Vec3 d = world.transformDirection(Vec3(0.0f, 0.0f, -1.0f));
+        light.direction = d.lengthSquared() > 1e-20f ? d.normalized() : Vec3(0.0f, 0.0f, -1.0f);
+        light.distant = type == "directional";
+        if (type == "spot") {
+            light.outerConeAngle = std::clamp(def["spot"]["outerConeAngle"].asFloat(0.78539816f), 0.0f, 1.57079633f);
+            light.innerConeAngle = std::clamp(def["spot"]["innerConeAngle"].asFloat(0.0f), 0.0f, light.outerConeAngle);
+        }
+        return light;
+    }
+
     static void walkNode(Context& ctx, GltfScene& scene, int nodeIndex, const Mat4& parent, int depth) {
         const auto& nodes = ctx.root["nodes"];
         if (nodeIndex < 0 || nodeIndex >= static_cast<int>(nodes.arr.size()) || depth > 64) return;
         const auto& node = nodes[static_cast<size_t>(nodeIndex)];
         Mat4 world = parent * localMatrix(node);
+        int lightIndex = node["extensions"]["KHR_lights_punctual"]["light"].asInt(-1);
+        const auto& lightDefs = ctx.root["extensions"]["KHR_lights_punctual"]["lights"];
+        if (lightIndex >= 0 && lightIndex < static_cast<int>(lightDefs.arr.size())) {
+            scene.lights.push_back(readLight(lightDefs[static_cast<size_t>(lightIndex)], world));
+        }
         int meshIndex = node["mesh"].asInt(-1);
         const auto& meshes = ctx.root["meshes"];
         if (meshIndex >= 0 && meshIndex < static_cast<int>(meshes.arr.size())) {
             Mat4 normalXf = normalMatrix(world);
             for (const auto& prim : meshes[static_cast<size_t>(meshIndex)]["primitives"].arr) {
-                appendPrimitive(ctx, scene, prim, world, normalXf);
+                appendPrimitive(ctx, scene, prim, world, normalXf, static_cast<uint32_t>(nodeIndex));
             }
         }
         for (const auto& child : node["children"].arr) walkNode(ctx, scene, child.asInt(-1), world, depth + 1);
     }
 
-    static void appendPrimitive(Context& ctx, GltfScene& scene, const io::GlbJsonValue& prim, const Mat4& world, const Mat4& normalXf) {
+    static void appendPrimitive(Context& ctx, GltfScene& scene, const io::GlbJsonValue& prim, const Mat4& world, const Mat4& normalXf, uint32_t nodeIndex) {
         if (prim["mode"].asInt(4) != 4) return;
         const auto& attrs = prim["attributes"];
         Accessor pos = accessor(ctx, attrs["POSITION"].asInt(-1));
@@ -498,6 +601,7 @@ private:
             if (a >= pos.count || b >= pos.count || c >= pos.count) continue;
             scene.mesh.addTriangle(base + a, base + b, base + c);
             scene.triangleMaterial.push_back(static_cast<uint32_t>(materialIndex));
+            scene.triangleNode.push_back(nodeIndex);
         }
 
         if (!hasNormals) {

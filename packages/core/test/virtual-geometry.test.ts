@@ -46,8 +46,12 @@ import { webgpuChrome, withWebGpuPage } from './helpers/webgpu-chrome';
 const INCLUDE_DIR = path.join(REPO_ROOT, 'packages/core/src/native/3d-engine/include');
 
 const clang = requireBinary(process.env.CXX || 'clang++', 'install clang++ (C++20)');
-/** sha256 of the .sbvg the builder writes for the determinism fixture (bumpySphere(60, 120) at [10, 2, -3]). */
-const DETERMINISTIC_FIXTURE_SHA256 = '3c3029664abd68d2fe50ef3346a72c86091c74f81f0abda73ae9b333e3bcac02';
+/**
+ * sha256 of the .sbvg the builder writes for the determinism fixture (bumpySphere(60, 120) at [10, 2, -3]). Version 6
+ * changed only the header's version word for it (no materials, so no atlas table): with word 1 set back to 5 the file
+ * hashes to version 5's pin, 3c302966...
+ */
+const DETERMINISTIC_FIXTURE_SHA256 = 'e72e579c577a97eb857597c4da61c0062dd228fa9a1f0b2271dc7641163e9b90';
 const SCREENSHOTS = path.join(REPO_ROOT, 'test-results', 'screenshots');
 const ARCH_GLB = 'deploy/cloud-run/spatial-separator/assets/arch_constantine_sb_archi.glb';
 
@@ -501,9 +505,9 @@ describe.skipIf(!clang.ok)(withReason('Virtual geometry builder (C++20 cluster L
         expect(tool.resultPayload.artifact.data.virtualGeometry.buildStats.skippedPrimitives).toBe(1);
     });
 
-    it('writes format version 5 with uvs, materials and an atlas table naming colour and normal atlases; reads versions 1 to 4; refuses unknown versions clearly', () => {
-        expect(SBVG_VERSION).toBe(5);
-        expect(sphere.header.version).toBe(5);
+    it('writes format version 6 with uvs, materials and an atlas table naming colour, normal and emission atlases; reads versions 1 to 5; refuses unknown versions clearly', () => {
+        expect(SBVG_VERSION).toBe(6);
+        expect(sphere.header.version).toBe(6);
         expect(sphere.header.materialCount).toBe(0);
         // No materials, so nothing to re-texture: no atlases, and the file ends where the level blocks end.
         expect(sphere.header.atlasCount).toBe(0);
@@ -534,9 +538,9 @@ describe.skipIf(!clang.ok)(withReason('Virtual geometry builder (C++20 cluster L
         expect(h1.levels[0]).toMatchObject({ byteOffset: v1.length, byteLength: 128 });
         expect(h1.skippedPrimitives).toBe(0);
 
-        const v6 = Buffer.from(v2);
-        v6.writeUInt32LE(6, 4);
-        expect(() => parseSbvgHeader(new Uint8Array(v6))).toThrow(/unsupported version 6.*rebuild/);
+        const v7 = Buffer.from(v2);
+        v7.writeUInt32LE(7, 4);
+        expect(() => parseSbvgHeader(new Uint8Array(v7))).toThrow(/unsupported version 7.*rebuild/);
     });
 
     it('is deterministic: the same fixture always gives the same bytes (no FMA contraction, total-order heap ties)', async () => {

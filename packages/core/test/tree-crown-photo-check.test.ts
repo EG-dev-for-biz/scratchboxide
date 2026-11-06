@@ -140,6 +140,11 @@ describe('planting with a crown correction', () => {
     let plain: Awaited<ReturnType<TileVegetationService['plant']>>;
     let corrected: Awaited<ReturnType<TileVegetationService['plant']>>;
     let recorded: Awaited<ReturnType<TileVegetationService['plant']>>;
+    // the same two plantings without the species library: every crown then grows from the grower's own crown base (0.35 of
+    // its height, within the seeded spread), so how far the correction moves the crown does not depend on which library
+    // entry a crown happens to match (an entry whose own base is already near the photo's leaves it little to move)
+    let plainOwn: Awaited<ReturnType<TileVegetationService['plant']>>;
+    let correctedOwn: Awaited<ReturnType<TileVegetationService['plant']>>;
     const correction = {
         schema: CROWN_CORRECTION_SCHEMA, provenance: 'photo-inferred', method: 'test',
         median: { widthScale: 1.3, crownBaseRatio: 0.15, trees: 1, readings: 1 },
@@ -153,6 +158,8 @@ describe('planting with a crown correction', () => {
         fs.writeFileSync(path.join(work, 'correction.json'), JSON.stringify(correction));
         plain = await svc.plant({ crownsPath: 'crowns.json', triangleBudget: 12000, seed: 'abc' });
         corrected = await svc.plant({ crownsPath: 'crowns.json', triangleBudget: 12000, seed: 'abc', crownCorrectionPath: 'correction.json' });
+        plainOwn = await svc.plant({ crownsPath: 'crowns.json', triangleBudget: 12000, seed: 'abc', species: false });
+        correctedOwn = await svc.plant({ crownsPath: 'crowns.json', triangleBudget: 12000, seed: 'abc', species: false, crownCorrectionPath: 'correction.json' });
         // recorded for these crowns: the trees stage's plain call picks it up
         const sha = crypto.createHash('sha256').update(fs.readFileSync(path.join(work, 'crowns.json'))).digest('hex');
         fs.mkdirSync(path.dirname(crownCorrectionPathFor(work, sha)), { recursive: true });
@@ -163,8 +170,10 @@ describe('planting with a crown correction', () => {
 
     it('grows the crown wider by the scale and lower to the base, the top unchanged, labelled photo-inferred', () => {
         const a = treeExtras(plain.treesGlb), b = treeExtras(corrected.treesGlb);
+        const aOwn = treeExtras(plainOwn.treesGlb), bOwn = treeExtras(correctedOwn.treesGlb);
         for (const id of [0, 1]) {
-            const ca = a.get(id).sbTree.crown, cb = b.get(id).sbTree.crown;
+            // the crown's shape, from the grower's own proportions to the photo's
+            const ca = aOwn.get(id).sbTree.crown, cb = bOwn.get(id).sbTree.crown;
             const wa = Math.max(ca.radii[0], ca.radii[2]), wb = Math.max(cb.radii[0], cb.radii[2]);
             expect(wb / wa).toBeGreaterThan(1.15);
             expect(wb / wa).toBeLessThan(1.45);
@@ -173,6 +182,12 @@ describe('planting with a crown correction', () => {
             const baseA = ca.centre[1] - ca.radii[1], baseB = cb.centre[1] - cb.radii[1];
             expect(baseB).toBeLessThan(baseA - 1);
             const c = CROWNS[id];
+            // with the species library the photo's base wins over the matched entry's (photo-inferred over generated): the tree
+            // grew with the correction's ratio whatever its entry gives, and its crown is no higher than the entry alone grew it
+            expect(b.get(id).sbTree.species.grownWith.crownBaseRatio).toBeCloseTo(0.15, 6);
+            const lib = a.get(id).sbTree.crown, libCorrected = b.get(id).sbTree.crown;
+            if (a.get(id).inferred.crownBaseRatio > 0.15) expect(libCorrected.centre[1] - libCorrected.radii[1]).toBeLessThan(lib.centre[1] - lib.radii[1]);
+            expect(bOwn.get(id).inferred.crownBaseRatio).toBeCloseTo(0.15, 6);
             expect(b.get(id).inferred.crownBaseRatio).toBeCloseTo(0.15, 6);
             expect(b.get(id).inferred.crownBaseY).toBeCloseTo(c.supportY + 0.15 * (c.apex[1] - c.supportY), 3);
             expect(b.get(id).crownCorrection).toMatchObject({ widthScale: 1.3, crownBaseRatio: 0.15, provenance: 'photo-inferred', source: id === 0 ? 'photo' : 'district-median' });

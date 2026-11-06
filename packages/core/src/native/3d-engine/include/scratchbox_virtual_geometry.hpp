@@ -44,7 +44,7 @@
  * borders, and each such level has one material of its own, appended after the glTF materials, whose
  * base colour is an atlas PNG written next to the file (atlas table at the end, version 4).
  *
- * Layout (little-endian, 4-byte words), version 5:
+ * Layout (little-endian, 4-byte words), version 6:
  *   header (128 bytes)          see writeSbvg (word 24: skipped non-triangle primitives,
  *                               word 25: dropped degenerate triangles, word 26: glTF material count,
  *                               word 27: atlas count, words 28-29: atlas table byte offset,
@@ -62,7 +62,9 @@
  *     materials  triCount u32             (glTF material index, a level atlas material, or 0xFFFFFFFF; version 3+)
  *   atlas table (version 4+), per atlas: level, material id, width, height, metallic f32, roughness f32,
  *                               name length, name bytes padded to 4; version 5 adds the normal atlas's
- *                               name the same way (length 0 when the level has none)
+ *                               name the same way (length 0 when the level has none); version 6 adds
+                               the emission atlas's name the same way and its scale (f32: the atlas
+                               holds emitted radiance over that peak, sRGB-encoded; 0 when it emits nothing)
  */
 
 #include "scratchbox_texture.hpp"
@@ -97,7 +99,7 @@ constexpr uint32_t kGroupTriangles = kGroupSize * kMaxClusterTriangles;
 /** Clusters a group may hold, growing to its triangle budget or after stuck groups have merged into it. */
 constexpr uint32_t kMaxMergedGroupSize = 4 * kGroupSize;
 constexpr uint32_t kSbvgMagic = 0x47564253; // 'SBVG'
-constexpr uint32_t kSbvgVersion = 5;
+constexpr uint32_t kSbvgVersion = 6;
 constexpr uint32_t kSbvgHeaderBytes = 128;
 constexpr uint32_t kSbvgLevelWords = 16;
 constexpr uint32_t kSbvgClusterWords = 32;
@@ -838,6 +840,8 @@ struct BakeRequest {
     SourceSampler sample;
     /** Optional: the source's own normal maps (an earlier level's normal atlas); vertex normals otherwise. */
     NormalSampler sampleNormal;
+    /** Optional: the source's emitted radiance (linear); with it the bake also writes an emission atlas. */
+    SourceSampler sampleEmission;
     /** Finest texel worth baking, in world units. */
     float minTexelWorld{0.05f};
     uint32_t maxAtlasSize{8192};
@@ -847,6 +851,9 @@ struct BakeResult {
     AtlasImage atlas;
     /** The finer surface's shading normals in each coarse triangle's tangent frame, glTF normal-map encoded. */
     AtlasImage normal;
+    /** Emitted radiance over emissionScale, sRGB-encoded; empty when nothing the level covers emits. */
+    AtlasImage emission;
+    float emissionScale{0.0f};
     std::vector<F2> cornerUv;   // per coarse corner
     uint32_t cells{0};
     /** Cells shared by two triangles along a common edge. */
@@ -865,6 +872,8 @@ struct BakeResult {
  */
 struct RetextureOptions {
     SourceSampler sampleLevel0;
+    /** Optional: emitted radiance of the glTF materials (factor, strength and texture), so coarse levels keep their emitters. */
+    SourceSampler sampleEmissionLevel0;
     std::function<BakeResult(const BakeRequest&)> bake;
     /** metallic, roughness per glTF material; the level materials take the area-dominant one's. */
     std::vector<std::array<float, 2>> materialFactors;
@@ -877,6 +886,9 @@ struct LevelAtlas {
     uint32_t materialId{0};
     AtlasImage image;
     AtlasImage normal;
+    /** Emitted radiance over emissionScale (empty when the level emits nothing). */
+    AtlasImage emission;
+    float emissionScale{0.0f};
     uint32_t cells{0};
     uint32_t pairedCells{0};
     uint64_t texels{0};
@@ -1816,10 +1828,16 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24, cons
             }
             if (level == 0) {
                 request.sample = retex->sampleLevel0;
+                request.sampleEmission = retex->sampleEmissionLevel0;
             } else {
                 const AtlasImage* previous = &dag.atlases.back().image;
                 const AtlasImage* previousNormal = &dag.atlases.back().normal;
                 request.sample = [previous](uint32_t, const F2& uv) { return previous->sampleLinear(uv); };
+                if (dag.atlases.back().emission.width > 0) {
+                    const AtlasImage* previousEmission = &dag.atlases.back().emission;
+                    const float scale = dag.atlases.back().emissionScale;
+                    request.sampleEmission = [previousEmission, scale](uint32_t, const F2& uv) { return previousEmission->sampleLinear(uv) * scale; };
+                }
                 // The previous level's baked normals, decoded in the source triangle's own frame.
                 request.sampleNormal = [previousNormal](uint32_t, const F2& uv, const F3& T, const F3& B, const F3& N, F3& out) {
                     if (previousNormal->width == 0) return false;
@@ -1835,6 +1853,8 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24, cons
             atlas.materialId = m.materialCount + static_cast<uint32_t>(dag.atlases.size());
             atlas.image = std::move(baked.atlas);
             atlas.normal = std::move(baked.normal);
+            atlas.emission = std::move(baked.emission);
+            atlas.emissionScale = baked.emissionScale;
             atlas.cells = baked.cells;
             atlas.pairedCells = baked.pairedCells;
             atlas.texels = baked.texels;
@@ -1911,6 +1931,11 @@ inline std::string atlasFileName(const std::string& stem, uint32_t level) {
 }
 
 /** Name of the PNG holding a level's baked normal map: `<stem>.normal<level>.png`. */
+/** Name of the PNG holding a level's emission atlas, next to the .sbvg: `<stem>.emission<level>.png`. */
+inline std::string emissionAtlasFileName(const std::string& stem, uint32_t level) {
+    return stem + ".emission" + std::to_string(level) + ".png";
+}
+
 inline std::string normalAtlasFileName(const std::string& stem, uint32_t level) {
     return stem + ".normal" + std::to_string(level) + ".png";
 }
@@ -2084,6 +2109,16 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uin
         body.push_back(bits);
         putName(name);
         putName(normalName);
+        // Version 6: the emission atlas and the peak it is scaled by (no name and 0 when the level emits nothing).
+        std::string emissionName;
+        if (atlas.emission.width > 0 && atlas.emission.height > 0) {
+            emissionName = emissionAtlasFileName(atlasStem, atlas.level);
+            writePng(atlas.emission, emissionName);
+        }
+        putName(emissionName);
+        const float scale = emissionName.empty() ? 0.0f : atlas.emissionScale;
+        std::memcpy(&bits, &scale, 4);
+        body.push_back(bits);
     }
     words[27] = static_cast<uint32_t>(dag.atlases.size());
     putU64(&words[28], tableOffset);

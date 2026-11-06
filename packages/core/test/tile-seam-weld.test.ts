@@ -21,14 +21,22 @@
  *   5. a bad tolerance and a missing input are refused before anything runs;
  *   6. T-junctions: two chunks whose border points interleave are split into each other's edges, so no seam edge is left open;
  *   7. overlap trim: the column of a chunk lying over its neighbour goes, and the rest is welded.
+ *
+ * Then by source tile (one node per chunk, as the crawler writes a leaf, with its stated geometric error):
+ *   8. a 15 cm gap between two coplanar tiles of different resolution, beyond the fixed passes, is closed by the adaptive
+ *      close and measured by the seam audit (before, after the fixed passes, after);
+ *   9. pairs whose surfaces do not agree (a step, a wall standing at the border) and a gap beyond the tiles' stated error
+ *      are left as they are;
+ *  10. agreed gaps no close may move are bridged by the strip fill, drawn with a material labelled generated;
+ *  11. the node -> tile file the service writes for the CLI.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
-import { type Chunk, quad, writeGlb, readGlb, encodePng } from './helpers/synthetic-scan-glb';
-import { runTileSeamWeld, TileSeamWeldError } from '../src/node/3d-engine/tile-seam-weld-service';
+import { type Chunk, quad, flat, writeGlb, readGlb, encodePng } from './helpers/synthetic-scan-glb';
+import { runTileSeamWeld, TileSeamWeldError, tileSeamTilesFile, type TileSeamWeldRequest } from '../src/node/3d-engine/tile-seam-weld-service';
 import { parseGlb, serializeGlb } from '../src/node/3d-engine/glb-geometry-patcher';
 import { parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
 
@@ -274,5 +282,123 @@ describe('tile_seam_weld on synthetic tile chunks', () => {
             expect(extras.anchor).toEqual({ lat: 40.748545, lng: -73.985763 });
         }
         expect(positions(output).length).toBeGreaterThan(0);
+    });
+});
+
+describe('tile_seam_weld by source tile: the seam audit, the adaptive close and the strip fill', () => {
+    beforeAll(() => {
+        fs.mkdirSync(WORK, { recursive: true });
+        buildDriver();
+        process.env.SCRATCHBOX_TILE_SEAM_WELD_BIN = BIN;
+    });
+
+    /** Each chunk its own tile (node), stating `errorM`; the passes as asked. */
+    async function weldTiles(name: string, chunks: Chunk[], errorM: number | undefined, opts: Partial<TileSeamWeldRequest> = {}) {
+        const input = path.join(WORK, `${name}.glb`), output = path.join(WORK, `${name}_welded.glb`);
+        writeGlb(input, chunks, [], chunks.map((_, i) => ({ leafId: `leaf-${i}`, geometricErrorM: errorM })));
+        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, threads: 2, repoRoot: REPO, adaptive: true, ...opts });
+        return { r, output };
+    }
+    // two ground tiles meeting at x = 10, B starting 15 cm on: A in 0.5 m cells, B in 0.758 m cells (their border points interleave)
+    const groundA = () => flat(0, 10, 0, 10, 0, 20);
+    const groundB = (x0 = 10.15, y = 0) => flat(x0, 20, 0, 10, y, 13);
+    const onSeam = (e: [[number, number, number], [number, number, number]]) =>
+        e.every(p => p[0] > 9.99 && p[0] < 10.16) && e.every(p => p[2] > 0.01 && p[2] < 9.99);
+    const seamBands = (a: { bandLengthM: number[] }) => a.bandLengthM.slice(0, 4).reduce((x, y) => x + y, 0);
+
+    it('closes a 15 cm gap between coplanar tiles up to their stated error, and the audit measures it', async () => {
+        const { r, output } = await weldTiles('adaptive_gap', [groundA(), groundB()], 2.0);
+        expect(r.tiles).toEqual({ count: 2, nodesNamed: 2, withStatedError: 2 });
+        const au = r.seamAudit!;
+        // the seam's open edges inside the cut border (2 m in from the scan's edge), 10-30 cm from the other tile's
+        expect(au.before.bandLengthM[2]).toBeGreaterThan(8);
+        expect(au.before.bandLengthM[0] + au.before.bandLengthM[1] + au.before.bandLengthM[3]).toBe(0);
+        expect(au.before.atCutM).toBeGreaterThan(30);   // the scan's own outline
+        // the fixed 3 cm passes do not reach it; the adaptive close does
+        expect(au.afterFixed.bandLengthM[2]).toBeCloseTo(au.before.bandLengthM[2], 1);
+        expect(seamBands(au.after)).toBe(0);
+        const ad = r.adaptive!;
+        expect(ad.capM).toBeCloseTo(0.3, 6);
+        expect(ad.maxToleranceM).toBeCloseTo(0.3, 6);   // min(2, 2) capped at 30 cm
+        expect(ad.agreed).toBe(ad.candidates);
+        expect(ad.refusedNormal + ad.refusedParallel + ad.refusedStep + ad.refusedNoSurface).toBe(0);
+        expect(ad.normalAngleHist[0]).toBe(ad.candidates);
+        expect(ad.agreedByGap[2]).toBeGreaterThan(0);
+        expect(ad.splitsClosed).toBeGreaterThan(0);
+        expect(ad.guardRefused).toBe(0);
+        expect(ad.maxMoveM).toBeLessThanOrEqual(0.16);
+        expect(r.stripFill).toEqual({ edgesFilled: 0, triangles: 0, areaM2: 0, refused: 0 });
+        // no seam edge is left open, and every position stays in the ground plane (the closes only slid along it)
+        const tris = triangles(output);
+        expect(openEdges(tris).filter(onSeam)).toHaveLength(0);
+        for (const t of tris) for (const p of t) expect(Math.abs(p[1])).toBeLessThan(1e-6);
+        // without the adaptive close the gap stays
+        const off = await weldTiles('adaptive_gap_off', [groundA(), groundB()], 2.0, { adaptive: false });
+        expect(off.r.adaptive).toBeUndefined();
+        expect(off.r.seamAudit!.after.bandLengthM[2]).toBeCloseTo(au.before.bandLengthM[2], 1);
+        expect(openEdges(triangles(off.output)).filter(onSeam).length).toBeGreaterThan(0);
+    });
+
+    it('leaves a step, a wall at the border and a gap beyond the stated error as they are', async () => {
+        // B 10 cm higher than A: the surfaces face alike but do not continue each other
+        const step = await weldTiles('adaptive_step', [groundA(), groundB(10.1, 0.1)], 2.0);
+        expect(step.r.adaptive!.candidates).toBeGreaterThan(0);
+        expect(step.r.adaptive!.refusedStep).toBe(step.r.adaptive!.candidates);
+        expect(step.r.adaptive!.splitsClosed + step.r.adaptive!.vertexMoves).toBe(0);
+        // a wall standing 10 cm beyond A's border: the surfaces meet at a right angle
+        const wallB = quad([10.1, 0, 10], [0, 0, -10], [0, 3, 0], 13, 4);
+        const corner = await weldTiles('adaptive_corner', [groundA(), wallB], 2.0);
+        expect(corner.r.adaptive!.refusedNormal).toBe(corner.r.adaptive!.candidates);
+        expect(corner.r.adaptive!.normalAngleHist[5] + corner.r.adaptive!.normalAngleHist[6]).toBe(corner.r.adaptive!.candidates);   // about 90 degrees
+        expect(corner.r.adaptive!.splitsClosed + corner.r.adaptive!.vertexMoves).toBe(0);
+        // tiles stating a 5 cm error: a 15 cm gap is beyond them, nothing is even a contact
+        const tight = await weldTiles('adaptive_tight', [groundA(), groundB()], 0.05);
+        expect(tight.r.adaptive!.candidates).toBe(0);
+        expect(tight.r.adaptive!.maxToleranceM).toBe(0);
+        expect(tight.r.seamAudit!.after.bandLengthM[2]).toBeCloseTo(tight.r.seamAudit!.before.bandLengthM[2], 1);
+        // no stated error: the pair is held to the fixed tolerance (3 cm), and a 15 cm gap stays
+        const none = await weldTiles('adaptive_unstated', [groundA(), groundB()], undefined);
+        expect(none.r.tiles!.withStatedError).toBe(0);
+        expect(none.r.adaptive!.candidates).toBe(0);
+    });
+
+    it('bridges the agreed gaps no close may move with strip triangles labelled generated', async () => {
+        // maxTurnDeg 0: every close is taken back, so the strip fill bridges the whole agreed seam
+        const { r, output } = await weldTiles('adaptive_fill', [groundA(), groundB()], 2.0, { maxTurnDeg: 0 });
+        expect(r.adaptive!.splitsClosed + r.adaptive!.vertexMoves).toBe(0);
+        expect(r.adaptive!.guardRefused).toBeGreaterThan(0);
+        const sf = r.stripFill!;
+        expect(sf.triangles).toBeGreaterThan(0);
+        expect(sf.areaM2).toBeGreaterThan(1.2);   // the 15 cm x 10 m gap, less its ends
+        expect(sf.areaM2).toBeLessThan(1.55);
+        expect(seamBands(r.seamAudit!.after)).toBe(0);
+        const tris = triangles(output);
+        expect(openEdges(tris).filter(onSeam)).toHaveLength(0);
+        // the bridge is drawn with a material of its own, labelled generated, and lies in the gap
+        const g = readGlb(output);
+        const labelled = (g.json.materials as any[]).map((m, i) => ({ m, i })).filter(({ m }) => m.extras?.scratchbox?.provenance === 'generated');
+        expect(labelled).toHaveLength(1);
+        expect(labelled[0].m.extras.scratchbox).toEqual({ photoInferredFill: true, provenance: 'generated', method: 'tile seam strip fill' });
+        const doc = parseGlbBytes(fs.readFileSync(output));
+        let fillTris = 0;
+        for (const m of doc.json.meshes) for (const pr of m.primitives) {
+            if (pr.material !== labelled[0].i) continue;
+            const P = readAccessor(doc, pr.attributes.POSITION).data, I = readAccessor(doc, pr.indices).data;
+            fillTris += I.length / 3;
+            for (const v of I) { expect(P[v * 3]).toBeGreaterThan(9.99); expect(P[v * 3]).toBeLessThan(10.16); }
+        }
+        expect(fillTris).toBe(sf.triangles);
+    });
+
+    it('names each node\'s tile by its leaf and its stated error for the CLI', () => {
+        const json = { nodes: [
+            { name: 'root', children: [1, 2, 3, 4] },
+            { mesh: 0, extras: { sb: { ids: { leafId: 'x' }, tile: { geometricErrorM: 2.01 } } } },
+            { mesh: 1, extras: { sb: { ids: { leafId: 'y' } } } },
+            { mesh: 2, extras: { sb: { ids: { leafId: 'x' }, tile: { geometricErrorM: 2.01 } } } },
+            { mesh: 3 }
+        ] };
+        expect(tileSeamTilesFile(json)).toBe('5\n0 0\n1 2.01\n2 0\n1 2.01\n3 0\n');
+        expect(tileSeamTilesFile(json, 4)).toBe('5\n0 4\n1 2.01\n2 4\n1 2.01\n3 4\n');
     });
 });

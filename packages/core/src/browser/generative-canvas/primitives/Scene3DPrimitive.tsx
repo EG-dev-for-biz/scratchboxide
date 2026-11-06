@@ -164,6 +164,7 @@ import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
 import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { WeatherControl } from './scene3d/WeatherPanel';
 import { ScenePathTraceButton, ScenePathTraceLayer } from './scene3d/ScenePathTrace';
+import { QuickBeautifyButton, type QuickBeautifyView } from './scene3d/QuickBeautifyButton';
 import { SplatEditControl } from './scene3d/SplatEditPanel';
 import { createSplatEditTool, DEFAULT_SPLAT_BRUSH, type SplatBrush, type SplatEditTool } from './scene3d/splatEditTool';
 import { PRIMARY_SPLAT_TARGET, type SplatEditStroke } from '../../../common/spatial/splat-edits';
@@ -195,7 +196,7 @@ import {
 } from './scene3d/selection';
 import { groupVariantSets, resolveActiveVariants, variantSetKeyOf } from './scene3d/variantSets';
 import type { VectorRoadmapConfig } from '../canvas-types';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { createGltfLoader } from './scene3d/resilientGltfLoader';
 import { applyWeatheringLayer } from './scene3d/weatheringLayer';
 import { CINEMATIC_RIGS, computeSceneBudgetTelemetry } from './scene3d/lightingRigs';
 import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
@@ -2501,7 +2502,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         let displayFlagWasOn = false;
         let compiledRootCache: THREE.Object3D | undefined;
         // a build step's snapshot under the flag (the model as it stood after that step)
-        const stepSnapshot = new StepSnapshotView(url => new GLTFLoader().loadAsync(resolveExternalModelUri(url)).then(g => g.scene));
+        const stepSnapshot = new StepSnapshotView(url => createGltfLoader().loadAsync(resolveExternalModelUri(url)).then(g => g.scene));
         const animate = () => {
             try {
                 const now = performance.now();
@@ -3119,7 +3120,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             for (let i = 0; i < binaryStr.length; i++) {
                 bytes[i] = binaryStr.charCodeAt(i);
             }
-            const loader = new GLTFLoader();
+            const loader = createGltfLoader();
             pendingGeneratedGlbParsesRef.current++;
             loader.parse(bytes.buffer, '', (gltf) => {
                 pendingGeneratedGlbParsesRef.current--;
@@ -3350,7 +3351,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             }
         };
 
-        const loader = new GLTFLoader();
+        const loader = createGltfLoader();
 
         objects.forEach(obj => {
             const rawUri = obj.content?.durableUri;
@@ -4320,6 +4321,35 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         console.info(`[Asset Recovery] rebuilding ${lost.length} lost file(s) from the scene's place on its own`);
         recoveryRebuild();
     }, [recoveryRebuild, assetRecovery, activeArtifact]);
+    // Quick AI Beautify (tool rail): the current frame as framed, the scene's name and place, and the camera, read at click time
+    const [beautifyError, setBeautifyError] = React.useState<string | null>(null);
+    const readQuickBeautifyView = React.useCallback((): QuickBeautifyView => {
+        const data = sceneDataRef.current;
+        const anchor = data.geoAnchor;
+        const place = anchor && anchor.active !== false && Number.isFinite(anchor.lat) && Number.isFinite(anchor.lng)
+            ? { lat: anchor.lat, lng: anchor.lng, ...(anchor.landmarkName ? { name: anchor.landmarkName } : {}) }
+            : undefined;
+        const camera = threeCameraRef.current;
+        let camFacts: Pick<QuickBeautifyView, 'headingDeg' | 'pitchDeg' | 'fovDeg' | 'subjectDistanceM'> = {};
+        if (camera) {
+            const dir = new THREE.Vector3();
+            camera.getWorldDirection(dir);
+            // the same heading convention as the roadmap HUD: -Z is north, +X east
+            camFacts = {
+                headingDeg: (Math.atan2(dir.x, -dir.z) * 180 / Math.PI + 360) % 360,
+                pitchDeg: Math.asin(Math.max(-1, Math.min(1, dir.y))) * 180 / Math.PI,
+                fovDeg: camera.fov,
+                subjectDistanceM: camera.position.distanceTo(cameraTargetRef.current)
+            };
+        }
+        return {
+            frameDataUrl: captureFrame(),
+            sceneName: activeArtifact?.title || anchor?.landmarkName || 'scene',
+            ...(place ? { place } : {}),
+            ...camFacts
+        };
+    }, [captureFrame, activeArtifact?.title, sceneDataRef]);
+
     const viewportNotices = React.useMemo(() => resolveViewportNotice({
         webglError,
         generatorError: currentGeneratorError,
@@ -4341,8 +4371,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             // the lasting missing-files notice carries the rebuild when it shows (the summary clears after 12 s)
             ...(recoveryRebuild && !objectLoadErrors.some(e => e.missingFile) ? { onRebuild: recoveryRebuild } : {})
         } : undefined,
-        ...(recoveryRebuild && objectLoadErrors.some(e => e.missingFile) ? { onRebuildMissing: recoveryRebuild } : {})
-    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects, opticsIssues, assetRecovery, recoveryNoticeJobId, recoveryRebuild]);
+        ...(recoveryRebuild && objectLoadErrors.some(e => e.missingFile) ? { onRebuildMissing: recoveryRebuild } : {}),
+        beautifyError: beautifyError ? { message: beautifyError, onDismiss: () => setBeautifyError(null) } : undefined
+    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects, opticsIssues, assetRecovery, recoveryNoticeJobId, recoveryRebuild, beautifyError]);
 
     const handleExportGlb = React.useCallback(async () => {
         if (!threeSceneRef.current) return;
@@ -4497,6 +4528,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     pickError={focusPickError}
                     readFocusDistance={readFocusDistance}
                 />
+
+                {/* AI Beautify: the current view as a photograph, downloaded as a PNG (QuickBeautifyButton.tsx) */}
+                <QuickBeautifyButton readView={readQuickBeautifyView} onError={setBeautifyError} />
 
                 {/* 2. Translate / Move (W) */}
                 <button

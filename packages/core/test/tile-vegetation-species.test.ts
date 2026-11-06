@@ -20,7 +20,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { TileVegetationService } from '../src/node/3d-engine/tile-vegetation-service';
 import { validateTreesGlbJson, type TreeNodeExtras } from '../src/common/spatial/staged-location-contracts';
-import { validateTreeSpeciesIndex, type TreeSpeciesIndex } from '../src/common/spatial/tree-species-library';
+import { treeSpeciesPlaceParams, validateTreeSpeciesIndex, type TreeSpeciesIndex } from '../src/common/spatial/tree-species-library';
 import type { TreeTextureIndex } from '../src/common/spatial/tree-texture-library';
 import { parseGlb } from './helpers/clay-glb-render';
 
@@ -28,6 +28,8 @@ const REPO = fs.realpathSync(path.resolve(__dirname, '../../..'));
 const INDEX = JSON.parse(fs.readFileSync(path.join(REPO, 'assets/vegetation/species/index.json'), 'utf8')) as TreeSpeciesIndex;
 const TEXTURES = JSON.parse(fs.readFileSync(path.join(REPO, 'assets/textures/trees/index.json'), 'utf8')) as TreeTextureIndex;
 const entry = (id: string) => INDEX.entries.find(e => e.id === id)!;
+// what the tests read of a chosen entry: its own continuous fields, never its name (the library grows)
+const palmLike = (id: string | null | undefined) => !!id && entry(id).crownBaseRatio >= 0.75 && entry(id).leafLengthM >= 1;
 
 type Vec3 = [number, number, number];
 
@@ -105,7 +107,7 @@ describe('tree species chosen per crown (plant)', () => {
         }
         // the tall narrow crown with a rounded head: a palm, its crown base high on a bare trunk, fronds for leaves
         const palm = trees.get(0)!;
-        expect(['date_palm', 'fan_palm']).toContain(palm.species!.entry);
+        expect(palmLike(palm.species!.entry), String(palm.species!.entry)).toBe(true);
         expect(palm.species!.measured.aspect).toBeCloseTo(3.5 / 15, 1);
         expect(palm.species!.grownWith.crownBaseRatio).toBeGreaterThanOrEqual(0.65);
         expect(palm.species!.grownWith.trunkRadiusPerHeight).toBe(entry(palm.species!.entry!).trunkRadiusPerHeight);
@@ -114,7 +116,8 @@ describe('tree species chosen per crown (plant)', () => {
         expect(palm.texture!.leaves.targetLeafLengthM).toBeLessThan(0.6);
         // the steep cone: a spruce, foliage nearly to the ground
         const spruce = trees.get(1)!;
-        expect(spruce.species!.entry).toBe('spruce');
+        expect(entry(spruce.species!.entry!).topShare).toBeLessThan(0.2);
+        expect(entry(spruce.species!.entry!).leafAspect).toBeLessThanOrEqual(0.2);
         expect(spruce.species!.measured.topShare).toBeLessThan(0.1);
         expect(spruce.species!.grownWith.crownBaseRatio).toBeLessThan(0.25);
         // the low mound: a shrub, several stems from the ground
@@ -124,7 +127,12 @@ describe('tree species chosen per crown (plant)', () => {
         expect(shrub.species!.grownWith.crownBaseRatio).toBeLessThan(0.2);
         // the broad dome: a broadleaf with one trunk and a crown base between a quarter and half way up
         const broad = trees.get(3)!;
-        expect(['london_plane', 'linden', 'oak', 'maple', 'honey_locust']).toContain(broad.species!.entry);
+        const broadEntry = entry(broad.species!.entry!);
+        expect(broadEntry.stems).toBe(1);
+        expect(broadEntry.topShare).toBeGreaterThan(0.4);
+        expect(broadEntry.crownRadiusPerHeight).toBeGreaterThan(0.3);
+        expect(broadEntry.crownRadiusPerHeight).toBeLessThan(0.65);
+        expect(broadEntry.leafAspect).toBeGreaterThan(0.25);
         expect(broad.species!.measured.topShare).toBeGreaterThan(0.4);
         expect(broad.species!.grownWith.stems).toBe(1);
         expect(broad.species!.grownWith.crownBaseRatio).toBeGreaterThan(0.15);
@@ -138,7 +146,7 @@ describe('tree species chosen per crown (plant)', () => {
         else expect(broad.texture!.leaves.targetLeafLengthM).not.toBe(want);
         // the inferred proportions in the provenance are the ones each tree grew with, not one ratio for all
         expect(sbOf(0).provenance.inferred.trunkRadiusPerHeight).toBe(palm.species!.grownWith.trunkRadiusPerHeight);
-        expect(sbOf(1).provenance.inferred.trunkRadiusPerHeight).toBe(entry('spruce').trunkRadiusPerHeight);
+        expect(sbOf(1).provenance.inferred.trunkRadiusPerHeight).toBe(entry(spruce.species!.entry!).trunkRadiusPerHeight);
         expect(sbOf(0).provenance.inferred.trunkRadiusPerHeight).not.toBe(sbOf(1).provenance.inferred.trunkRadiusPerHeight);
     });
 
@@ -149,15 +157,34 @@ describe('tree species chosen per crown (plant)', () => {
         for (const id of [0, 1, 2, 3]) expect(extras(id).crownSurfaceReached, `crown ${id}`).toBeGreaterThan(0.8);
     });
 
-    it('a build\'s own latitude keeps a shape-alike palm from matching outside where palms grow (user report, 2026-10-21)', async () => {
-        // the same tall-narrow-crown-bare-trunk-rounded-head measurements that matched date_palm/fan_palm above
-        // (entry 0, the "palm" fixture) - only this time the build is at New York's latitude, not unconstrained
-        const nyc = await svc.plant({ crownsPath: 'crowns.json', triangleBudget: 60000, seed: 'abc', params: { latAbsDeg: 40.7 } });
+    it('a build\'s own latitude alone keeps a shape-alike palm from matching well past where palms grow (user report, 2026-10-21)', async () => {
+        // the same tall-narrow-crown-bare-trunk-rounded-head measurements that matched a palm above (entry 0, the
+        // "palm" fixture) - only this time the build gives its unsigned latitude and nothing else. Latitude alone
+        // cannot tell New York from Barcelona, where fan palms line the streets (the signed place below can: the
+        // climate, not the latitude, keeps palms out of New York), so this is London's and Berlin's latitude.
+        const nyc = await svc.plant({ crownsPath: 'crowns.json', triangleBudget: 60000, seed: 'abc', params: { latAbsDeg: 52 } });
         const { json: nycJson } = parseGlb(fs.readFileSync(nyc.treesGlb));
         const palmAtNyc = nycJson.nodes.find((n: any) => n.extras?.sbTree?.id === 0)!.extras.sbTree as TreeNodeExtras;
         expect(palmAtNyc.species).toBeDefined();
-        expect(['date_palm', 'fan_palm']).not.toContain(palmAtNyc.species!.entry);
+        expect(palmLike(palmAtNyc.species!.entry), String(palmAtNyc.species!.entry)).toBe(false);
         // the measurements themselves are unchanged - only which species they are judged against
         expect(palmAtNyc.species!.measured.aspect).toBeCloseTo(3.5 / 15, 1);
+    }, 900_000);
+
+    it('the build\'s signed place weighs the pick by region: the palm-shaped crown is a palm in Seville, not in New York (user decision, 2026-11-05)', async () => {
+        const at = async (place: { lat: number; lng: number }) => {
+            const r = await svc.plant({ crownsPath: 'crowns.json', triangleBudget: 60000, seed: 'abc', params: treeSpeciesPlaceParams(place) });
+            const { json: j } = parseGlb(fs.readFileSync(r.treesGlb));
+            return new Map<number, TreeNodeExtras>(j.nodes.filter((n: any) => n.extras?.sbTree).map((n: any) => [n.extras.sbTree.id, n.extras.sbTree as TreeNodeExtras]));
+        };
+        const seville = await at({ lat: 37.39, lng: -5.99 }), newYork = await at({ lat: 40.7359, lng: -73.9911 });
+        expect(palmLike(seville.get(0)!.species!.entry), String(seville.get(0)!.species!.entry)).toBe(true);
+        expect(palmLike(newYork.get(0)!.species!.entry), String(newYork.get(0)!.species!.entry)).toBe(false);
+        // the broad dome is a broadleaf in both, of a species common where the build is
+        const regionAt = (lat: number, lng: number) => INDEX.regions!.find(g => lat >= g.latDeg[0] && lat <= g.latDeg[1] && lng >= g.lonDeg[0] && lng <= g.lonDeg[1])!.id;
+        expect(entry(seville.get(3)!.species!.entry!).regionWeights![regionAt(37.39, -5.99)]).toBeGreaterThanOrEqual(0.5);
+        expect(entry(newYork.get(3)!.species!.entry!).regionWeights![regionAt(40.7359, -73.9911)]).toBeGreaterThanOrEqual(0.5);
+        // the measurements are the same in both; only what they are judged against moved
+        expect(seville.get(0)!.species!.measured.aspect).toBe(newYork.get(0)!.species!.measured.aspect);
     }, 900_000);
 });

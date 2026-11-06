@@ -15,7 +15,9 @@
 //                                   frames as <dir>/frame.rgba (8-bit RGBA, display-ready); see serve()
 //
 // backend "metal" (default) traces on the GPU; backend "cpu" traces the same LOD cut with render::PathTracer,
-// the reference the GPU kernels are checked against. The CPU backend needs sun lighting.
+// the reference the GPU kernels are checked against. Both light the scene by the sun and sky or the studio
+// dome, plus the GLB's own lights (emissive materials and KHR_lights_punctual) sampled from the light tree;
+// config.lighting.sampleLights false leaves the lights to be found by BSDF rays alone, for comparison.
 
 #import <Foundation/Foundation.h>
 
@@ -230,6 +232,13 @@ MaterialSource loadMaterials(const std::string& glbPath, const sbvg::File& file,
         material.wrapT = 33071;
         material.metallicFactor = atlas.metallic;
         material.roughnessFactor = atlas.roughness;
+        if (!atlas.emissionImagePath.empty() && atlas.emissionScale > 0.0f) {
+            // The level's emitters, baked: radiance is the atlas (sRGB) times its scale.
+            material.emissiveImage = loadAtlasImage(atlas.emissionImagePath, atlas.level, "emission atlas");
+            material.emissiveWrapS = 33071;
+            material.emissiveWrapT = 33071;
+            material.emissiveFactor = Vec3(atlas.emissionScale, atlas.emissionScale, atlas.emissionScale);
+        }
         if (atlasNormals && !atlas.normalImagePath.empty()) {
             material.normalImage = loadAtlasImage(atlas.normalImagePath, atlas.level, "normal atlas");
             material.normalWrapS = 33071;
@@ -242,12 +251,49 @@ MaterialSource loadMaterials(const std::string& glbPath, const sbvg::File& file,
     return source;
 }
 
+/** The GLB's punctual lights in the file's coordinates (its vertices are the GLB's world less the stored origin). */
+std::vector<gltf::SceneLight> lightsInFile(const gltf::GltfScene& scene, const sbvg::File& file) {
+    const Vec3 origin(static_cast<float>(file.origin[0]), static_cast<float>(file.origin[1]), static_cast<float>(file.origin[2]));
+    std::vector<gltf::SceneLight> out = scene.lights;
+    for (gltf::SceneLight& l : out) l.position = l.position - origin;
+    return out;
+}
+
+/**
+ * Punctual lights given as JSON (MetalPathTracePunctualLight: position, direction, intensity, range, cone angles,
+ * distant), in the GLB's world coordinates, into the file's coordinates.
+ */
+std::vector<gltf::SceneLight> parseLights(const Json& list, const sbvg::File& file) {
+    const Vec3 origin(static_cast<float>(file.origin[0]), static_cast<float>(file.origin[1]), static_cast<float>(file.origin[2]));
+    std::vector<gltf::SceneLight> out;
+    for (const Json& l : list.arr) {
+        gltf::SceneLight light;
+        light.position = vec3Or(l["position"], Vec3(0, 0, 0)) - origin;
+        const Vec3 d = vec3Or(l["direction"], Vec3(0, 0, -1));
+        light.direction = d.lengthSquared() > 1e-20f ? d.normalized() : Vec3(0, 0, -1);
+        light.intensity = vec3Or(l["intensity"], Vec3(0, 0, 0));
+        light.range = std::max(0.0f, numberOr(l["range"], 0.0f));
+        light.outerConeAngle = std::clamp(numberOr(l["outerConeAngle"], 3.14159265f), 0.0f, 3.14159265f);
+        light.innerConeAngle = std::clamp(numberOr(l["innerConeAngle"], 0.0f), 0.0f, light.outerConeAngle);
+        light.distant = boolOr(l["distant"], false);
+        out.push_back(light);
+    }
+    return out;
+}
+
+std::string lightsJson(const render::lights::LightSet& set, bool sampling) {
+    std::ostringstream s;
+    s << "{\"sampling\":" << (sampling ? "true" : "false") << ",\"triangles\":" << set.triangleLights << ",\"points\":" << set.pointLights
+      << ",\"distant\":" << set.distantCount << ",\"treeNodes\":" << set.nodes.size() << "}";
+    return s.str();
+}
+
 /**
  * The LOD cut as a glTF scene for render::PathTracer, vertices relative to the file origin. With a
  * `source` scene its materials and images are taken over (a default material appended for triangles
  * without one); otherwise one default material, for the uniform clay path.
  */
-gltf::GltfScene sceneFromCut(const sbvg::File& file, const sbvg::Cut& cut, gltf::GltfScene* source) {
+gltf::GltfScene sceneFromCut(const sbvg::File& file, const sbvg::Cut& cut, gltf::GltfScene* source, const std::vector<gltf::SceneLight>& lights) {
     gltf::GltfScene scene;
     scene.ok = true;
     scene.mesh.name = "sbvg_cut";
@@ -258,6 +304,7 @@ gltf::GltfScene sceneFromCut(const sbvg::File& file, const sbvg::Cut& cut, gltf:
         scene.mesh.addVertex(geometry::Vertex(Vec3(v[0], v[1], v[2]), Vec3(v[3], v[4], v[5]), math::Vec2(v[6], v[7]), math::Vec4(1, 1, 1, 1), math::Vec4(0, 0, 0, 1)));
     }
     scene.mesh.indices = cut.indices;
+    scene.lights = lights;
     if (source) {
         scene.materials = source->materials;
         scene.images = std::move(source->images);
@@ -338,6 +385,11 @@ int renderOnce(const std::string& configPath) {
         const bool sceneMaterials = !materialsGlb.empty();
         MaterialSource source;
         if (sceneMaterials) source = loadMaterials(materialsGlb, file, boolOr(config["materials"]["atlasNormals"], true));
+        const bool sampleLights = boolOr(config["lighting"]["sampleLights"], true);
+        const std::vector<gltf::SceneLight> punctual = !sampleLights ? std::vector<gltf::SceneLight>{}
+            : config.has("lights") ? parseLights(config["lights"], file)
+            : sceneMaterials ? lightsInFile(source.scene, file) : std::vector<gltf::SceneLight>{};
+        render::lights::LightSet usedLights;
 
         render::RenderOutput out;
         std::string deviceName = "cpu";
@@ -387,17 +439,23 @@ int renderOnce(const std::string& configPath) {
                 tracer.setMaterials(source.scene);
                 texturesUploaded = tracer.textureCount();
             }
+            tracer.setLights(punctual);
+            tracer.setLightSampling(sampleLights);
             deviceName = tracer.deviceName();
             accelerationBuildMs = tracer.accelerationBuildMs();
             out = tracer.render(camera, lighting.lighting, settings, sceneMaterials ? nullptr : &material);
+            usedLights = tracer.lightSet();
         } else {
-            if (lighting.lighting.mode != metalpt::Lighting::Mode::Sky) throw std::runtime_error("backend \"cpu\" (render::PathTracer) needs config.lighting.sun");
-            const gltf::GltfScene scene = sceneFromCut(file, cut, sceneMaterials ? &source.scene : nullptr);
+            const gltf::GltfScene scene = sceneFromCut(file, cut, sceneMaterials ? &source.scene : nullptr, punctual);
             const auto buildStart = std::chrono::steady_clock::now();
             render::PathTracer tracer(scene, false);
             accelerationBuildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - buildStart).count();
             if (!sceneMaterials) tracer.setClayMaterial(material.albedo, material.roughness, material.metallic);
-            out = tracer.render(camera, *lighting.sky, settings);
+            tracer.setLightSampling(sampleLights);
+            const render::Environment environment{lighting.lighting.mode == metalpt::Lighting::Mode::Sky ? lighting.sky.get() : nullptr,
+                                                  lighting.lighting.studioRadiance};
+            out = tracer.render(camera, environment, settings);
+            usedLights = tracer.lightSet();
         }
 
         std::vector<Vec3> beauty = out.color;
@@ -460,6 +518,7 @@ int renderOnce(const std::string& configPath) {
               << "  \"samplesPerPixel\": " << settings.samplesPerPixel << ",\n"
               << "  \"maxBounces\": " << settings.maxBounces << ",\n"
               << "  \"lighting\": " << jsonString(lighting.lighting.mode == metalpt::Lighting::Mode::Sky ? "sky" : "studio") << ",\n"
+              << "  \"lights\": " << lightsJson(usedLights, sampleLights) << ",\n"
               << "  \"file\": { \"clusters\": " << file.clusters.size() << ", \"levels\": " << file.levelCount
               << ", \"vertices\": " << file.vertexCount() << ", \"leafTriangles\": " << file.leafTriangleCount << ", \"atlases\": " << file.atlases.size() << " },\n"
               << "  \"cut\": { \"clusters\": " << cut.clusterIds.size() << ", \"triangles\": " << cut.triangleCount()
@@ -517,6 +576,8 @@ int renderOnce(const std::string& configPath) {
  *       the eye moved more than a tenth of the scene radius or the LOD parameters changed
  *       -> {"event":"view","seq",..} then {"event":"frame","seq","spp","rays","gpuMs",..} as samples accumulate;
  *       each frame event means <dir>/frame.rgba holds the display-ready image (width * height * 4 bytes)
+ *   {"op":"lights","lighting"?:{..},"lights"?:[..]}  replaces the light (no rebuild) -> {"event":"lights","lights"}
+ *   {"op":"pause"}  stops sampling the current view (the camera is moving) -> {"event":"paused","seq","spp"}
  *   {"op":"close"}  (or EOF) exits.
  * Errors come back as {"event":"error","message":..}; a failed open leaves the session without a file.
  */
@@ -581,6 +642,8 @@ private:
     float renderScale_{1.0f};
     int outWidth_{0}, outHeight_{0};
     std::chrono::steady_clock::time_point lastWrite_;
+    /** A converging frame is written when the samples reach this (doubling), or half a second after the last. */
+    int nextWriteSpp_{1};
 
     bool frameActive() const { return frameActive_ && tracer_ && tracer_->samplesPerPixel() < targetSpp_; }
 
@@ -626,6 +689,8 @@ private:
             const std::string op = cmd["op"].asString("");
             if (op == "open") open(cmd);
             else if (op == "view") view(cmd);
+            else if (op == "pause") pause();
+            else if (op == "lights") setLights(cmd);
             else if (op == "close") closed_ = true;
             else throw std::runtime_error("unknown op: " + op);
         } catch (const std::exception& e) {
@@ -652,6 +717,10 @@ private:
         lightingConfig_ = cmd.has("lighting") ? serialize(cmd["lighting"]) : "{}";
         if (!tracer_) tracer_ = std::make_unique<metalpt::MetalPathTracer>();
         if (sceneMaterials_) tracer_->setMaterials(source_.scene);
+        const bool sampleLights = boolOr(cmd["lighting"]["sampleLights"], true);
+        tracer_->setLights(cmd.has("lights") ? parseLights(cmd["lights"], file_)
+                           : sceneMaterials_ ? lightsInFile(source_.scene, file_) : std::vector<gltf::SceneLight>{});
+        tracer_->setLightSampling(sampleLights);
         opened_ = true;
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         std::ostringstream s;
@@ -751,71 +820,94 @@ private:
         frameActive_ = true;
         ++seq_;
         lastWrite_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+        nextWriteSpp_ = 1;
         std::ostringstream s;
         s.precision(9);
         s << "{\"event\":\"view\",\"seq\":" << seq_ << ",\"width\":" << outWidth << ",\"height\":" << outHeight
           << ",\"renderWidth\":" << width << ",\"renderHeight\":" << height << ",\"renderScale\":" << renderScale_ << ",\"sampler\":" << jsonString(samplerName)
           << ",\"cut\":{\"clusters\":" << cut_.clusterIds.size() << ",\"triangles\":" << cut_.triangleCount() << ",\"thresholdPx\":" << cutParams_.thresholdPx
           << ",\"rebuilt\":" << ((lodChanged || moved) ? "true" : "false") << ",\"cutMs\":" << cutMs_ << ",\"accelerationBuildMs\":" << accelerationBuildMs << "}"
-          << ",\"lighting\":" << jsonString(lighting_.lighting.mode == metalpt::Lighting::Mode::Sky ? "sky" : "studio") << ",\"targetSpp\":" << targetSpp_ << "}";
+          << ",\"lighting\":" << jsonString(lighting_.lighting.mode == metalpt::Lighting::Mode::Sky ? "sky" : "studio")
+          << ",\"lights\":" << lightsJson(tracer_->lightSet(), tracer_->lightSampling()) << ",\"targetSpp\":" << targetSpp_ << "}";
         emit(s.str());
     }
 
-    /** One batch of samples, then the frame file when enough time passed or the target is reached. */
+    /**
+     * New light for the open file: the sun and sky or dome (`lighting`) and the punctual lights (`lights`), each
+     * kept when absent. Nothing is rebuilt; the next view samples it.
+     */
+    void setLights(const Json& cmd) {
+        if (!opened_) throw std::runtime_error("open a file before lights");
+        if (cmd.has("lighting")) lightingConfig_ = serialize(cmd["lighting"]);
+        const bool sampleLights = boolOr(parseJson(lightingConfig_)["sampleLights"], true);
+        if (cmd.has("lights")) tracer_->setLights(parseLights(cmd["lights"], file_));
+        tracer_->setLightSampling(sampleLights);
+        emit("{\"event\":\"lights\",\"lights\":" + std::to_string(cmd["lights"].arr.size()) + "}");
+    }
+
+    /** Stops sampling (the viewer's camera is moving); the newest frame stays, and the next view starts afresh. */
+    void pause() {
+        frameActive_ = false;
+        emit("{\"event\":\"paused\",\"seq\":" + std::to_string(seq_) + ",\"spp\":" + std::to_string(tracer_ ? tracer_->samplesPerPixel() : 0) + "}");
+    }
+
+    /**
+     * One batch of samples (committed, not waited for: the GPU runs it while the next is encoded), then a frame
+     * when one is due: the finished frame, or a converging one each time the samples double (1, 2, 4, ...) and at
+     * least every half second, never closer than 40 ms. Each frame costs a denoise, a display pass and a file.
+     */
     void step() {
         const int spp = tracer_->samplesPerPixel();
         const int passes = spp < 8 ? 1 : spp < 64 ? 2 : 4;
         tracer_->samplePasses(std::min(passes, targetSpp_ - spp));
         const auto now = std::chrono::steady_clock::now();
-        const bool done = tracer_->samplesPerPixel() >= targetSpp_;
+        const int reached = tracer_->samplesPerPixel();
+        const bool done = reached >= targetSpp_;
         const double sinceWrite = std::chrono::duration<double, std::milli>(now - lastWrite_).count();
-        if (!done && sinceWrite < 40.0) return;
+        const bool due = done || (sinceWrite >= 40.0 && reached >= nextWriteSpp_) || sinceWrite >= 500.0;
+        if (!due) return;
         writeFrame();
         lastWrite_ = std::chrono::steady_clock::now();
+        nextWriteSpp_ = std::max(reached + 1, 2 * reached);
         if (done) frameActive_ = false;
     }
 
+    /**
+     * The frame on the GPU: denoised, exposed and AgX-mapped there (view::toDisplayImage's transform), and only
+     * the bytes read back. A converging frame goes out at its traced size for the viewer to scale; the finished
+     * one is MetalFX-upscaled to the view. Exposure is metered once per view, from its first frame.
+     */
     void writeFrame() {
-        const render::RenderOutput out = tracer_->readback();
-        std::vector<Vec3> color = out.color;
         double denoiseMs = 0.0;
         uint32_t historyPixels = 0;
         if (denoise_) {
             metalpt::DenoiseOptions options;
             options.temporal = temporal_;
-            color = tracer_->denoise(options);
+            tracer_->denoiseGpu(options);
             denoiseMs = tracer_->denoiseGpuMs();
             historyPixels = tracer_->historyPixels();
         }
         if (!exposureSet_) {
-            exposureEv_ = view::autoExposureEv(color);
+            exposureEv_ = view::autoExposureEv(tracer_->frameColor(denoise_));
             exposureSet_ = true;
         }
-        const texture::ImageBuffer image = view::toDisplayImage(color, out.width, out.height, exposureEv_, view::AgxLook::Base);
-        std::vector<uint8_t> rgba(static_cast<size_t>(out.width) * out.height * 4);
-        for (size_t p = 0; p < static_cast<size_t>(out.width) * out.height; ++p) {
-            const uint8_t* src = image.data.data() + p * image.channels;
-            uint8_t* dst = rgba.data() + p * 4;
-            dst[0] = src[0];
-            dst[1] = image.channels >= 3 ? src[1] : src[0];
-            dst[2] = image.channels >= 3 ? src[2] : src[0];
-            dst[3] = 255;
-        }
-        double upscaleMs = 0.0;
-        if (out.width != outWidth_ || out.height != outHeight_) {
-            rgba = tracer_->upscaleRgba(rgba, out.width, out.height, outWidth_, outHeight_);
-            upscaleMs = tracer_->upscaleGpuMs();
-        }
+        const bool finished = tracer_->samplesPerPixel() >= targetSpp_;
+        const bool upscale = finished && (width_ != outWidth_ || height_ != outHeight_);
+        const int frameWidth = upscale ? outWidth_ : width_, frameHeight = upscale ? outHeight_ : height_;
+        const std::vector<uint8_t> rgba = tracer_->displayRgba(denoise_, exposureEv_, frameWidth, frameHeight);
+        const double upscaleMs = upscale ? tracer_->upscaleGpuMs() : 0.0;
+        const metalpt::MetalPathTracer::FrameCounters counters = tracer_->frameCounters();
         const std::filesystem::path tmp = dir_ / "frame.rgba.tmp";
         const std::filesystem::path final = dir_ / "frame.rgba";
         if (!writeBytes(tmp, rgba.data(), rgba.size())) throw std::runtime_error("failed to write " + tmp.string());
         std::filesystem::rename(tmp, final);
         std::ostringstream s;
         s.precision(9);
-        s << "{\"event\":\"frame\",\"seq\":" << seq_ << ",\"spp\":" << tracer_->samplesPerPixel() << ",\"rays\":" << out.rays
-          << ",\"gpuMs\":" << tracer_->frameGpuMs() << ",\"width\":" << outWidth_ << ",\"height\":" << outHeight_
-          << ",\"renderWidth\":" << out.width << ",\"renderHeight\":" << out.height << ",\"upscaleMs\":" << upscaleMs
-          << ",\"coverage\":" << out.geometryCoverage << ",\"exposureEv\":" << exposureEv_ << ",\"path\":" << jsonString(final.string())
+        s << "{\"event\":\"frame\",\"seq\":" << seq_ << ",\"spp\":" << tracer_->samplesPerPixel() << ",\"rays\":" << counters.rays
+          << ",\"gpuMs\":" << tracer_->frameGpuMs() << ",\"width\":" << frameWidth << ",\"height\":" << frameHeight
+          << ",\"displayWidth\":" << outWidth_ << ",\"displayHeight\":" << outHeight_
+          << ",\"renderWidth\":" << width_ << ",\"renderHeight\":" << height_ << ",\"upscaleMs\":" << upscaleMs
+          << ",\"coverage\":" << counters.coverage << ",\"exposureEv\":" << exposureEv_ << ",\"path\":" << jsonString(final.string())
           << ",\"denoised\":" << (denoise_ ? "true" : "false") << ",\"denoiseMs\":" << denoiseMs << ",\"historyPixels\":" << historyPixels
           << ",\"done\":" << (tracer_->samplesPerPixel() >= targetSpp_ ? "true" : "false") << "}";
         emit(s.str());

@@ -1414,6 +1414,9 @@ export interface Scene3DData {
             cloudShadowScale?: number;
             atmosphereShadowLength?: number;
             windVector?: [number, number];
+            /** Set when the weather wrote this sky (scene-weather.ts): its version, the sun's source, and whether cloud
+             *  shadows were requested on it (cloudShadowsRequested). */
+            weather?: { version: string; sun?: string; cloudShadows?: boolean };
         };
         contrails?: boolean | {
             enabled?: boolean;

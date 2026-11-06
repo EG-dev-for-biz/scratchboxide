@@ -76,6 +76,7 @@ import {
     type VisionModelUse
 } from '../../../common/spatial/staged-location-contracts';
 import { glbMeshCounts, plantTrees, summarizeTrees, type LocationClayTrees } from '../location-clay-pipeline';
+import { treeSpeciesPlaceParams } from '../../../common/spatial/tree-species-library';
 import { TileVegetationError, type TileVegetationPlantRequest, type TileVegetationPlantResult, type TileVegetationStripRequest, type TileVegetationStripResult } from '../tile-vegetation-service';
 import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service';
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorBuilding, type VectorEvidence } from './vector-footprints';
@@ -206,14 +207,15 @@ import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSIO
 import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
 import { districtBuildingIndex, districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
-import { chunkCpuShare, chunkOwner, chunkParallel, kdCentreRunner, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, planDistrictChunks, type DistrictChunkPlan, type TileFrame } from './pipeline-k/district-chunks';
+import { chunkCpuShare, chunkOwner, chunkParallel, kdCentreRunner, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
+import { createChunkJoiner } from './pipeline-k/chunk-join-worker';
 import { auditDistrictForPlace, placeStoreEnabled, pullPlaceForRun, syncPlaceAfterObjects } from './place-store-district';
 import { PLACE_STORE_PARAMS } from './place-store';
 import { kdLookCode, showBestVersions } from './place-store-best';
 import { addSeamEdges, applySeamGain, cutChunkLayer, DISTRICT_SEAMS_PARAMS, DISTRICT_SEAMS_VERSION, sampleSeamColour, seamCoverage, seamOwner, solveSeamGains, type SeamCoverage, type SeamCutReport, type SeamEdges, type SeamSamples } from './pipeline-k/district-seams';
 import * as os from 'os';
 import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
-import { FACADE_UPSCALE_EXTRA_MS, FACADE_UPSCALE_MODELS, FACADE_UPSCALE_VERSION, facadeUpscaleAsked, facadeUpscaleProvenance, upscaleFacadeTextures } from './pipeline-k/facade-upscale';
+import { FACADE_UPSCALE_DISTRICT_PARAMS, FACADE_UPSCALE_EXTRA_MS, FACADE_UPSCALE_MODELS, FACADE_UPSCALE_PARAMS, FACADE_UPSCALE_VERSION, facadeUpscaleAsked, facadeUpscaleProvenance, upscaleFacadeTextures } from './pipeline-k/facade-upscale';
 import { detailBakeProvenance, TILE_DETAIL_BAKE_VERSION, type TileDetailBakeReport } from '../../spatial/tile-detail-bake';
 import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visible-defects';
 import { TEXTURE_HARMONIZE_VERSION, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
@@ -222,13 +224,16 @@ import { ROOF_SHADOW_VERSION, roofShadowAuditPng } from './pipeline-k/roof-shado
 import { FACADE_READER_MODEL, FACADE_READER_MODEL_KEY, FACADE_READER_PARAMS, FACADE_READER_VERSION, facadeReplyUsable, type FacadeAsk } from './pipeline-k/facade-reader';
 import { readOnTwin, TWIN_READER_VERSION } from './pipeline-k/twin-reader';
 import { CHOICE_SPAN_M, candidateSheetPng, choicePrompt, chooseWithMemory, MATERIAL_CHOICE_VERSION, parseChoices, type ChoiceRow, type SetChoice } from './pipeline-k/material-choice';
-import { fileReadingStore, MODEL_READINGS_DIR } from './pipeline-k/model-readings';
+import { fileReadingStore, MODEL_READINGS_DIR, readingKey, type ModelReadingStore } from './pipeline-k/model-readings';
 import { betweenSeen, glassSeen, MATERIAL_NAMING_VERSION, namingPrompt, parseClassWords } from './pipeline-k/material-naming';
+import { finishPrompt, MATERIAL_FINISH_VERSION, parseClassFinish, type ClassFinish } from './pipeline-k/material-finish';
 import type { FacadeReadRecord } from './pipeline-k/facade-reader';
 import { shadowLiftQaPng } from './pipeline-k/shadow-lift-qa';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
 import { PROJECT_MAX_RELIEF_M, pipelineIRefineEnabled, refinePipelineI, type RefineOutcome } from './pipeline-i/refine';
+import { defaultWorldCacheBucket } from '../../cloud-store/world-cache';
+import { publishDistrictWorld } from '../../cloud-store/district-world';
 import { captureBuildingTrainingInBackground, sweepPendingBuildingTraining, type BuildingTrainingCaptureInput } from '../../cloud-store/building-training-capture';
 import { captureTrainingPairsInBackground } from '../../cloud-store/training-pair-capture';
 import { sceneTrainingPairs } from './scene-training-pairs';
@@ -623,7 +628,7 @@ export interface StagedLocationDeps {
     groundedReferences?: () => Promise<GroundedReferenceClient>;
     /** Pipeline K's material regions: one texture library set per appearance class (pipeline-k/material-sets.ts); absent = the stage is not run (tests, stand-in deps). */
     pipelineK?: {
-        materialSets?: (classes: RegionClass[], opts: { signal?: AbortSignal; progress?: (m: string) => void; /** The pick by appearance among each class's nearest sets (pipeline-k/material-choice.ts). */ choose?: (rows: ChoiceRow[]) => Promise<Array<SetChoice | undefined>> }) => Promise<RegionSet[]>;
+        materialSets?: (classes: RegionClass[], opts: { signal?: AbortSignal; progress?: (m: string) => void; /** The pick by appearance among each class's nearest sets (pipeline-k/material-choice.ts). */ choose?: (rows: ChoiceRow[]) => Promise<Array<SetChoice | undefined>>; /** Each class's finish read by the vision model (pipeline-k/material-finish.ts), before the ranking. */ finish?: () => Promise<Array<ClassFinish | undefined>>; /** Where prepared library maps are kept between builds. */ store?: ModelReadingStore }) => Promise<RegionSet[]>;
         /** The swatch detail bake (tile-detail-bake.ts): the building's survey swatches harvested from the tiles, baked into the twin's atlases. */
         detailBake?: (input: { glb: Uint8Array; tilesGlb: string; lat: number; lng: number; place: string; workDir: string; signal: AbortSignal; progress: (m: string) => void }) => Promise<{ glb: Buffer; report: TileDetailBakeReport }>;
     };
@@ -650,7 +655,7 @@ export interface StagedLocationDeps {
     /** Pipeline K-D: every leaf tile of the district's radius fetched into the shared leaf cache while the chunks build; absent = each chunk fetches its own. */
     prefetchTiles?: (req: { lat: number; lng: number; elevation?: number; radiusM: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void }) => Promise<{ leaves: number; downloaded: number; ms: number }>;
     /** Pipeline K-D: one chunk of a chunked district built on its own (its own worker, staged-location-tool.ts); absent = no chunking. */
-    runChunk?: (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void; atOnce?: number }) => Promise<StagedLocationOutcome>;
+    runChunk?: (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void; atOnce?: number; /** What the chunk keeps, for a build that cuts its own layers (the cloud job); one that does not sends them uncut. */ cut?: KdChunkCutSpec }) => Promise<StagedLocationOutcome>;
 }
 
 export interface StagedLocationContext {
@@ -664,6 +669,8 @@ export interface StagedLocationContext {
     retry?: { runId: string; stage: StageId };
     /** A resume: the run to rebuild as recorded; cached stages are reused, nothing is bypassed. */
     resume?: { runId: string };
+    /** The run's frame (the outcome's compat.frame) as soon as its tiles are in: a chunked district's centre job publishes it to the others. */
+    onFrame?: (frame: TileFrame) => void;
 }
 
 /** No real data exists to show: the place could not be resolved, or the tiles do not cover it. */
@@ -1362,6 +1369,22 @@ function chainLayerTransforms(a: StagedRun['layerTransform'], b: StagedRun['laye
     return (layer, meta) => b(a(layer, meta), meta);
 }
 
+/** What joining one chunk took here, from its outcome in hand to its last layer published (the chunks stage's report). */
+interface ChunkJoinRecord {
+    files: number;
+    /** Layer files that came cut by the chunk's own build (the cloud job), and those cut here. */
+    cutByJob: number;
+    cutHere: number;
+    /** Bytes read (as downloaded) and written, and the bytes the compaction dropped (in the job, or here). */
+    bytesIn: number;
+    bytesOut: number;
+    droppedBytes: number;
+    /** On the join's worker thread (read; check, or cut, place and compact; write), and publishing on this thread. */
+    workerMs: number;
+    publishMs: number;
+    ms: number;
+}
+
 /** A layer file joined into a chunked district (published under this suffix): never cut again. */
 const CHUNK_URL = /_kd\d+_[0-9a-f]{8}\.glb$/;
 
@@ -1600,7 +1623,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     const artifactId = stagedArtifactId(runId, intoActive?.id);
     const run = new StagedRun(runId, request, ctx, now, artifactId, intoActive);
     runningStages = () => STAGE_IDS.filter(id => run.summary(id).status === 'running');
-    const runner = new Runner(run, ctx, now, (request.isolate ? RUN_BUDGET_MS : stagedPipelineKD(request) && !request.chunk ? CHUNKED_DISTRICT_RUN_BUDGET_MS : DISTRICT_RUN_BUDGET_MS) + (facadeUpscaleAsked(request.steps) ? FACADE_UPSCALE_EXTRA_MS : 0));
+    const runner = new Runner(run, ctx, now, (request.isolate ? RUN_BUDGET_MS : stagedPipelineKD(request) && !request.chunk ? CHUNKED_DISTRICT_RUN_BUDGET_MS : DISTRICT_RUN_BUDGET_MS) + (request.isolate && facadeUpscaleAsked(request.steps) ? FACADE_UPSCALE_EXTRA_MS : 0));
     runner.proceduralOnly = request.procedural === true;
     // a procedural-only build never lists the other stages, not even as pending before they are skipped
     if (runner.proceduralOnly) for (const s of run.state.stages) if (!PROCEDURAL_STAGES.has(s.stage)) s.outOfScope = true;
@@ -1896,7 +1919,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     .then(r => { prefetch = r; }, err => { if (!io.signal.aborted) prefetch = { error: errorMessage(err) }; }) : Promise.resolve();
                 const committed: StagedLayer[] = [];
                 const degradations: DegradationRecord[] = [];
-                const report: Array<{ index: number; radiusM: number; buildings: number; status: string; runId?: string; layers?: number; truncated?: boolean; ms: number; error?: string }> = [];
+                const report: Array<{ index: number; radiusM: number; buildings: number; status: string; runId?: string; layers?: number; truncated?: boolean; ms: number; error?: string; join?: ChunkJoinRecord }> = [];
+                // the chunks' layers checked and written (cut, placed and compacted when they came uncut) on a worker thread, not this one
+                const joiner = createChunkJoiner();
                 // the vector buildings shown past the centre build's tiles stand in only where no chunk has been joined yet: as each
                 // chunk joins, the placeholders it owns are taken out (the layer republished without them, whole buildings by their middle)
                 const joinedChunks = new Set<number>(), replacedPlaceholders = new Set<string>();
@@ -1937,7 +1962,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             place: { lat: ll.lat, lng: ll.lng, formattedAddress: c.centre ? placeValue!.formattedAddress : `${placeValue!.formattedAddress} (chunk ${c.index})` },
                             ...(request.enhance !== undefined ? { enhance: request.enhance } : {}), ...(request.steps ? { steps: request.steps } : {}),
                             chunk: { of: runId, index: c.index, rect: { x0: c.rect.x0 - c.cx, z0: c.rect.z0 - c.cz, x1: c.rect.x1 - c.cx, z1: c.rect.z1 - c.cz } }
-                        }, { signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce });
+                        }, {
+                            signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce,
+                            // the district's frame when known already (the centre built here); else the centre job publishes it to the
+                            // others (district-chunks.ts cutChunkLayer)
+                            cut: { version: KD_CHUNK_CUT_VERSION, plan, district: here ? { ...here } : { lat: placeValue!.lat, lng: placeValue!.lng }, bandM: DISTRICT_CHUNKS_PARAMS.seamBandM }
+                        });
                         if (!out.compat.frame) throw new Error('the chunk did not report its frame');
                         if (c.centre) {
                             here = out.compat.frame;
@@ -1951,27 +1981,35 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             here = (await centreFrame.promise) ?? { lat: placeValue!.lat, lng: placeValue!.lng, originEllipsoidalHeightM: out.compat.frame.originEllipsoidalHeightM };
                             cloudScan ??= out;
                         }
+                        const tJoin = now();
                         const m = frameTransform(out.compat.frame, here);
-                        const mine = (x: number, z: number) => owner(x, z) === c.index, band = chunkTerritory(plan, c.index, DISTRICT_CHUNKS_PARAMS.seamBandM);
                         const layers = ((out.result.artifact as { data?: { stagedBuild?: { layers?: StagedLayer[] } } } | undefined)?.data?.stagedBuild?.layers ?? []);
                         const hidden = new Set(layers.filter(l => !l.retired).flatMap(l => l.supersedes));
                         const take = layers.filter(l => !l.retired && !hidden.has(l.objectId) && l.stage !== 'vector');
                         const dir = path.join(cache.dir, 'district-chunks');
                         fs.mkdirSync(dir, { recursive: true });
-                        const joinFile = (url: string, whole: boolean) => {
+                        const join: ChunkJoinRecord = { files: 0, cutByJob: 0, cutHere: 0, bytesIn: 0, bytesOut: 0, droppedBytes: 0, workerMs: 0, publishMs: 0, ms: 0 };
+                        const joinFile = async (url: string, whole: boolean) => {
                             const source = path.join(cache.modelsDir, path.basename(url));
                             if (!fs.existsSync(source)) return undefined;
-                            const r = joinChunkGlb(fs.readFileSync(source), m, whole ? mine : band, { whole });
                             const name = `${path.basename(url, '.glb')}_kd${c.index}_${crypto.createHash('sha256').update(`${runId}:${url}`).digest('hex').slice(0, 8)}.glb`;
-                            fs.writeFileSync(path.join(dir, name), r.glb);
-                            return { ...cache.publishFile(path.join(dir, name), name), kept: r.keptTriangles };
+                            let t = now();
+                            const r: ChunkLayerJoinResult = await joiner.join({ source, target: path.join(dir, name), transform: Array.from(m), whole, of: runId, chunk: c.index, plan, bandM: DISTRICT_CHUNKS_PARAMS.seamBandM });
+                            join.workerMs += now() - t;
+                            t = now();
+                            const pub = cache.publishFile(path.join(dir, name), name);
+                            join.publishMs += now() - t;
+                            join.files++;
+                            if (r.cutBy === 'job') join.cutByJob++; else join.cutHere++;
+                            join.bytesIn += r.bytesIn; join.bytesOut += r.bytesOut; join.droppedBytes += r.droppedBytes;
+                            return { ...pub, kept: r.keptTriangles };
                         };
                         const batch: StagedLayer[] = [];
                         for (const l of take) {
                             const whole = l.stage === 'trees';
-                            const clay = joinFile(l.url, whole);
+                            const clay = await joinFile(l.url, whole);
                             if (!clay || !clay.kept) continue;
-                            const tex = l.textured ? joinFile(l.textured.url, whole) : undefined;
+                            const tex = l.textured ? await joinFile(l.textured.url, whole) : undefined;
                             const layer: StagedLayer = {
                                 ...l, objectId: `${l.objectId}-kd${c.index}`, url: clay.url, bytes: clay.bytes, counts: { vertices: l.counts.vertices, triangles: clay.kept },
                                 supersedes: [], revealAfter: [], reveal: { ...l.reveal, crossfadeFrom: [] },
@@ -1984,8 +2022,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         committed.push(...batch);
                         joined++;
                         retirePlaceholders(c.index);
+                        join.ms = now() - tJoin;
+                        io.progress(`chunk ${c.index}: joined in ${(join.ms / 1000).toFixed(1)} s (${join.files} files, ${(join.bytesIn / 1e6).toFixed(0)} MB in, ${join.cutByJob} cut by its build${join.cutHere ? `, ${join.cutHere} cut here` : ''})`);
                         const truncated = out.result.stages.some(s => s.stage === 'tiles' && s.status === 'degraded');
-                        report.push({ index: c.index, radiusM: c.radiusM, buildings: c.buildings.length, status: out.result.status, ...(out.runId ? { runId: out.runId } : {}), layers: batch.length, truncated, ms: now() - t0 });
+                        report.push({ index: c.index, radiusM: c.radiusM, buildings: c.buildings.length, status: out.result.status, ...(out.runId ? { runId: out.runId } : {}), layers: batch.length, truncated, ms: now() - t0, join });
                         if (truncated) degradations.push(run.degrade(record('chunks', 'chunk_truncated', {
                             part: { description: `chunk ${c.index} of the district` }, intended: `its ${Math.round(c.radiusM)} m at leaf LOD`, fellTo: 'as far as its leaf tiles reach',
                             provenanceAfter: PROVENANCE.asScanned, reason: `chunk ${c.index}'s extraction reached the leaf-tile cap before its own radius`, transient: false, runId, now: now()
@@ -2007,8 +2047,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                 };
                 const width = Math.min(parallel, todo.length);
-                await Promise.all(Array.from({ length: width }, async () => { while (next < todo.length) await one(todo[next++], width); }));
-                if (retry.length) { let k = 0; const again = Math.min(parallel, retry.length); await Promise.all(Array.from({ length: again }, async () => { while (k < retry.length) await one(retry[k++], again, true); })); }
+                try {
+                    await Promise.all(Array.from({ length: width }, async () => { while (next < todo.length) await one(todo[next++], width); }));
+                    if (retry.length) { let k = 0; const again = Math.min(parallel, retry.length); await Promise.all(Array.from({ length: again }, async () => { while (k < retry.length) await one(retry[k++], again, true); })); }
+                } finally {
+                    await joiner.close();
+                }
                 // ---- the seam stage over the joined ground (scene-healing §3.1; pipeline-k/district-seams.ts), one chunk at a time:
                 // the chunks' photos levelled to one another by a gain per chunk, fitted where they meet; each chunk's ground cut
                 // exactly at the cell lines around what it owns, and its cut edge moved onto the edge the chunks before it left
@@ -2193,6 +2237,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             cache.writeRunNote(runId, 'model_calls', modelCalls.report());
             const outcome = finishRun(run, {
                 request, place: placeValue, extraction: scan, sizedTo: 'request', remeshedElsewhere: true, now, persist,
+                keep: { modelsDir: cache.modelsDir, note: (name, value) => cache.writeRunNote(runId, name, value) },
                 ...(scanOut.compat.groundGlbPath ? { groundFile: scanOut.compat.groundGlbPath } : {}), ...(scanOut.compat.trees ? { trees: scanOut.compat.trees } : {}),
                 rebuild: { droppedNotResolvable: 0, sourceLimits: scanOut.result.sourceLimits }
             });
@@ -2269,26 +2314,40 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     value = { extraction: x.extraction, key: x.key, sizedTo: radiusM > baseRadiusM ? 'district-containment' : 'request', rounds: 1, cached: x.cached, builtAtMs: x.builtAtMs };
                 }
                 // the tile seams closed as the extraction arrives (tile-seam-weld-service.ts: overlaps trimmed, positions welded,
-                // T-junctions split), cached beside it; every later stage reads the welded scan, the raw extraction stays as it came
+                // T-junctions split, then tile by tile the adaptive close and the strip fill), cached beside it; every later stage
+                // reads the welded scan, the raw extraction stays as it came
                 if (deps.tileSeams && process.env.SCRATCHBOX_TILE_SEAMS?.trim() !== '0') {
-                    // the passes on unless switched off (SCRATCHBOX_TILE_SEAM_TJUNCTIONS=0, SCRATCHBOX_TILE_SEAM_OVERLAP=0); the cache name says which ran
+                    // the passes on unless switched off (SCRATCHBOX_TILE_SEAM_TJUNCTIONS=0, SCRATCHBOX_TILE_SEAM_OVERLAP=0); the adaptive
+                    // close and strip fill only when asked (SCRATCHBOX_TILE_SEAM_ADAPTIVE=1: on the ESB, Penn 2 and a Penn district they
+                    // closed 30-142 points for up to 2 min, the seams left being capped cut planes); the cache name says which ran
                     const tj = process.env.SCRATCHBOX_TILE_SEAM_TJUNCTIONS?.trim() !== '0', ov = process.env.SCRATCHBOX_TILE_SEAM_OVERLAP?.trim() !== '0';
-                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}`, dir = path.dirname(raw.texturedGlb);
+                    const ad = process.env.SCRATCHBOX_TILE_SEAM_ADAPTIVE?.trim() === '1';
+                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}${ad ? '_ad' : ''}`, dir = path.dirname(raw.texturedGlb);
                     const tex = path.join(dir, `textured_${tag}.glb`), clay = path.join(dir, `geometry_${tag}.glb`), report = path.join(dir, `seams_${tag}.json`);
                     try {
                         if (!(fs.existsSync(tex) && fs.existsSync(clay) && fs.existsSync(report))) {
                             // written under temporary names and renamed: a build reading the same extraction never sees half a file
                             const sfx = `.tmp-${process.pid}-${Date.now()}`;
-                            const r = await deps.tileSeams({ inputGlb: raw.texturedGlb, outputGlb: tex + sfx, outputClayGlb: clay + sfx, tJunctions: tj, overlapTrim: ov, timeoutMs: 600_000 });
+                            const r = await deps.tileSeams({ inputGlb: raw.texturedGlb, outputGlb: tex + sfx, outputClayGlb: clay + sfx, tJunctions: tj, overlapTrim: ov, adaptive: ad, defaultGeometricErrorM: raw.leafGeometricErrorM, timeoutMs: 600_000 });
                             fs.renameSync(tex + sfx, tex); fs.renameSync(clay + sfx, clay);
                             fs.writeFileSync(report, JSON.stringify({ version: TILE_SEAMS_VERSION, ...r }));
                         }
                         const r = JSON.parse(fs.readFileSync(report, 'utf8')) as TileSeamWeldResult;
-                        const sw = r.seamWeld, tjs = r.tJunctions, ot = r.overlapTrim;
-                        cache.writeRunNote(runId, 'tile_seams', { version: TILE_SEAMS_VERSION, raw: raw.texturedGlb, inputTriangles: r.inputTriangles, outputTriangles: r.outputTriangles, toleranceM: r.toleranceM, seamWeld: sw, ...(ot ? { overlapTrim: ot } : {}), ...(tjs ? { tJunctions: tjs } : {}) });
-                        run.note(PROVENANCE.asScanned, `tile seams closed (${TILE_SEAMS_VERSION}, within ${Math.round(r.toleranceM * 100)} cm, nothing moved further): ` +
+                        const sw = r.seamWeld, tjs = r.tJunctions, ot = r.overlapTrim, ac = r.adaptive, sf = r.stripFill, au = r.seamAudit;
+                        cache.writeRunNote(runId, 'tile_seams', {
+                            version: TILE_SEAMS_VERSION, raw: raw.texturedGlb, inputTriangles: r.inputTriangles, outputTriangles: r.outputTriangles, toleranceM: r.toleranceM, seamWeld: sw,
+                            ...(ot ? { overlapTrim: ot } : {}), ...(tjs ? { tJunctions: tjs } : {}), ...(ac ? { adaptive: ac } : { adaptive: false }), ...(sf ? { stripFill: sf } : {}),
+                            ...(r.tiles ? { tiles: r.tiles } : {}), ...(au ? { seamAudit: au } : {}), ms: r.ms
+                        });
+                        // open seam length (km) under 3 cm / 3-10 / 10-30 / 30-100 cm / no other tile within 1 m
+                        const km = (a: { bandLengthM: number[] }) => a.bandLengthM.map(v => (v / 1000).toFixed(1)).join(' / ');
+                        run.note(PROVENANCE.asScanned, `tile seams closed (${TILE_SEAMS_VERSION}, within ${Math.round(r.toleranceM * 100)} cm` +
+                            `${ac ? `, and up to ${Math.round(ac.maxToleranceM * 100)} cm where the two tiles' surfaces agree` : ''}, nothing moved further): ` +
                             `${ot ? `${Math.round(ot.areaM2)} m² of doubled surface trimmed, ` : ''}${sw.groupsWelded.toLocaleString('en-US')} border points welded to the next tile's, ` +
-                            `${tjs ? `${tjs.closed.toLocaleString('en-US')} T-junctions split into the next tile's edge, ` : ''}${sw.trianglesDropped.toLocaleString('en-US')} collapsed slivers dropped; the raw extraction is kept as it came`);
+                            `${tjs ? `${tjs.closed.toLocaleString('en-US')} T-junctions split into the next tile's edge, ` : ''}${sw.trianglesDropped.toLocaleString('en-US')} collapsed slivers dropped` +
+                            `${ac ? `; ${(ac.splitsClosed + ac.vertexMoves).toLocaleString('en-US')} wider gaps closed of ${ac.agreed.toLocaleString('en-US')} where the surfaces agree (${ac.candidates.toLocaleString('en-US')} looked at)` : ''}` +
+                            `${sf && sf.triangles ? `; ${sf.areaM2.toFixed(1)} m² of strip bridged (generated)` : ''}` +
+                            `${au ? `; open seam km by gap (<3 / 3-10 / 10-30 / 30-100 cm / none within 1 m) ${km(au.before)} before, ${km(au.after)} after` : ''}; the raw extraction is kept as it came`);
                         value.extraction = { ...raw, texturedGlb: tex, geometryGlb: clay };
                         // later stages key on the tiles key: the welded scan is another input; the sizing's scan was the raw one
                         value.key = stageKey(value.key, tag);
@@ -2359,6 +2418,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         });
         persist();
         tilesSettle(tiles.value ? { extraction: tiles.value.extraction, key: tiles.value.key } : undefined);
+        if (tiles.value) ctx.onFrame?.({ lat: placeValue!.lat, lng: placeValue!.lng, originEllipsoidalHeightM: tiles.value.extraction.originEllipsoidalHeightM });
         if (tiles.status === 'stopped' || !tiles.value) throw new StagedLocationHardFailure('tiles', 'run_deadline', `The run reached its time limit before any tiles were extracted, so there is nothing to show.`);
         const t = tiles.value;
 
@@ -3325,8 +3385,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // twin's atlases as the detail band the tile cannot carry (generated); off by default, SCRATCHBOX_K_DETAIL_BAKE=1 or the node graph on
                 const detailBakeOn = kTwin && !!deps.pipelineK?.detailBake && stepOn('twin.detailBake', process.env.SCRATCHBOX_K_DETAIL_BAKE?.trim() === '1');
                 // the facade upscale: each rebuilt facade's photo given fine detail by an image model, only where its answer still
-                // matches the photo (pipeline-k/facade-upscale.ts, generated); off by default, SCRATCHBOX_K_FACADE_UPSCALE=1 or the node graph on
-                const facadeUpscaleOn = kTwin && facadeUpscaleAsked(request.steps);
+                // matches the photo (pipeline-k/facade-upscale.ts, generated); on by default for a district (K-D, capped per chunk),
+                // off for a single building; SCRATCHBOX_K_FACADE_UPSCALE=1/0 or the node graph sets it
+                const upscaleDistrict = kdDistrict && !request.isolate;
+                const facadeUpscaleOn = kTwin && facadeUpscaleAsked(request.steps, { district: upscaleDistrict });
                 // the view relight: the photos evened out from image-model relights of rendered views (pipeline-k/view-relight.ts);
                 // off by default, SCRATCHBOX_K_VIEW_RELIGHT=1 or the node graph on; needs the lighting model client
                 const relightClient = harmonizeOn && stepOn('twin.viewRelight', process.env.SCRATCHBOX_K_VIEW_RELIGHT?.trim() === '1') ? deps.textures?.lighting : undefined;
@@ -3385,6 +3447,23 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         return { glass, unnamed: `naming the classes failed: ${errorMessage(err)}` };
                     }
                 } : undefined;
+                // each class's finish read from the classes' swatch sheet before the sets are ranked (pipeline-k/material-finish.ts):
+                // roughness and metalness as numbers with a confidence; a class read confidently as metal may take a metal set
+                const readFinish = materialSets && visionAvailable ? async (classes: RegionClass[], swatches: Buffer): Promise<Array<ClassFinish | undefined>> => {
+                    const chain = new VisionModelChain<string>({ client: visionAvailable.client, candidates: [...new Set([FACADE_READER_MODEL.model, ...visionAvailable.candidates])], signal: io.signal, ...chainExtras('textures'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
+                    const replyText = (res: { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> }) => (res.candidates?.[0]?.content?.parts ?? []).filter(q => !q.thought).map(q => q.text ?? '').join('');
+                    const prompt = finishPrompt(classes, { building: [request.query, run.state.place?.resolvedAddress].filter(Boolean).join(', '), ...(readerSeen?.brief ? { brief: readerSeen.brief } : {}) });
+                    // a sheet read before (another run, chunk or machine, the same prompt and model) is not asked again
+                    const memoKey = readingKey('material-finish', [MATERIAL_FINISH_VERSION, FACADE_READER_MODEL_KEY, prompt, swatches]);
+                    const memo = modelReadings ? await modelReadings.get<Array<ClassFinish | null>>(memoKey) : undefined;
+                    if (memo && memo.length === classes.length) return memo.map(f => f ?? undefined);
+                    const res = await chain.generate({ contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: swatches.toString('base64') } }, { text: prompt }] }], config: { responseMimeType: 'application/json', temperature: 0, abortSignal: io.signal } },
+                        { stage: 'grammar', ...VISION_CALL_POLICY.grammar, thinkingBudget: FACADE_READER_MODEL.thinkingBudget, valid: x => { try { parseClassFinish(replyText(x), classes.length); return true; } catch { return false; } } });
+                    const finish = parseClassFinish(replyText(res.response), classes.length);
+                    res.remember();
+                    modelReadings?.put(memoKey, finish.map(f => f ?? null));
+                    return finish;
+                } : undefined;
                 // each class's library set picked by its look among the nearest the ranking gives (pipeline-k/material-choice.ts):
                 // the class's patches beside each candidate at the same real size, recoloured to the class's colour
                 const askSets = materialSets && visionAvailable ? async (rows: ChoiceRow[], swatches: { png: Buffer; spanM?: number }) => {
@@ -3401,9 +3480,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // a class shown the same candidates as one chosen before (another building, chunk or run) and of its colour takes that pick; only the rest are asked
                 const chooseSets = askSets ? async (rows: ChoiceRow[], swatches: { png: Buffer; spanM?: number }): Promise<Array<SetChoice | undefined>> => (await chooseWithMemory(rows, swatches, askSets, modelReadings ? { store: modelReadings, model: FACADE_READER_MODEL_KEY } : undefined)).picks : undefined;
                 const grammarFile = kOrthos ? path.join(kOrthos, WALL_GRAMMAR_FILE) : undefined;
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, upwardLift ? `upLift:${upwardLift}` : '', target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', facadeUpscaleOn ? `${FACADE_UPSCALE_VERSION}:${visionAvailable ? 'image' : 'none'}` : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '', readerAsk ? `${FACADE_READER_VERSION}:${TWIN_READER_VERSION}:${JSON.stringify(FACADE_READER_PARAMS)}` : '', nameClasses ? MATERIAL_NAMING_VERSION : '', chooseSets ? MATERIAL_CHOICE_VERSION : '');
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, upwardLift ? `upLift:${upwardLift}` : '', target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets && visionAvailable ? MATERIAL_FINISH_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', facadeUpscaleOn ? `${FACADE_UPSCALE_VERSION}:${visionAvailable ? 'image' : 'none'}${upscaleDistrict ? ':district' : ''}` : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '', readerAsk ? `${FACADE_READER_VERSION}:${TWIN_READER_VERSION}:${JSON.stringify(FACADE_READER_PARAMS)}` : '', nameClasses ? MATERIAL_NAMING_VERSION : '', chooseSets ? MATERIAL_CHOICE_VERSION : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions']; materialClasses?: TileRefineTwin['materialClasses'] }>('textures', key, async dir => {
-                    const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(upwardLift ? { upwardShadowLift: upwardLift } : {}), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0, ...(kdBuildings ? { buildingOf: districtBuildingIndex(kdBuildings) } : {}), ...(process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' && extraction.geometryGlb && fs.existsSync(extraction.geometryGlb) ? { skyContext: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)) } : {}) } } : {}), ...(relightClient ? { viewRelight: { client: relightClient, models: lightingModels(), params: viewRelightEnvParams().params, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`) } } : {}), ...roofShadowOpts, ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m), ...(chooseSets && swatches ? { choose: (rows: ChoiceRow[]) => chooseSets(rows, swatches) } : {}) }), planes, ...(planesFor ? { planesFor } : {}), ...(nameClasses ? { nameClasses } : {}) } } : {}) } : enhance || roofShadowOn ? {
+                    const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(upwardLift ? { upwardShadowLift: upwardLift } : {}), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0, ...(kdBuildings ? { buildingOf: districtBuildingIndex(kdBuildings) } : {}), ...(process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' && extraction.geometryGlb && fs.existsSync(extraction.geometryGlb) ? { skyContext: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)) } : {}) } } : {}), ...(relightClient ? { viewRelight: { client: relightClient, models: lightingModels(), params: viewRelightEnvParams().params, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`) } } : {}), ...roofShadowOpts, ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m), ...(chooseSets && swatches ? { choose: (rows: ChoiceRow[]) => chooseSets(rows, swatches) } : {}), ...(readFinish && swatches ? { finish: () => readFinish(classes, swatches.png) } : {}), ...(modelReadings ? { store: modelReadings } : {}) }), planes, ...(planesFor ? { planesFor } : {}), ...(nameClasses ? { nameClasses } : {}) } } : {}) } : enhance || roofShadowOn ? {
                         ...(enhance ? { recreate: {
                             client: enhance, ...(deps.textures?.enhanceModels ? { models: deps.textures.enhanceModels } : {}),
                             budgetMs: TILE_REFINE_RECREATE_BUDGET_MS
@@ -3462,10 +3541,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (kTwin && !facadeUpscaleOn) logStep('twin.facadeUpscale', 'skipped');
                     if (facadeUpscaleOn) {
                         logStep('twin.facadeUpscale', 'running');
-                        const fu = await upscaleFacadeTextures(twinGlb, { ...(visionAvailable ? { client: genAiEnhanceClient(visionAvailable.client) } : {}), models: FACADE_UPSCALE_MODELS, ...(modelReadings ? { store: modelReadings } : {}), signal: io.signal, progress: (m: string) => io.progress(m) });
+                        const fu = await upscaleFacadeTextures(twinGlb, { ...(visionAvailable ? { client: genAiEnhanceClient(visionAvailable.client) } : {}), models: FACADE_UPSCALE_MODELS, ...(modelReadings ? { store: modelReadings } : {}), place: { lat: extraction.geoAnchor.lat, lng: extraction.geoAnchor.lng, heightMeters: extraction.originEllipsoidalHeightM }, signal: io.signal, progress: (m: string) => io.progress(m) }, upscaleDistrict ? FACADE_UPSCALE_DISTRICT_PARAMS : FACADE_UPSCALE_PARAMS);
                         logStep('twin.facadeUpscale', fu.report.upscaled ? 'done' : 'skipped');
                         if (fu.report.upscaled) { twinGlb = fu.glb; provenance = [...provenance, facadeUpscaleProvenance(fu.report)]; }
-                        io.progress(fu.report.upscaled ? `facade upscale: ${fu.report.upscaled} of ${fu.report.facades} rebuilt facades given fine detail (${fu.report.calls} image calls, ${fu.report.cached} tiles saved before; generated)` : `no facade upscaled: ${fu.report.skipped}`);
+                        io.progress(fu.report.upscaled ? `facade upscale: ${fu.report.upscaled} of ${fu.report.facades} rebuilt facades given fine detail (${fu.report.reused ? `${fu.report.reused} from their kept best upscale, ` : ''}${fu.report.calls} image calls, ${fu.report.cached} tiles saved before; generated)` : `no facade upscaled: ${fu.report.skipped}`);
                         cache.writeRunNote(runId, 'pipeline_k_facade_upscale', { layer: target.layer.layer, ...fu.report });
                     }
                     fs.writeFileSync(path.join(dir, 'twin.glb'), twinGlb);
@@ -3730,7 +3809,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 run: async io => {
                     // the same climate cost plantTrees is given below, so a crown's regrowability check and its final
                     // geometry pick the same species (scratchbox_tree_species.hpp; user report, 2026-10-21).
-                    const r = await deps.vegetation.strip({ tilePath: extraction.texturedGlb, signal: io.signal, params: { latAbsDeg: Math.abs(run.geoAnchor.lat) }, ...(roi ? { roi } : {}) });
+                    const r = await deps.vegetation.strip({ tilePath: extraction.texturedGlb, signal: io.signal, params: treeSpeciesPlaceParams(run.geoAnchor), ...(roi ? { roi } : {}) });
                     run.keys['trees-measure'] = r.cacheKey;
                     run.cacheStatus['trees-measure'] = r.cached ? 'hit' : 'miss';
                     const removed = Number(r.stats?.triangles?.removed ?? 0);
@@ -4504,13 +4583,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const kLoops = kBase?.loops;
                 // pipeline K's polish (the lattice, clip and infill: a minute and more) on a worker thread, in a heap of its own
                 // (remesh-worker-pool.ts), unless SCRATCHBOX_REMESH_WORKERS=0; a lighter polish stays here, short of a thread's start
-                const polishInput: PolishJobInput = { clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: stepOn('polish.lattice', true), photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(wallGrammar ? { wallGrammar } : {}), ...(wallSheets ? { walls: wallSheets } : {}), ...(pipelineK && r.rawClayGlb ? { rawScan: r.rawClayGlb } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops && stepOn('polish.base', true) ? { base: { loops: kLoops, groundY: structure!.groundY, ...(kBase?.source === 'scan outline' ? { scanOutline: true } : {}) } } : {}), ...(pipelineK && stepOn('polish.seal', process.env.SCRATCHBOX_K_SEAL?.trim() === '1') ? { seal: true } : {}), ...(pipelineK && stepOn('polish.clip', process.env.SCRATCHBOX_K_CLIP?.trim() !== '0') ? { clip: true } : {}), ...(pipelineK && stepOn('polish.infill', process.env.SCRATCHBOX_K_INFILL?.trim() !== '0') ? { infill: true } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_LATTICE_CUT?.trim() === '1' ? { latticeCut: true } : {}), ...(cpuShare ? { threads: cpuShare.threads } : {}), cleanup: stepOn('polish.cleanup', remeshCleanupEnabled()), orient: stepOn('polish.orient', remeshOrientEnabled()) };
+                const polishInput: PolishJobInput = { clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: stepOn('polish.lattice', true), photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(wallGrammar ? { wallGrammar } : {}), ...(wallSheets ? { walls: wallSheets } : {}), ...(pipelineK && r.rawClayGlb ? { rawScan: r.rawClayGlb } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops && stepOn('polish.base', true) ? { base: { loops: kLoops, groundY: structure!.groundY, ...(kBase?.source === 'scan outline' ? { scanOutline: true } : {}) } } : {}), ...(pipelineK && stepOn('polish.seal', process.env.SCRATCHBOX_K_SEAL?.trim() === '1') ? { seal: true } : {}), ...(pipelineK && stepOn('polish.clip', process.env.SCRATCHBOX_K_CLIP?.trim() !== '0') ? { clip: true } : {}), ...(pipelineK && stepOn('polish.infill', process.env.SCRATCHBOX_K_INFILL?.trim() !== '0') ? { infill: true } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_LATTICE_CUT?.trim() === '1' ? { latticeCut: true } : {}), ...(pipelineK && isolateMode && stepOn('polish.closure', process.env.SCRATCHBOX_K_CLOSURE?.trim() !== '0') ? { closure: { joins: process.env.SCRATCHBOX_K_CORNER_JOIN?.trim() !== '0', core: process.env.SCRATCHBOX_K_CORE?.trim() !== '0', repair: process.env.SCRATCHBOX_K_HOLE_REPAIR?.trim() !== '0' } } : {}), ...(cpuShare ? { threads: cpuShare.threads } : {}), cleanup: stepOn('polish.cleanup', remeshCleanupEnabled()), orient: stepOn('polish.orient', remeshOrientEnabled()) };
                 const onPolishStep = (step: string, state: 'running' | 'done' | 'failed') => logStep(`polish.${step}`, state);
                 // the native infill runs inside the synchronous polish, so its binary is built first (remesh-polish-native.ts)
                 const pol = await timed('polish', async () => { await ensureNativePolishFor(polishInput); return pipelineK && remeshWorkersEnabled() ? runRemeshJob<PolishedRemesh>({ kind: 'polish', input: polishInput }, { signal: io.signal, onStep: onPolishStep }) : polishRemesh({ ...polishInput, onStep: onPolishStep }); });
                 for (const [name, file] of Object.entries(pol.snapshots)) stepFiles.push([`polish.${name}`, file]);
                 // the steps turned off for this build, shown as skipped
-                for (const key of ['polish.cleanup', 'polish.lattice', 'polish.base', 'polish.clip', 'polish.infill', 'polish.seal', 'polish.orient', 'remesh.streetViewScore', 'remesh.visibleDefects']) if (request.steps?.[key] === false) logStep(key, 'skipped');
+                for (const key of ['polish.cleanup', 'polish.lattice', 'polish.base', 'polish.clip', 'polish.infill', 'polish.seal', 'polish.orient', 'polish.closure', 'remesh.streetViewScore', 'remesh.visibleDefects']) if (request.steps?.[key] === false) logStep(key, 'skipped');
                 // the clay's relief against Street View, before the polish and after it (streetview-clay-score.ts)
                 if (pipelineK && surveyViews?.length && pol.clayGlb !== r.clayGlb && stepOn('remesh.streetViewScore', true)) {
                     try {
@@ -4524,6 +4603,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                 }
                 if (kBase) notes.write('pipeline_k_base', { loops: kBase.loops, groundY: structure!.groundY, footprint: kBase.source, report: pol.stats.base ?? null });
+                if (pol.stats.closure) notes.write('pipeline_k_closure', pol.stats.closure);
                 if (pol.clayGlb !== r.clayGlb) {
                     notes.note(PROVENANCE.remeshed, `remesh polish (${REMESH_POLISH_VERSION}): ${describePolish(pol.stats)}`);
                     r = { ...r, cacheKey: pol.cacheKey, clayGlb: pol.clayGlb, ...(pol.texturedGlb ? { texturedGlb: pol.texturedGlb } : {}) };
@@ -6035,7 +6115,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // a crown's shape alone can match a climate-limited species (a palm) regardless of where the
                         // build actually is; this build's own measured latitude costs that match down (user report,
                         // 2026-10-21, with a screenshot: a thin, tall "palm-shaped" tree in New York).
-                        latAbsDeg: Math.abs(run.geoAnchor.lat),
+                        // and its signed place, for the species choice's region cost (the same strip was given)
+                        place: treeSpeciesPlaceParams(run.geoAnchor),
                         supportMeshPath: isolateMode ? remeshed.clayGlb : undefined,
                         groundMeshPath: remeshed.clayGlb,
                         signal: io.signal
@@ -6699,7 +6780,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         if (readingStore) cache.writeRunNote(runId, 'model_readings', readingStore.report());
         const outcome = finishRun(run, {
             request, place: placeValue, extraction, structure, sizedTo: t.sizedTo, remeshed: remeshedNow, groundFile: groundOverride?.groundFile ?? remesh.value?.groundFile, groundLayerId: groundOverride?.groundLayerId ?? remesh.value?.groundLayerId ?? currentL1()?.objectId,
-            trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, ...(textureValue ? { textures: textureValue } : {}), now, persist
+            trees: treesOut.trees, putBack: treesOut.putBack, rebuild, strip, ...(textureValue ? { textures: textureValue } : {}), now, persist,
+            keep: { modelsDir: cache.modelsDir, note: (name, value) => cache.writeRunNote(runId, name, value) }
         });
         // the place's versions are in the object store before this run's are offered to it (a pull still out keeps reading)
         if (placePull) await Promise.race([placePull, new Promise(r => setTimeout(r, PLACE_STORE_PARAMS.pullWaitMs).unref())]);
@@ -6871,6 +6953,34 @@ interface FinishInput {
     textures?: TextureStageValue;
     now: () => number;
     persist: () => void;
+    /** Where this run's models were published, and its run notes: a finished district is kept as a world and backed up (backupDistrictWorld). */
+    keep?: { modelsDir: string; note: (name: string, value: unknown) => void };
+}
+
+/** A district's world name: its place and its run, e.g. `district_2_penn_plaza_new_york_8e3a912b`. */
+export function districtWorldSlug(query: string, runId: string): string {
+    return `district_${query.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80)}_${runId}`;
+}
+
+/**
+ * Every finished district (not one isolated building) kept as a world in the folder that serves /tilesets beside the
+ * published models, and backed up to the cloud world cache, so it opens again on any machine (user ask, 2026-11-04;
+ * cloud-store/district-world.ts). In the background: the build's result never waits on the upload, and a failure is a run
+ * note, never a failed build. Only with a world cache bucket (SCRATCHBOX_WORLD_CACHE_BUCKET or cloud-store.json; none in
+ * tests), and not with SCRATCHBOX_DISTRICT_BACKUP=0.
+ */
+function backupDistrictWorld(f: FinishInput, runId: string, artifact: CanvasArtifact | undefined): void {
+    if (f.request.isolate || !artifact || !f.keep || process.env.SCRATCHBOX_DISTRICT_BACKUP?.trim() === '0') return;
+    const bucket = defaultWorldCacheBucket();
+    if (!bucket) return;
+    const keep = f.keep, slug = districtWorldSlug(f.request.query, runId);
+    const started = Date.now();
+    void publishDistrictWorld({
+        artifact: artifact as unknown as { data?: Record<string, unknown> }, modelsDir: keep.modelsDir, slug, runId, bucket,
+        worldsDir: path.join(path.dirname(keep.modelsDir), 'tilesets'),
+        title: `${f.place.formattedAddress} district (${runId})`, log: m => console.log(m)
+    }).then(r => keep.note('district_world', { slug, models: r.models, bytes: r.bytes, ...(r.stored ? { stored: r.stored } : {}), ms: Date.now() - started }))
+        .catch(err => keep.note('district_world', { slug, failed: errorMessage(err), ms: Date.now() - started }));
 }
 
 function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
@@ -7010,6 +7120,7 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
     const result: StagedLocationResult = { ...base, artifact: artifact ?? null, digest, summary };
     // the finish event carries the final scene
     run.emitFinish(status === 'complete' ? 'committed' : 'degraded', digest);
+    backupDistrictWorld(f, run.runId, artifact);
     f.persist();
     run.close();
     return {
@@ -7026,4 +7137,3 @@ function finishRun(run: StagedRun, f: FinishInput): StagedLocationOutcome {
         }
     };
 }
-

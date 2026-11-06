@@ -189,6 +189,21 @@ describe('pipeline K material regions, native kernel', () => {
         expectSamePlan(await planMaterialRegionsNative(sc.g, sc.json, sc.images, classes, st, sc.planes), planMaterialRegions(sc.g, sc.json, sc.images, classes, st, sc.planes));
         // no fitted plane: the scan piece all wall
         expectSamePlan(await planMaterialRegionsNative(sc.g, sc.json, sc.images, classes, st, []), planMaterialRegions(sc.g, sc.json, sc.images, classes, st, []));
+        // sets read confidently as metal (the wall's and one other class's): their metalness drawn the same, never on glass
+        const withMetalness = (orm: RgbaImage8) => { const rgba = orm.rgba.slice(); for (let i = 0; i < orm.width * orm.height; i++) rgba[i * 4 + 2] = 180 + (i % 9) * 7; return { ...orm, rgba }; };
+        const metal = st.map((x, k) => (k === st.length - 1 || k === 0 ? { ...x, metal: true, orm: withMetalness(x.orm) } : x));
+        const mctx = materialPlanContext(sc.g, sc.json, sc.images, classes, metal, sc.planes);
+        let drawn = 0;
+        for (const job of jobs) {
+            const ts = planMaterialJob(job, mctx), native = await planMaterialJobNative(job, mctx);
+            expectSamePiece(native, ts);
+            for (let k = 0; k < ts.planned!.orm.width * ts.planned!.orm.height; k++) {
+                if (ts.planned!.orm.rgba[k * 4 + 2]) drawn++;
+                if (ts.planned!.params.rgba[k * 4]) expect(ts.planned!.orm.rgba[k * 4 + 2]).toBe(0);
+            }
+        }
+        expect(drawn).toBeGreaterThan(0);
+        expectSamePlan(await planMaterialRegionsNative(sc.g, sc.json, sc.images, classes, metal, sc.planes), planMaterialRegions(sc.g, sc.json, sc.images, classes, metal, sc.planes));
     }, 120_000);
 
     it('matches at a realistic size (four 2048 x 2048 photos) and reports the timings', async () => {

@@ -1205,8 +1205,9 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         openSettingsToTab
     });
 
-    // A starter button for a world already built: its newest saved version (else its build's scene) opens in a 3D Scene,
-    // fetched from the world cache when not on this machine; with neither, the prompt builds it.
+    // A starter button for a world already built (a splat world, or a massed district): its newest saved version (else its
+    // build's scene) opens in a 3D Scene, fetched from the world cache when not on this machine; with neither, the prompt
+    // builds it.
     const handleOpenStarterWorld = React.useCallback(async (item: StarterButton) => {
         const world = item.world!;
         let data: Scene3DData | undefined;
@@ -1221,7 +1222,8 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                 if (res.ok) data = { ...(await res.json() as Scene3DData), world: { slug: world.slug } };
             } catch { data = undefined; }
         }
-        if (!data?.splatUrl) {
+        // a splat world, or a massed district (its staged objects); anything else is no built world: the prompt builds one
+        if (!data?.splatUrl && !data?.objects?.length) {
             handleSendMessage(pickStarterPrompt(item));
             return;
         }

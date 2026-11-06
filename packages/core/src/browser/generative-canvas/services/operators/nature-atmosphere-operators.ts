@@ -224,6 +224,8 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
             if (params.cloudShadowScale !== undefined) updatedAtm.cloudShadowScale = params.cloudShadowScale;
             if (params.atmosphereShadowLength !== undefined) updatedAtm.atmosphereShadowLength = params.atmosphereShadowLength;
             if (params.windVector !== undefined) updatedAtm.windVector = params.windVector;
+            // a sky the weather wrote records the request, which the weather keeps (scene-weather.ts cloudShadowsRequested)
+            if (updatedAtm.weather) updatedAtm.weather = { ...updatedAtm.weather, cloudShadows: updatedAtm.cloudShadowsEnabled };
 
             scene.features.atmosphericScattering = updatedAtm;
 

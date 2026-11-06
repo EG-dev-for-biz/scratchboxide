@@ -204,6 +204,24 @@ struct ReliefParams {
     std::vector<double> occlusionElevationsDeg{0.0, 30.0, 45.0, 60.0};
     // a texel at least this share blocked counts toward the facade's reported occluded share
     double occlusionReportShare{0.65};
+    // Each region turned to face out of the building. Its normal comes from the scan's own winding, and a photogrammetric
+    // remesh leaves whole walls wound inward: a facade framed from one faces into the building (its photo mirrored, its
+    // occlusion fan cast inside, and every surface rebuilt on its frame facing in). Per region, outwardSamples points spread
+    // over its area by the cumulative area of its triangles; from each, standing outwardStandoff off the plane on either side,
+    // the fan below (the side's horizontal normal turned by each yaw, tilted up by each elevation) cast against the whole
+    // scan; on each side the share of rays that meet nothing. The open side is the outside: a region whose back is open by
+    // outwardMargin more than its front, or (a wall in a recess, its fan mostly blocked either way) open at least
+    // outwardMinOpen behind and outwardDominance times as open as in front, is turned (normal and in-plane s axis reversed,
+    // its scan triangles rewound). Its side is decided when, so turned, its front wins by the same rule; one open about as
+    // much on both sides (a free-standing sheet) or on neither (an inner wall) is left as wound, undecided.
+    bool orientOutward{true};
+    int outwardSamples{48};
+    double outwardStandoff{0.5};
+    double outwardMargin{0.15};
+    double outwardMinOpen{0.02};
+    double outwardDominance{4.0};
+    std::vector<double> outwardYawsDeg{-50.0, -25.0, 0.0, 25.0, 50.0};
+    std::vector<double> outwardElevationsDeg{0.0, 20.0, 40.0, 60.0};
     // false: analyse (and export the orthophotos) but carve nothing: the scene is written as it came. Pipeline K carves its
     // window recesses later, on the facades it rebuilds from the straightened photos (facade-lattice.ts).
     bool carve{true};
@@ -346,6 +364,10 @@ struct FacadeReport {
     // the occlusion mask's summary (ReliefParams::occluders): mean blocked share over the photo's covered texels, and the
     // share of covered texels at least occlusionReportShare blocked; -1 when no mask was written
     double occlusionMean{-1}, occludedShare{-1};
+    // ReliefParams::orientOutward: the share of the fan's rays that met nothing in front of the facade (along its final normal)
+    // and behind it (-1 when not measured), and whether the region was turned because the scan's winding faced it inward
+    double openFront{-1}, openBack{-1};
+    bool turned{false}, outwardDecided{false};
     FacadeAnalysis analysis;
     bool treated{false};
     std::string skipReason;
@@ -362,6 +384,7 @@ struct OutputTriangle {
     uint32_t material;
     int32_t region;
     uint32_t parent{0};  // input triangle this one was cut from (for orientation checks)
+    bool turned{false};  // rewound against its parent: its region was turned to face out (ReliefParams::orientOutward)
 };
 
 /** A per-position float the GLB writers emit as an application-specific vertex attribute (name starts with '_'). */
@@ -391,6 +414,7 @@ struct ReliefResult {
     size_t patchesMerged{0}, internalSeamEdges{0};
     size_t insertedBorderVertices{0}, borderPolygonsPatched{0};
     size_t earClipFallbacks{0}, earClipUnfilled{0};  // polygons whose ear clipping needed the relaxed ear test / left a remainder
+    size_t turnedRegions{0}, turnedTriangles{0};  // ReliefParams::orientOutward: regions turned to face out, output triangles rewound
     double minHeight{0}, maxHeight{0}, meanRecess{0}, meanProud{0};
     size_t recessedVertices{0}, proudVertices{0};
     double recessArea{0}, proudArea{0};
@@ -1890,6 +1914,9 @@ private:
         double area{0};
         P3 n, c, u, v, centroid;
         double sMin{0}, sMax{0}, tMin{0}, tMax{0};
+        // turned to face out of the building (ReliefParams::orientOutward): its scan triangles are wound against n
+        bool turned{false}, outwardDecided{false};
+        double openFront{-1}, openBack{-1};
         std::vector<ReliefFeature> features;
         // feature buckets
         double bs0{0}, bt0{0}, cell{2.0};
@@ -1950,11 +1977,16 @@ private:
         lap("topology");
         growRegions();
         lap("regions");
+        if (p_.orientOutward) {
+            orientRegionsOutward();
+            lap("orient_outward");
+        }
         analyseRegions();
         if (!p_.orthoExportDir.empty()) writeOrthoIndex();
         lap("analysis");
         tessellate();
         lap("tessellation");
+        rewindTurnedRegions();
         summarize();
         result_.ok = true;
     }
@@ -2251,6 +2283,74 @@ private:
         }
     }
 
+    /**
+     * Every region turned to face out of the building (ReliefParams::orientOutward). Its normal is the scan's winding, which
+     * a remesh leaves inward on whole walls; the side its sample points see open sky and street from is its outside.
+     */
+    void orientRegionsOutward() {
+        if (regions_.empty() || p_.outwardSamples <= 0) return;
+        bvh::BvhTree tree;
+        if (!tree.build(scene_.mesh)) return;
+        const double kPi = 3.14159265358979323846;
+        for (auto& R : regions_) {
+            if (R.tris.empty() || !(R.area > 0)) continue;
+            P3 h(R.n.x, 0.0, R.n.z);
+            if (h.length() < 1e-6) continue;  // a level plane: no outward horizontal to test
+            h = h * (1.0 / h.length());
+            const P3 side(-h.z, 0.0, h.x), up(0.0, 1.0, 0.0);
+            // sample points: the centroid of the triangle at each area quantile (deterministic, spread by area)
+            std::vector<P3> pts;
+            const int K = p_.outwardSamples;
+            double acc = 0;
+            size_t ti = 0;
+            for (int k = 0; k < K && ti < R.tris.size(); ++k) {
+                const double target = (k + 0.5) / K * R.area;
+                while (ti + 1 < R.tris.size() && acc + farea_[R.tris[ti]] < target) acc += farea_[R.tris[ti++]];
+                const auto& w = wtri_[R.tris[ti]];
+                pts.push_back((wpos_[w[0]] + wpos_[w[1]] + wpos_[w[2]]) * (1.0 / 3.0));
+            }
+            double open[2] = {0, 0};
+            size_t rays = 0;
+            for (int sd = 0; sd < 2; ++sd) {
+                const double sg = sd == 0 ? 1.0 : -1.0;
+                size_t escaped = 0, cast = 0;
+                for (const P3& q : pts) {
+                    const P3 o = q + R.n * (sg * p_.outwardStandoff);
+                    const math::Vec3 org(static_cast<float>(o.x), static_cast<float>(o.y), static_cast<float>(o.z));
+                    for (double y : p_.outwardYawsDeg)
+                        for (double e : p_.outwardElevationsDeg) {
+                            const double ce = std::cos(e * kPi / 180.0), se = std::sin(e * kPi / 180.0), cy = std::cos(y * kPi / 180.0), sy = std::sin(y * kPi / 180.0);
+                            const P3 d = (h * (sg * cy) + side * sy) * ce + up * se;
+                            ++cast;
+                            if (!tree.raycastAny(math::Ray(org, math::Vec3(static_cast<float>(d.x), static_cast<float>(d.y), static_cast<float>(d.z))))) ++escaped;
+                        }
+                }
+                open[sd] = cast ? static_cast<double>(escaped) / cast : 0.0;
+                rays += cast;
+            }
+            R.openFront = open[0];
+            R.openBack = open[1];
+            // one side wins: by the margin, or (both mostly blocked) open enough and that many times as open as the other
+            auto wins = [&](double a, double b) { return a > b + p_.outwardMargin || (a >= p_.outwardMinOpen && a >= p_.outwardDominance * b); };
+            R.outwardDecided = rays && (wins(open[0], open[1]) || wins(open[1], open[0]));
+            if (!rays || !wins(open[1], open[0])) continue;
+            // turned: the frame's normal and s axis reversed (t stays up, s x t = n), the s extent mirrored
+            R.turned = true;
+            ++result_.turnedRegions;
+            std::swap(R.openFront, R.openBack);
+            R.n = R.n * -1.0;
+            R.u = R.u * -1.0;
+            const double s0 = R.sMin;
+            R.sMin = -R.sMax;
+            R.sMax = -s0;
+        }
+    }
+
+    /** -1 for a turned region (its scan triangles wound against its frame), else 1. */
+    double regionWinding(int32_t region) const {
+        return region >= 0 && static_cast<size_t>(region) < regions_.size() && regions_[static_cast<size_t>(region)].turned ? -1.0 : 1.0;
+    }
+
     /** Open edges that lie on another patch of the same region are interior seams (displaced with their surface). */
     void markInteriorSeams(const std::vector<uint32_t>& cand) {
         const double tol = std::max(0.0, p_.seamTolerance);
@@ -2472,7 +2572,7 @@ private:
             if (!in) continue;
             if (std::max({s[0], s[1], s[2]}) < R.sMin || std::min({s[0], s[1], s[2]}) > R.sMax || std::max({tt[0], tt[1], tt[2]}) < R.tMin || std::min({tt[0], tt[1], tt[2]}) > R.tMax) continue;
             const P3 n = (wpos_[w[1]] - wpos_[w[0]]).cross(wpos_[w[2]] - wpos_[w[0]]);
-            if (n.dot(R.n) < 0) continue;  // facing into the building
+            if (n.dot(R.n) * (R.turned ? -1.0 : 1.0) < 0) continue;  // facing into the building (a turned region's scan is wound inward)
             tris.push_back(t);
             depth.push_back(static_cast<float>((h[0] + h[1] + h[2]) / 3.0));
         }
@@ -2709,6 +2809,7 @@ private:
                << ",\"sMin\":" << detail::fmt(f.sMin) << ",\"sMax\":" << detail::fmt(f.sMax) << ",\"tMin\":" << detail::fmt(f.tMin) << ",\"tMax\":" << detail::fmt(f.tMax)
                << ",\"pixel\":" << detail::fmt(f.pixel) << ",\"texel\":" << detail::fmt(f.texel) << ",\"width\":" << f.orthoWidth << ",\"height\":" << f.orthoHeight
                << ",\"orthoSMin\":" << detail::fmt(f.orthoSMin) << ",\"orthoTMax\":" << detail::fmt(f.orthoTMax) << ",\"coverage\":" << detail::fmt(f.coverage)
+               << (f.openFront >= 0 ? ",\"outward\":{\"openFront\":" + detail::fmt(f.openFront) + ",\"openBack\":" + detail::fmt(f.openBack) + ",\"turned\":" + (f.turned ? "true" : "false") + ",\"decided\":" + (f.outwardDecided ? "true" : "false") + "}" : std::string())
                << ",\"pattern\":\"" << f.analysis.pattern << "\",\"latticeConfirmation\":" << detail::fmt(f.analysis.latticeConfirmation)
                << ",\"latticeRejected\":" << (f.analysis.latticeRejected ? "true" : "false");
             if (f.occlusionMean >= 0)
@@ -2800,6 +2901,10 @@ private:
             rep.area = R.area;
             rep.centroid = R.centroid;
             rep.normal = R.n;
+            rep.turned = R.turned;
+            rep.openFront = R.openFront;
+            rep.openBack = R.openBack;
+            rep.outwardDecided = R.outwardDecided;
             rep.planeIndex = static_cast<size_t>(R.id) < regionPlaneIndex_.size() ? regionPlaneIndex_[static_cast<size_t>(R.id)] : -1;
             rep.axisS = R.u;
             rep.axisT = R.v;
@@ -3120,6 +3225,9 @@ private:
         auto cross = [&](size_t a, size_t b, size_t c) {
             return (L[b][0] - L[a][0]) * (L[c][1] - L[a][1]) - (L[c][0] - L[a][0]) * (L[b][1] - L[a][1]);
         };
+        // a turned region's polygons run clockwise in its frame (its scan wound inward): clipped mirrored, emitted as wound
+        if (regionWinding(region) < 0)
+            for (auto& l : L) l[1] = -l[1];
         double remaining = 0;
         for (size_t i = 0; i < n; ++i) remaining += L[i][0] * L[(i + 1) % n][1] - L[(i + 1) % n][0] * L[i][1];
         // Convex polygons with collinear runs (inserted border vertices): an ear is valid only if it and the remaining
@@ -3176,7 +3284,7 @@ private:
         bool tagged = false;
         for (uint64_t t : e) tagged = tagged || t != 0;
         if (!tagged) {
-            if (polyArea2(v) > 0) emitPolygon(v, P.tri, P.region);
+            if (polyArea2(v) * regionWinding(P.region) > 0) emitPolygon(v, P.tri, P.region);
             return;
         }
         P.v = std::move(v);
@@ -3516,7 +3624,7 @@ private:
                 result_.mesh.triangles.push_back(o);
                 continue;
             }
-            if (polyArea2(out) <= 0) {
+            if (polyArea2(out) * (P.region >= 0 ? regionWinding(P.region) : 1.0) <= 0) {
                 // degenerate in its frame: keep original fan to avoid holes
                 for (size_t k = 1; k + 1 < out.size(); ++k) {
                     std::vector<PV> tri3 = {out[0], out[k], out[k + 1]};
@@ -3533,6 +3641,19 @@ private:
         for (const auto& t : result_.mesh.triangles) if (t.region >= 0) count[t.region]++;
         for (auto& f : result_.facades) {
             if (f.treated) f.outputTriangles = count[f.id];
+        }
+    }
+
+    /** A turned region's scan triangles rewound in the output, so the scan faces out with its facade's frame. */
+    void rewindTurnedRegions() {
+        for (auto& o : result_.mesh.triangles) {
+            const int32_t r = o.parent < regionOf_.size() ? regionOf_[o.parent] : -1;
+            if (regionWinding(r) > 0) continue;
+            std::swap(o.p[1], o.p[2]);
+            std::swap(o.uv[1][0], o.uv[2][0]);
+            std::swap(o.uv[1][1], o.uv[2][1]);
+            o.turned = true;
+            ++result_.turnedTriangles;
         }
     }
 
@@ -3861,6 +3982,15 @@ inline std::vector<uint8_t> PhotometricRelief::writeTexturedGlb(const gltf::Gltf
             s << ",\"emissiveFactor\":[" << detail::fmt(sm.emissiveFactor.x) << "," << detail::fmt(sm.emissiveFactor.y) << "," << detail::fmt(sm.emissiveFactor.z) << "]";
         if (sm.doubleSided) s << ",\"doubleSided\":true";
         if (sm.unlit) { s << ",\"extensions\":{\"KHR_materials_unlit\":{}}"; anyUnlit = true; }
+        // a fill's labels pass through (the reader keeps them on the material)
+        if (sm.photoInferredFill || !sm.provenance.empty() || !sm.method.empty()) {
+            s << ",\"extras\":{\"scratchbox\":{";
+            bool first = true;
+            if (sm.photoInferredFill) { s << "\"photoInferredFill\":true"; first = false; }
+            if (!sm.provenance.empty()) { s << (first ? "" : ",") << "\"provenance\":\"" << sm.provenance << "\""; first = false; }
+            if (!sm.method.empty()) s << (first ? "" : ",") << "\"method\":\"" << sm.method << "\"";
+            s << "}}";
+        }
         s << "}";
         materials.push_back(s.str());
     }

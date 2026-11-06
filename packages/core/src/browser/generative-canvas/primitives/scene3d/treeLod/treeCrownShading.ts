@@ -126,7 +126,7 @@ export const DEFAULT_CROWN_BREAKUP: Readonly<CrownBreakupOptions> = Object.freez
 
 export const DEFAULT_CROWN_SHADING: Readonly<CrownShadingOptions> = Object.freeze<CrownShadingOptions>({
     enabled: true, blend: [0, 0.45, 0.9, 0.75], skyBias: 0.18, noise: [0, 0.06, 0.12, 0.06], occlusion: [0.6, 0.55, 0.45, 0.4], lobes: true,
-    innerDarkening: 0.3, innerDepthM: 1.5, breakup: DEFAULT_CROWN_BREAKUP
+    innerDarkening: 0.55, innerDepthM: 1.2, breakup: DEFAULT_CROWN_BREAKUP
 });
 
 /** Lobes per mesh are read from a float texture LOBE_TEX_WIDTH texels wide (one RGBA texel a lobe: centre xyz, radius). */
