@@ -26,6 +26,16 @@ import * as path from 'path';
 /** The store's directory under the staged-location cache (StageCache.dir). */
 export const MODEL_READINGS_DIR = 'model_readings';
 
+/**
+ * Where a build keeps its model answers: MODEL_READINGS_DIR under the staged-location cache, or SCRATCHBOX_MODEL_READINGS_DIR
+ * when set (an absolute folder), so builds whose stage caches are cleared (a benchmark's uncached builds, two checkouts
+ * compared before and after a change) still take the same answer for the same question and differ only where the code does.
+ */
+export function modelReadingsDir(cacheDir: string, env: NodeJS.ProcessEnv = process.env): string {
+    const dir = env.SCRATCHBOX_MODEL_READINGS_DIR?.trim();
+    return dir && path.isAbsolute(dir) ? dir : path.join(cacheDir, MODEL_READINGS_DIR);
+}
+
 /** Records by key. A record that cannot be read is absent; one that cannot be written is asked for again next time. */
 export interface ModelReadingStore {
     /** A record kept here comes back at once; one read back from elsewhere first (fileReadingStore's `restore`), through a promise. */

@@ -224,7 +224,7 @@ import { ROOF_SHADOW_VERSION, roofShadowAuditPng } from './pipeline-k/roof-shado
 import { FACADE_READER_MODEL, FACADE_READER_MODEL_KEY, FACADE_READER_PARAMS, FACADE_READER_VERSION, facadeReplyUsable, type FacadeAsk } from './pipeline-k/facade-reader';
 import { readOnTwin, TWIN_READER_VERSION } from './pipeline-k/twin-reader';
 import { CHOICE_SPAN_M, candidateSheetPng, choicePrompt, chooseWithMemory, MATERIAL_CHOICE_VERSION, parseChoices, type ChoiceRow, type SetChoice } from './pipeline-k/material-choice';
-import { fileReadingStore, MODEL_READINGS_DIR, readingKey, type ModelReadingStore } from './pipeline-k/model-readings';
+import { fileReadingStore, MODEL_READINGS_DIR, modelReadingsDir, readingKey, type ModelReadingStore } from './pipeline-k/model-readings';
 import { betweenSeen, glassSeen, MATERIAL_NAMING_VERSION, namingPrompt, parseClassWords } from './pipeline-k/material-naming';
 import { finishPrompt, MATERIAL_FINISH_VERSION, parseClassFinish, type ClassFinish } from './pipeline-k/material-finish';
 import type { FacadeReadRecord } from './pipeline-k/facade-reader';
@@ -1609,7 +1609,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
     // the vision model's answers kept between builds (pipeline-k/model-readings.ts), one store a run; one this workspace
     // lacks is read back from the cache mirror's bucket before the model is asked (stage-cache.ts restoreFile)
     let readingStore: ReturnType<typeof fileReadingStore> | undefined;
-    const modelReadingsStore = () => (readingStore ??= fileReadingStore(path.join(cache.dir, MODEL_READINGS_DIR), { restore: rel => cache.restoreFile(`${MODEL_READINGS_DIR}/${rel}`) }));
+    const modelReadingsStore = () => (readingStore ??= fileReadingStore(modelReadingsDir(cache.dir), { restore: rel => cache.restoreFile(`${MODEL_READINGS_DIR}/${rel}`) }));
     const runId = deps.newRunId?.() ?? crypto.randomBytes(4).toString('hex');
     cache.activeRunId = runId;
     // every stage event also goes to the run's wall-clock timeline (runs/<runId>/timeline.jsonl)
@@ -1700,7 +1700,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         placeValue = resolved.value;
         // a district run reads its place's store first (place-store.ts pullPlace): the place's objects into the object store,
         // its readings into the reading store; read in the background, waited for before the run's objects are kept
-        if (kdDistrict && !request.chunk && placeStoreEnabled()) placePull = pullPlaceForRun({ place: placeValue, store: defaultDurableAssetStore(), readingsDir: path.join(cache.dir, MODEL_READINGS_DIR), workspace: cache.workspaceRoot })
+        if (kdDistrict && !request.chunk && placeStoreEnabled()) placePull = pullPlaceForRun({ place: placeValue, store: defaultDurableAssetStore(), readingsDir: modelReadingsDir(cache.dir), workspace: cache.workspaceRoot })
             .then(r => { cache.writeRunNote(runId, 'place_pull', r); }, () => undefined);
         run.state.place = { query: request.query, resolvedAddress: placeValue.formattedAddress, lat: placeValue.lat, lng: placeValue.lng, ...(placeValue.alternatives?.length ? { alternatives: placeValue.alternatives } : {}) };
         persist();
@@ -4466,7 +4466,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         io.progress('pipeline K: straightening the facade photos');
                         // the facades' small holes no real source covers: inpainted by the image model when the build has one
                         // (capped per build, pipeline-k.ts HOLE_INPAINT); SCRATCHBOX_K_HOLE_INPAINT=0 off
-                        const holeInpaint = deps.textures?.enhance && process.env.SCRATCHBOX_K_HOLE_INPAINT?.trim() !== '0' ? { client: deps.textures.enhance, models: [LIGHTING_MODEL_LITE] } : undefined;
+                        const holeInpaint = deps.textures?.enhance && process.env.SCRATCHBOX_K_HOLE_INPAINT?.trim() !== '0' ? { client: deps.textures.enhance, models: [LIGHTING_MODEL_LITE], ...(bypass('remesh') ? {} : { readings: modelReadingsStore() }) } : undefined;
                         const k = await timed('pipelineK', () => rectifyReliefOrthos(r.reliefOrthosDir!, { signal: io.signal, ...(cpuShare ? { threads: cpuShare.threads } : {}), ...(holeInpaint ? { inpaint: holeInpaint } : {}) }));
                         orthosKey = `${PIPELINE_K_VERSION}:${k.key}`;
                         r = { ...r, reliefOrthosDir: k.orthosDir };
@@ -4869,7 +4869,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const chain = new VisionModelChain<string>({ client: visionAvailable!.client, candidates: visionAvailable!.candidates, signal: ctx.signal ? AbortSignal.any([ctx.signal, cut.signal]) : cut.signal, ...chainExtras('remesh'), ...(deps.sleep ? { sleep: deps.sleep } : {}) });
                         try {
                             // 12 at once; from 30 s on the vote goes ahead on a quorum of outlines (OWNERSHIP_VOTE_RULE), the window is the backstop
-                            seg = await timed('ownershipVision', () => segmentOwnershipViews({ viewsDir: views.dir, masksDir, target: request.query.trim(), chain, concurrency: 12, onProgress: m => io.progress(m) }));
+                            seg = await timed('ownershipVision', () => segmentOwnershipViews({ viewsDir: views.dir, masksDir, target: request.query.trim(), chain, concurrency: 12, onProgress: m => io.progress(m), ...(bypass('ownership') ? {} : { readings: modelReadingsStore() }) }));
                         } finally {
                             clearTimeout(cutTimer);
                         }
