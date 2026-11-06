@@ -166,6 +166,9 @@ struct TracedLine {
     int segments = 0;
 };
 
+/** A line peak the trace dropped (RejectedPeak): 'b' too near the border, 'e' no edge, 's' no segment. */
+struct RejectedPeak { char axis = 'v'; int at = 0; char why = 'b'; };
+
 struct HoleFill {
     double uncovered = 0, fromRepeats = 0, fromStoreys = 0, fromNearest = 0;
     bool hasPeriodPx = false, hasStoreyPx = false, hasFeatureless = false, hasFeaturelessLeft = false;
@@ -188,6 +191,9 @@ struct Result {
     Rgba image; Report report;
     std::vector<uint8_t> uncovered, featureless;
     bool hasOccluded = false; std::vector<uint8_t> occluded;
+    /** What the straightening read, for its overlay (the TypeScript result's `trace`). */
+    std::vector<TracedLine> lines; std::vector<RejectedPeak> rejected;
+    bool hasAfter = false; std::vector<TracedLine> after;
 };
 
 inline bool isUncovered(const std::vector<uint8_t>& rgba, size_t i) { return rgba[i * 4] == UNCOVERED && rgba[i * 4 + 1] == UNCOVERED && rgba[i * 4 + 2] == UNCOVERED; }
@@ -258,7 +264,7 @@ inline double weightedMedian(const std::vector<double>& v, const std::vector<dou
 }
 
 /** Traces the lines of one axis ('v': gradient across is gx, samples down the rows; 'h': the same transposed). */
-inline std::vector<TracedLine> traceAxis(char axis, const std::vector<float>& g, int W, int H, double pixelM, const Params& P) {
+inline std::vector<TracedLine> traceAxis(char axis, const std::vector<float>& g, int W, int H, double pixelM, const Params& P, std::vector<RejectedPeak>* rejected = nullptr) {
     const int nAcross = axis == 'v' ? W : H, nAlong = axis == 'v' ? H : W;
     auto at = [&](int along, int across) -> size_t { return axis == 'v' ? static_cast<size_t>(along) * W + across : static_cast<size_t>(across) * W + along; };
     std::vector<double> profile(nAcross, 0.0);
@@ -271,11 +277,12 @@ inline std::vector<TracedLine> traceAxis(char axis, const std::vector<float>& g,
     const int nS = nAlong / S;
     const std::vector<int> peaks = profilePeaks(profile, P.peakK, sep);
     std::vector<TracedLine> found(peaks.size());
-    std::vector<uint8_t> kept(peaks.size(), 0);
+    // per peak: 1 kept, else why it was dropped ('b', 'e', 's'), gathered in peak order afterwards as the TypeScript pushes them
+    std::vector<uint8_t> kept(peaks.size(), 's');
     parallelFor(peaks.size(), [&](size_t pb, size_t pe) {
         for (size_t pk = pb; pk < pe; pk++) {
             const int c0 = peaks[pk];
-            if (c0 - R < 1 || c0 + R > nAcross - 2) continue;
+            if (c0 - R < 1 || c0 + R > nAcross - 2) { kept[pk] = 'b'; continue; }
             double signedSum = 0;
             for (int a = 0; a < nAlong; a++) signedSum += g[at(a, c0)];
             const double pol = signedSum >= 0 ? 1 : -1;
@@ -294,7 +301,7 @@ inline std::vector<TracedLine> traceAxis(char axis, const std::vector<float>& g,
             std::vector<double> pos;
             for (double v : best) if (v > 0) pos.push_back(v);
             const double norm = medianOf(pos);
-            if (!(norm > 0)) continue;
+            if (!(norm > 0)) { kept[pk] = 'e'; continue; }
             std::vector<double> cost(static_cast<size_t>(nS) * nD);
             std::vector<int16_t> back(static_cast<size_t>(nS) * nD, 0);
             for (int d = 0; d < nD; d++) cost[d] = -e[d] / norm;
@@ -354,18 +361,21 @@ inline std::vector<TracedLine> traceAxis(char axis, const std::vector<float>& g,
         }
     }, 1);
     std::vector<TracedLine> lines;
-    for (size_t pk = 0; pk < peaks.size(); pk++) if (kept[pk]) lines.push_back(std::move(found[pk]));
+    for (size_t pk = 0; pk < peaks.size(); pk++) {
+        if (kept[pk] == 1) lines.push_back(std::move(found[pk]));
+        else if (rejected) rejected->push_back({axis, peaks[pk], static_cast<char>(kept[pk])});
+    }
     return lines;
 }
 
 /** The lines of an ortho, traced. */
-inline std::vector<TracedLine> traceLines(const Rgba& img, double pixelM, const Params& P) {
+inline std::vector<TracedLine> traceLines(const Rgba& img, double pixelM, const Params& P, std::vector<RejectedPeak>* rejected = nullptr) {
     std::vector<uint8_t> valid; std::vector<float> L, gx, gy;
     planes(img, valid, L);
     gradients(L, valid, img.width, img.height, gx, gy);
     std::vector<TracedLine> out;
-    if (P.traceVertical) { auto v = traceAxis('v', gx, img.width, img.height, pixelM, P); for (auto& l : v) out.push_back(std::move(l)); }
-    if (P.traceHorizontal) { auto h = traceAxis('h', gy, img.width, img.height, pixelM, P); for (auto& l : h) out.push_back(std::move(l)); }
+    if (P.traceVertical) { auto v = traceAxis('v', gx, img.width, img.height, pixelM, P, rejected); for (auto& l : v) out.push_back(std::move(l)); }
+    if (P.traceHorizontal) { auto h = traceAxis('h', gy, img.width, img.height, pixelM, P, rejected); for (auto& l : h) out.push_back(std::move(l)); }
     return out;
 }
 
@@ -989,10 +999,11 @@ inline Result rectifyOrtho(const Rgba& img, double pixelM, const Params& P, cons
     const auto t0 = std::chrono::steady_clock::now();
     const int W = img.width, H = img.height;
     const size_t N = static_cast<size_t>(W) * H;
-    const auto lines = traceLines(img, pixelM, P);
+    Result res;
+    res.lines = traceLines(img, pixelM, P, &res.rejected);
+    const auto& lines = res.lines;
     const double before = straightness(lines);
     const Period period = horizontalPeriod(img, pixelM, P);
-    Result res;
     Report& report = res.report;
     report.width = W; report.height = H; report.pixelM = pixelM;
     for (const auto& l : lines) {
@@ -1012,7 +1023,9 @@ inline Result rectifyOrtho(const Rgba& img, double pixelM, const Params& P, cons
         const MeshWarp warp = solveWarp(lines, W, H, pixelM, P, iterations);
         const double scale = foldScale(warp, W, H, P.minJacobian);
         Rgba warped = applyWarp(img, warp, scale);
-        const double after = straightness(retrace(warped, lines, pixelM, P));
+        res.after = retrace(warped, lines, pixelM, P);
+        res.hasAfter = true;
+        const double after = straightness(res.after);
         const double gain = before > 0 ? 1 - after / before : 0;
         double maxShift = 0, sumShift = 0;
         for (size_t v = 0; v < warp.sx.size(); v++) {
