@@ -112,6 +112,20 @@ function steppedBlock(opts: { hole: boolean; mast: boolean }): ScanBuilder {
     return b;
 }
 
+/** The clean stepped block with a round drum on the tower: radius 3 m, y 20..26, 48 facets, 0.5 m rings, a flat top. */
+function blockWithDrum(): ScanBuilder {
+    const b = steppedBlock({ hole: false, mast: false });
+    const n = 48, r = 3, cx = 5, cz = 5;
+    const ring = (y: number): V[] => Array.from({ length: n }, (_, i) => [cx + r * Math.cos((2 * Math.PI * i) / n), y, cz + r * Math.sin((2 * Math.PI * i) / n)] as V);
+    for (let y = 20; y < 26; y += 0.5) {
+        const lo = ring(y), hi = ring(y + 0.5);
+        for (let i = 0; i < n; i++) { const j = (i + 1) % n; b.tri(lo[i], hi[j], hi[i]); b.tri(lo[i], lo[j], hi[j]); }
+    }
+    const top = ring(26);
+    for (let i = 0; i < n; i++) b.tri([cx, 26, cz], top[i], top[(i + 1) % n]);
+    return b;
+}
+
 let binary = '';
 
 function run(args: string[]): Promise<any> {
@@ -271,4 +285,32 @@ describe('shell fit: one closed solid from a scan with gaps', () => {
         expect(on.metrics.boundaryEdges).toBe(0);
         expect(Math.abs(on.metrics.shellVolumeM3 - off.metrics.shellVolumeM3) / off.metrics.shellVolumeM3).toBeLessThan(0.005);
     }, 60_000);
+
+    it('finds a round drum as one solid of revolution, takes its scan out of the planes and writes it closed beside the shell', async () => {
+        const scanPath = path.join(TMP, 'drum.glb'), combinedPath = path.join(TMP, 'drum_combined.glb'), offPath = path.join(TMP, 'drum_off.json'), onPath = path.join(TMP, 'drum_on.json');
+        fs.writeFileSync(scanPath, blockWithDrum().glb());
+        await run(['--input', scanPath, '--report', offPath, '--threads', '2']);
+        await run(['--input', scanPath, '--report', onPath, '--out-combined', combinedPath, '--threads', '2', '--revolution']);
+        const off = JSON.parse(fs.readFileSync(offPath, 'utf8')), on = JSON.parse(fs.readFileSync(onPath, 'utf8'));
+        expect(off.metrics.revolutionParts).toBe(0);
+        expect(on.metrics.revolutionParts).toBe(1);
+        const rv = on.revolutions[0];
+        expect(Math.hypot(rv.axis[0] - 5, rv.axis[1] - 5)).toBeLessThan(0.2);
+        expect(Math.abs(rv.yTop - 26)).toBeLessThan(0.6);
+        expect(rv.explainedRmsM).toBeLessThan(0.15);
+        // the drum's side is 2 pi 3 x 6 = 113 m2 and its top 28 m2: most of it is explained by the solid, not the planes
+        expect(rv.areaM2).toBeGreaterThan(100);
+        expect(on.metrics.revolutionAreaM2).toBeCloseTo(rv.areaM2, 6);
+        // the shell stays one closed solid; the drum's scan is not left over as residual
+        expect(on.metrics.boundaryEdges).toBe(0);
+        expect(on.metrics.residualAreaM2).toBeLessThan(off.metrics.residualAreaM2 + 1);
+        // the solid is written as its own node, labelled measured, and closed (checked here, independently)
+        const combined = readGlbTriangles(fs.readFileSync(combinedPath));
+        const node = combined.nodeRanges.find(r => r.name === 'revolution_0');
+        expect(node, 'the revolution node').toBeDefined();
+        expect(node!.extras.sb.provenance.label).toBe('measured');
+        const c = closedness(combined.positions, combined.indices, node!.firstTriangle, node!.triangleCount);
+        expect(c.boundary).toBe(0);
+        expect(c.volume).toBeGreaterThan(0);
+    }, 120_000);
 });

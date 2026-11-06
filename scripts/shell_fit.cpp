@@ -54,6 +54,8 @@ static std::string metricsJson(const sf::Metrics& m, const sf::Params& p) {
         .n("skinAreaM2", m.skinAreaM2).n("hiddenAreaM2", m.hiddenAreaM2).n("apronAreaM2", m.apronAreaM2).n("groundY", m.groundY)
         .i("planesFitted", static_cast<long long>(m.planesFitted)).i("planesKept", static_cast<long long>(m.planesKept))
         .i("planesRejected", static_cast<long long>(m.planesRejected)).n("rejectedAreaM2", m.rejectedAreaM2)
+        .i("revolutionParts", static_cast<long long>(m.revolutionParts)).i("revolutionTriangles", static_cast<long long>(m.revolutionTriangles))
+        .n("revolutionAreaM2", m.revolutionAreaM2).n("revolutionAreaShare", m.revolutionAreaShare)
         .n("planeAssignedAreaShare", m.planeAssignedAreaShare)
         .i("supportCells", static_cast<long long>(m.supportCells)).i("refineSplits", static_cast<long long>(m.refineSplits)).i("separatorPlanes", static_cast<long long>(m.separatorPlanes))
         .i("cells", static_cast<long long>(m.cells)).i("insideCells", static_cast<long long>(m.insideCells)).i("interfaces", static_cast<long long>(m.interfaces))
@@ -75,7 +77,7 @@ static std::string metricsJson(const sf::Metrics& m, const sf::Params& p) {
     o.raw("ms", ms.text());
     sg::json::Object tol;
     tol.n("supportTolM", p.supportTolM).n("measuredShare", p.measuredShare).n("residualTolM", p.residualTolM).n("growDistM", p.growDistM)
-        .n("minNormalResultant", p.minNormalResultant).n("maxPlaneRmsM", p.maxPlaneRmsM)
+        .n("minNormalResultant", p.minNormalResultant).n("maxPlaneRmsM", p.maxPlaneRmsM).b("revolutionParts", p.revolutionParts).b("topIsAir", p.topIsAir).n("revolutionTolM", p.revolutionTolM)
         .n("minPlaneAreaM2", p.minPlaneAreaM2).i("maxPlanes", p.maxPlanes).n("minSplitAreaM2", p.minSplitAreaM2)
         .n("unaryWeight", p.unaryWeight).n("unsupportedCutCost", p.unsupportedCutCost).n("supportedCutCost", p.supportedCutCost);
     o.raw("params", tol.text());
@@ -99,6 +101,9 @@ int main(int argc, char** argv) {
             else if (a == "--ground-y") p.groundY = std::stod(next());
             else if (a == "--threads") p.threads = std::stoi(next());
             else if (a == "--no-skin") p.skinOnly = false;
+            else if (a == "--revolution") p.revolutionParts = true;
+            else if (a == "--top-air") p.topIsAir = true;
+            else if (a == "--set-revolution") { const std::string k = next(); p.revolution.set(k, std::stod(next())); }
             else if (a == "--set") {
                 const std::string k = next();
                 const double v = std::stod(next());
@@ -112,6 +117,7 @@ int main(int argc, char** argv) {
                 else if (k == "minPlaneAreaM2") p.minPlaneAreaM2 = v;
                 else if (k == "minNormalResultant") p.minNormalResultant = v;
                 else if (k == "maxPlaneRmsM") p.maxPlaneRmsM = v;
+                else if (k == "revolutionTolM") p.revolutionTolM = v;
                 else if (k == "maxPlanes") p.maxPlanes = static_cast<int>(v);
                 else if (k == "minSplitAreaM2") p.minSplitAreaM2 = v;
                 else if (k == "marginM") p.marginM = v;
@@ -186,7 +192,7 @@ int main(int argc, char** argv) {
         const std::string mjson = metricsJson(m, p);
         auto build = [&](bool shell, bool resid) {
             std::vector<sg::StagedNode> nodes;
-            const long long count = (shell ? (parts[0].prim.indices.empty() ? 0 : 1) + (parts[1].prim.indices.empty() ? 0 : 1) : 0) + (resid && !residual.indices.empty() ? 1 : 0);
+            const long long count = (shell ? (parts[0].prim.indices.empty() ? 0 : 1) + (parts[1].prim.indices.empty() ? 0 : 1) : 0) + (resid && !residual.indices.empty() ? 1 : 0) + (shell ? static_cast<long long>(r.revolutions.size()) : 0);
             long long order = 0;
             auto add = [&](const std::string& name, const sg::StagedPrimitive& prim, const std::string& label, bool measured, const std::string& method, double confidence, const std::string& note) {
                 if (prim.indices.empty()) return;
@@ -205,6 +211,19 @@ int main(int argc, char** argv) {
                     parts[0].area > 0 ? parts[0].supportArea / parts[0].area : 0.0, "each face's support share is in the root extras (shellFit.faces)");
                 add("shell_generated", parts[1].prim, "generated", false, "shell-fit: face closing the solid where no scan lies within the tolerance",
                     0.5, "the solver closed a gap by the smallest unsupported area between its cells (and the floor at the ground datum); not a measurement");
+            }
+            if (shell) for (size_t i = 0; i < r.revolutions.size(); ++i) {
+                const auto& rv = r.revolutions[i];
+                sg::StagedPrimitive prim;
+                for (size_t v = 0; v + 2 < rv.pos.size(); v += 3) {
+                    prim.positions.emplace_back(rv.pos[v], rv.pos[v + 1], rv.pos[v + 2]);
+                    prim.normals.emplace_back(rv.nrm[v], rv.nrm[v + 1], rv.nrm[v + 2]);
+                }
+                prim.indices = rv.idx;
+                char note[320];
+                std::snprintf(note, sizeof note, "a radial profile about a vertical axis fitted to the scan it stands for (%.0f m2 within %.2f m of it, RMS at most %.2f m); its bottom is sunk into the shell and its top is flat where the fit ended%s",
+                              rv.areaM2, p.revolutionTolM, rv.explainedRmsM, std::isfinite(rv.topCutY) ? " (the scan above is not round and stays as scan)" : "");
+                add("revolution_" + std::to_string(i), prim, "measured", true, "shell-fit: solid of revolution (scratchbox_revolution_fit.hpp) fitted to the scan", rv.fitWithin25, note);
             }
             if (resid) add("residual_scan", residual, "measured", true, "shell-fit: scan triangles farther than the residual tolerance from the shell, kept as scanned", 1.0, "what the planes do not explain");
             sg::WriteOptions opt;
@@ -238,7 +257,16 @@ int main(int argc, char** argv) {
                 .n("areaM2", c.areaM2).n("normalResultant", c.normalResultant).n("rmsM", c.rmsM).b("rejected", c.rejected);
             candidateRows.push_back(row.text());
         }
-        const std::string report = "{\"ok\":true,\"version\":\"shell-fit/1\",\"input\":" + sg::json::str(input) + ",\"metrics\":" + mjson + compare + ",\"faces\":" + sg::json::array(faceRows) + ",\"planeCandidates\":" + sg::json::array(candidateRows) + "}\n";
+        std::vector<std::string> revRows;
+        for (const auto& rv : r.revolutions) {
+            sg::json::Object row;
+            row.raw("axis", "[" + sg::json::num(rv.cx) + "," + sg::json::num(rv.cz) + "]").n("yBottom", rv.yBottom).n("yTop", rv.yTop)
+                .raw("topCutY", std::isfinite(rv.topCutY) ? sg::json::num(rv.topCutY) : std::string("null"))
+                .n("fitRmsM", rv.fitRmsM).n("fitWithin25", rv.fitWithin25).n("explainedRmsM", rv.explainedRmsM).n("areaM2", rv.areaM2)
+                .i("triangles", static_cast<long long>(rv.triangles)).i("meshTriangles", static_cast<long long>(rv.idx.size() / 3)).s("reason", rv.reason);
+            revRows.push_back(row.text());
+        }
+        const std::string report = "{\"ok\":true,\"version\":\"shell-fit/1\",\"input\":" + sg::json::str(input) + ",\"metrics\":" + mjson + compare + ",\"faces\":" + sg::json::array(faceRows) + ",\"planeCandidates\":" + sg::json::array(candidateRows) + ",\"revolutions\":" + sg::json::array(revRows) + "}\n";
         if (!reportPath.empty()) {
             std::ofstream out(reportPath);
             if (!out) throw std::runtime_error("cannot write " + reportPath);

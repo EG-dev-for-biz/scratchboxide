@@ -44,6 +44,21 @@
  *                facing out. It includes the floor at the ground datum, so it has no open edge by construction;
  *   6. residual  skin triangles farther than `residualTolM` from the shell and outside it are kept as measured scan
  *                (a mast, ornament, curved parts); those inside the shell are reported as buried.
+ *   0. round     (`revolutionParts`, off by default) before the planes, the skin is searched for solids of revolution
+ *                (scratchbox_revolution_fit.hpp, with `endAtNonRound`: a part ends where its sections stop being circles
+ *                for more than its maxFailM, cut flat there); skin within `revolutionTolM` of a fitted profile is taken out
+ *                of the planes, the votes and the residual, and each part is written as its own closed solid
+ *                (`revolution_<i>`, measured, with its fit). On the ESB (2026-11-06) the shaft under the antenna is
+ *                4-periodic (21% radial swing, a rounded square) and is found only with the revolution fit's
+ *                maxModulationRel raised to 0.3: one part, 335-380 m, 0.29 m RMS, 84% within 25 cm, 1,627 m2 of skin,
+ *                replacing the planes' slabs there; the Flatiron and the Dakota give 3 and 4 small round parts at
+ *                0.06-0.14 m RMS with the default limit.
+ *   topIsAir     (off by default) a cell touching the bounding volume's top is outside outright. The ESB's tall prism
+ *                is not the shaft but columns over the antenna's lattice, which the votes call inside and the solver
+ *                closes at the margin; this removes them and keeps the antenna as residual scan, but it also adds about
+ *                16,000 m2 of generated side faces through the tower (volume down 5,000 m3, nothing changed outside),
+ *                most likely a column cell hollowed down through the building: not ready. Making the whole margin air
+ *                breaks the base instead, where the isolation's cut runs along the sides.
  *
  * Every shell face carries its plane, the share of its area the scan supports within `supportTolM` (continuous) and a
  * provenance label: `measured` where that share reaches `measuredShare`, else `generated` (the solver closed a gap; the
@@ -51,8 +66,9 @@
  * triangles and tolerances in metres, the outputs planes, cells and distances.
  *
  * Known limits of the prototype (2026-11-05, ESB and 2 Penn Plaza): tapered and round parts no plane explains become
- * a prism between placed planes (the ESB's mast) or stay residual (a per-region flatness test does not prevent this:
- * the facets are flat; the round part has to be found as a whole, as scratchbox_revolution_fit.hpp does); thin open structures (a canopy) are residual, not solid;
+ * a prism between placed planes or stay residual (a per-region flatness test does not prevent this: the facets are flat;
+ * the round part has to be found as a whole: `revolutionParts`); the ESB's tall prism is columns over the antenna's
+ * lattice closed at the margin (see topIsAir); thin open structures (a canopy) are residual, not solid;
  * a gap with no plane beyond it is closed at the bounding volume's margin; a few edges where two cells meet only along
  * a line are non-manifold (reported, not repaired); facade relief under `growDistM` is flattened away.
  *
@@ -62,6 +78,7 @@
 #include "scratchbox_bvh.hpp"
 #include "scratchbox_geometry.hpp"
 #include "scratchbox_math.hpp"
+#include "scratchbox_revolution_fit.hpp"
 
 #include <algorithm>
 #include <array>
@@ -124,6 +141,7 @@ struct Params {
     double refineMinorityShare{0.0625};   // a cell is mixed when more than this share of its samples disagree with the rest
     double refineMinVolumeM3{2.0};        // cells smaller than this are not refined
     double marginM{2.0};           // the bounding volume stands this far outside the scan (sides and top)
+    bool topIsAir{false};          // a cell touching the bounding volume's top is outside outright, not by its face's cost
     double supportTolM{0.5};       // a face point is supported when scan lies within this along the face normal
     double measuredShare{0.5};     // a face is `measured` from this support share up
     double residualTolM{1.0};      // skin farther than this from the shell is kept as residual scan
@@ -133,6 +151,9 @@ struct Params {
     double supportedCutCost{0.05}; // cost per square metre of cutting along the scan
     double minComponentM3{20.0};   // inside components smaller than this (and not the largest) are dropped
     bool skinOnly{true};           // false: every triangle counts as skin, as wound
+    bool revolutionParts{false};   // find solids of revolution in the skin first (scratchbox_revolution_fit.hpp) ...
+    double revolutionTolM{0.35};   // ... and take the skin within this of a fitted profile out of the planes, the votes and the residual
+    revolution_fit::Params revolution = [] { revolution_fit::Params r; r.endAtNonRound = 1; return r; }();
     int threads{0};                // 0: hardware concurrency
 };
 
@@ -158,6 +179,8 @@ struct Metrics {
     double skinAreaM2{0}, hiddenAreaM2{0}, apronAreaM2{0};
     double groundY{0};
     size_t planesFitted{0}, planesKept{0};
+    size_t revolutionParts{0}, revolutionTriangles{0};   // skin a fitted solid of revolution explains (not in the planes, votes or residual)
+    double revolutionAreaM2{0}, revolutionAreaShare{0};
     size_t planesRejected{0};           // fitted regions whose scan does not agree in direction or lies too far from its plane
     double rejectedAreaM2{0};
     double planeAssignedAreaShare{0};   // skin area lying on a kept plane
@@ -187,6 +210,18 @@ struct Result {
     /** Every fitted region tested as a plane: its direction agreement and its spread, and whether it was kept as a candidate. */
     struct PlaneCandidate { V3 n, o; double areaM2{0}, normalResultant{0}, rmsM{0}; bool rejected{false}; };
     std::vector<PlaneCandidate> planeCandidates;
+    /** A solid of revolution found in the skin: its closed outward mesh (the revolution fit's), its axis and extent, how
+     *  well it fits the scan it explains, and that scan's area. */
+    struct RevolutionPart {
+        double cx{0}, cz{0}, yBottom{0}, yTop{0}, topCutY{std::numeric_limits<double>::quiet_NaN()};
+        double fitRmsM{0}, fitWithin25{0};          // the revolution fit's own, over every point it sampled
+        double explainedRmsM{0}, areaM2{0};         // over the skin triangles within revolutionTolM of its profile
+        size_t triangles{0};
+        std::vector<float> pos, nrm;
+        std::vector<uint32_t> idx;
+        std::string reason;
+    };
+    std::vector<RevolutionPart> revolutions;
     std::vector<V3> shellPositions;            // welded: the shell is a closed indexed mesh
     std::vector<uint32_t> shellIndices;        // sorted by face
     std::vector<ShellFace> faces;
@@ -594,18 +629,67 @@ public:
             }
             M.groundY = groundY;
         }
+        // solids of revolution first: a round part (a drum, a shaft, a dome) is not a set of planes, and cutting it into
+        // cells makes a prism; the skin within revolutionTolM of a fitted profile is explained by that solid instead
+        std::vector<int> revOf(nt, -1);
+        if (p.revolutionParts) {
+            auto isApron = [&](size_t t) { return std::abs(tc[t].y - groundY) < p.groundBandM && tn[t].y > 0.7; };
+            std::vector<float> soup;
+            std::vector<uint32_t> soupTri;
+            for (size_t t = 0; t < nt; ++t) {
+                if (!skinSide[t] || isApron(t) || ta[t] < 1e-10) continue;
+                for (int k = 0; k < 3; ++k) {
+                    const V3& q = in.positions[in.indices[t * 3 + static_cast<size_t>(k)]];
+                    soup.push_back(static_cast<float>(q.x)); soup.push_back(static_cast<float>(q.y)); soup.push_back(static_cast<float>(q.z));
+                }
+                soupTri.push_back(static_cast<uint32_t>(t));
+            }
+            revolution_fit::RevolutionFit rf(std::move(soup), p.revolution);
+            rf.run();
+            for (const auto& rv : rf.revolutions()) {
+                if (!rv.accepted || rv.idx.empty()) continue;
+                Result::RevolutionPart part;
+                part.cx = rv.cx; part.cz = rv.cz; part.topCutY = rv.topCutY;
+                part.yBottom = rv.stacks.front().yBottom; part.yTop = rv.stacks.back().yTop;
+                part.fitRmsM = rv.rmsM; part.fitWithin25 = rv.within25; part.reason = rv.reason;
+                part.pos = rv.pos; part.nrm = rv.nrm; part.idx = rv.idx;
+                std::vector<std::vector<std::array<double, 2>>> meridians;
+                for (const auto& st : rv.stacks) meridians.push_back(st.meridianPolyline());
+                const int id = static_cast<int>(R.revolutions.size());
+                double sumD2 = 0;
+                for (uint32_t t : soupTri) {
+                    if (revOf[t] >= 0) continue;
+                    double worst = 0;
+                    for (int k = 0; k < 3 && worst <= p.revolutionTolM; ++k) {
+                        const V3& q = in.positions[in.indices[t * 3 + static_cast<size_t>(k)]];
+                        const double r = std::hypot(q.x - rv.cx, q.z - rv.cz);
+                        double d = std::numeric_limits<double>::infinity();
+                        for (const auto& m : meridians) d = std::min(d, revolution_fit::detail::polyDist(m, r, q.y));
+                        worst = std::max(worst, d);
+                    }
+                    if (worst > p.revolutionTolM) continue;
+                    revOf[t] = id; ++part.triangles; part.areaM2 += ta[t]; sumD2 += ta[t] * worst * worst;
+                }
+                if (part.triangles == 0) continue;
+                part.explainedRmsM = std::sqrt(sumD2 / part.areaM2);   // by each triangle's farthest corner: an upper bound
+                R.revolutions.push_back(std::move(part));
+            }
+            M.revolutionParts = R.revolutions.size();
+        }
         for (size_t t = 0; t < nt; ++t) {
             if (!skinSide[t]) { ++M.hiddenTriangles; M.hiddenAreaM2 += ta[t]; continue; }
+            if (revOf[t] >= 0) { ++M.revolutionTriangles; M.revolutionAreaM2 += ta[t]; continue; }
             if (std::abs(tc[t].y - groundY) < p.groundBandM && tn[t].y > 0.7) { apron[t] = 1; ++M.apronTriangles; M.apronAreaM2 += ta[t]; }
             else { ++M.skinTriangles; M.skinAreaM2 += ta[t]; R.skinTriangles.push_back(static_cast<uint32_t>(t)); }
         }
         if (M.skinTriangles == 0) throw std::runtime_error("shell fit: no part of the scan can be seen from outside");
+        M.revolutionAreaShare = M.revolutionAreaM2 > 0 ? M.revolutionAreaM2 / (M.revolutionAreaM2 + M.skinAreaM2) : 0;
         // the skin as its own mesh (apron included: it stops rays as the ground does), each triangle facing out
         geometry::ScratchboxMesh skin("skin");
         std::vector<uint32_t> skinTri;   // skin triangle -> input triangle
         skin.vertices = all.vertices;
         for (size_t t = 0; t < nt; ++t) {
-            if (!skinSide[t]) continue;
+            if (!skinSide[t] || revOf[t] >= 0) continue;   // a round part's skin neither stops nor casts votes: its solid stands for it
             const uint32_t a = in.indices[t * 3], b = in.indices[t * 3 + 1], c = in.indices[t * 3 + 2];
             skin.indices.push_back(a);
             skin.indices.push_back(skinSide[t] > 0 ? b : c);
@@ -621,7 +705,7 @@ public:
         std::vector<int> triPlane(nt, -1);
         std::vector<Plane> fitted;
         {
-            auto fit = [&](size_t t) { return skinSide[t] != 0 && !apron[t]; };
+            auto fit = [&](size_t t) { return skinSide[t] != 0 && !apron[t] && revOf[t] < 0; };
             // welded vertices and edge adjacency
             std::vector<uint32_t> wid(in.positions.size());
             {
@@ -1065,7 +1149,10 @@ public:
                 const double w = it.area * (p.unsupportedCutCost * (1.0 - it.support) + p.supportedCutCost * it.support);
                 if (it.pos < 0 || it.neg < 0) {
                     // the bounding volume: outside, except its floor (below the ground datum is inside, the cut there is free)
-                    if (it.plane != 2) toSink[static_cast<size_t>(it.pos < 0 ? it.neg : it.pos)] += w;
+                    // topIsAir: the top of the bounding volume stands marginM above the highest scanned point, so a cell
+                    // reaching it holds no scanned solid: outside outright (else a thin column the votes call inside, a
+                    // lattice mast's, is closed at the margin). The sides are not: the isolation's cut can run along them.
+                    if (it.plane != 2) toSink[static_cast<size_t>(it.pos < 0 ? it.neg : it.pos)] += p.topIsAir && it.plane == 3 ? 1e15 : w;
                 } else mf.add(it.neg, it.pos, w, w);
             }
             for (int c = 0; c < nc; ++c) {
@@ -1285,7 +1372,7 @@ public:
             std::vector<Row> rows(nt);
             const V3 probe[3] = {V3(0.3713, 0.9106, 0.1812).normalized(), V3(-0.6241, 0.5127, 0.5895).normalized(), V3(0.2113, 0.4317, -0.8769).normalized()};
             parallelFor(nt, threads, [&](size_t t) {
-                if (!skinSide[t] || apron[t]) return;
+                if (!skinSide[t] || apron[t] || revOf[t] >= 0) return;
                 const V3& a = in.positions[in.indices[t * 3]]; const V3& b = in.positions[in.indices[t * 3 + 1]]; const V3& c = in.positions[in.indices[t * 3 + 2]];
                 const V3 s[4] = {tc[t], (a + b) * 0.5, (b + c) * 0.5, (c + a) * 0.5};
                 Row& r = rows[t]; r.maxDist = 0; r.inside = false;
@@ -1307,7 +1394,7 @@ public:
             double area = 0, w05 = 0, w15 = 0, sum2 = 0, maxD = 0, exArea = 0, exSum2 = 0;
             std::vector<std::pair<double, double>> dists;
             for (size_t t = 0; t < nt; ++t) {
-                if (!skinSide[t] || apron[t]) continue;
+                if (!skinSide[t] || apron[t] || revOf[t] >= 0) continue;
                 const Row& r = rows[t];
                 for (int k = 0; k < 4; ++k) {
                     const double w = ta[t] * 0.25;
