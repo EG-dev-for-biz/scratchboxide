@@ -446,7 +446,13 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
     lines.insert(lines.end(), strips.begin(), strips.end());
     const std::vector<double> L = luminance(img);
     std::vector<double> s, t;
-    photoLattice(img, L, f, P, s, t);
+    // a texel the photo did not reach is read as the uncovered grey it was before the hole fill (photoLattice and
+    // UNCOVERED_LUMINANCE in facade-lattice.ts): the fill draws no lines
+    if (uncovered) {
+        std::vector<double> Lp = L;
+        for (size_t k = 0; k < Lp.size() && k < uncovered->size(); ++k) if ((*uncovered)[k] && finite(Lp[k])) Lp[k] = 128.0;
+        photoLattice(img, Lp, f, P, s, t);
+    } else photoLattice(img, L, f, P, s, t);
     if (!lines.empty()) {
         std::vector<double> fs, ft;
         for (const Rect& w : lines) { fs.push_back(w[0]); fs.push_back(w[2]); ft.push_back(w[1]); ft.push_back(w[3]); }
