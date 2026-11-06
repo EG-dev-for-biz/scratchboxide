@@ -32,7 +32,8 @@
  *  0b. step blend (when asked, after the caps): each tile's wall moves toward the other's by half the step measured at
  *     its rim, faded out over 1.5 m, within the smaller of the two tiles' stated errors capped at 50 cm.
  *  0c. rim zip (when asked, after the blend): each tile's rim point at a cut moves halfway to the other tile's rim, when
- *     its whole way there is within the smaller of the two tiles' stated errors capped at 50 cm, so passes 2 and 3 join them.
+ *     its whole way there is within the smaller of the two tiles' stated errors capped at 50 cm, in five rounds, so passes 2 and 3
+ *     join them; with it, passes 2 and 3 run again (at most three times) while they still join something.
  *  6. tone feather (when asked, where the extraction gives each leaf's box): on the surfaces crossing every cut two leaves'
  *     boxes share, the two photos' colour is levelled toward each other, half the step each, faded out over 2.5 m, and the
  *     photos written back in their own format; labelled generated (extras.scratchbox.method).
@@ -191,6 +192,8 @@ export interface TileSeamWeldResult {
     capTrim?: TileSeamCapStats;
     stepBlend?: TileSeamBlendStats;
     rimZip?: TileSeamZipStats;
+    /** With the zip: the weld and the T-junction split run again while they still join something (at most three more passes). */
+    reweld?: { passes: number; groupsWelded: number; trianglesDropped: number; tJunctionsClosed: number };
     /** The per-cut scores: as the scan came, after the caps went, after the step blend, at the end; and cut by cut. */
     cutScores?: { raw: TileSeamCutTotals; afterCaps: TileSeamCutTotals; afterBlend?: TileSeamCutTotals; afterZip?: TileSeamCutTotals; final: TileSeamCutTotals; perCutAfterCaps: TileSeamCutScore[]; perCutFinal: TileSeamCutScore[] };
     /** The cuts two leaves' boxes share (when the extraction gives boxes): what the stages after read as the tiles' seams. */
@@ -249,6 +252,7 @@ export function parseTileSeamWeldReport(text: string): Omit<TileSeamWeldResult, 
         ...(raw.capTrim && Number.isFinite(raw.capTrim.trianglesDropped) ? { capTrim: raw.capTrim as TileSeamCapStats } : {}),
         ...(raw.stepBlend && Number.isFinite(raw.stepBlend.positionsMoved) ? { stepBlend: raw.stepBlend as TileSeamBlendStats } : {}),
         ...(raw.rimZip && Number.isFinite(raw.rimZip.positionsMoved) && Array.isArray(raw.rimZip.perCut) ? { rimZip: raw.rimZip as TileSeamZipStats } : {}),
+        ...(raw.reweld && Number.isFinite(raw.reweld.passes) ? { reweld: raw.reweld } : {}),
         ...(raw.cutScores && Number.isFinite(raw.cutScores.final?.rimLengthM) && Array.isArray(raw.cutScores.perCutFinal) ? { cutScores: raw.cutScores } : {}),
         ...(Array.isArray(raw.cuts) ? { cuts: (raw.cuts as TileSeamCut[]).filter(c => Number.isFinite(c?.o) && Array.isArray(c.u) && c.u.length === 3) } : {}),
         ...(raw.tiles && Number.isFinite(raw.tiles.count) ? { tiles: raw.tiles } : {}),

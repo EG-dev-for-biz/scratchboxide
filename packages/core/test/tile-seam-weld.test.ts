@@ -35,7 +35,9 @@
  *  14. the step blend and the per-cut scores: two walls 6 cm apart in depth at their cut meet on one surface there, each
  *      moved half way and not at all 1.5 m from the cut, and the weld then closes them;
  *  15. the rim zip: two rims 8 cm apart at their cut, their vertices not facing each other, meet on one line and are
- *      joined; the move is reported per cut; beyond the tiles' stated error nothing moves.
+ *      joined; the move is reported per cut; beyond the tiles' stated error nothing moves;
+ *  16. the zip's rounds: rim points the other rim has no point for (its edges 5 m long) come onto those edges, which are
+ *      split there.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -605,5 +607,26 @@ describe('tile_seam_weld tone feather: two tiles\' photos levelled toward each o
         const t = await runTileSeamWeld({ inputGlb: tight, outputGlb: path.join(WORK, 'zip_tight_welded.glb'), zip: true, threads: 2, repoRoot: REPO });
         expect(t.rimZip).toMatchObject({ positionsMoved: 0, cutsZipped: 0 });
         expect(cutEdges(path.join(WORK, 'zip_tight_welded.glb')).length).toBeGreaterThan(0);
+    });
+
+    it('zips in rounds: a rim point the other rim has none for comes all the way onto its edge, and the cut is closed', async () => {
+        // tile A: a wall up to y = 4.96 in two 5 m columns; tile B: the wall from y = 5.04 in twenty, every other rim point 6 cm proud
+        const a = quad([0, 0, 0], [10, 0, 0], [0, 4.96, 0], 2, 10), b = quad([0, 5.04, 0], [10, 0, 0], [0, 4.96, 0], 20, 10);
+        for (let k = 0; k < b.positions.length; k += 3) if (near(b.positions[k + 1], 5.04) && Math.round(b.positions[k] * 2) % 2 === 1) b.positions[k + 2] = 0.06;
+        const tiles = [{ leafId: 'a', geometricErrorM: 2, box: [5, 2.5, 0, 5, 0, 0, 0, 2.5, 0, 0, 0, 1] }, { leafId: 'b', geometricErrorM: 2, box: [5, 7.5, 0, 5, 0, 0, 0, 2.5, 0, 0, 0, 1] }];
+        const input = path.join(WORK, 'zip_rounds.glb'), output = path.join(WORK, 'zip_rounds_welded.glb');
+        writeGlb(input, [a, b], [], tiles, { localToEcef: IDENTITY });
+        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, zip: true, threads: 2, repoRoot: REPO });
+        // half the way would leave the proud points 3 cm off the other tile's 5 m edges; the rounds bring them within millimetres
+        const rim = distinct(positions(output)).filter(q => Math.abs(q[1] - 5) < 0.01);
+        expect(rim.length).toBeGreaterThanOrEqual(21);
+        for (const p of rim) expect(Math.abs(p[2])).toBeLessThan(0.004);
+        expect(r.rimZip!.maxMoveM).toBeGreaterThan(0.065);          // 4 cm along the cut's normal and nearly the whole 6 cm of depth
+        expect(r.rimZip!.maxMoveM).toBeLessThan(0.075);
+        expect(r.cutScores!.afterZip!.meanStepM).toBeLessThan(0.004);
+        expect(r.reweld).toBeDefined();
+        // the long edges are split at the other rim's points: no open edge is left along the cut
+        expect(openEdges(triangles(output)).filter(e => e.every(q => Math.abs(q[1] - 5) < 0.01))).toHaveLength(0);
+        expect(r.cutScores!.final.rimLengthM).toBe(0);
     });
 });

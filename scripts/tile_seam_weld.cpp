@@ -258,6 +258,16 @@ int main(int argc, char** argv) {
     TileSeamWeld::compactDropped(scene.mesh, r.keepTriangle, {&scene.triangleMaterial, &triTile});
     scratchbox::tile_seam_weld::TileSeamTJunctionStats tjStats;
     if (tjunctions) tjStats = TileSeamWeld::closeTJunctions(scene.mesh, {&scene.triangleMaterial, &triTile}, cp, &vertexPiece);
+    // with the zip, the weld and the split again while they still join something: where four tiles meet, or a sliver lies
+    // along a cut, the first pass pairs points two by two and leaves the pairs a few millimetres apart
+    size_t reweldPasses = 0, reweldGroups = 0, reweldDropped = 0, reweldSplit = 0;
+    if (zip && anyBox) for (int pass = 0; pass < 3; ++pass) {
+        const auto r2 = TileSeamWeld::weldAndMarkSlivers(scene.mesh, p, &vertexPiece);
+        if (!r2.ok || !r2.stats.groupsWelded) break;
+        TileSeamWeld::compactDropped(scene.mesh, r2.keepTriangle, {&scene.triangleMaterial, &triTile});
+        ++reweldPasses; reweldGroups += r2.stats.groupsWelded; reweldDropped += r2.stats.trianglesDropped;
+        if (tjunctions) reweldSplit += TileSeamWeld::closeTJunctions(scene.mesh, {&scene.triangleMaterial, &triTile}, cp, &vertexPiece).closed;
+    }
     const auto auditFixed = TileSeamWeld::auditSeams(scene.mesh, triTile, mask, {});
     const auto tFixed = std::chrono::steady_clock::now();
     // the adaptive close and the strip fill: tile by tile, up to the pair's stated error, where the surfaces agree
@@ -334,6 +344,8 @@ int main(int argc, char** argv) {
         (blend && anyBox ? ", \"stepBlend\": {\"cuts\": " + std::to_string(blendStats.cuts) + ", \"cutsMatched\": " + std::to_string(blendStats.cutsMatched) + ", \"positionsMoved\": " + std::to_string(blendStats.positionsMoved) +
             ", \"reverted\": " + std::to_string(blendStats.reverted) + ", \"maxMoveM\": " + std::to_string(blendStats.maxMoveM) + "}" : std::string()) +
         (zip && anyBox ? ", \"rimZip\": {" + TileSeamWeld::zipStatsJson(zipStats) + "}" : std::string()) +
+        (zip && anyBox ? ", \"reweld\": {\"passes\": " + std::to_string(reweldPasses) + ", \"groupsWelded\": " + std::to_string(reweldGroups) + ", \"trianglesDropped\": " + std::to_string(reweldDropped) +
+            ", \"tJunctionsClosed\": " + std::to_string(reweldSplit) + "}" : std::string()) +
         (anyBox ? ", \"cutScores\": {\"raw\": {" + TileSeamWeld::cutTotalsJson(cutsRaw) + "}, \"afterCaps\": {" + TileSeamWeld::cutTotalsJson(cutsCapless) + "}" +
             (blend ? ", \"afterBlend\": {" + TileSeamWeld::cutTotalsJson(cutsBlended) + "}" : std::string()) + (zip ? ", \"afterZip\": {" + TileSeamWeld::cutTotalsJson(cutsZipped) + "}" : std::string()) + ", \"final\": {" + TileSeamWeld::cutTotalsJson(cutsFinal) + "}" +
             ", \"perCutAfterCaps\": " + TileSeamWeld::cutScoresJson(cutsCapless) + ", \"perCutFinal\": " + TileSeamWeld::cutScoresJson(cutsFinal) + "}" : std::string()) +
