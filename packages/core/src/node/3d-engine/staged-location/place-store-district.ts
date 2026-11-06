@@ -43,7 +43,7 @@ import { auditDistrict, DISTRICT_AUDIT_VERSION, type AuditLayer, type DistrictAu
 import { districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
 import { chunkOwner, type DistrictChunkPlan } from './pipeline-k/district-chunks';
 import { DISTRICT_SEAMS_VERSION } from './pipeline-k/district-seams';
-import { MODEL_READINGS_DIR, readingFileOf, type ModelReadingReport } from './pipeline-k/model-readings';
+import { MODEL_READINGS_DIR, modelReadingsDir, readingFileOf, type ModelReadingReport } from './pipeline-k/model-readings';
 import { kdLookCode } from './place-store-best';
 import {
     openPlaceStore, placeCodeVersion, placeKey, PLACE_STORE_SCHEMA, pullPlace, syncPlaceObjects,
@@ -330,7 +330,7 @@ export async function syncPlaceAfterObjects(input: {
     if (note?.schema !== PLACE_AUDIT_SCHEMA) return undefined;
     try {
         const store = await openPlaceStore({ key: note.key, ...(input.placeStore ?? {}), ...(input.env ? { env: input.env } : {}) });
-        const cache = input.cache, readings = cache.dir ? { dir: path.join(cache.dir, MODEL_READINGS_DIR), ...runReadings(cache, input.runId) } : undefined;
+        const cache = input.cache, readings = cache.dir ? { dir: modelReadingsDir(cache.dir), ...runReadings(cache, input.runId) } : undefined;
         return await syncPlaceObjects(store, {
             ...(readings && (readings.used.length || readings.written.length) ? { readings: { ...readings, ...(cache.restoreFile ? { restore: (k: string) => cache.restoreFile!(`${MODEL_READINGS_DIR}/${readingFileOf(k)}`) } : {}) } } : {}),
             runId: input.runId, objects: new SceneObjectStore(input.store), objectKeys: input.kept.map(k => k.objectKey),

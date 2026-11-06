@@ -32,6 +32,7 @@ import { inpaintFace } from '../pipeline-e/occluders';
 import type { EnhanceModelClient } from '../texture-enhance';
 import type { RectifyJob, RectifyMessage } from './ortho-rectify-worker';
 import { remeshWorkersEnabled } from '../remesh-worker-pool';
+import { readingKey, type ModelReadingStore } from './model-readings';
 import { continueTail, countOf, finishTail, holesOf, startTailWorker, type ContinueResult } from './rectify-tail';
 import { stagedBuildingPipelineEnv, stagedDistrict } from '../staged-switches';
 
@@ -227,7 +228,7 @@ function runWorkers(jobs: RectifyJob[], signal?: AbortSignal): Promise<RectifyMe
  * The relief orthos of a remesh, straightened and levelled: the facades the lattice rebuild will use (coverage at least
  * its minCoverage) are rectified, the others copied as they are. Cached beside the originals.
  */
-export async function rectifyReliefOrthos(srcDir: string, opts: { params?: OrthoRectifyParams; minCoverage?: number; threads?: number; signal?: AbortSignal; /** The tail on this thread (tests; SCRATCHBOX_REMESH_WORKERS=0 too). */ inlineTail?: boolean; /** The image model for small holes no real source covers (absent: none; the smooth fill takes them). */ inpaint?: { client: EnhanceModelClient; models: string[]; caps?: typeof HOLE_INPAINT } } = {}): Promise<RectifiedOrthos> {
+export async function rectifyReliefOrthos(srcDir: string, opts: { params?: OrthoRectifyParams; minCoverage?: number; threads?: number; signal?: AbortSignal; /** The tail on this thread (tests; SCRATCHBOX_REMESH_WORKERS=0 too). */ inlineTail?: boolean; /** The image model for small holes no real source covers (absent: none; the smooth fill takes them). */ inpaint?: { client: EnhanceModelClient; models: string[]; caps?: typeof HOLE_INPAINT; /** The image model's fills kept between builds (model-readings.ts), by the facade's pixels and its holes: the same holes take the same fill. */ readings?: ModelReadingStore } } = {}): Promise<RectifiedOrthos> {
     const t0 = Date.now();
     const params = opts.params ?? ORTHO_RECTIFY_PARAMS, minCoverage = opts.minCoverage ?? FACADE_LATTICE_PARAMS.minCoverage;
     const caps = opts.inpaint?.caps ?? HOLE_INPAINT;
@@ -316,10 +317,29 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
                 if (inpaintCalls >= caps.maxCalls || !countOf(left)) continue;
                 const small = smallHoles(left, x.width, x.height, caps.maxHoleTexels);
                 if (!countOf(small)) continue;
+                const maxRects = Math.min(caps.maxRects, caps.maxCalls - inpaintCalls);
+                // the image model draws the holes a little differently every time it is asked: its fill is kept by the facade's
+                // pixels and holes, so a later build of the same facade takes the same fill (generated either way)
+                const store = opts.inpaint.readings;
+                const rKey = store ? readingKey('k-hole-inpaint', [HOLE_INPAINT_VERSION, opts.inpaint.models, maxRects, x.width, x.height, x.rgba, small]) : undefined;
+                const kept = rKey ? await store!.get<HoleInpaintRecord>(rKey) : undefined;
+                if (kept && kept.schema === 'scratchbox.k-hole-inpaint/1') {
+                    const at = new Uint32Array(Uint8Array.from(Buffer.from(kept.texels, 'base64')).buffer), rgb = Buffer.from(kept.rgb, 'base64');
+                    for (let j = 0; j < at.length; j++) { const i = at[j]; x.rgba[i * 4] = rgb[j * 3]; x.rgba[i * 4 + 1] = rgb[j * 3 + 1]; x.rgba[i * 4 + 2] = rgb[j * 3 + 2]; x.rgba[i * 4 + 3] = 255; }
+                    inpaintCalls += kept.calls;
+                    fromInpaint.set(id, at.length);
+                    continue;
+                }
                 const t = { width: x.width, height: x.height, rgba: x.rgba, source: new Uint8Array(N) };
-                const r = await inpaintFace(t, small, `k_${key}_${id}`, opts.inpaint.client, opts.inpaint.models, 1, { maxRects: Math.min(caps.maxRects, caps.maxCalls - inpaintCalls), ...(opts.signal ? { signal: opts.signal } : {}) });
-                inpaintCalls += r.records.filter(rec => (rec as { decision?: string }).decision !== 'skipped').length;
+                const r = await inpaintFace(t, small, `k_${key}_${id}`, opts.inpaint.client, opts.inpaint.models, 1, { maxRects, ...(opts.signal ? { signal: opts.signal } : {}) });
+                const calls = r.records.filter(rec => (rec as { decision?: string }).decision !== 'skipped').length;
+                inpaintCalls += calls;
                 fromInpaint.set(id, r.filled);
+                if (rKey) {
+                    const at: number[] = [], rgb: number[] = [];
+                    for (let i = 0; i < N; i++) if (t.source[i]) { at.push(i); rgb.push(x.rgba[i * 4], x.rgba[i * 4 + 1], x.rgba[i * 4 + 2]); }
+                    store!.put(rKey, { schema: 'scratchbox.k-hole-inpaint/1', key: rKey, models: opts.inpaint.models, calls, texels: Buffer.from(Uint32Array.from(at).buffer).toString('base64'), rgb: Buffer.from(rgb).toString('base64'), atMs: Date.now() } satisfies HoleInpaintRecord);
+                }
             }
             const continuedIds = [...cont.continued.keys()], holeIds = cont.holes.map(h => h.id);
             let fromSmooth: Map<number, number>;
@@ -360,6 +380,12 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
 }
 
 /** The holes (1) that are 4-connected regions of at most `max` texels. */
+/** The hole fills' record version in the model readings store. */
+export const HOLE_INPAINT_VERSION = 'k-hole-inpaint/1';
+
+/** One facade's image-model hole fill, kept by its pixels and holes: the texels it filled (uint32 indices) and their colour. */
+export interface HoleInpaintRecord { schema: 'scratchbox.k-hole-inpaint/1'; key: string; models: string[]; calls: number; texels: string; rgb: string; atMs: number }
+
 function smallHoles(holes: Uint8Array, W: number, H: number, max: number): Uint8Array {
     const out = new Uint8Array(holes.length), seen = new Uint8Array(holes.length), stack: number[] = [], comp: number[] = [];
     for (let s = 0; s < holes.length; s++) {
