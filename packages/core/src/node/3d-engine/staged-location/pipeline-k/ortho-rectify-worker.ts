@@ -22,6 +22,7 @@ import { encodePng } from '../png-encode';
 import { featurelessMaskName, occludedMaskName, rectifyOrtho, uncoveredMaskName, type OrthoRectifyParams, type OrthoRectifyReport } from './ortho-rectify';
 import { rectifyOrthoNative } from './native/ortho-rectify-native';
 import { kNative } from './native/native-switch';
+import { rectifyOverlayName, renderRectifyOverlay } from './rectify-overlay';
 
 export interface RectifyJob { srcDir: string; outDir: string; facades: Array<{ facadeId: number; image: string; pixel: number }>; params: OrthoRectifyParams }
 /** A straightened ortho as the main thread uses it: RGBA, and 0/1 masks of where the photo did not reach and of its smear (absent when none). */
@@ -38,12 +39,17 @@ void (async () => { for (const f of job.facades) {
         const occPng = fs.existsSync(occFile) ? decodePng(fs.readFileSync(occFile)) : undefined;
         const occ = occPng && occPng.width === png.width && occPng.height === png.height ? Uint8Array.from({ length: png.width * png.height }, (_, k) => occPng.rgba[k * 4]) : undefined;
         const img = { width: png.width, height: png.height, rgba: new Uint8Array(png.rgba) };
-        const r = native ? await rectifyOrthoNative(img, f.pixel, job.params, occ, { threads: 4 }) : rectifyOrtho(img, f.pixel, job.params, occ);
+        const r = native ? await rectifyOrthoNative(img, f.pixel, job.params, occ, { threads: 4, trace: true }) : rectifyOrtho(img, f.pixel, job.params, occ);
         fs.writeFileSync(path.join(job.outDir, f.image), encodePng(r.image.width, r.image.height, r.image.rgba, 4));
         // where the photo did not reach (its holes are filled in the ortho): the facade rebuild reads coverage from this
         fs.writeFileSync(path.join(job.outDir, uncoveredMaskName(f.image)), encodePng(r.image.width, r.image.height, r.uncovered.map(v => (v ? 255 : 0)), 1));
         if (r.occluded) fs.writeFileSync(path.join(job.outDir, occludedMaskName(f.image)), encodePng(r.image.width, r.image.height, r.occluded, 1));
         if (r.featureless.some(v => v)) fs.writeFileSync(path.join(job.outDir, featurelessMaskName(f.image)), encodePng(r.image.width, r.image.height, r.featureless.map(v => (v ? 255 : 0)), 1));
+        // what the straightening read (diagnostic; nothing reads it): a failed overlay never fails the facade
+        try {
+            const o = renderRectifyOverlay(img, r, occ);
+            fs.writeFileSync(path.join(job.outDir, rectifyOverlayName(f.image)), encodePng(o.width, o.height, o.rgb, 3));
+        } catch (err) { console.warn(`ortho-rectify: overlay for ${f.image} not written: ${(err as Error).message}`); }
         // the pixels as the files hold them: the masks read back as 0/1 (a featureless mask only where there is one)
         const uncovered = Uint8Array.from(r.uncovered, v => (v ? 1 : 0));
         const featureless = r.featureless.some(v => v) ? Uint8Array.from(r.featureless, v => (v ? 1 : 0)) : undefined;
