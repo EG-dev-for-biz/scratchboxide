@@ -218,17 +218,20 @@ Penn 2 says nothing either way: with the same code and the caps kept, two builds
 
 - **Scores** (`measureCuts`, in the report as `cutScores`: raw, after the caps, after the blend, after the zip, final, and cut by cut): each tile's rim at a cut (open border of a surface crossing the cut, within 1 m of its plane), how much of it finds the other tile's rim (nearest in space, running parallel, facing the same way, within the smaller of the two tiles' stated errors capped at 50 cm), the step between the two rims in the cut plane and the gap along the cut's normal.
 - **Step blend** (`blendCutSteps`): each wall moves half the step at its rim, faded out over 1.5 m.
-- **Rim zip** (`zipCutRims`): each rim point moves halfway to the other rim, across it only, when its whole way there is within the pair's tolerance; a move turning a triangle more than 25° is taken back; the report gives the move per cut (`rimZip.perCut`: points, mean and largest move). The weld and the T-junction split then join the rims, telling pieces apart as they were before the blend and the zip (two rims brought onto the same points are otherwise one piece, and the rest of their border is never welded: the first version left more rim open than no zip at all).
+- **Rim zip** (`zipCutRims`): each rim point moves halfway to the other rim, across it only, when its whole way there is within the pair's tolerance; a move turning a triangle more than 25° is taken back (a triangle no wider than 3 cm is left out of that test: the cut left it and the weld drops it); the report gives the move per cut (`rimZip.perCut`: points, mean and largest move). It runs five rounds, each from the rims as the last left them: where one rim has a point the other has none for, only that point can move, and half its way leaves it half as far off. Over all rounds no point ends further from where it started than the pair's tolerance. The weld and the T-junction split then join the rims, telling pieces apart as they were before the blend and the zip (two rims brought onto the same points are otherwise one piece, and the rest of their border is never welded: the first version left more rim open than no zip at all).
 
 ESB scan (198,462 triangles, 839 cuts with a rim, caps removed in every arm):
 
-| | open rim at the cuts | of it matched | mean gap of the matched | audit: open under 3 cm / 3-10 cm |
-|---|---|---|---|---|
-| after the caps, before the weld | 83.6 km | 27.0 km | 2.4 cm | |
-| caps only, final | 38.0 km | 11.0 km | 2.1 cm | 10.8 / 10.4 km |
-| + zip, final | 34.6 km | 9.1 km | 1.8 cm | 12.3 / 8.4 km |
-| + blend and zip, final | 30.8 km | 6.9 km | 1.9 cm | 10.5 / 7.8 km |
+| | open rim at the cuts | of it matched | audit: open under 3 cm / 3-10 cm |
+|---|---|---|---|
+| after the caps, before the weld | 83.6 km | 27.0 km | |
+| caps only, final | 38.0 km | 11.0 km | 10.8 / 10.4 km |
+| + zip, one round (first version) | 34.6 km | 9.1 km | 12.3 / 8.4 km |
+| + zip, five rounds | 26.3 km | 5.2 km | 9.8 / 7.0 km |
+| + blend and zip, five rounds | 26.1 km | 5.0 km | 9.2 / 7.1 km |
 
-The zip moved 15,539 rim points on 306 cuts (largest move 24.7 cm, 603 taken back, 269 beyond the tiles' error); right after it the matched rims stand 4 mm apart (2.4 cm before).
+The zip moved 15,861 rim points on 306 cuts (largest move 48 cm, inside the 50 cm cap; 2,331 moves taken back over the rounds; 269 points beyond the tiles' error); right after it the matched rims stand 1.7 mm apart (2.4 cm before). With the zip in rounds the blend adds almost nothing at the rim.
 
-**What it does not do yet.** A third of the matched rim is still open after the weld, with or without the zip, though it stands within the weld's 3 cm: the weld and the T-junction split leave it, and why is not traced (telling pieces apart by tile as well made it worse: 39.6 km). The 25 km of unmatched rim has no other tile's rim within reach. No clay sheet was made for this step: a 1-3 cm opening does not show at a building's scale, and a finished building's cuts are pipeline K's to draw.
+**Where the open rim goes, stage by stage** (zip arm, matched rim): 26.9 km after the zip, 18.0 km after the vertex weld, 5.2 km after the T-junction split. The two rims are tessellated differently along the cut (one side's edge runs 10 m where the other has points in between), so the vertex weld alone pairs a third of it and the split does most of the rest; more split rounds change nothing.
+
+**What it does not do yet.** Of the 5.2 km of matched rim still open, 4.1 km is at points the two tiles already share, where the edges leaving the point still differ; the rule that leaves them is not traced. 0.7 km stands 3 cm or more from the other tile's edge (out of the split's reach, taken back by the zip or beyond the tiles' error). Telling pieces apart by tile as well was tried and is worse (the split closes fewer). The 21 km of unmatched rim has no other tile's rim within reach. No clay sheet was made for this step: a 1-3 cm opening does not show at a building's scale, and a finished building's cuts are pipeline K's to draw.

@@ -360,6 +360,10 @@ struct TileSeamBlendParams {
     double wallReachM{0.6};
     /** A move turning a triangle by more than this, or inside out, is taken back. */
     double maxTurnDeg{25.0};
+    /** The rim zip's rounds (each halves what is left where only one rim has a point to move). */
+    int zipRounds{5};
+    /** The rim zip's take-back leaves out triangles no wider than this (their facing means nothing; the weld's own tolerance). */
+    double zipSliverM{0.03};
     int threads{0};
 };
 
@@ -2333,7 +2337,7 @@ private:
         return out;
     }
     /** Moves each position by disp, taking back (to nothing) the moves that turn a triangle by more than maxTurnDeg or inside out. */
-    static void applyMoves(geometry::ScratchboxMesh& mesh, const Topology& topo, std::vector<V3>& disp, double maxTurnDeg, size_t& moved, size_t& reverted, double& maxMoveM) {
+    static void applyMoves(geometry::ScratchboxMesh& mesh, const Topology& topo, std::vector<V3>& disp, double maxTurnDeg, size_t& moved, size_t& reverted, double& maxMoveM, double sliverM = 0.0) {
         const size_t G = topo.gpos.size(), F = mesh.indices.size() / 3;
         std::vector<uint32_t> memberStart(G + 1, 0), members(mesh.vertices.size());
         for (uint32_t v = 0; v < mesh.vertices.size(); ++v) memberStart[topo.groupOf[v] + 1]++;
@@ -2351,6 +2355,11 @@ private:
                 const double l0 = n0.norm(), l1 = n1.norm();
                 if (!(l0 > 1e-14)) continue;
                 if (l1 > 1e-14 && n0.dot(n1) >= maxTurnCos * l0 * l1) continue;
+                // a triangle no wider than sliverM is no surface to keep facing its way: the cut left it, and the weld drops it
+                if (sliverM > 0) {
+                    const double longest = std::max({(topo.gpos[g1] - topo.gpos[g0]).norm(), (topo.gpos[g2] - topo.gpos[g1]).norm(), (topo.gpos[g0] - topo.gpos[g2]).norm()});
+                    if (l0 <= sliverM * longest) continue;
+                }
                 for (uint32_t g : {g0, g1, g2}) if (disp[g].norm() > 0) { disp[g] = V3{}; ++rev; }
             }
             reverted += rev;
@@ -2457,7 +2466,8 @@ public:
     /**
      * Rim zip: at every cut, each tile's rim point moves halfway to the point of the other tile's rim it was matched to (in
      * the cut plane and along the cut's normal), so the two rims lie on one line and the vertex weld and the T-junction
-     * split that follow join them. A point moves only when its whole way to the other rim is within the pair's tolerance
+     * split that follow join them. Where one rim has a point the other has none for, that point alone can move, and
+     * half its way leaves it half as far off: so the zip runs zipRounds times, each from the rims as the last left them. A point moves only when its whole way to the other rim is within the pair's tolerance
      * (the smaller of the two tiles' stated errors, capped): a wider opening is left for what it is. Rims are matched only
      * where they run parallel and face the same way, so a thin wall's two faces stay apart. A move turning a triangle by
      * more than maxTurnDeg is taken back. Rim positions only: UVs, materials and topology are untouched.
@@ -2468,39 +2478,68 @@ public:
         const unsigned threads = scan_rectifier::detail::resolveThreads(p.threads);
         const std::vector<SeamCut> cuts = boxCuts(boxes, p.faceMatchM);
         st.cuts = cuts.size();
-        const Topology topo = topology(mesh);
-        const OpenBorder ob = openBorder(mesh, topo);
-        const std::vector<CutRims> rims = matchRims(mesh, triTile, cuts, tileErrorM, p, topo, ob, threads);
-        st.before = scoreCuts(cuts, rims);
-        const size_t G = topo.gpos.size();
-        std::vector<V3> disp(G);
-        std::vector<uint32_t> count(G, 0);
-        for (size_t k = 0; k < cuts.size(); ++k) {
-            const SeamCut& C = cuts[k];
-            const double ea = C.tile[0] < tileErrorM.size() ? tileErrorM[C.tile[0]] : -1.0, eb = C.tile[1] < tileErrorM.size() ? tileErrorM[C.tile[1]] : -1.0;
-            if (!(ea > 0 && eb > 0)) continue;
-            const double tol = std::min(p.capM, std::min(ea, eb));
-            for (int s = 0; s < 2; ++s) for (const RimMatch& m : rims[k].side[s]) {
-                const V3 way = m.step + C.u * m.gap;
-                if (way.norm() > tol) { ++st.beyondError; continue; }
-                disp[m.g] += way * 0.5;
-                count[m.g]++;
+        const size_t V = mesh.vertices.size();
+        std::vector<geometry::Vec3> start(V);
+        for (size_t v = 0; v < V; ++v) start[v] = mesh.vertices[v].position;
+        // the cut that first moved a point (by one of its vertices), for the report
+        std::vector<int32_t> cutOf(V, -1);
+        for (int round = 0; round < std::max(1, p.zipRounds); ++round) {
+            const Topology topo = topology(mesh);
+            const OpenBorder ob = openBorder(mesh, topo);
+            const std::vector<CutRims> rims = matchRims(mesh, triTile, cuts, tileErrorM, p, topo, ob, threads);
+            if (round == 0) st.before = scoreCuts(cuts, rims);
+            const size_t G = topo.gpos.size();
+            std::vector<V3> disp(G);
+            std::vector<uint32_t> count(G, 0);
+            std::vector<double> reach(G, 0.0);
+            size_t beyond = 0;
+            for (size_t k = 0; k < cuts.size(); ++k) {
+                const SeamCut& C = cuts[k];
+                const double ea = C.tile[0] < tileErrorM.size() ? tileErrorM[C.tile[0]] : -1.0, eb = C.tile[1] < tileErrorM.size() ? tileErrorM[C.tile[1]] : -1.0;
+                if (!(ea > 0 && eb > 0)) continue;
+                const double tol = std::min(p.capM, std::min(ea, eb));
+                for (int s = 0; s < 2; ++s) for (const RimMatch& m : rims[k].side[s]) {
+                    const V3 way = m.step + C.u * m.gap;
+                    if (way.norm() > tol) { ++beyond; continue; }
+                    disp[m.g] += way * 0.5;
+                    count[m.g]++;
+                    reach[m.g] = reach[m.g] > 0 ? std::min(reach[m.g], tol) : tol;
+                }
             }
+            if (round == 0) st.beyondError = beyond;
+            // a point on two cuts (a corner) takes the mean of its two moves
+            for (uint32_t g = 0; g < G; ++g) if (count[g] > 1) disp[g] = disp[g] * (1.0 / count[g]);
+            std::vector<uint32_t> firstVertex(G, UINT32_MAX);
+            for (uint32_t v = 0; v < V; ++v) if (firstVertex[topo.groupOf[v]] == UINT32_MAX) firstVertex[topo.groupOf[v]] = v;
+            // over all the rounds no point ends further from where it started than its pair's tolerance
+            for (uint32_t g = 0; g < G; ++g) {
+                if (!count[g]) continue;
+                const auto& a = start[firstVertex[g]];
+                const V3 total = topo.gpos[g] + disp[g] - V3{a.x, a.y, a.z};
+                if (total.norm() > reach[g]) disp[g] = V3{};
+            }
+            size_t moved = 0; double far = 0;
+            applyMoves(mesh, topo, disp, p.maxTurnDeg, moved, st.reverted, far, p.zipSliverM);
+            if (!moved) break;
+            for (size_t k = 0; k < cuts.size(); ++k) for (int s = 0; s < 2; ++s) for (const RimMatch& m : rims[k].side[s])
+                if (disp[m.g].norm() > 1e-6 && cutOf[firstVertex[m.g]] < 0) cutOf[firstVertex[m.g]] = static_cast<int32_t>(k);
         }
-        // a point on two cuts (a corner) takes the mean of its two moves
-        for (uint32_t g = 0; g < G; ++g) if (count[g] > 1) disp[g] = disp[g] * (1.0 / count[g]);
-        applyMoves(mesh, topo, disp, p.maxTurnDeg, st.positionsMoved, st.reverted, st.maxMoveM);
+        std::vector<TileSeamCutMove> moves(cuts.size());
+        std::vector<double> sum(cuts.size(), 0.0);
+        for (size_t v = 0; v < V; ++v) {
+            if (cutOf[v] < 0) continue;
+            const auto& a = start[v]; const auto& b = mesh.vertices[v].position;
+            const double l = std::sqrt(double(a.x - b.x) * (a.x - b.x) + double(a.y - b.y) * (a.y - b.y) + double(a.z - b.z) * (a.z - b.z));
+            if (!(l > 1e-6)) continue;
+            TileSeamCutMove& mv = moves[static_cast<size_t>(cutOf[v])];
+            ++mv.points; sum[static_cast<size_t>(cutOf[v])] += l; mv.maxMoveM = std::max(mv.maxMoveM, l);
+            ++st.positionsMoved; st.maxMoveM = std::max(st.maxMoveM, l);
+        }
         for (size_t k = 0; k < cuts.size(); ++k) {
-            TileSeamCutMove mv;
-            mv.tiles[0] = cuts[k].tile[0]; mv.tiles[1] = cuts[k].tile[1]; mv.u = cuts[k].u; mv.o = cuts[k].o;
-            double sum = 0;
-            for (int s = 0; s < 2; ++s) for (const RimMatch& m : rims[k].side[s]) {
-                const double l = disp[m.g].norm();
-                if (!(l > 1e-6)) continue;
-                ++mv.points; sum += l; mv.maxMoveM = std::max(mv.maxMoveM, l);
-            }
+            TileSeamCutMove& mv = moves[k];
             if (!mv.points) continue;
-            mv.meanMoveM = sum / static_cast<double>(mv.points);
+            mv.tiles[0] = cuts[k].tile[0]; mv.tiles[1] = cuts[k].tile[1]; mv.u = cuts[k].u; mv.o = cuts[k].o;
+            mv.meanMoveM = sum[k] / static_cast<double>(mv.points);
             st.perCut.push_back(mv);
         }
         st.cutsZipped = st.perCut.size();
