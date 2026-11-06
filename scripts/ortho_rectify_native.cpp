@@ -30,6 +30,13 @@
  *   uint8    featureless[width * height]       0 / 1
  *   uint8    occluded[width * height]          only when hasOccluded (carried through a kept warp)
  *
+ * Trace (little-endian; only with --trace <path>: what the straightening read, for its overlay):
+ *   char[4]  "SBTR"          uint32 version (1)
+ *   uint32   lineCount        uint32 rejectedCount     uint32 hasAfter
+ *   per line:     uint8 axis ('v' / 'h')  int32 at  int32 segments  uint32 n  float64 along[n] across[n] weight[n] straight[n]
+ *   per rejected: uint8 axis  int32 at  uint8 why ('b' border, 'e' no edge, 's' no segment)
+ *   when hasAfter, per line: float64 across[n]  (the lines measured again on the warped ortho)
+ *
  * The report (OrthoRectifyReport) is printed to stdout as one JSON object; a non-finite number is written as null. Errors go
  * to stderr with exit code 1 (bad arguments or request) or 2 (I/O).
  */
@@ -107,12 +114,32 @@ std::string reportJson(const orr::Report& r) {
     return j;
 }
 
+bool writeTrace(const std::string& path, const orr::Result& r) {
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return false;
+    auto u8 = [&](uint8_t v) { f.write(reinterpret_cast<const char*>(&v), 1); };
+    auto u32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
+    auto i32 = [&](int32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
+    auto f64s = [&](const std::vector<double>& v) { f.write(reinterpret_cast<const char*>(v.data()), static_cast<std::streamsize>(v.size() * sizeof(double))); };
+    f.write("SBTR", 4);
+    u32(1); u32(static_cast<uint32_t>(r.lines.size())); u32(static_cast<uint32_t>(r.rejected.size())); u32(r.hasAfter ? 1u : 0u);
+    for (const auto& l : r.lines) {
+        u8(static_cast<uint8_t>(l.axis)); i32(l.at); i32(l.segments); u32(static_cast<uint32_t>(l.along.size()));
+        f64s(l.along); f64s(l.across); f64s(l.weight); f64s(l.straight);
+    }
+    for (const auto& p : r.rejected) { u8(static_cast<uint8_t>(p.axis)); i32(p.at); u8(static_cast<uint8_t>(p.why)); }
+    if (r.hasAfter) for (const auto& l : r.after) f64s(l.across);
+    return static_cast<bool>(f);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 3) { std::cerr << "usage: ortho_rectify_native <request.bin> <result.bin> [--threads N]\n"; return 1; }
+    if (argc < 3) { std::cerr << "usage: ortho_rectify_native <request.bin> <result.bin> [--threads N] [--trace trace.bin]\n"; return 1; }
+    std::string tracePath;
     for (int a = 3; a < argc; a++) {
         if (!std::strcmp(argv[a], "--threads") && a + 1 < argc) orr::threadCount() = static_cast<unsigned>(std::max(0, std::atoi(argv[++a])));
+        else if (!std::strcmp(argv[a], "--trace") && a + 1 < argc) tracePath = argv[++a];
         else { std::cerr << "unknown argument " << argv[a] << "\n"; return 1; }
     }
     std::vector<uint8_t> req;
@@ -149,6 +176,7 @@ int main(int argc, char** argv) {
     if (r.hasOccluded) f.write(reinterpret_cast<const char*>(r.occluded.data()), static_cast<std::streamsize>(r.occluded.size()));
     if (!f) { std::cerr << "cannot write " << argv[2] << "\n"; return 2; }
     f.close();
+    if (!tracePath.empty() && !writeTrace(tracePath, r)) { std::cerr << "cannot write " << tracePath << "\n"; return 2; }
     std::cout << reportJson(r.report) << "\n";
     return 0;
 }

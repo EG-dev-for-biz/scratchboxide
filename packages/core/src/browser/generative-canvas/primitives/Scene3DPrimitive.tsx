@@ -163,6 +163,7 @@ import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
 import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { WeatherControl } from './scene3d/WeatherPanel';
 import { ScenePathTraceButton, ScenePathTraceLayer } from './scene3d/ScenePathTrace';
+import { QuickBeautifyButton, type QuickBeautifyView } from './scene3d/QuickBeautifyButton';
 import { SplatEditControl } from './scene3d/SplatEditPanel';
 import { createSplatEditTool, DEFAULT_SPLAT_BRUSH, type SplatBrush, type SplatEditTool } from './scene3d/splatEditTool';
 import { PRIMARY_SPLAT_TARGET, type SplatEditStroke } from '../../../common/spatial/splat-edits';
@@ -4311,6 +4312,35 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         console.info(`[Asset Recovery] rebuilding ${lost.length} lost file(s) from the scene's place on its own`);
         recoveryRebuild();
     }, [recoveryRebuild, assetRecovery]);
+    // Quick AI Beautify (tool rail): the current frame as framed, the scene's name and place, and the camera, read at click time
+    const [beautifyError, setBeautifyError] = React.useState<string | null>(null);
+    const readQuickBeautifyView = React.useCallback((): QuickBeautifyView => {
+        const data = sceneDataRef.current;
+        const anchor = data.geoAnchor;
+        const place = anchor && anchor.active !== false && Number.isFinite(anchor.lat) && Number.isFinite(anchor.lng)
+            ? { lat: anchor.lat, lng: anchor.lng, ...(anchor.landmarkName ? { name: anchor.landmarkName } : {}) }
+            : undefined;
+        const camera = threeCameraRef.current;
+        let camFacts: Pick<QuickBeautifyView, 'headingDeg' | 'pitchDeg' | 'fovDeg' | 'subjectDistanceM'> = {};
+        if (camera) {
+            const dir = new THREE.Vector3();
+            camera.getWorldDirection(dir);
+            // the same heading convention as the roadmap HUD: -Z is north, +X east
+            camFacts = {
+                headingDeg: (Math.atan2(dir.x, -dir.z) * 180 / Math.PI + 360) % 360,
+                pitchDeg: Math.asin(Math.max(-1, Math.min(1, dir.y))) * 180 / Math.PI,
+                fovDeg: camera.fov,
+                subjectDistanceM: camera.position.distanceTo(cameraTargetRef.current)
+            };
+        }
+        return {
+            frameDataUrl: captureFrame(),
+            sceneName: activeArtifact?.title || anchor?.landmarkName || 'scene',
+            ...(place ? { place } : {}),
+            ...camFacts
+        };
+    }, [captureFrame, activeArtifact?.title, sceneDataRef]);
+
     const viewportNotices = React.useMemo(() => resolveViewportNotice({
         webglError,
         generatorError: currentGeneratorError,
@@ -4330,8 +4360,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             onCancel: () => { void assetRecoveryClient.cancel(); },
             reasons: recoveryReasons(assetRecovery.job),
             ...(recoveryRebuild ? { onRebuild: recoveryRebuild } : {})
-        } : undefined
-    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects, opticsIssues, assetRecovery, recoveryNoticeJobId, recoveryRebuild]);
+        } : undefined,
+        beautifyError: beautifyError ? { message: beautifyError, onDismiss: () => setBeautifyError(null) } : undefined
+    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects, opticsIssues, assetRecovery, recoveryNoticeJobId, recoveryRebuild, beautifyError]);
 
     const handleExportGlb = React.useCallback(async () => {
         if (!threeSceneRef.current) return;
@@ -4486,6 +4517,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     pickError={focusPickError}
                     readFocusDistance={readFocusDistance}
                 />
+
+                {/* AI Beautify: the current view as a photograph, downloaded as a PNG (QuickBeautifyButton.tsx) */}
+                <QuickBeautifyButton readView={readQuickBeautifyView} onError={setBeautifyError} />
 
                 {/* 2. Translate / Move (W) */}
                 <button

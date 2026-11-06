@@ -111,6 +111,9 @@ export interface TracedLine {
     segments: number;
 }
 
+/** A line peak the trace dropped, and why: too near the ortho's border for its search window, no edge of its polarity, or no segment long and supported enough. */
+export interface RejectedPeak { axis: 'v' | 'h'; at: number; why: 'border' | 'no-edge' | 'no-segment' }
+
 export interface OrthoRectifyReport {
     width: number; height: number; pixelM: number;
     lines: { vertical: number; horizontal: number; segments: number; samples: number };
@@ -134,6 +137,12 @@ export interface OrthoRectifyResult {
     featureless: Uint8Array;
     /** The occlusion mask given, in the straightened ortho's pixels (0-255, the share of the capture's rays blocked). */
     occluded?: Uint8Array;
+    /**
+     * What the straightening read, for its overlay (rectify-overlay.ts): the lines traced on the input, the peaks dropped,
+     * and the lines measured again on the warped ortho (when a warp was solved). Always set here; the native kernel sets it
+     * when asked (`trace: true`).
+     */
+    trace?: { lines: TracedLine[]; rejected: RejectedPeak[]; after?: TracedLine[] };
 }
 
 const UNCOVERED = 128;
@@ -196,7 +205,7 @@ function weightedMedian(v: number[], w: number[]): number {
  * Traces the lines of one axis. For 'v' lines the gradient across is gx and samples run down the rows; for 'h' lines the
  * same with the image transposed. `g` is the signed gradient across the line, indexed (along, across) through `at`.
  */
-function traceAxis(axis: 'v' | 'h', g: Float32Array, W: number, H: number, pixelM: number, P: OrthoRectifyParams): TracedLine[] {
+function traceAxis(axis: 'v' | 'h', g: Float32Array, W: number, H: number, pixelM: number, P: OrthoRectifyParams, rejected?: RejectedPeak[]): TracedLine[] {
     const nAcross = axis === 'v' ? W : H, nAlong = axis === 'v' ? H : W;
     const at = (along: number, across: number) => (axis === 'v' ? along * W + across : across * W + along);
     const profile = new Float64Array(nAcross);
@@ -206,7 +215,7 @@ function traceAxis(axis: 'v' | 'h', g: Float32Array, W: number, H: number, pixel
     const nS = Math.floor(nAlong / S);
     const lines: TracedLine[] = [];
     for (const c0 of profilePeaks(profile, P.peakK, sep)) {
-        if (c0 - R < 1 || c0 + R > nAcross - 2) continue;
+        if (c0 - R < 1 || c0 + R > nAcross - 2) { rejected?.push({ axis, at: c0, why: 'border' }); continue; }
         // the line's polarity: the sign of its summed signed gradient
         let signed = 0;
         for (let a = 0; a < nAlong; a++) signed += g[at(a, c0)];
@@ -226,7 +235,7 @@ function traceAxis(axis: 'v' | 'h', g: Float32Array, W: number, H: number, pixel
             best[s] = m;
         }
         const norm = medianOf(Array.from(best).filter(v => v > 0));
-        if (!(norm > 0)) continue;
+        if (!(norm > 0)) { rejected?.push({ axis, at: c0, why: 'no-edge' }); continue; }
         // Viterbi: cost = -reward / norm + bendCost * |d - d'|
         const cost = new Float64Array(nS * nD), back = new Int16Array(nS * nD);
         for (let d = 0; d < nD; d++) cost[d] = -e[d] / norm;
@@ -271,16 +280,17 @@ function traceAxis(axis: 'v' | 'h', g: Float32Array, W: number, H: number, pixel
             }
             s = end + 1;
         }
-        if (segs) lines.push({ axis, at: c0, along, across, weight: weight.map((w, k) => (Number.isFinite(straight[k]) ? w : 0)), straight, segments: segs });
+        if (!segs) rejected?.push({ axis, at: c0, why: 'no-segment' });
+        else lines.push({ axis, at: c0, along, across, weight: weight.map((w, k) => (Number.isFinite(straight[k]) ? w : 0)), straight, segments: segs });
     }
     return lines;
 }
 
 /** The lines of an ortho, traced. */
-export function traceLines(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS): TracedLine[] {
+export function traceLines(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS, rejected?: RejectedPeak[]): TracedLine[] {
     const { valid, L } = planes(img);
     const { gx, gy } = gradients(L, valid, img.width, img.height);
-    return [...(P.traceVertical ? traceAxis('v', gx, img.width, img.height, pixelM, P) : []), ...(P.traceHorizontal ? traceAxis('h', gy, img.width, img.height, pixelM, P) : [])];
+    return [...(P.traceVertical ? traceAxis('v', gx, img.width, img.height, pixelM, P, rejected) : []), ...(P.traceHorizontal ? traceAxis('h', gy, img.width, img.height, pixelM, P, rejected) : [])];
 }
 
 /** Weighted mean distance of traced samples from their straight positions (px). */
@@ -833,7 +843,9 @@ export function levelSmears(img: Rgba, periodPx: number, pixelM: number, P: Orth
 export function rectifyOrtho(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS, occluded?: Uint8Array): OrthoRectifyResult {
     const t0 = Date.now();
     const W = img.width, H = img.height;
-    const lines = traceLines(img, pixelM, P);
+    const rejected: RejectedPeak[] = [];
+    const lines = traceLines(img, pixelM, P, rejected);
+    let linesAfter: TracedLine[] | undefined;
     const before = straightness(lines);
     const period = horizontalPeriod(img, pixelM, P);
     const report: OrthoRectifyReport = {
@@ -854,7 +866,8 @@ export function rectifyOrtho(img: Rgba, pixelM: number, P: OrthoRectifyParams = 
         const scale = foldScale(warp, W, H, P.minJacobian);
         const warped = applyWarp(img, warp, scale);
         // the lines measured again on the warped ortho, from their straight positions
-        const after = straightness(retrace(warped, lines, pixelM, P));
+        linesAfter = retrace(warped, lines, pixelM, P);
+        const after = straightness(linesAfter);
         const gain = before > 0 ? 1 - after / before : 0;
         let maxShift = 0, sumShift = 0;
         for (let v = 0; v < warp.sx.length; v++) {
@@ -892,7 +905,7 @@ export function rectifyOrtho(img: Rgba, pixelM: number, P: OrthoRectifyParams = 
     image = holes.image;
     report.holes = holes.fill;
     report.ms = Date.now() - t0;
-    return { image, report, uncovered, featureless: left, ...(occluded ? { occluded } : {}) };
+    return { image, report, uncovered, featureless: left, ...(occluded ? { occluded } : {}), trace: { lines, rejected, ...(linesAfter ? { after: linesAfter } : {}) } };
 }
 
 /** The given lines traced again on another image, each sample searched about its straight position (for the after measure). */
