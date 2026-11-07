@@ -3,7 +3,8 @@
  *
  * Standalone Headless Mesh Reshaping Pipeline CLI (C++20).
  * Reshapes a given binary glTF 2.0 mesh (--input, required) with an explicit list of operations whose positions
- * and magnitudes are fractions of the mesh's measured bounds: deformers, FFD lattices, sculpt strokes, subdivision.
+ * and magnitudes are fractions of the mesh's measured bounds: deformers, FFD lattices, sculpt strokes, Kelvinlet
+ * loads, subdivision.
  ********************************************************************************/
 
 #include "scratchbox_engine.hpp"
@@ -40,6 +41,7 @@ using namespace scratchbox::io;
 //   center [u, v, w]     fractions of the box along X, Y, Z
 //   radius, strength     fractions of the box diagonal (strength is a 0..1 blend for the smooth/flatten brushes)
 //   latticeOffsets       offsets as fractions of the box size per axis
+//   displacement         kelvinlet grab, as fractions of the box diagonal
 // Taper and twist act about the box's centre line along `axis`; bend and shear keep the box's min end fixed.
 
 struct UsageError : std::runtime_error {
@@ -201,6 +203,54 @@ static void applyOperation(ScratchboxMesh& mesh, const GlbJsonValue& op) {
             lattice.offsetControlPoint(i, j, k, Vec3(o.x * size.x, o.y * size.y, o.z * size.z));
         }
         lattice.deform(mesh);
+    } else if (type == "kelvinlet") {
+        // A regularised point load (scratchbox_kelvinlet.hpp): any of a grab, a twist, a uniform scale and a pinch,
+        // superposed at one load point.
+        const Vec3 c = requireVec3(op, "center", type);
+        const float radius = requireNumber(op, "radius", type);
+        requirePositive(radius, "kelvinlet radius");
+        kelvinlet::Load load;
+        load.center = Vec3(b.min.x + c.x * size.x, b.min.y + c.y * size.y, b.min.z + c.z * size.z);
+        bool any = false;
+        if (op.has("displacement")) {
+            load.displacement = requireVec3(op, "displacement", type) * diag;
+            any = true;
+        }
+        try {
+            if (op.has("twistDeg")) {
+                const Vec3 axis = requireVec3(op, "twistAxis", type);
+                load.gradient = load.gradient + kelvinlet::Load::twist(load.center, axis, requireNumber(op, "twistDeg", type) * (PI / 180.0f)).gradient;
+                any = true;
+            }
+            if (op.has("scaleFactor")) {
+                const float factor = requireNumber(op, "scaleFactor", type);
+                requirePositive(factor, "kelvinlet scaleFactor");
+                load.gradient = load.gradient + kelvinlet::Load::scale(load.center, factor).gradient;
+                any = true;
+            }
+            if (op.has("pinchStrength")) {
+                const Vec3 dir = requireVec3(op, "pinchDirection", type);
+                Vec3 secondary;
+                const bool planar = op.has("pinchSecondaryDirection");
+                if (planar) secondary = requireVec3(op, "pinchSecondaryDirection", type);
+                load.gradient = load.gradient + kelvinlet::Load::pinch(load.center, dir, requireNumber(op, "pinchStrength", type), planar ? &secondary : nullptr).gradient;
+                any = true;
+            }
+            if (!any) throw UsageError("kelvinlet needs at least one load: displacement, twistDeg (with twistAxis), scaleFactor or pinchStrength (with pinchDirection)");
+            kelvinlet::Options options;
+            options.epsilon = radius * diag;
+            options.poissonRatio = optionalNumber(op, "poissonRatio", 0.5f, type);
+            const float scales = optionalNumber(op, "falloffScales", 1.0f, type);
+            if (scales != std::floor(scales)) throw UsageError("kelvinlet falloffScales must be 1, 2 or 3");
+            options.falloffScales = static_cast<int>(scales);
+            options.falloffRatio = optionalNumber(op, "falloffRatio", 1.5f, type);
+            const float steps = optionalNumber(op, "steps", 0.0f, type);
+            if (steps < 0 || steps > 4096 || steps != std::floor(steps)) throw UsageError("kelvinlet steps must be a whole number 1..4096 (0 or absent chooses)");
+            options.steps = static_cast<int>(steps);
+            Deformer::kelvinlet(mesh, load, options);
+        } catch (const std::invalid_argument& e) {
+            throw UsageError(e.what());
+        }
     } else if (type == "subdivide") {
         const float iterations = requireNumber(op, "subdivideIterations", type);
         if (iterations < 1 || iterations > 3 || iterations != std::floor(iterations)) throw UsageError("subdivideIterations must be 1, 2 or 3");
@@ -213,7 +263,7 @@ static void applyOperation(ScratchboxMesh& mesh, const GlbJsonValue& op) {
         requirePositive(cycles, "weatheringScale (noise cycles across the mesh)");
         mesh.applyProceduralWeathering(cycles / diag, amplitude);
     } else {
-        throw UsageError("unknown operation type \"" + type + "\" (taper, twist, bend, shear, bulge, sculpt, lattice, subdivide, repair, weathering)");
+        throw UsageError("unknown operation type \"" + type + "\" (taper, twist, bend, shear, bulge, sculpt, lattice, kelvinlet, subdivide, repair, weathering)");
     }
     mesh.recomputeBounds();
 }
