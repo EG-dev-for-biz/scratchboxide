@@ -1,6 +1,6 @@
 # Pipeline K glass: the facade reader as the primary source, benchmarked on five buildings
 
-**Date:** 2026-11-06/07 · **Status:** Verified: ten uncached builds (main 70edef82 vs `feat/k-glass-openings` 79356a68), the numbers below from each build's own records · **Branch:** `feat/k-glass-openings` (#140 + #148 rebased onto main plus three commits: the reader as the primary glass source 6af20f5b, the pane wall guard 8588b51d, no set metalness without a read 79356a68)
+**Date:** 2026-11-06/07 · **Status:** Verified: ten uncached builds (main 70edef82 vs `feat/k-glass-openings` 79356a68), then MAIN's five fixes at 169f2043 with Seagram and Lever House built twice more with the model answers kept, and the Flatiron added · **Branch:** `feat/k-glass-openings` (#140 + #148 rebased onto main plus: the reader as the primary glass source 6af20f5b, the pane wall guard 8588b51d, no set metalness without a read 79356a68, the reader's windows voting as strips in the wall grammar and the windows' source label 14506bb2, the benchmark's kept model answers 14506bb2 and 4ef7eaf2, the twin reader keyed by the straightened photo 169f2043)
 
 ## Ask (MAIN, 2026-11-06, the user's first priority "Glass assignment")
 
@@ -74,3 +74,47 @@ and Seagram's untextured is up half a point (3.21 vs 2.67).
 - Benchmark: `/Volumes/3DTESTING/scratchbox-ide/benchmarks/2026-11-06-glass/` (`main/`, `feat/` at 79356a68,
   `superseded/feat-6af20f5b`, `superseded/feat-8588b51d`, `numbers.json`, `closeups/`, `glass-sheet.jpg`).
 - Sheet: `glass-sheet.jpg` there and in the side-session notes folder as `k-glass-benchmark-sheet.jpg`.
+
+## Round two (MAIN's five points, 2026-11-07, the user's go-ahead "Yes, send fixes")
+
+1. **Seagram flat → the reader's windows vote as strips** (14506bb2). The wall grammar's column vote reads bays from
+   full-height strips, which the fit gives and the reader does not; the Seagram's shaft read no bay and was built flat.
+   Now a plane the reader drew is voted on its windows plus the strips they make (`wall-grammar.ts` `voteRects`,
+   `window-strips.ts`), and a wall whose columns still read no bay recesses its window strips (TS and native alike).
+   Facade 6 after: 17 strips added to the vote; the column vote still reads no bay there (the bronze piers are as dark
+   as the glass, so the luminance split cannot tell them apart), but the fallback builds the structure: 17 bays, piers
+   proud (0.10 m, generated), 40,060 triangles against 27,784 before; cells 7,702 (main's 55,442 came from the fit's
+   sub-pane rects, which the reader's clean grid does not produce, so that part of the acceptance is not met by this
+   route). The close-up high on the shaft shows a bronze curtain wall with its mullions proud and the window strips
+   recessed between them, not a blank wall; it is glossier than real bronze (the sets' roughness 0.24–0.32).
+2. **Repeatability** (14506bb2, 4ef7eaf2, 169f2043). The reader and the ownership vote were at temperature 0 and kept
+   their answers in the model readings store already, but the benchmark gave every build its own store, so nothing was
+   reused run to run; the runner now keeps each side's answers under `<out>/model_readings/<side>`
+   (`SCRATCHBOX_MODEL_READINGS_DIR`; `--fresh-readings` clears them once per run, `--no-readings` the old way). With
+   the store kept, the remesh-stage reads reuse at once (the orthos are byte-identical build to build), but the
+   twin-stage reads still missed: 127 of the twin's 210 images differ between two builds of the same inputs by 0.4 to 4
+   levels (the texture stage's drift; the harmonise's sample and patch counts differ too), and a pixel hash cannot
+   tolerate that. The twin reader now keys a facade's answers by its straightened photo and masks and its own version
+   (`readPlanes` `planeKey`); planes photographed from the scan (roofs, terraces) keep their pixels' key.
+   - Store cleared, twice (Lever House, 14506bb2): 9 planes / 402 windows, then 7 / 135; same geometry both times
+     (holes 2.73%, untextured 2.60%). The variance is the model's.
+   - Store kept, old twin keys (Lever House run C): 153 answers kept, 349 windows: the remesh read repeated, the twin
+     reads did not.
+   - Store kept, new keys (169f2043, runs D then E): **Lever House** 7 planes / 349 windows both runs, twin read 45
+     planes / 9 replaced both runs, 259 kept and 11 missed in E; **Seagram** 8 / 1,752 both runs, twin 34 / 7 both,
+     105 kept, 5 missed, 0 written in E. Acceptance met (0% difference).
+   - Open: the texture stage's drift itself (the same inputs give twins that differ by a few levels on 127 of 210
+     images); the ownership and remesh stage cache keys also differ between runs of the same inputs while their
+     geometry does not. Both are for the determinism lane, not this branch.
+3. **Label** (14506bb2): `sbFacadeLattice.windows.source` now reads e.g. "facade-reader/14: 114 windows read from the
+   photo (photo-inferred); window-fit/8: 6 kept outside the zones it drew" (the Flatiron's facade 2); a plane the
+   reader did not draw keeps "window-fit/8".
+4. **Flatiron** (14506bb2 vs main): glass 8.26 → 11.15%, panes on stone 85 → 6, holes 0.68 → 0.79, untextured 4.05 →
+   4.11; reader 5 of 5 planes, 411 windows. Facade 2: main's 110 uneven fit boxes with a block of strips → the branch's
+   120, one per window on the whole 6 x 13 grid, the two shaded outer columns included (the column extension), plus the
+   arcade and base.
+5. **Re-runs and the sheet.** Seagram and Lever House twice each with the store kept (runs D and E above), the Flatiron
+   once per side; `numbers.json` and `glass-sheet.jpg` updated (Seagram's close-up after the fix; the Flatiron row).
+   The ESB, 30 Rock and Penn 2 rows are still their 79356a68 builds (before the bay fallback and the label). Model
+   calls this round: about $3 (12 branch builds, most of them answered from the store).
+
