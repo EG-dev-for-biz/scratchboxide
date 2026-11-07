@@ -37,6 +37,7 @@ import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor, type ParsedGl
 import { decodePng } from '../../texture-processing';
 import { cutScanToLattice, LATTICE_STITCH_PARAMS, stitchLattice, watertightLatticeMesh, type CutReport, type StitchReport } from './pipeline-k/lattice-stitch';
 import { fittedGeneratedUvs, fittedPaneUvs, fittedWindowRects, fittedWindowUvs, WINDOW_FIT_VERSION, windowSourceOf, type WindowFitFile, type WindowRect } from './window-fit';
+import { arrayExtras } from './pipeline-k/window-array';
 import { trustedReveal, type RevealDepthFile } from './reveal-depth';
 import { grammarBays, type WallGrammarFile } from './wall-grammar';
 import { WINDOW_STRIPS, windowBays, windowStrips } from './window-strips';
@@ -278,6 +279,8 @@ export interface FacadeLatticeResult {
     fittedPanes?: number[];
     /** Of the fitted windows, those continued into parts the photo never reached (window-fit.ts completeLattice), u0 v0 u1 v1 each: generated. */
     generatedWindows?: number[];
+    /** The facade's window array (pipeline-k/window-array.ts): its lattice, what was moved, replaced and added, for the extras. */
+    windowArray?: Record<string, unknown>;
     positions: Float32Array; normals: Float32Array; uv: Float32Array; indices: Uint32Array;
 }
 
@@ -996,7 +999,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         }
         const indices = acc(view(new Uint8Array(r.indices.buffer, r.indices.byteOffset, r.indices.byteLength), 34963), r.indices.length, 'SCALAR', 5125);
         json.meshes.push({ name: `facade_lattice_${f.facadeId}`, primitives: [{ attributes, indices, material, mode: 4 }] });
-        json.nodes.push({ name: `FacadeLattice_${f.facadeId}`, mesh: json.meshes.length - 1, extras: { sbFacadeLattice: { version: FACADE_LATTICE_VERSION, facadeId: f.facadeId, provenance: { lines: 'photo-inferred', depth: r.photoRecessCells ? `measured (median per cell, averaged along the row's repeats); ${r.photoRecessCells} window cells recessed as the straightened photo shows them (photo-inferred, ${r.recessFrom ?? "the photometric relief's contrast rule"})` : 'measured (median per cell, averaged along the row\'s repeats)', texture: f.textureFill || r.repeatTexture ? { photo: 'tile photo', ...(f.textureFill ? { holes: f.textureFill } : {}), ...(r.repeatTexture ? { repeats: r.repeatTexture } : {}) } : 'tile photo' }, cells: r.cells, measuredShare: r.measuredShare, sLines: r.s.length, tLines: r.t.length, ...(f.outward ? { outward: f.outward } : {}), ...(r.windows ? { windowCells: windowCellsExtras(r) } : {}), ...(r.fittedWindows ? { windows: { uv: r.fittedWindows, ...(r.fittedPanes ? { panes: r.fittedPanes } : {}), label: 'photo-inferred', source: r.windowSource ?? WINDOW_FIT_VERSION, ...(r.generatedWindows ? { generated: { uv: r.generatedWindows, label: 'generated', source: "the window grid continued into parts the photo never reached (its texture filled from the facade's own repeats)" } } : {}) } } : {}), ...(r.structure ? { structure: structureExtras(r) } : {}) } } });
+        json.nodes.push({ name: `FacadeLattice_${f.facadeId}`, mesh: json.meshes.length - 1, extras: { sbFacadeLattice: { version: FACADE_LATTICE_VERSION, facadeId: f.facadeId, provenance: { lines: 'photo-inferred', depth: r.photoRecessCells ? `measured (median per cell, averaged along the row's repeats); ${r.photoRecessCells} window cells recessed as the straightened photo shows them (photo-inferred, ${r.recessFrom ?? "the photometric relief's contrast rule"})` : 'measured (median per cell, averaged along the row\'s repeats)', texture: f.textureFill || r.repeatTexture ? { photo: 'tile photo', ...(f.textureFill ? { holes: f.textureFill } : {}), ...(r.repeatTexture ? { repeats: r.repeatTexture } : {}) } : 'tile photo' }, cells: r.cells, measuredShare: r.measuredShare, sLines: r.s.length, tLines: r.t.length, ...(f.outward ? { outward: f.outward } : {}), ...(r.windows ? { windowCells: windowCellsExtras(r) } : {}), ...(r.fittedWindows ? { windows: { uv: r.fittedWindows, ...(r.fittedPanes ? { panes: r.fittedPanes } : {}), label: 'photo-inferred', source: r.windowSource ?? WINDOW_FIT_VERSION, ...(r.generatedWindows ? { generated: { uv: r.generatedWindows, label: 'generated', source: "the window grid continued into parts the photo never reached (its texture filled from the facade's own repeats), or added at an empty site of the facade's window array the photo supports (window-array.ts)" } } : {}), ...(r.windowArray ? { array: r.windowArray } : {}) } } : {}), ...(r.structure ? { structure: structureExtras(r) } : {}) } } });
         scene?.nodes?.push(json.nodes.length - 1);
     }
     bin.align4();
@@ -1069,7 +1072,7 @@ export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Ui
     jobs.forEach(({ f, sheet, depth }, i) => {
         const { r, tex, width, height } = latticed[i];
         const uvOf = (rs: WindowRect[]) => (rs.length ? rs.flatMap(([x0, y0, x1, y1]) => [x0 / width, y0 / height, x1 / width, y1 / height]) : undefined);
-        if (r) { const w = sheet ? uvOf(sheet.windows) : fit ? fittedWindowUvs(fit, f.facadeId) : undefined, pw = sheet ? uvOf(sheet.panes) : w && fit ? fittedPaneUvs(fit, f.facadeId) : undefined, gw = !sheet && w && fit ? fittedGeneratedUvs(fit, f.facadeId) : undefined; done.push({ f, r: { ...r, ...(w ? { fittedWindows: w } : {}), ...(w && fit && !sheet ? { windowSource: windowSourceOf(fit, f.facadeId) } : {}), ...(pw ? { fittedPanes: pw } : {}), ...(gw ? { generatedWindows: gw } : {}), ...(depth && r.photoRecessCells ? { recessFrom: `${depth.depthM} m read from Street View's window reveals, ${depth.reason}` } : {}) }, png: tex() }); }
+        if (r) { const w = sheet ? uvOf(sheet.windows) : fit ? fittedWindowUvs(fit, f.facadeId) : undefined, pw = sheet ? uvOf(sheet.panes) : w && fit ? fittedPaneUvs(fit, f.facadeId) : undefined, gw = !sheet && w && fit ? fittedGeneratedUvs(fit, f.facadeId) : undefined, ax = !sheet && w && fit ? arrayExtras(fit, f.facadeId) : undefined; done.push({ f, r: { ...r, ...(w ? { fittedWindows: w } : {}), ...(w && fit && !sheet ? { windowSource: windowSourceOf(fit, f.facadeId) } : {}), ...(pw ? { fittedPanes: pw } : {}), ...(gw ? { generatedWindows: gw } : {}), ...(ax ? { windowArray: ax } : {}), ...(depth && r.photoRecessCells ? { recessFrom: `${depth.depthM} m read from Street View's window reveals, ${depth.reason}` } : {}) }, png: tex() }); }
     });
     if (opts.stitch && done.length) {
         // the scan cut to the rebuilt cells (the same cut on the twin: the same triangles), the walls appended, the seams stitched.
