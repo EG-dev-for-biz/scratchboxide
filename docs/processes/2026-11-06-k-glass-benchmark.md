@@ -263,3 +263,60 @@ back faces (`relief_m8`, `relief_m11`) showing through the lattice/scan cut line
 facades where it recesses strips. On Flatiron the extra is a 12 m² region on the wall sheet 10000 at 315° and the corner
 joins. Both are the K cut seam at recessed strips, not the glass path; the large regions (Penn 2's 86 and 70 m², Flatiron's
 43 m²) are the same on both sides. Reported to MAIN for the push decision; not pushed.
+
+
+## Rounds five to eight (MAIN, 2026-11-07: "hold, and fix the cut-seam hairline first")
+
+MAIN held the push over Penn 2 and Flatiron's holes above main. The audit's own rays, shot at its red pixels and listing
+every surface along the way with its node and facing (`probe.ts`, beside the benchmark), found two causes, neither a
+crack to weld:
+
+1. **Scan slivers standing across a rebuilt cell** (b34b0c77). A window reveal or a fin's side in the scan, perpendicular
+   to the wall, was never a candidate of the rebuild's claim (`facesFacade` took only triangles facing the facade), so it
+   stayed inside the rebuilt cell and showed its back as a 1-pixel line from the side: Penn 2's window strips at 180°.
+   A triangle within 0.3 of perpendicular is now the facade's to remove when it lies over built cells, TypeScript and
+   native; with `sameFacing` a thin wall's other side, facing away, is still left alone. Round five: Penn 2 holes 1.33 →
+   0.93%, Seagram 1.73 → 1.70, Flatiron 0.84 → 0.81 (its cause was another).
+2. **A lattice's end cells where the wall turns away** (3e245788, a9d558f1). The Flatiron's Fifth Avenue wall sheet
+   (10000) built its last cells on the plane where the rounded prow had already curved 0.3-0.6 m inward (the scan on the
+   plane at s 27.0 measures -0.6 m, the sheet's end cell -0.02), so the sheet's end stood proud of the wall and its back
+   showed as a 1-pixel column over the whole height from 315° (12 m²). From each end of a row inward, at most three
+   cells, a built wall cell whose own scan lies more than `edgeStepM` (0.25 m; 0.4 m missed the prow cell at -0.3) behind
+   the row's wall depth now keeps the scan; windows and strips keep their own rules. Rounds six and seven: Flatiron 0.81 →
+   0.75 → 0.63%, and the build "complete", not degraded.
+
+Then, on MAIN's note that main had moved (#174's CDT caps, #179's DAG weld, #176's UV unwrap), main 9d282b44 was merged
+into the branch (two documentation conflicts) and **all six buildings were rebuilt on both sides**: main at its head
+9d282b44 (a fresh baseline, `main/`; the old 70edef82 builds under `main-70edef82/`) and the branch with main merged
+(da786449, round eight, `feat/`; the earlier rounds under `feat-round4/` to `feat-round7/`). Three runners at once put the
+machine at load 100 and the main ESB hit tile_refine's 900 s limit; it was rebuilt alone. The main runner's sheet step
+(main's code) overwrote both sides' `result.json` from the set-aside folders; they were restored from each checkout's
+ledger (`restore.py`, rows marked `rebuiltFromLedger`), the numbers below.
+
+| Building | side | glass % | panes on stone | cells | triangles | bays read + gen | reader planes / windows | holes % | untex % |
+|---|---|---|---|---|---|---|---|---|---|
+| Lever House | main 9d282b44 | 1.37 | 48 (+2 bays) | 22,299 | 94,470 | 6 + 1 | 10/38 | 2.89 | 3.36 |
+| | branch da786449 | 9.40 | **1** | 12,498 | 84,074 | 11 + 1 | 8/16 / 362 | 2.91 | 2.91 |
+| Seagram | main | 7.83 | 185 (+5 bays) | 121,412 | 435,271 | 14 + 0 | 7/34 | 2.20 | 2.69 |
+| | branch | 18.53 | **7** | 56,367 | 309,415 | 12 + 0 | 11/12 / 3,373 | **1.72** | 3.05 |
+| ESB | main | 8.35 | 407 (+114 bays) | 162,605 | 861,838 | 192 + 30 | 58/120 | 0.73 | 0.39 |
+| | branch | 6.16 | **67** | 160,868 | 920,887 | 184 + 35 | 59/67 / 7,303 | **0.36** | 0.37 |
+| 30 Rock | main | 9.98 | 345 (+65 bays) | 216,642 | 1,074,391 | 362 + 52 | 60/120 | 0.53 | 0.53 |
+| | branch | 7.95 | **7** | 246,271 | 1,206,475 | 277 + 57 | 49/63 / 6,088 | **0.46** | 0.46 |
+| Penn 2 | main | 6.71 | 307 (+71 bays) | 210,018 | 965,120 | 42 + 56 | 11/71 | 1.08 | 1.67 |
+| | branch | 11.58 | **0** | 74,411 | 445,684 | 48 + 46 | 10/19 / 664 | **0.92** | 1.51 |
+| Flatiron | main | 8.58 | 89 (+3 bays) | 62,296 | 229,779 | 11 + 12 | 5/14 | 0.67 | 4.04 |
+| | branch | 10.16 | **27** | 66,217 | 263,633 | 14 + 4 | 5/5 / 601 | **0.62** | 3.97 |
+
+**Against main's head.** Panes on stone below main on all six (main's own numbers moved with its reads: Lever House
+28 → 48, ESB 366 → 407, Penn 2 169 → 307 against the 70edef82 builds; the branch's are 0-67). Holes below main on five;
+Lever House is 2.91 against 2.89, two hundredths of a point, with the same regions on both sides (the 430 m² region on
+its wall sheet 10010 at 180°, 424 m² on the branch; relief_m18, facade 4). The ESB's holes halved (0.73 → 0.36) once the
+slivers went. Cost of rounds five to eight and the fresh baseline: about $2.60 in model calls.
+
+**What #165 (the window-array session) would move.** Its step runs after `mergeReadings`, so the template's snapped
+boxes feed it: a strip on one lattice column folds into storey cells where the photo's storey pitch agrees (the Seagram
+and 30 Rock strips, their cells and triangles), window sizes from the photo folded at the lattice (Seagram 16's window
+height 2.26 → 2.49 m, so its glass share), its region model's bands (which planes lay a lattice at all), and generated
+windows at occluded sites inside an array (the generated-window counts). The slit fix holds for recessed cells as it
+does for strips: it removes slivers over any built cell, whatever the cell's depth.
