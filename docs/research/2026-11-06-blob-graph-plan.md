@@ -83,6 +83,15 @@ For each blob, the vision model sees a contact sheet: the blob rendered from fou
 - numbers: how manufactured versus organic, how permanent, how symmetric, the likely material and finish (roughness, metalness), each with a confidence;
 - what to keep in mind when rebuilding it, in one sentence.
 
+**The readers are vision subagents that look actively** (user direction, 2026-11-06: identify every blob's intent by looking at it with its photogrammetry texture):
+
+- **Textured views first.** The tile photos on the blob are the main evidence (rust, glass, leaves, signage, paint), so every sheet leads with the blob textured from four sides, then the same in clay. Clay guards against reading a painted shadow or a texture smear as shape.
+- **Context before detail.** A district reader first sees the whole district and writes a short brief: the place, its era, its streets and its kinds of building. A building reader sees one building and its roof and facade blobs together, so siblings are read consistently (as the facade reader's brief does today, `facade-reader-brief.ts`). The blob readers then work in parallel, each told the brief and where its blob stands.
+- **Asking for more.** A reader that is unsure can ask for another view: a closer render, a lower angle, the blob lit from another side, a registered Street View crop, or a neighbouring blob for comparison. It answers when its confidence is high enough or its view budget (about four extra views) is spent.
+- **Small blobs.** A blob only a few texels across in the tiles is read from Street View where one sees it, and otherwise from shape and context, at a low confidence.
+- **A judge.** A second, independent reader sees a held-out view and the first reader's description and agrees or not. Disagreement lowers the confidence and marks the blob for the review sheet.
+- **Parallel and cached.** Readers run several at a time within the model-call budget (`model-call-budget.ts`), and each answer is cached by the blob's geometry hash.
+
 These readings label the blob, feed the material choice (as K's finish reading does today) and set the "permanent" score that marks transient things. They never pick the geometry. Readings are cached in the model readings store (`pipeline-k/model-readings.ts`), keyed by the blob's geometry hash, so a blob is read once across runs and machines. Several blobs share one call where they fit on one sheet.
 
 ### 5.4 Wrap
