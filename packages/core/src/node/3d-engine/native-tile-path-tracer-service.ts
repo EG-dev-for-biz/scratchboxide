@@ -54,7 +54,15 @@ export interface TileAtmosphereSpec {
 }
 
 export interface TileDisplacementSpec {
+    /** displace_glb (NativeDisplacementService), which has no camera: every triangle is split N x N. The path tracer does not read it. */
     tessellationFactor?: number;
+    /**
+     * Path tracer: surfaces are diced by their projected size from the render camera, this many pixels an edge segment
+     * (default 4), crack-free across seams.
+     */
+    pixelsPerSegment?: number;
+    /** Path tracer: refuse the render when dicing would make more triangles than this (0 or unset: no limit). */
+    maxTriangles?: number;
     displacementScale?: number;
     midpoint?: number;
     sampleTextureHeight?: boolean;
