@@ -33,7 +33,7 @@ function linearToSrgb8(v: number): number {
 
 /**
  * - 'preserve-100-lock': geometry and UVs untouched; PBR maps are computed from the baseColor pixels (processGlb below).
- * - 'unwrap': new non-overlapping chart UVs (orthographic or LSCM per chart, by measured distortion) packed into one atlas
+ * - 'unwrap': new non-overlapping chart UVs (orthographic, LSCM, ABF++ or SLIM per chart, by measured distortion) packed into one atlas
  *   per material, written as a new TEXCOORD set; textures keep their own UVs.
  * - 'rewrap': the same atlas replaces TEXCOORD_0 and every texture of the material is rebaked into it (UvAtlasRewrap.ts).
  */

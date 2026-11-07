@@ -12,13 +12,17 @@
 //
 // Build:  clang++ -std=c++20 -O3 -I packages/core/src/native/3d-engine/include scripts/uv_rewrap.cpp -o build/3d-native/uv_rewrap
 //
-// SBUW (little endian): u32 version=1, u32 V, u32 T, f64[15] params (chartNormalToleranceDeg, minIslandAreaM2,
+// SBUW (little endian): u32 version=1|2, u32 V, u32 T, f64[15] params (chartNormalToleranceDeg, minIslandAreaM2,
 //        maxAngleStretch, maxAreaDistortion, splitToleranceFactor, minToleranceDeg, conformal, lscmMaxIterations,
 //        lscmRelTolerance, texelsPerMeter, atlasWidth, atlasHeight, maxSide, gutter, allowRotation),
+//        version 2 only: f64[6] (segmentation, parameterization, packing, abf, slimIterations, packRotations);
+//        version 1 runs the original normal-cluster / LSCM / skyline path,
 //        f32[3V] positions, u32[3T] indices, u32[T] group
-//   -> 'SBUO' u32 version, outV, T, C, W, H, lscmAttempts, lscmAccepted, splits,
+//   -> 'SBUO' u32 version (as requested), outV, T, C, W, H, lscmAttempts, lscmAccepted, splits,
+//        version 2 only: u32 abfAccepted, slimAccepted, grownCharts,
 //        f64 texelsPerMeter, requestedTexelsPerMeter, utilisation, overlappingPairs, msCharts, msPack,
 //        u32[outV] sourceVertex, f32[2 outV] uv, u32[3T] indices, u32[T] chart, f64[24 C] chart records
+//        (version 2: f64[26 C], adding abfIterations, slimIterations)
 //
 // SBRB: u32 version=1, W, H, gutter, transfer, S, M (materials), I (images), threads; f64 edgeTexels, maxDistance,
 //        maxNormalAngleDeg; u32[S] slot kind (0 linear, 1 sRGB, 2 tangent-space normal);
@@ -63,10 +67,11 @@ void checkFinite(const std::vector<float>& a, const char* what) {
 
 int runUnwrap() {
     using namespace scratchbox::uv_rewrap;
-    if (readOne<uint32_t>("version") != 1) throw std::runtime_error("unsupported SBUW version");
+    const uint32_t version = readOne<uint32_t>("version");
+    if (version != 1 && version != 2) throw std::runtime_error("unsupported SBUW version");
     const uint32_t V = readOne<uint32_t>("V"), T = readOne<uint32_t>("T");
     std::vector<double> p;
-    readN(p, 15, "params");
+    readN(p, version == 2 ? 21 : 15, "params");
     UnwrapParams prm;
     prm.chartNormalToleranceDeg = p[0];
     prm.minIslandAreaM2 = p[1];
@@ -83,6 +88,16 @@ int runUnwrap() {
     prm.maxSide = static_cast<uint32_t>(p[12]);
     prm.gutter = static_cast<uint32_t>(p[13]);
     prm.allowRotation = p[14] != 0;
+    if (version == 2) {
+        prm.segmentation = p[15] != 0 ? 1 : 0;
+        prm.parameterization = p[16] != 0 ? 1 : 0;
+        prm.packing = p[17] != 0 ? 1 : 0;
+        prm.abf = p[18] != 0;
+        prm.slimIterations = static_cast<int>(std::clamp(p[19], 0.0, 1000.0));
+        prm.packRotations = p[20] >= 4 ? 4 : p[20] >= 2 ? 2 : 1;
+    } else {
+        prm.segmentation = 0; prm.parameterization = 0; prm.packing = 0;
+    }
     std::vector<float> pos;
     std::vector<uint32_t> idx, grp;
     readN(pos, size_t(V) * 3, "positions");
@@ -96,8 +111,9 @@ int runUnwrap() {
 
     std::fwrite("SBUO", 1, 4, stdout);
     const uint32_t C = static_cast<uint32_t>(r.charts.size());
-    const uint32_t head[9] = {1, static_cast<uint32_t>(r.sourceVertex.size()), T, C, r.width, r.height, r.lscmAttempts, r.lscmAccepted, r.splits};
+    const uint32_t head[9] = {version, static_cast<uint32_t>(r.sourceVertex.size()), T, C, r.width, r.height, r.lscmAttempts, r.lscmAccepted, r.splits};
     writeN(head, 9);
+    if (version == 2) { const uint32_t more[3] = {r.abfAccepted, r.slimAccepted, r.grownCharts}; writeN(more, 3); }
     const double stats[6] = {r.texelsPerMeter, r.requestedTexelsPerMeter, r.utilisation, double(r.overlappingPairs), r.msCharts, r.msPack};
     writeN(stats, 6);
     writeN(r.sourceVertex.data(), r.sourceVertex.size());
@@ -105,13 +121,15 @@ int runUnwrap() {
     writeN(r.indices.data(), r.indices.size());
     writeN(r.triangleChart.data(), r.triangleChart.size());
     std::vector<double> rec;
-    rec.reserve(size_t(C) * 24);
+    const size_t per = version == 2 ? 26 : 24;
+    rec.reserve(size_t(C) * per);
     for (const auto& c : r.charts) {
         const double v[24] = {double(c.method), double(c.group), double(c.triangles), double(c.splitDepth), double(c.overThreshold), double(c.lscmIterations),
                               c.orthoDistortion.stretchRms, c.orthoDistortion.stretchMax, c.orthoDistortion.areaRms, c.orthoDistortion.areaMax, double(c.orthoDistortion.flipped),
                               c.distortion.stretchRms, c.distortion.stretchMax, c.distortion.areaRms, c.distortion.areaMax, double(c.distortion.flipped), c.distortion.area3D,
                               c.widthM, c.heightM, double(c.x), double(c.y), double(c.w), double(c.h), double(c.rotated)};
         rec.insert(rec.end(), v, v + 24);
+        if (version == 2) { rec.push_back(double(c.abfIterations)); rec.push_back(double(c.slimIterations)); }
     }
     writeN(rec.data(), rec.size());
     std::fflush(stdout);
