@@ -50,7 +50,7 @@ import { nativePolishThreads, runNativeLattice, runNativeLatticeAudit, type Nati
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const FACADE_LATTICE_VERSION = 'facade-lattice/21';
+export const FACADE_LATTICE_VERSION = 'facade-lattice/22';
 /** The cut (rebuildFacadesOnLattice opts.cut): the scan split at the rebuilt cells' lines before the removals and the tear audit. */
 export const LATTICE_CUT_VERSION = 'lattice-cut/5';
 
@@ -618,16 +618,21 @@ export function glbSoup(glb: ParsedGlb): Float32Array {
     return out;
 }
 
-/** Is a triangle (world corners) a candidate of facade f's rebuilt region: facing it (or a sliver), its centre within the depth band. */
+/**
+ * Is a triangle (world corners) a candidate of facade f's rebuilt region: its centre within the depth band, and facing the
+ * facade, or standing across it (a reveal or a fin's side of the scan's lumps, within 0.3 of perpendicular). A sliver left
+ * standing in a rebuilt cell shows its back as a 1-pixel line from the side (Penn 2's window strips at 180°, 0.25 points of
+ * the building, 2026-11-07), so it is the facade's as much as the wall it stands on. With sameFacing only a triangle facing
+ * the way the facade does, or across it: a thin wall's other side, facing away, is no part of its rebuild.
+ */
 function facesFacade(a: number[], b: number[], c: number[], f: ReliefFacade, P = FACADE_LATTICE_PARAMS, sameFacing = false): boolean {
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, nl = Math.hypot(nx, ny, nz);
     const m = [(a[0] + b[0] + c[0]) / 3 - f.centroid[0], (a[1] + b[1] + c[1]) / 3 - f.centroid[1], (a[2] + b[2] + c[2]) / 3 - f.centroid[2]];
     if (Math.abs(dot(m, f.normal)) > P.depthBandM) return false;
-    // a facing triangle, or a sliver (the reveals of the scan's lumps): both are the facade's
-    // sameFacing: only a triangle facing the way the facade does (a thin wall's other side, behind it, is no part of its rebuild)
     if (!(nl > 0)) return true;
     const c0 = dot([nx / nl, ny / nl, nz / nl], f.normal);
+    if (Math.abs(c0) < 0.3) return true;
     return (sameFacing ? c0 : Math.abs(c0)) >= 0.3;
 }
 

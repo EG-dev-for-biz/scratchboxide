@@ -1025,6 +1025,8 @@ inline bool facesFacade(const Vec3& a, const Vec3& b, const Vec3& c, const Frame
     if (std::abs(dot(m, f.normal)) > P.depthBandM) return false;
     if (!(nl > 0)) return true;
     const double c0 = dot({nx / nl, ny / nl, nz / nl}, f.normal);
+    // a reveal or a fin's side standing across the facade is the facade's too (facade-lattice.ts facesFacade)
+    if (std::abs(c0) < 0.3) return true;
     return (sameFacing ? c0 : std::abs(c0)) >= 0.3;
 }
 
