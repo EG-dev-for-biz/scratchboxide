@@ -97,15 +97,19 @@ int main() {
         if (dist > 2 && dist < 40) pxEdges.push_back(l / (dist * pixelAngle));
     }
     std::sort(pxEdges.begin(), pxEdges.end());
+    // 5. input vertices no triangle uses are ignored (a mesh cut down to some of its triangles keeps all its vertices)
+    auto partial = road; partial.indices.resize(30 * 3);
+    const auto pr = adaptive_subd::diceAndDisplace(partial, wp, bumps);
+    size_t partialBad = 0; for (const auto& v : pr.mesh.vertices) if (!std::isfinite(v.position.x) || v.position.z < -15.5f) partialBad++;
     adaptive_subd::Params lim = cp; lim.maxTriangles = 100;
     const auto limited = adaptive_subd::diceAndDisplace(road, lim, nullptr);
 
     std::printf("{\"cubeAdaptiveTris\":%zu,\"cubeAdaptiveOpen\":%zu,\"cubeUniformOpen\":%zu,\"maxEdge\":%.4f,\"minEdge\":%.6f,\"flipped\":%zu,\"offCube\":%.6f,"
                 "\"liftErr\":%.6f,\"liftTris\":%zu,\"roadTris\":%zu,\"nearMeanEdge\":%.4f,\"farMeanEdge\":%.4f,\"pxEdgeP50\":%.3f,\"pxEdgeP95\":%.3f,\"roadOpen\":%zu,"
-                "\"limitedOk\":%d,\"limitedError\":\"%s\",\"cubeHeightMin\":%.4f}\n",
+                "\"partialOk\":%d,\"partialTris\":%zu,\"partialBad\":%zu,\"limitedOk\":%d,\"limitedError\":\"%s\",\"cubeHeightMin\":%.4f}\n",
         a.stats.triangles, openEdges(a.mesh), openEdges(u), maxEdge, minEdge, flipped, offCube, liftErr, lifted.stats.triangles, c.stats.triangles,
         nearSum / std::max<size_t>(1, nearN), farSum / std::max<size_t>(1, farN), pxEdges[pxEdges.size() / 2], pxEdges[size_t(pxEdges.size() * 0.95)], openEdges(c.mesh, [](const Vec3& p) { return std::fabs(p.x) < 1e-4f || std::fabs(p.x - 1.0f) < 1e-4f || std::fabs(p.z) < 1e-4f || std::fabs(p.z + 100.0f) < 1e-4f; }),
-        limited.ok ? 1 : 0, limited.error.c_str(), [&]{ float m = 1e9f; for (auto& v : a.mesh.vertices) m = std::min(m, std::max({std::fabs(v.position.x), std::fabs(v.position.y), std::fabs(v.position.z)})); return m; }());
+        pr.ok ? 1 : 0, pr.stats.triangles, partialBad, limited.ok ? 1 : 0, limited.error.c_str(), [&]{ float m = 1e9f; for (auto& v : a.mesh.vertices) m = std::min(m, std::max({std::fabs(v.position.x), std::fabs(v.position.y), std::fabs(v.position.z)})); return m; }());
     return 0;
 }
 `;
@@ -113,7 +117,7 @@ int main() {
 interface Out {
     cubeAdaptiveTris: number; cubeAdaptiveOpen: number; cubeUniformOpen: number; maxEdge: number; minEdge: number; flipped: number; offCube: number;
     liftErr: number; liftTris: number; roadTris: number; nearMeanEdge: number; farMeanEdge: number; pxEdgeP50: number; pxEdgeP95: number; roadOpen: number;
-    limitedOk: number; limitedError: string; cubeHeightMin: number;
+    partialOk: number; partialTris: number; partialBad: number; limitedOk: number; limitedError: string; cubeHeightMin: number;
 }
 
 let out: Out;
@@ -140,6 +144,12 @@ describe('adaptive subdivision and displacement (scratchbox_adaptive_subd.hpp)',
         expect(out.minEdge).toBeGreaterThan(1e-4);
         expect(out.flipped).toBe(0);
         expect(out.offCube).toBeLessThan(1e-5);
+    });
+
+    it('ignores input vertices that no triangle uses', () => {
+        expect(out.partialOk).toBe(1);
+        expect(out.partialTris).toBeGreaterThan(30);
+        expect(out.partialBad).toBe(0);
     });
 
     it('moves a plane by exactly a constant height', () => {

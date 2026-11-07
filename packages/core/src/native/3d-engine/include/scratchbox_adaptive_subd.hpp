@@ -561,6 +561,7 @@ inline Result diceAndDisplace(const ScratchboxMesh& in, const Params& P, const H
     auto displaceRange = [&](size_t begin, size_t end) {
         for (size_t v = begin; v < end; v++) {
             const uint32_t f = vFace[v];
+            if (f == detail::kNone) { dP[v] = pos[v]; continue; }  // an input vertex no triangle uses: never output
             const B3& w = vBary[v];
             const auto& fc = faces[f];
             Vec3 n = ctrlN[fc[0]] * w.w[0] + ctrlN[fc[1]] * w.w[1] + ctrlN[fc[2]] * w.w[2];
