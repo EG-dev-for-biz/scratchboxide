@@ -14,7 +14,10 @@
  *   2. the detail bake (scratchbox_object_detail.hpp via scripts/object_detail_bake.cpp, built through the native build
  *      cache, run through a pipe) composites wear and decals onto each material's own base colour and
  *      metallic-roughness, texel by texel, from masks read off the geometry: edge wear on the part's convex edges,
- *      grime in cavities and creases, streaks under overhangs, dust on up-facing surfaces, sun fade by exposure.
+ *      grime in cavities and creases, streaks under overhangs, dust on up-facing surfaces, sun fade by exposure; and
+ *      maps measured from the mesh (scratchbox_mesh_maps.hpp): the part's curvature at a radius widens edge wear onto
+ *      whatever bulges, cavity (across parts) adds grime, and the inward thickness lightens thin parts
+ *      that are not metal.
  * Each material keeps its name, factors it does not hold in the new maps (emission, transmission, clearcoat, ior,
  * alpha), every extension and every other map (normal, occlusion, emissive); its base colour and metallic-roughness
  * factors move into the new maps, and the factors it had are kept in its extras with the pass's record, labelled
@@ -34,7 +37,7 @@ import { encodeRgbaToJpeg } from '../image-codec-ffmpeg';
 import { encodePng } from '../texture-processing';
 
 /** The pass's version: part of every version's input hash, so a change to what the pass draws makes new versions. */
-export const OBJECT_DETAIL_PASS_VERSION = 'object-detail-pass/1';
+export const OBJECT_DETAIL_PASS_VERSION = 'object-detail-pass/2';
 /** Texels the whole object's atlases share by default (about a 2K map's worth, at one density across every part). */
 export const OBJECT_DETAIL_TARGET_TEXELS = 2048 * 2048 * 0.55;
 
@@ -59,6 +62,15 @@ export interface ObjectWear {
     aoRadiusM?: number;
     /** How far run-off streaks reach below an overhang, metres. */
     streakReachM?: number;
+    /** The radius the part's curvature is measured at, metres; how much that curvature widens edge wear (0..1, 0 off). */
+    curvatureRadiusM?: number;
+    curvatureWear?: number;
+    /** The radius cavity is measured at, metres; how much cavity adds grime (0..1, 0 off). */
+    cavityRadiusM?: number;
+    cavityGrime?: number;
+    /** Parts thinner than this (metres, measured inward) are lightened, light passing through; how much (0..1, 0 off). */
+    thinM?: number;
+    thinLight?: number;
     /** Linear RGB of the layers. */
     grimeColor?: Rgb;
     streakColor?: Rgb;
@@ -131,6 +143,9 @@ export interface PartDetailReport {
     dust: number;
     exposure: number;
     decal: number;
+    /** Mean cavity and share of thin texels (mesh-measured maps). */
+    cavity: number;
+    thin: number;
 }
 
 export interface ObjectDetailReport {
@@ -144,11 +159,14 @@ export interface ObjectDetailReport {
     decals: Array<{ parts: string[]; texels: number; sizeM: [number, number]; label: string; method: string }>;
     left: Array<{ mesh: number; primitive: number; reason: string }>;
     featureEdges: { convex: number; concave: number; open: number };
+    /** The mesh-measured maps: the radii read at (larger than asked when the surface point budget forced it). */
+    meshMaps: { curvatureRadiusM: number; cavityRadiusM: number; thinM: number; label: 'generated'; method: string };
     timings: { rewrapMs: number; bakeMs: number; encodeMs: number; totalMs: number; native: { edges: number; bvh: number; masks: number; composite: number; dilate: number } };
     rewrap: Pick<UvRewrapReport, 'charts' | 'lscmCharts' | 'utilisation' | 'overlappingTrianglePairs'>;
 }
 
-export interface ObjectDetailMasks { material: number; width: number; height: number; wear: Uint8Array; light: Uint8Array }
+/** Per atlas: wear (R edge, G grime, B streak, A dust), light (R exposure, G decal, B occlusion, A convexity) and the mesh-measured maps (R curvature 0.5 + 0.5 H r, G cavity, B thickness / 2 thinM, A ao). */
+export interface ObjectDetailMasks { material: number; width: number; height: number; wear: Uint8Array; light: Uint8Array; maps: Uint8Array }
 
 export interface ObjectDetailResult { glb: Buffer; report: ObjectDetailReport; masks?: ObjectDetailMasks[] }
 
@@ -376,6 +394,9 @@ export async function runObjectDetailPass(rawInput: Buffer | Uint8Array, options
         grimeColor: (wearIn.grimeColor ?? [0.045, 0.038, 0.03]).map(clamp01) as Rgb,
         streakColor: (wearIn.streakColor ?? [0.06, 0.05, 0.04]).map(clamp01) as Rgb,
         dustColor: (wearIn.dustColor ?? [0.42, 0.39, 0.34]).map(clamp01) as Rgb,
+        curvatureRadiusM: Math.max(3 * texelM, finiteOr(wearIn.curvatureRadiusM, 4 * edgeWidthM)), curvatureWear: clamp01(finiteOr(wearIn.curvatureWear, 0.6)),
+        cavityRadiusM: Math.max(2 * texelM, finiteOr(wearIn.cavityRadiusM, 2 * edgeWidthM)), cavityGrime: clamp01(finiteOr(wearIn.cavityGrime, 0.6)),
+        thinM: Math.max(2 * texelM, finiteOr(wearIn.thinM, 0.01 * diag)), thinLight: clamp01(finiteOr(wearIn.thinLight, 0.25)),
         seed: Math.round(finiteOr(wearIn.seed, 7)) >>> 0,
         patchScaleM: 0.25 * diag, streakColumnM: Math.max(2 * texelM, 0.012 * diag)
     };
@@ -506,10 +527,12 @@ export async function runObjectDetailPass(rawInput: Buffer | Uint8Array, options
     }
 
     // 3. the bake
-    const W = wear ?? { edgeWear: 0, grime: 0, streaks: 0, dust: 0, sunFade: 0, variation: 0, edgeWidthM, creaseWidthM: 2 * edgeWidthM, aoRadiusM: 0.08 * diag, streakReachM: 0.25 * Math.max(size[1], 1e-3), grimeColor: [0, 0, 0], streakColor: [0, 0, 0], dustColor: [0, 0, 0], seed: 7, patchScaleM: 0.25 * diag, streakColumnM: 0.012 * diag };
+    const W = wear ?? { edgeWear: 0, grime: 0, streaks: 0, dust: 0, sunFade: 0, variation: 0, edgeWidthM, creaseWidthM: 2 * edgeWidthM, aoRadiusM: 0.08 * diag, streakReachM: 0.25 * Math.max(size[1], 1e-3), grimeColor: [0, 0, 0], streakColor: [0, 0, 0], dustColor: [0, 0, 0], seed: 7, patchScaleM: 0.25 * diag, streakColumnM: 0.012 * diag,
+        curvatureRadiusM: Math.max(3 * texelM, 4 * edgeWidthM), curvatureWear: 0, cavityRadiusM: Math.max(2 * texelM, 2 * edgeWidthM), cavityGrime: 0, thinM: Math.max(2 * texelM, 0.01 * diag), thinLight: 0 };
     const params = f64(W.edgeWear, W.grime, W.streaks, W.dust, W.sunFade, W.variation, W.edgeWidthM, W.creaseWidthM, W.aoRadiusM, W.streakReachM, W.streakColumnM,
         W.patchScaleM, 0.8 * W.edgeWidthM, 0.5, 0.9, ...W.grimeColor, ...W.streakColor, ...W.dustColor, 0.85, 0.75, 0.95,
-        16, lo[1], Math.max(1e-6, 1e-5 * diag), Math.max(1e-5, 2e-5 * diag), W.seed);
+        16, lo[1], Math.max(1e-6, 1e-5 * diag), Math.max(1e-5, 2e-5 * diag), W.seed,
+        W.curvatureRadiusM, W.cavityRadiusM, W.thinM, W.curvatureWear, W.cavityGrime, W.thinLight, 8);
     const atlasBufs: Buffer[] = [];
     for (const job of jobs) {
         atlasBufs.push(u32(job.width, job.height, 4, job.base ? 1 : 0, job.mr ? 1 : 0), f32(...job.factor, job.roughness, job.metalness, job.transmission, texelM));
@@ -521,27 +544,28 @@ export async function runObjectDetailPass(rawInput: Buffer | Uint8Array, options
     const tb = performance.now();
     const reply = await runNative(binary, [
         Buffer.from('SBOD', 'latin1'),
-        u32(1, jobs.length, surfaceCount, groupNames.length, decalReport.length, occ.length / 9, (options.masks ? 1 : 0) | 2, options.native?.threads ?? 0),
+        u32(2, jobs.length, surfaceCount, groupNames.length, decalReport.length, occ.length / 9, (options.masks ? 1 : 0) | 2, options.native?.threads ?? 0),
         params, ...atlasBufs, ...partBufs, ...surfaceBufs, view(Float32Array.from(occ)), ...decalBufs
     ], options.native?.timeoutMs ?? 600_000, options.signal);
     const bakeMs = performance.now() - tb;
     const r = new Reader(reply);
-    if (r.u32() !== 1) throw new Error('the object detail bake replied with an unknown version');
+    if (r.u32() !== 2) throw new Error('the object detail bake replied with an unknown version');
     const A = r.u32(), G = r.u32(), D = r.u32();
     if (A !== jobs.length || G !== groupNames.length || D !== decalReport.length) throw new Error('the object detail bake reply does not match its request');
     const edgeCounts = { convex: r.u32(), concave: r.u32(), open: r.u32() };
     const nativeMs = { edges: r.f64(), bvh: r.f64(), masks: r.f64(), composite: r.f64(), dilate: r.f64() };
+    const readRadii = { curvatureRadiusM: r.f64(), cavityRadiusM: r.f64() };
     const baked: Array<{ base: Uint8Array; mr: Uint8Array; texels: number }> = [];
     const masks: ObjectDetailMasks[] = [];
     for (const job of jobs) {
         const w = r.u32(), h = r.u32(), hasMasks = r.u32();
-        const stats = [r.f64(), r.f64(), r.f64(), r.f64(), r.f64(), r.f64(), r.f64()];
+        const stats = Array.from({ length: 9 }, () => r.f64());
         const n = w * h * 4;
         const base = r.bytes(n), mr = r.bytes(n);
-        if (hasMasks) masks.push({ material: job.material, width: w, height: h, wear: r.bytes(n), light: r.bytes(n) });
+        if (hasMasks) masks.push({ material: job.material, width: w, height: h, wear: r.bytes(n), light: r.bytes(n), maps: r.bytes(n) });
         baked.push({ base, mr, texels: stats[0] });
     }
-    const partStats = groupNames.map(() => [r.f64(), r.f64(), r.f64(), r.f64(), r.f64(), r.f64(), r.f64()]);
+    const partStats = groupNames.map(() => Array.from({ length: 9 }, () => r.f64()));
     for (const d of decalReport) d.texels = r.f64();
 
     // 4. the maps on each material: its own, with its pre-pass factors kept in its extras
@@ -614,11 +638,15 @@ export async function runObjectDetailPass(rawInput: Buffer | Uint8Array, options
         const node = [...groupOfNode.entries()].find(([, gg]) => gg === g)![0];
         const prim = prims.find(p => p.node === node);
         const mat = prim?.def.material !== undefined ? out.materials?.[out.meshes[prim.mesh].primitives[prim.primitive].material]?.name : undefined;
-        return { part: name, node, ...(mat ? { material: mat } : {}), texels: s[0], edgeWear: s[1] / n, grime: s[2] / n, streaks: s[3] / n, dust: s[4] / n, exposure: s[5] / n, decal: s[6] / n };
+        return { part: name, node, ...(mat ? { material: mat } : {}), texels: s[0], edgeWear: s[1] / n, grime: s[2] / n, streaks: s[3] / n, dust: s[4] / n, exposure: s[5] / n, decal: s[6] / n, cavity: s[7] / n, thin: s[8] / n };
     });
     const report: ObjectDetailReport = {
         version: OBJECT_DETAIL_PASS_VERSION, label: 'generated', wear, objectSizeM: size, texelsPerMeter, materials: materialsReport, parts: partsReport, decals: decalReport,
         left: rewrap.report.primitivesSkipped, featureEdges: edgeCounts,
+        meshMaps: {
+            ...readRadii, thinM: W.thinM, label: 'generated',
+            method: "measured from the object's own geometry (scratchbox_mesh_maps.hpp): each part's mean curvature at curvatureRadiusM widens edge wear where it bulges, cavity at cavityRadiusM over every part adds grime, and the inward thickness (rays cast in a cone around the inward normal) lightens what is thinner than thinM where its material is not metal"
+        },
         timings: { rewrapMs, bakeMs, encodeMs, totalMs: performance.now() - t0, native: nativeMs },
         rewrap: { charts: rewrap.report.charts, lscmCharts: rewrap.report.lscmCharts, utilisation: rewrap.report.utilisation, overlappingTrianglePairs: rewrap.report.overlappingTrianglePairs }
     };

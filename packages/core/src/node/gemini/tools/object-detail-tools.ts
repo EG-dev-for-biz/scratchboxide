@@ -69,6 +69,12 @@ const WEAR_PROPERTIES: Record<string, ToolParameterSchema> = {
     creaseWidthM: { type: 'NUMBER', description: 'How far grime reaches from a concave crease, metres (default twice edgeWidthM).' },
     aoRadiusM: { type: 'NUMBER', description: 'How near a surface must be to darken a cavity, metres (default 8% of the object\'s size).' },
     streakReachM: { type: 'NUMBER', description: 'How far streaks run below an overhang, metres (default a quarter of the object\'s height).' },
+    curvatureWear: { type: 'NUMBER', description: 'How much the part\'s measured curvature widens edge wear onto whatever bulges (rounded rims, knobs, fillets), 0..1 (default 0.6).' },
+    curvatureRadiusM: { type: 'NUMBER', description: 'The radius curvature is measured at, metres (default 4 times edgeWidthM): a part rounder than this reads as a worn edge.' },
+    cavityGrime: { type: 'NUMBER', description: 'How much measured cavity (small concave hollows, also where two parts meet) adds grime, 0..1 (default 0.6).' },
+    cavityRadiusM: { type: 'NUMBER', description: 'The radius cavity is measured at, metres (default twice edgeWidthM).' },
+    thinLight: { type: 'NUMBER', description: 'How much non-metal parts thinner than thinM are lightened, light passing through them, 0..1 (default 0.25); metal never is.' },
+    thinM: { type: 'NUMBER', description: 'Thickness, measured inward, below which a part reads thin, metres (default 1% of the object\'s size).' },
     grimeColor: { ...RGB_ITEMS, description: 'Grime colour, linear RGB 0..1 (default a dark brown-grey).' },
     streakColor: { ...RGB_ITEMS, description: 'Streak colour, linear RGB 0..1.' },
     dustColor: { ...RGB_ITEMS, description: 'Dust colour, linear RGB 0..1 (default a light grey-brown); e.g. the colour of the ground it stands on.' },
@@ -77,7 +83,7 @@ const WEAR_PROPERTIES: Record<string, ToolParameterSchema> = {
 
 export const OBJECT_DETAIL_TOOL_DECLARATIONS: ToolDeclaration[] = [{
     name: OBJECT_DETAIL_TOOL,
-    description: 'Weathers a generated 3D object part by part and lays decals on its parts, as a new version of the object that the open scene shows at once. Every part keeps its own material (colour, roughness, metalness, emission, transmission, any maps); wear is added where the geometry puts it: edge wear on convex edges, grime in cavities and creases, streaks under overhangs, dust on up-facing surfaces, sun fade by exposure. Strengths are numbers, and each part can take more or less of each, and what its worn edges show (e.g. bare metal under paint). Decals (lettering, numbers, stripes, logos, labels, stains) are projected onto the parts named and no other, from an image (e.g. a decal_generate asset) or painted from a description (one billed image call each); the weathering itself makes no image call. Every pass starts from the object as built with the object\'s whole recipe (the weathering given replaces the previous one, decals are added), so wear never compounds; restoreVersion shows any earlier version again. Only for objects the app generated (build_3d_object_from_reference, or a script made from no scan): scanned or measured content is refused. Everything it adds is labelled generated.',
+    description: 'Weathers a generated 3D object part by part and lays decals on its parts, as a new version of the object that the open scene shows at once. Every part keeps its own material (colour, roughness, metalness, emission, transmission, any maps); wear is added where the geometry puts it, read from maps measured on the mesh (curvature, cavity, thickness, occlusion): edge wear on convex edges and bulges, grime in cavities and creases, thin parts lightened where light passes through, streaks under overhangs, dust on up-facing surfaces, sun fade by exposure. Strengths are numbers, and each part can take more or less of each, and what its worn edges show (e.g. bare metal under paint). Decals (lettering, numbers, stripes, logos, labels, stains) are projected onto the parts named and no other, from an image (e.g. a decal_generate asset) or painted from a description (one billed image call each); the weathering itself makes no image call. Every pass starts from the object as built with the object\'s whole recipe (the weathering given replaces the previous one, decals are added), so wear never compounds; restoreVersion shows any earlier version again. Only for objects the app generated (build_3d_object_from_reference, or a script made from no scan): scanned or measured content is refused. Everything it adds is labelled generated.',
     parameters: {
         type: 'OBJECT',
         properties: {
@@ -353,7 +359,7 @@ function describeRecipe(r: DetailRecipe): string {
 
 function readWear(a: Record<string, unknown>): ObjectWear {
     const w: ObjectWear = {};
-    for (const k of ['edgeWear', 'grime', 'streaks', 'dust', 'sunFade', 'variation', 'edgeWidthM', 'creaseWidthM', 'aoRadiusM', 'streakReachM', 'seed'] as const) {
+    for (const k of ['edgeWear', 'grime', 'streaks', 'dust', 'sunFade', 'variation', 'edgeWidthM', 'creaseWidthM', 'aoRadiusM', 'streakReachM', 'curvatureWear', 'curvatureRadiusM', 'cavityGrime', 'cavityRadiusM', 'thinLight', 'thinM', 'seed'] as const) {
         const v = num(a[k]);
         if (v === undefined) continue;
         if (v < 0) throw new InvalidInputError(OBJECT_DETAIL_TOOL, `weathering.${k}`, 'must not be negative');

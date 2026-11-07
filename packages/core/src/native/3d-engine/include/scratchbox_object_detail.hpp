@@ -30,6 +30,10 @@
 //               streakColumnM wide;
 //   dust      - up-facing surfaces open to the sky straight above, less on edges rubbed clean;
 //   sun fade  - exposure: the share of the sky the texel sees, weighted towards the zenith.
+// Mesh-measured maps (scratchbox_mesh_maps.hpp) steer the same layers: the part's mean curvature at curvatureRadiusM
+// adds to convexity where the part bulges (a rounded knob or rim wears though no single edge is sharp), cavity at
+// cavityRadiusM (over every part, so the crease where two parts meet counts) adds to grime, and the inward thickness
+// lightens what is thinner than thinM where the material is not metal (light passes through it).
 // Decals are projector boxes on named parts: a texel of such a part that faces the decal and is the part's frontmost
 // surface along it takes the decal's colour (and, by finishMix, its roughness and metalness), under the wear, so worn
 // edges show the part beneath. Every strength, width and colour is a number; zero turns a layer off.
@@ -40,6 +44,7 @@
 #include "scratchbox_geometry.hpp"
 #include "scratchbox_bvh.hpp"
 #include "scratchbox_uv_rewrap.hpp"
+#include "scratchbox_mesh_maps.hpp"
 
 #include <algorithm>
 #include <array>
@@ -66,6 +71,10 @@ struct WearParams {
     float patchScaleM = 0.2f, chipScaleM = 0.006f;
     float chipNoise = 0.5f;             // raggedness of the worn edge's border, 0..1
     float openEdgeAngle = 0.9f;         // radians credited to an edge only one triangle has (a sheet's free edge)
+    // mesh-measured maps (scratchbox_mesh_maps.hpp): their scales (metres) and how much each steers its layer (0 off)
+    float curvatureRadiusM = 0.04f, cavityRadiusM = 0.02f, thinM = 0.01f;
+    float curvatureWear = 0.6f, cavityGrime = 0.6f, thinLight = 0.25f;
+    int thicknessSamples = 8;
     // the layers' own finish (linear RGB)
     Vec3 grimeColor{0.045f, 0.038f, 0.030f};
     Vec3 streakColor{0.060f, 0.050f, 0.040f};
@@ -126,14 +135,15 @@ struct DetailInput {
 };
 
 struct MaskStats {
-    double texels = 0, edge = 0, grime = 0, streak = 0, dust = 0, exposure = 0, decal = 0;
-    void add(const MaskStats& o) { texels += o.texels; edge += o.edge; grime += o.grime; streak += o.streak; dust += o.dust; exposure += o.exposure; decal += o.decal; }
+    double texels = 0, edge = 0, grime = 0, streak = 0, dust = 0, exposure = 0, decal = 0, cavity = 0, thin = 0;
+    void add(const MaskStats& o) { texels += o.texels; edge += o.edge; grime += o.grime; streak += o.streak; dust += o.dust; exposure += o.exposure; decal += o.decal; cavity += o.cavity; thin += o.thin; }
 };
 
 struct AtlasOutput {
     uint32_t width = 0, height = 0;
     std::vector<uint8_t> base, mr;      // RGBA8: sRGB colour (alpha kept), and R 255 / G roughness / B metalness
-    std::vector<uint8_t> masksA, masksB;// wantMasks: R edge, G grime, B streak, A dust; R exposure, G decal, B cavity, A convexity
+    std::vector<uint8_t> masksA, masksB;// wantMasks: R edge, G grime, B streak, A dust; R exposure, G decal, B occlusion, A convexity
+    std::vector<uint8_t> maps;          // wantMasks: the mesh-measured maps, R curvature (0.5 + 0.5 H r), G cavity, B thickness / (2 thinM), A ao
     MaskStats stats;                    // sums over the atlas's texels (masks before strengths)
 };
 
@@ -143,6 +153,7 @@ struct DetailOutput {
     std::vector<uint64_t> decalTexels;
     uint32_t convexEdges = 0, concaveEdges = 0, openEdges = 0;
     double msEdges = 0, msBvh = 0, msMasks = 0, msComposite = 0, msDilate = 0;
+    float curvatureRadiusM = 0, cavityRadiusM = 0;   // as read (larger than asked when the point budget forced it)
 };
 
 namespace detail {
@@ -381,11 +392,36 @@ inline DetailOutput bake(const DetailInput& in) {
     for (size_t p = 0; p < in.parts.size(); ++p) { convexGrid[p].build(convexOf[p], edgeR); concaveGrid[p].build(concaveOf[p], creaseR); }
     out.msEdges = std::chrono::duration<double, std::milli>(clock::now() - t0).count();
 
-    // occluders: every surface of the object; per decal, the parts it lies on (its frontmost-surface test)
+    // occluders: every surface of the object (rays and cavity read them; curvature reads each part's own surfaces);
+    // per decal, the parts it lies on (its frontmost-surface test)
     t0 = clock::now();
-    const geometry::ScratchboxMesh occluderMesh = soupMesh(in.occluders, "object_detail_occluders");
-    bvh::BvhTree occluders;
-    const bool haveOccluders = occluders.build(occluderMesh);
+    const float thicknessCap = 2.0f * std::max(1e-5f, P.thinM);
+    mesh_maps::MeshMaps maps;
+    {
+        mesh_maps::Params mp;
+        mp.curvatureRadiusM = std::max(1e-5f, P.curvatureRadiusM);
+        mp.cavityRadiusM = std::max(1e-5f, P.cavityRadiusM);
+        mp.aoRadiusM = std::max(1e-5f, P.aoRadiusM);
+        mp.aoSamples = 0;                 // the occlusion below is read with the sky in the same rays
+        mp.thicknessMaxM = thicknessCap;
+        mp.thicknessSamples = P.thinLight > 0 ? std::max(0, P.thicknessSamples) : 0;
+        mp.rayEpsM = P.rayEpsM;
+        mp.maxSamples = 3000000;
+        mp.seed = P.seed;
+        std::vector<float> grouped;
+        std::vector<uint32_t> groups;
+        for (const Surface& s : in.surfaces) {
+            for (size_t t = 0; t + 2 < s.idx.size(); t += 3) {
+                for (int k = 0; k < 3; ++k) for (int c = 0; c < 3; ++c) grouped.push_back(s.pos[s.idx[t + k] * 3 + c]);
+                groups.push_back(s.part);
+            }
+        }
+        maps.build(in.occluders, grouped, groups, mp);
+        out.curvatureRadiusM = maps.curvatureRadius();
+        out.cavityRadiusM = maps.cavityRadius();
+    }
+    const bvh::BvhTree& occluders = maps.bvh();
+    const bool haveOccluders = maps.haveBvh();
     std::vector<geometry::ScratchboxMesh> decalMeshes(in.decals.size());
     std::vector<bvh::BvhTree> decalTrees(in.decals.size());
     std::vector<std::vector<uint8_t>> decalOnPart(in.decals.size(), std::vector<uint8_t>(in.parts.size(), 0));
@@ -435,6 +471,7 @@ inline DetailOutput bake(const DetailInput& in) {
         std::vector<Vec3> tp(N), tng(N), tns(N);
         std::vector<uint32_t> tpart(N, 0);
         std::vector<float> convexM(N, 0), concaveM(N, 0), cavity(N, 0), exposure(N, 0), skyAbove(N, 0), streak(N, 0);
+        std::vector<float> curvMap(N, 0), cavMap(N, 0), thickM(N, thicknessCap);
         std::atomic<uint32_t> nextRow{0};
         auto measure = [&]() {
             for (uint32_t y; (y = nextRow.fetch_add(1)) < H;) {
@@ -498,6 +535,11 @@ inline DetailOutput bake(const DetailInput& in) {
                     if (!raster.state[i] || rep[i] != i) continue;
                     const Vec3 p = tp[i], ng = tng[i], ns = tns[i];
 
+                    // the mesh-measured maps: the part's curvature, cavity over every part, inward thickness
+                    if (P.curvatureWear > 0) curvMap[i] = maps.curvatureAt(p, ns, tpart[i]);
+                    if (P.cavityGrime > 0) cavMap[i] = maps.cavityAt(p, ns);
+                    if (P.thinLight > 0) thickM[i] = maps.thicknessAt(p, ng, static_cast<uint32_t>(i) ^ (static_cast<uint32_t>(a) << 24));
+
                     // hemisphere: cavity within aoRadiusM, and the sky it sees
                     const Vec3 origin = p + ng * P.rayEpsM;
                     Vec3 tan = std::abs(ng.y) < 0.9f ? Vec3(0, 1, 0).cross(ng) : Vec3(1, 0, 0).cross(ng);
@@ -559,6 +601,7 @@ inline DetailOutput bake(const DetailInput& in) {
         for (size_t i = 0; i < N; ++i) {
             if (!raster.state[i] || rep[i] == i) continue;
             cavity[i] = cavity[rep[i]]; exposure[i] = exposure[rep[i]]; skyAbove[i] = skyAbove[rep[i]]; streak[i] = streak[rep[i]];
+            curvMap[i] = curvMap[rep[i]]; cavMap[i] = cavMap[rep[i]]; thickM[i] = thickM[rep[i]];
         }
 
         // 2. the ray measures smoothed over each texel's own surface (neighbours within a couple of texels in space)
@@ -581,7 +624,7 @@ inline DetailOutput bake(const DetailInput& in) {
                 }
                 f.swap(g);
             };
-            smooth(cavity); smooth(exposure); smooth(skyAbove); smooth(streak);
+            smooth(cavity); smooth(exposure); smooth(skyAbove); smooth(streak); smooth(curvMap); smooth(cavMap); smooth(thickM);
         }
         out.msMasks += std::chrono::duration<double, std::milli>(clock::now() - tm).count();
 
@@ -589,7 +632,7 @@ inline DetailOutput bake(const DetailInput& in) {
         auto tc = clock::now();
         ao.base.assign(N * 4, 0);
         ao.mr.assign(N * 4, 0);
-        if (in.wantMasks) { ao.masksA.assign(N * 4, 0); ao.masksB.assign(N * 4, 0); }
+        if (in.wantMasks) { ao.masksA.assign(N * 4, 0); ao.masksB.assign(N * 4, 0); ao.maps.assign(N * 4, 0); }
         std::vector<MaskStats> partStats(in.parts.size());
         std::vector<uint64_t> decalHits(in.decals.size(), 0);
         for (size_t i = 0; i < N; ++i) {
@@ -600,10 +643,16 @@ inline DetailOutput bake(const DetailInput& in) {
             const float clear = 1.0f - std::clamp(A.transmission, 0.0f, 1.0f);
             const float patch = std::clamp(1.0f + P.variation * fbm(p, std::max(1e-5f, P.patchScaleM), P.seed + 11), 0.0f, 2.0f);
 
-            const float edgeMask = smoothstep(0.45f, 0.9f, convexM[i] + P.chipNoise * 0.35f * fbm(p, std::max(1e-5f, P.chipScaleM), P.seed + 3));
+            // convexity: the part's sharp edges, or its curvature where it bulges at curvatureRadiusM
+            // (H r from 0.5, a part about twice as round as the radius, to 1, a part as round as it)
+            const float convex = std::max(convexM[i], 1.5f * P.curvatureWear * smoothstep(0.5f, 1.0f, curvMap[i]));
+            const float edgeMask = smoothstep(0.45f, 0.9f, convex + P.chipNoise * 0.35f * fbm(p, std::max(1e-5f, P.chipScaleM), P.seed + 3));
             const float aoTerm = smoothstep(0.06f, 0.5f, cavity[i]);
             const float crease = smoothstep(0.15f, 0.7f, concaveM[i]);
-            const float grimeMask = std::clamp((aoTerm * 0.9f + crease * 0.8f + 0.2f * (1.0f - exposure[i])) * patch, 0.0f, 1.0f) * (1.0f - 0.7f * edgeMask);
+            const float cavityTerm = P.cavityGrime * smoothstep(0.1f, 0.6f, cavMap[i]);
+            const float grimeMask = std::clamp((aoTerm * 0.9f + crease * 0.8f + cavityTerm + 0.2f * (1.0f - exposure[i])) * patch, 0.0f, 1.0f) * (1.0f - 0.7f * edgeMask);
+            // thin: light passes through what is thinner than thinM (an inward ray that meets nothing reads the cap)
+            const float thinMask = thickM[i] < thicknessCap ? 1.0f - smoothstep(0.25f * P.thinM, P.thinM, thickM[i]) : 0.0f;
             float streakMask = 0;
             if (streak[i] > 0) {
                 Vec3 across = Vec3(0, 1, 0).cross(ns);
@@ -635,6 +684,10 @@ inline DetailOutput bake(const DetailInput& in) {
                 c = c + (Vec3(1, 1, 1) - c) * (0.18f * fade);
                 rough = rough + (1.0f - rough) * (0.3f * fade);
             }
+            // thin parts lighter, light passing through them (a dielectric only: no light passes through metal, by the
+            // material's own metalness at this texel)
+            const float thin = std::clamp(P.thinLight * thinMask * clear * (1.0f - std::clamp(m0, 0.0f, 1.0f)), 0.0f, 1.0f);
+            if (thin > 0) c = c + (Vec3(1, 1, 1) - c) * (0.45f * thin);
             // decals on this part, under the wear
             float decalCover = 0;
             for (size_t d = 0; d < in.decals.size(); ++d) {
@@ -684,9 +737,11 @@ inline DetailOutput bake(const DetailInput& in) {
                 ma[0] = toByte(edgeMask); ma[1] = toByte(grimeMask); ma[2] = toByte(streakMask); ma[3] = toByte(dustMask);
                 uint8_t* mb = &ao.masksB[i * 4];
                 mb[0] = toByte(exposureM); mb[1] = toByte(decalCover); mb[2] = toByte(cavity[i]); mb[3] = toByte(convexM[i]);
+                uint8_t* mm = &ao.maps[i * 4];
+                mm[0] = toByte(0.5f + 0.5f * curvMap[i]); mm[1] = toByte(cavMap[i]); mm[2] = toByte(thickM[i] / thicknessCap); mm[3] = toByte(1.0f - cavity[i]);
             }
             if (raster.state[i] == 1) {
-                MaskStats m{1, edgeMask, grimeMask, streakMask, dustMask, exposureM, decalCover};
+                MaskStats m{1, edgeMask, grimeMask, streakMask, dustMask, exposureM, decalCover, cavMap[i], thinMask};
                 ao.stats.add(m);
                 if (part < partStats.size()) partStats[part].add(m);
             }
@@ -701,13 +756,13 @@ inline DetailOutput bake(const DetailInput& in) {
         slots.push_back(std::move(ao.base));
         slots.push_back(std::move(ao.mr));
         std::vector<uint32_t> kinds = {uv_rewrap::kSlotSrgb, uv_rewrap::kSlotLinear};
-        if (in.wantMasks) { slots.push_back(std::move(ao.masksA)); slots.push_back(std::move(ao.masksB)); kinds.push_back(uv_rewrap::kSlotLinear); kinds.push_back(uv_rewrap::kSlotLinear); }
+        if (in.wantMasks) { slots.push_back(std::move(ao.masksA)); slots.push_back(std::move(ao.masksB)); slots.push_back(std::move(ao.maps)); for (int k = 0; k < 3; ++k) kinds.push_back(uv_rewrap::kSlotLinear); }
         std::vector<uint8_t> filled(N);
         for (size_t i = 0; i < N; ++i) filled[i] = raster.state[i] ? 1 : 0;
         uv_rewrap::dilateSlots(slots, std::move(filled), W, H, A.gutter, kinds);
         ao.base = std::move(slots[0]);
         ao.mr = std::move(slots[1]);
-        if (in.wantMasks) { ao.masksA = std::move(slots[2]); ao.masksB = std::move(slots[3]); }
+        if (in.wantMasks) { ao.masksA = std::move(slots[2]); ao.masksB = std::move(slots[3]); ao.maps = std::move(slots[4]); }
         out.msDilate += std::chrono::duration<double, std::milli>(clock::now() - td).count();
         out.atlases.push_back(std::move(ao));
     }

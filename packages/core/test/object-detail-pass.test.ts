@@ -13,6 +13,8 @@
  *   on every texel, and a weathered one keeps names, extensions, emission and the factors it had (in its extras);
  * - edge wear follows convexity, the same on a 12-triangle box as on a finely tessellated one, and none on a sphere;
  * - grime follows occlusion (a floor against a wall), dust lies on what faces the sky, streaks run under an overhang;
+ * - the mesh-measured maps steer it: a knob rounder than the curvature radius wears though it has no sharp edge, cavity
+ *   alone puts grime in the crease where two parts meet, and a thin plate is lightened while a thick block is not;
  * - a decal lands on the part it names and on no other, and only on the part's surface that faces it;
  * - SB-Veggie trees are left as they are.
  * Masks are read at points on the surface through the output's own UVs. A before/after render goes to
@@ -28,7 +30,7 @@ import { buildFixtureGlb, icosphereMesh, orbitCamera, renderGlb, saveSideBySide,
 type V3 = [number, number, number];
 const TIMEOUT = 900_000;
 const SMALL: Partial<ObjectDetailOptions> = { targetTexels: 512 * 512, imageFormat: 'png', masks: true };
-const OFF = { edgeWear: 0, grime: 0, streaks: 0, dust: 0, sunFade: 0, variation: 0 };
+const OFF = { edgeWear: 0, grime: 0, streaks: 0, dust: 0, sunFade: 0, variation: 0, thinLight: 0 };
 
 /** An axis-aligned box, each face split into n x n quads, hard edges (normals per face). */
 function box(name: string, size: V3, center: V3, n = 1, material = 0): FixturePrimitive {
@@ -98,7 +100,8 @@ function maskAt(glb: Buffer, masks: ObjectDetailMasks[], part: string, q: V3) {
         const m = masks.find(x => x.material === t.material)!;
         const u = b[0] * t.uv[0][0] + b[1] * t.uv[1][0] + b[2] * t.uv[2][0], v = b[0] * t.uv[0][1] + b[1] * t.uv[1][1] + b[2] * t.uv[2][1];
         const i = (Math.min(m.height - 1, Math.floor(v * m.height)) * m.width + Math.min(m.width - 1, Math.floor(u * m.width))) * 4;
-        return { edge: m.wear[i] / 255, grime: m.wear[i + 1] / 255, streak: m.wear[i + 2] / 255, dust: m.wear[i + 3] / 255, exposure: m.light[i] / 255, decal: m.light[i + 1] / 255, cavity: m.light[i + 2] / 255, convexity: m.light[i + 3] / 255 };
+        return { edge: m.wear[i] / 255, grime: m.wear[i + 1] / 255, streak: m.wear[i + 2] / 255, dust: m.wear[i + 3] / 255, exposure: m.light[i] / 255, decal: m.light[i + 1] / 255, cavity: m.light[i + 2] / 255, convexity: m.light[i + 3] / 255,
+            curvature: m.maps[i] / 255 * 2 - 1, cavityMap: m.maps[i + 1] / 255, thickness: m.maps[i + 2] / 255, ao: m.maps[i + 3] / 255 };
     }
     throw new Error(`no surface of ${part} at ${q.join(', ')}`);
 }
@@ -232,6 +235,61 @@ describe('object detail pass: wear follows the geometry', () => {
         // the top under the open sky sees more of it than a side, and the bottom none
         expect(maskAt(r.glb, r.masks!, 'block', [0.15, 0.5, -0.15]).exposure).toBeGreaterThan(maskAt(r.glb, r.masks!, 'block', [0.25, 0.25, -0.1]).exposure + 0.3);
         expect(maskAt(r.glb, r.masks!, 'block', [0, 0, 0.1]).exposure).toBeLessThan(0.02);
+    }, TIMEOUT);
+});
+
+describe('object detail pass: the mesh-measured maps steer the wear', () => {
+    it('wears a knob rounder than the curvature radius, though no edge of it is sharp, and only when curvature is asked to', async () => {
+        const glb = buildFixtureGlb({
+            primitives: [box('base', [1, 0.2, 1], [0, 0.1, 0], 8, 0), { ...icosphereMesh(0.04, 4), positions: icosphereMesh(0.04, 4).positions.map((v, k) => v + (k % 3 === 1 ? 0.24 : 0)), name: 'knob', material: 1 }],
+            materials: [material('base', [0.2, 0.3, 0.6, 1], 0.5, 0), material('knob', [0.2, 0.3, 0.6, 1], 0.5, 0)]
+        });
+        const wear = { ...OFF, edgeWear: 1, edgeWidthM: 0.004, curvatureRadiusM: 0.05 };
+        const on = await runObjectDetailPass(glb, { ...SMALL, wear: { ...wear, curvatureWear: 1 } });
+        const off = await runObjectDetailPass(glb, { ...SMALL, wear: { ...wear, curvatureWear: 0 } });
+        const knob = (r: typeof on) => r.report.parts.find(p => p.part === 'knob')!;
+        expect(maskAt(on.glb, on.masks!, 'knob', [0, 0.28, 0]).curvature).toBeGreaterThan(0.6);
+        expect(knob(on).edgeWear).toBeGreaterThan(0.3);
+        expect(knob(off).edgeWear).toBeLessThan(0.02);
+        // the base's flat top reads flat and stays unworn
+        expect(Math.abs(maskAt(on.glb, on.masks!, 'base', [0.3, 0.2, 0.3]).curvature)).toBeLessThan(0.05);
+        expect(maskAt(on.glb, on.masks!, 'base', [0.3, 0.2, 0.3]).edge).toBeLessThan(0.02);
+        expect(on.report.meshMaps.label).toBe('generated');
+    }, TIMEOUT);
+
+    it('puts grime in the crease where two parts meet from cavity alone', async () => {
+        const glb = buildFixtureGlb({
+            primitives: [box('floor', [1, 0.05, 1], [0, 0.025, 0], 12, 0), box('wall', [1, 1, 0.05], [0, 0.55, -0.475], 12, 1)],
+            materials: [material('floor', [0.6, 0.6, 0.6, 1], 0.7, 0), material('wall', [0.6, 0.6, 0.6, 1], 0.7, 0)]
+        });
+        // occlusion reaches less than the 3 cm from the wall the point stands: what is left is the cavity map
+        const wear = { ...OFF, grime: 1, aoRadiusM: 0.005, cavityRadiusM: 0.08 };
+        const r = await runObjectDetailPass(glb, { ...SMALL, wear: { ...wear, cavityGrime: 1 } });
+        const without = await runObjectDetailPass(glb, { ...SMALL, wear: { ...wear, cavityGrime: 0 } });
+        const at = (x: typeof r, z: number) => maskAt(x.glb, x.masks!, 'floor', [0.1, 0.05, z]);
+        expect(at(r, -0.42).cavityMap).toBeGreaterThan(0.4);
+        expect(at(r, 0.35).cavityMap).toBe(0);
+        expect(at(r, -0.42).grime).toBeGreaterThan(at(r, 0.35).grime + 0.3);
+        expect(at(without, -0.42).grime).toBeLessThan(at(without, 0.35).grime + 0.15);
+    }, TIMEOUT);
+
+    it('lightens a thin plate, light passing through it, and not a thick block of the same colour nor a thin metal sheet', async () => {
+        const glb = buildFixtureGlb({
+            primitives: [box('plate', [0.6, 0.004, 0.6], [-0.4, 0.3, 0], 6, 0), box('block', [0.4, 0.4, 0.4], [0.4, 0.2, 0], 6, 1), box('sheet', [0.4, 0.004, 0.4], [0.4, 0.6, 0], 6, 2)],
+            materials: [material('plate', [0.15, 0.25, 0.1, 1], 0.6, 0), material('block', [0.15, 0.25, 0.1, 1], 0.6, 0), material('sheet', [0.15, 0.25, 0.1, 1], 0.4, 1)]
+        });
+        const r = await runObjectDetailPass(glb, { ...SMALL, wear: { ...OFF, thinLight: 1, thinM: 0.02 } });
+        const plate = maskAt(r.glb, r.masks!, 'plate', [-0.4, 0.302, 0.1]), block = maskAt(r.glb, r.masks!, 'block', [0.4, 0.4, 0.1]);
+        expect(plate.thickness).toBeLessThan(0.15);           // 4 mm of a 40 mm cap
+        expect(block.thickness).toBeGreaterThan(0.99);
+        expect(r.report.parts.find(p => p.part === 'plate')!.thin).toBeGreaterThan(0.9);
+        expect(r.report.parts.find(p => p.part === 'block')!.thin).toBeLessThan(0.01);
+        const lit = mapsAt(r.glb, 'plate', [-0.4, 0.302, 0.1]).rgb, solid = mapsAt(r.glb, 'block', [0.4, 0.4, 0.1]).rgb;
+        expect(lit[1]).toBeGreaterThan(solid[1] + 25);
+        expect(Math.abs(solid[1] - srgb8(0.25))).toBeLessThan(3);
+        // the metal sheet is as thin as the plate, but no light passes through metal
+        expect(maskAt(r.glb, r.masks!, 'sheet', [0.4, 0.602, 0.1]).thickness).toBeLessThan(0.15);
+        expect(Math.abs(mapsAt(r.glb, 'sheet', [0.4, 0.602, 0.1]).rgb[1] - srgb8(0.25))).toBeLessThan(3);
     }, TIMEOUT);
 });
 

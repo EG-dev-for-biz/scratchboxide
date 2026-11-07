@@ -12,11 +12,12 @@
 //
 // Build:  clang++ -std=c++20 -O3 -I packages/core/src/native/3d-engine/include scripts/object_detail_bake.cpp -o build/3d-native/object_detail_bake -pthread
 //
-// SBOD (little endian): u32 version=1, u32 A (atlases), S (surfaces), G (parts), D (decals), O (occluder triangles),
+// SBOD (little endian): u32 version=2, u32 A (atlases), S (surfaces), G (parts), D (decals), O (occluder triangles),
 //        flags (1 masks, 2 ground), threads; f64[32] wear (edgeWear, grime, streaks, dust, sunFade, variation,
 //        edgeWidthM, creaseWidthM, aoRadiusM, streakReachM, streakColumnM, patchScaleM, chipScaleM, chipNoise,
 //        openEdgeAngle, grimeColor[3], streakColor[3], dustColor[3], grimeRoughness, streakRoughness, dustRoughness,
-//        aoSamples, groundY, weldM, rayEpsM, seed);
+//        aoSamples, groundY, weldM, rayEpsM, seed); f64[7] mesh maps (curvatureRadiusM, cavityRadiusM, thinM,
+//        curvatureWear, cavityGrime, thinLight, thicknessSamples);
 //        per atlas: u32 W, H, gutter, hasBase, hasMr; f32 baseFactor[4], roughness, metalness, transmission, texelM;
 //                   u8[4WH] base?, u8[4WH] mr?
 //        per part: f32 edgeWear, grime, streaks, dust, sunFade; u32 hasEdgeColor; f32 edgeColor[3], edgeRoughness, edgeMetalness
@@ -24,10 +25,12 @@
 //        occluders: f32[9O]
 //        per decal: u32 n; u32[n] parts; f32 center[3], normal[3], up[3], width, height, depth, opacity, maxAngleDeg,
 //                   roughness, metalness, finishMix; u32 w, h; u8[4wh]
-//   -> 'SBOO' u32 version, A, G, D, convexEdges, concaveEdges, openEdges; f64 msEdges, msBvh, msMasks, msComposite, msDilate;
-//        per atlas: u32 W, H, hasMasks; f64[7] stats (texels, edge, grime, streak, dust, exposure, decal);
-//                   u8[4WH] base, u8[4WH] mr, masks?: u8[4WH] edge/grime/streak/dust, u8[4WH] exposure/decal/cavity/convexity
-//        per part: f64[7] stats; per decal: f64 texels
+//   -> 'SBOO' u32 version=2, A, G, D, convexEdges, concaveEdges, openEdges; f64 msEdges, msBvh, msMasks, msComposite, msDilate,
+//        curvatureRadiusM, cavityRadiusM (as read);
+//        per atlas: u32 W, H, hasMasks; f64[9] stats (texels, edge, grime, streak, dust, exposure, decal, cavity, thin);
+//                   u8[4WH] base, u8[4WH] mr, masks?: u8[4WH] edge/grime/streak/dust, u8[4WH] exposure/decal/occlusion/convexity,
+//                   u8[4WH] curvature/cavity/thickness/ao
+//        per part: f64[9] stats; per decal: f64 texels
 
 #include "scratchbox_object_detail.hpp"
 
@@ -55,21 +58,21 @@ void checkFinite(const std::vector<float>& a, const char* what) {
 }
 
 void writeStats(const scratchbox::object_detail::MaskStats& s) {
-    const double v[7] = {s.texels, s.edge, s.grime, s.streak, s.dust, s.exposure, s.decal};
-    writeN(v, 7);
+    const double v[9] = {s.texels, s.edge, s.grime, s.streak, s.dust, s.exposure, s.decal, s.cavity, s.thin};
+    writeN(v, 9);
 }
 
 int run() {
     using namespace scratchbox::object_detail;
     using scratchbox::math::Vec3;
-    if (readOne<uint32_t>("version") != 1) throw std::runtime_error("unsupported SBOD version");
+    if (readOne<uint32_t>("version") != 2) throw std::runtime_error("unsupported SBOD version");
     const uint32_t A = readOne<uint32_t>("A"), S = readOne<uint32_t>("S"), G = readOne<uint32_t>("G"), D = readOne<uint32_t>("D"), O = readOne<uint32_t>("O");
     const uint32_t flags = readOne<uint32_t>("flags");
     DetailInput in;
     in.threads = readOne<uint32_t>("threads");
     in.wantMasks = (flags & 1u) != 0;
     std::vector<double> w;
-    readN(w, 32, "wear");
+    readN(w, 39, "wear");
     for (double x : w) if (!std::isfinite(x)) throw std::runtime_error("wear: non-finite value");
     WearParams& P = in.wear;
     P.edgeWear = float(w[0]); P.grime = float(w[1]); P.streaks = float(w[2]); P.dust = float(w[3]); P.sunFade = float(w[4]); P.variation = float(w[5]);
@@ -81,8 +84,10 @@ int run() {
     P.grimeRoughness = float(w[24]); P.streakRoughness = float(w[25]); P.dustRoughness = float(w[26]);
     P.aoSamples = static_cast<int>(std::clamp(w[27], 4.0, 256.0));
     P.groundY = float(w[28]); P.weldM = float(w[29]); P.rayEpsM = float(w[30]); P.seed = static_cast<uint32_t>(w[31]);
+    P.curvatureRadiusM = float(w[32]); P.cavityRadiusM = float(w[33]); P.thinM = float(w[34]);
+    P.curvatureWear = float(w[35]); P.cavityGrime = float(w[36]); P.thinLight = float(w[37]); P.thicknessSamples = static_cast<int>(std::clamp(w[38], 0.0, 64.0));
     P.ground = (flags & 2u) != 0;
-    if (!(P.edgeWidthM > 0) || !(P.creaseWidthM > 0) || !(P.aoRadiusM > 0) || !(P.streakReachM > 0)) throw std::runtime_error("wear widths and radii must be positive");
+    if (!(P.edgeWidthM > 0) || !(P.creaseWidthM > 0) || !(P.aoRadiusM > 0) || !(P.streakReachM > 0) || !(P.curvatureRadiusM > 0) || !(P.cavityRadiusM > 0) || !(P.thinM > 0)) throw std::runtime_error("wear widths and radii must be positive");
 
     in.atlases.resize(A);
     for (auto& at : in.atlases) {
@@ -149,17 +154,17 @@ int run() {
     const DetailOutput r = bake(in);
 
     std::fwrite("SBOO", 1, 4, stdout);
-    const uint32_t head[7] = {1, A, G, D, r.convexEdges, r.concaveEdges, r.openEdges};
+    const uint32_t head[7] = {2, A, G, D, r.convexEdges, r.concaveEdges, r.openEdges};
     writeN(head, 7);
-    const double ms[5] = {r.msEdges, r.msBvh, r.msMasks, r.msComposite, r.msDilate};
-    writeN(ms, 5);
+    const double ms[7] = {r.msEdges, r.msBvh, r.msMasks, r.msComposite, r.msDilate, r.curvatureRadiusM, r.cavityRadiusM};
+    writeN(ms, 7);
     for (const auto& at : r.atlases) {
         const uint32_t ah[3] = {at.width, at.height, in.wantMasks ? 1u : 0u};
         writeN(ah, 3);
         writeStats(at.stats);
         writeN(at.base.data(), at.base.size());
         writeN(at.mr.data(), at.mr.size());
-        if (in.wantMasks) { writeN(at.masksA.data(), at.masksA.size()); writeN(at.masksB.data(), at.masksB.size()); }
+        if (in.wantMasks) { writeN(at.masksA.data(), at.masksA.size()); writeN(at.masksB.data(), at.masksB.size()); writeN(at.maps.data(), at.maps.size()); }
     }
     for (const auto& p : r.parts) writeStats(p);
     for (uint64_t t : r.decalTexels) { const double v = double(t); writeN(&v, 1); }
