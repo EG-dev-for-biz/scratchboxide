@@ -21,12 +21,14 @@
  *  - `cut`: pipeline-k/lattice-stitch.ts cutScanToLattice (scratchbox_lattice_cut.hpp), triangles in chunks;
  *  - `stitch`: pipeline-k/lattice-stitch.ts stitchLattice's strips and corner zips (scratchbox_lattice_stitch.hpp), one
  *    facade a task;
- *  - `clip`: pipeline-k/lattice-stitch.ts clipToFootprint (scratchbox_lattice_cut.hpp, the cut's splits and weld), triangles
- *    in chunks;
- *  - `infill`: pipeline-k/lattice-stitch.ts fillOpenLoops (scratchbox_open_loop_fill.hpp);
+ *  - `clip`: pipeline-k/lattice-stitch.ts clipToFootprint by the robust boolean (scratchbox_footprint_clip.hpp,
+ *    `clip-boolean`); its TypeScript twin is the older line clip, so this port is the one not held bit for bit;
+ *  - `infill`: pipeline-k/lattice-stitch.ts fillOpenLoops (scratchbox_open_loop_fill.hpp), plus its native-only CDT caps
+ *    (LATTICE_STITCH_PARAMS.cdtCaps; off for its parity test);
  *  - `fill-texture`: pipeline-k/lattice-stitch.ts appendTexturedTriangles' routes (scratchbox_fill_texture.hpp), the
  *    texturing of the fill, seal and stitch in the twin, triangles and pieces in chunks.
- * and one with no TypeScript twin: the inner core (pipeline-k/inner-core.ts, scratchbox_inner_core.hpp), columns of voxels a task.
+ * and ones with no TypeScript twin: the inner core (pipeline-k/inner-core.ts, scratchbox_inner_core.hpp), columns of voxels a task;
+ * the boolean clip (above); and the boolean and the CDT themselves (`boolean`, `cdt`), for their tests and tools.
  *
  * Data goes over stdin as raw little-endian buffers (a header, then arrays), never PNG; the window fit's facades are
  * streamed as they are decoded and fitted as they arrive. The pool's size is the caller's: a chunked district's builds
@@ -379,19 +381,55 @@ function readCutOuts(r: Reader, prims: NativeCutPrim[]): NativeCutOut[] {
 }
 
 /**
- * lattice-stitch.ts clipToFootprint's geometry natively, per primitive: the outline lines (a point and the outward normal
- * in plan, as the TypeScript works them out), the footprint's loops and the margin; its report (the area unrounded).
+ * The footprint clip by the robust boolean (scratchbox_footprint_clip.hpp): the primitives trimmed to the prism over the
+ * footprint pushed out by marginM, cut points within collapseM of a neighbour merged into it; its report and per
+ * primitive the line clip's output.
  */
-export function runNativeClip(marginM: number, loops: Vec2[][], lines: Array<{ ax: number; az: number; nx: number; nz: number }>, prims: NativeCutPrim[], threads: number): { report: { cutTriangles: number; removedTriangles: number; removedAreaM2: number }; prims: NativeCutOut[] } {
-    const w = new Writer().magic('SBCL').u32(1).f64s([marginM]).u32(loops.length);
+export function runNativeClipBoolean(marginM: number, collapseM: number, loops: Vec2[][], prims: NativeCutPrim[]): { report: { cutTriangles: number; removedTriangles: number; removedAreaM2: number } & Record<string, number>; prims: NativeCutOut[] } {
+    const w = new Writer().magic('SBCB').u32(1).f64s([marginM, collapseM]).u32(loops.length);
     for (const loop of loops) w.u32(loop.length).f64s(loop.flatMap(p => [p[0], p[1]]));
-    w.u32(lines.length).f64s(lines.flatMap(l => [l.ax, l.az, l.nx, l.nz]));
     writeCutPrims(w, prims);
-    const r = new Reader(runSync('clip', w.take(), threads));
-    const report = { cutTriangles: r.f64(), removedTriangles: r.f64(), removedAreaM2: r.f64() };
+    const r = new Reader(runSync('clip-boolean', w.take(), 1));
+    const report = JSON.parse(r.str()) as { cutTriangles: number; removedTriangles: number; removedAreaM2: number } & Record<string, number>;
     const out = readCutOuts(r, prims);
-    r.done('clip');
+    r.done('clip-boolean');
     return { report, prims: out };
+}
+
+/** A triangle mesh for the native boolean: positions (x, y, z per vertex) and triangles (three indices each). */
+export interface NativeMesh { positions: ArrayLike<number>; indices: ArrayLike<number> }
+export type NativeBooleanOp = 'union' | 'intersection' | 'difference' | 'trim-inside' | 'trim-outside';
+
+/** The robust boolean of A and B (scratchbox_boolean.hpp through `boolean`): its report, the result and each triangle's side (0 A, 1 B). */
+export function runNativeBoolean(a: NativeMesh, b: NativeMesh, op: NativeBooleanOp, opts: { collapseM?: number; weldByPosition?: boolean } = {}): { report: Record<string, number>; positions: Float64Array; indices: Uint32Array; side: Uint8Array } {
+    const ops: NativeBooleanOp[] = ['union', 'intersection', 'difference', 'trim-inside', 'trim-outside'];
+    const w = new Writer().magic('SBBO').u32(1).u32(ops.indexOf(op)).f64s([opts.collapseM ?? 0]).u32(opts.weldByPosition === false ? 0 : 1);
+    for (const m of [a, b]) w.u32(m.positions.length / 3).f64s(m.positions).u32(m.indices.length / 3).u32s(m.indices);
+    const r = new Reader(runSync('boolean', w.take(), 1));
+    const report = JSON.parse(r.str()) as Record<string, number>;
+    const positions = r.f64s(r.u32() * 3);
+    const indices = r.u32s(r.u32() * 3);
+    const side = r.u8s(indices.length / 3);
+    r.done('boolean');
+    return { report, positions, indices, side };
+}
+
+/** A constrained Delaunay triangulation (scratchbox_cdt.hpp through `cdt`): directed segments, a fill rule, optional refinement. */
+export function runNativeCdt(points: ReadonlyArray<readonly [number, number]>, segments: ReadonlyArray<readonly [number, number]>, opts: { fill?: 'even-odd' | 'non-zero' | 'positive'; refine?: boolean; minAngleDeg?: number; maxArea?: number; splitSegments?: boolean } = {}): { report: Record<string, number>; points: Array<[number, number]>; tris: Array<[number, number, number]>; winding: number[] } {
+    const fill = opts.fill === 'non-zero' ? 1 : opts.fill === 'positive' ? 2 : 0;
+    const w = new Writer().magic('SBDT').u32(1).u32(fill).u32(opts.refine ? 1 : 0).f64s([opts.minAngleDeg ?? 20, opts.maxArea ?? 0]).u32(opts.splitSegments === false ? 0 : 1);
+    w.u32(points.length).f64s(points.flatMap(p => [p[0], p[1]])).u32(segments.length);
+    const sb = Buffer.alloc(segments.length * 8);
+    segments.forEach((sg, i) => { sb.writeInt32LE(sg[0], i * 8); sb.writeInt32LE(sg[1], i * 8 + 4); });
+    w.raw(sb);
+    const r = new Reader(runSync('cdt', w.take(), 1));
+    const report = JSON.parse(r.str()) as Record<string, number>;
+    const pts = Array.from({ length: r.u32() }, () => [r.f64(), r.f64()] as [number, number]);
+    const n = r.u32();
+    const tris = Array.from({ length: n }, () => [r.i32(), r.i32(), r.i32()] as [number, number, number]);
+    const winding = Array.from({ length: n }, () => r.i32());
+    r.done('cdt');
+    return { report, points: pts, tris, winding };
 }
 
 // ------------------------------------------------------------------------------------------------ the stitch

@@ -9,7 +9,7 @@
 
 /**
  * CLI of pipeline K's remesh-polish steps run natively on a fixed thread pool (packages/core/src/node/3d-engine/
- * staged-location/remesh-polish-native.ts drives it; SCRATCHBOX_K_NATIVE without window-fit, wall-grammar, wall-sheets, lattice, cut, stitch, clip, infill or fill-texture keeps that step in TypeScript). Data
+ * staged-location/remesh-polish-native.ts drives it; SCRATCHBOX_K_NATIVE without window-fit, wall-grammar, wall-sheets, lattice, cut, stitch, clip, infill or fill-texture keeps that step in TypeScript; the clip natively is the robust boolean, clip-boolean). Data
  * arrives on stdin as raw little-endian buffers, a header then arrays, never PNG:
  *
  *   remesh_polish_native window-fit <threads>
@@ -62,10 +62,20 @@
  *     out: f64 cutTriangles, removedPieces, keptPieces; per primitive u32 n, u32[n] the cut triangles' first index slots,
  *          u32 verts, f32[verts*3] positions, per attribute f32[verts*comps], f64[3] min, f64[3] max, u32 n, u32[n] indices.
  *
- *   remesh_polish_native clip <threads>
- *     in:  "SBCL" u32 version (1), f64 marginM, u32 nLoops, per loop u32 n, f64[n*2] (plan x z), u32 nLines, per line
- *          f64 ax, az, nx, nz (an outline edge's point and outward normal), then the primitives as `cut` reads them.
- *     out: f64 cutTriangles, removedTriangles, removedAreaM2 (unrounded), then per primitive as `cut` writes it.
+ *   remesh_polish_native clip-boolean <threads>
+ *     in:  "SBCB" u32 version (1), f64 marginM, f64 collapseM, u32 nLoops, per loop u32 n, f64[n*2] (plan x z), then the
+ *          primitives as `cut` reads them.
+ *     out: u32 jsonLen, the report's JSON (scratchbox_footprint_clip.hpp Report), then per primitive as `cut` writes it.
+ *
+ *   remesh_polish_native boolean <threads>
+ *     in:  "SBBO" u32 version (1), u32 op (0 union, 1 intersection, 2 difference, 3 trim inside, 4 trim outside), f64 collapse,
+ *          u32 weldByPosition, then meshes A and B, each u32 nVerts, f64[nVerts*3], u32 nTris, u32[nTris*3].
+ *     out: u32 jsonLen, the report's JSON (scratchbox_boolean.hpp Report), the result as a mesh, then u8 side per triangle.
+ *
+ *   remesh_polish_native cdt <threads>
+ *     in:  "SBDT" u32 version (1), u32 fill (0 even-odd, 1 non-zero, 2 positive), u32 refine, f64 minAngleDeg, f64 maxArea,
+ *          u32 splitSegments, u32 nPoints, f64[n*2], u32 nSegments, i32[nSegments*2].
+ *     out: u32 jsonLen, the report's JSON, u32 nPoints, f64[n*2], u32 nTris, i32[nTris*3], i32[nTris] winding.
  *
  *   remesh_polish_native fill-texture <threads>
  *     in:  "SBFT" u32 version (1), u32 nParams, f64[nParams] (scratchbox_fill_texture.hpp Params), u32 nWalls, per facade
@@ -108,6 +118,7 @@
 #include "scratchbox_facade_lattice.hpp"
 #include "scratchbox_wall_grammar.hpp"
 #include "scratchbox_lattice_cut.hpp"
+#include "scratchbox_footprint_clip.hpp"
 #include "scratchbox_lattice_stitch.hpp"
 #include "scratchbox_wall_sheets.hpp"
 #include "scratchbox_fill_texture.hpp"
@@ -121,6 +132,8 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using namespace scratchbox;
@@ -470,24 +483,94 @@ int cut(unsigned threads) {
     return 0;
 }
 
-int clip(unsigned threads) {
-    expectMagic("SBCL", 1);
-    const double marginM = readOne<double>();
+int clipBoolean(unsigned) {
+    expectMagic("SBCB", 1);
+    const double marginM = readOne<double>(), collapseM = readOne<double>();
     std::vector<lattice_cut::Loop> loops(readOne<uint32_t>());
     for (auto& loop : loops) {
         const auto v = readDoubles(static_cast<size_t>(readOne<uint32_t>()) * 2);
         for (size_t i = 0; i + 1 < v.size(); i += 2) loop.push_back({v[i], v[i + 1]});
     }
-    std::vector<lattice_cut::ClipLine> lines(readOne<uint32_t>());
-    for (auto& l : lines) { const auto v = readDoubles(4); l = {v[0], v[1], v[2], v[3]}; }
     const auto prims = readCutPrims();
-    FixedThreadPool pool(threads);
-    lattice_cut::ClipReport report;
-    const auto outs = lattice_cut::clip(prims, loops, lines, marginM, pool, report);
-    writeOne<double>(report.cutTriangles);
-    writeOne<double>(report.removedTriangles);
-    writeOne<double>(report.removedAreaM2);
+    footprint_clip::Report report;
+    const auto outs = footprint_clip::clip(prims, loops, marginM, collapseM, report);
+    const std::string json = footprint_clip::reportJson(report);
+    writeOne<uint32_t>(static_cast<uint32_t>(json.size()));
+    writeExact(json.data(), json.size());
     writeCutOuts(outs);
+    return 0;
+}
+
+boolean::Mesh readMesh() {
+    boolean::Mesh m;
+    const auto p = readDoubles(static_cast<size_t>(readOne<uint32_t>()) * 3);
+    for (size_t i = 0; i + 2 < p.size(); i += 3) m.pos.push_back({p[i], p[i + 1], p[i + 2]});
+    std::vector<uint32_t> idx(static_cast<size_t>(readOne<uint32_t>()) * 3);
+    if (!idx.empty()) readExact(idx.data(), idx.size() * sizeof(uint32_t));
+    for (size_t i = 0; i + 2 < idx.size(); i += 3) {
+        if (idx[i] >= m.pos.size() || idx[i + 1] >= m.pos.size() || idx[i + 2] >= m.pos.size()) throw std::runtime_error("a triangle index past the mesh's vertices");
+        m.tris.push_back({static_cast<int>(idx[i]), static_cast<int>(idx[i + 1]), static_cast<int>(idx[i + 2])});
+    }
+    return m;
+}
+
+/** A boolean of two meshes (scratchbox_boolean.hpp), for its tests and tools. */
+int booleanCmd(unsigned) {
+    expectMagic("SBBO", 1);
+    const uint32_t op = readOne<uint32_t>();
+    const double collapse = readOne<double>();
+    const bool weld = readOne<uint32_t>() != 0;
+    const boolean::Mesh A = readMesh(), B = readMesh();
+    if (op > 4) throw std::runtime_error("unknown boolean op");
+    boolean::Options o;
+    o.collapseShort = collapse;
+    o.weldByPosition = weld;
+    const auto r = boolean::compute(A, B, static_cast<boolean::Op>(op), o);
+    const auto& p = r.report;
+    char b[1024];
+    std::snprintf(b, sizeof b, "{\"trisA\":%zu,\"trisB\":%zu,\"crossingsA\":%zu,\"crossingsB\":%zu,\"segments\":%zu,\"facesCutA\":%zu,\"facesCutB\":%zu,\"fallbackFaces\":%zu,\"unpairedSegments\":%zu,\"chainFailures\":%zu,\"windingConflicts\":%zu,\"ties\":%zu,\"openEdgesB\":%zu,\"openEdgesOut\":%zu,\"nonManifoldOut\":%zu,\"collapsed\":%zu}",
+                  p.trisA, p.trisB, p.crossingsA, p.crossingsB, p.segments, p.facesCutA, p.facesCutB, p.fallbackFaces, p.unpairedSegments, p.chainFailures, p.windingConflicts, p.ties, p.openEdgesB, p.openEdgesOut, p.nonManifoldOut, p.collapsed);
+    const std::string json(b);
+    writeOne<uint32_t>(static_cast<uint32_t>(json.size()));
+    writeExact(json.data(), json.size());
+    writeOne<uint32_t>(static_cast<uint32_t>(r.mesh.pos.size()));
+    for (const auto& q : r.mesh.pos) writeExact(q.data(), sizeof(double) * 3);
+    writeOne<uint32_t>(static_cast<uint32_t>(r.mesh.tris.size()));
+    for (const auto& t : r.mesh.tris) for (int v : t) writeOne<uint32_t>(static_cast<uint32_t>(v));
+    for (int sd : r.side) writeOne<uint8_t>(static_cast<uint8_t>(sd));
+    std::fflush(stdout);
+    return 0;
+}
+
+/** A constrained Delaunay triangulation (scratchbox_cdt.hpp), for its tests and tools. */
+int cdtCmd(unsigned) {
+    expectMagic("SBDT", 1);
+    cdt::Options o;
+    const uint32_t fill = readOne<uint32_t>();
+    o.fill = fill == 1 ? cdt::Fill::NonZero : fill == 2 ? cdt::Fill::Positive : cdt::Fill::EvenOdd;
+    o.refine = readOne<uint32_t>() != 0;
+    o.minAngleDeg = readOne<double>();
+    o.maxArea = readOne<double>();
+    o.splitSegments = readOne<uint32_t>() != 0;
+    const auto pv = readDoubles(static_cast<size_t>(readOne<uint32_t>()) * 2);
+    std::vector<cdt::P2> pts;
+    for (size_t i = 0; i + 1 < pv.size(); i += 2) pts.push_back({pv[i], pv[i + 1]});
+    std::vector<int32_t> sv(static_cast<size_t>(readOne<uint32_t>()) * 2);
+    if (!sv.empty()) readExact(sv.data(), sv.size() * sizeof(int32_t));
+    std::vector<std::array<int, 2>> segs;
+    for (size_t i = 0; i + 1 < sv.size(); i += 2) segs.push_back({sv[i], sv[i + 1]});
+    const auto r = cdt::triangulate(pts, segs, o);
+    char b[256];
+    std::snprintf(b, sizeof b, "{\"crossingPoints\":%d,\"segmentSplits\":%d,\"interiorPoints\":%d,\"lostSegments\":%d}", r.crossingPoints, r.segmentSplits, r.interiorPoints, r.lostSegments);
+    const std::string json(b);
+    writeOne<uint32_t>(static_cast<uint32_t>(json.size()));
+    writeExact(json.data(), json.size());
+    writeOne<uint32_t>(static_cast<uint32_t>(r.points.size()));
+    for (const auto& p : r.points) { writeOne<double>(p[0]); writeOne<double>(p[1]); }
+    writeOne<uint32_t>(static_cast<uint32_t>(r.tris.size()));
+    for (const auto& t : r.tris) for (int v : t) writeOne<int32_t>(v);
+    for (int w : r.winding) writeOne<int32_t>(w);
+    std::fflush(stdout);
     return 0;
 }
 
@@ -659,7 +742,7 @@ int innerCore(unsigned threads) {
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|fill-texture|lattice|lattice-audit|wall-grammar|cut|clip|stitch|wall-sheets|inner-core <threads>  (binary input on stdin)\n");
+        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|fill-texture|lattice|lattice-audit|wall-grammar|cut|clip-boolean|boolean|cdt|stitch|wall-sheets|inner-core <threads>  (binary input on stdin)\n");
         return 2;
     }
     const std::string cmd = argv[1];
@@ -671,7 +754,9 @@ int main(int argc, char** argv) {
         if (cmd == "lattice-audit") return latticeAudit(threads);
         if (cmd == "wall-grammar") return wallGrammar(threads);
         if (cmd == "cut") return cut(threads);
-        if (cmd == "clip") return clip(threads);
+        if (cmd == "clip-boolean") return clipBoolean(threads);
+        if (cmd == "boolean") return booleanCmd(threads);
+        if (cmd == "cdt") return cdtCmd(threads);
         if (cmd == "fill-texture") return fillTexture(threads);
         if (cmd == "stitch") return stitch(threads);
         if (cmd == "wall-sheets") return wallSheets(threads);
