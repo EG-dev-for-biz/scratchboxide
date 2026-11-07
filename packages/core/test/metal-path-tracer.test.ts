@@ -322,11 +322,12 @@ describe.skipIf(process.platform !== 'darwin')('Metal path tracer (hardware ray 
         writeSphereGlb(texturedGlb, true);
         texturedSbvg = path.join(tmp, 'checker.sbvg');
         const textured = await builder.build(texturedGlb, texturedSbvg);
-        // Re-textured coarse levels: most triangles share their atlas cell with an edge neighbour, and each level
-        // has a normal atlas beside its colour atlas.
+        // Re-textured coarse levels: each is unwrapped into charts (SCRATCHBOX_LOD_ATLAS=cells keeps one cell per
+        // triangle pair, most of them paired), and each level has a normal atlas beside its colour atlas.
         expect(textured.stats.atlases.length).toBeGreaterThanOrEqual(5);
         for (const atlas of textured.stats.atlases) {
-            expect(atlas.pairedCells).toBeGreaterThanOrEqual(0.5 * atlas.cells);
+            if (process.env.SCRATCHBOX_LOD_ATLAS === 'cells') expect(atlas.pairedCells).toBeGreaterThanOrEqual(0.5 * atlas.cells);
+            else expect(atlas.cells).toBeGreaterThan(0);
             expect(fs.existsSync(path.join(tmp, `checker.atlas${atlas.level}.png`))).toBe(true);
             expect(fs.existsSync(path.join(tmp, `checker.normal${atlas.level}.png`))).toBe(true);
         }
