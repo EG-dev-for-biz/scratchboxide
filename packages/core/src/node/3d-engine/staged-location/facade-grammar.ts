@@ -128,6 +128,8 @@ export interface ReliefOrthoFacade {
     /** Metres per ortho pixel; the ortho's top-left pixel corner is (orthoSMin, orthoTMax), s grows right, t up. */
     pixel: number; texel: number; width: number; height: number; orthoSMin: number; orthoTMax: number;
     coverage: number;
+    /** The straightened photo's horizontal repeat (m) and the autocorrelation it was found at (ortho-rectify.ts): the plane's own column pitch, when it has one. */
+    periodM?: number; periodNcc?: number;
     pattern: string;
     latticeConfirmation: number;
     latticeRejected: boolean;

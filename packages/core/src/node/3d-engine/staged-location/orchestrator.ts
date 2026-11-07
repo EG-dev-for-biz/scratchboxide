@@ -267,6 +267,8 @@ const NO_EVIDENCE_COST: EvidenceCost = { metadataCalls: 0, cachedCalls: 0, image
 // stages
 // ----------------------------------------------------------------------------------------------------------------
 
+/** The voted build may show holes on at most this much more of itself than the first isolate's (a share of its pixels over the outside audit's views), or the first isolate stands. */
+const OWNERSHIP_TEAR_TOLERANCE = 0.001;
 /** The ownership vote's outlines are waited for this long; a view not outlined by then is left out of the vote. */
 export const OWNERSHIP_VOTE_WINDOW_MS = 60_000;
 /** The focused run readings get at most this long after the wide reading (and less when the wide reading ran long). */
@@ -4458,6 +4460,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
          * notes and steps describe the remesh it last ran on; `stage` is the stage its degradations are recorded under, and
          * `notes` where its run notes, legend notes and degradations go (the vote holds them until its remesh is committed).
          */
+        // what the outside audit saw on each polished build (holes), the vote's judged against the first isolate's below
+        const defectsSeen = new Map<'remesh' | 'ownership', { holeShare: number; largestHoleRegionM2: number; why: string }>();
         const finishRefine = async (r: TileRefineResult, io: StageIO, timed: <R>(k: string, work: () => Promise<R>) => Promise<R>, stepFiles: Array<[string, string]>, degradations: DegradationRecord[], stage: 'remesh' | 'ownership', notes: RefineNotes = directNotes): Promise<TileRefineResult> => {
             // pipeline K: the facade orthos straightened and their smears levelled before the facades are rebuilt on them
             let orthosKey: string | undefined, windowFit: string | undefined, wallGrammar: string | undefined, wallSheets: string | undefined, revealDepth: string | undefined, surveyViews: RevealView[] | undefined;
@@ -4637,6 +4641,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // is judged on the finished model in the texture stage, which still paints some of it (the party wall)
                 if (pipelineK && isolateMode && pol.texturedGlb && stepOn('remesh.visibleDefects', true)) {
                     const seen = await timed('visibleDefects', () => visibleDefects(pol.texturedGlb!, { signal: io.signal }));
+                    defectsSeen.set(stage, { holeShare: seen.holeShare, largestHoleRegionM2: seen.largestHoleRegionM2, why: seen.why });
                     notes.write('pipeline_k_visible_defects', { ...seen, views: seen.views.map(({ mask: _m, ...v }) => v), judged: 'holes (untextured surface is judged on the finished model: pipeline_k_visible_defects_textured)' });
                     if (seen.holesFlagged) degradations.push(notes.degrade(record(stage, 'visible_defects', {
                         part: { description: 'holes seen on the outside of the building' }, intended: 'every surface seen from outside closed',
@@ -4941,6 +4946,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (pipelineK) {
                         const heldNotes: RefineNotes = { write: (name, data) => held.push(() => cache.writeRunNote(runId, name, data)), note: (label, text) => held.push(() => run.note(label, text)), degrade: rec => { held.push(() => run.degrade(rec)); return rec; } };
                         voted = await finishRefine(voted, io, timedAs('remesh'), voteSteps, voteDegradations, 'ownership', heldNotes);
+                        // the vote decides what belongs to the structure; it may not tear it. Its build is kept only when the outside
+                        // audit sees it no more torn than the first isolate's (scan the vote took away that no rebuild covered opens
+                        // the base or a face: Penn 2, 2026-11-07, a 475 m² hole against 86 m²); else the first isolate stands
+                        const firstSeen = defectsSeen.get('remesh'), votedSeen = defectsSeen.get('ownership');
+                        if (firstSeen && votedSeen && (votedSeen.holeShare > firstSeen.holeShare + OWNERSHIP_TEAR_TOLERANCE || votedSeen.largestHoleRegionM2 > Math.max(firstSeen.largestHoleRegionM2, VISIBLE_DEFECTS_PARAMS.maxHoleRegionM2))) {
+                            return notUsed('ownership_vote_torn', `the voted build is more torn than the first isolate (holes on ${round(votedSeen.holeShare * 100, 2)}% of it against ${round(firstSeen.holeShare * 100, 2)}%, the largest ${round(votedSeen.largestHoleRegionM2, 1)} m² against ${round(firstSeen.largestHoleRegionM2, 1)} m²): the vote took away scan no rebuild covers; the geometric isolate stands`);
+                        }
                     }
                     run.keys.remesh = voted.cacheKey;
                     const key8 = voted.cacheKey.slice(0, 8);

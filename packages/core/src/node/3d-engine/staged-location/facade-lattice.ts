@@ -125,6 +125,8 @@ export interface TearReport {
 export interface ReliefFacade {
     facadeId: number; image: string; centroid: number[]; normal: number[]; axisS: number[]; axisT: number[];
     sMin: number; sMax: number; tMin: number; tMax: number; pixel: number; width: number; height: number; orthoSMin: number; orthoTMax: number; coverage: number;
+    /** The straightened photo's horizontal repeat (m) and the autocorrelation it was found at (pipeline-k/ortho-rectify.ts): the plane's own column pitch, when measured. */
+    periodM?: number; periodNcc?: number;
     /** A mask beside the image (one channel, 255 = the photo did not reach) when the image's holes were filled (pipeline K). */
     uncoveredMask?: string;
     /** tile_refine's occlusion mask beside the image (pipeline-k/occlusion.ts), with its mean and occluded share. */
