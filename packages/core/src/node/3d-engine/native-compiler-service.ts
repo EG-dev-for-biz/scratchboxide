@@ -12,6 +12,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { resolveWithinRoot } from '../security/path-guard';
 import { buildScrubbedEnv } from '../security/sandbox-policy';
+import { nativeThirdPartyRoot, vendoredLibraryArchives } from './native-third-party';
 import * as crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -95,6 +96,15 @@ export class NativeCppCompilerService {
      */
     getSdkIncludePath(): string {
         return this.sdkIncludePath;
+    }
+
+    /**
+     * The vendored third-party root (`3d-engine/third_party`, beside include/): on the include path of every compile,
+     * so engine code writes `#include "meshoptimizer/src/meshoptimizer.h"`.
+     */
+    getThirdPartyPath(): string {
+        const beside = path.resolve(this.sdkIncludePath, '../third_party');
+        return fs.existsSync(beside) ? beside : nativeThirdPartyRoot();
     }
 
     /**
@@ -213,6 +223,8 @@ export class NativeCppCompilerService {
             optimization?: '-O0' | '-O1' | '-O2' | '-O3';
             extraFlags?: string[];
             assets?: CompilationAsset[];
+            /** Vendored libraries (third_party/<name>) to link, each built once into a cached static archive. */
+            vendored?: string[];
         } = {}
     ): Promise<CppCompilationResult> {
         const startTime = Date.now();
@@ -246,6 +258,13 @@ export class NativeCppCompilerService {
         const extraFlags = options.extraFlags || [];
         // -l / -L arguments are linker inputs: they go after the source.
         const libs = extraFlags.filter(f => /^-[lL]/.test(f));
+        let vendoredArchives: string[];
+        try {
+            vendoredArchives = await vendoredLibraryArchives(options.vendored ?? []);
+        } catch (err) {
+            const output = err instanceof NativeBuildError ? (err.compilerOutput || err.message) : String((err as Error)?.message ?? err);
+            return { success: false, diagnostics: this.parseDiagnostics(output), compilerOutput: output.trim(), compilationTimeMs: Date.now() - startTime };
+        }
         const flags = ['-std=c++20', optFlag, ...extraFlags.filter(f => !/^-[lL]/.test(f))];
         if (process.platform === 'darwin') {
             const macSdk = '/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk';
@@ -259,9 +278,10 @@ export class NativeCppCompilerService {
         const spec: NativeCompileSpec = {
             sourceCode,
             sourceDir: outputDir,
-            includeDirs: [this.sdkIncludePath],
+            includeDirs: [this.sdkIncludePath, this.getThirdPartyPath()],
             flags,
-            libs,
+            // archives before -l flags: a vendored library may itself need a system library
+            libs: [...vendoredArchives, ...libs],
             pchPath: usePch ? this.getPchPath() : undefined,
             name: binName,
             compiler: this.compilerBinary,

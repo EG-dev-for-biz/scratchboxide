@@ -133,7 +133,8 @@ These rules are for coding agents changing this repository. The in-app chat mode
    - **Shape:** small logical commits, staging only the files your task touched (never `git add -A`); the working tree often holds other sessions' work.
    - **Pushing:** fast-forward only, never force-push.
    - **Before deleting:** look at a file or folder, and check for references (links in `desktop-app/public`, the hydration list in `manifests/demos_asset_manifest.json`), before removing it.
-7. **No leaked plumbing.**
+7. **Vendored native code.** Outside C/C++ enters only under `packages/core/src/native/3d-engine/third_party/<name>/`, by that folder's README: MIT, Apache-2.0, BSD, Zlib, Boost, ISC, or MPL-2.0 unmodified; never GPL-family or non-commercial code (GPL ideas are rewritten clean-room from the papers). Each library has its licence and a `VENDORED.md` (upstream, commit, SPDX, files, every local change), our adapter is `include/scratchbox_<x>.hpp`, it links through `compileSource({ vendored: [...] })` / `buildVendoredLibrary`, and `npm run notices:native` regenerates `NOTICE.md`'s section (never edited by hand). `native-third-party.test.ts` gates licences and notice drift.
+8. **No leaked plumbing.**
    - **User code:** never paste engine internals (solar trigonometry, tile octree walkers, clippers, distortion matrices, shaper source) into user code or chat.
    - **Sandboxes:** live-code sandboxes import from `@scratchbox/core`.
    - **Chat:** report tool use as concise status, not implementation.

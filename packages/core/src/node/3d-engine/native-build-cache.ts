@@ -551,6 +551,10 @@ export async function buildNativeBinary(spec: Omit<NativeCompileSpec, 'name'> & 
 // Bounds: last use, age, size
 
 /** Stamps an entry's last use; false when the entry directory is gone. */
+export function markNativeBuildEntryUsed(entryDir: string): boolean {
+    return markUsed(entryDir);
+}
+
 function markUsed(entryDir: string): boolean {
     const stamp = path.join(entryDir, ENTRY_LAST_USED);
     const now = new Date();
