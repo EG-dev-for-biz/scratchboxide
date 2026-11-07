@@ -133,7 +133,8 @@ These go wrong quietly when a part changes size: the box catches a different edg
 |---|---|
 | Data | `ScratchboxMesh::faceGroup` (per triangle) and `faceGroups` (`FaceGroup {names, edgeKind, edgeKindAlways}`) in `scratchbox_geometry.hpp`. `append` carries them. An operation that rebuilds triangles without them leaves the vector the wrong length, and every named lookup then says the names were lost. |
 | Names, lookups and refusals | New `scratchbox_named_topology.hpp`: edges derived from faces as sand3d derives them, `faceFrame`, `placeOnFace`, refusals that list the names the mesh has and suggest what was meant. |
-| Makers | `footprints::extrudePolygon` (walls split into surfaces where the outline turns by 30° or more, so a circle has no `side` edges) and `ScratchboxMesh::createBox`. Bindings take `name=`, which also writes `name.top`... |
+| Makers | `footprints::extrudePolygon` (walls split into surfaces where the outline turns by 30° or more, so a circle has no `side` edges), `ScratchboxMesh::createBox`, `shaper::Lathe3D::revolve` (flat ends `top`/`bottom`, the rest `side`, circles between side surfaces `rim`; a partial sweep's ends `start`/`end`) and `shaper::Loft3D::skin` (walls `side`, ends `start`/`end`), which `create_sweep` and `sweep_curve_profile` go through. Bindings take `name=`, which also writes `name.top`... |
+| Winding fixes found on the way | On main, `create_lathe` winds inward for the natural profile order (out along the bottom, up, back along the top: the guide's own example has 83% of its normals pointing in), a partial lathe's end caps are wound against its sides, and a loft run downward or a sweep not along +Y is inside-out or has caps wound against the walls (`sweep_curve_profile` included). Lathes and lofts are now wound outward whatever the profile or curve direction (signed volume about the axis or first section), and loft caps are triangulated in their own plane. Upward lofts and cones are unchanged. |
 | Edits | `meshops::bevel(edgeNames)`: the offset bevel for closed loops. It falls back to the new `mesh_edit::bevelNamedEdges` (wedge cuts) for any other set, such as a single edge ending at a corner. Concave named edges are refused. `CsgPolygon::tag` carries names through BSP splits. `sb.geometry.boolean_mesh` keeps both operands' names. `creaseNormals` keeps them. |
 | Python | `mesh.face_names()`, `edge_names()`, `face_frame(name)`, `place_on(target, face, u, v, gap, spin_deg)`, `sb.meshops.bevel(..., edges="top")`, `sb.create_box(..., name=)`, `sb.geometry.extrude_polygon(..., name=)`. |
 | Tests | `packages/core/test/sb-named-faces-edges.test.ts` (5 cases on the real engine). |
@@ -143,8 +144,13 @@ These go wrong quietly when a part changes size: the box catches a different edg
 - About 600 lines of C++, a day.
 - Memory: 4 bytes per triangle on named meshes only.
 
+**Also on this branch:**
+- A named closed loop may be concave: the offset bevel fills a valley with the round. Only the wedge path, for open chains, refuses concave edges.
+- A named offset bevel measures its width limit only on edges crossing the loop, not along it, and warns when it still has to shorten the width.
+- The wedge cutters reach a few widths past a slanted edge's ends, so a tapered loft's rounded corners meet its cap without slivers.
+
 **Next steps, not done here:**
-- Names from `create_lathe` (rims), `create_sweep`/`create_loft` (start/end) and `sb.meshops.union/subtract`.
+- Names from `sb.meshops.union/subtract` (the exact booleans; the `logic-booleans` session is working there).
 - Names on the object spec's parts, so `object_detail_pass` decals and `edgeRadiusMeters` can name a face.
 - Concave fillets: today they are refused, because a cut cannot add material.
 - The edge where a tool meets the part (sand3d's `edges="peg"`).
@@ -342,14 +348,15 @@ whole-set cost before the first run and ask if it is over $10.
   - The boss's sides are filleted and its top chamfered; its foot stays sharp.
   - `boss.place_on(plate, "plate.top", u=0.22)` stands it on the top at y = 0.060.
 
-Sheet: `docs/screenshots/sand3d-named-edges-before-after.png` (gitignored). It is also in the session group's notes
-folder.
+Sheets: `docs/screenshots/sand3d-named-edges-before-after.png` (extrusion, box, boolean) and
+`docs/screenshots/sand3d-named-makers-before-after.png` (lathe base and tapered loft column, with the main-vs-branch
+winding table). Both are gitignored and also in the session group's notes folder.
 
 **Tests** (Node 22.18, empty HOME, no credentials):
 
 | Test file | Result |
 |---|---|
-| `sb-named-faces-edges.test.ts` | 5/5 pass |
+| `sb-named-faces-edges.test.ts` | 8/8 pass |
 | `mesh-ops`, `native-mesh-edit`, `native-mesh-reshaping-pipeline`, `building-tiers-addons`, `python-engine-mesh-integrity`, `object-spec-interpreter` | 60/60 pass |
 | `instruction-tool-drift`, `sb-stubs`, `sb-script-typecheck`, `python-3d-api-reference` | 123/123 pass |
 
