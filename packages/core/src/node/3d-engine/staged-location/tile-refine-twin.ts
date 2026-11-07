@@ -48,6 +48,7 @@ import { viewRelight, type ViewRelightParams, type ViewRelightReport } from './p
 import { roofShadowLift, type RoofShadowReport } from './pipeline-k/roof-shadow';
 import { evaluateShadowLift, type ShadowLiftQaReport } from './pipeline-k/shadow-lift-qa';
 import { skyDelight, type SkyDelightReport } from './pipeline-k/sky-delight';
+import { applyMeshMapsToPlan } from './pipeline-k/material-mesh-maps';
 import { classSwatchSheet, describeMaterialRegions, readRegionClasses, writeMaterialRegions, type MaterialRegionsPlan, type MaterialRegionsReport, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { planMaterialRegionsOnThreads } from './pipeline-k/material-regions-pool';
 import { materialClassesExtras, type ClassWords, type GlassSeen, type MaterialClassesExtras } from './pipeline-k/material-naming';
@@ -307,6 +308,13 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
             try { sets = await opts.materialRegions.sets(classes, swatches); } catch (err) { regionsSkipped = `the library sets could not be resolved: ${err instanceof Error ? err.message : String(err)}`; }
             // each photo's maps planned on its own worker thread (material-regions-pool.ts), the same plan as on one
             if (sets) try { regionsPlan = await planMaterialRegionsOnThreads(g, json, finalImage, classes, sets, planes); } catch (err) { regionsSkipped = `planning the maps failed: ${err instanceof Error ? err.message : String(err)}`; }
+            // the finish shaded by maps measured from the building's own mesh: AO into occlusion, cavity rougher, convex
+            // edges smoother (material-mesh-maps.ts; generated; SCRATCHBOX_K_MESH_MAPS=0 off). A failed bake is reported, the
+            // plan kept as it was
+            if (regionsPlan) {
+                if (process.env.SCRATCHBOX_K_MESH_MAPS === '0') regionsPlan.report.meshMaps = { skipped: 'off (SCRATCHBOX_K_MESH_MAPS=0)' };
+                else try { await applyMeshMapsToPlan(g, json, regionsPlan); } catch (err) { regionsPlan.report.meshMaps = { skipped: `the mesh maps bake failed: ${err instanceof Error ? err.message : String(err)}` }; }
+            }
         }
         opts.onStep?.('materials', regionsSkipped ? 'failed' : 'done');
     }

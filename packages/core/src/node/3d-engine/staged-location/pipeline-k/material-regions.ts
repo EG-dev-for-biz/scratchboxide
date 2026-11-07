@@ -35,6 +35,9 @@
  *     tilt) the viewer reads for the scene's reflection; it fades in over glassFeatherM from its edge (weight, roughness
  *     and normal blended from the finish it sits in), so no hard line rings it.
  *
+ * After the plan, material-mesh-maps.ts may shade the finish by maps measured from the mesh (AO into the occlusion
+ * channel, cavity and convexity into the roughness; generated); the colour stays the photo.
+ *
  * Labels: base colour photo-inferred (the photo, never relit or lifted: it is the evidence of how the building looks);
  * roughness and normal generated (library sets); glass photo-inferred (the bays' texels off the wall's class). Nothing is
  * drawn where no photo is.
@@ -118,13 +121,27 @@ export interface MaterialRegionsReport {
     /** Bays (rebuilt facades' and scan pieces') mostly of the wall's class: glass only on their windows' panes. */
     baysOnStone: number;
     ms: number;
+    /** The finish shaded by maps measured from the mesh (material-mesh-maps.ts), or why not. Generated. */
+    meshMaps?: MeshMapsShadingReport | { skipped: string };
+}
+
+/** What material-mesh-maps.ts measured and drew into the plan's finish. */
+export interface MeshMapsShadingReport {
+    label: 'generated';
+    /** Points measured (one per `step` x `step` texels) and the radii read at. */
+    queries: number; step: number; curvatureRadiusM: number; cavityRadiusM: number; aoRadiusM: number;
+    /** Over the shaded texels: the mean AO, and the shares the cavity and the convexity changed the roughness on. */
+    meanAo: number; cavityShare: number; convexShare: number;
+    materials: number; texels: number; ms: number;
 }
 
 /** A material's maps, planned before the photos are encoded. */
-interface PlannedMaterial {
+export interface PlannedMaterial {
     material: number;
     orm: RgbaImage8; normal?: RgbaImage8; params: RgbaImage8;
     rebuilt: boolean; glass: boolean;
+    /** The orm's R holds a measured ambient occlusion (material-mesh-maps.ts): it is also the occlusion texture. */
+    occlusion?: boolean;
 }
 
 export interface MaterialRegionsPlan { materials: PlannedMaterial[]; sets: RegionSet[]; report: MaterialRegionsReport }
@@ -151,7 +168,7 @@ function photoOf(json: any, material: number | undefined): { image: number; texC
 }
 
 /** Each textured triangle of a material: its world corners and UVs. */
-function forEachTriangleOf(g: ParsedGlb, json: any, material: number, fn: (p: Float64Array, uv: Float64Array) => void): void {
+export function forEachTriangleOf(g: ParsedGlb, json: any, material: number, fn: (p: Float64Array, uv: Float64Array) => void): void {
     const p = new Float64Array(9), q = new Float64Array(6);
     for (const mesh of json.meshes ?? []) for (const prim of mesh.primitives ?? []) {
         if ((prim.mode ?? 4) !== 4 || prim.material !== material || prim.attributes?.POSITION === undefined) continue;
@@ -176,7 +193,7 @@ function forEachTriangleOf(g: ParsedGlb, json: any, material: number, fn: (p: Fl
 const dot3 = (a: ArrayLike<number>, b: ArrayLike<number>) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
 /** Visits the texels of a triangle given in UVs (uv * size), with each texel centre's barycentric weights. */
-function forTexelsOf(uv: ArrayLike<number>, W: number, H: number, visit: (k: number, wa: number, wb: number, wc: number) => void): void {
+export function forTexelsOf(uv: ArrayLike<number>, W: number, H: number, visit: (k: number, wa: number, wb: number, wc: number) => void): void {
     const ax = uv[0] * W, ay = uv[1] * H, bx = uv[2] * W, by = uv[3] * H, cx = uv[4] * W, cy = uv[5] * H;
     const den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
     if (Math.abs(den) < 1e-12) return;
@@ -752,6 +769,7 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
         const pbr = m.pbrMetallicRoughness = m.pbrMetallicRoughness ?? {};
         pbr.metallicFactor = 1; pbr.roughnessFactor = 1;
         pbr.metallicRoughnessTexture = { index: addTexture(pm.orm, 'image/jpeg', `${name}_orm`) };
+        if (pm.occlusion) m.occlusionTexture = { index: pbr.metallicRoughnessTexture.index };
         if (pm.normal) m.normalTexture = { index: addTexture(pm.normal, 'image/jpeg', `${name}_normal`) };
         m.extras = {
             ...(m.extras ?? {}),
@@ -767,6 +785,7 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
                     ? { label: 'photo-inferred', source: `drawn from the library set on the classes the vision model read confidently as metal (${plan.sets.filter(s => s.metal).map(s => s.name).join(', ')}; material-finish.ts); none elsewhere` }
                     : { label: 'generated', source: 'none drawn: no class was read confidently as metal' },
                 ...(pm.normal ? { normal: { label: 'generated', source: 'the same sets tiled at their real size' } } : {}),
+                ...(pm.occlusion ? { occlusion: { label: 'generated', source: "ambient occlusion measured from the building's own mesh (scratchbox_mesh_maps.hpp); the roughness raised in its cavities and eased on its convex edges by the same maps" } } : {}),
                 ...(pm.glass ? { glass: { label: 'photo-inferred', source: "the window fit's panes (window-fit.ts), the photo kept as their colour" }, paneTilt: { label: 'generated', source: "each pane's seed (parameters alpha): the viewer tilts it by a small angle of its own, as real panes sit off their wall's plane" } } : {})
             }
         };
@@ -819,5 +838,6 @@ export function describeMaterialRegions(r: MaterialRegionsReport): string {
     return `material regions: ${r.classes.length} appearance classes (${r.classes.map(c => `${c.wall ? 'wall' : 'L ' + Math.round(c.meanLab[0])} -> ${c.set}`).join(', ')}); ` +
         `${r.facades.withWindows} of ${r.facades.total} rebuilt facades opened at their ${windows} fitted windows (glass in their ${bays} bays whole, ${r.baysOnStone} bays mostly stone taking glass on their windows' panes alone, ${r.panesOnStone} panes left as stone: ${pct(r.texels.glass)} of texels); ` +
         `every other texel the wall's set; ${r.scanPieces.total} scan pieces its mean finish, ${Math.round(r.scanPieces.onPlanes * 1000) / 10}% of their texels on ${r.scanPieces.planes.length} fitted planes (${Math.round(r.scanPieces.windowShare * 1000) / 10}% in windows, ${Math.round(r.scanPieces.paneShare * 1000) / 10}% glass); nothing metal; ` +
-        `roughness and normal generated from the library, colour the photo (${r.ms} ms)`;
+        `roughness and normal generated from the library, colour the photo (${r.ms} ms)` +
+        (r.meshMaps && 'queries' in r.meshMaps ? `; finish shaded by maps measured from the mesh (AO into occlusion, cavity rougher, convex edges smoother; ${r.meshMaps.queries} points, mean AO ${r.meshMaps.meanAo}, generated)` : r.meshMaps ? `; no mesh-measured shading (${r.meshMaps.skipped})` : '');
 }

@@ -51,6 +51,7 @@ import { SKY_DELIGHT_VERSION } from './pipeline-k/sky-delight';
 import { TEXTURE_HARMONIZE_VERSION } from './pipeline-k/texture-harmonize';
 import { objectReuseEnabled, objectStoreEnabled, type LayerObject, type LayerObjectManifest } from './scene-objects';
 import { TILE_REFINE_TWIN_VERSION } from './tile-refine-twin';
+import { MESH_MAPS_SHADING_VERSION } from './pipeline-k/material-mesh-maps';
 
 export const PLACE_BEST_VERSION = 'place-best/1';
 
@@ -62,17 +63,17 @@ export const PLACE_BEST_PARAMS = {
 /** The environment switches that change a K twin's look (the textures stage); a geometry switch is not one. */
 const LOOK_SWITCHES = [
     'SCRATCHBOX_K_SKY_DELIGHT', 'SCRATCHBOX_K_ROOF_SHADOW', 'SCRATCHBOX_K_MATERIAL_REGIONS', 'SCRATCHBOX_K_MATERIAL_PICK', 'SCRATCHBOX_K_FACADE_READ',
-    'SCRATCHBOX_K_VIEW_RELIGHT', 'SCRATCHBOX_K_DETAIL_BAKE', 'SCRATCHBOX_K_PARTY_WALL_TEXTURE', 'SCRATCHBOX_KD_UPWARD_LIFT'
+    'SCRATCHBOX_K_VIEW_RELIGHT', 'SCRATCHBOX_K_DETAIL_BAKE', 'SCRATCHBOX_K_PARTY_WALL_TEXTURE', 'SCRATCHBOX_KD_UPWARD_LIFT', 'SCRATCHBOX_K_MESH_MAPS'
 ];
 
 /**
  * The code that sets a K twin's look: the twin's versions (de-light, sky de-light, roof shadow, harmonise, material
- * regions and choice) and the switches set that change them, from the environment and the request's own steps (`twin.*`).
+ * regions and choice, the mesh-maps shading) and the switches set that change them, from the environment and the request's own steps (`twin.*`).
  */
 export function kdLookCode(env: NodeJS.ProcessEnv = process.env, steps?: Record<string, unknown>): Record<string, string> {
     const code: Record<string, string> = {
         twin: TILE_REFINE_TWIN_VERSION, skyDelight: SKY_DELIGHT_VERSION, roofShadow: ROOF_SHADOW_VERSION, harmonize: TEXTURE_HARMONIZE_VERSION,
-        materialRegions: MATERIAL_REGIONS_VERSION, materialChoice: MATERIAL_CHOICE_VERSION
+        materialRegions: MATERIAL_REGIONS_VERSION, materialChoice: MATERIAL_CHOICE_VERSION, meshMaps: MESH_MAPS_SHADING_VERSION
     };
     for (const name of LOOK_SWITCHES) { const v = env[name]?.trim(); if (v) code[name] = v; }
     for (const [k, v] of Object.entries(steps ?? {})) if (k.startsWith('twin.') || k === 'remesh.facadeRead') code[`steps.${k}`] = String(v);
