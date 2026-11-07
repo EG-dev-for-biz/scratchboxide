@@ -17,9 +17,12 @@
  *  1. The bar: checkable criteria read from the request alone, before anything made is looked at (`deriveCriteria`).
  *  2. Facts first: what code can measure about each file (size, alpha, motion between frames: `measureDeliverable`).
  *  3. The reviewer: a separate vision call with fresh context, given the request, the bar, the facts, the files and
- *     the agent's claims, never its verdict; it answers met or not met per criterion, with where and why.
- *  4. The loop: streaming.ts sends unmet criteria back as feedback, at most MAX_GATE_ROUNDS times, then asks for a
- *     final reply that names what is still unmet. A reply never claims a criterion the reviewer failed.
+ *     the agent's claims, never its verdict; it scores each criterion 1-10, with where and why, and ranks at most
+ *     MAX_REVIEW_FIXES fixes. The result passes when no criterion scores under MIN_CRITERION_SCORE and the mean is at
+ *     least PASS_MEAN_SCORE (the scoring and the stall rule come from AnyScene's critic, reviewed 2026-11-06).
+ *  4. The loop: streaming.ts sends a failed review back as feedback and stops revising when `gateStopReason` says so:
+ *     MAX_GATE_ROUNDS rounds, GATE_STALL_ROUNDS rounds in a row without a better mean, or GATE_MAX_MS since the first
+ *     review. Then the agent's final reply names what is still not met; it never claims a criterion the reviewer failed.
  *
  * Criteria are open vocabulary from the request (AGENTS.md §1): nothing here branches on a kind of task.
  * `SCRATCHBOX_QUALITY_GATE=0` turns the gate off.
@@ -38,7 +41,19 @@ import { thinkingConfigFor } from './thinking-config';
 const execFileAsync = promisify(execFile);
 
 /** Revision rounds the reviewer can send back before the agent must report what is unmet. */
-export const MAX_GATE_ROUNDS = 2;
+export const MAX_GATE_ROUNDS = 4;
+/** Rounds in a row whose mean score does not beat the best so far before the gate stops revising. */
+export const GATE_STALL_ROUNDS = 2;
+/** A mean score must rise by more than this to count as an improvement. */
+const GATE_IMPROVEMENT = 0.05;
+/** Time from the first review after which no further revision is asked for. */
+export const GATE_MAX_MS = 20 * 60_000;
+/** The pass bar: no criterion under this score (1-10) ... */
+export const MIN_CRITERION_SCORE = 6;
+/** ... and a mean of at least this. */
+export const PASS_MEAN_SCORE = 7;
+/** Ranked fixes a review hands back, most important first. */
+export const MAX_REVIEW_FIXES = 5;
 /** The files a review looks at, newest first (each is an image the reviewer is shown, or a video's three frames). */
 export const MAX_REVIEWED_FILES = 4;
 /** Images one review call carries. */
@@ -74,13 +89,22 @@ export interface Deliverable {
 
 export interface GateVerdict {
     criterion: string;
+    /** 1-10: how well the evidence shows the criterion (10: shown fully, 1: contradicted or absent). */
+    score: number;
+    /** score >= MIN_CRITERION_SCORE. */
     met: boolean;
     where?: string;
     reason: string;
 }
 
+/** One concrete change the reviewer asks for, ranked most important first. */
+export interface GateFix {
+    fix: string;
+    where?: string;
+}
+
 export type GateReview =
-    | { status: 'reviewed'; criteria: string[]; verdicts: GateVerdict[]; modelUsed: string; files: string[] }
+    | { status: 'reviewed'; criteria: string[]; verdicts: GateVerdict[]; meanScore: number; passed: boolean; fixes: GateFix[]; modelUsed: string; files: string[] }
     | { status: 'unavailable'; criteria: string[]; error: string; modelUsed: string; files: string[] };
 
 // ----------------------------------------------------------------------
@@ -232,10 +256,11 @@ Each criterion is one short sentence stating something that must be true of the 
 Only what the request asks for or plainly implies; no extra wishes. Return JSON: {"criteria": ["..."]}.`;
 
 const REVIEW_INSTRUCTION = `You are an independent reviewer of a production result. You did not make it.
-Judge each acceptance criterion only from the images shown and the measured facts. The maker's claims are given so you can check them: a claim is not evidence, and a fact or image that contradicts a claim means the criterion is not met.
-A criterion is met only when the evidence shows it. When the evidence cannot show it, it is not met, and the reason says what is missing.
-For each criterion answer: met (true/false), where (the file and the region you mean, short) and reason (one sentence).
-Return JSON: {"verdicts": [{"criterion": "...", "met": true, "where": "...", "reason": "..."}]} with one entry per criterion, in order.`;
+Judge each acceptance criterion only from the images shown and the measured facts. The maker's claims are given so you can check them: a claim is not evidence, and a fact or image that contradicts a claim scores low.
+Score each criterion from 1 to 10 by what the evidence shows: 10 shown fully and well, 8 shown with small flaws, 6 shown but with a flaw a viewer would notice, 4 partly shown or clearly flawed, 1 contradicted or absent. When the evidence cannot show a criterion, score it 3 or lower and say what is missing. Be strict about defects you can see (wrong or missing parts, edges, seams, colour, scale, motion); do not reward effort or claims.
+For each criterion answer: score (integer 1-10), where (the file and the region you mean, short) and reason (one sentence).
+Then list at most ${MAX_REVIEW_FIXES} fixes, the most important first: each one concrete change that would raise a low score, with where it applies.
+Return JSON: {"verdicts": [{"criterion": "...", "score": 7, "where": "...", "reason": "..."}], "fixes": [{"fix": "...", "where": "..."}]} with one verdict per criterion, in order.`;
 
 function parseJson<T>(text: string): T | undefined {
     const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
@@ -344,19 +369,59 @@ export async function reviewDeliverables(client: GateModelClient, input: ReviewI
     } catch (err) {
         return unavailable(`${model} could not review the result: ${(err as Error).message}`);
     }
-    const parsed = parseJson<{ verdicts?: unknown }>(text);
+    const parsed = parseJson<{ verdicts?: unknown; fixes?: unknown }>(text);
     const raw = Array.isArray(parsed?.verdicts) ? parsed!.verdicts as Array<Record<string, unknown>> : [];
     if (!raw.length) return unavailable(`${model} returned no verdicts (${text.trim() ? 'the reply is not the verdict JSON' : 'empty reply'})`);
-    const verdicts = input.criteria.map((criterion, i): GateVerdict => {
-        const v = raw[i] ?? {};
-        return {
-            criterion,
-            met: v.met === true,
-            ...(typeof v.where === 'string' && v.where.trim() ? { where: v.where.trim() } : {}),
-            reason: typeof v.reason === 'string' && v.reason.trim() ? v.reason.trim() : (raw[i] ? 'no reason given' : 'the reviewer gave no verdict for this criterion')
-        };
-    });
-    return { status: 'reviewed', criteria: input.criteria, verdicts, modelUsed: model, files };
+    const verdicts = input.criteria.map((criterion, i): GateVerdict => scoredVerdict(criterion, raw[i]));
+    const fixes = (Array.isArray(parsed?.fixes) ? parsed!.fixes as Array<Record<string, unknown>> : [])
+        .filter(f => typeof f?.fix === 'string' && f.fix.trim())
+        .slice(0, MAX_REVIEW_FIXES)
+        .map((f): GateFix => ({ fix: String(f.fix).trim(), ...(typeof f.where === 'string' && f.where.trim() ? { where: f.where.trim() } : {}) }));
+    return { status: 'reviewed', criteria: input.criteria, verdicts, ...passBar(verdicts), fixes, modelUsed: model, files };
+}
+
+/**
+ * A verdict from the reviewer's raw entry. The score is clamped to 1-10 and rounded; an entry with no score (an older
+ * reply shape) counts met as 7 and not met as 3, and a missing entry scores 1: the evidence was not judged.
+ */
+export function scoredVerdict(criterion: string, v: Record<string, unknown> | undefined): GateVerdict {
+    const n = typeof v?.score === 'number' ? v.score : typeof v?.score === 'string' ? Number(v.score) : NaN;
+    const score = Number.isFinite(n) ? Math.min(10, Math.max(1, Math.round(n))) : !v ? 1 : v.met === true ? 7 : 3;
+    return {
+        criterion,
+        score,
+        met: score >= MIN_CRITERION_SCORE,
+        ...(typeof v?.where === 'string' && v.where.trim() ? { where: v.where.trim() } : {}),
+        reason: typeof v?.reason === 'string' && v.reason.trim() ? v.reason.trim() : (v ? 'no reason given' : 'the reviewer gave no verdict for this criterion')
+    };
+}
+
+/** The pass bar: no criterion under MIN_CRITERION_SCORE and a mean of at least PASS_MEAN_SCORE. */
+export function passBar(verdicts: GateVerdict[]): { meanScore: number; passed: boolean } {
+    if (!verdicts.length) return { meanScore: 0, passed: false };
+    const meanScore = Math.round(10 * verdicts.reduce((sum, v) => sum + v.score, 0) / verdicts.length) / 10;
+    return { meanScore, passed: verdicts.every(v => v.score >= MIN_CRITERION_SCORE) && meanScore >= PASS_MEAN_SCORE };
+}
+
+/**
+ * Why the gate stops asking for revisions after a failed review, or undefined to ask for another round. `means` holds
+ * the mean score of every failed review this turn, oldest first.
+ */
+export function gateStopReason(means: number[], elapsedMs: number): string | undefined {
+    if (means.length >= MAX_GATE_ROUNDS) return `${MAX_GATE_ROUNDS} review rounds were used`;
+    if (elapsedMs >= GATE_MAX_MS) return `the review time limit (${Math.round(GATE_MAX_MS / 60_000)} min) was reached`;
+    let best = -Infinity;
+    let stalled = 0;
+    for (const m of means) {
+        if (m > best + GATE_IMPROVEMENT) {
+            best = m;
+            stalled = 0;
+        } else {
+            stalled++;
+        }
+    }
+    if (stalled >= GATE_STALL_ROUNDS) return `${stalled} rounds in a row brought no improvement`;
+    return undefined;
 }
 
 // ----------------------------------------------------------------------
@@ -367,22 +432,35 @@ export function unmetVerdicts(review: GateReview): GateVerdict[] {
     return review.status === 'reviewed' ? review.verdicts.filter(v => !v.met) : [];
 }
 
-/** The line the chat shows after a review. */
-export function formatReviewNotice(review: GateReview, round: number): string {
-    if (review.status === 'unavailable') return `\n\n---\nIndependent review unavailable: ${review.error}.`;
-    const met = review.verdicts.filter(v => v.met).length;
-    const lines = review.verdicts.map(v => `- ${v.met ? 'Met' : 'Not met'}: ${v.criterion}${v.met ? '' : ` (${v.where ? `${v.where}: ` : ''}${v.reason})`}`);
-    return `\n\n---\nIndependent review (${review.modelUsed}, round ${round}): ${met} of ${review.verdicts.length} criteria met.\n${lines.join('\n')}`;
+/** Whether a review sends the result back: it was reviewed and did not clear the pass bar. */
+export function reviewFailed(review: GateReview): boolean {
+    return review.status === 'reviewed' && !review.passed;
 }
 
-/** The feedback the agent gets when criteria are unmet. On the last round it must report, not revise. */
-export function formatReviewFeedback(review: GateReview, lastRound: boolean): string {
-    const unmet = unmetVerdicts(review);
-    const list = unmet.map((v, i) => `${i + 1}. ${v.criterion}\n   Where: ${v.where || 'not given'}\n   Why: ${v.reason}`).join('\n');
-    const head = `[INDEPENDENT REVIEW] A reviewer that did not make the result checked it against the request and found ${unmet.length} of ${review.status === 'reviewed' ? review.verdicts.length : unmet.length} criteria not met:\n${list}\n\n`;
-    return head + (lastRound
-        ? 'No revision rounds are left. Write your final reply now without calling tools: say plainly which of these criteria are not met and why, and do not claim them.'
-        : 'Fix these with your tools, look at the new result yourself, then give your final reply. Do not claim a criterion the review found unmet unless you have changed the result.');
+const BAR = `pass: none under ${MIN_CRITERION_SCORE}, mean ${PASS_MEAN_SCORE} or more`;
+
+/** The lines the chat shows after a review. */
+export function formatReviewNotice(review: GateReview, round: number): string {
+    if (review.status === 'unavailable') return `\n\n---\nIndependent review unavailable: ${review.error}.`;
+    const lines = review.verdicts.map(v => `- ${v.score}/10 ${v.met ? 'Met' : 'Not met'}: ${v.criterion}${v.score >= 8 ? '' : ` (${v.where ? `${v.where}: ` : ''}${v.reason})`}`);
+    const fixes = review.passed || !review.fixes.length ? '' : `\nFixes asked for, most important first:\n${review.fixes.map((f, i) => `${i + 1}. ${f.fix}${f.where ? ` (${f.where})` : ''}`).join('\n')}`;
+    return `\n\n---\nIndependent review (${review.modelUsed}, round ${round}): mean ${review.meanScore.toFixed(1)}/10, ${review.passed ? 'passed' : 'not passed'} (${BAR}).\n${lines.join('\n')}${fixes}`;
+}
+
+/**
+ * The feedback the agent gets after a failed review: the criteria under the bar (or, when every one clears it but the
+ * mean does not, the lowest), and the reviewer's ranked fixes. With `stopReason` it must report, not revise.
+ */
+export function formatReviewFeedback(review: GateReview, stopReason?: string): string {
+    if (review.status !== 'reviewed') return '';
+    const low = unmetVerdicts(review);
+    const weakest = low.length ? low : [...review.verdicts].sort((a, b) => a.score - b.score).slice(0, 2);
+    const list = weakest.map((v, i) => `${i + 1}. ${v.score}/10 ${v.criterion}\n   Where: ${v.where || 'not given'}\n   Why: ${v.reason}`).join('\n');
+    const fixes = review.fixes.length ? `\nThe reviewer's fixes, most important first:\n${review.fixes.map((f, i) => `${i + 1}. ${f.fix}${f.where ? ` (${f.where})` : ''}`).join('\n')}\n` : '';
+    const head = `[INDEPENDENT REVIEW] A reviewer that did not make the result scored it against the request: mean ${review.meanScore.toFixed(1)}/10, not passed (${BAR}).\n${low.length ? `${low.length} of ${review.verdicts.length} criteria under ${MIN_CRITERION_SCORE}` : `Every criterion clears ${MIN_CRITERION_SCORE}, but the mean is under ${PASS_MEAN_SCORE}; the weakest`}:\n${list}\n${fixes}\n`;
+    return head + (stopReason
+        ? `No further revision: ${stopReason}. Write your final reply now without calling tools: say plainly which criteria are under the bar and why, and do not claim them.`
+        : 'Make these fixes with your tools, look at the new result yourself, then give your final reply. Do not claim a criterion the review scored under the bar unless you have changed the result.');
 }
 
 /** A folder for the frames a review extracts (deleted with the OS temp folder). */
