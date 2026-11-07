@@ -20,6 +20,9 @@
  *     not Google's data); one where only some parts did keeps `vector-modelled` (the building overall is measured). The
  *     counts of parts and buildings given the default height are reported, same as the share left out for falling
  *     outside the requested radius.
+ *   - A 2D-only building at least VECTOR_VOLUME_DUPLICATE_SHARE of whose plan lies under another feature's modelled 3D
+ *     volume is not drawn: it is that volume's footprint published again under another id, and the volume already draws
+ *     the building at its measured height.
  *   - A building's base is the Google Elevation API's terrain height at its centroid, relative to the frame's street level:
  *     before the tiles, the elevation at the geocoded point (the tiles' own origin is the street there, so the two agree to
  *     about a metre); after them, the frame's own height (geoAnchor.elevation). Without elevations every base is the
@@ -41,7 +44,7 @@ import { runMassing, type MassingNode } from './pipeline-e/native-massing';
 import { writeStagedGlbFile, type StagedGlbNode } from './staged-glb-writer';
 import type { VectorBuilding, VectorEvidence } from './vector-footprints';
 
-export const VECTOR_MASSING_VERSION = 'vector-massing/v1';
+export const VECTOR_MASSING_VERSION = 'vector-massing/v2';
 /** The label of every vector-massing triangle (AGENTS.md §4: measured, vector-modelled, photo-inferred, generated). */
 export const VECTOR_MODELLED_LABEL = 'vector-modelled';
 /** An isolated structure's first paint covers this far around the place (the structure is not known before the tiles). */
@@ -90,6 +93,8 @@ export interface PaintSelection {
     buildingsWithNoFootprint: number;
     /** Buildings whose centroid lies beyond the requested radius (the vector tiles are whole tiles). */
     outsideRadius: number;
+    /** 2D-only buildings left out because another feature's modelled volume already stands over them (VECTOR_VOLUME_DUPLICATE_SHARE). */
+    buildingsUnderOtherVolume: number;
 }
 
 function outerArea(b: VectorBuilding): { area: number; cx: number; cz: number } {
@@ -106,10 +111,63 @@ function outerArea(b: VectorBuilding): { area: number; cx: number; cz: number } 
     return area > 0 ? { area, cx: cx / area, cz: cz / area } : { area: 0, cx: NaN, cz: NaN };
 }
 
+/**
+ * A 2D-only building at least this share of whose plan lies under another feature's modelled 3D volume is that volume's
+ * own footprint published again under another id (at Penn Station, 2026-11-07: 105 of the 109 height-less buildings within
+ * 300 m lay under modelled volumes, most under one 81-89 m volume, each drawn as a 12 m generated slab inside it).
+ */
+export const VECTOR_VOLUME_DUPLICATE_SHARE = 0.5;
+
+/** Plan triangles of every modelled volume, bucketed on a 4 m grid: whether (x, z) lies under a volume `notOwner` does not own. */
+function volumePlanIndex(ev: VectorEvidence): (x: number, z: number, notOwner: string) => boolean {
+    const C = 4, grid = new Map<string, Array<{ t: number[]; owner: string }>>();
+    for (const b of ev.buildings) for (const v of b.volumes ?? []) {
+        for (let i = 0; i + 2 < v.indices.length; i += 3) {
+            const a = v.vertices[v.indices[i]], c = v.vertices[v.indices[i + 1]], d = v.vertices[v.indices[i + 2]];
+            const t = [a[0], a[2], c[0], c[2], d[0], d[2]];
+            if (Math.abs((t[3] - t[5]) * (t[0] - t[4]) + (t[4] - t[2]) * (t[1] - t[5])) < 1e-6) continue;
+            const x0 = Math.floor(Math.min(t[0], t[2], t[4]) / C), x1 = Math.floor(Math.max(t[0], t[2], t[4]) / C);
+            const z0 = Math.floor(Math.min(t[1], t[3], t[5]) / C), z1 = Math.floor(Math.max(t[1], t[3], t[5]) / C);
+            for (let gx = x0; gx <= x1; gx++) for (let gz = z0; gz <= z1; gz++) {
+                const k = `${gx},${gz}`;
+                const l = grid.get(k) ?? [];
+                l.push({ t, owner: b.id });
+                grid.set(k, l);
+            }
+        }
+    }
+    return (x, z, notOwner) => {
+        for (const { t, owner } of grid.get(`${Math.floor(x / C)},${Math.floor(z / C)}`) ?? []) {
+            if (owner === notOwner) continue;
+            const den = (t[3] - t[5]) * (t[0] - t[4]) + (t[4] - t[2]) * (t[1] - t[5]);
+            const l1 = ((t[3] - t[5]) * (x - t[4]) + (t[4] - t[2]) * (z - t[5])) / den;
+            const l2 = ((t[5] - t[1]) * (x - t[4]) + (t[0] - t[4]) * (z - t[5])) / den;
+            if (l1 >= 0 && l2 >= 0 && l1 + l2 <= 1) return true;
+        }
+        return false;
+    };
+}
+
+/** Share of the parts' plan (sampled on a grid of about 400 points at most) that lies under another building's volume. */
+function shareUnderOtherVolume(parts: Array<{ loops: Vec2[][] }>, owner: string, under: (x: number, z: number, notOwner: string) => boolean): number {
+    const xs = parts.flatMap(p => p.loops[0] ?? []);
+    if (!xs.length) return 0;
+    const x0 = Math.min(...xs.map(q => q[0])), x1 = Math.max(...xs.map(q => q[0])), z0 = Math.min(...xs.map(q => q[1])), z1 = Math.max(...xs.map(q => q[1]));
+    const step = Math.max(0.5, Math.sqrt(((x1 - x0) * (z1 - z0)) / 400));
+    let n = 0, hit = 0;
+    for (let x = x0 + step / 2; x < x1; x += step) for (let z = z0 + step / 2; z < z1; z += step) {
+        if (!parts.some(p => inLoopsEvenOdd(x, z, p.loops))) continue;
+        n++;
+        if (under(x, z, owner)) hit++;
+    }
+    return n ? hit / n : 0;
+}
+
 /** The buildings within `radiusM` of the place that have something to draw, and what was left out. */
 export function selectPaintBuildings(ev: VectorEvidence, radiusM: number): PaintSelection {
     const out: PaintBuilding[] = [];
-    let partsGivenDefaultHeight = 0, buildingsGivenDefaultHeight = 0, buildingsWithNoFootprint = 0, outsideRadius = 0;
+    let partsGivenDefaultHeight = 0, buildingsGivenDefaultHeight = 0, buildingsWithNoFootprint = 0, outsideRadius = 0, buildingsUnderOtherVolume = 0;
+    const under = ev.buildings.some(b => b.volumes?.length) ? volumePlanIndex(ev) : undefined;
     for (const b of ev.buildings) {
         const { area, cx, cz } = outerArea(b);
         const volumes = (b.volumes ?? []).filter(v => v.vertices.length >= 4 && v.indices.length >= 12);
@@ -136,11 +194,17 @@ export function selectPaintBuildings(ev: VectorEvidence, radiusM: number): Paint
         // whose existence and extent we have no evidence for (distinct from one whose extent is known but height is not).
         if (!parts.length && !volumes.length) { buildingsWithNoFootprint++; continue; }
         const heightGuessed = parts.length > 0 && parts.every(p => p.heightGuessed) && !volumes.length;
+        // a 2D-only footprint under another feature's modelled volume is that volume's plan again: the volume draws it, measured
+        if (heightGuessed && under && shareUnderOtherVolume(parts, b.id, under) >= VECTOR_VOLUME_DUPLICATE_SHARE) {
+            buildingsUnderOtherVolume++;
+            partsGivenDefaultHeight -= parts.length;
+            continue;
+        }
         if (heightGuessed) buildingsGivenDefaultHeight++;
         out.push({ id: b.id, centroid, areaM2: area, parts, volumes: volumes.map(v => ({ vertices: v.vertices.map(q => [q[0], q[1], q[2]] as [number, number, number]), indices: v.indices.slice() })), heightGuessed });
     }
     out.sort((a, b) => Math.hypot(a.centroid[0], a.centroid[1]) - Math.hypot(b.centroid[0], b.centroid[1]) || (a.id < b.id ? -1 : 1));
-    return { buildings: out, partsGivenDefaultHeight, buildingsGivenDefaultHeight, buildingsWithNoFootprint, outsideRadius };
+    return { buildings: out, partsGivenDefaultHeight, buildingsGivenDefaultHeight, buildingsWithNoFootprint, outsideRadius, buildingsUnderOtherVolume };
 }
 
 /** Geodetic position of a frame point (x east, z south) of the place. */

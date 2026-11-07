@@ -91,3 +91,32 @@ describe('believability first: a vector footprint with no measured height is dra
         expect(paintProvenance('x', 'vectortiles:abcd1234').label).toBe(VECTOR_MODELLED_LABEL);
     });
 });
+
+describe('a 2D-only footprint under another feature\'s modelled volume is that volume again', () => {
+    const rect = (x: number, z: number, w: number, d: number): Array<[number, number]> => [[x, z], [x + w, z], [x + w, z + d], [x, z + d]];
+    const vol = {
+        vertices: [[0, 0, 0], [40, 0, 0], [40, 0, 40], [0, 0, 40], [0, 80, 0], [40, 80, 0], [40, 80, 40], [0, 80, 40]] as Array<[number, number, number]>,
+        indices: [0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6], heightM: 80
+    };
+
+    it('is left out and counted; one beside the volume, and the volume itself, are drawn', () => {
+        const sel = selectPaintBuildings(ev([
+            { id: 'tower', parts: [], volumes: [vol] },
+            { id: 'dup', parts: [[rect(5, 5, 30, 30)]], extruded: [{ loops: [rect(5, 5, 30, 30)], planOnly: true }] },
+            { id: 'beside', parts: [[rect(60, 5, 10, 10)]], extruded: [{ loops: [rect(60, 5, 10, 10)], planOnly: true }] }
+        ]), 1000);
+        expect(sel.buildings.map(b => b.id).sort()).toEqual(['beside', 'tower']);
+        expect(sel.buildingsUnderOtherVolume).toBe(1);
+        expect(sel.buildingsGivenDefaultHeight).toBe(1);
+        expect(sel.partsGivenDefaultHeight).toBe(1);
+    });
+
+    it('keeps a footprint with a measured height even under another volume (real data is never dropped)', () => {
+        const sel = selectPaintBuildings(ev([
+            { id: 'tower', parts: [], volumes: [vol] },
+            { id: 'podium', parts: [[rect(5, 5, 30, 30)]], extruded: [{ loops: [rect(5, 5, 30, 30)], heightM: 12 }] }
+        ]), 1000);
+        expect(sel.buildings.map(b => b.id).sort()).toEqual(['podium', 'tower']);
+        expect(sel.buildingsUnderOtherVolume).toBe(0);
+    });
+});

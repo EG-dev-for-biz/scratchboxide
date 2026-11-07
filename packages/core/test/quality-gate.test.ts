@@ -9,7 +9,8 @@
 
 /**
  * The quality gate (quality-gate.ts, streaming.ts): a turn that made files is checked by an independent reviewer
- * against a bar read from the request, the agent revises at most MAX_GATE_ROUNDS times, then reports what is unmet.
+ * against a bar read from the request and scores each criterion 1-10; a result passes with none under 6 and a mean of
+ * 7 or more. The agent revises until it passes or the gate stops (round limit, no improvement, time), then reports.
  * The model calls are stubbed: tests never bill.
  */
 import { execFileSync } from 'child_process';
@@ -21,12 +22,18 @@ import { GeminiService } from '../src/node/gemini-service';
 import { GeminiClient } from '../src/node/gemini/gemini-client';
 import { encodeRgbaToPng, resolveFfmpegPath } from '../src/node/image-codec-ffmpeg';
 import {
+    GATE_MAX_MS,
+    GATE_STALL_ROUNDS,
     MAX_GATE_ROUNDS,
+    MAX_REVIEW_FIXES,
     deliverablePathsFromResult,
     deriveCriteria,
     filesToReview,
     formatReviewFeedback,
     formatReviewNotice,
+    gateStopReason,
+    passBar,
+    scoredVerdict,
     measureDeliverable,
     meanAbsDiff,
     qualityGateEnabled,
@@ -46,7 +53,7 @@ async function writeRgbaPng(file: string, w: number, h: number, alphaAt: (x: num
 }
 
 /** A stub Gemini client: the bar call returns `criteria`, each review call the next verdict list. */
-function stubModels(criteria: string[], verdictRounds: boolean[][]) {
+function stubModels(criteria: string[], scoreRounds: number[][]) {
     const calls: Array<{ system: string; parts: any[] }> = [];
     let review = 0;
     const models = {
@@ -55,8 +62,13 @@ function stubModels(criteria: string[], verdictRounds: boolean[][]) {
             const parts = params.contents?.[0]?.parts ?? [];
             calls.push({ system, parts });
             if (/acceptance bar/.test(system)) return { text: JSON.stringify({ criteria }) };
-            const round = verdictRounds[Math.min(review++, verdictRounds.length - 1)];
-            return { text: JSON.stringify({ verdicts: criteria.map((c, i) => ({ criterion: c, met: round[i], where: `file, part ${i}`, reason: round[i] ? 'shown' : 'not shown' })) }) };
+            const round = scoreRounds[Math.min(review++, scoreRounds.length - 1)];
+            return {
+                text: JSON.stringify({
+                    verdicts: criteria.map((c, i) => ({ criterion: c, score: round[i], where: `file, part ${i}`, reason: round[i] >= 6 ? 'shown' : 'not shown' })),
+                    fixes: [1, 2, 3, 4, 5, 6, 7].map(n => ({ fix: `fix ${n}`, where: `place ${n}` }))
+                })
+            };
         }
     };
     return { client: { getGenAIClient: async () => ({ models }) as any }, calls };
@@ -144,32 +156,59 @@ describe('what code measures', () => {
 
 describe('the bar and the reviewer', () => {
     it('sets the bar from the request alone, with no image', async () => {
-        const { client, calls } = stubModels(['The car is complete', 'The cut-out has transparency'], [[true, true]]);
+        const { client, calls } = stubModels(['The car is complete', 'The cut-out has transparency'], [[8, 8]]);
         expect(await deriveCriteria(client, 'cut the car out on transparency')).toEqual(['The car is complete', 'The cut-out has transparency']);
         expect(calls[0].parts.some((p: any) => p.inlineData)).toBe(false);
         await expect(deriveCriteria({ getGenAIClient: async () => ({ models: { generateContent: async () => ({ text: '{}' }) } } as any) }, 'x')).rejects.toThrow(/no acceptance criteria/);
     });
 
-    it('shows the reviewer the files, facts and claims, and maps its verdicts in order; a missing verdict is unmet', async () => {
+    it('shows the reviewer the files, facts and claims; scores each criterion in order; hands back at most five ranked fixes', async () => {
         const dir = tmp();
         const png = path.join(dir, 'cut.png');
         await writeRgbaPng(png, 8, 8, () => 255);
-        const models = { generateContent: async (p: any) => { seen = p; return { text: JSON.stringify({ verdicts: [{ met: true, reason: 'ok' }] }) }; } };
-        let seen: any;
+        const { client, calls } = stubModels(['A', 'B'], [[9, 4]]);
         const deliverable = await measureDeliverable(png, dir);
-        const review = await reviewDeliverables({ getGenAIClient: async () => ({ models }) as any }, {
-            request: 'cut it out', criteria: ['A', 'B'], deliverables: [deliverable], claims: 'I cleanly captured the car.'
-        });
+        const review = await reviewDeliverables(client, { request: 'cut it out', criteria: ['A', 'B'], deliverables: [deliverable], claims: 'I cleanly captured the car.' });
         expect(review.status).toBe('reviewed');
         if (review.status !== 'reviewed') return;
-        expect(review.verdicts.map(v => v.met)).toEqual([true, false]);
-        expect(review.verdicts[1].reason).toMatch(/no verdict/);
-        const parts = seen.contents[0].parts;
+        expect(review.verdicts.map(v => [v.score, v.met])).toEqual([[9, true], [4, false]]);
+        expect(review.meanScore).toBe(6.5);
+        expect(review.passed).toBe(false);
+        expect(review.fixes).toHaveLength(MAX_REVIEW_FIXES);
+        expect(review.fixes.map(f => f.fix)).toEqual(['fix 1', 'fix 2', 'fix 3', 'fix 4', 'fix 5']);
+        const parts = calls[0].parts;
         expect(parts.filter((p: any) => p.inlineData)).toHaveLength(1);
         const text = parts.map((p: any) => p.text ?? '').join('\n');
         expect(text).toContain('transparency: none (every pixel opaque)');
         expect(text).toContain('I cleanly captured the car.');
-        expect(String(seen.config.systemInstruction)).toMatch(/claim is not evidence/);
+        expect(calls[0].system).toMatch(/claim is not evidence/);
+        expect(calls[0].system).toMatch(/Score each criterion from 1 to 10/);
+    });
+
+    it('reads a score defensively: clamped and rounded, an old met-only answer, a missing entry', () => {
+        expect(scoredVerdict('a', { score: 14 }).score).toBe(10);
+        expect(scoredVerdict('a', { score: 0 }).score).toBe(1);
+        expect(scoredVerdict('a', { score: '6.6' })).toMatchObject({ score: 7, met: true });
+        expect(scoredVerdict('a', { met: true })).toMatchObject({ score: 7, met: true });
+        expect(scoredVerdict('a', { met: false })).toMatchObject({ score: 3, met: false });
+        expect(scoredVerdict('a', undefined)).toMatchObject({ score: 1, met: false, reason: expect.stringMatching(/no verdict/) });
+    });
+
+    it('passes only with no criterion under 6 and a mean of 7 or more', () => {
+        const v = (scores: number[]) => scores.map((score, i) => scoredVerdict(`c${i}`, { score }));
+        expect(passBar(v([8, 7, 9]))).toEqual({ meanScore: 8, passed: true });
+        expect(passBar(v([10, 10, 5]))).toEqual({ meanScore: 8.3, passed: false });
+        expect(passBar(v([6, 6, 7]))).toEqual({ meanScore: 6.3, passed: false });
+        expect(passBar([])).toEqual({ meanScore: 0, passed: false });
+    });
+
+    it('stops revising at the round limit, after rounds with no improvement, or at the time limit', () => {
+        expect(gateStopReason([5], 0)).toBeUndefined();
+        expect(gateStopReason([5, 5.5, 6], 0)).toBeUndefined();
+        expect(gateStopReason([5, 5, 5], 0)).toMatch(new RegExp(`${GATE_STALL_ROUNDS} rounds in a row brought no improvement`));
+        expect(gateStopReason([5, 6, 5.9, 6], 0)).toMatch(/round/);
+        expect(gateStopReason(Array.from({ length: MAX_GATE_ROUNDS }, (_, i) => 3 + i), 0)).toMatch(new RegExp(`${MAX_GATE_ROUNDS} review rounds were used`));
+        expect(gateStopReason([5], GATE_MAX_MS)).toMatch(/time limit/);
     });
 
     it('is unavailable, with the reason, when no model client is configured', async () => {
@@ -177,11 +216,15 @@ describe('the bar and the reviewer', () => {
         expect(review).toMatchObject({ status: 'unavailable', error: expect.stringMatching(/no Google Cloud service account/) });
     });
 
-    it('tells the agent to fix, and on the last round to report and claim nothing unmet', () => {
-        const review = { status: 'reviewed' as const, criteria: ['A', 'B'], verdicts: [{ criterion: 'A', met: true, reason: 'ok' }, { criterion: 'B', met: false, where: 'matte.png, wheels', reason: 'the wheels are cut off' }], modelUsed: 'm', files: [] };
-        expect(formatReviewFeedback(review, false)).toMatch(/1 of 2 criteria not met:[\s\S]*matte\.png, wheels[\s\S]*Fix these/);
-        expect(formatReviewFeedback(review, true)).toMatch(/No revision rounds are left[\s\S]*do not claim them/);
-        expect(formatReviewNotice(review, 1)).toContain('Independent review (m, round 1): 1 of 2 criteria met.\n- Met: A\n- Not met: B (matte.png, wheels: the wheels are cut off)');
+    it('tells the agent the low criteria and the ranked fixes; when stopped, to report and claim nothing under the bar', () => {
+        const verdicts = [scoredVerdict('A', { score: 9, reason: 'ok' }), scoredVerdict('B', { score: 4, where: 'matte.png, wheels', reason: 'the wheels are cut off' })];
+        const review = { status: 'reviewed' as const, criteria: ['A', 'B'], verdicts, ...passBar(verdicts), fixes: [{ fix: 'extend the matte over the wheels', where: 'matte.png' }], modelUsed: 'm', files: [] };
+        expect(formatReviewFeedback(review)).toMatch(/mean 6\.5\/10, not passed[\s\S]*1 of 2 criteria under 6[\s\S]*4\/10 B[\s\S]*matte\.png, wheels[\s\S]*1\. extend the matte over the wheels \(matte\.png\)[\s\S]*Make these fixes/);
+        expect(formatReviewFeedback(review, '2 rounds in a row brought no improvement')).toMatch(/No further revision: 2 rounds in a row brought no improvement[\s\S]*do not claim them/);
+        expect(formatReviewNotice(review, 1)).toContain('Independent review (m, round 1): mean 6.5/10, not passed (pass: none under 6, mean 7 or more).\n- 9/10 Met: A\n- 4/10 Not met: B (matte.png, wheels: the wheels are cut off)\nFixes asked for, most important first:\n1. extend the matte over the wheels (matte.png)');
+        // every criterion clears 6 but the mean does not: the weakest are named
+        const close = [scoredVerdict('A', { score: 6 }), scoredVerdict('B', { score: 7 })];
+        expect(formatReviewFeedback({ ...review, verdicts: close, ...passBar(close) })).toMatch(/Every criterion clears 6, but the mean is under 7; the weakest:\n1\. 6\/10 A/);
     });
 });
 
@@ -212,47 +255,60 @@ describe('the review loop in a chat turn', () => {
         delete process.env.SCRATCHBOX_QUALITY_GATE;
     });
 
-    async function run(verdicts: boolean[][], withFile = true) {
+    async function run(scores: number[][], withFile = true) {
         process.env.SCRATCHBOX_QUALITY_GATE = '1';
         const dir = tmp();
         const png = path.join(dir, 'cutout.png');
         await writeRgbaPng(png, 8, 8, x => (x < 4 ? 255 : 0));
-        const stub = stubModels(['The whole car is inside the matte', 'The cut-out is on transparency'], verdicts);
+        const stub = stubModels(['The whole car is inside the matte', 'The cut-out is on transparency'], scores);
         vi.spyOn(GeminiClient.prototype, 'getGenAIClient').mockImplementation(stub.client.getGenAIClient as never);
-        const { service, requests, register } = makeService([TOOL_CALL('make_cutout'), TEXT('Done: the car is cleanly captured.'), TEXT('Fixed the wheels.'), TEXT('Final: the wheels are still cut off.')]);
+        const turns = [TOOL_CALL('make_cutout'), TEXT('Done: the car is cleanly captured.'), ...Array.from({ length: 6 }, (_, k) => TEXT(`Revision ${k + 1}.`))];
+        const { service, requests, register } = makeService(turns);
         register('make_cutout', async () => ({ resultPayload: withFile ? { success: true, cutoutPath: png } : { success: true }, status: 'completed' }));
         const res = await service.streamGenerate({ prompt: 'cut the car out on transparency', model: 'gemini-3.7-flash', mode: 'agent' }, () => undefined);
-        return { res, requests, calls: stub.calls };
+        const reviews = stub.calls.filter(c => /independent reviewer/.test(c.system));
+        return { res, requests, calls: stub.calls, reviews };
     }
 
-    it('ends after one review when every criterion is met, and says so', async () => {
-        const { res, requests, calls } = await run([[true, true]]);
+    it('ends after one review when the result clears the bar, and says so', async () => {
+        const { res, requests, reviews } = await run([[8, 9]]);
         expect(requests).toHaveLength(2);
-        expect(calls.filter(c => /independent reviewer/.test(c.system))).toHaveLength(1);
-        expect(res.text).toContain('2 of 2 criteria met');
+        expect(reviews).toHaveLength(1);
+        expect(res.text).toContain('mean 8.5/10, passed');
     });
 
-    it(`sends unmet criteria back at most ${MAX_GATE_ROUNDS} times, then makes the agent report them without another review`, async () => {
-        const { res, requests, calls } = await run([[false, true], [false, true]]);
-        expect(requests).toHaveLength(2 + MAX_GATE_ROUNDS);
-        expect(calls.filter(c => /independent reviewer/.test(c.system))).toHaveLength(MAX_GATE_ROUNDS);
-        expect(calls.filter(c => /acceptance bar/.test(c.system))).toHaveLength(1);
+    it('keeps revising while the score improves, and ends when the result passes', async () => {
+        const { res, requests, reviews } = await run([[4, 8], [5, 8], [8, 8]]);
+        expect(reviews).toHaveLength(3);
+        expect(requests).toHaveLength(4);
+        expect(res.text).toContain('round 3): mean 8.0/10, passed');
         const feedback1 = JSON.stringify(requests[2].contents.at(-1));
         expect(feedback1).toContain('[INDEPENDENT REVIEW]');
-        expect(feedback1).toContain('Fix these with your tools');
-        const feedback2 = JSON.stringify(requests[3].contents.at(-1));
-        expect(feedback2).toContain('No revision rounds are left');
-        expect(res.text).toContain('round 1): 1 of 2 criteria met');
-        expect(res.text).toContain('round 2): 1 of 2 criteria met');
-        expect(res.text).toContain('Final: the wheels are still cut off.');
+        expect(feedback1).toContain('Make these fixes');
+        expect(feedback1).toContain('fix 1');
+        expect(feedback1).not.toContain('fix 6');
+    });
+
+    it(`stops after ${GATE_STALL_ROUNDS} rounds with no improvement and makes the agent report without another review`, async () => {
+        const { res, requests, calls, reviews } = await run([[4, 8], [4, 8], [4, 8]]);
+        expect(reviews).toHaveLength(1 + GATE_STALL_ROUNDS);
+        expect(requests).toHaveLength(2 + 1 + GATE_STALL_ROUNDS);
+        expect(calls.filter(c => /acceptance bar/.test(c.system))).toHaveLength(1);
+        expect(JSON.stringify(requests.at(-1).contents.at(-1))).toContain('No further revision: 2 rounds in a row brought no improvement');
+        expect(res.text).toContain('Revision 3.');
         // the reviewer saw the maker's claim as a claim, and the file itself
-        const review1 = calls.find(c => /independent reviewer/.test(c.system))!;
-        expect(review1.parts.some((p: any) => p.inlineData)).toBe(true);
-        expect(review1.parts.map((p: any) => p.text ?? '').join('\n')).toContain('the car is cleanly captured');
+        expect(reviews[0].parts.some((p: any) => p.inlineData)).toBe(true);
+        expect(reviews[0].parts.map((p: any) => p.text ?? '').join('\n')).toContain('the car is cleanly captured');
+    });
+
+    it(`stops at ${MAX_GATE_ROUNDS} rounds when the score keeps rising but never passes`, async () => {
+        const { requests, reviews } = await run([[2, 8], [3, 8], [4, 8], [5, 8], [5.9, 8]]);
+        expect(reviews).toHaveLength(MAX_GATE_ROUNDS);
+        expect(JSON.stringify(requests.at(-1).contents.at(-1))).toContain(`No further revision: ${MAX_GATE_ROUNDS} review rounds were used`);
     });
 
     it('does not run when the turn made no files', async () => {
-        const { requests, calls, res } = await run([[false, false]], false);
+        const { requests, calls, res } = await run([[2, 2]], false);
         expect(requests).toHaveLength(2);
         expect(calls).toHaveLength(0);
         expect(res.text).not.toContain('Independent review');

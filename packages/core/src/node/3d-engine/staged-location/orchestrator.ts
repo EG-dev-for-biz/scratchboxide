@@ -1787,7 +1787,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const left = [
                     sel.partsGivenDefaultHeight ? `${sel.partsGivenDefaultHeight} footprint part${sel.partsGivenDefaultHeight === 1 ? '' : 's'} with no height in the vector data shown at a plausible ${PLAUSIBLE_DEFAULT_HEIGHT_M} m (generated)` : '',
                     sel.buildingsGivenDefaultHeight ? `${sel.buildingsGivenDefaultHeight} building${sel.buildingsGivenDefaultHeight === 1 ? '' : 's'} with no measured height at all, shown at ${PLAUSIBLE_DEFAULT_HEIGHT_M} m (generated)` : '',
-                    sel.buildingsWithNoFootprint ? `${sel.buildingsWithNoFootprint} building${sel.buildingsWithNoFootprint === 1 ? '' : 's'} with no footprint shape and no Google volume left out` : ''
+                    sel.buildingsWithNoFootprint ? `${sel.buildingsWithNoFootprint} building${sel.buildingsWithNoFootprint === 1 ? '' : 's'} with no footprint shape and no Google volume left out` :'',
+                    sel.buildingsUnderOtherVolume ? `${sel.buildingsUnderOtherVolume} 2D-only footprint${sel.buildingsUnderOtherVolume === 1 ? '' : 's'} under another feature's modelled 3D volume left out (the volume draws that building at its own height)` : ''
                 ].filter(Boolean).join('; ');
                 if (!sel.buildings.length) return { status: 'skipped', source: '', reason: `Google's vector data has no building with a footprint or volume within ${Math.round(radiusM)} m${left ? ` (${left})` : ''}`, breakdownMs: msBy };
                 const baseNote = (frame: 'street' | 'tiles') => elevations

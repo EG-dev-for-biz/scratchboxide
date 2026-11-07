@@ -645,6 +645,62 @@ function triangleGlb(edit: (json: any) => void = () => undefined, bin?: Buffer):
     return rawGlb(json, data);
 }
 
+// The outline weld (vgeo::weld, kOutlineWeldM = 1 cm), a rule check on purpose small: two facade pieces whose
+// shared edge is drawn twice, 5 mm apart, weld into one surface with that edge shared; a gap of 2 cm stays open; a
+// piece's inner vertex 5 mm from the other piece's outline is not an outline vertex and stays; uvs stay per corner.
+const OUTLINE_WELD = String.raw`
+#include "scratchbox_virtual_geometry.hpp"
+#include <cstdio>
+#include <map>
+using namespace scratchbox::vgeo;
+static void quad(SourceMesh& m, F3 a, F3 b, F3 c, F3 d, float u0) {
+    const uint32_t base = uint32_t(m.positions.size());
+    for (F3 p : { a, b, c, d }) m.positions.push_back(p);
+    for (int k = 0; k < 4; ++k) m.uvs.push_back(F2(u0 + (k == 1 || k == 2 ? 0.5f : 0.f), k >= 2 ? 1.f : 0.f));
+    for (uint32_t i : { 0u, 1u, 2u, 0u, 2u, 3u }) m.indices.push_back(base + i);
+    m.triMaterial.push_back(0); m.triMaterial.push_back(0);
+}
+static size_t openEdges(const WeldedMesh& w) {
+    std::map<std::pair<uint32_t, uint32_t>, int> e;
+    for (size_t t = 0; t + 2 < w.indices.size(); t += 3) for (int k = 0; k < 3; ++k) {
+        uint32_t a = w.indices[t + k], b = w.indices[t + (k + 1) % 3]; e[{std::min(a, b), std::max(a, b)}]++;
+    }
+    size_t n = 0; for (auto& [k, c] : e) if (c == 1) ++n; return n;
+}
+int main() {
+    for (float gap : { 0.005f, 0.02f }) {
+        SourceMesh m; m.materialCount = 1;
+        quad(m, F3(0, 0, 0), F3(1, 0, 0), F3(1, 1, 0), F3(0, 1, 0), 0.0f);
+        quad(m, F3(1 + gap, 0, 0), F3(2, 0, 0), F3(2, 1, 0), F3(1 + gap, 1, 0), 0.5f);
+        // a third piece: a fan whose centre (an inner vertex) sits 5 mm from the first piece's corner (0, 0, 0)
+        const uint32_t c = uint32_t(m.positions.size());
+        m.positions.push_back(F3(0.003f, 0.004f, 0.0f)); m.uvs.push_back(F2(0, 0));
+        const F3 ring[4] = { F3(-1.5f, -1.5f, 0), F3(1.5f, -1.5f, 0), F3(1.5f, 1.5f, 0), F3(-1.5f, 1.5f, 0) };
+        for (F3 p : ring) { m.positions.push_back(p); m.uvs.push_back(F2(0, 0)); }
+        for (uint32_t k = 0; k < 4; ++k) { m.indices.push_back(c); m.indices.push_back(c + 1 + k); m.indices.push_back(c + 1 + (k + 1) % 4); m.triMaterial.push_back(0); }
+        WeldedMesh w = weld(m);
+        bool uvsKept = w.cornerUv.size() == w.indices.size() && w.cornerUv[6].x == 0.5f && w.cornerUv[0].x == 0.0f;
+        std::printf("%.3f %zu %zu %zu %d\n", gap, w.positions.size(), w.indices.size() / 3, openEdges(w), uvsKept ? 1 : 0);
+    }
+    return 0;
+}
+`;
+
+describe.skipIf(!clang.ok)(withReason('Virtual geometry outline weld (rule check)', clang), () => {
+    it('welds outlines that meet within 1 cm, leaves a 2 cm gap and inner vertices alone, keeps uvs per corner', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-vgeo-weld-'));
+        fs.writeFileSync(path.join(dir, 'weld.cpp'), OUTLINE_WELD);
+        const built = spawnSync(process.env.CXX || 'clang++', ['-std=c++20', '-O1', `-I${INCLUDE_DIR}`, path.join(dir, 'weld.cpp'), '-o', path.join(dir, 'weld')]);
+        expect(built.stderr.toString()).not.toMatch(/error:/);
+        const out = execFileSync(path.join(dir, 'weld')).toString().trim().split('\n').map(l => l.split(' ').map(Number));
+        // 5 mm: the two quads share their middle edge (6 positions, 2 x 3 open edges + the fan's 4), the fan's centre stays
+        expect(out[0].slice(1)).toEqual([6 + 5, 4 + 4, 6 + 4, 1]);
+        // 2 cm: the quads stay apart (8 positions, 8 open edges + the fan's 4)
+        expect(out[1].slice(1)).toEqual([8 + 5, 4 + 4, 8 + 4, 1]);
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+});
+
 interface LoaderHarness { binary: string; mode: string; env: Record<string, string> }
 
 /**

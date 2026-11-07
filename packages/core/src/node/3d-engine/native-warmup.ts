@@ -30,6 +30,7 @@ import { NativePythonRunnerService } from './native-python-runner-service';
 import { loadScanFit } from './scan-fit-loader';
 import { ensureMassingBinary } from './staged-location/pipeline-e/native-massing';
 import { NativeSkyService } from './native-sky-service';
+import { getNativeSkyMsService } from './native-sky-ms-service';
 
 export interface WarmupStep {
     name: string;
@@ -83,7 +84,9 @@ export function nativeWarmupSteps(workspaceRoot: string): WarmupStep[] {
             }
         },
         // off the location path: the path tracer, survey stations and skies read these tables (a cold medium is ~25 s)
-        { name: 'sky tables (default medium)', run: async () => { await new NativeSkyService().warmDefaultSky(); } }
+        { name: 'sky tables (default medium)', run: async () => { await new NativeSkyService().warmDefaultSky(); } },
+        // the scene weather's multiple-scattering sky (the viewer asks for it whenever a weather is set)
+        { name: 'weather sky (multiple scattering)', run: async () => { await getNativeSkyMsService().warm(); } }
     ];
 }
 

@@ -55,7 +55,7 @@ import { describeRouteOutcome, raceRoutedCall, routerConfig, type StartStream } 
 import { ContextCacheManager, type ContextCacheTarget } from './context-cache';
 import { AgentVerificationService, extractGeometryVerificationInput, type GeometryVerificationOptions } from './agent-verification-service';
 import * as path from 'path';
-import { MAX_GATE_ROUNDS, deliverablePathsFromResult, deriveCriteria, filesToReview, formatReviewFeedback, formatReviewNotice, gateScratchDir, measureDeliverable, qualityGateEnabled, reviewDeliverables, unmetVerdicts } from './quality-gate';
+import { deliverablePathsFromResult, deriveCriteria, filesToReview, formatReviewFeedback, formatReviewNotice, gateScratchDir, gateStopReason, measureDeliverable, qualityGateEnabled, reviewDeliverables, reviewFailed } from './quality-gate';
 import { resolveRepoRoot } from './tools/nano-banana-tools';
 import { ChatTurnTimer } from './chat-turn-telemetry';
 
@@ -667,6 +667,9 @@ export class StreamingEngine {
         const gateFiles: string[] = [];
         let gateCriteria: Promise<string[]> | undefined;
         let gateRounds = 0;
+        // the mean score of each failed review, and when the first review ran (gateStopReason's stall and time rules)
+        const gateMeans: number[] = [];
+        let gateStartedAt: number | undefined;
         let gateClosed = !qualityGateEnabled() || request.mode === 'plan';
         const gateRoots = (() => {
             const repo = resolveRepoRoot();
@@ -1043,13 +1046,15 @@ export class StreamingEngine {
                     const notice = formatReviewNotice(review, gateRounds + 1);
                     accumulatedText += notice;
                     onEvent({ type: 'delta', text: notice, modelUsed: model });
-                    if (unmetVerdicts(review).length) {
+                    if (reviewFailed(review) && review.status === 'reviewed') {
                         gateRounds++;
-                        const lastRound = gateRounds >= MAX_GATE_ROUNDS;
-                        // after the last round the agent only reports: no further review
-                        if (lastRound) gateClosed = true;
+                        gateStartedAt ??= Date.now();
+                        gateMeans.push(review.meanScore);
+                        const stopReason = gateStopReason(gateMeans, Date.now() - gateStartedAt);
+                        // once the gate stops the agent only reports: no further review
+                        if (stopReason) gateClosed = true;
                         payload.contents.push({ role: 'model', parts: [{ text: claims || '(no reply text)' }] });
-                        payload.contents.push({ role: 'user', parts: [{ text: formatReviewFeedback(review, lastRound) }] });
+                        payload.contents.push({ role: 'user', parts: [{ text: formatReviewFeedback(review, stopReason) }] });
                         continue;
                     }
                 }
