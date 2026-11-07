@@ -53,16 +53,7 @@ export interface UvRewrapOptions {
     maxAngleStretch?: number;
     /** Accepted area-weighted RMS of the area ratio max(r, 1/r) per chart (default 1.5). */
     maxAreaDistortion?: number;
-    /** Re-parameterization of charts the orthographic projection distorts (default true). */
-    conformal?: boolean;
-    /**
-     * 'slim' (default): charts grown by a cost on normal deviation, roundness, straightness and creases; each flattened by
-     * LSCM, then ABF++ (angle-based flattening), then SLIM (symmetric Dirichlet, no flips) unless its orthographic
-     * projection is already isometric; packed as rasterised masks so charts nest. 'legacy': normal clusters, LSCM, and
-     * minimum-area rectangles in a skyline packer (the original path, kept for comparison).
-     */
-    unwrapMethod?: 'slim' | 'legacy';
-    /** SLIM iterations per chart in the 'slim' method (default 30; 0 stops after LSCM / ABF++). */
+    /** SLIM iterations per chart (default 30; 0 stops after LSCM / ABF++). */
     slimIterations?: number;
     /** Charts under this share of the atlas's surface area merge into a neighbour when their normals allow (default 0.0005). */
     minChartAreaFraction?: number;
@@ -162,7 +153,6 @@ export interface UvAtlasReport {
     texelsPerMeter: number;
     densitySource: 'requested-density' | 'requested-atlas-size' | 'source-texture-density' | 'default-atlas-size';
     texCoordWritten?: string;
-    unwrapMethod: 'slim' | 'legacy';
     charts: number;
     lscmCharts: number;
     abfCharts: number;
@@ -190,7 +180,6 @@ export interface UvAtlasReport {
 export interface UvRewrapReport {
     mode: UvRewrapMode;
     atlases: UvAtlasReport[];
-    unwrapMethod: 'slim' | 'legacy';
     charts: number;
     lscmCharts: number;
     abfCharts: number;
@@ -310,24 +299,22 @@ const CHART_RECORD = 26;
 
 interface UnwrapParamsNative {
     chartNormalToleranceDeg: number; minIslandAreaM2: number; maxAngleStretch: number; maxAreaDistortion: number;
-    conformal: boolean; texelsPerMeter: number; atlasWidth: number; atlasHeight: number; maxSide: number; gutter: number; allowRotation: boolean;
-    method: 'slim' | 'legacy'; slimIterations: number;
+    texelsPerMeter: number; atlasWidth: number; atlasHeight: number; maxSide: number; gutter: number; allowRotation: boolean;
+    slimIterations: number;
 }
 
 async function nativeUnwrap(binary: string, positions: Float32Array, indices: Uint32Array, groups: Uint32Array, p: UnwrapParamsNative, timeoutMs: number, signal?: AbortSignal): Promise<NativeUnwrap> {
     const V = positions.length / 3, T = indices.length / 3;
     const out = await runNative(binary, [
-        Buffer.from('SBUW', 'latin1'), u32(2, V, T),
-        f64(p.chartNormalToleranceDeg, p.minIslandAreaM2, p.maxAngleStretch, p.maxAreaDistortion, 0.6, 1.0, p.conformal ? 1 : 0, 4000, 1e-9,
-            p.texelsPerMeter, p.atlasWidth, p.atlasHeight, p.maxSide, p.gutter, p.allowRotation ? 1 : 0),
-        // segmentation, parameterization, packing, ABF++, SLIM iterations, packing rotations
-        p.method === 'slim' ? f64(1, 1, 1, 1, p.slimIterations, 4) : f64(0, 0, 0, 0, 0, 2),
+        Buffer.from('SBUW', 'latin1'), u32(3, V, T),
+        f64(p.chartNormalToleranceDeg, p.minIslandAreaM2, p.maxAngleStretch, p.maxAreaDistortion, 0.6, 1.0,
+            p.texelsPerMeter, p.atlasWidth, p.atlasHeight, p.maxSide, p.gutter, p.allowRotation ? 1 : 0, p.slimIterations),
         view(positions), view(indices), view(groups)
     ], timeoutMs, signal);
     const r = new Reader(out, 'unwrap', 'SBUO');
-    if (r.u32() !== 2) throw new Error('unsupported SBUO version');
+    if (r.u32() !== 3) throw new Error('unsupported SBUO version');
     const outV = r.u32(), t = r.u32(), C = r.u32(), width = r.u32(), height = r.u32(), lscmAttempts = r.u32(), lscmAccepted = r.u32(), splits = r.u32();
-    const abfAccepted = r.u32(), slimAccepted = r.u32(), grownCharts = r.u32();
+    const abfAccepted = r.u32(), slimAccepted = r.u32(), grownCharts = r.u32(); r.u32(); // bitmapPacked
     if (t !== T) throw new Error(`the UV rewrap engine returned ${t} triangles for ${T}`);
     const texelsPerMeter = r.f64(); r.f64(); const utilisation = r.f64(), overlappingPairs = r.f64(), msCharts = r.f64(), msPack = r.f64();
     return {
@@ -834,12 +821,10 @@ export async function unwrapRewrapGlb(mode: UvRewrapMode, input: Buffer | Uint8A
         chartNormalToleranceDeg: options.chartNormalToleranceDeg ?? 60,
         maxAngleStretch: options.maxAngleStretch ?? 1.25,
         maxAreaDistortion: options.maxAreaDistortion ?? 1.5,
-        conformal: options.conformal ?? true,
         minChartAreaFraction: options.minChartAreaFraction ?? 0.0005,
         maxAtlasSide: Math.max(64, Math.min(16384, options.maxAtlasSide ?? 8192)),
         gutter: Math.max(1, Math.round(options.gutterTexels ?? 2)),
         allowRotation: options.allowRotation ?? true,
-        unwrapMethod: options.unwrapMethod ?? 'slim',
         slimIterations: Math.max(0, Math.min(1000, Math.round(options.slimIterations ?? 30))),
         timeoutMs: options.native?.timeoutMs ?? 600_000,
         threads: options.native?.threads ?? 0
@@ -858,7 +843,7 @@ export async function unwrapRewrapGlb(mode: UvRewrapMode, input: Buffer | Uint8A
     const identity = new Float64Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
     const report: UvRewrapReport = {
-        mode, atlases: [], unwrapMethod: opts.unwrapMethod, charts: 0, lscmCharts: 0, abfCharts: 0, slimCharts: 0, distortion: emptyStats(), orthographicDistortion: emptyStats(),
+        mode, atlases: [], charts: 0, lscmCharts: 0, abfCharts: 0, slimCharts: 0, distortion: emptyStats(), orthographicDistortion: emptyStats(),
         texelDensity: densityStats([]), utilisation: 0, overlappingTrianglePairs: 0, texturesRebaked: [], texturesFailed: [],
         primitivesSkipped: [], instancedMeshes: [...meshUses.entries()].filter(([, n]) => n > 1).map(([m]) => m),
         native: { binary: nativeBin.path, built: nativeBin.built }, totalMs: 0
@@ -948,7 +933,7 @@ export async function unwrapRewrapGlb(mode: UvRewrapMode, input: Buffer | Uint8A
             material: materialKey >= 0 ? materialKey : null, ...(material?.name ? { materialName: material.name } : {}),
             status: 'skipped', primitives: prims.length, triangles: prims.reduce((a, p) => a + p.indices.length / 3, 0),
             verticesIn: prims.reduce((a, p) => a + p.vertexCount, 0), verticesOut: 0, width: 0, height: 0, texelsPerMeter: 0,
-            densitySource: 'default-atlas-size', unwrapMethod: opts.unwrapMethod, charts: 0, lscmCharts: 0, abfCharts: 0, slimCharts: 0, orthographicCharts: 0, grownCharts: 0, lscmAttempts: 0, splits: 0, chartsOverThreshold: 0,
+            densitySource: 'default-atlas-size', charts: 0, lscmCharts: 0, abfCharts: 0, slimCharts: 0, orthographicCharts: 0, grownCharts: 0, lscmAttempts: 0, splits: 0, chartsOverThreshold: 0,
             distortion: emptyStats(), orthographicDistortion: emptyStats(), texelDensity: densityStats([]), utilisation: 0, overlappingTrianglePairs: 0,
             chartDetails: [], textures: [], failures: [], timings: { unwrapMs: 0, chartsMs: 0, packMs: 0, decodeMs: 0, bakeMs: 0, encodeMs: 0 }
         };
@@ -1074,9 +1059,9 @@ export async function unwrapRewrapGlb(mode: UvRewrapMode, input: Buffer | Uint8A
         const tu = performance.now();
         const nat = await nativeUnwrap(nativeBin.path, wpos, widx, groups, {
             chartNormalToleranceDeg: opts.chartNormalToleranceDeg, minIslandAreaM2: opts.minChartAreaFraction * area3D,
-            maxAngleStretch: opts.maxAngleStretch, maxAreaDistortion: opts.maxAreaDistortion, conformal: opts.conformal,
+            maxAngleStretch: opts.maxAngleStretch, maxAreaDistortion: opts.maxAreaDistortion,
             texelsPerMeter, atlasWidth: atlasW, atlasHeight: atlasH, maxSide: opts.maxAtlasSide, gutter: opts.gutter, allowRotation: opts.allowRotation,
-            method: opts.unwrapMethod, slimIterations: opts.slimIterations
+            slimIterations: opts.slimIterations
         }, opts.timeoutMs, options.signal);
         at.timings.unwrapMs = performance.now() - tu;
         at.timings.chartsMs = nat.msCharts; at.timings.packMs = nat.msPack;

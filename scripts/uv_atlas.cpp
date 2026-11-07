@@ -7,15 +7,14 @@
  * permission from Scratchbox LLC.
  ********************************************************************************/
 
-// Pipe CLI for the island unwrapper (scratchbox_uv_atlas.hpp). Reads one mesh on stdin, writes the islands on stdout;
+// Pipe CLI for the twin's island unwrapper: the chart stage of scratchbox_uv_rewrap.hpp (grown charts flattened by LSCM,
+// ABF++ and SLIM), reported as islands. Reads one mesh on stdin, writes the islands on stdout;
 // no files. Built and run by texture-uv.ts (packages/core/src/node/3d-engine/staged-location/texture-uv.ts).
 //
 // Build:  clang++ -std=c++20 -O3 -I packages/core/src/native/3d-engine/include scripts/uv_atlas.cpp -o build/3d-native/uv_atlas
 //
-// stdin (little endian):  'SBUV' u32 version=1|2, u32 V, u32 T, f32 normalToleranceDeg, f32 minIslandAreaM2,
-//                         version 2 only: u32 flatten (1 = charts grown and flattened by LSCM / ABF++ / SLIM through
-//                         scratchbox_uv_rewrap.hpp's chart stage instead of orthographic islands; same reply),
-//                         f32[3V] positions, u32[3T] indices, u32[T] group per triangle
+// stdin (little endian):  'SBUV' u32 version=2, u32 V, u32 T, f32 normalToleranceDeg (where splits start),
+//                         f32 minIslandAreaM2, f32[3V] positions, u32[3T] indices, u32[T] group per triangle
 // stdout:                 'SBUA' u32 version=1, u32 outV, u32 T, u32 I, u32 evictionRounds, u32 evicted, u32 singletons, u32 merged,
 //                         u32[outV] sourceVertex, f32[2 outV] uv (metres), u32[3T] indices, u32[T] island,
 //                         f32[7 I] (widthM, heightM, area3D, area2D, nx, ny, nz), u32[I] group
@@ -38,10 +37,8 @@ int main() {
     uint32_t hdr[3];
     float prm[2];
     if (std::fread(magic, 1, 4, stdin) != 4 || std::memcmp(magic, "SBUV", 4) != 0) { std::cerr << "uv_atlas: bad magic\n"; return 2; }
-    if (std::fread(hdr, 4, 3, stdin) != 3 || (hdr[0] != 1 && hdr[0] != 2)) { std::cerr << "uv_atlas: bad header\n"; return 2; }
+    if (std::fread(hdr, 4, 3, stdin) != 3 || hdr[0] != 2) { std::cerr << "uv_atlas: bad header\n"; return 2; }
     if (std::fread(prm, 4, 2, stdin) != 2) { std::cerr << "uv_atlas: bad params\n"; return 2; }
-    uint32_t flatten = 0;
-    if (hdr[0] == 2 && std::fread(&flatten, 4, 1, stdin) != 1) { std::cerr << "uv_atlas: bad params\n"; return 2; }
     const uint32_t V = hdr[1], T = hdr[2];
     std::vector<float> pos;
     std::vector<uint32_t> idx, grp;
@@ -50,8 +47,8 @@ int main() {
     for (float f : pos) if (!std::isfinite(f)) { std::cerr << "uv_atlas: non-finite position\n"; return 2; }
 
     scratchbox::uv_atlas::Result r;
-    if (flatten) {
-        // charts of the 'slim' unwrap method, reported as islands (local metres, origin at the min corner)
+    {
+        // the unwrap's charts, reported as islands (local metres, origin at the min corner)
         namespace rw = scratchbox::uv_rewrap;
         rw::UnwrapParams up;
         up.chartNormalToleranceDeg = prm[0];
@@ -93,11 +90,6 @@ int main() {
             isl.normal = l > 0 ? std::array<double, 3>{n[0] / l, n[1] / l, n[2] / l} : std::array<double, 3>{0, 1, 0};
         }
         (void)stats;
-    } else {
-        scratchbox::uv_atlas::Params params;
-        params.normalToleranceDeg = prm[0];
-        params.minIslandAreaM2 = prm[1];
-        r = scratchbox::uv_atlas::buildIslands(pos.data(), V, idx.data(), T, grp.data(), params);
     }
 
     std::fwrite("SBUA", 1, 4, stdout);

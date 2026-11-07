@@ -57,8 +57,6 @@ async function runUvAtlasMode(mode: 'unwrap' | 'rewrap', inputGlbPath: string, o
                 maxAngleStretch: asNumber(args.maxAngleStretch),
                 maxAreaDistortion: asNumber(args.maxAreaDistortion),
                 chartNormalToleranceDeg: asNumber(args.chartNormalToleranceDeg),
-                conformal: asBoolean(args.conformal, true),
-                unwrapMethod: asString(args.unwrapMethod) === 'legacy' ? 'legacy' : 'slim',
                 outputImageFormat: outputImageFormat === 'png' || outputImageFormat === 'jpeg' ? outputImageFormat : 'source',
                 transferSourceGlbPath: asString(args.transferSourceGlbPath),
                 transferMaxDistanceM: asNumber(args.transferMaxDistanceM)
@@ -80,7 +78,7 @@ async function runUvAtlasMode(mode: 'unwrap' | 'rewrap', inputGlbPath: string, o
     const otherAtlases = bySize.slice(12).map(a => ({ material: a.material, status: a.status, triangles: a.triangles, charts: a.charts, size: [a.width, a.height], textures: a.textures.length, failures: a.failures }));
     const done = r.atlases.filter(a => a.status !== 'skipped');
     const parts: string[] = [];
-    parts.push(`UV ${mode}: ${done.length} of ${r.atlases.length} material atlases in ${(r.totalMs / 1000).toFixed(1)} s; ${r.charts} charts (${r.slimCharts} SLIM, ${r.abfCharts} ABF++, ${r.lscmCharts} LSCM, ${r.charts - r.slimCharts - r.abfCharts - r.lscmCharts} orthographic; ${r.unwrapMethod} method), ${r.overlappingTrianglePairs} overlapping triangle pairs.`);
+    parts.push(`UV ${mode}: ${done.length} of ${r.atlases.length} material atlases in ${(r.totalMs / 1000).toFixed(1)} s; ${r.charts} charts (${r.slimCharts} SLIM, ${r.abfCharts} ABF++, ${r.lscmCharts} LSCM, ${r.charts - r.slimCharts - r.abfCharts - r.lscmCharts} orthographic), ${r.overlappingTrianglePairs} overlapping triangle pairs.`);
     parts.push(`Distortion (area-weighted RMS): angle stretch ${f2(r.distortion.stretchRms)} (max ${f2(r.distortion.stretchMax)}), area ratio ${f2(r.distortion.areaRms)} (max ${f2(r.distortion.areaMax)}); orthographic projection of the same charts would be ${f2(r.orthographicDistortion.stretchRms)} / ${f2(r.orthographicDistortion.areaRms)}.`);
     parts.push(`Texel density ${r.texelDensity.meanTexelsPerMeter.toFixed(1)} texels/m (CV ${f2(r.texelDensity.cv)}, p5/p95 ${f2(r.texelDensity.uniformity)}); atlas utilisation ${(r.utilisation * 100).toFixed(1)}%; sizes ${[...new Set(done.map(a => `${a.width}x${a.height}`))].slice(0, 6).join(', ')}.`);
     if (mode === 'rewrap') parts.push(`Rebaked ${r.texturesRebaked.length} textures (${r.texturesRebaked.slice(0, 4).map(t => `${t.slots.join('+')} ${t.outputSize[0]}x${t.outputSize[1]}`).join('; ')}${r.texturesRebaked.length > 4 ? '; ...' : ''}).`);
@@ -137,15 +135,7 @@ export const ALGORITHMIC_UV_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 chartNormalToleranceDeg: {
                     type: 'NUMBER',
-                    description: 'unwrap / rewrap: normal tolerance in degrees a chart that fails is split from (the "legacy" method also grows its charts with it; default 60).'
-                },
-                unwrapMethod: {
-                    type: 'STRING',
-                    description: 'unwrap / rewrap: "slim" (default: grown charts, LSCM -> ABF++ -> SLIM, mask packing) or "legacy" (normal clusters, LSCM, rectangle packing; for comparison).'
-                },
-                conformal: {
-                    type: 'BOOLEAN',
-                    description: 'unwrap / rewrap: flatten charts the orthographic projection distorts (LSCM / ABF++ / SLIM) before splitting them (default true).'
+                    description: 'unwrap / rewrap: normal tolerance in degrees a chart that cannot be flattened is split from (default 60).'
                 },
                 transferSourceGlbPath: {
                     type: 'STRING',

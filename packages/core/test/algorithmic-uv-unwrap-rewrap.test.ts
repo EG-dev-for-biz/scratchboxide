@@ -88,20 +88,13 @@ describe('UV unwrap of UV-less meshes', () => {
         });
     }
 
-    it('legacy method: the sphere needs LSCM: conformal charts beat the orthographic projection, and without LSCM it splits further', async () => {
+    it('the sphere needs flattening: its charts (SLIM / ABF++) beat their orthographic projection', async () => {
         const input = buildFixtureGlb({ primitives: [icosphereMesh(1, 4)] });
-        const on = await run('unwrap', input, { atlasSize: 1024, unwrapMethod: 'legacy' });
-        const off = await run('unwrap', input, { atlasSize: 1024, conformal: false, unwrapMethod: 'legacy' });
-        expect(on.report.lscmCharts).toBeGreaterThan(0);
+        const on = await run('unwrap', input, { atlasSize: 1024 });
+        expect(on.report.slimCharts + on.report.abfCharts).toBeGreaterThan(0);
         expect(on.report.distortion.stretchRms).toBeLessThan(on.report.orthographicDistortion.stretchRms);
-        expect(off.report.lscmCharts).toBe(0);
-        expect(off.report.charts).toBeGreaterThan(on.report.charts);
-        expect(measureDistortion(off.glb, 0).stretchRms).toBeLessThanOrEqual(1.25);
-        // the default method flattens the sphere's grown charts (SLIM / ABF++) and beats the orthographic projection too
-        const slim = await run('unwrap', input, { atlasSize: 1024 });
-        expect(slim.report.slimCharts + slim.report.abfCharts).toBeGreaterThan(0);
-        expect(slim.report.distortion.stretchRms).toBeLessThan(slim.report.orthographicDistortion.stretchRms);
-        recordMetrics('unwrap_sphere_conformal_on_off', { on: { charts: on.report.charts, lscm: on.report.lscmCharts, d: on.report.distortion, ortho: on.report.orthographicDistortion }, off: { charts: off.report.charts, d: off.report.distortion } });
+        expect(measureDistortion(on.glb, 0).flipped).toBe(0);
+        recordMetrics('unwrap_sphere_flattened', { charts: on.report.charts, slim: on.report.slimCharts, abf: on.report.abfCharts, d: on.report.distortion, ortho: on.report.orthographicDistortion });
     });
 
     it('unwrap keeps an existing textured UV set and appends the new one', async () => {
@@ -285,7 +278,7 @@ describe('algorithmic_uv_unwrap_rewrap tool', () => {
             expect(outcome.status).toBe('completed');
             const outPath = path.join(dir, 'in_rewrap.glb');
             expect(fs.existsSync(outPath)).toBe(true);
-            expect(outcome.summaryResult).toMatch(/charts \(\d+ SLIM, \d+ ABF\+\+, \d+ LSCM, \d+ orthographic; slim method\), 0 overlapping/);
+            expect(outcome.summaryResult).toMatch(/charts \(\d+ SLIM, \d+ ABF\+\+, \d+ LSCM, \d+ orthographic\), 0 overlapping/);
             expect(outcome.summaryResult).toMatch(/angle stretch \d\.\d\d/);
             expect(outcome.summaryResult).toMatch(/atlas utilisation \d+\.\d%/);
             expect(outcome.summaryResult).toMatch(/Rebaked 1 textures \(pbrMetallicRoughness\.baseColorTexture 512x512\)/);

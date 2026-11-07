@@ -15,9 +15,8 @@
  *   not fold it (all triangles one orientation in the chart); otherwise the node goes to the island path and the reason
  *   is recorded.
  * - Everything else (the remeshed scan, pass-through regions) is unwrapped by the native island unwrapper
- *   (scripts/uv_atlas.cpp, built with clang++ on first use and run through a pipe; no files): by default charts grown and
- *   flattened by LSCM, ABF++ and SLIM (scratchbox_uv_rewrap.hpp's chart stage); with islandMethod 'orthographic' (or
- *   SCRATCHBOX_TWIN_UV=orthographic) normal-clustered orthographic islands (scratchbox_uv_atlas.hpp).
+ *   (scripts/uv_atlas.cpp, built with clang++ on first use and run through a pipe; no files): charts grown and flattened
+ *   by LSCM, ABF++ and SLIM (scratchbox_uv_rewrap.hpp's chart stage), never overlapping, no flipped triangle.
  * - Charts and islands are packed together into one atlas at one texel density; when they do not fit in `maxSide`, the
  *   density goes down for all of them (the measured density is reported per map).
  * - Every rect carries `gutterTexels` of padding on each side; covered texels are dilated into it (gutter = 1).
@@ -117,12 +116,6 @@ export interface BuildUvAtlasOptions extends UvAtlasInput {
 
 const primKey = (p: { nodeIndex: number; primitiveIndex: number }) => `${p.nodeIndex}:${p.primitiveIndex}`;
 
-/** The island method: the input's, else SCRATCHBOX_TWIN_UV ('orthographic' or 'slim'), else 'slim'. */
-export function twinIslandMethod(requested?: 'slim' | 'orthographic'): 'slim' | 'orthographic' {
-    if (requested) return requested;
-    return process.env.SCRATCHBOX_TWIN_UV === 'orthographic' ? 'orthographic' : 'slim';
-}
-
 // =============================================================================
 // Native island unwrapper (pipe protocol of scripts/uv_atlas.cpp)
 // =============================================================================
@@ -184,13 +177,13 @@ export interface NativeIslands {
 
 /** Runs the native unwrapper over one concatenated mesh; `groups` (per triangle) keeps islands inside a primitive. */
 export async function runNativeIslands(binary: string, positions: Float32Array, indices: Uint32Array, groups: Uint32Array,
-    params: { normalToleranceDeg: number; minIslandAreaM2: number; flatten?: boolean }, timeoutMs = 120_000, signal?: AbortSignal): Promise<NativeIslands> {
+    params: { normalToleranceDeg: number; minIslandAreaM2: number }, timeoutMs = 120_000, signal?: AbortSignal): Promise<NativeIslands> {
     const V = positions.length / 3, T = indices.length / 3;
     const head = Buffer.alloc(16);
     head.write('SBUV', 0, 'latin1');
     head.writeUInt32LE(2, 4); head.writeUInt32LE(V, 8); head.writeUInt32LE(T, 12);
-    const prm = Buffer.alloc(12);
-    prm.writeFloatLE(params.normalToleranceDeg, 0); prm.writeFloatLE(params.minIslandAreaM2, 4); prm.writeUInt32LE(params.flatten ? 1 : 0, 8);
+    const prm = Buffer.alloc(8);
+    prm.writeFloatLE(params.normalToleranceDeg, 0); prm.writeFloatLE(params.minIslandAreaM2, 4);
     const asBuf = (a: Float32Array | Uint32Array) => Buffer.from(a.buffer, a.byteOffset, a.byteLength);
     const out: Buffer = await new Promise((resolve, reject) => {
         const proc = spawn(binary, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -465,7 +458,7 @@ export async function buildUvAtlas(input: BuildUvAtlasOptions): Promise<LaidOutU
         });
         const nt0 = Date.now();
         const bin = input.native?.binaryPath ? { path: input.native.binaryPath, built: false } : await ensureUvAtlasBinary(input.native?.repoRoot);
-        const r = await runNativeIslands(bin.path, positions, indices, groups, { normalToleranceDeg: input.islandNormalToleranceDeg, minIslandAreaM2: input.minIslandAreaM2 ?? 0.05, flatten: twinIslandMethod(input.islandMethod) === 'slim' }, input.native?.timeoutMs, input.signal);
+        const r = await runNativeIslands(bin.path, positions, indices, groups, { normalToleranceDeg: input.islandNormalToleranceDeg, minIslandAreaM2: input.minIslandAreaM2 ?? 0.05 }, input.native?.timeoutMs, input.signal);
         native = { evictionRounds: r.evictionRounds, evictedTriangles: r.evictedTriangles, forcedSingletons: r.forcedSingletons, mergedIslands: r.mergedIslands, ms: Date.now() - nt0, binary: bin.path, built: bin.built };
         // split the output per island: each island is an item; its vertices index the primitive's own clay vertices
         const islandVerts: number[][] = r.islands.map(() => []);

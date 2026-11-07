@@ -9,9 +9,9 @@
 
 // UV unwrap, atlas packing and texture rebake (AlgorithmicUvEngine modes 'unwrap' and 'rewrap').
 //
-// Unwrap (UnwrapParams selects each stage; the defaults are the first of each pair, the second is the original path)
+// Unwrap
 // - Charts: grown by uv_atlas::growCharts (cost on normal deviation, roundness, straightness and creases, seeds
-//   relocated, enclosed charts merged); or the islands of uv_atlas::buildIslands grown at a continuous normal tolerance.
+//   relocated, enclosed charts merged); a chart in several edge-connected pieces is flattened piece by piece.
 // - Every chart's distortion is measured per triangle from the singular values s1 >= s2 of the 3D -> UV Jacobian:
 //   angle stretch s1 / s2 and area ratio r = s1 s2 / (chart UV area / chart 3D area), folded to max(r, 1/r). The chart
 //   passes when the area-weighted RMS of both is under the caller's thresholds (continuous parameters).
@@ -20,8 +20,7 @@
 //   2005: Newton on the angle Lagrangian, triangle constraints eliminated, Schur complement by conjugate gradients;
 //   UVs by LSCM over the triangles its angles describe), then SLIM (Rabinovich et al. 2017: reweighted local-global
 //   iterations on the symmetric Dirichlet energy with a flip-free line search) from the best flip-free map, else from
-//   a Tutte embedding. The result is kept when it has no flipped triangle, no overlapping pair and passes. The original
-//   path tries the orthographic projection, then LSCM alone.
+//   a Tutte embedding. The result is kept when it has no flipped triangle, no overlapping pair and passes.
 // - Otherwise the chart is split: its triangles are re-clustered by buildIslands at a smaller normal tolerance and each
 //   piece is processed again. A single triangle (or a chart at the tolerance floor) keeps its orthographic UVs, which
 //   are always valid, and is counted as accepted over the threshold when it still fails. Charts are processed in
@@ -29,7 +28,9 @@
 // - Charts are scaled to UV area = 3D area (one texel density across the atlas), turned to their minimum-area bounding
 //   rectangle (rotating calipers over the convex hull) and packed at the requested texel density, or at the largest
 //   density that fits a requested atlas size: by uv_atlas::packChartsBitmap (rasterised masks, quarter turns, charts
-//   nest in each other's concavities), or by a skyline bottom-left rectangle packer with 90 degree rotations.
+//   nest in each other's concavities); above bitmapMaxCharts charts (a remesh in hundreds of thousands of
+//   pieces, where tight rectangles waste less than masks) by a skyline bottom-left rectangle packer with 90 degree
+//   rotations.
 //
 // Bake
 // - Each atlas texel is resolved to a source triangle and barycentric coordinates: for a rewrap of the same mesh the
@@ -215,101 +216,6 @@ inline uint64_t countOverlappingPairs(const std::vector<double>& cornerUv, uint6
 
 struct LscmReport { uint32_t iterations = 0; double relativeResidual = 0; bool converged = false; };
 
-/**
- * Least-squares conformal map of one connected chart. `vertexPos` holds the welded chart vertices (3 per vertex),
- * `tris` indexes them, `uv` (2 per vertex) is the starting point and receives the result. Vertices `pinA` and `pinB`
- * keep their starting UVs.
- */
-inline LscmReport solveLscm(const std::vector<double>& vertexPos, const std::vector<uint32_t>& tris, std::vector<double>& uv,
-                            uint32_t pinA, uint32_t pinB, int maxIterations, double relTolerance) {
-    LscmReport rep;
-    const size_t nV = vertexPos.size() / 3, nT = tris.size() / 3;
-    // per triangle: complex coefficients c_j = (P_{j+2} - P_{j+1}) / sqrt(A) in the triangle's own plane
-    std::vector<double> cr(nT * 3), ci(nT * 3);
-    for (size_t t = 0; t < nT; ++t) {
-        V3 p[3];
-        for (int k = 0; k < 3; ++k) { uint32_t v = tris[t * 3 + k]; p[k] = {vertexPos[v * 3], vertexPos[v * 3 + 1], vertexPos[v * 3 + 2]}; }
-        V3 e1 = sub(p[1], p[0]), e2 = sub(p[2], p[0]);
-        V3 n = cross(e1, e2);
-        double a2 = len(n), l1 = len(e1);
-        if (a2 < 1e-18 || l1 < 1e-12) { for (int k = 0; k < 3; ++k) cr[t * 3 + k] = ci[t * 3 + k] = 0; continue; }
-        V3 x = {e1[0] / l1, e1[1] / l1, e1[2] / l1};
-        V3 y = unit(cross(unit(n), x));
-        double lx[3] = {0, l1, dot(e2, x)}, ly[3] = {0, 0, dot(e2, y)};
-        double w = 1.0 / std::sqrt(0.5 * a2);
-        for (int j = 0; j < 3; ++j) {
-            int k1 = (j + 1) % 3, k2 = (j + 2) % 3;
-            cr[t * 3 + j] = (lx[k2] - lx[k1]) * w;
-            ci[t * 3 + j] = (ly[k2] - ly[k1]) * w;
-        }
-    }
-    auto applyNormal = [&](const std::vector<double>& x, std::vector<double>& out) {
-        std::fill(out.begin(), out.end(), 0.0);
-        for (size_t t = 0; t < nT; ++t) {
-            double re = 0, im = 0;
-            for (int j = 0; j < 3; ++j) {
-                uint32_t v = tris[t * 3 + j];
-                double u = x[v], w = x[nV + v];
-                re += cr[t * 3 + j] * u - ci[t * 3 + j] * w;
-                im += ci[t * 3 + j] * u + cr[t * 3 + j] * w;
-            }
-            for (int j = 0; j < 3; ++j) {
-                uint32_t v = tris[t * 3 + j];
-                out[v] += cr[t * 3 + j] * re + ci[t * 3 + j] * im;
-                out[nV + v] += -ci[t * 3 + j] * re + cr[t * 3 + j] * im;
-            }
-        }
-    };
-    std::vector<double> diag(nV * 2, 0.0);
-    for (size_t t = 0; t < nT; ++t) for (int j = 0; j < 3; ++j) {
-        uint32_t v = tris[t * 3 + j];
-        double s = cr[t * 3 + j] * cr[t * 3 + j] + ci[t * 3 + j] * ci[t * 3 + j];
-        diag[v] += s; diag[nV + v] += s;
-    }
-    std::vector<char> pinned(nV * 2, 0);
-    pinned[pinA] = pinned[nV + pinA] = pinned[pinB] = pinned[nV + pinB] = 1;
-    for (size_t i = 0; i < nV * 2; ++i) if (diag[i] <= 0) pinned[i] = 1;  // isolated (degenerate-only) vertices keep their start
-
-    std::vector<double> x(nV * 2);
-    for (size_t v = 0; v < nV; ++v) { x[v] = uv[v * 2]; x[nV + v] = uv[v * 2 + 1]; }
-    std::vector<double> r(nV * 2), z(nV * 2), p(nV * 2), q(nV * 2);
-    applyNormal(x, r);
-    for (size_t i = 0; i < r.size(); ++i) r[i] = pinned[i] ? 0 : -r[i];
-    auto norm = [](const std::vector<double>& a) { double s = 0; for (double v : a) s += v * v; return std::sqrt(s); };
-    // converged when the preconditioned residual has dropped by relTolerance from the orthographic start
-    const double r0 = norm(r);
-    const double target = relTolerance * std::max(r0, 1e-300);
-    double rz = 0;
-    for (size_t i = 0; i < r.size(); ++i) { z[i] = pinned[i] ? 0 : r[i] / diag[i]; rz += r[i] * z[i]; }
-    p = z;
-    int it = 0;
-    double rn = r0;
-    for (; it < maxIterations && rn > target && rn > 1e-300; ++it) {
-        applyNormal(p, q);
-        double pq = 0;
-        for (size_t i = 0; i < q.size(); ++i) { if (pinned[i]) q[i] = 0; pq += p[i] * q[i]; }
-        if (!(pq > 0)) break;
-        double alpha = rz / pq;
-        double rzNew = 0, s = 0;
-        for (size_t i = 0; i < x.size(); ++i) {
-            x[i] += alpha * p[i];
-            r[i] -= alpha * q[i];
-            z[i] = pinned[i] ? 0 : r[i] / diag[i];
-            rzNew += r[i] * z[i];
-            s += r[i] * r[i];
-        }
-        rn = std::sqrt(s);
-        double beta = rzNew / rz;
-        rz = rzNew;
-        for (size_t i = 0; i < p.size(); ++i) p[i] = z[i] + beta * p[i];
-    }
-    rep.iterations = static_cast<uint32_t>(it);
-    rep.relativeResidual = r0 > 0 ? rn / r0 : 0;
-    rep.converged = rn <= target || r0 == 0;
-    for (size_t v = 0; v < nV; ++v) { uv[v * 2] = x[v]; uv[v * 2 + 1] = x[nV + v]; }
-    return rep;
-}
-
 // =====================================================================================================================
 // Chart parameterisation beyond LSCM: per-triangle shapes, chart topology, ABF++, Tutte and SLIM
 // =====================================================================================================================
@@ -334,8 +240,9 @@ inline TriShape shapeOf(const V3& p0, const V3& p1, const V3& p2) {
 inline double shapeArea(const TriShape& s) { return 0.5 * s.x1 * s.y2; }
 
 /**
- * LSCM over per-triangle shapes (the 3D triangles, or the triangles an angle solution describes). Same solver as
- * solveLscm: preconditioned conjugate gradients on the normal equations, two pinned vertices, warm start from `uv`.
+ * LSCM (least-squares conformal map, Levy et al. 2002) over per-triangle shapes (the 3D triangles, or the triangles an
+ * angle solution describes): preconditioned conjugate gradients on the normal equations, two pinned vertices, warm
+ * start from `uv`.
  */
 inline LscmReport lscmShapes(const std::vector<TriShape>& shapes, const std::vector<uint32_t>& tris, size_t nV, std::vector<double>& uv,
                              uint32_t pinA, uint32_t pinB, int maxIterations, double relTolerance) {
@@ -933,7 +840,6 @@ struct UnwrapParams {
     /** Tolerance multiplier per split and the floor below which a chart is no longer split. */
     double splitToleranceFactor = 0.6;
     double minToleranceDeg = 1.0;
-    bool conformal = true;
     int lscmMaxIterations = 4000;
     double lscmRelTolerance = 1e-9;
     // packing
@@ -943,13 +849,6 @@ struct UnwrapParams {
     uint32_t maxSide = 8192;
     uint32_t gutter = 4;
     bool allowRotation = true;
-    // methods (0 = the original normal-cluster / LSCM / skyline path, kept for comparison)
-    /** 0: normal clusters at chartNormalToleranceDeg; 1: grown charts (uv_atlas::growCharts). */
-    uint32_t segmentation = 1;
-    /** 0: orthographic, else LSCM; 1: orthographic only when isometric, else LSCM -> ABF++ -> SLIM. */
-    uint32_t parameterization = 1;
-    /** 0: minimum-area rectangles, skyline packer; 1: bitmap packer (uv_atlas::packChartsBitmap). */
-    uint32_t packing = 1;
     /**
      * Above this many charts the bitmap packer gives way to the rectangle packer: on a mesh of crumbs (a remesh in
      * hundreds of thousands of pieces) tight rectangles waste less than conservative masks, and the search is long.
@@ -996,7 +895,7 @@ struct UnwrapResult {
     uint64_t overlappingPairs = 0; // inside charts after the unwrap (0 for a valid atlas)
     uint32_t lscmAttempts = 0, lscmAccepted = 0, splits = 0;
     uint32_t abfAccepted = 0, slimAccepted = 0, grownCharts = 0;
-    /** The packer used: 1 bitmap, 0 rectangles. */
+    /** The packer used: 1 bitmap masks, 0 rectangles (above bitmapMaxCharts). */
     uint32_t bitmapPacked = 0;
     double msCharts = 0, msPack = 0;
 };
@@ -1154,7 +1053,7 @@ inline ChartSet unwrapCharts(const float* positions, uint32_t vertexCount, const
         }
         return charts;
     };
-    if (prm.segmentation == 1 && prm.conformal) {
+    {
         // grown charts, each projected orthographically on its proxy plane as the starting UVs
         auto g = uv_atlas::growCharts(positions, vertexCount, indices, T, groups, prm.grow);
         work.resize(g.chartNormal.size());
@@ -1176,58 +1075,10 @@ inline ChartSet unwrapCharts(const float* positions, uint32_t vertexCount, const
             }
         }
         out.grownCharts = static_cast<uint32_t>(work.size());
-    } else {
-        std::vector<uint32_t> all(T);
-        std::iota(all.begin(), all.end(), 0u);
-        // first charts are pure normal clusters (no orthographic overlap eviction): a chart that folds in projection goes
-        // to LSCM whole rather than being fragmented, and is split only when LSCM cannot flatten it either
-        work = islandsToCharts(all, prm.chartNormalToleranceDeg, 0, !prm.conformal);
     }
 
     auto passes = [&](const ChartDistortion& d) {
         return d.flipped == 0 && d.stretchRms <= prm.maxAngleStretch && d.areaRms <= prm.maxAreaDistortion;
-    };
-
-    // LSCM over a chart: weld bit-identical positions, pin the extremes of the orthographic principal axis
-    auto lscmChart = [&](const detail::Chart& c, std::vector<double>& cornerOut, uint32_t& iterations) -> bool {
-        std::unordered_map<std::array<uint32_t, 3>, uint32_t, uv_atlas::detail::KeyHash> weld;
-        std::vector<double> vpos, vuv;
-        std::vector<uint32_t> tris(c.tris.size() * 3);
-        std::vector<uint32_t> uses;
-        for (size_t k = 0; k < c.tris.size(); ++k) for (int j = 0; j < 3; ++j) {
-            uint32_t v = indices[c.tris[k] * 3 + j];
-            std::array<uint32_t, 3> key;
-            for (int a = 0; a < 3; ++a) { float f = positions[v * 3 + a]; if (f == 0.0f) f = 0.0f; std::memcpy(&key[a], &f, 4); }
-            auto it = weld.find(key);
-            if (it == weld.end()) {
-                it = weld.emplace(key, static_cast<uint32_t>(vpos.size() / 3)).first;
-                for (int a = 0; a < 3; ++a) vpos.push_back(positions[v * 3 + a]);
-                vuv.push_back(c.cornerUv[k * 6 + j * 2]); vuv.push_back(c.cornerUv[k * 6 + j * 2 + 1]);
-            }
-            tris[k * 3 + j] = it->second;
-        }
-        const size_t nV = vpos.size() / 3;
-        if (nV < 3) return false;
-        // pins: extremes along the chart's longer orthographic axis
-        double minU = 1e300, maxU = -1e300, minV = 1e300, maxV = -1e300;
-        for (size_t v = 0; v < nV; ++v) { minU = std::min(minU, vuv[v * 2]); maxU = std::max(maxU, vuv[v * 2]); minV = std::min(minV, vuv[v * 2 + 1]); maxV = std::max(maxV, vuv[v * 2 + 1]); }
-        const int axis = (maxU - minU) >= (maxV - minV) ? 0 : 1;
-        uint32_t pinA = 0, pinB = 0;
-        for (size_t v = 0; v < nV; ++v) {
-            if (vuv[v * 2 + axis] < vuv[pinA * 2 + axis]) pinA = static_cast<uint32_t>(v);
-            if (vuv[v * 2 + axis] > vuv[pinB * 2 + axis]) pinB = static_cast<uint32_t>(v);
-        }
-        if (pinA == pinB) return false;
-        auto rep = solveLscm(vpos, tris, vuv, pinA, pinB, prm.lscmMaxIterations, prm.lscmRelTolerance);
-        iterations = rep.iterations;
-        cornerOut.resize(c.tris.size() * 6);
-        for (size_t k = 0; k < c.tris.size(); ++k) for (int j = 0; j < 3; ++j) {
-            uint32_t w = tris[k * 3 + j];
-            if (!std::isfinite(vuv[w * 2]) || !std::isfinite(vuv[w * 2 + 1])) return false;
-            cornerOut[k * 6 + j * 2] = vuv[w * 2];
-            cornerOut[k * 6 + j * 2 + 1] = vuv[w * 2 + 1];
-        }
-        return true;
     };
 
     // edge-connected pieces of a chart (edges welded on bit-identical positions), as indices into `tris`
@@ -1383,7 +1234,7 @@ inline ChartSet unwrapCharts(const float* positions, uint32_t vertexCount, const
         rep.orthoDistortion = chartDistortion(c.tris, c.cornerUv, corner);
         const bool orthoOverlaps = countOverlappingPairs(c.cornerUv) > 0;
         const bool orthoIsometric = rep.orthoDistortion.flipped == 0 && rep.orthoDistortion.stretchRms <= 1.001 && rep.orthoDistortion.areaRms <= 1.001;
-        if (prm.parameterization == 1 && c.tris.size() > 1) {
+        if (c.tris.size() > 1) {
             // a chart in several edge-connected pieces (merged islands) is flattened piece by piece: the solvers fix
             // translation per chart, so loose pieces would drift apart
             auto parts = edgeComponents(c.tris);
@@ -1401,7 +1252,7 @@ inline ChartSet unwrapCharts(const float* positions, uint32_t vertexCount, const
                 return;
             }
         }
-        if (prm.parameterization == 1 && prm.conformal && c.tris.size() > 1 && !(orthoIsometric && !orthoOverlaps)) {
+        if (c.tris.size() > 1 && !(orthoIsometric && !orthoOverlaps)) {
             std::vector<double> flat;
             ++o.lscmAttempts;
             ChartReport fr = rep;
@@ -1422,21 +1273,6 @@ inline ChartSet unwrapCharts(const float* positions, uint32_t vertexCount, const
             rep.distortion = rep.orthoDistortion;
             o.finish(std::move(c), rep);
             return;
-        }
-        if (prm.parameterization == 0 && prm.conformal && c.tris.size() > 1) {
-            std::vector<double> lscmUv;
-            uint32_t iters = 0;
-            ++o.lscmAttempts;
-            if (lscmChart(c, lscmUv, iters)) {
-                ChartDistortion dl = chartDistortion(c.tris, lscmUv, corner);
-                if (passes(dl) && countOverlappingPairs(lscmUv) == 0) {
-                    ++o.lscmAccepted;
-                    rep.method = kMethodLscm; rep.distortion = dl; rep.lscmIterations = iters;
-                    c.cornerUv.swap(lscmUv);
-                    o.finish(std::move(c), rep);
-                    return;
-                }
-            }
         }
         // split at a smaller tolerance; a chart that no tolerance splits keeps its orthographic UVs
         bool split = false;
@@ -1573,7 +1409,7 @@ inline UnwrapResult unwrap(const float* positions, uint32_t vertexCount, const u
     std::vector<Binned> binned(done.size());
     std::vector<double> itemW, itemH;
     double d = prm.texelsPerMeter;
-    const bool bitmapPacking = prm.packing == 1 && done.size() <= prm.bitmapMaxCharts;
+    const bool bitmapPacking = done.size() <= prm.bitmapMaxCharts;
     out.bitmapPacked = bitmapPacking ? 1 : 0;
     if (bitmapPacking) {
         // With many charts the tiny ones are first shelf-packed into small bins at the pack's density (footprints kept a

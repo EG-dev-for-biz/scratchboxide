@@ -8,21 +8,20 @@
  ********************************************************************************/
 
 /**
- * The 'slim' unwrap method (grown charts; LSCM -> ABF++ -> SLIM; mask packing) against the 'legacy' one, checked on the
- * written UVs with the independent reader of helpers/uv-rewrap-fixtures.ts:
- * - curved UV-less meshes (a bumpy torus, a cylinder, an icosphere, a saddle sheet) unwrap with no flipped triangle, no
- *   overlapping texel, angle stretch and area ratio under bounds tighter than the chart thresholds, and no more angle
- *   distortion than the legacy method;
- * - a SLIM chart reports at least one SLIM iteration and the per-chart flips stay zero;
- * - the legacy method is still selectable and reports no ABF++ / SLIM charts.
- * Real data (gitignored; skipped with a reason without it): SCRATCHBOX_UV_BENCH_K (a Pipeline K building GLB),
- * SCRATCHBOX_UV_BENCH_TILE (a Google 3D Tiles extraction GLB), SCRATCHBOX_UV_BENCH_OBJECT (a generated object GLB):
- * both methods on each, measured (angle and area distortion, flips, texel-density spread, utilisation, time) and
- * rendered with a UV checker to test-results/screenshots/uv_rewrap/methods_*.
+ * The UV unwrap (grown charts; LSCM -> ABF++ -> SLIM; mask packing), checked on the written UVs with an independent
+ * reader:
+ * - solver unit tests on curved UV-less meshes (a bumpy torus, a cylinder, an icosphere, a saddle sheet): no flipped
+ *   triangle, no overlapping texel, angle stretch and area ratio under bounds tighter than the chart thresholds; a mesh
+ *   of crumbs packs through the bins with no overlap;
+ * - real cached buildings (SCRATCHBOX_UV_BENCH_DIR: a benchmark folder of <building>/cache/tile_refine/<key>/raw_clay.glb,
+ *   e.g. benchmarks/2026-11-06-main/main; gitignored, skipped with a reason without it): each raw scan unwrapped,
+ *   measured (angle and area distortion, flips, texel-density spread, utilisation, time) and rendered with a UV checker
+ *   to test-results/screenshots/uv_rewrap/real_*.
  */
 
 import { describe, expect, it } from 'vitest';
 import * as fs from 'fs';
+import * as path from 'path';
 import { unwrapRewrapGlb, type UvRewrapReport } from '../src/node/spatial/UvAtlasRewrap';
 import { parseGlbBytes, readAccessor, nodeWorldMatrices, transformPoint } from '../src/node/3d-engine/staged-location/glb-bytes';
 import {
@@ -58,12 +57,11 @@ function saddle(n = 40, k = 0.6): FixturePrimitive {
     return { positions, indices };
 }
 
-async function unwrap(glb: Buffer, method: 'slim' | 'legacy', extra: Record<string, unknown> = {}) {
-    const r = await unwrapRewrapGlb('unwrap', glb, { atlasSize: 1024, unwrapMethod: method, ...extra });
-    return r;
+async function unwrap(glb: Buffer) {
+    return unwrapRewrapGlb('unwrap', glb, { atlasSize: 1024 });
 }
 
-describe('slim unwrap method on curved meshes', () => {
+describe('UV unwrap on curved meshes (solver unit tests)', () => {
     const cases: Array<[string, FixturePrimitive, { stretch: number; area: number }]> = [
         ['torus', bumpyTorus(), { stretch: 1.08, area: 1.12 }],
         ['cylinder', cylinderMesh(0.5, 2, 48, 12), { stretch: 1.05, area: 1.1 }],
@@ -71,34 +69,28 @@ describe('slim unwrap method on curved meshes', () => {
         ['saddle', saddle(), { stretch: 1.08, area: 1.2 }]
     ];
     for (const [name, mesh, bound] of cases) {
-        it(`${name}: no flips, no overlap, distortion bounded and no worse than legacy`, async () => {
+        it(`${name}: no flips, no overlap, distortion bounded`, async () => {
             const input = buildFixtureGlb({ primitives: [mesh] });
-            const slim = await unwrap(input, 'slim');
-            const legacy = await unwrap(input, 'legacy');
-            const a = slim.report.atlases[0];
+            const res = await unwrap(input);
+            const a = res.report.atlases[0];
             expect(a.status).toBe('unwrapped');
-            expect(a.unwrapMethod).toBe('slim');
-            expect(slim.report.overlappingTrianglePairs).toBe(0);
-            const ov = uvOverlapTexels(slim.glb, 0, 2048);
+            expect(res.report.overlappingTrianglePairs).toBe(0);
+            const ov = uvOverlapTexels(res.glb, 0, 2048);
             expect(ov.covered).toBeGreaterThan(0);
             expect(ov.overlapping).toBe(0);
-            const d = measureDistortion(slim.glb, 0);
-            const dl = measureDistortion(legacy.glb, 0);
+            const d = measureDistortion(res.glb, 0);
             expect(d.flipped).toBe(0);
             expect(d.stretchRms).toBeLessThanOrEqual(bound.stretch);
             expect(d.areaRms).toBeLessThanOrEqual(bound.area);
-            expect(d.stretchRms).toBeLessThanOrEqual(dl.stretchRms + 1e-3);
             for (const c of a.chartDetails) expect(c.flippedTriangles).toBe(0);
             for (const c of a.chartDetails.filter(c => c.method === 'slim')) expect(c.slimIterations).toBeGreaterThan(0);
-            recordMetrics(`methods_${name}`, { slim: { ...d, charts: a.charts, slimCharts: a.slimCharts, abfCharts: a.abfCharts, utilisation: a.utilisation }, legacy: { ...dl, charts: legacy.report.charts, utilisation: legacy.report.utilisation } });
-            const cam = orbitCamera(input, 35, 30, 320);
-            saveSideBySide(`methods_${name}_checker_legacy_vs_slim`, [renderGlb(legacy.glb, cam, 'checker'), renderGlb(slim.glb, cam, 'checker'), uvLayoutImage(legacy.glb, 0, 320), uvLayoutImage(slim.glb, 0, 320)]);
+            recordMetrics(`unwrap_${name}`, { ...d, charts: a.charts, slimCharts: a.slimCharts, abfCharts: a.abfCharts, utilisation: a.utilisation });
         }, 120_000);
     }
 
     it('a chart only the solvers can flatten is flattened, not split into pieces', async () => {
         const input = buildFixtureGlb({ primitives: [saddle()] });
-        const slim = await unwrap(input, 'slim');
+        const slim = await unwrap(input);
         const a = slim.report.atlases[0];
         // the saddle is one disk: the grower keeps it whole and SLIM / ABF++ flatten it without a split
         expect(a.charts).toBeLessThanOrEqual(2);
@@ -115,47 +107,23 @@ describe('slim unwrap method on curved meshes', () => {
             indices.push(b, b + 1, b + 2);
         }
         const input = buildFixtureGlb({ primitives: [{ positions, indices }] });
-        const slim = await unwrap(input, 'slim');
+        const slim = await unwrap(input);
         const a = slim.report.atlases[0];
         expect(a.charts).toBe(2000);
         expect(slim.report.overlappingTrianglePairs).toBe(0);
         expect(uvOverlapTexels(slim.glb, 0, 2048).overlapping).toBe(0);
         expect(measureDistortion(slim.glb, 0).flipped).toBe(0);
-        const legacy = await unwrap(input, 'legacy');
-        recordMetrics('methods_crumbs', { slim: { utilisation: a.utilisation, texelsPerMeter: a.texelsPerMeter }, legacy: { utilisation: legacy.report.utilisation, texelsPerMeter: legacy.report.atlases[0].texelsPerMeter } });
-    }, 120_000);
-
-    it('the legacy method is still selectable', async () => {
-        const input = buildFixtureGlb({ primitives: [bumpyTorus(48, 20)] });
-        const legacy = await unwrap(input, 'legacy');
-        expect(legacy.report.unwrapMethod).toBe('legacy');
-        expect(legacy.report.slimCharts).toBe(0);
-        expect(legacy.report.abfCharts).toBe(0);
-        expect(legacy.report.overlappingTrianglePairs).toBe(0);
-        expect(uvOverlapTexels(legacy.glb, 0, 2048).overlapping).toBe(0);
     }, 120_000);
 });
 
 // =============================================================================
-// Real data: old against new
+// Real cached buildings
 // =============================================================================
 
-function realFile(env: string, what: string): { path?: string; req: Requirement } {
-    const p = process.env[env];
-    if (p && fs.existsSync(p)) return { path: p, req: { ok: true, reason: '' } };
-    return { req: { ok: false, reason: `set ${env} to ${what} (gitignored real data)` } };
-}
-
-interface MethodMetrics {
-    method: string; triangles: number; charts: number; slimCharts: number; abfCharts: number; lscmCharts: number; splits: number;
-    angleStretchMean: number; angleStretchRms: number; areaRatioRms: number; flipped: number; subTexelSlivers: number;
+interface Metrics {
+    triangles: number; charts: number; slimCharts: number; abfCharts: number; splits: number;
+    angleStretchMean: number; angleStretchRms: number; areaRatioRms: number; flipped: number; subTexelSlivers: number; nativeFlips: number;
     texelDensityCv: number; texelDensityP5OverP95: number; utilisation: number; texelsPerMeter: number; atlas: string; ms: number; overlappingPairs: number;
-}
-
-/** The TEXCOORD set the unwrap wrote (an input that already has UVs keeps them as set 0 and gets a new set). */
-function writtenSet(report: UvRewrapReport): number {
-    const w = report.atlases.find(a => a.texCoordWritten)?.texCoordWritten ?? 'TEXCOORD_0';
-    return Number(w.split('_')[1] ?? 0);
 }
 
 /**
@@ -207,55 +175,53 @@ function measureTexels(glb: Buffer, set: number, W: number, H: number) {
     return { stretchMean: sm / A, stretchRms: Math.sqrt(s2 / A), areaRms: Math.sqrt(r2 / A), flipped, slivers };
 }
 
-function metricsOf(method: string, report: UvRewrapReport, glb: Buffer): MethodMetrics {
-    const atl = report.atlases.filter(a => a.status !== 'skipped');
-    const d = measureTexels(glb, writtenSet(report), atl[0].width, atl[0].height);
-    return {
-        method, triangles: atl.reduce((s, a) => s + a.triangles, 0), charts: report.charts, slimCharts: report.slimCharts, abfCharts: report.abfCharts,
-        lscmCharts: report.lscmCharts, splits: atl.reduce((s, a) => s + a.splits, 0),
-        angleStretchMean: d.stretchMean, angleStretchRms: d.stretchRms, areaRatioRms: d.areaRms, flipped: d.flipped, subTexelSlivers: d.slivers,
-        texelDensityCv: report.texelDensity.cv, texelDensityP5OverP95: report.texelDensity.uniformity, utilisation: report.utilisation,
-        texelsPerMeter: atl.length ? atl[0].texelsPerMeter : 0, atlas: atl.map(a => `${a.width}x${a.height}`).slice(0, 3).join(','),
-        ms: report.totalMs, overlappingPairs: report.overlappingTrianglePairs
-    };
+/** The TEXCOORD set the unwrap wrote (an input that already has UVs keeps them as set 0 and gets a new set). */
+function writtenSet(report: UvRewrapReport): number {
+    const w = report.atlases.find(a => a.texCoordWritten)?.texCoordWritten ?? 'TEXCOORD_0';
+    return Number(w.split('_')[1] ?? 0);
 }
 
-const REAL: Array<{ key: string; env: string; what: string }> = [
-    { key: 'k_building', env: 'SCRATCHBOX_UV_BENCH_K', what: 'a Pipeline K building GLB' },
-    { key: 'tile', env: 'SCRATCHBOX_UV_BENCH_TILE', what: 'a Google 3D Tiles extraction GLB' },
-    { key: 'object', env: 'SCRATCHBOX_UV_BENCH_OBJECT', what: 'a generated object GLB' }
-];
+const benchDir = process.env.SCRATCHBOX_UV_BENCH_DIR;
+const benchReq: Requirement = benchDir && fs.existsSync(benchDir)
+    ? { ok: true, reason: '' }
+    : { ok: false, reason: 'set SCRATCHBOX_UV_BENCH_DIR to a benchmark folder of cached buildings (<building>/cache/tile_refine/<key>/raw_clay.glb)' };
+const benchBuildings = benchReq.ok
+    ? fs.readdirSync(benchDir!).filter(b => fs.existsSync(path.join(benchDir!, b, 'cache', 'tile_refine'))).slice(0, Number(process.env.SCRATCHBOX_UV_BENCH_LIMIT ?? 6))
+    : [];
+const rawScanOf = (b: string) => {
+    const root = path.join(benchDir!, b, 'cache', 'tile_refine');
+    const key = fs.readdirSync(root).sort().find(k => fs.existsSync(path.join(root, k, 'raw_clay.glb')));
+    return key ? path.join(root, key, 'raw_clay.glb') : undefined;
+};
 
-for (const r of REAL) {
-    const f = realFile(r.env, r.what);
-    describe.skipIf(!f.req.ok)(withReason(`unwrap methods on ${r.what}`, f.req), () => {
-        it(`${r.key}: legacy and slim measured and rendered`, async () => {
-            const input = fs.readFileSync(f.path!);
-            // the same atlas size for both: the denser method packs better
-            const atlasSize = Number(process.env[`SCRATCHBOX_UV_BENCH_ATLAS_${r.key.toUpperCase()}`] ?? process.env.SCRATCHBOX_UV_BENCH_ATLAS ?? 4096);
-            const out: Record<string, MethodMetrics> = {};
-            const glbs: Record<string, Buffer> = {};
-            const sets: Record<string, number> = {};
-            const nativeFlips: Record<string, number> = {};
-            for (const method of ['legacy', 'slim'] as const) {
-                const res = await unwrapRewrapGlb('unwrap', input, { atlasSize, unwrapMethod: method, native: { timeoutMs: 3_600_000 } });
-                out[method] = metricsOf(method, res.report, res.glb);
-                glbs[method] = res.glb;
-                sets[method] = writtenSet(res.report);
+describe.skipIf(!benchReq.ok)(withReason('UV unwrap of real cached buildings', benchReq), () => {
+    for (const b of benchBuildings) {
+        it(`${b}: raw scan unwrapped with no flip or overlap, measured and rendered`, async ctx => {
+            const file = rawScanOf(b);
+            if (!file) return ctx.skip();
+            const input = fs.readFileSync(file);
+            const res = await unwrapRewrapGlb('unwrap', input, { atlasSize: 4096, native: { timeoutMs: 3_600_000 } });
+            const report = res.report;
+            const atl = report.atlases.filter(a => a.status !== 'skipped');
+            const set = writtenSet(report);
+            const d = measureTexels(res.glb, set, atl[0].width, atl[0].height);
+            const m: Metrics = {
+                triangles: atl.reduce((s, a) => s + a.triangles, 0), charts: report.charts, slimCharts: report.slimCharts, abfCharts: report.abfCharts,
+                splits: atl.reduce((s, a) => s + a.splits, 0), angleStretchMean: d.stretchMean, angleStretchRms: d.stretchRms, areaRatioRms: d.areaRms,
+                flipped: d.flipped, subTexelSlivers: d.slivers,
                 // the engine's own count, in double precision before the UVs are written as float32
-                nativeFlips[method] = res.report.atlases.reduce((s, a) => s + a.chartDetails.reduce((t, c) => t + c.flippedTriangles, 0), 0);
-            }
-            recordMetrics(`methods_real_${r.key}`, out);
-            const views: Array<[number, number]> = [[30, 25], [210, 35]];
-            views.forEach(([az, el], k) => {
-                const cam = orbitCamera(input, az, el, 640, 1.6);
-                saveSideBySide(`methods_real_${r.key}_view${k}`, [renderGlb(glbs.legacy, cam, 'checker', { checkerSet: sets.legacy }), renderGlb(glbs.slim, cam, 'checker', { checkerSet: sets.slim })]);
-            });
-            saveSideBySide(`methods_real_${r.key}_layout`, [uvLayoutImage(glbs.legacy, sets.legacy, 640), uvLayoutImage(glbs.slim, sets.slim, 640)]);
-            expect(out.slim.overlappingPairs).toBe(0);
-            expect(nativeFlips.slim).toBe(0);
-            // float32 UVs: a few near-sliver triangles of a very fine mesh can round to the other orientation (legacy too)
-            expect(out.slim.flipped).toBeLessThanOrEqual(out.legacy.flipped);
+                nativeFlips: atl.reduce((s, a) => s + a.chartDetails.reduce((t, c) => t + c.flippedTriangles, 0), 0),
+                texelDensityCv: report.texelDensity.cv, texelDensityP5OverP95: report.texelDensity.uniformity, utilisation: report.utilisation,
+                texelsPerMeter: atl[0].texelsPerMeter, atlas: `${atl[0].width}x${atl[0].height}`, ms: report.totalMs, overlappingPairs: report.overlappingTrianglePairs
+            };
+            recordMetrics(`real_${b}`, m);
+            const cam = orbitCamera(input, 30, 25, 640, 1.6);
+            saveSideBySide(`real_${b}`, [renderGlb(res.glb, cam, 'checker', { checkerSet: set }), uvLayoutImage(res.glb, set, 640)]);
+            expect(m.overlappingPairs).toBe(0);
+            expect(m.nativeFlips).toBe(0);
+            // float32 UVs: a near-sliver triangle of a very fine mesh can round to the other orientation
+            expect(m.flipped).toBeLessThanOrEqual(Math.ceil(m.triangles * 1e-3));
+            expect(m.angleStretchMean).toBeLessThan(1.1);
         }, 3_600_000);
-    });
-}
+    }
+});
