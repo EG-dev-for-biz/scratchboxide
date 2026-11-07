@@ -10,21 +10,27 @@
 // UV unwrap, atlas packing and texture rebake (AlgorithmicUvEngine modes 'unwrap' and 'rewrap').
 //
 // Unwrap
-// - Charts start as the islands of scratchbox_uv_atlas.hpp (normal-clustered, orthographic, never overlapping) grown at
-//   a continuous normal tolerance.
+// - Charts: grown by uv_atlas::growCharts (cost on normal deviation, roundness, straightness and creases, seeds
+//   relocated, enclosed charts merged); a chart in several edge-connected pieces is flattened piece by piece.
 // - Every chart's distortion is measured per triangle from the singular values s1 >= s2 of the 3D -> UV Jacobian:
 //   angle stretch s1 / s2 and area ratio r = s1 s2 / (chart UV area / chart 3D area), folded to max(r, 1/r). The chart
 //   passes when the area-weighted RMS of both is under the caller's thresholds (continuous parameters).
-// - A chart whose orthographic projection fails is re-parameterized conformally (LSCM: least-squares conformal map,
-//   Levy et al. 2002) by preconditioned conjugate gradients on the normal equations, started from the orthographic
-//   UVs with the two extreme vertices of the principal axis pinned. The LSCM result is kept when it has no flipped
-//   triangle, no overlapping triangle pair and passes the thresholds.
+// - Flattening: a chart whose orthographic projection is not isometric goes through LSCM (least-squares conformal map,
+//   Levy et al. 2002; preconditioned conjugate gradients, two pins) as a fast first map, then ABF++ (Sheffer et al.
+//   2005: Newton on the angle Lagrangian, triangle constraints eliminated, Schur complement by conjugate gradients;
+//   UVs by LSCM over the triangles its angles describe), then SLIM (Rabinovich et al. 2017: reweighted local-global
+//   iterations on the symmetric Dirichlet energy with a flip-free line search) from the best flip-free map, else from
+//   a Tutte embedding. The result is kept when it has no flipped triangle, no overlapping pair and passes.
 // - Otherwise the chart is split: its triangles are re-clustered by buildIslands at a smaller normal tolerance and each
 //   piece is processed again. A single triangle (or a chart at the tolerance floor) keeps its orthographic UVs, which
-//   are always valid, and is counted as accepted over the threshold when it still fails.
+//   are always valid, and is counted as accepted over the threshold when it still fails. Charts are processed in
+//   breadth-first batches on worker threads; results are taken in batch order, so the output is thread-count independent.
 // - Charts are scaled to UV area = 3D area (one texel density across the atlas), turned to their minimum-area bounding
-//   rectangle (rotating calipers over the convex hull) and packed with a skyline bottom-left packer with 90 degree
-//   rotations at the requested texel density, or at the largest density that fits a requested atlas size.
+//   rectangle (rotating calipers over the convex hull) and packed at the requested texel density, or at the largest
+//   density that fits a requested atlas size: by uv_atlas::packChartsBitmap (rasterised masks, quarter turns, charts
+//   nest in each other's concavities); above bitmapMaxCharts charts (a remesh in hundreds of thousands of
+//   pieces, where tight rectangles waste less than masks) by a skyline bottom-left rectangle packer with 90 degree
+//   rotations.
 //
 // Bake
 // - Each atlas texel is resolved to a source triangle and barycentric coordinates: for a rewrap of the same mesh the
@@ -210,28 +216,47 @@ inline uint64_t countOverlappingPairs(const std::vector<double>& cornerUv, uint6
 
 struct LscmReport { uint32_t iterations = 0; double relativeResidual = 0; bool converged = false; };
 
+// =====================================================================================================================
+// Chart parameterisation beyond LSCM: per-triangle shapes, chart topology, ABF++, Tutte and SLIM
+// =====================================================================================================================
+
+namespace param {
+
+/** A triangle in its own plane: corner 0 at the origin, corner 1 on +x, corner 2 above the x axis (metres). */
+struct TriShape { double x1 = 0, x2 = 0, y2 = 0; };
+
+inline TriShape shapeOf(const V3& p0, const V3& p1, const V3& p2) {
+    TriShape s;
+    V3 e1 = sub(p1, p0), e2 = sub(p2, p0);
+    V3 n = cross(e1, e2);
+    double l1 = len(e1);
+    if (len(n) < 1e-18 || l1 < 1e-12) return s;
+    V3 x = {e1[0] / l1, e1[1] / l1, e1[2] / l1};
+    V3 y = unit(cross(unit(n), x));
+    s.x1 = l1; s.x2 = dot(e2, x); s.y2 = dot(e2, y);
+    return s;
+}
+
+inline double shapeArea(const TriShape& s) { return 0.5 * s.x1 * s.y2; }
+
 /**
- * Least-squares conformal map of one connected chart. `vertexPos` holds the welded chart vertices (3 per vertex),
- * `tris` indexes them, `uv` (2 per vertex) is the starting point and receives the result. Vertices `pinA` and `pinB`
- * keep their starting UVs.
+ * LSCM (least-squares conformal map, Levy et al. 2002) over per-triangle shapes (the 3D triangles, or the triangles an
+ * angle solution describes): preconditioned conjugate gradients on the normal equations, two pinned vertices, warm
+ * start from `uv`.
  */
-inline LscmReport solveLscm(const std::vector<double>& vertexPos, const std::vector<uint32_t>& tris, std::vector<double>& uv,
-                            uint32_t pinA, uint32_t pinB, int maxIterations, double relTolerance) {
+inline LscmReport lscmShapes(const std::vector<TriShape>& shapes, const std::vector<uint32_t>& tris, size_t nV, std::vector<double>& uv,
+                             uint32_t pinA, uint32_t pinB, int maxIterations, double relTolerance) {
+    // a chart is rebuilt as flat 3D positions per corner is not possible (shapes need not close up), so the solver is
+    // run on the per-triangle coefficients directly: c_j = (P_{j+2} - P_{j+1}) / sqrt(A)
     LscmReport rep;
-    const size_t nV = vertexPos.size() / 3, nT = tris.size() / 3;
-    // per triangle: complex coefficients c_j = (P_{j+2} - P_{j+1}) / sqrt(A) in the triangle's own plane
-    std::vector<double> cr(nT * 3), ci(nT * 3);
+    const size_t nT = tris.size() / 3;
+    std::vector<double> cr(nT * 3, 0.0), ci(nT * 3, 0.0);
     for (size_t t = 0; t < nT; ++t) {
-        V3 p[3];
-        for (int k = 0; k < 3; ++k) { uint32_t v = tris[t * 3 + k]; p[k] = {vertexPos[v * 3], vertexPos[v * 3 + 1], vertexPos[v * 3 + 2]}; }
-        V3 e1 = sub(p[1], p[0]), e2 = sub(p[2], p[0]);
-        V3 n = cross(e1, e2);
-        double a2 = len(n), l1 = len(e1);
-        if (a2 < 1e-18 || l1 < 1e-12) { for (int k = 0; k < 3; ++k) cr[t * 3 + k] = ci[t * 3 + k] = 0; continue; }
-        V3 x = {e1[0] / l1, e1[1] / l1, e1[2] / l1};
-        V3 y = unit(cross(unit(n), x));
-        double lx[3] = {0, l1, dot(e2, x)}, ly[3] = {0, 0, dot(e2, y)};
-        double w = 1.0 / std::sqrt(0.5 * a2);
+        const TriShape& s = shapes[t];
+        const double a = shapeArea(s);
+        if (!(a > 1e-24)) continue;
+        const double lx[3] = {0, s.x1, s.x2}, ly[3] = {0, 0, s.y2};
+        const double w = 1.0 / std::sqrt(a);
         for (int j = 0; j < 3; ++j) {
             int k1 = (j + 1) % 3, k2 = (j + 2) % 3;
             cr[t * 3 + j] = (lx[k2] - lx[k1]) * w;
@@ -263,15 +288,13 @@ inline LscmReport solveLscm(const std::vector<double>& vertexPos, const std::vec
     }
     std::vector<char> pinned(nV * 2, 0);
     pinned[pinA] = pinned[nV + pinA] = pinned[pinB] = pinned[nV + pinB] = 1;
-    for (size_t i = 0; i < nV * 2; ++i) if (diag[i] <= 0) pinned[i] = 1;  // isolated (degenerate-only) vertices keep their start
-
+    for (size_t i = 0; i < nV * 2; ++i) if (diag[i] <= 0) pinned[i] = 1;
     std::vector<double> x(nV * 2);
     for (size_t v = 0; v < nV; ++v) { x[v] = uv[v * 2]; x[nV + v] = uv[v * 2 + 1]; }
     std::vector<double> r(nV * 2), z(nV * 2), p(nV * 2), q(nV * 2);
     applyNormal(x, r);
     for (size_t i = 0; i < r.size(); ++i) r[i] = pinned[i] ? 0 : -r[i];
     auto norm = [](const std::vector<double>& a) { double s = 0; for (double v : a) s += v * v; return std::sqrt(s); };
-    // converged when the preconditioned residual has dropped by relTolerance from the orthographic start
     const double r0 = norm(r);
     const double target = relTolerance * std::max(r0, 1e-300);
     double rz = 0;
@@ -284,8 +307,7 @@ inline LscmReport solveLscm(const std::vector<double>& vertexPos, const std::vec
         double pq = 0;
         for (size_t i = 0; i < q.size(); ++i) { if (pinned[i]) q[i] = 0; pq += p[i] * q[i]; }
         if (!(pq > 0)) break;
-        double alpha = rz / pq;
-        double rzNew = 0, s = 0;
+        double alpha = rz / pq, rzNew = 0, s = 0;
         for (size_t i = 0; i < x.size(); ++i) {
             x[i] += alpha * p[i];
             r[i] -= alpha * q[i];
@@ -305,6 +327,503 @@ inline LscmReport solveLscm(const std::vector<double>& vertexPos, const std::vec
     return rep;
 }
 
+/** Topology of a welded chart. */
+struct Topology {
+    bool manifold = true;              // every edge used at most twice with opposite orientations, every vertex one fan
+    std::vector<uint8_t> interior;     // per vertex: closed single fan
+    std::vector<std::vector<uint32_t>> boundaryLoops;
+    std::vector<std::vector<uint32_t>> neighbours;  // per vertex, unique
+    uint32_t interiorCount = 0;
+};
+
+inline Topology topologyOf(const std::vector<uint32_t>& tris, size_t nV) {
+    Topology top;
+    const size_t nT = tris.size() / 3;
+    top.interior.assign(nV, 0);
+    top.neighbours.assign(nV, {});
+    std::unordered_map<uint64_t, uint32_t> directed;  // (a -> b) -> uses
+    directed.reserve(nT * 3);
+    auto key = [](uint32_t a, uint32_t b) { return (uint64_t(a) << 32) | b; };
+    for (size_t t = 0; t < nT; ++t) for (int k = 0; k < 3; ++k) {
+        uint32_t a = tris[t * 3 + k], b = tris[t * 3 + (k + 1) % 3];
+        if (a == b) { top.manifold = false; continue; }
+        if (++directed[key(a, b)] > 1) top.manifold = false;
+        top.neighbours[a].push_back(b);
+        top.neighbours[b].push_back(a);
+    }
+    for (auto& n : top.neighbours) { std::sort(n.begin(), n.end()); n.erase(std::unique(n.begin(), n.end()), n.end()); }
+    // boundary edges: a -> b without b -> a
+    std::vector<uint32_t> nextBoundary(nV, UINT32_MAX);
+    std::vector<uint32_t> boundaryOut(nV, 0);
+    std::vector<uint32_t> corners(nV, 0);
+    for (size_t t = 0; t < nT; ++t) for (int k = 0; k < 3; ++k) ++corners[tris[t * 3 + k]];
+    for (auto& [kk, uses] : directed) {
+        uint32_t a = uint32_t(kk >> 32), b = uint32_t(kk & 0xffffffffu);
+        if (directed.find(key(b, a)) == directed.end()) { nextBoundary[a] = b; ++boundaryOut[a]; }
+    }
+    for (size_t v = 0; v < nV; ++v) if (boundaryOut[v] > 1) top.manifold = false;
+    // interior vertices: no boundary edge and one fan (as many distinct neighbours as corners)
+    for (size_t v = 0; v < nV; ++v) {
+        if (corners[v] == 0 || boundaryOut[v] > 0) continue;
+        bool hasIncomingBoundary = false;
+        for (uint32_t u : top.neighbours[v]) if (nextBoundary[u] == v) { hasIncomingBoundary = true; break; }
+        if (hasIncomingBoundary) continue;
+        if (top.neighbours[v].size() != corners[v]) { top.manifold = false; continue; }
+        top.interior[v] = 1;
+        ++top.interiorCount;
+    }
+    // boundary loops
+    std::vector<uint8_t> seen(nV, 0);
+    for (size_t v = 0; v < nV; ++v) {
+        if (nextBoundary[v] == UINT32_MAX || seen[v]) continue;
+        std::vector<uint32_t> loop;
+        uint32_t c = static_cast<uint32_t>(v);
+        while (c != UINT32_MAX && !seen[c]) { seen[c] = 1; loop.push_back(c); c = nextBoundary[c]; }
+        if (c != v) top.manifold = false;  // an open chain: non-manifold boundary
+        top.boundaryLoops.push_back(std::move(loop));
+    }
+    return top;
+}
+
+inline double cornerAngle(const TriShape& s, int k) {
+    const double px[3] = {0, s.x1, s.x2}, py[3] = {0, 0, s.y2};
+    const int a = (k + 1) % 3, b = (k + 2) % 3;
+    const double ux = px[a] - px[k], uy = py[a] - py[k], vx = px[b] - px[k], vy = py[b] - py[k];
+    return std::atan2(std::fabs(ux * vy - uy * vx), ux * vx + uy * vy);
+}
+
+struct AbfReport { uint32_t iterations = 0; double residual = 0; bool converged = false; };
+
+/**
+ * ABF++ (Sheffer, Levy, Mogilnitsky, Bogomyakov 2005): the corner angles closest (weighted by 1 / beta^2) to the 3D
+ * angles, scaled to sum to 2 pi around interior vertices, under the triangle (sum = pi), planarity (sum = 2 pi around
+ * an interior vertex) and length (sine law around an interior vertex) constraints. Newton steps on the Lagrangian with
+ * the Hessian of the energy only; the triangle constraints are eliminated (their block is diagonal) and the remaining
+ * Schur complement over the vertex constraints is solved by preconditioned conjugate gradients.
+ */
+inline AbfReport abfPlusPlus(const std::vector<TriShape>& shapes, const std::vector<uint32_t>& tris, const Topology& top,
+                             std::vector<double>& alpha, int maxIterations = 20, double tolerance = 1e-7) {
+    AbfReport rep;
+    const size_t nT = tris.size() / 3, nV = top.interior.size();
+    const size_t nC = nT * 3;
+    const double minAngle = 1.0 * M_PI / 180.0;
+    std::vector<double> beta(nC), w(nC);
+    for (size_t t = 0; t < nT; ++t) for (int k = 0; k < 3; ++k) beta[t * 3 + k] = std::clamp(cornerAngle(shapes[t], k), minAngle, M_PI - 2 * minAngle);
+    std::vector<double> vsum(nV, 0.0);
+    for (size_t c = 0; c < nC; ++c) vsum[tris[c]] += beta[c];
+    for (size_t c = 0; c < nC; ++c) if (top.interior[tris[c]] && vsum[tris[c]] > 0) beta[c] *= 2 * M_PI / vsum[tris[c]];
+    for (size_t c = 0; c < nC; ++c) w[c] = 1.0 / (beta[c] * beta[c]);
+    // interior vertex numbering
+    std::vector<uint32_t> vi(nV, UINT32_MAX);
+    uint32_t nI = 0;
+    for (size_t v = 0; v < nV; ++v) if (top.interior[v]) vi[v] = nI++;
+    alpha = beta;
+    if (nI == 0) {
+        // only triangle constraints: closed form per triangle (weighted projection onto sum = pi)
+        for (size_t t = 0; t < nT; ++t) {
+            double s = 0, iw = 0;
+            for (int k = 0; k < 3; ++k) { s += alpha[t * 3 + k]; iw += 1.0 / w[t * 3 + k]; }
+            for (int k = 0; k < 3; ++k) alpha[t * 3 + k] -= (s - M_PI) / (w[t * 3 + k] * iw);
+        }
+        rep.converged = true;
+        return rep;
+    }
+    std::vector<double> lTri(nT, 0.0), lPlan(nI, 0.0), lLen(nI, 0.0);
+    std::vector<double> g(nC), cotA(nC), lam(nC), b1(nT), b2(2 * nI), dl2(2 * nI), dl1(nT), dAlpha(nC), y(nC), zc(nC), atri(nT);
+    // J2^T x (vertex constraints -> corners) and J2 z (corners -> vertex constraints)
+    auto J2T = [&](const std::vector<double>& x, std::vector<double>& outC) {
+        for (size_t c = 0; c < nC; ++c) {
+            const size_t t = c / 3; const int j = int(c % 3);
+            const uint32_t v = tris[c], vPrev = tris[t * 3 + (j + 2) % 3], vNext = tris[t * 3 + (j + 1) % 3];
+            double s = 0;
+            if (vi[v] != UINT32_MAX) s += x[vi[v]];
+            if (vi[vPrev] != UINT32_MAX) s += x[nI + vi[vPrev]] * cotA[c];
+            if (vi[vNext] != UINT32_MAX) s -= x[nI + vi[vNext]] * cotA[c];
+            outC[c] = s;
+        }
+    };
+    auto J2 = [&](const std::vector<double>& zC, std::vector<double>& out) {
+        std::fill(out.begin(), out.end(), 0.0);
+        for (size_t c = 0; c < nC; ++c) {
+            const size_t t = c / 3; const int j = int(c % 3);
+            const uint32_t v = tris[c], vPrev = tris[t * 3 + (j + 2) % 3], vNext = tris[t * 3 + (j + 1) % 3];
+            if (vi[v] != UINT32_MAX) out[vi[v]] += zC[c];
+            if (vi[vPrev] != UINT32_MAX) out[nI + vi[vPrev]] += cotA[c] * zC[c];
+            if (vi[vNext] != UINT32_MAX) out[nI + vi[vNext]] -= cotA[c] * zC[c];
+        }
+    };
+    std::vector<double> tmpC(nC), Cplan(nI), Clen(nI), Ctri(nT);
+    for (int it = 0; it < maxIterations; ++it) {
+        for (size_t c = 0; c < nC; ++c) cotA[c] = 1.0 / std::tan(alpha[c]);
+        // constraints
+        std::fill(Cplan.begin(), Cplan.end(), -2 * M_PI);
+        std::fill(Clen.begin(), Clen.end(), 0.0);
+        for (size_t t = 0; t < nT; ++t) Ctri[t] = alpha[t * 3] + alpha[t * 3 + 1] + alpha[t * 3 + 2] - M_PI;
+        for (size_t c = 0; c < nC; ++c) {
+            const size_t t = c / 3; const int j = int(c % 3);
+            const uint32_t v = tris[c], vPrev = tris[t * 3 + (j + 2) % 3], vNext = tris[t * 3 + (j + 1) % 3];
+            const double ls = std::log(std::sin(alpha[c]));
+            if (vi[v] != UINT32_MAX) Cplan[vi[v]] += alpha[c];
+            if (vi[vPrev] != UINT32_MAX) Clen[vi[vPrev]] += ls;
+            if (vi[vNext] != UINT32_MAX) Clen[vi[vNext]] -= ls;
+        }
+        // gradient of the Lagrangian
+        std::vector<double> lam2(2 * nI);
+        for (uint32_t i = 0; i < nI; ++i) { lam2[i] = lPlan[i]; lam2[nI + i] = lLen[i]; }
+        J2T(lam2, tmpC);
+        double res = 0;
+        for (size_t c = 0; c < nC; ++c) { g[c] = 2 * w[c] * (alpha[c] - beta[c]) + lTri[c / 3] + tmpC[c]; res += g[c] * g[c]; }
+        for (double v : Ctri) res += v * v;
+        for (double v : Cplan) res += v * v;
+        for (double v : Clen) res += v * v;
+        res = std::sqrt(res);
+        rep.residual = res;
+        rep.iterations = static_cast<uint32_t>(it);
+        if (res < tolerance) { rep.converged = true; break; }
+        // b = C - J Lambda^-1 g, Lambda = 2w
+        for (size_t c = 0; c < nC; ++c) lam[c] = 1.0 / (2 * w[c]);
+        for (size_t t = 0; t < nT; ++t) {
+            atri[t] = lam[t * 3] + lam[t * 3 + 1] + lam[t * 3 + 2];
+            b1[t] = Ctri[t] - (lam[t * 3] * g[t * 3] + lam[t * 3 + 1] * g[t * 3 + 1] + lam[t * 3 + 2] * g[t * 3 + 2]);
+        }
+        for (size_t c = 0; c < nC; ++c) tmpC[c] = lam[c] * g[c];
+        J2(tmpC, b2);
+        for (uint32_t i = 0; i < nI; ++i) { b2[i] = Cplan[i] - b2[i]; b2[nI + i] = Clen[i] - b2[nI + i]; }
+        // r2 = b2 - J2 Lambda^-1 J1^T A11^-1 b1
+        for (size_t c = 0; c < nC; ++c) tmpC[c] = lam[c] * b1[c / 3] / atri[c / 3];
+        std::vector<double> r2(2 * nI);
+        J2(tmpC, r2);
+        for (size_t i = 0; i < 2 * nI; ++i) r2[i] = b2[i] - r2[i];
+        // Schur operator S x = J2 P Lambda^-1 J2^T x
+        auto applyS = [&](const std::vector<double>& x, std::vector<double>& out) {
+            J2T(x, y);
+            for (size_t c = 0; c < nC; ++c) y[c] *= lam[c];
+            for (size_t t = 0; t < nT; ++t) {
+                const double s = (y[t * 3] + y[t * 3 + 1] + y[t * 3 + 2]) / atri[t];
+                for (int k = 0; k < 3; ++k) zc[t * 3 + k] = y[t * 3 + k] - lam[t * 3 + k] * s;
+            }
+            J2(zc, out);
+        };
+        std::vector<double> dg(2 * nI, 0.0);
+        for (size_t c = 0; c < nC; ++c) {
+            const size_t t = c / 3; const int j = int(c % 3);
+            const uint32_t v = tris[c], vPrev = tris[t * 3 + (j + 2) % 3], vNext = tris[t * 3 + (j + 1) % 3];
+            if (vi[v] != UINT32_MAX) dg[vi[v]] += lam[c];
+            if (vi[vPrev] != UINT32_MAX) dg[nI + vi[vPrev]] += lam[c] * cotA[c] * cotA[c];
+            if (vi[vNext] != UINT32_MAX) dg[nI + vi[vNext]] += lam[c] * cotA[c] * cotA[c];
+        }
+        for (double& v : dg) v = v > 1e-30 ? v : 1.0;
+        // PCG
+        std::fill(dl2.begin(), dl2.end(), 0.0);
+        std::vector<double> r = r2, zz(2 * nI), pp(2 * nI), qq(2 * nI);
+        double rr0 = 0; for (double v : r) rr0 += v * v;
+        double rz = 0;
+        for (size_t i = 0; i < r.size(); ++i) { zz[i] = r[i] / dg[i]; rz += r[i] * zz[i]; }
+        pp = zz;
+        // inexact Newton: a relative 1e-6 inner solve, tightened as the outer residual falls
+        const double target = std::min(1e-12, res * res) * std::max(rr0, 1e-300);
+        for (int k = 0; k < 600; ++k) {
+            applyS(pp, qq);
+            double pq = 0; for (size_t i = 0; i < pp.size(); ++i) pq += pp[i] * qq[i];
+            if (!(pq > 0)) break;
+            const double a = rz / pq;
+            double rzN = 0, rrN = 0;
+            for (size_t i = 0; i < r.size(); ++i) { dl2[i] += a * pp[i]; r[i] -= a * qq[i]; zz[i] = r[i] / dg[i]; rzN += r[i] * zz[i]; rrN += r[i] * r[i]; }
+            if (rrN <= target) break;
+            const double bta = rzN / rz;
+            rz = rzN;
+            for (size_t i = 0; i < pp.size(); ++i) pp[i] = zz[i] + bta * pp[i];
+        }
+        // dl1 = A11^-1 (b1 - J1 Lambda^-1 J2^T dl2)
+        J2T(dl2, tmpC);
+        for (size_t t = 0; t < nT; ++t) dl1[t] = (b1[t] - (lam[t * 3] * tmpC[t * 3] + lam[t * 3 + 1] * tmpC[t * 3 + 1] + lam[t * 3 + 2] * tmpC[t * 3 + 2])) / atri[t];
+        // dAlpha = -Lambda^-1 (g + J^T dl)
+        bool finite = true;
+        for (size_t c = 0; c < nC; ++c) {
+            dAlpha[c] = -lam[c] * (g[c] + dl1[c / 3] + tmpC[c]);
+            if (!std::isfinite(dAlpha[c])) finite = false;
+        }
+        if (!finite) return rep;
+        for (size_t c = 0; c < nC; ++c) alpha[c] = std::clamp(alpha[c] + dAlpha[c], 1e-4, M_PI - 1e-4);
+        for (size_t t = 0; t < nT; ++t) lTri[t] += dl1[t];
+        for (uint32_t i = 0; i < nI; ++i) { lPlan[i] += dl2[i]; lLen[i] += dl2[nI + i]; }
+        rep.iterations = static_cast<uint32_t>(it + 1);
+    }
+    return rep;
+}
+
+/** Triangle shapes from corner angles (sine law), each scaled to the area of the 3D triangle it replaces. */
+inline std::vector<TriShape> shapesFromAngles(const std::vector<double>& alpha, const std::vector<TriShape>& reference) {
+    const size_t nT = reference.size();
+    std::vector<TriShape> out(nT);
+    for (size_t t = 0; t < nT; ++t) {
+        const double a0 = alpha[t * 3], a1 = alpha[t * 3 + 1], a2 = alpha[t * 3 + 2];
+        // side opposite corner k is proportional to sin(a_k): |p0 p1| ~ sin a2, |p0 p2| ~ sin a1
+        TriShape s;
+        const double l01 = std::sin(a2), l02 = std::sin(a1);
+        s.x1 = l01; s.x2 = l02 * std::cos(a0); s.y2 = l02 * std::sin(a0);
+        const double a = shapeArea(s), aRef = shapeArea(reference[t]);
+        const double k = a > 1e-30 && aRef > 0 ? std::sqrt(aRef / a) : 0.0;
+        s.x1 *= k; s.x2 *= k; s.y2 *= k;
+        out[t] = s;
+    }
+    return out;
+}
+
+/** Tutte embedding: the one boundary loop on a circle by arc length, interior vertices at the mean of their neighbours. */
+inline bool tutte(const std::vector<TriShape>& shapes, const std::vector<uint32_t>& tris, const Topology& top, const std::vector<double>& vpos, std::vector<double>& uv) {
+    if (!top.manifold || top.boundaryLoops.size() != 1 || top.boundaryLoops[0].size() < 3) return false;
+    const size_t nV = top.interior.size();
+    double area = 0;
+    for (const auto& s : shapes) area += shapeArea(s);
+    const double radius = std::sqrt(std::max(area, 1e-24) / M_PI);
+    const auto& loop = top.boundaryLoops[0];
+    std::vector<double> cum(loop.size() + 1, 0.0);
+    auto P = [&](uint32_t v) -> V3 { return {vpos[v * 3], vpos[v * 3 + 1], vpos[v * 3 + 2]}; };
+    for (size_t i = 0; i < loop.size(); ++i) cum[i + 1] = cum[i] + std::max(len(sub(P(loop[(i + 1) % loop.size()]), P(loop[i]))), 1e-12);
+    uv.assign(nV * 2, 0.0);
+    std::vector<uint8_t> fixedV(nV, 0);
+    for (size_t i = 0; i < loop.size(); ++i) {
+        const double a = 2 * M_PI * cum[i] / cum.back();
+        uv[loop[i] * 2] = radius * std::cos(a);
+        uv[loop[i] * 2 + 1] = radius * std::sin(a);
+        fixedV[loop[i]] = 1;
+    }
+    // vertices that are neither interior nor on the loop (cannot happen on a manifold disk) fail the embedding
+    for (size_t v = 0; v < nV; ++v) if (!fixedV[v] && !top.interior[v] && !top.neighbours[v].empty()) return false;
+    // uniform Laplacian with Dirichlet boundary, conjugate gradients per coordinate
+    for (int axis = 0; axis < 2; ++axis) {
+        std::vector<double> x(nV), b(nV, 0.0), r(nV), p(nV), q(nV);
+        for (size_t v = 0; v < nV; ++v) x[v] = fixedV[v] ? uv[v * 2 + axis] : 0.0;
+        auto apply = [&](const std::vector<double>& in, std::vector<double>& out) {
+            for (size_t v = 0; v < nV; ++v) {
+                if (fixedV[v] || top.neighbours[v].empty()) { out[v] = 0; continue; }
+                double s = double(top.neighbours[v].size()) * in[v];
+                for (uint32_t u : top.neighbours[v]) if (!fixedV[u]) s -= in[u];
+                out[v] = s;
+            }
+        };
+        for (size_t v = 0; v < nV; ++v) {
+            if (fixedV[v] || top.neighbours[v].empty()) continue;
+            for (uint32_t u : top.neighbours[v]) if (fixedV[u]) b[v] += uv[u * 2 + axis];
+        }
+        std::vector<double> xi(nV, 0.0);
+        apply(xi, q);
+        for (size_t v = 0; v < nV; ++v) r[v] = b[v] - q[v];
+        p = r;
+        double rr = 0; for (double v : r) rr += v * v;
+        const double target = 1e-24 * std::max(rr, 1e-300);
+        for (int it = 0; it < 20000 && rr > target; ++it) {
+            apply(p, q);
+            double pq = 0; for (size_t v = 0; v < nV; ++v) pq += p[v] * q[v];
+            if (!(pq > 0)) break;
+            const double a = rr / pq;
+            double rrN = 0;
+            for (size_t v = 0; v < nV; ++v) { xi[v] += a * p[v]; r[v] -= a * q[v]; rrN += r[v] * r[v]; }
+            const double bta = rrN / rr;
+            rr = rrN;
+            for (size_t v = 0; v < nV; ++v) p[v] = r[v] + bta * p[v];
+        }
+        for (size_t v = 0; v < nV; ++v) if (!fixedV[v]) uv[v * 2 + axis] = xi[v];
+    }
+    (void)tris;
+    return true;
+}
+
+/** Signed doubled UV area of each triangle. */
+inline double uvDet(const std::vector<double>& uv, const uint32_t* t) {
+    const double* a = &uv[t[0] * 2]; const double* b = &uv[t[1] * 2]; const double* c = &uv[t[2] * 2];
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+}
+
+/** Flips against the chart's majority orientation; degenerate UV triangles count as flipped. */
+inline uint32_t countFlips(const std::vector<double>& uv, const std::vector<uint32_t>& tris, const std::vector<TriShape>& shapes, double* orientationOut = nullptr) {
+    const size_t nT = tris.size() / 3;
+    double signedSum = 0;
+    for (size_t t = 0; t < nT; ++t) signedSum += uvDet(uv, &tris[t * 3]);
+    const double o = signedSum >= 0 ? 1.0 : -1.0;
+    if (orientationOut) *orientationOut = o;
+    uint32_t f = 0;
+    for (size_t t = 0; t < nT; ++t) if (shapeArea(shapes[t]) > 1e-24 && !(uvDet(uv, &tris[t * 3]) * o > 0)) ++f;
+    return f;
+}
+
+struct SlimReport { uint32_t iterations = 0; double energyStart = 0, energyEnd = 0; bool ok = false; };
+
+/**
+ * SLIM (Rabinovich, Lipman, Sorkine-Hornung 2017) on the symmetric Dirichlet energy sum A (s1^2 + s1^-2 + s2^2 + s2^-2):
+ * each iteration fits a reweighted ARAP proxy per triangle (closest rotation R = U V^T, weights from dD/ds over 2 (s - 1),
+ * which for this energy is (s + 1)(s^2 + 1) / s^3) and solves the global weighted least squares (conjugate gradients,
+ * warm start, a tiny proximal term fixes the translation), then takes a flip-free line search along the step: the
+ * largest step before any triangle degenerates (a quadratic per triangle) times 0.8, halved until the energy drops.
+ * `uv` must start with every triangle positively oriented; it stays so.
+ */
+inline SlimReport slim(const std::vector<TriShape>& shapes, const std::vector<uint32_t>& tris, size_t nV, std::vector<double>& uv,
+                       int maxIterations = 30, double relStop = 1e-4) {
+    SlimReport rep;
+    const size_t nT = tris.size() / 3;
+    std::vector<double> A(nT), gx(nT * 3, 0.0), gy(nT * 3, 0.0);
+    std::vector<uint8_t> live(nT, 0);
+    double totalA = 0;
+    for (size_t t = 0; t < nT; ++t) {
+        const TriShape& s = shapes[t];
+        A[t] = shapeArea(s);
+        if (!(A[t] > 1e-24) || std::fabs(s.x1) < 1e-15 || std::fabs(s.y2) < 1e-15) continue;
+        live[t] = 1;
+        totalA += A[t];
+        gx[t * 3] = -1 / s.x1; gx[t * 3 + 1] = 1 / s.x1; gx[t * 3 + 2] = 0;
+        gy[t * 3] = s.x2 / (s.x1 * s.y2) - 1 / s.y2; gy[t * 3 + 1] = -s.x2 / (s.x1 * s.y2); gy[t * 3 + 2] = 1 / s.y2;
+    }
+    if (!(totalA > 0)) return rep;
+    for (size_t t = 0; t < nT; ++t) if (live[t] && !(uvDet(uv, &tris[t * 3]) > 0)) return rep;
+    auto jac = [&](const std::vector<double>& x, size_t t, double J[4]) {
+        J[0] = J[1] = J[2] = J[3] = 0;
+        for (int k = 0; k < 3; ++k) {
+            const uint32_t v = tris[t * 3 + k];
+            J[0] += gx[t * 3 + k] * x[v * 2]; J[1] += gy[t * 3 + k] * x[v * 2];
+            J[2] += gx[t * 3 + k] * x[v * 2 + 1]; J[3] += gy[t * 3 + k] * x[v * 2 + 1];
+        }
+    };
+    auto energy = [&](const std::vector<double>& x) {
+        double e = 0;
+        for (size_t t = 0; t < nT; ++t) {
+            if (!live[t]) continue;
+            double J[4]; jac(x, t, J);
+            const double det = J[0] * J[3] - J[1] * J[2];
+            if (!(det > 0)) return HUGE_VAL;
+            const double fro = J[0] * J[0] + J[1] * J[1] + J[2] * J[2] + J[3] * J[3];
+            // s1^2 + s2^2 = |J|^2, s1^-2 + s2^-2 = |J|^2 / det^2
+            e += A[t] * (fro + fro / (det * det));
+        }
+        return e / totalA;
+    };
+    double E = energy(uv);
+    rep.energyStart = E;
+    if (!std::isfinite(E)) return rep;
+    std::vector<double> M(nT * 4), R(nT * 4), target(nV * 2), b(nV * 2), r(nV * 2), z(nV * 2), p(nV * 2), q(nV * 2), diag(nV * 2), d(nV * 2), trial(nV * 2);
+    for (int it = 0; it < maxIterations; ++it) {
+        // local step
+        for (size_t t = 0; t < nT; ++t) {
+            if (!live[t]) continue;
+            double J[4]; jac(uv, t, J);
+            const double Ee = (J[0] + J[3]) / 2, F = (J[0] - J[3]) / 2, G = (J[2] + J[1]) / 2, H = (J[2] - J[1]) / 2;
+            const double Qv = std::hypot(Ee, H), Rv = std::hypot(F, G);
+            const double s1 = Qv + Rv, s2 = std::max(Qv - Rv, 1e-12);
+            const double a1 = std::atan2(G, F), a2 = std::atan2(H, Ee);
+            const double phi = (a2 + a1) / 2;  // U = rot(phi); R = rot(a2)
+            const double cr = std::cos(a2), sr = std::sin(a2);
+            R[t * 4] = cr; R[t * 4 + 1] = -sr; R[t * 4 + 2] = sr; R[t * 4 + 3] = cr;
+            auto wgt = [](double s) { return (s + 1) * (s * s + 1) / (s * s * s); };  // squared weight
+            const double w1 = wgt(s1), w2 = wgt(s2);
+            const double cu = std::cos(phi), su = std::sin(phi);
+            // M = U diag(w1, w2) U^T
+            M[t * 4] = w1 * cu * cu + w2 * su * su;
+            M[t * 4 + 1] = M[t * 4 + 2] = (w1 - w2) * cu * su;
+            M[t * 4 + 3] = w1 * su * su + w2 * cu * cu;
+        }
+        // global step: sum 2A J*(M J(x)) + 2 mu x = sum 2A J*(M R) + 2 mu x_cur
+        double meanDiag = 0;
+        std::fill(diag.begin(), diag.end(), 0.0);
+        std::fill(b.begin(), b.end(), 0.0);
+        for (size_t t = 0; t < nT; ++t) {
+            if (!live[t]) continue;
+            const double* m = &M[t * 4]; const double* rr = &R[t * 4];
+            const double K[4] = {m[0] * rr[0] + m[1] * rr[2], m[0] * rr[1] + m[1] * rr[3], m[2] * rr[0] + m[3] * rr[2], m[2] * rr[1] + m[3] * rr[3]};
+            for (int k = 0; k < 3; ++k) {
+                const uint32_t v = tris[t * 3 + k];
+                const double ax = gx[t * 3 + k], ay = gy[t * 3 + k];
+                b[v * 2] += 2 * A[t] * (K[0] * ax + K[1] * ay);
+                b[v * 2 + 1] += 2 * A[t] * (K[2] * ax + K[3] * ay);
+                diag[v * 2] += 2 * A[t] * m[0] * (ax * ax + ay * ay);
+                diag[v * 2 + 1] += 2 * A[t] * m[3] * (ax * ax + ay * ay);
+            }
+        }
+        for (double v : diag) meanDiag += v;
+        meanDiag /= double(diag.size());
+        const double mu = 1e-8 * std::max(meanDiag, 1e-30);
+        for (size_t i = 0; i < nV * 2; ++i) { b[i] += 2 * mu * uv[i]; diag[i] += 2 * mu; if (!(diag[i] > 0)) diag[i] = 1; }
+        auto applyH = [&](const std::vector<double>& x, std::vector<double>& out) {
+            for (size_t i = 0; i < nV * 2; ++i) out[i] = 2 * mu * x[i];
+            for (size_t t = 0; t < nT; ++t) {
+                if (!live[t]) continue;
+                double J[4]; jac(x, t, J);
+                const double* m = &M[t * 4];
+                const double K[4] = {m[0] * J[0] + m[1] * J[2], m[0] * J[1] + m[1] * J[3], m[2] * J[0] + m[3] * J[2], m[2] * J[1] + m[3] * J[3]};
+                for (int k = 0; k < 3; ++k) {
+                    const uint32_t v = tris[t * 3 + k];
+                    const double ax = gx[t * 3 + k], ay = gy[t * 3 + k];
+                    out[v * 2] += 2 * A[t] * (K[0] * ax + K[1] * ay);
+                    out[v * 2 + 1] += 2 * A[t] * (K[2] * ax + K[3] * ay);
+                }
+            }
+        };
+        target = uv;
+        applyH(target, q);
+        double rr = 0, bb = 0;
+        for (size_t i = 0; i < nV * 2; ++i) { r[i] = b[i] - q[i]; rr += r[i] * r[i]; bb += b[i] * b[i]; }
+        double rz = 0;
+        for (size_t i = 0; i < nV * 2; ++i) { z[i] = r[i] / diag[i]; rz += r[i] * z[i]; }
+        p = z;
+        const double tol2 = 1e-12 * std::max(bb, 1e-300);
+        for (int k = 0; k < 300 && rr > tol2; ++k) {
+            applyH(p, q);
+            double pq = 0; for (size_t i = 0; i < nV * 2; ++i) pq += p[i] * q[i];
+            if (!(pq > 0)) break;
+            const double a = rz / pq;
+            double rzN = 0; rr = 0;
+            for (size_t i = 0; i < nV * 2; ++i) { target[i] += a * p[i]; r[i] -= a * q[i]; z[i] = r[i] / diag[i]; rzN += r[i] * z[i]; rr += r[i] * r[i]; }
+            const double bta = rzN / rz;
+            rz = rzN;
+            for (size_t i = 0; i < nV * 2; ++i) p[i] = z[i] + bta * p[i];
+        }
+        // flip-free line search
+        for (size_t i = 0; i < nV * 2; ++i) d[i] = target[i] - uv[i];
+        double tMax = HUGE_VAL;
+        for (size_t t = 0; t < nT; ++t) {
+            if (!live[t]) continue;
+            const uint32_t* id = &tris[t * 3];
+            const double ux1 = uv[id[1] * 2] - uv[id[0] * 2], uy1 = uv[id[1] * 2 + 1] - uv[id[0] * 2 + 1];
+            const double ux2 = uv[id[2] * 2] - uv[id[0] * 2], uy2 = uv[id[2] * 2 + 1] - uv[id[0] * 2 + 1];
+            const double dx1 = d[id[1] * 2] - d[id[0] * 2], dy1 = d[id[1] * 2 + 1] - d[id[0] * 2 + 1];
+            const double dx2 = d[id[2] * 2] - d[id[0] * 2], dy2 = d[id[2] * 2 + 1] - d[id[0] * 2 + 1];
+            // det(t) = (u1 + t d1) x (u2 + t d2) = qa t^2 + qb t + qc
+            const double qa = dx1 * dy2 - dy1 * dx2, qb = ux1 * dy2 - uy1 * dx2 + dx1 * uy2 - dy1 * ux2, qc = ux1 * uy2 - uy1 * ux2;
+            double root = HUGE_VAL;
+            if (std::fabs(qa) > 1e-300 * std::max(1.0, std::fabs(qc))) {
+                const double disc = qb * qb - 4 * qa * qc;
+                if (disc >= 0) {
+                    const double sq = std::sqrt(disc);
+                    const double r1 = (-qb - sq) / (2 * qa), r2 = (-qb + sq) / (2 * qa);
+                    const double lo = std::min(r1, r2), hi = std::max(r1, r2);
+                    if (lo > 0) root = lo; else if (hi > 0) root = hi;
+                }
+            } else if (std::fabs(qb) > 0) {
+                const double r1 = -qc / qb;
+                if (r1 > 0) root = r1;
+            }
+            tMax = std::min(tMax, root);
+        }
+        double step = std::min(1.0, 0.8 * tMax);
+        double Enew = HUGE_VAL;
+        for (int h = 0; h < 12; ++h, step *= 0.5) {
+            for (size_t i = 0; i < nV * 2; ++i) trial[i] = uv[i] + step * d[i];
+            Enew = energy(trial);
+            if (Enew < E) break;
+        }
+        rep.iterations = static_cast<uint32_t>(it + 1);
+        if (!(Enew < E)) break;
+        uv.swap(trial);
+        const double drop = (E - Enew) / E;
+        E = Enew;
+        if (drop < relStop) break;
+    }
+    rep.energyEnd = E;
+    rep.ok = std::isfinite(E);
+    return rep;
+}
+
+}  // namespace param
+
 // =====================================================================================================================
 // Unwrap
 // =====================================================================================================================
@@ -321,7 +840,6 @@ struct UnwrapParams {
     /** Tolerance multiplier per split and the floor below which a chart is no longer split. */
     double splitToleranceFactor = 0.6;
     double minToleranceDeg = 1.0;
-    bool conformal = true;
     int lscmMaxIterations = 4000;
     double lscmRelTolerance = 1e-9;
     // packing
@@ -331,9 +849,21 @@ struct UnwrapParams {
     uint32_t maxSide = 8192;
     uint32_t gutter = 4;
     bool allowRotation = true;
+    /**
+     * Above this many charts the bitmap packer gives way to the rectangle packer: on a mesh of crumbs (a remesh in
+     * hundreds of thousands of pieces) tight rectangles waste less than conservative masks, and the search is long.
+     */
+    uint32_t bitmapMaxCharts = 30000;
+    bool abf = true;
+    int slimIterations = 30;
+    /** Quarter turns tried by the bitmap packer (1, 2 or 4) when allowRotation. */
+    int packRotations = 4;
+    uv_atlas::GrowParams grow{};
+    /** Chart worker threads (0 = hardware concurrency, capped at 32). */
+    uint32_t threads = 0;
 };
 
-enum : uint32_t { kMethodOrtho = 0, kMethodLscm = 1 };
+enum : uint32_t { kMethodOrtho = 0, kMethodLscm = 1, kMethodAbf = 2, kMethodSlim = 3 };
 
 struct ChartReport {
     uint32_t method = kMethodOrtho;
@@ -342,6 +872,8 @@ struct ChartReport {
     uint32_t splitDepth = 0;
     uint32_t overThreshold = 0;   // accepted while failing the thresholds (single triangle or tolerance floor)
     uint32_t lscmIterations = 0;
+    uint32_t abfIterations = 0;
+    uint32_t slimIterations = 0;
     ChartDistortion orthoDistortion;
     ChartDistortion distortion;   // of the UVs kept
     double widthM = 0, heightM = 0;
@@ -362,6 +894,9 @@ struct UnwrapResult {
     double utilisation = 0;        // UV triangle area / atlas area
     uint64_t overlappingPairs = 0; // inside charts after the unwrap (0 for a valid atlas)
     uint32_t lscmAttempts = 0, lscmAccepted = 0, splits = 0;
+    uint32_t abfAccepted = 0, slimAccepted = 0, grownCharts = 0;
+    /** The packer used: 1 bitmap masks, 0 rectangles (above bitmapMaxCharts). */
+    uint32_t bitmapPacked = 0;
     double msCharts = 0, msPack = 0;
 };
 
@@ -461,16 +996,21 @@ inline std::vector<std::array<double, 2>> convexHull(std::vector<std::array<doub
 
 }  // namespace detail
 
+/** Charts before packing: per chart its triangles and corner UVs in metres (origin at the chart's min corner). */
+struct ChartSet {
+    std::vector<std::vector<uint32_t>> tris;
+    std::vector<std::vector<double>> cornerUv;   // 6 per triangle
+    std::vector<ChartReport> reports;            // widthM / heightM set; no packed rect
+};
+
 /**
- * Unwraps one atlas: `positions` (3 per vertex, metres), `indices` (3 per triangle), `groups` (one per triangle, may be
- * null) keep charts inside a group (a glTF primitive). The result's vertices are (source vertex, chart) pairs.
+ * The chart stage of unwrap (segmentation, flattening, splits, normalisation to UV area = 3D area, minimum-area
+ * rectangle): `out` receives the chart counters and msCharts.
  */
-inline UnwrapResult unwrap(const float* positions, uint32_t vertexCount, const uint32_t* indices, uint32_t triangleCount,
-                           const uint32_t* groups, const UnwrapParams& prm) {
+inline ChartSet unwrapCharts(const float* positions, uint32_t vertexCount, const uint32_t* indices, uint32_t triangleCount,
+                             const uint32_t* groups, const UnwrapParams& prm, UnwrapResult& out) {
     using clock = std::chrono::steady_clock;
     const auto t0 = clock::now();
-    (void)vertexCount;
-    UnwrapResult out;
     const uint32_t T = triangleCount;
     auto P = [&](uint32_t v) -> V3 { return {positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2]}; };
     auto corner = [&](uint32_t t, int k) -> V3 { return P(indices[t * 3 + k]); };
@@ -514,23 +1054,67 @@ inline UnwrapResult unwrap(const float* positions, uint32_t vertexCount, const u
         return charts;
     };
     {
-        std::vector<uint32_t> all(T);
-        std::iota(all.begin(), all.end(), 0u);
-        // first charts are pure normal clusters (no orthographic overlap eviction): a chart that folds in projection goes
-        // to LSCM whole rather than being fragmented, and is split only when LSCM cannot flatten it either
-        work = islandsToCharts(all, prm.chartNormalToleranceDeg, 0, !prm.conformal);
+        // grown charts, each projected orthographically on its proxy plane as the starting UVs
+        auto g = uv_atlas::growCharts(positions, vertexCount, indices, T, groups, prm.grow);
+        work.resize(g.chartNormal.size());
+        for (auto& c : work) { c.tolDeg = prm.chartNormalToleranceDeg; c.depth = 0; }
+        std::vector<std::array<V3, 2>> basis(g.chartNormal.size());
+        for (size_t c = 0; c < basis.size(); ++c) {
+            const V3 n = g.chartNormal[c];
+            const V3 axis = std::fabs(n[0]) < 0.9 ? V3{1, 0, 0} : V3{0, 1, 0};
+            const V3 a = unit(cross(n, axis));
+            basis[c] = {a, cross(n, a)};
+        }
+        for (uint32_t t = 0; t < T; ++t) {
+            auto& c = work[g.triangleChart[t]];
+            c.tris.push_back(t);
+            for (int j = 0; j < 3; ++j) {
+                const V3 p = corner(t, j);
+                c.cornerUv.push_back(dot(p, basis[g.triangleChart[t]][0]));
+                c.cornerUv.push_back(dot(p, basis[g.triangleChart[t]][1]));
+            }
+        }
+        out.grownCharts = static_cast<uint32_t>(work.size());
     }
 
     auto passes = [&](const ChartDistortion& d) {
         return d.flipped == 0 && d.stretchRms <= prm.maxAngleStretch && d.areaRms <= prm.maxAreaDistortion;
     };
 
-    // LSCM over a chart: weld bit-identical positions, pin the extremes of the orthographic principal axis
-    auto lscmChart = [&](const detail::Chart& c, std::vector<double>& cornerOut, uint32_t& iterations) -> bool {
+    // edge-connected pieces of a chart (edges welded on bit-identical positions), as indices into `tris`
+    auto edgeComponents = [&](const std::vector<uint32_t>& tris) {
+        std::unordered_map<std::array<uint32_t, 3>, uint32_t, uv_atlas::detail::KeyHash> weld;
+        auto id = [&](uint32_t v) {
+            std::array<uint32_t, 3> key;
+            for (int a = 0; a < 3; ++a) { float f = positions[v * 3 + a]; if (f == 0.0f) f = 0.0f; std::memcpy(&key[a], &f, 4); }
+            return weld.emplace(key, static_cast<uint32_t>(weld.size())).first->second;
+        };
+        std::vector<uint32_t> parent(tris.size());
+        std::iota(parent.begin(), parent.end(), 0u);
+        auto root = [&](uint32_t x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+        std::unordered_map<uint64_t, uint32_t> edgeOwner;
+        for (uint32_t k = 0; k < tris.size(); ++k) for (int j = 0; j < 3; ++j) {
+            uint32_t a = id(indices[tris[k] * 3 + j]), b = id(indices[tris[k] * 3 + (j + 1) % 3]);
+            if (a == b) continue;
+            const uint64_t key = a < b ? (uint64_t(a) << 32 | b) : (uint64_t(b) << 32 | a);
+            auto [it, fresh] = edgeOwner.emplace(key, k);
+            if (!fresh) parent[root(k)] = root(it->second);
+        }
+        std::unordered_map<uint32_t, uint32_t> label;
+        std::vector<std::vector<uint32_t>> parts;
+        for (uint32_t k = 0; k < tris.size(); ++k) {
+            auto [it, fresh] = label.emplace(root(k), static_cast<uint32_t>(parts.size()));
+            if (fresh) parts.emplace_back();
+            parts[it->second].push_back(k);
+        }
+        return parts;
+    };
+
+    // LSCM, then ABF++ (angle-based LSCM from its angles), then SLIM from the best flip-free map (else a Tutte embedding)
+    auto flattenChart = [&](const detail::Chart& c, std::vector<double>& cornerOut, ChartReport& rep) -> bool {
         std::unordered_map<std::array<uint32_t, 3>, uint32_t, uv_atlas::detail::KeyHash> weld;
         std::vector<double> vpos, vuv;
         std::vector<uint32_t> tris(c.tris.size() * 3);
-        std::vector<uint32_t> uses;
         for (size_t k = 0; k < c.tris.size(); ++k) for (int j = 0; j < 3; ++j) {
             uint32_t v = indices[c.tris[k] * 3 + j];
             std::array<uint32_t, 3> key;
@@ -543,9 +1127,12 @@ inline UnwrapResult unwrap(const float* positions, uint32_t vertexCount, const u
             }
             tris[k * 3 + j] = it->second;
         }
-        const size_t nV = vpos.size() / 3;
+        const size_t nV = vpos.size() / 3, nT = c.tris.size();
         if (nV < 3) return false;
-        // pins: extremes along the chart's longer orthographic axis
+        std::vector<param::TriShape> shapes(nT);
+        auto VP = [&](uint32_t v) -> V3 { return {vpos[v * 3], vpos[v * 3 + 1], vpos[v * 3 + 2]}; };
+        for (size_t t = 0; t < nT; ++t) shapes[t] = param::shapeOf(VP(tris[t * 3]), VP(tris[t * 3 + 1]), VP(tris[t * 3 + 2]));
+        const param::Topology top = param::topologyOf(tris, nV);
         double minU = 1e300, maxU = -1e300, minV = 1e300, maxV = -1e300;
         for (size_t v = 0; v < nV; ++v) { minU = std::min(minU, vuv[v * 2]); maxU = std::max(maxU, vuv[v * 2]); minV = std::min(minV, vuv[v * 2 + 1]); maxV = std::max(maxV, vuv[v * 2 + 1]); }
         const int axis = (maxU - minU) >= (maxV - minV) ? 0 : 1;
@@ -555,23 +1142,80 @@ inline UnwrapResult unwrap(const float* positions, uint32_t vertexCount, const u
             if (vuv[v * 2 + axis] > vuv[pinB * 2 + axis]) pinB = static_cast<uint32_t>(v);
         }
         if (pinA == pinB) return false;
-        auto rep = solveLscm(vpos, tris, vuv, pinA, pinB, prm.lscmMaxIterations, prm.lscmRelTolerance);
-        iterations = rep.iterations;
-        cornerOut.resize(c.tris.size() * 6);
-        for (size_t k = 0; k < c.tris.size(); ++k) for (int j = 0; j < 3; ++j) {
-            uint32_t w = tris[k * 3 + j];
-            if (!std::isfinite(vuv[w * 2]) || !std::isfinite(vuv[w * 2 + 1])) return false;
-            cornerOut[k * 6 + j * 2] = vuv[w * 2];
-            cornerOut[k * 6 + j * 2 + 1] = vuv[w * 2 + 1];
+        auto finite = [](const std::vector<double>& u) { for (double x : u) if (!std::isfinite(x)) return false; return true; };
+        auto toCorners = [&](const std::vector<double>& u, std::vector<double>& q) {
+            q.resize(nT * 6);
+            for (size_t k = 0; k < nT; ++k) for (int j = 0; j < 3; ++j) { q[k * 6 + j * 2] = u[tris[k * 3 + j] * 2]; q[k * 6 + j * 2 + 1] = u[tris[k * 3 + j] * 2 + 1]; }
+        };
+        std::vector<double> best, q;
+        double bestStretch = HUGE_VAL;
+        uint32_t method = kMethodLscm;
+        auto consider = [&](std::vector<double>& u, uint32_t m) {
+            if (!finite(u) || param::countFlips(u, tris, shapes) != 0) return;
+            toCorners(u, q);
+            const double st = chartDistortion(c.tris, q, corner).stretchRms;
+            if (st < bestStretch) { bestStretch = st; best = u; method = m; }
+        };
+        {
+            std::vector<double> u = vuv;
+            // only a starting map here: a looser tolerance than the LSCM-only path
+            auto lr = param::lscmShapes(shapes, tris, nV, u, pinA, pinB, std::min(prm.lscmMaxIterations, 1500), std::max(prm.lscmRelTolerance, 1e-6));
+            rep.lscmIterations = lr.iterations;
+            consider(u, kMethodLscm);
         }
+        if (prm.abf && top.manifold && top.interiorCount > 0) {
+            std::vector<double> alpha;
+            auto ar = param::abfPlusPlus(shapes, tris, top, alpha);
+            rep.abfIterations = ar.iterations;
+            bool ok = true;
+            for (double a : alpha) if (!std::isfinite(a)) { ok = false; break; }
+            if (ok) {
+                auto shapesA = param::shapesFromAngles(alpha, shapes);
+                std::vector<double> u = vuv;
+                param::lscmShapes(shapesA, tris, nV, u, pinA, pinB, std::min(prm.lscmMaxIterations, 2000), std::max(prm.lscmRelTolerance, 1e-7));
+                consider(u, kMethodAbf);
+            }
+        }
+        if (prm.slimIterations > 0) {
+            std::vector<double> init = best;
+            if (init.empty()) {
+                if (param::tutte(shapes, tris, top, vpos, init) && !(finite(init) && param::countFlips(init, tris, shapes) == 0)) init.clear();
+            }
+            if (!init.empty()) {
+                double orient = 1;
+                param::countFlips(init, tris, shapes, &orient);
+                if (orient < 0) for (size_t v = 0; v < nV; ++v) init[v * 2] = -init[v * 2];
+                double a3 = 0, a2 = 0;
+                for (size_t t = 0; t < nT; ++t) { a3 += param::shapeArea(shapes[t]); a2 += 0.5 * param::uvDet(init, &tris[t * 3]); }
+                const double sc = a2 > 0 && a3 > 0 ? std::sqrt(a3 / a2) : 1.0;
+                for (double& x : init) x *= sc;
+                auto sr = param::slim(shapes, tris, nV, init, prm.slimIterations);
+                rep.slimIterations = sr.iterations;
+                if (sr.ok && finite(init) && param::countFlips(init, tris, shapes) == 0) {
+                    toCorners(init, q);
+                    const double st = chartDistortion(c.tris, q, corner).stretchRms;
+                    // SLIM trades a little angle for area: kept unless it is clearly more angle-distorted
+                    if (best.empty() || st <= bestStretch * 1.05 + 1e-9) { bestStretch = st; best = init; method = kMethodSlim; }
+                }
+            }
+        }
+        if (best.empty()) return false;
+        rep.method = method;
+        toCorners(best, cornerOut);
         return true;
     };
 
     std::vector<detail::Chart> done;
     std::vector<ChartReport> reports;
-    while (!work.empty()) {
-        detail::Chart c = std::move(work.back());
-        work.pop_back();
+    struct Outcome {
+        bool finished = false;
+        detail::Chart chart;
+        ChartReport rep;
+        std::vector<detail::Chart> pieces;
+        uint32_t lscmAttempts = 0, lscmAccepted = 0, abfAccepted = 0, slimAccepted = 0, splits = 0;
+        void finish(detail::Chart&& c, const ChartReport& r) { finished = true; chart = std::move(c); rep = r; }
+    };
+    auto process = [&](detail::Chart c, Outcome& o) {
         if (c.tris.size() == 1) {
             // a lone triangle is laid out isometrically in its own plane (distortion exactly 1)
             V3 p0 = corner(c.tris[0], 0), p1 = corner(c.tris[0], 1), p2 = corner(c.tris[0], 2);
@@ -589,25 +1233,46 @@ inline UnwrapResult unwrap(const float* positions, uint32_t vertexCount, const u
         rep.splitDepth = c.depth;
         rep.orthoDistortion = chartDistortion(c.tris, c.cornerUv, corner);
         const bool orthoOverlaps = countOverlappingPairs(c.cornerUv) > 0;
-        if (!orthoOverlaps && passes(rep.orthoDistortion)) {
-            rep.distortion = rep.orthoDistortion;
-            done.push_back(std::move(c)); reports.push_back(rep);
-            continue;
+        const bool orthoIsometric = rep.orthoDistortion.flipped == 0 && rep.orthoDistortion.stretchRms <= 1.001 && rep.orthoDistortion.areaRms <= 1.001;
+        if (c.tris.size() > 1) {
+            // a chart in several edge-connected pieces (merged islands) is flattened piece by piece: the solvers fix
+            // translation per chart, so loose pieces would drift apart
+            auto parts = edgeComponents(c.tris);
+            if (parts.size() > 1) {
+                ++o.splits;
+                for (auto& part : parts) {
+                    detail::Chart piece;
+                    piece.tolDeg = c.tolDeg; piece.depth = c.depth + 1;
+                    for (uint32_t k : part) {
+                        piece.tris.push_back(c.tris[k]);
+                        piece.cornerUv.insert(piece.cornerUv.end(), c.cornerUv.begin() + k * 6, c.cornerUv.begin() + k * 6 + 6);
+                    }
+                    o.pieces.push_back(std::move(piece));
+                }
+                return;
+            }
         }
-        if (prm.conformal && c.tris.size() > 1) {
-            std::vector<double> lscmUv;
-            uint32_t iters = 0;
-            ++out.lscmAttempts;
-            if (lscmChart(c, lscmUv, iters)) {
-                ChartDistortion dl = chartDistortion(c.tris, lscmUv, corner);
-                if (passes(dl) && countOverlappingPairs(lscmUv) == 0) {
-                    ++out.lscmAccepted;
-                    rep.method = kMethodLscm; rep.distortion = dl; rep.lscmIterations = iters;
-                    c.cornerUv.swap(lscmUv);
-                    done.push_back(std::move(c)); reports.push_back(rep);
-                    continue;
+        if (c.tris.size() > 1 && !(orthoIsometric && !orthoOverlaps)) {
+            std::vector<double> flat;
+            ++o.lscmAttempts;
+            ChartReport fr = rep;
+            if (flattenChart(c, flat, fr)) {
+                ChartDistortion df = chartDistortion(c.tris, flat, corner);
+                if (passes(df) && countOverlappingPairs(flat) == 0) {
+                    if (fr.method == kMethodSlim) ++o.slimAccepted;
+                    else if (fr.method == kMethodAbf) ++o.abfAccepted;
+                    else ++o.lscmAccepted;
+                    fr.distortion = df;
+                    c.cornerUv.swap(flat);
+                    o.finish(std::move(c), fr);
+                    return;
                 }
             }
+        }
+        if (!orthoOverlaps && passes(rep.orthoDistortion)) {
+            rep.distortion = rep.orthoDistortion;
+            o.finish(std::move(c), rep);
+            return;
         }
         // split at a smaller tolerance; a chart that no tolerance splits keeps its orthographic UVs
         bool split = false;
@@ -616,37 +1281,60 @@ inline UnwrapResult unwrap(const float* positions, uint32_t vertexCount, const u
             // same tolerance with overlap eviction first: the orthographic pieces never overlap
             auto pieces = islandsToCharts(c.tris, tol, c.depth + 1, true);
             if (pieces.size() > 1) {
-                ++out.splits;
-                for (auto& p : pieces) work.push_back(std::move(p));
-                continue;
+                ++o.splits;
+                for (auto& p : pieces) o.pieces.push_back(std::move(p));
+                return;
             }
         }
         while (c.tris.size() > 1 && tol * prm.splitToleranceFactor >= prm.minToleranceDeg) {
             tol *= prm.splitToleranceFactor;
             auto pieces = islandsToCharts(c.tris, tol, c.depth + 1, true);
             if (pieces.size() > 1) {
-                ++out.splits;
-                for (auto& p : pieces) work.push_back(std::move(p));
+                ++o.splits;
+                for (auto& p : pieces) o.pieces.push_back(std::move(p));
                 split = true;
                 break;
             }
         }
-        if (split) continue;
+        if (split) return;
         if (orthoOverlaps) {
             // nothing above separated the overlapping triangles: lone triangles never overlap
-            ++out.splits;
+            ++o.splits;
             for (size_t k = 0; k < c.tris.size(); ++k) {
                 detail::Chart one;
                 one.tris = {c.tris[k]};
                 one.cornerUv.assign(c.cornerUv.begin() + k * 6, c.cornerUv.begin() + k * 6 + 6);
                 one.tolDeg = c.tolDeg; one.depth = c.depth + 1;
-                work.push_back(std::move(one));
+                o.pieces.push_back(std::move(one));
             }
-            continue;
+            return;
         }
         rep.distortion = rep.orthoDistortion;
         rep.overThreshold = 1;
-        done.push_back(std::move(c)); reports.push_back(rep);
+        o.finish(std::move(c), rep);
+        };
+    // breadth-first batches processed in parallel; results are taken in batch order, so the output does not depend on
+    // the thread count
+    const unsigned threads = std::max(1u, std::min(prm.threads ? prm.threads : std::thread::hardware_concurrency(), 32u));
+    while (!work.empty()) {
+        std::vector<detail::Chart> batch;
+        batch.swap(work);
+        std::vector<Outcome> outcomes(batch.size());
+        std::atomic<size_t> next{0};
+        auto worker = [&]() { for (size_t i = next++; i < batch.size(); i = next++) process(std::move(batch[i]), outcomes[i]); };
+        const unsigned n = static_cast<unsigned>(std::min<size_t>(threads, batch.size()));
+        if (n <= 1) worker();
+        else {
+            std::vector<std::thread> pool;
+            for (unsigned k = 0; k < n; ++k) pool.emplace_back(worker);
+            for (auto& th : pool) th.join();
+        }
+        for (auto& o : outcomes) {
+            out.lscmAttempts += o.lscmAttempts; out.lscmAccepted += o.lscmAccepted; out.abfAccepted += o.abfAccepted;
+            out.slimAccepted += o.slimAccepted; out.splits += o.splits;
+            if (o.finished) { done.push_back(std::move(o.chart)); reports.push_back(o.rep); }
+            for (auto& p : o.pieces) work.push_back(std::move(p));
+        }
     }
     const auto t1 = clock::now();
     out.msCharts = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -690,6 +1378,25 @@ inline UnwrapResult unwrap(const float* positions, uint32_t vertexCount, const u
         rep.widthM = x1 - x0; rep.heightM = y1 - y0;
         // distortion of the final (scaled, rotated) UVs is the same up to the normalisation already folded in
     }
+    ChartSet set;
+    set.reports = std::move(reports);
+    for (auto& c : done) { set.tris.push_back(std::move(c.tris)); set.cornerUv.push_back(std::move(c.cornerUv)); }
+    return set;
+}
+
+/**
+ * Unwraps one atlas: `positions` (3 per vertex, metres), `indices` (3 per triangle), `groups` (one per triangle, may be
+ * null) keep charts inside a group (a glTF primitive). The result's vertices are (source vertex, chart) pairs.
+ */
+inline UnwrapResult unwrap(const float* positions, uint32_t vertexCount, const uint32_t* indices, uint32_t triangleCount,
+                           const uint32_t* groups, const UnwrapParams& prm) {
+    using clock = std::chrono::steady_clock;
+    UnwrapResult out;
+    const uint32_t T = triangleCount;
+    ChartSet set = unwrapCharts(positions, vertexCount, indices, triangleCount, groups, prm, out);
+    std::vector<detail::Chart> done(set.tris.size());
+    for (size_t i = 0; i < done.size(); ++i) { done[i].tris = std::move(set.tris[i]); done[i].cornerUv = std::move(set.cornerUv[i]); }
+    std::vector<ChartReport>& reports = set.reports;
 
     // packing
     const auto t2 = clock::now();
@@ -697,6 +1404,124 @@ inline UnwrapResult unwrap(const float* positions, uint32_t vertexCount, const u
     double total3D = 0;
     for (auto& r : reports) total3D += r.distortion.area3D;
     std::vector<detail::PackRect> rects(done.size());
+    std::vector<uv_atlas::BitmapPlacement> places;   // per packed item (a chart, or a bin of tiny charts)
+    struct Binned { uint32_t item = 0; double cx = 0, cy = 0; bool inBin = false; };
+    std::vector<Binned> binned(done.size());
+    std::vector<double> itemW, itemH;
+    double d = prm.texelsPerMeter;
+    const bool bitmapPacking = done.size() <= prm.bitmapMaxCharts;
+    out.bitmapPacked = bitmapPacking ? 1 : 0;
+    if (bitmapPacking) {
+        // With many charts the tiny ones are first shelf-packed into small bins at the pack's density (footprints kept a
+        // gutter pair apart), and each bin enters the bitmap packer as one item: tens of thousands of crumbs would
+        // otherwise each search the whole atlas for a hole.
+        std::vector<uv_atlas::BitmapChart> items;
+        std::vector<std::vector<double>> binUv;
+        std::vector<double> binW, binH;
+        auto buildItems = [&](double dd) {
+            items.clear(); binUv.clear(); binW.clear(); binH.clear();
+            const bool binning = done.size() > 1500;
+            const double small = 24.0 * 24.0, binSide = 96.0;
+            std::vector<uint32_t> smalls;
+            for (size_t i = 0; i < done.size(); ++i) {
+                const double fw = reports[i].widthM * dd + 2.0 * G, fh = reports[i].heightM * dd + 2.0 * G;
+                if (binning && fw * fh <= small) { smalls.push_back(static_cast<uint32_t>(i)); continue; }
+                binned[i] = {static_cast<uint32_t>(items.size()), 0, 0, false};
+                uv_atlas::BitmapChart c; c.cornerUv = &done[i].cornerUv; c.widthM = reports[i].widthM; c.heightM = reports[i].heightM;
+                items.push_back(c);
+            }
+            std::stable_sort(smalls.begin(), smalls.end(), [&](uint32_t x, uint32_t y) { return reports[x].heightM > reports[y].heightM; });
+            std::vector<std::pair<uint32_t, std::array<double, 2>>> members;
+            double shelfX = 0, shelfY = 0, shelfH = 0, usedW = 0;
+            const size_t firstBin = items.size();
+            auto closeBin = [&]() {
+                if (members.empty()) return;
+                const double bh = shelfY + shelfH;
+                std::vector<double> uvb;
+                for (auto& [ci, off] : members) {
+                    const auto& q = done[ci].cornerUv;
+                    const double hM = reports[ci].heightM;
+                    // the member's image coords inside the bin are (off.x + u d, off.y + (hM - v) d); bin metres keep v up
+                    for (size_t k = 0; k < q.size(); k += 2) {
+                        uvb.push_back((off[0] + q[k] * dd) / dd);
+                        uvb.push_back((bh - (off[1] + (hM - q[k + 1]) * dd)) / dd);
+                    }
+                    binned[ci] = {static_cast<uint32_t>(firstBin + binUv.size()), off[0], off[1], true};
+                }
+                binUv.push_back(std::move(uvb)); binW.push_back(usedW / dd); binH.push_back(bh / dd);
+                members.clear(); shelfX = shelfY = shelfH = usedW = 0;
+            };
+            for (uint32_t ci : smalls) {
+                const double w = reports[ci].widthM * dd, h = reports[ci].heightM * dd;
+                if (shelfX > 0 && shelfX + w > binSide) { shelfY += shelfH + 2.0 * G; shelfX = 0; shelfH = 0; }
+                if (shelfY > 0 && shelfY + h > binSide) closeBin();
+                members.push_back({ci, {shelfX, shelfY}});
+                usedW = std::max(usedW, shelfX + w);
+                shelfX += std::ceil(w) + 2.0 * G + 1.0;
+                shelfH = std::max(shelfH, std::ceil(h) + 1.0);
+            }
+            closeBin();
+            for (size_t k = 0; k < binUv.size(); ++k) {
+                uv_atlas::BitmapChart c; c.cornerUv = &binUv[k]; c.widthM = binW[k]; c.heightM = binH[k];
+                items.push_back(c);
+            }
+        };
+        uv_atlas::BitmapPackParams bp;
+        bp.gutter = G;
+        bp.rotations = prm.allowRotation ? prm.packRotations : 1;
+        bp.maxSide = prm.maxSide;
+        auto packAt = [&](double dd) {
+            buildItems(dd);
+            bp.texelsPerMeter = dd;
+            // one bound on the whole search: few items are searched near exhaustively for holes, many briefly
+            bp.searchBudget = std::max<uint64_t>(1000, uint64_t(4e7 / std::max<size_t>(1, items.size())));
+            return uv_atlas::packChartsBitmap(items, bp);
+        };
+        uv_atlas::BitmapPackResult pr;
+        // the extent of a pack scales almost linearly with the density (only the gutters do not): one measured pack
+        // gives the density that fills a target, and a few small steps settle it
+        auto fitTo = [&](double d0, uint32_t W, uint32_t H) {
+            bp.aspect = double(W) / H;
+            bp.maxSide = std::min<uint32_t>(16384, std::max(W, H) * 2);
+            double dd = d0, failed = HUGE_VAL;
+            bool found = false;
+            for (int it = 0; it < 12; ++it) {
+                auto r = packAt(dd);
+                const double scale = r.ok ? std::min(double(W) / r.width, double(H) / r.height) : 0.5;
+                if (r.ok && r.width <= W && r.height <= H) {
+                    d = dd; pr = std::move(r); found = true;
+                    // slack left: one step up, never to a density that already failed
+                    const double up = std::min(dd * scale * 0.995, failed * 0.995);
+                    if (scale < 1.02 || up <= dd * 1.005) return true;
+                    dd = up;
+                    continue;
+                }
+                failed = std::min(failed, dd);
+                if (found) return true;
+                dd *= std::min(0.985, scale * 0.995);
+                if (dd <= 1e-9) break;
+            }
+            return found;
+        };
+        if (prm.atlasWidth > 0 && prm.atlasHeight > 0) {
+            const double hi = total3D > 0 ? std::sqrt(double(prm.atlasWidth) * prm.atlasHeight / total3D) : 1.0;
+            if (!fitTo(hi * 0.85, prm.atlasWidth, prm.atlasHeight)) throw std::runtime_error("the charts do not fit the requested atlas size even at a vanishing texel density");
+            out.requestedTexelsPerMeter = 0;
+            out.width = prm.atlasWidth; out.height = prm.atlasHeight;
+        } else {
+            if (!(d > 0)) d = total3D > 0 ? std::sqrt(1024.0 * 1024.0 * 0.7 / total3D) : 1.0;
+            out.requestedTexelsPerMeter = d;
+            bp.maxSide = prm.maxSide;
+            pr = packAt(d);
+            if (!pr.ok && !fitTo(d, prm.maxSide, prm.maxSide)) throw std::runtime_error("the charts do not fit the maximum atlas side even at a vanishing texel density");
+            out.width = std::min(prm.maxSide, std::max<uint32_t>(16, (pr.width + 3) / 4 * 4));
+            out.height = std::min(prm.maxSide, std::max<uint32_t>(16, (pr.height + 3) / 4 * 4));
+        }
+        buildItems(d);  // the items of the density kept
+        places = std::move(pr.placements);
+        for (const auto& it : items) { itemW.push_back(it.widthM); itemH.push_back(it.heightM); }
+        out.texelsPerMeter = d;
+    } else {
     auto sizeRects = [&](double d) {
         for (size_t i = 0; i < done.size(); ++i) {
             rects[i].w = static_cast<uint32_t>(std::max(1.0, std::ceil(reports[i].widthM * d - 1e-9))) + 2 * G;
@@ -726,7 +1551,6 @@ inline UnwrapResult unwrap(const float* positions, uint32_t vertexCount, const u
         if (best.first) detail::skylinePack(rects, best.first, prm.allowRotation);
         return best;
     };
-    double d = prm.texelsPerMeter;
     std::pair<uint32_t, uint32_t> size{0, 0};
     if (prm.atlasWidth > 0 && prm.atlasHeight > 0) {
         // largest density that fits the requested size (bisection; packing is monotone enough in practice)
@@ -756,6 +1580,7 @@ inline UnwrapResult unwrap(const float* positions, uint32_t vertexCount, const u
         if (!size.first) throw std::runtime_error("the charts do not fit the maximum atlas side even at a vanishing texel density");
     }
     out.width = size.first; out.height = size.second; out.texelsPerMeter = d;
+    }
     out.msPack = std::chrono::duration<double, std::milli>(clock::now() - t2).count();
 
     // emit: output vertices are (source vertex, chart) pairs
@@ -768,8 +1593,27 @@ inline UnwrapResult unwrap(const float* positions, uint32_t vertexCount, const u
         auto& c = done[i];
         auto rep = reports[i];
         const auto& r = rects[i];
-        rep.x = r.x; rep.y = r.y; rep.rotated = r.rotated ? 1 : 0;
-        rep.w = r.rotated ? r.h : r.w; rep.h = r.rotated ? r.w : r.h;
+        if (bitmapPacking) {
+            const auto& pl = places[binned[i].item];
+            if (binned[i].inBin) {
+                // the chart's own rect inside its bin (the bin's quarter turn applied to the corners)
+                double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
+                const double cxs[2] = {binned[i].cx, binned[i].cx + reports[i].widthM * d}, cys[2] = {binned[i].cy, binned[i].cy + reports[i].heightM * d};
+                for (double cx : cxs) for (double cy : cys) {
+                    double X, Y;
+                    uv_atlas::bitmapTexel(pl, d, G, itemW[binned[i].item], itemH[binned[i].item], cx / d, itemH[binned[i].item] - cy / d, X, Y);
+                    x0 = std::min(x0, X); x1 = std::max(x1, X); y0 = std::min(y0, Y); y1 = std::max(y1, Y);
+                }
+                rep.x = uint32_t(std::max(0.0, std::floor(x0) - G)); rep.y = uint32_t(std::max(0.0, std::floor(y0) - G));
+                rep.w = uint32_t(std::ceil(x1 - x0)) + 2 * G; rep.h = uint32_t(std::ceil(y1 - y0)) + 2 * G;
+            } else {
+                rep.x = pl.x; rep.y = pl.y; rep.w = pl.w; rep.h = pl.h;
+            }
+            rep.rotated = pl.rotation;
+        } else {
+            rep.x = r.x; rep.y = r.y; rep.rotated = r.rotated ? 1 : 0;
+            rep.w = r.rotated ? r.h : r.w; rep.h = r.rotated ? r.w : r.h;
+        }
         const double wM = rep.widthM, hM = rep.heightM;
         for (size_t k = 0; k < c.tris.size(); ++k) {
             const uint32_t t = c.tris[k];
@@ -779,7 +1623,16 @@ inline UnwrapResult unwrap(const float* positions, uint32_t vertexCount, const u
                 double lu = c.cornerUv[k * 6 + j * 2], lv = c.cornerUv[k * 6 + j * 2 + 1];
                 double cw = wM * d, chh = hM * d;
                 double X, Y;
-                if (!r.rotated) { X = r.x + G + lu * d; Y = r.y + G + (chh - lv * d); }
+                if (bitmapPacking) {
+                    const Binned& b = binned[i];
+                    if (!b.inBin) uv_atlas::bitmapTexel(places[b.item], d, G, wM, hM, lu, lv, X, Y);
+                    else {
+                        // the same point in its bin's metres (as the bin was rasterised), then the bin's placement
+                        const double ub = (b.cx + lu * d) / d, vb = itemH[b.item] - (b.cy + (hM - lv) * d) / d;
+                        uv_atlas::bitmapTexel(places[b.item], d, G, itemW[b.item], itemH[b.item], ub, vb, X, Y);
+                    }
+                }
+                else if (!r.rotated) { X = r.x + G + lu * d; Y = r.y + G + (chh - lv * d); }
                 else { X = r.x + G + lv * d; Y = r.y + G + lu * d; (void)cw; }
                 px[j][0] = X; px[j][1] = Y;
                 const uint32_t v = indices[t * 3 + j];

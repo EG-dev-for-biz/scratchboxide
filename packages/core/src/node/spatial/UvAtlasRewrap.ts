@@ -53,8 +53,8 @@ export interface UvRewrapOptions {
     maxAngleStretch?: number;
     /** Accepted area-weighted RMS of the area ratio max(r, 1/r) per chart (default 1.5). */
     maxAreaDistortion?: number;
-    /** Conformal (LSCM) re-parameterization of charts the orthographic projection distorts (default true). */
-    conformal?: boolean;
+    /** SLIM iterations per chart (default 30; 0 stops after LSCM / ABF++). */
+    slimIterations?: number;
     /** Charts under this share of the atlas's surface area merge into a neighbour when their normals allow (default 0.0005). */
     minChartAreaFraction?: number;
     /** Requested texel density (texels per metre). */
@@ -91,13 +91,15 @@ export interface UvDistortionStats {
 }
 
 export interface UvChartReport extends UvDistortionStats {
-    method: 'orthographic' | 'lscm';
+    method: 'orthographic' | 'lscm' | 'abf' | 'slim';
     primitive: number;
     triangles: number;
     splitDepth: number;
     /** Kept although it fails the thresholds (a single triangle, or no smaller tolerance splits it). */
     overThreshold: boolean;
     lscmIterations: number;
+    abfIterations: number;
+    slimIterations: number;
     /** What the orthographic projection of this chart measured (the LSCM charts improved on it). */
     orthographic: UvDistortionStats;
     area3DM2: number;
@@ -153,7 +155,11 @@ export interface UvAtlasReport {
     texCoordWritten?: string;
     charts: number;
     lscmCharts: number;
+    abfCharts: number;
+    slimCharts: number;
     orthographicCharts: number;
+    /** Charts the chart grower made before any split ('slim' method). */
+    grownCharts: number;
     lscmAttempts: number;
     splits: number;
     chartsOverThreshold: number;
@@ -176,6 +182,8 @@ export interface UvRewrapReport {
     atlases: UvAtlasReport[];
     charts: number;
     lscmCharts: number;
+    abfCharts: number;
+    slimCharts: number;
     distortion: UvDistortionStats;
     orthographicDistortion: UvDistortionStats;
     texelDensity: UvTexelDensityStats;
@@ -282,32 +290,37 @@ class Reader {
 interface NativeUnwrap {
     sourceVertex: Uint32Array; uv: Float32Array; indices: Uint32Array; triangleChart: Uint32Array;
     width: number; height: number; lscmAttempts: number; lscmAccepted: number; splits: number;
+    abfAccepted: number; slimAccepted: number; grownCharts: number;
     texelsPerMeter: number; utilisation: number; overlappingPairs: number; msCharts: number; msPack: number;
-    charts: Float64Array; // 24 per chart
+    charts: Float64Array; // CHART_RECORD per chart
 }
+
+const CHART_RECORD = 26;
 
 interface UnwrapParamsNative {
     chartNormalToleranceDeg: number; minIslandAreaM2: number; maxAngleStretch: number; maxAreaDistortion: number;
-    conformal: boolean; texelsPerMeter: number; atlasWidth: number; atlasHeight: number; maxSide: number; gutter: number; allowRotation: boolean;
+    texelsPerMeter: number; atlasWidth: number; atlasHeight: number; maxSide: number; gutter: number; allowRotation: boolean;
+    slimIterations: number;
 }
 
 async function nativeUnwrap(binary: string, positions: Float32Array, indices: Uint32Array, groups: Uint32Array, p: UnwrapParamsNative, timeoutMs: number, signal?: AbortSignal): Promise<NativeUnwrap> {
     const V = positions.length / 3, T = indices.length / 3;
     const out = await runNative(binary, [
-        Buffer.from('SBUW', 'latin1'), u32(1, V, T),
-        f64(p.chartNormalToleranceDeg, p.minIslandAreaM2, p.maxAngleStretch, p.maxAreaDistortion, 0.6, 1.0, p.conformal ? 1 : 0, 4000, 1e-9,
-            p.texelsPerMeter, p.atlasWidth, p.atlasHeight, p.maxSide, p.gutter, p.allowRotation ? 1 : 0),
+        Buffer.from('SBUW', 'latin1'), u32(3, V, T),
+        f64(p.chartNormalToleranceDeg, p.minIslandAreaM2, p.maxAngleStretch, p.maxAreaDistortion, 0.6, 1.0,
+            p.texelsPerMeter, p.atlasWidth, p.atlasHeight, p.maxSide, p.gutter, p.allowRotation ? 1 : 0, p.slimIterations),
         view(positions), view(indices), view(groups)
     ], timeoutMs, signal);
     const r = new Reader(out, 'unwrap', 'SBUO');
-    if (r.u32() !== 1) throw new Error('unsupported SBUO version');
+    if (r.u32() !== 3) throw new Error('unsupported SBUO version');
     const outV = r.u32(), t = r.u32(), C = r.u32(), width = r.u32(), height = r.u32(), lscmAttempts = r.u32(), lscmAccepted = r.u32(), splits = r.u32();
+    const abfAccepted = r.u32(), slimAccepted = r.u32(), grownCharts = r.u32(); r.u32(); // bitmapPacked
     if (t !== T) throw new Error(`the UV rewrap engine returned ${t} triangles for ${T}`);
     const texelsPerMeter = r.f64(); r.f64(); const utilisation = r.f64(), overlappingPairs = r.f64(), msCharts = r.f64(), msPack = r.f64();
     return {
         sourceVertex: r.take(Uint32Array, outV), uv: r.take(Float32Array, outV * 2), indices: r.take(Uint32Array, T * 3), triangleChart: r.take(Uint32Array, T),
-        charts: r.take(Float64Array, C * 24),
-        width, height, lscmAttempts, lscmAccepted, splits, texelsPerMeter, utilisation, overlappingPairs, msCharts, msPack
+        charts: r.take(Float64Array, C * CHART_RECORD),
+        width, height, lscmAttempts, lscmAccepted, splits, abfAccepted, slimAccepted, grownCharts, texelsPerMeter, utilisation, overlappingPairs, msCharts, msPack
     };
 }
 
@@ -808,11 +821,11 @@ export async function unwrapRewrapGlb(mode: UvRewrapMode, input: Buffer | Uint8A
         chartNormalToleranceDeg: options.chartNormalToleranceDeg ?? 60,
         maxAngleStretch: options.maxAngleStretch ?? 1.25,
         maxAreaDistortion: options.maxAreaDistortion ?? 1.5,
-        conformal: options.conformal ?? true,
         minChartAreaFraction: options.minChartAreaFraction ?? 0.0005,
         maxAtlasSide: Math.max(64, Math.min(16384, options.maxAtlasSide ?? 8192)),
         gutter: Math.max(1, Math.round(options.gutterTexels ?? 2)),
         allowRotation: options.allowRotation ?? true,
+        slimIterations: Math.max(0, Math.min(1000, Math.round(options.slimIterations ?? 30))),
         timeoutMs: options.native?.timeoutMs ?? 600_000,
         threads: options.native?.threads ?? 0
     };
@@ -830,7 +843,7 @@ export async function unwrapRewrapGlb(mode: UvRewrapMode, input: Buffer | Uint8A
     const identity = new Float64Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
 
     const report: UvRewrapReport = {
-        mode, atlases: [], charts: 0, lscmCharts: 0, distortion: emptyStats(), orthographicDistortion: emptyStats(),
+        mode, atlases: [], charts: 0, lscmCharts: 0, abfCharts: 0, slimCharts: 0, distortion: emptyStats(), orthographicDistortion: emptyStats(),
         texelDensity: densityStats([]), utilisation: 0, overlappingTrianglePairs: 0, texturesRebaked: [], texturesFailed: [],
         primitivesSkipped: [], instancedMeshes: [...meshUses.entries()].filter(([, n]) => n > 1).map(([m]) => m),
         native: { binary: nativeBin.path, built: nativeBin.built }, totalMs: 0
@@ -920,7 +933,7 @@ export async function unwrapRewrapGlb(mode: UvRewrapMode, input: Buffer | Uint8A
             material: materialKey >= 0 ? materialKey : null, ...(material?.name ? { materialName: material.name } : {}),
             status: 'skipped', primitives: prims.length, triangles: prims.reduce((a, p) => a + p.indices.length / 3, 0),
             verticesIn: prims.reduce((a, p) => a + p.vertexCount, 0), verticesOut: 0, width: 0, height: 0, texelsPerMeter: 0,
-            densitySource: 'default-atlas-size', charts: 0, lscmCharts: 0, orthographicCharts: 0, lscmAttempts: 0, splits: 0, chartsOverThreshold: 0,
+            densitySource: 'default-atlas-size', charts: 0, lscmCharts: 0, abfCharts: 0, slimCharts: 0, orthographicCharts: 0, grownCharts: 0, lscmAttempts: 0, splits: 0, chartsOverThreshold: 0,
             distortion: emptyStats(), orthographicDistortion: emptyStats(), texelDensity: densityStats([]), utilisation: 0, overlappingTrianglePairs: 0,
             chartDetails: [], textures: [], failures: [], timings: { unwrapMs: 0, chartsMs: 0, packMs: 0, decodeMs: 0, bakeMs: 0, encodeMs: 0 }
         };
@@ -1046,29 +1059,33 @@ export async function unwrapRewrapGlb(mode: UvRewrapMode, input: Buffer | Uint8A
         const tu = performance.now();
         const nat = await nativeUnwrap(nativeBin.path, wpos, widx, groups, {
             chartNormalToleranceDeg: opts.chartNormalToleranceDeg, minIslandAreaM2: opts.minChartAreaFraction * area3D,
-            maxAngleStretch: opts.maxAngleStretch, maxAreaDistortion: opts.maxAreaDistortion, conformal: opts.conformal,
-            texelsPerMeter, atlasWidth: atlasW, atlasHeight: atlasH, maxSide: opts.maxAtlasSide, gutter: opts.gutter, allowRotation: opts.allowRotation
+            maxAngleStretch: opts.maxAngleStretch, maxAreaDistortion: opts.maxAreaDistortion,
+            texelsPerMeter, atlasWidth: atlasW, atlasHeight: atlasH, maxSide: opts.maxAtlasSide, gutter: opts.gutter, allowRotation: opts.allowRotation,
+            slimIterations: opts.slimIterations
         }, opts.timeoutMs, options.signal);
         at.timings.unwrapMs = performance.now() - tu;
         at.timings.chartsMs = nat.msCharts; at.timings.packMs = nat.msPack;
         at.width = nat.width; at.height = nat.height; at.texelsPerMeter = nat.texelsPerMeter;
         at.utilisation = nat.utilisation; at.overlappingTrianglePairs = nat.overlappingPairs;
-        at.lscmAttempts = nat.lscmAttempts; at.splits = nat.splits;
-        const C = nat.charts.length / 24;
+        at.lscmAttempts = nat.lscmAttempts; at.splits = nat.splits; at.grownCharts = nat.grownCharts;
+        const C = nat.charts.length / CHART_RECORD;
         const parts: Array<{ s: UvDistortionStats; w: number }> = [], orthoParts: Array<{ s: UvDistortionStats; w: number }> = [];
         for (let c = 0; c < C; c++) {
-            const r = nat.charts.subarray(c * 24, c * 24 + 24);
+            const r = nat.charts.subarray(c * CHART_RECORD, (c + 1) * CHART_RECORD);
             const ortho: UvDistortionStats = { stretchRms: r[6], stretchMax: r[7], areaRms: r[8], areaMax: r[9], flippedTriangles: r[10] };
             const fin: UvDistortionStats = { stretchRms: r[11], stretchMax: r[12], areaRms: r[13], areaMax: r[14], flippedTriangles: r[15] };
             at.chartDetails.push({
-                method: r[0] === 1 ? 'lscm' : 'orthographic', primitive: r[1], triangles: r[2], splitDepth: r[3], overThreshold: r[4] === 1, lscmIterations: r[5],
-                orthographic: ortho, ...fin, area3DM2: r[16], widthM: r[17], heightM: r[18], rect: [r[19], r[20], r[21], r[22]], rotated: r[23] === 1
+                method: r[0] === 3 ? 'slim' : r[0] === 2 ? 'abf' : r[0] === 1 ? 'lscm' : 'orthographic',
+                primitive: r[1], triangles: r[2], splitDepth: r[3], overThreshold: r[4] === 1, lscmIterations: r[5], abfIterations: r[24], slimIterations: r[25],
+                orthographic: ortho, ...fin, area3DM2: r[16], widthM: r[17], heightM: r[18], rect: [r[19], r[20], r[21], r[22]], rotated: r[23] !== 0
             });
             parts.push({ s: fin, w: r[16] }); orthoParts.push({ s: ortho, w: r[16] });
         }
         at.charts = C;
         at.lscmCharts = at.chartDetails.filter(c => c.method === 'lscm').length;
-        at.orthographicCharts = C - at.lscmCharts;
+        at.abfCharts = at.chartDetails.filter(c => c.method === 'abf').length;
+        at.slimCharts = at.chartDetails.filter(c => c.method === 'slim').length;
+        at.orthographicCharts = C - at.lscmCharts - at.abfCharts - at.slimCharts;
         at.chartsOverThreshold = at.chartDetails.filter(c => c.overThreshold).length;
         at.distortion = mergeStats(parts);
         at.orthographicDistortion = mergeStats(orthoParts);
@@ -1332,6 +1349,8 @@ export async function unwrapRewrapGlb(mode: UvRewrapMode, input: Buffer | Uint8A
     const done = report.atlases.filter(a => a.status !== 'skipped');
     report.charts = done.reduce((a, x) => a + x.charts, 0);
     report.lscmCharts = done.reduce((a, x) => a + x.lscmCharts, 0);
+    report.abfCharts = done.reduce((a, x) => a + x.abfCharts, 0);
+    report.slimCharts = done.reduce((a, x) => a + x.slimCharts, 0);
     report.distortion = mergeStats(done.flatMap(a => a.chartDetails.map(c => ({ s: c as UvDistortionStats, w: c.area3DM2 }))));
     report.orthographicDistortion = mergeStats(done.flatMap(a => a.chartDetails.map(c => ({ s: c.orthographic, w: c.area3DM2 }))));
     report.texelDensity = densityStats(densityAll);
