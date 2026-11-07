@@ -13,6 +13,7 @@
 #include "scratchbox_math.hpp"
 #include "scratchbox_geometry.hpp"
 #include "scratchbox_io.hpp"
+#include "scratchbox_cdt.hpp"
 #include <vector>
 #include <cmath>
 #include <algorithm>
@@ -56,10 +57,28 @@ public:
     }
 
     /**
-     * Ear-clipping triangulation for simple polygons.
-     * Returns triangle indices pointing into the input polygon.
+     * Triangles over a simple polygon's own vertices, counter-clockwise, as indices into it: the constrained Delaunay
+     * triangulation (scratchbox_cdt.hpp; exact predicates, so collinear runs and repeated points cannot fold or drop a
+     * triangle, and the best smallest angles a triangulation of the polygon can have). Ear clipping only for a polygon
+     * that crosses itself, where the CDT would need points the caller does not have.
      */
     static std::vector<uint32_t> triangulate(const std::vector<Vec2>& rawPoly) {
+        if (rawPoly.size() >= 3) {
+            std::vector<cdt::P2> pts(rawPoly.size());
+            std::vector<int> loop(rawPoly.size());
+            for (size_t i = 0; i < rawPoly.size(); ++i) { pts[i] = {rawPoly[i].x, rawPoly[i].y}; loop[i] = static_cast<int>(i); }
+            if (auto tris = cdt::triangulatePolygon(pts, {loop}); tris && tris->size() + 2 == rawPoly.size()) {
+                std::vector<uint32_t> out;
+                out.reserve(tris->size() * 3);
+                for (const auto& t : *tris) for (int k = 0; k < 3; ++k) out.push_back(static_cast<uint32_t>(t[k]));
+                return out;
+            }
+        }
+        return earClip(rawPoly);
+    }
+
+    /** Ear clipping (a fan where it finds no ear): only for polygons that cross themselves. */
+    static std::vector<uint32_t> earClip(const std::vector<Vec2>& rawPoly) {
         std::vector<uint32_t> indices;
         if (rawPoly.size() < 3) return indices;
 

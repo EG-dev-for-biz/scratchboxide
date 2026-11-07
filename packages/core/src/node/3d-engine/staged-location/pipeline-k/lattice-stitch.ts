@@ -38,6 +38,11 @@
  * (scratchbox_lattice_cut.hpp, scratchbox_lattice_stitch.hpp, scratchbox_open_loop_fill.hpp, scratchbox_fill_texture.hpp,
  * through remesh-polish-native.ts), giving these functions' results bit for bit; SCRATCHBOX_K_NATIVE without `cut`,
  * `stitch`, `clip`, `infill` or `fill-texture` runs them here.
+ *
+ * The native fill goes further than its TypeScript twin in one place (which SCRATCHBOX_K_NATIVE=0 therefore does not
+ * reproduce): flat caps are the constrained Delaunay triangulation (scratchbox_cdt.hpp; LATTICE_STITCH_PARAMS.cdtCaps):
+ * the loop's own vertices, exact predicates, the best smallest angles its triangulation can have, earcut only where the
+ * loop crosses itself or where earcut doubles fewer of the surface's own edges.
  */
 
 import { ShapeUtils, Vector2 } from 'three';
@@ -48,7 +53,7 @@ import type { FacadeLatticeResult, ReliefFacade } from '../facade-lattice';
 import { nativePolishThreads, runNativeClip, runNativeCut, runNativeFill, runNativeFillTexture, runNativeStitch, type NativeCutPrim, type NativeFillPrim } from '../remesh-polish-native';
 import { kNative } from './native/native-switch';
 
-export const LATTICE_STITCH_VERSION = 'lattice-stitch/21';
+export const LATTICE_STITCH_VERSION = 'lattice-stitch/22';
 
 export const LATTICE_STITCH_PARAMS = {
     /** The slab of a rebuilt facade cut from the scan: within this of its plane (m). */
@@ -95,7 +100,10 @@ export const LATTICE_STITCH_PARAMS = {
      *  capRayStartM off it; judged from up to capRaySamples of its largest triangles, the majority deciding. */
     capRayM: 120, capRayStartM: 0.05, capRaySamples: 5,
     /** The textured twin judges the fill in pieces no longer than this (m) along any edge. */
-    pieceM: 2
+    pieceM: 2,
+    /** The native fill's flat caps by the constrained Delaunay triangulation (the TypeScript twin keeps earcut: its parity
+     *  test turns this off). */
+    cdtCaps: true
 };
 export type LatticeStitchParams = typeof LATTICE_STITCH_PARAMS;
 
@@ -1081,7 +1089,7 @@ function sealed(clay: Uint8Array, others: Uint8Array[], out: number[][][], piece
 
 /** LATTICE_STITCH_PARAMS' fill fields in the order of scratchbox_open_loop_fill.hpp's Params. */
 export function fillParamVector(P: LatticeStitchParams): number[] {
-    return [P.weldM, P.splitPerimeterM, P.splitRatio, P.doubledM, P.coveredByWallM, P.coveredByWallCellM, P.envelopeCellM, P.envelopeMarginM, P.skinM, P.skinShare, P.rimPlanarM, P.offRimCapM2, P.capRayM, P.capRayStartM, P.capRaySamples, P.pieceM];
+    return [P.weldM, P.splitPerimeterM, P.splitRatio, P.doubledM, P.coveredByWallM, P.coveredByWallCellM, P.envelopeCellM, P.envelopeMarginM, P.skinM, P.skinShare, P.rimPlanarM, P.offRimCapM2, P.capRayM, P.capRayStartM, P.capRaySamples, P.pieceM, P.cdtCaps ? 1 : 0];
 }
 
 /**
