@@ -67,11 +67,6 @@
  *          f64 ax, az, nx, nz (an outline edge's point and outward normal), then the primitives as `cut` reads them.
  *     out: f64 cutTriangles, removedTriangles, removedAreaM2 (unrounded), then per primitive as `cut` writes it.
  *
- *   remesh_polish_native boolean <threads>
- *     in:  "SBBO" u32 version (1), u32 op (0 union, 1 intersection, 2 difference, 3 trim inside, 4 trim outside), f64 collapse,
- *          u32 weldByPosition, then meshes A and B, each u32 nVerts, f64[nVerts*3], u32 nTris, u32[nTris*3].
- *     out: u32 jsonLen, the report's JSON (scratchbox_boolean.hpp Report), the result as a mesh, then u8 side per triangle.
- *
  *   remesh_polish_native cdt <threads>
  *     in:  "SBDT" u32 version (1), u32 fill (0 even-odd, 1 non-zero, 2 positive), u32 refine, f64 minAngleDeg, f64 maxArea,
  *          u32 splitSegments, u32 nPoints, f64[n*2], u32 nSegments, i32[nSegments*2].
@@ -118,7 +113,6 @@
 #include "scratchbox_facade_lattice.hpp"
 #include "scratchbox_wall_grammar.hpp"
 #include "scratchbox_lattice_cut.hpp"
-#include "scratchbox_boolean.hpp"
 #include "scratchbox_cdt.hpp"
 #include "scratchbox_lattice_stitch.hpp"
 #include "scratchbox_wall_sheets.hpp"
@@ -505,47 +499,6 @@ int clip(unsigned threads) {
     return 0;
 }
 
-boolean::Mesh readMesh() {
-    boolean::Mesh m;
-    const auto p = readDoubles(static_cast<size_t>(readOne<uint32_t>()) * 3);
-    for (size_t i = 0; i + 2 < p.size(); i += 3) m.pos.push_back({p[i], p[i + 1], p[i + 2]});
-    std::vector<uint32_t> idx(static_cast<size_t>(readOne<uint32_t>()) * 3);
-    if (!idx.empty()) readExact(idx.data(), idx.size() * sizeof(uint32_t));
-    for (size_t i = 0; i + 2 < idx.size(); i += 3) {
-        if (idx[i] >= m.pos.size() || idx[i + 1] >= m.pos.size() || idx[i + 2] >= m.pos.size()) throw std::runtime_error("a triangle index past the mesh's vertices");
-        m.tris.push_back({static_cast<int>(idx[i]), static_cast<int>(idx[i + 1]), static_cast<int>(idx[i + 2])});
-    }
-    return m;
-}
-
-/** A boolean of two meshes (scratchbox_boolean.hpp), for its tests and tools. */
-int booleanCmd(unsigned) {
-    expectMagic("SBBO", 1);
-    const uint32_t op = readOne<uint32_t>();
-    const double collapse = readOne<double>();
-    const bool weld = readOne<uint32_t>() != 0;
-    const boolean::Mesh A = readMesh(), B = readMesh();
-    if (op > 4) throw std::runtime_error("unknown boolean op");
-    boolean::Options o;
-    o.collapseShort = collapse;
-    o.weldByPosition = weld;
-    const auto r = boolean::compute(A, B, static_cast<boolean::Op>(op), o);
-    const auto& p = r.report;
-    char b[1024];
-    std::snprintf(b, sizeof b, "{\"trisA\":%zu,\"trisB\":%zu,\"crossingsA\":%zu,\"crossingsB\":%zu,\"segments\":%zu,\"facesCutA\":%zu,\"facesCutB\":%zu,\"fallbackFaces\":%zu,\"unpairedSegments\":%zu,\"chainFailures\":%zu,\"windingConflicts\":%zu,\"ties\":%zu,\"openEdgesB\":%zu,\"openEdgesOut\":%zu,\"nonManifoldOut\":%zu,\"collapsed\":%zu}",
-                  p.trisA, p.trisB, p.crossingsA, p.crossingsB, p.segments, p.facesCutA, p.facesCutB, p.fallbackFaces, p.unpairedSegments, p.chainFailures, p.windingConflicts, p.ties, p.openEdgesB, p.openEdgesOut, p.nonManifoldOut, p.collapsed);
-    const std::string json(b);
-    writeOne<uint32_t>(static_cast<uint32_t>(json.size()));
-    writeExact(json.data(), json.size());
-    writeOne<uint32_t>(static_cast<uint32_t>(r.mesh.pos.size()));
-    for (const auto& q : r.mesh.pos) writeExact(q.data(), sizeof(double) * 3);
-    writeOne<uint32_t>(static_cast<uint32_t>(r.mesh.tris.size()));
-    for (const auto& t : r.mesh.tris) for (int v : t) writeOne<uint32_t>(static_cast<uint32_t>(v));
-    for (int sd : r.side) writeOne<uint8_t>(static_cast<uint8_t>(sd));
-    std::fflush(stdout);
-    return 0;
-}
-
 /** A constrained Delaunay triangulation (scratchbox_cdt.hpp), for its tests and tools. */
 int cdtCmd(unsigned) {
     expectMagic("SBDT", 1);
@@ -746,7 +699,7 @@ int innerCore(unsigned threads) {
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|fill-texture|lattice|lattice-audit|wall-grammar|cut|clip|boolean|cdt|stitch|wall-sheets|inner-core <threads>  (binary input on stdin)\n");
+        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|fill-texture|lattice|lattice-audit|wall-grammar|cut|clip|cdt|stitch|wall-sheets|inner-core <threads>  (binary input on stdin)\n");
         return 2;
     }
     const std::string cmd = argv[1];
@@ -759,7 +712,6 @@ int main(int argc, char** argv) {
         if (cmd == "wall-grammar") return wallGrammar(threads);
         if (cmd == "cut") return cut(threads);
         if (cmd == "clip") return clip(threads);
-        if (cmd == "boolean") return booleanCmd(threads);
         if (cmd == "cdt") return cdtCmd(threads);
         if (cmd == "fill-texture") return fillTexture(threads);
         if (cmd == "stitch") return stitch(threads);

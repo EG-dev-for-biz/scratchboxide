@@ -28,8 +28,7 @@
  *  - `fill-texture`: pipeline-k/lattice-stitch.ts appendTexturedTriangles' routes (scratchbox_fill_texture.hpp), the
  *    texturing of the fill, seal and stitch in the twin, triangles and pieces in chunks.
  * and ones with no TypeScript twin: the inner core (pipeline-k/inner-core.ts, scratchbox_inner_core.hpp), columns of voxels a task;
- * and the engine's boolean and CDT themselves (`boolean`, `cdt`: scratchbox_boolean.hpp, scratchbox_cdt.hpp), for their
- * tests and tools.
+ * and the engine's CDT itself (`cdt`: scratchbox_cdt.hpp), for its tests and tools.
  *
  * Data goes over stdin as raw little-endian buffers (a header, then arrays), never PNG; the window fit's facades are
  * streamed as they are decoded and fitted as they arrive. The pool's size is the caller's: a chunked district's builds
@@ -395,24 +394,6 @@ export function runNativeClip(marginM: number, loops: Vec2[][], lines: Array<{ a
     const out = readCutOuts(r, prims);
     r.done('clip');
     return { report, prims: out };
-}
-
-/** A triangle mesh for the native boolean: positions (x, y, z per vertex) and triangles (three indices each). */
-export interface NativeMesh { positions: ArrayLike<number>; indices: ArrayLike<number> }
-export type NativeBooleanOp = 'union' | 'intersection' | 'difference' | 'trim-inside' | 'trim-outside';
-
-/** The robust boolean of A and B (scratchbox_boolean.hpp through `boolean`): its report, the result and each triangle's side (0 A, 1 B). */
-export function runNativeBoolean(a: NativeMesh, b: NativeMesh, op: NativeBooleanOp, opts: { collapseM?: number; weldByPosition?: boolean } = {}): { report: Record<string, number>; positions: Float64Array; indices: Uint32Array; side: Uint8Array } {
-    const ops: NativeBooleanOp[] = ['union', 'intersection', 'difference', 'trim-inside', 'trim-outside'];
-    const w = new Writer().magic('SBBO').u32(1).u32(ops.indexOf(op)).f64s([opts.collapseM ?? 0]).u32(opts.weldByPosition === false ? 0 : 1);
-    for (const m of [a, b]) w.u32(m.positions.length / 3).f64s(m.positions).u32(m.indices.length / 3).u32s(m.indices);
-    const r = new Reader(runSync('boolean', w.take(), 1));
-    const report = JSON.parse(r.str()) as Record<string, number>;
-    const positions = r.f64s(r.u32() * 3);
-    const indices = r.u32s(r.u32() * 3);
-    const side = r.u8s(indices.length / 3);
-    r.done('boolean');
-    return { report, positions, indices, side };
 }
 
 /** A constrained Delaunay triangulation (scratchbox_cdt.hpp through `cdt`): directed segments, a fill rule, optional refinement. */

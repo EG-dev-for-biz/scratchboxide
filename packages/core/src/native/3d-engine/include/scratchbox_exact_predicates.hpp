@@ -14,14 +14,8 @@
  * expansion arithmetic (a value held as a sum of non-overlapping doubles, so sums and products lose nothing).
  * Method: Shewchuk, "Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric Predicates" (1997).
  *
- * orient3dPerturbed adds simulation of simplicity: each point carries one or two symbolic displacement vectors (point +
- * eps d1 + eps^2 d2 for an infinitesimal eps), and a determinant that is exactly zero takes the sign of its first nonzero
- * coefficient in eps. The perturbed points are a real configuration, so every decision made from them is consistent with
- * every other (the boolean's topology never contradicts itself on coplanar or touching input).
- *
  * Sign conventions (all ours):
  *  - orient2d(a, b, c) = det[b - a, c - a]: positive when c lies left of a->b (a, b, c counter-clockwise);
- *  - orient3d(a, b, c, d) = det[b - a, c - a, d - a]: positive when d lies on the side (b - a) x (c - a) points to;
  *  - incircle(a, b, c, d): positive when d lies inside the circle through a, b, c taken counter-clockwise.
  */
 
@@ -41,7 +35,6 @@ namespace scratchbox {
 namespace exact {
 
 using P2 = std::array<double, 2>;
-using P3 = std::array<double, 3>;
 
 /** A value as a sum of non-overlapping doubles, smallest magnitude first, zeros dropped. */
 using Expansion = std::vector<double>;
@@ -136,7 +129,6 @@ inline double estimate(const Expansion& e) {
 
 constexpr double kEps = 1.1102230246251565e-16;  // 2^-53
 constexpr double kOrient2Bound = (3.0 + 16.0 * kEps) * kEps;
-constexpr double kOrient3Bound = (7.0 + 56.0 * kEps) * kEps;
 constexpr double kInCircleBound = (10.0 + 96.0 * kEps) * kEps;
 
 // ------------------------------------------------------------------------------------------------ orient2d
@@ -157,99 +149,6 @@ inline int orient2d(const P2& a, const P2& b, const P2& c) {
 
 /** det[b - a, c - a] in floating point (for magnitudes, never for signs). */
 inline double orient2dValue(const P2& a, const P2& b, const P2& c) { return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]); }
-
-// ------------------------------------------------------------------------------------------------ orient3d
-
-/** det of three columns given as exact coordinates (u . (v x w)). */
-inline Expansion det3(const std::array<Expansion, 3>& u, const std::array<Expansion, 3>& v, const std::array<Expansion, 3>& w) {
-    const Expansion x = sub(mul(v[1], w[2]), mul(v[2], w[1]));
-    const Expansion y = sub(mul(v[2], w[0]), mul(v[0], w[2]));
-    const Expansion z = sub(mul(v[0], w[1]), mul(v[1], w[0]));
-    return add(add(mul(u[0], x), mul(u[1], y)), mul(u[2], z));
-}
-
-inline std::array<Expansion, 3> diff3(const P3& p, const P3& q) { return {diff(p[0], q[0]), diff(p[1], q[1]), diff(p[2], q[2])}; }
-
-inline Expansion orient3dExact(const P3& a, const P3& b, const P3& c, const P3& d) { return det3(diff3(b, a), diff3(c, a), diff3(d, a)); }
-
-/** The sign of det[b - a, c - a, d - a]. */
-inline int orient3d(const P3& a, const P3& b, const P3& c, const P3& d) {
-    const double ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
-    const double vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
-    const double wx = d[0] - a[0], wy = d[1] - a[1], wz = d[2] - a[2];
-    const double m1 = vy * wz - vz * wy, m2 = vz * wx - vx * wz, m3 = vx * wy - vy * wx;
-    const double det = ux * m1 + uy * m2 + uz * m3;
-    const double perm = std::fabs(ux) * (std::fabs(vy * wz) + std::fabs(vz * wy)) + std::fabs(uy) * (std::fabs(vz * wx) + std::fabs(vx * wz)) + std::fabs(uz) * (std::fabs(vx * wy) + std::fabs(vy * wx));
-    const double bound = kOrient3Bound * perm;
-    if (det > bound) return 1;
-    if (-det > bound) return -1;
-    return sign(orient3dExact(a, b, c, d));
-}
-
-inline double orient3dValue(const P3& a, const P3& b, const P3& c, const P3& d) {
-    const double ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
-    const double vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
-    const double wx = d[0] - a[0], wy = d[1] - a[1], wz = d[2] - a[2];
-    return ux * (vy * wz - vz * wy) + uy * (vz * wx - vx * wz) + uz * (vx * wy - vy * wx);
-}
-
-/** A point with its symbolic displacements: the point stands at p + eps d1 + eps^2 d2. */
-struct PerturbedPoint {
-    P3 p{};
-    P3 d1{};
-    P3 d2{};
-};
-
-/** A determinant of perturbed points as a polynomial in eps: its exact coefficients, degree 0 to 6. */
-using Poly = std::array<Expansion, 7>;
-
-/** det[b - a, c - a, d - a] for perturbed points, every coefficient (each column is r + eps s + eps^2 t; multilinear). */
-inline Poly orient3dPoly(const PerturbedPoint& a, const PerturbedPoint& b, const PerturbedPoint& c, const PerturbedPoint& d) {
-    const PerturbedPoint* q[3] = {&b, &c, &d};
-    std::array<std::array<std::array<Expansion, 3>, 3>, 3> col;  // [column][degree][coordinate]
-    for (int k = 0; k < 3; ++k) {
-        col[k][0] = diff3(q[k]->p, a.p);
-        col[k][1] = diff3(q[k]->d1, a.d1);
-        col[k][2] = diff3(q[k]->d2, a.d2);
-    }
-    const auto isZero = [](const std::array<Expansion, 3>& v) { return sign(v[0]) == 0 && sign(v[1]) == 0 && sign(v[2]) == 0; };
-    Poly out;
-    for (auto& e : out) e = {0.0};
-    for (int i = 0; i <= 2; ++i) for (int j = 0; j <= 2; ++j) for (int k = 0; k <= 2; ++k) {
-        if (isZero(col[0][i]) || isZero(col[1][j]) || isZero(col[2][k])) continue;
-        out[i + j + k] = add(out[i + j + k], det3(col[0][i], col[1][j], col[2][k]));
-    }
-    return out;
-}
-
-/** The sign of a polynomial in an infinitesimal eps: that of its first nonzero coefficient. */
-template <size_t N>
-inline int leadingSign(const std::array<Expansion, N>& p) {
-    for (const auto& e : p) { const int s = sign(e); if (s) return s; }
-    return 0;
-}
-
-/**
- * The sign of det[b - a, c - a, d - a] for perturbed points: the exact determinant when it is nonzero, else the sign of
- * the first nonzero coefficient of its polynomial in eps. Zero only when every coefficient vanishes, which the caller
- * breaks by its own rule.
- */
-inline int orient3dPerturbed(const PerturbedPoint& a, const PerturbedPoint& b, const PerturbedPoint& c, const PerturbedPoint& d) {
-    const int s0 = orient3d(a.p, b.p, c.p, d.p);
-    if (s0 != 0) return s0;
-    return leadingSign(orient3dPoly(a, b, c, d));
-}
-
-/** x * y - z * w of polynomials in eps, exactly (degree up to 12). */
-inline std::array<Expansion, 13> crossPoly(const Poly& x, const Poly& y, const Poly& z, const Poly& w) {
-    std::array<Expansion, 13> out;
-    for (auto& e : out) e = {0.0};
-    for (int i = 0; i < 7; ++i) for (int j = 0; j < 7; ++j) {
-        if (sign(x[i]) != 0 && sign(y[j]) != 0) out[i + j] = add(out[i + j], mul(x[i], y[j]));
-        if (sign(z[i]) != 0 && sign(w[j]) != 0) out[i + j] = sub(out[i + j], mul(z[i], w[j]));
-    }
-    return out;
-}
 
 // ------------------------------------------------------------------------------------------------ incircle
 
