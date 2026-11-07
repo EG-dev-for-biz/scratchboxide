@@ -402,6 +402,11 @@ rebuilt end to end on `window-array/8`.
 
 - 30 Rock's pier rhythm is read as grouped bays in the system path (`groupedBay`); a face read without the system (its
   own photo seed) still takes the bay as one cell with one window and needs the same bay read.
+- The end-to-end rebuild on `window-array/8` waits for the glass PR (#182) to merge, and for the machine's load to be
+  under 100. MAIN is holding #182 over black diagonal zig-zags and dark outlines at the lattice/scan cut around rebuilt
+  panels (ESB close-ups). Its dark-line measure in numbers.json went ESB 1.48 to 1.62 and Lever House 0.22 to 0.77, main to
+  branch. This PR brings about 1,000 more recessed windows to that cut, so the rebuild carries the same measure, plus a
+  close-up crop of the cut, to show that the windows add no seams.
 - Lever House 7: the shaft's lowest seven storeys stay unfilled though the photo shows the same grid; the stepping stops
   there (not the grouped bays, which are not read on that face's shaft).
 - The seed reads lightness only and takes the darker interval as the window; a facade whose glass reads lighter than
