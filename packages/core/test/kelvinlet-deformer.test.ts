@@ -180,14 +180,4 @@ describe('mesh_apply_deformers kelvinlet operation', () => {
         });
         expect(ok.telemetry.outputVertices).toBe(ok.telemetry.inputVertices);
     }, 600_000);
-
-    it('the falloff sculpt grab and pinch it replaced are refused, naming the kelvinlet operation', async () => {
-        const input = writeFixtureGlb(path.join(WORK, 'cyl3.glb'), cylinderMesh());
-        for (const brush of ['grab', 'pinch']) {
-            await expect(NativeMeshReshaperService.reshapeMesh({
-                inputGlbPath: input,
-                operations: [{ type: 'sculpt', sculptBrush: brush as any, center: [0.5, 1, 0.5], radius: 0.2, strength: 0.05, direction: [0, 1, 0] }]
-            })).rejects.toThrow('is now the kelvinlet operation');
-        }
-    }, 600_000);
 });

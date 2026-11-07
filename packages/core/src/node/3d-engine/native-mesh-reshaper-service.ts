@@ -16,8 +16,7 @@ import { GeneratorFailedError, MissingInputError } from '../../common/errors/pip
 import { repoPath } from '../process/repo-python';
 
 export type MeshDeformationAxis = 'X' | 'Y' | 'Z';
-/** Local grab and pinch are the kelvinlet operation. */
-export type SculptBrushType = 'clay' | 'inflate' | 'flatten' | 'crease' | 'smooth';
+export type SculptBrushType = 'grab' | 'clay' | 'inflate' | 'flatten' | 'pinch' | 'crease' | 'smooth';
 
 export interface LatticeOffset {
     i: number;
@@ -38,8 +37,7 @@ export interface LatticeOffset {
  *   over the extent along axis; the min end stays fixed)
  * - shear: axis, secondaryAxis, factor (slope: the far end moves factor x the extent along axis)
  * - bulge: center, radius, strength (negative pinches), power? (falloff exponent, default 2)
- * - sculpt: sculptBrush (clay, inflate, flatten, crease, smooth), center, radius, strength, direction (clay and flatten);
- *   a local grab or pinch is the kelvinlet operation
+ * - sculpt: sculptBrush, center, radius, strength, direction (grab, clay and flatten)
  * - lattice: latticeDimensions [2..8 each], latticeOffsets
  * - kelvinlet: center, radius (the load's core, epsilon), and at least one load, superposed: displacement (the load
  *   point moves by exactly this, fractions of the box diagonal), twistDeg with twistAxis, scaleFactor (needs

@@ -1107,11 +1107,12 @@ NB_MODULE(scratchbox_native, m) {
     }, "mesh"_a, "center"_a, "epsilon"_a, "displacement"_a = Vec3(0, 0, 0), "twist_deg"_a = 0.0f, "twist_axis"_a = Vec3(0, 1, 0),
        "scale_factor"_a = 1.0f, "pinch_strength"_a = 0.0f, "pinch_direction"_a = Vec3(0, 1, 0), "pinch_secondary_direction"_a = nb::none(),
        "poisson_ratio"_a = 0.5f, "falloff_scales"_a = 1, "falloff_ratio"_a = 1.5f, "steps"_a = 0, "weights"_a = std::vector<float>{},
-       "Kelvinlet deformation: the elastic response to a regularised point load at center with core radius epsilon (metres). "
+       "Kelvinlet deformation, for free-form elastic reshaping of soft or organic forms: the elastic response to a regularised point load at center with core radius epsilon (metres). "
        "Loads superpose: displacement (the load point moves by exactly this), twist_deg about twist_axis, scale_factor (needs "
        "poisson_ratio < 0.5), pinch_strength (stretch by exp(strength) along pinch_direction; negative squeezes). No falloff edge; "
        "poisson_ratio 0.5 keeps volume and bulges like clay; falloff_scales 2 or 3 confine it closer to the load point; big moves "
-       "are integrated in steps so they drag instead of fold. weights: one 0..1 value per vertex (0 holds it still), or empty");
+       "are integrated in steps so they drag instead of fold. weights: one 0..1 value per vertex (0 holds it still), or empty. "
+       "A surface meant to stay rigid (straight members, flat planes, hard edges) keeps taper, twist, bend, bulge and lattices: a Kelvinlet bends it like rubber");
 
     m_shaper.def("subdivide", [](const ScratchboxMesh& mesh, int iterations) {
         return shaper::LoopSubdivision::subdivide(mesh, iterations);

@@ -75,33 +75,6 @@ static size_t nearestVertex(const ScratchboxMesh& m, const Vec3& p) {
     return best;
 }
 
-/**
- * The falloff grab and pinch the shaper's sculpt brushes had before the Kelvinlet loads replaced them, kept here as
- * the baseline they are measured against: the grab moves points along the stroke by strength x falloff, the pinch
- * pulls them toward the centre by strength x falloff.
- */
-static void plainGrab(ScratchboxMesh& m, const Vec3& c, float radius, float strength, const Vec3& dir) {
-    const Vec3 d = dir.normalized();
-    for (auto& v : m.vertices) {
-        const float w = shaper::SculptEngine::evaluateFalloff((v.position - c).length(), radius, shaper::SculptFalloff::Smoothstep);
-        if (w > 0.0f) v.position += d * (strength * w);
-    }
-    m.recomputeSmoothNormals();
-    m.recomputeBounds();
-}
-
-static void plainPinch(ScratchboxMesh& m, const Vec3& c, float radius, float strength) {
-    for (auto& v : m.vertices) {
-        const Vec3 delta = c - v.position;
-        const float dist = delta.length();
-        if (dist <= 1e-6f) continue;
-        const float w = shaper::SculptEngine::evaluateFalloff(dist, radius, shaper::SculptFalloff::Smoothstep);
-        if (w > 0.0f) v.position += (delta / dist) * (strength * w);
-    }
-    m.recomputeSmoothNormals();
-    m.recomputeBounds();
-}
-
 /** Plain-falloff twist for the comparison: cross-sections near the point turn by angle x smoothstep falloff. */
 static void plainTwist(ScratchboxMesh& m, const Vec3& c, const Vec3& axis, float angle, float radius) {
     const Vec3 n = axis.normalized();
@@ -219,7 +192,7 @@ static void record(const std::string& name, const std::string& op, const std::st
 }
 
 /**
- * The proof meshes for one shape: untouched, under the plain-falloff brushes (radius 2 eps: half strength at eps, as
+ * The proof meshes for one shape: untouched, under the shaper's falloff sculpt grab and pinch and a falloff twist (radius 2 eps: half strength at eps, as
  * the Kelvinlet grab) and under the
  * Kelvinlet loads at the same load point (grab 1.4 eps along the normal, twist 1.2 rad about the vertical, pinch).
  */
@@ -241,11 +214,11 @@ static void writeProof(const std::string& outDir, const std::string& name, const
     const Vec3 up(0, 1, 0);
     // Twist about the vertical through the load point: about the normal it would only slide a smooth surface over itself.
     const std::vector<Variant> variants = {
-        {"grab", "plain", [&](ScratchboxMesh& m) { plainGrab(m, lp, plainR, grab, n); }},
+        {"grab", "plain", [&](ScratchboxMesh& m) { shaper::SculptEngine::applyStroke(m, shaper::SculptBrush::Grab, lp, plainR, grab, n, shaper::SculptFalloff::Smoothstep); }},
         {"grab", "kelvinlet", [&](ScratchboxMesh& m) { kv::deformMesh(m, kv::Load::grab(lp, n * grab), o); }},
         {"twist", "plain", [&](ScratchboxMesh& m) { plainTwist(m, lp, up, 1.2f, plainR); }},
         {"twist", "kelvinlet", [&](ScratchboxMesh& m) { kv::deformMesh(m, kv::Load::twist(lp, up, 1.2f), o); }},
-        {"pinch", "plain", [&](ScratchboxMesh& m) { plainPinch(m, lp, plainR, pinchPull); }},
+        {"pinch", "plain", [&](ScratchboxMesh& m) { shaper::SculptEngine::applyStroke(m, shaper::SculptBrush::Pinch, lp, plainR, pinchPull, n, shaper::SculptFalloff::Smoothstep); }},
         {"pinch", "kelvinlet", [&](ScratchboxMesh& m) { kv::deformMesh(m, kv::Load::pinch(lp, t, -1.0f), o); }},
     };
     for (const auto& v : variants) {
