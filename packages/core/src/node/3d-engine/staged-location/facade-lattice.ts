@@ -77,7 +77,7 @@ export const FACADE_LATTICE_PARAMS = {
     /** A step face is drawn where neighbouring cells differ by more than this (m). */
     stepM: 0.03,
     /** A lattice's end cells where the wall turns away (a corner, a prow): a wall cell at a row's end whose own scan lies more than this (m) behind the row's wall depth keeps the scan, at most three cells in from each end. Built on the plane it would stand proud of the wall, its back showing from the side (the Flatiron's prow from 315°, 2026-11-07). */
-    edgeStepM: 0.4,
+    edgeStepM: 0.25,
     /** A facade is rebuilt only when its measured cells cover at least this share of its outline's area (each row from its first to its last photographed texel). */
     minMeasuredShare: 0.5,
     /**
