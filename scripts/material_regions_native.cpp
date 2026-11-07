@@ -17,7 +17,7 @@
  * Layout: little-endian, packed, no padding. u8/u32/i32/f32/f64 as named; an `image` is u32 width, u32 height,
  * u8 rgba[width * height * 4].
  *
- * Request header: u32 magic 0x524D4253 ("SBMR"), u32 version 5, u32 mode, u32 threads (0: every core).
+ * Request header: u32 magic 0x524D4253 ("SBMR"), u32 version 6, u32 mode, u32 threads (0: every core).
  *  A `rects` is u32 count, f64 values[count] (u0 v0 u1 v1 each, in the photo's UVs): a photo's window openings.
  *  mode 0, the colour tables: nothing more.
  *  mode 1, appearance classes (readRegionClasses' k-means): u32 imageCount, image[imageCount]; u32 photoCount, per photo
@@ -25,17 +25,17 @@
  *  mode 2, the harvest's texels: u32 imageCount, image[imageCount]; u32 K, f64 meanLab[K * 3], u8 openings[K], f64 wL;
  *    u32 photoCount, per photo u32 image, rects openings.
  *  mode 3, planMaterialJob for a batch of jobs: u32 imageCount, image[imageCount]; u32 K, f64 meanLab[K * 3],
- *    u8 openings[K], u32 wall, u32 repeatGrid; per set (K): f64 realSizeX, f64 realSizeY, image normal, image orm; f64 setMeans[K * 3];
+ *    u8 openings[K], u32 wall, u32 repeatGrid, f64 paneWallShare, f64 glassRoughness, f64 glassMetalness; per set (K): f64 realSizeX, f64 realSizeY, image normal, image orm; f64 setMeans[K * 3];
  *    u32 jobCount, per job: u32 kind (0 rebuilt facade, 1 scan piece), u32 image, f64 texelM, u32 radius, rects openings,
- *    rects repeat elements (their unit cells), u32 family[elements].
+ *    rects repeat elements (their unit cells), u32 family[elements], rects panes (kind 0; the glass in the fitted windows).
  *
  * Result header: u32 magic, u32 version, u32 mode.
  *  mode 0: f32 srgb8ToLinear[256], f64 lab[32768 * 3] (labOf's buckets, key (r >> 3) << 10 | (g >> 3) << 5 | b >> 3).
  *  mode 1: per region (outside, then inside the openings): u32 n (samples), u8 ok; when ok f64 C[Kr * 3], f64 count[Kr],
  *    f64 sd[Kr * 3] (centres by k-means index).
  *  mode 2: u32 photoCount, per photo u32 N, u8 valid[N], f32 L[N], i8 cls[N].
- *  mode 3: u32 jobCount, per job: u32 kind, u32 width, u32 height, f64 classTexels[K], f64 folded, u8 orm[w * h * 4], and for
- *    kind 0 u8 normal[w * h * 4].
+ *  mode 3: u32 jobCount, per job: u32 kind, u32 width, u32 height, f64 classTexels[K], f64 folded, f64 glass, f64 panesOnStone, f64 paneWallTexels,
+ *    u8 orm[w * h * 4], and for kind 0 u8 normal[w * h * 4].
  * Exit 0 on success; otherwise a message on stderr and a non-zero exit.
  */
 
@@ -55,7 +55,7 @@
 
 namespace mr = scratchbox::material_regions;
 
-static constexpr uint32_t MAGIC = 0x524D4253u, VERSION = 5;
+static constexpr uint32_t MAGIC = 0x524D4253u, VERSION = 6;
 
 struct Reader {
     std::vector<uint8_t> buf;
@@ -169,6 +169,7 @@ int main(int argc, char** argv) {
             if (ctx.wall >= static_cast<int>(K)) throw std::runtime_error("wall class out of range");
             ctx.grid = static_cast<int>(in.u32());
             if (ctx.grid < 1 || ctx.grid > 256) throw std::runtime_error("repeat grid must be 1..256");
+            ctx.paneWallShare = in.f64(); ctx.glassR = in.f64(); ctx.glassM = in.f64();
             ctx.sets.resize(K);
             for (auto& s : ctx.sets) { s.realSizeX = in.f64(); s.realSizeY = in.f64(); s.normal = in.image(); s.orm = in.image(); }
             in.array(ctx.setMeans, static_cast<size_t>(K) * 3);
@@ -186,6 +187,7 @@ int main(int argc, char** argv) {
                 j.elements = in.rects();
                 in.array(j.family, j.elements.size() / 4);
                 if (j.elements.size() % 4) throw std::runtime_error("repeat elements must be u0 v0 u1 v1 each");
+                if (j.rebuilt) j.panes = in.rects();
                 if (j.rebuilt && !(j.texelM > 0)) throw std::runtime_error("a rebuilt facade needs its texel size");
             }
             std::vector<mr::PlanResult> rs(jobCount);
@@ -195,7 +197,7 @@ int main(int argc, char** argv) {
                 auto& r = rs[i];
                 out.put(static_cast<uint32_t>(jobs[i].rebuilt ? 0 : 1));
                 out.put(static_cast<uint32_t>(r.width)); out.put(static_cast<uint32_t>(r.height));
-                out.array(r.classTexels); out.put(r.folded); out.array(r.orm);
+                out.array(r.classTexels); out.put(r.folded); out.put(r.glass); out.put(r.panesOnStone); out.put(r.paneWallTexels); out.array(r.orm);
                 if (jobs[i].rebuilt) out.array(r.normal);
                 r = mr::PlanResult{};
             }

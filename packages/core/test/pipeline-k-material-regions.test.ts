@@ -17,7 +17,7 @@
 import { describe, expect, it } from 'vitest';
 import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { classRepeatSizes, foldRepeats, planMaterialRegions, readRegionClasses, regionClassMap, regionRadius, repeatElements, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
+import { classRepeatSizes, foldRepeats, GLASS, paneGlass, planMaterialRegions, readRegionClasses, regionClassMap, regionRadius, repeatElements, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
 import { planMaterialRegionsOnThreads } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions-pool';
 import { tileRefineTwin } from '../src/node/3d-engine/staged-location/tile-refine-twin';
 import { decodeImageInMemory, type RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
@@ -200,6 +200,39 @@ describe('pipeline K material regions', () => {
         classRepeatSizes(g, g.json, images, classes);
         expect(classes[cls[darkAt]].repeatM).toBe(2);
         expect(classes[regionClassMap({ width: W, height: H, rgba }, classes, 1, open)[20 * W + 45]].repeatM).toBe(4);
+    });
+    it("draws glass in the fitted windows' panes (the reader's where it read), none on a pane mostly of the wall's class nor on the wall's class's texels in a pane", () => {
+        // a 20 x 20 m wall of light stone with 2 x 2 m dark windows: two real panes, one false pane fitted on the stone, and one
+        // pane half over stone (a sill): glass on its dark half alone
+        const W = 200, H = 200, rgba = new Uint8Array(W * H * 4);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) rgba.set([200, 196, 188, 255], (y * W + x) * 4);
+        for (const [x0, y0] of [[20, 20], [100, 20], [20, 120]]) for (let y = y0; y < y0 + 20; y++) for (let x = x0; x < x0 + 20; x++) rgba.set([25, 30, 42, 255], (y * W + x) * 4);
+        const r = (x0: number, y0: number, x1: number, y1: number) => [x0 / W, y0 / H, x1 / W, y1 / H];
+        const windows = [...r(20, 20, 40, 40), ...r(100, 20, 120, 40), ...r(20, 120, 40, 140), ...r(100, 120, 120, 140)];
+        const panes = [...r(20, 20, 40, 40), ...r(100, 20, 120, 40), ...r(20, 120, 40, 150), ...r(100, 120, 120, 140)];
+        const extras = { sbFacadeLattice: { facadeId: 1, windows: { uv: windows, panes } } };
+        const img = { width: W, height: H, rgba };
+        const g = parseGlbBytes(scene([{ mesh: 'facade_lattice_1', corners: wall(0, 20, 20), uv: FULL_UV, material: 0, extras }], [img]));
+        const classes = readRegionClasses(g.json, imagesOf([img]))!;
+        const pg = paneGlass(img, classes, panes, 0.5)!;
+        expect(pg.panes).toBe(4);
+        expect(pg.stone).toBe(1);
+        const at2 = (x: number, y: number) => pg.glass[y * W + x];
+        expect([at2(30, 30), at2(110, 30), at2(30, 130)]).toEqual([1, 1, 1]);
+        // the false pane (stone) and the sill half of the tall pane: no glass
+        expect([at2(110, 130), at2(30, 145)]).toEqual([0, 0]);
+        const plan = planMaterialRegions(g, g.json, imagesOf([img]), classes, sets(classes));
+        const orm = plan.materials[0].orm, nrm = plan.materials[0].normal!;
+        expect(at(orm, 30, 30)).toEqual([255, Math.round(GLASS.roughness * 255), 0, 255]);
+        expect(at(nrm, 30, 30)).toEqual([128, 128, 255, 255]);
+        expect(at(orm, 110, 130)[1]).not.toBe(Math.round(GLASS.roughness * 255));
+        expect(plan.report.texels.glass).toBe(3 * 400);
+        expect(plan.report.panesOnStone).toBe(1);
+        // the sill half of the tall pane: 200 wall-like texels left out of a glass pane
+        expect(plan.report.paneWallTexels).toBe(200);
+        expect(pg.wallTexels).toBe(200);
+        expect(plan.report.facades.perFacade[0]).toMatchObject({ panes: 4, glassShare: 0.03 });
+        expect(paneGlass(img, classes, undefined, 0.5)).toBeUndefined();
     });
     it('draws a speckle under regionSmoothM as the surface around it; a blot a metre across keeps its own set', () => {
         const W = 100, H = 100, rgba = new Uint8Array(W * H * 4);

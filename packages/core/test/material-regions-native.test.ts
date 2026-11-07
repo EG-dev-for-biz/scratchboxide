@@ -84,7 +84,7 @@ function scene(size: number, px: number, grid: number) {
     const windows: number[] = [];
     for (let b = 0; b * 5 < m; b++) for (let st = 0; st * 3.5 < m; st++) for (const x0 of [1.9, 3.6]) windows.push((b * 5 + x0) / m, (st * 3.5 + 0.8) / m, Math.min(1, (b * 5 + x0 + 1) / m), Math.min(1, (st * 3.5 + 2.6) / m));
     const g = glbOf([
-        { name: 'facade_lattice_1', ...wallGrid(0, m, m, 0, 2), material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: windows } } } },
+        { name: 'facade_lattice_1', ...wallGrid(0, m, m, 0, 2), material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: windows, panes: windows } } } },
         { name: 'facade_lattice_2', ...wallGrid(m + 5, m, m, 0, 2), material: 1 },
         { name: 'facade_lattice_3', ...wallGrid(2 * m + 10, m, m, 0, 2), material: 2 },
         { name: 'scan_piece', ...wallGrid(0, m, m, -0.3, grid), material: 3 }
@@ -162,6 +162,8 @@ describe('pipeline K material regions, native kernel', () => {
             // the facade with openings reaches the opening classes; the others and the scan piece only the outside ones
             if (job.mesh === 'facade_lattice_1') expect(ts.classTexels.slice(4).some(n => n > 0)).toBe(true);
             if (job.mesh === 'facade_lattice_1') expect(ts.facade!.foldedShare).toBeGreaterThan(0);
+            // the panes are drawn as glass on the facade that has them, with any on stone counted
+            if (job.mesh === 'facade_lattice_1') expect(ts.glass).toBeGreaterThan(0); else expect(ts.glass).toBe(0);
             else expect(ts.classTexels.slice(4).every(n => n === 0)).toBe(true);
         }
         expectSamePlan(await planMaterialRegionsNative(sc.g, sc.json, sc.images, classes, st), planMaterialRegions(sc.g, sc.json, sc.images, classes, st));

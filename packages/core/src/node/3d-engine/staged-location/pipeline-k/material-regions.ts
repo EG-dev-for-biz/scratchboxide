@@ -28,7 +28,13 @@
  *     piers' halves) is a repeat of every other of its size (a family); each position of the cell takes the class most
  *     of the family's repeats hold there, so one bay never reads metal while the bays beside it read glass, and a frame
  *     stays a frame on every window (photo-inferred). The texels outside every unit cell keep their own class.
- *  5. Maps: on each rebuilt facade, each texel's class's set tiled at the set's real size, box-filtered to the facade's
+ *  5. Glass (user priority, 2026-11-06): on each rebuilt facade the panes the lattice carries (sbFacadeLattice.windows.panes:
+ *     the facade reader's accepted openings with the pane splits it read where it read the plane, the window fit's elsewhere)
+ *     are drawn as glass (GLASS: roughness 0.08, no metalness, a flat normal; the photo stays the colour), except a pane
+ *     most of whose texels (paneWallShare) are the wall's class, which is stone whatever was fitted there, and the wall's
+ *     class's texels within a glass pane (a mullion, a sill); each texel's class among every class, so a stone texel in a
+ *     pane is told from glass. Photo-inferred.
+ *  6. Maps: on each rebuilt facade, each texel's class's set tiled at the set's real size, box-filtered to the facade's
  *     texel (so a tile never aliases): occlusion, roughness and metalness (ORM) and the normal, as the set has them; on
  *     scan pieces, whose atlases carry no metric frame for a tile, each texel's class's set's mean ORM.
  *
@@ -43,7 +49,7 @@ import { linearRgbToLab } from '../../../../common/spatial/texture-library-index
 import type { RgbaImage8 } from '../tile-texture-transfer';
 import { bandResponses, TEXTURE_BANDS_M, type TextureEnergy } from './material-harvest';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/32';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/33';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /**
@@ -62,8 +68,13 @@ export const MATERIAL_REGIONS_PARAMS = {
      * Repeats (see the file comment, 4): a window's unit cell repeats another when both sides are within repeatTolerance of
      * the family's first; a family is folded with at least minRepeats members, each cell cut into repeatGrid x repeatGrid.
      */
-    repeatTolerance: 0.1, minRepeats: 3, repeatGrid: 24
+    repeatTolerance: 0.1, minRepeats: 3, repeatGrid: 24,
+    /** A pane is stone, not glass, when at least this share of its texels fall in the wall's class. */
+    paneWallShare: 0.5
 };
+
+/** The glass drawn in the panes (see the file comment, 5): main's smooth-glass setting, roughness 0.08, no metalness, flat. */
+export const GLASS = { roughness: 0.08, metalness: 0 } as const;
 export type MaterialRegionsParams = typeof MATERIAL_REGIONS_PARAMS;
 
 /** A rebuilt facade's mesh, by the name facade-lattice.ts gives it: its photo is a metric orthophoto of one plane. */
@@ -107,11 +118,13 @@ export interface RegionSet {
 export interface MaterialRegionsReport {
     version: string;
     classes: Array<Pick<RegionClass, 'index' | 'meanLab' | 'share' | 'wall' | 'openings' | 'texture' | 'facades'> & { set: string; distance: number; harvest?: RegionSet['harvest']; choice?: RegionSet['choice']; finish?: RegionSet['finish'] }>;
-    /** The rebuilt facades: each one's texel and the share of its texels each class (by index) holds. */
-    facades: { total: number; perFacade: Array<{ mesh: string; texelM: number; classShares: number[]; /** The share of its texels the fold over its repeats changed (see the file comment, 4). */ foldedShare: number }> };
+    /** The rebuilt facades: each one's texel, the share of its texels each class (by index) holds, and the share drawn as glass. */
+    facades: { total: number; perFacade: Array<{ mesh: string; texelM: number; classShares: number[]; /** The share of its texels the fold over its repeats changed (see the file comment, 4). */ foldedShare: number; /** The pane rects the lattice carried, and the share of the facade drawn as glass. */ panes: number; glassShare: number }> };
     scanPieces: { total: number };
-    /** Every planned texel, and how many each class holds (by index). */
-    texels: { total: number; perClass: number[] };
+    /** Every planned texel, how many each class holds (by index), and how many are drawn as glass. */
+    texels: { total: number; perClass: number[]; glass: number };
+    /** The wall guard on the panes (see the file comment, 5): panes not drawn as glass, most of their texels wall-like (stone, whatever was fitted there), and texels of glass panes left out as wall-like. A reader pane the guard drops may be the reader's error or the guard's: both are reported. */
+    panesOnStone: number; paneWallTexels: number;
     ms: number;
 }
 
@@ -119,7 +132,7 @@ export interface MaterialRegionsReport {
 interface PlannedMaterial {
     material: number;
     orm: RgbaImage8; normal?: RgbaImage8;
-    rebuilt: boolean;
+    rebuilt: boolean; glass: boolean;
 }
 
 export interface MaterialRegionsPlan { materials: PlannedMaterial[]; sets: RegionSet[]; report: MaterialRegionsReport }
@@ -196,6 +209,46 @@ function fittedWindows(json: any, meshName: string): number[] | undefined {
     const mi = (json.meshes ?? []).findIndex((m: any) => m.name === meshName);
     const uv = (json.nodes ?? []).find((n: any) => n.mesh === mi && n.extras?.sbFacadeLattice?.windows)?.extras.sbFacadeLattice.windows.uv;
     return Array.isArray(uv) && uv.length % 4 === 0 && uv.length ? uv : undefined;
+}
+
+/** A rebuilt facade's panes (the glass in its fitted windows: the reader's pane splits where it read, window-fit.ts's elsewhere; sbFacadeLattice.windows.panes, u0 v0 u1 v1 each). */
+function fittedPanes(json: any, meshName: string): number[] | undefined {
+    const mi = (json.meshes ?? []).findIndex((m: any) => m.name === meshName);
+    const uv = (json.nodes ?? []).find((n: any) => n.mesh === mi && n.extras?.sbFacadeLattice?.windows)?.extras.sbFacadeLattice.windows.panes;
+    return Array.isArray(uv) && uv.length % 4 === 0 && uv.length ? uv : undefined;
+}
+
+/**
+ * The glass texels of a photo (see the file comment, 5): each pane rect's texels (Math.round at its edges, the first rect
+ * holding a texel), each classed among every class: a texel whose nearest class is one read outside the openings (the
+ * wall's shades, the spandrels) looks like the wall, not like what fills the openings; a pane at least `share` of whose
+ * texels look like the wall is stone and counted (`stone`), else its texels are glass but those. With no class read
+ * inside the openings, the wall's class alone counts as the wall. Returns none without pane rects.
+ */
+export function paneGlass(img: RgbaImage8, classes: RegionClass[], panes: number[] | undefined, share: number): { glass: Uint8Array; stone: number; panes: number; /** Texels of glass panes left out as wall-like. */ wallTexels: number } | undefined {
+    if (!panes?.length) return undefined;
+    const { width: W, height: H, rgba } = img, wall = Math.max(0, classes.findIndex(c => c.wall)), anyOpening = classes.some(c => c.openings);
+    const glass = new Uint8Array(W * H), seen = new Uint8Array(W * H);
+    let stone = 0, wallTexels = 0;
+    const wallLike = (k: number) => {
+        const [L, a, b] = labOf(rgba[k * 4], rgba[k * 4 + 1], rgba[k * 4 + 2]);
+        let best = 0, bd = Infinity;
+        classes.forEach((c, i) => { const m = c.meanLab, d = (L - m[0]) ** 2 + (a - m[1]) ** 2 + (b - m[2]) ** 2; if (d < bd) { bd = d; best = i; } });
+        return anyOpening ? !classes[best].openings : best === wall;
+    };
+    for (let i = 0; i + 3 < panes.length; i += 4) {
+        const x0 = Math.max(0, Math.round(panes[i] * W)), x1 = Math.min(W, Math.round(panes[i + 2] * W)), y0 = Math.max(0, Math.round(panes[i + 1] * H)), y1 = Math.min(H, Math.round(panes[i + 3] * H));
+        const mine: number[] = [], isWall: number[] = [];
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+            const k = y * W + x;
+            if (seen[k] || !rgba[k * 4 + 3]) continue;
+            seen[k] = 1; mine.push(k); isWall.push(wallLike(k) ? 1 : 0);
+        }
+        if (!mine.length) continue;
+        if (isWall.reduce((s, v) => s + v, 0) >= share * mine.length) { stone++; continue; }
+        mine.forEach((k, q) => { if (!isWall[q]) glass[k] = 1; else wallTexels++; });
+    }
+    return { glass, stone, panes: panes.length / 4, wallTexels };
 }
 
 /** The openings' texels of a photo (1 inside a rect, u0 v0 u1 v1 each: floor at the start, ceil at the end); none without rects. */
@@ -536,6 +589,8 @@ export interface MaterialPlanPiece {
     facade?: MaterialRegionsReport['facades']['perFacade'][number];
     /** The job's texels each class holds (by index). */
     classTexels: number[];
+    /** The job's texels drawn as glass, its panes left as stone, and the texels of its glass panes left out as wall-like. */
+    glass: number; panesOnStone: number; paneWallTexels: number;
 }
 
 /** What every job reads: the GLB, its photos, the classes and their sets, and each set's mean ORM. */
@@ -561,7 +616,7 @@ export function materialPlanJobs(json: any, images: Map<number, RgbaImage8>): Ma
 export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext): MaterialPlanPiece {
     const { g, json, images, classes, sets, P } = ctx;
     const K = classes.length;
-    const piece: MaterialPlanPiece = { classTexels: new Array<number>(K).fill(0) };
+    const piece: MaterialPlanPiece = { classTexels: new Array<number>(K).fill(0), glass: 0, panesOnStone: 0, paneWallTexels: 0 };
     const mi = job.material, img = images.get(photoOf(json, mi)!.image)!;
     const { width: W, height: H } = img, N = W * H;
     const texelM = texelMetres(g, json, mi, img);
@@ -578,14 +633,19 @@ export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext):
             return { tw, th, n: shrinkTile(s.normal, tw, th, true), o: shrinkTile(s.orm, tw, th, false) };
         });
         const nrm = blank(W, H);
+        // the glass in the panes (see the file comment, 5): main's smooth-glass setting, over whatever set the class has
+        const pg = paneGlass(img, classes, fittedPanes(json, job.mesh!), P.paneWallShare);
+        const gl = pg?.glass, glassR = Math.round(GLASS.roughness * 255), glassM = Math.round(GLASS.metalness * 255);
         for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
             const k = y * W + x, t = tiles[cls[k]]!, j = ((y % t.th) * t.tw + (x % t.tw)) * 3;
+            if (gl?.[k]) { orm.rgba.set([255, glassR, glassM, 255], k * 4); nrm.rgba.set([128, 128, 255, 255], k * 4); piece.glass++; continue; }
             orm.rgba.set([Math.round(t.o[j] * 255), Math.round(t.o[j + 1] * 255), Math.round(t.o[j + 2] * 255), 255], k * 4);
             nrm.rgba.set([Math.round(t.n[j] * 255), Math.round(t.n[j + 1] * 255), Math.round(t.n[j + 2] * 255), 255], k * 4);
         }
+        piece.panesOnStone = pg?.stone ?? 0; piece.paneWallTexels = pg?.wallTexels ?? 0;
         const r3 = (v: number) => Math.round(v * 1000) / 1000;
-        piece.facade = { mesh: job.mesh!, texelM: Math.round(texelM * 1e4) / 1e4, classShares: piece.classTexels.map(n => r3(n / N)), foldedShare: r3(folded / N) };
-        piece.planned = { material: mi, orm, normal: nrm, rebuilt: true };
+        piece.facade = { mesh: job.mesh!, texelM: Math.round(texelM * 1e4) / 1e4, classShares: piece.classTexels.map(n => r3(n / N)), foldedShare: r3(folded / N), panes: pg?.panes ?? 0, glassShare: r3(piece.glass / N) };
+        piece.planned = { material: mi, orm, normal: nrm, rebuilt: true, glass: piece.glass > 0 };
         return piece;
     }
     // scan pieces: each texel's class's set's mean ORM
@@ -593,7 +653,7 @@ export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext):
         const m = ctx.setMeans[cls[k]];
         orm.rgba.set([Math.round(m[0] * 255), Math.round(m[1] * 255), Math.round(m[2] * 255), 255], k * 4);
     }
-    piece.planned = { material: mi, orm, rebuilt: false };
+    piece.planned = { material: mi, orm, rebuilt: false, glass: false };
     return piece;
 }
 
@@ -603,12 +663,13 @@ export function mergeMaterialPlan(json: any, classes: RegionClass[], sets: Regio
     const report: MaterialRegionsReport = {
         version: MATERIAL_REGIONS_VERSION,
         classes: classes.map((c, k) => ({ index: c.index, meanLab: c.meanLab, share: c.share, wall: c.wall, openings: c.openings, set: sets[k].name, distance: Math.round(sets[k].distance * 100) / 100, ...(sets[k].harvest ? { harvest: sets[k].harvest } : {}), ...(sets[k].choice ? { choice: sets[k].choice } : {}), ...(sets[k].finish ? { finish: sets[k].finish } : {}), ...(c.texture ? { texture: c.texture, facades: c.facades } : {}) })),
-        facades: { total: rebuilt.size, perFacade: [] }, scanPieces: { total: other.size }, texels: { total: 0, perClass: classes.map(() => 0) }, ms
+        facades: { total: rebuilt.size, perFacade: [] }, scanPieces: { total: other.size }, texels: { total: 0, perClass: classes.map(() => 0), glass: 0 }, panesOnStone: 0, paneWallTexels: 0, ms
     };
     const planned: PlannedMaterial[] = [];
     for (const p of pieces) {
         if (p.planned) planned.push(p.planned);
         if (p.facade) report.facades.perFacade.push(p.facade);
+        report.texels.glass += p.glass; report.panesOnStone += p.panesOnStone; report.paneWallTexels += p.paneWallTexels;
         p.classTexels.forEach((n, c) => { report.texels.perClass[c] += n; report.texels.total += n; });
     }
     return { materials: planned, sets, report };
@@ -650,7 +711,8 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
                 version: MATERIAL_REGIONS_VERSION,
                 baseColor: { label: 'photo-inferred', source: "pipeline K's harmonised photo" },
                 material: { label: 'photo-inferred', source: `each texel's appearance class (CIELAB, the majority within ${MATERIAL_REGIONS_PARAMS.regionSmoothM} m)` },
-                maps: { label: 'generated', source: `the texture library set of each texel's class (${sets}): ${pm.rebuilt ? 'occlusion, roughness, metalness and normal tiled at the set\'s real size' : "the set's mean occlusion, roughness and metalness"}` }
+                maps: { label: 'generated', source: `the texture library set of each texel's class (${sets}): ${pm.rebuilt ? 'occlusion, roughness, metalness and normal tiled at the set\'s real size' : "the set's mean occlusion, roughness and metalness"}` },
+                ...(pm.glass ? { glass: { label: 'photo-inferred', source: `the panes of the fitted windows (the facade reader's accepted openings with the pane splits it read where it read the plane, the window fit's elsewhere), less panes mostly of the wall's class and the wall's class's texels: roughness ${GLASS.roughness}, no metalness, flat; the photo kept as the colour` } } : {})
             }
         };
     }
@@ -701,6 +763,6 @@ export function classSwatchSheet(json: any, images: Map<number, RgbaImage8>, cla
 export function describeMaterialRegions(r: MaterialRegionsReport): string {
     const pct = (a: number) => (r.texels.total ? `${Math.round((100 * a) / r.texels.total)}%` : '0%');
     return `material regions: ${r.classes.length} appearance classes (${r.classes.map((c, k) => `${c.openings ? 'in openings ' : ''}${c.wall ? 'lightest' : 'L ' + Math.round(c.meanLab[0])} -> ${c.set}, ${pct(r.texels.perClass[k] ?? 0)} of texels`).join('; ')}); ` +
-        `every texel its class's set: ${r.facades.total} rebuilt facades tiled at the sets' real size, ${r.scanPieces.total} scan pieces the sets' mean finish; ` +
+        `every texel its class's set: ${r.facades.total} rebuilt facades tiled at the sets' real size, ${r.scanPieces.total} scan pieces the sets' mean finish; glass in the fitted windows' panes on ${pct(r.texels.glass)} of texels (the wall guard: ${r.panesOnStone} panes left as stone, ${pct(r.paneWallTexels)} of texels wall-like within glass panes); ` +
         `occlusion, roughness, metalness and normal generated from the library, colour the photo (${r.ms} ms)`;
 }

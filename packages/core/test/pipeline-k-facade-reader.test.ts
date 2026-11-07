@@ -117,10 +117,12 @@ describe('pipeline K facade reader (vision agent)', () => {
         const unguided = tileZone(L, W, zone, crop, reading);
         const guided = tileZone(L, W, zone, crop, reading, undefined, PITCH);
         if ('why' in unguided || 'why' in guided) throw new Error('no tiling');
-        expect(Math.abs(unguided.pitch - 2 * PITCH)).toBeLessThan(1);
+        // unguided, the doubled pitch is halved by the photo itself: windows sit between the rows read (tileZone, 1)
+        expect(unguided.halved).toBe(true);
+        expect(Math.abs(unguided.pitch - PITCH)).toBeLessThan(1);
         expect(guided.guided).toBe(true);
         expect(Math.abs(guided.pitch - PITCH)).toBeLessThan(0.6);
-        expect(guided.rects.length).toBeGreaterThanOrEqual(2 * unguided.rects.length - 1);
+        expect(Math.abs(guided.rects.length - unguided.rects.length)).toBeLessThanOrEqual(1);
         // a single row read: tiled through the zone at the guide
         const one = tileZone(L, W, zone, crop, { rows: rows.slice(0, 1), conf: 80 }, undefined, PITCH);
         if ('why' in one) throw new Error('no tiling');

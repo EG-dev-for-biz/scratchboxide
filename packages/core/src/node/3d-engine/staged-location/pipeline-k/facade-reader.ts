@@ -53,14 +53,14 @@ import * as path from 'path';
 import { decodePngAsync, encodePngAsync } from '../../../png-codec-pool';
 import type { FitFrame, WindowFitFile, WindowRect } from '../window-fit';
 import { contactSheet, contextFor, parseBrief, briefPrompt, planePlaces, type BuildingBrief, type NamedBuilding, type PlaneFamily } from './facade-reader-brief';
-import { exemplarOf, matchExemplar, mergeMatches, TEMPLATE_PARAMS, type TemplateMatch, type WindowExemplar } from './facade-reader-template';
+import { exemplarOf, matchExemplar, mergeMatches, nccAt, TEMPLATE_PARAMS, type TemplateMatch, type WindowExemplar } from './facade-reader-template';
 import { planePixelsKey, readingKey, type ModelReadingStore } from './model-readings';
 import { kNative } from './native/native-switch';
 import { matchExemplarsNative } from './native/template-match-native';
 import { readOccludedAsync, unreadMask } from './occlusion';
 import { PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
 
-export const FACADE_READER_VERSION = 'facade-reader/13';
+export const FACADE_READER_VERSION = 'facade-reader/14';
 /** The prompts' version, in every kept reading's key (with the prompt's own text): a change to what is asked asks again. */
 export const FACADE_READER_PROMPT_VERSION = 'facade-reader-prompts/2';
 
@@ -92,6 +92,12 @@ export const FACADE_READER_PARAMS = {
     minContrast: 0.06,
     /** The pitch is measured within this share of the read pitch; an opening is drawn where this share of it is covered. */
     pitchSearch: 0.1, minCovered: 0.6,
+    /** The pitch read is halved when the rows between the read ones are at least this share as dark against their surroundings (tileZone, 1). */
+    betweenRowsShare: 0.6,
+    /** Regular columns are shifted by half a bay when the shifted boxes are darker than the read ones by at least this (luminance, 0..1; tileZone, 2). */
+    phaseShiftMargin: 0.02,
+    /** Columns added past the read ones at the column pitch, at most this many a side, each where the read window is found again in at least this share of the rows (tileZone, 3). */
+    extendColumns: 6, extendRowsShare: 0.5,
     /** The model's own confidence (0-100) below which a reading or a judgement is not taken. */
     minConf: 40,
     /** The building brief first (facade-reader-brief.ts): every reading told the building, its plane's family and place. */
@@ -129,7 +135,7 @@ export interface FacadeJudgement { accept: boolean; badColumns: number[]; conf: 
 export interface ZoneRecord {
     label?: string; region: ImageRegion; outcome: 'drawn' | 'none' | 'rejected' | 'failed'; why: string;
     reading?: { rows: number; openings: number; conf: number; notes?: string; between?: string };
-    fit?: { pitchPx: number; pitchM: number; measured: boolean; /** The storey pitch taken from the building's wide walls (readPlanes' guide). */ guided?: boolean; columns: number; rows: number; openings: number };
+    fit?: { pitchPx: number; pitchM: number; measured: boolean; /** The storey pitch taken from the building's wide walls (readPlanes' guide). */ guided?: boolean; columns: number; rows: number; openings: number; /** tileZone's corrections (1-3): the read pitch halved, the columns shifted half a bay, columns added past the read ones. */ halved?: boolean; phaseShifted?: boolean; extended?: number };
     judge?: FacadeJudgement;
     /** Drawn from the family's window found again in this photo (facade-reader-template.ts), not read: from which plane, how many matched, how many filled in on their grid. */
     template?: { fromPlane: number; matches: number; gridFilled: number };
@@ -417,7 +423,43 @@ export function columnsOf(reading: FacadeReading, cropW: number): ReaderColumn[]
     return groups.filter(g => g.length >= need).map(g => ({ x0: med(g.map(o => o.x0)), x1: med(g.map(o => o.x1)), panes: med(g.map(o => o.panes)), rows: g.length }));
 }
 
-export interface ZoneTiling { pitch: number; measured: boolean; guided?: boolean; columns: ReaderColumn[]; rows: Array<[number, number]>; rects: WindowRect[]; columnOf: number[] }
+export interface ZoneTiling {
+    pitch: number; measured: boolean; guided?: boolean; columns: ReaderColumn[]; rows: Array<[number, number]>; rects: WindowRect[]; columnOf: number[];
+    /** The read pitch halved: windows sat between the rows read (tileZone, 1). */
+    halved?: boolean;
+    /** The columns shifted by half a bay: the boxes read sat on the mullions, the shifted ones on the darker glass (tileZone, 2). */
+    phaseShifted?: boolean;
+    /** Columns added beyond the ones read, where the read window is found again at the column pitch (tileZone, 3). */
+    extended?: number;
+}
+
+/** Mean luminance over a box of L (finite texels), NaN when none. */
+function meanIn(L: Float32Array, W: number, H: number, x0: number, y0: number, x1: number, y1: number): number {
+    let s = 0, n = 0;
+    for (let y = Math.max(0, Math.floor(y0)); y < Math.min(H, Math.ceil(y1)); y++) for (let x = Math.max(0, Math.floor(x0)); x < Math.min(W, Math.ceil(x1)); x++) { const v = L[y * W + x]; if (Number.isFinite(v)) { s += v; n++; } }
+    return n ? s / n : NaN;
+}
+
+/**
+ * How much darker the boxes (columns x rows) are than what lies beside them (`beside`: the strips of a box's width on
+ * each side when 'x', of its height above and below when 'y'): the mean over the boxes of beside minus inside, over
+ * the boxes the photo covers; NaN with none. Window glass in a de-lit photo is darker than the frame, mullion or wall
+ * around it, so the reading whose boxes come out darker is the one on the openings.
+ */
+function darkness(L: Float32Array, W: number, H: number, columns: Array<{ x0: number; x1: number }>, rows: Array<[number, number]>, beside: 'x' | 'y'): number {
+    let s = 0, n = 0;
+    for (const c of columns) for (const [y0, y1] of rows) {
+        const inside = meanIn(L, W, H, c.x0, y0, c.x1, y1);
+        if (!Number.isFinite(inside)) continue;
+        const w = c.x1 - c.x0, h = y1 - y0;
+        const a = beside === 'x' ? meanIn(L, W, H, c.x0 - w, y0, c.x0, y1) : meanIn(L, W, H, c.x0, y0 - h, c.x1, y0);
+        const b = beside === 'x' ? meanIn(L, W, H, c.x1, y0, c.x1 + w, y1) : meanIn(L, W, H, c.x0, y1, c.x1, y1 + h);
+        const around = Number.isFinite(a) && Number.isFinite(b) ? (a + b) / 2 : Number.isFinite(a) ? a : b;
+        if (!Number.isFinite(around)) continue;
+        s += around - inside; n++;
+    }
+    return n ? s / n : NaN;
+}
 
 /**
  * The zone filled from the model's cell: its columns at their read places; its rows at the read storey pitch (measured
@@ -427,9 +469,9 @@ export interface ZoneTiling { pitch: number; measured: boolean; guided?: boolean
  * face's reading that skips storeys (its rows a whole number of guide pitches apart, within a fifth of one) or holds a
  * single row is tiled at the guide pitch instead (storeys run on around a building).
  */
-export function tileZone(L: Float32Array, W: number, zone: ImageRegion, crop: ImageRegion, reading: FacadeReading, P: FacadeReaderParams = FACADE_READER_PARAMS, guidePx?: number): ZoneTiling | { why: string } {
-    const cw = crop.x1 - crop.x0, ch = crop.y1 - crop.y0;
-    const columns = columnsOf(reading, cw).map(c => ({ ...c, x0: c.x0 + crop.x0, x1: c.x1 + crop.x0 }));
+export function tileZone(L: Float32Array, W: number, zone: ImageRegion, crop: ImageRegion, reading: FacadeReading, P: FacadeReaderParams = FACADE_READER_PARAMS, guidePx?: number, pixel?: number): ZoneTiling | { why: string } {
+    const cw = crop.x1 - crop.x0, ch = crop.y1 - crop.y0, H = L.length / W;
+    let columns = columnsOf(reading, cw).map(c => ({ ...c, x0: c.x0 + crop.x0, x1: c.x1 + crop.x0 }));
     if (!columns.length) return { why: 'the reading gave no column of openings' };
     const read = reading.rows.map(r => [crop.y0 + (r.y[0] / 1000) * ch, crop.y0 + (r.y[1] / 1000) * ch] as [number, number]).sort((a, b) => a[0] - b[0]);
     const oh = [...read.map(r => r[1] - r[0])].sort((a, b) => a - b)[read.length >> 1];
@@ -466,15 +508,53 @@ export function tileZone(L: Float32Array, W: number, zone: ImageRegion, crop: Im
     // a row loop over a pitch this small would not end
     if (!(pitch > 2)) return { why: `the storey pitch came to ${Number.isFinite(pitch) ? pitch.toFixed(2) : String(pitch)} px` };
     // the read rows' phase at that pitch (their circular mean), then every row through the zone
-    let c = 0, sn = 0;
-    for (const t of tops) { const a = (2 * Math.PI * t) / pitch; c += Math.cos(a); sn += Math.sin(a); }
-    const phase = ((((Math.atan2(sn, c) / (2 * Math.PI)) * pitch) % pitch) + pitch) % pitch;
-    const rows: Array<[number, number]> = [];
-    for (let k = Math.ceil((zone.y0 - oh * 0.25 - phase) / pitch); phase + k * pitch + oh <= zone.y1 + oh * 0.25; k++) rows.push([phase + k * pitch, phase + k * pitch + oh]);
+    const phaseOf = (p: number) => { let c = 0, sn = 0; for (const t of tops) { const a = (2 * Math.PI * t) / p; c += Math.cos(a); sn += Math.sin(a); } return ((((Math.atan2(sn, c) / (2 * Math.PI)) * p) % p) + p) % p; };
+    const rowsAt = (p: number, phase: number): Array<[number, number]> => { const out: Array<[number, number]> = []; for (let k = Math.ceil((zone.y0 - oh * 0.25 - phase) / p); phase + k * p + oh <= zone.y1 + oh * 0.25; k++) out.push([phase + k * p, phase + k * p + oh]); return out; };
+    let phase = phaseOf(pitch), rows = rowsAt(pitch, phase), halved = false, phaseShifted = false, extended = 0;
+    // 1. windows between the rows read (a model marking every other storey, 30 Rockefeller Plaza): the rows half a pitch
+    // from the read ones are as much darker than their surroundings as the read rows are: the pitch is half the read one
+    if (oh < 0.6 * pitch && rows.length >= 3) {
+        const between = rows.map(([y0, y1]) => [y0 + pitch / 2, y1 + pitch / 2] as [number, number]);
+        const read = darkness(L, W, H, columns, rows, 'y'), mid = darkness(L, W, H, columns, between, 'y');
+        if (Number.isFinite(read) && Number.isFinite(mid) && read > 0 && mid >= P.betweenRowsShare * read) { pitch /= 2; measured = false; halved = true; rows = rowsAt(pitch, phase); }
+    }
+    // 2. boxes on the mullions (Seagram): regular columns whose shift by half a column pitch comes out darker than they do
+    // are shifted: the glass is where the boxes are darker than the strips beside them
+    if (columns.length >= 4) {
+        const centres = columns.map(c => (c.x0 + c.x1) / 2).sort((a, b) => a - b), gaps = centres.slice(1).map((v, i) => v - centres[i]);
+        const cp = [...gaps].sort((a, b) => a - b)[gaps.length >> 1], ws = columns.map(c => c.x1 - c.x0).sort((a, b) => a - b)[columns.length >> 1];
+        if (cp > 1.3 * ws && gaps.every(g => Math.abs(g - cp) <= 0.2 * cp)) {
+            const shifted = columns.map(c => ({ ...c, x0: c.x0 + cp / 2, x1: c.x1 + cp / 2 })).filter(c => c.x1 <= zone.x1);
+            const here = darkness(L, W, H, columns, read, 'x'), there = darkness(L, W, H, shifted, read, 'x');
+            if (shifted.length >= 3 && Number.isFinite(here) && Number.isFinite(there) && there > here + P.phaseShiftMargin) { columns = shifted; phaseShifted = true; }
+        }
+    }
+    // 3. columns beyond the ones read (the Flatiron's side columns in shade): the read window, looked for at the column
+    // pitch past the last column on each side (normalised cross-correlation, so shade does not hide it), is a column when
+    // it is found in most rows; each new column is judged with the rest
+    if (pixel && columns.length >= 2) {
+        const centres = columns.map(c => (c.x0 + c.x1) / 2).sort((a, b) => a - b), gaps = centres.slice(1).map((v, i) => v - centres[i]);
+        const cp = [...gaps].sort((a, b) => a - b)[gaps.length >> 1];
+        const midCol = columns[columns.length >> 1], firstRow = rows.find(([y0, y1]) => y0 >= crop.y0 && y1 <= crop.y1) ?? rows[0];
+        const ex = cp > 0 && firstRow ? exemplarOf({ L, W, H, pixel }, [midCol.x0, firstRow[0], midCol.x1, firstRow[1]], midCol.panes, 0, undefined) : undefined;
+        if (ex && gaps.every(g => Math.abs(g - cp) <= 0.2 * cp)) {
+            const g = { L, W, H, pixel }, w = midCol.x1 - midCol.x0;
+            const found = (x0: number) => { let hit = 0, tried = 0; for (const [y0] of rows) { const v = nccAt(g, ex.patch, ex.pw, ex.ph, Math.round(x0 - ex.opening[0]), Math.round(y0 - ex.opening[1]), TEMPLATE_PARAMS.minCovered); if (v > -1) { tried++; if (v >= TEMPLATE_PARAMS.gridNcc) hit++; } } return tried >= 2 && hit >= P.extendRowsShare * tried; };
+            for (const dir of [-1, 1]) {
+                let edge = dir < 0 ? Math.min(...columns.map(c => c.x0)) : Math.max(...columns.map(c => c.x0));
+                for (let n = 0; n < P.extendColumns; n++) {
+                    const x0 = edge + dir * cp;
+                    if (x0 < zone.x0 || x0 + w > zone.x1 || !found(x0)) break;
+                    columns.push({ x0, x1: x0 + w, panes: midCol.panes, rows: 0 }); extended++; edge = x0;
+                }
+            }
+            if (extended) columns.sort((a, b) => a.x0 - b.x0);
+        }
+    }
     const rects: WindowRect[] = [], columnOf: number[] = [];
     columns.forEach((col, ci) => { for (const [y0, y1] of rows) if (coveredShare(L, W, col.x0, y0, col.x1, y1) >= P.minCovered) { rects.push([col.x0, y0, col.x1, y1]); columnOf.push(ci); } });
     if (!rects.length) return { why: 'the photo does not cover the zone\'s openings' };
-    return { pitch, measured, ...(guided ? { guided } : {}), columns, rows, rects, columnOf };
+    return { pitch, measured, ...(guided ? { guided } : {}), columns, rows, rects, columnOf, ...(halved ? { halved } : {}), ...(phaseShifted ? { phaseShifted } : {}), ...(extended ? { extended } : {}) };
 }
 
 // ------------------------------------------------------------------------------------------------ one plane, all planes
@@ -581,9 +661,9 @@ export async function readFacade(img: FacadePhoto, uncovered: ArrayLike<number> 
         if (!reading.rows.length) { zr.outcome = 'none'; zr.why = 'the model saw no openings in the zone'; continue; }
         // a narrow face's tiling waits here for the building's storey pitch (every wide wall read)
         const g = guide && !roof ? await guide : undefined;
-        const t = tileZone(L, W, z.region, z.read!, reading, P, g ? g.pitchM / f.pixel : undefined);
+        const t = tileZone(L, W, z.region, z.read!, reading, P, g ? g.pitchM / f.pixel : undefined, f.pixel);
         if ('why' in t) { zr.outcome = 'none'; zr.why = t.why; continue; }
-        zr.fit = { pitchPx: Math.round(t.pitch * 100) / 100, pitchM: Math.round(t.pitch * f.pixel * 100) / 100, measured: t.measured, ...(t.guided ? { guided: true } : {}), columns: t.columns.length, rows: t.rows.length, openings: t.rects.length };
+        zr.fit = { pitchPx: Math.round(t.pitch * 100) / 100, pitchM: Math.round(t.pitch * f.pixel * 100) / 100, measured: t.measured, ...(t.guided ? { guided: true } : {}), columns: t.columns.length, rows: t.rows.length, openings: t.rects.length, ...(t.halved ? { halved: true } : {}), ...(t.phaseShifted ? { phaseShifted: true } : {}), ...(t.extended ? { extended: t.extended } : {}) };
         z.t = t;
         z.kept = [...new Set(t.columnOf)].sort((a, b) => a - b);
         // the judge's picture: the outlines over the read crop and a held-out one

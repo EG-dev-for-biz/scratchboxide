@@ -323,21 +323,66 @@ inline double foldRepeats(std::vector<uint8_t>& cls, int W, int H, int K, const 
     return changed;
 }
 
+/** paneGlass: the glass texels of the pane rects (Math.round at the edges, the first rect holding a texel), each texel
+ * classed among every class; a pane at least `share` of whose texels are the wall's class is stone (counted), else its
+ * texels are glass but the wall's class's. */
+struct PaneGlass { std::vector<uint8_t> glass; double stone = 0, wallTexels = 0; };
+inline PaneGlass paneGlass(const Image& img, const std::vector<double>& meanLab, const std::vector<uint8_t>& openings, int wall, const std::vector<double>& panes, double share) {
+    const auto& lab = labTable();
+    const int W = img.width, H = img.height, K = static_cast<int>(meanLab.size() / 3);
+    bool anyOpening = false;
+    for (const auto o : openings) anyOpening = anyOpening || o;
+    const size_t N = static_cast<size_t>(W) * H;
+    PaneGlass r;
+    r.glass.assign(N, 0);
+    std::vector<uint8_t> seen(N, 0);
+    auto wallLike = [&](size_t k) {
+        const double* v = lab.of(img.rgba[k * 4], img.rgba[k * 4 + 1], img.rgba[k * 4 + 2]);
+        int best = 0;
+        double bd = INFINITY;
+        for (int c = 0; c < K; c++) {
+            const double* m = &meanLab[c * 3];
+            const double e0 = v[0] - m[0], e1 = v[1] - m[1], e2 = v[2] - m[2], d = e0 * e0 + e1 * e1 + e2 * e2;
+            if (d < bd) { bd = d; best = c; }
+        }
+        return anyOpening ? !openings[best] : best == wall;
+    };
+    std::vector<size_t> mine;
+    std::vector<uint8_t> isWall;
+    for (size_t i = 0; i + 3 < panes.size(); i += 4) {
+        const int x0 = static_cast<int>(std::max(0.0, js::round(panes[i] * W))), x1 = static_cast<int>(std::min(static_cast<double>(W), js::round(panes[i + 2] * W)));
+        const int y0 = static_cast<int>(std::max(0.0, js::round(panes[i + 1] * H))), y1 = static_cast<int>(std::min(static_cast<double>(H), js::round(panes[i + 3] * H)));
+        mine.clear(); isWall.clear();
+        double walls = 0;
+        for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) {
+            const size_t k = static_cast<size_t>(y) * W + x;
+            if (seen[k] || !img.rgba[k * 4 + 3]) continue;
+            seen[k] = 1; mine.push_back(k);
+            const uint8_t w = wallLike(k) ? 1 : 0;
+            isWall.push_back(w); walls += w;
+        }
+        if (mine.empty()) continue;
+        if (walls >= share * static_cast<double>(mine.size())) { r.stone++; continue; }
+        for (size_t q = 0; q < mine.size(); q++) { if (!isWall[q]) r.glass[mine[q]] = 1; else r.wallTexels++; }
+    }
+    return r;
+}
+
 // ---- planMaterialJob ----
 
 /** One class's library set: its tile's real size and its normal and occlusion/roughness/metalness maps. */
 struct RegionSet { double realSizeX = 1, realSizeY = 1; Image normal, orm; };
 
 /** What every job reads: the classes' CIELAB means, their sets and each set's mean ORM (3 per set). */
-struct PlanContext { std::vector<double> meanLab; std::vector<uint8_t> openings; int wall = 0, grid = 24; std::vector<RegionSet> sets; std::vector<double> setMeans; };
+struct PlanContext { std::vector<double> meanLab; std::vector<uint8_t> openings; int wall = 0, grid = 24; double paneWallShare = 0.5, glassR = 0.08, glassM = 0; std::vector<RegionSet> sets; std::vector<double> setMeans; };
 
 /** A job: its photo, metres per texel, whether it is a rebuilt facade (else a scan piece) and the square's half-side. */
-struct PlanJob { const Image* img = nullptr; double texelM = 0; bool rebuilt = false; int radius = 1; std::vector<uint8_t> open; std::vector<double> elements; std::vector<uint32_t> family; };
+struct PlanJob { const Image* img = nullptr; double texelM = 0; bool rebuilt = false; int radius = 1; std::vector<uint8_t> open; std::vector<double> elements; std::vector<uint32_t> family; std::vector<double> panes; };
 
 struct PlanResult {
     int width = 0, height = 0;
     std::vector<double> classTexels;
-    double folded = 0;
+    double folded = 0, glass = 0, panesOnStone = 0, paneWallTexels = 0;
     std::vector<uint8_t> orm, normal;
 };
 
@@ -363,8 +408,17 @@ inline PlanResult planJob(const PlanJob& job, const PlanContext& ctx) {
             t.n = shrinkTile(s.normal, t.tw, t.th, true); t.o = shrinkTile(s.orm, t.tw, t.th, false);
         }
         r.normal.assign(N * 4, 0);
+        const PaneGlass pg = job.panes.empty() ? PaneGlass{} : paneGlass(img, ctx.meanLab, ctx.openings, ctx.wall, job.panes, ctx.paneWallShare);
+        const uint8_t glassR = js::toUint8(js::round(ctx.glassR * 255)), glassM = js::toUint8(js::round(ctx.glassM * 255));
+        r.panesOnStone = pg.stone; r.paneWallTexels = pg.wallTexels;
         for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
             const size_t k = static_cast<size_t>(y) * W + x;
+            if (!pg.glass.empty() && pg.glass[k]) {
+                r.orm[k * 4] = 255; r.orm[k * 4 + 1] = glassR; r.orm[k * 4 + 2] = glassM; r.orm[k * 4 + 3] = 255;
+                r.normal[k * 4] = 128; r.normal[k * 4 + 1] = 128; r.normal[k * 4 + 2] = 255; r.normal[k * 4 + 3] = 255;
+                r.glass++;
+                continue;
+            }
             const Tile& t = tiles[cls[k]];
             const size_t j = (static_cast<size_t>(y % t.th) * t.tw + (x % t.tw)) * 3;
             for (int c = 0; c < 3; c++) {
