@@ -2577,7 +2577,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const res = await readChain.generate({ contents: [{ role: 'user', parts: [...images.map(p => ({ inlineData: { mimeType: 'image/png', data: p.toString('base64') } })), { text: prompt }] }], config: { responseMimeType: 'application/json', temperature: 0, abortSignal: signal } },
                     { stage: 'grammar', ...VISION_CALL_POLICY.grammar, thinkingBudget: FACADE_READER_MODEL.thinkingBudget, valid: x => facadeReplyUsable(kind, replyText(x), images.length) });
                 const text = replyText(res.response);
-                res.remember();
+                // only a reply the reader can parse is recorded: a malformed one replayed would fail the same plane in every later build
+                if (facadeReplyUsable(kind, text, images.length)) res.remember();
                 return text;
             };
         };

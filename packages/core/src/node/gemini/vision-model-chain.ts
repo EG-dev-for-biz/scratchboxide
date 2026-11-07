@@ -12,7 +12,9 @@
  * facade-detail reading).
  *
  * - Its first call walks the candidate models in order. Only a "model not found" answer moves on to the next one, and
- *   every model passed over is recorded with why (`skipped`). After a model answers, every later call uses it only.
+ *   every model passed over is recorded with why (`skipped`). After a model answers, every later call uses it only,
+ *   except that a reply the caller's check (`valid`) refuses (cut off, malformed) is put to the models behind it for
+ *   that call, the first refused reply returned when every model's is refused.
  * - A transient answer (429 / 5xx, network) retries the same model after 1 s, then 2 s; another model never stands in
  *   for a transient failure.
  * - A call may ask for a thinking budget. The thinking config is computed for the model actually called, at the time
@@ -171,8 +173,8 @@ export interface VisionAttempt {
     thinking?: { level: 'LOW' | 'MEDIUM' | 'HIGH' } | { budget: number };
     ms: number;
     ttftMs?: number;
-    /** 'deadline': the call's deadline (VisionCallOptions.deadlineMs) ended it with no answer. */
-    outcome: 'answered' | 'not_found' | 'retried' | 'failed' | 'stopped' | 'deadline';
+    /** 'deadline': the call's deadline (VisionCallOptions.deadlineMs) ended it with no answer; 'unusable': it answered, but the caller's check (VisionCallOptions.valid) refused the reply, so the next model was asked. */
+    outcome: 'answered' | 'not_found' | 'retried' | 'failed' | 'stopped' | 'deadline' | 'unusable';
     error?: string;
     httpStatus?: number;
     code?: string;
@@ -280,7 +282,11 @@ export interface VisionCallOptions<Stage extends string> {
     hedge?: VisionHedgePolicy;
     /** The call (retries and hedges included) fails with a deadline error when it has no answer this long after it started. */
     deadlineMs?: number;
-    /** Whether an answer is usable (default: it has text). With a hedge out, an unusable answer waits for the other request. */
+    /**
+     * Whether an answer is usable (default: it has text). With a hedge out, an unusable answer waits for the other request;
+     * an unusable answer is then put to the next model of the chain for this call (the chain's model stays), the first
+     * unusable reply returned when every model's is; a recorded reply that fails this check is asked for again.
+     */
     valid?: (response: GenerateContentResponse) => boolean;
 }
 
@@ -597,6 +603,11 @@ export class VisionModelChain<Stage extends string = string> {
         let rec: VisionReplyRecord | undefined;
         try { rec = cache.get(visionRequestKey(params, opts.stage, opts.thinkingBudget, this.options.candidates)); } catch { rec = undefined; }
         if (!rec || (this.model && this.model !== rec.model)) return undefined;
+        // a recorded reply the caller cannot use (recorded before its check, or by a caller without one) is asked for again
+        if (opts.valid && !opts.valid({ candidates: [{ content: { role: 'model', parts: [{ text: rec.text }] } }] } as GenerateContentResponse)) {
+            console.log(`[vision-call] ${opts.stage} ${rec.model}: the recorded reply is unusable; asked again`);
+            return undefined;
+        }
         if (!this.model) {
             for (const s of rec.skipped) if (!this.skipped.some(x => x.model === s.model)) this.skipped.push(s);
             this.model = rec.model;
@@ -628,7 +639,7 @@ export class VisionModelChain<Stage extends string = string> {
 
     /**
      * One call. The first call walks the candidates (only "not found" moves on); later calls use the model that
-     * answered. Throws the factory's error: the last model's failure, "none is served" when every one was not found, or
+     * answered, the models behind it only for a reply `opts.valid` refuses. Throws the factory's error: the last model's failure, "none is served" when every one was not found, or
      * the deadline error (details.deadline) when `deadlineMs` passed with no answer.
      */
     async generate(params: Omit<GenerateContentParameters, 'model'>, opts: VisionCallOptions<Stage>): Promise<VisionCallResult> {
@@ -657,22 +668,36 @@ export class VisionModelChain<Stage extends string = string> {
     }
 
     private async walk(params: Omit<GenerateContentParameters, 'model'>, opts: VisionCallOptions<Stage>, deadline?: AbortSignal): Promise<VisionCallResult> {
-        if (this.model) return this.callOne(this.model, params, opts, deadline);
         const candidates = this.options.candidates;
-        for (let i = this.skipped.length; i < candidates.length; i++) {
-            const model = candidates[i];
+        // the chain's model first (once one has answered), then, only for a reply the caller cannot use, the models behind it
+        const order = this.model ? [this.model, ...candidates.filter(m => m !== this.model && !this.skipped.some(s => s.model === m))] : candidates.slice(this.skipped.length);
+        let unusable: VisionCallResult | undefined;
+        for (const model of order) {
             try {
                 const result = await this.callOne(model, params, opts, deadline);
-                this.model = model;
-                this.answeredVersion = result.response.modelVersion || model;
+                if (!this.model) {
+                    this.model = model;
+                    this.answeredVersion = result.response.modelVersion || model;
+                }
+                // an answer the caller cannot use (cut off, malformed): the next model answers this call; the chain's model
+                // is unchanged, and the first such reply is returned when no model gives a usable one
+                if (opts.valid && !opts.valid(result.response)) {
+                    this.attempts.push({ model, ms: result.ms, outcome: 'unusable', ...(result.thinking ? { thinking: describeThinking(result.thinking) } : {}) });
+                    console.log(`[vision-call] ${opts.stage} ${model} answered, but the reply is unusable${order.indexOf(model) < order.length - 1 ? ': the next model is asked' : ''}`);
+                    unusable ??= result;
+                    continue;
+                }
                 return result;
             } catch (err) {
                 const details = (err as { details?: VisionErrorDetails }).details;
+                // a model asked only because an earlier reply was unusable: its failure does not lose that reply
+                if (unusable && (details?.modelNotFound === true || model !== this.model)) continue;
                 if (details?.modelNotFound !== true) throw err;
                 // calls made in parallel before any model answered each walk the candidates: a model is passed over once
                 if (!this.skipped.some(s => s.model === model)) this.skipped.push({ model, reason: (err as Error).message });
             }
         }
+        if (unusable) return unusable;
         throw this.makeError(opts.stage,
             `None of the chat's models is served: ${this.skipped.map(s => `${s.model} (${s.reason})`).join('; ')}`,
             { skipped: [...this.skipped] });
