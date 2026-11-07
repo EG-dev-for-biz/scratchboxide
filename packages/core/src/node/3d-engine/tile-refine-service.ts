@@ -88,6 +88,12 @@ export interface TileRefineRequest {
      * tile_refine then isolates exactly that footprint on that terrain instead of applying a footprint rule of its own.
      */
     isolatePick?: string;
+    /**
+     * Building footprint rings (a text file inside the workspace, one closed ring per line: x z x z ... in the tile frame;
+     * writeWallFootprints). Their edges are wall-plane candidates for the rectifier, taken only where the scan's walls agree
+     * with them in direction and area; the footprint sets a matched wall's direction, the scan its offset.
+     */
+    wallFootprints?: string;
     /** Also write raw-vs-output thumbnails into the cache entry (adds ~1-2 s). */
     thumbnails?: boolean;
     /**
@@ -164,6 +170,20 @@ const CACHE_VERSION = 'tile_refine/v1';
 const PUBLISH_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const PUBLISH_FILE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\.glb$/;
 const PUBLISH_KINDS: readonly PublishKind[] = ['textured', 'clay', 'rawClay'];
+
+/**
+ * Writes building footprint rings for tile_refine's --wall-footprints (one closed ring per line, x z pairs in the tile
+ * frame) into `dir`, named by their content so an unchanged footprint reuses the cache entry. Returns the file, or
+ * undefined when no ring has three corners.
+ */
+export function writeWallFootprints(dir: string, rings: ReadonlyArray<ReadonlyArray<readonly [number, number]>>): string | undefined {
+    const lines = rings.filter(r => r.length >= 3).map(r => r.map(([x, z]) => `${x.toFixed(3)} ${z.toFixed(3)}`).join(' '));
+    if (!lines.length) return undefined;
+    const text = `# building footprint rings: x z ... (tile frame)\n${lines.join('\n')}\n`;
+    const file = path.join(dir, `wall_footprints_${crypto.createHash('sha256').update(text).digest('hex').slice(0, 16)}.txt`);
+    if (!fs.existsSync(file)) fs.writeFileSync(file, text);
+    return file;
+}
 
 /** The checkout that holds scripts/tile_refine.cpp: walks up from this file, then from cwd. */
 export function findTileRefineRepoRoot(): string {
@@ -386,6 +406,12 @@ export class TileRefineService {
             if (!pickFile || !fs.existsSync(pickFile)) throw new TileRefineError('bad_request', 'isolatePick must be an existing SBIP file');
             cliArgs.push('--isolate-pick', pickFile);
             keyParams.isolatePick = crypto.createHash('sha256').update(fs.readFileSync(pickFile)).digest('hex');
+        }
+        if (req.wallFootprints !== undefined) {
+            const fpFile = typeof req.wallFootprints === 'string' ? resolveWithinRoot(this.workspaceRoot, req.wallFootprints) : '';
+            if (!fpFile || !fs.existsSync(fpFile)) throw new TileRefineError('bad_request', 'wallFootprints must be an existing footprint rings file');
+            cliArgs.push('--wall-footprints', fpFile);
+            keyParams.wallFootprints = crypto.createHash('sha256').update(fs.readFileSync(fpFile)).digest('hex');
         }
         if (req.thumbnails) keyParams.thumbnails = true;
         if (req.reliefOrthos) keyParams.reliefOrthos = true;

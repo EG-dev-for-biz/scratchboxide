@@ -79,6 +79,8 @@ import { glbMeshCounts, plantTrees, summarizeTrees, type LocationClayTrees } fro
 import { treeSpeciesPlaceParams } from '../../../common/spatial/tree-species-library';
 import { TileVegetationError, type TileVegetationPlantRequest, type TileVegetationPlantResult, type TileVegetationStripRequest, type TileVegetationStripResult } from '../tile-vegetation-service';
 import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service';
+import { writeWallFootprints } from '../tile-refine-service';
+import type { Vec2 as FootprintVec2 } from '../../../common/spatial/staged-location-contracts';
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorBuilding, type VectorEvidence } from './vector-footprints';
 import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type DistrictStreetAuditSummary } from './district-residual-audit';
 import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, type InventoryCrown, type SceneInventorySummary } from './scene-inventory';
@@ -434,6 +436,22 @@ export function scanDerivedFootprint(structure: Pick<StructurePickResult, 'outli
  * Where a footprint's loops come from, for the run notes: Google's vector footprint only when every building is one of
  * Google's (a building carrying its own provenance token is not: scanDerivedFootprint's is the scan's outline).
  */
+/**
+ * The outer loops of a structure's footprint for pipeline K: each building's modelled (extruded) parts, else its plan-only
+ * extruded parts, else its plan parts (the vector tile's 2D footprint, `parts`). A building Google publishes as a plan
+ * footprint with no modelled volume still gives its footprint here, instead of K falling back to the scan's outline.
+ */
+export function kFootprintLoops(buildings: ReadonlyArray<Pick<VectorBuilding, 'extruded' | 'parts'>>): FootprintVec2[][] {
+    const loops: FootprintVec2[][] = [];
+    for (const b of buildings) {
+        const modelled = (b.extruded ?? []).filter(p => !p.planOnly).map(p => p.loops[0]).filter(l => l && l.length >= 3);
+        const planned = modelled.length ? modelled : (b.extruded ?? []).map(p => p.loops[0]).filter(l => l && l.length >= 3);
+        const own = planned.length ? planned : (b.parts ?? []).map(p => p[0]).filter(l => l && l.length >= 3);
+        loops.push(...own);
+    }
+    return loops;
+}
+
 export function footprintSource(buildings: ReadonlyArray<Pick<VectorBuilding, 'provenance'>>): string {
     if (buildings.length && buildings.every(b => b.provenance === undefined)) return 'Google vector footprint';
     if (!buildings.length || buildings.some(b => b.provenance === SCAN_FOOTPRINT_TOKEN)) return 'scan outline';
@@ -4578,7 +4596,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // pipeline K: the base cleaned by the structure's footprint (Google's vector footprint, else the scan's own outline),
                 // named by where its loops come from
                 const kBase = pipelineK && isolateMode && structure ? (() => {
-                    const vec = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
+                    const vec = kFootprintLoops(eBuildings);
                     return vec.length ? { loops: vec, source: footprintSource(eBuildings) } : { loops: [structure.outline], source: 'scan outline' };
                 })() : undefined;
                 const kLoops = kBase?.loops;
@@ -4653,9 +4671,15 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     else run.note(PROVENANCE.remeshed, 'object ownership: the geometric rules (footprint and connectivity) decide what belongs to the structure in the first isolate; the multi-view mask vote runs beside the rest of the build and replaces it only when it changes the structure materially');
                 }
                 const reliefOpt = (request.relief ?? TILE_REFINE_RELIEF_DEFAULT) === false ? { relief: false } : {};
+                // pipeline K: the structure's Google footprint edges offered to tile_refine's rectifier as wall planes, before the
+                // facades' orthos are made: a wall the scan agrees runs along an edge takes the edge's direction (its offset stays
+                // the scan's), so every later stage starts from walls registered to the map (scan_rectifier matchFootprintEdges)
+                const kWallFootprints = pipelineK && isolateMode && footprintSource(eBuildings) !== 'scan outline'
+                    ? writeWallFootprints(path.dirname(tilePath), kFootprintLoops(eBuildings)) : undefined;
                 remeshRequest = {
                     tilePath,
                     ...(isolateMode ? { isolate: true, anchor: { x: structure!.seed.x, z: structure!.seed.z }, ...(isolatePick ? { isolatePick } : {}) } : {}),
+                    ...(kWallFootprints ? { wallFootprints: kWallFootprints } : {}),
                     ...reliefOpt
                 };
                 // the facades' orthophotos for the grammar reading (facade-grammar.ts), only when it will run; pipeline K: the relief
