@@ -9,19 +9,12 @@
 
 /**
  * The engine's robust geometry, on real geometry: the constrained Delaunay triangulation (scratchbox_cdt.hpp), the
- * mesh boolean (scratchbox_boolean.hpp), pipeline K's footprint clip by that boolean (scratchbox_footprint_clip.hpp), each through
- * remesh_polish_native. Areas, volumes, open and
+ * mesh boolean (scratchbox_boolean.hpp), each through remesh_polish_native. Areas, volumes, open and
  * non-manifold edges, angles and corner counts are measured on what comes back.
  */
 
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { ensureRemeshPolishBinary, runNativeBoolean, runNativeCdt, type NativeMesh } from '../src/node/3d-engine/staged-location/remesh-polish-native';
-import { clipToFootprint, fillOpenLoops } from '../src/node/3d-engine/staged-location/pipeline-k/lattice-stitch';
-import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
-import { readGlbTriangles } from './helpers/clay-glb-render';
 
 beforeAll(async () => { await ensureRemeshPolishBinary(); }, 900_000);
 
@@ -185,65 +178,5 @@ describe('the robust mesh boolean', () => {
             expect(z).toBeLessThanOrEqual(12 + 1e-9);
         }
         expect(e.open).toBeGreaterThan(0);
-    });
-});
-
-function glbOf(soup: number[]): Uint8Array {
-    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'robust-')), 'm.glb');
-    const positions = Float32Array.from(soup);
-    writeStagedGlbFile(file, [{ name: 'scan', positions, indices: Uint32Array.from({ length: positions.length / 3 }, (_, i) => i) }], {});
-    return fs.readFileSync(file);
-}
-function live(bytes: Uint8Array): V[][] {
-    const t = readGlbTriangles(bytes), out: V[][] = [];
-    for (let i = 0; i + 2 < t.indices.length; i += 3) {
-        const ids = [t.indices[i], t.indices[i + 1], t.indices[i + 2]];
-        if (ids[0] === ids[1] || ids[1] === ids[2] || ids[0] === ids[2]) continue;
-        out.push(ids.map(k => [t.positions[k * 3], t.positions[k * 3 + 1], t.positions[k * 3 + 2]] as V));
-    }
-    return out;
-}
-const area3 = (t: V[]) => { const u = [t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]], v = [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]]; return Math.hypot(u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]) / 2; };
-
-describe("pipeline K's footprint clip by the boolean", () => {
-    // an L-shaped footprint: its inner edges' lines run on through the far walls
-    const L: Array<Array<[number, number]>> = [[[0, 0], [20, 0], [20, 8], [8, 8], [8, 20], [0, 20]]];
-    /** A closed box of walls over [x0, x1] x [z0, z1], 1 m cells, from y 0 to h. */
-    function walls(x0: number, x1: number, z0: number, z1: number, h: number): number[] {
-        const soup: number[] = [];
-        const quad = (a: V, b: V, c: V, d: V) => soup.push(...a, ...b, ...c, ...a, ...c, ...d);
-        for (let y = 0; y < h; y++) {
-            for (let x = x0; x < x1; x++) { quad([x, y, z0], [x + 1, y, z0], [x + 1, y + 1, z0], [x, y + 1, z0]); quad([x + 1, y, z1], [x, y, z1], [x, y + 1, z1], [x + 1, y + 1, z1]); }
-            for (let z = z0; z < z1; z++) { quad([x0, y, z + 1], [x0, y, z], [x0, y + 1, z], [x0, y + 1, z + 1]); quad([x1, y, z], [x1, y, z + 1], [x1, y + 1, z + 1], [x1, y + 1, z]); }
-        }
-        for (let x = x0; x < x1; x++) for (let z = z0; z < z1; z++) { quad([x, h, z], [x, h, z + 1], [x + 1, h, z + 1], [x + 1, h, z]); quad([x, 0, z], [x + 1, 0, z], [x + 1, 0, z + 1], [x, 0, z + 1]); }
-        return soup;
-    }
-
-    it('cuts only where the prism wall crosses the building, leaves no sliver, and agrees with the outline plus the margin', () => {
-        // the scan: a 24 x 24 m box over the L, 6 m high; everything past the L plus 0.3 m goes
-        const scan = glbOf(walls(-2, 22, -2, 22, 6));
-        const m = 0.3;
-        const robust = clipToFootprint(scan, L, m);
-        expect(robust.report.method).toBe('robust boolean');
-        const b = robust.report.boolean!;
-        expect(b).toMatchObject({ unpairedSegments: 0, chainFailures: 0, windingConflicts: 0, nonManifoldAfter: 0, slivers: 0 });
-        // the roof kept is exactly the L pushed out by the margin (mitred): (20.6 x 8.6) + (8.6 x 12)
-        const roof = live(robust.glb).filter(t => t.every(p => Math.abs(p[1] - 6) < 1e-4));
-        expect(roof.reduce((a, t) => a + area3(t), 0)).toBeCloseTo(20.6 * 8.6 + 8.6 * 12, 2);
-        for (const t of live(robust.glb)) for (const p of t) {
-            const inLeg1 = p[0] >= -m - 1e-4 && p[0] <= 20 + m + 1e-4 && p[2] >= -m - 1e-4 && p[2] <= 8 + m + 1e-4;
-            const inLeg2 = p[0] >= -m - 1e-4 && p[0] <= 8 + m + 1e-4 && p[2] >= -m - 1e-4 && p[2] <= 20 + m + 1e-4;
-            expect(inLeg1 || inLeg2).toBe(true);
-        }
-    });
-
-    it('closes completely with the infill after the clip: no open or non-manifold edge left', () => {
-        // a block across the L's long leg: its walls cut at x = -0.3 and 20.3, the cut sections capped by the infill
-        const clipped = clipToFootprint(glbOf(walls(-2, 22, 2, 6, 6)), L, 0.3).glb;
-        const filled = fillOpenLoops(clipped, [], { footprint: L });
-        expect(filled.report.openAfter).toBe(0);
-        expect(filled.report.nonManifoldAfter).toBe(0);
-        expect(filled.report.unclosedLoops).toBe(0);
     });
 });

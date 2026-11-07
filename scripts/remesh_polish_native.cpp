@@ -9,7 +9,7 @@
 
 /**
  * CLI of pipeline K's remesh-polish steps run natively on a fixed thread pool (packages/core/src/node/3d-engine/
- * staged-location/remesh-polish-native.ts drives it; SCRATCHBOX_K_NATIVE without window-fit, wall-grammar, wall-sheets, lattice, cut, stitch, clip, infill or fill-texture keeps that step in TypeScript; the clip natively is the robust boolean, clip-boolean). Data
+ * staged-location/remesh-polish-native.ts drives it; SCRATCHBOX_K_NATIVE without window-fit, wall-grammar, wall-sheets, lattice, cut, stitch, clip, infill or fill-texture keeps that step in TypeScript). Data
  * arrives on stdin as raw little-endian buffers, a header then arrays, never PNG:
  *
  *   remesh_polish_native window-fit <threads>
@@ -62,10 +62,10 @@
  *     out: f64 cutTriangles, removedPieces, keptPieces; per primitive u32 n, u32[n] the cut triangles' first index slots,
  *          u32 verts, f32[verts*3] positions, per attribute f32[verts*comps], f64[3] min, f64[3] max, u32 n, u32[n] indices.
  *
- *   remesh_polish_native clip-boolean <threads>
- *     in:  "SBCB" u32 version (1), f64 marginM, f64 collapseM, u32 nLoops, per loop u32 n, f64[n*2] (plan x z), then the
- *          primitives as `cut` reads them.
- *     out: u32 jsonLen, the report's JSON (scratchbox_footprint_clip.hpp Report), then per primitive as `cut` writes it.
+ *   remesh_polish_native clip <threads>
+ *     in:  "SBCL" u32 version (1), f64 marginM, u32 nLoops, per loop u32 n, f64[n*2] (plan x z), u32 nLines, per line
+ *          f64 ax, az, nx, nz (an outline edge's point and outward normal), then the primitives as `cut` reads them.
+ *     out: f64 cutTriangles, removedTriangles, removedAreaM2 (unrounded), then per primitive as `cut` writes it.
  *
  *   remesh_polish_native boolean <threads>
  *     in:  "SBBO" u32 version (1), u32 op (0 union, 1 intersection, 2 difference, 3 trim inside, 4 trim outside), f64 collapse,
@@ -118,7 +118,8 @@
 #include "scratchbox_facade_lattice.hpp"
 #include "scratchbox_wall_grammar.hpp"
 #include "scratchbox_lattice_cut.hpp"
-#include "scratchbox_footprint_clip.hpp"
+#include "scratchbox_boolean.hpp"
+#include "scratchbox_cdt.hpp"
 #include "scratchbox_lattice_stitch.hpp"
 #include "scratchbox_wall_sheets.hpp"
 #include "scratchbox_fill_texture.hpp"
@@ -483,20 +484,23 @@ int cut(unsigned threads) {
     return 0;
 }
 
-int clipBoolean(unsigned) {
-    expectMagic("SBCB", 1);
-    const double marginM = readOne<double>(), collapseM = readOne<double>();
+int clip(unsigned threads) {
+    expectMagic("SBCL", 1);
+    const double marginM = readOne<double>();
     std::vector<lattice_cut::Loop> loops(readOne<uint32_t>());
     for (auto& loop : loops) {
         const auto v = readDoubles(static_cast<size_t>(readOne<uint32_t>()) * 2);
         for (size_t i = 0; i + 1 < v.size(); i += 2) loop.push_back({v[i], v[i + 1]});
     }
+    std::vector<lattice_cut::ClipLine> lines(readOne<uint32_t>());
+    for (auto& l : lines) { const auto v = readDoubles(4); l = {v[0], v[1], v[2], v[3]}; }
     const auto prims = readCutPrims();
-    footprint_clip::Report report;
-    const auto outs = footprint_clip::clip(prims, loops, marginM, collapseM, report);
-    const std::string json = footprint_clip::reportJson(report);
-    writeOne<uint32_t>(static_cast<uint32_t>(json.size()));
-    writeExact(json.data(), json.size());
+    FixedThreadPool pool(threads);
+    lattice_cut::ClipReport report;
+    const auto outs = lattice_cut::clip(prims, loops, lines, marginM, pool, report);
+    writeOne<double>(report.cutTriangles);
+    writeOne<double>(report.removedTriangles);
+    writeOne<double>(report.removedAreaM2);
     writeCutOuts(outs);
     return 0;
 }
@@ -742,7 +746,7 @@ int innerCore(unsigned threads) {
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|fill-texture|lattice|lattice-audit|wall-grammar|cut|clip-boolean|boolean|cdt|stitch|wall-sheets|inner-core <threads>  (binary input on stdin)\n");
+        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|fill-texture|lattice|lattice-audit|wall-grammar|cut|clip|boolean|cdt|stitch|wall-sheets|inner-core <threads>  (binary input on stdin)\n");
         return 2;
     }
     const std::string cmd = argv[1];
@@ -754,7 +758,7 @@ int main(int argc, char** argv) {
         if (cmd == "lattice-audit") return latticeAudit(threads);
         if (cmd == "wall-grammar") return wallGrammar(threads);
         if (cmd == "cut") return cut(threads);
-        if (cmd == "clip-boolean") return clipBoolean(threads);
+        if (cmd == "clip") return clip(threads);
         if (cmd == "boolean") return booleanCmd(threads);
         if (cmd == "cdt") return cdtCmd(threads);
         if (cmd == "fill-texture") return fillTexture(threads);

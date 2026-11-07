@@ -39,15 +39,10 @@
  * through remesh-polish-native.ts), giving these functions' results bit for bit; SCRATCHBOX_K_NATIVE without `cut`,
  * `stitch`, `clip`, `infill` or `fill-texture` runs them here.
  *
- * The native ports go further than their TypeScript twins in two places (which SCRATCHBOX_K_NATIVE=0 therefore does
- * not reproduce):
- *  - the clip is the robust boolean (scratchbox_footprint_clip.hpp over scratchbox_boolean.hpp): the building trimmed to
- *    one closed prism over the footprint pushed out by the margin, so a triangle is cut only where the prism's wall crosses
- *    it (never along an outline line's far extension) and short cut edges are collapsed: fewer slivers, one open curve
- *    for the fill;
- *  - flat caps are the constrained Delaunay triangulation (scratchbox_cdt.hpp; LATTICE_STITCH_PARAMS.cdtCaps): the loop's
- *    own vertices, exact predicates, the best smallest angles its triangulation can have, earcut only where the loop
- *    crosses itself or where earcut doubles fewer of the surface's own edges.
+ * The native fill goes further than its TypeScript twin in one place (which SCRATCHBOX_K_NATIVE=0 therefore does not
+ * reproduce): flat caps are the constrained Delaunay triangulation (scratchbox_cdt.hpp; LATTICE_STITCH_PARAMS.cdtCaps):
+ * the loop's own vertices, exact predicates, the best smallest angles its triangulation can have, earcut only where the
+ * loop crosses itself or where earcut doubles fewer of the surface's own edges.
  */
 
 import { ShapeUtils, Vector2 } from 'three';
@@ -55,11 +50,10 @@ import type { Vec2 } from '../../../../common/spatial/staged-location-contracts'
 import { outsideFootprint, signedFootprintDistance } from './base-cleanup';
 import { accessorLayout, assembleGlb, parseGlbBytes, readAccessor } from '../glb-bytes';
 import type { FacadeLatticeResult, ReliefFacade } from '../facade-lattice';
-import { nativePolishThreads, runNativeClipBoolean, runNativeCut, runNativeFill, runNativeFillTexture, runNativeStitch, type NativeCutPrim, type NativeFillPrim } from '../remesh-polish-native';
+import { nativePolishThreads, runNativeClip, runNativeCut, runNativeFill, runNativeFillTexture, runNativeStitch, type NativeCutPrim, type NativeFillPrim } from '../remesh-polish-native';
 import { kNative } from './native/native-switch';
 
 export const LATTICE_STITCH_VERSION = 'lattice-stitch/22';
-
 
 export const LATTICE_STITCH_PARAMS = {
     /** The slab of a rebuilt facade cut from the scan: within this of its plane (m). */
@@ -403,15 +397,13 @@ export function clipToFootprint(bytes: Uint8Array, loops: Vec2[][], marginM: num
         if (signedFootprintDistance(mx + nx * 1e-3, mz + nz * 1e-3, loops) < 0) { nx = -nx; nz = -nz; }
         lines.push({ key: `fp${li}.${i}`, ax: a[0], az: a[1], nx, nz, g: v => (v.p[0] - a[0]) * nx + (v.p[2] - a[1]) * nz - marginM });
     }));
-    if (kNative('clip')) {
-        // the robust boolean: trimmed to the prism over the footprint pushed out by the margin, short cut edges collapsed
-        const prims = clipped(readPrims(glb));
-        const r = runNativeClipBoolean(marginM, BOOLEAN_CLIP_COLLAPSE_M, loops, prims.map(nativeCutPrim));
-        const extras = { sbFootprintClip: { version: LATTICE_STITCH_VERSION, method: 'robust boolean', provenance: `as-scanned: the scan trimmed to the footprint's outline plus ${marginM} m (mitred) by the robust boolean, cut points within ${BOOLEAN_CLIP_COLLAPSE_M} m of a neighbour merged into it` } };
-        return { glb: appendNativeCut(glb, dv, prims, r.prims, extras), report: { ...report, cutTriangles: r.report.cutTriangles, removedTriangles: r.report.removedTriangles, removedAreaM2: Math.round(r.report.removedAreaM2), method: 'robust boolean', boolean: r.report } };
-    }
-    // the TypeScript twin (SCRATCHBOX_K_NATIVE without `clip`): the outline lines
     const extras = { sbFootprintClip: { version: LATTICE_STITCH_VERSION, provenance: `as-scanned: the scan cut at the footprint's outline plus ${marginM} m` } };
+    if (kNative('clip')) {
+        // natively: the same pieces, the same report, the area summed in the same order
+        const prims = clipped(readPrims(glb));
+        const r = runNativeClip(marginM, loops, lines, prims.map(nativeCutPrim), opts.threads ?? nativePolishThreads());
+        return { glb: appendNativeCut(glb, dv, prims, r.prims, extras), report: { ...report, cutTriangles: r.report.cutTriangles, removedTriangles: r.report.removedTriangles, removedAreaM2: Math.round(r.report.removedAreaM2) } };
+    }
     const area = (poly: Vx[]) => { let s = 0; for (let k = 1; k + 1 < poly.length; k++) s += Math.hypot(...cross3(sub3(poly[k].p, poly[0].p), sub3(poly[k + 1].p, poly[0].p)) as [number, number, number]) / 2; return s; };
     const centreOutside = (poly: Vx[]) => outside(poly.reduce((a, v) => a + v.p[0], 0) / poly.length, poly.reduce((a, v) => a + v.p[2], 0) / poly.length) > 0;
     const appended: Array<{ pr: PrimRead; polys: Vx[][] }> = [];
@@ -441,10 +433,7 @@ export function clipToFootprint(bytes: Uint8Array, loops: Vec2[][], marginM: num
     return { glb: appendPieces(glb, appended, extras), report };
 }
 
-/** The boolean clip merges a cut point into a neighbour this close (m), where the surface stays valid: no slivers along the cut. */
-export const BOOLEAN_CLIP_COLLAPSE_M = 0.01;
-
-export interface ClipReport { cutTriangles: number; removedTriangles: number; removedAreaM2: number; marginM: number; /** How the clip cut: the robust boolean, or (absent) the outline lines. */ method?: 'robust boolean'; /** The boolean's own report (scratchbox_footprint_clip.hpp): its checks, slivers, open and non-manifold edges after. */ boolean?: Record<string, number>; /** Nodes left uncut (opts.keepNodes): how many, and why. */ keptNodes?: number; keptWhy?: string }
+export interface ClipReport { cutTriangles: number; removedTriangles: number; removedAreaM2: number; marginM: number; /** Nodes left uncut (opts.keepNodes): how many, and why. */ keptNodes?: number; keptWhy?: string }
 
 /** A welded view of a GLB's live triangles: positions, faces, and which faces belong to rebuilt walls. */
 function welded(bytes: Uint8Array, P: LatticeStitchParams): { pos: number[][]; tris: number[][]; wall: number[]; idOf: (p: ArrayLike<number>) => number | undefined } {

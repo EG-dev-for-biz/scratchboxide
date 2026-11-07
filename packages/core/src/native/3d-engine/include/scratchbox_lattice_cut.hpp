@@ -377,9 +377,121 @@ inline std::vector<PrimOut> cut(const std::vector<Prim>& prims, const std::vecto
 }
 
 /** A footprint outline edge's line pushed out by the margin: a point, and the outward normal in plan (x, z). */
+struct ClipLine { double ax, az, nx, nz; };
 using Loop = std::vector<std::array<double, 2>>;
 
+struct ClipReport { double cutTriangles = 0, removedTriangles = 0, removedAreaM2 = 0; };
 
+namespace detail {
+
+/** base-cleanup.ts signedFootprintDistance: a plan point's distance to the footprint's outline, negative inside a loop. */
+inline double signedFootprintDistance(double x, double z, const std::vector<Loop>& loops) {
+    bool inside = false;
+    double best = js::kInf;
+    for (const Loop& loop : loops) {
+        bool inLoop = false;
+        const size_t n = loop.size();
+        for (size_t i = 0, j = n - 1; i < n; j = i++) {
+            const auto& a = loop[i];
+            const auto& b = loop[j];
+            if ((a[1] > z) != (b[1] > z) && x < ((b[0] - a[0]) * (z - a[1])) / (b[1] - a[1]) + a[0]) inLoop = !inLoop;
+            const double dx = b[0] - a[0], dz = b[1] - a[1], l2 = dx * dx + dz * dz;
+            const double t = l2 > 0 ? js::max(0, js::min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / l2)) : 0;
+            best = js::min(best, js::hypot({x - a[0] - t * dx, z - a[1] - t * dz}));
+        }
+        if (inLoop) inside = true;
+    }
+    return inside ? -best : best;
+}
+
+}  // namespace detail
+
+/**
+ * clipToFootprint's geometry for every primitive: each triangle with a corner outside the footprint (pushed out by the
+ * margin) split along every outline line any of its pieces straddles (all its pieces, as the TypeScript splits them),
+ * the pieces whose centre stands outside dropped and their area summed in order.
+ */
+inline std::vector<PrimOut> clip(const std::vector<Prim>& prims, const std::vector<Loop>& loops, const std::vector<ClipLine>& lines, double marginM, FixedThreadPool& pool, ClipReport& report) {
+    using namespace detail;
+    const auto outside = [&](double x, double z) { return signedFootprintDistance(x, z, loops) - marginM; };
+    std::vector<PrimOut> outs(prims.size());
+    std::vector<double> areas;
+    for (size_t pi = 0; pi < prims.size(); ++pi) {
+        const Prim& pr = prims[pi];
+        size_t width = 0;
+        for (int c : pr.comps) width += static_cast<size_t>(c);
+        const size_t nTri = pr.I.size() / 3, chunk = 1024, chunks = (nTri + chunk - 1) / chunk;
+        std::vector<Chunk> parts(chunks);
+        pool.forEach(chunks, [&](size_t c) {
+            Chunk& ch = parts[c];
+            Arena ar;
+            ar.width = width;
+            std::vector<Poly> polys, next, inside;
+            Poly neg, pos;
+            for (size_t tt = c * chunk; tt < std::min(nTri, (c + 1) * chunk); ++tt) {
+                const size_t t = tt * 3;
+                const uint32_t i0 = pr.I[t], i1 = pr.I[t + 1], i2 = pr.I[t + 2];
+                if (i0 == i1 || i1 == i2 || i0 == i2) continue;
+                const auto px = [&](uint32_t src) { return pr.pos[static_cast<size_t>(src) * 3]; };
+                const auto pz = [&](uint32_t src) { return pr.pos[static_cast<size_t>(src) * 3 + 2]; };
+                if (outside(px(i0), pz(i0)) < 0 && outside(px(i1), pz(i1)) < 0 && outside(px(i2), pz(i2)) < 0) continue;
+                loadTriangle(pr, t, ar);
+                polys.assign(1, Poly{0, 1, 2});
+                for (const ClipLine& L : lines) {
+                    const auto g = [&](uint32_t v) { return (ar.P[v * 3] - L.ax) * L.nx + (ar.P[v * 3 + 2] - L.az) * L.nz - marginM; };
+                    bool straddles = false;
+                    for (const Poly& q : polys) {
+                        double lo = js::kInf, hi = -js::kInf;
+                        for (uint32_t v : q) { const double x = g(v); lo = js::min(lo, x); hi = js::max(hi, x); }
+                        if (lo < -1e-9 && hi > 1e-9) { straddles = true; break; }
+                    }
+                    if (!straddles) continue;
+                    next.clear();
+                    for (const Poly& q : polys) {
+                        split(ar, q, g, pr, neg, pos);
+                        if (!neg.empty()) next.push_back(neg);
+                        if (!pos.empty()) next.push_back(pos);
+                    }
+                    polys.swap(next);
+                }
+                const auto centreOutside = [&](const Poly& q) {
+                    double x = 0, z = 0;
+                    for (uint32_t v : q) x += ar.P[v * 3];
+                    for (uint32_t v : q) z += ar.P[v * 3 + 2];
+                    const double n = static_cast<double>(q.size());
+                    return outside(x / n, z / n) > 0;
+                };
+                inside.clear();
+                for (const Poly& q : polys) if (!centreOutside(q)) inside.push_back(q);
+                if (inside.size() == 1 && polys.size() == 1) continue;
+                // the original goes; what lies inside is appended
+                ch.cut.push_back(static_cast<uint32_t>(t));
+                for (const Poly& q : polys) if (centreOutside(q)) {
+                    double s = 0;
+                    for (size_t k = 1; k + 1 < q.size(); ++k) {
+                        const double* p0 = &ar.P[q[0] * 3];
+                        const double* p1 = &ar.P[q[k] * 3];
+                        const double* p2 = &ar.P[q[k + 1] * 3];
+                        const Vec3 u{p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]}, w{p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]};
+                        s += js::hypot({u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]}) / 2;
+                    }
+                    ch.removedArea.push_back(s);
+                }
+                if (!inside.empty()) { ch.rep.cutTriangles++; ch.keep(ar, inside); }
+                else ch.removedTriangles++;
+            }
+        });
+        for (const Chunk& ch : parts) {
+            report.cutTriangles += ch.rep.cutTriangles;
+            report.removedTriangles += ch.removedTriangles;
+            areas.insert(areas.end(), ch.removedArea.begin(), ch.removedArea.end());
+        }
+        weldPieces(pr, width, parts, outs[pi]);
+    }
+    // summed in the TypeScript's order: primitive by primitive, triangle by triangle, piece by piece
+    for (double a : areas) report.removedAreaM2 += a;
+    return outs;
+}
 
 }  // namespace lattice_cut
 }  // namespace scratchbox
