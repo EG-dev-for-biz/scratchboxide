@@ -219,3 +219,47 @@ re-asked where the chain fix changed the answer.
 
 **Not pushed.** Flatiron's panes on stone and Penn 2's holes are above main, so per MAIN's instruction the branch stays
 local (HEAD 61870cab, three commits past the round-two state: 2a52f50e, efa6c043, 61870cab) until MAIN decides.
+
+
+## Round four (MAIN, 2026-11-07: "fix both on the branch")
+
+Two fixes, then all six rebuilt uncached at 332cbc25 with the reader answers kept ($0.93 priced, plus 234k prompt and 78k
+output gemini-4-argon tokens the runner does not price). Builds set aside under `feat-round3b/`.
+
+1. **The template snaps to the plane's own column period** (`facade-reader-template.ts` `templateColumns`,
+   `pipeline-k.ts`). The straightening's measured horizontal repeat (`rectify.json` `periodM`, `periodNcc`) now rides in
+   `facades.json`; a sibling plane's matches are phased on it (their circular mean at the period), each match goes to
+   its nearest column, and when they agree on no phase (circular mean under 0.5: matches half a column apart) the plane
+   is read in full. Without a measured period, two columns closer than an opening refuse the template the same way.
+   Flatiron's facade 6: read in full (262 openings in 4 zones) instead of 551 on a 25-column grid; panes on stone 106 →
+   60 (main 85). Where the template holds it now records the period and the agreement: ESB 39 at 5.54 m (0.99), 13 at
+   5.63 m (0.97); Penn 2's 16 and 25 at 5.95 m (0.93, 1.00); 30 Rock's 15 tiled planes at 2.2-2.7 m (0.57-0.99).
+2. **The ownership vote may not tear** (`orchestrator.ts` `OWNERSHIP_TEAR_TOLERANCE`): the voted remesh replaces the
+   first isolate only when its polished build shows holes on no more of itself (within 0.1 point) and no larger largest
+   hole than the first isolate's, else the geometric isolate stands with `ownership_vote_torn`. Penn 2: "the voted build
+   is more torn than the first isolate (holes on 2.18% of it against 1.33%, the largest 474.9 m² against 86.5 m²)"; its
+   l2v is gone and the build is the first isolate (holes 1.33%, largest 86 m²). Why the vote tore: it took away the
+   podium-level scan around the tower's base that no rebuilt facade covered.
+
+| Building | side | glass % | panes on stone | cells | triangles | bays read + gen | reader planes / windows | holes % | untex % |
+|---|---|---|---|---|---|---|---|---|---|
+| Lever House | main | 1.02 | 28 (+2 bays) | 17,558 | 84,373 | 8 + 0 | 9/41 | 3.20 | 4.34 |
+| | round 4 | 9.43 | **1** | 12,528 | 83,597 | 11 + 1 | 8/16 / 362 | **2.95** | 2.77 |
+| Seagram | main | 7.83 | 204 (+8 bays) | 121,412 | 435,685 | 14 + 0 | 8/34 | 2.21 | 2.67 |
+| | round 4 | 18.45 | **20** | 56,484 | 308,886 | 12 + 0 | 11/12 / 3,373 | **1.73** | 3.23 |
+| ESB | main | 8.35 | 366 (+105 bays) | 162,605 | 863,633 | 192 + 30 | 59/120 | 0.73 | 0.39 |
+| | round 4 | 6.16 | **88** | 161,500 | 922,798 | 184 + 35 | 59/67 / 7,303 | **0.71** | 0.48 |
+| 30 Rock | main | 8.00 | 248 (+79 bays) | 224,797 | 1,098,097 | 328 + 60 | 53/120 | 0.98 | 1.87 |
+| | round 4 | 7.95 | **4** | 246,450 | 1,203,880 | 277 + 57 | 49/63 / 6,088 | **0.51** | 0.52 |
+| Penn 2 | main | 6.57 | 169 (+72 bays) | 210,018 | 970,509 | 42 + 56 | 8/71 | 1.08 | 1.68 |
+| | round 4 | 11.61 | **1** | 74,698 | 444,640 | 48 + 46 | 10/19 / 664 | 1.33 | 1.69 |
+| Flatiron | main | 8.26 | 85 (+3 bays) | 62,296 | 230,456 | 11 + 12 | 6/14 | 0.68 | 4.05 |
+| | round 4 | 9.79 | **60** | 66,353 | 263,125 | 14 + 4 | 5/5 / 601 | 0.84 | 3.95 |
+
+**Against main.** Panes on stone below main on all six. Holes at or below main on four; Penn 2 (1.33 vs 1.08) and
+Flatiron (0.84 vs 0.68) stay above it. The audit's masks (`measureVisibleDefects` with `keepMasks`) show what the
+difference is: on Penn 2, 1-pixel (0.15 m) vertical slits along every recessed window strip in the 180° view, the scan's
+back faces (`relief_m8`, `relief_m11`) showing through the lattice/scan cut line; main has the same slits on the few
+facades where it recesses strips. On Flatiron the extra is a 12 m² region on the wall sheet 10000 at 315° and the corner
+joins. Both are the K cut seam at recessed strips, not the glass path; the large regions (Penn 2's 86 and 70 m², Flatiron's
+43 m²) are the same on both sides. Reported to MAIN for the push decision; not pushed.
