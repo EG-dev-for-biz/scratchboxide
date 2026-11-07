@@ -15,8 +15,11 @@
  *   - Each building is its footprint parts (outer rings and holes) extruded from minHeightMeters to heightMeters above its
  *     base, and Google's modelled 3D volume where it has one (its triangles as given).
  *   - A part with no height in the vector data (AGENTS.md §4 "Believability first, honestly labelled"): its measured
- *     footprint is still drawn, extruded to PLAUSIBLE_DEFAULT_HEIGHT_M, so the first paint shows a believable building
- *     instead of a gap. A building whose every part needed this is labelled `generated` (the height is a plausible guess,
+ *     footprint is still drawn, extruded to the height the place's own measured footprints make plausible for it
+ *     (height-norm.ts: a kernel estimate over plan distance, footprint area and compactness, fitted per place by
+ *     leave-one-out; SCRATCHBOX_HEIGHT_NORM=0 off), else, with too few measured footprints to fit, PLAUSIBLE_DEFAULT_HEIGHT_M,
+ *     so the first paint shows a believable building instead of a gap. One building takes one estimate (its largest unmeasured
+ *     part's, held under the place's own slenderness), so its fragments stand at one height. A building whose every part needed this is labelled `generated` (the height is a plausible guess,
  *     not Google's data); one where only some parts did keeps `vector-modelled` (the building overall is measured). The
  *     counts of parts and buildings given the default height are reported, same as the share left out for falling
  *     outside the requested radius.
@@ -40,8 +43,14 @@ import { massingSpecText, ringArea, simplifyRing, type MassingMesh, type Massing
 import { runMassing, type MassingNode } from './pipeline-e/native-massing';
 import { writeStagedGlbFile, type StagedGlbNode } from './staged-glb-writer';
 import type { VectorBuilding, VectorEvidence } from './vector-footprints';
+import { estimateHeights, fitHeightNorm, footprintNumbers, HEIGHT_NORM_MIN_M, HEIGHT_NORM_VERSION, type HeightEstimate, type HeightNormModel, type NormFootprint, type NormSample } from './height-norm';
 
-export const VECTOR_MASSING_VERSION = 'vector-massing/v1';
+/** The place's height norm for unmeasured footprints (height-norm.ts): on unless SCRATCHBOX_HEIGHT_NORM=0. */
+export function heightNormEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.SCRATCHBOX_HEIGHT_NORM !== '0';
+}
+
+export const VECTOR_MASSING_VERSION = `vector-massing/v1${heightNormEnabled() ? `+${HEIGHT_NORM_VERSION}` : ''}`;
 /** The label of every vector-massing triangle (AGENTS.md §4: measured, vector-modelled, photo-inferred, generated). */
 export const VECTOR_MODELLED_LABEL = 'vector-modelled';
 /** An isolated structure's first paint covers this far around the place (the structure is not known before the tiles). */
@@ -50,7 +59,8 @@ export const VECTOR_ISOLATE_RADIUS_M = 40;
 export const VECTOR_OUTER_MAX_COVERED_SHARE = 0.5;
 /**
  * A footprint part or building with no measured height in the vector data still gets drawn, at this height above its
- * base, so the first paint is a believable building rather than a gap (AGENTS.md §4). About 4 storeys at 3 m each: dense
+ * base when the place has too few measured footprints for a norm of its own (height-norm.ts HEIGHT_NORM_MIN_SAMPLES), so
+ * the first paint is a believable building rather than a gap (AGENTS.md §4). About 4 storeys at 3 m each: dense
  * enough to read as a building at street scale without claiming to know a real one's actual height. Never shown as
  * `vector-modelled`: a guessed height is always labelled `generated`.
  */
@@ -76,20 +86,45 @@ export interface PaintBuilding {
     areaM2: number;
     parts: Array<{ loops: Vec2[][]; minH: number; topH: number; heightGuessed?: boolean }>;
     volumes: Array<{ vertices: Array<[number, number, number]>; indices: number[] }>;
-    /** True when every part's height is PLAUSIBLE_DEFAULT_HEIGHT_M, not Google's data: the building node is labelled `generated`. */
+    /** True when no part's height is Google's data (every part guessed, no volume): the building node is labelled `generated`. */
     heightGuessed?: boolean;
+    /** The place norm's estimate its guessed parts were raised to (absent when the plain default was used). */
+    heightEstimate?: HeightEstimate;
+}
+
+/** The place's height norm as the selection used it: what it was fitted on and how far off it was when tested. */
+export interface PaintHeightNorm {
+    version: string;
+    /** Measured footprints it was fitted on. */
+    samples: number;
+    sigma: HeightNormModel['sigma'];
+    medianM: number;
+    /** Leave-one-out mean absolute error over measured footprints: the norm, and the plain default it replaces. */
+    looMaeM: number;
+    looMaeConstM: number;
+    looByBand: HeightNormModel['looByBand'];
+    /** Height over the square root of plan area that 95% of the place's measured buildings stay under: the estimates' cap. */
+    maxSlenderness: number;
+    /** Guessed buildings the cap lowered. */
+    capped: number;
 }
 
 export interface PaintSelection {
     buildings: PaintBuilding[];
-    /** Footprint parts with no height in the vector data, drawn at PLAUSIBLE_DEFAULT_HEIGHT_M instead. */
+    /** Footprint parts with no height in the vector data, drawn at the norm's estimate (else PLAUSIBLE_DEFAULT_HEIGHT_M) instead. */
     partsGivenDefaultHeight: number;
-    /** Buildings with no measured height anywhere (every part, no volume), drawn at PLAUSIBLE_DEFAULT_HEIGHT_M and labelled `generated`. */
+    /** Buildings with no measured height anywhere (every part, no volume), drawn at the estimate and labelled `generated`. */
     buildingsGivenDefaultHeight: number;
+    /** The place norm used for the guessed heights; absent when off or with too few measured footprints (the plain default then). */
+    heightNorm?: PaintHeightNorm;
+    /** Why the plain default was used instead of the norm, when there were guessed parts. */
+    heightNormSkipped?: string;
     /** Buildings with no footprint shape and no Google volume at all: no evidence one exists here, so nothing is drawn. */
     buildingsWithNoFootprint: number;
     /** Buildings whose centroid lies beyond the requested radius (the vector tiles are whole tiles). */
     outsideRadius: number;
+    /** 2D-only buildings left out because another feature's modelled volume already stands over them (VECTOR_VOLUME_DUPLICATE_SHARE). */
+    buildingsUnderOtherVolume: number;
 }
 
 function outerArea(b: VectorBuilding): { area: number; cx: number; cz: number } {
@@ -106,10 +141,69 @@ function outerArea(b: VectorBuilding): { area: number; cx: number; cz: number } 
     return area > 0 ? { area, cx: cx / area, cz: cz / area } : { area: 0, cx: NaN, cz: NaN };
 }
 
+/**
+ * A 2D-only building at least this share of whose plan lies under another feature's modelled 3D volume is that volume's
+ * own footprint published again under another id (at Penn, 2026-11-07: 85 of the 96 height-less buildings of 30 m² or more
+ * lay under one 81-89 m volume): it is not drawn, since the volume already draws the building at its measured height.
+ */
+export const VECTOR_VOLUME_DUPLICATE_SHARE = 0.5;
+
+/** Leaving out 2D-only footprints under another feature's modelled volume: on unless SCRATCHBOX_VECTOR_VOLUME_DEDUP=0. */
+export function volumeDedupEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.SCRATCHBOX_VECTOR_VOLUME_DEDUP !== '0';
+}
+
+/** Plan triangles of every modelled volume, bucketed on a 4 m grid, with the building that owns each. */
+function volumePlanIndex(ev: VectorEvidence): (x: number, z: number, notOwner: string) => boolean {
+    const C = 4, grid = new Map<string, Array<{ t: number[]; owner: string }>>();
+    for (const b of ev.buildings) for (const v of b.volumes ?? []) {
+        for (let i = 0; i + 2 < v.indices.length; i += 3) {
+            const a = v.vertices[v.indices[i]], c = v.vertices[v.indices[i + 1]], d = v.vertices[v.indices[i + 2]];
+            const t = [a[0], a[2], c[0], c[2], d[0], d[2]];
+            const den = (t[3] - t[5]) * (t[0] - t[4]) + (t[4] - t[2]) * (t[1] - t[5]);
+            if (Math.abs(den) < 1e-6) continue;
+            const x0 = Math.floor(Math.min(t[0], t[2], t[4]) / C), x1 = Math.floor(Math.max(t[0], t[2], t[4]) / C);
+            const z0 = Math.floor(Math.min(t[1], t[3], t[5]) / C), z1 = Math.floor(Math.max(t[1], t[3], t[5]) / C);
+            for (let gx = x0; gx <= x1; gx++) for (let gz = z0; gz <= z1; gz++) {
+                const k = `${gx},${gz}`;
+                const l = grid.get(k) ?? [];
+                l.push({ t, owner: b.id });
+                grid.set(k, l);
+            }
+        }
+    }
+    return (x, z, notOwner) => {
+        for (const { t, owner } of grid.get(`${Math.floor(x / C)},${Math.floor(z / C)}`) ?? []) {
+            if (owner === notOwner) continue;
+            const den = (t[3] - t[5]) * (t[0] - t[4]) + (t[4] - t[2]) * (t[1] - t[5]);
+            const l1 = ((t[3] - t[5]) * (x - t[4]) + (t[4] - t[2]) * (z - t[5])) / den;
+            const l2 = ((t[5] - t[1]) * (x - t[4]) + (t[0] - t[4]) * (z - t[5])) / den;
+            if (l1 >= 0 && l2 >= 0 && l1 + l2 <= 1) return true;
+        }
+        return false;
+    };
+}
+
+/** Share of `loops`' plan (sampled on a grid of at most about 400 points) that lies under another building's volume. */
+function shareUnderOtherVolume(parts: Array<{ loops: Vec2[][] }>, owner: string, under: (x: number, z: number, notOwner: string) => boolean): number {
+    const xs = parts.flatMap(p => p.loops[0] ?? []);
+    if (!xs.length) return 0;
+    const x0 = Math.min(...xs.map(q => q[0])), x1 = Math.max(...xs.map(q => q[0])), z0 = Math.min(...xs.map(q => q[1])), z1 = Math.max(...xs.map(q => q[1]));
+    const step = Math.max(0.5, Math.sqrt(((x1 - x0) * (z1 - z0)) / 400));
+    let n = 0, hit = 0;
+    for (let x = x0 + step / 2; x < x1; x += step) for (let z = z0 + step / 2; z < z1; z += step) {
+        if (!parts.some(p => inLoopsEvenOdd(x, z, p.loops))) continue;
+        n++;
+        if (under(x, z, owner)) hit++;
+    }
+    return n ? hit / n : 0;
+}
+
 /** The buildings within `radiusM` of the place that have something to draw, and what was left out. */
-export function selectPaintBuildings(ev: VectorEvidence, radiusM: number): PaintSelection {
+export function selectPaintBuildings(ev: VectorEvidence, radiusM: number, opts: { heightNorm?: boolean; volumeDedup?: boolean } = {}): PaintSelection {
     const out: PaintBuilding[] = [];
-    let partsGivenDefaultHeight = 0, buildingsGivenDefaultHeight = 0, buildingsWithNoFootprint = 0, outsideRadius = 0;
+    let partsGivenDefaultHeight = 0, buildingsGivenDefaultHeight = 0, buildingsWithNoFootprint = 0, outsideRadius = 0, buildingsUnderOtherVolume = 0;
+    const under = (opts.volumeDedup ?? volumeDedupEnabled()) && ev.buildings.some(b => b.volumes?.length) ? volumePlanIndex(ev) : undefined;
     for (const b of ev.buildings) {
         const { area, cx, cz } = outerArea(b);
         const volumes = (b.volumes ?? []).filter(v => v.vertices.length >= 4 && v.indices.length >= 12);
@@ -136,11 +230,79 @@ export function selectPaintBuildings(ev: VectorEvidence, radiusM: number): Paint
         // whose existence and extent we have no evidence for (distinct from one whose extent is known but height is not).
         if (!parts.length && !volumes.length) { buildingsWithNoFootprint++; continue; }
         const heightGuessed = parts.length > 0 && parts.every(p => p.heightGuessed) && !volumes.length;
+        // a 2D-only footprint under another feature's modelled volume is that volume's plan again: the volume draws it, measured
+        if (heightGuessed && under && shareUnderOtherVolume(parts, b.id, under) >= VECTOR_VOLUME_DUPLICATE_SHARE) {
+            buildingsUnderOtherVolume++;
+            partsGivenDefaultHeight -= parts.length;
+            continue;
+        }
         if (heightGuessed) buildingsGivenDefaultHeight++;
         out.push({ id: b.id, centroid, areaM2: area, parts, volumes: volumes.map(v => ({ vertices: v.vertices.map(q => [q[0], q[1], q[2]] as [number, number, number]), indices: v.indices.slice() })), heightGuessed });
     }
     out.sort((a, b) => Math.hypot(a.centroid[0], a.centroid[1]) - Math.hypot(b.centroid[0], b.centroid[1]) || (a.id < b.id ? -1 : 1));
-    return { buildings: out, partsGivenDefaultHeight, buildingsGivenDefaultHeight, buildingsWithNoFootprint, outsideRadius };
+    const norm = partsGivenDefaultHeight ? applyHeightNorm(ev, out, opts.heightNorm ?? heightNormEnabled()) : {};
+    return { buildings: out, partsGivenDefaultHeight, buildingsGivenDefaultHeight, buildingsWithNoFootprint, outsideRadius, buildingsUnderOtherVolume, ...norm };
+}
+
+/**
+ * The guessed parts raised (or lowered) from PLAUSIBLE_DEFAULT_HEIGHT_M to the place norm's estimate: fitted on every
+ * measured ground-standing part in the evidence (a part on a podium, minHeightM > 0, is not a height from the ground), one
+ * estimate per building from its largest guessed part. Parts are the norm's unit because whole-building samples did worse
+ * on the real unmeasured buildings at Penn (docs/research/2026-11-07-architectural-norms.md); but a tower's thin setback
+ * parts make small parts look tall, so the estimate is held under the slenderness (height over the square root of the whole
+ * plan) that 95% of the place's measured whole buildings stay under: a kiosk-sized footprint is not drawn as a needle.
+ * Never below a part's own floor; measured parts are untouched.
+ */
+function applyHeightNorm(ev: VectorEvidence, buildings: PaintBuilding[], on: boolean): Pick<PaintSelection, 'heightNorm' | 'heightNormSkipped'> {
+    if (!on) return { heightNormSkipped: 'the height norm is off (SCRATCHBOX_HEIGHT_NORM=0)' };
+    const wholeOf = (parts: Array<{ loops: Vec2[][] }>): NormFootprint | undefined => {
+        let largest: NormFootprint | undefined, area = 0;
+        for (const p of parts) {
+            const f = footprintNumbers(p.loops);
+            if (!f) continue;
+            area += f.areaM2;
+            if (!largest || f.areaM2 > largest.areaM2) largest = f;
+        }
+        return largest && { ...largest, areaM2: area };
+    };
+    const samples: NormSample[] = [];
+    const slender: number[] = [];
+    for (const b of ev.buildings) {
+        for (const p of b.extruded ?? []) {
+            if (p.planOnly || p.heightM === undefined || (p.minHeightM ?? 0) > 0 || !(p.heightM > 0)) continue;
+            const f = footprintNumbers(p.loops);
+            if (f) samples.push({ ...f, heightM: p.heightM });
+        }
+        const ground = (b.extruded ?? []).filter(p => !p.planOnly && !((p.minHeightM ?? 0) > 0));
+        if (!ground.length || ground.some(p => !(p.heightM !== undefined && p.heightM > 0))) continue;
+        const whole = wholeOf(ground);
+        if (whole) slender.push(Math.max(...ground.map(p => p.heightM!)) / Math.sqrt(whole.areaM2));
+    }
+    const model = fitHeightNorm(samples, { constantM: PLAUSIBLE_DEFAULT_HEIGHT_M });
+    if (!model || !slender.length) return { heightNormSkipped: `only ${samples.length} measured footprint${samples.length === 1 ? '' : 's'} nearby to fit a norm on: the plain ${PLAUSIBLE_DEFAULT_HEIGHT_M} m default was used` };
+    slender.sort((x, y) => x - y);
+    const maxSlender = slender[Math.min(slender.length - 1, Math.floor(slender.length * 0.95))];
+    const targets: Array<{ b: PaintBuilding; f: NormFootprint; wholeM2: number }> = [];
+    for (const b of buildings) {
+        let best: NormFootprint | undefined;
+        for (const p of b.parts) {
+            if (!p.heightGuessed) continue;
+            const f = footprintNumbers(p.loops);
+            if (f && (!best || f.areaM2 > best.areaM2)) best = f;
+        }
+        const whole = wholeOf(b.parts.filter(p => p.heightGuessed));
+        if (best && whole) targets.push({ b, f: best, wholeM2: whole.areaM2 });
+    }
+    const est = estimateHeights(model, targets.map(t => t.f));
+    let capped = 0;
+    targets.forEach(({ b, wholeM2 }, i) => {
+        const cap = Math.max(HEIGHT_NORM_MIN_M, Math.round(maxSlender * Math.sqrt(wholeM2) * 10) / 10);
+        const e = est[i].heightM > cap ? { ...est[i], heightM: cap, lowM: Math.min(est[i].lowM, cap), highM: cap } : est[i];
+        if (e !== est[i]) capped++;
+        b.heightEstimate = e;
+        for (const p of b.parts) if (p.heightGuessed) p.topH = Math.max(p.minH + HEIGHT_NORM_MIN_M, e.heightM);
+    });
+    return { heightNorm: { version: model.version, samples: model.samples.length, sigma: model.sigma, medianM: model.medianM, looMaeM: model.looMaeM, looMaeConstM: model.looMaeConstM, looByBand: model.looByBand, maxSlenderness: Math.round(maxSlender * 100) / 100, capped } };
 }
 
 /** Geodetic position of a frame point (x east, z south) of the place. */
@@ -323,8 +485,17 @@ export function paintProvenance(note: string, sourceId: string): ProvenanceRecor
     };
 }
 
-/** The provenance record of a first-paint building whose footprint is measured but whose height is PLAUSIBLE_DEFAULT_HEIGHT_M. */
-export function paintGeneratedHeightProvenance(sourceId: string): ProvenanceRecord {
+/**
+ * The provenance record of a first-paint building whose footprint is measured but whose height is a plausible guess: the
+ * place norm's estimate when `norm` is given (its tested error in the method), else PLAUSIBLE_DEFAULT_HEIGHT_M.
+ */
+export function paintGeneratedHeightProvenance(sourceId: string, norm?: PaintHeightNorm): ProvenanceRecord {
+    if (norm) return {
+        label: GENERATED_HEIGHT_LABEL, measuredGeometry: false, confidence: 0.35,
+        method: `the measured footprint extruded to the height the place's own ${norm.samples} measured footprints make plausible for it (${norm.version}: a kernel estimate over plan distance, footprint area and compactness, believability first, AGENTS.md §4); tested by leaving each measured footprint out, it was off by ${norm.looMaeM} m on average where the plain ${PLAUSIBLE_DEFAULT_HEIGHT_M} m default was off by ${norm.looMaeConstM} m`,
+        sources: [{ kind: 'vector-data', id: sourceId }],
+        note: 'no height in the vector data; shown at an estimate from the measured buildings around it, not measured'
+    };
     return {
         label: GENERATED_HEIGHT_LABEL, measuredGeometry: false, confidence: 0.2,
         method: `the measured footprint extruded to a plausible default of ${PLAUSIBLE_DEFAULT_HEIGHT_M} m (believability first, AGENTS.md §4): the vector data has no height for this building`,

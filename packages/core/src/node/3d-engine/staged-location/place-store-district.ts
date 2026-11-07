@@ -190,7 +190,7 @@ export async function auditDistrictForPlace(input: DistrictAuditInput): Promise<
             try {
                 const reach = plan.radiusM + NEIGHBOUR_REACH_M;
                 const ev = await input.vectorEvidence({ lat: input.place.lat, lng: input.place.lng, radiusM: reach });
-                const extra = districtFootprints(selectPaintBuildings(ev, reach).buildings).filter(f => !planned.has(f.id));
+                const extra = districtFootprints(selectPaintBuildings(ev, reach, { heightNorm: false }).buildings).filter(f => !planned.has(f.id));
                 buildings.push(...extra);
                 neighbours = extra.length;
             } catch (err) {
