@@ -3635,6 +3635,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     // ---- 5e. Map data view: blob groups, Google vector data and the roadmap over the scene (MapDataControl.tsx) ----
     const mapData = useMapDataView({
         stackRef, sceneData,
+        sceneRootsKey: JSON.stringify(externalLoadStatus),
         sceneRoots: () => {
             const scene = stackRef.current?.scene;
             return [

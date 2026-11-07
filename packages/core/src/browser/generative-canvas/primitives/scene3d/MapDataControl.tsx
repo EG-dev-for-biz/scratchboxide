@@ -54,8 +54,8 @@ function modelUris(scene: Scene3DData): string[] {
  * Loads and draws the map data for the scene while the view is on. `sceneRoots` are the scene's own drawn roots (models,
  * generated geometry), hidden while the blob groups draw the same surface.
  */
-export function useMapDataView(opts: { stackRef: React.MutableRefObject<RendererStack | null>; sceneData: Scene3DData; sceneRoots: () => THREE.Object3D[] }): MapDataViewState {
-    const { stackRef, sceneData, sceneRoots } = opts;
+export function useMapDataView(opts: { stackRef: React.MutableRefObject<RendererStack | null>; sceneData: Scene3DData; sceneRoots: () => THREE.Object3D[]; /** Changes when the scene's models load or unload. */ sceneRootsKey?: string }): MapDataViewState {
+    const { stackRef, sceneData, sceneRoots, sceneRootsKey } = opts;
     const cfg = sceneData.mapDataView;
     const on = !!cfg?.on;
     const layerRef = React.useRef<MapDataLayer | null>(null);
@@ -187,7 +187,7 @@ export function useMapDataView(opts: { stackRef: React.MutableRefObject<Renderer
         const hide = layers.blobs && blobs.status === 'ready' && (cfg?.hideSceneUnderBlobs ?? true);
         layer.hideSceneRoots(hide ? sceneRoots() : [], hide);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [on, layersKey, hiddenKey, blobs.status, vector.status, roadmap.status, cfg?.hideSceneUnderBlobs, sceneKey]);
+    }, [on, layersKey, hiddenKey, blobs.status, vector.status, roadmap.status, cfg?.hideSceneUnderBlobs, sceneKey, sceneRootsKey]);
 
     // line widths follow the canvas size
     React.useEffect(() => {
@@ -262,7 +262,7 @@ export function MapDataControl({ state, mutateSceneData }: MapDataControlProps):
         const v = layerOn({ on: true, layers: cfg?.layers }, l);
         return (
             <div className="sb-cam-row" key={l} style={{ justifyContent: 'space-between' }}>
-                <span className="sb-cam-label">{LAYER_TITLES[l]}</span>
+                <span className="sb-cam-label" style={{ flex: 1, whiteSpace: 'nowrap', width: 'auto' }}>{LAYER_TITLES[l]}</span>
                 <button type="button" role="switch" aria-checked={v} aria-label={LAYER_TITLES[l]} data-testid={`sb-map-layer-${l}`}
                     className={`sb-cam-switch ${v ? 'sb-cam-switch-on' : ''}`} onClick={() => toggleLayer(l)}><span className="sb-cam-switch-knob" /></button>
             </div>
@@ -336,7 +336,7 @@ export function MapDataControl({ state, mutateSceneData }: MapDataControlProps):
                                 <div className="sb-cam-note">{layerOn(cfg, 'roadmap') ? status(state.roadmap, `${state.roadmap.tiles} Google Map Tiles (2D roadmap) draped on the measured ground. ${state.roadmap.attribution ?? ''}`) : 'Switch the roadmap layer on to drape Google\'s 2D roadmap on the ground.'}</div>
                             </div>
                             <div className="sb-cam-row" style={{ justifyContent: 'space-between' }}>
-                                <span className="sb-cam-label">Hide the scene under the blob groups</span>
+                                <span className="sb-cam-label" style={{ flex: 1, width: 'auto' }}>Hide the scene under the blob groups</span>
                                 <button type="button" role="switch" aria-checked={cfg?.hideSceneUnderBlobs ?? true} aria-label="Hide the scene under the blob groups"
                                     className={`sb-cam-switch ${(cfg?.hideSceneUnderBlobs ?? true) ? 'sb-cam-switch-on' : ''}`} onClick={() => set({ hideSceneUnderBlobs: !(cfg?.hideSceneUnderBlobs ?? true) })}><span className="sb-cam-switch-knob" /></button>
                             </div>

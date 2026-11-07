@@ -101,7 +101,7 @@ export class MapDataLayer {
             geom.setIndex(new THREE.BufferAttribute(list, 1));
             geom.computeBoundingSphere();
             geom.computeBoundingBox();
-            const mat = new THREE.MeshLambertMaterial({ color: colours.get(g.label)!, flatShading: true, side: THREE.DoubleSide });
+            const mat = new THREE.MeshStandardMaterial({ color: colours.get(g.label)!, roughness: 0.85, metalness: 0, flatShading: true, toneMapped: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
             const mesh = new THREE.Mesh(geom, mat);
             mesh.name = `sb-map-blob-group:${g.label}`;
             mesh.userData = { mapBlobGroup: g.label };
@@ -130,18 +130,24 @@ export class MapDataLayer {
     /** Draws the vector overlay on the measured ground; returns the legend rows of the areas (by most specific code). */
     setVector(o: MapVectorOverlay, heightAt: (x: number, z: number) => number, resolution: THREE.Vector2): MapLegendRow[] {
         for (const l of ['roads', 'footprints', 'areas', 'rails', 'pois'] as LayerKey[]) this.clear(l);
-        const lineLayer = (segments: number[], colour: string, widthPx: number, name: string, dashed = false): LineSegments2 | undefined => {
+        // a line layer: drawn where it is in front, plus a faint copy through what stands over it (a footprint under its roof)
+        const lineLayer = (segments: number[], colour: string, widthPx: number, name: string, dashed = false): THREE.Group | undefined => {
             if (!segments.length) return undefined;
             const geom = new LineSegmentsGeometry();
             geom.setPositions(segments);
-            const mat = new LineMaterial({ color: colour, linewidth: widthPx, worldUnits: false, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false, dashed, dashSize: 3, gapSize: 2 });
-            mat.resolution.copy(resolution);
-            this.lineMaterials.push(mat);
-            const line = new LineSegments2(geom, mat);
-            if (dashed) line.computeLineDistances();
-            line.name = name;
-            line.renderOrder = 20;
-            return line;
+            const group = new THREE.Group();
+            group.name = name;
+            for (const [front, opacity] of [[true, 0.95], [false, 0.25]] as Array<[boolean, number]>) {
+                const mat = new LineMaterial({ color: colour, linewidth: widthPx, worldUnits: false, transparent: true, opacity, depthTest: front, depthWrite: false, toneMapped: false, dashed, dashSize: 3, gapSize: 2 });
+                mat.resolution.copy(resolution);
+                this.lineMaterials.push(mat);
+                const line = new LineSegments2(geom, mat);
+                if (dashed) line.computeLineDistances();
+                line.name = `${name}${front ? '' : ':through'}`;
+                line.renderOrder = front ? 21 : 20;
+                group.add(line);
+            }
+            return group;
         };
         const drape = (pts: MapVec2[], lift: number, out: number[], closed = false) => {
             const d = densify(closed && pts.length > 2 ? [...pts, pts[0]] : pts, 3);
@@ -172,7 +178,7 @@ export class MapDataLayer {
             geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
             geom.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
             geom.setIndex(idx);
-            const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+            const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
             mesh.name = 'sb-map-carriageways';
             mesh.renderOrder = 6;
             this.layers.roads.add(mesh);
@@ -208,7 +214,7 @@ export class MapDataLayer {
             if (!pos.length) return;
             const geom = new THREE.BufferGeometry();
             geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-            const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color: colours.get(k)!, transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+            const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color: colours.get(k)!, toneMapped: false, transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
             mesh.name = `sb-map-area:${k}`;
             mesh.renderOrder = 5 + order * 0.01;
             this.areaMeshes.set(k, mesh);
@@ -333,7 +339,7 @@ export class MapDataLayer {
 function labelSprite(text: string, kind: string): THREE.Sprite {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d')!;
-    const px = 28, pad = 10;
+    const px = 24, pad = 8;
     ctx.font = `600 ${px}px system-ui, -apple-system, sans-serif`;
     const w = Math.ceil(ctx.measureText(text).width) + pad * 2 + 18, h = px + pad * 2;
     canvas.width = w; canvas.height = h;
@@ -351,7 +357,7 @@ function labelSprite(text: string, kind: string): THREE.Sprite {
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, depthWrite: false, sizeAttenuation: false, transparent: true }));
-    const s = 0.032;
+    const s = 0.016;
     sprite.scale.set((s * w) / h, s, 1);
     sprite.center.set(0, 0.5);
     sprite.renderOrder = 30;
