@@ -1,0 +1,296 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
+ *
+ * Kelvinlet deformer checks on real meshes (a UV sphere and a revolved vase), printed as one JSON object for
+ * packages/core/test/kelvinlet-deformer.test.ts. With an output directory it also writes the proof meshes: each
+ * shape untouched, under the shaper's plain-falloff brushes and under the Kelvinlet loads (grab, twist, pinch).
+ ********************************************************************************/
+
+#include "scratchbox_kelvinlet.hpp"
+#include "scratchbox_shaper.hpp"
+#include "scratchbox_io.hpp"
+
+#include <cmath>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
+
+using namespace scratchbox;
+using math::Vec2;
+using math::Vec3;
+using math::Vec4;
+using geometry::ScratchboxMesh;
+namespace kv = scratchbox::kelvinlet;
+
+static double signedVolume(const ScratchboxMesh& m) {
+    double v = 0;
+    for (size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+        const Vec3& a = m.vertices[m.indices[i]].position;
+        const Vec3& b = m.vertices[m.indices[i + 1]].position;
+        const Vec3& c = m.vertices[m.indices[i + 2]].position;
+        v += (double)a.x * ((double)b.y * c.z - (double)b.z * c.y)
+           - (double)a.y * ((double)b.x * c.z - (double)b.z * c.x)
+           + (double)a.z * ((double)b.x * c.y - (double)b.y * c.x);
+    }
+    return v / 6.0;
+}
+
+static ScratchboxMesh sphere() { return geometry::ScratchboxMesh::createSphere(1.0f, 97, 193); }
+
+/** A generated object: a vase revolved from a profile with a swelling body, a neck and a lip. */
+static ScratchboxMesh vase() {
+    std::vector<Vec2> profile;
+    const int n = 121;
+    for (int i = 0; i < n; ++i) {
+        const float t = (float)i / (n - 1);
+        const float y = t * 2.0f;
+        float r = 0.32f + 0.38f * std::sin(math::PI * std::min(1.0f, t / 0.8f)) - 0.12f * std::exp(-std::pow((t - 0.86f) / 0.05f, 2.0f))
+                + 0.08f * std::exp(-std::pow((t - 0.97f) / 0.03f, 2.0f));
+        if (i == 0 || i == n - 1) r = 0.0f;
+        profile.push_back(Vec2(r, y));
+    }
+    ScratchboxMesh m = shaper::Lathe3D::revolve(profile, 160, math::TWO_PI, Vec4(0.8f, 0.8f, 0.8f, 1.0f));
+    for (auto& v : m.vertices) v.position.y -= 1.0f;  // centred on the origin
+    m.recomputeSmoothNormals();
+    m.recomputeBounds();
+    return m;
+}
+
+static size_t nearestVertex(const ScratchboxMesh& m, const Vec3& p) {
+    size_t best = 0;
+    float bd = 1e30f;
+    for (size_t i = 0; i < m.vertices.size(); ++i) {
+        const float d = (m.vertices[i].position - p).lengthSq();
+        if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+}
+
+/** Plain-falloff twist for the comparison: cross-sections near the point turn by angle x smoothstep falloff. */
+static void plainTwist(ScratchboxMesh& m, const Vec3& c, const Vec3& axis, float angle, float radius) {
+    const Vec3 n = axis.normalized();
+    for (auto& v : m.vertices) {
+        const Vec3 r = v.position - c;
+        const float w = shaper::SculptEngine::evaluateFalloff(r.length(), radius, shaper::SculptFalloff::Smoothstep);
+        if (w <= 0.0f) continue;
+        const float a = angle * w, cs = std::cos(a), sn = std::sin(a);
+        v.position = c + r * cs + n.cross(r) * sn + n * (n.dot(r) * (1.0f - cs));
+    }
+    m.recomputeSmoothNormals();
+    m.recomputeBounds();
+}
+
+static void writeGlb(const ScratchboxMesh& m, const std::string& path) {
+    const std::vector<uint8_t> bytes = io::GlbWriter::writeGlb(m);
+    std::ofstream f(path, std::ios::binary);
+    f.write(reinterpret_cast<const char*>(bytes.data()), (std::streamsize)bytes.size());
+}
+
+int main(int argc, char** argv) {
+    const std::string outDir = argc > 1 ? argv[1] : "";
+    std::ostringstream js;
+    js.precision(9);
+    js << "{";
+
+    // 1. A grab moves the load point by the asked displacement (the sphere's pole vertex, a big drag).
+    {
+        ScratchboxMesh m = sphere();
+        const size_t pole = nearestVertex(m, Vec3(0, 1, 0));
+        const Vec3 p0 = m.vertices[pole].position;
+        const Vec3 d(0.25f, 0.9f, -0.1f);
+        kv::Options o; o.epsilon = 0.4f;
+        const kv::Report rep = kv::deformMesh(m, kv::Load::grab(p0, d), o);
+        const Vec3 moved = m.vertices[pole].position - p0;
+        js << "\"grab\":{\"asked\":[" << d.x << "," << d.y << "," << d.z << "],\"moved\":[" << moved.x << "," << moved.y << "," << moved.z
+           << "],\"error\":" << (moved - d).length() << ",\"steps\":" << rep.steps << "},";
+    }
+
+    // 2. Decay with distance: the closed-form field against the formula written out here, and the far-field slope
+    //    for one, two and three scales (sharp localisation).
+    {
+        const double eps = 0.5, nu = 0.5;
+        const double a = 1.0 / (4.0 * math::PI), b = a / (4.0 * (1.0 - nu));
+        const Vec3 c(0, 0, 0), d(0, 0.01f, 0);  // a small move: the linear regime
+        kv::Options o; o.epsilon = (float)eps; o.poissonRatio = (float)nu;
+        double maxRelErr = 0;
+        js << "\"decay\":{\"samples\":[";
+        bool first = true;
+        for (double r : {0.0, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0}) {
+            const double re = std::sqrt(r * r + eps * eps);
+            const double A = (a - b) / re + a * eps * eps / (2 * re * re * re);
+            const double A0 = (3 * a - 2 * b) / (2 * eps);
+            const double B = b / (re * re * re);
+            const double perp = A / A0;               // |u| / |d| perpendicular to the move
+            const double along = (A + B * r * r) / A0; // along the move
+            const Vec3 up = kv::displacementAt(Vec3((float)r, 0, 0), kv::Load::grab(c, d), o);
+            const Vec3 ua = kv::displacementAt(Vec3(0, (float)r, 0), kv::Load::grab(c, d), o);
+            const double gotPerp = up.length() / d.length(), gotAlong = ua.length() / d.length();
+            maxRelErr = std::max({maxRelErr, std::abs(gotPerp - perp) / perp, std::abs(gotAlong - along) / along});
+            js << (first ? "" : ",") << "{\"r\":" << r << ",\"perp\":" << gotPerp << ",\"perpFormula\":" << perp
+               << ",\"along\":" << gotAlong << ",\"alongFormula\":" << along << "}";
+            first = false;
+        }
+        js << "],\"maxRelErr\":" << maxRelErr << ",\"slopes\":[";
+        for (int sc = 1; sc <= 3; ++sc) {
+            kv::Options os = o; os.falloffScales = sc; os.falloffRatio = 1.5f;
+            const double r1 = 20.0, r2 = 40.0;
+            const double u1 = kv::displacementAt(Vec3((float)r1, 0, 0), kv::Load::grab(c, d), os).length();
+            const double u2 = kv::displacementAt(Vec3((float)r2, 0, 0), kv::Load::grab(c, d), os).length();
+            js << (sc > 1 ? "," : "") << std::log(u2 / u1) / std::log(r2 / r1);
+        }
+        js << "],";
+        // Integrated small grab on the mesh against the closed form at each vertex.
+        ScratchboxMesh m = sphere();
+        std::vector<Vec3> before;
+        for (auto& v : m.vertices) before.push_back(v.position);
+        const Vec3 lp(0, 1, 0), dd(0.001f, 0.002f, 0.0f);
+        kv::Options om; om.epsilon = 0.5f;
+        kv::deformMesh(m, kv::Load::grab(lp, dd), om);
+        double worst = 0;
+        for (size_t i = 0; i < before.size(); ++i) {
+            const Vec3 want = kv::displacementAt(before[i], kv::Load::grab(lp, dd), om);
+            const Vec3 got = m.vertices[i].position - before[i];
+            worst = std::max(worst, (double)(got - want).length() / dd.length());
+        }
+        js << "\"meshVsFormula\":" << worst << "},";
+    }
+
+    // 3. Volume: nu = 0.5 keeps it (the field is divergence free), a compressible material does not.
+    {
+        js << "\"volume\":{";
+        for (float nu : {0.5f, 0.2f}) {
+            ScratchboxMesh m = sphere();
+            const double v0 = signedVolume(m);
+            const Vec3 p = Vec3(0.6f, 0.3f, 0.74f).normalized();
+            kv::Options o; o.epsilon = 0.5f; o.poissonRatio = nu;
+            kv::deformMesh(m, kv::Load::grab(p, p * 0.5f), o);
+            const double vg = signedVolume(m);
+            ScratchboxMesh q = sphere();
+            kv::deformMesh(q, kv::Load::pinch(p, Vec3(1, 0, 0), -0.8f), o);
+            const double vp = signedVolume(q);
+            js << (nu == 0.5f ? "" : ",") << "\"nu" << (nu == 0.5f ? "50" : "20") << "\":{\"grab\":" << (vg / v0 - 1.0) << ",\"pinch\":" << (vp / v0 - 1.0) << "}";
+        }
+        js << "},";
+    }
+
+    // 4. A twist keeps every point's distance to the axis (and along it): the sphere and the vase.
+    {
+        js << "\"twist\":{";
+        int k = 0;
+        for (int shape = 0; shape < 2; ++shape) {
+            ScratchboxMesh m = shape == 0 ? sphere() : vase();
+            const Vec3 c = shape == 0 ? Vec3(0, 0.2f, 0) : Vec3(0, 0.3f, 0);
+            const Vec3 axis = Vec3(0.2f, 1.0f, 0.1f).normalized();
+            std::vector<Vec3> before;
+            for (auto& v : m.vertices) before.push_back(v.position);
+            kv::Options o; o.epsilon = 0.6f; o.falloffScales = shape == 0 ? 1 : 2;
+            kv::deformMesh(m, kv::Load::twist(c, axis, 1.5f * math::PI), o);
+            double worstRadial = 0, worstAxial = 0, maxMove = 0;
+            for (size_t i = 0; i < before.size(); ++i) {
+                const Vec3 r0 = before[i] - c, r1 = m.vertices[i].position - c;
+                const float a0 = r0.dot(axis), a1 = r1.dot(axis);
+                const float d0 = (r0 - axis * a0).length(), d1 = (r1 - axis * a1).length();
+                worstRadial = std::max(worstRadial, (double)std::abs(d1 - d0));
+                worstAxial = std::max(worstAxial, (double)std::abs(a1 - a0));
+                maxMove = std::max(maxMove, (double)(r1 - r0).length());
+            }
+            js << (k++ ? "," : "") << (shape == 0 ? "\"sphere\"" : "\"vase\"") << ":{\"radialError\":" << worstRadial << ",\"axialError\":" << worstAxial << ",\"maxMove\":" << maxMove << "}";
+        }
+        js << "},";
+    }
+
+    // 5. The affine loads do what was asked at the load point (points a hundredth of epsilon away).
+    {
+        const Vec3 c(0.1f, -0.2f, 0.3f);
+        kv::Options o; o.epsilon = 0.5f; o.poissonRatio = 0.3f;
+        const float h = 0.005f;
+        std::vector<Vec3> pts = {c + Vec3(h, 0, 0), c + Vec3(0, h, 0), c + Vec3(0, 0, h)};
+        std::vector<Vec3> sc = pts;
+        kv::deformPoints(sc, kv::Load::scale(c, 1.6f), o);
+        const double scaleGot = (sc[0] - c).length() / h;
+        std::vector<Vec3> pi = pts;
+        kv::deformPoints(pi, kv::Load::pinch(c, Vec3(1, 0, 0), 0.5f), o);
+        const double pinchAlong = (pi[0] - c).length() / h, pinchAcross = (pi[1] - c).length() / h;
+        std::string incompressibleScale = "accepted";
+        try { kv::Options oi = o; oi.poissonRatio = 0.5f; std::vector<Vec3> t = pts; kv::deformPoints(t, kv::Load::scale(c, 1.6f), oi); }
+        catch (const std::invalid_argument& e) { incompressibleScale = e.what(); }
+        js << "\"affine\":{\"scaleAsked\":1.6,\"scaleGot\":" << scaleGot << ",\"pinchAlongAsked\":" << std::exp(0.5) << ",\"pinchAlong\":" << pinchAlong
+           << ",\"pinchAcrossAsked\":" << std::exp(-0.25) << ",\"pinchAcross\":" << pinchAcross << ",\"incompressibleScale\":\"" << incompressibleScale << "\"},";
+    }
+
+    // 6. Sharp versions localise: the share of the sphere moved by more than 1% of the drag, at 1, 2 and 3 scales,
+    //    with the same core radius; weights hold masked points still.
+    {
+        js << "\"localise\":[";
+        for (int s = 1; s <= 3; ++s) {
+            ScratchboxMesh m = sphere();
+            std::vector<Vec3> before;
+            for (auto& v : m.vertices) before.push_back(v.position);
+            kv::Options o; o.epsilon = 0.3f; o.falloffScales = s;
+            const Vec3 d(0, 0.3f, 0);
+            kv::deformMesh(m, kv::Load::grab(Vec3(0, 1, 0), d), o);
+            size_t movedCount = 0;
+            for (size_t i = 0; i < before.size(); ++i) if ((m.vertices[i].position - before[i]).length() > 0.01f * d.length()) ++movedCount;
+            js << (s > 1 ? "," : "") << (double)movedCount / before.size();
+        }
+        ScratchboxMesh m = sphere();
+        std::vector<float> w(m.vertices.size());
+        std::vector<Vec3> before;
+        for (size_t i = 0; i < m.vertices.size(); ++i) { w[i] = m.vertices[i].position.x > 0 ? 1.0f : 0.0f; before.push_back(m.vertices[i].position); }
+        kv::Options o; o.epsilon = 0.5f;
+        kv::deformMesh(m, kv::Load::grab(Vec3(0, 1, 0), Vec3(0, 0.5f, 0)), o, &w);
+        double heldMove = 0;
+        for (size_t i = 0; i < before.size(); ++i) if (w[i] == 0.0f) heldMove = std::max(heldMove, (double)(m.vertices[i].position - before[i]).length());
+        js << "],\"maskedMaxMove\":" << heldMove;
+    }
+    js << "}";
+    std::cout << js.str() << std::endl;
+
+    if (!outDir.empty()) {
+        std::filesystem::create_directories(outDir);
+        for (int shape = 0; shape < 2; ++shape) {
+            const std::string name = shape == 0 ? "sphere" : "vase";
+            const ScratchboxMesh base = shape == 0 ? sphere() : vase();
+            // A load point on the side facing the camera, its outward normal, and a tangent.
+            const Vec3 p = shape == 0 ? Vec3(0.6f, 0.3f, 0.74f).normalized() : Vec3(0.42f, -0.1f, 0.52f);
+            const size_t vi = nearestVertex(base, p);
+            const Vec3 lp = base.vertices[vi].position;
+            const Vec3 n = base.vertices[vi].normal.normalized();
+            const Vec3 t = Vec3(0, 1, 0).cross(n).normalized();
+            const float eps = shape == 0 ? 0.35f : 0.3f;
+            const float plainR = 3.0f * eps;  // the plain brush's radius: where its falloff reaches zero
+            writeGlb(base, outDir + "/" + name + "_original.glb");
+            {
+                std::ofstream lf(outDir + "/" + name + "_load.json");
+                lf << "{\"point\":[" << lp.x << "," << lp.y << "," << lp.z << "],\"normal\":[" << n.x << "," << n.y << "," << n.z << "]}";
+            }
+
+            ScratchboxMesh a = base;
+            shaper::SculptEngine::applyStroke(a, shaper::SculptBrush::Grab, lp, plainR, 0.5f, n, shaper::SculptFalloff::Smoothstep);
+            writeGlb(a, outDir + "/" + name + "_grab_plain.glb");
+            ScratchboxMesh b = base;
+            kv::Options o; o.epsilon = eps;
+            kv::deformMesh(b, kv::Load::grab(lp, n * 0.5f), o);
+            writeGlb(b, outDir + "/" + name + "_grab_kelvinlet.glb");
+
+            ScratchboxMesh c = base;
+            plainTwist(c, lp, Vec3(0, 1, 0), 1.2f, plainR);  // about the vertical through the load point: a normal axis only slides a smooth surface over itself
+            writeGlb(c, outDir + "/" + name + "_twist_plain.glb");
+            ScratchboxMesh d = base;
+            kv::deformMesh(d, kv::Load::twist(lp, Vec3(0, 1, 0), 1.2f), o);
+            writeGlb(d, outDir + "/" + name + "_twist_kelvinlet.glb");
+
+            ScratchboxMesh e = base;
+            shaper::SculptEngine::applyStroke(e, shaper::SculptBrush::Pinch, lp, plainR, 0.15f, n, shaper::SculptFalloff::Smoothstep);
+            writeGlb(e, outDir + "/" + name + "_pinch_plain.glb");
+            ScratchboxMesh f = base;
+            kv::deformMesh(f, kv::Load::pinch(lp, t, -1.0f), o);
+            writeGlb(f, outDir + "/" + name + "_pinch_kelvinlet.glb");
+        }
+    }
+    return 0;
+}
