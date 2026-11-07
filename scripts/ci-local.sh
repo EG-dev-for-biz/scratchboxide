@@ -57,16 +57,22 @@ if [ -n "$PR" ]; then
   git -C "$ROOT" worktree add -q --detach "$WT" "$BASE"
   git -C "$WT" -c user.name=ci-local -c user.email=ci-local@localhost merge -q --no-ff -m "ci-local: PR $PR onto $BASE" "$HEAD_SHA" \
     || { echo "ci-local: PR $PR does not merge cleanly onto $BASE" >&2; exit 1; }
-  # node_modules are not in a fresh worktree: share the main checkout's, the root's and each package's own.
-  while IFS= read -r nm; do
-    rel="${nm#"$ROOT"/}"
-    [ -e "$WT/$rel" ] || { mkdir -p "$(dirname "$WT/$rel")"; ln -s "$nm" "$WT/$rel"; }
-  done < <(find "$ROOT" -maxdepth 3 -type d -name node_modules -not -path '*/node_modules/*' -not -path '*/.claude/*' 2>/dev/null)
+  # node_modules are not in a fresh worktree: share the installed ones, the root's and each package's own. A checkout
+  # without its own install (a session worktree) borrows the main checkout's. Paths are matched relative to that
+  # checkout, so one living under .claude/worktrees/ still finds its own.
+  NM_SRC="$ROOT"
+  [ -e "$NM_SRC/node_modules" ] || NM_SRC="$(git -C "$ROOT" worktree list --porcelain | sed -n '1s/^worktree //p')"
+  while IFS= read -r rel; do
+    rel="${rel#./}"
+    [ -e "$WT/$rel" ] || { mkdir -p "$(dirname "$WT/$rel")"; ln -s "$NM_SRC/$rel" "$WT/$rel"; }
+  done < <(cd "$NM_SRC" && find . -maxdepth 3 \( -type d -o -type l \) -name node_modules -not -path '*/node_modules/*' -not -path './.claude/*' 2>/dev/null)
+  [ -e "$WT/node_modules" ] || { echo "ci-local: no installed node_modules found (run npm install in $NM_SRC)" >&2; exit 2; }
   WORK="$WT"
   TESTED="PR $PR head $HEAD_SHA merged onto $(git -C "$ROOT" rev-parse --short "$BASE")"
 else
   WORK="$ROOT"
   TESTED="$(git -C "$ROOT" rev-parse HEAD) (plus uncommitted changes)"
+  [ -e "$ROOT/node_modules" ] || { echo "ci-local: $ROOT has no node_modules; run npm install there, or check a pushed branch with --pr N" >&2; exit 2; }
 fi
 cd "$WORK"
 
