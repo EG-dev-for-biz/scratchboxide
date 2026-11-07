@@ -163,8 +163,8 @@ describe('pipeline K material regions, native kernel', () => {
             if (job.mesh === 'facade_lattice_1') expect(ts.classTexels.slice(4).some(n => n > 0)).toBe(true);
             if (job.mesh === 'facade_lattice_1') expect(ts.facade!.foldedShare).toBeGreaterThan(0);
             // the panes are drawn as glass on the facade that has them, with any on stone counted
-            if (job.mesh === 'facade_lattice_1') expect(ts.glass).toBeGreaterThan(0); else expect(ts.glass).toBe(0);
-            else expect(ts.classTexels.slice(4).every(n => n === 0)).toBe(true);
+            if (job.mesh === 'facade_lattice_1') expect(ts.glass).toBeGreaterThan(0);
+            else { expect(ts.glass).toBe(0); expect(ts.classTexels.slice(4).every(n => n === 0)).toBe(true); }
         }
         expectSamePlan(await planMaterialRegionsNative(sc.g, sc.json, sc.images, classes, st), planMaterialRegions(sc.g, sc.json, sc.images, classes, st));
         // a wider square (a finer texel's radius): the same majority

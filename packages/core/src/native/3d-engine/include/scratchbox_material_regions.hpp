@@ -324,14 +324,17 @@ inline double foldRepeats(std::vector<uint8_t>& cls, int W, int H, int K, const 
 }
 
 /** paneGlass: the glass texels of the pane rects (Math.round at the edges, the first rect holding a texel), each texel
- * classed among every class; a pane at least `share` of whose texels are the wall's class is stone (counted), else its
- * texels are glass but the wall's class's. */
+ * classed between the wall's class and the opening classes (every class without openings); a pane at least `share` of
+ * whose texels are the wall's class is stone (counted), else its texels are glass but the wall's class's. */
 struct PaneGlass { std::vector<uint8_t> glass; double stone = 0, wallTexels = 0; };
 inline PaneGlass paneGlass(const Image& img, const std::vector<double>& meanLab, const std::vector<uint8_t>& openings, int wall, const std::vector<double>& panes, double share) {
     const auto& lab = labTable();
     const int W = img.width, H = img.height, K = static_cast<int>(meanLab.size() / 3);
     bool anyOpening = false;
     for (const auto o : openings) anyOpening = anyOpening || o;
+    // the guard's candidates: the wall's class against the opening classes; every class without openings
+    std::vector<int> cands;
+    for (int c = 0; c < K; c++) if (!anyOpening || c == wall || openings[c]) cands.push_back(c);
     const size_t N = static_cast<size_t>(W) * H;
     PaneGlass r;
     r.glass.assign(N, 0);
@@ -340,12 +343,12 @@ inline PaneGlass paneGlass(const Image& img, const std::vector<double>& meanLab,
         const double* v = lab.of(img.rgba[k * 4], img.rgba[k * 4 + 1], img.rgba[k * 4 + 2]);
         int best = 0;
         double bd = INFINITY;
-        for (int c = 0; c < K; c++) {
+        for (const int c : cands) {
             const double* m = &meanLab[c * 3];
             const double e0 = v[0] - m[0], e1 = v[1] - m[1], e2 = v[2] - m[2], d = e0 * e0 + e1 * e1 + e2 * e2;
             if (d < bd) { bd = d; best = c; }
         }
-        return anyOpening ? !openings[best] : best == wall;
+        return best == wall;
     };
     std::vector<size_t> mine;
     std::vector<uint8_t> isWall;

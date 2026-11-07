@@ -220,21 +220,26 @@ function fittedPanes(json: any, meshName: string): number[] | undefined {
 
 /**
  * The glass texels of a photo (see the file comment, 5): each pane rect's texels (Math.round at its edges, the first rect
- * holding a texel), each classed among every class: a texel whose nearest class is one read outside the openings (the
- * wall's shades, the spandrels) looks like the wall, not like what fills the openings; a pane at least `share` of whose
- * texels look like the wall is stone and counted (`stone`), else its texels are glass but those. With no class read
- * inside the openings, the wall's class alone counts as the wall. Returns none without pane rects.
+ * holding a texel), each classed between the wall's class and the classes read inside the openings: a texel nearer the
+ * wall's colour than any of theirs is the wall (a pier through a window's box), not what fills the openings. The other
+ * outside classes are not candidates: among them there is always a dark one near the openings' colours (spandrels, shade)
+ * that would take a window's texels for stone. A pane at least `share` of whose texels look like the wall is stone and
+ * counted (`stone`), else its texels are glass but those. With no class read inside the openings, every class is a
+ * candidate and the wall's class alone counts as the wall. Returns none without pane rects.
  */
 export function paneGlass(img: RgbaImage8, classes: RegionClass[], panes: number[] | undefined, share: number): { glass: Uint8Array; stone: number; panes: number; /** Texels of glass panes left out as wall-like. */ wallTexels: number } | undefined {
     if (!panes?.length) return undefined;
-    const { width: W, height: H, rgba } = img, wall = Math.max(0, classes.findIndex(c => c.wall)), anyOpening = classes.some(c => c.openings);
+    const { width: W, height: H, rgba } = img, wall = Math.max(0, classes.findIndex(c => c.wall));
+    // the guard's candidates: the wall's class against the opening classes (the other outside classes always hold a
+    // dark one next to the openings' colours, which would take a window's texels for stone); every class without openings
+    const cands = classes.some(c => c.openings) ? classes.map((c, i) => i).filter(i => i === wall || classes[i].openings) : classes.map((_, i) => i);
     const glass = new Uint8Array(W * H), seen = new Uint8Array(W * H);
     let stone = 0, wallTexels = 0;
     const wallLike = (k: number) => {
         const [L, a, b] = labOf(rgba[k * 4], rgba[k * 4 + 1], rgba[k * 4 + 2]);
         let best = 0, bd = Infinity;
-        classes.forEach((c, i) => { const m = c.meanLab, d = (L - m[0]) ** 2 + (a - m[1]) ** 2 + (b - m[2]) ** 2; if (d < bd) { bd = d; best = i; } });
-        return anyOpening ? !classes[best].openings : best === wall;
+        for (const i of cands) { const m = classes[i].meanLab, d = (L - m[0]) ** 2 + (a - m[1]) ** 2 + (b - m[2]) ** 2; if (d < bd) { bd = d; best = i; } }
+        return best === wall;
     };
     for (let i = 0; i + 3 < panes.length; i += 4) {
         const x0 = Math.max(0, Math.round(panes[i] * W)), x1 = Math.min(W, Math.round(panes[i + 2] * W)), y0 = Math.max(0, Math.round(panes[i + 1] * H)), y1 = Math.min(H, Math.round(panes[i + 3] * H));

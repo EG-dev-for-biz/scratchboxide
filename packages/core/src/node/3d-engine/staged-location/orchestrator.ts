@@ -3551,8 +3551,12 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // the material regions' report, whether the stage ran now or its result came from the cache
                 if (materialSets) {
                     const mr = entry.value.materialRegions;
-                    cache.writeRunNote(runId, 'pipeline_k_materials', { layer: target.layer.layer, cached: entry.cached, ...(mr ?? { skipped: 'the cached textures were written before their result carried the material regions\' report; nothing was recorded for them' }), ...(entry.value.materialClasses ? { materialClasses: entry.value.materialClasses } : {}) });
-                    if (mr) io.progress('skipped' in mr ? `material regions not drawn: ${mr.skipped}` : `${describeMaterialRegions(mr)}${entry.cached ? ' (cached)' : ''}`);
+                    // a layer whose textures drew no regions (the vision vote's, with no rebuilt facade) keeps the note of
+                    // one that did, so the run's report is the building's
+                    const prior = cache.readRunNote<{ layer?: string; skipped?: string }>(runId, 'pipeline_k_materials');
+                    if (mr && 'skipped' in mr && prior && !prior.skipped && prior.layer !== target.layer.layer) io.progress(`material regions not drawn on ${target.layer.layer}: ${mr.skipped} (the report stays ${prior.layer}'s)`);
+                    else cache.writeRunNote(runId, 'pipeline_k_materials', { layer: target.layer.layer, cached: entry.cached, ...(mr ?? { skipped: 'the cached textures were written before their result carried the material regions\' report; nothing was recorded for them' }), ...(entry.value.materialClasses ? { materialClasses: entry.value.materialClasses } : {}) });
+                    if (mr && !('skipped' in mr && prior && !prior.skipped && prior.layer !== target.layer.layer)) io.progress('skipped' in mr ? `material regions not drawn: ${mr.skipped}` : `${describeMaterialRegions(mr)}${entry.cached ? ' (cached)' : ''}`);
                 }
                 // pipeline K's finished model, for scripts that rebuild the building from it (site-guides.ts)
                 if (harmonizeOn) cache.writeRunNote(runId, 'pipeline_k_model', { model: path.join(entry.dir, 'twin.glb'), url: pub.url, layer: target.layer.layer });
