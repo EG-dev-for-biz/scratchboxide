@@ -221,8 +221,7 @@ def create_arched_blister(bounds=(0.35, 0.45, 0.9), arch_radius=0.4, swell=0.08,
 def create_beveled_box(size=(1.0, 1.0, 1.0), bevel=0.02, color=None, material=None, **kwargs) -> Mesh: ...
 
 
-def create_box(*args, **kwargs) -> Mesh:
-    """Centred box; faces named top (+Y), bottom (-Y) and side, and with name given also name.top..."""
+def create_box(*args, **kwargs) -> Mesh: ...
 
 
 def create_cambered_foil(span: float = 1.8, chord: float = 0.45, camber: float = 0.04, thickness: float = 0.05, angle_of_attack_deg: float = -4.0, axis: str = 'x', endplates: bool = True, endplate_height: float = 0.25, endplate_thickness: float = 0.015, color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> Mesh:
@@ -240,8 +239,7 @@ def create_catenary_cable(start=(0, 0, 0), end=(10, 0, 0), sag=1.2, radius=0.03,
 def create_cone(radius=1.0, height=2.0, segments=24, color=None, material=None, **kwargs) -> Mesh: ...
 
 
-def create_cube(*args, **kwargs) -> Mesh:
-    """Centred box; faces named top (+Y), bottom (-Y) and side, and with name given also name.top..."""
+def create_cube(*args, **kwargs) -> Mesh: ...
 
 
 def create_cylinder(radius_top=1.0, radius_bottom=1.0, height=2.0, segments=24, color=None, material=None, capped=True, *, radius=None, **kwargs) -> Mesh: ...
@@ -301,7 +299,8 @@ def create_studio_pedestal(radius=4.0, height=0.25, bevel=0.04, bevel_radius=Non
 def create_subdivided_box(size=(1.0, 1.0, 1.0), subdivisions=4, color=None, material=None, **kwargs) -> Mesh: ...
 
 
-def create_sweep(curve: collections.abc.Sequence[scratchbox_native.math.Vec3], profile: collections.abc.Sequence[scratchbox_native.math.Vec2], total_twist_rad: float = 0.0, start_scale: float = 1.0, end_scale: float = 1.0, close_ends: bool = True, color: scratchbox_native.math.Vec4 = ...) -> Mesh: ...
+def create_sweep(curve: collections.abc.Sequence[scratchbox_native.math.Vec3], profile: collections.abc.Sequence[scratchbox_native.math.Vec2], total_twist_rad: float = 0.0, start_scale: float = 1.0, end_scale: float = 1.0, close_ends: bool = True, color: scratchbox_native.math.Vec4 = ..., name: str = '') -> Mesh:
+    """Sweep a profile along a curve. Faces named side (one surface per run of the profile turning under 30 degrees), the cap at the curve's start start and at its end end; with name given, also name.start..."""
 
 
 def create_torus(main_radius: float = 1.0, tube_radius: float = 0.25, radial_segments: int = 24, tubular_segments: int = 36, color: scratchbox_native.math.Vec4 = ...) -> Mesh: ...

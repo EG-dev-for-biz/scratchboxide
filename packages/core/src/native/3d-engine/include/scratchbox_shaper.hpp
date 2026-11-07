@@ -12,6 +12,7 @@
 
 #include "scratchbox_math.hpp"
 #include "scratchbox_geometry.hpp"
+#include "scratchbox_named_topology.hpp"
 #include <vector>
 #include <cmath>
 #include <algorithm>
@@ -619,12 +620,25 @@ public:
             }
         }
 
+        // Face names (scratchbox_named_topology.hpp): the walls "side", one surface per run of the first section's
+        // outline turning under 30 degrees at each corner (a square section's walls meet at four "side" edges, a round
+        // one has none); the first section's cap "start", the last's "end", whatever direction the loft runs.
+        const std::vector<int32_t> wallRun = named::surfaceRuns(slices[0], true, 30.0f);
+        int32_t walls = 0;
+        for (int32_t r : wallRun) walls = std::max(walls, r + 1);
+        for (int32_t r = 0; r < walls; ++r) mesh.faceGroups.push_back({{"side"}, "side", false});
+        const int32_t startGroup = walls, endGroup = walls + 1;
+        mesh.faceGroups.push_back({{"start"}, "side", false});
+        mesh.faceGroups.push_back({{"end"}, "side", false});
+
         // Add quad strip faces between consecutive slices
         for (size_t s = 0; s + 1 < slices.size(); ++s) {
             uint32_t s0 = static_cast<uint32_t>(s * ptsPerSlice);
             uint32_t s1 = static_cast<uint32_t>((s + 1) * ptsPerSlice);
 
             for (size_t p = 0; p < ptsPerSlice; ++p) {
+                mesh.faceGroup.push_back(wallRun[p]);
+                mesh.faceGroup.push_back(wallRun[p]);
                 size_t nextP = (p + 1) % ptsPerSlice;
                 uint32_t i0 = s0 + static_cast<uint32_t>(p);
                 uint32_t i1 = s1 + static_cast<uint32_t>(p);
@@ -647,31 +661,60 @@ public:
         // must be reversed for the top cap's +Y-facing one -- verified against a BSP boolean operand the same way
         // extrude_polygon's own winding was fixed earlier, not assumed from either function's doc comment.
         if (closeEnds) {
+            // Each cap is triangulated in its own plane: the section projected along the largest axis of its Newell
+            // normal (XZ for a section lying across Y, as before, so those caps are unchanged; YZ or XY for a sweep
+            // running along X or Z, which XZ would flatten to a line). Each cap triangle is then wound to run the
+            // section's boundary against the walls (the walls run the first section p+1 -> p and the last p -> p+1),
+            // so caps and walls form one consistently wound surface whatever the loft's direction.
             auto capFlat = [](const std::vector<Vec3>& slice) {
+                Vec3 n(0, 0, 0);
+                for (size_t i = 0; i < slice.size(); ++i) {
+                    const Vec3& a = slice[i]; const Vec3& b = slice[(i + 1) % slice.size()];
+                    n.x += (a.y - b.y) * (a.z + b.z); n.y += (a.z - b.z) * (a.x + b.x); n.z += (a.x - b.x) * (a.y + b.y);
+                }
+                const float ax = std::abs(n.x), ay = std::abs(n.y), az = std::abs(n.z);
                 std::vector<Vec2> flat;
                 flat.reserve(slice.size());
-                for (const auto& p : slice) flat.push_back(Vec2(p.x, p.z));
+                for (const auto& p : slice) {
+                    if (ay >= ax && ay >= az) flat.push_back(Vec2(p.x, p.z));
+                    else if (ax >= az) flat.push_back(Vec2(p.y, p.z));
+                    else flat.push_back(Vec2(p.x, p.y));
+                }
                 return flat;
             };
-
-            // Bottom cap: raw triangulator order is already correct for a -Y-facing normal.
-            {
-                const std::vector<uint32_t> capTris = detail::loftCapTriangulate(capFlat(slices[0]));
+            auto area2 = [](const Vec2& a, const Vec2& b, const Vec2& c) { return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x); };
+            auto addCap = [&](const std::vector<Vec3>& slice, bool sameAsSection, int32_t group, const Vec3& shadeNormal) {
+                const std::vector<Vec2> flat = capFlat(slice);
+                float polyArea = 0;
+                for (size_t i = 0; i < flat.size(); ++i) { const Vec2& a = flat[i]; const Vec2& b = flat[(i + 1) % flat.size()]; polyArea += a.x * b.y - b.x * a.y; }
+                const std::vector<uint32_t> capTris = detail::loftCapTriangulate(flat);
                 const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-                for (const auto& p : slices[0]) mesh.addVertex({p, Vec3(0, -1, 0), Vec2(p.x, p.z), color});
-                for (uint32_t idx : capTris) mesh.indices.push_back(base + idx);
-            }
-
-            // Top cap: reversed, for a +Y-facing normal.
-            {
-                const size_t lastS = slices.size() - 1;
-                const std::vector<uint32_t> capTris = detail::loftCapTriangulate(capFlat(slices[lastS]));
-                const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-                for (const auto& p : slices[lastS]) mesh.addVertex({p, Vec3(0, 1, 0), Vec2(p.x, p.z), color});
+                for (const auto& p : slice) mesh.addVertex({p, shadeNormal, Vec2(p.x, p.z), color});
                 for (size_t i = 0; i + 2 < capTris.size(); i += 3) {
-                    mesh.indices.push_back(base + capTris[i]); mesh.indices.push_back(base + capTris[i + 2]); mesh.indices.push_back(base + capTris[i + 1]);
+                    uint32_t a = capTris[i], b = capTris[i + 1], c = capTris[i + 2];
+                    const bool same = (area2(flat[a], flat[b], flat[c]) > 0) == (polyArea > 0);
+                    if (same != sameAsSection) std::swap(b, c);
+                    mesh.indices.push_back(base + a); mesh.indices.push_back(base + b); mesh.indices.push_back(base + c);
+                    mesh.faceGroup.push_back(group);
                 }
+            };
+            addCap(slices[0], true, startGroup, Vec3(0, -1, 0));
+            addCap(slices[slices.size() - 1], false, endGroup, Vec3(0, 1, 0));
+        }
+
+        // Outward: a section drawn the other way round, or a loft run downward, winds the whole surface inward, and the
+        // normals follow the winding. Measured by the signed volume about the first section's centre.
+        {
+            Vec3 c0(0, 0, 0);
+            for (const auto& p : slices[0]) c0 += p;
+            c0 = c0 / static_cast<float>(ptsPerSlice);
+            double vol = 0.0;
+            for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
+                const Vec3 a = mesh.vertices[mesh.indices[t]].position - c0, b = mesh.vertices[mesh.indices[t + 1]].position - c0,
+                           c = mesh.vertices[mesh.indices[t + 2]].position - c0;
+                vol += double(a.dot(b.cross(c)));
             }
+            if (vol < 0.0) for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3) std::swap(mesh.indices[t + 1], mesh.indices[t + 2]);
         }
 
         mesh.recomputeSmoothNormals();
@@ -1032,11 +1075,53 @@ public:
             }
         }
 
+        // Outward winding: the quads below wind (p, next ring p, next ring p + 1, p + 1), which faces inward for a profile
+        // drawn out along the bottom, up and back along the top (the natural order, and the guide's), and the normals
+        // follow the winding. So the signed volume of the side surface about the axis decides: negative, every triangle
+        // is flipped at the end. Measured from the positions, so it holds for any profile direction.
+        bool flipWinding = false;
+        {
+            double vol = 0.0;
+            const float yMid = 0.5f * (profilePoints.front().y + profilePoints.back().y);
+            auto at = [&](int s, size_t p) { const Vec3 q = mesh.vertices[(s % ringCount) * pts + p].position; return Vec3(q.x, q.y - yMid, q.z); };
+            for (int s = 0; s < radialSegments; ++s) for (size_t p = 0; p + 1 < pts; ++p) {
+                const Vec3 a = at(s, p), b = at(s + 1, p), c = at(s + 1, p + 1), d = at(s, p + 1);
+                vol += double(a.dot(b.cross(c))) + double(a.dot(c.cross(d)));
+            }
+            flipWinding = vol < 0.0;
+        }
+
+        // Face names (scratchbox_named_topology.hpp). Each run of profile segments turning under 30 degrees is one
+        // surface: "top" where it is flat and faces +Y, "bottom" where flat and facing -Y, else "side"; the circles
+        // between two side surfaces are "rim" edges, the circles round a top or bottom take that name. A partial
+        // sweep's flat ends are "start" (angle 0) and "end"; capEnds disks are "top" or "bottom" by the way they face.
+        std::vector<int> segClass(pts - 1, 0);
+        for (size_t p = 0; p + 1 < pts; ++p) {
+            // the quad (p, next ring p, next ring p+1, p+1) as the triangles below wind it, from two corners (one may sit on the axis)
+            const Vec3 q0 = mesh.vertices[p].position, q1 = mesh.vertices[pts + p].position;
+            const Vec3 q2 = mesh.vertices[pts + p + 1].position, q3 = mesh.vertices[p + 1].position;
+            const Vec3 n = ((q1 - q0).cross(q3 - q0) + (q3 - q2).cross(q1 - q2)) * (flipWinding ? -1.0f : 1.0f);
+            const float len = n.length();
+            if (len > 0 && std::abs(profilePoints[p + 1].y - profilePoints[p].y) <= 1e-7f * (1.0f + std::abs(profilePoints[p].y)))
+                segClass[p] = n.y / len > 0 ? 1 : 2;
+        }
+        std::vector<Vec3> profile3;
+        for (const auto& q : profilePoints) profile3.push_back(Vec3(q.x, q.y, 0.0f));
+        const std::vector<int32_t> profRun = named::surfaceRuns(profile3, false, 30.0f, segClass);
+        int32_t runs = 0;
+        for (int32_t r : profRun) runs = std::max(runs, r + 1);
+        std::vector<int> runClass(runs, 0);
+        for (size_t p = 0; p + 1 < pts; ++p) runClass[profRun[p]] = segClass[p];
+        for (int32_t r = 0; r < runs; ++r)
+            mesh.faceGroups.push_back({{runClass[r] == 1 ? "top" : runClass[r] == 2 ? "bottom" : "side"}, "rim", false});
+
         for (int s = 0; s < radialSegments; ++s) {
             uint32_t s0 = static_cast<uint32_t>((s % ringCount) * pts);
             uint32_t s1 = static_cast<uint32_t>(((s + 1) % ringCount) * pts);
 
             for (size_t p = 0; p + 1 < pts; ++p) {
+                mesh.faceGroup.push_back(profRun[p]);
+                mesh.faceGroup.push_back(profRun[p]);
                 uint32_t i0 = s0 + static_cast<uint32_t>(p);
                 uint32_t i1 = s1 + static_cast<uint32_t>(p);
                 uint32_t i2 = s1 + static_cast<uint32_t>(p + 1);
@@ -1049,21 +1134,31 @@ public:
 
         if (!isFullSweep) {
             // Fan-cap the profile polyline at each open end (angle = 0 and angle = totalAngleRad).
-            auto capFan = [&](int ring, bool flip) {
+            auto capFan = [&](int ring, bool flip, int32_t group) {
                 uint32_t base = static_cast<uint32_t>(ring * pts);
                 for (size_t p = 1; p + 1 < pts; ++p) {
                     uint32_t i0 = base, i1 = base + static_cast<uint32_t>(p), i2 = base + static_cast<uint32_t>(p + 1);
                     if (flip) mesh.addTriangle(i0, i2, i1);
                     else mesh.addTriangle(i0, i1, i2);
+                    mesh.faceGroup.push_back(group);
                 }
             };
-            capFan(0, true);
-            capFan(ringCount - 1, false);
+            const int32_t startGroup = static_cast<int32_t>(mesh.faceGroups.size());
+            mesh.faceGroups.push_back({{"start"}, "rim", false});
+            mesh.faceGroups.push_back({{"end"}, "rim", false});
+            // The side quads run ring 0 as p+1 -> p and the last ring as p -> p+1, so ring 0's cap runs p -> p+1 (as
+            // fanned) and the last ring's is flipped: one consistently wound surface (they were the other way round,
+            // which closed the mesh but wound both caps against the sides).
+            capFan(0, false, startGroup);
+            capFan(ringCount - 1, true, startGroup + 1);
         } else if (capEnds) {
             // Close an open axial hole at a profile end whose radius isn't already 0: a flat disk fanned from a
             // new axis-center vertex across that end's ring (fixed profile index, varying azimuthal ring s) — not
             // capFan above, which fans across profile points at one fixed azimuthal ring instead.
             auto capAxisDisk = [&](size_t profileIdx, bool normalDown) {
+                const int32_t group = static_cast<int32_t>(mesh.faceGroups.size());
+                mesh.faceGroups.push_back({{normalDown ? "bottom" : "top"}, "rim", false});
+                mesh.faceGroup.insert(mesh.faceGroup.end(), static_cast<size_t>(radialSegments), group);
                 float y = profilePoints[profileIdx].y;
                 uint32_t centerIdx = static_cast<uint32_t>(mesh.vertices.size());
                 mesh.addVertex({Vec3(0.0f, y, 0.0f), Vec3(0, normalDown ? -1.0f : 1.0f, 0), Vec2(0.5f, 0.5f), color});
@@ -1084,6 +1179,7 @@ public:
             }
         }
 
+        if (flipWinding) for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3) std::swap(mesh.indices[t + 1], mesh.indices[t + 2]);
         mesh.recomputeSmoothNormals();
         mesh.recomputeBounds();
         return mesh;

@@ -658,8 +658,9 @@ NB_MODULE(scratchbox_native, m) {
         ScratchboxMesh mesh = ScratchboxMesh::createBox(size, color);
         if (!name.empty()) { mesh.name = name; named::qualifyNames(mesh, name); }
         return mesh;
-    }, "size"_a = Vec3(1.0f, 1.0f, 1.0f), "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f), "name"_a = "",
-       "Centred box; faces named top (+Y), bottom (-Y) and side, and with name given also name.top...");
+    }, "size"_a = Vec3(1.0f, 1.0f, 1.0f), "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f), "name"_a = "");
+    // (faces named top (+Y), bottom (-Y) and side; with name given, also name.top...: no docstring, which the
+    // sb.create_box wrapper would carry into the size-capped API summary; the script guide says it)
 
     m_geom.def("create_cylinder", [](float radiusTop, float radiusBottom, float height, int segments, const Vec4& color, bool capped) {
         return ScratchboxMesh::createCylinder(radiusTop, radiusBottom, height, segments, color, capped);
@@ -693,17 +694,26 @@ NB_MODULE(scratchbox_native, m) {
         return ScratchboxMesh::createArchedBlister(bounds, archRadius, swell, gridPhi, gridW, sideSign, color);
     }, "bounds"_a = Vec3(0.35f, 0.45f, 0.9f), "arch_radius"_a = 0.40f, "swell"_a = 0.08f, "grid_phi"_a = 16, "grid_w"_a = 8, "side_sign"_a = 1.0f, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f));
 
-    m_geom.def("create_lathe", [](const std::vector<Vec2>& profile, int radialSegments, float totalAngleRad, const Vec4& color, bool capEnds) {
-        return shaper::Lathe3D::revolve(profile, radialSegments, totalAngleRad, color, capEnds);
-    }, "profile"_a, "radial_segments"_a = 32, "total_angle_rad"_a = math::TWO_PI, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f), "cap_ends"_a = false);
+    m_geom.def("create_lathe", [](const std::vector<Vec2>& profile, int radialSegments, float totalAngleRad, const Vec4& color, bool capEnds, const std::string& name) {
+        ScratchboxMesh mesh = shaper::Lathe3D::revolve(profile, radialSegments, totalAngleRad, color, capEnds);
+        if (!name.empty()) { mesh.name = name; named::qualifyNames(mesh, name); }
+        return mesh;
+    }, "profile"_a, "radial_segments"_a = 32, "total_angle_rad"_a = math::TWO_PI, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f), "cap_ends"_a = false, "name"_a = "");
+    // (face names: Lathe3D::revolve; no docstring, for the same reason as create_box)
 
-    m_geom.def("create_loft", [](const std::vector<std::vector<Vec3>>& slices, bool closeEnds, const Vec4& color) {
-        return shaper::Loft3D::skin(slices, closeEnds, color);
-    }, "slices"_a, "close_ends"_a = true, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f));
+    m_geom.def("create_loft", [](const std::vector<std::vector<Vec3>>& slices, bool closeEnds, const Vec4& color, const std::string& name) {
+        ScratchboxMesh mesh = shaper::Loft3D::skin(slices, closeEnds, color);
+        if (!name.empty()) { mesh.name = name; named::qualifyNames(mesh, name); }
+        return mesh;
+    }, "slices"_a, "close_ends"_a = true, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f), "name"_a = "");
+    // (face names: Loft3D::skin; no docstring, for the same reason as create_box)
 
-    m_geom.def("create_sweep", [](const std::vector<Vec3>& curve, const std::vector<Vec2>& profile, float totalTwistRad, float startScale, float endScale, bool closeEnds, const Vec4& color) {
-        return shaper::Sweep3D::sweep(curve, profile, totalTwistRad, startScale, endScale, closeEnds, color);
-    }, "curve"_a, "profile"_a, "total_twist_rad"_a = 0.0f, "start_scale"_a = 1.0f, "end_scale"_a = 1.0f, "close_ends"_a = true, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f));
+    m_geom.def("create_sweep", [](const std::vector<Vec3>& curve, const std::vector<Vec2>& profile, float totalTwistRad, float startScale, float endScale, bool closeEnds, const Vec4& color, const std::string& name) {
+        ScratchboxMesh mesh = shaper::Sweep3D::sweep(curve, profile, totalTwistRad, startScale, endScale, closeEnds, color);
+        if (!name.empty()) { mesh.name = name; named::qualifyNames(mesh, name); }
+        return mesh;
+    }, "curve"_a, "profile"_a, "total_twist_rad"_a = 0.0f, "start_scale"_a = 1.0f, "end_scale"_a = 1.0f, "close_ends"_a = true, "color"_a = Vec4(0.8f, 0.85f, 0.9f, 1.0f), "name"_a = "",
+       "Sweep a profile along a curve. Faces named side (one surface per run of the profile turning under 30 degrees), the cap at the curve's start start and at its end end; with name given, also name.start...");
 
     // Named for what each actually does rather than the caller's shape: onGrid is a 2D countU x countV grid (not
     // strictly "linear"), alongCurve follows an arbitrary polyline (not strictly "circular" — closing the curve
@@ -2194,10 +2204,12 @@ NB_MODULE(scratchbox_native, m) {
         }, "a"_a, "b"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Intersect", "require_closed"_a = true, "Exact overlap of two closed meshes; result is closed");
         m_ops.def("bevel", [](const ScratchboxMesh& mesh, float width, int segments, float sharp, float smooth, const std::string& name, nb::object edges) {
             if (edges.is_none()) return meshops::bevel(mesh, width, std::max(1, segments), sharp, smooth, name);
-            std::vector<std::string> names;
+            std::vector<std::string> names, warnings;
             if (nb::isinstance<nb::str>(edges)) names = named::splitNames(nb::cast<std::string>(edges));
             else for (nb::handle h : edges) names.push_back(nb::cast<std::string>(h));
-            return meshops::bevel(mesh, width, std::max(1, segments), sharp, smooth, name, &names);
+            ScratchboxMesh out = meshops::bevel(mesh, width, std::max(1, segments), sharp, smooth, name, &names, &warnings);
+            emitPythonWarnings(warnings);   // a named bevel says when it could not give the width asked
+            return out;
         }, "mesh"_a, "width"_a, "segments"_a = 1, "sharp_angle_deg"_a = 30.0f, "smooth_angle_deg"_a = 30.0f, "name"_a = "Beveled",
            "edges"_a.none() = nb::none(),
            "Bevel a closed mesh: segments 1 = chamfer, more = rounded. edges=\"top\" (a name, several in one string, or a "

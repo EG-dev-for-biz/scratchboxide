@@ -796,7 +796,7 @@ inline std::vector<BevelEdge> convexEdges(const ScratchboxMesh& m, const BevelOp
  * the bevel meets the faces (width from the edge on each face), less, for a fillet, the cylinder tangent to both faces
  * there, so what is left is a round of that radius.
  */
-inline std::vector<CsgPolygon> bevelCutter(const BevelEdge& e, double width, int segments, double eps) {
+inline std::vector<CsgPolygon> bevelCutter(const BevelEdge& e, double width, int segments, double eps, double endReach = 0) {
     D3 dir = e.b - e.a;
     const double L = dir.length();
     if (!(L > 0)) return {};
@@ -811,7 +811,10 @@ inline std::vector<CsgPolygon> bevelCutter(const BevelEdge& e, double width, int
     if (!(h > eps)) return {};
     up = up * (1.0 / h);
     const D3 side = dir.cross(up);
-    const double W = (T1 - T2).length() * 1.5, ext = std::max(eps * 64, 1e-4 * L);
+    // endReach: how far past each end of the edge the wedge and the round run (default: just past it). Where the edge
+    // meets the next face at a slant (a tapered loft's corner meeting its cap), a cutter ending square to the edge
+    // just past it stops partly inside the solid and leaves a stepped sliver under that face; a few widths clear it.
+    const double W = (T1 - T2).length() * 1.5, ext = std::max({eps * 64, 1e-4 * L, endReach});
     std::vector<CsgPolygon> wedge = boxPolygons(M + up * h + dir * (L / 2), {L + 2 * ext, 2 * h, W}, dir, up, side);
     if (segments <= 1) return wedge;
     const double cosPhi = std::clamp(e.n1.dot(e.n2), -0.999, 0.999), phi = std::acos(cosPhi);
@@ -869,8 +872,8 @@ inline ScratchboxMesh bevelNamedEdges(const ScratchboxMesh& input, const std::ve
             std::ostringstream at;
             at << "(" << pos[e.a].x << ", " << pos[e.a].y << ", " << pos[e.a].z << ")";
             throw MeshEditError("bevel: an edge named '" + *e.names.begin() + "' of '" + input.name + "' at " + at.str() +
-                                " is concave (a valley); a bevel here would add material, which this cut cannot. Bevel convex edges only; "
-                                "after a boolean, a qualified name (plate.top) tells the part's edges from the tool's");
+                                " is concave (a valley) and does not run in a closed loop of named edges, so it would be cut by a wedge, which "
+                                "cannot add the material a round in a valley needs. Name only convex edges here, or a whole loop (top, rim)");
         }
         runs.push_back({e.a, e.b, n1, n2});
     }
@@ -907,7 +910,7 @@ inline ScratchboxMesh bevelNamedEdges(const ScratchboxMesh& input, const std::ve
     const int32_t bevelTag = static_cast<int32_t>(faceGroups.size() - 1);
     std::vector<CsgPolygon> polys = meshToPolygons(input);
     for (const auto& e : edges) {
-        std::vector<CsgPolygon> cutter = bevelCutter(e, width, segments, eps);
+        std::vector<CsgPolygon> cutter = bevelCutter(e, width, segments, eps, 3 * width);
         for (auto& c : cutter) c.tag = bevelTag;
         if (!cutter.empty()) polys = booleanPolygons(std::move(polys), std::move(cutter), BooleanOp::Subtract, eps);
     }
@@ -918,6 +921,29 @@ inline ScratchboxMesh bevelNamedEdges(const ScratchboxMesh& input, const std::ve
     ScratchboxMesh out = polygonsToMesh(polys, input.name);
     out.material = input.material;
     out.faceGroups = std::move(faceGroups);
+    // One position per corner: pieces split from different polygons meet at points a few float steps apart, and a
+    // slanted edge's cuts leave micro-facets, which an exact weld downstream reads as an open seam. Snap each weld cluster to its first point,
+    // and drop the triangles that leaves with no area (cut slivers), with their names.
+    {
+        // within 0.2% of the width too: where a slanted fillet meets a cap, the cuts leave facets microns across
+        const float tol = float(std::max({1e-7, 1e-6 * diag, 2e-3 * width}));
+        const std::vector<uint32_t> wid = weldIds(out, tol);
+        std::vector<int64_t> first(out.vertices.size(), -1);
+        for (size_t i = 0; i < out.vertices.size(); ++i) {
+            if (first[wid[i]] < 0) first[wid[i]] = static_cast<int64_t>(i);
+            else out.vertices[i].position = out.vertices[static_cast<size_t>(first[wid[i]])].position;
+        }
+        std::vector<uint32_t> keep;
+        std::vector<int32_t> keepGroup;
+        for (size_t f = 0; f < out.indices.size() / 3; ++f) {
+            const uint32_t a = wid[out.indices[3 * f]], b = wid[out.indices[3 * f + 1]], c = wid[out.indices[3 * f + 2]];
+            if (a == b || b == c || a == c) continue;
+            keep.insert(keep.end(), out.indices.begin() + 3 * f, out.indices.begin() + 3 * f + 3);
+            if (!out.faceGroup.empty()) keepGroup.push_back(out.faceGroup[f]);
+        }
+        out.indices = std::move(keep);
+        if (!out.faceGroup.empty()) out.faceGroup = std::move(keepGroup);
+    }
     creaseNormals(out, creaseDeg, float(std::max(1e-6, 1e-5 * diag)));
     return out;
 }

@@ -891,7 +891,8 @@ if _native is not None and hasattr(_native, "geometry"):
         seg = int(segments)
         ang = float(total_angle_rad if total_angle_rad is not None else (math.TWO_PI if hasattr(math, "TWO_PI") else 6.283185307))
         if _orig_create_lathe:
-            mesh = _orig_create_lathe(prof_vec, seg, ang, c)
+            # cap_ends= and name= were taken by **kwargs and dropped before; they reach the native lathe now
+            mesh = _orig_create_lathe(prof_vec, seg, ang, c, bool(kwargs.get("cap_ends", False)), str(kwargs.get("name") or ""))
             return _finish_primitive(mesh, color, mat)
         raise RuntimeError("Native create_lathe not available")
     _geom.create_lathe = create_lathe
@@ -909,7 +910,7 @@ if _native is not None and hasattr(_native, "geometry"):
                     s_vec.append(math.Vec3(float(p[0]), float(p[1]), float(p[2])))
             slices_vec.append(s_vec)
         if _orig_create_loft:
-            mesh = _orig_create_loft(slices_vec, bool(close_ends), c)
+            mesh = _orig_create_loft(slices_vec, bool(close_ends), c, str(kwargs.get("name") or ""))
             return _finish_primitive(mesh, color, mat)
         raise RuntimeError("Native create_loft not available")
     _geom.create_loft = create_loft

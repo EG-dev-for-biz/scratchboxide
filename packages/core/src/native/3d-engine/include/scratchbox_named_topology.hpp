@@ -115,6 +115,47 @@ inline FaceGroup bevelGroup(const std::string& kind, const std::vector<FaceGroup
     return g;
 }
 
+/**
+ * Which smooth surface each segment of a polyline belongs to, for a maker naming the faces it sweeps from it: segment i
+ * runs pts[i] -> pts[i + 1] (wrapping when closed), and a new surface starts at a joint that turns by at least turnDeg,
+ * or where cls (one value per segment, optional) changes. A closed outline starts at such a break, so no surface wraps
+ * across the first segment. Zero-length segments continue the surface before them. Returns a surface index per segment.
+ */
+inline std::vector<int32_t> surfaceRuns(const std::vector<Vec3>& pts, bool closed, float turnDeg, const std::vector<int>& cls = {}) {
+    const size_t n = pts.size();
+    const size_t segs = closed ? n : (n > 0 ? n - 1 : 0);
+    std::vector<int32_t> run(segs, -1);
+    if (segs == 0) return run;
+    auto dir = [&](size_t i) { return pts[(i + 1) % n] - pts[i]; };
+    const float cosTurn = std::cos(turnDeg * 3.14159265358979f / 180.0f);
+    auto prevOf = [&](size_t i) -> long {      // the nearest earlier segment with length
+        for (size_t k = 1; k <= segs; ++k) {
+            if (!closed && k > i) return -1;
+            const size_t j = (i + segs - k) % segs;
+            if (dir(j).length() > 0) return static_cast<long>(j);
+        }
+        return -1;
+    };
+    auto breakAt = [&](size_t i) {             // whether segment i starts a new surface
+        const Vec3 b = dir(i);
+        if (!(b.length() > 0)) return false;
+        const long j = prevOf(i);
+        if (j < 0) return true;
+        if (!cls.empty() && cls[i] != cls[static_cast<size_t>(j)]) return true;
+        const Vec3 a = dir(static_cast<size_t>(j));
+        return a.dot(b) / (a.length() * b.length()) < cosTurn;
+    };
+    size_t first = 0;
+    if (closed) { first = segs; for (size_t i = 0; i < segs && first == segs; ++i) if (breakAt(i)) first = i; if (first == segs) first = 0; }
+    int32_t surface = -1;
+    for (size_t k = 0; k < segs; ++k) {
+        const size_t i = (first + k) % segs;
+        if (surface < 0 || breakAt(i)) ++surface;
+        run[i] = surface;
+    }
+    return run;
+}
+
 /** Ids of positions shared bit for bit (a maker's corners repeat exactly; a weld by tolerance could merge features). */
 inline std::vector<uint32_t> exactPointIds(const ScratchboxMesh& m) {
     std::map<std::array<float, 3>, uint32_t> byPos;

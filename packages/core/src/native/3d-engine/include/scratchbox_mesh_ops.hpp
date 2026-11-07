@@ -1305,7 +1305,7 @@ inline void collapseShortEdges(IndexedMesh& m, float minLen, float sharpAngleDeg
  */
 inline ScratchboxMesh bevel(const ScratchboxMesh& input, float width, int segments = 1, float sharpAngleDeg = 30.0f,
                             float smoothAngleDeg = 30.0f, const std::string& name = "Beveled",
-                            const std::vector<std::string>* edgeNames = nullptr) {
+                            const std::vector<std::string>* edgeNames = nullptr, std::vector<std::string>* warnings = nullptr) {
     if (edgeNames) {
         // Refuse a bad name before anything is welded or collapsed: the message lists the edge names the mesh has.
         named::selectEdges(input, *edgeNames, "bevel");
@@ -1368,18 +1368,11 @@ inline ScratchboxMesh bevel(const ScratchboxMesh& input, float width, int segmen
             const int32_t ga = m.g[fs[0]], gb = m.g[fs[1]];
             if (ga == gb || fn[fs[0]].dot(fn[fs[1]]) > 0.99999f) continue;
             const std::set<std::string> names = named::edgeNamesBetween(input.faceGroups, ga, gb);
-            std::string hit;
-            for (const auto& want : *edgeNames) if (names.count(want)) { hit = want; break; }
-            if (hit.empty()) continue;
-            // convex only: the second face's far corner lies behind the first face's plane
-            const uint32_t a = static_cast<uint32_t>(k >> 32), b = static_cast<uint32_t>(k & 0xffffffffu);
-            uint32_t far = a;
-            for (uint32_t v : m.t[fs[1]]) if (v != a && v != b) far = v;
-            if (fn[fs[0]].dot(m.p[far] - m.p[a]) > 1e-6f * (m.p[b] - m.p[a]).length()) {
-                throw std::invalid_argument("bevel: an edge named '" + hit + "' of '" + input.name + "' at (" + std::to_string(m.p[a].x) + ", " +
-                    std::to_string(m.p[a].y) + ", " + std::to_string(m.p[a].z) + ") is concave (a valley); a bevel here would add material, "
-                    "which this cut cannot. Bevel convex edges only; after a boolean, a qualified name (plate.top) tells the part's edges from the tool's");
-            }
+            bool hit = false;
+            for (const auto& want : *edgeNames) if (names.count(want)) { hit = true; break; }
+            if (!hit) continue;
+            // concave edges are fine here: the offset bevel rounds a valley by filling it (as its angle selection always
+            // has); the wedge-cut fallback below is the one that refuses them
             chosen.insert(k);
         }
         if (chosen.empty()) {
@@ -1432,12 +1425,17 @@ inline ScratchboxMesh bevel(const ScratchboxMesh& input, float width, int segmen
     // Each (vertex, region) pair on a sharp edge gets its own copy, pulled into the region.
     std::vector<std::vector<uint32_t>> vf(m.p.size());
     for (size_t f = 0; f < F; ++f) for (uint32_t v : m.t[f]) vf[v].push_back(static_cast<uint32_t>(f));
-    // Shortest edge at each vertex limits the width so faces cannot invert.
+    // Shortest edge at each vertex limits the width so faces cannot invert. With named edges, the bevelled edges
+    // themselves do not count: the copies move across them, never along them, so a finely divided loop (a lathe's
+    // rim, a polygonal circle) is not held to a fraction of its facet length.
     std::vector<float> shortest(m.p.size(), 1e30f);
     for (const auto& t : m.t) for (int k = 0; k < 3; ++k) {
+        if (edgeNames && sharp(t[k], t[(k + 1) % 3])) continue;
         float l = (m.p[t[k]] - m.p[t[(k + 1) % 3]]).length();
         shortest[t[k]] = std::min(shortest[t[k]], l); shortest[t[(k + 1) % 3]] = std::min(shortest[t[(k + 1) % 3]], l);
     }
+    size_t capped = 0;
+    float narrowest = width;
     std::map<std::pair<uint32_t, int>, uint32_t> copyOf;
     IndexedMesh out;
     out.p = m.p;
@@ -1476,6 +1474,7 @@ inline ScratchboxMesh bevel(const ScratchboxMesh& input, float width, int segmen
             }
             dir = dir - nR * dir.dot(nR);
             float w = std::min(width, shortest[v] * 0.45f);
+            if (w < width * 0.99f) { ++capped; narrowest = std::min(narrowest, w); }
             idx = static_cast<uint32_t>(out.p.size());
             out.p.push_back(m.p[v] + dir * w);
         }
@@ -1573,6 +1572,11 @@ inline ScratchboxMesh bevel(const ScratchboxMesh& input, float width, int segmen
             if (n.dot(outward) >= 0) out.t.push_back({hub, x, y});
             else out.t.push_back({hub, y, x});
         }
+    }
+    if (capped && warnings) {
+        warnings->push_back("bevel: the width was cut to " + std::to_string(narrowest) + " m (from " + std::to_string(width) +
+                            ") at " + std::to_string(capped) + " corner copies, 45% of the shortest edge there, so no face inverts; "
+                            "give a smaller width, or build the part with longer edges next to the bevel");
     }
     if (namedIn && m.g.size() == F) {
         // The kept faces keep their groups; the strips and corner caps are one new surface, named by what it is.
