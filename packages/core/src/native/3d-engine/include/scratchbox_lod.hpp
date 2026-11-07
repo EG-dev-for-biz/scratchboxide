@@ -13,6 +13,7 @@
 #include "scratchbox_math.hpp"
 #include "scratchbox_geometry.hpp"
 #include "scratchbox_halfedge.hpp"
+#include "scratchbox_processing.hpp"
 
 #include <vector>
 #include <string>
@@ -23,9 +24,21 @@ namespace lod {
 
 using geometry::ScratchboxMesh;
 
+/**
+ * One LOD step: QEM edge collapse on the welded surface (processing::QuadricDecimator) with its outline pinned, UV
+ * seams crossed at the cost of the texture they drag (crossSeams), and the result ordered for the vertex cache.
+ * Replaces halfedge::decimateMeshQEM here, which cracked seams open and lost the surface on scan meshes.
+ */
+inline ScratchboxMesh simplifyForLod(const ScratchboxMesh& mesh, size_t targetTriangles) {
+    processing::DecimateOptions opt;
+    opt.targetTriangles = std::max<size_t>(4, targetTriangles);
+    opt.crossSeams = true;
+    return processing::QuadricDecimator::decimate(mesh, opt);
+}
+
 struct LodLevel {
     uint32_t levelIndex{0};
-    float triangleRatio{1.0f};  // 1.0 (LOD0), 0.5 (LOD1), 0.25 (LOD2), 0.125 (LOD3)
+    float triangleRatio{1.0f};  // the share of LOD0's triangles this level holds (asked: 1.0, 0.5, 0.25, 0.125)
     float switchDistance{0.0f}; // Camera distance in meters/units to trigger switch
     ScratchboxMesh mesh;
 };
@@ -68,8 +81,10 @@ inline LodPyramid buildLodPyramid(
         } else {
             uint32_t targetTriangles = static_cast<uint32_t>(origTriangles * ratio);
             targetTriangles = std::max(4u, targetTriangles);
-            lvl.mesh = halfedge::decimateMeshQEM(baseMesh, targetTriangles);
+            lvl.mesh = simplifyForLod(baseMesh, targetTriangles);
             lvl.mesh.name = baseMesh.name + "_LOD" + std::to_string(i);
+            // a scan the collapse cannot take that far (topology locks it) keeps the share it reached, said here
+            lvl.triangleRatio = static_cast<float>(lvl.mesh.indices.size() / 3) / static_cast<float>(std::max<size_t>(1, origTriangles));
         }
 
         pyramid.levels.push_back(std::move(lvl));

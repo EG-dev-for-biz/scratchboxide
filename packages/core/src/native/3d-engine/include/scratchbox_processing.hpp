@@ -234,7 +234,117 @@ struct DecimateOptions {
     float creaseAngleDeg{45.0f};   // Dihedral angle threshold (same convention as IsotropicRemeshOptions) between
                                     // two triangles sharing an edge that counts that edge as a crease; also the angle
                                     // between two copies of one corner's normal that keeps them a hard edge
+    bool crossSeams{false};        // Let a collapse cross a UV or colour seam (meshoptimizer's "permissive" idea): a
+                                    // wedge of the removed end with no partner at the kept end takes the kept end's
+                                    // wedge nearest in UV, and the collapse pays for the texture it drags, in the
+                                    // quadric's units: each moved triangle's area times (its UV shift in surface metres)^2
+                                    // times seamWeight. Without it, photogrammetry atlases (a seam at nearly every vertex)
+                                    // stall the collapse long before the target.
+    float seamWeight{1.0f};        // weight of that texture-drift cost against the surface quadric
+    bool optimizeOrder{true};      // order the result's triangles for the post-transform vertex cache and its
+                                    // vertices by first use (optimizeVertexCache, optimizeVertexFetch)
 };
+
+// Triangle and vertex order for the GPU (post-transform vertex cache, then vertex fetch)
+
+/** Average vertex-shader invocations per triangle (ACMR) of `indices` through a FIFO cache of cacheSize entries. */
+inline double vertexCacheMissRatio(const std::vector<uint32_t>& indices, size_t vertexCount, size_t cacheSize = 16) {
+    if (indices.size() < 3) return 0.0;
+    std::vector<uint64_t> stamp(vertexCount, 0);
+    uint64_t clock = 0;
+    size_t misses = 0;
+    for (uint32_t i : indices) {
+        // a vertex is cached while fewer than cacheSize misses have followed its own
+        if (stamp[i] == 0 || clock - stamp[i] >= cacheSize) { ++misses; stamp[i] = ++clock; }
+    }
+    return double(misses) / double(indices.size() / 3);
+}
+
+/**
+ * Re-orders triangles for the post-transform vertex cache, in place (Forsyth's linear-speed vertex cache ordering).
+ * Each vertex scores by its place in a simulated LRU cache (the last triangle's three corners a fixed 0.75, deeper
+ * entries falling off as (1 - depth/size)^1.5) plus a boost for few remaining triangles (2 / sqrt(remaining)), so
+ * lone vertices are finished first; the next triangle is the best-scoring one around the cache, else the next
+ * unemitted one in input order.
+ */
+inline void optimizeVertexCache(std::vector<uint32_t>& indices, size_t vertexCount, int cacheSize = 32) {
+    const size_t triCount = indices.size() / 3;
+    if (triCount < 2) return;
+    std::vector<uint32_t> offset(vertexCount + 1, 0), remaining(vertexCount, 0);
+    for (size_t i = 0; i < triCount * 3; ++i) offset[indices[i] + 1]++;
+    for (size_t v = 0; v < vertexCount; ++v) { remaining[v] = offset[v + 1]; offset[v + 1] += offset[v]; }
+    std::vector<uint32_t> vertTris(triCount * 3), fill(offset.begin(), offset.end() - 1);
+    for (size_t t = 0; t < triCount; ++t) for (int k = 0; k < 3; ++k) vertTris[fill[indices[t * 3 + k]]++] = uint32_t(t);
+
+    std::vector<int> cachePos(vertexCount, -1);
+    auto vertexScore = [&](uint32_t v) -> float {
+        if (remaining[v] == 0) return -1.0f;
+        float score = 0.0f;
+        const int p = cachePos[v];
+        if (p >= 0) score = p < 3 ? 0.75f : std::pow(1.0f - float(p - 3) / float(cacheSize - 3), 1.5f);
+        return score + 2.0f / std::sqrt(float(remaining[v]));
+    };
+    std::vector<float> vScore(vertexCount), tScore(triCount, 0.0f);
+    for (size_t v = 0; v < vertexCount; ++v) vScore[v] = vertexScore(uint32_t(v));
+    for (size_t t = 0; t < triCount; ++t) tScore[t] = vScore[indices[t * 3]] + vScore[indices[t * 3 + 1]] + vScore[indices[t * 3 + 2]];
+
+    std::vector<uint8_t> emitted(triCount, 0);
+    std::vector<uint32_t> out;
+    out.reserve(indices.size());
+    std::vector<uint32_t> cache, next;
+    cache.reserve(cacheSize + 3);
+    size_t cursor = 0;
+    int64_t best = -1;
+    for (size_t done = 0; done < triCount; ++done) {
+        if (best < 0) {
+            while (cursor < triCount && emitted[cursor]) ++cursor;
+            best = int64_t(cursor);
+        }
+        const uint32_t t = uint32_t(best);
+        emitted[t] = 1;
+        const uint32_t tri[3] = { indices[t * 3], indices[t * 3 + 1], indices[t * 3 + 2] };
+        out.insert(out.end(), tri, tri + 3);
+        // the triangle's corners go to the front of the cache; the rest follow, pushed one place deeper
+        next.assign(tri, tri + 3);
+        for (uint32_t v : cache) if (v != tri[0] && v != tri[1] && v != tri[2]) next.push_back(v);
+        for (uint32_t v : tri) {
+            uint32_t* list = vertTris.data() + offset[v];
+            const uint32_t n = remaining[v];
+            for (uint32_t i = 0; i < n; ++i) if (list[i] == t) { list[i] = list[n - 1]; list[n - 1] = t; break; }
+            remaining[v]--;
+        }
+        for (uint32_t v : cache) cachePos[v] = -1;
+        for (size_t i = 0; i < next.size(); ++i) cachePos[next[i]] = i < size_t(cacheSize) ? int(i) : -1;
+        // the best live triangle around the cache, scored afresh
+        best = -1;
+        float bestScore = -1.0f;
+        for (uint32_t v : next) vScore[v] = vertexScore(v);
+        for (uint32_t v : next) {
+            for (uint32_t i = 0; i < remaining[v]; ++i) {
+                const uint32_t s = vertTris[offset[v] + i];
+                const float sc = vScore[indices[s * 3]] + vScore[indices[s * 3 + 1]] + vScore[indices[s * 3 + 2]];
+                tScore[s] = sc;
+                if (sc > bestScore) { bestScore = sc; best = int64_t(s); }
+            }
+        }
+        if (next.size() > size_t(cacheSize)) next.resize(cacheSize);
+        cache.swap(next);
+    }
+    indices.swap(out);
+}
+
+/** Vertices in the order the triangles first use them, unused ones dropped, in place (cheaper vertex fetch). */
+inline void optimizeVertexFetch(ScratchboxMesh& mesh) {
+    constexpr uint32_t NONE = std::numeric_limits<uint32_t>::max();
+    std::vector<uint32_t> remap(mesh.vertices.size(), NONE);
+    std::vector<Vertex> out;
+    out.reserve(mesh.vertices.size());
+    for (uint32_t& i : mesh.indices) {
+        if (remap[i] == NONE) { remap[i] = uint32_t(out.size()); out.push_back(mesh.vertices[i]); }
+        i = remap[i];
+    }
+    mesh.vertices.swap(out);
+}
 
 class QuadricDecimator {
 public:
@@ -423,8 +533,12 @@ public:
             float attrT{0.0f};   // 0: the target is u's position, 1: v's, 0.5: their midpoint
             double cost{0.0};
             std::vector<std::pair<uint32_t, uint32_t>> wedgeMap;   // (wedge of v, wedge of u)
+            std::vector<uint8_t> crossed;   // per wedgeMap entry: 1 when the pair crosses a seam (attributes not blended)
+            double seamCost{0.0};
         };
         std::vector<uint32_t> ringA, ringB, edgeTris, opposite;
+        std::vector<std::pair<uint32_t, uint32_t>> altMap;
+        std::vector<uint8_t> altCrossed;
         auto ringOf = [&](uint32_t a, std::vector<uint32_t>& ring) {
             // every other corner of a's live triangles, sorted: a neighbour listed once shares an outline edge with a
             ring.clear();
@@ -465,6 +579,71 @@ public:
                         return false;   // a wedge of v with no counterpart at u (the edge leaves v's seam)
             }
             return true;
+        };
+        // The seam-crossing map for collapsing v into u (DecimateOptions::crossSeams): each wedge of v takes its partner
+        // across the edge's own triangles where it has one, else u's wedge nearest in UV. Returns the texture-drift cost:
+        // over v's triangles that stay, area x (UV shift x metres per UV unit)^2, plus area^2 x (colour shift)^2 (a full
+        // colour flip costs as much as moving the triangle by its own size).
+        std::vector<uint32_t> uWedges;
+        auto uvGap2 = [&](uint32_t a, uint32_t b) {
+            const Vertex& x = wedges[a];
+            const Vertex& y = wedges[b];
+            const double du = x.uv.x - y.uv.x, dv = x.uv.y - y.uv.y, du1 = x.uv1.x - y.uv1.x, dv1 = x.uv1.y - y.uv1.y;
+            return du * du + dv * dv + du1 * du1 + dv1 * dv1;
+        };
+        auto colourGap2 = [&](uint32_t a, uint32_t b) {
+            const Vec4& x = wedges[a].color;
+            const Vec4& y = wedges[b].color;
+            const double dr = x.x - y.x, dg = x.y - y.y, db = x.z - y.z, da = x.w - y.w;
+            return dr * dr + dg * dg + db * db + da * da;
+        };
+        auto crossWedges = [&](uint32_t u, uint32_t v, std::vector<std::pair<uint32_t, uint32_t>>& map, std::vector<uint8_t>& crossed) -> double {
+            map.clear();
+            crossed.clear();
+            for (uint32_t t : edgeTris) {
+                const auto& tri = triangles[t];
+                uint32_t wu = NONE, wv = NONE;
+                for (int k = 0; k < 3; ++k) {
+                    if (corner(tri, k) == u) wu = tri.w[k];
+                    if (corner(tri, k) == v) wv = tri.w[k];
+                }
+                if (std::none_of(map.begin(), map.end(), [&](const auto& m) { return m.first == wv; })) { map.emplace_back(wv, wu); crossed.push_back(0); }
+            }
+            uWedges.clear();
+            for (uint32_t t : vertTriangles[u]) {
+                const auto& tri = triangles[t];
+                if (tri.deleted) continue;
+                for (int k = 0; k < 3; ++k)
+                    if (corner(tri, k) == u && std::find(uWedges.begin(), uWedges.end(), tri.w[k]) == uWedges.end()) uWedges.push_back(tri.w[k]);
+            }
+            double cost = 0.0;
+            for (uint32_t t : vertTriangles[v]) {
+                const auto& tri = triangles[t];
+                if (tri.deleted || std::find(edgeTris.begin(), edgeTris.end(), t) != edgeTris.end()) continue;
+                for (int k = 0; k < 3; ++k) {
+                    if (corner(tri, k) != v) continue;
+                    const uint32_t wv = tri.w[k];
+                    size_t i = 0;
+                    while (i < map.size() && map[i].first != wv) ++i;
+                    if (i == map.size()) {
+                        uint32_t best = uWedges.empty() ? NONE : uWedges[0];
+                        for (uint32_t w : uWedges) if (uvGap2(wv, w) < uvGap2(wv, best)) best = w;
+                        if (best == NONE) return -1.0;
+                        map.emplace_back(wv, best);
+                        crossed.push_back(1);
+                    }
+                    if (!crossed[i]) continue;
+                    const uint32_t wu = map[i].second;
+                    const double area = 0.5 * faceCross(tri).length();
+                    const Vec2& a = wedges[tri.w[0]].uv;
+                    const Vec2& b = wedges[tri.w[1]].uv;
+                    const Vec2& c = wedges[tri.w[2]].uv;
+                    const double uvArea = 0.5 * std::abs(double(b.x - a.x) * (c.y - a.y) - double(c.x - a.x) * (b.y - a.y));
+                    const double metres2PerUv2 = uvArea > 1e-14 ? area / uvArea : 0.0;
+                    cost += area * metres2PerUv2 * uvGap2(wv, wu) + area * area * colourGap2(wv, wu);
+                }
+            }
+            return cost;
         };
         auto foldsOver = [&](uint32_t a, uint32_t b, const Vec3& target) {
             for (uint32_t end : { a, b }) {
@@ -524,8 +703,18 @@ public:
             opposite.erase(std::unique(opposite.begin(), opposite.end()), opposite.end());
             if (shared != opposite.size()) return false;
 
-            if (mapWedges(a, b, plan.wedgeMap)) { plan.u = a; plan.v = b; }
-            else if (mapWedges(b, a, plan.wedgeMap)) { plan.u = b; plan.v = a; }
+            plan.seamCost = 0.0;
+            if (mapWedges(a, b, plan.wedgeMap)) { plan.u = a; plan.v = b; plan.crossed.assign(plan.wedgeMap.size(), 0); }
+            else if (mapWedges(b, a, plan.wedgeMap)) { plan.u = b; plan.v = a; plan.crossed.assign(plan.wedgeMap.size(), 0); }
+            else if (opt.crossSeams) {
+                // across the seam: whichever end drags less texture is removed
+                const double costAB = crossWedges(a, b, plan.wedgeMap, plan.crossed);
+                const double costBA = crossWedges(b, a, altMap, altCrossed);
+                if (costAB < 0 && costBA < 0) return false;
+                if (costAB >= 0 && (costBA < 0 || costAB <= costBA)) { plan.u = a; plan.v = b; plan.seamCost = costAB; }
+                else { plan.u = b; plan.v = a; plan.seamCost = costBA; plan.wedgeMap.swap(altMap); plan.crossed.swap(altCrossed); }
+                plan.seamCost *= opt.seamWeight;
+            }
             else return false;
 
             // A triangle around v whose other corners are both opposite corners of the edge would land on one u
@@ -556,7 +745,7 @@ public:
                 if (opt.preventNormalFlips && foldsOver(plan.u, plan.v, c.p)) continue;
                 plan.target = c.p;
                 plan.attrT = c.attrT;
-                plan.cost = c.err;
+                plan.cost = c.err + plan.seamCost;
                 return true;
             }
             return false;
@@ -613,7 +802,9 @@ public:
             uint32_t u = plan.u, v = plan.v;
             positions[u] = plan.target;
             quadrics[u] += quadrics[v];
-            for (auto [wv, wu] : plan.wedgeMap) {
+            for (size_t i = 0; i < plan.wedgeMap.size(); ++i) {
+                if (plan.crossed[i]) continue;   // the two sides of a seam keep their own attributes
+                const auto [wv, wu] = plan.wedgeMap[i];
                 wedges[wu].uv = math::lerp(wedges[wu].uv, wedges[wv].uv, plan.attrT);
                 wedges[wu].uv1 = math::lerp(wedges[wu].uv1, wedges[wv].uv1, plan.attrT);
                 wedges[wu].color = math::lerp(wedges[wu].color, wedges[wv].color, plan.attrT);
@@ -680,6 +871,10 @@ public:
 
         decimated.recomputeSmoothNormals();
         decimated.recomputeBounds();
+        if (opt.optimizeOrder) {
+            optimizeVertexCache(decimated.indices, decimated.vertices.size());
+            optimizeVertexFetch(decimated);
+        }
         return decimated;
     }
 };
