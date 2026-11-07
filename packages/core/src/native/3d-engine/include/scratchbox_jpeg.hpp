@@ -683,6 +683,160 @@ inline DecodeResult decodeFile(const std::string& path, OutputFormat format = Ou
     return decode(bytes, format);
 }
 
+
+/**
+ * Baseline JPEG encoder (JFIF, 8-bit, 4:4:4, the standard Annex K quantisation and Huffman tables scaled by quality as the
+ * IJG library does): for writing a photo back after a stage changed some of its texels, so it stays a JPEG of about the
+ * size it came as. Greyscale (1 channel) is written as one component; RGB and RGBA as YCbCr (alpha dropped).
+ */
+namespace encode_detail {
+constexpr uint8_t kLumaQuant[64] = {16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69, 56, 14, 17, 22, 29, 51, 87, 80, 62,
+                                    18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113, 92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99};
+constexpr uint8_t kChromaQuant[64] = {17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26, 56, 99, 99, 99, 99, 99, 47, 66, 99, 99, 99, 99, 99, 99,
+                                      99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99};
+constexpr uint8_t kDcLumaBits[16] = {0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0};
+constexpr uint8_t kDcLumaVals[12] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+constexpr uint8_t kDcChromaBits[16] = {0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0};
+constexpr uint8_t kDcChromaVals[12] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+constexpr uint8_t kAcLumaBits[16] = {0, 2, 1, 3, 3, 2, 4, 3, 5, 5, 4, 4, 0, 0, 1, 0x7d};
+constexpr uint8_t kAcLumaVals[162] = {
+    0x01, 0x02, 0x03, 0x00, 0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07, 0x22, 0x71, 0x14, 0x32, 0x81, 0x91, 0xa1, 0x08,
+    0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1, 0xf0, 0x24, 0x33, 0x62, 0x72, 0x82, 0x09, 0x0a, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x25, 0x26, 0x27, 0x28,
+    0x29, 0x2a, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59,
+    0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89,
+    0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6,
+    0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2,
+    0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa};
+constexpr uint8_t kAcChromaBits[16] = {0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 0x77};
+constexpr uint8_t kAcChromaVals[162] = {
+    0x00, 0x01, 0x02, 0x03, 0x11, 0x04, 0x05, 0x21, 0x31, 0x06, 0x12, 0x41, 0x51, 0x07, 0x61, 0x71, 0x13, 0x22, 0x32, 0x81, 0x08, 0x14, 0x42, 0x91,
+    0xa1, 0xb1, 0xc1, 0x09, 0x23, 0x33, 0x52, 0xf0, 0x15, 0x62, 0x72, 0xd1, 0x0a, 0x16, 0x24, 0x34, 0xe1, 0x25, 0xf1, 0x17, 0x18, 0x19, 0x1a, 0x26,
+    0x27, 0x28, 0x29, 0x2a, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58,
+    0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
+    0x88, 0x89, 0x8a, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2, 0xb3, 0xb4,
+    0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda,
+    0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa};
+
+struct HuffCode { uint16_t code{0}; uint8_t len{0}; };
+/** Canonical codes from a table's code counts per length and its symbols (ITU T.81 Annex C). */
+inline std::array<HuffCode, 256> buildCodes(const uint8_t* bits, const uint8_t* vals) {
+    std::array<HuffCode, 256> out{};
+    uint16_t code = 0;
+    size_t k = 0;
+    for (int len = 1; len <= 16; ++len) {
+        for (int i = 0; i < bits[len - 1]; ++i) out[vals[k++]] = HuffCode{code++, static_cast<uint8_t>(len)};
+        code <<= 1;
+    }
+    return out;
+}
+struct BitWriter {
+    std::vector<uint8_t>& out;
+    uint32_t acc{0};
+    int n{0};
+    void put(uint32_t bits, int len) {
+        for (int i = len - 1; i >= 0; --i) {
+            acc = (acc << 1) | ((bits >> i) & 1u);
+            if (++n == 8) {
+                out.push_back(static_cast<uint8_t>(acc));
+                if (acc == 0xFF) out.push_back(0x00);   // byte stuffing
+                acc = 0; n = 0;
+            }
+        }
+    }
+    void flush() { while (n) put(1, 1); }   // pad the last byte with ones
+};
+/** The bit length of |v| and v's bits as JPEG writes a coefficient (negative values one's complement). */
+inline void magnitude(int v, uint32_t& bits, int& len) {
+    int a = v < 0 ? -v : v;
+    len = 0;
+    while (a) { ++len; a >>= 1; }
+    bits = static_cast<uint32_t>(v < 0 ? v + (1 << len) - 1 : v);
+}
+}  // namespace encode_detail
+
+inline std::vector<uint8_t> encode(const texture::ImageBuffer& img, int quality = 90) {
+    using namespace encode_detail;
+    if (img.empty() || (img.channels != 1 && img.channels != 3 && img.channels != 4)) return {};
+    quality = std::clamp(quality, 1, 100);
+    const int scale = quality < 50 ? 5000 / quality : 200 - 2 * quality;
+    uint8_t qt[2][64];
+    for (int i = 0; i < 64; ++i) {
+        qt[0][i] = static_cast<uint8_t>(std::clamp((kLumaQuant[i] * scale + 50) / 100, 1, 255));
+        qt[1][i] = static_cast<uint8_t>(std::clamp((kChromaQuant[i] * scale + 50) / 100, 1, 255));
+    }
+    const int comps = img.channels == 1 ? 1 : 3;
+    std::vector<uint8_t> out;
+    auto u16 = [&](int v) { out.push_back(static_cast<uint8_t>(v >> 8)); out.push_back(static_cast<uint8_t>(v & 0xFF)); };
+    out.insert(out.end(), {0xFF, 0xD8});                                                               // SOI
+    out.insert(out.end(), {0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00});   // APP0
+    for (int t = 0; t < (comps == 1 ? 1 : 2); ++t) {                                                    // DQT, zigzag order
+        out.insert(out.end(), {0xFF, 0xDB}); u16(67); out.push_back(static_cast<uint8_t>(t));
+        for (int i = 0; i < 64; ++i) out.push_back(qt[t][detail::kNaturalOrder[i]]);
+    }
+    out.insert(out.end(), {0xFF, 0xC0}); u16(8 + 3 * comps); out.push_back(8); u16(img.height); u16(img.width); out.push_back(static_cast<uint8_t>(comps));   // SOF0
+    for (int c = 0; c < comps; ++c) { out.push_back(static_cast<uint8_t>(c + 1)); out.push_back(0x11); out.push_back(static_cast<uint8_t>(c == 0 ? 0 : 1)); }
+    auto dht = [&](int cls, int id, const uint8_t* bits, const uint8_t* vals, int nvals) {
+        out.insert(out.end(), {0xFF, 0xC4}); u16(3 + 16 + nvals); out.push_back(static_cast<uint8_t>((cls << 4) | id));
+        out.insert(out.end(), bits, bits + 16); out.insert(out.end(), vals, vals + nvals);
+    };
+    dht(0, 0, kDcLumaBits, kDcLumaVals, 12); dht(1, 0, kAcLumaBits, kAcLumaVals, 162);
+    if (comps == 3) { dht(0, 1, kDcChromaBits, kDcChromaVals, 12); dht(1, 1, kAcChromaBits, kAcChromaVals, 162); }
+    out.insert(out.end(), {0xFF, 0xDA}); u16(6 + 2 * comps); out.push_back(static_cast<uint8_t>(comps));   // SOS
+    for (int c = 0; c < comps; ++c) { out.push_back(static_cast<uint8_t>(c + 1)); out.push_back(static_cast<uint8_t>(c == 0 ? 0x00 : 0x11)); }
+    out.insert(out.end(), {0x00, 0x3F, 0x00});
+    const auto dcCodes = std::array<std::array<HuffCode, 256>, 2>{buildCodes(kDcLumaBits, kDcLumaVals), buildCodes(kDcChromaBits, kDcChromaVals)};
+    const auto acCodes = std::array<std::array<HuffCode, 256>, 2>{buildCodes(kAcLumaBits, kAcLumaVals), buildCodes(kAcChromaBits, kAcChromaVals)};
+    // the DCT basis: cos((2x + 1) u pi / 16) with its normalisation
+    double basis[8][8];
+    for (int u = 0; u < 8; ++u) for (int x = 0; x < 8; ++x) basis[u][x] = (u == 0 ? std::sqrt(0.125) : 0.5) * std::cos((2 * x + 1) * u * M_PI / 16.0);
+    BitWriter bw{out};
+    int prevDc[3] = {0, 0, 0};
+    auto sampleAt = [&](int x, int y, int c) {
+        x = std::min(x, img.width - 1); y = std::min(y, img.height - 1);   // edge blocks repeat the last row and column
+        const uint8_t* px = &img.data[(static_cast<size_t>(y) * img.width + x) * img.channels];
+        if (comps == 1) return px[0] - 128.0;
+        const double r = px[0], g = px[1], b = px[2];
+        if (c == 0) return 0.299 * r + 0.587 * g + 0.114 * b - 128.0;
+        if (c == 1) return -0.168736 * r - 0.331264 * g + 0.5 * b;
+        return 0.5 * r - 0.418688 * g - 0.081312 * b;
+    };
+    for (int by = 0; by < img.height; by += 8) for (int bx = 0; bx < img.width; bx += 8) for (int c = 0; c < comps; ++c) {
+        double block[8][8], tmp[8][8];
+        for (int y = 0; y < 8; ++y) for (int x = 0; x < 8; ++x) block[y][x] = sampleAt(bx + x, by + y, c);
+        for (int y = 0; y < 8; ++y) for (int u = 0; u < 8; ++u) { double s = 0; for (int x = 0; x < 8; ++x) s += basis[u][x] * block[y][x]; tmp[y][u] = s; }
+        int q[64];
+        const int t = c == 0 ? 0 : 1;
+        for (int v = 0; v < 8; ++v) for (int u = 0; u < 8; ++u) {
+            double s = 0;
+            for (int y = 0; y < 8; ++y) s += basis[v][y] * tmp[y][u];
+            q[v * 8 + u] = static_cast<int>(std::lround(s / qt[t][v * 8 + u]));
+        }
+        // DC: the difference from the previous block of this component
+        uint32_t bits; int len;
+        const int diff = q[0] - prevDc[c];
+        prevDc[c] = q[0];
+        magnitude(diff, bits, len);
+        bw.put(dcCodes[t][len].code, dcCodes[t][len].len);
+        if (len) bw.put(bits, len);
+        // AC in zigzag order: (zero run, size) symbols, ZRL for 16 zeros, EOB at the end
+        int run = 0;
+        for (int i = 1; i < 64; ++i) {
+            const int v = q[detail::kNaturalOrder[i]];
+            if (v == 0) { ++run; continue; }
+            while (run > 15) { bw.put(acCodes[t][0xF0].code, acCodes[t][0xF0].len); run -= 16; }
+            magnitude(v, bits, len);
+            const int sym = (run << 4) | len;
+            bw.put(acCodes[t][sym].code, acCodes[t][sym].len);
+            bw.put(bits, len);
+            run = 0;
+        }
+        if (run) bw.put(acCodes[t][0].code, acCodes[t][0].len);
+    }
+    bw.flush();
+    out.insert(out.end(), {0xFF, 0xD9});   // EOI
+    return out;
+}
+
 } // namespace jpeg
 } // namespace scratchbox
 

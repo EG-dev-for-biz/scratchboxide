@@ -163,3 +163,111 @@ No difference a build shows. A full chunked district (pipeline K-D) was not buil
 ### Cost
 
 On the district extraction: the fixed passes 50 s, the adaptive close 115 s, the fill 7 s, the audits about a second each (with other builds loading the machine). With the adaptive close off by default, the stage costs what tile-seams/3 did plus the audit.
+
+## 9. Seam tone feather (tile-seams/5, 2026-11-05)
+
+**Status: measured offline on the ESB and the Penn district extraction, rendered before and after; opt-in (`SCRATCHBOX_TILE_SEAM_TONE=1`; the default is the user's decision: on Penn 2 it raised pipeline K's untextured share 1.56% → 1.78%), for extractions whose leaves carry their boxes (the crawler now writes each leaf's tileset box into its node, `extras.sb.tile.box`).**
+
+What a facade seam shows (§8) is the two tiles' photos. Three things were tried; one ships.
+
+- **Tone feather (shipped, `featherSeamTone`).** The cuts are the planes where two leaves' boxes share a face (neighbouring faces lie 5–10 cm apart; 808 cuts on the ESB, 1,602 on the district). On the surfaces crossing a cut (never a cap lying in it), each tile's photo is read within 1 m of the cut in 2 m bins along it, whichever way the surface faces (bins split by facing put a facade's triangles on either side of a bin's edge and levelled them each their own way: hard-edged wedges in the difference map); where both sides read a bin the two mean colours are levelled toward their geometric mean, half the step each, smoothed over neighbouring bins, interpolated between bin centres with a bin that has none counting as none (so it fades out where the read ends instead of stopping), faded out over 2.5 m from the cut, capped at 1.6x per channel. Texels an atlas draws at two places more than 0.5 m apart are never touched. The photos are written back in their own format (a native baseline JPEG encoder, `jpeg::encode`, keeps them JPEG; as PNG the ESB scan grew 18 → 46 MB, as JPEG 18 → 22 MB). Labelled `generated` on the material (`extras.scratchbox.method`).
+
+| | median / p90 CIELAB step across the seam, before → after | photos changed | time |
+|---|---|---|---|
+| ESB (136 tiles) | 4.40 / 19.6 → 2.62 / 10.9 | 189 | 0.9 s |
+| Penn district r210 (234 boxed tiles) | 3.41 / 14.9 → 2.12 / 9.1 | 304 | 1.3 s |
+
+  In renders the change is modest: a softer tone change at the cuts, 4–11% of a facade view's pixels moved by more than 3 levels, as bands fading out either side of each cut (a few triangle-shaped wedges remain where a neighbouring triangle is left out: atlas-shared texels, or a face lying near the cut plane).
+
+- **Sideways registration (tried, not shipped).** Grey profiles parallel to each cut, either side, cross-correlated per 4 m of seam: the two sides already correlate at 0.89–0.99 at no shift on the ESB's walls; 27 of 236 segments had a clear peak elsewhere. Rendered, nothing visible changed.
+- **Row phase across the cut (tried, not shipped).** Each side's rhythm perpendicular to the cut (storeys, bays) read out to 12 m, the period from both sides' autocorrelation, each side's phase at it, and half the phase difference moved into each side over a band four times the move. On the ESB 86 wall segments had a rhythm on both sides; the tile photos (256–512 texels for ~30 m) are too soft and too different in viewpoint for it to be reliable: rendered, moves landed in triangle-shaped patches and swapped window content rather than continuing it. What still reads as a seam is the two photos themselves (different sharpness, different viewpoint), which no levelling or shift of either photo fixes.
+
+## 10. The tiles' caps removed (tile-seams/6, 2026-11-05)
+
+**Status: opt-in (`SCRATCHBOX_TILE_SEAM_CAPS=1`), for extractions whose leaves carry their boxes. Built and compared in uncached pipeline K builds of the ESB, in clay, against a control of the same code with the caps kept: clean on two of the four tower cuts looked at, a regression on one, unsure on one. Penn 2 is too noisy run to run to say anything.**
+
+Judged in clay, a finished K building shows a row of slots across every bay at each Google tile cut. A ray through a slot hits a scan piece facing straight up, 14 cm in front of the rebuilt bay: the tile's cap, the strip each leaf carries in its cut plane (a ring about a metre wide inside the wall, about 500 m² at each ESB tower cut, half facing up, half down). K recesses the bays behind the scan's wall plane and never removes the cap (it faces up, not the facade), so it stands out across them. On the raw scan the caps are inside the surface and nothing shows (§8).
+
+`trimCapsByBox`, first of the seam stage's passes: a triangle goes when it faces along a box face its leaf shares with another leaf (two faces within 1.2 m: some boxes stand half a metre loose of their cut, so two neighbours' boxes overlap by a metre), lies within 0.75 m of that face, and the neighbour's cap lies behind it within 10 cm, facing the other way, under its centroid.
+
+What was tried on the way:
+- **Marking a band along each cut in K's facade photos** (as uncovered, then as occluded), on the theory that K read the photos' meeting line as openings: as uncovered, K kept the scan's wall triangles across the band and with them the scan in place of the rebuild (flat walls); as occluded, the facades were rebuilt and the slots stayed. Reverted.
+- **Caps within 15 cm of the box face:** 14,629 m² removed on the ESB scan, but only 14–48% of the cap area at the tower cuts (loose boxes); the west face's slots stayed.
+- **Caps within 0.75 m, backed within 30 cm:** the cuts clean, but the ESB build opened a 75 m² hole near its top setbacks (3 x 24.5 m): the two faces of a thin wall standing along a cut, one in each leaf, are back to back like two caps. Backing within 10 cm (two leaves' caps lie centimetres apart; a wall's faces its thickness apart) removes 58 m² less and the hole is gone.
+
+ESB, uncached builds (holes / untextured / largest hole region):
+
+| | caps kept (control) | caps removed |
+|---|---|---|
+| ESB | 0.70% / 0.38% / 28.5 m², complete | 0.75% / 0.32% / 28.2 m², complete |
+
+ESB scan: 20,448 m² of caps removed; 10–31 m² left at each tower cut (was about 500). In clay (sheet `docs/screenshots/2026-11-05-esb-tile-caps-clay.jpg`), face by face:
+
+- **West and north faces at 215.9 m:** the slots are gone and nothing new appears.
+- **East face near 179.5 m: not the cut (traced 2026-11-05).** The dark band there lies about 3.3 m below the cut, at 175.5-176.4 m, on the rebuilt facade (`FacadeLattice`). It is in builds with the caps kept too: main and two branch builds have it at 175.5-176.0 m, 0.52 m deep; the first caps-removed build had none, the second one 0.80 m deep, a build with the caps removed and the step blend none. Pipeline K rebuilds that part of the east face differently on every build, so one pair of builds cannot say what the caps do there (sheet `docs/screenshots/2026-11-05-esb-cuts-clay-four-builds.jpg`).
+- **South face at 143 m: pipeline K's sheet edge (traced 2026-11-05).** The scan within 5 m is whole after the caps go (wall 20.3 to 21.4 m², return wall 8.0 to 10.3 m², the caps 10.3 m² to none). In the finished model the near wall's rebuilt sheet has a jagged left edge with scan pieces left on it (`relief_m96`, `relief_m97`). The cause inside pipeline K is not traced.
+- **A rougher central recess** at 45° in the caps-removed build (whole-building sheet `2026-11-05-esb-clay-whole-caps.jpg`): not traced.
+
+Holes rise 0.05 pt. The pass stays opt-in: the two faces above are pipeline K's and vary from build to build, so the caps' effect on a finished building is judged on the scan's per-cut scores (section 11) and on two builds an arm, not on one pair.
+
+Penn 2 says nothing either way: with the same code and the caps kept, two builds gave holes 1.37% and 1.66% and a largest hole of 223 and 312 m² (its ownership vote and a standing fault at one corner vary run to run); with the caps removed, 1.31% and 1.79%.
+
+## 11. Per-cut scores, step blend and rim zip (tile-seams/7, 2026-11-05)
+
+**Status: the scores are always in the report (where the extraction gives each leaf's box and stated error); the step blend (`SCRATCHBOX_TILE_SEAM_BLEND=1`) and the rim zip (`SCRATCHBOX_TILE_SEAM_ZIP=1`) are opt-in. Fresh extractions only (older ones carry no boxes). Scan-level numbers below; no finished-building benchmark of the zip yet.**
+
+- **Scores** (`measureCuts`, in the report as `cutScores`: raw, after the caps, after the blend, after the zip, final, and cut by cut): each tile's rim at a cut (open border of a surface crossing the cut, within 1 m of its plane), how much of it finds the other tile's rim (nearest in space, running parallel, facing the same way, within the smaller of the two tiles' stated errors capped at 50 cm), the step between the two rims in the cut plane and the gap along the cut's normal.
+- **Step blend** (`blendCutSteps`): each wall moves half the step at its rim, faded out over 1.5 m.
+- **Rim zip** (`zipCutRims`): each rim point moves halfway to the other rim, across it only, when its whole way there is within the pair's tolerance; a move turning a triangle more than 25° is taken back (a triangle no wider than 3 cm is left out of that test: the cut left it and the weld drops it); the report gives the move per cut (`rimZip.perCut`: points, mean and largest move). It runs five rounds, each from the rims as the last left them: where one rim has a point the other has none for, only that point can move, and half its way leaves it half as far off. Over all rounds no point ends further from where it started than the pair's tolerance. The weld and the T-junction split then join the rims, telling pieces apart as they were before the blend and the zip (two rims brought onto the same points are otherwise one piece, and the rest of their border is never welded: the first version left more rim open than no zip at all).
+
+ESB scan (198,462 triangles, 839 cuts with a rim, caps removed in every arm):
+
+| | open rim at the cuts | of it matched | audit: open under 3 cm / 3-10 cm |
+|---|---|---|---|
+| after the caps, before the weld | 83.6 km | 27.0 km | |
+| caps only, final | 38.0 km | 11.0 km | 10.8 / 10.4 km |
+| + zip, one round (first version) | 34.6 km | 9.1 km | 12.3 / 8.4 km |
+| + zip, five rounds | 26.3 km | 5.2 km | 9.8 / 7.0 km |
+| + blend and zip, five rounds | 26.1 km | 5.0 km | 9.2 / 7.1 km |
+| + zip, five rounds, weld and split repeated | 17.7 km | 3.2 km | 4.6 / 6.7 km |
+
+The zip moved 15,861 rim points on 306 cuts (largest move 48 cm, inside the 50 cm cap; 2,331 moves taken back over the rounds; 269 points beyond the tiles' error); right after it the matched rims stand 1.7 mm apart (2.4 cm before). With the zip in rounds the blend adds almost nothing at the rim.
+
+**Where the open rim goes, stage by stage** (zip arm, matched rim): 26.9 km after the zip, 18.0 km after the vertex weld, 5.2 km after the T-junction split. The two rims are tessellated differently along the cut (one side's edge runs 10 m where the other has points in between), so the vertex weld alone pairs a third of it and the split does most of the rest; more split rounds change nothing.
+
+**The weld and the split repeated** (with the zip, at most three more passes, while the weld still joins something; `reweld` in the report). The 4.1 km of matched rim left open at points the two tiles already shared was mostly slivers along the cuts and corners where four tiles meet: the first weld pairs such points two by two and leaves the pairs a few millimetres apart, and a sliver's two long edges both count as open rim. On the ESB two more passes weld 287 points, drop 114 slivers and close 16 T-junctions, and the open rim at the cuts falls from 26.3 to 17.7 km. Checked on the written scan apart from the stage's own scores: surface area 434,478 to 434,131 m² (0.08% less), all open edges 96.8 to 87.3 km, edges shared by three or more triangles 15,776 to 15,849. The stage takes 3.0 s (1.7 s without the zip).
+
+**What it does not do yet.** 3.2 km of matched rim is still open (mean gap 2.1 cm, mean step 1.9 cm: mostly moves the zip took back, and points beyond the tiles' error). Telling pieces apart by tile as well was tried and is worse (the split closes fewer); more split rounds alone change nothing. The 14.5 km of unmatched rim has no other tile's rim within reach. No clay sheet was made for this step: a 1-3 cm opening does not show at a building's scale, and a finished building's cuts are pipeline K's to draw; no finished building has been built with the zip.
+
+## 12. Tone balance per tile (tile-seams/8, 2026-11-06)
+
+**Status: opt-in (`SCRATCHBOX_TILE_SEAM_BALANCE=1`), built and tested, and measured as no help on Google's tiles: the feather (section 9) does the work. Scan-level numbers; no finished building.**
+
+One gain per tile and channel for the whole scan, fitted over all the cuts at once and applied to the tile's whole photos, before the feather (`TileSeamToneParams.balance`, inside `featherSeamTone`): each cut's step is the weighted median of its bins' log ratio of the two sides' mean colours (linear RGB); the fit is weighted least squares on g(tile 0) - g(tile 1) = step, refitted six times with each cut's weight cut down by how far it stands from the fit (Huber, 0.05 log gain), with a weak pull of every gain toward none (2% of a tile's cut weight) that pins the scan's overall level; gains capped at 1.6. Labelled generated (`extras.scratchbox.method`). The report gives tiles, cuts in the fit, the largest gain, the mean log gain (the drift) and the step after the balance.
+
+| scan | step at the cuts as it came (ΔE median / 90th) | balance only | feather only | balance, then feather |
+|---|---|---|---|---|
+| ESB (136 tiles, 808 cuts, 225 in the fit) | 3.59 / 16.13 | 3.59 / 14.68 | 2.44 / 8.74 | 2.45 / 8.49 |
+| Penn Station district (234 tiles, 1,602 cuts, 509 in the fit) | 2.82 / 12.08 | 2.78 / 11.52 | 1.96 / 7.90 | 1.96 / 7.90 |
+
+The mean log gain is -0.016 and -0.015 (no drift). Before the fit was made robust (plain means and least squares) it raised the ESB's median to 3.98.
+
+**Reading.** The tiles carry no exposure offset of their own to take out: neighbouring leaves are textured from one source, and the step at a cut is what each side's photo shows there (resolution, where a window falls, a shadow's edge), which one gain per tile cannot move. A tile also holds faces lit differently, so its cuts disagree with each other whatever gain it takes. What the balance does move is a few outlying cuts (the 90th percentile). The remaining colour work is the photo line-up across a cut, not levels.
+
+## 13. Picture offset across the cuts: measured, no line-up built (2026-11-06)
+
+**Status: a measure in every report (`photoOffset`, where the extraction gives each leaf's box); nothing is moved. A second look at the sideways registration of section 9, with the same answer.**
+
+`measureSeamOffsets`: on each wall crossing a cut, a grey profile is read either side along the wall (0.15 m cells, a leaf photo's texel; within 0.2 m of the cut; in 8 m segments by the wall's facing), and the two profiles are correlated at every shift up to 0.8 m, the peak placed between cells by a parabola. A segment counts when both sides read 16 cells in common and each carries a picture (4 grey levels of spread); it is "off" when its best correlation is at least 0.6, 0.05 above the one at no shift, and a cell or more away. Per cut: segments, segments off, correlation at no shift, shift in metres and in texels.
+
+| scan (texel 0.155 m) | segments with a picture | correlation at no shift (median / 10th) | best shift (median / 90th) | segments off |
+|---|---|---|---|---|
+| ESB | 1,020 | 0.66 / -0.14 | 0.11 m (0.7 texel) / 0.75 m | 189 (19%), median 0.27 m, +0.15 correlation |
+| Penn Station district | 1,676 | 0.70 / 0.00 | 0.10 m (0.6 texel) / 0.63 m | 385 (23%), median 0.22 m, +0.14 correlation |
+
+Both rows are with the caps removed; with them kept far fewer segments read both sides (ESB 202, correlation 0.51, shift 0.15 m). The measure adds 0.3 s (ESB) and 0.6 s (district) to the stage.
+
+The strip's width decides what is read: a metre either side the two tiles show different storeys and correlate at 0.25 (ESB) with a best shift anywhere in reach; at 0.35 m 0.58; at 0.2 m 0.66. So the measure reads the strip at the cut only.
+
+**Reading.** The typical cut needs less than a texel: the two photos stand where they should, to the photos' own resolution (15 cm a texel). About a fifth of the segments prefer a shift of one to two texels for a modest gain in correlation; with profiles of 16-53 cells, some of those are a repeat of the wall matching one bay along, not a misplaced photo. Moving a photo by a texel or two cannot sharpen a seam between photos this coarse, and section 9's try (the same shifts applied) changed nothing in renders. No line-up pass is built: the measure stays so a scan with a real offset shows it.
+
