@@ -1712,7 +1712,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // the buildings the circle may reach too (their middles up to the edge growth past it): each planned whole or left out
                 const reach = radius + DISTRICT_CHUNKS_PARAMS.edgeGrowthM;
                 const ev = await deps.vectorEvidence({ lat: placeValue.lat, lng: placeValue.lng, radiusM: reach });
-                chunkPlan = planDistrictChunks(radius, selectPaintBuildings(ev, reach, { heightNorm: false }).buildings.map(b => ({ id: b.id, centroid: b.centroid, loops: b.parts.map(p => p.loops[0]).filter(l => l && l.length >= 3) })));
+                chunkPlan = planDistrictChunks(radius, selectPaintBuildings(ev, reach).buildings.map(b => ({ id: b.id, centroid: b.centroid, loops: b.parts.map(p => p.loops[0]).filter(l => l && l.length >= 3) })));
                 if (chunkPlan) {
                     // the whole plan, footprints too: the seam stage's ownership can be rebuilt from it offline
                     cache.writeRunNote(runId, 'district_chunks', chunkPlan);
@@ -1783,8 +1783,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const { sel, elevations, elevationError } = inputs;
                 if (kdDistrict) districtBuildings = sel.buildings;
                 const left = [
-                    sel.partsGivenDefaultHeight ? `${sel.partsGivenDefaultHeight} footprint part${sel.partsGivenDefaultHeight === 1 ? '' : 's'} with no height in the vector data shown at ${sel.heightNorm ? `the height the place's ${sel.heightNorm.samples} measured footprints make plausible (tested off by ${sel.heightNorm.looMaeM} m on average, the plain ${PLAUSIBLE_DEFAULT_HEIGHT_M} m by ${sel.heightNorm.looMaeConstM} m)` : `a plausible ${PLAUSIBLE_DEFAULT_HEIGHT_M} m${sel.heightNormSkipped && !/ is off /.test(sel.heightNormSkipped) ? ` (${sel.heightNormSkipped})` : ''}`} (generated)` : '',
-                    sel.buildingsGivenDefaultHeight ? `${sel.buildingsGivenDefaultHeight} building${sel.buildingsGivenDefaultHeight === 1 ? '' : 's'} with no measured height at all, shown at ${sel.heightNorm ? 'their estimate' : `${PLAUSIBLE_DEFAULT_HEIGHT_M} m`} (generated)` : '',
+                    sel.partsGivenDefaultHeight ? `${sel.partsGivenDefaultHeight} footprint part${sel.partsGivenDefaultHeight === 1 ? '' : 's'} with no height in the vector data shown at a plausible ${PLAUSIBLE_DEFAULT_HEIGHT_M} m (generated)` : '',
+                    sel.buildingsGivenDefaultHeight ? `${sel.buildingsGivenDefaultHeight} building${sel.buildingsGivenDefaultHeight === 1 ? '' : 's'} with no measured height at all, shown at ${PLAUSIBLE_DEFAULT_HEIGHT_M} m (generated)` : '',
                     sel.buildingsWithNoFootprint ? `${sel.buildingsWithNoFootprint} building${sel.buildingsWithNoFootprint === 1 ? '' : 's'} with no footprint shape and no Google volume left out` :'',
                     sel.buildingsUnderOtherVolume ? `${sel.buildingsUnderOtherVolume} 2D-only footprint${sel.buildingsUnderOtherVolume === 1 ? '' : 's'} under another feature's modelled 3D volume left out (the volume draws that building at its own height)` : ''
                 ].filter(Boolean).join('; ');
@@ -1817,7 +1817,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const ground0 = elevations?.[0];
                     const pkey = stageKey(key, 'first', elevations ? 'elev' : 'street');
                     const entry = await cache.run<{ counts: { vertices: number; triangles: number }; refused: Array<{ buildings: string[]; error: string }>; nativeMs: number }>('vector', pkey, async dir => {
-                        const r = await writePaintGlb(sel.buildings, (_b, i) => (elevations && ground0 !== undefined ? elevations[i + 1] - ground0 : 0), { dir, stage: 'vector', stageKey: pkey, provenance: paintProvenance(baseNote('street'), `vectortiles:${key8}`), generatedHeightProvenance: paintGeneratedHeightProvenance(`vectortiles:${key8}`, sel.heightNorm), signal: io.signal });
+                        const r = await writePaintGlb(sel.buildings, (_b, i) => (elevations && ground0 !== undefined ? elevations[i + 1] - ground0 : 0), { dir, stage: 'vector', stageKey: pkey, provenance: paintProvenance(baseNote('street'), `vectortiles:${key8}`), generatedHeightProvenance: paintGeneratedHeightProvenance(`vectortiles:${key8}`), signal: io.signal });
                         return { value: { counts: r.counts, refused: r.refused, nativeMs: r.nativeMs } };
                     }, { publish: () => [{ from: 'vector_massing.glb', as: `${base}_vector_${pkey.slice(0, 8)}.glb` }], bypass: bypass('vector') });
                     msBy.native = entry.cached ? 0 : entry.value.nativeMs;
@@ -1855,7 +1855,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const t2 = now();
                         const entry = await cache.run<{ counts: { vertices: number; triangles: number }; refused: Array<{ buildings: string[]; error: string }>; nativeMs: number }>('vector', okey, async dir => {
                             const list: PaintBuilding[] = outer.map(o => o.b);
-                            const r = await writePaintGlb(list, (_b, k) => (elevations && frameElev !== undefined ? elevations[outer[k].i + 1] - frameElev : 0), { dir, stage: 'vector', stageKey: okey, provenance: paintProvenance(baseNote('tiles'), `vectortiles:${key8}`), generatedHeightProvenance: paintGeneratedHeightProvenance(`vectortiles:${key8}`, sel.heightNorm), signal: io.signal });
+                            const r = await writePaintGlb(list, (_b, k) => (elevations && frameElev !== undefined ? elevations[outer[k].i + 1] - frameElev : 0), { dir, stage: 'vector', stageKey: okey, provenance: paintProvenance(baseNote('tiles'), `vectortiles:${key8}`), generatedHeightProvenance: paintGeneratedHeightProvenance(`vectortiles:${key8}`), signal: io.signal });
                             return { value: { counts: r.counts, refused: r.refused, nativeMs: r.nativeMs } };
                         }, { publish: () => [{ from: 'vector_massing.glb', as: `${base}_vector_outer_${okey.slice(0, 8)}.glb` }], bypass: bypass('vector') });
                         msBy.outer = now() - t2;

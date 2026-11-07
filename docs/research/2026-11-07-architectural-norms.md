@@ -5,7 +5,8 @@ learned grammars) would improve pipeline K's facades or the district's plausible
 against which AGENTS.md rules.
 
 **Answer in one line:** a height norm for unmeasured footprints had the best payoff for its cost, so it is the one
-prototyped (`height-norm.ts`, beside the first paint). Its test turned up a larger, simpler win: most of Penn's
+prototyped. Measured on real data it did not beat the plain 12 m on the footprints that actually lack a height, so it was
+**not kept** (user rule, 2026-11-07: only new code that is an improvement). The method and its numbers are recorded here. Its test turned up a larger, simpler win: most of Penn's
 height-less footprints are duplicates of a Google modelled volume. Where a real height is missing, the norm only helps
 buildings that actually stand above the street. The facade papers mostly confirm what K already does, and each would cost
 a training run or a solver for a modest gain.
@@ -19,7 +20,7 @@ our own method.
 
 | # | Paper | Would improve | Expected measured gain | Cost | Verdict |
 |---|---|---|---|---|---|
-| 3 | Ma et al. 2025 / Milojevic-Dupont et al. 2020: heights from footprints and urban form | First paint and the outer layer past the tile cap: unmeasured heights (today a flat 12 m) | Measured below: leave-one-out error 33–70% lower than 12 m in 7 cities; −20% on real unmeasured buildings that stand ≥ 6 m; no gain on ground-level "buildings" | ~300 lines of TypeScript, no model, no spend; ~3 s per district | **Prototyped**, opt-in (`SCRATCHBOX_HEIGHT_NORM=1`); the duplicate fix it found is on |
+| 3 | Ma et al. 2025 / Milojevic-Dupont et al. 2020: heights from footprints and urban form | First paint and the outer layer past the tile cap: unmeasured heights (today a flat 12 m) | Measured below: leave-one-out error 33–70% lower than 12 m in 7 cities; −20% on real unmeasured buildings that stand ≥ 6 m; no gain on ground-level "buildings" | ~300 lines of TypeScript, no model, no spend; ~3 s per district | **Prototyped, measured, not kept**; the duplicate fix it found is kept |
 | 2 | StructuredMesh: facade components regularised by binary integer programming | Lattice completion and window array: one layout per facade that minimises distinct sizes and positions | Paper: +6.5% precision, +4.5% recall, +5.5% F over 7 buildings. K's window array (#165) already does the consensus step, so the likely gain on K is 1–3 F points on irregular facades | An ILP solver (Gurobi is commercial; an open solver or our own branch-and-bound); NP-hard, so it needs pruning | Later: worth it only if #165's consensus leaves measured misalignments |
 | 1 | Visual-to-Executable Procedural Reconstruction (arXiv 2611.03143): layout tree → tile codes → deterministic program | Facade reader: a split/repeat tree in place of zone-by-zone boxes; a compiled program in place of tiled cells | Paper: TRC 1.47 vs 1.83 expert edits for direct LLM code; execution 0.98 vs 0.94; tile attributes 0.89–0.98 | A LoRA-tuned 7B VLM (training data, GPU) or prompting our reader to emit the tree; the compiler is cheap | Borrow the *reflection loop* (render the reading, show it back, repair) into the reader; skip the fine-tune |
 | 4 | FloorLevel-Net (arXiv 2107.02462): floor lines from street photos | Storey pitch on facades the tile photos barely see (low, occluded) | Paper: line accuracy 0.894 overall, 0.798 on GSV; no metric-pitch error reported | A segmentation net trained on street images; we no longer read Street View in K (the evidence stage is off) | No: K reads pitch from the straightened ortho by Viterbi on its own lines; the paper's gain is in perspective street photos we do not use |
@@ -103,7 +104,7 @@ keeps the ones beyond the leaf-tile cap as their own layer. A part with no heigh
 `PLAUSIBLE_DEFAULT_HEIGHT_M` = 12 m, labelled generated. The district massing itself never lacks a height: a building is
 massed only where the scan stands raised over 60% of its footprint, so the scan measures it.
 
-**Prototype (our own code):** `packages/core/src/node/3d-engine/staged-location/height-norm.ts`.
+**Prototype (our own code, commit 372bfc28 on `claude/serene-spence-a4181c`, removed in the PR):** `height-norm.ts`.
 - Each footprint is continuous numbers only: centroid, ln(area), compactness 4πA/P². No zoning, roof class or type code
   (ADA §1).
 - The estimate is a kernel-weighted geometric mean of the place's measured heights, weighted by plan distance, area
@@ -114,15 +115,25 @@ massed only where the scan stands raised over 60% of its footprint, so the scan 
 - One estimate per building, held under the slenderness (height / √plan) that 95% of the place's whole measured
   buildings stay under. Small extruded parts in Google's data are tower setbacks, and without the cap a 3 m² kiosk came
   out 45 m tall.
-- Opt-in: `SCRATCHBOX_HEIGHT_NORM=1`. Without it the plain 12 m stays (see the measured results for why).
+- Removed after measurement (see below). The commit keeps it, for a future version gated on a measured existence check.
 
 **Testing it found the duplicate problem first:**
 - At Penn (7th Ave & W 32nd St, 500 m), 1,586 of 4,116 footprint parts and 128 buildings had no height.
 - Every one was a 2D-only footprint. 115 of these buildings lie under another feature's modelled 3D volume: one 81–89 m
   volume, f38, holds 85 of the 96 that are 30 m² or larger.
 - They are that volume's own plan published again, drawn as 12 m slabs inside it. The same change therefore leaves out a
-  2D-only footprint when at least half its plan is under another feature's volume (`VECTOR_VOLUME_DUPLICATE_SHARE`,
-  `SCRATCHBOX_VECTOR_VOLUME_DEDUP=0` off). The volume already draws that building at its measured height.
+  2D-only footprint when at least half its plan is under another feature's volume (`VECTOR_VOLUME_DUPLICATE_SHARE`;
+  the only path, no switch). The volume already draws that building at its measured height.
+
+**The duplicate fix, before / after.** Penn Station, real Google vector data, first paint built natively:
+
+| Radius | Generated buildings | Triangles | GLB | Native build |
+|---|---|---|---|---|
+| 300 m | 109 → 4 | 59,856 → 50,192 (−16%) | 5.40 → 4.45 MB (−18%) | 1.9 → 0.6 s |
+| 500 m | 128 → 13 | 96,206 → 85,546 (−11%) | 9.07 → 8.03 MB (−12%) | 6.2 → 1.1 s |
+
+Selection takes 0.2–0.4 s longer for the plan test against the volumes. Nothing visible changes, because the slabs it
+removes were inside the volume; the layer is lighter and no longer carries hidden generated parts.
 
 ### Measured results
 
@@ -191,8 +202,8 @@ The norm wins where buildings are tall and loses on the few low ones, which 12 m
 - The same run's tiles stage hit its 360 s limit while streaming under a load average of about 60. The vector stage then
   went degraded at its 120 s limit while waiting on the tiles, after its own layer had committed.
 
-**Default:** the duplicate fix is on. The norm is opt-in until a measured existence gate keeps it off street-level
-footprints.
+**Decision:** the duplicate fix replaces the old path. The norm is not kept: it does not beat 12 m on the real target
+population, and a 46 m slab where the DSM shows a plaza is worse than what we draw now.
 
 **Cost:** about 3 s per district (fit with 60 grid points × 400 targets) and no spend.
 
@@ -253,13 +264,10 @@ were used for geometry. Floor lines are photo-inferred labels, allowed.
 **Conflicts:** ADA §1. Learned rules over named terminals (window, balcony, shop) are a closed taxonomy. It is
 compatible only if the terminals are boxes with continuous attributes. §4's footprint rule is unaffected.
 
-## The prototype in the code
+## What the PR keeps
 
-- `height-norm.ts`: the method (`fitHeightNorm`, `estimateHeight(s)`, `footprintNumbers`).
-- `vector-first-paint.ts`: `selectPaintBuildings` applies the dedup and the norm (`applyHeightNorm`) and reports
-  `heightNorm` (samples, widths, leave-one-out error vs 12 m) and `buildingsUnderOtherVolume`.
-  `paintGeneratedHeightProvenance` names the tested error. `VECTOR_MASSING_VERSION` carries `height-norm/1`, so cached
-  first paints are rebuilt.
-- `orchestrator.ts`: the layer note says what was estimated and what was left out. The chunk planner and the place store
-  ask for footprints only (`heightNorm: false`).
-- `packages/core/test/height-norm.test.ts`: synthetic districts with known heights.
+- `vector-first-paint.ts`: `selectPaintBuildings` leaves out 2D-only footprints under another feature's modelled volume
+  and counts them (`buildingsUnderOtherVolume`). `VECTOR_MASSING_VERSION` is `vector-massing/v2`, so cached first paints
+  are rebuilt.
+- `orchestrator.ts`: the layer note says how many were left out and why.
+- `packages/core/test/vector-first-paint-believability.test.ts`: the formula's two cases.

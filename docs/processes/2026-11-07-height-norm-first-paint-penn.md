@@ -1,11 +1,11 @@
 # Height norm and volume dedup in the first paint at Penn Station (2026-11-07)
 
-**Status: Verified (code path and duplicate fix), Needs Fix before the norm is a default.** The norm is opt-in; the duplicate fix is on.
+**Status: Verified.** The duplicate fix is kept as the only path. The height norm was measured and removed: it did not beat 12 m on real unmeasured footprints.
 
 ## What was tested
 
 - **Branch:** `claude/serene-spence-a4181c`.
-- **Code:** `height-norm.ts`, `vector-first-paint.ts` (`applyHeightNorm`, `VECTOR_VOLUME_DUPLICATE_SHARE`), and the orchestrator's layer note.
+- **Code at the run:** commit 372bfc28 (`height-norm.ts`, `applyHeightNorm`, `VECTOR_VOLUME_DUPLICATE_SHARE`). The PR keeps only the duplicate fix.
 - **Research:** `docs/research/2026-11-07-architectural-norms.md`.
 
 ## How
@@ -22,13 +22,14 @@
   - Norm fitted on 720 measured footprints: leave-one-out error 21.9 m, against 39.9 m for 12 m.
   - 109 2D-only footprints under another feature's modelled volume left out.
   - 4 real gaps estimated, at 7.7, 18.4, 33.7 and 46.4 m.
-  - The 46.4 m one is 1,077 m², and the Solar DSM puts it at 2.8 m (street level). This is the failure that keeps the norm opt-in.
+  - The 46.4 m one is 1,077 m², and the Solar DSM puts it at 2.8 m (street level). This failure is why the norm was removed.
 - **Vector stage:** went degraded at its 120 s limit while waiting on the tiles, after its own layer had committed.
 - **Tiles stage:** failed at its 360 s limit ("No Photorealistic 3D Tiles could be extracted … the stage reached its time limit"). The load average was about 60 from other sessions' work. This is a separate issue and was not retried.
 - **Offline checks:**
   - Leave-one-out in 7 cities.
   - Solar DSM truth on 110 real unmeasured footprints in 4 cities: 27 Solar calls, under $3.
-  - Vitest: 16/16 in `height-norm.test.ts` and `vector-first-paint-believability.test.ts`.
+  - Vitest: 10/10 in `vector-first-paint-believability.test.ts`, on the final code.
+  - Duplicate fix before/after at Penn (300 m): generated buildings 109 → 4, triangles −16%, GLB −18%, native build 1.9 → 0.6 s.
   - `tsc -p packages/core` clean.
 - **Sheets:** `docs/screenshots/height_norm_2026-11-07/data-sheet.png` and `app-run.png` (gitignored).
 
