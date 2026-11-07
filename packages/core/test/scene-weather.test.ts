@@ -164,6 +164,8 @@ describe('a real place\'s opening sky (user decision 2026-11-02)', () => {
         expect(s.environment?.skybox).toBe('sky');
         expect((s.features as any).atmosphericScattering).toMatchObject({ enabled: true, cloudCoverage: 0.4, cloudShadowsEnabled: false, latitude: nyc.lat, longitude: nyc.lng });
         expect((s.features as any).atmosphericScattering.aerialPerspectiveEnabled).toBe(true);
+        // the weather's sky is the native multiple-scattering model, its haze the turbidity it reads as aerosol
+        expect((s.features as any).atmosphericScattering).toMatchObject({ skyModel: 'multiple-scattering', turbidity: 2 + 8 * LOCATION_SCENE_WEATHER.haze });
         // a splat world gets the sky without the haze pass, which would tone-map its depthless splats a second time
         const world = withLocationSceneWeather({ ...place(), splatUrl: '/tilesets/w/fused.spz' } as Scene3DData, '2026-11-02');
         expect((world.features as any).atmosphericScattering).toMatchObject({ enabled: true, cloudCoverage: 0.4, aerialPerspectiveEnabled: false });

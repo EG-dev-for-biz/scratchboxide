@@ -108,6 +108,12 @@ export interface CloudShellLayer {
 
 export interface AtmosphericScatteringConfig {
     enabled?: boolean;
+    /**
+     * Which clear-sky model the dome draws. 'multiple-scattering': García Liñán's multiple-scattering sky from the native
+     * engine (vendored from Blender, MIT; scratchbox_sky_ms.hpp, GET /api/sky/multiple-scattering), what the scene weather
+     * sets (scene-weather.ts applySceneWeather). Absent: the TypeScript spectral sky (physical-sky.ts).
+     */
+    skyModel?: 'multiple-scattering';
     rayleigh?: number;
     mie?: number;
     turbidity?: number;
@@ -221,6 +227,12 @@ export interface AtmosphericSkyDomeModule {
     sunGlare?: import('./SunGlare').SunGlare;
     /** Replaces the shell cloud decks (an empty list removes them). */
     setCloudLayers: (layers: CloudShellLayer[]) => void;
+    /** The sky model the dome draws now: 'multiple-scattering' once the native table is in, else 'spectral' (physical-sky.ts). */
+    readonly skyModel?: 'multiple-scattering' | 'spectral';
+    /** Why the native multiple-scattering sky could not be drawn (the dome then keeps the spectral sky), when it failed. */
+    readonly skyModelError?: string;
+    /** Resolves when the sky the config asks for is drawn (at once for the spectral sky); rejects when the native sky failed. */
+    whenSkyReady?: () => Promise<void>;
     dispose: () => void;
 }
 

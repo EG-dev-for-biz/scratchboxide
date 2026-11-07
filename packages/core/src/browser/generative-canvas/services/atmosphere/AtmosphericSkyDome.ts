@@ -23,6 +23,7 @@ import {
 } from './diurnal-lighting';
 import { getSunVectorFromAngles } from './solar-position';
 import { buildPhysicalSkyLut, PhysicalSkyLut } from './physical-sky';
+import { cachedMultipleScatteringSky, fetchMultipleScatteringSky, MULTIPLE_SCATTERING_SKY_MODEL, multipleScatteringSkyKey } from './multiple-scattering-sky';
 import { calibratedExposure, luminance, NIGHT_MOON_INTENSITY, NIGHT_SKY_LIGHT_FLOOR, nightFillWeight, physicalSkyLevel, skyIrradianceChroma } from './sky-light-rig';
 import { SunGlare } from './SunGlare';
 import { cloudShellUniformArrays, cloudShellWindSpeeds, coverageForSkyCover, MAX_CLOUD_SHELL_LAYERS, resolveCloudShellLayers } from './cloud-shell-layers';
@@ -816,18 +817,54 @@ export function createAtmosphericSkyDome(
     let currentLut: PhysicalSkyLut | undefined;
     let exposure = 1;
     const skyTurbidity = () => config.turbidity ?? diurnalProfile.turbidity ?? 2;
-    let sunsetAnchor: { turbidity: number; lut: PhysicalSkyLut; level: number } | undefined;
+    // The sky model (config.skyModel): the scene weather asks for the native multiple-scattering sky, whose tables come
+    // from the server (multiple-scattering-sky.ts). Until a sun's table is in, the dome keeps the last multiple-scattering
+    // table it drew, else (the first sun) the spectral sky; the table's arrival redraws the sky and its lights. A native
+    // failure is kept (skyModelError, logged) and the spectral sky stays, named as such (skyModel).
+    let skyModelInUse: 'multiple-scattering' | 'spectral' = 'spectral';
+    let skyModelError: string | undefined;
+    let skyPending: Promise<void> | undefined;
+    const wantsMultipleScattering = () => config.skyModel === MULTIPLE_SCATTERING_SKY_MODEL;
+    const requestMultipleScattering = (elevDeg: number, turbidity: number) => {
+        if (skyModelError) return;
+        const key = multipleScatteringSkyKey(elevDeg, turbidity);
+        const pending = Promise.all([fetchMultipleScatteringSky(elevDeg, turbidity), fetchMultipleScatteringSky(0, turbidity)]).then(() => {
+            if (disposed || !wantsMultipleScattering()) return;
+            // redraw only for the sun the dome still shows (a later sun has its own request)
+            if (multipleScatteringSkyKey(Math.max(-18, initialElev), skyTurbidity()) === key) applySolarState(initialElev, initialAzim, diurnalProfile);
+        }, (err: unknown) => {
+            skyModelError = err instanceof Error ? err.message : String(err);
+            console.error(`[sky] the multiple-scattering sky could not be drawn; the spectral sky stays: ${skyModelError}`);
+            throw err;
+        });
+        skyPending = pending;
+        pending.catch(() => undefined);
+    };
+    const skyTableFor = (elevDeg: number): PhysicalSkyLut => {
+        const turbidity = skyTurbidity();
+        if (wantsMultipleScattering() && !skyModelError) {
+            const lut = cachedMultipleScatteringSky(elevDeg, turbidity);
+            if (lut && cachedMultipleScatteringSky(0, turbidity)) { skyModelInUse = 'multiple-scattering'; return lut; }
+            requestMultipleScattering(elevDeg, turbidity);
+            if (currentLut && skyModelInUse === 'multiple-scattering') return currentLut;
+        }
+        skyModelInUse = 'spectral';
+        return buildPhysicalSkyLut({ sunElevationDeg: elevDeg, turbidity });
+    };
+    let sunsetAnchor: { turbidity: number; model: string; lut: PhysicalSkyLut; level: number } | undefined;
     const sunsetSkyAnchor = () => {
         const turbidity = skyTurbidity();
-        if (!sunsetAnchor || sunsetAnchor.turbidity !== turbidity) {
+        if (!sunsetAnchor || sunsetAnchor.turbidity !== turbidity || sunsetAnchor.model !== skyModelInUse) {
             const p = computeDiurnalLightingProfile(0, beamOptions);
-            sunsetAnchor = { turbidity, lut: buildPhysicalSkyLut({ sunElevationDeg: 0, turbidity }), level: p.skyLightIntensity * colorLuminance(new THREE.Color(skyLightColorHex(p))) };
+            // the anchor comes from the same model as the table it scales (skyTableFor fetched both)
+            const lut = (skyModelInUse === 'multiple-scattering' ? cachedMultipleScatteringSky(0, turbidity) : undefined) ?? buildPhysicalSkyLut({ sunElevationDeg: 0, turbidity });
+            sunsetAnchor = { turbidity, model: skyModelInUse, lut, level: p.skyLightIntensity * colorLuminance(new THREE.Color(skyLightColorHex(p))) };
         }
         return sunsetAnchor;
     };
     const applyPhysicalSky = (elevDeg: number) => {
         uniforms.uPhysicalSkyWeight.value = 1;
-        const lut = buildPhysicalSkyLut({ sunElevationDeg: Math.max(-18, elevDeg), turbidity: skyTurbidity() });
+        const lut = skyTableFor(Math.max(-18, elevDeg));
         currentLut = lut;
         const W = lut.azimuthResolution, H = lut.elevationResolution;
         const rgba = new Float32Array(W * H * 4);
@@ -1180,6 +1217,21 @@ export function createAtmosphericSkyDome(
             applySolarState(presetState.elevationDeg, presetState.azimuthDeg, presetState);
         },
         setCloudLayers: (layers) => applyCloudLayers(layers),
+        get skyModel() {
+            return skyModelInUse;
+        },
+        get skyModelError() {
+            return skyModelError;
+        },
+        whenSkyReady: async () => {
+            // a redraw can ask for another sun; wait until the drawn table is the one asked for
+            for (let i = 0; i < 8 && skyPending; i++) {
+                const p = skyPending;
+                await p;
+                if (skyPending === p) break;
+            }
+            if (skyModelError) throw new Error(skyModelError);
+        },
         dispose: () => {
             if (disposed) return;
             disposed = true;
