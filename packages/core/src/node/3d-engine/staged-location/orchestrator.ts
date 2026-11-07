@@ -2627,6 +2627,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             : !eBuildings.length && !shapeMode && request.procedural !== true ? `the structure's footprint did not come from Google vector data (${structure?.vectorFootprint?.reason ?? 'no vector footprint at the place'})` : undefined;
         const eEligible = pipelineE && !eWhyNot;
         const startSurvey = (): void => {
+        // pipeline K reads no Street View survey unless its evidence stage is on: the survey's images only fed the window
+        // reveal depth (off since 2026-10-28) and a diagnostic score, and the remesh waited for it before texturing could
+        // start (user ask, 2026-11-07: drop the Street View check, get to texturing sooner)
+        if (pipelineK && isolateMode && !stepOn('evidence', process.env.SCRATCHBOX_K_EVIDENCE?.trim() === '1')) {
+            runner.skip('survey', 'a 3D Building reads no Street View survey (SCRATCHBOX_K_EVIDENCE=1 turns it on)');
+            return;
+        }
         if (isolateMode && visionForSurvey) {
             const noSurvey = (reasonCode: string, reason: string, cause?: unknown, model?: VisionModelUse, transient = false) => ({
                 status: 'degraded' as const, source: 'no survey: the detail passes aim at the scan-only slots', reason,
