@@ -162,7 +162,7 @@ export function applySceneWeather(scene: Scene3DData, weather: Partial<SceneWeat
     const atmosphericScattering = {
         ...base,
         enabled: true,
-        // the native multiple-scattering clear sky (vendored from Blender, MIT; multiple-scattering-sky.ts): at the low sun
+        // the native multiple-scattering clear sky (García Liñán's method, scratchbox_sky_ms.hpp; multiple-scattering-sky.ts): at the low sun
         // a real place opens under, the higher orders of scattering set the colour of the sky and of its light. The sun
         // elevation drives it, the haze sets its aerosol (the turbidity below, as an optical depth at 550 nm), and the
         // cloud cover stays the dome's cloud layer over it

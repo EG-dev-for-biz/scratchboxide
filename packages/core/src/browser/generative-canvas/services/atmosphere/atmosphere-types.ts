@@ -110,7 +110,7 @@ export interface AtmosphericScatteringConfig {
     enabled?: boolean;
     /**
      * Which clear-sky model the dome draws. 'multiple-scattering': García Liñán's multiple-scattering sky from the native
-     * engine (vendored from Blender, MIT; scratchbox_sky_ms.hpp, GET /api/sky/multiple-scattering), what the scene weather
+     * engine (scratchbox_sky_ms.hpp, GET /api/sky/multiple-scattering), what the scene weather
      * sets (scene-weather.ts applySceneWeather). Absent: the TypeScript spectral sky (physical-sky.ts).
      */
     skyModel?: 'multiple-scattering';

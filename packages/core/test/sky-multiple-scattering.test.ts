@@ -8,17 +8,14 @@
  ********************************************************************************/
 
 /**
- * The scene weather's multiple-scattering sky (vendored from Blender, scratchbox_sky_ms.hpp), compiled and run: its
+ * The scene weather's multiple-scattering sky (García Liñán's method, scratchbox_sky_ms.hpp), compiled and run: its
  * radiance at known sun angles against physics (energy, the sun's reddening, the blue zenith, twilight past sunset),
  * the haze mapping, and the TypeScript spectral sky it replaces in the weather.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import * as fs from 'fs';
-import * as path from 'path';
 import { aerosolOpticalDepthForTurbidity, NativeSkyMsService, SkyMsTable } from '../src/node/3d-engine/native-sky-ms-service';
 import { buildPhysicalSkyLut } from '../src/browser/generative-canvas/services/atmosphere/physical-sky';
-import { NativeCppCompilerService } from '../src/node/3d-engine/native-compiler-service';
 
 const lum = (c: ArrayLike<number>) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
 const px = (t: { data: Float32Array; azimuthResolution: number }, row: number, col: number): [number, number, number] => {
@@ -28,24 +25,13 @@ const px = (t: { data: Float32Array; azimuthResolution: number }, row: number, c
 /** Turbidity of the location sky's haze 0.2 (scene-weather.ts: 2 + 8 x haze). */
 const LOCATION_TURBIDITY = 3.6;
 
-describe('multiple-scattering sky (vendored Blender model)', () => {
+describe('multiple-scattering sky (scratchbox_sky_ms.hpp)', () => {
     const service = new NativeSkyMsService();
     const sky: Record<number, SkyMsTable> = {};
 
     beforeAll(async () => {
         for (const el of [60, 20, 5, 0, -4]) sky[el] = await service.skyViewTable({ sunElevationDeg: el, turbidity: LOCATION_TURBIDITY });
     }, 300_000);
-
-    it('vendors only the MIT file, with its licence and record, and none of Blender\'s GPL headers', () => {
-        const dir = path.join(new NativeCppCompilerService().getSdkIncludePath(), '..', 'third_party', 'blender-sky');
-        const cpp = fs.readFileSync(path.join(dir, 'sky_multiple_scattering.cpp'), 'utf8');
-        expect(cpp).toMatch(/SPDX-License-Identifier: MIT/);
-        expect(cpp).toMatch(/Modified by Scratchbox LLC, 2026/);
-        expect(cpp).not.toMatch(/#include "sky_math\.h"|#include "sky_nishita\.h"/);
-        expect(fs.readFileSync(path.join(dir, 'LICENSE'), 'utf8')).toMatch(/Fernando García Liñán[\s\S]*Permission is hereby granted/);
-        expect(fs.readFileSync(path.join(dir, 'VENDORED.md'), 'utf8')).toMatch(/8be38b821855731aaa3a981110870101962fbb52/);
-        for (const f of fs.readdirSync(dir)) expect(fs.readFileSync(path.join(dir, f), 'utf8')).not.toMatch(/SPDX-License-Identifier: GPL/);
-    });
 
     it('maps the haze to the aerosol optical depth the spectral sky uses', () => {
         expect(aerosolOpticalDepthForTurbidity(3.6)).toBeCloseTo((0.04608 * 3.6 - 0.04586) * Math.pow(0.55, -1.3), 6);

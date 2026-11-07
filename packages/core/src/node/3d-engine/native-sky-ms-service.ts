@@ -9,9 +9,8 @@
 
 /**
  * The scene weather's sky (scene-weather.ts applySceneWeather, skyModel 'multiple-scattering'): García Liñán's
- * multiple-scattering clear sky, vendored from Blender (third_party/blender-sky, MIT) and sampled by
- * scratchbox_sky_ms.hpp into the viewer's sky-view table (physical-sky.ts's layout and units), so the dome draws it
- * exactly as it draws the TypeScript spectral sky. One runner binary for every sky, built once through the native
+ * multiple-scattering clear sky, computed by scratchbox_sky_ms.hpp into the viewer's sky-view table (physical-sky.ts's
+ * layout and units), so the dome draws it exactly as it draws the TypeScript spectral sky. One runner binary for every sky, built once through the native
  * build cache; a sky takes a few milliseconds and is kept in memory by its inputs.
  */
 

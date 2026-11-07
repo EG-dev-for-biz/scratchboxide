@@ -9,7 +9,7 @@
 
 /**
  * The scene weather's sky, from the native engine (GET /api/sky/multiple-scattering, native-sky-ms-service.ts):
- * García Liñán's multiple-scattering clear sky (vendored from Blender, MIT), as a sky-view table in physical-sky.ts's
+ * García Liñán's multiple-scattering clear sky (scratchbox_sky_ms.hpp), as a sky-view table in physical-sky.ts's
  * layout and units, so the dome draws it as it draws the TypeScript spectral sky. Tables are kept by their inputs (the
  * sun to 0.05 degrees, the turbidity to 0.01), so dragging the Weather tool's time back and forth asks once per sun.
  */
