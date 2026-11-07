@@ -981,7 +981,7 @@ export function mergeReadings(orthosDir: string, fit: WindowFitFile, readings: P
         let entry = fit.facades.find(e => e.facadeId === r.facadeId);
         if (entry && 'error' in entry) continue;
         if (!entry) { entry = { facadeId: r.facadeId, width: r.width, height: r.height, rects: [], panes: [], bands: [], ms: 0 }; fit.facades.push(entry); }
-        const e = entry as Extract<WindowFitFile['facades'][number], { rects: WindowRect[] }> & { structural?: { rects: WindowRect[]; panes?: WindowRect[]; generated?: WindowRect[] }; reader?: string };
+        const e = entry as Extract<WindowFitFile['facades'][number], { rects: WindowRect[] }> & { structural?: { rects: WindowRect[]; panes?: WindowRect[]; generated?: WindowRect[] } };
         // the window fit's own reading: as first merged over, else the entry as it stands
         if (!e.reader || !e.structural) e.structural = { rects: e.rects, ...(e.panes ? { panes: e.panes } : {}), ...(e.generated ? { generated: e.generated } : {}) };
         const own = e.structural, zones = r.drawn ?? [];
@@ -989,7 +989,7 @@ export function mergeReadings(orthosDir: string, fit: WindowFitFile, readings: P
         const keptRects = keep(own.rects), keptGenerated = keep(own.generated);
         e.rects = [...r.rects, ...keptRects]; e.panes = [...r.panes, ...keep(own.panes)];
         if (keptGenerated.length) e.generated = keptGenerated; else delete e.generated;
-        e.reader = FACADE_READER_VERSION;
+        e.reader = FACADE_READER_VERSION; e.readerWindows = r.rects.length;
         merged.planes++; merged.readerWindows += r.rects.length; merged.keptFitWindows += keptRects.length; merged.replacedFitWindows += own.rects.length - keptRects.length;
     }
     (fit as WindowFitFile & { reader?: string }).reader = FACADE_READER_VERSION;

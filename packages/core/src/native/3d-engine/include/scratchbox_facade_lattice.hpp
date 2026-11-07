@@ -441,7 +441,9 @@ inline std::string cm(double v) { return js::toString(js::round(v * 100)); }
 inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::vector<double>& samples, const Params& P, const std::vector<uint8_t>* uncovered, bool photoRecess,
                                    const std::vector<Rect>& fitted, bool hasRecess, double recessM, const std::vector<Rect>* bays, const std::vector<double>* reliefSamples, bool buildWhereMeasured, const std::vector<uint8_t>* inpainted = nullptr) {
     LatticeResult res;
-    const std::vector<Rect> strips = photoRecess ? (bays ? *bays : (!fitted.empty() ? windowStrips(fitted, P) : std::vector<Rect>{})) : std::vector<Rect>{};
+    // the wall grammar's bays when it read any, else the fitted windows' own strips (an empty list is none: a wall whose
+    // columns read no bay still recesses its window strips)
+    const std::vector<Rect> strips = photoRecess ? ((bays && !bays->empty()) ? *bays : (!fitted.empty() ? windowStrips(fitted, P) : std::vector<Rect>{})) : std::vector<Rect>{};
     std::vector<Rect> lines = fitted;
     lines.insert(lines.end(), strips.begin(), strips.end());
     const std::vector<double> L = luminance(img);

@@ -1437,7 +1437,7 @@ export interface SegmentScope { key: string; includes: (plane: { facadeId: numbe
 
 export interface WindowFitFile {
     version: string; params: WindowFitParams; /** An opening-mask segmenter (SCRATCHBOX_K_WINDOW_SEGMENT) was offered the no-pattern tail of this run: the record's version (SEGMENT_TRY_VERSION). */ segment?: string; ms: number;
-    facades: Array<{ facadeId: number; width: number; height: number; rects: WindowRect[]; panes?: WindowRect[]; /** Windows continued into parts the photo never reached: generated. */ generated?: WindowRect[]; bands: WindowFitBand[]; /** The segmenter's try on a facade the structural fit left empty. */ segmentTry?: SegmentTry; /** Covered texels not read because something stood in front of them (pipeline-k/occlusion.ts), and the windows continued into them (generated, continueIntoOccluded). */ occludedTexels?: number; occludedContinued?: number; ms: number } | { facadeId: number; error: string }>;
+    facades: Array<{ facadeId: number; width: number; height: number; rects: WindowRect[]; panes?: WindowRect[]; /** Windows continued into parts the photo never reached: generated. */ generated?: WindowRect[]; bands: WindowFitBand[]; /** The facade reader drew this plane (pipeline-k/facade-reader.ts mergeReadings): its version, and how many of `rects` (the first ones) are its windows; the rest are the fit's, kept outside the zones it drew. */ reader?: string; readerWindows?: number; /** The segmenter's try on a facade the structural fit left empty. */ segmentTry?: SegmentTry; /** Covered texels not read because something stood in front of them (pipeline-k/occlusion.ts), and the windows continued into them (generated, continueIntoOccluded). */ occludedTexels?: number; occludedContinued?: number; ms: number } | { facadeId: number; error: string }>;
 }
 
 /** The segmenter's tries over a fit, counted by outcome, with the first few failures' messages. */
@@ -1645,6 +1645,14 @@ export function fittedPaneUvs(fit: WindowFitFile, facadeId: number): number[] | 
 /** A facade's fitted windows from window_fit.json in photo pixels, or none (as fittedWindowUvs). */
 export function fittedWindowRects(fit: WindowFitFile, facadeId: number): WindowRect[] | undefined {
     return fittedEntry(fit, facadeId)?.rects;
+}
+
+/** Where a facade's windows came from, for the lattice's extras: the reader's and the fit's counts when the reader drew the plane, else the fit alone. */
+export function windowSourceOf(fit: WindowFitFile, facadeId: number): string {
+    const e = fittedEntry(fit, facadeId);
+    if (!e || !e.reader) return WINDOW_FIT_VERSION;
+    const r = e.readerWindows ?? 0, kept = e.rects.length - r;
+    return `${e.reader}: ${r} windows read from the photo (photo-inferred)${kept ? `; ${WINDOW_FIT_VERSION}: ${kept} kept outside the zones it drew` : ''}`;
 }
 
 /**

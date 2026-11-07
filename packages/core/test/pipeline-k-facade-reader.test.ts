@@ -15,6 +15,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { windowSourceOf, WINDOW_FIT_VERSION } from '../src/node/3d-engine/staged-location/window-fit';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -195,6 +196,10 @@ describe('pipeline K facade reader (vision agent)', () => {
             expect(e7.panes).toEqual([[12, 12, 28, 38], [60, 12, 76, 38], bottom]);
             expect(e7.generated).toEqual([gen]);
             expect(e7.structural.rects).toEqual([top, bottom, gen]);
+            expect(e7.readerWindows).toBe(2);
+            expect(windowSourceOf(once, 7)).toBe(`${FACADE_READER_VERSION}: 2 windows read from the photo (photo-inferred); ${WINDOW_FIT_VERSION}: 2 kept outside the zones it drew`);
+            expect(windowSourceOf(once, 9)).toBe(`${FACADE_READER_VERSION}: 1 windows read from the photo (photo-inferred)`);
+            expect(windowSourceOf(once, 8)).toBe(WINDOW_FIT_VERSION);
             // a plane the reader gave nothing for keeps the window fit's whole; a plane the fit never saw gets its own entry
             expect((once.facades.find((f: any) => f.facadeId === 8) as any).rects).toEqual([top]);
             expect((once.facades.find((f: any) => f.facadeId === 9) as any).rects).toEqual([[5, 5, 15, 15]]);

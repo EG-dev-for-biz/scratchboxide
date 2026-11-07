@@ -14,7 +14,7 @@
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { groupWalls, readWallBays, type GrammarFacade, type WallEvidence } from '../src/node/3d-engine/staged-location/wall-grammar';
+import { groupWalls, readWallBays, voteRects, type GrammarFacade, type WallEvidence } from '../src/node/3d-engine/staged-location/wall-grammar';
 import { facadeSamples, latticeFacade, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
 import { buildWallSheets, SHEET_ID_BASE } from '../src/node/3d-engine/staged-location/wall-sheets';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
@@ -103,6 +103,28 @@ describe('the wall grammar', () => {
         expect(cols).toContain('19-23');
         expect(cols).toContain('7-11');
         expect(bays.every(b => b.u1 - b.u0 < 6)).toBe(true);
+    });
+
+    it("votes a plane the facade reader drew on the strips its single windows make, and a plane the fit read on its rects alone", () => {
+        // a 12 m x 9 m facade at 0.1 m a pixel: three columns of six windows a storey (1.5 m) apart, each 1 m x 0.4 m
+        const f = { pixel: 0.1, orthoSMin: 0, orthoTMax: 9 };
+        const rects: Array<[number, number, number, number]> = [];
+        for (const cx of [20, 60, 100]) for (let k = 0; k < 6; k++) { const y1 = 85 - k * 15; rects.push([cx - 5, y1 - 4, cx + 5, y1]); }
+        const fit = voteRects(f, { rects });
+        expect(fit).toEqual({ rects, strips: 0 });
+        const read = voteRects(f, { rects, reader: 'facade-reader/14' });
+        expect(read.strips).toBe(3);
+        expect(read.rects).toHaveLength(rects.length + 3);
+        // each strip runs the column from its lowest sill to its highest head, at the column's edges, in pixels
+        expect(read.rects.slice(rects.length)).toEqual([[15, 6, 25, 85], [55, 6, 65, 85], [95, 6, 105, 85]]);
+        // and the column vote (0.5 m cells) then reads the three columns as bays where the windows alone, 0.4 m of each 1.5 m storey, would not
+        const nu = 24, ny = 18, cellM = 0.5, mk = (list: Array<[number, number, number, number]>): WallEvidence => {
+            const covered = new Uint8Array(nu * ny).fill(1), window = new Uint8Array(nu * ny), lum = new Float32Array(nu * ny).fill(120);
+            for (const [x0, y0, x1, y1] of list) for (let y = Math.floor(y0 / 5); y < Math.ceil(y1 / 5); y++) for (let x = Math.floor(x0 / 5); x < Math.ceil(x1 / 5); x++) { window[(ny - 1 - y) * nu + x] = 1; lum[(ny - 1 - y) * nu + x] = 60; }
+            return { u0: 0, y0: 0, nu, ny, cellM, covered, window, lum };
+        };
+        expect(readWallBays(mk(rects)).bays).toHaveLength(0);
+        expect(readWallBays(mk(read.rects)).bays.length).toBeGreaterThanOrEqual(3);
     });
 
     it('draws no bay over a stack of punched windows in shaded stone, and keeps a strip whose spandrels hold no windows but are no stone', () => {

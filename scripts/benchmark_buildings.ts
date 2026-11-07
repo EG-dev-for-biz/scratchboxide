@@ -7,6 +7,7 @@
  *   npx vite-node scripts/benchmark_buildings.ts plan  [--places a,b]
  *   npx vite-node scripts/benchmark_buildings.ts run   --side main=<checkout> [--side feat=<checkout>] --out <dir>
  *                                                      [--places a,b] [--retry-failed] [--keep-caches] [--max-load 100]
+ *                                                      [--fresh-readings] [--no-readings]
  *   npx vite-node scripts/benchmark_buildings.ts views --out <dir>      (re-render missing views; --force all of them)
  *   npx vite-node scripts/benchmark_buildings.ts sheet --out <dir>      (the sheet from whatever results exist)
  *   npx vite-node scripts/benchmark_buildings.ts measure --glb <model>  (one model's generated share)
@@ -196,7 +197,7 @@ function freePort(): Promise<number> {
 
 interface Server { port: number; token: string; child: childProcess.ChildProcess; stop: () => Promise<void> }
 
-async function startServer(checkout: string, logFile: string): Promise<Server> {
+async function startServer(checkout: string, logFile: string, readingsDir?: string): Promise<Server> {
     const port = await freePort(), toolsPort = await freePort();
     const token = crypto.randomBytes(24).toString('hex');
     const out = fs.openSync(logFile, 'a');
@@ -216,7 +217,11 @@ async function startServer(checkout: string, logFile: string): Promise<Server> {
             SCRATCHBOX_WORKSPACE_ROOTS: checkout,
             // a single building with pipeline K, and no readings restored from the place store: nothing served from before
             SCRATCHBOX_STAGED_BUILDING_PIPELINE: 'k',
-            SCRATCHBOX_CACHE_RESTORE: 'off'
+            SCRATCHBOX_CACHE_RESTORE: 'off',
+            // the model answers (facade readings, ownership outlines, finishes, set choices) kept under <out>/model_readings/<side>
+            // across runs, so a run repeated asks nothing twice and differs only where the code does (--fresh-readings
+            // clears them first; --no-readings keeps them in the build's own cache, gone with it)
+            ...(readingsDir ? { SCRATCHBOX_MODEL_READINGS_DIR: readingsDir } : {})
         }
     });
     const stop = async () => {
@@ -429,9 +434,11 @@ async function renderViews(glbPath: string, dir: string, log: (s: string) => voi
 // one build
 // ----------------------------------------------------------------------------------------------------------------
 
-async function buildOne(side: Side, place: Place, outDir: string, opts: { keepCaches: boolean; maxLoad: number }): Promise<BuildResult> {
+async function buildOne(side: Side, place: Place, outDir: string, opts: { keepCaches: boolean; maxLoad: number; readings: boolean; freshReadings: boolean }): Promise<BuildResult> {
     const dir = path.join(outDir, side.label, place.slug);
     fs.mkdirSync(dir, { recursive: true });
+    const readingsDir = opts.readings ? path.join(outDir, 'model_readings', side.label) : undefined;
+    if (readingsDir) { if (opts.freshReadings) fs.rmSync(readingsDir, { recursive: true, force: true }); fs.mkdirSync(readingsDir, { recursive: true }); }
     const log = (s: string) => { const line = `${new Date().toISOString()} [${side.label}/${place.slug}] ${s}`; console.log(line); fs.appendFileSync(path.join(dir, 'bench.log'), `${line}\n`); };
     while (os.loadavg()[0] > opts.maxLoad) { log(`load ${os.loadavg()[0].toFixed(0)} above ${opts.maxLoad}: waiting`); await sleep(60_000); }
     const loadAtStart = os.loadavg()[0];
@@ -447,7 +454,7 @@ async function buildOne(side: Side, place: Place, outDir: string, opts: { keepCa
     let server: Server | undefined;
     let runIds: string[] = [];
     try {
-        server = await startServer(side.checkout, path.join(dir, 'server.log'));
+        server = await startServer(side.checkout, path.join(dir, 'server.log'), readingsDir);
         const out = await runBuild(server, side.checkout, place, path.join(dir, 'progress.log'));
         runIds = out.runIds;
         fs.writeFileSync(path.join(dir, 'tool_result.json'), JSON.stringify(out.result, null, 1));
@@ -594,7 +601,7 @@ async function main(): Promise<void> {
     if (cmd !== 'run') throw new Error(`unknown command ${cmd}: plan | run | views | sheet | measure`);
     const sides = parseSides(flags.get('side'));
     fs.writeFileSync(path.join(outDir, 'sides.json'), JSON.stringify(sides, null, 1));
-    const opts = { keepCaches: flags.has('keep-caches'), maxLoad: Number(flag(flags, 'max-load') ?? 100) };
+    const opts = { keepCaches: flags.has('keep-caches'), maxLoad: Number(flag(flags, 'max-load') ?? 100), readings: !flags.has('no-readings'), freshReadings: flags.has('fresh-readings') };
     const retryFailed = flags.has('retry-failed');
     // place by place, each side in turn, so the two sides of a comparison are built minutes apart under the same load
     for (const place of places) {
