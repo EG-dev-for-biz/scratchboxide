@@ -157,6 +157,27 @@ Every asset generated through `execute_3d_python_script` must respect the 70-20-
   - Generative scenes / vehicles: $\ge 25,000$ vertices, $\ge 15,000$ triangles, $\ge 3$ distinct submeshes.
   - Isolated props: $\ge 5,000$ vertices, $\ge 3,000$ triangles.
 
+### Named Faces and Edges: Say Which Edge, Not Where It Is
+
+Makers name the faces they make, and edits address those names instead of a direction cone or a box in fractions of the bounds (which silently picks the wrong edges when the part changes size):
+
+- `sb.geometry.extrude_polygon(outline, base_y, h, name="plate")` and `sb.create_box(w, h, d, name="boss")`: faces `top` (+Y), `bottom`, `side`, also `plate.top`... The edges take their faces' names: `top`, `bottom` around the caps, `side` between two walls (a smooth outline such as a circle has no `side` edges).
+- `sb.meshops.bevel(mesh, width, segments, edges="top")`: bevels exactly those edges (several: `"top side"` or a list); the faces keep their names and the bevel's faces are named `chamfer` or `fillet`. Concave edges are refused.
+- `part.place_on(base, "top", u=0.1, v=0.0, gap=0.0, spin_deg=0)`: the part's +Y onto the face normal, its bottom centre on the face centre, moved u/v in the face's own axes; `base.face_frame("top")` returns that frame.
+- `sb.geometry.merge_meshes([...])` keeps every part's names; qualified names (`boss.top`) tell parts apart.
+- Name-based edits come before subdivide, remesh, booleans and `inset_extrude`, which drop the names. A wrong name raises with the names the mesh has: read it, don't guess.
+
+```python
+import scratchbox as sb
+V = sb.math.Vec2
+plate = sb.geometry.extrude_polygon([V(-0.4, -0.2), V(0.4, -0.2), V(0.4, 0.2), V(-0.4, 0.2)], 0.0, 0.06, name="plate")
+plate = sb.meshops.bevel(plate, 0.02, segments=4, edges="side")    # round the vertical corners only
+plate = sb.meshops.bevel(plate, 0.006, segments=1, edges="top")    # then chamfer the top rim
+boss = sb.create_box(0.12, 0.10, 0.12, name="boss").place_on(plate, "top", u=0.2)
+boss = sb.meshops.bevel(boss, 0.01, segments=3, edges="top")
+part = sb.geometry.merge_meshes([plate, boss])
+```
+
 ### Assemblies: Build Between Joints, Never by Rotating Guesswork
 
 Parts that must meet (legs, rungs, frames, struts, rails, brackets) go wrong when each one is built at the origin and then rotated and offset by hand-computed amounts: legs lean the wrong way and rungs float a few centimetres from the legs. Build them from the joints instead:
