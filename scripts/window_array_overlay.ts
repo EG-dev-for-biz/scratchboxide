@@ -5,7 +5,8 @@
  *   npx vite-node scripts/window_array_overlay.ts --orthos <relief_orthos_k_dir> --facade <id> --out <png>
  *       the boxes from window_fit.json: before (array.in) in magenta on the left, after (rects) on the right, the moved
  *       and replaced boxes in cyan, strips folded into cells in orange, the added in yellow, bays kept whole in green,
- *       boxes of another size kept as read in magenta, sites the array stepped on into a blank band in violet
+ *       boxes of another size kept as read in magenta, sites the array stepped on into a blank band in violet, sites
+ *       continued behind something that stood in front of the facade in red (all three generated)
  *   npx vite-node scripts/window_array_overlay.ts --orthos <dir> --facade <id> --glb <model.glb> --out <png>
  *       the right side from the model's own extras (sbFacadeLattice.windows: uv, generated, array) instead
  *   add --infer to run the array step on a copy of the orthos first (an offline check of a kept cache)
@@ -47,9 +48,9 @@ if (glb) {
     const w = node?.extras?.sbFacadeLattice?.windows;
     if (!w) { console.error(`no sbFacadeLattice.windows for facade ${facadeId} in ${glb}`); process.exit(1); }
     const toPx = (uv: number[]): WindowRect[] => { const o: WindowRect[] = []; for (let k = 0; k + 3 < uv.length; k += 4) o.push([Math.round(uv[k] * W), Math.round(uv[k + 1] * H), Math.round(uv[k + 2] * W), Math.round(uv[k + 3] * H)]); return o; };
-    const gen = new Set(toPx(w.generated?.uv ?? []).map(r => r.join(','))), moved = new Set([...toPx(w.array?.snapped_uv ?? []), ...toPx(w.array?.replaced_uv ?? [])].map(r => r.join(','))), folded = new Set(toPx(w.array?.folded_uv ?? []).map(r => r.join(','))), continued = new Set(toPx(w.array?.continued_uv ?? []).map(r => r.join(',')));
-    after = toPx(w.uv).map(r => ({ r, kind: continued.has(r.join(',')) ? SITE_KIND.continued : gen.has(r.join(',')) ? SITE_KIND.added : moved.has(r.join(',')) ? SITE_KIND.snapped : folded.has(r.join(',')) ? SITE_KIND.folded : SITE_KIND.on }));
-    console.log(JSON.stringify({ facadeId, extras: { ...w.array, snapped_uv: undefined, replaced_uv: undefined, folded_uv: undefined, continued_uv: undefined }, windows: toPx(w.uv).length, generated: gen.size }, null, 1));
+    const gen = new Set(toPx(w.generated?.uv ?? []).map(r => r.join(','))), moved = new Set([...toPx(w.array?.snapped_uv ?? []), ...toPx(w.array?.replaced_uv ?? [])].map(r => r.join(','))), folded = new Set(toPx(w.array?.folded_uv ?? []).map(r => r.join(','))), continued = new Set(toPx(w.array?.continued_uv ?? []).map(r => r.join(','))), behind = new Set(toPx(w.array?.behind_uv ?? []).map(r => r.join(',')));
+    after = toPx(w.uv).map(r => ({ r, kind: behind.has(r.join(',')) ? SITE_KIND.behind : continued.has(r.join(',')) ? SITE_KIND.continued : gen.has(r.join(',')) ? SITE_KIND.added : moved.has(r.join(',')) ? SITE_KIND.snapped : folded.has(r.join(',')) ? SITE_KIND.folded : SITE_KIND.on }));
+    console.log(JSON.stringify({ facadeId, extras: { ...w.array, snapped_uv: undefined, replaced_uv: undefined, folded_uv: undefined, continued_uv: undefined, behind_uv: undefined }, windows: toPx(w.uv).length, generated: gen.size }, null, 1));
 } else after = rec ? Array.from({ length: rec.sites.length / 7 }, (_, k) => ({ r: rec.sites.slice(k * 7, k * 7 + 4) as WindowRect, kind: rec.sites[k * 7 + 4] })) : e.rects.map(r => ({ r, kind: SITE_KIND.on }));
 
 const gap = 12, rgba = new Uint8Array((W * 2 + gap) * H * 4).fill(255);
@@ -61,8 +62,8 @@ const draw = (rIn: WindowRect, ox: number, c: [number, number, number]) => {
     for (let x = r[0]; x < r[2]; x++) { set(x, r[1]); set(x, r[3] - 1); }
     for (let y = r[1]; y < r[3]; y++) { set(r[0], y); set(r[2] - 1, y); }
 };
-const MAGENTA: [number, number, number] = [255, 0, 255], CYAN: [number, number, number] = [0, 220, 255], YELLOW: [number, number, number] = [255, 230, 0], GREEN: [number, number, number] = [0, 255, 80], ORANGE: [number, number, number] = [255, 140, 0], VIOLET: [number, number, number] = [170, 90, 255];
+const MAGENTA: [number, number, number] = [255, 0, 255], CYAN: [number, number, number] = [0, 220, 255], YELLOW: [number, number, number] = [255, 230, 0], GREEN: [number, number, number] = [0, 255, 80], ORANGE: [number, number, number] = [255, 140, 0], VIOLET: [number, number, number] = [170, 90, 255], RED: [number, number, number] = [255, 40, 40];
 for (const r of before) draw(r, 0, MAGENTA);
-for (const b of after) draw(b.r, W + gap, b.kind === SITE_KIND.added ? YELLOW : b.kind === SITE_KIND.continued ? VIOLET : b.kind === SITE_KIND.snapped || b.kind === SITE_KIND.replaced ? CYAN : b.kind === SITE_KIND.folded ? ORANGE : b.kind === SITE_KIND.span ? GREEN : MAGENTA);
+for (const b of after) draw(b.r, W + gap, b.kind === SITE_KIND.added ? YELLOW : b.kind === SITE_KIND.continued ? VIOLET : b.kind === SITE_KIND.behind ? RED : b.kind === SITE_KIND.snapped || b.kind === SITE_KIND.replaced ? CYAN : b.kind === SITE_KIND.folded ? ORANGE : b.kind === SITE_KIND.span ? GREEN : MAGENTA);
 fs.writeFileSync(out, encodePng(OW, H, rgba, 4));
-console.log(`before ${before.length} boxes, after ${after.length} (${after.filter(b => b.kind === SITE_KIND.added).length} added, ${after.filter(b => b.kind === SITE_KIND.snapped || b.kind === SITE_KIND.replaced).length} moved or replaced, ${after.filter(b => b.kind === SITE_KIND.folded).length} cells from folded strips, ${after.filter(b => b.kind === SITE_KIND.continued).length} stepped into blank bands); ${out}`);
+console.log(`before ${before.length} boxes, after ${after.length} (${after.filter(b => b.kind === SITE_KIND.added).length} added, ${after.filter(b => b.kind === SITE_KIND.snapped || b.kind === SITE_KIND.replaced).length} moved or replaced, ${after.filter(b => b.kind === SITE_KIND.folded).length} cells from folded strips, ${after.filter(b => b.kind === SITE_KIND.continued).length} stepped into blank bands, ${after.filter(b => b.kind === SITE_KIND.behind).length} behind an occluder); ${out}`);

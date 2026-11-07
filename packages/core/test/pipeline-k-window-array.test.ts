@@ -19,7 +19,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { consensusPitch, describeWindowArrays, inferWindowArray, inferWindowArrays, SITE_KIND, WINDOW_ARRAY_PARAMS, WINDOW_ARRAY_VERSION, type ArrayRecord } from '../src/node/3d-engine/staged-location/pipeline-k/window-array';
+import { BEHIND_REASON, consensusPitch, describeWindowArrays, inferWindowArray, inferWindowArrays, SITE_KIND, WINDOW_ARRAY_PARAMS, WINDOW_ARRAY_VERSION, type ArrayRecord } from '../src/node/3d-engine/staged-location/pipeline-k/window-array';
 import { WINDOW_FIT_PARAMS, WINDOW_FIT_VERSION, type WindowFitFile, type WindowRect } from '../src/node/3d-engine/staged-location/window-fit';
 import { BUILD_STEPS, TOGGLEABLE_STEPS } from '../src/common/staged-build-steps';
 
@@ -298,9 +298,13 @@ describe('the window array', () => {
         const out = inferWindowArray({ rects: given }, photo(truth), valid, occluded, PX);
         expect(out.report.reason).toBeUndefined();
         expect(out.rects).toHaveLength(150);
-        expect(out.report.continued!.sites).toBe(30); expect(out.report.continued!.cols).toBe(2);
+        // continued behind the occluder: their own kind and reason, generated
+        expect(out.report.behind).toEqual({ sites: 30, reason: BEHIND_REASON });
+        expect(out.report.continued).toBeUndefined();
         expect(out.report.empty!.occluded).toBe(30);
         expect(out.generated!.length).toBe(30);
+        let behind = 0; for (let k = 4; k < out.sites.length; k += 7) if (out.sites[k] === SITE_KIND.behind) behind++;
+        expect(behind).toBe(30);
     });
 
     it('leaves a facade alone when its lattice would drop many boxes as second boxes on taken sites', () => {

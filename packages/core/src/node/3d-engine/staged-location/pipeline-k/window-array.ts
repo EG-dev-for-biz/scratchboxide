@@ -160,7 +160,7 @@ export const WINDOW_ARRAY_PARAMS = {
 export type WindowArrayParams = typeof WINDOW_ARRAY_PARAMS;
 
 /** How a site came to hold its box. */
-export const SITE_KIND = { on: 0, snapped: 1, replaced: 2, added: 3, span: 4, folded: 5, kept: 6, continued: 7 } as const;
+export const SITE_KIND = { on: 0, snapped: 1, replaced: 2, added: 3, span: 4, folded: 5, kept: 6, continued: 7, behind: 8 } as const;
 
 export interface ArrayTier {
     /** The tier's rows, bottom and top of its band in photo pixels (y down). */
@@ -188,9 +188,11 @@ export interface FacadeArrayReport {
     rowsIn?: number; colsIn?: number;
     /** Blank rows and columns (unreached or featureless) the array stepped on into from the rows and columns that hold it, and the sites it placed there (generated). */
     continued?: { rows: number; cols: number; sites: number; reason: string };
+    /** Sites inside the array that something stood in front of, which the array continued behind (generated), and why. */
+    behind?: { sites: number; reason: string };
     /** The input boxes' RMS distance to their nearest site, in pitches, and the output's. */
     rmsIn?: number; rmsOut?: number;
-    /** The empty sites of the lattice: those outside the rows and columns that hold the array, those withheld (under a bay, reading the opposite of a window), those continued over an occlusion, and of the filled, those the photo never reached and those too dim to confirm on their own. */
+    /** The empty sites of the lattice: those outside the rows and columns that hold the array, those withheld (under a bay, reading the opposite of a window), those continued behind an occluder (kind behind, BEHIND_REASON), and of the filled, those the photo never reached and those too dim to confirm on their own. */
     empty?: { sites: number; outside: number; uncovered: number; occluded: number; wall: number; underBox: number; byRow: number };
     /** Where the lattice came from: the boxes' consensus, the photo's own periodicity, or the boxes' with its storeys (columns) merged into the photo's. */
     source?: 'boxes' | 'photo' | 'merged' | 'system';
@@ -264,6 +266,7 @@ function inferRegions(input: ArrayInput, photo: NonNullable<ReturnType<typeof fa
         tiers: ok.flatMap(r => r.tiers ?? []),
         on: sum('on'), snapped: sum('snapped'), replaced: sum('replaced'), added: sum('added'), rejected: sum('rejected'), folded: opt('folded'), kept: opt('kept') + rects.length - ok.reduce((t, r) => t + r.boxesIn, 0), rowsIn: opt('rowsIn'), colsIn: Math.max(0, ...ok.map(r => r.colsIn ?? 0)),
         ...(ok.some(r => r.continued) ? { continued: { rows: ok.reduce((t, r) => t + (r.continued?.rows ?? 0), 0), cols: Math.max(0, ...ok.map(r => r.continued?.cols ?? 0)), sites: ok.reduce((t, r) => t + (r.continued?.sites ?? 0), 0), reason: CONTINUED_REASON } } : {}),
+        ...(ok.some(r => r.behind) ? { behind: { sites: ok.reduce((t, r) => t + (r.behind?.sites ?? 0), 0), reason: BEHIND_REASON } } : {}),
         ...(base ? { rmsIn: base.rmsIn, rmsOut: base.rmsOut, seed: base.seed } : {}),
         source: 'system', rowsFrom: 'building',
         system: { regions: listed },
@@ -337,6 +340,8 @@ interface Lattice1D { pitch: number; phase: number }
 
 /** Why a continued site is there (its provenance label is generated). */
 export const CONTINUED_REASON = "no photo evidence: the photo never reached or left featureless this band, the building's envelope and the array beside it say the wall goes on, so the array steps on at its pitch and phase";
+/** Why a site behind an occluder is there (its provenance label is generated). */
+export const BEHIND_REASON = "no photo evidence: something stood in front of this site when the facade was photographed (the occlusion mask), and the array holds the rows and columns on both sides, so the array continues behind it at its pitch and phase";
 /** The share of the best candidate pitch's score the smallest accepted pitch must reach (consensusPitch). */
 const PITCH_SHARE = 0.75;
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -976,7 +981,7 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     // boxes flank it (left and right, or above and below). Outside those rows and columns nothing is added: the array stops
     // where its evidence does
     const sites = out.map(o => o.r);
-    let added = 0, rowsIn = 0, colsIn = 0, continuedRows = 0, continuedCols = 0, continuedSites = 0;
+    let added = 0, rowsIn = 0, colsIn = 0, continuedRows = 0, continuedCols = 0, continuedSites = 0, behindSites = 0;
     const empty = { sites: 0, outside: 0, uncovered: 0, occluded: 0, wall: 0, underBox: 0, byRow: 0 };
     const projOf = (r: WindowRect, t: ArrayTier, cy: number): number | undefined => {
         const look = regionLook(img, valid, r);
@@ -1084,8 +1089,8 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
             // does over an occluded span (generated, counted)
             if (share(occ, r, true) > P.addMaxOccluded) {
                 empty.occluded++;
-                taken.set(key, out.push({ r, kind: SITE_KIND.continued, conf: 0.25, res: 0, panes: templatePanes(r) }) - 1);
-                occupied.set(key, true); sites.push(r); continuedSites++;
+                taken.set(key, out.push({ r, kind: SITE_KIND.behind, conf: 0.25, res: 0, panes: templatePanes(r) }) - 1);
+                occupied.set(key, true); sites.push(r); behindSites++;
                 continue;
             }
             if (continuing) {
@@ -1110,7 +1115,7 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     for (const o of out) if (o.kind !== SITE_KIND.span && o.kind !== SITE_KIND.kept) { const t = tierFor((o.r[1] + o.r[3]) / 2); const d = Math.hypot(siteOf((o.r[0] + o.r[2]) / 2, col).res, siteOf((o.r[1] + o.r[3]) / 2, { pitch: t.rowPitch, phase: t.rowPhase }).res); rmsOutSum += d * d; rmsOutN++; }
     const order = out.map((_, k) => k).sort((a, b) => cmpRect(out[a].r, out[b].r));
     const outRects = order.map(k => out[k].r), outPanes = order.flatMap(k => out[k].panes ?? []).sort(cmpRect);
-    const outGenerated = order.flatMap(k => { const o = out[k]; return o.kind === SITE_KIND.added || o.kind === SITE_KIND.continued || (o.src !== undefined && o.src >= 0 && genSet.has(boxes[o.src].r.join(','))) ? [o.r] : []; }).sort(cmpRect);
+    const outGenerated = order.flatMap(k => { const o = out[k]; return o.kind === SITE_KIND.added || o.kind === SITE_KIND.continued || o.kind === SITE_KIND.behind || (o.src !== undefined && o.src >= 0 && genSet.has(boxes[o.src].r.join(','))) ? [o.r] : []; }).sort(cmpRect);
     const count = (kind: number) => out.filter(o => o.kind === kind).length;
     const report: Omit<FacadeArrayReport, 'facadeId'> = {
         boxesIn: rects.length, spans: spans.length, colPitchM: r3(col.pitch * pixel), colPhaseM: r3(col.phase * pixel), cols: colRange[1] - colRange[0] + 1,
@@ -1118,6 +1123,7 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
         on: count(SITE_KIND.on), snapped: count(SITE_KIND.snapped), replaced: count(SITE_KIND.replaced), added, rejected, folded, kept: count(SITE_KIND.kept), rowsIn, colsIn,
         source, rowsFrom, seed: seedReport, ...(systemNote ? { system: systemNote } : {}), ...(merged ? { merged, mergedBy: { ...(mergeRows ? { rows: mergeRows } : {}), ...(mergeCols ? { cols: mergeCols } : {}) } } : {}),
         ...(continuedSites ? { continued: { rows: continuedRows, cols: continuedCols, sites: continuedSites, reason: CONTINUED_REASON } } : {}),
+        ...(behindSites ? { behind: { sites: behindSites, reason: BEHIND_REASON } } : {}),
         rmsIn: r3(Math.sqrt(rmsInSum / Math.max(1, rmsInN))), rmsOut: r3(Math.sqrt(rmsOutSum / Math.max(1, rmsOutN))), empty
     };
     return { rects: outRects, panes: outPanes, ...(outGenerated.length ? { generated: outGenerated } : {}), report, sites: order.flatMap(k => { const o = out[k]; return [...o.r, o.kind, o.conf, o.res]; }) };
@@ -1223,7 +1229,7 @@ export function arrayExtras(fit: WindowFitFile, facadeId: number): Record<string
     const uvs = (kind: number): number[] => { const o: number[] = []; for (let k = 0; k + 6 < a.sites.length; k += 7) if (a.sites[k + 4] === kind) o.push(q(a.sites[k] / e.width), q(a.sites[k + 1] / e.height), q(a.sites[k + 2] / e.width), q(a.sites[k + 3] / e.height)); return o; };
     return {
         version: a.version, latticeFrom: a.report.source, seed: a.report.seed, ...(a.report.merged ? { merged: a.report.merged } : {}), colPitchM: a.report.colPitchM, tiers: a.report.tiers, boxesIn: a.report.boxesIn, on: a.report.on, snapped: a.report.snapped, replaced: a.report.replaced, added: a.report.added, rejected: a.report.rejected, rmsIn: a.report.rmsIn, rmsOut: a.report.rmsOut,
-        snapped_uv: uvs(SITE_KIND.snapped), replaced_uv: uvs(SITE_KIND.replaced), folded_uv: uvs(SITE_KIND.folded), continued_uv: uvs(SITE_KIND.continued), snappedLabel: 'photo-inferred', addedLabel: 'generated', ...(a.report.continued ? { continued: a.report.continued } : {}),
+        snapped_uv: uvs(SITE_KIND.snapped), replaced_uv: uvs(SITE_KIND.replaced), folded_uv: uvs(SITE_KIND.folded), continued_uv: uvs(SITE_KIND.continued), behind_uv: uvs(SITE_KIND.behind), snappedLabel: 'photo-inferred', addedLabel: 'generated', ...(a.report.continued ? { continued: a.report.continued } : {}), ...(a.report.behind ? { behind: { ...a.report.behind, label: 'generated' } } : {}),
         source: "the facade's window array: the photo's own periodicity (its lightness profiles autocorrelated, the fold at those pitches) seeding column and storey pitches that the boxes refine by consensus, each box moved to its site or replaced by the lattice's, empty sites filled row by row and column by column as far as the photo shows the array (window-array.ts)"
     };
 }
@@ -1235,5 +1241,5 @@ export function describeWindowArrays(r: WindowArrayReport): string {
     const tiers = done.reduce((t, f) => t + (f.tiers?.length ?? 1), 0), folded = done.reduce((t, f) => t + (f.folded ?? 0), 0);
     const by = (k: FacadeArrayReport['source']) => done.filter(f => f.source === k).length, merged = done.reduce((t, f) => t + (f.merged ?? 0), 0);
     const fromBuilding = done.filter(f => f.rowsFrom === 'building').length, fromSystem = done.filter(f => f.source === 'system').length;
-    return `window arrays (${r.version}): ${done.length} of ${r.facades.length} facades brought onto their array (${r.system ? `the building's system read from the whole structure by the vision model (${r.system.patterns.filter(p => p.repeats).length} array patterns and ${r.system.patterns.filter(p => !p.repeats).length} that do not repeat, over ${r.system.regions.length} regions, confidence ${r.system.conf}${r.system.reused ? ', the kept answer' : ''}): ${r.system.laid} of ${r.system.arrayRegions} array regions laid where the photo shows the window, ${r.system.refused} refused by the photo, ${r.system.notArray} regions of openings that do not repeat and ${r.system.noOpenings} without openings kept as read on ${fromSystem} faces; ` : ''}${r.building ? `the building's storeys ${r.building.pitchM} m from ${r.building.facades} facades and ${r.building.rows} rows, taken by ${fromBuilding} facades; ` : ''}${tiers} tiers; the lattice from the boxes on ${by('boxes')}, from the photo's own periodicity on ${by('photo')}, the boxes' with ${merged} sub-boxes merged into their windows on ${by('merged')}; of ${sum('boxesIn')} boxes ${sum('on')} on the lattice, ${sum('snapped')} moved to their site, ${sum('replaced')} replaced by the lattice's box and ${folded} strips folded into its cells (photo-inferred), ${sum('rejected')} dropped, ${done.reduce((t, f) => t + (f.kept ?? 0), 0)} of another size kept as read; ${sum('added')} added at the empty sites inside the rows and columns the array holds, where the photo does not read the opposite of a window, and ${done.reduce((t, f) => t + (f.continued?.sites ?? 0), 0)} stepped on into blank bands the photo never reached or left featureless (generated))${left.length ? `; ${left.length} left as fitted (${left.slice(0, 3).map(f => `${f.facadeId}: ${f.reason}`).join('; ')}${left.length > 3 ? '; ...' : ''})` : ''}`;
+    return `window arrays (${r.version}): ${done.length} of ${r.facades.length} facades brought onto their array (${r.system ? `the building's system read from the whole structure by the vision model (${r.system.patterns.filter(p => p.repeats).length} array patterns and ${r.system.patterns.filter(p => !p.repeats).length} that do not repeat, over ${r.system.regions.length} regions, confidence ${r.system.conf}${r.system.reused ? ', the kept answer' : ''}): ${r.system.laid} of ${r.system.arrayRegions} array regions laid where the photo shows the window, ${r.system.refused} refused by the photo, ${r.system.notArray} regions of openings that do not repeat and ${r.system.noOpenings} without openings kept as read on ${fromSystem} faces; ` : ''}${r.building ? `the building's storeys ${r.building.pitchM} m from ${r.building.facades} facades and ${r.building.rows} rows, taken by ${fromBuilding} facades; ` : ''}${tiers} tiers; the lattice from the boxes on ${by('boxes')}, from the photo's own periodicity on ${by('photo')}, the boxes' with ${merged} sub-boxes merged into their windows on ${by('merged')}; of ${sum('boxesIn')} boxes ${sum('on')} on the lattice, ${sum('snapped')} moved to their site, ${sum('replaced')} replaced by the lattice's box and ${folded} strips folded into its cells (photo-inferred), ${sum('rejected')} dropped, ${done.reduce((t, f) => t + (f.kept ?? 0), 0)} of another size kept as read; ${sum('added')} added at the empty sites inside the rows and columns the array holds, where the photo does not read the opposite of a window, ${done.reduce((t, f) => t + (f.continued?.sites ?? 0), 0)} stepped on into blank bands the photo never reached or left featureless and ${done.reduce((t, f) => t + (f.behind?.sites ?? 0), 0)} continued behind something that stood in front of the facade (generated, each with its reason))${left.length ? `; ${left.length} left as fitted (${left.slice(0, 3).map(f => `${f.facadeId}: ${f.reason}`).join('; ')}${left.length > 3 ? '; ...' : ''})` : ''}`;
 }
