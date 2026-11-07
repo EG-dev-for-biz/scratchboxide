@@ -849,7 +849,7 @@ function callLimiter(n: number): <T>(fn: () => Promise<T>) => Promise<T> {
  * returned as it is. The judged overlays are kept in facade_reader/ for review. With `readings`, every answer is kept
  * in that store and a question asked before about the same photo is answered from it (readFacade).
  */
-export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { signal?: AbortSignal; params?: FacadeReaderParams; progress?: (m: string) => void; /** The building the request named, told to the brief and every reading. */ building?: NamedBuilding; /** Where answers are kept between builds, and the model they are asked of (model-readings.ts). */ readings?: { store: ModelReadingStore; model: string } } = {}): Promise<{ records: FacadeReaderFile; cached: boolean }> {
+export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { signal?: AbortSignal; params?: FacadeReaderParams; progress?: (m: string) => void; /** The building the request named, told to the brief and every reading. */ building?: NamedBuilding; /** Where answers are kept between builds, and the model they are asked of (model-readings.ts). */ readings?: { store: ModelReadingStore; model: string }; /** A plane's key in the store in place of its own pixels' (planePixelsKey): the twin reader keys a facade by its straightened photo, which is the same build to build while the harmonised texture drifts (twin-reader.ts). None: the pixels'. */ planeKey?: (f: { facadeId: number; image: string }) => string | undefined } = {}): Promise<{ records: FacadeReaderFile; cached: boolean }> {
     const P = opts.params ?? FACADE_READER_PARAMS;
     const recFile = path.join(orthosDir, FACADE_READER_FILE);
     if (fs.existsSync(recFile)) {
@@ -939,7 +939,7 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
                 if (occluded) uncovered = unreadMask(uncovered, occluded, d.width * d.height);
                 const img = { rgba: d.rgba, width: d.width, height: d.height }, review = (png: Buffer, tag: string) => fs.writeFileSync(path.join(reviewDir, `${f.facadeId}_${tag}.png`), png);
                 // the plane's answers kept by its photo and what it may not read (uncovered or occluded)
-                const memory = opts.readings ? { ...opts.readings, plane: planePixelsKey(img, uncovered) } : undefined;
+                const memory = opts.readings ? { ...opts.readings, plane: opts.planeKey?.(f) ?? planePixelsKey(img, uncovered) } : undefined;
                 let r: { record: FacadeReadRecord; rects?: WindowRect[]; panes?: WindowRect[]; exemplars?: WindowExemplar[] } | undefined;
                 if (P.template && st && fam && !isLead) {
                     await st.done;

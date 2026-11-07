@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { memoryReadingStore } from '../src/node/3d-engine/staged-location/pipeline-k/model-readings';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -73,6 +74,22 @@ describe('the facade reader on the finished exterior', () => {
             expect(p.rects.length).toBeGreaterThan(20);
             expect(r.records.readings.filter(x => x.facadeId === 7)).toHaveLength(1);
             expect('planes' in r).toBe(false);
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    it('keeps a facade\'s answers by its straightened photo, so a twin whose harmonised texture drifted a little asks nothing again', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'twin-reader-'));
+        try {
+            const { orthos, flat, twinJson } = twinCase(dir);
+            const store = memoryReadingStore();
+            const first = oracle();
+            const a = await readOnTwin({ orthosDir: orthos, flatGlb: flat, twinJson, finalImage: new Map([[0, { width: W, height: H, rgba: photo(40, 150) }]]), ask: first.ask, readings: { store, model: 'm' } });
+            expect(first.asked.length).toBeGreaterThan(0);
+            // the same building built again: its straightened photo the same, its harmonised texture a few levels off
+            const second = oracle();
+            const b = await readOnTwin({ orthosDir: orthos, flatGlb: flat, twinJson, finalImage: new Map([[0, { width: W, height: H, rgba: photo(43, 153) }]]), ask: second.ask, readings: { store, model: 'm' } });
+            expect(second.asked).toEqual([]);
+            expect(b.records.readings.find(x => x.facadeId === 7)!.rects).toEqual(a.records.readings.find(x => x.facadeId === 7)!.rects);
         } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     });
 

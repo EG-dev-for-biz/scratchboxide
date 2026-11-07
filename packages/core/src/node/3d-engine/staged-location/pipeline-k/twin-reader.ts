@@ -133,12 +133,24 @@ export async function readOnTwin(input: {
         for (const m of [f.uncoveredMask, f.occludedMask]) if (m && fs.existsSync(path.join(input.orthosDir, m))) fs.copyFileSync(path.join(input.orthosDir, m), path.join(dir, m));
     });
     fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify(facadesFile));
+    // a facade's answers are kept by its straightened photo and masks (byte-identical build to build) and this reader's
+    // version, not by the harmonised texture it reads, which drifts by a few levels between builds of the same inputs
+    // (the Seagram: 127 of 210 twin images differed by 0.4 to 4 levels, and every twin-stage read was asked again,
+    // 2026-11-07); a plane photographed from the scan (a roof, a terrace) has no straightened photo and keeps its pixels' key
+    const planeKeys = new Map<number, string>();
+    for (const f of facadesFile.facades) {
+        const src = path.join(input.orthosDir, f.image);
+        if (!fs.existsSync(src)) continue;
+        const h = crypto.createHash('sha256').update(`twin-read\0${TWIN_READER_VERSION}\0`).update(fs.readFileSync(src));
+        for (const m of [f.uncoveredMask, f.occludedMask]) { h.update('\0mask\0'); if (m && fs.existsSync(path.join(input.orthosDir, m))) h.update(fs.readFileSync(path.join(input.orthosDir, m))); }
+        planeKeys.set(f.facadeId, h.digest('hex'));
+    }
     // the other planes, photographed from the flat scan with its photos harmonised
     const scan = await harmonisedScan(fs.readFileSync(input.flatGlb), input.finalImage);
     const scanFile = path.join(dir, 'scan_harmonised.glb');
     fs.writeFileSync(scanFile, scan.glb);
     const po = await planeOrthos(scanFile, dir);
     fs.rmSync(scanFile, { force: true });
-    const { records } = await readPlanes(dir, input.ask, { ...(input.signal ? { signal: input.signal } : {}), ...(input.progress ? { progress: input.progress } : {}), ...(input.building ? { building: input.building } : {}), ...(input.readings ? { readings: input.readings } : {}) });
+    const { records } = await readPlanes(dir, input.ask, { ...(input.signal ? { signal: input.signal } : {}), ...(input.progress ? { progress: input.progress } : {}), ...(input.building ? { building: input.building } : {}), ...(input.readings ? { readings: input.readings, planeKey: (f: { facadeId: number }) => planeKeys.get(f.facadeId) } : {}) });
     return { records, report: { dir, facadesHarmonised, facadesAsPhotographed, photosHarmonised: scan.swapped, planes: po.file.planes.length } };
 }
