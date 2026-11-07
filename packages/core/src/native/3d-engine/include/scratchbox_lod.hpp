@@ -26,13 +26,11 @@ using geometry::ScratchboxMesh;
 
 /**
  * One LOD step: QEM edge collapse on the welded surface (processing::QuadricDecimator) with its outline pinned, UV
- * seams crossed at the cost of the texture they drag (crossSeams), and the result ordered for the vertex cache.
- * Replaces halfedge::decimateMeshQEM here, which cracked seams open and lost the surface on scan meshes.
+ * seams crossed at the cost of the texture they drag, and the result ordered for the vertex cache.
  */
 inline ScratchboxMesh simplifyForLod(const ScratchboxMesh& mesh, size_t targetTriangles) {
     processing::DecimateOptions opt;
     opt.targetTriangles = std::max<size_t>(4, targetTriangles);
-    opt.crossSeams = true;
     return processing::QuadricDecimator::decimate(mesh, opt);
 }
 

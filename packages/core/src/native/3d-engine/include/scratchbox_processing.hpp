@@ -234,13 +234,6 @@ struct DecimateOptions {
     float creaseAngleDeg{45.0f};   // Dihedral angle threshold (same convention as IsotropicRemeshOptions) between
                                     // two triangles sharing an edge that counts that edge as a crease; also the angle
                                     // between two copies of one corner's normal that keeps them a hard edge
-    bool crossSeams{false};        // Let a collapse cross a UV or colour seam (meshoptimizer's "permissive" idea): a
-                                    // wedge of the removed end with no partner at the kept end takes the kept end's
-                                    // wedge nearest in UV, and the collapse pays for the texture it drags, in the
-                                    // quadric's units: each moved triangle's area times (its UV shift in surface metres)^2
-                                    // times seamWeight. Without it, photogrammetry atlases (a seam at nearly every vertex)
-                                    // stall the collapse long before the target.
-    float seamWeight{1.0f};        // weight of that texture-drift cost against the surface quadric
     bool optimizeOrder{true};      // order the result's triangles for the post-transform vertex cache and its
                                     // vertices by first use (optimizeVertexCache, optimizeVertexFetch)
 };
@@ -580,7 +573,7 @@ public:
             }
             return true;
         };
-        // The seam-crossing map for collapsing v into u (DecimateOptions::crossSeams): each wedge of v takes its partner
+        // The seam-crossing map for collapsing v into u: each wedge of v takes its partner
         // across the edge's own triangles where it has one, else u's wedge nearest in UV. Returns the texture-drift cost:
         // over v's triangles that stay, area x (UV shift x metres per UV unit)^2, plus area^2 x (colour shift)^2 (a full
         // colour flip costs as much as moving the triangle by its own size).
@@ -706,16 +699,17 @@ public:
             plan.seamCost = 0.0;
             if (mapWedges(a, b, plan.wedgeMap)) { plan.u = a; plan.v = b; plan.crossed.assign(plan.wedgeMap.size(), 0); }
             else if (mapWedges(b, a, plan.wedgeMap)) { plan.u = b; plan.v = a; plan.crossed.assign(plan.wedgeMap.size(), 0); }
-            else if (opt.crossSeams) {
-                // across the seam: whichever end drags less texture is removed
+            else {
+                // Across a UV or colour seam (meshoptimizer's "permissive" idea): a wedge of the removed end with no
+                // partner at the kept end takes the kept end's wedge nearest in UV, and the collapse pays for the
+                // texture it drags in the quadric's units (crossWedges). Respecting seams instead stalls atlased scans
+                // (a seam at nearly every vertex) far above the target. Whichever end drags less texture is removed.
                 const double costAB = crossWedges(a, b, plan.wedgeMap, plan.crossed);
                 const double costBA = crossWedges(b, a, altMap, altCrossed);
                 if (costAB < 0 && costBA < 0) return false;
                 if (costAB >= 0 && (costBA < 0 || costAB <= costBA)) { plan.u = a; plan.v = b; plan.seamCost = costAB; }
                 else { plan.u = b; plan.v = a; plan.seamCost = costBA; plan.wedgeMap.swap(altMap); plan.crossed.swap(altCrossed); }
-                plan.seamCost *= opt.seamWeight;
             }
-            else return false;
 
             // A triangle around v whose other corners are both opposite corners of the edge would land on one u
             // already has (the two triangles left of a tetrahedron).
