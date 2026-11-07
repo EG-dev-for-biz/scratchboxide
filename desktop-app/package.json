@@ -10,7 +10,7 @@
     "dev": "node scripts/dev.js",
     "vite:dev": "vite --host 127.0.0.1",
     "server:dev": "ts-node --transpile-only -P tsconfig.electron.json server/index.ts",
-    "build": "tsc && vite build && tsc -p tsconfig.electron.json",
+    "build": "tsc && vite build && tsc -p tsconfig.electron.json && node scripts/copy-core-assets.cjs",
     "build:client": "vite build",
     "start": "electron .",
     "start:standalone": "SCRATCHBOX_STANDALONE=true electron .",
