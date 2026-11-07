@@ -352,12 +352,12 @@ private:
 // ============================================================================
 // 3. Multi-Brush Sculpt Engine
 // ============================================================================
+// Local grab and pinch are Kelvinlet loads (Deformer::kelvinlet, scratchbox_kelvinlet.hpp): measured against the
+// falloff brushes they replaced, they keep volume and fold no triangles where those creased and turned faces over.
 enum class SculptBrush {
-    Grab,
     Clay,
     Inflate,
     Flatten,
-    Pinch,
     Crease,
     Smooth
 };
@@ -404,16 +404,6 @@ public:
         Vec3 normDir = strokeDir.lengthSq() > 1e-6f ? strokeDir.normalized() : Vec3(0, 1, 0);
 
         switch (brush) {
-            case SculptBrush::Grab: {
-                for (auto& v : mesh.vertices) {
-                    float dist = (v.position - center).length();
-                    if (dist < radius) {
-                        float w = evaluateFalloff(dist, radius, falloff);
-                        v.position += normDir * (strength * w);
-                    }
-                }
-                break;
-            }
             case SculptBrush::Clay: {
                 // Layered clay buildup with surface tangent constraint
                 for (auto& v : mesh.vertices) {
@@ -444,17 +434,6 @@ public:
                         float w = evaluateFalloff(dist, radius, falloff);
                         float distToPlane = (v.position - center).dot(normDir);
                         v.position -= normDir * (distToPlane * strength * w);
-                    }
-                }
-                break;
-            }
-            case SculptBrush::Pinch: {
-                for (auto& v : mesh.vertices) {
-                    Vec3 delta = center - v.position;
-                    float dist = delta.length();
-                    if (dist < radius && dist > 1e-6f) {
-                        float w = evaluateFalloff(dist, radius, falloff);
-                        v.position += (delta / dist) * (strength * w);
                     }
                 }
                 break;

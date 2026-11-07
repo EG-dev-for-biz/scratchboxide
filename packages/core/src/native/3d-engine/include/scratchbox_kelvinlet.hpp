@@ -352,7 +352,7 @@ namespace detail {
 template <typename F>
 inline void parallelChunks(std::size_t n, F&& fn) {
     const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-    const unsigned threads = n < 20000 ? 1u : std::min<unsigned>(hw, 16u);
+    const unsigned threads = n < 2048 ? 1u : static_cast<unsigned>(std::min<std::size_t>({hw, 16u, n / 1024}));
     if (threads <= 1) { fn(std::size_t{0}, n); return; }
     std::vector<std::thread> pool;
     const std::size_t chunk = (n + threads - 1) / threads;

@@ -13,7 +13,11 @@
 
 #include <cmath>
 #include <cstdio>
+#include <algorithm>
+#include <chrono>
 #include <filesystem>
+#include <functional>
+#include <map>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -71,6 +75,33 @@ static size_t nearestVertex(const ScratchboxMesh& m, const Vec3& p) {
     return best;
 }
 
+/**
+ * The falloff grab and pinch the shaper's sculpt brushes had before the Kelvinlet loads replaced them, kept here as
+ * the baseline they are measured against: the grab moves points along the stroke by strength x falloff, the pinch
+ * pulls them toward the centre by strength x falloff.
+ */
+static void plainGrab(ScratchboxMesh& m, const Vec3& c, float radius, float strength, const Vec3& dir) {
+    const Vec3 d = dir.normalized();
+    for (auto& v : m.vertices) {
+        const float w = shaper::SculptEngine::evaluateFalloff((v.position - c).length(), radius, shaper::SculptFalloff::Smoothstep);
+        if (w > 0.0f) v.position += d * (strength * w);
+    }
+    m.recomputeSmoothNormals();
+    m.recomputeBounds();
+}
+
+static void plainPinch(ScratchboxMesh& m, const Vec3& c, float radius, float strength) {
+    for (auto& v : m.vertices) {
+        const Vec3 delta = c - v.position;
+        const float dist = delta.length();
+        if (dist <= 1e-6f) continue;
+        const float w = shaper::SculptEngine::evaluateFalloff(dist, radius, shaper::SculptFalloff::Smoothstep);
+        if (w > 0.0f) v.position += (delta / dist) * (strength * w);
+    }
+    m.recomputeSmoothNormals();
+    m.recomputeBounds();
+}
+
 /** Plain-falloff twist for the comparison: cross-sections near the point turn by angle x smoothstep falloff. */
 static void plainTwist(ScratchboxMesh& m, const Vec3& c, const Vec3& axis, float angle, float radius) {
     const Vec3 n = axis.normalized();
@@ -92,7 +123,104 @@ static void writeGlb(const ScratchboxMesh& m, const std::string& path) {
 }
 
 /**
- * The proof meshes for one shape: untouched, under the shaper's plain-falloff brushes (radius 3 eps) and under the
+ * How a deformation treats the surface, measured against the mesh before it: the change in dihedral angle across
+ * every interior edge (positions welded, so UV seams count as interior), triangles whose normal turned over, the
+ * largest edge stretch, and the volume change of a closed mesh.
+ */
+struct Quality {
+    double creaseMaxDeg = 0, creaseP99Deg = 0;
+    size_t creasesOver30 = 0, folded = 0, edges = 0;
+    double stretchMax = 0, volumeChange = 0;
+};
+
+static Quality measure(const ScratchboxMesh& before, const ScratchboxMesh& after) {
+    Quality q;
+    const float diag = (before.bounds.max - before.bounds.min).length();
+    const double cell = 1e-5 * diag;
+    std::map<std::array<long long, 3>, uint32_t> weld;
+    std::vector<uint32_t> id(before.vertices.size());
+    for (size_t i = 0; i < before.vertices.size(); ++i) {
+        const Vec3& p = before.vertices[i].position;
+        const std::array<long long, 3> k{(long long)std::llround(p.x / cell), (long long)std::llround(p.y / cell), (long long)std::llround(p.z / cell)};
+        id[i] = weld.emplace(k, (uint32_t)weld.size()).first->second;
+    }
+    const size_t nt = before.indices.size() / 3;
+    auto normal = [](const ScratchboxMesh& m, size_t t) {  // in double: float32 cross products of thin triangles are noise
+        const kv::V3d a(m.vertices[m.indices[3 * t]].position), b(m.vertices[m.indices[3 * t + 1]].position), c(m.vertices[m.indices[3 * t + 2]].position);
+        return (b - a).cross(c - a);
+    };
+    std::vector<kv::V3d> n0(nt), n1(nt);
+    std::vector<double> areas;
+    for (size_t t = 0; t < nt; ++t) {
+        n0[t] = normal(before, t); n1[t] = normal(after, t);
+        areas.push_back(n0[t].length());
+    }
+    // Slivers (a pole's or an axis end's triangles, under a millionth of the median area) have no meaningful normal.
+    std::vector<double> sorted = areas;
+    std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
+    const double minArea = 1e-6 * sorted[sorted.size() / 2];
+    for (size_t t = 0; t < nt; ++t) if (areas[t] > minArea && n1[t].dot(n0[t]) < 0) ++q.folded;
+    std::map<std::pair<uint32_t, uint32_t>, std::vector<size_t>> edgeFaces;
+    for (size_t t = 0; t < nt; ++t) {
+        for (int e = 0; e < 3; ++e) {
+            const uint32_t i0 = before.indices[3 * t + e], i1 = before.indices[3 * t + (e + 1) % 3];
+            const uint32_t a = id[i0], b = id[i1];
+            if (a == b) continue;
+            edgeFaces[{std::min(a, b), std::max(a, b)}].push_back(t);
+            const double l0 = (before.vertices[i1].position - before.vertices[i0].position).length();
+            const double l1 = (after.vertices[i1].position - after.vertices[i0].position).length();
+            if (l0 > 1e-9 * diag) q.stretchMax = std::max(q.stretchMax, l1 / l0);
+        }
+    }
+    auto angle = [](const kv::V3d& a, const kv::V3d& b) {
+        const double la = a.length(), lb = b.length();
+        if (la <= 0 || lb <= 0) return 0.0;
+        return std::acos(std::clamp(a.dot(b) / (la * lb), -1.0, 1.0)) * 180.0 / math::PI;
+    };
+    std::vector<double> changes;
+    for (const auto& [edge, faces] : edgeFaces) {
+        if (faces.size() != 2) continue;
+        const double d = std::abs(angle(n1[faces[0]], n1[faces[1]]) - angle(n0[faces[0]], n0[faces[1]]));
+        changes.push_back(d);
+        if (d > 30.0) ++q.creasesOver30;
+    }
+    q.edges = changes.size();
+    if (!changes.empty()) {
+        std::sort(changes.begin(), changes.end());
+        q.creaseMaxDeg = changes.back();
+        q.creaseP99Deg = changes[(size_t)(0.99 * (changes.size() - 1))];
+    }
+    const double v0 = signedVolume(before);
+    q.volumeChange = std::abs(v0) > 1e-12 ? signedVolume(after) / v0 - 1.0 : 0.0;
+    return q;
+}
+
+/** Median wall time of `runs` applications of `op` to fresh copies of `base` (ms); the last result is kept in `out`. */
+static double timeOp(const ScratchboxMesh& base, ScratchboxMesh& out, const std::function<void(ScratchboxMesh&)>& op, int runs = 5) {
+    std::vector<double> ms;
+    for (int r = 0; r < runs; ++r) {
+        out = base;
+        const auto t0 = std::chrono::steady_clock::now();
+        op(out);
+        ms.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
+    std::sort(ms.begin(), ms.end());
+    return ms[ms.size() / 2];
+}
+
+static std::ostringstream compareJson;
+static int compareCount = 0;
+
+static void record(const std::string& name, const std::string& op, const std::string& variant, const Quality& q, double ms, size_t vertices) {
+    compareJson << (compareCount++ ? "," : "") << "{\"shape\":\"" << name << "\",\"op\":\"" << op << "\",\"variant\":\"" << variant
+                << "\",\"vertices\":" << vertices << ",\"creaseMaxDeg\":" << q.creaseMaxDeg << ",\"creaseP99Deg\":" << q.creaseP99Deg
+                << ",\"creasesOver30\":" << q.creasesOver30 << ",\"edges\":" << q.edges << ",\"folded\":" << q.folded
+                << ",\"stretchMax\":" << q.stretchMax << ",\"volumeChange\":" << q.volumeChange << ",\"ms\":" << ms << "}";
+}
+
+/**
+ * The proof meshes for one shape: untouched, under the plain-falloff brushes (radius 2 eps: half strength at eps, as
+ * the Kelvinlet grab) and under the
  * Kelvinlet loads at the same load point (grab 1.4 eps along the normal, twist 1.2 rad about the vertical, pinch).
  */
 static void writeProof(const std::string& outDir, const std::string& name, const ScratchboxMesh& base, size_t vi, float eps) {
@@ -101,33 +229,31 @@ static void writeProof(const std::string& outDir, const std::string& name, const
     n = n.lengthSq() > 1e-12f ? n.normalized() : Vec3(1, 0, 0);
     Vec3 t = Vec3(0, 1, 0).cross(n);
     t = t.lengthSq() > 1e-8f ? t.normalized() : Vec3(1, 0, 0);
-    const float plainR = 3.0f * eps;   // where the plain brush's falloff reaches zero
-    const float grab = 1.43f * eps, plainPinch = 0.43f * eps;
+    const float plainR = 2.0f * eps;   // the plain brush falls to half at eps, as the Kelvinlet grab does (smoothstep is 0.5 at half its radius)
+    const float grab = 1.43f * eps, pinchPull = 0.43f * eps;
     writeGlb(base, outDir + "/" + name + "_original.glb");
     {
         std::ofstream lf(outDir + "/" + name + "_load.json");
         lf << "{\"point\":[" << lp.x << "," << lp.y << "," << lp.z << "],\"normal\":[" << n.x << "," << n.y << "," << n.z << "],\"epsilon\":" << eps << "}";
     }
     kv::Options o; o.epsilon = eps;
-    ScratchboxMesh a = base;
-    shaper::SculptEngine::applyStroke(a, shaper::SculptBrush::Grab, lp, plainR, grab, n, shaper::SculptFalloff::Smoothstep);
-    writeGlb(a, outDir + "/" + name + "_grab_plain.glb");
-    ScratchboxMesh b = base;
-    kv::deformMesh(b, kv::Load::grab(lp, n * grab), o);
-    writeGlb(b, outDir + "/" + name + "_grab_kelvinlet.glb");
+    struct Variant { const char* op; const char* variant; std::function<void(ScratchboxMesh&)> apply; };
+    const Vec3 up(0, 1, 0);
     // Twist about the vertical through the load point: about the normal it would only slide a smooth surface over itself.
-    ScratchboxMesh c = base;
-    plainTwist(c, lp, Vec3(0, 1, 0), 1.2f, plainR);
-    writeGlb(c, outDir + "/" + name + "_twist_plain.glb");
-    ScratchboxMesh d = base;
-    kv::deformMesh(d, kv::Load::twist(lp, Vec3(0, 1, 0), 1.2f), o);
-    writeGlb(d, outDir + "/" + name + "_twist_kelvinlet.glb");
-    ScratchboxMesh e = base;
-    shaper::SculptEngine::applyStroke(e, shaper::SculptBrush::Pinch, lp, plainR, plainPinch, n, shaper::SculptFalloff::Smoothstep);
-    writeGlb(e, outDir + "/" + name + "_pinch_plain.glb");
-    ScratchboxMesh f = base;
-    kv::deformMesh(f, kv::Load::pinch(lp, t, -1.0f), o);
-    writeGlb(f, outDir + "/" + name + "_pinch_kelvinlet.glb");
+    const std::vector<Variant> variants = {
+        {"grab", "plain", [&](ScratchboxMesh& m) { plainGrab(m, lp, plainR, grab, n); }},
+        {"grab", "kelvinlet", [&](ScratchboxMesh& m) { kv::deformMesh(m, kv::Load::grab(lp, n * grab), o); }},
+        {"twist", "plain", [&](ScratchboxMesh& m) { plainTwist(m, lp, up, 1.2f, plainR); }},
+        {"twist", "kelvinlet", [&](ScratchboxMesh& m) { kv::deformMesh(m, kv::Load::twist(lp, up, 1.2f), o); }},
+        {"pinch", "plain", [&](ScratchboxMesh& m) { plainPinch(m, lp, plainR, pinchPull); }},
+        {"pinch", "kelvinlet", [&](ScratchboxMesh& m) { kv::deformMesh(m, kv::Load::pinch(lp, t, -1.0f), o); }},
+    };
+    for (const auto& v : variants) {
+        ScratchboxMesh m;
+        const double ms = timeOp(base, m, v.apply);
+        writeGlb(m, outDir + "/" + name + "_" + v.op + "_" + v.variant + ".glb");
+        record(name, v.op, v.variant, measure(base, m), ms, base.vertices.size());
+    }
 }
 
 int main(int argc, char** argv) {
@@ -318,6 +444,8 @@ int main(int argc, char** argv) {
             const Vec3 target(lo.x + fu * size.x, lo.y + fv * size.y, lo.z + fw * size.z);
             writeProof(outDir, arg.substr(0, c1), base, nearestVertex(base, target), 0.05f * size.length());
         }
+        std::ofstream cf(outDir + "/compare.json");
+        cf << "[" << compareJson.str() << "]";
     }
     return 0;
 }

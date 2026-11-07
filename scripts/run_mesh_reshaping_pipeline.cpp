@@ -115,14 +115,16 @@ static void bendAlongExtent(ScratchboxMesh& mesh, Axis axis, Axis secondary, flo
 
 static SculptBrush requireBrush(const GlbJsonValue& op) {
     const std::string s = op["sculptBrush"].asString("");
-    if (s == "grab") return SculptBrush::Grab;
     if (s == "clay") return SculptBrush::Clay;
     if (s == "inflate") return SculptBrush::Inflate;
     if (s == "flatten") return SculptBrush::Flatten;
-    if (s == "pinch") return SculptBrush::Pinch;
     if (s == "crease") return SculptBrush::Crease;
     if (s == "smooth") return SculptBrush::Smooth;
-    throw UsageError("sculpt needs sculptBrush (grab, clay, inflate, flatten, pinch, crease or smooth)");
+    if (s == "grab" || s == "pinch") {
+        throw UsageError("sculpt " + s + " is now the kelvinlet operation: {type: \"kelvinlet\", center, radius, " +
+                         (s == "grab" ? std::string("displacement [dx, dy, dz]}") : std::string("pinchStrength, pinchDirection}")));
+    }
+    throw UsageError("sculpt needs sculptBrush (clay, inflate, flatten, crease or smooth; grab and pinch are the kelvinlet operation)");
 }
 
 /** Applies one operation, reading its parameters against the mesh's current bounds. */
@@ -183,7 +185,7 @@ static void applyOperation(ScratchboxMesh& mesh, const GlbJsonValue& op) {
         requirePositive(radius, "sculpt radius");
         const float strength = requireNumber(op, "strength", type);
         const bool blend = brush == SculptBrush::Smooth || brush == SculptBrush::Flatten;
-        const bool directed = brush == SculptBrush::Grab || brush == SculptBrush::Clay || brush == SculptBrush::Flatten;
+        const bool directed = brush == SculptBrush::Clay || brush == SculptBrush::Flatten;
         const Vec3 direction = directed ? requireVec3(op, "direction", type) : Vec3(0, 1, 0);
         if (directed && direction.lengthSq() < 1e-12f) throw UsageError("sculpt direction must not be zero");
         SculptEngine::applyStroke(mesh, brush, Vec3(b.min.x + c.x * size.x, b.min.y + c.y * size.y, b.min.z + c.z * size.z),
