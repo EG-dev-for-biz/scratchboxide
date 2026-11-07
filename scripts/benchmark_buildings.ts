@@ -434,11 +434,11 @@ async function renderViews(glbPath: string, dir: string, log: (s: string) => voi
 // one build
 // ----------------------------------------------------------------------------------------------------------------
 
-async function buildOne(side: Side, place: Place, outDir: string, opts: { keepCaches: boolean; maxLoad: number; readings: boolean; freshReadings: boolean }): Promise<BuildResult> {
+async function buildOne(side: Side, place: Place, outDir: string, opts: { keepCaches: boolean; maxLoad: number; readings: boolean }): Promise<BuildResult> {
     const dir = path.join(outDir, side.label, place.slug);
     fs.mkdirSync(dir, { recursive: true });
     const readingsDir = opts.readings ? path.join(outDir, 'model_readings', side.label) : undefined;
-    if (readingsDir) { if (opts.freshReadings) fs.rmSync(readingsDir, { recursive: true, force: true }); fs.mkdirSync(readingsDir, { recursive: true }); }
+    if (readingsDir) fs.mkdirSync(readingsDir, { recursive: true });
     const log = (s: string) => { const line = `${new Date().toISOString()} [${side.label}/${place.slug}] ${s}`; console.log(line); fs.appendFileSync(path.join(dir, 'bench.log'), `${line}\n`); };
     while (os.loadavg()[0] > opts.maxLoad) { log(`load ${os.loadavg()[0].toFixed(0)} above ${opts.maxLoad}: waiting`); await sleep(60_000); }
     const loadAtStart = os.loadavg()[0];
@@ -601,7 +601,9 @@ async function main(): Promise<void> {
     if (cmd !== 'run') throw new Error(`unknown command ${cmd}: plan | run | views | sheet | measure`);
     const sides = parseSides(flags.get('side'));
     fs.writeFileSync(path.join(outDir, 'sides.json'), JSON.stringify(sides, null, 1));
-    const opts = { keepCaches: flags.has('keep-caches'), maxLoad: Number(flag(flags, 'max-load') ?? 100), readings: !flags.has('no-readings'), freshReadings: flags.has('fresh-readings') };
+    const opts = { keepCaches: flags.has('keep-caches'), maxLoad: Number(flag(flags, 'max-load') ?? 100), readings: !flags.has('no-readings') };
+    // --fresh-readings: each side's kept model answers cleared once, before this run's first build (not before every build)
+    if (opts.readings && flags.has('fresh-readings')) for (const side of sides) fs.rmSync(path.join(outDir, 'model_readings', side.label), { recursive: true, force: true });
     const retryFailed = flags.has('retry-failed');
     // place by place, each side in turn, so the two sides of a comparison are built minutes apart under the same load
     for (const place of places) {
