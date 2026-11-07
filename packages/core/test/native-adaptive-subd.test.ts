@@ -101,15 +101,24 @@ int main() {
     auto partial = road; partial.indices.resize(30 * 3);
     const auto pr = adaptive_subd::diceAndDisplace(partial, wp, bumps);
     size_t partialBad = 0; for (const auto& v : pr.mesh.vertices) if (!std::isfinite(v.position.x) || v.position.z < -15.5f) partialBad++;
+    // 6. the tile path tracer's entry point: a scene diced for its camera keeps each triangle's material and stays closed
+    gltf::GltfScene sc; sc.ok = true; sc.mesh = box; sc.materials.resize(2);
+    for (size_t t = 0; t < box.indices.size() / 3; t++) sc.triangleMaterial.push_back(uint32_t((t / 2) % 2));
+    displacement::DisplacementOptions so; so.sampleTextureHeight = false; so.enableProceduralNoise = true; so.proceduralNoiseScale = 0.04f;
+    adaptive_subd::CameraSpec view; view.position = Vec3(4, 3, 5); view.target = Vec3(0, 0, 0); view.width = 640; view.height = 360;
+    const auto ds = displacement::DisplacementEngine::displaceSceneForView(sc, so, view, 4.0f);
+    size_t matWrong = 0; const auto dsr = adaptive_subd::diceAndDisplace(box, [&]{ adaptive_subd::Params q; q.useCamera = true; q.camera = view; q.dicingRate = 4.0f; return q; }(), nullptr);
+    for (size_t t = 0; t < ds.triangleMaterial.size() && t < dsr.triangleSource.size(); t++) if (ds.triangleMaterial[t] != uint32_t((dsr.triangleSource[t] / 2) % 2)) matWrong++;
+    const auto refused = displacement::DisplacementEngine::displaceSceneForView(sc, so, view, 4.0f, 50);
     adaptive_subd::Params lim = cp; lim.maxTriangles = 100;
     const auto limited = adaptive_subd::diceAndDisplace(road, lim, nullptr);
 
     std::printf("{\"cubeAdaptiveTris\":%zu,\"cubeAdaptiveOpen\":%zu,\"cubeUniformOpen\":%zu,\"maxEdge\":%.4f,\"minEdge\":%.6f,\"flipped\":%zu,\"offCube\":%.6f,"
                 "\"liftErr\":%.6f,\"liftTris\":%zu,\"roadTris\":%zu,\"nearMeanEdge\":%.4f,\"farMeanEdge\":%.4f,\"pxEdgeP50\":%.3f,\"pxEdgeP95\":%.3f,\"roadOpen\":%zu,"
-                "\"partialOk\":%d,\"partialTris\":%zu,\"partialBad\":%zu,\"limitedOk\":%d,\"limitedError\":\"%s\",\"cubeHeightMin\":%.4f}\n",
+                "\"sceneOk\":%d,\"sceneTris\":%zu,\"sceneMatSize\":%zu,\"sceneMatWrong\":%zu,\"sceneOpen\":%zu,\"sceneRefused\":%d,\"partialOk\":%d,\"partialTris\":%zu,\"partialBad\":%zu,\"limitedOk\":%d,\"limitedError\":\"%s\",\"cubeHeightMin\":%.4f}\n",
         a.stats.triangles, openEdges(a.mesh), openEdges(u), maxEdge, minEdge, flipped, offCube, liftErr, lifted.stats.triangles, c.stats.triangles,
         nearSum / std::max<size_t>(1, nearN), farSum / std::max<size_t>(1, farN), pxEdges[pxEdges.size() / 2], pxEdges[size_t(pxEdges.size() * 0.95)], openEdges(c.mesh, [](const Vec3& p) { return std::fabs(p.x) < 1e-4f || std::fabs(p.x - 1.0f) < 1e-4f || std::fabs(p.z) < 1e-4f || std::fabs(p.z + 100.0f) < 1e-4f; }),
-        pr.ok ? 1 : 0, pr.stats.triangles, partialBad, limited.ok ? 1 : 0, limited.error.c_str(), [&]{ float m = 1e9f; for (auto& v : a.mesh.vertices) m = std::min(m, std::max({std::fabs(v.position.x), std::fabs(v.position.y), std::fabs(v.position.z)})); return m; }());
+        ds.ok ? 1 : 0, ds.mesh.indices.size() / 3, ds.triangleMaterial.size(), matWrong, openEdges(ds.mesh), refused.ok ? 0 : 1, pr.ok ? 1 : 0, pr.stats.triangles, partialBad, limited.ok ? 1 : 0, limited.error.c_str(), [&]{ float m = 1e9f; for (auto& v : a.mesh.vertices) m = std::min(m, std::max({std::fabs(v.position.x), std::fabs(v.position.y), std::fabs(v.position.z)})); return m; }());
     return 0;
 }
 `;
@@ -117,7 +126,7 @@ int main() {
 interface Out {
     cubeAdaptiveTris: number; cubeAdaptiveOpen: number; cubeUniformOpen: number; maxEdge: number; minEdge: number; flipped: number; offCube: number;
     liftErr: number; liftTris: number; roadTris: number; nearMeanEdge: number; farMeanEdge: number; pxEdgeP50: number; pxEdgeP95: number; roadOpen: number;
-    partialOk: number; partialTris: number; partialBad: number; limitedOk: number; limitedError: string; cubeHeightMin: number;
+    sceneOk: number; sceneTris: number; sceneMatSize: number; sceneMatWrong: number; sceneOpen: number; sceneRefused: number; partialOk: number; partialTris: number; partialBad: number; limitedOk: number; limitedError: string; cubeHeightMin: number;
 }
 
 let out: Out;
@@ -144,6 +153,15 @@ describe('adaptive subdivision and displacement (scratchbox_adaptive_subd.hpp)',
         expect(out.minEdge).toBeGreaterThan(1e-4);
         expect(out.flipped).toBe(0);
         expect(out.offCube).toBeLessThan(1e-5);
+    });
+
+    it('dices a scene for the tile path tracer\'s camera, keeping each triangle\'s material, closed, and refusing over its cap', () => {
+        expect(out.sceneOk).toBe(1);
+        expect(out.sceneTris).toBeGreaterThan(100);
+        expect(out.sceneMatSize).toBe(out.sceneTris);
+        expect(out.sceneMatWrong).toBe(0);
+        expect(out.sceneOpen).toBe(0);
+        expect(out.sceneRefused).toBe(1);
     });
 
     it('ignores input vertices that no triangle uses', () => {
