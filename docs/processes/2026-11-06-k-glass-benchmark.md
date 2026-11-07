@@ -134,3 +134,88 @@ The reader's accepted boxes come at two decimals (`round2` in `facade-reader.ts`
 | wall sheets' member windows | `Math.round` into the sheet | fine | unchanged |
 
 The native parity fixture (`wall-grammar-native.test.ts`) only ever found its generated bay through the shifted mask: its second facade's windows sat a bay out of phase and its unread span was too narrow for a whole bay. It now gives that facade the windows of its painted bays and an unread span from its u 14, and reads 5 bays on the front wall, the next one generated, native and TypeScript byte for byte. 24 tests in the four touched files pass; typecheck clean.
+
+
+## Round three (MAIN, 2026-11-07, the user's go-ahead "Yes, rebuild then train")
+
+All six buildings rebuilt uncached on the branch, the reader answers kept from round two (`model_readings/feat`), main
+70edef82 reused. Two runs: **3a** at 2a52f50e (the fractional-rect fix), then **3b** at 61870cab after the vision-chain
+fix below; the table is 3b. Materials are now read on each build's **final** layer (the voted `l2v` where the ownership
+stage published one, else `l2`); the earlier rows read main's retired `l2` on Lever House and 30 Rock, so main's numbers
+there change (Lever House cells 36,319 → 17,558; 30 Rock glass 10.03 → 8.00%, panes on stone 500 → 248).
+
+| Building | side | glass % | panes on stone | wall-like in panes % | cells | triangles | bays read + gen | reader planes / windows | holes % | untex % |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Lever House | main | 1.02 | 28 (+2 bays) | – | 17,558 | 84,373 | 8 + 0 | 9/41 | 3.20 | 4.34 |
+| | round 2 | 8.79 | 14 | 0.34 | 10,825 | 78,663 | 11 + 1 | 7/16 / 349 | 2.73 | 2.60 |
+| | round 3 | 7.84 | **0** | 0.23 | 12,420 | 84,803 | 11 + 1 | 8/16 / 396 | 2.87 | 2.77 |
+| Seagram | main | 7.83 | 204 (+8 bays) | – | 121,412 | 435,685 | 14 + 0 | 8/34 | 2.21 | 2.67 |
+| | round 2 | 9.91 | 10 | 0.10 | 48,267 | 250,815 | 2 + 0 | 8/12 / 1,752 | 1.88 | 3.03 |
+| | round 3 | 18.45 | 20 | 0.16 | 56,484 | 308,886 | **12 + 0** | 11/12 / 3,373 | 1.73 | 3.23 |
+| ESB | main | 8.35 | 366 (+105 bays) | – | 162,605 | 863,633 | 192 + 30 | 59/120 | 0.73 | 0.39 |
+| | round 2 | 5.53 | 43 | 0.13 | 136,404 | 728,765 | 58 + 38 | 50/67 / 5,749 | 0.66 | 0.34 |
+| | round 3 | 5.99 | 86 | 0.06 | 161,445 | 927,859 | 181 + 66 | 59/67 / 7,227 | 0.70 | 0.35 |
+| 30 Rock | main | 8.00 | 248 (+79 bays) | – | 224,797 | 1,098,097 | 328 + 60 | 53/120 | 0.98 | 1.87 |
+| | round 2 | 6.69 | 4 | 0.19 | 234,070 | 1,138,661 | 200 + 93 | 39/63 / 3,991 | 0.51 | 0.54 |
+| | round 3 | 10.26 | **0** | 0.02 | 268,928 | 1,292,075 | 284 + 45 | 48/63 / 8,454 | 0.50 | 0.53 |
+| Penn 2 | main | 6.57 | 169 (+72 bays) | – | 210,018 | 970,509 | 42 + 56 | 8/71 | 1.08 | 1.68 |
+| | round 2 | 9.31 | 7 | 0.47 | 150,035 | 756,443 | 23 + 52 | 9/19 / 344 | 1.16 | 1.69 |
+| | round 3 (l2v) | 11.61 | 13 | 0.74 | 78,024 | 443,843 | 44 + 16 | 14/22 / 760 | **2.23** | 1.30 |
+| Flatiron | main | 8.26 | 85 (+3 bays) | – | 62,296 | 230,456 | 11 + 12 | 6/14 | 0.68 | 4.05 |
+| | round 2 | 11.15 | 6 | 0.46 | 92,195 | 323,291 | 4 + 0 | 5/5 / 411 | 0.79 | 4.11 |
+| | round 3 | 12.35 | **106** | 0.48 | 47,028 | 207,038 | 11 + 0 | 5/5 / 946 | 0.80 | 4.07 |
+
+**MAIN's two questions.** Lever House's 14 panes on stone went down: 10 in 3a, 0 in 3b. Seagram's bays changed: the
+shaft read 2 bays in round two, 10 in 3a and 12 in 3b (the fractional mask fix: the column vote now sees the reader's
+windows in their own columns); facade 6 keeps the reader's 681 windows and its structure (8,066 cells, 41,510 triangles).
+
+**Against main**, by MAIN's four numbers:
+- glass %: up on five buildings; ESB is below main (5.99 vs 8.35%) because main's share includes its 366 panes and 105
+  bays drawn as glass on stone, which the branch refuses (86 panes left as stone, 0.06% wall-like texels in glass).
+- panes on stone: down on five buildings (Lever House 28 → 0, Seagram 204 → 20, ESB 366 → 86, 30 Rock 248 → 0, Penn 2
+  169 → 13). **Flatiron is up, 85 → 106.** Its facade 6 (Broadway) was not read in full this run: the brief grouped
+  planes 3 and 6 into one family, so facade 6 was tiled from plane 3's window by the template (`facade-reader-template.ts`),
+  which found 551 matches in 25 columns on a facade with 17 window columns (the template's peaks only need to be half an
+  exemplar apart, so the Flatiron's undulating bays match at half-column offsets too); about a hundred of those panes sit
+  on the piers and the wall guard refuses them. Main did the same on this facade (625 template matches) with its own
+  brief; in round two the brief kept planes 3 and 6 in separate families and facade 6 was read in full (250 openings in 4
+  zones, 6 panes on stone). The code is the same on both sides; the number moves with the model's family grouping. The
+  fix is in the template, not this branch's glass path: peaks at least an opening apart (openings cannot overlap), not half
+  the exemplar's patch.
+- cells and triangles: ESB and 30 Rock are at or above main; Lever House (12,420 vs 17,558), Seagram (56,484 vs 121,412),
+  Penn 2 (78,024 vs 210,018) and Flatiron (47,028 vs 62,296) are below it, because main's counts come from the window
+  fit's sub-pane rects (Seagram's facade 6: 55,442 cells for 487 fit boxes; Penn 2's facade 16: 46,456 cells for 457)
+  and the reader's one box per window makes fewer, larger cells. On the compared facades the triangles go up where main
+  had strips (ESB 39: 23,104 → 47,582; 30 Rock 12: 30,106 → 42,040) and down where main had the fit's slivers (Seagram 6:
+  165,668 → 41,510; Flatiron 2: 43,896 → 14,950); Penn 2's facade ids differ on the voted layer (its broad face is 7
+  there, 57,701 cells, 369 windows), so its facade 16 is not comparable.
+- **Penn 2's holes 1.08 → 2.23%, the largest hole 84.7 → 474.9 m²**, is a regression in a number MAIN did not list but
+  the product rule does ("no tears"). It is the first Penn 2 build with a voted layer: the ownership stage's 12-view vote
+  had always failed on Penn 2 ("the voted isolate is not the structure picked; the geometric isolate stands", main and 3a
+  alike) because gemini-3.8-flash's outline replies were unusable; with the chain fix the vote fell through to
+  gemini-4-argon, passed, and published an `l2v` remesh (443,176 triangles) that supersedes the `l2`. On it the twin reader
+  read facade 8 (the 225° face, its ortho now 1,422 x 1,185 instead of 1,383 x 1,533) as one zone with 4 openings, and the
+  visible-defect audit sees the back of FacadeLattice_8 through a 48 x 9.9 m hole at 225°/0° (`view_225.png` beside the
+  build: the base of that face is open). The `l2` of the same build (retired) reads like 3a: 300 openings on facade 8,
+  holes 1.33%. The vote's acceptance on Penn 2 is for the ownership lane; the tear audit should have put the scan back.
+
+**What was fixed on the way** (both commits on the branch):
+- 3a lost planes to malformed gemini-3.8-flash replies (`"label": "panes": 1`, fenced arrays, trailing data) that the
+  vision chain never handed to the next model and cached: ESB 10 planes, 30 Rock 7 (facade 12 fell back to the fit, as on
+  main), Seagram 2, Flatiron 2 (facade 2 fell back to the fit: 103 panes on stone). `VisionModelChain.walk` now walks the
+  candidates once and moves on when `valid` refuses a reply, returning the first reply only when every model's is unusable;
+  `replay` asks again when the recorded text fails `valid`; the facade reader remembers only usable replies
+  (efa6c043; `vision-model-chain.test.ts`). 3b reads 59/67 ESB planes (3a 49), 48/63 on 30 Rock (42), 11/12 Seagram (9),
+  14/22 Penn 2 (10), 8/16 Lever House; the fallback model answered 284k prompt and 95k output tokens across the six
+  builds (unpriced in the runner's estimate).
+- The runner's `sheet` step rewrote every `result.json` under the output folder by side, so the round-three results were
+  overwritten with round two's (same run ids); it now writes only the row of the same side and place (61870cab). The 3a
+  results were restored from the ledger rows.
+- The measuring scripts read the final layer (above).
+
+**Cost.** 3a $2.08 (fresh reads on four buildings); 3b $1.00 priced plus the gemini-4-argon tokens above. Both under
+the $10 cap. Reader reuse in 3b: Lever House and Seagram remesh reads from the store (27–28 answers each), the twin reads
+re-asked where the chain fix changed the answer.
+
+**Not pushed.** Flatiron's panes on stone and Penn 2's holes are above main, so per MAIN's instruction the branch stays
+local (HEAD 61870cab, three commits past the round-two state: 2a52f50e, efa6c043, 61870cab) until MAIN decides.
