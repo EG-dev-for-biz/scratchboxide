@@ -17,7 +17,7 @@
  *   - A part with no height in the vector data (AGENTS.md §4 "Believability first, honestly labelled"): its measured
  *     footprint is still drawn, extruded to the height the place's own measured footprints make plausible for it
  *     (height-norm.ts: a kernel estimate over plan distance, footprint area and compactness, fitted per place by
- *     leave-one-out; SCRATCHBOX_HEIGHT_NORM=0 off), else, with too few measured footprints to fit, PLAUSIBLE_DEFAULT_HEIGHT_M,
+ *     leave-one-out; opt-in, SCRATCHBOX_HEIGHT_NORM=1), else (off, or too few measured footprints) PLAUSIBLE_DEFAULT_HEIGHT_M,
  *     so the first paint shows a believable building instead of a gap. One building takes one estimate (its largest unmeasured
  *     part's, held under the place's own slenderness), so its fragments stand at one height. A building whose every part needed this is labelled `generated` (the height is a plausible guess,
  *     not Google's data); one where only some parts did keeps `vector-modelled` (the building overall is measured). The
@@ -45,12 +45,15 @@ import { writeStagedGlbFile, type StagedGlbNode } from './staged-glb-writer';
 import type { VectorBuilding, VectorEvidence } from './vector-footprints';
 import { estimateHeights, fitHeightNorm, footprintNumbers, HEIGHT_NORM_MIN_M, HEIGHT_NORM_VERSION, type HeightEstimate, type HeightNormModel, type NormFootprint, type NormSample } from './height-norm';
 
-/** The place's height norm for unmeasured footprints (height-norm.ts): on unless SCRATCHBOX_HEIGHT_NORM=0. */
+/**
+ * The place's height norm for unmeasured footprints (height-norm.ts): opt-in, SCRATCHBOX_HEIGHT_NORM=1. Off by default
+ * because of what it was measured to do on real unmeasured footprints (docs/research/2026-11-07-architectural-norms.md):
+ * 20% closer than 12 m where a structure stands, but about a third of them are at street level (plazas, platforms), where
+ * a neighbour norm draws them taller than 12 m did (at Penn a 1,077 m² footprint the DSM puts at 2.8 m went to 46 m).
+ */
 export function heightNormEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-    return env.SCRATCHBOX_HEIGHT_NORM !== '0';
+    return env.SCRATCHBOX_HEIGHT_NORM === '1';
 }
-
-export const VECTOR_MASSING_VERSION = `vector-massing/v1${heightNormEnabled() ? `+${HEIGHT_NORM_VERSION}` : ''}`;
 /** The label of every vector-massing triangle (AGENTS.md §4: measured, vector-modelled, photo-inferred, generated). */
 export const VECTOR_MODELLED_LABEL = 'vector-modelled';
 /** An isolated structure's first paint covers this far around the place (the structure is not known before the tiles). */
@@ -153,6 +156,8 @@ export function volumeDedupEnabled(env: NodeJS.ProcessEnv = process.env): boolea
     return env.SCRATCHBOX_VECTOR_VOLUME_DEDUP !== '0';
 }
 
+export const VECTOR_MASSING_VERSION = `vector-massing/v1${volumeDedupEnabled() ? '+dedup1' : ''}${heightNormEnabled() ? `+${HEIGHT_NORM_VERSION}` : ''}`;
+
 /** Plan triangles of every modelled volume, bucketed on a 4 m grid, with the building that owns each. */
 function volumePlanIndex(ev: VectorEvidence): (x: number, z: number, notOwner: string) => boolean {
     const C = 4, grid = new Map<string, Array<{ t: number[]; owner: string }>>();
@@ -254,7 +259,7 @@ export function selectPaintBuildings(ev: VectorEvidence, radiusM: number, opts: 
  * Never below a part's own floor; measured parts are untouched.
  */
 function applyHeightNorm(ev: VectorEvidence, buildings: PaintBuilding[], on: boolean): Pick<PaintSelection, 'heightNorm' | 'heightNormSkipped'> {
-    if (!on) return { heightNormSkipped: 'the height norm is off (SCRATCHBOX_HEIGHT_NORM=0)' };
+    if (!on) return { heightNormSkipped: 'the height norm is off (SCRATCHBOX_HEIGHT_NORM=1 turns it on)' };
     const wholeOf = (parts: Array<{ loops: Vec2[][] }>): NormFootprint | undefined => {
         let largest: NormFootprint | undefined, area = 0;
         for (const p of parts) {

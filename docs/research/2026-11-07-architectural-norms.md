@@ -19,7 +19,7 @@ our own method.
 
 | # | Paper | Would improve | Expected measured gain | Cost | Verdict |
 |---|---|---|---|---|---|
-| 3 | Ma et al. 2025 / Milojevic-Dupont et al. 2020: heights from footprints and urban form | First paint and the outer layer past the tile cap: unmeasured heights (today a flat 12 m) | Measured below: leave-one-out error 33–70% lower than 12 m in 7 cities; −20% on real unmeasured buildings that stand ≥ 6 m; no gain on ground-level "buildings" | ~300 lines of TypeScript, no model, no spend; ~3 s per district | **Prototyped** |
+| 3 | Ma et al. 2025 / Milojevic-Dupont et al. 2020: heights from footprints and urban form | First paint and the outer layer past the tile cap: unmeasured heights (today a flat 12 m) | Measured below: leave-one-out error 33–70% lower than 12 m in 7 cities; −20% on real unmeasured buildings that stand ≥ 6 m; no gain on ground-level "buildings" | ~300 lines of TypeScript, no model, no spend; ~3 s per district | **Prototyped**, opt-in (`SCRATCHBOX_HEIGHT_NORM=1`); the duplicate fix it found is on |
 | 2 | StructuredMesh: facade components regularised by binary integer programming | Lattice completion and window array: one layout per facade that minimises distinct sizes and positions | Paper: +6.5% precision, +4.5% recall, +5.5% F over 7 buildings. K's window array (#165) already does the consensus step, so the likely gain on K is 1–3 F points on irregular facades | An ILP solver (Gurobi is commercial; an open solver or our own branch-and-bound); NP-hard, so it needs pruning | Later: worth it only if #165's consensus leaves measured misalignments |
 | 1 | Visual-to-Executable Procedural Reconstruction (arXiv 2611.03143): layout tree → tile codes → deterministic program | Facade reader: a split/repeat tree in place of zone-by-zone boxes; a compiled program in place of tiled cells | Paper: TRC 1.47 vs 1.83 expert edits for direct LLM code; execution 0.98 vs 0.94; tile attributes 0.89–0.98 | A LoRA-tuned 7B VLM (training data, GPU) or prompting our reader to emit the tree; the compiler is cheap | Borrow the *reflection loop* (render the reading, show it back, repair) into the reader; skip the fine-tune |
 | 4 | FloorLevel-Net (arXiv 2107.02462): floor lines from street photos | Storey pitch on facades the tile photos barely see (low, occluded) | Paper: line accuracy 0.894 overall, 0.798 on GSV; no metric-pitch error reported | A segmentation net trained on street images; we no longer read Street View in K (the evidence stage is off) | No: K reads pitch from the straightened ortho by Viterbi on its own lines; the paper's gain is in perspective street photos we do not use |
@@ -114,7 +114,7 @@ massed only where the scan stands raised over 60% of its footprint, so the scan 
 - One estimate per building, held under the slenderness (height / √plan) that 95% of the place's whole measured
   buildings stay under. Small extruded parts in Google's data are tower setbacks, and without the cap a 3 m² kiosk came
   out 45 m tall.
-- `SCRATCHBOX_HEIGHT_NORM=0` returns to 12 m.
+- Opt-in: `SCRATCHBOX_HEIGHT_NORM=1`. Without it the plain 12 m stays (see the measured results for why).
 
 **Testing it found the duplicate problem first:**
 - At Penn (7th Ave & W 32nd St, 500 m), 1,586 of 4,116 footprint parts and 128 buildings had no height.
@@ -181,6 +181,18 @@ The norm wins where buildings are tall and loses on the few low ones, which 12 m
   draws them in scale with their block where they stand.
 - Hidden error moves from "every gap is 12 m" to "every gap is its block's typical height". Ground-level things are
   still drawn as buildings, as before.
+
+**In the app (uncached, 2026-11-07, run 53fcfbec, Penn district 300 m, norm switched on):**
+- The first paint committed in 8.8 s with 50,930 triangles.
+- The norm was fitted on 720 measured footprints, with leave-one-out error 21.9 m against 39.9 m for 12 m.
+- 109 duplicates under a modelled volume were left out, and 4 real gaps were estimated: 7.7, 18.4, 33.7 and 46.4 m.
+- The 46.4 m one is a 1,077 m² footprint the DSM puts at 2.8 m (street level). Before, it was a 12 m slab; now it is a
+  46 m slab. This failure is why the norm is opt-in.
+- The same run's tiles stage hit its 360 s limit while streaming under a load average of about 60. The vector stage then
+  went degraded at its 120 s limit while waiting on the tiles, after its own layer had committed.
+
+**Default:** the duplicate fix is on. The norm is opt-in until a measured existence gate keeps it off street-level
+footprints.
 
 **Cost:** about 3 s per district (fit with 60 grid points × 400 targets) and no spend.
 
