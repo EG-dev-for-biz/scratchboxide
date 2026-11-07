@@ -101,7 +101,7 @@ export class MapDataLayer {
             geom.setIndex(new THREE.BufferAttribute(list, 1));
             geom.computeBoundingSphere();
             geom.computeBoundingBox();
-            const mat = new THREE.MeshStandardMaterial({ color: colours.get(g.label)!, roughness: 0.85, metalness: 0, flatShading: true, toneMapped: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
+            const mat = new THREE.MeshStandardMaterial({ color: colours.get(g.label)!, roughness: 0.85, metalness: 0, flatShading: true, toneMapped: false, side: THREE.DoubleSide, polygonOffset: false, polygonOffsetFactor: -1, polygonOffsetUnits: -4 });
             const mesh = new THREE.Mesh(geom, mat);
             mesh.name = `sb-map-blob-group:${g.label}`;
             mesh.userData = { mapBlobGroup: g.label };
@@ -281,6 +281,17 @@ export class MapDataLayer {
         for (const [l, g] of Object.entries(this.layers) as Array<[LayerKey, THREE.Group]>) g.visible = layers[l];
         for (const [k, m] of this.blobMeshes) m.visible = !hidden.has(k);
         for (const [k, m] of this.areaMeshes) m.visible = !hidden.has(k);
+    }
+
+    /**
+     * The blob groups' depth bias: only while the scene's own surface is drawn under them (the two would z-fight). With the
+     * scene hidden the groups take none, so the lines and fills draped on the ground are not buried under a biased ground.
+     */
+    setBlobDepthBias(on: boolean): void {
+        for (const m of this.blobMeshes.values()) {
+            const mat = m.material as THREE.Material;
+            if (mat.polygonOffset !== on) { mat.polygonOffset = on; mat.needsUpdate = true; }
+        }
     }
 
     /** Hides the given scene roots (they are drawn again by the blob groups); restores them when called with hide false. */

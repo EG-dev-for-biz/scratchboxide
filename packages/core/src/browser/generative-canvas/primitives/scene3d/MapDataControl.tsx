@@ -186,6 +186,7 @@ export function useMapDataView(opts: { stackRef: React.MutableRefObject<Renderer
         layer.applyVisibility(layers, new Set(cfg?.hidden ?? []));
         const hide = layers.blobs && blobs.status === 'ready' && (cfg?.hideSceneUnderBlobs ?? true);
         layer.hideSceneRoots(hide ? sceneRoots() : [], hide);
+        layer.setBlobDepthBias(layers.blobs && !hide);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [on, layersKey, hiddenKey, blobs.status, vector.status, roadmap.status, cfg?.hideSceneUnderBlobs, sceneKey, sceneRootsKey]);
 
