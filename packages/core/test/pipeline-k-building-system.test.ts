@@ -12,7 +12,8 @@
  * laid on each face region by region by the window array (pipeline-k/window-array.ts): synthetic faces of one building on
  * the same floors (dark 1.2 x 2 m windows every 3 m across, 4 m storeys): a face read by nothing taking its neighbour's
  * array; a base of openings that do not repeat under an array shaft; a building with no arrays; an array the photo
- * contradicts; an unsure answer.
+ * contradicts; an unsure answer; grouped bays (windows in threes, a wider pier between the groups) the photo shows where
+ * the model read one window per bay.
  */
 
 import * as fs from 'fs';
@@ -23,7 +24,7 @@ import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { parseSystem, readBuildingSystem, systemOnFace, type BuildingSystem } from '../src/node/3d-engine/staged-location/pipeline-k/building-system';
 import type { FacadeAsk } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
 import { memoryReadingStore } from '../src/node/3d-engine/staged-location/pipeline-k/model-readings';
-import { describeWindowArrays, inferWindowArrays } from '../src/node/3d-engine/staged-location/pipeline-k/window-array';
+import { bayWarp, describeWindowArrays, groupedBay, inferWindowArrays, lightnessProfiles } from '../src/node/3d-engine/staged-location/pipeline-k/window-array';
 import { WINDOW_FIT_PARAMS, WINDOW_FIT_VERSION, type WindowFitFile, type WindowRect } from '../src/node/3d-engine/staged-location/window-fit';
 
 const PX = 0.1, W = 300, H = 600, COL = 30, ROW = 40, BW = 12, BH = 20;
@@ -148,5 +149,39 @@ describe('the building system', () => {
         const unsure = await readBuildingSystem(d2, standIn(c => ANSWER(c, { 1: [[0, 60, 'punched']] }, [SHAFT], 20)).ask);
         expect(unsure.system).toBeUndefined(); expect(unsure.reason).toMatch(/unsure/);
         fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(d2, { recursive: true, force: true });
+    });
+
+    it('reads grouped bays from the photo where the model read evenly spaced windows: the threes laid whole, each window at its own width', () => {
+        // windows in threes 3 m apart on an 11 m bay (a 5 m pier between the groups), 1.2 x 2 m, 4 m storeys, six bays
+        const GW = 660, BAY = 110, OFF = [25, 55, 85];
+        const g: WindowRect[] = []; for (let j = 0; j < 15; j++) for (let b = 0; b < 6; b++) for (const o of OFF) { const cx = b * BAY + o, cy = ROW / 2 + j * ROW; g.push([cx - BW / 2, cy - BH / 2, cx + BW / 2, cy + BH / 2]); }
+        const rgba = new Uint8Array(GW * H * 4); for (let k = 0; k < GW * H; k++) rgba.set([200, 200, 200, 255], k * 4);
+        for (const [x0, y0, x1, y1] of g) for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) rgba.set([40, 40, 40], (y * GW + x) * 4);
+        // the photo alone shows the bay: three windows at 25, 55 and 85 px of each 110 px
+        const valid = new Uint8Array(GW * H).fill(1);
+        const bay = groupedBay(lightnessProfiles({ rgba, width: GW, height: H }, valid).col, 29, 12)!;
+        expect(bay.bay).toBeCloseTo(BAY, 0);
+        bay.offsets.forEach((o, k) => expect(Math.abs(o - OFF[k])).toBeLessThanOrEqual(1)); // within a texel (the bay measured to a fraction of one)
+        // the warp spaces them evenly and keeps each window's width
+        const wp = bayWarp(bay, GW);
+        expect(wp.pitch).toBeCloseTo(BAY / 3, 0);
+        for (const o of OFF) { expect(wp.fwd(o + 6) - wp.fwd(o - 6)).toBeCloseTo(12, 0); expect(wp.inv(wp.fwd(o + 0.3))).toBeCloseTo(o + 0.3, 6); }
+        // evenly spaced windows are not bays
+        expect(groupedBay(lightnessProfiles({ rgba: photo(truth), width: W, height: H }, new Uint8Array(W * H).fill(1)).col, 30, 12)).toBeUndefined();
+        // through the system: the model read a 2.9 m pitch, one window per bay; a third of the boxes read
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'building-system-bays-'));
+        fs.writeFileSync(path.join(dir, 'facade_1.png'), encodePng(GW, H, rgba, 4));
+        fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades: [{ ...frame(1, [0, 0, -1]), width: GW }] }));
+        const fit: WindowFitFile = { version: WINDOW_FIT_VERSION, params: WINDOW_FIT_PARAMS, ms: 0, facades: [{ facadeId: 1, width: GW, height: H, rects: g.filter((_, k) => k % 3 === 0), panes: [], bands: [], ms: 0 }] };
+        const sys: BuildingSystem = { version: 'v', building: '', patterns: [{ ...SHAFT, bayM: 2.9 }], regions: [{ facadeId: 1, pattern: 'punched', bottomM: 0, topM: 60 }], conf: 80, groundY: 0, sheet: '', reused: false };
+        const rep = inferWindowArrays(dir, fit, undefined, { system: sys });
+        const reg = rep.facades[0].system!.regions![0];
+        expect(reg.source).toBe('system');
+        expect(reg.bay).toMatchObject({ windows: 3 }); expect(reg.bay!.pitchM).toBeCloseTo(11, 1);
+        const out = (JSON.parse(fs.readFileSync(path.join(dir, 'window_fit.json'), 'utf8')) as WindowFitFile).facades[0] as { rects: WindowRect[] };
+        expect(out.rects).toHaveLength(g.length);
+        // every window found within 2 px of its place, at its own width
+        for (const t of g) expect(out.rects.some(r => Math.abs((r[0] + r[2]) / 2 - (t[0] + t[2]) / 2) <= 2 && Math.abs((r[1] + r[3]) / 2 - (t[1] + t[3]) / 2) <= 2 && Math.abs(r[2] - r[0] - BW) <= 2)).toBe(true);
+        fs.rmSync(dir, { recursive: true, force: true });
     });
 });
