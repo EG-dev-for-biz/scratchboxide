@@ -184,6 +184,234 @@ envelope is the scan's height, not the vector's, so a continued row can start in
 whose reader boxes cover only the crown (Lever House 7, the slab's long face read as 51 small boxes at the mechanical
 band) stays at the crown, so the slab's bands are not boxed at all on that run — the reader's reading, not the array's.
 
+## 7. Round three (2026-11-07): the array seeded from the photo, stepping as far as the photo shows it
+
+### What the review found
+
+The user's review of the run8 sheet ("architectural inference could be improved for detecting these windows") read at
+full size:
+
+- Lever House facade 7, the most regular facade in the set (twenty ribbon rows, a mullion every bay), got no window at
+  all: the reader and the fit read only the crown's louvres, and the array fitted only to boxes.
+- Penn 2 facade 9's lower slab, with visible windows, stopped two rows past the last box (`extendBeyond`).
+- Seagram 16's pitch came from three rows (3.48 m against the building's 3.66 m) and its box from the median of a bad
+  reading (0.93 x 2.26 m where the glass runs 2.5 m between the spandrels); the facade's middle columns, masked as
+  occluded, were withheld, so the top rows had two columns.
+- 30 Rock 13 and 18 kept five columns as strips and moved two onto a pier (the irregular-pier phase, still open).
+
+The common thread: the module inferred from boxes alone. The fix with the most reach was a seed read from the photo
+itself.
+
+### The seed (`photoLattice`, `autocorrPeaks`, `foldCell`)
+
+1. **Profiles.** The ortho's CIELAB per valid texel; its column and row lightness profiles (the mean L of each column
+   and each row over the valid texels, NaN where under a tenth is valid).
+2. **Candidate pitches.** Each profile's normalised autocorrelation over lags of 0.8 to 12 m (a running mean over twice
+   the longest lag removed first, so a lit side shading into a dark one is not a period; at least three periods must
+   fit); its local maxima at 0.15 or more, strongest first, up to six, each refined between texels by the parabola
+   through its neighbours.
+3. **The fold.** For a pair of pitches the photo is folded into one unit cell (every valid texel binned by its position
+   modulo each pitch). The window is the interval on each axis darker than the rest of the cell (glass reads darker
+   than the wall under the sky), the interval of 12 to 95% of the cell whose mean deviation, weighted toward a long
+   interval, is largest, then grown to half-max; its centre is the phase, its length the window's size, and the window's
+   mean colour less the rest of the cell's is the contrast.
+4. **The pitch on each axis** is the candidate whose fold shows the window most clearly (the other axis at its
+   strongest candidate), a sub-multiple (a half to an eighth) nearly as clear (90%) taken instead: a unit cell of two
+   windows folds a little more clearly than one. The seed is clear when both pitches correlate (0.15) and the window
+   stands out of the cell (CIELAB 6); it stands on its own when four rows and three columns show its contrast.
+
+On the kept caches (orthos of run8), the seed read: Seagram 16 1.41 x 3.66 m, window 1.09 x 2.49 m (the correlation of
+the storeys 0.83 over fifty of them); Lever House 7 8.54 x 3.75 m (the bay and the storey), window 5.85 x 1.53 m; Penn 2
+16 2.97 x 3.69 m (the pane pitch and the storey, chosen over the 0.86 m transoms, which correlate more strongly but fold
+less clearly: contrast 15.2 against 7.9); 30 Rock 18 and 13 3.50 m storeys and a 5.8 m column pitch (the pier rhythm in
+pairs; the window columns at 2.5 m fold less clearly, 15.6 against 20.6, and are not a sub-multiple within 10%); Seagram 9
+and 12, no clear seed (contrast 5.5 and 5.3; their boxes are good).
+
+### The seed and the boxes reconciled
+
+- **Agreement** (pitches within 5%): the boxes' pitch and phase stand, refined over every box; the seed's instead when
+  the boxes occupy few rows (under four, or under a quarter of the rows showing the seed's contrast: Seagram 16's three
+  rows against thirty-three). The window is sized from the fold at that lattice (a seed pitch a few percent off smears
+  the fold over a tall facade into a narrow core), and only within 0.5 to 2.5 times the boxes' median size.
+- **Sub-boxes.** Where the lattice's window spans the boxes (1.5 times their height or width: a window read as its
+  halves, a pane and a spandrel read apart), the boxes standing in one site are merged into one window, the sub-boxes
+  its panes (photo-inferred). A seed storey pitch a multiple of the boxes' whose window is no larger than theirs is the
+  coarser reading of the same storeys and changes nothing (Seagram 12's 10.95 m, Penn 2 9's 7.16 m).
+- **Outright disagreement:** the lattice whose evidence spans the wider extent wins (the seed's holding rows against the
+  rows the boxes occupy, by 1.5): the seed over a crown's few rows (Lever House's louvres yield to the slab; the louvres
+  are kept as read when of another size, or stand as a tier of their own), the boxes over a weak seed. Boxes that sit
+  cleanly on their lattice (80% on it) never fold into a coarser reading of every other column (Penn 2 16's bays stand
+  against the seed's pane pitch).
+- **No boxes at all:** the seed alone is the lattice, every site generated. But the seed alone never replaces twelve or
+  more boxes read with a window under half their median area: that darker interval is a band between the windows (30
+  Rock's spandrels, darker than its reflective glass: facades 11, 21, 26 and 29 keep their 800 to 2,400 read boxes
+  instead of gaining tiny boxes on the spandrels).
+
+### The building's storeys (`buildingStorey`, `storeyOnFacade`; user direction, 2026-11-07: "we may need the context of the entire structure to infer the placements")
+
+The floors are the building's, not one face's. After each facade's own pass, every arrayed facade's main storey lattice
+(pitch and the windows' centre line) is converted to world height by its plane frame (`Y = centroid.y + axisT.y
+(orthoTMax - y pixel)`) and weighted by the sites it holds (rows x columns, so a wide slab outweighs a narrow face of as
+many rows); the pitch whose cluster of facades (within 5%) carries the most weight is the building's storey, its pitch
+the cluster's weighted mean, its phase their circular mean. On the kept caches: Seagram 3.645 m from 5 facades (141
+rows), 30 Rock 3.508 m from 19 (481 rows), Lever House 3.746 m from 3 (the 3.05 m a narrow face alone gave under a rows-only
+weight was wrong), Penn 2 3.678 m from 3.
+
+A second pass gives those storeys to the facades that lacked rows of their own (left as fitted, holding under four
+rows, or a photo-only lattice whose storey is neither the building's nor a whole multiple of it, which read a transom or
+a sill for a storey): a face's boxes take the building's pitch at the face's own phase (its boxes', or the fold's: the
+building's phase is a mean over faces whose windows need not sit at one height, and gave Penn 2's facade 1 no box on a
+site), a face with no row pitch takes it outright, and a face too short or too faint to correlate its own rows (fewer
+than three periods: Lever House 3, three storeys tall; Penn 2 1, two) but whose columns correlate is folded at its
+columns and the building's storeys, standing as a seed when that fold shows the window, one row of its own then enough.
+Lever House 3 keeps its 21 read boxes on the building's 3.75 m (18 on, 3 snapped) where the face alone had snapped 12 and
+dropped 9 on a 2.03 m seed; Penn 2 1 (32 boxes, two rows) stands on 3.68 m. A line of two sites is judged by both.
+
+### The building's system read by the vision model, region by region (`building-system.ts`; user, 2026-11-07)
+
+The passes above find periods; they do not understand a building ("not smart enough"). The top line the user then set:
+**understand what an array is, what the pattern is, how it changes per region on a structure, and that some structures
+have no arrays.** An array is a set of openings of one size repeating at one spacing across and one storey up; "no
+array" (openings placed one by one, of differing sizes or spacing, or no openings) is an answer, never a failure to fill.
+
+Before any face's array, every facade photo goes on one contact sheet (the facade reader's, `facade-reader-brief.ts`),
+each cell told where its plane stands (facing, size, height above the lowest plane) and what the photo's own periodicity
+measured there, and the facade reader's vision model answers, in numbers and one structural fact (never a type name):
+
+- **patterns**: each distinct pattern of openings, `repeats` true (an array: storey, bay, windows per bay, window width
+  and height, sill, in metres) or false (openings that do not form an array);
+- **regions**: for every face, its bands bottom to top, each with its heights above the lowest plane and its pattern, or
+  none (no openings): a base of shopfronts, a shaft of an array, a mechanical floor without openings, a crown of another
+  array.
+
+One call per building, kept in the model readings store by the sheet's pixels and the prompt. Checked on parse: storeys
+2.2 to 9 m, bays 0.6 to 24 m, at most 8 windows a bay, every region naming a known pattern, confidence 40 or more; else
+unused, with the reason.
+
+A face the answer covers is run **region by region** (`inferRegions`): each band is cut from the photo with the boxes
+whose centre lies in it. An array region lays its pattern's lattice through the plane frame (the pane pitch `bayM /
+windowsPerBay` across; up, the storey with the window's centre at the region's bottom + sill + half the window, by
+`Y = centroid.y + axisT.y (orthoTMax - y px)`), folds the photo at it and takes it only where the fold shows the window:
+the model's pitches and sizes, the photo's phases (the model reads, the photo places; photo-inferred); the boxes refine it
+as before. A region the fold contradicts is refused and reported. A region whose openings do not repeat, or with none,
+keeps the openings read there exactly as read and gains nothing. A face the answer covers is not given the building's
+storeys afterwards (its answer stands, array or not); a face off the sheet, or a building with no usable answer, reads
+for itself as above. Tests: a face read by nothing gets its neighbour's 150 windows from one reading, kept for the next
+build; a base of three odd openings is kept exactly under a filled shaft; a building read as having no arrays keeps
+every box as read and adds none, however periodic its photo; an array read on a plain wall is refused; an unsure answer is
+unused.
+
+### One opening model, and what the system read replaces (MAIN's review, 2026-11-07)
+
+MAIN's review of K found openings coming from overlapping readers (window fit, wall grammar, facade reader, window
+array) that can disagree. On this branch the flow is:
+
+1. The window fit and the facade reader read boxes.
+2. The reader's boxes are merged into `window_fit.json` inside the zones it drew (`mergeReadings`).
+3. The window array, with the system read, rewrites that same file.
+4. Everything downstream reads that one file: the wall grammar and wall sheets (bays), the lattice (`facade-lattice.ts`:
+   each window's recess and the panes it carries) and the material regions' glass (`paneGlass`, the panes the lattice
+   carries).
+
+So recess and glass already read one opening model, the arrayed `window_fit.json`. The twin reader on the finished
+exterior draws nothing.
+
+What the system read replaces and absorbs:
+
+- **Replaces, on every face it covers:** the per-face lattice heuristics as the source of the lattice. The photo
+  periodicity seed and the building storeys are now only the fallback for faces off the sheet or a building with no
+  usable answer.
+- **To absorb next: the facade reader's brief.** The brief is a second call on the same contact sheet of the same planes
+  (its building sentences and its families of planes sharing a window system). Its families are the faces that share an
+  array pattern in the system's answer, and its building text is the system's. So one call can serve both, with the
+  reader's per-plane reads told the system instead of the brief. That leaves the per-building model calls where they
+  were before this branch, at one.
+- **Not done here:** the reader's files are not edited until the glass PR merges, so that absorption waits for the
+  rebase. Until then the system read is one extra call per building, kept in the readings store.
+
+### The extent, stepping
+
+Each site is judged against the ring around it (the bands beside, above and below it, outside every box: a ribbon window
+reads against its floor band, a punched one against the pier; the left-and-right test read Lever House's ribbons as
+nothing against the equally dark panel beside them). From the rows and columns holding boxes (or, with none, the row and
+column showing the contrast most clearly) the array steps outward row by row and column by column for as long as each
+next one shows at least 0.3 of the windows' contrast (a lower bar than the 0.5 that establishes a row on its own, since
+the array beside it is established and a storey in shade reads dim: Penn 2 9's lower slab reads 0.3 to 0.5), to the
+photo's edge if it does; a blank run (unreached, occluded or featureless) is crossed and continued when the first row
+read beyond it holds again (Seagram 16's occluded middle columns, between held columns on both sides); the walk stops at
+the first read row that does not hold (Penn 2 9's podium, the ground floor at -0.02). A site inside the array that
+something stood in front of is continued over (generated, counted), as the lattice continues over an occluded span, no
+longer withheld. `extendBeyond` is retired.
+
+### Offline, on the kept caches (`window-array/4`, before the builds)
+
+| Facade | Before (run8) | Now | Source |
+|---|---|---|---|
+| Lever House 7 | 51 boxes, 26 added at the crown's 0.86 m rows, the slab empty | 296 added over 19 rows x 16 columns at 2.89 x 3.75 m, window 2.55 x 1.53 m, the 51 crown boxes kept | photo |
+| Seagram 16 | 3.48 m rows from 3 rows, 75 added, 9 rows held | 3.66 m rows, 266 added over 34 rows (the occluded middle columns continued between the held ones), box 0.93 x 2.49 m | photo (agreement, few rows) |
+| Penn 2 9 | 60 added, stopped two rows under the boxes | 130 added, the lower slab stepped to the podium | boxes |
+| Penn 2 16 | 420 on, 22 added | 420 on, 4 added (the seed's pane pitch refused: clean boxes) | boxes |
+| Seagram 9, 12; 30 Rock 18, 13; Lever House 16 | as run8 | as run8 (no clear seed, or the seed agreed and the boxes' window kept) | boxes |
+| 30 Rock 11, 21, 26, 29 | left as fitted (835 to 2,446 boxes, no majority) | left as fitted: the seed's 0.78 m "window" refused as a spandrel | boxes stand |
+| Lever House 3, Penn 2 1 (short faces) | left or mis-snapped | on the building's storeys, their boxes kept | boxes, rows from the building |
+
+### Builds (`2026-11-07-window-array-regions`, run1, commit 87d7983c, `window-array/7`, uncached)
+
+Four uncached builds, all finished degraded on their usual counts (holes 0.8 to 2.8%, generated 66 to 69%), $2.26 of
+model calls in all. The vision model read a sensible system for every building in one call each:
+
+| Building | Patterns read (array / not) | Array regions laid / refused | Windows added | Behind an occluder |
+|---|---|---|---|---|
+| Penn 2 | 3 / 1 (shaft curtain wall 3.7 x 2.97 m, end bays, louvre bands; storefronts) | 7 / 6 | 1,091 | 34 |
+| Lever House | 2 / 3 (shaft 3.75 x 1.44 m, podium glazing; open ground, solid core, penthouse) | 6 / 7 | 150 | 0 |
+| 30 Rockefeller Plaza | 2 / 2 (tower windows 3.5 x 2.35 m, narrow bays; storefronts, parapet band) | 13 / 17 | 238 | 122 |
+| Seagram | 2 / 1 (curtain wall 3.65 x 1.41 m, low podium; lobby) | 2 / 13 | 925 | 21 |
+
+The reading was right; the photo refused too many of its arrays. Replayed offline on the builds' own orthos and the
+model's own answers (exactly reproducing the builds' counts first), three causes:
+
+1. **The model's pitch taken as read.** A pitch a percent off drifts half a storey over a 60-storey face and the fold
+   smears. Each pitch is now measured on the photo: its strongest autocorrelation peak within 8% of the model's
+   (`measurePitch`). A 1D fold search was tried first and was too coarse (30 Rock 20: 45.72 px against the true 45.42).
+2. **Grouped bays.** 30 Rock's windows stand in threes 2.5 m apart, a wider pier between the groups, every 8.39 m; the
+   model read a 2.35 m bay with one window, and no single pitch fits (the sites drift in and out of phase, every row
+   averages zero). Grouped bays are now measured from the photo (`groupedBay`) and the band warped across so its windows
+   stand evenly (`bayWarp`, window interiors at their own scale), inferred there and warped back. Read on seven of 30
+   Rock's faces at 8.38 to 8.46 m with three windows, two narrow faces at 5.85 m with two; never on a band under four
+   storeys (a one-storey podium band read four uneven windows to a bay before that guard).
+3. **No fallback.** A system lattice that showed its window in the fold but held no row or column returned the face
+   unchanged; it now reads for itself (its own seed and boxes), the refusal kept in the report.
+
+The fold in the system path also takes the model's window size and tries the window darker and lighter than the rest
+of the cell. Seagram stays refused: its tile photo shows the mullions and no storey line at all (window and spandrel the
+same bronze-dark), so the photo cannot place a window, and the refusal is the right answer.
+
+| Offline on the builds' orthos | Laid / refused | Windows added |
+|---|---|---|
+| As built (`window-array/7`) | 28 / 43 | 2,404 |
+| Pitch by autocorrelation, fallback | 27 / 44 | 2,211 |
+| Final (`window-array/8`: and grouped bays, window size either sign, four-storey guard) | 37 / 34 | 3,353 |
+
+By building (final): Penn 2 10 / 3 and 1,061; Lever House 8 / 5 and 414 (face 7's shaft 8 boxes to 392 windows); 30
+Rock 18 / 12 and 1,256 (face 20 2,154 boxes to 2,554 windows, face 27 550 to 1,862); Seagram 1 / 14 and 622. Not yet
+rebuilt end to end on `window-array/8`.
+
+### Open
+
+- 30 Rock's pier rhythm is read as grouped bays in the system path (`groupedBay`); a face read without the system (its
+  own photo seed) still takes the bay as one cell with one window and needs the same bay read.
+- Lever House 7: the shaft's lowest seven storeys stay unfilled though the photo shows the same grid; the stepping stops
+  there (not the grouped bays, which are not read on that face's shaft).
+- The seed reads lightness only and takes the darker interval as the window; a facade whose glass reads lighter than
+  its wall (a mirror wall under an overcast sky) gets no seed and stays with its boxes.
+- A column stepped onto at the ortho's edge may lie on the neighbouring plane the ortho also shows (Seagram 12's last
+  column): the plane's own extent is not read.
+- After the rebase onto the glass branch: its lattice keeps the scan in a row's end cells whose own scan lies more than
+  0.25 m behind the row's wall depth (a curving wall, the Flatiron prow; commits 3e245788, a9d558f1). The array can add or
+  step windows to a wall's ends. Check that a generated window landing in such a kept-scan cell is dropped from the
+  lattice's windows and panes, not drawn as glass over the scan, and that the array does not count it as laid. The tear
+  audit's ray probe (every surface along a red pixel's ray, front or back and node) is the check to reuse.
+
 ## 5. Tests
 
 `packages/core/test/pipeline-k-window-array.test.ts` (synthetic 30 x 60 m facades at a 3 x 4 m grid): the consensus pitch
