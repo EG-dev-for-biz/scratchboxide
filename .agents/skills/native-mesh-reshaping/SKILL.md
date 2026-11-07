@@ -3,7 +3,7 @@ name: native-mesh-reshaping
 description: >-
   Deform a given 3D mesh (.glb) with explicit operations in the native C++20 engine (scratchbox_shaper.hpp)
   through mesh_apply_deformers / NativeMeshReshaperService: taper, twist, bend, shear, bulge, Bernstein FFD
-  lattices, sculpt brushes, loop subdivision, repair and weathering. Every value is chosen by the agent and is
+  lattices, sculpt brushes, Kelvinlet elastic loads, loop subdivision, repair and weathering. Every value is chosen by the agent and is
   relative to the mesh's measured bounding box; nothing is read from prose or applied by default.
 ---
 
@@ -56,6 +56,7 @@ operation means the same on a 4 cm prop and a 60 m tower:
 | `bulge` | `center`, `radius`, `strength`; optional `power` (default 2) | Radial push (negative `strength` pinches). |
 | `sculpt` | `sculptBrush`, `center`, `radius`, `strength`; `direction` for grab, clay, flatten | Local brush stroke (grab, clay, inflate, flatten, pinch, crease, smooth). |
 | `lattice` | `latticeDimensions` (2..8 each), `latticeOffsets` `[{ i, j, k, offset: [dx, dy, dz] }]` | Bernstein FFD; offsets are fractions of the box size per axis. |
+| `kelvinlet` | `center`, `radius` (the load's core width), and one or more of `displacement` `[dx, dy, dz]`, `twistDeg` + `twistAxis`, `scaleFactor`, `pinchStrength` + `pinchDirection` (`pinchSecondaryDirection` for planar); optional `poissonRatio` (default 0.5), `falloffScales` (1..3, default 1), `falloffRatio` (default 1.5), `steps` | Elastic response to a point load: no falloff edge, the load point does exactly what is asked (moves by `displacement`, turns by `twistDeg`, scales by `scaleFactor`), and at `poissonRatio` 0.5 volume is kept, so a grab bulges the sides like clay. More `falloffScales` confine it closer to the load point. `scaleFactor` is refused at 0.5 (an incompressible medium cannot change volume). |
 | `subdivide` | `subdivideIterations` (1..3) | Loop subdivision. |
 | `repair` | — | Removes degenerate faces. |
 | `weathering` | `weatheringIntensity`, `weatheringScale` (noise cycles across the mesh) | Vertex colour variation. |

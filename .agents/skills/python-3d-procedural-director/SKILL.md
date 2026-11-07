@@ -31,7 +31,7 @@ Procedural scripts execute inside a sandboxed Python sub-process communicating d
                  ▼
  [Python Runtime: import scratchbox as sb]
   - sb.core      (Scenes, submeshes, transforms)
-  - sb.shaper    (Taper, twist, bend, bulge, FFD lattices)
+  - sb.shaper    (Taper, twist, bend, bulge, FFD lattices, Kelvinlet elastic loads)
   - sb.create_tree / sb.vegetation (SB-Veggie trees from measurements; the only vegetation generator)
   - sb.nature    (ivy; trees are sb.create_tree)
   - sb.terrain   (Multi-fractal noise, elevation profiles)
@@ -264,6 +264,8 @@ chassis.subdivide(6)                   # deformers need vertices to bend
 # Non-linear deformers take integer axes: 0 = X, 1 = Y, 2 = Z
 sb.shaper.taper(chassis, axis=2, factor=0.45)
 sb.shaper.bulge(chassis, center=sb.math.Vec3(0.0, 0.0, 0.2), radius=1.2, strength=0.25)
+# An elastic pull with no falloff edge: the nose tip moves exactly 0.15 forward and the flanks draw in to keep volume
+sb.shaper.kelvinlet(chassis, center=sb.math.Vec3(0.0, 0.0, 2.0), epsilon=0.35, displacement=sb.math.Vec3(0.0, 0.0, 0.15))
 add(chassis, "Primary_Chassis")
 
 # =========================================================================
