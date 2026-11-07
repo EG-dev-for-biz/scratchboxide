@@ -76,6 +76,8 @@ export const FACADE_LATTICE_PARAMS = {
     minDepthM: -1.2, maxDepthM: 0.8,
     /** A step face is drawn where neighbouring cells differ by more than this (m). */
     stepM: 0.03,
+    /** A lattice's end cells where the wall turns away (a corner, a prow): a wall cell at a row's end whose own scan lies more than this (m) behind the row's wall depth keeps the scan, at most three cells in from each end. Built on the plane it would stand proud of the wall, its back showing from the side (the Flatiron's prow from 315°, 2026-11-07). */
+    edgeStepM: 0.4,
     /** A facade is rebuilt only when its measured cells cover at least this share of its outline's area (each row from its first to its last photographed texel). */
     minMeasuredShare: 0.5,
     /**
@@ -241,7 +243,8 @@ export function latticeParamVector(P: typeof FACADE_LATTICE_PARAMS = FACADE_LATT
         STRUCTURE.chamferM, STRUCTURE.minReliefM, STRUCTURE.defaultReliefM,
         REPEAT_TEXTURE.sizeTol, REPEAT_TEXTURE.minRepeats, REPEAT_TEXTURE.edgeM, REPEAT_TEXTURE.keepShade, REPEAT_TEXTURE.maxShade, REPEAT_TEXTURE.maxSpandrelM, REPEAT_TEXTURE.minSidePx,
         FACADE_LATTICE_PARAMS.depthBandM + 1,
-        ...views
+        ...views,
+        P.edgeStepM
     ];
 }
 
@@ -425,6 +428,23 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
     // repeats averaged: per row, the windows (read in rows and columns) and the wall each take their median depth
     const win = fitted?.length ? fittedCells(s, t, fitted) : windowGrid(lum, ns, nt);
     const strip = strips.length ? fittedCells(s, t, strips) : undefined;
+    // the lattice's end cells where the wall turns away (a corner, a prow): from each end of a row inward, a built wall cell
+    // whose own scan lies more than edgeStepM behind the row's wall depth keeps the scan (P.edgeStepM)
+    if (P.edgeStepM > 0) for (let b = 0; b < nt; b++) {
+        const isWall = (k: number) => built[k] && !win[k] && !strip?.[k] && Number.isFinite(raw[k]);
+        const wall: number[] = [];
+        for (let a = 0; a < ns; a++) if (isWall(b * ns + a)) wall.push(raw[b * ns + a]);
+        if (wall.length < 3) continue;
+        const med = median(wall);
+        for (const dir of [1, -1]) {
+            let a = dir > 0 ? 0 : ns - 1, n = 0;
+            while (a >= 0 && a < ns && n < 3) {
+                const k = b * ns + a;
+                if (!built[k]) { a += dir; continue; }
+                if (isWall(k) && raw[k] < med - P.edgeStepM) { built[k] = 0; n++; a += dir; } else break;
+            }
+        }
+    }
     const depth: number[][] = [];
     const rowMeds: number[] = [];
     let photoRecessCells = 0, stripCells = 0;

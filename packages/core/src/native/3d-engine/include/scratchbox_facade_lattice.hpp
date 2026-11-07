@@ -66,8 +66,10 @@ struct Params {
     /** The audit's world box reach (the module's depthBandM + 1, whatever P says), and its four angled views' turns. */
     double reachM;
     double viewDeg[4], viewCos[4], viewSin[4];
+    /** FACADE_LATTICE_PARAMS.edgeStepM: a row's end cells where the wall turns away keep the scan. */
+    double edgeStepM;
 
-    static constexpr size_t kCount = 19 + 5 + 3 + 6 + 3 + 7 + 1 + 12;
+    static constexpr size_t kCount = 19 + 5 + 3 + 6 + 3 + 7 + 1 + 12 + 1;
     static Params from(const std::vector<double>& v) {
         if (v.size() != kCount) throw std::runtime_error("the lattice takes " + std::to_string(kCount) + " parameters, got " + std::to_string(v.size()));
         Params p;
@@ -80,7 +82,8 @@ struct Params {
             &p.rtSizeTol, &p.rtMinRepeats, &p.rtEdgeM, &p.rtKeepShade, &p.rtMaxShade, &p.rtMaxSpandrelM, &p.rtMinSidePx,
             &p.reachM,
             &p.viewDeg[0], &p.viewCos[0], &p.viewSin[0], &p.viewDeg[1], &p.viewCos[1], &p.viewSin[1],
-            &p.viewDeg[2], &p.viewCos[2], &p.viewSin[2], &p.viewDeg[3], &p.viewCos[3], &p.viewSin[3]};
+            &p.viewDeg[2], &p.viewCos[2], &p.viewSin[2], &p.viewDeg[3], &p.viewCos[3], &p.viewSin[3],
+            &p.edgeStepM};
         static_assert(sizeof fields / sizeof fields[0] == kCount);
         for (size_t i = 0; i < kCount; ++i) *fields[i] = v[i];
         return p;
@@ -512,6 +515,22 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
     const std::vector<uint8_t> win = !fitted.empty() ? fittedCells(s, t, fitted) : windowGrid(lum, ns, nt, P);
     const bool hasStrip = !strips.empty();
     const std::vector<uint8_t> strip = hasStrip ? fittedCells(s, t, strips) : std::vector<uint8_t>{};
+    // the lattice's end cells where the wall turns away (a corner, a prow): facade-lattice.ts, P.edgeStepM
+    if (P.edgeStepM > 0) for (size_t b = 0; b < nt; ++b) {
+        const auto isWall = [&](size_t k) { return built[k] && !win[k] && !(hasStrip && strip[k]) && finite(raw[k]); };
+        std::vector<double> wall;
+        for (size_t a = 0; a < ns; ++a) if (isWall(b * ns + a)) wall.push_back(raw[b * ns + a]);
+        if (wall.size() < 3) continue;
+        const double med = median(std::move(wall));
+        for (const int dir : {1, -1}) {
+            long a = dir > 0 ? 0 : static_cast<long>(ns) - 1; int n = 0;
+            while (a >= 0 && a < static_cast<long>(ns) && n < 3) {
+                const size_t k = b * ns + static_cast<size_t>(a);
+                if (!built[k]) { a += dir; continue; }
+                if (isWall(k) && raw[k] < med - P.edgeStepM) { built[k] = 0; ++n; a += dir; } else break;
+            }
+        }
+    }
     std::vector<double> depth;
     depth.reserve(N);
     std::vector<double> rowMeds;
