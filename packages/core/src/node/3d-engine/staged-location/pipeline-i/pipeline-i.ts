@@ -35,6 +35,7 @@ import { beautifyCharacterSheet, type CharacterSheetPanel } from '../../../spati
 import { readGlbScene, sceneToRenderMesh } from '../../../spatial/StreetViewPoseRegistrar';
 import { decodePng, encodePng } from '../../../texture-processing';
 import { planSheetStations, type SheetStationPlan } from './sheet-stations';
+import { cleanupGeneratedGlb, type GeneratedMeshCleanupReport } from '../../generated-mesh-cleanup-service';
 import { applyRootTransform, registerToFootprint, stripMaterials, type FootprintTarget, type RegistrationFit } from './register';
 import type { ModelClient, ModelResult } from './fal-trellis';
 import { scoreCandidate, panelMask, type CandidateScore } from './seed-score';
@@ -85,6 +86,12 @@ export interface PipelineIInput {
     renderMode?: 'textured' | 'clay';
     /** Fills the kept model's own black texture holes (texture-holes.ts) before it is written; skipped without a client. */
     infill?: { client: EnhanceModelClient; models: string[] };
+    /**
+     * Closes and regularises the kept model before it is placed (generated-mesh-cleanup-service.ts: voxel remesh,
+     * quad remesh, subdivision, the model's detail and textures projected back; labelled generated). Default: on when
+     * SCRATCHBOX_GENERATED_CLEANUP=1. A failure keeps the model as built and records why.
+     */
+    cleanup?: boolean | { targetQuads?: number; subdivisions?: number };
     signal?: AbortSignal;
     onProgress?: (msg: string) => void;
     now?: () => number;
@@ -101,6 +108,8 @@ export interface PipelineIOutcome {
     fit: RegistrationFit;
     /** The kept model's own texture holes (texture-holes.ts), when `input.infill` was given. */
     holes?: ModelTextureInfillResult;
+    /** The cleanup's report (topology before and after, Hausdorff distance to the model), when it ran. */
+    cleanup?: { ok: boolean; reason?: string; report?: GeneratedMeshCleanupReport };
     steps: PipelineIStep[];
     timingsMs: Record<string, number>;
 }
@@ -233,6 +242,30 @@ export async function runPipelineI(input: PipelineIInput): Promise<PipelineIOutc
             : 'no black holes in the model\'s own texture']
     });
 
+    // 6. the model closed and regularised (generated content only: the model is generated, never a scan)
+    let cleanup: PipelineIOutcome['cleanup'];
+    const cleanupWanted = input.cleanup ?? process.env.SCRATCHBOX_GENERATED_CLEANUP === '1';
+    if (cleanupWanted) {
+        t = now();
+        progress('Pipeline I: closing the model (voxel and quad remesh, its detail projected back)');
+        const opts = typeof input.cleanup === 'object' ? input.cleanup : {};
+        try {
+            const c = await cleanupGeneratedGlb(painted, { provenance: 'generated', workDir: path.join(input.dir, 'cleanup'), ...opts });
+            painted = c.glb;
+            cleanup = { ok: true, report: c.report };
+            const a = c.report.after, b = c.report.before, h = c.report.hausdorff;
+            steps.push({ step: 'cleanup', proposed: 1, accepted: 1, rejected: 0, ms: now() - t,
+                notes: [`open edges ${b.openEdges} -> ${a?.openEdges ?? '?'}, non-manifold edges ${b.nonManifoldEdges} -> ${a?.nonManifoldEdges ?? '?'}; ${a?.watertight ? 'watertight' : 'not watertight'}, genus ${a?.genus ?? '?'}`,
+                    `${c.report.report.quad.quads} quads (${c.report.report.quad.singularities} irregular vertices), ${a?.triangles ?? '?'} triangles; Hausdorff to the model ${h ? (100 * h.max / Math.max(h.diagonal, 1e-9)).toFixed(2) : '?'}% of its diagonal (generated)`] });
+        } catch (err) {
+            if (input.signal?.aborted) throw err;
+            const reason = err instanceof Error ? err.message : String(err);
+            cleanup = { ok: false, reason };
+            steps.push({ step: 'cleanup', proposed: 1, accepted: 0, rejected: 1, ms: now() - t, notes: [`kept as the model built it: ${reason}`] });
+        }
+        timingsMs.cleanup = now() - t;
+    }
+
     const fitted = applyRootTransform(painted, best.fit.matrix);
     const texturedGlb = path.join(input.dir, 'pipeline_i_textured.glb'), clayGlb = path.join(input.dir, 'pipeline_i_clay.glb');
     fs.writeFileSync(texturedGlb, fitted); fs.writeFileSync(clayGlb, stripMaterials(fitted));
@@ -243,6 +276,7 @@ export async function runPipelineI(input: PipelineIInput): Promise<PipelineIOutc
         sheet: { accepted: sheet.accepted, attempts: sheet.attempts, modelUsed: sheet.modelUsed, panels: sheet.panels.map(p => ({ stationId: p.station.id, passed: p.qc.passed, reason: p.qc.reason, overflow: p.qc.outline?.overflow, underfill: p.qc.outline?.underfill })) },
         model: { model: best.result.model, requestId: best.result.requestId, seconds: best.result.seconds, seed: best.seed },
         ...(holes ? { holes } : {}),
+        ...(cleanup ? { cleanup } : {}),
         candidates: candidates.map(c => (c.ok ? { seed: c.seed, requestId: c.result.requestId, score: c.score, fit: { planIoU: c.fit.planIoU, overflowShare: c.fit.overflowShare, coverage: c.fit.coverage } } : { seed: c.seed, error: c.error })),
         swatch: { ...swatch, before: matched.before },
         fit, steps, timingsMs
