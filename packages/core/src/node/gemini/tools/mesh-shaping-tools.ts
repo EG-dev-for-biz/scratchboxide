@@ -46,7 +46,7 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'mesh_apply_deformers',
         description: 'Deform a given 3D mesh (.glb) with an explicit, ordered list of operations in the native C++20 engine. You choose every operation and value from what the user asked for; nothing is inferred or applied by default, and an operation with a missing or out-of-range parameter fails the call. Positions and sizes are fractions of the mesh\'s measured bounding box (as it stands before each operation), so they mean the same on a small prop and a 60 m tower: range [start, end] = fractions of the extent along axis (0 = min, 1 = max); center [u, v, w] = fractions of the box along X, Y, Z; radius and strength = fractions of the box diagonal. '
-            + 'Per type: taper {axis, factor (cross-section scale at the range end, >0), range, power? (default 1)}; twist {axis, angleDeg, range}; bend {axis (length direction), secondaryAxis (direction the far end curves toward), angleDeg (total over the extent; the min end stays fixed)}; shear {axis, secondaryAxis, factor (the far end moves factor x the extent along axis)}; bulge {center, radius, strength (negative pinches), power? (default 2)}; sculpt {sculptBrush, center, radius, strength (a 0..1 blend for smooth and flatten), direction (grab, clay, flatten)}; lattice {latticeDimensions [2..8 each], latticeOffsets [{i, j, k, offset: fractions of the box size}]}; subdivide {subdivideIterations 1..3}; repair {}; weathering {weatheringIntensity (vertex colour variation), weatheringScale (noise cycles across the mesh)}. The result reports the measured input bounds.',
+            + 'Per type: taper {axis, factor (cross-section scale at the range end, >0), range, power? (default 1)}; twist {axis, angleDeg, range}; bend {axis (length direction), secondaryAxis (direction the far end curves toward), angleDeg (total over the extent; the min end stays fixed)}; shear {axis, secondaryAxis, factor (the far end moves factor x the extent along axis)}; bulge {center, radius, strength (negative pinches), power? (default 2)}; sculpt {sculptBrush, center, radius, strength (a 0..1 blend for smooth and flatten), direction (grab, clay, flatten)}; lattice {latticeDimensions [2..8 each], latticeOffsets [{i, j, k, offset: fractions of the box size}]}; kelvinlet {center, radius (the load\'s core width), and one or more loads that superpose: displacement [dx, dy, dz] (fractions of the box diagonal; the load point moves by exactly this), twistDeg + twistAxis [x, y, z] (the load point\'s neighbourhood turns by that angle), scaleFactor (its neighbourhood scales by that, needs poissonRatio < 0.5), pinchStrength + pinchDirection (stretch by exp(strength) along it, negative squeezes; pinchSecondaryDirection makes it planar); poissonRatio? (0..0.5, default 0.5: incompressible, keeps volume and bulges like clay), falloffScales? (1, 2 or 3, default 1: more scales confine the effect closer to the load point), falloffRatio? (default 1.5), steps? (default: enough that big moves drag instead of fold)} - an elastic response with no falloff edge, unlike bulge and sculpt; subdivide {subdivideIterations 1..3}; repair {}; weathering {weatheringIntensity (vertex colour variation), weatheringScale (noise cycles across the mesh)}. The result reports the measured input bounds.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -56,15 +56,15 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     items: {
                         type: 'OBJECT',
                         properties: {
-                            type: { type: 'STRING', description: 'taper, twist, bend, shear, bulge, sculpt, lattice, subdivide, repair or weathering.' },
+                            type: { type: 'STRING', description: 'taper, twist, bend, shear, bulge, sculpt, lattice, kelvinlet, subdivide, repair or weathering.' },
                             axis: { type: 'STRING', description: '"X", "Y" or "Z".' },
                             secondaryAxis: { type: 'STRING', description: '"X", "Y" or "Z", different from axis (bend, shear).' },
                             factor: { type: 'NUMBER', description: 'Taper: cross-section scale at the range end (>0). Shear: slope.' },
                             angleDeg: { type: 'NUMBER', description: 'Twist or bend angle in degrees.' },
                             range: { type: 'ARRAY', items: { type: 'NUMBER' }, description: '[start, end], fractions of the extent along axis, 0 <= start < end <= 1 (taper, twist).' },
                             power: { type: 'NUMBER', description: 'Optional curve exponent (taper, default 1; bulge falloff, default 2).' },
-                            center: { type: 'ARRAY', items: { type: 'NUMBER' }, description: '[u, v, w], fractions of the bounding box along X, Y, Z (bulge, sculpt).' },
-                            radius: { type: 'NUMBER', description: 'Fraction of the bounding-box diagonal (bulge, sculpt).' },
+                            center: { type: 'ARRAY', items: { type: 'NUMBER' }, description: '[u, v, w], fractions of the bounding box along X, Y, Z (bulge, sculpt, kelvinlet).' },
+                            radius: { type: 'NUMBER', description: 'Fraction of the bounding-box diagonal (bulge, sculpt; kelvinlet: the load\'s core width).' },
                             strength: { type: 'NUMBER', description: 'Displacement as a fraction of the bounding-box diagonal; a 0..1 blend for the smooth and flatten brushes.' },
                             direction: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Stroke direction [x, y, z] (sculpt grab, clay, flatten).' },
                             sculptBrush: { type: 'STRING', description: 'grab, clay, inflate, flatten, pinch, crease or smooth.' },
@@ -84,7 +84,18 @@ export const MESH_SHAPING_TOOL_DECLARATIONS: ToolDeclaration[] = [
                             },
                             subdivideIterations: { type: 'NUMBER', description: '1, 2 or 3.' },
                             weatheringIntensity: { type: 'NUMBER', description: 'Vertex colour variation amplitude.' },
-                            weatheringScale: { type: 'NUMBER', description: 'Noise cycles across the mesh (> 0).' }
+                            weatheringScale: { type: 'NUMBER', description: 'Noise cycles across the mesh (> 0).' },
+                            displacement: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'kelvinlet grab [dx, dy, dz], fractions of the bounding-box diagonal: the load point moves by exactly this.' },
+                            twistDeg: { type: 'NUMBER', description: 'kelvinlet twist angle in degrees at the load point (needs twistAxis).' },
+                            twistAxis: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'kelvinlet twist axis [x, y, z] (right handed).' },
+                            scaleFactor: { type: 'NUMBER', description: 'kelvinlet uniform scale at the load point (> 0; needs poissonRatio < 0.5).' },
+                            pinchStrength: { type: 'NUMBER', description: 'kelvinlet pinch: stretch by exp(strength) along pinchDirection, the perpendicular directions the opposite; negative squeezes.' },
+                            pinchDirection: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'kelvinlet pinch direction [x, y, z].' },
+                            pinchSecondaryDirection: { type: 'ARRAY', items: { type: 'NUMBER' }, description: 'Optional kelvinlet planar pinch: this direction takes the opposite stretch, the third none.' },
+                            poissonRatio: { type: 'NUMBER', description: 'kelvinlet material, 0..0.5 (default 0.5: incompressible, volume preserving).' },
+                            falloffScales: { type: 'NUMBER', description: 'kelvinlet 1, 2 or 3 (default 1); more scales confine the effect closer to the load point.' },
+                            falloffRatio: { type: 'NUMBER', description: 'kelvinlet ratio between the scales\' radii (> 1, default 1.5).' },
+                            steps: { type: 'NUMBER', description: 'kelvinlet time steps (default: chosen from the move).' }
                         },
                         required: ['type']
                     }
