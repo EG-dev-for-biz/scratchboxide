@@ -13,6 +13,20 @@
  * size), read band by band from a photo that is clear in one part and dim in another, so a band read on its own drifts
  * off the facade's grid or comes back oversized, and nothing before this step checked a band's grid against the facade's.
  *
+ * - The seed. Before any box is read, the photo's own periodicity: its column and row lightness profiles (the mean over
+ *   the valid texels of each column and row) autocorrelated, the pitch on each axis the lag of the strongest correlation
+ *   (a smaller lag nearly as strong taken instead, so the pitch wins over its multiples), then the photo folded at those
+ *   pitches into one unit cell, where the window is the interval on each axis that differs most from the rest of the cell
+ *   (its centre the phase, its length the window's size, its colour against the rest the window's contrast). The seed
+ *   is clear when both pitches correlate (P.photo.minAutocorr) and the window stands out of the cell (P.photo.minContrast),
+ *   and it stands on its own when P.photo.minRows rows and P.photo.minCols columns show its contrast. The boxes then
+ *   refine it: where the two agree the boxes' pitch and phase are kept (refined over many boxes) and the seed's window
+ *   size is taken (the box the photo shows, not the median of the boxes read: a reader reading the lower half dim reads
+ *   small boxes); where the seed's storey pitch is a whole multiple of the boxes' the boxes are sub-boxes of one window
+ *   (a window read as a pane, a transom and a spandrel) and are merged, site by site, into one; where they disagree
+ *   outright the lattice with the wider evidence wins (the seed when the rows showing its contrast outnumber the rows the
+ *   boxes occupy by P.photo.evidenceRatio: a slab of ribbon windows under a crown read by nothing else), the boxes off it
+ *   kept as read; with no usable boxes at all the seed alone is the lattice.
  * - The lattice. The column pitch and phase from every box's centre (strips included: a strip stands in its column), the
  *   storey pitch and phase from the rows the single-site boxes form (rows weighted by their boxes), each by a spacing
  *   histogram over the pairwise distances (a candidate pitch scored by how many distances are a whole number of it within a
@@ -37,13 +51,15 @@
  *   array's size, sit on the lattice at its size, and the lattice would not drop more than P.maxRejectedShare of them as
  *   second boxes on taken sites. Else it is left exactly as fitted, with the reason.
  * - The pattern is the facade's, not a site's: every lattice row and column the photo spans is judged by its sites together
- *   (it holds the array when P.extentShare of its sites hold a box, or, within P.extendBeyond rows or columns of the
- *   boxes' own extent, when its sites on average show the contrast the neighbouring windows show against the wall beside
- *   them: a relative CIELAB test, so a dim part of the photo reads like a bright one; farther from the boxes the lattice
- *   is unproven, however window-like the surface), and inside the rows and columns that hold it every empty site takes the lattice's box (added, generated):
+ *   (it holds the array when P.extentShare of its sites hold a box, or when its sites on average show the contrast the
+ *   neighbouring windows show against the wall beside them: a relative CIELAB test, so a dim part of the photo reads like
+ *   a bright one; from the rows and columns the boxes occupy the array steps outward row by row and column by column for as
+ *   long as each next one shows that contrast, to the photo's edge if it does, and stops at the first that does not), and
+ *   inside the rows and columns that hold it every empty site takes the lattice's box (added, generated):
  *   a site too dim to confirm on its own, or one the photo never reached, is filled on the array's evidence; a site is
- *   withheld only where the photo reads the opposite of a window (its contrast under P.contradict of the windows'),
- *   something stood in front of it (its occluded share over P.addMaxOccluded) or a bay covers it. From a row or column that
+ *   withheld only where the photo reads the opposite of a window (its contrast under P.contradict of the windows') or a
+ *   bay covers it; where something stood in front of it (its occluded share over P.addMaxOccluded) the array continues
+ *   over it unread (generated), as the lattice does over an occluded span. From a row or column that
  *   holds it the array steps on through contiguous blank rows and columns (their sites' texels mostly unreached or
  *   featureless: a smear, a hole refilled with nothing to read) at its pitch and phase (continued, generated, with the
  *   reason): a blank run between two rows (columns) that hold the array, or up from the array's top to the building's
@@ -59,11 +75,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { decodePng } from '../../../texture-processing';
-import { regionLook, WINDOW_FIT_FILE, type WindowFitFile, type WindowRect } from '../window-fit';
+import { labOf8, regionLook, WINDOW_FIT_FILE, type WindowFitFile, type WindowRect } from '../window-fit';
 import { countSet, readOccluded } from './occlusion';
 import { featurelessMaskName } from './ortho-rectify';
 
-export const WINDOW_ARRAY_VERSION = 'window-array/3';
+export const WINDOW_ARRAY_VERSION = 'window-array/4';
 
 export const WINDOW_ARRAY_PARAMS = {
     /** Fewer single-site boxes than this: nothing is inferred. */
@@ -94,20 +110,47 @@ export const WINDOW_ARRAY_PARAMS = {
     tierPitchDiff: 0.05,
     /** A box whose area is under this share of the lattice box's, or over its inverse, is not of the array: kept as read, never replaced. */
     areaRange: [0.4, 3] as [number, number],
-    /** An added site must be at most this uncovered, and at most this occluded. */
+    /** A site's look is read only when at most this share of it is uncovered; a site more than addMaxOccluded occluded (something stood before it) is continued over, never read. */
     addMaxUncovered: 0.5, addMaxOccluded: 0.35,
     /** Members within this many rows of an added site give the window contrast it is compared to. */
     peerRows: 3,
     /** A site shows a window when it has at least this share of its neighbours' contrast against the wall beside it, in the same direction; it contradicts one under contradictShare of that (plain wall reads near zero). */
     addMinContrast: 0.5,
+    /** Stepping outward from a row or column that holds the array, the next row (column) is entered while its sites show at least this share of the windows' contrast: a lower bar than addMinContrast, since the array beside it is already established and a storey in shade reads dim; the step stops at the first row under it. */
+    stepContrast: 0.3,
     /** A site contradicts a window only when its contrast runs the opposite way, under this (negative) share of the windows' own; plain wall, which reads near zero, does not. */
     contradict: -0.25,
     /** More than this share of the single-site boxes landing as a second box on a taken site means the lattice does not explain the boxes: the facade is left as fitted. */
     maxRejectedShare: 0.2,
     /** A lattice row or column holds the array when at least this share of its sites hold a box, or its sites show the window contrast on average. */
     extentShare: 0.25,
-    /** A row or column may hold the array on its contrast alone only within this many rows (columns) of the boxes' own extent: beyond it the lattice is unproven, however window-like the surface. */
-    extendBeyond: 2,
+    /** The photo's own periodicity (the seed): the ortho's row and column lightness profiles autocorrelated, the lattice read from the fold of the photo at the pitches found. */
+    photo: {
+        /** The normalised autocorrelation at the pitch must reach this for the photo to show a pitch on that axis. */
+        minAutocorr: 0.15,
+        /** A smaller lag with at least this share of the best lag's autocorrelation is the pitch (the best lag may be a multiple). */
+        subharmonic: 0.8,
+        /** A sub-multiple (a half to an eighth) of an axis's clearest candidate pitch whose fold's window contrast reaches this share of the clearest is the pitch (a unit cell of two windows folds a little more clearly than one). */
+        pitchShare: 0.9,
+        /** The window must differ from the rest of the unit cell by at least this (CIELAB) for the fold to show a window. */
+        minContrast: 6,
+        /** The window's share of the cell on an axis lies within this range (a ribbon fills nearly all of it, a slit very little). */
+        sizeShare: [0.12, 0.95] as [number, number],
+        /** The seed stands on its own (no boxes needed) only when at least this many rows and columns show its window contrast. */
+        minRows: 4, minCols: 3,
+        /** Two pitches agree within this share; one is a multiple of the other within this share of the smaller. */
+        agree: 0.05, multiple: 0.1,
+        /** The seed's window size replaces the boxes' only when it lies within this range of the boxes' median size (a fold blurred by mixed light is not trusted over a hundred boxes). */
+        sizeRange: [0.5, 2.5] as [number, number],
+        /** Where the boxes' lattice and the seed's disagree, the seed wins only when the rows (columns) that show its contrast span this many times the extent of the rows (columns) the boxes occupy. */
+        evidenceRatio: 1.5,
+        /** Storeys are merged (the seed's storey pitch a multiple of the boxes') only when the seed's window is at least this many times the boxes' tall: the window spans the sub-boxes read apart; a window the boxes' own size is another reading of the same storeys, not sub-boxes. */
+        mergeSpan: 1.5,
+        /** Where the pitches agree, the boxes' lattice is still replaced by the seed's (better refined over every storey) when the boxes occupy fewer rows (columns) than this share of those showing the seed's contrast, or fewer than minRows (minCols). */
+        fewShare: 0.25,
+        /** Boxes of which at least this share sit on their own lattice are a clean reading: the seed never folds their columns into a coarser reading of every other column. */
+        trustOnShare: 0.8
+    },
     /** A row or column is blank when at least this share of its sites' texels the photo never reached or left featureless: the array steps on into it from a row or column that holds it. */
     blankShare: 0.5
 } as const;
@@ -122,7 +165,7 @@ export interface ArrayTier {
     rowPitch: number; rowPhase: number;
     /** The lattice's box (px). */
     boxW: number; boxH: number;
-    from: 'majority' | 'residual-tier';
+    from: 'majority' | 'residual-tier' | 'photo' | 'merged';
     /** The photo's separation of window from wall under the facade's lattice and this tier's over its rows (CIELAB), when tried as a tier. */
     photoScore?: { facade: number; tier: number };
     rows: number;
@@ -144,8 +187,14 @@ export interface FacadeArrayReport {
     continued?: { rows: number; cols: number; sites: number; reason: string };
     /** The input boxes' RMS distance to their nearest site, in pitches, and the output's. */
     rmsIn?: number; rmsOut?: number;
-    /** The empty sites of the lattice: those outside the rows and columns that hold the array, those withheld (occluded, under a bay, reading the opposite of a window), and of the filled, those the photo never reached and those too dim to confirm on their own. */
+    /** The empty sites of the lattice: those outside the rows and columns that hold the array, those withheld (under a bay, reading the opposite of a window), those continued over an occlusion, and of the filled, those the photo never reached and those too dim to confirm on their own. */
     empty?: { sites: number; outside: number; uncovered: number; occluded: number; wall: number; underBox: number; byRow: number };
+    /** Where the lattice came from: the boxes' consensus, the photo's own periodicity, or the boxes' with its storeys (columns) merged into the photo's. */
+    source?: 'boxes' | 'photo' | 'merged';
+    /** The photo's own lattice (photoLattice), in metres, and the rows and columns that showed its window contrast. */
+    seed?: { colPitchM?: number; rowPitchM?: number; windowM?: [number, number]; contrast?: number; ac?: [number, number]; clear: boolean; rows: number; cols: number };
+    /** Sub-boxes merged into one window on the photo's storey (or column) pitch, and the multiple on each axis. */
+    merged?: number; mergedBy?: { rows?: number; cols?: number };
     /** Why the facade was left as it was. */
     reason?: string;
 }
@@ -256,6 +305,19 @@ function rowsOf(boxes: Array<{ cy: number; h: number }>): Array<{ cy: number; me
     return rows;
 }
 
+/**
+ * The wall around a box: the bands just left, right, above and below it (each 0.4 of the box's width or height), outside
+ * every box in `skip`, as one mean colour (CIELAB). A ribbon window reads against the floor band above and below it, a
+ * punched one against the pier beside it: the ring sees both.
+ */
+function ringLook(img: ArrayPhoto, valid: Uint8Array, r: WindowRect, skip: WindowRect[]): number[] | undefined {
+    const sw = Math.max(2, Math.round((r[2] - r[0]) * 0.4)), sh = Math.max(2, Math.round((r[3] - r[1]) * 0.4));
+    const bands: WindowRect[] = [[r[0] - sw, r[1], r[0], r[3]], [r[2], r[1], r[2] + sw, r[3]], [r[0], r[1] - sh, r[2], r[1]], [r[0], r[3], r[2], r[3] + sh]];
+    const m = [0, 0, 0]; let n = 0;
+    for (const b of bands) { const l = regionLook(img, valid, b, skip); if (!l.lab) continue; const w = l.validShare * (b[2] - b[0]) * (b[3] - b[1]); for (let k = 0; k < 3; k++) m[k] += l.lab[k] * w; n += w; }
+    return n > 0 ? m.map(v => v / n) : undefined;
+}
+
 const median = (v: number[]): number => { const s = [...v].sort((a, b) => a - b); return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : NaN; };
 
 /**
@@ -269,16 +331,190 @@ function photoScore(img: ArrayPhoto, valid: Uint8Array, col: Lattice1D, row: Lat
         sites.push([Math.round(cx - boxW / 2), Math.round(cy - boxH / 2), Math.round(cx + boxW / 2), Math.round(cy + boxH / 2)]);
     }
     let sum = 0, n = 0;
-    const sw = Math.max(2, Math.round(boxW * 0.4));
     for (const r of sites) {
         const inside = regionLook(img, valid, r);
         if (!inside.lab || inside.validShare < 0.5) continue;
-        const walls = [regionLook(img, valid, [r[0] - sw, r[1], r[0], r[3]], sites).lab, regionLook(img, valid, [r[2], r[1], r[2] + sw, r[3]], sites).lab].filter((v): v is number[] => !!v);
-        if (!walls.length) continue;
-        const wall = [0, 1, 2].map(k => walls.reduce((t, l) => t + l[k], 0) / walls.length);
+        const wall = ringLook(img, valid, r, sites);
+        if (!wall) continue;
         sum += Math.hypot(inside.lab[0] - wall[0], inside.lab[1] - wall[1], inside.lab[2] - wall[2]); n++;
     }
     return n ? sum / n : 0;
+}
+
+/** One axis of the photo's own lattice. */
+export interface SeedAxis { pitch: number; phase: number; /** The window's extent on this axis (px). */ size: number; /** The normalised autocorrelation at the pitch. */ ac: number }
+/** The photo's own periodicity: a lattice read from the ortho alone. */
+export interface PhotoSeed {
+    col?: SeedAxis; row?: SeedAxis;
+    /** The window's colour less the rest of the unit cell's (CIELAB), and its magnitude. */
+    contrast?: number[]; contrastE: number;
+    /** Both pitches correlate and the window stands out of the cell. */
+    clear: boolean;
+    /** The candidate pitches tried on each axis (px) with their correlation and the contrast of the fold at each (the other axis at the pitch chosen). */
+    tried?: { col: Array<{ pitch: number; ac: number; contrast: number }>; row: Array<{ pitch: number; ac: number; contrast: number }> };
+}
+
+/**
+ * A profile's period by normalised autocorrelation over lags in [lo, hi] (px): the lag of the strongest correlation, a
+ * smaller lag at least `sub` as strong taken instead (the strongest may be a multiple), refined between texels by the
+ * parabola through its neighbours. Gaps (NaN) take the mean; a running mean over 2 hi is removed first (a lit side
+ * shading into a dark one is not a period). Undefined when fewer than three periods fit.
+ */
+export function autocorrPeriod(profile: Float64Array, lo: number, hi: number, sub: number): { lag: number; ac: number } | undefined {
+    const peaks = autocorrPeaks(profile, lo, hi);
+    if (!peaks.length) return undefined;
+    let best = peaks[0];
+    // a local peak at the best lag's half, third or quarter nearly as strong is the pitch itself
+    for (const q of [4, 3, 2]) { const k = peaks.find(pk => Math.abs(pk.lag - best.lag / q) <= 2.5 && pk.ac >= sub * best.ac); if (k) { best = k; break; } }
+    return best;
+}
+
+/**
+ * The local maxima of a profile's normalised autocorrelation over lags in [lo, hi] (px), strongest first, each refined
+ * between texels by the parabola through its neighbours. Gaps (NaN) take the mean; a running mean over 2 hi is removed
+ * first (a lit side shading into a dark one is not a period). Empty when fewer than three periods fit.
+ */
+export function autocorrPeaks(profile: Float64Array, lo: number, hi: number): Array<{ lag: number; ac: number }> {
+    const n = profile.length;
+    const finite = Array.from(profile).filter(Number.isFinite), mean = finite.length ? finite.reduce((a, b) => a + b, 0) / finite.length : 0;
+    const v = Float64Array.from(profile, x => (Number.isFinite(x) ? x : mean));
+    const w = Math.min(n, Math.max(3, Math.round(2 * hi)) | 1), h = w >> 1;
+    const d = new Float64Array(n);
+    for (let i = 0; i < n; i++) { let t = 0, c = 0; for (let j = Math.max(0, i - h); j <= Math.min(n - 1, i + h); j++) { t += v[j]; c++; } d[i] = v[i] - t / c; }
+    let s2 = 0; for (let i = 0; i < n; i++) s2 += d[i] * d[i];
+    if (!(s2 > 0)) return [];
+    const maxLag = Math.min(Math.floor(hi), Math.floor(n / 3)), minLag = Math.max(2, Math.ceil(lo));
+    if (maxLag < minLag) return [];
+    const ac = new Float64Array(maxLag + 2);
+    for (let k = Math.max(1, minLag - 1); k <= maxLag + 1 && k < n; k++) { let c = 0; for (let i = 0; i + k < n; i++) c += d[i] * d[i + k]; ac[k] = c / (s2 * (n - k) / n); }
+    const out: Array<{ lag: number; ac: number }> = [];
+    for (let k = minLag; k <= maxLag; k++) {
+        if (!(ac[k] > 0) || ac[k] < ac[k - 1] || ac[k] < ac[k + 1]) continue;
+        let lag = k;
+        const a = ac[k - 1], b = ac[k], c = ac[k + 1], den = a - 2 * b + c;
+        if (den < 0) lag = k + 0.5 * (a - c) / den;
+        out.push({ lag, ac: b });
+    }
+    return out.sort((x, y) => y.ac - x.ac);
+}
+
+/**
+ * The interval of a circular profile that differs most from its mean on the side `sign` (the window of the unit cell on
+ * one axis: darker than the rest by default, as glass reads under the sky): its start (bin), length and signed deviation,
+ * over lengths within `share` of the profile.
+ */
+function cellInterval(prof: Float64Array, share: [number, number], sign: -1 | 1 = -1): { start: number; len: number; dev: number } | undefined {
+    const n = prof.length;
+    if (n < 4) return undefined;
+    const mean = prof.reduce((a, b) => a + b, 0) / n, dev = Float64Array.from(prof, v => sign * (v - mean));
+    const minL = Math.max(1, Math.round(share[0] * n)), maxL = Math.max(minL, Math.floor(share[1] * n));
+    let best: { start: number; len: number; dev: number } | undefined;
+    for (let start = 0; start < n; start++) {
+        let sum = 0;
+        for (let len = 1; len <= maxL; len++) {
+            sum += dev[(start + len - 1) % n];
+            if (len < minL) continue;
+            if (sum <= 0) continue;
+            const score = sum / Math.sqrt(len); // the mean deviation, weighted toward a long interval
+            if (!best || score > best.dev * sign / Math.sqrt(best.len)) best = { start, len, dev: sum * sign };
+        }
+    }
+    return best;
+}
+
+/**
+ * The photo's own lattice: the column and row pitches by autocorrelation of its lightness profiles over the valid texels,
+ * the window's phase, size and contrast from the fold of the photo (CIELAB) at those pitches. `minP`, `maxP` the pitches
+ * searched (px). The seed is read from the photo alone; it never names what the pattern is.
+ */
+/** The photo's CIELAB per valid texel and its column and row lightness profiles (the mean L of each column and row over the valid texels; NaN where under a tenth is valid). */
+export function lightnessProfiles(img: ArrayPhoto, valid: Uint8Array): { L: Float32Array; A: Float32Array; B: Float32Array; col: Float64Array; row: Float64Array } {
+    const W = img.width, H = img.height, n = W * H;
+    const L = new Float32Array(n), A = new Float32Array(n), B = new Float32Array(n);
+    for (let k = 0; k < n; k++) if (valid[k]) { const l = labOf8(img.rgba[k * 4], img.rgba[k * 4 + 1], img.rgba[k * 4 + 2]); L[k] = l[0]; A[k] = l[1]; B[k] = l[2]; }
+    const col = new Float64Array(W), row = new Float64Array(H), colN = new Int32Array(W), rowN = new Int32Array(H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const k = y * W + x; if (!valid[k]) continue; col[x] += L[k]; colN[x]++; row[y] += L[k]; rowN[y]++; }
+    for (let x = 0; x < W; x++) col[x] = colN[x] >= 0.1 * H ? col[x] / colN[x] : NaN;
+    for (let y = 0; y < H; y++) row[y] = rowN[y] >= 0.1 * W ? row[y] / rowN[y] : NaN;
+    return { L, A, B, col, row };
+}
+
+/** A lattice's unit cell: the photo folded at both pitches. */
+export interface Fold { col: SeedAxis; row: SeedAxis; contrast: number[]; contrastE: number }
+
+/**
+ * The photo folded at a column and a row pitch (px) into one unit cell, over the valid texels: the window the interval on
+ * each axis darker than the rest of the cell (grown to half-max), its centre the phase, its colour against the rest of
+ * the cell the contrast. `lab` is the photo's CIELAB per texel (lightnessProfiles).
+ */
+export function foldCell(lab: { L: Float32Array; A: Float32Array; B: Float32Array; W: number; H: number; valid: Uint8Array }, cp: { lag: number; ac: number }, rp: { lag: number; ac: number }, P: WindowArrayParams = WINDOW_ARRAY_PARAMS): Fold | undefined {
+    const { L, A, B, W, H, valid } = lab;
+    const nu = Math.max(4, Math.round(cp.lag)), nv = Math.max(4, Math.round(rp.lag));
+    const cell = new Float64Array(nu * nv * 3), cnt = new Int32Array(nu * nv);
+    for (let y = 0; y < H; y++) { const v = Math.min(nv - 1, Math.floor(((y % rp.lag) + rp.lag) % rp.lag / rp.lag * nv)); for (let x = 0; x < W; x++) { const k = y * W + x; if (!valid[k]) continue; const u = Math.min(nu - 1, Math.floor(((x % cp.lag) + cp.lag) % cp.lag / cp.lag * nu)), c = v * nu + u; cell[c * 3] += L[k]; cell[c * 3 + 1] += A[k]; cell[c * 3 + 2] += B[k]; cnt[c]++; } }
+    const cu = new Float64Array(nu), cv = new Float64Array(nv), cun = new Int32Array(nu), cvn = new Int32Array(nv);
+    for (let v = 0; v < nv; v++) for (let u = 0; u < nu; u++) { const c = v * nu + u; if (!cnt[c]) continue; cu[u] += cell[c * 3]; cun[u] += cnt[c]; cv[v] += cell[c * 3]; cvn[v] += cnt[c]; }
+    for (let u = 0; u < nu; u++) cu[u] = cun[u] ? cu[u] / cun[u] : 0;
+    for (let v = 0; v < nv; v++) cv[v] = cvn[v] ? cv[v] / cvn[v] : 0;
+    const iu = cellInterval(cu, P.photo.sizeShare), iv = cellInterval(cv, P.photo.sizeShare);
+    if (!iu || !iv) return undefined;
+    // the interval grown to half-max: every bin beyond it still darker than halfway between the window and the rest
+    const grow = (prof: Float64Array, iv0: { start: number; len: number }, n: number) => {
+        const inI = (q: number, st: number, ln: number) => (q - st + n) % n < ln;
+        let wm = 0, wn = 0, rm = 0, rn = 0;
+        for (let q = 0; q < n; q++) if (inI(q, iv0.start, iv0.len)) { wm += prof[q]; wn++; } else { rm += prof[q]; rn++; }
+        if (!wn || !rn) return iv0;
+        const half = (wm / wn + rm / rn) / 2, maxL = Math.floor(P.photo.sizeShare[1] * n);
+        let st = iv0.start, ln = iv0.len;
+        while (ln < maxL && prof[(st - 1 + n) % n] < half) { st = (st - 1 + n) % n; ln++; }
+        while (ln < maxL && prof[(st + ln) % n] < half) ln++;
+        return { start: st, len: ln };
+    };
+    const gu = grow(cu, iu, nu), gv = grow(cv, iv, nv);
+    const inU = (u: number) => (u - gu.start + nu) % nu < gu.len, inV = (v: number) => (v - gv.start + nv) % nv < gv.len;
+    const win = [0, 0, 0], rest = [0, 0, 0]; let wn = 0, rn = 0;
+    for (let v = 0; v < nv; v++) for (let u = 0; u < nu; u++) { const c = v * nu + u; if (!cnt[c]) continue; const t = inU(u) && inV(v) ? win : rest; for (let q = 0; q < 3; q++) t[q] += cell[c * 3 + q]; if (t === win) wn += cnt[c]; else rn += cnt[c]; }
+    if (!wn || !rn) return undefined;
+    const contrast = [0, 1, 2].map(q => win[q] / wn - rest[q] / rn);
+    return {
+        col: { pitch: cp.lag, phase: ((gu.start + gu.len / 2) / nu * cp.lag) % cp.lag, size: gu.len / nu * cp.lag, ac: cp.ac },
+        row: { pitch: rp.lag, phase: ((gv.start + gv.len / 2) / nv * rp.lag) % rp.lag, size: gv.len / nv * rp.lag, ac: rp.ac },
+        contrast, contrastE: Math.hypot(contrast[0], contrast[1], contrast[2])
+    };
+}
+
+export function photoLattice(img: ArrayPhoto, valid: Uint8Array, minP: number, maxP: number, P: WindowArrayParams = WINDOW_ARRAY_PARAMS, profiles = lightnessProfiles(img, valid)): PhotoSeed {
+    const W = img.width, H = img.height;
+    const { L, A, B, col: colP, row: rowP } = profiles;
+    const none: PhotoSeed = { contrastE: 0, clear: false };
+    // the candidate pitches on each axis: the strongest correlations, and among them the smallest nearly as strong as the
+    // best (the best may be a multiple of the pitch)
+    const cands = (prof: Float64Array) => {
+        const peaks = autocorrPeaks(prof, minP, maxP).filter(pk => pk.ac >= P.photo.minAutocorr).slice(0, 6);
+        return peaks;
+    };
+    const cps = cands(colP), rps = cands(rowP);
+    if (!cps.length || !rps.length) return { ...none, ...(cps.length ? { col: { pitch: cps[0].lag, phase: 0, size: 0, ac: cps[0].ac } } : {}), ...(rps.length ? { row: { pitch: rps[0].lag, phase: 0, size: 0, ac: rps[0].ac } } : {}) };
+    // the unit cell at a pair of pitches: the photo folded, the window the interval on each axis darker than the rest, its
+    // colour against the rest of the cell
+    const fold = (cp: { lag: number; ac: number }, rp: { lag: number; ac: number }): Fold | undefined => foldCell({ L, A, B, W, H, valid }, cp, rp, P);
+    // each axis's pitch: among its candidates (the other axis at its strongest), the fold whose window stands out of the
+    // cell most clearly, the smaller pitch when within a tenth of the clearest (a storey over the transoms that divide
+    // its window, the bay over the pier rhythm folded twice)
+    const tried = { col: [] as Array<{ pitch: number; ac: number; contrast: number }>, row: [] as Array<{ pitch: number; ac: number; contrast: number }> };
+    const pick = (list: Array<{ lag: number; ac: number }>, other: { lag: number; ac: number }, axis: 'col' | 'row'): { lag: number; ac: number } => {
+        const scored = list.map(c => ({ c, f: axis === 'col' ? fold(c, other) : fold(other, c) })).filter((x): x is { c: { lag: number; ac: number }; f: Fold } => !!x.f);
+        tried[axis] = scored.map(x => ({ pitch: x.c.lag, ac: x.c.ac, contrast: x.f.contrastE }));
+        if (!scored.length) return list[0];
+        const best = scored.reduce((a, b) => (b.f.contrastE > a.f.contrastE ? b : a));
+        // a sub-multiple of the clearest pitch (its half, third or quarter) that folds nearly as clearly is the pitch
+        const sub = scored.filter(x => x.f.contrastE >= P.photo.pitchShare * best.f.contrastE && [2, 3, 4, 5, 6, 7, 8].some(k => Math.abs(x.c.lag * k - best.c.lag) <= P.photo.multiple * x.c.lag)).sort((a, b) => a.c.lag - b.c.lag);
+        return (sub[0] ?? best).c;
+    };
+    const cp = pick(cps, rps[0], 'col'), rp = pick(rps, cp, 'row');
+    const f = fold(cp, rp);
+    if (!f) return { ...none, col: { pitch: cp.lag, phase: 0, size: 0, ac: cp.ac }, row: { pitch: rp.lag, phase: 0, size: 0, ac: rp.ac }, tried };
+    return { ...f, clear: cp.ac >= P.photo.minAutocorr && rp.ac >= P.photo.minAutocorr && f.contrastE >= P.photo.minContrast, tried };
 }
 
 export interface ArrayInput { rects: WindowRect[]; panes?: WindowRect[]; generated?: WindowRect[] }
@@ -294,39 +530,142 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     const whole = (r: WindowRect): WindowRect => [Math.round(r[0]), Math.round(r[1]), Math.round(r[2]), Math.round(r[3])];
     const input: ArrayInput = { rects: inputIn.rects.map(whole), ...(inputIn.panes ? { panes: inputIn.panes.map(whole) } : {}), ...(inputIn.generated ? { generated: inputIn.generated.map(whole) } : {}) };
     const rects = input.rects, W = img.width, H = img.height;
-    const unchanged = (reason: string): ArrayOutput => ({ rects: inputIn.rects, ...(inputIn.panes ? { panes: inputIn.panes } : {}), ...(inputIn.generated ? { generated: inputIn.generated } : {}), report: { boxesIn: rects.length, spans: 0, on: 0, snapped: 0, replaced: 0, added: 0, rejected: 0, reason }, sites: [] });
-    if (rects.length < P.minBoxes) return unchanged(`${rects.length} boxes, fewer than ${P.minBoxes}`);
+    let seedReport: FacadeArrayReport['seed'] | undefined;
+    const unchanged = (reason: string): ArrayOutput => ({ rects: inputIn.rects, ...(inputIn.panes ? { panes: inputIn.panes } : {}), ...(inputIn.generated ? { generated: inputIn.generated } : {}), report: { boxesIn: rects.length, spans: 0, on: 0, snapped: 0, replaced: 0, added: 0, rejected: 0, ...(seedReport ? { seed: seedReport } : {}), reason }, sites: [] });
     const genSet = new Set((input.generated ?? []).map(r => r.join(',')));
     const boxes = rects.map(r => ({ r, cx: (r[0] + r[2]) / 2, cy: (r[1] + r[3]) / 2, w: r[2] - r[0], h: r[3] - r[1] }));
     const minP = P.pitchM[0] / pixel, maxP = P.pitchM[1] / pixel, bin = Math.max(1, P.binM / pixel);
+    // the seed: the photo's own lattice, read before any box (seedLattice below)
+    const lab = lightnessProfiles(img, valid), seed = photoLattice(img, valid, minP, maxP, P, lab);
     // the column lattice from every box; a box wider than spanSites pitches (a bay) is then a span, so columns are fitted
     // twice: first from all, then without the spans
     // a pitch is never under the boxes' own size (boxes do not overlap): the typical width for the columns, the typical
     // height of the single-site boxes for the rows
-    let col = consensusPitch(boxes.map(b => b.cx), boxes.map(() => 1), Math.max(minP, 0.9 * median(boxes.map(b => b.w))), maxP, bin, P.harmonicTol * median(boxes.map(b => b.w)));
-    if (!col) return unchanged('no column pitch repeats');
-    const spanW = (b: { w: number }) => b.w > P.spanSites * col!.pitch;
+    let col = boxes.length >= 3 ? consensusPitch(boxes.map(b => b.cx), boxes.map(() => 1), Math.max(minP, 0.9 * median(boxes.map(b => b.w))), maxP, bin, P.harmonicTol * median(boxes.map(b => b.w))) : undefined;
+    const spanW = (b: { w: number }) => !!col && b.w > P.spanSites * col.pitch;
     const narrow = boxes.filter(b => !spanW(b));
-    if (narrow.length >= 3) col = consensusPitch(narrow.map(b => b.cx), narrow.map(() => 1), Math.max(minP, 0.9 * median(narrow.map(b => b.w))), maxP, bin, P.harmonicTol * median(narrow.map(b => b.w))) ?? col;
+    if (col && narrow.length >= 3) col = consensusPitch(narrow.map(b => b.cx), narrow.map(() => 1), Math.max(minP, 0.9 * median(narrow.map(b => b.w))), maxP, bin, P.harmonicTol * median(narrow.map(b => b.w))) ?? col;
     // the row lattice from the rows the single-site boxes form (strips, taller than spanSites of the typical box, stand aside)
-    const typicalH = median(narrow.map(b => b.h));
+    const typicalH = narrow.length ? median(narrow.map(b => b.h)) : 0;
     const single = narrow.filter(b => b.h <= P.spanSites * typicalH);
-    if (single.length < P.minBoxes) return unchanged(`${single.length} single-site boxes, fewer than ${P.minBoxes}`);
-    const rows = rowsOf(single);
-    const rowW = rows.map(r => r.members.length);
-    // rows never nearer than the boxes are tall (rows of windows do not overlap)
-    const row = consensusPitch(rows.map(r => r.cy), rowW, Math.max(minP, median(single.map(b => b.h))), maxP, bin, P.harmonicTol * median(single.map(b => b.h)));
-    if (!row) return unchanged('no row pitch repeats');
+    let row: Lattice1D | undefined;
+    if (single.length >= P.minBoxes) {
+        const rows = rowsOf(single);
+        // rows never nearer than the boxes are tall (rows of windows do not overlap)
+        row = consensusPitch(rows.map(r => r.cy), rows.map(r => r.members.length), Math.max(minP, median(single.map(b => b.h))), maxP, bin, P.harmonicTol * median(single.map(b => b.h)));
+    }
+    // the boxes' own lattice and its majority: boxes on a site and of the facade's size (the median of those on a site)
+    const majorityOf = (c: Lattice1D, r: Lattice1D, among: typeof boxes) => {
+        const onSite = among.filter(b => Math.abs(siteOf(b.cx, c).res) <= P.snapTol && Math.abs(siteOf(b.cy, r).res) <= P.snapTol);
+        const w = median(onSite.map(b => b.w)), h = median(onSite.map(b => b.h));
+        const on = onSite.filter(b => Math.abs(b.w - w) <= P.sizeTol * w && Math.abs(b.h - h) <= P.sizeTol * h);
+        const ofArray = among.filter(b => { const q = (b.w * b.h) / Math.max(1, w * h); return q >= P.areaRange[0] && q <= P.areaRange[1]; });
+        return { on, ofArray, w: median(on.map(b => b.w)), h: median(on.map(b => b.h)), holds: on.length >= P.minBoxes && on.length >= P.majority * ofArray.length };
+    };
+    const boxSingles = col && row ? boxes.filter(b => !(b.w > P.spanSites * col!.pitch || b.h > P.spanSites * row!.pitch)) : [];
+    const boxMaj = col && row ? majorityOf(col, row, boxSingles) : undefined;
+    // the photo's own evidence for a lattice: the rows and columns whose sites show its window contrast on average
+    const projection = (r: WindowRect, D: number[], skip: WindowRect[]): number | undefined => {
+        const look = regionLook(img, valid, r);
+        if (!look.lab || look.validShare < 1 - P.addMaxUncovered) return undefined;
+        const beside = ringLook(img, valid, r, skip);
+        if (!beside) return undefined;
+        const D2 = D[0] * D[0] + D[1] * D[1] + D[2] * D[2];
+        const d = [0, 1, 2].map(k => look.lab![k] - beside[k]);
+        return D2 > 1 ? (d[0] * D[0] + d[1] * D[1] + d[2] * D[2]) / D2 : 0;
+    };
+    const evidenceOf = (c: Lattice1D, r: Lattice1D, bw: number, bh: number, D: number[]): { rows: number; cols: number; rowExtent: number; colExtent: number } => {
+        const i0 = Math.ceil((bw / 2 - c.phase) / c.pitch), i1 = Math.floor((W - bw / 2 - c.phase) / c.pitch), j0 = Math.ceil((bh / 2 - r.phase) / r.pitch), j1 = Math.floor((H - bh / 2 - r.phase) / r.pitch);
+        if (i1 < i0 || j1 < j0) return { rows: 0, cols: 0, rowExtent: 0, colExtent: 0 };
+        const box = (i: number, j: number): WindowRect => { const cx = c.phase + i * c.pitch, cy = r.phase + j * r.pitch; return [Math.round(cx - bw / 2), Math.round(cy - bh / 2), Math.round(cx + bw / 2), Math.round(cy + bh / 2)]; };
+        const all: WindowRect[] = []; for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) all.push(box(i, j));
+        const pr = new Map<string, number | undefined>();
+        for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) pr.set(`${i}:${j}`, projection(box(i, j), D, all));
+        const holds = (keys: string[]) => { const v = keys.map(k => pr.get(k)).filter((x): x is number => x !== undefined); return v.length >= 3 && v.reduce((a, x) => a + x, 0) / v.length >= P.addMinContrast; };
+        const rows: number[] = [], cols: number[] = [];
+        for (let j = j0; j <= j1; j++) if (holds(Array.from({ length: i1 - i0 + 1 }, (_, k) => `${i0 + k}:${j}`))) rows.push(j);
+        for (let i = i0; i <= i1; i++) if (holds(Array.from({ length: j1 - j0 + 1 }, (_, k) => `${i}:${j0 + k}`))) cols.push(i);
+        // the extent (px) the holding rows and columns span: evidence over a whole slab outweighs a crown's few rows
+        return { rows: rows.length, cols: cols.length, rowExtent: rows.length ? (Math.max(...rows) - Math.min(...rows) + 1) * r.pitch : 0, colExtent: cols.length ? (Math.max(...cols) - Math.min(...cols) + 1) * c.pitch : 0 };
+    };
+    const agree = (a: number, b: number) => Math.abs(a - b) <= P.photo.agree * Math.max(a, b);
+    /** k when `big` is k times `small` (k = 2..4) within P.photo.multiple of `small`. */
+    const multipleOf = (big: number, small: number): number | undefined => { for (let k = 2; k <= 4; k++) if (Math.abs(big - k * small) <= P.photo.multiple * small) return k; return undefined; };
+    // the lattice decided: the boxes', the seed's, or the boxes' with its storeys merged (seedLattice in the doc above)
+    let source: 'boxes' | 'photo' | 'merged' = 'boxes';
+    let boxW = boxMaj?.w ?? NaN, boxH = boxMaj?.h ?? NaN;
+    const seedEv = seed.clear ? evidenceOf(seed.col!, seed.row!, seed.col!.size, seed.row!.size, seed.contrast!) : { rows: 0, cols: 0, rowExtent: 0, colExtent: 0 };
+    const seedStands = seed.clear && seedEv.rows >= P.photo.minRows && seedEv.cols >= P.photo.minCols;
+    const seedNote = seed.clear ? `photo seed ${r2(seed.col!.pitch * pixel)} x ${r2(seed.row!.pitch * pixel)} m, window ${r2(seed.col!.size * pixel)} x ${r2(seed.row!.size * pixel)} m, contrast ${r2(seed.contrastE)}, ${seedEv.rows} rows and ${seedEv.cols} columns show it` : `no photo seed (${seed.col ? `columns ${r2(seed.col.pitch * pixel)} m at ${r2(seed.col.ac)}` : 'no column pitch'}, ${seed.row ? `rows ${r2(seed.row.pitch * pixel)} m at ${r2(seed.row.ac)}` : 'no row pitch'}, contrast ${r2(seed.contrastE)})`;
+    seedReport = { ...(seed.col ? { colPitchM: r3(seed.col.pitch * pixel) } : {}), ...(seed.row ? { rowPitchM: r3(seed.row.pitch * pixel) } : {}), ...(seed.clear ? { windowM: [r3(seed.col!.size * pixel), r3(seed.row!.size * pixel)] as [number, number] } : {}), contrast: r2(seed.contrastE), ...(seed.col && seed.row ? { ac: [r2(seed.col.ac), r2(seed.row.ac)] as [number, number] } : {}), clear: seed.clear, rows: seedEv.rows, cols: seedEv.cols };
+    let mergeRows: number | undefined, mergeCols: number | undefined;
+    if (!col || !row || !boxMaj!.holds) {
+        const why = !col ? 'no column pitch repeats among the boxes' : !row ? `${single.length} single-site boxes${single.length >= P.minBoxes ? ', no row pitch repeats' : `, fewer than ${P.minBoxes}`}` : `${boxMaj!.on.length} of ${boxMaj!.ofArray.length} single-site boxes on their lattice at its size (column pitch ${r2(col.pitch * pixel)} m, row pitch ${r2(row.pitch * pixel)} m): no majority`;
+        if (!seedStands) return unchanged(`${why}; ${seedNote}`);
+        source = 'photo'; col = seed.col!; row = seed.row!; boxW = seed.col!.size; boxH = seed.row!.size;
+    } else if (seed.clear && boxMaj) {
+        // boxes that sit cleanly on their lattice keep their pitch against a seed that reads every other column; where the
+        // two disagree outright the lattice with the wider evidence wins, clean or not (a crown's louvres read cleanly
+        // say nothing about the slab below)
+        const clean = boxMaj.on.length >= P.photo.trustOnShare * boxSingles.length;
+        // the extent the boxes on their lattice span (px): a crown's few rows against a slab the photo shows whole
+        const occRowExtent = Math.max(...boxMaj.on.map(b => b.cy)) - Math.min(...boxMaj.on.map(b => b.cy)) + row.pitch, occColExtent = Math.max(...boxMaj.on.map(b => b.cx)) - Math.min(...boxMaj.on.map(b => b.cx)) + col.pitch;
+        const sizeFrom = (seedSize: number, own: number) => (seedSize >= P.photo.sizeRange[0] * own && seedSize <= P.photo.sizeRange[1] * own ? seedSize : own);
+        // where the pitches agree the window's size is read from the fold at the boxes' own lattice (its pitch refined
+        // over many boxes; a seed pitch a few percent off smears the fold over a tall facade into a narrow core)
+        const refold = agree(seed.row!.pitch, row.pitch) || agree(seed.col!.pitch, col.pitch) ? foldCell({ ...lab, W, H, valid }, { lag: agree(seed.col!.pitch, col.pitch) ? col.pitch : seed.col!.pitch, ac: seed.col!.ac }, { lag: agree(seed.row!.pitch, row.pitch) ? row.pitch : seed.row!.pitch, ac: seed.row!.ac }, P) : undefined;
+        // the boxes' rows and columns on their lattice: few of them against the seed's, and the seed's pitch and phase
+        // are the better refined (a pitch from three rows of a fifty-storey facade is off by the width of a window at the
+        // far end; the photo's correlates over every storey)
+        const occRows = rowsOf(boxMaj.on).length, occCols = new Set(boxMaj.on.map(b => siteOf(b.cx, col!).k)).size;
+        const fewRows = occRows < Math.max(P.photo.minRows, P.photo.fewShare * seedEv.rows), fewCols = occCols < Math.max(P.photo.minCols, P.photo.fewShare * seedEv.cols);
+        // rows. A seed pitch a whole multiple of the boxes' is the coarser reading of the same storeys: the boxes' stand,
+        // unless the seed's window spans the boxes (then they are sub-boxes of one window, merged)
+        const kr = multipleOf(seed.row!.pitch, row.pitch);
+        if (agree(seed.row!.pitch, row.pitch)) { if (fewRows && seedStands) { row = seed.row!; boxH = seed.row!.size; source = 'photo'; } else boxH = sizeFrom((refold ?? seed).row!.size, boxH); }
+        else if (kr) { if (seed.row!.size >= P.photo.mergeSpan * boxH) { mergeRows = kr; row = seed.row!; boxH = seed.row!.size; source = 'merged'; } }
+        else if (seedStands && seedEv.rowExtent >= P.photo.evidenceRatio * occRowExtent) { row = seed.row!; boxH = seed.row!.size; source = 'photo'; }
+        // columns: a seed pitch a multiple of the boxes' is the bay over their panes (the boxes' kept); the boxes' a
+        // multiple of the seed's is a reading of every other column (the seed's taken)
+        const kc = multipleOf(col.pitch, seed.col!.pitch);
+        if (agree(seed.col!.pitch, col.pitch)) { if (fewCols && seedStands) { col = seed.col!; boxW = seed.col!.size; source = 'photo'; } else boxW = sizeFrom((refold ?? seed).col!.size, boxW); }
+        else if (multipleOf(seed.col!.pitch, col.pitch)) { /* the boxes' columns stand */ }
+        else if (kc && !clean && seed.col!.size <= boxW) { mergeCols = kc; col = seed.col!; boxW = seed.col!.size; if (source === 'boxes') source = 'merged'; }
+        else if (seedStands && seedEv.colExtent >= P.photo.evidenceRatio * occColExtent) { col = seed.col!; boxW = seed.col!.size; source = 'photo'; }
+    }
     // a strip spans sites once the row pitch is known
-    const isSpan = (b: { w: number; h: number }) => b.w > P.spanSites * col!.pitch || b.h > P.spanSites * row.pitch;
-    const spans = boxes.filter(isSpan), singles = boxes.filter(b => !isSpan(b));
-    if (singles.length < P.minBoxes) return unchanged(`${singles.length} single-site boxes, fewer than ${P.minBoxes}`);
+    const isSpan = (b: { w: number; h: number }) => b.w > P.spanSites * col!.pitch || b.h > P.spanSites * row!.pitch;
+    const spans = boxes.filter(isSpan);
+    let singles = boxes.filter(b => !isSpan(b));
+    // merged storeys (or columns): the boxes standing in one site of the lattice are sub-boxes of one window (a pane, a
+    // transom and a spandrel read apart; a window read as its halves) when the window the photo shows spans them: their
+    // union is the window, the sub-boxes its panes (photo-inferred)
+    let merged = 0;
+    if (source === 'boxes' && seed.clear && singles.length) {
+        const subW = median(singles.map(b => b.w)), subH = median(singles.map(b => b.h));
+        if (boxH >= P.photo.mergeSpan * subH) { mergeRows = Math.round(boxH / subH); source = 'merged'; }
+        if (boxW >= P.photo.mergeSpan * subW) { mergeCols = Math.round(boxW / subW); source = 'merged'; }
+    }
+    if (source === 'merged') {
+        const groups = new Map<string, typeof singles>();
+        for (const b of singles) { const k = `${siteOf(b.cx, col).k}:${siteOf(b.cy, row).k}`; groups.set(k, [...(groups.get(k) ?? []), b]); }
+        const joined: typeof singles = [];
+        for (const g of groups.values()) {
+            if (g.length < 2) { joined.push(...g); continue; }
+            const r: WindowRect = [Math.min(...g.map(b => b.r[0])), Math.min(...g.map(b => b.r[1])), Math.max(...g.map(b => b.r[2])), Math.max(...g.map(b => b.r[3]))];
+            joined.push({ r, cx: (r[0] + r[2]) / 2, cy: (r[1] + r[3]) / 2, w: r[2] - r[0], h: r[3] - r[1] });
+            input.panes = [...(input.panes ?? []), ...g.map(b => b.r)];
+            merged += g.length;
+        }
+        singles = joined;
+    }
+    if (source === 'boxes' && singles.length < P.minBoxes) return unchanged(`${singles.length} single-site boxes, fewer than ${P.minBoxes}; ${seedNote}`);
     // tiers: the facade's lattice, then each contiguous run of rows off it tried on its own
     // a row is off the facade's lattice when its centre is, or when its boxes are another size than the facade's (a base
     // of taller windows at another storey pitch can still land within the tolerance of the shaft's rows)
     const rows2 = rowsOf(singles);
-    const typW = median(singles.map(b => b.w)), typH = median(singles.map(b => b.h));
-    const offRow = rows2.map(r => Math.abs(siteOf(r.cy, row).res) > P.snapTol || Math.abs(median(r.members.map(k => singles[k].w)) - typW) > P.sizeTol * typW || Math.abs(median(r.members.map(k => singles[k].h)) - typH) > P.sizeTol * typH);
+    const typW = boxW, typH = boxH;
+    const offRow = rows2.map(r => Math.abs(siteOf(r.cy, row!).res) > P.snapTol || Math.abs(median(r.members.map(k => singles[k].w)) - typW) > P.sizeTol * typW || Math.abs(median(r.members.map(k => singles[k].h)) - typH) > P.sizeTol * typH);
     const tiers: ArrayTier[] = [];
     const colRange = (() => { const ks = singles.map(b => siteOf(b.cx, col!).k); return [Math.min(...ks), Math.max(...ks)] as [number, number]; })();
     let k0 = 0;
@@ -342,9 +681,9 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
                     const members = run.flatMap(r => r.members.map(k => singles[k]));
                     const bw = median(members.map(b => b.w)), bh = median(members.map(b => b.h));
                     const y0 = Math.min(...members.map(b => b.cy)) - own.pitch / 2, y1 = Math.max(...members.map(b => b.cy)) + own.pitch / 2;
-                    const facadeScore = photoScore(img, valid, col, row, bw, bh, y0, y1, colRange), tierScore = photoScore(img, valid, col, own, bw, bh, y0, y1, colRange);
+                    const facadeScore = photoScore(img, valid, col!, row!, bw, bh, y0, y1, colRange), tierScore = photoScore(img, valid, col!, own, bw, bh, y0, y1, colRange);
                     // the facade's own pitch and box, shifted: a band that drifted, not a tier; its rows are snapped instead
-                    const sameArray = Math.abs(own.pitch - row.pitch) <= P.tierPitchDiff * row.pitch && Math.abs(bh - median(single.map(b => b.h))) <= P.sizeTol * median(single.map(b => b.h));
+                    const sameArray = Math.abs(own.pitch - row!.pitch) <= P.tierPitchDiff * row!.pitch && Math.abs(bh - typH) <= P.sizeTol * typH;
                     if (!sameArray && tierScore >= facadeScore * P.tierGain && tierScore > 0) tiers.push({ y0, y1, rowPitch: own.pitch, rowPhase: own.phase, boxW: bw, boxH: bh, from: 'residual-tier', photoScore: { facade: r2(facadeScore), tier: r2(tierScore) }, rows: run.length });
                 }
             }
@@ -352,15 +691,12 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
         k0 = k1 + 1;
     }
     const tierOf = (cy: number): ArrayTier | undefined => tiers.find(t => cy >= t.y0 && cy < t.y1);
-    // the facade's own tier: the lattice's box from the boxes on it outside the other tiers
+    // the facade's own tier: with the boxes' lattice, its box from the boxes on it outside the other tiers; with the seed's
+    // (or a merged) lattice, the window the photo shows
     const mainBoxes = singles.filter(b => !tierOf(b.cy));
-    // the majority: boxes on a site and of the facade's size (the median of those on a site)
-    const onSiteMain = mainBoxes.filter(b => Math.abs(siteOf(b.cx, col!).res) <= P.snapTol && Math.abs(siteOf(b.cy, row).res) <= P.snapTol);
-    const mainW = median(onSiteMain.map(b => b.w)), mainH = median(onSiteMain.map(b => b.h));
-    const onMain = onSiteMain.filter(b => Math.abs(b.w - mainW) <= P.sizeTol * mainW && Math.abs(b.h - mainH) <= P.sizeTol * mainH);
-    const ofArrayMain = mainBoxes.filter(b => { const q = (b.w * b.h) / Math.max(1, mainW * mainH); return q >= P.areaRange[0] && q <= P.areaRange[1]; });
-    if (onMain.length < P.minBoxes || onMain.length < P.majority * ofArrayMain.length) return unchanged(`${onMain.length} of ${ofArrayMain.length} single-site boxes on the lattice at its size (column pitch ${r2(col.pitch * pixel)} m, row pitch ${r2(row.pitch * pixel)} m): no majority`);
-    const main: ArrayTier = { y0: -Infinity, y1: Infinity, rowPitch: row.pitch, rowPhase: row.phase, boxW: median(onMain.map(b => b.w)), boxH: median(onMain.map(b => b.h)), from: 'majority', rows: rowsOf(onMain).length };
+    const onMain = majorityOf(col, row, mainBoxes).on;
+    if (source === 'boxes') { boxW = median(onMain.map(b => b.w)); boxH = median(onMain.map(b => b.h)); if (!(boxW > 0 && boxH > 0)) return unchanged(`no boxes on the lattice outside its tiers; ${seedNote}`); }
+    const main: ArrayTier = { y0: -Infinity, y1: Infinity, rowPitch: row.pitch, rowPhase: row.phase, boxW, boxH, from: source === 'boxes' ? 'majority' : source === 'photo' ? 'photo' : 'merged', rows: rowsOf(onMain).length };
     const tierFor = (cy: number): ArrayTier => tierOf(cy) ?? main;
     // every site: key by tier index, row, column
     const tierIndex = (t: ArrayTier) => (t === main ? -1 : tiers.indexOf(t));
@@ -379,7 +715,7 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     // column of its cells, folded into the sites it covers (photo-inferred: the strip was read there), its panes going to
     // the cell they lie in. A bay wider than a column, or a strip on a facade read mostly as strips, is kept whole and its
     // sites taken
-    const foldStrips = singles.length >= spans.length;
+    const foldStrips = singles.length >= spans.length || (seed.clear && agree(seed.row!.pitch, row.pitch));
     for (const b of spans) {
         const ci = siteOf(b.cx, col);
         if (foldStrips && b.w <= P.spanSites * col.pitch && Math.abs(ci.res) <= P.snapTol) {
@@ -418,6 +754,9 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
         // a box far from the array's size (a small opening on a facade of strips, a doorway among windows) is not of the
         // array: kept as read, taking no site
         if (!c.ofArray) { out.push({ r: c.b.r, kind: SITE_KIND.kept, conf: 1, res: r3(c.dist), src: boxes.indexOf(c.b), panes: panesOf(c.b.r) }); continue; }
+        // on the seed's lattice a box of another size is the reader's, not the array's (a crown's louvres over a slab):
+        // kept as read, never moved or replaced; one of the lattice's size off its site is a window drifted, snapped
+        if (source === 'photo' && !c.sizeOk) { out.push({ r: c.b.r, kind: SITE_KIND.kept, conf: 1, res: r3(c.dist), src: boxes.indexOf(c.b), panes: panesOf(c.b.r) }); continue; }
         const key = siteKey(c.t, c.i, c.j);
         if (taken.has(key)) { rejected++; continue; }
         const site = siteBox(c.t, c.i, c.j);
@@ -431,7 +770,7 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     }
     // a lattice that puts many boxes two to a site (a pitch twice the facade's, two readings of one storey) does not
     // explain the boxes: nothing is changed
-    if (rejected > P.maxRejectedShare * singles.length) return unchanged(`${rejected} of ${singles.length} single-site boxes would be a second box on a taken site (column pitch ${r2(col.pitch * pixel)} m, row pitch ${r2(row.pitch * pixel)} m): the lattice does not explain them`);
+    if (source === 'boxes' && rejected > P.maxRejectedShare * singles.length) return unchanged(`${rejected} of ${singles.length} single-site boxes would be a second box on a taken site (column pitch ${r2(col.pitch * pixel)} m, row pitch ${r2(row.pitch * pixel)} m): the lattice does not explain them`);
     // the pane layout of the nearest box on the lattice with panes, for a replaced or added box
     const withPanes = out.filter(o => o.kind === SITE_KIND.on && o.panes?.length);
     const templatePanes = (r: WindowRect): WindowRect[] => {
@@ -443,13 +782,10 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     };
     for (const o of out) if (o.kind === SITE_KIND.replaced || (o.kind === SITE_KIND.folded && !o.panes?.length)) o.panes = templatePanes(o.r);
     const members = out.filter(o => o.kind === SITE_KIND.on || o.kind === SITE_KIND.snapped || o.kind === SITE_KIND.replaced || o.kind === SITE_KIND.folded);
-    // each member's contrast: its look less the wall's just beside it (left and right, outside every box); a site is a
-    // window when it shows at least addMinContrast of its neighbours' contrast in the same direction, whatever the light
-    const besideOf = (r: WindowRect, bw: number, skip: WindowRect[]): number[] | undefined => {
-        const sw = Math.max(2, Math.round(bw * 0.4));
-        const walls = [regionLook(img, valid, [r[0] - sw, r[1], r[0], r[3]], skip).lab, regionLook(img, valid, [r[2], r[1], r[2] + sw, r[3]], skip).lab].filter((v): v is number[] => !!v);
-        return walls.length ? [0, 1, 2].map(k => walls.reduce((t, l) => t + l[k], 0) / walls.length) : undefined;
-    };
+    // each member's contrast: its look less the wall's around it (the ring beside, above and below it, outside every box);
+    // a site is a window when it shows at least addMinContrast of its neighbours' contrast in the same direction, whatever
+    // the light
+    const besideOf = (r: WindowRect, _bw: number, skip: WindowRect[]): number[] | undefined => ringLook(img, valid, r, skip);
     const allBoxes = out.map(o => o.r);
     const memberLook = members.map(o => {
         const inside = regionLook(img, valid, o.r).lab, beside = besideOf(o.r, o.r[2] - o.r[0], allBoxes);
@@ -478,8 +814,8 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
         const peers = memberLook.filter(m => m.contrast && Math.abs(m.cy - cy) <= P.peerRows * t.rowPitch + 1);
         const use = peers.length ? peers : memberLook.filter(m => m.contrast);
         const beside = besideOf(r, t.boxW, sites);
-        if (!use.length || !beside) return undefined;
-        const D = [0, 1, 2].map(k => use.reduce((a, m) => a + m.contrast![k], 0) / use.length), D2 = D[0] * D[0] + D[1] * D[1] + D[2] * D[2];
+        if (!beside || (!use.length && !seed.contrast)) return undefined;
+        const D = use.length ? [0, 1, 2].map(k => use.reduce((a, m) => a + m.contrast![k], 0) / use.length) : seed.contrast!, D2 = D[0] * D[0] + D[1] * D[1] + D[2] * D[2];
         const d = [0, 1, 2].map(k => look.lab![k] - beside[k]);
         return D2 > 1 ? (d[0] * D[0] + d[1] * D[1] + d[2] * D[2]) / D2 : 0;
     };
@@ -496,67 +832,72 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
             if (taken.has(key)) { occupied.set(key, true); continue; }
             proj.set(key, projOf(siteBox(t, i, j), t, siteCy(t, j)));
         }
-        // the boxes' own extent: a row or column beyond it by more than extendBeyond holds the array only by its boxes (a
-        // lattice read at a crown or a base says nothing about the storeys far from it, however window-like they are)
-        const occJ = js.filter(j => Array.from({ length: i1 - i0 + 1 }, (_, k) => occupied.get(siteKey(t, i0 + k, j))).some(Boolean));
-        const occI: number[] = []; for (let i = i0; i <= i1; i++) if (js.some(j => occupied.get(siteKey(t, i, j)))) occI.push(i);
-        const near = (v: number, xs: number[]) => xs.length > 0 && v >= Math.min(...xs) - P.extendBeyond && v <= Math.max(...xs) + P.extendBeyond;
-        const holdsBy = (keys: string[], within: boolean): boolean => {
+        // the array's extent: the rows and columns that hold boxes (extentShare of their sites), and from them outward,
+        // row by row and column by column, every next one whose sites show the window contrast on average, to the
+        // photo's edge if they do; the step stops at the first that does not (a crown's lattice is carried down a slab
+        // only as far as the slab shows it, storey by storey). With no occupied row (the seed's lattice over a plane
+        // nothing read), the step starts from the row and column showing the contrast most clearly
+        const byOcc = (keys: string[]) => keys.filter(k => occupied.get(k)).length >= P.extentShare * keys.length;
+        const byContrast = (keys: string[]): number | undefined => { const v = keys.map(k => proj.get(k)).filter((x): x is number => x !== undefined); return v.length >= 3 ? v.reduce((a, x) => a + x, 0) / v.length : undefined; };
+        const holds = (keys: string[], bar: number = P.addMinContrast) => byOcc(keys) || (byContrast(keys) ?? -Infinity) >= bar;
+        const rowKeysOf = (j: number) => Array.from({ length: i1 - i0 + 1 }, (_, k) => siteKey(t, i0 + k, j));
+        // a row or column is blank when its sites' texels are mostly unreached, occluded (something stood before it: the
+        // array continues over it, as the lattice does) or featureless (a smear, a hole refilled with nothing to read)
+        const blankOf = (keys: string[], boxes: WindowRect[]): boolean => {
+            let n = 0, blank = 0;
+            for (const r of boxes) for (let y = Math.max(0, r[1]); y < Math.min(H, r[3]); y++) for (let x = Math.max(0, r[0]); x < Math.min(W, r[2]); x++) { n++; const k = y * W + x; if (!valid[k] || opts.featureless?.[k]) blank++; }
             const occ = keys.filter(k => occupied.get(k)).length;
-            if (occ >= P.extentShare * keys.length) return true;
-            if (!within) return false;
-            const scored = keys.map(k => proj.get(k)).filter((v): v is number => v !== undefined);
-            return scored.length >= 3 && scored.reduce((a, v) => a + v, 0) / scored.length >= P.addMinContrast;
-        };
-        const rowIn = new Set(js.filter(j => holdsBy(Array.from({ length: i1 - i0 + 1 }, (_, k) => siteKey(t, i0 + k, j)), near(j, occJ))));
-        const colIn = new Set<number>();
-        for (let i = i0; i <= i1; i++) if (rowIn.size && holdsBy([...rowIn].map(j => siteKey(t, i, j)), near(i, occI))) colIn.add(i);
-        rowsIn += rowIn.size; colsIn = Math.max(colsIn, colIn.size);
-        // the array steps on into blank rows and columns (their sites' texels mostly unreached or featureless: a smear, a
-        // hole refilled with nothing to read) from a row or column that holds it, until a row or column the photo reads
-        // and that does not hold (the evidence changes: a screen, a setback), or the photo's edge; an unreached band at the
-        // edge is entered only when the building's height envelope says the wall goes on there (opts.minRowPx), never
-        // above the roof line
-        const blankOf = (keys: string[], boxes: WindowRect[]): { blank: boolean; unreachedEdge: boolean } => {
-            let n = 0, blank = 0, unreached = 0;
-            for (const r of boxes) for (let y = Math.max(0, r[1]); y < Math.min(H, r[3]); y++) for (let x = Math.max(0, r[0]); x < Math.min(W, r[2]); x++) { n++; const k = y * W + x; if (!valid[k] && !(occluded && occluded[k])) { blank++; unreached++; } else if (opts.featureless?.[k]) blank++; }
-            const occ = keys.filter(k => occupied.get(k)).length;
-            return { blank: n > 0 && blank >= P.blankShare * n && occ < P.extentShare * keys.length, unreachedEdge: n > 0 && unreached >= P.blankShare * n };
+            return n > 0 && blank >= P.blankShare * n && occ < P.extentShare * keys.length;
         };
         const rowKeys = (j: number) => Array.from({ length: i1 - i0 + 1 }, (_, k) => siteKey(t, i0 + k, j)), rowBoxes = (j: number) => Array.from({ length: i1 - i0 + 1 }, (_, k) => siteBox(t, i0 + k, j));
         const colKeys = (i: number) => js.map(j => siteKey(t, i, j)), colBoxes = (i: number) => js.map(j => siteBox(t, i, j));
-        const rowBlank = new Map(js.map(j => [j, blankOf(rowKeys(j), rowBoxes(j))] as const)), colBlank = new Map<number, ReturnType<typeof blankOf>>();
+        const rowBlank = new Map(js.map(j => [j, blankOf(rowKeys(j), rowBoxes(j))] as const)), colBlank = new Map<number, boolean>();
         for (let i = i0; i <= i1; i++) colBlank.set(i, blankOf(colKeys(i), colBoxes(i)));
-        const rowCont = new Set<number>(), colCont = new Set<number>();
-        // a blank run is entered only where the array is known to go on: between two rows (columns) that hold it, or, for
-        // rows, up from the highest holding row to the building's roof line when the envelope is given (the photo's edge
-        // sideways, or a blank band above the array's top with no envelope, may be another surface or the sky)
-        const jsSorted = [...js].sort((a, b) => a - b);
-        const held = jsSorted.filter(j => rowIn.has(j));
-        if (held.length) {
-            const lo = held[0], hi = held[held.length - 1];
-            // between holding rows: every row of a run bounded by holding rows on both sides, when the whole run is blank
-            let run: number[] = [];
-            for (const j of jsSorted) {
-                if (j < lo || j > hi) continue;
-                if (rowIn.has(j)) { if (run.every(w => rowBlank.get(w)!.blank)) for (const w of run) rowCont.add(w); run = []; }
-                else run.push(j);
+        /**
+         * The rows (columns) that hold the array and those it steps on into. From the rows holding boxes (or, with none,
+         * the row showing the contrast most clearly) outward: each next row is entered while it shows the contrast
+         * (P.stepContrast); a blank run is crossed, and continued (generated), when the first row read beyond it holds
+         * again; the walk stops at a row that reads and does not hold (the evidence changes: a screen, a setback), and at
+         * a blank run that no held row closes (the photo's edge, or another surface beyond it)
+         */
+        const walk = (idx: number[], keysOf: (v: number) => string[], blank: (v: number) => boolean): { inSet: Set<number>; cont: Set<number> } => {
+            const inSet = new Set(idx.filter(v => byOcc(keysOf(v)))), cont = new Set<number>();
+            if (!inSet.size) {
+                let best: number | undefined, bestC = -Infinity;
+                for (const v of idx) { const c = byContrast(keysOf(v)); if (c !== undefined && c > bestC) { bestC = c; best = v; } }
+                if (best === undefined || bestC < P.addMinContrast) return { inSet, cont };
+                inSet.add(best);
             }
-            // up from the highest holding row (the smallest j) to the roof line, through blank rows only
-            if (opts.minRowPx !== undefined) for (let q = jsSorted.indexOf(lo) - 1; q >= 0; q--) {
-                const j = jsSorted[q], b = rowBlank.get(j)!;
-                if (!b.blank || siteCy(t, j) - t.boxH / 2 < opts.minRowPx) break;
-                rowCont.add(j);
+            const sorted = [...idx].sort((a, b) => a - b), lo = sorted.findIndex(v => inSet.has(v)), hi = sorted.length - 1 - [...sorted].reverse().findIndex(v => inSet.has(v));
+            // between the extremes that hold boxes: each by its own evidence, a blank one continued
+            for (let q = lo; q <= hi; q++) { const v = sorted[q]; if (holds(keysOf(v))) inSet.add(v); else if (blank(v)) cont.add(v); }
+            for (const dir of [-1, 1]) {
+                let q = (dir < 0 ? lo : hi) + dir;
+                while (q >= 0 && q < sorted.length) {
+                    const v = sorted[q];
+                    if (holds(keysOf(v), P.stepContrast)) { inSet.add(v); q += dir; continue; }
+                    if (!blank(v)) break;
+                    let e = q; while (e + dir >= 0 && e + dir < sorted.length && blank(sorted[e + dir]) && !holds(keysOf(sorted[e + dir]), P.stepContrast)) e += dir;
+                    const next = e + dir;
+                    if (!(next >= 0 && next < sorted.length) || !holds(keysOf(sorted[next]), P.stepContrast)) break;
+                    for (let w = q; w !== next; w += dir) cont.add(sorted[w]);
+                    inSet.add(sorted[next]); q = next + dir;
+                }
             }
-        }
-        // columns: only between two holding columns
-        const heldCols: number[] = []; for (let i = i0; i <= i1; i++) if (colIn.has(i)) heldCols.push(i);
-        if (heldCols.length) {
-            let run: number[] = [];
-            for (let i = heldCols[0]; i <= heldCols[heldCols.length - 1]; i++) {
-                if (colIn.has(i)) { if (run.every(w => colBlank.get(w)!.blank)) for (const w of run) colCont.add(w); run = []; }
-                else run.push(i);
-            }
+            return { inSet, cont };
+        };
+        const rw = walk(js, rowKeysOf, j => rowBlank.get(j)!), rowIn = rw.inSet, rowCont = rw.cont;
+        const cw = rowIn.size ? walk(Array.from({ length: i1 - i0 + 1 }, (_, k) => i0 + k), i => [...rowIn].map(j => siteKey(t, i, j)), i => colBlank.get(i)!) : { inSet: new Set<number>(), cont: new Set<number>() };
+        const colIn = cw.inSet, colCont = cw.cont;
+        rowsIn += rowIn.size; colsIn = Math.max(colsIn, colIn.size);
+        // up from the highest holding row to the building's roof line, through blank rows only, when the envelope is
+        // given (a blank band above the array's top with no envelope may be another surface or the sky)
+        const jsSorted = [...js].sort((a, b) => a - b), held = jsSorted.filter(j => rowIn.has(j));
+        if (held.length && opts.minRowPx !== undefined) for (let q = jsSorted.indexOf(held[0]) - 1; q >= 0; q--) {
+            const j = jsSorted[q];
+            if (rowIn.has(j) || rowCont.has(j)) continue;
+            if (!rowBlank.get(j) || siteCy(t, j) - t.boxH / 2 < opts.minRowPx) break;
+            rowCont.add(j);
         }
         continuedRows += rowCont.size; continuedCols = Math.max(continuedCols, colCont.size);
         for (const j of js) for (let i = i0; i <= i1; i++) {
@@ -569,7 +910,14 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
             const r = siteBox(t, i, j);
             if (opts.minRowPx !== undefined && r[1] < opts.minRowPx) { empty.outside++; continue; }
             if (sites.some(q => Math.max(0, Math.min(q[2], r[2]) - Math.max(q[0], r[0])) * Math.max(0, Math.min(q[3], r[3]) - Math.max(q[1], r[1])) > 0.2 * (r[2] - r[0]) * (r[3] - r[1]))) { empty.underBox++; continue; }
-            if (share(occ, r, true) > P.addMaxOccluded) { empty.occluded++; continue; }
+            // an occluded site (something stood before it) inside the array: the array continues over it, as the lattice
+            // does over an occluded span (generated, counted)
+            if (share(occ, r, true) > P.addMaxOccluded) {
+                empty.occluded++;
+                taken.set(key, out.push({ r, kind: SITE_KIND.continued, conf: 0.25, res: 0, panes: templatePanes(r) }) - 1);
+                occupied.set(key, true); sites.push(r); continuedSites++;
+                continue;
+            }
             if (continuing) {
                 // stepped on into a blank row or column: generated, on the array's pitch and phase alone
                 taken.set(key, out.push({ r, kind: SITE_KIND.continued, conf: 0.25, res: 0, panes: templatePanes(r) }) - 1);
@@ -592,12 +940,13 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     for (const o of out) if (o.kind !== SITE_KIND.span && o.kind !== SITE_KIND.kept) { const t = tierFor((o.r[1] + o.r[3]) / 2); const d = Math.hypot(siteOf((o.r[0] + o.r[2]) / 2, col).res, siteOf((o.r[1] + o.r[3]) / 2, { pitch: t.rowPitch, phase: t.rowPhase }).res); rmsOutSum += d * d; rmsOutN++; }
     const order = out.map((_, k) => k).sort((a, b) => cmpRect(out[a].r, out[b].r));
     const outRects = order.map(k => out[k].r), outPanes = order.flatMap(k => out[k].panes ?? []).sort(cmpRect);
-    const outGenerated = order.flatMap(k => { const o = out[k]; return o.kind === SITE_KIND.added || o.kind === SITE_KIND.continued || (o.src !== undefined && genSet.has(boxes[o.src].r.join(','))) ? [o.r] : []; }).sort(cmpRect);
+    const outGenerated = order.flatMap(k => { const o = out[k]; return o.kind === SITE_KIND.added || o.kind === SITE_KIND.continued || (o.src !== undefined && o.src >= 0 && genSet.has(boxes[o.src].r.join(','))) ? [o.r] : []; }).sort(cmpRect);
     const count = (kind: number) => out.filter(o => o.kind === kind).length;
     const report: Omit<FacadeArrayReport, 'facadeId'> = {
         boxesIn: rects.length, spans: spans.length, colPitchM: r3(col.pitch * pixel), colPhaseM: r3(col.phase * pixel), cols: colRange[1] - colRange[0] + 1,
         tiers: [main, ...tiers].map(t => ({ rowPitchM: r3(t.rowPitch * pixel), rowPhaseM: r3(t.rowPhase * pixel), rows: t.rows, boxM: [r3(t.boxW * pixel), r3(t.boxH * pixel)] as [number, number], from: t.from, ...(t.photoScore ? { photoScore: t.photoScore } : {}) })),
         on: count(SITE_KIND.on), snapped: count(SITE_KIND.snapped), replaced: count(SITE_KIND.replaced), added, rejected, folded, kept: count(SITE_KIND.kept), rowsIn, colsIn,
+        source, seed: seedReport, ...(merged ? { merged, mergedBy: { ...(mergeRows ? { rows: mergeRows } : {}), ...(mergeCols ? { cols: mergeCols } : {}) } } : {}),
         ...(continuedSites ? { continued: { rows: continuedRows, cols: continuedCols, sites: continuedSites, reason: CONTINUED_REASON } } : {}),
         rmsIn: r3(Math.sqrt(rmsInSum / Math.max(1, rmsInN))), rmsOut: r3(Math.sqrt(rmsOutSum / Math.max(1, rmsOutN))), empty
     };
@@ -664,9 +1013,9 @@ export function arrayExtras(fit: WindowFitFile, facadeId: number): Record<string
     const a = e.array, q = (v: number) => Math.round(v * 10000) / 10000;
     const uvs = (kind: number): number[] => { const o: number[] = []; for (let k = 0; k + 6 < a.sites.length; k += 7) if (a.sites[k + 4] === kind) o.push(q(a.sites[k] / e.width), q(a.sites[k + 1] / e.height), q(a.sites[k + 2] / e.width), q(a.sites[k + 3] / e.height)); return o; };
     return {
-        version: a.version, colPitchM: a.report.colPitchM, tiers: a.report.tiers, boxesIn: a.report.boxesIn, on: a.report.on, snapped: a.report.snapped, replaced: a.report.replaced, added: a.report.added, rejected: a.report.rejected, rmsIn: a.report.rmsIn, rmsOut: a.report.rmsOut,
+        version: a.version, latticeFrom: a.report.source, seed: a.report.seed, ...(a.report.merged ? { merged: a.report.merged } : {}), colPitchM: a.report.colPitchM, tiers: a.report.tiers, boxesIn: a.report.boxesIn, on: a.report.on, snapped: a.report.snapped, replaced: a.report.replaced, added: a.report.added, rejected: a.report.rejected, rmsIn: a.report.rmsIn, rmsOut: a.report.rmsOut,
         snapped_uv: uvs(SITE_KIND.snapped), replaced_uv: uvs(SITE_KIND.replaced), folded_uv: uvs(SITE_KIND.folded), continued_uv: uvs(SITE_KIND.continued), snappedLabel: 'photo-inferred', addedLabel: 'generated', ...(a.report.continued ? { continued: a.report.continued } : {}),
-        source: "the facade's window array: column and storey pitches by consensus over every box, each box moved to its site or replaced by the lattice's, empty sites filled where the photo reads a window (window-array.ts)"
+        source: "the facade's window array: the photo's own periodicity (its lightness profiles autocorrelated, the fold at those pitches) seeding column and storey pitches that the boxes refine by consensus, each box moved to its site or replaced by the lattice's, empty sites filled row by row and column by column as far as the photo shows the array (window-array.ts)"
     };
 }
 
@@ -675,5 +1024,6 @@ export function describeWindowArrays(r: WindowArrayReport): string {
     const done = r.facades.filter(f => !f.reason), left = r.facades.filter(f => f.reason);
     const sum = (k: 'boxesIn' | 'on' | 'snapped' | 'replaced' | 'added' | 'rejected') => done.reduce((t, f) => t + f[k], 0);
     const tiers = done.reduce((t, f) => t + (f.tiers?.length ?? 1), 0), folded = done.reduce((t, f) => t + (f.folded ?? 0), 0);
-    return `window arrays (${r.version}): ${done.length} of ${r.facades.length} facades brought onto their array (${tiers} tiers; of ${sum('boxesIn')} boxes ${sum('on')} on the lattice, ${sum('snapped')} moved to their site, ${sum('replaced')} replaced by the lattice's box and ${folded} strips folded into its cells (photo-inferred), ${sum('rejected')} dropped, ${done.reduce((t, f) => t + (f.kept ?? 0), 0)} of another size kept as read; ${sum('added')} added at the empty sites inside the rows and columns the array holds, where the photo does not read the opposite of a window, and ${done.reduce((t, f) => t + (f.continued?.sites ?? 0), 0)} stepped on into blank bands the photo never reached or left featureless (generated))${left.length ? `; ${left.length} left as fitted (${left.slice(0, 3).map(f => `${f.facadeId}: ${f.reason}`).join('; ')}${left.length > 3 ? '; ...' : ''})` : ''}`;
+    const by = (k: FacadeArrayReport['source']) => done.filter(f => f.source === k).length, merged = done.reduce((t, f) => t + (f.merged ?? 0), 0);
+    return `window arrays (${r.version}): ${done.length} of ${r.facades.length} facades brought onto their array (${tiers} tiers; the lattice from the boxes on ${by('boxes')}, from the photo's own periodicity on ${by('photo')}, the boxes' with ${merged} sub-boxes merged into their windows on ${by('merged')}; of ${sum('boxesIn')} boxes ${sum('on')} on the lattice, ${sum('snapped')} moved to their site, ${sum('replaced')} replaced by the lattice's box and ${folded} strips folded into its cells (photo-inferred), ${sum('rejected')} dropped, ${done.reduce((t, f) => t + (f.kept ?? 0), 0)} of another size kept as read; ${sum('added')} added at the empty sites inside the rows and columns the array holds, where the photo does not read the opposite of a window, and ${done.reduce((t, f) => t + (f.continued?.sites ?? 0), 0)} stepped on into blank bands the photo never reached or left featureless (generated))${left.length ? `; ${left.length} left as fitted (${left.slice(0, 3).map(f => `${f.facadeId}: ${f.reason}`).join('; ')}${left.length > 3 ? '; ...' : ''})` : ''}`;
 }

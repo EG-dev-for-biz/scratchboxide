@@ -10,7 +10,8 @@
 /**
  * The window array (pipeline-k/window-array.ts) on synthetic facades drawn with a known grid: dark 1.2 x 2 m windows every
  * 3 m along the wall and every 4 m up it on a light wall. The boxes given are the window fit's as a dim lower half would
- * leave them (off the grid, oversized), as two genuine tiers, with a span nothing was read on, and with no grid at all.
+ * leave them (off the grid, oversized), as two genuine tiers, with a span nothing was read on, with no grid at all, read
+ * at a crown only, read as halves, and none at all (the photo's own lattice).
  */
 
 import * as fs from 'fs';
@@ -210,17 +211,96 @@ describe('the window array', () => {
         expect(midOut.rects).toHaveLength(150);
     });
 
-    it('does not carry a lattice read at the crown down a facade it never read, however window-like the surface', () => {
+    it('carries a lattice read at the crown down the facade storey by storey while the photo shows the array, and stops where it stops', () => {
         const truth: WindowRect[] = [];
         for (let j = 0; j < 15; j++) for (let i = 0; i < 10; i++) truth.push(site(i, j));
         // the whole grid drawn, boxes read on the top three rows only (with one site missing)
         const given = truth.filter(r => r[1] < site(0, 3)[1] && !(r[0] === site(5, 1)[0] && r[1] === site(5, 1)[1]));
         const out = inferWindowArray({ rects: given }, photo(truth), allValid(), undefined, PX);
         expect(out.report.reason).toBeUndefined();
-        // the missing site and at most two rows below the read ones
-        expect(out.report.added).toBeLessThanOrEqual(21);
-        expect(out.report.added).toBeGreaterThanOrEqual(1);
-        for (const r of out.rects) expect(r[1]).toBeLessThan(site(0, 5)[1] + 1);
+        expect(out.rects).toHaveLength(150);
+        expect(out.report.added).toBe(121);
+        // the grid drawn on the top eight rows only, plain wall below: the step stops at the first row of wall
+        const eight = truth.filter(r => r[1] < site(0, 8)[1]);
+        const out2 = inferWindowArray({ rects: given }, photo(eight), allValid(), undefined, PX);
+        expect(out2.report.reason).toBeUndefined();
+        expect(out2.rects).toHaveLength(80);
+        for (const r of out2.rects) expect(r[1]).toBeLessThan(site(0, 8)[1]);
+    });
+
+    it('reads the lattice from the photo alone where the boxes give none, and sizes the window from the photo', () => {
+        const truth: WindowRect[] = [];
+        for (let j = 0; j < 15; j++) for (let i = 0; i < 10; i++) truth.push(site(i, j));
+        // five boxes, read at random (no lattice among them); the photo shows the whole array
+        const rnd = lcg(5);
+        const given: WindowRect[] = Array.from({ length: 5 }, () => { const x = Math.round(rnd() * (W - 30)), y = Math.round(rnd() * (H - 30)); return [x, y, x + 25, y + 8] as WindowRect; });
+        const out = inferWindowArray({ rects: given }, photo(truth), allValid(), undefined, PX);
+        expect(out.report.reason).toBeUndefined();
+        expect(out.report.source).toBe('photo');
+        expect(out.report.seed!.clear).toBe(true);
+        expect(Math.abs(out.report.colPitchM! - 3)).toBeLessThan(0.1); expect(Math.abs(out.report.tiers![0].rowPitchM - 4)).toBeLessThan(0.1);
+        expect(out.report.tiers![0].boxM[0]).toBeCloseTo(1.2, 0); expect(out.report.tiers![0].boxM[1]).toBeCloseTo(2, 0);
+        // every site filled (generated) but those under a random box, the five random boxes kept as read
+        const onGrid = out.rects.filter(r => rmsToGrid([r]) < 0.05);
+        expect(onGrid.length).toBeGreaterThanOrEqual(148);
+        expect(out.report.kept).toBe(5);
+        expect(out.generated!.length).toBe(onGrid.length);
+        // and with no boxes at all: the photo's own lattice, every site generated
+        const none = inferWindowArray({ rects: [] }, photo(truth), allValid(), undefined, PX);
+        expect(none.report.reason).toBeUndefined();
+        expect(none.report.source).toBe('photo');
+        expect(none.rects).toHaveLength(150); expect(none.generated!.length).toBe(150);
+        // and on a plain wall with nothing periodic: nothing
+        const wall = inferWindowArray({ rects: [] }, photo([]), allValid(), undefined, PX);
+        expect(wall.report.reason).toBeDefined();
+    });
+
+    it('replaces a crown\'s lattice by the photo\'s where the slab below shows another, the crown a tier of its own', () => {
+        // a slab of 12 storeys at 4 m under a crown of four rows of louvres 0.9 m apart; only the louvres were read
+        const slab: WindowRect[] = [];
+        for (let j = 3; j < 15; j++) for (let i = 0; i < 10; i++) slab.push(site(i, j));
+        const louvres: WindowRect[] = [];
+        for (let j = 0; j < 4; j++) for (let i = 0; i < 10; i++) louvres.push(site(i, j, 2.4 / PX, 0.5 / PX, 0.9 / PX, 1.2 / PX));
+        const out = inferWindowArray({ rects: louvres }, photo([...slab, ...louvres]), allValid(), undefined, PX);
+        expect(out.report.reason).toBeUndefined();
+        expect(out.report.source).toBe('photo');
+        expect(Math.abs(out.report.tiers![0].rowPitchM - 4)).toBeLessThan(0.1);
+        // the louvres stand as a tier of their own on the photo's lattice (their rows off it, their own pitch clean), the slab filled
+        expect(out.report.tiers).toHaveLength(2);
+        expect(out.report.on).toBe(40);
+        expect(out.report.added).toBe(120);
+        expect(out.rects).toHaveLength(160);
+    });
+
+    it('merges sub-boxes read apart into one window where the photo\'s storey is a multiple of the boxes\' pitch', () => {
+        const truth: WindowRect[] = [];
+        for (let j = 0; j < 15; j++) for (let i = 0; i < 10; i++) truth.push(site(i, j));
+        // every window read as its upper and lower half (a transom across it)
+        const halves = truth.flatMap(r => { const m = Math.round((r[1] + r[3]) / 2); return [[r[0], r[1], r[2], m], [r[0], m, r[2], r[3]]] as WindowRect[]; });
+        const out = inferWindowArray({ rects: halves }, photo(truth), allValid(), undefined, PX);
+        expect(out.report.reason).toBeUndefined();
+        expect(out.report.source).toBe('merged');
+        expect(out.report.merged).toBe(300); expect(out.report.mergedBy).toEqual({ rows: 2 });
+        expect(Math.abs(out.report.tiers![0].rowPitchM - 4)).toBeLessThan(0.1);
+        expect(out.rects).toHaveLength(150);
+        for (const r of out.rects) expect(r[3] - r[1]).toBeCloseTo(BH, 0);
+        // the halves are the windows' panes
+        expect(out.panes!.length).toBe(300);
+    });
+
+    it('continues over an occluded span inside the array, as the lattice does, and reports it', () => {
+        const truth: WindowRect[] = [];
+        for (let j = 0; j < 15; j++) for (let i = 0; i < 10; i++) truth.push(site(i, j));
+        // columns 4 and 5 stood behind something, boxes read on both sides of them
+        const occluded = new Uint8Array(W * H), valid = allValid();
+        for (let y = 0; y < H; y++) for (let x = 4 * COL; x < 6 * COL; x++) { occluded[y * W + x] = 1; valid[y * W + x] = 0; }
+        const given = truth.filter(r => r[2] <= 4 * COL || r[0] >= 6 * COL);
+        const out = inferWindowArray({ rects: given }, photo(truth), valid, occluded, PX);
+        expect(out.report.reason).toBeUndefined();
+        expect(out.rects).toHaveLength(150);
+        expect(out.report.continued!.sites).toBe(30); expect(out.report.continued!.cols).toBe(2);
+        expect(out.report.empty!.occluded).toBe(30);
+        expect(out.generated!.length).toBe(30);
     });
 
     it('leaves a facade alone when its lattice would drop many boxes as second boxes on taken sites', () => {
