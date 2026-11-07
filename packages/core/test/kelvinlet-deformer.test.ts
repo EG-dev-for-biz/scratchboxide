@@ -42,7 +42,9 @@ async function runNativeChecks(): Promise<any> {
         name: 'test_kelvinlet',
         timeoutMs: 600_000
     });
-    checks = JSON.parse(execFileSync(built.binaryPath, [path.join(WORK, 'proof')], { encoding: 'utf8', maxBuffer: 1 << 24 }));
+    // Opt-in proof on real data: SCRATCHBOX_KELVINLET_REAL="name:/path/a.glb;name2:/path/b.glb:u,v,w" (copies cut from cached tiles or builds).
+    const real = (process.env.SCRATCHBOX_KELVINLET_REAL || '').split(';').filter(Boolean);
+    checks = JSON.parse(execFileSync(built.binaryPath, [path.join(WORK, 'proof'), ...real], { encoding: 'utf8', maxBuffer: 1 << 24 }));
     return checks;
 }
 
@@ -102,16 +104,23 @@ describe('Kelvinlet deformer (native, on a sphere and a revolved vase)', () => {
         expect(c.maskedMaxMove).toBe(0);
     }, 600_000);
 
-    it('renders the plain-falloff brushes against the Kelvinlet loads (sphere and vase)', async () => {
+    it('renders the plain-falloff brushes against the Kelvinlet loads (sphere, vase and any real meshes given)', async () => {
         await runNativeChecks();
         fs.mkdirSync(SHOTS, { recursive: true });
-        for (const shape of ['sphere', 'vase']) {
+        const shapes = fs.readdirSync(path.join(WORK, 'proof')).filter(f => f.endsWith('_load.json')).map(f => f.replace(/_load\.json$/, ''));
+        expect(shapes).toEqual(expect.arrayContaining(['sphere', 'vase']));
+        for (const shape of shapes) {
             const { min, max } = readGlbPositions(path.join(WORK, 'proof', `${shape}_original.glb`));
-            const cx = (min[0] + max[0]) / 2, cy = (min[1] + max[1]) / 2, cz = (min[2] + max[2]) / 2;
-            const span = Math.max(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
+            let cx = (min[0] + max[0]) / 2, cy = (min[1] + max[1]) / 2, cz = (min[2] + max[2]) / 2;
+            let span = Math.max(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
+            const load = JSON.parse(fs.readFileSync(path.join(WORK, 'proof', `${shape}_load.json`), 'utf8'));
+            // A shape much larger than its load is framed on the load point, 12 epsilon across.
+            if (12 * load.epsilon < span) {
+                [cx, cy, cz] = load.point as number[];
+                span = 12 * load.epsilon;
+            }
             const camera = { x: cx + span * 1.05, y: cy + span * 0.45, z: cz + span * 1.4, targetX: cx, targetY: cy, targetZ: cz, fov: 45 };
             // The side view: looking across the load's normal, so a grab along it shows on the silhouette.
-            const load = JSON.parse(fs.readFileSync(path.join(WORK, 'proof', `${shape}_load.json`), 'utf8'));
             const n = load.normal as number[];
             const sx = n[2], sz = -n[0], sl = Math.hypot(sx, sz) || 1;  // horizontal, perpendicular to the normal
             const side = { x: cx + (sx / sl) * span * 1.9, y: cy + span * 0.15, z: cz + (sz / sl) * span * 1.9, targetX: cx + n[0] * span * 0.15, targetY: cy, targetZ: cz + n[2] * span * 0.15, fov: 45 };

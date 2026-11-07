@@ -3,7 +3,8 @@
  *
  * Kelvinlet deformer checks on real meshes (a UV sphere and a revolved vase), printed as one JSON object for
  * packages/core/test/kelvinlet-deformer.test.ts. With an output directory it also writes the proof meshes: each
- * shape untouched, under the shaper's plain-falloff brushes and under the Kelvinlet loads (grab, twist, pinch).
+ * shape untouched, under the shaper's plain-falloff brushes and under the Kelvinlet loads (grab, twist, pinch); further
+ * name:path arguments add meshes read from disk (e.g. a copy cut from cached tiles) to the proof.
  ********************************************************************************/
 
 #include "scratchbox_kelvinlet.hpp"
@@ -88,6 +89,45 @@ static void writeGlb(const ScratchboxMesh& m, const std::string& path) {
     const std::vector<uint8_t> bytes = io::GlbWriter::writeGlb(m);
     std::ofstream f(path, std::ios::binary);
     f.write(reinterpret_cast<const char*>(bytes.data()), (std::streamsize)bytes.size());
+}
+
+/**
+ * The proof meshes for one shape: untouched, under the shaper's plain-falloff brushes (radius 3 eps) and under the
+ * Kelvinlet loads at the same load point (grab 1.4 eps along the normal, twist 1.2 rad about the vertical, pinch).
+ */
+static void writeProof(const std::string& outDir, const std::string& name, const ScratchboxMesh& base, size_t vi, float eps) {
+    const Vec3 lp = base.vertices[vi].position;
+    Vec3 n = base.vertices[vi].normal;
+    n = n.lengthSq() > 1e-12f ? n.normalized() : Vec3(1, 0, 0);
+    Vec3 t = Vec3(0, 1, 0).cross(n);
+    t = t.lengthSq() > 1e-8f ? t.normalized() : Vec3(1, 0, 0);
+    const float plainR = 3.0f * eps;   // where the plain brush's falloff reaches zero
+    const float grab = 1.43f * eps, plainPinch = 0.43f * eps;
+    writeGlb(base, outDir + "/" + name + "_original.glb");
+    {
+        std::ofstream lf(outDir + "/" + name + "_load.json");
+        lf << "{\"point\":[" << lp.x << "," << lp.y << "," << lp.z << "],\"normal\":[" << n.x << "," << n.y << "," << n.z << "],\"epsilon\":" << eps << "}";
+    }
+    kv::Options o; o.epsilon = eps;
+    ScratchboxMesh a = base;
+    shaper::SculptEngine::applyStroke(a, shaper::SculptBrush::Grab, lp, plainR, grab, n, shaper::SculptFalloff::Smoothstep);
+    writeGlb(a, outDir + "/" + name + "_grab_plain.glb");
+    ScratchboxMesh b = base;
+    kv::deformMesh(b, kv::Load::grab(lp, n * grab), o);
+    writeGlb(b, outDir + "/" + name + "_grab_kelvinlet.glb");
+    // Twist about the vertical through the load point: about the normal it would only slide a smooth surface over itself.
+    ScratchboxMesh c = base;
+    plainTwist(c, lp, Vec3(0, 1, 0), 1.2f, plainR);
+    writeGlb(c, outDir + "/" + name + "_twist_plain.glb");
+    ScratchboxMesh d = base;
+    kv::deformMesh(d, kv::Load::twist(lp, Vec3(0, 1, 0), 1.2f), o);
+    writeGlb(d, outDir + "/" + name + "_twist_kelvinlet.glb");
+    ScratchboxMesh e = base;
+    shaper::SculptEngine::applyStroke(e, shaper::SculptBrush::Pinch, lp, plainR, plainPinch, n, shaper::SculptFalloff::Smoothstep);
+    writeGlb(e, outDir + "/" + name + "_pinch_plain.glb");
+    ScratchboxMesh f = base;
+    kv::deformMesh(f, kv::Load::pinch(lp, t, -1.0f), o);
+    writeGlb(f, outDir + "/" + name + "_pinch_kelvinlet.glb");
 }
 
 int main(int argc, char** argv) {
@@ -253,43 +293,30 @@ int main(int argc, char** argv) {
     if (!outDir.empty()) {
         std::filesystem::create_directories(outDir);
         for (int shape = 0; shape < 2; ++shape) {
-            const std::string name = shape == 0 ? "sphere" : "vase";
             const ScratchboxMesh base = shape == 0 ? sphere() : vase();
-            // A load point on the side facing the camera, its outward normal, and a tangent.
+            // A load point on the side facing the camera.
             const Vec3 p = shape == 0 ? Vec3(0.6f, 0.3f, 0.74f).normalized() : Vec3(0.42f, -0.1f, 0.52f);
-            const size_t vi = nearestVertex(base, p);
-            const Vec3 lp = base.vertices[vi].position;
-            const Vec3 n = base.vertices[vi].normal.normalized();
-            const Vec3 t = Vec3(0, 1, 0).cross(n).normalized();
-            const float eps = shape == 0 ? 0.35f : 0.3f;
-            const float plainR = 3.0f * eps;  // the plain brush's radius: where its falloff reaches zero
-            writeGlb(base, outDir + "/" + name + "_original.glb");
-            {
-                std::ofstream lf(outDir + "/" + name + "_load.json");
-                lf << "{\"point\":[" << lp.x << "," << lp.y << "," << lp.z << "],\"normal\":[" << n.x << "," << n.y << "," << n.z << "]}";
+            writeProof(outDir, shape == 0 ? "sphere" : "vase", base, nearestVertex(base, p), shape == 0 ? 0.35f : 0.3f);
+        }
+        // Further meshes given as name:path[:u,v,w] (a copy of real data; the file is only read): the load point is the
+        // vertex nearest that fraction of the bounds (default 1, 0.6, 1: the +X +Z edge at 60% of the height),
+        // epsilon a twentieth of the diagonal.
+        for (int i = 2; i < argc; ++i) {
+            const std::string arg = argv[i];
+            const size_t c1 = arg.find(':');
+            if (c1 == std::string::npos) { std::cerr << "expected name:path[:u,v,w], got " << arg << "\n"; return 2; }
+            const size_t c2 = arg.find(':', c1 + 1);
+            const std::string path = arg.substr(c1 + 1, c2 == std::string::npos ? std::string::npos : c2 - c1 - 1);
+            float fu = 1.0f, fv = 0.6f, fw = 1.0f;
+            if (c2 != std::string::npos && std::sscanf(arg.c_str() + c2 + 1, "%f,%f,%f", &fu, &fv, &fw) != 3) {
+                std::cerr << "expected u,v,w after the path in " << arg << "\n"; return 2;
             }
-
-            ScratchboxMesh a = base;
-            shaper::SculptEngine::applyStroke(a, shaper::SculptBrush::Grab, lp, plainR, 0.5f, n, shaper::SculptFalloff::Smoothstep);
-            writeGlb(a, outDir + "/" + name + "_grab_plain.glb");
-            ScratchboxMesh b = base;
-            kv::Options o; o.epsilon = eps;
-            kv::deformMesh(b, kv::Load::grab(lp, n * 0.5f), o);
-            writeGlb(b, outDir + "/" + name + "_grab_kelvinlet.glb");
-
-            ScratchboxMesh c = base;
-            plainTwist(c, lp, Vec3(0, 1, 0), 1.2f, plainR);  // about the vertical through the load point: a normal axis only slides a smooth surface over itself
-            writeGlb(c, outDir + "/" + name + "_twist_plain.glb");
-            ScratchboxMesh d = base;
-            kv::deformMesh(d, kv::Load::twist(lp, Vec3(0, 1, 0), 1.2f), o);
-            writeGlb(d, outDir + "/" + name + "_twist_kelvinlet.glb");
-
-            ScratchboxMesh e = base;
-            shaper::SculptEngine::applyStroke(e, shaper::SculptBrush::Pinch, lp, plainR, 0.15f, n, shaper::SculptFalloff::Smoothstep);
-            writeGlb(e, outDir + "/" + name + "_pinch_plain.glb");
-            ScratchboxMesh f = base;
-            kv::deformMesh(f, kv::Load::pinch(lp, t, -1.0f), o);
-            writeGlb(f, outDir + "/" + name + "_pinch_kelvinlet.glb");
+            ScratchboxMesh base = io::GlbReader::readGlb(path);
+            base.recomputeSmoothNormals();
+            base.recomputeBounds();
+            const Vec3 lo = base.bounds.min, size = base.bounds.max - base.bounds.min;
+            const Vec3 target(lo.x + fu * size.x, lo.y + fv * size.y, lo.z + fw * size.z);
+            writeProof(outDir, arg.substr(0, c1), base, nearestVertex(base, target), 0.05f * size.length());
         }
     }
     return 0;
