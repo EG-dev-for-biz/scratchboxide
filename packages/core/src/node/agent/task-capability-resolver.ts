@@ -448,7 +448,7 @@ export class TaskCapabilityResolver {
                 nativeCapabilities.push('Multi-Brush Digital Sculpt Engine (Clay, Crease, Smooth, Flatten, Inflate)');
                 nativeCapabilities.push('Loop Subdivision & Manifold Topology Repair');
                 nativeCapabilities.push('In-App Agent Tool: mesh_apply_deformers (explicit operations on a given GLB)');
-                rationale = 'Native Scratchbox C++20 Astro 3D engine executes sub-second parametric deformers, Bernstein FFD lattices, sculpt strokes, and loop subdivision directly on meshes, compiling via Apple Clang with zero external dependencies.';
+                rationale = 'Native Scratchbox C++20 Astro 3D engine executes sub-second parametric deformers, Bernstein FFD lattices, sculpt strokes, Kelvinlet elastic loads, and loop subdivision directly on meshes, compiling via Apple Clang with zero external dependencies.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'mesh_apply_deformers or NativeMeshReshaperService',

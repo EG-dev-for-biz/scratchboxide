@@ -71,6 +71,7 @@ import { createCppRouter } from './routes/cppRoutes';
 import { createVirtualGeometryRouter } from './routes/virtualGeometryRoutes';
 import { createPathTraceRouter } from './routes/pathTraceRoutes';
 import { createMapDataRouter } from './routes/mapDataRoutes';
+import { createSkyRouter } from './routes/skyRoutes';
 import { createTileRefineRouter } from './routes/tileRefineRoutes';
 import { createTextureRouter } from './routes/textureRoutes';
 import { createMediaRouter, createVideoRouter } from './routes/mediaVideoRoutes';
@@ -703,6 +704,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/3d/virtual-geometry', createVirtualGeometryRouter(getVirtualGeometryBuildService(), routeContext));
     app.use('/3d/path-trace', createPathTraceRouter(new MetalPathTracerService(), routeContext));
     app.use('/api/map-data', createMapDataRouter(routeContext));
+    app.use('/api/sky', createSkyRouter(routeContext));
 
     // 5. Media & Video Compositor Endpoints
     const mediaRouter = createMediaRouter({
