@@ -433,8 +433,14 @@ export interface UvAtlasInput {
      * Default: max(maxSide, 8192). Still bounded, so a malformed layer cannot ask for an unbounded texture.
      */
     hardMaxSide?: number;
-    /** Angular tolerance (degrees) when clustering scan triangles into islands. */
+    /** Angular tolerance (degrees) when clustering scan triangles into islands (with islandMethod 'slim', where splits start). */
     islandNormalToleranceDeg: number;
+    /**
+     * How the scan's islands are made: 'slim' (default) grows charts and flattens each by LSCM, ABF++ and SLIM (no flipped
+     * triangles); 'orthographic' clusters by normal and projects each island on its plane. SCRATCHBOX_TWIN_UV sets the
+     * default.
+     */
+    islandMethod?: 'slim' | 'orthographic';
 }
 export type BuildUvAtlas = (input: UvAtlasInput) => Promise<UvAtlas>;
 
