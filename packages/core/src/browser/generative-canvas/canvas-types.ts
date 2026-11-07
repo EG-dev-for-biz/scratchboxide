@@ -1206,6 +1206,8 @@ export interface Scene3DData {
     weather?: import('./services/atmosphere/scene-weather').SceneWeatherState;
     /** A colour harmony grade the viewport draws on the scene's objects (sb_set_color_harmony); absent = none. */
     colorHarmony?: SceneColorHarmony;
+    /** The viewport's Parts view: the loaded models as the parts they are made of (common/spatial/model-parts-view.ts); absent = off. */
+    partsView?: import('../../common/spatial/model-parts-view').ModelPartsViewConfig;
     /** A look matched from a reference photo, drawn on the scene's objects (sb_set_look_match); absent = none. */
     lookMatch?: SceneLookMatch;
     environment?: {

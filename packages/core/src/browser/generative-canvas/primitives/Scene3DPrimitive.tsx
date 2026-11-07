@@ -163,6 +163,7 @@ import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
 import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { WeatherControl } from './scene3d/WeatherPanel';
 import { ScenePathTraceButton, ScenePathTraceLayer } from './scene3d/ScenePathTrace';
+import { ModelPartsControl, useModelPartsView } from './scene3d/ModelPartsControl';
 import { QuickBeautifyButton, type QuickBeautifyView } from './scene3d/QuickBeautifyButton';
 import { SplatEditControl } from './scene3d/SplatEditPanel';
 import { createSplatEditTool, DEFAULT_SPLAT_BRUSH, type SplatBrush, type SplatEditTool } from './scene3d/splatEditTool';
@@ -1912,6 +1913,15 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const wasmHandleRef = React.useRef<WasmMeshHandle | null>(null);
     const customMeshRegistryRef = React.useRef<CustomMeshRegistry>(new Map());
     const externalObjectsMapRef = React.useRef<Map<string, THREE.Object3D>>(new Map());
+    // the Parts view (ModelPartsControl.tsx): the loaded models as their parts, re-read whenever a model loads or unloads
+    const partsRoots = React.useCallback((): THREE.Object3D[] => {
+        const roots: THREE.Object3D[] = [...externalObjectsMapRef.current.values()].filter(o => o.parent);
+        const generated = stackRef.current?.scene?.getObjectByName(GENERATED_ROOT_NAME);
+        if (generated) roots.push(generated);
+        return roots;
+    }, []);
+    const partsRootsKey = Object.entries(externalLoadStatus).map(([id, s]) => `${id}:${s.phase}`).join('|');
+    const modelParts = useModelPartsView({ stackRef, sceneData, roots: partsRoots, rootsKey: partsRootsKey });
     // In-flight external loads live in pendingExternalLoadsRef (declared with the variant/load state above).
     const pendingGeneratedGlbParsesRef = React.useRef(0);
 
@@ -3445,6 +3455,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     const def = latestDef(obj);
                     model.name = `${EXTERNAL_OBJECT_ROOT_PREFIX}${obj.id}`;
                     model.userData.sbSourceUri = uri;
+                    // the file's own extras (a building's material classes and provenance), which the loader keeps nowhere else
+                    if (gltf.asset?.extras) model.userData.sbAssetExtras = gltf.asset.extras;
                     model.userData.sbEnvironment = isEnvironmentDef(def);
                     // `sbEnvironment` means "ground-snapping background" and is true for the whole staged build (terrain
                     // AND the hero tiles/building: every attached hero snaps onto all of it) — too broad for camera
@@ -4493,6 +4505,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
                 {/* Path traced: the scene through the Metal path tracer (ScenePathTrace.tsx) */}
                 <ScenePathTraceButton active={pathTraceOn} onToggle={() => setPathTraceOn(v => !v)} />
+
+                {/* Parts: the model as the parts it is made of (ModelPartsControl.tsx) */}
+                <ModelPartsControl state={modelParts} mutateSceneData={mutateSceneData} />
 
                 {/* Colour harmony: every hue on the objects moved toward a hue template (color-harmony.ts) */}
                 <ColorHarmonyControl

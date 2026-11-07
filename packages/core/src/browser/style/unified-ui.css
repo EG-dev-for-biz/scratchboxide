@@ -9431,6 +9431,22 @@ body.sb-light .sb-3d-budget-btn {
     gap: 8px;
 }
 .sb-3d-camera-panel:focus { outline: none; }
+/* The Parts view's panel (ModelPartsControl.tsx): groups of parts, each row a part */
+.sb-3d-parts-panel .sb-parts-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; max-height: 240px; overflow-y: auto; }
+.sb-3d-parts-panel .sb-parts-row { display: flex; align-items: center; gap: 4px; border-radius: 4px; padding: 0 2px; }
+.sb-3d-parts-panel .sb-parts-row-lit { background: rgba(255, 255, 255, 0.1); }
+.sb-3d-parts-panel .sb-parts-row-main { display: flex; gap: 6px; align-items: center; flex: 1; min-width: 0; background: none; border: 0; padding: 2px 0; color: inherit; cursor: pointer; text-align: left; font: inherit; }
+.sb-3d-parts-panel .sb-parts-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-3d-parts-panel .sb-parts-dim { color: #a1a1aa; }
+.sb-3d-parts-panel .sb-parts-swatch { width: 11px; height: 11px; border-radius: 2px; flex-shrink: 0; }
+.sb-3d-parts-panel .sb-parts-only { background: none; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 4px; padding: 0 4px; color: #a1a1aa; cursor: pointer; font: inherit; font-size: 9px; line-height: 14px; }
+.sb-3d-parts-panel .sb-parts-only:hover, .sb-3d-parts-panel .sb-parts-only-on { color: #fff; border-color: rgba(255, 255, 255, 0.5); }
+.sb-3d-parts-panel .sb-parts-only-on { background: rgba(255, 255, 255, 0.15); }
+.sb-3d-parts-panel .sb-parts-group-head { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; text-align: left; font: inherit; }
+.sb-3d-parts-panel .sb-parts-group-head h3 { white-space: nowrap; }
+.sb-3d-parts-panel .sb-parts-action { flex: 1; background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px; padding: 3px 6px; color: #e4e4e7; cursor: pointer; font: inherit; }
+.sb-3d-parts-panel .sb-parts-action:disabled { opacity: 0.5; cursor: default; }
+.sb-3d-parts-panel .sb-parts-action:not(:disabled):hover { background: rgba(255, 255, 255, 0.12); }
 .sb-3d-camera-panel .sb-cam-header { display: flex; align-items: center; justify-content: space-between; }
 .sb-3d-camera-panel .sb-cam-header > span { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .sb-3d-camera-panel .sb-cam-close {
