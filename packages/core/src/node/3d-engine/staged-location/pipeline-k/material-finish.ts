@@ -186,20 +186,22 @@ export function grainOf(pick: { by: 'appearance' | 'ranking'; conf?: number } | 
 /**
  * A class's set maps drawn at its read finish and grain (see the file comment). Each texel's roughness (ORM green) and
  * metalness (blue) is its mean plus `grain` of its deviation from it, the mean being the read value (through drawnRoughness
- * and drawnMetalness) with a confident
- * reading (a set with no metalness takes the read value even) and the set's own without; the tangent-space normal is
+ * and drawnMetalness) with a confident reading (a set with no metalness takes the read value even); without one the
+ * roughness is the set's own and the metalness 0: a set's metal is never drawn on a reading's say-so alone (nothing is
+ * drawn metal unless read as metal, user decision 2026-10-28; the Seagram's bronze classes came out at 0.8 from
+ * MetalPlates sets their reads never called metal). The tangent-space normal is
  * tilted toward flat by `grain` and, with a confident reading, by the square of the read roughness over reliefFullAt. Occlusion (red)
  * keeps its mean. The occlusion, roughness and metalness variation is drawn as far as the relief is (`relief`): a surface
  * read smooth is drawn even as well as flat. Returns new images (the inputs when nothing changes).
  */
 export function finishMaps(orm: { width: number; height: number; rgba: Uint8Array }, normal: { width: number; height: number; rgba: Uint8Array }, f: ClassFinish | undefined, grain = 1, R = FINISH_READ): { orm: typeof orm; normal: typeof normal; drawn?: DrawnFinish } {
     const sure = !!f && f.conf >= R.minConf;
-    if (!sure && grain >= 1) return { orm, normal };
     const n = orm.width * orm.height;
     let g = 0, b = 0;
     for (let k = 0; k < n; k++) { g += orm.rgba[k * 4 + 1]; b += orm.rgba[k * 4 + 2]; }
     const gMean = g / n / 255, bMean = b / n / 255;
-    const rTo = sure ? drawnRoughness(f!.roughness, R) : gMean, mTo = sure ? drawnMetalness(f!.metalness, R) : bMean;
+    if (!sure && grain >= 1 && bMean === 0) return { orm, normal };
+    const rTo = sure ? drawnRoughness(f!.roughness, R) : gMean, mTo = sure ? drawnMetalness(f!.metalness, R) : 0;
     const o = orm.rgba.slice(), clamp8 = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
     // how much of the set's own pattern is drawn: the grain, and with a confident reading the square of the read roughness
     // over reliefFullAt, on every map alike: a surface read smooth is drawn even as well as flat (the road markings in a

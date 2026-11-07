@@ -42,6 +42,13 @@ describe('pipeline K material finish', () => {
         const tilt = (img: typeof normal) => Math.max(...Array.from({ length: N }, (_, k) => Math.abs(img.rgba[k * 4] - 128)));
         // no confident reading: the set as it is
         expect(finishMaps(orm, normal, { roughness: 0.05, metalness: 0, conf: FINISH_READ.minConf - 1 }).orm).toBe(orm);
+        // no confident reading on a metal set: its roughness kept, its metalness never drawn (nothing is metal on a set's say-so)
+        const metalSet = { ...orm, rgba: orm.rgba.map((v, i) => (i % 4 === 2 ? 204 : v)) };
+        const unsure = finishMaps(metalSet, normal, { roughness: 0.3, metalness: 0.9, conf: FINISH_READ.minConf - 1 });
+        expect(Array.from({ length: N }, (_, k) => unsure.orm.rgba[k * 4 + 2])).toEqual(new Array(N).fill(0));
+        expect(Array.from({ length: N }, (_, k) => unsure.orm.rgba[k * 4 + 1])).toEqual(Array.from({ length: N }, (_, k) => orm.rgba[k * 4 + 1]));
+        expect(unsure.drawn).toMatchObject({ metallic: 0 });
+        expect(finishMaps(metalSet, normal, undefined).drawn).toMatchObject({ metallic: 0 });
         // read as smooth reflective glass (0.15): drawn as main drew glass (0.08) with the grain's ratio, a tenth of the relief, no metalness
         const glass = finishMaps(orm, normal, { roughness: 0.15, metalness: 0, conf: 85 });
         const g = Array.from({ length: N }, (_, k) => glass.orm.rgba[k * 4 + 1] / 255);
