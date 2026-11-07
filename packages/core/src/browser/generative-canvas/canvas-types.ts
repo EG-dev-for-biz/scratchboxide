@@ -1274,6 +1274,8 @@ export interface Scene3DData {
         active?: boolean;
     };
     vectorRoadmap?: VectorRoadmapConfig;
+    /** The viewport's Map data view: blob groups, Google vector map data and the roadmap over the scene (common/spatial/map-data-view.ts). */
+    mapDataView?: import('../../common/spatial/map-data-view').MapDataViewConfig;
     wasmPhysics?: {
         waveActive?: boolean;
         deformFactor?: number;
