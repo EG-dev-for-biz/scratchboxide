@@ -35,13 +35,14 @@ export const MAP_DATA_VERSION = 'map-data/v1';
 
 // ------------------------------------------------------------------------------------------------ blob groups
 
-/** Where a blob graph's labels and mesh are: labels in split/labels.bin (or beside it), the mesh its source, else welded.glb beside. */
+/** Where a blob graph's labels and mesh are: labels in split/labels.bin (or beside it), the mesh beside it (its source's name, else welded.glb), else its source. */
 export function blobGraphFiles(blobGraphPath: string, graph: BlobGraphFile): { labels: string; mesh: string } {
     const dir = path.dirname(blobGraphPath);
     const labels = [path.join(dir, 'split', 'labels.bin'), path.join(dir, 'labels.bin')].find(p => fs.existsSync(p));
     if (!labels) throw new Error(`No per-triangle labels beside the blob graph (looked for split/labels.bin and labels.bin in ${dir}).`);
     const named = graph.source?.welded;
-    const mesh = [named && fs.existsSync(named) ? named : undefined, named ? path.join(dir, path.basename(named)) : undefined, path.join(dir, 'welded.glb')]
+    // the graph's own folder first (a graph copied with its mesh reads its copy), then the path it names
+    const mesh = [named ? path.join(dir, path.basename(named)) : undefined, path.join(dir, 'welded.glb'), named && fs.existsSync(named) ? named : undefined]
         .find((p): p is string => !!p && fs.existsSync(p));
     if (!mesh) throw new Error(`The blob graph's mesh was not found (${named ?? 'no source.welded'}; nor welded.glb in ${dir}).`);
     return { labels, mesh };
@@ -92,23 +93,125 @@ export { BLOB_GROUPS_SCHEMA };
 
 // ------------------------------------------------------------------------------------------------ vector overlay
 
-/** A building's plan outlines: its extruded parts' loops, else the outer edges of its modelled volumes seen from above. */
+/**
+ * A building's plan outline: a single extruded part's own loops; several parts (storeys stepping back, plan pieces that
+ * overlap) or modelled volumes are drawn as the outline of their union, so the overlaps' inner edges are not drawn.
+ */
 export function footprintLoops(b: VectorBuilding): MapVec2[][] {
-    if (b.extruded?.length) return b.extruded.flatMap(e => e.loops);
-    // the parts of a volume-only building are its plan triangles: their boundary edges (edges used once) are the outline
-    const key = (p: MapVec2) => `${p[0].toFixed(2)},${p[1].toFixed(2)}`;
-    const edges = new Map<string, { a: MapVec2; b: MapVec2; n: number }>();
-    for (const part of b.parts) for (const loop of part) {
-        for (let i = 0; i < loop.length; i++) {
-            const a = loop[i], c = loop[(i + 1) % loop.length];
-            const ka = key(a), kc = key(c);
-            if (ka === kc) continue;
-            const k = ka < kc ? `${ka}|${kc}` : `${kc}|${ka}`;
-            const e = edges.get(k);
-            if (e) e.n++; else edges.set(k, { a, b: c, n: 1 });
+    if (b.extruded?.length === 1 && !b.volumes?.length) return b.extruded[0].loops;
+    if (b.extruded?.length) return planUnionOutline(b.extruded.map(e => e.loops), FOOTPRINT_OUTLINE_CELL_M);
+    // the parts of a volume-only building are its triangles seen from above (roofs at several levels overlap, walls are
+    // slivers): their union is rasterised and its boundary traced as cell edges, joined into runs along rows and columns
+    return planUnionOutline(b.parts, FOOTPRINT_OUTLINE_CELL_M);
+}
+
+/** Cell size the union outline of a volume-only building is traced at (m). */
+export const FOOTPRINT_OUTLINE_CELL_M = 0.5;
+
+/** The outline of the union of plan parts (each part's loops even-odd): traced on a `cell` grid, linked into closed loops and simplified to within 1.5 cells. */
+export function planUnionOutline(parts: MapVec2[][][], cell: number): MapVec2[][] {
+    let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+    for (const part of parts) for (const p of part) for (const [x, z] of p) { x0 = Math.min(x0, x); z0 = Math.min(z0, z); x1 = Math.max(x1, x); z1 = Math.max(z1, z); }
+    if (!Number.isFinite(x0)) return [];
+    x0 -= cell; z0 -= cell;
+    const nx = Math.ceil((x1 - x0) / cell) + 2, nz = Math.ceil((z1 - z0) / cell) + 2;
+    if (nx * nz > 16_000_000) return [];
+    const fill = new Uint8Array(nx * nz);
+    const xs: number[] = [];
+    // each part filled even-odd across its own loops (a courtyard stays open), the parts unioned
+    for (const part of parts) {
+        const loops = part.filter(l => l.length >= 3);
+        if (!loops.length) continue;
+        let pz0 = Infinity, pz1 = -Infinity;
+        for (const l of loops) for (const [, z] of l) { pz0 = Math.min(pz0, z); pz1 = Math.max(pz1, z); }
+        for (let k = Math.max(0, Math.floor((pz0 - z0) / cell)); k <= Math.min(nz - 1, Math.ceil((pz1 - z0) / cell)); k++) {
+            const cz = z0 + (k + 0.5) * cell;
+            xs.length = 0;
+            for (const p of loops) for (let i = 0; i < p.length; i++) {
+                const [ax, az] = p[i], [bx, bz] = p[(i + 1) % p.length];
+                if ((az <= cz) !== (bz <= cz)) xs.push(ax + ((cz - az) / (bz - az)) * (bx - ax));
+            }
+            xs.sort((a, c) => a - c);
+            for (let j = 0; j + 1 < xs.length; j += 2) {
+                for (let i = Math.max(0, Math.ceil((xs[j] - x0) / cell - 0.5)); i <= Math.min(nx - 1, Math.floor((xs[j + 1] - x0) / cell - 0.5)); i++) fill[k * nx + i] = 1;
+            }
         }
     }
-    return [...edges.values()].filter(e => e.n === 1).map(e => [e.a, e.b]);
+    const at = (i: number, k: number) => (i < 0 || k < 0 || i >= nx || k >= nz ? 0 : fill[k * nx + i]);
+    const segs: MapVec2[][] = [];
+    // horizontal edges (between rows k-1 and k), joined along x
+    for (let k = 0; k <= nz; k++) {
+        let start = -1;
+        for (let i = 0; i <= nx; i++) {
+            const edge = i < nx && at(i, k - 1) !== at(i, k);
+            if (edge && start < 0) start = i;
+            if (!edge && start >= 0) { segs.push([[x0 + start * cell, z0 + k * cell], [x0 + i * cell, z0 + k * cell]]); start = -1; }
+        }
+    }
+    // vertical edges (between columns i-1 and i), joined along z
+    for (let i = 0; i <= nx; i++) {
+        let start = -1;
+        for (let k = 0; k <= nz; k++) {
+            const edge = k < nz && at(i - 1, k) !== at(i, k);
+            if (edge && start < 0) start = k;
+            if (!edge && start >= 0) { segs.push([[x0 + i * cell, z0 + start * cell], [x0 + i * cell, z0 + k * cell]]); start = -1; }
+        }
+    }
+    // specks (a modelled volume's wall slivers seen from above) and pinholes are left out
+    const area = (l: MapVec2[]) => Math.abs(l.reduce((n, p, i) => { const q = l[(i + 1) % l.length]; return n + p[0] * q[1] - q[0] * p[1]; }, 0)) / 2;
+    return simplifyLoops(linkSegments(segs).filter(l => area(l) >= OUTLINE_MIN_LOOP_M2), cell * 1.5);
+}
+
+/** A traced outline loop (or hole) smaller than this is left out (m²). */
+export const OUTLINE_MIN_LOOP_M2 = 10;
+
+/** Axis-aligned boundary runs linked end to end into closed loops (a corner shared by two loops is left by any unused run). */
+export function linkSegments(segs: MapVec2[][]): MapVec2[][] {
+    const key = (p: MapVec2) => `${Math.round(p[0] * 1000)},${Math.round(p[1] * 1000)}`;
+    const at = new Map<string, number[]>();
+    segs.forEach((s, i) => { for (const p of s) (at.get(key(p)) ?? at.set(key(p), []).get(key(p))!).push(i); });
+    const used = new Uint8Array(segs.length);
+    const loops: MapVec2[][] = [];
+    for (let s0 = 0; s0 < segs.length; s0++) {
+        if (used[s0]) continue;
+        used[s0] = 1;
+        const loop: MapVec2[] = [segs[s0][0]];
+        let end = segs[s0][1];
+        for (let guard = 0; guard < segs.length; guard++) {
+            if (key(end) === key(loop[0])) break;
+            loop.push(end);
+            const next = (at.get(key(end)) ?? []).find(i => !used[i]);
+            if (next === undefined) break;
+            used[next] = 1;
+            end = key(segs[next][0]) === key(end) ? segs[next][1] : segs[next][0];
+        }
+        loops.push(loop);
+    }
+    return loops;
+}
+
+/** Douglas-Peucker on each closed loop (split at its farthest pair), so a 0.5 m staircase reads as the slanted wall it traces. */
+export function simplifyLoops(loops: MapVec2[][], tolM: number): MapVec2[][] {
+    const dp = (pts: MapVec2[]): MapVec2[] => {
+        if (pts.length < 3) return pts;
+        const [a, b] = [pts[0], pts[pts.length - 1]];
+        const L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1e-9;
+        let worst = -1, wd = 0;
+        for (let i = 1; i + 1 < pts.length; i++) {
+            const d = Math.abs((b[0] - a[0]) * (a[1] - pts[i][1]) - (a[0] - pts[i][0]) * (b[1] - a[1])) / L;
+            if (d > wd) { wd = d; worst = i; }
+        }
+        if (wd <= tolM) return [a, b];
+        const left = dp(pts.slice(0, worst + 1)), right = dp(pts.slice(worst));
+        return [...left.slice(0, -1), ...right];
+    };
+    return loops.map(loop => {
+        if (loop.length < 4) return loop;
+        let far = 0, fd = 0;
+        for (let i = 1; i < loop.length; i++) { const d = Math.hypot(loop[i][0] - loop[0][0], loop[i][1] - loop[0][1]); if (d > fd) { fd = d; far = i; } }
+        const first = dp(loop.slice(0, far + 1)), second = dp([...loop.slice(far), loop[0]]);
+        return [...first.slice(0, -1), ...second.slice(0, -1)];
+    });
 }
 
 export interface MapVectorOptions {
@@ -158,7 +261,8 @@ export function overlayFromEvidence(ev: VectorEvidence, o: Pick<MapVectorOptions
     const roads = centrelines.length ? measureRoadSurfaces({ roads: centrelines, grid: { ...surfaceModel(scan, 0.5), cellM: 0.5 }, within, buildingAt: look.buildingAt, groundAt: ground.groundAt }) : [];
     out.carriageways = roads.map(r => ({
         id: r.id,
-        measuredKerbShare: Math.round(r.measuredKerbShare * 1000) / 1000,
+        // from the stations themselves (road-surfaces.ts's own share is over the whole road, so a road split into runs reads above 1)
+        measuredKerbShare: r.stations.length ? Math.round((1000 * r.stations.reduce((n, s) => n + (s.left.kerb === 'measured' ? 1 : 0) + (s.right.kerb === 'measured' ? 1 : 0), 0)) / (2 * r.stations.length)) / 1000 : 0,
         stations: r.stations.map(s => ({
             x: s.x, z: s.z, nx: s.nx, nz: s.nz, y: s.profile[2],
             left: s.left.halfWidthM, right: s.right.halfWidthM,
@@ -170,10 +274,10 @@ export function overlayFromEvidence(ev: VectorEvidence, o: Pick<MapVectorOptions
     const h = new Float32Array(gnx * gnz);
     for (let k = 0; k < gnz; k++) for (let i = 0; i < gnx; i++) h[k * gnx + i] = ground.ground[Math.min(ground.nz - 1, k * step) * ground.nx + Math.min(ground.nx - 1, i * step)];
     out.ground = { x0: ground.x0, z0: ground.z0, nx: gnx, nz: gnz, cellM: ground.cellMeters * step, heightsB64: encodeFloat32B64(h), method: ground.terrainMethod };
-    const stations = roads.reduce((n, r) => n + r.stations.length, 0);
-    const share = stations ? roads.reduce((n, r) => n + r.measuredKerbShare * r.stations.length, 0) / stations : 0;
+    const stations = out.carriageways.reduce((n, c) => n + c.stations.length, 0);
+    const share = stations ? out.carriageways.reduce((n, c) => n + c.measuredKerbShare * c.stations.length, 0) / stations : 0;
     out.provenance.widths = roads.length
-        ? `carriageways measured kerb to kerb on the scan (road-surfaces.ts): ${roads.length} streets, ${stations} stations, ${Math.round(share * 100)} % of kerbs measured, the rest defaulted`
+        ? `carriageways measured kerb to kerb on the scan (road-surfaces.ts): ${roads.length} runs, ${stations} stations, ${Math.round(share * 100)} % of their kerbs measured (a stretch with no kerb on the scan is left out, its centreline still drawn)`
         : 'no carriageway could be measured on the scan: centrelines only';
     out.provenance.ground = `measured terrain of the scan (${ground.terrainMethod}), 2 m grid`;
     return out;

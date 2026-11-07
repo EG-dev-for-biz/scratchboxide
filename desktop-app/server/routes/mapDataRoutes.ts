@@ -13,6 +13,7 @@ import * as path from 'path';
 import { encodeBlobGroups } from '../../../packages/core/src/common/spatial/map-data-view';
 import { buildMapVectorOverlay, discoverBlobGraph, loadBlobGroups, RoadmapTileService, ROADMAP_ZOOM } from '../../../packages/core/src/node/spatial/map-data-service';
 import { GoogleVectorTileService } from '../../../packages/core/src/node/spatial/GoogleVectorTileService';
+import { stagedWorkspaceRoot } from '../../../packages/core/src/node/3d-engine/staged-location/stage-cache';
 import { resolveWithinRoot } from '../../../packages/core/src/node/security/path-guard';
 import { RouteContext } from './types';
 
@@ -28,7 +29,8 @@ import { RouteContext } from './types';
  */
 export function createMapDataRouter(ctx: RouteContext, deps: { roadmap?: RoadmapTileService } = {}): Router {
     const router = Router();
-    const workspaceRoot = (req: Request) => ctx.requireWorkspaceRoot(req.query.workspaceRoot);
+    // the staged builds' workspace (SCRATCHBOX_ROOT, else the repo) unless the request names one
+    const workspaceRoot = (req: Request) => ctx.requireWorkspaceRoot(typeof req.query.workspaceRoot === 'string' && req.query.workspaceRoot ? req.query.workspaceRoot : stagedWorkspaceRoot());
     const cacheDir = (root: string) => path.join(root, '.scratchbox', 'cache', 'map-data');
     const inWorkspace = (root: string, p: unknown, what: string): string => {
         if (typeof p !== 'string' || !p.trim()) throw Object.assign(new Error(`${what} is required`), { status: 400 });

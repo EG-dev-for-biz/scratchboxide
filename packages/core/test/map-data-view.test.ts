@@ -25,11 +25,13 @@ import {
     type BlobGraphFile, type BlobGroupsPayload, type MapGroundGrid
 } from '../src/common/spatial/map-data-view';
 import { LocalTangentPlane } from '../src/common/coordinate/LocalTangentPlane';
-import { discoverBlobGraph, footprintLoops, loadBlobGroups, overlayFromEvidence } from '../src/node/spatial/map-data-service';
+import { discoverBlobGraph, footprintLoops, loadBlobGroups, overlayFromEvidence, planUnionOutline } from '../src/node/spatial/map-data-service';
 import { fetchVectorEvidence } from '../src/node/3d-engine/staged-location/vector-footprints';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 
 const ORIGIN = { lat: 40.75032, lng: -73.99172 };
+
+const perimeter = (loop: Array<[number, number]>) => loop.reduce((n, p, i) => { const q = loop[(i + 1) % loop.length]; return n + Math.hypot(q[0] - p[0], q[1] - p[1]); }, 0);
 
 /** Three blobs over four triangles: one triangle unassigned; groups named as nobody anticipated. */
 function tinyGraph(): { graph: BlobGraphFile; triBlob: Int32Array; positions: Float32Array; indices: Uint32Array } {
@@ -207,9 +209,35 @@ describe('vector overlay projection', () => {
     it('outlines a volume-only building by its plan triangles\' outer edges', async () => {
         const ev = await fetchVectorEvidence({ ...ORIGIN, radiusM: 60, fetchTile: standInTiles() });
         const vol = ev.buildings.find(b => b.id.endsWith('f9'))!;
-        const edges = footprintLoops(vol);
-        expect(edges).toHaveLength(4); // the square's four sides; the shared diagonal is inside
-        for (const [a, b] of edges) expect(Math.hypot(b[0] - a[0], b[1] - a[1])).toBeCloseTo(10, 2);
+        const loops = footprintLoops(vol);
+        // one closed loop round the square, traced on the 0.5 m grid: the shared diagonal is inside and gives no edge
+        expect(loops).toHaveLength(1);
+        expect(loops[0]).toHaveLength(4);
+        expect(perimeter(loops[0])).toBeGreaterThan(38);
+        expect(perimeter(loops[0])).toBeLessThan(42);
+        const xs = loops[0].map(p => p[0]);
+        expect(Math.min(...xs)).toBeGreaterThan(19); expect(Math.max(...xs)).toBeLessThan(31);
+    });
+
+    it('traces overlapping plan pieces as one outline (roofs at several levels), a slanted wall as one edge', () => {
+        const a: Array<[number, number]> = [[0, 0], [10, 0], [10, 10], [0, 10]], b: Array<[number, number]> = [[5, 5], [15, 5], [15, 15], [5, 15]];
+        const union = planUnionOutline([[a], [b]], 0.5);
+        expect(union).toHaveLength(1);
+        expect(union[0]).toHaveLength(8);
+        expect(perimeter(union[0])).toBeGreaterThan(58); // the union's perimeter is 60 m; the overlap's inner edges are not drawn
+        expect(perimeter(union[0])).toBeLessThan(62);
+        // a square turned 30 degrees: its staircase on the grid simplifies back to about four sides
+        const c = 30 * Math.PI / 180, sq = [[-10, -10], [10, -10], [10, 10], [-10, 10]].map(([x, z]) => [x * Math.cos(c) - z * Math.sin(c), x * Math.sin(c) + z * Math.cos(c)] as [number, number]);
+        const turned = planUnionOutline([[sq]], 0.5);
+        // a courtyard (a part's inner loop) stays open: two loops
+        const ring = planUnionOutline([[[[0, 0], [20, 0], [20, 20], [0, 20]], [[5, 5], [15, 5], [15, 15], [5, 15]]]], 0.5);
+        expect(ring).toHaveLength(2);
+        // a speck beside it (a wall sliver seen from above) is not an outline
+        expect(planUnionOutline([[[[0, 0], [20, 0], [20, 20], [0, 20]]], [[[30, 0], [32, 0], [32, 2]]]], 0.5)).toHaveLength(1);
+        expect(turned).toHaveLength(1);
+        expect(turned[0].length).toBeLessThanOrEqual(8);
+        expect(perimeter(turned[0])).toBeGreaterThan(78);
+        expect(perimeter(turned[0])).toBeLessThan(84);
     });
 
     it('measures the carriageway on the scan: kerbs 5 m either side of the centreline, ground at the street', async () => {
