@@ -57,7 +57,6 @@ async function runUvAtlasMode(mode: 'unwrap' | 'rewrap', inputGlbPath: string, o
                 maxAngleStretch: asNumber(args.maxAngleStretch),
                 maxAreaDistortion: asNumber(args.maxAreaDistortion),
                 chartNormalToleranceDeg: asNumber(args.chartNormalToleranceDeg),
-                conformal: asBoolean(args.conformal, true),
                 outputImageFormat: outputImageFormat === 'png' || outputImageFormat === 'jpeg' ? outputImageFormat : 'source',
                 transferSourceGlbPath: asString(args.transferSourceGlbPath),
                 transferMaxDistanceM: asNumber(args.transferMaxDistanceM)
@@ -79,7 +78,7 @@ async function runUvAtlasMode(mode: 'unwrap' | 'rewrap', inputGlbPath: string, o
     const otherAtlases = bySize.slice(12).map(a => ({ material: a.material, status: a.status, triangles: a.triangles, charts: a.charts, size: [a.width, a.height], textures: a.textures.length, failures: a.failures }));
     const done = r.atlases.filter(a => a.status !== 'skipped');
     const parts: string[] = [];
-    parts.push(`UV ${mode}: ${done.length} of ${r.atlases.length} material atlases in ${(r.totalMs / 1000).toFixed(1)} s; ${r.charts} charts (${r.lscmCharts} LSCM, ${r.charts - r.lscmCharts} orthographic), ${r.overlappingTrianglePairs} overlapping triangle pairs.`);
+    parts.push(`UV ${mode}: ${done.length} of ${r.atlases.length} material atlases in ${(r.totalMs / 1000).toFixed(1)} s; ${r.charts} charts (${r.slimCharts} SLIM, ${r.abfCharts} ABF++, ${r.lscmCharts} LSCM, ${r.charts - r.slimCharts - r.abfCharts - r.lscmCharts} orthographic), ${r.overlappingTrianglePairs} overlapping triangle pairs.`);
     parts.push(`Distortion (area-weighted RMS): angle stretch ${f2(r.distortion.stretchRms)} (max ${f2(r.distortion.stretchMax)}), area ratio ${f2(r.distortion.areaRms)} (max ${f2(r.distortion.areaMax)}); orthographic projection of the same charts would be ${f2(r.orthographicDistortion.stretchRms)} / ${f2(r.orthographicDistortion.areaRms)}.`);
     parts.push(`Texel density ${r.texelDensity.meanTexelsPerMeter.toFixed(1)} texels/m (CV ${f2(r.texelDensity.cv)}, p5/p95 ${f2(r.texelDensity.uniformity)}); atlas utilisation ${(r.utilisation * 100).toFixed(1)}%; sizes ${[...new Set(done.map(a => `${a.width}x${a.height}`))].slice(0, 6).join(', ')}.`);
     if (mode === 'rewrap') parts.push(`Rebaked ${r.texturesRebaked.length} textures (${r.texturesRebaked.slice(0, 4).map(t => `${t.slots.join('+')} ${t.outputSize[0]}x${t.outputSize[1]}`).join('; ')}${r.texturesRebaked.length > 4 ? '; ...' : ''}).`);
@@ -98,7 +97,7 @@ async function runUvAtlasMode(mode: 'unwrap' | 'rewrap', inputGlbPath: string, o
 export const ALGORITHMIC_UV_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
         name: 'algorithmic_uv_unwrap_rewrap',
-        description: 'UV unwrap, texture rewrap, or PBR maps for a .glb, by mode. "unwrap": new non-overlapping UV charts for every triangle primitive (normal-clustered charts; each chart\'s distortion is measured as angle stretch and area ratio, charts the orthographic projection distorts are flattened conformally with LSCM, and charts neither passes are split), packed into one atlas per material with gutters at one texel density, written as a new TEXCOORD set (TEXCOORD_0 when the mesh had none); textures are untouched. "rewrap": the same atlas replaces TEXCOORD_0 and every texture the material uses (baseColor, normal, metallicRoughness, occlusion, emissive and extension textures) is rebaked into it from the old UVs (exact per-triangle transfer, bilinear, gutter dilation); normal maps are converted to the new tangent frame and TANGENT is rewritten; with transferSourceGlbPath the textures are baked instead from another mesh by nearest surface (e.g. a remesh from the scan it came from). A texture that cannot be rebaked is reported with the reason and its material keeps its old UVs. Reports charts (orthographic / LSCM), distortion per chart and overall, texel-density uniformity, atlas utilisation and size, and each texture rebaked with its size. "preserve-100-lock" (default): geometry and UVs untouched; computes a normal map and an ORM texture (R = AO, G = roughness, B = metalness) from each baseColor image\'s pixels (image heuristics, not measurements) and attaches them; optional albedo de-lighting rewrites the baseColor image.',
+        description: 'UV unwrap, texture rewrap, or PBR maps for a .glb, by mode. "unwrap": new non-overlapping UV charts for every triangle primitive (charts grown by normal deviation, roundness, boundary straightness and creases; a chart whose orthographic projection is not isometric is flattened by LSCM, then ABF++, then SLIM, which minimises symmetric Dirichlet distortion with no flipped triangles; each chart\'s angle stretch and area ratio are measured and a chart that still fails is split), packed as rasterised masks so charts nest, into one atlas per material with gutters at one texel density, written as a new TEXCOORD set (TEXCOORD_0 when the mesh had none); textures are untouched. "rewrap": the same atlas replaces TEXCOORD_0 and every texture the material uses (baseColor, normal, metallicRoughness, occlusion, emissive and extension textures) is rebaked into it from the old UVs (exact per-triangle transfer, bilinear, gutter dilation); normal maps are converted to the new tangent frame and TANGENT is rewritten; with transferSourceGlbPath the textures are baked instead from another mesh by nearest surface (e.g. a remesh from the scan it came from). A texture that cannot be rebaked is reported with the reason and its material keeps its old UVs. Reports charts (orthographic / LSCM / ABF++ / SLIM), distortion per chart and overall, texel-density uniformity, atlas utilisation and size, and each texture rebaked with its size. "preserve-100-lock" (default): geometry and UVs untouched; computes a normal map and an ORM texture (R = AO, G = roughness, B = metalness) from each baseColor image\'s pixels (image heuristics, not measurements) and attaches them; optional albedo de-lighting rewrites the baseColor image.',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -136,11 +135,7 @@ export const ALGORITHMIC_UV_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 chartNormalToleranceDeg: {
                     type: 'NUMBER',
-                    description: 'unwrap / rewrap: normal tolerance in degrees charts are grown with before distortion splits them (default 60).'
-                },
-                conformal: {
-                    type: 'BOOLEAN',
-                    description: 'unwrap / rewrap: flatten charts the orthographic projection distorts with LSCM before splitting them (default true).'
+                    description: 'unwrap / rewrap: normal tolerance in degrees a chart that cannot be flattened is split from (default 60).'
                 },
                 transferSourceGlbPath: {
                     type: 'STRING',

@@ -15,7 +15,8 @@
  *   not fold it (all triangles one orientation in the chart); otherwise the node goes to the island path and the reason
  *   is recorded.
  * - Everything else (the remeshed scan, pass-through regions) is unwrapped by the native island unwrapper
- *   (scratchbox_uv_atlas.hpp via scripts/uv_atlas.cpp, built with clang++ on first use and run through a pipe; no files).
+ *   (scripts/uv_atlas.cpp, built with clang++ on first use and run through a pipe; no files): charts grown and flattened
+ *   by LSCM, ABF++ and SLIM (scratchbox_uv_rewrap.hpp's chart stage), never overlapping, no flipped triangle.
  * - Charts and islands are packed together into one atlas at one texel density; when they do not fit in `maxSide`, the
  *   density goes down for all of them (the measured density is reported per map).
  * - Every rect carries `gutterTexels` of padding on each side; covered texels are dilated into it (gutter = 1).
@@ -120,7 +121,7 @@ const primKey = (p: { nodeIndex: number; primitiveIndex: number }) => `${p.nodeI
 // =============================================================================
 
 const CLI_SOURCE = path.join('scripts', 'uv_atlas.cpp');
-const HEADER = path.join('packages', 'core', 'src', 'native', '3d-engine', 'include', 'scratchbox_uv_atlas.hpp');
+const HEADERS = ['scratchbox_uv_atlas.hpp', 'scratchbox_uv_rewrap.hpp'].map(h => path.join('packages', 'core', 'src', 'native', '3d-engine', 'include', h));
 const INCLUDE_DIR = path.join('packages', 'core', 'src', 'native', '3d-engine', 'include');
 const BINARY = path.join('build', '3d-native', 'uv_atlas');
 
@@ -145,14 +146,14 @@ export function ensureUvAtlasBinary(repoRoot = findUvAtlasRepoRoot()): Promise<{
     const pending = building.get(bin);
     if (pending) return pending;
     const job = (async () => {
-        const deps = [path.join(repoRoot, CLI_SOURCE), path.join(repoRoot, HEADER)];
+        const deps = [path.join(repoRoot, CLI_SOURCE), ...HEADERS.map(h => path.join(repoRoot, h))];
         const binTime = fs.existsSync(bin) ? fs.statSync(bin).mtimeMs : -1;
         if (binTime >= 0 && deps.every(d => fs.existsSync(d) && fs.statSync(d).mtimeMs <= binTime)) return { path: bin, built: false };
         fs.mkdirSync(path.dirname(bin), { recursive: true });
         const tmp = `${bin}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
         const args = ['-std=c++20', '-O3'];
         if (process.env.SCRATCHBOX_NATIVE_ARCH === '1') args.push('-march=native');
-        args.push('-I', path.join(repoRoot, INCLUDE_DIR), deps[0], '-o', tmp);
+        args.push('-I', path.join(repoRoot, INCLUDE_DIR), deps[0], '-o', tmp, '-pthread');
         await new Promise<void>((resolve, reject) => {
             execFile(process.env.CXX || 'clang++', args, { timeout: 300_000, maxBuffer: 8 * 1024 * 1024 }, (err, _out, stderr) => {
                 if (err) { fs.rmSync(tmp, { force: true }); reject(new Error(`could not build the island unwrapper: ${String(stderr || err.message).slice(-1500)}`)); } else resolve();
@@ -180,7 +181,7 @@ export async function runNativeIslands(binary: string, positions: Float32Array, 
     const V = positions.length / 3, T = indices.length / 3;
     const head = Buffer.alloc(16);
     head.write('SBUV', 0, 'latin1');
-    head.writeUInt32LE(1, 4); head.writeUInt32LE(V, 8); head.writeUInt32LE(T, 12);
+    head.writeUInt32LE(2, 4); head.writeUInt32LE(V, 8); head.writeUInt32LE(T, 12);
     const prm = Buffer.alloc(8);
     prm.writeFloatLE(params.normalToleranceDeg, 0); prm.writeFloatLE(params.minIslandAreaM2, 4);
     const asBuf = (a: Float32Array | Uint32Array) => Buffer.from(a.buffer, a.byteOffset, a.byteLength);
