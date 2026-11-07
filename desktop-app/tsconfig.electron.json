@@ -28,7 +28,8 @@
   },
   "include": [
     "electron",
-    "server"
+    "server",
+    "../packages/core/src/**/*-worker.ts"
   ],
   "exclude": [
     "electron/native/build",
