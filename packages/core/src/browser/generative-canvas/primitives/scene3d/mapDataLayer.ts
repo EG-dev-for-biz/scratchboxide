@@ -13,8 +13,9 @@
  *
  * - blob groups: the scan mesh once (one shared position buffer), one mesh per group with that group's triangles, so a
  *   district of a thousand blobs is a handful of draw calls; flat-shaded in the group's palette colour;
- * - vector data: one merged screen-width line layer each for centrelines, footprint outlines and rails (drawn through
- *   the scene, like a map over it), the measured carriageways and the areas as translucent fills on the ground, and POI
+ * - vector data: one merged screen-width line layer each for centrelines, footprint outlines and rails, hidden behind
+ *   whatever stands in front of them (centrelines and rail also show faintly through it; footprints never overlay an
+ *   object or building), the measured carriageways and the areas as translucent fills on the ground, and POI
  *   labels as screen-space sprites;
  * - the roadmap: Google's 2D tiles, each a grid draped on the measured ground.
  */
@@ -41,7 +42,7 @@ export const MAP_OVERLAY_COLOURS = {
 } as const;
 
 /** Heights above the measured ground the overlay draws at (m). */
-const LIFT = { area: 0.25, carriageway: 0.3, roadmap: 0.4, line: 0.6, poi: 8 };
+const LIFT = { area: 0.25, carriageway: 0.3, roadmap: 0.4, line: 0.6, footprint: 0.3, poi: 8 };
 
 export interface MapLegendRow { key: string; label: string; colour: string; count?: number; detail?: string }
 
@@ -130,14 +131,15 @@ export class MapDataLayer {
     /** Draws the vector overlay on the measured ground; returns the legend rows of the areas (by most specific code). */
     setVector(o: MapVectorOverlay, heightAt: (x: number, z: number) => number, resolution: THREE.Vector2): MapLegendRow[] {
         for (const l of ['roads', 'footprints', 'areas', 'rails', 'pois'] as LayerKey[]) this.clear(l);
-        // a line layer: drawn where it is in front, plus a faint copy through what stands over it (a footprint under its roof)
-        const lineLayer = (segments: number[], colour: string, widthPx: number, name: string, dashed = false): THREE.Group | undefined => {
+        // a line layer, drawn only where nothing stands in front of it; `through` adds a faint copy seen through what stands
+        // over it (footprints have none: an object or building is never overlaid with its outline)
+        const lineLayer = (segments: number[], colour: string, widthPx: number, name: string, dashed = false, through = true): THREE.Group | undefined => {
             if (!segments.length) return undefined;
             const geom = new LineSegmentsGeometry();
             geom.setPositions(segments);
             const group = new THREE.Group();
             group.name = name;
-            for (const [front, opacity] of [[true, 0.95], [false, 0.25]] as Array<[boolean, number]>) {
+            for (const [front, opacity] of ([[true, 0.95], [false, 0.25]] as Array<[boolean, number]>).filter(([f]) => f || through)) {
                 const mat = new LineMaterial({ color: colour, linewidth: widthPx, worldUnits: false, transparent: true, opacity, depthTest: front, depthWrite: false, toneMapped: false, dashed, dashSize: 3, gapSize: 2 });
                 mat.resolution.copy(resolution);
                 this.lineMaterials.push(mat);
@@ -186,8 +188,8 @@ export class MapDataLayer {
 
         // footprints: outlines at the ground
         const fp: number[] = [];
-        for (const f of o.footprints) for (const loop of f.loops) drape(loop, LIFT.line, fp, loop.length > 2);
-        const fl = lineLayer(fp, MAP_OVERLAY_COLOURS.footprint, 2, 'sb-map-footprints');
+        for (const f of o.footprints) for (const loop of f.loops) drape(loop, LIFT.footprint, fp, loop.length > 2);
+        const fl = lineLayer(fp, MAP_OVERLAY_COLOURS.footprint, 2, 'sb-map-footprints', false, false);
         if (fl) this.layers.footprints.add(fl);
 
         // rails
