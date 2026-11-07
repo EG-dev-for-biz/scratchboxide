@@ -290,6 +290,9 @@ inline BakeResult bakeAtlas(const BakeRequest& r) {
     out.normal.rgb.assign(static_cast<size_t>(width) * height * 3, 0);
     // Flat tangent-space normal everywhere a cell does not reach, so bilinear taps at a cell's rim stay sane.
     for (size_t i = 0; i < out.normal.rgb.size(); i += 3) { out.normal.rgb[i] = 128; out.normal.rgb[i + 1] = 128; out.normal.rgb[i + 2] = 255; }
+    // Emitted radiance in linear float, quantized after the bake against its own peak (emissionScale).
+    std::vector<float> emission;
+    if (r.sampleEmission) emission.assign(static_cast<size_t>(width) * height * 3, 0.0f);
 
     // Corner uvs: p at the lower-right corner, q at the upper-left, the third vertices at lower-left / upper-right.
     double texelWorldSum = 0.0;
@@ -440,6 +443,11 @@ inline BakeResult bakeAtlas(const BakeRequest& r) {
                         const float sw = 1.0f - su - sv;
                         const F2 uv(uv0.x * sw + uv1.x * su + uv2.x * sv, uv0.y * sw + uv1.y * su + uv2.y * sv);
                         const F3 color = r.sample(src.materials[srcTri], uv);
+                        if (!emission.empty()) {
+                            const F3 e = r.sampleEmission(src.materials[srcTri], uv);
+                            float* ex = emission.data() + (static_cast<size_t>(cell.y + j) * width + (cell.x + i)) * 3;
+                            ex[0] = e.x; ex[1] = e.y; ex[2] = e.z;
+                        }
 
                         // The source's shading normal there: its vertex normals, refined by its own normal map if any.
                         const uint32_t s0 = src.tris[srcTri * 3], s1 = src.tris[srcTri * 3 + 1], s2 = src.tris[srcTri * 3 + 2];
@@ -476,6 +484,17 @@ inline BakeResult bakeAtlas(const BakeRequest& r) {
     for (unsigned w = 0; w < workers; ++w) pool.emplace_back(worker);
     for (auto& th : pool) th.join();
     out.missed = missed.load();
+    float peak = 0.0f;
+    for (float e : emission) peak = std::max(peak, e);
+    if (peak > 0.0f) {
+        out.emission.width = width;
+        out.emission.height = height;
+        out.emission.rgb.resize(emission.size());
+        for (size_t i = 0; i < emission.size(); ++i) {
+            out.emission.rgb[i] = static_cast<uint8_t>(std::clamp(view::srgbEncode(emission[i] / peak) * 255.0f + 0.5f, 0.0f, 255.0f));
+        }
+        out.emissionScale = peak;
+    }
     return out;
 }
 
