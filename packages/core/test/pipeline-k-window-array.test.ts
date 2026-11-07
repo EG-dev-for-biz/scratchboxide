@@ -364,6 +364,34 @@ describe('the window array', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
+    it('reads the building\'s storeys across its facades, and gives them to a face too short to correlate its own', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'window-array-'));
+        // facade 1: the full 15-storey grid; facade 2: a short face of two storeys (its photo cannot correlate rows: fewer
+        // than three periods) with four boxes read, on the same floors in world height (both frames share Y = orthoTMax - y px)
+        const truth: WindowRect[] = [];
+        for (let j = 0; j < 15; j++) for (let i = 0; i < 10; i++) truth.push(site(i, j));
+        const H2 = 2 * ROW + 10, short: WindowRect[] = [];
+        for (let j = 0; j < 2; j++) for (let i = 0; i < 10; i++) short.push(site(i, j));
+        const img2 = { rgba: photo(short).rgba.subarray(0, W * H2 * 4), width: W, height: H2 };
+        fs.writeFileSync(path.join(dir, 'facade_1.png'), encodePng(W, H, photo(truth).rgba, 4));
+        fs.writeFileSync(path.join(dir, 'facade_2.png'), encodePng(W, H2, img2.rgba, 4));
+        const frame = (id: number, h: number) => ({ facadeId: id, image: `facade_${id}.png`, width: W, height: h, pixel: PX, coverage: 1, orthoSMin: 0, orthoTMax: H * PX, texel: PX, centroid: [0, 0, 0], axisT: [0, 1, 0] });
+        fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades: [frame(1, H), frame(2, H2)] }));
+        const fit: WindowFitFile = { version: WINDOW_FIT_VERSION, params: WINDOW_FIT_PARAMS, ms: 0, facades: [{ facadeId: 1, width: W, height: H, rects: truth, panes: [], bands: [], ms: 0 }, { facadeId: 2, width: W, height: H2, rects: short.slice(0, 4), panes: [], bands: [], ms: 0 }] };
+        fs.writeFileSync(path.join(dir, 'window_fit.json'), JSON.stringify(fit));
+        const rep = inferWindowArrays(dir, fit);
+        expect(rep.building).toBeDefined();
+        expect(rep.building!.pitchM).toBeCloseTo(4, 1);
+        const b = rep.facades.find(f => f.facadeId === 2)!;
+        expect(b.reason).toBeUndefined();
+        expect(b.rowsFrom).toBe('building');
+        expect(Math.abs(b.tiers![0].rowPitchM - 4)).toBeLessThan(0.1);
+        const e2 = (JSON.parse(fs.readFileSync(path.join(dir, 'window_fit.json'), 'utf8')) as WindowFitFile).facades[1] as Extract<WindowFitFile['facades'][number], { rects: WindowRect[] }>;
+        expect(e2.rects).toHaveLength(20);
+        expect(describeWindowArrays(rep)).toContain("the building's storeys 4 m from");
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
     it('is a step of the build graph, with a switch', () => {
         expect(BUILD_STEPS.find(s => s.key === 'remesh.windowArray')?.stage).toBe('remesh');
         expect(TOGGLEABLE_STEPS.has('remesh.windowArray')).toBe(true);
