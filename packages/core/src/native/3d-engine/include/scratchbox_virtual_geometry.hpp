@@ -661,7 +661,10 @@ inline bool sameUv(const F2& a, const F2& b) {
 }
 
 /**
- * Vertices weld by exact position, so the mesh is watertight for clustering and simplification.
+ * Vertices weld by exact position, so the mesh is watertight for clustering and simplification; then the
+ * positions on an open edge (an edge with one triangle) within kOutlineWeldM of each other weld too. A
+ * Pipeline K twin is built of separate facade pieces whose outlines meet within millimetres without sharing
+ * vertices; simplified apart, their seams open into cracks that show the inner layers through the facade.
  * A triangle corner keeps its own uv (cornerUv) and every triangle its glTF material: UV seams and
  * material borders are attributes on the position mesh, not splits in it. Normals are area-weighted
  * per position.
@@ -680,6 +683,11 @@ struct WeldedMesh {
     uint32_t sourceTriangles{0};
     uint32_t droppedDegenerate{0};
 };
+
+/** Open-edge positions within this distance (metres) weld into one (see WeldedMesh). Measured 2026-11-07 on the
+ * ESB and 30 Rock Pipeline K twins at DAG level 3: holes 1,458 -> 276 and 896 -> 193 px, stray texels 6,304 -> 268
+ * and 2,197 -> 694; 3 cm opened larger errors on 30 Rock. */
+constexpr float kOutlineWeldM = 0.01f;
 
 inline WeldedMesh weld(const SourceMesh& src) {
     WeldedMesh out;
@@ -719,6 +727,52 @@ inline WeldedMesh weld(const SourceMesh& src) {
         } else {
             remap[i] = it->second;
         }
+    }
+
+    // Outline weld: each position on an open edge takes the nearest earlier open-edge position within
+    // kOutlineWeldM (searched over the 27 grid cells around it); positions nothing uses any more are dropped.
+    {
+        std::unordered_map<uint64_t, uint32_t> edgeUse;
+        edgeUse.reserve(src.indices.size());
+        auto edgeKey = [](uint32_t a, uint32_t b) { return a < b ? (uint64_t(a) << 32 | b) : (uint64_t(b) << 32 | a); };
+        for (size_t t = 0; t + 2 < src.indices.size(); t += 3) {
+            const uint32_t c[3] = { remap[src.indices[t]], remap[src.indices[t + 1]], remap[src.indices[t + 2]] };
+            if (c[0] == c[1] || c[1] == c[2] || c[0] == c[2]) continue;
+            for (int k = 0; k < 3; ++k) edgeUse[edgeKey(c[k], c[(k + 1) % 3])]++;
+        }
+        std::vector<uint8_t> outline(welded.size(), 0);
+        for (const auto& [k, n] : edgeUse) if (n == 1) { outline[k >> 32] = 1; outline[k & 0xffffffffu] = 1; }
+        std::vector<uint32_t> joined(welded.size());
+        for (uint32_t v = 0; v < joined.size(); ++v) joined[v] = v;
+        std::unordered_map<Key, std::vector<uint32_t>, KeyHash> cells;
+        auto cellOf = [](float x) { return static_cast<uint32_t>(static_cast<int32_t>(std::floor(x / kOutlineWeldM))); };
+        for (uint32_t v = 0; v < welded.size(); ++v) {
+            if (!outline[v]) continue;
+            const F3& p = welded[v];
+            const uint32_t cx = cellOf(p.x), cy = cellOf(p.y), cz = cellOf(p.z);
+            uint32_t best = v;
+            float bestD = kOutlineWeldM;
+            for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) for (int dz = -1; dz <= 1; ++dz) {
+                auto it = cells.find(Key{cx + uint32_t(dx), cy + uint32_t(dy), cz + uint32_t(dz)});
+                if (it == cells.end()) continue;
+                for (uint32_t w : it->second) {
+                    const float d = length(welded[w] - p);
+                    if (d <= bestD) { bestD = d; best = w; }
+                }
+            }
+            if (best != v) joined[v] = best;
+            else cells[Key{cx, cy, cz}].push_back(v);
+        }
+        std::vector<uint32_t> compact(welded.size(), std::numeric_limits<uint32_t>::max());
+        std::vector<F3> kept;
+        kept.reserve(welded.size());
+        for (uint32_t v = 0; v < welded.size(); ++v) {
+            if (joined[v] != v) continue;
+            compact[v] = static_cast<uint32_t>(kept.size());
+            kept.push_back(welded[v]);
+        }
+        for (uint32_t& r : remap) r = compact[joined[r]];
+        welded.swap(kept);
     }
 
     F3 mn(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
@@ -1383,6 +1437,21 @@ private:
             if (tr[0] == to || tr[1] == to || tr[2] == to) shared++;
         }
         if (shared == 0) return false;
+        // A collapse never leaves fewer than two triangles at the vertex it keeps: it would erase a small piece of
+        // the surface, or shrink it to one triangle, metres from where it was (on the ESB and 30 Rock twins the only
+        // collapses over 1 m RMS were these, 2.7 m and 2.1 m).
+        uint32_t survivors = 0;
+        for (uint32_t end : { from, to }) {
+            for (uint32_t t : vtris_[end]) {
+                if (!triAlive_[t]) continue;
+                const auto& tr = tri_[t];
+                const bool hasFrom = tr[0] == from || tr[1] == from || tr[2] == from;
+                const bool hasTo = tr[0] == to || tr[1] == to || tr[2] == to;
+                if (!(hasFrom && hasTo) && ++survivors >= 2) break;
+            }
+            if (survivors >= 2) break;
+        }
+        if (survivors < 2) return false;
 
         // No triangle around `from` may flip or collapse to a sliver.
         F3 target = pos(to);
