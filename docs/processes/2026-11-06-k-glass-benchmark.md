@@ -118,3 +118,19 @@ and Seagram's untextured is up half a point (3.21 vs 2.67).
    The ESB, 30 Rock and Penn 2 rows are still their 79356a68 builds (before the bay fallback and the label). Model
    calls this round: about $3 (12 branch builds, most of them answered from the store).
 
+
+## Fractional reader rects (the window-array session's note, relayed by MAIN, 2026-11-07)
+
+The reader's accepted boxes come at two decimals (`round2` in `facade-reader.ts`). Every loop over them in the glass branch, audited:
+
+| Consumer | How it reads a rect | Before | Now |
+|---|---|---|---|
+| wall grammar window mask (`wallEvidence`, TS and `scratchbox_wall_grammar.hpp` `decodeMember`) | fills each row of the rect in the texel index | the fractional top edge was used as the row: `y * W + x0` with `y = 10.6` lands 0.6 of a row further on, so the fill was shifted sideways by a fraction of the row width (TypedArray `fill` and the native `fillIndex` both truncate the index); on a reader plane the column vote saw its windows in the wrong columns | floor at the start, ceil at the end, whole rows; test `marks the window cells of a rect at fractional pixels` |
+| pane wall guard (`paneGlass`, TS and native) | `Math.round` at each edge | a pane under a texel each way rounded to nothing and drew no glass | at least one texel each way; test case added |
+| `openingMask`, `classRepeatSizes` (material regions, TS and native) | floor at the start, ceil at the end | fine | unchanged |
+| repeat texture (`facade-repeat-texture.ts`, native `repeatTexture`) | floor/ceil texel loops, a floored sample position | fine | unchanged |
+| `voteRects` | its strips are rounded to pixels; the single rects pass through as they are into the mask above | fine once the mask is | unchanged |
+| `windowStrips`, `windowBays`, the lattice's window cells, reveal depth, `lattice-stitch` pitch | continuous geometry in metres or by a cell's centre; no texel loop | fine | unchanged |
+| wall sheets' member windows | `Math.round` into the sheet | fine | unchanged |
+
+The native parity fixture (`wall-grammar-native.test.ts`) only ever found its generated bay through the shifted mask: its second facade's windows sat a bay out of phase and its unread span was too narrow for a whole bay. It now gives that facade the windows of its painted bays and an unread span from its u 14, and reads 5 bays on the front wall, the next one generated, native and TypeScript byte for byte. 24 tests in the four touched files pass; typecheck clean.

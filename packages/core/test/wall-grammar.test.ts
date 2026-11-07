@@ -14,7 +14,7 @@
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { groupWalls, readWallBays, voteRects, type GrammarFacade, type WallEvidence } from '../src/node/3d-engine/staged-location/wall-grammar';
+import { groupWalls, readWallBays, voteRects, wallEvidence, type GrammarFacade, type WallEvidence } from '../src/node/3d-engine/staged-location/wall-grammar';
 import { facadeSamples, latticeFacade, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
 import { buildWallSheets, SHEET_ID_BASE } from '../src/node/3d-engine/staged-location/wall-sheets';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
@@ -200,5 +200,24 @@ describe('the wall grammar', () => {
         expect(at(whole, 6, 4)).toBe(1);
         expect(at(whole, 2, 4)).toBe(1);
         expect(at(whole, 10, 4)).toBe(0);
+    });
+    it("marks the window cells of a rect at fractional pixels (the facade reader's) under the rect, at whole texels, and none beside it", () => {
+        // a 10 m x 5 m facade at 0.1 m a pixel, one flat colour; one window at pixels x 40.4-60.3, y 10.6-20.2 (u 4.0-6.1 m,
+        // height 2.9-3.9 m); the evidence at its 0.1 m cells, one a texel. A fractional row used as a fill index shifted the
+        // mask sideways by a fraction of the row (2026-11-07): the cells beside the window then read as window
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wall-grammar-frac-'));
+        const f: GrammarFacade = { facadeId: 1, image: 'f1.png', centroid: [0, 0, 0], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], sMin: 0, sMax: 10, tMin: 0, tMax: 5, pixel: 0.1, width: 100, height: 50, orthoSMin: 0, orthoTMax: 5 };
+        const rgba = new Uint8Array(100 * 50 * 4);
+        for (let k = 0; k < 100 * 50; k++) rgba.set([190, 180, 170, 255], k * 4);
+        fs.writeFileSync(path.join(dir, f.image), encodePng(100, 50, rgba, 4));
+        const dec = (b: Buffer) => { const d = decodePng(b); return { rgba: d.rgba, width: d.width, height: d.height }; };
+        const e = wallEvidence(dir, [f], new Map([[1, [[40.4, 10.6, 60.3, 20.2]]]]), [1, 0, 0], 0, 0, 10, 5, dec);
+        expect([e.nu, e.ny]).toEqual([100, 50]);
+        const cells: Array<[number, number]> = [];
+        for (let cy = 0; cy < e.ny; cy++) for (let cu = 0; cu < e.nu; cu++) if (e.window[cy * e.nu + cu]) cells.push([cu, cy]);
+        // texels x 40-60 (floor 40.4, ceil 60.3) and y 10-20 (floor 10.6, ceil 20.2): u cells 40-60, height cells 49 - y = 29-39
+        expect(cells).toHaveLength(21 * 11);
+        expect(cells.every(([cu, cy]) => cu >= 40 && cu <= 60 && cy >= 29 && cy <= 39)).toBe(true);
+        fs.rmSync(dir, { recursive: true, force: true });
     });
 });

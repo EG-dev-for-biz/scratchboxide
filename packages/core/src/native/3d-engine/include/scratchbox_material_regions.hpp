@@ -353,8 +353,9 @@ inline PaneGlass paneGlass(const Image& img, const std::vector<double>& meanLab,
     std::vector<size_t> mine;
     std::vector<uint8_t> isWall;
     for (size_t i = 0; i + 3 < panes.size(); i += 4) {
-        const int x0 = static_cast<int>(std::max(0.0, js::round(panes[i] * W))), x1 = static_cast<int>(std::min(static_cast<double>(W), js::round(panes[i + 2] * W)));
-        const int y0 = static_cast<int>(std::max(0.0, js::round(panes[i + 1] * H))), y1 = static_cast<int>(std::min(static_cast<double>(H), js::round(panes[i + 3] * H)));
+        // a pane under a texel wide or tall still holds the texel it rounds into (as material-regions.ts)
+        const int x0 = static_cast<int>(std::max(0.0, js::round(panes[i] * W))), x1 = static_cast<int>(std::min(static_cast<double>(W), std::max(js::round(panes[i + 2] * W), static_cast<double>(x0 + 1))));
+        const int y0 = static_cast<int>(std::max(0.0, js::round(panes[i + 1] * H))), y1 = static_cast<int>(std::min(static_cast<double>(H), std::max(js::round(panes[i + 3] * H), static_cast<double>(y0 + 1))));
         mine.clear(); isWall.clear();
         double walls = 0;
         for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) {
