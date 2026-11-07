@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classSwatchSheet, type RegionClass } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
-import { betweenSeen, glassSeen, materialClassesExtras, namingPrompt, parseClassWords } from '../src/node/3d-engine/staged-location/pipeline-k/material-naming';
+import { betweenSeen, materialClassesExtras, namingPrompt, parseClassWords } from '../src/node/3d-engine/staged-location/pipeline-k/material-naming';
 import type { FacadeReadRecord } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
 
 const STONE = [205, 196, 178], SPANDREL = [70, 56, 48];
@@ -34,7 +34,7 @@ describe("the building's materials, saved with it", () => {
 
     it("reads the namer's words row by row, and saves each class's colour, library set and words with their provenance", () => {
         const classes = [cls(0, SPANDREL, false, 0.3), cls(1, STONE, true, 0.7)];
-        const prompt = namingPrompt(classes, { building: 'Empire State Building, New York', brief: 'Art Deco limestone tower', between: ['cast-aluminium spandrels'], glass: ['clear, slightly green'] });
+        const prompt = namingPrompt(classes, { building: 'Empire State Building, New York', brief: 'Art Deco limestone tower', between: ['cast-aluminium spandrels'] });
         expect(prompt).toContain('row 2: 70% of the facades\' texels');
         expect(prompt).toContain('the lightest (the wall)');
         expect(prompt).toContain('cast-aluminium spandrels');
@@ -42,17 +42,15 @@ describe("the building's materials, saved with it", () => {
         expect(words).toEqual([{ words: 'cast-aluminium spandrel panel', conf: 70 }, { words: 'Indiana limestone ashlar', conf: 85 }]);
         expect(() => parseClassWords('{"classes":[{"row":1}]}', 2)).toThrow();
         const records: FacadeReadRecord[] = [
-            { facadeId: 1, outcome: 'replaced', why: '', ms: 0, zones: [{ region: { x0: 0, y0: 0, x1: 1, y1: 1 }, outcome: 'drawn', why: '', reading: { rows: 1, openings: 1, conf: 80, between: 'cast-aluminium spandrels' }, glass: { label: 'clear, slightly green', transparency: 0.7, reflectivity: 0.3, tint: '#7a8f88', opaque: false } }] },
-            { facadeId: 2, outcome: 'replaced', why: '', ms: 0, zones: [{ region: { x0: 0, y0: 0, x1: 1, y1: 1 }, outcome: 'drawn', why: '', glass: { label: 'clear, slightly green', transparency: 0.5, reflectivity: 0.5, opaque: false } }, { region: { x0: 0, y0: 0, x1: 1, y1: 1 }, outcome: 'rejected', why: '', glass: { label: 'mirror', transparency: 0, reflectivity: 1, opaque: false } }] }
+            { facadeId: 1, outcome: 'replaced', why: '', ms: 0, zones: [{ region: { x0: 0, y0: 0, x1: 1, y1: 1 }, outcome: 'drawn', why: '', reading: { rows: 1, openings: 1, conf: 80, between: 'cast-aluminium spandrels' } }] },
+            { facadeId: 2, outcome: 'replaced', why: '', ms: 0, zones: [{ region: { x0: 0, y0: 0, x1: 1, y1: 1 }, outcome: 'drawn', why: '' }, { region: { x0: 0, y0: 0, x1: 1, y1: 1 }, outcome: 'rejected', why: '' }] }
         ];
-        const glass = glassSeen(records);
-        expect(glass).toEqual([{ words: 'clear, slightly green', planes: 2, transparency: 0.6, reflectivity: 0.4, tint: '#7a8f88', opaque: false }]);
         expect(betweenSeen(records)).toEqual(['cast-aluminium spandrels']);
-        const saved = materialClassesExtras([{ ...classes[0], set: 'Metal_Painted_Dark', distance: 0.12345 }, { ...classes[1], set: 'Limestone_Ashlar', distance: 0.05 }], [words[0], undefined], glass);
+        const saved = materialClassesExtras([{ ...classes[0], set: 'Metal_Painted_Dark', distance: 0.12345 }, { ...classes[1], set: 'Limestone_Ashlar', distance: 0.05 }], [words[0], undefined]);
         expect(saved.schema).toBe('scratchbox.material-classes/1');
         expect(saved.classes[0]).toMatchObject({ set: { name: 'Metal_Painted_Dark', distance: 0.123, label: 'generated' }, words: { text: 'cast-aluminium spandrel panel', label: 'photo-inferred' }, colour: { label: 'photo-inferred' } });
         expect(saved.classes[0].colour.srgb).toMatch(/^#[0-9a-f]{6}$/);
         expect(saved.classes[1].words).toBeUndefined();
-        expect(saved.glass![0]).toMatchObject({ words: 'clear, slightly green', label: 'photo-inferred' });
+        expect('glass' in saved).toBe(false);
     });
 });

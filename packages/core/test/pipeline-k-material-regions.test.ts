@@ -8,20 +8,18 @@
  ********************************************************************************/
 
 /**
- * Pipeline K's material regions (pipeline-k/material-regions.ts, tile-refine-twin.ts): metal drawn only on a set marked
- * metal (a class read so by the vision model), never on glass; openings
- * only from the window fit (its panes glass, the rest of each window one frame finish), the wall's set everywhere else
- * whatever the colour; the twin written lit with the maps and labels.
+ * Pipeline K's material regions (pipeline-k/material-regions.ts, tile-refine-twin.ts): one material path for every surface:
+ * each texel takes its detected class's library set (occlusion, roughness, metalness and normal as the set has them) at
+ * the set's real size, whatever the window fit or the lattice read there; a speckle under regionSmoothM never flips a
+ * texel; the photo stays the colour; the twin written lit with the maps and labels.
  */
 
 import { describe, expect, it } from 'vitest';
 import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { GLASS_ROUGHNESS } from '../src/node/3d-engine/staged-location/facade-materials';
-import { MATERIAL_REGIONS_PARAMS, paneSeed, planMaterialRegions, readRegionClasses, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
+import { classRepeatSizes, foldRepeats, planMaterialRegions, readRegionClasses, regionClassMap, regionRadius, repeatElements, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
 import { planMaterialRegionsOnThreads } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions-pool';
 import { tileRefineTwin } from '../src/node/3d-engine/staged-location/tile-refine-twin';
-import type { FittedPlane } from '../src/node/3d-engine/staged-location/window-fit';
 import { decodeImageInMemory, type RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 
 const PX = 0.1; // metres per texel of the facade photos
@@ -106,267 +104,158 @@ function building(): { glb: Uint8Array; photos: RgbaImage8[] } {
     return { glb: scene(quads, photos), photos };
 }
 
-/** Flat-normal sets, each class its own roughness (wall 179, the others 64 + 16 x index), every set's metalness map full (so drawn metal anywhere would show). */
-const roughnessOf = (c: RegionClass) => (c.wall ? 179 : 64 + 16 * c.index);
+/** Each class's set: its own occlusion (250 - 10 x index), roughness (64 + 32 x index), metalness (40 x index) and normal tilt (128 + 8 x index in x). */
+const ormOf = (c: RegionClass) => [250 - 10 * c.index, 64 + 32 * c.index, 40 * c.index];
 function sets(classes: RegionClass[]): RegionSet[] {
     return classes.map(c => {
         const orm = { width: 8, height: 8, rgba: new Uint8Array(256) }, normal = { width: 8, height: 8, rgba: new Uint8Array(256) };
-        for (let k = 0; k < 64; k++) { orm.rgba.set([255, roughnessOf(c), 255, 255], k * 4); normal.rgba.set([128, 128, 255, 255], k * 4); }
-        return { name: c.wall ? 'TestStone' : `TestDark${c.index}`, realSizeM: [1, 1], normal, orm, distance: 0 };
+        for (let k = 0; k < 64; k++) { orm.rgba.set([...ormOf(c), 255], k * 4); normal.rgba.set([128 + 8 * c.index, 128, 255, 255], k * 4); }
+        return { name: `TestSet${c.index}`, realSizeM: [1, 1], normal, orm, distance: 0 };
     });
 }
 
 const imagesOf = (photos: RgbaImage8[]) => new Map(photos.map((p, i) => [i, { ...p, rgba: p.rgba.slice() }]));
 
 const at = (img: RgbaImage8, x: number, y: number) => Array.from(img.rgba.subarray((y * img.width + x) * 4, (y * img.width + x) * 4 + 4));
-const metalTexels = (img: RgbaImage8) => { let n = 0; for (let k = 0; k < img.width * img.height; k++) if (img.rgba[k * 4 + 2]) n++; return n; };
-
-/** The piered facade with one fitted strip window (a bay's left pane column over two storeys) and its upper pane. */
-function fittedFacade(): { g: ReturnType<typeof parseGlbBytes>; photo: RgbaImage8; classes: RegionClass[] } {
-    const photo = piered(), W = photo.width, H = photo.height;
-    const win = [19 / W, 8 / H, 29 / W, 43 / H], pane = [19 / W, 8 / H, 29 / W, 26 / H];
-    const quads: Quad[] = [{ mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: win, panes: pane, label: 'photo-inferred', source: 'test' } } } }];
-    const g = parseGlbBytes(scene(quads, [photo]));
-    const b = building(), bg = parseGlbBytes(b.glb);
-    return { g, photo, classes: readRegionClasses(bg.json, imagesOf(b.photos))! };
-}
 
 describe('pipeline K material regions', () => {
-    it('draws nothing metal, and the wall set everywhere without a fitted window, whatever the colour', () => {
+    it("gives every texel its detected class's set, with every map the set has, whatever the windows", () => {
         const { glb, photos } = building();
         const g = parseGlbBytes(glb);
         const images = imagesOf(photos);
         const classes = readRegionClasses(g.json, images)!;
         expect(classes).toHaveLength(4);
-        expect(classes[3].wall).toBe(true);
-        expect(classes.map(c => c.meanLab[0])).toEqual([...classes.map(c => c.meanLab[0])].sort((a, b) => a - b));
         const plan = planMaterialRegions(g, g.json, images, classes, sets(classes));
-        expect(plan.report.facades.withWindows).toBe(0);
-        expect(plan.report.texels.glass).toBe(0);
-        const wallRough = roughnessOf(classes[3]);
-        for (const m of plan.materials) {
-            expect(metalTexels(m.orm)).toBe(0);
-            expect(metalTexels(m.params)).toBe(0);
-            // the piered facade's dark spandrels and panes, the weathered wall's dark blots, the brown scan piece: all the wall's roughness
-            for (let k = 0; k < m.orm.width * m.orm.height; k++) expect(m.orm.rgba[k * 4 + 1]).toBe(wallRough);
+        const facade = plan.materials.find(m => m.material === 0)!;
+        expect(facade.rebuilt).toBe(true);
+        const cls = regionClassMap(photos[0], classes, regionRadius(PX));
+        // a pier, a spandrel, a dark pane and a sky pane: each its own class's occlusion, roughness, metalness and normal
+        const probes: Array<[number, number]> = [[7, 150], [24, 5], [24, 15], [24, 85]];
+        for (const [x, y] of probes) {
+            const c = classes[cls[y * photos[0].width + x]];
+            expect(at(facade.orm, x, y)).toEqual([...ormOf(c), 255]);
+            expect(at(facade.normal!, x, y)[0]).toBe(128 + 8 * c.index);
         }
-        expect(plan.materials.find(m => m.material === 2)!.normal).toBeUndefined();
-        expect(plan.report.scanPieces.total).toBe(1);
+        // the pier is the lightest class, the dark pane the darkest: different sets, each drawn with its own metalness
+        expect(cls[150 * 200 + 7]).toBe(3);
+        expect(cls[15 * 200 + 24]).toBe(0);
+        expect(at(facade.orm, 24, 15)[2]).toBe(0);
+        expect(at(facade.orm, 7, 150)[2]).toBe(120);
+        // the classes drawn on the piered facade, the shares adding up
+        const shares = plan.report.facades.perFacade.find(f => f.mesh === 'facade_lattice_1')!.classShares;
+        expect(shares.filter(v => v > 0).length).toBeGreaterThanOrEqual(3);
+        expect(shares.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 2);
+        expect(plan.report.texels.perClass.reduce((a, b) => a + b, 0)).toBe(plan.report.texels.total);
     });
-
-    it("draws metalness only where the class's set is marked metal (read so by the vision model), from the set, never on glass", () => {
-        const { g, photo, classes } = fittedFacade();
-        const WALL = classes.length - 1;
-        // the wall's set marked metal: its metalness map (full) is drawn on the wall's texels; the panes stay dielectric
-        const marked = sets(classes).map((st, k) => (k === WALL ? { ...st, metal: true } : st));
-        const plan = planMaterialRegions(g, g.json, imagesOf([photo]), classes, marked);
-        const m = plan.materials[0], N = m.orm.width * m.orm.height;
-        let metal = 0, glassMetal = 0;
-        for (let k = 0; k < N; k++) {
-            const glass = m.params.rgba[k * 4] > 0;
-            if (m.orm.rgba[k * 4 + 2]) { metal++; expect(m.params.rgba[k * 4 + 2]).toBe(m.orm.rgba[k * 4 + 2]); }
-            if (glass && m.orm.rgba[k * 4 + 2]) glassMetal++;
+    it('reads the materials inside the window openings apart from those outside, so a pane and a panel of one colour are two', () => {
+        // a 20 x 20 m wall of grey panels with grey glass of the same colour in 2 x 2 m windows (fitted), and light piers
+        const W = 200, H = 200, rgba = new Uint8Array(W * H * 4), windows: number[] = [];
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) rgba.set([...(x % 50 < 10 ? [200, 196, 188] : [92, 96, 100]), 255], (y * W + x) * 4);
+        for (let b = 0; b < 4; b++) for (let st = 0; st < 5; st++) windows.push((b * 50 + 20) / W, (st * 40 + 10) / H, (b * 50 + 40) / W, (st * 40 + 30) / H);
+        const extras = { sbFacadeLattice: { facadeId: 1, windows: { uv: windows } } };
+        const g = parseGlbBytes(scene([{ mesh: 'facade_lattice_1', corners: wall(0, 20, 20), uv: FULL_UV, material: 0, extras }], [{ width: W, height: H, rgba }]));
+        const images = imagesOf([{ width: W, height: H, rgba }]);
+        const classes = readRegionClasses(g.json, images)!;
+        expect(classes.filter(c => c.openings)).toHaveLength(2);
+        expect(classes.find(c => c.wall)!.openings).toBe(false);
+        const plan = planMaterialRegions(g, g.json, images, classes, sets(classes));
+        const orm = plan.materials[0].orm;
+        // the glass (inside a window) and the panel (outside) share a colour but not a material
+        const pane = at(orm, 30, 20), panel = at(orm, 45, 20);
+        expect(pane).not.toEqual(panel);
+        const opening = new Set(classes.filter(c => c.openings).map(c => ormOf(c).join()));
+        expect(opening.has(pane.slice(0, 3).join())).toBe(true);
+        expect(opening.has(panel.slice(0, 3).join())).toBe(false);
+    });
+    it("follows the facade's repeats: a bay whose glass reads another colour takes its family's material, and each class knows its repeat size", () => {
+        // a 20 x 20 m curtain wall: 2 x 2 m windows of dark glass every 5 m and 4 m, one of them reflecting the sky (lighter)
+        const W = 200, H = 200, rgba = new Uint8Array(W * H * 4), windows: number[] = [];
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) rgba.set([...(x % 50 < 10 ? [200, 196, 188] : [92, 96, 100]), 255], (y * W + x) * 4);
+        for (let b = 0; b < 4; b++) for (let st = 0; st < 5; st++) {
+            const x0 = b * 50 + 20, y0 = st * 40 + 10, sky = b === 1 && st === 2;
+            for (let y = y0; y < y0 + 20; y++) for (let x = x0; x < x0 + 20; x++) rgba.set([...(sky ? [150, 170, 185] : [30, 34, 42]), 255], (y * W + x) * 4);
+            windows.push(x0 / W, y0 / H, (x0 + 20) / W, (y0 + 20) / H);
         }
-        expect(metal).toBeGreaterThan(N / 2);
-        expect(glassMetal).toBe(0);
-        expect(plan.report.texels.glass).toBeGreaterThan(0);
-        // unmarked, the same sets draw no metal at all
-        const plain = planMaterialRegions(g, g.json, imagesOf([photo]), classes, sets(classes));
-        expect(metalTexels(plain.materials[0].orm)).toBe(0);
+        const el = repeatElements(windows);
+        expect(el.family.length).toBe(20);
+        // the unit cells: half the 30 px gap to each neighbour, half the 20 px gap above and below: one 50 x 40 px repeat
+        expect(el.rects.slice(4 * 5, 4 * 5 + 4).map(v => Math.round(v * W))).toEqual([55, 0, 105, 40]);
+        const extras = { sbFacadeLattice: { facadeId: 1, windows: { uv: windows } } };
+        const g = parseGlbBytes(scene([{ mesh: 'facade_lattice_1', corners: wall(0, 20, 20), uv: FULL_UV, material: 0, extras }], [{ width: W, height: H, rgba }]));
+        const images = imagesOf([{ width: W, height: H, rgba }]);
+        const classes = readRegionClasses(g.json, images)!;
+        // per texel the sky pane is another class than the other panes; folded over its repeats it is theirs
+        const open = new Uint8Array(W * H);
+        for (let k = 0; k + 3 < windows.length; k += 4) for (let y = Math.floor(windows[k + 1] * H); y < Math.ceil(windows[k + 3] * H); y++) open.fill(1, y * W + Math.floor(windows[k] * W), y * W + Math.ceil(windows[k + 2] * W));
+        const cls = regionClassMap({ width: W, height: H, rgba }, classes, 1, open);
+        const skyAt = 100 * W + 80, darkAt = 100 * W + 30;
+        expect(cls[skyAt]).not.toBe(cls[darkAt]);
+        const changed = foldRepeats(cls, W, H, classes.length, el, 24);
+        expect(changed).toBeGreaterThan(0);
+        expect(cls[skyAt]).toBe(cls[darkAt]);
+        const plan = planMaterialRegions(g, g.json, images, classes, sets(classes));
+        expect(at(plan.materials[0].orm, 80, 100)).toEqual(at(plan.materials[0].orm, 30, 100));
+        expect(plan.report.facades.perFacade[0].foldedShare).toBeGreaterThan(0);
+        // the glass class knows its window's shorter side (2 m at 0.1 m a texel), the panels' class its unit cell's (4 m)
+        classRepeatSizes(g, g.json, images, classes);
+        expect(classes[cls[darkAt]].repeatM).toBe(2);
+        expect(classes[regionClassMap({ width: W, height: H, rgba }, classes, 1, open)[20 * W + 45]].repeatM).toBe(4);
     });
-
-    it("draws a fitted window's panes as glass and the rest of it as one frame finish, never metal", () => {
-        const { g, photo, classes } = fittedFacade();
-        const plan = planMaterialRegions(g, g.json, imagesOf([photo]), classes, sets(classes));
-        const f = plan.report.facades.perFacade[0];
-        expect(f.fittedWindows).toBe(1);
-        expect(f.bays).toBe(0);
-        expect(f.glassShare).toBeGreaterThan(0);
-        expect(f.frameSet).not.toBe('TestStone');
-        expect(plan.report.facades.withWindows).toBe(1);
-        const m = plan.materials[0];
-        const frame = classes.find(c => sets(classes)[c.index].name === f.frameSet)!;
-        // in the pane: glass at float glass's roughness; in the window below it: the frame's set; outside, even on another bay's dark pane: the wall's
-        expect(at(m.params, 24, 15)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
-        expect(at(m.orm, 24, 15)[1]).toBe(Math.round(GLASS_ROUGHNESS * 255));
-        expect(at(m.params, 24, 35)[0]).toBe(0);
-        expect(at(m.orm, 24, 35)[1]).toBe(roughnessOf(frame));
-        expect(at(m.orm, 74, 50)[1]).toBe(roughnessOf(classes[3]));
-        expect(at(m.params, 74, 50)[0]).toBe(0);
-        expect(metalTexels(m.orm)).toBe(0);
-        // the pane carries its seed in the parameters alpha (the viewer's tilt), everything else 255
-        expect(at(m.params, 24, 15)[3]).toBe(paneSeed(100001));
-        expect(at(m.params, 24, 35)[3]).toBe(255);
-        expect(at(m.params, 74, 50)[3]).toBe(255);
-        const seeds = Array.from({ length: 500 }, (_, i) => paneSeed(i));
-        expect(Math.min(...seeds)).toBeGreaterThanOrEqual(1);
-        expect(Math.max(...seeds)).toBeLessThanOrEqual(254);
-        expect(new Set(seeds).size).toBeGreaterThan(200);
+    it('draws a speckle under regionSmoothM as the surface around it; a blot a metre across keeps its own set', () => {
+        const W = 100, H = 100, rgba = new Uint8Array(W * H * 4);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const blot = x >= 60 && x < 70 && y >= 60 && y < 70, speck = x === 20 && y === 20;
+            rgba.set([...(blot || speck ? [25, 30, 40] : [190, 185, 175]), 255], (y * W + x) * 4);
+        }
+        const img = { width: W, height: H, rgba };
+        const g = parseGlbBytes(scene([{ mesh: 'facade_lattice_1', corners: wall(0, 10, 10), uv: FULL_UV, material: 0 }], [img]));
+        const b = building(), classes = readRegionClasses(parseGlbBytes(b.glb).json, imagesOf(b.photos))!;
+        const orm = planMaterialRegions(g, g.json, imagesOf([img]), classes, sets(classes)).materials[0].orm;
+        expect([regionRadius(0.03), regionRadius(0), regionRadius(0.001)]).toEqual([5, 1, 32]);
+        expect(at(orm, 20, 20)).toEqual(at(orm, 25, 25));
+        expect(at(orm, 65, 65)).not.toEqual(at(orm, 25, 25));
     });
-
-    it("draws glass on a scan piece only in its fitted plane's bays, off the wall's class; none on a piece off the plane", () => {
+    it("draws a scan piece's texels with their class's set's mean finish, no normal", () => {
         const { glb, photos } = building();
         const g = parseGlbBytes(glb);
-        const images = imagesOf(photos);
-        const classes = readRegionClasses(g.json, images)!;
-        // a plane through the scan piece relief_m0 (x 50-55, y 0-5, z 0, facing +z): a column of three windows s -1.5..0.5
-        // (x 51-53), each 1.2 m tall every 1.5 m up the wall (t 2.2 to -2.3): one bay from y 0.2 to 4.7
-        const windows: Array<[number, number, number, number]> = [[10, 3, 30, 15], [10, 18, 30, 30], [10, 33, 30, 45]];
-        const plane: FittedPlane = { facadeId: 9, centroid: [52.5, 2.5, 0], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], orthoSMin: -2.5, orthoTMax: 2.5, pixel: 0.1, width: 50, height: 50, windows, panes: windows };
-        const plan = planMaterialRegions(g, g.json, images, classes, sets(classes), [plane]);
-        const m = plan.materials.find(x => x.material === 2)!;
-        // the brown scan photo is not the wall's class: the bay is glass; beside it (x 54) and relief_m1 (off the plane's ortho), wall
-        const wall = roughnessOf(classes[3]);
-        expect(at(m.params, 12, 9)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
-        expect(at(m.params, 12, 9)[3]).toBeLessThan(255);
-        expect(at(m.orm, 12, 9)[1]).toBe(Math.round(GLASS_ROUGHNESS * 255));
-        expect(at(m.orm, 25, 19)[1]).toBe(wall);
-        expect(at(m.orm, 50, 19)[1]).toBe(wall);
-        expect(metalTexels(m.orm)).toBe(0);
-        expect(m.glass).toBe(true);
-        expect(plan.report.scanPieces.planes).toEqual([9]);
-        expect(plan.report.scanPieces.paneShare).toBeGreaterThan(0);
-        // one window alone makes no bay, but its pane is glass all the same (a row of windows has no strip to make a bay)
-        const single = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes), [{ ...plane, windows: [windows[0]], panes: [windows[0]] }]);
-        const sm = single.materials.find(x => x.material === 2)!;
-        expect(sm.glass).toBe(true);
-        expect(at(sm.params, 12, 9)[0]).toBeGreaterThan(0);
-        // and not beside it
-        expect(at(sm.params, 25, 19)[0]).toBe(0);
-        // no pane, no glass
-        const none = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes), [{ ...plane, windows: [windows[0]], panes: [] }]);
-        expect(none.materials.find(x => x.material === 2)!.glass).toBe(false);
-        // a plane facing the other way draws nothing
-        const back = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes), [{ ...plane, normal: [0, 0, -1], axisS: [-1, 0, 0] }]);
-        expect(back.report.scanPieces.planes).toEqual([]);
+        const classes = readRegionClasses(g.json, imagesOf(photos))!;
+        const plan = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes));
+        const scan = plan.materials.find(m => m.material === 2)!;
+        expect(scan.rebuilt).toBe(false);
+        expect(scan.normal).toBeUndefined();
+        const c = classes[regionClassMap(photos[2], classes, 1)[0]];
+        expect(at(scan.orm, 10, 10)).toEqual([...ormOf(c), 255]);
+        expect(plan.report.scanPieces.total).toBe(1);
     });
-
     it('plans the same maps and report on worker threads as on one thread', async () => {
         const { glb, photos: flat } = building();
         // photo noise, so texels of one colour bucket differ (each thread's colour cache fills in its own order)
         const photos = flat.map((p, i) => ({ ...p, rgba: p.rgba.map((v, k) => (k % 4 === 3 ? v : Math.max(0, Math.min(255, v + ((k * 7919 + i * 104729) % 13) - 6)))) }));
         const g = parseGlbBytes(glb);
         const classes = readRegionClasses(g.json, imagesOf(photos))!;
-        const windows: Array<[number, number, number, number]> = [[10, 3, 30, 15], [10, 18, 30, 30], [10, 33, 30, 45]];
-        const plane: FittedPlane = { facadeId: 9, centroid: [52.5, 2.5, 0], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], orthoSMin: -2.5, orthoTMax: 2.5, pixel: 0.1, width: 50, height: 50, windows, panes: windows };
-        const one = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes), [plane]);
-        const many = await planMaterialRegionsOnThreads(g, g.json, imagesOf(photos), classes, sets(classes), [plane], undefined, { threads: 3 });
+        const one = planMaterialRegions(g, g.json, imagesOf(photos), classes, sets(classes));
+        const many = await planMaterialRegionsOnThreads(g, g.json, imagesOf(photos), classes, sets(classes), undefined, { threads: 3 });
         expect(many.materials.length).toBeGreaterThan(1);
         expect(many.materials.map(m => m.material)).toEqual(one.materials.map(m => m.material));
         many.materials.forEach((m, i) => {
             const o = one.materials[i];
             expect(Buffer.from(m.orm.rgba).equals(Buffer.from(o.orm.rgba))).toBe(true);
-            expect(Buffer.from(m.params.rgba).equals(Buffer.from(o.params.rgba))).toBe(true);
             expect(!!m.normal && Buffer.from(m.normal.rgba).equals(Buffer.from(o.normal!.rgba))).toBe(!!o.normal);
-            expect([m.rebuilt, m.glass]).toEqual([o.rebuilt, o.glass]);
+            expect(m.rebuilt).toBe(o.rebuilt);
         });
         expect({ ...many.report, ms: 0 }).toEqual({ ...one.report, ms: 0 });
-        expect(many.report.scanPieces.planes).toEqual([9]);
     });
-
-    it("puts the stone's relief on the structure alone and glass in the bays it frames, off the wall's class", () => {
-        // the piered facade with one fitted window and its pane, the lattice's structure (the piers, x 0-15 mod 50, full height)
-        // and its bays (x 15-50 mod 50) up to 25 m (v from 1/6)
-        const photo = piered(), W = photo.width, H = photo.height;
-        const win = [19 / W, 8 / H, 29 / W, 43 / H], pane = [19 / W, 8 / H, 29 / W, 26 / H];
-        const runs = [0, 50, 100, 150].flatMap(x => [x / W, 0, (x + 15) / W, 1]);
-        const bays = [15, 65, 115, 165].flatMap(x => [x / W, 1 / 6, (x + 35) / W, 1]);
-        const quads: Quad[] = [{ mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: win, panes: pane, label: 'photo-inferred', source: 'test' }, structure: { uv: runs, bays, reliefM: 0.18, reliefFrom: 'measured', reason: 'test', chamferM: 0.05, label: 'photo-inferred' } } } }];
-        const g = parseGlbBytes(scene(quads, [photo]));
-        const b = building(), bg = parseGlbBytes(b.glb);
-        const classes = readRegionClasses(bg.json, imagesOf(b.photos))!;
-        const plan = planMaterialRegions(g, g.json, imagesOf([photo]), classes, sets(classes));
-        const m = plan.materials[0], f = plan.report.facades.perFacade[0];
-        const frame = classes.find(c => sets(classes)[c.index].name === f.frameSet)!;
-        expect(f.structureShare).toBeCloseTo(0.3, 2);
-        expect(frame.wall).toBe(false);
-        // a pier: the wall's (stone) set; a spandrel and a pane in a bay: glass; the fitted window above the bays (outside
-        // them): its pane glass, the rest of it the frame's
-        expect(at(m.orm, 7, 100)[1]).toBe(roughnessOf(classes[3]));
-        expect(at(m.params, 74, 110)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
-        expect(at(m.params, 74, 120)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
-        // a pane mirroring the sky (light, the third storey's) is glass too: a bay is glass whole, never cut texel by texel
-        expect(at(m.params, 24, 85)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
-        expect(at(m.orm, 24, 15)[1]).toBe(Math.round(GLASS_ROUGHNESS * 255));
-        expect(at(m.orm, 24, 35)[1]).toBe(roughnessOf(frame));
-        expect(f.bays).toBe(4);
-        // the glass fades in from the bay's edge (x 15): weaker at its first texel than inside, never zero
-        const gEdge = at(m.params, 15, 120)[0], gIn = at(m.params, 20, 120)[0];
-        expect(gEdge).toBeGreaterThan(0);
-        expect(gEdge).toBeLessThan(gIn);
-        expect(at(m.orm, 15, 120)[1]).toBeGreaterThan(at(m.orm, 20, 120)[1]);
-        // each storey of a bay its own tilt seed (the facade's storey pitch from its windows: here one window, so one seed per bay)
-        expect(at(m.params, 20, 120)[3]).toBeLessThan(255);
-        expect(plan.report.baysOnStone).toBe(0);
-        // a "bay" drawn over a pier (mostly the wall's class) is no glass bay: only its window's panes would be
-        const gp = parseGlbBytes(scene([{ ...quads[0], extras: { sbFacadeLattice: { facadeId: 1, structure: { uv: runs, bays: [1 / W, 1 / 6, 14 / W, 1], reliefM: 0.18, reliefFrom: 'measured', reason: 'test', chamferM: 0.05, label: 'photo-inferred' } } } }], [photo]));
-        const onPier = planMaterialRegions(gp, gp.json, imagesOf([photo]), classes, sets(classes));
-        expect(onPier.report.baysOnStone).toBe(1);
-        expect(at(onPier.materials[0].params, 7, 100)[0]).toBe(0);
-        expect(metalTexels(m.orm)).toBe(0);
-    });
-
-    it("puts glass on a bay's fitted panes alone when it holds any (the facade reader's punched windows), whole on a bay without", () => {
-        const photo = piered(), W = photo.width, H = photo.height;
-        const runs = [0, 50, 100, 150].flatMap(x => [x / W, 0, (x + 15) / W, 1]);
-        const bays = [15, 65, 115, 165].flatMap(x => [x / W, 1 / 6, (x + 35) / W, 1]);
-        // the second bay's panes, storey by storey (x 69-79 and 86-96, y 8-26 every 35)
-        const panes = [2, 3, 4, 5, 6, 7].flatMap(k => [69, 86].flatMap(x => [x / W, (8 + 35 * k) / H, (x + 10) / W, (26 + 35 * k) / H]));
-        const quads: Quad[] = [{ mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: panes, panes, label: 'photo-inferred', source: 'test' }, structure: { uv: runs, bays, reliefM: 0.18, reliefFrom: 'measured', reason: 'test', chamferM: 0.05, label: 'photo-inferred' } } } }];
-        const g = parseGlbBytes(scene(quads, [photo]));
-        const b = building(), bg = parseGlbBytes(b.glb);
-        const classes = readRegionClasses(bg.json, imagesOf(b.photos))!;
-        const m = planMaterialRegions(g, g.json, imagesOf([photo]), classes, sets(classes)).materials[0];
-        // the paned bay: glass on a pane, none on the spandrel between storeys (the frame's finish there)
-        expect(at(m.params, 74, 118)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
-        expect(at(m.params, 74, 135)[0]).toBe(0);
-        expect(at(m.orm, 74, 135)[1]).not.toBe(Math.round(GLASS_ROUGHNESS * 255));
-        // the bay without panes: glass whole, spandrel included
-        expect(at(m.params, 24, 135)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
-    });
-
-    it("draws no glass on a pane whose texels are the wall's class: stone, whatever the fit read", () => {
-        // the piered facade with two fitted windows and panes: one on a bay's glass, one across a pier (stone)
-        const photo = piered(), W = photo.width, H = photo.height;
-        const glassWin = [19 / W, 8 / H, 29 / W, 26 / H], pierWin = [1 / W, 40 / H, 14 / W, 70 / H];
-        const quads: Quad[] = [{ mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: [...glassWin, ...pierWin], panes: [...glassWin, ...pierWin], label: 'photo-inferred', source: 'test' } } } }];
-        const g = parseGlbBytes(scene(quads, [photo]));
-        const b = building(), bg = parseGlbBytes(b.glb);
-        const classes = readRegionClasses(bg.json, imagesOf(b.photos))!;
-        const plan = planMaterialRegions(g, g.json, imagesOf([photo]), classes, sets(classes));
-        const m = plan.materials[0];
-        expect(at(m.params, 24, 15)[0]).toBe(MATERIAL_REGIONS_PARAMS.paneGlassWeight);
-        expect(at(m.params, 7, 55)[0]).toBe(0);
-        expect(plan.report.panesOnStone).toBe(1);
-    });
-
-    it("tilts a glass bay storey by storey, at the storey pitch of the facade's own windows", () => {
-        // a bay x 15-50 with four fitted windows one above another every 35 texels (3.5 m)
-        const photo = piered(), W = photo.width, H = photo.height;
-        const win = [8, 43, 78, 113].flatMap(y => [19 / W, y / H, 29 / W, (y + 18) / H]);
-        const runs = [0, 50, 100, 150].flatMap(x => [x / W, 0, (x + 15) / W, 1]);
-        const quads: Quad[] = [{ mesh: 'facade_lattice_1', corners: wall(0, 20, 30), uv: FULL_UV, material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: win, label: 'photo-inferred', source: 'test' }, structure: { uv: runs, bays: [15 / W, 0, 50 / W, 1], reliefM: 0.18, reliefFrom: 'measured', reason: 'test', chamferM: 0.05, label: 'photo-inferred' } } } }];
-        const g = parseGlbBytes(scene(quads, [photo]));
-        const b = building(), bg = parseGlbBytes(b.glb);
-        const classes = readRegionClasses(bg.json, imagesOf(b.photos))!;
-        const m = planMaterialRegions(g, g.json, imagesOf([photo]), classes, sets(classes)).materials[0];
-        const seed = (y: number) => at(m.params, 32, y)[3];
-        // within a storey one seed; the next storey another
-        expect(seed(12)).toBe(seed(20));
-        expect(seed(50)).not.toBe(seed(15));
-        expect(seed(85)).not.toBe(seed(50));
-    });
-
-    it('keeps the photo as the base colour everywhere, panes included', () => {
-        const { g, photo, classes } = fittedFacade();
-        const images = imagesOf([photo]);
+    it('keeps the photo as the base colour everywhere', () => {
+        const { glb, photos } = building();
+        const g = parseGlbBytes(glb);
+        const images = imagesOf(photos);
+        const classes = readRegionClasses(g.json, images)!;
         planMaterialRegions(g, g.json, images, classes, sets(classes));
-        expect(Buffer.from(images.get(0)!.rgba).equals(Buffer.from(photo.rgba))).toBe(true);
+        photos.forEach((p, i) => expect(Buffer.from(images.get(i)!.rgba).equals(Buffer.from(p.rgba))).toBe(true));
     });
-
     it('writes the twin lit, with the maps, the extras and the labels', async () => {
-        const { g: fg } = fittedFacade();
-        const twin = await tileRefineTwin(new Uint8Array(assembleGlb(fg.json as never, fg.bin)), 'esb', { harmonize: { groundY: 0 }, materialRegions: { sets: async classes => sets(classes) } });
+        const { glb } = building();
+        const twin = await tileRefineTwin(glb, 'esb', { harmonize: { groundY: 0 }, materialRegions: { sets: async classes => sets(classes) } });
         expect(twin.materialRegions && 'version' in twin.materialRegions).toBe(true);
         const g = parseGlbBytes(twin.glb);
         const json: any = g.json;
@@ -374,22 +263,21 @@ describe('pipeline K material regions', () => {
         const m = json.materials[0];
         expect(m.extensions?.KHR_materials_unlit).toBeUndefined();
         expect(m.pbrMetallicRoughness.metallicRoughnessTexture).toBeDefined();
+        expect(m.occlusionTexture.index).toBe(m.pbrMetallicRoughness.metallicRoughnessTexture.index);
         expect(m.normalTexture).toBeDefined();
-        expect(m.extras.sbMaterial.schema).toBe('scratchbox.staged-material/1');
-        expect(m.extras.sbMaterialRegions.roughness.label).toBe('generated');
-        expect(m.extras.sbMaterialRegions.metalness.source).toMatch(/none drawn/);
+        expect(m.extras.sbMaterial).toEqual({ schema: 'scratchbox.staged-material/1', provenanceIndices: expect.any(Array) });
+        expect(m.extras.sbMaterialRegions.maps.label).toBe('generated');
+        expect(m.extras.sbMaterialRegions.material.label).toBe('photo-inferred');
         expect(m.extras.sbMaterialRegions.baseColor.label).toBe('photo-inferred');
-        expect(m.extras.sbMaterialRegions.glass.label).toBe('photo-inferred');
         const prov = json.asset.extras.sbTexture.provenance;
         expect(prov.find((p: any) => p.source === 'material-regions').label).toBe('generated');
-        expect(prov.find((p: any) => p.source === 'facade-material-reading').label).toBe('photo-inferred');
-        // the parameters texture decodes and carries glass weight on the pane
-        const pt = json.textures[m.extras.sbMaterial.paramsTexture].source;
-        const view = json.bufferViews[json.images[pt].bufferView];
-        const params = decodeImageInMemory(g.bin.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength));
-        expect(params.rgba[(15 * params.width + 24) * 4]).toBeGreaterThan(0);
+        expect(prov.find((p: any) => p.source === 'facade-material-reading')).toBeUndefined();
+        // the ORM decodes with a set's own metalness where its class lies
+        const src = json.textures[m.pbrMetallicRoughness.metallicRoughnessTexture.index].source;
+        const view = json.bufferViews[json.images[src].bufferView];
+        const orm = decodeImageInMemory(g.bin.subarray(view.byteOffset ?? 0, (view.byteOffset ?? 0) + view.byteLength));
+        expect(Math.max(...Array.from({ length: orm.width * orm.height }, (_, k) => orm.rgba[k * 4 + 2]))).toBeGreaterThan(60);
     });
-
     it('leaves the twin unlit and says why when the library cannot give the sets', async () => {
         const { glb } = building();
         const twin = await tileRefineTwin(glb, 'esb', { harmonize: { groundY: 0 }, materialRegions: { sets: async () => { throw new Error('no credentials'); } } });

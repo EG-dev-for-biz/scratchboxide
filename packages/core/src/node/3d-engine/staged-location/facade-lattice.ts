@@ -219,7 +219,8 @@ export const WINDOW_STRIPS = { overlap: 0.5, maxGapM: 2.5, minWindows: 2, minStr
  * difference of the two medians at least minReliefM and two standard errors), else the depth the photo's recess rule (or
  * Street View's reveals) gives, else defaultReliefM (generated); the front edge of every step at least twice chamferM deep
  * is chamfered by chamferM at 45 degrees, so the stone's arrises catch the light. Written into the facade's extras
- * (sbFacadeLattice.structure) so the material regions put the stone's relief on the structure alone.
+ * (sbFacadeLattice.structure), a record of the frame read; the materials are drawn texel by texel from what each texel's
+ * photo shows (pipeline-k/material-regions.ts), whatever the structure.
  */
 export const STRUCTURE = { chamferM: 0.05, minReliefM: 0.03, defaultReliefM: 0.10 };
 
@@ -331,7 +332,7 @@ export interface FacadeLatticeResult {
     windows: Uint8Array; cellU: number[]; cellV: number[];
     /** The window fit's windows on this facade (window-fit.ts), u0 v0 u1 v1 per window in the photo's UVs: photo-inferred. */
     fittedWindows?: number[];
-    /** The glass in those windows (window-fit.ts panes), u0 v0 u1 v1 each: photo-inferred. */
+    /** The panes of those windows (window-fit.ts panes, the lights between their mullions), u0 v0 u1 v1 each: photo-inferred. */
     fittedPanes?: number[];
     /** Of the fitted windows, those continued into parts the photo never reached (window-fit.ts completeLattice), u0 v0 u1 v1 each: generated. */
     generatedWindows?: number[];

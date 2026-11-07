@@ -163,8 +163,9 @@ export interface WindowFitBand {
     panesDropped?: number;
 }
 /**
- * `rects` are the openings (a punched window, or a strip of windows and spandrels storey on storey); `panes` the glass in
- * them: each punched window, and the panes a strip's colours split it into at its storey pitch.
+ * `rects` are the openings (a punched window, or a strip of windows and spandrels storey on storey); `panes` the lights in
+ * them (a record of the reading; no material is drawn from them): each punched window, and the panes a strip's colours
+ * split it into at its storey pitch.
  */
 export interface WindowFit {
     rects: WindowRect[]; panes: WindowRect[]; bands: WindowFitBand[];
@@ -1657,29 +1658,3 @@ export function fittedWindowUvs(fit: WindowFitFile, facadeId: number): number[] 
     return e.rects.flatMap(([x0, y0, x1, y1]) => [x0 / e.width, y0 / e.height, x1 / e.width, y1 / e.height]);
 }
 
-/** A facade plane's fitted windows in its ortho's frame (relief_orthos/facades.json): world = centroid + s axisS + t axisT, pixel x at s = orthoSMin + x pixel, y at t = orthoTMax - y pixel. */
-export interface FittedPlane {
-    facadeId: number; centroid: number[]; normal: number[]; axisS: number[]; axisT: number[];
-    orthoSMin: number; orthoTMax: number; pixel: number; width: number; height: number;
-    /** The fitted windows and their panes, photo-pixel rects [x0, y0, x1, y1]. */
-    windows: WindowRect[]; panes: WindowRect[];
-    /** The plane's bays read per wall (wall-grammar.ts), photo-pixel rects, when the wall grammar read it. */
-    bays?: WindowRect[];
-}
-
-/** Every plane with fitted windows or wall-grammar bays in an orthos directory (facades.json and window_fit.json beside it, wall_grammar.json when read); none when either of the first two is missing. */
-export function fittedPlanesOf(orthosDir: string): FittedPlane[] {
-    const ff = path.join(orthosDir, 'facades.json'), wf = path.join(orthosDir, WINDOW_FIT_FILE);
-    if (!fs.existsSync(ff) || !fs.existsSync(wf)) return [];
-    const frames = JSON.parse(fs.readFileSync(ff, 'utf8')).facades as Array<Omit<FittedPlane, 'windows' | 'panes'>>;
-    const fit = JSON.parse(fs.readFileSync(wf, 'utf8')) as WindowFitFile;
-    const gf = path.join(orthosDir, 'wall_grammar.json');
-    const grammar = fs.existsSync(gf) ? JSON.parse(fs.readFileSync(gf, 'utf8')) as { facades: Record<string, Array<[number, number, number, number, number]>> } : undefined;
-    return frames.flatMap(f => {
-        const e = fittedEntry(fit, f.facadeId), gb = grammar?.facades[String(f.facadeId)];
-        if (e && (e.width !== f.width || e.height !== f.height)) return [];
-        if (!e && !gb?.length) return [];
-        const bays = gb?.map(([s0, t0, s1, t1]) => [(s0 - f.orthoSMin) / f.pixel, (f.orthoTMax - t1) / f.pixel, (s1 - f.orthoSMin) / f.pixel, (f.orthoTMax - t0) / f.pixel] as WindowRect);
-        return [{ facadeId: f.facadeId, centroid: f.centroid, normal: f.normal, axisS: f.axisS, axisT: f.axisT, orthoSMin: f.orthoSMin, orthoTMax: f.orthoTMax, pixel: f.pixel, width: f.width, height: f.height, windows: e?.rects ?? [], panes: e?.panes ?? [], ...(bays ? { bays } : {}) }];
-    });
-}

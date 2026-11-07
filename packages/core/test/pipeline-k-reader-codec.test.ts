@@ -27,7 +27,6 @@ import { encodeRgbaToJpeg } from '../src/node/image-codec-ffmpeg';
 import { closePngCodecPool, INLINE_MAX_BYTES } from '../src/node/png-codec-pool';
 import { readOnTwin } from '../src/node/3d-engine/staged-location/pipeline-k/twin-reader';
 import { regionRgba, type FacadeAsk, type FacadePhoto, type ImageRegion } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
-import type { FittedPlane } from '../src/node/3d-engine/staged-location/window-fit';
 import { packGlb, quad } from './helpers/synthetic-material-scan';
 
 const PIXEL = 0.1, FW = 300, FH = 600;
@@ -86,8 +85,7 @@ async function twinCase(dir: string) {
     const lattice = (id: number, image: number) => ({ node: { mesh: image - 10, extras: { sbFacadeLattice: { facadeId: id } } }, mesh: { primitives: [{ material: image - 10 }] }, material: { pbrMetallicRoughness: { baseColorTexture: { index: image - 10 } } }, texture: { source: image } });
     const ls = [lattice(7, 10), lattice(8, 11)];
     const twinJson = { nodes: ls.map(l => l.node), meshes: ls.map(l => l.mesh), materials: ls.map(l => l.material), textures: ls.map(l => l.texture), images: [] };
-    const fitted: FittedPlane[] = facades.map(f => ({ ...f, windows: [[0, 0, 5, 5]], panes: [[0, 0, 5, 5]] }));
-    return { orthos, flat, twinJson, finalImage, fitted };
+    return { orthos, flat, twinJson, finalImage };
 }
 
 /** A stand-in model: one family of the three walls; each crop's windows where they are; every judge accepts. Every image it is shown, kept. */
@@ -169,9 +167,9 @@ describe('the facade reader on the codec threads', () => {
                 try {
                     const c = await twinCase(dir);
                     const { ask, shown } = standIn();
-                    const r = await readOnTwin({ orthosDir: c.orthos, flatGlb: c.flat, twinJson: c.twinJson, finalImage: c.finalImage, fitted: c.fitted, ask });
+                    const r = await readOnTwin({ orthosDir: c.orthos, flatGlb: c.flat, twinJson: c.twinJson, finalImage: c.finalImage, ask });
                     const { dir: readDir, ...report } = r.report;
-                    runs.push({ files: snapshot(readDir), shown: shown.sort(), planes: JSON.stringify(r.planes), report });
+                    runs.push({ files: snapshot(readDir), shown: shown.sort(), planes: JSON.stringify(r.records.readings), report });
                 } finally { fs.rmSync(dir, { recursive: true, force: true }); }
             }
         } finally {

@@ -17,7 +17,7 @@ plane finder, and says nothing about the rest, looks complete while it has read 
 2. **Every surface ends accounted for:** read (and what it was read as), read and left alone (with the reason), or never
    read (with the reason). Shares of area, never just counts.
 3. **Check the inputs before paying for anything.** A wrong input makes every later step expensive and wrong.
-4. **Report against the list.** "Glass on 4% of the facade area" means nothing without "of 61% that the window fit read".
+4. **Report against the list.** "A class on 4% of the facade area" means nothing without "of the 61% the photos cover".
 
 ## 1. The list: every surface, by kind
 
@@ -98,5 +98,6 @@ The sum of the three is 100% of the area. A pass that reads a small share is rep
   reason was re-encoding sharpness (136 atlases), not the match.
 - **Colosseum**: 68,889 fragments, 3,152 matched 7 swatches; the curved walls never formed planes, and only ~2.7% of
   the surface matched any swatch. Its first survey cameras stood in the arena.
-- **Material regions** (glass, frame finishes) are off by default (user decision, 2026-10-28): a default staged
-  building has no glass at all, which reads as "nothing found" unless the inventory says the pass did not run.
+- **Material regions** are on by default for pipeline K and give every texel its detected material's library set; there
+  is no glass layer (user decision, 2026-11-05), so "glass on N% of the facade" is no longer a reading: report each
+  class's share of the texels and its set instead.

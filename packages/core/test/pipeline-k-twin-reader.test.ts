@@ -7,7 +7,6 @@ import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
 import { readOnTwin } from '../src/node/3d-engine/staged-location/pipeline-k/twin-reader';
 import type { FacadeAsk, ImageRegion } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
-import type { FittedPlane } from '../src/node/3d-engine/staged-location/window-fit';
 
 // a 30 m x 30 m facade at 0.1 m a pixel: 5 columns of windows 12 px wide, storeys every 40 px, windows 22 px tall
 const W = 300, H = 300, PIXEL = 0.1, PITCH = 40, PHASE = 9, WIN_H = 22;
@@ -36,8 +35,7 @@ function twinCase(dir: string, occluded?: Uint8Array) {
     const flat = path.join(dir, 'textured.glb');
     writeStagedGlbFile(flat, [{ name: 'scan', positions: Float32Array.from([0, 0, 0, 1, 0, 0, 0, 1, 0]), indices: Uint32Array.from([0, 1, 2]) }], {});
     const twinJson = { nodes: [{ mesh: 0, extras: { sbFacadeLattice: { facadeId: 7 } } }], meshes: [{ primitives: [{ material: 0 }] }], materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 } } }], textures: [{ source: 0 }], images: [{}] };
-    const fitted: FittedPlane = { ...frame, windows: [[0, 0, 5, 5]], panes: [[0, 0, 5, 5]], bays: [[10, 10, 60, 290]] };
-    return { orthos, flat, twinJson, fitted };
+    return { orthos, flat, twinJson };
 }
 
 /** A model that sees every column's windows in each storey its crop holds (grey or not), and accepts every outline; the read crops kept. */
@@ -56,26 +54,25 @@ function oracle() {
 }
 
 describe('the facade reader on the finished exterior', () => {
-    it("reads each facade from its harmonised rebuilt texture, and its openings replace the window fit's for the glass", async () => {
+    it('reads each facade from its harmonised rebuilt texture, and records its openings', async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'twin-reader-'));
         try {
-            const { orthos, flat, twinJson, fitted } = twinCase(dir);
+            const { orthos, flat, twinJson } = twinCase(dir);
             // the twin: facade 7's rebuilt texture is image 0, harmonised darker
             const harmonised = photo(40, 150);
             const { ask, asked } = oracle();
-            const r = await readOnTwin({ orthosDir: orthos, flatGlb: flat, twinJson, finalImage: new Map([[0, { width: W, height: H, rgba: harmonised }]]), fitted: [fitted], ask });
+            const r = await readOnTwin({ orthosDir: orthos, flatGlb: flat, twinJson, finalImage: new Map([[0, { width: W, height: H, rgba: harmonised }]]), ask });
             expect(r.report).toMatchObject({ facadesHarmonised: 1, facadesAsPhotographed: 0 });
             // what the reader was given is the harmonised texture, in the photo's own frame
             const given = decodePng(fs.readFileSync(path.join(r.report.dir, 'facade_7.png')));
             expect([given.width, given.height]).toEqual([W, H]);
             expect(Buffer.from(given.rgba).equals(Buffer.from(harmonised))).toBe(true);
             expect(asked).toContain('read');
-            // the reader's openings in place of the window fit's, the wall grammar's bays kept
-            const p = r.planes.find(x => x.facadeId === 7)!;
-            expect(p.windows.length).toBeGreaterThan(20);
-            expect(p.windows).not.toContainEqual([0, 0, 5, 5]);
-            expect(p.bays).toEqual([[10, 10, 60, 290]]);
-            expect(r.planes.filter(x => x.facadeId === 7)).toHaveLength(1);
+            // the reader's openings recorded (told to the material reads; nothing is drawn from them)
+            const p = r.records.readings.find(x => x.facadeId === 7)!;
+            expect(p.rects.length).toBeGreaterThan(20);
+            expect(r.records.readings.filter(x => x.facadeId === 7)).toHaveLength(1);
+            expect('planes' in r).toBe(false);
         } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     });
 
@@ -86,12 +83,12 @@ describe('the facade reader on the finished exterior', () => {
             // something low across its left (x < 60: 59% blocked, under the 65% the readers skip: column 1 is still read)
             const CROWN = 170, occluded = new Uint8Array(W * H);
             for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) occluded[y * W + x] = x >= CROWN ? 200 : x < 60 ? 150 : 0;
-            const { orthos, flat, twinJson, fitted } = twinCase(dir, occluded);
+            const { orthos, flat, twinJson } = twinCase(dir, occluded);
             // the twin's harmonised texture shows the crown's leaves where it stood
             const harmonised = photo(40, 150);
             for (let y = 0; y < H; y++) for (let x = CROWN; x < W; x++) harmonised.set([30, 90, 30, 255], (y * W + x) * 4);
             const { ask, crops } = oracle();
-            const r = await readOnTwin({ orthosDir: orthos, flatGlb: flat, twinJson, finalImage: new Map([[0, { width: W, height: H, rgba: harmonised }]]), fitted: [fitted], ask });
+            const r = await readOnTwin({ orthosDir: orthos, flatGlb: flat, twinJson, finalImage: new Map([[0, { width: W, height: H, rgba: harmonised }]]), ask });
             // the occlusion mask reached the reader's copy of the orthos beside the harmonised texture
             expect(Buffer.from(fs.readFileSync(path.join(r.report.dir, 'facade_7_occluded.png'))).equals(fs.readFileSync(path.join(orthos, 'facade_7_occluded.png')))).toBe(true);
             // every read crop: uniform grey over the occluded texels, the harmonised texture everywhere else
@@ -110,10 +107,10 @@ describe('the facade reader on the finished exterior', () => {
                 expect(kept).toBeGreaterThan(0);
             }
             // the model saw windows in all five columns, but the tiling draws only the three it may read, a window every storey
-            const p = r.planes.find(x => x.facadeId === 7)!;
-            expect(p.windows.length).toBeGreaterThan(0);
-            expect(p.windows.filter(w => w[2] > CROWN)).toEqual([]);
-            for (const [a, b] of cols.slice(0, 3)) expect(p.windows.filter(w => Math.abs(w[0] - a) < 2 && Math.abs(w[2] - b) < 2).length).toBeGreaterThanOrEqual(6);
+            const p = r.records.readings.find(x => x.facadeId === 7)!;
+            expect(p.rects.length).toBeGreaterThan(0);
+            expect(p.rects.filter(w => w[2] > CROWN)).toEqual([]);
+            for (const [a, b] of cols.slice(0, 3)) expect(p.rects.filter(w => Math.abs(w[0] - a) < 2 && Math.abs(w[2] - b) < 2).length).toBeGreaterThanOrEqual(6);
             expect(p.panes.filter(w => w[2] > CROWN)).toEqual([]);
         } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     });
