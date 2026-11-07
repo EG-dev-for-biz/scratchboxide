@@ -15,6 +15,7 @@
 #include "scratchbox_texture.hpp"
 #include "scratchbox_gltf_scene.hpp"
 #include "scratchbox_io.hpp"
+#include "scratchbox_adaptive_subd.hpp"
 
 #include <vector>
 #include <string>
@@ -351,6 +352,56 @@ public:
         outScene.mesh.recomputeBounds();
         outScene.bounds = outScene.mesh.bounds;
         return outScene;
+    }
+
+    /**
+     * Displaces a scene for one view: every surface is diced by its projected size from `camera` (scratchbox_adaptive_subd.hpp,
+     * `pixelsPerSegment` pixels an edge segment), crack-free across seams, then moved by evaluateDisplacement with each
+     * triangle's own base colour image. Used where the camera is known (the tile path tracer); on real cached buildings it
+     * draws fewer triangles than tessellateAndDisplaceScene's N x N split, in less time, with lower height error.
+     * `tessellationFactor` is not read. Returns a scene with ok = false and the reason when dicing is refused.
+     */
+    static GltfScene displaceSceneForView(
+        const GltfScene& inScene,
+        const DisplacementOptions& options,
+        const adaptive_subd::CameraSpec& camera,
+        float pixelsPerSegment,
+        size_t maxTriangles = 0
+    ) {
+        GltfScene out;
+        out.materials = inScene.materials;
+        out.images = inScene.images;
+        out.lights = inScene.lights;
+        out.primitiveCount = inScene.primitiveCount;
+        out.nodeCount = inScene.nodeCount;
+        if (inScene.mesh.indices.empty() || inScene.mesh.vertices.empty()) return inScene;
+        auto imageOf = [&](uint32_t tri) -> const texture::ImageBuffer* {
+            const uint32_t m = tri < inScene.triangleMaterial.size() ? inScene.triangleMaterial[tri] : 0;
+            if (m >= inScene.materials.size()) return nullptr;
+            const int i = inScene.materials[m].baseColorImage;
+            return (i >= 0 && i < static_cast<int>(inScene.images.size()) && inScene.images[i].decoded) ? &inScene.images[i].pixels : nullptr;
+        };
+        adaptive_subd::Params p;
+        p.useCamera = true;
+        p.camera = camera;
+        p.dicingRate = pixelsPerSegment;
+        p.maxTriangles = maxTriangles;
+        p.recomputeNormals = options.recomputeSmoothNormals;
+        adaptive_subd::Result r = adaptive_subd::diceAndDisplace(inScene.mesh, p,
+            [&](const Vec2& uv, const Vec3& pos, const Vec3&, uint32_t tri) { return evaluateDisplacement(uv, pos, imageOf(tri), options); });
+        if (!r.ok) { out.error = r.error; return out; }
+        out.mesh = std::move(r.mesh);
+        out.mesh.name = inScene.mesh.name + "_displaced";
+        out.triangleMaterial.resize(r.triangleSource.size());
+        out.triangleNode.resize(inScene.triangleNode.empty() ? 0 : r.triangleSource.size());
+        for (size_t t = 0; t < r.triangleSource.size(); t++) {
+            const uint32_t s = r.triangleSource[t];
+            out.triangleMaterial[t] = s < inScene.triangleMaterial.size() ? inScene.triangleMaterial[s] : 0;
+            if (!out.triangleNode.empty()) out.triangleNode[t] = s < inScene.triangleNode.size() ? inScene.triangleNode[s] : 0;
+        }
+        out.bounds = out.mesh.bounds;
+        out.ok = true;
+        return out;
     }
 
 private:

@@ -159,10 +159,46 @@ int main(int argc, char** argv) {
     uint32_t originalTris = static_cast<uint32_t>(scene.mesh.indices.size() / 3);
     uint32_t originalVerts = static_cast<uint32_t>(scene.mesh.vertices.size());
 
+    render::RenderSettings settings;
+    settings.width = static_cast<int>(numberOr(config["width"], 1280));
+    settings.height = static_cast<int>(numberOr(config["height"], 720));
+    settings.samplesPerPixel = static_cast<int>(numberOr(config["samplesPerPixel"], 64));
+    settings.maxBounces = static_cast<int>(numberOr(config["maxBounces"], 4));
+    settings.threads = static_cast<int>(numberOr(config["threads"], 0));
+    settings.clampIndirect = numberOr(config["clampIndirect"], 10.0f);
+    settings.seed = static_cast<uint32_t>(numberOr(config["seed"], 1));
+    const std::string modeName = config["shadingMode"].asString("relit");
+    settings.mode = modeName == "baked" ? render::ShadingMode::Baked : render::ShadingMode::Relit;
+
+    render::CameraSpec camera;
+    const Json& cameraConfig = config["camera"];
+    const float aspect = static_cast<float>(settings.width) / static_cast<float>(std::max(settings.height, 1));
+    // the camera, from the config or framed on the scene's bounds above its ground
+    auto resolveCamera = [&](const gltf::GltfScene& s, float groundHeight) {
+        render::CameraSpec c;
+        if (cameraConfig.has("position") && cameraConfig.has("target")) {
+            c.position = vec3Or(cameraConfig["position"], c.position);
+            c.target = vec3Or(cameraConfig["target"], c.target);
+            c.verticalFovDeg = numberOr(cameraConfig["verticalFovDeg"], c.verticalFovDeg);
+            c.up = vec3Or(cameraConfig["up"], c.up);
+            c.apertureRadius = numberOr(cameraConfig["apertureRadius"], 0.0f);
+            c.focusDistance = numberOr(cameraConfig["focusDistance"], 0.0f);
+        } else {
+            const Json& framing = cameraConfig["auto"];
+            c = render::PathTracer::frameBounds(
+                s.bounds, groundHeight, aspect,
+                numberOr(framing["verticalFovDeg"], 40.0f),
+                numberOr(framing["pitchDeg"], 35.0f),
+                numberOr(framing["headingDeg"], 20.0f),
+                numberOr(framing["distanceScale"], 0.9f));
+        }
+        return c;
+    };
+    bool cameraResolved = false;
+
     if (config.has("displacement")) {
         const Json& dispJson = config["displacement"];
         displacement::DisplacementOptions dispOpt;
-        dispOpt.tessellationFactor = static_cast<uint32_t>(numberOr(dispJson["tessellationFactor"], 4.0f));
         dispOpt.displacementScale = numberOr(dispJson["displacementScale"], 0.06f);
         dispOpt.midpoint = numberOr(dispJson["midpoint"], 0.5f);
         dispOpt.enableProceduralNoise = boolOr(dispJson["enableProceduralNoise"], true);
@@ -171,14 +207,35 @@ int main(int argc, char** argv) {
         dispOpt.sampleTextureHeight = boolOr(dispJson["sampleTextureHeight"], true);
         dispOpt.textureHeightWeight = numberOr(dispJson["textureHeightWeight"], 1.0f);
         dispOpt.recomputeSmoothNormals = boolOr(dispJson["recomputeSmoothNormals"], true);
+        const float pixelsPerSegment = numberOr(dispJson["pixelsPerSegment"], 4.0f);
 
-        std::cout << "[Displacement] Subdividing and physically displacing scene: factor N=" 
-                  << dispOpt.tessellationFactor << ", scale=" << dispOpt.displacementScale << "m..." << std::endl;
-        scene = displacement::DisplacementEngine::tessellateAndDisplaceScene(scene, dispOpt);
-        std::cout << "[Displacement] Complete. Triangles: " << originalTris << " -> " 
-                  << (scene.mesh.indices.size() / 3) << " (x" 
-                  << ((scene.mesh.indices.size() / 3) / std::max<size_t>(1, originalTris))
-                  << "), Vertices: " << originalVerts << " -> " << scene.mesh.vertices.size() << std::endl;
+        // dice for this render's camera: framed on the undisplaced scene when the camera is automatic
+        if (cameraConfig.has("position") && cameraConfig.has("target")) {
+            camera = resolveCamera(scene, 0.0f);
+        } else {
+            render::PathTracer framingTracer(scene, boolOr(config["groundPlane"], true));
+            camera = resolveCamera(scene, framingTracer.groundHeight());
+        }
+        cameraResolved = true;
+        adaptive_subd::CameraSpec view;
+        view.position = camera.position;
+        view.target = camera.target;
+        view.up = camera.up;
+        view.fovYRadians = camera.verticalFovDeg * math::DEG_TO_RAD;
+        view.width = settings.width;
+        view.height = settings.height;
+
+        std::cout << "[Displacement] Dicing for the render camera at " << pixelsPerSegment
+                  << " px a segment and displacing, scale=" << dispOpt.displacementScale << "m..." << std::endl;
+        gltf::GltfScene displaced = displacement::DisplacementEngine::displaceSceneForView(
+            scene, dispOpt, view, pixelsPerSegment, static_cast<size_t>(numberOr(dispJson["maxTriangles"], 0.0f)));
+        if (!displaced.ok) {
+            std::cerr << "displacement failed: " << displaced.error << std::endl;
+            return 3;
+        }
+        scene = std::move(displaced);
+        std::cout << "[Displacement] Complete. Triangles: " << originalTris << " -> " << (scene.mesh.indices.size() / 3)
+                  << ", Vertices: " << originalVerts << " -> " << scene.mesh.vertices.size() << std::endl;
 
         if (dispJson.has("exportDisplacedGlb")) {
             std::string outGlb = dispJson["exportDisplacedGlb"].asString("");
@@ -200,16 +257,7 @@ int main(int argc, char** argv) {
                                numberOr(config["clayRoughness"], 0.82f), numberOr(config["clayMetallic"], 0.02f));
     }
 
-    render::RenderSettings settings;
-    settings.width = static_cast<int>(numberOr(config["width"], 1280));
-    settings.height = static_cast<int>(numberOr(config["height"], 720));
-    settings.samplesPerPixel = static_cast<int>(numberOr(config["samplesPerPixel"], 64));
-    settings.maxBounces = static_cast<int>(numberOr(config["maxBounces"], 4));
-    settings.threads = static_cast<int>(numberOr(config["threads"], 0));
-    settings.clampIndirect = numberOr(config["clampIndirect"], 10.0f);
-    settings.seed = static_cast<uint32_t>(numberOr(config["seed"], 1));
-    const std::string modeName = config["shadingMode"].asString("relit");
-    settings.mode = modeName == "baked" ? render::ShadingMode::Baked : render::ShadingMode::Relit;
+    if (!cameraResolved) camera = resolveCamera(scene, tracer.groundHeight());
 
     const Json& sunConfig = config["sun"];
     float elevationDeg = 0.0f, azimuthDeg = 0.0f;
@@ -228,26 +276,6 @@ int main(int argc, char** argv) {
     }
     const float e = elevationDeg * math::DEG_TO_RAD, a = azimuthDeg * math::DEG_TO_RAD;
     const Vec3 sunDirection(std::cos(e) * std::sin(a), std::sin(e), -std::cos(e) * std::cos(a));
-
-    render::CameraSpec camera;
-    const Json& cameraConfig = config["camera"];
-    const float aspect = static_cast<float>(settings.width) / static_cast<float>(std::max(settings.height, 1));
-    if (cameraConfig.has("position") && cameraConfig.has("target")) {
-        camera.position = vec3Or(cameraConfig["position"], camera.position);
-        camera.target = vec3Or(cameraConfig["target"], camera.target);
-        camera.verticalFovDeg = numberOr(cameraConfig["verticalFovDeg"], camera.verticalFovDeg);
-        camera.up = vec3Or(cameraConfig["up"], camera.up);
-        camera.apertureRadius = numberOr(cameraConfig["apertureRadius"], 0.0f);
-        camera.focusDistance = numberOr(cameraConfig["focusDistance"], 0.0f);
-    } else {
-        const Json& framing = cameraConfig["auto"];
-        camera = render::PathTracer::frameBounds(
-            scene.bounds, tracer.groundHeight(), aspect,
-            numberOr(framing["verticalFovDeg"], 40.0f),
-            numberOr(framing["pitchDeg"], 35.0f),
-            numberOr(framing["headingDeg"], 20.0f),
-            numberOr(framing["distanceScale"], 0.9f));
-    }
 
     const Json& atmosphereConfig = config["atmosphere"];
     sky::AtmosphereParams atmosphere;

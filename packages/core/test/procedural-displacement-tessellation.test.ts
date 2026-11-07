@@ -70,7 +70,7 @@ describe('Procedural Displacement & Tessellation Engine (Frontier 4)', () => {
                 verticalFovDeg: 40
             },
             displacement: {
-                tessellationFactor: 2, // 2^2 = 4x for rapid unit test
+                pixelsPerSegment: 8, // coarse dicing for a rapid unit test
                 displacementScale: 0.04,
                 sampleTextureHeight: true,
                 enableProceduralNoise: true
@@ -80,7 +80,7 @@ describe('Procedural Displacement & Tessellation Engine (Frontier 4)', () => {
         expect(result.success).toBe(true);
         expect(fs.existsSync(result.beautyPngPath)).toBe(true);
         expect(fs.existsSync(result.normalPngPath)).toBe(true);
-        expect(result.stats.triangles).toBe(8444 * 4); // 33,776 triangles
+        expect(result.stats.triangles).toBeGreaterThan(8444); // diced for the camera, more than the input
         expect(result.stats.nanSamples).toBe(0);
         expect(result.stats.geometryCoverage).toBeGreaterThan(0.5);
     });
