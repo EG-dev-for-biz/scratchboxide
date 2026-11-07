@@ -71,6 +71,9 @@ function photo(f: ReliefFacade): { rgba: Uint8Array; width: number; height: numb
     return { rgba, width: W, height: H };
 }
 
+// the fill's parity with the TypeScript: its native-only CDT caps off
+const TS_FILL = { ...LATTICE_STITCH_PARAMS, cdtCaps: false };
+
 function withNative<T>(mode: '0' | '1', fn: () => T): { out: T; ms: number } {
     const was = process.env.SCRATCHBOX_K_NATIVE;
     process.env.SCRATCHBOX_K_NATIVE = mode;
@@ -132,15 +135,18 @@ describe('lattice cut and stitch: native against TypeScript', () => {
     // a footprint that crosses the box: its left 2 m and a corner of its front outside, a notch in the back
     const FOOTPRINT: Array<[number, number]> = [[2, -0.5], [9, -0.5], [9, 1.5], [11, 1.5], [11, -0.5], [16.5, -0.5], [16.5, 9], [13, 12.5], [2, 12.5]];
 
-    it('clips the scan to the footprint the same, at every margin', () => {
+    it('clips the scan to the footprint natively by the robust boolean, removing what the TypeScript line clip removes', () => {
         for (const margin of [0, 0.3]) {
             const ts = withNative('0', () => clipToFootprint(Uint8Array.from(scan), [FOOTPRINT], margin));
             const nat = withNative('1', () => clipToFootprint(Uint8Array.from(scan), [FOOTPRINT], margin));
             expect(ts.out.report.cutTriangles).toBeGreaterThan(10);
-            expect(ts.out.report.removedTriangles).toBeGreaterThan(10);
-            expect(nat.out.report).toEqual(ts.out.report);
-            expect(Buffer.compare(nat.out.glb, ts.out.glb)).toBe(0);
-            console.log(`footprint clip (${margin} m), ${ts.out.report.cutTriangles} triangles cut, ${ts.out.report.removedTriangles} removed: TypeScript ${ts.ms.toFixed(0)} ms, native ${nat.ms.toFixed(0)} ms`);
+            expect(nat.out.report.method).toBe('robust boolean');
+            expect(nat.out.report.boolean).toMatchObject({ unpairedSegments: 0, chainFailures: 0, windingConflicts: 0 });
+            // the same surface goes (the line clip's corners are cut at the outline's lines, the boolean's at its mitred offset)
+            expect(Math.abs(nat.out.report.removedAreaM2 - ts.out.report.removedAreaM2)).toBeLessThanOrEqual(Math.max(2, 0.02 * ts.out.report.removedAreaM2));
+            // and cuts no triangle the prism's wall does not cross
+            expect(nat.out.report.cutTriangles).toBeLessThanOrEqual(ts.out.report.cutTriangles);
+            console.log(`footprint clip (${margin} m): lines ${ts.out.report.cutTriangles} cut / ${ts.out.report.removedAreaM2} m2 in ${ts.ms.toFixed(0)} ms; boolean ${nat.out.report.cutTriangles} cut / ${nat.out.report.removedAreaM2} m2 in ${nat.ms.toFixed(0)} ms`);
         }
     }, 300_000);
 
@@ -169,8 +175,9 @@ describe('lattice cut and stitch: native against TypeScript', () => {
         expect(wallTriangles(ts.out.glb)).toBe(before);
         expect(ts.out.report.keptNodes).toBe(facades.length);
         expect(ts.out.report.removedTriangles).toBeGreaterThan(10);
-        expect(nat.out.report).toEqual(ts.out.report);
-        expect(Buffer.compare(nat.out.glb, ts.out.glb)).toBe(0);
+        expect(nat.out.report.keptNodes).toBe(facades.length);
+        expect(wallTriangles(nat.out.glb)).toBe(before);
+        expect(nat.out.report.removedTriangles).toBeGreaterThan(10);
     }, 300_000);
 
     it('textures the fill the same: on a rebuilt wall, at its corners, continued from a wall, or clay', () => {
@@ -180,7 +187,7 @@ describe('lattice cut and stitch: native against TypeScript', () => {
         const cut = cutScanToLattice(Uint8Array.from(scan), sealed).glb;
         const clay = clipToFootprint(applyFacadeLattices(cut, sealed, false, undefined, { removeScan: false }).glb, [FOOTPRINT], 0.3).glb;
         const twin = clipToFootprint(applyFacadeLattices(cut, textured, true, undefined, { removeScan: false }).glb, [FOOTPRINT], 0.3).glb;
-        const fill = () => fillOpenLoops(Uint8Array.from(clay), [Uint8Array.from(twin)], { footprint: [FOOTPRINT] });
+        const fill = () => fillOpenLoops(Uint8Array.from(clay), [Uint8Array.from(twin)], { footprint: [FOOTPRINT] }, TS_FILL);
         const ts = withNative('0', fill), nat = withNative('1', fill);
         const seal = (glb: Buffer) => parseGlbBytes(glb).json.nodes.find((n: any) => n.extras?.sbSeal)?.extras.sbSeal;
         const routes = seal(ts.out.others[0]);
