@@ -392,6 +392,8 @@ same bronze-dark), so the photo cannot place a window, and the refusal is the ri
 | Pitch by autocorrelation, fallback | 27 / 44 | 2,211 |
 | Final (`window-array/8`: and grouped bays, window size either sign, four-storey guard) | 37 / 34 | 3,353 |
 
+![Window arrays by region: the system's builds and the final offline reading](./k-window-array/2026-11-07-regions-sheet.jpg)
+
 By building (final): Penn 2 10 / 3 and 1,061; Lever House 8 / 5 and 414 (face 7's shaft 8 boxes to 392 windows); 30
 Rock 18 / 12 and 1,256 (face 20 2,154 boxes to 2,554 windows, face 27 550 to 1,862); Seagram 1 / 14 and 622. Not yet
 rebuilt end to end on `window-array/8`.
