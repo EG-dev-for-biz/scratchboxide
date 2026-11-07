@@ -1384,6 +1384,8 @@ export interface Scene3DData {
         };
         atmosphericScattering?: boolean | {
             enabled?: boolean;
+            /** The clear-sky model: 'multiple-scattering' (native, set by the scene weather), else the spectral sky (atmosphere-types.ts). */
+            skyModel?: 'multiple-scattering';
             rayleigh?: number;
             mie?: number;
             turbidity?: number;

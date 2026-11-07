@@ -142,8 +142,8 @@ export function readSceneWeather(scene: Partial<Scene3DData> | undefined): Scene
 
 /**
  * The scene with its weather set: the weather recorded on the scene, and the sky config the viewport draws written from
- * it (sun angles, cloud cover and density, cloud shadows, haze as turbidity, fog as an exponential density), the
- * skybox the atmospheric sky. Fields of the sky config the weather does not own are kept.
+ * it (the multiple-scattering sky model, sun angles, cloud cover and density, cloud shadows, haze as turbidity, fog as an
+ * exponential density), the skybox the atmospheric sky. Fields of the sky config the weather does not own are kept.
  */
 export function applySceneWeather(scene: Scene3DData, weather: Partial<SceneWeather>): Scene3DData {
     const w = normalizeWeather({ ...(readSceneWeather(scene) ?? DEFAULT_SCENE_WEATHER), ...weather });
@@ -162,6 +162,11 @@ export function applySceneWeather(scene: Scene3DData, weather: Partial<SceneWeat
     const atmosphericScattering = {
         ...base,
         enabled: true,
+        // the native multiple-scattering clear sky (García Liñán's method, scratchbox_sky_ms.hpp; multiple-scattering-sky.ts): at the low sun
+        // a real place opens under, the higher orders of scattering set the colour of the sky and of its light. The sun
+        // elevation drives it, the haze sets its aerosol (the turbidity below, as an optical depth at 550 nm), and the
+        // cloud cover stays the dome's cloud layer over it
+        skyModel: 'multiple-scattering' as const,
         sunElevation: sun.elevationDeg,
         sunAzimuth: sun.azimuthDeg,
         timeOfDay: w.timeOfDay,
