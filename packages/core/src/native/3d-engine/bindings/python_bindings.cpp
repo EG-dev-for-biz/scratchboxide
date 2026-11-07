@@ -622,6 +622,23 @@ NB_MODULE(scratchbox_native, m) {
         .def("hausdorff_distance", [](const ScratchboxMesh& self, const ScratchboxMesh& other, size_t samples) {
             return processing::HausdorffDistanceEngine::compute(self, other, samples);
         }, "other"_a, "samples"_a = 500)
+        // Named faces and edges (scratchbox_named_topology.hpp)
+        .def("face_names", [](const ScratchboxMesh& self) { return named::faceNames(self); },
+             "The names its faces carry (top, bottom, side, chamfer, plate.top...); [] when its maker names none or an edit lost them")
+        .def("edge_names", [](const ScratchboxMesh& self) { return named::edgeNames(self); },
+             "The names its real edges carry, read from the faces on each side: a cap's name (top, bottom), a bevel's (chamfer, fillet), or side between walls")
+        .def("face_frame", [](const ScratchboxMesh& self, const std::string& face) {
+            const named::FaceFrame fr = named::faceFrame(self, face);
+            auto t = [](const Vec3& v) { return std::array<float, 3>{v.x, v.y, v.z}; };
+            nb::dict d;
+            d["origin"] = t(fr.origin); d["normal"] = t(fr.normal); d["x_axis"] = t(fr.xAxis); d["z_axis"] = t(fr.zAxis); d["area"] = fr.area;
+            return d;
+        }, "face"_a, "The frame of the named face: origin at its centre, normal out of the solid, x_axis and z_axis in its plane (on a +-Y face x_axis is +X); its largest flat part when the name spans several planes. Raises for a name it does not carry, listing the ones it does")
+        .def("place_on", [](ScratchboxMesh& self, const ScratchboxMesh& target, const std::string& face, float u, float v, float gap, float spinDeg) -> ScratchboxMesh& {
+            named::placeOnFace(self, target, face, u, v, gap, spinDeg);
+            return self;
+        }, "target"_a, "face"_a, "u"_a = 0.0f, "v"_a = 0.0f, "gap"_a = 0.0f, "spin_deg"_a = 0.0f, nb::rv_policy::reference,
+           "Set this mesh on target's named face: its +Y turned onto the face normal and the centre of its bottom (-Y side of its bounds) put at the face centre, moved u along the face's x_axis, v along its z_axis and gap out; spin_deg turns it about the normal. In place; returns self")
         .def("__repr__", [](const ScratchboxMesh& self) {
             return "<ScratchboxMesh '" + self.name + "': " +
                    std::to_string(self.vertices.size()) + " verts, " +
@@ -637,9 +654,12 @@ NB_MODULE(scratchbox_native, m) {
         return ScratchboxMesh::createSphere(radius, rings, sectors, color);
     }, "radius"_a = 1.0f, "rings"_a = 16, "sectors"_a = 32, "color"_a = Vec4(0.9f, 0.3f, 0.3f, 1.0f));
 
-    m_geom.def("create_box", [](const Vec3& size, const Vec4& color) {
-        return ScratchboxMesh::createBox(size, color);
-    }, "size"_a = Vec3(1.0f, 1.0f, 1.0f), "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f));
+    m_geom.def("create_box", [](const Vec3& size, const Vec4& color, const std::string& name) {
+        ScratchboxMesh mesh = ScratchboxMesh::createBox(size, color);
+        if (!name.empty()) { mesh.name = name; named::qualifyNames(mesh, name); }
+        return mesh;
+    }, "size"_a = Vec3(1.0f, 1.0f, 1.0f), "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f), "name"_a = "",
+       "Centred box; faces named top (+Y), bottom (-Y) and side, and with name given also name.top...");
 
     m_geom.def("create_cylinder", [](float radiusTop, float radiusBottom, float height, int segments, const Vec4& color, bool capped) {
         return ScratchboxMesh::createCylinder(radiusTop, radiusBottom, height, segments, color, capped);
@@ -698,10 +718,14 @@ NB_MODULE(scratchbox_native, m) {
     }, "seed"_a, "curve"_a, "pitch"_a, "merge_distance"_a = 0.0f, "fit_to_length"_a = true,
        "Repeat seed at a continuous pitch along curve (close the curve on itself for a circular array)");
 
-    m_geom.def("extrude_polygon", [](const std::vector<Vec2>& footprint, float baseY, float height, const Vec4& color) {
-        return footprints::extrudePolygon(footprint, baseY, height, color);
-    }, "footprint"_a, "base_y"_a = 0.0f, "height"_a = 1.0f, "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f),
-       "Extrude a 2D XZ polygon along +Y into a closed, capped solid (walls + top + bottom)");
+    m_geom.def("extrude_polygon", [](const std::vector<Vec2>& footprint, float baseY, float height, const Vec4& color, const std::string& name) {
+        ScratchboxMesh mesh = footprints::extrudePolygon(footprint, baseY, height, color);
+        if (!name.empty()) { mesh.name = name; named::qualifyNames(mesh, name); }
+        return mesh;
+    }, "footprint"_a, "base_y"_a = 0.0f, "height"_a = 1.0f, "color"_a = Vec4(0.8f, 0.8f, 0.8f, 1.0f), "name"_a = "",
+       "Extrude a 2D XZ polygon along +Y into a closed, capped solid (walls + top + bottom). Faces named top, bottom and "
+       "side (one side surface per run of the outline turning under 30 degrees, so a circle's wall has no side edges); "
+       "with name given, also name.top, name.side...");
 
     m_geom.def("merge_meshes", [](const std::vector<ScratchboxMesh>& meshes) {
         ScratchboxMesh out("merged_mesh");
@@ -722,7 +746,9 @@ NB_MODULE(scratchbox_native, m) {
         else if (op == "subtract") bop = mesh_edit::BooleanOp::Subtract;
         else if (op == "intersect") bop = mesh_edit::BooleanOp::Intersect;
         else throw std::invalid_argument("boolean_mesh op must be \"union\", \"subtract\" or \"intersect\"");
-        std::vector<mesh_edit::CsgPolygon> pa = mesh_edit::meshToPolygons(a), pb = mesh_edit::meshToPolygons(b);
+        // face names ride through the BSP splits: a's groups, then b's (so a cut's walls carry the tool's names)
+        std::vector<mesh_edit::CsgPolygon> pa = mesh_edit::meshToPolygons(a),
+            pb = mesh_edit::meshToPolygons(b, static_cast<int32_t>(a.hasFaceNames() ? a.faceGroups.size() : 0));
         const mesh_edit::DBox ba = mesh_edit::boxOf(pa), bb = mesh_edit::boxOf(pb);
         const double extent = std::max((ba.hi - ba.lo).length(), (bb.hi - bb.lo).length());
         const double eps = std::max(1e-9, 1e-7 * std::max(extent, 1e-3));
@@ -730,9 +756,16 @@ NB_MODULE(scratchbox_native, m) {
         mesh_edit::closeTJunctions(result, eps * 10);
         ScratchboxMesh out = mesh_edit::polygonsToMesh(result, "boolean_mesh");
         out.material = a.material;
+        if (out.faceGroup.size() == out.indices.size() / 3 && (a.hasFaceNames() || b.hasFaceNames())) {
+            if (a.hasFaceNames()) out.faceGroups = a.faceGroups;
+            if (b.hasFaceNames()) out.faceGroups.insert(out.faceGroups.end(), b.faceGroups.begin(), b.faceGroups.end());
+        } else {
+            out.faceGroup.clear();
+        }
         out.recomputeBounds();
         return out;
-    }, "a"_a, "b"_a, "op"_a, "Boolean a and b by BSP mesh CSG: op is \"union\", \"subtract\" or \"intersect\"");
+    }, "a"_a, "b"_a, "op"_a, "Boolean a and b by BSP mesh CSG: op is \"union\", \"subtract\" or \"intersect\". Face names are kept: a's, "
+       "and b's on what b adds (a subtract's cut walls carry b's names, e.g. tool.side)");
 
     // ========================================================================
     // 3. ARCHITECTURE SUBMODULE (Building Tools / OSM)
@@ -2159,11 +2192,18 @@ NB_MODULE(scratchbox_native, m) {
         m_ops.def("intersect", [boolean](const ScratchboxMesh& a, const ScratchboxMesh& b, float smooth, const std::string& name, bool requireClosed) {
             return boolean(a, b, meshops::BooleanKind::Intersect, smooth, name, requireClosed);
         }, "a"_a, "b"_a, "smooth_angle_deg"_a = 30.0f, "name"_a = "Intersect", "require_closed"_a = true, "Exact overlap of two closed meshes; result is closed");
-        m_ops.def("bevel", [](const ScratchboxMesh& mesh, float width, int segments, float sharp, float smooth, const std::string& name) {
-            return meshops::bevel(mesh, width, std::max(1, segments), sharp, smooth, name);
+        m_ops.def("bevel", [](const ScratchboxMesh& mesh, float width, int segments, float sharp, float smooth, const std::string& name, nb::object edges) {
+            if (edges.is_none()) return meshops::bevel(mesh, width, std::max(1, segments), sharp, smooth, name);
+            std::vector<std::string> names;
+            if (nb::isinstance<nb::str>(edges)) names = named::splitNames(nb::cast<std::string>(edges));
+            else for (nb::handle h : edges) names.push_back(nb::cast<std::string>(h));
+            return meshops::bevel(mesh, width, std::max(1, segments), sharp, smooth, name, &names);
         }, "mesh"_a, "width"_a, "segments"_a = 1, "sharp_angle_deg"_a = 30.0f, "smooth_angle_deg"_a = 30.0f, "name"_a = "Beveled",
-           "Bevel edges sharper than sharp_angle_deg on a closed mesh: segments 1 = chamfer, more = rounded. "
-           "Width is capped per vertex at 45% of its shortest edge so faces never invert");
+           "edges"_a.none() = nb::none(),
+           "Bevel a closed mesh: segments 1 = chamfer, more = rounded. edges=\"top\" (a name, several in one string, or a "
+           "list) bevels exactly the edges carrying those names (mesh.edge_names(); an unknown name raises with the "
+           "ones it has); without edges=, every edge sharper than sharp_angle_deg. Face names are kept, and the new "
+           "faces are named chamfer or fillet. Width is capped per vertex at 45% of its shortest edge so faces never invert");
         m_ops.def("inset_extrude", [v3](const ScratchboxMesh& mesh, const V3& facing, float maxAngle, float inset, float depth,
                                        std::optional<V3> boxMin, std::optional<V3> boxMax, float smooth, const std::string& name) {
             bool useBox = boxMin.has_value() && boxMax.has_value();

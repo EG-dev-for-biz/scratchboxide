@@ -405,7 +405,7 @@ inline std::vector<CsgPolygon> clipConvex(const std::vector<CsgPolygon>& polys, 
                 keep.push_back(x); section.push_back(x.p);
             }
         }
-        if (keep.size() >= 3) out.push_back(CsgPolygon{std::move(keep), p.plane});
+        if (keep.size() >= 3) out.push_back(CsgPolygon{std::move(keep), p.plane, p.tag});
     }
     if (section.size() >= 3) {
         D3 c{0, 0, 0};

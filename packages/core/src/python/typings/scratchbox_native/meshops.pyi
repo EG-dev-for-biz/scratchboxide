@@ -6,8 +6,8 @@ import scratchbox_native.geometry
 __all__ = ['bevel', 'inset_extrude', 'intersect', 'solidify', 'subtract', 'union']
 
 
-def bevel(mesh: scratchbox_native.geometry.Mesh, width: float, segments: int = 1, sharp_angle_deg: float = 30.0, smooth_angle_deg: float = 30.0, name: str = 'Beveled') -> scratchbox_native.geometry.Mesh:
-    """Bevel edges sharper than sharp_angle_deg on a closed mesh: segments 1 = chamfer, more = rounded. Width is capped per vertex at 45% of its shortest edge so faces never invert"""
+def bevel(mesh: scratchbox_native.geometry.Mesh, width: float, segments: int = 1, sharp_angle_deg: float = 30.0, smooth_angle_deg: float = 30.0, name: str = 'Beveled', edges: object | None = None) -> scratchbox_native.geometry.Mesh:
+    """Bevel a closed mesh: segments 1 = chamfer, more = rounded. edges="top" (a name, several in one string, or a list) bevels exactly the edges carrying those names (mesh.edge_names(); an unknown name raises with the ones it has); without edges=, every edge sharper than sharp_angle_deg. Face names are kept, and the new faces are named chamfer or fillet. Width is capped per vertex at 45% of its shortest edge so faces never invert"""
 
 
 def inset_extrude(mesh: scratchbox_native.geometry.Mesh, facing: collections.abc.Sequence[float], max_angle_deg: float = 10.0, inset: float = 0.0, depth: float = 0.0, box_min: collections.abc.Sequence[float] | None = None, box_max: collections.abc.Sequence[float] | None = None, smooth_angle_deg: float = 30.0, name: str = 'InsetExtruded') -> scratchbox_native.geometry.Mesh:

@@ -134,6 +134,18 @@ class Mesh:
 
     def hausdorff_distance(self, other, samples=500) -> scratchbox_native.processing.HausdorffResult: ...
 
+    def face_names(self) -> list[str]:
+        """The names its faces carry (top, bottom, side, chamfer, plate.top...); [] when its maker names none or an edit lost them"""
+
+    def edge_names(self) -> list[str]:
+        """The names its real edges carry, read from the faces on each side: a cap's name (top, bottom), a bevel's (chamfer, fillet), or side between walls"""
+
+    def face_frame(self, face: str) -> dict:
+        """The frame of the named face: origin at its centre, normal out of the solid, x_axis and z_axis in its plane (on a +-Y face x_axis is +X); its largest flat part when the name spans several planes. Raises for a name it does not carry, listing the ones it does"""
+
+    def place_on(self, target: scratchbox_native.geometry.Mesh, face: str, u: float = 0.0, v: float = 0.0, gap: float = 0.0, spin_deg: float = 0.0) -> Mesh:
+        """Set this mesh on target's named face: its +Y turned onto the face normal and the centre of its bottom (-Y side of its bounds) put at the face centre, moved u along the face's x_axis, v along its z_axis and gap out; spin_deg turns it about the normal. In place; returns self"""
+
     def __repr__(self) -> str: ...
 
     def merge(self, other) -> Mesh: ...
@@ -200,7 +212,7 @@ class Vertex:
 
 
 def boolean_mesh(a: scratchbox_native.geometry.Mesh, b: scratchbox_native.geometry.Mesh, op: str) -> Mesh:
-    """Boolean a and b by BSP mesh CSG: op is "union", "subtract" or "intersect""""
+    """Boolean a and b by BSP mesh CSG: op is "union", "subtract" or "intersect". Face names are kept: a's, and b's on what b adds (a subtract's cut walls carry b's names, e.g. tool.side)"""
 
 
 def create_arched_blister(bounds=(0.35, 0.45, 0.9), arch_radius=0.4, swell=0.08, side=1.0, grid=(16, 8), color=None, material=None, **kwargs) -> Mesh: ...
@@ -209,7 +221,8 @@ def create_arched_blister(bounds=(0.35, 0.45, 0.9), arch_radius=0.4, swell=0.08,
 def create_beveled_box(size=(1.0, 1.0, 1.0), bevel=0.02, color=None, material=None, **kwargs) -> Mesh: ...
 
 
-def create_box(*args, **kwargs) -> Mesh: ...
+def create_box(*args, **kwargs) -> Mesh:
+    """Centred box; faces named top (+Y), bottom (-Y) and side, and with name given also name.top..."""
 
 
 def create_cambered_foil(span: float = 1.8, chord: float = 0.45, camber: float = 0.04, thickness: float = 0.05, angle_of_attack_deg: float = -4.0, axis: str = 'x', endplates: bool = True, endplate_height: float = 0.25, endplate_thickness: float = 0.015, color: typing.Tuple[float, float, float, float] | None = None, material: typing.Any = None, **kwargs) -> Mesh:
@@ -227,7 +240,8 @@ def create_catenary_cable(start=(0, 0, 0), end=(10, 0, 0), sag=1.2, radius=0.03,
 def create_cone(radius=1.0, height=2.0, segments=24, color=None, material=None, **kwargs) -> Mesh: ...
 
 
-def create_cube(*args, **kwargs) -> Mesh: ...
+def create_cube(*args, **kwargs) -> Mesh:
+    """Centred box; faces named top (+Y), bottom (-Y) and side, and with name given also name.top..."""
 
 
 def create_cylinder(radius_top=1.0, radius_bottom=1.0, height=2.0, segments=24, color=None, material=None, capped=True, *, radius=None, **kwargs) -> Mesh: ...
@@ -312,8 +326,8 @@ def create_wheel_assembly(track_width: float = 1.6, wheelbase: float = 3.2, whee
     """
 
 
-def extrude_polygon(footprint: collections.abc.Sequence[scratchbox_native.math.Vec2], base_y: float = 0.0, height: float = 1.0, color: scratchbox_native.math.Vec4 = ...) -> Mesh:
-    """Extrude a 2D XZ polygon along +Y into a closed, capped solid (walls + top + bottom)"""
+def extrude_polygon(footprint: collections.abc.Sequence[scratchbox_native.math.Vec2], base_y: float = 0.0, height: float = 1.0, color: scratchbox_native.math.Vec4 = ..., name: str = '') -> Mesh:
+    """Extrude a 2D XZ polygon along +Y into a closed, capped solid (walls + top + bottom). Faces named top, bottom and side (one side surface per run of the outline turning under 30 degrees, so a circle's wall has no side edges); with name given, also name.top, name.side..."""
 
 
 def merge_meshes(meshes: collections.abc.Sequence[scratchbox_native.geometry.Mesh]) -> Mesh:

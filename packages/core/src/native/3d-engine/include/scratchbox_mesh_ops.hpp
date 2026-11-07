@@ -27,6 +27,8 @@
 
 #include "scratchbox_math.hpp"
 #include "scratchbox_geometry.hpp"
+#include "scratchbox_named_topology.hpp"
+#include "scratchbox_mesh_edit.hpp"
 #include "scratchbox_scan_geom.hpp"
 #include <vector>
 #include <array>
@@ -58,6 +60,10 @@ using geometry::Vertex;
 struct IndexedMesh {
     std::vector<Vec3> p;
     std::vector<std::array<uint32_t, 3>> t;
+    /** Per triangle, its source's FaceGroup index (ScratchboxMesh::faceGroup), carried only while it matches t;
+     *  empty when the source names nothing. An operation that adds triangles without it leaves it short, and finish
+     *  then writes no names. */
+    std::vector<int32_t> g;
 };
 
 inline IndexedMesh weld(const ScratchboxMesh& m, float eps = -1.0f) {
@@ -92,10 +98,12 @@ inline IndexedMesh weld(const ScratchboxMesh& m, float eps = -1.0f) {
         }
         remap[i] = found;
     }
+    const bool named = m.hasFaceNames();
     for (size_t i = 0; i + 2 < m.indices.size(); i += 3) {
         std::array<uint32_t, 3> tri = { remap[m.indices[i]], remap[m.indices[i + 1]], remap[m.indices[i + 2]] };
         if (tri[0] == tri[1] || tri[1] == tri[2] || tri[0] == tri[2]) continue;
         out.t.push_back(tri);
+        if (named) out.g.push_back(m.faceGroup[i / 3]);
     }
     return out;
 }
@@ -111,10 +119,12 @@ inline IndexedMesh weldExact(const ScratchboxMesh& m) {
         if (it.second) out.p.push_back(q);
         remap[i] = it.first->second;
     }
+    const bool named = m.hasFaceNames();
     for (size_t i = 0; i + 2 < m.indices.size(); i += 3) {
         std::array<uint32_t, 3> tri = { remap[m.indices[i]], remap[m.indices[i + 1]], remap[m.indices[i + 2]] };
         if (tri[0] == tri[1] || tri[1] == tri[2] || tri[0] == tri[2]) continue;
         out.t.push_back(tri);
+        if (named) out.g.push_back(m.faceGroup[i / 3]);
     }
     return out;
 }
@@ -259,9 +269,14 @@ inline void removeCaps(IndexedMesh& m, float cosLimit) {
  * faces dominate small fillet strips, and polygonal cylinders blend whatever their diagonals.
  */
 inline ScratchboxMesh finish(const IndexedMesh& m, const ScratchboxMesh& style, const std::string& name, float smoothAngleDeg = 30.0f,
-                             const std::set<uint64_t>* creases = nullptr) {
+                             const std::set<uint64_t>* creases = nullptr, const std::vector<geometry::FaceGroup>* groups = nullptr) {
     ScratchboxMesh out(name);
     out.material = style.material;
+    // Face names ride along when every triangle still has its group (scratchbox_named_topology.hpp).
+    if (!m.g.empty() && m.g.size() == m.t.size()) {
+        out.faceGroups = groups ? *groups : style.faceGroups;
+        out.faceGroup = m.g;
+    }
     const float cosLimit = std::cos(smoothAngleDeg * math::DEG_TO_RAD);
     std::vector<Vec3> fn(m.t.size()), fa(m.t.size());
     std::vector<std::vector<uint32_t>> vf(m.p.size());
@@ -1269,8 +1284,11 @@ inline void collapseShortEdges(IndexedMesh& m, float minLen, float sharpAngleDeg
             changed = true;
         }
         std::vector<std::array<uint32_t, 3>> kept;
-        for (size_t f = 0; f < m.t.size(); ++f) if (!deadF[f]) kept.push_back(m.t[f]);
+        std::vector<int32_t> keptG;
+        const bool named = m.g.size() == m.t.size() && !m.g.empty();
+        for (size_t f = 0; f < m.t.size(); ++f) if (!deadF[f]) { kept.push_back(m.t[f]); if (named) keptG.push_back(m.g[f]); }
         m.t.swap(kept);
+        if (named) m.g.swap(keptG);
         if (!changed) return;
     }
 }
@@ -1278,10 +1296,25 @@ inline void collapseShortEdges(IndexedMesh& m, float minLen, float sharpAngleDeg
 // --------------------------------------------------------------------------
 // Bevel
 // --------------------------------------------------------------------------
+/**
+ * Bevel on a closed 2-manifold mesh: segments 1 = a chamfer, more = a rounded fillet. Which edges: with `edgeNames`,
+ * exactly the real edges carrying one of those names (scratchbox_named_topology.hpp; an unknown name, or a mesh whose
+ * names were lost, is refused with the names it has); without, every edge sharper than sharpAngleDeg. Face names
+ * ride through: the faces kept keep theirs, and the bevel's own faces are named "chamfer" (segments 1) or "fillet",
+ * so the edges where they meet a cap are named both, e.g. "top" and "chamfer".
+ */
 inline ScratchboxMesh bevel(const ScratchboxMesh& input, float width, int segments = 1, float sharpAngleDeg = 30.0f,
-                            float smoothAngleDeg = 30.0f, const std::string& name = "Beveled") {
+                            float smoothAngleDeg = 30.0f, const std::string& name = "Beveled",
+                            const std::vector<std::string>* edgeNames = nullptr) {
+    if (edgeNames) {
+        // Refuse a bad name before anything is welded or collapsed: the message lists the edge names the mesh has.
+        named::selectEdges(input, *edgeNames, "bevel");
+        if (!(width > 0.0f)) throw std::invalid_argument("bevel: width must be greater than 0 to bevel the named edges");
+    }
     IndexedMesh m = weldForOps(input);
     if (m.t.empty() || width <= 0.0f) return finish(m, input, name, smoothAngleDeg);
+    const bool namedIn = !m.g.empty() && m.g.size() == m.t.size();
+    if (edgeNames && !namedIn) throw std::invalid_argument("bevel: '" + input.name + "' lost its face names while being welded");
     if (badEdges(m) == 0) {
         // Needles only: well under the mesh's own edge scale, never a quarter of a width larger than the mesh.
         std::vector<float> lengths;
@@ -1326,7 +1359,37 @@ inline ScratchboxMesh bevel(const ScratchboxMesh& input, float width, int segmen
         }
         fn.swap(settled);
     }
+    // Named selection: the real edges (between two face groups) whose names include a requested one, and that are
+    // not flat across (a flat named edge has nothing to bevel).
+    std::set<uint64_t> chosen;
+    if (edgeNames) {
+        if (m.g.size() != m.t.size()) throw std::invalid_argument("bevel: '" + input.name + "' lost its face names while short edges were collapsed");
+        for (const auto& [k, fs] : ef) {
+            const int32_t ga = m.g[fs[0]], gb = m.g[fs[1]];
+            if (ga == gb || fn[fs[0]].dot(fn[fs[1]]) > 0.99999f) continue;
+            const std::set<std::string> names = named::edgeNamesBetween(input.faceGroups, ga, gb);
+            std::string hit;
+            for (const auto& want : *edgeNames) if (names.count(want)) { hit = want; break; }
+            if (hit.empty()) continue;
+            // convex only: the second face's far corner lies behind the first face's plane
+            const uint32_t a = static_cast<uint32_t>(k >> 32), b = static_cast<uint32_t>(k & 0xffffffffu);
+            uint32_t far = a;
+            for (uint32_t v : m.t[fs[1]]) if (v != a && v != b) far = v;
+            if (fn[fs[0]].dot(m.p[far] - m.p[a]) > 1e-6f * (m.p[b] - m.p[a]).length()) {
+                throw std::invalid_argument("bevel: an edge named '" + hit + "' of '" + input.name + "' at (" + std::to_string(m.p[a].x) + ", " +
+                    std::to_string(m.p[a].y) + ", " + std::to_string(m.p[a].z) + ") is concave (a valley); a bevel here would add material, "
+                    "which this cut cannot. Bevel convex edges only; after a boolean, a qualified name (plate.top) tells the part's edges from the tool's");
+            }
+            chosen.insert(k);
+        }
+        if (chosen.empty()) {
+            std::ostringstream all;
+            for (const auto& n : *edgeNames) all << (all.tellp() ? " " : "") << n;
+            throw std::invalid_argument("bevel: the edges named '" + all.str() + "' of '" + input.name + "' are all flat across; nothing to bevel");
+        }
+    }
     auto sharp = [&](uint32_t a, uint32_t b) {
+        if (edgeNames) return chosen.count(edgeKey(a, b)) > 0;
         const auto& fs = ef.at(edgeKey(a, b));
         return fn[fs[0]].dot(fn[fs[1]]) < cosSharp;
     };
@@ -1347,6 +1410,23 @@ inline ScratchboxMesh bevel(const ScratchboxMesh& input, float width, int segmen
             }
         }
         ++regionCount;
+    }
+
+    // Named edges this offset bevel can make: every chosen edge with a different region on each side, and every point
+    // on them meeting at least two (closed loops such as an extrusion's "top"). Any other selection (a single edge or
+    // an open chain ending at a corner, where the bevel must die out on the next face) goes to the wedge-cut bevel,
+    // which handles any set of edges.
+    if (edgeNames) {
+        std::map<uint32_t, int> chosenAt;
+        bool offsetOk = true;
+        for (uint64_t k : chosen) {
+            const auto& fs = ef.at(k);
+            if (region[fs[0]] == region[fs[1]]) offsetOk = false;
+            ++chosenAt[static_cast<uint32_t>(k >> 32)];
+            ++chosenAt[static_cast<uint32_t>(k & 0xffffffffu)];
+        }
+        for (const auto& [_, c] : chosenAt) if (c < 2) offsetOk = false;
+        if (!offsetOk) { ScratchboxMesh r = mesh_edit::bevelNamedEdges(input, *edgeNames, width, segments, smoothAngleDeg); r.name = name; return r; }
     }
 
     // Each (vertex, region) pair on a sharp edge gets its own copy, pulled into the region.
@@ -1493,6 +1573,17 @@ inline ScratchboxMesh bevel(const ScratchboxMesh& input, float width, int segmen
             if (n.dot(outward) >= 0) out.t.push_back({hub, x, y});
             else out.t.push_back({hub, y, x});
         }
+    }
+    if (namedIn && m.g.size() == F) {
+        // The kept faces keep their groups; the strips and corner caps are one new surface, named by what it is.
+        std::vector<geometry::FaceGroup> groups = input.faceGroups;
+        const std::string kind = segments > 1 ? "fillet" : "chamfer";
+        std::set<int32_t> adjacent;
+        for (const auto& [k, fs] : ef) if (sharp(static_cast<uint32_t>(k >> 32), static_cast<uint32_t>(k & 0xffffffffu))) { adjacent.insert(m.g[fs[0]]); adjacent.insert(m.g[fs[1]]); }
+        groups.push_back(named::bevelGroup(kind, input.faceGroups, adjacent));
+        out.g = m.g;
+        out.g.resize(out.t.size(), static_cast<int32_t>(groups.size() - 1));
+        return finish(out, input, name, smoothAngleDeg, nullptr, &groups);
     }
     return finish(out, input, name, smoothAngleDeg);
 }

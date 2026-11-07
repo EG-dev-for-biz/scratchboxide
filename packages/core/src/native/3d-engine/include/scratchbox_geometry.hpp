@@ -288,6 +288,19 @@ struct Vertex {
         : position(p), normal(n), uv(u), color(c), tangent(t) {}
 };
 
+/**
+ * One named surface of a solid: the names its maker or an edit gave it ("top", "side", "plate.top", "chamfer"), and
+ * the name an edge takes when it runs between this surface and another wall rather than a cap (`edgeKind`: "side"
+ * for an extrusion's walls, "chamfer" or "fillet" for a bevel's faces; with `edgeKindAlways` the edge takes it even
+ * beside a cap). Names are open labels: they select geometry for an edit, they never choose how geometry is made
+ * (scratchbox_named_topology.hpp).
+ */
+struct FaceGroup {
+    std::vector<std::string> names;
+    std::string edgeKind;
+    bool edgeKindAlways{false};
+};
+
 class ScratchboxMesh {
 public:
     std::string name{"mesh"};
@@ -297,6 +310,13 @@ public:
     PbrMaterial material;
     /** Whether the vertices' uv1 carries a second UV set worth writing (TEXCOORD_1). */
     bool hasUv1{false};
+    /**
+     * Per triangle, the index of its FaceGroup in faceGroups, or -1 for a triangle with no name. Empty for a mesh
+     * that carries no names. Valid only while it has one entry per triangle: an operation that rebuilds the
+     * triangles without carrying it leaves it the wrong length, and the named lookups then say the names were lost.
+     */
+    std::vector<int32_t> faceGroup;
+    std::vector<FaceGroup> faceGroups;
 
     ScratchboxMesh() = default;
     explicit ScratchboxMesh(std::string meshName) : name(std::move(meshName)) {}
@@ -304,7 +324,14 @@ public:
     void clear() {
         vertices.clear();
         indices.clear();
+        faceGroup.clear();
+        faceGroups.clear();
         bounds = AABB();
+    }
+
+    /** Whether faceGroup names this mesh's triangles (one entry per triangle). */
+    bool hasFaceNames() const {
+        return !faceGroups.empty() && faceGroup.size() == indices.size() / 3;
     }
 
     void addVertex(const Vertex& v) {
@@ -320,6 +347,22 @@ public:
 
     void append(const ScratchboxMesh& other) {
         hasUv1 = hasUv1 || other.hasUv1;
+        // Face names: kept when both sides still name their triangles (an unnamed side's triangles take -1); a side
+        // whose names were already lost makes the whole result unnamed rather than misnamed.
+        const bool mineOk = faceGroups.empty() ? faceGroup.empty() : hasFaceNames();
+        const bool theirsOk = other.faceGroups.empty() ? other.faceGroup.empty() : other.hasFaceNames();
+        if (!faceGroups.empty() || !other.faceGroups.empty()) {
+            if (mineOk && theirsOk) {
+                faceGroup.resize(indices.size() / 3, -1);
+                const int32_t groupOffset = static_cast<int32_t>(faceGroups.size());
+                faceGroups.insert(faceGroups.end(), other.faceGroups.begin(), other.faceGroups.end());
+                if (other.faceGroups.empty()) faceGroup.insert(faceGroup.end(), other.indices.size() / 3, -1);
+                else for (int32_t g : other.faceGroup) faceGroup.push_back(g < 0 ? -1 : g + groupOffset);
+            } else {
+                faceGroups.clear();
+                faceGroup.clear();
+            }
+        }
         uint32_t offset = static_cast<uint32_t>(vertices.size());
         vertices.insert(vertices.end(), other.vertices.begin(), other.vertices.end());
         indices.reserve(indices.size() + other.indices.size());
@@ -726,6 +769,13 @@ public:
         addFace({-1, 0, 0}, {0, 0, 1}, {0, 1, 0}); // -X
         addFace({0, 1, 0}, {1, 0, 0}, {0, 0, -1}); // +Y
         addFace({0, -1, 0}, {1, 0, 0}, {0, 0, 1}); // -Y
+
+        // Face names, as an extrusion of its +Y-up rectangle has them: four walls ("side", each its own surface, so
+        // the vertical edges between them are "side" edges), the +Y cap "top", the -Y cap "bottom".
+        for (int wall = 0; wall < 4; ++wall) mesh.faceGroups.push_back({{"side"}, "side", false});
+        mesh.faceGroups.push_back({{"top"}, "side", false});
+        mesh.faceGroups.push_back({{"bottom"}, "side", false});
+        for (int32_t g : {0, 1, 2, 3, 4, 5}) { mesh.faceGroup.push_back(g); mesh.faceGroup.push_back(g); }
 
         return mesh;
     }

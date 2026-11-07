@@ -360,7 +360,8 @@ def create_arched_blister(bounds=(0.35, 0.45, 0.9), arch_radius=0.4, swell=0.08,
 def create_beveled_box(size=(1.0, 1.0, 1.0), bevel=0.02, color=None, material=None, **kwargs) -> scratchbox_native.geometry.Mesh: ...
 
 
-def create_box(*args, **kwargs) -> scratchbox_native.geometry.Mesh: ...
+def create_box(*args, **kwargs) -> scratchbox_native.geometry.Mesh:
+    """Centred box; faces named top (+Y), bottom (-Y) and side, and with name given also name.top..."""
 
 
 def create_building(width: float = 18.0, depth: float = 14.0, floors: int = 4, floor_height: float = 3.4, ground_floor_height: float = 4.2, plinth_height: float = 0.8, bay_width: float = 3.2, window_width: float = 1.8, window_height: float = 2.0, window_recess_depth: float = 0.25, roof: typing.Any = 'mansard', roof_height: float = 3.5, roof_overhang: float = 0.4, roof_pitch_degrees: float = 55.0, parapet_height: float = 0.8, curvature: float = 0.0, superellipse_exponent: float | None = None, twist_degrees: float = 0.0, taper: float = 1.0, bulge: float = 0.0, bay_count: int | None = None, bake_curvature_ao: bool = True, details: typing.Dict[str, typing.Any] | None = None, floor_heights: typing.List[float] | None = None, centre_bay_scale: float = 1.0, end_bay_scale: float = 1.0, facade_rules: typing.List[typing.Dict[str, typing.Any]] | None = None, name: str = 'ProceduralBuilding', **kwargs) -> scratchbox_native.geometry.Mesh:
@@ -426,7 +427,8 @@ def create_character(name: str = 'Human', height: float = 1.78, gender_beta: flo
 def create_cone(radius=1.0, height=2.0, segments=24, color=None, material=None, **kwargs) -> scratchbox_native.geometry.Mesh: ...
 
 
-def create_cube(*args, **kwargs) -> scratchbox_native.geometry.Mesh: ...
+def create_cube(*args, **kwargs) -> scratchbox_native.geometry.Mesh:
+    """Centred box; faces named top (+Y), bottom (-Y) and side, and with name given also name.top..."""
 
 
 def create_curved_building(width: float = 18.0, depth: float = 18.0, floors: int = 6, curvature: float = 0.85, superellipse_exponent: float = 2.4, twist_degrees: float = 0.0, taper: float = 0.85, bulge: float = 0.12, roof: str = 'dome', roof_height: float = 4.0, bake_curvature_ao: bool = True, name: str = 'CurvedBuilding', **kwargs) -> scratchbox_native.geometry.Mesh:

@@ -787,7 +787,8 @@ if _native is not None and hasattr(_native, "geometry"):
         c, mat = _resolve_color_and_material(color, material, default_color=math.Vec4(0.8, 0.8, 0.8, 1.0))
 
         if _orig_create_box:
-            mesh = _orig_create_box(s, c)
+            # name= also qualifies its face names (top -> name.top) for named edits after a merge
+            mesh = _orig_create_box(s, c, str(kwargs["name"])) if kwargs.get("name") else _orig_create_box(s, c)
             return _finish_primitive(mesh, color, mat)
         raise RuntimeError("Native create_box not available")
     _geom.create_box = create_box

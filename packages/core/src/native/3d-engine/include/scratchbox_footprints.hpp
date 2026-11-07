@@ -141,6 +141,36 @@ inline ScratchboxMesh extrudePolygon(const std::vector<Vec2>& footprint, float b
     const float topY = baseY + height;
     const size_t n = footprint.size();
 
+    // Face names (scratchbox_named_topology.hpp): the caps "top" and "bottom"; the walls "side", one surface per run
+    // of segments that turns by less than 30 degrees at each joint, so a polygonal circle's wall is one smooth surface
+    // (no "side" edges on it) and a rectangle's four walls meet at four "side" edges.
+    std::vector<int32_t> wallSurface(n, -1);
+    {
+        int32_t surface = -1;
+        size_t first = n;
+        // start where a sharp joint is, so a run never wraps across the starting segment
+        auto dirOf = [&](size_t i) { return (footprint[(i + 1) % n] - footprint[i]); };
+        auto sharpAt = [&](size_t i) {   // the joint at the start of segment i
+            const Vec2 a = dirOf((i + n - 1) % n), b = dirOf(i);
+            const float la = a.length(), lb = b.length();
+            if (la < 1e-4f || lb < 1e-4f) return false;
+            return (a.x * b.x + a.y * b.y) / (la * lb) < std::cos(30.0f * 3.14159265358979f / 180.0f);
+        };
+        for (size_t i = 0; i < n && first == n; ++i) if (sharpAt(i)) first = i;
+        if (first == n) first = 0;
+        for (size_t k = 0; k < n; ++k) {
+            const size_t i = (first + k) % n;
+            if (surface < 0 || sharpAt(i)) {
+                surface = static_cast<int32_t>(mesh.faceGroups.size());
+                mesh.faceGroups.push_back({{"side"}, "side", false});
+            }
+            wallSurface[i] = surface;
+        }
+    }
+    const int32_t topGroup = static_cast<int32_t>(mesh.faceGroups.size());
+    mesh.faceGroups.push_back({{"top"}, "side", false});
+    mesh.faceGroups.push_back({{"bottom"}, "side", false});
+
     // Side walls
     float uCoord = 0.0f;
     for (size_t i = 0; i < n; ++i) {
@@ -148,6 +178,8 @@ inline ScratchboxMesh extrudePolygon(const std::vector<Vec2>& footprint, float b
         const Vec2 seg = p1 - p0;
         const float segLen = seg.length();
         if (segLen < 1e-4f) continue;
+        mesh.faceGroup.push_back(wallSurface[i]);
+        mesh.faceGroup.push_back(wallSurface[i]);
         const Vec3 wallNormal(seg.y / segLen, 0.0f, -seg.x / segLen);
         const Vec4 tangent(seg.x / segLen, 0.0f, seg.y / segLen, 1.0f);
         const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
@@ -173,6 +205,7 @@ inline ScratchboxMesh extrudePolygon(const std::vector<Vec2>& footprint, float b
         for (const auto& p : footprint) mesh.vertices.push_back(Vertex(Vec3(p.x, topY, p.y), Vec3(0, 1, 0), Vec2(p.x, p.y), color, tangent));
         for (size_t i = 0; i + 2 < capTris.size(); i += 3) {
             mesh.indices.push_back(base + capTris[i]); mesh.indices.push_back(base + capTris[i + 2]); mesh.indices.push_back(base + capTris[i + 1]);
+            mesh.faceGroup.push_back(topGroup);
         }
     }
     // Bottom cap: the triangulator's own order, which after the swap above is this cap's correct (-Y-facing) winding.
@@ -181,6 +214,7 @@ inline ScratchboxMesh extrudePolygon(const std::vector<Vec2>& footprint, float b
         const Vec4 tangent(1.0f, 0.0f, 0.0f, 1.0f);
         for (const auto& p : footprint) mesh.vertices.push_back(Vertex(Vec3(p.x, baseY, p.y), Vec3(0, -1, 0), Vec2(p.x, p.y), color, tangent));
         for (uint32_t idx : capTris) mesh.indices.push_back(base + idx);
+        mesh.faceGroup.insert(mesh.faceGroup.end(), capTris.size() / 3, topGroup + 1);
     }
 
     for (const auto& v : mesh.vertices) mesh.bounds.expand(v.position);

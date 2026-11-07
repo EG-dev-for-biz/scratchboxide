@@ -24,6 +24,7 @@
 
 #include "scratchbox_math.hpp"
 #include "scratchbox_geometry.hpp"
+#include "scratchbox_named_topology.hpp"
 #include <vector>
 #include <memory>
 #include <unordered_map>
@@ -75,6 +76,8 @@ struct CsgPlane {
 struct CsgPolygon {
     std::vector<CsgVertex> verts;
     CsgPlane plane;
+    /** The source triangle's FaceGroup (ScratchboxMesh::faceGroup), carried through every split; -1 for none. */
+    int32_t tag = -1;
     void flip() { std::reverse(verts.begin(), verts.end()); plane.flip(); }
 };
 
@@ -190,8 +193,8 @@ private:
                     }
                 }
                 // the pieces keep the parent's plane: re-deriving it from a sliver would tilt it
-                if (f.size() >= 3) front.push_back(CsgPolygon{std::move(f), poly.plane});
-                if (b.size() >= 3) back.push_back(CsgPolygon{std::move(b), poly.plane});
+                if (f.size() >= 3) front.push_back(CsgPolygon{std::move(f), poly.plane, poly.tag});
+                if (b.size() >= 3) back.push_back(CsgPolygon{std::move(b), poly.plane, poly.tag});
             }
         }
     }
@@ -303,9 +306,11 @@ inline void closeTJunctions(std::vector<CsgPolygon>& polys, double eps) {
     }
 }
 
-inline std::vector<CsgPolygon> meshToPolygons(const ScratchboxMesh& m) {
+/** Each triangle as a polygon; a mesh that names its faces tags each with its FaceGroup index plus groupOffset. */
+inline std::vector<CsgPolygon> meshToPolygons(const ScratchboxMesh& m, int32_t groupOffset = 0) {
     std::vector<CsgPolygon> out;
     out.reserve(m.indices.size() / 3);
+    const bool named = m.hasFaceNames();
     for (size_t i = 0; i + 2 < m.indices.size(); i += 3) {
         std::vector<CsgVertex> vs;
         for (int k = 0; k < 3; ++k) {
@@ -313,6 +318,7 @@ inline std::vector<CsgPolygon> meshToPolygons(const ScratchboxMesh& m) {
             vs.push_back({{v.position.x, v.position.y, v.position.z}, v.uv.x, v.uv.y});
         }
         CsgPolygon p;
+        if (named) { const int32_t g = m.faceGroup[i / 3]; p.tag = g < 0 ? -1 : g + groupOffset; }
         if (makePolygon(std::move(vs), p)) out.push_back(std::move(p));
     }
     return out;
@@ -326,7 +332,12 @@ inline std::vector<CsgPolygon> meshToPolygons(const ScratchboxMesh& m) {
  */
 inline ScratchboxMesh polygonsToMesh(const std::vector<CsgPolygon>& polys, const std::string& name) {
     ScratchboxMesh m(name);
+    // each triangle's polygon tag, kept as faceGroup when any polygon has one (the caller supplies faceGroups)
+    bool anyTag = false;
+    for (const auto& p : polys) anyTag = anyTag || p.tag >= 0;
+    std::vector<int32_t> tags;
     for (const auto& p : polys) {
+        const size_t trianglesBefore = m.indices.size() / 3;
         const Vec3 n(static_cast<float>(p.plane.n.x), static_cast<float>(p.plane.n.y), static_cast<float>(p.plane.n.z));
         const uint32_t base = static_cast<uint32_t>(m.vertices.size());
         for (const auto& v : p.verts) {
@@ -368,7 +379,9 @@ inline ScratchboxMesh polygonsToMesh(const std::vector<CsgPolygon>& polys, const
             ring.erase(ring.begin() + static_cast<std::ptrdiff_t>(best));
         }
         if (ring.size() == 3 && minSin(ring[0], ring[1], ring[2]) > 0) m.addTriangle(base + ring[0], base + ring[1], base + ring[2]);
+        if (anyTag) tags.insert(tags.end(), m.indices.size() / 3 - trianglesBefore, p.tag);
     }
+    if (anyTag) m.faceGroup = std::move(tags);
     return m;
 }
 
@@ -682,6 +695,8 @@ inline void creaseNormals(ScratchboxMesh& m, float creaseDeg, float weldTol) {
         out.vertices[3 * f + k].normal = n.length() > 0 ? n.normalized() : fn[f];
     }
     out.recomputeBounds();
+    out.faceGroup = m.faceGroup;     // one triangle out per triangle in, same order: the names stay
+    out.faceGroups = m.faceGroups;
     m = std::move(out);
 }
 
@@ -818,6 +833,93 @@ inline uint32_t dropDegenerate(ScratchboxMesh& m, float minArea) {
     }
     m.indices = std::move(keep);
     return dropped;
+}
+
+/**
+ * Bevel exactly the edges carrying one of `names` (scratchbox_named_topology.hpp), each by subtracting its bevelCutter
+ * wedge in turn: a chamfer (segments 1) or a fillet of `width` from the edge on each face. Works for any set of
+ * edges, a single edge ending at a corner included. Face names ride through the BSP splits; the faces the cutters
+ * leave are one new surface named "chamfer" or "fillet" (and owner.chamfer). Refused loudly: an unknown name, a
+ * concave named edge (a fillet there adds material, which a cut cannot), and a width that cuts nothing.
+ */
+inline ScratchboxMesh bevelNamedEdges(const ScratchboxMesh& input, const std::vector<std::string>& names, double width, int segments,
+                                      float creaseDeg = 30.0f) {
+    if (!(width > 0)) throw MeshEditError("bevel: width must be greater than 0");
+    named::selectEdges(input, names, "bevel");
+    const std::vector<named::NamedEdge> all = named::namedEdges(input);
+    const std::vector<uint32_t> id = named::exactPointIds(input);
+    std::vector<Vec3> pos(input.vertices.size());
+    for (size_t i = 0; i < input.vertices.size(); ++i) pos[id[i]] = input.vertices[i].position;
+    auto tri = [&](uint32_t f, int k) { return input.vertices[input.indices[3 * f + k]].position; };
+    auto normalOf = [&](uint32_t f) { return (tri(f, 1) - tri(f, 0)).cross(tri(f, 2) - tri(f, 0)).normalized(); };
+    const double diag = std::max(1e-9, double((input.bounds.max - input.bounds.min).length()));
+    const double eps = std::max(1e-9, 1e-7 * diag);
+    // the chosen triangle edges, joined into straight runs that share a point and both face directions
+    struct Run { uint32_t a, b; Vec3 n1, n2; };
+    std::vector<Run> runs;
+    for (const auto& e : all) {
+        bool want = false;
+        for (const auto& n : names) want = want || e.names.count(n) > 0;
+        if (!want) continue;
+        const Vec3 n1 = normalOf(e.f0), n2 = normalOf(e.f1);
+        if (n1.dot(n2) > 0.99999f) continue;                       // flat across: nothing to bevel
+        Vec3 far = pos[e.a];
+        for (int k = 0; k < 3; ++k) { const Vec3 q = tri(e.f1, k); if ((q - pos[e.a]).length() > 0 && (q - pos[e.b]).length() > 0) far = q; }
+        if (n1.dot(far - pos[e.a]) > 1e-6f * float(diag)) {
+            std::ostringstream at;
+            at << "(" << pos[e.a].x << ", " << pos[e.a].y << ", " << pos[e.a].z << ")";
+            throw MeshEditError("bevel: an edge named '" + *e.names.begin() + "' of '" + input.name + "' at " + at.str() +
+                                " is concave (a valley); a bevel here would add material, which this cut cannot. Bevel convex edges only; "
+                                "after a boolean, a qualified name (plate.top) tells the part's edges from the tool's");
+        }
+        runs.push_back({e.a, e.b, n1, n2});
+    }
+    if (runs.empty()) throw MeshEditError("bevel: every edge named in edges= of '" + input.name + "' is flat across; nothing to bevel");
+    std::vector<int> parent(runs.size());
+    for (size_t i = 0; i < runs.size(); ++i) parent[i] = int(i);
+    std::function<int(int)> find = [&](int x) { return parent[x] == x ? x : parent[x] = find(parent[x]); };
+    std::unordered_map<uint32_t, std::vector<int>> atPoint;
+    for (size_t i = 0; i < runs.size(); ++i) { atPoint[runs[i].a].push_back(int(i)); atPoint[runs[i].b].push_back(int(i)); }
+    auto same = [](const Run& r, const Run& q) {
+        return (r.n1.dot(q.n1) > 0.9999f && r.n2.dot(q.n2) > 0.9999f) || (r.n1.dot(q.n2) > 0.9999f && r.n2.dot(q.n1) > 0.9999f);
+    };
+    for (const auto& [_, list] : atPoint) for (size_t i = 0; i < list.size(); ++i) for (size_t j = i + 1; j < list.size(); ++j)
+        if (same(runs[list[i]], runs[list[j]])) parent[find(list[i])] = find(list[j]);
+    std::map<int, std::vector<int>> groups;
+    for (size_t i = 0; i < runs.size(); ++i) groups[find(int(i))].push_back(int(i));
+    std::vector<BevelEdge> edges;
+    for (const auto& [_, g] : groups) {
+        const Run& r0 = runs[g[0]];
+        const Vec3 dir = (pos[r0.b] - pos[r0.a]).normalized();
+        float lo = 1e30f, hi = -1e30f;
+        for (int i : g) for (uint32_t v : {runs[i].a, runs[i].b}) { const float t = (pos[v] - pos[r0.a]).dot(dir); lo = std::min(lo, t); hi = std::max(hi, t); }
+        // (no length floor: the mesh_edit tool's "shorter than twice the width" skip is for the facets of a curved
+        // rim, which never carry an edge name, since a smooth surface is one face group)
+        if (!(hi - lo > 0)) continue;
+        const Vec3 A = pos[r0.a] + dir * lo, B = pos[r0.a] + dir * hi;
+        edges.push_back({{A.x, A.y, A.z}, {B.x, B.y, B.z}, {r0.n1.x, r0.n1.y, r0.n1.z}, {r0.n2.x, r0.n2.y, r0.n2.z}});
+    }
+    std::vector<geometry::FaceGroup> faceGroups = input.faceGroups;
+    const std::string kind = segments > 1 ? "fillet" : "chamfer";
+    std::set<int32_t> adjacent;
+    for (const auto& e : all) for (const auto& n : names) if (e.names.count(n)) { adjacent.insert(input.faceGroup[e.f0]); adjacent.insert(input.faceGroup[e.f1]); break; }
+    faceGroups.push_back(named::bevelGroup(kind, input.faceGroups, adjacent));
+    const int32_t bevelTag = static_cast<int32_t>(faceGroups.size() - 1);
+    std::vector<CsgPolygon> polys = meshToPolygons(input);
+    for (const auto& e : edges) {
+        std::vector<CsgPolygon> cutter = bevelCutter(e, width, segments, eps);
+        for (auto& c : cutter) c.tag = bevelTag;
+        if (!cutter.empty()) polys = booleanPolygons(std::move(polys), std::move(cutter), BooleanOp::Subtract, eps);
+    }
+    closeTJunctions(polys, eps * 10);
+    size_t cut = 0;
+    for (const auto& p : polys) if (p.tag == bevelTag) ++cut;
+    if (cut == 0) throw MeshEditError("bevel: the width " + std::to_string(width) + " m cut nothing from '" + input.name + "'");
+    ScratchboxMesh out = polygonsToMesh(polys, input.name);
+    out.material = input.material;
+    out.faceGroups = std::move(faceGroups);
+    creaseNormals(out, creaseDeg, float(std::max(1e-6, 1e-5 * diag)));
+    return out;
 }
 
 } // namespace mesh_edit
