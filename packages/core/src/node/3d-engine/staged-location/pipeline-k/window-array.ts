@@ -80,7 +80,7 @@ import { countSet, readOccluded } from './occlusion';
 import { featurelessMaskName } from './ortho-rectify';
 import { systemOnFace, type BuildingSystem, type FaceRegion, type FaceSystem } from './building-system';
 
-export const WINDOW_ARRAY_VERSION = 'window-array/8';
+export const WINDOW_ARRAY_VERSION = 'window-array/9';
 
 export const WINDOW_ARRAY_PARAMS = {
     /** Fewer single-site boxes than this: nothing is inferred. */
@@ -203,7 +203,7 @@ export interface FacadeArrayReport {
     /** Where the lattice came from: the boxes' consensus, the photo's own periodicity, or the boxes' with its storeys (columns) merged into the photo's. */
     source?: 'boxes' | 'photo' | 'merged' | 'system';
     /** The building's system on this face (building-system.ts): its family and tier, how far the photo moved the window's centre line from where the system put it (px, in storeys), or why the system was not used here. */
-    system?: { family?: string; tier?: string; phaseMoved?: number; /** The system's column and row pitch as measured on the photo (m). */ pitchM?: [number, number]; refused?: string; /** The face's regions as the system read them, top to bottom, and what each came to here. */ regions?: Array<{ pattern: string | null; repeats: boolean; bottomM: number; topM: number; boxes: number; windows: number; source?: string; reason?: string; /** Grouped bays the photo showed here (several windows close together, a wider pier between groups): the bay pitch, its windows, their centres within the bay and the window's width (m). */ bay?: { pitchM: number; windows: number; offsetsM: number[]; windowM: number } }> };
+    system?: { family?: string; tier?: string; phaseMoved?: number; /** The system's column and row pitch as measured on the photo (m). */ pitchM?: [number, number]; /** The window's size taken from this many boxes read on the system's sites, in place of the model's. */ sizeFromBoxes?: number; refused?: string; /** The face's regions as the system read them, top to bottom, and what each came to here. */ regions?: Array<{ pattern: string | null; repeats: boolean; bottomM: number; topM: number; boxes: number; windows: number; source?: string; reason?: string; /** Grouped bays the photo showed here (several windows close together, a wider pier between groups): the bay pitch, its windows, their centres within the bay and the window's width (m). */ bay?: { pitchM: number; windows: number; offsetsM: number[]; windowM: number } }> };
     /** The photo's own lattice (photoLattice), in metres, and the rows and columns that showed its window contrast. */
     seed?: { colPitchM?: number; rowPitchM?: number; windowM?: [number, number]; contrast?: number; ac?: [number, number]; clear: boolean; rows: number; cols: number };
     /** Where the storey lattice came from: this facade, or the building's storeys read across every facade. */
@@ -569,6 +569,16 @@ function cellInterval(prof: Float64Array, share: [number, number], sign: -1 | 1 
             if (!best || score > best.dev * sign / Math.sqrt(best.len)) best = { start, len, dev: sum * sign };
         }
     }
+    // an interval shorter than the run it lies in scores alike at every place along the run: centred on the run (a
+    // window of known size placed in the middle of the dark run, not at its start)
+    if (best && minL === maxL) {
+        const b0 = best, at = (st: number) => { let t = 0; for (let k = 0; k < b0.len; k++) t += dev[(st + k) % n]; return t; };
+        const tie = (st: number) => at(st) >= b0.dev * sign - 1e-9 * Math.abs(b0.dev);
+        let lo = 0, hi = 0;
+        while (lo < n && tie((b0.start - lo - 1 + n) % n)) lo++;
+        while (hi < n && tie((b0.start + hi + 1) % n)) hi++;
+        if (lo + hi > 0 && lo + hi < n) best = { ...b0, start: (b0.start + Math.round((hi - lo) / 2) + n) % n };
+    }
     return best;
 }
 
@@ -846,9 +856,14 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
         const f = foldCell({ ...lab, W, H, valid }, { lag: cpM, ac: 1 }, { lag: rpM, ac: 1 }, P, { size: [sy.col.size, sy.row.size] });
         if (f && f.contrastE >= P.photo.minContrast) {
             let d = (f.row.phase - sy.row.phase) / sy.row.pitch; d -= Math.round(d);
-            seed = { ...f, col: { ...f.col, size: sy.col.size }, row: { ...f.row, size: sy.row.size }, clear: true, tried: seed.tried };
+            // the boxes read on the system's sites measure its window: the model gives the pattern, the photo its size
+            // (Penn 2's lower band read 1.72 x 1.8 m windows in bays its reader boxes fill at 2.6 m: the model's size kept
+            // every box aside as another size and filled the bays between with small windows)
+            const onSys = boxes.filter(b => Math.abs(siteOf(b.cx, f.col).res) <= P.snapTol && Math.abs(siteOf(b.cy, f.row).res) <= P.snapTol && b.w <= P.spanSites * f.col.pitch && b.h <= P.spanSites * f.row.pitch);
+            const fromBoxes = onSys.length >= P.minBoxes;
+            seed = { ...f, col: { ...f.col, size: fromBoxes ? median(onSys.map(b => b.w)) : sy.col.size }, row: { ...f.row, size: fromBoxes ? median(onSys.map(b => b.h)) : sy.row.size }, clear: true, tried: seed.tried };
             systemUsed = true; rowsFrom = 'building';
-            systemNote = { family: sy.family, tier: sy.tier, phaseMoved: r2(Math.abs(d)), pitchM: [r3(cpM * pixel), r3(rpM * pixel)] };
+            systemNote = { family: sy.family, tier: sy.tier, phaseMoved: r2(Math.abs(d)), pitchM: [r3(cpM * pixel), r3(rpM * pixel)], ...(fromBoxes ? { sizeFromBoxes: onSys.length } : {}) };
         } else systemNote = { family: sy.family, tier: sy.tier, pitchM: [r3(cpM * pixel), r3(rpM * pixel)], refused: `the photo folded at the system's lattice (measured ${r2(cpM * pixel)} x ${r2(rpM * pixel)} m) shows no window (contrast ${r2(f?.contrastE ?? 0)}); the face reads for itself` };
     }
     // the boxes' rows on the building's storeys where they agree (the floors are the building's); a face with no row
