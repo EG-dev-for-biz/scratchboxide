@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { ARTIST_FINISH, PBR_ARTIST_RULES, PBR_REFERENCE, pbrReferenceLines } from '../src/common/spatial/pbr-artist-reference';
+import { ARTIST_FINISH, PBR_ARTIST_RULES, PBR_REFERENCE, pbrReferenceLines, referenceRange } from '../src/common/spatial/pbr-artist-reference';
 
 describe('the texture artist reference', () => {
     it('holds ranges within 0..1, metalness 0 or 1, and a source for every finish', () => {
@@ -33,6 +33,11 @@ describe('the texture artist reference', () => {
     it('is told as prompt lines: every finish and every rule', () => {
         const lines = pbrReferenceLines();
         expect(lines.length).toBe(PBR_REFERENCE.length + PBR_ARTIST_RULES.length + 2);
-        expect(lines).toContain('- dressed limestone or sandstone, weathered ashlar, sawn or tooled stone: roughness 0.7-0.95, metalness 0');
+        const i = PBR_REFERENCE.findIndex(e => /dressed limestone/.test(e.look));
+        expect(lines).toContain(`${i + 1}. dressed limestone or sandstone, weathered ashlar, sawn or tooled stone: roughness 0.7-0.95, metalness 0`);
+        // the range of the finish a reading names, by its number; none for 0 or a number past the list
+        expect(referenceRange(i + 1)).toEqual([0.7, 0.95]);
+        expect(referenceRange(0)).toBeUndefined();
+        expect(referenceRange(PBR_REFERENCE.length + 1)).toBeUndefined();
     });
 });

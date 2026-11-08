@@ -36,9 +36,9 @@
  */
 
 import type { RegionClass } from './material-regions';
-import { ARTIST_FINISH, pbrReferenceLines } from '../../../../common/spatial/pbr-artist-reference';
+import { ARTIST_FINISH, pbrReferenceLines, referenceRange } from '../../../../common/spatial/pbr-artist-reference';
 
-export const MATERIAL_FINISH_VERSION = 'material-finish/4';
+export const MATERIAL_FINISH_VERSION = 'material-finish/5';
 
 export const FINISH_READ = {
     /** A reading's roughness and metalness rank the class's sets, and set its drawn finish, at this confidence (0..100) and above. */
@@ -124,6 +124,10 @@ export interface ClassFinish {
     grain?: number;
     /** The share of the class's area the read material covers (0..1; the expert's read). */
     coverage?: number;
+    /** The reference finish it named (common/spatial/pbr-artist-reference.ts, 1-based); its roughness is held in that finish's range (parseClassFinish). */
+    ref?: number;
+    /** The roughness it gave, when the reference's range moved it. */
+    readRoughness?: number;
 }
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
@@ -140,11 +144,12 @@ export function finishPrompt(classes: Array<Pick<RegionClass, 'meanLab' | 'share
         '- "metalness": 0 or 1 only (see the rules);',
         '- "grain": 0..1, how much the surface varies at a metre\'s scale (glass 0, smooth paint 0.2, dressed stone 0.5, rough brick or concrete 0.8);',
         '- "coverage": 0..1, the share of the row\'s patches the material you set covers;',
+        '- "ref": the number of the reference finish the material is, or 0 when none of them is; your roughness must lie in its range;',
         '- "conf": 0..100, how sure you are of the material; a row that is no one material (shadow, a mix, reflected sky) gets a low conf;',
         '- "seen": the material in a few words.',
         // a window opening's surface is the pane that closes it: the photo there shows what lies behind or mirrored in it
         ...(classes.some(c => c.openings) ? ['A row marked "inside the window openings" is photographed through or off the pane that closes the opening: set the finish of that pane itself (the glazing, or an opaque infill panel when the patches show one), not of the blinds, rooms, shadows or reflections seen in it.'] : []),
-        'Answer with JSON only: {"classes":[{"row":1,"roughness":0.85,"metalness":0,"grain":0.5,"coverage":0.9,"conf":0,"seen":"..."}]}'
+        'Answer with JSON only: {"classes":[{"row":1,"ref":5,"roughness":0.85,"metalness":0,"grain":0.5,"coverage":0.9,"conf":0,"seen":"..."}]}'
     ].join('\n');
 }
 
@@ -160,8 +165,10 @@ export function parseClassFinish(text: string, rows = 0): Array<ClassFinish | un
         if (typeof c?.row !== 'number') throw new Error('a class without a "row"');
         const k = Math.round(c.row) - 1, roughness = unit(c.roughness), metalness = unit(c.metalness);
         if (k < 0 || (rows && k >= rows) || roughness === undefined || metalness === undefined) continue;
-        const grain = unit(c.grain), coverage = unit(c.coverage);
-        out[k] = { roughness, metalness, conf: typeof c.conf === 'number' && Number.isFinite(c.conf) ? Math.max(0, Math.min(100, c.conf)) : 0, ...(typeof c.seen === 'string' && c.seen.trim() ? { seen: c.seen.trim().slice(0, 80) } : {}), ...(grain !== undefined ? { grain } : {}), ...(coverage !== undefined ? { coverage } : {}) };
+        const grain = unit(c.grain), coverage = unit(c.coverage), ref = typeof c.ref === 'number' ? Math.round(c.ref) : undefined, range = referenceRange(ref);
+        // a roughness outside the range of the finish it named is held to that range (a "satin stainless" read at 0.1)
+        const held = range ? Math.max(range[0], Math.min(range[1], roughness)) : roughness;
+        out[k] = { roughness: held, ...(held !== roughness ? { readRoughness: roughness } : {}), ...(range ? { ref } : {}), metalness, conf: typeof c.conf === 'number' && Number.isFinite(c.conf) ? Math.max(0, Math.min(100, c.conf)) : 0, ...(typeof c.seen === 'string' && c.seen.trim() ? { seen: c.seen.trim().slice(0, 80) } : {}), ...(grain !== undefined ? { grain } : {}), ...(coverage !== undefined ? { coverage } : {}) };
     }
     return out;
 }

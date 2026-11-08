@@ -15,6 +15,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { agreeMetal, settleFinishes, drawFinish, drawnMetalness, drawnRoughness, energyFit, FINISH_READ, finishMaps, finishPrompt, finishTarget, grainOf, parseClassFinish, patternFit } from '../src/node/3d-engine/staged-location/pipeline-k/material-finish';
+import { PBR_REFERENCE } from '../src/common/spatial/pbr-artist-reference';
 import { REGION_FINISH } from '../src/node/3d-engine/staged-location/pipeline-k/material-sets';
 
 describe('pipeline K material finish', () => {
@@ -25,6 +26,11 @@ describe('pipeline K material finish', () => {
         expect(f[1]).toEqual({ roughness: 1, metalness: 0, conf: 100 });
         expect(f[2]).toBeUndefined();
         expect(() => parseClassFinish('no json', 3)).toThrow();
+        // a roughness outside the range of the reference finish it named is held to that range, the read kept beside it
+        const steel = PBR_REFERENCE.findIndex(e => /stainless/.test(e.look)) + 1;
+        const held = parseClassFinish(`{"classes":[{"row":1,"ref":${steel},"roughness":0.1,"metalness":0,"conf":80},{"row":2,"ref":0,"roughness":0.1,"metalness":0,"conf":80}]}`, 2);
+        expect(held[0]).toMatchObject({ roughness: 0.25, readRoughness: 0.1, ref: steel });
+        expect(held[1]).toEqual({ roughness: 0.1, metalness: 0, conf: 80 });
     });
 
     it('ranks toward the read roughness and metalness when confident, else the matte dielectric finish', () => {
@@ -156,7 +162,8 @@ describe('pipeline K material finish', () => {
         expect(p).toContain('"metalness"');
         expect(p).toContain('A dark colour is not metal');
         // the expert is told the reference and the artists' rules, and asked for grain and coverage
-        expect(p).toMatch(/dressed limestone or sandstone.*roughness 0\.7-0\.95, metalness 0/);
+        expect(p).toMatch(/\d+\. dressed limestone or sandstone.*roughness 0\.7-0\.95, metalness 0/);
+        expect(p).toContain('"ref"');
         expect(p).toContain('Metalness is 0 or 1, never in between');
         expect(p).toContain('"grain"');
         expect(p).toContain('"coverage"');

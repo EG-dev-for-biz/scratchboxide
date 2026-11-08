@@ -77,12 +77,20 @@ export const PBR_ARTIST_RULES: readonly string[] = [
  */
 export const ARTIST_FINISH = { metalAt: 0.5, metalConf: 70, metalCoverage: 0.6, frameRoughness: 0.35, minRoughness: 0.08 } as const;
 
-/** The reference as prompt lines: one line a finish, then the rules. */
+/**
+ * The roughness range of the reference finish a reading named (1-based, as the prompt numbers them; 0 or out of range:
+ * none, a surface the reference does not hold). The code reads only the numbers of the row the model chose.
+ */
+export function referenceRange(ref: number | undefined): [number, number] | undefined {
+    return ref !== undefined && Number.isInteger(ref) && ref >= 1 && ref <= PBR_REFERENCE.length ? [...PBR_REFERENCE[ref - 1].roughness] as [number, number] : undefined;
+}
+
+/** The reference as prompt lines: one numbered line a finish, then the rules. */
 export function pbrReferenceLines(): string[] {
     const f = (v: number) => v.toFixed(2).replace(/0$/, '');
     return [
         'Reference finishes of exterior building surfaces as found (measured and practised values; roughness 0 a mirror, 1 fully matte; metalness 0 or 1):',
-        ...PBR_REFERENCE.map(e => `- ${e.look}: roughness ${f(e.roughness[0])}-${f(e.roughness[1])}, metalness ${e.metalness}`),
+        ...PBR_REFERENCE.map((e, i) => `${i + 1}. ${e.look}: roughness ${f(e.roughness[0])}-${f(e.roughness[1])}, metalness ${e.metalness}`),
         'Rules a texture artist follows:',
         ...PBR_ARTIST_RULES.map(r => `- ${r}`)
     ];
