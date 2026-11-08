@@ -83,6 +83,16 @@ interface BuildResult {
     maxViewHoleShare?: number;
     maxViewUntexturedShare?: number;
     largestHoleRegionM2?: number;
+    /**
+     * From the lattice's audits (pipeline_k_lattice.json): scan standing proud of the rebuilt facades (more than the audit's
+     * tolerance in front of the surface they draw, over their cells, seen straight on) before and after the proud audit's
+     * removals, in m²; the rebuilt cells; whether the scan was cut at the cells (SCRATCHBOX_K_LATTICE_CUT).
+     */
+    proudM2?: number;
+    proudLeftM2?: number;
+    latticeCells?: number;
+    latticeCut?: boolean;
+    tearsLeft?: number;
     defectsFlagged?: boolean;
     defectsWhy?: string;
     generated?: GeneratedShare;
@@ -483,6 +493,8 @@ async function buildOne(side: Side, place: Place, outDir: string, opts: { keepCa
             holeShare: seen.holeShare, untexturedShare: seen.clayShare, maxViewHoleShare: seen.maxViewHoleShare, maxViewUntexturedShare: seen.maxViewClayShare,
             largestHoleRegionM2: seen.largestHoleRegionM2, defectsFlagged: seen.flagged, defectsWhy: seen.why
         });
+        const lattice = readJson(path.join(run, 'pipeline_k_lattice.json'));
+        if (lattice) Object.assign(base, { latticeCells: lattice.cells, latticeCut: lattice.cut, tearsLeft: lattice.tears?.left, ...(lattice.proud ? { proudM2: lattice.proud.m2, proudLeftM2: lattice.proud.afterM2 } : {}) });
         const model = readJson(path.join(run, 'pipeline_k_model.json'));
         if (model?.model && fs.existsSync(model.model)) {
             base.model = model.url ?? model.model;
@@ -498,7 +510,7 @@ async function buildOne(side: Side, place: Place, outDir: string, opts: { keepCa
     dropStageCache(side.checkout, opts.keepCaches ? path.join(dir, 'cache') : undefined);
     fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(base, null, 1));
     appendLedger(side.checkout, base, path.join(dir, 'result.json'));
-    log(`${base.outcome}${base.reason ? ` (${base.reason})` : ''}: holes ${pct(base.holeShare)}, untextured ${pct(base.untexturedShare)}, generated ${pct(base.generated?.share)}, ${base.buildMs ? (base.buildMs / 60_000).toFixed(1) : '?'} min`);
+    log(`${base.outcome}${base.reason ? ` (${base.reason})` : ''}: holes ${pct(base.holeShare)}, untextured ${pct(base.untexturedShare)}, generated ${pct(base.generated?.share)}, proud ${base.proudM2 ?? '?'} → ${base.proudLeftM2 ?? '?'} m² (${base.latticeCells ?? '?'} cells, cut ${base.latticeCut === undefined ? '?' : base.latticeCut ? 'on' : 'off'}), ${base.buildMs ? (base.buildMs / 60_000).toFixed(1) : '?'} min`);
     return base;
 }
 
@@ -514,6 +526,7 @@ function appendLedger(checkout: string, r: BuildResult, resultFile: string): voi
             features: {
                 holeShare: r.holeShare, untexturedShare: r.untexturedShare, maxViewHoleShare: r.maxViewHoleShare, maxViewUntexturedShare: r.maxViewUntexturedShare,
                 largestHoleRegionM2: r.largestHoleRegionM2, generatedShare: r.generated?.share, surfaceAreaM2: r.generated?.areaM2, triangles: r.triangles,
+                proudM2: r.proudM2, proudLeftM2: r.proudLeftM2, latticeCells: r.latticeCells, latticeCut: r.latticeCut, tearsLeft: r.tearsLeft,
                 buildMs: r.buildMs, wallMs: r.wallMs, loadAtStart: r.loadAtStart,
                 modelRequests: r.modelCalls?.requests, modelFailed: r.modelCalls?.failed, modelUsd: r.modelCalls?.estimatedUsd, unpricedModels: r.modelCalls?.unpriced
             },
