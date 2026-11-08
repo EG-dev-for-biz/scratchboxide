@@ -52,7 +52,8 @@
  * the seam meets the other); the strip fill (fillStrips) bridges, with thin triangles labelled generated, the agreed gaps a
  * move would have distorted. The seam audit (auditSeams) measures the open border by its gap to the nearest other tile,
  * inside the extraction's cut border, before and after. First of all, where the tiles' boxes are known, the caps two tiles
- * carry back to back in a shared cut plane are removed (trimCapsByBox). Last, the seam tone feather (featherSeamTone) levels the two tiles'
+ * carry back to back in a shared cut plane are removed (trimCapsByBox), and the two tiles' rims at every cut are zipped onto one line
+ * (zipCutRims) for the weld and the split to join. Last, when asked, the seam tone feather (featherSeamTone) levels the two tiles'
  * photos' colour toward each other on the surfaces crossing every cut their boxes share, faded out over a band.
  * Why it runs where it runs: scratchbox_scan_rectifier.hpp's own D1 weld (weldEpsilon, 1 mm) is far
  * tighter than a 1-3 cm tile seam, and its D4 orientation-family vote and D5 planar regions run four
@@ -339,11 +340,12 @@ struct TileCapParams {
 struct TileCapStats { size_t sharedFaces{0}; size_t candidates{0}; size_t trianglesDropped{0}; double areaM2{0}; };
 
 /**
- * The step blend (TileSeamWeld::blendCutSteps) and the per-cut scores (measureCuts). At a cut, the two tiles' walls sit at
+ * The rim zip (TileSeamWeld::zipCutRims) and the per-cut scores (measureCuts). At a cut, the two tiles' walls sit at
  * slightly different depths: seen in the cut plane, each tile's rim (its open border along the cut, once the caps are gone)
- * traces the same outline, a few centimetres to decimetres apart. That offset is the surface step.
+ * traces the same outline, a few centimetres to decimetres apart. That offset is the surface step; along the cut's normal
+ * the two rims stand a gap apart.
  */
-struct TileSeamBlendParams {
+struct TileSeamZipParams {
     /** Two boxes' faces are one cut when their planes lie within this (loose boxes overlap by up to a metre). */
     double faceMatchM{1.2};
     /** A rim is an open border edge of a surface crossing the cut (|normal . cut normal| <= crossCos) within this of the cut plane. */
@@ -354,10 +356,6 @@ struct TileSeamBlendParams {
     double capM{0.5};
     /** The two rims run parallel where they are matched (in the cut plane). */
     double parallelCos{0.866};
-    /** Each side moves half the step at its rim, faded to nothing this far from it along the cut's normal (raised cosine). */
-    double falloffM{1.5};
-    /** A vertex follows the rim point nearest it in the cut plane, when that lies within this (the same wall). */
-    double wallReachM{0.6};
     /** A move turning a triangle by more than this, or inside out, is taken back. */
     double maxTurnDeg{25.0};
     /** The rim zip's rounds (each halves what is left where only one rim has a point to move). */
@@ -379,15 +377,6 @@ struct TileSeamCutScore {
     double stepP50M{0}, stepP90M{0};
     /** The gap between the two rims along the cut's normal (m, median of absolute values): open when positive, overlapping too. */
     double gapP50M{0};
-};
-
-struct TileSeamBlendStats {
-    size_t cuts{0};
-    size_t cutsMatched{0};
-    size_t positionsMoved{0};
-    size_t reverted{0};
-    double maxMoveM{0};
-    std::vector<TileSeamCutScore> before, after;
 };
 
 /** One cut's rim zip: how many rim points moved and how far (m). */
@@ -476,19 +465,6 @@ struct TileSeamToneParams {
     double maxGain{1.6};
     /** A levelled photo that came as a JPEG is written back as one at this quality. */
     int jpegQuality{92};
-    /** The feather itself (off: only the balance below, when that is on). */
-    bool feather{true};
-    /** Tone balance: one gain per tile and channel for the whole scan, fitted over all its cuts at once, before the feather. */
-    bool balance{false};
-    /** A cut counts in the fit when its bins both sides read hold at least this many texels together. */
-    size_t balanceMinTexels{64};
-    /** No tile's channel is scaled by more than this either way. */
-    double balanceMaxGain{1.6};
-    /** The fit's pull of every gain toward none, as a share of a tile's cut weight: it pins the scan's overall level
-     *  (a fit of differences alone leaves it free) and keeps a tile joined by one weak cut near its own level. */
-    double balanceRidge{0.02};
-    /** A cut whose step stands further than this (log gain) from the fit counts less, in proportion. */
-    double balanceHuber{0.05};
     int threads{0};
 };
 
@@ -502,11 +478,6 @@ struct TileSeamToneStats {
     double maxGain{1};
     /** The CIELAB step between the two sides' mean colours per matched bin, weighted by texels: before and after. */
     double dEBeforeP50{0}, dEBeforeP90{0}, dEAfterP50{0}, dEAfterP90{0};
-    /** Tone balance: tiles given a gain, cuts in the fit, the largest gain either way, the mean log gain over tiles and
-     *  channels (the scan's overall drift: near none), and the step after the balance, before the feather. */
-    size_t tilesBalanced{0}, balanceCuts{0};
-    double balanceMaxGain{1}, balanceMeanLogGain{0};
-    double dEBalancedP50{0}, dEBalancedP90{0};
 };
 
 namespace tone_detail {
@@ -2195,106 +2166,7 @@ public:
             for (const auto& [v, w] : de) { acc += w; if (!got50 && acc >= 0.5 * wsum) { p50 = v; got50 = true; } if (acc >= 0.9 * wsum) { p90 = v; break; } }
         };
         // ---- read both sides, and the levelling per bin (half the step each way, in log space)
-        BinMap before = sample();
-        // ---- tone balance: one gain per tile and channel, fitted over every cut at once (weighted least squares on the log
-        // of the two sides' mean colours per cut, with a small pull toward no gain), applied to the tile's whole photos
-        std::vector<uint8_t> balanced(scene.images.size(), 0);
-        double rawP50 = 0, rawP90 = 0;
-        if (p.balance) {
-            std::vector<uint64_t> keys;
-            for (const auto& [k, v] : before) if (v[0].n >= p.minTexels && v[1].n >= p.minTexels) keys.push_back(k);
-            std::sort(keys.begin(), keys.end());
-            stepPercentiles(before, keys, rawP50, rawP90);
-            // a cut's step: the weighted median of its bins' (one bin over a window or a shadow's edge says nothing of the tile)
-            struct CutSum { std::array<double, 3> lg{0, 0, 0}; double w{0}; std::vector<std::pair<double, double>> bins[3]; };
-            std::vector<CutSum> perCut(sc.cuts.size());
-            for (uint64_t k : keys) {
-                const auto& v = before.at(k);
-                const double w = static_cast<double>(std::min(v[0].n, v[1].n));
-                CutSum& c = perCut[static_cast<size_t>(k >> 40)];
-                auto lg = [](double a, double b) { return std::log(std::max(b, 1e-4)) - std::log(std::max(a, 1e-4)); };
-                c.bins[0].push_back({lg(v[0].r / v[0].n, v[1].r / v[1].n), w}); c.bins[1].push_back({lg(v[0].g / v[0].n, v[1].g / v[1].n), w}); c.bins[2].push_back({lg(v[0].b / v[0].n, v[1].b / v[1].n), w});
-                c.w += w;
-            }
-            for (CutSum& c : perCut) for (size_t ch = 0; ch < 3; ++ch) {
-                auto& b = c.bins[ch];
-                if (b.empty()) continue;
-                std::sort(b.begin(), b.end());
-                double acc = 0;
-                for (const auto& [v, w] : b) { acc += w; if (acc >= 0.5 * c.w) { c.lg[ch] = v * c.w; break; } }
-            }
-            // the fit: g(tile 0) - g(tile 1) = the cut's log step, per channel (Gauss-Seidel on the normal equations)
-            struct Edge { uint32_t other; double w; std::array<double, 3> d; double w0; };
-            std::unordered_map<uint32_t, std::vector<Edge>> edgesOf;
-            for (size_t k = 0; k < sc.cuts.size(); ++k) {
-                if (!(perCut[k].w >= static_cast<double>(p.balanceMinTexels))) continue;
-                ++st.balanceCuts;
-                std::array<double, 3> d;
-                for (size_t c = 0; c < 3; ++c) d[c] = perCut[k].lg[c] / perCut[k].w;
-                edgesOf[sc.cuts[k].tile[0]].push_back({sc.cuts[k].tile[1], perCut[k].w, d, perCut[k].w});
-                edgesOf[sc.cuts[k].tile[1]].push_back({sc.cuts[k].tile[0], perCut[k].w, {-d[0], -d[1], -d[2]}, perCut[k].w});
-            }
-            std::vector<uint32_t> order;
-            for (const auto& kv : edgesOf) order.push_back(kv.first);
-            std::sort(order.begin(), order.end());
-            std::unordered_map<uint32_t, std::array<double, 3>> gain;
-            for (uint32_t t : order) gain[t] = {0, 0, 0};
-            const double bcap = std::log(p.balanceMaxGain);
-            // refitted with each cut's weight cut down by how far it stands from the fit (Huber): a tile holds faces lit
-            // differently, and a cut on one of them disagrees with the rest whatever gain the tile takes
-            for (int refit = 0; refit < 6; ++refit) {
-            if (refit) for (uint32_t t : order) for (Edge& e : edgesOf[t]) {
-                double r = 0;
-                for (size_t c = 0; c < 3; ++c) r = std::max(r, std::abs(gain[t][c] - gain[e.other][c] - e.d[c]));
-                e.w = e.w0 * std::min(1.0, p.balanceHuber / std::max(r, 1e-9));
-            }
-            for (int it = 0; it < 2000; ++it) {
-                double moved = 0;
-                for (uint32_t t : order) {
-                    const auto& es = edgesOf[t];
-                    double wsum = 0;
-                    std::array<double, 3> acc{0, 0, 0};
-                    for (const Edge& e : es) { const auto& go = gain[e.other]; for (size_t c = 0; c < 3; ++c) acc[c] += e.w * (go[c] + e.d[c]); wsum += e.w; }
-                    auto& g = gain[t];
-                    for (size_t c = 0; c < 3; ++c) { const double v = std::clamp(acc[c] / (wsum * (1.0 + p.balanceRidge)), -bcap, bcap); moved = std::max(moved, std::abs(v - g[c])); g[c] = v; }
-                }
-                if (moved < 1e-7) break;
-            }
-            }
-            // each photo's tile (a photo two tiles draw from is left alone)
-            std::vector<int64_t> tileOfImage(scene.images.size(), -1);
-            for (size_t t = 0; t < sc.imageOfTri.size() && t < triTile.size(); ++t) {
-                const int32_t im = sc.imageOfTri[t];
-                if (im < 0) continue;
-                int64_t& o = tileOfImage[static_cast<size_t>(im)];
-                if (o == -1) o = triTile[t]; else if (o != static_cast<int64_t>(triTile[t])) o = -2;
-            }
-            double lsum = 0;
-            for (uint32_t t : order) { const auto& g = gain[t]; for (size_t c = 0; c < 3; ++c) { lsum += g[c]; st.balanceMaxGain = std::max(st.balanceMaxGain, std::exp(std::abs(g[c]))); } }
-            st.tilesBalanced = order.size();
-            st.balanceMeanLogGain = order.empty() ? 0.0 : lsum / (3.0 * static_cast<double>(order.size()));
-            scan_rectifier::detail::parallelFor(scene.images.size(), threads, 1, [&](size_t i0, size_t i1, unsigned) {
-                for (size_t im = i0; im < i1; ++im) {
-                    if (tileOfImage[im] < 0) continue;
-                    auto git = gain.find(static_cast<uint32_t>(tileOfImage[im]));
-                    if (git == gain.end()) continue;
-                    const double g[3] = {std::exp(git->second[0]), std::exp(git->second[1]), std::exp(git->second[2])};
-                    auto& img = scene.images[im].pixels;
-                    const size_t N = static_cast<size_t>(img.width) * img.height;
-                    bool any = false;
-                    for (size_t t = 0; t < N; ++t) {
-                        uint8_t* px = &img.data[t * static_cast<size_t>(img.channels)];
-                        for (int c = 0; c < std::min(3, img.channels); ++c) {
-                            const int v = std::clamp(static_cast<int>(std::lround(255.0 * toSrgb(toLinear(px[c] / 255.0) * g[img.channels >= 3 ? c : 1]))), 0, 255);
-                            if (v != px[c]) any = true;
-                            px[c] = static_cast<uint8_t>(v);
-                        }
-                    }
-                    if (any) balanced[im] = 1;
-                }
-            });
-            before = sample();
-        }
+        const BinMap before = sample();
         std::vector<uint64_t> matched;
         std::unordered_map<uint64_t, std::array<double, 3>> rawLg;   // side 0 gets +lg, side 1 -lg
         const double cap = std::log(p.maxGain);
@@ -2307,8 +2179,6 @@ public:
         std::sort(matched.begin(), matched.end());
         st.binsMatched = matched.size();
         stepPercentiles(before, matched, st.dEBeforeP50, st.dEBeforeP90);
-        if (p.balance) { st.dEBalancedP50 = st.dEBeforeP50; st.dEBalancedP90 = st.dEBeforeP90; st.dEBeforeP50 = rawP50; st.dEBeforeP90 = rawP90; }
-        if (!p.feather) rawLg.clear();
         auto unpack = [](uint64_t k, uint32_t& cut, int64_t& ia, int64_t& ib, int& oct) {
             cut = static_cast<uint32_t>(k >> 40); ia = static_cast<int64_t>((k >> 24) & 0xFFFF) - 32768; ib = static_cast<int64_t>((k >> 8) & 0xFFFF) - 32768; oct = static_cast<int>(k & 0xFF);
         };
@@ -2378,11 +2248,11 @@ public:
         });
         double maxGainSeen = 1.0;
         for (size_t im = 0; im < scene.images.size(); ++im) {
-            if (acc[im].empty() && !balanced[im]) continue;
+            if (acc[im].empty()) continue;
             auto& img = scene.images[im].pixels;
             const size_t N = static_cast<size_t>(img.width) * img.height;
-            size_t changed = balanced[im] ? N : 0;
-            for (size_t t = 0; t < N && !acc[im].empty(); ++t) {
+            size_t changed = 0;
+            for (size_t t = 0; t < N; ++t) {
                 if (std::isnan(acc[im][t * 3])) continue;
                 uint8_t* px = &img.data[t * static_cast<size_t>(img.channels)];
                 bool any = false;
@@ -2393,7 +2263,7 @@ public:
                     if (v != px[c]) any = true;
                     px[c] = static_cast<uint8_t>(v);
                 }
-                if (any && !balanced[im]) ++changed;
+                if (any) ++changed;
             }
             if (changed) {
                 ++st.imagesChanged;
@@ -2538,7 +2408,7 @@ private:
      * running parallel there.
      */
     static std::vector<CutRims> matchRims(const geometry::ScratchboxMesh& mesh, const std::vector<uint32_t>& triTile, const std::vector<SeamCut>& cuts,
-                                          const std::vector<double>& tileErrorM, const TileSeamBlendParams& p, const Topology& topo, const OpenBorder& ob, unsigned threads) {
+                                          const std::vector<double>& tileErrorM, const TileSeamZipParams& p, const Topology& topo, const OpenBorder& ob, unsigned threads) {
         std::vector<CutRims> out(cuts.size());
         auto vp = [&](uint32_t v) { const auto& q = mesh.vertices[v].position; return V3{q.x, q.y, q.z}; };
         // each tile's open border edges on surfaces (their owner triangle's normal kept)
@@ -2675,76 +2545,13 @@ private:
 public:
     /** The per-cut scores of the mesh as it is (rim length, how much of it finds the other tile's rim, step and gap). */
     static std::vector<TileSeamCutScore> measureCuts(const geometry::ScratchboxMesh& mesh, const std::vector<uint32_t>& triTile, const std::vector<TileBox>& boxes,
-                                                     const std::vector<double>& tileErrorM, const TileSeamBlendParams& p = {}) {
+                                                     const std::vector<double>& tileErrorM, const TileSeamZipParams& p = {}) {
         const std::vector<SeamCut> cuts = boxCuts(boxes, p.faceMatchM);
         const Topology topo = topology(mesh);
         const OpenBorder ob = openBorder(mesh, topo);
         return scoreCuts(cuts, matchRims(mesh, triTile, cuts, tileErrorM, p, topo, ob, scan_rectifier::detail::resolveThreads(p.threads)));
     }
 
-    /**
-     * Step blend: at every cut, each tile's surface moves toward the other's by half the step measured at its rim (in the
-     * cut plane, so along the wall's own normal mostly), faded to nothing over falloffM from the rim along the cut's
-     * normal: the two walls meet on one surface at the cut and keep their own away from it, so no ridge is left there. A
-     * vertex follows the matched rim point nearest it in the cut plane (within wallReachM: the same wall). Nothing moves
-     * further than half the pair's tolerance (the smaller of the two tiles' stated errors, capped); a move turning a
-     * triangle by more than maxTurnDeg is taken back. Positions only: UVs, materials and topology are untouched.
-     */
-    static TileSeamBlendStats blendCutSteps(geometry::ScratchboxMesh& mesh, const std::vector<uint32_t>& triTile, const std::vector<TileBox>& boxes,
-                                            const std::vector<double>& tileErrorM, const TileSeamBlendParams& p = {}) {
-        TileSeamBlendStats st;
-        const unsigned threads = scan_rectifier::detail::resolveThreads(p.threads);
-        const std::vector<SeamCut> cuts = boxCuts(boxes, p.faceMatchM);
-        st.cuts = cuts.size();
-        const Topology topo = topology(mesh);
-        const OpenBorder ob = openBorder(mesh, topo);
-        const std::vector<CutRims> rims = matchRims(mesh, triTile, cuts, tileErrorM, p, topo, ob, threads);
-        st.before = scoreCuts(cuts, rims);
-        const size_t G = topo.gpos.size(), F = mesh.indices.size() / 3;
-        const std::vector<uint32_t> gTile = groupTiles(mesh, topo, triTile);
-        // each tile's positions, to find those near a cut
-        std::unordered_map<uint32_t, std::vector<uint32_t>> groupsOfTile;
-        for (uint32_t g = 0; g < G; ++g) if (gTile[g] != kMixedTile && gTile[g] != kMixedTile - 1) groupsOfTile[gTile[g]].push_back(g);
-        std::vector<V3> disp(G);
-        std::vector<std::mutex> lockOf(64);
-        scan_rectifier::detail::parallelFor(cuts.size(), threads, 4, [&](size_t k0, size_t k1, unsigned) {
-            for (size_t k = k0; k < k1; ++k) {
-                const SeamCut& C = cuts[k];
-                for (int s = 0; s < 2; ++s) {
-                    const auto& ms = rims[k].side[s];
-                    if (ms.empty()) continue;
-                    auto it = groupsOfTile.find(C.tile[s]);
-                    if (it == groupsOfTile.end()) continue;
-                    // the matched rim points in the cut plane, with their height along the normal
-                    struct R { double x, y, h; V3 step; };
-                    std::vector<R> rs;
-                    rs.reserve(ms.size());
-                    for (const RimMatch& m : ms) { const V3 d = topo.gpos[m.g] - C.c; rs.push_back({d.dot(C.a), d.dot(C.b), d.dot(C.u), m.step}); }
-                    for (uint32_t g : it->second) {
-                        const V3 d = topo.gpos[g] - C.c;
-                        const double h = d.dot(C.u) + (C.u.dot(C.c) - C.o);
-                        if (std::abs(h) > p.bandM + p.falloffM) continue;
-                        const double x = d.dot(C.a), y = d.dot(C.b);
-                        if (std::abs(x) > C.ha + p.marginM + p.wallReachM || std::abs(y) > C.hb + p.marginM + p.wallReachM) continue;
-                        double bd = p.wallReachM; const R* br = nullptr;
-                        for (const R& r : rs) { const double dd = std::hypot(x - r.x, y - r.y); if (dd < bd) { bd = dd; br = &r; } }
-                        if (!br) continue;
-                        const double along = std::abs(d.dot(C.u) - br->h);
-                        if (along >= p.falloffM) continue;
-                        const double w = 0.5 * (1.0 + std::cos(M_PI * along / p.falloffM));
-                        std::lock_guard<std::mutex> lock(lockOf[g % lockOf.size()]);
-                        disp[g] += br->step * (0.5 * w);
-                    }
-                }
-            }
-        });
-        // no position further than half the cap (two cuts meeting at a corner add up)
-        for (uint32_t g = 0; g < G; ++g) { const double l = disp[g].norm(); if (l > 0.5 * p.capM) disp[g] = disp[g] * (0.5 * p.capM / l); }
-        applyMoves(mesh, topo, disp, p.maxTurnDeg, st.positionsMoved, st.reverted, st.maxMoveM);
-        st.after = measureCuts(mesh, triTile, boxes, tileErrorM, p);
-        for (const auto& sc : st.before) if (sc.matchedLengthM > 0) ++st.cutsMatched;
-        return st;
-    }
     /**
      * Rim zip: at every cut, each tile's rim point moves halfway to the point of the other tile's rim it was matched to (in
      * the cut plane and along the cut's normal), so the two rims lie on one line and the vertex weld and the T-junction
@@ -2755,7 +2562,7 @@ public:
      * more than maxTurnDeg is taken back. Rim positions only: UVs, materials and topology are untouched.
      */
     static TileSeamZipStats zipCutRims(geometry::ScratchboxMesh& mesh, const std::vector<uint32_t>& triTile, const std::vector<TileBox>& boxes,
-                                       const std::vector<double>& tileErrorM, const TileSeamBlendParams& p = {}) {
+                                       const std::vector<double>& tileErrorM, const TileSeamZipParams& p = {}) {
         TileSeamZipStats st;
         const unsigned threads = scan_rectifier::detail::resolveThreads(p.threads);
         const std::vector<SeamCut> cuts = boxCuts(boxes, p.faceMatchM);
@@ -2874,13 +2681,7 @@ public:
         char b[256];
         std::snprintf(b, sizeof b, "\"cuts\": %zu, \"binsMatched\": %zu, \"imagesChanged\": %zu, \"texelsChanged\": %zu, \"maxGain\": %.4f, \"dEBefore\": [%.2f, %.2f], \"dEAfter\": [%.2f, %.2f]",
                       s.cuts, s.binsMatched, s.imagesChanged, s.texelsChanged, s.maxGain, s.dEBeforeP50, s.dEBeforeP90, s.dEAfterP50, s.dEAfterP90);
-        std::string js = b;
-        if (s.tilesBalanced) {
-            std::snprintf(b, sizeof b, ", \"balance\": {\"tiles\": %zu, \"cuts\": %zu, \"maxGain\": %.4f, \"meanLogGain\": %.5f, \"dEAfter\": [%.2f, %.2f]}",
-                          s.tilesBalanced, s.balanceCuts, s.balanceMaxGain, s.balanceMeanLogGain, s.dEBalancedP50, s.dEBalancedP90);
-            js += b;
-        }
-        return js;
+        return b;
     }
 
     /** The stats as a JSON object body (no braces), for CLI reports. */

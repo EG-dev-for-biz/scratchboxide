@@ -31,16 +31,14 @@
  *  11. the node -> tile file the service writes for the CLI;
  *  12. the tone feather: two tiles' photos of one wall, cut across by their boxes, levelled toward each other at the cut,
  *      faded out away from it, labelled, and left alone without boxes or when not asked for;
- *  13. the cap trim: the strips two tiles carry back to back in their shared cut plane go, the walls stay;
- *  14. the step blend and the per-cut scores: two walls 6 cm apart in depth at their cut meet on one surface there, each
- *      moved half way and not at all 1.5 m from the cut, and the weld then closes them;
- *  15. the rim zip: two rims 8 cm apart at their cut, their vertices not facing each other, meet on one line and are
- *      joined; the move is reported per cut; beyond the tiles' stated error nothing moves;
- *  18. the picture offset: a photo two texels along the cut from its neighbour's is measured as 0.31 m off; the same
- *      photo either side as none;
- *  17. the tone balance: three tiles' photos up one wall brought to one level by a gain each, fitted over both cuts;
- *  16. the zip's rounds: rim points the other rim has no point for (its edges 5 m long) come onto those edges, which are
- *      split there.
+ *  13. the cap trim (on by default): the strips two tiles carry back to back in their shared cut plane go, the walls stay;
+ *  14. the rim zip and the per-cut scores (on by default): two rims 8 cm apart at their cut, their vertices not facing
+ *      each other, meet on one line and are joined; the cut is scored before and after and the move reported per cut;
+ *      beyond the tiles' stated error nothing moves;
+ *  15. the zip's rounds: rim points the other rim has no point for (its edges 5 m long) come onto those edges, which are
+ *      split there;
+ *  16. the picture offset: a photo two texels along the cut from its neighbour's is measured as 0.31 m off; the same
+ *      photo either side as none.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -531,49 +529,17 @@ describe('tile_seam_weld tone feather: two tiles\' photos levelled toward each o
         writeGlb(input, [a, b], [], tiles, { localToEcef: IDENTITY });
         const horizontal = (file: string) => triangles(file).filter(t => t.every(p => Math.abs(p[1] - 5) < 1e-4)).length;
         expect(horizontal(input)).toBe(64);
-        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, caps: true, threads: 2, repoRoot: REPO });
+        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, threads: 2, repoRoot: REPO });
         expect(r.capTrim).toMatchObject({ sharedFaces: 2, candidates: 64, trianglesDropped: 64 });
         expect(r.capTrim!.areaM2).toBeCloseTo(40, 3);
         expect(horizontal(output)).toBe(0);
         expect(triangles(output).length).toBe(200);   // the two walls, whole
         expect(r.cuts).toHaveLength(1);
         expect(r.cuts![0]).toMatchObject({ o: 5 });
-        // not asked for, the caps stay
-        const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'caps_off.glb'), threads: 2, repoRoot: REPO });
+        // switched off, the caps stay
+        const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'caps_off.glb'), caps: false, threads: 2, repoRoot: REPO });
         expect(off.capTrim).toBeUndefined();
         expect(horizontal(path.join(WORK, 'caps_off.glb'))).toBeGreaterThan(0);
-    });
-
-    it('fades the step between two tiles\' walls out either side of their cut, scores the cut before and after, and the weld closes it', async () => {
-        // tile A: a wall in z = 0 below y = 5; tile B: the wall above, standing 6 cm proud (z = 0.06); 0.5 m cells
-        const a = quad([0, 0, 0], [10, 0, 0], [0, 5, 0], 20, 10), b = quad([0, 5, 0.06], [10, 0, 0], [0, 5, 0], 20, 10);
-        const tiles = [{ leafId: 'a', geometricErrorM: 2, box: [5, 2.5, 0, 5, 0, 0, 0, 2.5, 0, 0, 0, 1] }, { leafId: 'b', geometricErrorM: 2, box: [5, 7.5, 0, 5, 0, 0, 0, 2.5, 0, 0, 0, 1] }];
-        const input = path.join(WORK, 'blend.glb'), output = path.join(WORK, 'blend_welded.glb');
-        writeGlb(input, [a, b], [], tiles, { localToEcef: IDENTITY });
-        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, blend: true, threads: 2, repoRoot: REPO });
-        const cs = r.cutScores!;
-        expect(cs.afterCaps.cuts).toBe(1);
-        expect(cs.afterCaps.meanStepM).toBeCloseTo(0.06, 3);
-        expect(cs.afterCaps.rimLengthM).toBeCloseTo(20, 1);       // both rims, 10 m each
-        expect(cs.afterBlend!.meanStepM).toBeLessThan(0.002);
-        expect(r.stepBlend).toMatchObject({ cutsMatched: 1, reverted: 0 });
-        expect(r.stepBlend!.maxMoveM).toBeCloseTo(0.03, 3);        // each side half the step
-        // at the cut both walls stand at z = 0.03; 1.5 m and more from it each stands where it was; in between it fades
-        const P = distinct(positions(output));
-        for (const p of P.filter(q => near(q[1], 5))) expect(p[2]).toBeCloseTo(0.03, 3);
-        for (const p of P.filter(q => q[1] <= 3.5 + 1e-6)) expect(Math.abs(p[2])).toBeLessThan(1e-5);
-        for (const p of P.filter(q => q[1] >= 6.5 - 1e-6)) expect(p[2]).toBeCloseTo(0.06, 5);
-        const mid = P.filter(q => near(q[1], 4.5)).map(q => q[2]);
-        expect(Math.min(...mid)).toBeGreaterThan(0.015);
-        expect(Math.max(...mid)).toBeLessThan(0.03);
-        // the two rims now coincide, so the weld joins them: no open edge is left along the cut
-        expect(openEdges(triangles(output)).filter(e => e.every(q => near(q[1], 5)))).toHaveLength(0);
-        expect(cs.final.rimLengthM).toBe(0);
-        // not asked for: the step stays and the cut stays open
-        const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'blend_off.glb'), threads: 2, repoRoot: REPO });
-        expect(off.stepBlend).toBeUndefined();
-        expect(off.cutScores!.final.meanStepM).toBeCloseTo(0.06, 3);
-        expect(openEdges(triangles(path.join(WORK, 'blend_off.glb'))).filter(e => e.every(q => near(q[1], 5) )).length).toBeGreaterThan(0);
     });
 
     it('zips the two tiles\' rims at their cut onto one line within their stated error, reports the move per cut, and the weld closes it', async () => {
@@ -583,7 +549,7 @@ describe('tile_seam_weld tone feather: two tiles\' photos levelled toward each o
         const input = path.join(WORK, 'zip.glb'), output = path.join(WORK, 'zip_welded.glb');
         writeGlb(input, [a, b], [], boxes(2), { localToEcef: IDENTITY });
         const cutEdges = (file: string) => openEdges(triangles(file)).filter(e => e.every(q => Math.abs(q[1] - 5) < 0.1 && q[0] > 0.3 && q[0] < 9.7));
-        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, zip: true, threads: 2, repoRoot: REPO });
+        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, threads: 2, repoRoot: REPO });
         const z = r.rimZip!;
         expect(z).toMatchObject({ cuts: 1, cutsZipped: 1, reverted: 0, beyondError: 0 });
         expect(z.positionsMoved).toBe(41);                          // 21 rim points below, 20 above
@@ -600,14 +566,14 @@ describe('tile_seam_weld tone feather: two tiles\' photos levelled toward each o
         expect(cutEdges(output)).toHaveLength(0);
         // away from the rim nothing moved
         for (const p of distinct(positions(output)).filter(q => q[1] < 4.5)) expect(Math.abs(p[2])).toBeLessThan(1e-6);
-        // not asked for: the rims stay 8 cm apart and open
-        const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'zip_off.glb'), threads: 2, repoRoot: REPO });
+        // switched off: the rims stay 8 cm apart and open
+        const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'zip_off.glb'), zip: false, threads: 2, repoRoot: REPO });
         expect(off.rimZip).toBeUndefined();
         expect(cutEdges(path.join(WORK, 'zip_off.glb')).length).toBeGreaterThan(0);
         // tiles stating 5 cm of error: the 8 cm way is beyond it, and nothing moves
         const tight = path.join(WORK, 'zip_tight.glb');
         writeGlb(tight, [a, b], [], boxes(0.05), { localToEcef: IDENTITY });
-        const t = await runTileSeamWeld({ inputGlb: tight, outputGlb: path.join(WORK, 'zip_tight_welded.glb'), zip: true, threads: 2, repoRoot: REPO });
+        const t = await runTileSeamWeld({ inputGlb: tight, outputGlb: path.join(WORK, 'zip_tight_welded.glb'), threads: 2, repoRoot: REPO });
         expect(t.rimZip).toMatchObject({ positionsMoved: 0, cutsZipped: 0 });
         expect(cutEdges(path.join(WORK, 'zip_tight_welded.glb')).length).toBeGreaterThan(0);
     });
@@ -619,7 +585,7 @@ describe('tile_seam_weld tone feather: two tiles\' photos levelled toward each o
         const tiles = [{ leafId: 'a', geometricErrorM: 2, box: [5, 2.5, 0, 5, 0, 0, 0, 2.5, 0, 0, 0, 1] }, { leafId: 'b', geometricErrorM: 2, box: [5, 7.5, 0, 5, 0, 0, 0, 2.5, 0, 0, 0, 1] }];
         const input = path.join(WORK, 'zip_rounds.glb'), output = path.join(WORK, 'zip_rounds_welded.glb');
         writeGlb(input, [a, b], [], tiles, { localToEcef: IDENTITY });
-        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, zip: true, threads: 2, repoRoot: REPO });
+        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, threads: 2, repoRoot: REPO });
         // half the way would leave the proud points 3 cm off the other tile's 5 m edges; the rounds bring them within millimetres
         const rim = distinct(positions(output)).filter(q => Math.abs(q[1] - 5) < 0.01);
         expect(rim.length).toBeGreaterThanOrEqual(21);
@@ -631,34 +597,6 @@ describe('tile_seam_weld tone feather: two tiles\' photos levelled toward each o
         // the long edges are split at the other rim's points: no open edge is left along the cut
         expect(openEdges(triangles(output)).filter(e => e.every(q => Math.abs(q[1] - 5) < 0.01))).toHaveLength(0);
         expect(r.cutScores!.final.rimLengthM).toBe(0);
-    });
-
-    it('balances the tiles\' tone over all their cuts at once: one gain per tile, no overall drift, labelled', async () => {
-        // three tiles up one wall, their photos grey 110, 130 and 150: two cuts, fitted together
-        const input = path.join(WORK, 'balance.glb'), output = path.join(WORK, 'balance_welded.glb');
-        writeGlb(input, [wallTile(0, 0), wallTile(5, 1), wallTile(10, 2)], [grey(110), grey(130), grey(150)],
-            [{ leafId: 'a', geometricErrorM: 2, box: boxOf(0) }, { leafId: 'b', geometricErrorM: 2, box: boxOf(5) }, { leafId: 'c', geometricErrorM: 2, box: boxOf(10) }], { localToEcef: IDENTITY });
-        const r = await runTileSeamWeld({ inputGlb: input, outputGlb: output, balance: true, threads: 2, repoRoot: REPO });
-        const t = r.tone!;
-        expect(t.feather).toBe(false);
-        expect(t.balance).toMatchObject({ tiles: 3, cuts: 2 });
-        expect(Math.abs(t.balance!.meanLogGain)).toBeLessThan(0.01);      // what one tile gains the others give
-        expect(t.balance!.maxGain).toBeGreaterThan(1.25);                 // the darkest and the brightest move about a third each
-        expect(t.balance!.maxGain).toBeLessThan(1.6);
-        expect(t.dEBefore[0]).toBeGreaterThan(6);
-        expect(t.balance!.dEAfter[0]).toBeLessThan(1.5);
-        expect(t.imagesChanged).toBeGreaterThanOrEqual(2);                // the middle tile is near the scan's level already
-        // each photo is one level throughout (a gain, no feather), and the three now agree near the middle one's
-        const levels = rowMeans(output).map(m => m.rows.map(x => x.v));
-        expect(levels).toHaveLength(3);
-        for (const rows of levels) expect(Math.max(...rows) - Math.min(...rows)).toBeLessThanOrEqual(1);
-        const means = levels.map(rows => rows.reduce((a, b) => a + b, 0) / rows.length);
-        expect(Math.max(...means) - Math.min(...means)).toBeLessThan(4);
-        for (const m of means) expect(Math.abs(m - 130)).toBeLessThan(4);
-        expect(rowMeans(output).filter(m => m.material.extras?.scratchbox?.method === 'tile tone balance (fitted gain per tile, generated)').length).toBe(t.imagesChanged);
-        // not asked for, the photos stay as they came
-        const off = await runTileSeamWeld({ inputGlb: input, outputGlb: path.join(WORK, 'balance_off.glb'), threads: 2, repoRoot: REPO });
-        expect(off.tone).toBeUndefined();
     });
 
     it('measures how far the two tiles\' photos stand apart along their cut', async () => {

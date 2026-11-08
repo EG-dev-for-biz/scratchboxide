@@ -184,7 +184,7 @@ What a facade seam shows (§8) is the two tiles' photos. Three things were tried
 
 ## 10. The tiles' caps removed (tile-seams/6, 2026-11-05)
 
-**Status: opt-in (`SCRATCHBOX_TILE_SEAM_CAPS=1`), for extractions whose leaves carry their boxes. Built and compared in uncached pipeline K builds of the ESB, in clay, against a control of the same code with the caps kept: clean on two of the four tower cuts looked at, a regression on one, unsure on one. Penn 2 is too noisy run to run to say anything.**
+**Status: on by default since `tile-seams/9` (2026-11-07, section 14; the service's `caps: false` turns it off), for extractions whose leaves carry their boxes. When this section was written it was opt-in (`SCRATCHBOX_TILE_SEAM_CAPS=1`, a switch that no longer exists). Built and compared in uncached pipeline K builds of the ESB, in clay, against a control of the same code with the caps kept: clean on two of the four tower cuts looked at, a regression on one, unsure on one. Penn 2 is too noisy run to run to say anything.**
 
 Judged in clay, a finished K building shows a row of slots across every bay at each Google tile cut. A ray through a slot hits a scan piece facing straight up, 14 cm in front of the rebuilt bay: the tile's cap, the strip each leaf carries in its cut plane (a ring about a metre wide inside the wall, about 500 m² at each ESB tower cut, half facing up, half down). K recesses the bays behind the scan's wall plane and never removes the cap (it faces up, not the facade), so it stands out across them. On the raw scan the caps are inside the surface and nothing shows (§8).
 
@@ -214,7 +214,7 @@ Penn 2 says nothing either way: with the same code and the caps kept, two builds
 
 ## 11. Per-cut scores, step blend and rim zip (tile-seams/7, 2026-11-05)
 
-**Status: the scores are always in the report (where the extraction gives each leaf's box and stated error); the step blend (`SCRATCHBOX_TILE_SEAM_BLEND=1`) and the rim zip (`SCRATCHBOX_TILE_SEAM_ZIP=1`) are opt-in. Fresh extractions only (older ones carry no boxes). Scan-level numbers below; no finished-building benchmark of the zip yet.**
+**Status: the scores are always in the report (where the extraction gives each leaf's box and stated error); the rim zip, with the weld and the split repeated, is on by default since `tile-seams/9` (section 14; the service's `zip: false` turns it off). The step blend was dropped (2026-11-07): with the zip in rounds it added nothing at the rim (the table below), and its code is gone; its numbers stay here as the record. When this section was written both were opt-in (`SCRATCHBOX_TILE_SEAM_BLEND=1`, `SCRATCHBOX_TILE_SEAM_ZIP=1`, switches that no longer exist). Fresh extractions only (older ones carry no boxes). Scan-level numbers below; the finished-building comparison is section 14.**
 
 - **Scores** (`measureCuts`, in the report as `cutScores`: raw, after the caps, after the blend, after the zip, final, and cut by cut): each tile's rim at a cut (open border of a surface crossing the cut, within 1 m of its plane), how much of it finds the other tile's rim (nearest in space, running parallel, facing the same way, within the smaller of the two tiles' stated errors capped at 50 cm), the step between the two rims in the cut plane and the gap along the cut's normal.
 - **Step blend** (`blendCutSteps`): each wall moves half the step at its rim, faded out over 1.5 m.
@@ -241,7 +241,7 @@ The zip moved 15,861 rim points on 306 cuts (largest move 48 cm, inside the 50 c
 
 ## 12. Tone balance per tile (tile-seams/8, 2026-11-06)
 
-**Status: opt-in (`SCRATCHBOX_TILE_SEAM_BALANCE=1`), built and tested, and measured as no help on Google's tiles: the feather (section 9) does the work. Scan-level numbers; no finished building.**
+**Status: not in the code. Built, tested and measured as no help on Google's tiles (the feather, section 9, does the work); kept on the branch `claude/tile-seam-colour` (commit 2d46dd21) and not landed (MAIN's call, 2026-11-07). Scan-level numbers; no finished building.**
 
 One gain per tile and channel for the whole scan, fitted over all the cuts at once and applied to the tile's whole photos, before the feather (`TileSeamToneParams.balance`, inside `featherSeamTone`): each cut's step is the weighted median of its bins' log ratio of the two sides' mean colours (linear RGB); the fit is weighted least squares on g(tile 0) - g(tile 1) = step, refitted six times with each cut's weight cut down by how far it stands from the fit (Huber, 0.05 log gain), with a weak pull of every gain toward none (2% of a tile's cut weight) that pins the scan's overall level; gains capped at 1.6. Labelled generated (`extras.scratchbox.method`). The report gives tiles, cuts in the fit, the largest gain, the mean log gain (the drift) and the step after the balance.
 
@@ -271,3 +271,22 @@ The strip's width decides what is read: a metre either side the two tiles show d
 
 **Reading.** The typical cut needs less than a texel: the two photos stand where they should, to the photos' own resolution (15 cm a texel). About a fifth of the segments prefer a shift of one to two texels for a modest gain in correlation; with profiles of 16-53 cells, some of those are a repeat of the wall matching one bay along, not a misplaced photo. Moving a photo by a texel or two cannot sharpen a seam between photos this coarse, and section 9's try (the same shifts applied) changed nothing in renders. No line-up pass is built: the measure stays so a scan with a real offset shows it.
 
+
+## 14. Caps removed and rims zipped by default: uncached builds against main (tile-seams/9, 2026-11-07)
+
+**Status: the default. Two arms, each an uncached pipeline K build (stage cache emptied first) of the Empire State Building and Two Penn Plaza: `main` = 87a792c4 as it was (caps kept, `tile-seams/4`), `zip` = the caps removed, the rims zipped in rounds and the weld and split repeated (section 10 and 11's code). The zip arm was built twice and came out identical to the last digit (the stage and pipeline K are deterministic; the readings store serves the same model answers); the main arm's second pair did not finish (one tile_refine over its 900 s limit at load 200, one Google Places fetch failure), so main is one build each. Sheets: `docs/screenshots/tile_seams_zip_2026-11-07/seams_{esb,penn2}_main_vs_zip.jpg` (eight cut cameras each, 30 m out: main clay, zip clay, main textured, zip textured; a yellow tick at the cut height). Decided on by the user through MAIN from the ESB sheet.**
+
+Finished building (the tear audit's twelve views):
+
+| place | arm | outcome | holes | untextured | largest hole | triangles |
+|---|---|---|---|---|---|---|
+| ESB | main | degraded (the largest hole) | 0.73% | 0.39% | 55.4 m² | 861,838 |
+| ESB | zip | complete | 0.67% | 0.34% | 30.1 m² | 913,527 |
+| Penn 2 | main | degraded | 1.08% | 1.67% | 84.7 m² | 965,120 |
+| Penn 2 | zip | degraded | 0.92% | 1.43% | 88.1 m² | 723,312 |
+
+The seam stage on the extraction: ESB 269,243 → 208,906 triangles (62,566 cap triangles, 26,179 m², removed), open edges after the stage 73,023 → 52,828, open length by gap band (0–3 cm / 3–10 / 10–30 / 30–100 / none within 1 m) 10.7 / 16.2 / 13.6 / 10.2 / 68.9 km → 5.6 / 9.1 / 5.1 / 8.8 / 71.9 km, 7.4 → 15.2 s; Penn 2 141,852 → 99,196, 48,469 → 33,781, 6.7 / 10.1 / 8.3 / 7.7 / 36.5 → 3.9 / 6.0 / 4.4 / 7.5 / 38.3 km, 7.7 → 5.3 s. Cut scores (ESB): the rim at the cuts 20.9 km as the scan came (2.5 km of it matched to the other tile's rim) → 105.3 km once the caps are gone (35.0 matched) → after the zip the matched rims 1.4 mm apart (24 mm before) → 21.4 km open at the end (3.7 matched); the zip moved 20,469 rim points on 402 of 1,287 cuts (largest move 48 cm, 445 beyond the tiles' error, 3,007 taken back), the reweld 2 passes, 366 groups, 18 more T-junctions. Penn 2: 44,450 cap triangles, 15,486 points on 318 of 897 cuts, 18.1 km open at the end (21.5 raw).
+
+**In the pictures.** Clay at the cut height: the zip arm cleaner in 9 of the 16 rows (ESB west 216, north 216, east 180, south 143, east 70; Penn 2 north 114, west 114, south 78, east 42), main cleaner in 1 (ESB west 107), the same in 6. The main arm's typical defect is the cap's horizontal slot across the bays, or a wedge, at the cut; what the zip arm still shows is slivers and pipeline K's own rebuild edges. Textured: no visible difference at the cut in 14 of 16 rows; ESB west 107 the zip worse (a stepped edge on the right), Penn 2 north 114 the zip better (low confidence). A separate fast multimodal check, given the claims and not a verdict, read the sheets the same way. Caveat: the arms are separate uncached builds, so K's own rebuild near the cuts differs between the columns too; the per-build variation is of the order of the change.
+
+**What changed in the code** (`tile-seams/9`): the cap trim and the rim zip run whenever the extraction gives each leaf's box (the service's `caps`/`zip` default true; the CLI's `--no-caps`/`--no-zip`); the orchestrator's `SCRATCHBOX_TILE_SEAM_CAPS`, `_ZIP`, `_BLEND` and `_BALANCE` switches are gone (`_TONE` and `_ADAPTIVE` stay opt-in); the step blend (section 11) and the tone balance (section 12) are out of the code; the per-cut scores, the rim zip's per-cut moves, the reweld counts and the picture offset stay in every report and run note. On the finished building, open edges within 0.3 m of a cut plane: ESB 51.1 → 48.7 km, Penn 2 36.9 → 24.0 km (a band that mostly counts K's own node boundaries, so it moves with the triangle count).

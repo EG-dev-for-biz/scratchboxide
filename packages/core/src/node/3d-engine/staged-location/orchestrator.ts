@@ -2314,8 +2314,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const x = await extractCached(radiusM, io, chunkRect);
                     value = { extraction: x.extraction, key: x.key, sizedTo: radiusM > baseRadiusM ? 'district-containment' : 'request', rounds: 1, cached: x.cached, builtAtMs: x.builtAtMs };
                 }
-                // the tile seams closed as the extraction arrives (tile-seam-weld-service.ts: overlaps trimmed, positions welded,
-                // T-junctions split, then tile by tile the adaptive close and the strip fill), cached beside it; every later stage
+                // the tile seams closed as the extraction arrives (tile-seam-weld-service.ts: the tiles' caps removed, their rims
+                // zipped at every cut, overlaps trimmed, positions welded, T-junctions split, then tile by tile the adaptive close
+                // and the strip fill), cached beside it; every later stage
                 // reads the welded scan, the raw extraction stays as it came
                 if (deps.tileSeams && process.env.SCRATCHBOX_TILE_SEAMS?.trim() !== '0') {
                     // the passes on unless switched off (SCRATCHBOX_TILE_SEAM_TJUNCTIONS=0, SCRATCHBOX_TILE_SEAM_OVERLAP=0); the adaptive
@@ -2326,23 +2327,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // the tiles' photos levelled toward each other across their cuts only when asked (SCRATCHBOX_TILE_SEAM_TONE=1: it
                     // halves the colour step at the cuts, but pipeline K reads the photos, and on Penn 2 its untextured share rose)
                     const tn = process.env.SCRATCHBOX_TILE_SEAM_TONE?.trim() === '1';
-                    // one colour gain per tile, fitted over all the cuts at once, only when asked (SCRATCHBOX_TILE_SEAM_BALANCE=1)
-                    const tb = process.env.SCRATCHBOX_TILE_SEAM_BALANCE?.trim() === '1';
-                    // the caps two tiles carry in a shared cut plane removed only when asked (SCRATCHBOX_TILE_SEAM_CAPS=1: on the ESB the
-                    // slots they make across a rebuilt facade's bays go; what else changes in a finished building is not settled,
-                    // pipeline K's rebuild near the cuts varying from build to build)
-                    const cp = process.env.SCRATCHBOX_TILE_SEAM_CAPS?.trim() === '1';
-                    // the step between two tiles' walls faded out either side of each cut only when asked (SCRATCHBOX_TILE_SEAM_BLEND=1)
-                    const bl = process.env.SCRATCHBOX_TILE_SEAM_BLEND?.trim() === '1';
-                    // the two tiles' rims at each cut brought onto one line and welded only when asked (SCRATCHBOX_TILE_SEAM_ZIP=1)
-                    const zp = process.env.SCRATCHBOX_TILE_SEAM_ZIP?.trim() === '1';
-                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}${ad ? '_ad' : ''}${tn ? '_tone' : ''}${tb ? '_bal' : ''}${cp ? '_capless' : ''}${bl ? '_blend' : ''}${zp ? '_zip' : ''}`, dir = path.dirname(raw.texturedGlb);
+                    // the caps two tiles carry in a shared cut plane are removed and the two tiles' rims at every cut zipped onto one
+                    // line and welded (the service's defaults, where the extraction gives each leaf's box; user decision 2026-11-07:
+                    // on the ESB and Penn 2 the slots across a rebuilt facade's bays go, the tear audit's holes drop)
+                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}${ad ? '_ad' : ''}${tn ? '_tone' : ''}`, dir = path.dirname(raw.texturedGlb);
                     const tex = path.join(dir, `textured_${tag}.glb`), clay = path.join(dir, `geometry_${tag}.glb`), report = path.join(dir, `seams_${tag}.json`);
                     try {
                         if (!(fs.existsSync(tex) && fs.existsSync(clay) && fs.existsSync(report))) {
                             // written under temporary names and renamed: a build reading the same extraction never sees half a file
                             const sfx = `.tmp-${process.pid}-${Date.now()}`;
-                            const r = await deps.tileSeams({ inputGlb: raw.texturedGlb, outputGlb: tex + sfx, outputClayGlb: clay + sfx, tJunctions: tj, overlapTrim: ov, adaptive: ad, tone: tn, balance: tb, caps: cp, blend: bl, zip: zp, defaultGeometricErrorM: raw.leafGeometricErrorM, timeoutMs: 600_000 });
+                            const r = await deps.tileSeams({ inputGlb: raw.texturedGlb, outputGlb: tex + sfx, outputClayGlb: clay + sfx, tJunctions: tj, overlapTrim: ov, adaptive: ad, tone: tn, defaultGeometricErrorM: raw.leafGeometricErrorM, timeoutMs: 600_000 });
                             fs.renameSync(tex + sfx, tex); fs.renameSync(clay + sfx, clay);
                             fs.writeFileSync(report, JSON.stringify({ version: TILE_SEAMS_VERSION, ...r }));
                         }
@@ -2351,7 +2345,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         cache.writeRunNote(runId, 'tile_seams', {
                             version: TILE_SEAMS_VERSION, raw: raw.texturedGlb, inputTriangles: r.inputTriangles, outputTriangles: r.outputTriangles, toleranceM: r.toleranceM, seamWeld: sw,
                             ...(ot ? { overlapTrim: ot } : {}), ...(tjs ? { tJunctions: tjs } : {}), ...(ac ? { adaptive: ac } : { adaptive: false }), ...(sf ? { stripFill: sf } : {}),
-                            ...(r.tiles ? { tiles: r.tiles } : {}), ...(au ? { seamAudit: au } : {}), ...(tf ? { tone: tf } : {}), ...(ct ? { capTrim: ct } : {}), ...(r.stepBlend ? { stepBlend: r.stepBlend } : {}), ...(r.rimZip ? { rimZip: r.rimZip } : {}), ...(r.reweld ? { reweld: r.reweld } : {}), ...(r.photoOffset ? { photoOffset: r.photoOffset } : {}), ...(r.cutScores ? { cutScores: r.cutScores } : {}), ms: r.ms
+                            ...(r.tiles ? { tiles: r.tiles } : {}), ...(au ? { seamAudit: au } : {}), ...(tf ? { tone: tf } : {}), ...(ct ? { capTrim: ct } : {}), ...(r.rimZip ? { rimZip: r.rimZip } : {}), ...(r.reweld ? { reweld: r.reweld } : {}), ...(r.photoOffset ? { photoOffset: r.photoOffset } : {}), ...(r.cutScores ? { cutScores: r.cutScores } : {}), ms: r.ms
                         });
                         // open seam length (km) under 3 cm / 3-10 / 10-30 / 30-100 cm / no other tile within 1 m
                         const km = (a: { bandLengthM: number[] }) => a.bandLengthM.map(v => (v / 1000).toFixed(1)).join(' / ');
