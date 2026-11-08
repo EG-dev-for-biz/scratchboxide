@@ -51,8 +51,8 @@ export const INFER_PARAMS = {
     baseMinCos: 0.3, baseMaxMetresPerPx: 0.12, baseDepthTolM: 0.6, baseDepthTolShare: 0.03,
     /** Appearance classes: inside the openings, outside them; a finish read with this confidence or more is drawn as read. */
     classesIn: 2, classesOut: 4, finishMinConf: 50,
-    /** Relief: the largest walls with windows (at most), each split into chunks of at most this aspect, the answer kept when its edges correlate with the photo's at least this much, at most this deep (m). */
-    reliefFaces: 12, reliefMaxAspect: 2.0, reliefMinEdgeCorr: 0.25, reliefDepthM: 0.08
+    /** Relief: the largest walls with windows (at most), each one window cell's answer kept when its edges correlate with the exemplar's at least this much and its window boxes read this many grey levels deeper than the wall, at most this deep (m). */
+    reliefFaces: 40, reliefMinEdgeCorr: 0.3, reliefWindowStep: 20, reliefDepthM: 0.08
 } as const;
 
 type V3 = [number, number, number];
@@ -76,7 +76,7 @@ export interface InferReport {
     windows: { arrayed: number; walls: number; copied: number; copiedWalls: number; array?: Pick<WindowArrayReport, 'building'> };
     base?: { faces: number; texels: number; plates: number } | { reason: string };
     classes?: { count: number; read: number; finishes: Array<{ lab: V3; openings: boolean; roughness: number; metalness: number; conf: number; seen?: string }> } | { reason: string };
-    relief?: { faces: number; chunks: number; kept: number; rejected: number } | { reason: string };
+    relief?: { faces: number; chunks: number; kept: number; rejected: number; boxRejected?: number; corrs?: number[] } | { reason: string };
     calls: { text: number; image: number };
     ms: number;
 }
@@ -322,64 +322,122 @@ export async function inferFromSelfOrthos(dir: string, opts: { models?: InferMod
         } catch (err) { report.base = { reason: `Street View failed: ${err instanceof Error ? err.message : String(err)}` }; }
     } else report.base = { reason: opts.streetView ? `no plates at ${opts.streetView.platesFile}` : 'no registered Street View plates for this place' };
 
-    // 7. relief: the image model's height map of each large wall with windows, kept where its edges follow the photo's
+    // 7. relief: per wall, its window cell (the repeat its windows share across and up, from their boxes) median-stacked over
+    // every repeat into one sharp exemplar; the image model draws that cell's height map from a 2 x 2 tiling of it at an
+    // aspect it makes exactly, its four quadrants averaged back into one periodic cell, kept when its edges follow the
+    // exemplar's, and tiled over the wall's array at the cell's pitch and phase (generated; a normal map, never geometry)
     const height: InferredInputs['height'] = [];
     if (opts.models?.image) {
-        const big = frames.filter(f => (entries.get(f.facadeId)?.rects.length ?? 0) >= 6).sort((a, b) => b.width * b.height * b.coverage - a.width * a.height * a.coverage).slice(0, P.reliefFaces);
-        let chunks = 0, kept = 0, rejected = 0;
-        const prompt = 'Convert this straightened, front-on photo of a building wall into a grayscale HEIGHT MAP of its surface relief with exactly the same framing, size and layout: every edge must stay where it is in the photo. White = the surfaces standing furthest out (pier faces, cornices, sills, carved ornament, mouldings), black = the deepest (window glass, recesses), mid grey = the main wall plane. No lighting, no shadows, no colour, no text, no perspective: an orthographic depth map aligned pixel for pixel with the input. Uniform grey areas of the input are unknown: keep them mid grey.';
-        // every chunk of every wall first, then asked four at a time (a kept answer is not asked again)
-        type Chunk = { f: SelfFrame; x0: number; y0: number; cw: number; chh: number; crop: Uint8Array; png: Buffer; aspect: string; key?: string; ans?: string };
-        const jobs: Chunk[] = [];
-        for (const f of big) {
-            const p = photoOf(f);
-            const chunkH = Math.max(8, Math.min(p.height, Math.floor(p.width * P.reliefMaxAspect))), chunkW = Math.min(p.width, Math.floor(p.height * P.reliefMaxAspect) || p.width);
-            for (let y0 = 0; y0 < p.height; y0 += chunkH) for (let x0 = 0; x0 < p.width; x0 += chunkW) {
-                const cw = Math.min(chunkW, p.width - x0), chh = Math.min(chunkH, p.height - y0);
-                if (cw < 16 || chh < 16) continue;
-                const crop = new Uint8Array(cw * chh * 3);
-                for (let y = 0; y < chh; y++) for (let x = 0; x < cw; x++) { const o = ((y0 + y) * p.width + x0 + x) * 4, d = (y * cw + x) * 3; crop[d] = p.rgba[o]; crop[d + 1] = p.rgba[o + 1]; crop[d + 2] = p.rgba[o + 2]; }
-                const png = encodePng(cw, chh, crop, 3);
-                const ar = cw / chh, aspect = ar >= 1.6 ? '16:9' : ar >= 1.2 ? '4:3' : ar >= 0.85 ? '1:1' : ar >= 0.65 ? '3:4' : '9:16';
-                jobs.push({ f, x0, y0, cw, chh, crop, png, aspect, ...(opts.store ? { key: readingKey('measured-twin-relief', [INFER_VERSION, prompt, png]) } : {}) });
+        const prompt = 'This image is one repeating cell of a building facade (the same cell tiled two by two), photographed straight on. Draw its grayscale HEIGHT MAP: the same image, same size, every edge exactly where it is in the photo, with white = the surfaces standing furthest out (piers, mullions, sills, mouldings, carved ornament), black = the deepest (window glass, recesses), mid grey = the main wall surface, and smooth gradations for rounded or sloped profiles. No lighting, no shadows, no colour, no text, no perspective, no border: an orthographic depth map aligned pixel for pixel with the input, the two by two tiling kept.';
+        type Cell = { f: SelfFrame; px: number; py: number; ox: number; oy: number; x0: number; x1: number; y0: number; y1: number; ex: Float32Array; png: Buffer; side: number; key?: string; ans?: string };
+        const cells: Cell[] = [];
+        // the repeat of a set of positions: the smallest step (sum of consecutive gaps) at which they fall on one lattice
+        const repeatOf = (xs: number[]): number | undefined => {
+            const u = [...new Set(xs.map(x => Math.round(x)))].sort((a, b) => a - b);
+            if (u.length < 3) return undefined;
+            const gaps = u.slice(1).map((x, i) => x - u[i]).filter(g => g > 2);
+            if (gaps.length < 2) return undefined;
+            const cands = new Set<number>();
+            for (let i = 0; i < gaps.length; i++) for (let k = 1; k <= 3 && i + k <= gaps.length; k++) cands.add(gaps.slice(i, i + k).reduce((a, b) => a + b, 0));
+            let best: number | undefined, bestScore = Infinity;
+            for (const c of [...cands].sort((a, b) => a - b)) {
+                const ph = u.map(x => ((x % c) + c) % c), ref = ph[0];
+                const err = ph.reduce((m, q) => m + Math.min(Math.abs(q - ref), c - Math.abs(q - ref)), 0) / ph.length;
+                const score = err / c + (c > 4 * Math.min(...gaps) ? 1 : 0);
+                if (err <= Math.max(1.5, 0.08 * c) && score < bestScore) { bestScore = score; best = c; }
             }
+            return best;
+        };
+        const ranked = frames.filter(f => (entries.get(f.facadeId)?.rects.length ?? 0) >= 8).sort((a, b) => b.width * b.height * b.coverage - a.width * a.height * a.coverage).slice(0, P.reliefFaces);
+        for (const f of ranked) {
+            const rects = entries.get(f.facadeId)!.rects;
+            const px = repeatOf(rects.map(r => r[0])), py = repeatOf(rects.map(r => r[1]));
+            if (!px || !py || px < 6 || py < 6) continue;
+            const p = photoOf(f);
+            // the cell's origin: the first window's corner, less a quarter cell so the window sits inside it
+            const ox = ((Math.round(rects[0][0] - px / 4) % px) + px) % px, oy = ((Math.round(rects[0][1] - py / 4) % py) + py) % py;
+            const x0 = Math.max(0, Math.min(...rects.map(r => r[0])) - px / 2), x1 = Math.min(p.width, Math.max(...rects.map(r => r[2])) + px / 2);
+            const y0 = Math.max(0, Math.min(...rects.map(r => r[1])) - py / 2), y1 = Math.min(p.height, Math.max(...rects.map(r => r[3])) + py / 2);
+            // the exemplar: each pixel of the cell the median over the repeats inside the array's extent
+            const ex = new Float32Array(px * py * 3);
+            let filled = 0;
+            for (let cy = 0; cy < py; cy++) for (let cx = 0; cx < px; cx++) {
+                const vr: number[] = [], vg: number[] = [], vb: number[] = [];
+                for (let y = oy + cy; y < y1; y += py) { if (y < y0) continue; for (let x = ox + cx; x < x1; x += px) { if (x < x0 || !coveredAt(f, x, y)) continue; const o = (y * p.width + x) * 4; vr.push(p.rgba[o]); vg.push(p.rgba[o + 1]); vb.push(p.rgba[o + 2]); } }
+                if (vr.length < 3) continue;
+                const med = (v: number[]) => { v.sort((a, b) => a - b); return v[v.length >> 1]; };
+                const o = (cy * px + cx) * 3; ex[o] = med(vr); ex[o + 1] = med(vg); ex[o + 2] = med(vb); filled++;
+            }
+            if (filled < 0.9 * px * py) continue;
+            // a 2 x 2 tiling, enlarged into a square the model draws at its own size (1:1)
+            const side = 768, sheet = new Uint8Array(side * side * 3);
+            for (let y = 0; y < side; y++) for (let x = 0; x < side; x++) {
+                const cx = Math.floor(((x / side) * 2 * px)) % px, cy = Math.floor(((y / side) * 2 * py)) % py, o = (cy * px + cx) * 3, d = (y * side + x) * 3;
+                sheet[d] = ex[o]; sheet[d + 1] = ex[o + 1]; sheet[d + 2] = ex[o + 2];
+            }
+            const png = encodePng(side, side, sheet, 3);
+            cells.push({ f, px, py, ox, oy, x0, x1, y0, y1, ex, png, side, ...(opts.store ? { key: readingKey('measured-twin-relief-cell', [INFER_VERSION, prompt, png]) } : {}) });
         }
-        chunks = jobs.length;
         let next = 0;
         const worker = async () => {
-            while (next < jobs.length) {
-                const j = jobs[next++];
+            while (next < cells.length) {
+                const c = cells[next++];
                 if (opts.signal?.aborted) return;
-                j.ans = j.key ? await opts.store!.get<string>(j.key) : undefined;
-                if (j.ans) continue;
-                try { calls.image++; const ans = await opts.models!.image!(j.png, prompt, j.aspect); if (ans) { j.ans = ans.toString('base64'); if (j.key) opts.store!.put(j.key, j.ans); } } catch { /* rejected below */ }
+                c.ans = c.key ? await opts.store!.get<string>(c.key) : undefined;
+                if (c.ans) continue;
+                try { calls.image++; const ans = await opts.models!.image!(c.png, prompt, '1:1'); if (ans) { c.ans = ans.toString('base64'); if (c.key) opts.store!.put(c.key, c.ans); } } catch { /* rejected below */ }
             }
         };
         await Promise.all([0, 1, 2, 3].map(worker));
-        for (const f of big) {
-            const p = photoOf(f);
-            const hmap = new Uint8Array(p.width * p.height).fill(128);
-            let any = false;
-            for (const j of jobs.filter(q => q.f === f)) {
-                const { x0, y0, cw, chh, crop } = j;
-                if (!j.ans) { rejected++; continue; }
-                let ans: { width: number; height: number; rgba: Uint8Array | Buffer };
-                try { ans = decodeImageToRgba(Buffer.from(j.ans, 'base64')); } catch { rejected++; continue; }
-                const rgbaCrop = new Uint8Array(cw * chh * 4); for (let i = 0; i < cw * chh; i++) { rgbaCrop[i * 4] = crop[i * 3]; rgbaCrop[i * 4 + 1] = crop[i * 3 + 1]; rgbaCrop[i * 4 + 2] = crop[i * 3 + 2]; }
-                const L1 = lumaResampled({ width: cw, height: chh, rgba: rgbaCrop }, cw, chh);
-                const L2 = lumaResampled(ans, cw, chh);
-                const valid = new Uint8Array(cw * chh); for (let y = 0; y < chh; y++) for (let x = 0; x < cw; x++) valid[y * cw + x] = coveredAt(f, x0 + x, y0 + y) ? 1 : 0;
-                const corr = ncc(gradMag(L1, cw, chh), gradMag(L2, cw, chh), valid);
-                if (corr < P.reliefMinEdgeCorr) { rejected++; continue; }
-                kept++; any = true;
-                for (let y = 0; y < chh; y++) for (let x = 0; x < cw; x++) if (valid[y * cw + x]) hmap[(y0 + y) * p.width + x0 + x] = Math.max(0, Math.min(255, Math.round(L2[y * cw + x])));
+        let kept = 0, rejected = 0, boxRejected = 0;
+        const corrs: number[] = [];
+        for (const c of cells) {
+            if (!c.ans) { rejected++; continue; }
+            let ans: { width: number; height: number; rgba: Uint8Array | Buffer };
+            try { ans = decodeImageToRgba(Buffer.from(c.ans, 'base64')); } catch { rejected++; continue; }
+            // the four quadrants averaged into one cell at the exemplar's pixels
+            const { px, py } = c, cellH = new Float32Array(px * py);
+            for (let cy = 0; cy < py; cy++) for (let cx = 0; cx < px; cx++) {
+                let s = 0;
+                for (const [qx, qy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+                    const ax = Math.min(ans.width - 1, Math.floor(((qx * px + cx + 0.5) / (2 * px)) * ans.width)), ay = Math.min(ans.height - 1, Math.floor(((qy * py + cy + 0.5) / (2 * py)) * ans.height));
+                    const o = (ay * ans.width + ax) * 4; s += 0.299 * ans.rgba[o] + 0.587 * ans.rgba[o + 1] + 0.114 * ans.rgba[o + 2];
+                }
+                cellH[cy * px + cx] = s / 4;
             }
-            if (!any) continue;
-            const out = path.join(dir, `${f.image.replace(/\.png$/, '')}_height.png`);
+            const exL = new Float32Array(px * py); for (let i = 0; i < px * py; i++) exL[i] = 0.299 * c.ex[i * 3] + 0.587 * c.ex[i * 3 + 1] + 0.114 * c.ex[i * 3 + 2];
+            const corr = ncc(gradMag(exL, px, py), gradMag(cellH, px, py));
+            corrs.push(Math.round(corr * 100) / 100);
+            if (corr < P.reliefMinEdgeCorr) { rejected++; continue; }
+            // the wall's own window boxes folded into the cell: the answer must read them deeper than the wall, then they
+            // are recessed as the boxes say, and outside them only what the answer raises is kept (no invented openings)
+            const win = new Uint8Array(px * py);
+            for (const r of entries.get(c.f.facadeId)!.rects) {
+                for (let y = Math.floor(r[1]); y < Math.ceil(r[3]); y++) for (let x = Math.floor(r[0]); x < Math.ceil(r[2]); x++) {
+                    const cx = (((x - c.ox) % px) + px) % px, cy = (((y - c.oy) % py) + py) % py; win[cy * px + cx] = 1;
+                }
+            }
+            const ins: number[] = [], outs: number[] = [];
+            for (let i = 0; i < px * py; i++) (win[i] ? ins : outs).push(cellH[i]);
+            const med = (v: number[]) => { const q = [...v].sort((a, b) => a - b); return q[q.length >> 1] ?? 128; };
+            const wall = med(outs), inMed = med(ins);
+            if (ins.length < 0.03 * px * py || outs.length < 0.2 * px * py || inMed > wall - P.reliefWindowStep) { rejected++; boxRejected++; continue; }
+            for (let i = 0; i < px * py; i++) cellH[i] = win[i] ? Math.min(cellH[i], wall - 2 * P.reliefWindowStep) : Math.max(cellH[i], wall - P.reliefWindowStep / 2);
+            kept++;
+            // tiled over the wall's array, the rest at the cell's mean (no step at the array's edge)
+            const p = photoOf(c.f);
+            let mean = 0; for (const v of cellH) mean += v; mean /= cellH.length;
+            const hmap = new Uint8Array(p.width * p.height).fill(Math.round(mean));
+            for (let y = Math.floor(c.y0); y < Math.ceil(c.y1); y++) for (let x = Math.floor(c.x0); x < Math.ceil(c.x1); x++) {
+                if (!coveredAt(c.f, x, y)) continue;
+                const cx = (((x - c.ox) % px) + px) % px, cy = (((y - c.oy) % py) + py) % py;
+                hmap[y * p.width + x] = Math.max(0, Math.min(255, Math.round(cellH[cy * px + cx])));
+            }
+            const out = path.join(dir, `${c.f.image.replace(/\.png$/, '')}_height.png`);
             fs.writeFileSync(out, encodePng(p.width, p.height, hmap, 1));
-            height.push({ id: f.facadeId, png: out, depthM: P.reliefDepthM });
+            height.push({ id: c.f.facadeId, png: out, depthM: P.reliefDepthM });
         }
-        report.relief = { faces: height.length, chunks, kept, rejected };
+        report.relief = { faces: height.length, chunks: cells.length, kept, rejected, boxRejected, corrs };
     } else report.relief = { reason: 'no image model' };
 
     const planes = frames.map(f => ({ facadeId: f.facadeId, image: f.image, centroid: f.centroid, normal: f.normal, axisS: f.axisS, axisT: f.axisT, orthoSMin: f.orthoSMin, orthoTMax: f.orthoTMax, pixel: f.pixel, width: f.width, height: f.height }));
