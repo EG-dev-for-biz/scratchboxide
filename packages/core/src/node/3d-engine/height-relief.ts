@@ -73,7 +73,7 @@ export interface HeightReliefReport {
     ms: number;
 }
 
-/** Whether a pipeline K build runs the displacement: the node graph's switch when set, else SCRATCHBOX_K_HEIGHT_RELIEF (1 on, 0 off), else on for one building and off for a district (its chunks hold dozens of buildings). */
+/** Whether a pipeline K build runs the displacement: the node graph's switch when set, else SCRATCHBOX_K_HEIGHT_RELIEF=1; off otherwise. */
 export function heightReliefAsked(steps: Record<string, unknown> | undefined): boolean {
     const asked = steps?.['twin.heightRelief'];
     if (typeof asked === 'boolean') return asked;
