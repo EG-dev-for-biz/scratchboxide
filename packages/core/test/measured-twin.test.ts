@@ -103,12 +103,15 @@ describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K bui
         expect(json.nodes.map(n => n.name)).toEqual(['massing', 'openings', 'slender_top']);
         expect(json.nodes.map(n => n.extras?.sb?.provenance)).toEqual(['measured', 'photo-inferred', 'measured']);
         expect(json.nodes[1].extras?.sb?.depthProvenance).toBe('generated');
-        expect((json.images ?? []).length).toBeGreaterThanOrEqual(9);
+        // one image: the atlas every element samples (renderers that ignore vertex colours still draw every colour)
+        expect((json.images ?? []).length).toBe(1);
+        expect(rep.detail.paletteColours).toBeGreaterThan(1000);
         // the walls' detail textures: most walls with windows carry one, in one atlas
         expect(rep.detail.faces).toBeGreaterThan(rep.facesWithWindows / 2);
         expect(rep.detail.atlas[0]).toBe(4096);
         const mats = (glb.json as { materials: Array<{ name: string; pbrMetallicRoughness: { baseColorTexture?: unknown } }> }).materials;
-        expect(mats.filter(m => m.name.endsWith('+detail')).every(m => m.pbrMetallicRoughness.baseColorTexture)).toBe(true);
+        const used = new Set(json.meshes.flatMap(m => m.primitives.map(p => (p as { material: number }).material)));
+        expect([...used].every(i => mats[i].pbrMetallicRoughness.baseColorTexture)).toBe(true);
         let tris = 0;
         for (const m of json.meshes) for (const p of m.primitives) {
             const col = readAccessor(glb, p.attributes.COLOR_0);

@@ -34,11 +34,14 @@
  *     texels left out) at that point and `detailRepeats` storeys up and down, so the storey's own sash, mullion,
  *     spandrel and stone pattern stays and a one-off reflection, lit window or smear is outvoted. Each element's measured
  *     colour is baked over its rect as a gain on that median (to the power `detailGainPower`); the walls share one atlas
- *     (texel enlarged from `detailTexelM` until they fit), sampled through the element's TEXCOORD_0. The geometry stays
- *     the operators'; roofs and the slender top keep their flat element colours.
- *   - Material (photo-inferred). Each element's colour picks the nearest of K's measured appearance classes (CIELAB),
- *     whose library set gives the normal and occlusion-roughness-metalness maps at the set's real tile size; the colour
- *     stays the element's own (COLOR_0, baseColorFactor white). Glass is a smooth dielectric.
+ *     (texel enlarged from `detailTexelM` until they fit in half the atlas). The geometry stays the operators'; roofs,
+ *     the slender top and walls without detail keep their flat element colours.
+ *   - Atlas. Every element takes its colour from one atlas texture through its TEXCOORD_0 (COLOR_0 white), since some
+ *     renderers read material textures and ignore vertex colours: a detailed wall's elements sample its texture, every
+ *     other element a 16-texel block of its own colour (the palette, below the walls' textures; each colour once).
+ *   - Material (photo-inferred). Each element's colour picks the nearest of K's measured appearance classes (CIELAB):
+ *     its roughness and metalness (the library set's tiled maps would need a second UV set and are left out with an
+ *     atlas). Glass is a smooth dielectric.
  *
  * No element is named or classified: walls, openings and bands are the operators' geometry (prisms, punched relief,
  * revolution), the class picks a measured appearance. Output: one binary glTF in the tile frame (x east, y up, z
@@ -389,16 +392,46 @@ struct Emitter {
     std::vector<ClassMat>* classes{nullptr};
     int glassMat{0};
     size_t triangles{0};
-    // while a textured wall is emitted: its texture, its frame, and where textured materials start
+    // Every element is drawn from the atlas (its colour in a texture, COLOR_0 white), since some renderers read material
+    // textures but not vertex colours. While a detail-textured wall is emitted, `tex` is its texture and an element samples
+    // it; any other element samples a block of its own colour (the palette, below the walls' textures). UVs are written in
+    // atlas texels and divided by the atlas's final size when it is known (normaliseUvs).
     FaceTex* tex{nullptr};
     P3 texP0, texD;
     double groundY{0};
-    int texOffset{0}, atlasW{1}, atlasH{1};
-    // a textured element's TEXCOORD_0 is its place in the atlas (one UV set: every reader takes it)
+    int texOffset{0}, atlasW{4096}, paletteY0{0};
+    static constexpr int kBlock = 16;                // a palette block's side (texels): its colour survives four mip levels (distant views)
+    std::map<uint32_t, int> paletteIndex;            // 8-bit sRGB colour -> block
+    std::vector<uint32_t> palette;
+    static uint8_t toSrgb8(double c) { c = std::clamp(c, 0.0, 1.0); return static_cast<uint8_t>(std::lround(255.0 * (c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1 / 2.4) - 0.055))); }
+    void paletteUv(float& u, float& v, const Rgb& c) {
+        const uint32_t key = (static_cast<uint32_t>(toSrgb8(c.r)) << 16) | (static_cast<uint32_t>(toSrgb8(c.g)) << 8) | toSrgb8(c.b);
+        auto it = paletteIndex.find(key);
+        int k;
+        if (it == paletteIndex.end()) { k = static_cast<int>(palette.size()); palette.push_back(key); paletteIndex[key] = k; } else k = it->second;
+        const int perRow = atlasW / kBlock;
+        u = static_cast<float>((k % perRow) * kBlock + kBlock * 0.5);
+        v = static_cast<float>(paletteY0 + (k / perRow) * kBlock + kBlock * 0.5);
+    }
+    int paletteRowsTexels() const { const int perRow = atlasW / kBlock; return static_cast<int>((palette.size() + perRow - 1) / perRow) * kBlock; }
     void atlasUv(Prim& p, const P3& q) const {
         const double a = sp::dot(q - texP0, texD), h = q.y - groundY;
-        p.uv.push_back(static_cast<float>((tex->ax + a / tex->texel) / atlasW));
-        p.uv.push_back(static_cast<float>((tex->ay + (tex->h1 - h) / tex->texel) / atlasH));
+        p.uv.push_back(static_cast<float>(tex->ax + a / tex->texel));
+        p.uv.push_back(static_cast<float>(tex->ay + (tex->h1 - h) / tex->texel));
+    }
+    void push(Prim& p, std::initializer_list<P3> pts, P3 n, const Rgb& col) {
+        float pu = 0, pv = 0;
+        if (!tex) paletteUv(pu, pv, col);
+        for (const P3& q : pts) {
+            if (tex) atlasUv(p, q); else { p.uv.push_back(pu); p.uv.push_back(pv); }
+            p.pos.insert(p.pos.end(), {static_cast<float>(q.x), static_cast<float>(q.y), static_cast<float>(q.z)});
+            p.nrm.insert(p.nrm.end(), {static_cast<float>(n.x), static_cast<float>(n.y), static_cast<float>(n.z)});
+            p.col.insert(p.col.end(), {1.0f, 1.0f, 1.0f});
+        }
+    }
+    /** Divides every element's UVs (atlas texels) by the atlas's final size. */
+    void normaliseUvs(std::vector<OutNode*> nodes, int H) const {
+        for (auto* nd : nodes) for (auto& [m, p] : nd->prims) for (size_t i = 0; i + 1 < p.uv.size(); i += 2) { p.uv[i] /= static_cast<float>(atlasW); p.uv[i + 1] /= static_cast<float>(H); }
     }
 
     /** The nearest class (CIELAB) to a colour; openings classes only when nothing else is given. */
@@ -414,36 +447,21 @@ struct Emitter {
             }
         return best;
     }
-    double tileOf(int mat) const { return mat < static_cast<int>(classes->size()) && (*classes)[mat].tileM > 0 ? (*classes)[mat].tileM : 2.0; }
 
-    /** A planar quad a, b, c, d (counter-clockwise seen from n), UVs along uAxis / vAxis in metres over the material's tile. */
-    void quad(OutNode& nd, int mat, P3 a, P3 b, P3 c, P3 d, P3 n, const Rgb& col, P3 uAxis, P3 vAxis) {
+    /** A planar quad a, b, c, d (counter-clockwise seen from n, reordered when not), drawn from the atlas. */
+    void quad(OutNode& nd, int mat, P3 a, P3 b, P3 c, P3 d, P3 n, const Rgb& col, P3, P3) {
         if (sp::dot(sp::cross(b - a, c - a), n) < 0) std::swap(b, d);
-        const double tile = tileOf(mat);
-        Prim& p = nd.prims[tex ? mat + texOffset : mat];
+        Prim& p = nd.prims[mat + texOffset];
         const uint32_t base = static_cast<uint32_t>(p.pos.size() / 3);
-        const Rgb colUsed = tex ? Rgb{1, 1, 1} : col;  // a textured element's colour is baked into its texels
-        for (const P3& q : {a, b, c, d}) {
-            if (tex) atlasUv(p, q);
-            p.pos.insert(p.pos.end(), {static_cast<float>(q.x), static_cast<float>(q.y), static_cast<float>(q.z)});
-            p.nrm.insert(p.nrm.end(), {static_cast<float>(n.x), static_cast<float>(n.y), static_cast<float>(n.z)});
-            if (!tex) p.uv.insert(p.uv.end(), {static_cast<float>(sp::dot(q, uAxis) / tile), static_cast<float>(-sp::dot(q, vAxis) / tile)});
-            p.col.insert(p.col.end(), {static_cast<float>(colUsed.r), static_cast<float>(colUsed.g), static_cast<float>(colUsed.b)});
-        }
+        push(p, {a, b, c, d}, n, col);
         p.idx.insert(p.idx.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
         triangles += 2;
     }
-    void tri(OutNode& nd, int mat, P3 a, P3 b, P3 c, P3 n, const Rgb& col, P3 uAxis, P3 vAxis) {
+    void tri(OutNode& nd, int mat, P3 a, P3 b, P3 c, P3 n, const Rgb& col, P3, P3) {
         if (sp::dot(sp::cross(b - a, c - a), n) < 0) std::swap(b, c);
-        Prim& p = nd.prims[mat];
+        Prim& p = nd.prims[mat + texOffset];
         const uint32_t base = static_cast<uint32_t>(p.pos.size() / 3);
-        const double tile = tileOf(mat);
-        for (const P3& q : {a, b, c}) {
-            p.pos.insert(p.pos.end(), {static_cast<float>(q.x), static_cast<float>(q.y), static_cast<float>(q.z)});
-            p.nrm.insert(p.nrm.end(), {static_cast<float>(n.x), static_cast<float>(n.y), static_cast<float>(n.z)});
-            p.uv.insert(p.uv.end(), {static_cast<float>(sp::dot(q, uAxis) / tile), static_cast<float>(-sp::dot(q, vAxis) / tile)});
-            p.col.insert(p.col.end(), {static_cast<float>(col.r), static_cast<float>(col.g), static_cast<float>(col.b)});
-        }
+        push(p, {a, b, c}, n, col);
         p.idx.insert(p.idx.end(), {base, base + 1, base + 2});
         triangles += 1;
     }
@@ -458,7 +476,7 @@ struct Report {
     size_t windowsGiven{0}, windowsPlaced{0}, windowsGenerated{0}, windowsContinued{0}, continueTested{0}, windowsRephased{0}, wallsRephased{0}, panesPlaced{0};
     size_t droppedNoWall{0}, droppedClipped{0}, droppedOverlap{0}, droppedSmall{0}, droppedNoFrame{0};
     size_t uncolouredElements{0}, colouredElements{0}, capsCut{0};
-    size_t facesTextured{0}, texelsDetail{0};
+    size_t facesTextured{0}, texelsDetail{0}, paletteColours{0};
     int atlasW{0}, atlasH{0};
     double detailTexelM{0};
     double slenderFromM{-1}, topM{0};
@@ -905,6 +923,7 @@ inline Result build(const Spec& S) {
         return photos.emplace(id, std::move(P)).first->second;
     };
     std::vector<double> facePitch(faces.size(), 0);
+    int facesUsedH = 0;
     std::vector<int> facePlane(faces.size(), -1);
     if (S.P.detail) {
         for (size_t fi = 0; fi < faces.size(); ++fi) {
@@ -924,7 +943,8 @@ inline Result build(const Spec& S) {
             facePitch[fi] = steps[steps.size() / 2];
             facePlane[fi] = best;
         }
-        // the texel: enlarged until every textured wall fits the atlas (shelves, tallest first)
+        // the texel: enlarged until every textured wall fits the atlas (shelves, tallest first), half of it at most: the
+        // other half holds the palette of every other element's colour
         double texel = S.P.detailTexelM;
         const int A = S.P.detailAtlas;
         for (int attempt = 0; attempt < 12; ++attempt, texel *= 1.15) {
@@ -940,10 +960,10 @@ inline Result build(const Spec& S) {
                 auto& t = faceTex[fi];
                 if (t.w + 2 > A || t.h + 2 > A) { fits = false; break; }
                 if (x + t.w + 2 > A) { x = 0; y += shelf; shelf = 0; }
-                if (y + t.h + 2 > A) { fits = false; break; }
+                if (y + t.h + 2 > A / 2) { fits = false; break; }
                 t.ax = x + 1; t.ay = y + 1; x += t.w + 2; shelf = std::max(shelf, t.h + 2);
             }
-            if (fits) { rep.detailTexelM = texel; rep.atlasW = A; rep.atlasH = std::min(A, ((y + shelf + 3) / 4) * 4); break; }
+            if (fits) { rep.detailTexelM = texel; rep.atlasW = A; facesUsedH = ((y + shelf + 3) / 4) * 4; break; }
         }
         if (rep.atlasW) {
             for (size_t fi = 0; fi < faces.size(); ++fi) {
@@ -989,7 +1009,8 @@ inline Result build(const Spec& S) {
     }
     E.groundY = S.groundY;
     E.texOffset = static_cast<int>(classes.size()) + 1;
-    E.atlasW = std::max(1, rep.atlasW); E.atlasH = std::max(1, rep.atlasH);
+    E.atlasW = S.P.detailAtlas;
+    E.paletteY0 = facesUsedH;
 
     // --- emit walls (cells), windows (reveals, panes, frames)
     const double D = S.revealM;
@@ -1075,41 +1096,6 @@ inline Result build(const Spec& S) {
     }
     E.tex = nullptr;
 
-    // --- the atlas: each element's measured colour baked over its rect as a gain on the repeat median (the median's own
-    // mean over the rect brought toward the element's colour: the gain held within [1/3, 3], to the power
-    // detailGainPower, so a cell's own colour shows without its edges reading as blocks); a texel no repeat
-    // photographed takes the element's colour flat
-    if (rep.atlasW) {
-        texture::ImageBuffer atlas(rep.atlasW, rep.atlasH, 3, 128);
-        auto toS = [](double c) { c = std::clamp(c, 0.0, 1.0); return static_cast<uint8_t>(std::lround(255.0 * (c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1 / 2.4) - 0.055))); };
-        for (auto& t : faceTex) {
-            if (!t.ok) continue;
-            std::vector<float> baked(t.M.size(), -1.0f);
-            for (const auto& e : t.tints) {
-                const int i0 = std::clamp(static_cast<int>(std::floor(e.a0 / t.texel)), 0, t.w), i1 = std::clamp(static_cast<int>(std::ceil(e.a1 / t.texel)), 0, t.w);
-                const int j0 = std::clamp(static_cast<int>(std::floor((t.h1 - e.h1) / t.texel)), 0, t.h), j1 = std::clamp(static_cast<int>(std::ceil((t.h1 - e.h0) / t.texel)), 0, t.h);
-                double m[3] = {0, 0, 0}; size_t n = 0;
-                for (int j = j0; j < j1; ++j) for (int i = i0; i < i1; ++i) { const size_t o = (static_cast<size_t>(j) * t.w + i) * 3; if (t.M[o] >= 0) { m[0] += t.M[o]; m[1] += t.M[o + 1]; m[2] += t.M[o + 2]; ++n; } }
-                const double cc[3] = {e.c.r, e.c.g, e.c.b};
-                double gain[3] = {1, 1, 1};
-                if (n) for (int k = 0; k < 3; ++k) gain[k] = std::pow(std::clamp(cc[k] / std::max(1e-4, m[k] / n), 1.0 / 3, 3.0), S.P.detailGainPower);
-                for (int j = j0; j < j1; ++j) for (int i = i0; i < i1; ++i) {
-                    const size_t o = (static_cast<size_t>(j) * t.w + i) * 3;
-                    for (int k = 0; k < 3; ++k) baked[o + k] = static_cast<float>(t.M[o] >= 0 ? t.M[o + k] * gain[k] : cc[k]);
-                }
-            }
-            // a texel past every element (the edge rounding) takes its neighbour's value; the 1-texel gutter repeats the edge
-            for (int j = -1; j <= t.h; ++j) for (int i = -1; i <= t.w; ++i) {
-                const int si = std::clamp(i, 0, t.w - 1), sj = std::clamp(j, 0, t.h - 1);
-                const size_t o = (static_cast<size_t>(sj) * t.w + si) * 3;
-                const int X = t.ax + i, Y = t.ay + j;
-                if (X < 0 || Y < 0 || X >= atlas.width || Y >= atlas.height) continue;
-                const size_t q = atlas.getIndex(X, Y);
-                for (int k = 0; k < 3; ++k) atlas.data[q + k] = baked[o] >= 0 ? toS(baked[o + k]) : (t.M[o] >= 0 ? toS(t.M[o + k]) : 128);
-            }
-        }
-        out.atlas = std::move(atlas);
-    }
 
     // --- roofs: each tier's cap, split until every edge is at most ~2 cell sizes, each piece its own colour
     for (size_t ti = 0; ti < tiers.size(); ++ti) {
@@ -1293,6 +1279,59 @@ inline Result build(const Spec& S) {
         }
     }
 
+    // --- the atlas: each element's measured colour baked over its rect as a gain on the repeat median (the median's own
+    // mean over the rect brought toward the element's colour: the gain held within [1/3, 3], to the power
+    // detailGainPower, so a cell's own colour shows without its edges reading as blocks); a texel no repeat
+    // photographed takes the element's colour flat
+    // the atlas's size: the walls' textures, then the palette's rows below them
+    {
+        const int H = ((E.paletteY0 + E.paletteRowsTexels() + 3) / 4) * 4;
+        if (H > E.atlasW) throw std::runtime_error("measured twin: " + std::to_string(E.palette.size()) + " element colours do not fit the atlas below the walls' textures (raise detailAtlas or detailTexelM)");
+        rep.atlasW = E.atlasW; rep.atlasH = std::max(4, H); rep.paletteColours = E.palette.size();
+        E.normaliseUvs({&massing, &openings, &slender}, rep.atlasH);
+    }
+    {
+        texture::ImageBuffer atlas(rep.atlasW, rep.atlasH, 3, 128);
+        // the palette: each colour a solid block
+        for (size_t k = 0; k < E.palette.size(); ++k) {
+            const int perRow = E.atlasW / Emitter::kBlock;
+            const int x0 = static_cast<int>(k % perRow) * Emitter::kBlock, y0 = E.paletteY0 + static_cast<int>(k / perRow) * Emitter::kBlock;
+            const uint32_t c = E.palette[k];
+            for (int y = y0; y < y0 + Emitter::kBlock; ++y) for (int x = x0; x < x0 + Emitter::kBlock; ++x) {
+                const size_t q = atlas.getIndex(x, y);
+                atlas.data[q] = static_cast<uint8_t>(c >> 16); atlas.data[q + 1] = static_cast<uint8_t>(c >> 8); atlas.data[q + 2] = static_cast<uint8_t>(c);
+            }
+        }
+        auto toS = [](double c) { c = std::clamp(c, 0.0, 1.0); return static_cast<uint8_t>(std::lround(255.0 * (c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1 / 2.4) - 0.055))); };
+        for (auto& t : faceTex) {
+            if (!t.ok) continue;
+            std::vector<float> baked(t.M.size(), -1.0f);
+            for (const auto& e : t.tints) {
+                const int i0 = std::clamp(static_cast<int>(std::floor(e.a0 / t.texel)), 0, t.w), i1 = std::clamp(static_cast<int>(std::ceil(e.a1 / t.texel)), 0, t.w);
+                const int j0 = std::clamp(static_cast<int>(std::floor((t.h1 - e.h1) / t.texel)), 0, t.h), j1 = std::clamp(static_cast<int>(std::ceil((t.h1 - e.h0) / t.texel)), 0, t.h);
+                double m[3] = {0, 0, 0}; size_t n = 0;
+                for (int j = j0; j < j1; ++j) for (int i = i0; i < i1; ++i) { const size_t o = (static_cast<size_t>(j) * t.w + i) * 3; if (t.M[o] >= 0) { m[0] += t.M[o]; m[1] += t.M[o + 1]; m[2] += t.M[o + 2]; ++n; } }
+                const double cc[3] = {e.c.r, e.c.g, e.c.b};
+                double gain[3] = {1, 1, 1};
+                if (n) for (int k = 0; k < 3; ++k) gain[k] = std::pow(std::clamp(cc[k] / std::max(1e-4, m[k] / n), 1.0 / 3, 3.0), S.P.detailGainPower);
+                for (int j = j0; j < j1; ++j) for (int i = i0; i < i1; ++i) {
+                    const size_t o = (static_cast<size_t>(j) * t.w + i) * 3;
+                    for (int k = 0; k < 3; ++k) baked[o + k] = static_cast<float>(t.M[o] >= 0 ? t.M[o + k] * gain[k] : cc[k]);
+                }
+            }
+            // a texel past every element (the edge rounding) takes its neighbour's value; the 1-texel gutter repeats the edge
+            for (int j = -1; j <= t.h; ++j) for (int i = -1; i <= t.w; ++i) {
+                const int si = std::clamp(i, 0, t.w - 1), sj = std::clamp(j, 0, t.h - 1);
+                const size_t o = (static_cast<size_t>(sj) * t.w + si) * 3;
+                const int X = t.ax + i, Y = t.ay + j;
+                if (X < 0 || Y < 0 || X >= atlas.width || Y >= atlas.height) continue;
+                const size_t q = atlas.getIndex(X, Y);
+                for (int k = 0; k < 3; ++k) atlas.data[q + k] = baked[o] >= 0 ? toS(baked[o + k]) : (t.M[o] >= 0 ? toS(t.M[o + k]) : 128);
+            }
+        }
+        out.atlas = std::move(atlas);
+    }
+
     const std::string colourSrc = ph.ok ? "photo-inferred: the per-channel median of the scan's own photo texture over each element" : "the nearest appearance class's measured colour (no photo sampled)";
     massing.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"tiers of the tree-free scan's height map (mean-shift levels, squared outlines), each a prism with a flat cap\",\"colour\":\"" + detail::esc(colourSrc) + "\",\"material\":\"photo-inferred: the nearest of pipeline K's measured appearance classes, its library set's maps at real size\"}}";
     openings.extras = "{\"sb\":{\"provenance\":\"photo-inferred\",\"method\":\"pipeline K's kept window boxes (facade reader, else window fit) mapped onto the prism walls, punched and recessed\",\"depthM\":" + detail::num(D) + ",\"depthProvenance\":\"" + detail::esc(S.revealLabel) + "\",\"depthSource\":\"" + detail::esc(S.revealSource) + "\",\"generatedWindows\":" + std::to_string(rep.windowsGenerated) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
@@ -1302,7 +1341,7 @@ inline Result build(const Spec& S) {
 }
 
 // =============================================================================================
-// GLB writer: materials with the classes' library maps, COLOR_0 as float
+// GLB writer: the classes' materials (sampling the atlas when there is one, else with their library maps), COLOR_0 as float
 // =============================================================================================
 
 inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const std::vector<ClassMat>& classesIn, double glassRoughness, const std::string& rootExtras, size_t& triangles, const texture::ImageBuffer* atlas = nullptr) {
@@ -1362,7 +1401,7 @@ inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const st
         }
         const auto& c = classes[m];
         // a detailed element's UVs are the atlas's: the library's tiled maps stay on the flat-coloured elements
-        const int nIm = detailed ? -1 : image(c.normalPng), oIm = detailed ? -1 : image(c.ormPng);
+        const int nIm = detailed || atlasIm >= 0 ? -1 : image(c.normalPng), oIm = detailed || atlasIm >= 0 ? -1 : image(c.ormPng);  // with an atlas, only the detailed materials are used
         mats << "{\"name\":\"" << detail::esc(c.name) << (detailed ? "+detail" : "") << "\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,1,1,1],\"metallicFactor\":" << detail::num(c.metallic) << ",\"roughnessFactor\":" << detail::num(c.roughness) << base
              << (oIm >= 0 ? ",\"metallicRoughnessTexture\":{\"index\":" + std::to_string(oIm) + "}" : std::string()) << "}"
              << (nIm >= 0 ? ",\"normalTexture\":{\"index\":" + std::to_string(nIm) + "}" : std::string())
@@ -1417,7 +1456,7 @@ inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const st
 inline std::string reportJson(const Report& r, const Spec& S, size_t triangles, size_t bytes) {
     std::ostringstream o;
     o << "{\"ok\":true,\"tiers\":" << r.tiers << ",\"wallFaces\":" << r.wallFaces << ",\"facesWithWindows\":" << r.facesWithWindows
-      << ",\"wallCells\":" << r.wallCells << ",\"roofCells\":" << r.roofCells << ",\"capsCut\":" << r.capsCut << ",\"detail\":{\"faces\":" << r.facesTextured << ",\"texels\":" << r.texelsDetail << ",\"atlas\":[" << r.atlasW << "," << r.atlasH << "],\"texelM\":" << detail::num(r.detailTexelM) << "}" 
+      << ",\"wallCells\":" << r.wallCells << ",\"roofCells\":" << r.roofCells << ",\"capsCut\":" << r.capsCut << ",\"detail\":{\"faces\":" << r.facesTextured << ",\"texels\":" << r.texelsDetail << ",\"atlas\":[" << r.atlasW << "," << r.atlasH << "],\"texelM\":" << detail::num(r.detailTexelM) << ",\"paletteColours\":" << r.paletteColours << "}" 
       << ",\"windows\":{\"given\":" << r.windowsGiven << ",\"placed\":" << r.windowsPlaced << ",\"generated\":" << r.windowsGenerated << ",\"continued\":" << r.windowsContinued << ",\"rephased\":" << r.windowsRephased << ",\"wallsRephased\":" << r.wallsRephased << ",\"continueTested\":" << r.continueTested << ",\"panes\":" << r.panesPlaced
       << ",\"dropped\":{\"noWall\":" << r.droppedNoWall << ",\"clipped\":" << r.droppedClipped << ",\"overlap\":" << r.droppedOverlap << ",\"small\":" << r.droppedSmall << ",\"noFrame\":" << r.droppedNoFrame << "}}"
       << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << "}"

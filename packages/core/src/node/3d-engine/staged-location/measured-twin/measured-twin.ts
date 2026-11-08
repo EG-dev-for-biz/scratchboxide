@@ -205,7 +205,7 @@ export function ensureMeasuredTwinBinary(repoRoot = findTileRefineRepoRoot()): P
 /** The generator's report (scratchbox_measured_twin.hpp reportJson). */
 export interface MeasuredTwinReport {
     ok: true; tiers: number; wallFaces: number; facesWithWindows: number; wallCells: number; roofCells: number; capsCut: number;
-    detail: { faces: number; texels: number; atlas: [number, number]; texelM: number };
+    detail: { faces: number; texels: number; atlas: [number, number]; texelM: number; paletteColours: number };
     windows: { given: number; placed: number; generated: number; continued: number; continueTested: number; rephased: number; wallsRephased: number; panes: number; dropped: Record<string, number> };
     colour: { elements: number; uncoloured: number };
     slender: { fromM: number | null; slices: number; bands: number };
