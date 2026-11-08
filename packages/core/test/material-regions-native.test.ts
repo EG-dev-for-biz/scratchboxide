@@ -21,8 +21,7 @@ import { SRGB8_TO_LINEAR } from '../src/common/spatial/photogrammetric-delight';
 import { linearRgbToLab } from '../src/common/spatial/texture-library-index';
 import {
     MATERIAL_REGIONS_PARAMS, materialPlanContext, materialPlanJobs, planMaterialJob, planMaterialRegions, readRegionClasses, writeMaterialRegions,
-    type MaterialPlanPiece, type MaterialRegionsPlan, type RegionClass, type RegionSet
-} from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
+    type MaterialPlanPiece, type MaterialRegionsPlan, type RegionClass, type RegionSet, NO_RELIEF_CLASS } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
 import { HEIGHT_RELIEF } from '../src/node/3d-engine/staged-location/pipeline-k/material-height';
 import {
     ensureMaterialRegionsNativeBinary, materialRegionsNativeColourTables, planMaterialJobNative, planMaterialRegionsNative, readRegionClassesNative
@@ -176,7 +175,15 @@ describe('pipeline K material regions, native kernel', () => {
         const rebuilt = plan.materials.filter(m => m.rebuilt), cm = rebuilt[0].classes!;
         expect(rebuilt.every(m => m.classes && m.texelM! > 0)).toBe(true);
         expect(plan.materials.filter(m => !m.rebuilt).every(m => !m.classes)).toBe(true);
-        for (let k = 0; k < cm.width * cm.height; k += 97) expect(cm.rgba[k * 4]).toBeLessThan(classes.length);
+        // every texel names a class, except a glass pane's, which names none (NO_RELIEF_CLASS: a pane takes no relief)
+        let noRelief = 0;
+        for (let k = 0; k < cm.width * cm.height; k++) { const c = cm.rgba[k * 4]; if (c === NO_RELIEF_CLASS) noRelief++; else expect(c).toBeLessThan(classes.length); }
+        const glassFacade = plan.materials.find(m => m.rebuilt && m.glass)!;
+        expect(glassFacade).toBeDefined();
+        let glassNoRelief = 0;
+        for (let k = 0; k < glassFacade.classes!.width * glassFacade.classes!.height; k++) if (glassFacade.classes!.rgba[k * 4] === NO_RELIEF_CLASS) glassNoRelief++;
+        expect(glassNoRelief).toBeGreaterThan(0);
+        expect(noRelief === 0 || rebuilt[0].glass).toBe(true);
         const written: any = JSON.parse(JSON.stringify(sc.json)), names: string[] = [];
         writeMaterialRegions(written, plan, (_img, _mime, name) => names.push(name) - 1, [0]);
         const relief = written.asset.extras.sbMaterialRelief;
