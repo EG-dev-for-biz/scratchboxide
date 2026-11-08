@@ -126,12 +126,13 @@ const n6 = (v: number) => (Number.isFinite(v) ? String(Math.round(v * 1e6) / 1e6
  * The generator's line spec (scripts/measured_twin.cpp lists the directives). `maps` gives each class's prepared normal
  * and ORM PNG files and its set's real tile size, where known.
  */
-export function measuredTwinSpec(r: KRunRecords, out: { glb: string; report: string }, maps: Array<{ normal?: string; orm?: string; tileM?: number } | undefined> = []): string {
+export function measuredTwinSpec(r: KRunRecords, out: { glb: string; report: string }, maps: Array<{ normal?: string; orm?: string; tileM?: number } | undefined> = [], options: MeasuredTwinOptions = {}): string {
     const L: string[] = [`# ${MEASURED_TWIN_VERSION} from ${r.runDir}`, `isolate ${r.isolate}`];
     if (r.textured) L.push(`textured ${r.textured}`);
     L.push(`out ${out.glb}`, `report ${out.report}`, `ground ${n6(r.groundY)}`);
     for (const l of r.loops) if (l.length >= 3) L.push(`footprint ${l.length} ${l.map(p => `${n6(p[0])} ${n6(p[1])}`).join(' ')}`);
     for (const [k, v] of Object.entries(TWIN_SCAN_PARAMS)) L.push(`scan ${k} ${v}`);
+    if (options.scanDetailM !== undefined && options.scanDetailM > 0) L.push(`param scanDetailM ${n6(options.scanDetailM)}`);
     L.push(`reveal ${n6(r.reveal.depthM)} ${r.reveal.label} ${r.reveal.source.replace(/\s+/g, ' ')}`);
     r.classes.forEach((c, i) => {
         const rough = c.finish?.drawn?.roughness ?? c.finish?.roughness ?? 0.8, metal = c.finish?.drawn?.metallic ?? c.finish?.metallic ?? 0;
@@ -202,11 +203,19 @@ export function ensureMeasuredTwinBinary(repoRoot = findTileRefineRepoRoot()): P
     return building;
 }
 
+/**
+ * How the twin is made. `scanDetailM` above 0 keeps the scan's own surface wherever it stands at least that far outside the
+ * procedural shell (measured; the ledge profiles and roof blocks are then left out); none or 0: everything procedural.
+ */
+export interface MeasuredTwinOptions { scanDetailM?: number }
+
 /** The generator's report (scratchbox_measured_twin.hpp reportJson). */
 export interface MeasuredTwinReport {
     ok: true; tiers: number; wallFaces: number; facesWithWindows: number; wallCells: number; roofCells: number; capsCut: number;
     detail: { faces: number; texels: number; atlas: [number, number]; texelM: number; paletteColours: number };
     profiles: { walls: number; lips: number; parapets: number; steps: number; medianOutM: number; medianParapetM: number };
+    roofDetail: { pieces: number; boxes: number; areaM2: number; medianM: number };
+    scanDetail: { thresholdM: number; pieces: number; triangles: number; areaM2: number };
     windows: { given: number; placed: number; generated: number; continued: number; continueTested: number; rephased: number; wallsRephased: number; panes: number; dropped: Record<string, number> };
     colour: { elements: number; uncoloured: number };
     slender: { fromM: number | null; slices: number; bands: number; axisFits: number; symmetry: number };
@@ -221,14 +230,14 @@ export interface MeasuredTwinResult {
  * Generates the measured twin of the K build in `runDir` into `outDir` (measured_twin.glb, its report and spec).
  * `store` is where the build's library maps were kept (its model readings store); without it the materials carry no maps.
  */
-export async function buildMeasuredTwin(opts: { runDir: string; cacheRoot: string; outDir: string; store?: ModelReadingStore; signal?: AbortSignal; timeoutMs?: number }): Promise<MeasuredTwinResult> {
+export async function buildMeasuredTwin(opts: { runDir: string; cacheRoot: string; outDir: string; store?: ModelReadingStore; signal?: AbortSignal; timeoutMs?: number; options?: MeasuredTwinOptions }): Promise<MeasuredTwinResult> {
     const t0 = Date.now();
     const rec = readKRunRecords(opts.runDir, opts.cacheRoot);
     fs.mkdirSync(opts.outDir, { recursive: true });
     const { maps, missing } = await classMaps(rec.classes, path.join(opts.outDir, 'maps'), opts.store);
     const glb = path.join(opts.outDir, 'measured_twin.glb'), report = path.join(opts.outDir, 'measured_twin_report.json');
     const specFile = path.join(opts.outDir, 'measured_twin_spec.txt');
-    fs.writeFileSync(specFile, measuredTwinSpec(rec, { glb, report }, maps));
+    fs.writeFileSync(specFile, measuredTwinSpec(rec, { glb, report }, maps, opts.options ?? {}));
     const bin = await ensureMeasuredTwinBinary();
     const stdout = await new Promise<string>((resolve, reject) => {
         execFile(bin, [specFile], { timeout: opts.timeoutMs ?? 600_000, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024, ...(opts.signal ? { signal: opts.signal } : {}) }, (err, out, errOut) => {

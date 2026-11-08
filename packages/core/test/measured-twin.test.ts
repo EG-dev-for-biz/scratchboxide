@@ -56,6 +56,9 @@ describe('measuredTwinSpec', () => {
         expect(lines).toContain('planeimage 1 /o/facade_1.png');
         expect(lines).toContain('planemask 1 /o/facade_1_uncovered.png');
         expect(lines.some(l => l.startsWith('planeimage 9 '))).toBe(false);
+        // fully procedural unless a scan-detail threshold is given
+        expect(lines.some(l => l.startsWith('param scanDetailM'))).toBe(false);
+        expect(measuredTwinSpec(records(), { glb: '/out/t.glb', report: '/out/r.json' }, [], { scanDetailM: 0.3 }).split('\n')).toContain('param scanDetailM 0.3');
     });
 });
 
@@ -104,8 +107,11 @@ describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K bui
         // the GLB: three provenance-labelled nodes, colours per vertex, library maps embedded
         const glb = parseGlbBytes(new Uint8Array(fs.readFileSync(r.glb)));
         const json = glb.json as { nodes: Array<{ name: string; extras?: { sb?: { provenance?: string; depthProvenance?: string } }; mesh: number }>; meshes: Array<{ primitives: Array<{ attributes: Record<string, number>; indices: number }> }>; images?: unknown[] };
-        expect(json.nodes.map(n => n.name)).toEqual(['massing', 'openings', 'slender_top', 'ledge_profiles']);
-        expect(json.nodes.map(n => n.extras?.sb?.provenance)).toEqual(['measured', 'photo-inferred', 'measured', 'measured']);
+        expect(json.nodes.map(n => n.name)).toEqual(['massing', 'openings', 'slender_top', 'ledge_profiles', 'roof_detail']);
+        expect(json.nodes.map(n => n.extras?.sb?.provenance)).toEqual(['measured', 'photo-inferred', 'measured', 'measured', 'measured']);
+        // what the scan has above the twin's roofs, rebuilt as blocks: a few pieces on the ESB's terraces, none of them a missed tier
+        expect(rep.roofDetail.pieces).toBeGreaterThan(0);
+        expect(rep.roofDetail.medianM).toBeLessThan(5);
         // the setback parapets and lips, from the scan's sections stacked along each wall: the ESB's setbacks carry parapets of a metre or two
         expect(rep.profiles.parapets).toBeGreaterThan(20);
         expect(rep.profiles.medianParapetM).toBeGreaterThan(0.5);

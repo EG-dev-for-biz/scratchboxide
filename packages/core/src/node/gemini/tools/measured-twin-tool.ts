@@ -39,7 +39,8 @@ export const MEASURED_TWIN_DECLARATION: ToolDeclaration = {
         type: 'OBJECT',
         properties: {
             runId: { type: 'STRING', description: 'Optional: the staged build\'s run id (8 hex). Default: the open scene\'s staged build.' },
-            gapM: { type: 'NUMBER', description: 'Optional: metres between the build and the twin placed beside it (default 20).' }
+            gapM: { type: 'NUMBER', description: 'Optional: metres between the build and the twin placed beside it (default 20).' },
+            scanDetailM: { type: 'NUMBER', description: 'Optional: keep the scan\'s own surface (Google 3D Tiles, measured) wherever it stands at least this many metres outside the procedural shell (e.g. 0.3: terrace objects, statues, antenna equipment, ornament the shell misses); its parapet and roof blocks are then left out. Omit or 0 for a fully procedural twin with no scan surface.' }
         }
     }
 };
@@ -122,7 +123,8 @@ export async function runMeasuredTwinTool(args: Record<string, unknown>, ctx: To
     if (!fs.existsSync(runDir)) throw new Error(`${MEASURED_TWIN_TOOL}: run ${runId} is not in this machine's staged cache (${runDir})`);
     ctx.reportProgress?.('measured twin: reading the build\'s measurements', 0.1);
     const outDir = path.join(cacheRoot, 'staged_location', 'measured_twin', runId);
-    const r = await buildMeasuredTwin({ runDir, cacheRoot, outDir, store: fileReadingStore(modelReadingsDir(path.join(cacheRoot, 'staged_location'))), ...(ctx.signal ? { signal: ctx.signal } : {}) });
+    const scanDetailM = typeof args.scanDetailM === 'number' && Number.isFinite(args.scanDetailM) && args.scanDetailM > 0 ? args.scanDetailM : undefined;
+    const r = await buildMeasuredTwin({ runDir, cacheRoot, outDir, ...(scanDetailM ? { options: { scanDetailM } } : {}), store: fileReadingStore(modelReadingsDir(path.join(cacheRoot, 'staged_location'))), ...(ctx.signal ? { signal: ctx.signal } : {}) });
     ctx.reportProgress?.('measured twin: generated', 0.9);
     const { uri, file } = publish(r.glb, runId, root);
     ctx.reportProgress?.('measured twin: rendering proof views', 0.95);
@@ -146,6 +148,7 @@ export async function runMeasuredTwinTool(args: Record<string, unknown>, ctx: To
     const w = r.report.windows;
     const summary = `Measured procedural twin of run ${runId}: ${r.report.tiers} tiers from the scan's height map${r.report.slender.fromM !== null && r.report.slender.bands ? `, a revolved slender top from ${r.report.slender.fromM.toFixed(1)} m in ${r.report.slender.bands} measured bands` : ''} up to ${r.report.topM.toFixed(1)} m; `
         + `${w.placed} windows punched (${w.placed - w.generated} where the build read them, ${w.continued} continued along their rows where the photo shows a window, ${w.rephased} put back on their wall's storey rhythm: generated), reveal ${r.report.revealM.toFixed(2)} m (${r.report.revealLabel}); `
+        + (r.report.scanDetail.pieces ? `the scan's own surface kept in ${r.report.scanDetail.pieces} pieces (${Math.round(r.report.scanDetail.areaM2)} m²) where it stands ${r.report.scanDetail.thresholdM} m or more outside the shell (measured, scan); ` : '')
         + `${views.length} proof views rendered (${views.map(v => path.basename(v.path)).join(', ')}); `
         + `${r.report.colour.elements} elements coloured from the scan's photo${r.report.colour.uncoloured ? `, ${r.report.colour.uncoloured} with no photo near taking their wall's colour` : ''}; ${r.report.triangles.toLocaleString('en-US')} triangles. No scan surface is in it.`
         + (r.mapsMissing.length ? ` Library maps not in this machine's readings store: ${r.mapsMissing.join(', ')} (those materials have no relief maps).` : '');

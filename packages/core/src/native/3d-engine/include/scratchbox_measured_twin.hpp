@@ -42,6 +42,10 @@
  *     per 0.1 m of height, 4 m below to 3 m above the tier top): continuous steps standing out of the wall (lips,
  *     cornices) and a parapet rising out of the roof are swept along the wall, mitred at convex corners. A step or
  *     parapet must run along at least `profileCoverage` of the wall, or it is not drawn.
+ *   - Roof detail (measured). Connected cells of the scan's height map standing at least `roofDetailMinM` above the
+ *     twin's tiers (away from the parapets' band and the slender top's foot), rebuilt as blocks at the scan's heights.
+ *   - Scan detail (measured, opt-in: `scanDetailM` above 0). The scan's own triangles standing at least that far outside
+ *     the procedural shell, in connected pieces, are kept as they are (the ledge profiles and roof detail are then left out).
  *   - Atlas. Every element takes its colour from one atlas texture through its TEXCOORD_0 (COLOR_0 white), since some
  *     renderers read material textures and ignore vertex colours: a detailed wall's elements sample its texture, every
  *     other element a 16-texel block of its own colour (the palette, below the walls' textures; each colour once).
@@ -126,7 +130,14 @@ struct Params {
     double profileMinOutM{0.12};       // a step stands at least this far out of the wall (scan noise below it)
     double profileMaxOutM{1.5};        // ... and at most this far (beyond it, something else)
     double profileCoverage{0.5};       // a step runs along at least this share of the wall (a continuous lip, not a blob)
-    double profileDensity{25};         // scan samples per square metre for the profiles       // how much of an element's own colour is baked over the median (1: all of it, 0: none)
+    double profileDensity{25};         // scan samples per square metre for the profiles
+    int roofDetail{1};                 // what the scan has above the twin's roofs, rebuilt as stacked measured blocks
+    double roofDetailMinM{0.8};        // ... standing at least this far above the twin's surface
+    double roofDetailMinArea{1.5};     // ... over at least this much plan area (m^2)
+    double roofDetailStepM{0.5};       // ... its heights in steps of this
+    double scanDetailM{0};             // when above 0: scan surface standing at least this far outside the shell is kept as it is (measured), and the ledge profiles and roof detail are left out
+    double scanDetailMinArea{0.5};     // ... in connected pieces of at least this much area (m^2)
+    double roofDetailEdgeM{1.2};       // ... within this of a tier's outline (the parapets' band, drawn by the ledge profiles) only above 2.5 m       // how much of an element's own colour is baked over the median (1: all of it, 0: none)
 };
 
 struct Spec {
@@ -185,6 +196,9 @@ inline Spec parseSpec(std::istream& in) {
             else if (name == "detailRepeats") P.detailRepeats = static_cast<int>(v); else if (name == "detailAtlas") P.detailAtlas = static_cast<int>(v); else if (name == "detailGainPower") P.detailGainPower = v;
             else if (name == "edgeProfiles") P.edgeProfiles = static_cast<int>(v); else if (name == "profileBinM") P.profileBinM = v;
             else if (name == "profileMinOutM") P.profileMinOutM = v; else if (name == "profileMaxOutM") P.profileMaxOutM = v;
+            else if (name == "scanDetailM") P.scanDetailM = v; else if (name == "scanDetailMinArea") P.scanDetailMinArea = v;
+            else if (name == "roofDetail") P.roofDetail = static_cast<int>(v); else if (name == "roofDetailMinM") P.roofDetailMinM = v;
+            else if (name == "roofDetailMinArea") P.roofDetailMinArea = v; else if (name == "roofDetailStepM") P.roofDetailStepM = v; else if (name == "roofDetailEdgeM") P.roofDetailEdgeM = v;
             else if (name == "profileCoverage") P.profileCoverage = v; else if (name == "profileDensity") P.profileDensity = v;
             else if (name == "continueMinWindows") P.continueMinWindows = static_cast<int>(v); else if (name == "continueMaxDeltaE") P.continueMaxDeltaE = v;
             else if (name == "fillGapM") P.fillGapM = v; else if (name == "fillReachM") P.fillReachM = v; else if (name == "snapAlongM") P.snapAlongM = v; else if (name == "snapUpM") P.snapUpM = v;
@@ -493,6 +507,10 @@ struct Report {
     size_t uncolouredElements{0}, colouredElements{0}, capsCut{0};
     size_t facesTextured{0}, texelsDetail{0}, paletteColours{0};
     size_t profileWalls{0}, profileLips{0}, profileParapets{0}, profileSteps{0};
+    size_t roofDetailPieces{0}, roofDetailBoxes{0};
+    size_t scanDetailPieces{0}, scanDetailTriangles{0};
+    double scanDetailAreaM2{0};
+    double roofDetailAreaM2{0}, roofDetailMedianM{0};
     double profileMedianOutM{0}, profileMedianParapetM{0};
     int atlasW{0}, atlasH{0};
     double detailTexelM{0};
@@ -629,7 +647,7 @@ inline Result build(const Spec& S) {
         return f.c + f.s * s + f.t * t;
     };
 
-    OutNode massing{"massing", "", {}}, openings{"openings", "", {}}, slender{"slender_top", "", {}}, ledges{"ledge_profiles", "", {}};
+    OutNode massing{"massing", "", {}}, openings{"openings", "", {}}, slender{"slender_top", "", {}}, ledges{"ledge_profiles", "", {}}, roofDet{"roof_detail", "", {}}, scanDet{"scan_detail", "", {}};
     const P3 up{0, 1, 0};
 
     auto classColour = [&](int k) {
@@ -1132,7 +1150,7 @@ inline Result build(const Spec& S) {
     // of the wall (0.5 m bins). Above the tier top, a parapet: samples rising out of the roof within a metre of the wall,
     // whose density stops below 3 m (an upper tier's wall standing flush would not stop). Each is swept along the wall, its
     // ends mitred at convex corners and drawn back at concave ones. Measured (stacked scan); the colour is the photo's.
-    if (S.P.edgeProfiles && R.building.size()) {
+    if (S.P.edgeProfiles && S.P.scanDetailM <= 0 && R.building.size()) {
         // dense samples of the building's surface, in the tile frame, on a 2 m grid
         std::vector<P3> dense;
         {
@@ -1323,6 +1341,10 @@ inline Result build(const Spec& S) {
         }
     }
 
+    std::vector<double> slenderFoot;  // the slender top's widest first ring (m), its axis (u, v): the roof detail keeps clear of it
+    struct ShellRing { double z0, z1; std::vector<double> r, r1; };
+    std::vector<ShellRing> shellRings;  // the slender top's steps, for the scan detail's distance to the shell
+    int shellK = 0; double shellAu = 0, shellAv = 0;
     // --- the slender top, axis-locked. One vertical axis for the whole top: the median of the per-slice circle fits (Kasa,
     // slices whose fitted radius is at least 1.5 m: a thin antenna's fit wanders). Each 1 m slice's radius is read in
     // `sectors` sectors about it (95th percentile), smoothed to `harmonics` Fourier terms. The top's order of rotational
@@ -1468,6 +1490,9 @@ inline Result build(const Spec& S) {
             }
         }
         rep.slenderBands = bands.size();
+        if (!bands.empty()) slenderFoot = {*std::max_element(bands[0].r.begin(), bands[0].r.end()), au, av};
+        for (const auto& b : bands) shellRings.push_back({b.z0, b.z1, b.r, b.r1});
+        shellK = K; shellAu = au; shellAv = av;
         auto ringPt = [&](const Ring& b, int s, double h) {
             const double th = -kPi + 2 * kPi * s / K;  // sector boundaries
             const double t = b.z1 > b.z0 ? std::clamp((h - b.z0) / (b.z1 - b.z0), 0.0, 1.0) : 0.0;  // the step's taper
@@ -1526,6 +1551,192 @@ inline Result build(const Spec& S) {
         }
     }
 
+    // --- roof detail. The scan's height map (the building's top per 0.25 m cell) against the twin's: the top tier covering
+    // each cell. Connected cells where the scan stands at least roofDetailMinM above the twin, over at least
+    // roofDetailMinArea, away from the tiers' outlines (the parapets' band) unless 2.5 m above, and from the slender top's foot, are what the
+    // tiers do not hold (the crown's wings and buttresses, bulkheads, plant, tanks: no kind is named). Each is rebuilt as
+    // blocks from the twin's roof up to the scan's height in roofDetailStepM steps: maximal rectangles of cells sharing a
+    // height and a roof. Measured; the colour is the photo's.
+    if (S.P.roofDetail && S.P.scanDetailM <= 0 && R.grid.nu > 0) {
+        const auto& G = R.grid;
+        const int NU = G.nu, NV = G.nv;
+        std::vector<float> twinH(static_cast<size_t>(NU) * NV, NAN);
+        std::vector<uint8_t> nearEdge(static_cast<size_t>(NU) * NV, 0);
+        for (const auto* t : tiers) {
+            for (const auto& l : t->loopsUV) {
+                double lo_u = 1e30, hi_u = -1e30, lo_v = 1e30, hi_v = -1e30;
+                for (const auto& q : l) { lo_u = std::min(lo_u, q.u); hi_u = std::max(hi_u, q.u); lo_v = std::min(lo_v, q.v); hi_v = std::max(hi_v, q.v); }
+                const int i0 = std::max(0, static_cast<int>((lo_u - G.u0) / G.cell)), i1 = std::min(NU - 1, static_cast<int>((hi_u - G.u0) / G.cell));
+                const int j0 = std::max(0, static_cast<int>((lo_v - G.v0) / G.cell)), j1 = std::min(NV - 1, static_cast<int>((hi_v - G.v0) / G.cell));
+                for (int j = j0; j <= j1; ++j) for (int i = i0; i <= i1; ++i) {
+                    const double pu = G.cu(i), pv = G.cv(j);
+                    bool in = false;
+                    for (const auto& l2 : t->loopsUV) if (detail::inRingXZ(pu, pv, l2)) in = !in;
+                    float& h = twinH[static_cast<size_t>(j) * NU + i];
+                    if (in && !(h >= t->topY)) h = static_cast<float>(t->topY);
+                }
+                // the parapets' band along each edge
+                const double E2 = S.P.roofDetailEdgeM;
+                for (size_t k = 0; k < l.size(); ++k) {
+                    const P2 a = l[k], b = l[(k + 1) % l.size()];
+                    const int ei0 = std::max(0, static_cast<int>((std::min(a.u, b.u) - E2 - G.u0) / G.cell)), ei1 = std::min(NU - 1, static_cast<int>((std::max(a.u, b.u) + E2 - G.u0) / G.cell));
+                    const int ej0 = std::max(0, static_cast<int>((std::min(a.v, b.v) - E2 - G.v0) / G.cell)), ej1 = std::min(NV - 1, static_cast<int>((std::max(a.v, b.v) + E2 - G.v0) / G.cell));
+                    const double du = b.u - a.u, dv = b.v - a.v, L2 = du * du + dv * dv;
+                    for (int j = ej0; j <= ej1; ++j) for (int i = ei0; i <= ei1; ++i) {
+                        const double pu = G.cu(i) - a.u, pv = G.cv(j) - a.v;
+                        const double tt = L2 > 0 ? std::clamp((pu * du + pv * dv) / L2, 0.0, 1.0) : 0;
+                        if (std::hypot(pu - tt * du, pv - tt * dv) <= E2) nearEdge[static_cast<size_t>(j) * NU + i] = 1;
+                    }
+                }
+            }
+        }
+        // the slender top's foot: its widest first ring, and a metre and a half
+        double footR = -1, fu = 0, fv = 0;
+        if (rep.slenderFromM >= 0 && !slenderFoot.empty()) { footR = slenderFoot[0] + 1.5; fu = slenderFoot[1]; fv = slenderFoot[2]; }
+        std::vector<uint8_t> cand(static_cast<size_t>(NU) * NV, 0);
+        for (int j = 0; j < NV; ++j) for (int i = 0; i < NU; ++i) {
+            const size_t k = static_cast<size_t>(j) * NU + i;
+            const float hs = R.height[k], ht = twinH[k];
+            if (!(hs == hs) || !(ht == ht)) continue;
+            if (nearEdge[k] && hs - ht < 2.5) continue;  // the parapets' band: only what stands above any parapet
+            if (footR > 0 && std::hypot(G.cu(i) - fu, G.cv(j) - fv) <= footR) continue;
+            if (hs - ht >= S.P.roofDetailMinM && hs - ht <= 40) cand[k] = 1;
+        }
+        // connected pieces (8-connected), each rebuilt
+        std::vector<int> comp(cand.size(), -1);
+        std::vector<double> heights;
+        const double cellA = G.cell * G.cell;
+        for (int j = 0; j < NV; ++j) for (int i = 0; i < NU; ++i) {
+            const size_t k0 = static_cast<size_t>(j) * NU + i;
+            if (!cand[k0] || comp[k0] >= 0) continue;
+            std::vector<size_t> cells{k0}; comp[k0] = 0;
+            for (size_t q = 0; q < cells.size(); ++q) {
+                const int ci = static_cast<int>(cells[q] % NU), cj = static_cast<int>(cells[q] / NU);
+                for (int dj = -1; dj <= 1; ++dj) for (int di = -1; di <= 1; ++di) {
+                    const int ni = ci + di, nj = cj + dj;
+                    if (ni < 0 || nj < 0 || ni >= NU || nj >= NV) continue;
+                    const size_t nk = static_cast<size_t>(nj) * NU + ni;
+                    if (cand[nk] && comp[nk] < 0) { comp[nk] = 0; cells.push_back(nk); }
+                }
+            }
+            if (cells.size() * cellA < S.P.roofDetailMinArea) continue;
+            // each cell's height key (the scan's height in steps) and roof; maximal rectangles of equal keys
+            std::unordered_map<size_t, std::pair<int, float>> key;
+            for (size_t c : cells) key[c] = {static_cast<int>(std::lround(R.height[c] / S.P.roofDetailStepM)), twinH[c]};
+            std::unordered_map<size_t, uint8_t> used;
+            ++rep.roofDetailPieces; rep.roofDetailAreaM2 += cells.size() * cellA;
+            std::sort(cells.begin(), cells.end());
+            for (size_t c : cells) {
+                if (used[c]) continue;
+                const auto kc = key[c];
+                const int ci = static_cast<int>(c % NU), cj = static_cast<int>(c / NU);
+                auto same = [&](int ii, int jj) { if (ii < 0 || jj < 0 || ii >= NU || jj >= NV) return false; const size_t kk = static_cast<size_t>(jj) * NU + ii; auto it = key.find(kk); return it != key.end() && !used[kk] && it->second == kc; };
+                int i1 = ci; while (same(i1 + 1, cj)) ++i1;
+                int j1 = cj;
+                for (;;) { bool ok = true; for (int ii = ci; ii <= i1 && ok; ++ii) ok = same(ii, j1 + 1); if (!ok) break; ++j1; }
+                for (int jj = cj; jj <= j1; ++jj) for (int ii = ci; ii <= i1; ++ii) used[static_cast<size_t>(jj) * NU + ii] = 1;
+                // the block in the tile frame: corners from the frame, base on the twin's roof, top at the stepped height
+                const double h0 = kc.second, h1 = kc.first * S.P.roofDetailStepM;
+                if (h1 - h0 < 0.3) continue;
+                heights.push_back(h1 - h0);
+                const double u0 = G.u0 + ci * G.cell, u1 = G.u0 + (i1 + 1) * G.cell, v0 = G.v0 + cj * G.cell, v1 = G.v0 + (j1 + 1) * G.cell;
+                auto at = [&](double u, double v, double h) { double x, z; F.toXZ(u, v, x, z); return P3{x, S.groundY + h, z}; };
+                const P3 A0 = at(u0, v0, h0), B0 = at(u1, v0, h0), C0 = at(u1, v1, h0), D0 = at(u0, v1, h0);
+                const P3 A1 = at(u0, v0, h1), B1 = at(u1, v0, h1), C1 = at(u1, v1, h1), D1 = at(u0, v1, h1);
+                const P3 up{0, 1, 0};
+                bool got;
+                const Rgb ct = colourOf(A1, B1 - A1, D1 - A1, up, classColour(0), got);
+                const int mt = E.classOf(ct);
+                E.quad(roofDet, mt, A1, B1, C1, D1, up, ct, P3{1, 0, 0}, P3{0, 0, 1});
+                // sides, each facing away from the block's centre
+                const P3 cen = (A0 + C1) * 0.5;
+                const P3 sides[4][4] = {{A0, B0, B1, A1}, {B0, C0, C1, B1}, {C0, D0, D1, C1}, {D0, A0, A1, D1}};
+                for (const auto& q : sides) {
+                    P3 n = sp::cross(q[1] - q[0], up); const double L = sp::len(n); if (L < 1e-9) continue; n = n * (1 / L);
+                    const P3 mid = (q[0] + q[1]) * 0.5;
+                    if (sp::dot(n, mid - cen) < 0) n = n * -1.0;
+                    const Rgb cs = colourOf(q[0] + n * 0.05, q[1] - q[0], q[3] - q[0], n, ct, got);
+                    E.quad(roofDet, E.classOf(cs), q[0], q[1], q[2], q[3], n, cs, q[1] - q[0], up);
+                }
+                ++rep.roofDetailBoxes;
+            }
+        }
+        if (!heights.empty()) { std::nth_element(heights.begin(), heights.begin() + heights.size() / 2, heights.end()); rep.roofDetailMedianM = heights[heights.size() / 2]; }
+    }
+
+    // --- scan detail. Every triangle of the tree-free scan gets its distance outside the procedural shell: below the slender
+    // top, the plan distance from its centroid to the outline of the tier at its height (inside it: none), and no more
+    // than its height above the roof of the highest tier below it whose outline holds it; on the slender top, how far it
+    // stands beyond the fitted ring at its height and sector. Triangles at least scanDetailM out, in connected pieces of at
+    // least scanDetailMinArea, are kept as they are: the scan's own surface (measured), coloured from the photo.
+    if (S.P.scanDetailM > 0 && R.building.size()) {
+        auto insideTier = [&](const sp::TierOut* t, double u, double v) { bool in = false; for (const auto& l : t->loopsUV) if (detail::inRingXZ(u, v, l)) in = !in; return in; };
+        auto planDist = [&](const sp::TierOut* t, double u, double v) {
+            double best = 1e30;
+            for (const auto& l : t->loopsUV) for (size_t k = 0; k < l.size(); ++k) {
+                const P2 a = l[k], b = l[(k + 1) % l.size()];
+                const double du = b.u - a.u, dv = b.v - a.v, L2 = du * du + dv * dv;
+                const double tt = L2 > 0 ? std::clamp(((u - a.u) * du + (v - a.v) * dv) / L2, 0.0, 1.0) : 0;
+                best = std::min(best, std::hypot(u - a.u - tt * du, v - a.v - tt * dv));
+            }
+            return best;
+        };
+        const double topShell = tiers.empty() ? 0 : tiers.back()->topY;
+        auto outside = [&](const P3& q) {  // q: frame (u, h, v)
+            const double u = q.x, h = q.y, v = q.z;
+            if (slenderH >= 0 && h >= slenderH && !shellRings.empty()) {
+                const ShellRing* R0 = nullptr;
+                for (const auto& r : shellRings) if (h >= r.z0 - 1e-6 && h <= r.z1 + 1e-6) { R0 = &r; break; }
+                if (!R0) return h - shellRings.back().z1;  // above the top
+                const double du = u - shellAu, dv = v - shellAv;
+                const int sct = ((static_cast<int>(std::floor((std::atan2(dv, du) + kPi) / (2 * kPi) * shellK)) % shellK) + shellK) % shellK;
+                const double t = R0->z1 > R0->z0 ? std::clamp((h - R0->z0) / (R0->z1 - R0->z0), 0.0, 1.0) : 0;
+                return std::hypot(du, dv) - ((1 - t) * R0->r[sct] + t * R0->r1[sct]);
+            }
+            // the tier at this height
+            const sp::TierOut* at = nullptr;
+            for (const auto* t : tiers) if (h >= t->baseY - 1e-6 && h <= t->topY + 1e-6) at = t;
+            double d = 1e30;
+            if (at) { if (insideTier(at, u, v)) return -1.0; d = planDist(at, u, v); }
+            else if (h > topShell) d = 1e30;
+            // above the roof of the highest tier below whose outline holds it
+            for (auto it = tiers.rbegin(); it != tiers.rend(); ++it) if ((*it)->topY <= h + 1e-6 && insideTier(*it, u, v)) { d = std::min(d, h - (*it)->topY); break; }
+            return d >= 1e29 ? 0.0 : d;
+        };
+        const size_t T = R.building.size();
+        std::vector<uint8_t> keep(T, 0);
+        for (size_t t = 0; t < T; ++t) {
+            const P3 c = (R.building.p[3 * t] + R.building.p[3 * t + 1] + R.building.p[3 * t + 2]) * (1.0 / 3);
+            if (outside(c) >= S.P.scanDetailM) keep[t] = 1;
+        }
+        // connected pieces through shared vertices (positions to the millimetre)
+        std::unordered_map<uint64_t, std::vector<uint32_t>> byVert;
+        auto vkey = [](const P3& q) { auto r = [](double x) { return static_cast<uint64_t>(static_cast<int64_t>(std::llround(x * 1000)) & 0x1FFFFF); }; return (r(q.x) << 42) | (r(q.y) << 21) | r(q.z); };
+        for (size_t t = 0; t < T; ++t) if (keep[t]) for (int k = 0; k < 3; ++k) byVert[vkey(R.building.p[3 * t + k])].push_back(static_cast<uint32_t>(t));
+        std::vector<int> comp(T, -1);
+        for (size_t t0 = 0; t0 < T; ++t0) {
+            if (!keep[t0] || comp[t0] >= 0) continue;
+            std::vector<uint32_t> piece{static_cast<uint32_t>(t0)}; comp[t0] = 0;
+            double area = 0;
+            for (size_t q = 0; q < piece.size(); ++q) {
+                const uint32_t t = piece[q];
+                const P3 a = R.building.p[3 * t], b = R.building.p[3 * t + 1], c = R.building.p[3 * t + 2];
+                area += sp::len(sp::cross(b - a, c - a)) / 2;
+                for (int k = 0; k < 3; ++k) for (uint32_t nb : byVert[vkey(R.building.p[3 * t + k])]) if (comp[nb] < 0) { comp[nb] = 0; piece.push_back(nb); }
+            }
+            if (area < S.P.scanDetailMinArea) continue;
+            ++rep.scanDetailPieces; rep.scanDetailAreaM2 += area;
+            for (uint32_t t : piece) {
+                const P3 a = F.toTile(R.building.p[3 * t]), b = F.toTile(R.building.p[3 * t + 1]), c = F.toTile(R.building.p[3 * t + 2]);
+                P3 n = sp::cross(b - a, c - a); const double L = sp::len(n); if (L < 1e-12) continue; n = n * (1 / L);
+                bool got;
+                const Rgb col = colourOf(a, b - a, c - a, n, classColour(0), got);
+                E.tri(scanDet, E.classOf(col), a, b, c, n, col, P3{1, 0, 0}, P3{0, 1, 0});
+                ++rep.scanDetailTriangles;
+            }
+        }
+    }
+
     // --- the atlas: each element's measured colour baked over its rect as a gain on the repeat median (the median's own
     // mean over the rect brought toward the element's colour: the gain held within [1/3, 3], to the power
     // detailGainPower, so a cell's own colour shows without its edges reading as blocks); a texel no repeat
@@ -1535,7 +1746,7 @@ inline Result build(const Spec& S) {
         const int H = ((E.paletteY0 + E.paletteRowsTexels() + 3) / 4) * 4;
         if (H > E.atlasW) throw std::runtime_error("measured twin: " + std::to_string(E.palette.size()) + " element colours do not fit the atlas below the walls' textures (raise detailAtlas or detailTexelM)");
         rep.atlasW = E.atlasW; rep.atlasH = std::max(4, H); rep.paletteColours = E.palette.size();
-        E.normaliseUvs({&massing, &openings, &slender, &ledges}, rep.atlasH);
+        E.normaliseUvs({&massing, &openings, &slender, &ledges, &roofDet, &scanDet}, rep.atlasH);
     }
     {
         texture::ImageBuffer atlas(rep.atlasW, rep.atlasH, 3, 128);
@@ -1584,7 +1795,9 @@ inline Result build(const Spec& S) {
     openings.extras = "{\"sb\":{\"provenance\":\"photo-inferred\",\"method\":\"pipeline K's kept window boxes (facade reader, else window fit) mapped onto the prism walls, punched and recessed\",\"depthM\":" + detail::num(D) + ",\"depthProvenance\":\"" + detail::esc(S.revealLabel) + "\",\"depthSource\":\"" + detail::esc(S.revealSource) + "\",\"generatedWindows\":" + std::to_string(rep.windowsGenerated) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
     slender.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"one axis from per-slice circle fits; 95th-percentile sector radii per slice, harmonic smoothing, averaged over the measured order of rotational symmetry; tapered steps by penalised least-squares segmentation of the radius\",\"symmetry\":" + std::to_string(rep.slenderSymmetry) + ",\"fromM\":" + detail::num(slenderH) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
     ledges.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"each tier wall's scan sections stacked along it into one profile (outermost surface per 0.1 m of height), its continuous steps and parapet swept along the wall, mitred at the corners\",\"walls\":" + std::to_string(rep.profileWalls) + ",\"lips\":" + std::to_string(rep.profileLips) + ",\"parapets\":" + std::to_string(rep.profileParapets) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
-    for (auto* n : {&massing, &openings, &slender, &ledges}) if (!n->prims.empty()) out.nodes.push_back(std::move(*n));
+    roofDet.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"the scan's height map against the twin's tiers: connected cells standing above the twin's roof, rebuilt as blocks at the scan's heights in 0.5 m steps (maximal rectangles per height)\",\"pieces\":" + std::to_string(rep.roofDetailPieces) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
+    scanDet.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"the scan's own surface (Google 3D Tiles), kept as it is wherever it stands at least " + detail::num(S.P.scanDetailM) + " m outside the procedural shell, in connected pieces\",\"source\":\"scan\",\"pieces\":" + std::to_string(rep.scanDetailPieces) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
+    for (auto* n : {&massing, &openings, &slender, &ledges, &roofDet, &scanDet}) if (!n->prims.empty()) out.nodes.push_back(std::move(*n));
     return out;
 }
 
@@ -1704,7 +1917,7 @@ inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const st
 inline std::string reportJson(const Report& r, const Spec& S, size_t triangles, size_t bytes) {
     std::ostringstream o;
     o << "{\"ok\":true,\"tiers\":" << r.tiers << ",\"wallFaces\":" << r.wallFaces << ",\"facesWithWindows\":" << r.facesWithWindows
-      << ",\"wallCells\":" << r.wallCells << ",\"roofCells\":" << r.roofCells << ",\"capsCut\":" << r.capsCut << ",\"detail\":{\"faces\":" << r.facesTextured << ",\"texels\":" << r.texelsDetail << ",\"atlas\":[" << r.atlasW << "," << r.atlasH << "],\"texelM\":" << detail::num(r.detailTexelM) << ",\"paletteColours\":" << r.paletteColours << "}" << ",\"profiles\":{\"walls\":" << r.profileWalls << ",\"lips\":" << r.profileLips << ",\"parapets\":" << r.profileParapets << ",\"steps\":" << r.profileSteps << ",\"medianOutM\":" << detail::num(r.profileMedianOutM) << ",\"medianParapetM\":" << detail::num(r.profileMedianParapetM) << "}" 
+      << ",\"wallCells\":" << r.wallCells << ",\"roofCells\":" << r.roofCells << ",\"capsCut\":" << r.capsCut << ",\"detail\":{\"faces\":" << r.facesTextured << ",\"texels\":" << r.texelsDetail << ",\"atlas\":[" << r.atlasW << "," << r.atlasH << "],\"texelM\":" << detail::num(r.detailTexelM) << ",\"paletteColours\":" << r.paletteColours << "}" << ",\"profiles\":{\"walls\":" << r.profileWalls << ",\"lips\":" << r.profileLips << ",\"parapets\":" << r.profileParapets << ",\"steps\":" << r.profileSteps << ",\"medianOutM\":" << detail::num(r.profileMedianOutM) << ",\"medianParapetM\":" << detail::num(r.profileMedianParapetM) << "}" << ",\"roofDetail\":{\"pieces\":" << r.roofDetailPieces << ",\"boxes\":" << r.roofDetailBoxes << ",\"areaM2\":" << detail::num(r.roofDetailAreaM2) << ",\"medianM\":" << detail::num(r.roofDetailMedianM) << "}" << ",\"scanDetail\":{\"thresholdM\":" << detail::num(S.P.scanDetailM) << ",\"pieces\":" << r.scanDetailPieces << ",\"triangles\":" << r.scanDetailTriangles << ",\"areaM2\":" << detail::num(r.scanDetailAreaM2) << "}" 
       << ",\"windows\":{\"given\":" << r.windowsGiven << ",\"placed\":" << r.windowsPlaced << ",\"generated\":" << r.windowsGenerated << ",\"continued\":" << r.windowsContinued << ",\"rephased\":" << r.windowsRephased << ",\"wallsRephased\":" << r.wallsRephased << ",\"continueTested\":" << r.continueTested << ",\"panes\":" << r.panesPlaced
       << ",\"dropped\":{\"noWall\":" << r.droppedNoWall << ",\"clipped\":" << r.droppedClipped << ",\"overlap\":" << r.droppedOverlap << ",\"small\":" << r.droppedSmall << ",\"noFrame\":" << r.droppedNoFrame << "}}"
       << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << "}"
