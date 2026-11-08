@@ -45,7 +45,7 @@ export function wordsPrompt(rows: Array<{ seen: string }>, lines: string[], ctx:
         `For the outside of ${ctx.building ?? 'a building'}, a vision model described each appearance class of its photographed surfaces:`,
         ...rows.map((r, k) => `- class ${k + 1}: ${r.seen}`),
         ...(ctx.brief ? [`The building, as an architect described it from its photos: ${ctx.brief}`] : []),
-        `For each class name up to ${WORD_CANDIDATES} set ids whose description is the same material and finish, as a facade expert reads them (a dressed stone cladding is a flat, fine-grained stone with joints, not rubble, concrete or plaster; a travertine or a marble is a limestone), nearest first; an empty list when no set's description is that material.`,
+        `For each class name up to ${WORD_CANDIDATES} set ids whose description is nearest to the same material and finish, as a facade expert reads them (a dressed stone cladding is a flat, fine-grained stone with joints, not rubble, concrete or plaster; a travertine, a limestone tile or a marble is a limestone; a shaded or dark class is still its material), nearest first. When no set is that exact material, name the sets of the nearest kind (the same family of material and the same finish); an empty list only for a class that is no material (glass, sky, a shadow, a mix).`,
         `Answer with JSON only: {"classes":[{"class":1,"sets":["id","id"]}]}`,
         '',
         'The library:',
