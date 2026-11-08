@@ -133,6 +133,7 @@ export function measuredTwinSpec(r: KRunRecords, out: { glb: string; report: str
     for (const l of r.loops) if (l.length >= 3) L.push(`footprint ${l.length} ${l.map(p => `${n6(p[0])} ${n6(p[1])}`).join(' ')}`);
     for (const [k, v] of Object.entries(TWIN_SCAN_PARAMS)) L.push(`scan ${k} ${v}`);
     if (options.scanDetailM !== undefined && options.scanDetailM > 0) L.push(`param scanDetailM ${n6(options.scanDetailM)}`);
+    if (options.reliefM !== undefined && options.reliefM > 0) L.push(`param reliefM ${n6(options.reliefM)}`);
     L.push(`reveal ${n6(r.reveal.depthM)} ${r.reveal.label} ${r.reveal.source.replace(/\s+/g, ' ')}`);
     r.classes.forEach((c, i) => {
         const rough = c.finish?.drawn?.roughness ?? c.finish?.roughness ?? 0.8, metal = c.finish?.drawn?.metallic ?? c.finish?.metallic ?? 0;
@@ -206,8 +207,10 @@ export function ensureMeasuredTwinBinary(repoRoot = findTileRefineRepoRoot()): P
 /**
  * How the twin is made. `scanDetailM` above 0 keeps the scan's own surface wherever it stands at least that far outside the
  * procedural shell (measured; the ledge profiles and roof blocks are then left out); none or 0: everything procedural.
+ * `reliefM` above 0 (and no scanDetailM) rebuilds, purely procedurally, what stands at least that far off the shell: relief maps
+ * of the scan on the walls, roofs and slender top in 0.3 m cells, as measured blocks.
  */
-export interface MeasuredTwinOptions { scanDetailM?: number }
+export interface MeasuredTwinOptions { scanDetailM?: number; reliefM?: number }
 
 /** The generator's report (scratchbox_measured_twin.hpp reportJson). */
 export interface MeasuredTwinReport {
@@ -216,6 +219,7 @@ export interface MeasuredTwinReport {
     profiles: { walls: number; lips: number; parapets: number; steps: number; medianOutM: number; medianParapetM: number };
     roofDetail: { pieces: number; boxes: number; areaM2: number; medianM: number };
     scanDetail: { thresholdM: number; pieces: number; triangles: number; areaM2: number };
+    relief: { thresholdM: number; wallPieces: number; wallBoxes: number; wallAreaM2: number; mastPieces: number; mastCells: number };
     windows: { given: number; placed: number; generated: number; continued: number; continueTested: number; rephased: number; wallsRephased: number; panes: number; dropped: Record<string, number> };
     colour: { elements: number; uncoloured: number };
     slender: { fromM: number | null; slices: number; bands: number; axisFits: number; symmetry: number };

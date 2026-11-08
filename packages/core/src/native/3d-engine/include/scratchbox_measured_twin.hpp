@@ -46,6 +46,9 @@
  *     twin's tiers (away from the parapets' band and the slender top's foot), rebuilt as blocks at the scan's heights.
  *   - Scan detail (measured, opt-in: `scanDetailM` above 0). The scan's own triangles standing at least that far outside
  *     the procedural shell, in connected pieces, are kept as they are (the ledge profiles and roof detail are then left out).
+ *   - Relief maps (measured, procedural, opt-in: `reliefM` above 0). Dense scan samples mapped on each wall (along, up), the
+ *     roofs (the height map, down to reliefM, parapets included) and the slender top (height, sector) in `reliefCellM`
+ *     cells; what stands at least reliefM off the shell, in pieces of reliefMinArea to reliefMaxArea, rebuilt as blocks.
  *   - Atlas. Every element takes its colour from one atlas texture through its TEXCOORD_0 (COLOR_0 white), since some
  *     renderers read material textures and ignore vertex colours: a detailed wall's elements sample its texture, every
  *     other element a 16-texel block of its own colour (the palette, below the walls' textures; each colour once).
@@ -137,6 +140,11 @@ struct Params {
     double roofDetailStepM{0.5};       // ... its heights in steps of this
     double scanDetailM{0};             // when above 0: scan surface standing at least this far outside the shell is kept as it is (measured), and the ledge profiles and roof detail are left out
     double scanDetailMinArea{0.5};     // ... in connected pieces of at least this much area (m^2)
+    double reliefM{0};                 // when above 0: relief maps on the walls, roofs and slender top rebuild, as blocks, what stands at least this far off the shell (all procedural; the ledge profiles are left out)
+    double reliefCellM{0.3};           // ... their cell
+    double reliefDensity{40};          // ... scan samples per square metre
+    double reliefMinArea{0.5};         // ... in connected pieces of at least this much area (m^2)
+    double reliefMaxArea{20};          // ... and at most this (a larger piece on a wall is the wall standing off the squared outline, not a detail)
     double roofDetailEdgeM{1.2};       // ... within this of a tier's outline (the parapets' band, drawn by the ledge profiles) only above 2.5 m       // how much of an element's own colour is baked over the median (1: all of it, 0: none)
 };
 
@@ -196,6 +204,7 @@ inline Spec parseSpec(std::istream& in) {
             else if (name == "detailRepeats") P.detailRepeats = static_cast<int>(v); else if (name == "detailAtlas") P.detailAtlas = static_cast<int>(v); else if (name == "detailGainPower") P.detailGainPower = v;
             else if (name == "edgeProfiles") P.edgeProfiles = static_cast<int>(v); else if (name == "profileBinM") P.profileBinM = v;
             else if (name == "profileMinOutM") P.profileMinOutM = v; else if (name == "profileMaxOutM") P.profileMaxOutM = v;
+            else if (name == "reliefM") P.reliefM = v; else if (name == "reliefCellM") P.reliefCellM = v; else if (name == "reliefDensity") P.reliefDensity = v; else if (name == "reliefMinArea") P.reliefMinArea = v; else if (name == "reliefMaxArea") P.reliefMaxArea = v;
             else if (name == "scanDetailM") P.scanDetailM = v; else if (name == "scanDetailMinArea") P.scanDetailMinArea = v;
             else if (name == "roofDetail") P.roofDetail = static_cast<int>(v); else if (name == "roofDetailMinM") P.roofDetailMinM = v;
             else if (name == "roofDetailMinArea") P.roofDetailMinArea = v; else if (name == "roofDetailStepM") P.roofDetailStepM = v; else if (name == "roofDetailEdgeM") P.roofDetailEdgeM = v;
@@ -509,6 +518,8 @@ struct Report {
     size_t profileWalls{0}, profileLips{0}, profileParapets{0}, profileSteps{0};
     size_t roofDetailPieces{0}, roofDetailBoxes{0};
     size_t scanDetailPieces{0}, scanDetailTriangles{0};
+    size_t reliefWallPieces{0}, reliefWallBoxes{0}, reliefMastPieces{0}, reliefMastCells{0};
+    double reliefWallAreaM2{0};
     double scanDetailAreaM2{0};
     double roofDetailAreaM2{0}, roofDetailMedianM{0};
     double profileMedianOutM{0}, profileMedianParapetM{0};
@@ -1150,7 +1161,7 @@ inline Result build(const Spec& S) {
     // of the wall (0.5 m bins). Above the tier top, a parapet: samples rising out of the roof within a metre of the wall,
     // whose density stops below 3 m (an upper tier's wall standing flush would not stop). Each is swept along the wall, its
     // ends mitred at convex corners and drawn back at concave ones. Measured (stacked scan); the colour is the photo's.
-    if (S.P.edgeProfiles && S.P.scanDetailM <= 0 && R.building.size()) {
+    if (S.P.edgeProfiles && S.P.scanDetailM <= 0 && S.P.reliefM <= 0 && R.building.size()) {
         // dense samples of the building's surface, in the tile frame, on a 2 m grid
         std::vector<P3> dense;
         {
@@ -1557,7 +1568,11 @@ inline Result build(const Spec& S) {
     // tiers do not hold (the crown's wings and buttresses, bulkheads, plant, tanks: no kind is named). Each is rebuilt as
     // blocks from the twin's roof up to the scan's height in roofDetailStepM steps: maximal rectangles of cells sharing a
     // height and a roof. Measured; the colour is the photo's.
-    if (S.P.roofDetail && S.P.scanDetailM <= 0 && R.grid.nu > 0) {
+    if ((S.P.roofDetail || S.P.reliefM > 0) && S.P.scanDetailM <= 0 && R.grid.nu > 0) {
+        // with relief maps: down to reliefM, parapets included (no ledge profiles draw them), in quarter-metre steps
+        const double rdMin = S.P.reliefM > 0 ? S.P.reliefM : S.P.roofDetailMinM, rdStep = S.P.reliefM > 0 ? 0.25 : S.P.roofDetailStepM;
+        const double rdArea = S.P.reliefM > 0 ? S.P.reliefMinArea : S.P.roofDetailMinArea;
+        const bool rdEdge = S.P.reliefM <= 0;
         const auto& G = R.grid;
         const int NU = G.nu, NV = G.nv;
         std::vector<float> twinH(static_cast<size_t>(NU) * NV, NAN);
@@ -1598,9 +1613,9 @@ inline Result build(const Spec& S) {
             const size_t k = static_cast<size_t>(j) * NU + i;
             const float hs = R.height[k], ht = twinH[k];
             if (!(hs == hs) || !(ht == ht)) continue;
-            if (nearEdge[k] && hs - ht < 2.5) continue;  // the parapets' band: only what stands above any parapet
+            if (rdEdge && nearEdge[k] && hs - ht < 2.5) continue;  // the parapets' band: only what stands above any parapet
             if (footR > 0 && std::hypot(G.cu(i) - fu, G.cv(j) - fv) <= footR) continue;
-            if (hs - ht >= S.P.roofDetailMinM && hs - ht <= 40) cand[k] = 1;
+            if (hs - ht >= rdMin && hs - ht <= 40) cand[k] = 1;
         }
         // connected pieces (8-connected), each rebuilt
         std::vector<int> comp(cand.size(), -1);
@@ -1619,10 +1634,10 @@ inline Result build(const Spec& S) {
                     if (cand[nk] && comp[nk] < 0) { comp[nk] = 0; cells.push_back(nk); }
                 }
             }
-            if (cells.size() * cellA < S.P.roofDetailMinArea) continue;
+            if (cells.size() * cellA < rdArea) continue;
             // each cell's height key (the scan's height in steps) and roof; maximal rectangles of equal keys
             std::unordered_map<size_t, std::pair<int, float>> key;
-            for (size_t c : cells) key[c] = {static_cast<int>(std::lround(R.height[c] / S.P.roofDetailStepM)), twinH[c]};
+            for (size_t c : cells) key[c] = {static_cast<int>(std::lround(R.height[c] / rdStep)), twinH[c]};
             std::unordered_map<size_t, uint8_t> used;
             ++rep.roofDetailPieces; rep.roofDetailAreaM2 += cells.size() * cellA;
             std::sort(cells.begin(), cells.end());
@@ -1636,8 +1651,8 @@ inline Result build(const Spec& S) {
                 for (;;) { bool ok = true; for (int ii = ci; ii <= i1 && ok; ++ii) ok = same(ii, j1 + 1); if (!ok) break; ++j1; }
                 for (int jj = cj; jj <= j1; ++jj) for (int ii = ci; ii <= i1; ++ii) used[static_cast<size_t>(jj) * NU + ii] = 1;
                 // the block in the tile frame: corners from the frame, base on the twin's roof, top at the stepped height
-                const double h0 = kc.second, h1 = kc.first * S.P.roofDetailStepM;
-                if (h1 - h0 < 0.3) continue;
+                const double h0 = kc.second, h1 = kc.first * rdStep;
+                if (h1 - h0 < std::min(0.3, rdMin)) continue;
                 heights.push_back(h1 - h0);
                 const double u0 = G.u0 + ci * G.cell, u1 = G.u0 + (i1 + 1) * G.cell, v0 = G.v0 + cj * G.cell, v1 = G.v0 + (j1 + 1) * G.cell;
                 auto at = [&](double u, double v, double h) { double x, z; F.toXZ(u, v, x, z); return P3{x, S.groundY + h, z}; };
@@ -1737,6 +1752,166 @@ inline Result build(const Spec& S) {
         }
     }
 
+    // --- relief maps (procedural, opt-in: reliefM above 0). Dense samples of the scan (reliefDensity per m^2). On each tier
+    // wall, a map over the wall's (along, up) cells of reliefCellM: per cell the second-largest offset of the samples out of
+    // the wall (the outermost surface two samples agree on); cells at least reliefM out, in connected pieces of reliefMinArea to
+    // reliefMaxArea (a larger one is the wall standing off its squared outline), become blocks from the wall out to their offset (0.1 m steps), merged into maximal rectangles of one
+    // offset. On the slender top, a map over (height, sector): how far the samples stand beyond the fitted ring; cells at
+    // least reliefM out become ring segments out to that radius. Measured blocks: none of the scan's surface is kept.
+    if (S.P.reliefM > 0 && S.P.scanDetailM <= 0 && R.building.size()) {
+        struct Sm { float x, y, z; };
+        std::vector<Sm> dense;
+        {
+            std::mt19937 rng(13);
+            std::uniform_real_distribution<double> U(0, 1);
+            for (size_t ti = 0; ti < R.building.size(); ++ti) {
+                const P3 a = R.building.p[3 * ti], b = R.building.p[3 * ti + 1], c = R.building.p[3 * ti + 2];
+                const double area = sp::len(sp::cross(b - a, c - a)) / 2;
+                const int n = std::max(1, static_cast<int>(std::ceil(area * S.P.reliefDensity)));
+                for (int k = 0; k < n; ++k) {
+                    double r1 = U(rng), r2 = U(rng); if (r1 + r2 > 1) { r1 = 1 - r1; r2 = 1 - r2; }
+                    const P3 q = a + (b - a) * r1 + (c - a) * r2;  // frame (u, h, v)
+                    dense.push_back({static_cast<float>(q.x), static_cast<float>(q.y), static_cast<float>(q.z)});
+                }
+            }
+        }
+        const double cell2 = 2.0;
+        std::unordered_map<uint64_t, std::vector<uint32_t>> grid2;
+        auto gk = [&](double u, double v) { return (static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(std::floor(u / cell2)))) << 32) | static_cast<uint32_t>(static_cast<int32_t>(std::floor(v / cell2))); };
+        for (uint32_t i = 0; i < dense.size(); ++i) grid2[gk(dense[i].x, dense[i].z)].push_back(i);
+        const double C = S.P.reliefCellM, thr = S.P.reliefM;
+        const P3 up{0, 1, 0};
+        // the walls (a block on a detail-textured wall samples that wall's texture, projected along its normal)
+        for (size_t fi = 0; fi < faces.size(); ++fi) {
+            const auto& w = faces[fi];
+            if (w.L < 1.0) continue;
+            E.tex = faceTex[fi].ok ? &faceTex[fi] : nullptr; E.texP0 = w.p0; E.texD = w.d;
+            // the wall in the frame: its start and direction in (u, v)
+            const P2 s0 = F.toUV(w.p0.x, w.p0.z);
+            const P2 dU = F.toUV(w.p0.x + w.d.x, w.p0.z + w.d.z), nU = F.toUV(w.p0.x + w.n.x, w.p0.z + w.n.z);
+            const double du = dU.u - s0.u, dv = dU.v - s0.v, nu = nU.u - s0.u, nv = nU.v - s0.v;
+            const int NA = std::max(1, static_cast<int>(std::ceil(w.L / C))), NH = std::max(1, static_cast<int>(std::ceil((w.h1 - w.h0) / C)));
+            std::vector<std::array<float, 2>> top2(static_cast<size_t>(NA) * NH, {-1e9f, -1e9f});
+            const double minU = std::min(s0.u, s0.u + du * w.L) - 3.5, maxU = std::max(s0.u, s0.u + du * w.L) + 3.5;
+            const double minV = std::min(s0.v, s0.v + dv * w.L) - 3.5, maxV = std::max(s0.v, s0.v + dv * w.L) + 3.5;
+            for (double gu = std::floor(minU / cell2) * cell2; gu <= maxU; gu += cell2) for (double gv = std::floor(minV / cell2) * cell2; gv <= maxV; gv += cell2) {
+                auto it = grid2.find(gk(gu + 0.5 * cell2, gv + 0.5 * cell2));
+                if (it == grid2.end()) continue;
+                for (uint32_t i : it->second) {
+                    const auto& q = dense[i];
+                    const double ru = q.x - s0.u, rv = q.z - s0.v;
+                    const double a = ru * du + rv * dv, o = ru * nu + rv * nv;
+                    if (a < 0 || a >= w.L || q.y < w.h0 || q.y >= w.h1 || o < -0.3 || o > 3.0) continue;
+                    const int ia = std::min(NA - 1, static_cast<int>(a / C)), ih = std::min(NH - 1, static_cast<int>((q.y - w.h0) / C));
+                    auto& t2 = top2[static_cast<size_t>(ih) * NA + ia];
+                    if (o > t2[0]) { t2[1] = t2[0]; t2[0] = static_cast<float>(o); } else if (o > t2[1]) t2[1] = static_cast<float>(o);
+                }
+            }
+            std::vector<int> q(top2.size(), 0);  // the cell's offset in 0.1 m steps, 0 below the threshold
+            for (size_t k = 0; k < top2.size(); ++k) if (top2[k][1] >= thr) q[k] = static_cast<int>(std::lround(top2[k][1] / 0.1));
+            // connected pieces of solid cells, small ones dropped
+            std::vector<int> comp(q.size(), -1);
+            for (size_t k0 = 0; k0 < q.size(); ++k0) {
+                if (!q[k0] || comp[k0] >= 0) continue;
+                std::vector<size_t> cells{k0}; comp[k0] = 0;
+                for (size_t z = 0; z < cells.size(); ++z) {
+                    const int ia = static_cast<int>(cells[z] % NA), ih = static_cast<int>(cells[z] / NA);
+                    for (int dh = -1; dh <= 1; ++dh) for (int da = -1; da <= 1; ++da) {
+                        const int na = ia + da, nh = ih + dh;
+                        if (na < 0 || nh < 0 || na >= NA || nh >= NH) continue;
+                        const size_t nk = static_cast<size_t>(nh) * NA + na;
+                        if (q[nk] && comp[nk] < 0) { comp[nk] = 0; cells.push_back(nk); }
+                    }
+                }
+                if (cells.size() * C * C < S.P.reliefMinArea || cells.size() * C * C > S.P.reliefMaxArea) { for (size_t c : cells) q[c] = -q[c]; continue; }  // marked dropped
+                ++rep.reliefWallPieces; rep.reliefWallAreaM2 += cells.size() * C * C;
+            }
+            // maximal rectangles of one offset, each a block out of the wall
+            std::vector<uint8_t> used(q.size(), 0);
+            auto at = [&](double a, double h, double o) { return P3{w.p0.x + w.d.x * a + w.n.x * o, S.groundY + h, w.p0.z + w.d.z * a + w.n.z * o}; };
+            for (int ih = 0; ih < NH; ++ih) for (int ia = 0; ia < NA; ++ia) {
+                const size_t k = static_cast<size_t>(ih) * NA + ia;
+                if (q[k] <= 0 || used[k]) continue;
+                const int key = q[k];
+                auto same = [&](int a2, int h2) { if (a2 >= NA || h2 >= NH) return false; const size_t kk = static_cast<size_t>(h2) * NA + a2; return q[kk] == key && !used[kk]; };
+                int a1 = ia; while (same(a1 + 1, ih)) ++a1;
+                int h1 = ih;
+                for (;;) { bool ok = true; for (int a2 = ia; a2 <= a1 && ok; ++a2) ok = same(a2, h1 + 1); if (!ok) break; ++h1; }
+                for (int h2 = ih; h2 <= h1; ++h2) for (int a2 = ia; a2 <= a1; ++a2) used[static_cast<size_t>(h2) * NA + a2] = 1;
+                const double A0 = ia * C, A1 = std::min(w.L, (a1 + 1) * C), H0 = w.h0 + ih * C, H1 = std::min(w.h1, w.h0 + (h1 + 1) * C), O = key * 0.1;
+                bool got;
+                const Rgb c = colourOf(at(A0, H0, O + 0.05), w.d * (A1 - A0), P3{0, H1 - H0, 0}, w.n, classColour(0), got);
+                const int m = E.classOf(c);
+                E.quad(scanDet, m, at(A0, H0, O), at(A1, H0, O), at(A1, H1, O), at(A0, H1, O), w.n, c, w.d, up);       // front
+                E.quad(scanDet, m, at(A0, H1, 0), at(A1, H1, 0), at(A1, H1, O), at(A0, H1, O), up, c, w.d, w.n);       // top
+                E.quad(scanDet, m, at(A0, H0, 0), at(A0, H0, O), at(A1, H0, O), at(A1, H0, 0), up * -1.0, c, w.d, w.n); // underside
+                E.quad(scanDet, m, at(A0, H0, 0), at(A0, H1, 0), at(A0, H1, O), at(A0, H0, O), w.d * -1.0, c, w.n, up); // sides
+                E.quad(scanDet, m, at(A1, H0, 0), at(A1, H0, O), at(A1, H1, O), at(A1, H1, 0), w.d, c, w.n, up);
+                ++rep.reliefWallBoxes;
+            }
+        }
+        E.tex = nullptr;
+        // the slender top: (height, sector) cells beyond the fitted ring
+        if (slenderH >= 0 && !shellRings.empty()) {
+            const int K2 = shellK;
+            const double z0 = shellRings.front().z0, z1 = shellRings.back().z1;
+            const int NZ = std::max(1, static_cast<int>(std::ceil((z1 - z0) / C)));
+            std::vector<std::array<float, 2>> top2(static_cast<size_t>(NZ) * K2, {-1e9f, -1e9f});
+            auto ringR = [&](double h, int sct) {
+                for (const auto& r : shellRings) if (h >= r.z0 - 1e-6 && h <= r.z1 + 1e-6) { const double t = r.z1 > r.z0 ? std::clamp((h - r.z0) / (r.z1 - r.z0), 0.0, 1.0) : 0; return (1 - t) * r.r[sct] + t * r.r1[sct]; }
+                return 0.0;
+            };
+            for (const auto& q : dense) {
+                if (q.y < z0 || q.y >= z1) continue;
+                const double du = q.x - shellAu, dv = q.z - shellAv;
+                const int sct = ((static_cast<int>(std::floor((std::atan2(dv, du) + kPi) / (2 * kPi) * K2)) % K2) + K2) % K2;
+                const int iz = std::min(NZ - 1, static_cast<int>((q.y - z0) / C));
+                const float e = static_cast<float>(std::hypot(du, dv) - ringR(q.y, sct));
+                auto& t2 = top2[static_cast<size_t>(iz) * K2 + sct];
+                if (e > t2[0]) { t2[1] = t2[0]; t2[0] = e; } else if (e > t2[1]) t2[1] = e;
+            }
+            std::vector<uint8_t> solid(top2.size(), 0);
+            for (size_t k = 0; k < top2.size(); ++k) if (top2[k][1] >= thr && top2[k][1] <= 6) solid[k] = 1;
+            std::vector<int> comp(solid.size(), -1);
+            for (size_t k0 = 0; k0 < solid.size(); ++k0) {
+                if (!solid[k0] || comp[k0] >= 0) continue;
+                std::vector<size_t> cells{k0}; comp[k0] = 0;
+                for (size_t z = 0; z < cells.size(); ++z) {
+                    const int s2 = static_cast<int>(cells[z] % K2), iz = static_cast<int>(cells[z] / K2);
+                    for (int dz = -1; dz <= 1; ++dz) for (int ds = -1; ds <= 1; ++ds) {
+                        const int ns = (s2 + ds + K2) % K2, nz = iz + dz;
+                        if (nz < 0 || nz >= NZ) continue;
+                        const size_t nk = static_cast<size_t>(nz) * K2 + ns;
+                        if (solid[nk] && comp[nk] < 0) { comp[nk] = 0; cells.push_back(nk); }
+                    }
+                }
+                if (cells.size() < 3) continue;
+                ++rep.reliefMastPieces;
+                for (size_t c : cells) {
+                    const int s2 = static_cast<int>(c % K2), iz = static_cast<int>(c / K2);
+                    const double hA = z0 + iz * C, hB = std::min(z1, hA + C), hm = (hA + hB) / 2;
+                    const double r0 = ringR(hm, s2), r1 = r0 + std::round(top2[c][1] / 0.1) * 0.1;
+                    const double t0 = -kPi + 2 * kPi * s2 / K2, t1 = -kPi + 2 * kPi * (s2 + 1) / K2;
+                    auto pt = [&](double rr, double th, double h) { double x, z; F.toXZ(shellAu + rr * std::cos(th), shellAv + rr * std::sin(th), x, z); return P3{x, S.groundY + h, z}; };
+                    const P3 o0 = pt(r1, t0, hA), o1 = pt(r1, t1, hA), o2 = pt(r1, t1, hB), o3 = pt(r1, t0, hB);
+                    const P3 i0 = pt(r0, t0, hA), i1 = pt(r0, t1, hA), i2 = pt(r0, t1, hB), i3 = pt(r0, t0, hB);
+                    double ax, az; F.toXZ(shellAu, shellAv, ax, az);
+                    const P3 mid = (o0 + o1) * 0.5; P3 nOut{mid.x - ax, 0, mid.z - az}; nOut = nOut * (1.0 / std::max(1e-9, sp::len(nOut)));
+                    bool got;
+                    const Rgb col = colourOf(o0 + nOut * 0.05, o1 - o0, o3 - o0, nOut, classColour(0), got);
+                    const int m = E.classOf(col);
+                    E.quad(scanDet, m, o0, o1, o2, o3, nOut, col, o1 - o0, up);
+                    E.quad(scanDet, m, i3, i2, o2, o3, up, col, P3{1, 0, 0}, P3{0, 0, 1});
+                    E.quad(scanDet, m, i0, o0, o1, i1, up * -1.0, col, P3{1, 0, 0}, P3{0, 0, 1});
+                    P3 sA = sp::cross(up, o0 - i0); sA = sA * (1.0 / std::max(1e-9, sp::len(sA)));
+                    E.quad(scanDet, m, i0, i3, o3, o0, sA * -1.0, col, o0 - i0, up);
+                    E.quad(scanDet, m, i1, o1, o2, i2, sp::cross(up, o1 - i1) * (1.0 / std::max(1e-9, sp::len(sp::cross(up, o1 - i1)))), col, o1 - i1, up);
+                    ++rep.reliefMastCells;
+                }
+            }
+        }
+    }
+
     // --- the atlas: each element's measured colour baked over its rect as a gain on the repeat median (the median's own
     // mean over the rect brought toward the element's colour: the gain held within [1/3, 3], to the power
     // detailGainPower, so a cell's own colour shows without its edges reading as blocks); a texel no repeat
@@ -1796,7 +1971,10 @@ inline Result build(const Spec& S) {
     slender.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"one axis from per-slice circle fits; 95th-percentile sector radii per slice, harmonic smoothing, averaged over the measured order of rotational symmetry; tapered steps by penalised least-squares segmentation of the radius\",\"symmetry\":" + std::to_string(rep.slenderSymmetry) + ",\"fromM\":" + detail::num(slenderH) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
     ledges.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"each tier wall's scan sections stacked along it into one profile (outermost surface per 0.1 m of height), its continuous steps and parapet swept along the wall, mitred at the corners\",\"walls\":" + std::to_string(rep.profileWalls) + ",\"lips\":" + std::to_string(rep.profileLips) + ",\"parapets\":" + std::to_string(rep.profileParapets) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
     roofDet.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"the scan's height map against the twin's tiers: connected cells standing above the twin's roof, rebuilt as blocks at the scan's heights in 0.5 m steps (maximal rectangles per height)\",\"pieces\":" + std::to_string(rep.roofDetailPieces) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
-    scanDet.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"the scan's own surface (Google 3D Tiles), kept as it is wherever it stands at least " + detail::num(S.P.scanDetailM) + " m outside the procedural shell, in connected pieces\",\"source\":\"scan\",\"pieces\":" + std::to_string(rep.scanDetailPieces) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
+    if (S.P.reliefM > 0 && S.P.scanDetailM <= 0) scanDet.name = "relief_detail";
+    scanDet.extras = S.P.reliefM > 0 && S.P.scanDetailM <= 0
+        ? "{\"sb\":{\"provenance\":\"measured\",\"method\":\"relief maps of the scan's dense samples on the walls (along, up) and the slender top (height, sector) in " + detail::num(S.P.reliefCellM) + " m cells: what stands at least " + detail::num(S.P.reliefM) + " m off the shell, rebuilt as blocks (no scan surface kept)\",\"source\":\"procedural\",\"colour\":\"" + detail::esc(colourSrc) + "\"}}"
+        : "{\"sb\":{\"provenance\":\"measured\",\"method\":\"the scan's own surface (Google 3D Tiles), kept as it is wherever it stands at least " + detail::num(S.P.scanDetailM) + " m outside the procedural shell, in connected pieces\",\"source\":\"scan\",\"pieces\":" + std::to_string(rep.scanDetailPieces) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
     for (auto* n : {&massing, &openings, &slender, &ledges, &roofDet, &scanDet}) if (!n->prims.empty()) out.nodes.push_back(std::move(*n));
     return out;
 }
@@ -1917,7 +2095,7 @@ inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const st
 inline std::string reportJson(const Report& r, const Spec& S, size_t triangles, size_t bytes) {
     std::ostringstream o;
     o << "{\"ok\":true,\"tiers\":" << r.tiers << ",\"wallFaces\":" << r.wallFaces << ",\"facesWithWindows\":" << r.facesWithWindows
-      << ",\"wallCells\":" << r.wallCells << ",\"roofCells\":" << r.roofCells << ",\"capsCut\":" << r.capsCut << ",\"detail\":{\"faces\":" << r.facesTextured << ",\"texels\":" << r.texelsDetail << ",\"atlas\":[" << r.atlasW << "," << r.atlasH << "],\"texelM\":" << detail::num(r.detailTexelM) << ",\"paletteColours\":" << r.paletteColours << "}" << ",\"profiles\":{\"walls\":" << r.profileWalls << ",\"lips\":" << r.profileLips << ",\"parapets\":" << r.profileParapets << ",\"steps\":" << r.profileSteps << ",\"medianOutM\":" << detail::num(r.profileMedianOutM) << ",\"medianParapetM\":" << detail::num(r.profileMedianParapetM) << "}" << ",\"roofDetail\":{\"pieces\":" << r.roofDetailPieces << ",\"boxes\":" << r.roofDetailBoxes << ",\"areaM2\":" << detail::num(r.roofDetailAreaM2) << ",\"medianM\":" << detail::num(r.roofDetailMedianM) << "}" << ",\"scanDetail\":{\"thresholdM\":" << detail::num(S.P.scanDetailM) << ",\"pieces\":" << r.scanDetailPieces << ",\"triangles\":" << r.scanDetailTriangles << ",\"areaM2\":" << detail::num(r.scanDetailAreaM2) << "}" 
+      << ",\"wallCells\":" << r.wallCells << ",\"roofCells\":" << r.roofCells << ",\"capsCut\":" << r.capsCut << ",\"detail\":{\"faces\":" << r.facesTextured << ",\"texels\":" << r.texelsDetail << ",\"atlas\":[" << r.atlasW << "," << r.atlasH << "],\"texelM\":" << detail::num(r.detailTexelM) << ",\"paletteColours\":" << r.paletteColours << "}" << ",\"profiles\":{\"walls\":" << r.profileWalls << ",\"lips\":" << r.profileLips << ",\"parapets\":" << r.profileParapets << ",\"steps\":" << r.profileSteps << ",\"medianOutM\":" << detail::num(r.profileMedianOutM) << ",\"medianParapetM\":" << detail::num(r.profileMedianParapetM) << "}" << ",\"roofDetail\":{\"pieces\":" << r.roofDetailPieces << ",\"boxes\":" << r.roofDetailBoxes << ",\"areaM2\":" << detail::num(r.roofDetailAreaM2) << ",\"medianM\":" << detail::num(r.roofDetailMedianM) << "}" << ",\"scanDetail\":{\"thresholdM\":" << detail::num(S.P.scanDetailM) << ",\"pieces\":" << r.scanDetailPieces << ",\"triangles\":" << r.scanDetailTriangles << ",\"areaM2\":" << detail::num(r.scanDetailAreaM2) << "}" << ",\"relief\":{\"thresholdM\":" << detail::num(S.P.reliefM) << ",\"wallPieces\":" << r.reliefWallPieces << ",\"wallBoxes\":" << r.reliefWallBoxes << ",\"wallAreaM2\":" << detail::num(r.reliefWallAreaM2) << ",\"mastPieces\":" << r.reliefMastPieces << ",\"mastCells\":" << r.reliefMastCells << "}" 
       << ",\"windows\":{\"given\":" << r.windowsGiven << ",\"placed\":" << r.windowsPlaced << ",\"generated\":" << r.windowsGenerated << ",\"continued\":" << r.windowsContinued << ",\"rephased\":" << r.windowsRephased << ",\"wallsRephased\":" << r.wallsRephased << ",\"continueTested\":" << r.continueTested << ",\"panes\":" << r.panesPlaced
       << ",\"dropped\":{\"noWall\":" << r.droppedNoWall << ",\"clipped\":" << r.droppedClipped << ",\"overlap\":" << r.droppedOverlap << ",\"small\":" << r.droppedSmall << ",\"noFrame\":" << r.droppedNoFrame << "}}"
       << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << "}"

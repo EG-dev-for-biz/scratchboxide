@@ -59,6 +59,7 @@ describe('measuredTwinSpec', () => {
         // fully procedural unless a scan-detail threshold is given
         expect(lines.some(l => l.startsWith('param scanDetailM'))).toBe(false);
         expect(measuredTwinSpec(records(), { glb: '/out/t.glb', report: '/out/r.json' }, [], { scanDetailM: 0.3 }).split('\n')).toContain('param scanDetailM 0.3');
+        expect(measuredTwinSpec(records(), { glb: '/out/t.glb', report: '/out/r.json' }, [], { reliefM: 0.3 }).split('\n')).toContain('param reliefM 0.3');
     });
 });
 
