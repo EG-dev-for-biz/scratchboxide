@@ -93,6 +93,11 @@ describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K bui
         expect(rep.slender.axisFits).toBeGreaterThan(20);
         expect(rep.slender.bands).toBeGreaterThan(5);
         expect(rep.slender.bands).toBeLessThan(40);
+        // the mast's ribs: the angular profile stacked over each step, folded by the rib count above the ring's harmonics
+        expect(rep.slender.finBands).toBeGreaterThan(2);
+        expect(rep.slender.fins).toBeGreaterThan(20);
+        // the ESB's arches are carved ornament over flat-topped windows: the opening reader draws no shaped head there
+        expect(rep.heads.drawn).toBe(0);
         // most kept boxes are punched; the rest were duplicates of overlapping photos or off every wall, and are counted
         expect(rep.windows.given).toBeGreaterThan(7000);
         expect(rep.windows.placed).toBeGreaterThan(5000);
@@ -149,9 +154,12 @@ describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K bui
                 const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
                 const len = Math.hypot(n[0], n[1], n[2]);
                 if (!len || Math.abs(n[1] / len) > 0.3) continue;
-                vertical++;
                 const c = [0, 2].map(j => (v[0][j] + v[1][j] + v[2][j]) / 3);
-                if (n[0] * (c[0] - mx) + n[2] * (c[1] - mz) > 0) outward++;
+                const rx = c[0] - mx, rz = c[1] - mz, rl = Math.hypot(rx, rz), hl = Math.hypot(n[0], n[2]);
+                const radial = (n[0] * rx + n[2] * rz) / (rl * hl || 1);
+                if (Math.abs(radial) < 0.7) continue;  // a fin's side faces sideways round the axis, not in or out
+                vertical++;
+                if (radial > 0) outward++;
             }
         }
         expect(vertical).toBeGreaterThan(100);

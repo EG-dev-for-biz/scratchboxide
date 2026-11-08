@@ -22,6 +22,11 @@
  *     sectors about it and smoothed to `harmonics` Fourier terms, averaged over the top's measured order of rotational
  *     symmetry, and the mean radius up the axis split into tapered steps by penalised least-squares segmentation (a
  *     harmonic solid of revolution in stepped, tapered bands).
+ *   - Opening heads (photo-inferred). Each window type of six or more on a plane photo median-stacked into one exemplar;
+ *     the opening's top boundary traced across it; a head varying `headMinM` or more cut into the wall as that curve.
+ *   - Fins (measured). Each step of the slender top: its angular profile stacked over the step's height in 0.5 degree bins
+ *     (the excess of dense scan samples beyond the ring), folded by its period when it repeats around the axis, the bins
+ *     standing `finMinM` or more beyond the ring drawn as radial blocks.
  *   - Openings (photo-inferred). Every window box pipeline K kept (window_fit.json: the facade reader's openings, the
  *     window fit's elsewhere, in each plane photo's pixels) is mapped through its plane's frame onto the prism wall facing
  *     the same way within `planeTolM`, punched through it, recessed by the reveal depth (photo-inferred when read from
@@ -49,6 +54,8 @@
  *   - Relief maps (measured, procedural, opt-in: `reliefM` above 0). Dense scan samples mapped on each wall (along, up), the
  *     roofs (the height map, down to reliefM, parapets included) and the slender top (height, sector) in `reliefCellM`
  *     cells; what stands at least reliefM off the shell, in pieces of reliefMinArea to reliefMaxArea, rebuilt as blocks.
+ *   - Surface fit (measured, opt-in `surfaceFit`, with the relief maps). Irregular pieces off the shell (0.5 to 40 m^2, 1.5 m tall, not flat)
+ *     rebuilt as a closed surface: the signed distance to their points on a 0.15 m grid, meshed by surface nets.
  *   - Atlas. Every element takes its colour from one atlas texture through its TEXCOORD_0 (COLOR_0 white), since some
  *     renderers read material textures and ignore vertex colours: a detailed wall's elements sample its texture, every
  *     other element a 16-texel block of its own colour (the palette, below the walls' textures; each colour once).
@@ -115,7 +122,13 @@ struct Params {
     int sectors{32};
     int harmonics{12};
     double symmetryTol{0.04};          // a slender top's rotational symmetry holds when its m-fold average departs by at most this share of the radius (RMS)
-    double circleBelowM{1.0};          // a slice of a slender top narrower than this (mean radius) is a circle
+    double circleBelowM{1.0};
+    int openingHeads{1};               // window heads traced from each window type's median-stacked photo
+    double headMinM{0.15};             // ... drawn when the traced top varies at least this much across the window
+    double headEdgeM{0.12};            // ... and stays within this of the box top at its outer columns (the wall closes in at the corners)          // a slice of a slender top narrower than this (mean radius) is a circle
+    int slenderFins{1};                // the angular profile of each step, stacked over its height at 0.5 degrees, folded by its period: fins, flutes, ribs
+    double finMinM{0.2};               // ... standing at least this far beyond the ring
+    double finMinCorr{0.15};           // ... folded when one harmonic above the ring's carries at least this share of the excess's power
     double sliceM{1.0};
     double fillGapM{1.0};              // another photo's window fills a wall only this far from the windows already placed (along the wall)
     double fillReachM{8.0};            // ... looked for within this height above and below
@@ -144,7 +157,8 @@ struct Params {
     double reliefCellM{0.3};           // ... their cell
     double reliefDensity{40};          // ... scan samples per square metre
     double reliefMinArea{0.5};         // ... in connected pieces of at least this much area (m^2)
-    double reliefMaxArea{20};          // ... and at most this (a larger piece on a wall is the wall standing off the squared outline, not a detail)
+    double reliefMaxArea{20};
+    int surfaceFit{0};                 // ... irregular leftovers rebuilt as a fitted closed surface (with the relief maps; opt-in: on the ESB its thin open pieces fit worse than blocks)          // ... and at most this (a larger piece on a wall is the wall standing off the squared outline, not a detail)
     double roofDetailEdgeM{1.2};       // ... within this of a tier's outline (the parapets' band, drawn by the ledge profiles) only above 2.5 m       // how much of an element's own colour is baked over the median (1: all of it, 0: none)
 };
 
@@ -199,12 +213,14 @@ inline Spec parseSpec(std::istream& in) {
             else if (name == "minWindowM") P.minWindowM = v; else if (name == "keepShare") P.keepShare = v; else if (name == "sampleRadiusM") P.sampleRadiusM = v;
             else if (name == "slenderShare") P.slenderShare = v; else if (name == "minSlenderShare") P.minSlenderShare = v;
             else if (name == "sectors") P.sectors = static_cast<int>(v); else if (name == "harmonics") P.harmonics = static_cast<int>(v);
+            else if (name == "openingHeads") P.openingHeads = static_cast<int>(v); else if (name == "headMinM") P.headMinM = v; else if (name == "headEdgeM") P.headEdgeM = v;
+            else if (name == "slenderFins") P.slenderFins = static_cast<int>(v); else if (name == "finMinM") P.finMinM = v; else if (name == "finMinCorr") P.finMinCorr = v;
             else if (name == "symmetryTol") P.symmetryTol = v; else if (name == "circleBelowM") P.circleBelowM = v; else if (name == "sliceM") P.sliceM = v;
             else if (name == "detail") P.detail = static_cast<int>(v); else if (name == "detailTexelM") P.detailTexelM = v;
             else if (name == "detailRepeats") P.detailRepeats = static_cast<int>(v); else if (name == "detailAtlas") P.detailAtlas = static_cast<int>(v); else if (name == "detailGainPower") P.detailGainPower = v;
             else if (name == "edgeProfiles") P.edgeProfiles = static_cast<int>(v); else if (name == "profileBinM") P.profileBinM = v;
             else if (name == "profileMinOutM") P.profileMinOutM = v; else if (name == "profileMaxOutM") P.profileMaxOutM = v;
-            else if (name == "reliefM") P.reliefM = v; else if (name == "reliefCellM") P.reliefCellM = v; else if (name == "reliefDensity") P.reliefDensity = v; else if (name == "reliefMinArea") P.reliefMinArea = v; else if (name == "reliefMaxArea") P.reliefMaxArea = v;
+            else if (name == "reliefM") P.reliefM = v; else if (name == "reliefCellM") P.reliefCellM = v; else if (name == "reliefDensity") P.reliefDensity = v; else if (name == "reliefMinArea") P.reliefMinArea = v; else if (name == "reliefMaxArea") P.reliefMaxArea = v; else if (name == "surfaceFit") P.surfaceFit = static_cast<int>(v);
             else if (name == "scanDetailM") P.scanDetailM = v; else if (name == "scanDetailMinArea") P.scanDetailMinArea = v;
             else if (name == "roofDetail") P.roofDetail = static_cast<int>(v); else if (name == "roofDetailMinM") P.roofDetailMinM = v;
             else if (name == "roofDetailMinArea") P.roofDetailMinArea = v; else if (name == "roofDetailStepM") P.roofDetailStepM = v; else if (name == "roofDetailEdgeM") P.roofDetailEdgeM = v;
@@ -443,7 +459,9 @@ struct Emitter {
     std::vector<uint32_t> palette;
     static uint8_t toSrgb8(double c) { c = std::clamp(c, 0.0, 1.0); return static_cast<uint8_t>(std::lround(255.0 * (c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1 / 2.4) - 0.055))); }
     void paletteUv(float& u, float& v, const Rgb& c) {
-        const uint32_t key = (static_cast<uint32_t>(toSrgb8(c.r)) << 16) | (static_cast<uint32_t>(toSrgb8(c.g)) << 8) | toSrgb8(c.b);
+        // 5 bits a channel (steps of 8 in sRGB): the palette stays within the atlas however many elements there are
+        auto q5 = [&](double v) { return static_cast<uint32_t>(std::min(255, (toSrgb8(v) & 0xF8) + 4)); };
+        const uint32_t key = (q5(c.r) << 16) | (q5(c.g) << 8) | q5(c.b);
         auto it = paletteIndex.find(key);
         int k;
         if (it == paletteIndex.end()) { k = static_cast<int>(palette.size()); palette.push_back(key); paletteIndex[key] = k; } else k = it->second;
@@ -526,7 +544,9 @@ struct Report {
     int atlasW{0}, atlasH{0};
     double detailTexelM{0};
     double slenderFromM{-1}, topM{0};
-    size_t slenderBands{0}, slenderSlices{0}, slenderAxisFits{0};
+    size_t slenderBands{0}, slenderSlices{0}, slenderAxisFits{0}, finBands{0}, finCount{0}, finSegments{0};
+    size_t headTypes{0}, headWindows{0}, headsDrawn{0}, surfacePieces{0}, surfaceQuads{0};
+    std::vector<double> headRises;
     int slenderSymmetry{1};
     std::map<int, size_t> classUse;
     std::vector<std::string> notes;
@@ -708,8 +728,117 @@ inline Result build(const Spec& S) {
     }
     rep.wallFaces = faces.size();
 
+    struct Photo { bool ok{false}; texture::ImageBuffer rgb, mask; };
+    std::map<int, Photo> photos;
+    auto photoOf = [&](int id) -> const Photo& {
+        auto it = photos.find(id);
+        if (it != photos.end()) return it->second;
+        Photo P;
+        auto im = S.planeImage.find(id);
+        if (im != S.planeImage.end()) {
+            const auto bytes = detail::readFile(im->second);
+            auto d = png::decode(bytes.data(), bytes.size(), png::OutputFormat::Rgb);
+            if (d.ok) { P.rgb = std::move(d.image); P.ok = true; }
+            auto mk = S.planeMask.find(id);
+            if (P.ok && mk != S.planeMask.end()) {
+                const auto mb = detail::readFile(mk->second);
+                auto md = png::decode(mb.data(), mb.size(), png::OutputFormat::Luma);
+                if (md.ok && md.image.width == P.rgb.width && md.image.height == P.rgb.height) P.mask = std::move(md.image);
+            }
+        }
+        return photos.emplace(id, std::move(P)).first->second;
+    };
+
+    // --- opening heads. Per plane photo, its window boxes grouped into types by size (3 px); a type of six or more is
+    // median-stacked into one exemplar (each crop with a margin of 0.6 of its width above the box and 0.2 to the sides,
+    // resampled to 32 x 48), sharper than any one window. Where the exemplar's opening reads apart from the wall beside it
+    // (12 grey levels or more), the opening's top boundary is traced in 16 columns across the box (from inside the
+    // opening up, the first two rows that read as the wall), and when that boundary varies by headMinM or more across
+    // the window the type's head is that curve (metres above the box top, smoothed): an arch, a point, a stepped head or
+    // anything else, no shape named. Photo-inferred.
+    std::map<int, std::vector<std::vector<double>>> heads;  // plane -> per window box, its head (16 samples) or empty
+    if (S.P.openingHeads) {
+        for (const auto& [id, rects] : S.windows) {
+            auto fit = frames.find(id);
+            if (fit == frames.end() || rects.size() < 6) continue;
+            const Photo& P = photoOf(id);
+            if (!P.ok) continue;
+            const double pix = fit->second->pixel;
+            auto lum = [&](double x, double y) -> double {
+                if (x < 0 || y < 0 || x >= P.rgb.width - 1 || y >= P.rgb.height - 1) return NAN;
+                const int xi = static_cast<int>(x), yi = static_cast<int>(y);
+                if (!P.mask.empty() && P.mask.data[P.mask.getIndex(xi, yi)] > 127) return NAN;
+                const size_t o = P.rgb.getIndex(xi, yi);
+                return 0.299 * P.rgb.data[o] + 0.587 * P.rgb.data[o + 1] + 0.114 * P.rgb.data[o + 2];
+            };
+            std::map<std::pair<long, long>, std::vector<size_t>> types;
+            for (size_t i = 0; i < rects.size(); ++i) types[{std::lround((rects[i].x1 - rects[i].x0) / 3), std::lround((rects[i].y1 - rects[i].y0) / 3)}].push_back(i);
+            auto& out = heads[id];
+            out.assign(rects.size(), {});
+            constexpr int NX = 32, NY = 48, NS = 16;
+            for (const auto& [key, members] : types) {
+                if (members.size() < 6) continue;
+                const double w = rects[members[0]].x1 - rects[members[0]].x0, h = rects[members[0]].y1 - rects[members[0]].y0;
+                if (w * pix < 0.4 || h * pix < 0.6) continue;
+                const double mTop = 0.6 * w, gx0 = -0.2 * w, gx1 = w * 1.2, gy0 = -mTop, gy1 = 0.5 * h;
+                std::vector<std::vector<double>> stack(NX * NY);
+                for (size_t m : members) {
+                    const auto& r = rects[m];
+                    for (int j = 0; j < NY; ++j) for (int i = 0; i < NX; ++i) {
+                        const double v = lum(r.x0 + gx0 + (gx1 - gx0) * (i + 0.5) / NX, r.y0 + gy0 + (gy1 - gy0) * (j + 0.5) / NY);
+                        if (!std::isnan(v)) stack[j * NX + i].push_back(v);
+                    }
+                }
+                std::vector<double> ex(NX * NY, NAN);
+                for (size_t k = 0; k < ex.size(); ++k) if (stack[k].size() >= 3) { auto& v = stack[k]; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); ex[k] = v[v.size() / 2]; }
+                auto colOf = [&](double fx) { return std::clamp(static_cast<int>((fx * w - gx0) / (gx1 - gx0) * NX), 0, NX - 1); };
+                auto rowOf = [&](double py) { return std::clamp(static_cast<int>((py - gy0) / (gy1 - gy0) * NY), 0, NY - 1); };
+                std::vector<double> inV, outV;
+                for (int j = rowOf(0.1 * h); j <= rowOf(0.45 * h); ++j) {
+                    for (int i = colOf(0.3); i <= colOf(0.7); ++i) if (!std::isnan(ex[j * NX + i])) inV.push_back(ex[j * NX + i]);
+                    for (int i = 0; i < colOf(-0.05); ++i) if (!std::isnan(ex[j * NX + i])) outV.push_back(ex[j * NX + i]);
+                    for (int i = colOf(1.05) + 1; i < NX; ++i) if (!std::isnan(ex[j * NX + i])) outV.push_back(ex[j * NX + i]);
+                }
+                if (inV.size() < 8 || outV.size() < 8) continue;
+                auto med = [](std::vector<double> v) { std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; };
+                const double li = med(inV), lo = med(outV);
+                if (std::abs(li - lo) < 12) continue;
+                std::vector<double> prof(NS, NAN);
+                int found = 0;
+                for (int k = 0; k < NS; ++k) {
+                    const int col = colOf((k + 0.5) / NS);
+                    int run = 0, yb = -1;
+                    for (int j = rowOf(0.3 * h); j >= 0; --j) {
+                        const double v = ex[j * NX + col];
+                        if (std::isnan(v)) { run = 0; continue; }
+                        if (std::abs(v - lo) < std::abs(v - li)) { if (++run == 2) { yb = j + 1; break; } } else run = 0;
+                    }
+                    if (yb < 0) { prof[k] = 1e9; continue; }  // never closed within the band above the box: an open strip, not a head
+                    const double py = gy0 + (gy1 - gy0) * (yb + 0.5) / NY;  // pixels below the box top (negative above)
+                    prof[k] = -py * pix;
+                    ++found;
+                }
+                if (found < 12) continue;
+                // a head closes: every column's boundary found below the band's top, and the wall right above the box's outer
+                // columns (two each side within headEdgeM of the box top); a dark strip running on up does neither
+                bool open = false; for (double x : prof) if (x >= 1e8) open = true;
+                if (open) continue;
+                if (std::max(std::abs(prof[0]), std::abs(prof[1])) > S.P.headEdgeM || std::max(std::abs(prof[NS - 1]), std::abs(prof[NS - 2])) > S.P.headEdgeM) continue;
+                // fill gaps from neighbours, smooth (median of three)
+                for (int k = 0; k < NS; ++k) if (std::isnan(prof[k])) { double a2 = NAN, b2 = NAN; for (int d = 1; d < NS && (std::isnan(a2) && std::isnan(b2)); ++d) { if (k - d >= 0) a2 = prof[k - d]; if (k + d < NS) b2 = prof[k + d]; } prof[k] = std::isnan(a2) ? b2 : std::isnan(b2) ? a2 : (a2 + b2) / 2; }
+                std::vector<double> sm(NS);
+                for (int k = 0; k < NS; ++k) { double a2 = prof[std::max(0, k - 1)], b2 = prof[k], c2 = prof[std::min(NS - 1, k + 1)]; sm[k] = std::max(std::min(a2, b2), std::min(std::max(a2, b2), c2)); }
+                const double lo2 = *std::min_element(sm.begin(), sm.end()), hi2 = *std::max_element(sm.begin(), sm.end());
+                if (hi2 - lo2 < S.P.headMinM || hi2 > 0.8 * w * pix) continue;
+                for (size_t m : members) out[m] = sm;
+                ++rep.headTypes; rep.headWindows += members.size();
+                rep.headRises.push_back(hi2 - lo2);
+            }
+        }
+    }
+
     // --- windows onto faces: each plane's boxes onto the face it stands on
-    struct Win { detail::R2 r; bool generated; std::vector<detail::R2> panes; int plane; };
+    struct Win { detail::R2 r; bool generated; std::vector<detail::R2> panes; int plane; std::vector<double> head; };
     std::vector<std::vector<Win>> faceWins(faces.size());
     for (const auto& [id, rects] : S.windows) rep.windowsGiven += rects.size();
     std::vector<int> ids;
@@ -755,7 +884,9 @@ inline Result build(const Spec& S) {
                     if (overlap || near) { hit = true; break; }
                 }
                 if (hit) { overlapped = true; continue; }
-                Win W{box, r.generated, {}, id};
+                std::vector<double> head;
+                { auto hi = heads.find(id); const size_t ri = static_cast<size_t>(&r - &rects[0]); if (hi != heads.end() && ri < hi->second.size()) head = hi->second[ri]; }
+                Win W{box, r.generated, {}, id, head};
                 for (const auto& pr : panes) {
                     const double cx = (pr.x0 + pr.x1) / 2, cy = (pr.y0 + pr.y1) / 2;
                     if (cx < r.x0 || cx > r.x1 || cy < r.y0 || cy > r.y1) continue;
@@ -949,7 +1080,7 @@ inline Result build(const Spec& S) {
                     if (!inside(box, c)) continue;
                     const auto L = labOf(c);
                     const double toWin = dE(L, refIn), toWall = dE(L, refWall);
-                    if (toWin <= S.P.continueMaxDeltaE && toWin < toWall) added.push_back(Win{box, true, {}, -1});
+                    if (toWin <= S.P.continueMaxDeltaE && toWin < toWall) added.push_back(Win{box, true, {}, -1, {}});
                 }
             }
         }
@@ -958,26 +1089,6 @@ inline Result build(const Spec& S) {
 
     // --- detail textures: a wall with windows from a photographed plane and a storey pitch gets one (FaceTex)
     std::vector<FaceTex> faceTex(faces.size());
-    struct Photo { bool ok{false}; texture::ImageBuffer rgb, mask; };
-    std::map<int, Photo> photos;
-    auto photoOf = [&](int id) -> const Photo& {
-        auto it = photos.find(id);
-        if (it != photos.end()) return it->second;
-        Photo P;
-        auto im = S.planeImage.find(id);
-        if (im != S.planeImage.end()) {
-            const auto bytes = detail::readFile(im->second);
-            auto d = png::decode(bytes.data(), bytes.size(), png::OutputFormat::Rgb);
-            if (d.ok) { P.rgb = std::move(d.image); P.ok = true; }
-            auto mk = S.planeMask.find(id);
-            if (P.ok && mk != S.planeMask.end()) {
-                const auto mb = detail::readFile(mk->second);
-                auto md = png::decode(mb.data(), mb.size(), png::OutputFormat::Luma);
-                if (md.ok && md.image.width == P.rgb.width && md.image.height == P.rgb.height) P.mask = std::move(md.image);
-            }
-        }
-        return photos.emplace(id, std::move(P)).first->second;
-    };
     std::vector<double> facePitch(faces.size(), 0);
     int facesUsedH = 0;
     std::vector<int> facePlane(faces.size(), -1);
@@ -1076,8 +1187,23 @@ inline Result build(const Spec& S) {
         FaceTex* T = faceTex[fi].ok ? &faceTex[fi] : nullptr;
         E.tex = T; E.texP0 = w.p0; E.texD = w.d;
         auto tint = [&](double a0, double a1, double h0, double h1, const Rgb& c) { if (T) T->tints.push_back({a0, a1, h0, h1, c}); };
+        // a window with a traced head: its opening runs up to the head's curve (the box top moved to the curve's lowest
+        // point, the curve's patch above it cut out of the wall and drawn below), when the patch stays clear of the wall's
+        // top and of every other window
+        std::vector<double> headTop(faceWins[fi].size(), NAN), headBase(faceWins[fi].size(), NAN);
+        for (size_t wi = 0; wi < faceWins[fi].size(); ++wi) {
+            const auto& W = faceWins[fi][wi];
+            if (W.head.size() < 2) continue;
+            const double lo = *std::min_element(W.head.begin(), W.head.end()), hi = *std::max_element(W.head.begin(), W.head.end());
+            const double base = W.r.h1 + lo, top = W.r.h1 + hi;
+            if (top > w.h1 - 0.05 || base < W.r.h0 + 0.3) continue;
+            bool clash = false;
+            for (size_t wj = 0; wj < faceWins[fi].size() && !clash; ++wj) if (wj != wi) { const auto& o = faceWins[fi][wj].r; clash = std::min(o.a1, W.r.a1) - std::max(o.a0, W.r.a0) > 0.01 && std::min(o.h1, top) - std::max(o.h0, W.r.h1) > 0.01; }
+            if (clash) continue;
+            headTop[wi] = top; headBase[wi] = base;
+        }
         std::vector<detail::R2> holes;
-        for (const auto& W : faceWins[fi]) holes.push_back(W.r);
+        for (size_t wi = 0; wi < faceWins[fi].size(); ++wi) { auto r = faceWins[fi][wi].r; if (!std::isnan(headTop[wi])) r.h1 = headTop[wi]; holes.push_back(r); }
         if (!holes.empty()) ++rep.facesWithWindows;
         // the face's median colour, the fallback for any cell the photo misses
         Rgb faceFallback = classColour(0);
@@ -1113,8 +1239,11 @@ inline Result build(const Spec& S) {
                 ++rep.wallCells;
             }
         }
-        for (const auto& W : faceWins[fi]) {
-            const auto& r = W.r;
+        for (size_t wi = 0; wi < faceWins[fi].size(); ++wi) {
+            const auto& W = faceWins[fi][wi];
+            const bool headed = !std::isnan(headTop[wi]);
+            detail::R2 r = W.r;
+            if (headed) r.h1 = headBase[wi];
             // reveals: the wall's colour just around the opening
             bool got;
             const Rgb ring = colourOf(at(r.a0 - 0.15, r.h0 - 0.15, 0), w.d * (r.a1 - r.a0 + 0.3), P3{0, r.h1 - r.h0 + 0.3, 0}, w.n, faceFallback, got);
@@ -1124,9 +1253,35 @@ inline Result build(const Spec& S) {
             E.quad(openings, rm, at(r.a0, r.h0, 0), at(r.a0, r.h1, 0), at(r.a0, r.h1, D), at(r.a0, r.h0, D), inL, ring, w.n, up);
             E.quad(openings, rm, at(r.a1, r.h1, 0), at(r.a1, r.h0, 0), at(r.a1, r.h0, D), at(r.a1, r.h1, D), inR, ring, w.n, up);
             E.quad(openings, rm, at(r.a1, r.h0, 0), at(r.a0, r.h0, 0), at(r.a0, r.h0, D), at(r.a1, r.h0, D), inB, ring, w.d, w.n);
-            E.quad(openings, rm, at(r.a0, r.h1, 0), at(r.a1, r.h1, 0), at(r.a1, r.h1, D), at(r.a0, r.h1, D), inT, ring, w.d, w.n);
-            // panes (glass) and the frame between them, at the reveal's depth
-            const std::vector<detail::R2> panes = W.panes.empty() ? std::vector<detail::R2>{r} : W.panes;
+            if (!headed) E.quad(openings, rm, at(r.a0, r.h1, 0), at(r.a1, r.h1, 0), at(r.a1, r.h1, D), at(r.a0, r.h1, D), inT, ring, w.d, w.n);
+            if (headed) {
+                // the head: strips across the window between its traced points, glass below the curve at the reveal's depth,
+                // wall above it, a reveal along it and down its two ends
+                const auto& hd = W.head;
+                const int NS = static_cast<int>(hd.size());
+                std::vector<std::pair<double, double>> curve{{r.a0, W.r.h1 + hd.front()}};
+                for (int k = 0; k < NS; ++k) curve.push_back({r.a0 + (r.a1 - r.a0) * (k + 0.5) / NS, W.r.h1 + hd[k]});
+                curve.push_back({r.a1, W.r.h1 + hd.back()});
+                const double base = headBase[wi], top = headTop[wi];
+                bool g2;
+                const Rgb glassC = colourOf(at(r.a0, base, D), w.d * (r.a1 - r.a0), P3{0, top - base, 0}, w.n, Rgb{0.05, 0.06, 0.07}, g2);
+                for (size_t k = 0; k + 1 < curve.size(); ++k) {
+                    const double xa = curve[k].first, xb = curve[k + 1].first, ya = std::max(base, curve[k].second), yb = std::max(base, curve[k + 1].second);
+                    if (xb - xa < 1e-4) continue;
+                    if (std::max(ya, yb) > base + 1e-3) E.quad(openings, E.glassMat, at(xa, base, D), at(xb, base, D), at(xb, yb, D), at(xa, ya, D), w.n, glassC, w.d, P3{0, -1, 0});
+                    if (top - std::min(ya, yb) > 1e-3) E.quad(openings, rm, at(xa, ya, 0), at(xb, yb, 0), at(xb, top, 0), at(xa, top, 0), w.n, ring, w.d, P3{0, -1, 0});
+                    P3 nr = sp::cross(at(xb, yb, 0) - at(xa, ya, 0), w.n); const double L = sp::len(nr);
+                    if (L > 1e-9) { nr = nr * (1 / L); if (nr.y > 0) nr = nr * -1.0; E.quad(openings, rm, at(xa, ya, 0), at(xb, yb, 0), at(xb, yb, D), at(xa, ya, D), nr, ring, w.d, w.n); }
+                }
+                const double yA = std::max(base, curve.front().second), yB = std::max(base, curve.back().second);
+                if (yA > base + 1e-3) E.quad(openings, rm, at(r.a0, base, 0), at(r.a0, yA, 0), at(r.a0, yA, D), at(r.a0, base, D), inL, ring, w.n, up);
+                if (yB > base + 1e-3) E.quad(openings, rm, at(r.a1, yB, 0), at(r.a1, base, 0), at(r.a1, base, D), at(r.a1, yB, D), inR, ring, w.n, up);
+                ++rep.headsDrawn;
+            }
+            // panes (glass) and the frame between them, at the reveal's depth (inside the box below the head)
+            std::vector<detail::R2> panesClipped;
+            for (auto q : W.panes) { q.h1 = std::min(q.h1, r.h1); if (q.h1 - q.h0 > 0.05) panesClipped.push_back(q); }
+            const std::vector<detail::R2> panes = panesClipped.empty() ? std::vector<detail::R2>{r} : panesClipped;
             std::vector<FaceTex::Tint> panesTint;
             for (const auto& p : panes) {
                 const Rgb g = colourOf(at(p.a0, p.h0, D), w.d * (p.a1 - p.a0), P3{0, p.h1 - p.h0, 0}, w.n, Rgb{0.05, 0.06, 0.07}, got);
@@ -1134,8 +1289,8 @@ inline Result build(const Spec& S) {
                 E.quad(openings, E.glassMat, at(p.a0, p.h0, D), at(p.a1, p.h0, D), at(p.a1, p.h1, D), at(p.a0, p.h1, D), w.n, g, w.d, P3{0, -1, 0});
                 ++rep.panesPlaced;
             }
-            if (!W.panes.empty()) {
-                const auto frame = detail::subtractHoles(r, W.panes);
+            if (!panesClipped.empty()) {
+                const auto frame = detail::subtractHoles(r, panesClipped);
                 if (!frame.empty()) {
                     // one colour for the frame: the photo over the whole opening's frame strips
                     std::vector<double> cr, cg, cb;
@@ -1356,6 +1511,7 @@ inline Result build(const Spec& S) {
     struct ShellRing { double z0, z1; std::vector<double> r, r1; };
     std::vector<ShellRing> shellRings;  // the slender top's steps, for the scan detail's distance to the shell
     int shellK = 0; double shellAu = 0, shellAv = 0;
+    std::vector<std::pair<double, double>> finSpans;  // the height spans whose fins the angular profile drew
     // --- the slender top, axis-locked. One vertical axis for the whole top: the median of the per-slice circle fits (Kasa,
     // slices whose fitted radius is at least 1.5 m: a thin antenna's fit wanders). Each 1 m slice's radius is read in
     // `sectors` sectors about it (95th percentile), smoothed to `harmonics` Fourier terms. The top's order of rotational
@@ -1502,8 +1658,160 @@ inline Result build(const Spec& S) {
         }
         rep.slenderBands = bands.size();
         if (!bands.empty()) slenderFoot = {*std::max_element(bands[0].r.begin(), bands[0].r.end()), au, av};
-        for (const auto& b : bands) shellRings.push_back({b.z0, b.z1, b.r, b.r1});
         shellK = K; shellAu = au; shellAv = av;
+
+        // fins, flutes and ribs: each step's angular profile stacked over its height. Dense samples of the scan (100 per
+        // m^2) in the step's height span; each sample's excess beyond the step's ring at its height and angle (the ring's
+        // polygon, its taper); per 0.5 degree bin the 85th percentile of the excess (the outermost surface the bin's
+        // samples agree on). When the profile repeats around the axis (its autocorrelation at a lag of 2 to 90 degrees at
+        // least finMinCorr: the strongest harmonic above the ring's carries that share of the excess's power), it is folded: the n copies averaged into one exemplar and drawn
+        // n times; else drawn as it is. Bins at least finMinM beyond the ring become radial blocks from the ring out,
+        // consecutive bins within 5 cm one block. Measured (stacked, folded); far finer than the scan's triangles.
+        if (S.P.slenderFins) {
+            constexpr int NB = 720;
+            std::vector<P3> fs;  // frame (u, h, v)
+            {
+                std::mt19937 rng(17);
+                std::uniform_real_distribution<double> U(0, 1);
+                for (size_t ti = 0; ti < R.building.size(); ++ti) {
+                    const P3 a = R.building.p[3 * ti], b = R.building.p[3 * ti + 1], c = R.building.p[3 * ti + 2];
+                    if (std::max({a.y, b.y, c.y}) < slenderH) continue;
+                    const double area = sp::len(sp::cross(b - a, c - a)) / 2;
+                    const int n = std::max(1, static_cast<int>(std::ceil(area * 100)));
+                    for (int k = 0; k < n; ++k) { double r1 = U(rng), r2 = U(rng); if (r1 + r2 > 1) { r1 = 1 - r1; r2 = 1 - r2; } fs.push_back(a + (b - a) * r1 + (c - a) * r2); }
+                }
+            }
+            // the ring's radius along the ray at angle th (its polygon through the sector boundaries), at height h
+            auto ringAt = [&](const Ring& b, double th, double h) {
+                const double t = b.z1 > b.z0 ? std::clamp((h - b.z0) / (b.z1 - b.z0), 0.0, 1.0) : 0.0;
+                const double pos = (th + kPi) / (2 * kPi) * K;
+                const int s0 = static_cast<int>(std::floor(pos)) % K;
+                auto bound = [&](int s2) { s2 = ((s2 % K) + K) % K; return (1 - t) * (b.r[(s2 - 1 + K) % K] + b.r[s2]) / 2 + t * (b.r1[(s2 - 1 + K) % K] + b.r1[s2]) / 2; };
+                const double ta = -kPi + 2 * kPi * s0 / K, tb = ta + 2 * kPi / K;
+                const double ra = bound(s0), rb = bound(s0 + 1);
+                const double ax2 = ra * std::cos(ta), ay2 = ra * std::sin(ta), bx2 = rb * std::cos(tb), by2 = rb * std::sin(tb);
+                const double dx = std::cos(th), dy = std::sin(th);
+                // ray (dx, dy) * r meets segment a + (b - a) s
+                const double ex = bx2 - ax2, ey = by2 - ay2, den = dx * ey - dy * ex;
+                if (std::abs(den) < 1e-12) return ra;
+                return (ax2 * ey - ay2 * ex) / den;
+            };
+            for (auto& b : bands) {
+                if (b.z1 - b.z0 < 2.0) continue;
+                double meanR = 0; for (double x : b.r) meanR += x; meanR /= K;
+                if (meanR < 1.5) continue;
+                std::vector<std::vector<float>> bins(NB);
+                for (const auto& q : fs) {
+                    if (q.y < b.z0 || q.y > b.z1) continue;
+                    const double du = q.x - au, dv = q.z - av, th = std::atan2(dv, du);
+                    const int bi = std::clamp(static_cast<int>((th + kPi) / (2 * kPi) * NB), 0, NB - 1);
+                    bins[bi].push_back(static_cast<float>(std::hypot(du, dv) - ringAt(b, th, q.y)));
+                }
+                std::vector<double> e(NB, NAN);
+                for (int i = 0; i < NB; ++i) if (bins[i].size() >= 6) {
+                    auto& v = bins[i];
+                    std::nth_element(v.begin(), v.begin() + static_cast<long>(0.85 * (v.size() - 1)), v.end());
+                    e[i] = v[static_cast<size_t>(0.85 * (v.size() - 1))];
+                }
+                // the period: the ring holds the step's shape up to `harmonics` lobes, so ribs and flutes are what repeats
+                // faster: the strongest harmonic of the excess from harmonics + 1 to 180 lobes, kept when it carries at least
+                // finMinCorr of that band's power (the excess's gaps filled with its median first)
+                int bestN = 0; double bestC = 0;
+                {
+                    std::vector<double> v; for (double x : e) if (!std::isnan(x)) v.push_back(x);
+                    if (v.size() > NB * 3 / 4) {
+                        std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+                        const double medE = v[v.size() / 2];
+                        std::vector<double> f(NB); for (int i = 0; i < NB; ++i) f[i] = std::isnan(e[i]) ? medE : e[i] - medE;
+                        double total = 0; std::vector<double> pw(181, 0);
+                        for (int m = S.P.harmonics + 1; m <= 180; ++m) {
+                            double cr = 0, ci = 0;
+                            for (int i = 0; i < NB; ++i) { const double th = 2 * kPi * m * i / NB; cr += f[i] * std::cos(th); ci += f[i] * std::sin(th); }
+                            pw[m] = cr * cr + ci * ci; total += pw[m];
+                        }
+                        for (int m = S.P.harmonics + 1; m <= 180; ++m) if (total > 0 && pw[m] / total > bestC) { bestC = pw[m] / total; bestN = m; }
+                    }
+                }
+                std::vector<double> prof = e;
+                int copies = 1;
+                {
+                    std::vector<double> v; for (double x : e) if (!std::isnan(x)) v.push_back(x);
+                    std::sort(v.begin(), v.end());
+                    char buf[200];
+                    std::snprintf(buf, sizeof buf, "fins: step %.1f-%.1f m r %.2f: %zu bins, excess p10 %.2f p50 %.2f p90 %.2f, period %d corr %.2f", b.z0, b.z1, meanR, v.size(), v.empty() ? 0.0 : v[v.size() / 10], v.empty() ? 0.0 : v[v.size() / 2], v.empty() ? 0.0 : v[v.size() * 9 / 10], bestN, bestC);
+                    rep.notes.push_back(buf);
+                }
+                if (bestN >= 2 && bestC >= S.P.finMinCorr) {
+                    // folded: each bin the mean over the n rotations
+                    copies = bestN;
+                    for (int i = 0; i < NB; ++i) {
+                        double sum = 0; int m = 0;
+                        for (int k = 0; k < bestN; ++k) { const double x = e[(i + static_cast<int>(std::lround(static_cast<double>(k) * NB / bestN))) % NB]; if (!std::isnan(x)) { sum += x; ++m; } }
+                        prof[i] = m * 2 >= bestN ? sum / m : NAN;
+                    }
+                }
+                // the ring is the step's outer envelope: regular ribs read as grooves between their tips. Grooves deeper
+                // than finMinM (the folded profile's 10th percentile), where the ribs' harmonic carries a quarter of the
+                // power or more, pull the step's core in to their floor (half a metre at most), and the ribs stand out of it
+                {
+                    std::vector<double> v; for (double x : prof) if (!std::isnan(x)) v.push_back(x);
+                    if (v.size() > NB / 2) {
+                        std::nth_element(v.begin(), v.begin() + v.size() / 10, v.end());
+                        const double low = v[v.size() / 10];
+                        if (low < -S.P.finMinM && copies > 1 && bestC >= 0.25) {
+                            const double pull = std::max(low, -0.5);  // at most half a metre: a deeper low is the step's shape, not its grooves
+                            for (auto& x : b.r) x = std::max(0.05, x + pull);
+                            for (auto& x : b.r1) x = std::max(0.05, x + pull);
+                            for (auto& x : prof) if (!std::isnan(x)) x -= pull;
+                        }
+                    }
+                }
+                // the blocks: runs of bins at least finMinM out, within 5 cm of the run's start
+                bool any = false;
+                const double binA = 2 * kPi / NB;
+                for (int i = 0; i < NB;) {
+                    if (std::isnan(prof[i]) || prof[i] < S.P.finMinM || prof[i] > 4) { ++i; continue; }
+                    int j = i + 1;
+                    while (j < NB && !std::isnan(prof[j]) && prof[j] >= S.P.finMinM && std::abs(prof[j] - prof[i]) < 0.05) ++j;
+                    double ex = 0; for (int k = i; k < j; ++k) ex += prof[k]; ex /= (j - i);
+                    const double th0 = -kPi + i * binA, th1 = -kPi + j * binA;
+                    auto pt = [&](double th, double h, double off) { const double rr = ringAt(b, th, h) + off; double x, z; F.toXZ(au + rr * std::cos(th), av + rr * std::sin(th), x, z); return P3{x, S.groundY + h, z}; };
+                    const P3 up{0, 1, 0};
+                    bool got;
+                    const P3 m0 = pt((th0 + th1) / 2, (b.z0 + b.z1) / 2, ex);
+                    double cx, cz; F.toXZ(au, av, cx, cz);
+                    P3 nOut{m0.x - cx, 0, m0.z - cz}; nOut = nOut * (1.0 / std::max(1e-9, sp::len(nOut)));
+                    const Rgb col = colourOf(pt(th0, b.z0, ex + 0.05), pt(th1, b.z0, ex) - pt(th0, b.z0, ex), P3{0, b.z1 - b.z0, 0}, nOut, classColour(0), got);
+                    const int mt = E.classOf(col);
+                    const int nh = std::max(1, static_cast<int>(std::ceil((b.z1 - b.z0) / 3.0)));
+                    // the copies drawn here are the fold's rotations (one when the profile was not folded and the run is the profile itself)
+                    if (copies == 1 || i < NB / copies) {
+                        for (int k = 0; k < copies; ++k) {
+                            const double rot = 2 * kPi * k / copies;
+                            const double a0 = th0 + rot, a1 = th1 + rot;
+                            for (int jh = 0; jh < nh; ++jh) {
+                                const double h0 = b.z0 + (b.z1 - b.z0) * jh / nh, h1 = b.z0 + (b.z1 - b.z0) * (jh + 1) / nh;
+                                const P3 o00 = pt(a0, h0, ex), o10 = pt(a1, h0, ex), o11 = pt(a1, h1, ex), o01 = pt(a0, h1, ex);
+                                const P3 i00 = pt(a0, h0, 0), i10 = pt(a1, h0, 0), i11 = pt(a1, h1, 0), i01 = pt(a0, h1, 0);
+                                const P3 mo = (o00 + o11) * 0.5; P3 no{mo.x - cx, 0, mo.z - cz}; no = no * (1.0 / std::max(1e-9, sp::len(no)));
+                                E.quad(slender, mt, o00, o10, o11, o01, no, col, o10 - o00, up);
+                                P3 s0 = sp::cross(up, o00 - i00); s0 = s0 * (-1.0 / std::max(1e-9, sp::len(s0)));
+                                P3 s1 = sp::cross(up, o10 - i10); s1 = s1 * (1.0 / std::max(1e-9, sp::len(s1)));
+                                E.quad(slender, mt, i00, o00, o01, i01, s0, col, o00 - i00, up);
+                                E.quad(slender, mt, i10, i11, o11, o10, s1, col, o10 - i10, up);
+                                if (jh == nh - 1) E.quad(slender, mt, i01, o01, o11, i11, up, col, P3{1, 0, 0}, P3{0, 0, 1});
+                                if (jh == 0) E.quad(slender, mt, i00, i10, o10, o00, up * -1.0, col, P3{1, 0, 0}, P3{0, 0, 1});
+                            }
+                            ++rep.finSegments;
+                        }
+                        any = true;
+                    }
+                    i = j;
+                }
+                if (any) { ++rep.finBands; rep.finCount += copies; finSpans.push_back({b.z0, b.z1}); }
+            }
+        }
+        for (const auto& b : bands) shellRings.push_back({b.z0, b.z1, b.r, b.r1});  // after the fins (a fluted step's core moves in)
         auto ringPt = [&](const Ring& b, int s, double h) {
             const double th = -kPi + 2 * kPi * s / K;  // sector boundaries
             const double t = b.z1 > b.z0 ? std::clamp((h - b.z0) / (b.z1 - b.z0), 0.0, 1.0) : 0.0;  // the step's taper
@@ -1562,6 +1870,173 @@ inline Result build(const Spec& S) {
         }
     }
 
+    // --- the procedural shell's distance from a point outside it (frame u, h, v), shared by the surface fit and the scan detail
+    auto insideTier = [&](const sp::TierOut* t, double u, double v) { bool in = false; for (const auto& l : t->loopsUV) if (detail::inRingXZ(u, v, l)) in = !in; return in; };
+    auto planDist = [&](const sp::TierOut* t, double u, double v) {
+        double best = 1e30;
+        for (const auto& l : t->loopsUV) for (size_t k = 0; k < l.size(); ++k) {
+            const P2 a = l[k], b = l[(k + 1) % l.size()];
+            const double du = b.u - a.u, dv = b.v - a.v, L2 = du * du + dv * dv;
+            const double tt = L2 > 0 ? std::clamp(((u - a.u) * du + (v - a.v) * dv) / L2, 0.0, 1.0) : 0;
+            best = std::min(best, std::hypot(u - a.u - tt * du, v - a.v - tt * dv));
+        }
+        return best;
+    };
+    const double topShell = tiers.empty() ? 0 : tiers.back()->topY;
+    auto outside = [&](const P3& q) {  // q: frame (u, h, v)
+        const double u = q.x, h = q.y, v = q.z;
+        if (slenderH >= 0 && h >= slenderH && !shellRings.empty()) {
+            const ShellRing* R0 = nullptr;
+            for (const auto& r : shellRings) if (h >= r.z0 - 1e-6 && h <= r.z1 + 1e-6) { R0 = &r; break; }
+            if (!R0) return h - shellRings.back().z1;  // above the top
+            const double du = u - shellAu, dv = v - shellAv;
+            const int sct = ((static_cast<int>(std::floor((std::atan2(dv, du) + kPi) / (2 * kPi) * shellK)) % shellK) + shellK) % shellK;
+            const double t = R0->z1 > R0->z0 ? std::clamp((h - R0->z0) / (R0->z1 - R0->z0), 0.0, 1.0) : 0;
+            return std::hypot(du, dv) - ((1 - t) * R0->r[sct] + t * R0->r1[sct]);
+        }
+        // the tier at this height
+        const sp::TierOut* at = nullptr;
+        for (const auto* t : tiers) if (h >= t->baseY - 1e-6 && h <= t->topY + 1e-6) at = t;
+        double d = 1e30;
+        if (at) { if (insideTier(at, u, v)) return -1.0; d = planDist(at, u, v); }
+        else if (h > topShell) d = 1e30;
+        // above the roof of the highest tier below whose outline holds it
+        for (auto it = tiers.rbegin(); it != tiers.rend(); ++it) if ((*it)->topY <= h + 1e-6 && insideTier(*it, u, v)) { d = std::min(d, h - (*it)->topY); break; }
+        return d >= 1e29 ? 0.0 : d;
+    };
+
+    // --- surface fit for irregular leftovers (with the relief maps). Connected pieces of the scan standing reliefM or more
+    // off the shell, of 0.5 to 40 m^2, at least 1.5 m tall and not flat (their samples' smallest principal spread at least
+    // a tenth of the largest) are what no operator describes (a statue, a sculpted finial). Each is rebuilt as a closed
+    // surface fitted to its points: the signed distance to the piece's triangles (signed by the nearest one's normal) on a
+    // 0.15 m grid, meshed by surface nets. A new surface from the measurements, not the scan's triangles; measured.
+    std::vector<std::array<double, 6>> fitBoxes;  // the pieces' boxes (frame u, h, v min / max): the roof blocks and wall relief keep out
+    if (S.P.reliefM > 0 && S.P.surfaceFit && S.P.scanDetailM <= 0 && R.building.size()) {
+        const size_t T = R.building.size();
+        std::vector<uint8_t> keep(T, 0);
+        for (size_t t = 0; t < T; ++t) {
+            const P3 c = (R.building.p[3 * t] + R.building.p[3 * t + 1] + R.building.p[3 * t + 2]) * (1.0 / 3);
+            if (outside(c) >= S.P.reliefM) keep[t] = 1;
+        }
+        std::unordered_map<uint64_t, std::vector<uint32_t>> byVert;
+        auto vkey = [](const P3& q) { auto r = [](double x) { return static_cast<uint64_t>(static_cast<int64_t>(std::llround(x * 1000)) & 0x1FFFFF); }; return (r(q.x) << 42) | (r(q.y) << 21) | r(q.z); };
+        for (size_t t = 0; t < T; ++t) if (keep[t]) for (int k = 0; k < 3; ++k) byVert[vkey(R.building.p[3 * t + k])].push_back(static_cast<uint32_t>(t));
+        std::vector<int> comp(T, -1);
+        const double G2 = 0.15;
+        for (size_t t0 = 0; t0 < T; ++t0) {
+            if (!keep[t0] || comp[t0] >= 0) continue;
+            std::vector<uint32_t> piece{static_cast<uint32_t>(t0)}; comp[t0] = 0;
+            double area = 0; P3 lo{1e30, 1e30, 1e30}, hi{-1e30, -1e30, -1e30};
+            for (size_t q = 0; q < piece.size(); ++q) {
+                const uint32_t t = piece[q];
+                const P3 a = R.building.p[3 * t], b = R.building.p[3 * t + 1], c = R.building.p[3 * t + 2];
+                area += sp::len(sp::cross(b - a, c - a)) / 2;
+                for (const P3& v : {a, b, c}) { lo = {std::min(lo.x, v.x), std::min(lo.y, v.y), std::min(lo.z, v.z)}; hi = {std::max(hi.x, v.x), std::max(hi.y, v.y), std::max(hi.z, v.z)}; }
+                for (int k = 0; k < 3; ++k) for (uint32_t nb : byVert[vkey(R.building.p[3 * t + k])]) if (comp[nb] < 0) { comp[nb] = 0; piece.push_back(nb); }
+            }
+            if (area < 0.5 || area > 40 || hi.y - lo.y < 1.5) continue;
+            // flatness: the principal spreads of the triangle centroids
+            {
+                P3 m{0, 0, 0}; for (uint32_t t : piece) m = m + (R.building.p[3 * t] + R.building.p[3 * t + 1] + R.building.p[3 * t + 2]) * (1.0 / 3);
+                m = m * (1.0 / piece.size());
+                double C3[3][3] = {{0}};
+                for (uint32_t t : piece) { const P3 c = (R.building.p[3 * t] + R.building.p[3 * t + 1] + R.building.p[3 * t + 2]) * (1.0 / 3) - m; const double v[3] = {c.x, c.y, c.z}; for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) C3[i][j] += v[i] * v[j]; }
+                // eigenvalues of the symmetric 3x3 (closed form)
+                const double p1 = C3[0][1] * C3[0][1] + C3[0][2] * C3[0][2] + C3[1][2] * C3[1][2];
+                const double q3 = (C3[0][0] + C3[1][1] + C3[2][2]) / 3;
+                const double p2 = (C3[0][0] - q3) * (C3[0][0] - q3) + (C3[1][1] - q3) * (C3[1][1] - q3) + (C3[2][2] - q3) * (C3[2][2] - q3) + 2 * p1;
+                const double pp = std::sqrt(std::max(1e-18, p2 / 6));
+                double Bm[3][3]; for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) Bm[i][j] = (C3[i][j] - (i == j ? q3 : 0)) / pp;
+                const double detB = Bm[0][0] * (Bm[1][1] * Bm[2][2] - Bm[1][2] * Bm[2][1]) - Bm[0][1] * (Bm[1][0] * Bm[2][2] - Bm[1][2] * Bm[2][0]) + Bm[0][2] * (Bm[1][0] * Bm[2][1] - Bm[1][1] * Bm[2][0]);
+                const double phi = std::acos(std::clamp(detB / 2, -1.0, 1.0)) / 3;
+                const double e1 = q3 + 2 * pp * std::cos(phi), e3 = q3 + 2 * pp * std::cos(phi + 2 * kPi / 3);
+                if (e1 <= 0 || e3 / e1 < 0.01) continue;  // flat: a relief block's, not a surface's
+            }
+            // the signed distance on the grid, then surface nets
+            lo = lo - P3{0.3, 0.3, 0.3}; hi = hi + P3{0.3, 0.3, 0.3};
+            const int nx = static_cast<int>(std::ceil((hi.x - lo.x) / G2)) + 1, ny = static_cast<int>(std::ceil((hi.y - lo.y) / G2)) + 1, nz = static_cast<int>(std::ceil((hi.z - lo.z) / G2)) + 1;
+            if (static_cast<double>(nx) * ny * nz > 3e6) continue;
+            // a bucket grid of the piece's triangles (0.6 m)
+            const double bc = 0.6;
+            std::unordered_map<uint64_t, std::vector<uint32_t>> bucket;
+            auto bk = [&](int a, int b, int c) { return (static_cast<uint64_t>(a & 0x1FFFFF) << 42) | (static_cast<uint64_t>(b & 0x1FFFFF) << 21) | static_cast<uint64_t>(c & 0x1FFFFF); };
+            for (uint32_t t : piece) {
+                P3 tl{1e30, 1e30, 1e30}, th{-1e30, -1e30, -1e30};
+                for (int k = 0; k < 3; ++k) { const P3 v = R.building.p[3 * t + k]; tl = {std::min(tl.x, v.x), std::min(tl.y, v.y), std::min(tl.z, v.z)}; th = {std::max(th.x, v.x), std::max(th.y, v.y), std::max(th.z, v.z)}; }
+                for (int a = static_cast<int>(std::floor((tl.x - lo.x) / bc)); a <= static_cast<int>(std::floor((th.x - lo.x) / bc)); ++a)
+                    for (int b = static_cast<int>(std::floor((tl.y - lo.y) / bc)); b <= static_cast<int>(std::floor((th.y - lo.y) / bc)); ++b)
+                        for (int c = static_cast<int>(std::floor((tl.z - lo.z) / bc)); c <= static_cast<int>(std::floor((th.z - lo.z) / bc)); ++c) bucket[bk(a, b, c)].push_back(t);
+            }
+            auto closestOn = [&](const P3& p, uint32_t t, P3& q) {
+                const P3 a = R.building.p[3 * t], b = R.building.p[3 * t + 1], c = R.building.p[3 * t + 2];
+                const P3 ab = b - a, ac = c - a, ap = p - a;
+                const double d1 = sp::dot(ab, ap), d2 = sp::dot(ac, ap);
+                if (d1 <= 0 && d2 <= 0) { q = a; return; }
+                const P3 bp = p - b; const double d3 = sp::dot(ab, bp), d4 = sp::dot(ac, bp);
+                if (d3 >= 0 && d4 <= d3) { q = b; return; }
+                const double vc = d1 * d4 - d3 * d2;
+                if (vc <= 0 && d1 >= 0 && d3 <= 0) { q = a + ab * (d1 / (d1 - d3)); return; }
+                const P3 cp = p - c; const double d5 = sp::dot(ab, cp), d6 = sp::dot(ac, cp);
+                if (d6 >= 0 && d5 <= d6) { q = c; return; }
+                const double vb = d5 * d2 - d1 * d6;
+                if (vb <= 0 && d2 >= 0 && d6 <= 0) { q = a + ac * (d2 / (d2 - d6)); return; }
+                const double va = d3 * d6 - d5 * d4;
+                if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) { q = b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6))); return; }
+                const double den = 1 / (va + vb + vc); q = a + ab * (vb * den) + ac * (vc * den);
+            };
+            std::vector<float> sd(static_cast<size_t>(nx) * ny * nz, 1e3f);
+            auto idx = [&](int i, int j, int k) { return (static_cast<size_t>(k) * ny + j) * nx + i; };
+            for (int k = 0; k < nz; ++k) for (int j = 0; j < ny; ++j) for (int i = 0; i < nx; ++i) {
+                const P3 p{lo.x + i * G2, lo.y + j * G2, lo.z + k * G2};
+                const int a0 = static_cast<int>(std::floor((p.x - lo.x) / bc)), b0 = static_cast<int>(std::floor((p.y - lo.y) / bc)), c0 = static_cast<int>(std::floor((p.z - lo.z) / bc));
+                double best = 1e30; int bt = -1; P3 bq;
+                for (int a = a0 - 1; a <= a0 + 1; ++a) for (int b = b0 - 1; b <= b0 + 1; ++b) for (int c = c0 - 1; c <= c0 + 1; ++c) {
+                    auto it = bucket.find(bk(a, b, c)); if (it == bucket.end()) continue;
+                    for (uint32_t t : it->second) { P3 q; closestOn(p, t, q); const double d = sp::dot(p - q, p - q); if (d < best) { best = d; bt = static_cast<int>(t); bq = q; } }
+                }
+                if (bt < 0) continue;  // far from the piece: outside
+                const P3 a = R.building.p[3 * bt], b = R.building.p[3 * bt + 1], c = R.building.p[3 * bt + 2];
+                P3 n = sp::cross(b - a, c - a); const double L = sp::len(n); if (L < 1e-12) continue; n = n * (1 / L);
+                const double dist = std::sqrt(best);
+                sd[idx(i, j, k)] = static_cast<float>(sp::dot(p - bq, n) >= 0 ? dist : -dist);
+            }
+            // surface nets: a vertex per cell the surface crosses, a quad per crossed edge
+            std::unordered_map<size_t, P3> cellV;
+            auto cellIdx = [&](int i, int j, int k) { return (static_cast<size_t>(k) * ny + j) * nx + i; };
+            for (int k = 0; k + 1 < nz; ++k) for (int j = 0; j + 1 < ny; ++j) for (int i = 0; i + 1 < nx; ++i) {
+                P3 acc{0, 0, 0}; int n = 0;
+                static const int E12[12][2][3] = {{{0,0,0},{1,0,0}},{{0,1,0},{1,1,0}},{{0,0,1},{1,0,1}},{{0,1,1},{1,1,1}},{{0,0,0},{0,1,0}},{{1,0,0},{1,1,0}},{{0,0,1},{0,1,1}},{{1,0,1},{1,1,1}},{{0,0,0},{0,0,1}},{{1,0,0},{1,0,1}},{{0,1,0},{0,1,1}},{{1,1,0},{1,1,1}}};
+                for (const auto& e : E12) {
+                    const float va = sd[idx(i + e[0][0], j + e[0][1], k + e[0][2])], vb = sd[idx(i + e[1][0], j + e[1][1], k + e[1][2])];
+                    if ((va < 0) == (vb < 0)) continue;
+                    const double t = va / (va - vb);
+                    acc = acc + P3{lo.x + (i + e[0][0] + t * (e[1][0] - e[0][0])) * G2, lo.y + (j + e[0][1] + t * (e[1][1] - e[0][1])) * G2, lo.z + (k + e[0][2] + t * (e[1][2] - e[0][2])) * G2};
+                    ++n;
+                }
+                if (n) cellV[cellIdx(i, j, k)] = acc * (1.0 / n);
+            }
+            size_t quads = 0;
+            auto emit = [&](const P3& a, const P3& b, const P3& c, const P3& d, bool flip) {
+                P3 A = F.toTile(a), B = F.toTile(b), C2 = F.toTile(c), D2 = F.toTile(d);
+                if (flip) std::swap(B, D2);
+                P3 n = sp::cross(B - A, C2 - A); const double L = sp::len(n); if (L < 1e-12) return; n = n * (1 / L);
+                bool got;
+                const Rgb col = colourOf(A, B - A, D2 - A, n, classColour(0), got);
+                E.quad(scanDet, E.classOf(col), A, B, C2, D2, n, col, P3{1, 0, 0}, P3{0, 1, 0});
+                ++quads;
+            };
+            auto cv = [&](int i, int j, int k, P3& out2) { auto it = cellV.find(cellIdx(i, j, k)); if (it == cellV.end()) return false; out2 = it->second; return true; };
+            for (int k = 1; k + 1 < nz; ++k) for (int j = 1; j + 1 < ny; ++j) for (int i = 1; i + 1 < nx; ++i) {
+                const float v0 = sd[idx(i, j, k)];
+                // the x edge (i, j, k)-(i+1, j, k): cells (i, j-1..j, k-1..k)
+                if (i + 1 < nx) { const float v1 = sd[idx(i + 1, j, k)]; if ((v0 < 0) != (v1 < 0)) { P3 a, b, c, d; if (cv(i, j - 1, k - 1, a) && cv(i, j, k - 1, b) && cv(i, j, k, c) && cv(i, j - 1, k, d)) emit(a, b, c, d, v0 < 0); } }
+                if (j + 1 < ny) { const float v1 = sd[idx(i, j + 1, k)]; if ((v0 < 0) != (v1 < 0)) { P3 a, b, c, d; if (cv(i - 1, j, k - 1, a) && cv(i - 1, j, k, b) && cv(i, j, k, c) && cv(i, j, k - 1, d)) emit(a, b, c, d, v0 < 0); } }
+                if (k + 1 < nz) { const float v1 = sd[idx(i, j, k + 1)]; if ((v0 < 0) != (v1 < 0)) { P3 a, b, c, d; if (cv(i - 1, j - 1, k, a) && cv(i, j - 1, k, b) && cv(i, j, k, c) && cv(i - 1, j, k, d)) emit(a, b, c, d, v0 < 0); } }
+            }
+            if (quads) { ++rep.surfacePieces; rep.surfaceQuads += quads; fitBoxes.push_back({lo.x, lo.y, lo.z, hi.x, hi.y, hi.z}); }
+        }
+    }
+
     // --- roof detail. The scan's height map (the building's top per 0.25 m cell) against the twin's: the top tier covering
     // each cell. Connected cells where the scan stands at least roofDetailMinM above the twin, over at least
     // roofDetailMinArea, away from the tiers' outlines (the parapets' band) unless 2.5 m above, and from the slender top's foot, are what the
@@ -1614,6 +2089,7 @@ inline Result build(const Spec& S) {
             const float hs = R.height[k], ht = twinH[k];
             if (!(hs == hs) || !(ht == ht)) continue;
             if (rdEdge && nearEdge[k] && hs - ht < 2.5) continue;  // the parapets' band: only what stands above any parapet
+            { bool inFit = false; for (const auto& bx : fitBoxes) if (G.cu(i) >= bx[0] && G.cu(i) <= bx[3] && G.cv(j) >= bx[2] && G.cv(j) <= bx[5] && hs >= bx[1]) { inFit = true; break; } if (inFit) continue; }
             if (footR > 0 && std::hypot(G.cu(i) - fu, G.cv(j) - fv) <= footR) continue;
             if (hs - ht >= rdMin && hs - ht <= 40) cand[k] = 1;
         }
@@ -1685,39 +2161,6 @@ inline Result build(const Spec& S) {
     // stands beyond the fitted ring at its height and sector. Triangles at least scanDetailM out, in connected pieces of at
     // least scanDetailMinArea, are kept as they are: the scan's own surface (measured), coloured from the photo.
     if (S.P.scanDetailM > 0 && R.building.size()) {
-        auto insideTier = [&](const sp::TierOut* t, double u, double v) { bool in = false; for (const auto& l : t->loopsUV) if (detail::inRingXZ(u, v, l)) in = !in; return in; };
-        auto planDist = [&](const sp::TierOut* t, double u, double v) {
-            double best = 1e30;
-            for (const auto& l : t->loopsUV) for (size_t k = 0; k < l.size(); ++k) {
-                const P2 a = l[k], b = l[(k + 1) % l.size()];
-                const double du = b.u - a.u, dv = b.v - a.v, L2 = du * du + dv * dv;
-                const double tt = L2 > 0 ? std::clamp(((u - a.u) * du + (v - a.v) * dv) / L2, 0.0, 1.0) : 0;
-                best = std::min(best, std::hypot(u - a.u - tt * du, v - a.v - tt * dv));
-            }
-            return best;
-        };
-        const double topShell = tiers.empty() ? 0 : tiers.back()->topY;
-        auto outside = [&](const P3& q) {  // q: frame (u, h, v)
-            const double u = q.x, h = q.y, v = q.z;
-            if (slenderH >= 0 && h >= slenderH && !shellRings.empty()) {
-                const ShellRing* R0 = nullptr;
-                for (const auto& r : shellRings) if (h >= r.z0 - 1e-6 && h <= r.z1 + 1e-6) { R0 = &r; break; }
-                if (!R0) return h - shellRings.back().z1;  // above the top
-                const double du = u - shellAu, dv = v - shellAv;
-                const int sct = ((static_cast<int>(std::floor((std::atan2(dv, du) + kPi) / (2 * kPi) * shellK)) % shellK) + shellK) % shellK;
-                const double t = R0->z1 > R0->z0 ? std::clamp((h - R0->z0) / (R0->z1 - R0->z0), 0.0, 1.0) : 0;
-                return std::hypot(du, dv) - ((1 - t) * R0->r[sct] + t * R0->r1[sct]);
-            }
-            // the tier at this height
-            const sp::TierOut* at = nullptr;
-            for (const auto* t : tiers) if (h >= t->baseY - 1e-6 && h <= t->topY + 1e-6) at = t;
-            double d = 1e30;
-            if (at) { if (insideTier(at, u, v)) return -1.0; d = planDist(at, u, v); }
-            else if (h > topShell) d = 1e30;
-            // above the roof of the highest tier below whose outline holds it
-            for (auto it = tiers.rbegin(); it != tiers.rend(); ++it) if ((*it)->topY <= h + 1e-6 && insideTier(*it, u, v)) { d = std::min(d, h - (*it)->topY); break; }
-            return d >= 1e29 ? 0.0 : d;
-        };
         const size_t T = R.building.size();
         std::vector<uint8_t> keep(T, 0);
         for (size_t t = 0; t < T; ++t) {
@@ -1802,6 +2245,7 @@ inline Result build(const Spec& S) {
                     const double ru = q.x - s0.u, rv = q.z - s0.v;
                     const double a = ru * du + rv * dv, o = ru * nu + rv * nv;
                     if (a < 0 || a >= w.L || q.y < w.h0 || q.y >= w.h1 || o < -0.3 || o > 3.0) continue;
+                    { bool inFit = false; for (const auto& bx : fitBoxes) if (q.x >= bx[0] && q.x <= bx[3] && q.y >= bx[1] && q.y <= bx[4] && q.z >= bx[2] && q.z <= bx[5]) { inFit = true; break; } if (inFit) continue; }
                     const int ia = std::min(NA - 1, static_cast<int>(a / C)), ih = std::min(NH - 1, static_cast<int>((q.y - w.h0) / C));
                     auto& t2 = top2[static_cast<size_t>(ih) * NA + ia];
                     if (o > t2[0]) { t2[1] = t2[0]; t2[0] = static_cast<float>(o); } else if (o > t2[1]) t2[1] = static_cast<float>(o);
@@ -2099,7 +2543,7 @@ inline std::string reportJson(const Report& r, const Spec& S, size_t triangles, 
       << ",\"windows\":{\"given\":" << r.windowsGiven << ",\"placed\":" << r.windowsPlaced << ",\"generated\":" << r.windowsGenerated << ",\"continued\":" << r.windowsContinued << ",\"rephased\":" << r.windowsRephased << ",\"wallsRephased\":" << r.wallsRephased << ",\"continueTested\":" << r.continueTested << ",\"panes\":" << r.panesPlaced
       << ",\"dropped\":{\"noWall\":" << r.droppedNoWall << ",\"clipped\":" << r.droppedClipped << ",\"overlap\":" << r.droppedOverlap << ",\"small\":" << r.droppedSmall << ",\"noFrame\":" << r.droppedNoFrame << "}}"
       << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << "}"
-      << ",\"slender\":{\"fromM\":" << detail::num(r.slenderFromM) << ",\"slices\":" << r.slenderSlices << ",\"bands\":" << r.slenderBands << ",\"axisFits\":" << r.slenderAxisFits << ",\"symmetry\":" << r.slenderSymmetry << "}"
+      << ",\"slender\":{\"fromM\":" << detail::num(r.slenderFromM) << ",\"slices\":" << r.slenderSlices << ",\"bands\":" << r.slenderBands << ",\"axisFits\":" << r.slenderAxisFits << ",\"symmetry\":" << r.slenderSymmetry << ",\"finBands\":" << r.finBands << ",\"fins\":" << r.finCount << ",\"finSegments\":" << r.finSegments << "}" << ",\"heads\":{\"types\":" << r.headTypes << ",\"windows\":" << r.headWindows << ",\"drawn\":" << r.headsDrawn << ",\"surfacePieces\":" << r.surfacePieces << ",\"surfaceQuads\":" << r.surfaceQuads << ",\"medianRiseM\":" << detail::num([&] { auto v = r.headRises; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
       << ",\"topM\":" << detail::num(r.topM) << ",\"revealM\":" << detail::num(S.revealM) << ",\"revealLabel\":\"" << detail::esc(S.revealLabel) << "\""
       << ",\"triangles\":" << triangles << ",\"bytes\":" << bytes << ",\"classUse\":{";
     bool first = true;
