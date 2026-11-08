@@ -42,7 +42,8 @@
     "test:cli": "vitest run packages/cli/test",
     "test:desktop": "vitest run desktop-app/test",
     "omnispatial:build": "mkdir -p build/omnispatial && clang++ -std=c++20 -O3 -I packages/core/src/native/3d-engine/include scripts/build_omnispatial_master_models.cpp -o build/omnispatial/build_master -lz && clang++ -std=c++20 -O3 -I packages/core/src/native/3d-engine/include scripts/render_tile_pathtraced.cpp -o build/omnispatial/render_pt -lz && build/omnispatial/build_master && build/omnispatial/render_pt scripts/config_stage1_clay.json && build/omnispatial/render_pt scripts/config_stage2_vector.json && build/omnispatial/render_pt scripts/config_stage3_pbr.json",
-    "library:stats": "vite-node scripts/bundle_texture_library_stats.ts"
+    "library:stats": "vite-node scripts/bundle_texture_library_stats.ts",
+    "library:heights": "vite-node scripts/measure_texture_library_heights.ts"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^2.1.9",

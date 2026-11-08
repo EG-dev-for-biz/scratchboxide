@@ -372,22 +372,52 @@ inline PaneGlass paneGlass(const Image& img, const std::vector<double>& meanLab,
     return r;
 }
 
+/** classBorderWeights: the share of the relief each texel takes, into a class map's green channel (see material-regions.ts). */
+inline void classBorderWeights(const std::vector<uint8_t>& cls, int W, int H, double texelM, std::vector<uint8_t>& rgba) {
+    constexpr double FADE_M = 0.12;
+    constexpr uint16_t FAR = 65535;
+    const size_t N = static_cast<size_t>(W) * H;
+    std::vector<uint16_t> d(N, FAR);
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+        const size_t k = static_cast<size_t>(y) * W + x;
+        const uint8_t c = cls[k];
+        if ((x > 0 && cls[k - 1] != c) || (x + 1 < W && cls[k + 1] != c) || (y > 0 && cls[k - W] != c) || (y + 1 < H && cls[k + W] != c)) d[k] = 0;
+    }
+    // a Uint16Array store: FAR + 1 is never stored (the comparison fails first), as in the TypeScript
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+        const size_t k = static_cast<size_t>(y) * W + x;
+        if (x > 0 && d[k - 1] + 1 < d[k]) d[k] = static_cast<uint16_t>(d[k - 1] + 1);
+        if (y > 0 && d[k - W] + 1 < d[k]) d[k] = static_cast<uint16_t>(d[k - W] + 1);
+    }
+    for (int y = H - 1; y >= 0; y--) for (int x = W - 1; x >= 0; x--) {
+        const size_t k = static_cast<size_t>(y) * W + x;
+        if (x + 1 < W && d[k + 1] + 1 < d[k]) d[k] = static_cast<uint16_t>(d[k + 1] + 1);
+        if (y + 1 < H && d[k + W] + 1 < d[k]) d[k] = static_cast<uint16_t>(d[k + W] + 1);
+    }
+    for (size_t k = 0; k < N; k++) rgba[k * 4 + 1] = d[k] == FAR ? 255 : js::toUint8(js::round(255 * std::min(1.0, (d[k] * texelM) / FADE_M)));
+}
+
 // ---- planMaterialJob ----
 
 /** One class's library set: its tile's real size and its normal and occlusion/roughness/metalness maps. */
 struct RegionSet { double realSizeX = 1, realSizeY = 1; Image normal, orm; };
 
 /** What every job reads: the classes' CIELAB means, their sets and each set's mean ORM (3 per set). */
-struct PlanContext { std::vector<double> meanLab; std::vector<uint8_t> openings; int wall = 0, grid = 24; double paneWallShare = 0.5, glassR = 0.08, glassM = 0; std::vector<RegionSet> sets; std::vector<double> setMeans; };
+struct PlanContext { std::vector<double> meanLab; std::vector<uint8_t> openings; int wall = 0, grid = 24; double paneWallShare = 0.5, glassR = 0.08, glassM = 0; /** Whether a rebuilt facade's job also returns each texel's class (the relief's class map). */ bool classMap = false; std::vector<RegionSet> sets; std::vector<double> setMeans; };
 
 /** A job: its photo, metres per texel, whether it is a rebuilt facade (else a scan piece) and the square's half-side. */
 struct PlanJob { const Image* img = nullptr; double texelM = 0; bool rebuilt = false; int radius = 1; std::vector<uint8_t> open; std::vector<double> elements; std::vector<uint32_t> family; std::vector<double> panes; };
+
+/** The class written for a texel that takes no relief (a glass pane): no tile is ever stacked at it, so it reads as the surface. */
+constexpr uint8_t NO_RELIEF_CLASS = 255;
 
 struct PlanResult {
     int width = 0, height = 0;
     std::vector<double> classTexels;
     double folded = 0, glass = 0, panesOnStone = 0, paneWallTexels = 0;
     std::vector<uint8_t> orm, normal;
+    /** Each texel's class (r, g, b the class index, a 255) of a rebuilt facade, when the context asks for it. */
+    std::vector<uint8_t> classes;
 };
 
 inline PlanResult planJob(const PlanJob& job, const PlanContext& ctx) {
@@ -415,11 +445,14 @@ inline PlanResult planJob(const PlanJob& job, const PlanContext& ctx) {
         const PaneGlass pg = job.panes.empty() ? PaneGlass{} : paneGlass(img, ctx.meanLab, ctx.openings, ctx.wall, job.panes, ctx.paneWallShare);
         const uint8_t glassR = js::toUint8(js::round(ctx.glassR * 255)), glassM = js::toUint8(js::round(ctx.glassM * 255));
         r.panesOnStone = pg.stone; r.paneWallTexels = pg.wallTexels;
+        if (ctx.classMap) r.classes.assign(N * 4, 0);
         for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
             const size_t k = static_cast<size_t>(y) * W + x;
             if (!pg.glass.empty() && pg.glass[k]) {
                 r.orm[k * 4] = 255; r.orm[k * 4 + 1] = glassR; r.orm[k * 4 + 2] = glassM; r.orm[k * 4 + 3] = 255;
                 r.normal[k * 4] = 128; r.normal[k * 4 + 1] = 128; r.normal[k * 4 + 2] = 255; r.normal[k * 4 + 3] = 255;
+                // a pane has no relief: a class no tile answers to (NO_RELIEF_CLASS), read as the surface
+                if (ctx.classMap) { r.classes[k * 4] = NO_RELIEF_CLASS; r.classes[k * 4 + 1] = NO_RELIEF_CLASS; r.classes[k * 4 + 2] = NO_RELIEF_CLASS; r.classes[k * 4 + 3] = 255; }
                 r.glass++;
                 continue;
             }
@@ -430,7 +463,9 @@ inline PlanResult planJob(const PlanJob& job, const PlanContext& ctx) {
                 r.normal[k * 4 + c] = js::toUint8(js::round(static_cast<double>(t.n[j + c]) * 255));
             }
             r.orm[k * 4 + 3] = 255; r.normal[k * 4 + 3] = 255;
+            if (ctx.classMap) { r.classes[k * 4] = cls[k]; r.classes[k * 4 + 1] = 255; r.classes[k * 4 + 2] = cls[k]; r.classes[k * 4 + 3] = 255; }
         }
+        if (ctx.classMap) classBorderWeights(cls, W, H, job.texelM, r.classes);
         return r;
     }
     for (size_t k = 0; k < N; k++) {

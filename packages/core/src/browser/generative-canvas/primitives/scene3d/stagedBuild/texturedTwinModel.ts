@@ -17,6 +17,7 @@
 import * as THREE from 'three';
 import { CONFIDENCE_MAP_KEY, FRONT_BIAS_KEY } from './revealMaterial';
 import { prepareFacadeMaterials } from './facadeMaterialLook';
+import { prepareHeightRelief } from './heightRelief';
 import { applyStochasticTiling } from './stochasticTiling';
 
 /** Mirrors the flag applyClayRenderMode (clayRenderMode.ts) skips: the surface keeps its authored material. */
@@ -95,7 +96,8 @@ export function prepareTexturedTwinModel(gltf: GltfLike, opts: { twin?: boolean 
     applyStochasticTiling(gltf.scene);
     const parser = gltf.parser;
     // the material extras (the facade probe, a texture pass's glass and coursing) on the same surfaces, when the twin carries them
-    const facade = prepareFacadeMaterials(gltf).catch(() => 0);
+    // then the materials' relief (heightRelief.ts): after the facade look, whose shader it extends
+    const facade = prepareFacadeMaterials(gltf).catch(() => 0).then(n => prepareHeightRelief(gltf).catch(err => { console.warn('[staged textures] the material relief was not prepared:', err); return 0; }).then(() => n));
     if (byIndex.size === 0 || !parser) return facade.then(() => 0);
     return facade.then(() => Promise.all([...byIndex].map(async ([idx, mats]) => {
         try {

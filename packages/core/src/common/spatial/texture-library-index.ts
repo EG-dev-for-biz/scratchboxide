@@ -37,7 +37,7 @@ export interface TextureLibraryEntry {
     id: string;
     publisher: 'ambientCG' | 'Poly Haven' | (string & {});
     /** Bucket object names by role (only the roles a GLB material uses), and their total download size. */
-    maps: { color?: string; normal?: string; roughness?: string; ao?: string; metalness?: string; arm?: string };
+    maps: { color?: string; normal?: string; roughness?: string; ao?: string; metalness?: string; arm?: string; /** The height (displacement) map: fetched only when a caller asks for it. */ height?: string };
     downloadMB: number;
     /** Pixel size of the stored maps, when the publisher states it. */
     pixels?: [number, number];
@@ -46,8 +46,18 @@ export interface TextureLibraryEntry {
     /** The publisher's width alone, when it gives no height: the height follows from the preview's aspect once measured. */
     widthOnlyM?: number;
     /** The publisher's small preview maps by role (ambientCG lists them; Poly Haven's are looked up when measured). */
-    previews?: { color?: string; normal?: string; roughness?: string; metalness?: string; arm?: string };
+    previews?: { color?: string; normal?: string; roughness?: string; metalness?: string; arm?: string; height?: string };
     sizeSource: string;
+    /**
+     * The real depth the height map spans from its black to its white, metres, and where it comes from: the publisher's
+     * own figure when it gives one, else an estimate (texture-library-heights.ts: the depth at which the height map's
+     * slopes equal the normal map's over the tile's real size), labelled so. Absent for a set with no height map, no real
+     * size or no usable estimate: its height is then never drawn.
+     */
+    heightDepthM?: number;
+    heightDepthSource?: string;
+    /** How well the estimate's height slopes follow the normal map's (their correlation, 0..1); absent for a publisher's depth. */
+    heightDepthFit?: number;
     colour?: TextureLibraryColour;
     /** Roughness map mean and spread, and the metalness map's mean, 0..1. `metallic` is 0 for a set the bucket holds no
      * metalness map for (glTF's default: its publisher left it dielectric); hasMetalnessMap tells the two apart. */
