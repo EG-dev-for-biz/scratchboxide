@@ -362,3 +362,35 @@ and from the sides), which a session is building on `feat/k-proud-audit`.
 (25 tests at 180 s, two clang++ ETIMEDOUT); the retry at load 78-111 passed 161 of 166 files, 3 tests timing out in
 `staged-location-orchestrator.test.ts` (the Street View grounding close-ups and two figure cases, 180 s each), none
 failing on an assertion.
+
+
+## Rounds ten and eleven (MAIN, 2026-11-08: Lever House's wedges, the ESB's slivers, main 5d72aeb3)
+
+Two more lattice rules (5e3431d8), from the probe on the round-nine close-ups:
+
+- **End cells follow the wall.** Lever House's wedges were the raw step where the end-cell rule had left the sheet's
+  end cells to the scan: the sheet's last built cell on the plane, the scan 0.3 m behind it. An end cell whose scan lies
+  more than `edgeStepM` behind the row's wall depth is now built at its own scan depth, so the rebuild turns with the
+  wall at a prow or a corner instead of standing proud of it (the Flatiron) or stopping short of it (Lever House).
+- **A window inside a strip takes the strip's columns.** The ESB's recessed strips showed jagged chamfered steps down
+  their reveals: every storey's window, read on its own, brought its own edge lines a few centimetres apart, and each
+  pair of lines made a chamfered step. The window's glass rect stays the reader's; only its lattice lines snap.
+
+The ESB's broken patch at the top of its second view is scan at the setback junction (the probe: `relief_m39`, `m40`,
+`m101` standing 0.3 m in front of `FacadeLattice_41`), the cut's remainder at the terrace ledge, not the seal's fill; it
+is what the proud-surface audit on `feat/k-proud-audit` removes.
+
+Then main 5d72aeb3 (#185: the tile seams' caps removed and rims zipped, so every K build starts from a different welded
+scan) was merged into the branch (5e34419d, one AGENTS.md conflict), and the two buildings were rebuilt uncached on both
+sides, main at 5d72aeb3 and the branch at 5e34419d; the other four stay at 9d282b44 against da786449.
+
+| Building | side | glass % | panes on stone | holes % | untex % | dark lines % |
+|---|---|---|---|---|---|---|
+| ESB | main 5d72aeb3 | 8.4 | 228 | 0.67 | 0.33 | 2.44 |
+| | branch 5e34419d | 6.2 | **24** | **0.56** | 0.48 | **1.00** |
+| Lever House | main 5d72aeb3 | 1.4 | 25 | 2.89 | 2.91 | 1.32 |
+| | branch 5e34419d | 9.4 | **0** | **2.64** | 4.96 | **0.64** |
+
+Both are now better than main on every gated number, dark lines included (`esb_row_r11.jpg`, `lever-house_row_r11.jpg`
+beside the benchmark and in the shared notes folder). The zipped scan itself took the ESB's main build to "complete"
+(no degradation) and moved main's own numbers (panes on stone 407 → 228).
