@@ -56,7 +56,7 @@ For each row, record what the data holds, from the build's own outputs:
 | Area, tilt, height band, facing | the remesh / twin geometry |
 | Photo coverage and texel size | the twin's UVs and atlases (texel metres), the uncovered mask of the facade orthos |
 | Which survey station sees it square-on, at what distance | the survey or swatch station plan |
-| Readings already made | window fit (`window-fit.ts`), wall grammar (`wall-grammar.ts`), material classes (`material-regions.ts`), swatch matches (`tile-detail-bake.ts`) |
+| Readings already made | window fit (`window-fit.ts`) and its window array (`pipeline-k/window-array.ts`), wall grammar (`wall-grammar.ts`), material classes (`material-regions.ts`), swatch matches (`tile-detail-bake.ts`) |
 | Provenance of its texels | measured / photo-inferred / generated (GLB extras) |
 
 ## 3. Input checks (before any image call)

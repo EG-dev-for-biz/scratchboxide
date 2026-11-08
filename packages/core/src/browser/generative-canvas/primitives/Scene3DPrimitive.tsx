@@ -201,6 +201,7 @@ import { applyWeatheringLayer } from './scene3d/weatheringLayer';
 import { CINEMATIC_RIGS, computeSceneBudgetTelemetry } from './scene3d/lightingRigs';
 import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
 import { useStagedBuild } from './scene3d/stagedBuild/useStagedBuild';
+import { WindowCheckCard } from './scene3d/stagedBuild/WindowCheckCard';
 import { readStagedBuild, type StagedSceneData } from './scene3d/stagedBuild/stagedBuildState';
 import { mergeStagedParts, mergeStagedPartsEnabled } from './scene3d/stagedBuild/mergeStagedParts';
 import { carryStagedChoice, carryTwinObjects, twinSourceOf, type StagedMaterialModeFields } from './scene3d/stagedBuild/texturedTwins';
@@ -4460,6 +4461,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 </div>
             )}
             {staged.overlay({ bottomInsetPx: isTimelineDrawerOpen ? 255 : 16 })}
+            {staged.active && readStagedBuild(sceneData)?.runId && <WindowCheckCard runId={readStagedBuild(sceneData)!.runId} />}
             <ObjectBuildLiveOverlay live={readObjectBuildLive(sceneData)} bottomInsetPx={isTimelineDrawerOpen ? 255 : 76} />
             {cameraMode === 'fps' && <WalkHud session={walkSessionOf} />}
 

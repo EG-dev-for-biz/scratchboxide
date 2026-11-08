@@ -738,7 +738,7 @@ export function srgb8LinearTable(): Float64Array {
 }
 
 /** sRGB 8-bit to CIELAB (D65). */
-function labOf8(r: number, g: number, b: number): [number, number, number] {
+export function labOf8(r: number, g: number, b: number): [number, number, number] {
     const R = srgb8Linear(r), G = srgb8Linear(g), B = srgb8Linear(b);
     const f = (t: number) => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
     const x = f((0.4124 * R + 0.3576 * G + 0.1805 * B) / 0.95047), y = f(0.2126 * R + 0.7152 * G + 0.0722 * B), z = f((0.0193 * R + 0.1192 * G + 0.9505 * B) / 1.08883);
@@ -766,7 +766,7 @@ function spanGroups(spans: Array<[number, number]>, overlap: number): Array<{ lo
  * A region's look over its valid texels, leaving out `skip`'s: its mean colour (CIELAB) and the spread of its lightness (a
  * window's frame against its glass varies where plain stone stays even), as [L, a, b, sdL]; and its valid share.
  */
-function regionLook(img: { rgba: ArrayLike<number>; width: number; height: number }, valid: Uint8Array, r: WindowRect, skip?: WindowRect[]): { lab?: number[]; validShare: number } {
+export function regionLook(img: { rgba: ArrayLike<number>; width: number; height: number }, valid: Uint8Array, r: WindowRect, skip?: WindowRect[]): { lab?: number[]; validShare: number } {
     const W = img.width, m = [0, 0, 0];
     let n = 0, all = 0, l2 = 0;
     for (let y = Math.max(0, r[1]); y < Math.min(img.height, r[3]); y++) for (let x = Math.max(0, r[0]); x < Math.min(W, r[2]); x++) {
