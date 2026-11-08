@@ -40,4 +40,6 @@ Path-traced, sun 12 degrees up and raking along the facade, the camera 30 degree
 - Estimated depths inherit the tile size's estimate.
 - Generated objects get the relief with the object material path.
 
+Gate: `ci-local --pr 190` on head ca367d01 merged onto main 1296358b: typecheck, docs-mcp and the primitives lint pass; the test run failed twice on the loaded machine (load 25 to 30), first six tests across three files, then one, every one a 180 s timeout or a timing assertion, plus `sb-veggie-lockdown` which fails on main alone (`timed_out`); the three files pass on the branch run by themselves (68 tests).
+
 Tests: `texture-library-heights.test.ts`, `height-relief.test.ts`, `material-regions-native.test.ts`, the touched K tests; `npm run typecheck`.
