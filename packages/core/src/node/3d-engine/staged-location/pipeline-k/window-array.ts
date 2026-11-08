@@ -1133,7 +1133,10 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     const foldStrips = singles.length >= spans.length || (seed.clear && agree(seed.row!.pitch, row.pitch));
     for (const b of spans) {
         const ci = siteOf(b.cx, col);
-        if (foldStrips && b.w <= P.spanSites * col.pitch && Math.abs(ci.res) <= P.snapTol) {
+        // a box the facade reader drew is never folded either: it stands whole as read (Penn 2's reader drew its shaft's
+        // windows two storeys tall; folded at the storey they drew a wall band and recess edges through every one, a long
+        // dark line across the facade)
+        if (foldStrips && !fixedSet.has(b.r.join(',')) && b.w <= P.spanSites * col.pitch && Math.abs(ci.res) <= P.snapTol) {
             const own = panesOf(b.r);
             let n = 0;
             for (const t of [main, ...tiers]) {
