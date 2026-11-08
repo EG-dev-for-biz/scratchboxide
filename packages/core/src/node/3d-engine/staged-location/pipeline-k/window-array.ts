@@ -160,14 +160,8 @@ export const WINDOW_ARRAY_PARAMS = {
         /** A grouped bay's window is at most this share of the narrowest spacing between its windows. */
         bayWindowShare: 0.85,
         /** A bay of several windows the model read is grouped when a gap between its windows differs from the even spacing by more than this share of it. */
-        bayUneven: 0.12,
-        /** The boxes read on a region sit off the building's system's lattice by more than this share of a pitch (their RMS) when the lattice does not fit them: the system is refused there and the face reads for itself. */
-        systemRms: 0.1
+        bayUneven: 0.12
     },
-    /** A lattice column (row) is placed by its read boxes when at least this many stand on it at a shared offset. */
-    offsetMin: 3,
-    /** ... and at least this share of them within settleTol of their median. */
-    offsetShare: 0.8,
     /** A row or column is blank when at least this share of its sites' texels the photo never reached or left featureless: the array steps on into it from a row or column that holds it. */
     blankShare: 0.5
 } as const;
@@ -280,7 +274,8 @@ function inferRegions(input: ArrayInput, photo: NonNullable<ReturnType<typeof fa
         }
         const inBand = (r: WindowRect): WindowRect => [toWarp(r[0]), r[1] - g.y0, toWarp(r[2]), r[3] - g.y0];
         const onFace = (r: WindowRect): WindowRect => [Math.round(toFace(r[0])), r[1] + g.y0, Math.round(toFace(r[2])), r[3] + g.y0];
-        const out = inferWindowArray({ rects: mine.map(inBand), panes: myPanes.map(inBand), generated: mine.filter(r => gen.has(r.join(','))).map(inBand) }, img, valid, occluded, pixel, P, { ...(featureless ? { featureless } : {}), ...(minRowPx !== undefined ? { minRowPx: minRowPx - g.y0 } : {}), system: { ...lat, col, row: { ...lat.row, phase: ph } } });
+        const fixedHere = new Set((input.fixed ?? []).map(r => whole(r).join(',')));
+        const out = inferWindowArray({ rects: mine.map(inBand), panes: myPanes.map(inBand), generated: mine.filter(r => gen.has(r.join(','))).map(inBand), fixed: mine.filter(r => fixedHere.has(r.join(','))).map(inBand) }, img, valid, occluded, pixel, P, { ...(featureless ? { featureless } : {}), ...(minRowPx !== undefined ? { minRowPx: minRowPx - g.y0 } : {}), system: { ...lat, col, row: { ...lat.row, phase: ph } } });
         entry.source = out.report.reason ? undefined : out.report.source; entry.reason = out.report.system?.refused ?? out.report.reason;
         if (out.report.reason) { keepAsRead(mine); listed.push(entry); reports.push(out.report); return; }
         entry.windows = out.rects.length;
@@ -815,7 +810,7 @@ export function photoLattice(img: ArrayPhoto, valid: Uint8Array, minP: number, m
     return { ...f, clear: cp.ac >= P.photo.minAutocorr && rp.ac >= P.photo.minAutocorr && f.contrastE >= P.photo.minContrast, tried };
 }
 
-export interface ArrayInput { rects: WindowRect[]; panes?: WindowRect[]; generated?: WindowRect[] }
+export interface ArrayInput { rects: WindowRect[]; panes?: WindowRect[]; generated?: WindowRect[]; /** Boxes never moved or replaced (the facade reader's accepted openings, the primary source of windows): on a site they stand there as read, off one they are kept as read. */ fixed?: WindowRect[] }
 export interface ArrayOutput extends ArrayInput { report: Omit<FacadeArrayReport, 'facadeId'>; sites: number[] }
 
 /**
@@ -827,6 +822,7 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     // nothing (its indices fall between texels)
     const whole = (r: WindowRect): WindowRect => [Math.round(r[0]), Math.round(r[1]), Math.round(r[2]), Math.round(r[3])];
     const input: ArrayInput = { rects: inputIn.rects.map(whole), ...(inputIn.panes ? { panes: inputIn.panes.map(whole) } : {}), ...(inputIn.generated ? { generated: inputIn.generated.map(whole) } : {}) };
+    const fixedSet = new Set((inputIn.fixed ?? []).map(r => whole(r).join(',')));
     const rects = input.rects, W = img.width, H = img.height;
     let seedReport: FacadeArrayReport['seed'] | undefined, systemNote: FacadeArrayReport['system'];
     const unchanged = (reason: string): ArrayOutput => ({ rects: inputIn.rects, ...(inputIn.panes ? { panes: inputIn.panes } : {}), ...(inputIn.generated ? { generated: inputIn.generated } : {}), report: { boxesIn: rects.length, spans: 0, on: 0, snapped: 0, replaced: 0, added: 0, rejected: 0, ...(seedReport ? { seed: seedReport } : {}), ...(systemNote ? { system: systemNote } : {}), reason }, sites: [] });
@@ -957,20 +953,6 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     let { ev: seedEv, stands: seedStands, note: seedNote } = seedEvidence();
     // the system's lattice shows its window in the fold but no row or column of sites holds it: refused here, and the
     // face reads for itself (its own seed and boxes)
-    // the boxes read sit off the system's lattice (their RMS from its sites, in pitches, over enough single-site boxes):
-    // the lattice does not fit what was read (the ESB's paired windows laid at an even half-bay moved 622 boxes off their
-    // pairs, and the wall grammar lost its bays); refused here, the face reads for itself
-    let offFit: number | undefined;
-    if (systemUsed) {
-        const near = boxes.filter(b => b.w <= P.spanSites * seed.col!.pitch && b.h <= P.spanSites * seed.row!.pitch);
-        if (near.length >= P.minBoxes) offFit = Math.sqrt(near.reduce((t, b) => { const u = siteOf(b.cx, seed.col!).res, v = siteOf(b.cy, seed.row!).res; return t + u * u + v * v; }, 0) / near.length);
-    }
-    if (systemUsed && offFit !== undefined && offFit > P.photo.systemRms) {
-        systemNote = { ...systemNote, refused: `the boxes read sit off the building's system's lattice (RMS ${r2(offFit)} of a pitch over the boxes); the face reads for itself` };
-        delete systemNote!.phaseMoved;
-        seed = ownSeed; rowsFrom = ownRowsFrom; systemUsed = false;
-        ({ ev: seedEv, stands: seedStands, note: seedNote } = seedEvidence());
-    }
     if (systemUsed && !(seedEv.rows >= 1 && seedEv.cols >= 1)) {
         systemNote = { ...systemNote, refused: `the building's system laid on this face shows its window in the fold but no row or column of sites (${seedNote}); the face reads for itself` };
         delete systemNote!.phaseMoved;
@@ -1088,34 +1070,7 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     // every site: key by tier index, row, column
     const tierIndex = (t: ArrayTier) => (t === main ? -1 : tiers.indexOf(t));
     const siteKey = (t: ArrayTier, i: number, j: number) => `${tierIndex(t)}:${i}:${j}`;
-    // each lattice column (row) at the place its read boxes share: windows paired about a pier, or grouped in threes, stand
-    // off an even lattice by the same amount column after column; their sites follow them rather than the boxes being moved
-    // onto an even lattice (the ESB's pairs moved off their pairs lost the wall grammar its bays). A column read by no box
-    // takes the offset of the columns in its place in the repeat (every 2nd, 3rd or 4th, the first that agrees)
-    const offsetsOf = (vals: Map<number, number[]>, pitch: number): ((k: number) => number) => {
-        const own = new Map<number, number>();
-        // a column's offset holds for nearly all its boxes (a drift over part of a facade is not the column's place)
-        for (const [k, v] of vals) { if (v.length < P.offsetMin) continue; const m = median(v); if (v.filter(x => Math.abs(x - m) <= P.settleTol * pitch).length >= P.offsetShare * v.length) own.set(k, m); }
-        for (let per = 1; own.size && per <= 4; per++) {
-            const groups = new Map<number, number[]>();
-            for (const [k, m] of own) { const g = ((k % per) + per) % per; if (!groups.has(g)) groups.set(g, []); groups.get(g)!.push(m); }
-            if (![...groups.values()].every(v => Math.max(...v) - Math.min(...v) <= 2 * P.settleTol * pitch)) continue;
-            const gm = new Map([...groups].map(([g, v]) => [g, median(v)] as const));
-            return k => own.get(k) ?? gm.get(((k % per) + per) % per) ?? 0;
-        }
-        return k => own.get(k) ?? 0;
-    };
-    const colVals = new Map<number, number[]>(), rowVals = new Map<number, number[]>();
-    for (const b of singles) {
-        const t = tierFor(b.cy); if (t !== main) continue;
-        const ci = siteOf(b.cx, col), rj = siteOf(b.cy, { pitch: t.rowPitch, phase: t.rowPhase });
-        if (Math.abs(ci.res) > P.snapTol || Math.abs(rj.res) > P.snapTol) continue;
-        if (!colVals.has(ci.k)) colVals.set(ci.k, []); colVals.get(ci.k)!.push(ci.res * col.pitch);
-        if (!rowVals.has(rj.k)) rowVals.set(rj.k, []); rowVals.get(rj.k)!.push(rj.res * t.rowPitch);
-    }
-    const colOff = offsetsOf(colVals, col.pitch), rowOff = offsetsOf(rowVals, main.rowPitch);
-    const cOff = colOff, rOff = (t: ArrayTier, j: number) => (t === main ? rowOff(j) : 0);
-    const siteBox = (t: ArrayTier, i: number, j: number): WindowRect => { const cx = col!.phase + i * col!.pitch + cOff(i), cy = t.rowPhase + j * t.rowPitch + rOff(t, j); return [Math.round(cx - t.boxW / 2), Math.round(cy - t.boxH / 2), Math.round(cx + t.boxW / 2), Math.round(cy + t.boxH / 2)]; };
+    const siteBox = (t: ArrayTier, i: number, j: number): WindowRect => { const cx = col!.phase + i * col!.pitch, cy = t.rowPhase + j * t.rowPitch; return [Math.round(cx - t.boxW / 2), Math.round(cy - t.boxH / 2), Math.round(cx + t.boxW / 2), Math.round(cy + t.boxH / 2)]; };
     const taken = new Map<string, number>(); // site -> output index
     const out: Array<{ r: WindowRect; kind: number; conf: number; res: number; src?: number; panes?: WindowRect[] }> = [];
     const panesOf = (r: WindowRect): WindowRect[] => (input.panes ?? []).filter(p => p[0] >= r[0] - 1 && p[2] <= r[2] + 1 && p[1] >= r[1] - 1 && p[3] <= r[3] + 1);
@@ -1124,7 +1079,7 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
         return panes.map(p => [Math.round(to[0] + (p[0] - from[0]) * sx), Math.round(to[1] + (p[1] - from[1]) * sy), Math.round(to[0] + (p[2] - from[0]) * sx), Math.round(to[1] + (p[3] - from[1]) * sy)] as WindowRect);
     };
     let rmsInSum = 0, rmsInN = 0, rejected = 0, folded = 0;
-    const siteCy = (t: ArrayTier, j: number) => t.rowPhase + j * t.rowPitch + rOff(t, j);
+    const siteCy = (t: ArrayTier, j: number) => t.rowPhase + j * t.rowPitch;
     // spans first. A facade read mostly as cells is one array: a strip standing on a lattice column (one column wide) is a
     // column of its cells, folded into the sites it covers (photo-inferred: the strip was read there), its panes going to
     // the cell they lie in. A bay wider than a column, or a strip on a facade read mostly as strips, is kept whole and its
@@ -1157,9 +1112,7 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     }
     // members on their sites first (so an outlier never takes a member's site), then the outliers
     const classified = singles.map(b => {
-        const t = tierFor(b.cy), ci0 = siteOf(b.cx, col!), rj0 = siteOf(b.cy, { pitch: t.rowPitch, phase: t.rowPhase });
-        // the residual from the site as its column and row place it
-        const ci = { k: ci0.k, res: ci0.res - cOff(ci0.k) / col!.pitch }, rj = { k: rj0.k, res: rj0.res - rOff(t, rj0.k) / t.rowPitch };
+        const t = tierFor(b.cy), ci = siteOf(b.cx, col!), rj = siteOf(b.cy, { pitch: t.rowPitch, phase: t.rowPhase });
         const dist = Math.hypot(ci.res, rj.res), onSite = Math.abs(ci.res) <= P.snapTol && Math.abs(rj.res) <= P.snapTol;
         const sizeOk = Math.abs(b.w - t.boxW) <= P.sizeTol * t.boxW && Math.abs(b.h - t.boxH) <= P.sizeTol * t.boxH;
         const areaRatio = (b.w * b.h) / Math.max(1, t.boxW * t.boxH), ofArray = areaRatio >= P.areaRange[0] && areaRatio <= P.areaRange[1];
@@ -1170,6 +1123,15 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
         // a box far from the array's size (a small opening on a facade of strips, a doorway among windows) is not of the
         // array: kept as read, taking no site
         if (!c.ofArray) { out.push({ r: c.b.r, kind: SITE_KIND.kept, conf: 1, res: r3(c.dist), src: boxes.indexOf(c.b), panes: panesOf(c.b.r) }); continue; }
+        // the facade reader's accepted openings are the windows (user decision, 2026-11-06): one on a free site stands
+        // there exactly as read, any other is kept as read; the array never moves or replaces them (the ESB's paired
+        // windows snapped to an even lattice lost the wall grammar its bays)
+        if (fixedSet.has(c.b.r.join(','))) {
+            const fk = siteKey(c.t, c.i, c.j);
+            if (c.onSite && !taken.has(fk)) taken.set(fk, out.push({ r: c.b.r, kind: SITE_KIND.on, conf: r3(1 - c.dist / (P.snapTol * Math.SQRT2)), res: r3(c.dist), src: boxes.indexOf(c.b), panes: panesOf(c.b.r) }) - 1);
+            else out.push({ r: c.b.r, kind: SITE_KIND.kept, conf: 1, res: r3(c.dist), src: boxes.indexOf(c.b), panes: panesOf(c.b.r) });
+            continue;
+        }
         // on the seed's lattice a box of another size is the reader's, not the array's (a crown's louvres over a slab):
         // kept as read, never moved or replaced; one of the lattice's size off its site is a window drifted, snapped
         if ((source === 'photo' || source === 'system') && !c.sizeOk) { out.push({ r: c.b.r, kind: SITE_KIND.kept, conf: 1, res: r3(c.dist), src: boxes.indexOf(c.b), panes: panesOf(c.b.r) }); continue; }
@@ -1407,7 +1369,10 @@ export function inferWindowArrays(orthosDir: string, fit: WindowFitFile, P: Wind
     const run = (p: Pending, storey?: Lattice1D) => {
         const { e, f, photo, minRowPx } = p;
         restore(e);
-        const input: ArrayInput = { rects: e.rects, ...(e.panes ? { panes: e.panes } : {}), ...(e.generated ? { generated: e.generated } : {}) };
+        // the reader's boxes: the merged rects the window fit's own reading (structural) does not hold
+        const st = (e as FitEntry & { reader?: string; structural?: { rects: WindowRect[] } }).structural, own = new Set((st?.rects ?? []).map(r => r.join(',')));
+        const fixed = (e as { reader?: string }).reader && st ? e.rects.filter(r => !own.has(r.join(','))) : [];
+        const input: ArrayInput = { rects: e.rects, ...(e.panes ? { panes: e.panes } : {}), ...(e.generated ? { generated: e.generated } : {}), ...(fixed.length ? { fixed } : {}) };
         // a face the building's system covers is run region by region; any other face reads for itself
         const regions = opts.system && !storey ? systemOnFace(opts.system, f) : [];
         const out = regions.length ? inferRegions(input, photo, f.pixel, regions, P, minRowPx) : inferWindowArray(input, photo.img, photo.valid, photo.occluded, f.pixel, P, { ...(photo.featureless ? { featureless: photo.featureless } : {}), ...(minRowPx !== undefined ? { minRowPx } : {}), ...(storey ? { storey } : {}) });
