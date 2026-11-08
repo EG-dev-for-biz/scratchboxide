@@ -21,7 +21,8 @@
 
 import type { RgbaImage8 } from '../tile-texture-transfer';
 
-export const TILE_FILTER_VERSION = 'tile-filter/1';
+/** The version of how a set's maps are drawn: this filter and the photo cap on the grain (material-sets.ts capGrain); in the twin's stage key. */
+export const TILE_FILTER_VERSION = 'tile-filter/2';
 
 /** Modes of this wavelength and longer are removed; a tile shorter than it keeps its maps as they are. */
 export const TILE_FILTER = { minWavelengthM: 0.5 } as const;
