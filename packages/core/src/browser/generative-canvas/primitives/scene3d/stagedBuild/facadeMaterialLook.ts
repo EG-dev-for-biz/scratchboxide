@@ -281,7 +281,7 @@ export function updateFacadeReflections(renderer: THREE.WebGLRenderer, scene: TH
     // the shared probe capture (reflectionProbe.ts): directions where nothing was drawn see its labelled fallback sky
     const probe = new ReflectionProbeRenderer(renderer, size);
     try {
-        const target = probe.capture(scene, { position: centre, near, far: Math.max(near * 50, 5000) });
+        const target = probe.capture(scene, { position: centre, near, far: probeFar(scene, centre, near) });
         const env = target.texture;
         env.userData.sbProbeTarget = target;
         for (const m of mats) { m.envMap = env; m.envMapIntensity = 1; m.needsUpdate = true; }
@@ -305,6 +305,28 @@ export function updateFacadeReflections(renderer: THREE.WebGLRenderer, scene: TH
     } finally {
         probe.dispose();
     }
+}
+
+/**
+ * The probe's far plane: past everything drawn in the scene, the sky dome included, seen from `centre` (at least 50 times
+ * the near plane and 5 km). Measured 2026-11-08: with a fixed max(near x 50, 5000) m the scene's 18 km sky dome lay past
+ * it for most buildings (the Seagram, the Empire State Building), so their probe saw only the fallback gradient
+ * (reflectionProbe.ts, scaled from the lights, about the same in every direction): a white wall's irradiance from it
+ * 2.09 facing up and 1.76 both toward and away from the sun, where the sky gives 0.64, 1.37 and 0.34. The reflections came
+ * from no sky at all.
+ */
+export function probeFar(scene: THREE.Object3D, centre: THREE.Vector3, near: number): number {
+    let reach = 0;
+    const sphere = new THREE.Sphere();
+    scene.traverseVisible(o => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh || !mesh.geometry) return;
+        if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
+        if (!mesh.geometry.boundingSphere) return;
+        sphere.copy(mesh.geometry.boundingSphere).applyMatrix4(mesh.matrixWorld);
+        if (Number.isFinite(sphere.radius)) reach = Math.max(reach, centre.distanceTo(sphere.center) + sphere.radius);
+    });
+    return Math.max(near * 50, 5000, reach * 1.01);
 }
 
 /** Frees a facade probe environment (its render target, when it has one). */
