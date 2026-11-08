@@ -126,7 +126,7 @@ export interface RegionSet {
      * none for a set without a height map or a depth, or drawn too flat to show. And what it was drawn at.
      */
     height?: RgbaImage8; heightDrawn?: DrawnHeight;
-    finish?: { read?: { roughness: number; metalness: number; conf: number; seen?: string }; why?: string; roughness: number; metallic: number; /** The finish and grain the set's maps were drawn at (material-finish.ts finishMaps), when either changed them. */ drawn?: { roughness: number; metallic: number; relief: number; grain: number }; label: 'photo-inferred' };
+    finish?: { read?: { roughness: number; metalness: number; conf: number; seen?: string; grain?: number; coverage?: number }; /** The pick by look voted the class not bare metal: drawn a dielectric (material-finish.ts agreeMetal). */ metalVetoed?: true; why?: string; roughness: number; metallic: number; /** The finish and grain the set's maps were drawn at (material-finish.ts finishMaps), when either changed them. */ drawn?: { roughness: number; metallic: number; relief: number; grain: number }; label: 'photo-inferred' };
 }
 
 export interface MaterialRegionsReport {

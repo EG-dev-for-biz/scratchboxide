@@ -107,6 +107,17 @@ export function drawnMetalness(f: Pick<ClassFinish, 'metalness' | 'conf' | 'cove
     return f.metalness >= A.metalAt && f.conf >= A.metalConf && (f.coverage ?? 1) >= A.metalCoverage ? 1 : 0;
 }
 
+/**
+ * Two expert looks must agree on bare metal (the artists' rule: when unsure, the dielectric): a reading drawn metal
+ * (drawnMetalness) whose class the pick by look, shown the same patches beside the candidate surfaces, voted not metal
+ * (paint, coating, oxide, shade) is drawn as a dielectric at its read roughness, and says so (`metalVetoed`). A pick that
+ * gave no vote leaves the reading as it is.
+ */
+export function agreeMetal<F extends Pick<ClassFinish, 'metalness' | 'conf' | 'coverage'>>(f: F | undefined, vote: 0 | 1 | undefined): (F & { metalVetoed?: true }) | undefined {
+    if (!f || vote !== 0 || !drawnMetalness(f)) return f;
+    return { ...f, metalness: 0, metalVetoed: true };
+}
+
 export interface ClassFinish {
     roughness: number; metalness: number; conf: number; seen?: string;
     /** How much the surface varies at a metre's scale, 0 (glass) to 1 (weathered rubble): the most of a set's grain drawn (the expert's read). */

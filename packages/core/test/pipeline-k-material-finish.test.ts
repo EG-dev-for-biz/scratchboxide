@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { settleFinishes, drawFinish, drawnMetalness, drawnRoughness, energyFit, FINISH_READ, finishMaps, finishPrompt, finishTarget, grainOf, parseClassFinish, patternFit } from '../src/node/3d-engine/staged-location/pipeline-k/material-finish';
+import { agreeMetal, settleFinishes, drawFinish, drawnMetalness, drawnRoughness, energyFit, FINISH_READ, finishMaps, finishPrompt, finishTarget, grainOf, parseClassFinish, patternFit } from '../src/node/3d-engine/staged-location/pipeline-k/material-finish';
 import { REGION_FINISH } from '../src/node/3d-engine/staged-location/pipeline-k/material-sets';
 
 describe('pipeline K material finish', () => {
@@ -136,6 +136,17 @@ describe('pipeline K material finish', () => {
         expect(settleFinishes([cls(41, 1, 0.5, 0.2), cls(50, 1.7, 1.4, 0.8)], [{ roughness: 0.4, metalness: 0.9, conf: 80 }, { roughness: 0.7, metalness: 0, conf: 30 }])[0]!.metalness).toBe(0.9);
         // an opening class is settled among the opening classes only
         expect(settleFinishes([cls(41, 1, 0.5, 0.1, true), cls(50, 1.7, 1.4, 0.9)], [{ roughness: 0.4, metalness: 0.9, conf: 80 }, { roughness: 0.7, metalness: 0, conf: 90 }])[0]!.metalness).toBe(0.9);
+    });
+
+    it('draws bare metal only where the pick by look agrees: two expert looks, the dielectric when they differ', () => {
+        const metal = { roughness: 0.45, metalness: 1, conf: 80, coverage: 0.8 };
+        expect(agreeMetal(metal, 0)).toEqual({ ...metal, metalness: 0, metalVetoed: true });
+        expect(agreeMetal(metal, 1)).toBe(metal);
+        expect(agreeMetal(metal, undefined)).toBe(metal);
+        // a reading not drawn metal anyway is left alone
+        const stone = { roughness: 0.75, metalness: 0.3, conf: 80 };
+        expect(agreeMetal(stone, 0)).toBe(stone);
+        expect(drawnMetalness(agreeMetal(metal, 0)!)).toBe(0);
     });
 
     it('asks for numbers per row, never a material category to route on', () => {
