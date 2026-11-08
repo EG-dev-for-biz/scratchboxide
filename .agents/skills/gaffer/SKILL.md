@@ -84,6 +84,10 @@ these three being too strong, too weak, the wrong colour or not occluded where i
 - **Staged buildings (pipeline K):** one material path for every surface (user decision, 2026-11-05): each texel's
   detected material carries its library set's occlusion, roughness, metalness and normal, and the viewer reflects the
   scene's probe on every texel by those numbers alone; there is no separate glass layer, glass weight or pane tilt.
+  The set's height is drawn too (`stagedBuild/heightRelief.ts`): a recess of at most 3 cm marched as parallax within
+  30-70 m, its slope a fine normal and its depth dimming the ambient light, and within 14 m the lowest storey's displaced
+  geometry in place of the flat facade. A grazing-angle close-up that looks flat means the class's set has no height
+  (the build note names each set's recess), not a lighting fault.
   `reflectionProbe.ts` captures the environment (its fallback sky is what the probe sees where no geometry was drawn);
   `stagedBuild/facadeMaterialLook.ts` applies it, with the ground below the horizon (`GROUND_ALBEDO`), the probe's
   diffuse light left out and specular anti-aliasing. The sky dome and sun come from the scene's atmosphere

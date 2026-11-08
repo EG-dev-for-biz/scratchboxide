@@ -201,12 +201,14 @@ import { applyWeatheringLayer } from './scene3d/weatheringLayer';
 import { CINEMATIC_RIGS, computeSceneBudgetTelemetry } from './scene3d/lightingRigs';
 import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
 import { useStagedBuild } from './scene3d/stagedBuild/useStagedBuild';
+import { WindowCheckCard } from './scene3d/stagedBuild/WindowCheckCard';
 import { readStagedBuild, type StagedSceneData } from './scene3d/stagedBuild/stagedBuildState';
 import { mergeStagedParts, mergeStagedPartsEnabled } from './scene3d/stagedBuild/mergeStagedParts';
 import { carryStagedChoice, carryTwinObjects, twinSourceOf, type StagedMaterialModeFields } from './scene3d/stagedBuild/texturedTwins';
 import { prepareTexturedTwinModel } from './scene3d/stagedBuild/texturedTwinModel';
 import { drawPhotoTwinsLit } from './scene3d/stagedBuild/litPhotoTwins';
 import { refreshFacadeReflections } from './scene3d/stagedBuild/facadeMaterialLook';
+import { setHeightReliefEnabled, updateHeightReliefLods } from './scene3d/stagedBuild/heightRelief';
 
 // Aircraft helpers live in services/mesh/aircraft.ts (single source of truth, shared with the
 // transformer engine's sandbox template); re-exported here to keep the public API stable.
@@ -2174,6 +2176,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         (window as any).__SB_3D_STACK__ = stack;
         (window as any).__SB_3D_SCENE_DATA__ = sceneData;
         (window as any).__SB_3D_CAMERA_TARGET__ = cameraTargetRef;
+        // the materials' relief off and on at one camera (heightRelief.ts): a before/after for a proof sheet
+        (window as any).__SB_SET_HEIGHT_RELIEF__ = setHeightReliefEnabled;
         (window as any).__SB_3D_CAMERA_ROTATION__ = cameraRotationRef;
         // Loaded models by object id, including detached (inactive variant) ones kept for instant switching.
         (window as any).__SB_3D_EXTERNAL_OBJECTS__ = externalObjectsMapRef.current;
@@ -2631,6 +2635,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
                 // 12.9 Tree levels of detail: per-tree level, dither and culling for loaded trees GLBs (before the render).
                 updateTreeLods(now);
+
+                // 12.92 Material relief: the displaced cells near the camera drawn in place of their flat triangles (heightRelief.ts).
+                updateHeightReliefLods(camera);
 
                 // 12.95 Place reflections: re-rendered only once a material change in the scene has settled (placeReflections.ts).
                 placeReflections.tick(now);
@@ -4454,6 +4461,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 </div>
             )}
             {staged.overlay({ bottomInsetPx: isTimelineDrawerOpen ? 255 : 16 })}
+            {staged.active && readStagedBuild(sceneData)?.runId && <WindowCheckCard runId={readStagedBuild(sceneData)!.runId} />}
             <ObjectBuildLiveOverlay live={readObjectBuildLive(sceneData)} bottomInsetPx={isTimelineDrawerOpen ? 255 : 76} />
             {cameraMode === 'fps' && <WalkHud session={walkSessionOf} />}
 

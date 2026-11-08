@@ -56,7 +56,7 @@ For each row, record what the data holds, from the build's own outputs:
 | Area, tilt, height band, facing | the remesh / twin geometry |
 | Photo coverage and texel size | the twin's UVs and atlases (texel metres), the uncovered mask of the facade orthos |
 | Which survey station sees it square-on, at what distance | the survey or swatch station plan |
-| Readings already made | window fit (`window-fit.ts`), wall grammar (`wall-grammar.ts`), material classes (`material-regions.ts`), swatch matches (`tile-detail-bake.ts`) |
+| Readings already made | window fit (`window-fit.ts`) and its window array (`pipeline-k/window-array.ts`), wall grammar (`wall-grammar.ts`), material classes (`material-regions.ts`), swatch matches (`tile-detail-bake.ts`) |
 | Provenance of its texels | measured / photo-inferred / generated (GLB extras) |
 
 ## 3. Input checks (before any image call)
@@ -101,3 +101,5 @@ The sum of the three is 100% of the area. A pass that reads a small share is rep
 - **Material regions** are on by default for pipeline K and give every texel its detected material's library set; there
   is no glass layer (user decision, 2026-11-05), so "glass on N% of the facade" is no longer a reading: report each
   class's share of the texels and its set instead.
+  A class's set may also carry a height (a recess of at most 3 cm, generated; `pipeline_k_materials` gives each class's
+  `height`, `pipeline_k_height_relief` the displaced cells): relief on rebuilt facades only, never on a scan piece.

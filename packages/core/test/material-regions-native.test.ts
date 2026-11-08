@@ -20,9 +20,9 @@ import type { RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-text
 import { SRGB8_TO_LINEAR } from '../src/common/spatial/photogrammetric-delight';
 import { linearRgbToLab } from '../src/common/spatial/texture-library-index';
 import {
-    MATERIAL_REGIONS_PARAMS, materialPlanContext, materialPlanJobs, planMaterialJob, planMaterialRegions, readRegionClasses,
-    type MaterialPlanPiece, type MaterialRegionsPlan, type RegionClass, type RegionSet
-} from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
+    MATERIAL_REGIONS_PARAMS, materialPlanContext, materialPlanJobs, planMaterialJob, planMaterialRegions, readRegionClasses, writeMaterialRegions,
+    type MaterialPlanPiece, type MaterialRegionsPlan, type RegionClass, type RegionSet, NO_RELIEF_CLASS } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
+import { HEIGHT_RELIEF } from '../src/node/3d-engine/staged-location/pipeline-k/material-height';
 import {
     ensureMaterialRegionsNativeBinary, materialRegionsNativeColourTables, planMaterialJobNative, planMaterialRegionsNative, readRegionClassesNative
 } from '../src/node/3d-engine/staged-location/pipeline-k/native/material-regions-native';
@@ -97,7 +97,10 @@ function sets(classes: RegionClass[], S: number): RegionSet[] {
     return classes.map((c, k) => {
         const orm = { width: S, height: S, rgba: new Uint8Array(S * S * 4) }, normal = { width: S, height: S, rgba: new Uint8Array(S * S * 4) };
         for (let i = 0; i < S * S; i++) { orm.rgba.set([200 + (i % 5) * 9, 90 + k * 35 + (i % 7) * 3, k * 50 + (i % 9) * 4, 255], i * 4); normal.rgba.set([118 + (i % 23), 140 - (i % 17), 230 + (i % 11), 255], i * 4); }
-        return { name: `TestSet${c.index}`, realSizeM: [0.8 + k * 0.45, 1.1 + k * 0.3], normal, orm, distance: k };
+        // every other set with a recess map (material-height.ts), of its own size: a facade mixes classes with and without
+        const H = S + 3, height = { width: H, height: H, rgba: new Uint8Array(H * H * 4) };
+        for (let i = 0; i < H * H; i++) { const v = 255 - ((i * 7 + k * 13) % 97); height.rgba.set([v, v, v, 255], i * 4); }
+        return { name: `TestSet${c.index}`, realSizeM: [0.8 + k * 0.45, 1.1 + k * 0.3], normal, orm, distance: k, ...(k % 2 ? { height, heightDrawn: { depthM: 0.02, source: 'test', relief: 1, maxRecessM: 0.011, meanRecessM: 0.004, label: 'generated' as const } } : {}) };
     });
 }
 
@@ -105,9 +108,9 @@ function sets(classes: RegionClass[], S: number): RegionSet[] {
 const firstDiff = (a: Uint8Array, b: Uint8Array) => { if (a.length !== b.length) return 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return i; return -1; };
 
 function expectSamePiece(native: MaterialPlanPiece, ts: MaterialPlanPiece): void {
-    const strip = (p: MaterialPlanPiece) => ({ ...p, planned: p.planned && { ...p.planned, orm: undefined, normal: undefined } });
+    const strip = (p: MaterialPlanPiece) => ({ ...p, planned: p.planned && { ...p.planned, orm: undefined, normal: undefined, classes: undefined } });
     expect(strip(native)).toEqual(strip(ts));
-    for (const key of ['orm', 'normal'] as const) {
+    for (const key of ['orm', 'normal', 'classes'] as const) {
         const a = native.planned?.[key], b = ts.planned?.[key];
         expect(!!a).toBe(!!b);
         if (a && b) { expect([a.width, a.height]).toEqual([b.width, b.height]); expect(firstDiff(a.rgba, b.rgba)).toBe(-1); }
@@ -166,7 +169,35 @@ describe('pipeline K material regions, native kernel', () => {
             if (job.mesh === 'facade_lattice_1') expect(ts.glass).toBeGreaterThan(0);
             else { expect(ts.glass).toBe(0); expect(ts.classTexels.slice(4).every(n => n === 0)).toBe(true); }
         }
-        expectSamePlan(await planMaterialRegionsNative(sc.g, sc.json, sc.images, classes, st), planMaterialRegions(sc.g, sc.json, sc.images, classes, st));
+        const plan = planMaterialRegions(sc.g, sc.json, sc.images, classes, st);
+        expectSamePlan(await planMaterialRegionsNative(sc.g, sc.json, sc.images, classes, st), plan);
+        // the relief as written: a rebuilt facade's class map and metric frame, the classes' recess tiles once on the asset, none on the scan piece
+        const rebuilt = plan.materials.filter(m => m.rebuilt), cm = rebuilt[0].classes!;
+        expect(rebuilt.every(m => m.classes && m.texelM! > 0)).toBe(true);
+        expect(plan.materials.filter(m => !m.rebuilt).every(m => !m.classes)).toBe(true);
+        // every texel names a class, except a glass pane's, which names none (NO_RELIEF_CLASS: a pane takes no relief)
+        let noRelief = 0;
+        for (let k = 0; k < cm.width * cm.height; k++) { const c = cm.rgba[k * 4]; if (c === NO_RELIEF_CLASS) noRelief++; else expect(c).toBeLessThan(classes.length); }
+        const glassFacade = plan.materials.find(m => m.rebuilt && m.glass)!;
+        expect(glassFacade).toBeDefined();
+        let glassNoRelief = 0;
+        for (let k = 0; k < glassFacade.classes!.width * glassFacade.classes!.height; k++) if (glassFacade.classes!.rgba[k * 4] === NO_RELIEF_CLASS) glassNoRelief++;
+        expect(glassNoRelief).toBeGreaterThan(0);
+        expect(noRelief === 0 || rebuilt[0].glass).toBe(true);
+        const written: any = JSON.parse(JSON.stringify(sc.json)), names: string[] = [];
+        writeMaterialRegions(written, plan, (_img, _mime, name) => names.push(name) - 1, [0]);
+        const relief = written.asset.extras.sbMaterialRelief;
+        expect(relief.depthM).toBe(HEIGHT_RELIEF.capM);
+        expect(relief.label).toBe('generated');
+        expect(relief.tiles.map((t: unknown) => !!t)).toEqual(classes.map((_, k) => k % 2 === 1));
+        expect(relief.tiles[1]).toMatchObject({ class: 1, set: st[1].name, sizeM: st[1].realSizeM, maxRecessM: 0.011, label: 'generated' });
+        const mat = written.materials[rebuilt[0].material];
+        expect(mat.extras.sbMaterial.relief.uvMetres[0]).toBeCloseTo(cm.width * rebuilt[0].texelM!, 3);
+        expect(names[mat.extras.sbMaterial.relief.classTexture]).toMatch(/_classes$/);
+        expect(mat.extras.sbMaterialRegions.height.label).toBe('generated');
+        const scanMat = written.materials[plan.materials.find(m => !m.rebuilt)!.material];
+        expect(scanMat.extras.sbMaterial.relief).toBeUndefined();
+        expect(scanMat.extras.sbMaterialRegions.height).toBeUndefined();
         // a wider square (a finer texel's radius): the same majority
         const wide = { ...MATERIAL_REGIONS_PARAMS, regionSmoothM: 0.5 };
         const wctx = materialPlanContext(sc.g, sc.json, sc.images, classes, st, wide);

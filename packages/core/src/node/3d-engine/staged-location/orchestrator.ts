@@ -215,6 +215,7 @@ import { kdLookCode, showBestVersions } from './place-store-best';
 import { addSeamEdges, applySeamGain, cutChunkLayer, DISTRICT_SEAMS_PARAMS, DISTRICT_SEAMS_VERSION, sampleSeamColour, seamCoverage, seamOwner, solveSeamGains, type SeamCoverage, type SeamCutReport, type SeamEdges, type SeamSamples } from './pipeline-k/district-seams';
 import * as os from 'os';
 import { PARTY_WALL_TEXTURE_VERSION, texturePartyWall } from './pipeline-k/party-wall-texture';
+import { applyHeightRelief, HEIGHT_RELIEF_PARAMS, HEIGHT_RELIEF_VERSION, heightReliefAsked, heightReliefProvenance } from '../height-relief';
 import { FACADE_UPSCALE_DISTRICT_PARAMS, FACADE_UPSCALE_EXTRA_MS, FACADE_UPSCALE_MODELS, FACADE_UPSCALE_PARAMS, FACADE_UPSCALE_VERSION, facadeUpscaleAsked, facadeUpscaleProvenance, upscaleFacadeTextures } from './pipeline-k/facade-upscale';
 import { detailBakeProvenance, TILE_DETAIL_BAKE_VERSION, type TileDetailBakeReport } from '../../spatial/tile-detail-bake';
 import { measureVisibleDefects, VISIBLE_DEFECTS_PARAMS } from './pipeline-k/visible-defects';
@@ -223,6 +224,8 @@ import { VIEW_RELIGHT_VERSION, viewRelightEnvParams } from './pipeline-k/view-re
 import { ROOF_SHADOW_VERSION, roofShadowAuditPng } from './pipeline-k/roof-shadow';
 import { FACADE_READER_MODEL, FACADE_READER_MODEL_KEY, FACADE_READER_PARAMS, FACADE_READER_VERSION, facadeReplyUsable, mergeReadings, readPlanes, type FacadeAsk } from './pipeline-k/facade-reader';
 import { readOnTwin, TWIN_READER_VERSION } from './pipeline-k/twin-reader';
+import { describeWindowArrays, inferWindowArrays, WINDOW_ARRAY_VERSION } from './pipeline-k/window-array';
+import { BUILDING_SYSTEM_VERSION, readBuildingSystem, type BuildingSystem } from './pipeline-k/building-system';
 import { CHOICE_SPAN_M, candidateSheetPng, choicePrompt, chooseWithMemory, MATERIAL_CHOICE_VERSION, parseChoices, type ChoiceRow, type SetChoice } from './pipeline-k/material-choice';
 import { fileReadingStore, MODEL_READINGS_DIR, modelReadingsDir, readingKey, type ModelReadingStore } from './pipeline-k/model-readings';
 import { betweenSeen, MATERIAL_NAMING_VERSION, namingPrompt, parseClassWords } from './pipeline-k/material-naming';
@@ -3409,6 +3412,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // off for a single building; SCRATCHBOX_K_FACADE_UPSCALE=1/0 or the node graph sets it
                 const upscaleDistrict = kdDistrict && !request.isolate;
                 const facadeUpscaleOn = kTwin && facadeUpscaleAsked(request.steps, { district: upscaleDistrict });
+                // the rebuilt facades' lowest storey tessellated and displaced by their materials' height (height-relief.ts,
+                // generated), drawn by the viewer only up close; on for one building, off for a district
+                const heightReliefOn = kTwin && !!materialSets && heightReliefAsked(request.steps);
                 // the view relight: the photos evened out from image-model relights of rendered views (pipeline-k/view-relight.ts);
                 // off by default, SCRATCHBOX_K_VIEW_RELIGHT=1 or the node graph on; needs the lighting model client
                 const relightClient = harmonizeOn && stepOn('twin.viewRelight', process.env.SCRATCHBOX_K_VIEW_RELIGHT?.trim() === '1') ? deps.textures?.lighting : undefined;
@@ -3497,7 +3503,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // a class shown the same candidates as one chosen before (another building, chunk or run) and of its colour takes that pick; only the rest are asked
                 const chooseSets = askSets ? async (rows: ChoiceRow[], swatches: { png: Buffer; spanM?: number }): Promise<Array<SetChoice | undefined>> => (await chooseWithMemory(rows, swatches, askSets, modelReadings ? { store: modelReadings, model: FACADE_READER_MODEL_KEY } : undefined)).picks : undefined;
                 const grammarFile = kOrthos ? path.join(kOrthos, WALL_GRAMMAR_FILE) : undefined;
-                const key = stageKey(TILE_REFINE_TWIN_VERSION, upwardLift ? `upLift:${upwardLift}` : '', target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets && visionAvailable ? MATERIAL_FINISH_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', facadeUpscaleOn ? `${FACADE_UPSCALE_VERSION}:${visionAvailable ? 'image' : 'none'}${upscaleDistrict ? ':district' : ''}` : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '', readerAsk ? `${FACADE_READER_VERSION}:${TWIN_READER_VERSION}:${JSON.stringify(FACADE_READER_PARAMS)}` : '', nameClasses ? MATERIAL_NAMING_VERSION : '', chooseSets ? MATERIAL_CHOICE_VERSION : '');
+                const key = stageKey(TILE_REFINE_TWIN_VERSION, upwardLift ? `upLift:${upwardLift}` : '', target.layer.layer, sha256Bytes(bytes), fitFile && fs.existsSync(fitFile) ? sha256Bytes(fs.readFileSync(fitFile)) : '', grammarFile && fs.existsSync(grammarFile) ? sha256Bytes(fs.readFileSync(grammarFile)) : '', !!enhance && !harmonizeOn, harmonizeOn ? TEXTURE_HARMONIZE_VERSION : '', materialSets && visionAvailable ? MATERIAL_FINISH_VERSION : '', materialSets ? `${MATERIAL_REGIONS_VERSION}${process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum' ? '+harvest' : ''}` : '', partyWallOn ? PARTY_WALL_TEXTURE_VERSION : '', partyWallOn && visionAvailable ? 'party-wall-image' : '', facadeUpscaleOn ? `${FACADE_UPSCALE_VERSION}:${visionAvailable ? 'image' : 'none'}${upscaleDistrict ? ':district' : ''}` : '', heightReliefOn ? `${HEIGHT_RELIEF_VERSION}:${JSON.stringify(HEIGHT_RELIEF_PARAMS)}` : '', detailBakeOn ? `${TILE_DETAIL_BAKE_VERSION}:${sha256Bytes(fs.readFileSync(extraction.texturedGlb)).slice(0, 12)}` : '', relightClient ? `${VIEW_RELIGHT_VERSION}:${lightingModels().join(',')}:${lightingPromptVariant()}:${viewRelightEnvParams().key}` : '', roofShadowOn ? ROOF_SHADOW_VERSION : '', process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' ? SKY_DELIGHT_VERSION : '', readerAsk ? `${FACADE_READER_VERSION}:${TWIN_READER_VERSION}:${JSON.stringify(FACADE_READER_PARAMS)}` : '', nameClasses ? MATERIAL_NAMING_VERSION : '', chooseSets ? MATERIAL_CHOICE_VERSION : '');
                 const entry = await cache.run<{ rungShares: number[]; provenance: TileRefineTwin['provenance']; ladderRung: number; triangles: number; harmonize?: TextureHarmonizeReport; materialRegions?: TileRefineTwin['materialRegions']; materialClasses?: TileRefineTwin['materialClasses'] }>('textures', key, async dir => {
                     const twin = await tileRefineTwin(bytes, target.layer.layer, kTwin ? { onStep: (step: string, state: 'running' | 'done' | 'failed') => logStep(`twin.${step}`, state), ...(upwardLift ? { upwardShadowLift: upwardLift } : {}), ...(harmonizeOn ? { harmonize: { groundY: structure?.groundY ?? 0, ...(kdBuildings ? { buildingOf: districtBuildingIndex(kdBuildings) } : {}), ...(process.env.SCRATCHBOX_K_SKY_DELIGHT === '1' && extraction.geometryGlb && fs.existsSync(extraction.geometryGlb) ? { skyContext: sceneToRenderMesh(readGlbScene(extraction.geometryGlb)) } : {}) } } : {}), ...(relightClient ? { viewRelight: { client: relightClient, models: lightingModels(), params: viewRelightEnvParams().params, signal: io.signal, progress: (m: string) => io.progress(`textures: ${m}`) } } : {}), ...roofShadowOpts, ...(materialSets ? { materialRegions: { harvest: process.env.SCRATCHBOX_K_MATERIAL_PICK?.trim() === 'spectrum', sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => materialSets(classes, { signal: io.signal, progress: (m: string) => io.progress(m), ...(chooseSets && swatches ? { choose: (rows: ChoiceRow[]) => chooseSets(rows, swatches) } : {}), ...(readFinish && swatches ? { finish: () => readFinish(classes, swatches.png) } : {}), ...(modelReadings ? { store: modelReadings } : {}) }), ...(readExterior ? { readExterior } : {}), ...(nameClasses ? { nameClasses } : {}) } } : {}) } : enhance || roofShadowOn ? {
                         ...(enhance ? { recreate: {
@@ -3563,6 +3569,16 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         if (fu.report.upscaled) { twinGlb = fu.glb; provenance = [...provenance, facadeUpscaleProvenance(fu.report)]; }
                         io.progress(fu.report.upscaled ? `facade upscale: ${fu.report.upscaled} of ${fu.report.facades} rebuilt facades given fine detail (${fu.report.reused ? `${fu.report.reused} from their kept best upscale, ` : ''}${fu.report.calls} image calls, ${fu.report.cached} tiles saved before; generated)` : `no facade upscaled: ${fu.report.skipped}`);
                         cache.writeRunNote(runId, 'pipeline_k_facade_upscale', { layer: target.layer.layer, ...fu.report });
+                    }
+                    if (kTwin && !heightReliefOn) logStep('twin.heightRelief', 'skipped');
+                    if (heightReliefOn) {
+                        // a failed native build or run is thrown (no flat stand-in is written in its place)
+                        logStep('twin.heightRelief', 'running');
+                        const hr = await applyHeightRelief(twinGlb, HEIGHT_RELIEF_PARAMS, { signal: io.signal });
+                        logStep('twin.heightRelief', hr.report.cells ? 'done' : 'skipped');
+                        if (hr.report.cells) { twinGlb = hr.glb; provenance = [...provenance, heightReliefProvenance(hr.report, twin.surfaceAreaM2)]; }
+                        io.progress(hr.report.cells ? `height relief: ${hr.report.cells} cells of ${hr.report.displacedSurfaces} rebuilt facades (${hr.report.areaM2} m2, the lowest ${hr.report.bandM} m) displaced by their materials' height, up to ${Math.round(hr.report.maxRecessM * 1000)} mm inward: ${hr.report.nearTriangles + hr.report.riserTriangles} triangles in place of ${hr.report.baseTriangles}, drawn within ${hr.report.showWithinM} m (edges from ${Math.round(hr.report.edgeMinUsedM * 1000)} mm; generated)` : `no surface displaced: ${hr.report.skipped}`);
+                        cache.writeRunNote(runId, 'pipeline_k_height_relief', { layer: target.layer.layer, ...hr.report });
                     }
                     fs.writeFileSync(path.join(dir, 'twin.glb'), twinGlb);
                     return { value: { rungShares: twin.rungShares, provenance, ladderRung: twin.ladderRung, triangles: twin.triangles, ...(twin.harmonize ? { harmonize: twin.harmonize } : {}), ...(twin.materialRegions ? { materialRegions: twin.materialRegions } : {}), ...(twin.materialClasses ? { materialClasses: twin.materialClasses } : {}) } };
@@ -4543,6 +4559,37 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     notes.note(PROVENANCE.photoInferred, `the facade reader on the straightened photos failed (${errorMessage(err)}); the window geometry is the window fit's`);
                                 }
                             }
+                            // each facade's boxes (the reader's where it drew, the window fit's elsewhere) brought onto the array the majority
+                            // of them form (pipeline-k/window-array.ts), read against the photo; the wall grammar, wall sheets and lattice
+                            // below read the arrayed fit. On unless
+                            // SCRATCHBOX_K_WINDOW_ARRAY=0 or the node graph's remesh.windowArray off
+                            if (stepOn('remesh.windowArray', process.env.SCRATCHBOX_K_WINDOW_ARRAY?.trim() !== '0')) {
+                                try {
+                                    // the building's system first, read by the vision model from the whole structure on one contact sheet
+                                    // (pipeline-k/building-system.ts; user direction 2026-11-07): tiers, families and their measures, kept in
+                                    // the readings store; laid on each face below where the photo shows it. SCRATCHBOX_K_BUILDING_SYSTEM=0 off
+                                    let system: BuildingSystem | undefined;
+                                    const systemAsk = geometryAsk && process.env.SCRATCHBOX_K_BUILDING_SYSTEM?.trim() !== '0' ? geometryAsk : undefined;
+                                    if (systemAsk) {
+                                        try {
+                                            const bs = await timed('buildingSystem', () => readBuildingSystem(k.orthosDir, systemAsk, { signal: io.signal, building: { name: request.query, ...(run.state.place?.resolvedAddress ? { address: run.state.place.resolvedAddress } : {}) }, ...(geometryReadings ? { readings: { store: geometryReadings, model: FACADE_READER_MODEL_KEY } } : {}) }));
+                                            system = bs.system;
+                                            notes.write('pipeline_k_building_system', { version: BUILDING_SYSTEM_VERSION, ...(bs.system ? { system: bs.system } : {}), ...(bs.reason ? { reason: bs.reason } : {}), calls: bs.calls, reused: bs.reused, ms: bs.ms });
+                                        } catch (err) {
+                                            if (isAbort(err) || io.signal.aborted) throw err;
+                                            notes.write('pipeline_k_building_system', { version: BUILDING_SYSTEM_VERSION, failed: true, reason: errorMessage(err) });
+                                        }
+                                    } else notes.write('pipeline_k_building_system', { version: BUILDING_SYSTEM_VERSION, skipped: geometryAsk ? 'SCRATCHBOX_K_BUILDING_SYSTEM=0' : 'no vision model, or the facade reader off' });
+                                    // the structure's roof line bounds the array's step into an unreached band at a photo's top
+                                    const wa = await timed('windowArray', async () => inferWindowArrays(k.orthosDir, wf.fit, undefined, { ...(structure ? { envelopeTopY: structure.groundY + structure.heightM } : {}), ...(system ? { system } : {}) }));
+                                    notes.write('pipeline_k_window_array', { ...wa, on: "the window fit, with the facade reader's openings merged in" });
+                                    notes.note(PROVENANCE.photoInferred, describeWindowArrays(wa));
+                                } catch (err) {
+                                    if (isAbort(err) || io.signal.aborted) throw err;
+                                    notes.write('pipeline_k_window_array', { version: WINDOW_ARRAY_VERSION, failed: true, reason: errorMessage(err) });
+                                    notes.note(PROVENANCE.photoInferred, `the window array step failed (${errorMessage(err)}); the windows stay as the window fit read them`);
+                                }
+                            } else logStep('remesh.windowArray', 'skipped');
                             // the bay grammar read per wall, from all the photos of each wall's facades together (wall-grammar.ts)
                             try {
                                 const wg = await timed('wallGrammar', async () => { await ensureNativeWallGrammar(); return onThreads ? runRemeshJob<{ file: string; grammar: WallGrammarFile }>({ kind: 'wallGrammar', orthosDir: k.orthosDir, fit: wf.fit, ...(cpuShare ? { threads: cpuShare.threads } : {}) }, { signal: io.signal }) : readWallGrammar(k.orthosDir, wf.fit, b => { const d = decodePngForGrammar(b); return { rgba: d.rgba, width: d.width, height: d.height }; }, undefined, cpuShare ? { threads: cpuShare.threads } : {}); });

@@ -33,7 +33,7 @@ export const BUILD_RESULTS: Record<string, string> = {
     depth: 'window depth', cleanClay: 'cleaned scan', latticeClay: 'facades rebuilt', baseClay: 'base cleaned',
     sealedClay: 'sealed shell', closedClay: 'closed from outside', finalClay: 'final model', score: 'relief score', holes: 'holes seen',
     ownerViews: 'ownership views', ownerMasks: 'ownership vote', votedClay: 'voted remesh', registeredPoses: 'registered photos', treeStrip: 'trees', delit: 'de-lit photos',
-    harmonised: 'harmonised photos', materials: 'material maps', partyWall: 'party wall', facadeDetail: 'upscaled facade photos', late: 'later layers', published: 'scene'
+    harmonised: 'harmonised photos', materials: 'material maps', partyWall: 'party wall', facadeDetail: 'upscaled facade photos', relief: 'displaced near surfaces', late: 'later layers', published: 'scene'
 };
 
 /** Pipeline K's steps, in run order. */
@@ -46,6 +46,7 @@ export const BUILD_STEPS: BuildStepSpec[] = [
     { key: 'remesh.occlusion', stage: 'remesh', title: 'What stood in front of each facade', needs: ['tiles'], makes: ['occlusion'] },
     { key: 'remesh.pipelineK', stage: 'remesh', title: 'Straighten the facade photos', needs: ['orthos', 'occlusion'], makes: ['straightOrthos'] },
     { key: 'remesh.windowFit', stage: 'remesh', title: 'Window fit', needs: ['straightOrthos'], makes: ['windows'] },
+    { key: 'remesh.windowArray', stage: 'remesh', title: 'Window array per facade', needs: ['windows'], makes: ['windows'] },
     { key: 'remesh.facadeRead', stage: 'remesh', title: 'Read every plane\'s openings', needs: ['straightOrthos', 'tiles'], makes: ['planeReadings'] },
     { key: 'remesh.revealDepth', stage: 'remesh', title: 'Window depth from Street View', needs: ['windows', 'surveyPhotos'], makes: ['depth'] },
     { key: 'polish.cleanup', stage: 'remesh', title: 'Remesh cleanup', needs: ['scanClay'], makes: ['cleanClay'] },
@@ -73,6 +74,7 @@ export const BUILD_STEPS: BuildStepSpec[] = [
     { key: 'twin.partyWall', stage: 'textures', title: 'Party wall', needs: ['harmonised', 'baseClay'], makes: ['partyWall'] },
     { key: 'twin.detailBake', stage: 'textures', title: 'Swatch detail', needs: ['harmonised', 'tiles'], makes: ['detail'] },
     { key: 'twin.facadeUpscale', stage: 'textures', title: 'Upscale the facade photos', needs: ['harmonised', 'latticeClay'], makes: ['facadeDetail'] },
+    { key: 'twin.heightRelief', stage: 'textures', title: 'Displace the near surfaces', needs: ['materials', 'latticeClay'], makes: ['relief'] },
     { key: 'textures.lateLayers', stage: 'textures', title: 'Textures of later layers', needs: ['materials'], makes: ['late'] },
     { key: 'textures-late', stage: 'textures-late', title: 'Textures of later layers', needs: ['materials'], makes: ['late'] }
 ];
@@ -87,6 +89,7 @@ export const WRAPPER_STEPS = new Set(['remesh.polish', 'textures.waitRebuildGram
 export const TOGGLEABLE_STEPS = new Map<string, string>([
     ['remesh.occlusion', 'a facade texel behind a tree, an awning or a neighbour is read as wall like any other'],
     ['remesh.windowFit', 'the facades are opened by their bay rhythm and the lattice\'s own window cells'],
+    ['remesh.windowArray', 'each facade\'s windows stay as its bands read them, off their grid where a band drifted'],
     ['remesh.facadeRead', 'the window geometry stays as the window fit read it, and the material reads are told no brief of the building'],
     ['remesh.revealDepth', 'the recesses follow the photo-contrast rule'],
     ['polish.cleanup', 'the lattice works on the remesh as tile_refine left it'],
@@ -107,5 +110,6 @@ export const TOGGLEABLE_STEPS = new Map<string, string>([
     ['twin.materials', 'no occlusion, roughness, metalness or normal maps: the photos only'],
     ['twin.partyWall', 'the party wall stays untextured'],
     ['twin.detailBake', 'the photo atlases keep the tile\'s own resolution, no swatch detail'],
-    ['twin.facadeUpscale', 'the rebuilt facades keep their photo\'s own resolution (about 15 cm a texel), no image-model detail']
+    ['twin.facadeUpscale', 'the rebuilt facades keep their photo\'s own resolution (about 15 cm a texel), no image-model detail'],
+    ['twin.heightRelief', 'the rebuilt facades stay flat up close: their materials\' height is drawn by the viewer\'s parallax only, no geometry moved']
 ]);
