@@ -39,6 +39,11 @@ export interface LatticeOffset {
  * - bulge: center, radius, strength (negative pinches), power? (falloff exponent, default 2)
  * - sculpt: sculptBrush, center, radius, strength, direction (grab, clay and flatten)
  * - lattice: latticeDimensions [2..8 each], latticeOffsets
+ * - kelvinlet: center, radius (the load's core, epsilon), and at least one load, superposed: displacement (the load
+ *   point moves by exactly this, fractions of the box diagonal), twistDeg with twistAxis, scaleFactor (needs
+ *   poissonRatio below 0.5), pinchStrength with pinchDirection (and pinchSecondaryDirection for a planar pinch);
+ *   poissonRatio? (default 0.5, incompressible), falloffScales? (1..3, default 1; more localises), falloffRatio?
+ *   (default 1.5), steps? (default: enough for the move)
  * - subdivide: subdivideIterations (1..3); repair: no parameters
  * - weathering: weatheringIntensity (vertex colour variation), weatheringScale (noise cycles across the mesh)
  *
@@ -46,7 +51,7 @@ export interface LatticeOffset {
  * radius and strength: fractions of the box diagonal (strength is a 0..1 blend for the smooth and flatten brushes).
  */
 export type MeshDeformationOp = {
-    type: 'taper' | 'twist' | 'bend' | 'bulge' | 'shear' | 'lattice' | 'sculpt' | 'subdivide' | 'repair' | 'weathering' | (string & {});
+    type: 'taper' | 'twist' | 'bend' | 'bulge' | 'shear' | 'lattice' | 'sculpt' | 'kelvinlet' | 'subdivide' | 'repair' | 'weathering' | (string & {});
     axis?: MeshDeformationAxis;
     secondaryAxis?: MeshDeformationAxis;
     factor?: number;
@@ -63,6 +68,18 @@ export type MeshDeformationOp = {
     subdivideIterations?: number;
     weatheringIntensity?: number;
     weatheringScale?: number;
+    /** kelvinlet: the grab, as fractions of the box diagonal. */
+    displacement?: [number, number, number];
+    twistDeg?: number;
+    twistAxis?: [number, number, number];
+    scaleFactor?: number;
+    pinchStrength?: number;
+    pinchDirection?: [number, number, number];
+    pinchSecondaryDirection?: [number, number, number];
+    poissonRatio?: number;
+    falloffScales?: number;
+    falloffRatio?: number;
+    steps?: number;
 };
 
 export type MeshDeformOperation = MeshDeformationOp;
@@ -123,7 +140,7 @@ function requireTelemetryNumber(values: Map<string, string>, key: string): numbe
 
 /**
  * Native C++20 mesh reshaping: applies an explicit list of deformations (taper, twist, bend, shear, bulge, FFD
- * lattice, sculpt strokes, subdivision, repair, weathering) to a given GLB and writes the result. The caller supplies
+ * lattice, sculpt strokes, Kelvinlet loads, subdivision, repair, weathering) to a given GLB and writes the result. The caller supplies
  * the mesh and every operation; nothing is read from prose and nothing is applied by default.
  */
 export class NativeMeshReshaperService {

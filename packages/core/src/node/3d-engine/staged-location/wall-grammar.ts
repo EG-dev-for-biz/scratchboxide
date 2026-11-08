@@ -279,7 +279,9 @@ export function wallEvidence(orthosDir: string, fs0: GrammarFacade[], windowsOf:
         const img = decode(fs.readFileSync(path.join(orthosDir, f.image)));
         const unc = uncoveredOf(orthosDir, f, img.rgba, decode), wins = windowsOf.get(f.facadeId) ?? [];
         const inWin = new Uint8Array(img.width * img.height);
-        for (const [xa, ya, xb, yb] of wins) for (let y = Math.max(0, ya); y < Math.min(img.height, yb); y++) inWin.fill(1, y * img.width + Math.max(0, xa), y * img.width + Math.min(img.width, xb));
+        // the rects at whole texels (floor at the start, ceil at the end, as material-regions.ts openingMask): the facade
+        // reader's come at fractional pixels, and a fractional row used as an index shifts the fill sideways
+        for (const [xa, ya, xb, yb] of wins) for (let y = Math.max(0, Math.floor(ya)); y < Math.min(img.height, Math.ceil(yb)); y++) inWin.fill(1, y * img.width + Math.max(0, Math.floor(xa)), y * img.width + Math.min(img.width, Math.ceil(xb)));
         const step = Math.max(1, Math.round(P.cellM / f.pixel / 2));
         // u and y are affine in the photo's x and y: u = cu0 + x du_x + y du_y, height = cy0 + x dy_x + y dy_y
         const us = dot(f.axisS, U), ut = dot(f.axisT, U), uc = dot(f.centroid, U);

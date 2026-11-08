@@ -32,7 +32,13 @@ export const TEMPLATE_PARAMS = {
      * where one is drawn (as a reading's tiling asks of its openings). */
     minCovered: 0.85, openingCovered: 0.6,
     /** Fewer matches than this on a plane: the template does not hold there (the plane is read instead). */
-    minMatches: 6
+    minMatches: 6,
+    /** With the plane's own column period measured (ortho-rectify.ts), the matches must agree on one phase at it this well
+     * (the length of their circular mean, 0-1): matches half a column apart (the pattern repeats at half the period too)
+     * cancel out, no phase holds, and the plane is read instead of tiled. */
+    minPhaseR: 0.5,
+    /** A column's share of the best column's matches below which it is not drawn, and the least matches a column needs. */
+    columnShare: 0.25, columnMatches: 3
 } as const;
 export type TemplateParams = typeof TEMPLATE_PARAMS;
 
@@ -94,6 +100,39 @@ export function nccAt(g: LumGrid, t: Float32Array, tw: number, th: number, ox: n
     const va = saa - (sa * sa) / n, vb = sbb - (sb * sb) / n;
     if (!(va > 1e-6) || !(vb > 1e-6)) return -1;
     return (sab - (sa * sb) / n) / Math.sqrt(va * vb);
+}
+
+/**
+ * The columns a plane's template matches stand in (their left edges, px), snapped to the plane's own column period when the
+ * straightened photo measured one (pitchPx): the matches' phase at that period is their circular mean, each match goes
+ * to its nearest column, and a column is drawn with at least columnMatches matches and columnShare of the best column's.
+ * Undefined when no phase holds: at a measured period the matches do not agree on one (phaseR under minPhaseR, as when
+ * they sit half a column apart), or without one two neighbouring columns stand closer than an opening (openings cannot
+ * overlap, so the matches repeat at less than the real pitch). The plane is then read in full instead of tiled.
+ */
+export function templateColumns(lefts: number[], ow: number, pitchPx: number | undefined, P: TemplateParams = TEMPLATE_PARAMS): { colX: number[]; snapped: boolean; phaseR?: number } | undefined {
+    if (!lefts.length || !(ow > 0)) return undefined;
+    const med = (v: number[]) => { const q = [...v].sort((a, b) => a - b); return q[q.length >> 1]; };
+    if (pitchPx !== undefined && pitchPx >= ow) {
+        const centres = lefts.map(x => x + ow / 2);
+        let c = 0, s = 0;
+        for (const x of centres) { const a = (2 * Math.PI * x) / pitchPx; c += Math.cos(a); s += Math.sin(a); }
+        const phaseR = Math.hypot(c, s) / centres.length;
+        if (phaseR < P.minPhaseR) return undefined;
+        const phase = ((((Math.atan2(s, c) / (2 * Math.PI)) * pitchPx) % pitchPx) + pitchPx) % pitchPx;
+        const counts = new Map<number, number>();
+        for (const x of centres) { const k = Math.round((x - phase) / pitchPx); counts.set(k, (counts.get(k) ?? 0) + 1); }
+        const most = Math.max(...counts.values());
+        const colX = [...counts.entries()].filter(([, n]) => n >= Math.max(P.columnMatches, P.columnShare * most)).map(([k]) => phase + k * pitchPx - ow / 2).sort((a, b) => a - b);
+        return colX.length ? { colX, snapped: true, phaseR: Math.round(phaseR * 1000) / 1000 } : undefined;
+    }
+    const xs = [...lefts].sort((a, b) => a - b), groups: number[][] = [];
+    for (const x of xs) { const g = groups[groups.length - 1]; if (g && x - g[g.length - 1] <= 0.3 * ow) g.push(x); else groups.push([x]); }
+    const most = Math.max(...groups.map(g => g.length));
+    const colX = groups.filter(g => g.length >= Math.max(P.columnMatches, P.columnShare * most)).map(med);
+    if (!colX.length) return undefined;
+    for (let i = 1; i < colX.length; i++) if (colX[i] - colX[i - 1] < ow) return undefined;
+    return { colX, snapped: false };
 }
 
 /** Matches top to bottom, then left to right (a stable sort: equal positions keep their order). */

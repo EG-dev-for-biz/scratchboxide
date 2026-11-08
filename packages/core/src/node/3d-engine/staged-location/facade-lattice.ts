@@ -51,7 +51,7 @@ import { nativePolishThreads, runNativeLattice, runNativeLatticeAudit, type Nati
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const FACADE_LATTICE_VERSION = 'facade-lattice/21';
+export const FACADE_LATTICE_VERSION = 'facade-lattice/22';
 /** The cut (rebuildFacadesOnLattice opts.cut): the scan split at the rebuilt cells' lines before the removals and the tear audit. */
 export const LATTICE_CUT_VERSION = 'lattice-cut/5';
 
@@ -77,6 +77,8 @@ export const FACADE_LATTICE_PARAMS = {
     minDepthM: -1.2, maxDepthM: 0.8,
     /** A step face is drawn where neighbouring cells differ by more than this (m). */
     stepM: 0.03,
+    /** A lattice's end cells where the wall turns away (a corner, a prow): a wall cell at a row's end whose own scan lies more than this (m) behind the row's wall depth is built at its own scan depth, not the row's, at most three cells in from each end. Built on the plane it would stand proud of the wall, its back showing from the side (the Flatiron's prow from 315°, 2026-11-07); left to the scan it met the scan at a raw step (Lever House, 2026-11-08). */
+    edgeStepM: 0.25,
     /** A facade is rebuilt only when its measured cells cover at least this share of its outline's area (each row from its first to its last photographed texel). */
     minMeasuredShare: 0.5,
     /**
@@ -126,6 +128,8 @@ export interface TearReport {
 export interface ReliefFacade {
     facadeId: number; image: string; centroid: number[]; normal: number[]; axisS: number[]; axisT: number[];
     sMin: number; sMax: number; tMin: number; tMax: number; pixel: number; width: number; height: number; orthoSMin: number; orthoTMax: number; coverage: number;
+    /** The straightened photo's horizontal repeat (m) and the autocorrelation it was found at (pipeline-k/ortho-rectify.ts): the plane's own column pitch, when measured. */
+    periodM?: number; periodNcc?: number;
     /** A mask beside the image (one channel, 255 = the photo did not reach) when the image's holes were filled (pipeline K). */
     uncoveredMask?: string;
     /** tile_refine's occlusion mask beside the image (pipeline-k/occlusion.ts), with its mean and occluded share. */
@@ -240,7 +244,8 @@ export function latticeParamVector(P: typeof FACADE_LATTICE_PARAMS = FACADE_LATT
         STRUCTURE.chamferM, STRUCTURE.minReliefM, STRUCTURE.defaultReliefM,
         REPEAT_TEXTURE.sizeTol, REPEAT_TEXTURE.minRepeats, REPEAT_TEXTURE.edgeM, REPEAT_TEXTURE.keepShade, REPEAT_TEXTURE.maxShade, REPEAT_TEXTURE.maxSpandrelM, REPEAT_TEXTURE.minSidePx,
         FACADE_LATTICE_PARAMS.depthBandM + 1,
-        ...views
+        ...views,
+        P.edgeStepM
     ];
 }
 
@@ -364,7 +369,11 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
     // recess on, on their strips too (each window column recessed whole between its piers): the wall grammar's bays when it
     // read this facade's wall (wall-grammar.ts), else the strips of its own windows
     const strips = photoRecess ? (bays?.length ? bays : fitted?.length ? windowStrips(fitted) : []) : [];
-    const lines = [...(fitted ?? []), ...strips];
+    // a window inside a strip takes the strip's columns for its lattice lines (its own edges, read per storey, jitter by a few
+    // centimetres and would cut the strip's reveal into a zig-zag of chamfered steps: the ESB's shaft, 2026-11-08); its recorded
+    // rect, the glass, stays its own
+    const snapped: Array<[number, number, number, number]> = (fitted ?? []).map(w => { const cx = (w[0] + w[2]) / 2, cy = (w[1] + w[3]) / 2; const st = strips.find(r => cx >= r[0] && cx <= r[2] && cy >= r[1] && cy <= r[3]); return st ? [st[0], w[1], st[2], w[3]] : w; });
+    const lines = [...snapped, ...strips];
     const photo = photoLattice(img, f, P, inpainted);
     const { s, t } = lines.length ? fittedLattice(photo, lines, f, P) : photo;
     const ns = s.length - 1, nt = t.length - 1;
@@ -424,8 +433,28 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
     // what lies behind; it keeps the scan instead
     for (let k = 0; k < ns * nt; k++) if (built[k] && Number.isFinite(raw[k]) && raw[k] < P.minDepthM) built[k] = 0;
     // repeats averaged: per row, the windows (read in rows and columns) and the wall each take their median depth
-    const win = fitted?.length ? fittedCells(s, t, fitted) : windowGrid(lum, ns, nt);
+    const win = fitted?.length ? fittedCells(s, t, snapped) : windowGrid(lum, ns, nt);
     const strip = strips.length ? fittedCells(s, t, strips) : undefined;
+    // the lattice's end cells where the wall turns away (a corner, a prow): from each end of a row inward, a built wall cell
+    // whose own scan lies more than edgeStepM behind the row's wall depth follows its own scan depth instead of the row's
+    // (P.edgeStepM), so the rebuild turns with the wall: built on the plane it stood proud of the wall (the Flatiron's prow),
+    // left to the scan it met the scan at a raw step (Lever House's sheet ends, 2026-11-08)
+    const endFollow = new Uint8Array(ns * nt);
+    if (P.edgeStepM > 0) for (let b = 0; b < nt; b++) {
+        const isWall = (k: number) => built[k] && !win[k] && !strip?.[k] && Number.isFinite(raw[k]);
+        const wall: number[] = [];
+        for (let a = 0; a < ns; a++) if (isWall(b * ns + a)) wall.push(raw[b * ns + a]);
+        if (wall.length < 3) continue;
+        const med = median(wall);
+        for (const dir of [1, -1]) {
+            let a = dir > 0 ? 0 : ns - 1, n = 0;
+            while (a >= 0 && a < ns && n < 3) {
+                const k = b * ns + a;
+                if (!built[k]) { a += dir; continue; }
+                if (isWall(k) && raw[k] < med - P.edgeStepM) { endFollow[k] = 1; n++; a += dir; } else break;
+            }
+        }
+    }
     const depth: number[][] = [];
     const rowMeds: number[] = [];
     let photoRecessCells = 0, stripCells = 0;
@@ -469,7 +498,7 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
             const wall = Number.isFinite(wall0) ? wall0 : Number.isFinite(rowMed) ? rowMed : 0;
             for (const k of cells) if (win[k] && built[k]) windows[k] = 1;
             depth.push(cells.map(k => {
-                if (stripR === undefined || !(strip[k] || win[k])) return clamp(wall);
+                if (stripR === undefined || !(strip[k] || win[k])) return clamp(endFollow[k] && Number.isFinite(raw[k]) ? raw[k] : wall);
                 if (built[k]) { stripCells++; if (win[k]) photoRecessCells++; }
                 // a window never shallower than the scan measures it
                 return clamp(win[k] ? Math.min(wall - stripR - WINDOW_STRIPS.windowInsetM, Number.isFinite(raw[k]) ? raw[k] : Infinity) : wall - stripR);
@@ -492,7 +521,7 @@ export function latticeFacade(f: ReliefFacade, img: { rgba: Uint8Array; width: n
             const r = photoRecess && wallLum > 0 && Number.isFinite(wall) ? (recessM !== undefined ? recessM : photoRecessDepth(contrast)) : undefined;
             if (r !== undefined && !(dm <= wall - r)) { dm = wall - r; recessed = true; }
         }
-        depth.push(cells.map(k => clamp(Number.isFinite(win[k] ? dm : lm) ? (win[k] ? dm : lm) : Number.isFinite(rowMed) ? rowMed : 0)));
+        depth.push(cells.map(k => clamp(endFollow[k] && Number.isFinite(raw[k]) ? raw[k] : Number.isFinite(win[k] ? dm : lm) ? (win[k] ? dm : lm) : Number.isFinite(rowMed) ? rowMed : 0)));
         if (recessed) photoRecessCells += dark.filter(k => built[k]).length;
     }
     // the surface: one face per cell, step faces between cells
@@ -619,16 +648,21 @@ export function glbSoup(glb: ParsedGlb): Float32Array {
     return out;
 }
 
-/** Is a triangle (world corners) a candidate of facade f's rebuilt region: facing it (or a sliver), its centre within the depth band. */
+/**
+ * Is a triangle (world corners) a candidate of facade f's rebuilt region: its centre within the depth band, and facing the
+ * facade, or standing across it (a reveal or a fin's side of the scan's lumps, within 0.3 of perpendicular). A sliver left
+ * standing in a rebuilt cell shows its back as a 1-pixel line from the side (Penn 2's window strips at 180°, 0.25 points of
+ * the building, 2026-11-07), so it is the facade's as much as the wall it stands on. With sameFacing only a triangle facing
+ * the way the facade does, or across it: a thin wall's other side, facing away, is no part of its rebuild.
+ */
 function facesFacade(a: number[], b: number[], c: number[], f: ReliefFacade, P = FACADE_LATTICE_PARAMS, sameFacing = false): boolean {
     const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
     const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, nl = Math.hypot(nx, ny, nz);
     const m = [(a[0] + b[0] + c[0]) / 3 - f.centroid[0], (a[1] + b[1] + c[1]) / 3 - f.centroid[1], (a[2] + b[2] + c[2]) / 3 - f.centroid[2]];
     if (Math.abs(dot(m, f.normal)) > P.depthBandM) return false;
-    // a facing triangle, or a sliver (the reveals of the scan's lumps): both are the facade's
-    // sameFacing: only a triangle facing the way the facade does (a thin wall's other side, behind it, is no part of its rebuild)
     if (!(nl > 0)) return true;
     const c0 = dot([nx / nl, ny / nl, nz / nl], f.normal);
+    if (Math.abs(c0) < 0.3) return true;
     return (sameFacing ? c0 : Math.abs(c0)) >= 0.3;
 }
 

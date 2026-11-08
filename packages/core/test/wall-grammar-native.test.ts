@@ -69,14 +69,15 @@ describe('wall grammar: native against TypeScript', () => {
             return out;
         };
         const w1 = paint(dir, f1, (u, v) => (bay(u) && !band(v) ? (mullion(u) ? SPANDREL : GLASS) : band(v) ? BAND : STONE), bayWindows(34), { uncovered: u => u > 34, occluded: (u, v) => u > 8 && u < 11 && v > 20 && v < 26 });
-        // f2 (world x 15..35, its u 0..20, the wall's u + 35): the bays carried on, then a stack of punched windows at its u 12-14 in
-        // stone, one a storey, and its right end the uncovered grey
+        // f2 (world x 15..35, its u 0..20; the pattern keeps the wall's 6 m pitch, bays at its u 2-6 and 8-12): the bays carried
+        // on, then a stack of punched windows at its u 12-14 in stone, one a storey, and from u 14 the uncovered grey, wide
+        // enough to hold the next bay whole (u 14-18, generated)
         const w2 = paint(dir, f2, (u, v) => {
-            if (u > 18) return [128, 128, 128, 255];
+            if (u > 14) return [128, 128, 128, 255];
             const x = u + 35;
             if (u >= 12 && u < 14) return v % 3 >= 0.8 && v % 3 < 2.4 ? GLASS : STONE;
             return bay(x) && !band(v) && x < 47 ? (mullion(x) ? SPANDREL : GLASS) : band(v) ? BAND : STONE;
-        }, [...Array.from({ length: 9 }, (_, i) => [12, i * 3 + 0.8, 14, i * 3 + 2.4] as [number, number, number, number]), [5, 1, 6.7, 14], [7.3, 1, 9, 14]]);
+        }, [...Array.from({ length: 9 }, (_, i) => [12, i * 3 + 0.8, 14, i * 3 + 2.4] as [number, number, number, number]), ...[[2, 3.7], [4.3, 6], [8, 9.7], [10.3, 12]].flatMap(([a, b]) => [[a, 1, b, 14], [a, 17, b, 29]] as Array<[number, number, number, number]>)]);
         // the side wall: plain stone with one small window, fully photographed
         const f3 = facadeOf(3, [35, 15, -6], [1, 0, 0], [0, 0, -1], 12, 30);
         const w3 = paint(dir, f3, (u, v) => (u > 5 && u < 6 && v > 10 && v < 11.5 ? GLASS : STONE), [[5, 10, 6, 11.5]]);

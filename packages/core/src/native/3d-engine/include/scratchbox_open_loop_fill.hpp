@@ -13,6 +13,10 @@
  * capped in its best-fitting plane (earcut, a port of the mapbox/earcut 3.0.2 three.js ships) or by greedy Liepa ears
  * inside the building's envelope, the caps turned to face out, fill doubling the scan or a rebuilt wall dropped, and the
  * kept fill cut into the pieces the textured twin judges. The GLBs are written by the TypeScript (appendTriangles).
+ * With `cdtCaps` (LATTICE_STITCH_PARAMS.cdtCaps, on; native only, so the TypeScript twin keeps earcut) a flat cap is the
+ * constrained Delaunay triangulation of its loop instead (scratchbox_cdt.hpp: exact predicates, the loop's own vertices
+ * only, the best smallest angles a triangulation of that loop can have), earcut only where the loop crosses itself in
+ * its plane or where earcut doubles fewer of the surface's own edges.
  *
  * Parallel where the TypeScript's order allows it, with the same result: the loops (the TypeScript's stack runs each
  * loop's splits before the next loop, so loops are independent and their caps are numbered in that order), the caps'
@@ -22,6 +26,7 @@
 
 #pragma once
 
+#include "scratchbox_cdt.hpp"
 #include "scratchbox_js_math.hpp"
 #include "scratchbox_thread_pool.hpp"
 
@@ -49,7 +54,9 @@ namespace open_loop_fill {
 struct Params {
     double weldM, splitPerimeterM, splitRatio, doubledM, coveredByWallM, coveredByWallCellM, envelopeCellM, envelopeMarginM;
     double skinM, skinShare, rimPlanarM, offRimCapM2, capRayM, capRayStartM, capRaySamples, pieceM;
-    static constexpr size_t kCount = 16;
+    /** Flat caps by the constrained Delaunay triangulation (1) or earcut (0, the TypeScript's). */
+    double cdtCaps;
+    static constexpr size_t kCount = 17;
     static Params from(const std::vector<double>& v) {
         Params p{};
         double* f = &p.weldM;
@@ -432,6 +439,19 @@ inline std::optional<std::vector<Tri>> triangulate(const std::vector<int>& outer
         for (int k = 0; k < 3; ++k) got.insert(ekey(t[k], t[(k + 1) % 3]));
     }
     for (size_t k = 0; k < n; ++k) if (!got.count(ekey(outer[k], outer[(k + 1) % n]))) return std::nullopt;
+    return out;
+}
+
+/** A flat cap by the constrained Delaunay triangulation of its loop (counter-clockwise like the loop); empty when the loop crosses itself. */
+inline std::optional<std::vector<Tri>> triangulateCdt(const std::vector<int>& outer, const std::vector<std::array<double, 2>>& xy) {
+    std::vector<int> loop(outer.size());
+    for (size_t i = 0; i < loop.size(); ++i) loop[i] = static_cast<int>(i);
+    const auto t = cdt::triangulatePolygon(xy, {loop});
+    if (!t || t->size() + 2 != outer.size()) return std::nullopt;
+    std::vector<Tri> out;
+    out.reserve(t->size());
+    // the loop runs counter-clockwise in its plane's frame (its Newell normal), as the triangles do
+    for (const auto& f : *t) out.push_back({outer[f[0]], outer[f[1]], outer[f[2]]});
     return out;
 }
 
@@ -820,6 +840,17 @@ inline Result fillOpenLoops(const std::vector<Prim>& prims, const std::vector<st
                     if (within) { lo.skippedWallOnly++; continue; }
                 }
                 tri = triangulate(l, poly, ec);
+                if (P.cdtCaps != 0) {
+                    // the CDT cap unless it joins more rim vertices the surface already joins than earcut does (such a chord
+                    // doubles an edge: three triangles on it)
+                    auto cdtTri = triangulateCdt(l, poly);
+                    if (cdtTri) {
+                        std::unordered_set<uint64_t> rim;
+                        for (size_t i = 0; i < n; ++i) rim.insert(ekey(l[i], l[(i + 1) % n]));
+                        const auto doubled = [&](const std::vector<Tri>& ts) { size_t d = 0; for (const auto& t : ts) for (int k = 0; k < 3; ++k) { const uint64_t e = ekey(t[k], t[(k + 1) % 3]); if (!rim.count(e) && edgeAt.count(e)) d++; } return d; };
+                        if (!tri || doubled(*cdtTri) <= doubled(*tri)) tri = std::move(cdtTri);
+                    }
+                }
             } else if (wallOnly) { lo.skippedWallOnly++; continue; }
             if (tri) {
                 bool allIn = true;

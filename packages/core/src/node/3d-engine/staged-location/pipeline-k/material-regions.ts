@@ -219,8 +219,8 @@ function fittedPanes(json: any, meshName: string): number[] | undefined {
 }
 
 /**
- * The glass texels of a photo (see the file comment, 5): each pane rect's texels (Math.round at its edges, the first rect
- * holding a texel), each classed between the wall's class and the classes read inside the openings: a texel nearer the
+ * The glass texels of a photo (see the file comment, 5): each pane rect's texels (Math.round at its edges, at least one texel
+ * each way, the first rect holding a texel), each classed between the wall's class and the classes read inside the openings: a texel nearer the
  * wall's colour than any of theirs is the wall (a pier through a window's box), not what fills the openings. The other
  * outside classes are not candidates: among them there is always a dark one near the openings' colours (spandrels, shade)
  * that would take a window's texels for stone. A pane at least `share` of whose texels look like the wall is stone and
@@ -242,7 +242,8 @@ export function paneGlass(img: RgbaImage8, classes: RegionClass[], panes: number
         return best === wall;
     };
     for (let i = 0; i + 3 < panes.length; i += 4) {
-        const x0 = Math.max(0, Math.round(panes[i] * W)), x1 = Math.min(W, Math.round(panes[i + 2] * W)), y0 = Math.max(0, Math.round(panes[i + 1] * H)), y1 = Math.min(H, Math.round(panes[i + 3] * H));
+        // a pane under a texel wide or tall (the reader's rects come at fractional pixels) still holds the texel it rounds into
+        const x0 = Math.max(0, Math.round(panes[i] * W)), x1 = Math.min(W, Math.max(Math.round(panes[i + 2] * W), x0 + 1)), y0 = Math.max(0, Math.round(panes[i + 1] * H)), y1 = Math.min(H, Math.max(Math.round(panes[i + 3] * H), y0 + 1));
         const mine: number[] = [], isWall: number[] = [];
         for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
             const k = y * W + x;

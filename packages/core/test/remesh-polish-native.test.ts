@@ -25,7 +25,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { assembleGlb, parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
-import { fillOpenLoops } from '../src/node/3d-engine/staged-location/pipeline-k/lattice-stitch';
+import { fillOpenLoops, LATTICE_STITCH_PARAMS } from '../src/node/3d-engine/staged-location/pipeline-k/lattice-stitch';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { ensureRemeshPolishBinary, nativePolishThreads } from '../src/node/3d-engine/staged-location/remesh-polish-native';
 import { remeshWorkerThreads, runRemeshJobs } from '../src/node/3d-engine/staged-location/remesh-worker-pool';
@@ -207,7 +207,8 @@ function fillWith(on: boolean, s: ReturnType<typeof shell>, threads?: number) {
     process.env.SCRATCHBOX_K_NATIVE = on ? 'infill' : '0';
     try {
         const t = performance.now();
-        const r = fillOpenLoops(s.clay, [s.tex], { footprint: s.footprint, ...(threads ? { threads } : {}) });
+        // the TypeScript's methods: the native fill's CDT caps off
+        const r = fillOpenLoops(s.clay, [s.tex], { footprint: s.footprint, ...(threads ? { threads } : {}) }, { ...LATTICE_STITCH_PARAMS, cdtCaps: false });
         return { ...r, ms: performance.now() - t };
     } finally {
         if (prior === undefined) delete process.env.SCRATCHBOX_K_NATIVE; else process.env.SCRATCHBOX_K_NATIVE = prior;

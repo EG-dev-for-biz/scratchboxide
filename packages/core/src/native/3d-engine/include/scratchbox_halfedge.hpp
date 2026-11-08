@@ -12,6 +12,7 @@
 
 #include "scratchbox_math.hpp"
 #include "scratchbox_geometry.hpp"
+#include "scratchbox_processing.hpp"
 #include <vector>
 #include <queue>
 #include <unordered_map>
@@ -243,297 +244,24 @@ public:
 };
 
 // ============================================================================
-// 2. Garland-Heckbert Quadric Error Metric (QEM) LOD Decimation
+// 2. QEM LOD Decimation (one path: processing::QuadricDecimator)
 // ============================================================================
 
-struct Quadric4x4 {
-    // Stored as 10 independent symmetric coefficients:
-    // [ a2, ab, ac, ad ]
-    // [ ab, b2, bc, bd ]
-    // [ ac, bc, c2, cd ]
-    // [ ad, bd, cd, d2 ]
-    float a2{0.0f}, ab{0.0f}, ac{0.0f}, ad{0.0f};
-    float b2{0.0f}, bc{0.0f}, bd{0.0f};
-    float c2{0.0f}, cd{0.0f};
-    float d2{0.0f};
-
-    Quadric4x4() = default;
-
-    /**
-     * Creates a fundamental quadric from a plane equation p = [a, b, c, d]^T
-     * where ax + by + cz + d = 0 and a^2 + b^2 + c^2 = 1.
-     */
-    static Quadric4x4 fromPlane(float a, float b, float c, float d) {
-        Quadric4x4 q;
-        q.a2 = a * a; q.ab = a * b; q.ac = a * c; q.ad = a * d;
-        q.b2 = b * b; q.bc = b * c; q.bd = b * d;
-        q.c2 = c * c; q.cd = c * d;
-        q.d2 = d * d;
-        return q;
-    }
-
-    static Quadric4x4 fromTriangle(const Vec3& p0, const Vec3& p1, const Vec3& p2) {
-        Vec3 n = (p1 - p0).cross(p2 - p0);
-        float len = n.length();
-        if (len < 1e-8f) return Quadric4x4();
-        n = n / len;
-        float d = -n.dot(p0);
-        return fromPlane(n.x, n.y, n.z, d);
-    }
-
-    Quadric4x4 operator+(const Quadric4x4& o) const {
-        Quadric4x4 r;
-        r.a2 = a2 + o.a2; r.ab = ab + o.ab; r.ac = ac + o.ac; r.ad = ad + o.ad;
-        r.b2 = b2 + o.b2; r.bc = bc + o.bc; r.bd = bd + o.bd;
-        r.c2 = c2 + o.c2; r.cd = cd + o.cd;
-        r.d2 = d2 + o.d2;
-        return r;
-    }
-
-    Quadric4x4& operator+=(const Quadric4x4& o) {
-        *this = *this + o;
-        return *this;
-    }
-
-    /**
-     * Evaluates error E(v) = v^T Q v where v = [x, y, z, 1]^T.
-     */
-    float evaluate(const Vec3& p) const {
-        return a2 * p.x * p.x + 2.0f * ab * p.x * p.y + 2.0f * ac * p.x * p.z + 2.0f * ad * p.x +
-               b2 * p.y * p.y + 2.0f * bc * p.y * p.z + 2.0f * bd * p.y +
-               c2 * p.z * p.z + 2.0f * cd * p.z +
-               d2;
-    }
-
-    /**
-     * Solves for the optimal vertex placement that minimizes quadric error:
-     * [ a2 ab ac ] [ x ]   [ -ad ]
-     * [ ab b2 bc ] [ y ] = [ -bd ]
-     * [ ac bc c2 ] [ z ]   [ -cd ]
-     * If the determinant is near zero, evaluates endpoints p0, p1, and midpoint (p0+p1)/2.
-     */
-    Vec3 solveOptimalPosition(const Vec3& p0, const Vec3& p1) const {
-        float det = a2 * (b2 * c2 - bc * bc) -
-                    ab * (ab * c2 - bc * ac) +
-                    ac * (ab * bc - b2 * ac);
-
-        if (std::abs(det) > 1e-5f) {
-            float invDet = 1.0f / det;
-            // Solve via Cramer's rule
-            float m00 = b2 * c2 - bc * bc, m01 = ac * bc - ab * c2, m02 = ab * bc - ac * b2;
-            float m10 = bc * ac - ab * c2, m11 = a2 * c2 - ac * ac, m12 = ab * ac - a2 * bc;
-            float m20 = ab * bc - ac * b2, m21 = ac * ab - a2 * bc, m22 = a2 * b2 - ab * ab;
-
-            Vec3 opt(
-                (-ad * m00 - bd * m01 - cd * m02) * invDet,
-                (-ad * m10 - bd * m11 - cd * m12) * invDet,
-                (-ad * m20 - bd * m21 - cd * m22) * invDet
-            );
-
-            // Sanity check: optimal position should be within proximity of edge bounds
-            float dist0 = (opt - p0).length();
-            float dist1 = (opt - p1).length();
-            float edgeLen = (p1 - p0).length();
-            if (dist0 < edgeLen * 2.5f && dist1 < edgeLen * 2.5f) {
-                return opt;
-            }
-        }
-
-        // Fallback: test endpoints and midpoint
-        Vec3 mid = (p0 + p1) * 0.5f;
-        float e0 = evaluate(p0);
-        float e1 = evaluate(p1);
-        float eMid = evaluate(mid);
-
-        if (eMid <= e0 && eMid <= e1) return mid;
-        if (e0 <= e1) return p0;
-        return p1;
-    }
-};
-
-struct EdgeCollapseCandidate {
-    int v0;
-    int v1;
-    Vec3 targetPos;
-    float cost;
-
-    bool operator>(const EdgeCollapseCandidate& o) const {
-        return cost > o.cost;
-    }
-};
-
 /**
- * Decimates a ScratchboxMesh down to targetTriangleCount using Garland-Heckbert QEM.
+ * Decimates a ScratchboxMesh to targetTriangles. Kept as the halfedge entry point; the collapse itself is
+ * processing::QuadricDecimator (welded surface, seams crossed at the cost of the texture they drag, outline pinned),
+ * which replaced the QEM here: on real buildings that one cracked seams open (Seagram's Pipeline K twin at an eighth
+ * of its triangles: 111 cm RMS off the surface, against 4.9 cm now).
  */
 inline ScratchboxMesh decimateMeshQEM(
     const ScratchboxMesh& input,
     uint32_t targetTriangles,
     float maxError = 1e8f
 ) {
-    if (input.indices.size() <= targetTriangles * 3 || input.indices.empty()) {
-        return input;
-    }
-
-    size_t vertCount = input.vertices.size();
-    size_t triCount = input.indices.size() / 3;
-
-    std::vector<Quadric4x4> quadrics(vertCount);
-    std::vector<Vec3> positions(vertCount);
-    std::vector<Vec3> normals(vertCount);
-    std::vector<Vec2> uvs(vertCount);
-    std::vector<Vec4> colors(vertCount);
-    std::vector<Vec4> tangents(vertCount);
-    std::vector<bool> deleted(vertCount, false);
-
-    for (size_t i = 0; i < vertCount; ++i) {
-        positions[i] = input.vertices[i].position;
-        normals[i] = input.vertices[i].normal;
-        uvs[i] = input.vertices[i].uv;
-        colors[i] = input.vertices[i].color;
-        tangents[i] = input.vertices[i].tangent;
-    }
-
-    struct Triangle {
-        int v[3];
-        bool deleted{false};
-    };
-    std::vector<Triangle> triangles(triCount);
-
-    for (size_t f = 0; f < triCount; ++f) {
-        int i0 = static_cast<int>(input.indices[f * 3 + 0]);
-        int i1 = static_cast<int>(input.indices[f * 3 + 1]);
-        int i2 = static_cast<int>(input.indices[f * 3 + 2]);
-        triangles[f] = {{i0, i1, i2}, false};
-
-        Quadric4x4 qf = Quadric4x4::fromTriangle(positions[i0], positions[i1], positions[i2]);
-        quadrics[i0] += qf;
-        quadrics[i1] += qf;
-        quadrics[i2] += qf;
-    }
-
-    // Vertex to incident triangles mapping
-    std::vector<std::vector<int>> vertTris(vertCount);
-    for (size_t f = 0; f < triCount; ++f) {
-        vertTris[triangles[f].v[0]].push_back(static_cast<int>(f));
-        vertTris[triangles[f].v[1]].push_back(static_cast<int>(f));
-        vertTris[triangles[f].v[2]].push_back(static_cast<int>(f));
-    }
-
-    // Build unique undirected edge candidates
-    std::set<std::pair<int, int>> uniqueEdges;
-    std::priority_queue<EdgeCollapseCandidate, std::vector<EdgeCollapseCandidate>, std::greater<EdgeCollapseCandidate>> pq;
-
-    for (const auto& tri : triangles) {
-        for (int k = 0; k < 3; ++k) {
-            int u = tri.v[k];
-            int v = tri.v[(k + 1) % 3];
-            if (u > v) std::swap(u, v);
-            if (uniqueEdges.insert({u, v}).second) {
-                Quadric4x4 qSum = quadrics[u] + quadrics[v];
-                Vec3 opt = qSum.solveOptimalPosition(positions[u], positions[v]);
-                float cost = qSum.evaluate(opt);
-                pq.push({u, v, opt, cost});
-            }
-        }
-    }
-
-    size_t currentTriCount = triCount;
-
-    while (!pq.empty() && currentTriCount > targetTriangles) {
-        auto cand = pq.top();
-        pq.pop();
-
-        int u = cand.v0;
-        int v = cand.v1;
-
-        if (deleted[u] || deleted[v]) continue;
-        if (cand.cost > maxError) break;
-
-        // Check for triangle flipping before collapsing v into u
-        bool flipDetected = false;
-        for (int triIdx : vertTris[v]) {
-            if (triangles[triIdx].deleted) continue;
-            int a = triangles[triIdx].v[0];
-            int b = triangles[triIdx].v[1];
-            int c = triangles[triIdx].v[2];
-            if (a == u || b == u || c == u) continue; // Will become degenerate and deleted
-
-            Vec3 pa = (a == v) ? cand.targetPos : positions[a];
-            Vec3 pb = (b == v) ? cand.targetPos : positions[b];
-            Vec3 pc = (c == v) ? cand.targetPos : positions[c];
-
-            Vec3 origNorm = (positions[b] - positions[a]).cross(positions[c] - positions[a]);
-            Vec3 newNorm = (pb - pa).cross(pc - pa);
-
-            if (origNorm.dot(newNorm) < 0.0f) {
-                flipDetected = true;
-                break;
-            }
-        }
-        if (flipDetected) continue;
-
-        // Collapse: move u to targetPos, redirect v to u
-        positions[u] = cand.targetPos;
-        normals[u] = (normals[u] + normals[v]).normalized();
-        uvs[u] = (uvs[u] + uvs[v]) * 0.5f;
-        colors[u] = (colors[u] + colors[v]) * 0.5f;
-        tangents[u] = (tangents[u] + tangents[v]) * 0.5f;
-        quadrics[u] += quadrics[v];
-        deleted[v] = true;
-
-        // Update triangles
-        for (int triIdx : vertTris[v]) {
-            if (triangles[triIdx].deleted) continue;
-            auto& t = triangles[triIdx];
-            if (t.v[0] == u || t.v[1] == u || t.v[2] == u) {
-                // Degenerate triangle
-                t.deleted = true;
-                currentTriCount--;
-            } else {
-                if (t.v[0] == v) t.v[0] = u;
-                if (t.v[1] == v) t.v[1] = u;
-                if (t.v[2] == v) t.v[2] = u;
-                vertTris[u].push_back(triIdx);
-            }
-        }
-        vertTris[v].clear();
-    }
-
-    // Assemble output mesh
-    ScratchboxMesh out(input.name + "_lod");
-    out.material = input.material;
-    std::vector<int> remap(vertCount, -1);
-
-    for (size_t f = 0; f < triCount; ++f) {
-        if (triangles[f].deleted) continue;
-        int i0 = triangles[f].v[0];
-        int i1 = triangles[f].v[1];
-        int i2 = triangles[f].v[2];
-        if (i0 == i1 || i1 == i2 || i2 == i0) continue;
-
-        if (remap[i0] == -1) {
-            remap[i0] = static_cast<int>(out.vertices.size());
-            out.addVertex(Vertex(positions[i0], normals[i0], uvs[i0], colors[i0], tangents[i0]));
-        }
-        if (remap[i1] == -1) {
-            remap[i1] = static_cast<int>(out.vertices.size());
-            out.addVertex(Vertex(positions[i1], normals[i1], uvs[i1], colors[i1], tangents[i1]));
-        }
-        if (remap[i2] == -1) {
-            remap[i2] = static_cast<int>(out.vertices.size());
-            out.addVertex(Vertex(positions[i2], normals[i2], uvs[i2], colors[i2], tangents[i2]));
-        }
-
-        out.addTriangle(
-            static_cast<uint32_t>(remap[i0]),
-            static_cast<uint32_t>(remap[i1]),
-            static_cast<uint32_t>(remap[i2])
-        );
-    }
-
-    out.recomputeBounds();
-    out.recomputeSmoothNormals();
-    return out;
+    processing::DecimateOptions opt;
+    opt.targetTriangles = std::max<uint32_t>(4, targetTriangles);
+    opt.maxError = maxError;
+    return processing::QuadricDecimator::decimate(input, opt);
 }
 
 // ============================================================================

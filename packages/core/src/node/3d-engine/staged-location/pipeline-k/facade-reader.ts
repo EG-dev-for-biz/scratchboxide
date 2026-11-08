@@ -53,14 +53,14 @@ import * as path from 'path';
 import { decodePngAsync, encodePngAsync } from '../../../png-codec-pool';
 import type { FitFrame, WindowFitFile, WindowRect } from '../window-fit';
 import { contactSheet, contextFor, parseBrief, briefPrompt, planePlaces, type BuildingBrief, type NamedBuilding, type PlaneFamily } from './facade-reader-brief';
-import { exemplarOf, matchExemplar, mergeMatches, nccAt, TEMPLATE_PARAMS, type TemplateMatch, type WindowExemplar } from './facade-reader-template';
+import { exemplarOf, matchExemplar, mergeMatches, nccAt, TEMPLATE_PARAMS, templateColumns, type TemplateMatch, type WindowExemplar } from './facade-reader-template';
 import { planePixelsKey, readingKey, type ModelReadingStore } from './model-readings';
 import { kNative } from './native/native-switch';
 import { matchExemplarsNative } from './native/template-match-native';
 import { readOccludedAsync, unreadMask } from './occlusion';
 import { PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
 
-export const FACADE_READER_VERSION = 'facade-reader/14';
+export const FACADE_READER_VERSION = 'facade-reader/15';
 /** The prompts' version, in every kept reading's key (with the prompt's own text): a change to what is asked asks again. */
 export const FACADE_READER_PROMPT_VERSION = 'facade-reader-prompts/2';
 
@@ -137,8 +137,8 @@ export interface ZoneRecord {
     reading?: { rows: number; openings: number; conf: number; notes?: string; between?: string };
     fit?: { pitchPx: number; pitchM: number; measured: boolean; /** The storey pitch taken from the building's wide walls (readPlanes' guide). */ guided?: boolean; columns: number; rows: number; openings: number; /** tileZone's corrections (1-3): the read pitch halved, the columns shifted half a bay, columns added past the read ones. */ halved?: boolean; phaseShifted?: boolean; extended?: number };
     judge?: FacadeJudgement;
-    /** Drawn from the family's window found again in this photo (facade-reader-template.ts), not read: from which plane, how many matched, how many filled in on their grid. */
-    template?: { fromPlane: number; matches: number; gridFilled: number };
+    /** Drawn from the family's window found again in this photo (facade-reader-template.ts), not read: from which plane, how many matched, how many filled in on their grid; the photo's own column period (m) the columns were snapped to and how well the matches agreed on a phase at it. */
+    template?: { fromPlane: number; matches: number; gridFilled: number; pitchM?: number; phaseR?: number };
 }
 
 export interface FacadeReadRecord {
@@ -559,7 +559,7 @@ export function tileZone(L: Float32Array, W: number, zone: ImageRegion, crop: Im
 
 // ------------------------------------------------------------------------------------------------ one plane, all planes
 
-type FacadeFrame = FitFrame & { facadeId: number; image: string; coverage: number; uncoveredMask?: string; occludedMask?: string; width: number; height: number; kind?: string };
+type FacadeFrame = FitFrame & { facadeId: number; image: string; coverage: number; uncoveredMask?: string; occludedMask?: string; width: number; height: number; kind?: string; /** The straightened photo's column period (m) and its autocorrelation (ortho-rectify.ts), when measured. */ periodM?: number; periodNcc?: number };
 
 const round2 = (r: WindowRect): WindowRect => r.map(v => Math.round(v * 100) / 100) as WindowRect;
 
@@ -736,16 +736,19 @@ export async function readFromTemplates(img: FacadePhoto, uncovered: ArrayLike<n
     const g = { L, W, H, pixel: f.pixel };
     // every exemplar's matches in one native run, off the event loop (native/template-match-native.ts), unless the TypeScript is asked for
     const found = kNative('template') ? await matchExemplarsNative(g, family.exemplars) : family.exemplars.map(ex => matchExemplar(g, ex));
+    // the columns snapped to the plane's own period where the straightened photo measured one (its pier rhythm); matches that
+    // agree on no phase there (half a column apart) leave the plane to be read in full
+    const pitchX = f.periodM !== undefined && f.periodNcc !== undefined ? f.periodM / f.pixel : undefined;
+    let noPhase = false, phaseR: number | undefined;
     const lattice = family.exemplars.flatMap((ex, ei) => {
         const ms = found[ei].filter(m => !m.grid);
         if (ms.length < TEMPLATE_PARAMS.minMatches) return [];
         const med = (v: number[]) => { const q = [...v].sort((a, b) => a - b); return q[q.length >> 1]; };
         const ow = med(ms.map(m => m.rect[2] - m.rect[0])), oh = med(ms.map(m => m.rect[3] - m.rect[1]));
-        const xs = ms.map(m => m.rect[0]).sort((a, b) => a - b), groups: number[][] = [];
-        for (const x of xs) { const g = groups[groups.length - 1]; if (g && x - g[g.length - 1] <= 0.3 * ow) g.push(x); else groups.push([x]); }
-        const most = Math.max(...groups.map(g => g.length));
-        const colX = groups.filter(g => g.length >= Math.max(3, 0.25 * most)).map(med);
-        if (!colX.length) return [];
+        const cols = templateColumns(ms.map(m => m.rect[0]), ow, pitchX);
+        if (!cols) { noPhase = true; return []; }
+        if (cols.phaseR !== undefined) phaseR = Math.min(phaseR ?? 1, cols.phaseR);
+        const colX = cols.colX;
         // the storey pitch: the exemplar's zone's, else the commonest step between matches in one column
         let pitch = ex.pitchM ? ex.pitchM / f.pixel : 0;
         if (!(pitch > 2)) {
@@ -764,6 +767,7 @@ export async function readFromTemplates(img: FacadePhoto, uncovered: ArrayLike<n
         }
         return out;
     });
+    if (noPhase) return undefined;
     const matches = mergeMatches([lattice]);
     if (matches.length < TEMPLATE_PARAMS.minMatches) return undefined;
     // as many openings for its covered wall as the lead had (within templateDensity), or the window was not this plane's
@@ -798,8 +802,8 @@ export async function readFromTemplates(img: FacadePhoto, uncovered: ArrayLike<n
     const from = family.exemplars[0].fromPlane, gridFilled = 0;
     const zr: ZoneRecord = {
         label: `${family.name}: plane ${from}'s window`, region: box, outcome: 'drawn', judge,
-        why: `${outRects.length} openings on the grid plane ${from}'s window was found in, in ${columns - bad.size} columns${bad.size ? `; ${bad.size} columns rejected by the judge` : ''}`,
-        template: { fromPlane: from, matches: matches.length, gridFilled }
+        why: `${outRects.length} openings on the grid plane ${from}'s window was found in, in ${columns - bad.size} columns${pitchX !== undefined ? ` at the photo's ${f.periodM} m period` : ''}${bad.size ? `; ${bad.size} columns rejected by the judge` : ''}`,
+        template: { fromPlane: from, matches: matches.length, gridFilled, ...(pitchX !== undefined ? { pitchM: f.periodM } : {}), ...(phaseR !== undefined ? { phaseR } : {}) }
     };
     const record: FacadeReadRecord = { facadeId: f.facadeId, outcome: 'replaced', why: zr.why, zones: [zr], family: family.name, calls: tally.calls, ...(tally.reused ? { reused: tally.reused } : {}), ms: Date.now() - t0 };
     return { record, rects: outRects, panes };

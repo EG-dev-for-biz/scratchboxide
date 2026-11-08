@@ -22,7 +22,7 @@ import * as path from 'path';
 import { FACADE_READER_PARAMS, FACADE_READER_VERSION, luminanceOf, mergeReadings, parseJudgement, parseReading, parseZones, readFacade, readPlanes, tileZone, type FacadeAsk, type FacadePhoto } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { contextFor, parseBrief, planePlaces } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader-brief';
-import { exemplarOf, matchExemplar } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader-template';
+import { exemplarOf, matchExemplar, templateColumns } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader-template';
 
 // a 30 m x 60 m facade at 0.1 m a pixel: 5 bays, each two windows 12 px wide, storeys every 38.4 px, windows 22 px tall;
 // its top 6 m never reached by the photo
@@ -359,5 +359,34 @@ describe('pipeline K facade reader (vision agent)', () => {
             expect(again.cached).toBe(true);
             expect(calls.length).toBe(3);
         } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+});
+
+describe("the template's columns on the plane's own period (facade-reader-template.ts templateColumns)", () => {
+    const ow = 24;
+    it('snaps jittered matches to the measured period and drops a column with too few matches', () => {
+        // columns every 44 px from 30, four rows each, jittered up to 3 px; one stray match between two columns
+        const lefts: number[] = [];
+        for (let k = 0; k < 6; k++) for (let r = 0; r < 4; r++) lefts.push(30 + 44 * k + ((r * 7 + k) % 7) - 3);
+        lefts.push(30 + 44 * 2 + 22);
+        const cols = templateColumns(lefts, ow, 44)!;
+        expect(cols.snapped).toBe(true);
+        expect(cols.phaseR).toBeGreaterThan(0.8);
+        expect(cols.colX.length).toBe(6);
+        cols.colX.forEach((x, k) => expect(Math.abs(x - (30 + 44 * k))).toBeLessThan(2));
+    });
+    it('holds no phase when the matches sit half a column apart (the Flatiron: 25 columns found on a 17-column facade), so the plane is read', () => {
+        const lefts: number[] = [];
+        for (let k = 0; k < 12; k++) for (let r = 0; r < 4; r++) lefts.push(30 + 22 * k);
+        expect(templateColumns(lefts, ow, 44)).toBeUndefined();
+    });
+    it('without a measured period keeps the clustered columns, and refuses two closer than an opening', () => {
+        const lefts: number[] = [];
+        for (let k = 0; k < 5; k++) for (let r = 0; r < 4; r++) lefts.push(30 + 44 * k);
+        const cols = templateColumns(lefts, ow, undefined)!;
+        expect(cols.snapped).toBe(false);
+        expect(cols.colX).toEqual([30, 74, 118, 162, 206]);
+        for (let r = 0; r < 4; r++) lefts.push(30 + 44 * 2 + 12);
+        expect(templateColumns(lefts, ow, undefined)).toBeUndefined();
     });
 });

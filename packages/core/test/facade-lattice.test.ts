@@ -376,6 +376,43 @@ describe('facades on their photo lattice', () => {
         expect(out.tears.droppedFacades).toEqual([]);
     });
 
+    it("builds a row's end cells at their own scan depth where the wall turns away behind the plane (a prow, a corner), but not an end window", () => {
+        // the wall curves inward over its last 1.5 m (s > 10.5): 0 to 1 m behind the plane; windows as in the photo
+        let seed = 3;
+        const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.06;
+        const out: number[] = [];
+        const z = (sv: number, tv: number) => (sv > 10.5 ? -((sv - 10.5) / 1.5) : isWindow(sv, tv) ? -0.25 : 0) + rnd();
+        for (let sv = 0; sv < 12; sv += 0.25) for (let tv = 0; tv < 9; tv += 0.25) {
+            const a = [sv, tv, z(sv, tv)], b = [sv + 0.25, tv, z(sv + 0.25, tv)], c = [sv + 0.25, tv + 0.25, z(sv + 0.25, tv + 0.25)], d = [sv, tv + 0.25, z(sv, tv + 0.25)];
+            out.push(...a, ...b, ...c, ...a, ...c, ...d);
+        }
+        const r = latticeFacade(f, photo(), facadeSamples(Float32Array.from(out), f))!;
+        const ns = r.s.length - 1;
+        // the last column (its cell past s 10.5) is built, at its own scan depth, well behind the plane; the first column on it
+        for (let b = 0; b < r.t.length - 1; b++) { if (r.s[ns] - r.s[ns - 1] > 0.5) { expect(r.built[b * ns + ns - 1]).toBe(1); expect(r.depth[b][ns - 1]).toBeLessThan(-0.3); } expect(r.built[b * ns]).toBe(1); expect(Math.abs(r.depth[b][0])).toBeLessThan(0.1); }
+        const flat = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
+        expect(Math.abs(flat.depth[0][flat.s.length - 2])).toBeLessThan(0.1);
+    });
+
+    it('removes a scan sliver standing across a rebuilt cell (a reveal or a fin side), whichever way the claim faces, and leaves one outside the rebuild', () => {
+        const front = scan();
+        const r = latticeFacade(f, photo(), facadeSamples(front, f))!;
+        // two slivers perpendicular to the wall, 0.4 m deep and a metre tall: one inside a rebuilt cell (s 4.5), one past the rectangle (s -1)
+        const sliver = (sv: number): number[] => [sv, 4, 0, sv, 5, 0, sv, 5, -0.4, sv, 4, 0, sv, 5, -0.4, sv, 4, -0.4];
+        const extra = [...sliver(4.5), ...sliver(-1)];
+        const soup = new Float32Array(front.length + extra.length); soup.set(front); soup.set(extra, front.length);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-'));
+        const file = path.join(dir, 'clay.glb');
+        writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
+        for (const sameFacing of [false, true]) {
+            const t = readGlbTriangles(applyFacadeLattices(fs.readFileSync(file), [{ f, r }], false, undefined, { sameFacing }).glb);
+            const gone = (k: number) => t.indices[k * 3] === t.indices[k * 3 + 1] && t.indices[k * 3 + 1] === t.indices[k * 3 + 2];
+            const first = front.length / 9;
+            expect(gone(first)).toBe(true); expect(gone(first + 1)).toBe(true);
+            expect(gone(first + 2)).toBe(false); expect(gone(first + 3)).toBe(false);
+        }
+    });
+
     it('with sameFacing, keeps the scan of a thin wall\'s other side lying in the rebuilt cells', () => {
         // the wall's back face 5 cm behind its front, wound the other way (a parapet's street side behind its rebuilt terrace side)
         const img = photo();

@@ -14,6 +14,7 @@
 #include "scratchbox_geometry.hpp"
 #include "scratchbox_uv_tangent.hpp"
 #include "scratchbox_texture.hpp"
+#include "scratchbox_uv_rewrap.hpp"
 
 #include <vector>
 #include <cmath>
@@ -540,8 +541,31 @@ inline void dilateUvGutters(ImageBuffer& img, const std::vector<bool>& mask, int
 // 7. Full Algorithmic UV Engine Pipeline
 // ============================================================================
 
+/**
+ * New UVs for the whole mesh from the chart unwrap (scratchbox_uv_rewrap.hpp: grown charts flattened by LSCM, ABF++ and
+ * SLIM, mask-packed into one 0..1 atlas): vertices are split where a chart seam passes, positions and every other
+ * attribute are copied, and the UVs are written with v up (this engine's convention). Returns the unwrap's report.
+ */
+inline uv_rewrap::UnwrapResult reparameterizeCharts(ScratchboxMesh& mesh, uint32_t atlasSide = 1024, uint32_t gutter = 4) {
+    const uint32_t V = static_cast<uint32_t>(mesh.vertices.size()), T = static_cast<uint32_t>(mesh.indices.size() / 3);
+    std::vector<float> pos(size_t(V) * 3);
+    for (uint32_t v = 0; v < V; ++v) { pos[v * 3] = mesh.vertices[v].position.x; pos[v * 3 + 1] = mesh.vertices[v].position.y; pos[v * 3 + 2] = mesh.vertices[v].position.z; }
+    uv_rewrap::UnwrapParams prm;
+    prm.atlasWidth = prm.atlasHeight = atlasSide;
+    prm.gutter = gutter;
+    uv_rewrap::UnwrapResult r = uv_rewrap::unwrap(pos.data(), V, mesh.indices.data(), T, nullptr, prm);
+    std::vector<Vertex> verts(r.sourceVertex.size());
+    for (size_t o = 0; o < verts.size(); ++o) {
+        verts[o] = mesh.vertices[r.sourceVertex[o]];
+        verts[o].uv = Vec2(r.uv[o * 2], 1.0f - r.uv[o * 2 + 1]);
+    }
+    mesh.vertices = std::move(verts);
+    mesh.indices = r.indices;
+    return r;
+}
+
 struct UvEngineOptions {
-    std::string mode{"preserve-100-lock"}; // "preserve-100-lock" or "conformal-reparameterize"
+    std::string mode{"preserve-100-lock"}; // "preserve-100-lock" or "conformal-reparameterize" (chart unwrap, reparameterizeCharts)
     bool synthesizeCavitation{true};
     bool synthesizePbrSuite{true};
     bool decomposeAlbedo{true};
@@ -596,7 +620,9 @@ inline UvEngineResult processMeshUvEngine(
 
     // 1. Process mode: conformal reparameterization if requested
     if (options.mode == "conformal-reparameterize") {
-        uv::parameterizeHarmonicUV(mesh);
+        reparameterizeCharts(mesh);
+        uv::generateMikkTSpaceTangents(mesh);
+        result.processedVertices = static_cast<int>(mesh.vertices.size());
     } else {
         // preserve-100-lock: strictly maintain existing UVs and generate MikkTSpace tangents
         uv::generateMikkTSpaceTangents(mesh);

@@ -269,6 +269,8 @@ const NO_EVIDENCE_COST: EvidenceCost = { metadataCalls: 0, cachedCalls: 0, image
 // stages
 // ----------------------------------------------------------------------------------------------------------------
 
+/** The voted build may show holes on at most this much more of itself than the first isolate's (a share of its pixels over the outside audit's views), or the first isolate stands. */
+const OWNERSHIP_TEAR_TOLERANCE = 0.001;
 /** The ownership vote's outlines are waited for this long; a view not outlined by then is left out of the vote. */
 export const OWNERSHIP_VOTE_WINDOW_MS = 60_000;
 /** The focused run readings get at most this long after the wide reading (and less when the wide reading ran long). */
@@ -1787,7 +1789,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const left = [
                     sel.partsGivenDefaultHeight ? `${sel.partsGivenDefaultHeight} footprint part${sel.partsGivenDefaultHeight === 1 ? '' : 's'} with no height in the vector data shown at a plausible ${PLAUSIBLE_DEFAULT_HEIGHT_M} m (generated)` : '',
                     sel.buildingsGivenDefaultHeight ? `${sel.buildingsGivenDefaultHeight} building${sel.buildingsGivenDefaultHeight === 1 ? '' : 's'} with no measured height at all, shown at ${PLAUSIBLE_DEFAULT_HEIGHT_M} m (generated)` : '',
-                    sel.buildingsWithNoFootprint ? `${sel.buildingsWithNoFootprint} building${sel.buildingsWithNoFootprint === 1 ? '' : 's'} with no footprint shape and no Google volume left out` : ''
+                    sel.buildingsWithNoFootprint ? `${sel.buildingsWithNoFootprint} building${sel.buildingsWithNoFootprint === 1 ? '' : 's'} with no footprint shape and no Google volume left out` :'',
+                    sel.buildingsUnderOtherVolume ? `${sel.buildingsUnderOtherVolume} 2D-only footprint${sel.buildingsUnderOtherVolume === 1 ? '' : 's'} under another feature's modelled 3D volume left out (the volume draws that building at its own height)` : ''
                 ].filter(Boolean).join('; ');
                 if (!sel.buildings.length) return { status: 'skipped', source: '', reason: `Google's vector data has no building with a footprint or volume within ${Math.round(radiusM)} m${left ? ` (${left})` : ''}`, breakdownMs: msBy };
                 const baseNote = (frame: 'street' | 'tiles') => elevations
@@ -2315,8 +2318,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const x = await extractCached(radiusM, io, chunkRect);
                     value = { extraction: x.extraction, key: x.key, sizedTo: radiusM > baseRadiusM ? 'district-containment' : 'request', rounds: 1, cached: x.cached, builtAtMs: x.builtAtMs };
                 }
-                // the tile seams closed as the extraction arrives (tile-seam-weld-service.ts: overlaps trimmed, positions welded,
-                // T-junctions split, then tile by tile the adaptive close and the strip fill), cached beside it; every later stage
+                // the tile seams closed as the extraction arrives (tile-seam-weld-service.ts: the tiles' caps removed, their rims
+                // zipped at every cut, overlaps trimmed, positions welded, T-junctions split, then tile by tile the adaptive close
+                // and the strip fill), cached beside it; every later stage
                 // reads the welded scan, the raw extraction stays as it came
                 if (deps.tileSeams && process.env.SCRATCHBOX_TILE_SEAMS?.trim() !== '0') {
                     // the passes on unless switched off (SCRATCHBOX_TILE_SEAM_TJUNCTIONS=0, SCRATCHBOX_TILE_SEAM_OVERLAP=0); the adaptive
@@ -2324,31 +2328,39 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // closed 30-142 points for up to 2 min, the seams left being capped cut planes); the cache name says which ran
                     const tj = process.env.SCRATCHBOX_TILE_SEAM_TJUNCTIONS?.trim() !== '0', ov = process.env.SCRATCHBOX_TILE_SEAM_OVERLAP?.trim() !== '0';
                     const ad = process.env.SCRATCHBOX_TILE_SEAM_ADAPTIVE?.trim() === '1';
-                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}${ad ? '_ad' : ''}`, dir = path.dirname(raw.texturedGlb);
+                    // the tiles' photos levelled toward each other across their cuts only when asked (SCRATCHBOX_TILE_SEAM_TONE=1: it
+                    // halves the colour step at the cuts, but pipeline K reads the photos, and on Penn 2 its untextured share rose)
+                    const tn = process.env.SCRATCHBOX_TILE_SEAM_TONE?.trim() === '1';
+                    // the caps two tiles carry in a shared cut plane are removed and the two tiles' rims at every cut zipped onto one
+                    // line and welded (the service's defaults, where the extraction gives each leaf's box; user decision 2026-11-07:
+                    // on the ESB and Penn 2 the slots across a rebuilt facade's bays go, the tear audit's holes drop)
+                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}${ad ? '_ad' : ''}${tn ? '_tone' : ''}`, dir = path.dirname(raw.texturedGlb);
                     const tex = path.join(dir, `textured_${tag}.glb`), clay = path.join(dir, `geometry_${tag}.glb`), report = path.join(dir, `seams_${tag}.json`);
                     try {
                         if (!(fs.existsSync(tex) && fs.existsSync(clay) && fs.existsSync(report))) {
                             // written under temporary names and renamed: a build reading the same extraction never sees half a file
                             const sfx = `.tmp-${process.pid}-${Date.now()}`;
-                            const r = await deps.tileSeams({ inputGlb: raw.texturedGlb, outputGlb: tex + sfx, outputClayGlb: clay + sfx, tJunctions: tj, overlapTrim: ov, adaptive: ad, defaultGeometricErrorM: raw.leafGeometricErrorM, timeoutMs: 600_000 });
+                            const r = await deps.tileSeams({ inputGlb: raw.texturedGlb, outputGlb: tex + sfx, outputClayGlb: clay + sfx, tJunctions: tj, overlapTrim: ov, adaptive: ad, tone: tn, defaultGeometricErrorM: raw.leafGeometricErrorM, timeoutMs: 600_000 });
                             fs.renameSync(tex + sfx, tex); fs.renameSync(clay + sfx, clay);
                             fs.writeFileSync(report, JSON.stringify({ version: TILE_SEAMS_VERSION, ...r }));
                         }
                         const r = JSON.parse(fs.readFileSync(report, 'utf8')) as TileSeamWeldResult;
-                        const sw = r.seamWeld, tjs = r.tJunctions, ot = r.overlapTrim, ac = r.adaptive, sf = r.stripFill, au = r.seamAudit;
+                        const sw = r.seamWeld, tjs = r.tJunctions, ot = r.overlapTrim, ac = r.adaptive, sf = r.stripFill, au = r.seamAudit, tf = r.tone, ct = r.capTrim;
                         cache.writeRunNote(runId, 'tile_seams', {
                             version: TILE_SEAMS_VERSION, raw: raw.texturedGlb, inputTriangles: r.inputTriangles, outputTriangles: r.outputTriangles, toleranceM: r.toleranceM, seamWeld: sw,
                             ...(ot ? { overlapTrim: ot } : {}), ...(tjs ? { tJunctions: tjs } : {}), ...(ac ? { adaptive: ac } : { adaptive: false }), ...(sf ? { stripFill: sf } : {}),
-                            ...(r.tiles ? { tiles: r.tiles } : {}), ...(au ? { seamAudit: au } : {}), ms: r.ms
+                            ...(r.tiles ? { tiles: r.tiles } : {}), ...(au ? { seamAudit: au } : {}), ...(tf ? { tone: tf } : {}), ...(ct ? { capTrim: ct } : {}), ...(r.rimZip ? { rimZip: r.rimZip } : {}), ...(r.reweld ? { reweld: r.reweld } : {}), ...(r.photoOffset ? { photoOffset: r.photoOffset } : {}), ...(r.cutScores ? { cutScores: r.cutScores } : {}), ms: r.ms
                         });
                         // open seam length (km) under 3 cm / 3-10 / 10-30 / 30-100 cm / no other tile within 1 m
                         const km = (a: { bandLengthM: number[] }) => a.bandLengthM.map(v => (v / 1000).toFixed(1)).join(' / ');
                         run.note(PROVENANCE.asScanned, `tile seams closed (${TILE_SEAMS_VERSION}, within ${Math.round(r.toleranceM * 100)} cm` +
                             `${ac ? `, and up to ${Math.round(ac.maxToleranceM * 100)} cm where the two tiles' surfaces agree` : ''}, nothing moved further): ` +
+                            `${ct && ct.trianglesDropped ? `${Math.round(ct.areaM2).toLocaleString('en-US')} m² of the tiles' caps (the strips two tiles carry back to back in a shared cut plane) removed, ` : ''}` +
                             `${ot ? `${Math.round(ot.areaM2)} m² of doubled surface trimmed, ` : ''}${sw.groupsWelded.toLocaleString('en-US')} border points welded to the next tile's, ` +
                             `${tjs ? `${tjs.closed.toLocaleString('en-US')} T-junctions split into the next tile's edge, ` : ''}${sw.trianglesDropped.toLocaleString('en-US')} collapsed slivers dropped` +
                             `${ac ? `; ${(ac.splitsClosed + ac.vertexMoves).toLocaleString('en-US')} wider gaps closed of ${ac.agreed.toLocaleString('en-US')} where the surfaces agree (${ac.candidates.toLocaleString('en-US')} looked at)` : ''}` +
                             `${sf && sf.triangles ? `; ${sf.areaM2.toFixed(1)} m² of strip bridged (generated)` : ''}` +
+                            `${tf && tf.imagesChanged ? `; the tiles' photos levelled toward each other across ${tf.cuts.toLocaleString('en-US')} cuts (generated levels: the median colour step across them ${tf.dEBefore[0].toFixed(1)} -> ${tf.dEAfter[0].toFixed(1)} CIELAB)` : ''}` +
                             `${au ? `; open seam km by gap (<3 / 3-10 / 10-30 / 30-100 cm / none within 1 m) ${km(au.before)} before, ${km(au.after)} after` : ''}; the raw extraction is kept as it came`);
                         value.extraction = { ...raw, texturedGlb: tex, geometryGlb: clay };
                         // later stages key on the tiles key: the welded scan is another input; the sizing's scan was the raw one
@@ -2579,7 +2591,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const res = await readChain.generate({ contents: [{ role: 'user', parts: [...images.map(p => ({ inlineData: { mimeType: 'image/png', data: p.toString('base64') } })), { text: prompt }] }], config: { responseMimeType: 'application/json', temperature: 0, abortSignal: signal } },
                     { stage: 'grammar', ...VISION_CALL_POLICY.grammar, thinkingBudget: FACADE_READER_MODEL.thinkingBudget, valid: x => facadeReplyUsable(kind, replyText(x), images.length) });
                 const text = replyText(res.response);
-                res.remember();
+                // only a reply the reader can parse is recorded: a malformed one replayed would fail the same plane in every later build
+                if (facadeReplyUsable(kind, text, images.length)) res.remember();
                 return text;
             };
         };
@@ -2628,6 +2641,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             : !eBuildings.length && !shapeMode && request.procedural !== true ? `the structure's footprint did not come from Google vector data (${structure?.vectorFootprint?.reason ?? 'no vector footprint at the place'})` : undefined;
         const eEligible = pipelineE && !eWhyNot;
         const startSurvey = (): void => {
+        // pipeline K reads no Street View survey unless its evidence stage is on: the survey's images only fed the window
+        // reveal depth (off since 2026-10-28) and a diagnostic score, and the remesh waited for it before texturing could
+        // start (user ask, 2026-11-07: drop the Street View check, get to texturing sooner)
+        if (pipelineK && isolateMode && !stepOn('evidence', process.env.SCRATCHBOX_K_EVIDENCE?.trim() === '1')) {
+            runner.skip('survey', 'a 3D Building reads no Street View survey (SCRATCHBOX_K_EVIDENCE=1 turns it on)');
+            return;
+        }
         if (isolateMode && visionForSurvey) {
             const noSurvey = (reasonCode: string, reason: string, cause?: unknown, model?: VisionModelUse, transient = false) => ({
                 status: 'degraded' as const, source: 'no survey: the detail passes aim at the scan-only slots', reason,
@@ -4459,6 +4479,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
          * notes and steps describe the remesh it last ran on; `stage` is the stage its degradations are recorded under, and
          * `notes` where its run notes, legend notes and degradations go (the vote holds them until its remesh is committed).
          */
+        // what the outside audit saw on each polished build (holes), the vote's judged against the first isolate's below
+        const defectsSeen = new Map<'remesh' | 'ownership', { holeShare: number; largestHoleRegionM2: number; why: string }>();
         const finishRefine = async (r: TileRefineResult, io: StageIO, timed: <R>(k: string, work: () => Promise<R>) => Promise<R>, stepFiles: Array<[string, string]>, degradations: DegradationRecord[], stage: 'remesh' | 'ownership', notes: RefineNotes = directNotes): Promise<TileRefineResult> => {
             // pipeline K: the facade orthos straightened and their smears levelled before the facades are rebuilt on them
             let orthosKey: string | undefined, windowFit: string | undefined, wallGrammar: string | undefined, wallSheets: string | undefined, revealDepth: string | undefined, surveyViews: RevealView[] | undefined;
@@ -4640,13 +4662,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const kLoops = kBase?.loops;
                 // pipeline K's polish (the lattice, clip and infill: a minute and more) on a worker thread, in a heap of its own
                 // (remesh-worker-pool.ts), unless SCRATCHBOX_REMESH_WORKERS=0; a lighter polish stays here, short of a thread's start
-                const polishInput: PolishJobInput = { clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: stepOn('polish.lattice', true), photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(wallGrammar ? { wallGrammar } : {}), ...(wallSheets ? { walls: wallSheets } : {}), ...(pipelineK && r.rawClayGlb ? { rawScan: r.rawClayGlb } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops && stepOn('polish.base', true) ? { base: { loops: kLoops, groundY: structure!.groundY, ...(kBase?.source === 'scan outline' ? { scanOutline: true } : {}) } } : {}), ...(pipelineK && stepOn('polish.seal', process.env.SCRATCHBOX_K_SEAL?.trim() === '1') ? { seal: true } : {}), ...(pipelineK && stepOn('polish.clip', process.env.SCRATCHBOX_K_CLIP?.trim() !== '0') ? { clip: true } : {}), ...(pipelineK && stepOn('polish.infill', process.env.SCRATCHBOX_K_INFILL?.trim() !== '0') ? { infill: true } : {}), ...(pipelineK && process.env.SCRATCHBOX_K_LATTICE_CUT?.trim() === '1' ? { latticeCut: true } : {}), ...(pipelineK && isolateMode && stepOn('polish.closure', process.env.SCRATCHBOX_K_CLOSURE?.trim() !== '0') ? { closure: { joins: process.env.SCRATCHBOX_K_CORNER_JOIN?.trim() !== '0', core: process.env.SCRATCHBOX_K_CORE?.trim() !== '0', repair: process.env.SCRATCHBOX_K_HOLE_REPAIR?.trim() !== '0' } } : {}), ...(cpuShare ? { threads: cpuShare.threads } : {}), cleanup: stepOn('polish.cleanup', remeshCleanupEnabled()), orient: stepOn('polish.orient', remeshOrientEnabled()) };
+                const polishInput: PolishJobInput = { clayGlb: r.clayGlb, ...(r.texturedGlb ? { texturedGlb: r.texturedGlb } : {}), cacheKey: r.cacheKey, ...(r.reliefOrthosDir ? { orthosDir: r.reliefOrthosDir } : {}), ...(orthosKey ? { orthosKey, lattice: stepOn('polish.lattice', true), photoRecess: true } : {}), ...(windowFit ? { windowFit } : {}), ...(wallGrammar ? { wallGrammar } : {}), ...(wallSheets ? { walls: wallSheets } : {}), ...(pipelineK && r.rawClayGlb ? { rawScan: r.rawClayGlb } : {}), ...(revealDepth ? { revealDepth } : {}), ...(kLoops && stepOn('polish.base', true) ? { base: { loops: kLoops, groundY: structure!.groundY, ...(kBase?.source === 'scan outline' ? { scanOutline: true } : {}) } } : {}), ...(pipelineK && stepOn('polish.seal', process.env.SCRATCHBOX_K_SEAL?.trim() === '1') ? { seal: true } : {}), ...(pipelineK && stepOn('polish.clip', process.env.SCRATCHBOX_K_CLIP?.trim() !== '0') ? { clip: true } : {}), ...(pipelineK && stepOn('polish.infill', process.env.SCRATCHBOX_K_INFILL?.trim() !== '0') ? { infill: true } : {}), ...(pipelineK && stepOn('polish.latticeCut', process.env.SCRATCHBOX_K_LATTICE_CUT?.trim() !== '0') ? { latticeCut: true } : {}), ...(pipelineK && isolateMode && stepOn('polish.closure', process.env.SCRATCHBOX_K_CLOSURE?.trim() !== '0') ? { closure: { joins: process.env.SCRATCHBOX_K_CORNER_JOIN?.trim() !== '0', core: process.env.SCRATCHBOX_K_CORE?.trim() !== '0', repair: process.env.SCRATCHBOX_K_HOLE_REPAIR?.trim() !== '0' } } : {}), ...(cpuShare ? { threads: cpuShare.threads } : {}), cleanup: stepOn('polish.cleanup', remeshCleanupEnabled()), orient: stepOn('polish.orient', remeshOrientEnabled()) };
                 const onPolishStep = (step: string, state: 'running' | 'done' | 'failed') => logStep(`polish.${step}`, state);
                 // the native infill runs inside the synchronous polish, so its binary is built first (remesh-polish-native.ts)
                 const pol = await timed('polish', async () => { await ensureNativePolishFor(polishInput); return pipelineK && remeshWorkersEnabled() ? runRemeshJob<PolishedRemesh>({ kind: 'polish', input: polishInput }, { signal: io.signal, onStep: onPolishStep }) : polishRemesh({ ...polishInput, onStep: onPolishStep }); });
                 for (const [name, file] of Object.entries(pol.snapshots)) stepFiles.push([`polish.${name}`, file]);
                 // the steps turned off for this build, shown as skipped
-                for (const key of ['polish.cleanup', 'polish.lattice', 'polish.base', 'polish.clip', 'polish.infill', 'polish.seal', 'polish.orient', 'polish.closure', 'remesh.streetViewScore', 'remesh.visibleDefects']) if (request.steps?.[key] === false) logStep(key, 'skipped');
+                for (const key of ['polish.cleanup', 'polish.lattice', 'polish.latticeCut', 'polish.base', 'polish.clip', 'polish.infill', 'polish.seal', 'polish.orient', 'polish.closure', 'remesh.streetViewScore', 'remesh.visibleDefects']) if (request.steps?.[key] === false) logStep(key, 'skipped');
                 // the clay's relief against Street View, before the polish and after it (streetview-clay-score.ts)
                 if (pipelineK && surveyViews?.length && pol.clayGlb !== r.clayGlb && stepOn('remesh.streetViewScore', true)) {
                     try {
@@ -4669,6 +4691,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // is judged on the finished model in the texture stage, which still paints some of it (the party wall)
                 if (pipelineK && isolateMode && pol.texturedGlb && stepOn('remesh.visibleDefects', true)) {
                     const seen = await timed('visibleDefects', () => visibleDefects(pol.texturedGlb!, { signal: io.signal }));
+                    defectsSeen.set(stage, { holeShare: seen.holeShare, largestHoleRegionM2: seen.largestHoleRegionM2, why: seen.why });
                     notes.write('pipeline_k_visible_defects', { ...seen, views: seen.views.map(({ mask: _m, ...v }) => v), judged: 'holes (untextured surface is judged on the finished model: pipeline_k_visible_defects_textured)' });
                     if (seen.holesFlagged) degradations.push(notes.degrade(record(stage, 'visible_defects', {
                         part: { description: 'holes seen on the outside of the building' }, intended: 'every surface seen from outside closed',
@@ -4973,6 +4996,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     if (pipelineK) {
                         const heldNotes: RefineNotes = { write: (name, data) => held.push(() => cache.writeRunNote(runId, name, data)), note: (label, text) => held.push(() => run.note(label, text)), degrade: rec => { held.push(() => run.degrade(rec)); return rec; } };
                         voted = await finishRefine(voted, io, timedAs('remesh'), voteSteps, voteDegradations, 'ownership', heldNotes);
+                        // the vote decides what belongs to the structure; it may not tear it. Its build is kept only when the outside
+                        // audit sees it no more torn than the first isolate's (scan the vote took away that no rebuild covered opens
+                        // the base or a face: Penn 2, 2026-11-07, a 475 m² hole against 86 m²); else the first isolate stands
+                        const firstSeen = defectsSeen.get('remesh'), votedSeen = defectsSeen.get('ownership');
+                        if (firstSeen && votedSeen && (votedSeen.holeShare > firstSeen.holeShare + OWNERSHIP_TEAR_TOLERANCE || votedSeen.largestHoleRegionM2 > Math.max(firstSeen.largestHoleRegionM2, VISIBLE_DEFECTS_PARAMS.maxHoleRegionM2))) {
+                            return notUsed('ownership_vote_torn', `the voted build is more torn than the first isolate (holes on ${round(votedSeen.holeShare * 100, 2)}% of it against ${round(firstSeen.holeShare * 100, 2)}%, the largest ${round(votedSeen.largestHoleRegionM2, 1)} m² against ${round(firstSeen.largestHoleRegionM2, 1)} m²): the vote took away scan no rebuild covers; the geometric isolate stands`);
+                        }
                     }
                     run.keys.remesh = voted.cacheKey;
                     const key8 = voted.cacheKey.slice(0, 8);

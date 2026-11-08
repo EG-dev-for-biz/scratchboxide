@@ -109,6 +109,38 @@ describe('VisionModelChain', () => {
         expect(chain.attempts[2]).toMatchObject({ thinking: { level: 'LOW' }, httpStatus: 503, error: 'unavailable' });
     });
 
+    it('puts a reply the caller cannot use to the next model for that call, keeps the chain\'s model, and asks again for a recorded reply it cannot use', async () => {
+        // the first model answers malformed JSON every time, the second well; the chain's model stays the first
+        const client = scriptedClient({ 'gemini-3.8-flash': ['{"rows": [{"x": [1, 2], "label": "panes": 1}]}'], 'gemini-4-argon': ['{"rows":[]}'] });
+        const store = new Map<string, any>();
+        const chain = new VisionModelChain({ client, candidates: ['gemini-3.8-flash', 'gemini-4-argon'], sleep: async () => undefined, replyCache: { get: k => store.get(k), put: (k, v) => { store.set(k, v); } } });
+        const usable = (r: any) => { try { JSON.parse(r.candidates[0].content.parts[0].text); return true; } catch { return false; } };
+        const params = { contents: [{ role: 'user', parts: [{ text: 'read' }] }] };
+        const r = await chain.generate(params, { stage: 'vision', valid: usable });
+        expect(r.model).toBe('gemini-4-argon');
+        expect(r.response.candidates![0].content!.parts![0].text).toBe('{"rows":[]}');
+        expect(chain.answeredModel).toBe('gemini-3.8-flash');
+        expect(chain.attempts.map(a => [a.model, a.outcome])).toEqual([['gemini-3.8-flash', 'answered'], ['gemini-3.8-flash', 'unusable'], ['gemini-4-argon', 'answered']]);
+        // a later call without a check is answered by the chain's model alone
+        const plain = await chain.generate({ contents: [{ role: 'user', parts: [{ text: 'other' }] }] }, { stage: 'vision' });
+        expect(plain.model).toBe('gemini-3.8-flash');
+        expect(client.calls.map(c => c.model)).toEqual(['gemini-3.8-flash', 'gemini-4-argon', 'gemini-3.8-flash']);
+        // a reply recorded although it was unusable (a caller that remembered without checking) is not replayed: the call is made again
+        const bad = await chain.generate({ contents: [{ role: 'user', parts: [{ text: 'again' }] }] }, { stage: 'vision' });
+        bad.remember();
+        expect(store.size).toBe(1);
+        const again = await chain.generate({ contents: [{ role: 'user', parts: [{ text: 'again' }] }] }, { stage: 'vision', valid: usable });
+        expect(again.cached).toBeUndefined();
+        expect(again.model).toBe('gemini-4-argon');
+        expect(client.calls.map(c => c.model).slice(3)).toEqual(['gemini-3.8-flash', 'gemini-3.8-flash', 'gemini-4-argon']);
+        // every model's reply unusable: the first one comes back, for the caller to report
+        const only = new VisionModelChain({ client: scriptedClient({ a: ['nope'], b: ['nor'] }), candidates: ['a', 'b'], sleep: async () => undefined });
+        const worst = await only.generate(params, { stage: 'vision', valid: usable });
+        expect(worst.model).toBe('a');
+        expect(worst.response.candidates![0].content!.parts![0].text).toBe('nope');
+        expect(only.attempts.map(a => a.outcome)).toEqual(['answered', 'unusable', 'answered', 'unusable']);
+    });
+
     it('says none is served when every candidate is not found', async () => {
         const client = scriptedClient({});
         const chain = new VisionModelChain({ client, candidates: ['gemini-4-argon', 'gemini-3.8-flash'], sleep: async () => undefined });

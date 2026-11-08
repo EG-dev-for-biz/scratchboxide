@@ -540,7 +540,9 @@ function results(outDir: string): BuildResult[] {
         if (!fs.statSync(sideDir).isDirectory()) continue;
         for (const slug of fs.readdirSync(sideDir)) {
             const r = readJson(path.join(sideDir, slug, 'result.json'));
-            if (r?.schema === RESULT_SCHEMA) out.push(r);
+            // only the sides of this run: a result set aside under another folder (feat-round2/, superseded/) is not
+            // one of them, and would otherwise be written back over the live side's result under its own `side`
+            if (r?.schema === RESULT_SCHEMA && r.side === side && r.place?.slug === slug) out.push(r);
         }
     }
     return out;

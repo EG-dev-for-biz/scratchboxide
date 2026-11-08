@@ -448,7 +448,7 @@ export class TaskCapabilityResolver {
                 nativeCapabilities.push('Multi-Brush Digital Sculpt Engine (Clay, Crease, Smooth, Flatten, Inflate)');
                 nativeCapabilities.push('Loop Subdivision & Manifold Topology Repair');
                 nativeCapabilities.push('In-App Agent Tool: mesh_apply_deformers (explicit operations on a given GLB)');
-                rationale = 'Native Scratchbox C++20 Astro 3D engine executes sub-second parametric deformers, Bernstein FFD lattices, sculpt strokes, and loop subdivision directly on meshes, compiling via Apple Clang with zero external dependencies.';
+                rationale = 'Native Scratchbox C++20 Astro 3D engine executes sub-second parametric deformers, Bernstein FFD lattices, sculpt strokes, Kelvinlet elastic loads, and loop subdivision directly on meshes, compiling via Apple Clang with zero external dependencies.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'mesh_apply_deformers or NativeMeshReshaperService',
@@ -488,12 +488,12 @@ export class TaskCapabilityResolver {
             } else if (/algorithmic\s*uv|unwrap[\s\w-]{0,30}rewrap|rewrap[\s\w-]{0,30}unwrap|uv\s*(?:unwrap|re-?wrap|parameteriz|atlas\s*pack|maxrects)|cavitation\s*pore|calcite\s*strata|pbr\s*material\s*decompos|conformal\s*reparameteriz/i.test(lower)) {
                 canSolveNatively = true;
                 primaryNativeEngine = 'cpp-3d-engine';
-                nativeCapabilities.push('UV unwrap: normal-clustered charts, per-chart distortion measured (angle stretch and area ratio), LSCM conformal re-parameterization where the orthographic projection distorts, splitting where neither passes; never overlapping (AlgorithmicUvEngine mode \'unwrap\', scratchbox_uv_rewrap.hpp)');
+                nativeCapabilities.push('UV unwrap: grown charts (normal deviation, roundness, straightness, creases), each flattened by LSCM, ABF++ and SLIM (no flipped triangles) where the orthographic projection is not isometric, per-chart distortion measured (angle stretch and area ratio), splitting where nothing passes; mask packing, never overlapping (AlgorithmicUvEngine mode \'unwrap\', scratchbox_uv_rewrap.hpp)');
                 nativeCapabilities.push('Atlas packing per material at a requested texel density or atlas size, with gutters and 90° chart rotation (skyline packer)');
                 nativeCapabilities.push('Texture rewrap (mode \'rewrap\'): every texture of a material rebaked into the new atlas from the old UVs (exact barycentric transfer, bilinear, gutter dilation), normal maps converted between tangent frames, TANGENT rewritten; or baked from another mesh by nearest surface (transferSourceGlbPath)');
                 nativeCapabilities.push('Mode \'preserve-100-lock\': UVs untouched; normal / ORM maps estimated from the baseColor pixels and optional albedo de-lighting');
                 nativeCapabilities.push('In-App Agent Tools: algorithmic_uv_unwrap_rewrap, uv_analyze_texel_density, pbr_material_decompose, atlas_maxrects_pack');
-                rationale = 'AlgorithmicUvEngine unwraps a GLB into new non-overlapping UV charts (orthographic or LSCM per chart by measured distortion), packs them per material at one texel density, and on rewrap rebakes every texture into the new atlas; it reports chart counts, distortion, texel-density uniformity, utilisation, and each texture rebaked or not rebaked with the reason.';
+                rationale = 'AlgorithmicUvEngine unwraps a GLB into new non-overlapping UV charts (orthographic, LSCM, ABF++ or SLIM per chart by measured distortion), packs them per material at one texel density, and on rewrap rebakes every texture into the new atlas; it reports chart counts, distortion, texel-density uniformity, utilisation, and each texture rebaked or not rebaked with the reason.';
                 suggestedNativeAction = {
                     primitiveType: '3d-scene',
                     serviceOrTool: 'AlgorithmicUvEngine.processGlb or algorithmic_uv_unwrap_rewrap tool',
