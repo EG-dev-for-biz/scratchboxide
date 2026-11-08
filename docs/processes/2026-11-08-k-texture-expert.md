@@ -37,4 +37,6 @@ Benchmark `/Volumes/3DTESTING/scratchbox-ide/benchmarks/2026-11-08-texture-exper
 - **Seagram:** the bronze is read bronze (metal 1) at 0.50-0.55, against 0.24 on main, and one class main drew as glass at 0.08 now reads bronze. So metal rises and smoothness falls; the reflective share stays 100%.
 - **Lever House:** an all-glass curtain wall, read as glass. Its two light classes were named brushed stainless (reference row 12, held to 0.25) but main's shade-twin rule (`settleFinishes`) overruled them into the glass finish: follow-up.
 
+**Repeat runs** (MAIN's determinism check): a second uncached build of each arm on the ESB and Penn 2 (main 17f1d2f1; branch ac7f646f, which is 141da180 plus docs only), on the same shared answer store, gave the same classes, picks and shares texel for texel. The spread is 0, so every difference above is the change. Both arms rank from the committed `stats.json`: neither checkout had measured sets of its own.
+
 **Not done:** app-viewer close-ups at a raking sun. The session's window was closed, so the Browser pane ran as a background page and could not load the textured twins. Launch entries `scratchbox-tx-main` and `scratchbox-k-texture-expert` (ports 3270-3282, shared answer store) are in the main checkout's `.claude/launch.json`, ready for them.
