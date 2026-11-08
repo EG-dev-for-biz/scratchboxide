@@ -20,6 +20,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+// the maintainer's flow measures sets into this checkout and bundles them; builds read the bundle alone (texture-library.ts localLibraryStatsAllowed)
+process.env.SCRATCHBOX_LIBRARY_LOCAL_STATS = '1';
 import { LIBRARY_STATS_BUNDLE, libraryEntryMeasured, loadTextureLibraryIndex, measureLibraryEntries, measuredLibraryStats } from '../packages/core/src/node/3d-engine/texture-library';
 import { FACADE_TILE } from '../packages/core/src/node/3d-engine/staged-location/pipeline-k/material-sets';
 
