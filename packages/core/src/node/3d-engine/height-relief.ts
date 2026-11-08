@@ -74,11 +74,12 @@ export interface HeightReliefReport {
 }
 
 /** Whether a pipeline K build runs the displacement: the node graph's switch when set, else SCRATCHBOX_K_HEIGHT_RELIEF (1 on, 0 off), else on for one building and off for a district (its chunks hold dozens of buildings). */
-export function heightReliefAsked(steps: Record<string, unknown> | undefined, opts: { district?: boolean } = {}): boolean {
+export function heightReliefAsked(steps: Record<string, unknown> | undefined): boolean {
     const asked = steps?.['twin.heightRelief'];
     if (typeof asked === 'boolean') return asked;
-    const env = process.env.SCRATCHBOX_K_HEIGHT_RELIEF?.trim();
-    return env === '1' ? true : env === '0' ? false : opts.district !== true;
+    // Off by default (MAIN's verdict on PR #190, 2026-11-08): the height stays a material channel the viewer draws by
+    // parallax; the geometry is displaced only when asked, by the node graph's step or SCRATCHBOX_K_HEIGHT_RELIEF=1.
+    return process.env.SCRATCHBOX_K_HEIGHT_RELIEF?.trim() === '1';
 }
 
 export const heightReliefProvenance = (r: Pick<HeightReliefReport, 'areaM2' | 'maxRecessM' | 'nearTriangles' | 'riserTriangles' | 'bandM' | 'showWithinM'>, totalAreaM2: number) => ({

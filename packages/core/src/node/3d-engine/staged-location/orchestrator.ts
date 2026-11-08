@@ -3412,7 +3412,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const facadeUpscaleOn = kTwin && facadeUpscaleAsked(request.steps, { district: upscaleDistrict });
                 // the rebuilt facades' lowest storey tessellated and displaced by their materials' height (height-relief.ts,
                 // generated), drawn by the viewer only up close; on for one building, off for a district
-                const heightReliefOn = kTwin && !!materialSets && heightReliefAsked(request.steps, { district: upscaleDistrict });
+                const heightReliefOn = kTwin && !!materialSets && heightReliefAsked(request.steps);
                 // the view relight: the photos evened out from image-model relights of rendered views (pipeline-k/view-relight.ts);
                 // off by default, SCRATCHBOX_K_VIEW_RELIGHT=1 or the node graph on; needs the lighting model client
                 const relightClient = harmonizeOn && stepOn('twin.viewRelight', process.env.SCRATCHBOX_K_VIEW_RELIGHT?.trim() === '1') ? deps.textures?.lighting : undefined;

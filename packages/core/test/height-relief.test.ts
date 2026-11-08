@@ -211,14 +211,14 @@ describe('height relief on a GLB', () => {
         const prior = process.env.SCRATCHBOX_K_HEIGHT_RELIEF;
         delete process.env.SCRATCHBOX_K_HEIGHT_RELIEF;
         try {
-            expect(heightReliefAsked(undefined)).toBe(true);
-            expect(heightReliefAsked(undefined, { district: true })).toBe(false);
+            expect(heightReliefAsked(undefined)).toBe(false);
             expect(heightReliefAsked({ 'twin.heightRelief': false })).toBe(false);
-            expect(heightReliefAsked({ 'twin.heightRelief': true }, { district: true })).toBe(true);
+            expect(heightReliefAsked({ 'twin.heightRelief': true })).toBe(true);
             process.env.SCRATCHBOX_K_HEIGHT_RELIEF = '0';
             expect(heightReliefAsked(undefined)).toBe(false);
             process.env.SCRATCHBOX_K_HEIGHT_RELIEF = '1';
-            expect(heightReliefAsked(undefined, { district: true })).toBe(true);
+            expect(heightReliefAsked(undefined)).toBe(true);
+            expect(heightReliefAsked({ 'twin.heightRelief': false })).toBe(false);
         } finally {
             if (prior === undefined) delete process.env.SCRATCHBOX_K_HEIGHT_RELIEF; else process.env.SCRATCHBOX_K_HEIGHT_RELIEF = prior;
         }
