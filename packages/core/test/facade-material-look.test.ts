@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { MATTE_REFLECTION, prepareFacadeMaterials } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/facadeMaterialLook';
+import { MATTE_REFLECTION, prepareFacadeMaterials, probeFar } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/facadeMaterialLook';
 
 describe('the staged twin material look', () => {
     it("draws a rough dielectric's probe reflection in proportion to its fill, and a smooth or metal one whole", async () => {
@@ -31,5 +31,21 @@ describe('the staged twin material look', () => {
         expect(j).toBeGreaterThan(i);
         expect(MATTE_REFLECTION.from).toBeLessThan(MATTE_REFLECTION.full);
         expect(mat.customProgramCacheKey()).toMatch(/^sb-facade-v10:/);
+    });
+
+    it("sets the probe's far plane past everything drawn, the sky dome included", () => {
+        const scene = new THREE.Scene();
+        // a building 60 m across at the origin and an 18 km sky dome: a fixed 5 km far plane would clip the dome away
+        scene.add(new THREE.Mesh(new THREE.BoxGeometry(60, 160, 60)));
+        const dome = new THREE.Mesh(new THREE.SphereGeometry(18000, 8, 6));
+        dome.position.set(200, 180, 200);
+        scene.add(dome);
+        scene.updateMatrixWorld(true);
+        const centre = new THREE.Vector3(0, 80, 0), far = probeFar(scene, centre, 81);
+        expect(far).toBeGreaterThan(18000 + dome.position.distanceTo(centre));
+        // a hidden mesh does not stretch it; with nothing far the floor holds
+        dome.visible = false;
+        expect(probeFar(scene, centre, 81)).toBe(5000);
+        expect(probeFar(scene, centre, 200)).toBe(10000);
     });
 });
