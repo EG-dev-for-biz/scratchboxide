@@ -96,8 +96,8 @@ describe('pipeline K library sets', () => {
         expect(prompts[0]).toMatch(/\nConcrete \(2 m\): /);
         expect(prompts[0]).not.toContain('NotMeasured (');
         expect(first[0].choice?.words).toEqual({ seen: 'limestone cladding', sets: [] });
-        // the same classes again: the kept answer, no second call
-        await resolveRegionSets([dark], { repoRoot: root, store, finish: read, choose, words: { ask, model: 'm1' } });
+        // the same classes and prompt again: the kept answer, no second call
+        await resolveRegionSets([dark], { repoRoot: root, store, finish: read, choose, words: { ask, model: 'm1', building: 'Empire State Building' } });
         expect(prompts).toHaveLength(1);
         // an unsure finish read is not asked; a failed ask degrades to the colour shortlist with its reason
         await resolveRegionSets([dark], { repoRoot: root, store, finish: async () => [{ roughness: 0.8, metalness: 0, conf: 30, seen: 'limestone cladding' }], choose, words: { ask, model: 'm1' } });

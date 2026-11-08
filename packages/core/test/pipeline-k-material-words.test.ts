@@ -40,12 +40,11 @@ describe('pipeline K material words', () => {
         expect(() => parseWordCandidates('{"classes":[{"sets":["a"]}]}', 1, valid)).toThrow(/"class"/);
     });
 
-    it('keys the kept answer by the seen words, the pool and the model', () => {
-        const k = wordsKey(['limestone cladding'], ['a', 'b'], 'm1');
+    it('keys the kept answer by the whole prompt (the seen words, the pool and the wording) and the model', () => {
+        const k = wordsKey('prompt A', 'm1');
         expect(k).toMatch(/^material-words\/[0-9a-f]{64}$/);
-        expect(wordsKey(['limestone cladding'], ['a', 'b'], 'm1')).toBe(k);
-        expect(wordsKey(['limestone cladding'], ['a', 'c'], 'm1')).not.toBe(k);
-        expect(wordsKey(['limestone ashlar'], ['a', 'b'], 'm1')).not.toBe(k);
-        expect(wordsKey(['limestone cladding'], ['a', 'b'], 'm2')).not.toBe(k);
+        expect(wordsKey('prompt A', 'm1')).toBe(k);
+        expect(wordsKey('prompt B', 'm1')).not.toBe(k);
+        expect(wordsKey('prompt A', 'm2')).not.toBe(k);
     });
 });

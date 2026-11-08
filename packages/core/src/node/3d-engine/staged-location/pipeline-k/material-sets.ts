@@ -124,13 +124,15 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
     if (opts.words) {
         const asked = classes.map((_, k) => k).filter(k => finishes[k]?.seen && (finishes[k]!.conf ?? 0) >= WORDS_MIN_CONF);
         if (asked.length) {
-            const seen = asked.map(k => finishes[k]!.seen!), poolIds = pool.map(e => e.id), key = wordsKey(seen, poolIds, opts.words.model);
+            const seen = asked.map(k => finishes[k]!.seen!), poolIds = pool.map(e => e.id);
+            const prompt = wordsPrompt(seen.map(x => ({ seen: x })), poolLines(pool), { ...(opts.words.building ? { building: opts.words.building } : {}), ...(opts.words.brief ? { brief: opts.words.brief } : {}) });
+            const key = wordsKey(prompt, opts.words.model);
             const kept = opts.store ? await opts.store.get<Array<string[] | null>>(key) : undefined;
             let named: Array<string[] | undefined> | undefined = kept?.map(x => x ?? undefined);
             if (!named || named.length !== asked.length) {
                 try {
                     opts.progress?.(`material regions: a text model naming the library sets that are what ${asked.length} classes were seen to be`);
-                    const reply = await opts.words.ask(wordsPrompt(seen.map(s => ({ seen: s })), poolLines(pool), { ...(opts.words.building ? { building: opts.words.building } : {}), ...(opts.words.brief ? { brief: opts.words.brief } : {}) }));
+                    const reply = await opts.words.ask(prompt);
                     named = parseWordCandidates(reply, asked.length, new Set(poolIds));
                     opts.store?.put(key, named.map(x => x ?? null));
                 } catch (err) {

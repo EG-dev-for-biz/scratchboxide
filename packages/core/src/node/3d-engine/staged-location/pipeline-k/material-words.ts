@@ -24,7 +24,7 @@
 import type { TextureLibraryEntry } from '../../../../common/spatial/texture-library-index';
 import { readingKey } from './model-readings';
 
-export const MATERIAL_WORDS_VERSION = 'material-words/1';
+export const MATERIAL_WORDS_VERSION = 'material-words/2';
 
 /** Sets named per class, at most; a class whose finish read is this unsure, or has no words, is not asked. */
 export const WORD_CANDIDATES = 6, WORDS_MIN_CONF = 50;
@@ -71,5 +71,5 @@ export function parseWordCandidates(text: string, rows: number, valid: ReadonlyS
     return out;
 }
 
-/** The kept answer for these seen words over this pool (its ids in order), this prompt wording and model. */
-export const wordsKey = (seen: string[], poolIds: string[], model: string) => readingKey('material-words', [MATERIAL_WORDS_VERSION, model, seen, poolIds]);
+/** The kept answer for this prompt (the seen words, the pool's lines and the wording) and model. */
+export const wordsKey = (prompt: string, model: string) => readingKey('material-words', [MATERIAL_WORDS_VERSION, model, prompt]);
