@@ -623,6 +623,62 @@ describe('facades on their photo lattice', () => {
         expect(out.tears.droppedFacades).toEqual([]);
     });
 
+    it('measures scan standing proud of the rebuilt surface, and removes it only where the rebuilt cells cover its footprint', () => {
+        // the photo's right third uncovered: the cells there stay scan; the wall as storey-long whole triangles reaching past them
+        const img = photo();
+        for (let y = 0; y < H; y++) for (let x = 80; x < W; x++) img.rgba.set([128, 128, 128, 255], (y * W + x) * 4);
+        const pos: number[] = [];
+        for (let t = 0; t < 9; t += 3) pos.push(0, t, 0, 12, t, 0, 12, t + 3, 0, 0, t, 0, 12, t + 3, 0, 0, t + 3, 0);
+        const soup = Float32Array.from(pos);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-proud-'));
+        try {
+            fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades: [f] }));
+            fs.writeFileSync(path.join(dir, f.image), encodePng(W, H, img.rgba, 4));
+            const file = path.join(dir, 'clay.glb');
+            writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
+            // the windows recessed as the photo shows them (the scan here is flat): 0.15 to 0.25 m, past the tolerance
+            const whole = rebuildFacadesOnLattice(fs.readFileSync(file), undefined, dir, undefined, undefined, { photoRecess: true });
+            const p = whole.stats.proud!;
+            // the windows are recessed and the whole triangles lie on the plane over them: proud by more than the tolerance
+            // (restoreFrontM plus the chamfer), over about eight metres of wall with 1.2 x 1.6 m windows every 3 m on three storeys
+            expect(p.tolM).toBeCloseTo(0.10, 6);
+            expect(p.m2).toBeGreaterThan(8);
+            expect(p.m2).toBeLessThan(8 * 9);
+            expect(p.obliqueM2).toBeGreaterThan(0);
+            // nothing is removed: every triangle reaches past the rebuilt cells, into the third left as scan
+            expect(p.removedTriangles).toBe(0);
+            expect(p.afterM2).toBe(p.m2);
+            expect(whole.stats.removedTriangles).toBe(0);
+            // the measure is in the rebuilt facade's extras too, labelled measured
+            const node = parseGlbBytes(whole.clay).json.nodes.find((n: any) => n.extras?.sbFacadeLattice);
+            expect(node.extras.sbFacadeLattice.proud).toMatchObject({ m2: p.m2, afterM2: p.afterM2, tolM: p.tolM, label: 'measured' });
+            // the cut (pipeline K) splits the wall at the cells' lines, so the pieces over the recessed windows go and little stands proud
+            const cut = rebuildFacadesOnLattice(fs.readFileSync(file), undefined, dir, undefined, undefined, { cut: true, photoRecess: true });
+            expect(cut.stats.proud!.afterM2).toBeLessThan(p.m2 * 0.25);
+            expect(cut.stats.tears.left).toBe(0);
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    it('a proud triangle the rebuilt cells cover is removed, and put back where that opens a tear, so the removal opens nothing', () => {
+        // the torn rebuild over the coarse wall: the audit puts the two whole triangles back over the hole, in front of the rebuild;
+        // the proud audit then sees them proud, removes them (the cells cover them whole), the hole reopens, and they come back
+        const r = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
+        const keep: number[] = [];
+        for (let q = 0; q < r.indices.length; q += 3) if (Math.max(...[0, 1, 2].map(j => r.positions[r.indices[q + j] * 3])) <= 6) keep.push(r.indices[q], r.indices[q + 1], r.indices[q + 2]);
+        const torn = { ...r, built: new Uint8Array(r.built.length).fill(1), indices: Uint32Array.from(keep) };
+        const out = applyFacadeLattices(glbOf(coarse), [{ f, r: torn }], false);
+        expect(out.tears.restoredInFront).toBeGreaterThan(0);
+        expect(out.proud.m2).toBeGreaterThan(0);
+        expect(out.proud.removedTriangles).toBeGreaterThan(0);
+        expect(out.proud.restoredTriangles).toBe(out.proud.removedTriangles);
+        expect(out.proud.afterM2).toBe(out.proud.m2);
+        expect(out.tears.left).toBe(0);
+        expect(out.tears.droppedFacades).toEqual([]);
+        // the scan's two triangles are live at the end
+        const t = readGlbTriangles(out.glb);
+        expect([0, 3].filter(i => !(t.indices[i] === t.indices[i + 1] && t.indices[i + 1] === t.indices[i + 2])).length).toBe(2);
+    });
+
     it('puts the scan back over a hole seen straight on even where it stands in front of the rebuild, and counts it', () => {
         const good = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
         // the rebuild's right half missing; the wall's two large triangles each span its recessed windows on the left

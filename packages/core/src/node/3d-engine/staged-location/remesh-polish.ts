@@ -24,7 +24,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { cleanRemesh, remeshCleanupEnabled, REMESH_CLEANUP_VERSION, type RemeshCleanupStats } from './remesh-cleanup';
 import { orientRemesh, remeshOrientEnabled, REMESH_ORIENT_VERSION, type RemeshOrientStats } from './remesh-orient';
-import { FACADE_LATTICE_PARAMS, FACADE_LATTICE_VERSION, LATTICE_CUT_VERSION, PHOTO_RECESS, rebuildFacadesOnLattice, type TearReport } from './facade-lattice';
+import { FACADE_LATTICE_PARAMS, FACADE_LATTICE_VERSION, LATTICE_CUT_VERSION, PHOTO_RECESS, rebuildFacadesOnLattice, type ProudReport, type TearReport } from './facade-lattice';
 import { BASE_CLEANUP_PARAMS, BASE_CLEANUP_VERSION, cleanBase, type BaseCleanupReport } from './pipeline-k/base-cleanup';
 import { clipToFootprint, fillOpenLoops, LATTICE_STITCH_VERSION, type ClipReport, type CutReport, type FillReport } from './pipeline-k/lattice-stitch';
 import type { Vec2 } from '../../../common/spatial/staged-location-contracts';
@@ -48,7 +48,7 @@ export interface RemeshPolishStats {
     clip?: { clay: ClipReport; textured?: ClipReport } | { skipped: string };
     /** The openings left closed by the fill (without the seal's cut and stitch). */
     infill?: FillReport;
-    lattice?: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears?: TearReport; cut?: CutReport; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number] }> };
+    lattice?: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears?: TearReport; /** The proud audit: scan standing in front of the rebuilt facades (facade-lattice.ts ProudReport). */ proud?: ProudReport; cut?: CutReport; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number] }> };
     /** Pipeline K: the building closed from outside (joins, inner core) and its holes repaired (pipeline-k/outside-closure.ts). */
     closure?: OutsideClosureReport;
 }
@@ -149,7 +149,8 @@ export function describePolish(s: RemeshPolishStats): string {
         const t = s.lattice.tears;
         parts.push(`${s.lattice.rebuilt} of ${s.lattice.facades} rectified facades rebuilt on the lines their photo shows (${s.lattice.cells} cells; lines photo-inferred, depths measured and averaged along each storey's repeats)` +
             (s.lattice.cut ? `; the scan cut exactly at the rebuilt cells (${s.lattice.cut.cutTriangles} triangles cut, ${s.lattice.cut.removedPieces} pieces over the cells dropped)` : '') +
-            (t ? `; tear audit: ${t.found ? `${t.found} torn pixels found, ${t.restoredTriangles} scan triangles put back${t.restoredInFront ? ` (${t.restoredInFront} over holes seen straight on, though they stand in front of the rebuild)` : ''}${t.keptInFront ? `, ${t.keptInFront} kept out because they would stand in front of the rebuild${t.obliqueLeft ? ` (${t.obliqueLeft} pixels seen only from an angle left open)` : ''}` : ''}${t.droppedFacades.length ? `, ${t.droppedFacades.length} facades left as scanned because a tear stayed` : ''}` : 'no tear'}${t.left ? `, ${t.left} torn pixels left` : ''}` : ''));
+            (t ? `; tear audit: ${t.found ? `${t.found} torn pixels found, ${t.restoredTriangles} scan triangles put back${t.restoredInFront ? ` (${t.restoredInFront} over holes seen straight on, though they stand in front of the rebuild)` : ''}${t.keptInFront ? `, ${t.keptInFront} kept out because they would stand in front of the rebuild${t.obliqueLeft ? ` (${t.obliqueLeft} pixels seen only from an angle left open)` : ''}` : ''}${t.droppedFacades.length ? `, ${t.droppedFacades.length} facades left as scanned because a tear stayed` : ''}` : 'no tear'}${t.left ? `, ${t.left} torn pixels left` : ''}` : '') +
+            (s.lattice.proud ? `; proud audit: ${s.lattice.proud.m2 ? `${s.lattice.proud.m2} m² of scan standing more than ${s.lattice.proud.tolM} m in front of the rebuilt facades (seen straight on; ${s.lattice.proud.obliqueM2} m² from the angles), ${s.lattice.proud.removedTriangles} triangles over the rebuilt cells removed${s.lattice.proud.restoredTriangles ? ` (${s.lattice.proud.restoredTriangles} put back where the removal opened a tear)` : ''}, ${s.lattice.proud.afterM2} m² left proud (reaching past the cells, or closing a hole the rebuild leaves)` : 'no scan stands proud of the rebuilt facades'}` : ''));
     }
     if (s.base) {
         const b = s.base;

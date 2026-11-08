@@ -50,7 +50,7 @@ import { nativePolishThreads, runNativeLattice, runNativeLatticeAudit, type Nati
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const FACADE_LATTICE_VERSION = 'facade-lattice/22';
+export const FACADE_LATTICE_VERSION = 'facade-lattice/23';
 /** The cut (rebuildFacadesOnLattice opts.cut): the scan split at the rebuilt cells' lines before the removals and the tear audit. */
 export const LATTICE_CUT_VERSION = 'lattice-cut/5';
 
@@ -122,6 +122,20 @@ export interface TearReport {
     keptInFront?: number;
     /** Of `restoredTriangles`, those put back over a hole seen straight on though they stand in front of the rebuild. */
     restoredInFront?: number;
+}
+
+/**
+ * What the proud audit found, the tear audit's mirror: scan standing more than its tolerance (restoreFrontM plus the
+ * structure's chamfer) in front of the surface a rebuilt facade draws, over that facade's built cells and within its depth
+ * band, seen straight on (`m2`) and from the tear audit's four angles (`obliqueM2`, view-plane area); the proud scan
+ * triangles whose footprint the rebuilt cells cover removed, those the tear audit then had to put back, and what stands
+ * proud after (`afterM2`, `obliqueAfterM2`). A whole tile triangle reaching past the cells, kept whole, lies on the wall
+ * plane over the recessed bays (the ESB's shaft, 2026-11-07): invisible to the tear audit, which looks only for missing
+ * surface. Areas in m² at the audit's pixel.
+ */
+export interface ProudReport {
+    m2: number; obliqueM2: number; removedTriangles: number; restoredTriangles: number; afterM2: number; obliqueAfterM2: number; tolM: number;
+    perFacade: Array<{ id: number; m2: number; afterM2: number }>;
 }
 
 export interface ReliefFacade {
@@ -674,14 +688,24 @@ function overBuilt(x: number, y: number, z: number, f: ReliefFacade, r: FacadeLa
 }
 
 /**
+ * The coverage samples are drawn in toward the triangle's centroid by this share, so a piece the cut made exactly on a
+ * lattice line (its vertices on the line between a built cell and one left as scan) is judged by its own cell, not its
+ * neighbour's: on that line a sample fell into the unbuilt neighbour and the piece stayed, on the wall plane a quarter metre
+ * proud of the recessed cell beside it.
+ */
+const COVER_INSET = 1e-3;
+
+/**
  * Is the whole of a triangle covered by rebuilt cells (of any facade): sampled at most every sampleM over its area, every
  * sample over a built cell. A triangle only partly over the rebuilt surface is kept, so removing it never opens a tear.
  */
 function coveredByRebuild(a: number[], b: number[], c: number[], facades: Array<{ f: ReliefFacade; r: FacadeLatticeResult }>, P = FACADE_LATTICE_PARAMS): boolean {
     const steps = Math.min(40, Math.max(1, Math.ceil(Math.max(Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]), Math.hypot(c[0] - a[0], c[1] - a[1], c[2] - a[2]), Math.hypot(c[0] - b[0], c[1] - b[1], c[2] - b[2])) / P.sampleM)));
+    const cx = (a[0] + b[0] + c[0]) / 3, cy = (a[1] + b[1] + c[1]) / 3, cz = (a[2] + b[2] + c[2]) / 3;
     for (let p = 0; p <= steps; p++) for (let q = 0; p + q <= steps; q++) {
         const u = p / steps, v = q / steps;
-        const x = a[0] + (b[0] - a[0]) * u + (c[0] - a[0]) * v, y = a[1] + (b[1] - a[1]) * u + (c[1] - a[1]) * v, z = a[2] + (b[2] - a[2]) * u + (c[2] - a[2]) * v;
+        const x0 = a[0] + (b[0] - a[0]) * u + (c[0] - a[0]) * v, y0 = a[1] + (b[1] - a[1]) * u + (c[1] - a[1]) * v, z0 = a[2] + (b[2] - a[2]) * u + (c[2] - a[2]) * v;
+        const x = cx + (x0 - cx) * (1 - COVER_INSET), y = cy + (y0 - cy) * (1 - COVER_INSET), z = cz + (z0 - cz) * (1 - COVER_INSET);
         if (!facades.some(e => overBuilt(x, y, z, e.f, e.r, P))) return false;
     }
     return true;
@@ -692,7 +716,7 @@ function coveredByRebuild(a: number[], b: number[], c: number[], facades: Array<
  * `px`: per pixel the largest depth d (toward the outside, at most maxDepth) of any triangle covering it, -Infinity where none
  * does. `live` leaves out triangles (by soup index) when given.
  */
-function outermostDepth(soup: Float32Array, f: ReliefFacade, r: Pick<FacadeLatticeResult, 's' | 't'>, px: number, live?: Uint8Array, maxDepth = Infinity): { W: number; H: number; s0: number; t0: number; depth: Float32Array } {
+function outermostDepth(soup: Float32Array, f: ReliefFacade, r: Pick<FacadeLatticeResult, 's' | 't'>, px: number, live?: Uint8Array, maxDepth = Infinity, who?: Int32Array): { W: number; H: number; s0: number; t0: number; depth: Float32Array } {
     const s0 = r.s[0], t0 = r.t[0], W = Math.max(1, Math.ceil((r.s[r.s.length - 1] - s0) / px)), H = Math.max(1, Math.ceil((r.t[r.t.length - 1] - t0) / px));
     const depth = new Float32Array(W * H).fill(-Infinity);
     // the facade's world box (its lattice rectangle, the depth band and a metre either side): a district soup is mostly elsewhere
@@ -718,7 +742,7 @@ function outermostDepth(soup: Float32Array, f: ReliefFacade, r: Pick<FacadeLatti
             const w1 = ((x - S[0]) * (T[2] - T[0]) - (S[2] - S[0]) * (y - T[0])) / area, w2 = ((S[1] - S[0]) * (y - T[0]) - (x - S[0]) * (T[1] - T[0])) / area, w0 = 1 - w1 - w2;
             if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) continue;
             const d = w0 * D[0] + w1 * D[1] + w2 * D[2], o = y * W + x;
-            if (d > depth[o] && d <= maxDepth) depth[o] = d;
+            if (d > depth[o] && d <= maxDepth) { depth[o] = d; if (who) who[o] = k; }
         }
     }
     return { W, H, s0, t0, depth };
@@ -749,7 +773,7 @@ function obliqueViews(f: ReliefFacade, r: Pick<FacadeLatticeResult, 's' | 't'>, 
  * the view, cut a wide facade's ends away at 45 degrees: their small rebuilt triangles were culled where the scan's large
  * ones still reached in, and read as 460,000 torn pixels on the ESB.)
  */
-function obliqueDepth(soup: Float32Array, f: ReliefFacade, r: Pick<FacadeLatticeResult, 's' | 't'>, v: AuditView, px: number, live?: Uint8Array): { W: number; H: number; s0: number; t0: number; depth: Float32Array; onPlane: Float32Array; view: AuditView } {
+function obliqueDepth(soup: Float32Array, f: ReliefFacade, r: Pick<FacadeLatticeResult, 's' | 't'>, v: AuditView, px: number, live?: Uint8Array, who?: Int32Array): { W: number; H: number; s0: number; t0: number; depth: Float32Array; onPlane: Float32Array; view: AuditView } {
     const W = Math.max(1, Math.ceil((v.s1 - v.s0) / px)), H = Math.max(1, Math.ceil((v.t1 - v.t0) / px));
     const depth = new Float32Array(W * H).fill(-Infinity), onPlane = new Float32Array(W * H).fill(NaN);
     const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity], reach = FACADE_LATTICE_PARAMS.depthBandM + 1;
@@ -774,7 +798,7 @@ function obliqueDepth(soup: Float32Array, f: ReliefFacade, r: Pick<FacadeLattice
             const w1 = ((x - S[0]) * (T[2] - T[0]) - (S[2] - S[0]) * (y - T[0])) / area, w2 = ((S[1] - S[0]) * (y - T[0]) - (x - S[0]) * (T[1] - T[0])) / area, w0 = 1 - w1 - w2;
             if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) continue;
             const d = w0 * D[0] + w1 * D[1] + w2 * D[2], o = y * W + x;
-            if (d > depth[o]) { depth[o] = d; onPlane[o] = w0 * F[0] + w1 * F[1] + w2 * F[2]; }
+            if (d > depth[o]) { depth[o] = d; onPlane[o] = w0 * F[0] + w1 * F[1] + w2 * F[2]; if (who) who[o] = k; }
         }
     }
     return { W, H, s0: v.s0, t0: v.t0, depth, onPlane, view: v };
@@ -852,7 +876,7 @@ class BinBuilder {
  * Edits a GLB of the remesh: the facades' scan triangles degenerate, each rebuilt facade appended as a node (`textured`:
  * an unlit material with the facade's orthophoto, as tile_refine's twin is; otherwise the GLB's first material, its clay).
  */
-export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: ReliefFacade; r: FacadeLatticeResult; png?: Uint8Array }>, textured: boolean, P = FACADE_LATTICE_PARAMS, opts: { /** false: the scan was already cut to the lattice (pipeline-k/lattice-stitch.ts); only append the rebuilt facades. */ removeScan?: boolean; /** Only scan facing the way a rebuilt facade faces is removed under it (its audit sees only its own front). */ sameFacing?: boolean; /** The native audit's threads (every core when none). */ threads?: number } = {}): { glb: Buffer; removed: number; tears: TearReport } {
+export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: ReliefFacade; r: FacadeLatticeResult; png?: Uint8Array }>, textured: boolean, P = FACADE_LATTICE_PARAMS, opts: { /** false: the scan was already cut to the lattice (pipeline-k/lattice-stitch.ts); only append the rebuilt facades. */ removeScan?: boolean; /** Only scan facing the way a rebuilt facade faces is removed under it (its audit sees only its own front). */ sameFacing?: boolean; /** The native audit's threads (every core when none). */ threads?: number } = {}): { glb: Buffer; removed: number; tears: TearReport; proud: ProudReport } {
     const glb = parseGlbBytes(bytes);
     const json = glb.json;
     const dv = new DataView(glb.bin.buffer, glb.bin.byteOffset, glb.bin.byteLength);
@@ -891,6 +915,9 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
     // (at that facade's depth), and a facade still torn after that is not rebuilt at all (its scan stays whole, the removals are
     // decided again without it), until nothing is torn
     const tears: TearReport = { found: 0, restoredTriangles: 0, droppedFacades: [], left: 0, keptInFront: 0, restoredInFront: 0 };
+    // the proud audit's counts, in pixels at auditPixelM, per facade (its m² below)
+    const proudTol = P.restoreFrontM + STRUCTURE.chamferM;
+    const proudPix = { straight: facadesIn.map(() => 0), oblique: facadesIn.map(() => 0), straightAfter: facadesIn.map(() => 0), obliqueAfter: facadesIn.map(() => 0), removed: 0, restored: 0 };
     if (!keepScan && kNative('lattice')) {
         // natively: the same removals, audit, restores and drops, one view a task
         const a = runNativeLatticeAudit(latticeParamVector(P), opts.sameFacing === true, soup, facadesIn.map(x => ({ f: x.f, s: x.r.s, t: x.r.t, built: x.r.built, positions: x.r.positions, indices: x.r.indices })), opts.threads ?? nativePolishThreads());
@@ -901,6 +928,8 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         tears.obliqueLeft = a.obliqueLeft;
         tears.keptInFront = a.keptInFront;
         tears.restoredInFront = a.restoredInFront;
+        proudPix.straight = a.proud.straight; proudPix.oblique = a.proud.oblique; proudPix.straightAfter = a.proud.straightAfter; proudPix.obliqueAfter = a.proud.obliqueAfter;
+        proudPix.removed = a.proud.removed; proudPix.restored = a.proud.restored;
     } else auditHere();
     function auditHere(): void {
         if (!keepScan) decide();
@@ -939,7 +968,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         // neighbours, up to three rounds; from an angle never one that would stand in front of the rebuild that claimed it (a hole
         // seen straight on is the rebuild's own, a seam or a corner it leaves open, and gets its scan back whatever it stands in
         // front of); then a facade whose own frame is still torn by its own removals is not rebuilt
-        const restore = (list: typeof torn): number => {
+        const restore = (list: typeof torn, only?: Uint8Array): number => {
             let n = 0;
             for (const { fi, pix, grid, oblique } of list) {
                 const f = facadesIn[fi].f, mark = new Uint8Array(grid.W * grid.H);
@@ -947,7 +976,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
                 const fc = grid.view?.c ?? f.centroid, fS = grid.view?.S ?? f.axisS, fT = grid.view?.T ?? f.axisT;
                 for (const o of pix) { const x = o % grid.W, y = Math.floor(o / grid.W); for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const xx = x + dx, yy = y + dy; if (xx >= 0 && yy >= 0 && xx < grid.W && yy < grid.H) mark[yy * grid.W + xx] = 1; } }
                 for (let k = 0; k < nTri; k++) {
-                    if (claim[k] < 0) continue;
+                    if (claim[k] < 0 || (only && !only[k])) continue;
                     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, near = false;
                     for (let j = 0; j < 3; j++) {
                         const m = [soup[k * 9 + 3 * j] - fc[0], soup[k * 9 + 3 * j + 1] - fc[1], soup[k * 9 + 3 * j + 2] - fc[2]];
@@ -961,7 +990,8 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
                     if (!hit) continue;
                     const front = inFrontOfRebuild(corner(k, 0), corner(k, 1), corner(k, 2), facadesIn[claim[k]].f, drawn[claim[k]], P);
                     if (oblique && front) keptBack[k] = 1;
-                    else { claim[k] = -1; n++; if (front) tears.restoredInFront!++; }
+                    // a proud removal put back (only) was counted when the tear audit first restored it
+                    else { claim[k] = -1; n++; if (front && !only) tears.restoredInFront!++; }
                 }
             }
             return n;
@@ -984,6 +1014,57 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         tears.obliqueLeft = torn.filter(x => x.oblique).reduce((a, x) => a + x.pix.length, 0);
         // the last resort: anything still torn straight on means no facade is rebuilt (the scan is shown whole, as it came)
         if (tears.left) { facadesIn.forEach((x, fi) => { if (!dropped.has(fi)) { dropped.add(fi); tears.droppedFacades.push(x.f.facadeId); } }); decide(); tears.left = straight(audit(false)).reduce((a, x) => a + x.pix.length, 0); }
+        // the proud audit, the tear audit's mirror: each facade still rebuilt seen straight on and from its four angles, the result's
+        // nearest surface at a pixel standing more than proudTol in front of the surface the rebuild itself draws there, a scan
+        // triangle (never a rebuilt one), lying within the facade's depth band and over one of its built cells, is proud. Measured
+        // first; then a proud scan triangle whose whole footprint the rebuilt cells cover goes (one reaching past them, over cells
+        // left as scan or beyond the outline, is never touched), the tear audit runs again over those removals alone and puts back
+        // what they opened, and the proud surface is measured again
+        if (!keepScan) {
+            const ownSoup = facadesIn.map(x => { const tri = new Float32Array(x.r.indices.length * 3); for (let q = 0; q < x.r.indices.length; q++) for (let k = 0; k < 3; k++) tri[q * 3 + k] = x.r.positions[x.r.indices[q] * 3 + k]; return tri; });
+            const proudPass = (): { straight: number[]; oblique: number[]; tris: Map<number, number> } => {
+                const { soup: rs, live } = resultSoup();
+                const st = facadesIn.map(() => 0), ob = facadesIn.map(() => 0), tris = new Map<number, number>();
+                facadesIn.forEach((x, fi) => {
+                    if (dropped.has(fi)) return;
+                    for (const v of [undefined, ...obliqueViews(x.f, x.r, P)]) {
+                        const own = v ? obliqueDepth(ownSoup[fi], x.f, x.r, v, P.auditPixelM) : drawn[fi];
+                        const who = new Int32Array(own.W * own.H).fill(-1);
+                        const res = v ? obliqueDepth(rs, x.f, x.r, v, P.auditPixelM, live, who) : outermostDepth(rs, x.f, x.r, P.auditPixelM, live, Infinity, who);
+                        const S = v ? v.S : x.f.axisS, T = v ? v.T : x.f.axisT, N = v ? v.N : x.f.normal;
+                        let n = 0;
+                        for (let o = 0; o < res.depth.length; o++) {
+                            const d = res.depth[o], k = who[o];
+                            if (k < 0 || k >= nTri || !Number.isFinite(own.depth[o]) || !(d > own.depth[o] + proudTol)) continue;
+                            // the proud point in the world (the view shares the facade's origin): over a built cell, within the band
+                            const a = res.s0 + ((o % res.W) + 0.5) * P.auditPixelM, b = res.t0 + (Math.floor(o / res.W) + 0.5) * P.auditPixelM;
+                            if (!overBuilt(x.f.centroid[0] + a * S[0] + b * T[0] + d * N[0], x.f.centroid[1] + a * S[1] + b * T[1] + d * N[1], x.f.centroid[2] + a * S[2] + b * T[2] + d * N[2], x.f, x.r, P)) continue;
+                            n++;
+                            if (!tris.has(k)) tris.set(k, fi);
+                        }
+                        if (v) ob[fi] += n; else st[fi] += n;
+                    }
+                });
+                return { straight: st, oblique: ob, tris };
+            };
+            const first = proudPass();
+            proudPix.straight = first.straight; proudPix.oblique = first.oblique;
+            const mine = new Uint8Array(nTri);
+            for (const [k, fi] of first.tris) {
+                const a = corner(k, 0), b = corner(k, 1), c = corner(k, 2);
+                if (claim[k] < 0 && facesFacade(a, b, c, facadesIn[fi].f, P, opts.sameFacing === true) && coveredByRebuild(a, b, c, [facadesIn[fi]], P)) { claim[k] = fi; mine[k] = 1; proudPix.removed++; }
+            }
+            if (proudPix.removed) {
+                let t2 = audit(false);
+                for (let round = 0; t2.length && round < 3; round++) { proudPix.restored += restore(t2, mine); t2 = audit(false); }
+                tears.left = straight(t2).reduce((a, x) => a + x.pix.length, 0);
+                tears.obliqueLeft = t2.filter(x => x.oblique).reduce((a, x) => a + x.pix.length, 0);
+                // a tear straight on that the restores did not close: every proud removal undone (the removal opens nothing)
+                if (tears.left) { for (let k = 0; k < nTri; k++) if (mine[k] && claim[k] >= 0) { claim[k] = -1; proudPix.restored++; } t2 = audit(false); tears.left = straight(t2).reduce((a, x) => a + x.pix.length, 0); tears.obliqueLeft = t2.filter(x => x.oblique).reduce((a, x) => a + x.pix.length, 0); }
+                const after = proudPass();
+                proudPix.straightAfter = after.straight; proudPix.obliqueAfter = after.oblique;
+            } else { proudPix.straightAfter = first.straight; proudPix.obliqueAfter = first.oblique; }
+        }
         tears.keptInFront = 0;
         for (let k = 0; k < nTri; k++) if (keptBack[k] && claim[k] >= 0) tears.keptInFront++;
     }
@@ -995,6 +1076,14 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         removed++;
     }
     const facades = facadesIn.filter((_, i) => !dropped.has(i));
+    const m2 = (n: number) => Math.round(n * P.auditPixelM * P.auditPixelM * 100) / 100;
+    const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
+    const proud: ProudReport = {
+        m2: m2(sum(proudPix.straight)), obliqueM2: m2(sum(proudPix.oblique)), removedTriangles: proudPix.removed, restoredTriangles: proudPix.restored,
+        afterM2: m2(sum(proudPix.straightAfter)), obliqueAfterM2: m2(sum(proudPix.obliqueAfter)), tolM: proudTol,
+        perFacade: facadesIn.flatMap((x, i) => (dropped.has(i) ? [] : [{ id: x.f.facadeId, m2: m2(proudPix.straight[i]), afterM2: m2(proudPix.straightAfter[i]) }]))
+    };
+    const proudOf = new Map(proud.perFacade.map(e => [e.id, e]));
     // the edited bytes (edited in place through dv) first, the rebuilt facades appended after them
     const bin = new BinBuilder();
     bin.push(glb.bin);
@@ -1023,19 +1112,19 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
         }
         const indices = acc(view(new Uint8Array(r.indices.buffer, r.indices.byteOffset, r.indices.byteLength), 34963), r.indices.length, 'SCALAR', 5125);
         json.meshes.push({ name: `facade_lattice_${f.facadeId}`, primitives: [{ attributes, indices, material, mode: 4 }] });
-        json.nodes.push({ name: `FacadeLattice_${f.facadeId}`, mesh: json.meshes.length - 1, extras: { sbFacadeLattice: { version: FACADE_LATTICE_VERSION, facadeId: f.facadeId, provenance: { lines: 'photo-inferred', depth: r.photoRecessCells ? `measured (median per cell, averaged along the row's repeats); ${r.photoRecessCells} window cells recessed as the straightened photo shows them (photo-inferred, ${r.recessFrom ?? "the photometric relief's contrast rule"})` : 'measured (median per cell, averaged along the row\'s repeats)', texture: f.textureFill || r.repeatTexture ? { photo: 'tile photo', ...(f.textureFill ? { holes: f.textureFill } : {}), ...(r.repeatTexture ? { repeats: r.repeatTexture } : {}) } : 'tile photo' }, cells: r.cells, measuredShare: r.measuredShare, sLines: r.s.length, tLines: r.t.length, ...(f.outward ? { outward: f.outward } : {}), ...(r.windows ? { windowCells: windowCellsExtras(r) } : {}), ...(r.fittedWindows ? { windows: { uv: r.fittedWindows, ...(r.fittedPanes ? { panes: r.fittedPanes } : {}), label: 'photo-inferred', source: r.windowSource ?? WINDOW_FIT_VERSION, ...(r.generatedWindows ? { generated: { uv: r.generatedWindows, label: 'generated', source: "the window grid continued into parts the photo never reached (its texture filled from the facade's own repeats)" } } : {}) } } : {}), ...(r.structure ? { structure: structureExtras(r) } : {}) } } });
+        json.nodes.push({ name: `FacadeLattice_${f.facadeId}`, mesh: json.meshes.length - 1, extras: { sbFacadeLattice: { version: FACADE_LATTICE_VERSION, facadeId: f.facadeId, provenance: { lines: 'photo-inferred', depth: r.photoRecessCells ? `measured (median per cell, averaged along the row's repeats); ${r.photoRecessCells} window cells recessed as the straightened photo shows them (photo-inferred, ${r.recessFrom ?? "the photometric relief's contrast rule"})` : 'measured (median per cell, averaged along the row\'s repeats)', texture: f.textureFill || r.repeatTexture ? { photo: 'tile photo', ...(f.textureFill ? { holes: f.textureFill } : {}), ...(r.repeatTexture ? { repeats: r.repeatTexture } : {}) } : 'tile photo' }, cells: r.cells, measuredShare: r.measuredShare, sLines: r.s.length, tLines: r.t.length, ...(f.outward ? { outward: f.outward } : {}), ...(r.windows ? { windowCells: windowCellsExtras(r) } : {}), ...(r.fittedWindows ? { windows: { uv: r.fittedWindows, ...(r.fittedPanes ? { panes: r.fittedPanes } : {}), label: 'photo-inferred', source: r.windowSource ?? WINDOW_FIT_VERSION, ...(r.generatedWindows ? { generated: { uv: r.generatedWindows, label: 'generated', source: "the window grid continued into parts the photo never reached (its texture filled from the facade's own repeats)" } } : {}) } } : {}), ...(r.structure ? { structure: structureExtras(r) } : {}), proud: { m2: proudOf.get(f.facadeId)?.m2 ?? 0, afterM2: proudOf.get(f.facadeId)?.afterM2 ?? 0, tolM: proudTol, label: 'measured', source: `scan standing more than ${proudTol} m in front of the rebuilt surface over its built cells, seen straight on; before and after the proud audit's removals` } } } });
         scene?.nodes?.push(json.nodes.length - 1);
     }
     bin.align4();
     json.buffers = [{ ...(json.buffers?.[0] ?? {}), byteLength: bin.length }];
-    return { glb: assembleGlb(json, bin.bytes()), removed, tears };
+    return { glb: assembleGlb(json, bin.bytes()), removed, tears, proud };
 }
 
 /** Rebuilds a remesh's rectified facades on their photo lattices: the clay and (when given) its textured twin. */
 /** Cut-and-stitch rounds at most: each leaves as scan the rebuilt cells beside outline edges the stitch could join to nothing. */
 const STITCH_ROUNDS = 4;
 
-export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Uint8Array | undefined, orthosDir: string, P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS, skip: Set<number> = new Set(), opts: { /** Pipeline K: the scan cut exactly to the rebuilt cells and stitched to them (pipeline-k/lattice-stitch.ts), instead of whole triangles removed. */ stitch?: boolean; /** Pipeline K: window recesses read from the straightened photo (PHOTO_RECESS), the scan being uncarved. */ photoRecess?: boolean; /** window_fit.json (window-fit.ts): each facade's fitted windows written into its extras. */ windowFit?: string; /** reveal_depth.json (reveal-depth.ts): each facade's window depth read from Street View. */ revealDepth?: string; /** wall_grammar.json (wall-grammar.ts): each facade's bays read per wall. */ wallGrammar?: string; /** The isolated scan before its walls were flattened: where the structure's relief is measured. */ rawScan?: string; /** walls.json (wall-sheets.ts): each multi-facade wall rebuilt once, as one sheet, in place of its facades; and every facade rebuilt whole, where the scan has its wall. */ walls?: string; /** Pipeline K: the scan cut exactly to the rebuilt cells (pipeline-k/lattice-stitch.ts cutScanToLattice) with no stitch, instead of whole triangles removed. */ cut?: boolean; /** The native steps' threads (the lattice, the audit, the cut and the stitch; every core when none). It changes how fast, not what, is built. */ threads?: number } = {}): { clay: Buffer; textured?: Buffer; stats: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears: TearReport; /** With opts.cut: the triangles cut and the pieces dropped and kept. */ cut?: CutReport; stitch?: { cut: CutReport; strips: StitchReport; /** Per round: outline edges joined to nothing, and the cells beside them left as scan for the next round. */ rounds?: Array<{ unjoined: number; cellsLeftAsScan: number }> }; photoRecessCells?: number; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number]; photoRecessCells?: number }> } } {
+export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Uint8Array | undefined, orthosDir: string, P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS, skip: Set<number> = new Set(), opts: { /** Pipeline K: the scan cut exactly to the rebuilt cells and stitched to them (pipeline-k/lattice-stitch.ts), instead of whole triangles removed. */ stitch?: boolean; /** Pipeline K: window recesses read from the straightened photo (PHOTO_RECESS), the scan being uncarved. */ photoRecess?: boolean; /** window_fit.json (window-fit.ts): each facade's fitted windows written into its extras. */ windowFit?: string; /** reveal_depth.json (reveal-depth.ts): each facade's window depth read from Street View. */ revealDepth?: string; /** wall_grammar.json (wall-grammar.ts): each facade's bays read per wall. */ wallGrammar?: string; /** The isolated scan before its walls were flattened: where the structure's relief is measured. */ rawScan?: string; /** walls.json (wall-sheets.ts): each multi-facade wall rebuilt once, as one sheet, in place of its facades; and every facade rebuilt whole, where the scan has its wall. */ walls?: string; /** Pipeline K: the scan cut exactly to the rebuilt cells (pipeline-k/lattice-stitch.ts cutScanToLattice) with no stitch, instead of whole triangles removed. */ cut?: boolean; /** The native steps' threads (the lattice, the audit, the cut and the stitch; every core when none). It changes how fast, not what, is built. */ threads?: number } = {}): { clay: Buffer; textured?: Buffer; stats: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears: TearReport; /** The proud audit (the clay's): scan standing in front of the rebuilt facades, before and after its removals. */ proud?: ProudReport; /** With opts.cut: the triangles cut and the pieces dropped and kept. */ cut?: CutReport; stitch?: { cut: CutReport; strips: StitchReport; /** Per round: outline edges joined to nothing, and the cells beside them left as scan for the next round. */ rounds?: Array<{ unjoined: number; cellsLeftAsScan: number }> }; photoRecessCells?: number; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number]; photoRecessCells?: number }> } } {
     const facades = JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as ReliefFacade[];
     // the native steps' threads (the lattice, the audit, the cut and the stitch)
     const threads = opts.threads ? { threads: opts.threads } : {};
@@ -1145,6 +1234,6 @@ export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Ui
     const tex = texturedBytes ? applyFacadeLattices(cut ? cutScanToLattice(Uint8Array.from(texturedBytes), kept, split, threads).glb : texturedBytes, kept, true, P, { sameFacing: !!cut, ...threads }) : undefined;
     return {
         clay: clay.glb, ...(tex ? { textured: tex.glb } : {}),
-        stats: { facades: facades.length, rebuilt: kept.length, cells: kept.reduce((a, d) => a + d.r.cells, 0), removedTriangles: clay.removed, tears: clay.tears, ...(cut ? { cut: cut.report } : {}), ...(opts.photoRecess ? { photoRecessCells: kept.reduce((a, d) => a + (d.r.photoRecessCells ?? 0), 0) } : {}), perFacade: kept.map(d => ({ id: d.f.facadeId, cells: d.r.cells, measuredShare: d.r.measuredShare, lines: [d.r.s.length, d.r.t.length] as [number, number], ...(d.r.photoRecessCells !== undefined ? { photoRecessCells: d.r.photoRecessCells } : {}) })) }
+        stats: { facades: facades.length, rebuilt: kept.length, cells: kept.reduce((a, d) => a + d.r.cells, 0), removedTriangles: clay.removed, tears: clay.tears, proud: clay.proud, ...(cut ? { cut: cut.report } : {}), ...(opts.photoRecess ? { photoRecessCells: kept.reduce((a, d) => a + (d.r.photoRecessCells ?? 0), 0) } : {}), perFacade: kept.map(d => ({ id: d.f.facadeId, cells: d.r.cells, measuredShare: d.r.measuredShare, lines: [d.r.s.length, d.r.t.length] as [number, number], ...(d.r.photoRecessCells !== undefined ? { photoRecessCells: d.r.photoRecessCells } : {}) })) }
     };
 }

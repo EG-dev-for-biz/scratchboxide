@@ -40,11 +40,13 @@
  *          f64 filled, f64 edge, u32 n, u8[n] the PNG ([cells]: one per lattice cell, row by row).
  *
  *   remesh_polish_native lattice-audit <threads>
- *     in:  "SBLA" u32 version (2), u32 nParams, f64[nParams], u32 flags (1: same facing only), u32 n, f32[n] the scan's
+ *     in:  "SBLA" u32 version (3), u32 nParams, f64[nParams], u32 flags (1: same facing only), u32 n, f32[n] the scan's
  *          indexed triangles, u32 nFacades, per facade i32 id, f64[19] frame, u32 n, f64[n] s, u32 n, f64[n] t,
  *          u8[cells] built, u32 n, f32[n] positions, u32 n, u32[n] indices.
  *     out: u32 nTri, i32[nTri] the facade claiming each triangle (-1: kept), f64 found, f64 restored, f64 left,
- *          f64 obliqueLeft, u32 hasOblique, f64 oblique, f64 keptInFront, f64 restoredInFront, u32 n, i32[n] the facades dropped, in the order dropped.
+ *          f64 obliqueLeft, u32 hasOblique, f64 oblique, f64 keptInFront, f64 restoredInFront, u32 n, i32[n] the facades dropped, in the order dropped;
+ *          the proud audit: f64 removed, f64 restored, u32 nFacades, per facade f64 straight, f64 oblique, f64 straightAfter,
+ *          f64 obliqueAfter (proud pixels at auditPixelM).
  *
  *   remesh_polish_native wall-grammar <threads>
  *     in:  "SBWG" u32 version (1), u32 nParams, f64[nParams] (scratchbox_wall_grammar.hpp Params), u32 nWalls, per wall
@@ -349,7 +351,7 @@ int lattice(unsigned threads) {
 }
 
 int latticeAudit(unsigned threads) {
-    expectMagic("SBLA", 2);
+    expectMagic("SBLA", 3);
     const auto params = facade_lattice::Params::from(readDoubles(readOne<uint32_t>()));
     const uint32_t flags = readOne<uint32_t>();
     const auto soup = readFloats();
@@ -378,6 +380,15 @@ int latticeAudit(unsigned threads) {
     writeOne<double>(r.restoredInFront);
     std::vector<int32_t> dropped(r.dropped.begin(), r.dropped.end());
     writeArray(dropped);
+    writeOne<double>(r.proudRemoved);
+    writeOne<double>(r.proudRestored);
+    writeOne<uint32_t>(static_cast<uint32_t>(facades.size()));
+    for (size_t fi = 0; fi < facades.size(); ++fi) {
+        writeOne<double>(r.proudStraight[fi]);
+        writeOne<double>(r.proudOblique[fi]);
+        writeOne<double>(r.proudStraightAfter[fi]);
+        writeOne<double>(r.proudObliqueAfter[fi]);
+    }
     std::fflush(stdout);
     return 0;
 }

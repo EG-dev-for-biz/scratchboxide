@@ -99,7 +99,7 @@ import { TILE_SEAMS_VERSION, type TileSeamWeldRequest, type TileSeamWeldResult }
 import { measureRevealDepth, REVEAL_DEPTH_VERSION, type RevealFacade, type RevealView } from './reveal-depth';
 import { streetViewClayScores, visibleDefects } from './remesh-scores';
 import { decodeJpegInMemory } from './photo-palette';
-import type { ReliefFacade } from './facade-lattice';
+import { FACADE_LATTICE_VERSION, type ReliefFacade } from './facade-lattice';
 import { wallSampleIndex } from './wall-plane-fit';
 import { assembleDistrictLayer, inBackground, districtMassingManifest, findStoredLayer, objectFrameOf, objectReuseEnabled, objectStoreEnabled, planDistrictObjects, readLayerManifests, storeSceneObjects, treesManifest, wholeLayerManifest, writeLayerManifests, type DistrictObjectPlan, type LayerObjectManifest } from './scene-objects';
 import { objectInputHash } from '../../asset-store/scene-object-store';
@@ -4634,6 +4634,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 }
                 if (kBase) notes.write('pipeline_k_base', { loops: kBase.loops, groundY: structure!.groundY, footprint: kBase.source, report: pol.stats.base ?? null });
                 if (pol.stats.closure) notes.write('pipeline_k_closure', pol.stats.closure);
+                // the lattice's audits for the run's records: the tear audit, the proud audit and the cut (the benchmark reads them)
+                if (pol.stats.lattice) notes.write('pipeline_k_lattice', { version: FACADE_LATTICE_VERSION, cut: !!pol.stats.lattice.cut, facades: pol.stats.lattice.facades, rebuilt: pol.stats.lattice.rebuilt, cells: pol.stats.lattice.cells, removedTriangles: pol.stats.lattice.removedTriangles, ...(pol.stats.lattice.cut ? { cutReport: pol.stats.lattice.cut } : {}), tears: pol.stats.lattice.tears ?? null, proud: pol.stats.lattice.proud ?? null });
                 if (pol.clayGlb !== r.clayGlb) {
                     notes.note(PROVENANCE.remeshed, `remesh polish (${REMESH_POLISH_VERSION}): ${describePolish(pol.stats)}`);
                     r = { ...r, cacheKey: pol.cacheKey, clayGlb: pol.clayGlb, ...(pol.texturedGlb ? { texturedGlb: pol.texturedGlb } : {}) };
