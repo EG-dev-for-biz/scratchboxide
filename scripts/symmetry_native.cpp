@@ -12,8 +12,11 @@
  * pipeline-k/native/symmetry-native.ts. It reads the scan (a GLB) and the facade orthos (PNGs beside facades.json) itself;
  * the request names them and carries the frames. Raw little-endian request on stdin, a JSON report on stdout.
  *
- * usage: symmetry_native [--threads N] [--heightmap FILE]
+ * usage: symmetry_native [--threads N] [--heightmap FILE] [--fill DIR]
  *   --heightmap: the plan's height map written to FILE: a text line "W H cell x0 z0" then W * H float32 (row j, column i)
+ *   --fill: the mirror fill (step 2): each facade whose unread texels its own mirror (when detected) or an accepted twin
+ *           fills is written into DIR under its image's name, with a mask beside it (<image>_mirror.png, 255 = filled);
+ *           the report gains "fills". DIR holds a copy of the orthos' folder (the wrapper clones it).
  *
  * Request:
  *   char[4] "SBSY"   u32 version (1)
@@ -114,9 +117,10 @@ void putTransform(std::ostream& o, const sym::PlanTransform& t) {
 
 int main(int argc, char** argv) {
     unsigned threads = 0;
-    std::string heightmapFile;
+    std::string heightmapFile, fillDir;
     for (int a = 1; a < argc; a++) {
         if (!std::strcmp(argv[a], "--threads") && a + 1 < argc) threads = static_cast<unsigned>(std::max(0, std::atoi(argv[++a])));
+        else if (!std::strcmp(argv[a], "--fill") && a + 1 < argc) fillDir = argv[++a];
         else if (!std::strcmp(argv[a], "--heightmap") && a + 1 < argc) heightmapFile = argv[++a];
         else fail(std::string("unknown argument ") + argv[a]);
     }
@@ -204,6 +208,80 @@ int main(int argc, char** argv) {
 
     const std::vector<sym::PlanTransform> transforms = sym::planTransforms(plan, P);
     const std::vector<sym::Twin> twins = sym::twinFacades(images, transforms, P, &pool);
+    const auto tTwins = std::chrono::steady_clock::now();
+
+    // the mirror fill: every facade at full resolution, as photographed (a fill never copies a fill)
+    std::vector<sym::FillReport> fills;
+    if (!fillDir.empty()) {
+        using F = scratchbox::png::OutputFormat;
+        const uint8_t occAt = static_cast<uint8_t>(std::lround(minBlocked * 255));
+        std::vector<sym::FillImage> orig(specs.size());
+        pool.forEach(specs.size(), [&](size_t i) {
+            const Spec& s = specs[i];
+            sym::FillImage& g = orig[i];
+            const auto rgba = readPng(dir + "/" + s.image, F::Rgba);
+            g.id = s.f.id; g.W = rgba.width; g.H = rgba.height;
+            for (int k = 0; k < 3; k++) { g.centroid[k] = s.f.centroid[k]; g.normal[k] = s.f.normal[k]; g.axisS[k] = s.f.axisS[k]; g.axisT[k] = s.f.axisT[k]; }
+            g.orthoSMin = s.f.orthoSMin; g.orthoTMax = s.f.orthoTMax; g.pixel = s.f.pixel;
+            g.rgba = rgba.data;
+            auto mask = [&](const std::string& name) -> std::vector<uint8_t> {
+                if (name.empty()) return {};
+                std::ifstream probe(dir + "/" + name);
+                if (!probe) return {};
+                auto m = readPng(dir + "/" + name, F::Luma);
+                return m.width == g.W && m.height == g.H ? m.data : std::vector<uint8_t>{};
+            };
+            const auto unc = mask(s.uncovered), occ = mask(s.occluded), fl = mask(s.featureless);
+            const size_t N = static_cast<size_t>(g.W) * g.H;
+            g.read.assign(N, 0); g.unread.assign(N, 0);
+            for (size_t k = 0; k < N; k++) {
+                if (!g.rgba[4 * k + 3]) continue;
+                const bool un = (!unc.empty() && unc[k] >= 128) || (!occ.empty() && occ[k] >= occAt) || (!fl.empty() && fl[k] >= 128);
+                (un ? g.unread : g.read)[k] = 1;
+            }
+        });
+        sym::FillParams FP;
+        FP.nccGate = P.nccGate;
+        fills.resize(specs.size());
+        pool.forEach(specs.size(), [&](size_t i) {
+            sym::FillImage g = orig[i];
+            sym::FillReport& rep = fills[i];
+            rep.facadeId = g.id;
+            for (uint8_t u : g.unread) rep.unread += u;
+            if (!rep.unread) return;
+            std::vector<uint8_t> mask(g.unread.size(), 0);
+            if (mirrors[i].detected) {
+                rep.axisS = mirrors[i].axisS; rep.axisNcc = mirrors[i].ncc;
+                sym::fillFromOwnMirror(g, mirrors[i].axisS, mask, rep, FP);
+            }
+            for (const sym::Twin& t : twins) {
+                if (!t.accepted || (t.a != g.id && t.b != g.id)) continue;
+                const int other = t.a == g.id ? t.b : t.a;
+                const auto it = std::find_if(orig.begin(), orig.end(), [&](const sym::FillImage& o) { return o.id == other; });
+                if (it == orig.end()) continue;
+                // a's points go to b through the transform; b's go back through its inverse (a mirror is its own)
+                sym::PlanTransform T = t.transform;
+                double ds = t.shiftS, dt = t.shiftT;
+                if (t.b == g.id) {
+                    ds = 0; dt = 0;
+                    if (T.kind == "rotation") T = sym::PlanTransform::rotation(T.c, T.order, T.order - T.k, T.score, T.from);
+                }
+                sym::fillFromTwin(g, *it, T, ds, dt, mask, rep, FP);
+            }
+            const int filled = rep.fromSelf + std::accumulate(rep.fromTwins.begin(), rep.fromTwins.end(), 0, [](int a, const std::pair<int, int>& b) { return a + b.second; });
+            if (!filled) return;
+            scratchbox::texture::ImageBuffer out(g.W, g.H, 4);
+            out.data = g.rgba;
+            const auto png = scratchbox::png::encode(out);
+            scratchbox::texture::ImageBuffer m(g.W, g.H, 1);
+            m.data = mask;
+            const auto mpng = scratchbox::png::encode(m);
+            std::string base = specs[i].image;
+            if (base.size() > 4 && base.substr(base.size() - 4) == ".png") base.resize(base.size() - 4);
+            std::ofstream(fillDir + "/" + specs[i].image, std::ios::binary).write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+            std::ofstream(fillDir + "/" + base + "_mirror.png", std::ios::binary).write(reinterpret_cast<const char*>(mpng.data()), static_cast<std::streamsize>(mpng.size()));
+        });
+    }
     const auto tEnd = std::chrono::steady_clock::now();
     auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
 
@@ -252,7 +330,23 @@ int main(int argc, char** argv) {
         putTransform(o, t.transform);
         o << ",\"ncc\":" << t.ncc << ",\"share\":" << t.share << ",\"shiftM\":[" << t.shiftS << "," << t.shiftT << "],\"overlapShare\":" << t.overlapShare << ",\"accepted\":" << (t.accepted ? "true" : "false") << "}";
     }
-    o << "],\"ms\":{\"plan\":" << ms(t0, tPlan) << ",\"facades\":" << ms(tPlan, tFacades) << ",\"twins\":" << ms(tFacades, tEnd) << "}}\n";
+    o << "]";
+    if (!fillDir.empty()) {
+        o << ",\"fills\":[";
+        bool first = true;
+        for (const sym::FillReport& f : fills) {
+            if (!f.unread) continue;
+            if (!first) o << ",";
+            first = false;
+            o << "{\"facadeId\":" << f.facadeId << ",\"unread\":" << f.unread << ",\"fromMirror\":" << f.fromSelf << ",\"axisS\":" << f.axisS << ",\"axisNcc\":" << f.axisNcc << ",\"fromTwins\":[";
+            for (size_t k = 0; k < f.fromTwins.size(); k++) { if (k) o << ","; o << "[" << f.fromTwins[k].first << "," << f.fromTwins[k].second << "]"; }
+            o << "],\"regions\":" << f.regions << ",\"regionsFilled\":" << f.regionsFilled << ",\"regionsRefused\":" << f.regionsRefused << ",\"largest\":[";
+            for (size_t k = 0; k < f.log.size(); k++) { if (k) o << ","; o << "{\"texels\":" << f.log[k].texels << ",\"filled\":" << f.log[k].filled << ",\"ringNcc\":" << f.log[k].ringNcc << ",\"ringPairs\":" << f.log[k].ringPairs << ",\"source\":\"" << f.log[k].source << "\"}"; }
+            o << "]}";
+        }
+        o << "]";
+    }
+    o << ",\"ms\":{\"plan\":" << ms(t0, tPlan) << ",\"facades\":" << ms(tPlan, tFacades) << ",\"twins\":" << ms(tFacades, tTwins) << ",\"fill\":" << ms(tTwins, tEnd) << "}}\n";
     const std::string s = j.o.str();
     if (std::fwrite(s.data(), 1, s.size(), stdout) != s.size() || std::fflush(stdout) != 0) fail("cannot write the result");
     return 0;

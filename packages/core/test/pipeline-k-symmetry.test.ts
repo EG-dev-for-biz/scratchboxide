@@ -24,7 +24,9 @@ import * as os from 'os';
 import * as path from 'path';
 import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { describeSymmetry, detectSymmetry, stampSymmetryGlb, SYMMETRY_PARAMS, type SymmetryReport } from '../src/node/3d-engine/staged-location/pipeline-k/symmetry';
+import { describeSymmetry, detectSymmetry, mirrorFillOrthos, mirrorWindows, stampSymmetryGlb, SYMMETRY_PARAMS, type SymmetryReport } from '../src/node/3d-engine/staged-location/pipeline-k/symmetry';
+import { decodePng } from '../src/node/texture-processing';
+import type { WindowFitFile, WindowRect } from '../src/node/3d-engine/staged-location/window-fit';
 
 type Box = { x0: number; x1: number; z0: number; z1: number; top: number };
 
@@ -63,19 +65,23 @@ function noise(sM: number, tM: number, seed: number): number {
 const PIXEL = 0.1, HALF_W = 10, HALF_H = 5;
 
 /** A 20 x 10 m facade photo drawn by `lum(s, t)` (s along, t up, both from the centre), with its frame and an optional occluded mask. */
-function facade(dir: string, id: number, centroid: number[], normal: number[], axisS: number[], lum: (s: number, t: number) => number, occluded?: (s: number, t: number) => boolean) {
+function facade(dir: string, id: number, centroid: number[], normal: number[], axisS: number[], lum: (s: number, t: number) => number, occluded?: (s: number, t: number) => boolean, uncovered?: (s: number, t: number) => boolean) {
     const W = 2 * HALF_W / PIXEL, H = 2 * HALF_H / PIXEL;
-    const rgba = new Uint8Array(W * H * 4), occ = new Uint8Array(W * H);
+    const rgba = new Uint8Array(W * H * 4), occ = new Uint8Array(W * H), unc = new Uint8Array(W * H);
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-        const s = -HALF_W + (x + 0.5) * PIXEL, t = HALF_H - (y + 0.5) * PIXEL, v = Math.round(lum(s, t)), k = y * W + x;
+        const s = -HALF_W + (x + 0.5) * PIXEL, t = HALF_H - (y + 0.5) * PIXEL, k = y * W + x;
+        // a texel the photo never reached is the rectifier's repeat fill: here a flat grey that is not the wall
+        const v = uncovered?.(s, t) ? 90 : Math.round(lum(s, t));
         rgba.set([v, v, v, 255], k * 4);
         if (occluded?.(s, t)) occ[k] = 255;
+        if (uncovered?.(s, t)) unc[k] = 255;
     }
     fs.writeFileSync(path.join(dir, `facade_${id}.png`), encodePng(W, H, rgba, 4));
     if (occluded) fs.writeFileSync(path.join(dir, `facade_${id}_occluded.png`), encodePng(W, H, occ, 1));
+    if (uncovered) fs.writeFileSync(path.join(dir, `facade_${id}_uncovered.png`), encodePng(W, H, unc, 1));
     return {
         facadeId: id, image: `facade_${id}.png`, centroid, normal, axisS, axisT: [0, 1, 0], sMin: -HALF_W, sMax: HALF_W, tMin: -HALF_H, tMax: HALF_H,
-        pixel: PIXEL, width: W, height: H, orthoSMin: -HALF_W, orthoTMax: HALF_H, coverage: 1, ...(occluded ? { occludedMask: `facade_${id}_occluded.png` } : {})
+        pixel: PIXEL, width: W, height: H, orthoSMin: -HALF_W, orthoTMax: HALF_H, coverage: 1, ...(occluded ? { occludedMask: `facade_${id}_occluded.png` } : {}), ...(uncovered ? { uncoveredMask: `facade_${id}_uncovered.png` } : {})
     };
 }
 
@@ -170,5 +176,71 @@ describe('pipeline K symmetry reading', () => {
         expect(ex.twins.length).toBe(rep.twins.length);
         expect(parseGlbBytes(fs.readFileSync(glb)).json.asset.extras).toBeUndefined();
         expect(describeSymmetry(rep as SymmetryReport)).toMatch(/twin facade pairs/);
+    }, 300_000);
+    it('fills unread texels from the mirror only where the photo around them agrees, never writing a read texel; the reader\'s windows fill their unread mirror sites and flag a phase error', async () => {
+        const orthos = path.join(dir, 'fill');
+        fs.mkdirSync(orthos, { recursive: true });
+        const glb = path.join(dir, 'fill.glb');
+        roofsGlb(glb, [{ x0: -20, x1: 20, z0: -10, z1: 10, top: 10 }]);
+        const sym = (s: number, t: number) => noise(Math.abs(s), t, 7);
+        // facade 5: symmetric, a 3 x 3 m patch right of the axis never reached; facade 6: symmetric except a 6.5 x 6.5 m door
+        // left of the axis (other noise), with the door's mirror site never reached: the ring there breaks the symmetry
+        const hole = (s: number, t: number) => s > 4 && s < 7 && t > -1 && t < 2;
+        const door = (s: number, t: number) => s > -8.5 && s < -2 && t > -5 && t < 1.5;
+        const doorHole = (s: number, t: number) => s > 3.5 && s < 6.5 && t > -3.5 && t < -0.5;
+        const doorWall = (s: number, t: number) => (door(s, t) ? noise(s, t, 55) : sym(s, t));
+        const facades = [
+            facade(orthos, 5, [0, 5, 10], [0, 0, 1], [1, 0, 0], sym, undefined, hole),
+            facade(orthos, 6, [0, 5, -10], [0, 0, -1], [-1, 0, 0], doorWall, undefined, doorHole)
+        ];
+        fs.writeFileSync(path.join(orthos, 'facades.json'), JSON.stringify({ schema: 'test', facades }));
+        const before = decodePng(fs.readFileSync(path.join(orthos, 'facade_5.png')));
+        const r = await mirrorFillOrthos(orthos, 'test', { scanGlb: glb, groundY: 0, footprint: [] });
+        expect(r.cached).toBe(false);
+        const f5 = r.report.fills!.find(x => x.facadeId === 5)!;
+        expect(f5.fromMirror).toBeGreaterThan(0.95 * 30 * 30);
+        const after = decodePng(fs.readFileSync(path.join(r.orthosDir, 'facade_5.png')));
+        const W = after.width;
+        let readChanged = 0, filledOff = 0, filled = 0;
+        for (let y = 0; y < after.height; y++) for (let x = 0; x < W; x++) {
+            const k = y * W + x, s = -HALF_W + (x + 0.5) * PIXEL, t = HALF_H - (y + 0.5) * PIXEL;
+            if (!hole(s, t)) { if (after.rgba[k * 4] !== before.rgba[k * 4]) readChanged++; continue; }
+            filled++;
+            if (Math.abs(after.rgba[k * 4] - Math.round(sym(s, t))) > 3) filledOff++;
+        }
+        expect(readChanged).toBe(0);
+        expect(filledOff / filled).toBeLessThan(0.05);
+        const meta = JSON.parse(fs.readFileSync(path.join(r.orthosDir, 'facades.json'), 'utf8')).facades.find((f: { facadeId: number }) => f.facadeId === 5);
+        expect(meta.mirrorMask).toBe('facade_5_mirror.png');
+        expect(meta.mirrorFill.label).toBe('generated');
+        expect(meta.textureFill.method).toMatch(/own mirror/);
+        // the door's mirror site: the photo around it disagrees with its image (the door), so it is refused
+        const f6 = r.report.fills!.find(x => x.facadeId === 6)!;
+        expect(f6.fromMirror).toBe(0);
+        expect(f6.regionsRefused).toBeGreaterThan(0);
+        // the source folder is untouched, and a second call is served from the keyed clone
+        expect(fs.existsSync(path.join(orthos, 'facade_5_mirror.png'))).toBe(false);
+        expect((await mirrorFillOrthos(orthos, 'test', { scanGlb: glb, groundY: 0, footprint: [] })).cached).toBe(true);
+
+        // windows on facade 5 (axis at s = 0, x = 100 px): the reader read two windows left of the axis; one mirror site is
+        // the unread patch (filled, generated), the other read and holding the fit's box 4 px off (a pair); with four
+        // more reader windows whose read mirror sites hold boxes 8 px off, the facade is flagged for a reader phase error
+        const px = (s: number) => (s + HALF_W) / PIXEL, py = (t: number) => (HALF_H - t) / PIXEL;
+        const win = (s0: number, s1: number, t0: number, t1: number): WindowRect => [px(s0), py(t1), px(s1), py(t0)];
+        const readerBoxes: WindowRect[] = [win(-6.5, -4.5, -0.5, 1.5), win(-3, -2, 3, 4), win(-5, -4, 3, 4), win(-7, -6, 3, 4), win(-9, -8, 3, 4)];
+        const shifted = (r0: WindowRect, d: number): WindowRect => [2 * 100 - r0[2] + d, r0[1], 2 * 100 - r0[0] + d, r0[3]];
+        const structural = [shifted(readerBoxes[1], 8), shifted(readerBoxes[2], 8), shifted(readerBoxes[3], 8), shifted(readerBoxes[4], 8)];
+        const fit = { version: 'test', params: {}, ms: 0, facades: [{ facadeId: 5, width: 200, height: 100, rects: [...readerBoxes, ...structural], bands: [], reader: 'test', readerWindows: readerBoxes.length, structural: { rects: structural }, ms: 0 }] } as unknown as WindowFitFile;
+        const mw = mirrorWindows(r.orthosDir, fit, r.report);
+        const rec = mw.facades.find(x => x.facadeId === 5)!;
+        expect(rec.added).toBe(1);
+        expect(rec.paired).toBe(4);
+        expect(rec.flag?.kind).toBe('phase');
+        expect(rec.flag!.offsetM).toBeCloseTo(0.8, 1);
+        const e = fit.facades[0] as { rects: WindowRect[]; generated?: WindowRect[] };
+        expect(e.generated!.length).toBe(1);
+        expect(e.rects.length).toBe(readerBoxes.length + structural.length + 1);
+        // nothing on read photo moved
+        for (const b of structural) expect(e.rects.some(x => x.join() === b.join())).toBe(true);
     }, 300_000);
 });

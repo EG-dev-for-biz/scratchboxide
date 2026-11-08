@@ -30,6 +30,10 @@
  *     its candidate twin, and the two photos are compared point for point through the transform (a small shift search
  *     absorbs the planes' fitting error): band-passed NCC over texels both photos read, gated as texture-repeat.ts gates a
  *     repeat (NCC_GATE).
+ *  4. The mirror fill (step 2). A facade's unread texels (never reached, occluded, a smear) take the colour of the read
+ *     texel its mirror pairs them with: its own mirror first, then an accepted twin's. Region by region, and only where the
+ *     read ring around the region agrees with its image at the gate, so a part that breaks the symmetry (a door, a sign)
+ *     is left to the repeat fill. A read texel is never written: the mirror never overrides what the photo measured.
  *
  * Plan coordinates are the tile frame's (x east, z south, metres); a plan angle is measured from +x toward +z. A mirror
  * axis is the vertical plane through `point` along `dir`.
@@ -794,6 +798,175 @@ inline std::vector<PlanTransform> planTransforms(const PlanReport& r, const Para
     for (size_t k = 0; k < r.tiers.size(); k++) add(r.tiers[k].outline, "tier " + std::to_string(k));
     if (r.hasFootprint) add(r.footprint, "footprint");
     return out;
+}
+
+
+// ---------------------------------------------------------------------------------------------------------------------
+// the mirror fill (step 2): unread texels taken from the read texel the symmetry pairs them with
+
+/** A facade photo at full resolution for the fill: RGBA, which texels are read, its frame. */
+struct FillImage {
+    int id = 0, W = 0, H = 0;
+    double centroid[3]{}, normal[3]{}, axisS[3]{}, axisT[3]{};
+    double orthoSMin = 0, orthoTMax = 0, pixel = 0.1;
+    std::vector<uint8_t> rgba;
+    std::vector<uint8_t> read;      // 1: the photo saw the wall here (covered, not occluded, not a smear)
+    std::vector<uint8_t> unread;    // 1: the facade's own texel the photo did not read (filled or occluded)
+};
+
+struct FillParams {
+    /** The ring of read texels around a region its symmetry must hold on (m), and the least ring texels paired. */
+    double ringM = 1.0;
+    int minRingPairs = 40;
+    /** The ring's NCC against its mirror must reach this (the gate). */
+    double nccGate = 0.55;
+    /** Of the ring, at least this share must pair with read texels. */
+    double minRingShare = 0.3;
+};
+
+struct FillRegionLog { int texels = 0; int filled = 0; double ringNcc = 0; int ringPairs = 0; std::string source; };
+
+struct FillReport {
+    int facadeId = 0;
+    int unread = 0, fromSelf = 0;
+    std::vector<std::pair<int, int>> fromTwins;   // (twin facade id, texels)
+    int regions = 0, regionsFilled = 0, regionsRefused = 0;
+    double axisS = 0, axisNcc = 0;
+    std::vector<FillRegionLog> log;                // the largest regions, for the record
+};
+
+namespace detail {
+
+inline double lumaAt(const std::vector<uint8_t>& rgba, size_t k) { return 0.299 * rgba[4 * k] + 0.587 * rgba[4 * k + 1] + 0.114 * rgba[4 * k + 2]; }
+
+/** The unread regions (4-connected) of a fill image, each as its texel list and bounding box. */
+inline std::vector<std::pair<std::vector<int>, std::array<int, 4>>> unreadRegions(const FillImage& g) {
+    std::vector<std::pair<std::vector<int>, std::array<int, 4>>> out;
+    std::vector<uint8_t> seen(g.unread.size(), 0);
+    for (int start = 0; start < g.W * g.H; start++) {
+        if (!g.unread[static_cast<size_t>(start)] || seen[static_cast<size_t>(start)]) continue;
+        std::vector<int> region, stack{start};
+        seen[static_cast<size_t>(start)] = 1;
+        std::array<int, 4> box{g.W, g.H, -1, -1};
+        while (!stack.empty()) {
+            const int i = stack.back(); stack.pop_back();
+            region.push_back(i);
+            const int x = i % g.W, y = i / g.W;
+            box[0] = std::min(box[0], x); box[1] = std::min(box[1], y); box[2] = std::max(box[2], x); box[3] = std::max(box[3], y);
+            const int nb[4] = {x > 0 ? i - 1 : -1, x < g.W - 1 ? i + 1 : -1, y > 0 ? i - g.W : -1, y < g.H - 1 ? i + g.W : -1};
+            for (int k : nb) if (k >= 0 && g.unread[static_cast<size_t>(k)] && !seen[static_cast<size_t>(k)]) { seen[static_cast<size_t>(k)] = 1; stack.push_back(k); }
+        }
+        out.push_back({std::move(region), box});
+    }
+    return out;
+}
+
+/** The read texels of g within r texels of a region's box that touch the region (a sampled ring). */
+inline std::vector<int> ringOf(const FillImage& g, const std::vector<int>& region, const std::array<int, 4>& box, int r, size_t maxRing = 4000) {
+    std::vector<uint8_t> inRegion;
+    const int bx0 = std::max(0, box[0] - r), by0 = std::max(0, box[1] - r), bx1 = std::min(g.W - 1, box[2] + r), by1 = std::min(g.H - 1, box[3] + r);
+    const int bw = bx1 - bx0 + 1, bh = by1 - by0 + 1;
+    inRegion.assign(static_cast<size_t>(bw) * bh, 0);
+    for (int i : region) inRegion[static_cast<size_t>(i / g.W - by0) * bw + (i % g.W - bx0)] = 1;
+    // distance to the region, by a two-pass chamfer over the box
+    std::vector<int> d(inRegion.size(), 1 << 20);
+    for (size_t k = 0; k < d.size(); k++) if (inRegion[k]) d[k] = 0;
+    for (int y = 0; y < bh; y++) for (int x = 0; x < bw; x++) {
+        int& v = d[static_cast<size_t>(y) * bw + x];
+        if (x) v = std::min(v, d[static_cast<size_t>(y) * bw + x - 1] + 1);
+        if (y) v = std::min(v, d[static_cast<size_t>(y - 1) * bw + x] + 1);
+    }
+    for (int y = bh - 1; y >= 0; y--) for (int x = bw - 1; x >= 0; x--) {
+        int& v = d[static_cast<size_t>(y) * bw + x];
+        if (x + 1 < bw) v = std::min(v, d[static_cast<size_t>(y) * bw + x + 1] + 1);
+        if (y + 1 < bh) v = std::min(v, d[static_cast<size_t>(y + 1) * bw + x] + 1);
+    }
+    std::vector<int> ring;
+    for (int y = 0; y < bh; y++) for (int x = 0; x < bw; x++) {
+        const int dv = d[static_cast<size_t>(y) * bw + x];
+        if (dv < 1 || dv > r) continue;
+        const int i = (y + by0) * g.W + (x + bx0);
+        if (g.read[static_cast<size_t>(i)]) ring.push_back(i);
+    }
+    if (ring.size() > maxRing) {
+        std::vector<int> s;
+        const size_t stride = (ring.size() + maxRing - 1) / maxRing;
+        for (size_t k = 0; k < ring.size(); k += stride) s.push_back(ring[k]);
+        ring.swap(s);
+    }
+    return ring;
+}
+
+} // namespace detail
+
+/**
+ * A mapping of one facade's texels onto another's (or its own): `map(i)` gives the source texel index, or -1 when the
+ * image falls outside the source. The fill copies a region only where the read ring around it agrees with its image
+ * (NCC of luminance over ring texels whose image is read), so a symmetry that holds over the facade as a whole is not
+ * pushed onto a part that breaks it (an entrance, a sign).
+ */
+template <class Map>
+inline void fillRegionsFrom(FillImage& dst, const FillImage& src, Map map, const std::string& source, std::vector<uint8_t>& mask, FillReport& rep, int& counter, const FillParams& P) {
+    const int r = std::max(1, static_cast<int>(std::round(P.ringM / dst.pixel)));
+    for (auto& [region, box] : detail::unreadRegions(dst)) {
+        rep.regions++;
+        FillRegionLog lg;
+        lg.texels = static_cast<int>(region.size());
+        lg.source = source;
+        const std::vector<int> ring = detail::ringOf(dst, region, box, r);
+        NccAcc acc;
+        for (int i : ring) {
+            const int j = map(i);
+            if (j >= 0 && src.read[static_cast<size_t>(j)]) acc.add(detail::lumaAt(dst.rgba, static_cast<size_t>(i)), detail::lumaAt(src.rgba, static_cast<size_t>(j)));
+        }
+        lg.ringPairs = static_cast<int>(acc.n);
+        lg.ringNcc = acc.ncc();
+        const bool holds = acc.n >= P.minRingPairs && acc.n >= P.minRingShare * ring.size() && lg.ringNcc >= P.nccGate;
+        if (holds) {
+            for (int i : region) {
+                const int j = map(i);
+                if (j < 0 || !src.read[static_cast<size_t>(j)]) continue;
+                for (int c = 0; c < 3; c++) dst.rgba[4 * static_cast<size_t>(i) + c] = src.rgba[4 * static_cast<size_t>(j) + c];
+                // never the exact grey the rectifier marks as uncovered
+                if (dst.rgba[4 * static_cast<size_t>(i)] == 128 && dst.rgba[4 * static_cast<size_t>(i) + 1] == 128 && dst.rgba[4 * static_cast<size_t>(i) + 2] == 128) dst.rgba[4 * static_cast<size_t>(i) + 2] = 129;
+                dst.unread[static_cast<size_t>(i)] = 0;
+                mask[static_cast<size_t>(i)] = 255;
+                lg.filled++;
+            }
+            counter += lg.filled;
+            if (lg.filled) rep.regionsFilled++;
+        } else if (acc.n > 0) rep.regionsRefused++;
+        if (lg.texels >= 200) rep.log.push_back(lg);
+    }
+    std::sort(rep.log.begin(), rep.log.end(), [](const FillRegionLog& a, const FillRegionLog& b) { return a.texels > b.texels; });
+    if (rep.log.size() > 12) rep.log.resize(12);
+}
+
+/** The facade's unread texels filled from its own mirror about the vertical axis at `axisS` (m along s). */
+inline void fillFromOwnMirror(FillImage& g, double axisS, std::vector<uint8_t>& mask, FillReport& rep, const FillParams& P) {
+    const double c = (axisS - g.orthoSMin) / g.pixel - 0.5;
+    const FillImage src = g;   // reads come from the photo as it was (a fill never copies a fill)
+    fillRegionsFrom(g, src, [&](int i) {
+        const int x = i % g.W, y = i / g.W;
+        const int xm = static_cast<int>(std::lround(2 * c - x));
+        return xm < 0 || xm >= g.W ? -1 : y * g.W + xm;
+    }, "mirror", mask, rep, rep.fromSelf, P);
+}
+
+/** The facade's unread texels filled from a twin facade through the plan transform, at the shift its comparison settled on. */
+inline void fillFromTwin(FillImage& g, const FillImage& twin, const PlanTransform& T, double shiftS, double shiftT, std::vector<uint8_t>& mask, FillReport& rep, const FillParams& P) {
+    int n = 0;
+    fillRegionsFrom(g, twin, [&](int i) {
+        const int x = i % g.W, y = i / g.W;
+        const double s = g.orthoSMin + (x + 0.5) * g.pixel, t = g.orthoTMax - (y + 0.5) * g.pixel;
+        const double px = g.centroid[0] + s * g.axisS[0] + t * g.axisT[0], py = g.centroid[1] + s * g.axisS[1] + t * g.axisT[1], pz = g.centroid[2] + s * g.axisS[2] + t * g.axisT[2];
+        const Vec2d q = T.apply({px, pz});
+        const double v[3] = {q.x - twin.centroid[0], py - twin.centroid[1], q.z - twin.centroid[2]};
+        const double sb = detail::dot3(v, twin.axisS) + shiftS, tb = detail::dot3(v, twin.axisT) + shiftT;
+        const int xb = static_cast<int>(std::floor((sb - twin.orthoSMin) / twin.pixel)), yb = static_cast<int>(std::floor((twin.orthoTMax - tb) / twin.pixel));
+        return xb < 0 || yb < 0 || xb >= twin.W || yb >= twin.H ? -1 : yb * twin.W + xb;
+    }, "twin " + std::to_string(twin.id), mask, rep, n, P);
+    if (n) rep.fromTwins.push_back({twin.id, n});
 }
 
 } // namespace symmetry

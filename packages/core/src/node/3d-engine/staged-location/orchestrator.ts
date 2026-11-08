@@ -206,7 +206,7 @@ import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
-import { describeSymmetry, detectSymmetry, stampSymmetryGlb, symmetryOn, SYMMETRY_VERSION, type SymmetryReport } from './pipeline-k/symmetry';
+import { describeMirrorFill, describeMirrorWindows, describeSymmetry, detectSymmetry, mirrorFillOrthos, mirrorWindows, stampSymmetryGlb, symmetryFillOn, symmetryOn, symmetryWindowsOn, SYMMETRY_VERSION, type SymmetryReport } from './pipeline-k/symmetry';
 import { districtBuildingIndex, districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
 import { chunkCpuShare, chunkOwner, chunkParallel, kdCentreRunner, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
 import { createChunkJoiner } from './pipeline-k/chunk-join-worker';
@@ -4508,7 +4508,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // the facades' small holes no real source covers: inpainted by the image model when the build has one
                         // (capped per build, pipeline-k.ts HOLE_INPAINT); SCRATCHBOX_K_HOLE_INPAINT=0 off
                         const holeInpaint = deps.textures?.enhance && process.env.SCRATCHBOX_K_HOLE_INPAINT?.trim() !== '0' ? { client: deps.textures.enhance, models: [LIGHTING_MODEL_LITE], ...(bypass('remesh') ? {} : { readings: modelReadingsStore() }) } : undefined;
-                        const k = await timed('pipelineK', () => rectifyReliefOrthos(r.reliefOrthosDir!, { signal: io.signal, ...(cpuShare ? { threads: cpuShare.threads } : {}), ...(holeInpaint ? { inpaint: holeInpaint } : {}) }));
+                        let k = await timed('pipelineK', () => rectifyReliefOrthos(r.reliefOrthosDir!, { signal: io.signal, ...(cpuShare ? { threads: cpuShare.threads } : {}), ...(holeInpaint ? { inpaint: holeInpaint } : {}) }));
                         orthosKey = `${PIPELINE_K_VERSION}:${k.key}`;
                         r = { ...r, reliefOrthosDir: k.orthosDir };
                         notes.write('pipeline_k', { version: PIPELINE_K_VERSION, orthosDir: k.orthosDir, cached: k.cached, ms: k.ms, reports: k.reports });
@@ -4520,7 +4520,18 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 io.progress('pipeline K: reading the building\'s symmetry');
                                 const vec = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
                                 const footprint = (vec.length ? vec : [structure.outline]).map(l => l.map(p => [p[0], p[1]] as [number, number]));
-                                symmetry = await timed('symmetry', () => detectSymmetry({ scanGlb: r.clayGlb, groundY: structure.groundY, footprint, orthosDir: k.orthosDir }, { signal: io.signal, ...(cpuShare ? { threads: cpuShare.threads } : {}) }));
+                                const symIn = { scanGlb: r.clayGlb, groundY: structure.groundY, footprint };
+                                const symOpts = { signal: io.signal, ...(cpuShare ? { threads: cpuShare.threads } : {}) };
+                                if (symmetryFillOn()) {
+                                    // step 2: the unread facade texels filled from the mirror (generated), on a clone of the orthos that every
+                                    // later stage reads; the polish's key follows it
+                                    const filled = await timed('symmetry', () => mirrorFillOrthos(k.orthosDir, k.key, symIn, symOpts));
+                                    symmetry = filled.report;
+                                    k = { ...k, orthosDir: filled.orthosDir, key: `${k.key}-sym-${filled.key}` };
+                                    orthosKey = `${PIPELINE_K_VERSION}:${k.key}`;
+                                    r = { ...r, reliefOrthosDir: k.orthosDir };
+                                    notes.note(PROVENANCE.generated, describeMirrorFill(filled.report));
+                                } else symmetry = await timed('symmetry', () => detectSymmetry({ ...symIn, orthosDir: k.orthosDir }, symOpts));
                                 notes.write('pipeline_k_symmetry', { version: SYMMETRY_VERSION, footprint: vec.length ? footprintSource(eBuildings) : 'scan outline', ...symmetry });
                                 notes.note(PROVENANCE.photoInferred, describeSymmetry(symmetry));
                             } catch (err) {
@@ -4608,6 +4619,19 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     notes.note(PROVENANCE.photoInferred, `the window array step failed (${errorMessage(err)}); the windows stay as the window fit read them`);
                                 }
                             } else logStep('remesh.windowArray', 'skipped');
+                            // step 2 of the symmetry: the reader's windows confirm or fill their mirror sites (unread sites only), and a
+                            // reader phase error is flagged where the mirror halves disagree (pipeline-k/symmetry.ts mirrorWindows)
+                            if (symmetry && symmetryWindowsOn() && stepOn('remesh.mirrorWindows', true)) {
+                                try {
+                                    const sym = symmetry;
+                                    const mw = await timed('mirrorWindows', async () => mirrorWindows(k.orthosDir, wf.fit, sym));
+                                    notes.write('pipeline_k_mirror_windows', mw);
+                                    notes.note(PROVENANCE.generated, describeMirrorWindows(mw));
+                                } catch (err) {
+                                    if (isAbort(err) || io.signal.aborted) throw err;
+                                    notes.write('pipeline_k_mirror_windows', { version: SYMMETRY_VERSION, failed: true, reason: errorMessage(err) });
+                                }
+                            } else logStep('remesh.mirrorWindows', 'skipped');
                             // the bay grammar read per wall, from all the photos of each wall's facades together (wall-grammar.ts)
                             try {
                                 const wg = await timed('wallGrammar', async () => { await ensureNativeWallGrammar(); return onThreads ? runRemeshJob<{ file: string; grammar: WallGrammarFile }>({ kind: 'wallGrammar', orthosDir: k.orthosDir, fit: wf.fit, ...(cpuShare ? { threads: cpuShare.threads } : {}) }, { signal: io.signal }) : readWallGrammar(k.orthosDir, wf.fit, b => { const d = decodePngForGrammar(b); return { rgba: d.rgba, width: d.width, height: d.height }; }, undefined, cpuShare ? { threads: cpuShare.threads } : {}); });
