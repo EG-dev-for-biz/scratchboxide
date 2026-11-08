@@ -398,7 +398,55 @@ By building (final): Penn 2 10 / 3 and 1,061; Lever House 8 / 5 and 414 (face 7'
 Rock 18 / 12 and 1,256 (face 20 2,154 boxes to 2,554 windows, face 27 550 to 1,862); Seagram 1 / 14 and 622. Not yet
 rebuilt end to end on `window-array/8`.
 
+### On main after the glass, tile-seam and relief merges (2026-11-08)
+
+Rebuilt uncached on main b2a41010 (glass #182, tile seams #185, measured relief #187) against #165 + #186 at dbfb7aeb.
+All five buildings ran on each side, with load under 100. One store of model answers was shared by both sides, so they
+read identical photos with identical answers (`2026-11-07-window-array-main`).
+
+Dark lines are the glass session's measure (`tools/darklines.py`), the mean of its glass and stone close-ups from its
+cameras. Off-axis is that measure's thin dark lines more than 15 degrees off both image axes. A seam, slit or zig-zag at a
+cut runs that way; a reveal or frame runs along the axes.
+
+| Building | Holes, main / branch | Untextured | Dark lines | Off-axis |
+|---|---|---|---|---|
+| Penn 2 | 0.89 / 0.92% | 1.13 / 1.10% | 0.66 / 1.14% | 0.000 / 0.015% |
+| Empire State Building | 0.54 / 0.54% | 0.42 / 0.37% | 2.26 / 2.08% | 0.085 / 0.070% |
+| Lever House | 2.83 / 2.84% | 3.08 / 4.00% | 0.96 / 1.00% | 0.060 / 0.040% |
+| 30 Rockefeller Plaza | 0.44 / 0.45% | 2.73 / 2.81% | 0.13 / 0.12% | 0.060 / 0.060% |
+| Seagram | 1.21 / 1.04% | 4.05 / 3.77% | 0.51 / 0.57% | 0.020 / 0.020% |
+
+![Window arrays on main](./k-window-array/2026-11-08-main-sheet.jpg)
+
+- **No seams added.** The off-axis share is equal or lower on four buildings and up 0.015 points on Penn 2. Where dark
+  lines rise (Penn 2), they run along the axes: window frames and recess edges.
+- **Lever House.** Main's two dark horizontal slots across the slab are gone; the grid runs on.
+- **Seagram.** The scattered slits become the curtain wall's grid.
+- **Empire State Building.** Close to main, slightly fewer dark lines. 30 Rock is equal; its close-up shows no windows.
+
+Found and fixed during these runs:
+
+- **Model-sized windows in full bays.** On Penn 2 the system laid the model's 1.72 x 1.8 m window in bays the reader's
+  boxes fill at 2.6 m; they were drawn as notched dark recesses. The boxes read on the system's sites now set its window
+  size and phase, and a fold of known window size centres it in its dark run.
+- **Reader boxes moved.** The array snapped the facade reader's boxes onto an even lattice. On the ESB that broke the
+  paired windows the wall grammar reads its bays from. The reader's boxes are now never moved or replaced (it is the
+  primary source of windows, 2026-11-06).
+- **Grouped bays at whole multiples.** A bay the model reads with several windows is now grouped when they stand unevenly,
+  even when it is exactly k windows wide.
+- **Speed.** The array's colour looks use cached CIELAB and skip masks: 30 Rock's array 178 s to 14 s with the same
+  windows. The branch's 30 Rock build ran before this, at 23 min against main's 10.
+- **Taken out after a regression.** A fit check and per-column offsets: on Penn 2 the fit check refused a working system
+  lattice over mixed bay and half-bay boxes, and the face's own reading then laid two-storey windows.
+
+**The reader varies between runs.** Two separate reads of the same ESB photos returned 838 and 622 windows on facade 43.
+They turned its window strips from dark recessed glass into grey wall. Comparisons between checkouts must share the
+model answers, or that variance swamps the change.
+
 ### Open
+- Lever House's untextured share rises 3.08 to 4.00% on the branch. The seal's share of it went from 14 to 30%, with the
+  closure's corner-join strips 127 to 199 m². Holes are equal.
+- 30 Rock's branch build took 23 min (array 358 s before the speed fix, the building system 97 s, load 50 to 68).
 
 - 30 Rock's pier rhythm is read as grouped bays in the system path (`groupedBay`); a face read without the system (its
   own photo seed) still takes the bay as one cell with one window and needs the same bay read.
