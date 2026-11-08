@@ -67,16 +67,16 @@ describe('pipeline K library sets', () => {
         const unsure = await resolveRegionSets([dark], { repoRoot: root, store, finish: async () => [{ roughness: 0.3, metalness: 0.9, conf: 40 }] });
         expect(unsure[0].name).toBe('Concrete');
         expect(unsure[0].finish).toMatchObject({ roughness: 0.8, metallic: 0, label: 'photo-inferred' });
-        const metal = await resolveRegionSets([dark], { repoRoot: root, store, finish: async () => [{ roughness: 0.35, metalness: 0.95, conf: 60, seen: 'anodized aluminium panel' }] });
+        const metal = await resolveRegionSets([dark], { repoRoot: root, store, finish: async () => [{ roughness: 0.35, metalness: 0.95, conf: 80, seen: 'anodized aluminium panel' }] });
         expect(metal[0].name).toBe('Panel');
         expect(metal[0].finish?.read?.seen).toBe('anodized aluminium panel');
-        // the set's own maps, from the store: the panel's metalness (blue) drawn as read (0.95), its roughness read 0.35
-        // drawn smoother (0.245: material-finish.ts drawnRoughness)
-        expect(Array.from(metal[0].orm.rgba.subarray(0, 3))).toEqual([255, 62, 242]);
+        // the set's own maps, from the store: the panel's metalness (blue) drawn as a bare metal (1: never in between), its
+        // roughness as read (0.35: material-finish.ts drawnRoughness, no squaring)
+        expect(Array.from(metal[0].orm.rgba.subarray(0, 3))).toEqual([255, 89, 255]);
         // read as smooth glass: a library set all the same, never a plain finish
         const glass = await resolveRegionSets([dark], { repoRoot: root, store, finish: async () => [{ roughness: 0.05, metalness: 0, conf: 80, seen: 'dark tinted glass' }] });
         expect(['Concrete', 'Panel']).toContain(glass[0].name);
-        expect(glass[0].finish).toMatchObject({ roughness: 0.05, metallic: 0 });
+        expect(glass[0].finish).toMatchObject({ roughness: 0.08, metallic: 0 });
         // the unmeasured set is counted and left out, never measured in the build
         expect(progress.some(m => /1 library sets .* not measured yet/.test(m))).toBe(true);
         expect(fs.existsSync(path.join(root, 'build', 'texture-library', 'stats'))).toBe(false);

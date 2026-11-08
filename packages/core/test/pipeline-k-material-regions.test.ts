@@ -17,7 +17,8 @@
 import { describe, expect, it } from 'vitest';
 import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { classRepeatSizes, foldRepeats, GLASS, paneGlass, planMaterialRegions, readRegionClasses, regionClassMap, regionRadius, repeatElements, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
+import { ARTIST_FINISH } from '../src/common/spatial/pbr-artist-reference';
+import { applyFrameFinish, classRepeatSizes, foldRepeats, GLASS, paneGlass, planMaterialRegions, readRegionClasses, regionClassMap, regionRadius, repeatElements, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
 import { planMaterialRegionsOnThreads } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions-pool';
 import { tileRefineTwin } from '../src/node/3d-engine/staged-location/tile-refine-twin';
 import { decodeImageInMemory, type RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
@@ -243,6 +244,32 @@ describe('pipeline K material regions', () => {
         expect(tiny.glass[20 * W + 100]).toBe(1);
         expect(tiny.glass[22 * W + 100]).toBe(0);
     });
+    it("draws a window's frames beside its glass no smoother than a frame, and leaves a window without a glass pane as its class drew it", () => {
+        // a 20 x 20 m wall of light stone with two 2 x 2 m dark windows; the first holds a 1.4 x 1.4 m glass pane in its middle
+        // (its frame the 0.3 m ring around it), the second holds no pane
+        const W = 200, H = 200, rgba = new Uint8Array(W * H * 4);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) rgba.set([200, 196, 188, 255], (y * W + x) * 4);
+        for (const [x0, y0] of [[20, 20], [100, 20]]) for (let y = y0; y < y0 + 20; y++) for (let x = x0; x < x0 + 20; x++) rgba.set([25, 30, 42, 255], (y * W + x) * 4);
+        const r = (x0: number, y0: number, x1: number, y1: number) => [x0 / W, y0 / H, x1 / W, y1 / H];
+        const extras = { sbFacadeLattice: { facadeId: 1, windows: { uv: [...r(20, 20, 40, 40), ...r(100, 20, 120, 40)], panes: r(23, 23, 37, 37) } } };
+        const img = { width: W, height: H, rgba };
+        const g = parseGlbBytes(scene([{ mesh: 'facade_lattice_1', corners: wall(0, 20, 20), uv: FULL_UV, material: 0, extras }], [img]));
+        const classes = readRegionClasses(g.json, imagesOf([img]))!;
+        // every class's set as smooth as glass (roughness 20/255), so only the rule can raise a texel
+        const smooth = sets(classes).map(st => ({ ...st, orm: { ...st.orm, rgba: st.orm.rgba.map((v, i) => (i % 4 === 1 ? 20 : v)) } }));
+        const plan = planMaterialRegions(g, g.json, imagesOf([img]), classes, smooth);
+        const raised = applyFrameFinish(plan, g.json, imagesOf([img]), classes);
+        const orm = plan.materials[0].orm, floor = Math.round(ARTIST_FINISH.frameRoughness * 255);
+        // the frame ring (400 - 196 texels) raised to a frame's roughness, the glass kept at main's glass setting
+        expect(raised).toBe(400 - 14 * 14);
+        expect(plan.report.frameTexels).toBe(raised);
+        expect(at(orm, 21, 21)[1]).toBe(floor);
+        expect(at(orm, 30, 30)[1]).toBe(Math.round(GLASS.roughness * 255));
+        // the window with no pane, and the wall, as their classes drew them
+        expect(at(orm, 110, 30)[1]).toBe(20);
+        expect(at(orm, 60, 100)[1]).toBe(20);
+    });
+
     it('draws a speckle under regionSmoothM as the surface around it; a blot a metre across keeps its own set', () => {
         const W = 100, H = 100, rgba = new Uint8Array(W * H * 4);
         for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
