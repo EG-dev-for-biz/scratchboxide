@@ -36,6 +36,10 @@
  *     colour is baked over its rect as a gain on that median (to the power `detailGainPower`); the walls share one atlas
  *     (texel enlarged from `detailTexelM` until they fit in half the atlas). The geometry stays the operators'; roofs,
  *     the slender top and walls without detail keep their flat element colours.
+ *   - Ledge profiles (measured). Each tier wall's scan sections stacked along it into one profile (the outermost surface
+ *     per 0.1 m of height, 4 m below to 3 m above the tier top): continuous steps standing out of the wall (lips,
+ *     cornices) and a parapet rising out of the roof are swept along the wall, mitred at convex corners. A step or
+ *     parapet must run along at least `profileCoverage` of the wall, or it is not drawn.
  *   - Atlas. Every element takes its colour from one atlas texture through its TEXCOORD_0 (COLOR_0 white), since some
  *     renderers read material textures and ignore vertex colours: a detailed wall's elements sample its texture, every
  *     other element a 16-texel block of its own colour (the palette, below the walls' textures; each colour once).
@@ -114,7 +118,13 @@ struct Params {
     double detailTexelM{0.12};         // their texel, enlarged until every wall fits one atlas
     int detailRepeats{6};              // storeys up and down a texel's median is taken over
     int detailAtlas{4096};             // the atlas's side (texels)
-    double detailGainPower{0.5};       // how much of an element's own colour is baked over the median (1: all of it, 0: none)
+    double detailGainPower{0.5};
+    int edgeProfiles{1};               // ledge profiles (lips, cornices, parapets) fitted from the scan's stacked sections
+    double profileBinM{0.1};           // a profile's height bins
+    double profileMinOutM{0.12};       // a step stands at least this far out of the wall (scan noise below it)
+    double profileMaxOutM{1.5};        // ... and at most this far (beyond it, something else)
+    double profileCoverage{0.5};       // a step runs along at least this share of the wall (a continuous lip, not a blob)
+    double profileDensity{25};         // scan samples per square metre for the profiles       // how much of an element's own colour is baked over the median (1: all of it, 0: none)
 };
 
 struct Spec {
@@ -171,6 +181,9 @@ inline Spec parseSpec(std::istream& in) {
             else if (name == "bandTolM") P.bandTolM = v; else if (name == "axialMedian") P.axialMedian = static_cast<int>(v); else if (name == "sliceM") P.sliceM = v;
             else if (name == "detail") P.detail = static_cast<int>(v); else if (name == "detailTexelM") P.detailTexelM = v;
             else if (name == "detailRepeats") P.detailRepeats = static_cast<int>(v); else if (name == "detailAtlas") P.detailAtlas = static_cast<int>(v); else if (name == "detailGainPower") P.detailGainPower = v;
+            else if (name == "edgeProfiles") P.edgeProfiles = static_cast<int>(v); else if (name == "profileBinM") P.profileBinM = v;
+            else if (name == "profileMinOutM") P.profileMinOutM = v; else if (name == "profileMaxOutM") P.profileMaxOutM = v;
+            else if (name == "profileCoverage") P.profileCoverage = v; else if (name == "profileDensity") P.profileDensity = v;
             else if (name == "continueMinWindows") P.continueMinWindows = static_cast<int>(v); else if (name == "continueMaxDeltaE") P.continueMaxDeltaE = v;
             else if (name == "fillGapM") P.fillGapM = v; else if (name == "fillReachM") P.fillReachM = v; else if (name == "snapAlongM") P.snapAlongM = v; else if (name == "snapUpM") P.snapUpM = v;
             else throw std::runtime_error("unknown param " + name);
@@ -477,6 +490,8 @@ struct Report {
     size_t droppedNoWall{0}, droppedClipped{0}, droppedOverlap{0}, droppedSmall{0}, droppedNoFrame{0};
     size_t uncolouredElements{0}, colouredElements{0}, capsCut{0};
     size_t facesTextured{0}, texelsDetail{0}, paletteColours{0};
+    size_t profileWalls{0}, profileLips{0}, profileParapets{0}, profileSteps{0};
+    double profileMedianOutM{0}, profileMedianParapetM{0};
     int atlasW{0}, atlasH{0};
     double detailTexelM{0};
     double slenderFromM{-1}, topM{0};
@@ -538,7 +553,7 @@ inline std::vector<R2> subtractHoles(const R2& box, const std::vector<R2>& holes
 struct Result { std::vector<OutNode> nodes; Report report; sp::Frame frame; texture::ImageBuffer atlas; };
 
 /** A wall face: from p0 along d (unit, horizontal) for L metres, between heights h0 and h1 above the street, facing n. */
-struct WallFace { P3 p0, d, n; double L, h0, h1; int tier; };
+struct WallFace { P3 p0, d, n; double L, h0, h1; int tier; bool cvx0{true}, cvx1{true}; };  // cvx: the corner at the start / end is convex
 
 inline Result build(const Spec& S) {
     Result out;
@@ -611,7 +626,7 @@ inline Result build(const Spec& S) {
         return f.c + f.s * s + f.t * t;
     };
 
-    OutNode massing{"massing", "", {}}, openings{"openings", "", {}}, slender{"slender_top", "", {}};
+    OutNode massing{"massing", "", {}}, openings{"openings", "", {}}, slender{"slender_top", "", {}}, ledges{"ledge_profiles", "", {}};
     const P3 up{0, 1, 0};
 
     auto classColour = [&](int k) {
@@ -647,6 +662,15 @@ inline Result build(const Spec& S) {
                 for (const auto& l2 : t.loopsUV) { std::vector<P2> lx; for (const auto& q : l2) { double x, z; F.toXZ(q.u, q.v, x, z); lx.push_back({x, z}); } if (detail::inRingXZ(mx, mz, lx)) inside = !inside; }
                 if (inside) n = n * -1.0;
                 faces.push_back({P3{a.u, S.groundY, a.v}, d, n, L, t.baseY, t.topY, static_cast<int>(ti)});
+            }
+            // each corner of this loop: convex when the next edge turns away from the previous edge's outward side
+            const size_t first = faces.size() - std::min(faces.size(), xz.size());
+            const size_t nf = faces.size() - first;
+            for (size_t k = 0; k < nf; ++k) {
+                auto& A = faces[first + k];
+                auto& B = faces[first + (k + 1) % nf];
+                const bool convex = sp::dot(B.d, A.n) < 1e-6;
+                A.cvx1 = convex; B.cvx0 = convex;
             }
         }
     }
@@ -1097,6 +1121,139 @@ inline Result build(const Spec& S) {
     E.tex = nullptr;
 
 
+    // --- ledge profiles. A lip, cornice or parapet is far below the scan's resolution in any one place, but it is the same
+    // profile all along its wall: every scan sample within a band around the tier top (4 m below to 3 m above, 1.5 m in and
+    // out of the wall) is projected onto the wall's section plane, and per 0.1 m of height the outermost surface (the 90th
+    // percentile of the samples' offset) is the stacked profile. Consecutive bins within 6 cm are one step; a step counts
+    // when it stands profileMinOutM to profileMaxOutM out of the wall and its samples run along at least profileCoverage
+    // of the wall (0.5 m bins). Above the tier top, a parapet: samples rising out of the roof within a metre of the wall,
+    // whose density stops below 3 m (an upper tier's wall standing flush would not stop). Each is swept along the wall, its
+    // ends mitred at convex corners and drawn back at concave ones. Measured (stacked scan); the colour is the photo's.
+    if (S.P.edgeProfiles && R.building.size()) {
+        // dense samples of the building's surface, in the tile frame, on a 2 m grid
+        std::vector<P3> dense;
+        {
+            std::mt19937 rng(11);
+            std::uniform_real_distribution<double> U(0, 1);
+            for (size_t ti = 0; ti < R.building.size(); ++ti) {
+                const P3 a = R.building.p[3 * ti], b = R.building.p[3 * ti + 1], c = R.building.p[3 * ti + 2];
+                const double area = sp::len(sp::cross(b - a, c - a)) / 2;
+                const int n = std::max(1, static_cast<int>(std::ceil(area * S.P.profileDensity)));
+                for (int k = 0; k < n; ++k) {
+                    double r1 = U(rng), r2 = U(rng); if (r1 + r2 > 1) { r1 = 1 - r1; r2 = 1 - r2; }
+                    const P3 q = a + (b - a) * r1 + (c - a) * r2;
+                    double x, z; F.toXZ(q.x, q.z, x, z);
+                    dense.push_back({x, q.y, z});  // y: height above the street
+                }
+            }
+        }
+        const double cell = 2.0;
+        std::unordered_map<uint64_t, std::vector<uint32_t>> grid;
+        auto gkey = [&](double x, double z) { return (static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(std::floor(x / cell)))) << 32) | static_cast<uint32_t>(static_cast<int32_t>(std::floor(z / cell))); };
+        for (uint32_t i = 0; i < dense.size(); ++i) grid[gkey(dense[i].x, dense[i].z)].push_back(i);
+        const double bin = S.P.profileBinM, below = 4.0, above = 3.0, inM = 1.5;
+        std::vector<double> outs, paras;
+        for (size_t fi = 0; fi < faces.size(); ++fi) {
+            const auto& w = faces[fi];
+            if (w.L < 3.0) continue;
+            const double a0 = 0.5, a1 = w.L - 0.5;
+            const int nb = static_cast<int>(std::ceil((below + above) / bin));
+            const double hb0 = w.h1 - below;
+            const int na = std::max(1, static_cast<int>(std::ceil((a1 - a0) / 0.5)));
+            std::vector<std::vector<double>> offs(nb);
+            std::vector<std::vector<int>> alongOf(nb);
+            // the samples near the wall's band
+            const double minx = std::min(w.p0.x, w.p0.x + w.d.x * w.L) - 2, maxx = std::max(w.p0.x, w.p0.x + w.d.x * w.L) + 2;
+            const double minz = std::min(w.p0.z, w.p0.z + w.d.z * w.L) - 2, maxz = std::max(w.p0.z, w.p0.z + w.d.z * w.L) + 2;
+            for (double gx = std::floor(minx / cell) * cell; gx <= maxx; gx += cell) for (double gz = std::floor(minz / cell) * cell; gz <= maxz; gz += cell) {
+                auto it = grid.find(gkey(gx + 0.5 * cell, gz + 0.5 * cell));
+                if (it == grid.end()) continue;
+                for (uint32_t i : it->second) {
+                    const P3& q = dense[i];
+                    const double rx = q.x - w.p0.x, rz = q.z - w.p0.z;
+                    const double a = rx * w.d.x + rz * w.d.z, o = rx * w.n.x + rz * w.n.z;
+                    if (a < a0 || a > a1 || o < -inM || o > S.P.profileMaxOutM + 0.2) continue;
+                    const int k = static_cast<int>(std::floor((q.y - hb0) / bin));
+                    if (k < 0 || k >= nb) continue;
+                    offs[k].push_back(o);
+                    alongOf[k].push_back(static_cast<int>(std::floor((a - a0) / 0.5)));
+                }
+            }
+            ++rep.profileWalls;
+            // per bin: the outermost surface, and how much of the wall's length it covers
+            std::vector<double> out90(nb, NAN), cover(nb, 0);
+            for (int k = 0; k < nb; ++k) {
+                if (offs[k].size() < 8) continue;
+                std::vector<double> v = offs[k];
+                std::nth_element(v.begin(), v.begin() + static_cast<long>(0.9 * (v.size() - 1)), v.end());
+                const double o90 = v[static_cast<size_t>(0.9 * (v.size() - 1))];
+                out90[k] = o90;
+                std::vector<uint8_t> hit(na, 0);
+                for (size_t j = 0; j < offs[k].size(); ++j) if (offs[k][j] > o90 - 0.1 && alongOf[k][j] >= 0 && alongOf[k][j] < na) hit[alongOf[k][j]] = 1;
+                cover[k] = std::accumulate(hit.begin(), hit.end(), 0.0) / na;
+            }
+            // lips: the bins up to the tier top standing out of the wall, merged into steps
+            struct Step { double h0, h1, out; };
+            std::vector<Step> steps;
+            const int kTop = static_cast<int>(std::floor(below / bin));
+            for (int k = 0; k < kTop; ++k) {
+                const double o = out90[k];
+                const bool ok = std::isfinite(o) && o >= S.P.profileMinOutM && o <= S.P.profileMaxOutM && cover[k] >= S.P.profileCoverage;
+                if (!ok) continue;
+                const double h0 = hb0 + k * bin, h1 = h0 + bin;
+                if (!steps.empty() && std::abs(steps.back().h1 - h0) < 1e-6 && std::abs(steps.back().out - o) < 0.06) { steps.back().h1 = h1; steps.back().out = (steps.back().out + o) / 2; }
+                else steps.push_back({h0, h1, o});
+            }
+            // a step must be at least two bins tall (one bin is noise)
+            steps.erase(std::remove_if(steps.begin(), steps.end(), [&](const Step& st) { return st.h1 - st.h0 < 2 * bin - 1e-6; }), steps.end());
+            // the parapet: above the top, samples within a metre of the wall plane, stopping below 3 m
+            double paraTop = -1, paraIn = 0, paraOut = 0;
+            {
+                std::vector<double> hs, os;
+                int dense0 = 0, dense1 = 0;
+                for (int k = kTop; k < nb; ++k) for (double o : offs[k]) if (o > -1.0 && o < 0.6) {
+                    const double h = hb0 + (k + 0.5) * bin;
+                    if (h < w.h1 + 2.5) { hs.push_back(h); os.push_back(o); ++dense0; } else ++dense1;
+                }
+                // coverage along the wall in the parapet band
+                std::vector<uint8_t> hit(na, 0);
+                for (int k = kTop; k < nb && hb0 + k * bin < w.h1 + 2.5; ++k) for (size_t j = 0; j < offs[k].size(); ++j) if (offs[k][j] > -1.0 && offs[k][j] < 0.6 && hb0 + (k + 0.5) * bin > w.h1 + 0.3) { const int ai = alongOf[k][j]; if (ai >= 0 && ai < na) hit[ai] = 1; }
+                const double cov = std::accumulate(hit.begin(), hit.end(), 0.0) / na;
+                if (hs.size() > 40 && dense1 * 5 < dense0 && cov >= S.P.profileCoverage) {
+                    std::vector<double> h2 = hs;
+                    std::nth_element(h2.begin(), h2.begin() + static_cast<long>(0.95 * (h2.size() - 1)), h2.end());
+                    const double top = h2[static_cast<size_t>(0.95 * (h2.size() - 1))];
+                    std::vector<double> o2 = os;
+                    std::sort(o2.begin(), o2.end());
+                    paraIn = o2[static_cast<size_t>(0.05 * (o2.size() - 1))];
+                    paraOut = std::max(0.0, o2[static_cast<size_t>(0.95 * (o2.size() - 1))]);
+                    if (top - w.h1 >= 0.4) { paraTop = top; paraIn = std::min(paraIn, paraOut - 0.2); }
+                }
+            }
+            if (steps.empty() && paraTop < 0) continue;
+            // the sweep: a box per step (front at its offset, top and bottom back to the wall), the parapet a box above
+            // the top from its inner to its outer face; ends mitred by the offset at convex corners, drawn back at concave
+            auto at = [&](double a, double h, double o) { return P3{w.p0.x + w.d.x * a + w.n.x * o, S.groundY + h, w.p0.z + w.d.z * a + w.n.z * o}; };
+            auto endA = [&](double o, bool start) { const bool cv = start ? w.cvx0 : w.cvx1; const double e = cv ? o : -o; return start ? -e : w.L + e; };
+            auto box = [&](double h0, double h1, double oIn, double oOut) {
+                const double sIn = endA(oIn, true), eIn = endA(oIn, false), sOut = endA(oOut, true), eOut = endA(oOut, false);
+                bool got;
+                const Rgb c = colourOf(at(0, h0, oOut + 0.05), w.d * w.L, P3{0, h1 - h0, 0}, w.n, classColour(0), got);
+                const int m = E.classOf(c);
+                const P3 up{0, 1, 0};
+                E.quad(ledges, m, at(sOut, h0, oOut), at(eOut, h0, oOut), at(eOut, h1, oOut), at(sOut, h1, oOut), w.n, c, w.d, up);           // front
+                E.quad(ledges, m, at(sIn, h1, oIn), at(eIn, h1, oIn), at(eOut, h1, oOut), at(sOut, h1, oOut), up, c, w.d, w.n);               // top
+                E.quad(ledges, m, at(sIn, h0, oIn), at(sOut, h0, oOut), at(eOut, h0, oOut), at(eIn, h0, oIn), up * -1.0, c, w.d, w.n);         // underside
+                if (oIn < -0.01) E.quad(ledges, m, at(sIn, h0, oIn), at(sIn, h1, oIn), at(eIn, h1, oIn), at(eIn, h0, oIn), w.n * -1.0, c, w.d, up);  // inner face
+            };
+            for (const auto& st : steps) { box(st.h0, st.h1, 0.0, st.out); outs.push_back(st.out); ++rep.profileSteps; }
+            if (!steps.empty()) ++rep.profileLips;
+            if (paraTop > 0) { box(w.h1, paraTop, paraIn, std::max(paraOut, 0.0)); paras.push_back(paraTop - w.h1); ++rep.profileParapets; }
+        }
+        auto med = [](std::vector<double> v) { if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; };
+        rep.profileMedianOutM = med(outs); rep.profileMedianParapetM = med(paras);
+    }
+
     // --- roofs: each tier's cap, split until every edge is at most ~2 cell sizes, each piece its own colour
     for (size_t ti = 0; ti < tiers.size(); ++ti) {
         const auto& t = *tiers[ti];
@@ -1288,7 +1445,7 @@ inline Result build(const Spec& S) {
         const int H = ((E.paletteY0 + E.paletteRowsTexels() + 3) / 4) * 4;
         if (H > E.atlasW) throw std::runtime_error("measured twin: " + std::to_string(E.palette.size()) + " element colours do not fit the atlas below the walls' textures (raise detailAtlas or detailTexelM)");
         rep.atlasW = E.atlasW; rep.atlasH = std::max(4, H); rep.paletteColours = E.palette.size();
-        E.normaliseUvs({&massing, &openings, &slender}, rep.atlasH);
+        E.normaliseUvs({&massing, &openings, &slender, &ledges}, rep.atlasH);
     }
     {
         texture::ImageBuffer atlas(rep.atlasW, rep.atlasH, 3, 128);
@@ -1336,7 +1493,8 @@ inline Result build(const Spec& S) {
     massing.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"tiers of the tree-free scan's height map (mean-shift levels, squared outlines), each a prism with a flat cap\",\"colour\":\"" + detail::esc(colourSrc) + "\",\"material\":\"photo-inferred: the nearest of pipeline K's measured appearance classes, its library set's maps at real size\"}}";
     openings.extras = "{\"sb\":{\"provenance\":\"photo-inferred\",\"method\":\"pipeline K's kept window boxes (facade reader, else window fit) mapped onto the prism walls, punched and recessed\",\"depthM\":" + detail::num(D) + ",\"depthProvenance\":\"" + detail::esc(S.revealLabel) + "\",\"depthSource\":\"" + detail::esc(S.revealSource) + "\",\"generatedWindows\":" + std::to_string(rep.windowsGenerated) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
     slender.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"95th-percentile sector radii of the scan per slice, harmonic smoothing, merged into stepped bands\",\"fromM\":" + detail::num(slenderH) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
-    for (auto* n : {&massing, &openings, &slender}) if (!n->prims.empty()) out.nodes.push_back(std::move(*n));
+    ledges.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"each tier wall's scan sections stacked along it into one profile (outermost surface per 0.1 m of height), its continuous steps and parapet swept along the wall, mitred at the corners\",\"walls\":" + std::to_string(rep.profileWalls) + ",\"lips\":" + std::to_string(rep.profileLips) + ",\"parapets\":" + std::to_string(rep.profileParapets) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
+    for (auto* n : {&massing, &openings, &slender, &ledges}) if (!n->prims.empty()) out.nodes.push_back(std::move(*n));
     return out;
 }
 
@@ -1456,7 +1614,7 @@ inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const st
 inline std::string reportJson(const Report& r, const Spec& S, size_t triangles, size_t bytes) {
     std::ostringstream o;
     o << "{\"ok\":true,\"tiers\":" << r.tiers << ",\"wallFaces\":" << r.wallFaces << ",\"facesWithWindows\":" << r.facesWithWindows
-      << ",\"wallCells\":" << r.wallCells << ",\"roofCells\":" << r.roofCells << ",\"capsCut\":" << r.capsCut << ",\"detail\":{\"faces\":" << r.facesTextured << ",\"texels\":" << r.texelsDetail << ",\"atlas\":[" << r.atlasW << "," << r.atlasH << "],\"texelM\":" << detail::num(r.detailTexelM) << ",\"paletteColours\":" << r.paletteColours << "}" 
+      << ",\"wallCells\":" << r.wallCells << ",\"roofCells\":" << r.roofCells << ",\"capsCut\":" << r.capsCut << ",\"detail\":{\"faces\":" << r.facesTextured << ",\"texels\":" << r.texelsDetail << ",\"atlas\":[" << r.atlasW << "," << r.atlasH << "],\"texelM\":" << detail::num(r.detailTexelM) << ",\"paletteColours\":" << r.paletteColours << "}" << ",\"profiles\":{\"walls\":" << r.profileWalls << ",\"lips\":" << r.profileLips << ",\"parapets\":" << r.profileParapets << ",\"steps\":" << r.profileSteps << ",\"medianOutM\":" << detail::num(r.profileMedianOutM) << ",\"medianParapetM\":" << detail::num(r.profileMedianParapetM) << "}" 
       << ",\"windows\":{\"given\":" << r.windowsGiven << ",\"placed\":" << r.windowsPlaced << ",\"generated\":" << r.windowsGenerated << ",\"continued\":" << r.windowsContinued << ",\"rephased\":" << r.windowsRephased << ",\"wallsRephased\":" << r.wallsRephased << ",\"continueTested\":" << r.continueTested << ",\"panes\":" << r.panesPlaced
       << ",\"dropped\":{\"noWall\":" << r.droppedNoWall << ",\"clipped\":" << r.droppedClipped << ",\"overlap\":" << r.droppedOverlap << ",\"small\":" << r.droppedSmall << ",\"noFrame\":" << r.droppedNoFrame << "}}"
       << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << "}"

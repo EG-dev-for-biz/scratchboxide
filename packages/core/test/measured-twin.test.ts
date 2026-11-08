@@ -100,8 +100,12 @@ describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K bui
         // the GLB: three provenance-labelled nodes, colours per vertex, library maps embedded
         const glb = parseGlbBytes(new Uint8Array(fs.readFileSync(r.glb)));
         const json = glb.json as { nodes: Array<{ name: string; extras?: { sb?: { provenance?: string; depthProvenance?: string } }; mesh: number }>; meshes: Array<{ primitives: Array<{ attributes: Record<string, number>; indices: number }> }>; images?: unknown[] };
-        expect(json.nodes.map(n => n.name)).toEqual(['massing', 'openings', 'slender_top']);
-        expect(json.nodes.map(n => n.extras?.sb?.provenance)).toEqual(['measured', 'photo-inferred', 'measured']);
+        expect(json.nodes.map(n => n.name)).toEqual(['massing', 'openings', 'slender_top', 'ledge_profiles']);
+        expect(json.nodes.map(n => n.extras?.sb?.provenance)).toEqual(['measured', 'photo-inferred', 'measured', 'measured']);
+        // the setback parapets and lips, from the scan's sections stacked along each wall: the ESB's setbacks carry parapets of a metre or two
+        expect(rep.profiles.parapets).toBeGreaterThan(20);
+        expect(rep.profiles.medianParapetM).toBeGreaterThan(0.5);
+        expect(rep.profiles.medianParapetM).toBeLessThan(2.6);
         expect(json.nodes[1].extras?.sb?.depthProvenance).toBe('generated');
         // one image: the atlas every element samples (renderers that ignore vertex colours still draw every colour)
         expect((json.images ?? []).length).toBe(1);
