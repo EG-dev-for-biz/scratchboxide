@@ -79,3 +79,23 @@ claim and cell rules) before its own PR.
 - `packages/core/src/native/3d-engine/include/scratchbox_facade_lattice.hpp`, `scripts/remesh_polish_native.cpp`, `remesh-polish-native.ts` (the native rule and its protocol)
 - `remesh-polish.ts` (the stats type and summary), `AGENTS.md`
 - benchmark: `/Volumes/3DTESTING/scratchbox-ide/benchmarks/2026-11-07-relief/` (after) against `/Volumes/3DTESTING/scratchbox-ide/benchmarks/2026-11-06-glass/feat/` (round four, before)
+
+## After the rebase onto main 9f11026c (2026-11-08)
+
+The branch was squashed to one commit and rebased onto main after the glass PR (#182) merged (main now cuts the scan at
+the rebuilt cells, follows the wall at a lattice's end cells, snaps a window's lines to its strip, and zips the tile
+seams), then Penn 2 and the ESB were rebuilt uncached on both sides (`benchmarks/2026-11-07-relief/main/` at 9f11026c,
+`feat/` at 7d0f5591; the reader answers kept). The close-ups use the glass benchmark's cameras; dark lines as there.
+
+| Building | side | holes % | largest hole m² | cells | triangles | cells left to the scan | m² | dark lines % (glass close-up) |
+|---|---|---|---|---|---|---|---|---|
+| Penn 2 | main 9f11026c | 0.99 | 83 | 35,174 | 657,634 | – | – | 2.68 |
+| | branch 7d0f5591 | **0.96** | 84 | 33,408 | 545,476 | 182 | 568 | **1.26** |
+| ESB | main 9f11026c | 0.55 | 35 | 82,288 | 1,484,619 | – | – | 2.92 |
+| | branch 7d0f5591 | 0.59 | 37 | 86,152 | 1,560,591 | 614 | 2,436 | **2.52** |
+
+Penn 2's crown is kept on the branch where main still draws it as flat cells (`penn2-crown-main-vs-branch-9f11026c.jpg`,
+rows main / branch at 180°, 225°, 270°); the body differs only by the reads (the branch's reader voted the columns as
+strips this run). The ESB is unchanged to the eye (`esb-main-vs-branch-9f11026c.jpg`); its 614 kept cells lie on the
+setback faces where they meet the terraces; its holes are 0.04 points above main's, the same regions on both sides
+(`FacadeLattice_10020` 35 → 37 m², `relief_m82` 26 m² both), within the run-to-run spread seen on every building.
