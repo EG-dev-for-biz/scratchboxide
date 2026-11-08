@@ -63,7 +63,7 @@ import { bandResponses, TEXTURE_BANDS_M, type TextureEnergy } from './material-h
 import { HEIGHT_RELIEF, MATERIAL_HEIGHT_VERSION, type DrawnHeight } from './material-height';
 import { ARTIST_FINISH, EXPOSURE_FIT, referenceAlbedo } from '../../../../common/spatial/pbr-artist-reference';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/37';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/38';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /**
