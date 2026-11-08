@@ -209,7 +209,7 @@ export interface MeasuredTwinReport {
     profiles: { walls: number; lips: number; parapets: number; steps: number; medianOutM: number; medianParapetM: number };
     windows: { given: number; placed: number; generated: number; continued: number; continueTested: number; rephased: number; wallsRephased: number; panes: number; dropped: Record<string, number> };
     colour: { elements: number; uncoloured: number };
-    slender: { fromM: number | null; slices: number; bands: number };
+    slender: { fromM: number | null; slices: number; bands: number; axisFits: number; symmetry: number };
     topM: number; revealM: number; revealLabel: string; triangles: number; bytes: number; classUse: Record<string, number>; notes: string[];
 }
 

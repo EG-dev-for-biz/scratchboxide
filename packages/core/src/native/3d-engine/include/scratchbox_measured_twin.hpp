@@ -18,8 +18,10 @@
  *     each tier a prism of its squared outline between its base and top, its roof a flat cap (constrained Delaunay).
  *   - Slender top (measured). Where the scan above a tier top is slender (every 1 m slice's 95th-percentile radius under
  *     `slenderShare` of the building's plan diagonal) and tall (at least `minSlenderShare` of the height), it is not a
- *     prism: each slice's radius is read in `sectors` angular sectors, smoothed to `harmonics` Fourier terms (a harmonic
- *     solid of revolution), and consecutive slices within `bandTolM` of one another merged into one stepped band.
+ *     prism: one vertical axis is fitted (the median of per-slice circle fits), each slice's radius read in `sectors`
+ *     sectors about it and smoothed to `harmonics` Fourier terms, averaged over the top's measured order of rotational
+ *     symmetry, and the mean radius up the axis split into tapered steps by penalised least-squares segmentation (a
+ *     harmonic solid of revolution in stepped, tapered bands).
  *   - Openings (photo-inferred). Every window box pipeline K kept (window_fit.json: the facade reader's openings, the
  *     window fit's elsewhere, in each plane photo's pixels) is mapped through its plane's frame onto the prism wall facing
  *     the same way within `planeTolM`, punched through it, recessed by the reveal depth (photo-inferred when read from
@@ -105,8 +107,8 @@ struct Params {
     double minSlenderShare{0.1};       // ... over at least this share of the building's height
     int sectors{32};
     int harmonics{12};
-    double bandTolM{0.4};              // slices within this of the band's first ring merge into one band
-    int axialMedian{1};                // sector radii median-filtered over this many slices either side
+    double symmetryTol{0.04};          // a slender top's rotational symmetry holds when its m-fold average departs by at most this share of the radius (RMS)
+    double circleBelowM{1.0};          // a slice of a slender top narrower than this (mean radius) is a circle
     double sliceM{1.0};
     double fillGapM{1.0};              // another photo's window fills a wall only this far from the windows already placed (along the wall)
     double fillReachM{8.0};            // ... looked for within this height above and below
@@ -178,7 +180,7 @@ inline Spec parseSpec(std::istream& in) {
             else if (name == "minWindowM") P.minWindowM = v; else if (name == "keepShare") P.keepShare = v; else if (name == "sampleRadiusM") P.sampleRadiusM = v;
             else if (name == "slenderShare") P.slenderShare = v; else if (name == "minSlenderShare") P.minSlenderShare = v;
             else if (name == "sectors") P.sectors = static_cast<int>(v); else if (name == "harmonics") P.harmonics = static_cast<int>(v);
-            else if (name == "bandTolM") P.bandTolM = v; else if (name == "axialMedian") P.axialMedian = static_cast<int>(v); else if (name == "sliceM") P.sliceM = v;
+            else if (name == "symmetryTol") P.symmetryTol = v; else if (name == "circleBelowM") P.circleBelowM = v; else if (name == "sliceM") P.sliceM = v;
             else if (name == "detail") P.detail = static_cast<int>(v); else if (name == "detailTexelM") P.detailTexelM = v;
             else if (name == "detailRepeats") P.detailRepeats = static_cast<int>(v); else if (name == "detailAtlas") P.detailAtlas = static_cast<int>(v); else if (name == "detailGainPower") P.detailGainPower = v;
             else if (name == "edgeProfiles") P.edgeProfiles = static_cast<int>(v); else if (name == "profileBinM") P.profileBinM = v;
@@ -495,7 +497,8 @@ struct Report {
     int atlasW{0}, atlasH{0};
     double detailTexelM{0};
     double slenderFromM{-1}, topM{0};
-    size_t slenderBands{0}, slenderSlices{0};
+    size_t slenderBands{0}, slenderSlices{0}, slenderAxisFits{0};
+    int slenderSymmetry{1};
     std::map<int, size_t> classUse;
     std::vector<std::string> notes;
 };
@@ -1320,75 +1323,155 @@ inline Result build(const Spec& S) {
         }
     }
 
-    // --- the slender top: sector radii per slice, smoothed, merged into stepped bands
+    // --- the slender top, axis-locked. One vertical axis for the whole top: the median of the per-slice circle fits (Kasa,
+    // slices whose fitted radius is at least 1.5 m: a thin antenna's fit wanders). Each 1 m slice's radius is read in
+    // `sectors` sectors about it (95th percentile), smoothed to `harmonics` Fourier terms. The top's order of rotational
+    // symmetry is measured: the largest m in {8, 4, 2} whose m-fold average of the mean normalised profile departs from it
+    // by at most `symmetryTol` (an RMS share of the radius); every slice is averaged over its m rotations (the scan's
+    // one-sided noise cancels, a real asymmetry stays below that order). A slice under `circleBelowM` in mean radius is
+    // a circle at its sectors' 75th-percentile radius (a shape below a metre is beyond the scan). The mean radius up the axis is then split into steps by the
+    // least squares segmentation with a penalty per step (3 ln(n) times the slice noise squared, the noise from the
+    // differences of neighbouring slices), each step a straight taper of the median shape of its slices. Measured.
     if (slenderH >= 0) {
         const int K = std::max(8, S.P.sectors);
         const int k0 = static_cast<int>(std::floor(slenderH / S.P.sliceM));
-        // the axis: the mean centre of the first 30 m above its start (measured)
-        double au = 0, av = 0; int an = 0;
-        for (int k = k0; k < nSlices && (k - k0) * S.P.sliceM < 30; ++k) if (r95[k] >= 0) { au += cen[k].u; av += cen[k].v; ++an; }
-        if (an) { au /= an; av /= an; }
-        struct Ring { double z0, z1; std::vector<double> r; };
-        std::vector<Ring> rings;
+        // the axis
+        std::vector<double> cu, cv;
+        for (int k = k0; k < nSlices; ++k) {
+            const auto& q = slice[k];
+            if (q.size() < 30) continue;
+            // Kasa circle fit: x^2 + y^2 + D x + E y + F = 0 by least squares
+            double sxx = 0, sxy = 0, syy = 0, sx = 0, sy = 0, sxz = 0, syz = 0, sz = 0; const double n = static_cast<double>(q.size());
+            for (const auto& p : q) { const double x = p.x, y = p.z, z = x * x + y * y; sxx += x * x; sxy += x * y; syy += y * y; sx += x; sy += y; sxz += x * z; syz += y * z; sz += z; }
+            // normal equations for [D E F]
+            const double A[3][3] = {{sxx, sxy, sx}, {sxy, syy, sy}, {sx, sy, n}}, B[3] = {-sxz, -syz, -sz};
+            const double det = A[0][0] * (A[1][1] * A[2][2] - A[1][2] * A[2][1]) - A[0][1] * (A[1][0] * A[2][2] - A[1][2] * A[2][0]) + A[0][2] * (A[1][0] * A[2][1] - A[1][1] * A[2][0]);
+            if (std::abs(det) < 1e-9) continue;
+            auto solve = [&](int col) { double M[3][3]; for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) M[i][j] = j == col ? B[i] : A[i][j]; return (M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1]) - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0]) + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0])) / det; };
+            const double D = solve(0), E2 = solve(1), Fc = solve(2);
+            const double xc = -D / 2, yc = -E2 / 2, r2 = xc * xc + yc * yc - Fc;
+            if (r2 < 1.5 * 1.5) continue;
+            cu.push_back(xc); cv.push_back(yc);
+        }
+        double au = 0, av = 0;
+        if (!cu.empty()) {
+            std::vector<double> a = cu, b = cv;
+            std::nth_element(a.begin(), a.begin() + a.size() / 2, a.end()); std::nth_element(b.begin(), b.begin() + b.size() / 2, b.end());
+            au = a[a.size() / 2]; av = b[b.size() / 2];
+        } else {
+            int an = 0;
+            for (int k = k0; k < nSlices; ++k) if (r95[k] >= 0) { au += cen[k].u; av += cen[k].v; ++an; }
+            if (an) { au /= an; av /= an; }
+        }
+        rep.slenderAxisFits = cu.size();
+        // sector radii per slice, harmonic smoothing
+        struct Slice { double z0, z1, mean; std::vector<double> r; };
+        std::vector<Slice> sl;
         for (int k = k0; k < nSlices; ++k) {
             if (slice[k].size() < 12) continue;
             std::vector<std::vector<double>> sec(K);
             for (const auto& p : slice[k]) {
                 const double du = p.x - au, dv = p.z - av;
-                const int s = ((static_cast<int>(std::floor((std::atan2(dv, du) + kPi) / (2 * kPi) * K)) % K) + K) % K;
-                sec[s].push_back(std::hypot(du, dv));
+                const int s2 = ((static_cast<int>(std::floor((std::atan2(dv, du) + kPi) / (2 * kPi) * K)) % K) + K) % K;
+                sec[s2].push_back(std::hypot(du, dv));
             }
-            std::vector<double> rr(K, NAN);
-            std::vector<double> all;
-            for (int s = 0; s < K; ++s) if (sec[s].size() >= 2) {
-                auto& v = sec[s];
+            std::vector<double> rr(K, NAN), all;
+            for (int s2 = 0; s2 < K; ++s2) if (sec[s2].size() >= 2) {
+                auto& v = sec[s2];
                 std::nth_element(v.begin(), v.begin() + static_cast<long>(0.95 * (v.size() - 1)), v.end());
-                rr[s] = v[static_cast<size_t>(0.95 * (v.size() - 1))];
-                all.push_back(rr[s]);
+                rr[s2] = v[static_cast<size_t>(0.95 * (v.size() - 1))];
+                all.push_back(rr[s2]);
             }
             if (all.empty()) continue;
             std::nth_element(all.begin(), all.begin() + all.size() / 2, all.end());
             for (auto& x : rr) if (std::isnan(x)) x = all[all.size() / 2];
-            // harmonic smoothing: the first `harmonics` Fourier terms of the sector radii
             const int Hn = std::min(S.P.harmonics, K / 2);
             std::vector<double> sm(K, 0);
             for (int h = 0; h <= Hn; ++h) {
-                double a = 0, b = 0;
-                for (int s = 0; s < K; ++s) { const double th = 2 * kPi * h * (s + 0.5) / K; a += rr[s] * std::cos(th); b += rr[s] * std::sin(th); }
-                a *= (h == 0 ? 1.0 : 2.0) / K; b *= 2.0 / K;
-                for (int s = 0; s < K; ++s) { const double th = 2 * kPi * h * (s + 0.5) / K; sm[s] += a * std::cos(th) + b * std::sin(th); }
+                double ca = 0, cb = 0;
+                for (int s2 = 0; s2 < K; ++s2) { const double th = 2 * kPi * h * (s2 + 0.5) / K; ca += rr[s2] * std::cos(th); cb += rr[s2] * std::sin(th); }
+                ca *= (h == 0 ? 1.0 : 2.0) / K; cb *= 2.0 / K;
+                for (int s2 = 0; s2 < K; ++s2) { const double th = 2 * kPi * h * (s2 + 0.5) / K; sm[s2] += ca * std::cos(th) + cb * std::sin(th); }
             }
-            for (auto& x : sm) x = std::max(0.05, x);
-            rings.push_back({k * S.P.sliceM, std::min(topH, (k + 1) * S.P.sliceM), sm});
+            double mean = 0; for (auto& x : sm) { x = std::max(0.05, x); mean += x; } mean /= K;
+            sl.push_back({k * S.P.sliceM, std::min(topH, (k + 1) * S.P.sliceM), mean, sm});
             ++rep.slenderSlices;
         }
-        // up the axis, each sector's radius is the median of its slice and the `axialMedian` slices either side (a 1 m slice
-        // of a photogrammetric scan is noisy; a step two slices tall survives a 3-slice median, a one-slice spike does not)
-        if (S.P.axialMedian > 0 && rings.size() > 2) {
-            const int m = S.P.axialMedian;
-            std::vector<Ring> sm = rings;
-            for (size_t i = 0; i < rings.size(); ++i) for (int sct = 0; sct < K; ++sct) {
-                std::vector<double> v;
-                for (int d = -m; d <= m; ++d) { const long j = static_cast<long>(i) + d; if (j >= 0 && j < static_cast<long>(rings.size())) v.push_back(rings[j].r[sct]); }
-                std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
-                sm[i].r[sct] = v[v.size() / 2];
+        // the order of rotational symmetry, from the mean normalised profile of the slices wide enough to have a shape
+        int order = 1;
+        {
+            std::vector<double> f(K, 0); int nf = 0;
+            for (const auto& q : sl) if (q.mean >= S.P.circleBelowM) { for (int s2 = 0; s2 < K; ++s2) f[s2] += q.r[s2] / q.mean; ++nf; }
+            if (nf) {
+                for (auto& x : f) x /= nf;
+                for (int m : {8, 4, 2}) {
+                    if (K % m) continue;
+                    double e = 0;
+                    for (int s2 = 0; s2 < K; ++s2) { double g = 0; for (int j = 0; j < m; ++j) g += f[(s2 + j * K / m) % K]; g /= m; e += (f[s2] - g) * (f[s2] - g); }
+                    if (std::sqrt(e / K) <= S.P.symmetryTol) { order = m; break; }
+                }
             }
-            rings = sm;
         }
-        // merge into bands
-        std::vector<Ring> bands;
-        for (const auto& r : rings) {
-            if (!bands.empty() && std::abs(bands.back().z1 - r.z0) < 1e-6) {
-                double dmax = 0;
-                for (int s = 0; s < K; ++s) dmax = std::max(dmax, std::abs(bands.back().r[s] - r.r[s]));
-                if (dmax < S.P.bandTolM) { bands.back().z1 = r.z1; continue; }
+        rep.slenderSymmetry = order;
+        for (auto& q : sl) {
+            if (q.mean < S.P.circleBelowM) {
+                // a circle at the 75th percentile of its sector radii: a thin lattice or mast fills more of its circle than its mean
+                std::vector<double> v = q.r;
+                std::nth_element(v.begin(), v.begin() + static_cast<long>(0.75 * (v.size() - 1)), v.end());
+                const double rc = v[static_cast<size_t>(0.75 * (v.size() - 1))];
+                for (auto& x : q.r) x = rc;
+                q.mean = rc;
+                continue;
             }
-            bands.push_back(r);
+            if (order > 1) { std::vector<double> g(K, 0); for (int s2 = 0; s2 < K; ++s2) { for (int j = 0; j < order; ++j) g[s2] += q.r[(s2 + j * K / order) % K]; g[s2] /= order; } q.r = g; }
+        }
+        // steps: the penalised least-squares segmentation of the mean radius (each step a straight line in z)
+        struct Ring { double z0, z1; std::vector<double> r, r1; };
+        std::vector<Ring> bands;
+        const int N = static_cast<int>(sl.size());
+        if (N) {
+            std::vector<double> dif;
+            for (int i = 1; i < N; ++i) dif.push_back(std::abs(sl[i].mean - sl[i - 1].mean));
+            double sigma = 0.1;
+            if (!dif.empty()) { std::nth_element(dif.begin(), dif.begin() + dif.size() / 2, dif.end()); sigma = std::max(0.03, dif[dif.size() / 2] / 0.6745 / std::sqrt(2.0)); }
+            const double lambda = 3 * std::log(std::max(2, N)) * sigma * sigma;
+            auto lineCost = [&](int i, int j, double& a, double& b) {  // slices i..j-1
+                double s0 = 0, s1 = 0, s2 = 0, t0 = 0, t1 = 0;
+                for (int k = i; k < j; ++k) { const double z = (sl[k].z0 + sl[k].z1) / 2, y = sl[k].mean; s0 += 1; s1 += z; s2 += z * z; t0 += y; t1 += z * y; }
+                const double den = s0 * s2 - s1 * s1;
+                b = std::abs(den) > 1e-9 ? (s0 * t1 - s1 * t0) / den : 0; a = (t0 - b * s1) / s0;
+                double c = 0;
+                for (int k = i; k < j; ++k) { const double z = (sl[k].z0 + sl[k].z1) / 2, e = sl[k].mean - (a + b * z); c += e * e; }
+                return c;
+            };
+            std::vector<double> best(N + 1, 1e300); std::vector<int> from(N + 1, 0); best[0] = 0;
+            for (int j = 2; j <= N; ++j) for (int i = std::max(0, j - 200); i <= j - 2; ++i) {
+                if (best[i] >= 1e299) continue;
+                double a, b; const double c = best[i] + lineCost(i, j, a, b) + lambda;
+                if (c < best[j]) { best[j] = c; from[j] = i; }
+            }
+            if (N == 1) { best[1] = 0; from[1] = 0; }
+            std::vector<std::pair<int, int>> segs;
+            for (int j = N; j > 0; j = from[j]) segs.push_back({from[j], j});
+            std::reverse(segs.begin(), segs.end());
+            for (auto [i, j] : segs) {
+                double a, b; lineCost(i, j, a, b);
+                const double zA = sl[i].z0, zB = sl[j - 1].z1;
+                if (std::abs(b * (zB - zA)) < 0.1) { b = 0; double m = 0; for (int k = i; k < j; ++k) m += sl[k].mean; a = m / (j - i); }
+                // the step's shape: the median normalised profile of its slices
+                std::vector<double> shape(K);
+                for (int s2 = 0; s2 < K; ++s2) { std::vector<double> v; for (int k = i; k < j; ++k) v.push_back(sl[k].r[s2] / sl[k].mean); std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); shape[s2] = v[v.size() / 2]; }
+                Ring R0{zA, zB, std::vector<double>(K), std::vector<double>(K)};
+                const double rA = std::max(0.05, a + b * zA), rB = std::max(0.05, a + b * zB);
+                for (int s2 = 0; s2 < K; ++s2) { R0.r[s2] = shape[s2] * rA; R0.r1[s2] = shape[s2] * rB; }
+                bands.push_back(R0);
+            }
         }
         rep.slenderBands = bands.size();
         auto ringPt = [&](const Ring& b, int s, double h) {
             const double th = -kPi + 2 * kPi * s / K;  // sector boundaries
-            const double rad = (b.r[(s - 1 + K) % K] + b.r[s % K]) / 2;
+            const double t = b.z1 > b.z0 ? std::clamp((h - b.z0) / (b.z1 - b.z0), 0.0, 1.0) : 0.0;  // the step's taper
+            const double rad = (1 - t) * (b.r[(s - 1 + K) % K] + b.r[s % K]) / 2 + t * (b.r1[(s - 1 + K) % K] + b.r1[s % K]) / 2;
             double x, z; F.toXZ(au + rad * std::cos(th), av + rad * std::sin(th), x, z);
             return P3{x, S.groundY + h, z};
         };
@@ -1426,7 +1509,7 @@ inline Result build(const Spec& S) {
                     const double ro = sp::len(o0 - i0);
                     if (ro < 0.02) continue;
                     // facing up where this band is wider, down where the next one is
-                    const bool wider = (b.r[s] + b.r[(s + K - 1) % K]) >= (nb.r[s] + nb.r[(s + K - 1) % K]);
+                    const bool wider = (b.r1[s] + b.r1[(s + K - 1) % K]) >= (nb.r[s] + nb.r[(s + K - 1) % K]);
                     const P3 n = wider ? up : up * -1.0;
                     if (s == 0) { bool got; capC = colourOf(i0, o0 - i0, o1 - o0, n, classColour(0), got); }
                     if (wider) E.quad(slender, E.classOf(capC), o0, i0, i1, o1, n, capC, P3{1, 0, 0}, P3{0, 0, 1});
@@ -1492,7 +1575,7 @@ inline Result build(const Spec& S) {
     const std::string colourSrc = ph.ok ? "photo-inferred: the per-channel median of the scan's own photo texture over each element" : "the nearest appearance class's measured colour (no photo sampled)";
     massing.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"tiers of the tree-free scan's height map (mean-shift levels, squared outlines), each a prism with a flat cap\",\"colour\":\"" + detail::esc(colourSrc) + "\",\"material\":\"photo-inferred: the nearest of pipeline K's measured appearance classes, its library set's maps at real size\"}}";
     openings.extras = "{\"sb\":{\"provenance\":\"photo-inferred\",\"method\":\"pipeline K's kept window boxes (facade reader, else window fit) mapped onto the prism walls, punched and recessed\",\"depthM\":" + detail::num(D) + ",\"depthProvenance\":\"" + detail::esc(S.revealLabel) + "\",\"depthSource\":\"" + detail::esc(S.revealSource) + "\",\"generatedWindows\":" + std::to_string(rep.windowsGenerated) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
-    slender.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"95th-percentile sector radii of the scan per slice, harmonic smoothing, merged into stepped bands\",\"fromM\":" + detail::num(slenderH) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
+    slender.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"one axis from per-slice circle fits; 95th-percentile sector radii per slice, harmonic smoothing, averaged over the measured order of rotational symmetry; tapered steps by penalised least-squares segmentation of the radius\",\"symmetry\":" + std::to_string(rep.slenderSymmetry) + ",\"fromM\":" + detail::num(slenderH) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
     ledges.extras = "{\"sb\":{\"provenance\":\"measured\",\"method\":\"each tier wall's scan sections stacked along it into one profile (outermost surface per 0.1 m of height), its continuous steps and parapet swept along the wall, mitred at the corners\",\"walls\":" + std::to_string(rep.profileWalls) + ",\"lips\":" + std::to_string(rep.profileLips) + ",\"parapets\":" + std::to_string(rep.profileParapets) + ",\"colour\":\"" + detail::esc(colourSrc) + "\"}}";
     for (auto* n : {&massing, &openings, &slender, &ledges}) if (!n->prims.empty()) out.nodes.push_back(std::move(*n));
     return out;
@@ -1618,7 +1701,7 @@ inline std::string reportJson(const Report& r, const Spec& S, size_t triangles, 
       << ",\"windows\":{\"given\":" << r.windowsGiven << ",\"placed\":" << r.windowsPlaced << ",\"generated\":" << r.windowsGenerated << ",\"continued\":" << r.windowsContinued << ",\"rephased\":" << r.windowsRephased << ",\"wallsRephased\":" << r.wallsRephased << ",\"continueTested\":" << r.continueTested << ",\"panes\":" << r.panesPlaced
       << ",\"dropped\":{\"noWall\":" << r.droppedNoWall << ",\"clipped\":" << r.droppedClipped << ",\"overlap\":" << r.droppedOverlap << ",\"small\":" << r.droppedSmall << ",\"noFrame\":" << r.droppedNoFrame << "}}"
       << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << "}"
-      << ",\"slender\":{\"fromM\":" << detail::num(r.slenderFromM) << ",\"slices\":" << r.slenderSlices << ",\"bands\":" << r.slenderBands << "}"
+      << ",\"slender\":{\"fromM\":" << detail::num(r.slenderFromM) << ",\"slices\":" << r.slenderSlices << ",\"bands\":" << r.slenderBands << ",\"axisFits\":" << r.slenderAxisFits << ",\"symmetry\":" << r.slenderSymmetry << "}"
       << ",\"topM\":" << detail::num(r.topM) << ",\"revealM\":" << detail::num(S.revealM) << ",\"revealLabel\":\"" << detail::esc(S.revealLabel) << "\""
       << ",\"triangles\":" << triangles << ",\"bytes\":" << bytes << ",\"classUse\":{";
     bool first = true;

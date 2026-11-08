@@ -85,6 +85,10 @@ describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K bui
         expect(rep.slender.fromM).toBeGreaterThan(315);
         expect(rep.slender.fromM).toBeLessThan(340);
         expect(rep.topM).toBeGreaterThan(430);
+        // one axis from many slices' circle fits, and the top in a few tapered steps (not one band per noisy slice)
+        expect(rep.slender.axisFits).toBeGreaterThan(20);
+        expect(rep.slender.bands).toBeGreaterThan(5);
+        expect(rep.slender.bands).toBeLessThan(40);
         // most kept boxes are punched; the rest were duplicates of overlapping photos or off every wall, and are counted
         expect(rep.windows.given).toBeGreaterThan(7000);
         expect(rep.windows.placed).toBeGreaterThan(5000);
