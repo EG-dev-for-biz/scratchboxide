@@ -116,7 +116,7 @@ export interface RegionSet {
     /** The tile-only harvest's pick (material-harvest.ts): the class's and the set's texture energy at the class's texel, the distances it was chosen by, and what of it is generated. */
     harvest?: { colourDistance: number; textureDistance: number; classEnergy: number[]; setEnergy: number[]; texelM: number; candidates: number; grain: string };
     /** The pick by appearance (material-choice.ts): the candidates shown, whether the look or the ranking chose, what the chooser saw and why the ranking's nearest was kept; `reused`: the pick kept for an earlier class shown the same candidates, its colour and how far this class's lies from it (CHOICE_REUSE), not asked again. */
-    choice?: { candidates: string[]; by: 'appearance' | 'ranking'; seen?: string; conf?: number; reused?: { meanLab: [number, number, number]; colourUnits: number }; why?: string };
+    choice?: { candidates: string[]; by: 'appearance' | 'ranking'; seen?: string; conf?: number; reused?: { meanLab: [number, number, number]; colourUnits: number }; why?: string; /** The sets a text model named for what the finish read saw of the class (material-words.ts), shown beside the colour ranking's nearest; `picked` when the pick was one of them. */ words?: { seen: string; sets: string[]; picked?: boolean } };
     /** The class's finish read by the vision model (material-finish.ts), or why there is none, and what the ranking ranked toward. Photo-inferred. */
     /**
      * The set's height as a recess below the surface (material-height.ts): 255 the surface, 0 a recess of HEIGHT_RELIEF.capM;

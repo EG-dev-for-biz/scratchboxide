@@ -82,4 +82,29 @@ describe('pipeline K library sets', () => {
         expect(failed[0].name).toBe('Panel');
         expect(failed[0].choice?.why).toMatch(/no answer within 90 s/);
     });
+
+    it('asks a text model once for the sets that are what each confident finish read saw, keeps the answer in the store, and records it on the choice', async () => {
+        const { root, store } = library();
+        const prompts: string[] = [], progress: string[] = [];
+        const ask = async (prompt: string) => { prompts.push(prompt); return '{"classes":[{"class":1,"sets":["Panel","Nowhere"]}]}'; };
+        const read = async () => [{ roughness: 0.8, metalness: 0, conf: 80, seen: 'limestone cladding' }];
+        const choose = async (rows: Array<{ candidates: Array<{ id: string }> }>) => rows.map(() => ({ pick: 0, conf: 50 }));
+        const first = await resolveRegionSets([dark], { repoRoot: root, store, finish: read, choose, words: { ask, model: 'm1', building: 'Empire State Building' }, progress: m => progress.push(m) });
+        expect(prompts).toHaveLength(1);
+        expect(prompts[0]).toContain('- class 1: limestone cladding');
+        expect(prompts[0]).toContain('Empire State Building');
+        expect(prompts[0]).toMatch(/\nConcrete \(2 m\): /);
+        expect(prompts[0]).not.toContain('NotMeasured (');
+        expect(first[0].choice?.words).toEqual({ seen: 'limestone cladding', sets: [] });
+        // the same classes again: the kept answer, no second call
+        await resolveRegionSets([dark], { repoRoot: root, store, finish: read, choose, words: { ask, model: 'm1' } });
+        expect(prompts).toHaveLength(1);
+        // an unsure finish read is not asked; a failed ask degrades to the colour shortlist with its reason
+        await resolveRegionSets([dark], { repoRoot: root, store, finish: async () => [{ roughness: 0.8, metalness: 0, conf: 30, seen: 'limestone cladding' }], choose, words: { ask, model: 'm1' } });
+        expect(prompts).toHaveLength(1);
+        const broken = await resolveRegionSets([dark], { repoRoot: root, store, finish: async () => [{ roughness: 0.8, metalness: 0, conf: 80, seen: 'dressed limestone' }], choose, words: { ask: async () => { throw new Error('no answer within 90 s'); }, model: 'm1' }, progress: m => progress.push(m) });
+        expect(broken[0].name).toBe('Concrete');
+        expect(broken[0].choice?.words).toBeUndefined();
+        expect(progress.some(m => /naming the sets by words failed: no answer within 90 s/.test(m))).toBe(true);
+    });
 });

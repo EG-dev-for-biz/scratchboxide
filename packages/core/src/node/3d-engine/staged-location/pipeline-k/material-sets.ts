@@ -11,8 +11,9 @@
  * The library sets of pipeline K's material regions (material-regions.ts): for each appearance class, the texture
  * library set nearest its colour and finish (searchTextureLibrary among the sets whose colour has been measured, whose
  * publisher gives a real size of a facade's scale (FACADE_TILE) and a normal and roughness map; ranked toward the finish the
- * vision model read, material-finish.ts, else matte, REGION_FINISH; with a chooser, the one among its nearest that looks
- * most like it, material-choice.ts). Every class takes its set whole, all its maps drawn (user decision, 2026-11-05), fetched
+ * vision model read, material-finish.ts, else matte, REGION_FINISH; with a words reader, the sets a text model names for
+ * what the finish read saw of the class joining that shortlist, material-words.ts; with a chooser, the one among its
+ * nearest and those that looks most like it, material-choice.ts). Every class takes its set whole, all its maps drawn (user decision, 2026-11-05), fetched
  * from the library bucket (fetchLibrarySets) and prepared small by the engine (surface.prepare_material_maps), cached
  * beside the set for later builds; and its height (material-height.ts), from its publisher's preview, at its real depth.
  */
@@ -30,6 +31,7 @@ import { drawFinish, energyFit, finishMaps, finishTarget, grainOf, OPENING_FINIS
 import { loadSetFitModel, setFitGrain } from './material-set-fit';
 import { heightRecessMap } from './material-height';
 import { readingKey, type ModelReadingStore } from './model-readings';
+import { parseWordCandidates, poolLines, WORD_CANDIDATES, WORDS_MIN_CONF, wordsKey, wordsPrompt } from './material-words';
 
 /** Prepared map size: a facade texel is several centimetres, so a tile of a metre or two needs few texels. */
 const PREPARED_SIZE = 256;
@@ -89,6 +91,8 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
     choose?: (rows: ChoiceRow[]) => Promise<Array<SetChoice | undefined>>;
     /** Each class's finish read by the vision model (material-finish.ts), before the ranking: the roughness and metalness to rank toward. */
     finish?: () => Promise<Array<ClassFinish | undefined>>;
+    /** A text model's reply to the words prompt (material-words.ts): the sets whose description is what each class was seen to be; the building for its prompt. */
+    words?: { ask: (prompt: string) => Promise<string>; model: string; building?: string; brief?: string };
     /** Where prepared maps are kept between builds (PREPARED_VERSION): a set found there is not fetched. */
     store?: ModelReadingStore;
 } = {}): Promise<RegionSet[]> {
@@ -114,6 +118,30 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
     const query = (c: RegionClass) => ({ colorSrgb: c.meanLinear.map(linearToSrgb) as [number, number, number], colorSpreadLab: c.spreadLab, roughness: targets[classes.indexOf(c)].roughness, metallic: targets[classes.indexOf(c)].metallic, tileSizeM: FACADE_TILE.wantM });
     // every class's shortlist measured first, so its normal relief can be ranked
     const own = classes.map(c => new Set(searchTextureLibrary({ ...index, sets: pool }, { ...query(c), limit: SHORTLIST }).hits.map(h => h.entry.id)));
+    // the sets a text model names for what each class was seen to be (material-words.ts), joining its shortlist: asked once
+    // a building for the classes with a confident finish read, the answer kept in the readings store
+    const words: Array<{ seen: string; sets: string[] } | undefined> = classes.map(() => undefined);
+    if (opts.words) {
+        const asked = classes.map((_, k) => k).filter(k => finishes[k]?.seen && (finishes[k]!.conf ?? 0) >= WORDS_MIN_CONF);
+        if (asked.length) {
+            const seen = asked.map(k => finishes[k]!.seen!), poolIds = pool.map(e => e.id), key = wordsKey(seen, poolIds, opts.words.model);
+            const kept = opts.store ? await opts.store.get<Array<string[] | null>>(key) : undefined;
+            let named: Array<string[] | undefined> | undefined = kept?.map(x => x ?? undefined);
+            if (!named || named.length !== asked.length) {
+                try {
+                    opts.progress?.(`material regions: a text model naming the library sets that are what ${asked.length} classes were seen to be`);
+                    const reply = await opts.words.ask(wordsPrompt(seen.map(s => ({ seen: s })), poolLines(pool), { ...(opts.words.building ? { building: opts.words.building } : {}), ...(opts.words.brief ? { brief: opts.words.brief } : {}) }));
+                    named = parseWordCandidates(reply, asked.length, new Set(poolIds));
+                    opts.store?.put(key, named.map(x => x ?? null));
+                } catch (err) {
+                    if (opts.signal?.aborted) throw err;
+                    opts.progress?.(`material regions: naming the sets by words failed: ${err instanceof Error ? err.message : String(err)}; the colour shortlist alone`);
+                    named = undefined;
+                }
+            }
+            if (named) asked.forEach((k, i) => { const sets = (named![i] ?? []).slice(0, WORD_CANDIDATES); words[k] = { seen: seen[i], sets }; for (const id of sets) own[k].add(id); });
+        }
+    }
     const shortlist = new Set(own.flatMap(o => [...o]));
     if (shortlist.size) {
         opts.progress?.(`material regions: measuring ${shortlist.size} candidates`);
@@ -125,7 +153,7 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
     type Hit = ReturnType<typeof searchTextureLibrary>['hits'][number];
     const ranked = await Promise.all(classes.map(async (c, k): Promise<Hit[]> => {
         const mine = measured.filter(e => own[k].has(e.id));
-        const nearest = () => searchTextureLibrary({ ...index, sets: mine }, { ...query(c), normalTiltDeg: REGION_FINISH.normalTiltDeg, limit: Math.max(1, CHOICE_CANDIDATES) }).hits;
+        const nearest = () => searchTextureLibrary({ ...index, sets: mine }, { ...query(c), normalTiltDeg: REGION_FINISH.normalTiltDeg, limit: Math.max(1, mine.length) }).hits;
         if (c.texture) {
             const hits = searchTextureLibrary({ ...index, sets: mine }, { ...query(c), normalTiltDeg: REGION_FINISH.normalTiltDeg, limit: TEXTURE_SHORTLIST }).hits.filter(h => h.entry.realSizeM);
             const scored: Array<{ hit: (typeof hits)[number]; tex: number; energy: number[] }> = [];
@@ -151,12 +179,14 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
         return hits;
     }));
     // the pick by appearance among each class's nearest; the ranking's nearest where it gives none
-    const choices: Array<{ candidates: string[]; pick?: SetChoice; why?: string } | undefined> = classes.map(() => undefined);
+    const choices: Array<{ candidates: string[]; pick?: SetChoice; why?: string; words?: { seen: string; sets: string[]; picked?: boolean } } | undefined> = classes.map(() => undefined);
     if (opts.choose) {
         const rows: ChoiceRow[] = [];
         for (const [k, hits] of ranked.entries()) {
             const candidates: ChoiceCandidate[] = [];
-            for (const hit of hits.slice(0, CHOICE_CANDIDATES)) {
+            const named = words[k]?.sets ?? [];
+            const shown = [...hits.slice(0, CHOICE_CANDIDATES), ...hits.filter((h, i) => i >= CHOICE_CANDIDATES && named.includes(h.entry.id))];
+            for (const hit of shown) {
                 const bytes = await libraryColourPreview(hit.entry, repoRoot, opts.signal).catch(() => undefined);
                 if (bytes) candidates.push({ id: hit.entry.id, realSizeM: hit.entry.realSizeM!, preview: decodeImageInMemory(bytes) });
             }
@@ -168,6 +198,8 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
         rows.forEach((row, k) => {
             const candidates = row.candidates.map(c => c.id), pick = picks?.[k];
             choices[k] = pick ? { candidates, pick, ...(pick.pick === 0 ? { why: 'none of the candidates looked like the class; the ranking\'s nearest kept' } : {}) } : { candidates, why: why ?? 'the reply gave this class no pick; the ranking\'s nearest kept' };
+            const w = words[k];
+            if (w) choices[k]!.words = { seen: w.seen, sets: w.sets.filter(id => candidates.includes(id)), ...(pick?.pick ? { picked: w.sets.includes(candidates[pick.pick - 1]) } : {}) };
         });
     }
     const chosen = ranked.map((hits, k) => {
@@ -253,7 +285,7 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         return {
             name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
             ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: targets[k].roughness, metallic: targets[k].metallic, ...(drawn.drawn ? { drawn: drawn.drawn } : {}), label: 'photo-inferred' as const } } : drawn.drawn ? { finish: { ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: drawn.drawn.roughness, metallic: drawn.drawn.metallic, drawn: drawn.drawn, label: 'photo-inferred' as const } } : {}),
-            ...(choices[k] ? { choice: { candidates: choices[k]!.candidates, by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick?.seen ? { seen: choices[k]!.pick!.seen } : {}), ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}), ...(choices[k]!.pick?.reused ? { reused: choices[k]!.pick!.reused } : {}), ...(choices[k]!.why ? { why: choices[k]!.why } : {}) } } : {}),
+            ...(choices[k] ? { choice: { candidates: choices[k]!.candidates, by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick?.seen ? { seen: choices[k]!.pick!.seen } : {}), ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}), ...(choices[k]!.pick?.reused ? { reused: choices[k]!.pick!.reused } : {}), ...(choices[k]!.why ? { why: choices[k]!.why } : {}), ...(choices[k]!.words ? { words: choices[k]!.words } : {}) } } : {}),
             ...(textured.has(k) ? { harvest: { ...textured.get(k)!, classEnergy: classes[k].texture!.energy, texelM: classes[k].texture!.texelM, grain: `generated: the set's detail finer than the tile's ${Math.round(classes[k].texture!.texelM * 100)} cm texel is its own, below the tile's resolution` } } : {}),
             normal: drawn.normal, orm: drawn.orm,
             ...(height ? { height: height.map, heightDrawn: height.drawn } : {})
