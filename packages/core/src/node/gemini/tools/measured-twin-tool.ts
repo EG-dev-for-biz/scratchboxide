@@ -76,15 +76,29 @@ export function measuredTwinObject(runId: string, uri: string, offsetX: number, 
     };
 }
 
+/** The twin's bounds in the tile frame, from its GLB's POSITION accessors (the footprint is not known in every mode). */
+export function twinBounds(glbFile: string): { min: [number, number, number]; max: [number, number, number] } {
+    const b = fs.readFileSync(glbFile);
+    const jl = b.readUInt32LE(12);
+    const json = JSON.parse(b.subarray(20, 20 + jl).toString('utf8')) as { accessors: Array<{ min?: number[]; max?: number[] }>; meshes: Array<{ primitives: Array<{ attributes: { POSITION: number } }> }> };
+    const min: [number, number, number] = [Infinity, Infinity, Infinity], max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+    for (const m of json.meshes) for (const p of m.primitives) {
+        const a = json.accessors[p.attributes.POSITION];
+        if (!a.min || !a.max) continue;
+        for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], a.min[k]); max[k] = Math.max(max[k], a.max[k]); }
+    }
+    if (!Number.isFinite(min[0])) throw new Error(`${glbFile}: no position bounds`);
+    return { min, max };
+}
+
 /**
  * Proof views of the twin, path traced in the tile frame: two obliques of the whole building, a close view of the
  * facade at a third of its height, and a look down on the top. Shown to the chat model and to the turn's reviewer.
  */
 export async function renderTwinViews(r: MeasuredTwinResult, outDir: string, signal?: AbortSignal): Promise<Array<{ path: string; label: string }>> {
-    const pts = r.records.loops.flat();
-    const xs = pts.map(p => p[0]), zs = pts.map(p => p[1]);
-    const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cz = (Math.min(...zs) + Math.max(...zs)) / 2;
-    const g = r.records.groundY, H = r.report.topM, plan = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...zs) - Math.min(...zs));
+    const bb = twinBounds(r.glb);
+    const cx = (bb.min[0] + bb.max[0]) / 2, cz = (bb.min[2] + bb.max[2]) / 2;
+    const g = bb.min[1], H = bb.max[1] - bb.min[1], plan = Math.hypot(bb.max[0] - bb.min[0], bb.max[2] - bb.min[2]);
     const radius = Math.hypot(plan, H) / 2;
     const at = (headingDeg: number, pitchDeg: number, dist: number, target: number[]) => {
         const h = headingDeg * Math.PI / 180, p = pitchDeg * Math.PI / 180;
@@ -143,9 +157,9 @@ export async function runMeasuredTwinTool(args: Record<string, unknown>, ctx: To
     fs.copyFileSync(r.glb, wsGlb);
     const views = rendered.map(v => { const to = path.join(wsDir, path.basename(v.path)); fs.copyFileSync(v.path, to); return { path: to, label: v.label }; });
     const rel = (f: string) => path.relative(ws, f);
-    const xsAll = r.records.loops.flat().map(p => p[0]), zsAll = r.records.loops.flat().map(p => p[1]);
+    const bb = twinBounds(r.glb);
     const facts = {
-        glbFile: rel(wsGlb), servedAt: file, heightM: Math.round(r.report.topM * 10) / 10, footprintM: [Math.round((Math.max(...xsAll) - Math.min(...xsAll)) * 10) / 10, Math.round((Math.max(...zsAll) - Math.min(...zsAll)) * 10) / 10],
+        glbFile: rel(wsGlb), servedAt: file, heightM: Math.round(r.report.topM * 10) / 10, footprintM: [Math.round((bb.max[0] - bb.min[0]) * 10) / 10, Math.round((bb.max[2] - bb.min[2]) * 10) / 10],
         tiers: r.report.tiers, slenderTopFromM: r.report.slender.fromM, windows: r.report.windows, triangles: r.report.triangles,
         views: views.map(v => rel(v.path)), workspaceRoot: ws
     };
@@ -160,17 +174,16 @@ export async function runMeasuredTwinTool(args: Record<string, unknown>, ctx: To
         + `${r.report.colour.elements} elements coloured from the scan's photo${r.report.colour.uncoloured ? `, ${r.report.colour.uncoloured} with no photo near taking their wall's colour` : ''}; ${r.report.triangles.toLocaleString('en-US')} triangles. No scan surface is in it.`
         + (r.mapsMissing.length ? ` Library maps not in this machine's readings store: ${r.mapsMissing.join(', ')} (those materials have no relief maps).` : '');
     const meta = { runId, version: r.version, report: r.report, reveal: r.records.reveal };
-    const xs0 = r.records.loops.flat().map(p => p[0]), zs0 = r.records.loops.flat().map(p => p[1]);
     if (!active || !scene) {
         // no staged scene open: a studio scene of its own, framed on the twin
-        const cx = (Math.min(...xs0) + Math.max(...xs0)) / 2, cz = (Math.min(...zs0) + Math.max(...zs0)) / 2, top = r.records.groundY + r.report.topM;
+        const cx = (bb.min[0] + bb.max[0]) / 2, cz = (bb.min[2] + bb.max[2]) / 2, top = bb.max[1];
         const d = Math.max(60, r.report.topM * 1.3);
         const title = `Measured twin (run ${runId})`;
         const artifact = {
             id: `artifact-3d-measured-twin-${runId}`, type: '3d-scene', title, summary,
             data: {
                 title, subtitle: 'Procedural twin generated from a pipeline K build\'s measurements', sceneType: 'custom', renderMode: 'pbr', cameraMode: 'orbit',
-                camera: { position: [cx + d * 0.6, r.records.groundY + top * 0.45, cz + d * 0.8], target: [cx, r.records.groundY + r.report.topM * 0.45, cz], fov: 45 },
+                camera: { position: [cx + d * 0.6, bb.min[1] + (top - bb.min[1]) * 0.45, cz + d * 0.8], target: [cx, bb.min[1] + (top - bb.min[1]) * 0.45, cz], fov: 45 },
                 environment: { skybox: 'studio', lighting: 'studio', ground: false },
                 objects: [measuredTwinObject(runId, uri, 0, meta)]
             }
@@ -179,7 +192,7 @@ export async function runMeasuredTwinTool(args: Record<string, unknown>, ctx: To
     }
     const gap = typeof args.gapM === 'number' && Number.isFinite(args.gapM) ? Math.max(0, args.gapM) : 20;
     // beside a staged build (its layers stand at the place); in a scene with no staged build (an earlier twin's own), in place
-    const offsetX = scene.stagedBuild ? (xs0.length ? Math.max(...xs0) - Math.min(...xs0) : 100) + gap : 0;
+    const offsetX = scene.stagedBuild ? (bb.max[0] - bb.min[0]) + gap : 0;
     const obj = measuredTwinObject(runId, uri, offsetX, meta);
     const objects = [...(scene.objects ?? []).filter((o: Media4DObject) => o.id !== obj.id), obj];
     const artifact: CanvasArtifact = { ...active, data: { ...scene, objects } as Scene3DData, version: ((active as { version?: number }).version || 1) + 1 } as CanvasArtifact;

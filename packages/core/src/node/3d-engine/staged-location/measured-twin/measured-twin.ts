@@ -121,19 +121,27 @@ export function readKRunRecords(runDir: string, cacheRoot: string): KRunRecords 
 }
 
 /**
- * A staged run's cut-out scan without pipeline K's notes: the tile_refine folder its remesh stage committed (the stage's
- * cache entry names it), its tree-free scan and photo-textured scan. No footprint, street level, plane photos, window
+ * A staged run's cut-out scan without pipeline K's outputs: the tile_refine folder its remesh stage committed (the stage's
+ * cache entry names it; else the first one a run note names whose scan is on this machine), its tree-free scan and
+ * photo-textured scan. No footprint, street level, plane photos, window
  * boxes or appearance classes: the generator reads them itself (selfRead).
  */
 export function readKFreeRecords(runDir: string, cacheRoot: string): KRunRecords {
+    // the remesh stage's cache entry names the folder; else any run note that names one whose scan is on this machine
     const stages = readJson<{ keys?: Record<string, string> }>(path.join(runDir, 'stages.json'));
     const key = stages?.keys?.remesh;
-    if (!key) throw new Error(`the run has no remesh stage (${path.join(runDir, 'stages.json')}): its cut-out scan is unknown`);
-    const done = path.join(cacheRoot, 'staged_location', 'remesh', key, 'done.json');
-    const text = fs.existsSync(done) ? fs.readFileSync(done, 'utf8') : '';
-    const m = /tile_refine\/([0-9a-f]{64})/.exec(text);
-    if (!m) throw new Error(`the run's remesh entry names no tile_refine folder (${done})`);
-    const refineDir = path.join(cacheRoot, 'tile_refine', m[1]);
+    const done = key ? path.join(cacheRoot, 'staged_location', 'remesh', key, 'done.json') : '';
+    const texts = [done && fs.existsSync(done) ? fs.readFileSync(done, 'utf8') : ''];
+    if (fs.existsSync(runDir)) for (const f of fs.readdirSync(runDir)) if (f.endsWith('.json')) { try { texts.push(fs.readFileSync(path.join(runDir, f), 'utf8')); } catch { /* unreadable: skipped */ } }
+    let refineDir: string | undefined;
+    for (const t of texts) {
+        for (const m of t.matchAll(/tile_refine\/([0-9a-f]{64})/g)) {
+            const d = path.join(cacheRoot, 'tile_refine', m[1]);
+            if (fs.existsSync(path.join(d, 'clay.glb'))) { refineDir = d; break; }
+        }
+        if (refineDir) break;
+    }
+    if (!refineDir) throw new Error(`no cut-out scan of this run is on this machine (its remesh entry ${done || '(none)'} and its notes name no tile_refine folder that holds one)`);
     const isolate = path.join(refineDir, 'clay.glb');
     if (!fs.existsSync(isolate)) throw new Error(`the run's tree-free scan is not on this machine (${isolate})`);
     const textured = path.join(refineDir, 'textured.glb');
