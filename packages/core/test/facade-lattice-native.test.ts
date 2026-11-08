@@ -84,8 +84,9 @@ function boxSoup(depth: (f: ReliefFacade, u: number, v: number) => number): Floa
 const noise = () => (rnd() - 0.5) * 0.08;
 // the scan tile_refine flattened: its walls on their planes, the windows recessed
 const flatScan = () => boxSoup((_f, u, v) => (inWindow(u, v) ? -0.25 : 0) + noise());
-// the scan before: the front's window columns (its bays) 0.2 m behind its piers
-const rawScan = () => boxSoup((f, u, v) => (inWindow(u, v) ? -0.35 : f.facadeId === 0 && u % 3 > 0.9 && u % 3 < 2.1 ? -0.2 : 0) + noise());
+// the scan before: the front's window columns (its bays) 0.2 m behind its piers, and the right wall's top storey a crown of
+// fins 0.7 m proud every 0.5 m (KEEP_MEASURED leaves those cells to the scan)
+const rawScan = () => boxSoup((f, u, v) => (f.facadeId === 1 && v > 12 ? (Math.floor(u / 0.5) % 2 ? 0 : -0.7) : inWindow(u, v) ? -0.35 : f.facadeId === 0 && u % 3 > 0.9 && u % 3 < 2.1 ? -0.2 : 0) + noise());
 // the windows 0.9 m deep
 const deepScan = () => boxSoup((_f, u, v) => (inWindow(u, v) ? -0.9 : 0) + noise());
 /** The box's walls flat, each as two large triangles (as the tiles draw a plain wall), and its roof. */
@@ -183,6 +184,10 @@ describe('facade lattice: native against TypeScript', () => {
         expect((byId.get(2) as any).windows.generated.label).toBe('generated');
         expect((byId.get(3) as any).structure).toBeDefined();
         expect((byId.get(1) as any).windowCells.cells.length).toBeGreaterThan(0);
+        expect((byId.get(1) as any).scanKept.cells).toBeGreaterThan(0);
+        expect((byId.get(1) as any).scanKept.label).toBe('measured');
+        expect((byId.get(0) as any).scanKept).toBeUndefined();
+        expect(ts.out.stats.scanKeptCells).toBe((byId.get(1) as any).scanKept.cells);
         const values = expectSameGlb(ts.out.clay, nat.out.clay) + expectSameGlb(ts.out.textured!, nat.out.textured!);
         console.log(`facade lattice, 4 facades (160 x 150 and 120 x 150 texels), ${values} vertex values compared: TypeScript ${ts.ms.toFixed(0)} ms, native ${nat.ms.toFixed(0)} ms`);
     }, 300_000);
