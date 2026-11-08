@@ -28,6 +28,7 @@ function records(): KRunRecords {
             { facadeId: 3, rects: [[1, 1, 5, 5]] }
         ],
         classes: [{ index: 0, meanLab: [70, 3, 6], set: 'Tiles039', finish: { roughness: 0.6, metallic: 0, drawn: { roughness: 0.55, metallic: 0 } } }, { index: 1, meanLab: [40, 1, 1], openings: true }],
+        photos: { 1: { image: '/o/facade_1.png', mask: '/o/facade_1_uncovered.png' }, 9: { image: '/o/none.png' } },
         reveal: { depthM: GENERATED_REVEAL_M, label: 'generated', source: 'no reading' }
     };
 }
@@ -51,6 +52,10 @@ describe('measuredTwinSpec', () => {
         expect(lines).toContain(`reveal ${GENERATED_REVEAL_M} generated no reading`);
         expect(lines).toContain('footprint 4 0 0 10 0 10 10 0 10');
         expect(lines).toContain('plane 1 0 50 0 1 0 0 0 1 0 0 0 1 -10 50 0.1 200 1000');
+        // a plane's photo and mask, only for a framed plane
+        expect(lines).toContain('planeimage 1 /o/facade_1.png');
+        expect(lines).toContain('planemask 1 /o/facade_1_uncovered.png');
+        expect(lines.some(l => l.startsWith('planeimage 9 '))).toBe(false);
     });
 });
 
@@ -98,7 +103,12 @@ describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K bui
         expect(json.nodes.map(n => n.name)).toEqual(['massing', 'openings', 'slender_top']);
         expect(json.nodes.map(n => n.extras?.sb?.provenance)).toEqual(['measured', 'photo-inferred', 'measured']);
         expect(json.nodes[1].extras?.sb?.depthProvenance).toBe('generated');
-        expect((json.images ?? []).length).toBeGreaterThanOrEqual(8);
+        expect((json.images ?? []).length).toBeGreaterThanOrEqual(9);
+        // the walls' detail textures: most walls with windows carry one, in one atlas
+        expect(rep.detail.faces).toBeGreaterThan(rep.facesWithWindows / 2);
+        expect(rep.detail.atlas[0]).toBe(4096);
+        const mats = (glb.json as { materials: Array<{ name: string; pbrMetallicRoughness: { baseColorTexture?: unknown } }> }).materials;
+        expect(mats.filter(m => m.name.endsWith('+detail')).every(m => m.pbrMetallicRoughness.baseColorTexture)).toBe(true);
         let tris = 0;
         for (const m of json.meshes) for (const p of m.primitives) {
             const col = readAccessor(glb, p.attributes.COLOR_0);

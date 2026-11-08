@@ -29,6 +29,13 @@
  *     band face) takes the per-channel median of the scan's own photo texture sampled over it (nearest scan surface
  *     facing the same way within `sampleRadiusM`; a fill a stage laid over unphotographed surfaces is not sampled).
  *     An element no photo reaches takes its tier's median wall colour, counted.
+ *   - Detail (photo-inferred). A wall with windows from a photographed plane and a storey pitch gets a detail texture:
+ *     every texel the per-channel median of the plane's straightened photo (the scan's own photo; never-photographed
+ *     texels left out) at that point and `detailRepeats` storeys up and down, so the storey's own sash, mullion,
+ *     spandrel and stone pattern stays and a one-off reflection, lit window or smear is outvoted. Each element's measured
+ *     colour is baked over its rect as a gain on that median (to the power `detailGainPower`); the walls share one atlas
+ *     (texel enlarged from `detailTexelM` until they fit), sampled through the element's TEXCOORD_0. The geometry stays
+ *     the operators'; roofs and the slender top keep their flat element colours.
  *   - Material (photo-inferred). Each element's colour picks the nearest of K's measured appearance classes (CIELAB),
  *     whose library set gives the normal and occlusion-roughness-metalness maps at the set's real tile size; the colour
  *     stays the element's own (COLOR_0, baseColorFactor white). Glass is a smooth dielectric.
@@ -40,6 +47,7 @@
 
 #include "scratchbox_cdt.hpp"
 #include "scratchbox_gltf_scene.hpp"
+#include "scratchbox_png.hpp"
 #include "scratchbox_shape_program.hpp"
 
 #include <algorithm>
@@ -99,6 +107,11 @@ struct Params {
     double snapUpM{0.2};               // ... and within this up the wall one row line
     int continueMinWindows{6};         // a wall's rows are continued into unread spans when it holds at least this many windows
     double continueMaxDeltaE{20};      // a continued window's photo lies within this (CIELAB) of the wall's windows, and nearer them than the wall
+    int detail{1};                     // wall detail textures from the walls' own storey repeats (0: flat colours only)
+    double detailTexelM{0.12};         // their texel, enlarged until every wall fits one atlas
+    int detailRepeats{6};              // storeys up and down a texel's median is taken over
+    int detailAtlas{4096};             // the atlas's side (texels)
+    double detailGainPower{0.5};       // how much of an element's own colour is baked over the median (1: all of it, 0: none)
 };
 
 struct Spec {
@@ -113,6 +126,7 @@ struct Spec {
     double glassRoughness{0.06};
     std::vector<PlaneFrame> planes;
     std::map<int, std::vector<PixRect>> windows, panes;
+    std::map<int, std::string> planeImage, planeMask;  // a plane photo (its frame's pixels) and its uncovered mask
 };
 
 inline std::string restOfLine(std::istringstream& ls) {
@@ -152,6 +166,8 @@ inline Spec parseSpec(std::istream& in) {
             else if (name == "slenderShare") P.slenderShare = v; else if (name == "minSlenderShare") P.minSlenderShare = v;
             else if (name == "sectors") P.sectors = static_cast<int>(v); else if (name == "harmonics") P.harmonics = static_cast<int>(v);
             else if (name == "bandTolM") P.bandTolM = v; else if (name == "axialMedian") P.axialMedian = static_cast<int>(v); else if (name == "sliceM") P.sliceM = v;
+            else if (name == "detail") P.detail = static_cast<int>(v); else if (name == "detailTexelM") P.detailTexelM = v;
+            else if (name == "detailRepeats") P.detailRepeats = static_cast<int>(v); else if (name == "detailAtlas") P.detailAtlas = static_cast<int>(v); else if (name == "detailGainPower") P.detailGainPower = v;
             else if (name == "continueMinWindows") P.continueMinWindows = static_cast<int>(v); else if (name == "continueMaxDeltaE") P.continueMaxDeltaE = v;
             else if (name == "fillGapM") P.fillGapM = v; else if (name == "fillReachM") P.fillReachM = v; else if (name == "snapAlongM") P.snapAlongM = v; else if (name == "snapUpM") P.snapUpM = v;
             else throw std::runtime_error("unknown param " + name);
@@ -171,6 +187,8 @@ inline Spec parseSpec(std::istream& in) {
             ls >> f.id >> f.c.x >> f.c.y >> f.c.z >> f.s.x >> f.s.y >> f.s.z >> f.t.x >> f.t.y >> f.t.z >> f.n.x >> f.n.y >> f.n.z >> f.sMin >> f.tMax >> f.pixel >> f.w >> f.h;
             S.planes.push_back(f);
         }
+        else if (k == "planeimage") { int id; ls >> id; S.planeImage[id] = restOfLine(ls); }
+        else if (k == "planemask") { int id; ls >> id; S.planeMask[id] = restOfLine(ls); }
         else if (k == "win" || k == "pane") {
             int id; PixRect r; int gen = 0;
             ls >> id >> r.x0 >> r.y0 >> r.x1 >> r.y1 >> gen;
@@ -350,12 +368,38 @@ inline bool patchLumStats(PhotoSampler& ph, P3 origin, P3 A, P3 B, P3 n, double 
 // =============================================================================================
 
 struct Prim { std::vector<float> pos, nrm, uv, col; std::vector<uint32_t> idx; };
+
+/**
+ * A wall's detail texture: every texel the per-channel median of the wall's photo at that point and the same point
+ * `detailRepeats` storeys up and down (the facade's own repeats: a reflection, a lit window, a blind or a smear in one
+ * storey is outvoted by the others, the storey's own pattern of sash, mullion, spandrel and pier stays), placed in the
+ * atlas at (ax, ay). Each element's measured colour is then baked over its rect as a gain on the median (bakeTints).
+ */
+struct FaceTex {
+    bool ok{false};
+    int ax{0}, ay{0}, w{0}, h{0};
+    double texel{0.12}, h0{0}, h1{0};
+    std::vector<float> M;              // linear RGB, -1 where no repeat was photographed
+    struct Tint { double a0, a1, h0, h1; Rgb c; };
+    std::vector<Tint> tints;
+};
 struct OutNode { std::string name, extras; std::map<int, Prim> prims; };  // material index -> primitive
 
 struct Emitter {
     std::vector<ClassMat>* classes{nullptr};
     int glassMat{0};
     size_t triangles{0};
+    // while a textured wall is emitted: its texture, its frame, and where textured materials start
+    FaceTex* tex{nullptr};
+    P3 texP0, texD;
+    double groundY{0};
+    int texOffset{0}, atlasW{1}, atlasH{1};
+    // a textured element's TEXCOORD_0 is its place in the atlas (one UV set: every reader takes it)
+    void atlasUv(Prim& p, const P3& q) const {
+        const double a = sp::dot(q - texP0, texD), h = q.y - groundY;
+        p.uv.push_back(static_cast<float>((tex->ax + a / tex->texel) / atlasW));
+        p.uv.push_back(static_cast<float>((tex->ay + (tex->h1 - h) / tex->texel) / atlasH));
+    }
 
     /** The nearest class (CIELAB) to a colour; openings classes only when nothing else is given. */
     int classOf(const Rgb& c) const {
@@ -375,14 +419,16 @@ struct Emitter {
     /** A planar quad a, b, c, d (counter-clockwise seen from n), UVs along uAxis / vAxis in metres over the material's tile. */
     void quad(OutNode& nd, int mat, P3 a, P3 b, P3 c, P3 d, P3 n, const Rgb& col, P3 uAxis, P3 vAxis) {
         if (sp::dot(sp::cross(b - a, c - a), n) < 0) std::swap(b, d);
-        Prim& p = nd.prims[mat];
-        const uint32_t base = static_cast<uint32_t>(p.pos.size() / 3);
         const double tile = tileOf(mat);
+        Prim& p = nd.prims[tex ? mat + texOffset : mat];
+        const uint32_t base = static_cast<uint32_t>(p.pos.size() / 3);
+        const Rgb colUsed = tex ? Rgb{1, 1, 1} : col;  // a textured element's colour is baked into its texels
         for (const P3& q : {a, b, c, d}) {
+            if (tex) atlasUv(p, q);
             p.pos.insert(p.pos.end(), {static_cast<float>(q.x), static_cast<float>(q.y), static_cast<float>(q.z)});
             p.nrm.insert(p.nrm.end(), {static_cast<float>(n.x), static_cast<float>(n.y), static_cast<float>(n.z)});
-            p.uv.insert(p.uv.end(), {static_cast<float>(sp::dot(q, uAxis) / tile), static_cast<float>(-sp::dot(q, vAxis) / tile)});
-            p.col.insert(p.col.end(), {static_cast<float>(col.r), static_cast<float>(col.g), static_cast<float>(col.b)});
+            if (!tex) p.uv.insert(p.uv.end(), {static_cast<float>(sp::dot(q, uAxis) / tile), static_cast<float>(-sp::dot(q, vAxis) / tile)});
+            p.col.insert(p.col.end(), {static_cast<float>(colUsed.r), static_cast<float>(colUsed.g), static_cast<float>(colUsed.b)});
         }
         p.idx.insert(p.idx.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
         triangles += 2;
@@ -412,6 +458,9 @@ struct Report {
     size_t windowsGiven{0}, windowsPlaced{0}, windowsGenerated{0}, windowsContinued{0}, continueTested{0}, windowsRephased{0}, wallsRephased{0}, panesPlaced{0};
     size_t droppedNoWall{0}, droppedClipped{0}, droppedOverlap{0}, droppedSmall{0}, droppedNoFrame{0};
     size_t uncolouredElements{0}, colouredElements{0}, capsCut{0};
+    size_t facesTextured{0}, texelsDetail{0};
+    int atlasW{0}, atlasH{0};
+    double detailTexelM{0};
     double slenderFromM{-1}, topM{0};
     size_t slenderBands{0}, slenderSlices{0};
     std::map<int, size_t> classUse;
@@ -468,7 +517,7 @@ inline std::vector<R2> subtractHoles(const R2& box, const std::vector<R2>& holes
 // The build
 // =============================================================================================
 
-struct Result { std::vector<OutNode> nodes; Report report; sp::Frame frame; };
+struct Result { std::vector<OutNode> nodes; Report report; sp::Frame frame; texture::ImageBuffer atlas; };
 
 /** A wall face: from p0 along d (unit, horizontal) for L metres, between heights h0 and h1 above the street, facing n. */
 struct WallFace { P3 p0, d, n; double L, h0, h1; int tier; };
@@ -833,11 +882,123 @@ inline Result build(const Spec& S) {
         for (auto& W : added) { wins.push_back(W); ++rep.windowsContinued; ++rep.windowsPlaced; ++rep.windowsGenerated; }
     }
 
+    // --- detail textures: a wall with windows from a photographed plane and a storey pitch gets one (FaceTex)
+    std::vector<FaceTex> faceTex(faces.size());
+    struct Photo { bool ok{false}; texture::ImageBuffer rgb, mask; };
+    std::map<int, Photo> photos;
+    auto photoOf = [&](int id) -> const Photo& {
+        auto it = photos.find(id);
+        if (it != photos.end()) return it->second;
+        Photo P;
+        auto im = S.planeImage.find(id);
+        if (im != S.planeImage.end()) {
+            const auto bytes = detail::readFile(im->second);
+            auto d = png::decode(bytes.data(), bytes.size(), png::OutputFormat::Rgb);
+            if (d.ok) { P.rgb = std::move(d.image); P.ok = true; }
+            auto mk = S.planeMask.find(id);
+            if (P.ok && mk != S.planeMask.end()) {
+                const auto mb = detail::readFile(mk->second);
+                auto md = png::decode(mb.data(), mb.size(), png::OutputFormat::Luma);
+                if (md.ok && md.image.width == P.rgb.width && md.image.height == P.rgb.height) P.mask = std::move(md.image);
+            }
+        }
+        return photos.emplace(id, std::move(P)).first->second;
+    };
+    std::vector<double> facePitch(faces.size(), 0);
+    std::vector<int> facePlane(faces.size(), -1);
+    if (S.P.detail) {
+        for (size_t fi = 0; fi < faces.size(); ++fi) {
+            const auto& wins = faceWins[fi];
+            if (wins.size() < 4) continue;
+            std::map<int, int> votes;
+            for (const auto& W : wins) if (W.plane >= 0) ++votes[W.plane];
+            int best = -1, bn = 0;
+            for (const auto& [id, n] : votes) if (n > bn && frames.count(id) && photoOf(id).ok) { best = id; bn = n; }
+            if (best < 0) continue;
+            std::map<long, std::vector<double>> cols;
+            for (const auto& W : wins) cols[std::lround(W.r.a0 * 20)].push_back(W.r.h0);
+            std::vector<double> steps;
+            for (auto& [k, v] : cols) { std::sort(v.begin(), v.end()); for (size_t i = 1; i < v.size(); ++i) { const double st = v[i] - v[i - 1]; if (st > 1.5 && st < 6.0) steps.push_back(st); } }
+            if (steps.size() < 3) continue;
+            std::nth_element(steps.begin(), steps.begin() + steps.size() / 2, steps.end());
+            facePitch[fi] = steps[steps.size() / 2];
+            facePlane[fi] = best;
+        }
+        // the texel: enlarged until every textured wall fits the atlas (shelves, tallest first)
+        double texel = S.P.detailTexelM;
+        const int A = S.P.detailAtlas;
+        for (int attempt = 0; attempt < 12; ++attempt, texel *= 1.15) {
+            std::vector<size_t> order;
+            for (size_t fi = 0; fi < faces.size(); ++fi) if (facePlane[fi] >= 0) {
+                faceTex[fi].w = std::max(1, static_cast<int>(std::ceil(faces[fi].L / texel)));
+                faceTex[fi].h = std::max(1, static_cast<int>(std::ceil((faces[fi].h1 - faces[fi].h0) / texel)));
+                order.push_back(fi);
+            }
+            std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return faceTex[a].h > faceTex[b].h; });
+            int x = 0, y = 0, shelf = 0; bool fits = true;
+            for (size_t fi : order) {
+                auto& t = faceTex[fi];
+                if (t.w + 2 > A || t.h + 2 > A) { fits = false; break; }
+                if (x + t.w + 2 > A) { x = 0; y += shelf; shelf = 0; }
+                if (y + t.h + 2 > A) { fits = false; break; }
+                t.ax = x + 1; t.ay = y + 1; x += t.w + 2; shelf = std::max(shelf, t.h + 2);
+            }
+            if (fits) { rep.detailTexelM = texel; rep.atlasW = A; rep.atlasH = std::min(A, ((y + shelf + 3) / 4) * 4); break; }
+        }
+        if (rep.atlasW) {
+            for (size_t fi = 0; fi < faces.size(); ++fi) {
+                if (facePlane[fi] < 0) continue;
+                auto& t = faceTex[fi];
+                const auto& w = faces[fi];
+                const PlaneFrame& f = *frames.at(facePlane[fi]);
+                const Photo& P = photoOf(facePlane[fi]);
+                t.texel = rep.detailTexelM; t.h0 = w.h0; t.h1 = w.h0 + t.h * t.texel;
+                t.M.assign(static_cast<size_t>(t.w) * t.h * 3, -1.0f);
+                const double Pp = facePitch[fi];
+                const P3 fs = f.s, ft = f.t;
+                auto texelAt = [&](double a, double h, Rgb& c) {
+                    const P3 q{w.p0.x + w.d.x * a, S.groundY + h, w.p0.z + w.d.z * a};
+                    const double ss = sp::dot(q - f.c, fs), tt = sp::dot(q - f.c, ft);
+                    const int px = static_cast<int>(std::floor((ss - f.sMin) / f.pixel)), py = static_cast<int>(std::floor((f.tMax - tt) / f.pixel));
+                    if (px < 0 || py < 0 || px >= P.rgb.width || py >= P.rgb.height) return false;
+                    if (!P.mask.empty() && P.mask.data[P.mask.getIndex(px, py)] > 127) return false;
+                    const size_t o = P.rgb.getIndex(px, py);
+                    c = {srgbToLinear(P.rgb.data[o] / 255.0), srgbToLinear(P.rgb.data[o + 1] / 255.0), srgbToLinear(P.rgb.data[o + 2] / 255.0)};
+                    return true;
+                };
+                std::vector<double> vr, vg, vb;
+                for (int j = 0; j < t.h; ++j) for (int i = 0; i < t.w; ++i) {
+                    const double a = (i + 0.5) * t.texel, h = t.h1 - (j + 0.5) * t.texel;
+                    vr.clear(); vg.clear(); vb.clear();
+                    for (int k = -S.P.detailRepeats; k <= S.P.detailRepeats; ++k) {
+                        const double hk = h + k * Pp;
+                        if (hk < w.h0 || hk > w.h1) continue;
+                        Rgb c;
+                        if (texelAt(a, hk, c)) { vr.push_back(c.r); vg.push_back(c.g); vb.push_back(c.b); }
+                    }
+                    if (vr.size() < 3) continue;
+                    auto med = [](std::vector<double>& v) { std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; };
+                    const size_t o = (static_cast<size_t>(j) * t.w + i) * 3;
+                    t.M[o] = static_cast<float>(med(vr)); t.M[o + 1] = static_cast<float>(med(vg)); t.M[o + 2] = static_cast<float>(med(vb));
+                    ++rep.texelsDetail;
+                }
+                t.ok = true;
+                ++rep.facesTextured;
+            }
+        }
+    }
+    E.groundY = S.groundY;
+    E.texOffset = static_cast<int>(classes.size()) + 1;
+    E.atlasW = std::max(1, rep.atlasW); E.atlasH = std::max(1, rep.atlasH);
+
     // --- emit walls (cells), windows (reveals, panes, frames)
     const double D = S.revealM;
     for (size_t fi = 0; fi < faces.size(); ++fi) {
         const auto& w = faces[fi];
         auto at = [&](double a, double h, double off) { return P3{w.p0.x + w.d.x * a - w.n.x * off, S.groundY + h, w.p0.z + w.d.z * a - w.n.z * off}; };
+        FaceTex* T = faceTex[fi].ok ? &faceTex[fi] : nullptr;
+        E.tex = T; E.texP0 = w.p0; E.texD = w.d;
+        auto tint = [&](double a0, double a1, double h0, double h1, const Rgb& c) { if (T) T->tints.push_back({a0, a1, h0, h1, c}); };
         std::vector<detail::R2> holes;
         for (const auto& W : faceWins[fi]) holes.push_back(W.r);
         if (!holes.empty()) ++rep.facesWithWindows;
@@ -871,6 +1032,7 @@ inline Result build(const Spec& S) {
                 const int m = E.classOf(c);
                 ++rep.classUse[m];
                 E.quad(massing, m, at(a0, h0, 0), at(a1, h0, 0), at(a1, h1, 0), at(a0, h1, 0), w.n, c, w.d, P3{0, -1, 0});
+                tint(a0, a1, h0, h1, c);
                 ++rep.wallCells;
             }
         }
@@ -880,6 +1042,7 @@ inline Result build(const Spec& S) {
             bool got;
             const Rgb ring = colourOf(at(r.a0 - 0.15, r.h0 - 0.15, 0), w.d * (r.a1 - r.a0 + 0.3), P3{0, r.h1 - r.h0 + 0.3, 0}, w.n, faceFallback, got);
             const int rm = E.classOf(ring);
+            tint(r.a0, r.a1, r.h0, r.h1, ring);  // the opening's frame colour below, then each pane's, are laid over this
             const P3 inL = w.d, inR = w.d * -1.0, inB = up, inT = up * -1.0;
             E.quad(openings, rm, at(r.a0, r.h0, 0), at(r.a0, r.h1, 0), at(r.a0, r.h1, D), at(r.a0, r.h0, D), inL, ring, w.n, up);
             E.quad(openings, rm, at(r.a1, r.h1, 0), at(r.a1, r.h0, 0), at(r.a1, r.h0, D), at(r.a1, r.h1, D), inR, ring, w.n, up);
@@ -887,8 +1050,10 @@ inline Result build(const Spec& S) {
             E.quad(openings, rm, at(r.a0, r.h1, 0), at(r.a1, r.h1, 0), at(r.a1, r.h1, D), at(r.a0, r.h1, D), inT, ring, w.d, w.n);
             // panes (glass) and the frame between them, at the reveal's depth
             const std::vector<detail::R2> panes = W.panes.empty() ? std::vector<detail::R2>{r} : W.panes;
+            std::vector<FaceTex::Tint> panesTint;
             for (const auto& p : panes) {
                 const Rgb g = colourOf(at(p.a0, p.h0, D), w.d * (p.a1 - p.a0), P3{0, p.h1 - p.h0, 0}, w.n, Rgb{0.05, 0.06, 0.07}, got);
+                panesTint.push_back({p.a0, p.a1, p.h0, p.h1, g});
                 E.quad(openings, E.glassMat, at(p.a0, p.h0, D), at(p.a1, p.h0, D), at(p.a1, p.h1, D), at(p.a0, p.h1, D), w.n, g, w.d, P3{0, -1, 0});
                 ++rep.panesPlaced;
             }
@@ -902,9 +1067,48 @@ inline Result build(const Spec& S) {
                     if (!cr.empty()) { auto med = [](std::vector<double>& v) { std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }; fc = {med(cr), med(cg), med(cb)}; ++rep.colouredElements; } else ++rep.uncolouredElements;
                     const int fm = E.classOf(fc);
                     for (const auto& q : frame) E.quad(openings, fm, at(q.a0, q.h0, D), at(q.a1, q.h0, D), at(q.a1, q.h1, D), at(q.a0, q.h1, D), w.n, fc, w.d, P3{0, -1, 0});
+                    tint(r.a0, r.a1, r.h0, r.h1, fc);
                 }
             }
+            for (const auto& pt : panesTint) tint(pt.a0, pt.a1, pt.h0, pt.h1, pt.c);
         }
+    }
+    E.tex = nullptr;
+
+    // --- the atlas: each element's measured colour baked over its rect as a gain on the repeat median (the median's own
+    // mean over the rect brought toward the element's colour: the gain held within [1/3, 3], to the power
+    // detailGainPower, so a cell's own colour shows without its edges reading as blocks); a texel no repeat
+    // photographed takes the element's colour flat
+    if (rep.atlasW) {
+        texture::ImageBuffer atlas(rep.atlasW, rep.atlasH, 3, 128);
+        auto toS = [](double c) { c = std::clamp(c, 0.0, 1.0); return static_cast<uint8_t>(std::lround(255.0 * (c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1 / 2.4) - 0.055))); };
+        for (auto& t : faceTex) {
+            if (!t.ok) continue;
+            std::vector<float> baked(t.M.size(), -1.0f);
+            for (const auto& e : t.tints) {
+                const int i0 = std::clamp(static_cast<int>(std::floor(e.a0 / t.texel)), 0, t.w), i1 = std::clamp(static_cast<int>(std::ceil(e.a1 / t.texel)), 0, t.w);
+                const int j0 = std::clamp(static_cast<int>(std::floor((t.h1 - e.h1) / t.texel)), 0, t.h), j1 = std::clamp(static_cast<int>(std::ceil((t.h1 - e.h0) / t.texel)), 0, t.h);
+                double m[3] = {0, 0, 0}; size_t n = 0;
+                for (int j = j0; j < j1; ++j) for (int i = i0; i < i1; ++i) { const size_t o = (static_cast<size_t>(j) * t.w + i) * 3; if (t.M[o] >= 0) { m[0] += t.M[o]; m[1] += t.M[o + 1]; m[2] += t.M[o + 2]; ++n; } }
+                const double cc[3] = {e.c.r, e.c.g, e.c.b};
+                double gain[3] = {1, 1, 1};
+                if (n) for (int k = 0; k < 3; ++k) gain[k] = std::pow(std::clamp(cc[k] / std::max(1e-4, m[k] / n), 1.0 / 3, 3.0), S.P.detailGainPower);
+                for (int j = j0; j < j1; ++j) for (int i = i0; i < i1; ++i) {
+                    const size_t o = (static_cast<size_t>(j) * t.w + i) * 3;
+                    for (int k = 0; k < 3; ++k) baked[o + k] = static_cast<float>(t.M[o] >= 0 ? t.M[o + k] * gain[k] : cc[k]);
+                }
+            }
+            // a texel past every element (the edge rounding) takes its neighbour's value; the 1-texel gutter repeats the edge
+            for (int j = -1; j <= t.h; ++j) for (int i = -1; i <= t.w; ++i) {
+                const int si = std::clamp(i, 0, t.w - 1), sj = std::clamp(j, 0, t.h - 1);
+                const size_t o = (static_cast<size_t>(sj) * t.w + si) * 3;
+                const int X = t.ax + i, Y = t.ay + j;
+                if (X < 0 || Y < 0 || X >= atlas.width || Y >= atlas.height) continue;
+                const size_t q = atlas.getIndex(X, Y);
+                for (int k = 0; k < 3; ++k) atlas.data[q + k] = baked[o] >= 0 ? toS(baked[o + k]) : (t.M[o] >= 0 ? toS(t.M[o + k]) : 128);
+            }
+        }
+        out.atlas = std::move(atlas);
     }
 
     // --- roofs: each tier's cap, split until every edge is at most ~2 cell sizes, each piece its own colour
@@ -1101,7 +1305,7 @@ inline Result build(const Spec& S) {
 // GLB writer: materials with the classes' library maps, COLOR_0 as float
 // =============================================================================================
 
-inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const std::vector<ClassMat>& classesIn, double glassRoughness, const std::string& rootExtras, size_t& triangles) {
+inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const std::vector<ClassMat>& classesIn, double glassRoughness, const std::string& rootExtras, size_t& triangles, const texture::ImageBuffer* atlas = nullptr) {
     std::vector<ClassMat> classes = classesIn;
     if (classes.empty()) classes.push_back(ClassMat{"neutral", {60, 0, 0}, 0.8, 0, 2, "", "", false});
     const int glass = static_cast<int>(classes.size());
@@ -1133,19 +1337,37 @@ inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const st
         texs << (nImg ? "," : "") << "{\"sampler\":0,\"source\":" << nImg << "}";
         return imageOf[p] = nImg++;
     };
-    for (int m = 0; m <= glass; ++m) {
-        if (m) mats << ",";
+    // the wall detail atlas (the detailed materials sample it through their elements' TEXCOORD_0)
+    int atlasIm = -1;
+    if (atlas && !atlas->empty()) {
+        const auto bytes = png::encode(*atlas, 6);
+        if (!bytes.empty()) {
+            const int v = addView(bytes.data(), bytes.size(), 0);
+            imgs << (nImg ? "," : "") << "{\"bufferView\":" << v << ",\"mimeType\":\"image/png\"}";
+            texs << (nImg ? "," : "") << "{\"sampler\":1,\"source\":" << nImg << "}";
+            atlasIm = nImg++;
+        }
+    }
+    // materials: the classes and glass, then (with an atlas) the same again sampling it, at glass + 1 + class
+    const int nMat = atlasIm >= 0 ? 2 * (glass + 1) : glass + 1;
+    for (int mi = 0; mi < nMat; ++mi) {
+        if (mi) mats << ",";
+        const int m = mi % (glass + 1);
+        const bool detailed = mi > glass;
+        const std::string base = detailed ? ",\"baseColorTexture\":{\"index\":" + std::to_string(atlasIm) + "}" : std::string();
+        const std::string detailNote = detailed ? ",\"detail\":\"photo-inferred: the wall's own photo, each texel the median over its storey repeats, each element's measured colour baked in as a gain\"" : std::string();
         if (m == glass) {
-            mats << "{\"name\":\"glass\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,1,1,1],\"metallicFactor\":0,\"roughnessFactor\":" << detail::num(glassRoughness) << "},\"extras\":{\"sb\":{\"provenance\":\"photo-inferred\",\"finish\":\"a smooth dielectric (glazing)\"}}}";
+            mats << "{\"name\":\"glass" << (detailed ? "+detail" : "") << "\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,1,1,1],\"metallicFactor\":0,\"roughnessFactor\":" << detail::num(glassRoughness) << base << "},\"extras\":{\"sb\":{\"provenance\":\"photo-inferred\",\"finish\":\"a smooth dielectric (glazing)\"" << detailNote << "}}}";
             continue;
         }
         const auto& c = classes[m];
-        const int nIm = image(c.normalPng), oIm = image(c.ormPng);
-        mats << "{\"name\":\"" << detail::esc(c.name) << "\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,1,1,1],\"metallicFactor\":" << detail::num(c.metallic) << ",\"roughnessFactor\":" << detail::num(c.roughness)
+        // a detailed element's UVs are the atlas's: the library's tiled maps stay on the flat-coloured elements
+        const int nIm = detailed ? -1 : image(c.normalPng), oIm = detailed ? -1 : image(c.ormPng);
+        mats << "{\"name\":\"" << detail::esc(c.name) << (detailed ? "+detail" : "") << "\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,1,1,1],\"metallicFactor\":" << detail::num(c.metallic) << ",\"roughnessFactor\":" << detail::num(c.roughness) << base
              << (oIm >= 0 ? ",\"metallicRoughnessTexture\":{\"index\":" + std::to_string(oIm) + "}" : std::string()) << "}"
              << (nIm >= 0 ? ",\"normalTexture\":{\"index\":" + std::to_string(nIm) + "}" : std::string())
              << (oIm >= 0 ? ",\"occlusionTexture\":{\"index\":" + std::to_string(oIm) + "}" : std::string())
-             << ",\"extras\":{\"sb\":{\"provenance\":\"photo-inferred\",\"set\":\"" << detail::esc(c.name) << "\",\"tileM\":" << detail::num(c.tileM) << "}}}";
+             << ",\"extras\":{\"sb\":{\"provenance\":\"photo-inferred\",\"set\":\"" << detail::esc(c.name) << "\",\"tileM\":" << detail::num(c.tileM) << detailNote << "}}}";
     }
     triangles = 0;
     int nMesh = 0;
@@ -1165,7 +1387,7 @@ inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const st
             const int aT = addAcc(addView(p.uv.data(), p.uv.size() * 4, 34962), 5126, nv, "VEC2", "");
             const int aC = addAcc(addView(p.col.data(), p.col.size() * 4, 34962), 5126, nv, "VEC3", "");
             const int aI = addAcc(addView(p.idx.data(), p.idx.size() * 4, 34963), 5125, p.idx.size(), "SCALAR", "");
-            prims << (np++ ? "," : "") << "{\"attributes\":{\"POSITION\":" << aP << ",\"NORMAL\":" << aN << ",\"TEXCOORD_0\":" << aT << ",\"COLOR_0\":" << aC << "},\"indices\":" << aI << ",\"material\":" << std::min(mat, glass) << ",\"mode\":4}";
+            prims << (np++ ? "," : "") << "{\"attributes\":{\"POSITION\":" << aP << ",\"NORMAL\":" << aN << ",\"TEXCOORD_0\":" << aT << ",\"COLOR_0\":" << aC << "},\"indices\":" << aI << ",\"material\":" << std::min(mat, nMat - 1) << ",\"mode\":4}";
             triangles += p.idx.size() / 3;
         }
         if (!np) continue;
@@ -1180,7 +1402,7 @@ inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const st
     J << ",\"scene\":0,\"scenes\":[{\"nodes\":[";
     for (int i = 0; i < nMesh; ++i) J << (i ? "," : "") << i;
     J << "]" << (rootExtras.empty() ? std::string() : ",\"extras\":" + rootExtras) << "}],\"nodes\":[" << nodesJ.str() << "],\"meshes\":[" << meshes.str() << "],\"materials\":[" << mats.str() << "]";
-    if (nImg) J << ",\"images\":[" << imgs.str() << "],\"textures\":[" << texs.str() << "],\"samplers\":[{\"magFilter\":9729,\"minFilter\":9987,\"wrapS\":10497,\"wrapT\":10497}]";
+    if (nImg) J << ",\"images\":[" << imgs.str() << "],\"textures\":[" << texs.str() << "],\"samplers\":[{\"magFilter\":9729,\"minFilter\":9987,\"wrapS\":10497,\"wrapT\":10497},{\"magFilter\":9729,\"minFilter\":9987,\"wrapS\":33071,\"wrapT\":33071}]";
     J << ",\"accessors\":[" << accs.str() << "],\"bufferViews\":[" << views.str() << "],\"buffers\":[{\"byteLength\":" << bin.size() << "}]}";
     std::string json = J.str();
     while (json.size() % 4) json += ' ';
@@ -1195,7 +1417,7 @@ inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const st
 inline std::string reportJson(const Report& r, const Spec& S, size_t triangles, size_t bytes) {
     std::ostringstream o;
     o << "{\"ok\":true,\"tiers\":" << r.tiers << ",\"wallFaces\":" << r.wallFaces << ",\"facesWithWindows\":" << r.facesWithWindows
-      << ",\"wallCells\":" << r.wallCells << ",\"roofCells\":" << r.roofCells << ",\"capsCut\":" << r.capsCut
+      << ",\"wallCells\":" << r.wallCells << ",\"roofCells\":" << r.roofCells << ",\"capsCut\":" << r.capsCut << ",\"detail\":{\"faces\":" << r.facesTextured << ",\"texels\":" << r.texelsDetail << ",\"atlas\":[" << r.atlasW << "," << r.atlasH << "],\"texelM\":" << detail::num(r.detailTexelM) << "}" 
       << ",\"windows\":{\"given\":" << r.windowsGiven << ",\"placed\":" << r.windowsPlaced << ",\"generated\":" << r.windowsGenerated << ",\"continued\":" << r.windowsContinued << ",\"rephased\":" << r.windowsRephased << ",\"wallsRephased\":" << r.wallsRephased << ",\"continueTested\":" << r.continueTested << ",\"panes\":" << r.panesPlaced
       << ",\"dropped\":{\"noWall\":" << r.droppedNoWall << ",\"clipped\":" << r.droppedClipped << ",\"overlap\":" << r.droppedOverlap << ",\"small\":" << r.droppedSmall << ",\"noFrame\":" << r.droppedNoFrame << "}}"
       << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << "}"

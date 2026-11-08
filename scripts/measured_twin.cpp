@@ -25,6 +25,7 @@
  *   classnormal <i> <png> / classorm <i> <png>                               its library set's prepared maps
  *   plane <id> cx cy cz sx sy sz tx ty tz nx ny nz sMin tMax pixel w h        a plane photo's frame (tile frame)
  *   win <id> x0 y0 x1 y1 <generated 0|1> / pane <id> x0 y0 x1 y1 0           a kept window box / pane, the plane photo's pixels
+ *   planeimage <id> <png> / planemask <id> <png>                            a plane's photo (its frame's pixels) and its uncovered mask (white: never photographed)
  *
  * Build:
  *   clang++ -std=c++20 -O3 -I packages/core/src/native/3d-engine/include scripts/measured_twin.cpp -o build/3d-native/measured_twin -lz
@@ -47,7 +48,7 @@ int main(int argc, char** argv) {
         const auto& F = R.frame;
         const std::string root = "{\"sb\":{\"schema\":\"scratchbox.measured-twin/1\",\"frame\":{\"ox\":" + detail::num(F.ox) + ",\"oz\":" + detail::num(F.oz) + ",\"theta\":" + detail::num(F.theta) + ",\"groundY\":" + detail::num(F.groundY) + "}}}";
         size_t triangles = 0;
-        const auto glb = writeGlb(R.nodes, S.classes, S.glassRoughness, root, triangles);
+        const auto glb = writeGlb(R.nodes, S.classes, S.glassRoughness, root, triangles, R.atlas.empty() ? nullptr : &R.atlas);
         {
             std::ofstream o(S.out, std::ios::binary);
             if (!o) throw std::runtime_error("cannot write " + S.out);

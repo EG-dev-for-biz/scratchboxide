@@ -26,7 +26,7 @@ import { preparedKey } from '../pipeline-k/material-sets';
 import type { ModelReadingStore } from '../pipeline-k/model-readings';
 import { REVEAL_DEPTH_PARAMS } from '../reveal-depth';
 
-export const MEASURED_TWIN_VERSION = 'measured-twin/1';
+export const MEASURED_TWIN_VERSION = 'measured-twin/2';
 
 /** The reveal depth used when no reading is trusted (m): a plausible punched window's, labelled generated. */
 export const GENERATED_REVEAL_M = 0.12;
@@ -54,6 +54,8 @@ export interface KRunRecords {
     planes: PlaneFrameJson[];
     windowFit: WindowFitEntry[];
     classes: MaterialClassNote[];
+    /** Each plane's photo (its frame's pixels: the straightened ortho, else the twin reader's) and its uncovered mask. */
+    photos: Record<number, { image: string; mask?: string }>;
     reveal: { depthM: number; label: 'photo-inferred' | 'generated'; source: string };
 }
 
@@ -92,6 +94,21 @@ export function readKRunRecords(runDir: string, cacheRoot: string): KRunRecords 
     // the other planes the reader read are framed by the twin reader's plane photos (its latest folder)
     const twinReads = fs.readdirSync(orthosDir).filter(d => d.startsWith('twin_read_')).map(d => path.join(orthosDir, d)).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
     const others = twinReads.length ? readJson<{ planes: PlaneFrameJson[] }>(path.join(twinReads[0], 'planes.json'))?.planes ?? [] : [];
+    // the photos: each facade's straightened ortho (the scan's own photo, straightened: the colours the elements are
+    // sampled to), else the twin reader's photo of the plane (the planes tile_refine did not analyse)
+    const photos: KRunRecords['photos'] = {};
+    const sizeOk = (file: string, f: PlaneFrameJson) => { try { const b = fs.readFileSync(file); return b.length > 24 && b.readUInt32BE(16) === f.width && b.readUInt32BE(20) === f.height; } catch { return false; } };
+    for (const f of [...facades, ...others]) {
+        if (!f.image) continue;
+        const dirs = twinReads.length ? [orthosDir, twinReads[0]] : [orthosDir];
+        for (const d of dirs) {
+            const image = path.join(d, f.image);
+            if (!fs.existsSync(image) || !sizeOk(image, f)) continue;
+            const mask = path.join(d, f.image.replace(/\.png$/, '_uncovered.png'));
+            photos[f.facadeId] = { image, ...(fs.existsSync(mask) ? { mask } : {}) };
+            break;
+        }
+    }
     const windowFit = readJson<{ facades: WindowFitEntry[] }>(path.join(orthosDir, 'window_fit.json'))?.facades;
     if (!windowFit) throw new Error(`the run has no window boxes (${path.join(orthosDir, 'window_fit.json')})`);
     const classes = note<{ classes?: MaterialClassNote[] }>('pipeline_k_materials')?.classes ?? [];
@@ -100,7 +117,7 @@ export function readKRunRecords(runDir: string, cacheRoot: string): KRunRecords 
     const reveal = trusted
         ? { depthM: rd!.building!.depthM, label: 'photo-inferred' as const, source: `read from Street View by the reveal-depth stage: ${rd!.building!.depthM.toFixed(3)} +- ${rd!.building!.seM.toFixed(3)} m over ${rd!.building!.pairs} window pairs` }
         : { depthM: GENERATED_REVEAL_M, label: 'generated' as const, source: rd && !rd.skipped ? 'the reveal-depth stage read no depth it trusts; a plausible reveal' : 'no reveal-depth reading in this run (it needs Street View); a plausible reveal' };
-    return { runDir, orthosDir, isolate, ...(textured ? { textured } : {}), groundY: base.groundY, loops: base.loops, planes: [...facades, ...others], windowFit, classes, reveal };
+    return { runDir, orthosDir, isolate, ...(textured ? { textured } : {}), groundY: base.groundY, loops: base.loops, planes: [...facades, ...others], windowFit, classes, photos, reveal };
 }
 
 const n6 = (v: number) => (Number.isFinite(v) ? String(Math.round(v * 1e6) / 1e6) : '0');
@@ -125,6 +142,11 @@ export function measuredTwinSpec(r: KRunRecords, out: { glb: string; report: str
     });
     const framed = new Map<number, PlaneFrameJson>();
     for (const f of r.planes) if (!framed.has(f.facadeId)) framed.set(f.facadeId, f);
+    for (const [id, ph] of Object.entries(r.photos ?? {})) {
+        if (!framed.has(Number(id))) continue;
+        L.push(`planeimage ${id} ${ph.image}`);
+        if (ph.mask) L.push(`planemask ${id} ${ph.mask}`);
+    }
     for (const f of framed.values()) L.push(`plane ${f.facadeId} ${[...f.centroid, ...f.axisS, ...f.axisT, ...f.normal].map(n6).join(' ')} ${n6(f.orthoSMin)} ${n6(f.orthoTMax)} ${n6(f.pixel)} ${f.width} ${f.height}`);
     for (const e of r.windowFit) {
         if (e.error || !e.rects?.length) continue;
@@ -183,6 +205,7 @@ export function ensureMeasuredTwinBinary(repoRoot = findTileRefineRepoRoot()): P
 /** The generator's report (scratchbox_measured_twin.hpp reportJson). */
 export interface MeasuredTwinReport {
     ok: true; tiers: number; wallFaces: number; facesWithWindows: number; wallCells: number; roofCells: number; capsCut: number;
+    detail: { faces: number; texels: number; atlas: [number, number]; texelM: number };
     windows: { given: number; placed: number; generated: number; continued: number; continueTested: number; rephased: number; wallsRephased: number; panes: number; dropped: Record<string, number> };
     colour: { elements: number; uncoloured: number };
     slender: { fromM: number | null; slices: number; bands: number };
@@ -190,7 +213,7 @@ export interface MeasuredTwinReport {
 }
 
 export interface MeasuredTwinResult {
-    version: string; glb: string; specFile: string; report: MeasuredTwinReport; records: Omit<KRunRecords, 'planes' | 'windowFit'> & { planes: number; windowPlanes: number }; mapsMissing: string[]; ms: number;
+    version: string; glb: string; specFile: string; report: MeasuredTwinReport; records: Omit<KRunRecords, 'planes' | 'windowFit' | 'photos'> & { planes: number; windowPlanes: number; photos: number }; mapsMissing: string[]; ms: number;
 }
 
 /**
@@ -218,6 +241,6 @@ export async function buildMeasuredTwin(opts: { runDir: string; cacheRoot: strin
     });
     const answer = JSON.parse(stdout) as MeasuredTwinReport | { ok: false; error: string };
     if (!answer.ok) throw new Error(`measured_twin failed: ${(answer as { error: string }).error}`);
-    const { planes, windowFit, ...rest } = rec;
-    return { version: MEASURED_TWIN_VERSION, glb, specFile, report: answer, records: { ...rest, planes: planes.length, windowPlanes: windowFit.filter(e => e.rects?.length).length }, mapsMissing: missing, ms: Date.now() - t0 };
+    const { planes, windowFit, photos, ...rest } = rec;
+    return { version: MEASURED_TWIN_VERSION, glb, specFile, report: answer, records: { ...rest, planes: planes.length, windowPlanes: windowFit.filter(e => e.rects?.length).length, photos: Object.keys(photos).length }, mapsMissing: missing, ms: Date.now() - t0 };
 }
