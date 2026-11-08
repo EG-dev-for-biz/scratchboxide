@@ -443,9 +443,39 @@ Found and fixed during these runs:
 They turned its window strips from dark recessed glass into grey wall. Comparisons between checkouts must share the
 model answers, or that variance swamps the change.
 
+### Follow-ups after the merge (2026-11-08, `claude/k-array-followups`)
+
+MAIN's review of the merged arrays named two problems. The first was a long dark horizontal line across Penn 2's glass
+close-up, with a cracked pane in the band row. The second was Lever House's untextured share, 3.08 to 4.00%. Both sides
+were rebuilt uncached: main ab9ca95d against the fix (786044ed), with one shared answer store
+(`2026-11-08-array-followups`). Main's ESB build hit tile_refine's 900 s limit at load 45 and was retried.
+
+| Building | Holes, main / fix | Untextured | Dark lines | Off-axis |
+|---|---|---|---|---|
+| Penn 2 | 0.95 / 0.92% | 1.04 / 1.05% | 1.04 / 1.21% | 0.015 / 0.005% |
+| Empire State Building | 0.63 / 0.63% | 0.48 / 0.48% | 2.33 / 2.25% | 0.030 / 0.035% |
+| Lever House | 2.85 / 2.85% | 3.10 / 3.10% | 1.06 / 1.06% | 0.02 / 0.02% |
+| 30 Rockefeller Plaza | 0.45 / 0.44% | 2.81 / 2.81% | 0.12 / 0.12% | 0.06 / 0.06% |
+| Seagram | 1.05 / 1.05% | 3.76 / 3.76% | 0.45 / 0.45% | 0.02 / 0.02% |
+
+![Window-array follow-ups](./k-window-array/2026-11-08-followups-sheet.jpg)
+
+- **Penn 2's long line and cracked pane.** The facade reader drew the shaft's windows two storeys tall (7.2 m). The array
+  folded each into two one-storey cells, and the lattice drew a wall band and recess edges through every one. The
+  reader's boxes are now never folded either; only the window fit's strips are. Facade 11 went from 272 folded cells to
+  none. On the glass close-up the line and the crack are gone: dark lines 1.30 to 0.91%. The stone close-up rises 0.77 to
+  1.50%. There the louvre panels at the roofline, also drawn tall by the reader, stand whole and recessed, and their
+  shadowed side reveal reads as a thin dark line. These lines run along the axes; the off-axis share falls 0.015 to
+  0.005%, and holes 0.95 to 0.92%.
+- **Lever House's untextured share.** The earlier attribution to the corner-join strips was wrong: the strips are
+  textured. The rise was the seal: a 222 m² untextured cap at 93 to 94 m, closing the shaft's top rim over the roof
+  scanned just below. A seal triangle facing up with a roof within 3 m straight beneath it now stays in the clay and
+  leaves the textured twin (`pipeline-k/roof-caps.ts`). On the earlier models this took Lever House from 4.00 to 3.30%
+  and the ESB from 0.37 to 0.34%, holes unchanged. On main ab9ca95d (the proud audit, #188) the cap no longer forms:
+  Lever House is 3.10% on both sides, and the pass changes nothing on the five buildings. It stays as a guard,
+  switchable off with `SCRATCHBOX_K_ROOF_CAPS=0`.
+
 ### Open
-- Lever House's untextured share rises 3.08 to 4.00% on the branch. The seal's share of it went from 14 to 30%, with the
-  closure's corner-join strips 127 to 199 m². Holes are equal.
 - 30 Rock's branch build took 23 min (array 358 s before the speed fix, the building system 97 s, load 50 to 68).
 
 - 30 Rock's pier rhythm is read as grouped bays in the system path (`groupedBay`); a face read without the system (its
