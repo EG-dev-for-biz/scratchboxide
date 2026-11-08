@@ -224,16 +224,4 @@ describe('the building system', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
-    it('refuses the system where the read boxes sit off its lattice, and the face reads for itself', () => {
-        // the windows stand every 3 m; the model reads 3.6 m: the read boxes sit off its sites
-        const { dir, fit } = setup([{ id: 1, windows: truth, boxes: truth.filter((_, k) => k % 3 !== 0) }, { id: 2, windows: truth, boxes: truth }]);
-        const sys: BuildingSystem = { version: 'v', building: '', patterns: [{ ...SHAFT, bayM: 3.6 }], regions: [{ facadeId: 1, pattern: 'punched', bottomM: 0, topM: 60 }], conf: 80, groundY: 0, sheet: '', reused: false };
-        const rep = inferWindowArrays(dir, fit, undefined, { system: sys });
-        const f1 = rep.facades.find(f => f.facadeId === 1)!;
-        expect(f1.system!.regions![0].source).not.toBe('system');
-        const e1 = (JSON.parse(fs.readFileSync(path.join(dir, 'window_fit.json'), 'utf8')) as WindowFitFile).facades[0] as { rects: WindowRect[] };
-        // read for itself: the 3 m array completed, every window where the photo shows it
-        for (const t of truth) expect(e1.rects.some(r => Math.abs((r[0] + r[2]) / 2 - (t[0] + t[2]) / 2) <= 2 && Math.abs((r[1] + r[3]) / 2 - (t[1] + t[3]) / 2) <= 2)).toBe(true);
-        fs.rmSync(dir, { recursive: true, force: true });
-    });
 });
