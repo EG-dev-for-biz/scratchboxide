@@ -320,3 +320,77 @@ and 30 Rock strips, their cells and triangles), window sizes from the photo fold
 height 2.26 → 2.49 m, so its glass share), its region model's bands (which planes lay a lattice at all), and generated
 windows at occluded sites inside an array (the generated-window counts). The slit fix holds for recessed cells as it
 does for strips: it removes slivers over any built cell, whatever the cell's depth.
+
+
+## Round nine (MAIN, 2026-11-08: the ESB's jagged lines)
+
+MAIN held #182 again: in both ESB close-ups, dark zig-zag outlines ran around rebuilt panels on the shaft while the
+hole metric went down. The audit's rays from the close-up camera through the darkest thin pixels (`probe2.ts`) hit
+`FacadeLattice_39`'s own front face, and a clay render at the same camera showed the same zig-zags: geometry, not
+texture. Facade 39's depth map was regular (seven bays recessed a quarter metre behind proud piers, as the ESB is built),
+so the plateaus were scan: whole tile triangles reaching past the rebuilt cells, kept whole because the claim removes a
+triangle only when it lies wholly over built cells, lying on the old wall plane a quarter metre proud of the recessed
+bays, their cut edges the zig-zags. Main showed only traces because its bays were nearly flat (0.09 m), so the same
+pieces sat flush. The lattice cut (`lattice-stitch.ts` `cutScanToLattice`, written for exactly this and left opt-in)
+splits the scan at the cells' lines so the pieces over built cells go and the rest stays; it is now on by default in
+pipeline K (b54f4c3d; `SCRATCHBOX_K_LATTICE_CUT=0` or the node graph's `polish.latticeCut` off).
+
+Rebuilt uncached with the cut (two attempts: the first lost the ESB to a Google Places fetch failure and Lever House to
+an API server that could not start under load 300):
+
+| Building | holes % main → before the cut → with the cut | panes on stone | dark lines % (the measure below) main → before → with |
+|---|---|---|---|
+| ESB | 0.73 → 0.36 → 0.64 | 407 → 67 → 42 | 1.48 → 1.62 → 2.63 |
+| Lever House | 2.89 → 2.91 → 2.96 | 48 → 1 → 1 | 0.22 → 0.77 → 1.23 |
+
+The ESB's plateaus are gone (`esb_row_cut.jpg` beside the benchmark: the shaft reads as piers and recessed window
+strips, the strips' reveals casting crisp vertical shadow lines, which is what the dark-line measure now counts, so that
+number rises as the picture gets cleaner); what remains dark at the left is facade 6's back face, seen on main too.
+The holes rose from 0.36 to 0.64% (main 0.73): the cut's pieces leave more of the shell for the seal and the inner
+core to close (the `Seal` node enters the hole list). Lever House: the sheet 10002's right edge shows dark wedges at
+every storey, a step between its recessed strips and the end cells the end-cell rule leaves to the scan (the probe:
+`FacadeLattice_10002`'s front, then the scan's back); its holes are 2.96 against main's 2.89. Open, with the measure.
+
+**The measure.** `numbers.json` and the sheet now carry `darkLines`: the share of a close-up's pixels that are thin
+dark lines (under 0.55 of the mean of the 15 x 15 window around them, that window itself lit, blobs over 6 px wide left
+out; `tools/darklines.py`, the mean of the side's glass and stone close-ups). It catches slits, seams and plateau
+outlines, but also real shadow lines at reveals, so it is a flag to look, not a gate. The gate belongs to a geometric
+proud-surface audit beside the tear audit (surface standing in front of the rebuilt surface it covers, seen straight on
+and from the sides), which a session is building on `feat/k-proud-audit`.
+
+**The gate.** `npm run ci:local -- --pr 182` at 8999c6a2: the first run under load 200-300 failed 13 files on timeouts
+(25 tests at 180 s, two clang++ ETIMEDOUT); the retry at load 78-111 passed 161 of 166 files, 3 tests timing out in
+`staged-location-orchestrator.test.ts` (the Street View grounding close-ups and two figure cases, 180 s each), none
+failing on an assertion.
+
+
+## Rounds ten and eleven (MAIN, 2026-11-08: Lever House's wedges, the ESB's slivers, main 5d72aeb3)
+
+Two more lattice rules (5e3431d8), from the probe on the round-nine close-ups:
+
+- **End cells follow the wall.** Lever House's wedges were the raw step where the end-cell rule had left the sheet's
+  end cells to the scan: the sheet's last built cell on the plane, the scan 0.3 m behind it. An end cell whose scan lies
+  more than `edgeStepM` behind the row's wall depth is now built at its own scan depth, so the rebuild turns with the
+  wall at a prow or a corner instead of standing proud of it (the Flatiron) or stopping short of it (Lever House).
+- **A window inside a strip takes the strip's columns.** The ESB's recessed strips showed jagged chamfered steps down
+  their reveals: every storey's window, read on its own, brought its own edge lines a few centimetres apart, and each
+  pair of lines made a chamfered step. The window's glass rect stays the reader's; only its lattice lines snap.
+
+The ESB's broken patch at the top of its second view is scan at the setback junction (the probe: `relief_m39`, `m40`,
+`m101` standing 0.3 m in front of `FacadeLattice_41`), the cut's remainder at the terrace ledge, not the seal's fill; it
+is what the proud-surface audit on `feat/k-proud-audit` removes.
+
+Then main 5d72aeb3 (#185: the tile seams' caps removed and rims zipped, so every K build starts from a different welded
+scan) was merged into the branch (5e34419d, one AGENTS.md conflict), and the two buildings were rebuilt uncached on both
+sides, main at 5d72aeb3 and the branch at 5e34419d; the other four stay at 9d282b44 against da786449.
+
+| Building | side | glass % | panes on stone | holes % | untex % | dark lines % |
+|---|---|---|---|---|---|---|
+| ESB | main 5d72aeb3 | 8.4 | 228 | 0.67 | 0.33 | 2.44 |
+| | branch 5e34419d | 6.2 | **24** | **0.56** | 0.48 | **1.00** |
+| Lever House | main 5d72aeb3 | 1.4 | 25 | 2.89 | 2.91 | 1.32 |
+| | branch 5e34419d | 9.4 | **0** | **2.64** | 4.96 | **0.64** |
+
+Both are now better than main on every gated number, dark lines included (`esb_row_r11.jpg`, `lever-house_row_r11.jpg`
+beside the benchmark and in the shared notes folder). The zipped scan itself took the ESB's main build to "complete"
+(no degradation) and moved main's own numbers (panes on stone 407 → 228).

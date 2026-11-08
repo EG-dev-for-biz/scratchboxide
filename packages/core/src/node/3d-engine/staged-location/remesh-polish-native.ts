@@ -251,14 +251,14 @@ export interface NativeLatticeOut {
     lattice?: {
         s: number[]; t: number[]; cells: number; measuredShare: number; depth: Float64Array; photoRecessCells?: number;
         strips: Array<[number, number, number, number]>; stripCells: number; structure?: { cells: Uint8Array; reliefM: number; reliefFrom: string; reason: string };
-        built: Uint8Array; windows: Uint8Array; cellU: number[]; cellV: number[]; positions: Float32Array; normals: Float32Array; uv: Float32Array; indices: Uint32Array;
+        built: Uint8Array; scanKept?: { cells: Uint8Array; count: number; areaM2: number; reliefM: number }; windows: Uint8Array; cellU: number[]; cellV: number[]; positions: Float32Array; normals: Float32Array; uv: Float32Array; indices: Uint32Array;
     };
     repeat?: { groups: number; windows: number; spandrels: number; texels: number; filled: number; edge: number; png: Buffer };
 }
 
 /** facade-lattice.ts's per-facade work natively: decoded, sampled from the scan (and the raw scan), latticed, rebuilt and retextured. */
 export function runNativeLattice(params: number[], opts: { photoRecess: boolean; whole: boolean }, soup: Float32Array, rawSoup: Float32Array | undefined, jobs: NativeLatticeJob[], threads: number): NativeLatticeOut[] {
-    const w = new Writer().magic('SBLF').u32(2).u32(params.length).f64s(params).u32((opts.photoRecess ? 1 : 0) | (opts.whole ? 2 : 0));
+    const w = new Writer().magic('SBLF').u32(3).u32(params.length).f64s(params).u32((opts.photoRecess ? 1 : 0) | (opts.whole ? 2 : 0));
     w.u32(soup.length).f32s(soup).u32(rawSoup ? 1 : 0).u32(rawSoup?.length ?? 0);
     if (rawSoup) w.f32s(rawSoup);
     w.u32(jobs.length);
@@ -278,10 +278,12 @@ export function runNativeLattice(params: number[], opts: { photoRecess: boolean;
         const strips = Array.from({ length: r.u32() }, () => Array.from(r.f64s(4)) as [number, number, number, number]);
         const stripCells = r.i32();
         const structure = r.u32() ? { cells: r.u8s(n), reliefM: r.f64(), reliefFrom: r.str(), reason: r.str() } : undefined;
-        const built = r.u8s(n), windows = r.u8s(n), cellU = Array.from(r.f64s(s.length)), cellV = Array.from(r.f64s(t.length));
+        const built = r.u8s(n);
+        const scanKept = r.u32() ? { cells: r.u8s(n), count: r.i32(), areaM2: r.f64(), reliefM: r.f64() } : undefined;
+        const windows = r.u8s(n), cellU = Array.from(r.f64s(s.length)), cellV = Array.from(r.f64s(t.length));
         const positions = r.f32s(r.u32()), normals = r.f32s(r.u32()), uv = r.f32s(r.u32()), indices = r.u32s(r.u32());
         const repeat = r.u32() ? { groups: r.i32(), windows: r.i32(), spandrels: r.i32(), texels: r.f64(), filled: r.f64(), edge: r.f64(), png: Buffer.from(r.u8s(r.u32())) } : undefined;
-        return { width, height, lattice: { s, t, cells, measuredShare, depth, ...(hasPhotoRecess ? { photoRecessCells } : {}), strips, stripCells, ...(structure ? { structure } : {}), built, windows, cellU, cellV, positions, normals, uv, indices }, ...(repeat ? { repeat } : {}) };
+        return { width, height, lattice: { s, t, cells, measuredShare, depth, ...(hasPhotoRecess ? { photoRecessCells } : {}), strips, stripCells, ...(structure ? { structure } : {}), built, ...(scanKept ? { scanKept } : {}), windows, cellU, cellV, positions, normals, uv, indices }, ...(repeat ? { repeat } : {}) };
     });
     r.done('lattice');
     return out;

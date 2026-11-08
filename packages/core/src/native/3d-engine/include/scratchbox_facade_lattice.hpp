@@ -37,6 +37,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <set>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -69,7 +70,10 @@ struct Params {
     /** FACADE_LATTICE_PARAMS.edgeStepM: a row's end cells where the wall turns away keep the scan. */
     double edgeStepM;
 
-    static constexpr size_t kCount = 19 + 5 + 3 + 6 + 3 + 7 + 1 + 12 + 1;
+    /** KEEP_MEASURED (facade-lattice.ts): relief the cells cannot draw keeps the scan. */
+    double keepMinReliefM, keepSubCells, keepMinSubCells, keepMinSubSamples, keepEdgeM, keepStepShare, keepMinCellM;
+
+    static constexpr size_t kCount = 19 + 5 + 3 + 6 + 3 + 7 + 1 + 12 + 1 + 7;
     static Params from(const std::vector<double>& v) {
         if (v.size() != kCount) throw std::runtime_error("the lattice takes " + std::to_string(kCount) + " parameters, got " + std::to_string(v.size()));
         Params p;
@@ -83,7 +87,8 @@ struct Params {
             &p.reachM,
             &p.viewDeg[0], &p.viewCos[0], &p.viewSin[0], &p.viewDeg[1], &p.viewCos[1], &p.viewSin[1],
             &p.viewDeg[2], &p.viewCos[2], &p.viewSin[2], &p.viewDeg[3], &p.viewCos[3], &p.viewSin[3],
-            &p.edgeStepM};
+            &p.edgeStepM,
+            &p.keepMinReliefM, &p.keepSubCells, &p.keepMinSubCells, &p.keepMinSubSamples, &p.keepEdgeM, &p.keepStepShare, &p.keepMinCellM};
         static_assert(sizeof fields / sizeof fields[0] == kCount);
         for (size_t i = 0; i < kCount; ++i) *fields[i] = v[i];
         return p;
@@ -131,6 +136,11 @@ struct LatticeResult {
     double reliefM = 0;
     std::string reliefFrom, reason;
     std::vector<uint8_t> built, windows;
+    /** Cells left to the scan for measured relief the cells cannot draw (KEEP_MEASURED). */
+    bool hasScanKept = false;
+    std::vector<uint8_t> scanKeptCells;
+    int scanKeptCount = 0;
+    double scanKeptAreaM2 = 0, scanKeptReliefM = 0;
     std::vector<double> cellU, cellV;
     std::vector<float> positions, normals, uv;
     std::vector<uint32_t> indices;
@@ -447,7 +457,10 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
     // the wall grammar's bays when it read any, else the fitted windows' own strips (an empty list is none: a wall whose
     // columns read no bay still recesses its window strips)
     const std::vector<Rect> strips = photoRecess ? ((bays && !bays->empty()) ? *bays : (!fitted.empty() ? windowStrips(fitted, P) : std::vector<Rect>{})) : std::vector<Rect>{};
-    std::vector<Rect> lines = fitted;
+    // a window inside a strip takes the strip's columns for its lattice lines (facade-lattice.ts)
+    std::vector<Rect> snapped = fitted;
+    for (auto& w : snapped) { const double cx = (w[0] + w[2]) / 2, cy = (w[1] + w[3]) / 2; for (const Rect& r : strips) if (cx >= r[0] && cx <= r[2] && cy >= r[1] && cy <= r[3]) { w[0] = r[0]; w[2] = r[2]; break; } }
+    std::vector<Rect> lines = snapped;
     lines.insert(lines.end(), strips.begin(), strips.end());
     const std::vector<double> L = luminance(img);
     std::vector<double> s, t;
@@ -512,10 +525,11 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
         if (!built[k] && finite(raw[k]) && inOutline(a, b)) built[k] = 1;
     }
     for (size_t k = 0; k < N; ++k) if (built[k] && finite(raw[k]) && raw[k] < P.minDepthM) built[k] = 0;
-    const std::vector<uint8_t> win = !fitted.empty() ? fittedCells(s, t, fitted) : windowGrid(lum, ns, nt, P);
+    const std::vector<uint8_t> win = !fitted.empty() ? fittedCells(s, t, snapped) : windowGrid(lum, ns, nt, P);
     const bool hasStrip = !strips.empty();
     const std::vector<uint8_t> strip = hasStrip ? fittedCells(s, t, strips) : std::vector<uint8_t>{};
-    // the lattice's end cells where the wall turns away (a corner, a prow): facade-lattice.ts, P.edgeStepM
+    // the lattice's end cells where the wall turns away (a corner, a prow) follow their own scan depth: facade-lattice.ts, P.edgeStepM
+    std::vector<uint8_t> endFollow(N);
     if (P.edgeStepM > 0) for (size_t b = 0; b < nt; ++b) {
         const auto isWall = [&](size_t k) { return built[k] && !win[k] && !(hasStrip && strip[k]) && finite(raw[k]); };
         std::vector<double> wall;
@@ -527,8 +541,58 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
             while (a >= 0 && a < static_cast<long>(ns) && n < 3) {
                 const size_t k = b * ns + static_cast<size_t>(a);
                 if (!built[k]) { a += dir; continue; }
-                if (isWall(k) && raw[k] < med - P.edgeStepM) { built[k] = 0; ++n; a += dir; } else break;
+                if (isWall(k) && raw[k] < med - P.edgeStepM) { endFollow[k] = 1; ++n; a += dir; } else break;
             }
+        }
+    }
+    // measured relief the cells cannot draw keeps the scan (KEEP_MEASURED): the raw scan read on a sub-grid inside each wall cell (facade-lattice.ts)
+    if (reliefSamples) {
+        const size_t G = static_cast<size_t>(P.keepSubCells);
+        std::vector<std::vector<std::vector<double>>> sub(N, std::vector<std::vector<double>>(G * G));
+        const auto& rs = *reliefSamples;
+        const double E = P.keepEdgeM;
+        for (size_t i = 0; i + 2 < rs.size(); i += 3) {
+            if (rs[i] < f.sMin + E || rs[i] > f.sMax - E || rs[i + 1] < f.tMin + E || rs[i + 1] > f.tMax - E) continue;
+            const int a = cellOf(rs[i], s), b = cellOf(rs[i + 1], t);
+            if (a < 0 || b < 0) continue;
+            const size_t k = static_cast<size_t>(b) * ns + static_cast<size_t>(a);
+            if (!built[k] || win[k] || (hasStrip && strip[k])) continue;
+            const size_t ia = std::min(G - 1, static_cast<size_t>(std::floor(((rs[i] - s[static_cast<size_t>(a)]) / (s[static_cast<size_t>(a) + 1] - s[static_cast<size_t>(a)])) * static_cast<double>(G))));
+            const size_t ib = std::min(G - 1, static_cast<size_t>(std::floor(((rs[i + 1] - t[static_cast<size_t>(b)]) / (t[static_cast<size_t>(b) + 1] - t[static_cast<size_t>(b)])) * static_cast<double>(G))));
+            sub[k][ib * G + ia].push_back(rs[i + 2]);
+        }
+        std::vector<uint8_t> keptCells(N);
+        std::vector<double> reliefs;
+        double areaM2 = 0;
+        for (size_t b = 0; b < nt; ++b) for (size_t a = 0; a < ns; ++a) {
+            const size_t k = b * ns + a;
+            if (!built[k] || win[k] || (hasStrip && strip[k]) || s[a + 1] - s[a] < P.keepMinCellM || t[b + 1] - t[b] < P.keepMinCellM) continue;
+            std::vector<std::pair<size_t, double>> at;
+            for (size_t q = 0; q < sub[k].size(); ++q) if (static_cast<double>(sub[k][q].size()) >= P.keepMinSubSamples) at.emplace_back(q, median(std::move(sub[k][q])));
+            if (static_cast<double>(at.size()) < P.keepMinSubCells) continue;
+            double hi = -1e300, lo = 1e300;
+            for (const auto& x : at) { hi = std::max(hi, x.second); lo = std::min(lo, x.second); }
+            const double relief = hi - lo;
+            if (relief < P.keepMinReliefM) continue;
+            // a step, not a slope: the sorted medians must jump by at least stepShare of the range somewhere
+            std::vector<double> sorted;
+            for (const auto& x : at) sorted.push_back(x.second);
+            std::sort(sorted.begin(), sorted.end());
+            double gap = 0;
+            for (size_t i = 1; i < sorted.size(); ++i) gap = std::max(gap, sorted[i] - sorted[i - 1]);
+            if (gap < P.keepStepShare * relief) continue;
+            // the deep and the proud sub-cells must each span two sub-columns and two sub-rows: fins or a setback edge run across
+            // the cell, while a neighbouring wall's reveal leaking in at the cell's edge fills one sub-column only
+            const auto spans = [&](bool deep) { std::set<size_t> cols, rows; for (const auto& x : at) if ((x.second < (hi + lo) / 2) == deep) { cols.insert(x.first % G); rows.insert(x.first / G); } return cols.size() >= 2 && rows.size() >= 2; };
+            if (!spans(true) || !spans(false)) continue;
+            built[k] = 0; keptCells[k] = 1; reliefs.push_back(relief); areaM2 += (s[a + 1] - s[a]) * (t[b + 1] - t[b]);
+        }
+        if (!reliefs.empty()) {
+            res.hasScanKept = true;
+            res.scanKeptCells = keptCells;
+            res.scanKeptCount = static_cast<int>(reliefs.size());
+            res.scanKeptAreaM2 = std::round(areaM2 * 10) / 10;
+            res.scanKeptReliefM = std::round(median(std::move(reliefs)) * 100) / 100;
         }
     }
     std::vector<double> depth;
@@ -588,7 +652,7 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
             for (size_t a = 0; a < ns; ++a) { const size_t k = b * ns + a; if (win[k] && built[k]) windows[k] = 1; }
             for (size_t a = 0; a < ns; ++a) {
                 const size_t k = b * ns + a;
-                if (std::isnan(stripR) || !(strip[k] || win[k])) { depth.push_back(clamp(wall)); continue; }
+                if (std::isnan(stripR) || !(strip[k] || win[k])) { depth.push_back(clamp(endFollow[k] && finite(raw[k]) ? raw[k] : wall)); continue; }
                 if (built[k]) { stripCells++; if (win[k]) photoRecessCells++; }
                 depth.push_back(clamp(win[k] ? js::min(wall - stripR - P.stripWindowInsetM, finite(raw[k]) ? raw[k] : kInf) : wall - stripR));
             }
@@ -611,7 +675,7 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
         }
         for (size_t a = 0; a < ns; ++a) {
             const size_t k = b * ns + a;
-            const double v = win[k] ? dm : lm;
+            const double v = endFollow[k] && finite(raw[k]) ? raw[k] : (win[k] ? dm : lm);
             depth.push_back(clamp(finite(v) ? v : finite(rowMed) ? rowMed : 0));
         }
         if (recessed) for (size_t k : dark) if (built[k]) photoRecessCells++;

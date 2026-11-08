@@ -225,6 +225,49 @@ describe('facades on their photo lattice', () => {
         expect(inRun(1.5 / 12, 1 - 3.0 / 9)).toBe(false);
     });
 
+    it('leaves cells to the scan where the raw scan measures relief deeper or finer than a cell can draw (a band of fins), and draws no window there', () => {
+        // the windows in the lower and upper storeys; the middle storey (t 3.6-5.4) a band of fins 0.7 m proud every 0.5 m
+        const fitted: Array<[number, number, number, number]> = [];
+        for (const s0 of [0.9, 3.9, 6.9, 9.9]) for (const t0 of [0.7, 6.7]) fitted.push([s0, t0, s0 + 1.2, t0 + 1.6]);
+        let seed = 11;
+        const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.06;
+        const soupOf = (z: (sv: number, tv: number) => number) => {
+            const out: number[] = [];
+            for (let sv = 0; sv < 12; sv += 0.125) for (let tv = 0; tv < 9; tv += 0.125) {
+                const q = (a: number, b: number) => [a, b, z(a, b) + rnd()];
+                out.push(...q(sv, tv), ...q(sv + 0.125, tv), ...q(sv + 0.125, tv + 0.125), ...q(sv, tv), ...q(sv + 0.125, tv + 0.125), ...q(sv, tv + 0.125));
+            }
+            return Float32Array.from(out);
+        };
+        const inBand = (tv: number) => tv > 3.6 && tv < 5.4;
+        const fins = soupOf((sv, tv) => (inBand(tv) ? (Math.floor(sv / 0.5) % 2 ? 0 : -0.7) : isWindow(sv, tv) && !inBand(tv) ? -0.25 : 0));
+        const r = latticeFacade(f, photo(), facadeSamples(scan(), f), undefined, undefined, true, fitted, undefined, undefined, facadeSamples(fins, f))!;
+        expect(r.scanKept).toBeDefined();
+        expect(r.scanKept!.count).toBeGreaterThan(0);
+        expect(r.scanKept!.reliefM).toBeGreaterThan(0.6);
+        const ns = r.s.length - 1;
+        let inside = 0;
+        for (let b = 0; b < r.t.length - 1; b++) for (let a = 0; a < ns; a++) {
+            const k = b * ns + a;
+            if (!r.scanKept!.cells[k]) continue;
+            // every kept cell lies in the band (a cell straddling its edge is in it too), is not built, and draws no window
+            expect(r.t[b + 1]).toBeGreaterThan(3.6 - 1e-6);
+            expect(r.t[b]).toBeLessThan(5.4 + 1e-6);
+            expect(r.built[k]).toBe(0);
+            expect(r.windows[k]).toBe(0);
+            if (r.t[b] >= 3.6 - 1e-6 && r.t[b + 1] <= 5.4 + 1e-6) inside++;
+        }
+        expect(inside).toBeGreaterThan(0);
+        expect(r.scanKept!.areaM2).toBeGreaterThan(4);
+        // the same walls without the band: nothing kept, more cells rebuilt
+        const flat = latticeFacade(f, photo(), facadeSamples(scan(), f), undefined, undefined, true, fitted, undefined, undefined, facadeSamples(soupOf((sv, tv) => (isWindow(sv, tv) ? -0.25 : 0)), f))!;
+        expect(flat.scanKept).toBeUndefined();
+        expect(flat.cells).toBeGreaterThan(r.cells);
+        // a smooth bulge of the same depth (photogrammetry on glass) slopes through every depth between: no step, nothing kept
+        const bulge = latticeFacade(f, photo(), facadeSamples(scan(), f), undefined, undefined, true, fitted, undefined, undefined, facadeSamples(soupOf((sv, tv) => (inBand(tv) ? -0.8 * Math.sin((Math.PI * (sv % 4)) / 4) ** 2 : isWindow(sv, tv) ? -0.25 : 0)), f))!;
+        expect(bulge.scanKept).toBeUndefined();
+    });
+
     it('recesses the fitted windows by a depth read from Street View when one is given, never shallower than the scan', () => {
         const fitted: Array<[number, number, number, number]> = [[0.9, 0.7, 2.1, 2.3], [3.9, 0.7, 5.1, 2.3], [6.9, 0.7, 8.1, 2.3]];
         const read = latticeFacade(f, photo(), facadeSamples(scan(), f), undefined, undefined, true, fitted, 0.5)!;
@@ -376,7 +419,7 @@ describe('facades on their photo lattice', () => {
         expect(out.tears.droppedFacades).toEqual([]);
     });
 
-    it("leaves a row's end cells to the scan where the wall turns away behind the plane (a prow, a corner), but not an end window", () => {
+    it("builds a row's end cells at their own scan depth where the wall turns away behind the plane (a prow, a corner), but not an end window", () => {
         // the wall curves inward over its last 1.5 m (s > 10.5): 0 to 1 m behind the plane; windows as in the photo
         let seed = 3;
         const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.06;
@@ -388,11 +431,10 @@ describe('facades on their photo lattice', () => {
         }
         const r = latticeFacade(f, photo(), facadeSamples(Float32Array.from(out), f))!;
         const ns = r.s.length - 1;
-        // the last column (its cell past s 10.5) is scan in every row; the first column is built; a flat wall builds the last column
-        for (let b = 0; b < r.t.length - 1; b++) { if (r.s[ns] - r.s[ns - 1] > 0.5) expect(r.built[b * ns + ns - 1]).toBe(0); expect(r.built[b * ns]).toBe(1); }
+        // the last column (its cell past s 10.5) is built, at its own scan depth, well behind the plane; the first column on it
+        for (let b = 0; b < r.t.length - 1; b++) { if (r.s[ns] - r.s[ns - 1] > 0.5) { expect(r.built[b * ns + ns - 1]).toBe(1); expect(r.depth[b][ns - 1]).toBeLessThan(-0.3); } expect(r.built[b * ns]).toBe(1); expect(Math.abs(r.depth[b][0])).toBeLessThan(0.1); }
         const flat = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
-        expect(flat.built[flat.s.length - 2]).toBe(1);
-        expect(flat.cells).toBeGreaterThan(r.cells);
+        expect(Math.abs(flat.depth[0][flat.s.length - 2])).toBeLessThan(0.1);
     });
 
     it('removes a scan sliver standing across a rebuilt cell (a reveal or a fin side), whichever way the claim faces, and leaves one outside the rebuild', () => {
