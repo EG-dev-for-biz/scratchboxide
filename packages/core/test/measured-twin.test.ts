@@ -96,6 +96,8 @@ describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K bui
         // the mast's ribs: the angular profile stacked over each step, folded by the rib count above the ring's harmonics
         expect(rep.slender.finBands).toBeGreaterThan(2);
         expect(rep.slender.fins).toBeGreaterThan(20);
+        // the mast's overhang at 388 m: the scan's texels under it are black (never photographed); it takes its wall's colour
+        expect(rep.colour.undersideFills).toBeGreaterThan(0);
         // the ESB's arches are carved ornament over flat-topped windows: the opening reader draws no shaped head there
         expect(rep.heads.drawn).toBe(0);
         // most kept boxes are punched; the rest were duplicates of overlapping photos or off every wall, and are counted

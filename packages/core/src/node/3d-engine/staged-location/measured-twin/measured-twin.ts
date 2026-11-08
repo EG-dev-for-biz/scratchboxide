@@ -255,7 +255,7 @@ export interface MeasuredTwinReport {
     scanDetail: { thresholdM: number; pieces: number; triangles: number; areaM2: number };
     relief: { thresholdM: number; wallPieces: number; wallBoxes: number; wallAreaM2: number; mastPieces: number; mastCells: number };
     windows: { given: number; placed: number; generated: number; continued: number; continueTested: number; rephased: number; wallsRephased: number; panes: number; dropped: Record<string, number> };
-    colour: { elements: number; uncoloured: number };
+    colour: { elements: number; uncoloured: number; undersideFills: number };
     slender: { fromM: number | null; slices: number; bands: number; axisFits: number; symmetry: number; finBands: number; fins: number; finSegments: number };
     heads: { types: number; windows: number; drawn: number; surfacePieces: number; surfaceQuads: number; selfWalls: number; selfWindowWalls: number; selfWindows: number; medianRiseM: number };
     topM: number; revealM: number; revealLabel: string; triangles: number; bytes: number; classUse: Record<string, number>; notes: string[];

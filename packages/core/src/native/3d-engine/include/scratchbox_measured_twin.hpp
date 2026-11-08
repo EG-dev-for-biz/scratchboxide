@@ -538,7 +538,7 @@ struct Report {
     size_t tiers{0}, wallFaces{0}, facesWithWindows{0}, wallCells{0}, roofCells{0};
     size_t windowsGiven{0}, windowsPlaced{0}, windowsGenerated{0}, windowsContinued{0}, continueTested{0}, windowsRephased{0}, wallsRephased{0}, panesPlaced{0};
     size_t droppedNoWall{0}, droppedClipped{0}, droppedOverlap{0}, droppedSmall{0}, droppedNoFrame{0};
-    size_t uncolouredElements{0}, colouredElements{0}, capsCut{0};
+    size_t uncolouredElements{0}, colouredElements{0}, capsCut{0}, undersideFills{0};
     size_t facesTextured{0}, texelsDetail{0}, paletteColours{0};
     size_t profileWalls{0}, profileLips{0}, profileParapets{0}, profileSteps{0};
     size_t roofDetailPieces{0}, roofDetailBoxes{0};
@@ -2001,7 +2001,23 @@ inline Result build(Spec S) {
                     // facing up where this band is wider, down where the next one is
                     const bool wider = (b.r1[s] + b.r1[(s + K - 1) % K]) >= (nb.r[s] + nb.r[(s + K - 1) % K]);
                     const P3 n = wider ? up : up * -1.0;
-                    if (s == 0) { bool got; capC = colourOf(i0, o0 - i0, o1 - o0, n, classColour(0), got); }
+                    if (s == 0) {
+                        bool got; capC = colourOf(i0, o0 - i0, o1 - o0, n, classColour(0), got);
+                        // an underside: the captures look down, so the scan's texels under an overhang are whatever the
+                        // mesher found (often black, never photographed). Darker than half the wall it hangs from, it takes
+                        // that wall's colour (generated, counted)
+                        if (!wider) {
+                            double ax, az; F.toXZ(au, av, ax, az);
+                            const P3 mid = (i0 + i1) * 0.5;
+                            P3 nOut{mid.x - ax, 0, mid.z - az}; nOut = nOut * (1.0 / std::max(1e-9, sp::len(nOut)));
+                            const double hTop = std::min(nb.z1, b.z1 + 3.0);
+                            const P3 w0 = ringPt(nb, s, b.z1), w1 = ringPt(nb, s + 1, b.z1);
+                            Rgb wallC;
+                            auto lum = [](const Rgb& c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b; };
+                            if (hTop > b.z1 + 0.05 && patchColour(ph, w0 + nOut * 0.05, w1 - w0, P3{0, hTop - b.z1, 0}, nOut, S.P.sampleRadiusM, wallC)
+                                && lum(capC) < 0.5 * lum(wallC)) { capC = wallC; ++rep.undersideFills; }
+                        }
+                    }
                     if (wider) E.quad(slender, E.classOf(capC), o0, i0, i1, o1, n, capC, P3{1, 0, 0}, P3{0, 0, 1});
                     else E.quad(slender, E.classOf(capC), o0, o1, i1, i0, n, capC, P3{1, 0, 0}, P3{0, 0, 1});
                 }
@@ -2681,7 +2697,7 @@ inline std::string reportJson(const Report& r, const Spec& S, size_t triangles, 
       << ",\"wallCells\":" << r.wallCells << ",\"roofCells\":" << r.roofCells << ",\"capsCut\":" << r.capsCut << ",\"detail\":{\"faces\":" << r.facesTextured << ",\"texels\":" << r.texelsDetail << ",\"atlas\":[" << r.atlasW << "," << r.atlasH << "],\"texelM\":" << detail::num(r.detailTexelM) << ",\"paletteColours\":" << r.paletteColours << "}" << ",\"profiles\":{\"walls\":" << r.profileWalls << ",\"lips\":" << r.profileLips << ",\"parapets\":" << r.profileParapets << ",\"steps\":" << r.profileSteps << ",\"medianOutM\":" << detail::num(r.profileMedianOutM) << ",\"medianParapetM\":" << detail::num(r.profileMedianParapetM) << "}" << ",\"roofDetail\":{\"pieces\":" << r.roofDetailPieces << ",\"boxes\":" << r.roofDetailBoxes << ",\"areaM2\":" << detail::num(r.roofDetailAreaM2) << ",\"medianM\":" << detail::num(r.roofDetailMedianM) << "}" << ",\"scanDetail\":{\"thresholdM\":" << detail::num(S.P.scanDetailM) << ",\"pieces\":" << r.scanDetailPieces << ",\"triangles\":" << r.scanDetailTriangles << ",\"areaM2\":" << detail::num(r.scanDetailAreaM2) << "}" << ",\"relief\":{\"thresholdM\":" << detail::num(S.P.reliefM) << ",\"wallPieces\":" << r.reliefWallPieces << ",\"wallBoxes\":" << r.reliefWallBoxes << ",\"wallAreaM2\":" << detail::num(r.reliefWallAreaM2) << ",\"mastPieces\":" << r.reliefMastPieces << ",\"mastCells\":" << r.reliefMastCells << "}" 
       << ",\"windows\":{\"given\":" << r.windowsGiven << ",\"placed\":" << r.windowsPlaced << ",\"generated\":" << r.windowsGenerated << ",\"continued\":" << r.windowsContinued << ",\"rephased\":" << r.windowsRephased << ",\"wallsRephased\":" << r.wallsRephased << ",\"continueTested\":" << r.continueTested << ",\"panes\":" << r.panesPlaced
       << ",\"dropped\":{\"noWall\":" << r.droppedNoWall << ",\"clipped\":" << r.droppedClipped << ",\"overlap\":" << r.droppedOverlap << ",\"small\":" << r.droppedSmall << ",\"noFrame\":" << r.droppedNoFrame << "}}"
-      << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << "}"
+      << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << ",\"undersideFills\":" << r.undersideFills << "}"
       << ",\"slender\":{\"fromM\":" << detail::num(r.slenderFromM) << ",\"slices\":" << r.slenderSlices << ",\"bands\":" << r.slenderBands << ",\"axisFits\":" << r.slenderAxisFits << ",\"symmetry\":" << r.slenderSymmetry << ",\"finBands\":" << r.finBands << ",\"fins\":" << r.finCount << ",\"finSegments\":" << r.finSegments << "}" << ",\"heads\":{\"types\":" << r.headTypes << ",\"windows\":" << r.headWindows << ",\"drawn\":" << r.headsDrawn << ",\"surfacePieces\":" << r.surfacePieces << ",\"surfaceQuads\":" << r.surfaceQuads << ",\"selfWalls\":" << r.selfWalls << ",\"selfWindowWalls\":" << r.selfWindowWalls << ",\"selfWindows\":" << r.selfWindows << ",\"medianRiseM\":" << detail::num([&] { auto v = r.headRises; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
       << ",\"topM\":" << detail::num(r.topM) << ",\"revealM\":" << detail::num(S.revealM) << ",\"revealLabel\":\"" << detail::esc(S.revealLabel) << "\""
       << ",\"triangles\":" << triangles << ",\"bytes\":" << bytes << ",\"classUse\":{";
