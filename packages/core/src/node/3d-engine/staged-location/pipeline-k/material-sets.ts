@@ -320,7 +320,12 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         const nothingOfItsKind = !!words[k] && words[k]!.sets.length === 0;
         const size = hit.entry.realSizeM!;
         const fit = fitOf(k, hit);
-        const drawn = finishMaps(filterOrm(decodeImageInMemory(maps.orm), size), filterNormal(decodeImageInMemory(maps.normal), size), df.finish, nothingOfItsKind ? 0 : grainOf(pick) * fit.grain);
+        // the roughness pattern held to the photo's tone deviation at the facade texel (finishMaps RoughnessHold): the
+        // square root of the photo's relative energy on its finest band, over the tile's size in facade texels
+        const pt = classes[k].photoTexture;
+        const e0 = pt?.energy.find(v => Number.isFinite(v));
+        const hold = pt && e0 !== undefined && pt.texelM > 0 ? { maxRelStd: Math.sqrt(Math.max(0, e0)), texels: [Math.max(2, Math.round(size[0] / pt.texelM)), Math.max(2, Math.round(size[1] / pt.texelM))] as [number, number] } : undefined;
+        const drawn = finishMaps(filterOrm(decodeImageInMemory(maps.orm), size), filterNormal(decodeImageInMemory(maps.normal), size), df.finish, nothingOfItsKind ? 0 : grainOf(pick) * fit.grain, undefined, hold);
         // its height at its real depth, by the share of the normal relief drawn (material-height.ts)
         const hp = heightPreviews.get(hit.entry.id);
         const height = hp && hit.entry.heightDepthM && !nothingOfItsKind ? heightRecessMap(filterHeight(hp, size), hit.entry.heightDepthM, drawn.drawn?.relief ?? 1, hit.entry.heightDepthSource ?? 'unknown') : undefined;
