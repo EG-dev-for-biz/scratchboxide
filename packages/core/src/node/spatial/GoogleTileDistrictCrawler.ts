@@ -70,6 +70,8 @@ export interface ParsedLeafTile {
     leafId?: string;
     /** The geometric error the tileset states for that leaf (LeafTileRef.geometricError), when the caller passed it; written into the node's extras. */
     geometricErrorM?: number;
+    /** That leaf's bounding box (LeafTileRef.box: ECEF centre and three half-axes), when the caller passed it; written into the node's extras. */
+    box?: number[];
 }
 
 export interface DistrictGlbResult {
@@ -477,7 +479,7 @@ export class GoogleTileDistrictCrawler {
     }
 
     /** Parses every triangle primitive of a leaf GLB. */
-    static parseLeafGlbPrimitives(glb: Buffer, leafId?: string, geometricErrorM?: number): ParsedLeafTile[] {
+    static parseLeafGlbPrimitives(glb: Buffer, leafId?: string, geometricErrorM?: number, box?: number[]): ParsedLeafTile[] {
         if (glb.toString('utf8', 0, 4) !== 'glTF' || glb.readUInt32LE(4) !== 2) throw new Error('Not a glTF 2.0 binary');
         let offset = 12;
         let json: any = null;
@@ -544,7 +546,7 @@ export class GoogleTileDistrictCrawler {
                     const indices = prim.indices !== undefined
                         ? readIndices(prim.indices)
                         : Uint32Array.from({ length: positions.length / 3 }, (_, i) => i);
-                    out.push({ positions, uvs, indices, worldMatrix: world, image: readImage(prim.material), copyright, ...(leafId ? { leafId } : {}), ...(Number.isFinite(geometricErrorM) ? { geometricErrorM } : {}) });
+                    out.push({ positions, uvs, indices, worldMatrix: world, image: readImage(prim.material), copyright, ...(leafId ? { leafId } : {}), ...(Number.isFinite(geometricErrorM) ? { geometricErrorM } : {}), ...(box && box.length >= 12 ? { box: box.slice(0, 12) } : {}) });
                 }
             }
             for (const child of node.children ?? []) walk(child, world);
@@ -796,7 +798,7 @@ export class GoogleTileDistrictCrawler {
                     revealKind: 'appear',
                     reveal: { attribute: null, displacement: null, durationShare: 1 / Math.max(1, leaves.length) },
                     ids: leaf.leafId ? { leafId: leaf.leafId } : {},
-                    ...(leaf.geometricErrorM !== undefined ? { tile: { geometricErrorM: leaf.geometricErrorM } } : {}),
+                    ...(leaf.geometricErrorM !== undefined || leaf.box ? { tile: { ...(leaf.geometricErrorM !== undefined ? { geometricErrorM: leaf.geometricErrorM } : {}), ...(leaf.box ? { box: leaf.box } : {}) } } : {}),
                     counts: { vertices: pos.length / 3, triangles: Math.floor(idx.length / 3) }
                 }
             };

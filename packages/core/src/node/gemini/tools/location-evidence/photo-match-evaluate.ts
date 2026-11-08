@@ -538,12 +538,12 @@ class BuildResolver {
      * names them (its tile seam step). Undefined without the note or the files.
      */
     weldedTiles(rec: RunRecordLike): { dir: string; value: TilesValue } | undefined {
-        const note = this.cache.readRunNote<{ version?: string; raw?: string; tJunctions?: unknown; overlapTrim?: unknown; adaptive?: unknown }>(rec.runId, 'tile_seams');
+        const note = this.cache.readRunNote<{ version?: string; raw?: string; tJunctions?: unknown; overlapTrim?: unknown; adaptive?: unknown; tone?: unknown; capTrim?: unknown; rimZip?: unknown }>(rec.runId, 'tile_seams');
         if (!note?.raw || !note.version) return undefined;
         const dir = path.dirname(note.raw);
         let raw: TilesValue | undefined;
         try { raw = (JSON.parse(fs.readFileSync(path.join(dir, 'done.json'), 'utf8')) as { value?: TilesValue }).value; } catch { return undefined; }
-        const tag = `${note.version.replace(/\W/g, '_')}${note.tJunctions ? '' : '_notj'}${note.overlapTrim ? '' : '_noov'}${note.adaptive && typeof note.adaptive === 'object' ? '_ad' : ''}`;
+        const tag = `${note.version.replace(/\W/g, '_')}${note.tJunctions ? '' : '_notj'}${note.overlapTrim ? '' : '_noov'}${note.adaptive && typeof note.adaptive === 'object' ? '_ad' : ''}${note.tone && typeof note.tone === 'object' ? '_tone' : ''}`;
         const value = raw && { ...raw, texturedGlb: `textured_${tag}.glb`, geometryGlb: `geometry_${tag}.glb` };
         return value && fs.existsSync(path.join(dir, value.texturedGlb)) && fs.existsSync(path.join(dir, value.geometryGlb)) ? { dir, value } : undefined;
     }
