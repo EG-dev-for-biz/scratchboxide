@@ -1,0 +1,112 @@
+/********************************************************************************
+ * Copyright (C) 2026 Scratchbox LLC. All rights reserved.
+ *
+ * This software and associated documentation files are proprietary and confidential
+ * to Scratchbox LLC. Unauthorized copying, modification, distribution, or use
+ * of this file, via any medium, is strictly prohibited without explicit written
+ * permission from Scratchbox LLC.
+ ********************************************************************************/
+
+import { describe, expect, it } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { buildMeasuredTwin, GENERATED_REVEAL_M, measuredTwinSpec, rebasePath, type KRunRecords } from '../src/node/3d-engine/staged-location/measured-twin/measured-twin';
+import { parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
+import { fileReadingStore } from '../src/node/3d-engine/staged-location/pipeline-k/model-readings';
+
+const frame = (id: number, w: number, h: number) => ({ facadeId: id, centroid: [0, 50, 0] as [number, number, number], normal: [0, 0, 1] as [number, number, number], axisS: [1, 0, 0] as [number, number, number], axisT: [0, 1, 0] as [number, number, number], orthoSMin: -10, orthoTMax: 50, pixel: 0.1, width: w, height: h });
+
+function records(): KRunRecords {
+    return {
+        runDir: '/runs/x', orthosDir: '/o', isolate: '/o/clay.glb', textured: '/o/textured.glb', groundY: 0.25,
+        loops: [[[0, 0], [10, 0], [10, 10], [0, 10]]],
+        planes: [frame(1, 200, 1000), frame(2, 50, 50)],
+        windowFit: [
+            { facadeId: 1, width: 200, height: 1000, rects: [[10, 10, 20, 30], [30, 10, 40, 30]], panes: [[10, 10, 20, 30]], generated: [[30, 10, 40, 30]] },
+            { facadeId: 2, width: 60, height: 50, rects: [[1, 1, 5, 5]] },
+            { facadeId: 3, rects: [[1, 1, 5, 5]] }
+        ],
+        classes: [{ index: 0, meanLab: [70, 3, 6], set: 'Tiles039', finish: { roughness: 0.6, metallic: 0, drawn: { roughness: 0.55, metallic: 0 } } }, { index: 1, meanLab: [40, 1, 1], openings: true }],
+        reveal: { depthM: GENERATED_REVEAL_M, label: 'generated', source: 'no reading' }
+    };
+}
+
+describe('measuredTwinSpec', () => {
+    const spec = measuredTwinSpec(records(), { glb: '/out/t.glb', report: '/out/r.json' }, [{ normal: '/m/n.png', orm: '/m/o.png', tileM: 1.8 }, undefined]);
+    const lines = spec.trim().split('\n');
+    it('carries every kept window box, flagging the ones the window fit generated', () => {
+        expect(lines.filter(l => l.startsWith('win 1 '))).toEqual(['win 1 10 10 20 30 0', 'win 1 30 10 40 30 1']);
+        expect(lines.filter(l => l.startsWith('pane 1 '))).toEqual(['pane 1 10 10 20 30 0']);
+    });
+    it('leaves out boxes whose plane photo is not the one framed, or has no frame', () => {
+        expect(lines.some(l => l.startsWith('win 2 '))).toBe(false);
+        expect(lines.some(l => l.startsWith('win 3 '))).toBe(false);
+    });
+    it('writes the classes with their drawn finish, maps and tile size, the reveal with its label, and the footprint', () => {
+        expect(lines).toContain('class Tiles039 70 3 6 0.55 0 1.8 0');
+        expect(lines).toContain('class class1 40 1 1 0.8 0 2 1');
+        expect(lines).toContain('classnormal 0 /m/n.png');
+        expect(lines).toContain('classorm 0 /m/o.png');
+        expect(lines).toContain(`reveal ${GENERATED_REVEAL_M} generated no reading`);
+        expect(lines).toContain('footprint 4 0 0 10 0 10 10 0 10');
+        expect(lines).toContain('plane 1 0 50 0 1 0 0 0 1 0 0 0 1 -10 50 0.1 200 1000');
+    });
+});
+
+describe('rebasePath', () => {
+    it('finds a recorded path under another cache root by its cache folders', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mtwin-'));
+        const f = path.join(root, 'tile_refine', 'abc', 'clay.glb');
+        fs.mkdirSync(path.dirname(f), { recursive: true });
+        fs.writeFileSync(f, 'x');
+        expect(rebasePath('/elsewhere/.scratchbox/cache/tile_refine/abc/clay.glb', root)).toBe(f);
+        expect(rebasePath('/elsewhere/missing.glb', root)).toBe('/elsewhere/missing.glb');
+    });
+});
+
+// A finished pipeline K build of the Empire State Building, kept from the 2026-11-07 window-array benchmark (main at b2a41010).
+const BENCH = process.env.SCRATCHBOX_MEASURED_TWIN_BENCH || '/Volumes/3DTESTING/scratchbox-ide/benchmarks/2026-11-07-window-array-main';
+const CACHE = path.join(BENCH, 'main-b2a41010-ownreadings', 'esb', 'cache');
+const RUN = path.join(CACHE, 'staged_location', 'runs', '493d1ee7');
+
+describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K build (ESB)', () => {
+    it('generates the building from its records: tiers, a revolved top, the kept windows, photo colours, provenance per node', async () => {
+        const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtwin-esb-'));
+        const r = await buildMeasuredTwin({ runDir: RUN, cacheRoot: CACHE, outDir, store: fileReadingStore(path.join(BENCH, 'model_readings', 'main-own')) });
+        const rep = r.report;
+        // the setbacks are tiers; the mast above the 86th-floor block is one slender revolved top to the antenna tip (443 m above the street)
+        expect(rep.tiers).toBeGreaterThanOrEqual(10);
+        expect(rep.slender.fromM).toBeGreaterThan(315);
+        expect(rep.slender.fromM).toBeLessThan(340);
+        expect(rep.topM).toBeGreaterThan(430);
+        // most kept boxes are punched; the rest were duplicates of overlapping photos or off every wall, and are counted
+        expect(rep.windows.given).toBeGreaterThan(7000);
+        expect(rep.windows.placed).toBeGreaterThan(5000);
+        const d = rep.windows.dropped;
+        expect(rep.windows.placed + d.noWall + d.clipped + d.overlap + d.small + d.noFrame).toBe(rep.windows.given + rep.windows.continued);
+        // the reading that put neighbouring columns half a storey apart is put back on its walls' rhythm
+        expect(rep.windows.rephased).toBeGreaterThan(100);
+        expect(rep.windows.generated).toBeGreaterThanOrEqual(rep.windows.rephased + rep.windows.continued);
+        // colour comes from the photo for most elements
+        expect(rep.colour.elements).toBeGreaterThan(3 * rep.colour.uncoloured);
+        expect(rep.revealLabel).toBe('generated');
+        expect(r.mapsMissing).toEqual([]);
+        // the GLB: three provenance-labelled nodes, colours per vertex, library maps embedded
+        const glb = parseGlbBytes(new Uint8Array(fs.readFileSync(r.glb)));
+        const json = glb.json as { nodes: Array<{ name: string; extras?: { sb?: { provenance?: string; depthProvenance?: string } }; mesh: number }>; meshes: Array<{ primitives: Array<{ attributes: Record<string, number>; indices: number }> }>; images?: unknown[] };
+        expect(json.nodes.map(n => n.name)).toEqual(['massing', 'openings', 'slender_top']);
+        expect(json.nodes.map(n => n.extras?.sb?.provenance)).toEqual(['measured', 'photo-inferred', 'measured']);
+        expect(json.nodes[1].extras?.sb?.depthProvenance).toBe('generated');
+        expect((json.images ?? []).length).toBeGreaterThanOrEqual(8);
+        let tris = 0;
+        for (const m of json.meshes) for (const p of m.primitives) {
+            const col = readAccessor(glb, p.attributes.COLOR_0);
+            expect(col.comps).toBe(3);
+            expect(Math.max(...Array.from(col.data.slice(0, 3000)))).toBeLessThanOrEqual(1);
+            tris += readAccessor(glb, p.indices).count / 3;
+        }
+        expect(tris).toBe(rep.triangles);
+        expect(tris).toBeLessThan(400_000);
+    }, 600_000);
+});
