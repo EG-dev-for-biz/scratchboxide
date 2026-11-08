@@ -14,6 +14,7 @@ import * as path from 'path';
 import { buildMeasuredTwin, GENERATED_REVEAL_M, measuredTwinSpec, rebasePath, type KRunRecords } from '../src/node/3d-engine/staged-location/measured-twin/measured-twin';
 import { parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { fileReadingStore } from '../src/node/3d-engine/staged-location/pipeline-k/model-readings';
+import { enuOffset } from '../src/node/3d-engine/staged-location/measured-twin/infer';
 
 const frame = (id: number, w: number, h: number) => ({ facadeId: id, centroid: [0, 50, 0] as [number, number, number], normal: [0, 0, 1] as [number, number, number], axisS: [1, 0, 0] as [number, number, number], axisT: [0, 1, 0] as [number, number, number], orthoSMin: -10, orthoTMax: 50, pixel: 0.1, width: w, height: h });
 
@@ -184,4 +185,37 @@ describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K bui
         expect(rep.heads.selfWindows).toBeGreaterThan(500);
         expect(rep.detail.faces).toBeGreaterThan(50);
     }, 600_000);
+
+    it('infers a second pass from its own wall photos with no model: window arrays, congruent copies, piers, round thin sections', async () => {
+        const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtwin-esb-infer-'));
+        const r = await buildMeasuredTwin({ runDir: RUN, cacheRoot: CACHE, outDir, options: { infer: true } });
+        const i = r.infer!;
+        // the first pass wrote each wall's photo as an orthos folder in K's frame
+        const facades = JSON.parse(fs.readFileSync(path.join(outDir, 'self_orthos', 'facades.json'), 'utf8')) as { facades: Array<{ facadeId: number; image: string; width: number; height: number }> };
+        expect(facades.facades.length).toBeGreaterThan(50);
+        const png = fs.readFileSync(path.join(outDir, 'self_orthos', facades.facades[0].image));
+        expect(png.readUInt32BE(16)).toBe(facades.facades[0].width);
+        // no model: the steps that need one say so, the rest ran on the photos and the scan
+        expect(i.system).toEqual({ reason: 'no vision model' });
+        expect(i.relief).toEqual({ reason: 'no image model' });
+        expect(i.windows.arrayed).toBeGreaterThan(1000);
+        expect(i.windows.copied).toBeGreaterThan(0);
+        const spec = fs.readFileSync(r.specFile, 'utf8').split('\n');
+        expect(spec).toContain('param piers 1');
+        expect(spec.filter(l => l.startsWith('plane ')).length).toBe(facades.facades.length);
+        expect(r.report.windows.placed).toBeGreaterThan(2000);
+        expect(r.report.piers!.walls).toBeGreaterThan(10);
+        expect(r.report.piers!.turnedBands).toBeGreaterThan(0);
+        expect(r.report.detail.faces).toBeGreaterThan(100);
+    }, 600_000);
+});
+
+describe('enuOffset', () => {
+    it('measures east, up and south between two places', () => {
+        // 0.0001 degrees of latitude north at 40.75 N is about 11.1 m; of longitude east about 8.4 m
+        const o = enuOffset({ lat: 40.748545, lng: -73.985763, h: -18.66 }, { lat: 40.7484405, lng: -73.9856644, h: -30 });
+        expect(o[0]).toBeCloseTo(8.33, 1);
+        expect(o[1]).toBeCloseTo(-11.34, 2);
+        expect(o[2]).toBeCloseTo(11.6, 1);
+    });
 });

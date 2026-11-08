@@ -165,6 +165,11 @@ struct Params {
     double reliefMinArea{0.5};         // ... in connected pieces of at least this much area (m^2)
     double reliefMaxArea{20};
     int surfaceFit{0};                 // ... irregular leftovers rebuilt as a fitted closed surface (with the relief maps; opt-in: on the ESB its thin open pieces fit worse than blocks)          // ... and at most this (a larger piece on a wall is the wall standing off the squared outline, not a detail)
+    double turnedBelowM{0};            // slender-top sections thinner than this (mean radius) drawn as exact circles
+    int piers{0};                      // window columns (three or more windows sharing their sides) recessed between proud piers
+    double pierDefaultM{0.10};         // ... by this when the scan resolves no step between pier and column (generated)
+    double pierMinM{0.05};             // ... the scan's step read as the depth when at least this
+    double pierMaxM{0.6};              // ... and at most this
     double roofDetailEdgeM{1.2};       // ... within this of a tier's outline (the parapets' band, drawn by the ledge profiles) only above 2.5 m       // how much of an element's own colour is baked over the median (1: all of it, 0: none)
 };
 
@@ -181,6 +186,11 @@ struct Spec {
     std::vector<PlaneFrame> planes;
     std::map<int, std::vector<PixRect>> windows, panes;
     std::map<int, std::string> planeImage, planeMask;  // a plane photo (its frame's pixels) and its uncovered mask
+    std::string exportDir;                              // selfRead: each wall's own photo written here as an orthos folder (facades.json)
+    struct BaseImage { std::string png; double pixel{0.05}, topM{0}; };
+    std::map<int, BaseImage> planeBase;                 // a plane's base band (Street View, its frame's s and t at this pixel, up to topM above ground)
+    struct HeightImage { std::string png; double depthM{0.05}; };
+    std::map<int, HeightImage> planeHeight;             // a plane's relief (height map in its photo's pixels, white = proud, at most depthM)
 };
 
 inline std::string restOfLine(std::istringstream& ls) {
@@ -233,6 +243,8 @@ inline Spec parseSpec(std::istream& in) {
             else if (name == "roofDetailMinArea") P.roofDetailMinArea = v; else if (name == "roofDetailStepM") P.roofDetailStepM = v; else if (name == "roofDetailEdgeM") P.roofDetailEdgeM = v;
             else if (name == "profileCoverage") P.profileCoverage = v; else if (name == "profileDensity") P.profileDensity = v;
             else if (name == "continueMinWindows") P.continueMinWindows = static_cast<int>(v); else if (name == "continueMaxDeltaE") P.continueMaxDeltaE = v;
+            else if (name == "turnedBelowM") P.turnedBelowM = v;
+            else if (name == "piers") P.piers = static_cast<int>(v); else if (name == "pierDefaultM") P.pierDefaultM = v; else if (name == "pierMinM") P.pierMinM = v; else if (name == "pierMaxM") P.pierMaxM = v;
             else if (name == "fillGapM") P.fillGapM = v; else if (name == "fillReachM") P.fillReachM = v; else if (name == "snapAlongM") P.snapAlongM = v; else if (name == "snapUpM") P.snapUpM = v;
             else throw std::runtime_error("unknown param " + name);
         }
@@ -253,6 +265,9 @@ inline Spec parseSpec(std::istream& in) {
         }
         else if (k == "planeimage") { int id; ls >> id; S.planeImage[id] = restOfLine(ls); }
         else if (k == "planemask") { int id; ls >> id; S.planeMask[id] = restOfLine(ls); }
+        else if (k == "exportdir") S.exportDir = restOfLine(ls);
+        else if (k == "planebase") { int id; Spec::BaseImage b; ls >> id >> b.pixel >> b.topM; b.png = restOfLine(ls); S.planeBase[id] = b; }
+        else if (k == "planeheight") { int id; Spec::HeightImage h; ls >> id >> h.depthM; h.png = restOfLine(ls); S.planeHeight[id] = h; }
         else if (k == "win" || k == "pane") {
             int id; PixRect r; int gen = 0;
             ls >> id >> r.x0 >> r.y0 >> r.x1 >> r.y1 >> gen;
@@ -539,6 +554,8 @@ struct Report {
     size_t windowsGiven{0}, windowsPlaced{0}, windowsGenerated{0}, windowsContinued{0}, continueTested{0}, windowsRephased{0}, wallsRephased{0}, panesPlaced{0};
     size_t droppedNoWall{0}, droppedClipped{0}, droppedOverlap{0}, droppedSmall{0}, droppedNoFrame{0};
     size_t uncolouredElements{0}, colouredElements{0}, capsCut{0}, undersideFills{0};
+    size_t pierWalls{0}, pierWallsMeasured{0}, pierStrips{0}, baseFaces{0}, baseTexels{0}, reliefFaces{0}, reliefTexels{0}, turnedBands{0};
+    std::vector<double> pierDepths;
     size_t facesTextured{0}, texelsDetail{0}, paletteColours{0};
     size_t profileWalls{0}, profileLips{0}, profileParapets{0}, profileSteps{0};
     size_t roofDetailPieces{0}, roofDetailBoxes{0};
@@ -610,7 +627,7 @@ inline std::vector<R2> subtractHoles(const R2& box, const std::vector<R2>& holes
 // The build
 // =============================================================================================
 
-struct Result { std::vector<OutNode> nodes; Report report; sp::Frame frame; texture::ImageBuffer atlas; };
+struct Result { std::vector<OutNode> nodes; Report report; sp::Frame frame; texture::ImageBuffer atlas, normalAtlas; };
 
 /** A wall face: from p0 along d (unit, horizontal) for L metres, between heights h0 and h1 above the street, facing n. */
 struct WallFace { P3 p0, d, n; double L, h0, h1; int tier; bool cvx0{true}, cvx1{true}; };  // cvx: the corner at the start / end is convex
@@ -995,6 +1012,7 @@ inline Result build(Spec S) {
     // wall's detail texture, read from this photo.
     struct SelfImg { int w{0}, h{0}; double pitch{0}; std::vector<float> rgb; };
     std::vector<SelfImg> selfImg(faces.size());
+    std::vector<std::string> exported;
     if (S.P.selfRead && ph.ok) {
         const double t = S.P.selfTexelM;
         for (size_t fi = 0; fi < faces.size(); ++fi) {
@@ -1015,6 +1033,31 @@ inline Result build(Spec S) {
             }
             if (got * 2 < L.size()) continue;
             ++rep.selfWalls;
+            if (!S.exportDir.empty()) {
+                // the wall's own photo as an orthos plane (pipeline K's facades.json frame): id 1000 + face, s along the wall
+                // from its middle, t up from its middle, row 0 at its top; untouched texels grey and in the uncovered mask
+                texture::ImageBuffer img(I.w, I.h, 3, 128), unc(I.w, I.h, 1, 0);
+                auto enc = [](float v) { const double c = std::clamp(static_cast<double>(v), 0.0, 1.0); return static_cast<uint8_t>(std::lround(255 * (c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1 / 2.4) - 0.055))); };
+                for (int j = 0; j < I.h; ++j) for (int i = 0; i < I.w; ++i) {
+                    const size_t o = static_cast<size_t>(j) * I.w + i;
+                    if (I.rgb[o * 3] < 0) { unc.data[unc.getIndex(i, j)] = 255; continue; }
+                    const size_t q = img.getIndex(i, j);
+                    img.data[q] = enc(I.rgb[o * 3]); img.data[q + 1] = enc(I.rgb[o * 3 + 1]); img.data[q + 2] = enc(I.rgb[o * 3 + 2]);
+                    if (img.data[q] == 128 && img.data[q + 1] == 128 && img.data[q + 2] == 128) img.data[q + 2] = 129;  // never the grey that reads as uncovered
+                }
+                const std::string name = "face_" + std::to_string(1000 + fi);
+                auto put = [&](const std::string& f, const texture::ImageBuffer& b) { const auto bytes = png::encode(b, 6); std::ofstream o(S.exportDir + "/" + f, std::ios::binary); o.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size())); };
+                put(name + ".png", img); put(name + "_uncovered.png", unc);
+                const double H = w.h1 - w.h0;
+                const P3 c{w.p0.x + w.d.x * w.L / 2, S.groundY + (w.h0 + w.h1) / 2, w.p0.z + w.d.z * w.L / 2};
+                std::ostringstream e;
+                e << "{\"facadeId\":" << 1000 + fi << ",\"kind\":\"wall\",\"image\":\"" << name << ".png\",\"uncoveredMask\":\"" << name << "_uncovered.png\",\"width\":" << I.w << ",\"height\":" << I.h
+                  << ",\"pixel\":" << detail::num(t) << ",\"coverage\":" << detail::num(static_cast<double>(got) / L.size())
+                  << ",\"centroid\":[" << detail::num(c.x) << "," << detail::num(c.y) << "," << detail::num(c.z) << "],\"normal\":[" << detail::num(w.n.x) << ",0," << detail::num(w.n.z) << "],\"axisS\":[" << detail::num(w.d.x) << ",0," << detail::num(w.d.z) << "],\"axisT\":[0,1,0]"
+                  << ",\"orthoSMin\":" << detail::num(-w.L / 2) << ",\"orthoTMax\":" << detail::num(H / 2) << ",\"tMin\":" << detail::num(-H / 2) << ",\"tMax\":" << detail::num(H / 2) << ",\"tier\":" << w.tier
+                  << ",\"lengthM\":" << detail::num(w.L) << ",\"h0\":" << detail::num(w.h0) << ",\"h1\":" << detail::num(w.h1) << "}";
+                exported.push_back(e.str());
+            }
             auto corr = [&](int dx, int dy) {
                 double sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0; size_t n = 0;
                 for (int j = 0; j + dy < I.h; j += 2) for (int i = 0; i + dx < I.w; i += 2) {
@@ -1078,6 +1121,13 @@ inline Result build(Spec S) {
             if (placed) { ++rep.selfWindowWalls; rep.selfWindows += placed; rep.windowsPlaced += placed; rep.windowsGiven += placed; }
             selfImg[fi] = std::move(I);
         }
+    }
+
+    if (!S.exportDir.empty()) {
+        std::ofstream o(S.exportDir + "/facades.json");
+        o << "{\"groundY\":" << detail::num(S.groundY) << ",\"facades\":[";
+        for (size_t i = 0; i < exported.size(); ++i) o << (i ? "," : "") << exported[i];
+        o << "]}";
     }
 
     // --- one storey phase per wall: the windows' bottoms taken modulo the wall's storey pitch fall in phase groups; when
@@ -1213,7 +1263,10 @@ inline Result build(Spec S) {
     }
 
     // --- detail textures: a wall with windows from a photographed plane and a storey pitch gets one (FaceTex)
-    std::vector<FaceTex> faceTex(faces.size());
+    const size_t NF = faces.size();
+    std::vector<FaceTex> faceTex(2 * NF);  // the walls' textures, then their base bands' (Street View, planebase)
+    std::vector<double> baseTopM(NF, 0);
+    std::vector<int> basePlane(NF, -1);
     std::vector<double> facePitch(faces.size(), 0);
     int facesUsedH = 0;
     std::vector<int> facePlane(faces.size(), -1);
@@ -1237,8 +1290,44 @@ inline Result build(Spec S) {
             facePitch[fi] = steps[steps.size() / 2];
             facePlane[fi] = best;
         }
+        // a wall with too few windows to read its own storey: the photographed plane standing on it (facing its way, on its
+        // line, over its heights), at the building's storey (the walls' median)
+        {
+            std::vector<double> ps; for (double p : facePitch) if (p > 0) ps.push_back(p);
+            if (!ps.empty() && !S.P.selfRead) {
+                std::nth_element(ps.begin(), ps.begin() + ps.size() / 2, ps.end());
+                const double storey = ps[ps.size() / 2];
+                for (size_t fi = 0; fi < faces.size(); ++fi) {
+                    if (facePlane[fi] != -1) continue;
+                    const auto& w = faces[fi];
+                    for (const auto& [id, fp] : frames) {
+                        const PlaneFrame& f = *fp;
+                        const P3 fn = f.n * (1.0 / std::max(1e-9, sp::len(f.n)));
+                        if (sp::dot(fn, w.n) < 0.99 || std::abs(sp::dot(f.c - w.p0, w.n)) > 0.2 || std::abs(f.c.y - (S.groundY + (w.h0 + w.h1) / 2)) > 0.5) continue;
+                        const double a = sp::dot(f.c - w.p0, w.d);
+                        if (a < 0 || a > w.L || !photoOf(id).ok) continue;
+                        facePlane[fi] = id; facePitch[fi] = storey; break;
+                    }
+                }
+            }
+        }
         // the texel: enlarged until every textured wall fits the atlas (shelves, tallest first), half of it at most: the
         // other half holds the palette of every other element's colour
+        // each wall's base band: its own plane's (the plane standing on it: facing its way, on its line, over its heights)
+        for (size_t fi = 0; fi < NF && !S.planeBase.empty(); ++fi) {
+            if (S.planeBase.count(facePlane[fi])) { basePlane[fi] = facePlane[fi]; continue; }
+            const auto& w = faces[fi];
+            for (const auto& [id, b] : S.planeBase) {
+                auto fit = frames.find(id);
+                if (fit == frames.end()) continue;
+                const PlaneFrame& f = *fit->second;
+                const P3 fn = f.n * (1.0 / std::max(1e-9, sp::len(f.n)));
+                if (sp::dot(fn, w.n) < 0.99 || std::abs(sp::dot(f.c - w.p0, w.n)) > 0.2 || std::abs(f.c.y - (S.groundY + (w.h0 + w.h1) / 2)) > 0.5) continue;
+                const double a = sp::dot(f.c - w.p0, w.d);
+                if (a < 0 || a > w.L) continue;
+                basePlane[fi] = id; break;
+            }
+        }
         double texel = S.P.detailTexelM;
         const int A = S.P.detailAtlas;
         for (int attempt = 0; attempt < 12; ++attempt, texel *= 1.15) {
@@ -1248,10 +1337,23 @@ inline Result build(Spec S) {
                 faceTex[fi].h = std::max(1, static_cast<int>(std::ceil((faces[fi].h1 - faces[fi].h0) / texel)));
                 order.push_back(fi);
             }
+            // the base bands, at the band's own pixel (no coarser than 2.5 times finer than the walls')
+            for (size_t fi = 0; fi < NF; ++fi) {
+                if (basePlane[fi] < 0) continue;
+                auto bi = S.planeBase.find(basePlane[fi]);
+                const double top = std::min(faces[fi].h1, bi->second.topM);
+                if (top - faces[fi].h0 < 1.0) continue;
+                auto& b = faceTex[NF + fi];
+                b.texel = std::max(bi->second.pixel, texel / 2.5);
+                b.w = std::max(1, static_cast<int>(std::ceil(faces[fi].L / b.texel)));
+                b.h = std::max(1, static_cast<int>(std::ceil((top - faces[fi].h0) / b.texel)));
+                order.push_back(NF + fi);
+            }
             std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return faceTex[a].h > faceTex[b].h; });
             int x = 0, y = 0, shelf = 0; bool fits = true;
             for (size_t fi : order) {
                 auto& t = faceTex[fi];
+                if (fi >= NF && t.w + 2 > A) { const double k = (t.w + 2.0) / (A - 2); t.texel *= k; t.w = static_cast<int>(std::ceil(t.w / k)); t.h = static_cast<int>(std::ceil(t.h / k)); }  // a long base band at a coarser pixel
                 if (t.w + 2 > A || t.h + 2 > A) { fits = false; break; }
                 if (x + t.w + 2 > A) { x = 0; y += shelf; shelf = 0; }
                 if (y + t.h + 2 > A / 2) { fits = false; break; }
@@ -1313,10 +1415,129 @@ inline Result build(Spec S) {
             }
         }
     }
+    // the base bands: each texel the Street View band's pixel at its place (the plane's frame along, metres down from its
+    // top), else the wall's own texture there
+    for (size_t fi = 0; fi < NF && rep.atlasW; ++fi) {
+        auto& b = faceTex[NF + fi];
+        if (!b.w || basePlane[fi] < 0) continue;
+        const auto& bi = S.planeBase.at(basePlane[fi]);
+        const auto bytes = detail::readFile(bi.png);
+        auto d = png::decode(bytes.data(), bytes.size(), png::OutputFormat::Rgba);
+        if (!d.ok) { rep.notes.push_back("base band " + bi.png + " unreadable"); continue; }
+        const auto& im = d.image;
+        const PlaneFrame& f = *frames.at(basePlane[fi]);
+        const auto& w = faces[fi];
+        const auto& T = faceTex[fi];
+        b.h0 = w.h0; b.h1 = w.h0 + b.h * b.texel;
+        b.M.assign(static_cast<size_t>(b.w) * b.h * 3, -1.0f);
+        size_t sv = 0;
+        for (int j = 0; j < b.h; ++j) for (int i = 0; i < b.w; ++i) {
+            const double a = (i + 0.5) * b.texel, h = b.h1 - (j + 0.5) * b.texel;
+            const P3 q{w.p0.x + w.d.x * a, S.groundY + h, w.p0.z + w.d.z * a};
+            const int px = static_cast<int>(std::floor((sp::dot(q - f.c, f.s) - f.sMin) / bi.pixel)), py = static_cast<int>(std::floor((bi.topM - h) / bi.pixel));
+            const size_t o = (static_cast<size_t>(j) * b.w + i) * 3;
+            if (px >= 0 && py >= 0 && px < im.width && py < im.height && im.data[im.getIndex(px, py) + 3] >= 128) {
+                const size_t k = im.getIndex(px, py);
+                for (int c = 0; c < 3; ++c) b.M[o + c] = static_cast<float>(srgbToLinear(im.data[k + c] / 255.0));
+                ++sv; continue;
+            }
+            const int ti = T.ok ? static_cast<int>(a / T.texel) : -1, tj = T.ok ? static_cast<int>((T.h1 - h) / T.texel) : -1;
+            if (ti >= 0 && tj >= 0 && ti < T.w && tj < T.h) { const size_t to = (static_cast<size_t>(tj) * T.w + ti) * 3; for (int c = 0; c < 3; ++c) b.M[o + c] = T.M[to + c]; }
+        }
+        if (!sv) { b = FaceTex{}; continue; }
+        b.ok = true;
+        baseTopM[fi] = std::min(w.h1, bi.topM);
+        ++rep.baseFaces; rep.baseTexels += sv;
+    }
     E.groundY = S.groundY;
     E.texOffset = static_cast<int>(classes.size()) + 1;
     E.atlasW = S.P.detailAtlas;
     E.paletteY0 = facesUsedH;
+
+    // --- piers and window columns. A column of three or more windows sharing their sides is a strip recessed behind the
+    // piers beside it, by the step the scan measures between them (the front-most scan surface per 0.3 m cell, the piers'
+    // median over the strips' median: measured) when it reads pierMinM to pierMaxM, else pierDefaultM (generated)
+    struct Strip { double a0, a1, h0, h1; };
+    std::vector<std::vector<Strip>> faceStrips(faces.size());
+    std::vector<double> faceRecess(faces.size(), 0);
+    if (S.P.piers && R.building.size()) {
+        std::vector<P3> dense;
+        {
+            std::mt19937 rng(17);
+            std::uniform_real_distribution<double> U(0, 1);
+            for (size_t ti = 0; ti < R.building.size(); ++ti) {
+                const P3 a = R.building.p[3 * ti], b = R.building.p[3 * ti + 1], c = R.building.p[3 * ti + 2];
+                const int n = std::max(1, static_cast<int>(std::ceil(sp::len(sp::cross(b - a, c - a)) / 2 * 30)));
+                for (int k = 0; k < n; ++k) {
+                    double r1 = U(rng), r2 = U(rng); if (r1 + r2 > 1) { r1 = 1 - r1; r2 = 1 - r2; }
+                    const P3 q = a + (b - a) * r1 + (c - a) * r2;
+                    double x, z; F.toXZ(q.x, q.z, x, z);
+                    dense.push_back({x, q.y, z});
+                }
+            }
+        }
+        const double cell = 2.0;
+        std::unordered_map<uint64_t, std::vector<uint32_t>> grid;
+        auto gkey = [&](double x, double z) { return (static_cast<uint64_t>(static_cast<uint32_t>(static_cast<int32_t>(std::floor(x / cell)))) << 32) | static_cast<uint32_t>(static_cast<int32_t>(std::floor(z / cell))); };
+        for (uint32_t i = 0; i < dense.size(); ++i) grid[gkey(dense[i].x, dense[i].z)].push_back(i);
+        for (size_t fi = 0; fi < faces.size(); ++fi) {
+            const auto& w = faces[fi];
+            std::map<std::pair<long, long>, Strip> cols;
+            std::map<std::pair<long, long>, int> count;
+            for (const auto& W : faceWins[fi]) {
+                const auto k = std::make_pair(std::lround(W.r.a0 * 20), std::lround(W.r.a1 * 20));
+                auto it = cols.find(k);
+                if (it == cols.end()) cols[k] = {W.r.a0, W.r.a1, W.r.h0, W.r.h1};
+                else { auto& st = it->second; st.a0 = std::min(st.a0, W.r.a0); st.a1 = std::max(st.a1, W.r.a1); st.h0 = std::min(st.h0, W.r.h0); st.h1 = std::max(st.h1, W.r.h1); }
+                ++count[k];
+            }
+            std::vector<Strip> st;
+            for (const auto& [k, c] : cols) if (count[k] >= 3) st.push_back(c);
+            std::sort(st.begin(), st.end(), [](const Strip& a, const Strip& b) { return a.a0 < b.a0; });
+            std::vector<Strip> kept;
+            for (const auto& c : st) { if (!kept.empty() && c.a0 < kept.back().a1 + 0.1) continue; if (c.a0 < 0.3 || c.a1 > w.L - 0.3) continue; kept.push_back(c); }
+            if (kept.size() < 2) continue;
+            // the front-most scan surface per 0.3 m cell, piers against strips over the strips' heights
+            const double C = 0.3, sh0 = kept.front().h0, sh1 = kept.front().h1;
+            double lo = 1e9, hi = -1e9; for (const auto& c : kept) { lo = std::min(lo, c.h0); hi = std::max(hi, c.h1); }
+            const int NA = static_cast<int>(std::ceil(w.L / C)), NH = std::max(1, static_cast<int>(std::ceil((hi - lo) / C)));
+            std::vector<float> front(static_cast<size_t>(NA) * NH, -1e9f);
+            const double minx = std::min(w.p0.x, w.p0.x + w.d.x * w.L) - 2, maxx = std::max(w.p0.x, w.p0.x + w.d.x * w.L) + 2;
+            const double minz = std::min(w.p0.z, w.p0.z + w.d.z * w.L) - 2, maxz = std::max(w.p0.z, w.p0.z + w.d.z * w.L) + 2;
+            for (double gx = std::floor(minx / cell) * cell; gx <= maxx; gx += cell) for (double gz = std::floor(minz / cell) * cell; gz <= maxz; gz += cell) {
+                auto it = grid.find(gkey(gx + 0.5 * cell, gz + 0.5 * cell));
+                if (it == grid.end()) continue;
+                for (uint32_t i : it->second) {
+                    const P3& q = dense[i];
+                    const double rx = q.x - w.p0.x, rz = q.z - w.p0.z;
+                    const double a = rx * w.d.x + rz * w.d.z, o = rx * w.n.x + rz * w.n.z;
+                    if (a < 0 || a >= w.L || q.y < lo || q.y >= hi || o < -1.0 || o > 1.0) continue;
+                    auto& f = front[static_cast<size_t>(std::min(NH - 1, static_cast<int>((q.y - lo) / C))) * NA + std::min(NA - 1, static_cast<int>(a / C))];
+                    f = std::max(f, static_cast<float>(o));
+                }
+            }
+            (void)sh0; (void)sh1;
+            std::vector<double> pierO, stripO;
+            for (int ih = 0; ih < NH; ++ih) for (int ia = 0; ia < NA; ++ia) {
+                const float o = front[static_cast<size_t>(ih) * NA + ia];
+                if (o < -1e8f) continue;
+                const double a = (ia + 0.5) * C;
+                if (a < kept.front().a0 || a > kept.back().a1) continue;
+                bool inStrip = false, nearEdge = false;
+                for (const auto& c : kept) { if (a > c.a0 + C && a < c.a1 - C) inStrip = true; if (std::abs(a - c.a0) < C || std::abs(a - c.a1) < C) nearEdge = true; }
+                if (nearEdge) continue;
+                (inStrip ? stripO : pierO).push_back(o);
+            }
+            double Ds = S.P.pierDefaultM; bool measured = false;
+            if (pierO.size() >= 20 && stripO.size() >= 20) {
+                auto med = [](std::vector<double>& v) { std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; };
+                const double step = med(pierO) - med(stripO);
+                if (step >= S.P.pierMinM && step <= S.P.pierMaxM) { Ds = step; measured = true; }
+            }
+            faceStrips[fi] = kept; faceRecess[fi] = Ds;
+            ++rep.pierWalls; if (measured) ++rep.pierWallsMeasured; rep.pierStrips += kept.size(); rep.pierDepths.push_back(Ds);
+        }
+    }
 
     // --- emit walls (cells), windows (reveals, panes, frames)
     const double D = S.revealM;
@@ -1324,8 +1545,11 @@ inline Result build(Spec S) {
         const auto& w = faces[fi];
         auto at = [&](double a, double h, double off) { return P3{w.p0.x + w.d.x * a - w.n.x * off, S.groundY + h, w.p0.z + w.d.z * a - w.n.z * off}; };
         FaceTex* T = faceTex[fi].ok ? &faceTex[fi] : nullptr;
+        FaceTex* B = faceTex[NF + fi].ok ? &faceTex[NF + fi] : nullptr;
+        const double baseTop = B ? baseTopM[fi] : -1;
+        auto texFor = [&](double h1) { return B && h1 <= baseTop + 1e-6 ? B : T; };
         E.tex = T; E.texP0 = w.p0; E.texD = w.d;
-        auto tint = [&](double a0, double a1, double h0, double h1, const Rgb& c) { if (T) T->tints.push_back({a0, a1, h0, h1, c}); };
+        auto tint = [&](double a0, double a1, double h0, double h1, const Rgb& c) { FaceTex* X = texFor(h1); if (X) X->tints.push_back({a0, a1, h0, h1, c}); };
         // a window with a traced head: its opening runs up to the head's curve (the box top moved to the curve's lowest
         // point, the curve's patch above it cut out of the wall and drawn below), when the patch stays clear of the wall's
         // top and of every other window
@@ -1352,12 +1576,18 @@ inline Result build(Spec S) {
             if (got) faceFallback = c;
         }
         // cells split at the windows' column lines too, so a pier and the band between a column's windows are cells of their own
-        std::vector<double> colLines;
+        std::vector<double> colLines, rowLines;
         for (const auto& hl : holes) { colLines.push_back(hl.a0); colLines.push_back(hl.a1); }
+        const auto& strips = faceStrips[fi];
+        const double Ds = faceRecess[fi];
+        for (const auto& st : strips) { rowLines.push_back(st.h0); rowLines.push_back(st.h1); }
+        if (B) rowLines.push_back(baseTop);
         std::sort(colLines.begin(), colLines.end());
+        std::sort(rowLines.begin(), rowLines.end());
+        auto inStrip = [&](double a0, double a1, double h0, double h1) { for (const auto& st : strips) if (a0 >= st.a0 - 1e-6 && a1 <= st.a1 + 1e-6 && h0 >= st.h0 - 1e-6 && h1 <= st.h1 + 1e-6) return true; return false; };
         auto spans = [&](double lo, double hi, bool useLines) {
             std::vector<double> cut{lo};
-            if (useLines) for (double x : colLines) if (x > cut.back() + 0.05 && x < hi - 0.05) cut.push_back(x);
+            for (double x : useLines ? colLines : rowLines) if (x > cut.back() + 0.05 && x < hi - 0.05) cut.push_back(x);
             cut.push_back(hi);
             std::vector<std::pair<double, double>> out2;
             for (size_t k = 0; k + 1 < cut.size(); ++k) {
@@ -1373,26 +1603,43 @@ inline Result build(Spec S) {
                 const Rgb c = colourOf(at(a0, h0, 0), w.d * (a1 - a0), P3{0, h1 - h0, 0}, w.n, faceFallback, got);
                 const int m = E.classOf(c);
                 ++rep.classUse[m];
-                E.quad(massing, m, at(a0, h0, 0), at(a1, h0, 0), at(a1, h1, 0), at(a0, h1, 0), w.n, c, w.d, P3{0, -1, 0});
+                const double off = inStrip(a0, a1, h0, h1) ? Ds : 0;
+                E.tex = texFor(h1);
+                E.quad(massing, m, at(a0, h0, off), at(a1, h0, off), at(a1, h1, off), at(a0, h1, off), w.n, c, w.d, P3{0, -1, 0});
+                E.tex = T;
                 tint(a0, a1, h0, h1, c);
                 ++rep.wallCells;
             }
         }
+        // each strip's returns: the piers' sides down its two edges, the wall above and below closing it
+        for (const auto& st : strips) {
+            bool got;
+            const Rgb c = colourOf(at(st.a0 - 0.3, st.h0, 0), w.d * 0.3, P3{0, st.h1 - st.h0, 0}, w.n, faceFallback, got);
+            const int m = E.classOf(c);
+            E.quad(massing, m, at(st.a0, st.h0, 0), at(st.a0, st.h1, 0), at(st.a0, st.h1, Ds), at(st.a0, st.h0, Ds), w.d, c, w.n * -1.0, up);
+            E.quad(massing, m, at(st.a1, st.h1, 0), at(st.a1, st.h0, 0), at(st.a1, st.h0, Ds), at(st.a1, st.h1, Ds), w.d * -1.0, c, w.n, up);
+            E.quad(massing, m, at(st.a1, st.h0, 0), at(st.a0, st.h0, 0), at(st.a0, st.h0, Ds), at(st.a1, st.h0, Ds), up, c, w.d, w.n);
+            E.quad(massing, m, at(st.a0, st.h1, 0), at(st.a1, st.h1, 0), at(st.a1, st.h1, Ds), at(st.a0, st.h1, Ds), up * -1.0, c, w.d, w.n);
+        }
         for (size_t wi = 0; wi < faceWins[fi].size(); ++wi) {
             const auto& W = faceWins[fi][wi];
             const bool headed = !std::isnan(headTop[wi]);
+            // a window in a strip opens from the strip's recessed face
+            const double o0 = inStrip(W.r.a0, W.r.a1, W.r.h0, W.r.h1) ? Ds : 0;
+            E.tex = texFor(W.r.h1);
+            auto atw = [&](double a, double h, double off) { return at(a, h, off + o0); };
             detail::R2 r = W.r;
             if (headed) r.h1 = headBase[wi];
             // reveals: the wall's colour just around the opening
             bool got;
-            const Rgb ring = colourOf(at(r.a0 - 0.15, r.h0 - 0.15, 0), w.d * (r.a1 - r.a0 + 0.3), P3{0, r.h1 - r.h0 + 0.3, 0}, w.n, faceFallback, got);
+            const Rgb ring = colourOf(atw(r.a0 - 0.15, r.h0 - 0.15, 0), w.d * (r.a1 - r.a0 + 0.3), P3{0, r.h1 - r.h0 + 0.3, 0}, w.n, faceFallback, got);
             const int rm = E.classOf(ring);
             tint(r.a0, r.a1, r.h0, r.h1, ring);  // the opening's frame colour below, then each pane's, are laid over this
             const P3 inL = w.d, inR = w.d * -1.0, inB = up, inT = up * -1.0;
-            E.quad(openings, rm, at(r.a0, r.h0, 0), at(r.a0, r.h1, 0), at(r.a0, r.h1, D), at(r.a0, r.h0, D), inL, ring, w.n, up);
-            E.quad(openings, rm, at(r.a1, r.h1, 0), at(r.a1, r.h0, 0), at(r.a1, r.h0, D), at(r.a1, r.h1, D), inR, ring, w.n, up);
-            E.quad(openings, rm, at(r.a1, r.h0, 0), at(r.a0, r.h0, 0), at(r.a0, r.h0, D), at(r.a1, r.h0, D), inB, ring, w.d, w.n);
-            if (!headed) E.quad(openings, rm, at(r.a0, r.h1, 0), at(r.a1, r.h1, 0), at(r.a1, r.h1, D), at(r.a0, r.h1, D), inT, ring, w.d, w.n);
+            E.quad(openings, rm, atw(r.a0, r.h0, 0), atw(r.a0, r.h1, 0), atw(r.a0, r.h1, D), atw(r.a0, r.h0, D), inL, ring, w.n, up);
+            E.quad(openings, rm, atw(r.a1, r.h1, 0), atw(r.a1, r.h0, 0), atw(r.a1, r.h0, D), atw(r.a1, r.h1, D), inR, ring, w.n, up);
+            E.quad(openings, rm, atw(r.a1, r.h0, 0), atw(r.a0, r.h0, 0), atw(r.a0, r.h0, D), atw(r.a1, r.h0, D), inB, ring, w.d, w.n);
+            if (!headed) E.quad(openings, rm, atw(r.a0, r.h1, 0), atw(r.a1, r.h1, 0), atw(r.a1, r.h1, D), atw(r.a0, r.h1, D), inT, ring, w.d, w.n);
             if (headed) {
                 // the head: strips across the window between its traced points, glass below the curve at the reveal's depth,
                 // wall above it, a reveal along it and down its two ends
@@ -1403,18 +1650,18 @@ inline Result build(Spec S) {
                 curve.push_back({r.a1, W.r.h1 + hd.back()});
                 const double base = headBase[wi], top = headTop[wi];
                 bool g2;
-                const Rgb glassC = colourOf(at(r.a0, base, D), w.d * (r.a1 - r.a0), P3{0, top - base, 0}, w.n, Rgb{0.05, 0.06, 0.07}, g2);
+                const Rgb glassC = colourOf(atw(r.a0, base, D), w.d * (r.a1 - r.a0), P3{0, top - base, 0}, w.n, Rgb{0.05, 0.06, 0.07}, g2);
                 for (size_t k = 0; k + 1 < curve.size(); ++k) {
                     const double xa = curve[k].first, xb = curve[k + 1].first, ya = std::max(base, curve[k].second), yb = std::max(base, curve[k + 1].second);
                     if (xb - xa < 1e-4) continue;
-                    if (std::max(ya, yb) > base + 1e-3) E.quad(openings, E.glassMat, at(xa, base, D), at(xb, base, D), at(xb, yb, D), at(xa, ya, D), w.n, glassC, w.d, P3{0, -1, 0});
-                    if (top - std::min(ya, yb) > 1e-3) E.quad(openings, rm, at(xa, ya, 0), at(xb, yb, 0), at(xb, top, 0), at(xa, top, 0), w.n, ring, w.d, P3{0, -1, 0});
-                    P3 nr = sp::cross(at(xb, yb, 0) - at(xa, ya, 0), w.n); const double L = sp::len(nr);
-                    if (L > 1e-9) { nr = nr * (1 / L); if (nr.y > 0) nr = nr * -1.0; E.quad(openings, rm, at(xa, ya, 0), at(xb, yb, 0), at(xb, yb, D), at(xa, ya, D), nr, ring, w.d, w.n); }
+                    if (std::max(ya, yb) > base + 1e-3) E.quad(openings, E.glassMat, atw(xa, base, D), atw(xb, base, D), atw(xb, yb, D), atw(xa, ya, D), w.n, glassC, w.d, P3{0, -1, 0});
+                    if (top - std::min(ya, yb) > 1e-3) E.quad(openings, rm, atw(xa, ya, 0), atw(xb, yb, 0), atw(xb, top, 0), atw(xa, top, 0), w.n, ring, w.d, P3{0, -1, 0});
+                    P3 nr = sp::cross(atw(xb, yb, 0) - atw(xa, ya, 0), w.n); const double L = sp::len(nr);
+                    if (L > 1e-9) { nr = nr * (1 / L); if (nr.y > 0) nr = nr * -1.0; E.quad(openings, rm, atw(xa, ya, 0), atw(xb, yb, 0), atw(xb, yb, D), atw(xa, ya, D), nr, ring, w.d, w.n); }
                 }
                 const double yA = std::max(base, curve.front().second), yB = std::max(base, curve.back().second);
-                if (yA > base + 1e-3) E.quad(openings, rm, at(r.a0, base, 0), at(r.a0, yA, 0), at(r.a0, yA, D), at(r.a0, base, D), inL, ring, w.n, up);
-                if (yB > base + 1e-3) E.quad(openings, rm, at(r.a1, yB, 0), at(r.a1, base, 0), at(r.a1, base, D), at(r.a1, yB, D), inR, ring, w.n, up);
+                if (yA > base + 1e-3) E.quad(openings, rm, atw(r.a0, base, 0), atw(r.a0, yA, 0), atw(r.a0, yA, D), atw(r.a0, base, D), inL, ring, w.n, up);
+                if (yB > base + 1e-3) E.quad(openings, rm, atw(r.a1, yB, 0), atw(r.a1, base, 0), atw(r.a1, base, D), atw(r.a1, yB, D), inR, ring, w.n, up);
                 ++rep.headsDrawn;
             }
             // panes (glass) and the frame between them, at the reveal's depth (inside the box below the head)
@@ -1423,9 +1670,9 @@ inline Result build(Spec S) {
             const std::vector<detail::R2> panes = panesClipped.empty() ? std::vector<detail::R2>{r} : panesClipped;
             std::vector<FaceTex::Tint> panesTint;
             for (const auto& p : panes) {
-                const Rgb g = colourOf(at(p.a0, p.h0, D), w.d * (p.a1 - p.a0), P3{0, p.h1 - p.h0, 0}, w.n, Rgb{0.05, 0.06, 0.07}, got);
+                const Rgb g = colourOf(atw(p.a0, p.h0, D), w.d * (p.a1 - p.a0), P3{0, p.h1 - p.h0, 0}, w.n, Rgb{0.05, 0.06, 0.07}, got);
                 panesTint.push_back({p.a0, p.a1, p.h0, p.h1, g});
-                E.quad(openings, E.glassMat, at(p.a0, p.h0, D), at(p.a1, p.h0, D), at(p.a1, p.h1, D), at(p.a0, p.h1, D), w.n, g, w.d, P3{0, -1, 0});
+                E.quad(openings, E.glassMat, atw(p.a0, p.h0, D), atw(p.a1, p.h0, D), atw(p.a1, p.h1, D), atw(p.a0, p.h1, D), w.n, g, w.d, P3{0, -1, 0});
                 ++rep.panesPlaced;
             }
             if (!panesClipped.empty()) {
@@ -1433,11 +1680,11 @@ inline Result build(Spec S) {
                 if (!frame.empty()) {
                     // one colour for the frame: the photo over the whole opening's frame strips
                     std::vector<double> cr, cg, cb;
-                    for (const auto& q : frame) { Rgb c; if (patchColour(ph, at(q.a0, q.h0, D), w.d * (q.a1 - q.a0), P3{0, q.h1 - q.h0, 0}, w.n, S.P.sampleRadiusM, c, 2)) { cr.push_back(c.r); cg.push_back(c.g); cb.push_back(c.b); } }
+                    for (const auto& q : frame) { Rgb c; if (patchColour(ph, atw(q.a0, q.h0, D), w.d * (q.a1 - q.a0), P3{0, q.h1 - q.h0, 0}, w.n, S.P.sampleRadiusM, c, 2)) { cr.push_back(c.r); cg.push_back(c.g); cb.push_back(c.b); } }
                     Rgb fc = ring;
                     if (!cr.empty()) { auto med = [](std::vector<double>& v) { std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }; fc = {med(cr), med(cg), med(cb)}; ++rep.colouredElements; } else ++rep.uncolouredElements;
                     const int fm = E.classOf(fc);
-                    for (const auto& q : frame) E.quad(openings, fm, at(q.a0, q.h0, D), at(q.a1, q.h0, D), at(q.a1, q.h1, D), at(q.a0, q.h1, D), w.n, fc, w.d, P3{0, -1, 0});
+                    for (const auto& q : frame) E.quad(openings, fm, atw(q.a0, q.h0, D), atw(q.a1, q.h0, D), atw(q.a1, q.h1, D), atw(q.a0, q.h1, D), w.n, fc, w.d, P3{0, -1, 0});
                     tint(r.a0, r.a1, r.h0, r.h1, fc);
                 }
             }
@@ -1949,6 +2196,16 @@ inline Result build(Spec S) {
                 }
                 if (any) { ++rep.finBands; rep.finCount += copies; finSpans.push_back({b.z0, b.z1}); }
             }
+        }
+        // thin sections (a mean radius under turnedBelowM: rods, masts, finials) turned exact circles: the scan blobs a section
+        // that narrow into lumps no sector reading resolves, and a turned member is round
+        if (S.P.turnedBelowM > 0) for (auto& b : bands) {
+            if (b.r.empty()) continue;
+            double m0 = 0, m1 = 0; for (size_t k = 0; k < b.r.size(); ++k) { m0 += b.r[k]; m1 += b.r1[k]; }
+            m0 /= b.r.size(); m1 /= b.r.size();
+            if (std::max(m0, m1) >= S.P.turnedBelowM) continue;
+            std::fill(b.r.begin(), b.r.end(), m0); std::fill(b.r1.begin(), b.r1.end(), m1);
+            ++rep.turnedBands;
         }
         for (const auto& b : bands) shellRings.push_back({b.z0, b.z1, b.r, b.r1});  // after the fins (a fluted step's core moves in)
         auto ringPt = [&](const Ring& b, int s, double h) {
@@ -2562,6 +2819,46 @@ inline Result build(Spec S) {
             }
         }
         out.atlas = std::move(atlas);
+        // the relief: each textured wall whose plane carries a height map (planeheight: white proud, depthM at most), its
+        // tangent-space normal from the height's slope at the texel (photo-inferred, never moving the surface); flat elsewhere
+        if (!S.planeHeight.empty()) {
+            texture::ImageBuffer nrm(rep.atlasW, rep.atlasH, 3, 0);
+            for (size_t k = 0; k < nrm.data.size(); k += 3) { nrm.data[k] = 128; nrm.data[k + 1] = 128; nrm.data[k + 2] = 255; }
+            for (size_t fi = 0; fi < NF; ++fi) {
+                const auto& t = faceTex[fi];
+                if (!t.ok || facePlane[fi] < 0) continue;
+                auto hi = S.planeHeight.find(facePlane[fi]);
+                if (hi == S.planeHeight.end()) continue;
+                const auto bytes = detail::readFile(hi->second.png);
+                auto d = png::decode(bytes.data(), bytes.size(), png::OutputFormat::Luma);
+                if (!d.ok) { rep.notes.push_back("relief " + hi->second.png + " unreadable"); continue; }
+                const PlaneFrame& f = *frames.at(facePlane[fi]);
+                const auto& w = faces[fi];
+                std::vector<float> Hm(static_cast<size_t>(t.w) * t.h, NAN);
+                size_t n = 0;
+                for (int j = 0; j < t.h; ++j) for (int i = 0; i < t.w; ++i) {
+                    const double a = (i + 0.5) * t.texel, h = t.h1 - (j + 0.5) * t.texel;
+                    const P3 q{w.p0.x + w.d.x * a, S.groundY + h, w.p0.z + w.d.z * a};
+                    const int px = static_cast<int>(std::floor((sp::dot(q - f.c, f.s) - f.sMin) / f.pixel)), py = static_cast<int>(std::floor((f.tMax - sp::dot(q - f.c, f.t)) / f.pixel));
+                    if (px < 0 || py < 0 || px >= d.image.width || py >= d.image.height) continue;
+                    Hm[static_cast<size_t>(j) * t.w + i] = static_cast<float>(d.image.data[d.image.getIndex(px, py)] / 255.0 * hi->second.depthM);
+                    ++n;
+                }
+                if (!n) continue;
+                auto H = [&](int i, int j) { i = std::clamp(i, 0, t.w - 1); j = std::clamp(j, 0, t.h - 1); const float v = Hm[static_cast<size_t>(j) * t.w + i]; return std::isnan(v) ? 0.0f : v; };
+                for (int j = -1; j <= t.h; ++j) for (int i = -1; i <= t.w; ++i) {
+                    const int si = std::clamp(i, 0, t.w - 1), sj = std::clamp(j, 0, t.h - 1);
+                    const double dx = (H(si + 1, sj) - H(si - 1, sj)) / (2 * t.texel), dy = (H(si, sj - 1) - H(si, sj + 1)) / (2 * t.texel);  // along the wall, and up it
+                    double nx = -dx, ny = -dy, nz = 1; const double L = std::sqrt(nx * nx + ny * ny + nz * nz); nx /= L; ny /= L; nz /= L;
+                    const int X = t.ax + i, Y = t.ay + j;
+                    if (X < 0 || Y < 0 || X >= nrm.width || Y >= nrm.height) continue;
+                    const size_t q = nrm.getIndex(X, Y);
+                    nrm.data[q] = static_cast<uint8_t>(std::lround((nx * 0.5 + 0.5) * 255)); nrm.data[q + 1] = static_cast<uint8_t>(std::lround((ny * 0.5 + 0.5) * 255)); nrm.data[q + 2] = static_cast<uint8_t>(std::lround((nz * 0.5 + 0.5) * 255));
+                }
+                ++rep.reliefFaces; rep.reliefTexels += n;
+            }
+            if (rep.reliefFaces) out.normalAtlas = std::move(nrm);
+        }
     }
 
     const std::string colourSrc = ph.ok ? "photo-inferred: the per-channel median of the scan's own photo texture over each element" : "the nearest appearance class's measured colour (no photo sampled)";
@@ -2582,7 +2879,7 @@ inline Result build(Spec S) {
 // GLB writer: the classes' materials (sampling the atlas when there is one, else with their library maps), COLOR_0 as float
 // =============================================================================================
 
-inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const std::vector<ClassMat>& classesIn, double glassRoughness, const std::string& rootExtras, size_t& triangles, const texture::ImageBuffer* atlas = nullptr) {
+inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const std::vector<ClassMat>& classesIn, double glassRoughness, const std::string& rootExtras, size_t& triangles, const texture::ImageBuffer* atlas = nullptr, const texture::ImageBuffer* normalAtlas = nullptr) {
     std::vector<ClassMat> classes = classesIn;
     if (classes.empty()) classes.push_back(ClassMat{"neutral", {60, 0, 0}, 0.8, 0, 2, "", "", false});
     const int glass = static_cast<int>(classes.size());
@@ -2625,6 +2922,17 @@ inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const st
             atlasIm = nImg++;
         }
     }
+    // its relief (tangent space, the same layout): photo-inferred height on the textured walls, flat elsewhere
+    int normalIm = -1;
+    if (atlasIm >= 0 && normalAtlas && !normalAtlas->empty()) {
+        const auto bytes = png::encode(*normalAtlas, 6);
+        if (!bytes.empty()) {
+            const int v = addView(bytes.data(), bytes.size(), 0);
+            imgs << "," << "{\"bufferView\":" << v << ",\"mimeType\":\"image/png\"}";
+            texs << "," << "{\"sampler\":1,\"source\":" << nImg << "}";
+            normalIm = nImg++;
+        }
+    }
     // materials: the classes and glass, then (with an atlas) the same again sampling it, at glass + 1 + class
     const int nMat = atlasIm >= 0 ? 2 * (glass + 1) : glass + 1;
     for (int mi = 0; mi < nMat; ++mi) {
@@ -2642,7 +2950,7 @@ inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const st
         const int nIm = detailed || atlasIm >= 0 ? -1 : image(c.normalPng), oIm = detailed || atlasIm >= 0 ? -1 : image(c.ormPng);  // with an atlas, only the detailed materials are used
         mats << "{\"name\":\"" << detail::esc(c.name) << (detailed ? "+detail" : "") << "\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,1,1,1],\"metallicFactor\":" << detail::num(c.metallic) << ",\"roughnessFactor\":" << detail::num(c.roughness) << base
              << (oIm >= 0 ? ",\"metallicRoughnessTexture\":{\"index\":" + std::to_string(oIm) + "}" : std::string()) << "}"
-             << (nIm >= 0 ? ",\"normalTexture\":{\"index\":" + std::to_string(nIm) + "}" : std::string())
+             << (nIm >= 0 ? ",\"normalTexture\":{\"index\":" + std::to_string(nIm) + "}" : detailed && normalIm >= 0 ? ",\"normalTexture\":{\"index\":" + std::to_string(normalIm) + "}" : std::string())
              << (oIm >= 0 ? ",\"occlusionTexture\":{\"index\":" + std::to_string(oIm) + "}" : std::string())
              << ",\"extras\":{\"sb\":{\"provenance\":\"photo-inferred\",\"set\":\"" << detail::esc(c.name) << "\",\"tileM\":" << detail::num(c.tileM) << detailNote << "}}}";
     }
@@ -2698,6 +3006,7 @@ inline std::string reportJson(const Report& r, const Spec& S, size_t triangles, 
       << ",\"windows\":{\"given\":" << r.windowsGiven << ",\"placed\":" << r.windowsPlaced << ",\"generated\":" << r.windowsGenerated << ",\"continued\":" << r.windowsContinued << ",\"rephased\":" << r.windowsRephased << ",\"wallsRephased\":" << r.wallsRephased << ",\"continueTested\":" << r.continueTested << ",\"panes\":" << r.panesPlaced
       << ",\"dropped\":{\"noWall\":" << r.droppedNoWall << ",\"clipped\":" << r.droppedClipped << ",\"overlap\":" << r.droppedOverlap << ",\"small\":" << r.droppedSmall << ",\"noFrame\":" << r.droppedNoFrame << "}}"
       << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << ",\"undersideFills\":" << r.undersideFills << "}"
+      << ",\"piers\":{\"walls\":" << r.pierWalls << ",\"measured\":" << r.pierWallsMeasured << ",\"strips\":" << r.pierStrips << ",\"baseFaces\":" << r.baseFaces << ",\"baseTexels\":" << r.baseTexels << ",\"reliefFaces\":" << r.reliefFaces << ",\"reliefTexels\":" << r.reliefTexels << ",\"turnedBands\":" << r.turnedBands << ",\"medianM\":" << detail::num([&] { auto v = r.pierDepths; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
       << ",\"slender\":{\"fromM\":" << detail::num(r.slenderFromM) << ",\"slices\":" << r.slenderSlices << ",\"bands\":" << r.slenderBands << ",\"axisFits\":" << r.slenderAxisFits << ",\"symmetry\":" << r.slenderSymmetry << ",\"finBands\":" << r.finBands << ",\"fins\":" << r.finCount << ",\"finSegments\":" << r.finSegments << "}" << ",\"heads\":{\"types\":" << r.headTypes << ",\"windows\":" << r.headWindows << ",\"drawn\":" << r.headsDrawn << ",\"surfacePieces\":" << r.surfacePieces << ",\"surfaceQuads\":" << r.surfaceQuads << ",\"selfWalls\":" << r.selfWalls << ",\"selfWindowWalls\":" << r.selfWindowWalls << ",\"selfWindows\":" << r.selfWindows << ",\"medianRiseM\":" << detail::num([&] { auto v = r.headRises; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
       << ",\"topM\":" << detail::num(r.topM) << ",\"revealM\":" << detail::num(S.revealM) << ",\"revealLabel\":\"" << detail::esc(S.revealLabel) << "\""
       << ",\"triangles\":" << triangles << ",\"bytes\":" << bytes << ",\"classUse\":{";

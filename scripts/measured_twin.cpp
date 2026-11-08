@@ -48,7 +48,7 @@ int main(int argc, char** argv) {
         const auto& F = R.frame;
         const std::string root = "{\"sb\":{\"schema\":\"scratchbox.measured-twin/1\",\"frame\":{\"ox\":" + detail::num(F.ox) + ",\"oz\":" + detail::num(F.oz) + ",\"theta\":" + detail::num(F.theta) + ",\"groundY\":" + detail::num(F.groundY) + "}}}";
         size_t triangles = 0;
-        const auto glb = writeGlb(R.nodes, S.classes, S.glassRoughness, root, triangles, R.atlas.empty() ? nullptr : &R.atlas);
+        const auto glb = writeGlb(R.nodes, S.classes, S.glassRoughness, root, triangles, R.atlas.empty() ? nullptr : &R.atlas, R.normalAtlas.empty() ? nullptr : &R.normalAtlas);
         {
             std::ofstream o(S.out, std::ios::binary);
             if (!o) throw std::runtime_error("cannot write " + S.out);

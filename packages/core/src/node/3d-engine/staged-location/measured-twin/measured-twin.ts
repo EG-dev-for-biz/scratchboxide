@@ -25,6 +25,8 @@ import { findTileRefineRepoRoot } from '../../tile-refine-service';
 import { preparedKey } from '../pipeline-k/material-sets';
 import type { ModelReadingStore } from '../pipeline-k/model-readings';
 import { REVEAL_DEPTH_PARAMS } from '../reveal-depth';
+import type { NamedBuilding } from '../pipeline-k/facade-reader-brief';
+import { enuOffset, inferFromSelfOrthos, type InferModels, type InferReport, type StreetViewSource } from './infer';
 
 export const MEASURED_TWIN_VERSION = 'measured-twin/2';
 
@@ -244,7 +246,7 @@ export function ensureMeasuredTwinBinary(repoRoot = findTileRefineRepoRoot()): P
  * `reliefM` above 0 (and no scanDetailM) rebuilds, purely procedurally, what stands at least that far off the shell: relief maps
  * of the scan on the walls, roofs and slender top in 0.3 m cells, as measured blocks.
  */
-export interface MeasuredTwinOptions { scanDetailM?: number; reliefM?: number; kFree?: boolean }
+export interface MeasuredTwinOptions { scanDetailM?: number; reliefM?: number; kFree?: boolean; /** K-free, then inferred (infer.ts): the building's window system, symmetry, pier depth, finishes, Street View base, relief. */ infer?: boolean }
 
 /** The generator's report (scratchbox_measured_twin.hpp reportJson). */
 export interface MeasuredTwinReport {
@@ -256,40 +258,95 @@ export interface MeasuredTwinReport {
     relief: { thresholdM: number; wallPieces: number; wallBoxes: number; wallAreaM2: number; mastPieces: number; mastCells: number };
     windows: { given: number; placed: number; generated: number; continued: number; continueTested: number; rephased: number; wallsRephased: number; panes: number; dropped: Record<string, number> };
     colour: { elements: number; uncoloured: number; undersideFills: number };
+    piers?: { walls: number; measured: number; strips: number; baseFaces: number; baseTexels: number; reliefFaces: number; reliefTexels: number; turnedBands: number; medianM: number };
     slender: { fromM: number | null; slices: number; bands: number; axisFits: number; symmetry: number; finBands: number; fins: number; finSegments: number };
     heads: { types: number; windows: number; drawn: number; surfacePieces: number; surfaceQuads: number; selfWalls: number; selfWindowWalls: number; selfWindows: number; medianRiseM: number };
     topM: number; revealM: number; revealLabel: string; triangles: number; bytes: number; classUse: Record<string, number>; notes: string[];
 }
 
 export interface MeasuredTwinResult {
-    version: string; glb: string; specFile: string; report: MeasuredTwinReport; records: Omit<KRunRecords, 'planes' | 'windowFit' | 'photos'> & { planes: number; windowPlanes: number; photos: number }; mapsMissing: string[]; ms: number;
+    version: string; glb: string; specFile: string; report: MeasuredTwinReport; /** What the infer mode inferred between its two passes. */ infer?: InferReport; records: Omit<KRunRecords, 'planes' | 'windowFit' | 'photos'> & { planes: number; windowPlanes: number; photos: number }; mapsMissing: string[]; ms: number;
 }
 
 /**
  * Generates the measured twin of the K build in `runDir` into `outDir` (measured_twin.glb, its report and spec).
  * `store` is where the build's library maps were kept (its model readings store); without it the materials carry no maps.
  */
-export async function buildMeasuredTwin(opts: { runDir: string; cacheRoot: string; outDir: string; store?: ModelReadingStore; signal?: AbortSignal; timeoutMs?: number; options?: MeasuredTwinOptions }): Promise<MeasuredTwinResult> {
+export async function buildMeasuredTwin(opts: { runDir: string; cacheRoot: string; outDir: string; store?: ModelReadingStore; signal?: AbortSignal; timeoutMs?: number; options?: MeasuredTwinOptions; models?: InferModels; building?: NamedBuilding; streetView?: StreetViewSource }): Promise<MeasuredTwinResult> {
     const t0 = Date.now();
-    const rec = opts.options?.kFree ? readKFreeRecords(opts.runDir, opts.cacheRoot) : readKRunRecords(opts.runDir, opts.cacheRoot);
+    const options = opts.options ?? {};
+    const kFree = options.kFree || options.infer;
+    let rec = kFree ? readKFreeRecords(opts.runDir, opts.cacheRoot) : readKRunRecords(opts.runDir, opts.cacheRoot);
     fs.mkdirSync(opts.outDir, { recursive: true });
     const { maps, missing } = await classMaps(rec.classes, path.join(opts.outDir, 'maps'), opts.store);
     const glb = path.join(opts.outDir, 'measured_twin.glb'), report = path.join(opts.outDir, 'measured_twin_report.json');
     const specFile = path.join(opts.outDir, 'measured_twin_spec.txt');
-    fs.writeFileSync(specFile, measuredTwinSpec(rec, { glb, report }, maps, opts.options ?? {}));
     const bin = await ensureMeasuredTwinBinary();
-    const stdout = await new Promise<string>((resolve, reject) => {
-        execFile(bin, [specFile], { timeout: opts.timeoutMs ?? 600_000, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024, ...(opts.signal ? { signal: opts.signal } : {}) }, (err, out, errOut) => {
+    const run = (spec: string) => new Promise<MeasuredTwinReport>((resolve, reject) => {
+        execFile(bin, [spec], { timeout: opts.timeoutMs ?? 600_000, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024, ...(opts.signal ? { signal: opts.signal } : {}) }, (err, out, errOut) => {
             const tail = String(out || '').trim().split('\n').pop() ?? '';
             if (err) {
                 let msg = tail || String(errOut || err.message).trim();
                 try { msg = JSON.parse(tail).error ?? msg; } catch { /* not JSON */ }
                 reject(new Error(`measured_twin failed: ${msg}`));
-            } else resolve(tail);
+                return;
+            }
+            try {
+                const answer = JSON.parse(tail) as MeasuredTwinReport | { ok: false; error: string };
+                if (!answer.ok) reject(new Error(`measured_twin failed: ${(answer as { error: string }).error}`)); else resolve(answer);
+            } catch (e) { reject(new Error(`measured_twin answered no report: ${String(e)}`)); }
         });
     });
-    const answer = JSON.parse(stdout) as MeasuredTwinReport | { ok: false; error: string };
-    if (!answer.ok) throw new Error(`measured_twin failed: ${(answer as { error: string }).error}`);
+    let inferReport: InferReport | undefined;
+    let extra: string[] = [];
+    if (options.infer) {
+        // the first pass: the K-free twin, writing each wall's own photo as an orthos folder
+        const selfDir = path.join(opts.outDir, 'self_orthos');
+        fs.rmSync(selfDir, { recursive: true, force: true });
+        fs.mkdirSync(selfDir, { recursive: true });
+        const specA = path.join(opts.outDir, 'measured_twin_spec_pass1.txt');
+        fs.writeFileSync(specA, measuredTwinSpec(rec, { glb: path.join(opts.outDir, 'measured_twin_pass1.glb'), report: path.join(opts.outDir, 'measured_twin_report_pass1.json') }, [], { kFree: true }) + `exportdir ${selfDir}\n`);
+        await run(specA);
+        // what Google's data says beyond the scan's own reading, then the second pass from it
+        const inf = await inferFromSelfOrthos(selfDir, { ...(opts.models ? { models: opts.models } : {}), ...(opts.store ? { store: opts.store } : {}), ...(opts.building ? { building: opts.building } : {}), ...(opts.streetView ? { streetView: opts.streetView } : {}), ...(opts.signal ? { signal: opts.signal } : {}) });
+        inferReport = inf.report;
+        rec = { ...rec, groundY: inf.groundY, planes: inf.planes, windowFit: inf.windowFit, photos: inf.photos, classes: inf.classes, reveal: rec.reveal };
+        extra = ['param piers 1', 'param turnedBelowM 1.2', ...inf.base.map(b => `planebase ${b.id} ${b.pixel} ${b.topM} ${b.png}`), ...inf.height.map(h => `planeheight ${h.id} ${h.depthM} ${h.png}`)];
+    }
+    fs.writeFileSync(specFile, measuredTwinSpec(rec, { glb, report }, maps, { ...options, kFree: options.infer ? false : options.kFree }) + extra.map(l => l + '\n').join(''));
+    const answer = await run(specFile);
     const { planes, windowFit, photos, ...rest } = rec;
-    return { version: MEASURED_TWIN_VERSION, glb, specFile, report: answer, records: { ...rest, planes: planes.length, windowPlanes: windowFit.filter(e => e.rects?.length).length, photos: Object.keys(photos).length }, mapsMissing: missing, ms: Date.now() - t0 };
+    return { version: MEASURED_TWIN_VERSION, glb, specFile, report: answer, ...(inferReport ? { infer: inferReport } : {}), records: { ...rest, planes: planes.length, windowPlanes: windowFit.filter(e => e.rects?.length).length, photos: Object.keys(photos).length }, mapsMissing: missing, ms: Date.now() - t0 };
+}
+
+/**
+ * Registered Street View plates for the run's place (StreetViewPoseRegistrar's plates.json under the repository's
+ * .scratchbox/streetview_cache), the nearest whose anchor lies within 400 m, with their frame's offset in the run's frame
+ * (the run's origin: its tiles stage's geoAnchor and ellipsoidal height). None when either is not on this machine.
+ */
+export function findStreetViewPlates(runDir: string, cacheRoot: string, repoRoot = findTileRefineRepoRoot()): StreetViewSource | undefined {
+    const tilesDir = path.join(cacheRoot, 'staged_location', 'tiles');
+    let origin: { lat: number; lng: number; h: number } | undefined;
+    const place = readJson<{ place?: { lat: number; lng: number } }>(path.join(runDir, 'stages.json'))?.place;
+    if (fs.existsSync(tilesDir)) for (const k of fs.readdirSync(tilesDir)) {
+        const t = (() => { try { return fs.readFileSync(path.join(tilesDir, k, 'done.json'), 'utf8'); } catch { return ''; } })();
+        const h = /"originEllipsoidalHeightM":(-?[0-9.]+)/.exec(t), g = /"geoAnchor":\{"lat":(-?[0-9.]+),"lng":(-?[0-9.]+)/.exec(t);
+        if (!h || !g) continue;
+        const o = { lat: Number(g[1]), lng: Number(g[2]), h: Number(h[1]) };
+        if (place && (Math.abs(o.lat - place.lat) > 1e-5 || Math.abs(o.lng - place.lng) > 1e-5)) continue;
+        origin = o; break;
+    }
+    if (!origin) return undefined;
+    const root = path.join(repoRoot, '.scratchbox', 'streetview_cache');
+    if (!fs.existsSync(root)) return undefined;
+    let best: StreetViewSource | undefined, bestD = 400;
+    for (const d of fs.readdirSync(root)) {
+        const f = path.join(root, d, 'plates', 'plates.json');
+        const j = readJson<{ anchor?: { lat: number; lng: number; heightMeters: number }; plates?: unknown[] }>(f);
+        if (!j?.anchor || !j.plates?.length) continue;
+        const off = enuOffset(origin, { lat: j.anchor.lat, lng: j.anchor.lng, h: j.anchor.heightMeters });
+        const dist = Math.hypot(off[0], off[2]);
+        if (dist < bestD) { bestD = dist; best = { platesFile: f, offset: off }; }
+    }
+    return best;
 }
