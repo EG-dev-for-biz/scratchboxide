@@ -31,7 +31,7 @@ export const BUILD_RESULTS: Record<string, string> = {
     place: 'the place', tiles: 'tile mesh', surveyPhotos: 'Street View photos', canopy: 'canopy',
     scanClay: 'remeshed scan', orthos: 'facade orthophotos', straightOrthos: 'straightened facade photos', occlusion: 'occlusion masks', windows: 'windows', planeReadings: 'openings read by the vision agent',
     depth: 'window depth', cleanClay: 'cleaned scan', latticeClay: 'facades rebuilt', baseClay: 'base cleaned',
-    sealedClay: 'sealed shell', closedClay: 'closed from outside', finalClay: 'final model', score: 'relief score', holes: 'holes seen',
+    sealedClay: 'sealed shell', closedClay: 'closed from outside', finalClay: 'final model', score: 'relief score', holes: 'holes seen', symmetry: 'symmetry read (axes and scores)',
     ownerViews: 'ownership views', ownerMasks: 'ownership vote', votedClay: 'voted remesh', registeredPoses: 'registered photos', treeStrip: 'trees', delit: 'de-lit photos',
     harmonised: 'harmonised photos', materials: 'material maps', partyWall: 'party wall', facadeDetail: 'upscaled facade photos', relief: 'displaced near surfaces', late: 'later layers', published: 'scene'
 };
@@ -45,6 +45,7 @@ export const BUILD_STEPS: BuildStepSpec[] = [
     { key: 'remesh.tileRefine', stage: 'remesh', title: 'tile_refine: isolate, remesh, flatten', needs: ['tiles'], makes: ['scanClay', 'orthos'] },
     { key: 'remesh.occlusion', stage: 'remesh', title: 'What stood in front of each facade', needs: ['tiles'], makes: ['occlusion'] },
     { key: 'remesh.pipelineK', stage: 'remesh', title: 'Straighten the facade photos', needs: ['orthos', 'occlusion'], makes: ['straightOrthos'] },
+    { key: 'remesh.symmetry', stage: 'remesh', title: 'Read the building\'s symmetry', needs: ['scanClay', 'straightOrthos', 'occlusion'], makes: ['symmetry'] },
     { key: 'remesh.windowFit', stage: 'remesh', title: 'Window fit', needs: ['straightOrthos'], makes: ['windows'] },
     { key: 'remesh.windowArray', stage: 'remesh', title: 'Window array per facade', needs: ['windows'], makes: ['windows'] },
     { key: 'remesh.facadeRead', stage: 'remesh', title: 'Read every plane\'s openings', needs: ['straightOrthos', 'tiles'], makes: ['planeReadings'] },
@@ -88,6 +89,7 @@ export const WRAPPER_STEPS = new Set(['remesh.polish', 'textures.waitRebuildGram
  */
 export const TOGGLEABLE_STEPS = new Map<string, string>([
     ['remesh.occlusion', 'a facade texel behind a tree, an awning or a neighbour is read as wall like any other'],
+    ['remesh.symmetry', 'no symmetry is read (off by default; when on it is reported only: nothing is built from it yet)'],
     ['remesh.windowFit', 'the facades are opened by their bay rhythm and the lattice\'s own window cells'],
     ['remesh.windowArray', 'each facade\'s windows stay as its bands read them, off their grid where a band drifted'],
     ['remesh.facadeRead', 'the window geometry stays as the window fit read it, and the material reads are told no brief of the building'],

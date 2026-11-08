@@ -206,6 +206,7 @@ import { fetchFootprints, type FootprintSource } from './facade-footprints';
 import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSION, SCAN_FOOTPRINT_TOKEN, massingProvenance, type MassingLayerFiles, type MassingStageResult } from './pipeline-e/pipeline-e';
 import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
+import { describeSymmetry, detectSymmetry, stampSymmetryGlb, symmetryOn, SYMMETRY_VERSION, type SymmetryReport } from './pipeline-k/symmetry';
 import { districtBuildingIndex, districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
 import { chunkCpuShare, chunkOwner, chunkParallel, kdCentreRunner, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
 import { createChunkJoiner } from './pipeline-k/chunk-join-worker';
@@ -4498,6 +4499,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const finishRefine = async (r: TileRefineResult, io: StageIO, timed: <R>(k: string, work: () => Promise<R>) => Promise<R>, stepFiles: Array<[string, string]>, degradations: DegradationRecord[], stage: 'remesh' | 'ownership', notes: RefineNotes = directNotes): Promise<TileRefineResult> => {
             // pipeline K: the facade orthos straightened and their smears levelled before the facades are rebuilt on them
             let orthosKey: string | undefined, windowFit: string | undefined, wallGrammar: string | undefined, wallSheets: string | undefined, revealDepth: string | undefined, surveyViews: RevealView[] | undefined;
+            let symmetry: SymmetryReport | undefined;
             if (pipelineK) {
                 if (!r.reliefOrthosDir) notes.note(PROVENANCE.remeshed, 'pipeline K: tile_refine wrote no facade orthophotos, so no facade could be straightened; the remesh stands as cleaned');
                 else {
@@ -4511,6 +4513,22 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         r = { ...r, reliefOrthosDir: k.orthosDir };
                         notes.write('pipeline_k', { version: PIPELINE_K_VERSION, orthosDir: k.orthosDir, cached: k.cached, ms: k.ms, reports: k.reports });
                         notes.note(PROVENANCE.photoInferred, `pipeline K (${PIPELINE_K_VERSION}): ${describeRectified(k)}`);
+                        // the symmetry the scan, the footprint and the straightened photos imply (pipeline-k/symmetry.ts): detected and
+                        // reported only (step 1), off unless SCRATCHBOX_K_SYMMETRY=1 or the node graph's remesh.symmetry
+                        if (structure && stepOn('remesh.symmetry', symmetryOn())) {
+                            try {
+                                io.progress('pipeline K: reading the building\'s symmetry');
+                                const vec = eBuildings.flatMap(b => (b.extruded?.length ? b.extruded.filter(p => !p.planOnly).map(p => p.loops[0]) : [])).filter(l => l && l.length >= 3);
+                                const footprint = (vec.length ? vec : [structure.outline]).map(l => l.map(p => [p[0], p[1]] as [number, number]));
+                                symmetry = await timed('symmetry', () => detectSymmetry({ scanGlb: r.clayGlb, groundY: structure.groundY, footprint, orthosDir: k.orthosDir }, { signal: io.signal, ...(cpuShare ? { threads: cpuShare.threads } : {}) }));
+                                notes.write('pipeline_k_symmetry', { version: SYMMETRY_VERSION, footprint: vec.length ? footprintSource(eBuildings) : 'scan outline', ...symmetry });
+                                notes.note(PROVENANCE.photoInferred, describeSymmetry(symmetry));
+                            } catch (err) {
+                                if (isAbort(err) || io.signal.aborted) throw err;
+                                notes.write('pipeline_k_symmetry', { version: SYMMETRY_VERSION, failed: true, reason: errorMessage(err) });
+                                notes.note(PROVENANCE.photoInferred, `the symmetry reading failed (${errorMessage(err)}); nothing reads it yet, so the build is unchanged`);
+                            }
+                        } else logStep('remesh.symmetry', 'skipped');
                         // the windows fitted on the straightened photos (window-fit.ts), for the lattice to hand to the material regions
                         if (!stepOn('remesh.windowFit', true)) {
                             logStep('remesh.windowFit', 'skipped');
@@ -4702,6 +4720,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 if (pol.clayGlb !== r.clayGlb) {
                     notes.note(PROVENANCE.remeshed, `remesh polish (${REMESH_POLISH_VERSION}): ${describePolish(pol.stats)}`);
                     r = { ...r, cacheKey: pol.cacheKey, clayGlb: pol.clayGlb, ...(pol.texturedGlb ? { texturedGlb: pol.texturedGlb } : {}) };
+                }
+                // the symmetry read above carried into the model's asset.extras (sbSymmetry), on copies beside the cached remesh
+                if (symmetry) {
+                    try {
+                        r = { ...r, clayGlb: stampSymmetryGlb(r.clayGlb, symmetry), ...(r.texturedGlb ? { texturedGlb: stampSymmetryGlb(r.texturedGlb, symmetry) } : {}) };
+                    } catch (err) {
+                        notes.note(PROVENANCE.photoInferred, `the symmetry reading could not be written into the model's extras (${errorMessage(err)}); it stays in the run notes`);
+                    }
                 }
                 // the build looked at from outside: holes seen on it are flagged here, where its geometry is final; untextured surface
                 // is judged on the finished model in the texture stage, which still paints some of it (the party wall)
