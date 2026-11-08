@@ -200,4 +200,40 @@ describe('the building system', () => {
         for (const q of e1.rects) { expect(q[2] - q[0]).toBeCloseTo(BW, -0.5); expect(q[3] - q[1]).toBeCloseTo(BH, -0.5); }
         fs.rmSync(dir, { recursive: true, force: true });
     });
+
+    it('reads windows paired about a pier on a bay exactly two windows wide, where the model read two to a bay, and keeps the read boxes on their pairs', () => {
+        // pairs 2 m apart on a 6 m bay (a 4 m pier between pairs: the bay is exactly two windows' even spacing, yet they are grouped)
+        const GW = 600, BAY = 60, OFF = [20, 40];
+        const g: WindowRect[] = []; for (let j = 0; j < 15; j++) for (let b = 0; b < 10; b++) for (const o of OFF) { const cx = b * BAY + o, cy = ROW / 2 + j * ROW; g.push([cx - 6, cy - BH / 2, cx + 6, cy + BH / 2]); }
+        const rgba = new Uint8Array(GW * H * 4); for (let k = 0; k < GW * H; k++) rgba.set([200, 200, 200, 255], k * 4);
+        for (const [x0, y0, x1, y1] of g) for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) rgba.set([40, 40, 40], (y * GW + x) * 4);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'building-system-pairs-'));
+        fs.writeFileSync(path.join(dir, 'facade_1.png'), encodePng(GW, H, rgba, 4));
+        fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades: [{ ...frame(1, [0, 0, -1]), width: GW }] }));
+        const read = g.filter((_, k) => k % 3 !== 0);
+        const fit: WindowFitFile = { version: WINDOW_FIT_VERSION, params: WINDOW_FIT_PARAMS, ms: 0, facades: [{ facadeId: 1, width: GW, height: H, rects: read, panes: [], bands: [], ms: 0 }] };
+        const sys: BuildingSystem = { version: 'v', building: '', patterns: [{ ...SHAFT, bayM: 6, windowsPerBay: 2 }], regions: [{ facadeId: 1, pattern: 'punched', bottomM: 0, topM: 60 }], conf: 80, groundY: 0, sheet: '', reused: false };
+        const rep = inferWindowArrays(dir, fit, undefined, { system: sys });
+        const reg = rep.facades[0].system!.regions![0];
+        expect(reg.source).toBe('system');
+        expect(reg.bay).toMatchObject({ windows: 2 }); expect(reg.bay!.pitchM).toBeCloseTo(6, 1);
+        const out = (JSON.parse(fs.readFileSync(path.join(dir, 'window_fit.json'), 'utf8')) as WindowFitFile).facades[0] as { rects: WindowRect[] };
+        expect(out.rects).toHaveLength(g.length);
+        // every window at its own place in its pair, none moved to an even half-bay
+        for (const t of g) expect(out.rects.some(r => Math.abs((r[0] + r[2]) / 2 - (t[0] + t[2]) / 2) <= 2 && Math.abs((r[1] + r[3]) / 2 - (t[1] + t[3]) / 2) <= 2)).toBe(true);
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('refuses the system where the read boxes sit off its lattice, and the face reads for itself', () => {
+        // the windows stand every 3 m; the model reads 3.6 m: the read boxes sit off its sites
+        const { dir, fit } = setup([{ id: 1, windows: truth, boxes: truth.filter((_, k) => k % 3 !== 0) }, { id: 2, windows: truth, boxes: truth }]);
+        const sys: BuildingSystem = { version: 'v', building: '', patterns: [{ ...SHAFT, bayM: 3.6 }], regions: [{ facadeId: 1, pattern: 'punched', bottomM: 0, topM: 60 }], conf: 80, groundY: 0, sheet: '', reused: false };
+        const rep = inferWindowArrays(dir, fit, undefined, { system: sys });
+        const f1 = rep.facades.find(f => f.facadeId === 1)!;
+        expect(f1.system!.regions![0].source).not.toBe('system');
+        const e1 = (JSON.parse(fs.readFileSync(path.join(dir, 'window_fit.json'), 'utf8')) as WindowFitFile).facades[0] as { rects: WindowRect[] };
+        // read for itself: the 3 m array completed, every window where the photo shows it
+        for (const t of truth) expect(e1.rects.some(r => Math.abs((r[0] + r[2]) / 2 - (t[0] + t[2]) / 2) <= 2 && Math.abs((r[1] + r[3]) / 2 - (t[1] + t[3]) / 2) <= 2)).toBe(true);
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
 });

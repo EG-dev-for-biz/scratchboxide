@@ -158,8 +158,16 @@ export const WINDOW_ARRAY_PARAMS = {
         /** Grouped bays: the columns are read as bays of several windows (a wider pier between the groups) when the strongest column period at least 1.5 times the windows' own correlates at least this much, and by bayGain more than the windows' own, and is no whole multiple of it (within `multiple`). */
         bayMinAutocorr: 0.5, bayGain: 0.15,
         /** A grouped bay's window is at most this share of the narrowest spacing between its windows. */
-        bayWindowShare: 0.85
+        bayWindowShare: 0.85,
+        /** A bay of several windows the model read is grouped when a gap between its windows differs from the even spacing by more than this share of it. */
+        bayUneven: 0.12,
+        /** The boxes read on a region sit off the building's system's lattice by more than this share of a pitch (their RMS) when the lattice does not fit them: the system is refused there and the face reads for itself. */
+        systemRms: 0.1
     },
+    /** A lattice column (row) is placed by its read boxes when at least this many stand on it at a shared offset. */
+    offsetMin: 3,
+    /** ... and at least this share of them within settleTol of their median. */
+    offsetShare: 0.8,
     /** A row or column is blank when at least this share of its sites' texels the photo never reached or left featureless: the array steps on into it from a row or column that holds it. */
     blankShare: 0.5
 } as const;
@@ -259,7 +267,7 @@ function inferRegions(input: ArrayInput, photo: NonNullable<ReturnType<typeof fa
         // grouped bays (several windows close together, a wider pier between the groups): the band is warped across so
         // its windows stand evenly at bay / k, inferred there, and its boxes warped back (window widths kept)
         // (only over a band of at least minRows storeys: a storey or two of photo is too little to measure a bay by)
-        const bayG = BH >= P.photo.minRows * lat.row.pitch ? groupedBay(lightnessProfiles(img, valid).col, lat.col.pitch, lat.col.size, P) : undefined;
+        const bayG = BH >= P.photo.minRows * lat.row.pitch ? groupedBay(lightnessProfiles(img, valid).col, lat.col.pitch, lat.col.size, P, lat.col.bay && lat.col.perBay ? { bay: lat.col.bay, perBay: lat.col.perBay } : undefined) : undefined;
         let toFace = (x: number) => x, toWarp = (x: number) => x;
         if (bayG) {
             const wp = bayWarp(bayG, W), xmap = new Int32Array(wp.W);
@@ -711,22 +719,40 @@ export function measurePitch(prof: Float64Array, pitch: number, share: number, c
  * the bay. Undefined for evenly spaced columns.
  */
 export interface BayGroup { bay: number; offsets: number[]; width: number }
-export function groupedBay(colProf: Float64Array, q: number, width: number, P: WindowArrayParams = WINDOW_ARRAY_PARAMS): BayGroup | undefined {
+export function groupedBay(colProf: Float64Array, q: number, width: number, P: WindowArrayParams = WINDOW_ARRAY_PARAMS, hint?: { bay: number; perBay: number }): BayGroup | undefined {
+    // the model read several windows to a bay: the bay measured on the photo near the model's, and its windows placed by
+    // the fold; grouped when they stand unevenly (a bay exactly k windows wide can still pair them about a pier)
+    if (hint && hint.perBay >= 2) {
+        const lo = hint.bay * (1 - P.photo.systemRefine), hi = hint.bay * (1 + P.photo.systemRefine);
+        const pk = autocorrPeaks(colProf, lo, hi).find(x => x.lag >= lo && x.lag <= hi && x.ac >= P.photo.minAutocorr);
+        if (pk) {
+            const g = bayWindows(colProf, pk.lag, hint.perBay, pk.lag / hint.perBay, width, P);
+            if (g) {
+                const even = pk.lag / hint.perBay, gaps = g.offsets.map((o, i) => (i + 1 < g.offsets.length ? g.offsets[i + 1] : g.offsets[0] + pk.lag) - o);
+                return Math.max(...gaps.map(x => Math.abs(x - even))) > P.photo.bayUneven * even ? g : undefined;
+            }
+        }
+    }
     const near = autocorrPeaks(colProf, q * (1 - P.photo.systemRefine), q * (1 + P.photo.systemRefine)).find(pk => pk.lag >= q * (1 - P.photo.systemRefine) && pk.lag <= q * (1 + P.photo.systemRefine));
     const qM = near?.lag ?? q, acQ = near?.ac ?? 0;
     const bay = autocorrPeaks(colProf, 1.5 * qM, Math.min(8.5 * qM, colProf.length / 3)).find(pk => pk.lag >= 1.5 * qM && pk.ac >= Math.max(P.photo.bayMinAutocorr, acQ + P.photo.bayGain));
     if (!bay) return undefined;
     const ratio = bay.lag / qM, k = Math.floor(ratio);
     if (k < 2 || Math.abs(ratio - Math.round(ratio)) <= P.photo.multiple) return undefined;
+    return bayWindows(colProf, bay.lag, k, qM, width, P);
+}
+
+/** A bay's k windows: the column profile folded at the bay (px), the k darkest runs at least 0.6 of the spacing `qM` apart, each window centred on its run, its width at most P.photo.bayWindowShare of the narrowest gap. */
+function bayWindows(colProf: Float64Array, bayLag: number, k: number, qM: number, width: number, P: WindowArrayParams): BayGroup | undefined {
     // the profile folded at the bay
-    const n = Math.max(8, Math.round(bay.lag)), sum = new Float64Array(n), cnt = new Int32Array(n);
-    for (let x = 0; x < colProf.length; x++) { if (!Number.isFinite(colProf[x])) continue; const b = Math.min(n - 1, Math.floor((x % bay.lag) / bay.lag * n)); sum[b] += colProf[x]; cnt[b]++; }
+    const n = Math.max(8, Math.round(bayLag)), sum = new Float64Array(n), cnt = new Int32Array(n);
+    for (let x = 0; x < colProf.length; x++) { if (!Number.isFinite(colProf[x])) continue; const b = Math.min(n - 1, Math.floor((x % bayLag) / bayLag * n)); sum[b] += colProf[x]; cnt[b]++; }
     const m = Float64Array.from(sum, (v, b) => (cnt[b] ? v / cnt[b] : NaN)), fin = Array.from(m).filter(Number.isFinite);
     if (fin.length < n / 2) return undefined;
     const mean = fin.reduce((a, b) => a + b, 0) / fin.length;
     for (let b = 0; b < n; b++) if (!Number.isFinite(m[b])) m[b] = mean;
     // the k darkest points, each at least 0.6 of the spacing from the others (circular), refined by the parabola
-    const sup = 0.6 * qM / bay.lag * n, taken = new Uint8Array(n), offsets: number[] = [];
+    const sup = 0.6 * qM / bayLag * n, taken = new Uint8Array(n), offsets: number[] = [];
     for (let t = 0; t < k; t++) {
         let best = -1;
         for (let b = 0; b < n; b++) if (!taken[b] && (best < 0 || m[b] < m[best])) best = b;
@@ -737,14 +763,14 @@ export function groupedBay(colProf: Float64Array, q: number, width: number, P: W
         let lo = 0, hi = 0;
         while (lo < n / 2 && m[(best - lo - 1 + n) % n] < half) lo++;
         while (hi < n / 2 && m[(best + hi + 1) % n] < half) hi++;
-        offsets.push((((best + (hi - lo) / 2 + 0.5) / n * bay.lag) + bay.lag) % bay.lag);
+        offsets.push((((best + (hi - lo) / 2 + 0.5) / n * bayLag) + bayLag) % bayLag);
         for (let b = 0; b < n; b++) { const d = Math.abs(b - best), dc = Math.min(d, n - d); if (dc < sup) taken[b] = 1; }
     }
     offsets.sort((a, b) => a - b);
-    const gaps = offsets.map((o, i) => (i + 1 < k ? offsets[i + 1] : offsets[0] + bay.lag) - o);
-    const w = Math.min(width, P.photo.bayWindowShare * Math.min(...gaps, bay.lag / k));
+    const gaps = offsets.map((o, i) => (i + 1 < k ? offsets[i + 1] : offsets[0] + bayLag) - o);
+    const w = Math.min(width, P.photo.bayWindowShare * Math.min(...gaps, bayLag / k));
     if (!(w > 1)) return undefined;
-    return { bay: bay.lag, offsets, width: w };
+    return { bay: bayLag, offsets, width: w };
 }
 
 /**
@@ -871,9 +897,14 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
             // the boxes read on the system's sites measure its window: the model gives the pattern, the photo its size
             // (Penn 2's lower band read 1.72 x 1.8 m windows in bays its reader boxes fill at 2.6 m: the model's size kept
             // every box aside as another size and filled the bays between with small windows)
-            const onSys = boxes.filter(b => Math.abs(siteOf(b.cx, f.col).res) <= P.snapTol && Math.abs(siteOf(b.cy, f.row).res) <= P.snapTol && b.w <= P.spanSites * f.col.pitch && b.h <= P.spanSites * f.row.pitch);
+            // and where they stand: their phases at the measured pitches (a dark spandrel folds darker than reflective
+            // glass, and the fold alone sets the rows half a storey off, as on the ESB)
+            const singles = boxes.filter(b => b.w <= P.spanSites * f.col.pitch && b.h <= P.spanSites * f.row.pitch);
+            const fc = singles.length >= P.minBoxes ? { ...f.col, phase: consensusPhase(singles.map(b => b.cx), singles.map(() => 1), f.col.pitch) } : f.col;
+            const fr = singles.length >= P.minBoxes ? { ...f.row, phase: consensusPhase(singles.map(b => b.cy), singles.map(() => 1), f.row.pitch) } : f.row;
+            const onSys = singles.filter(b => Math.abs(siteOf(b.cx, fc).res) <= P.snapTol && Math.abs(siteOf(b.cy, fr).res) <= P.snapTol);
             const fromBoxes = onSys.length >= P.minBoxes;
-            seed = { ...f, col: { ...f.col, size: fromBoxes ? median(onSys.map(b => b.w)) : sy.col.size }, row: { ...f.row, size: fromBoxes ? median(onSys.map(b => b.h)) : sy.row.size }, clear: true, tried: seed.tried };
+            seed = { ...f, col: { ...fc, size: fromBoxes ? median(onSys.map(b => b.w)) : sy.col.size }, row: { ...fr, size: fromBoxes ? median(onSys.map(b => b.h)) : sy.row.size }, clear: true, tried: seed.tried };
             systemUsed = true; rowsFrom = 'building';
             systemNote = { family: sy.family, tier: sy.tier, phaseMoved: r2(Math.abs(d)), pitchM: [r3(cpM * pixel), r3(rpM * pixel)], ...(fromBoxes ? { sizeFromBoxes: onSys.length } : {}) };
         } else systemNote = { family: sy.family, tier: sy.tier, pitchM: [r3(cpM * pixel), r3(rpM * pixel)], refused: `the photo folded at the system's lattice (measured ${r2(cpM * pixel)} x ${r2(rpM * pixel)} m) shows no window (contrast ${r2(f?.contrastE ?? 0)}); the face reads for itself` };
@@ -938,6 +969,20 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     let { ev: seedEv, stands: seedStands, note: seedNote } = seedEvidence();
     // the system's lattice shows its window in the fold but no row or column of sites holds it: refused here, and the
     // face reads for itself (its own seed and boxes)
+    // the boxes read sit off the system's lattice (their RMS from its sites, in pitches, over enough single-site boxes):
+    // the lattice does not fit what was read (the ESB's paired windows laid at an even half-bay moved 622 boxes off their
+    // pairs, and the wall grammar lost its bays); refused here, the face reads for itself
+    let offFit: number | undefined;
+    if (systemUsed) {
+        const near = boxes.filter(b => b.w <= P.spanSites * seed.col!.pitch && b.h <= P.spanSites * seed.row!.pitch);
+        if (near.length >= P.minBoxes) offFit = Math.sqrt(near.reduce((t, b) => { const u = siteOf(b.cx, seed.col!).res, v = siteOf(b.cy, seed.row!).res; return t + u * u + v * v; }, 0) / near.length);
+    }
+    if (systemUsed && offFit !== undefined && offFit > P.photo.systemRms) {
+        systemNote = { ...systemNote, refused: `the boxes read sit off the building's system's lattice (RMS ${r2(offFit)} of a pitch over the boxes); the face reads for itself` };
+        delete systemNote!.phaseMoved;
+        seed = ownSeed; rowsFrom = ownRowsFrom; systemUsed = false;
+        ({ ev: seedEv, stands: seedStands, note: seedNote } = seedEvidence());
+    }
     if (systemUsed && !(seedEv.rows >= 1 && seedEv.cols >= 1)) {
         systemNote = { ...systemNote, refused: `the building's system laid on this face shows its window in the fold but no row or column of sites (${seedNote}); the face reads for itself` };
         delete systemNote!.phaseMoved;
@@ -1055,7 +1100,34 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     // every site: key by tier index, row, column
     const tierIndex = (t: ArrayTier) => (t === main ? -1 : tiers.indexOf(t));
     const siteKey = (t: ArrayTier, i: number, j: number) => `${tierIndex(t)}:${i}:${j}`;
-    const siteBox = (t: ArrayTier, i: number, j: number): WindowRect => { const cx = col!.phase + i * col!.pitch, cy = t.rowPhase + j * t.rowPitch; return [Math.round(cx - t.boxW / 2), Math.round(cy - t.boxH / 2), Math.round(cx + t.boxW / 2), Math.round(cy + t.boxH / 2)]; };
+    // each lattice column (row) at the place its read boxes share: windows paired about a pier, or grouped in threes, stand
+    // off an even lattice by the same amount column after column; their sites follow them rather than the boxes being moved
+    // onto an even lattice (the ESB's pairs moved off their pairs lost the wall grammar its bays). A column read by no box
+    // takes the offset of the columns in its place in the repeat (every 2nd, 3rd or 4th, the first that agrees)
+    const offsetsOf = (vals: Map<number, number[]>, pitch: number): ((k: number) => number) => {
+        const own = new Map<number, number>();
+        // a column's offset holds for nearly all its boxes (a drift over part of a facade is not the column's place)
+        for (const [k, v] of vals) { if (v.length < P.offsetMin) continue; const m = median(v); if (v.filter(x => Math.abs(x - m) <= P.settleTol * pitch).length >= P.offsetShare * v.length) own.set(k, m); }
+        for (let per = 1; own.size && per <= 4; per++) {
+            const groups = new Map<number, number[]>();
+            for (const [k, m] of own) { const g = ((k % per) + per) % per; if (!groups.has(g)) groups.set(g, []); groups.get(g)!.push(m); }
+            if (![...groups.values()].every(v => Math.max(...v) - Math.min(...v) <= 2 * P.settleTol * pitch)) continue;
+            const gm = new Map([...groups].map(([g, v]) => [g, median(v)] as const));
+            return k => own.get(k) ?? gm.get(((k % per) + per) % per) ?? 0;
+        }
+        return k => own.get(k) ?? 0;
+    };
+    const colVals = new Map<number, number[]>(), rowVals = new Map<number, number[]>();
+    for (const b of singles) {
+        const t = tierFor(b.cy); if (t !== main) continue;
+        const ci = siteOf(b.cx, col), rj = siteOf(b.cy, { pitch: t.rowPitch, phase: t.rowPhase });
+        if (Math.abs(ci.res) > P.snapTol || Math.abs(rj.res) > P.snapTol) continue;
+        if (!colVals.has(ci.k)) colVals.set(ci.k, []); colVals.get(ci.k)!.push(ci.res * col.pitch);
+        if (!rowVals.has(rj.k)) rowVals.set(rj.k, []); rowVals.get(rj.k)!.push(rj.res * t.rowPitch);
+    }
+    const colOff = offsetsOf(colVals, col.pitch), rowOff = offsetsOf(rowVals, main.rowPitch);
+    const cOff = colOff, rOff = (t: ArrayTier, j: number) => (t === main ? rowOff(j) : 0);
+    const siteBox = (t: ArrayTier, i: number, j: number): WindowRect => { const cx = col!.phase + i * col!.pitch + cOff(i), cy = t.rowPhase + j * t.rowPitch + rOff(t, j); return [Math.round(cx - t.boxW / 2), Math.round(cy - t.boxH / 2), Math.round(cx + t.boxW / 2), Math.round(cy + t.boxH / 2)]; };
     const taken = new Map<string, number>(); // site -> output index
     const out: Array<{ r: WindowRect; kind: number; conf: number; res: number; src?: number; panes?: WindowRect[] }> = [];
     const panesOf = (r: WindowRect): WindowRect[] => (input.panes ?? []).filter(p => p[0] >= r[0] - 1 && p[2] <= r[2] + 1 && p[1] >= r[1] - 1 && p[3] <= r[3] + 1);
@@ -1064,7 +1136,7 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
         return panes.map(p => [Math.round(to[0] + (p[0] - from[0]) * sx), Math.round(to[1] + (p[1] - from[1]) * sy), Math.round(to[0] + (p[2] - from[0]) * sx), Math.round(to[1] + (p[3] - from[1]) * sy)] as WindowRect);
     };
     let rmsInSum = 0, rmsInN = 0, rejected = 0, folded = 0;
-    const siteCy = (t: ArrayTier, j: number) => t.rowPhase + j * t.rowPitch;
+    const siteCy = (t: ArrayTier, j: number) => t.rowPhase + j * t.rowPitch + rOff(t, j);
     // spans first. A facade read mostly as cells is one array: a strip standing on a lattice column (one column wide) is a
     // column of its cells, folded into the sites it covers (photo-inferred: the strip was read there), its panes going to
     // the cell they lie in. A bay wider than a column, or a strip on a facade read mostly as strips, is kept whole and its
@@ -1097,7 +1169,9 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     }
     // members on their sites first (so an outlier never takes a member's site), then the outliers
     const classified = singles.map(b => {
-        const t = tierFor(b.cy), ci = siteOf(b.cx, col!), rj = siteOf(b.cy, { pitch: t.rowPitch, phase: t.rowPhase });
+        const t = tierFor(b.cy), ci0 = siteOf(b.cx, col!), rj0 = siteOf(b.cy, { pitch: t.rowPitch, phase: t.rowPhase });
+        // the residual from the site as its column and row place it
+        const ci = { k: ci0.k, res: ci0.res - cOff(ci0.k) / col!.pitch }, rj = { k: rj0.k, res: rj0.res - rOff(t, rj0.k) / t.rowPitch };
         const dist = Math.hypot(ci.res, rj.res), onSite = Math.abs(ci.res) <= P.snapTol && Math.abs(rj.res) <= P.snapTol;
         const sizeOk = Math.abs(b.w - t.boxW) <= P.sizeTol * t.boxW && Math.abs(b.h - t.boxH) <= P.sizeTol * t.boxH;
         const areaRatio = (b.w * b.h) / Math.max(1, t.boxW * t.boxH), ofArray = areaRatio >= P.areaRange[0] && areaRatio <= P.areaRange[1];

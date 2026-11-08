@@ -179,7 +179,7 @@ export async function readBuildingSystem(orthosDir: string, ask: FacadeAsk, opts
 }
 
 /** The lattice an array pattern prescribes on one face (px): the pane pitch across, the storeys and the window's centre line up, the window's size. */
-export interface FaceSystem { family: string; tier: string; col: { pitch: number; size: number }; row: { pitch: number; phase: number; size: number } }
+export interface FaceSystem { family: string; tier: string; col: { pitch: number; size: number; /** The model's bay (px) and windows per bay, when it read more than one: the photo decides whether they stand evenly or grouped. */ bay?: number; perBay?: number }; row: { pitch: number; phase: number; size: number } }
 /** A region of a face in its photo's rows [y0, y1) (y down), its pattern, and the lattice when it is an array. */
 export interface FaceRegion { y0: number; y1: number; pattern: string | null; repeats: boolean; bottomM: number; topM: number; lattice?: FaceSystem }
 
@@ -203,7 +203,7 @@ export function systemOnFace(sys: BuildingSystem, f: FrameLike): FaceRegion[] {
             const pitch = pat.storeyM! / along, y = yOf(r.bottomM + pat.sillM! + pat.windowHeightM! / 2);
             region.lattice = {
                 family: pat.name, tier: `${r.bottomM}-${r.topM} m`,
-                col: { pitch: pat.bayM! / pat.windowsPerBay! / f.pixel, size: Math.min(pat.windowWidthM!, pat.bayM! / pat.windowsPerBay! * 0.95) / f.pixel },
+                col: { pitch: pat.bayM! / pat.windowsPerBay! / f.pixel, size: Math.min(pat.windowWidthM!, pat.bayM! / pat.windowsPerBay! * 0.95) / f.pixel, ...(pat.windowsPerBay! > 1 ? { bay: pat.bayM! / f.pixel, perBay: pat.windowsPerBay! } : {}) },
                 row: { pitch, phase: ((y % pitch) + pitch) % pitch, size: Math.min(pat.windowHeightM!, pat.storeyM! * 0.95) / along }
             };
         }
