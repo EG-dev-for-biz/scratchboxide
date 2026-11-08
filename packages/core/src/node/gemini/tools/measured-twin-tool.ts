@@ -167,9 +167,9 @@ export async function runMeasuredTwinTool(args: Record<string, unknown>, ctx: To
         } as unknown as CanvasArtifact;
         return { resultPayload: { success: true, glbPath: facts.glbFile, viewerUrl: uri, ...facts, report: r.report, modelImages, artifact }, summaryResult: summary };
     }
-    // beside the build: the scan's plan width plus the gap, along +x
     const gap = typeof args.gapM === 'number' && Number.isFinite(args.gapM) ? Math.max(0, args.gapM) : 20;
-    const offsetX = (xs0.length ? Math.max(...xs0) - Math.min(...xs0) : 100) + gap;
+    // beside a staged build (its layers stand at the place); in a scene with no staged build (an earlier twin's own), in place
+    const offsetX = scene.stagedBuild ? (xs0.length ? Math.max(...xs0) - Math.min(...xs0) : 100) + gap : 0;
     const obj = measuredTwinObject(runId, uri, offsetX, meta);
     const objects = [...(scene.objects ?? []).filter((o: Media4DObject) => o.id !== obj.id), obj];
     const artifact: CanvasArtifact = { ...active, data: { ...scene, objects } as Scene3DData, version: ((active as { version?: number }).version || 1) + 1 } as CanvasArtifact;
