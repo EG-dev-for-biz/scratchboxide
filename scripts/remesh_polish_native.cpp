@@ -27,7 +27,7 @@
  *          i32 parent, i32 of, f64[9] corners, f64[9] barycentric weights.
  *
  *   remesh_polish_native lattice <threads>
- *     in:  "SBLF" u32 version (1), u32 nParams, f64[nParams] (scratchbox_facade_lattice.hpp Params), u32 flags (1: the
+ *     in:  "SBLF" u32 version (3), u32 nParams, f64[nParams] (scratchbox_facade_lattice.hpp Params), u32 flags (1: the
  *          photo's recess, 2: whole walls), u32 n, f32[n] the scan's triangles, u32 hasRaw, u32 n, f32[n] the raw scan's,
  *          u32 nFacades, per facade i32 id, f64[19] frame (centroid, normal, axisS, axisT, sMin, sMax, tMin, tMax, pixel,
  *          orthoSMin, orthoTMax), str image, str mask (u32 length, bytes; empty: none), str inpainted mask (empty: none), u32 n, f64[4n] fitted windows,
@@ -35,7 +35,7 @@
  *     out: per facade in order, u32 ok, u32 W, u32 H (the photo's size), then when ok its lattice: u32 n, f64[n] s, u32 n, f64[n] t, i32 cells, f64
  *          measuredShare, f64[cells] depth, u32 hasPhotoRecess, i32 photoRecessCells, u32 n, f64[4n] strips, i32
  *          stripCells, u32 hasStructure (then u8[cells], f64 reliefM, str reliefFrom, str reason), u8[cells] built,
- *          u8[cells] windows, f64[] cellU, f64[] cellV, u32 n, f32[n] positions, u32 n, f32[n] normals, u32 n, f32[n] uv,
+ *          u32 hasScanKept (then u8[cells] kept, i32 count, f64 areaM2, f64 reliefM: KEEP_MEASURED), u8[cells] windows, f64[] cellU, f64[] cellV, u32 n, f32[n] positions, u32 n, f32[n] normals, u32 n, f32[n] uv,
  *          u32 n, u32[n] indices; then u32 hasRepeat and, when set, i32 groups, i32 windows, i32 spandrels, f64 texels,
  *          f64 filled, f64 edge, u32 n, u8[n] the PNG ([cells]: one per lattice cell, row by row).
  *
@@ -272,7 +272,7 @@ void writeArray(const std::vector<T>& v) { writeOne<uint32_t>(static_cast<uint32
 void writeString(const std::string& v) { writeOne<uint32_t>(static_cast<uint32_t>(v.size())); writeExact(v.data(), v.size()); }
 
 int lattice(unsigned threads) {
-    expectMagic("SBLF", 2);
+    expectMagic("SBLF", 3);
     const auto params = facade_lattice::Params::from(readDoubles(readOne<uint32_t>()));
     const uint32_t flags = readOne<uint32_t>();
     const auto soup = readFloats();
@@ -326,6 +326,13 @@ int lattice(unsigned threads) {
             writeString(r.reason);
         }
         writeExact(r.built.data(), r.built.size());
+        writeOne<uint32_t>(r.hasScanKept ? 1 : 0);
+        if (r.hasScanKept) {
+            writeExact(r.scanKeptCells.data(), r.scanKeptCells.size());
+            writeOne<int32_t>(r.scanKeptCount);
+            writeOne<double>(r.scanKeptAreaM2);
+            writeOne<double>(r.scanKeptReliefM);
+        }
         writeExact(r.windows.data(), r.windows.size());
         writeDoubles(r.cellU);
         writeDoubles(r.cellV);
