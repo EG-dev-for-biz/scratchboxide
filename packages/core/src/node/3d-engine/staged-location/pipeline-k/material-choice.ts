@@ -30,7 +30,7 @@ import type { RgbaImage8 } from '../tile-texture-transfer';
 import { readingKey, type ModelReadingStore } from './model-readings';
 import { PBR_ARTIST_RULES } from '../../../../common/spatial/pbr-artist-reference';
 
-export const MATERIAL_CHOICE_VERSION = 'material-choice/3';
+export const MATERIAL_CHOICE_VERSION = 'material-choice/4';
 
 /** Candidates shown a class (the ranking's nearest), and the cell each is drawn in, pixels. */
 export const CHOICE_CANDIDATES = 10;
