@@ -82,6 +82,8 @@ export interface TileRefineTwin {
     /** Share per rung by triangle area (TEXTURE_LADDER_RUNGS order). */
     rungShares: number[];
     provenance: Array<{ source: string; label: string; method: string; coverage: number }>;
+    /** The area of every triangle written, m2 (what a later step's coverage is a share of). */
+    surfaceAreaM2: number;
     ladderRung: number;
     triangles: number;
     recreate?: TileRefineRecreateReport;
@@ -414,5 +416,5 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     let o = 0;
     for (const b of bin) { out.set(b, o); o += b.byteLength; }
     const ladderRung = rungShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1);
-    return { glb: assembleGlb(json, out), rungShares, provenance, ladderRung, triangles, ...(recreate ? { recreate } : {}), ...(harmonize ? { harmonize } : {}), ...(sky ? { skyDelight: sky } : {}), ...(relight ? { viewRelight: relight } : {}), ...(roofShadow ? { roofShadow } : {}), ...(roofShadowQa ? { roofShadowQa } : {}), ...(regionsPlan ? { materialRegions: regionsPlan.report } : regionsSkipped ? { materialRegions: { skipped: regionsSkipped } } : {}), ...(materialClasses ? { materialClasses } : {}) };
+    return { glb: assembleGlb(json, out), rungShares, provenance, surfaceAreaM2: total, ladderRung, triangles, ...(recreate ? { recreate } : {}), ...(harmonize ? { harmonize } : {}), ...(sky ? { skyDelight: sky } : {}), ...(relight ? { viewRelight: relight } : {}), ...(roofShadow ? { roofShadow } : {}), ...(roofShadowQa ? { roofShadowQa } : {}), ...(regionsPlan ? { materialRegions: regionsPlan.report } : regionsSkipped ? { materialRegions: { skipped: regionsSkipped } } : {}), ...(materialClasses ? { materialClasses } : {}) };
 }

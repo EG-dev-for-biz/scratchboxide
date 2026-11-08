@@ -11,9 +11,12 @@
  * Builds assets/textures/library/index.json (scratchbox.texture-library/1): one entry per material set in the texture
  * library bucket, holding what costs nothing to know, so texture_library_search can find sets by text and real tile size:
  *
- *   - the sets and their maps: the bucket listing (the app's service account);
+ *   - the sets and their maps (colour, normal, roughness, occlusion, metalness, packed ARM and height): the bucket
+ *     listing (the app's service account);
  *   - real tile sizes, tags, descriptions and preview links: the publishers' public metadata (ambientCG API v2,
- *     dimensions in cm; Poly Haven API, dimensions in mm).
+ *     dimensions in cm; Poly Haven API, dimensions in mm), and the height map's real depth where a publisher gives one
+ *     (a third dimension; neither gave one for any set on 2026-11-05, so the depths are estimated and labelled:
+ *     scripts/measure_texture_library_heights.ts).
  *
  * No image is downloaded. Colour, roughness and metalness are measured later, on demand, only for the sets a search
  * ranks (texture-library.ts measureLibraryEntries), and cached per set.
@@ -32,7 +35,7 @@ const outFile = path.join(repoRoot, 'assets/textures/library/index.json');
 const arg = (name: string) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : undefined; };
 const only = arg('only')?.split(',').map(s => s.trim()).filter(Boolean);
 
-interface Meta { publisher: string; realSizeM?: [number, number]; widthOnlyM?: number; pixels?: [number, number]; tags: string[]; appearance: string; previews: TextureLibraryEntry['previews'] }
+interface Meta { publisher: string; realSizeM?: [number, number]; widthOnlyM?: number; /** The publisher's own depth of the height map, metres, when it gives one. */ depthM?: number; pixels?: [number, number]; tags: string[]; appearance: string; previews: TextureLibraryEntry['previews'] }
 
 async function json<T>(url: string): Promise<T> {
     for (let i = 1; ; i++) {
@@ -55,12 +58,15 @@ async function ambientCG(): Promise<Map<string, Meta>> {
         for (const a of page.foundAssets) {
             const link = (a.previewLinks as Array<{ url: string }> | undefined)?.find(l => l.url.includes('color_url='))?.url ?? '';
             const param = (k: string) => { const m = new RegExp(`${k}_url=([^&]+)`).exec(link); return m ? m[1].replace(/\?.*$/, '') : undefined; };
-            const x = Number(a.dimensionX), y = Number(a.dimensionY);
+            const x = Number(a.dimensionX), y = Number(a.dimensionY), z = Number(a.dimensionZ);
             const previews: Meta['previews'] = {};
             for (const role of ['color', 'normal', 'roughness', 'metalness'] as const) { const u = param(role); if (u) previews[role] = u; }
+            const disp = param('displacement');
+            if (disp) previews.height = disp;
             out.set(a.assetId, {
                 publisher: 'ambientCG',
                 ...(x > 0 && y > 0 ? { realSizeM: [x / 100, y / 100] as [number, number] } : x > 0 ? { widthOnlyM: x / 100 } : {}),
+                ...(z > 0 ? { depthM: z / 100 } : {}),
                 tags: (a.tags ?? []).filter((t: string) => !/^\d+$/.test(t)),
                 appearance: [a.displayName, a.displayCategory, a.description, a.creationMethodName].filter(Boolean).join('. '),
                 previews
@@ -76,10 +82,11 @@ async function polyHaven(): Promise<Map<string, Meta>> {
     const all = await json<Record<string, Record<string, any>>>('https://api.polyhaven.com/assets?t=textures');
     const out = new Map<string, Meta>();
     for (const [id, a] of Object.entries(all)) {
-        const [w, h] = (a.dimensions ?? []) as number[];
+        const [w, h, d] = (a.dimensions ?? []) as number[];
         out.set(id, {
             publisher: 'Poly Haven',
             ...(w > 0 && h > 0 ? { realSizeM: [w / 1000, h / 1000] as [number, number] } : {}),
+            ...(d > 0 ? { depthM: d / 1000 } : {}),
             ...(Array.isArray(a.max_resolution) ? { pixels: a.max_resolution as [number, number] } : {}),
             tags: [...(a.tags ?? []), ...(a.categories ?? [])],
             appearance: [a.name, a.category, a.description].filter(Boolean).join('. '),
@@ -121,11 +128,13 @@ async function main(): Promise<void> {
             id,
             publisher: meta?.publisher ?? (/^[A-Z]/.test(id) ? 'ambientCG' : 'Poly Haven'),
             maps: s.maps,
-            downloadMB: Math.round(Object.values(s.sizes).reduce((a, b) => a + b, 0) / 1e6),
+            // the height map is fetched only on request (fetchLibrarySets `height`): not part of a set's usual download
+            downloadMB: Math.round(Object.entries(s.sizes).filter(([role]) => role !== 'height').reduce((a, [, b]) => a + b, 0) / 1e6),
             ...(meta?.pixels ? { pixels: meta.pixels } : long ? { pixels: [long, long] as [number, number] } : {}),
             ...(meta?.realSizeM ? { realSizeM: meta.realSizeM.map(v => Math.round(v * 1000) / 1000) as [number, number] } : {}),
             ...(meta?.widthOnlyM && !meta.realSizeM ? { widthOnlyM: meta.widthOnlyM } : {}),
             sizeSource: meta?.realSizeM ? `${meta.publisher} metadata` : 'unknown',
+            ...(meta?.depthM && s.maps.height ? { heightDepthM: Math.round(meta.depthM * 1e4) / 1e4, heightDepthSource: `${meta.publisher} metadata` } : {}),
             ...(meta?.previews && Object.keys(meta.previews).length ? { previews: meta.previews } : {}),
             appearance: meta?.appearance || id,
             tags: meta?.tags ?? [],

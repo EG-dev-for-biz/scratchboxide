@@ -37,9 +37,14 @@
  *  6. Maps: on each rebuilt facade, each texel's class's set tiled at the set's real size, box-filtered to the facade's
  *     texel (so a tile never aliases): occlusion, roughness and metalness (ORM) and the normal, as the set has them; on
  *     scan pieces, whose atlases carry no metric frame for a tile, each texel's class's set's mean ORM.
+ *  7. Height: each class's set's height as a recess below the rebuilt facade's plane (material-height.ts), one small tile
+ *     a class at the tile's own resolution (millimetres a texel, where the facade's photo has centimetres), with each
+ *     facade's class map and metric frame to place it. The viewer's parallax and the near displacement
+ *     (height-relief.ts) read them. A glass pane takes none (its class map texel names no class), and scan pieces
+ *     take none: a measured surface is never moved.
  *
  * Labels: base colour photo-inferred (the photo, never relit or lifted: it is the evidence of how the building looks); each
- * texel's material photo-inferred (its class); occlusion, roughness, metalness and normal generated (library sets).
+ * texel's material photo-inferred (its class); occlusion, roughness, metalness, normal and height generated (library sets).
  * Nothing is drawn where no photo is.
  */
 
@@ -48,8 +53,9 @@ import { SRGB8_TO_LINEAR } from '../../../../common/spatial/photogrammetric-deli
 import { linearRgbToLab } from '../../../../common/spatial/texture-library-index';
 import type { RgbaImage8 } from '../tile-texture-transfer';
 import { bandResponses, TEXTURE_BANDS_M, type TextureEnergy } from './material-harvest';
+import { HEIGHT_RELIEF, MATERIAL_HEIGHT_VERSION, type DrawnHeight } from './material-height';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/33';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/34';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /**
@@ -112,12 +118,17 @@ export interface RegionSet {
     /** The pick by appearance (material-choice.ts): the candidates shown, whether the look or the ranking chose, what the chooser saw and why the ranking's nearest was kept; `reused`: the pick kept for an earlier class shown the same candidates, its colour and how far this class's lies from it (CHOICE_REUSE), not asked again. */
     choice?: { candidates: string[]; by: 'appearance' | 'ranking'; seen?: string; conf?: number; reused?: { meanLab: [number, number, number]; colourUnits: number }; why?: string };
     /** The class's finish read by the vision model (material-finish.ts), or why there is none, and what the ranking ranked toward. Photo-inferred. */
+    /**
+     * The set's height as a recess below the surface (material-height.ts): 255 the surface, 0 a recess of HEIGHT_RELIEF.capM;
+     * none for a set without a height map or a depth, or drawn too flat to show. And what it was drawn at.
+     */
+    height?: RgbaImage8; heightDrawn?: DrawnHeight;
     finish?: { read?: { roughness: number; metalness: number; conf: number; seen?: string }; why?: string; roughness: number; metallic: number; /** The finish and grain the set's maps were drawn at (material-finish.ts finishMaps), when either changed them. */ drawn?: { roughness: number; metallic: number; relief: number; grain: number }; label: 'photo-inferred' };
 }
 
 export interface MaterialRegionsReport {
     version: string;
-    classes: Array<Pick<RegionClass, 'index' | 'meanLab' | 'share' | 'wall' | 'openings' | 'texture' | 'facades'> & { set: string; distance: number; harvest?: RegionSet['harvest']; choice?: RegionSet['choice']; finish?: RegionSet['finish'] }>;
+    classes: Array<Pick<RegionClass, 'index' | 'meanLab' | 'share' | 'wall' | 'openings' | 'texture' | 'facades'> & { set: string; distance: number; harvest?: RegionSet['harvest']; choice?: RegionSet['choice']; finish?: RegionSet['finish']; /** The set's height as drawn (material-height.ts); none when it has none. Generated. */ height?: DrawnHeight }>;
     /** The rebuilt facades: each one's texel, the share of its texels each class (by index) holds, and the share drawn as glass. */
     facades: { total: number; perFacade: Array<{ mesh: string; texelM: number; classShares: number[]; /** The share of its texels the fold over its repeats changed (see the file comment, 4). */ foldedShare: number; /** The pane rects the lattice carried, and the share of the facade drawn as glass. */ panes: number; glassShare: number }> };
     scanPieces: { total: number };
@@ -132,6 +143,12 @@ export interface MaterialRegionsReport {
 interface PlannedMaterial {
     material: number;
     orm: RgbaImage8; normal?: RgbaImage8;
+    /**
+     * Each texel's class (r and b the class index; g the share of the relief it takes, classBorderWeights) and the photo's texel (m), on a rebuilt facade when any class's
+     * set has a height: with the sets' recess tiles (RegionSet.height) the relief under every texel at the tile's own
+     * resolution, far finer than the facade's texel.
+     */
+    classes?: RgbaImage8; texelM?: number;
     rebuilt: boolean; glass: boolean;
 }
 
@@ -586,6 +603,31 @@ export function regionClassMap(img: RgbaImage8, classes: RegionClass[], r: numbe
 export const regionRadius = (texelM: number, P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS) =>
     texelM > 0 ? Math.max(1, Math.min(P.regionSmoothMaxTexels, Math.round(P.regionSmoothM / texelM))) : 1;
 
+/**
+ * How much of the relief each texel takes, into a class map's green channel (0..255): none on a texel beside another
+ * class, rising to all of it CLASS_BORDER_FADE_M away (a city-block distance in texels), so two materials meet level
+ * instead of stepping from one set's recess to the other's. A surface of one class is 255 throughout.
+ */
+export const CLASS_BORDER_FADE_M = 0.12;
+export function classBorderWeights(cls: Uint8Array, W: number, H: number, texelM: number, rgba: Uint8Array): void {
+    const N = W * H, FAR = 65535, d = new Uint16Array(N).fill(FAR);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const k = y * W + x, c = cls[k];
+        if ((x > 0 && cls[k - 1] !== c) || (x + 1 < W && cls[k + 1] !== c) || (y > 0 && cls[k - W] !== c) || (y + 1 < H && cls[k + W] !== c)) d[k] = 0;
+    }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const k = y * W + x;
+        if (x > 0 && d[k - 1] + 1 < d[k]) d[k] = d[k - 1] + 1;
+        if (y > 0 && d[k - W] + 1 < d[k]) d[k] = d[k - W] + 1;
+    }
+    for (let y = H - 1; y >= 0; y--) for (let x = W - 1; x >= 0; x--) {
+        const k = y * W + x;
+        if (x + 1 < W && d[k + 1] + 1 < d[k]) d[k] = d[k + 1] + 1;
+        if (y + 1 < H && d[k + W] + 1 < d[k]) d[k] = d[k + W] + 1;
+    }
+    for (let k = 0; k < N; k++) rgba[k * 4 + 1] = d[k] === FAR ? 255 : Math.round(255 * Math.min(1, (d[k] * texelM) / CLASS_BORDER_FADE_M));
+}
+
 /** One material's share of the plan: a rebuilt facade's photo, or a scan piece's (each photo planned once, the first material using it). */
 export interface MaterialPlanJob { kind: 'rebuilt' | 'scan'; material: number; mesh?: string }
 
@@ -618,6 +660,9 @@ export function materialPlanJobs(json: any, images: Map<number, RgbaImage8>): Ma
     return jobs;
 }
 
+/** The class written for a texel that takes no relief (a glass pane): no tile is ever stacked at it, so it reads as the surface. */
+export const NO_RELIEF_CLASS = 255;
+
 /** Plans one job's maps (see the file comment): independent of every other job, so jobs can run on separate threads. */
 export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext): MaterialPlanPiece {
     const { g, json, images, classes, sets, P } = ctx;
@@ -642,16 +687,20 @@ export function planMaterialJob(job: MaterialPlanJob, ctx: MaterialPlanContext):
         // the glass in the panes (see the file comment, 5): main's smooth-glass setting, over whatever set the class has
         const pg = paneGlass(img, classes, fittedPanes(json, job.mesh!), P.paneWallShare);
         const gl = pg?.glass, glassR = Math.round(GLASS.roughness * 255), glassM = Math.round(GLASS.metalness * 255);
+        // each texel's class, for the relief (the sets' recess tiles are sampled by it, at their own resolution)
+        const cmap = sets.some(s => !!s.height) ? blank(W, H) : undefined;
         for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
             const k = y * W + x, t = tiles[cls[k]]!, j = ((y % t.th) * t.tw + (x % t.tw)) * 3;
-            if (gl?.[k]) { orm.rgba.set([255, glassR, glassM, 255], k * 4); nrm.rgba.set([128, 128, 255, 255], k * 4); piece.glass++; continue; }
+            if (gl?.[k]) { orm.rgba.set([255, glassR, glassM, 255], k * 4); nrm.rgba.set([128, 128, 255, 255], k * 4); cmap?.rgba.set([NO_RELIEF_CLASS, NO_RELIEF_CLASS, NO_RELIEF_CLASS, 255], k * 4); piece.glass++; continue; }
             orm.rgba.set([Math.round(t.o[j] * 255), Math.round(t.o[j + 1] * 255), Math.round(t.o[j + 2] * 255), 255], k * 4);
             nrm.rgba.set([Math.round(t.n[j] * 255), Math.round(t.n[j + 1] * 255), Math.round(t.n[j + 2] * 255), 255], k * 4);
+            if (cmap) cmap.rgba.set([cls[k], 255, cls[k], 255], k * 4);
         }
         piece.panesOnStone = pg?.stone ?? 0; piece.paneWallTexels = pg?.wallTexels ?? 0;
+        if (cmap) classBorderWeights(cls, W, H, texelM, cmap.rgba);
         const r3 = (v: number) => Math.round(v * 1000) / 1000;
         piece.facade = { mesh: job.mesh!, texelM: Math.round(texelM * 1e4) / 1e4, classShares: piece.classTexels.map(n => r3(n / N)), foldedShare: r3(folded / N), panes: pg?.panes ?? 0, glassShare: r3(piece.glass / N) };
-        piece.planned = { material: mi, orm, normal: nrm, rebuilt: true, glass: piece.glass > 0 };
+        piece.planned = { material: mi, orm, normal: nrm, ...(cmap ? { classes: cmap, texelM } : {}), rebuilt: true, glass: piece.glass > 0 };
         return piece;
     }
     // scan pieces: each texel's class's set's mean ORM
@@ -668,7 +717,7 @@ export function mergeMaterialPlan(json: any, classes: RegionClass[], sets: Regio
     const { rebuilt, other } = photoMaterials(json);
     const report: MaterialRegionsReport = {
         version: MATERIAL_REGIONS_VERSION,
-        classes: classes.map((c, k) => ({ index: c.index, meanLab: c.meanLab, share: c.share, wall: c.wall, openings: c.openings, set: sets[k].name, distance: Math.round(sets[k].distance * 100) / 100, ...(sets[k].harvest ? { harvest: sets[k].harvest } : {}), ...(sets[k].choice ? { choice: sets[k].choice } : {}), ...(sets[k].finish ? { finish: sets[k].finish } : {}), ...(c.texture ? { texture: c.texture, facades: c.facades } : {}) })),
+        classes: classes.map((c, k) => ({ index: c.index, meanLab: c.meanLab, share: c.share, wall: c.wall, openings: c.openings, set: sets[k].name, distance: Math.round(sets[k].distance * 100) / 100, ...(sets[k].harvest ? { harvest: sets[k].harvest } : {}), ...(sets[k].choice ? { choice: sets[k].choice } : {}), ...(sets[k].finish ? { finish: sets[k].finish } : {}), ...(sets[k].heightDrawn ? { height: sets[k].heightDrawn } : {}), ...(c.texture ? { texture: c.texture, facades: c.facades } : {}) })),
         facades: { total: rebuilt.size, perFacade: [] }, scanPieces: { total: other.size }, texels: { total: 0, perClass: classes.map(() => 0), glass: 0 }, panesOnStone: 0, paneWallTexels: 0, ms
     };
     const planned: PlannedMaterial[] = [];
@@ -695,10 +744,13 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
 /**
  * Writes a plan's maps into the GLB's materials: lit (KHR_materials_unlit removed), the metallic-roughness texture (its
  * red the occlusion, also the occlusion texture), the normal on rebuilt facades, and the extras: sbMaterial (the viewer's
- * reflection probe, every texel by its own roughness and metalness) and the maps' provenance. `addTexture` stores an image
+ * reflection probe, every texel by its own roughness and metalness; and the relief: the facade's class map and metric
+ * frame, with the classes' recess tiles in the asset's sbMaterialRelief) and the maps' provenance. `addTexture` stores an image
  * and returns its texture index.
  */
 export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTexture: (img: RgbaImage8, mimeType: 'image/png' | 'image/jpeg', name: string) => number, provenanceIndices: number[]): void {
+    const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
+    let anyRelief = false;
     const sets = plan.sets.map(s => (s.harvest ? `${s.name}, chosen by colour and texture at the tile's texel (tile-only harvest), its finer grain ${s.harvest.grain}` : s.name)).join('; ');
     for (const pm of plan.materials) {
         const m = json.materials[pm.material];
@@ -710,15 +762,32 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
         pbr.metallicRoughnessTexture = { index: orm };
         m.occlusionTexture = { index: orm };
         if (pm.normal) m.normalTexture = { index: addTexture(pm.normal, 'image/jpeg', `${name}_normal`) };
+        // the relief: this facade's class map and metric frame; the classes' recess tiles are stored once (below)
+        const relief = pm.classes && pm.texelM ? { classTexture: addTexture(pm.classes, 'image/png', `${name}_classes`), weights: true, uvMetres: [r4(pm.classes.width * pm.texelM), r4(pm.classes.height * pm.texelM)] } : undefined;
+        if (relief) anyRelief = true;
         m.extras = {
             ...(m.extras ?? {}),
-            sbMaterial: { schema: 'scratchbox.staged-material/1', provenanceIndices },
+            sbMaterial: { schema: 'scratchbox.staged-material/1', provenanceIndices, ...(relief ? { relief } : {}) },
             sbMaterialRegions: {
                 version: MATERIAL_REGIONS_VERSION,
                 baseColor: { label: 'photo-inferred', source: "pipeline K's harmonised photo" },
                 material: { label: 'photo-inferred', source: `each texel's appearance class (CIELAB, the majority within ${MATERIAL_REGIONS_PARAMS.regionSmoothM} m)` },
+                ...(relief ? { height: { label: 'generated', source: `each texel's class's set's height map, tiled at the set's real size, as a recess of at most ${HEIGHT_RELIEF.capM} m below the rebuilt plane (${plan.sets.filter(st => st.heightDrawn).map(st => `${st.name} ${Math.round(st.heightDrawn!.maxRecessM * 1000)} mm, its depth ${st.heightDrawn!.source}`).join('; ')}); the scan's own pieces and the glass panes take none` } } : {}),
                 maps: { label: 'generated', source: `the texture library set of each texel's class (${sets}): ${pm.rebuilt ? 'occlusion, roughness, metalness and normal tiled at the set\'s real size' : "the set's mean occlusion, roughness and metalness"}` },
                 ...(pm.glass ? { glass: { label: 'photo-inferred', source: `the panes of the fitted windows (the facade reader's accepted openings with the pane splits it read where it read the plane, the window fit's elsewhere), less panes mostly of the wall's class and the wall's class's texels: roughness ${GLASS.roughness}, no metalness, flat; the photo kept as the colour` } } : {})
+            }
+        };
+    }
+    // the classes' recess tiles, once for the building: the viewer's parallax and the near displacement sample them by each
+    // facade's class map (height-relief.ts, heightRelief.ts)
+    if (anyRelief) {
+        json.asset = json.asset ?? { version: '2.0' };
+        json.asset.extras = {
+            ...(json.asset.extras ?? {}),
+            sbMaterialRelief: {
+                schema: 'scratchbox.material-relief/1', version: MATERIAL_HEIGHT_VERSION, depthM: HEIGHT_RELIEF.capM, label: 'generated',
+                about: `each class's library set's height as a recess below the surface it is drawn on: a tile's 255 is the surface, 0 a recess of ${HEIGHT_RELIEF.capM} m; tiled at sizeM, placed by each material's class map (extras.sbMaterial.relief)`,
+                tiles: plan.sets.map((st, k) => (st.height && st.heightDrawn ? { class: k, set: st.name, texture: addTexture(st.height, 'image/png', `relief_${st.name}`), sizeM: st.realSizeM, ...st.heightDrawn } : null))
             }
         };
     }
@@ -770,5 +839,6 @@ export function describeMaterialRegions(r: MaterialRegionsReport): string {
     const pct = (a: number) => (r.texels.total ? `${Math.round((100 * a) / r.texels.total)}%` : '0%');
     return `material regions: ${r.classes.length} appearance classes (${r.classes.map((c, k) => `${c.openings ? 'in openings ' : ''}${c.wall ? 'lightest' : 'L ' + Math.round(c.meanLab[0])} -> ${c.set}, ${pct(r.texels.perClass[k] ?? 0)} of texels`).join('; ')}); ` +
         `every texel its class's set: ${r.facades.total} rebuilt facades tiled at the sets' real size, ${r.scanPieces.total} scan pieces the sets' mean finish; glass in the fitted windows' panes on ${pct(r.texels.glass)} of texels (the wall guard: ${r.panesOnStone} panes left as stone, ${pct(r.paneWallTexels)} of texels wall-like within glass panes); ` +
-        `occlusion, roughness, metalness and normal generated from the library, colour the photo (${r.ms} ms)`;
+        `occlusion, roughness, metalness and normal generated from the library, colour the photo` +
+        `${r.classes.some(c => c.height) ? `; height (a recess below the rebuilt planes, generated): ${r.classes.filter(c => c.height).map(c => `${c.set} up to ${Math.round(c.height!.maxRecessM * 1000)} mm`).join(', ')}` : ''} (${r.ms} ms)`;
 }
