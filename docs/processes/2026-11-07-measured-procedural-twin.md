@@ -62,9 +62,45 @@ The tool also renders four proof views (two obliques, a facade close-up, the top
 - **Mast:** it keeps its stepped profile but loses the lattice and the observation ring.
 - **Use:** a light, watertight, fully labelled stand-in, for example far buildings in a district. It does not replace K for a hero building. MAIN decides whether to take it.
 
+## Round two: detail textures from each wall's own storey repeats (2026-11-07)
+
+**What changed.** A wall with windows from a photographed plane now carries a detail texture.
+
+- **Source:** the plane's straightened photo, which is the scan's own photo, straightened by K.
+- **Each texel:** the median of that point and the same point 6 storeys up and down, so one-off reflections, lit windows and smears are outvoted.
+- **Colour:** each element's measured colour is baked over its own rect as a square-root gain.
+- **Atlas:** 85 walls at 0.12 m share one 4096 x 1744 atlas (4.2 million texels).
+- **Unchanged:** the geometry stays procedural. Roofs and the mast keep their flat colours, since they have no storey repeats to take a median over.
+
+**Measured against the scan's photo** at the same 9 cameras, unlit colours:
+- dE is the mean CIELAB difference.
+- "detail" is the correlation of fine luminance detail (luminance minus its 5 px blur) with the scan's.
+
+| | Flat twin | Detail twin | K twin |
+|---|---|---|---|
+| dE, benchmark views | 4.6–5.6 | 3.9–4.6 | 8.9–10.1 |
+| dE, street views | 6.9–7.3 | 5.3–6.0 | 13.5–14.2 |
+| dE, setbacks | 8.2 | 7.0 | 9.9 |
+| dE, facade close-up | 9.5 | 6.3 | 13.1 |
+| detail, benchmark views | 0.79–0.81 | 0.87–0.88 | 0.86–0.89 |
+| detail, street views | 0.27–0.36 | 0.67–0.68 | 0.69–0.71 |
+| detail, setbacks | 0.19 | 0.45 | 0.59 |
+| detail, facade close-up | 0.04 | 0.57 | 0.55 |
+| Mast | dE 11.0, detail −0.03 | unchanged | dE 8.3, detail 0.64 |
+
+**Two variants that lost:**
+- **K's harmonised twin photos as the source:** dE rose above the flat twin's, because K's harmonising moves the colours away from the scan's.
+- **The full per-element gain:** cells read as blocks. The square-root gain keeps each cell's colour without the blocks.
+
+**Verdict.**
+- **From the street up:** the twin is now about as close to the scan in fine detail as K, and closer in colour.
+- **Close up:** it reads like the photo at its own ~0.3 m detail, without the scan's one-off marks.
+- **Still short:** the mast and the roofs.
+- **Size:** 230k triangles and a 32 MB GLB, against K's 863k triangles and 179 MB.
+
 ## Candidate tool and service ideas
 
 - **Mouldings as measured sweeps** (from the review of lsimic/ProceduralBuildingGenerator; GPL, so the idea only). Sweep a stepped moulding profile around each tier outline, mitred at the corners, wherever the scan's own profile at a tier edge resolves one. This would add cornices and copings without breaking the footprint rule.
 - **Layered window frames.** Sweep a frame profile around each read pane, so sashes show depth and shadow. Their widths and depths are generated and labelled.
-- **Per-element photo detail.** Give each element a small detail texture cut from K's straightened facade photo, still on procedural geometry, so close-ups stop reading as a mosaic.
+- **Detail for the mast and roofs.** Use a median over the mast's angular repeats (its sectors) and over the roof's own repeats, so they get detail textures like the walls.
 - **Build from a staged scene's own run.** Pipeline K's 3D Building flow could offer the twin as a toggle beside the K layer (today it is a chat tool).
