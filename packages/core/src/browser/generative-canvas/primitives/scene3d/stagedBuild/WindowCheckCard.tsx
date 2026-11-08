@@ -88,7 +88,7 @@ export const WindowCheckCard: React.FC<{ runId: string; topPx?: number; leftPx?:
                 <div style={{ fontSize: 13 }}>Select every image where the yellow box is on a</div>
                 <div style={{ fontSize: 24, fontWeight: 700, lineHeight: 1.15 }}>window</div>
                 <div style={{ fontSize: 12, marginTop: 2 }}>Leave the others. Optional: it helps the 3D Building feature find windows.</div>
-                <button type="button" aria-label="Close the window check" onClick={() => void send(true)} style={{ position: 'absolute', top: 6, right: 8, background: 'transparent', border: 'none', color: '#fff', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}>×</button>
+                <button type="button" className="sb-window-check-close" aria-label="Close the window check" onClick={() => void send(true)} style={{ position: 'absolute', top: 6, right: 8, background: 'transparent', border: 'none', color: '#fff', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}>×</button>
             </div>
             {state === 'thanks'
                 ? <div role="status" style={{ padding: 16, fontSize: 13 }}>{note}</div>
@@ -97,7 +97,7 @@ export const WindowCheckCard: React.FC<{ runId: string; topPx?: number; leftPx?:
                         {check.tiles.map((t, i) => {
                             const on = selected.has(t.id);
                             return (
-                                <button key={t.id} type="button" aria-pressed={on} aria-label={`Image ${i + 1}${on ? ', selected' : ''}`} onClick={() => toggle(t.id)} data-tile={t.id}
+                                <button key={t.id} type="button" className="sb-window-check-tile" aria-pressed={on} aria-label={`Image ${i + 1}${on ? ', selected' : ''}`} onClick={() => toggle(t.id)} data-tile={t.id}
                                     style={{ position: 'relative', padding: 0, border: 'none', outline: on ? `3px solid ${BLUE}` : 'none', outlineOffset: -3, background: '#eee', cursor: 'pointer', aspectRatio: '1 / 1', overflow: 'hidden', width: '100%', minWidth: 0 }}>
                                     <img src={`data:image/png;base64,${t.png}`} alt="" draggable={false} style={{ width: '100%', height: '100%', display: 'block', transform: on ? 'scale(0.82)' : 'none', transition: 'transform 120ms' }} />
                                     {on && <span aria-hidden="true" style={{ position: 'absolute', top: 3, left: 3, width: 20, height: 20, borderRadius: 10, background: BLUE, color: '#fff', fontSize: 14, lineHeight: '20px', textAlign: 'center' }}>✓</span>}
@@ -108,8 +108,8 @@ export const WindowCheckCard: React.FC<{ runId: string; topPx?: number; leftPx?:
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderTop: '1px solid #dadce0' }}>
                         <span style={{ fontSize: 12, color: '#5f6368' }}>{selected.size ? `${selected.size} selected` : 'None selected yet'}</span>
                         <span style={{ display: 'flex', gap: 6 }}>
-                            <button type="button" title="Skip this check: nothing is saved" disabled={state === 'sending'} onClick={() => void send(true)} style={{ background: '#fff', color: BLUE, border: `1px solid ${BLUE}`, borderRadius: 3, padding: '7px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>SKIP</button>
-                            <button type="button" title="Save your answers" disabled={state === 'sending'} onClick={() => void send(false)} style={{ background: BLUE, color: '#fff', border: 'none', borderRadius: 3, padding: '7px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>VERIFY</button>
+                            <button type="button" className="sb-window-check-skip" title="Skip this check: nothing is saved" disabled={state === 'sending'} onClick={() => void send(true)} style={{ background: '#fff', color: BLUE, border: `1px solid ${BLUE}`, borderRadius: 3, padding: '7px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>SKIP</button>
+                            <button type="button" className="sb-window-check-verify" title="Save your answers" disabled={state === 'sending'} onClick={() => void send(false)} style={{ background: BLUE, color: '#fff', border: 'none', borderRadius: 3, padding: '7px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>VERIFY</button>
                         </span>
                     </div>
                 </>}
