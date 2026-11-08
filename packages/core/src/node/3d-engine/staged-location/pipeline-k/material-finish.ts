@@ -101,7 +101,7 @@ export function settleFinishes(classes: Array<{ meanLab: [number, number, number
  * (the Empire State Building's wall sheets: the reader's zones covered its middle bays only), their glass and spandrels fall
  * outside the openings and form an outside class the colour of the glazing (the ESB's darkest outside class, L 40.1 a 1.1
  * b 0.4, against its window glazing's L 41.6 a 1.0 b 0.5), which the finish read took for "shaded limestone": drawn as rough
- * stone and pulling the building's exposure up. An outside class within deltaE (CIELAB) of a class read inside the
+ * stone and pulling the building's exposure up. An outside class within deltaE (CIELAB) of the darkest class read inside the
  * openings, whose reading names a reference finish with an albedo (stone, masonry, render) and is not drawn metal, is that
  * class's material outside the fitted windows, a mix of glass and spandrel: drawn as a window frame
  * (ARTIST_FINISH.frameRoughness, no metalness), keeping its reading's words and confidence, and left out of the exposure fit.
@@ -109,7 +109,10 @@ export function settleFinishes(classes: Array<{ meanLab: [number, number, number
 export const GLAZING_MATCH = { deltaE: 3 } as const;
 
 export function matchGlazing(classes: Array<{ meanLab: [number, number, number]; openings?: boolean }>, finishes: Array<ClassFinish | undefined>, M = GLAZING_MATCH, A = ARTIST_FINISH): Array<ClassFinish | undefined> {
-    const open = classes.map((c, j) => j).filter(j => classes[j].openings);
+    // the glazing: the darkest class read inside the openings (the lighter one holds the frames and reflections, whose greys
+    // overlap weathered stone: on the ESB 'window glass and frames' at L 50 beside its limestone at L 49)
+    const inside = classes.map((c, j) => j).filter(j => classes[j].openings);
+    const open = inside.length ? [inside.reduce((a, j) => (classes[j].meanLab[0] < classes[a].meanLab[0] ? j : a))] : [];
     return finishes.map((f, k) => {
         // only a reading of a surface whose own colour is its albedo (stone, masonry, render: a reference finish with an albedo),
         // not drawn metal: a read of paint, metal or glass stands (the Seagram's bronze is about its dark glass's colour)

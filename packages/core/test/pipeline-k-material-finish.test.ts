@@ -171,6 +171,11 @@ describe('pipeline K material finish', () => {
         // a reading of paint or metal the glazing's colour stands (the Seagram's bronze): only a stone reading is turned
         const bronze = PBR_REFERENCE.findIndex(e => /bronze or brass/.test(e.look)) + 1;
         expect(matchGlazing(classes, [{ roughness: 0.55, metalness: 1, conf: 85, ref: bronze }, stone, stone, { roughness: 0.08, metalness: 0, conf: 90 }])[0]!.glazingOf).toBeUndefined();
+        // only the darkest opening class (the glazing) is matched: a lighter one (frames, reflections) the colour of weathered stone is not
+        const two = [...classes.slice(0, 3), classes[3], { meanLab: [49.5, 1.5, 1.5] as [number, number, number], openings: true }];
+        const m2 = matchGlazing(two, [stone, stone, stone, { roughness: 0.08, metalness: 0, conf: 90 }, { roughness: 0.08, metalness: 0, conf: 90 }]);
+        expect(m2[0]!.glazingOf).toBe(3);
+        expect(m2[1]!.glazingOf).toBeUndefined();
         // no class inside the openings: nothing to match
         expect(matchGlazing(classes.slice(0, 3), [stone, stone, stone]).every(f => f!.glazingOf === undefined)).toBe(true);
     });
