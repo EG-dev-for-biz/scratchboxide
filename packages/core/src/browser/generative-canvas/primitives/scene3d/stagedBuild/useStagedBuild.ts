@@ -51,7 +51,7 @@ import { mergedPartsOf } from './mergeStagedParts';
 import { FACADE_MATERIAL_SOURCE } from './facadeMaterialLook';
 import { TEXTURE_RUNG_COLORS, classUniforms, hexToRgb01, legendRows, patternCode, provenanceBackground, resolveLegend, shadingClasses, styleFor, textureRungLegendRows, uncertaintyCoverage, type LegendStyle } from './provenanceShading';
 import { EVICT_AFTER_MS, evictionCandidates, evictionEnabled, sameSet, stepEviction } from './layerEviction';
-import { isInterrupted, isRunSettled, publishStageEvent, stageEventsFor, streamedProgress, subscribeStageEvents, withStreamedEvents, type StageProgress } from './stagedBuildState';
+import { isInterrupted, isRemeshRunning, isRunSettled, publishStageEvent, stageEventsFor, streamedProgress, subscribeStageEvents, withStreamedEvents, type StageProgress } from './stagedBuildState';
 import { followStagedRunShared } from './stagedRunClient';
 import { readStagedBuild } from './stagedBuildState';
 import type { CanvasArtifact } from '../../../canvas-types';
@@ -116,6 +116,8 @@ export interface UseStagedBuildOptions {
 
 export interface StagedBuildHandle {
     active: boolean;
+    /** The remesh stage is running now (streamed events included): the window check shows as a popup meanwhile. */
+    remeshRunning: boolean;
     overlay: (opts: { bottomInsetPx: number }) => React.ReactNode;
 }
 
@@ -967,7 +969,7 @@ export function useStagedBuild(opts: UseStagedBuildOptions): StagedBuildHandle {
         return React.createElement(OverlayHost, { store, render: (frame, skipNote) => render(frame, skipNote, o.bottomInsetPx) });
     }, [store, render]);
 
-    return { active: !!effective, overlay };
+    return { active: !!effective, remeshRunning: !!effective && isRemeshRunning(effective, pageLoadedAtMs), overlay };
 }
 
 /** What the overlay says about clay and textures: the mode, how many layers show their twin, the pass's progress. */

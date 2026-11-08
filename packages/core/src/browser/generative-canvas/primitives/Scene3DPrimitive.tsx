@@ -4461,7 +4461,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 </div>
             )}
             {staged.overlay({ bottomInsetPx: isTimelineDrawerOpen ? 255 : 16 })}
-            {staged.active && readStagedBuild(sceneData)?.runId && <WindowCheckCard runId={readStagedBuild(sceneData)!.runId} />}
+            {staged.active && readStagedBuild(sceneData)?.runId && <WindowCheckCard runId={readStagedBuild(sceneData)!.runId} modal={staged.remeshRunning} />}
             <ObjectBuildLiveOverlay live={readObjectBuildLive(sceneData)} bottomInsetPx={isTimelineDrawerOpen ? 255 : 76} />
             {cameraMode === 'fps' && <WalkHud session={walkSessionOf} />}
 
