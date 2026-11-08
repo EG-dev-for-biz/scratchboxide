@@ -13,14 +13,13 @@
  * extent clipped away by the near plane (so the probe sees the street, the neighbours and the sky, not the building's
  * inside), prefiltered (PMREM) and set as the material's environment. It moves with the camera like a reflection, never
  * painted on. Where a reflection points below the horizon it sees ground of GROUND_ALBEDO under the scene's sky and sun,
- * never brighter (whatever the probe drew there); the probe's diffuse light is left out (the scene's sky fill already lights
- * the photos), and the roughness rises where the normal varies within a pixel (specular anti-aliasing), so a distant
+ * never brighter (whatever the probe drew there); a rough surface's diffuse light is the probe's irradiance (SKY_FILL), and the roughness rises where the normal varies within a pixel (specular anti-aliasing), so a distant
  * facade does not shimmer.
  *
  *  - Without a parameters texture (pipeline K's material regions, one material path for every surface; user decision,
  *    2026-11-05): every texel reflects the probe by its own roughness and metalness (the twin's metallic-roughness
- *    texture, from the library set of its detected material), nothing gated on a kind of surface; a rough dielectric's
- *    reflection is drawn in proportion to the fill its photo is lit by (MATTE_REFLECTION), as its diffuse is.
+ *    texture, from the library set of its detected material), nothing gated on a kind of surface; its diffuse light is the
+ *    probe's irradiance too on a rough dielectric, in place of the hemisphere fill (SKY_FILL), so shade is lit as the scene's own sky implies.
  *  - With a parameters texture (the facade material reading of the texture pass, facade-materials.ts, and pipeline E's
  *    openings): texels read as glass reflect it scaled by their weight (parameters R / 255, the reading's confidence), with a
  *    roughness floor (GLASS_MIN_ROUGHNESS); metal texels (B > 0) whole; every other texel the scene's direct light only.
@@ -82,14 +81,17 @@ uniform float uSbGroundAlbedo;
 export const GLASS_MIN_ROUGHNESS = 0.08;
 
 /**
- * A rough dielectric reflects the probe in proportion to the fill its photo is lit by (FRAGMENT_ENV_GATE), from roughness
- * `from` (the whole probe below it) to `full` (the fill's share of the probe's light at and above it). Measured in the app
- * viewer (2026-11-08, Seagram scene, a flat wall of albedo 0.15 at roughness 0.85 in shade, linear light): the probe's
- * reflection was 21% of the wall's brightness seen straight on and 47% at 80 degrees, where three.js's own physical render,
- * the probe's diffuse kept, puts it at 8% and 20%: the viewer had taken the probe's diffuse out (the photo holds it) and left
- * its reflection whole, so matte stone in shade read wet. With this weight, 7% and 20%. Generated.
+ * The sky fill (FRAGMENT_ENV_GATE; MAIN's decision, 2026-11-08: shade lit as the scene's own sky implies): a rough dielectric of
+ * the staged twins' material-regions look takes its diffuse light from the reflection probe's irradiance at that point, in
+ * place of the hemisphere and ambient fill, ramping in from roughness `from` to `full`; glass, polished surfaces and metals
+ * keep the fill. The probe's reflection is drawn in proportion to whichever fill lights the texel. Measured in the app viewer
+ * (Seagram scene, a flat wall of albedo 0.15 at roughness 0.85, linear light): the hemisphere gave a shaded wall 0.022 where
+ * the probe gives 0.093; with the probe's diffuse out and its reflection whole, the reflection was 21-47% of the wall's
+ * brightness (straight on to 80 degrees), wet stone; three.js's physical render puts it at 8-20%. Lit by the probe the
+ * shaded wall is 0.093 and its reflection 6-16%. Smooth surfaces are left on the fill because a glass pane's photo shows what
+ * lies behind it, not an albedo: lit by the probe, the Seagram's glass bands went pale grey. Generated.
  */
-export const MATTE_REFLECTION = { from: 0.3, full: 0.7 } as const;
+export const SKY_FILL = { from: 0.3, full: 0.7 } as const;
 
 /** The ground's albedo a surface reflects below the horizon (generated: asphalt and stone, 0.1-0.2; gaffer skill, section 1). */
 export const GROUND_ALBEDO = 0.15;
@@ -171,22 +173,25 @@ const FRAGMENT_ENV_GATE = `
             float sbAbove = smoothstep( -0.03, 0.03, sbRwG.y );
             radiance = mix( min( radiance, sbGround ), radiance, sbAbove );
         }
-        // a rough dielectric's reflection of the probe is the same sky light the probe's diffuse would have given it, and the
-        // photo already holds it: it is drawn in proportion to the fill the photo is lit by here (the hemisphere and ambient
-        // light), not at the probe's own brightness, so a matte wall in shade is not lit mostly by a reflection (the wet look;
-        // MATTE_REFLECTION); a smooth surface (glass, polished stone) and a metal keep the whole probe
-        {
-            float sbProbeE = dot( iblIrradiance, vec3( 0.2126, 0.7152, 0.0722 ) );
-            float sbFillE = dot( irradiance, vec3( 0.2126, 0.7152, 0.0722 ) );
-            float sbFill = sbProbeE > 1e-5 ? clamp( sbFillE / sbProbeE, 0.0, 1.0 ) : 1.0;
-            radiance *= mix( 1.0, sbFill, smoothstep( ${MATTE_REFLECTION.from.toFixed(2)}, ${MATTE_REFLECTION.full.toFixed(2)}, material.roughness ) * ( 1.0 - metalnessFactor ) );
-        }
-        // the probe's diffuse light only on metal read by the parameters: every photo is already lit by the scene's sky
-        // fill (the hemisphere light), so adding the probe's irradiance lit its colour twice (a metal's diffuse is ~0 anyway)
+        // the photo's de-lit colour lit by the scene's own sky (SKY_FILL): a rough dielectric takes its diffuse from the probe's
+        // irradiance (three.js feeds it through the indirect specular term, with the energy the reflection leaves) in place of
+        // the hemisphere and ambient fill that stood in for it (a quarter of the probe's light on a shaded wall: shade read dark
+        // and heavy); a smooth one (glass, whose photo shows what lies behind it, not an albedo) and a metal keep the fill, and
+        // the probe's reflection is drawn in proportion to whichever fill lights the texel, so the two stay consistent (the
+        // reflection of a probe four times the fill read as wet stone). With parameters (the texture pass's reading, pipeline E)
+        // the walls keep the lighting they had: the probe's diffuse on metal only, every photo lit by the hemisphere fill
         #if defined( USE_MAP ) && defined( SB_PARAMS )
         iblIrradiance *= sbP.b > 0.0 ? 1.0 : 0.0;
         #else
-        iblIrradiance *= 0.0;
+        {
+            float sbSky = smoothstep( ${SKY_FILL.from.toFixed(2)}, ${SKY_FILL.full.toFixed(2)}, material.roughness ) * ( 1.0 - metalnessFactor );
+            float sbProbeE = dot( iblIrradiance, vec3( 0.2126, 0.7152, 0.0722 ) );
+            irradiance *= 1.0 - sbSky;
+            iblIrradiance *= sbSky;
+            float sbFillE = dot( irradiance + iblIrradiance, vec3( 0.2126, 0.7152, 0.0722 ) );
+            float sbFill = sbProbeE > 1e-5 ? clamp( sbFillE / sbProbeE, 0.0, 1.0 ) : 1.0;
+            radiance *= mix( 1.0, sbFill, sbSky );
+        }
         #endif
         radiance *= sbEnv;
     }
@@ -250,7 +255,7 @@ export async function prepareFacadeMaterials(gltf: GltfLike): Promise<number> {
                     .replace('#include <lights_physical_fragment>', FRAGMENT_SPECULAR_AA)
                     .replace('#include <lights_fragment_maps>', FRAGMENT_ENV_GATE);
             };
-            mat.customProgramCacheKey = () => `sb-facade-v10:${withParams ? 'p' : 'n'}:${withCourses ? courses.length : 0}`;
+            mat.customProgramCacheKey = () => `sb-facade-v11:${withParams ? 'p' : 'n'}:${withCourses ? courses.length : 0}`;
             mat.needsUpdate = true;
             patched++;
         } catch (err) {

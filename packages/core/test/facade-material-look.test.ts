@@ -9,10 +9,10 @@
 
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { MATTE_REFLECTION, prepareFacadeMaterials } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/facadeMaterialLook';
+import { SKY_FILL, prepareFacadeMaterials } from '../src/browser/generative-canvas/primitives/scene3d/stagedBuild/facadeMaterialLook';
 
 describe('the staged twin material look', () => {
-    it("draws a rough dielectric's probe reflection in proportion to its fill, and a smooth or metal one whole", async () => {
+    it("lights a rough dielectric by the probe's irradiance in place of the hemisphere fill, and keeps glass and metal on the fill", async () => {
         const mat = new THREE.MeshStandardMaterial();
         mat.userData.sbMaterial = { provenanceIndices: [] };
         const scene = new THREE.Scene();
@@ -20,16 +20,20 @@ describe('the staged twin material look', () => {
         expect(await prepareFacadeMaterials({ scene, parser: { getDependency: async () => null } })).toBe(1);
         const shader = { uniforms: {} as Record<string, unknown>, vertexShader: THREE.ShaderLib.physical.vertexShader, fragmentShader: THREE.ShaderLib.physical.fragmentShader };
         mat.onBeforeCompile(shader as never, {} as never);
-        // the probe's reflection weighed by the hemisphere and ambient fill against the probe's own irradiance, from roughness
-        // `from` to `full`, never on metal
-        expect(shader.fragmentShader).toContain(`smoothstep( ${MATTE_REFLECTION.from.toFixed(2)}, ${MATTE_REFLECTION.full.toFixed(2)}, material.roughness ) * ( 1.0 - metalnessFactor )`);
-        expect(shader.fragmentShader).toContain('dot( irradiance, vec3( 0.2126, 0.7152, 0.0722 ) )');
-        // the weight is applied after the probe's radiance is read and before its diffuse is taken out
-        const f = shader.fragmentShader, i = f.indexOf('sbFill'), j = f.indexOf('iblIrradiance *= 0.0');
-        expect(f.indexOf('#include <lights_fragment_maps>')).toBeGreaterThan(-1);
-        expect(i).toBeGreaterThan(f.indexOf('#include <lights_fragment_maps>'));
-        expect(j).toBeGreaterThan(i);
-        expect(MATTE_REFLECTION.from).toBeLessThan(MATTE_REFLECTION.full);
-        expect(mat.customProgramCacheKey()).toMatch(/^sb-facade-v10:/);
+        const f = shader.fragmentShader;
+        // the sky's share of the texel's diffuse ramps in with roughness, never on metal
+        expect(f).toContain(`float sbSky = smoothstep( ${SKY_FILL.from.toFixed(2)}, ${SKY_FILL.full.toFixed(2)}, material.roughness ) * ( 1.0 - metalnessFactor );`);
+        // the hemisphere and ambient fill give way to the probe's irradiance by that share
+        expect(f).toContain('irradiance *= 1.0 - sbSky;');
+        expect(f).toContain('iblIrradiance *= sbSky;');
+        // the reflection is weighed by whichever fill lights the texel against the probe's own light
+        expect(f).toContain('radiance *= mix( 1.0, sbFill, sbSky );');
+        // all of it after the probe's light is read (lights_fragment_maps) and before the indirect terms are summed
+        const at = f.indexOf('#include <lights_fragment_maps>');
+        expect(at).toBeGreaterThan(-1);
+        expect(f.indexOf('float sbSky')).toBeGreaterThan(at);
+        expect(f.indexOf('float sbSky')).toBeLessThan(f.indexOf('#include <lights_fragment_end>'));
+        expect(SKY_FILL.from).toBeLessThan(SKY_FILL.full);
+        expect(mat.customProgramCacheKey()).toMatch(/^sb-facade-v11:/);
     });
 });
