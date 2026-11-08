@@ -63,7 +63,7 @@ import { bandResponses, TEXTURE_BANDS_M, type TextureEnergy } from './material-h
 import { HEIGHT_RELIEF, MATERIAL_HEIGHT_VERSION, type DrawnHeight } from './material-height';
 import { ARTIST_FINISH, EXPOSURE_FIT, referenceAlbedo } from '../../../../common/spatial/pbr-artist-reference';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/36';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/37';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /**
@@ -131,7 +131,7 @@ export interface RegionSet {
      * none for a set without a height map or a depth, or drawn too flat to show. And what it was drawn at.
      */
     height?: RgbaImage8; heightDrawn?: DrawnHeight;
-    finish?: { read?: { roughness: number; metalness: number; conf: number; seen?: string; grain?: number; coverage?: number }; /** The pick by look voted the class not bare metal: drawn a dielectric (material-finish.ts agreeMetal). */ metalVetoed?: true; why?: string; roughness: number; metallic: number; /** The finish and grain the set's maps were drawn at (material-finish.ts finishMaps), when either changed them. */ drawn?: { roughness: number; metallic: number; relief: number; grain: number }; label: 'photo-inferred' };
+    finish?: { read?: { roughness: number; metalness: number; conf: number; seen?: string; grain?: number; coverage?: number; ref?: number; glazingOf?: number }; /** The pick by look voted the class not bare metal: drawn a dielectric (material-finish.ts agreeMetal). */ metalVetoed?: true; why?: string; roughness: number; metallic: number; /** The finish and grain the set's maps were drawn at (material-finish.ts finishMaps), when either changed them. */ drawn?: { roughness: number; metallic: number; relief: number; grain: number }; label: 'photo-inferred' };
 }
 
 export interface MaterialRegionsReport {
@@ -809,7 +809,7 @@ export function fitExposureGain(classes: RegionClass[], sets: Array<Pick<RegionS
     classes.forEach((c, k) => {
         const read = sets[k]?.finish?.read as { ref?: number } | undefined, albedo = referenceAlbedo(read?.ref);
         const L = lum(c.meanLinear);
-        if (c.openings || !albedo || !(L > 1e-4) || (sets[k]?.finish?.drawn?.metallic ?? 0) > 0.5) return;
+        if (c.openings || !albedo || !(L > 1e-4) || (sets[k]?.finish?.drawn?.metallic ?? 0) > 0.5 || (read as { glazingOf?: number } | undefined)?.glazingOf !== undefined) return;
         used.push({ index: c.index, share: c.share, luminance: Math.round(L * 1e4) / 1e4, ref: read!.ref!, albedo, gainRange: [Math.round((albedo[0] / L) * 1000) / 1000, Math.round((albedo[1] / L) * 1000) / 1000] });
     });
     // the clip cap: the clipShare quantile of the photos' linear luminance, sampled every 7th texel

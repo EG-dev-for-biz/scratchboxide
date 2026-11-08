@@ -14,8 +14,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { agreeMetal, settleFinishes, drawFinish, drawnMetalness, drawnRoughness, energyFit, FINISH_READ, finishMaps, finishPrompt, finishTarget, grainOf, parseClassFinish, patternFit } from '../src/node/3d-engine/staged-location/pipeline-k/material-finish';
-import { PBR_REFERENCE } from '../src/common/spatial/pbr-artist-reference';
+import { agreeMetal, matchGlazing, settleFinishes, drawFinish, drawnMetalness, drawnRoughness, energyFit, FINISH_READ, finishMaps, finishPrompt, finishTarget, grainOf, parseClassFinish, patternFit } from '../src/node/3d-engine/staged-location/pipeline-k/material-finish';
+import { ARTIST_FINISH, PBR_REFERENCE } from '../src/common/spatial/pbr-artist-reference';
 import { REGION_FINISH } from '../src/node/3d-engine/staged-location/pipeline-k/material-sets';
 
 describe('pipeline K material finish', () => {
@@ -156,6 +156,23 @@ describe('pipeline K material finish', () => {
         const stone = { roughness: 0.75, metalness: 0.3, conf: 80 };
         expect(agreeMetal(stone, 0)).toBe(stone);
         expect(drawnMetalness(agreeMetal(metal, 0)!)).toBe(0);
+    });
+
+    it("draws an outside class the colour of the window openings as a frame, never as stone, and keeps its reading's words", () => {
+        // the ESB's classes: three limestone-coloured outside classes, a dark outside class the glazing's colour, the glazing inside the openings
+        const classes = [{ meanLab: [40.1, 1.09, 0.36] as [number, number, number] }, { meanLab: [49.1, 1.55, 1.41] as [number, number, number] }, { meanLab: [70.3, 3.04, 5.86] as [number, number, number] }, { meanLab: [41.6, 1.03, 0.54] as [number, number, number], openings: true }];
+        const stone = { roughness: 0.82, metalness: 0, conf: 80, seen: 'shaded weathered limestone', ref: 5 };
+        const out = matchGlazing(classes, [stone, { ...stone, roughness: 0.8 }, { ...stone, roughness: 0.75 }, { roughness: 0.08, metalness: 0, conf: 90 }]);
+        expect(out[0]).toMatchObject({ roughness: ARTIST_FINISH.frameRoughness, metalness: 0, glazingOf: 3, seen: 'shaded weathered limestone', readRoughness: 0.82 });
+        expect(out[1]).toBe(out[1]);
+        expect(out[1]!.glazingOf).toBeUndefined();
+        expect(out[2]!.glazingOf).toBeUndefined();
+        expect(out[3]!.roughness).toBe(0.08);
+        // a reading of paint or metal the glazing's colour stands (the Seagram's bronze): only a stone reading is turned
+        const bronze = PBR_REFERENCE.findIndex(e => /bronze or brass/.test(e.look)) + 1;
+        expect(matchGlazing(classes, [{ roughness: 0.55, metalness: 1, conf: 85, ref: bronze }, stone, stone, { roughness: 0.08, metalness: 0, conf: 90 }])[0]!.glazingOf).toBeUndefined();
+        // no class inside the openings: nothing to match
+        expect(matchGlazing(classes.slice(0, 3), [stone, stone, stone]).every(f => f!.glazingOf === undefined)).toBe(true);
     });
 
     it('asks for numbers per row, never a material category to route on', () => {

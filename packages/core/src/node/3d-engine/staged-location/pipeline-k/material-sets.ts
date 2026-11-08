@@ -26,7 +26,7 @@ import { NativePythonRunnerService } from '../../native-python-runner-service';
 import { decodeImageInMemory } from '../tile-texture-transfer';
 import type { RegionClass, RegionSet } from './material-regions';
 import { CHOICE_CANDIDATES, type ChoiceCandidate, type ChoiceRow, type SetChoice } from './material-choice';
-import { agreeMetal, drawFinish, energyFit, finishMaps, finishTarget, grainOf, OPENING_FINISH, patternFit, settleFinishes, type ClassFinish } from './material-finish';
+import { agreeMetal, drawFinish, matchGlazing, energyFit, finishMaps, finishTarget, grainOf, OPENING_FINISH, patternFit, settleFinishes, type ClassFinish } from './material-finish';
 import { loadSetFitModel, setFitGrain } from './material-set-fit';
 import { heightRecessMap } from './material-height';
 import { readingKey, type ModelReadingStore } from './model-readings';
@@ -103,6 +103,8 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
     }
     // a metal read on a class of the colour the building mostly reads dielectric is that material in shade (settleFinishes)
     finishes = settleFinishes(classes, finishes);
+    // an outside class the colour of the window openings is the bays the fitted windows missed: drawn as a frame (matchGlazing)
+    finishes = matchGlazing(classes, finishes);
     // an opening class with no confident reading is ranked toward the opening prior (a smooth dielectric), any other toward matte
     const targets = classes.map((c, k) => finishTarget(finishes[k], c.openings ? { roughness: OPENING_FINISH.roughness, metallic: OPENING_FINISH.metalness } : REGION_FINISH));
     // every set of a facade's scale is ranked by its measured colour, measured ahead (the committed statistics,
