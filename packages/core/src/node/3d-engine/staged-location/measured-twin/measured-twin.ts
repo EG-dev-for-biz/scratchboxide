@@ -120,6 +120,29 @@ export function readKRunRecords(runDir: string, cacheRoot: string): KRunRecords 
     return { runDir, orthosDir, isolate, ...(textured ? { textured } : {}), groundY: base.groundY, loops: base.loops, planes: [...facades, ...others], windowFit, classes, photos, reveal };
 }
 
+/**
+ * A staged run's cut-out scan without pipeline K's notes: the tile_refine folder its remesh stage committed (the stage's
+ * cache entry names it), its tree-free scan and photo-textured scan. No footprint, street level, plane photos, window
+ * boxes or appearance classes: the generator reads them itself (selfRead).
+ */
+export function readKFreeRecords(runDir: string, cacheRoot: string): KRunRecords {
+    const stages = readJson<{ keys?: Record<string, string> }>(path.join(runDir, 'stages.json'));
+    const key = stages?.keys?.remesh;
+    if (!key) throw new Error(`the run has no remesh stage (${path.join(runDir, 'stages.json')}): its cut-out scan is unknown`);
+    const done = path.join(cacheRoot, 'staged_location', 'remesh', key, 'done.json');
+    const text = fs.existsSync(done) ? fs.readFileSync(done, 'utf8') : '';
+    const m = /tile_refine\/([0-9a-f]{64})/.exec(text);
+    if (!m) throw new Error(`the run's remesh entry names no tile_refine folder (${done})`);
+    const refineDir = path.join(cacheRoot, 'tile_refine', m[1]);
+    const isolate = path.join(refineDir, 'clay.glb');
+    if (!fs.existsSync(isolate)) throw new Error(`the run's tree-free scan is not on this machine (${isolate})`);
+    const textured = path.join(refineDir, 'textured.glb');
+    return {
+        runDir, orthosDir: refineDir, isolate, ...(fs.existsSync(textured) ? { textured } : {}), groundY: NaN, loops: [], planes: [], windowFit: [], classes: [], photos: {},
+        reveal: { depthM: GENERATED_REVEAL_M, label: 'generated', source: 'no reveal-depth reading (the K-free twin reads no Street View); a plausible reveal' }
+    };
+}
+
 const n6 = (v: number) => (Number.isFinite(v) ? String(Math.round(v * 1e6) / 1e6) : '0');
 
 /**
@@ -129,7 +152,8 @@ const n6 = (v: number) => (Number.isFinite(v) ? String(Math.round(v * 1e6) / 1e6
 export function measuredTwinSpec(r: KRunRecords, out: { glb: string; report: string }, maps: Array<{ normal?: string; orm?: string; tileM?: number } | undefined> = [], options: MeasuredTwinOptions = {}): string {
     const L: string[] = [`# ${MEASURED_TWIN_VERSION} from ${r.runDir}`, `isolate ${r.isolate}`];
     if (r.textured) L.push(`textured ${r.textured}`);
-    L.push(`out ${out.glb}`, `report ${out.report}`, `ground ${n6(r.groundY)}`);
+    L.push(`out ${out.glb}`, `report ${out.report}`, `ground ${Number.isNaN(r.groundY) ? 'auto' : n6(r.groundY)}`);
+    if (options.kFree) L.push('param selfRead 1');
     for (const l of r.loops) if (l.length >= 3) L.push(`footprint ${l.length} ${l.map(p => `${n6(p[0])} ${n6(p[1])}`).join(' ')}`);
     for (const [k, v] of Object.entries(TWIN_SCAN_PARAMS)) L.push(`scan ${k} ${v}`);
     if (options.scanDetailM !== undefined && options.scanDetailM > 0) L.push(`param scanDetailM ${n6(options.scanDetailM)}`);
@@ -207,10 +231,12 @@ export function ensureMeasuredTwinBinary(repoRoot = findTileRefineRepoRoot()): P
 /**
  * How the twin is made. `scanDetailM` above 0 keeps the scan's own surface wherever it stands at least that far outside the
  * procedural shell (measured; the ledge profiles and roof blocks are then left out); none or 0: everything procedural.
+ * `kFree` reads nothing of pipeline K: only the run's cut-out scan (tile_refine's isolate and its photo texture); the street
+ * level is estimated from the scan, each wall's photo rendered from the texture and its windows found in it (readKFreeRecords).
  * `reliefM` above 0 (and no scanDetailM) rebuilds, purely procedurally, what stands at least that far off the shell: relief maps
  * of the scan on the walls, roofs and slender top in 0.3 m cells, as measured blocks.
  */
-export interface MeasuredTwinOptions { scanDetailM?: number; reliefM?: number }
+export interface MeasuredTwinOptions { scanDetailM?: number; reliefM?: number; kFree?: boolean }
 
 /** The generator's report (scratchbox_measured_twin.hpp reportJson). */
 export interface MeasuredTwinReport {
@@ -223,7 +249,7 @@ export interface MeasuredTwinReport {
     windows: { given: number; placed: number; generated: number; continued: number; continueTested: number; rephased: number; wallsRephased: number; panes: number; dropped: Record<string, number> };
     colour: { elements: number; uncoloured: number };
     slender: { fromM: number | null; slices: number; bands: number; axisFits: number; symmetry: number; finBands: number; fins: number; finSegments: number };
-    heads: { types: number; windows: number; drawn: number; surfacePieces: number; surfaceQuads: number; medianRiseM: number };
+    heads: { types: number; windows: number; drawn: number; surfacePieces: number; surfaceQuads: number; selfWalls: number; selfWindowWalls: number; selfWindows: number; medianRiseM: number };
     topM: number; revealM: number; revealLabel: string; triangles: number; bytes: number; classUse: Record<string, number>; notes: string[];
 }
 
@@ -237,7 +263,7 @@ export interface MeasuredTwinResult {
  */
 export async function buildMeasuredTwin(opts: { runDir: string; cacheRoot: string; outDir: string; store?: ModelReadingStore; signal?: AbortSignal; timeoutMs?: number; options?: MeasuredTwinOptions }): Promise<MeasuredTwinResult> {
     const t0 = Date.now();
-    const rec = readKRunRecords(opts.runDir, opts.cacheRoot);
+    const rec = opts.options?.kFree ? readKFreeRecords(opts.runDir, opts.cacheRoot) : readKRunRecords(opts.runDir, opts.cacheRoot);
     fs.mkdirSync(opts.outDir, { recursive: true });
     const { maps, missing } = await classMaps(rec.classes, path.join(opts.outDir, 'maps'), opts.store);
     const glb = path.join(opts.outDir, 'measured_twin.glb'), report = path.join(opts.outDir, 'measured_twin_report.json');

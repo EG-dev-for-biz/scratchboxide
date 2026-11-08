@@ -27,6 +27,10 @@
  *   - Fins (measured). Each step of the slender top: its angular profile stacked over the step's height in 0.5 degree bins
  *     (the excess of dense scan samples beyond the ring), folded by its period when it repeats around the axis, the bins
  *     standing `finMinM` or more beyond the ring drawn as radial blocks.
+ *   - Self-read (opt-in `selfRead`, the K-free mode): no plane photos or window boxes from another stage. Each wall's photo
+ *     rendered from the scan's texture; its windows found in it (storey and column pitch from its autocorrelation, the
+ *     median unit cell's dark opening, every cell that matches); its detail texture read from it; the street level, when
+ *     not given ("ground auto"), the commonest up-facing height near the scan's foot.
  *   - Openings (photo-inferred). Every window box pipeline K kept (window_fit.json: the facade reader's openings, the
  *     window fit's elsewhere, in each plane photo's pixels) is mapped through its plane's frame onto the prism wall facing
  *     the same way within `planeTolM`, punched through it, recessed by the reveal depth (photo-inferred when read from
@@ -123,6 +127,8 @@ struct Params {
     int harmonics{12};
     double symmetryTol{0.04};          // a slender top's rotational symmetry holds when its m-fold average departs by at most this share of the radius (RMS)
     double circleBelowM{1.0};
+    int selfRead{0};                   // no plane photos or window boxes given: each wall's own photo rendered from the scan's texture, its windows found in it
+    double selfTexelM{0.15};           // ... its texel
     int openingHeads{1};               // window heads traced from each window type's median-stacked photo
     double headMinM{0.15};             // ... drawn when the traced top varies at least this much across the window
     double headEdgeM{0.12};            // ... and stays within this of the box top at its outer columns (the wall closes in at the corners)          // a slice of a slender top narrower than this (mean radius) is a circle
@@ -196,7 +202,7 @@ inline Spec parseSpec(std::istream& in) {
         else if (k == "textured") S.textured = restOfLine(ls);
         else if (k == "out") S.out = restOfLine(ls);
         else if (k == "report") S.report = restOfLine(ls);
-        else if (k == "ground") ls >> S.groundY;
+        else if (k == "ground") { std::string g; ls >> g; S.groundY = g == "auto" ? NAN : std::stod(g); }
         else if (k == "footprint") { size_t n; ls >> n; std::vector<P2> l(n); for (auto& p : l) ls >> p.u >> p.v; if (n >= 3) S.footprintXZ.push_back(l); }
         else if (k == "scan") {
             std::string name; double v; ls >> name >> v;
@@ -213,6 +219,7 @@ inline Spec parseSpec(std::istream& in) {
             else if (name == "minWindowM") P.minWindowM = v; else if (name == "keepShare") P.keepShare = v; else if (name == "sampleRadiusM") P.sampleRadiusM = v;
             else if (name == "slenderShare") P.slenderShare = v; else if (name == "minSlenderShare") P.minSlenderShare = v;
             else if (name == "sectors") P.sectors = static_cast<int>(v); else if (name == "harmonics") P.harmonics = static_cast<int>(v);
+            else if (name == "selfRead") P.selfRead = static_cast<int>(v); else if (name == "selfTexelM") P.selfTexelM = v;
             else if (name == "openingHeads") P.openingHeads = static_cast<int>(v); else if (name == "headMinM") P.headMinM = v; else if (name == "headEdgeM") P.headEdgeM = v;
             else if (name == "slenderFins") P.slenderFins = static_cast<int>(v); else if (name == "finMinM") P.finMinM = v; else if (name == "finMinCorr") P.finMinCorr = v;
             else if (name == "symmetryTol") P.symmetryTol = v; else if (name == "circleBelowM") P.circleBelowM = v; else if (name == "sliceM") P.sliceM = v;
@@ -546,6 +553,7 @@ struct Report {
     double slenderFromM{-1}, topM{0};
     size_t slenderBands{0}, slenderSlices{0}, slenderAxisFits{0}, finBands{0}, finCount{0}, finSegments{0};
     size_t headTypes{0}, headWindows{0}, headsDrawn{0}, surfacePieces{0}, surfaceQuads{0};
+    size_t selfWalls{0}, selfWindowWalls{0}, selfWindows{0};
     std::vector<double> headRises;
     int slenderSymmetry{1};
     std::map<int, size_t> classUse;
@@ -607,7 +615,7 @@ struct Result { std::vector<OutNode> nodes; Report report; sp::Frame frame; text
 /** A wall face: from p0 along d (unit, horizontal) for L metres, between heights h0 and h1 above the street, facing n. */
 struct WallFace { P3 p0, d, n; double L, h0, h1; int tier; bool cvx0{true}, cvx1{true}; };  // cvx: the corner at the start / end is convex
 
-inline Result build(const Spec& S) {
+inline Result build(Spec S) {
     Result out;
     Report& rep = out.report;
     std::vector<ClassMat> classes = S.classes;
@@ -617,6 +625,28 @@ inline Result build(const Spec& S) {
     E.glassMat = static_cast<int>(classes.size());  // one past the classes
 
     // --- massing: the scan's tiers
+    // the street level, when not given: the commonest height of the scan's up-facing surface (area-weighted, 0.1 m bins)
+    // within 15 m of its lowest point
+    if (std::isnan(S.groundY)) {
+        gltf::GltfScene sc = gltf::GlbSceneReader::readFile(S.isolate);
+        if (!sc.ok) throw std::runtime_error("isolate: " + sc.error);
+        double lo = 1e30;
+        for (const auto& v : sc.mesh.vertices) lo = std::min(lo, static_cast<double>(v.position.y));
+        std::map<long, double> hist;
+        const auto& vs = sc.mesh.vertices; const auto& ix = sc.mesh.indices;
+        for (size_t t = 0; t + 2 < ix.size(); t += 3) {
+            const P3 a{vs[ix[t]].position.x, vs[ix[t]].position.y, vs[ix[t]].position.z}, b{vs[ix[t + 1]].position.x, vs[ix[t + 1]].position.y, vs[ix[t + 1]].position.z}, c{vs[ix[t + 2]].position.x, vs[ix[t + 2]].position.y, vs[ix[t + 2]].position.z};
+            const P3 n = sp::cross(b - a, c - a); const double A2 = sp::len(n);
+            if (A2 < 1e-9 || n.y / A2 < 0.9) continue;
+            const double y = (a.y + b.y + c.y) / 3;
+            if (y > lo + 15) continue;
+            hist[std::lround(y * 10)] += A2 / 2;
+        }
+        long best = 0; double bw = -1;
+        for (const auto& [k, w] : hist) if (w > bw) { bw = w; best = k; }
+        S.groundY = bw > 0 ? best / 10.0 : lo;
+        rep.notes.push_back("street level not given: " + detail::num(S.groundY) + " (the commonest up-facing height near the scan's foot)");
+    }
     sp::ScanResult R = sp::analyseScan(S.isolate, S.groundY, S.footprintXZ, {}, S.scan);
     out.frame = R.frame;
     const sp::Frame& F = R.frame;
@@ -955,6 +985,101 @@ inline Result build(const Spec& S) {
         wins = kept;
     }
 
+    // --- self-read (selfRead: no plane photos or window boxes from another stage). Each wall's own photo is rendered from
+    // the scan's photo texture (selfTexelM texels: the nearest scan surface facing the same way within 1.5 m). Its windows
+    // are found in it: the storey pitch (the best vertical autocorrelation of its luminance at 2.5 to 6 m, at least 0.3)
+    // and the column pitch (the best horizontal one at 0.8 to 8 m, at least 0.2) fold the photo into one unit cell (the
+    // median over its repeats); the cell's opening is its largest region darker than the midpoint of its 20th and 80th
+    // percentiles (10 to 70% of the cell, at least 0.04 darker than the rest); every cell of the wall whose opening region
+    // reads darker than the midpoint of opening and wall is a window. Photo-inferred; the storey pitch also serves the
+    // wall's detail texture, read from this photo.
+    struct SelfImg { int w{0}, h{0}; double pitch{0}; std::vector<float> rgb; };
+    std::vector<SelfImg> selfImg(faces.size());
+    if (S.P.selfRead && ph.ok) {
+        const double t = S.P.selfTexelM;
+        for (size_t fi = 0; fi < faces.size(); ++fi) {
+            const auto& w = faces[fi];
+            if (w.L < 4 || w.h1 - w.h0 < 4) continue;
+            SelfImg I; I.w = static_cast<int>(std::ceil(w.L / t)); I.h = static_cast<int>(std::ceil((w.h1 - w.h0) / t));
+            I.rgb.assign(static_cast<size_t>(I.w) * I.h * 3, -1.0f);
+            std::vector<float> L(static_cast<size_t>(I.w) * I.h, NAN);
+            size_t got = 0;
+            for (int j = 0; j < I.h; ++j) for (int i = 0; i < I.w; ++i) {
+                const double a = (i + 0.5) * t, hh = w.h1 - (j + 0.5) * t;
+                Rgb c;
+                if (!ph.sample(P3{w.p0.x + w.d.x * a, S.groundY + hh, w.p0.z + w.d.z * a}, w.n, 1.5, c)) continue;
+                const size_t o = (static_cast<size_t>(j) * I.w + i);
+                I.rgb[o * 3] = static_cast<float>(c.r); I.rgb[o * 3 + 1] = static_cast<float>(c.g); I.rgb[o * 3 + 2] = static_cast<float>(c.b);
+                L[o] = static_cast<float>(0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b);
+                ++got;
+            }
+            if (got * 2 < L.size()) continue;
+            ++rep.selfWalls;
+            auto corr = [&](int dx, int dy) {
+                double sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0; size_t n = 0;
+                for (int j = 0; j + dy < I.h; j += 2) for (int i = 0; i + dx < I.w; i += 2) {
+                    const float x = L[static_cast<size_t>(j) * I.w + i], y = L[static_cast<size_t>(j + dy) * I.w + i + dx];
+                    if (std::isnan(x) || std::isnan(y)) continue;
+                    sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y; ++n;
+                }
+                if (n < 200) return -1.0;
+                const double cov = sxy / n - sx / n * sy / n, vx = sxx / n - sx / n * sx / n, vy = syy / n - sy / n * sy / n;
+                return vx > 1e-12 && vy > 1e-12 ? cov / std::sqrt(vx * vy) : -1.0;
+            };
+            int P = 0; double cP = 0.3;
+            for (int k = static_cast<int>(std::round(2.5 / t)); k <= static_cast<int>(std::round(6.0 / t)) && k < I.h / 2; ++k) { const double c = corr(0, k); if (c > cP) { cP = c; P = k; } }
+            int Q = 0; double cQ = 0.2;
+            for (int k = static_cast<int>(std::round(0.8 / t)); k <= static_cast<int>(std::round(8.0 / t)) && k < I.w / 2; ++k) { const double c = corr(k, 0); if (c > cQ) { cQ = c; Q = k; } }
+            I.pitch = P ? P * t : 0;
+            if (!P || !Q) { selfImg[fi] = std::move(I); continue; }
+            // the unit cell: the median over the wall's repeats
+            std::vector<float> U(static_cast<size_t>(Q) * P, NAN);
+            for (int cy = 0; cy < P; ++cy) for (int cx = 0; cx < Q; ++cx) {
+                std::vector<float> v;
+                for (int y = cy; y < I.h; y += P) for (int x = cx; x < I.w; x += Q) { const float l = L[static_cast<size_t>(y) * I.w + x]; if (!std::isnan(l)) v.push_back(l); }
+                if (v.size() >= 3) { std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); U[static_cast<size_t>(cy) * Q + cx] = v[v.size() / 2]; }
+            }
+            std::vector<float> uv; for (float x : U) if (!std::isnan(x)) uv.push_back(x);
+            if (uv.size() < U.size() / 2) { selfImg[fi] = std::move(I); continue; }
+            std::sort(uv.begin(), uv.end());
+            const double thr = (uv[uv.size() / 5] + uv[uv.size() * 4 / 5]) / 2;
+            // the largest dark region of the cell (4-connected)
+            std::vector<int> lab(U.size(), -1); int bestLab = -1; size_t bestN = 0; int bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+            for (size_t k0 = 0; k0 < U.size(); ++k0) {
+                if (lab[k0] >= 0 || !(U[k0] < thr)) continue;
+                std::vector<size_t> q{k0}; lab[k0] = static_cast<int>(k0);
+                int x0 = Q, y0 = P, x1 = -1, y1 = -1;
+                for (size_t z = 0; z < q.size(); ++z) {
+                    const int cx = static_cast<int>(q[z] % Q), cy = static_cast<int>(q[z] / Q);
+                    x0 = std::min(x0, cx); x1 = std::max(x1, cx); y0 = std::min(y0, cy); y1 = std::max(y1, cy);
+                    const int nb[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+                    for (const auto& d : nb) { const int nx = cx + d[0], ny = cy + d[1]; if (nx < 0 || ny < 0 || nx >= Q || ny >= P) continue; const size_t nk = static_cast<size_t>(ny) * Q + nx; if (lab[nk] < 0 && U[nk] < thr) { lab[nk] = static_cast<int>(k0); q.push_back(nk); } }
+                }
+                if (q.size() > bestN) { bestN = q.size(); bestLab = static_cast<int>(k0); bx0 = x0; by0 = y0; bx1 = x1 + 1; by1 = y1 + 1; }
+            }
+            const double share = static_cast<double>((bx1 - bx0) * (by1 - by0)) / U.size();
+            if (bestLab < 0 || share < 0.1 || share > 0.7 || (bx1 - bx0) * t < 0.4 || (by1 - by0) * t < 0.6) { selfImg[fi] = std::move(I); continue; }
+            double inS = 0, outS = 0; size_t inN = 0, outN = 0;
+            for (int cy = 0; cy < P; ++cy) for (int cx = 0; cx < Q; ++cx) { const float u = U[static_cast<size_t>(cy) * Q + cx]; if (std::isnan(u)) continue; if (cx >= bx0 && cx < bx1 && cy >= by0 && cy < by1) { inS += u; ++inN; } else { outS += u; ++outN; } }
+            if (!inN || !outN || outS / outN - inS / inN < 0.04) { selfImg[fi] = std::move(I); continue; }
+            const double mid = (inS / inN + outS / outN) / 2;
+            size_t placed = 0;
+            for (int ry = 0; ry * P + by1 <= I.h; ++ry) for (int rx = 0; rx * Q + bx1 <= I.w; ++rx) {
+                const int x0 = rx * Q + bx0, x1 = rx * Q + bx1, y0 = ry * P + by0, y1 = ry * P + by1;
+                double sum = 0; size_t n = 0, all = 0;
+                for (int y = y0; y < y1; ++y) for (int x = x0; x < x1; ++x) { ++all; const float l = L[static_cast<size_t>(y) * I.w + x]; if (!std::isnan(l)) { sum += l; ++n; } }
+                if (n * 2 < all || sum / n >= mid) continue;
+                detail::R2 box{x0 * t, x1 * t, w.h1 - y1 * t, w.h1 - y0 * t};
+                box.a0 = std::max(box.a0, 0.05); box.a1 = std::min(box.a1, w.L - 0.05); box.h0 = std::max(box.h0, w.h0 + 0.05); box.h1 = std::min(box.h1, w.h1 - 0.05);
+                if (box.a1 - box.a0 < S.P.minWindowM || box.h1 - box.h0 < S.P.minWindowM) continue;
+                faceWins[fi].push_back(Win{box, false, {}, -2, {}});
+                ++placed;
+            }
+            if (placed) { ++rep.selfWindowWalls; rep.selfWindows += placed; rep.windowsPlaced += placed; rep.windowsGiven += placed; }
+            selfImg[fi] = std::move(I);
+        }
+    }
+
     // --- one storey phase per wall: the windows' bottoms taken modulo the wall's storey pitch fall in phase groups; when
     // two groups each hold at least a fifth of the wall's windows (a reading that put neighbouring columns half a storey
     // apart), the group whose boxes hold the more fine detail in the photo (glazing: sashes, blinds, reflections; a
@@ -1095,6 +1220,8 @@ inline Result build(const Spec& S) {
     if (S.P.detail) {
         for (size_t fi = 0; fi < faces.size(); ++fi) {
             const auto& wins = faceWins[fi];
+            // a self-read wall: its own photo and the storey pitch read from it
+            if (S.P.selfRead) { if (selfImg[fi].w && selfImg[fi].pitch > 0) { facePitch[fi] = selfImg[fi].pitch; facePlane[fi] = -2; } continue; }
             if (wins.size() < 4) continue;
             std::map<int, int> votes;
             for (const auto& W : wins) if (W.plane >= 0) ++votes[W.plane];
@@ -1116,7 +1243,7 @@ inline Result build(const Spec& S) {
         const int A = S.P.detailAtlas;
         for (int attempt = 0; attempt < 12; ++attempt, texel *= 1.15) {
             std::vector<size_t> order;
-            for (size_t fi = 0; fi < faces.size(); ++fi) if (facePlane[fi] >= 0) {
+            for (size_t fi = 0; fi < faces.size(); ++fi) if (facePlane[fi] != -1) {
                 faceTex[fi].w = std::max(1, static_cast<int>(std::ceil(faces[fi].L / texel)));
                 faceTex[fi].h = std::max(1, static_cast<int>(std::ceil((faces[fi].h1 - faces[fi].h0) / texel)));
                 order.push_back(fi);
@@ -1134,16 +1261,28 @@ inline Result build(const Spec& S) {
         }
         if (rep.atlasW) {
             for (size_t fi = 0; fi < faces.size(); ++fi) {
-                if (facePlane[fi] < 0) continue;
+                if (facePlane[fi] == -1) continue;
                 auto& t = faceTex[fi];
                 const auto& w = faces[fi];
-                const PlaneFrame& f = *frames.at(facePlane[fi]);
-                const Photo& P = photoOf(facePlane[fi]);
+                const bool self = facePlane[fi] == -2;
+                static const PlaneFrame noFrame{};
+                static const Photo noPhoto{};
+                const PlaneFrame& f = self ? noFrame : *frames.at(facePlane[fi]);
+                const Photo& P = self ? noPhoto : photoOf(facePlane[fi]);
+                const SelfImg& SI = selfImg[fi];
                 t.texel = rep.detailTexelM; t.h0 = w.h0; t.h1 = w.h0 + t.h * t.texel;
                 t.M.assign(static_cast<size_t>(t.w) * t.h * 3, -1.0f);
                 const double Pp = facePitch[fi];
                 const P3 fs = f.s, ft = f.t;
                 auto texelAt = [&](double a, double h, Rgb& c) {
+                    if (self) {
+                        const int i = static_cast<int>(a / S.P.selfTexelM), j = static_cast<int>((w.h1 - h) / S.P.selfTexelM);
+                        if (i < 0 || j < 0 || i >= SI.w || j >= SI.h) return false;
+                        const size_t o = (static_cast<size_t>(j) * SI.w + i) * 3;
+                        if (SI.rgb[o] < 0) return false;
+                        c = {SI.rgb[o], SI.rgb[o + 1], SI.rgb[o + 2]};
+                        return true;
+                    }
                     const P3 q{w.p0.x + w.d.x * a, S.groundY + h, w.p0.z + w.d.z * a};
                     const double ss = sp::dot(q - f.c, fs), tt = sp::dot(q - f.c, ft);
                     const int px = static_cast<int>(std::floor((ss - f.sMin) / f.pixel)), py = static_cast<int>(std::floor((f.tMax - tt) / f.pixel));
@@ -2543,7 +2682,7 @@ inline std::string reportJson(const Report& r, const Spec& S, size_t triangles, 
       << ",\"windows\":{\"given\":" << r.windowsGiven << ",\"placed\":" << r.windowsPlaced << ",\"generated\":" << r.windowsGenerated << ",\"continued\":" << r.windowsContinued << ",\"rephased\":" << r.windowsRephased << ",\"wallsRephased\":" << r.wallsRephased << ",\"continueTested\":" << r.continueTested << ",\"panes\":" << r.panesPlaced
       << ",\"dropped\":{\"noWall\":" << r.droppedNoWall << ",\"clipped\":" << r.droppedClipped << ",\"overlap\":" << r.droppedOverlap << ",\"small\":" << r.droppedSmall << ",\"noFrame\":" << r.droppedNoFrame << "}}"
       << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << "}"
-      << ",\"slender\":{\"fromM\":" << detail::num(r.slenderFromM) << ",\"slices\":" << r.slenderSlices << ",\"bands\":" << r.slenderBands << ",\"axisFits\":" << r.slenderAxisFits << ",\"symmetry\":" << r.slenderSymmetry << ",\"finBands\":" << r.finBands << ",\"fins\":" << r.finCount << ",\"finSegments\":" << r.finSegments << "}" << ",\"heads\":{\"types\":" << r.headTypes << ",\"windows\":" << r.headWindows << ",\"drawn\":" << r.headsDrawn << ",\"surfacePieces\":" << r.surfacePieces << ",\"surfaceQuads\":" << r.surfaceQuads << ",\"medianRiseM\":" << detail::num([&] { auto v = r.headRises; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
+      << ",\"slender\":{\"fromM\":" << detail::num(r.slenderFromM) << ",\"slices\":" << r.slenderSlices << ",\"bands\":" << r.slenderBands << ",\"axisFits\":" << r.slenderAxisFits << ",\"symmetry\":" << r.slenderSymmetry << ",\"finBands\":" << r.finBands << ",\"fins\":" << r.finCount << ",\"finSegments\":" << r.finSegments << "}" << ",\"heads\":{\"types\":" << r.headTypes << ",\"windows\":" << r.headWindows << ",\"drawn\":" << r.headsDrawn << ",\"surfacePieces\":" << r.surfacePieces << ",\"surfaceQuads\":" << r.surfaceQuads << ",\"selfWalls\":" << r.selfWalls << ",\"selfWindowWalls\":" << r.selfWindowWalls << ",\"selfWindows\":" << r.selfWindows << ",\"medianRiseM\":" << detail::num([&] { auto v = r.headRises; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
       << ",\"topM\":" << detail::num(r.topM) << ",\"revealM\":" << detail::num(S.revealM) << ",\"revealLabel\":\"" << detail::esc(S.revealLabel) << "\""
       << ",\"triangles\":" << triangles << ",\"bytes\":" << bytes << ",\"classUse\":{";
     bool first = true;

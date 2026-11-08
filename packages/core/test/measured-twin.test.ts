@@ -166,4 +166,20 @@ describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K bui
         expect(outward / vertical).toBeGreaterThan(0.95);
         expect(tris).toBeLessThan(400_000);
     }, 600_000);
+
+    it('builds the twin K-free: from the cut-out scan and its texture alone, its own wall photos and windows', async () => {
+        const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtwin-esb-kfree-'));
+        const r = await buildMeasuredTwin({ runDir: RUN, cacheRoot: CACHE, outDir, options: { kFree: true } });
+        const rep = r.report;
+        const spec = fs.readFileSync(r.specFile, 'utf8').split('\n');
+        // nothing of K in the spec: no plane frames, window boxes, classes or footprint; the street level estimated
+        expect(spec.some(l => /^(plane|win|pane|class|footprint|planeimage) /.test(l))).toBe(false);
+        expect(spec).toContain('ground auto');
+        expect(spec).toContain('param selfRead 1');
+        expect(rep.tiers).toBeGreaterThanOrEqual(10);
+        expect(rep.slender.fromM).toBeGreaterThan(315);
+        expect(rep.heads.selfWalls).toBeGreaterThan(50);
+        expect(rep.heads.selfWindows).toBeGreaterThan(500);
+        expect(rep.detail.faces).toBeGreaterThan(50);
+    }, 600_000);
 });

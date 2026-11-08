@@ -33,7 +33,7 @@ export const MEASURED_TWIN_DECLARATION: ToolDeclaration = {
         'The massing is the scan\'s height-map tiers (and a revolved, stepped slender top such as a mast when the scan has one), measured; every window box the build kept is punched into the walls and recessed, photo-inferred; ' +
         'each wall cell, window, frame and roof cell takes its colour from the scan\'s own photo and its material from the build\'s measured appearance classes. ' +
         'Windows the build left unread are continued along their row only where the photo looks like a window, and a reading that put neighbouring columns half a storey apart is put back on the wall\'s storey rhythm; both are labelled generated, as is the reveal depth unless Street View read one. ' +
-        'Needs a finished pipeline K build (the 3D Building default) of one building; makes no model call and fetches nothing. Returns four path-traced proof views and the GLB, both copied into the workspace (renders/measured-twin/<runId>/, paths relative to the workspace) for viewing, rendering or judging. ' +
+        'Needs a finished pipeline K build (the 3D Building default) of one building, or with kFree any staged run with a cut-out scan; makes no model call and fetches nothing. Returns four path-traced proof views and the GLB, both copied into the workspace (renders/measured-twin/<runId>/, paths relative to the workspace) for viewing, rendering or judging. ' +
         'Use it when the user asks for a procedural, generated or lightweight version of the staged building, or to compare a procedural rebuild with the scan-based one.',
     parameters: {
         type: 'OBJECT',
@@ -41,6 +41,7 @@ export const MEASURED_TWIN_DECLARATION: ToolDeclaration = {
             runId: { type: 'STRING', description: 'Optional: the staged build\'s run id (8 hex). Default: the open scene\'s staged build.' },
             gapM: { type: 'NUMBER', description: 'Optional: metres between the build and the twin placed beside it (default 20).' },
             scanDetailM: { type: 'NUMBER', description: 'Optional: keep the scan\'s own surface (Google 3D Tiles, measured) wherever it stands at least this many metres outside the procedural shell (e.g. 0.3: terrace objects, statues, antenna equipment, ornament the shell misses); its parapet and roof blocks are then left out. Omit or 0 for a fully procedural twin with no scan surface.' },
+            kFree: { type: 'BOOLEAN', description: 'Optional: read nothing of pipeline K, only the staged run\'s cut-out scan and its photo texture (any pipeline\'s run with a remesh stage): the street level is estimated from the scan, each wall\'s photo rendered from the texture and its windows found in it by the twin\'s own detector (no model call). Default false: the twin uses the K build\'s window boxes, frames and materials.' },
             reliefM: { type: 'NUMBER', description: 'Optional: purely procedural detail down to this size (e.g. 0.3): relief maps of the scan on the walls, roofs and mast in 0.3 m cells, and whatever stands at least this far off the shell rebuilt as measured blocks, with no scan surface kept. Ignored when scanDetailM is given.' }
         }
     }
@@ -126,7 +127,9 @@ export async function runMeasuredTwinTool(args: Record<string, unknown>, ctx: To
     const outDir = path.join(cacheRoot, 'staged_location', 'measured_twin', runId);
     const scanDetailM = typeof args.scanDetailM === 'number' && Number.isFinite(args.scanDetailM) && args.scanDetailM > 0 ? args.scanDetailM : undefined;
     const reliefM = !scanDetailM && typeof args.reliefM === 'number' && Number.isFinite(args.reliefM) && args.reliefM > 0 ? args.reliefM : undefined;
-    const r = await buildMeasuredTwin({ runDir, cacheRoot, outDir, ...(scanDetailM ? { options: { scanDetailM } } : reliefM ? { options: { reliefM } } : {}), store: fileReadingStore(modelReadingsDir(path.join(cacheRoot, 'staged_location'))), ...(ctx.signal ? { signal: ctx.signal } : {}) });
+    const kFree = args.kFree === true;
+    const options = { ...(scanDetailM ? { scanDetailM } : reliefM ? { reliefM } : {}), ...(kFree ? { kFree } : {}) };
+    const r = await buildMeasuredTwin({ runDir, cacheRoot, outDir, ...(Object.keys(options).length ? { options } : {}), store: fileReadingStore(modelReadingsDir(path.join(cacheRoot, 'staged_location'))), ...(ctx.signal ? { signal: ctx.signal } : {}) });
     ctx.reportProgress?.('measured twin: generated', 0.9);
     const { uri, file } = publish(r.glb, runId, root);
     ctx.reportProgress?.('measured twin: rendering proof views', 0.95);
@@ -150,6 +153,7 @@ export async function runMeasuredTwinTool(args: Record<string, unknown>, ctx: To
     const w = r.report.windows;
     const summary = `Measured procedural twin of run ${runId}: ${r.report.tiers} tiers from the scan's height map${r.report.slender.fromM !== null && r.report.slender.bands ? `, a revolved slender top from ${r.report.slender.fromM.toFixed(1)} m in ${r.report.slender.bands} measured bands` : ''} up to ${r.report.topM.toFixed(1)} m; `
         + `${w.placed} windows punched (${w.placed - w.generated} where the build read them, ${w.continued} continued along their rows where the photo shows a window, ${w.rephased} put back on their wall's storey rhythm: generated), reveal ${r.report.revealM.toFixed(2)} m (${r.report.revealLabel}); `
+        + (kFree ? `K-free: walls photographed from the scan's texture (${r.report.heads.selfWalls}), windows found in ${r.report.heads.selfWindowWalls} of them; ` : '')
         + (r.report.relief.thresholdM > 0 ? `procedural relief down to ${r.report.relief.thresholdM} m: ${r.report.relief.wallPieces} wall pieces (${Math.round(r.report.relief.wallAreaM2)} m²), ${r.report.roofDetail.pieces} roof pieces, ${r.report.relief.mastPieces} mast pieces, as measured blocks (no scan surface); ` : '')
         + (r.report.scanDetail.pieces ? `the scan's own surface kept in ${r.report.scanDetail.pieces} pieces (${Math.round(r.report.scanDetail.areaM2)} m²) where it stands ${r.report.scanDetail.thresholdM} m or more outside the shell (measured, scan); ` : '')
         + `${views.length} proof views rendered (${views.map(v => path.basename(v.path)).join(', ')}); `
