@@ -80,7 +80,7 @@ import { countSet, readOccluded } from './occlusion';
 import { featurelessMaskName } from './ortho-rectify';
 import { systemOnFace, type BuildingSystem, type FaceRegion, type FaceSystem } from './building-system';
 
-export const WINDOW_ARRAY_VERSION = 'window-array/8';
+export const WINDOW_ARRAY_VERSION = 'window-array/9';
 
 export const WINDOW_ARRAY_PARAMS = {
     /** Fewer single-site boxes than this: nothing is inferred. */
@@ -241,7 +241,7 @@ function inferRegions(input: ArrayInput, photo: NonNullable<ReturnType<typeof fa
     const rects = input.rects.map(whole), panes = (input.panes ?? []).map(whole), gen = new Set((input.generated ?? []).map(r => whole(r).join(',')));
     const cy = (r: WindowRect) => (r[1] + r[3]) / 2;
     const regionOf = (r: WindowRect) => regions.findIndex(g => cy(r) >= g.y0 && cy(r) < g.y1);
-    const outRects: WindowRect[] = [], outPanes: WindowRect[] = [], outGen: WindowRect[] = [], sites: number[] = [];
+    const outRects: WindowRect[] = [], outPanes: WindowRect[] = [], outGen: WindowRect[] = [], sites: number[] = [], evidence: Array<number | null> = [];
     const keepAsRead = (rs: WindowRect[]) => { for (const r of rs) { outRects.push(r); if (gen.has(r.join(','))) outGen.push(r); outPanes.push(...panes.filter(q => q[0] >= r[0] - 1 && q[2] <= r[2] + 1 && q[1] >= r[1] - 1 && q[3] <= r[3] + 1)); sites.push(...r, SITE_KIND.kept, 1, 0); } };
     keepAsRead(rects.filter(r => regionOf(r) < 0));
     const reports: Array<Omit<FacadeArrayReport, 'facadeId'>> = [], listed: NonNullable<NonNullable<FacadeArrayReport['system']>['regions']> = [];
@@ -278,6 +278,8 @@ function inferRegions(input: ArrayInput, photo: NonNullable<ReturnType<typeof fa
         entry.windows = out.rects.length;
         outRects.push(...out.rects.map(onFace)); outPanes.push(...(out.panes ?? []).map(onFace)); outGen.push(...(out.generated ?? []).map(onFace));
         for (let q = 0; q + 6 < out.sites.length; q += 7) { const r = onFace(out.sites.slice(q, q + 4) as WindowRect); sites.push(...r, out.sites[q + 4], out.sites[q + 5], out.sites[q + 6]); }
+        const ev = out.evidence ?? [], nF = SITE_EVIDENCE_FIELDS.length;
+        for (let q = 0; q + nF - 1 < ev.length; q += nF) evidence.push(...onFace(ev.slice(q, q + 4) as WindowRect), ...ev.slice(q + 4, q + nF));
         listed.push(entry); reports.push(out.report);
     });
     const ok = reports.filter(r => !r.reason);
@@ -301,7 +303,7 @@ function inferRegions(input: ArrayInput, photo: NonNullable<ReturnType<typeof fa
     if (!ok.length) return { rects: input.rects, ...(input.panes ? { panes: input.panes } : {}), ...(input.generated ? { generated: input.generated } : {}), report, sites: [] };
     const order = outRects.map((_, k) => k).sort((a, b) => cmpRect(outRects[a], outRects[b]));
     const sortedSites = order.flatMap(k => sites.slice(k * 7, k * 7 + 7));
-    return { rects: order.map(k => outRects[k]), panes: outPanes.sort(cmpRect), ...(outGen.length ? { generated: outGen.sort(cmpRect) } : {}), report, sites: sortedSites };
+    return { rects: order.map(k => outRects[k]), panes: outPanes.sort(cmpRect), ...(outGen.length ? { generated: outGen.sort(cmpRect) } : {}), report, sites: sortedSites, evidence };
 }
 
 /** A facade's plane frame, as facades.json gives it: world Y = centroid.y + axisT.y (orthoTMax - y pixel). */
@@ -346,7 +348,17 @@ export function storeyOnFacade(b: BuildingStorey, f: PlaneFrame): Lattice1D | un
 }
 
 /** What an entry keeps of the step: the boxes before it, the report, and each site's box, kind, confidence and residual (7 numbers a site). */
-export interface ArrayRecord { version: string; in: { rects: WindowRect[]; panes?: WindowRect[]; generated?: WindowRect[] }; report: Omit<FacadeArrayReport, 'facadeId'>; sites: number[] }
+export interface ArrayRecord { version: string; in: { rects: WindowRect[]; panes?: WindowRect[]; generated?: WindowRect[] }; report: Omit<FacadeArrayReport, 'facadeId'>; sites: number[]; /** Every empty site the array judged, SITE_EVIDENCE_FIELDS.length values each (null where unread). */ evidence?: Array<number | null> }
+
+/** What the array decided at an empty site. */
+export const SITE_DECISION = { outside: 0, added: 1, withheld: 2, behind: 3, continued: 4 } as const;
+/**
+ * The values recorded per empty site in ArrayRecord.evidence, in order: its box (px), the decision (SITE_DECISION), its
+ * window contrast against the wall around it relative to the array's own (null where the photo cannot be read), the share
+ * of it the photo covers, the share occluded, its row's and column's mean contrast, and the share of its row's and
+ * column's sites holding a box.
+ */
+export const SITE_EVIDENCE_FIELDS = ['x0', 'y0', 'x1', 'y1', 'decision', 'contrast', 'covered', 'occluded', 'rowContrast', 'colContrast', 'rowBoxes', 'colBoxes'] as const;
 
 export interface ArrayPhoto { rgba: ArrayLike<number>; width: number; height: number }
 
@@ -780,7 +792,7 @@ export function photoLattice(img: ArrayPhoto, valid: Uint8Array, minP: number, m
 }
 
 export interface ArrayInput { rects: WindowRect[]; panes?: WindowRect[]; generated?: WindowRect[] }
-export interface ArrayOutput extends ArrayInput { report: Omit<FacadeArrayReport, 'facadeId'>; sites: number[] }
+export interface ArrayOutput extends ArrayInput { report: Omit<FacadeArrayReport, 'facadeId'>; sites: number[]; /** Every empty site judged, SITE_EVIDENCE_FIELDS.length values each. */ evidence?: Array<number | null> }
 
 /**
  * One facade's boxes brought onto its array. `valid` is 1 where the photo may be read (covered, not occluded); `occluded`
@@ -1135,6 +1147,9 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     const sites = out.map(o => o.r);
     let added = 0, rowsIn = 0, colsIn = 0, continuedRows = 0, continuedCols = 0, continuedSites = 0, behindSites = 0;
     const empty = { sites: 0, outside: 0, uncovered: 0, occluded: 0, wall: 0, underBox: 0, byRow: 0 };
+    // every empty site the array judged, with its evidence and what it decided (SITE_EVIDENCE_FIELDS): the record a
+    // learned decision is fitted on, and the sites a person is asked about
+    const evidence: Array<number | null> = [];
     const projOf = (r: WindowRect, t: ArrayTier, cy: number): number | undefined => {
         const look = regionLook(img, valid, r);
         if (!look.lab || look.validShare < 1 - P.addMaxUncovered) return undefined;
@@ -1227,39 +1242,46 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
             rowCont.add(j);
         }
         continuedRows += rowCont.size; continuedCols = Math.max(continuedCols, colCont.size);
+        const rowC = new Map(js.map(j => [j, byContrast(rowKeys(j))] as const)), colC = new Map<number, number | undefined>();
+        for (let i = i0; i <= i1; i++) colC.set(i, byContrast(colKeys(i)));
+        const occShare = (keys: string[]) => keys.filter(k => occupied.get(k)).length / Math.max(1, keys.length);
+        const rowO = new Map(js.map(j => [j, occShare(rowKeys(j))] as const)), colO = new Map<number, number>();
+        for (let i = i0; i <= i1; i++) colO.set(i, occShare(colKeys(i)));
+        const r2n = (v: number | undefined) => (v === undefined ? null : Math.round(v * 100) / 100);
+        const note = (r: WindowRect, i: number, j: number, decision: number) => evidence.push(r[0], r[1], r[2], r[3], decision, r2n(proj.get(siteKey(t, i, j))), r2n(share(valid, r, true)), r2n(share(occ, r, true)), r2n(rowC.get(j)), r2n(colC.get(i)), r2n(rowO.get(j)), r2n(colO.get(i)));
         for (const j of js) for (let i = i0; i <= i1; i++) {
             const key = siteKey(t, i, j);
             if (occupied.get(key)) continue;
             empty.sites++;
             const inRow = rowIn.has(j), inCol = colIn.has(i), contRow = rowCont.has(j), contCol = colCont.has(i);
             const continuing = (contRow && (inCol || contCol)) || (inRow && contCol);
-            if (!((inRow && inCol) || continuing)) { empty.outside++; continue; }
             const r = siteBox(t, i, j);
-            if (opts.minRowPx !== undefined && r[1] < opts.minRowPx) { empty.outside++; continue; }
+            if (!((inRow && inCol) || continuing)) { empty.outside++; note(r, i, j, SITE_DECISION.outside); continue; }
+            if (opts.minRowPx !== undefined && r[1] < opts.minRowPx) { empty.outside++; note(r, i, j, SITE_DECISION.outside); continue; }
             if (sites.some(q => Math.max(0, Math.min(q[2], r[2]) - Math.max(q[0], r[0])) * Math.max(0, Math.min(q[3], r[3]) - Math.max(q[1], r[1])) > 0.2 * (r[2] - r[0]) * (r[3] - r[1]))) { empty.underBox++; continue; }
             // an occluded site (something stood before it) inside the array: the array continues over it, as the lattice
             // does over an occluded span (generated, counted)
             if (share(occ, r, true) > P.addMaxOccluded) {
                 empty.occluded++;
                 taken.set(key, out.push({ r, kind: SITE_KIND.behind, conf: 0.25, res: 0, panes: templatePanes(r) }) - 1);
-                occupied.set(key, true); sites.push(r); behindSites++;
+                occupied.set(key, true); sites.push(r); behindSites++; note(r, i, j, SITE_DECISION.behind);
                 continue;
             }
             if (continuing) {
                 // stepped on into a blank row or column: generated, on the array's pitch and phase alone
                 taken.set(key, out.push({ r, kind: SITE_KIND.continued, conf: 0.25, res: 0, panes: templatePanes(r) }) - 1);
-                occupied.set(key, true); sites.push(r); continuedSites++;
+                occupied.set(key, true); sites.push(r); continuedSites++; note(r, i, j, SITE_DECISION.continued);
                 continue;
             }
             const p = proj.get(key);
             // the array is the facade's: inside the rows and columns that hold it a site is withheld only when the photo
             // reads the opposite of a window there; one it never reached, or one too dim to confirm, is filled on the
             // array's evidence (and counted)
-            if (p !== undefined && p < P.contradict) { empty.wall++; continue; }
+            if (p !== undefined && p < P.contradict) { empty.wall++; note(r, i, j, SITE_DECISION.withheld); continue; }
             if (p === undefined) empty.uncovered++;
             else if (p < P.addMinContrast) empty.byRow++;
             taken.set(key, out.push({ r, kind: SITE_KIND.added, conf: r3(p === undefined ? 0.3 : 0.3 + 0.7 * Math.min(1, Math.max(0, p))), res: 0, panes: templatePanes(r) }) - 1);
-            occupied.set(key, true); sites.push(r); added++;
+            occupied.set(key, true); sites.push(r); added++; note(r, i, j, SITE_DECISION.added);
         }
     }
     // the output
@@ -1278,7 +1300,7 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
         ...(behindSites ? { behind: { sites: behindSites, reason: BEHIND_REASON } } : {}),
         rmsIn: r3(Math.sqrt(rmsInSum / Math.max(1, rmsInN))), rmsOut: r3(Math.sqrt(rmsOutSum / Math.max(1, rmsOutN))), empty
     };
-    return { rects: outRects, panes: outPanes, ...(outGenerated.length ? { generated: outGenerated } : {}), report, sites: order.flatMap(k => { const o = out[k]; return [...o.r, o.kind, o.conf, o.res]; }) };
+    return { rects: outRects, panes: outPanes, ...(outGenerated.length ? { generated: outGenerated } : {}), report, sites: order.flatMap(k => { const o = out[k]; return [...o.r, o.kind, o.conf, o.res]; }), evidence };
 }
 
 /** A facade's photo and masks as the array reads them. */
@@ -1325,7 +1347,7 @@ export function inferWindowArrays(orthosDir: string, fit: WindowFitFile, P: Wind
         const at = facades.findIndex(x => x.facadeId === e.facadeId), rep = { facadeId: e.facadeId, ...out.report };
         if (at >= 0) facades[at] = rep; else facades.push(rep);
         if (out.report.reason) return;
-        e.array = { version: WINDOW_ARRAY_VERSION, in: input, report: out.report, sites: out.sites };
+        e.array = { version: WINDOW_ARRAY_VERSION, in: input, report: out.report, sites: out.sites, ...(out.evidence?.length ? { evidence: out.evidence } : {}) };
         e.rects = out.rects; e.panes = out.panes ?? []; if (out.generated) e.generated = out.generated; else delete e.generated;
     };
     for (const entry of fit.facades) {
