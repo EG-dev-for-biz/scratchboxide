@@ -128,6 +128,27 @@ describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K bui
             tris += readAccessor(glb, p.indices).count / 3;
         }
         expect(tris).toBe(rep.triangles);
+        // the slender top's walls face away from its axis (a viewer drawing front faces only shows them solid)
+        const top = json.nodes.findIndex(n => n.name === 'slender_top');
+        let outward = 0, vertical = 0;
+        for (const p of json.meshes[json.nodes[top].mesh].primitives) {
+            const P = readAccessor(glb, p.attributes.POSITION).data, I = readAccessor(glb, p.indices).data;
+            const cx: number[] = [], cz: number[] = [];
+            for (let k = 0; k < P.length; k += 3) { cx.push(P[k]); cz.push(P[k + 2]); }
+            const mx = cx.reduce((a, b) => a + b, 0) / cx.length, mz = cz.reduce((a, b) => a + b, 0) / cz.length;
+            for (let t = 0; t < I.length; t += 3) {
+                const v = [0, 1, 2].map(j => [P[I[t + j] * 3], P[I[t + j] * 3 + 1], P[I[t + j] * 3 + 2]]);
+                const e1 = v[1].map((x, j) => x - v[0][j]), e2 = v[2].map((x, j) => x - v[0][j]);
+                const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+                const len = Math.hypot(n[0], n[1], n[2]);
+                if (!len || Math.abs(n[1] / len) > 0.3) continue;
+                vertical++;
+                const c = [0, 2].map(j => (v[0][j] + v[1][j] + v[2][j]) / 3);
+                if (n[0] * (c[0] - mx) + n[2] * (c[1] - mz) > 0) outward++;
+            }
+        }
+        expect(vertical).toBeGreaterThan(100);
+        expect(outward / vertical).toBeGreaterThan(0.95);
         expect(tris).toBeLessThan(400_000);
     }, 600_000);
 });

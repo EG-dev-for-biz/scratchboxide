@@ -1486,6 +1486,13 @@ inline Result build(const Spec& S) {
                     const double L = sp::len(n);
                     if (L < 1e-9) continue;
                     n = n * (1 / L);
+                    // outward: away from the axis (the sectors' winding alone leaves it pointing in, and a viewer that draws
+                    // only front faces then shows the far wall's inside through the near one)
+                    {
+                        double ax, az; F.toXZ(au, av, ax, az);
+                        const P3 mid = (a0 + a1) * 0.5;
+                        if (n.x * (mid.x - ax) + n.z * (mid.z - az) < 0) n = n * -1.0;
+                    }
                     bool got;
                     const Rgb c = colourOf(a0, a1 - a0, c0 - a0, n, classColour(0), got);
                     const int m = E.classOf(c);
