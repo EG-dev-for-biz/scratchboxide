@@ -33,7 +33,9 @@
  *     are drawn as glass (GLASS: roughness 0.08, no metalness, a flat normal; the photo stays the colour), except a pane
  *     most of whose texels (paneWallShare) are the wall's class, which is stone whatever was fitted there, and the wall's
  *     class's texels within a glass pane (a mullion, a sill); each texel's class among every class, so a stone texel in a
- *     pane is told from glass. Photo-inferred.
+ *     pane is told from glass. Photo-inferred. The rest of a window holding a glass pane (its frames, mullions and sills)
+ *     is drawn no smoother than a painted or anodised frame (applyFrameFinish, ARTIST_FINISH.frameRoughness; the
+ *     texturing expert, 2026-11-08: glass is smooth, the frames around it are not), whatever its class was read as.
  *  6. Maps: on each rebuilt facade, each texel's class's set tiled at the set's real size, box-filtered to the facade's
  *     texel (so a tile never aliases): occlusion, roughness and metalness (ORM) and the normal, as the set has them; on
  *     scan pieces, whose atlases carry no metric frame for a tile, each texel's class's set's mean ORM.
@@ -54,8 +56,9 @@ import { linearRgbToLab } from '../../../../common/spatial/texture-library-index
 import type { RgbaImage8 } from '../tile-texture-transfer';
 import { bandResponses, TEXTURE_BANDS_M, type TextureEnergy } from './material-harvest';
 import { HEIGHT_RELIEF, MATERIAL_HEIGHT_VERSION, type DrawnHeight } from './material-height';
+import { ARTIST_FINISH } from '../../../../common/spatial/pbr-artist-reference';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/34';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/35';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /**
@@ -123,7 +126,7 @@ export interface RegionSet {
      * none for a set without a height map or a depth, or drawn too flat to show. And what it was drawn at.
      */
     height?: RgbaImage8; heightDrawn?: DrawnHeight;
-    finish?: { read?: { roughness: number; metalness: number; conf: number; seen?: string }; why?: string; roughness: number; metallic: number; /** The finish and grain the set's maps were drawn at (material-finish.ts finishMaps), when either changed them. */ drawn?: { roughness: number; /** The regressor's grain held to what the photo bears out (material-sets.ts capGrain): the cap, where it came from, and the regressor's own grain. */ cap?: { grain: number; by: 'photo' | 'other classes' | 'none measured'; regressor: number }; metallic: number; relief: number; grain: number }; label: 'photo-inferred' };
+    finish?: { read?: { roughness: number; metalness: number; conf: number; seen?: string; grain?: number; coverage?: number }; /** The pick by look voted the class not bare metal: drawn a dielectric (material-finish.ts agreeMetal). */ metalVetoed?: true; why?: string; roughness: number; metallic: number; /** The finish and grain the set's maps were drawn at (material-finish.ts finishMaps), when either changed them. */ drawn?: { roughness: number; /** The regressor's grain held to what the photo bears out (material-sets.ts capGrain): the cap, where it came from, and the regressor's own grain. */ cap?: { grain: number; by: 'photo' | 'other classes' | 'none measured'; regressor: number }; metallic: number; relief: number; grain: number }; label: 'photo-inferred' };
 }
 
 export interface MaterialRegionsReport {
@@ -136,6 +139,8 @@ export interface MaterialRegionsReport {
     texels: { total: number; perClass: number[]; glass: number };
     /** The wall guard on the panes (see the file comment, 5): panes not drawn as glass, most of their texels wall-like (stone, whatever was fitted there), and texels of glass panes left out as wall-like. A reader pane the guard drops may be the reader's error or the guard's: both are reported. */
     panesOnStone: number; paneWallTexels: number;
+    /** Texels of windows holding a glass pane, outside every glass pane, raised to the frames' roughness (applyFrameFinish). */
+    frameTexels?: number;
     ms: number;
 }
 
@@ -742,6 +747,38 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
 }
 
 /**
+ * Window frames are not glass (see the file comment, 5; ARTIST_FINISH.frameRoughness): on each rebuilt facade, a texel
+ * inside a fitted window that holds a glass pane, in none of its glass panes (a frame, a mullion, a sill) and drawn
+ * smoother than a frame, is raised to the frames' roughness, its metalness kept. A window with no glass pane is left as
+ * its class drew it (its class may be its only glass). Runs on the finished plan, whichever path planned it; sets the
+ * report's frameTexels and returns it.
+ */
+export function applyFrameFinish(plan: MaterialRegionsPlan, json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS, frameRoughness: number = ARTIST_FINISH.frameRoughness): number {
+    const { rebuilt } = photoMaterials(json), floor = Math.round(frameRoughness * 255);
+    let raised = 0;
+    for (const pm of plan.materials) {
+        const mesh = pm.rebuilt ? rebuilt.get(pm.material) : undefined, img = mesh ? images.get(photoOf(json, pm.material)!.image) : undefined;
+        if (!mesh || !img || img.width !== pm.orm.width || img.height !== pm.orm.height) continue;
+        const windows = fittedWindows(json, mesh), glass = paneGlass(img, classes, fittedPanes(json, mesh), P.paneWallShare)?.glass;
+        if (!windows || !glass) continue;
+        const W = img.width, H = img.height, o = pm.orm.rgba;
+        for (let i = 0; i + 3 < windows.length; i += 4) {
+            const x0 = Math.max(0, Math.floor(windows[i] * W)), y0 = Math.max(0, Math.floor(windows[i + 1] * H)), x1 = Math.min(W, Math.ceil(windows[i + 2] * W)), y1 = Math.min(H, Math.ceil(windows[i + 3] * H));
+            let hasGlass = false;
+            for (let y = y0; y < y1 && !hasGlass; y++) for (let x = x0; x < x1; x++) if (glass[y * W + x]) { hasGlass = true; break; }
+            if (!hasGlass) continue;
+            for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+                const k = y * W + x;
+                if (glass[k] || !img.rgba[k * 4 + 3] || o[k * 4 + 1] >= floor) continue;
+                o[k * 4 + 1] = floor; raised++;
+            }
+        }
+    }
+    plan.report.frameTexels = raised;
+    return raised;
+}
+
+/**
  * Writes a plan's maps into the GLB's materials: lit (KHR_materials_unlit removed), the metallic-roughness texture (its
  * red the occlusion, also the occlusion texture), the normal on rebuilt facades, and the extras: sbMaterial (the viewer's
  * reflection probe, every texel by its own roughness and metalness; and the relief: the facade's class map and metric
@@ -835,10 +872,11 @@ export function classSwatchSheet(json: any, images: Map<number, RgbaImage8>, cla
 }
 
 /** One line for the build's notes. */
+/** The provenance sentence written into the GLB: the classes, their sets and what was drawn, never how long it took (the run note keeps the timing; two builds of one scan must give one GLB, k_determinism.md §5). */
 export function describeMaterialRegions(r: MaterialRegionsReport): string {
     const pct = (a: number) => (r.texels.total ? `${Math.round((100 * a) / r.texels.total)}%` : '0%');
     return `material regions: ${r.classes.length} appearance classes (${r.classes.map((c, k) => `${c.openings ? 'in openings ' : ''}${c.wall ? 'lightest' : 'L ' + Math.round(c.meanLab[0])} -> ${c.set}, ${pct(r.texels.perClass[k] ?? 0)} of texels`).join('; ')}); ` +
-        `every texel its class's set: ${r.facades.total} rebuilt facades tiled at the sets' real size, ${r.scanPieces.total} scan pieces the sets' mean finish; glass in the fitted windows' panes on ${pct(r.texels.glass)} of texels (the wall guard: ${r.panesOnStone} panes left as stone, ${pct(r.paneWallTexels)} of texels wall-like within glass panes); ` +
+        `every texel its class's set: ${r.facades.total} rebuilt facades tiled at the sets' real size, ${r.scanPieces.total} scan pieces the sets' mean finish; glass in the fitted windows' panes on ${pct(r.texels.glass)} of texels (the wall guard: ${r.panesOnStone} panes left as stone, ${pct(r.paneWallTexels)} of texels wall-like within glass panes)${r.frameTexels !== undefined ? `; window frames beside the glass no smoother than ${ARTIST_FINISH.frameRoughness} on ${pct(r.frameTexels)} of texels` : ''}; ` +
         `occlusion, roughness, metalness and normal generated from the library, colour the photo` +
-        `${r.classes.some(c => c.height) ? `; height (a recess below the rebuilt planes, generated): ${r.classes.filter(c => c.height).map(c => `${c.set} up to ${Math.round(c.height!.maxRecessM * 1000)} mm`).join(', ')}` : ''} (${r.ms} ms)`;
+        `${r.classes.some(c => c.height) ? `; height (a recess below the rebuilt planes, generated): ${r.classes.filter(c => c.height).map(c => `${c.set} up to ${Math.round(c.height!.maxRecessM * 1000)} mm`).join(', ')}` : ''}`;
 }

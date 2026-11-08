@@ -26,7 +26,7 @@ import { NativePythonRunnerService } from '../../native-python-runner-service';
 import { decodeImageInMemory } from '../tile-texture-transfer';
 import type { RegionClass, RegionSet } from './material-regions';
 import { CHOICE_CANDIDATES, type ChoiceCandidate, type ChoiceRow, type SetChoice } from './material-choice';
-import { drawFinish, energyFit, finishMaps, finishTarget, grainOf, OPENING_FINISH, patternFit, settleFinishes, type ClassFinish } from './material-finish';
+import { agreeMetal, drawFinish, energyFit, finishMaps, finishTarget, grainOf, OPENING_FINISH, patternFit, settleFinishes, type ClassFinish } from './material-finish';
 import { loadSetFitModel, setFitGrain } from './material-set-fit';
 import { heightRecessMap } from './material-height';
 import { readingKey, type ModelReadingStore } from './model-readings';
@@ -277,7 +277,9 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         // the set drawn at the class's read finish (material-finish.ts finishMaps): smooth where it was read smooth, and its
         // grain only as far as the pick by appearance confirmed it
         const pick = choices[k] ? { by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}) } : undefined;
-        const df = drawFinish(finishes[k], classes[k].openings);
+        // bare metal only where the pick by look agrees (agreeMetal): two expert looks, the dielectric when they differ
+        const agreed = agreeMetal(finishes[k], choices[k]?.pick?.metal);
+        const df = drawFinish(agreed, classes[k].openings);
         const fit = fitOf(k, hit);
         // the roughness pattern held to the photo's tone deviation at the facade texel (finishMaps RoughnessHold): the
         // square root of the photo's relative energy on its finest band, over the tile's size in facade texels
@@ -290,7 +292,7 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         const height = hp && hit.entry.heightDepthM ? heightRecessMap(hp, hit.entry.heightDepthM, drawn.drawn?.relief ?? 1, hit.entry.heightDepthSource ?? 'unknown') : undefined;
         return {
             name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
-            ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: targets[k].roughness, metallic: targets[k].metallic, ...(drawn.drawn ? { drawn: drawn.drawn } : {}), ...('cap' in fit && fit.cap ? { cap: fit.cap } : {}), label: 'photo-inferred' as const } } : drawn.drawn ? { finish: { ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: drawn.drawn.roughness, metallic: drawn.drawn.metallic, drawn: drawn.drawn, ...('cap' in fit && fit.cap ? { cap: fit.cap } : {}), label: 'photo-inferred' as const } } : {}),
+            ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), ...(agreed?.metalVetoed ? { metalVetoed: true } : {}), ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: targets[k].roughness, metallic: targets[k].metallic, ...(drawn.drawn ? { drawn: drawn.drawn } : {}), ...('cap' in fit && fit.cap ? { cap: fit.cap } : {}), label: 'photo-inferred' as const } } : drawn.drawn ? { finish: { ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: drawn.drawn.roughness, metallic: drawn.drawn.metallic, drawn: drawn.drawn, ...('cap' in fit && fit.cap ? { cap: fit.cap } : {}), label: 'photo-inferred' as const } } : {}),
             ...(choices[k] ? { choice: { candidates: choices[k]!.candidates, by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick?.seen ? { seen: choices[k]!.pick!.seen } : {}), ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}), ...(choices[k]!.pick?.reused ? { reused: choices[k]!.pick!.reused } : {}), ...(choices[k]!.why ? { why: choices[k]!.why } : {}) } } : {}),
             ...(textured.has(k) ? { harvest: { ...textured.get(k)!, classEnergy: classes[k].texture!.energy, texelM: classes[k].texture!.texelM, grain: `generated: the set's detail finer than the tile's ${Math.round(classes[k].texture!.texelM * 100)} cm texel is its own, below the tile's resolution` } } : {}),
             normal: drawn.normal, orm: drawn.orm,

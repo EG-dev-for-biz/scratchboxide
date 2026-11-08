@@ -37,6 +37,9 @@ describe('the library set chosen by its look', () => {
         const picks = parseChoices('```json\n{"rows":[{"row":1,"pick":3,"seen":"smooth honed limestone","conf":80},{"row":2,"pick":4},{"row":7,"pick":1}]}\n```', rows);
         expect(picks).toEqual([{ pick: 3, seen: 'smooth honed limestone', conf: 80 }, undefined]);
         expect(parseChoices('{"rows":[{"row":2,"pick":0}]}', rows)).toEqual([undefined, { pick: 0, conf: 50 }]);
+        // the chooser's own vote on bare metal, 0 or 1
+        expect(parseChoices('{"rows":[{"row":1,"pick":2,"metal":1,"conf":70},{"row":2,"pick":1,"metal":0.2}]}', rows).map(p => p?.metal)).toEqual([1, 0]);
+        expect(choicePrompt(rows, 1.5)).toContain('"metal"');
         expect(() => parseChoices('{"rows":[{"row":1}]}', rows)).toThrow();
         expect(() => parseChoices('no', rows)).toThrow();
         const c = { index: 0, meanLab: [70, 2, 5] as [number, number, number], meanLinear: [0.4, 0.38, 0.35] as [number, number, number], spreadLab: [1, 1, 1] as [number, number, number], share: 1, wall: true };
