@@ -469,11 +469,10 @@ were rebuilt uncached: main ab9ca95d against the fix (786044ed), with one shared
   0.005%, and holes 0.95 to 0.92%.
 - **Lever House's untextured share.** The earlier attribution to the corner-join strips was wrong: the strips are
   textured. The rise was the seal: a 222 m² untextured cap at 93 to 94 m, closing the shaft's top rim over the roof
-  scanned just below. A seal triangle facing up with a roof within 3 m straight beneath it now stays in the clay and
-  leaves the textured twin (`pipeline-k/roof-caps.ts`). On the earlier models this took Lever House from 4.00 to 3.30%
-  and the ESB from 0.37 to 0.34%, holes unchanged. On main ab9ca95d (the proud audit, #188) the cap no longer forms:
-  Lever House is 3.10% on both sides, and the pass changes nothing on the five buildings. It stays as a guard,
-  switchable off with `SCRATCHBOX_K_ROOF_CAPS=0`.
+  scanned just below. A pass that left such caps out of the textured twin (`roof-caps.ts`) took Lever House from 4.00
+  to 3.30% on the earlier models. On main ab9ca95d (the proud audit, #188) the cap no longer forms: Lever House is 3.10%
+  on both sides, and the pass changed nothing on the five buildings. It was taken out (MAIN, 2026-11-08: only code that
+  improves output is added). If the cap returns in a build, the pass comes back with that build as its proof.
 
 ### Open
 - 30 Rock's branch build took 23 min (array 358 s before the speed fix, the building system 97 s, load 50 to 68).
