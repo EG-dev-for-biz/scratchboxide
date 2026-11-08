@@ -30,8 +30,10 @@ describe('pipeline K material finish', () => {
     it('ranks toward the read roughness and metalness when confident, else the matte dielectric finish', () => {
         const matte = { roughness: REGION_FINISH.roughness, metallic: REGION_FINISH.metallic };
         expect(finishTarget(undefined, matte)).toEqual(matte);
-        expect(finishTarget({ roughness: 0.35, metalness: 0.9, conf: FINISH_READ.minConf }, matte)).toEqual({ roughness: 0.35, metallic: 0.9 });
-        expect(finishTarget({ roughness: 0.05, metalness: 0, conf: 95 }, matte)).toEqual({ roughness: 0.05, metallic: 0 });
+        expect(finishTarget({ roughness: 0.35, metalness: 0.9, conf: 80 }, matte)).toEqual({ roughness: 0.35, metallic: 1 });
+        // a metal read short of the metal confidence ranks toward a dielectric; a glass read toward main's glass setting
+        expect(finishTarget({ roughness: 0.35, metalness: 0.9, conf: FINISH_READ.minConf }, matte)).toEqual({ roughness: 0.35, metallic: 0 });
+        expect(finishTarget({ roughness: 0.05, metalness: 0, conf: 95 }, matte)).toEqual({ roughness: 0.08, metallic: 0 });
         expect(finishTarget({ roughness: 0.2, metalness: 1, conf: FINISH_READ.minConf - 1 }, matte)).toEqual(matte);
     });
 
@@ -53,8 +55,14 @@ describe('pipeline K material finish', () => {
         const glass = finishMaps(orm, normal, { roughness: 0.15, metalness: 0, conf: 85 });
         const g = Array.from({ length: N }, (_, k) => glass.orm.rgba[k * 4 + 1] / 255);
         expect(g.reduce((a, b) => a + b, 0) / N).toBeCloseTo(0.08, 2);
-        expect([drawnRoughness(0.2), drawnRoughness(0.05), drawnRoughness(0.3), drawnRoughness(0.8)].map(v => Math.round(v * 1000) / 1000)).toEqual([0.08, 0.08, 0.18, 0.8]);
-        expect([drawnMetalness(0.1), drawnMetalness(0.2), drawnMetalness(0.8)].map(v => Math.round(v * 1000) / 1000)).toEqual([0.02, 0.08, 0.8]);
+        // the expert's draw: a glass read at main's glass setting, every other read as read (no squaring: 0.4 stays 0.4)
+        expect([drawnRoughness(0.19), drawnRoughness(0.05), drawnRoughness(0.2), drawnRoughness(0.3), drawnRoughness(0.4), drawnRoughness(0.8)]).toEqual([0.08, 0.08, 0.2, 0.3, 0.4, 0.8]);
+        // metalness 0 or 1: a hedged read is a dielectric, a metal read only when sure and covering most of the class
+        expect([0.1, 0.3, 0.49].map(m => drawnMetalness({ metalness: m, conf: 90 }))).toEqual([0, 0, 0]);
+        expect(drawnMetalness({ metalness: 0.8, conf: 80 })).toBe(1);
+        expect(drawnMetalness({ metalness: 0.8, conf: 65 })).toBe(0);
+        expect(drawnMetalness({ metalness: 0.8, conf: 80, coverage: 0.4 })).toBe(0);
+        expect(drawnMetalness({ metalness: 0.8, conf: 80, coverage: 0.7 })).toBe(1);
         // the set's roughness pattern is drawn as far as its relief (9% here): a smooth surface is even, not figured
         expect(Math.max(...g) - Math.min(...g)).toBeLessThan(0.01);
         // a matte read keeps the set's pattern whole
@@ -67,9 +75,13 @@ describe('pipeline K material finish', () => {
         const figured = { ...orm, rgba: orm.rgba.map((v, i) => (i % 4 === 0 ? (i % 8 ? 255 : 120) : v)) };
         const drawnAo = finishMaps(figured, normal, { roughness: 0.1, metalness: 0, conf: 90 }).orm;
         expect(Math.abs(drawnAo.rgba[0] - drawnAo.rgba[4])).toBeLessThan(8);
-        // read as painted metal: metalness drawn even where the set had none; a matte read keeps the full relief
-        expect(finishMaps(orm, normal, { roughness: 0.4, metalness: 0.8, conf: 70 }).orm.rgba[2]).toBe(204);
-        expect(finishMaps(orm, normal, { roughness: 0.15, metalness: 0.1, conf: 70 }).orm.rgba[2]).toBe(5);
+        // read as bare metal: metalness 1 even where the set had none; a hedged 0.1 is none; a matte read keeps the full relief
+        expect(finishMaps(orm, normal, { roughness: 0.4, metalness: 0.8, conf: 70 }).orm.rgba[2]).toBe(255);
+        expect(finishMaps(orm, normal, { roughness: 0.15, metalness: 0.1, conf: 70 }).orm.rgba[2]).toBe(0);
+        // the expert's grain caps the set's: a read of a smooth panel (grain 0.2) draws a fifth of the pattern
+        const smoothPanel = finishMaps(orm, normal, { roughness: 0.75, metalness: 0, conf: 85, grain: 0.2 });
+        expect(smoothPanel.drawn?.grain).toBe(0.2);
+        expect(tilt(smoothPanel.normal)).toBeLessThan(tilt(normal) / 3);
         expect(tilt(finishMaps(orm, normal, { roughness: 0.85, metalness: 0, conf: 70 }).normal)).toBeGreaterThanOrEqual(tilt(normal) - 3);
         // a set the pick by appearance did not confirm (grain 0): its finish drawn even, no pattern, flat
         const unconfirmed = finishMaps(orm, normal, { roughness: 0.6, metalness: 0, conf: 80 }, grainOf({ by: 'ranking' }));
@@ -131,6 +143,11 @@ describe('pipeline K material finish', () => {
         expect(p).toContain('row 2');
         expect(p).toContain('"roughness"');
         expect(p).toContain('"metalness"');
-        expect(p).toContain('A dark colour alone is not metal');
+        expect(p).toContain('A dark colour is not metal');
+        // the expert is told the reference and the artists' rules, and asked for grain and coverage
+        expect(p).toMatch(/dressed limestone or sandstone.*roughness 0\.7-0\.95, metalness 0/);
+        expect(p).toContain('Metalness is 0 or 1, never in between');
+        expect(p).toContain('"grain"');
+        expect(p).toContain('"coverage"');
     });
 });
