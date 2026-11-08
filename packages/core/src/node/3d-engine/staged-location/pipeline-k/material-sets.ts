@@ -13,7 +13,9 @@
  * publisher gives a real size of a facade's scale (FACADE_TILE) and a normal and roughness map; ranked toward the finish the
  * vision model read, material-finish.ts, else matte, REGION_FINISH; with a words reader, the sets a text model names for
  * what the finish read saw of the class joining that shortlist, material-words.ts; with a chooser, the one among its
- * nearest and those that looks most like it, material-choice.ts). Every class takes its set whole, all its maps drawn (user decision, 2026-11-05), fetched
+ * nearest and those that looks most like it, material-choice.ts). Every set's maps lose their tile-scale modes before they
+ * are drawn (material-tile-filter.ts), and a class for which the text model named no set at all (the library holds
+ * nothing of its kind: window glazing) is drawn without the set's grain, its maps flat at the read finish. Every class takes its set whole, all its maps drawn (user decision, 2026-11-05), fetched
  * from the library bucket (fetchLibrarySets) and prepared small by the engine (surface.prepare_material_maps), cached
  * beside the set for later builds; and its height (material-height.ts), from its publisher's preview, at its real depth.
  */
@@ -30,6 +32,7 @@ import { CHOICE_CANDIDATES, type ChoiceCandidate, type ChoiceRow, type SetChoice
 import { drawFinish, energyFit, finishMaps, finishTarget, grainOf, OPENING_FINISH, patternFit, settleFinishes, type ClassFinish } from './material-finish';
 import { loadSetFitModel, setFitGrain } from './material-set-fit';
 import { heightRecessMap } from './material-height';
+import { filterHeight, filterNormal, filterOrm } from './material-tile-filter';
 import { readingKey, type ModelReadingStore } from './model-readings';
 import { parseWordCandidates, poolLines, WORD_CANDIDATES, WORDS_MIN_CONF, wordsKey, wordsPrompt } from './material-words';
 
@@ -181,7 +184,7 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
         return hits;
     }));
     // the pick by appearance among each class's nearest; the ranking's nearest where it gives none
-    const choices: Array<{ candidates: string[]; pick?: SetChoice; why?: string; words?: { seen: string; sets: string[]; picked?: boolean } } | undefined> = classes.map(() => undefined);
+    const choices: Array<{ candidates: string[]; pick?: SetChoice; why?: string; words?: { seen: string; sets: string[]; picked?: boolean; nothingOfItsKind?: boolean } } | undefined> = classes.map(() => undefined);
     if (opts.choose) {
         const rows: ChoiceRow[] = [];
         for (const [k, hits] of ranked.entries()) {
@@ -202,7 +205,7 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
             const candidates = row.candidates.map(c => c.id), pick = picks?.[k];
             choices[k] = pick ? { candidates, pick, ...(pick.pick === 0 ? { why: 'none of the candidates looked like the class; the ranking\'s nearest kept' } : {}) } : { candidates, why: why ?? 'the reply gave this class no pick; the ranking\'s nearest kept' };
             const w = words[k];
-            if (w) choices[k]!.words = { seen: w.seen, sets: w.sets.filter(id => candidates.includes(id)), ...(pick?.pick ? { picked: w.sets.includes(candidates[pick.pick - 1]) } : {}) };
+            if (w) choices[k]!.words = { seen: w.seen, sets: w.sets.filter(id => candidates.includes(id)), ...(pick?.pick ? { picked: w.sets.includes(candidates[pick.pick - 1]) } : {}), ...(w.sets.length === 0 ? { nothingOfItsKind: true } : {}) };
         });
     }
     const chosen = ranked.map((hits, k) => {
@@ -281,10 +284,13 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         // grain only as far as the pick by appearance confirmed it
         const pick = choices[k] ? { by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}) } : undefined;
         const df = drawFinish(finishes[k], classes[k].openings);
-        const drawn = finishMaps(decodeImageInMemory(maps.orm), decodeImageInMemory(maps.normal), df.finish, grainOf(pick) * fitOf(k, hit).grain);
+        // the library holds nothing of the class's kind (the text model named no set for it): the set carries the finish only
+        const nothingOfItsKind = !!words[k] && words[k]!.sets.length === 0;
+        const size = hit.entry.realSizeM!;
+        const drawn = finishMaps(filterOrm(decodeImageInMemory(maps.orm), size), filterNormal(decodeImageInMemory(maps.normal), size), df.finish, nothingOfItsKind ? 0 : grainOf(pick) * fitOf(k, hit).grain);
         // its height at its real depth, by the share of the normal relief drawn (material-height.ts)
         const hp = heightPreviews.get(hit.entry.id);
-        const height = hp && hit.entry.heightDepthM ? heightRecessMap(hp, hit.entry.heightDepthM, drawn.drawn?.relief ?? 1, hit.entry.heightDepthSource ?? 'unknown') : undefined;
+        const height = hp && hit.entry.heightDepthM && !nothingOfItsKind ? heightRecessMap(filterHeight(hp, size), hit.entry.heightDepthM, drawn.drawn?.relief ?? 1, hit.entry.heightDepthSource ?? 'unknown') : undefined;
         return {
             name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
             ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: targets[k].roughness, metallic: targets[k].metallic, ...(drawn.drawn ? { drawn: drawn.drawn } : {}), label: 'photo-inferred' as const } } : drawn.drawn ? { finish: { ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: drawn.drawn.roughness, metallic: drawn.drawn.metallic, drawn: drawn.drawn, label: 'photo-inferred' as const } } : {}),

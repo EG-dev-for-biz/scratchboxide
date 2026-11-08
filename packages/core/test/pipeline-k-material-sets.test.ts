@@ -106,5 +106,12 @@ describe('pipeline K library sets', () => {
         expect(broken[0].name).toBe('Concrete');
         expect(broken[0].choice?.words).toBeUndefined();
         expect(progress.some(m => /naming the sets by words failed: no answer within 90 s/.test(m))).toBe(true);
+        // the library holds nothing of the class's kind (an empty list): the set carries the finish only, no grain, no height
+        const none = await resolveRegionSets([dark], { repoRoot: root, store, finish: async () => [{ roughness: 0.08, metalness: 0, conf: 85, seen: 'window glazing' }], choose, words: { ask: async () => '{"classes":[{"class":1,"sets":[]}]}', model: 'm1' } });
+        expect(none[0].choice?.words).toEqual({ seen: 'window glazing', sets: [], nothingOfItsKind: true });
+        expect(none[0].finish?.drawn).toMatchObject({ relief: 0, grain: 0 });
+        expect(none[0].height).toBeUndefined();
+        // flat: every normal texel straight up
+        for (let k = 0; k < none[0].normal.width * none[0].normal.height; k++) expect(Array.from(none[0].normal.rgba.subarray(k * 4, k * 4 + 3))).toEqual([128, 128, 255]);
     });
 });
