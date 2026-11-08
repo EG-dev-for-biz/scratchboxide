@@ -876,7 +876,7 @@ class BinBuilder {
  * Edits a GLB of the remesh: the facades' scan triangles degenerate, each rebuilt facade appended as a node (`textured`:
  * an unlit material with the facade's orthophoto, as tile_refine's twin is; otherwise the GLB's first material, its clay).
  */
-export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: ReliefFacade; r: FacadeLatticeResult; png?: Uint8Array }>, textured: boolean, P = FACADE_LATTICE_PARAMS, opts: { /** false: the scan was already cut to the lattice (pipeline-k/lattice-stitch.ts); only append the rebuilt facades. */ removeScan?: boolean; /** Only scan facing the way a rebuilt facade faces is removed under it (its audit sees only its own front). */ sameFacing?: boolean; /** The native audit's threads (every core when none). */ threads?: number } = {}): { glb: Buffer; removed: number; tears: TearReport; proud: ProudReport } {
+export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: ReliefFacade; r: FacadeLatticeResult; png?: Uint8Array }>, textured: boolean, P = FACADE_LATTICE_PARAMS, opts: { /** false: the scan was already cut to the lattice (pipeline-k/lattice-stitch.ts); only append the rebuilt facades. */ removeScan?: boolean; /** Only scan facing the way a rebuilt facade faces is removed under it (its audit sees only its own front). */ sameFacing?: boolean; /** The native audit's threads (every core when none). */ threads?: number; /** false: the proud audit measures only, removing nothing (SCRATCHBOX_K_PROUD_REMOVE=0). */ proudRemove?: boolean } = {}): { glb: Buffer; removed: number; tears: TearReport; proud: ProudReport } {
     const glb = parseGlbBytes(bytes);
     const json = glb.json;
     const dv = new DataView(glb.bin.buffer, glb.bin.byteOffset, glb.bin.byteLength);
@@ -920,7 +920,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
     const proudPix = { straight: facadesIn.map(() => 0), oblique: facadesIn.map(() => 0), straightAfter: facadesIn.map(() => 0), obliqueAfter: facadesIn.map(() => 0), removed: 0, restored: 0 };
     if (!keepScan && kNative('lattice')) {
         // natively: the same removals, audit, restores and drops, one view a task
-        const a = runNativeLatticeAudit(latticeParamVector(P), opts.sameFacing === true, soup, facadesIn.map(x => ({ f: x.f, s: x.r.s, t: x.r.t, built: x.r.built, positions: x.r.positions, indices: x.r.indices })), opts.threads ?? nativePolishThreads());
+        const a = runNativeLatticeAudit(latticeParamVector(P), opts.sameFacing === true, opts.proudRemove !== false, soup, facadesIn.map(x => ({ f: x.f, s: x.r.s, t: x.r.t, built: x.r.built, positions: x.r.positions, indices: x.r.indices })), opts.threads ?? nativePolishThreads());
         claim.set(a.claim);
         for (const fi of a.dropped) { dropped.add(fi); tears.droppedFacades.push(facadesIn[fi].f.facadeId); }
         tears.found = a.found; tears.restoredTriangles = a.restored; tears.left = a.left;
@@ -989,7 +989,9 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
                     for (let y = Math.max(0, Math.floor(y0)); y <= Math.min(grid.H - 1, Math.floor(y1)) && !hit; y++) for (let x = Math.max(0, Math.floor(x0)); x <= Math.min(grid.W - 1, Math.floor(x1)) && !hit; x++) if (mark[y * grid.W + x]) hit = true;
                     if (!hit) continue;
                     const front = inFrontOfRebuild(corner(k, 0), corner(k, 1), corner(k, 2), facadesIn[claim[k]].f, drawn[claim[k]], P);
-                    if (oblique && front) keptBack[k] = 1;
+                    // a proud removal (only) comes back from an angle too, in front or not: it stood there before, and the removal
+                    // must open nothing (the ESB, 2026-11-08: 0.03 points of holes from proud pieces that had closed angled slits)
+                    if (oblique && front && !only) keptBack[k] = 1;
                     // a proud removal put back (only) was counted when the tear audit first restored it
                     else { claim[k] = -1; n++; if (front && !only) tears.restoredInFront!++; }
                 }
@@ -1050,7 +1052,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
             const first = proudPass();
             proudPix.straight = first.straight; proudPix.oblique = first.oblique;
             const mine = new Uint8Array(nTri);
-            for (const [k, fi] of first.tris) {
+            if (opts.proudRemove !== false) for (const [k, fi] of first.tris) {
                 const a = corner(k, 0), b = corner(k, 1), c = corner(k, 2);
                 if (claim[k] < 0 && facesFacade(a, b, c, facadesIn[fi].f, P, opts.sameFacing === true) && coveredByRebuild(a, b, c, [facadesIn[fi]], P)) { claim[k] = fi; mine[k] = 1; proudPix.removed++; }
             }
@@ -1124,7 +1126,7 @@ export function applyFacadeLattices(bytes: Uint8Array, facadesIn: Array<{ f: Rel
 /** Cut-and-stitch rounds at most: each leaves as scan the rebuilt cells beside outline edges the stitch could join to nothing. */
 const STITCH_ROUNDS = 4;
 
-export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Uint8Array | undefined, orthosDir: string, P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS, skip: Set<number> = new Set(), opts: { /** Pipeline K: the scan cut exactly to the rebuilt cells and stitched to them (pipeline-k/lattice-stitch.ts), instead of whole triangles removed. */ stitch?: boolean; /** Pipeline K: window recesses read from the straightened photo (PHOTO_RECESS), the scan being uncarved. */ photoRecess?: boolean; /** window_fit.json (window-fit.ts): each facade's fitted windows written into its extras. */ windowFit?: string; /** reveal_depth.json (reveal-depth.ts): each facade's window depth read from Street View. */ revealDepth?: string; /** wall_grammar.json (wall-grammar.ts): each facade's bays read per wall. */ wallGrammar?: string; /** The isolated scan before its walls were flattened: where the structure's relief is measured. */ rawScan?: string; /** walls.json (wall-sheets.ts): each multi-facade wall rebuilt once, as one sheet, in place of its facades; and every facade rebuilt whole, where the scan has its wall. */ walls?: string; /** Pipeline K: the scan cut exactly to the rebuilt cells (pipeline-k/lattice-stitch.ts cutScanToLattice) with no stitch, instead of whole triangles removed. */ cut?: boolean; /** The native steps' threads (the lattice, the audit, the cut and the stitch; every core when none). It changes how fast, not what, is built. */ threads?: number } = {}): { clay: Buffer; textured?: Buffer; stats: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears: TearReport; /** The proud audit (the clay's): scan standing in front of the rebuilt facades, before and after its removals. */ proud?: ProudReport; /** With opts.cut: the triangles cut and the pieces dropped and kept. */ cut?: CutReport; stitch?: { cut: CutReport; strips: StitchReport; /** Per round: outline edges joined to nothing, and the cells beside them left as scan for the next round. */ rounds?: Array<{ unjoined: number; cellsLeftAsScan: number }> }; photoRecessCells?: number; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number]; photoRecessCells?: number }> } } {
+export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Uint8Array | undefined, orthosDir: string, P: typeof FACADE_LATTICE_PARAMS = FACADE_LATTICE_PARAMS, skip: Set<number> = new Set(), opts: { /** Pipeline K: the scan cut exactly to the rebuilt cells and stitched to them (pipeline-k/lattice-stitch.ts), instead of whole triangles removed. */ stitch?: boolean; /** Pipeline K: window recesses read from the straightened photo (PHOTO_RECESS), the scan being uncarved. */ photoRecess?: boolean; /** window_fit.json (window-fit.ts): each facade's fitted windows written into its extras. */ windowFit?: string; /** reveal_depth.json (reveal-depth.ts): each facade's window depth read from Street View. */ revealDepth?: string; /** wall_grammar.json (wall-grammar.ts): each facade's bays read per wall. */ wallGrammar?: string; /** The isolated scan before its walls were flattened: where the structure's relief is measured. */ rawScan?: string; /** walls.json (wall-sheets.ts): each multi-facade wall rebuilt once, as one sheet, in place of its facades; and every facade rebuilt whole, where the scan has its wall. */ walls?: string; /** Pipeline K: the scan cut exactly to the rebuilt cells (pipeline-k/lattice-stitch.ts cutScanToLattice) with no stitch, instead of whole triangles removed. */ cut?: boolean; /** The native steps' threads (the lattice, the audit, the cut and the stitch; every core when none). It changes how fast, not what, is built. */ threads?: number; /** false: the proud audit measures only (SCRATCHBOX_K_PROUD_REMOVE=0). */ proudRemove?: boolean } = {}): { clay: Buffer; textured?: Buffer; stats: { facades: number; rebuilt: number; cells: number; removedTriangles: number; tears: TearReport; /** The proud audit (the clay's): scan standing in front of the rebuilt facades, before and after its removals. */ proud?: ProudReport; /** With opts.cut: the triangles cut and the pieces dropped and kept. */ cut?: CutReport; stitch?: { cut: CutReport; strips: StitchReport; /** Per round: outline edges joined to nothing, and the cells beside them left as scan for the next round. */ rounds?: Array<{ unjoined: number; cellsLeftAsScan: number }> }; photoRecessCells?: number; perFacade: Array<{ id: number; cells: number; measuredShare: number; lines: [number, number]; photoRecessCells?: number }> } } {
     const facades = JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as ReliefFacade[];
     // the native steps' threads (the lattice, the audit, the cut and the stitch)
     const threads = opts.threads ? { threads: opts.threads } : {};
@@ -1228,10 +1230,11 @@ export function rebuildFacadesOnLattice(clayBytes: Uint8Array, texturedBytes: Ui
     const cut = opts.cut && done.length ? cutScanToLattice(Uint8Array.from(clayBytes), done, split, threads) : undefined;
     // with the cut, a triangle's other side is its own piece: the street face of a parapet whose terrace face is rebuilt lies in
     // that rebuild's cells, out of its audit's sight (a 2 m strip along the ESB's podium attic), so only same-facing scan goes
-    const clay = applyFacadeLattices(cut ? cut.glb : clayBytes, done, false, P, { sameFacing: !!cut, ...threads });
+    const proudRemove = opts.proudRemove === false ? { proudRemove: false } : {};
+    const clay = applyFacadeLattices(cut ? cut.glb : clayBytes, done, false, P, { sameFacing: !!cut, ...threads, ...proudRemove });
     const kept = done.filter(d => !clay.tears.droppedFacades.includes(d.f.facadeId));
     // the twin rebuilds what the clay kept (its own audit still runs over its own triangles; the same cut, the same triangles)
-    const tex = texturedBytes ? applyFacadeLattices(cut ? cutScanToLattice(Uint8Array.from(texturedBytes), kept, split, threads).glb : texturedBytes, kept, true, P, { sameFacing: !!cut, ...threads }) : undefined;
+    const tex = texturedBytes ? applyFacadeLattices(cut ? cutScanToLattice(Uint8Array.from(texturedBytes), kept, split, threads).glb : texturedBytes, kept, true, P, { sameFacing: !!cut, ...threads, ...proudRemove }) : undefined;
     return {
         clay: clay.glb, ...(tex ? { textured: tex.glb } : {}),
         stats: { facades: facades.length, rebuilt: kept.length, cells: kept.reduce((a, d) => a + d.r.cells, 0), removedTriangles: clay.removed, tears: clay.tears, proud: clay.proud, ...(cut ? { cut: cut.report } : {}), ...(opts.photoRecess ? { photoRecessCells: kept.reduce((a, d) => a + (d.r.photoRecessCells ?? 0), 0) } : {}), perFacade: kept.map(d => ({ id: d.f.facadeId, cells: d.r.cells, measuredShare: d.r.measuredShare, lines: [d.r.s.length, d.r.t.length] as [number, number], ...(d.r.photoRecessCells !== undefined ? { photoRecessCells: d.r.photoRecessCells } : {}) })) }

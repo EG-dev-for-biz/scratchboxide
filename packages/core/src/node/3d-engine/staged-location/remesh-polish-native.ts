@@ -294,8 +294,8 @@ export interface NativeAuditFacade { f: NativeLatticeFrame; s: number[]; t: numb
  * facade-lattice.ts applyFacadeLattices' removals under its tear audit natively: per scan triangle (nine floats each, the
  * indexed primitives' in order) the facade claiming it (-1: kept), and what the audit found, restored and dropped.
  */
-export function runNativeLatticeAudit(params: number[], sameFacing: boolean, soup: Float32Array, facades: NativeAuditFacade[], threads: number): { claim: Int32Array; found: number; restored: number; left: number; obliqueLeft: number; oblique?: number; keptInFront: number; restoredInFront: number; dropped: number[]; /** The proud audit, in pixels per facade (facade-lattice.ts ProudReport). */ proud: { straight: number[]; oblique: number[]; straightAfter: number[]; obliqueAfter: number[]; removed: number; restored: number } } {
-    const w = new Writer().magic('SBLA').u32(3).u32(params.length).f64s(params).u32(sameFacing ? 1 : 0).u32(soup.length).f32s(soup).u32(facades.length);
+export function runNativeLatticeAudit(params: number[], sameFacing: boolean, proudRemove: boolean, soup: Float32Array, facades: NativeAuditFacade[], threads: number): { claim: Int32Array; found: number; restored: number; left: number; obliqueLeft: number; oblique?: number; keptInFront: number; restoredInFront: number; dropped: number[]; /** The proud audit, in pixels per facade (facade-lattice.ts ProudReport). */ proud: { straight: number[]; oblique: number[]; straightAfter: number[]; obliqueAfter: number[]; removed: number; restored: number } } {
+    const w = new Writer().magic('SBLA').u32(3).u32(params.length).f64s(params).u32((sameFacing ? 1 : 0) | (proudRemove ? 0 : 2)).u32(soup.length).f32s(soup).u32(facades.length);
     for (const x of facades) {
         if (x.built.length !== (x.s.length - 1) * (x.t.length - 1)) throw new Error(`facade ${x.f.facadeId}: its built cells do not match its lattice`);
         frame(w, x.f).u32(x.s.length).f64s(x.s).u32(x.t.length).f64s(x.t).raw(x.built).u32(x.positions.length).f32s(x.positions).u32(x.indices.length).raw(new Uint8Array(x.indices.buffer, x.indices.byteOffset, x.indices.byteLength));

@@ -40,7 +40,7 @@
  *          f64 filled, f64 edge, u32 n, u8[n] the PNG ([cells]: one per lattice cell, row by row).
  *
  *   remesh_polish_native lattice-audit <threads>
- *     in:  "SBLA" u32 version (3), u32 nParams, f64[nParams], u32 flags (1: same facing only), u32 n, f32[n] the scan's
+ *     in:  "SBLA" u32 version (3), u32 nParams, f64[nParams], u32 flags (1: same facing only; 2: the proud audit measures only), u32 n, f32[n] the scan's
  *          indexed triangles, u32 nFacades, per facade i32 id, f64[19] frame, u32 n, f64[n] s, u32 n, f64[n] t,
  *          u8[cells] built, u32 n, f32[n] positions, u32 n, u32[n] indices.
  *     out: u32 nTri, i32[nTri] the facade claiming each triangle (-1: kept), f64 found, f64 restored, f64 left,
@@ -368,7 +368,7 @@ int latticeAudit(unsigned threads) {
         if (!x.indices.empty()) readExact(x.indices.data(), x.indices.size() * sizeof(uint32_t));
     }
     FixedThreadPool pool(threads);
-    const auto r = facade_lattice::audit(soup, facades, params, (flags & 1) != 0, pool);
+    const auto r = facade_lattice::audit(soup, facades, params, (flags & 1) != 0, (flags & 2) == 0, pool);
     writeArray(r.claim);
     writeOne<double>(r.found);
     writeOne<double>(r.restored);

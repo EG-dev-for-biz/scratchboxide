@@ -1120,7 +1120,7 @@ struct Torn {
 };
 
 /** applyFacadeLattices' removals under its tear audit. `soupPts` holds the scan's indexed triangles, nine floats each. */
-inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<AuditFacade>& facades, const Params& P, bool sameFacing, FixedThreadPool& pool) {
+inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<AuditFacade>& facades, const Params& P, bool sameFacing, bool proudRemove, FixedThreadPool& pool) {
     const size_t nTri = soupPts.size() / 9, F = facades.size();
     AuditResult R;
     R.claim.assign(nTri, -1);
@@ -1246,7 +1246,8 @@ inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<Au
                     // view straight on still puts it back)
                     if (!hit) continue;
                     if (inFront < 0) inFront = inFrontOfRebuild(corner(k, 0), corner(k, 1), corner(k, 2), facades[static_cast<size_t>(R.claim[k])], drawn[static_cast<size_t>(R.claim[k])], P) ? 1 : 0;
-                    if (t.oblique && inFront) { keptBack[k] = 1; continue; }
+                    // a proud removal (only) comes back from an angle too, in front or not: it stood there before
+                    if (t.oblique && inFront && !only) { keptBack[k] = 1; continue; }
                     R.claim[k] = -1;
                     mine++;
                     // a proud removal put back (only) was counted when the tear audit first restored it
@@ -1342,7 +1343,7 @@ inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<Au
     R.proudObliqueAfter.assign(F, 0);
     const std::vector<int> owner = proudPass(R.proudStraight, R.proudOblique);
     std::vector<uint8_t> mine(nTri);
-    for (size_t k = 0; k < nTri; ++k) {
+    for (size_t k = 0; proudRemove && k < nTri; ++k) {
         if (owner[k] < 0 || R.claim[k] >= 0) continue;
         const Vec3 a = corner(k, 0), b = corner(k, 1), c = corner(k, 2);
         const auto& x = facades[static_cast<size_t>(owner[k])];

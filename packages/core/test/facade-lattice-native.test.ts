@@ -274,6 +274,13 @@ describe('facade lattice: native against TypeScript', () => {
         expect(nat.out.proud).toEqual(ts.out.proud);
         expect(nat.out.tears).toEqual(ts.out.tears);
         expect(Buffer.compare(nat.out.glb, ts.out.glb)).toBe(0);
+        // measuring only (SCRATCHBOX_K_PROUD_REMOVE=0): the same measure, nothing removed
+        const tsM = withNative('0', () => applyFacadeLattices(fs.readFileSync(file), [{ f, r }], false, undefined, { proudRemove: false }));
+        const natM = withNative('1', () => applyFacadeLattices(fs.readFileSync(file), [{ f, r }], false, undefined, { proudRemove: false }));
+        expect(natM.out.proud).toEqual(tsM.out.proud);
+        expect(tsM.out.proud.m2).toBe(ts.out.proud.m2);
+        expect(tsM.out.proud.removedTriangles).toBe(0);
+        expect(Buffer.compare(natM.out.glb, tsM.out.glb)).toBe(0);
         // the same wall cut at the cells' lines (pipeline K): the pieces over the rebuilt cells go, and nothing stands proud but
         // what closes the rebuild's own open edges
         let wholeM2 = 0;
