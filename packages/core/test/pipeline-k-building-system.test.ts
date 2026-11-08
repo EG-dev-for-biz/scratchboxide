@@ -184,4 +184,20 @@ describe('the building system', () => {
         for (const t of g) expect(out.rects.some(r => Math.abs((r[0] + r[2]) / 2 - (t[0] + t[2]) / 2) <= 2 && Math.abs((r[1] + r[3]) / 2 - (t[1] + t[3]) / 2) <= 2 && Math.abs(r[2] - r[0] - BW) <= 2)).toBe(true);
         fs.rmSync(dir, { recursive: true, force: true });
     });
+
+    it('takes the window size from the boxes read on the system\'s sites, not the model\'s, so read and added windows match', async () => {
+        // the model reads a 0.8 x 1.2 m window; the photo and two boxes in three show 1.2 x 2 m
+        const { dir, fit } = setup([{ id: 1, windows: truth, boxes: truth.filter((_, k) => k % 3 !== 0) }, { id: 2, windows: truth, boxes: truth }]);
+        const small = { ...SHAFT, windowWidthM: 0.8, windowHeightM: 1.2 };
+        const r = await readBuildingSystem(dir, standIn(c => ANSWER(c, { 1: [[0, 60, 'punched']], 2: [[0, 60, 'punched']] }, [small])).ask);
+        const rep = inferWindowArrays(dir, fit, undefined, { system: r.system! });
+        const f1 = rep.facades.find(f => f.facadeId === 1)!;
+        expect(f1.system!.regions![0].reason).toBeUndefined();
+        expect(f1.system!.regions![0].source).toBe('system');
+        const e1 = (JSON.parse(fs.readFileSync(path.join(dir, 'window_fit.json'), 'utf8')) as WindowFitFile).facades[0] as { rects: WindowRect[] };
+        expect(e1.rects).toHaveLength(150);
+        // every window, read or added, at the boxes' size
+        for (const q of e1.rects) { expect(q[2] - q[0]).toBeCloseTo(BW, -0.5); expect(q[3] - q[1]).toBeCloseTo(BH, -0.5); }
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
 });
