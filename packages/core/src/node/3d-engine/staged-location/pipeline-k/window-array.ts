@@ -75,7 +75,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { decodePng } from '../../../texture-processing';
-import { labOf8, regionLook, WINDOW_FIT_FILE, type WindowFitFile, type WindowRect } from '../window-fit';
+import { labOf8, WINDOW_FIT_FILE, type WindowFitFile, type WindowRect } from '../window-fit';
 import { countSet, readOccluded } from './occlusion';
 import { featurelessMaskName } from './ortho-rectify';
 import { systemOnFace, type BuildingSystem, type FaceRegion, type FaceSystem } from './building-system';
@@ -470,6 +470,40 @@ function rowsOf(boxes: Array<{ cy: number; h: number }>): Array<{ cy: number; me
     return rows;
 }
 
+/** Each photo's CIELAB per texel, computed once (labOf8), and each skip list drawn once as a mask: the array asks for the colour of thousands of boxes and rings per facade. */
+const labCache = new WeakMap<object, { L: Float32Array; A: Float32Array; B: Float32Array }>();
+const skipCache = new WeakMap<WindowRect[], { len: number; W: number; H: number; mask: Uint8Array }>();
+function labsOf(img: ArrayPhoto): { L: Float32Array; A: Float32Array; B: Float32Array } {
+    let c = labCache.get(img);
+    if (!c) {
+        const n = img.width * img.height, L = new Float32Array(n), A = new Float32Array(n), B = new Float32Array(n);
+        for (let k = 0; k < n; k++) { const l = labOf8(img.rgba[k * 4], img.rgba[k * 4 + 1], img.rgba[k * 4 + 2]); L[k] = l[0]; A[k] = l[1]; B[k] = l[2]; }
+        c = { L, A, B }; labCache.set(img, c);
+    }
+    return c;
+}
+function skipMaskOf(skip: WindowRect[], W: number, H: number): Uint8Array {
+    const c = skipCache.get(skip);
+    if (c && c.len === skip.length && c.W === W && c.H === H) return c.mask;
+    const mask = new Uint8Array(W * H);
+    for (const q of skip) for (let y = Math.max(0, q[1]); y < Math.min(H, q[3]); y++) mask.fill(1, y * W + Math.max(0, q[0]), y * W + Math.min(W, q[2]));
+    skipCache.set(skip, { len: skip.length, W, H, mask });
+    return mask;
+}
+/** window-fit.ts regionLook (the mean CIELAB of the valid texels in a box outside every box in `skip`, its L spread, the valid share) over the cached colours and skip mask. */
+function lookIn(img: ArrayPhoto, valid: Uint8Array, r: WindowRect, skip?: WindowRect[]): { lab?: number[]; validShare: number } {
+    const W = img.width, H = img.height, { L, A, B } = labsOf(img), sk = skip?.length ? skipMaskOf(skip, W, H) : undefined;
+    let n = 0, all = 0, l0 = 0, a0 = 0, b0 = 0, l2 = 0;
+    for (let y = Math.max(0, r[1]); y < Math.min(H, r[3]); y++) for (let x = Math.max(0, r[0]); x < Math.min(W, r[2]); x++) {
+        const k = y * W + x;
+        if (sk && sk[k]) continue;
+        all++;
+        if (!valid[k]) continue;
+        l0 += L[k]; a0 += A[k]; b0 += B[k]; l2 += L[k] * L[k]; n++;
+    }
+    return { lab: n ? [l0 / n, a0 / n, b0 / n, Math.sqrt(Math.max(0, l2 / n - (l0 / n) ** 2))] : undefined, validShare: all ? n / all : 0 };
+}
+
 /**
  * The wall around a box: the bands just left, right, above and below it (each 0.4 of the box's width or height), outside
  * every box in `skip`, as one mean colour (CIELAB). A ribbon window reads against the floor band above and below it, a
@@ -479,7 +513,7 @@ function ringLook(img: ArrayPhoto, valid: Uint8Array, r: WindowRect, skip: Windo
     const sw = Math.max(2, Math.round((r[2] - r[0]) * 0.4)), sh = Math.max(2, Math.round((r[3] - r[1]) * 0.4));
     const bands: WindowRect[] = [[r[0] - sw, r[1], r[0], r[3]], [r[2], r[1], r[2] + sw, r[3]], [r[0], r[1] - sh, r[2], r[1]], [r[0], r[3], r[2], r[3] + sh]];
     const m = [0, 0, 0]; let n = 0;
-    for (const b of bands) { const l = regionLook(img, valid, b, skip); if (!l.lab) continue; const w = l.validShare * (b[2] - b[0]) * (b[3] - b[1]); for (let k = 0; k < 3; k++) m[k] += l.lab[k] * w; n += w; }
+    for (const b of bands) { const l = lookIn(img, valid, b, skip); if (!l.lab) continue; const w = l.validShare * (b[2] - b[0]) * (b[3] - b[1]); for (let k = 0; k < 3; k++) m[k] += l.lab[k] * w; n += w; }
     return n > 0 ? m.map(v => v / n) : undefined;
 }
 
@@ -497,7 +531,7 @@ function photoScore(img: ArrayPhoto, valid: Uint8Array, col: Lattice1D, row: Lat
     }
     let sum = 0, n = 0;
     for (const r of sites) {
-        const inside = regionLook(img, valid, r);
+        const inside = lookIn(img, valid, r);
         if (!inside.lab || inside.validShare < 0.5) continue;
         const wall = ringLook(img, valid, r, sites);
         if (!wall) continue;
@@ -926,7 +960,7 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     const boxMaj = col && row ? majorityOf(col, row, boxSingles) : undefined;
     // the photo's own evidence for a lattice: the rows and columns whose sites show its window contrast on average
     const projection = (r: WindowRect, D: number[], skip: WindowRect[]): number | undefined => {
-        const look = regionLook(img, valid, r);
+        const look = lookIn(img, valid, r);
         if (!look.lab || look.validShare < 1 - P.addMaxUncovered) return undefined;
         const beside = ringLook(img, valid, r, skip);
         if (!beside) return undefined;
@@ -1178,7 +1212,7 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     const besideOf = (r: WindowRect, _bw: number, skip: WindowRect[]): number[] | undefined => ringLook(img, valid, r, skip);
     const allBoxes = out.map(o => o.r);
     const memberLook = members.map(o => {
-        const inside = regionLook(img, valid, o.r).lab, beside = besideOf(o.r, o.r[2] - o.r[0], allBoxes);
+        const inside = lookIn(img, valid, o.r).lab, beside = besideOf(o.r, o.r[2] - o.r[0], allBoxes);
         return { o, cy: (o.r[1] + o.r[3]) / 2, contrast: inside && beside ? [0, 1, 2].map(k => inside[k] - beside[k]) : undefined };
     });
     const occ = occluded;
@@ -1202,7 +1236,7 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     // learned decision is fitted on, and the sites a person is asked about
     const evidence: Array<number | null> = [];
     const projOf = (r: WindowRect, t: ArrayTier, cy: number): number | undefined => {
-        const look = regionLook(img, valid, r);
+        const look = lookIn(img, valid, r);
         if (!look.lab || look.validShare < 1 - P.addMaxUncovered) return undefined;
         const peers = memberLook.filter(m => m.contrast && Math.abs(m.cy - cy) <= P.peerRows * t.rowPitch + 1);
         const use = peers.length ? peers : memberLook.filter(m => m.contrast);
