@@ -278,11 +278,24 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         if (bytes) heightPreviews.set(id, decodeImageInMemory(bytes));
     }
     // each chosen set's texture energy at its class's texel, against the photo's (material-finish.ts energyFit)
+    // the set's energy per band is the larger of its colour preview's and its roughness map's (the prepared ORM's green as a
+    // grey image): a set whose finish varies more than its colour (travertine's pores, a smooth stone pitted rough) is held
+    // by the photo the same way, since a finish that varied so would show in the photo as tone
     const setEnergy = await Promise.all(chosen.map(async (hit, k) => {
         const t = classes[k].photoTexture;
         if (!t || !hit.entry.realSizeM) return undefined;
         const bytes = await libraryColourPreview(hit.entry, repoRoot, opts.signal).catch(() => undefined);
-        return bytes ? libraryTextureEnergy(decodeImageInMemory(bytes), hit.entry.realSizeM, t.texelM).energy : undefined;
+        const colour = bytes ? libraryTextureEnergy(decodeImageInMemory(bytes), hit.entry.realSizeM, t.texelM).energy : undefined;
+        const maps = kept.get(hit.entry.id);
+        let rough: number[] | undefined;
+        if (maps) {
+            const orm = decodeImageInMemory(maps.orm), grey = { width: orm.width, height: orm.height, rgba: new Uint8Array(orm.rgba.length) };
+            for (let i = 0; i < orm.width * orm.height; i++) { const g = orm.rgba[i * 4 + 1]; grey.rgba[i * 4] = g; grey.rgba[i * 4 + 1] = g; grey.rgba[i * 4 + 2] = g; grey.rgba[i * 4 + 3] = 255; }
+            rough = libraryTextureEnergy(grey, hit.entry.realSizeM, t.texelM).energy;
+        }
+        if (!colour && !rough) return undefined;
+        const n = Math.max(colour?.length ?? 0, rough?.length ?? 0);
+        return Array.from({ length: n }, (_, b) => { const c = colour?.[b], r = rough?.[b]; const cv = Number.isFinite(c) ? c! : -Infinity, rv = Number.isFinite(r) ? r! : -Infinity; const m = Math.max(cv, rv); return Number.isFinite(m) ? m : NaN; });
     }));
     // the set-fit regressor learned from the finished buildings (material-set-fit.ts), when committed: the chosen set's
     // grain by its predicted fit, in place of the hand-set tile and energy caps
