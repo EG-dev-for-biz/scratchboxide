@@ -56,7 +56,9 @@ describe('a staged build drawn as its steps', () => {
 
     it('wires each step to the step that made what it reads, labelled by the result', () => {
         expect(edge('stage-tiles', 'step-remesh.tileRefine')?.label).toBe('tile mesh');
-        expect(edge('step-remesh.windowFit', 'step-polish.lattice')?.label).toBe('windows');
+        // the window array (a step this recorded build predates, so off) stands between the window fit and what reads its windows
+        expect(edge('step-remesh.windowFit', 'step-remesh.windowArray')?.label).toBe('windows');
+        expect(edge('step-remesh.windowFit', 'step-polish.lattice')?.label).toBe('windows (Window array per facade off)');
         expect(edge('step-remesh.revealDepth', 'step-polish.lattice')?.label).toBe('window depth');
         expect(edge('step-polish.cleanup', 'step-polish.lattice')?.label).toBe('cleaned scan');
         expect(edge('stage-survey', 'step-remesh.revealDepth')?.label).toBe('Street View photos');

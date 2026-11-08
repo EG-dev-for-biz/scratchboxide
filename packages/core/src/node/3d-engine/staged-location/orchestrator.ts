@@ -223,6 +223,8 @@ import { VIEW_RELIGHT_VERSION, viewRelightEnvParams } from './pipeline-k/view-re
 import { ROOF_SHADOW_VERSION, roofShadowAuditPng } from './pipeline-k/roof-shadow';
 import { FACADE_READER_MODEL, FACADE_READER_MODEL_KEY, FACADE_READER_PARAMS, FACADE_READER_VERSION, facadeReplyUsable, mergeReadings, readPlanes, type FacadeAsk } from './pipeline-k/facade-reader';
 import { readOnTwin, TWIN_READER_VERSION } from './pipeline-k/twin-reader';
+import { describeWindowArrays, inferWindowArrays, WINDOW_ARRAY_VERSION } from './pipeline-k/window-array';
+import { BUILDING_SYSTEM_VERSION, readBuildingSystem, type BuildingSystem } from './pipeline-k/building-system';
 import { CHOICE_SPAN_M, candidateSheetPng, choicePrompt, chooseWithMemory, MATERIAL_CHOICE_VERSION, parseChoices, type ChoiceRow, type SetChoice } from './pipeline-k/material-choice';
 import { fileReadingStore, MODEL_READINGS_DIR, modelReadingsDir, readingKey, type ModelReadingStore } from './pipeline-k/model-readings';
 import { betweenSeen, MATERIAL_NAMING_VERSION, namingPrompt, parseClassWords } from './pipeline-k/material-naming';
@@ -4543,6 +4545,37 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     notes.note(PROVENANCE.photoInferred, `the facade reader on the straightened photos failed (${errorMessage(err)}); the window geometry is the window fit's`);
                                 }
                             }
+                            // each facade's boxes (the reader's where it drew, the window fit's elsewhere) brought onto the array the majority
+                            // of them form (pipeline-k/window-array.ts), read against the photo; the wall grammar, wall sheets and lattice
+                            // below read the arrayed fit. On unless
+                            // SCRATCHBOX_K_WINDOW_ARRAY=0 or the node graph's remesh.windowArray off
+                            if (stepOn('remesh.windowArray', process.env.SCRATCHBOX_K_WINDOW_ARRAY?.trim() !== '0')) {
+                                try {
+                                    // the building's system first, read by the vision model from the whole structure on one contact sheet
+                                    // (pipeline-k/building-system.ts; user direction 2026-11-07): tiers, families and their measures, kept in
+                                    // the readings store; laid on each face below where the photo shows it. SCRATCHBOX_K_BUILDING_SYSTEM=0 off
+                                    let system: BuildingSystem | undefined;
+                                    const systemAsk = geometryAsk && process.env.SCRATCHBOX_K_BUILDING_SYSTEM?.trim() !== '0' ? geometryAsk : undefined;
+                                    if (systemAsk) {
+                                        try {
+                                            const bs = await timed('buildingSystem', () => readBuildingSystem(k.orthosDir, systemAsk, { signal: io.signal, building: { name: request.query, ...(run.state.place?.resolvedAddress ? { address: run.state.place.resolvedAddress } : {}) }, ...(geometryReadings ? { readings: { store: geometryReadings, model: FACADE_READER_MODEL_KEY } } : {}) }));
+                                            system = bs.system;
+                                            notes.write('pipeline_k_building_system', { version: BUILDING_SYSTEM_VERSION, ...(bs.system ? { system: bs.system } : {}), ...(bs.reason ? { reason: bs.reason } : {}), calls: bs.calls, reused: bs.reused, ms: bs.ms });
+                                        } catch (err) {
+                                            if (isAbort(err) || io.signal.aborted) throw err;
+                                            notes.write('pipeline_k_building_system', { version: BUILDING_SYSTEM_VERSION, failed: true, reason: errorMessage(err) });
+                                        }
+                                    } else notes.write('pipeline_k_building_system', { version: BUILDING_SYSTEM_VERSION, skipped: geometryAsk ? 'SCRATCHBOX_K_BUILDING_SYSTEM=0' : 'no vision model, or the facade reader off' });
+                                    // the structure's roof line bounds the array's step into an unreached band at a photo's top
+                                    const wa = await timed('windowArray', async () => inferWindowArrays(k.orthosDir, wf.fit, undefined, { ...(structure ? { envelopeTopY: structure.groundY + structure.heightM } : {}), ...(system ? { system } : {}) }));
+                                    notes.write('pipeline_k_window_array', { ...wa, on: "the window fit, with the facade reader's openings merged in" });
+                                    notes.note(PROVENANCE.photoInferred, describeWindowArrays(wa));
+                                } catch (err) {
+                                    if (isAbort(err) || io.signal.aborted) throw err;
+                                    notes.write('pipeline_k_window_array', { version: WINDOW_ARRAY_VERSION, failed: true, reason: errorMessage(err) });
+                                    notes.note(PROVENANCE.photoInferred, `the window array step failed (${errorMessage(err)}); the windows stay as the window fit read them`);
+                                }
+                            } else logStep('remesh.windowArray', 'skipped');
                             // the bay grammar read per wall, from all the photos of each wall's facades together (wall-grammar.ts)
                             try {
                                 const wg = await timed('wallGrammar', async () => { await ensureNativeWallGrammar(); return onThreads ? runRemeshJob<{ file: string; grammar: WallGrammarFile }>({ kind: 'wallGrammar', orthosDir: k.orthosDir, fit: wf.fit, ...(cpuShare ? { threads: cpuShare.threads } : {}) }, { signal: io.signal }) : readWallGrammar(k.orthosDir, wf.fit, b => { const d = decodePngForGrammar(b); return { rgba: d.rgba, width: d.width, height: d.height }; }, undefined, cpuShare ? { threads: cpuShare.threads } : {}); });
