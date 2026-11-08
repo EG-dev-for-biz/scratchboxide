@@ -74,6 +74,22 @@ export const FACADE_TILE = { wantM: 2, maxM: 8 } as const;
 
 const linearToSrgb = (c: number) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
 
+/**
+ * A set's grain capped by what the photo shows (found on PR #191, 2026-11-08: a travertine's high-contrast roughness map,
+ * drawn at the set-fit regressor's 0.85 on a base the photo shows plain, repeated as a checker). The regressor's grain is
+ * held to energyFit (material-finish.ts: the square root of the photo's texture energy over the set's on the bands both
+ * resolve, at most 1), so a set is never drawn with more pattern than the photo bears out, whatever the regressor thinks of
+ * it; a class whose photo texture or set energy was not measured takes the median cap of the classes that were, else
+ * GRAIN_CAP_UNMEASURED. The cap and where it came from are recorded on the finish.
+ */
+export const GRAIN_CAP_UNMEASURED = 0.5;
+export function capGrain(grain: number, photo: number[] | undefined, set: number[] | undefined, others: number[]): { grain: number; cap: number; by: 'photo' | 'other classes' | 'none measured' } {
+    if (photo && set) { const cap = energyFit(photo, set); return { grain: Math.min(grain, cap), cap, by: 'photo' }; }
+    const measured = others.filter(v => Number.isFinite(v)).sort((a, b) => a - b);
+    const cap = measured.length ? measured[measured.length >> 1] : GRAIN_CAP_UNMEASURED;
+    return { grain: Math.min(grain, cap), cap, by: measured.length ? 'other classes' : 'none measured' };
+}
+
 /** Said of a class inside the window openings drawn at the opening prior (material-finish.ts OPENING_FINISH). */
 const PRIOR_WHY = 'no confident reading of a class inside the window openings: drawn as the pane that closes them, a smooth dielectric (generated)';
 
@@ -224,21 +240,37 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         if (bytes) heightPreviews.set(id, decodeImageInMemory(bytes));
     }
     // each chosen set's texture energy at its class's texel, against the photo's (material-finish.ts energyFit)
+    // the set's energy per band is the larger of its colour preview's and its roughness map's (the prepared ORM's green as a
+    // grey image): a set whose finish varies more than its colour (travertine's pores, a smooth stone pitted rough) is held
+    // by the photo the same way, since a finish that varied so would show in the photo as tone
     const setEnergy = await Promise.all(chosen.map(async (hit, k) => {
         const t = classes[k].photoTexture;
         if (!t || !hit.entry.realSizeM) return undefined;
         const bytes = await libraryColourPreview(hit.entry, repoRoot, opts.signal).catch(() => undefined);
-        return bytes ? libraryTextureEnergy(decodeImageInMemory(bytes), hit.entry.realSizeM, t.texelM).energy : undefined;
+        const colour = bytes ? libraryTextureEnergy(decodeImageInMemory(bytes), hit.entry.realSizeM, t.texelM).energy : undefined;
+        const maps = kept.get(hit.entry.id);
+        let rough: number[] | undefined;
+        if (maps) {
+            const orm = decodeImageInMemory(maps.orm), grey = { width: orm.width, height: orm.height, rgba: new Uint8Array(orm.rgba.length) };
+            for (let i = 0; i < orm.width * orm.height; i++) { const g = orm.rgba[i * 4 + 1]; grey.rgba[i * 4] = g; grey.rgba[i * 4 + 1] = g; grey.rgba[i * 4 + 2] = g; grey.rgba[i * 4 + 3] = 255; }
+            rough = libraryTextureEnergy(grey, hit.entry.realSizeM, t.texelM).energy;
+        }
+        if (!colour && !rough) return undefined;
+        const n = Math.max(colour?.length ?? 0, rough?.length ?? 0);
+        return Array.from({ length: n }, (_, b) => { const c = colour?.[b], r = rough?.[b]; const cv = Number.isFinite(c) ? c! : -Infinity, rv = Number.isFinite(r) ? r! : -Infinity; const m = Math.max(cv, rv); return Number.isFinite(m) ? m : NaN; });
     }));
     // the set-fit regressor learned from the finished buildings (material-set-fit.ts), when committed: the chosen set's
     // grain by its predicted fit, in place of the hand-set tile and energy caps
     const fitModel = loadSetFitModel(repoRoot);
+    // every class's photo cap (capGrain): the measured ones first, so an unmeasured class can take their median
+    const photoCaps = chosen.map((_, k) => (classes[k].photoTexture && setEnergy[k] ? energyFit(classes[k].photoTexture!.energy, setEnergy[k]) : NaN));
     const fitOf = (k: number, hit: (typeof chosen)[number]) => {
         if (!fitModel) return { grain: patternFit(classes[k].repeatM, hit.entry.realSizeM!) * energyFit(classes[k].photoTexture?.energy, setEnergy[k]) };
         const read = finishes[k] && finishes[k]!.conf >= 50 ? { roughness: finishes[k]!.roughness, metalness: finishes[k]!.metalness } : undefined;
         const g = setFitGrain(fitModel, { meanLab: classes[k].meanLab, openings: classes[k].openings, ...(classes[k].photoTexture ? { photoEnergy: classes[k].photoTexture!.energy } : {}), ...(classes[k].repeatM ? { repeatM: classes[k].repeatM } : {}), ...(read ? { read } : {}) },
             { rank: Math.max(0, ranked[k].indexOf(hit)), ...(hit.entry.colour?.meanLab ? { colourLab: hit.entry.colour.meanLab as [number, number, number] } : {}), ...(hit.entry.roughnessMean !== undefined ? { roughness: hit.entry.roughnessMean } : {}), ...(hit.entry.metallic !== undefined ? { metallic: hit.entry.metallic } : {}), ...(hit.entry.normalTiltRmsDeg !== undefined ? { normalTiltDeg: hit.entry.normalTiltRmsDeg } : {}), ...(hit.entry.realSizeM ? { tileM: hit.entry.realSizeM } : {}), ...(setEnergy[k] ? { energy: setEnergy[k] } : {}) });
-        return { grain: g, model: fitModel.version };
+        const capped = capGrain(g, classes[k].photoTexture?.energy, setEnergy[k], photoCaps.filter((_, j) => j !== k));
+        return { grain: capped.grain, model: fitModel.version, cap: { grain: Math.round(capped.cap * 1000) / 1000, by: capped.by, regressor: Math.round(g * 1000) / 1000 } };
     };
     return chosen.map((hit, k): RegionSet => {
         const maps = kept.get(hit.entry.id)!;
@@ -246,13 +278,19 @@ for j in json.load(open(${JSON.stringify(jobs)})):
         // grain only as far as the pick by appearance confirmed it
         const pick = choices[k] ? { by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}) } : undefined;
         const df = drawFinish(finishes[k], classes[k].openings);
-        const drawn = finishMaps(decodeImageInMemory(maps.orm), decodeImageInMemory(maps.normal), df.finish, grainOf(pick) * fitOf(k, hit).grain);
+        const fit = fitOf(k, hit);
+        // the roughness pattern held to the photo's tone deviation at the facade texel (finishMaps RoughnessHold): the
+        // square root of the photo's relative energy on its finest band, over the tile's size in facade texels
+        const pt = classes[k].photoTexture, size = hit.entry.realSizeM!;
+        const e0 = pt?.energy.find(v => Number.isFinite(v));
+        const hold = pt && e0 !== undefined && pt.texelM > 0 ? { maxRelStd: Math.sqrt(Math.max(0, e0)), texels: [Math.max(2, Math.round(size[0] / pt.texelM)), Math.max(2, Math.round(size[1] / pt.texelM))] as [number, number] } : undefined;
+        const drawn = finishMaps(decodeImageInMemory(maps.orm), decodeImageInMemory(maps.normal), df.finish, grainOf(pick) * fit.grain, undefined, hold);
         // its height at its real depth, by the share of the normal relief drawn (material-height.ts)
         const hp = heightPreviews.get(hit.entry.id);
         const height = hp && hit.entry.heightDepthM ? heightRecessMap(hp, hit.entry.heightDepthM, drawn.drawn?.relief ?? 1, hit.entry.heightDepthSource ?? 'unknown') : undefined;
         return {
             name: hit.entry.id, realSizeM: hit.entry.realSizeM!, distance: hit.distance,
-            ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: targets[k].roughness, metallic: targets[k].metallic, ...(drawn.drawn ? { drawn: drawn.drawn } : {}), label: 'photo-inferred' as const } } : drawn.drawn ? { finish: { ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: drawn.drawn.roughness, metallic: drawn.drawn.metallic, drawn: drawn.drawn, label: 'photo-inferred' as const } } : {}),
+            ...(finishes[k] || finishWhy ? { finish: { ...(finishes[k] ? { read: finishes[k] } : { why: finishWhy }), ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: targets[k].roughness, metallic: targets[k].metallic, ...(drawn.drawn ? { drawn: drawn.drawn } : {}), ...('cap' in fit && fit.cap ? { cap: fit.cap } : {}), label: 'photo-inferred' as const } } : drawn.drawn ? { finish: { ...(df.prior ? { why: PRIOR_WHY } : {}), roughness: drawn.drawn.roughness, metallic: drawn.drawn.metallic, drawn: drawn.drawn, ...('cap' in fit && fit.cap ? { cap: fit.cap } : {}), label: 'photo-inferred' as const } } : {}),
             ...(choices[k] ? { choice: { candidates: choices[k]!.candidates, by: choices[k]!.pick?.pick ? 'appearance' as const : 'ranking' as const, ...(choices[k]!.pick?.seen ? { seen: choices[k]!.pick!.seen } : {}), ...(choices[k]!.pick ? { conf: choices[k]!.pick!.conf } : {}), ...(choices[k]!.pick?.reused ? { reused: choices[k]!.pick!.reused } : {}), ...(choices[k]!.why ? { why: choices[k]!.why } : {}) } } : {}),
             ...(textured.has(k) ? { harvest: { ...textured.get(k)!, classEnergy: classes[k].texture!.energy, texelM: classes[k].texture!.texelM, grain: `generated: the set's detail finer than the tile's ${Math.round(classes[k].texture!.texelM * 100)} cm texel is its own, below the tile's resolution` } } : {}),
             normal: drawn.normal, orm: drawn.orm,
