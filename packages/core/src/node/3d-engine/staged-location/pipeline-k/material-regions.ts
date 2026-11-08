@@ -835,10 +835,11 @@ export function classSwatchSheet(json: any, images: Map<number, RgbaImage8>, cla
 }
 
 /** One line for the build's notes. */
+/** The provenance sentence written into the GLB: the classes, their sets and what was drawn, never how long it took (the run note keeps the timing; two builds of one scan must give one GLB, k_determinism.md §5). */
 export function describeMaterialRegions(r: MaterialRegionsReport): string {
     const pct = (a: number) => (r.texels.total ? `${Math.round((100 * a) / r.texels.total)}%` : '0%');
     return `material regions: ${r.classes.length} appearance classes (${r.classes.map((c, k) => `${c.openings ? 'in openings ' : ''}${c.wall ? 'lightest' : 'L ' + Math.round(c.meanLab[0])} -> ${c.set}, ${pct(r.texels.perClass[k] ?? 0)} of texels`).join('; ')}); ` +
         `every texel its class's set: ${r.facades.total} rebuilt facades tiled at the sets' real size, ${r.scanPieces.total} scan pieces the sets' mean finish; glass in the fitted windows' panes on ${pct(r.texels.glass)} of texels (the wall guard: ${r.panesOnStone} panes left as stone, ${pct(r.paneWallTexels)} of texels wall-like within glass panes); ` +
         `occlusion, roughness, metalness and normal generated from the library, colour the photo` +
-        `${r.classes.some(c => c.height) ? `; height (a recess below the rebuilt planes, generated): ${r.classes.filter(c => c.height).map(c => `${c.set} up to ${Math.round(c.height!.maxRecessM * 1000)} mm`).join(', ')}` : ''} (${r.ms} ms)`;
+        `${r.classes.some(c => c.height) ? `; height (a recess below the rebuilt planes, generated): ${r.classes.filter(c => c.height).map(c => `${c.set} up to ${Math.round(c.height!.maxRecessM * 1000)} mm`).join(', ')}` : ''}`;
 }
