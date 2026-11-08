@@ -49,8 +49,9 @@ import { kNative } from './pipeline-k/native/native-switch';
 import { OCCLUSION_PARAMS, readOccluded, unreadMask } from './pipeline-k/occlusion';
 import { nativePolishThreads, runNativeWallGrammar } from './remesh-polish-native';
 import type { WindowFitFile, WindowRect } from './window-fit';
+import { windowStrips } from './window-strips';
 
-export const WALL_GRAMMAR_VERSION = 'wall-grammar/3';
+export const WALL_GRAMMAR_VERSION = 'wall-grammar/4';
 
 export const WALL_GRAMMAR_PARAMS = {
     /** One wall: normals within this cosine, planes within this (m), extents overlapping or within joinGapM (m). */
@@ -96,6 +97,22 @@ export interface WallGrammarFile {
     version: string; params: WallGrammarParams; walls: Wall[];
     /** Per facade id, its bays in its own frame: [s0, t0, s1, t1, from (0 photo-inferred, 1 generated)]. */
     facades: Record<string, Array<[number, number, number, number, number]>>;
+    /** Per facade id the facade reader drew: the strips its single windows made for the column vote (voteRects). */
+    readerStrips?: Record<string, number>;
+}
+
+/**
+ * The window rects a facade's columns are voted on: the window fit's as they are (its strips run the column's height),
+ * and where the facade reader drew the plane (single windows, one per opening, in place of the fit's strips) also the
+ * strips those windows make in the plane's frame (window-strips.ts), so a column of windows a storey apart votes as a bay
+ * the way a strip does. Without them the Seagram's shaft (18 panes a storey, 36 storeys) read no bay at all and was
+ * built flat, 2026-11-07. Returns the rects and how many strips were added.
+ */
+export function voteRects(f: Pick<GrammarFacade, 'pixel' | 'orthoSMin' | 'orthoTMax'>, e: { rects: WindowRect[]; reader?: string }): { rects: WindowRect[]; strips: number } {
+    if (!e.reader || !e.rects.length) return { rects: e.rects, strips: 0 };
+    const plane = e.rects.map(([x0, y0, x1, y1]): [number, number, number, number] => [f.orthoSMin + x0 * f.pixel, f.orthoTMax - y1 * f.pixel, f.orthoSMin + x1 * f.pixel, f.orthoTMax - y0 * f.pixel]);
+    const strips = windowStrips(plane).map(([s0, t0, s1, t1]): WindowRect => [Math.round((s0 - f.orthoSMin) / f.pixel), Math.round((f.orthoTMax - t1) / f.pixel), Math.round((s1 - f.orthoSMin) / f.pixel), Math.round((f.orthoTMax - t0) / f.pixel)]);
+    return { rects: [...e.rects, ...strips], strips: strips.length };
 }
 
 const dot = (a: ArrayLike<number>, b: ArrayLike<number>) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -262,7 +279,9 @@ export function wallEvidence(orthosDir: string, fs0: GrammarFacade[], windowsOf:
         const img = decode(fs.readFileSync(path.join(orthosDir, f.image)));
         const unc = uncoveredOf(orthosDir, f, img.rgba, decode), wins = windowsOf.get(f.facadeId) ?? [];
         const inWin = new Uint8Array(img.width * img.height);
-        for (const [xa, ya, xb, yb] of wins) for (let y = Math.max(0, ya); y < Math.min(img.height, yb); y++) inWin.fill(1, y * img.width + Math.max(0, xa), y * img.width + Math.min(img.width, xb));
+        // the rects at whole texels (floor at the start, ceil at the end, as material-regions.ts openingMask): the facade
+        // reader's come at fractional pixels, and a fractional row used as an index shifts the fill sideways
+        for (const [xa, ya, xb, yb] of wins) for (let y = Math.max(0, Math.floor(ya)); y < Math.min(img.height, Math.ceil(yb)); y++) inWin.fill(1, y * img.width + Math.max(0, Math.floor(xa)), y * img.width + Math.min(img.width, Math.ceil(xb)));
         const step = Math.max(1, Math.round(P.cellM / f.pixel / 2));
         // u and y are affine in the photo's x and y: u = cu0 + x du_x + y du_y, height = cy0 + x dy_x + y dy_y
         const us = dot(f.axisS, U), ut = dot(f.axisT, U), uc = dot(f.centroid, U);
@@ -284,8 +303,14 @@ export function wallEvidence(orthosDir: string, fs0: GrammarFacade[], windowsOf:
 /** Reads every wall's bay grammar from the orthos and the window fit (see the file comment) and writes wall_grammar.json beside them. */
 export function readWallGrammar(orthosDir: string, fit: WindowFitFile, decode: (b: Buffer) => { rgba: Uint8Array; width: number; height: number }, P: WallGrammarParams = WALL_GRAMMAR_PARAMS, opts: { /** The native reading's threads (every core when none). It changes how fast, not what, is read. */ threads?: number } = {}): { file: string; grammar: WallGrammarFile } {
     const facades = (JSON.parse(fs.readFileSync(path.join(orthosDir, 'facades.json'), 'utf8')).facades as GrammarFacade[]).filter(f => fs.existsSync(path.join(orthosDir, f.image)));
-    const windowsOf = new Map<number, WindowRect[]>();
-    for (const e of fit.facades) if (!('error' in e)) windowsOf.set(e.facadeId, e.rects);
+    const windowsOf = new Map<number, WindowRect[]>(), readerStrips: Record<string, number> = {};
+    for (const e of fit.facades) {
+        if ('error' in e) continue;
+        const f = facades.find(x => x.facadeId === e.facadeId);
+        const v = f ? voteRects(f, e as { rects: WindowRect[]; reader?: string }) : { rects: e.rects, strips: 0 };
+        windowsOf.set(e.facadeId, v.rects);
+        if (v.strips) readerStrips[String(e.facadeId)] = v.strips;
+    }
     const walls: Wall[] = [], evidence: Array<Pick<WallEvidence, 'u0' | 'cellM' | 'nu'>> = [], states: Int8Array[] = [];
     const frames = groupWalls(facades, P).map(members => {
         const fs0 = members.map(i => facades[i]);
@@ -346,7 +371,7 @@ export function readWallGrammar(orthosDir: string, fit: WindowFitFile, decode: (
         }
         perFacade[String(id)] = out;
     }
-    const grammar: WallGrammarFile = { version: WALL_GRAMMAR_VERSION, params: P, walls, tiers, facades: perFacade };
+    const grammar: WallGrammarFile = { version: WALL_GRAMMAR_VERSION, params: P, walls, tiers, facades: perFacade, ...(Object.keys(readerStrips).length ? { readerStrips } : {}) };
     const file = path.join(orthosDir, WALL_GRAMMAR_FILE);
     fs.writeFileSync(file, JSON.stringify(grammar));
     return { file, grammar };

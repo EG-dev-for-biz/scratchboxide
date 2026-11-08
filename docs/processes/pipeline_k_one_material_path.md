@@ -1,0 +1,58 @@
+# Pipeline K: one material path for every surface (2026-11-05)
+
+Branch `feat/k-one-material-path`, against main `f4989130`. The user's decision (2026-11-05): "we should not be doing glass / metal anymore, we should be detecting materials and assigning them roughness texture etc". Two refinements followed: window glass keeps a glass quality of smoothness, and materials follow the architecture's repeats.
+
+## What changed
+- **Gone:** the separate glass layer (bays, fitted panes, glass weight, pane seeds, feathering), the metal gate, the plain finish for smooth classes and for unconfirmed picks, and the viewer's pane tilt and recess occlusion.
+- **Detection:** CIELAB classes are read apart inside the fitted windows (2 classes) and outside them (4). Each texel takes its nearest class among its region's, then the majority within 0.15 m. Every window's unit cell (the window and half the gap to its neighbours) is folded over its family of same-size repeats: each place in the cell takes the family's majority class.
+- **Maps:** each class takes its library set's occlusion, roughness, metalness and normal at the set's real size. A confident vision read (numbers) sets the drawn roughness and metalness, keeping the set's grain, and flattens the relief by the square of the read roughness, so glass read at about 0.1 is almost flat. The grain is scaled by three things: the look-pick's confidence (none when the pick confirmed nothing), whether the tile fits the class's repeat element (`patternFit`), and whether the photo shows that much texture (`energyFit`).
+- **The viewer:** it reflects the probe on every texel of a K twin by its own roughness and metalness.
+- **The facade reader:** it stays, with no glass question. Its brief and what it saw go to the material reads; nothing is drawn from it. Prompt version `facade-reader-prompts/2`.
+- **The regression guard** (`scripts/material_regions_metrics.ts`): repeat spread, the drawn finish inside the windows and around them, and the grain within a cell, read from a finished twin.
+
+## Builds (uncached, benchmark runner, same tile cache)
+| | main f4989130 | branch |
+|---|---|---|
+| Penn 2 repeat spread | 0.231 | 0.089 (53f208fc, isolate l2) / 0.063 (97d8e193, isolate l2v) |
+| Penn 2 in windows, roughness / metalness | 0.08 / 0.06 | 0.42 / 0.24 (53f208fc) / 0.35 / 0.18 (97d8e193) |
+| ESB repeat spread | 0.168 | 0.048 (97d8e193) |
+| ESB in windows, roughness / metalness | 0.14 / 0.08 | 0.22 / 0.18 |
+| ESB around windows, roughness / grain | 0.77 / 0.092 | 0.55 / 0.150 |
+| holes | Penn 2 1.28%, ESB 0.72% | Penn 2 1.28% (l2) / 1.60% (l2v), ESB 0.72% |
+
+The sheet of close-ups is `k-one-material-closeups.jpg` in the side-session notes folder. ESB on the branch reads like main at street distance, with fewer repeat flips.
+
+## Open
+- **Penn 2's spandrels still show a library pattern.** The look-pick confirms Fence004 or MetalPlates sets, and the photo-energy cap does not bring their grain down: the facade's window rhythm gives the photo high band energy.
+- **Penn 2's glass inside the fitted windows reads rougher than main's plain 0.2.** The opening classes there are window interiors and blinds, and the curtain wall's glazing class sits outside the fitted windows.
+- **The ownership vote drew isolate l2v on both final Penn 2 builds.** It is a vision vote before textures, unrelated to this change.
+
+## Update, later on 2026-11-05: glass as main, and the set-fit model (branch 9b2ace84)
+- **Glass as main drew it:** a confident smooth read is drawn smoother (`drawnRoughness`: below 0.5, r x r / 0.5, at least 0.08) and its low metalness lower (`drawnMetalness`), so a class read as glass is drawn at roughness 0.08, flat, with almost no metalness. The user chose no extra reflective boost.
+- **The set-fit model** (`material-set-fit.ts`, `assets/textures/library/set-fit-model.json`, `scripts/material_set_fit.ts`): a logistic fit on 138 finished builds of 10 buildings (4,010 class and candidate rows, 310 look-pick decisions), features measured on the finished twins. Leave-one-building-out: its first choice is the look-pick's 26.8% of the time against the ranking's 3.5%, AUC 0.68. In a build it scales the chosen set's grain, in place of the tile and energy caps.
+
+| uncached, isolate l2 on both sides | main f4989130 | branch 9b2ace84 |
+|---|---|---|
+| Penn 2 repeat spread | 0.231 | 0.099 |
+| Penn 2 in windows, roughness / metalness | 0.08 / 0.06 | 0.53 / 0.05 |
+| Penn 2 around windows, roughness / metalness | 0.38 / 0.12 | 0.28 / 0.26 |
+| ESB repeat spread | 0.168 | 0.029 |
+| ESB in windows, roughness / metalness | 0.14 / 0.08 | 0.19 / 0.04 |
+| holes | 1.28% / 0.72% | 1.28% / 0.72% |
+
+Sheet: `k-one-material-closeups-v2.jpg` in the side-session notes folder. The fence pattern on Penn 2's dark panels is gone; a faint plate pattern remains on its mid-grey panels (the look-pick confirmed that set, drawn at 45% grain).
+
+Still open: Penn 2's fitted windows are drawn matte (roughness 0.5-0.6). The vision model reads the two classes inside them as interior recesses and blinds, not glass, so the smooth-read curve does not apply there. The benchmark's `result.json` for a place can keep an older build's commit and model after a rebuild (seen on feat/penn2); the run folder and the twin were the new build's.
+
+## Update: window openings as the pane (branch 03d25b29)
+The finish prompt now asks, for the classes inside fitted windows, for the finish of the pane that closes the opening, and such a class with no confident reading is drawn at the opening prior (a smooth dielectric). On Penn 2 the vision model then read both opening classes as window glazing at confidence 85-90.
+
+| uncached, isolate l2 on both sides | main f4989130 | branch 03d25b29 |
+|---|---|---|
+| Penn 2 in windows, roughness / metalness | 0.08 / 0.06 | 0.09 / 0.02 |
+| Penn 2 repeat spread | 0.231 | 0.094 |
+| ESB in windows, roughness / metalness | 0.14 / 0.08 | 0.11 / 0.06 |
+| ESB repeat spread | 0.168 | 0.040 |
+| holes | 1.28% / 0.72% | 1.28% / 0.72% |
+
+Sheet: `k-one-material-closeups-v3.jpg`. Still open: a faint dotted pattern on Penn 2's dark spandrel panels in this build (the look-pick confirmed Metal015 at high confidence, so the model allowed 89% of its grain); the look-pick's choice varies from build to build.

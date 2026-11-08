@@ -10,14 +10,13 @@
 /**
  * Pipeline K's material regions on the native kernel (pipeline-k/native/material-regions-native.ts over
  * scratchbox_material_regions.hpp): the same classes, pieces and plan as the TypeScript (material-regions.ts), bit for
- * bit, on synthetic facades of stone piers, brown spandrels and glass (some reflecting the sky), with a scan piece lying
- * on a fitted plane; and the TypeScript and native timings at a realistic size (four 2048 x 2048 photos).
+ * bit, on synthetic facades of stone piers, brown spandrels and glass (some reflecting the sky), and a scan piece; and the
+ * TypeScript and native timings at a realistic size (four 2048 x 2048 photos).
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { ParsedGlb } from '../src/node/3d-engine/staged-location/glb-bytes';
 import type { RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
-import type { FittedPlane } from '../src/node/3d-engine/staged-location/window-fit';
 import { SRGB8_TO_LINEAR } from '../src/common/spatial/photogrammetric-delight';
 import { linearRgbToLab } from '../src/common/spatial/texture-library-index';
 import {
@@ -42,21 +41,6 @@ function facadePhoto(W: number, H: number, px: number, seed: number): RgbaImage8
         rgba.set([clamp(c[0]), clamp(c[1]), clamp(c[2]), x < 3 && y < 3 ? 0 : 255], (y * W + x) * 4);
     }
     return { width: W, height: H, rgba };
-}
-
-/** The facadePhoto pattern's fitted windows, their panes, the structure's piers and the bays between them (u0 v0 u1 v1, UVs). */
-function facadeRects(W: number, H: number, px: number) {
-    const wm = W * px, hm = H * px, windows: number[] = [], panes: number[] = [], runs: number[] = [], bays: number[] = [];
-    for (let b = 0; b * 5 < wm; b++) {
-        runs.push((b * 5) / wm, 0, Math.min(1, (b * 5 + 1.5) / wm), 1);
-        bays.push((b * 5 + 1.5) / wm, 0, Math.min(1, (b * 5 + 5) / wm), 1);
-        for (let st = 0; st * 3.5 < hm; st++) {
-            const v0 = (st * 3.5 + 0.8) / hm, v1 = Math.min(1, (st * 3.5 + 2.6) / hm);
-            windows.push((b * 5 + 1.9) / wm, v0, Math.min(1, (b * 5 + 4.6) / wm), v1);
-            panes.push((b * 5 + 1.9) / wm, v0, Math.min(1, (b * 5 + 2.9) / wm), v1, (b * 5 + 3.6) / wm, v0, Math.min(1, (b * 5 + 4.6) / wm), v1);
-        }
-    }
-    return { windows, panes, runs, bays };
 }
 
 /** A wall facing +z from (x0, 0) to (x0 + w, h), n x n quads rippled a centimetre about depth z, UVs (0,0) at its top left. */
@@ -92,35 +76,28 @@ function glbOf(prims: Prim[], imageCount: number): ParsedGlb {
     return { json, bin };
 }
 
-/**
- * Three rebuilt facades (bays and structure with panes; punched windows only; plain) and a scan piece 0.3 m in front of a
- * fitted plane (its ortho half the photo's resolution, its bays the strips its windows make), size x size photos at px m.
- */
+/** Three rebuilt facades and a scan piece 0.3 m in front of the first, size x size photos at px m. */
 function scene(size: number, px: number, grid: number) {
     const m = size * px;
     const photos = [1, 2, 3, 4].map(s => facadePhoto(size, size, px, s));
-    const r = facadeRects(size, size, px);
-    // a window fitted on the first pier (stone, so its pane is never glass) on the punched facade
-    const onPier = [0.2 / m, 4.3 / m, 1.2 / m, 6.1 / m];
-    const lattice = (structure: boolean) => ({ sbFacadeLattice: { facadeId: 1, windows: { uv: structure ? r.windows : [...r.windows, ...onPier], panes: structure ? r.panes : [...r.panes, ...onPier] }, ...(structure ? { structure: { uv: r.runs, bays: r.bays } } : {}) } });
+    // facade 1's fitted windows (sbFacadeLattice.windows.uv): its panes, so the classes are read inside and outside them
+    const windows: number[] = [];
+    for (let b = 0; b * 5 < m; b++) for (let st = 0; st * 3.5 < m; st++) for (const x0 of [1.9, 3.6]) windows.push((b * 5 + x0) / m, (st * 3.5 + 0.8) / m, Math.min(1, (b * 5 + x0 + 1) / m), Math.min(1, (st * 3.5 + 2.6) / m));
     const g = glbOf([
-        { name: 'facade_lattice_1', ...wallGrid(0, m, m, 0, 2), material: 0, extras: lattice(true) },
-        { name: 'facade_lattice_2', ...wallGrid(m + 5, m, m, 0, 2), material: 1, extras: lattice(false) },
+        { name: 'facade_lattice_1', ...wallGrid(0, m, m, 0, 2), material: 0, extras: { sbFacadeLattice: { facadeId: 1, windows: { uv: windows, panes: windows } } } },
+        { name: 'facade_lattice_2', ...wallGrid(m + 5, m, m, 0, 2), material: 1 },
         { name: 'facade_lattice_3', ...wallGrid(2 * m + 10, m, m, 0, 2), material: 2 },
         { name: 'scan_piece', ...wallGrid(0, m, m, -0.3, grid), material: 3 }
     ], 4);
-    const ow = size >> 1, opx = m / ow, pr = facadeRects(ow, ow, opx);
-    const toPx = (a: number[]) => { const out: Array<[number, number, number, number]> = []; for (let i = 0; i < a.length; i += 4) out.push([a[i] * ow, a[i + 1] * ow, a[i + 2] * ow, a[i + 3] * ow]); return out; };
-    const planes: FittedPlane[] = [{ facadeId: 9, centroid: [0, 0, 0], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], orthoSMin: 0, orthoTMax: m, pixel: opx, width: ow, height: ow, windows: toPx(pr.windows), panes: toPx([...pr.panes, 0.2 / m, 4.3 / m, 1.2 / m, 6.1 / m]) }];
-    return { g, json: g.json, images: new Map(photos.map((p, i) => [i, p])), planes };
+    return { g, json: g.json, images: new Map(photos.map((p, i) => [i, p])) };
 }
 
-/** Library sets: textured roughness and tilted normals (so the box filter and renormalisation are exercised), each tile its own real size. */
+/** Library sets: textured occlusion, roughness and metalness and tilted normals (so the box filter and renormalisation are exercised), each tile its own real size. */
 function sets(classes: RegionClass[], S: number): RegionSet[] {
     return classes.map((c, k) => {
         const orm = { width: S, height: S, rgba: new Uint8Array(S * S * 4) }, normal = { width: S, height: S, rgba: new Uint8Array(S * S * 4) };
-        for (let i = 0; i < S * S; i++) { orm.rgba.set([255, 90 + k * 35 + (i % 7) * 3, 0, 255], i * 4); normal.rgba.set([118 + (i % 23), 140 - (i % 17), 230 + (i % 11), 255], i * 4); }
-        return { name: c.wall ? 'TestStone' : `TestDark${c.index}`, realSizeM: [0.8 + k * 0.45, 1.1 + k * 0.3], normal, orm, distance: k };
+        for (let i = 0; i < S * S; i++) { orm.rgba.set([200 + (i % 5) * 9, 90 + k * 35 + (i % 7) * 3, k * 50 + (i % 9) * 4, 255], i * 4); normal.rgba.set([118 + (i % 23), 140 - (i % 17), 230 + (i % 11), 255], i * 4); }
+        return { name: `TestSet${c.index}`, realSizeM: [0.8 + k * 0.45, 1.1 + k * 0.3], normal, orm, distance: k };
     });
 }
 
@@ -128,9 +105,9 @@ function sets(classes: RegionClass[], S: number): RegionSet[] {
 const firstDiff = (a: Uint8Array, b: Uint8Array) => { if (a.length !== b.length) return 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return i; return -1; };
 
 function expectSamePiece(native: MaterialPlanPiece, ts: MaterialPlanPiece): void {
-    const strip = (p: MaterialPlanPiece) => ({ ...p, planned: p.planned && { ...p.planned, orm: undefined, normal: undefined, params: undefined } });
+    const strip = (p: MaterialPlanPiece) => ({ ...p, planned: p.planned && { ...p.planned, orm: undefined, normal: undefined } });
     expect(strip(native)).toEqual(strip(ts));
-    for (const key of ['orm', 'normal', 'params'] as const) {
+    for (const key of ['orm', 'normal'] as const) {
         const a = native.planned?.[key], b = ts.planned?.[key];
         expect(!!a).toBe(!!b);
         if (a && b) { expect([a.width, a.height]).toEqual([b.width, b.height]); expect(firstDiff(a.rgba, b.rgba)).toBe(-1); }
@@ -161,7 +138,8 @@ describe('pipeline K material regions, native kernel', () => {
     it('reads the same appearance classes, with and without the tile-only harvest', async () => {
         const sc = scene(384, 0.06, 24);
         const ts = readRegionClasses(sc.json, sc.images)!;
-        expect(ts).toHaveLength(4);
+        // four classes outside the openings and two inside them
+        expect(ts.map(c => c.openings)).toEqual([false, false, false, false, true, true]);
         expect(await readRegionClassesNative(sc.json, sc.images)).toEqual(ts);
         const tsH = readRegionClasses(sc.json, sc.images, MATERIAL_REGIONS_PARAMS, { g: sc.g })!;
         expect(tsH.some(c => c.texture)).toBe(true);
@@ -175,35 +153,24 @@ describe('pipeline K material regions, native kernel', () => {
     it('plans every job to the same bytes and the same report', async () => {
         const sc = scene(384, 0.06, 24);
         const classes = readRegionClasses(sc.json, sc.images)!, st = sets(classes, 64);
-        const ctx = materialPlanContext(sc.g, sc.json, sc.images, classes, st, sc.planes);
+        const ctx = materialPlanContext(sc.g, sc.json, sc.images, classes, st);
         const jobs = materialPlanJobs(sc.json, sc.images);
         expect(jobs.map(j => j.kind)).toEqual(['rebuilt', 'rebuilt', 'rebuilt', 'scan']);
         for (const job of jobs) {
             const ts = planMaterialJob(job, ctx), native = await planMaterialJobNative(job, ctx);
             expectSamePiece(native, ts);
-            // the fixture reaches every branch: glass on the bay facade, the punched windows and the scan piece's plane
-            if (job.mesh !== 'facade_lattice_3') expect(ts.texels.glass).toBeGreaterThan(0);
-            if (job.mesh === 'facade_lattice_2' || job.kind === 'scan') expect(ts.panesOnStone).toBeGreaterThan(0);
-            if (job.mesh === 'facade_lattice_1') expect(ts.facade!.frameSet).not.toBe('TestStone');
+            // the facade with openings reaches the opening classes; the others and the scan piece only the outside ones
+            if (job.mesh === 'facade_lattice_1') expect(ts.classTexels.slice(4).some(n => n > 0)).toBe(true);
+            if (job.mesh === 'facade_lattice_1') expect(ts.facade!.foldedShare).toBeGreaterThan(0);
+            // the panes are drawn as glass on the facade that has them, with any on stone counted
+            if (job.mesh === 'facade_lattice_1') expect(ts.glass).toBeGreaterThan(0);
+            else { expect(ts.glass).toBe(0); expect(ts.classTexels.slice(4).every(n => n === 0)).toBe(true); }
         }
-        expectSamePlan(await planMaterialRegionsNative(sc.g, sc.json, sc.images, classes, st, sc.planes), planMaterialRegions(sc.g, sc.json, sc.images, classes, st, sc.planes));
-        // no fitted plane: the scan piece all wall
-        expectSamePlan(await planMaterialRegionsNative(sc.g, sc.json, sc.images, classes, st, []), planMaterialRegions(sc.g, sc.json, sc.images, classes, st, []));
-        // sets read confidently as metal (the wall's and one other class's): their metalness drawn the same, never on glass
-        const withMetalness = (orm: RgbaImage8) => { const rgba = orm.rgba.slice(); for (let i = 0; i < orm.width * orm.height; i++) rgba[i * 4 + 2] = 180 + (i % 9) * 7; return { ...orm, rgba }; };
-        const metal = st.map((x, k) => (k === st.length - 1 || k === 0 ? { ...x, metal: true, orm: withMetalness(x.orm) } : x));
-        const mctx = materialPlanContext(sc.g, sc.json, sc.images, classes, metal, sc.planes);
-        let drawn = 0;
-        for (const job of jobs) {
-            const ts = planMaterialJob(job, mctx), native = await planMaterialJobNative(job, mctx);
-            expectSamePiece(native, ts);
-            for (let k = 0; k < ts.planned!.orm.width * ts.planned!.orm.height; k++) {
-                if (ts.planned!.orm.rgba[k * 4 + 2]) drawn++;
-                if (ts.planned!.params.rgba[k * 4]) expect(ts.planned!.orm.rgba[k * 4 + 2]).toBe(0);
-            }
-        }
-        expect(drawn).toBeGreaterThan(0);
-        expectSamePlan(await planMaterialRegionsNative(sc.g, sc.json, sc.images, classes, metal, sc.planes), planMaterialRegions(sc.g, sc.json, sc.images, classes, metal, sc.planes));
+        expectSamePlan(await planMaterialRegionsNative(sc.g, sc.json, sc.images, classes, st), planMaterialRegions(sc.g, sc.json, sc.images, classes, st));
+        // a wider square (a finer texel's radius): the same majority
+        const wide = { ...MATERIAL_REGIONS_PARAMS, regionSmoothM: 0.5 };
+        const wctx = materialPlanContext(sc.g, sc.json, sc.images, classes, st, wide);
+        for (const job of jobs) expectSamePiece(await planMaterialJobNative(job, wctx), planMaterialJob(job, wctx));
     }, 120_000);
 
     it('matches at a realistic size (four 2048 x 2048 photos) and reports the timings', async () => {
@@ -217,13 +184,13 @@ describe('pipeline K material regions, native kernel', () => {
         expect(native).toEqual(ts);
         const st = sets(ts, 512);
         t = performance.now();
-        const tsPlan = planMaterialRegions(sc.g, sc.json, sc.images, ts, st, sc.planes);
+        const tsPlan = planMaterialRegions(sc.g, sc.json, sc.images, ts, st);
         const tsPlanMs = performance.now() - t;
         t = performance.now();
-        const nativePlan = await planMaterialRegionsNative(sc.g, sc.json, sc.images, ts, st, sc.planes);
+        const nativePlan = await planMaterialRegionsNative(sc.g, sc.json, sc.images, ts, st);
         const nativePlanMs = performance.now() - t;
         t = performance.now();
-        await planMaterialRegionsNative(sc.g, sc.json, sc.images, ts, st, sc.planes, MATERIAL_REGIONS_PARAMS, { threads: 1 });
+        await planMaterialRegionsNative(sc.g, sc.json, sc.images, ts, st, MATERIAL_REGIONS_PARAMS, { threads: 1 });
         const nativePlan1Ms = performance.now() - t;
         expectSamePlan(nativePlan, tsPlan);
         const f = (v: number) => `${Math.round(v)} ms`;

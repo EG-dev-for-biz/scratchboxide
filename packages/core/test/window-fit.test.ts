@@ -19,7 +19,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { completeLattice, Darkness, ensureReliefBandBinary, storeyColumn, fitFacadeWindows, fittedPlanesOf, panesOfUnitCell, panesUnlikeWall, fittedWindowUvs, fitWindowsForOrthos, maskWindows, nativeRelief, openingSegmenter, panesOfStrip, segmentSummary, WINDOW_FIT_PARAMS, type FitFrame, type ReliefGrid, type ReliefRunner, type SegmentOpeningMask, type WindowFitFile } from '../src/node/3d-engine/staged-location/window-fit';
+import { completeLattice, Darkness, ensureReliefBandBinary, storeyColumn, fitFacadeWindows, panesOfUnitCell, panesUnlikeWall, fittedWindowUvs, fitWindowsForOrthos, maskWindows, nativeRelief, openingSegmenter, panesOfStrip, segmentSummary, WINDOW_FIT_PARAMS, type FitFrame, type ReliefGrid, type ReliefRunner, type SegmentOpeningMask, type WindowFitFile } from '../src/node/3d-engine/staged-location/window-fit';
 
 const PX = 0.1, W = 300, H = 240; // a 30 x 24 m facade
 const frame: FitFrame = { pixel: PX, orthoSMin: 0, orthoTMax: 24, texel: 0.05 };
@@ -245,24 +245,6 @@ describe('the window fit', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     }, 600_000);
 
-    it('reads every fitted plane with its frame, its windows and panes; a plane with no windows or a size mismatch is left out', () => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fitted-planes-'));
-        const frame = (facadeId: number, width: number) => ({ facadeId, image: `facade_${facadeId}.png`, centroid: [0, 10, 0], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], orthoSMin: -5, orthoTMax: 10, pixel: 0.1, width, height: 200, coverage: 0.4 });
-        fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades: [frame(1, 100), frame(2, 100), frame(3, 100)] }));
-        const fit: WindowFitFile = { version: 'v', params: WINDOW_FIT_PARAMS, ms: 0, facades: [
-            { facadeId: 1, width: 100, height: 200, rects: [[10, 10, 20, 30]], panes: [[10, 10, 20, 18]], bands: [], ms: 0 },
-            { facadeId: 2, width: 100, height: 200, rects: [], bands: [], ms: 0 },
-            { facadeId: 3, width: 90, height: 200, rects: [[1, 1, 2, 2]], bands: [], ms: 0 }
-        ] };
-        fs.writeFileSync(path.join(dir, 'window_fit.json'), JSON.stringify(fit));
-        const planes = fittedPlanesOf(dir);
-        fs.rmSync(dir, { recursive: true, force: true });
-        expect(planes.map(p => p.facadeId)).toEqual([1]);
-        expect(planes[0].windows).toEqual([[10, 10, 20, 30]]);
-        expect(planes[0].panes).toEqual([[10, 10, 20, 18]]);
-        expect(planes[0].orthoTMax).toBe(10);
-        expect(fittedPlanesOf(path.join(os.tmpdir(), 'no-such-orthos'))).toEqual([]);
-    });
 
     it('completes the lattice from its repeats: a lit pane on the grid becomes a window, a site showing the wall stays wall', () => {
         // 4 columns x 4 rows of dark windows (12 x 20 px) on a light stone wall, every 30 px across and 40 px up; one site holds a

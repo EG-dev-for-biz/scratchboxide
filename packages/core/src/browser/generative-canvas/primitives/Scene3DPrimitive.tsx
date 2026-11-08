@@ -2418,7 +2418,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 return out;
             },
             overlays: () => [transformGizmoGroupRef.current, selectionBoxRef.current, brushCursorMeshRef.current, stack.gridHelper],
-            // the facade glass probe shares the capture and is re-rendered with the place's probes
+            // the facade probe shares the capture and is re-rendered with the place's probes
             refreshOthers: () => { refreshFacadeReflections(renderer, scene, externalObjectsMapRef.current.values()); }
         });
         placeReflectionsRef.current = placeReflections;
@@ -3500,11 +3500,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     // its unlit photo surfaces drawn lit, so the sun lights and shadows them like everything else
                     drawPhotoTwinsLit(model);
                     void twinPrepared.then(() => {
-                        // the facade material reading's glass reflects the scene: render its probe once the textures are in,
+                        // the twin's facades reflect the scene: render its probe once the textures are in,
                         // and again for the other twins (this layer is now part of what they see)
                         const stack = stackRef.current;
                         if (!stack || !model.parent) return;
-                        try { refreshFacadeReflections(stack.renderer, stack.scene, currentMap.values()); } catch (err) { console.warn('[staged textures] the glass reflection probe failed:', err); }
+                        try { refreshFacadeReflections(stack.renderer, stack.scene, currentMap.values()); } catch (err) { console.warn('[staged textures] the facade reflection probe failed:', err); }
                     });
                     // A staged layer of many small parts (a pipeline E hero) draws one mesh per material; each vertex keeps its part
                     // (provenance, ids) for the staged build, the provenance view and picking (mergeStagedParts.ts).

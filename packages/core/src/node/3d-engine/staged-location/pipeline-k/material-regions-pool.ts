@@ -22,13 +22,12 @@ import { workerTsRegisterSource } from '../../../worker-ts-register';
 import { shareDeep } from '../texture-worker-protocol';
 import type { ParsedGlb } from '../glb-bytes';
 import type { RgbaImage8 } from '../tile-texture-transfer';
-import type { FittedPlane } from '../window-fit';
 import { kNative } from './native/native-switch';
 import { planMaterialRegionsNative } from './native/material-regions-native';
 import { MATERIAL_REGIONS_PARAMS, materialPlanJobs, mergeMaterialPlan, planMaterialRegions, type MaterialPlanPiece, type MaterialRegionsParams, type MaterialRegionsPlan, type RegionClass, type RegionSet } from './material-regions';
 
 export interface MaterialRegionsWorkerInit {
-    json: any; bin: Uint8Array; images: Map<number, RgbaImage8>; classes: RegionClass[]; sets: RegionSet[]; planes: FittedPlane[]; P: MaterialRegionsParams;
+    json: any; bin: Uint8Array; images: Map<number, RgbaImage8>; classes: RegionClass[]; sets: RegionSet[]; P: MaterialRegionsParams;
 }
 
 export class MaterialRegionsWorkerError extends Error {
@@ -63,16 +62,16 @@ function workerEntry(): string {
  * planMaterialRegions across `threads` worker threads (one: on this thread); the same plan, its report's ms the wall time.
  * When SCRATCHBOX_K_NATIVE runs `regions` (the default), every job in one native run across the cores instead (the same plan).
  */
-export async function planMaterialRegionsOnThreads(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], sets: RegionSet[], planes: FittedPlane[] = [], P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS, opts: { threads?: number; signal?: AbortSignal } = {}): Promise<MaterialRegionsPlan> {
-    if (kNative('regions')) return planMaterialRegionsNative(g, json, images, classes, sets, planes, P, opts.threads ? { threads: opts.threads } : {});
+export async function planMaterialRegionsOnThreads(g: ParsedGlb, json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], sets: RegionSet[], P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS, opts: { threads?: number; signal?: AbortSignal } = {}): Promise<MaterialRegionsPlan> {
+    if (kNative('regions')) return planMaterialRegionsNative(g, json, images, classes, sets, P, opts.threads ? { threads: opts.threads } : {});
     const t0 = Date.now();
     const jobs = materialPlanJobs(json, images);
     const threads = Math.min(opts.threads ?? materialRegionsThreads(), jobs.length);
-    if (threads <= 1) return planMaterialRegions(g, json, images, classes, sets, planes, P);
+    if (threads <= 1) return planMaterialRegions(g, json, images, classes, sets, P);
     // largest photos first, so no thread is left with a big one at the end
     const size = (i: number) => { const img = images.get(json.textures[json.materials[jobs[i].material].pbrMetallicRoughness.baseColorTexture.index].source)!; return img.width * img.height; };
     const queue = jobs.map((_, i) => i).sort((a, b) => size(b) - size(a) || a - b);
-    const init: MaterialRegionsWorkerInit = { json, ...shareDeep({ bin: g.bin, images, sets, planes }), classes, P };
+    const init: MaterialRegionsWorkerInit = { json, ...shareDeep({ bin: g.bin, images, sets }), classes, P };
     const entry = workerEntry();
     const pieces: MaterialPlanPiece[] = new Array(jobs.length);
     const workers: Worker[] = [];

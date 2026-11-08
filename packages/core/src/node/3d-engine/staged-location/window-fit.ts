@@ -163,8 +163,9 @@ export interface WindowFitBand {
     panesDropped?: number;
 }
 /**
- * `rects` are the openings (a punched window, or a strip of windows and spandrels storey on storey); `panes` the glass in
- * them: each punched window, and the panes a strip's colours split it into at its storey pitch.
+ * `rects` are the openings (a punched window, or a strip of windows and spandrels storey on storey); `panes` the lights in
+ * them (a record of the reading; no material is drawn from them): each punched window, and the panes a strip's colours
+ * split it into at its storey pitch.
  */
 export interface WindowFit {
     rects: WindowRect[]; panes: WindowRect[]; bands: WindowFitBand[];
@@ -1436,7 +1437,7 @@ export interface SegmentScope { key: string; includes: (plane: { facadeId: numbe
 
 export interface WindowFitFile {
     version: string; params: WindowFitParams; /** An opening-mask segmenter (SCRATCHBOX_K_WINDOW_SEGMENT) was offered the no-pattern tail of this run: the record's version (SEGMENT_TRY_VERSION). */ segment?: string; ms: number;
-    facades: Array<{ facadeId: number; width: number; height: number; rects: WindowRect[]; panes?: WindowRect[]; /** Windows continued into parts the photo never reached: generated. */ generated?: WindowRect[]; bands: WindowFitBand[]; /** The segmenter's try on a facade the structural fit left empty. */ segmentTry?: SegmentTry; /** Covered texels not read because something stood in front of them (pipeline-k/occlusion.ts), and the windows continued into them (generated, continueIntoOccluded). */ occludedTexels?: number; occludedContinued?: number; ms: number } | { facadeId: number; error: string }>;
+    facades: Array<{ facadeId: number; width: number; height: number; rects: WindowRect[]; panes?: WindowRect[]; /** Windows continued into parts the photo never reached: generated. */ generated?: WindowRect[]; bands: WindowFitBand[]; /** The facade reader drew this plane (pipeline-k/facade-reader.ts mergeReadings): its version, and how many of `rects` (the first ones) are its windows; the rest are the fit's, kept outside the zones it drew. */ reader?: string; readerWindows?: number; /** The segmenter's try on a facade the structural fit left empty. */ segmentTry?: SegmentTry; /** Covered texels not read because something stood in front of them (pipeline-k/occlusion.ts), and the windows continued into them (generated, continueIntoOccluded). */ occludedTexels?: number; occludedContinued?: number; ms: number } | { facadeId: number; error: string }>;
 }
 
 /** The segmenter's tries over a fit, counted by outcome, with the first few failures' messages. */
@@ -1646,6 +1647,14 @@ export function fittedWindowRects(fit: WindowFitFile, facadeId: number): WindowR
     return fittedEntry(fit, facadeId)?.rects;
 }
 
+/** Where a facade's windows came from, for the lattice's extras: the reader's and the fit's counts when the reader drew the plane, else the fit alone. */
+export function windowSourceOf(fit: WindowFitFile, facadeId: number): string {
+    const e = fittedEntry(fit, facadeId);
+    if (!e || !e.reader) return WINDOW_FIT_VERSION;
+    const r = e.readerWindows ?? 0, kept = e.rects.length - r;
+    return `${e.reader}: ${r} windows read from the photo (photo-inferred)${kept ? `; ${WINDOW_FIT_VERSION}: ${kept} kept outside the zones it drew` : ''}`;
+}
+
 /**
  * A facade's fitted windows from window_fit.json, in the photo's UVs (u along s, v down from the top): u0 v0 u1 v1 per window.
  * None when the fit placed none: a facade too narrow for the relief to read two bays (most of the ESB's tower returns) shows
@@ -1657,29 +1666,3 @@ export function fittedWindowUvs(fit: WindowFitFile, facadeId: number): number[] 
     return e.rects.flatMap(([x0, y0, x1, y1]) => [x0 / e.width, y0 / e.height, x1 / e.width, y1 / e.height]);
 }
 
-/** A facade plane's fitted windows in its ortho's frame (relief_orthos/facades.json): world = centroid + s axisS + t axisT, pixel x at s = orthoSMin + x pixel, y at t = orthoTMax - y pixel. */
-export interface FittedPlane {
-    facadeId: number; centroid: number[]; normal: number[]; axisS: number[]; axisT: number[];
-    orthoSMin: number; orthoTMax: number; pixel: number; width: number; height: number;
-    /** The fitted windows and their panes, photo-pixel rects [x0, y0, x1, y1]. */
-    windows: WindowRect[]; panes: WindowRect[];
-    /** The plane's bays read per wall (wall-grammar.ts), photo-pixel rects, when the wall grammar read it. */
-    bays?: WindowRect[];
-}
-
-/** Every plane with fitted windows or wall-grammar bays in an orthos directory (facades.json and window_fit.json beside it, wall_grammar.json when read); none when either of the first two is missing. */
-export function fittedPlanesOf(orthosDir: string): FittedPlane[] {
-    const ff = path.join(orthosDir, 'facades.json'), wf = path.join(orthosDir, WINDOW_FIT_FILE);
-    if (!fs.existsSync(ff) || !fs.existsSync(wf)) return [];
-    const frames = JSON.parse(fs.readFileSync(ff, 'utf8')).facades as Array<Omit<FittedPlane, 'windows' | 'panes'>>;
-    const fit = JSON.parse(fs.readFileSync(wf, 'utf8')) as WindowFitFile;
-    const gf = path.join(orthosDir, 'wall_grammar.json');
-    const grammar = fs.existsSync(gf) ? JSON.parse(fs.readFileSync(gf, 'utf8')) as { facades: Record<string, Array<[number, number, number, number, number]>> } : undefined;
-    return frames.flatMap(f => {
-        const e = fittedEntry(fit, f.facadeId), gb = grammar?.facades[String(f.facadeId)];
-        if (e && (e.width !== f.width || e.height !== f.height)) return [];
-        if (!e && !gb?.length) return [];
-        const bays = gb?.map(([s0, t0, s1, t1]) => [(s0 - f.orthoSMin) / f.pixel, (f.orthoTMax - t1) / f.pixel, (s1 - f.orthoSMin) / f.pixel, (f.orthoTMax - t0) / f.pixel] as WindowRect);
-        return [{ facadeId: f.facadeId, centroid: f.centroid, normal: f.normal, axisS: f.axisS, axisT: f.axisT, orthoSMin: f.orthoSMin, orthoTMax: f.orthoTMax, pixel: f.pixel, width: f.width, height: f.height, windows: e?.rects ?? [], panes: e?.panes ?? [], ...(bays ? { bays } : {}) }];
-    });
-}
