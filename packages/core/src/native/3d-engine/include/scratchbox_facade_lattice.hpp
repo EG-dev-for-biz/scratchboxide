@@ -447,7 +447,10 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
     // the wall grammar's bays when it read any, else the fitted windows' own strips (an empty list is none: a wall whose
     // columns read no bay still recesses its window strips)
     const std::vector<Rect> strips = photoRecess ? ((bays && !bays->empty()) ? *bays : (!fitted.empty() ? windowStrips(fitted, P) : std::vector<Rect>{})) : std::vector<Rect>{};
-    std::vector<Rect> lines = fitted;
+    // a window inside a strip takes the strip's columns for its lattice lines (facade-lattice.ts)
+    std::vector<Rect> snapped = fitted;
+    for (auto& w : snapped) { const double cx = (w[0] + w[2]) / 2, cy = (w[1] + w[3]) / 2; for (const Rect& r : strips) if (cx >= r[0] && cx <= r[2] && cy >= r[1] && cy <= r[3]) { w[0] = r[0]; w[2] = r[2]; break; } }
+    std::vector<Rect> lines = snapped;
     lines.insert(lines.end(), strips.begin(), strips.end());
     const std::vector<double> L = luminance(img);
     std::vector<double> s, t;
@@ -512,10 +515,11 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
         if (!built[k] && finite(raw[k]) && inOutline(a, b)) built[k] = 1;
     }
     for (size_t k = 0; k < N; ++k) if (built[k] && finite(raw[k]) && raw[k] < P.minDepthM) built[k] = 0;
-    const std::vector<uint8_t> win = !fitted.empty() ? fittedCells(s, t, fitted) : windowGrid(lum, ns, nt, P);
+    const std::vector<uint8_t> win = !fitted.empty() ? fittedCells(s, t, snapped) : windowGrid(lum, ns, nt, P);
     const bool hasStrip = !strips.empty();
     const std::vector<uint8_t> strip = hasStrip ? fittedCells(s, t, strips) : std::vector<uint8_t>{};
-    // the lattice's end cells where the wall turns away (a corner, a prow): facade-lattice.ts, P.edgeStepM
+    // the lattice's end cells where the wall turns away (a corner, a prow) follow their own scan depth: facade-lattice.ts, P.edgeStepM
+    std::vector<uint8_t> endFollow(N);
     if (P.edgeStepM > 0) for (size_t b = 0; b < nt; ++b) {
         const auto isWall = [&](size_t k) { return built[k] && !win[k] && !(hasStrip && strip[k]) && finite(raw[k]); };
         std::vector<double> wall;
@@ -527,7 +531,7 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
             while (a >= 0 && a < static_cast<long>(ns) && n < 3) {
                 const size_t k = b * ns + static_cast<size_t>(a);
                 if (!built[k]) { a += dir; continue; }
-                if (isWall(k) && raw[k] < med - P.edgeStepM) { built[k] = 0; ++n; a += dir; } else break;
+                if (isWall(k) && raw[k] < med - P.edgeStepM) { endFollow[k] = 1; ++n; a += dir; } else break;
             }
         }
     }
@@ -588,7 +592,7 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
             for (size_t a = 0; a < ns; ++a) { const size_t k = b * ns + a; if (win[k] && built[k]) windows[k] = 1; }
             for (size_t a = 0; a < ns; ++a) {
                 const size_t k = b * ns + a;
-                if (std::isnan(stripR) || !(strip[k] || win[k])) { depth.push_back(clamp(wall)); continue; }
+                if (std::isnan(stripR) || !(strip[k] || win[k])) { depth.push_back(clamp(endFollow[k] && finite(raw[k]) ? raw[k] : wall)); continue; }
                 if (built[k]) { stripCells++; if (win[k]) photoRecessCells++; }
                 depth.push_back(clamp(win[k] ? js::min(wall - stripR - P.stripWindowInsetM, finite(raw[k]) ? raw[k] : kInf) : wall - stripR));
             }
@@ -611,7 +615,7 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
         }
         for (size_t a = 0; a < ns; ++a) {
             const size_t k = b * ns + a;
-            const double v = win[k] ? dm : lm;
+            const double v = endFollow[k] && finite(raw[k]) ? raw[k] : (win[k] ? dm : lm);
             depth.push_back(clamp(finite(v) ? v : finite(rowMed) ? rowMed : 0));
         }
         if (recessed) for (size_t k : dark) if (built[k]) photoRecessCells++;

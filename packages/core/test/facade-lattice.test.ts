@@ -376,7 +376,7 @@ describe('facades on their photo lattice', () => {
         expect(out.tears.droppedFacades).toEqual([]);
     });
 
-    it("leaves a row's end cells to the scan where the wall turns away behind the plane (a prow, a corner), but not an end window", () => {
+    it("builds a row's end cells at their own scan depth where the wall turns away behind the plane (a prow, a corner), but not an end window", () => {
         // the wall curves inward over its last 1.5 m (s > 10.5): 0 to 1 m behind the plane; windows as in the photo
         let seed = 3;
         const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.06;
@@ -388,11 +388,10 @@ describe('facades on their photo lattice', () => {
         }
         const r = latticeFacade(f, photo(), facadeSamples(Float32Array.from(out), f))!;
         const ns = r.s.length - 1;
-        // the last column (its cell past s 10.5) is scan in every row; the first column is built; a flat wall builds the last column
-        for (let b = 0; b < r.t.length - 1; b++) { if (r.s[ns] - r.s[ns - 1] > 0.5) expect(r.built[b * ns + ns - 1]).toBe(0); expect(r.built[b * ns]).toBe(1); }
+        // the last column (its cell past s 10.5) is built, at its own scan depth, well behind the plane; the first column on it
+        for (let b = 0; b < r.t.length - 1; b++) { if (r.s[ns] - r.s[ns - 1] > 0.5) { expect(r.built[b * ns + ns - 1]).toBe(1); expect(r.depth[b][ns - 1]).toBeLessThan(-0.3); } expect(r.built[b * ns]).toBe(1); expect(Math.abs(r.depth[b][0])).toBeLessThan(0.1); }
         const flat = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
-        expect(flat.built[flat.s.length - 2]).toBe(1);
-        expect(flat.cells).toBeGreaterThan(r.cells);
+        expect(Math.abs(flat.depth[0][flat.s.length - 2])).toBeLessThan(0.1);
     });
 
     it('removes a scan sliver standing across a rebuilt cell (a reveal or a fin side), whichever way the claim faces, and leaves one outside the rebuild', () => {
