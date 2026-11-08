@@ -1,0 +1,30 @@
+# Pipeline K: the sets a text model names for what a class was seen to be (2026-11-08)
+
+Branch `feat/k-limestone-pick` on main `24175fd4`. MAIN's open item after #190: the real height made the ESB's set picks plain, and they were wrong: its limestone took trowelled concrete and plaster grains.
+
+## Why the pick was wrong
+The run record of the ESB's material step (run 1861376c) shows the finish read and the class naming both saying limestone ("limestone cladding", "sunlit limestone facade"; the namer: "weathered Indiana limestone cladding", "sunlit buff Indiana limestone ashlar", conf 70 to 80), yet the candidates the pick by appearance was shown were, for the three stone classes: Concrete042B, Concrete030, Asphalt012, asphalt_pit_lane, Concrete041B, brushed_concrete, Asphalt013, Asphalt011, Concrete017, Concrete014 (class 0); Asphalt009, Concrete042B, ... floor_pavement (class 1); Concrete042B, concrete_pavement_02, PavingStones068, floor_pavement, PaintedPlaster015, Plaster005, Plaster006, ... Ground030 (class 2). The colour ranking (`material-sets.ts`: colour, finish, tile size) shortlists a grey limestone among concretes, asphalts and plasters; no set of the kind the reads saw ever reached the pick, so the pick chose the least wrong concrete.
+
+## What changed
+- **`pipeline-k/material-words.ts`:** a text model reads the whole facade-scale pool (2,366 sets: id, tile size, the publisher's free text and tags; about 170 k characters) once a building and names, for each class with a confident finish read (conf at least 50), up to 6 sets whose description is the material and finish the class was seen to be. Open vocabulary: the model's knowledge (a travertine is a limestone, coursed stone has joints), nothing in the code matches words. The answer is kept in the readings store under the seen words, the pool's ids and the model, so a rebuild or another benchmark side asks nothing twice.
+- **`material-sets.ts`:** the named sets join the class's shortlist (measured and ranked like the rest) and are shown to the pick by appearance beside the colour ranking's 10 nearest, recoloured to the class as every candidate is; the pick still decides by the surface. Recorded on the choice: `words.seen`, `words.sets` (those shown) and `picked` (whether the pick was one of them). A failed or unsure ask leaves the colour shortlist alone, with its reason in the progress log.
+- **Orchestrator:** the text ask goes through the same model chain as the finish read (no image), the brief read when the prompt is built; the twin's stage key carries `material-words/1`.
+- AGENTS.md's material regions sentence names the word shortlist.
+
+## Measured
+Every build on the branch through the app, one cached remesh (run c0d54c32's) and one shared model-answer store (the benchmark's feat readings), the displacement on so the set's grain shows; the app viewer at one camera (6 m from facade_lattice_10007's lowest relief cell, 30 degrees off its normal, a raking sun 12 degrees up) for every column of `limestone/limestone-sheet.jpg` (benchmark dir `2026-11-07-height/limestone/`).
+
+| build | stone classes' sets (share of texels) | named sets picked |
+|---|---|---|
+| before (main 24175fd4, run 1861376c) | Concrete030 (20 %), Concrete014 (32 %), Plaster006 (21 %), concrete_slab_wall (13 %) | no words |
+| named sets shown, pick untold (run e0ce76d1) | Concrete041B, Concrete031, PaintedPlaster015, Plaster006 | 0 of 3 named lists |
+| pick told the words (run cbb65b6a) | Concrete030, floor_tiles_04 (32 %), Plaster005, floor_tiles_04 (13 %) | 2 of 2 named lists; two classes got an empty list |
+| nearest kind named (run 9938e27d, head) | Travertine007 (20 %), Travertine009 (32 %), Concrete042B (21 %), Travertine009 (13 %) | 3 of 4 named lists |
+
+- The words alone changed nothing: with the limestone-described sets among 16 candidates, the pick by appearance still chose concretes, because at 8 cm a texel the photo patches show no grain and any flat set passes; the colour-nearest wins. Told what the class was seen to be and which candidates the library describes as that material, the pick takes them where they pass.
+- The exact-match wording of the words prompt left the shaded class ("shaded limestone or dark stone surface") with no sets; naming the nearest kind gives it travertines and marbles, and the pick takes Travertine007.
+- The one stone class still on concrete (21 %, "limestone panels with aluminum or mullion trim") was shown six named sets and the pick answered none: its patches hold mullion edges, and no flat stone set passes beside them. Open.
+- The viewer at 6 m: before, the trowelled concrete's pits under the raking sun; after, a flat stone with faint pores and the tile's joints. The relief now draws travertine's pores, not concrete's pits; whether travertine's pores read as Indiana limestone is the user's call (the library has no dressed limestone ashlar set; its nearest are the travertines, the limestone tiles and the coursed stone walls).
+- Costs a building: one text call of about 45 k tokens (the pool's lines) and the look-pick's call as before; both kept in the readings store. Build time unchanged within noise (the fifth build 225 s from the cached remesh).
+
+Tests: `pipeline-k-material-words.test.ts` (prompt, reply, key), `pipeline-k-material-sets.test.ts` (asked once, kept, recorded, degrades), `pipeline-k-material-choice.test.ts`; `npm run typecheck`.
