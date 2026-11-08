@@ -979,6 +979,9 @@ struct AuditResult {
     double found = 0, restored = 0, left = 0, oblique = 0, obliqueLeft = 0, keptInFront = 0, restoredInFront = 0;
     bool hasOblique = false;
     std::vector<int> dropped;
+    /** The proud audit (facade-lattice.ts ProudReport, in pixels per facade): proud pixels straight on and from the angles, before and after its removals. */
+    std::vector<double> proudStraight, proudOblique, proudStraightAfter, proudObliqueAfter;
+    double proudRemoved = 0, proudRestored = 0;
 };
 
 /** A triangle soup with each triangle's box, for the views' cull. */
@@ -1010,6 +1013,8 @@ struct Grid {
     int W = 0, H = 0;
     double s0 = 0, t0 = 0;
     std::vector<float> depth, onPlane;
+    /** The soup index of the triangle drawn at each pixel (-1: none), when asked for. */
+    std::vector<int32_t> who;
 };
 
 inline void worldBox(const Vec3& c, const Vec3& S, const Vec3& T, const Vec3& N, double s0, double s1, double t0, double t1, double reach, double lo[3], double hi[3]) {
@@ -1026,7 +1031,7 @@ inline void worldBox(const Vec3& c, const Vec3& S, const Vec3& T, const Vec3& N,
  * view, with where each pixel's surface lies along the facade's normal): the soup's triangles in order, those `live`,
  * culled to the facade's world box (its lattice rectangle and `reach` along its normal either side) from every view.
  */
-inline Grid renderView(const Soup& soup, const std::vector<uint8_t>* live, const AuditFacade& x, const View& v, double px, double reach, double maxDepth) {
+inline Grid renderView(const Soup& soup, const std::vector<uint8_t>* live, const AuditFacade& x, const View& v, double px, double reach, double maxDepth, bool who = false) {
     const Frame& f = x.f;
     Grid g;
     g.s0 = v.s0;
@@ -1036,6 +1041,7 @@ inline Grid renderView(const Soup& soup, const std::vector<uint8_t>* live, const
     const size_t WH = static_cast<size_t>(g.W) * g.H;
     g.depth.assign(WH, -std::numeric_limits<float>::infinity());
     if (v.oblique) g.onPlane.assign(WH, std::numeric_limits<float>::quiet_NaN());
+    if (who) g.who.assign(WH, -1);
     double lo[3], hi[3];
     worldBox(f.centroid, f.axisS, f.axisT, f.normal, x.s.front(), x.s.back(), x.t.front(), x.t.back(), reach, lo, hi);
     for (size_t k = 0; k < soup.n; ++k) {
@@ -1061,9 +1067,10 @@ inline Grid renderView(const Soup& soup, const std::vector<uint8_t>* live, const
             const double d = w0 * D[0] + w1 * D[1] + w2 * D[2];
             const size_t o = static_cast<size_t>(y) * g.W + static_cast<size_t>(x);
             if (v.oblique) {
-                if (d > g.depth[o]) { g.depth[o] = static_cast<float>(d); g.onPlane[o] = static_cast<float>(w0 * F[0] + w1 * F[1] + w2 * F[2]); }
+                if (d > g.depth[o]) { g.depth[o] = static_cast<float>(d); g.onPlane[o] = static_cast<float>(w0 * F[0] + w1 * F[1] + w2 * F[2]); if (who) g.who[o] = static_cast<int32_t>(k); }
             } else if (d > g.depth[o] && d <= maxDepth) {
                 g.depth[o] = static_cast<float>(d);
+                if (who) g.who[o] = static_cast<int32_t>(k);
             }
         }
     }
@@ -1126,13 +1133,18 @@ inline bool overBuilt(double px, double py, double pz, const AuditFacade& x, con
     return x.built[static_cast<size_t>(cellIndex(tv, x.t)) * (x.s.size() - 1) + static_cast<size_t>(cellIndex(sv, x.s))] != 0;
 }
 
+/** facade-lattice.ts COVER_INSET: the coverage samples drawn in toward the centroid, so a piece cut exactly on a lattice line is judged by its own cell. */
+constexpr double kCoverInset = 1e-3;
+
 inline bool coveredByRebuild(const Vec3& a, const Vec3& b, const Vec3& c, const AuditFacade& x, const Params& P) {
     const double longest = js::max(js::max(js::hypot({b[0] - a[0], b[1] - a[1], b[2] - a[2]}), js::hypot({c[0] - a[0], c[1] - a[1], c[2] - a[2]})), js::hypot({c[0] - b[0], c[1] - b[1], c[2] - b[2]}));
     const double steps = js::min(40, js::max(1, std::ceil(longest / P.sampleM)));
     const int n = static_cast<int>(steps);
+    const double cx = (a[0] + b[0] + c[0]) / 3, cy = (a[1] + b[1] + c[1]) / 3, cz = (a[2] + b[2] + c[2]) / 3;
     for (int p = 0; p <= n; ++p) for (int q = 0; p + q <= n; ++q) {
         const double u = p / steps, v = q / steps;
-        const double X = a[0] + (b[0] - a[0]) * u + (c[0] - a[0]) * v, Y = a[1] + (b[1] - a[1]) * u + (c[1] - a[1]) * v, Z = a[2] + (b[2] - a[2]) * u + (c[2] - a[2]) * v;
+        const double X0 = a[0] + (b[0] - a[0]) * u + (c[0] - a[0]) * v, Y0 = a[1] + (b[1] - a[1]) * u + (c[1] - a[1]) * v, Z0 = a[2] + (b[2] - a[2]) * u + (c[2] - a[2]) * v;
+        const double X = cx + (X0 - cx) * (1 - kCoverInset), Y = cy + (Y0 - cy) * (1 - kCoverInset), Z = cz + (Z0 - cz) * (1 - kCoverInset);
         if (!overBuilt(X, Y, Z, x, P)) return false;
     }
     return true;
@@ -1172,7 +1184,7 @@ struct Torn {
 };
 
 /** applyFacadeLattices' removals under its tear audit. `soupPts` holds the scan's indexed triangles, nine floats each. */
-inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<AuditFacade>& facades, const Params& P, bool sameFacing, FixedThreadPool& pool) {
+inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<AuditFacade>& facades, const Params& P, bool sameFacing, bool proudRemove, FixedThreadPool& pool) {
     const size_t nTri = soupPts.size() / 9, F = facades.size();
     AuditResult R;
     R.claim.assign(nTri, -1);
@@ -1261,7 +1273,7 @@ inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<Au
     std::vector<uint8_t> keptBack(nTri);
     // restore: every removed triangle whose footprint in a torn view touches a torn pixel or its neighbours, unless only views
     // from an angle touch it and it would stand in front of the rebuild that claimed it
-    const auto restore = [&](const std::vector<Torn>& list) {
+    const auto restore = [&](const std::vector<Torn>& list, const std::vector<uint8_t>* only = nullptr) {
         std::vector<std::vector<uint8_t>> marks(list.size());
         pool.forEach(list.size(), [&](size_t e) {
             const Torn& t = list[e];
@@ -1276,7 +1288,7 @@ inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<Au
         pool.forEach(chunks, [&](size_t c) {
             long mine = 0, mineInFront = 0;
             for (size_t k = c * chunk; k < std::min(nTri, (c + 1) * chunk); ++k) {
-                if (R.claim[k] < 0) continue;
+                if (R.claim[k] < 0 || (only && !(*only)[k])) continue;
                 int inFront = -1;
                 for (size_t e = 0; e < list.size(); ++e) {
                     const Torn& t = list[e];
@@ -1298,10 +1310,12 @@ inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<Au
                     // view straight on still puts it back)
                     if (!hit) continue;
                     if (inFront < 0) inFront = inFrontOfRebuild(corner(k, 0), corner(k, 1), corner(k, 2), facades[static_cast<size_t>(R.claim[k])], drawn[static_cast<size_t>(R.claim[k])], P) ? 1 : 0;
-                    if (t.oblique && inFront) { keptBack[k] = 1; continue; }
+                    // a proud removal (only) comes back from an angle too, in front or not: it stood there before
+                    if (t.oblique && inFront && !only) { keptBack[k] = 1; continue; }
                     R.claim[k] = -1;
                     mine++;
-                    if (inFront) mineInFront++;
+                    // a proud removal put back (only) was counted when the tear audit first restored it
+                    if (inFront && !only) mineInFront++;
                     break;
                 }
             }
@@ -1328,6 +1342,91 @@ inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<Au
         decide();
         R.left = 0;
         for (const auto& t : runAudit(false)) if (!t.oblique) R.left += static_cast<double>(t.pix.size());
+    }
+    // the proud audit (facade-lattice.ts applyFacadeLattices, the tear audit's mirror): each facade still rebuilt seen straight
+    // on and from its four angles; the result's nearest surface at a pixel more than proudTol in front of the surface the rebuild
+    // itself draws there, a scan triangle, within the facade's depth band and over one of its built cells, is proud. Measured;
+    // then a proud triangle whose whole footprint the rebuilt cells cover goes, the tear audit runs again over those removals
+    // alone and puts back what they opened, and the proud surface is measured again
+    const double proudTol = P.restoreFrontM + P.chamferM;
+    std::vector<std::vector<float>> ownTri(F);
+    std::vector<Soup> own(F);
+    for (size_t fi = 0; fi < F; ++fi) {
+        const auto& x = facades[fi];
+        ownTri[fi].reserve(x.indices.size() * 3);
+        for (uint32_t v : x.indices) ownTri[fi].insert(ownTri[fi].end(), {x.positions[v * 3], x.positions[v * 3 + 1], x.positions[v * 3 + 2]});
+        own[fi].index(ownTri[fi].data(), ownTri[fi].size() / 9);
+    }
+    // per facade its proud pixels straight on and from the angles; per scan triangle the first facade that saw it proud (-1: none)
+    const auto proudPass = [&](std::vector<double>& straight, std::vector<double>& oblique) {
+        std::vector<float> all(soupPts);
+        for (size_t fi = 0; fi < F; ++fi) {
+            if (dropped[fi]) continue;
+            const auto& x = facades[fi];
+            for (uint32_t v : x.indices) all.insert(all.end(), {x.positions[v * 3], x.positions[v * 3 + 1], x.positions[v * 3 + 2]});
+        }
+        Soup result;
+        result.index(all.data(), all.size() / 9);
+        std::vector<uint8_t> live(result.n, 1);
+        for (size_t k = 0; k < nTri; ++k) if (R.claim[k] >= 0) live[k] = 0;
+        std::vector<std::pair<size_t, size_t>> tasks;
+        for (size_t fi = 0; fi < F; ++fi) if (!dropped[fi]) for (size_t vi = 0; vi < views[fi].size(); ++vi) tasks.push_back({fi, vi});
+        std::vector<double> counts(tasks.size(), 0);
+        std::vector<std::vector<int32_t>> hits(tasks.size());
+        pool.forEach(tasks.size(), [&](size_t ti) {
+            const auto [fi, vi] = tasks[ti];
+            const View& v = views[fi][vi];
+            const auto& x = facades[fi];
+            const Grid ownG = vi == 0 ? drawn[fi] : renderView(own[fi], nullptr, x, v, P.auditPixelM, P.reachM, kInf);
+            const Grid res = renderView(result, &live, x, v, P.auditPixelM, P.reachM, kInf, true);
+            double n = 0;
+            const size_t W = static_cast<size_t>(res.W);
+            for (size_t o = 0; o < res.depth.size(); ++o) {
+                const double d = res.depth[o];
+                const int32_t k = res.who[o];
+                if (k < 0 || static_cast<size_t>(k) >= nTri || !finite(ownG.depth[o]) || !(d > static_cast<double>(ownG.depth[o]) + proudTol)) continue;
+                // the proud point in the world (the view shares the facade's origin): over a built cell, within the band
+                const double a = res.s0 + (static_cast<double>(o % W) + 0.5) * P.auditPixelM, b = res.t0 + (static_cast<double>(o / W) + 0.5) * P.auditPixelM;
+                if (!overBuilt(x.f.centroid[0] + a * v.S[0] + b * v.T[0] + d * v.N[0], x.f.centroid[1] + a * v.S[1] + b * v.T[1] + d * v.N[1], x.f.centroid[2] + a * v.S[2] + b * v.T[2] + d * v.N[2], x, P)) continue;
+                n += 1;
+                hits[ti].push_back(k);
+            }
+            counts[ti] = n;
+        });
+        std::vector<int> owner(nTri, -1);
+        for (size_t ti = 0; ti < tasks.size(); ++ti) {
+            const auto [fi, vi] = tasks[ti];
+            (vi == 0 ? straight[fi] : oblique[fi]) += counts[ti];
+            for (int32_t k : hits[ti]) if (owner[static_cast<size_t>(k)] < 0) owner[static_cast<size_t>(k)] = static_cast<int>(fi);
+        }
+        return owner;
+    };
+    R.proudStraight.assign(F, 0);
+    R.proudOblique.assign(F, 0);
+    R.proudStraightAfter.assign(F, 0);
+    R.proudObliqueAfter.assign(F, 0);
+    const std::vector<int> owner = proudPass(R.proudStraight, R.proudOblique);
+    std::vector<uint8_t> mine(nTri);
+    for (size_t k = 0; proudRemove && k < nTri; ++k) {
+        if (owner[k] < 0 || R.claim[k] >= 0) continue;
+        const Vec3 a = corner(k, 0), b = corner(k, 1), c = corner(k, 2);
+        const auto& x = facades[static_cast<size_t>(owner[k])];
+        if (facesFacade(a, b, c, x.f, P, sameFacing) && coveredByRebuild(a, b, c, x, P)) { R.claim[k] = owner[k]; mine[k] = 1; R.proudRemoved += 1; }
+    }
+    if (R.proudRemoved > 0) {
+        const auto count = [&](const std::vector<Torn>& list) { R.left = 0; R.obliqueLeft = 0; for (const auto& t : list) (t.oblique ? R.obliqueLeft : R.left) += static_cast<double>(t.pix.size()); };
+        std::vector<Torn> t2 = runAudit(false);
+        for (int round = 0; !t2.empty() && round < 3; ++round) { R.proudRestored += restore(t2, &mine); t2 = runAudit(false); }
+        count(t2);
+        // a tear straight on that the restores did not close: every proud removal undone (the removal opens nothing)
+        if (R.left) {
+            for (size_t k = 0; k < nTri; ++k) if (mine[k] && R.claim[k] >= 0) { R.claim[k] = -1; R.proudRestored += 1; }
+            count(runAudit(false));
+        }
+        proudPass(R.proudStraightAfter, R.proudObliqueAfter);
+    } else {
+        R.proudStraightAfter = R.proudStraight;
+        R.proudObliqueAfter = R.proudOblique;
     }
     for (size_t k = 0; k < nTri; ++k) if (keptBack[k] && R.claim[k] >= 0) R.keptInFront += 1;
     return R;
