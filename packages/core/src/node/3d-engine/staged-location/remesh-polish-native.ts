@@ -296,8 +296,8 @@ export interface NativeAuditFacade { f: NativeLatticeFrame; s: number[]; t: numb
  * facade-lattice.ts applyFacadeLattices' removals under its tear audit natively: per scan triangle (nine floats each, the
  * indexed primitives' in order) the facade claiming it (-1: kept), and what the audit found, restored and dropped.
  */
-export function runNativeLatticeAudit(params: number[], sameFacing: boolean, soup: Float32Array, facades: NativeAuditFacade[], threads: number): { claim: Int32Array; found: number; restored: number; left: number; obliqueLeft: number; oblique?: number; keptInFront: number; restoredInFront: number; dropped: number[] } {
-    const w = new Writer().magic('SBLA').u32(2).u32(params.length).f64s(params).u32(sameFacing ? 1 : 0).u32(soup.length).f32s(soup).u32(facades.length);
+export function runNativeLatticeAudit(params: number[], sameFacing: boolean, proudRemove: boolean, soup: Float32Array, facades: NativeAuditFacade[], threads: number): { claim: Int32Array; found: number; restored: number; left: number; obliqueLeft: number; oblique?: number; keptInFront: number; restoredInFront: number; dropped: number[]; /** The proud audit, in pixels per facade (facade-lattice.ts ProudReport). */ proud: { straight: number[]; oblique: number[]; straightAfter: number[]; obliqueAfter: number[]; removed: number; restored: number } } {
+    const w = new Writer().magic('SBLA').u32(3).u32(params.length).f64s(params).u32((sameFacing ? 1 : 0) | (proudRemove ? 0 : 2)).u32(soup.length).f32s(soup).u32(facades.length);
     for (const x of facades) {
         if (x.built.length !== (x.s.length - 1) * (x.t.length - 1)) throw new Error(`facade ${x.f.facadeId}: its built cells do not match its lattice`);
         frame(w, x.f).u32(x.s.length).f64s(x.s).u32(x.t.length).f64s(x.t).raw(x.built).u32(x.positions.length).f32s(x.positions).u32(x.indices.length).raw(new Uint8Array(x.indices.buffer, x.indices.byteOffset, x.indices.byteLength));
@@ -305,8 +305,12 @@ export function runNativeLatticeAudit(params: number[], sameFacing: boolean, sou
     const r = new Reader(runSync('lattice-audit', w.take(), threads));
     const claim = r.i32s(r.u32()), found = r.f64(), restored = r.f64(), left = r.f64(), obliqueLeft = r.f64(), hasOblique = r.u32(), oblique = r.f64(), keptInFront = r.f64(), restoredInFront = r.f64();
     const dropped = Array.from(r.i32s(r.u32()));
+    const proud = { removed: r.f64(), restored: r.f64(), straight: [] as number[], oblique: [] as number[], straightAfter: [] as number[], obliqueAfter: [] as number[] };
+    const nF = r.u32();
+    if (nF !== facades.length) throw new Error(`remesh_polish_native lattice-audit: the proud audit reports ${nF} facades, not ${facades.length}`);
+    for (let i = 0; i < nF; i++) { proud.straight.push(r.f64()); proud.oblique.push(r.f64()); proud.straightAfter.push(r.f64()); proud.obliqueAfter.push(r.f64()); }
     r.done('lattice-audit');
-    return { claim, found, restored, left, obliqueLeft, ...(hasOblique ? { oblique } : {}), keptInFront, restoredInFront, dropped };
+    return { claim, found, restored, left, obliqueLeft, ...(hasOblique ? { oblique } : {}), keptInFront, restoredInFront, dropped, proud };
 }
 
 // ------------------------------------------------------------------------------------------------ the wall grammar

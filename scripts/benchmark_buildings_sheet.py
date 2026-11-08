@@ -162,6 +162,8 @@ def main(out):
                 cx += 18
             cy += 24
             t = f"build {minutes(r.get('buildMs'))}   worst view: holes {pct(r.get('maxViewHoleShare'))}, untextured {pct(r.get('maxViewUntexturedShare'))}   largest hole {r.get('largestHoleRegionM2') or 0:.0f} m²"
+            if r.get('proudM2') is not None:
+                t += f"   proud scan {r.get('proudM2'):.0f} → {r.get('proudLeftM2') or 0:.0f} m² ({r.get('latticeCells') or 0:,} cells, cut {'on' if r.get('latticeCut') else 'off'})"
             d.text((x, cy), t, font=f_body, fill=INK)
             if base is not r and base is not None:
                 dt, col = delta(base.get('buildMs'), r.get('buildMs'), scale=1 / 60000, unit='min')
