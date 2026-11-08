@@ -23,10 +23,12 @@
  *    facade a task;
  *  - `clip`: pipeline-k/lattice-stitch.ts clipToFootprint (scratchbox_lattice_cut.hpp, the cut's splits and weld), triangles
  *    in chunks;
- *  - `infill`: pipeline-k/lattice-stitch.ts fillOpenLoops (scratchbox_open_loop_fill.hpp);
+ *  - `infill`: pipeline-k/lattice-stitch.ts fillOpenLoops (scratchbox_open_loop_fill.hpp), plus its native-only CDT caps
+ *    (LATTICE_STITCH_PARAMS.cdtCaps; off for its parity test);
  *  - `fill-texture`: pipeline-k/lattice-stitch.ts appendTexturedTriangles' routes (scratchbox_fill_texture.hpp), the
  *    texturing of the fill, seal and stitch in the twin, triangles and pieces in chunks.
- * and one with no TypeScript twin: the inner core (pipeline-k/inner-core.ts, scratchbox_inner_core.hpp), columns of voxels a task.
+ * and ones with no TypeScript twin: the inner core (pipeline-k/inner-core.ts, scratchbox_inner_core.hpp), columns of voxels a task;
+ * and the engine's CDT itself (`cdt`: scratchbox_cdt.hpp), for its tests and tools.
  *
  * Data goes over stdin as raw little-endian buffers (a header, then arrays), never PNG; the window fit's facades are
  * streamed as they are decoded and fitted as they arrive. The pool's size is the caller's: a chunked district's builds
@@ -392,6 +394,24 @@ export function runNativeClip(marginM: number, loops: Vec2[][], lines: Array<{ a
     const out = readCutOuts(r, prims);
     r.done('clip');
     return { report, prims: out };
+}
+
+/** A constrained Delaunay triangulation (scratchbox_cdt.hpp through `cdt`): directed segments, a fill rule, optional refinement. */
+export function runNativeCdt(points: ReadonlyArray<readonly [number, number]>, segments: ReadonlyArray<readonly [number, number]>, opts: { fill?: 'even-odd' | 'non-zero' | 'positive'; refine?: boolean; minAngleDeg?: number; maxArea?: number; splitSegments?: boolean } = {}): { report: Record<string, number>; points: Array<[number, number]>; tris: Array<[number, number, number]>; winding: number[] } {
+    const fill = opts.fill === 'non-zero' ? 1 : opts.fill === 'positive' ? 2 : 0;
+    const w = new Writer().magic('SBDT').u32(1).u32(fill).u32(opts.refine ? 1 : 0).f64s([opts.minAngleDeg ?? 20, opts.maxArea ?? 0]).u32(opts.splitSegments === false ? 0 : 1);
+    w.u32(points.length).f64s(points.flatMap(p => [p[0], p[1]])).u32(segments.length);
+    const sb = Buffer.alloc(segments.length * 8);
+    segments.forEach((sg, i) => { sb.writeInt32LE(sg[0], i * 8); sb.writeInt32LE(sg[1], i * 8 + 4); });
+    w.raw(sb);
+    const r = new Reader(runSync('cdt', w.take(), 1));
+    const report = JSON.parse(r.str()) as Record<string, number>;
+    const pts = Array.from({ length: r.u32() }, () => [r.f64(), r.f64()] as [number, number]);
+    const n = r.u32();
+    const tris = Array.from({ length: n }, () => [r.i32(), r.i32(), r.i32()] as [number, number, number]);
+    const winding = Array.from({ length: n }, () => r.i32());
+    r.done('cdt');
+    return { report, points: pts, tris, winding };
 }
 
 // ------------------------------------------------------------------------------------------------ the stitch

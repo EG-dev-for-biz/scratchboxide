@@ -233,6 +233,15 @@ describe('pipeline K material regions', () => {
         expect(pg.wallTexels).toBe(200);
         expect(plan.report.facades.perFacade[0]).toMatchObject({ panes: 4, glassShare: 0.03 });
         expect(paneGlass(img, classes, undefined, 0.5)).toBeUndefined();
+        // the reader's rects come at fractional pixels: a pane under a texel each way (x 30.6-31.4, y 30.6-31.4 rounds to nothing)
+        // still holds the texel it rounds into, and a pane whose edges round apart holds exactly those texels
+        const tiny = paneGlass(img, classes, [...r(30.6, 30.6, 31.4, 31.4), ...r(100.4, 20.3, 102.6, 22.4)], 0.5)!;
+        expect(tiny.panes).toBe(2);
+        expect(tiny.stone).toBe(0);
+        expect(tiny.glass.reduce((a, v) => a + v, 0)).toBe(1 + 3 * 2);
+        expect(tiny.glass[31 * W + 31]).toBe(1);
+        expect(tiny.glass[20 * W + 100]).toBe(1);
+        expect(tiny.glass[22 * W + 100]).toBe(0);
     });
     it('draws a speckle under regionSmoothM as the surface around it; a blot a metre across keeps its own set', () => {
         const W = 100, H = 100, rgba = new Uint8Array(W * H * 4);

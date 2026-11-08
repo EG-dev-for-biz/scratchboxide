@@ -373,6 +373,8 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
         // a rectified facade names its uncovered mask (the rebuild reads coverage from it, its ortho's holes being filled) and its fill
         for (const f of facadesJson.facades) {
             const rep = reports.find(x => x.facadeId === f.facadeId)?.report;
+            // the photo's measured column period, for the reader's template (facade-reader-template.ts templateColumns)
+            if (rep?.periodM !== undefined && rep.periodNcc !== undefined) { f.periodM = rep.periodM; f.periodNcc = rep.periodNcc; }
             if (!rep || !fs.existsSync(path.join(tmp, uncoveredMaskName(f.image)))) continue;
             f.uncoveredMask = uncoveredMaskName(f.image);
             const cont = (rep.holes as typeof rep.holes & { continued?: ContinuedFill }).continued;

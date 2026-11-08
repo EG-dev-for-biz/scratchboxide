@@ -407,6 +407,8 @@ rebuilt end to end on `window-array/8`.
   panels (ESB close-ups). Its dark-line measure in numbers.json went ESB 1.48 to 1.62 and Lever House 0.22 to 0.77, main to
   branch. This PR brings about 1,000 more recessed windows to that cut, so the rebuild carries the same measure, plus a
   close-up crop of the cut, to show that the windows add no seams.
+  Rebase onto current main first: #185 (merged at 5d72aeb3) removes the tile caps and zips the rims by default, so K
+  builds start from a different welded scan with fewer open edges at tile cuts. The comparison must be like for like.
 - Lever House 7: the shaft's lowest seven storeys stay unfilled though the photo shows the same grid; the stepping stops
   there (not the grouped bays, which are not read on that face's shaft).
 - The seed reads lightness only and takes the darker interval as the window; a facade whose glass reads lighter than

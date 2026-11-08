@@ -67,6 +67,11 @@
  *          f64 ax, az, nx, nz (an outline edge's point and outward normal), then the primitives as `cut` reads them.
  *     out: f64 cutTriangles, removedTriangles, removedAreaM2 (unrounded), then per primitive as `cut` writes it.
  *
+ *   remesh_polish_native cdt <threads>
+ *     in:  "SBDT" u32 version (1), u32 fill (0 even-odd, 1 non-zero, 2 positive), u32 refine, f64 minAngleDeg, f64 maxArea,
+ *          u32 splitSegments, u32 nPoints, f64[n*2], u32 nSegments, i32[nSegments*2].
+ *     out: u32 jsonLen, the report's JSON, u32 nPoints, f64[n*2], u32 nTris, i32[nTris*3], i32[nTris] winding.
+ *
  *   remesh_polish_native fill-texture <threads>
  *     in:  "SBFT" u32 version (1), u32 nParams, f64[nParams] (scratchbox_fill_texture.hpp Params), u32 nWalls, per facade
  *          mapping i32 material, f64[3] U, f64 u0, f64[3] V, f64 v0, f64[3] n, f64 dLo, f64 dHi, u32 hasPu, f64 pu, u32 hasPv,
@@ -108,6 +113,7 @@
 #include "scratchbox_facade_lattice.hpp"
 #include "scratchbox_wall_grammar.hpp"
 #include "scratchbox_lattice_cut.hpp"
+#include "scratchbox_cdt.hpp"
 #include "scratchbox_lattice_stitch.hpp"
 #include "scratchbox_wall_sheets.hpp"
 #include "scratchbox_fill_texture.hpp"
@@ -121,6 +127,8 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using namespace scratchbox;
@@ -491,6 +499,38 @@ int clip(unsigned threads) {
     return 0;
 }
 
+/** A constrained Delaunay triangulation (scratchbox_cdt.hpp), for its tests and tools. */
+int cdtCmd(unsigned) {
+    expectMagic("SBDT", 1);
+    cdt::Options o;
+    const uint32_t fill = readOne<uint32_t>();
+    o.fill = fill == 1 ? cdt::Fill::NonZero : fill == 2 ? cdt::Fill::Positive : cdt::Fill::EvenOdd;
+    o.refine = readOne<uint32_t>() != 0;
+    o.minAngleDeg = readOne<double>();
+    o.maxArea = readOne<double>();
+    o.splitSegments = readOne<uint32_t>() != 0;
+    const auto pv = readDoubles(static_cast<size_t>(readOne<uint32_t>()) * 2);
+    std::vector<cdt::P2> pts;
+    for (size_t i = 0; i + 1 < pv.size(); i += 2) pts.push_back({pv[i], pv[i + 1]});
+    std::vector<int32_t> sv(static_cast<size_t>(readOne<uint32_t>()) * 2);
+    if (!sv.empty()) readExact(sv.data(), sv.size() * sizeof(int32_t));
+    std::vector<std::array<int, 2>> segs;
+    for (size_t i = 0; i + 1 < sv.size(); i += 2) segs.push_back({sv[i], sv[i + 1]});
+    const auto r = cdt::triangulate(pts, segs, o);
+    char b[256];
+    std::snprintf(b, sizeof b, "{\"crossingPoints\":%d,\"segmentSplits\":%d,\"interiorPoints\":%d,\"lostSegments\":%d}", r.crossingPoints, r.segmentSplits, r.interiorPoints, r.lostSegments);
+    const std::string json(b);
+    writeOne<uint32_t>(static_cast<uint32_t>(json.size()));
+    writeExact(json.data(), json.size());
+    writeOne<uint32_t>(static_cast<uint32_t>(r.points.size()));
+    for (const auto& p : r.points) { writeOne<double>(p[0]); writeOne<double>(p[1]); }
+    writeOne<uint32_t>(static_cast<uint32_t>(r.tris.size()));
+    for (const auto& t : r.tris) for (int v : t) writeOne<int32_t>(v);
+    for (int w : r.winding) writeOne<int32_t>(w);
+    std::fflush(stdout);
+    return 0;
+}
+
 int stitch(unsigned threads) {
     expectMagic("SBST", 1);
     const auto params = lattice_stitch::Params::from(readDoubles(readOne<uint32_t>()));
@@ -659,7 +699,7 @@ int innerCore(unsigned threads) {
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|fill-texture|lattice|lattice-audit|wall-grammar|cut|clip|stitch|wall-sheets|inner-core <threads>  (binary input on stdin)\n");
+        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|fill-texture|lattice|lattice-audit|wall-grammar|cut|clip|cdt|stitch|wall-sheets|inner-core <threads>  (binary input on stdin)\n");
         return 2;
     }
     const std::string cmd = argv[1];
@@ -672,6 +712,7 @@ int main(int argc, char** argv) {
         if (cmd == "wall-grammar") return wallGrammar(threads);
         if (cmd == "cut") return cut(threads);
         if (cmd == "clip") return clip(threads);
+        if (cmd == "cdt") return cdtCmd(threads);
         if (cmd == "fill-texture") return fillTexture(threads);
         if (cmd == "stitch") return stitch(threads);
         if (cmd == "wall-sheets") return wallSheets(threads);

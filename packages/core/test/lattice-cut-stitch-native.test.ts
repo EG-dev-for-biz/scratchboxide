@@ -71,6 +71,9 @@ function photo(f: ReliefFacade): { rgba: Uint8Array; width: number; height: numb
     return { rgba, width: W, height: H };
 }
 
+// the fill's parity with the TypeScript: its native-only CDT caps off
+const TS_FILL = { ...LATTICE_STITCH_PARAMS, cdtCaps: false };
+
 function withNative<T>(mode: '0' | '1', fn: () => T): { out: T; ms: number } {
     const was = process.env.SCRATCHBOX_K_NATIVE;
     process.env.SCRATCHBOX_K_NATIVE = mode;
@@ -180,7 +183,7 @@ describe('lattice cut and stitch: native against TypeScript', () => {
         const cut = cutScanToLattice(Uint8Array.from(scan), sealed).glb;
         const clay = clipToFootprint(applyFacadeLattices(cut, sealed, false, undefined, { removeScan: false }).glb, [FOOTPRINT], 0.3).glb;
         const twin = clipToFootprint(applyFacadeLattices(cut, textured, true, undefined, { removeScan: false }).glb, [FOOTPRINT], 0.3).glb;
-        const fill = () => fillOpenLoops(Uint8Array.from(clay), [Uint8Array.from(twin)], { footprint: [FOOTPRINT] });
+        const fill = () => fillOpenLoops(Uint8Array.from(clay), [Uint8Array.from(twin)], { footprint: [FOOTPRINT] }, TS_FILL);
         const ts = withNative('0', fill), nat = withNative('1', fill);
         const seal = (glb: Buffer) => parseGlbBytes(glb).json.nodes.find((n: any) => n.extras?.sbSeal)?.extras.sbSeal;
         const routes = seal(ts.out.others[0]);

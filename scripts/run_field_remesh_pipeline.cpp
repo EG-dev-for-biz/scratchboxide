@@ -9,8 +9,8 @@
  * 2. Dihedral Angle Crease & Sharp Feature Detection
  * 3. 4-RoSy (4-Fold Rotational Symmetry) Orientation Field Solver
  * 4. Manhattan Orthogonal Priors & Street Canyon Alignment
- * 5. Position Field Integration & Target Edge Spacing (h = sqrt(A / N))
- * 6. Integer-Grid Quad Extraction & Quad Wireframe Generation
+ * 5. 4-PoSy Position Field (h = sqrt(A / N)) and integer offsets closed by a min-cost flow
+ * 6. Quad extraction (collapsed zero offsets, diagonals joined) & quad wireframe
  * 7. BVH Surface Snapping & Tangential Laplacian Relaxation
  *
  * Streams binary glTF 2.0 (.glb) chunks over stdout or writes to disk.
@@ -123,7 +123,10 @@ int main(int argc, char* argv[]) {
     RemeshTelemetry telemetry;
     auto tStart = std::chrono::high_resolution_clock::now();
 
-    ScratchboxMesh remeshedMesh = FieldAlignedQuadRemesher::remesh(inputMesh, options, &telemetry);
+    PolyMesh polygons = FieldAlignedQuadRemesher::remeshToPolygons(inputMesh, options, &telemetry);
+    ScratchboxMesh remeshedMesh = FieldAlignedQuadRemesher::triangulate(polygons, inputMesh.name + "_quad_remeshed");
+    remeshedMesh.material = inputMesh.material;
+    telemetry.outputTriangleCount = remeshedMesh.indices.size() / 3;
 
     ScratchboxMesh combinedOutput;
     combinedOutput.name = remeshedMesh.name;
@@ -132,7 +135,7 @@ int main(int argc, char* argv[]) {
     for (uint32_t idx : remeshedMesh.indices) combinedOutput.indices.push_back(idx);
 
     if (includeWireframe) {
-        ScratchboxMesh wireMesh = FieldAlignedQuadRemesher::buildQuadWireframe(remeshedMesh, 0.08f);
+        ScratchboxMesh wireMesh = FieldAlignedQuadRemesher::buildQuadWireframe(polygons, std::max(0.002f, float(telemetry.targetEdgeLength) * 0.04f));
         uint32_t wireBase = static_cast<uint32_t>(combinedOutput.vertices.size());
         for (const auto& v : wireMesh.vertices) combinedOutput.addVertex(v);
         for (uint32_t idx : wireMesh.indices) combinedOutput.indices.push_back(wireBase + idx);
@@ -161,6 +164,10 @@ int main(int argc, char* argv[]) {
         std::cout << "  Singularities:           " << telemetry.singularityCount << "\n";
         std::cout << "  Mean Aspect Ratio:       " << telemetry.meanQuadAspect << "\n";
         std::cout << "  Mean Corner Orthogonality:" << telemetry.meanOrthogonalityDeg << " deg\n";
+        std::cout << "  Mean Angle Deviation:    " << telemetry.meanAngleDeviationDeg << " deg\n";
+        std::cout << "  Mean Scaled Jacobian:    " << telemetry.meanScaledJacobian << "\n";
+        std::cout << "  Field Singularities:     " << telemetry.orientationSingularities << "\n";
+        std::cout << "  Output Polygons:         " << telemetry.outputPolygonCount << "\n";
         std::cout << "  Max Angle Deviation:     " << telemetry.maxOrthogonalityDeviationDeg << " deg\n";
         std::cout << "  Mean Surface Deviation:  " << (telemetry.meanSurfaceErrorMeters * 1000.0f) << " mm\n";
         std::cout << "  Sharp Crease Edges:      " << telemetry.sharpCreaseEdges << "\n";

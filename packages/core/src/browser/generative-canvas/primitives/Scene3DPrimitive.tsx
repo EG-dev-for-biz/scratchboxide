@@ -162,6 +162,7 @@ import { syncVectorRoadmapBlueprint } from './scene3d/syncVectorRoadmapBlueprint
 import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
 import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { WeatherControl } from './scene3d/WeatherPanel';
+import { MapDataControl, useMapDataView } from './scene3d/MapDataControl';
 import { ScenePathTraceButton, ScenePathTraceLayer } from './scene3d/ScenePathTrace';
 import { QuickBeautifyButton, type QuickBeautifyView } from './scene3d/QuickBeautifyButton';
 import { SplatEditControl } from './scene3d/SplatEditPanel';
@@ -3632,6 +3633,20 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         sceneObjects: sceneData.objects, view: (sceneData as StagedSceneData).stagedBuildView, onEvictedChange: setEvictedLayerIds, displayObjectIds: sceneData.displayFlag?.objectIds
     });
 
+    // ---- 5e. Map data view: blob groups, Google vector data and the roadmap over the scene (MapDataControl.tsx) ----
+    const mapData = useMapDataView({
+        stackRef, sceneData,
+        sceneRootsKey: JSON.stringify(externalLoadStatus),
+        sceneRoots: () => {
+            const scene = stackRef.current?.scene;
+            return [
+                ...Array.from(externalObjectsMapRef.current.values()),
+                ...Array.from(customMeshRegistryRef.current.values(), e => e.mesh),
+                ...(scene?.getObjectByName('scratchbox-cpp-generated-root') ? [scene.getObjectByName('scratchbox-cpp-generated-root')!] : [])
+            ];
+        }
+    });
+
     // ---- 6. Custom meshes from schema (id-diffed, updated in place) ---------------
     React.useEffect(() => {
         const stack = stackRef.current;
@@ -4492,6 +4507,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
                 {/* Weather: time of day into night, cloud cover, haze, fog (scene-weather.ts) */}
                 <WeatherControl sceneData={sceneData} mutateSceneData={mutateSceneData} />
+
+                {/* Map data: blob groups, roads, footprints, areas, places and the roadmap over the scene (MapDataControl.tsx) */}
+                <MapDataControl state={mapData} mutateSceneData={mutateSceneData} />
 
                 {/* Path traced: the scene through the Metal path tracer (ScenePathTrace.tsx) */}
                 <ScenePathTraceButton active={pathTraceOn} onToggle={() => setPathTraceOn(v => !v)} />

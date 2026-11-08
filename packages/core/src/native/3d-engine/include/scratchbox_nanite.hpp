@@ -232,7 +232,7 @@ public:
                     tempMerged.indices = mergedIndices;
                     
                     uint32_t targetTris = std::max(16u, static_cast<uint32_t>(mergedIndices.size() / 6));
-                    ScratchboxMesh decimated = halfedge::decimateMeshQEM(tempMerged, targetTris);
+                    ScratchboxMesh decimated = lod::simplifyForLod(tempMerged, targetTris);
                     
                     parent.vertices = decimated.vertices;
                     parent.indices = decimated.indices;

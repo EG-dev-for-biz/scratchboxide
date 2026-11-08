@@ -151,9 +151,11 @@ inline Decoded decodeMember(const Member& f, const Params& P) {
     d.unread = std::move(unc);
     d.inWin.assign(N, 0);
     const double W = d.img.W, H = d.img.H;
+    // the rects at whole texels (floor at the start, ceil at the end), as wall-grammar.ts: the facade reader's come at
+    // fractional pixels, and a fractional row used as an index shifts the fill sideways
     for (const Rect& w : f.windows) {
-        for (double y = js::max(0, w[1]); y < js::min(H, w[3]); ++y) {
-            const size_t a = fillIndex(y * W + js::max(0, w[0]), N), b = fillIndex(y * W + js::min(W, w[2]), N);
+        for (double y = js::max(0, std::floor(w[1])); y < js::min(H, std::ceil(w[3])); ++y) {
+            const size_t a = fillIndex(y * W + js::max(0, std::floor(w[0])), N), b = fillIndex(y * W + js::min(W, std::ceil(w[2])), N);
             for (size_t k = a; k < b; ++k) d.inWin[k] = 1;
         }
     }

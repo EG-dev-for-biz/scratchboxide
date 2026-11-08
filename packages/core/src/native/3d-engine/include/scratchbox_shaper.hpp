@@ -12,6 +12,7 @@
 
 #include "scratchbox_math.hpp"
 #include "scratchbox_geometry.hpp"
+#include "scratchbox_kelvinlet.hpp"
 #include <vector>
 #include <cmath>
 #include <algorithm>
@@ -172,6 +173,20 @@ public:
 
         mesh.recomputeSmoothNormals();
         mesh.recomputeBounds();
+    }
+
+    /**
+     * Kelvinlet deformation (scratchbox_kelvinlet.hpp): the elastic response to a regularised point load - a grab,
+     * twist, uniform scale or pinch - with no falloff edge, bulging like clay when the material is incompressible.
+     * Large moves are integrated in small steps so they drag rather than fold. `weights` (one per vertex, 0..1) or null.
+     */
+    static kelvinlet::Report kelvinlet(
+        ScratchboxMesh& mesh,
+        const kelvinlet::Load& load,
+        const kelvinlet::Options& options,
+        const std::vector<float>* weights = nullptr
+    ) {
+        return kelvinlet::deformMesh(mesh, load, options, weights);
     }
 
 private:
