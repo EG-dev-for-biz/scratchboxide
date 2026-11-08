@@ -2316,8 +2316,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const x = await extractCached(radiusM, io, chunkRect);
                     value = { extraction: x.extraction, key: x.key, sizedTo: radiusM > baseRadiusM ? 'district-containment' : 'request', rounds: 1, cached: x.cached, builtAtMs: x.builtAtMs };
                 }
-                // the tile seams closed as the extraction arrives (tile-seam-weld-service.ts: overlaps trimmed, positions welded,
-                // T-junctions split, then tile by tile the adaptive close and the strip fill), cached beside it; every later stage
+                // the tile seams closed as the extraction arrives (tile-seam-weld-service.ts: the tiles' caps removed, their rims
+                // zipped at every cut, overlaps trimmed, positions welded, T-junctions split, then tile by tile the adaptive close
+                // and the strip fill), cached beside it; every later stage
                 // reads the welded scan, the raw extraction stays as it came
                 if (deps.tileSeams && process.env.SCRATCHBOX_TILE_SEAMS?.trim() !== '0') {
                     // the passes on unless switched off (SCRATCHBOX_TILE_SEAM_TJUNCTIONS=0, SCRATCHBOX_TILE_SEAM_OVERLAP=0); the adaptive
@@ -2325,31 +2326,39 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     // closed 30-142 points for up to 2 min, the seams left being capped cut planes); the cache name says which ran
                     const tj = process.env.SCRATCHBOX_TILE_SEAM_TJUNCTIONS?.trim() !== '0', ov = process.env.SCRATCHBOX_TILE_SEAM_OVERLAP?.trim() !== '0';
                     const ad = process.env.SCRATCHBOX_TILE_SEAM_ADAPTIVE?.trim() === '1';
-                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}${ad ? '_ad' : ''}`, dir = path.dirname(raw.texturedGlb);
+                    // the tiles' photos levelled toward each other across their cuts only when asked (SCRATCHBOX_TILE_SEAM_TONE=1: it
+                    // halves the colour step at the cuts, but pipeline K reads the photos, and on Penn 2 its untextured share rose)
+                    const tn = process.env.SCRATCHBOX_TILE_SEAM_TONE?.trim() === '1';
+                    // the caps two tiles carry in a shared cut plane are removed and the two tiles' rims at every cut zipped onto one
+                    // line and welded (the service's defaults, where the extraction gives each leaf's box; user decision 2026-11-07:
+                    // on the ESB and Penn 2 the slots across a rebuilt facade's bays go, the tear audit's holes drop)
+                    const raw = value.extraction, tag = `${TILE_SEAMS_VERSION.replace(/\W/g, '_')}${tj ? '' : '_notj'}${ov ? '' : '_noov'}${ad ? '_ad' : ''}${tn ? '_tone' : ''}`, dir = path.dirname(raw.texturedGlb);
                     const tex = path.join(dir, `textured_${tag}.glb`), clay = path.join(dir, `geometry_${tag}.glb`), report = path.join(dir, `seams_${tag}.json`);
                     try {
                         if (!(fs.existsSync(tex) && fs.existsSync(clay) && fs.existsSync(report))) {
                             // written under temporary names and renamed: a build reading the same extraction never sees half a file
                             const sfx = `.tmp-${process.pid}-${Date.now()}`;
-                            const r = await deps.tileSeams({ inputGlb: raw.texturedGlb, outputGlb: tex + sfx, outputClayGlb: clay + sfx, tJunctions: tj, overlapTrim: ov, adaptive: ad, defaultGeometricErrorM: raw.leafGeometricErrorM, timeoutMs: 600_000 });
+                            const r = await deps.tileSeams({ inputGlb: raw.texturedGlb, outputGlb: tex + sfx, outputClayGlb: clay + sfx, tJunctions: tj, overlapTrim: ov, adaptive: ad, tone: tn, defaultGeometricErrorM: raw.leafGeometricErrorM, timeoutMs: 600_000 });
                             fs.renameSync(tex + sfx, tex); fs.renameSync(clay + sfx, clay);
                             fs.writeFileSync(report, JSON.stringify({ version: TILE_SEAMS_VERSION, ...r }));
                         }
                         const r = JSON.parse(fs.readFileSync(report, 'utf8')) as TileSeamWeldResult;
-                        const sw = r.seamWeld, tjs = r.tJunctions, ot = r.overlapTrim, ac = r.adaptive, sf = r.stripFill, au = r.seamAudit;
+                        const sw = r.seamWeld, tjs = r.tJunctions, ot = r.overlapTrim, ac = r.adaptive, sf = r.stripFill, au = r.seamAudit, tf = r.tone, ct = r.capTrim;
                         cache.writeRunNote(runId, 'tile_seams', {
                             version: TILE_SEAMS_VERSION, raw: raw.texturedGlb, inputTriangles: r.inputTriangles, outputTriangles: r.outputTriangles, toleranceM: r.toleranceM, seamWeld: sw,
                             ...(ot ? { overlapTrim: ot } : {}), ...(tjs ? { tJunctions: tjs } : {}), ...(ac ? { adaptive: ac } : { adaptive: false }), ...(sf ? { stripFill: sf } : {}),
-                            ...(r.tiles ? { tiles: r.tiles } : {}), ...(au ? { seamAudit: au } : {}), ms: r.ms
+                            ...(r.tiles ? { tiles: r.tiles } : {}), ...(au ? { seamAudit: au } : {}), ...(tf ? { tone: tf } : {}), ...(ct ? { capTrim: ct } : {}), ...(r.rimZip ? { rimZip: r.rimZip } : {}), ...(r.reweld ? { reweld: r.reweld } : {}), ...(r.photoOffset ? { photoOffset: r.photoOffset } : {}), ...(r.cutScores ? { cutScores: r.cutScores } : {}), ms: r.ms
                         });
                         // open seam length (km) under 3 cm / 3-10 / 10-30 / 30-100 cm / no other tile within 1 m
                         const km = (a: { bandLengthM: number[] }) => a.bandLengthM.map(v => (v / 1000).toFixed(1)).join(' / ');
                         run.note(PROVENANCE.asScanned, `tile seams closed (${TILE_SEAMS_VERSION}, within ${Math.round(r.toleranceM * 100)} cm` +
                             `${ac ? `, and up to ${Math.round(ac.maxToleranceM * 100)} cm where the two tiles' surfaces agree` : ''}, nothing moved further): ` +
+                            `${ct && ct.trianglesDropped ? `${Math.round(ct.areaM2).toLocaleString('en-US')} m² of the tiles' caps (the strips two tiles carry back to back in a shared cut plane) removed, ` : ''}` +
                             `${ot ? `${Math.round(ot.areaM2)} m² of doubled surface trimmed, ` : ''}${sw.groupsWelded.toLocaleString('en-US')} border points welded to the next tile's, ` +
                             `${tjs ? `${tjs.closed.toLocaleString('en-US')} T-junctions split into the next tile's edge, ` : ''}${sw.trianglesDropped.toLocaleString('en-US')} collapsed slivers dropped` +
                             `${ac ? `; ${(ac.splitsClosed + ac.vertexMoves).toLocaleString('en-US')} wider gaps closed of ${ac.agreed.toLocaleString('en-US')} where the surfaces agree (${ac.candidates.toLocaleString('en-US')} looked at)` : ''}` +
                             `${sf && sf.triangles ? `; ${sf.areaM2.toFixed(1)} m² of strip bridged (generated)` : ''}` +
+                            `${tf && tf.imagesChanged ? `; the tiles' photos levelled toward each other across ${tf.cuts.toLocaleString('en-US')} cuts (generated levels: the median colour step across them ${tf.dEBefore[0].toFixed(1)} -> ${tf.dEAfter[0].toFixed(1)} CIELAB)` : ''}` +
                             `${au ? `; open seam km by gap (<3 / 3-10 / 10-30 / 30-100 cm / none within 1 m) ${km(au.before)} before, ${km(au.after)} after` : ''}; the raw extraction is kept as it came`);
                         value.extraction = { ...raw, texturedGlb: tex, geometryGlb: clay };
                         // later stages key on the tiles key: the welded scan is another input; the sizing's scan was the raw one
@@ -2630,6 +2639,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
             : !eBuildings.length && !shapeMode && request.procedural !== true ? `the structure's footprint did not come from Google vector data (${structure?.vectorFootprint?.reason ?? 'no vector footprint at the place'})` : undefined;
         const eEligible = pipelineE && !eWhyNot;
         const startSurvey = (): void => {
+        // pipeline K reads no Street View survey unless its evidence stage is on: the survey's images only fed the window
+        // reveal depth (off since 2026-10-28) and a diagnostic score, and the remesh waited for it before texturing could
+        // start (user ask, 2026-11-07: drop the Street View check, get to texturing sooner)
+        if (pipelineK && isolateMode && !stepOn('evidence', process.env.SCRATCHBOX_K_EVIDENCE?.trim() === '1')) {
+            runner.skip('survey', 'a 3D Building reads no Street View survey (SCRATCHBOX_K_EVIDENCE=1 turns it on)');
+            return;
+        }
         if (isolateMode && visionForSurvey) {
             const noSurvey = (reasonCode: string, reason: string, cause?: unknown, model?: VisionModelUse, transient = false) => ({
                 status: 'degraded' as const, source: 'no survey: the detail passes aim at the scan-only slots', reason,
