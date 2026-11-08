@@ -33,7 +33,7 @@ export const MEASURED_TWIN_DECLARATION: ToolDeclaration = {
         'The massing is the scan\'s height-map tiers (and a revolved, stepped slender top such as a mast when the scan has one), measured; every window box the build kept is punched into the walls and recessed, photo-inferred; ' +
         'each wall cell, window, frame and roof cell takes its colour from the scan\'s own photo and its material from the build\'s measured appearance classes. ' +
         'Windows the build left unread are continued along their row only where the photo looks like a window, and a reading that put neighbouring columns half a storey apart is put back on the wall\'s storey rhythm; both are labelled generated, as is the reveal depth unless Street View read one. ' +
-        'Needs a finished pipeline K build (the 3D Building default) of one building; makes no model call and fetches nothing. ' +
+        'Needs a finished pipeline K build (the 3D Building default) of one building; makes no model call and fetches nothing. Returns four path-traced proof views and the GLB, both copied into the workspace (renders/measured-twin/<runId>/, paths relative to the workspace) for viewing, rendering or judging. ' +
         'Use it when the user asks for a procedural, generated or lightweight version of the staged building, or to compare a procedural rebuild with the scan-based one.',
     parameters: {
         type: 'OBJECT',
@@ -126,12 +126,21 @@ export async function runMeasuredTwinTool(args: Record<string, unknown>, ctx: To
     ctx.reportProgress?.('measured twin: generated', 0.9);
     const { uri, file } = publish(r.glb, runId, root);
     ctx.reportProgress?.('measured twin: rendering proof views', 0.95);
-    const views = await renderTwinViews(r, outDir, ctx.signal).catch(() => []);
+    const rendered = await renderTwinViews(r, outDir, ctx.signal).catch(() => []);
+    // the GLB and its views copied into the chat's workspace, so the agent's file, render and judge tools (which only
+    // read inside it) take them as they are: renders/measured-twin/<runId>/
+    const ws = ctx.workspaceRoot || root;
+    const wsDir = path.join(ws, 'renders', 'measured-twin', runId);
+    fs.mkdirSync(wsDir, { recursive: true });
+    const wsGlb = path.join(wsDir, 'measured_twin.glb');
+    fs.copyFileSync(r.glb, wsGlb);
+    const views = rendered.map(v => { const to = path.join(wsDir, path.basename(v.path)); fs.copyFileSync(v.path, to); return { path: to, label: v.label }; });
+    const rel = (f: string) => path.relative(ws, f);
     const xsAll = r.records.loops.flat().map(p => p[0]), zsAll = r.records.loops.flat().map(p => p[1]);
     const facts = {
-        glbFile: file, heightM: Math.round(r.report.topM * 10) / 10, footprintM: [Math.round((Math.max(...xsAll) - Math.min(...xsAll)) * 10) / 10, Math.round((Math.max(...zsAll) - Math.min(...zsAll)) * 10) / 10],
+        glbFile: rel(wsGlb), servedAt: file, heightM: Math.round(r.report.topM * 10) / 10, footprintM: [Math.round((Math.max(...xsAll) - Math.min(...xsAll)) * 10) / 10, Math.round((Math.max(...zsAll) - Math.min(...zsAll)) * 10) / 10],
         tiers: r.report.tiers, slenderTopFromM: r.report.slender.fromM, windows: r.report.windows, triangles: r.report.triangles,
-        views: views.map(v => v.path)
+        views: views.map(v => rel(v.path)), workspaceRoot: ws
     };
     const modelImages = views.map(v => ({ path: v.path, mimeType: 'image/png', label: `measured twin: ${v.label}` }));
     const w = r.report.windows;
@@ -156,7 +165,7 @@ export async function runMeasuredTwinTool(args: Record<string, unknown>, ctx: To
                 objects: [measuredTwinObject(runId, uri, 0, meta)]
             }
         } as unknown as CanvasArtifact;
-        return { resultPayload: { success: true, glbPath: uri, ...facts, report: r.report, modelImages, artifact }, summaryResult: summary };
+        return { resultPayload: { success: true, glbPath: facts.glbFile, viewerUrl: uri, ...facts, report: r.report, modelImages, artifact }, summaryResult: summary };
     }
     // beside the build: the scan's plan width plus the gap, along +x
     const gap = typeof args.gapM === 'number' && Number.isFinite(args.gapM) ? Math.max(0, args.gapM) : 20;
@@ -164,5 +173,5 @@ export async function runMeasuredTwinTool(args: Record<string, unknown>, ctx: To
     const obj = measuredTwinObject(runId, uri, offsetX, meta);
     const objects = [...(scene.objects ?? []).filter((o: Media4DObject) => o.id !== obj.id), obj];
     const artifact: CanvasArtifact = { ...active, data: { ...scene, objects } as Scene3DData, version: ((active as { version?: number }).version || 1) + 1 } as CanvasArtifact;
-    return { resultPayload: { success: true, glbPath: uri, ...facts, report: r.report, modelImages, artifact }, summaryResult: summary };
+    return { resultPayload: { success: true, glbPath: facts.glbFile, viewerUrl: uri, ...facts, report: r.report, modelImages, artifact }, summaryResult: summary };
 }
