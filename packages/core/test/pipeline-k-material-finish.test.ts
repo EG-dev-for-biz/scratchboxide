@@ -140,6 +140,9 @@ describe('pipeline K material finish', () => {
         // a metal of another colour than the wall (a copper roof beside limestone: far in a, b) stands; an unsure dielectric read does not outvote it
         expect(settleFinishes([cls(45, 14, 22, 0.1), cls(70, 2, 5, 0.9)], [{ roughness: 0.4, metalness: 0.9, conf: 80 }, { roughness: 0.7, metalness: 0, conf: 90 }])[0]!.metalness).toBe(0.9);
         expect(settleFinishes([cls(41, 1, 0.5, 0.2), cls(50, 1.7, 1.4, 0.8)], [{ roughness: 0.4, metalness: 0.9, conf: 80 }, { roughness: 0.7, metalness: 0, conf: 30 }])[0]!.metalness).toBe(0.9);
+        // a metal read settled against a glass twin keeps its own roughness: it is not glass, only not metal
+        const glassy = settleFinishes([cls(41, 1, 0.5, 0.3), cls(60, 1.5, 1.2, 0.14)], [{ roughness: 0.1, metalness: 0, conf: 80 }, { roughness: 0.25, metalness: 1, conf: 80 }]);
+        expect(glassy[1]).toMatchObject({ roughness: 0.25, metalness: 0, shadeOf: 0 });
         // an opening class is settled among the opening classes only
         expect(settleFinishes([cls(41, 1, 0.5, 0.1, true), cls(50, 1.7, 1.4, 0.9)], [{ roughness: 0.4, metalness: 0.9, conf: 80 }, { roughness: 0.7, metalness: 0, conf: 90 }])[0]!.metalness).toBe(0.9);
     });

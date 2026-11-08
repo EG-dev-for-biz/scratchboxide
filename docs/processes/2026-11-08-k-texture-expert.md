@@ -17,7 +17,7 @@ Per texel over every lit material's ORM map: Penn 2 81.6% reflective (metal > 0.
 - `common/spatial/pbr-artist-reference.ts`: our own reference of measured finishes by look and the artists' rules (from the Physically Based database, Filament, Substance's PBR guide, Lagarde's charts, the glTF model). It is data told to the model; nothing branches on it.
 - `material-finish.ts` (material-finish/5): the read is asked as a PBR texture artist, told the reference; it also returns grain, coverage and the numbered reference finish it matched, and its roughness is held to that finish's range. Drawing: roughness as read (reads under 0.2 are glass at main's 0.08); metalness 0 or 1, 1 only when read metal at confidence 70 or more over at least 60% of the class; the set's grain at most the read grain.
 - `material-choice.ts` (material-choice/4): the pick by look is told the rules and votes 0 or 1 on bare metal; `agreeMetal` draws a dielectric where the two looks differ.
-- `material-regions.ts` `applyFrameFinish`: the texels of a window holding a glass pane, outside its glass, are drawn no smoother than 0.35.
+- `material-regions.ts` `applyFrameFinish`: the texels of a window holding a glass pane, outside its glass, are drawn no smoother than 0.45 (0.35 before MAIN's review).
 - `.claude/skills/pbr-material-review`: the coding agents' screenshot review against the same reference.
 
 ## Step 3: uncached builds, main 17f1d2f1 against branch 141da180, one shared answer store

@@ -49,7 +49,7 @@ export const PBR_REFERENCE: readonly PbrReferenceFinish[] = [
     { look: 'render, stucco, plaster, paint over masonry', roughness: [0.8, 0.95], metalness: 0, source: 'Lagarde chart (plaster); Substance guide' },
     { look: 'brick and its mortar, unglazed terracotta', roughness: [0.75, 0.95], metalness: 0, source: 'Physically Based (brick); Lagarde chart (brick)' },
     { look: 'glazed terracotta or ceramic tile, a glossy glaze', roughness: [0.15, 0.4], metalness: 0, source: 'Lagarde chart (ceramic glaze)' },
-    { look: 'painted or powder-coated metal panels, mullions and frames (the paint is what you see)', roughness: [0.35, 0.65], metalness: 0, source: 'Substance guide (paint over metal is a dielectric); Lagarde chart (painted metal)' },
+    { look: 'painted or powder-coated metal panels, mullions and frames outdoors (the paint is what you see; weathering chalks and dulls it)', roughness: [0.45, 0.7], metalness: 0, source: 'Substance guide (paint over metal is a dielectric); Lagarde chart (painted metal, satin to matte); practice: exterior coatings lose gloss as they weather' },
     { look: 'anodised aluminium, a satin metallic sheen tinted by the anodising', roughness: [0.3, 0.6], metalness: 1, source: 'Physically Based (aluminium, reflectance about 91 %); practice: anodised satin 0.3-0.6' },
     { look: 'brushed or satin stainless steel', roughness: [0.25, 0.45], metalness: 1, source: 'Physically Based (iron and chromium reflectance); Lagarde chart (brushed metal)' },
     { look: 'bronze or brass weathered to a dark oiled or oxidised finish', roughness: [0.4, 0.7], metalness: 1, source: 'Physically Based (copper and brass reflectance); practice: oxidation roughens and darkens' },
@@ -64,7 +64,7 @@ export const PBR_ARTIST_RULES: readonly string[] = [
     'A dark colour is not metal, and a shaded part of a wall is not another material: shade, soot and dark stone are dielectrics.',
     'Exterior building stone, concrete, brick and render are rough (0.7 and up). Only a surface whose photo shows a readable reflection of its surroundings is polished.',
     'Dirt, dust, soot and weathering raise roughness; a city facade above the street has years of it. When unsure between two values, take the rougher.',
-    'Glass is smooth (0.05 to 0.15), but the frames, mullions, sills and spandrels around it are not glass: painted or anodised frames 0.35 to 0.6, stone around a window as rough as the wall.',
+    'Glass is smooth (0.05 to 0.15), but the frames, mullions, sills and spandrels around it are not glass: painted frames 0.45 to 0.7, anodised ones 0.3 to 0.6, stone around a window as rough as the wall.',
     'A row that mixes materials takes the finish of what covers most of its area, and says how much that is; a wrongly matte surface looks less wrong than a wrongly shiny one.',
     'Grain is how much the surface varies at the scale of a metre: glass and polished stone nearly none, smooth paint little, weathered stone, brick and concrete a lot.'
 ] as const;
@@ -75,7 +75,7 @@ export const PBR_ARTIST_RULES: readonly string[] = [
  * metalCoverage of the class's area; else 0), the roughness of window frames beside glass panes (frameRoughness, the
  * low end of painted and anodised frames), and the least roughness anything is drawn at (minRoughness: glass in place).
  */
-export const ARTIST_FINISH = { metalAt: 0.5, metalConf: 70, metalCoverage: 0.6, frameRoughness: 0.35, minRoughness: 0.08 } as const;
+export const ARTIST_FINISH = { metalAt: 0.5, metalConf: 70, metalCoverage: 0.6, frameRoughness: 0.45, minRoughness: 0.08 } as const;
 
 /**
  * The roughness range of the reference finish a reading named (1-based, as the prompt numbers them; 0 or out of range:

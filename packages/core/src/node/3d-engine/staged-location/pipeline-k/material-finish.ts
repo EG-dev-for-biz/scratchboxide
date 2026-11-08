@@ -20,7 +20,7 @@
  * roughness and metalness scaled to the read values, its grain kept, and its normal relief by the square of the read
  * roughness (reliefFullAt), so a surface read smooth and reflective (window glass) is drawn smooth and nearly flat (user, 2026-11-05);
  * a metal read is settled against the other classes' first (settleFinishes: a class of the colour the building mostly
- * reads dielectric is that material in shade, never drawn metal);
+ * reads dielectric is that material in shade, never drawn metal, nor drawn as glass when its own read is not glass);
  * and the set's grain is drawn only as far as the pick by appearance confirmed the set (grainFullAtConf) and as far as its
  * tile fits the element its class repeats on (patternFit) and its pattern is borne out by the photo (energyFit).
  * Labelled photo-inferred.
@@ -38,7 +38,7 @@
 import type { RegionClass } from './material-regions';
 import { ARTIST_FINISH, pbrReferenceLines, referenceRange } from '../../../../common/spatial/pbr-artist-reference';
 
-export const MATERIAL_FINISH_VERSION = 'material-finish/5';
+export const MATERIAL_FINISH_VERSION = 'material-finish/6';
 
 export const FINISH_READ = {
     /** A reading's roughness and metalness rank the class's sets, and set its drawn finish, at this confidence (0..100) and above. */
@@ -89,7 +89,10 @@ export function settleFinishes(classes: Array<{ meanLab: [number, number, number
         const metalShare = near.filter(metal).reduce((a, j) => a + classes[j].share, 0), others = near.filter(j => !metal(j));
         if (!others.length || metalShare >= others.reduce((a, j) => a + classes[j].share, 0)) return f;
         const twin = others.reduce((a, j) => (Math.abs(classes[j].meanLab[0] - classes[k].meanLab[0]) < Math.abs(classes[a].meanLab[0] - classes[k].meanLab[0]) ? j : a));
-        return { ...f, roughness: finishes[twin]!.roughness, metalness: finishes[twin]!.metalness, shadeOf: twin };
+        // the twin's finish, but never a glass finish on a class not read as glass (the texturing expert, 2026-11-08: Lever
+        // House's stainless trims, read 0.25, were drawn as its spandrel glass at 0.08): such a class keeps its own roughness
+        const glassTwin = finishes[twin]!.roughness < R.glassBelow && f.roughness >= R.glassBelow;
+        return { ...f, roughness: glassTwin ? f.roughness : finishes[twin]!.roughness, metalness: finishes[twin]!.metalness, shadeOf: twin };
     });
 }
 
