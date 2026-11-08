@@ -190,7 +190,8 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
                 const bytes = await libraryColourPreview(hit.entry, repoRoot, opts.signal).catch(() => undefined);
                 if (bytes) candidates.push({ id: hit.entry.id, realSizeM: hit.entry.realSizeM!, preview: decodeImageInMemory(bytes) });
             }
-            rows.push({ meanLinear: classes[k].meanLinear, candidates });
+            const indices = candidates.map((c, i) => (named.includes(c.id) ? i + 1 : 0)).filter(Boolean);
+            rows.push({ meanLinear: classes[k].meanLinear, candidates, ...(words[k] && indices.length ? { named: { seen: words[k]!.seen, indices } } : {}) });
         }
         opts.progress?.(`material regions: choosing each class's set by its look among ${rows.reduce((a, r) => a + r.candidates.length, 0)} candidates`);
         let picks: Array<SetChoice | undefined> | undefined, why: string | undefined;

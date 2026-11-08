@@ -28,7 +28,7 @@ import { encodePng } from '../png-encode';
 import type { RgbaImage8 } from '../tile-texture-transfer';
 import { readingKey, type ModelReadingStore } from './model-readings';
 
-export const MATERIAL_CHOICE_VERSION = 'material-choice/2';
+export const MATERIAL_CHOICE_VERSION = 'material-choice/3';
 
 /** Candidates shown a class (the ranking's nearest), and the cell each is drawn in, pixels. */
 export const CHOICE_CANDIDATES = 10;
@@ -37,7 +37,11 @@ const CELL = 96, GAP = 8;
 export const CHOICE_SPAN_M = 1.5;
 
 export interface ChoiceCandidate { id: string; realSizeM: [number, number]; preview: RgbaImage8 }
-export interface ChoiceRow { meanLinear: [number, number, number]; candidates: ChoiceCandidate[] }
+export interface ChoiceRow {
+    meanLinear: [number, number, number]; candidates: ChoiceCandidate[];
+    /** What the finish read saw of the class, and which candidates (1-based) a text model named for that description from the library's own descriptions (material-words.ts): the pick prefers them where they would pass. */
+    named?: { seen: string; indices: number[] };
+}
 
 const toLinear = (v: number) => { const c = v / 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
 const toByte = (l: number) => { const c = Math.max(0, Math.min(1, l)); return Math.round((c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055) * 255); };
@@ -82,6 +86,7 @@ export function choicePrompt(rows: ChoiceRow[], spanM: number, ctx: { building?:
         `Image 1: each row is one appearance class of the outside of ${ctx.building ?? 'a building'}, patches of its photographed surfaces (straightened, de-lit photos), each about ${span} across.`,
         `Image 2: row k holds candidate surfaces for image 1's row k, numbered 1 to n from the left, each a patch ${span} across, recoloured to that class's mean colour, so the colour tells them nothing: judge the surface itself, its grain, relief, joints, pattern and how its tone varies.`,
         ...(ctx.brief ? [`The building, as an architect described it from its photos: ${ctx.brief}`] : []),
+        ...rows.flatMap((r, k) => (r.named?.indices.length ? [`Row ${k + 1} was seen on the building as "${r.named.seen}"; candidates ${r.named.indices.join(', ')} are the library's sets described as that material. The photos are about 8 cm a texel and show no grain of their own, so a flat candidate of any material passes by look alone: where one of those named candidates would pass, prefer it over an unnamed one.`] : [])),
         'For each row give "pick": the candidate that would pass for the same surface as the class seen on the building, or 0 when none would; "seen": what the class looks like in a few words; and "conf" (0..100).',
         `There are ${rows.length} rows, with ${rows.map(r => r.candidates.length).join(', ')} candidates. Answer with JSON only: {"rows":[{"row":1,"pick":1,"seen":"...","conf":0}]}`
     ].join('\n');
@@ -127,7 +132,7 @@ export interface ChoiceMemoryRecord {
     classes: Array<{ meanLab: [number, number, number]; pick: number; seen?: string; conf: number; atMs: number }>;
 }
 
-export const choiceKey = (row: ChoiceRow, spanM: number, model: string) => readingKey('material-choice', [MATERIAL_CHOICE_VERSION, model, Math.round(spanM * 10) / 10, row.candidates.map(c => c.id)]);
+export const choiceKey = (row: ChoiceRow, spanM: number, model: string) => readingKey('material-choice', [MATERIAL_CHOICE_VERSION, model, Math.round(spanM * 10) / 10, row.candidates.map(c => c.id), ...(row.named ? [row.named.seen, row.named.indices] : [])]);
 
 /**
  * The swatch sheet's rows `keep`, in that order, as a sheet of their own (classSwatchSheet: n rows of square cells on
