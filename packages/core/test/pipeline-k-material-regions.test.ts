@@ -17,8 +17,8 @@
 import { describe, expect, it } from 'vitest';
 import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { ARTIST_FINISH } from '../src/common/spatial/pbr-artist-reference';
-import { applyFrameFinish, classRepeatSizes, foldRepeats, GLASS, paneGlass, planMaterialRegions, readRegionClasses, regionClassMap, regionRadius, repeatElements, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
+import { ARTIST_FINISH, PBR_REFERENCE } from '../src/common/spatial/pbr-artist-reference';
+import { applyExposureGain, fitExposureGain, applyFrameFinish, classRepeatSizes, foldRepeats, GLASS, paneGlass, planMaterialRegions, readRegionClasses, regionClassMap, regionRadius, repeatElements, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
 import { planMaterialRegionsOnThreads } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions-pool';
 import { tileRefineTwin } from '../src/node/3d-engine/staged-location/tile-refine-twin';
 import { decodeImageInMemory, type RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
@@ -268,6 +268,34 @@ describe('pipeline K material regions', () => {
         // the window with no pane, and the wall, as their classes drew them
         expect(at(orm, 110, 30)[1]).toBe(20);
         expect(at(orm, 60, 100)[1]).toBe(20);
+    });
+
+    it("fits the building's exposure so its named stone lands in its reference albedo, held below clipping, and keeps relative colours", () => {
+        const limestone = PBR_REFERENCE.findIndex(e => /dressed limestone/.test(e.look)) + 1, glass = PBR_REFERENCE.findIndex(e => /window glass in place/.test(e.look)) + 1;
+        const cls = (index: number, L: number, share: number, openings = false) => ({ index, meanLab: [0, 0, 0] as [number, number, number], meanLinear: [L, L, L] as [number, number, number], spreadLab: [0, 0, 0] as [number, number, number], share, wall: false, openings });
+        // a photo of dark texels (0.1 linear) with nothing bright: the clip cap stays out of the way
+        const W = 64, H = 64, px = (L: number) => Math.round((L <= 0.0031308 ? 12.92 * L : 1.055 * Math.pow(L, 1 / 2.4) - 0.055) * 255);
+        const dark = { width: W, height: H, rgba: new Uint8Array(W * H * 4) };
+        for (let k = 0; k < W * H; k++) dark.rgba.set([px(0.1), px(0.12), px(0.08), 255], k * 4);
+        const fit = fitExposureGain([cls(0, 0.1, 0.6), cls(1, 0.05, 0.3, true)], [{ finish: { read: { roughness: 0.85, metalness: 0, conf: 80, ref: limestone } as never, roughness: 0.85, metallic: 0, label: 'photo-inferred' } }, { finish: { read: { roughness: 0.08, metalness: 0, conf: 80, ref: glass } as never, roughness: 0.08, metallic: 0, label: 'photo-inferred' } }], new Map([[0, dark]]));
+        // limestone (0.3-0.6) at 0.1 wants x3 to x6; the nearest to 1 that lands it is x3; the opening class takes no part
+        expect(fit.gain).toBeCloseTo(3, 1);
+        expect(fit.classes.map(c => c.index)).toEqual([0]);
+        expect(fit.label).toBe('photo-inferred');
+        // a photo with bright texels: the clip cap holds the gain (0.5% of texels may pass 0.95)
+        const bright = { width: W, height: H, rgba: dark.rgba.slice() };
+        for (let k = 0; k < W * H / 10; k++) bright.rgba.set([px(0.5), px(0.5), px(0.5), 255], k * 4);
+        const capped = fitExposureGain([cls(0, 0.1, 0.6)], [{ finish: { read: { roughness: 0.85, metalness: 0, conf: 80, ref: limestone } as never, roughness: 0.85, metallic: 0, label: 'photo-inferred' } }], new Map([[0, bright]]));
+        expect(capped.gain).toBeLessThan(2);
+        expect(capped.gain).toBeCloseTo(capped.clipCap, 2);
+        // no class names a finish with an albedo: the photos stay as they are
+        expect(fitExposureGain([cls(0, 0.1, 1)], [{}], new Map([[0, dark]])).gain).toBe(1);
+        // the gain in linear light keeps the channels' ratios
+        const img = { width: 1, height: 1, rgba: new Uint8Array([px(0.1), px(0.05), px(0.02), 255]) };
+        applyExposureGain(new Map([[0, img]]), 2);
+        const lin = (v: number) => { const c = v / 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+        expect(lin(img.rgba[0]) / lin(img.rgba[1])).toBeCloseTo(2, 1);
+        expect(lin(img.rgba[0])).toBeCloseTo(0.2, 2);
     });
 
     it('draws a speckle under regionSmoothM as the surface around it; a blot a metre across keeps its own set', () => {
