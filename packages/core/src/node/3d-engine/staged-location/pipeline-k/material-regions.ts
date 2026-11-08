@@ -830,8 +830,9 @@ export function fitExposureGain(classes: RegionClass[], sets: Array<Pick<RegionS
     const dist = (g: number) => used.reduce((a, u) => a + u.share * (g < u.gainRange[0] ? Math.log(u.gainRange[0] / g) : g > u.gainRange[1] ? Math.log(g / u.gainRange[1]) : 0), 0);
     let best = 1, bestD = Infinity;
     for (let lg = Math.log(F.minGain); lg <= Math.log(F.maxGain) + 1e-9; lg += 0.01) { const g = Math.exp(lg), d = dist(g); if (d < bestD - 1e-12 || (Math.abs(d - bestD) <= 1e-12 && Math.abs(Math.log(g)) < Math.abs(Math.log(best)))) { bestD = d; best = g; } }
-    const gain = Math.max(F.minGain, Math.min(best, clipCap, F.maxGain));
-    const why = `${used.length} classes named a reference finish with an albedo (${used.map(u => `class ${u.index} at ${u.luminance} for ${u.albedo[0]}-${u.albedo[1]}`).join('; ')}): gain ${r3(best)} fitted${gain < best ? `, held to ${r3(gain)} by ${gain === clipCap ? `the clip cap (${F.clipShare * 100}% of texels past ${F.clipLevel})` : 'the bound'}` : ''}`;
+    // within 2% of 1 the photos are left as they are (the grid's step, not a correction)
+    const held = Math.max(F.minGain, Math.min(best, clipCap, F.maxGain)), gain = Math.abs(held - 1) < 0.02 ? 1 : held;
+    const why = `${used.length} classes named a reference finish with an albedo (${used.map(u => `class ${u.index} at ${u.luminance} for ${u.albedo[0]}-${u.albedo[1]}`).join('; ')}): gain ${r3(best)} fitted${gain === 1 && Math.abs(best - 1) < 0.02 ? ' (within 2% of 1: the photos kept)' : gain < best ? `, held to ${r3(gain)} by ${gain === clipCap ? `the clip cap (${F.clipShare * 100}% of texels past ${F.clipLevel})` : 'the bound'}` : ''}`;
     return { gain: r3(gain), classes: used, fitted: r3(best), clipCap: r3(clipCap), why, label: 'photo-inferred' };
 }
 
