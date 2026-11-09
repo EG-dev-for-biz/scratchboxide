@@ -34,6 +34,23 @@
   * "wheeled suitcase with extended handle", read as not permanent;
   * "yellow metal patio chair", read as not permanent.
 * **Masks.** The segmenter (MediaPipe interactive + GrabCut) runs in memory (`segmentBytes`, the JPEG decoded inside the worker), prompted by the read's tight box. On a synthetic photo, 11,623 of 11,637 post pixels were found in 1.9 s.
+* **Penn, 7th Ave & W 32nd St, whole district, after merging main (2026-11-08, head 9fd21683).**
+  * **The build:** fresh and uncached (stage caches moved aside), `"query": "40.74870, -73.99080"`, `district: "scan"`, run `6f8baa5b`, stopped through `/gemini/staged-runs/:runId/stop` once its district audit was written. The audit: 4,425 clusters (2,363 artefacts, 700 real objects, 1,362 unsure).
+  * **The tool run** (`build/street-objects/581ecfeff2ec`, 35.5 min, load 25-50): 1,796 street clusters became 1,453 families (53 rows). 400 panoramas were found, and 117 of the 160 planned images were fetched. Only 2 of 19 panos took an edge pose, and the joint fit did not run in its budget, so the poses are nominal. There were 46 vision reads.
+  * **Decisions:**
+    * 4 families rebuilt and kept, 9 objects in all: a 6-member row of lamp-post bases (IoU 0.743 against the scan's 0.033; ΔE 1.8 against 10), a signal pole (0.496 against 0.359), a utility pole with a signal box (0.505 against 0.045) and a young street tree (0.527 against 0.139);
+    * 1 scan kept: a tree in a fenced pit, whose colour came out further from the photos;
+    * 5 read as temporary: sidewalk sheds, a barricade, a scaffold pole, a potted tree;
+    * 1,443 not seen.
+  * **Explained share:** 71 of 4,425 audit clusters (1.6%), or 71 of 1,667 street clusters (4.3%), carry a Street View label; 9 clusters (0.2%) were rebuilt.
+  * **Why the share is low:**
+    * 858 clusters: every candidate view is blocked in the scan;
+    * 369: past the 160-image budget;
+    * 271: no pano frames them large enough;
+    * 56: a different era;
+    * the 2,758 unsure or artefact clusters are not street-object candidates at all.
+  * **The eye-level renders are weak:** for the lamp-post row and the utility pole, the camera stands against scan geometry, so the before/after pair barely differs; the tree rebuilt as a solid of revolution reads as a toy.
+  * **Sheet:** `docs/screenshots/street-objects_2026-11-08/penn-street-objects-pr95-sheet.jpg` (`make_map.py` beside it draws the plan map by decision).
 * **Penn, 8th Ave at the Farley Building (2026-11-04, the user's walk-mode block).**
   * **The build:** staged at 40.7506, -73.9952 (`"query": "40.75060, -73.99520"`, `district: "scan"`, trees on), stopped once its district audit was written. A first build queried as "8th Ave & W 32nd St" geocoded to the 14 St / 8 Av station and was stopped.
   * **The audit:** 951 clusters. The bollard rows come out as rows: 20, 16 and 15 members at about 1.52 m pitch.
