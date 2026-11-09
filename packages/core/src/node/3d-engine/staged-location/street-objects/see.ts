@@ -56,7 +56,11 @@ export const SEE_PARAMS = {
     depthWidthPx: 320,
     /** Each member's clear check looks from its nearest this many panos in range (each check renders the tile's depth). */
     candidatePanos: 8,
-    maxImages: 160,
+    /** The district's images. Raised from 160 on 2026-11-08: at Penn the 160 reached 3 of 4 families' clusters' turn
+     * at most (369 clusters past the budget), and about half went to registration views. */
+    maxImages: 400,
+    /** A view from a pano already registered costs one image, not two (no new wide view): its score is worth this much more. */
+    reusedPanoBonus: 1.5,
     /** The wide view each pano is registered from. */
     contextFovDeg: 90
 };
@@ -105,23 +109,38 @@ export function aimAt(eye: V3, m: Pick<StreetObjectMember, 'foot' | 'heightM' | 
 }
 
 /**
- * The share of `member`'s points the scan says a camera sees: each point projected into a small depth image of the tile
- * mesh and counted when it is no deeper than the surface there (within depthTolM). The member's own triangles are in the
- * tile mesh, so a clear member is the nearest surface at its own pixels.
+ * The share of `member`'s visible surface the scan says a camera sees. The member's own triangles (`memberTriangles`:
+ * x, y, z per corner, three corners a triangle) are drawn into a depth image, and so is the tile mesh; a pixel of the
+ * member counts as seen when nothing in the tile stands in front of the member's nearest surface there (within depthTolM).
+ * Only the member's near side is tested: its far side is hidden by the member itself, not by anything in front of it
+ * (testing every corner, as before 2026-11-08, capped any object deeper than depthTolM at about half seen, so most of a
+ * district's street clusters were planned as blocked).
  */
-export function clearShare(eye: V3, aim: { headingDeg: number; pitchDeg: number; fovDeg: number }, memberPoints: Float32Array, tileMesh: RenderMesh3D, P: SeeParams = SEE_PARAMS): number {
+export function clearShare(eye: V3, aim: { headingDeg: number; pitchDeg: number; fovDeg: number }, memberTriangles: Float32Array, tileMesh: RenderMesh3D, P: SeeParams = SEE_PARAMS): number {
     const W = P.depthWidthPx, H = Math.round((W * 3) / 4);
     const cam = castCamera({ eye, headingDeg: aim.headingDeg, pitchDeg: aim.pitchDeg, fovDeg: aim.fovDeg, widthPx: W, heightPx: H });
     const depth = renderFrameDepth(tileMesh, cam);
-    let seen = 0, n = 0;
-    for (let i = 0; i + 2 < memberPoints.length; i += 3) {
-        const p = projectToFrame(cam, memberPoints, i);
-        if (!p || p[0] < 0 || p[1] < 0 || p[0] >= W || p[1] >= H) continue;
-        n++;
-        const dz = depth[Math.floor(p[1]) * W + Math.floor(p[0])];
-        if (!(dz < 1e8) || p[2] <= dz + P.depthTolM) seen++;
+    const n = Math.floor(memberTriangles.length / 9) * 3;
+    const own = renderFrameDepth({ vertices: memberTriangles.subarray(0, n * 3), indices: Uint32Array.from({ length: n }, (_, i) => i) }, cam);
+    let seen = 0, px = 0;
+    for (let i = 0; i < own.length; i++) {
+        const dm = own[i];
+        if (!(dm < 1e8)) continue;
+        px++;
+        const dz = depth[i];
+        if (!(dz < 1e8) || dm <= dz + P.depthTolM) seen++;
     }
-    return n ? seen / n : 0;
+    if (px) return seen / px;
+    // the member covers no pixel (smaller than one at this range): its corners, each against the tile's depth
+    let s = 0, k = 0;
+    for (let i = 0; i + 2 < n * 3; i += 3) {
+        const p = projectToFrame(cam, memberTriangles, i);
+        if (!p || p[0] < 0 || p[1] < 0 || p[0] >= W || p[1] >= H) continue;
+        k++;
+        const dz = depth[Math.floor(p[1]) * W + Math.floor(p[0])];
+        if (!(dz < 1e8) || p[2] <= dz + P.depthTolM) s++;
+    }
+    return k ? s / k : 0;
 }
 
 const angleBetween = (a: number, b: number) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
@@ -185,12 +204,14 @@ export function planFamilyViews(input: {
         }
         if (!cands.length) { out.push({ familyId: fam.id, views: [], notes: [blocked ? `every one of ${blocked} candidate views is blocked in the scan` : `no Google panorama within ${P.maxRangeM} m frames it at ${P.minPixelHeight} px or more`], blocked }); continue; }
         // members with the best views first; each member's best view, then other sides
+        // a pano already in the plan costs no wide registration view: its views are preferred by reusedPanoBonus
+        const worth = (c: PlannedView) => c.score * (contextByPano.has(c.panoId) ? P.reusedPanoBonus : 1);
         const bestOf = new Map<number, PlannedView>();
-        for (const c of cands) if (!bestOf.has(c.clusterId) || c.score > bestOf.get(c.clusterId)!.score) bestOf.set(c.clusterId, c);
-        const members = [...bestOf.values()].sort((a, b) => b.score - a.score).slice(0, P.membersPerFamily).map(v => v.clusterId);
+        for (const c of cands) if (!bestOf.has(c.clusterId) || worth(c) > worth(bestOf.get(c.clusterId)!)) bestOf.set(c.clusterId, c);
+        const members = [...bestOf.values()].sort((a, b) => worth(b) - worth(a)).slice(0, P.membersPerFamily).map(v => v.clusterId);
         const picked: PlannedView[] = [];
         for (const id of members) { const v = bestOf.get(id)!; picked.push(v); }
-        const rest = cands.filter(c => members.includes(c.clusterId) && !picked.includes(c)).sort((a, b) => b.score - a.score);
+        const rest = cands.filter(c => members.includes(c.clusterId) && !picked.includes(c)).sort((a, b) => worth(b) - worth(a));
         for (const c of rest) {
             if (picked.length >= P.viewsPerFamily) break;
             const sides = picked.filter(p => p.clusterId === c.clusterId).map(p => p.sideDeg);

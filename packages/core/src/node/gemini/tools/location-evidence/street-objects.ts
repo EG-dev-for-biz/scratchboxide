@@ -67,7 +67,7 @@ export const STREET_OBJECTS_TOOL_DECLARATION: ToolDeclaration = {
             lng: { type: 'NUMBER', description: 'Longitude of the build\'s anchor.' },
             maxFamilies: { type: 'NUMBER', description: 'At most this many families, the largest first (default: all).' },
             only: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Only these families (report ids such as "row/12" or "one/40") or cluster ids.' },
-            maxImages: { type: 'NUMBER', description: 'The image budget for the district (default 160).' },
+            maxImages: { type: 'NUMBER', description: 'The image budget for the district (default 400).' },
             overlays: { type: 'BOOLEAN', description: 'Write per checked view a PNG of the tile\'s own render at the view\'s registered pose with three outlines: what Street View showed of the object (green), the scan\'s blob (red), the rebuild (cyan). No photo pixel is written. Default true.' }
         },
         required: ['auditJson', 'scanGlb', 'tileGlb', 'lat', 'lng']

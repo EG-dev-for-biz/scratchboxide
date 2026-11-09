@@ -26,7 +26,8 @@ import { combineProfiles, heightOnAxis, meridianOf, profileFromSilhouette, type 
 import { cleanBands, offAxisRuns, planHeadingOf, srgbToLinear, streetObjectSpec } from '../src/node/3d-engine/staged-location/street-objects/object-spec';
 import { validateObjectBuildSpec } from '../src/common/spatial/object-build-spec';
 import type { FrameCamera } from '../src/node/spatial/StreetViewPoseRegistrar';
-import { aimAt } from '../src/node/3d-engine/staged-location/street-objects/see';
+import { aimAt, clearShare, planFamilyViews } from '../src/node/3d-engine/staged-location/street-objects/see';
+import type { StreetObjectFamily } from '../src/node/3d-engine/staged-location/street-objects/families';
 import { maskFromReply, parseFamilyReading } from '../src/node/3d-engine/staged-location/street-objects/read';
 import { iou, judgeFamily } from '../src/node/3d-engine/staged-location/street-objects/check';
 import { heightFromPhotos, instancedLayer } from '../src/node/3d-engine/staged-location/street-objects/run';
@@ -498,5 +499,48 @@ describe('the height: the scan\'s unless the photos outweigh it', () => {
         expect(heightFromPhotos([p(0.9)], [false])).toBeUndefined();
         expect(heightFromPhotos([p(1.21, 1.48), p(1.2, 1.48)], [false, false])).toBeUndefined();
         expect(heightFromPhotos([p(1.3, 1.48)], [true])).toBeDefined();
+    });
+});
+
+describe('which views the scan says are clear, and the image budget', () => {
+    /** A closed box as a triangle soup (x, y, z per corner), its foot at `foot`. */
+    const box = (foot: [number, number, number], w: number, h: number, d: number): Float32Array => {
+        const [x0, y0, z0] = [foot[0] - w / 2, foot[1], foot[2] - d / 2], [x1, y1, z1] = [foot[0] + w / 2, foot[1] + h, foot[2] + d / 2];
+        const c = [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]];
+        const f = [[0, 1, 2], [0, 2, 3], [4, 6, 5], [4, 7, 6], [0, 4, 5], [0, 5, 1], [3, 2, 6], [3, 6, 7], [0, 3, 7], [0, 7, 4], [1, 5, 6], [1, 6, 2]];
+        return Float32Array.from(f.flatMap(t => t.flatMap(i => c[i])));
+    };
+    const soupMesh = (...soups: Float32Array[]) => {
+        const v = Float32Array.from(soups.flatMap(s => [...s]));
+        return { vertices: v, indices: Uint32Array.from({ length: v.length / 3 }, (_, i) => i) };
+    };
+    const ground = box([0, -0.1, -10], 60, 0.1, 60);
+
+    it('sees a deep object whole when nothing stands in front of it (its far side is hidden by itself, not blocked)', () => {
+        const post = box([0, 0, -10], 0.6, 1.2, 2);
+        const eye: [number, number, number] = [0, 2.5, 0];
+        const aim = aimAt(eye, { foot: [0, 0, -10], heightM: 1.2, planM: [0.6, 2] });
+        expect(clearShare(eye, aim, post, soupMesh(post, ground))).toBeGreaterThan(0.9);
+        // a wall between the camera and the object blocks it
+        const wall = box([0, 0, -5], 4, 4, 0.2);
+        expect(clearShare(eye, aim, post, soupMesh(post, ground, wall))).toBeLessThan(0.1);
+    });
+
+    it('spends the image budget on panos already registered when their views are nearly as good', () => {
+        const member = (clusterId: number, x: number) => ({ clusterId, foot: [x, 0, -10], heightM: 1.2, planM: [0.4, 0.4], planHeadingDeg: 0, triangles: 12, radialSymmetry: 1, radiusMedianM: 0.2 });
+        const fam = (id: string, m: ReturnType<typeof member>, h: number) => ({ id, members: [m], heightM: h, planM: [0.4, 0.4], reason: 'test' }) as unknown as StreetObjectFamily;
+        const a = member(1, 0), b = member(2, 6);
+        const families = [fam('one/1', a, 1.4), fam('one/2', b, 1.2)];
+        const panos = [{ panoId: 'A', lat: 0, lng: 0, x: 0, z: 0 }, { panoId: 'B', lat: 0, lng: 0, x: 6, z: -1 }];
+        const pa = box([0, 0, -10], 0.4, 1.2, 0.4), pb = box([6, 0, -10], 0.4, 1.2, 0.4);
+        const input = { families, panos, groundAt: () => 0, tileMesh: soupMesh(pa, pb, ground), memberPoints: new Map([[1, pa], [2, pb]]) };
+        const reused = planFamilyViews(input);
+        expect(reused.families.map(f => f.views[0]?.panoId)).toEqual(['A', 'A']);
+        expect(reused.context.length).toBe(1);
+        expect(reused.images).toBe(3);
+        // without the preference, the second family takes its own nearer pano and a second wide view
+        const own = planFamilyViews({ ...input, params: { reusedPanoBonus: 1 } });
+        expect(own.families.map(f => f.views[0]?.panoId)).toEqual(['A', 'B']);
+        expect(own.context.length).toBe(2);
     });
 });

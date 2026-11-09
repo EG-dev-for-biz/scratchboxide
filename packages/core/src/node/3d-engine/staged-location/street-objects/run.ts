@@ -54,10 +54,10 @@ import { encodePng } from '../png-encode';
 /* eslint-disable @typescript-eslint/no-explicit-any -- glTF JSON is untyped */
 
 /**
- * The registration's time: three times the staged build's (90 s edges, 120 s joint). Narrow views of street objects give
+ * The registration's time: three times the staged build's edge search (90 s) and five times its joint fit (120 s). Narrow views of street objects give
  * the edge search little to hold, and a loaded machine ran the joint fit out of its own budget (Penn, 2026-11-03).
  */
-export const REGISTRATION_BUDGET_MS = { edges: 270_000, joint: 360_000 };
+export const REGISTRATION_BUDGET_MS = { edges: 270_000, joint: 600_000 };
 
 /** One batch of grounding fetches (12 views, each with its own limit) ends after this, whatever it waits on. */
 export const FETCH_BATCH_LIMIT_MS = 180_000;
@@ -377,6 +377,24 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
         if (!got) { for (const v of batch) fetchErrors.set(v, `the grounding service did not answer in ${FETCH_BATCH_LIMIT_MS / 1000} s (its token or the API)`); continue; }
         for (const im of got.images) images.set(im.view as PlannedView, im);
         for (const f of got.failures) fetchErrors.set(f.view as PlannedView, f.error);
+    }
+    // a view whose fetch timed out is asked for once more, after the rest (at Penn, 2026-11-08, 43 of 160 timed out at 30 s
+    // while the service was busy, a quarter of the district's evidence)
+    const retry = all.filter(v => /timed out|did not answer/i.test(fetchErrors.get(v) ?? ''));
+    if (retry.length) {
+        progress(`asking again for ${retry.length} views whose fetch timed out`);
+        for (let i = 0; i < retry.length; i += 6) {
+            const batch = retry.slice(i, i + 6);
+            const own = new AbortController();
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            const got = await Promise.race([
+                fetchViews(batch, input.streetView, input.signal ? AbortSignal.any([input.signal, own.signal]) : own.signal),
+                new Promise<undefined>(resolve => { timer = setTimeout(() => { own.abort(new Error('batch timed out')); resolve(undefined); }, FETCH_BATCH_LIMIT_MS); })
+            ]).finally(() => clearTimeout(timer));
+            if (!got) continue;
+            for (const im of got.images) { images.set(im.view as PlannedView, im); fetchErrors.delete(im.view as PlannedView); }
+            for (const f of got.failures) fetchErrors.set(f.view as PlannedView, `${f.error} (asked twice)`);
+        }
     }
     let reg: PanoRegistrationOutcome | undefined;
     if (images.size) {
