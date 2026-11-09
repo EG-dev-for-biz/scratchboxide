@@ -831,6 +831,8 @@ export interface FacadeReaderFile {
     brief?: (BuildingBrief & { cells: number }) | { failed: string };
     /** Every plane's calls and the brief's: made to the model, and answers given back from the store instead. */
     calls?: CallTally;
+    /** Planes whose reading was taken from an earlier reading of the same building, not read again (readPlanes opts.reuse). */
+    reusedPlanes?: number;
 }
 
 export const FACADE_READER_FILE = 'facade_reader.json';
@@ -853,7 +855,7 @@ function callLimiter(n: number): <T>(fn: () => Promise<T>) => Promise<T> {
  * returned as it is. The judged overlays are kept in facade_reader/ for review. With `readings`, every answer is kept
  * in that store and a question asked before about the same photo is answered from it (readFacade).
  */
-export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { signal?: AbortSignal; params?: FacadeReaderParams; progress?: (m: string) => void; /** The building the request named, told to the brief and every reading. */ building?: NamedBuilding; /** Where answers are kept between builds, and the model they are asked of (model-readings.ts). */ readings?: { store: ModelReadingStore; model: string }; /** A plane's key in the store in place of its own pixels' (planePixelsKey): the twin reader keys a facade by its straightened photo, which is the same build to build while the harmonised texture drifts (twin-reader.ts). None: the pixels'. */ planeKey?: (f: { facadeId: number; image: string }) => string | undefined } = {}): Promise<{ records: FacadeReaderFile; cached: boolean }> {
+export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { signal?: AbortSignal; params?: FacadeReaderParams; progress?: (m: string) => void; /** The building the request named, told to the brief and every reading. */ building?: NamedBuilding; /** Where answers are kept between builds, and the model they are asked of (model-readings.ts). */ readings?: { store: ModelReadingStore; model: string }; /** A plane's key in the store in place of its own pixels' (planePixelsKey): the twin reader keys a facade by its straightened photo, which is the same build to build while the harmonised texture drifts (twin-reader.ts). None: the pixels'. */ planeKey?: (f: { facadeId: number; image: string }) => string | undefined; /** Planes whose reading is taken as it is from an earlier reading of the same building (the first pass's, for the facades the ownership vote left unchanged: facade-reuse.ts), with its brief: they are not read again and no brief is asked for. */ reuse?: { file: FacadeReaderFile; ids: ReadonlySet<number> } } = {}): Promise<{ records: FacadeReaderFile; cached: boolean }> {
     const P = opts.params ?? FACADE_READER_PARAMS;
     const recFile = path.join(orthosDir, FACADE_READER_FILE);
     if (fs.existsSync(recFile)) {
@@ -875,28 +877,47 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
     const reviewDir = path.join(orthosDir, 'facade_reader');
     fs.mkdirSync(reviewDir, { recursive: true });
     const records: FacadeReadRecord[] = [], readings: PlaneReading[] = [];
+    // the planes taken from an earlier reading: their records and readings as they were
+    const reusedIds = new Set<number>();
+    if (opts.reuse) for (const f of frames) {
+        const rec = opts.reuse.ids.has(f.facadeId) ? opts.reuse.file.facades.find(r => r.facadeId === f.facadeId) : undefined;
+        if (!rec) continue;
+        reusedIds.add(f.facadeId);
+        // asked of nobody this time: its calls were counted where it was read
+        records.push({ ...structuredClone(rec), calls: 0, reused: 0 });
+        const rd = opts.reuse.file.readings.find(r => r.facadeId === f.facadeId);
+        if (rd) readings.push(structuredClone(rd));
+    }
     // the wide walls first, then the narrow faces (a tower's window columns, where the model tends to skip storeys) and the
     // roofs. Every plane's calls go out as soon as it opens, under one limit on the calls in flight; a narrow wall's tiling
     // waits for the storey pitch the wide walls were read at (their drawn zones' median, by openings), a roof's for nothing
     const wide = (f: FacadeFrame) => f.kind !== 'roof' && f.width * f.pixel >= P.minWidthM;
-    const queue = [...frames.filter(wide), ...frames.filter(f => !wide(f))];
-    const wideIds = new Set(queue.filter(wide).map(f => f.facadeId));
-    let wideLeft = wideIds.size, guide: { pitchM: number } | undefined, settleGuide!: (g: { pitchM: number } | undefined) => void;
+    const toRead = frames.filter(f => !reusedIds.has(f.facadeId));
+    const queue = [...toRead.filter(wide), ...toRead.filter(f => !wide(f))];
+    const wideIds = new Set(frames.filter(wide).map(f => f.facadeId));
+    let wideLeft = queue.filter(wide).length, guide: { pitchM: number } | undefined, settleGuide!: (g: { pitchM: number } | undefined) => void;
     const guideRead = new Promise<{ pitchM: number } | undefined>(resolve => { settleGuide = resolve; });
     const wideDone = () => {
         if (--wideLeft > 0) return;
+        settleWide();
+    };
+    const settleWide = () => {
         const pitches: Array<[number, number]> = records.filter(r => wideIds.has(r.facadeId)).flatMap(r => (r.zones ?? []).filter(z => z.outcome === 'drawn' && z.fit && z.fit.rows > 1 && z.fit.pitchM > 0).map(z => [z.fit!.pitchM, z.fit!.openings] as [number, number])).sort((a, b) => a[0] - b[0]);
         if (pitches.length) { const half = pitches.reduce((a, p) => a + p[1], 0) / 2; let acc = 0; for (const [m, w] of pitches) { acc += w; if (acc >= half) { guide = { pitchM: m }; break; } } }
         settleGuide(guide);
     };
-    if (!wideLeft) settleGuide(undefined);
+    if (!wideLeft) settleWide();
     const limited: FacadeAsk = (() => { const slot = callLimiter(P.concurrency); return (png, prompt, kind, region, regions) => slot(() => ask(png, prompt, kind, region, regions)); })();
     // the building brief: the largest planes on one contact sheet, read as one building and grouped into families
     // (facade-reader-brief.ts); every reading is told it, its plane's family and where its plane stands
     const places = planePlaces(frames);
     let brief: BuildingBrief | undefined, briefNote: FacadeReaderFile['brief'];
     const briefCalls: CallTally = { calls: 0, reused: 0 };
-    if (P.brief && frames.length > 1) {
+    const reusedBrief = opts.reuse?.file.brief;
+    if (opts.reuse && reusedBrief) {
+        briefNote = reusedBrief;
+        if (!('failed' in reusedBrief)) { const { cells: _cells, ...b } = reusedBrief; brief = b as BuildingBrief; }
+    } else if (P.brief && frames.length > 1) {
         try {
             const sheet = await contactSheet(orthosDir, frames);
             fs.writeFileSync(path.join(reviewDir, 'brief_sheet.png'), sheet.png);
@@ -965,7 +986,7 @@ export async function readPlanes(orthosDir: string, ask: FacadeAsk, opts: { sign
     records.sort((a, b) => a.facadeId - b.facadeId);
     readings.sort((a, b) => a.facadeId - b.facadeId);
     const calls: CallTally = { calls: briefCalls.calls + records.reduce((a, r) => a + (r.calls ?? 0), 0), reused: briefCalls.reused + records.reduce((a, r) => a + (r.reused ?? 0), 0) };
-    const file: FacadeReaderFile = { version: FACADE_READER_VERSION, params: P, ms: Date.now() - t0, facades: records, unread, readings, ...(guide ? { guide } : {}), ...(briefNote ? { brief: briefNote } : {}), calls };
+    const file: FacadeReaderFile = { version: FACADE_READER_VERSION, params: P, ms: Date.now() - t0, facades: records, unread, readings, ...(guide ? { guide } : {}), ...(briefNote ? { brief: briefNote } : {}), calls, ...(reusedIds.size ? { reusedPlanes: reusedIds.size } : {}) };
     fs.writeFileSync(recFile, JSON.stringify(file));
     return { records: file, cached: false };
 }

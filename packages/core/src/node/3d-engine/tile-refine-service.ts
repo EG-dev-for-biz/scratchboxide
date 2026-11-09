@@ -148,6 +148,16 @@ export interface TileRefineResult {
     binary: { path: string; built: boolean; buildMs?: number; warning?: string };
 }
 
+/** An isolate-only run (TileRefineService.isolate): the isolated raw scan as clay, and the vote of every kept triangle when voted. */
+export interface TileRefineIsolate {
+    rawClayGlb: string;
+    ownershipVotes?: string;
+    stats: Record<string, any>;
+    cacheKey: string;
+    cached: boolean;
+    ms: number;
+}
+
 export type TileRefineErrorCode = 'bad_request' | 'not_found' | 'timeout' | 'failed' | 'build_failed';
 
 export class TileRefineError extends Error {
@@ -454,6 +464,45 @@ export class TileRefineService {
             if (!fs.existsSync(path.join(dir, 'done.json'))) throw err;
         }
         return { dir, views: list(), cached: false, ms: Date.now() - t0 };
+    }
+
+    /**
+     * The isolate alone (with its ownership vote, when the request has masks): tile_refine writes the isolated raw scan as
+     * clay and stops, no remesh, relief or outputs (a few seconds against a whole refine). The staged build judges an
+     * ownership vote on it and refines only a vote that changes the structure materially. Cached by the tile, the request
+     * and the binary; the raw clay is byte for byte the one a whole refine of the same request writes.
+     */
+    async isolate(req: TileRefineRequest): Promise<TileRefineIsolate> {
+        const t0 = Date.now();
+        const { input, cliArgs, keyParams } = this.resolveRequest({ ...req, isolate: req.isolate ?? true });
+        const binary = await this.ensureBinary();
+        const hash = crypto.createHash('sha256').update(CACHE_VERSION).update('\0isolate-only\0').update(this.hashBinary(binary.path)).update('\0');
+        sha256File(input, hash);
+        hash.update('\0').update(JSON.stringify(keyParams));
+        const key = hash.digest('hex');
+        const dir = path.join(this.cacheDir, `isolate_${key}`);
+        const result = (cached: boolean): TileRefineIsolate => {
+            const votes = path.join(dir, 'ownership.sbov');
+            return { rawClayGlb: path.join(dir, 'raw_clay.glb'), ...(fs.existsSync(votes) ? { ownershipVotes: votes } : {}), stats: JSON.parse(fs.readFileSync(path.join(dir, 'stats.json'), 'utf8')), cacheKey: key, cached, ms: Date.now() - t0 };
+        };
+        if (fs.existsSync(path.join(dir, 'done.json'))) return result(true);
+        fs.mkdirSync(this.cacheDir, { recursive: true });
+        const tmp = `${dir}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+        fs.mkdirSync(tmp, { recursive: true });
+        try {
+            const args = ['--input', input, '--isolate-only', '--out-raw-clay', path.join(tmp, 'raw_clay.glb'), '--stats', path.join(tmp, 'stats.json'), ...cliArgs];
+            if (keyParams.ownership) args.push('--ownership-out', path.join(tmp, 'ownership.sbov'));
+            await runFile(binary.path, args, req.timeoutMs ?? this.defaultTimeoutMs);
+            for (const f of ['raw_clay.glb', 'stats.json']) if (!fs.existsSync(path.join(tmp, f))) throw new TileRefineError('failed', `tile_refine (isolate only) did not write ${f}`);
+            fs.writeFileSync(path.join(tmp, 'done.json'), JSON.stringify({ input, cliArgs, at: new Date().toISOString() }));
+            fs.rmSync(dir, { recursive: true, force: true });
+            fs.renameSync(tmp, dir);
+        } catch (err) {
+            fs.rmSync(tmp, { recursive: true, force: true });
+            if (!fs.existsSync(path.join(dir, 'done.json'))) throw err;
+            return result(true);
+        }
+        return result(false);
     }
 
     private entryResult(dir: string, key: string, cached: boolean, binary: TileRefineResult['binary']): TileRefineResult {
