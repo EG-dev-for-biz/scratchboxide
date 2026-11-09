@@ -251,8 +251,9 @@ export interface CloudChunkConfig {
      */
     serviceRegions?: string[];
     /**
-     * SCRATCHBOX_KD_CLOUD_VMS (comma list) in SCRATCHBOX_KD_CLOUD_VM_ZONE (default us-central1-a): Compute Engine VMs kept
-     * suspended, the fast VMs (VmPoolJobs) the largest chunks are built on (the orchestrator marks them, kdFastChunks).
+     * SCRATCHBOX_KD_CLOUD_VMS (comma list, each `name` or `name@zone`; the zone default SCRATCHBOX_KD_CLOUD_VM_ZONE, else
+     * us-central1-a): Compute Engine VMs kept suspended, the fast VMs (VmPoolJobs) the largest chunks are built on (the
+     * orchestrator marks them, kdFastChunks). One zone ran out of C3s at 16 (2026-11-09): spread them over several.
      */
     vms?: string[];
     vmZone?: string;
@@ -273,7 +274,7 @@ export function cloudChunkConfig(env: NodeJS.ProcessEnv = process.env): CloudChu
         downloadAttempts: 4,
         ...(env.SCRATCHBOX_KD_CLOUD_SERVICE?.trim() ? { service: env.SCRATCHBOX_KD_CLOUD_SERVICE.trim() } : {}),
         ...((r => r.length ? { serviceRegions: r } : {})((env.SCRATCHBOX_KD_CLOUD_SERVICE_REGIONS ?? '').split(',').map(x => x.trim()).filter(x => /^[a-z]+-[a-z]+\d+$/.test(x)))),
-        ...((v => v.length ? { vms: v, vmZone: env.SCRATCHBOX_KD_CLOUD_VM_ZONE?.trim() || 'us-central1-a' } : {})((env.SCRATCHBOX_KD_CLOUD_VMS ?? '').split(',').map(x => x.trim()).filter(x => /^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$/.test(x))))
+        ...((v => v.length ? { vms: v, vmZone: env.SCRATCHBOX_KD_CLOUD_VM_ZONE?.trim() || 'us-central1-a' } : {})((env.SCRATCHBOX_KD_CLOUD_VMS ?? '').split(',').map(x => x.trim()).filter(x => /^[a-z]([-a-z0-9]{0,61}[a-z0-9])?(@[a-z]+-[a-z]+\d+-[a-z])?$/.test(x))))
     };
 }
 
@@ -655,8 +656,9 @@ export class CloudRunServiceJobs implements CloudRunJobs {
 }
 
 /** The keys of a VM's assignment and its answer in the job bucket (kd-chunk-job.ts --poll reads and writes them). */
-export function kdVmKeys(vm: string): { assign: string; done: string } {
-    if (!/^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$/.test(vm)) throw new Error(`not a VM name: ${vm}`);
+export function kdVmKeys(vmIn: string): { assign: string; done: string } {
+    const vm = vmIn.split('@')[0];
+    if (!/^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$/.test(vm)) throw new Error(`not a VM name: ${vmIn}`);
     return { assign: `kd-vm/${vm}/assign.json`, done: `kd-vm/${vm}/done.json` };
 }
 
@@ -696,12 +698,13 @@ export class VmPoolJobs implements CloudRunJobs {
         let authOptions: Record<string, unknown> = {};
         try { authOptions = ((await new GoogleMediaCredentialsService().getVertexAuth()).googleAuthOptions ?? {}) as Record<string, unknown>; } catch { /* application default credentials */ }
         const client = await new GoogleAuth({ ...authOptions, scopes: ['https://www.googleapis.com/auth/cloud-platform'] }).getClient();
-        const base = `https://compute.googleapis.com/compute/v1/projects/${config.project}/zones/${config.vmZone ?? 'us-central1-a'}/instances`;
-        const get = async (vm: string) => (await client.request<{ status?: string; metadata?: { items?: Array<{ key: string; value?: string }> } }>({ url: `${base}/${vm}`, method: 'GET' })).data;
+        // a VM is `name` (in the default zone) or `name@zone`
+        const at = (vm: string) => { const [name, zone] = vm.split('@'); return `https://compute.googleapis.com/compute/v1/projects/${config.project}/zones/${zone || config.vmZone || 'us-central1-a'}/instances/${name}`; };
+        const get = async (vm: string) => (await client.request<{ status?: string; metadata?: { items?: Array<{ key: string; value?: string }> } }>({ url: at(vm), method: 'GET' })).data;
         const compute: ComputeVms = {
             status: async vm => (await get(vm)).status ?? 'UNKNOWN',
-            resume: async vm => { await client.request({ url: `${base}/${vm}/resume`, method: 'POST' }); },
-            suspend: async vm => { await client.request({ url: `${base}/${vm}/suspend`, method: 'POST' }); },
+            resume: async vm => { await client.request({ url: `${at(vm)}/resume`, method: 'POST' }); },
+            suspend: async vm => { await client.request({ url: `${at(vm)}/suspend`, method: 'POST' }); },
             image: async vm => (await get(vm)).metadata?.items?.find(i => i.key === 'kd-image')?.value
         };
         return new VmPoolJobs(config.vms ?? [], compute, bucket, workDir, log);

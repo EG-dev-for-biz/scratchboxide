@@ -14,9 +14,10 @@ set -euo pipefail
 #                                         0 instances between districts, one chunk an instance, as the app's account
 #                                         (SERVICE, MAX_INSTANCES; the runner's SCRATCHBOX_KD_CLOUD_SERVICE names it)
 #   deploy/kd-chunk-job/deploy.sh vms     the fast VMs: COUNT (default 6) Compute Engine VMs kd-fast-1.. (MACHINE, default
-#                                         c3-standard-8; ZONE, default us-central1-a) running the image's --poll worker, each
-#                                         suspended once its worker is ready (the runner's SCRATCHBOX_KD_CLOUD_VMS names
-#                                         them, SCRATCHBOX_KD_FAST_CHUNKS sets how many chunks go there)
+#                                         c3-standard-8) running the image's --poll worker, spread over ZONES (default
+#                                         us-central1-a,b,c,f: one zone ran out of C3s at 16), each suspended once its worker
+#                                         is ready; a name that exists is kept (the runner's SCRATCHBOX_KD_CLOUD_VMS names
+#                                         them as name@zone, SCRATCHBOX_KD_FAST_CHUNKS sets how many chunks go there)
 #   deploy/kd-chunk-job/deploy.sh vms-delete  every kd-fast-* VM deleted
 #
 # Needs your own `gcloud auth login`. Every step creates or changes billed resources in the project.
@@ -151,7 +152,7 @@ service() {
 # image's own files, as a job task does), and is suspended between districts (billed for its disk and kept memory only).
 vms() {
   local app; app="$(app_sa)"
-  local count="${COUNT:-6}" machine="${MACHINE:-c3-standard-8}" zone="${ZONE:-us-central1-a}"
+  local count="${COUNT:-6}" machine="${MACHINE:-c3-standard-8}" zones="${ZONES:-us-central1-a,us-central1-b,us-central1-c,us-central1-f}"
   [ -n "${GOOGLE_MAPS_API_KEY:-}" ] || { echo "set GOOGLE_MAPS_API_KEY"; exit 1; }
   local work; work="$(mktemp -d)"; chmod 700 "$work"
   printf 'GOOGLE_CLOUD_PROJECT=%s\nSCRATCHBOX_GOOGLE_ADC=1\nGOOGLE_MAPS_API_KEY=%s\nSCRATCHBOX_TRAINING_BUCKET=%s\nSCRATCHBOX_STORE_BUCKET=off\nSCRATCHBOX_CPUS=8\nSCRATCHBOX_TEXTURE_WORKERS=7\nSCRATCHBOX_KD_CHUNK_JOB=1\nKD_VM_BUCKET=%s\n' \
@@ -166,27 +167,43 @@ docker-credential-gcr configure-docker --registries "${IMAGE%%/*}"
 docker pull "$IMAGE"
 nohup bash -c "while true; do docker run --rm --name kd --env-file /var/tmp/kd.env $IMAGE node --max-old-space-size=28672 -r ts-node/register packages/core/src/node/3d-engine/staged-location/kd-chunk-job.js --poll 2>&1 | logger -t kd-vm; sleep 1; done" >/dev/null 2>&1 &
 EOS
-  local names=()
-  for i in $(seq 1 "$count"); do names+=("kd-fast-$i"); "${G[@]}" storage rm "gs://$JOB_BUCKET/kd-vm/kd-fast-$i/**" >/dev/null 2>&1 || true; done
-  echo "[vms] ${names[*]}: $machine in $zone, $IMAGE"
-  "${G[@]}" compute instances create "${names[@]}" --zone "$zone" --machine-type "$machine" --image-family cos-stable --image-project cos-cloud \
-    --boot-disk-size 20GB --boot-disk-type pd-balanced --service-account "$app" --scopes cloud-platform \
-    --metadata "kd-image=$IMAGE" --metadata-from-file "startup-script=$work/startup.sh,kd-env=$work/kd.env" >/dev/null
+  # the VMs already there, name@zone; each missing name made in the next zone with room (a zone out of C3s is passed over)
+  local existing; existing="$("${G[@]}" compute instances list --filter="name~^kd-fast-" --format="value(name,zone.basename())" | awk '{print $1"@"$2}')"
+  local made=() all=() z
+  IFS=, read -r -a zl <<< "$zones"
+  local zi=0
+  for i in $(seq 1 "$count"); do
+    local n="kd-fast-$i" have
+    have="$(printf '%s\n' "$existing" | grep -m1 "^$n@" || true)"
+    if [ -n "$have" ]; then all+=("$have"); continue; fi
+    "${G[@]}" storage rm "gs://$JOB_BUCKET/kd-vm/$n/**" >/dev/null 2>&1 || true
+    local ok=""
+    for t in $(seq 0 $(( ${#zl[@]} - 1 ))); do
+      z="${zl[$(( (zi + t) % ${#zl[@]} ))]}"
+      if "${G[@]}" compute instances create "$n" --zone "$z" --machine-type "$machine" --image-family cos-stable --image-project cos-cloud \
+        --boot-disk-size 20GB --boot-disk-type pd-balanced --service-account "$app" --scopes cloud-platform \
+        --metadata "kd-image=$IMAGE,google-logging-enabled=true" --metadata-from-file "startup-script=$work/startup.sh,kd-env=$work/kd.env" >/dev/null 2>&1; then
+        ok="$z"; zi=$(( (zi + t + 1) % ${#zl[@]} )); break
+      fi
+    done
+    [ -n "$ok" ] || { echo "[vms] $n: no zone in $zones had room"; continue; }
+    echo "[vms] $n: $machine in $ok"
+    made+=("$n@$ok"); all+=("$n@$ok")
+  done
   rm -rf "$work"
-  for n in "${names[@]}"; do
+  for v in "${made[@]}"; do
+    local n="${v%@*}" z="${v#*@}"
     until "${G[@]}" storage ls "gs://$JOB_BUCKET/kd-vm/$n/ready.json" >/dev/null 2>&1; do sleep 5; done
     echo "[vms] $n ready: suspending"
-    "${G[@]}" compute instances suspend "$n" --zone "$zone" --async >/dev/null
+    "${G[@]}" compute instances suspend "$n" --zone "$z" --async >/dev/null
   done
-  echo "[vms] done: SCRATCHBOX_KD_CLOUD_VMS=$(IFS=,; echo "${names[*]}") SCRATCHBOX_KD_FAST_CHUNKS=$count"
+  echo "[vms] done: SCRATCHBOX_KD_CLOUD_VMS=$(IFS=,; echo "${all[*]}") SCRATCHBOX_KD_FAST_CHUNKS=${#all[@]}"
 }
 
 vms_delete() {
-  local zone="${ZONE:-us-central1-a}"
-  local names; names="$("${G[@]}" compute instances list --filter="name~^kd-fast-" --format="value(name)")"
-  [ -n "$names" ] || { echo "[vms-delete] none"; return; }
-  # shellcheck disable=SC2086
-  "${G[@]}" compute instances delete $names --zone "$zone"
+  local rows; rows="$("${G[@]}" compute instances list --filter="name~^kd-fast-" --format="value(name,zone.basename())")"
+  [ -n "$rows" ] || { echo "[vms-delete] none"; return; }
+  while read -r n z; do "${G[@]}" compute instances delete "$n" --zone "$z" --async >/dev/null && echo "[vms-delete] $n ($z)"; done <<< "$rows"
 }
 
 JOB_ID="${JOB_SA%%@*}"

@@ -326,6 +326,9 @@ describe('pipeline K-D cloud chunk runner', () => {
         await expect(mixed.jobImage()).rejects.toThrow(/one image/);
         expect(cloudChunkConfig({ SCRATCHBOX_KD_CLOUD_VMS: 'kd-fast-1,kd-fast-2, Bad_Name' })).toMatchObject({ vms: ['kd-fast-1', 'kd-fast-2'], vmZone: 'us-central1-a' });
         expect(() => kdVmKeys('../x')).toThrow();
+        // a VM in another zone: name@zone; its keys are the name's
+        expect(cloudChunkConfig({ SCRATCHBOX_KD_CLOUD_VMS: 'kd-fast-1@us-central1-b,kd-fast-2' }).vms).toEqual(['kd-fast-1@us-central1-b', 'kd-fast-2']);
+        expect(kdVmKeys('kd-fast-1@us-central1-b')).toEqual({ assign: 'kd-vm/kd-fast-1/assign.json', done: 'kd-vm/kd-fast-1/done.json' });
     });
 
     it('sends a chunk to the pool again while it scales (503, 429, a dropped connection), never failing it for that', async () => {
