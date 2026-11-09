@@ -73,6 +73,7 @@ export const STREET_OBJECTS_TOOL_DECLARATION: ToolDeclaration = {
             maxFamilies: { type: 'NUMBER', description: 'At most this many families, the largest first (default: all).' },
             only: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Only these families (report ids such as "row/12" or "one/40") or cluster ids.' },
             maxImages: { type: 'NUMBER', description: 'The image budget for the district (default 400).' },
+            freshRead: { type: 'BOOLEAN', description: 'Ask the model again for the cheap read, past the readings store and the reply cache, and keep nothing (to measure how far two reads agree). Default false.' },
             streetView: { type: 'BOOLEAN', description: 'Ask Street View for the blobs the cheap read (scan measures, map, tile photo) leaves unsure (default true). False: the cheap read only.' },
             overlays: { type: 'BOOLEAN', description: 'Write per checked view a PNG of the tile\'s own render at the view\'s registered pose with three outlines: what Street View showed of the object (green), the scan\'s blob (red), the rebuild (cyan). No photo pixel is written. Default true.' }
         },
@@ -98,7 +99,7 @@ export const streetObjectsHandler: ToolHandler = async (args, ctx): Promise<Tool
         if (!vision) throw new StreetObjectsToolError('no_vision', 'no vision model is configured: the objects cannot be read from Street View');
         const chain = new VisionModelChain<string>({ client: vision.client, candidates: vision.candidates, signal: ctx.signal, hedgeAfterMs: VISION_HEDGE_AFTER_MS, replyCache: stagedReplyCache(deps.cache) });
         const asked = Array.isArray(args.only) ? (args.only as unknown[]).map(String).map(x => (/^\d+$/.test(x) ? Number(x) : x)) : undefined;
-        const key = crypto.createHash('sha256').update(JSON.stringify([files, lat, lng, asked ?? null, args.maxFamilies ?? null, args.maxImages ?? null, args.streetView ?? true])).digest('hex').slice(0, 12);
+        const key = crypto.createHash('sha256').update(JSON.stringify([files, lat, lng, asked ?? null, args.maxFamilies ?? null, args.maxImages ?? null, args.streetView ?? true, args.freshRead === true])).digest('hex').slice(0, 12);
         const outDir = path.join(ctx.workspaceRoot, STREET_OBJECTS_DIR, key);
         fs.mkdirSync(outDir, { recursive: true });
         // 1. every blob read from the cheap evidence first (blob-reader.ts): the scan's measures, the map, the tile's own photo
@@ -106,9 +107,12 @@ export const streetObjectsHandler: ToolHandler = async (args, ctx): Promise<Tool
         const radiusM = Math.max(30, ...audit.clusters.map(c => Math.hypot((c.lo[0] + c.hi[0]) / 2, (c.lo[2] + c.hi[2]) / 2))) + 30;
         const vector = await deps.vectorEvidence({ lat, lng, radiusM });
         const look = evidenceLookup(vector, radiusM);
-        const store = fileReadingStore(modelReadingsDir(deps.cache.dir));
+        // freshRead: the model asked again, past the readings store and the reply cache (to measure how far two reads agree)
+        const fresh = args.freshRead === true;
+        const store = fresh ? undefined : fileReadingStore(modelReadingsDir(deps.cache.dir));
+        const blobChain = fresh ? new VisionModelChain<string>({ client: vision.client, candidates: vision.candidates, signal: ctx.signal, hedgeAfterMs: VISION_HEDGE_AFTER_MS }) : chain;
         const blobs: BlobReadReport = await readBlobs({
-            audit, look, vector, tile: readTileTriangles(fs.readFileSync(files.tile)), vision: chain, store,
+            audit, look, vector, tile: readTileTriangles(fs.readFileSync(files.tile)), vision: blobChain, ...(store ? { store } : {}),
             onSheet: (i, jpeg) => fs.writeFileSync(path.join(outDir, `blob_sheet_${String(i).padStart(3, '0')}.jpg`), jpeg),
             ...(ctx.signal ? { signal: ctx.signal } : {}), onProgress: m => ctx.reportProgress?.(m)
         });

@@ -73,6 +73,21 @@
     * The eye-level renders still often stand inside scan geometry.
     * The joint registration never ran: scoring 22 panos' start poses against the whole district tile took its whole 600 s budget. This is fixed separately in PR #202.
   * **Sheet:** `docs/screenshots/street-objects_2026-11-08/penn-street-objects-run2-sheet.jpg`.
+* **Penn, cheap evidence first (MAIN's order, 2026-11-08, commits 989ac31d and 973a15bc, the same audit):**
+  * **The read** (`blob-reader.ts`): the scan's measures, the map and the tile's own photo, on contact sheets of 16 numbered patches with one vision call per sheet. Every answer goes to the model readings store.
+  * **Coverage:**
+    * 1,856 of 4,425 blobs read;
+    * 308 left out as building parts (inside or touching a footprint);
+    * 2,261 left out as the audit's scan artefacts;
+    * 1,638 confident labels and 218 unsure;
+    * 4,207 of 4,425 explained (95.1%); a vision label alone covers 37%.
+  * **Time and calls:** orthophoto 37 s; 116 calls in 10.4 min.
+  * **Stability:**
+    * a rerun reads all 116 sheets back from the store (0 calls), identical;
+    * a fresh read (`freshRead`) against run A agrees 92.3% on confident or unsure and 86.5% on the answer class; both-confident labels share a content word 94.8% of the time; the exact wording matches 21.8%.
+  * **Spot check** by a separate model (3 sheets, 48 blobs): 27 fit, 2 wrong, 19 can't tell.
+  * **Street View only for the unsure** (153 families): 167 images, 56 reads, 7 rebuilt, in 47.5 min all told. The eye-level camera stands on walkable ground: the newsstand reads well from the pavement; a bin is still blocked by a scan spike.
+  * **Sheet:** `docs/screenshots/street-objects_2026-11-08/penn-blobs-cheap-first-sheet.jpg`.
 * **Penn, 8th Ave at the Farley Building (2026-11-04, the user's walk-mode block).**
   * **The build:** staged at 40.7506, -73.9952 (`"query": "40.75060, -73.99520"`, `district: "scan"`, trees on), stopped once its district audit was written. A first build queried as "8th Ave & W 32nd St" geocoded to the 14 St / 8 Av station and was stopped.
   * **The audit:** 951 clusters. The bollard rows come out as rows: 20, 16 and 15 members at about 1.52 m pitch.
