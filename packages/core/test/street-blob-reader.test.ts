@@ -29,7 +29,7 @@ const look = {
     landuseAt: () => undefined
 };
 const audit = {
-    clusters: [cluster(1, 0, 0, 0.3, 0.3, 1.1), cluster(2, 15, 0, 1, 1, 2), cluster(3, 9.8, 0, 1, 1, 2), cluster(4, 0, 8, 2, 4, 1.5), cluster(5, -5, 0, 3, 3, 0.4, 'scan-artefact')],
+    clusters: [cluster(1, 0, 0, 0.3, 0.3, 1.1), cluster(2, 15, 0, 1, 1, 2), cluster(3, 9.8, 0, 1, 1, 2), cluster(4, 0, 8, 2, 4, 1.5), cluster(5, -5, 0, 3, 3, 0.4, 'scan-artefact'), cluster(6, -10, 0, 0.1, 0.1, 0.05)],
     groundY: 0
 } as unknown as ResidualAuditResult;
 
@@ -49,12 +49,14 @@ describe('blobs read from the cheap evidence first', () => {
         expect(by.get(4)!.vector.onCarriageway).toBe(true);
     });
 
-    it('leaves out a building\'s parts (inside or touching a footprint) and the audit\'s scan artefacts, with why', () => {
+    it('leaves out a building\'s parts (inside or touching a footprint), the audit\'s scan artefacts and fragments below the size floor, with why', () => {
         const { read, leftOut } = blobsToRead(blobEvidence(audit, look, vector));
         expect(read.map(e => e.clusterId)).toEqual([1, 4]);
         expect(leftOut.find(o => o.clusterId === 2)!.reason).toMatch(/inside a building footprint/);
         expect(leftOut.find(o => o.clusterId === 3)!.reason).toMatch(/touching a building footprint/);
         expect(leftOut.find(o => o.clusterId === 5)!.reason).toMatch(/scan artefact/);
+        // a 5 cm sliver of 0.06 m2 is below the read's size floor
+        expect(leftOut.find(o => o.clusterId === 6)!.reason).toMatch(/size floor/);
     });
 
     it('draws a numbered contact sheet of patches from the orthophoto, each blob\'s plan box outlined', () => {

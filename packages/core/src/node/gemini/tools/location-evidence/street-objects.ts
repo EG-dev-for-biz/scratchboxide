@@ -27,7 +27,7 @@ import { createStagedLocationDeps } from '../../../3d-engine/staged-location/sta
 import { stagedReplyCache, stagedWorkspaceRoot } from '../../../3d-engine/staged-location/stage-cache';
 import { missingCredentials } from '../../../3d-engine/staged-location/streetview-evidence';
 import { VISION_HEDGE_AFTER_MS } from '../../../3d-engine/staged-location/orchestrator';
-import { rebuildStreetObjects } from '../../../3d-engine/staged-location/street-objects/run';
+import { mergeSoups, rebuildStreetObjects } from '../../../3d-engine/staged-location/street-objects/run';
 import type { ResidualAuditResult } from '../../../3d-engine/staged-location/residual-audit';
 import { VisionModelChain } from '../../vision-model-chain';
 import { BLOB_READ_PARAMS, readBlobs, type BlobReadReport } from '../../../3d-engine/staged-location/street-objects/blob-reader';
@@ -35,6 +35,7 @@ import { BLOB_PATCHES_DIR, BLOB_READ_FILE } from '../../../3d-engine/staged-loca
 import { evidenceLookup } from '../../../3d-engine/staged-location/vector-footprints';
 import { fileReadingStore, modelReadingsDir } from '../../../3d-engine/staged-location/pipeline-k/model-readings';
 import { readTileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
+import { auditMeshes } from '../../../3d-engine/staged-location/street-objects/audit-meshes';
 
 export const STREET_OBJECTS_TOOL_NAME = 'location_street_objects';
 export const STREET_OBJECTS_DIR = path.join('build', 'street-objects');
@@ -75,10 +76,13 @@ export const STREET_OBJECTS_TOOL_DECLARATION: ToolDeclaration = {
             only: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Only these families (report ids such as "row/12" or "one/40") or cluster ids.' },
             maxImages: { type: 'NUMBER', description: 'The image budget for the district (default 400).' },
             freshRead: { type: 'BOOLEAN', description: 'Ask the model again for the cheap read, past the readings store and the reply cache, and keep nothing (to measure how far two reads agree). Default false.' },
+            scanGlbs: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Instead of auditJson and scanGlb: a built district\'s own meshes (a pipeline K-D build\'s remeshed chunk GLBs, in the district\'s frame), audited here chunk by chunk with Google\'s vector data. Street View is not asked for such a read.' },
+            tileGlbs: { type: 'ARRAY', items: { type: 'STRING' }, description: 'With scanGlbs: the textured meshes the blobs are seen on from above (the chunks\' textured GLBs).' },
+            radiusM: { type: 'NUMBER', description: 'With scanGlbs: the radius around lat, lng that Google\'s vector data is read over (default 450 m).' },
             streetView: { type: 'BOOLEAN', description: 'Ask Street View for the blobs the cheap read (scan measures, map, tile photo) leaves unsure (default true). False: the cheap read only.' },
             overlays: { type: 'BOOLEAN', description: 'Write per checked view a PNG of the tile\'s own render at the view\'s registered pose with three outlines: what Street View showed of the object (green), the scan\'s blob (red), the rebuild (cyan). No photo pixel is written. Default true.' }
         },
-        required: ['auditJson', 'scanGlb', 'tileGlb', 'lat', 'lng']
+        required: ['lat', 'lng']
     }
 };
 
@@ -86,12 +90,20 @@ export const streetObjectsHandler: ToolHandler = async (args, ctx): Promise<Tool
     try {
         const s = (k: string) => (typeof args[k] === 'string' ? (args[k] as string).trim() : '');
         const auditJson = s('auditJson'), scanGlb = s('scanGlb'), tileGlb = s('tileGlb');
+        const list = (k: string) => (Array.isArray(args[k]) ? (args[k] as unknown[]).filter((x): x is string => typeof x === 'string' && !!x.trim()).map(x => abs(x.trim(), ctx.workspaceRoot)) : []);
+        const scanGlbs = list('scanGlbs'), tileGlbs = list('tileGlbs');
         const lat = Number(args.lat), lng = Number(args.lng);
-        if (!auditJson || !scanGlb || !tileGlb) throw new StreetObjectsToolError('no_input', 'give auditJson, scanGlb and tileGlb');
+        // either an audit with its scan and tile, or a built district's own meshes (audited here, chunk by chunk)
+        const fromMeshes = !auditJson && scanGlbs.length > 0;
+        // (with auditJson, scanGlb is needed only for Street View: without it the read stops at the cheap evidence)
+        if (!fromMeshes && (!auditJson || (!tileGlb && !tileGlbs.length))) throw new StreetObjectsToolError('no_input', 'give auditJson with tileGlb (and scanGlb for Street View), or scanGlbs and tileGlbs (a built district\'s meshes, audited here)');
+        if (fromMeshes && !tileGlbs.length && !tileGlb) throw new StreetObjectsToolError('no_input', 'give tileGlbs (the textured meshes the blobs are seen on from above) with scanGlbs');
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new StreetObjectsToolError('no_input', 'give lat and lng (the build\'s anchor)');
-        const files = { audit: abs(auditJson, ctx.workspaceRoot), scan: abs(scanGlb, ctx.workspaceRoot), tile: abs(tileGlb, ctx.workspaceRoot) };
-        for (const [k, f] of Object.entries(files)) if (!fs.existsSync(f)) throw new StreetObjectsToolError('not_found', `no ${k} file at ${f}`);
-        const audit = readAudit(files.audit);
+        const files = {
+            ...(auditJson ? { audit: abs(auditJson, ctx.workspaceRoot) } : {}), ...(scanGlb ? { scan: abs(scanGlb, ctx.workspaceRoot) } : {}), ...(tileGlb ? { tile: abs(tileGlb, ctx.workspaceRoot) } : {}),
+            ...(scanGlbs.length ? { scans: scanGlbs } : {}), ...(tileGlbs.length ? { tiles: tileGlbs } : {})
+        } as { audit?: string; scan?: string; tile?: string; scans?: string[]; tiles?: string[] };
+        for (const f of [files.audit, files.scan, files.tile, ...(files.scans ?? []), ...(files.tiles ?? [])]) if (f && !fs.existsSync(f)) throw new StreetObjectsToolError('not_found', `no file at ${f}`);
         const deps = await createStagedLocationDeps(stagedWorkspaceRoot(), { signal: ctx.signal });
         const sv = deps.streetView ?? {};
         const missing = missingCredentials(sv);
@@ -99,21 +111,35 @@ export const streetObjectsHandler: ToolHandler = async (args, ctx): Promise<Tool
         const vision = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
         if (!vision) throw new StreetObjectsToolError('no_vision', 'no vision model is configured: the objects cannot be read from Street View');
         const chain = new VisionModelChain<string>({ client: vision.client, candidates: vision.candidates, signal: ctx.signal, hedgeAfterMs: VISION_HEDGE_AFTER_MS, replyCache: stagedReplyCache(deps.cache) });
+        if (!deps.vectorEvidence) throw new StreetObjectsToolError('no_vector', 'Google\'s vector data is not available: the blobs cannot be placed against the map');
         const asked = Array.isArray(args.only) ? (args.only as unknown[]).map(String).map(x => (/^\d+$/.test(x) ? Number(x) : x)) : undefined;
         const key = crypto.createHash('sha256').update(JSON.stringify([files, lat, lng, asked ?? null, args.maxFamilies ?? null, args.maxImages ?? null, args.streetView ?? true, args.freshRead === true])).digest('hex').slice(0, 12);
         const outDir = path.join(ctx.workspaceRoot, STREET_OBJECTS_DIR, key);
         fs.mkdirSync(outDir, { recursive: true });
-        // 1. every blob read from the cheap evidence first (blob-reader.ts): the scan's measures, the map, the tile's own photo
-        if (!deps.vectorEvidence) throw new StreetObjectsToolError('no_vector', 'Google\'s vector data is not available: the blobs cannot be placed against the map');
-        const radiusM = Math.max(30, ...audit.clusters.map(c => Math.hypot((c.lo[0] + c.hi[0]) / 2, (c.lo[2] + c.hi[2]) / 2))) + 30;
-        const vector = await deps.vectorEvidence({ lat, lng, radiusM });
+        // the audit: given, or the meshes' own (audit-meshes.ts), with Google's vector data over the district
+        let audit: ResidualAuditResult, radiusM: number;
+        let vector: Awaited<ReturnType<NonNullable<typeof deps.vectorEvidence>>>;
+        if (files.audit) {
+            audit = readAudit(files.audit);
+            // a loop, not a spread: a district's audit can hold 100,000+ clusters, past the argument limit
+            radiusM = audit.clusters.reduce((m, c) => Math.max(m, Math.hypot((c.lo[0] + c.hi[0]) / 2, (c.lo[2] + c.hi[2]) / 2)), 30) + 30;
+            vector = await deps.vectorEvidence({ lat, lng, radiusM });
+        } else {
+            radiusM = typeof args.radiusM === 'number' && args.radiusM > 0 ? args.radiusM : 450;
+            vector = await deps.vectorEvidence({ lat, lng, radiusM });
+            const r = await auditMeshes({ glbs: files.scans!, look: evidenceLookup(vector, radiusM), vector, dir: path.join(outDir, 'mesh_audit'), ...(ctx.signal ? { signal: ctx.signal } : {}), onProgress: m => ctx.reportProgress?.(m) });
+            audit = r.audit;
+            fs.writeFileSync(path.join(outDir, 'district_audit.json'), JSON.stringify({ audit }));
+        }
         const look = evidenceLookup(vector, radiusM);
+        // 1. every blob read from the cheap evidence first (blob-reader.ts): the scan's measures, the map, the tile's own photo
+        const tileSoup = files.tiles?.length ? mergeSoups(files.tiles.map(t => readTileTriangles(fs.readFileSync(t)))) : readTileTriangles(fs.readFileSync(files.tile!));
         // freshRead: the model asked again, past the readings store and the reply cache (to measure how far two reads agree)
         const fresh = args.freshRead === true;
         const store = fresh ? undefined : fileReadingStore(modelReadingsDir(deps.cache.dir));
         const blobChain = fresh ? new VisionModelChain<string>({ client: vision.client, candidates: vision.candidates, signal: ctx.signal, hedgeAfterMs: VISION_HEDGE_AFTER_MS }) : chain;
         const blobs: BlobReadReport = await readBlobs({
-            audit, look, vector, tile: readTileTriangles(fs.readFileSync(files.tile)), vision: blobChain, ...(store ? { store } : {}),
+            audit, look, vector, tile: tileSoup, vision: blobChain, ...(store ? { store } : {}),
             onSheet: (i, jpeg) => fs.writeFileSync(path.join(outDir, `blob_sheet_${String(i).padStart(3, '0')}.jpg`), jpeg),
             onPatch: (id, jpeg) => { fs.mkdirSync(path.join(outDir, BLOB_PATCHES_DIR), { recursive: true }); fs.writeFileSync(path.join(outDir, BLOB_PATCHES_DIR, `${id}.jpg`), jpeg); },
             ...(ctx.signal ? { signal: ctx.signal } : {}), onProgress: m => ctx.reportProgress?.(m)
@@ -122,19 +148,20 @@ export const streetObjectsHandler: ToolHandler = async (args, ctx): Promise<Tool
         // 2. Street View only for the blobs the cheap read leaves unsure that stand up off the ground and look like things
         const labelled = new Set(blobs.labels.map(l => l.clusterId));
         const unsure = [...blobs.labels.filter(l => l.confidence < BLOB_READ_PARAMS.confidentAt && l.standing >= 0.5 && l.scanFault < 0.5).map(l => l.clusterId),
-            ...blobs.evidence.filter(e => !labelled.has(e.clusterId) && !blobs.leftOut.some(o => o.clusterId === e.clusterId)).map(e => e.clusterId)];
+            ...(() => { const out = new Set(blobs.leftOut.map(o => o.clusterId)); return blobs.evidence.filter(e => !labelled.has(e.clusterId) && !out.has(e.clusterId)).map(e => e.clusterId); })()];
         const only = asked ?? unsure;
-        if (args.streetView === false || !only.length) {
+        // Street View reads one scan: a district read from many meshes stops at the cheap read
+        if (args.streetView === false || !only.length || !files.scan) {
             const st = blobs.stats;
             return {
-                status: 'completed', summaryResult: `${STREET_OBJECTS_TOOL_NAME}: ${st.clusters} blobs; ${st.read} read from the scan, the map and the tile photo (${st.visionCalls} vision calls, ${st.storeHits} answers from the readings store), ${st.confident} labelled with confidence, ${st.unsure} unsure; ${st.inFootprint} building parts and ${st.artefacts} scan artefacts left out. Street View not asked. Report: ${path.relative(ctx.workspaceRoot, path.join(outDir, BLOB_READ_FILE))}.`,
+                status: 'completed', summaryResult: `${STREET_OBJECTS_TOOL_NAME}: ${st.clusters} blobs; ${st.read} read from the scan, the map and the tile photo (${st.visionCalls} vision calls, ${st.storeHits} answers from the readings store), ${st.confident} labelled with confidence, ${st.unsure} unsure; ${st.inFootprint} building parts, ${st.artefacts} scan artefacts and ${st.fragments} fragments below the size floor left out. Street View not asked${!files.scan ? ' (a district read from its own meshes)' : ''}. Report: ${path.relative(ctx.workspaceRoot, path.join(outDir, BLOB_READ_FILE))}.`,
                 resultPayload: { status: 'success', blobRead: path.relative(ctx.workspaceRoot, path.join(outDir, BLOB_READ_FILE)), blobStats: st }
             };
         }
         const walkable = (x: number, z: number) => look.buildingAt(x, z) <= 0 && !look.roadAt(x, z);
         const report = await rebuildStreetObjects({
             walkable,
-            origin: { lat, lng, heightMeters: 0 }, audit, scanGlb: files.scan, tileGlb: files.tile, streetView: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() }, vision: chain, outDir,
+            origin: { lat, lng, heightMeters: 0 }, audit, scanGlb: files.scan, tileGlb: files.tile ?? files.tiles![0], streetView: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() }, vision: chain, outDir,
             ...(typeof args.maxFamilies === 'number' ? { maxFamilies: args.maxFamilies } : {}), ...(only?.length ? { only } : {}),
             ...(typeof args.maxImages === 'number' ? { see: { maxImages: args.maxImages } } : {}), overlays: args.overlays !== false,
             ...(ctx.signal ? { signal: ctx.signal } : {}), onProgress: m => ctx.reportProgress?.(m)
