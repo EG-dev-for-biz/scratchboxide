@@ -10,6 +10,9 @@ set -euo pipefail
 #   deploy/kd-chunk-job/deploy.sh job     the Cloud Run job, pointed at HEAD's image
 #   deploy/kd-chunk-job/deploy.sh job-app the job as the app's account, the Maps key from the main checkout's .env
 #   deploy/kd-chunk-job/deploy.sh all     the three in order
+#   deploy/kd-chunk-job/deploy.sh service the warm worker pool: the same image as a Cloud Run service (kd-chunk-job.ts --serve),
+#                                         0 instances between districts, one chunk an instance, as the app's account
+#                                         (SERVICE, MAX_INSTANCES; the runner's SCRATCHBOX_KD_CLOUD_SERVICE names it)
 #
 # Needs your own `gcloud auth login`. Every step creates or changes billed resources in the project.
 #
@@ -17,11 +20,16 @@ set -euo pipefail
 #   GOOGLE_MAPS_API_KEY  the Maps key (setup, and job with KD_JOB_AUTH=app)
 #   KD_JOB_AUTH=app      job runs as the app's account, no secrets (when nobody may grant access to them)
 #   PROJECT / REGION     default scoutscan / us-central1
+#   IMAGE                the job's image (default HEAD's, as build tags it)
+#   JOB / CPU / MEMORY   the job's name and task size (default kd-chunk-job, 8, 32Gi); a second size is a second job,
+#                        e.g. JOB=kd-chunk-job-4c CPU=4 MEMORY=16Gi, chosen by the runner's SCRATCHBOX_KD_CLOUD_JOB
 ################################################################################
 
 PROJECT="${PROJECT:-scoutscan}"
 REGION="${REGION:-us-central1}"
-JOB="kd-chunk-job"
+JOB="${JOB:-kd-chunk-job}"
+CPU="${CPU:-8}"
+MEMORY="${MEMORY:-32Gi}"
 JOB_BUCKET="scoutscan-kd-jobs"
 TRAINING_BUCKET="scoutscan-building-training"
 JOB_SA="kd-chunk-job@${PROJECT}.iam.gserviceaccount.com"
@@ -30,7 +38,7 @@ MAPS_SECRET="kd-maps-api-key"
 SA_KEY_FILE="${SA_KEY_FILE:-$HOME/.scratchbox-ide/service-account.json}"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
-IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/depthbox3-repo/${JOB}:${COMMIT}"
+IMAGE="${IMAGE:-${REGION}-docker.pkg.dev/${PROJECT}/depthbox3-repo/kd-chunk-job:${COMMIT}}"
 G=(gcloud --project "$PROJECT" --quiet)
 
 app_sa() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["client_email"])' "$SA_KEY_FILE"; }
@@ -99,7 +107,7 @@ build() {
 
 job() {
   local app; app="$(app_sa)"
-  local common="SCRATCHBOX_TRAINING_BUCKET=$TRAINING_BUCKET,SCRATCHBOX_STORE_BUCKET=off,SCRATCHBOX_CPUS=8,SCRATCHBOX_TEXTURE_WORKERS=7"
+  local common="SCRATCHBOX_TRAINING_BUCKET=$TRAINING_BUCKET,SCRATCHBOX_STORE_BUCKET=off,SCRATCHBOX_CPUS=$CPU,SCRATCHBOX_TEXTURE_WORKERS=$((CPU > 1 ? CPU - 1 : 1))"
   local auth
   if [ "${KD_JOB_AUTH:-secrets}" = "app" ]; then
     # the job runs as the app's account with no key file (the Gemini client's SCRATCHBOX_GOOGLE_ADC fallback), and the Maps
@@ -114,10 +122,24 @@ job() {
       --set-env-vars "GOOGLE_APPLICATION_CREDENTIALS=/secrets/sa/key.json,$common")
   fi
   "${G[@]}" run jobs deploy "$JOB" --region "$REGION" --image "$IMAGE" \
-    --tasks 1 --max-retries 0 --task-timeout 3h --cpu 8 --memory 32Gi --execution-environment gen2 "${auth[@]}"
+    --tasks 1 --max-retries 0 --task-timeout 3h --cpu "$CPU" --memory "$MEMORY" --execution-environment gen2 "${auth[@]}"
   # a job run as the app's own account needs no grant for the app to run it (Editor)
   [ "${KD_JOB_AUTH:-secrets}" = "app" ] \
     || "${G[@]}" run jobs add-iam-policy-binding "$JOB" --region "$REGION" --member "serviceAccount:$app" --role roles/run.developer >/dev/null
+}
+
+# The warm worker pool. Request-based billing (CPU only while a chunk is built: the worker answers once its caches are
+# mirrored, so nothing runs after), min 0 instances (nothing billed between districts), concurrency 1, an hour a chunk.
+service() {
+  local app; app="$(app_sa)"
+  local name="${SERVICE:-kd-chunk-worker}"
+  [ -n "${GOOGLE_MAPS_API_KEY:-}" ] || { echo "set GOOGLE_MAPS_API_KEY"; exit 1; }
+  echo "[service] $name -> $IMAGE, as $app, ${CPU} vCPU / ${MEMORY}, 0 to ${MAX_INSTANCES:-100} instances"
+  "${G[@]}" run deploy "$name" --region "$REGION" --image "$IMAGE" --service-account "$app" --no-allow-unauthenticated \
+    --cpu "$CPU" --memory "$MEMORY" --concurrency 1 --timeout 3600 --min-instances 0 --max-instances "${MAX_INSTANCES:-100}" \
+    --execution-environment gen2 --cpu-boost --cpu-throttling \
+    --command node --args="--max-old-space-size=28672,-r,ts-node/register,packages/core/src/node/3d-engine/staged-location/kd-chunk-job.js,--serve" \
+    --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT,SCRATCHBOX_GOOGLE_ADC=1,GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY,SCRATCHBOX_TRAINING_BUCKET=$TRAINING_BUCKET,SCRATCHBOX_STORE_BUCKET=off,SCRATCHBOX_CPUS=$CPU,SCRATCHBOX_TEXTURE_WORKERS=$((CPU > 1 ? CPU - 1 : 1)),SCRATCHBOX_KD_CHUNK_JOB=1"
 }
 
 JOB_ID="${JOB_SA%%@*}"
@@ -135,5 +157,13 @@ case "${1:-}" in
     export GOOGLE_MAPS_API_KEY
     job ;;
   all) setup; build; job ;;
-  *) sed -n '4,21p' "$0"; exit 2 ;;
+  service)
+    # as job-app: the app's account, the Maps key from the main checkout's .env (never printed)
+    export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$SA_KEY_FILE"
+    G=(gcloud --project "$PROJECT" --quiet)
+    ENV_FILE="${ENV_FILE:-$(git -C "$REPO_ROOT" worktree list --porcelain | sed -n '1s/^worktree //p')/.env}"
+    GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(grep -m1 '^GOOGLE_MAPS_API_KEY=' "$ENV_FILE" | cut -d= -f2- | tr -d "\"' \r")}"
+    export GOOGLE_MAPS_API_KEY
+    service ;;
+  *) sed -n '4,27p' "$0"; exit 2 ;;
 esac

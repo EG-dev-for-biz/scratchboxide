@@ -19,6 +19,17 @@
  *
  * `--warm` builds the native engines the chunk runs, at image build time (deploy/kd-chunk-job/Dockerfile), so a task never
  * waits on clang; it exits non-zero when one does not build.
+ *
+ * `--serve` runs the same chunk build as a Cloud Run service (the warm worker pool; cloud-chunk-runner.ts
+ * CloudRunServiceJobs): POST /chunk with `{ env }` (KD_JOB and the runner's switches, as a job execution's overrides) builds
+ * one chunk exactly as a job task does, the instance's workspace put back as the image left it first, so a reused warm
+ * instance builds from nothing as a new one would. The answer's headers go at once and a newline every 20 s, the result
+ * last (`{ ok, ms }`), and only once the caches are mirrored, so with request-based billing nothing runs unbilled after it.
+ * One chunk an instance at a time (the service's concurrency 1; a second request is answered 429), and by default one chunk
+ * an instance at all: the worker exits once it has answered (SCRATCHBOX_KD_SERVE_ONCE=0 keeps it), so every chunk builds in
+ * a new process on a clean instance, as a job task does. A reused instance gave the same bytes but built the largest
+ * building about twice as slowly (its native steps 2x, Penn 2026-11-09), while a new service instance started in about 8 s
+ * (a Cloud Run job task took 90 s).
  */
 
 import * as fs from 'fs';
@@ -272,10 +283,45 @@ async function warm(root: string): Promise<number> {
     return failed.length ? 1 : 0;
 }
 
-async function main(): Promise<number> {
-    const { stagedWorkspaceRoot, StageCache } = await import('./stage-cache');
-    const root = stagedWorkspaceRoot();
-    if (process.argv.includes('--warm')) return warm(root);
+/** Every file under `dir` (relative paths), for putting a reused instance's workspace back as the image left it. */
+function filesUnder(dir: string, rel = '', out = new Set<string>()): Set<string> {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(path.join(dir, rel), { withFileTypes: true }); } catch { return out; }
+    for (const e of entries) {
+        const r = rel ? path.join(rel, e.name) : e.name;
+        if (e.isDirectory()) filesUnder(dir, r, out); else out.add(r);
+    }
+    return out;
+}
+
+/** Removes every file under `dir` the snapshot did not hold (and the folders left empty). */
+export function restoreWorkspace(dir: string, snapshot: Set<string>): number {
+    let removed = 0;
+    for (const f of filesUnder(dir)) if (!snapshot.has(f)) { fs.rmSync(path.join(dir, f), { force: true }); removed++; }
+    const prune = (rel: string): boolean => {
+        const abs = path.join(dir, rel);
+        let entries: fs.Dirent[];
+        try { entries = fs.readdirSync(abs, { withFileTypes: true }); } catch { return false; }
+        let empty = true;
+        for (const e of entries) if (!(e.isDirectory() && prune(path.join(rel, e.name)))) empty = false;
+        if (empty && rel) fs.rmdirSync(abs);
+        return empty;
+    };
+    prune('');
+    return removed;
+}
+
+/** The env a request asks for, set for one chunk and put back after (KD_JOB and SCRATCHBOX_ switches only). */
+export function requestEnv(asked: Record<string, unknown> | undefined): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(asked ?? {})) if ((k === 'KD_JOB' || /^SCRATCHBOX_[A-Z0-9_]+$/.test(k)) && typeof v === 'string') out[k] = v;
+    if (!out.KD_JOB) throw new Error('the request names no KD_JOB');
+    return out;
+}
+
+/** One chunk as a job task builds it, from KD_JOB in the environment; true when its outcome was sent. */
+async function buildChunkFromEnv(root: string, signal: AbortSignal): Promise<boolean> {
+    const { StageCache } = await import('./stage-cache');
     const where = parseKdJobLocation(process.env.KD_JOB);
     const { GcsCloudBucket } = await import('../../cloud-store/cloud-bucket');
     const { GoogleMediaCredentialsService } = await import('../../google-media-credentials-service');
@@ -283,20 +329,75 @@ async function main(): Promise<number> {
     const { runStagedLocation } = await import('./orchestrator');
     const { createStagedLocationDeps } = await import('./staged-location-tool');
     const bucket = new GcsCloudBucket(new GoogleMediaCredentialsService().createStorageClient().bucket(where.bucket));
-    const own = new AbortController();
-    process.once('SIGTERM', () => own.abort(Object.assign(new Error('the cloud job was cancelled'), { name: 'AbortError' })));
     const mirror = cacheMirrorBucket();
-    const ok = await runKdChunkJob({
-        bucket, prefix: where.prefix, cache: new StageCache({ workspaceRoot: root }), signal: own.signal,
+    return runKdChunkJob({
+        bucket, prefix: where.prefix, cache: new StageCache({ workspaceRoot: root }), signal,
         ...(mirror ? { mirror } : {}), ...(process.env.KD_IMAGE_COMMIT ? { commit: process.env.KD_IMAGE_COMMIT } : {}),
         build: async (spec, ctx) => {
-            const deps = await createStagedLocationDeps(root, { signal: own.signal });
+            const deps = await createStagedLocationDeps(root, { signal });
             // the cloud task fetches its own leaves; it never builds chunks of its own
             const { prefetchTiles: _p, runChunk: _r, ...rest } = deps;
             return runStagedLocation(spec.request, { ...rest, newRunId: () => spec.runId }, ctx);
         }
     });
-    return ok ? 0 : 1;
+}
+
+/** The chunk build as a Cloud Run service (see the file comment). */
+async function serve(root: string): Promise<void> {
+    const http = await import('http');
+    const scratch = path.join(root, '.scratchbox');
+    const snapshot = filesUnder(scratch);
+    let busy = false;
+    const server = http.createServer((req, res) => {
+        if (req.method === 'GET' && req.url === '/healthz') { res.writeHead(200).end('ok'); return; }
+        if (req.method !== 'POST' || req.url !== '/chunk') { res.writeHead(404).end(); return; }
+        if (busy) { res.writeHead(429, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: false, error: 'this instance is building a chunk' })); return; }
+        busy = true;
+        let body = '';
+        req.on('data', d => { body += d; });
+        req.on('end', () => {
+            const t0 = Date.now(), own = new AbortController();
+            res.on('close', () => { if (!res.writableEnded) own.abort(Object.assign(new Error('the runner went away'), { name: 'AbortError' })); });
+            res.writeHead(200, { 'content-type': 'application/json' });
+            const beat = setInterval(() => res.write('\n'), 20_000);
+            const saved = new Map<string, string | undefined>();
+            void (async () => {
+                let ok = false, error: string | undefined;
+                try {
+                    const env = requestEnv(JSON.parse(body || '{}').env);
+                    for (const [k, v] of Object.entries(env)) { saved.set(k, process.env[k]); process.env[k] = v; }
+                    const removed = restoreWorkspace(scratch, snapshot);
+                    console.log(`[kd-serve] ${env.KD_JOB}${removed ? ` (${removed} files of the last chunk removed first)` : ''}`);
+                    ok = await buildChunkFromEnv(root, own.signal);
+                } catch (err) {
+                    error = err instanceof Error ? err.message : String(err);
+                    console.error(`[kd-serve] failed: ${error}`);
+                } finally {
+                    for (const [k, v] of saved) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+                    clearInterval(beat);
+                    busy = false;
+                    res.end(JSON.stringify({ ok, ms: Date.now() - t0, ...(error ? { error } : {}) }), () => {
+                        // one chunk an instance: Cloud Run starts a clean one for the next
+                        if (process.env.SCRATCHBOX_KD_SERVE_ONCE?.trim() !== '0') setTimeout(() => process.exit(0), 200).unref();
+                    });
+                }
+            })();
+        });
+    });
+    await new Promise<void>(resolve => server.listen(Number(process.env.PORT) || 8080, resolve));
+    console.log(`[kd-serve] listening on ${Number(process.env.PORT) || 8080}`);
+    // the build's modules loaded while the instance waits for its first chunk
+    void import('./orchestrator').then(() => import('./staged-location-tool')).catch(err => console.error(`[kd-serve] preload: ${err}`));
+}
+
+async function main(): Promise<number> {
+    const { stagedWorkspaceRoot } = await import('./stage-cache');
+    const root = stagedWorkspaceRoot();
+    if (process.argv.includes('--warm')) return warm(root);
+    if (process.argv.includes('--serve')) { await serve(root); return new Promise<number>(() => undefined); }
+    const own = new AbortController();
+    process.once('SIGTERM', () => own.abort(Object.assign(new Error('the cloud job was cancelled'), { name: 'AbortError' })));
+    return (await buildChunkFromEnv(root, own.signal)) ? 0 : 1;
 }
 
 if (require.main === module) {

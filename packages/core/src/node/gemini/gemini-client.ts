@@ -166,6 +166,12 @@ export function isTransientError(err: unknown): boolean {
     return /\b(429|500|502|503|504)\b|ECONNRESET|ETIMEDOUT|EAI_AGAIN|overloaded|RESOURCE_EXHAUSTED|UNAVAILABLE/i.test(message);
 }
 
+/** The kind of a transient failure, for the retry's log line: its HTTP status, 429 for RESOURCE_EXHAUSTED, 503 for UNAVAILABLE or overloaded, else 'network'. */
+export function transientStatus(err: unknown): string {
+    const message = errorMessage(err);
+    return /\b(429|500|502|503|504)\b/.exec(message)?.[1] ?? (/RESOURCE_EXHAUSTED/i.test(message) ? '429' : /UNAVAILABLE|overloaded/i.test(message) ? '503' : 'network');
+}
+
 /** Resolve the global fetch implementation (Node 18+) with a node-fetch fallback. */
 export function resolveFetch(): FetchLike {
     const globalFetch = (globalThis as { fetch?: unknown }).fetch;
@@ -674,6 +680,9 @@ export class GeminiClient {
                 }
                 const delay = this.retryBaseDelayMs * Math.pow(2, attemptIndex);
                 attemptIndex++;
+                // one line a retry, whatever thread asked: how often a district's fan-out meets the model's rate limits is
+                // counted from the logs (a 429 or RESOURCE_EXHAUSTED is the quota; 5xx the service; else the network)
+                console.warn(`[gemini] transient ${transientStatus(err)}: retry ${attemptIndex} of ${this.transientRetries} in ${delay} ms`);
                 await new Promise(resolve => setTimeout(resolve, delay));
             }
         }

@@ -147,6 +147,49 @@ describe('pipeline K-D: the centre cell in the cloud', () => {
         expect(result.status).toBe('complete');
     });
 
+    it('with a task per building in the shown band, closes the cells\' seams while the buildings still build, and keeps no preview in the place store', async () => {
+        vi.stubEnv('SCRATCHBOX_KD_CHUNK_RUNNER', 'cloud');
+        vi.stubEnv('SCRATCHBOX_KD_CHUNK_UNIT', 'building');
+        vi.stubEnv('SCRATCHBOX_KD_BAND', 'shown');
+        const s = setup();
+        // every building task waits until the seam stage has started (or, failing that, 5 s)
+        let open!: (how: string) => void;
+        const gate = new Promise<string>(r => { open = r; });
+        const timer = setTimeout(() => open('timeout'), 5_000);
+        const lines: string[] = [];
+        const job = s.deps.runChunk!;
+        let firstBuildingBack = -1;
+        s.deps.runChunk = async (req, o) => {
+            if (req.chunk!.index >= 9) { await gate; if (firstBuildingBack < 0) firstBuildingBack = lines.length; }
+            return job(req, o);
+        };
+        const { result } = await runStagedLocation(REQUEST, s.deps, { ...s.ctx, reportProgress: m => { lines.push(m); if (/every cell joined: closing the seams/.test(m)) open('seams'); } });
+        clearTimeout(timer);
+        expect(await gate).toBe('seams');
+        // nine cells and a task for each of the five buildings
+        expect(s.asked).toHaveLength(14);
+        // the cells: their ground steps and the band's; the buildings: the band's alone (no model, no sets, no upscale)
+        for (const r of s.asked) {
+            expect(r.steps, `chunk ${r.chunk!.index}`).toMatchObject({ models: false, 'twin.materials': false, 'twin.facadeUpscale': false });
+            expect(r.steps!['remesh.facadeRead'] === false, `chunk ${r.chunk!.index}`).toBe(r.chunk!.index < 9);
+        }
+        // the seam stage started with every building task still out (the gate opened on it, not on the timeout), and closed
+        // each of the nine cells
+        const seamLines = lines.map((m, i) => [m, i] as const).filter(([m]) => /closing chunk \d+'s seams/.test(m));
+        expect(seamLines).toHaveLength(9);
+        expect(lines.findIndex(m => /every cell joined: closing the seams/.test(m))).toBeLessThan(firstBuildingBack);
+        // the cells' grounds seamed; the buildings' layers joined as their jobs cut them, never seamed
+        const layers = (result.artifact as any).data.stagedBuild.layers as any[];
+        expect(layers.filter(l => !l.retired && /-seam$/.test(l.objectId))).toHaveLength(9);
+        expect(layers.filter(l => !l.retired && /^stg-c(9|1[0-3])-l2-kd\d+$/.test(l.objectId))).toHaveLength(5);
+        // shown, and the preview kept out of the place store
+        const joined = s.cache.readRunNote<{ shownAtMs: number; band: string }>('c0ffee01', 'district_chunks_joined')!;
+        expect(joined.band).toBe('shown');
+        expect(joined.shownAtMs).toBeGreaterThanOrEqual(0);
+        expect(s.cache.readRunNote<{ skipped: boolean }>('c0ffee01', 'place_audit')).toMatchObject({ skipped: true });
+        expect(result.status).toBe('complete');
+    });
+
     it("frames the scene with the centre job's camera when the vector paint could not be drawn", async () => {
         vi.stubEnv('SCRATCHBOX_KD_CHUNK_RUNNER', 'cloud');
         // the plan reads the evidence first; the paint's own read then fails
