@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { answeredBlobKeys, BLOB_EVIDENCE_FIELDS, BLOB_LABELS_FILE, BLOB_PATCHES_DIR, BLOB_READ_FILE, BlobCheckService, findBlobCheckSources, labelWords } from '../src/node/3d-engine/staged-location/street-objects/blob-check';
+import { answeredBlobKeys, headWord, BLOB_EVIDENCE_FIELDS, BLOB_LABELS_FILE, BLOB_PATCHES_DIR, BLOB_READ_FILE, BlobCheckService, findBlobCheckSources, labelWords } from '../src/node/3d-engine/staged-location/street-objects/blob-check';
 
 const evidence = (id: number) => ({
     clusterId: id, centre: [id, 0], box: { origin: [id, 0], xAxis: [1, 0], extentsM: [1, 1] }, verdict: 'real-object', auditConfidence: 0.8, heightM: 1, standM: 1, planM: [1, 0.5], areaM2: 2, triangles: 10,
@@ -38,6 +38,11 @@ describe('the blob check', () => {
     it('groups by the model\'s own words', () => {
         expect(labelWords('Two parked cars, merged')).toEqual(['parked', 'car', 'merged']);
         expect(labelWords('a bus')).toEqual(['bus']);
+        expect(headWord('parked car')).toBe('car');
+        expect(headWord('two parked cars merged')).toBe('car');
+        expect(headWord('Traffic cone with reflective band')).toBe('cone');
+        expect(headWord('orange traffic cone')).toBe('cone');
+        expect(headWord('parked van or small truck')).toBe('van');
     });
 
     it('draws nine patches: unsure blobs, one sure yes and one sure no, and stores the answers with each blob\'s measures', () => {

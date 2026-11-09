@@ -74,11 +74,25 @@ export function findBlobCheckSources(roots: string[], maxDepth: number = BLOB_CH
     return out.sort();
 }
 
-const STOP = new Set(['a', 'an', 'the', 'of', 'or', 'and', 'with', 'on', 'in', 'at', 'by', 'to', 'from', 'two', 'three', 'row', 'small', 'large', 'possible', 'probably', 'likely', 'some', 'its', 'part', 'side', 'edge', 'top']);
+const STOP = new Set(['a', 'an', 'the', 'of', 'or', 'and', 'with', 'on', 'in', 'at', 'by', 'to', 'from', 'two', 'three', 'row', 'small', 'large', 'possible', 'probably', 'likely', 'some', 'its', 'part', 'side', 'edge', 'top', 'together']);
 
 /** A label's content words, lower case, a plural's trailing s dropped (labels only: they group blobs into questions). */
 export function labelWords(label: string): string[] {
     return [...new Set((label.toLowerCase().match(/[a-z]+/g) ?? []).filter(w => w.length > 2 && !STOP.has(w)).map(w => (w.length > 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w)))];
+}
+
+/**
+ * The word a check asks about for a label: its last content word (in an English label that is the thing itself: "parked
+ * car" -> car, "traffic cone" -> cone; the words before it say what kind), before any "with", "on", "and" or the like,
+ * passing a trailing participle ("cars merged" -> car). Of a label naming two things ("van or truck"), the first's.
+ * Labels only.
+ */
+export function headWord(label: string): string | undefined {
+    const first = label.toLowerCase().split(/\b(?:or|with|on|in|under|beside|near|and|at)\b|,|\/|\(/)[0];
+    const w = labelWords(first);
+    // a trailing participle ("cars merged", "post leaning") says what happened to the thing, not what it is
+    for (let i = w.length - 1; i >= 0; i--) if (!/(ed|ing)$/.test(w[i])) return w[i];
+    return w[w.length - 1];
 }
 
 interface Source { dir: string; origin?: { lat: number; lng: number }; evidence: Map<number, BlobEvidence>; labels: BlobLabel[] }
@@ -149,10 +163,10 @@ export class BlobCheckService {
             const open = s.labels.filter(l => !done.has(blobKey(s.dir, l.clusterId)) && s.evidence.has(l.clusterId));
             // the subjects: the scan-fault question, and each word the model's confident non-fault labels share often enough
             const counts = new Map<string, number>();
-            for (const l of s.labels) if (l.confidence >= 0.6 && l.scanFault < 0.5) for (const w of labelWords(l.label)) counts.set(w, (counts.get(w) ?? 0) + 1);
+            for (const l of s.labels) if (l.confidence >= 0.6 && l.scanFault < 0.5) { const w = headWord(l.label); if (w) counts.set(w, (counts.get(w) ?? 0) + 1); }
             const words = [...counts].filter(([, n]) => n >= this.P.minPerSubject).map(([w]) => w);
             const subjects: Array<{ kind: 'word' | 'nothing'; subject: string; has: (l: BlobLabel) => boolean }> = [
-                ...words.map(w => ({ kind: 'word' as const, subject: w, has: (l: BlobLabel) => labelWords(l.label).includes(w) })),
+                ...words.map(w => ({ kind: 'word' as const, subject: w, has: (l: BlobLabel) => headWord(l.label) === w })),
                 { kind: 'nothing' as const, subject: 'nothing but ground, wall or roof', has: (l: BlobLabel) => l.scanFault >= 0.5 }
             ].map(x => ({ x, k: r() })).sort((a, b) => a.k - b.k).map(x => x.x);
             for (const sub of subjects) {
