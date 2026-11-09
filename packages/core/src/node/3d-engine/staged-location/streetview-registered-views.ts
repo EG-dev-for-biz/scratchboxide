@@ -40,10 +40,10 @@ export const FACE_MATCH_TOLERANCE_DEG = 45;
  */
 export const OWNERSHIP_TRUST_RESIDUAL_M = 0.6;
 
-/** Whether `registration` posed the pano against the tile mesh (edges or jointly) to at most `maxResidualM`. */
+/** Whether `registration` posed the pano against the tile mesh (edges, jointly or as a drive) to at most `maxResidualM`. */
 export function trustedRegisteredPose(registration: Pick<Registration, 'perPano'> | undefined, panoId: string, maxResidualM = OWNERSHIP_TRUST_RESIDUAL_M): boolean {
     const per = registration?.perPano.find(p => p.panoId === panoId);
-    return !!per && (per.method === 'edges' || per.method === 'joint') && per.edgeResidualM !== undefined && Number.isFinite(per.edgeResidualM) && per.edgeResidualM <= maxResidualM;
+    return !!per && (per.method === 'edges' || per.method === 'joint' || per.method === 'drive') && per.edgeResidualM !== undefined && Number.isFinite(per.edgeResidualM) && per.edgeResidualM <= maxResidualM;
 }
 
 /**

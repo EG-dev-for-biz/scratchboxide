@@ -135,10 +135,11 @@ export interface Registration {
         panoId: string; dxM: number; dzM: number; dyawDeg: number; dpitchDeg: number; pairs: number; beforeRmsM: number; afterRmsM: number;
         /**
          * 'edges' when the pose is the geometric (edge) registration's (pano-edge-registration.ts), 'joint' when it is the joint
-         * registration's (pano-joint-registration.ts); absent for the box solve.
+         * registration's (pano-joint-registration.ts), 'drive' when it is the drive registration's (pano-drive-registration.ts);
+         * absent for the box solve.
          */
-        method?: 'edges' | 'joint';
-        /** The residual of the pose against the scan at the frames' distance, metres (set with method 'edges' or 'joint'). */
+        method?: 'edges' | 'joint' | 'drive';
+        /** The residual of the pose against the scan at the frames' distance, metres (set with method 'edges', 'joint' or 'drive'). */
         edgeResidualM?: number;
     }>;
     /** Per-pano non-rigid warps of the joint registration, when the held-out fit kept them (pano-joint-registration.ts). */

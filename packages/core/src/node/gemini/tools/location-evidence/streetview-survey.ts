@@ -520,7 +520,13 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
         const joint = reg?.joint?.panos.find(p => p.panoId === v.panoId);
         const regWidth = Math.min(im.widthPx, EDGE_REG_MAX_WIDTH_PX);
         let method = 'nominal', residualPx: number | null = null, atWidth: number | null = null, reason: string;
-        if (per?.method === 'joint' && joint) {
+        const drive = reg?.drive?.panos.find(p => p.panoId === v.panoId);
+        if (per?.method === 'drive' && drive) {
+            method = 'drive';
+            const fv = (reg!.drive!.fit.drive?.views ?? []).filter(x => x.panoId === v.panoId).map(x => x.clayChamferPx).filter((x): x is number => x !== null).sort((x, y) => x - y);
+            residualPx = fv.length ? fv[fv.length >> 1] : null; atWidth = fv.length ? Math.min(im.widthPx, JOINT_METRIC_WIDTH_PX) : null;
+            reason = `${reg!.drive!.reason}; tied to the other panoramas by photo-to-photo matches, moved ${drive.moveM} m; residual: the tile mesh's edges against this photo's edges (held-out chamfer)`;
+        } else if (per?.method === 'joint' && joint) {
             method = reg!.joint!.chosen === 'joint+warp' ? 'joint+warp' : 'joint';
             // the held-out fit of the kept poses: the tile mesh's own edges against this pano's photo edges (chamfer), else the
             // median cross-view match residual of the pano

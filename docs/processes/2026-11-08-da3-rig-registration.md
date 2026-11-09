@@ -85,6 +85,17 @@ The user asked to check. Street View's own metadata (Map Tiles API `streetview/m
 - So the lateral jump in the fit is two lanes on two passes; Google's positions for drive A's straight panoramas are the ones that are off. This settles the open point above about plausibility; it does not prove the fit to the decimetre. The one-window tie ambiguity is not ruled out, but the fit now agrees with Street View's own link graph, headings and the turning panorama's position, none of which the solver used.
 - Each panorama already has its own pose in `registerDriveOnScan`, so separate drives need no change to the solver; drive membership (the link graph) is a candidate for a check on its result: panoramas of one drive should lie on a smooth path along their headings.
 
+### Wired into the Street View pose path (2026-11-09)
+
+The user asked to wire it in. The drive registration is now the last step of the shared pose job (`pano-registration-run.ts` `runPanoRegistrationOffThread`: box, edges, joint, then drive), which the build's evidence stage, `streetview_survey` and `photo_match_evaluate` all use.
+
+- `pano-drive-registration.ts` `registerPanosByDrive`: renders the tiles' texture from each wide view at the poses in force, picks co-visible view pairs between panoramas, asks the learned matcher for photo/render and photo/photo matches, lifts the scan matches through the render depth (training cells only), runs `registerDriveOnScan` and converts the poses back to the path's corrections (`correctionFromPose`, YXZ at reference heading 0; round trip tested against `frameCamera`).
+- **Judged like every other step:** kept only when `heldOutFitOfFrames` on the held-out cells is better (`fitIsBetter`). A kept pose is `method: 'drive'` with its residual in metres; `streetview_survey`, the survey detail, the texture views and the ownership trust read it like 'edges' and 'joint'. The joint fit's warps are dropped when the drive replaces the poses they were fitted to.
+- `LearnedFeatureMatcherService` + `tools/matching/learned_match.py`: DISK + LightGlue (kornia, Apache-2.0) as a persistent worker, photos inline (never on disk). Interpreter `SCRATCHBOX_MATCH_PYTHON` (needs torch and kornia; `pip install kornia`); without it the step is skipped with that reason. `SCRATCHBOX_DRIVE_REGISTRATION=0` turns the step off.
+- **The run** through `runPanoRegistrationOffThread` itself (worker thread), 72 views of the six 7th Ave panoramas, the photo-textured tiles: edges took no panorama (3 scored, 3 not reached in the time, machine load 15-23), joint did not run in its budget; the drive step made 21,347 photo-to-photo and 7,095 scan matches in 289 s and was **kept: held-out edge chamfer 8.33 -> 6.47 px, gradient NCC 0.142 -> 0.356**. Poses equal the standalone fit within 5 cm. Proof sheets `proof_path_drive.png` and `proof_path_zoom.png` (full-resolution crops: at sheet scale a visual check could not tell the panels apart; in the crops the photo's window edges sit on the rendered windows under the kept pose and beside them under the stated one). The 300-degree views look the same under both poses.
+- Tests: `pano-drive-registration.test.ts` (correction round trip, lift, covisibility), `street-view-drive-registration.test.ts`; the existing registration, worker, survey and bake tests pass with the step in place (it skips without the matcher's interpreter).
+- Cost: about 5 minutes for six panoramas on this Mac (matching on mps); it runs after the edges and joint steps, whatever their budgets.
+
 ## Still open
 
 1. The edge score used here (median distance from scan edges to photo edges) is too loose to judge a pose: it improved under the implausible forced move. The judge's registration or the research report's render-and-match is the measure to use.
@@ -93,3 +104,4 @@ The user asked to check. Street View's own metadata (Map Tiles API `streetview/m
 ## Candidate tool/service ideas
 
 - A `streetview_register_drive` tool over `registerRigOnScan` once a depth model passes the consensus on real data.
+- Drive membership from Street View's link graph (Map Tiles `streetview/metadata`) as a check on the drive fit: panoramas of one drive should lie on a smooth path along their headings.

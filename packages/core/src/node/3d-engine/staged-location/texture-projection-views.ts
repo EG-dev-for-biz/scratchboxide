@@ -43,8 +43,8 @@ export function registeredResidualM(panoId: string, registration?: Registration)
     if (!registration) return NOMINAL_POSE_UNCERTAINTY.meters;
     if (registration.setAside.some((s) => s.panoId === panoId)) return undefined;
     const p = registration.perPano.find((q) => q.panoId === panoId);
-    // a pano posed against the scan (its edges, or jointly with the other panos) is as good as that residual, not as the boxes it was not fitted to
-    if ((p?.method === 'edges' || p?.method === 'joint') && p.edgeResidualM !== undefined && Number.isFinite(p.edgeResidualM)) return p.edgeResidualM;
+    // a pano posed against the scan (its edges, jointly with the other panos, or as a drive) is as good as that residual, not as the boxes it was not fitted to
+    if ((p?.method === 'edges' || p?.method === 'joint' || p?.method === 'drive') && p.edgeResidualM !== undefined && Number.isFinite(p.edgeResidualM)) return p.edgeResidualM;
     const rms = p && p.pairs > 0 && Number.isFinite(p.afterRmsM) ? p.afterRmsM : registration.afterRmsM;
     return Number.isFinite(rms) ? rms : NOMINAL_POSE_UNCERTAINTY.meters;
 }

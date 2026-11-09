@@ -28,6 +28,8 @@ import { registerPanos, type Correspondence, type Registration } from './pano-re
 import { EDGE_MAX_RESIDUAL_PX, EDGE_REGISTRATION_BUDGET_MS, edgeFramesFromImages, registerPanosByEdges, type EdgeRegistrationResult, type HeldImage } from './pano-edge-registration';
 import { JOINT_REGISTRATION_BUDGET_MS, registerPanosJointly, type JointRegistrationResult } from './pano-joint-registration';
 import { jointRegistrationEnabled } from './round5-switch';
+import { registerPanosByDrive, type DriveStepResult } from './pano-drive-registration';
+import { LearnedFeatureMatcherService, LearnedMatcherUnavailableError } from '../../spatial/LearnedFeatureMatcherService';
 
 export interface PanoRegistrationJob {
     images: HeldImage[];
@@ -40,6 +42,8 @@ export interface PanoRegistrationJob {
     jointBudgetMs?: number;
     /** Run the joint registration after the edges (default: jointRegistrationEnabled()). */
     joint?: boolean;
+    /** Run the drive registration after them (default: driveRegistrationEnabled()). */
+    drive?: boolean;
 }
 
 export interface PanoRegistrationOutcome {
@@ -47,6 +51,8 @@ export interface PanoRegistrationOutcome {
     panos: number;
     edge?: EdgeRegistrationResult;
     joint?: JointRegistrationResult;
+    /** The drive registration (pano-drive-registration.ts), when it ran. */
+    drive?: DriveStepResult;
     /** The registration in force after the job: the edge registration's when any pano took its edge pose, the joint one's when kept. Absent: the prior stands. */
     registration?: Registration;
 }
@@ -77,14 +83,37 @@ export function runPanoRegistration(job: PanoRegistrationJob, log: (m: string) =
     return { frames: frames.length, panos, edge, ...(joint ? { joint } : {}), ...(registration ? { registration } : {}) };
 }
 
+/**
+ * The drive registration after the edge and joint registration (pano-drive-registration.ts); kept only when the held-out
+ * fit improves. SCRATCHBOX_DRIVE_REGISTRATION=0 turns it off. Without the learned matcher's interpreter (torch and kornia)
+ * it is skipped and says why.
+ */
+export const driveRegistrationEnabled = (): boolean => process.env.SCRATCHBOX_DRIVE_REGISTRATION !== '0';
+
+/** The drive step of a job, from the registration in force after the edges and the joint fit. */
+export async function runDriveRegistration(job: { images: HeldImage[]; meshFiles: string[]; current?: Registration }, log: (m: string) => void = () => undefined): Promise<DriveStepResult> {
+    const t0 = Date.now();
+    let matcher: LearnedFeatureMatcherService;
+    try {
+        matcher = new LearnedFeatureMatcherService();
+    } catch (e) {
+        if (!(e instanceof LearnedMatcherUnavailableError)) throw e;
+        return { status: 'skipped', reason: `the learned matcher is not available: ${e.message}`, panos: [], viewPairs: 0, ties: 0, tiesUsed: 0, scanMatches: 0, fit: { current: null, drive: null }, ms: Date.now() - t0 };
+    }
+    const frames = edgeFramesFromImages(job.images);
+    return registerPanosByDrive({ frames, meshFiles: job.meshFiles, mesh: loadMesh(job.meshFiles), ...(job.current ? { current: job.current } : {}), matcher, log });
+}
+
 /** SCRATCHBOX_REGISTRATION_WORKER=0 runs the job on the main thread (as before). */
 export const registrationWorkerEnabled = (): boolean => process.env.SCRATCHBOX_REGISTRATION_WORKER !== '0';
 
 /** What a registration thread is asked: the box solve from the matched elements, or the edge and joint registration. */
-export type RegistrationThreadJob = { kind: 'box'; correspondences: Correspondence[]; faces: CastFace[] } | ({ kind: 'edges' } & PanoRegistrationJob);
+export type RegistrationThreadJob = { kind: 'box'; correspondences: Correspondence[]; faces: CastFace[] } | ({ kind: 'edges' } & PanoRegistrationJob)
+    | { kind: 'drive'; images: HeldImage[]; meshFiles: string[]; current?: Registration };
 
 /** Runs a thread job in this thread (the worker's entry calls it too). */
-export function runRegistrationThreadJob(job: RegistrationThreadJob, log: (m: string) => void = () => undefined): Registration | PanoRegistrationOutcome {
+export function runRegistrationThreadJob(job: RegistrationThreadJob, log: (m: string) => void = () => undefined): Registration | PanoRegistrationOutcome | Promise<DriveStepResult> {
+    if (job.kind === 'drive') return runDriveRegistration(job, log);
     return job.kind === 'box' ? registerPanos(job.correspondences, job.faces) : runPanoRegistration(job, log);
 }
 
@@ -92,12 +121,9 @@ const BOOTSTRAP = `
 const { workerData, parentPort } = require('worker_threads');
 ${workerTsRegisterSource()}
 const { runRegistrationThreadJob } = require(workerData.entry);
-try {
-    const out = runRegistrationThreadJob(workerData.job, m => parentPort.postMessage({ log: m }));
-    parentPort.postMessage({ done: out });
-} catch (err) {
-    parentPort.postMessage({ error: { message: err && err.message || String(err), stack: err && err.stack } });
-}
+Promise.resolve().then(() => runRegistrationThreadJob(workerData.job, m => parentPort.postMessage({ log: m })))
+    .then(out => parentPort.postMessage({ done: out }))
+    .catch(err => parentPort.postMessage({ error: { message: err && err.message || String(err), stack: err && err.stack } }));
 `;
 
 function selfEntry(): string {
@@ -113,8 +139,13 @@ function selfEntry(): string {
  * The edge and joint registration in a worker thread (or inline with SCRATCHBOX_REGISTRATION_WORKER=0). A stop terminates
  * the thread and rejects with the signal's reason; a thread that dies rejects with why.
  */
-export function runPanoRegistrationOffThread(job: PanoRegistrationJob, opts: { signal?: AbortSignal; log?: (m: string) => void } = {}): Promise<PanoRegistrationOutcome> {
-    return inThread({ kind: 'edges', ...job }, opts) as Promise<PanoRegistrationOutcome>;
+export async function runPanoRegistrationOffThread(job: PanoRegistrationJob, opts: { signal?: AbortSignal; log?: (m: string) => void } = {}): Promise<PanoRegistrationOutcome> {
+    const out = await (inThread({ kind: 'edges', ...job }, opts) as Promise<PanoRegistrationOutcome>);
+    if (!(job.drive ?? driveRegistrationEnabled()) || out.panos < 2) return out;
+    const current = out.registration ?? job.prior ?? out.edge?.registration;
+    opts.log?.(`registering ${out.panos} panos as a drive (learned photo-to-photo and photo-to-texture matches)`);
+    const drive = await (inThread({ kind: 'drive', images: job.images, meshFiles: job.meshFiles, ...(current ? { current } : {}) }, opts) as Promise<DriveStepResult>);
+    return { ...out, drive, ...(drive.status === 'accepted' && drive.registration ? { registration: drive.registration } : {}) };
 }
 
 /** The box solve of the matched element pairs (registerPanos) in a worker thread: live it held the main thread ~7 s (ray casts). */
@@ -122,8 +153,8 @@ export function registerPanosOffThread(correspondences: Correspondence[], faces:
     return inThread({ kind: 'box', correspondences, faces }, opts) as Promise<Registration>;
 }
 
-function inThread(job: RegistrationThreadJob, opts: { signal?: AbortSignal; log?: (m: string) => void }): Promise<Registration | PanoRegistrationOutcome> {
-    if (!registrationWorkerEnabled()) return Promise.resolve().then(() => runRegistrationThreadJob(job, opts.log));
+function inThread(job: RegistrationThreadJob, opts: { signal?: AbortSignal; log?: (m: string) => void }): Promise<Registration | PanoRegistrationOutcome | DriveStepResult> {
+    if (!registrationWorkerEnabled()) return Promise.resolve().then((): Promise<Registration | PanoRegistrationOutcome | DriveStepResult> | Registration | PanoRegistrationOutcome => runRegistrationThreadJob(job, opts.log));
     if (opts.signal?.aborted) return Promise.reject(opts.signal.reason);
     return new Promise((resolve, reject) => {
         const worker = new Worker(BOOTSTRAP, { eval: true, workerData: { entry: selfEntry(), job } });
@@ -131,7 +162,7 @@ function inThread(job: RegistrationThreadJob, opts: { signal?: AbortSignal; log?
         const finish = (fn: () => void) => { if (settled) return; settled = true; opts.signal?.removeEventListener('abort', onAbort); fn(); void worker.terminate(); };
         const onAbort = () => finish(() => reject(opts.signal!.reason));
         opts.signal?.addEventListener('abort', onAbort, { once: true });
-        worker.on('message', (m: { log?: string; done?: Registration | PanoRegistrationOutcome; error?: { message: string; stack?: string } }) => {
+        worker.on('message', (m: { log?: string; done?: Registration | PanoRegistrationOutcome | DriveStepResult; error?: { message: string; stack?: string } }) => {
             if (m.log !== undefined) opts.log?.(m.log);
             else if (m.done) finish(() => resolve(m.done!));
             else if (m.error) finish(() => reject(Object.assign(new Error(m.error!.message), { stack: m.error!.stack })));
