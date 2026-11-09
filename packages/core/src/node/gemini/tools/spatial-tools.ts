@@ -3056,6 +3056,9 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             draft: typeof args.draft === 'boolean' ? args.draft : undefined,
             styleSuffix: typeof args.styleSuffix === 'string' ? args.styleSuffix : undefined,
             onProgress: chatProgress(ctx),
+            // the rebuild and the street vantage (they had landed in the result payload, so the build never saw them)
+            ...(args.refresh === true ? { refresh: true } : {}),
+            ...(street ?? {}),
             // The chat's Stop or the time limit ends the run down to the station image-model calls.
             signal: ctx?.signal
         });
@@ -3064,8 +3067,6 @@ export const panoramaHandlers: Record<string, ToolHandler> = {
             resultPayload: {
                 success: res.success,
                 locationName: res.locationName,
-            ...(args.refresh === true ? { refresh: true } : {}),
-            ...(street ?? {}),
                 geoAnchor: res.geoAnchor,
                 splatUrl: res.splatUrl,
                 splatPath: res.splatPath,
