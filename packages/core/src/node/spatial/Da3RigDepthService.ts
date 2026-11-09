@@ -33,6 +33,8 @@ export interface RigViewImage {
     yawDeg: number;
     /** The view's encoded image (JPEG or PNG), kept in memory. */
     image: Buffer;
+    /** The view's known horizontal field of view (degrees, principal point centred): conditions the model when every view has one. */
+    horizontalFovDeg?: number;
 }
 
 export interface Da3RigDepthOptions {
@@ -68,7 +70,7 @@ export class Da3RigDepthService {
             model: opts.model ?? 'depth-anything/DA3-SMALL',
             stride: opts.stride ?? 2,
             outPath,
-            views: images.map(v => ({ panoId: v.panoId, yawDeg: v.yawDeg, jpegBase64: v.image.toString('base64') }))
+            views: images.map(v => ({ panoId: v.panoId, yawDeg: v.yawDeg, jpegBase64: v.image.toString('base64'), horizontalFovDeg: v.horizontalFovDeg }))
         };
         const pool = getPythonWorkerPool({
             pythonBinary: this.python(opts.pythonExecutable),

@@ -9,7 +9,8 @@ Apache-2.0 weights; the larger DA3 models are non-commercial and are refused her
 
 Request (stdin, one JSON object):
     {"model": "depth-anything/DA3-SMALL", "stride": 2, "outPath": "/tmp/x.f32",
-     "views": [{"panoId": "...", "yawDeg": 30, "jpegBase64": "..."}, ...]}
+     "views": [{"panoId": "...", "yawDeg": 30, "jpegBase64": "...", "horizontalFovDeg": 90}, ...]}
+horizontalFovDeg (optional, on every view or none) conditions the model on the known intrinsics.
 The views travel inline because Street View imagery is never written to disk (the worker protocol's file-path rule
 gives way to that). Only the derived depth and confidence are written, to outPath: for each view in order, its depth
 then its confidence, float32, row-major, at 1/stride resolution.
@@ -76,8 +77,17 @@ def main():
         fail("the request needs views and outPath")
     dev, model = load(req.get("model", "depth-anything/DA3-SMALL"))
     images = [decode(v["jpegBase64"]) for v in views]
+    # known intrinsics (a view's horizontal field of view, centred principal point) condition the model, when given
+    intrinsics = None
+    if all(v.get("horizontalFovDeg") for v in views):
+        ks = []
+        for v, im in zip(views, images):
+            h, w = im.shape[:2]
+            f = w / 2 / np.tan(np.radians(float(v["horizontalFovDeg"])) / 2)
+            ks.append([[f, 0, w / 2], [0, f, h / 2], [0, 0, 1]])
+        intrinsics = np.asarray(ks, np.float32)
     t0 = time.time()
-    pred = model.inference(images)
+    pred = model.inference(images, intrinsics=intrinsics)
     ms = (time.time() - t0) * 1000
     depth = np.asarray(pred.depth, np.float32)
     conf = np.asarray(pred.conf, np.float32) if pred.conf is not None else np.ones_like(depth)
