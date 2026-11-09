@@ -239,6 +239,36 @@ describe('the fast isolate first', () => {
         expect((result.artifact as any).data.objects.find((o: any) => o.content.metadata.isGround).id).toBe(l2v.objectId);
     });
 
+    it('judges the vote on tile_refine\'s isolate alone, and refines the voted structure once, only when the vote is material', async () => {
+        for (const material of [false, true]) {
+            const s0 = setup(ARCH);
+            const v = voteDeps(path.join(s0.root, 'views'), 50);
+            // a material vote's isolate holds a rooftop block the geometric one did not (8 x 8 x 6 m on the roof)
+            const extra = material ? building(-4, 4, -4, 4, 6).map(t => t.map((c, k) => (k % 3 === 1 ? c + 22 : c)) as typeof t) : [];
+            const votedRefines: any[] = [], isolates: any[] = [];
+            const voted = async (req: any) => {
+                const r = await s0.native.deps.refine.refine(req);
+                const dir = path.join(s0.root, `voted_${material}`);
+                fs.mkdirSync(dir, { recursive: true });
+                for (const [name, from] of [['raw_clay.glb', r.rawClayGlb!], ['clay.glb', r.clayGlb], ['textured.glb', r.texturedGlb]] as const) writeTris(path.join(dir, name), [...readTris(from), ...extra]);
+                return { ...r, rawClayGlb: path.join(dir, 'raw_clay.glb'), clayGlb: path.join(dir, 'clay.glb'), texturedGlb: path.join(dir, 'textured.glb'), cacheKey: 'e'.repeat(64) };
+            };
+            const refine: StagedLocationDeps['refine']['refine'] = async req => { if (!req.ownership) return s0.native.deps.refine.refine(req); votedRefines.push(req); return voted(req); };
+            const isolate: NonNullable<StagedLocationDeps['refine']['isolate']> = async req => { isolates.push(req); const r = await voted(req); return { rawClayGlb: r.rawClayGlb, stats: { mode: 'isolate-only' }, cacheKey: 'i'.repeat(64), cached: false, ms: 0 }; };
+            const s = setup(ARCH, { vision: v.vision, scanFit: fitter(path.join(s0.root, 'fit')), refine: { refine, renderOwnershipViews: v.renderOwnershipViews, isolate } });
+            const { result } = await runStagedLocation({ query: 'Washington Square Arch', isolate: true, trees: false }, s.deps, s.ctx);
+            expect(validateContract('StagedLocationResult', result)).toEqual([]);
+            // the vote's isolate once, with the outlines; the whole refine (with the vote) only for a material vote, once
+            expect(isolates.length).toBe(1);
+            expect(isolates[0].ownership?.masksDir).toBeTruthy();
+            expect(votedRefines.length).toBe(material ? 1 : 0);
+            if (material) expect(votedRefines[0].ownership.masksDir).toBe(isolates[0].ownership.masksDir);
+            const final = (result.artifact as any).data.stagedBuild;
+            expect(final.layers.some((l: any) => l.layer === 'l2v')).toBe(material);
+            expect(result.stages.find(x => x.stage === 'ownership')!.source).toMatch(material ? /^the vote moved .*: the voted remesh replaces the first isolate/ : /under the 5% that would replace the geometric isolate/);
+        }
+    });
+
     it('pipeline K: a material vote gets the facade work and polish the first isolate got, so the voted building shown is cut to its footprint', async () => {
         const s0 = setup(ARCH);
         const v = voteDeps(path.join(s0.root, 'views'), 50);

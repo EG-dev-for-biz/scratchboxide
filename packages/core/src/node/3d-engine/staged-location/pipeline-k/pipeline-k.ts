@@ -35,6 +35,7 @@ import { remeshWorkersEnabled } from '../remesh-worker-pool';
 import { readingKey, type ModelReadingStore } from './model-readings';
 import { encodePng } from '../png-encode';
 import { continueTail, countOf, finishTail, holesOf, startTailWorker, type ContinueResult } from './rectify-tail';
+import { rectifyOverlayName } from './rectify-overlay';
 import { stagedBuildingPipelineEnv, stagedDistrict } from '../staged-switches';
 
 /** The featureless photo refilled region by region: regions found, filled (each from one source at one shift), their texels, and the texels kept as photographed. */
@@ -229,11 +230,18 @@ function runWorkers(jobs: RectifyJob[], signal?: AbortSignal): Promise<RectifyMe
  * The relief orthos of a remesh, straightened and levelled: the facades the lattice rebuild will use (coverage at least
  * its minCoverage) are rectified, the others copied as they are. Cached beside the originals.
  */
-export async function rectifyReliefOrthos(srcDir: string, opts: { params?: OrthoRectifyParams; minCoverage?: number; threads?: number; signal?: AbortSignal; /** The tail on this thread (tests; SCRATCHBOX_REMESH_WORKERS=0 too). */ inlineTail?: boolean; /** The image model for small holes no real source covers (absent: none; the smooth fill takes them). */ inpaint?: { client: EnhanceModelClient; models: string[]; caps?: typeof HOLE_INPAINT; /** The image model's fills kept between builds (model-readings.ts), by the facade's pixels and its holes: the same holes take the same fill. */ readings?: ModelReadingStore } } = {}): Promise<RectifiedOrthos> {
+export async function rectifyReliefOrthos(srcDir: string, opts: { params?: OrthoRectifyParams; minCoverage?: number; threads?: number; signal?: AbortSignal; /** The tail on this thread (tests; SCRATCHBOX_REMESH_WORKERS=0 too). */ inlineTail?: boolean; /** The image model for small holes no real source covers (absent: none; the smooth fill takes them). */ inpaint?: { client: EnhanceModelClient; models: string[]; caps?: typeof HOLE_INPAINT; /** The image model's fills kept between builds (model-readings.ts), by the facade's pixels and its holes: the same holes take the same fill. */ readings?: ModelReadingStore };
+    /**
+     * Facades taken whole from another rectified set (the first pass's, when the ownership vote left them unchanged:
+     * facade-reuse.ts): their straightened photo, masks, frame and report are copied from `fromDir`, where they carry the
+     * same ids, and nothing is computed for them; they still lend their photo to the featureless continuation of the others,
+     * read only. `key` names that set in the cache key (content-based: the first pass's tile_refine entry and rectify key).
+     */
+    reuse?: { fromDir: string; ids: number[]; key: string } } = {}): Promise<RectifiedOrthos> {
     const t0 = Date.now();
     const params = opts.params ?? ORTHO_RECTIFY_PARAMS, minCoverage = opts.minCoverage ?? FACADE_LATTICE_PARAMS.minCoverage;
     const caps = opts.inpaint?.caps ?? HOLE_INPAINT;
-    const key = crypto.createHash('sha256').update(JSON.stringify({ v: PIPELINE_K_VERSION, params, minCoverage, inpaint: opts.inpaint ? { models: opts.inpaint.models, caps } : false })).digest('hex').slice(0, 16);
+    const key = crypto.createHash('sha256').update(JSON.stringify({ v: PIPELINE_K_VERSION, params, minCoverage, inpaint: opts.inpaint ? { models: opts.inpaint.models, caps } : false, ...(opts.reuse ? { reuse: { from: opts.reuse.key, ids: [...opts.reuse.ids].sort((a, b) => a - b) } } : {}) })).digest('hex').slice(0, 16);
     const outDir = path.join(path.dirname(srcDir), `${path.basename(srcDir)}_k_${key}`);
     const reportFile = path.join(outDir, 'rectify.json');
     if (fs.existsSync(reportFile)) {
@@ -251,12 +259,26 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
             const w = wallCoverage(decodePng(fs.readFileSync(file)), f.pixel);
             f.wallCoverage = Math.round(w.wallCoverage * 1000) / 1000; f.wallAreaM2 = Math.round(w.wallAreaM2);
         }
-        const todo = facadesJson.facades.filter(f => facadeEligible(f, { ...FACADE_LATTICE_PARAMS, minCoverage }) && fs.existsSync(path.join(srcDir, f.image)));
-        for (const f of facadesJson.facades) if (!todo.includes(f) && fs.existsSync(path.join(srcDir, f.image))) fs.copyFileSync(path.join(srcDir, f.image), path.join(tmp, f.image));
+        // the facades taken whole from another rectified set: their files, frame and report as they are there
+        const reused = new Set(opts.reuse?.ids ?? []);
+        const fromFacades = opts.reuse ? (JSON.parse(fs.readFileSync(path.join(opts.reuse.fromDir, 'facades.json'), 'utf8')) as { facades: ReliefFacade[] }).facades : [];
+        const fromReports = opts.reuse ? (JSON.parse(fs.readFileSync(path.join(opts.reuse.fromDir, 'rectify.json'), 'utf8')) as { reports: RectifiedOrthos['reports'] }).reports : [];
+        for (let k = 0; k < facadesJson.facades.length; k++) {
+            const f = facadesJson.facades[k];
+            if (!reused.has(f.facadeId)) continue;
+            const from = fromFacades.find(g => g.facadeId === f.facadeId);
+            if (!from || from.image !== f.image) throw new Error(`pipeline K: facade ${f.facadeId} is to be taken from ${opts.reuse!.fromDir}, which does not hold it as ${f.image}`);
+            for (const name of [from.image, uncoveredMaskName(from.image), featurelessMaskName(from.image), inpaintedMaskName(from.image), occludedMaskName(from.image), rectifyOverlayName(from.image)]) {
+                if (fs.existsSync(path.join(opts.reuse!.fromDir, name))) fs.copyFileSync(path.join(opts.reuse!.fromDir, name), path.join(tmp, name));
+            }
+            facadesJson.facades[k] = from;
+        }
+        const todo = facadesJson.facades.filter(f => !reused.has(f.facadeId) && facadeEligible(f, { ...FACADE_LATTICE_PARAMS, minCoverage }) && fs.existsSync(path.join(srcDir, f.image)));
+        for (const f of facadesJson.facades) if (!reused.has(f.facadeId) && !todo.includes(f) && fs.existsSync(path.join(srcDir, f.image))) fs.copyFileSync(path.join(srcDir, f.image), path.join(tmp, f.image));
         // tile_refine's occlusion masks: a straightened facade's comes back through its warp; the others' are copied as they are
         for (const f of facadesJson.facades) {
             const occ = occludedMaskName(f.image);
-            if (!todo.includes(f) && fs.existsSync(path.join(srcDir, occ))) fs.copyFileSync(path.join(srcDir, occ), path.join(tmp, occ));
+            if (!reused.has(f.facadeId) && !todo.includes(f) && fs.existsSync(path.join(srcDir, occ))) fs.copyFileSync(path.join(srcDir, occ), path.join(tmp, occ));
         }
         // largest first, dealt round the threads
         const n = Math.max(1, Math.min(opts.threads ?? Math.max(1, Math.min(4, os.cpus().length - 1)), todo.length));
@@ -271,12 +293,12 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
             if (fs.existsSync(path.join(srcDir, occ))) fs.copyFileSync(path.join(srcDir, occ), path.join(tmp, occ));
         }
         // the reports without the pixels the workers sent with them (those go to the tail)
-        const reports: RectifiedOrthos['reports'] = todo.map(f => {
+        const reports: RectifiedOrthos['reports'] = [...todo.map(f => {
             const m = msgs.find(x => x.facadeId === f.facadeId);
             if (!m) return { facadeId: f.facadeId, error: 'no report came back' };
             const { pixels: _pixels, ...rest } = m;
             return rest;
-        });
+        }), ...fromReports.filter(r => reused.has(r.facadeId))];
         // featureless photo the facades' own repeats could not refill: continued from the nearest facade facing the same way.
         // The straightened pixels come back from the workers as they are; only a facade that failed (its original ortho kept)
         // is read from its file.
@@ -294,6 +316,17 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
             const file = path.join(tmp, f.image);
             if (fs.existsSync(file)) { const d = decodePng(fs.readFileSync(file)); images.set(f.facadeId, { f, rgba: new Uint8Array(d.rgba), width: d.width, height: d.height, uncovered: mask(uncoveredMaskName(f.image)), featureless: mask(featurelessMaskName(f.image)) }); }
         }
+        // the reused facades the other set straightened lend their photo to the continuation, read only: what was not real
+        // photo there (uncovered or featureless) is marked uncovered, so it is neither copied from nor refilled
+        const lenders = new Set<number>();
+        if (todo.length) for (const f of facadesJson.facades) {
+            if (!reused.has(f.facadeId) || !fromReports.some(r => r.facadeId === f.facadeId && 'report' in r && r.report)) continue;
+            const d = decodePng(fs.readFileSync(path.join(tmp, f.image))), u = mask(uncoveredMaskName(f.image)), fl = mask(featurelessMaskName(f.image));
+            const notReal = new Uint8Array(d.width * d.height);
+            for (let k = 0; k < notReal.length; k++) notReal[k] = (u?.[k] || fl?.[k]) ? 1 : 0;
+            images.set(f.facadeId, { f, rgba: new Uint8Array(d.rgba), width: d.width, height: d.height, uncovered: notReal });
+            lenders.add(f.facadeId);
+        }
         // the holes the facades' own repeats left (still the exact grey of the uncovered mark), the featureless continuation,
         // and later the smooth fill and the PNGs: on a worker thread of their own (rectify-tail.ts), the same functions
         const tail = opts.inlineTail || !remeshWorkersEnabled() ? undefined : startTailWorker(opts.signal);
@@ -305,6 +338,8 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
                 if (r.op !== 'continue') throw new Error('pipeline K: the orthos\' tail answered out of turn');
                 work = r.images; cont = r.result;
             } else cont = continueTail(work);
+            // a lender is never written: it stands as the other set left it
+            if (lenders.size) cont = { continued: new Map([...cont.continued].filter(([id]) => !lenders.has(id))), holes: cont.holes.filter(h => !lenders.has(h.id)) };
             for (const [id, c] of cont.continued) {
                 const r = reports.find(y => y.facadeId === id);
                 if (r && 'report' in r && r.report) (r.report.holes as typeof r.report.holes & { continued?: ContinuedFill }).continued = c;
