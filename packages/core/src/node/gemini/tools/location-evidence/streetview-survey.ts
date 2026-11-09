@@ -131,6 +131,8 @@ export interface SurveySite {
     unmaskedTop: Float32Array;
     /** GLB files of the full tile mesh the views are registered against (the extraction's geometry). */
     tileMeshFiles: string[];
+    /** The same tile mesh with its photo texture (the drive registration matches the photos against it). */
+    texturedTileMeshFiles?: string[];
     /** The structure itself, tile frame: the ownership masks' target and the coverage's judge. */
     structureMesh: RenderMesh3D;
     structureMeshSource: 'given' | 'scan-crop' | (string & {});
@@ -495,7 +497,7 @@ export async function runStreetViewSurvey(site: SurveySite, options: StreetViewS
     let regError: string | undefined;
     const held: HeldImage[] = fetched.map(im => ({ id: im.id, bytes: im.bytes, widthPx: im.widthPx, heightPx: im.heightPx, view: im.view }));
     try {
-        reg = await (deps.register ?? runPanoRegistrationOffThread)({ images: held, meshFiles: site.tileMeshFiles, correspondences: [], faces: [] }, { signal: deps.signal, log: progress });
+        reg = await (deps.register ?? runPanoRegistrationOffThread)({ images: held, meshFiles: site.tileMeshFiles, ...(site.texturedTileMeshFiles ? { texturedMeshFiles: site.texturedTileMeshFiles } : {}), correspondences: [], faces: [] }, { signal: deps.signal, log: progress });
     } catch (err) {
         if (deps.signal?.aborted) throw err;
         regError = err instanceof Error ? err.message : String(err);
@@ -815,6 +817,7 @@ export async function prepareSurveySite(req: SurveySiteRequest, deps: StagedLoca
         place, extraction: sizing.extraction,
         origin: { lat: place.lat, lng: place.lng, heightMeters: sizing.extraction.originEllipsoidalHeightM },
         label: place.formattedAddress, structure, ground, unmaskedTop: sizing.unmaskedTop, tileMeshFiles: [sizing.extraction.geometryGlb],
+        ...(sizing.extraction.texturedGlb ? { texturedTileMeshFiles: [sizing.extraction.texturedGlb] } : {}),
         structureMesh, structureMeshSource
     };
 }
@@ -828,7 +831,7 @@ export const STREETVIEW_SURVEY_DECLARATION: ToolDeclaration = {
     description:
         'Survey one real structure with Google Street View: finds Google-captured panoramas around it, takes wide views of the faces asked for through the Maps Imagery ' +
         'Grounding API (redacted images, permitted for generative use; a pano the API refuses is replaced by the next eligible one and reported), registers every view ' +
-        'against the Google 3D Tiles mesh (silhouette/edge registration, then jointly across views), and returns per view the pano id, capture month, the registered ' +
+        'against the Google 3D Tiles mesh (silhouette/edge registration, then jointly across views, then as drives: photo-to-photo matches between panoramas, the drive moved onto the tiles, kept only when a held-out fit improves), and returns per view the pano id, capture month, the registered ' +
         'camera (position in the tile frame and as lat/lng, heading, elevation, the API pitch where POSITIVE looks down, roll, and pinhole intrinsics with ' +
         'fx = fy = 960 / tan(fov / 2) at full size), the registration method and residual, and the image path; plus refusals and coverage per face. Optionally cuts the ' +
         'structure out of each view (ownership mask) with what stands in front of it (occluder mask). By default also asks, per view, whether anything temporary ' +

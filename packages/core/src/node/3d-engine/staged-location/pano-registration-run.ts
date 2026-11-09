@@ -35,6 +35,8 @@ export interface PanoRegistrationJob {
     images: HeldImage[];
     /** GLB files of the full tile mesh the frames are registered against. */
     meshFiles: string[];
+    /** The same mesh with its photo texture (the drive registration matches the photos against it); default meshFiles. */
+    texturedMeshFiles?: string[];
     prior?: Registration;
     correspondences: Correspondence[];
     faces: CastFace[];
@@ -91,7 +93,7 @@ export function runPanoRegistration(job: PanoRegistrationJob, log: (m: string) =
 export const driveRegistrationEnabled = (): boolean => process.env.SCRATCHBOX_DRIVE_REGISTRATION !== '0';
 
 /** The drive step of a job, from the registration in force after the edges and the joint fit. */
-export async function runDriveRegistration(job: { images: HeldImage[]; meshFiles: string[]; current?: Registration }, log: (m: string) => void = () => undefined): Promise<DriveStepResult> {
+export async function runDriveRegistration(job: { images: HeldImage[]; meshFiles: string[]; texturedMeshFiles?: string[]; current?: Registration }, log: (m: string) => void = () => undefined): Promise<DriveStepResult> {
     const t0 = Date.now();
     let matcher: LearnedFeatureMatcherService;
     try {
@@ -101,7 +103,7 @@ export async function runDriveRegistration(job: { images: HeldImage[]; meshFiles
         return { status: 'skipped', reason: `the learned matcher is not available: ${e.message}`, panos: [], viewPairs: 0, ties: 0, tiesUsed: 0, scanMatches: 0, fit: { current: null, drive: null }, ms: Date.now() - t0 };
     }
     const frames = edgeFramesFromImages(job.images);
-    return registerPanosByDrive({ frames, meshFiles: job.meshFiles, mesh: loadMesh(job.meshFiles), ...(job.current ? { current: job.current } : {}), matcher, log });
+    return registerPanosByDrive({ frames, meshFiles: job.texturedMeshFiles?.length ? job.texturedMeshFiles : job.meshFiles, mesh: loadMesh(job.meshFiles), ...(job.current ? { current: job.current } : {}), matcher, log });
 }
 
 /** SCRATCHBOX_REGISTRATION_WORKER=0 runs the job on the main thread (as before). */
@@ -109,7 +111,7 @@ export const registrationWorkerEnabled = (): boolean => process.env.SCRATCHBOX_R
 
 /** What a registration thread is asked: the box solve from the matched elements, or the edge and joint registration. */
 export type RegistrationThreadJob = { kind: 'box'; correspondences: Correspondence[]; faces: CastFace[] } | ({ kind: 'edges' } & PanoRegistrationJob)
-    | { kind: 'drive'; images: HeldImage[]; meshFiles: string[]; current?: Registration };
+    | { kind: 'drive'; images: HeldImage[]; meshFiles: string[]; texturedMeshFiles?: string[]; current?: Registration };
 
 /** Runs a thread job in this thread (the worker's entry calls it too). */
 export function runRegistrationThreadJob(job: RegistrationThreadJob, log: (m: string) => void = () => undefined): Registration | PanoRegistrationOutcome | Promise<DriveStepResult> {
@@ -144,7 +146,7 @@ export async function runPanoRegistrationOffThread(job: PanoRegistrationJob, opt
     if (!(job.drive ?? driveRegistrationEnabled()) || out.panos < 2) return out;
     const current = out.registration ?? job.prior ?? out.edge?.registration;
     opts.log?.(`registering ${out.panos} panos as a drive (learned photo-to-photo and photo-to-texture matches)`);
-    const drive = await (inThread({ kind: 'drive', images: job.images, meshFiles: job.meshFiles, ...(current ? { current } : {}) }, opts) as Promise<DriveStepResult>);
+    const drive = await (inThread({ kind: 'drive', images: job.images, meshFiles: job.meshFiles, ...(job.texturedMeshFiles ? { texturedMeshFiles: job.texturedMeshFiles } : {}), ...(current ? { current } : {}) }, opts) as Promise<DriveStepResult>);
     return { ...out, drive, ...(drive.status === 'accepted' && drive.registration ? { registration: drive.registration } : {}) };
 }
 

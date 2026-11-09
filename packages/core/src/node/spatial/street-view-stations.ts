@@ -83,6 +83,8 @@ export interface StreetViewStationsResult {
 export interface StreetViewStationsRequest {
     /** The clay GLB the stations are rendered and baked on; its origin is `anchor` (x east, y up, z south). */
     glbPath: string;
+    /** The same tiles with their photo texture, in glbPath's frame: the drive registration matches the photos against it (texturedTilesTwin). */
+    texturedGlbPath?: string;
     anchor: GeodeticAnchor;
     vantage: StreetVantage;
     streetView: StreetViewEvidenceDeps;
@@ -331,7 +333,7 @@ export async function planStreetViewStations(req: StreetViewStationsRequest): Pr
         try {
             reg = await (req.register ?? runPanoRegistrationOffThread)({
                 images: got.images.map(im => ({ id: im.id, bytes: im.bytes, widthPx: im.widthPx, heightPx: im.heightPx, view: im.view })),
-                meshFiles: [req.glbPath], correspondences: [], faces: []
+                meshFiles: [req.glbPath], ...(req.texturedGlbPath ? { texturedMeshFiles: [req.texturedGlbPath] } : {}), correspondences: [], faces: []
             }, { signal: req.signal, log: progress });
         } catch (err) {
             if (req.signal?.aborted) throw err;

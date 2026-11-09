@@ -211,7 +211,7 @@ export type RegisteredView = ProjectionView & {
  * nominal poses, said per view.
  */
 export async function registeredSurveyViews(input: {
-    site: SurveyGround; panos: PanoCandidate[]; maxViews: number; sv: StreetViewEvidenceDeps; tileMeshFiles: string[];
+    site: SurveyGround; panos: PanoCandidate[]; maxViews: number; sv: StreetViewEvidenceDeps; tileMeshFiles: string[]; texturedTileMeshFiles?: string[];
     structureMesh: RenderMesh3D; context?: RenderMesh3D; segment: OwnershipSegmenter; target?: string;
     register?: (job: PanoRegistrationJob, opts: { signal?: AbortSignal; log?: (m: string) => void }) => Promise<PanoRegistrationOutcome>;
     /** Also a street-level view (streetLevelView) of each planned view's pano (default false). */
@@ -248,7 +248,7 @@ export async function registeredSurveyViews(input: {
     let outcome: PanoRegistrationOutcome | undefined, registrationError: string | undefined;
     const held: HeldImage[] = got.images.map(im => ({ id: im.id, bytes: im.bytes, widthPx: im.widthPx, heightPx: im.heightPx, view: im.view }));
     try {
-        outcome = await (input.register ?? runPanoRegistrationOffThread)({ images: held, meshFiles: input.tileMeshFiles, correspondences: [], faces: [] }, { signal: input.signal, log: progress });
+        outcome = await (input.register ?? runPanoRegistrationOffThread)({ images: held, meshFiles: input.tileMeshFiles, ...(input.texturedTileMeshFiles ? { texturedMeshFiles: input.texturedTileMeshFiles } : {}), correspondences: [], faces: [] }, { signal: input.signal, log: progress });
     } catch (err) {
         if (input.signal?.aborted) throw err;
         registrationError = err instanceof Error ? err.message : String(err);

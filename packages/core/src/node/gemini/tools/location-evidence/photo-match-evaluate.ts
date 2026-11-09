@@ -319,7 +319,7 @@ export function defaultPhotoMatchDeps(): PhotoMatchDeps {
             return createStreetViewGroundingImageService(gemini);
         },
         register: async (images, meshFiles, signal, log) => {
-            const out = await runPanoRegistrationOffThread({ images, meshFiles, correspondences: [], faces: [], joint: false }, { signal, log });
+            const out = await runPanoRegistrationOffThread({ images, meshFiles, correspondences: [], faces: [], joint: false, drive: false }, { signal, log });
             return (out.edge?.panos ?? []).map(p => ({ panoId: p.panoId, edgeResidualPx: p.edgeResidualPx, ...(p.edge ? { correction: p.edge } : {}), reason: p.reason }));
         },
         judge: async (model, signal) => {

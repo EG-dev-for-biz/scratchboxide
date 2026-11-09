@@ -2807,7 +2807,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // edges, then jointly, in a worker thread (pano-registration-run.ts): the main thread keeps serving the
                         // vision calls in flight (figures, reading) instead of being held ~100 s
                         const reg = await runPanoRegistrationOffThread({
-                            images: [...surveyFrames, ...(match ? matchRingImages(match) : []), ...got.images], meshFiles: [extraction.geometryGlb],
+                            images: [...surveyFrames, ...(match ? matchRingImages(match) : []), ...got.images], meshFiles: [extraction.geometryGlb], ...(extraction.texturedGlb ? { texturedMeshFiles: [extraction.texturedGlb] } : {}),
                             ...(registration ? { prior: registration } : {}), correspondences: match?.correspondences ?? [], faces: fit ? fitFaces(fit) : []
                         }, { signal: io.signal, log: m => io.progress(m) });
                         if (reg.edge) {
@@ -5098,7 +5098,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const context = e.refined.rawClayGlb && fs.existsSync(e.refined.rawClayGlb) ? contextWithoutStructure(tileMesh, sceneToRenderMesh(readGlbScene(e.refined.rawClayGlb))) : tileMesh;
                     const got = await registeredSurveyViews({
                         site: { structure: structure!, ground: t.ground!, unmaskedTop: t.unmaskedTop ?? t.ground!.top }, panos: usable, maxViews, streetLevel: true,
-                        sv: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() }, tileMeshFiles: [extraction.geometryGlb], structureMesh,
+                        sv: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() }, tileMeshFiles: [extraction.geometryGlb], ...(extraction.texturedGlb ? { texturedTileMeshFiles: [extraction.texturedGlb] } : {}), structureMesh,
                         context, segment: segmenter, ...(visionAvailable ? { target: request.query } : {}),
                         ...(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR ? { debugDir: path.join(process.env.SCRATCHBOX_OWNERSHIP_DEBUG_DIR, runId, 'survey') } : {}),
                         // the views' obstruction-free copies, for the image model's references (streetview-clean.ts)

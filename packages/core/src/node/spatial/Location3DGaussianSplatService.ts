@@ -18,7 +18,8 @@ import {
     type StationImageGenerator
 } from './BeautifyStationService';
 import { resolveSurveyPreset } from './survey-router';
-import { geocode3DTilesAddress, getGoogle3DTilesClay } from './Google3DTileBlockoutPipelineService';
+import { geocode3DTilesAddress, getGoogle3DTilesClay, getGoogle3DTilesFullTexture } from './Google3DTileBlockoutPipelineService';
+import { HeadlessMeshSilhouetteRenderer } from './HeadlessMeshSilhouetteRenderer';
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
 import { glbRaycaster, planStreetViewStations, snapVantageToDrivenSidewalk, snapVantageToSidewalk, SNAP_STREET_RADIUS_M, type SidewalkSnap, type StreetVantage, type StreetViewStationsResult, type VectorStreet } from './street-view-stations';
@@ -369,9 +370,11 @@ export class Location3DGaussianSplatService {
                 if (req.vantage.headingDeg === undefined) throw new MissingInputError('location_generate_3dgs', 'vantageHeadingDeg', 'a vantage without vantageSideDeg needs the heading the viewer looks along');
                 vantage = { ...req.vantage, ...place, headingDeg: req.vantage.headingDeg };
             }
+            // the drive registration matches the photos against the tiles' own photo texture: the same tiles, textured
+            const twin = await texturedTilesTwin(glbPath, anchor, preset.cropRadius || 75, path.resolve(root, 'public/models'), m => progressReporter(0.075, m));
             progressReporter(0.08, 'Finding and registering the Street View around the vantage...');
             street = await planStreetViewStations({
-                glbPath, anchor,
+                glbPath, anchor, ...(twin.glbPath ? { texturedGlbPath: twin.glbPath } : {}),
                 vantage,
                 streetView: req.streetView,
                 // apart from the survey's own ids
@@ -518,3 +521,40 @@ export async function generateLocation3DGS(request: Location3DGSRequest): Promis
 
 // Canonical alias
 export const Location3DGSService = Location3DGaussianSplatService;
+
+/** Bounds (min x, y, z, max x, y, z) of a GLB's vertices. */
+function glbBounds(file: string): number[] {
+    const m = HeadlessMeshSilhouetteRenderer.loadMeshFromGlb(file);
+    const b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < m.vertices.length; i += 3) for (let k = 0; k < 3; k++) { b[k] = Math.min(b[k], m.vertices[i + k]); b[k + 3] = Math.max(b[k + 3], m.vertices[i + k]); }
+    return b;
+}
+
+/** Tiles of one extraction in two renderings agree to this (m) on every bound, or the textured one is not used. */
+export const TEXTURED_TWIN_TOLERANCE_M = 0.1;
+
+/**
+ * The photo-textured extraction of the same tiles as a clay GLB, at the same anchor (elevation included) and radius,
+ * used only when its bounds match the clay's (same frame); otherwise none, with the reason. An extraction made without
+ * the anchor's elevation sat 5.08 m above the clay at 7th Ave (2026-11-09).
+ */
+export async function texturedTilesTwin(clayGlb: string, anchor: { lat: number; lng: number; elevationMeters?: number; formattedAddress?: string }, radiusMeters: number, outputDir: string, log: (m: string) => void = () => undefined): Promise<{ glbPath?: string; reason: string }> {
+    try {
+        log('Extracting the same tiles with their photo texture (for the drive registration)...');
+        const r = await getGoogle3DTilesFullTexture(
+            { lat: anchor.lat, lng: anchor.lng, elevation: anchor.elevationMeters, landmarkName: anchor.formattedAddress },
+            { radiusMeters, outputDir }
+        );
+        if (r.success === false || !r.glbPath || !fs.existsSync(r.glbPath)) return { reason: 'the textured extraction failed' };
+        const a = glbBounds(clayGlb), b = glbBounds(r.glbPath);
+        const off = Math.max(...a.map((v, i) => Math.abs(v - b[i])));
+        if (!(off <= TEXTURED_TWIN_TOLERANCE_M)) {
+            const reason = `the textured tiles do not share the clay's frame (bounds differ by up to ${off.toFixed(2)} m); the drive registration is skipped`;
+            log(reason);
+            return { reason };
+        }
+        return { glbPath: r.glbPath, reason: `textured tiles in the clay's frame (bounds within ${off.toFixed(3)} m)` };
+    } catch (e) {
+        return { reason: `the textured extraction failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+}
