@@ -460,6 +460,13 @@ export function buildPartitionShell(cleanedTex: Uint8Array, latticeTex: Uint8Arr
         clay = appendNode(clay, [{ positions: all, normals: flatNormals(all), material: CLAY(node) }], node, extras);
         nodeCounts[node.startsWith('FacadeLattice_') ? 'FacadeLattice' : node] = (nodeCounts[node.startsWith('FacadeLattice_') ? 'FacadeLattice' : node] ?? 0) + count;
     }
+    // a rebuilt facade's mesh is named as the lattice names it (material-regions.ts finds rebuilt facades by it)
+    const renameMeshes = (bytes: Buffer): Buffer => {
+        const g = parseGlbBytes(bytes);
+        for (const n of g.json.nodes ?? []) { const m = /^FacadeLattice_(\d+)$/.exec(n.name ?? ''); if (m && n.mesh !== undefined) g.json.meshes[n.mesh].name = `facade_lattice_${m[1]}`; }
+        return assembleGlb(g.json, g.bin);
+    };
+    tex = renameMeshes(tex); clay = renameMeshes(clay);
     const report: PartitionShellReport = {
         version: PARTITION_SHELL_VERSION, native, photoMaps: [...maps].map(([id, m]) => ({ id, fromRow: byId.has(id), fitRms: Number(m.fitRms.toExponential(2)), onPlaneShare: Number(m.onPlaneShare.toFixed(3)) })),
         bake: { charts: chartList.length, atlases: nAtlas, texels, sampledShare: texels ? sampled / texels : 0, filledShare: texels ? (texels - sampled) / texels : 0, areaM2: Math.round(bakeArea), ms: msBake },
