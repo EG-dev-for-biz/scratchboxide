@@ -40,6 +40,16 @@ The user asked for DA3 Base next (2026-11-08). Same 72 views, same code.
 
 DA3 Small is the smallest any-view model (0.08 B parameters, no metric head); the projects this logic comes from run DA3 Nested Giant Large 1.1 (CC BY-NC 4.0, not usable here) and found even the non-nested Large model's pieces came out at different scales. Their thresholds were set for the Giant model.
 
+## Our own registrar, then learned matching (2026-11-09)
+
+The user asked to get the panoramas aligned. Both tried against a fresh photo-textured extraction of the same crawl (same triangles as the clay scan, but 5.08 m higher: shifted down onto the clay frame the stated poses use). Photos in memory only; proof sheet `proof_sheet_learned_matching.png`.
+
+- **StreetViewFeatureRegistrar as it is** (dense alignment, block matching, RANSAC-PnP, edge refinement): one panorama took 63 minutes and accepted 0 of 12 views (0-8 point matches per view, gate 12; interior edges 3-4 px, gate 2; orientation NCC 0.03-0.13). Not run on the rest.
+- **DISK + LightGlue** (kornia, Apache-2.0) between each photo and the textured render at the stated pose: 25-624 matches per view, about 1 s each on mps (LoFTR outdoor: 0-89). Render keypoints lifted through the render depth (off depth steps), then the registrar's own robustSolve + refine, one pose per panorama; a second pass re-rendered at the first solution.
+- **Held-out** (each view under the pose fitted to the other 11): in 5 of 6 panoramas 2-5 views land within 1.1-2.5 px (stated: 5-56 px). But they face one sector each; the other views stay 20-40 px off, and the moves (1.4-6.7 m) disagree along the drive: one correction shared by all six explains 1,038 of 14,916 matches (the six separate fits: 3,549). Not applied.
+- Likely causes: matches on one facade let a pose shift and turn to fit it; views toward changed places (the 2026 canopy and plaza) and transients (a parked police car) match wrongly.
+- Next: same-date photo-to-photo matches tie the six panoramas into one rigid drive first, then the drive is fitted to the scan with all its views at once.
+
 ## Still open
 
 1. The edge score used here (median distance from scan edges to photo edges) is too loose to judge a pose: it improved under the implausible forced move. The judge's registration or the research report's render-and-match is the measure to use.
