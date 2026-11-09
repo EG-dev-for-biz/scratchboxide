@@ -76,7 +76,7 @@ export interface InferReport {
     windows: { arrayed: number; walls: number; copied: number; copiedWalls: number; array?: Pick<WindowArrayReport, 'building'> };
     base?: { faces: number; texels: number; plates: number } | { reason: string };
     classes?: { count: number; read: number; finishes: Array<{ lab: V3; openings: boolean; roughness: number; metalness: number; conf: number; seen?: string }> } | { reason: string };
-    relief?: { faces: number; chunks: number; kept: number; rejected: number; boxRejected?: number; corrs?: number[] } | { reason: string };
+    relief?: { faces: number; chunks: number; shared?: number; kept: number; rejected: number; boxRejected?: number; corrs?: number[] } | { reason: string };
     calls: { text: number; image: number };
     ms: number;
 }
@@ -152,29 +152,49 @@ function ncc(a: Float32Array, b: Float32Array, valid?: Uint8Array): number {
  * Infers the second pass's inputs from the first pass's orthos folder `dir` (facades.json and each wall's photo).
  * Every step that needs a model or Street View is skipped, with its reason, when that is not given.
  */
-export async function inferFromSelfOrthos(dir: string, opts: { models?: InferModels; store?: ModelReadingStore; building?: NamedBuilding; streetView?: StreetViewSource; signal?: AbortSignal; P?: typeof INFER_PARAMS } = {}): Promise<InferredInputs> {
+export async function inferFromSelfOrthos(dir: string, opts: { models?: InferModels; store?: ModelReadingStore; building?: NamedBuilding; streetView?: StreetViewSource; signal?: AbortSignal; P?: typeof INFER_PARAMS; /** The windows already fitted and arrayed (the hybrid: pipeline K's window fit, reader and array on its straightened orthos): the system read and array are skipped. */ fit?: WindowFitFile; /** The street level when the folder does not record one (pipeline K's orthos). */ groundY?: number } = {}): Promise<InferredInputs> {
     const t0 = Date.now(), P = opts.P ?? INFER_PARAMS;
     const calls = { text: 0, image: 0 };
-    const file = JSON.parse(fs.readFileSync(path.join(dir, 'facades.json'), 'utf8')) as { groundY: number; facades: SelfFrame[] };
-    const frames = file.facades.filter(f => fs.existsSync(path.join(dir, f.image)));
+    const raw = JSON.parse(fs.readFileSync(path.join(dir, 'facades.json'), 'utf8')) as { groundY?: number; facades: Array<Partial<SelfFrame> & { facadeId: number; image: string; width: number; height: number; pixel: number; centroid: V3; normal: V3; axisS: V3; axisT: V3; orthoSMin: number; orthoTMax: number }> };
+    const file = { groundY: raw.groundY ?? opts.groundY ?? 0, facades: raw.facades };
+    // every folder's frames in one shape: the image's top and bottom above the street, its length (pipeline K's orthos
+    // record none of them); walls only
+    const frames: SelfFrame[] = file.facades.filter(f => fs.existsSync(path.join(dir, f.image)) && Math.abs(f.normal[1]) < 0.5).map(f => {
+        const h1 = f.centroid[1] + f.orthoTMax * f.axisT[1] - file.groundY;
+        return { kind: 'wall', uncoveredMask: f.image.replace(/\.png$/, '_uncovered.png'), coverage: 1, tMin: 0, tMax: 0, tier: -1, ...f, lengthM: f.lengthM ?? f.width * f.pixel, h1: f.h1 ?? h1, h0: f.h0 ?? h1 - f.height * f.pixel } as SelfFrame;
+    });
     const report: InferReport = { version: INFER_VERSION, walls: frames.length, windows: { arrayed: 0, walls: 0, copied: 0, copiedWalls: 0 }, calls, ms: 0 };
     const photo = new Map<number, { width: number; height: number; rgba: Uint8Array | Buffer }>();
     const photoOf = (f: SelfFrame) => { let p = photo.get(f.facadeId); if (!p) { p = decodePng(fs.readFileSync(path.join(dir, f.image))); photo.set(f.facadeId, p); } return p; };
-    const coveredAt = (f: SelfFrame, x: number, y: number) => { const p = photoOf(f), o = (y * p.width + x) * 4; return !(p.rgba[o] === 128 && p.rgba[o + 1] === 128 && p.rgba[o + 2] === 128); };
+    // covered: not in the frame's uncovered mask (when it has one), else not the grey that marks no photo
+    const masks = new Map<number, Uint8Array | null>();
+    const maskOf = (f: SelfFrame) => {
+        if (!masks.has(f.facadeId)) {
+            const m = path.join(dir, f.uncoveredMask);
+            let v: Uint8Array | null = null;
+            if (fs.existsSync(m)) { const d = decodePng(fs.readFileSync(m)); if (d.width === f.width && d.height === f.height) { v = new Uint8Array(d.width * d.height); for (let i = 0; i < v.length; i++) v[i] = d.rgba[i * 4] >= 128 ? 0 : 1; } }
+            masks.set(f.facadeId, v);
+        }
+        return masks.get(f.facadeId)!;
+    };
+    const coveredAt = (f: SelfFrame, x: number, y: number) => { const m = maskOf(f); if (m) return !!m[y * f.width + x]; const p = photoOf(f), o = (y * p.width + x) * 4; return !(p.rgba[o] === 128 && p.rgba[o + 1] === 128 && p.rgba[o + 2] === 128); };
 
     // 1. the building's system, then each wall's array
     let system: BuildingSystem | undefined;
-    if (opts.models) {
+    if (opts.fit) report.system = { reason: 'read with the windows (the hybrid)' };
+    else if (opts.models) {
         try {
             const bs = await readBuildingSystem(dir, facadeAskOf(opts.models, calls), { ...(opts.building ? { building: opts.building } : {}), ...(opts.store ? { readings: { store: opts.store, model: FACADE_READER_MODEL_KEY } } : {}), ...(opts.signal ? { signal: opts.signal } : {}) });
             system = bs.system;
             report.system = bs.system ? { conf: bs.system.conf, patterns: bs.system.patterns.length, regions: bs.system.regions.length, reused: bs.system.reused } : { reason: bs.reason ?? 'no answer' };
         } catch (err) { report.system = { reason: `the system read failed: ${err instanceof Error ? err.message : String(err)}` }; }
     } else report.system = { reason: 'no vision model' };
-    const fit: WindowFitFile = { version: INFER_VERSION, params: {} as WindowFitFile['params'], ms: 0, facades: frames.map(f => ({ facadeId: f.facadeId, width: f.width, height: f.height, rects: [] as WindowRect[], bands: [], ms: 0 })) };
-    const top = Math.max(...frames.map(f => f.h1)) + file.groundY;
-    const wa = inferWindowArrays(dir, fit, undefined, { envelopeTopY: top, ...(system ? { system } : {}) });
-    if (wa.building) report.windows.array = { building: wa.building };
+    const fit: WindowFitFile = opts.fit ?? { version: INFER_VERSION, params: {} as WindowFitFile['params'], ms: 0, facades: frames.map(f => ({ facadeId: f.facadeId, width: f.width, height: f.height, rects: [] as WindowRect[], bands: [], ms: 0 })) };
+    if (!opts.fit) {
+        const top = Math.max(...frames.map(f => f.h1)) + file.groundY;
+        const wa = inferWindowArrays(dir, fit, undefined, { envelopeTopY: top, ...(system ? { system } : {}) });
+        if (wa.building) report.windows.array = { building: wa.building };
+    }
     type Entry = { facadeId: number; width: number; height: number; rects: WindowRect[]; panes?: WindowRect[]; generated?: WindowRect[] };
     const entries = new Map<number, Entry>();
     for (const e of fit.facades) if (!('error' in e)) entries.set(e.facadeId, e as Entry);
@@ -378,10 +398,18 @@ export async function inferFromSelfOrthos(dir: string, opts: { models?: InferMod
             const png = encodePng(side, side, sheet, 3);
             cells.push({ f, px, py, ox, oy, x0, x1, y0, y1, ex, png, side, ...(opts.store ? { key: readingKey('measured-twin-relief-cell', [INFER_VERSION, prompt, png]) } : {}) });
         }
+        // congruent walls share one answer: a cell of the same size whose exemplar matches an earlier one's (NCC 0.9) takes it
+        const exLum = (c: Cell) => { const L = new Float32Array(c.px * c.py); for (let i = 0; i < L.length; i++) L[i] = 0.299 * c.ex[i * 3] + 0.587 * c.ex[i * 3 + 1] + 0.114 * c.ex[i * 3 + 2]; return L; };
+        const shareOf = new Map<Cell, Cell>();
+        cells.forEach((c, i) => {
+            const L = exLum(c);
+            for (let j = 0; j < i; j++) { const o = cells[j]; if (shareOf.has(o) || o.px !== c.px || o.py !== c.py) continue; if (ncc(L, exLum(o)) >= 0.9) { shareOf.set(c, o); break; } }
+        });
+        const asked = cells.filter(c => !shareOf.has(c));
         let next = 0;
         const worker = async () => {
-            while (next < cells.length) {
-                const c = cells[next++];
+            while (next < asked.length) {
+                const c = asked[next++];
                 if (opts.signal?.aborted) return;
                 c.ans = c.key ? await opts.store!.get<string>(c.key) : undefined;
                 if (c.ans) continue;
@@ -389,6 +417,7 @@ export async function inferFromSelfOrthos(dir: string, opts: { models?: InferMod
             }
         };
         await Promise.all([0, 1, 2, 3].map(worker));
+        for (const [c, o] of shareOf) if (o.ans) c.ans = o.ans;
         let kept = 0, rejected = 0, boxRejected = 0;
         const corrs: number[] = [];
         for (const c of cells) {
@@ -437,12 +466,12 @@ export async function inferFromSelfOrthos(dir: string, opts: { models?: InferMod
             fs.writeFileSync(out, encodePng(p.width, p.height, hmap, 1));
             height.push({ id: c.f.facadeId, png: out, depthM: P.reliefDepthM });
         }
-        report.relief = { faces: height.length, chunks: cells.length, kept, rejected, boxRejected, corrs };
+        report.relief = { faces: height.length, chunks: cells.length, shared: shareOf.size, kept, rejected, boxRejected, corrs };
     } else report.relief = { reason: 'no image model' };
 
-    const planes = frames.map(f => ({ facadeId: f.facadeId, image: f.image, centroid: f.centroid, normal: f.normal, axisS: f.axisS, axisT: f.axisT, orthoSMin: f.orthoSMin, orthoTMax: f.orthoTMax, pixel: f.pixel, width: f.width, height: f.height }));
+    const planes = file.facades.filter(f => fs.existsSync(path.join(dir, f.image))).map(f => ({ facadeId: f.facadeId, image: f.image, centroid: f.centroid, normal: f.normal, axisS: f.axisS, axisT: f.axisT, orthoSMin: f.orthoSMin, orthoTMax: f.orthoTMax, pixel: f.pixel, width: f.width, height: f.height }));
     const photos: InferredInputs['photos'] = {};
-    for (const f of frames) photos[f.facadeId] = { image: path.join(dir, f.image), mask: path.join(dir, f.uncoveredMask) };
+    for (const f of file.facades) { if (!fs.existsSync(path.join(dir, f.image))) continue; const m = path.join(dir, f.uncoveredMask ?? f.image.replace(/\.png$/, '_uncovered.png')); photos[f.facadeId] = { image: path.join(dir, f.image), ...(fs.existsSync(m) ? { mask: m } : {}) }; }
     const windowFit = [...entries.values()].map(e => ({ facadeId: e.facadeId, width: e.width, height: e.height, rects: e.rects as Array<[number, number, number, number]>, ...(e.panes?.length ? { panes: e.panes as Array<[number, number, number, number]> } : {}), ...(e.generated?.length ? { generated: e.generated as Array<[number, number, number, number]> } : {}) }));
     report.ms = Date.now() - t0;
     fs.writeFileSync(path.join(dir, 'infer_report.json'), JSON.stringify(report, null, 1));

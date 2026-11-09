@@ -47,6 +47,7 @@ export const MEASURED_TWIN_DECLARATION: ToolDeclaration = {
             scanDetailM: { type: 'NUMBER', description: 'Optional: keep the scan\'s own surface (Google 3D Tiles, measured) wherever it stands at least this many metres outside the procedural shell (e.g. 0.3: terrace objects, statues, antenna equipment, ornament the shell misses); its parapet and roof blocks are then left out. Omit or 0 for a fully procedural twin with no scan surface.' },
             kFree: { type: 'BOOLEAN', description: 'Optional: read nothing of pipeline K, only the staged run\'s cut-out scan and its photo texture (any pipeline\'s run with a remesh stage): the street level is estimated from the scan, each wall\'s photo rendered from the texture and its windows found in it by the twin\'s own detector (no model call). Default false: the twin uses the K build\'s window boxes, frames and materials.' },
             infer: { type: 'BOOLEAN', description: 'Optional: the K-free twin, then everything Google\'s data lets the twin infer beyond the scan, in a second pass: the building\'s window system read by the vision model from all its walls at once and laid on every wall where the photo shows it; windows copied to congruent walls the photo left empty (the building\'s repetition, generated); window columns recessed behind proud piers (depth measured from the scan where it resolves it, else generated); each appearance class\'s finish read from its patches; the street-level band from registered Street View plates where this machine has them; relief drawn from an image model\'s height map of the largest walls (a normal map, never moving the surface, generated); thin mast sections turned round; and first the scan\'s photos corrected (baked roof and terrace shadow lifted by a sun fitted from the mesh, each photo\'s gain matched per side and height band, the seams between photos levelled). Makes vision and image model calls (a few dollars at most). Implies kFree.' },
+            hybrid: { type: 'BOOLEAN', description: 'Optional: the hybrid twin: pipeline K\'s detail stages run on the staged run\'s own cut-out (its facade photos straightened, windows fitted and read by the facade reader by family, the building\'s window system, the window arrays), without the rest of pipeline K; the twin\'s shell built from them, each wall\'s own photo blended over its storey texture where they agree, the scan kept only where it steps 0.6 m or more out of the shell (crowns, fins, ornament), plus the infer mode\'s photometry, finishes, Street View base and relief. Model calls: the facade reader\'s (tens), a few more. Implies kFree.' },
             reliefM: { type: 'NUMBER', description: 'Optional: purely procedural detail down to this size (e.g. 0.3): relief maps of the scan on the walls, roofs and mast in 0.3 m cells, and whatever stands at least this far off the shell rebuilt as measured blocks, with no scan surface kept. Ignored when scanDetailM is given.' }
         }
     }
@@ -162,6 +163,13 @@ export async function renderTwinViews(r: MeasuredTwinResult, outDir: string, sig
     return out;
 }
 
+/** The hybrid's K stages, for the chat. */
+function hybridSummary(r: MeasuredTwinResult): string {
+    const h = r.hybrid!;
+    const rd = h.reader && 'read' in h.reader ? `the facade reader read ${h.reader.read} planes (${h.reader.readerWindows} openings, ${h.reader.calls} calls, ${h.reader.reused} kept answers)` : `facade reader ${h.reader && 'reason' in h.reader ? `skipped (${h.reader.reason})` : 'not run'}`;
+    return `hybrid: ${h.orthos.rectified} of ${h.orthos.facades} facade photos straightened; window fit ${h.windowFit.windows}; ${rd}; ${h.array.windows} windows after the arrays; the stages took ${Math.round(h.ms / 1000)} s; `;
+}
+
 /** What the infer mode inferred, for the chat (every step that did not run says why). */
 function inferSummary(r: MeasuredTwinResult): string {
     const i = r.infer!, p = r.report.piers;
@@ -189,10 +197,11 @@ export async function runMeasuredTwinTool(args: Record<string, unknown>, ctx: To
     const outDir = path.join(cacheRoot, 'staged_location', 'measured_twin', runId);
     const scanDetailM = typeof args.scanDetailM === 'number' && Number.isFinite(args.scanDetailM) && args.scanDetailM > 0 ? args.scanDetailM : undefined;
     const reliefM = !scanDetailM && typeof args.reliefM === 'number' && Number.isFinite(args.reliefM) && args.reliefM > 0 ? args.reliefM : undefined;
-    const infer = args.infer === true;
-    const kFree = args.kFree === true || infer;
-    const options = { ...(scanDetailM ? { scanDetailM } : reliefM ? { reliefM } : {}), ...(kFree ? { kFree } : {}), ...(infer ? { infer } : {}) };
-    const inferDeps = infer ? await inferDepsFor(runDir, cacheRoot, ctx.signal) : {};
+    const hybrid = args.hybrid === true;
+    const infer = args.infer === true && !hybrid;
+    const kFree = args.kFree === true || infer || hybrid;
+    const options = { ...(scanDetailM ? { scanDetailM } : reliefM ? { reliefM } : {}), ...(kFree ? { kFree } : {}), ...(infer ? { infer } : {}), ...(hybrid ? { hybrid } : {}) };
+    const inferDeps = infer || hybrid ? await inferDepsFor(runDir, cacheRoot, ctx.signal) : {};
     if (infer) ctx.reportProgress?.('measured twin: inferring the window system, finishes, Street View base and relief', 0.2);
     const r = await buildMeasuredTwin({ runDir, cacheRoot, outDir, ...(Object.keys(options).length ? { options } : {}), ...inferDeps, store: fileReadingStore(modelReadingsDir(path.join(cacheRoot, 'staged_location'))), ...(ctx.signal ? { signal: ctx.signal } : {}) });
     ctx.reportProgress?.('measured twin: generated', 0.9);
@@ -218,7 +227,7 @@ export async function runMeasuredTwinTool(args: Record<string, unknown>, ctx: To
     const w = r.report.windows;
     const summary = `Measured procedural twin of run ${runId}: ${r.report.tiers} tiers from the scan's height map${r.report.slender.fromM !== null && r.report.slender.bands ? `, a revolved slender top from ${r.report.slender.fromM.toFixed(1)} m in ${r.report.slender.bands} measured bands` : ''} up to ${r.report.topM.toFixed(1)} m; `
         + `${w.placed} windows punched (${w.placed - w.generated} where the build read them, ${w.continued} continued along their rows where the photo shows a window, ${w.rephased} put back on their wall's storey rhythm: generated), reveal ${r.report.revealM.toFixed(2)} m (${r.report.revealLabel}); `
-        + (r.infer ? inferSummary(r) : kFree ? `K-free: walls photographed from the scan's texture (${r.report.heads.selfWalls}), windows found in ${r.report.heads.selfWindowWalls} of them; ` : '')
+        + (r.hybrid ? hybridSummary(r) : '') + (r.infer ? inferSummary(r) : kFree ? `K-free: walls photographed from the scan's texture (${r.report.heads.selfWalls}), windows found in ${r.report.heads.selfWindowWalls} of them; ` : '')
         + (r.report.relief.thresholdM > 0 ? `procedural relief down to ${r.report.relief.thresholdM} m: ${r.report.relief.wallPieces} wall pieces (${Math.round(r.report.relief.wallAreaM2)} m²), ${r.report.roofDetail.pieces} roof pieces, ${r.report.relief.mastPieces} mast pieces, as measured blocks (no scan surface); ` : '')
         + (r.report.scanDetail.pieces ? `the scan's own surface kept in ${r.report.scanDetail.pieces} pieces (${Math.round(r.report.scanDetail.areaM2)} m²) where it stands ${r.report.scanDetail.thresholdM} m or more outside the shell (measured, scan); ` : '')
         + `${views.length} proof views rendered (${views.map(v => path.basename(v.path)).join(', ')}); `

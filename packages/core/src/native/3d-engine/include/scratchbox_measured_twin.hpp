@@ -74,6 +74,7 @@
 
 #include "scratchbox_cdt.hpp"
 #include "scratchbox_gltf_scene.hpp"
+#include "scratchbox_jpeg.hpp"
 #include "scratchbox_png.hpp"
 #include "scratchbox_shape_program.hpp"
 
@@ -128,6 +129,7 @@ struct Params {
     double symmetryTol{0.04};          // a slender top's rotational symmetry holds when its m-fold average departs by at most this share of the radius (RMS)
     double circleBelowM{1.0};
     int selfRead{0};                   // no plane photos or window boxes given: each wall's own photo rendered from the scan's texture, its windows found in it
+    int selfFill{0};                   // plane photos given: a wall none of them stands on takes its own photo rendered from the scan's texture for its detail
     double selfTexelM{0.15};           // ... its texel
     int openingHeads{1};               // window heads traced from each window type's median-stacked photo
     double headMinM{0.15};             // ... drawn when the traced top varies at least this much across the window
@@ -159,6 +161,9 @@ struct Params {
     double roofDetailStepM{0.5};       // ... its heights in steps of this
     double scanDetailM{0};             // when above 0: scan surface standing at least this far outside the shell is kept as it is (measured), and the ledge profiles and roof detail are left out
     double scanDetailMinArea{0.5};     // ... in connected pieces of at least this much area (m^2)
+    double scanDetailStepM{0};         // ... and only pieces standing at least this far out somewhere (a real step: crowns, fins, ornament; not a scan bulge)
+    double orthoBlend{0};              // each wall's own photo blended over its storey median by this weight, where the two agree (unique detail kept)
+    int atlasJpeg{0};                  // the colour atlas written as JPEG (a large atlas at a fraction of the bytes)
     double reliefM{0};                 // when above 0: relief maps on the walls, roofs and slender top rebuild, as blocks, what stands at least this far off the shell (all procedural; the ledge profiles are left out)
     double reliefCellM{0.3};           // ... their cell
     double reliefDensity{40};          // ... scan samples per square metre
@@ -229,7 +234,7 @@ inline Spec parseSpec(std::istream& in) {
             else if (name == "minWindowM") P.minWindowM = v; else if (name == "keepShare") P.keepShare = v; else if (name == "sampleRadiusM") P.sampleRadiusM = v;
             else if (name == "slenderShare") P.slenderShare = v; else if (name == "minSlenderShare") P.minSlenderShare = v;
             else if (name == "sectors") P.sectors = static_cast<int>(v); else if (name == "harmonics") P.harmonics = static_cast<int>(v);
-            else if (name == "selfRead") P.selfRead = static_cast<int>(v); else if (name == "selfTexelM") P.selfTexelM = v;
+            else if (name == "selfRead") P.selfRead = static_cast<int>(v); else if (name == "selfFill") P.selfFill = static_cast<int>(v); else if (name == "selfTexelM") P.selfTexelM = v;
             else if (name == "openingHeads") P.openingHeads = static_cast<int>(v); else if (name == "headMinM") P.headMinM = v; else if (name == "headEdgeM") P.headEdgeM = v;
             else if (name == "slenderFins") P.slenderFins = static_cast<int>(v); else if (name == "finMinM") P.finMinM = v; else if (name == "finMinCorr") P.finMinCorr = v;
             else if (name == "symmetryTol") P.symmetryTol = v; else if (name == "circleBelowM") P.circleBelowM = v; else if (name == "sliceM") P.sliceM = v;
@@ -238,7 +243,8 @@ inline Spec parseSpec(std::istream& in) {
             else if (name == "edgeProfiles") P.edgeProfiles = static_cast<int>(v); else if (name == "profileBinM") P.profileBinM = v;
             else if (name == "profileMinOutM") P.profileMinOutM = v; else if (name == "profileMaxOutM") P.profileMaxOutM = v;
             else if (name == "reliefM") P.reliefM = v; else if (name == "reliefCellM") P.reliefCellM = v; else if (name == "reliefDensity") P.reliefDensity = v; else if (name == "reliefMinArea") P.reliefMinArea = v; else if (name == "reliefMaxArea") P.reliefMaxArea = v; else if (name == "surfaceFit") P.surfaceFit = static_cast<int>(v);
-            else if (name == "scanDetailM") P.scanDetailM = v; else if (name == "scanDetailMinArea") P.scanDetailMinArea = v;
+            else if (name == "scanDetailM") P.scanDetailM = v; else if (name == "scanDetailMinArea") P.scanDetailMinArea = v; else if (name == "scanDetailStepM") P.scanDetailStepM = v;
+            else if (name == "orthoBlend") P.orthoBlend = v; else if (name == "atlasJpeg") P.atlasJpeg = static_cast<int>(v);
             else if (name == "roofDetail") P.roofDetail = static_cast<int>(v); else if (name == "roofDetailMinM") P.roofDetailMinM = v;
             else if (name == "roofDetailMinArea") P.roofDetailMinArea = v; else if (name == "roofDetailStepM") P.roofDetailStepM = v; else if (name == "roofDetailEdgeM") P.roofDetailEdgeM = v;
             else if (name == "profileCoverage") P.profileCoverage = v; else if (name == "profileDensity") P.profileDensity = v;
@@ -554,7 +560,7 @@ struct Report {
     size_t windowsGiven{0}, windowsPlaced{0}, windowsGenerated{0}, windowsContinued{0}, continueTested{0}, windowsRephased{0}, wallsRephased{0}, panesPlaced{0};
     size_t droppedNoWall{0}, droppedClipped{0}, droppedOverlap{0}, droppedSmall{0}, droppedNoFrame{0};
     size_t uncolouredElements{0}, colouredElements{0}, capsCut{0}, undersideFills{0};
-    size_t pierWalls{0}, pierWallsMeasured{0}, pierStrips{0}, baseFaces{0}, baseTexels{0}, reliefFaces{0}, reliefTexels{0}, turnedBands{0};
+    size_t pierWalls{0}, pierWallsMeasured{0}, pierStrips{0}, baseFaces{0}, baseTexels{0}, reliefFaces{0}, reliefTexels{0}, turnedBands{0}, orthoTexels{0}, selfFilled{0};
     std::vector<double> pierDepths;
     size_t facesTextured{0}, texelsDetail{0}, paletteColours{0};
     size_t profileWalls{0}, profileLips{0}, profileParapets{0}, profileSteps{0};
@@ -1013,7 +1019,7 @@ inline Result build(Spec S) {
     struct SelfImg { int w{0}, h{0}; double pitch{0}; std::vector<float> rgb; };
     std::vector<SelfImg> selfImg(faces.size());
     std::vector<std::string> exported;
-    if (S.P.selfRead && ph.ok) {
+    if ((S.P.selfRead || S.P.selfFill) && ph.ok) {
         const double t = S.P.selfTexelM;
         for (size_t fi = 0; fi < faces.size(); ++fi) {
             const auto& w = faces[fi];
@@ -1074,6 +1080,7 @@ inline Result build(Spec S) {
             int Q = 0; double cQ = 0.2;
             for (int k = static_cast<int>(std::round(0.8 / t)); k <= static_cast<int>(std::round(8.0 / t)) && k < I.w / 2; ++k) { const double c = corr(k, 0); if (c > cQ) { cQ = c; Q = k; } }
             I.pitch = P ? P * t : 0;
+            if (!S.P.selfRead) { selfImg[fi] = std::move(I); continue; }  // selfFill: the photo only, for the wall's detail
             if (!P || !Q) { selfImg[fi] = std::move(I); continue; }
             // the unit cell: the median over the wall's repeats
             std::vector<float> U(static_cast<size_t>(Q) * P, NAN);
@@ -1308,6 +1315,8 @@ inline Result build(Spec S) {
                         if (a < 0 || a > w.L || !photoOf(id).ok) continue;
                         facePlane[fi] = id; facePitch[fi] = storey; break;
                     }
+                    // none: its own photo from the scan's texture (selfFill), at its own storey when it read one
+                    if (facePlane[fi] == -1 && S.P.selfFill && selfImg[fi].w) { facePlane[fi] = -2; facePitch[fi] = selfImg[fi].pitch > 0 ? selfImg[fi].pitch : storey; ++rep.selfFilled; }
                 }
             }
         }
@@ -1407,7 +1416,19 @@ inline Result build(Spec S) {
                     if (vr.size() < 3) continue;
                     auto med = [](std::vector<double>& v) { std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; };
                     const size_t o = (static_cast<size_t>(j) * t.w + i) * 3;
-                    t.M[o] = static_cast<float>(med(vr)); t.M[o + 1] = static_cast<float>(med(vg)); t.M[o + 2] = static_cast<float>(med(vb));
+                    double m3[3] = {med(vr), med(vg), med(vb)};
+                    // the wall's own photo at this texel, over the median where the two agree (within a factor of 1.6 in
+                    // luminance: not a smear, hole or stray reflection): what does not repeat stays on the wall
+                    Rgb own;
+                    if (S.P.orthoBlend > 0 && texelAt(a, h, own)) {
+                        const double lm = 0.2126 * m3[0] + 0.7152 * m3[1] + 0.0722 * m3[2], lo = 0.2126 * own.r + 0.7152 * own.g + 0.0722 * own.b;
+                        if (lm > 1e-4 && lo > 1e-4 && lo / lm < 1.6 && lm / lo < 1.6) {
+                            const double wgt = S.P.orthoBlend;
+                            m3[0] = (1 - wgt) * m3[0] + wgt * own.r; m3[1] = (1 - wgt) * m3[1] + wgt * own.g; m3[2] = (1 - wgt) * m3[2] + wgt * own.b;
+                            ++rep.orthoTexels;
+                        }
+                    }
+                    t.M[o] = static_cast<float>(m3[0]); t.M[o + 1] = static_cast<float>(m3[1]); t.M[o + 2] = static_cast<float>(m3[2]);
                     ++rep.texelsDetail;
                 }
                 t.ok = true;
@@ -1702,7 +1723,7 @@ inline Result build(Spec S) {
     // of the wall (0.5 m bins). Above the tier top, a parapet: samples rising out of the roof within a metre of the wall,
     // whose density stops below 3 m (an upper tier's wall standing flush would not stop). Each is swept along the wall, its
     // ends mitred at convex corners and drawn back at concave ones. Measured (stacked scan); the colour is the photo's.
-    if (S.P.edgeProfiles && S.P.scanDetailM <= 0 && S.P.reliefM <= 0 && R.building.size()) {
+    if (S.P.edgeProfiles && (S.P.scanDetailM <= 0 || S.P.scanDetailStepM > 0) && S.P.reliefM <= 0 && R.building.size()) {  // the ornament-only scan (a step filter) keeps the lips
         // dense samples of the building's surface, in the tile frame, on a 2 m grid
         std::vector<P3> dense;
         {
@@ -2455,7 +2476,7 @@ inline Result build(Spec S) {
     // tiers do not hold (the crown's wings and buttresses, bulkheads, plant, tanks: no kind is named). Each is rebuilt as
     // blocks from the twin's roof up to the scan's height in roofDetailStepM steps: maximal rectangles of cells sharing a
     // height and a roof. Measured; the colour is the photo's.
-    if ((S.P.roofDetail || S.P.reliefM > 0) && S.P.scanDetailM <= 0 && R.grid.nu > 0) {
+    if ((S.P.roofDetail || S.P.reliefM > 0) && (S.P.scanDetailM <= 0 || S.P.scanDetailStepM > 0) && R.grid.nu > 0) {
         // with relief maps: down to reliefM, parapets included (no ledge profiles draw them), in quarter-metre steps
         const double rdMin = S.P.reliefM > 0 ? S.P.reliefM : S.P.roofDetailMinM, rdStep = S.P.reliefM > 0 ? 0.25 : S.P.roofDetailStepM;
         const double rdArea = S.P.reliefM > 0 ? S.P.reliefMinArea : S.P.roofDetailMinArea;
@@ -2587,14 +2608,15 @@ inline Result build(Spec S) {
         for (size_t t0 = 0; t0 < T; ++t0) {
             if (!keep[t0] || comp[t0] >= 0) continue;
             std::vector<uint32_t> piece{static_cast<uint32_t>(t0)}; comp[t0] = 0;
-            double area = 0;
+            double area = 0, outMax = 0;
             for (size_t q = 0; q < piece.size(); ++q) {
                 const uint32_t t = piece[q];
                 const P3 a = R.building.p[3 * t], b = R.building.p[3 * t + 1], c = R.building.p[3 * t + 2];
                 area += sp::len(sp::cross(b - a, c - a)) / 2;
+                if (S.P.scanDetailStepM > 0) outMax = std::max(outMax, outside((a + b + c) * (1.0 / 3)));
                 for (int k = 0; k < 3; ++k) for (uint32_t nb : byVert[vkey(R.building.p[3 * t + k])]) if (comp[nb] < 0) { comp[nb] = 0; piece.push_back(nb); }
             }
-            if (area < S.P.scanDetailMinArea) continue;
+            if (area < S.P.scanDetailMinArea || (S.P.scanDetailStepM > 0 && outMax < S.P.scanDetailStepM)) continue;
             ++rep.scanDetailPieces; rep.scanDetailAreaM2 += area;
             for (uint32_t t : piece) {
                 const P3 a = F.toTile(R.building.p[3 * t]), b = F.toTile(R.building.p[3 * t + 1]), c = F.toTile(R.building.p[3 * t + 2]);
@@ -2879,7 +2901,7 @@ inline Result build(Spec S) {
 // GLB writer: the classes' materials (sampling the atlas when there is one, else with their library maps), COLOR_0 as float
 // =============================================================================================
 
-inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const std::vector<ClassMat>& classesIn, double glassRoughness, const std::string& rootExtras, size_t& triangles, const texture::ImageBuffer* atlas = nullptr, const texture::ImageBuffer* normalAtlas = nullptr) {
+inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const std::vector<ClassMat>& classesIn, double glassRoughness, const std::string& rootExtras, size_t& triangles, const texture::ImageBuffer* atlas = nullptr, const texture::ImageBuffer* normalAtlas = nullptr, bool jpegAtlas = false) {
     std::vector<ClassMat> classes = classesIn;
     if (classes.empty()) classes.push_back(ClassMat{"neutral", {60, 0, 0}, 0.8, 0, 2, "", "", false});
     const int glass = static_cast<int>(classes.size());
@@ -2914,10 +2936,10 @@ inline std::vector<uint8_t> writeGlb(const std::vector<OutNode>& nodes, const st
     // the wall detail atlas (the detailed materials sample it through their elements' TEXCOORD_0)
     int atlasIm = -1;
     if (atlas && !atlas->empty()) {
-        const auto bytes = png::encode(*atlas, 6);
+        const auto bytes = jpegAtlas ? jpeg::encode(*atlas, 92) : png::encode(*atlas, 6);
         if (!bytes.empty()) {
             const int v = addView(bytes.data(), bytes.size(), 0);
-            imgs << (nImg ? "," : "") << "{\"bufferView\":" << v << ",\"mimeType\":\"image/png\"}";
+            imgs << (nImg ? "," : "") << "{\"bufferView\":" << v << ",\"mimeType\":\"" << (jpegAtlas ? "image/jpeg" : "image/png") << "\"}";
             texs << (nImg ? "," : "") << "{\"sampler\":1,\"source\":" << nImg << "}";
             atlasIm = nImg++;
         }
@@ -3006,7 +3028,7 @@ inline std::string reportJson(const Report& r, const Spec& S, size_t triangles, 
       << ",\"windows\":{\"given\":" << r.windowsGiven << ",\"placed\":" << r.windowsPlaced << ",\"generated\":" << r.windowsGenerated << ",\"continued\":" << r.windowsContinued << ",\"rephased\":" << r.windowsRephased << ",\"wallsRephased\":" << r.wallsRephased << ",\"continueTested\":" << r.continueTested << ",\"panes\":" << r.panesPlaced
       << ",\"dropped\":{\"noWall\":" << r.droppedNoWall << ",\"clipped\":" << r.droppedClipped << ",\"overlap\":" << r.droppedOverlap << ",\"small\":" << r.droppedSmall << ",\"noFrame\":" << r.droppedNoFrame << "}}"
       << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << ",\"undersideFills\":" << r.undersideFills << "}"
-      << ",\"piers\":{\"walls\":" << r.pierWalls << ",\"measured\":" << r.pierWallsMeasured << ",\"strips\":" << r.pierStrips << ",\"baseFaces\":" << r.baseFaces << ",\"baseTexels\":" << r.baseTexels << ",\"reliefFaces\":" << r.reliefFaces << ",\"reliefTexels\":" << r.reliefTexels << ",\"turnedBands\":" << r.turnedBands << ",\"medianM\":" << detail::num([&] { auto v = r.pierDepths; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
+      << ",\"piers\":{\"walls\":" << r.pierWalls << ",\"measured\":" << r.pierWallsMeasured << ",\"strips\":" << r.pierStrips << ",\"baseFaces\":" << r.baseFaces << ",\"baseTexels\":" << r.baseTexels << ",\"reliefFaces\":" << r.reliefFaces << ",\"reliefTexels\":" << r.reliefTexels << ",\"turnedBands\":" << r.turnedBands << ",\"orthoTexels\":" << r.orthoTexels << ",\"selfFilled\":" << r.selfFilled << ",\"medianM\":" << detail::num([&] { auto v = r.pierDepths; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
       << ",\"slender\":{\"fromM\":" << detail::num(r.slenderFromM) << ",\"slices\":" << r.slenderSlices << ",\"bands\":" << r.slenderBands << ",\"axisFits\":" << r.slenderAxisFits << ",\"symmetry\":" << r.slenderSymmetry << ",\"finBands\":" << r.finBands << ",\"fins\":" << r.finCount << ",\"finSegments\":" << r.finSegments << "}" << ",\"heads\":{\"types\":" << r.headTypes << ",\"windows\":" << r.headWindows << ",\"drawn\":" << r.headsDrawn << ",\"surfacePieces\":" << r.surfacePieces << ",\"surfaceQuads\":" << r.surfaceQuads << ",\"selfWalls\":" << r.selfWalls << ",\"selfWindowWalls\":" << r.selfWindowWalls << ",\"selfWindows\":" << r.selfWindows << ",\"medianRiseM\":" << detail::num([&] { auto v = r.headRises; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
       << ",\"topM\":" << detail::num(r.topM) << ",\"revealM\":" << detail::num(S.revealM) << ",\"revealLabel\":\"" << detail::esc(S.revealLabel) << "\""
       << ",\"triangles\":" << triangles << ",\"bytes\":" << bytes << ",\"classUse\":{";

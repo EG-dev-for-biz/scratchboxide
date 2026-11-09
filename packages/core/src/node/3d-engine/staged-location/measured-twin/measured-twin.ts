@@ -27,6 +27,7 @@ import type { ModelReadingStore } from '../pipeline-k/model-readings';
 import { REVEAL_DEPTH_PARAMS } from '../reveal-depth';
 import type { NamedBuilding } from '../pipeline-k/facade-reader-brief';
 import { tileRefineTwin } from '../tile-refine-twin';
+import { hybridInputs, type HybridReport } from './hybrid';
 import { enuOffset, inferFromSelfOrthos, type InferModels, type InferReport, type StreetViewSource } from './infer';
 
 export const MEASURED_TWIN_VERSION = 'measured-twin/2';
@@ -247,7 +248,7 @@ export function ensureMeasuredTwinBinary(repoRoot = findTileRefineRepoRoot()): P
  * `reliefM` above 0 (and no scanDetailM) rebuilds, purely procedurally, what stands at least that far off the shell: relief maps
  * of the scan on the walls, roofs and slender top in 0.3 m cells, as measured blocks.
  */
-export interface MeasuredTwinOptions { scanDetailM?: number; reliefM?: number; kFree?: boolean; /** K-free, then inferred (infer.ts): the building's window system, symmetry, pier depth, finishes, Street View base, relief. */ infer?: boolean; /** The scan's photo texture corrected before the twin reads it (K's de-light, roof-shadow lift and harmonising, tile-refine-twin.ts). Default: on with infer. */ photometry?: boolean }
+export interface MeasuredTwinOptions { scanDetailM?: number; reliefM?: number; kFree?: boolean; /** K-free, then inferred (infer.ts): the building's window system, symmetry, pier depth, finishes, Street View base, relief. */ infer?: boolean; /** The scan's photo texture corrected before the twin reads it (K's roof-shadow lift and harmonising, tile-refine-twin.ts). Default: on with infer or hybrid. */ photometry?: boolean; /** The hybrid (hybrid.ts, docs/research/2026-11-08-hybrid-twin-plan.md): pipeline K's detail stages on the cut-out's own facade orthos, the twin's shell and texture built from them. */ hybrid?: boolean }
 
 /** The generator's report (scratchbox_measured_twin.hpp reportJson). */
 export interface MeasuredTwinReport {
@@ -259,7 +260,7 @@ export interface MeasuredTwinReport {
     relief: { thresholdM: number; wallPieces: number; wallBoxes: number; wallAreaM2: number; mastPieces: number; mastCells: number };
     windows: { given: number; placed: number; generated: number; continued: number; continueTested: number; rephased: number; wallsRephased: number; panes: number; dropped: Record<string, number> };
     colour: { elements: number; uncoloured: number; undersideFills: number };
-    piers?: { walls: number; measured: number; strips: number; baseFaces: number; baseTexels: number; reliefFaces: number; reliefTexels: number; turnedBands: number; medianM: number };
+    piers?: { walls: number; measured: number; strips: number; baseFaces: number; baseTexels: number; reliefFaces: number; reliefTexels: number; turnedBands: number; orthoTexels?: number; selfFilled?: number; medianM: number };
     slender: { fromM: number | null; slices: number; bands: number; axisFits: number; symmetry: number; finBands: number; fins: number; finSegments: number };
     heads: { types: number; windows: number; drawn: number; surfacePieces: number; surfaceQuads: number; selfWalls: number; selfWindowWalls: number; selfWindows: number; medianRiseM: number };
     topM: number; revealM: number; revealLabel: string; triangles: number; bytes: number; classUse: Record<string, number>; notes: string[];
@@ -267,7 +268,8 @@ export interface MeasuredTwinReport {
 
 export interface MeasuredTwinResult {
     version: string; glb: string; specFile: string; report: MeasuredTwinReport; /** What the infer mode inferred between its two passes. */ infer?: InferReport;
-    /** The scan's photo texture as corrected before the twin read it, or why not. */ photometry?: PhotometryReport; records: Omit<KRunRecords, 'planes' | 'windowFit' | 'photos'> & { planes: number; windowPlanes: number; photos: number }; mapsMissing: string[]; ms: number;
+    /** The scan's photo texture as corrected before the twin read it, or why not. */ photometry?: PhotometryReport;
+    /** The hybrid's K stages (orthos, window fit, reader, system, array), with their times and calls. */ hybrid?: HybridReport; records: Omit<KRunRecords, 'planes' | 'windowFit' | 'photos'> & { planes: number; windowPlanes: number; photos: number }; mapsMissing: string[]; ms: number;
 }
 
 /**
@@ -277,7 +279,7 @@ export interface MeasuredTwinResult {
 export async function buildMeasuredTwin(opts: { runDir: string; cacheRoot: string; outDir: string; store?: ModelReadingStore; signal?: AbortSignal; timeoutMs?: number; options?: MeasuredTwinOptions; models?: InferModels; building?: NamedBuilding; streetView?: StreetViewSource }): Promise<MeasuredTwinResult> {
     const t0 = Date.now();
     const options = opts.options ?? {};
-    const kFree = options.kFree || options.infer;
+    const kFree = options.kFree || options.infer || options.hybrid;
     let rec = kFree ? readKFreeRecords(opts.runDir, opts.cacheRoot) : readKRunRecords(opts.runDir, opts.cacheRoot);
     fs.mkdirSync(opts.outDir, { recursive: true });
     const { maps, missing } = await classMaps(rec.classes, path.join(opts.outDir, 'maps'), opts.store);
@@ -299,16 +301,24 @@ export async function buildMeasuredTwin(opts: { runDir: string; cacheRoot: strin
             } catch (e) { reject(new Error(`measured_twin answered no report: ${String(e)}`)); }
         });
     });
-    let inferReport: InferReport | undefined, photometry: PhotometryReport | undefined;
+    let inferReport: InferReport | undefined, photometry: PhotometryReport | undefined, hybridReport: HybridReport | undefined;
     let extra: string[] = [];
-    if ((options.photometry ?? options.infer) && rec.textured) {
+    if ((options.photometry ?? (options.infer || options.hybrid)) && rec.textured) {
         try {
             const fixed = await correctedScanTexture(rec.textured, opts.outDir);
             photometry = fixed.report;
             rec = { ...rec, textured: fixed.glb };
         } catch (err) { photometry = { reason: `the photometry step failed: ${err instanceof Error ? err.message : String(err)}` }; }
     }
-    if (options.infer) {
+    if (options.hybrid) {
+        // pipeline K's detail stages on the cut-out's own facade orthos, then the twin's shell from them
+        const groundY = photometry && 'groundY' in photometry ? photometry.groundY : NaN;
+        const h = await hybridInputs(rec.orthosDir, path.join(opts.outDir, 'hybrid'), { groundY: Number.isFinite(groundY) ? groundY : 0, ...(opts.models ? { models: opts.models } : {}), ...(opts.store ? { store: opts.store } : {}), ...(opts.building ? { building: opts.building } : {}), ...(opts.streetView ? { streetView: opts.streetView } : {}), ...(opts.signal ? { signal: opts.signal } : {}) });
+        hybridReport = h.hybrid; inferReport = h.report;
+        rec = { ...rec, planes: h.planes, windowFit: h.windowFit, photos: h.photos, classes: h.classes };
+        extra = ['param piers 1', 'param turnedBelowM 1.2', 'param selfFill 1', 'param orthoBlend 0.6', 'param detailAtlas 8192', 'param detailTexelM 0.07', 'param atlasJpeg 1', 'param scanDetailM 0.3', 'param scanDetailStepM 0.6', 'param scanDetailMinArea 2',
+            ...h.base.map(b => `planebase ${b.id} ${b.pixel} ${b.topM} ${b.png}`), ...h.height.map(x => `planeheight ${x.id} ${x.depthM} ${x.png}`)];
+    } else if (options.infer) {
         // the first pass: the K-free twin, writing each wall's own photo as an orthos folder
         const selfDir = path.join(opts.outDir, 'self_orthos');
         fs.rmSync(selfDir, { recursive: true, force: true });
@@ -322,10 +332,10 @@ export async function buildMeasuredTwin(opts: { runDir: string; cacheRoot: strin
         rec = { ...rec, groundY: inf.groundY, planes: inf.planes, windowFit: inf.windowFit, photos: inf.photos, classes: inf.classes, reveal: rec.reveal };
         extra = ['param piers 1', 'param turnedBelowM 1.2', ...inf.base.map(b => `planebase ${b.id} ${b.pixel} ${b.topM} ${b.png}`), ...inf.height.map(h => `planeheight ${h.id} ${h.depthM} ${h.png}`)];
     }
-    fs.writeFileSync(specFile, measuredTwinSpec(rec, { glb, report }, maps, { ...options, kFree: options.infer ? false : options.kFree }) + extra.map(l => l + '\n').join(''));
+    fs.writeFileSync(specFile, measuredTwinSpec(rec, { glb, report }, maps, { ...options, kFree: options.infer || options.hybrid ? false : options.kFree }) + extra.map(l => l + '\n').join(''));
     const answer = await run(specFile);
     const { planes, windowFit, photos, ...rest } = rec;
-    return { version: MEASURED_TWIN_VERSION, glb, specFile, report: answer, ...(inferReport ? { infer: inferReport } : {}), ...(photometry ? { photometry } : {}), records: { ...rest, planes: planes.length, windowPlanes: windowFit.filter(e => e.rects?.length).length, photos: Object.keys(photos).length }, mapsMissing: missing, ms: Date.now() - t0 };
+    return { version: MEASURED_TWIN_VERSION, glb, specFile, report: answer, ...(inferReport ? { infer: inferReport } : {}), ...(photometry ? { photometry } : {}), ...(hybridReport ? { hybrid: hybridReport } : {}), records: { ...rest, planes: planes.length, windowPlanes: windowFit.filter(e => e.rects?.length).length, photos: Object.keys(photos).length }, mapsMissing: missing, ms: Date.now() - t0 };
 }
 
 /** What the photometry step did to the scan's photos (tile-refine-twin.ts's reports, summarised). */

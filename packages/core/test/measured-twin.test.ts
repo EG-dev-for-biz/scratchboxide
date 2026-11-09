@@ -216,6 +216,35 @@ describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K bui
     }, 600_000);
 });
 
+describe.skipIf(!fs.existsSync(RUN))('the hybrid twin of a real staged run (ESB)', () => {
+    it('runs pipeline K\'s detail stages on the cut-out\'s own facade photos with no model, and builds the twin from them', async () => {
+        const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtwin-esb-hybrid-'));
+        const r = await buildMeasuredTwin({ runDir: RUN, cacheRoot: CACHE, outDir, options: { hybrid: true } });
+        const h = r.hybrid!;
+        // a fresh copy of the orthos straightened, its windows fitted and arrayed; the reader and system need a model
+        expect(h.orthos.rectified).toBeGreaterThan(50);
+        expect(h.windowFit.windows).toBeGreaterThan(1000);
+        expect(h.reader).toEqual({ reason: 'no vision model' });
+        expect(h.array.windows).toBeGreaterThan(h.windowFit.windows);
+        expect(fs.existsSync(path.join(outDir, 'hybrid', 'relief_orthos'))).toBe(true);
+        const spec = fs.readFileSync(r.specFile, 'utf8').split('\n');
+        for (const l of ['param selfFill 1', 'param orthoBlend 0.6', 'param scanDetailStepM 0.6', 'param atlasJpeg 1']) expect(spec).toContain(l);
+        expect(spec.some(l => l.startsWith('win '))).toBe(true);
+        // no model: the window fit and arrays alone (with the reader and system, cold, 4,418 on the twin)
+        expect(r.report.windows.placed).toBeGreaterThan(1000);
+        // every wall textured: K's photo blended in where one stands on it, its own scan photo elsewhere
+        expect(r.report.piers!.orthoTexels).toBeGreaterThan(1_000_000);
+        expect(r.report.piers!.selfFilled).toBeGreaterThan(0);
+        expect(r.report.detail.faces).toBeGreaterThan(100);
+        // the scan kept only where it steps out (ornament), the lips still drawn
+        expect(r.report.scanDetail.pieces).toBeGreaterThan(0);
+        expect(r.report.profiles.lips).toBeGreaterThan(0);
+        const glb = fs.readFileSync(r.glb);
+        const json = JSON.parse(glb.subarray(20, 20 + glb.readUInt32LE(12)).toString('utf8')) as { images: Array<{ mimeType: string }> };
+        expect(json.images[0].mimeType).toBe('image/jpeg');
+    }, 1_200_000);
+});
+
 describe('enuOffset', () => {
     it('measures east, up and south between two places', () => {
         // 0.0001 degrees of latitude north at 40.75 N is about 11.1 m; of longitude east about 8.4 m
