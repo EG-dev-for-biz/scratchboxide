@@ -1944,7 +1944,13 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 if (!centreInCloud) centreFrame.resolve(here);
                 const owner = chunkOwner(plan);
                 // with the centre in the cloud it is one of them, the first (nearest)
-                const todo = plan.chunks.filter(c => !c.centre || centreInCloud).sort((a, b) => Math.hypot(a.cx, a.cz) - Math.hypot(b.cx, b.cz));
+                // a task per building: the centre first (the others cut in its frame), then the largest extractions first, so the
+                // longest builds start first and, with the pool in several regions, the largest land in different regions;
+                // otherwise nearest first
+                const area = (c: DistrictChunk) => (c.rect.x1 - c.rect.x0) * (c.rect.z1 - c.rect.z0);
+                const todo = plan.chunks.filter(c => !c.centre || centreInCloud).sort(plan.unit === 'building'
+                    ? (a, b) => Number(b.centre) - Number(a.centre) || area(b) - area(a) || a.index - b.index
+                    : (a, b) => Math.hypot(a.cx, a.cz) - Math.hypot(b.cx, b.cz));
                 // several at once, as memory allows (a district build holds several GB), the centre build running beside them (here,
                 // or with the centre in the cloud as the first of them)
                 const parallel = chunkParallel();

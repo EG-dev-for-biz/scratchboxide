@@ -166,8 +166,12 @@ describe('pipeline K-D: the centre cell in the cloud', () => {
         const { result } = await runStagedLocation(REQUEST, s.deps, { ...s.ctx, reportProgress: m => { lines.push(m); if (/every cell joined: closing the seams/.test(m)) open('seams'); } });
         clearTimeout(timer);
         expect(await gate).toBe('seams');
-        // nine cells and a task for each of the five buildings
+        // nine cells and a task for each of the five buildings, the centre first, then the largest extractions first (the
+        // cells' 136 m squares before the buildings' 34 m boxes)
         expect(s.asked).toHaveLength(14);
+        expect(s.asked[0].chunk!.index).toBe(4);
+        expect(s.asked.slice(1, 9).every(r => r.chunk!.index < 9)).toBe(true);
+        expect(s.asked.slice(9).every(r => r.chunk!.index >= 9)).toBe(true);
         // the cells: their ground steps and the band's; the buildings: the band's alone (no model, no sets, no upscale)
         for (const r of s.asked) {
             expect(r.steps, `chunk ${r.chunk!.index}`).toMatchObject({ models: false, 'twin.materials': false, 'twin.facadeUpscale': false });

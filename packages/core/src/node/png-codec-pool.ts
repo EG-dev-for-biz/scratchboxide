@@ -27,10 +27,13 @@ import { Worker } from 'worker_threads';
 import { workerTsRegisterSource } from './worker-ts-register';
 import { encodePng } from './3d-engine/staged-location/png-encode';
 import { decodePng, type DecodedImage } from './texture-processing';
+import { delightImage, type DelightImage } from './3d-engine/staged-location/pipeline-k/twin-delight';
 
 export type PngCodecRequest =
     | { id: number; op: 'encode'; width: number; height: number; channels: 1 | 3 | 4; pixels: ArrayBuffer }
-    | { id: number; op: 'decode'; png: ArrayBuffer };
+    | { id: number; op: 'decode'; png: ArrayBuffer }
+    /** The twin's de-light of one photo (pipeline-k/twin-delight.ts): the same function and pixels as on the caller's thread. */
+    | { id: number; op: 'delight'; width: number; height: number; pixels: ArrayBuffer; surface?: ArrayBuffer; upMask?: ArrayBuffer; upLift?: number };
 export type PngCodecReply = { id: number; bytes?: ArrayBuffer; width?: number; height?: number; error?: string };
 
 /** Inputs smaller than this many bytes are coded on the calling thread. */
@@ -88,7 +91,7 @@ function spawn(): Slot {
 
 type WithoutId<T> = T extends unknown ? Omit<T, 'id'> : never;
 
-function submit(req: WithoutId<PngCodecRequest>, transfer: ArrayBuffer): Promise<PngCodecReply> {
+function submit(req: WithoutId<PngCodecRequest>, transfer: ArrayBuffer | ArrayBuffer[]): Promise<PngCodecReply> {
     const want = pngCodecThreads();
     if (slots.length < want) slots.push(spawn());
     const slot = slots.reduce((a, b) => (b.pending.size < a.pending.size ? b : a), slots[nextSlot++ % slots.length]);
@@ -96,7 +99,7 @@ function submit(req: WithoutId<PngCodecRequest>, transfer: ArrayBuffer): Promise
     return new Promise<PngCodecReply>((resolve, reject) => {
         slot.pending.set(id, { resolve, reject });
         slot.worker.ref();
-        slot.worker.postMessage({ ...req, id } as PngCodecRequest, [transfer]);
+        slot.worker.postMessage({ ...req, id } as PngCodecRequest, Array.isArray(transfer) ? transfer : [transfer]);
     });
 }
 
@@ -129,4 +132,17 @@ export async function closePngCodecPool(): Promise<void> {
     const all = slots;
     slots = [];
     await Promise.all(all.map(s => s.worker.terminate()));
+}
+
+/**
+ * The twin's de-light of one photo on a codec thread (tile-refine-twin.ts: every photo at once instead of one after
+ * another on the build's thread): the same pixels as delightImage here. Small photos, or no codec threads, inline.
+ */
+export async function delightImageAsync(img: DelightImage, surface?: Uint8Array, upward?: { mask: Uint8Array; shadowLift: number }): Promise<DelightImage> {
+    if (img.rgba.byteLength < INLINE_MAX_BYTES || pngCodecThreads() === 0) return delightImage(img, surface, upward);
+    const pixels = ownCopy(img.rgba);
+    const surfaceCopy = surface ? ownCopy(surface) : undefined, upCopy = upward ? ownCopy(upward.mask) : undefined;
+    const r = await submit({ op: 'delight', width: img.width, height: img.height, pixels, ...(surfaceCopy ? { surface: surfaceCopy } : {}), ...(upCopy ? { upMask: upCopy, upLift: upward!.shadowLift } : {}) },
+        [pixels, ...(surfaceCopy ? [surfaceCopy] : []), ...(upCopy ? [upCopy] : [])]);
+    return { width: img.width, height: img.height, rgba: new Uint8Array(r.bytes!) };
 }

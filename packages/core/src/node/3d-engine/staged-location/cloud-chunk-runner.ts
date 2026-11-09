@@ -245,6 +245,11 @@ export interface CloudChunkConfig {
     downloadAttempts: number;
     /** SCRATCHBOX_KD_CLOUD_SERVICE: the chunks go to this Cloud Run service (the warm worker pool, kd-chunk-job.ts --serve), not the job. */
     service?: string;
+    /**
+     * SCRATCHBOX_KD_CLOUD_SERVICE_REGIONS (comma list): the service in each of these regions, the chunks dealt to them in
+     * turn (RoundRobinJobs): 34 chunks building at once in one region built the largest building ~35% slower than alone.
+     */
+    serviceRegions?: string[];
 }
 
 /** The runner's settings: SCRATCHBOX_KD_CLOUD_{PROJECT,REGION,JOB,BUCKET}, defaults scoutscan / us-central1 / kd-chunk-job / scoutscan-kd-jobs. */
@@ -260,7 +265,8 @@ export function cloudChunkConfig(env: NodeJS.ProcessEnv = process.env): CloudChu
         pollMs: 10_000,
         pollMisses: 12,
         downloadAttempts: 4,
-        ...(env.SCRATCHBOX_KD_CLOUD_SERVICE?.trim() ? { service: env.SCRATCHBOX_KD_CLOUD_SERVICE.trim() } : {})
+        ...(env.SCRATCHBOX_KD_CLOUD_SERVICE?.trim() ? { service: env.SCRATCHBOX_KD_CLOUD_SERVICE.trim() } : {}),
+        ...((r => r.length ? { serviceRegions: r } : {})((env.SCRATCHBOX_KD_CLOUD_SERVICE_REGIONS ?? '').split(',').map(x => x.trim()).filter(x => /^[a-z]+-[a-z]+\d+$/.test(x))))
     };
 }
 
@@ -641,6 +647,46 @@ export class CloudRunServiceJobs implements CloudRunJobs {
 
     async cancel(execution: string): Promise<void> {
         this.sent.get(execution)?.abort.abort();
+    }
+}
+
+/**
+ * Several backends (the pool's service in several regions) as one: each chunk goes to the next in turn, in the order the
+ * chunks are started (the largest first, orchestrator.ts), and is read and cancelled where it went. Every backend must run
+ * the same image, or none is used.
+ */
+export class RoundRobinJobs implements CloudRunJobs {
+    readonly label: string;
+    private next = 0;
+    private readonly owner = new Map<string, CloudRunJobs>();
+
+    constructor(private readonly backends: CloudRunJobs[]) {
+        if (!backends.length) throw new Error('RoundRobinJobs needs at least one backend');
+        this.label = backends.map(b => b.label).join(' + ');
+    }
+
+    async jobImage(): Promise<string> {
+        const images = await Promise.all(this.backends.map(b => b.jobImage()));
+        const other = images.findIndex(i => i !== images[0]);
+        if (other > 0) throw new Error(`${this.backends[other].label} runs ${images[other]}, not ${images[0]}: deploy one image to every region`);
+        return images[0];
+    }
+
+    async run(env: Record<string, string>): Promise<string> {
+        const b = this.backends[this.next++ % this.backends.length];
+        const name = await b.run(env);
+        this.owner.set(name, b);
+        return name;
+    }
+
+    async get(execution: string): Promise<CloudExecution> {
+        const b = this.owner.get(execution);
+        if (!b) throw new Error(`${this.label}: no chunk ${execution} was sent from here`);
+        return b.get(execution);
+    }
+
+    async cancel(execution: string): Promise<void> {
+        await this.owner.get(execution)?.cancel(execution);
     }
 }
 

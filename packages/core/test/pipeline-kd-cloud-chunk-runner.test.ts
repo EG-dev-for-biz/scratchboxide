@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DirectoryCloudBucket } from '../src/node/cloud-store/cloud-bucket';
 import { GeminiClient } from '../src/node/gemini/gemini-client';
 import {
-    checkImageSkew, cloudChunkConfig, CloudRunServiceJobs, cloudRunTaskCostUsd, createCloudChunkRunner, forwardedJobEnv, parseServiceAnswer, imageCommit, KD_CHUNK_BUILT_LINE, kdChunkJobPrefix, kdChunkLayerFiles,
+    checkImageSkew, cloudChunkConfig, CloudRunServiceJobs, RoundRobinJobs, cloudRunTaskCostUsd, createCloudChunkRunner, forwardedJobEnv, parseServiceAnswer, imageCommit, KD_CHUNK_BUILT_LINE, kdChunkJobPrefix, kdChunkLayerFiles,
     localiseJobPaths, newProgressLines, parseExecution, type CloudExecution, type CloudRunJobs, type KdChunkJobSpec
 } from '../src/node/3d-engine/staged-location/cloud-chunk-runner';
 import { parseKdJobLocation, requestEnv, restoreWorkspace, runKdChunkJob } from '../src/node/3d-engine/staged-location/kd-chunk-job';
@@ -245,6 +245,25 @@ describe('pipeline K-D cloud chunk runner', () => {
         expect(fs.existsSync(path.join(dir, 'cache', 'staged_location'))).toBe(false);
         expect(requestEnv({ KD_JOB: 'gs://b/kd-jobs/c527da43/7', SCRATCHBOX_CACHE_RESTORE: 'off', GOOGLE_MAPS_API_KEY: 'x', PATH: '/evil', SCRATCHBOX_N: 3 })).toEqual({ KD_JOB: 'gs://b/kd-jobs/c527da43/7', SCRATCHBOX_CACHE_RESTORE: 'off' });
         expect(() => requestEnv({})).toThrow(/KD_JOB/);
+    });
+
+    it('deals the chunks to the pool in each region in turn, reads each where it went, and refuses regions on different images', async () => {
+        const img = `us-central1-docker.pkg.dev/scoutscan/depthbox3-repo/kd-chunk-job:${SHA}`;
+        const a = new FakeJobs(img, async () => true), b = new FakeJobs(img, async () => true);
+        const rr = new RoundRobinJobs([a, b]);
+        expect(await rr.jobImage()).toBe(img);
+        const names = [];
+        for (let k = 0; k < 5; k++) names.push(await rr.run({ KD_JOB: `gs://scoutscan-kd-jobs/kd-jobs/c527da43/${k}` }));
+        expect(a.runs.map(r => r.KD_JOB.split('/').pop())).toEqual(['0', '2', '4']);
+        expect(b.runs.map(r => r.KD_JOB.split('/').pop())).toEqual(['1', '3']);
+        await new Promise(r => setTimeout(r, 20));
+        expect(await rr.get(names[1])).toMatchObject({ done: true, succeeded: true });
+        await rr.cancel(names[3]);
+        expect(b.cancelled).toEqual([names[3]]);
+        await expect(rr.get('nowhere')).rejects.toThrow(/no chunk nowhere/);
+        await expect(new RoundRobinJobs([a, new FakeJobs(img.replace(SHA, 'b'.repeat(40)), async () => true)]).jobImage()).rejects.toThrow(/deploy one image to every region/);
+        expect(cloudChunkConfig({ SCRATCHBOX_KD_CLOUD_SERVICE_REGIONS: 'us-central1, us-east4,bad region,' }).serviceRegions).toEqual(['us-central1', 'us-east4']);
+        expect(cloudChunkConfig({}).serviceRegions).toBeUndefined();
     });
 
     it('sets no budget on an execution when this process has none', async () => {
