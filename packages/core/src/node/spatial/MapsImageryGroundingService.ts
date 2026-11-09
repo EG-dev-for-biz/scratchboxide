@@ -224,6 +224,46 @@ export class MapsImageryGroundingService {
     }
 
     /**
+     * A panorama's views at chosen compass headings, level, kept in memory and never written (Street View imagery
+     * is not stored): the input of Street View registration (Da3RigDepthService). A prompt is resolved to a panorama
+     * through Maps Imagery Grounding, whose chunk also gives the capture date and the stated pose; a panoId is used
+     * as given. Returns the panorama's metadata (date, position) beside the views.
+     */
+    public static async fetchPanoViewsInMemory(query: {
+        panoId?: string;
+        prompt?: string;
+        headingsDeg: number[];
+        fovDegrees?: number;
+        size?: number;
+        pitchDeg?: number;
+        apiKey?: string;
+        fetchImpl?: typeof fetch;
+    }): Promise<{ metadata: StreetViewPanoMetadata; chunk?: MapsImageryChunk; views: Array<{ headingDeg: number; image: Buffer }> }> {
+        const apiKey = this.resolveApiKey(query.apiKey);
+        const fetchImpl = query.fetchImpl || fetch;
+        let panoId = query.panoId?.trim();
+        let chunk: MapsImageryChunk | undefined;
+        if (!panoId && query.prompt) {
+            const mig = await this.queryVertexMapsImagery(query.prompt, { fetchImpl });
+            chunk = mig.groundingChunks.find(c => c.panoId && c.panoId.length > 5);
+            panoId = chunk?.panoId;
+        }
+        if (!panoId) throw new MapsImageryGroundingError('NO_PANORAMA', 'fetchPanoViewsInMemory needs a panoId, or a prompt Maps Imagery Grounding resolves to one');
+        const metadata = await fetchStreetViewPanoMetadata({ panoId, apiKey, fetchImpl });
+        const size = query.size ?? 640, fov = query.fovDegrees ?? 90, pitch = query.pitchDeg ?? 0;
+        const views = await Promise.all(query.headingsDeg.map(async headingDeg => {
+            const params = new URLSearchParams({
+                size: `${size}x${size}`, pano: metadata.panoId, heading: String(headingDeg), pitch: String(pitch), fov: String(fov),
+                source: 'outdoor', return_error_code: 'true', key: apiKey
+            });
+            const res = await fetchImpl(`https://maps.googleapis.com/maps/api/streetview?${params}`);
+            if (!res.ok) throw new Error(`Street View view (heading ${headingDeg}) failed: HTTP ${res.status}`);
+            return { headingDeg, image: Buffer.from(await res.arrayBuffer()) };
+        }));
+        return { metadata, chunk, views };
+    }
+
+    /**
      * End-to-end: Accepts a prompt or direct panoId, queries Maps Imagery Grounding (MIG)
      * if necessary, downloads Street View cubic faces, and projects them onto an equirectangular
      * 360 panorama canvas for showcase demos and viewers.
