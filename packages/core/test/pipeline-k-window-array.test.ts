@@ -19,7 +19,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { BEHIND_REASON, consensusPitch, describeWindowArrays, inferWindowArray, inferWindowArrays, SITE_KIND, WINDOW_ARRAY_PARAMS, WINDOW_ARRAY_VERSION, type ArrayRecord } from '../src/node/3d-engine/staged-location/pipeline-k/window-array';
+import { BEHIND_REASON, consensusPitch, describeWindowArrays, arrayFacadeFirstPass, inferWindowArray, inferWindowArrays, inferWindowArraysOnThreads, SITE_KIND, WINDOW_ARRAY_PARAMS, WINDOW_ARRAY_VERSION, type ArrayRecord } from '../src/node/3d-engine/staged-location/pipeline-k/window-array';
 import { WINDOW_FIT_PARAMS, WINDOW_FIT_VERSION, type WindowFitFile, type WindowRect } from '../src/node/3d-engine/staged-location/window-fit';
 import { BUILD_STEPS, TOGGLEABLE_STEPS } from '../src/common/staged-build-steps';
 
@@ -366,6 +366,39 @@ describe('the window array', () => {
         expect((JSON.parse(fs.readFileSync(path.join(dir, 'window_fit.json'), 'utf8')) as WindowFitFile).facades[0]).toEqual(e);
         expect(describeWindowArrays(rep)).toContain('1 of 1 facades brought onto their array');
         fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('gives the same fit, byte for byte, with each facade\'s first pass on other threads, the second pass included', async () => {
+        const make = () => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'window-array-'));
+            const truth: WindowRect[] = [];
+            for (let j = 0; j < 15; j++) for (let i = 0; i < 10; i++) truth.push(site(i, j));
+            const H2 = 2 * ROW + 10, short: WindowRect[] = [];
+            for (let j = 0; j < 2; j++) for (let i = 0; i < 10; i++) short.push(site(i, j));
+            fs.writeFileSync(path.join(dir, 'facade_1.png'), encodePng(W, H, photo(truth).rgba, 4));
+            fs.writeFileSync(path.join(dir, 'facade_2.png'), encodePng(W, H2, photo(short).rgba.subarray(0, W * H2 * 4), 4));
+            const frame = (id: number, h: number) => ({ facadeId: id, image: `facade_${id}.png`, width: W, height: h, pixel: PX, coverage: 1, orthoSMin: 0, orthoTMax: H * PX, texel: PX, centroid: [0, 0, 0], axisT: [0, 1, 0] });
+            fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades: [frame(1, H), frame(2, H2), frame(3, H)] }));
+            const given = truth.filter((_, k) => k % 7 !== 3).map((r, k) => (k % 5 === 0 ? [r[0] + 5, r[1] + 8, r[2] + 5, r[3] + 8] as WindowRect : r));
+            // facade 3 names a photo that is not there: no photo of the entry's size, on both paths
+            const fit: WindowFitFile = { version: WINDOW_FIT_VERSION, params: WINDOW_FIT_PARAMS, ms: 0, facades: [{ facadeId: 1, width: W, height: H, rects: given, panes: [], bands: [], ms: 0 }, { facadeId: 2, width: W, height: H2, rects: short.slice(0, 4), panes: [], bands: [], ms: 0 }, { facadeId: 3, width: W, height: H, rects: [], panes: [], bands: [], ms: 0 }, { facadeId: 4, error: 'not fitted' }] };
+            fs.writeFileSync(path.join(dir, 'window_fit.json'), JSON.stringify(fit));
+            return { dir, fit };
+        };
+        const a = make(), b = make();
+        const here = inferWindowArrays(a.dir, a.fit);
+        const sent: number[] = [];
+        const there = await inferWindowArraysOnThreads(b.dir, b.fit, async jobs => {
+            sent.push(...jobs.map(j => j.frame.facadeId));
+            // as a worker thread hands them back: structured clones
+            return jobs.map(j => structuredClone(arrayFacadeFirstPass(structuredClone(j))));
+        });
+        expect(sent).toEqual([1, 2, 3]);
+        expect(here.building).toBeDefined();
+        expect(here.facades.find(f => f.facadeId === 2)!.rowsFrom).toBe('building');
+        expect({ ...there, ms: 0 }).toEqual({ ...here, ms: 0 });
+        expect(fs.readFileSync(path.join(b.dir, 'window_fit.json'), 'utf8')).toBe(fs.readFileSync(path.join(a.dir, 'window_fit.json'), 'utf8'));
+        for (const d of [a.dir, b.dir]) fs.rmSync(d, { recursive: true, force: true });
     });
 
     it('reads the building\'s storeys across its facades, and gives them to a face too short to correlate its own', () => {

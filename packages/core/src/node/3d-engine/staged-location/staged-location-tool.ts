@@ -22,7 +22,7 @@
 
 import { cacheMirrorBucket, mirrorCachesInBackground, restoreCacheEntry, restoreCacheFile } from '../../cloud-store/cache-mirror';
 import { GcsCloudBucket } from '../../cloud-store/cloud-bucket';
-import { cloudChunkConfig, CloudRunJobsRest, createCloudChunkRunner, type RunChunk } from './cloud-chunk-runner';
+import { cloudChunkConfig, CloudRunJobsRest, CloudRunServiceJobs, createCloudChunkRunner, type RunChunk } from './cloud-chunk-runner';
 import { kdChunkRunner } from './pipeline-k/district-chunks';
 import { TOGGLEABLE_STEPS } from '../../../common/staged-build-steps';
 import { solarRoofFromBuildingShape } from './pipeline-e/solar-roof';
@@ -381,7 +381,9 @@ function cloudRunChunk(cache: StageCache): NonNullable<StagedLocationDeps['runCh
     const make = async (): Promise<RunChunk> => {
         const config = cloudChunkConfig();
         const storage = new GoogleMediaCredentialsService().createStorageClient();
-        return createCloudChunkRunner({ cache, config, bucket: new GcsCloudBucket(storage.bucket(config.bucket)), jobs: await CloudRunJobsRest.create(config) });
+        // the warm worker pool (a Cloud Run service, SCRATCHBOX_KD_CLOUD_SERVICE) when named, else a job execution a chunk
+        const jobs = config.service ? await CloudRunServiceJobs.create(config) : await CloudRunJobsRest.create(config);
+        return createCloudChunkRunner({ cache, config, bucket: new GcsCloudBucket(storage.bucket(config.bucket)), jobs });
     };
     return async (request, o) => {
         runner ??= make();

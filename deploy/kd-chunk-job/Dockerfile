@@ -1,27 +1,35 @@
 # Pipeline K-D chunk job (packages/core/src/node/3d-engine/staged-location/kd-chunk-job.ts): one district chunk a task.
 # Built by Cloud Build (cloudbuild.yaml) from a `git archive` of one commit (deploy.sh build), tagged with that commit.
-FROM node:22-trixie
+# the slim base: the full node image's build tooling (git, mercurial, autoconf, ...: about 300 MB of the 1.04 GB image) is
+# never used here, and every Cloud Run task pulls the whole image onto a fresh host before it starts (90 s at Penn, 2026-11-09)
+FROM node:22-trixie-slim
 
 # clang for the native engine (C++20, -O3, never -march=native: the task's CPU is not the build machine's): trixie's
 # clang 19, since bookworm's clang 14 rejects C++20 the native kernels use (a lambda capturing a structured binding);
 # python3 with numpy and OpenCV for the photo-tier rectify the orchestrator spawns; python3-dev, python3-venv and cmake for
 # the engine's Python module (scratchbox_native: material regions prepare the library maps with it)
 RUN apt-get update \
- && apt-get install -y --no-install-recommends clang zlib1g-dev python3 python3-numpy python3-opencv python3-dev python3-venv cmake ca-certificates \
+ && apt-get install -y --no-install-recommends clang make zlib1g-dev python3 python3-numpy python3-opencv python3-dev python3-venv cmake ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY . .
+
+# the slim base has no gcc: an addon npm builds is built with clang
+ENV CC=clang CXX=clang++
 
 # the project's .venv the app's Python runs on (repo-python.ts): the system's numpy and OpenCV, and nanobind to build
 # scratchbox_native (the version requirements.txt pins)
 RUN python3 -m venv --system-site-packages /app/.venv \
  && /app/.venv/bin/pip install --no-cache-dir nanobind==3.1.0
 
+# no Electron binary: the job never opens the desktop app, and its download (a 504 from GitHub) failed an image build
+ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
+
 # packages/core's dependencies alone (the workspace's other package.json files are in the archive for the lock file), and
 # ts-node, which runs the TypeScript as the app's worker threads do (worker-ts-register.ts)
 RUN npm ci --workspace packages/core --include-workspace-root=false --no-audit --no-fund \
- && npm install --no-save --no-audit --no-fund ts-node@10.9.2 \
+ && npm install --no-save --no-audit --no-fund ts-node@10.9.2 esbuild@0.21.5 \
  && npm cache clean --force
 
 ENV NODE_ENV=production \
@@ -35,9 +43,13 @@ ENV NODE_ENV=production \
     SCRATCHBOX_ASSET_STORE=0 \
     SCRATCHBOX_KD_CHUNK_JOB=1
 
+# the TypeScript transpiled to JavaScript beside it, once (transpile.js): a task no longer spends its first minute in
+# ts-node (0.6 s to load the orchestrator against 15 s); ts-node stays registered for a .ts named explicitly
+RUN node deploy/kd-chunk-job/transpile.js packages/core/src
+
 # every native engine a chunk runs, compiled now: a Linux build failure fails the image, not a district
-RUN node -r ts-node/register packages/core/src/node/3d-engine/staged-location/kd-chunk-job.ts --warm
+RUN node -r ts-node/register packages/core/src/node/3d-engine/staged-location/kd-chunk-job.js --warm
 
 ARG COMMIT
 ENV KD_IMAGE_COMMIT=${COMMIT}
-CMD ["node", "--max-old-space-size=28672", "-r", "ts-node/register", "packages/core/src/node/3d-engine/staged-location/kd-chunk-job.ts"]
+CMD ["node", "--max-old-space-size=28672", "-r", "ts-node/register", "packages/core/src/node/3d-engine/staged-location/kd-chunk-job.js"]

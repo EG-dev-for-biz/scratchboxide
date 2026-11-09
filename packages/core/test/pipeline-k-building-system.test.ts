@@ -24,7 +24,7 @@ import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { parseSystem, readBuildingSystem, systemOnFace, type BuildingSystem } from '../src/node/3d-engine/staged-location/pipeline-k/building-system';
 import type { FacadeAsk } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
 import { memoryReadingStore } from '../src/node/3d-engine/staged-location/pipeline-k/model-readings';
-import { bayWarp, describeWindowArrays, groupedBay, inferWindowArrays, lightnessProfiles } from '../src/node/3d-engine/staged-location/pipeline-k/window-array';
+import { arrayFacadeFirstPass, bayWarp, describeWindowArrays, groupedBay, inferWindowArrays, inferWindowArraysOnThreads, lightnessProfiles } from '../src/node/3d-engine/staged-location/pipeline-k/window-array';
 import { WINDOW_FIT_PARAMS, WINDOW_FIT_VERSION, type WindowFitFile, type WindowRect } from '../src/node/3d-engine/staged-location/window-fit';
 
 const PX = 0.1, W = 300, H = 600, COL = 30, ROW = 40, BW = 12, BH = 20;
@@ -88,6 +88,18 @@ describe('the building system', () => {
         // the shaft's first window centre 10 m up (8 + sill 1 + half of 2): y = (60 - 10) / 0.1 = 500 px, modulo 40 = 20
         expect(lat.row.phase).toBeCloseTo(20, 5);
         expect(systemOnFace(sys, frame(2, [1, 0, 0]))).toEqual([]);
+    });
+
+    it('lays the system the same, byte for byte, with each facade\'s first pass on other threads', async () => {
+        const a = setup([{ id: 1, windows: truth, boxes: truth }, { id: 2, windows: truth, boxes: [] }]);
+        const b = setup([{ id: 1, windows: truth, boxes: truth }, { id: 2, windows: truth, boxes: [] }]);
+        const { ask } = standIn(c => ANSWER(c, { 1: [[0, 60, 'punched']], 2: [[0, 60, 'punched']] }));
+        const r = await readBuildingSystem(a.dir, ask, { readings: { store: memoryReadingStore(), model: 'stand-in' } });
+        const here = inferWindowArrays(a.dir, a.fit, undefined, { system: r.system! });
+        const there = await inferWindowArraysOnThreads(b.dir, b.fit, async jobs => jobs.map(j => structuredClone(arrayFacadeFirstPass(structuredClone(j)))), undefined, { system: r.system! });
+        expect(here.facades.find(f => f.facadeId === 2)!.source).toBe('system');
+        expect({ ...there, ms: 0 }).toEqual({ ...here, ms: 0 });
+        expect(fs.readFileSync(path.join(b.dir, 'window_fit.json'), 'utf8')).toBe(fs.readFileSync(path.join(a.dir, 'window_fit.json'), 'utf8'));
     });
 
     it('gives a face read by nothing the array its neighbour shows, from one model reading of the whole building, kept for the next build', async () => {
