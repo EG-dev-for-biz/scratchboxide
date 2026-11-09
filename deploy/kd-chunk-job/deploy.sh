@@ -20,7 +20,6 @@ set -euo pipefail
 #   IMAGE                the job's image (default HEAD's, as build tags it)
 #   JOB / CPU / MEMORY   the job's name and task size (default kd-chunk-job, 8, 32Gi); a second size is a second job,
 #                        e.g. JOB=kd-chunk-job-4c CPU=4 MEMORY=16Gi, chosen by the runner's SCRATCHBOX_KD_CLOUD_JOB
-#   EXEC_ENV             Cloud Run's execution environment, gen2 (default) or gen1
 ################################################################################
 
 PROJECT="${PROJECT:-scoutscan}"
@@ -28,7 +27,6 @@ REGION="${REGION:-us-central1}"
 JOB="${JOB:-kd-chunk-job}"
 CPU="${CPU:-8}"
 MEMORY="${MEMORY:-32Gi}"
-EXEC_ENV="${EXEC_ENV:-gen2}"
 JOB_BUCKET="scoutscan-kd-jobs"
 TRAINING_BUCKET="scoutscan-building-training"
 JOB_SA="kd-chunk-job@${PROJECT}.iam.gserviceaccount.com"
@@ -121,7 +119,7 @@ job() {
       --set-env-vars "GOOGLE_APPLICATION_CREDENTIALS=/secrets/sa/key.json,$common")
   fi
   "${G[@]}" run jobs deploy "$JOB" --region "$REGION" --image "$IMAGE" \
-    --tasks 1 --max-retries 0 --task-timeout 3h --cpu "$CPU" --memory "$MEMORY" --execution-environment "$EXEC_ENV" "${auth[@]}"
+    --tasks 1 --max-retries 0 --task-timeout 3h --cpu "$CPU" --memory "$MEMORY" --execution-environment gen2 "${auth[@]}"
   # a job run as the app's own account needs no grant for the app to run it (Editor)
   [ "${KD_JOB_AUTH:-secrets}" = "app" ] \
     || "${G[@]}" run jobs add-iam-policy-binding "$JOB" --region "$REGION" --member "serviceAccount:$app" --role roles/run.developer >/dev/null
