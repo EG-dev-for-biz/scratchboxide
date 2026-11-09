@@ -78,7 +78,7 @@ import {
 import { glbMeshCounts, plantTrees, summarizeTrees, type LocationClayTrees } from '../location-clay-pipeline';
 import { treeSpeciesPlaceParams } from '../../../common/spatial/tree-species-library';
 import { TileVegetationError, type TileVegetationPlantRequest, type TileVegetationPlantResult, type TileVegetationStripRequest, type TileVegetationStripResult } from '../tile-vegetation-service';
-import type { TileRefineRequest, TileRefineResult } from '../tile-refine-service';
+import type { TileRefineIsolate, TileRefineRequest, TileRefineResult } from '../tile-refine-service';
 import { evidenceLookup, footprintPriorFor, type EvidenceLookup, type VectorBuilding, type VectorEvidence } from './vector-footprints';
 import { auditDistrict, DISTRICT_AUDIT_VERSION, districtStreetAuditSummary, type DistrictStreetAuditSummary } from './district-residual-audit';
 import { buildSceneInventory, sceneInventorySummary, SCENE_INVENTORY_VERSION, type InventoryCrown, type SceneInventorySummary } from './scene-inventory';
@@ -230,7 +230,8 @@ import { CHOICE_SPAN_M, candidateSheetPng, choicePrompt, chooseWithMemory, MATER
 import { fileReadingStore, MODEL_READINGS_DIR, modelReadingsDir, readingKey, type ModelReadingStore } from './pipeline-k/model-readings';
 import { betweenSeen, MATERIAL_NAMING_VERSION, namingPrompt, parseClassWords } from './pipeline-k/material-naming';
 import { finishPrompt, MATERIAL_FINISH_VERSION, parseClassFinish, type ClassFinish } from './pipeline-k/material-finish';
-import type { FacadeReadRecord } from './pipeline-k/facade-reader';
+import type { FacadeReadRecord, FacadeReaderFile } from './pipeline-k/facade-reader';
+import { composeReusedOrthos, FACADE_REUSE_VERSION, planFacadeReuse, type FacadeReusePlan } from './pipeline-k/facade-reuse';
 import { shadowLiftQaPng } from './pipeline-k/shadow-lift-qa';
 import { describeMaterialRegions, MATERIAL_REGIONS_VERSION, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { MIN_FOOTPRINT_COVERAGE_TO_SUPERSEDE, PIPELINE_I_VERSION, TRELLIS_SEEDS, runPipelineI } from './pipeline-i/pipeline-i';
@@ -587,6 +588,8 @@ export interface StagedLocationDeps {
         refine(req: TileRefineRequest): Promise<TileRefineResult>;
         /** Registered views of the tile around the structure the geometric isolate finds, for the multi-view mask vote. */
         renderOwnershipViews?(req: Pick<TileRefineRequest, 'tilePath' | 'anchor' | 'isolate' | 'isolatePick'>): Promise<{ dir: string; views: string[]; cached: boolean; ms: number }>;
+        /** The isolate alone (with its ownership vote): the raw scan as clay, no remesh. The vote is judged on it; absent, a whole refine stands in. */
+        isolate?(req: TileRefineRequest): Promise<TileRefineIsolate>;
     };
     /** The scan fitter; absent until the engine has it (then the rebuild stages degrade and say so). */
     scanFit?: ScanFitDeps;
@@ -1357,7 +1360,8 @@ function withCpuShare(deps: StagedLocationDeps, share: { threads: number; slowdo
         ...deps,
         refine: {
             refine: req => refine.refine({ ...req, threads: req.threads ?? share.threads, timeoutMs: limit(req.timeoutMs) }),
-            ...(refine.renderOwnershipViews ? { renderOwnershipViews: refine.renderOwnershipViews.bind(refine) } : {})
+            ...(refine.renderOwnershipViews ? { renderOwnershipViews: refine.renderOwnershipViews.bind(refine) } : {}),
+            ...(refine.isolate ? { isolate: (req: TileRefineRequest) => refine.isolate!({ ...req, threads: req.threads ?? share.threads, timeoutMs: limit(req.timeoutMs) }) } : {})
         },
         vegetation: {
             ...deps.vegetation,
@@ -4495,7 +4499,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
          */
         // what the outside audit saw on each polished build (holes), the vote's judged against the first isolate's below
         const defectsSeen = new Map<'remesh' | 'ownership', { holeShare: number; largestHoleRegionM2: number; why: string }>();
-        const finishRefine = async (r: TileRefineResult, io: StageIO, timed: <R>(k: string, work: () => Promise<R>) => Promise<R>, stepFiles: Array<[string, string]>, degradations: DegradationRecord[], stage: 'remesh' | 'ownership', notes: RefineNotes = directNotes): Promise<TileRefineResult> => {
+        /**
+         * Pipeline K's facade pass as each remesh ran it: tile_refine's orthos (or the set composed from both passes), the
+         * straightened set, and the window fit (merged with the reader's openings and arrayed) and the reader's records as
+         * the lattice took them. The ownership vote takes the facades it left unchanged from the first isolate's (facade-reuse.ts).
+         */
+        type FacadePass = { rawDir: string; kDir: string; fit?: WindowFitFile; reader?: FacadeReaderFile };
+        const facadePasses = new Map<'remesh' | 'ownership', FacadePass>();
+        const finishRefine = async (r: TileRefineResult, io: StageIO, timed: <R>(k: string, work: () => Promise<R>) => Promise<R>, stepFiles: Array<[string, string]>, degradations: DegradationRecord[], stage: 'remesh' | 'ownership', notes: RefineNotes = directNotes, reuse?: { plan: FacadeReusePlan; first: FacadePass }): Promise<TileRefineResult> => {
             // pipeline K: the facade orthos straightened and their smears levelled before the facades are rebuilt on them
             let orthosKey: string | undefined, windowFit: string | undefined, wallGrammar: string | undefined, wallSheets: string | undefined, revealDepth: string | undefined, surveyViews: RevealView[] | undefined;
             if (pipelineK) {
@@ -4506,7 +4517,17 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // the facades' small holes no real source covers: inpainted by the image model when the build has one
                         // (capped per build, pipeline-k.ts HOLE_INPAINT); SCRATCHBOX_K_HOLE_INPAINT=0 off
                         const holeInpaint = deps.textures?.enhance && process.env.SCRATCHBOX_K_HOLE_INPAINT?.trim() !== '0' ? { client: deps.textures.enhance, models: [LIGHTING_MODEL_LITE], ...(bypass('remesh') ? {} : { readings: modelReadingsStore() }) } : undefined;
-                        const k = await timed('pipelineK', () => rectifyReliefOrthos(r.reliefOrthosDir!, { signal: io.signal, ...(cpuShare ? { threads: cpuShare.threads } : {}), ...(holeInpaint ? { inpaint: holeInpaint } : {}) }));
+                        // the ownership vote's remesh: the facades it left unchanged put back as the first pass's (facade-reuse.ts),
+                        // and taken whole from the first pass's straightened set; only the others are straightened
+                        const keptIds = new Set(reuse?.plan.kept.map(x => x.firstId) ?? []);
+                        const srcDir = reuse ? composeReusedOrthos(reuse.first.rawDir, r.reliefOrthosDir!, reuse.plan) : r.reliefOrthosDir!;
+                        const rectifyReuse = reuse ? { fromDir: reuse.first.kDir, ids: [...keptIds], key: `${path.basename(path.dirname(reuse.first.kDir))}/${path.basename(reuse.first.kDir)}` } : undefined;
+                        const k = await timed('pipelineK', () => rectifyReliefOrthos(srcDir, { signal: io.signal, ...(cpuShare ? { threads: cpuShare.threads } : {}), ...(holeInpaint ? { inpaint: holeInpaint } : {}), ...(rectifyReuse ? { reuse: rectifyReuse } : {}) }));
+                        const pass: FacadePass = { rawDir: srcDir, kDir: k.orthosDir };
+                        facadePasses.set(stage, pass);
+                        // the first pass's window fit as the lattice took it, for the kept facades: neither fitted nor read again
+                        const fitReused = new Map<number, WindowFitEntry>();
+                        if (reuse?.first.fit) for (const e of reuse.first.fit.facades) if (keptIds.has(e.facadeId)) fitReused.set(e.facadeId, e);
                         orthosKey = `${PIPELINE_K_VERSION}:${k.key}`;
                         r = { ...r, reliefOrthosDir: k.orthosDir };
                         notes.write('pipeline_k', { version: PIPELINE_K_VERSION, orthosDir: k.orthosDir, cached: k.cached, ms: k.ms, reports: k.reports });
@@ -4538,20 +4559,23 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             // openings and pane splits drive the window geometry (user decision, 2026-11-05), merged into the fit below
                             const geometryAsk = readerOn ? facadeReaderAsk(io.signal, 'remesh') : undefined;
                             const geometryReadings = bypass('remesh') ? undefined : modelReadingsStore();
-                            const geometryRead = geometryAsk ? timed('facadeRead', () => readPlanes(k.orthosDir, geometryAsk, { signal: io.signal, progress: m => io.progress(`pipeline K: ${m}`), building: { name: request.query, ...(run.state.place?.resolvedAddress ? { address: run.state.place.resolvedAddress } : {}) }, ...(geometryReadings ? { readings: { store: geometryReadings, model: FACADE_READER_MODEL_KEY } } : {}) })) : undefined;
+                            const readerReuse = reuse?.first.reader && fitReused.size ? { file: reuse.first.reader, ids: new Set(fitReused.keys()) } : undefined;
+                            const geometryRead = geometryAsk ? timed('facadeRead', () => readPlanes(k.orthosDir, geometryAsk, { signal: io.signal, progress: m => io.progress(`pipeline K: ${m}`), building: { name: request.query, ...(run.state.place?.resolvedAddress ? { address: run.state.place.resolvedAddress } : {}) }, ...(geometryReadings ? { readings: { store: geometryReadings, model: FACADE_READER_MODEL_KEY } } : {}), ...(readerReuse ? { reuse: readerReuse } : {}) })) : undefined;
                             // awaited after the window fit; a failure is handled there
                             geometryRead?.catch(() => undefined);
                             if (!geometryRead) logStep('remesh.facadeRead', 'skipped');
-                            const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal, ...(cpuShare ? { concurrency: cpuShare.threads } : {}), ...(windowSegment ? { segment: windowSegment } : {}), ...(segmentScope ? { segmentScope } : {}), ...(onThreads ? { fitFacades: fitOnThreads } : {}) }));
+                            const wf = await timed('windowFit', () => fitWindowsForOrthos(k.orthosDir, { signal: io.signal, ...(cpuShare ? { concurrency: cpuShare.threads } : {}), ...(windowSegment ? { segment: windowSegment } : {}), ...(segmentScope ? { segmentScope } : {}), ...(onThreads ? { fitFacades: fitOnThreads } : {}), ...(fitReused.size ? { reuse: fitReused } : {}) }));
                             windowFit = wf.file;
                             // the reader's openings in place of the window fit's inside the zones it drew; the window fit's stand
                             // elsewhere (planes unread, zones rejected); the wall grammar, wall sheets and lattice below read the merged fit
                             if (geometryRead) {
                                 try {
                                     const fr = await geometryRead;
-                                    const m = mergeReadings(k.orthosDir, wf.fit, fr.records.readings).merged;
+                                    pass.reader = fr.records;
+                                    // a kept facade's fit entry already holds its reading, merged and arrayed in the first pass
+                                    const m = mergeReadings(k.orthosDir, wf.fit, fr.records.readings.filter(x => !fitReused.has(x.facadeId))).merged;
                                     const recs = fr.records.facades, by = (o: string) => recs.filter(x => x.outcome === o).length;
-                                    notes.write('pipeline_k_window_reader', { version: FACADE_READER_VERSION, on: 'the straightened facade photos', cached: fr.cached, read: recs.length, replaced: by('replaced'), kept: by('kept'), skipped: by('skipped'), failed: by('failed'), unread: fr.records.unread, ms: fr.records.ms, ...(fr.records.calls ? { calls: fr.records.calls } : {}), merged: m });
+                                    notes.write('pipeline_k_window_reader', { version: FACADE_READER_VERSION, on: 'the straightened facade photos', cached: fr.cached, ...(fr.records.reusedPlanes ? { reusedPlanes: fr.records.reusedPlanes } : {}), read: recs.length, replaced: by('replaced'), kept: by('kept'), skipped: by('skipped'), failed: by('failed'), unread: fr.records.unread, ms: fr.records.ms, ...(fr.records.calls ? { calls: fr.records.calls } : {}), merged: m });
                                     notes.note(PROVENANCE.photoInferred, `facade reader (${FACADE_READER_VERSION}) on the straightened photos: ${m.readerWindows} openings on ${m.planes} of ${recs.length} planes read drive the window geometry, in place of ${m.replacedFitWindows} of the window fit's; ${m.keptFitWindows} of the window fit's kept on those planes outside the zones it drew, and all of them on the rest`);
                                 } catch (err) {
                                     if (isAbort(err) || io.signal.aborted) throw err;
@@ -4590,6 +4614,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                     notes.note(PROVENANCE.photoInferred, `the window array step failed (${errorMessage(err)}); the windows stay as the window fit read them`);
                                 }
                             } else logStep('remesh.windowArray', 'skipped');
+                            // the fit as the lattice takes it, for a later pass to take its unchanged facades from
+                            pass.fit = structuredClone(wf.fit);
                             // the bay grammar read per wall, from all the photos of each wall's facades together (wall-grammar.ts)
                             try {
                                 const wg = await timed('wallGrammar', async () => { await ensureNativeWallGrammar(); return onThreads ? runRemeshJob<{ file: string; grammar: WallGrammarFile }>({ kind: 'wallGrammar', orthosDir: k.orthosDir, fit: wf.fit, ...(cpuShare ? { threads: cpuShare.threads } : {}) }, { signal: io.signal }) : readWallGrammar(k.orthosDir, wf.fit, b => { const d = decodePngForGrammar(b); return { rgba: d.rgba, width: d.width, height: d.height }; }, undefined, cpuShare ? { threads: cpuShare.threads } : {}); });
@@ -4980,15 +5006,20 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         return notUsed('ownership_vote_unavailable', `the multi-view mask vote could not be made (${errorMessage(err)}); the geometric isolate stands`, err);
                     }
                     const votedRequest: TileRefineRequest = { ...v.request, ownership: { masksDir } };
-                    // the vote is judged on the isolate alone: no facade orthos (they are wanted only if the voted remesh replaces the first)
-                    let voted = await timed('tileRefine', () => deps.refine.refine({ ...votedRequest }));
+                    // the vote is judged on its isolate alone (the raw scan the vote keeps, seconds: tile_refine stops after the
+                    // isolate), and tile_refine runs whole, with the facade orthos the rebuild reads, only for a vote that replaces
+                    // the first isolate. Without the isolate-only run, one whole refine (with the orthos) is judged instead
+                    let voted: TileRefineResult | undefined;
+                    let isolated: { rawClayGlb?: string };
+                    if (deps.refine.isolate) isolated = await timed('isolate', () => deps.refine.isolate!({ ...votedRequest }));
+                    else isolated = voted = await timed('tileRefine', () => deps.refine.refine({ ...votedRequest, ...v.orthos }));
                     const picked = v.pick?.pick ?? structure!;
                     const terrain = v.pick?.ground ?? t.ground;
-                    if (!voted.rawClayGlb || !terrain) return notUsed('ownership_vote_not_used', 'tile_refine wrote no voted isolate to check; the geometric isolate stands');
-                    const chk = checkIsolate(voted.rawClayGlb, picked, terrain);
+                    if (!isolated.rawClayGlb || !terrain) return notUsed('ownership_vote_not_used', 'tile_refine wrote no voted isolate to check; the geometric isolate stands');
+                    const chk = checkIsolate(isolated.rawClayGlb, picked, terrain);
                     if (!chk.ok) return notUsed('ownership_vote_not_used', `the voted isolate is not the structure picked (${Math.round(chk.recall * 100)}% of the pick covered, ${Math.round(chk.precision * 100)}% of it on the pick, ${Math.round(chk.roofed * 100)}% roofed); the geometric isolate stands`);
                     // how much the vote moved: compared on the isolates' raw scan triangles (a first isolate that fell back to the district is replaced outright)
-                    const change = firstWasIsolate && first.rawClayGlb ? ownershipChange(first.rawClayGlb, voted.rawClayGlb) : undefined;
+                    const change = firstWasIsolate && first.rawClayGlb ? ownershipChange(first.rawClayGlb, isolated.rawClayGlb) : undefined;
                     const moved = change ? `${round(change.share * 100, 1)}% of the structure's scan surface (${round(change.onlySecondM2, 1)} m² joined, ${round(change.onlyFirstM2, 1)} m² left)` : 'the first isolate had fallen back to the district around the structure';
                     const notVoted = seg.skipped.filter(x => !seg.cut?.views.includes(x.view));
                     const ownershipNote = `object ownership: ${seg.model ?? 'the vision model'} outlined the structure in ${seg.masks} of ${seg.views} views of the tile${seg.cut ? ` (${seg.cut.note})` : ''}${notVoted.length ? ` (no vote from ${notVoted.map(x => `${x.view}: ${x.reason}`).join('; ')})` : ''}${readBack ? ` (${readBack})` : ''}; the vote moved ${moved}`;
@@ -5000,8 +5031,18 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         };
                     }
                     // material: the voted remesh replaces the first isolate and what was built on it (the rebuild runs again on it),
-                    // so it is made again with the facade orthos the rebuild reads
-                    if (Object.keys(v.orthos).length) voted = await timed('tileRefine', () => deps.refine.refine({ ...votedRequest, ...v.orthos }));
+                    // refined once, with the facade orthos the rebuild reads
+                    voted ??= await timed('tileRefine', () => deps.refine.refine({ ...votedRequest, ...v.orthos }));
+                    // pipeline K: the facades the vote left unchanged (the same plane, no scan moved near it, the same photo:
+                    // facade-reuse.ts) keep the first isolate's straightened photo, reading, window fit and arrays; only the
+                    // others are read and fitted again. SCRATCHBOX_K_FACADE_REUSE=0 reads every facade again
+                    const firstPass = facadePasses.get('remesh');
+                    let reusePlan: FacadeReusePlan | undefined;
+                    if (pipelineK && change && firstPass && voted.reliefOrthosDir && process.env.SCRATCHBOX_K_FACADE_REUSE?.trim() !== '0') {
+                        const votedOrthos = voted.reliefOrthosDir;
+                        try { reusePlan = await timed('facadeMatch', async () => planFacadeReuse(firstPass.rawDir, votedOrthos, change.moved, change.movedAreas)); }
+                        catch (err) { if (isAbort(err) || io.signal.aborted) throw err; io.progress(`facade reuse: the facades could not be matched (${errorMessage(err)}); every facade is read again`); }
+                    }
                     // pipeline K: the voted remesh gets K's facade work and polish (its base cleanup and clip to the footprint) as the
                     // first isolate did, under the remesh's step names, so the node graph shows the voted build's steps. Its notes and
                     // degradations are held until it is committed: a vote that ends before then leaves the first isolate's in place
@@ -5011,7 +5052,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const held: Array<() => void> = [];
                     if (pipelineK) {
                         const heldNotes: RefineNotes = { write: (name, data) => held.push(() => cache.writeRunNote(runId, name, data)), note: (label, text) => held.push(() => run.note(label, text)), degrade: rec => { held.push(() => run.degrade(rec)); return rec; } };
-                        voted = await finishRefine(voted, io, timedAs('remesh'), voteSteps, voteDegradations, 'ownership', heldNotes);
+                        if (reusePlan) heldNotes.write('pipeline_k_facade_reuse', { version: FACADE_REUSE_VERSION, first: firstPass!.rawDir, voted: voted.reliefOrthosDir, kept: reusePlan.kept.length, changed: reusePlan.changed.length, keptAreaM2: reusePlan.keptAreaM2, changedAreaM2: reusePlan.changedAreaM2, params: reusePlan.params, facades: [...reusePlan.kept.map(x => ({ ...x, outcome: 'kept' })), ...reusePlan.changed.map(x => ({ ...x, outcome: 'changed' }))] });
+                        if (reusePlan) heldNotes.note(PROVENANCE.photoInferred, `facade reuse (${FACADE_REUSE_VERSION}): ${reusePlan.kept.length} of ${reusePlan.kept.length + reusePlan.changed.length} facades (${reusePlan.keptAreaM2} of ${reusePlan.keptAreaM2 + reusePlan.changedAreaM2} m² covered) the vote left unchanged keep the first isolate's straightened photo, reading, window fit and arrays; the other ${reusePlan.changed.length} are read and fitted again`);
+                        const reuse = reusePlan?.kept.length && firstPass ? { plan: reusePlan, first: firstPass } : undefined;
+                        voted = await finishRefine(voted, io, timedAs('remesh'), voteSteps, voteDegradations, 'ownership', heldNotes, reuse);
                         // the vote decides what belongs to the structure; it may not tear it. Its build is kept only when the outside
                         // audit sees it no more torn than the first isolate's (scan the vote took away that no rebuild covered opens
                         // the base or a face: Penn 2, 2026-11-07, a 475 m² hole against 86 m²); else the first isolate stands

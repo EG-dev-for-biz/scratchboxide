@@ -1459,8 +1459,16 @@ export function inferWindowArrays(orthosDir: string, fit: WindowFitFile, P: Wind
         pending.set(e.facadeId, p);
         run(p);
     }
-    const building = buildingStorey([...pending.values()].flatMap(p => {
-        const r = facades.find(x => x.facadeId === p.e.facadeId);
+    // the building's storeys from every facade's own rows: those inferred now, and those already arrayed (a facade taken
+    // from the first pass when the ownership vote left it unchanged, pipeline-k/facade-reuse.ts) unless the building's
+    // storeys gave them their rows (the second run below; the system's faces count, as they do when inferred now)
+    const arrayed = fit.facades.flatMap(entry => {
+        if ('error' in entry || pending.has(entry.facadeId)) return [];
+        const e = entry as FitEntry, f = frames.find(x => x.facadeId === e.facadeId);
+        return f && e.array?.version === WINDOW_ARRAY_VERSION && !(e.array.report.rowsFrom === 'building' && e.array.report.source !== 'system') ? [{ facadeId: e.facadeId, f }] : [];
+    });
+    const building = buildingStorey([...[...pending.values()].map(p => ({ facadeId: p.e.facadeId, f: p.f })), ...arrayed].flatMap(p => {
+        const r = facades.find(x => x.facadeId === p.facadeId);
         const main = r && !r.reason ? r.tiers?.find(t => t.from !== 'residual-tier') : undefined;
         return main && r!.rowsIn ? [{ frame: p.f, rowPitchPx: main.rowPitchM / p.f.pixel, rowPhasePx: main.rowPhaseM / p.f.pixel, rows: r!.rowsIn, cols: r!.colsIn }] : [];
     }), P);
