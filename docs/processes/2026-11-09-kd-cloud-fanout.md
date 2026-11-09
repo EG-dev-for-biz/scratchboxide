@@ -2,8 +2,8 @@
 
 **Date:** 2026-11-09 · **Branches:** `feat/kd-building-fanout`, `feat/kd-shown-3min`, `feat/kd-fast-vms` · **Status:**
 Measured fresh on the Penn Station district (2 Penn Plaza, 150 m: 9 ground cells and 25 building tasks, plus the
-outline-less buildings kept with their cells). **Shown in 2.6-2.8 min with every chunk on a suspended Compute Engine VM**
-(169 s and 173 s headless, 159 s from the app's own chat), byte-identical. Design and order of work:
+outline-less buildings kept with their cells). **Shown in 2.8-2.9 min fresh with every chunk on a suspended Compute Engine
+VM** (169 s and 173 s headless), byte-identical; 159 s from the app's own chat, but that run was not fresh (see below). Design and order of work:
 `docs/research/2026-11-08-kd-cloud-processing-design.md`.
 
 ![timing sheet](kd-cloud-fanout/2026-11-09-timing-sheet.jpg)
@@ -111,8 +111,10 @@ At job speed chunk 25 would land at about 150 s + 8 s, and the district would be
   (`ZONE_RESOURCE_POOL_EXHAUSTED`); N2D spread over four zones resumed every time. The largest building alone: C3 149 s,
   C4 143 s, N2D 154 s, N2 204 s, a job task 147 s, a pool instance 193-211 s.
 - **Penn 150 m, shown band, fresh, every chunk on its own VM: 169 s and 173 s** headless (runs `8743c01f`, `fbbd739a`), and
-  **159 s from the app's own chat** (run `d9857e9b`, committed at 2 min 40 s; all 34 chunks on the VMs, the slowest
-  144.5 s). 110/110 layers byte-identical against the pool runs and main's image.
+  159 s from the app's own chat (run `d9857e9b`, committed at 2 min 40 s; all 34 chunks on the VMs, the slowest
+  144.5 s), **not a fresh figure**: the app was started with `SCRATCHBOX_CACHE_RESTORE=0`, and only `off` turns the
+  restore off, so every chunk's terrain and photo twin came back from the cache mirror (the fresh headless runs restore
+  nothing; their only cache hit is the late-texture stage, as in any run). The layers are the same bytes either way. 110/110 layers byte-identical against the pool runs and main's image.
 - **Two bugs the app run found** (the headless runs joined on x86 in Cloud Run and never met them):
   1. *A chunk refused at random when the Mac joins:* the job (x86) and the Mac (arm64) compute the same frame transform
      with different last bits (up to 3e-10 m), and the join's check was bitwise. It now accepts a transform within
