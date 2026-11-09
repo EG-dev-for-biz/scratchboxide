@@ -88,9 +88,43 @@ thinking; 6 photos about $0.04. **About $2 to $4**, under the $15 cap and the us
 4. One paid call with every arm and decoy.
 5. Report against the bars with the grid image.
 
+## Amendment 1 (arm H rebuilt), before any paid call
+
+Written after the free dry run and before any paid call; no score had been read. No bar, place, view rule or decoy rule
+changes.
+- **Why:** the dry run's view 02zHXunY showed arm H (and arm I) drawing a 72 m x 15 m stretch of the podium wall as one
+  flat grey slab. A ray pick found it: a roof-detail block standing in for that wall, its faces each one palette colour,
+  because the reserved photo-patch rows overflowed before the roof blocks were drawn.
+- **The fix,** a8e266e6: every vertical face of a ledge or roof block of 4 m2 or more takes its own patch of the scan's
+  photo (1,536 reserved rows; 504 faces patched, none overflowing; `patchOverflow` reported).
+- **Arm H is now** the native pass of that code on out54's spec (same K stages and model answers), `out55`; the decoys X2
+  and X3 are remade from it. Arm I is unchanged (reported only; it keeps the slab).
+
 ## Run record
 
-(filled in after the dry run, before the paid call)
+- **Code:** `feat/measured-procedural-twin` at a8e266e6 (prereg 34403006).
+- **Arms' GLBs** (copied into `.scratchbox/judge_arms/`, gitignored): `k.glb` (K's twin.glb of run 493d1ee7),
+  `hybrid_c.glb` (out55), `infer.glb` (out48), `x2_c.glb` (hybrid_c moved 4 m east, positions baked), `x3_c.glb`
+  (hybrid_c, every texture replaced by its mean colour, normal map removed); reference tile
+  `textured_tile_seams_9.glb` and isolate `raw_clay.glb` of the same run.
+- **Free dry run** (`photo-match-dryrun.test.ts`, stand-ins at the billed edges, credentials unreachable): passed. Six
+  views, every arm and decoy rendered at every pose, 9 plate panos excluded, 36 stand-in judge calls (18 textured,
+  18 clay), as estimated.
+- **Pinned poses** (the dry run's `heldOut.judgedPoses`; `autoViews: false` in the paid call):
+
+  | View | Pano | Heading | Pitch | FOV |
+  |---|---|---|---|---|
+  | v0 | lui1N8rPhV-Uk5on9D2LPQ | 199.3 | 12 | 80 |
+  | v1 | iL6aK4K9ZTgfp6Spsw60kQ | 217.8 | 12 | 80 |
+  | v2 | 02zHXunYnbfDOD4QxOcVLg | 337.6 | 12 | 80 |
+  | v3 | w4nU8TkIWNQjsnulYysjNw | 269 | 12 | 80 |
+  | v4 | -qdlw7_XTh6cxO2UYl5WiQ | 102.8 | 12 | 80 |
+  | v5 | 6BQ_gXrXCRuOhRoZYeRUpA | 264.6 | 30 | 72 |
+
+- **D for bar V2:** X2 13.71 px, H 5.52 px in the dry run's placement: D = half the gap = **4.10 px**.
+- **Era:** the six panos are those the tool's held-out search picks at this place; earlier preregistrations checked
+  iL6aK4K9 and 02zHXunY (2024-2026 captures, the tile's massing). The paid call's grids are checked for era before any
+  score is read; a view from another era is dropped and said so.
 
 ## Report
 
