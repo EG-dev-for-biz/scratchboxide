@@ -167,7 +167,10 @@ struct Params {
     int atlasJpeg{0};
     int slenderTex{0};                 // the slender top's panels each take their own patch of the scan's photo in the atlas (not one colour a panel)
     int slenderRows{512};              // ... in this many atlas rows, reserved below the walls' textures
-    double slenderTexelM{0.08};        // ... at this texel at finest (coarsened until every panel fits)                  // the colour atlas written as JPEG (a large atlas at a fraction of the bytes)
+    double slenderTexelM{0.08};        // ... at this texel at finest (coarsened until every panel fits)
+    int patchRows{0};                  // more reserved rows: any large flat face of a ledge or roof block takes its own patch of the scan's photo there
+    double patchTexelM{0.1};           // ... at this texel
+    double patchMinArea{4};            // ... faces of at least this area (m^2)                  // the colour atlas written as JPEG (a large atlas at a fraction of the bytes)
     double reliefM{0};                 // when above 0: relief maps on the walls, roofs and slender top rebuild, as blocks, what stands at least this far off the shell (all procedural; the ledge profiles are left out)
     double reliefCellM{0.3};           // ... their cell
     double reliefDensity{40};          // ... scan samples per square metre
@@ -248,6 +251,7 @@ inline Spec parseSpec(std::istream& in) {
             else if (name == "profileMinOutM") P.profileMinOutM = v; else if (name == "profileMaxOutM") P.profileMaxOutM = v;
             else if (name == "reliefM") P.reliefM = v; else if (name == "reliefCellM") P.reliefCellM = v; else if (name == "reliefDensity") P.reliefDensity = v; else if (name == "reliefMinArea") P.reliefMinArea = v; else if (name == "reliefMaxArea") P.reliefMaxArea = v; else if (name == "surfaceFit") P.surfaceFit = static_cast<int>(v);
             else if (name == "scanDetailM") P.scanDetailM = v; else if (name == "scanDetailMinArea") P.scanDetailMinArea = v; else if (name == "scanDetailStepM") P.scanDetailStepM = v;
+            else if (name == "patchRows") P.patchRows = static_cast<int>(v); else if (name == "patchTexelM") P.patchTexelM = v; else if (name == "patchMinArea") P.patchMinArea = v;
             else if (name == "slenderTex") P.slenderTex = static_cast<int>(v); else if (name == "slenderRows") P.slenderRows = static_cast<int>(v); else if (name == "slenderTexelM") P.slenderTexelM = v;
             else if (name == "orthoBlend") P.orthoBlend = v; else if (name == "atlasJpeg") P.atlasJpeg = static_cast<int>(v);
             else if (name == "roofDetail") P.roofDetail = static_cast<int>(v); else if (name == "roofDetailMinM") P.roofDetailMinM = v;
@@ -565,7 +569,7 @@ struct Report {
     size_t windowsGiven{0}, windowsPlaced{0}, windowsGenerated{0}, windowsContinued{0}, continueTested{0}, windowsRephased{0}, wallsRephased{0}, panesPlaced{0};
     size_t droppedNoWall{0}, droppedClipped{0}, droppedOverlap{0}, droppedSmall{0}, droppedNoFrame{0};
     size_t uncolouredElements{0}, colouredElements{0}, capsCut{0}, undersideFills{0};
-    size_t pierWalls{0}, pierWallsMeasured{0}, pierStrips{0}, baseFaces{0}, baseTexels{0}, reliefFaces{0}, reliefTexels{0}, turnedBands{0}, orthoTexels{0}, selfFilled{0}, slenderTexels{0};
+    size_t pierWalls{0}, pierWallsMeasured{0}, pierStrips{0}, baseFaces{0}, baseTexels{0}, reliefFaces{0}, reliefTexels{0}, turnedBands{0}, orthoTexels{0}, selfFilled{0}, slenderTexels{0}, patchFaces{0}, patchTexels{0}, patchOverflow{0};
     std::vector<double> pierDepths;
     size_t facesTextured{0}, texelsDetail{0}, paletteColours{0};
     size_t profileWalls{0}, profileLips{0}, profileParapets{0}, profileSteps{0};
@@ -1480,7 +1484,39 @@ inline Result build(Spec S) {
     E.texOffset = static_cast<int>(classes.size()) + 1;
     E.atlasW = S.P.detailAtlas;
     const int slenderY0 = facesUsedH, slenderRows = S.P.slenderTex && rep.atlasW ? ((S.P.slenderRows + 3) / 4) * 4 : 0;
-    E.paletteY0 = facesUsedH + slenderRows;
+    const int patchY0 = slenderY0 + slenderRows, patchRows = S.P.patchRows > 0 && rep.atlasW ? ((S.P.patchRows + 3) / 4) * 4 : 0;
+    E.paletteY0 = facesUsedH + slenderRows + patchRows;
+    // a large flat vertical face (bottom a0 -> a1, top c1, c0) with its own patch of the scan's photo in the reserved rows
+    // (shelf-packed as they come; when the rows are full, or the face is small, its one colour as before)
+    int patchX = 0, patchY = patchY0, patchShelf = 0;
+    auto patchQuad = [&](OutNode& node, int m, const P3& a0, const P3& a1, const P3& c1, const P3& c0, const P3& n, const Rgb& c, const P3& tu, const P3& tv) {
+        P3 d{a1.x - a0.x, 0, a1.z - a0.z};
+        const double chord = sp::len(d), top = std::max(c0.y, c1.y) - S.groundY, bottom = std::min(a0.y, a1.y) - S.groundY;
+        if (!patchRows || !ph.ok || chord * (top - bottom) < S.P.patchMinArea || chord < 1e-6) { E.quad(node, m, a0, a1, c1, c0, n, c, tu, tv); return; }
+        d = d * (1.0 / chord);
+        const double t = S.P.patchTexelM;
+        const int w = static_cast<int>(std::ceil(chord / t)) + 1, h = static_cast<int>(std::ceil((top - bottom) / t)) + 1;
+        if (patchX + w + 2 > E.atlasW) { patchX = 0; patchY += patchShelf; patchShelf = 0; }
+        if (w + 2 > E.atlasW || patchY + h + 2 > patchY0 + patchRows) { ++rep.patchOverflow; E.quad(node, m, a0, a1, c1, c0, n, c, tu, tv); return; }
+        slenderTex.emplace_back();
+        FaceTex& T = slenderTex.back();
+        T.ax = patchX + 1; T.ay = patchY + 1; T.w = w; T.h = h; T.texel = t; T.h1 = top; T.h0 = top - h * t;
+        patchX += w + 2; patchShelf = std::max(patchShelf, h + 2);
+        T.M.assign(static_cast<size_t>(w) * h * 3, 0.0f);
+        for (int j = 0; j < h; ++j) for (int i = 0; i < w; ++i) {
+            const double aa = (i + 0.5) * t, hh = T.h1 - (j + 0.5) * t;
+            Rgb pc;
+            if (!ph.sample(P3{a0.x + d.x * aa, S.groundY + hh, a0.z + d.z * aa}, n, 1.5, pc)) pc = c; else ++rep.patchTexels;
+            const size_t o = (static_cast<size_t>(j) * w + i) * 3;
+            T.M[o] = static_cast<float>(pc.r); T.M[o + 1] = static_cast<float>(pc.g); T.M[o + 2] = static_cast<float>(pc.b);
+        }
+        T.ok = true;
+        FaceTex* prev = E.tex; const P3 p0 = E.texP0, pd = E.texD;
+        E.tex = &T; E.texP0 = a0; E.texD = d;
+        E.quad(node, m, a0, a1, c1, c0, n, c, tu, tv);
+        E.tex = prev; E.texP0 = p0; E.texD = pd;
+        ++rep.patchFaces;
+    };
 
     // --- piers and window columns. A column of three or more windows sharing their sides is a strip recessed behind the
     // piers beside it, by the step the scan measures between them (the front-most scan surface per 0.3 m cell, the piers'
@@ -1842,7 +1878,7 @@ inline Result build(Spec S) {
                 const Rgb c = colourOf(at(0, h0, oOut + 0.05), w.d * w.L, P3{0, h1 - h0, 0}, w.n, classColour(0), got);
                 const int m = E.classOf(c);
                 const P3 up{0, 1, 0};
-                E.quad(ledges, m, at(sOut, h0, oOut), at(eOut, h0, oOut), at(eOut, h1, oOut), at(sOut, h1, oOut), w.n, c, w.d, up);           // front
+                patchQuad(ledges, m, at(sOut, h0, oOut), at(eOut, h0, oOut), at(eOut, h1, oOut), at(sOut, h1, oOut), w.n, c, w.d, up);           // front
                 E.quad(ledges, m, at(sIn, h1, oIn), at(eIn, h1, oIn), at(eOut, h1, oOut), at(sOut, h1, oOut), up, c, w.d, w.n);               // top
                 E.quad(ledges, m, at(sIn, h0, oIn), at(sOut, h0, oOut), at(eOut, h0, oOut), at(eIn, h0, oIn), up * -1.0, c, w.d, w.n);         // underside
                 if (oIn < -0.01) E.quad(ledges, m, at(sIn, h0, oIn), at(sIn, h1, oIn), at(eIn, h1, oIn), at(eIn, h0, oIn), w.n * -1.0, c, w.d, up);  // inner face
@@ -2639,7 +2675,7 @@ inline Result build(Spec S) {
                     const P3 mid = (q[0] + q[1]) * 0.5;
                     if (sp::dot(n, mid - cen) < 0) n = n * -1.0;
                     const Rgb cs = colourOf(q[0] + n * 0.05, q[1] - q[0], q[3] - q[0], n, ct, got);
-                    E.quad(roofDet, E.classOf(cs), q[0], q[1], q[2], q[3], n, cs, q[1] - q[0], up);
+                    patchQuad(roofDet, E.classOf(cs), q[0], q[1], q[2], q[3], n, cs, q[1] - q[0], up);
                 }
                 ++rep.roofDetailBoxes;
             }
@@ -3089,7 +3125,7 @@ inline std::string reportJson(const Report& r, const Spec& S, size_t triangles, 
       << ",\"windows\":{\"given\":" << r.windowsGiven << ",\"placed\":" << r.windowsPlaced << ",\"generated\":" << r.windowsGenerated << ",\"continued\":" << r.windowsContinued << ",\"rephased\":" << r.windowsRephased << ",\"wallsRephased\":" << r.wallsRephased << ",\"continueTested\":" << r.continueTested << ",\"panes\":" << r.panesPlaced
       << ",\"dropped\":{\"noWall\":" << r.droppedNoWall << ",\"clipped\":" << r.droppedClipped << ",\"overlap\":" << r.droppedOverlap << ",\"small\":" << r.droppedSmall << ",\"noFrame\":" << r.droppedNoFrame << "}}"
       << ",\"colour\":{\"elements\":" << r.colouredElements << ",\"uncoloured\":" << r.uncolouredElements << ",\"undersideFills\":" << r.undersideFills << "}"
-      << ",\"piers\":{\"walls\":" << r.pierWalls << ",\"measured\":" << r.pierWallsMeasured << ",\"strips\":" << r.pierStrips << ",\"baseFaces\":" << r.baseFaces << ",\"baseTexels\":" << r.baseTexels << ",\"reliefFaces\":" << r.reliefFaces << ",\"reliefTexels\":" << r.reliefTexels << ",\"turnedBands\":" << r.turnedBands << ",\"orthoTexels\":" << r.orthoTexels << ",\"selfFilled\":" << r.selfFilled << ",\"slenderTexels\":" << r.slenderTexels << ",\"medianM\":" << detail::num([&] { auto v = r.pierDepths; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
+      << ",\"piers\":{\"walls\":" << r.pierWalls << ",\"measured\":" << r.pierWallsMeasured << ",\"strips\":" << r.pierStrips << ",\"baseFaces\":" << r.baseFaces << ",\"baseTexels\":" << r.baseTexels << ",\"reliefFaces\":" << r.reliefFaces << ",\"reliefTexels\":" << r.reliefTexels << ",\"turnedBands\":" << r.turnedBands << ",\"orthoTexels\":" << r.orthoTexels << ",\"selfFilled\":" << r.selfFilled << ",\"slenderTexels\":" << r.slenderTexels << ",\"patchFaces\":" << r.patchFaces << ",\"patchTexels\":" << r.patchTexels << ",\"patchOverflow\":" << r.patchOverflow << ",\"medianM\":" << detail::num([&] { auto v = r.pierDepths; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
       << ",\"slender\":{\"fromM\":" << detail::num(r.slenderFromM) << ",\"slices\":" << r.slenderSlices << ",\"bands\":" << r.slenderBands << ",\"axisFits\":" << r.slenderAxisFits << ",\"symmetry\":" << r.slenderSymmetry << ",\"finBands\":" << r.finBands << ",\"fins\":" << r.finCount << ",\"finSegments\":" << r.finSegments << "}" << ",\"heads\":{\"types\":" << r.headTypes << ",\"windows\":" << r.headWindows << ",\"drawn\":" << r.headsDrawn << ",\"surfacePieces\":" << r.surfacePieces << ",\"surfaceQuads\":" << r.surfaceQuads << ",\"selfWalls\":" << r.selfWalls << ",\"selfWindowWalls\":" << r.selfWindowWalls << ",\"selfWindows\":" << r.selfWindows << ",\"medianRiseM\":" << detail::num([&] { auto v = r.headRises; if (v.empty()) return 0.0; std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end()); return v[v.size() / 2]; }()) << "}"
       << ",\"topM\":" << detail::num(r.topM) << ",\"revealM\":" << detail::num(S.revealM) << ",\"revealLabel\":\"" << detail::esc(S.revealLabel) << "\""
       << ",\"triangles\":" << triangles << ",\"bytes\":" << bytes << ",\"classUse\":{";
