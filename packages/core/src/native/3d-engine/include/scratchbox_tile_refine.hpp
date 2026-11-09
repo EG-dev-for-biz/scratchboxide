@@ -203,6 +203,10 @@ struct TileRefineParams {
     // every stage measures heights above the same terrain.
     std::string isolatePickPath;
     std::string rawClayPath;           // non-empty: also write the (isolated) raw scan, unmodified, as studio clay
+    // Isolate only: the isolate (and its ownership vote) and the raw clay are written, and nothing after them runs (no
+    // visibility, rectify, relief or outputs). The staged build judges an ownership vote on its raw scan this way, seconds
+    // instead of a whole refine, and refines only a vote that changes the structure materially.
+    bool isolateOnly{false};
     // Ownership by multi-view mask voting (isolate only; scratchbox_mask_vote.hpp). Render mode writes the views to segment
     // (views.txt: one registered pinhole view per line; <name>.png: the scan's unlit texture from it) around the structure the
     // geometric rules found, and stops. Vote mode reads views.txt and <name>.mask.png (8-bit: 255 = the requested structure,
@@ -826,6 +830,17 @@ private:
             if (!writeFile(P.rawClayPath, rawClay)) { res.error = "cannot write " + P.rawClayPath; return res; }
             js << "  \"rawClay\": {\"path\": \"" << jsonEscape(P.rawClayPath) << "\", \"bytes\": " << rawClay.size() << ", \"triangles\": " << F << "},\n";
             lap("write_raw_clay");
+        }
+        if (P.isolateOnly) {
+            // isolate-only mode: the isolate and its raw clay are written; nothing else runs
+            res.totalMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+            std::ostringstream tm;
+            for (size_t i = 0; i < timings.size(); ++i) tm << (i ? ", " : "") << "\"" << timings[i].first << "\": " << num(timings[i].second);
+            res.statsJson = "{\n  \"ok\": true,\n  \"mode\": \"isolate-only\",\n" + js.str() + "  \"stagesMs\": {" + tm.str() + "},\n  \"totalMs\": " + num(res.totalMs) + "\n}\n";
+            if (!statsPath.empty() && !writeFile(statsPath, std::vector<uint8_t>(res.statsJson.begin(), res.statsJson.end()))) { res.error = "cannot write " + statsPath; return res; }
+            res.outputTriangles = F;
+            res.ok = true;
+            return res;
         }
 
         // 2. visibility

@@ -1570,7 +1570,7 @@ export async function fitOrthoFacades(orthosDir: string, facades: OrthoFacade[],
  * several at a time; writes window_fit.json. A plane with no uncovered mask beside it (one pipeline K did not straighten)
  * has it read from its ortho: the texels the photo never reached are exact grey 128 or transparent.
  */
-export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency?: number; signal?: AbortSignal; params?: WindowFitParams; segment?: SegmentOpeningMask; segmentScope?: SegmentScope; /** The structural fit of these facades elsewhere (worker threads: remesh-worker-pool.ts), the same entries fitOrthoFacades gives. */ fitFacades?: (facades: OrthoFacade[], P: WindowFitParams) => Promise<WindowFitEntry[]> } = {}): Promise<{ file: string; fit: WindowFitFile; cached: boolean }> {
+export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency?: number; signal?: AbortSignal; params?: WindowFitParams; segment?: SegmentOpeningMask; segmentScope?: SegmentScope; /** The structural fit of these facades elsewhere (worker threads: remesh-worker-pool.ts), the same entries fitOrthoFacades gives. */ fitFacades?: (facades: OrthoFacade[], P: WindowFitParams) => Promise<WindowFitEntry[]>; /** Facades whose entry is taken as it is (the first pass's, for a facade the ownership vote left unchanged: pipeline-k/facade-reuse.ts), by id: neither fitted nor segmented again. */ reuse?: ReadonlyMap<number, WindowFitEntry> } = {}): Promise<{ file: string; fit: WindowFitFile; cached: boolean }> {
     const file = path.join(orthosDir, WINDOW_FIT_FILE), P = opts.params ?? WINDOW_FIT_PARAMS;
     const segment = opts.segment ? `${SEGMENT_TRY_VERSION}${opts.segmentScope ? `:${opts.segmentScope.key}` : ''}` : undefined;
     if (fs.existsSync(file)) {
@@ -1578,11 +1578,13 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency
         if (prior.version === WINDOW_FIT_VERSION && JSON.stringify(prior.params) === JSON.stringify(P) && prior.segment === segment) return { file, fit: prior, cached: true };
     }
     const t0 = Date.now();
-    const facades = orthoFacades(orthosDir);
+    const all = orthoFacades(orthosDir);
+    const reused = all.flatMap(f => { const e = opts.reuse?.get(f.facadeId); return e ? [structuredClone(e)] : []; });
+    const facades = opts.reuse ? all.filter(f => !opts.reuse!.has(f.facadeId)) : all;
     const concurrency = Math.max(1, opts.concurrency ?? Math.max(1, Math.min(8, os.cpus().length - 1)));
     // natively (one process, a pool of `concurrency` threads when the caller caps it, else every core) unless
     // SCRATCHBOX_K_NATIVE without window-fit keeps the TypeScript fit (on worker threads when the caller gives them)
-    const out = kNative('window-fit') ? await fitOrthoFacadesNative(orthosDir, facades, P, { threads: opts.concurrency ?? nativePolishThreads(), ...(opts.signal ? { signal: opts.signal } : {}) })
+    const out: WindowFitEntry[] = !facades.length ? [] : kNative('window-fit') ? await fitOrthoFacadesNative(orthosDir, facades, P, { threads: opts.concurrency ?? nativePolishThreads(), ...(opts.signal ? { signal: opts.signal } : {}) })
         : opts.fitFacades ? await opts.fitFacades(facades, P) : await fitOrthoFacades(orthosDir, facades, P, { concurrency, ...(opts.signal ? { signal: opts.signal } : {}) });
     // the six readings found nothing (the no-pattern tail): the segmenter's opening mask, as far as the photo confirms it. On
     // this thread, since it calls a model
@@ -1617,6 +1619,7 @@ export async function fitWindowsForOrthos(orthosDir: string, opts: { concurrency
         };
         await Promise.all(Array.from({ length: Math.min(concurrency, Math.max(1, tail.length)) }, worker));
     }
+    out.push(...reused);
     out.sort((a, b) => a.facadeId - b.facadeId);
     const fit: WindowFitFile = { version: WINDOW_FIT_VERSION, params: P, ...(segment ? { segment } : {}), ms: Date.now() - t0, facades: out };
     fs.writeFileSync(file, JSON.stringify(fit));

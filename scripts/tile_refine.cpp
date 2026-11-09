@@ -114,6 +114,7 @@ static void usage() {
         "  --below-ground-margin M isolate: clip surfaces more than M below the terrain (default 0.3; < 0: off)\n"
         "  --interior-inset M      isolate: drop upward-facing floors at least M inside the footprint under the top (default 2.5; < 0: off)\n"
         "  --out-raw-clay PATH     also write the (isolated) raw scan, unmodified, as studio clay\n"
+        "  --isolate-only          with --out-raw-clay: write the isolate (and its ownership vote) and stop; no outputs\n"
         "  --ownership-render DIR  isolate: write registered views around the structure the geometric rules found (views.txt,\n"
         "                          <name>.png: the scan's texture) for segmentation into DIR, and stop\n"
         "  --ownership-masks DIR   isolate: multi-view mask voting from DIR (views.txt + <name>.mask.png, 255 = the requested\n"
@@ -198,6 +199,7 @@ int main(int argc, char** argv) {
         else if (a == "--below-ground-margin") p.isolateBelowGroundMargin = num();
         else if (a == "--interior-inset") p.isolateInteriorInset = num();
         else if (a == "--out-raw-clay") p.rawClayPath = next();
+        else if (a == "--isolate-only") p.isolateOnly = true;
         else if (a == "--ownership-render") p.ownershipRenderDir = next();
         else if (a == "--ownership-masks") p.ownershipMasksDir = next();
         else if (a == "--ownership-out") p.ownershipOutPath = next();
@@ -262,7 +264,8 @@ int main(int argc, char** argv) {
         else if (a == "--help" || a == "-h") { usage(); return 0; }
         else { std::cerr << "unknown argument " << a << "\n"; usage(); return 2; }
     }
-    if (input.empty() || (outTextured.empty() && outClay.empty() && p.ownershipRenderDir.empty())) { usage(); return 2; }
+    if (input.empty() || (outTextured.empty() && outClay.empty() && p.ownershipRenderDir.empty() && !p.isolateOnly)) { usage(); return 2; }
+    if (p.isolateOnly && (!p.isolate || p.rawClayPath.empty())) { std::cerr << "--isolate-only needs --isolate and --out-raw-clay\n"; return 2; }
     if ((!p.ownershipRenderDir.empty() || !p.ownershipMasksDir.empty()) && !p.isolate) { std::cerr << "--ownership-render / --ownership-masks need --isolate\n"; return 2; }
     if (!(p.reliefParams.maxDepth >= 0)) { std::cerr << "--relief-max-depth must be >= 0\n"; return 2; }
     if (!(p.isolateApron >= 0) || !(p.isolateReach >= 0) || !std::isfinite(p.isolateMinHeight)) {
