@@ -22,7 +22,10 @@ transformers==5.20.1
 huggingface_hub==2.2.0
 safetensors==0.8.0
 
+# learned matching for Street View registration: DISK + LightGlue (tools/matching/learned_match.py; weights fetched by kornia on first use)
+kornia==0.9.0
+
 # Not installed in the default venv, used only by optional research scripts (install on demand):
-#   scipy, kornia, pycolmap (scripts/matchmove/*), gsplat, av, imageio (scripts/refine_multiview_avatar.py),
+#   scipy, pycolmap (scripts/matchmove/*), gsplat, av, imageio (scripts/refine_multiview_avatar.py),
 #   hydra-core, omegaconf, lightning, ultralytics (scripts/run_gvhmr.py), rembg (local SF3D).
 # tools/depth/requirements.txt and tools/geobox/requirements.txt cover those tools on their own.

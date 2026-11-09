@@ -14,7 +14,7 @@
  *
  * The images are sent to the worker inline and never written to disk (Street View imagery is not stored).
  * The interpreter: SCRATCHBOX_MATCH_PYTHON, else SCRATCHBOX_PYTHON, else the project's .venv, with torch and kornia
- * importable (`pip install kornia`). The DISK and LightGlue weights are fetched by kornia on first use.
+ * importable (kornia is in requirements.txt). The DISK and LightGlue weights are fetched by kornia on first use.
  */
 
 import { getPythonWorkerPool } from '../process/persistent-python-worker';
