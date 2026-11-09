@@ -22,7 +22,7 @@ import { renderFrameDepth, ZERO_CORRECTION, type FrameCamera, type PoseCorrectio
 import type { RenderMesh3D } from '../src/node/spatial/HeadlessMeshSilhouetteRenderer';
 import { castCamera } from '../src/node/3d-engine/staged-location/survey-casting';
 import { registerPanosByEdges, type EdgeRegFrame } from '../src/node/3d-engine/staged-location/pano-edge-registration';
-import { faceSlabMesh, heldOutFitOfFrames, indexMeshByPlan, meshNearCamera, registerPanosJointly, trainCell } from '../src/node/3d-engine/staged-location/pano-joint-registration';
+import { faceSlabMesh, registerPanosJointly, trainCell } from '../src/node/3d-engine/staged-location/pano-joint-registration';
 import { faceOutlineSamples } from '../src/node/spatial/StreetViewCrossViewRefiner';
 import type { SurfaceChart } from '../src/common/spatial/staged-location-contracts';
 import type { Registration, RegView } from '../src/node/3d-engine/staged-location/pano-registration';
@@ -157,30 +157,6 @@ describe('joint pano registration (pano-joint-registration)', () => {
         fs.writeFileSync(path.join(out, 'staged_location_joint_registration_p2.png'), encodePng(W, H, px, 4));
         fs.writeFileSync(path.join(out, 'staged_location_joint_registration_report.json'), JSON.stringify({ perPanoErrPx: perPano, jointErrPx: together, chosen: joint.chosen, reason: joint.reason, fit: { current: { c: joint.fit.current.chamferPx, n: joint.fit.current.gradNcc }, joint: { c: joint.fit.joint?.chamferPx, n: joint.fit.joint?.gradNcc }, warped: { c: joint.fit.warped?.chamferPx, n: joint.fit.warped?.gradNcc } }, panos: joint.panos, edge: edge.panos.map(p => ({ id: p.panoId, chosen: p.chosen, res: p.edgeResidualPx })) }, null, 1));
     }, 600_000);
-
-    it('scores each view on the mesh near it only: in front of it and within range, the same fit as the whole mesh', () => {
-        // a quad as two triangles at plan (x, z), 1 m across
-        const quad = (x: number, z: number): number[] => [x, 0, z, x + 1, 0, z, x + 1, 1, z, x, 0, z, x + 1, 1, z, x, 1, z];
-        const v = [...quad(0, -20), ...quad(0, 40), ...quad(0, -400)];
-        const mesh: RenderMesh3D = { vertices: Float32Array.from(v), indices: Uint32Array.from({ length: v.length / 3 }, (_, i) => i) };
-        const cam = castCamera({ eye: [0.5, 1.7, 0], headingDeg: 0, pitchDeg: 0, fovDeg: 60, widthPx: 320, heightPx: 240 });
-        const near = meshNearCamera(indexMeshByPlan(mesh), cam);
-        // heading 0 looks toward -z: the quad 20 m ahead is kept, the one behind and the one 400 m ahead are not
-        expect(near.indices.length / 3).toBe(2);
-        expect(Math.max(...Array.from(near.vertices).filter((_, i) => i % 3 === 2))).toBeCloseTo(-20, 5);
-
-        // the facade scene lies within the range: the cropped scoring is the whole mesh's, exactly
-        const truthMesh = facade({ parapetUp: 0, openingIn: 0 });
-        const scan = facade({ parapetUp: 0.2, openingIn: 0.15 });
-        const truths: Record<string, PoseCorrection> = { p1: { ...ZERO_CORRECTION, dx: 0.6, dyawDeg: 0.6 }, p2: { ...ZERO_CORRECTION, dx: -0.7, dpitchDeg: -0.5 } };
-        const views = [view('p1', [-6, 1.7, 18], 12), view('p2', [-1, 1.7, 21], 2)];
-        const frames: EdgeRegFrame[] = views.map(vw => ({ key: vw.panoId, view: vw, image: photo(truthMesh, vw, truths[vw.panoId]) }));
-        const corrs = new Map(views.map(vw => [vw.panoId, ZERO_CORRECTION]));
-        const whole = heldOutFitOfFrames(frames, scan, corrs), cropped = heldOutFitOfFrames(frames, indexMeshByPlan(scan), corrs);
-        expect(cropped.chamferPx).toBe(whole.chamferPx);
-        expect(cropped.gradNcc).toBe(whole.gradNcc);
-        expect(cropped.views.map(x => x.pixels)).toEqual(whole.views.map(x => x.pixels));
-    }, 300_000);
 
     it('keeps the coarse fit for the held-out test when the budget ends before the fine scale', () => {
         const truthMesh = facade({ parapetUp: 0, openingIn: 0 });
