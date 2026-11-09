@@ -99,6 +99,11 @@ describe('pipeline K-D: a district in chunks', () => {
         const s = new Map<number, Float32Array>([[1, Float32Array.from([0, 0.5, 0.5, 0.5])]]);
         const solved = solveSeamGains(new Map([[centre.index, s], [tasks[0].index, new Map([[1, Float32Array.from([0, 0.9, 0.9, 0.9])]])]]), plan);
         expect(solved.gains.get(tasks[0].index)).toEqual([1, 1, 1]);
+        // a building with no outline (a centroid only) has no box: it stays with its cell, no task with a NaN place
+        const bare = planDistrictChunks(350, [block, { id: 'bare', centroid: [10, 130] as [number, number], loops: [] }], DISTRICT_CHUNKS_PARAMS, 'building')!;
+        expect(bare.chunks.filter(c => !isCellChunk(c)).map(t => t.buildings)).toEqual([['block']]);
+        expect(bare.chunks.find(c => c.cx === 0 && c.cz === 120)!.buildings).toEqual(['bare']);
+        expect(bare.chunks.every(c => [c.cx, c.cz, c.rect.x0, c.rect.z1, c.radiusM].every(Number.isFinite))).toBe(true)
         // the switch
         expect(kdChunkUnit({ SCRATCHBOX_KD_CHUNK_UNIT: 'building' })).toBe('building');
         expect(kdChunkUnit({})).toBe('cell');

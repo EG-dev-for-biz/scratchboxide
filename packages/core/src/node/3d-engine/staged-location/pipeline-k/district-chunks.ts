@@ -194,10 +194,13 @@ export function planDistrictChunks(radiusM: number, buildings: Array<{ id: strin
         return { index: k, cx: c.cx, cz: c.cz, half, rect: r, radiusM: farthest(r, c.cx, c.cz), buildings: unit === 'building' ? [] : owned[k], centre: c.i === 0 && c.j === 0 };
     });
     if (unit !== 'building') return { version: DISTRICT_CHUNKS_VERSION, radiusM, cellM: P.cellM, chunks, footprints, ...(leftOut.length ? { leftOut } : {}) };
+    const cellKeeps = (c: DistrictChunk, id: string) => { c.buildings.push(id); };
     // a task per building, after the cells, in the footprints' order: its box, grown by its reach and the margin
     for (const f of footprints) {
         let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
         for (const loop of f.loops) for (const [x, z] of loop) { x0 = Math.min(x0, x); z0 = Math.min(z0, z); x1 = Math.max(x1, x); z1 = Math.max(z1, z); }
+        // a building with no outline (only a centroid) has no box to extract: it stays with its cell, as in the cell plan
+        if (!(x1 >= x0 && z1 >= z0)) { cellKeeps(chunks[f.chunk], f.id); continue; }
         const g = P.marginM + P.buildingReachM, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
         const r = { x0: x0 - g, z0: z0 - g, x1: x1 + g, z1: z1 + g };
         f.chunk = chunks.length;
