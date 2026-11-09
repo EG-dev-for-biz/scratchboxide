@@ -223,6 +223,11 @@ export interface CloudRunJobs {
     run(env: Record<string, string>): Promise<string>;
     get(execution: string): Promise<CloudExecution>;
     cancel(execution: string): Promise<void>;
+    /**
+     * The chunk's outcome is in (its "chunk built" line, or the execution done): a backend holding a machine for it lets
+     * the machine go now (VmPoolJobs suspends its VM), so nothing on the machine itself has to.
+     */
+    finished?(execution: string): Promise<void>;
 }
 
 export interface CloudChunkConfig {
@@ -466,6 +471,7 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
                         if (state.done) break;
                         if (builtAtMs !== undefined) { state = { ...state, done: true, succeeded: true, endMs: builtAtMs }; break; }
                     }
+                    await o.jobs.finished?.(execution).catch(e => log(`[kd-cloud] letting ${short} go failed: ${e instanceof Error ? e.message : String(e)}`));
                 } catch (err) {
                     if (signal?.aborted) {
                         await cancel();
@@ -796,6 +802,18 @@ export class VmPoolJobs implements CloudRunJobs {
         try { await this.compute.suspend(vm); this.log(`[kd-vm] ${vm} suspending`); } catch (err) { this.log(`[kd-vm] suspending ${vm} failed: ${err instanceof Error ? err.message : String(err)}`); }
     }
 
+    /**
+     * The chunk's outcome is read: its VM suspended now, by this runner alone. The worker no longer suspends itself after a
+     * chunk: its request could reach Compute Engine after the next district had resumed the VM (a resume at 10:09:02, the
+     * old worker's suspend at 10:09:43, the new worker frozen at its start and its chunk never built, 2026-11-09).
+     */
+    async finished(execution: string): Promise<void> {
+        const e = this.sent.get(execution);
+        if (!e) return;
+        if (e.endMs === undefined) { e.endMs = this.now(); e.ok = true; }
+        await this.release(e.vm, execution);
+    }
+
     async cancel(execution: string): Promise<void> {
         const e = this.sent.get(execution);
         if (!e) return;
@@ -841,6 +859,10 @@ export class HybridJobs implements CloudRunJobs {
     async cancel(execution: string): Promise<void> {
         await this.owner.get(execution)?.cancel(execution);
     }
+
+    async finished(execution: string): Promise<void> {
+        await this.owner.get(execution)?.finished?.(execution);
+    }
 }
 
 /**
@@ -880,6 +902,10 @@ export class RoundRobinJobs implements CloudRunJobs {
 
     async cancel(execution: string): Promise<void> {
         await this.owner.get(execution)?.cancel(execution);
+    }
+
+    async finished(execution: string): Promise<void> {
+        await this.owner.get(execution)?.finished?.(execution);
     }
 }
 

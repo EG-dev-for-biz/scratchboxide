@@ -402,7 +402,20 @@ async function serve(root: string): Promise<void> {
 
 /** The VM's own name, zone and project from the metadata server. */
 async function vmIdentity(): Promise<{ name: string; zone: string; project: string }> {
-    const get = async (p: string) => (await fetch(`http://metadata.google.internal/computeMetadata/v1/${p}`, { headers: { 'Metadata-Flavor': 'Google' } })).text();
+    // each read timed out and asked again: just after a resume the metadata server does not answer for a while (the guest
+    // agent's own reads failed for ~20 s, 2026-11-09), and a read with no timeout left a worker waiting for ever
+    const get = async (p: string) => {
+        for (let tries = 1; ; tries++) {
+            try {
+                const r = await fetch(`http://metadata.google.internal/computeMetadata/v1/${p}`, { headers: { 'Metadata-Flavor': 'Google' }, signal: AbortSignal.timeout(5_000) });
+                if (r.ok) return await r.text();
+                throw new Error(`HTTP ${r.status}`);
+            } catch (err) {
+                if (tries >= 60) throw err;
+                await new Promise(res => setTimeout(res, 2_000));
+            }
+        }
+    };
     const [name, zonePath, project] = await Promise.all([get('instance/name'), get('instance/zone'), get('project/project-id')]);
     return { name: name.trim(), zone: zonePath.trim().split('/').pop()!, project: project.trim() };
 }
@@ -480,15 +493,13 @@ async function poll(root: string): Promise<void> {
             const out = path.join(tmp, 'done.json');
             fs.writeFileSync(out, JSON.stringify({ ok, ms: Date.now() - t0, job, ...(error ? { error } : {}) }));
             await bucket.putFile(keys.done, out, { contentType: 'application/json' }).catch(err => console.error(`[kd-vm] done.json not sent: ${err}`));
-            // the VM suspends itself at once: it is the first to know the chunk is done (the runner moves on at the chunk's
-            // "chunk built" line and may never read done.json; 29 of 34 VMs were left running so, 2026-11-09). The request
-            // goes out before this process exits; the next district resumes the VM only once it reads SUSPENDED
-            await selfSuspend(me, 'chunk done');
-            // a new process for the next chunk (the container restarts), as a job task gets
+            // the runner suspends the VM as it reads the chunk's outcome (VmPoolJobs.finished); a suspend asked from here
+            // could reach Compute Engine after the next district had resumed the VM, and froze its next chunk (2026-11-09).
+            // A new process for the next chunk (the container restarts), as a job task gets
             process.exit(0);
         }
         if (Date.now() - idleSince > idleS * 1000) {
-            // nothing to build: the VM suspends itself (it normally has after its chunk); after resume this loop goes on
+            // nothing to build: the VM suspends itself (the runner normally has, after its chunk); after resume this loop goes on
             await selfSuspend(me, `idle ${idleS} s`);
             idleSince = Date.now();
         }

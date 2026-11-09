@@ -90,6 +90,8 @@ class FakeJobs implements CloudRunJobs {
         return e ? { name, done: true, succeeded: e.ok, ...(e.ok ? {} : { message: 'Task kd-chunk-job-0 failed with exit code 1' }), startMs: e.startMs, endMs: e.endMs } : { name, done: false, succeeded: false };
     }
     async cancel(name: string) { this.cancelled.push(name); }
+    finishedCalls: string[] = [];
+    async finished(name: string) { this.finishedCalls.push(name); }
 }
 
 function setup(opts: { progress?: string[]; fail?: Error; hang?: boolean; image?: string; withMirror?: boolean; env?: NodeJS.ProcessEnv } = {}) {
@@ -193,6 +195,8 @@ describe('pipeline K-D cloud chunk runner', () => {
         expect(out.result.status).toBe('complete');
         expect(fs.readFileSync(path.join(s.laptop.modelsDir, 'ground_c7.glb'), 'utf8')).toBe('glTF-ground');
         expect(jobs.runs).toEqual([{ KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/7', SCRATCHBOX_CACHE_RESTORE: 'off' }]);
+        // the backend told the chunk is in (a VM pool suspends its VM then), though the execution itself never ended
+        expect(jobs.finishedCalls).toEqual(['projects/scoutscan/locations/us-central1/jobs/kd-chunk-job/executions/kd-chunk-job-0']);
         expect(forwardedJobEnv({ SCRATCHBOX_CACHE_MIRROR: ' off ', SCRATCHBOX_CPUS: '8' })).toEqual({ SCRATCHBOX_CACHE_MIRROR: 'off' });
         expect(KD_CHUNK_BUILT_LINE.test('chunk built (degraded) in 478 s')).toBe(true);
         expect(KD_CHUNK_BUILT_LINE.test('chunk 3: chunk built (degraded) in 478 s')).toBe(false);
@@ -321,6 +325,15 @@ describe('pipeline K-D cloud chunk runner', () => {
         calls.length = 0;
         expect(await vms.get(d)).toMatchObject({ done: false });
         expect(calls).toEqual(['resume kd-fast-1']);
+        // the runner read the chunk's outcome ("chunk built"): the VM suspended by the runner then, once, with no done.json
+        // (the worker no longer suspends itself), the chunk done and the VM free
+        calls.length = 0;
+        await jobs.finished?.(d);
+        await vms.finished(d);
+        expect(calls).toEqual(['suspend kd-fast-1']);
+        expect(await vms.get(d)).toMatchObject({ done: true, succeeded: true });
+        expect(calls).toEqual(['suspend kd-fast-1']);
+        expect(vms.free()).toBe(2);
         // VMs created from different images are refused; the config
         const mixed = new VmPoolJobs(['x', 'y'], { ...compute, image: async vm => (vm === 'x' ? img : img.replace(SHA, 'c'.repeat(40))) }, bucket, tmp('vm-work2'));
         await expect(mixed.jobImage()).rejects.toThrow(/one image/);
