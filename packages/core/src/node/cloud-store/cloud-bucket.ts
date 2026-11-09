@@ -264,10 +264,14 @@ export class DirectoryCloudBucket implements VersionedCloudBucket {
         const out: CloudObject[] = [];
         const walk = async (dir: string, keyPrefix: string): Promise<void> => {
             if (!(await fs.pathExists(dir))) return;
-            for (const name of await fs.readdir(dir)) {
+            for (const name of await fs.readdir(dir).catch(() => [] as string[])) {
+                // a write's temporary file is renamed away at any moment: never stat one; an entry gone between the read of its
+                // folder and its stat (a temp, a removed object) is not listed, rather than failing the whole listing
+                if (/\.tmp-[0-9a-f]{8}$/.test(name)) continue;
                 const full = path.join(dir, name);
                 const key = keyPrefix ? `${keyPrefix}/${name}` : name;
-                const stat = await fs.stat(full);
+                const stat = await fs.stat(full).catch((err: NodeJS.ErrnoException) => { if (err?.code === 'ENOENT') return undefined; throw err; });
+                if (!stat) continue;
                 if (stat.isDirectory()) {
                     await walk(full, key);
                 } else if (!name.endsWith('.meta.json') && !/\.tmp-[0-9a-f]{8}$/.test(name) && key.startsWith(prefix)) {
