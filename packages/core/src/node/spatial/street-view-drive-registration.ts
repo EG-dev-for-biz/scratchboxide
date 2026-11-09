@@ -66,6 +66,13 @@ export interface DriveRegistrationOptions {
     priorUpM: number;
     /** Loose prior holding each rotation near the stated one (1 sigma, degrees). */
     priorRotDeg: number;
+    /**
+     * Prior on positions in the drive stage (1 sigma, m; default `priorPosM`): small keeps the stated relative positions
+     * (Street View's own trajectory) and lets the ties fix only the turns, the rigid stage still moving the whole drive.
+     */
+    drivePriorPosM?: number;
+    /** Prior in the joint stage, centred on the rigid stage's poses (1 sigma, m; default `priorPosM`). */
+    jointPriorPosM?: number;
     /** Rigid stage's coarse search: shift half-range and step (horizontal, vertical; m) and turn half-range and step (deg). */
     rigidSearchM: number; rigidStepM: number;
     rigidSearchUpM: number; rigidStepUpM: number;
@@ -506,12 +513,13 @@ export function registerDriveOnScan(panos: DrivePano[], ties: DriveTie[], scan: 
         poses, scanInliers: scanInliers(panos, poses, scan, opts.inlierPx), tieInliers: tieInliers(panos, poses, T, points, opts.tieScalePx)
     });
     const base = { panos, stated, ties: T, scan, opts };
-    const drive = bundle({ ...base, useTies: true, useScan: false }, { poses: stated, points: P0 });
+    const withPos = (m: number | undefined) => m === undefined ? opts : { ...opts, priorPosM: m, priorUpM: Math.min(opts.priorUpM, m) };
+    const drive = bundle({ ...base, opts: withPos(opts.drivePriorPosM), useTies: true, useScan: false }, { poses: stated, points: P0 });
     const rf = rigidFit(panos, drive.poses, scan, opts);
     const centre = scale(drive.poses.reduce((a, p) => add(a, p.eye), [0, 0, 0] as V3), 1 / drive.poses.length);
     const rigidPoses = moveDrive(drive.poses, rf.t, rf.w, centre);
     const rigidPoints = triangulateAll(panos, rigidPoses, T, opts.minTieAngleDeg);
-    const joint = bundle({ ...base, useTies: true, useScan: true }, { poses: rigidPoses, points: rigidPoints });
+    const joint = bundle({ ...base, stated: rigidPoses, opts: withPos(opts.jointPriorPosM), useTies: true, useScan: true }, { poses: rigidPoses, points: rigidPoints });
     return {
         stated: summary(stated, P0),
         drive: summary(drive.poses, drive.points),

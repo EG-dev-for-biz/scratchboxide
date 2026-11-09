@@ -61,8 +61,19 @@ The 7th Ave run (proof sheet `proof_sheet_drive_first.png`):
 - Rigid move of the drive: 6.7 m east, 2.5 m down, 2.1 m south, 1.2 degrees. Joint: scan matches within 3 px 11 -> 4,875 of 14,095; cameras moved 1.1-8.9 m (pano iUK9l3Uh 6.9 m down: the 5 m high elevation noted below).
 - **Leave one panorama out** (its scan matches removed, its pose from ties alone): lands 0.10-1.34 m from the full fit; its own scan matches then fit as well as in the full run (e.g. VVmScUGc views 30-180 degrees: 72-82% within 3 px, medians 1.7-3.5 px; stated 0%).
 - **Plausibility check** (not ground truth): the solver knows nothing of the ground, and every camera ends 2.04-2.19 m above the street surface below it (stated: 2.50-9.09 m).
-- Still off: views toward 120 and 300-330 degrees (medians 60-240 px in every panorama); the cause is not established. Views at 180 degrees improve but stay 3-11 px.
+- Views toward 120 and 300-330 degrees score badly on the pixel measure (medians 60-240 px); see below: the scan matches there are wrong. Views at 180 degrees improve but stay 3-11 px.
 - Not yet applied anywhere: no tool or stage consumes these poses. Next: find why the 300-degree views fail (wrong matches vs a scan surface missing, e.g. the canopy), then wire the drive registration into the Street View pose path.
+
+### Why the 300-degree views looked wrong (2026-11-09)
+
+The user asked to investigate. Findings:
+
+- **The poses are consistent there:** photo-to-photo ties in the 300- and 330-degree views fit within 2 px for 84-100% of them under the drive poses, as in the views that align.
+- **The pixel numbers there came from wrong scan matches,** not from a wrong pose: those views' scan matches mostly pair 2026 cars and the lower storefronts, which changed since the tiles were captured. Looked at directly (`proof_h300_structure.png`, upper part of each view), the photo's edges sit on the canopy truss in all six panoramas under the drive pose. The PENN STATION sign lines up clearly in 2 of 6 (3yGYmP_G, iUK9l3Uh) and partly in 2. The stated pose traces the truss about as well (it is far away and repetitive, so it says little about the pose). A visual check by a separate agent agreed with that reading.
+- **Where the photos see behind the scan:** triangulated tie points sit mostly 2-30 m behind the scan's surface along the same ray, in every direction (`diag300.ts` in the scratchpad). Two causes are visible: photogrammetry drapes over recesses (under the Penn canopy the scan surface sits at the canopy edge while the photos see the facade behind it), and objects in the tiles that are gone in 2026. Under the drive pose, VVmScUGc has a scan surface 1.2-2.1 m away across 60-180 degrees (a large vehicle-sized block at the curb; the photo shows open street and a police car there).
+- **Not settled: the cameras' lateral positions.** Ties alone move 3yGYmP_G and hx0IwVbv about 10 m west of the other four, even with the stated relative positions held to 0.3 m; the scan matches then agree with that shape (joint and rigid stages nearly equal). The top-down map puts feKTMhN8, VVmScUGc and hFvT5jKC about 6-7 m east of the stated line, at the east curb beside 1-3 m objects in the scan, and the other two near the line: a lateral change of about 8 m over 13 m of travel, implausible for one car on one drive unless these are separate drives (the capture dates are known only to the month). A straight drive past window-grid facades lets a match shifted by one window satisfy the photo-to-photo check, which could bend the tie geometry; nothing here yet rules that in or out.
+- Added `drivePriorPosM` and `jointPriorPosM`; the joint stage's prior is now centred on the rigid stage's poses.
+- Next: an outside position check (Street View's own per-pano capture dates and links, to tell separate drives apart), and a tie filter that rejects matches whose disparity is ambiguous along a repeating row.
 
 ## Still open
 
