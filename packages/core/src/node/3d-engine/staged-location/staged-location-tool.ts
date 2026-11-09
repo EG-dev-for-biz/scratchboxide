@@ -61,6 +61,7 @@ import { reportStagedSwitchProblems, RETIRED_PIPELINE_LETTERS, STAGED_DISTRICT_M
 import { genAiEnhanceClient } from './texture-enhance';
 import { lightingCorrectionEnabled, lightingModels } from './texture-lighting';
 import { bakeTileDetail, defaultSwatchServices, subjectSwatchLibrary } from '../../spatial/tile-detail-bake';
+import { MODEL_READINGS_DIR } from './pipeline-k/model-readings';
 import {
     STAGE_IDS, runStagedLocation, StagedLocationHardFailure, type StageId, type StagedExtraction, type StagedLocationContext, type StagedLocationDeps,
     type StagedLocationOutcome, type StagedLocationRequest, type ResolvedPlace
@@ -234,13 +235,16 @@ function stoppableFetch(signal: AbortSignal | undefined): typeof fetch | undefin
 /** The orchestrator's dependencies wired to the app's own services. */
 export async function createStagedLocationDeps(workspaceRoot: string, options: { signal?: AbortSignal } = {}): Promise<StagedLocationDeps> {
     // a stage this workspace lacks is read back from the cache mirror's bucket before it runs, and so is a model's answer
-    // kept as one file (pipeline-k/model-readings.ts) before the model is asked (SCRATCHBOX_CACHE_RESTORE=off: never)
-    const mirror = process.env.SCRATCHBOX_CACHE_RESTORE?.trim() === 'off' ? undefined : cacheMirrorBucket();
+    // kept as one file (pipeline-k/model-readings.ts) before the model is asked (SCRATCHBOX_CACHE_RESTORE=off: never;
+    // `readings`: the model's answers only, every stage built here: a build compared with another on the same answers)
+    const restoreMode = process.env.SCRATCHBOX_CACHE_RESTORE?.trim();
+    const mirror = restoreMode === 'off' ? undefined : cacheMirrorBucket();
+    const readingsOnly = restoreMode === 'readings';
     const cache: StageCache = new StageCache({
         workspaceRoot,
         ...(mirror ? {
-            restore: (stage: string, key: string) => restoreCacheEntry(mirror, cache.workspaceRoot, `staged_location/${stage}/${key}`, { modelsDir: cache.modelsDir }),
-            restoreFile: (rel: string) => restoreCacheFile(mirror, cache.workspaceRoot, `staged_location/${rel}`)
+            ...(readingsOnly ? {} : { restore: (stage: string, key: string) => restoreCacheEntry(mirror, cache.workspaceRoot, `staged_location/${stage}/${key}`, { modelsDir: cache.modelsDir }) }),
+            restoreFile: (rel: string) => (readingsOnly && !rel.startsWith(`${MODEL_READINGS_DIR}/`) ? Promise.resolve(false) : restoreCacheFile(mirror, cache.workspaceRoot, `staged_location/${rel}`))
         } : {})
     });
     const gemini = new GeminiClient();
