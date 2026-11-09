@@ -56,6 +56,16 @@ export const JOINT_METRIC_WIDTH_PX = 480;
 export const HOLDOUT_CELL_M = 1.5;
 /** The evidence stage's allowance for the joint fit (the scoring is extra, a few seconds). */
 export const JOINT_REGISTRATION_BUDGET_MS = 120_000;
+/**
+ * The held-out scoring reads, per view, only the mesh within this plan range of its eye and in front of it (a district's
+ * whole tile is millions of triangles, and each view drew all of them: at Penn, 2026-11-08, scoring 22 panos' start poses
+ * took the joint fit's whole 600 s budget and the coarse scale never ran). Past it a street photo's detail is a few pixels.
+ */
+export const JOINT_SCORE_RANGE_M = 90;
+/** Plan cell (m) of the triangle index the held-out scoring crops from. */
+export const JOINT_SCORE_CELL_M = 15;
+/** The coarse scale always runs, with at least this much of its own time, whatever the scoring before it took. */
+export const JOINT_MIN_COARSE_MS = 60_000;
 /** Warp lattice (nodes across the pano's directions) and its cap (deg). */
 export const WARP_GRID = [16, 12] as const;
 export const WARP_MAX_DEG = 0.6;
@@ -250,18 +260,73 @@ function bilinear(a: Float32Array, w: number, h: number, x: number, y: number): 
     return (a[i] * (1 - ax) + a[i + 1] * ax) * (1 - ay) + (a[i + w] * (1 - ax) + a[i + w + 1] * ax) * ay;
 }
 
+/** A mesh's triangles by the plan cell of their centroid, built once and shared by every view's crop. */
+export interface PlanTriangleIndex { mesh: RenderMesh3D; cellM: number; cells: Map<string, number[]> }
+
+export function indexMeshByPlan(mesh: RenderMesh3D, cellM = JOINT_SCORE_CELL_M): PlanTriangleIndex {
+    const V = mesh.vertices, I = mesh.indices, cells = new Map<string, number[]>();
+    for (let t = 0; t * 3 + 2 < I.length; t++) {
+        const a = I[t * 3] * 3, b = I[t * 3 + 1] * 3, c = I[t * 3 + 2] * 3;
+        const key = `${Math.floor((V[a] + V[b] + V[c]) / 3 / cellM)},${Math.floor((V[a + 2] + V[b + 2] + V[c + 2]) / 3 / cellM)}`;
+        let list = cells.get(key);
+        if (!list) cells.set(key, list = []);
+        list.push(t);
+    }
+    return { mesh, cellM, cells };
+}
+
+/**
+ * The triangles a camera can see within `rangeM` (plan) of its eye, as a compact mesh: cells whose centre lies within the
+ * range and inside the horizontal field of view (widened by the cell's half diagonal), plus the cells round the eye.
+ */
+export function meshNearCamera(ix: PlanTriangleIndex, cam: FrameCamera, rangeM = JOINT_SCORE_RANGE_M): RenderMesh3D {
+    const { cellM, cells, mesh } = ix, V = mesh.vertices, I = mesh.indices;
+    const ex = cam.eye[0], ez = cam.eye[2];
+    const fl = Math.hypot(cam.fwd[0], cam.fwd[2]) || 1, fx = cam.fwd[0] / fl, fz = cam.fwd[2] / fl;
+    const halfFov = Math.atan((cam.width / 2) / cam.fx);
+    const r = Math.ceil(rangeM / cellM) + 1, gx = Math.floor(ex / cellM), gz = Math.floor(ez / cellM);
+    const halfDiag = cellM * Math.SQRT1_2;
+    const tris: number[] = [];
+    for (let i = gx - r; i <= gx + r; i++) for (let k = gz - r; k <= gz + r; k++) {
+        const list = cells.get(`${i},${k}`);
+        if (!list) continue;
+        const dx = (i + 0.5) * cellM - ex, dz = (k + 0.5) * cellM - ez, d = Math.hypot(dx, dz);
+        if (d > rangeM + halfDiag) continue;
+        if (d > 2 * cellM) {
+            const ang = Math.acos(Math.max(-1, Math.min(1, (dx * fx + dz * fz) / d)));
+            if (ang > halfFov + Math.asin(Math.min(1, halfDiag / d)) + 0.05) continue;
+        }
+        for (const t of list) tris.push(t);
+    }
+    const remap = new Map<number, number>(), verts: number[] = [], idx = new Uint32Array(tris.length * 3);
+    tris.forEach((t, n) => {
+        for (let j = 0; j < 3; j++) {
+            const v = I[t * 3 + j];
+            let m = remap.get(v);
+            if (m === undefined) { m = verts.length / 3; remap.set(v, m); verts.push(V[v * 3], V[v * 3 + 1], V[v * 3 + 2]); }
+            idx[n * 3 + j] = m;
+        }
+    });
+    return { vertices: Float32Array.from(verts), indices: idx };
+}
+
 /**
  * Per view: the other panos' photos carried through the scan into it (mean luminance of every other pano's view that sees the
  * same scan point), scored against the view's own photo on the held-out scan points (`score`), as texture-fit-metric scores a
  * texture: structural-edge chamfer both ways and gradient NCC; and the scan's own edges against the photo's (clay).
  */
-export function heldOutPoseFit(frames: Prepared[], mesh: RenderMesh3D, corrs: Map<string, PoseCorrection>, warps: Map<string, PanoWarp> | undefined, score: (X: V3) => boolean,
+export function heldOutPoseFit(frames: Prepared[], mesh: RenderMesh3D | PlanTriangleIndex, corrs: Map<string, PoseCorrection>, warps: Map<string, PanoWarp> | undefined, score: (X: V3) => boolean,
     outline?: { mesh: RenderMesh3D; dts: Float32Array[] }): PoseFit {
     const t0 = Date.now();
     const cams = frames.map(f => camOf(f, corrs.get(f.panoId) ?? ZERO_CORRECTION));
-    const depths = cams.map(c => renderFrameDepth(mesh, c));
+    // with an index, each view draws only the mesh near it and in front of it (meshNearCamera), and carries in only the
+    // panos near enough to see the same surface (two ranges apart at most)
+    const ix = 'cells' in mesh ? mesh : undefined;
+    const depths = cams.map(c => renderFrameDepth(ix ? meshNearCamera(ix, c) : mesh as RenderMesh3D, c));
+    const reach = ix ? 2 * JOINT_SCORE_RANGE_M : Infinity;
     const views: PoseFitView[] = [];
     for (let v = 0; v < frames.length; v++) {
+        const near = frames.map((_, o) => o).filter(o => frames[o].panoId !== frames[v].panoId && Math.hypot(cams[o].eye[0] - cams[v].eye[0], cams[o].eye[2] - cams[v].eye[2]) <= reach);
         const fv = frames[v], cam = cams[v], D = depths[v], W = cam.width, H = cam.height;
         const sum = new Float32Array(W * H), cnt = new Uint16Array(W * H), held = new Uint8Array(W * H), seen = new Uint8Array(W * H);
         const photo = new Float32Array(W * H);
@@ -276,8 +341,7 @@ export function heldOutPoseFit(frames: Prepared[], mesh: RenderMesh3D, corrs: Ma
             const u = (x + 0.5 - cam.cx) / cam.fx, vv = (y + 0.5 - cam.cy) / cam.fy;
             const X: V3 = [cam.eye[0] + d * (cam.fwd[0] + u * cam.right[0] - vv * cam.up[0]), cam.eye[1] + d * (cam.fwd[1] + u * cam.right[1] - vv * cam.up[1]), cam.eye[2] + d * (cam.fwd[2] + u * cam.right[2] - vv * cam.up[2])];
             if (score(X)) held[i] = 1;
-            for (let o = 0; o < frames.length; o++) {
-                if (frames[o].panoId === fv.panoId) continue;
+            for (const o of near) {
                 const co = cams[o];
                 const qx = X[0] - co.eye[0], qy = X[1] - co.eye[1], qz = X[2] - co.eye[2];
                 const zc = qx * co.fwd[0] + qy * co.fwd[1] + qz * co.fwd[2];
@@ -347,7 +411,7 @@ export function heldOutPoseFit(frames: Prepared[], mesh: RenderMesh3D, corrs: Ma
  * The held-out fit (heldOutPoseFit, held-out cells only) of the wide frames of `frames` under `corrs`, each pano's rotations
  * stated about its first wide frame's heading (as the edge registration states them).
  */
-export function heldOutFitOfFrames(frames: EdgeRegFrame[], mesh: RenderMesh3D, corrs: Map<string, PoseCorrection>, widthPx: number = JOINT_METRIC_WIDTH_PX): PoseFit {
+export function heldOutFitOfFrames(frames: EdgeRegFrame[], mesh: RenderMesh3D | PlanTriangleIndex, corrs: Map<string, PoseCorrection>, widthPx: number = JOINT_METRIC_WIDTH_PX): PoseFit {
     const wide = frames.filter(f => f.view.fovDeg >= EDGE_REG_MIN_FOV_DEG);
     const ref = new Map<string, number>();
     for (const f of wide) if (!ref.has(f.view.panoId)) ref.set(f.view.panoId, f.view.headingDeg);
@@ -546,11 +610,13 @@ export function registerPanosJointly(input: JointRegistrationInput): JointRegist
     // the score frames (held-out cells only)
     t = Date.now();
     const metricFrames = wide.map(f => prepare(f, JOINT_METRIC_WIDTH_PX, refHeading.get(f.view.panoId)!));
+    const scoreMesh = indexMeshByPlan(input.mesh);
     const held = (X: V3) => !trainCell(X);
     const metricOutline = useOutline ? { mesh: outlineMesh!, dts: metricFrames.map(outlineDT) } : undefined;
-    const fitCurrent = heldOutPoseFit(metricFrames, input.mesh, current, undefined, held, metricOutline);
-    const fitStart = heldOutPoseFit(metricFrames, input.mesh, start, undefined, held, metricOutline);
+    const fitCurrent = heldOutPoseFit(metricFrames, scoreMesh, current, undefined, held, metricOutline);
+    const fitStart = heldOutPoseFit(metricFrames, scoreMesh, start, undefined, held, metricOutline);
     timings.scoreStart = Date.now() - t;
+    log(`[joint] held-out scoring of ${metricFrames.length} views (mesh cropped to ${JOINT_SCORE_RANGE_M} m in front of each, ${scoreMesh.cells.size} index cells) took ${(timings.scoreStart / 1000).toFixed(1)} s`);
     log(`[joint] held-out fit: current chamfer ${fitCurrent.chamferPx} px NCC ${fitCurrent.gradNcc}${useOutline ? ` outline ${fitCurrent.outlinePx} px` : ''}; start chamfer ${fitStart.chamferPx} px NCC ${fitStart.gradNcc}${useOutline ? ` outline ${fitStart.outlinePx} px` : ''}`);
 
     // (a)-(c): coarse to fine, on the training cells only
@@ -560,7 +626,8 @@ export function registerPanosJointly(input: JointRegistrationInput): JointRegist
     let before: CrossViewResult | undefined;
     let fineFrames: Prepared[] = [];
     for (const [s, width] of JOINT_WIDTHS_PX.entries()) {
-        const left = budget - (clock() - t0);
+        // the coarse scale always runs, with at least JOINT_MIN_COARSE_MS of its own (the scoring before it is not the fit)
+        const left = s === 0 ? Math.max(JOINT_MIN_COARSE_MS, budget - (clock() - t0)) : budget - (clock() - t0);
         if (left < 5000) { log(`[joint] budget spent before the ${width} px scale`); break; }
         t = Date.now();
         const prepared = wide.map(f => prepare(f, width, refHeading.get(f.view.panoId)!));
@@ -599,8 +666,8 @@ export function registerPanosJointly(input: JointRegistrationInput): JointRegist
     const warps = fitPanoWarps(fineFrames, fineCams, res.matches);
     timings.warps = Date.now() - t;
     t = Date.now();
-    const fitJoint = heldOutPoseFit(metricFrames, input.mesh, corrs, undefined, held, metricOutline);
-    const fitWarped = warps.size ? heldOutPoseFit(metricFrames, input.mesh, corrs, warps, held, metricOutline) : null;
+    const fitJoint = heldOutPoseFit(metricFrames, scoreMesh, corrs, undefined, held, metricOutline);
+    const fitWarped = warps.size ? heldOutPoseFit(metricFrames, scoreMesh, corrs, warps, held, metricOutline) : null;
     timings.scoreJoint = Date.now() - t;
     log(`[joint] held-out fit: joint chamfer ${fitJoint.chamferPx} px NCC ${fitJoint.gradNcc}${useOutline ? ` outline ${fitJoint.outlinePx} px` : ''}${fitWarped ? `; with warps chamfer ${fitWarped.chamferPx} px NCC ${fitWarped.gradNcc}` : ''}`);
 
