@@ -33,7 +33,7 @@ export const VIRTUAL_GEOMETRY_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'path_trace_render',
-        description: 'Render a GLB from the workspace as one physically lit, denoised still with the native Metal path tracer (bounce light, soft sky occlusion, the sun\'s shadows and the GLB\'s own materials and textures), saved as a PNG under renders/path-traced/ in the workspace with a JSON of how it was made beside it. macOS with a ray tracing GPU only: anywhere else it fails and says so. Lighting is the neutral studio dome unless a sun is given. The camera is in the GLB\'s own coordinates (Y up); without one the whole model is framed. The GLB must use float32 positions without Draco or meshopt compression. The user can also path trace the open 3D scene live from the viewport toolstrip.',
+        description: 'Render a GLB from the workspace as one physically lit, denoised still with the native Metal path tracer (bounce light, soft sky occlusion, the sun\'s shadows, the GLB\'s own materials and textures, and its own lights: emissive materials and its point, spot and directional lights), saved as a PNG under renders/path-traced/ in the workspace with a JSON of how it was made beside it. macOS with a ray tracing GPU only: anywhere else it fails and says so. Lighting is the neutral studio dome unless a sun is given, plus the GLB\'s own lights. The camera is in the GLB\'s own coordinates (Y up); without one the whole model is framed. The GLB must use float32 positions without Draco or meshopt compression. The user can also path trace the open 3D scene live from the viewport toolstrip.',
         parameters: {
             type: 'OBJECT',
             properties: {

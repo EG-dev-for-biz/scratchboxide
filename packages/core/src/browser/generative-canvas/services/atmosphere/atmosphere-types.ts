@@ -108,6 +108,12 @@ export interface CloudShellLayer {
 
 export interface AtmosphericScatteringConfig {
     enabled?: boolean;
+    /**
+     * Which clear-sky model the dome draws. 'multiple-scattering': García Liñán's multiple-scattering sky from the native
+     * engine (scratchbox_sky_ms.hpp, GET /api/sky/multiple-scattering), what the scene weather
+     * sets (scene-weather.ts applySceneWeather). Absent: the TypeScript spectral sky (physical-sky.ts).
+     */
+    skyModel?: 'multiple-scattering';
     rayleigh?: number;
     mie?: number;
     turbidity?: number;
@@ -130,6 +136,12 @@ export interface AtmosphericScatteringConfig {
     /** Thin cloud decks drawn as stacked curved shells, behind the volumetric layer. Strictly opt-in: none by default. */
     cloudLayers?: CloudShellLayer[];
     kelvinTemperature?: number;
+    /**
+     * By day the lights are white-balanced as a camera would be, to the sun and sky together, so the textures keep their
+     * own colour (AtmosphericSkyDome.ts daylightWhiteBalance). false keeps the raw sun colour (a low sun's orange cast).
+     * Golden hour, twilight, night and a chosen kelvinTemperature are never balanced.
+     */
+    whiteBalance?: boolean;
     wavelengthDispersion?: [number, number, number];
 
     // Aerial Perspective & Depth Inscattering
@@ -215,6 +227,12 @@ export interface AtmosphericSkyDomeModule {
     sunGlare?: import('./SunGlare').SunGlare;
     /** Replaces the shell cloud decks (an empty list removes them). */
     setCloudLayers: (layers: CloudShellLayer[]) => void;
+    /** The sky model the dome draws now: 'multiple-scattering' once the native table is in, else 'spectral' (physical-sky.ts). */
+    readonly skyModel?: 'multiple-scattering' | 'spectral';
+    /** Why the native multiple-scattering sky could not be drawn (the dome then keeps the spectral sky), when it failed. */
+    readonly skyModelError?: string;
+    /** Resolves when the sky the config asks for is drawn (at once for the spectral sky); rejects when the native sky failed. */
+    whenSkyReady?: () => Promise<void>;
     dispose: () => void;
 }
 

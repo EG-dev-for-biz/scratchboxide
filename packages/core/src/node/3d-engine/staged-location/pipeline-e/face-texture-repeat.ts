@@ -41,7 +41,7 @@ export const RUNG_REPEATED = TEXTURE_LADDER_RUNGS.indexOf(TEXTURE_RUNG_REPEATED_
 const RUNG_TILE_ORTHO = TEXTURE_LADDER_RUNGS.indexOf('tile photo transfer');
 
 /** Wraps one face's plain texture (textureFromOrtho's output, before fillNearest/facadeMedian) as a one-map UvAtlas + BakedTexturePlanes. */
-function wrapFace(t: FaceTexture, pixelM: number): { atlas: UvAtlas; planes: BakedTexturePlanes } {
+function wrapFace(t: FaceTexture, pixelM: number, real: number): { atlas: UvAtlas; planes: BakedTexturePlanes } {
     const n = t.width * t.height;
     const atlas: UvAtlas = {
         layerKey: 'pipeline-e-face',
@@ -58,7 +58,7 @@ function wrapFace(t: FaceTexture, pixelM: number): { atlas: UvAtlas; planes: Bak
         }
     };
     const confidence: ConfidencePlane = { width: t.width, height: t.height, data: new Uint8Array(n * 4) };
-    for (let i = 0; i < n; i++) if (t.source[i] === SRC.tileOrtho) packConfidenceTexel(confidence, i, 0, 0.5, RUNG_TILE_ORTHO);
+    for (let i = 0; i < n; i++) if (t.source[i] === real) packConfidenceTexel(confidence, i, 0, 0.5, RUNG_TILE_ORTHO);
     const planes: BakedTexturePlanes = { layerKey: 'pipeline-e-face', width: t.width, height: t.height, albedo: t.rgba, confidence, provenance: [], degradations: [] };
     return { atlas, planes };
 }
@@ -72,10 +72,11 @@ export interface FaceRepeatResult { filled: number; degradations: TexturePassDeg
  * `SRC.tileOrtho`: a repeat-filled texel must never be read back as a real, measured photo texel by the grammar,
  * relief, bay-average or Street-View colour steps downstream in inference.ts, all of which gate on
  * `source === SRC.tileOrtho`). A face with no gated axis is left untouched (falls through to fillNearest/facadeMedian
- * exactly as before this rung existed).
+ * exactly as before this rung existed). `opts` names a legend whose real photo texels and repeat-fill entry sit at other
+ * indices (pipeline-e.ts `closeUnsourcedTexels`); the texels to fill must then have alpha 0, as textureFromOrtho's do.
  */
-export function repeatFillFace(t: FaceTexture, pixelM: number): FaceRepeatResult {
-    const { atlas, planes } = wrapFace(t, pixelM);
+export function repeatFillFace(t: FaceTexture, pixelM: number, opts: { real?: number; fillSource?: number } = {}): FaceRepeatResult {
+    const { atlas, planes } = wrapFace(t, pixelM, opts.real ?? SRC.tileOrtho);
     const detections = detectPlaneRepeats(atlas, planes);
     const { planes: out, degradations } = repeatFill(atlas, planes, detections, RUNG_REPEATED);
     let filled = 0;
@@ -84,7 +85,7 @@ export function repeatFillFace(t: FaceTexture, pixelM: number): FaceRepeatResult
         if (t.source[i] !== 255) continue; // only fill what the tile ortho never covered
         if (!out.albedo[i * 4 + 3]) continue; // this rung did not write this texel
         t.rgba.set(out.albedo.subarray(i * 4, i * 4 + 4), i * 4);
-        t.source[i] = SRC.repeatFill;
+        t.source[i] = opts.fillSource ?? SRC.repeatFill;
         filled++;
     }
     return { filled, degradations };

@@ -2563,7 +2563,7 @@ export class Google3DTileBlockoutPipelineService {
     let district: ReturnType<typeof GoogleTileDistrictCrawler.buildDistrictGlb>;
     let geometryDistrict: ReturnType<typeof GoogleTileDistrictCrawler.buildDistrictGlb> | undefined;
     try {
-      parsed = buffers.flatMap((b, i) => GoogleTileDistrictCrawler.parseLeafGlbPrimitives(b, leafSubset[i].id));
+      parsed = buffers.flatMap((b, i) => GoogleTileDistrictCrawler.parseLeafGlbPrimitives(b, leafSubset[i].id, leafSubset[i].geometricError, leafSubset[i].box));
       district = GoogleTileDistrictCrawler.buildDistrictGlb(parsed, anchor, {
         clay: mode === 'clay',
         clayPreset: options?.clayPreset || 'studio-grey',

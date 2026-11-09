@@ -173,6 +173,14 @@ function clipNear(poly: CamVertex[], near: number): CamVertex[] {
     return out;
 }
 
+/** A pixel's threshold for a porous cut-out's hashed alpha test, uniform in [0, 1) and the same on every run. */
+function pixelHash(x: number, y: number): number {
+    let h = (Math.imul(x, 73856093) ^ Math.imul(y, 19349663)) >>> 0;
+    h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+    h = Math.imul(h ^ (h >>> 16), 0x45d9f3b) >>> 0;
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
 /** Bilinear alpha of one mip level at (u, v), clamped (row 0 at v = 0). */
 function alphaBilinear(m: CutoutAlphaMap['mips'][number], u: number, v: number): number {
     const x = u * m.width - 0.5, y = v * m.height - 0.5;
@@ -347,7 +355,9 @@ export function renderTriangles(meshes: TileTriangles[], camera: RenderCamera, o
                             const mips = cutM!.mips, l0 = Math.min(mips.length - 1, Math.floor(cutLod)), l1 = Math.min(mips.length - 1, l0 + 1), lf = cutLod - Math.floor(cutLod);
                             let a = alphaBilinear(mips[l0], cutUv[0], cutUv[1]);
                             if (l1 !== l0 && lf > 0.01) a = a * (1 - lf) + alphaBilinear(mips[l1], cutUv[0], cutUv[1]) * lf;
-                            if (a * cutLift < 0.5) continue;
+                            const lifted = a * cutLift, solid = cutK.solidity ?? 1;
+                            // the porous share is cut at a hashed threshold (a pixel hash: the evaluator draws still frames)
+                            if (solid >= 1 ? lifted < 0.5 : solid * lifted + (1 - solid) * (lifted >= pixelHash(px, py) ? 1 : 0) < 0.5) continue;
                         }
                         depth[i] = z;
                         mesh[i] = mi; tri[i] = t;

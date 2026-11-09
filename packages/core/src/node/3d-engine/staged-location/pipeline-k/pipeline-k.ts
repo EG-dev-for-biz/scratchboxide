@@ -32,6 +32,8 @@ import { inpaintFace } from '../pipeline-e/occluders';
 import type { EnhanceModelClient } from '../texture-enhance';
 import type { RectifyJob, RectifyMessage } from './ortho-rectify-worker';
 import { remeshWorkersEnabled } from '../remesh-worker-pool';
+import { readingKey, type ModelReadingStore } from './model-readings';
+import { encodePng } from '../png-encode';
 import { continueTail, countOf, finishTail, holesOf, startTailWorker, type ContinueResult } from './rectify-tail';
 import { stagedBuildingPipelineEnv, stagedDistrict } from '../staged-switches';
 
@@ -157,7 +159,7 @@ export function continueFeatureless(images: Map<number, FacadeImage>, P = CONTIN
     return out;
 }
 
-export const PIPELINE_K_VERSION = `pipeline-k/3(${ORTHO_RECTIFY_VERSION})`;
+export const PIPELINE_K_VERSION = `pipeline-k/4(${ORTHO_RECTIFY_VERSION})`;
 
 /** Pipeline K when the request (or SCRATCHBOX_STAGED_BUILDING_PIPELINE) asks for 'k', and in a district shown as kd. */
 export function stagedPipelineK(request: { pipeline?: string; district?: string; isolate?: boolean }, env: NodeJS.ProcessEnv = process.env): boolean {
@@ -227,7 +229,7 @@ function runWorkers(jobs: RectifyJob[], signal?: AbortSignal): Promise<RectifyMe
  * The relief orthos of a remesh, straightened and levelled: the facades the lattice rebuild will use (coverage at least
  * its minCoverage) are rectified, the others copied as they are. Cached beside the originals.
  */
-export async function rectifyReliefOrthos(srcDir: string, opts: { params?: OrthoRectifyParams; minCoverage?: number; threads?: number; signal?: AbortSignal; /** The tail on this thread (tests; SCRATCHBOX_REMESH_WORKERS=0 too). */ inlineTail?: boolean; /** The image model for small holes no real source covers (absent: none; the smooth fill takes them). */ inpaint?: { client: EnhanceModelClient; models: string[]; caps?: typeof HOLE_INPAINT } } = {}): Promise<RectifiedOrthos> {
+export async function rectifyReliefOrthos(srcDir: string, opts: { params?: OrthoRectifyParams; minCoverage?: number; threads?: number; signal?: AbortSignal; /** The tail on this thread (tests; SCRATCHBOX_REMESH_WORKERS=0 too). */ inlineTail?: boolean; /** The image model for small holes no real source covers (absent: none; the smooth fill takes them). */ inpaint?: { client: EnhanceModelClient; models: string[]; caps?: typeof HOLE_INPAINT; /** The image model's fills kept between builds (model-readings.ts), by the facade's pixels and its holes: the same holes take the same fill. */ readings?: ModelReadingStore } } = {}): Promise<RectifiedOrthos> {
     const t0 = Date.now();
     const params = opts.params ?? ORTHO_RECTIFY_PARAMS, minCoverage = opts.minCoverage ?? FACADE_LATTICE_PARAMS.minCoverage;
     const caps = opts.inpaint?.caps ?? HOLE_INPAINT;
@@ -310,16 +312,38 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
             // what no real source covers: small holes inpainted by the image model (capped), and the rest a smooth fill, never
             // the nearest texel copied across (it draws straight streaks out of the photo's edge)
             let inpaintCalls = 0;
-            const fromInpaint = new Map<number, number>();
+            const fromInpaint = new Map<number, number>(), inpaintedAt = new Map<number, Uint32Array>();
             if (opts.inpaint) for (const { id } of cont.holes) {
                 const x = work.get(id)!, N = x.width * x.height, left = holesOf(x);
                 if (inpaintCalls >= caps.maxCalls || !countOf(left)) continue;
                 const small = smallHoles(left, x.width, x.height, caps.maxHoleTexels);
                 if (!countOf(small)) continue;
+                const maxRects = Math.min(caps.maxRects, caps.maxCalls - inpaintCalls);
+                // the holes sent to the model: what it draws there, and the smooth fill closing what it leaves, change with its
+                // answer; named for the lattice whatever it answers (decided before it is asked, so the same every build)
+                const sent: number[] = [];
+                for (let i = 0; i < N; i++) if (small[i]) sent.push(i);
+                inpaintedAt.set(id, Uint32Array.from(sent));
+                // the image model draws the holes a little differently every time it is asked: its fill is kept by the facade's
+                // pixels and holes, so a later build of the same facade takes the same fill (generated either way)
+                const store = opts.inpaint.readings;
+                const rKey = store ? readingKey('k-hole-inpaint', [HOLE_INPAINT_VERSION, opts.inpaint.models, maxRects, x.width, x.height, x.rgba, small]) : undefined;
+                const kept = rKey ? await store!.get<HoleInpaintRecord>(rKey) : undefined;
+                if (kept && kept.schema === 'scratchbox.k-hole-inpaint/1') {
+                    const at = new Uint32Array(Uint8Array.from(Buffer.from(kept.texels, 'base64')).buffer), rgb = Buffer.from(kept.rgb, 'base64');
+                    for (let j = 0; j < at.length; j++) { const i = at[j]; x.rgba[i * 4] = rgb[j * 3]; x.rgba[i * 4 + 1] = rgb[j * 3 + 1]; x.rgba[i * 4 + 2] = rgb[j * 3 + 2]; x.rgba[i * 4 + 3] = 255; }
+                    inpaintCalls += kept.calls;
+                    fromInpaint.set(id, at.length);
+                    continue;
+                }
                 const t = { width: x.width, height: x.height, rgba: x.rgba, source: new Uint8Array(N) };
-                const r = await inpaintFace(t, small, `k_${key}_${id}`, opts.inpaint.client, opts.inpaint.models, 1, { maxRects: Math.min(caps.maxRects, caps.maxCalls - inpaintCalls), ...(opts.signal ? { signal: opts.signal } : {}) });
-                inpaintCalls += r.records.filter(rec => (rec as { decision?: string }).decision !== 'skipped').length;
+                const r = await inpaintFace(t, small, `k_${key}_${id}`, opts.inpaint.client, opts.inpaint.models, 1, { maxRects, ...(opts.signal ? { signal: opts.signal } : {}) });
+                const calls = r.records.filter(rec => (rec as { decision?: string }).decision !== 'skipped').length;
+                inpaintCalls += calls;
                 fromInpaint.set(id, r.filled);
+                const at: number[] = [], rgb: number[] = [];
+                for (let i = 0; i < N; i++) if (t.source[i]) { at.push(i); rgb.push(x.rgba[i * 4], x.rgba[i * 4 + 1], x.rgba[i * 4 + 2]); }
+                if (rKey) store!.put(rKey, { schema: 'scratchbox.k-hole-inpaint/1', key: rKey, models: opts.inpaint.models, calls, texels: Buffer.from(Uint32Array.from(at).buffer).toString('base64'), rgb: Buffer.from(rgb).toString('base64'), atMs: Date.now() } satisfies HoleInpaintRecord);
             }
             const continuedIds = [...cont.continued.keys()], holeIds = cont.holes.map(h => h.id);
             let fromSmooth: Map<number, number>;
@@ -332,6 +356,15 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
                 const r = reports.find(y => y.facadeId === id);
                 if (r && 'report' in r && r.report) Object.assign(r.report.holes, { fromRegions, fromInpaint: fromInpaint.get(id) ?? 0, fromSmooth: fromSmooth.get(id) });
             }
+            // the holes the image model was asked to draw (its fill and the smooth fill after it), named beside the photo: the
+            // lattice reads its lines past them (facade-lattice.ts photoLattice), the model drawing them differently every time
+            for (const [id, at] of inpaintedAt) {
+                const x = work.get(id)!, m = new Uint8Array(x.width * x.height);
+                for (const i of at) m[i] = 255;
+                const f = facadesJson.facades.find(g => g.facadeId === id)!;
+                fs.writeFileSync(path.join(tmp, inpaintedMaskName(f.image)), encodePng(x.width, x.height, m, 1));
+                f.inpaintedMask = inpaintedMaskName(f.image);
+            }
         } finally {
             await tail?.close();
         }
@@ -340,6 +373,8 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
         // a rectified facade names its uncovered mask (the rebuild reads coverage from it, its ortho's holes being filled) and its fill
         for (const f of facadesJson.facades) {
             const rep = reports.find(x => x.facadeId === f.facadeId)?.report;
+            // the photo's measured column period, for the reader's template (facade-reader-template.ts templateColumns)
+            if (rep?.periodM !== undefined && rep.periodNcc !== undefined) { f.periodM = rep.periodM; f.periodNcc = rep.periodNcc; }
             if (!rep || !fs.existsSync(path.join(tmp, uncoveredMaskName(f.image)))) continue;
             f.uncoveredMask = uncoveredMaskName(f.image);
             const cont = (rep.holes as typeof rep.holes & { continued?: ContinuedFill }).continued;
@@ -360,6 +395,15 @@ export async function rectifyReliefOrthos(srcDir: string, opts: { params?: Ortho
 }
 
 /** The holes (1) that are 4-connected regions of at most `max` texels. */
+/** The mask of the holes sent to the image model (its fill there, and the smooth fill closing what it left), beside a facade's photo (255). */
+export const inpaintedMaskName = (image: string): string => image.replace(/\.png$/i, '') + '_inpainted.png';
+
+/** The hole fills' record version in the model readings store. */
+export const HOLE_INPAINT_VERSION = 'k-hole-inpaint/1';
+
+/** One facade's image-model hole fill, kept by its pixels and holes: the texels it filled (uint32 indices) and their colour. */
+export interface HoleInpaintRecord { schema: 'scratchbox.k-hole-inpaint/1'; key: string; models: string[]; calls: number; texels: string; rgb: string; atMs: number }
+
 function smallHoles(holes: Uint8Array, W: number, H: number, max: number): Uint8Array {
     const out = new Uint8Array(holes.length), seen = new Uint8Array(holes.length), stack: number[] = [], comp: number[] = [];
     for (let s = 0; s < holes.length; s++) {

@@ -37,6 +37,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <set>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -66,8 +67,13 @@ struct Params {
     /** The audit's world box reach (the module's depthBandM + 1, whatever P says), and its four angled views' turns. */
     double reachM;
     double viewDeg[4], viewCos[4], viewSin[4];
+    /** FACADE_LATTICE_PARAMS.edgeStepM: a row's end cells where the wall turns away keep the scan. */
+    double edgeStepM;
 
-    static constexpr size_t kCount = 19 + 5 + 3 + 6 + 3 + 7 + 1 + 12;
+    /** KEEP_MEASURED (facade-lattice.ts): relief the cells cannot draw keeps the scan. */
+    double keepMinReliefM, keepSubCells, keepMinSubCells, keepMinSubSamples, keepEdgeM, keepStepShare, keepMinCellM;
+
+    static constexpr size_t kCount = 19 + 5 + 3 + 6 + 3 + 7 + 1 + 12 + 1 + 7;
     static Params from(const std::vector<double>& v) {
         if (v.size() != kCount) throw std::runtime_error("the lattice takes " + std::to_string(kCount) + " parameters, got " + std::to_string(v.size()));
         Params p;
@@ -80,7 +86,9 @@ struct Params {
             &p.rtSizeTol, &p.rtMinRepeats, &p.rtEdgeM, &p.rtKeepShade, &p.rtMaxShade, &p.rtMaxSpandrelM, &p.rtMinSidePx,
             &p.reachM,
             &p.viewDeg[0], &p.viewCos[0], &p.viewSin[0], &p.viewDeg[1], &p.viewCos[1], &p.viewSin[1],
-            &p.viewDeg[2], &p.viewCos[2], &p.viewSin[2], &p.viewDeg[3], &p.viewCos[3], &p.viewSin[3]};
+            &p.viewDeg[2], &p.viewCos[2], &p.viewSin[2], &p.viewDeg[3], &p.viewCos[3], &p.viewSin[3],
+            &p.edgeStepM,
+            &p.keepMinReliefM, &p.keepSubCells, &p.keepMinSubCells, &p.keepMinSubSamples, &p.keepEdgeM, &p.keepStepShare, &p.keepMinCellM};
         static_assert(sizeof fields / sizeof fields[0] == kCount);
         for (size_t i = 0; i < kCount; ++i) *fields[i] = v[i];
         return p;
@@ -102,7 +110,7 @@ struct Image {
 /** One facade to rebuild: rebuildFacadesOnLattice's arguments to latticeFacade, and its repeat texture's windows. */
 struct FacadeJob {
     Frame f;
-    std::string image, mask;
+    std::string image, mask, inpainted;
     std::vector<Rect> fitted;
     bool hasBays = false;
     std::vector<Rect> bays;
@@ -128,6 +136,11 @@ struct LatticeResult {
     double reliefM = 0;
     std::string reliefFrom, reason;
     std::vector<uint8_t> built, windows;
+    /** Cells left to the scan for measured relief the cells cannot draw (KEEP_MEASURED). */
+    bool hasScanKept = false;
+    std::vector<uint8_t> scanKeptCells;
+    int scanKeptCount = 0;
+    double scanKeptAreaM2 = 0, scanKeptReliefM = 0;
     std::vector<double> cellU, cellV;
     std::vector<float> positions, normals, uv;
     std::vector<uint32_t> indices;
@@ -439,14 +452,25 @@ inline std::string cm(double v) { return js::toString(js::round(v * 100)); }
 
 /** latticeFacade, with the scan's (and the raw scan's) samples drawn first. */
 inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::vector<double>& samples, const Params& P, const std::vector<uint8_t>* uncovered, bool photoRecess,
-                                   const std::vector<Rect>& fitted, bool hasRecess, double recessM, const std::vector<Rect>* bays, const std::vector<double>* reliefSamples, bool buildWhereMeasured) {
+                                   const std::vector<Rect>& fitted, bool hasRecess, double recessM, const std::vector<Rect>* bays, const std::vector<double>* reliefSamples, bool buildWhereMeasured, const std::vector<uint8_t>* inpainted = nullptr) {
     LatticeResult res;
-    const std::vector<Rect> strips = photoRecess ? (bays ? *bays : (!fitted.empty() ? windowStrips(fitted, P) : std::vector<Rect>{})) : std::vector<Rect>{};
-    std::vector<Rect> lines = fitted;
+    // the wall grammar's bays when it read any, else the fitted windows' own strips (an empty list is none: a wall whose
+    // columns read no bay still recesses its window strips)
+    const std::vector<Rect> strips = photoRecess ? ((bays && !bays->empty()) ? *bays : (!fitted.empty() ? windowStrips(fitted, P) : std::vector<Rect>{})) : std::vector<Rect>{};
+    // a window inside a strip takes the strip's columns for its lattice lines (facade-lattice.ts)
+    std::vector<Rect> snapped = fitted;
+    for (auto& w : snapped) { const double cx = (w[0] + w[2]) / 2, cy = (w[1] + w[3]) / 2; for (const Rect& r : strips) if (cx >= r[0] && cx <= r[2] && cy >= r[1] && cy <= r[3]) { w[0] = r[0]; w[2] = r[2]; break; } }
+    std::vector<Rect> lines = snapped;
     lines.insert(lines.end(), strips.begin(), strips.end());
     const std::vector<double> L = luminance(img);
     std::vector<double> s, t;
-    photoLattice(img, L, f, P, s, t);
+    // a hole sent to the image model is read as the uncovered grey it was before (photoLattice and UNCOVERED_LUMINANCE in
+    // facade-lattice.ts): the model draws it differently every build, and its edges drew no line the photo shows
+    if (inpainted) {
+        std::vector<double> Lp = L;
+        for (size_t k = 0; k < Lp.size() && k < inpainted->size(); ++k) if ((*inpainted)[k] && finite(Lp[k])) Lp[k] = 128.0;
+        photoLattice(img, Lp, f, P, s, t);
+    } else photoLattice(img, L, f, P, s, t);
     if (!lines.empty()) {
         std::vector<double> fs, ft;
         for (const Rect& w : lines) { fs.push_back(w[0]); fs.push_back(w[2]); ft.push_back(w[1]); ft.push_back(w[3]); }
@@ -501,9 +525,76 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
         if (!built[k] && finite(raw[k]) && inOutline(a, b)) built[k] = 1;
     }
     for (size_t k = 0; k < N; ++k) if (built[k] && finite(raw[k]) && raw[k] < P.minDepthM) built[k] = 0;
-    const std::vector<uint8_t> win = !fitted.empty() ? fittedCells(s, t, fitted) : windowGrid(lum, ns, nt, P);
+    const std::vector<uint8_t> win = !fitted.empty() ? fittedCells(s, t, snapped) : windowGrid(lum, ns, nt, P);
     const bool hasStrip = !strips.empty();
     const std::vector<uint8_t> strip = hasStrip ? fittedCells(s, t, strips) : std::vector<uint8_t>{};
+    // the lattice's end cells where the wall turns away (a corner, a prow) follow their own scan depth: facade-lattice.ts, P.edgeStepM
+    std::vector<uint8_t> endFollow(N);
+    if (P.edgeStepM > 0) for (size_t b = 0; b < nt; ++b) {
+        const auto isWall = [&](size_t k) { return built[k] && !win[k] && !(hasStrip && strip[k]) && finite(raw[k]); };
+        std::vector<double> wall;
+        for (size_t a = 0; a < ns; ++a) if (isWall(b * ns + a)) wall.push_back(raw[b * ns + a]);
+        if (wall.size() < 3) continue;
+        const double med = median(std::move(wall));
+        for (const int dir : {1, -1}) {
+            long a = dir > 0 ? 0 : static_cast<long>(ns) - 1; int n = 0;
+            while (a >= 0 && a < static_cast<long>(ns) && n < 3) {
+                const size_t k = b * ns + static_cast<size_t>(a);
+                if (!built[k]) { a += dir; continue; }
+                if (isWall(k) && raw[k] < med - P.edgeStepM) { endFollow[k] = 1; ++n; a += dir; } else break;
+            }
+        }
+    }
+    // measured relief the cells cannot draw keeps the scan (KEEP_MEASURED): the raw scan read on a sub-grid inside each wall cell (facade-lattice.ts)
+    if (reliefSamples) {
+        const size_t G = static_cast<size_t>(P.keepSubCells);
+        std::vector<std::vector<std::vector<double>>> sub(N, std::vector<std::vector<double>>(G * G));
+        const auto& rs = *reliefSamples;
+        const double E = P.keepEdgeM;
+        for (size_t i = 0; i + 2 < rs.size(); i += 3) {
+            if (rs[i] < f.sMin + E || rs[i] > f.sMax - E || rs[i + 1] < f.tMin + E || rs[i + 1] > f.tMax - E) continue;
+            const int a = cellOf(rs[i], s), b = cellOf(rs[i + 1], t);
+            if (a < 0 || b < 0) continue;
+            const size_t k = static_cast<size_t>(b) * ns + static_cast<size_t>(a);
+            if (!built[k] || win[k] || (hasStrip && strip[k])) continue;
+            const size_t ia = std::min(G - 1, static_cast<size_t>(std::floor(((rs[i] - s[static_cast<size_t>(a)]) / (s[static_cast<size_t>(a) + 1] - s[static_cast<size_t>(a)])) * static_cast<double>(G))));
+            const size_t ib = std::min(G - 1, static_cast<size_t>(std::floor(((rs[i + 1] - t[static_cast<size_t>(b)]) / (t[static_cast<size_t>(b) + 1] - t[static_cast<size_t>(b)])) * static_cast<double>(G))));
+            sub[k][ib * G + ia].push_back(rs[i + 2]);
+        }
+        std::vector<uint8_t> keptCells(N);
+        std::vector<double> reliefs;
+        double areaM2 = 0;
+        for (size_t b = 0; b < nt; ++b) for (size_t a = 0; a < ns; ++a) {
+            const size_t k = b * ns + a;
+            if (!built[k] || win[k] || (hasStrip && strip[k]) || s[a + 1] - s[a] < P.keepMinCellM || t[b + 1] - t[b] < P.keepMinCellM) continue;
+            std::vector<std::pair<size_t, double>> at;
+            for (size_t q = 0; q < sub[k].size(); ++q) if (static_cast<double>(sub[k][q].size()) >= P.keepMinSubSamples) at.emplace_back(q, median(std::move(sub[k][q])));
+            if (static_cast<double>(at.size()) < P.keepMinSubCells) continue;
+            double hi = -1e300, lo = 1e300;
+            for (const auto& x : at) { hi = std::max(hi, x.second); lo = std::min(lo, x.second); }
+            const double relief = hi - lo;
+            if (relief < P.keepMinReliefM) continue;
+            // a step, not a slope: the sorted medians must jump by at least stepShare of the range somewhere
+            std::vector<double> sorted;
+            for (const auto& x : at) sorted.push_back(x.second);
+            std::sort(sorted.begin(), sorted.end());
+            double gap = 0;
+            for (size_t i = 1; i < sorted.size(); ++i) gap = std::max(gap, sorted[i] - sorted[i - 1]);
+            if (gap < P.keepStepShare * relief) continue;
+            // the deep and the proud sub-cells must each span two sub-columns and two sub-rows: fins or a setback edge run across
+            // the cell, while a neighbouring wall's reveal leaking in at the cell's edge fills one sub-column only
+            const auto spans = [&](bool deep) { std::set<size_t> cols, rows; for (const auto& x : at) if ((x.second < (hi + lo) / 2) == deep) { cols.insert(x.first % G); rows.insert(x.first / G); } return cols.size() >= 2 && rows.size() >= 2; };
+            if (!spans(true) || !spans(false)) continue;
+            built[k] = 0; keptCells[k] = 1; reliefs.push_back(relief); areaM2 += (s[a + 1] - s[a]) * (t[b + 1] - t[b]);
+        }
+        if (!reliefs.empty()) {
+            res.hasScanKept = true;
+            res.scanKeptCells = keptCells;
+            res.scanKeptCount = static_cast<int>(reliefs.size());
+            res.scanKeptAreaM2 = std::round(areaM2 * 10) / 10;
+            res.scanKeptReliefM = std::round(median(std::move(reliefs)) * 100) / 100;
+        }
+    }
     std::vector<double> depth;
     depth.reserve(N);
     std::vector<double> rowMeds;
@@ -561,7 +652,7 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
             for (size_t a = 0; a < ns; ++a) { const size_t k = b * ns + a; if (win[k] && built[k]) windows[k] = 1; }
             for (size_t a = 0; a < ns; ++a) {
                 const size_t k = b * ns + a;
-                if (std::isnan(stripR) || !(strip[k] || win[k])) { depth.push_back(clamp(wall)); continue; }
+                if (std::isnan(stripR) || !(strip[k] || win[k])) { depth.push_back(clamp(endFollow[k] && finite(raw[k]) ? raw[k] : wall)); continue; }
                 if (built[k]) { stripCells++; if (win[k]) photoRecessCells++; }
                 depth.push_back(clamp(win[k] ? js::min(wall - stripR - P.stripWindowInsetM, finite(raw[k]) ? raw[k] : kInf) : wall - stripR));
             }
@@ -584,7 +675,7 @@ inline LatticeResult latticeFacade(const Frame& f, const Image& img, const std::
         }
         for (size_t a = 0; a < ns; ++a) {
             const size_t k = b * ns + a;
-            const double v = win[k] ? dm : lm;
+            const double v = endFollow[k] && finite(raw[k]) ? raw[k] : (win[k] ? dm : lm);
             depth.push_back(clamp(finite(v) ? v : finite(rowMed) ? rowMed : 0));
         }
         if (recessed) for (size_t k : dark) if (built[k]) photoRecessCells++;
@@ -839,10 +930,18 @@ inline FacadeOut rebuildFacade(const FacadeJob& job, const std::vector<float>& s
         for (size_t k = 0; k < static_cast<size_t>(m.W) * m.H; ++k) maskStore[k] = m.rgba[k * 4] > 127 ? 1 : 0;
         mask = &maskStore;
     }
+    std::vector<uint8_t> inpaintedStore;
+    const std::vector<uint8_t>* inpainted = nullptr;
+    if (!job.inpainted.empty()) {
+        const Image m = readPng(job.inpainted);
+        inpaintedStore.assign(std::max(static_cast<size_t>(m.W) * m.H, static_cast<size_t>(img.W) * img.H), 0);
+        for (size_t k = 0; k < static_cast<size_t>(m.W) * m.H; ++k) inpaintedStore[k] = m.rgba[k * 4] > 127 ? 1 : 0;
+        inpainted = &inpaintedStore;
+    }
     const std::vector<double> samples = facadeSamples(soup, job.f, P);
     std::vector<double> relief;
     if (rawSoup) relief = facadeSamples(*rawSoup, job.f, P);
-    o.r = latticeFacade(job.f, img, samples, P, mask, photoRecess, job.fitted, job.hasRecess, job.recessM, job.hasBays ? &job.bays : nullptr, rawSoup ? &relief : nullptr, whole);
+    o.r = latticeFacade(job.f, img, samples, P, mask, photoRecess, job.fitted, job.hasRecess, job.recessM, job.hasBays ? &job.bays : nullptr, rawSoup ? &relief : nullptr, whole, inpainted);
     if (o.r.ok && !o.r.strips.empty() && !job.rectsPx.empty()) {
         const Frame& f = job.f;
         std::vector<Rect> stripsPx;
@@ -880,6 +979,9 @@ struct AuditResult {
     double found = 0, restored = 0, left = 0, oblique = 0, obliqueLeft = 0, keptInFront = 0, restoredInFront = 0;
     bool hasOblique = false;
     std::vector<int> dropped;
+    /** The proud audit (facade-lattice.ts ProudReport, in pixels per facade): proud pixels straight on and from the angles, before and after its removals. */
+    std::vector<double> proudStraight, proudOblique, proudStraightAfter, proudObliqueAfter;
+    double proudRemoved = 0, proudRestored = 0;
 };
 
 /** A triangle soup with each triangle's box, for the views' cull. */
@@ -911,6 +1013,8 @@ struct Grid {
     int W = 0, H = 0;
     double s0 = 0, t0 = 0;
     std::vector<float> depth, onPlane;
+    /** The soup index of the triangle drawn at each pixel (-1: none), when asked for. */
+    std::vector<int32_t> who;
 };
 
 inline void worldBox(const Vec3& c, const Vec3& S, const Vec3& T, const Vec3& N, double s0, double s1, double t0, double t1, double reach, double lo[3], double hi[3]) {
@@ -927,7 +1031,7 @@ inline void worldBox(const Vec3& c, const Vec3& S, const Vec3& T, const Vec3& N,
  * view, with where each pixel's surface lies along the facade's normal): the soup's triangles in order, those `live`,
  * culled to the facade's world box (its lattice rectangle and `reach` along its normal either side) from every view.
  */
-inline Grid renderView(const Soup& soup, const std::vector<uint8_t>* live, const AuditFacade& x, const View& v, double px, double reach, double maxDepth) {
+inline Grid renderView(const Soup& soup, const std::vector<uint8_t>* live, const AuditFacade& x, const View& v, double px, double reach, double maxDepth, bool who = false) {
     const Frame& f = x.f;
     Grid g;
     g.s0 = v.s0;
@@ -937,6 +1041,7 @@ inline Grid renderView(const Soup& soup, const std::vector<uint8_t>* live, const
     const size_t WH = static_cast<size_t>(g.W) * g.H;
     g.depth.assign(WH, -std::numeric_limits<float>::infinity());
     if (v.oblique) g.onPlane.assign(WH, std::numeric_limits<float>::quiet_NaN());
+    if (who) g.who.assign(WH, -1);
     double lo[3], hi[3];
     worldBox(f.centroid, f.axisS, f.axisT, f.normal, x.s.front(), x.s.back(), x.t.front(), x.t.back(), reach, lo, hi);
     for (size_t k = 0; k < soup.n; ++k) {
@@ -962,9 +1067,10 @@ inline Grid renderView(const Soup& soup, const std::vector<uint8_t>* live, const
             const double d = w0 * D[0] + w1 * D[1] + w2 * D[2];
             const size_t o = static_cast<size_t>(y) * g.W + static_cast<size_t>(x);
             if (v.oblique) {
-                if (d > g.depth[o]) { g.depth[o] = static_cast<float>(d); g.onPlane[o] = static_cast<float>(w0 * F[0] + w1 * F[1] + w2 * F[2]); }
+                if (d > g.depth[o]) { g.depth[o] = static_cast<float>(d); g.onPlane[o] = static_cast<float>(w0 * F[0] + w1 * F[1] + w2 * F[2]); if (who) g.who[o] = static_cast<int32_t>(k); }
             } else if (d > g.depth[o] && d <= maxDepth) {
                 g.depth[o] = static_cast<float>(d);
+                if (who) g.who[o] = static_cast<int32_t>(k);
             }
         }
     }
@@ -1009,6 +1115,8 @@ inline bool facesFacade(const Vec3& a, const Vec3& b, const Vec3& c, const Frame
     if (std::abs(dot(m, f.normal)) > P.depthBandM) return false;
     if (!(nl > 0)) return true;
     const double c0 = dot({nx / nl, ny / nl, nz / nl}, f.normal);
+    // a reveal or a fin's side standing across the facade is the facade's too (facade-lattice.ts facesFacade)
+    if (std::abs(c0) < 0.3) return true;
     return (sameFacing ? c0 : std::abs(c0)) >= 0.3;
 }
 
@@ -1025,13 +1133,18 @@ inline bool overBuilt(double px, double py, double pz, const AuditFacade& x, con
     return x.built[static_cast<size_t>(cellIndex(tv, x.t)) * (x.s.size() - 1) + static_cast<size_t>(cellIndex(sv, x.s))] != 0;
 }
 
+/** facade-lattice.ts COVER_INSET: the coverage samples drawn in toward the centroid, so a piece cut exactly on a lattice line is judged by its own cell. */
+constexpr double kCoverInset = 1e-3;
+
 inline bool coveredByRebuild(const Vec3& a, const Vec3& b, const Vec3& c, const AuditFacade& x, const Params& P) {
     const double longest = js::max(js::max(js::hypot({b[0] - a[0], b[1] - a[1], b[2] - a[2]}), js::hypot({c[0] - a[0], c[1] - a[1], c[2] - a[2]})), js::hypot({c[0] - b[0], c[1] - b[1], c[2] - b[2]}));
     const double steps = js::min(40, js::max(1, std::ceil(longest / P.sampleM)));
     const int n = static_cast<int>(steps);
+    const double cx = (a[0] + b[0] + c[0]) / 3, cy = (a[1] + b[1] + c[1]) / 3, cz = (a[2] + b[2] + c[2]) / 3;
     for (int p = 0; p <= n; ++p) for (int q = 0; p + q <= n; ++q) {
         const double u = p / steps, v = q / steps;
-        const double X = a[0] + (b[0] - a[0]) * u + (c[0] - a[0]) * v, Y = a[1] + (b[1] - a[1]) * u + (c[1] - a[1]) * v, Z = a[2] + (b[2] - a[2]) * u + (c[2] - a[2]) * v;
+        const double X0 = a[0] + (b[0] - a[0]) * u + (c[0] - a[0]) * v, Y0 = a[1] + (b[1] - a[1]) * u + (c[1] - a[1]) * v, Z0 = a[2] + (b[2] - a[2]) * u + (c[2] - a[2]) * v;
+        const double X = cx + (X0 - cx) * (1 - kCoverInset), Y = cy + (Y0 - cy) * (1 - kCoverInset), Z = cz + (Z0 - cz) * (1 - kCoverInset);
         if (!overBuilt(X, Y, Z, x, P)) return false;
     }
     return true;
@@ -1071,7 +1184,7 @@ struct Torn {
 };
 
 /** applyFacadeLattices' removals under its tear audit. `soupPts` holds the scan's indexed triangles, nine floats each. */
-inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<AuditFacade>& facades, const Params& P, bool sameFacing, FixedThreadPool& pool) {
+inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<AuditFacade>& facades, const Params& P, bool sameFacing, bool proudRemove, FixedThreadPool& pool) {
     const size_t nTri = soupPts.size() / 9, F = facades.size();
     AuditResult R;
     R.claim.assign(nTri, -1);
@@ -1160,7 +1273,7 @@ inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<Au
     std::vector<uint8_t> keptBack(nTri);
     // restore: every removed triangle whose footprint in a torn view touches a torn pixel or its neighbours, unless only views
     // from an angle touch it and it would stand in front of the rebuild that claimed it
-    const auto restore = [&](const std::vector<Torn>& list) {
+    const auto restore = [&](const std::vector<Torn>& list, const std::vector<uint8_t>* only = nullptr) {
         std::vector<std::vector<uint8_t>> marks(list.size());
         pool.forEach(list.size(), [&](size_t e) {
             const Torn& t = list[e];
@@ -1175,7 +1288,7 @@ inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<Au
         pool.forEach(chunks, [&](size_t c) {
             long mine = 0, mineInFront = 0;
             for (size_t k = c * chunk; k < std::min(nTri, (c + 1) * chunk); ++k) {
-                if (R.claim[k] < 0) continue;
+                if (R.claim[k] < 0 || (only && !(*only)[k])) continue;
                 int inFront = -1;
                 for (size_t e = 0; e < list.size(); ++e) {
                     const Torn& t = list[e];
@@ -1197,10 +1310,12 @@ inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<Au
                     // view straight on still puts it back)
                     if (!hit) continue;
                     if (inFront < 0) inFront = inFrontOfRebuild(corner(k, 0), corner(k, 1), corner(k, 2), facades[static_cast<size_t>(R.claim[k])], drawn[static_cast<size_t>(R.claim[k])], P) ? 1 : 0;
-                    if (t.oblique && inFront) { keptBack[k] = 1; continue; }
+                    // a proud removal (only) comes back from an angle too, in front or not: it stood there before
+                    if (t.oblique && inFront && !only) { keptBack[k] = 1; continue; }
                     R.claim[k] = -1;
                     mine++;
-                    if (inFront) mineInFront++;
+                    // a proud removal put back (only) was counted when the tear audit first restored it
+                    if (inFront && !only) mineInFront++;
                     break;
                 }
             }
@@ -1227,6 +1342,91 @@ inline AuditResult audit(const std::vector<float>& soupPts, const std::vector<Au
         decide();
         R.left = 0;
         for (const auto& t : runAudit(false)) if (!t.oblique) R.left += static_cast<double>(t.pix.size());
+    }
+    // the proud audit (facade-lattice.ts applyFacadeLattices, the tear audit's mirror): each facade still rebuilt seen straight
+    // on and from its four angles; the result's nearest surface at a pixel more than proudTol in front of the surface the rebuild
+    // itself draws there, a scan triangle, within the facade's depth band and over one of its built cells, is proud. Measured;
+    // then a proud triangle whose whole footprint the rebuilt cells cover goes, the tear audit runs again over those removals
+    // alone and puts back what they opened, and the proud surface is measured again
+    const double proudTol = P.restoreFrontM + P.chamferM;
+    std::vector<std::vector<float>> ownTri(F);
+    std::vector<Soup> own(F);
+    for (size_t fi = 0; fi < F; ++fi) {
+        const auto& x = facades[fi];
+        ownTri[fi].reserve(x.indices.size() * 3);
+        for (uint32_t v : x.indices) ownTri[fi].insert(ownTri[fi].end(), {x.positions[v * 3], x.positions[v * 3 + 1], x.positions[v * 3 + 2]});
+        own[fi].index(ownTri[fi].data(), ownTri[fi].size() / 9);
+    }
+    // per facade its proud pixels straight on and from the angles; per scan triangle the first facade that saw it proud (-1: none)
+    const auto proudPass = [&](std::vector<double>& straight, std::vector<double>& oblique) {
+        std::vector<float> all(soupPts);
+        for (size_t fi = 0; fi < F; ++fi) {
+            if (dropped[fi]) continue;
+            const auto& x = facades[fi];
+            for (uint32_t v : x.indices) all.insert(all.end(), {x.positions[v * 3], x.positions[v * 3 + 1], x.positions[v * 3 + 2]});
+        }
+        Soup result;
+        result.index(all.data(), all.size() / 9);
+        std::vector<uint8_t> live(result.n, 1);
+        for (size_t k = 0; k < nTri; ++k) if (R.claim[k] >= 0) live[k] = 0;
+        std::vector<std::pair<size_t, size_t>> tasks;
+        for (size_t fi = 0; fi < F; ++fi) if (!dropped[fi]) for (size_t vi = 0; vi < views[fi].size(); ++vi) tasks.push_back({fi, vi});
+        std::vector<double> counts(tasks.size(), 0);
+        std::vector<std::vector<int32_t>> hits(tasks.size());
+        pool.forEach(tasks.size(), [&](size_t ti) {
+            const auto [fi, vi] = tasks[ti];
+            const View& v = views[fi][vi];
+            const auto& x = facades[fi];
+            const Grid ownG = vi == 0 ? drawn[fi] : renderView(own[fi], nullptr, x, v, P.auditPixelM, P.reachM, kInf);
+            const Grid res = renderView(result, &live, x, v, P.auditPixelM, P.reachM, kInf, true);
+            double n = 0;
+            const size_t W = static_cast<size_t>(res.W);
+            for (size_t o = 0; o < res.depth.size(); ++o) {
+                const double d = res.depth[o];
+                const int32_t k = res.who[o];
+                if (k < 0 || static_cast<size_t>(k) >= nTri || !finite(ownG.depth[o]) || !(d > static_cast<double>(ownG.depth[o]) + proudTol)) continue;
+                // the proud point in the world (the view shares the facade's origin): over a built cell, within the band
+                const double a = res.s0 + (static_cast<double>(o % W) + 0.5) * P.auditPixelM, b = res.t0 + (static_cast<double>(o / W) + 0.5) * P.auditPixelM;
+                if (!overBuilt(x.f.centroid[0] + a * v.S[0] + b * v.T[0] + d * v.N[0], x.f.centroid[1] + a * v.S[1] + b * v.T[1] + d * v.N[1], x.f.centroid[2] + a * v.S[2] + b * v.T[2] + d * v.N[2], x, P)) continue;
+                n += 1;
+                hits[ti].push_back(k);
+            }
+            counts[ti] = n;
+        });
+        std::vector<int> owner(nTri, -1);
+        for (size_t ti = 0; ti < tasks.size(); ++ti) {
+            const auto [fi, vi] = tasks[ti];
+            (vi == 0 ? straight[fi] : oblique[fi]) += counts[ti];
+            for (int32_t k : hits[ti]) if (owner[static_cast<size_t>(k)] < 0) owner[static_cast<size_t>(k)] = static_cast<int>(fi);
+        }
+        return owner;
+    };
+    R.proudStraight.assign(F, 0);
+    R.proudOblique.assign(F, 0);
+    R.proudStraightAfter.assign(F, 0);
+    R.proudObliqueAfter.assign(F, 0);
+    const std::vector<int> owner = proudPass(R.proudStraight, R.proudOblique);
+    std::vector<uint8_t> mine(nTri);
+    for (size_t k = 0; proudRemove && k < nTri; ++k) {
+        if (owner[k] < 0 || R.claim[k] >= 0) continue;
+        const Vec3 a = corner(k, 0), b = corner(k, 1), c = corner(k, 2);
+        const auto& x = facades[static_cast<size_t>(owner[k])];
+        if (facesFacade(a, b, c, x.f, P, sameFacing) && coveredByRebuild(a, b, c, x, P)) { R.claim[k] = owner[k]; mine[k] = 1; R.proudRemoved += 1; }
+    }
+    if (R.proudRemoved > 0) {
+        const auto count = [&](const std::vector<Torn>& list) { R.left = 0; R.obliqueLeft = 0; for (const auto& t : list) (t.oblique ? R.obliqueLeft : R.left) += static_cast<double>(t.pix.size()); };
+        std::vector<Torn> t2 = runAudit(false);
+        for (int round = 0; !t2.empty() && round < 3; ++round) { R.proudRestored += restore(t2, &mine); t2 = runAudit(false); }
+        count(t2);
+        // a tear straight on that the restores did not close: every proud removal undone (the removal opens nothing)
+        if (R.left) {
+            for (size_t k = 0; k < nTri; ++k) if (mine[k] && R.claim[k] >= 0) { R.claim[k] = -1; R.proudRestored += 1; }
+            count(runAudit(false));
+        }
+        proudPass(R.proudStraightAfter, R.proudObliqueAfter);
+    } else {
+        R.proudStraightAfter = R.proudStraight;
+        R.proudObliqueAfter = R.proudOblique;
     }
     for (size_t k = 0; k < nTri; ++k) if (keptBack[k] && R.claim[k] >= 0) R.keptInFront += 1;
     return R;

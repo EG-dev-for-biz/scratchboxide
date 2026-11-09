@@ -302,7 +302,8 @@ describe('strip keeps a tree it cannot regrow as scanned', () => {
         // the growth the removal was decided with, for plant to grow the same trees
         expect(doc.growth).toEqual({
             seed: strip.tileSha256.slice(0, 16), crownBaseRatio: 0.35, crownBaseRatioExplicit: false, trunkRadiusPerHeight: 0.016, trunkRadiusPerHeightExplicit: false,
-            shellDepth: 0.8, minSurfaceReached: 0.9, crownBaseSpread: 0.1, branchAngleSpreadRad: 0.2, trunkLeanShare: 0.45, apicalDominance: 0.5, branchAngleMeanRad: 0.80795, internodeLengthM: 0
+            shellDepth: 0.8, minSurfaceReached: 0.9, crownBaseSpread: 0.1, branchAngleSpreadRad: 0.2, trunkLeanShare: 0.45, apicalDominance: 0.5, branchAngleMeanRad: 0.80795, internodeLengthM: 0,
+            excurrentTopShareLo: 0.15, excurrentTopShareHi: 0.3, excurrentApicalLo: 0.45, excurrentApicalHi: 0.6
         });
         const trees = doc.crowns.filter((c: any) => c.status === 'tree');
         expect(trees).toHaveLength(3);

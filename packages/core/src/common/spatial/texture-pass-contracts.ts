@@ -433,7 +433,7 @@ export interface UvAtlasInput {
      * Default: max(maxSide, 8192). Still bounded, so a malformed layer cannot ask for an unbounded texture.
      */
     hardMaxSide?: number;
-    /** Angular tolerance (degrees) when clustering scan triangles into islands. */
+    /** Angular tolerance (degrees) a scan chart that cannot be flattened is split from. */
     islandNormalToleranceDeg: number;
 }
 export type BuildUvAtlas = (input: UvAtlasInput) => Promise<UvAtlas>;

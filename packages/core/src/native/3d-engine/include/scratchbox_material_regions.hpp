@@ -18,8 +18,8 @@
  *
  *  - appearanceKMeans: readRegionClasses' sampling (the seeded LCG sampler) and its CIELAB k-means;
  *  - harvestClassify: the tile-only harvest's per-texel validity, luma and nearest class;
- *  - planRebuilt / planScan: planMaterialJob's two branches (markRects, paneIdsOf, stonePanes over classify,
- *    storeyPitchOf, shrinkTile, featherWeights, forTexelsOf and the maps they write).
+ *  - regionClassMap / planJob: planMaterialJob (each texel's class, its majority over a square, and the maps its class's
+ *    set writes: tiled at the set's real size on a rebuilt facade, the set's mean on a scan piece).
  *
  * Parity rules: a JS number is a double, a Float32Array element a float (stored rounded); a Uint8Array/Int32Array store
  * (ToUint8/ToInt32), Math.round, Math.hypot and Math.cbrt are V8's, from scratchbox_js_math.hpp; and no multiply-add is
@@ -34,8 +34,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 namespace scratchbox::material_regions {
@@ -94,46 +92,39 @@ struct Sampler {
     double operator()() { s = s * 1664525u + 1013904223u; return s / 4294967296.0; }
 };
 
-/** The harvest's excluded texels: each rect (u0 v0 u1 v1) filled, floor at the start, ceil at the end. */
-inline std::vector<uint8_t> excludedMask(const std::vector<double>& rects, int W, int H) {
-    std::vector<uint8_t> ex(static_cast<size_t>(W) * H, 0);
+/** openingMask: each rect (u0 v0 u1 v1) filled, floor at the start, ceil at the end; empty without rects. */
+inline std::vector<uint8_t> openingMask(const std::vector<double>& rects, int W, int H) {
+    if (rects.empty()) return {};
+    std::vector<uint8_t> m(static_cast<size_t>(W) * H, 0);
     for (size_t k = 0; k + 3 < rects.size(); k += 4) {
         const int x0 = static_cast<int>(std::max(0.0, std::floor(rects[k] * W))), y0 = static_cast<int>(std::max(0.0, std::floor(rects[k + 1] * H)));
         const int x1 = static_cast<int>(std::min(static_cast<double>(W), std::ceil(rects[k + 2] * W))), y1 = static_cast<int>(std::min(static_cast<double>(H), std::ceil(rects[k + 3] * H)));
-        for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) ex[static_cast<size_t>(y) * W + x] = 1;
+        for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) m[static_cast<size_t>(y) * W + x] = 1;
     }
-    return ex;
+    return m;
+}
+
+/** regionCandidates: each region's class indices, outside (0) and inside (1) the openings; a region with none takes every class. */
+inline std::vector<std::vector<int>> regionCandidates(const std::vector<uint8_t>& openings) {
+    std::vector<int> all, out, inn;
+    for (int k = 0; k < static_cast<int>(openings.size()); k++) { all.push_back(k); (openings[k] ? inn : out).push_back(k); }
+    return { out.empty() ? all : out, inn.empty() ? all : inn };
 }
 
 // ---- appearance classes ----
 
-/** One photo readRegionClasses samples: its image and, with the harvest, its excluded texels (empty: none). */
-struct SampledPhoto { const Image* img; std::vector<uint8_t> excluded; };
+/** One photo readRegionClasses samples, and its openings (empty: none). */
+struct SampledPhoto { const Image* img; std::vector<uint8_t> open; };
 
-/** The k-means' state: the final centres, each centre's member count and squared CIELAB deviations (by original index). */
+/** One region's k-means: its sample count, whether it ran, the final centres, member counts and squared CIELAB deviations (by k-means index). */
 struct KMeansResult { size_t n = 0; bool ok = false; std::vector<double> C, count, sd; };
 
-/** readRegionClasses up to its classes' formatting: the samples, the lightness-seeded k-means, counts and spreads. */
-inline KMeansResult appearanceKMeans(const std::vector<SampledPhoto>& photos, int samplesPerPhoto, uint32_t seed, int K, int iterations, double wL) {
-    const auto& lab = labTable();
-    Sampler rnd(seed);
-    std::vector<double> X;
-    for (const auto& ph : photos) {
-        const Image& img = *ph.img;
-        const double N = static_cast<double>(img.width) * img.height;
-        const double take = std::min(N, static_cast<double>(samplesPerPhoto));
-        for (double s = 0; s < take; s++) {
-            const double q = std::floor(rnd() * N);
-            const size_t qi = static_cast<size_t>(q), p = qi * 4;
-            if (!img.rgba[p + 3] || (!ph.excluded.empty() && ph.excluded[qi])) continue;
-            const double* v = lab.of(img.rgba[p], img.rgba[p + 1], img.rgba[p + 2]);
-            X.push_back(v[0]); X.push_back(v[1]); X.push_back(v[2]);
-        }
-    }
+/** kMeansLab and its counts: the lightness-seeded k-means of the samples X. */
+inline KMeansResult kMeansLab(const std::vector<double>& X, int K, int iterations, double wL) {
     KMeansResult res;
     const size_t n = X.size() / 3;
     res.n = n;
-    if (n < static_cast<size_t>(K) * 10) return res;
+    if (K < 1 || n < static_cast<size_t>(K) * 10) return res;
     std::vector<size_t> order(n);
     for (size_t i = 0; i < n; i++) order[i] = i;
     std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return X[a * 3] - X[b * 3] < 0; });
@@ -164,24 +155,45 @@ inline KMeansResult appearanceKMeans(const std::vector<SampledPhoto>& photos, in
     return res;
 }
 
-/** The harvest's per-texel reading of one photo: valid (lit, not excluded), luma (float) and nearest class (-1 none). */
+/** readRegionClasses up to its classes' formatting: the samples, split by region, and each region's k-means (outside, inside). */
+inline std::vector<KMeansResult> appearanceKMeans(const std::vector<SampledPhoto>& photos, int samplesPerPhoto, uint32_t seed, int K, int Kopen, int iterations, double wL) {
+    const auto& lab = labTable();
+    Sampler rnd(seed);
+    std::vector<double> X[2];
+    for (const auto& ph : photos) {
+        const Image& img = *ph.img;
+        const double N = static_cast<double>(img.width) * img.height;
+        const double take = std::min(N, static_cast<double>(samplesPerPhoto));
+        for (double s = 0; s < take; s++) {
+            const double q = std::floor(rnd() * N);
+            const size_t qi = static_cast<size_t>(q), p = qi * 4;
+            if (!img.rgba[p + 3]) continue;
+            const double* v = lab.of(img.rgba[p], img.rgba[p + 1], img.rgba[p + 2]);
+            auto& x = X[!ph.open.empty() && ph.open[qi] ? 1 : 0];
+            x.push_back(v[0]); x.push_back(v[1]); x.push_back(v[2]);
+        }
+    }
+    return { kMeansLab(X[0], K, iterations, wL), kMeansLab(X[1], Kopen, iterations, wL) };
+}
+
+/** The harvest's per-texel reading of one photo: valid (lit), luma (float) and nearest class (-1 none). */
 struct HarvestTexels { std::vector<uint8_t> valid; std::vector<float> L; std::vector<int8_t> cls; };
 
-inline HarvestTexels harvestClassify(const Image& img, const std::vector<uint8_t>& excluded, const std::vector<double>& meanLab, double wL) {
+inline HarvestTexels harvestClassify(const Image& img, const std::vector<uint8_t>& open, const std::vector<double>& meanLab, const std::vector<uint8_t>& openings, double wL) {
     const auto& lab = labTable();
-    const int K = static_cast<int>(meanLab.size() / 3);
+    const auto cand = regionCandidates(openings);
     const size_t N = static_cast<size_t>(img.width) * img.height;
     HarvestTexels h;
     h.valid.assign(N, 0); h.L.assign(N, 0.0f); h.cls.assign(N, -1);
     for (size_t i = 0; i < N; i++) {
         const size_t p = i * 4;
-        if (!img.rgba[p + 3] || (!excluded.empty() && excluded[i])) continue;
+        if (!img.rgba[p + 3]) continue;
         h.valid[i] = 1;
         h.L[i] = static_cast<float>(lumaOf(img.rgba.data(), p));
         const double* v = lab.of(img.rgba[p], img.rgba[p + 1], img.rgba[p + 2]);
         int best = 0;
         double bd = INFINITY;
-        for (int k = 0; k < K; k++) {
+        for (const int k : cand[!open.empty() && open[i] ? 1 : 0]) {
             const double* c = &meanLab[k * 3];
             const double e0 = wL * (v[0] - c[0]), e1 = v[1] - c[1], e2 = v[2] - c[2], d = e0 * e0 + e1 * e1 + e2 * e2;
             if (d < bd) { bd = d; best = k; }
@@ -193,109 +205,60 @@ inline HarvestTexels harvestClassify(const Image& img, const std::vector<uint8_t
 
 // ---- texel kernels ----
 
-/** classify: each texel's class (texels outside `only` the wall's), with a 3 x 3 majority. */
-inline std::vector<uint8_t> classify(const Image& img, const std::vector<double>& meanLab, const uint8_t* only) {
+/**
+ * regionClassMap: each texel's nearest class among its region's (`open`: 1 inside an opening; an empty texel none), then
+ * the class most of the (2r+1)-square about it holds, the texel's own on a tie, else the lowest index; a square of empty
+ * texels the wall.
+ */
+inline std::vector<uint8_t> regionClassMap(const Image& img, const std::vector<double>& meanLab, const std::vector<uint8_t>& openings, int wall, int r, const std::vector<uint8_t>& open) {
     const auto& lab = labTable();
     const int W = img.width, H = img.height, K = static_cast<int>(meanLab.size() / 3);
+    const auto cand = regionCandidates(openings);
     const size_t N = static_cast<size_t>(W) * H;
-    std::vector<uint8_t> raw(N), out(N);
+    constexpr uint8_t NONE = 255;
+    std::vector<uint8_t> raw(N);
     for (size_t k = 0; k < N; k++) {
-        if (only && !only[k]) { raw[k] = static_cast<uint8_t>(K - 1); continue; }
+        if (!img.rgba[k * 4 + 3]) { raw[k] = NONE; continue; }
         const double* v = lab.of(img.rgba[k * 4], img.rgba[k * 4 + 1], img.rgba[k * 4 + 2]);
         int best = 0;
         double bd = INFINITY;
-        for (int c = 0; c < K; c++) {
+        for (const int c : cand[!open.empty() && open[k] ? 1 : 0]) {
             const double* m = &meanLab[c * 3];
             const double e0 = v[0] - m[0], e1 = v[1] - m[1], e2 = v[2] - m[2], d = e0 * e0 + e1 * e1 + e2 * e2;
             if (d < bd) { bd = d; best = c; }
         }
         raw[k] = static_cast<uint8_t>(best);
     }
-    std::vector<uint16_t> votes(K);
-    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
-        std::fill(votes.begin(), votes.end(), 0);
-        for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
-            const int yy = y + dy, xx = x + dx;
-            if (yy >= 0 && yy < H && xx >= 0 && xx < W) votes[raw[static_cast<size_t>(yy) * W + xx]]++;
+    std::vector<uint8_t> best(N, static_cast<uint8_t>(wall));
+    std::vector<uint16_t> bestN(N, 0), rawN(N, 0), row(N), cnt(N);
+    for (int c = 0; c < K; c++) {
+        for (int y = 0; y < H; y++) {
+            int run = 0;
+            const size_t o = static_cast<size_t>(y) * W;
+            for (int x = 0; x < std::min(W, r); x++) if (raw[o + x] == c) run++;
+            for (int x = 0; x < W; x++) {
+                if (x + r < W && raw[o + x + r] == c) run++;
+                row[o + x] = static_cast<uint16_t>(run);
+                if (x - r >= 0 && raw[o + x - r] == c) run--;
+            }
         }
-        int best = raw[static_cast<size_t>(y) * W + x];
-        for (int c = 0; c < K; c++) if (votes[c] > votes[best]) best = c;
-        out[static_cast<size_t>(y) * W + x] = static_cast<uint8_t>(best);
+        for (int x = 0; x < W; x++) {
+            int run = 0;
+            for (int y = 0; y < std::min(H, r); y++) run += row[static_cast<size_t>(y) * W + x];
+            for (int y = 0; y < H; y++) {
+                if (y + r < H) run += row[static_cast<size_t>(y + r) * W + x];
+                cnt[static_cast<size_t>(y) * W + x] = static_cast<uint16_t>(run);
+                if (y - r >= 0) run -= row[static_cast<size_t>(y - r) * W + x];
+            }
+        }
+        for (size_t k = 0; k < N; k++) {
+            if (cnt[k] > bestN[k]) { bestN[k] = cnt[k]; best[k] = static_cast<uint8_t>(c); }
+            if (raw[k] == c) rawN[k] = cnt[k];
+        }
     }
-    return out;
+    for (size_t k = 0; k < N; k++) if (raw[k] != NONE && rawN[k] == bestN[k]) best[k] = raw[k];
+    return best;
 }
-
-/** A rect's texel span (Math.round of its UVs, clamped). */
-struct Span { int x0, x1, y0, y1; };
-inline Span spanOf(const std::vector<double>& rects, size_t i, int W, int H) {
-    return { static_cast<int>(std::max(0.0, js::round(rects[i] * W))), static_cast<int>(std::min(static_cast<double>(W), js::round(rects[i + 2] * W))),
-             static_cast<int>(std::max(0.0, js::round(rects[i + 1] * H))), static_cast<int>(std::min(static_cast<double>(H), js::round(rects[i + 3] * H))) };
-}
-
-/** markRects with value 1: marks the rects' unmarked texels (within `inside` when given); returns how many. */
-inline size_t markRects(const std::vector<double>& rects, int W, int H, std::vector<uint8_t>& mask, const uint8_t* inside = nullptr) {
-    size_t n = 0;
-    for (size_t i = 0; i + 3 < rects.size(); i += 4) {
-        const Span s = spanOf(rects, i, W, H);
-        for (int y = s.y0; y < s.y1; y++) for (int x = s.x0; x < s.x1; x++) { const size_t k = static_cast<size_t>(y) * W + x; if (!mask[k] && (!inside || inside[k])) { mask[k] = 1; n++; } }
-    }
-    return n;
-}
-
-/** paneIdsOf: each texel's rect (index + 1; 0 none), the first rect holding it, within `inside` (null: everywhere). */
-inline std::vector<int32_t> paneIdsOf(const std::vector<double>& rects, int W, int H, const uint8_t* inside) {
-    std::vector<int32_t> ids(static_cast<size_t>(W) * H, 0);
-    for (size_t i = 0; i + 3 < rects.size(); i += 4) {
-        const Span s = spanOf(rects, i, W, H);
-        const int32_t id = static_cast<int32_t>(i / 4 + 1);
-        for (int y = s.y0; y < s.y1; y++) for (int x = s.x0; x < s.x1; x++) { const size_t k = static_cast<size_t>(y) * W + x; if (!ids[k] && (!inside || inside[k])) ids[k] = id; }
-    }
-    return ids;
-}
-
-/** stonePanes: the ids at least `share` of whose texels the classes read as the wall's. */
-inline std::unordered_set<int32_t> stonePanes(const Image& img, const std::vector<double>& meanLab, const std::vector<int32_t>& ids, double share) {
-    const size_t N = ids.size();
-    std::vector<uint8_t> mask(N);
-    bool any = false;
-    for (size_t k = 0; k < N; k++) { mask[k] = ids[k] ? 1 : 0; any = any || mask[k]; }
-    std::unordered_set<int32_t> out;
-    if (!any) return out;
-    const auto cls = classify(img, meanLab, mask.data());
-    const int WALL = static_cast<int>(meanLab.size() / 3) - 1;
-    std::unordered_map<int32_t, std::pair<double, double>> n;
-    for (size_t k = 0; k < N; k++) if (ids[k]) { auto& c = n[ids[k]]; c.first++; if (cls[k] == WALL) c.second++; }
-    for (const auto& [id, c] : n) if (c.second >= share * c.first) out.insert(id);
-    return out;
-}
-
-/** storeyPitchOf: the median step between windows one above another, and the median phase; none with fewer than 3 steps. */
-struct Storey { bool ok = false; double pitch = 0, phase = 0; };
-inline Storey storeyPitchOf(const std::vector<double>& rects, int W, int H) {
-    struct Wn { double cx, w, y; };
-    std::vector<Wn> ws;
-    for (size_t i = 0; i + 3 < rects.size(); i += 4) ws.push_back({ (rects[i] + rects[i + 2]) / 2 * W, (rects[i + 2] - rects[i]) * W, rects[i + 1] * H });
-    std::stable_sort(ws.begin(), ws.end(), [](const Wn& a, const Wn& b) { const double d = a.cx - b.cx; return (d != 0 ? d : a.y - b.y) < 0; });
-    std::vector<double> steps;
-    for (size_t i = 0; i < ws.size(); i++) for (size_t j = i + 1; j < ws.size(); j++) {
-        if (std::fabs(ws[j].cx - ws[i].cx) > 0.5 * std::min(ws[i].w, ws[j].w)) continue;
-        const double d = std::fabs(ws[j].y - ws[i].y);
-        if (d > 2) { steps.push_back(d); break; }
-    }
-    Storey s;
-    if (steps.size() < 3) return s;
-    std::sort(steps.begin(), steps.end());
-    s.pitch = steps[steps.size() >> 1];
-    std::vector<double> phases;
-    for (const auto& w : ws) phases.push_back(std::fmod(std::fmod(w.y, s.pitch) + s.pitch, s.pitch));
-    std::sort(phases.begin(), phases.end());
-    s.phase = phases[phases.size() >> 1];
-    s.ok = true;
-    return s;
-}
-
-/** paneSeed: 1 + (Math.imul(pane + 1, 2654435761) >>> 0) % 254. */
-inline uint8_t paneSeed(double pane) { return static_cast<uint8_t>(1 + (js::toUint32(pane + 1) * 2654435761u) % 254u); }
 
 /** shrinkTile: a library map box-filtered to tw x th texels (floats; a normal map renormalised). */
 inline std::vector<float> shrinkTile(const Image& src, int tw, int th, bool normal) {
@@ -317,45 +280,121 @@ inline std::vector<float> shrinkTile(const Image& src, int tw, int th, bool norm
     return out;
 }
 
-/** featherWeights: each glass texel's chamfer distance to the nearest texel that is not glass, over `ramp`, capped at 1 (floats). */
-template <typename T>
-inline std::vector<float> featherWeights(const std::vector<T>& glass, int W, int H, double ramp) {
+/** foldRepeats: the classes folded over each repeat family's elements (u0 v0 u1 v1 each, with its family); returns the texels changed. */
+inline double foldRepeats(std::vector<uint8_t>& cls, int W, int H, int K, const std::vector<double>& rects, const std::vector<uint32_t>& family, int grid) {
+    uint32_t F = 0;
+    for (const auto f : family) F = std::max(F, f + 1);
+    if (!F) return 0;
+    std::vector<uint32_t> votes(static_cast<size_t>(F) * grid * grid * K, 0);
+    struct Span { int x0, y0, x1, y1; };
+    std::vector<Span> spans(family.size());
+    for (size_t e = 0; e < family.size(); e++) {
+        const double* r = &rects[e * 4];
+        spans[e] = { static_cast<int>(std::max(0.0, std::floor(r[0] * W))), static_cast<int>(std::max(0.0, std::floor(r[1] * H))),
+                     static_cast<int>(std::min(static_cast<double>(W), std::ceil(r[2] * W))), static_cast<int>(std::min(static_cast<double>(H), std::ceil(r[3] * H))) };
+    }
+    auto cellOf = [&](int x, int y, const Span& s) {
+        const int cy = std::min(grid - 1, static_cast<int>(std::floor((static_cast<double>(y - s.y0) * grid) / (s.y1 - s.y0))));
+        const int cx = std::min(grid - 1, static_cast<int>(std::floor((static_cast<double>(x - s.x0) * grid) / (s.x1 - s.x0))));
+        return static_cast<size_t>(cy) * grid + cx;
+    };
+    for (size_t e = 0; e < family.size(); e++) {
+        const Span& s = spans[e];
+        if (s.x1 - s.x0 < 2 || s.y1 - s.y0 < 2) continue;
+        const size_t base = static_cast<size_t>(family[e]) * grid * grid;
+        for (int y = s.y0; y < s.y1; y++) for (int x = s.x0; x < s.x1; x++) votes[(base + cellOf(x, y, s)) * K + cls[static_cast<size_t>(y) * W + x]]++;
+    }
+    std::vector<uint8_t> winner(static_cast<size_t>(F) * grid * grid);
+    for (size_t c = 0; c < winner.size(); c++) { int b = 0; for (int k = 1; k < K; k++) if (votes[c * K + k] > votes[c * K + b]) b = k; winner[c] = static_cast<uint8_t>(b); }
+    std::vector<uint8_t> done(static_cast<size_t>(W) * H, 0);
+    double changed = 0;
+    for (size_t e = 0; e < family.size(); e++) {
+        const Span& s = spans[e];
+        if (s.x1 - s.x0 < 2 || s.y1 - s.y0 < 2) continue;
+        const size_t base = static_cast<size_t>(family[e]) * grid * grid;
+        for (int y = s.y0; y < s.y1; y++) for (int x = s.x0; x < s.x1; x++) {
+            const size_t k = static_cast<size_t>(y) * W + x;
+            if (done[k]) continue;
+            done[k] = 1;
+            const uint8_t c = winner[base + cellOf(x, y, s)];
+            if (cls[k] != c) { cls[k] = c; changed++; }
+        }
+    }
+    return changed;
+}
+
+/** paneGlass: the glass texels of the pane rects (Math.round at the edges, the first rect holding a texel), each texel
+ * classed between the wall's class and the opening classes (every class without openings); a pane at least `share` of
+ * whose texels are the wall's class is stone (counted), else its texels are glass but the wall's class's. */
+struct PaneGlass { std::vector<uint8_t> glass; double stone = 0, wallTexels = 0; };
+inline PaneGlass paneGlass(const Image& img, const std::vector<double>& meanLab, const std::vector<uint8_t>& openings, int wall, const std::vector<double>& panes, double share) {
+    const auto& lab = labTable();
+    const int W = img.width, H = img.height, K = static_cast<int>(meanLab.size() / 3);
+    bool anyOpening = false;
+    for (const auto o : openings) anyOpening = anyOpening || o;
+    // the guard's candidates: the wall's class against the opening classes; every class without openings
+    std::vector<int> cands;
+    for (int c = 0; c < K; c++) if (!anyOpening || c == wall || openings[c]) cands.push_back(c);
     const size_t N = static_cast<size_t>(W) * H;
-    std::vector<float> d(N);
-    for (size_t k = 0; k < N; k++) d[k] = glass[k] ? 1e9f : 0.0f;
-    auto relax = [&](size_t k, size_t j, double c) { if (static_cast<double>(d[j]) + c < static_cast<double>(d[k])) d[k] = static_cast<float>(static_cast<double>(d[j]) + c); };
+    PaneGlass r;
+    r.glass.assign(N, 0);
+    std::vector<uint8_t> seen(N, 0);
+    auto wallLike = [&](size_t k) {
+        const double* v = lab.of(img.rgba[k * 4], img.rgba[k * 4 + 1], img.rgba[k * 4 + 2]);
+        int best = 0;
+        double bd = INFINITY;
+        for (const int c : cands) {
+            const double* m = &meanLab[c * 3];
+            const double e0 = v[0] - m[0], e1 = v[1] - m[1], e2 = v[2] - m[2], d = e0 * e0 + e1 * e1 + e2 * e2;
+            if (d < bd) { bd = d; best = c; }
+        }
+        return best == wall;
+    };
+    std::vector<size_t> mine;
+    std::vector<uint8_t> isWall;
+    for (size_t i = 0; i + 3 < panes.size(); i += 4) {
+        // a pane under a texel wide or tall still holds the texel it rounds into (as material-regions.ts)
+        const int x0 = static_cast<int>(std::max(0.0, js::round(panes[i] * W))), x1 = static_cast<int>(std::min(static_cast<double>(W), std::max(js::round(panes[i + 2] * W), static_cast<double>(x0 + 1))));
+        const int y0 = static_cast<int>(std::max(0.0, js::round(panes[i + 1] * H))), y1 = static_cast<int>(std::min(static_cast<double>(H), std::max(js::round(panes[i + 3] * H), static_cast<double>(y0 + 1))));
+        mine.clear(); isWall.clear();
+        double walls = 0;
+        for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) {
+            const size_t k = static_cast<size_t>(y) * W + x;
+            if (seen[k] || !img.rgba[k * 4 + 3]) continue;
+            seen[k] = 1; mine.push_back(k);
+            const uint8_t w = wallLike(k) ? 1 : 0;
+            isWall.push_back(w); walls += w;
+        }
+        if (mine.empty()) continue;
+        if (walls >= share * static_cast<double>(mine.size())) { r.stone++; continue; }
+        for (size_t q = 0; q < mine.size(); q++) { if (!isWall[q]) r.glass[mine[q]] = 1; else r.wallTexels++; }
+    }
+    return r;
+}
+
+/** classBorderWeights: the share of the relief each texel takes, into a class map's green channel (see material-regions.ts). */
+inline void classBorderWeights(const std::vector<uint8_t>& cls, int W, int H, double texelM, std::vector<uint8_t>& rgba) {
+    constexpr double FADE_M = 0.12;
+    constexpr uint16_t FAR = 65535;
+    const size_t N = static_cast<size_t>(W) * H;
+    std::vector<uint16_t> d(N, FAR);
     for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
         const size_t k = static_cast<size_t>(y) * W + x;
-        if (d[k] == 0) continue;
-        if (x == 0 || y == 0 || x == W - 1 || y == H - 1) d[k] = static_cast<float>(std::min(static_cast<double>(d[k]), 1.0));
-        if (x > 0) relax(k, k - 1, 1);
-        if (y > 0) { relax(k, k - W, 1); if (x > 0) relax(k, k - W - 1, 1.414); if (x < W - 1) relax(k, k - W + 1, 1.414); }
+        const uint8_t c = cls[k];
+        if ((x > 0 && cls[k - 1] != c) || (x + 1 < W && cls[k + 1] != c) || (y > 0 && cls[k - W] != c) || (y + 1 < H && cls[k + W] != c)) d[k] = 0;
+    }
+    // a Uint16Array store: FAR + 1 is never stored (the comparison fails first), as in the TypeScript
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+        const size_t k = static_cast<size_t>(y) * W + x;
+        if (x > 0 && d[k - 1] + 1 < d[k]) d[k] = static_cast<uint16_t>(d[k - 1] + 1);
+        if (y > 0 && d[k - W] + 1 < d[k]) d[k] = static_cast<uint16_t>(d[k - W] + 1);
     }
     for (int y = H - 1; y >= 0; y--) for (int x = W - 1; x >= 0; x--) {
         const size_t k = static_cast<size_t>(y) * W + x;
-        if (d[k] == 0) continue;
-        if (x < W - 1) relax(k, k + 1, 1);
-        if (y < H - 1) { relax(k, k + W, 1); if (x < W - 1) relax(k, k + W + 1, 1.414); if (x > 0) relax(k, k + W - 1, 1.414); }
+        if (x + 1 < W && d[k + 1] + 1 < d[k]) d[k] = static_cast<uint16_t>(d[k + 1] + 1);
+        if (y + 1 < H && d[k + W] + 1 < d[k]) d[k] = static_cast<uint16_t>(d[k + W] + 1);
     }
-    const double den = std::max(1.0, ramp);
-    std::vector<float> out(N);
-    for (size_t k = 0; k < N; k++) { const double v = d[k]; out[k] = v != 0 ? static_cast<float>(std::min(1.0, v / den)) : 0.0f; }
-    return out;
-}
-
-/** forTexelsOf: the texels of a triangle given in UVs (uv * size) whose centres it holds, with their barycentric weights. */
-template <typename F>
-inline void forTexelsOf(const double* uv, int W, int H, F&& visit) {
-    const double ax = uv[0] * W, ay = uv[1] * H, bx = uv[2] * W, by = uv[3] * H, cx = uv[4] * W, cy = uv[5] * H;
-    const double den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
-    if (std::fabs(den) < 1e-12) return;
-    const double x0 = std::max(0.0, std::floor(std::min({ax, bx, cx}))), x1 = std::min(static_cast<double>(W - 1), std::ceil(std::max({ax, bx, cx})));
-    const double y0 = std::max(0.0, std::floor(std::min({ay, by, cy}))), y1 = std::min(static_cast<double>(H - 1), std::ceil(std::max({ay, by, cy})));
-    for (double y = y0; y <= y1; y++) for (double x = x0; x <= x1; x++) {
-        const double px = x + 0.5, py = y + 0.5;
-        const double wa = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / den, wb = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / den, wc = 1 - wa - wb;
-        if (wa >= 0 && wb >= 0 && wc >= 0) visit(static_cast<size_t>(y * W + x), wa, wb, wc);
-    }
+    for (size_t k = 0; k < N; k++) rgba[k * 4 + 1] = d[k] == FAR ? 255 : js::toUint8(js::round(255 * std::min(1.0, (d[k] * texelM) / FADE_M)));
 }
 
 // ---- planMaterialJob ----
@@ -363,175 +402,76 @@ inline void forTexelsOf(const double* uv, int W, int H, F&& visit) {
 /** One class's library set: its tile's real size and its normal and occlusion/roughness/metalness maps. */
 struct RegionSet { double realSizeX = 1, realSizeY = 1; Image normal, orm; };
 
-struct PlanParams { double paneWallShare = 0.5, glassFeatherM = 0.15, paneGlassWeight = 128, glassRoughness = 0.05; };
+/** What every job reads: the classes' CIELAB means, their sets and each set's mean ORM (3 per set). */
+struct PlanContext { std::vector<double> meanLab; std::vector<uint8_t> openings; int wall = 0, grid = 24; double paneWallShare = 0.5, glassR = 0.08, glassM = 0; /** Whether a rebuilt facade's job also returns each texel's class (the relief's class map). */ bool classMap = false; std::vector<RegionSet> sets; std::vector<double> setMeans; };
 
-/** What every job reads: the classes' CIELAB means, their sets, the sets' mean roughness (G) and the params. */
-struct PlanContext { std::vector<double> meanLab; std::vector<RegionSet> sets; std::vector<double> setMeanG; double wallMeanG = 0; PlanParams P; };
+/** A job: its photo, metres per texel, whether it is a rebuilt facade (else a scan piece) and the square's half-side. */
+struct PlanJob { const Image* img = nullptr; double texelM = 0; bool rebuilt = false; int radius = 1; std::vector<uint8_t> open; std::vector<double> elements; std::vector<uint32_t> family; std::vector<double> panes; };
 
-/** A rebuilt facade's job: its photo, metres per texel and its lattice's rects (u0 v0 u1 v1 each). */
-struct RebuiltJob { const Image* img = nullptr; double texelM = 0; std::vector<double> fitted, panes, runs, bays; };
+/** The class written for a texel that takes no relief (a glass pane): no tile is ever stacked at it, so it reads as the surface. */
+constexpr uint8_t NO_RELIEF_CLASS = 255;
 
-struct RebuiltResult {
-    int width = 0, height = 0, frameClass = 0;
-    double windowN = 0, stoneN = 0, paneN = 0, panesOnStone = 0, baysOnStone = 0, texels = 0, glass = 0;
-    std::vector<uint8_t> orm, normal, params;
-};
-
-inline RebuiltResult planRebuilt(const RebuiltJob& job, const PlanContext& ctx) {
-    const Image& img = *job.img;
-    const int W = img.width, H = img.height, K = static_cast<int>(ctx.meanLab.size() / 3), WALL = K - 1;
-    const size_t N = static_cast<size_t>(W) * H;
-    const double texelM = job.texelM;
-    RebuiltResult r;
-    r.width = W; r.height = H;
-    std::vector<uint8_t> window(N, 0), pane(N, 0), stone(N, 0);
-    r.windowN = static_cast<double>(markRects(job.fitted, W, H, window));
-    r.stoneN = static_cast<double>(markRects(job.runs, W, H, stone));
-    const auto bayId = paneIdsOf(job.bays, W, H, nullptr);
-    const auto stoneBays = stonePanes(img, ctx.meanLab, bayId, ctx.P.paneWallShare);
-    const auto allPanes = paneIdsOf(job.panes, W, H, nullptr);
-    std::unordered_set<int32_t> panedBays;
-    for (size_t k = 0; k < N; k++) if (allPanes[k] && bayId[k]) panedBays.insert(bayId[k]);
-    auto glassBay = [&](size_t k) { return bayId[k] && !stoneBays.count(bayId[k]) && (!panedBays.count(bayId[k]) || allPanes[k]); };
-    const Storey storey = storeyPitchOf(job.fitted, W, H);
-    double paneN = 0;
-    for (size_t k = 0; k < N; k++) if (glassBay(k)) {
-        const double st = storey.ok ? std::floor((std::floor(static_cast<double>(k) / W) - storey.phase) / storey.pitch) : 0;
-        pane[k] = paneSeed((bayId[k] - 1) * 997.0 + st + 500); paneN++;
-    }
-    std::vector<uint8_t> loose(N);
-    for (size_t k = 0; k < N; k++) loose[k] = window[k] && !glassBay(k) ? 1 : 0;
-    const auto paneIds = paneIdsOf(job.panes, W, H, loose.data());
-    const auto stoneIds = stonePanes(img, ctx.meanLab, paneIds, ctx.P.paneWallShare);
-    for (size_t k = 0; k < N; k++) if (paneIds[k] && !stoneIds.count(paneIds[k])) { pane[k] = paneSeed(100000.0 + paneIds[k]); paneN++; }
-    r.panesOnStone = static_cast<double>(stoneIds.size());
-    r.baysOnStone = static_cast<double>(stoneBays.size());
-    auto framed = [&](size_t k) { return !pane[k] && (bayId[k] || window[k]); };
-    int frameClass = WALL;
-    std::vector<uint8_t> frameMask(N);
-    bool anyFrame = false;
-    for (size_t k = 0; k < N; k++) { frameMask[k] = framed(k) ? 1 : 0; anyFrame = anyFrame || frameMask[k]; }
-    if (anyFrame) {
-        const auto cls = classify(img, ctx.meanLab, frameMask.data());
-        std::vector<uint32_t> inFrames(K, 0);
-        for (size_t k = 0; k < N; k++) if (frameMask[k] && cls[k] != WALL) inFrames[cls[k]]++;
-        for (int c = 0; c < WALL; c++) if (inFrames[c] && (frameClass == WALL || inFrames[c] > inFrames[frameClass])) frameClass = c;
-    }
-    r.frameClass = frameClass;
-
-    struct Tile { int tw, th; std::vector<float> n, o; };
-    auto tileOf = [&](const RegionSet& s) {
-        Tile t;
-        t.tw = static_cast<int>(std::max(2.0, js::round(s.realSizeX / texelM))); t.th = static_cast<int>(std::max(2.0, js::round(s.realSizeY / texelM)));
-        t.n = shrinkTile(s.normal, t.tw, t.th, true); t.o = shrinkTile(s.orm, t.tw, t.th, false);
-        return t;
-    };
-    const Tile wallTile = tileOf(ctx.sets[WALL]);
-    const Tile frameOwn = frameClass == WALL ? Tile{} : tileOf(ctx.sets[frameClass]);
-    const Tile& frameTile = frameClass == WALL ? wallTile : frameOwn;
-    const auto fw = featherWeights(pane, W, H, ctx.P.glassFeatherM / texelM);
-    r.orm.assign(N * 4, 0); r.normal.assign(N * 4, 0); r.params.assign(N * 4, 0);
-    auto write = [&](size_t k, double rough, double glassWeight, double seed) {
-        r.orm[k * 4] = 255; r.orm[k * 4 + 1] = js::toUint8(js::round(rough * 255)); r.orm[k * 4 + 2] = 0; r.orm[k * 4 + 3] = 255;
-        r.params[k * 4] = js::toUint8(glassWeight); r.params[k * 4 + 2] = 0; r.params[k * 4 + 3] = js::toUint8(seed);
-        r.texels++;
-        if (glassWeight != 0) r.glass++;
-    };
-    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
-        const size_t k = static_cast<size_t>(y) * W + x;
-        const Tile& t = pane[k] || framed(k) ? frameTile : wallTile;
-        const size_t j = (static_cast<size_t>(y % t.th) * t.tw + (x % t.tw)) * 3;
-        const double a = fw[k];
-        if (pane[k]) {
-            const double o1 = t.o[j + 1];
-            write(k, o1 + (ctx.P.glassRoughness - o1) * a, std::max(1.0, js::round(ctx.P.paneGlassWeight * a)), pane[k]);
-            double n[3];
-            for (int c = 0; c < 3; c++) n[c] = (static_cast<double>(t.n[j + c]) * 2 - 1) * (1 - a) + (c == 2 ? a : 0);
-            const double l = hypotOr1(n[0], n[1], n[2]);
-            for (int c = 0; c < 3; c++) r.normal[k * 4 + c] = js::toUint8(js::round(((n[c] / l) * 0.5 + 0.5) * 255));
-            r.normal[k * 4 + 3] = 255;
-            continue;
-        }
-        write(k, t.o[j + 1], 0, 255);
-        for (int c = 0; c < 3; c++) r.normal[k * 4 + c] = js::toUint8(js::round(static_cast<double>(t.n[j + c]) * 255));
-        r.normal[k * 4 + 3] = 255;
-    }
-    r.paneN = paneN;
-    return r;
-}
-
-/** A fitted plane's rasters in its ortho's pixels (materialPlanContext's rasters): windows, bay ids, pane ids, storey. */
-struct PlaneRaster {
+struct PlanResult {
     int width = 0, height = 0;
-    double orthoSMin = 0, orthoTMax = 0, pixel = 1;
-    Storey storey;
-    std::vector<uint8_t> win;
-    std::vector<int32_t> bay, pane;
-    std::unordered_set<int32_t> panedBays;
+    std::vector<double> classTexels;
+    double folded = 0, glass = 0, panesOnStone = 0, paneWallTexels = 0;
+    std::vector<uint8_t> orm, normal;
+    /** Each texel's class (r, g, b the class index, a 255) of a rebuilt facade, when the context asks for it. */
+    std::vector<uint8_t> classes;
 };
 
-/** A scan triangle on its nearest plane: its UVs and its corners' plane coordinates (s, t). */
-struct ScanTriangle { uint32_t plane; double uv[6], sv[3], tv[3]; };
-
-struct ScanJob { const Image* img = nullptr; double texelM = 0; std::vector<ScanTriangle> tris; };
-
-struct ScanResult {
-    int width = 0, height = 0, frameClass = 0;
-    double onPlane = 0, inWindows = 0, inPanes = 0, texels = 0, glass = 0, panesOnStone = 0, baysOnStone = 0;
-    bool anyGlass = false;
-    std::vector<uint8_t> orm, params;
-};
-
-inline ScanResult planScan(const ScanJob& job, const std::vector<PlaneRaster>& planes, const PlanContext& ctx) {
+inline PlanResult planJob(const PlanJob& job, const PlanContext& ctx) {
     const Image& img = *job.img;
-    const int W = img.width, H = img.height, K = static_cast<int>(ctx.meanLab.size() / 3), WALL = K - 1;
+    const int W = img.width, H = img.height, K = static_cast<int>(ctx.meanLab.size() / 3);
     const size_t N = static_cast<size_t>(W) * H;
-    ScanResult r;
+    PlanResult r;
     r.width = W; r.height = H;
-    std::vector<uint8_t> on(N, 0), win(N, 0), pane(N, 0), onPane(N, 0), paned(N, 0);
-    std::vector<int32_t> bayId(N, 0), storeyOf(N, 0), paneAt(N, 0);
-    for (const auto& tri : job.tris) {
-        const PlaneRaster& b = planes[tri.plane];
-        forTexelsOf(tri.uv, W, H, [&](size_t k, double wa, double wb, double wc) {
-            on[k] = 1;
-            const double x = std::floor((wa * tri.sv[0] + wb * tri.sv[1] + wc * tri.sv[2] - b.orthoSMin) / b.pixel), y = std::floor((b.orthoTMax - (wa * tri.tv[0] + wb * tri.tv[1] + wc * tri.tv[2])) / b.pixel);
-            if (x < 0 || y < 0 || x >= b.width || y >= b.height) return;
-            const size_t j = static_cast<size_t>(y * b.width + x);
-            if (b.win[j]) win[k] = 1;
-            if (b.bay[j]) { bayId[k] = b.bay[j]; storeyOf[k] = b.storey.ok ? js::toInt32(std::floor((y - b.storey.phase) / b.storey.pitch)) : 0; if (b.panedBays.count(b.bay[j])) paned[k] = 1; }
-            if (b.pane[j]) { onPane[k] = 1; paneAt[k] = b.pane[j]; }
-        });
+    r.classTexels.assign(K, 0);
+    auto cls = regionClassMap(img, ctx.meanLab, ctx.openings, ctx.wall, job.radius, job.open);
+    if (job.rebuilt) r.folded = foldRepeats(cls, W, H, K, job.elements, job.family, ctx.grid);
+    for (size_t k = 0; k < N; k++) r.classTexels[cls[k]]++;
+    r.orm.assign(N * 4, 0);
+    if (job.rebuilt) {
+        struct Tile { int tw = 0, th = 0; std::vector<float> n, o; };
+        std::vector<Tile> tiles(K);
+        for (int c = 0; c < K; c++) {
+            if (r.classTexels[c] == 0) continue;
+            const RegionSet& s = ctx.sets[c];
+            Tile& t = tiles[c];
+            t.tw = static_cast<int>(std::max(2.0, js::round(s.realSizeX / job.texelM))); t.th = static_cast<int>(std::max(2.0, js::round(s.realSizeY / job.texelM)));
+            t.n = shrinkTile(s.normal, t.tw, t.th, true); t.o = shrinkTile(s.orm, t.tw, t.th, false);
+        }
+        r.normal.assign(N * 4, 0);
+        const PaneGlass pg = job.panes.empty() ? PaneGlass{} : paneGlass(img, ctx.meanLab, ctx.openings, ctx.wall, job.panes, ctx.paneWallShare);
+        const uint8_t glassR = js::toUint8(js::round(ctx.glassR * 255)), glassM = js::toUint8(js::round(ctx.glassM * 255));
+        r.panesOnStone = pg.stone; r.paneWallTexels = pg.wallTexels;
+        if (ctx.classMap) r.classes.assign(N * 4, 0);
+        for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) {
+            const size_t k = static_cast<size_t>(y) * W + x;
+            if (!pg.glass.empty() && pg.glass[k]) {
+                r.orm[k * 4] = 255; r.orm[k * 4 + 1] = glassR; r.orm[k * 4 + 2] = glassM; r.orm[k * 4 + 3] = 255;
+                r.normal[k * 4] = 128; r.normal[k * 4 + 1] = 128; r.normal[k * 4 + 2] = 255; r.normal[k * 4 + 3] = 255;
+                // a pane has no relief: a class no tile answers to (NO_RELIEF_CLASS), read as the surface
+                if (ctx.classMap) { r.classes[k * 4] = NO_RELIEF_CLASS; r.classes[k * 4 + 1] = NO_RELIEF_CLASS; r.classes[k * 4 + 2] = NO_RELIEF_CLASS; r.classes[k * 4 + 3] = 255; }
+                r.glass++;
+                continue;
+            }
+            const Tile& t = tiles[cls[k]];
+            const size_t j = (static_cast<size_t>(y % t.th) * t.tw + (x % t.tw)) * 3;
+            for (int c = 0; c < 3; c++) {
+                r.orm[k * 4 + c] = js::toUint8(js::round(static_cast<double>(t.o[j + c]) * 255));
+                r.normal[k * 4 + c] = js::toUint8(js::round(static_cast<double>(t.n[j + c]) * 255));
+            }
+            r.orm[k * 4 + 3] = 255; r.normal[k * 4 + 3] = 255;
+            if (ctx.classMap) { r.classes[k * 4] = cls[k]; r.classes[k * 4 + 1] = 255; r.classes[k * 4 + 2] = cls[k]; r.classes[k * 4 + 3] = 255; }
+        }
+        if (ctx.classMap) classBorderWeights(cls, W, H, job.texelM, r.classes);
+        return r;
     }
-    const auto stoneBays = stonePanes(img, ctx.meanLab, bayId, ctx.P.paneWallShare);
-    for (size_t k = 0; k < N; k++) if (bayId[k] && !stoneBays.count(bayId[k]) && (!paned[k] || onPane[k])) pane[k] = paneSeed((bayId[k] - 1) * 997.0 + storeyOf[k] + 500);
-    r.baysOnStone = static_cast<double>(stoneBays.size());
-    std::vector<int32_t> loose(N);
-    for (size_t k = 0; k < N; k++) loose[k] = paneAt[k] && !bayId[k] ? paneAt[k] : 0;
-    const auto stoneLoose = stonePanes(img, ctx.meanLab, loose, ctx.P.paneWallShare);
-    for (size_t k = 0; k < N; k++) if (loose[k] && !stoneLoose.count(loose[k])) pane[k] = paneSeed(100000.0 + loose[k]);
-    r.panesOnStone = static_cast<double>(stoneLoose.size());
-    int frameClass = WALL;
-    std::vector<uint8_t> frameMask(N);
-    bool anyFrame = false;
-    for (size_t k = 0; k < N; k++) { frameMask[k] = (win[k] || bayId[k]) && !pane[k] ? 1 : 0; anyFrame = anyFrame || frameMask[k]; }
-    if (anyFrame) {
-        const auto cls = classify(img, ctx.meanLab, frameMask.data());
-        std::vector<uint32_t> n(K, 0);
-        for (size_t k = 0; k < N; k++) if (frameMask[k] && cls[k] != WALL) n[cls[k]]++;
-        for (int c = 0; c < WALL; c++) if (n[c] && (frameClass == WALL || n[c] > n[frameClass])) frameClass = c;
-    }
-    r.frameClass = frameClass;
-    const auto fw = featherWeights(pane, W, H, job.texelM > 0 ? ctx.P.glassFeatherM / job.texelM : 1);
-    r.orm.assign(N * 4, 0); r.params.assign(N * 4, 0);
     for (size_t k = 0; k < N; k++) {
-        const double rough = pane[k] || win[k] || bayId[k] ? ctx.setMeanG[frameClass] : ctx.wallMeanG;
-        const double gw = pane[k] ? std::max(1.0, js::round(ctx.P.paneGlassWeight * fw[k])) : 0;
-        const double v = pane[k] ? rough + (ctx.P.glassRoughness - rough) * fw[k] : rough;
-        r.orm[k * 4] = 255; r.orm[k * 4 + 1] = js::toUint8(js::round(v * 255)); r.orm[k * 4 + 2] = 0; r.orm[k * 4 + 3] = 255;
-        r.params[k * 4] = js::toUint8(gw); r.params[k * 4 + 2] = 0; r.params[k * 4 + 3] = pane[k] ? pane[k] : 255;
-        r.texels++;
-        if (gw != 0) r.glass++;
-        r.onPlane += on[k]; r.inWindows += win[k]; if (pane[k]) { r.inPanes++; r.anyGlass = true; }
+        const double* m = &ctx.setMeans[static_cast<size_t>(cls[k]) * 3];
+        for (int c = 0; c < 3; c++) r.orm[k * 4 + c] = js::toUint8(js::round(m[c] * 255));
+        r.orm[k * 4 + 3] = 255;
     }
     return r;
 }

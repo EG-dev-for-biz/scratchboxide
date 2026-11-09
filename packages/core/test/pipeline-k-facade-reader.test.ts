@@ -11,17 +11,18 @@
  * The facade reader (pipeline-k/facade-reader.ts), a vision agent, against a stand-in model on a synthetic facade of
  * punched windows: the overview's zones, the unit cell tiled through its zone at the measured pitch (whichever way the
  * glass is lit), the judge's rejection keeping the window fit's reading, nothing drawn where the photo never reached,
- * the glass reading kept with the zone; window_fit.json takes the openings and keeps the window fit's own.
+ * no glass asked or kept (user decision, 2026-11-05); window_fit.json takes the openings and keeps the window fit's own.
  */
 
 import { describe, it, expect } from 'vitest';
+import { windowSourceOf, WINDOW_FIT_VERSION } from '../src/node/3d-engine/staged-location/window-fit';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { FACADE_READER_PARAMS, FACADE_READER_VERSION, luminanceOf, mergeReadings, parseJudgement, parseReading, parseZones, readFacade, readPlanes, tileZone, type FacadeAsk, type FacadePhoto } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { contextFor, parseBrief, planePlaces } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader-brief';
-import { exemplarOf, matchExemplar } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader-template';
+import { exemplarOf, matchExemplar, templateColumns } from '../src/node/3d-engine/staged-location/pipeline-k/facade-reader-template';
 
 // a 30 m x 60 m facade at 0.1 m a pixel: 5 bays, each two windows 12 px wide, storeys every 38.4 px, windows 22 px tall;
 // its top 6 m never reached by the photo
@@ -62,7 +63,7 @@ function standIn(accept = true): { ask: FacadeAsk; calls: string[] } {
             if (t < region.y0 || b > region.y1) continue;
             rows.push({ y: [((t + 3 - region.y0) / ch) * 1000, ((b - 2 - region.y0) / ch) * 1000], openings: cols.map(([a, c]) => ({ x: [((a + 3 - region.x0) / cw) * 1000, ((c - 2 - region.x0) / cw) * 1000], panes: 2 })) });
         }
-        return JSON.stringify({ rows, glass: { label: 'clear, slightly green', transparency: 0.7, reflectivity: 0.25, tint: '#7A8F88', opaque: false }, between: 'stone spandrels', conf: 85, notes: 'punched windows over spandrels' });
+        return JSON.stringify({ rows, between: 'stone spandrels', conf: 85, notes: 'punched windows over spandrels' });
     };
     return { ask, calls };
 }
@@ -86,7 +87,7 @@ function checkOpenings(rects: Array<[number, number, number, number]>, tol: numb
 }
 
 describe('pipeline K facade reader (vision agent)', () => {
-    it('reads the zones, tiles the unit cell down its zone at the measured pitch, two panes an opening, and keeps the glass', async () => {
+    it('reads the zones, tiles the unit cell down its zone at the measured pitch, two panes an opening', async () => {
         const { ask, calls } = standIn();
         const r = await readFacade(facade(), undefined, frame, ask);
         expect(calls).toEqual(['overview', 'read', 'judge']);
@@ -97,7 +98,7 @@ describe('pipeline K facade reader (vision agent)', () => {
         expect(z.fit!.columns).toBe(10);
         checkOpenings(r.rects!, 3.5);
         expect(r.panes!.length).toBe(2 * r.rects!.length);
-        expect(r.glass![0].glass).toMatchObject({ transparency: 0.7, reflectivity: 0.25, tint: '#7a8f88', opaque: false });
+        expect('glass' in r).toBe(false);
     });
 
     it('tiles a facade whose windows are each lit their own way (darker and lighter than the wall) the same way', async () => {
@@ -117,10 +118,12 @@ describe('pipeline K facade reader (vision agent)', () => {
         const unguided = tileZone(L, W, zone, crop, reading);
         const guided = tileZone(L, W, zone, crop, reading, undefined, PITCH);
         if ('why' in unguided || 'why' in guided) throw new Error('no tiling');
-        expect(Math.abs(unguided.pitch - 2 * PITCH)).toBeLessThan(1);
+        // unguided, the doubled pitch is halved by the photo itself: windows sit between the rows read (tileZone, 1)
+        expect(unguided.halved).toBe(true);
+        expect(Math.abs(unguided.pitch - PITCH)).toBeLessThan(1);
         expect(guided.guided).toBe(true);
         expect(Math.abs(guided.pitch - PITCH)).toBeLessThan(0.6);
-        expect(guided.rects.length).toBeGreaterThanOrEqual(2 * unguided.rects.length - 1);
+        expect(Math.abs(guided.rects.length - unguided.rects.length)).toBeLessThanOrEqual(1);
         // a single row read: tiled through the zone at the guide
         const one = tileZone(L, W, zone, crop, { rows: rows.slice(0, 1), conf: 80 }, undefined, PITCH);
         if ('why' in one) throw new Error('no tiling');
@@ -169,7 +172,41 @@ describe('pipeline K facade reader (vision agent)', () => {
         expect(() => parseZones('{"zones":[{"box":[0,0,1000]}]}')).toThrow();
         const r = parseReading('x {"rows":[{"y":[100,200],"openings":[{"x":[10,20],"panes":3}]}],"glass":{"transparency":4,"tint":"blue"},"conf":70} y');
         expect(r.rows[0].openings[0].panes).toBe(3);
-        expect(r.glass).toEqual({ transparency: 1, reflectivity: 0.3, opaque: false });
+        expect('glass' in r).toBe(false);
+    });
+
+    it("merges a plane's reading zone by zone: the reader's openings inside the zones it drew, the window fit's kept outside them, and a merge repeated gives the same", () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'facade-merge-'));
+        try {
+            // the window fit read a window in the top half and one in the bottom half, and a continued (generated) one at the bottom
+            const top: [number, number, number, number] = [10, 10, 30, 40], bottom: [number, number, number, number] = [10, 310, 30, 340], gen: [number, number, number, number] = [50, 310, 70, 340];
+            const fit: any = { version: 'window-fit/8', params: {}, ms: 1, facades: [
+                { facadeId: 7, width: 100, height: 400, rects: [top, bottom, gen], panes: [top, bottom], generated: [gen], bands: [], ms: 1 },
+                { facadeId: 8, width: 100, height: 400, rects: [top], panes: [top], bands: [], ms: 1 }
+            ] };
+            // the reader drew only the top half of plane 7 (its bottom zone rejected), and plane 9, which the fit never saw
+            const readings = [
+                { facadeId: 7, width: 100, height: 400, rects: [[12, 12, 28, 38], [60, 12, 76, 38]] as Array<[number, number, number, number]>, panes: [[12, 12, 28, 38], [60, 12, 76, 38]] as Array<[number, number, number, number]>, drawn: [{ x0: 0, y0: 0, x1: 100, y1: 200 }] },
+                { facadeId: 9, width: 50, height: 50, rects: [[5, 5, 15, 15]] as Array<[number, number, number, number]>, panes: [[5, 5, 15, 15]] as Array<[number, number, number, number]>, drawn: [{ x0: 0, y0: 0, x1: 50, y1: 50 }] }
+            ];
+            const once = mergeReadings(dir, fit, readings);
+            expect(once.merged).toEqual({ planes: 2, readerWindows: 3, keptFitWindows: 2, replacedFitWindows: 1 });
+            const e7: any = once.facades.find((f: any) => f.facadeId === 7);
+            expect(e7.rects).toEqual([[12, 12, 28, 38], [60, 12, 76, 38], bottom, gen]);
+            expect(e7.panes).toEqual([[12, 12, 28, 38], [60, 12, 76, 38], bottom]);
+            expect(e7.generated).toEqual([gen]);
+            expect(e7.structural.rects).toEqual([top, bottom, gen]);
+            expect(e7.readerWindows).toBe(2);
+            expect(windowSourceOf(once, 7)).toBe(`${FACADE_READER_VERSION}: 2 windows read from the photo (photo-inferred); ${WINDOW_FIT_VERSION}: 2 kept outside the zones it drew`);
+            expect(windowSourceOf(once, 9)).toBe(`${FACADE_READER_VERSION}: 1 windows read from the photo (photo-inferred)`);
+            expect(windowSourceOf(once, 8)).toBe(WINDOW_FIT_VERSION);
+            // a plane the reader gave nothing for keeps the window fit's whole; a plane the fit never saw gets its own entry
+            expect((once.facades.find((f: any) => f.facadeId === 8) as any).rects).toEqual([top]);
+            expect((once.facades.find((f: any) => f.facadeId === 9) as any).rects).toEqual([[5, 5, 15, 15]]);
+            // merged again over its own file (a cached window fit read back): the same
+            const again = mergeReadings(dir, JSON.parse(fs.readFileSync(path.join(dir, 'window_fit.json'), 'utf8')), readings);
+            expect((again.facades.find((f: any) => f.facadeId === 7) as any).rects).toEqual(e7.rects);
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     });
 
     it('reads a narrow window-column wall (3 m wide) before any roof, and leaves out a roof under 6 m', async () => {
@@ -296,7 +333,7 @@ describe('pipeline K facade reader (vision agent)', () => {
         } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     });
 
-    it("writes the openings and the glass into window_fit.json, the window fit's own kept, and reads once", async () => {
+    it("writes the openings into window_fit.json, the window fit's own kept, and reads once", async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'facade-reader-'));
         try {
             const img = facade();
@@ -312,12 +349,44 @@ describe('pipeline K facade reader (vision agent)', () => {
             expect(e.reader).toBe(FACADE_READER_VERSION);
             expect(e.structural.rects).toEqual([strip]);
             expect(e.rects.length).toBeGreaterThan(100);
-            expect(e.glass[0].glass.label).toBe('clear, slightly green');
+            // the strip lay inside the zone the reader drew: the reader's openings stand there, the window fit's go
+            expect(e.rects).not.toContainEqual(strip);
+            expect(first.records.readings[0].drawn.length).toBeGreaterThan(0);
+            expect(e.glass).toBeUndefined();
             expect(first.records.facades[0].outcome).toBe('replaced');
             expect(fs.readdirSync(path.join(dir, 'facade_reader'))).toContain('7_z0.png');
             const again = await readPlanes(dir, ask);
             expect(again.cached).toBe(true);
             expect(calls.length).toBe(3);
         } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+});
+
+describe("the template's columns on the plane's own period (facade-reader-template.ts templateColumns)", () => {
+    const ow = 24;
+    it('snaps jittered matches to the measured period and drops a column with too few matches', () => {
+        // columns every 44 px from 30, four rows each, jittered up to 3 px; one stray match between two columns
+        const lefts: number[] = [];
+        for (let k = 0; k < 6; k++) for (let r = 0; r < 4; r++) lefts.push(30 + 44 * k + ((r * 7 + k) % 7) - 3);
+        lefts.push(30 + 44 * 2 + 22);
+        const cols = templateColumns(lefts, ow, 44)!;
+        expect(cols.snapped).toBe(true);
+        expect(cols.phaseR).toBeGreaterThan(0.8);
+        expect(cols.colX.length).toBe(6);
+        cols.colX.forEach((x, k) => expect(Math.abs(x - (30 + 44 * k))).toBeLessThan(2));
+    });
+    it('holds no phase when the matches sit half a column apart (the Flatiron: 25 columns found on a 17-column facade), so the plane is read', () => {
+        const lefts: number[] = [];
+        for (let k = 0; k < 12; k++) for (let r = 0; r < 4; r++) lefts.push(30 + 22 * k);
+        expect(templateColumns(lefts, ow, 44)).toBeUndefined();
+    });
+    it('without a measured period keeps the clustered columns, and refuses two closer than an opening', () => {
+        const lefts: number[] = [];
+        for (let k = 0; k < 5; k++) for (let r = 0; r < 4; r++) lefts.push(30 + 44 * k);
+        const cols = templateColumns(lefts, ow, undefined)!;
+        expect(cols.snapped).toBe(false);
+        expect(cols.colX).toEqual([30, 74, 118, 162, 206]);
+        for (let r = 0; r < 4; r++) lefts.push(30 + 44 * 2 + 12);
+        expect(templateColumns(lefts, ow, undefined)).toBeUndefined();
     });
 });

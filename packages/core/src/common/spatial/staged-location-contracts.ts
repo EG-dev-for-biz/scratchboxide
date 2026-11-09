@@ -725,8 +725,19 @@ export interface StagedNodeExtras {
         /** Moldings: t = arc length / carrierLengthM. */
         sweep?: { carrierLengthM: number; closed: boolean; tAttribute: '_REVEAL.y' };
         ids: { primitiveId?: string; surfaceId?: string; slotId?: string; elementId?: string; crownId?: number; leafId?: string; degradationId?: string };
+        /**
+         * A Google 3D Tiles leaf: the geometric error its tileset states for it (m), and its bounding box as the tileset gives
+         * it (ECEF: centre, then three half-axes). The tile seam stage welds up to the error and finds the leaf's cut planes by
+         * the box.
+         */
+        tile?: { geometricErrorM?: number; box?: number[] };
         /** A recut copy of a surface (recessed relief) hides the surface node it replaces. */
         replacesSurfaceIds?: string[];
+        /**
+         * Shown from a version kept by an earlier run (place-store-best.ts): the object, the version, the run it came from,
+         * and why it stands in place of this run's.
+         */
+        storedVersion?: { objectKey: string; version: number; runId?: string; reason: string };
         fitError?: ResidualStats;
         counts: { vertices: number; triangles: number; lines?: number };
     };
@@ -762,7 +773,9 @@ export interface TreeLodExtras {
 export interface TreeClusterExtras { clusterMesh: string; hashSeed: number }
 
 /** Leaf blade length (m) = clamp(sizeRatio * crownHeightM, minM, maxM). Continuous, so it scales with the tree. */
-export interface TreeLeafSizeModel { sizeRatioToCrownHeight: number; minM: number; maxM: number }
+/** Blade length = clamp(sizeRatioToCrownHeight x crown height, minM, maxM); with a leaf texture chosen, its leaf's real
+ *  length within [minM, atlasMaxM] (a needle spray's shoot draws at its own size). */
+export interface TreeLeafSizeModel { sizeRatioToCrownHeight: number; minM: number; maxM: number; atlasMaxM?: number }
 
 /** One shared cluster mesh: how many leaves it holds at the near level (leavesLevel0), the near-mid level (trees-lod/2) and the mid level (leavesLevel1). */
 export interface TreeClusterVariant { mesh: string; leavesLevel0: number; leavesNearMid?: number; leavesLevel1: number }
@@ -799,7 +812,13 @@ export interface TreeColourExtras {
  * the median of its planting's measured crowns ('neighbours'), or the library's leaf-on prior ('prior').
  */
 export interface TreeTextureExtras {
-    leaves: { entry: string; tint: [number, number, number]; leafLengthM: number; targetLeafLengthM: number; cost: number; provenance: 'library' };
+    /** bladeWidthM: the entry's measured blade width; targetBladeWidthM: the species leaf's it was matched to (0: not matched on width). */
+    /**
+     * variation: how much a leaf's colour varies around the tint (a viewer's per-leaf factor is 1 + variation x (u - 0.5), u
+     * uniform), from the spread of the tree's own crown colour in the tile's photo (colour.spreadLinearRgb); absent where the
+     * crown has no measured spread (the viewer's default applies).
+     */
+    leaves: { entry: string; tint: [number, number, number]; variation?: number; leafLengthM: number; targetLeafLengthM: number; bladeWidthM?: number; targetBladeWidthM?: number; cost: number; provenance: 'library' };
     bark: {
         entry: string; tint: [number, number, number]; tileM: [number, number]; reliefIndex: number; targetReliefIndex: number; sizeShare: number;
         cost: number; provenance: 'library';
@@ -807,6 +826,12 @@ export interface TreeTextureExtras {
     /** The far level's leaf masses: the chosen leaves' mean linear colour under the tint. */
     massColourLinear: [number, number, number];
     colourProvenance: 'measured' | 'neighbours' | 'prior' | 'none';
+    /**
+     * What the colour on the leaves is: 'photo-inferred' when the tint and variation were read from the tree's own crown in
+     * the tile's photo (colourProvenance 'measured': the reading is measured, the leaves wearing it are grown), 'generated'
+     * when they are a fill (its neighbours' median or the library's prior), with the reason.
+     */
+    tintProvenance?: { label: 'photo-inferred' | 'generated'; reason: string };
 }
 
 /**
@@ -838,12 +863,13 @@ export interface TreesGlbRootExtras {
     };
     /** Present when the trees were textured from the tree texture library (their sbTree.texture names the entries). */
     textures?: { schema: string; index: string; woodUv: string; chosenBy: string };
-    /** Present when some trees draw their mid level as crown cards (TreeCrownCardsExtras). */
+    /** Present when some trees draw leaf cards (TreeCrownCardsExtras): the mid level's crown cards, the near-mid level's clumped leaf cards, the near level's core cards. */
     crownCards?: TreeCrownCardsExtras;
 }
 
 /**
- * The crown cards' atlas (scratchbox.crown-cards/1): a tree's mid level may be large cards over its crown, each a quad
+ * The crown cards' atlas (scratchbox.crown-cards/1): a tree's mid level may be large cards over its crown, its near-mid
+ * level smaller cards of open leaf sprays, and its near level may add such cards beneath its leaves (core cards), each a quad
  * (library mesh `meshes[k]`, atlas cell k, TEXCOORD_0 = ((col + s) / cols, (row + t) / rows)) showing a spray of leaves.
  * `cells[k]` lists cell k's leaves as [u, v, angle, length, pick]: an ellipse centred (u, v) in the cell's [0, 1]^2, its
  * long axis at `angle` (rad from +s), `length` long and length x `clayLeafAspect` wide in clay; textured, the leaf cell's
@@ -854,6 +880,8 @@ export interface TreeCrownCardsExtras {
     meshes: string[];
     cols: number;
     rows: number;
+    /** Cells [0, denseCells) are dense sprays (the mid level's cards), the rest open sprays (the near-mid level's cards and the near level's core cards); absent: every cell dense. */
+    denseCells?: number;
     clayLeafAspect: number;
     leaf: string;
     cells: Array<Array<[number, number, number, number, number]>>;
@@ -1881,8 +1909,9 @@ const DEFINITIONS = {
         }),
         texture: obj(['leaves', 'bark', 'massColourLinear', 'colourProvenance'], {
             leaves: obj(['entry', 'tint', 'leafLengthM', 'targetLeafLengthM', 'cost', 'provenance'], {
-                entry: { type: 'string', minLength: 1 }, tint: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }), leafLengthM: { type: 'number', exclusiveMinimum: 0 },
-                targetLeafLengthM: { type: 'number', exclusiveMinimum: 0 }, cost: ref('nonneg'), provenance: { const: 'library' }
+                entry: { type: 'string', minLength: 1 }, tint: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }), variation: ref('unit'), leafLengthM: { type: 'number', exclusiveMinimum: 0 },
+                targetLeafLengthM: { type: 'number', exclusiveMinimum: 0 }, bladeWidthM: ref('nonneg'), targetBladeWidthM: ref('nonneg'),
+                cost: ref('nonneg'), provenance: { const: 'library' }
             }),
             bark: obj(['entry', 'tint', 'tileM', 'reliefIndex', 'targetReliefIndex', 'sizeShare', 'cost', 'provenance'], {
                 entry: { type: 'string', minLength: 1 }, tint: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }),
@@ -1890,7 +1919,8 @@ const DEFINITIONS = {
                 sizeShare: ref('unit'), cost: ref('nonneg'), provenance: { const: 'library' }
             }),
             massColourLinear: arr(ref('nonneg'), { minItems: 3, maxItems: 3 }),
-            colourProvenance: { enum: ['measured', 'neighbours', 'prior', 'none'] }
+            colourProvenance: { enum: ['measured', 'neighbours', 'prior', 'none'] },
+            tintProvenance: obj(['label', 'reason'], { label: { enum: ['photo-inferred', 'generated'] }, reason: STR })
         }),
         species: obj(['measured', 'entry', 'cost', 'provenance', 'grownWith'], {
             measured: obj(['heightM', 'meanRadiusM', 'aspect', 'topShare', 'depthM', 'samples', 'provenance'], {
@@ -1906,7 +1936,8 @@ const DEFINITIONS = {
         clusterLibrary: obj(['variants', 'leafSizeModel'], {
             variants: arr(obj(['mesh', 'leavesLevel0', 'leavesLevel1'], { mesh: { type: 'string', minLength: 1 }, leavesLevel0: NONNEG_INT, leavesNearMid: NONNEG_INT, leavesLevel1: NONNEG_INT }), { minItems: 1 }),
             leafSizeModel: obj(['sizeRatioToCrownHeight', 'minM', 'maxM'], {
-                sizeRatioToCrownHeight: ref('nonneg'), minM: { type: 'number', exclusiveMinimum: 0 }, maxM: { type: 'number', exclusiveMinimum: 0 }
+                sizeRatioToCrownHeight: ref('nonneg'), minM: { type: 'number', exclusiveMinimum: 0 }, maxM: { type: 'number', exclusiveMinimum: 0 },
+                atlasMaxM: { type: 'number', exclusiveMinimum: 0 }
             }),
             leafCard: obj(['widthRatio', 'uv', 'leafAttribute'], { widthRatio: { type: 'number', exclusiveMinimum: 0 }, uv: STR, leafAttribute: STR })
         }),
@@ -1914,7 +1945,7 @@ const DEFINITIONS = {
         species: obj(['schema', 'index', 'chosenBy'], { schema: STR, index: STR, chosenBy: STR }),
         crownCards: obj(['schema', 'meshes', 'cols', 'rows', 'clayLeafAspect', 'leaf', 'cells'], {
             schema: { const: 'scratchbox.crown-cards/1' }, meshes: arr({ type: 'string', minLength: 1 }, { minItems: 1 }),
-            cols: { type: 'integer', minimum: 1 }, rows: { type: 'integer', minimum: 1 }, clayLeafAspect: { type: 'number', exclusiveMinimum: 0 }, leaf: STR,
+            cols: { type: 'integer', minimum: 1 }, rows: { type: 'integer', minimum: 1 }, denseCells: NONNEG_INT, clayLeafAspect: { type: 'number', exclusiveMinimum: 0 }, leaf: STR,
             cells: arr(arr(arr(NUM, { minItems: 5, maxItems: 5 })), { minItems: 1 })
         })
     }),

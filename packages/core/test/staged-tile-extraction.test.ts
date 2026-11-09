@@ -106,7 +106,12 @@ describe('buildDistrictGlb: run-independent node extras and the geometry-only fi
                 reveal: { attribute: null, displacement: null }
             });
             expect(sb.provenance.sources[0].kind).toBe('tile-leaf');
+            expect(sb.tile).toBeUndefined();   // these leaves state no geometric error
         }
+        // a leaf that states one carries it in its node (the tile seam stage welds up to it)
+        const box = [1334000, -4654000, 4138000, 10, 0, 0, 0, 10, 0, 0, 0, 10];
+        const stated = GoogleTileDistrictCrawler.buildDistrictGlb([{ ...leafQuad('leaf-e', 4, 3, 0), geometricErrorM: 2.01, box }], ANCHOR, { ...BUILD, clay: false });
+        expect(readGlb(stated.glb).json.nodes.find((n: any) => /^tile_/.test(n.name)).extras.sb.tile).toEqual({ geometricErrorM: 2.01, box });
         // the frame extras the loader and the reshaper read are kept beside them
         expect(json.extras.frame).toMatch(/x = east/);
         expect(json.extras.localToEcef).toHaveLength(16);

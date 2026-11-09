@@ -225,6 +225,49 @@ describe('facades on their photo lattice', () => {
         expect(inRun(1.5 / 12, 1 - 3.0 / 9)).toBe(false);
     });
 
+    it('leaves cells to the scan where the raw scan measures relief deeper or finer than a cell can draw (a band of fins), and draws no window there', () => {
+        // the windows in the lower and upper storeys; the middle storey (t 3.6-5.4) a band of fins 0.7 m proud every 0.5 m
+        const fitted: Array<[number, number, number, number]> = [];
+        for (const s0 of [0.9, 3.9, 6.9, 9.9]) for (const t0 of [0.7, 6.7]) fitted.push([s0, t0, s0 + 1.2, t0 + 1.6]);
+        let seed = 11;
+        const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.06;
+        const soupOf = (z: (sv: number, tv: number) => number) => {
+            const out: number[] = [];
+            for (let sv = 0; sv < 12; sv += 0.125) for (let tv = 0; tv < 9; tv += 0.125) {
+                const q = (a: number, b: number) => [a, b, z(a, b) + rnd()];
+                out.push(...q(sv, tv), ...q(sv + 0.125, tv), ...q(sv + 0.125, tv + 0.125), ...q(sv, tv), ...q(sv + 0.125, tv + 0.125), ...q(sv, tv + 0.125));
+            }
+            return Float32Array.from(out);
+        };
+        const inBand = (tv: number) => tv > 3.6 && tv < 5.4;
+        const fins = soupOf((sv, tv) => (inBand(tv) ? (Math.floor(sv / 0.5) % 2 ? 0 : -0.7) : isWindow(sv, tv) && !inBand(tv) ? -0.25 : 0));
+        const r = latticeFacade(f, photo(), facadeSamples(scan(), f), undefined, undefined, true, fitted, undefined, undefined, facadeSamples(fins, f))!;
+        expect(r.scanKept).toBeDefined();
+        expect(r.scanKept!.count).toBeGreaterThan(0);
+        expect(r.scanKept!.reliefM).toBeGreaterThan(0.6);
+        const ns = r.s.length - 1;
+        let inside = 0;
+        for (let b = 0; b < r.t.length - 1; b++) for (let a = 0; a < ns; a++) {
+            const k = b * ns + a;
+            if (!r.scanKept!.cells[k]) continue;
+            // every kept cell lies in the band (a cell straddling its edge is in it too), is not built, and draws no window
+            expect(r.t[b + 1]).toBeGreaterThan(3.6 - 1e-6);
+            expect(r.t[b]).toBeLessThan(5.4 + 1e-6);
+            expect(r.built[k]).toBe(0);
+            expect(r.windows[k]).toBe(0);
+            if (r.t[b] >= 3.6 - 1e-6 && r.t[b + 1] <= 5.4 + 1e-6) inside++;
+        }
+        expect(inside).toBeGreaterThan(0);
+        expect(r.scanKept!.areaM2).toBeGreaterThan(4);
+        // the same walls without the band: nothing kept, more cells rebuilt
+        const flat = latticeFacade(f, photo(), facadeSamples(scan(), f), undefined, undefined, true, fitted, undefined, undefined, facadeSamples(soupOf((sv, tv) => (isWindow(sv, tv) ? -0.25 : 0)), f))!;
+        expect(flat.scanKept).toBeUndefined();
+        expect(flat.cells).toBeGreaterThan(r.cells);
+        // a smooth bulge of the same depth (photogrammetry on glass) slopes through every depth between: no step, nothing kept
+        const bulge = latticeFacade(f, photo(), facadeSamples(scan(), f), undefined, undefined, true, fitted, undefined, undefined, facadeSamples(soupOf((sv, tv) => (inBand(tv) ? -0.8 * Math.sin((Math.PI * (sv % 4)) / 4) ** 2 : isWindow(sv, tv) ? -0.25 : 0)), f))!;
+        expect(bulge.scanKept).toBeUndefined();
+    });
+
     it('recesses the fitted windows by a depth read from Street View when one is given, never shallower than the scan', () => {
         const fitted: Array<[number, number, number, number]> = [[0.9, 0.7, 2.1, 2.3], [3.9, 0.7, 5.1, 2.3], [6.9, 0.7, 8.1, 2.3]];
         const read = latticeFacade(f, photo(), facadeSamples(scan(), f), undefined, undefined, true, fitted, 0.5)!;
@@ -374,6 +417,43 @@ describe('facades on their photo lattice', () => {
         expect(liveCovered).toBe(0);
         expect(out.tears.left).toBe(0);
         expect(out.tears.droppedFacades).toEqual([]);
+    });
+
+    it("builds a row's end cells at their own scan depth where the wall turns away behind the plane (a prow, a corner), but not an end window", () => {
+        // the wall curves inward over its last 1.5 m (s > 10.5): 0 to 1 m behind the plane; windows as in the photo
+        let seed = 3;
+        const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 0.06;
+        const out: number[] = [];
+        const z = (sv: number, tv: number) => (sv > 10.5 ? -((sv - 10.5) / 1.5) : isWindow(sv, tv) ? -0.25 : 0) + rnd();
+        for (let sv = 0; sv < 12; sv += 0.25) for (let tv = 0; tv < 9; tv += 0.25) {
+            const a = [sv, tv, z(sv, tv)], b = [sv + 0.25, tv, z(sv + 0.25, tv)], c = [sv + 0.25, tv + 0.25, z(sv + 0.25, tv + 0.25)], d = [sv, tv + 0.25, z(sv, tv + 0.25)];
+            out.push(...a, ...b, ...c, ...a, ...c, ...d);
+        }
+        const r = latticeFacade(f, photo(), facadeSamples(Float32Array.from(out), f))!;
+        const ns = r.s.length - 1;
+        // the last column (its cell past s 10.5) is built, at its own scan depth, well behind the plane; the first column on it
+        for (let b = 0; b < r.t.length - 1; b++) { if (r.s[ns] - r.s[ns - 1] > 0.5) { expect(r.built[b * ns + ns - 1]).toBe(1); expect(r.depth[b][ns - 1]).toBeLessThan(-0.3); } expect(r.built[b * ns]).toBe(1); expect(Math.abs(r.depth[b][0])).toBeLessThan(0.1); }
+        const flat = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
+        expect(Math.abs(flat.depth[0][flat.s.length - 2])).toBeLessThan(0.1);
+    });
+
+    it('removes a scan sliver standing across a rebuilt cell (a reveal or a fin side), whichever way the claim faces, and leaves one outside the rebuild', () => {
+        const front = scan();
+        const r = latticeFacade(f, photo(), facadeSamples(front, f))!;
+        // two slivers perpendicular to the wall, 0.4 m deep and a metre tall: one inside a rebuilt cell (s 4.5), one past the rectangle (s -1)
+        const sliver = (sv: number): number[] => [sv, 4, 0, sv, 5, 0, sv, 5, -0.4, sv, 4, 0, sv, 5, -0.4, sv, 4, -0.4];
+        const extra = [...sliver(4.5), ...sliver(-1)];
+        const soup = new Float32Array(front.length + extra.length); soup.set(front); soup.set(extra, front.length);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-'));
+        const file = path.join(dir, 'clay.glb');
+        writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
+        for (const sameFacing of [false, true]) {
+            const t = readGlbTriangles(applyFacadeLattices(fs.readFileSync(file), [{ f, r }], false, undefined, { sameFacing }).glb);
+            const gone = (k: number) => t.indices[k * 3] === t.indices[k * 3 + 1] && t.indices[k * 3 + 1] === t.indices[k * 3 + 2];
+            const first = front.length / 9;
+            expect(gone(first)).toBe(true); expect(gone(first + 1)).toBe(true);
+            expect(gone(first + 2)).toBe(false); expect(gone(first + 3)).toBe(false);
+        }
     });
 
     it('with sameFacing, keeps the scan of a thin wall\'s other side lying in the rebuilt cells', () => {
@@ -583,6 +663,62 @@ describe('facades on their photo lattice', () => {
         expect(out.removed).toBe(2);
         expect(out.tears.left).toBe(0);
         expect(out.tears.droppedFacades).toEqual([]);
+    });
+
+    it('measures scan standing proud of the rebuilt surface, and removes it only where the rebuilt cells cover its footprint', () => {
+        // the photo's right third uncovered: the cells there stay scan; the wall as storey-long whole triangles reaching past them
+        const img = photo();
+        for (let y = 0; y < H; y++) for (let x = 80; x < W; x++) img.rgba.set([128, 128, 128, 255], (y * W + x) * 4);
+        const pos: number[] = [];
+        for (let t = 0; t < 9; t += 3) pos.push(0, t, 0, 12, t, 0, 12, t + 3, 0, 0, t, 0, 12, t + 3, 0, 0, t + 3, 0);
+        const soup = Float32Array.from(pos);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lattice-proud-'));
+        try {
+            fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify({ facades: [f] }));
+            fs.writeFileSync(path.join(dir, f.image), encodePng(W, H, img.rgba, 4));
+            const file = path.join(dir, 'clay.glb');
+            writeStagedGlbFile(file, [{ name: 'scan', positions: soup, indices: Uint32Array.from({ length: soup.length / 3 }, (_, i) => i) }], {});
+            // the windows recessed as the photo shows them (the scan here is flat): 0.15 to 0.25 m, past the tolerance
+            const whole = rebuildFacadesOnLattice(fs.readFileSync(file), undefined, dir, undefined, undefined, { photoRecess: true });
+            const p = whole.stats.proud!;
+            // the windows are recessed and the whole triangles lie on the plane over them: proud by more than the tolerance
+            // (restoreFrontM plus the chamfer), over about eight metres of wall with 1.2 x 1.6 m windows every 3 m on three storeys
+            expect(p.tolM).toBeCloseTo(0.10, 6);
+            expect(p.m2).toBeGreaterThan(8);
+            expect(p.m2).toBeLessThan(8 * 9);
+            expect(p.obliqueM2).toBeGreaterThan(0);
+            // nothing is removed: every triangle reaches past the rebuilt cells, into the third left as scan
+            expect(p.removedTriangles).toBe(0);
+            expect(p.afterM2).toBe(p.m2);
+            expect(whole.stats.removedTriangles).toBe(0);
+            // the measure is in the rebuilt facade's extras too, labelled measured
+            const node = parseGlbBytes(whole.clay).json.nodes.find((n: any) => n.extras?.sbFacadeLattice);
+            expect(node.extras.sbFacadeLattice.proud).toMatchObject({ m2: p.m2, afterM2: p.afterM2, tolM: p.tolM, label: 'measured' });
+            // the cut (pipeline K) splits the wall at the cells' lines, so the pieces over the recessed windows go and little stands proud
+            const cut = rebuildFacadesOnLattice(fs.readFileSync(file), undefined, dir, undefined, undefined, { cut: true, photoRecess: true });
+            expect(cut.stats.proud!.afterM2).toBeLessThan(p.m2 * 0.25);
+            expect(cut.stats.tears.left).toBe(0);
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+
+    it('a proud triangle the rebuilt cells cover is removed, and put back where that opens a tear, so the removal opens nothing', () => {
+        // the torn rebuild over the coarse wall: the audit puts the two whole triangles back over the hole, in front of the rebuild;
+        // the proud audit then sees them proud, removes them (the cells cover them whole), the hole reopens, and they come back
+        const r = latticeFacade(f, photo(), facadeSamples(scan(), f))!;
+        const keep: number[] = [];
+        for (let q = 0; q < r.indices.length; q += 3) if (Math.max(...[0, 1, 2].map(j => r.positions[r.indices[q + j] * 3])) <= 6) keep.push(r.indices[q], r.indices[q + 1], r.indices[q + 2]);
+        const torn = { ...r, built: new Uint8Array(r.built.length).fill(1), indices: Uint32Array.from(keep) };
+        const out = applyFacadeLattices(glbOf(coarse), [{ f, r: torn }], false);
+        expect(out.tears.restoredInFront).toBeGreaterThan(0);
+        expect(out.proud.m2).toBeGreaterThan(0);
+        expect(out.proud.removedTriangles).toBeGreaterThan(0);
+        expect(out.proud.restoredTriangles).toBe(out.proud.removedTriangles);
+        expect(out.proud.afterM2).toBe(out.proud.m2);
+        expect(out.tears.left).toBe(0);
+        expect(out.tears.droppedFacades).toEqual([]);
+        // the scan's two triangles are live at the end
+        const t = readGlbTriangles(out.glb);
+        expect([0, 3].filter(i => !(t.indices[i] === t.indices[i + 1] && t.indices[i + 1] === t.indices[i + 2])).length).toBe(2);
     });
 
     it('puts the scan back over a hole seen straight on even where it stands in front of the rebuild, and counts it', () => {

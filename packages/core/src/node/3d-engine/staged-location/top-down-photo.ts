@@ -45,14 +45,19 @@ export function topDownCamera(frame: TopDownFrame, topY: number, texelM: number)
     };
 }
 
-/** Renders the tile (GLB bytes or its triangles) over `frame`. `maxPx` caps each side: the texel grows to fit. */
-export function renderTopDownPhoto(tile: Uint8Array | TileTriangles, frame: TopDownFrame, opts: { texelM?: number; maxPx?: number } = {}): TopDownPhoto {
+/**
+ * Renders the tile (GLB bytes or its triangles) over `frame`. `maxPx` caps each side: the texel grows to fit. The photo's
+ * scale is exact at `referenceY` (default the tile's highest point); a surface Δ below it is drawn Δ / 3 km small toward
+ * the frame's centre, so a photo of the ground beside a 230 m tower passes the ground's own level (7 % off at the default).
+ */
+export function renderTopDownPhoto(tile: Uint8Array | TileTriangles, frame: TopDownFrame, opts: { texelM?: number; maxPx?: number; referenceY?: number } = {}): TopDownPhoto {
     const tris = tile instanceof Uint8Array ? readTileTriangles(tile) : tile;
     const maxPx = opts.maxPx ?? 4096;
     let texelM = opts.texelM ?? 0.1;
     texelM = Math.max(texelM, frame.widthM / maxPx, frame.heightM / maxPx);
     let topY = -Infinity;
-    for (let i = 1; i < tris.positions.length; i += 3) topY = Math.max(topY, tris.positions[i]);
+    if (opts.referenceY !== undefined && Number.isFinite(opts.referenceY)) topY = opts.referenceY;
+    else for (let i = 1; i < tris.positions.length; i += 3) topY = Math.max(topY, tris.positions[i]);
     if (topY === -Infinity) topY = 0;
     const camera = topDownCamera(frame, topY, texelM);
     const r = renderTriangles([tris], camera, { supersample: 1, ambient: 1, background: [128, 128, 128] });

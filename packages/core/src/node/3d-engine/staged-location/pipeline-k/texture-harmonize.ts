@@ -297,6 +297,27 @@ function fieldWeights(f: Field, u: number, v: number): [number[], number[]] {
     return [[at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1)], [(1 - a) * (1 - b), a * (1 - b), (1 - a) * b, a * b]];
 }
 
+/**
+ * Keys for n integer tuples of `width` (fill(i, out) writes tuple i): equal keys for equal tuples, in any Map in the same
+ * order. A number (mixed radix over the tuples' own ranges) when every key fits in a double's exact integers, else a string.
+ */
+function tupleKeys(n: number, fill: (i: number, out: number[]) => void, width: number): (i: number) => number | string {
+    const t = new Array<number>(width).fill(0), lo = new Array<number>(width).fill(Infinity), hi = new Array<number>(width).fill(-Infinity);
+    for (let i = 0; i < n; i++) {
+        fill(i, t);
+        for (let q = 0; q < width; q++) { lo[q] = Math.min(lo[q], t[q]); hi[q] = Math.max(hi[q], t[q]); }
+    }
+    let span = 1;
+    for (let q = 0; q < width; q++) span *= hi[q] - lo[q] + 1;
+    if (!(span <= Number.MAX_SAFE_INTEGER)) return i => { fill(i, t); return t.join(','); };
+    return i => {
+        fill(i, t);
+        let k = 0;
+        for (let q = 0; q < width; q++) k = k * (hi[q] - lo[q] + 1) + (t[q] - lo[q]);
+        return k;
+    };
+}
+
 /** About this many bytes of pixels go to the native apply at a time (the request, the reply and the copies stay bounded). */
 const NATIVE_BATCH_BYTES = 256 * 1024 * 1024;
 
@@ -339,19 +360,24 @@ export function harmonizeTextures(g: ParsedGlb, json: any, images: Map<number, R
     phase('samples');
     const report: TextureHarmonizeReport = { images: images.size, samples: samples.length, groups: 0, roofs: { roofM2: Math.round(areas.roofM2), hiddenM2: Math.round(areas.hiddenM2), roofGains: 0 }, gains: { meanAbsLog: 0, maxAbsLog: 0 }, seams: { pairs: 0, before: 0, afterMatch: 0, after: 0 }, kept: false, why: '', ms: 0 };
     if (samples.length < 100 || images.size < 2) { report.why = 'fewer than two photos or too few samples: nothing to harmonise'; report.ms = Date.now() - t0; return report; }
-    // 2. groups and their references
-    const groupOf = (s: Sample) => {
-        const band = Math.floor((s.y - groundY) / P.bandM), b = opts.buildingOf ? `b${opts.buildingOf(s.x, s.z)}:` : '';
-        if (s.ny > P.flatNy) return `${b}up:${band}`;
-        if (s.ny < -P.flatNy) return `${b}down:${band}`;
-        const az = Math.atan2(s.nx, s.nz), bin = ((Math.round((az / (2 * Math.PI)) * P.sideBins) % P.sideBins) + P.sideBins) % P.sideBins;
-        return `${b}side${bin}:${band}`;
+    // a district: each sample's building, looked up once for the groups and the seam patches both
+    const building = opts.buildingOf ? Int32Array.from(samples, s => opts.buildingOf!(s.x, s.z)) : undefined;
+    // 2. groups and their references; a group is (building, facing: side bin, then up and down, height band)
+    const facingOf = (s: Sample) => {
+        if (s.ny > P.flatNy) return P.sideBins;
+        if (s.ny < -P.flatNy) return P.sideBins + 1;
+        const az = Math.atan2(s.nx, s.nz);
+        return ((Math.round((az / (2 * Math.PI)) * P.sideBins) % P.sideBins) + P.sideBins) % P.sideBins;
     };
+    const groupKey = tupleKeys(samples.length, (i, out) => {
+        const s = samples[i];
+        out[0] = building ? building[i] : 0; out[1] = facingOf(s); out[2] = Math.floor((s.y - groundY) / P.bandM);
+    }, 3);
     // a photo's roof and the rest of it are matched apart: one gain each (key gainKey; the photo is key >> 1)
     const gainKey = (s: Sample) => s.img * 2 + (s.roof ? 1 : 0);
-    const stats = new Map<string, Map<number, { w: number; c: [number, number, number] }>>();
-    for (const s of samples) {
-        const k = groupOf(s);
+    const stats = new Map<number | string, Map<number, { w: number; c: [number, number, number] }>>();
+    for (let i = 0; i < samples.length; i++) {
+        const s = samples[i], k = groupKey(i);
         let m = stats.get(k); if (!m) stats.set(k, (m = new Map()));
         let e = m.get(gainKey(s)); if (!e) m.set(gainKey(s), (e = { w: 0, c: [0, 0, 0] }));
         e.w += s.w; for (let c = 0; c < 3; c++) e.c[c] += s.w * s.c[c];
@@ -379,11 +405,15 @@ export function harmonizeTextures(g: ParsedGlb, json: any, images: Map<number, R
     report.gains = { meanAbsLog: gain.size ? +(sumAbs / (3 * gain.size)).toFixed(4) : 0, maxAbsLog: +maxAbs.toFixed(4) };
     phase('gains');
     // 3. seam patches: per cell of space and facing, the mean colour and UV of each photo there; a patch two photos share is a seam
-    const facingBin = (s: Sample) => (s.ny > P.flatNy ? 'u' : s.ny < -P.flatNy ? 'd' : String(((Math.round((Math.atan2(s.nx, s.nz) / (2 * Math.PI)) * P.seamFacingBins) % P.seamFacingBins) + P.seamFacingBins) % P.seamFacingBins));
-    const patches = new Map<string, Map<number, { w: number; c: [number, number, number]; u: number; v: number }>>();
-    for (const s of samples) {
-        // a district: two buildings meeting flush are never levelled into each other
-        const k = `${opts.buildingOf ? `b${opts.buildingOf(s.x, s.z)}:` : ''}${Math.floor(s.x / P.seamM)},${Math.floor(s.y / P.seamM)},${Math.floor(s.z / P.seamM)},${facingBin(s)}`;
+    const facingBin = (s: Sample) => (s.ny > P.flatNy ? P.seamFacingBins : s.ny < -P.flatNy ? P.seamFacingBins + 1 : ((Math.round((Math.atan2(s.nx, s.nz) / (2 * Math.PI)) * P.seamFacingBins) % P.seamFacingBins) + P.seamFacingBins) % P.seamFacingBins);
+    // a district: two buildings meeting flush are never levelled into each other (the building is part of the patch)
+    const patchKey = tupleKeys(samples.length, (i, out) => {
+        const s = samples[i];
+        out[0] = building ? building[i] : 0; out[1] = Math.floor(s.x / P.seamM); out[2] = Math.floor(s.y / P.seamM); out[3] = Math.floor(s.z / P.seamM); out[4] = facingBin(s);
+    }, 5);
+    const patches = new Map<number | string, Map<number, { w: number; c: [number, number, number]; u: number; v: number }>>();
+    for (let i = 0; i < samples.length; i++) {
+        const s = samples[i], k = patchKey(i);
         let m = patches.get(k); if (!m) patches.set(k, (m = new Map()));
         let e = m.get(gainKey(s)); if (!e) m.set(gainKey(s), (e = { w: 0, c: [0, 0, 0], u: 0, v: 0 }));
         e.w += s.w; e.u += s.w * s.u; e.v += s.w * s.v; for (let c = 0; c < 3; c++) e.c[c] += s.w * s.c[c];

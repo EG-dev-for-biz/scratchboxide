@@ -29,8 +29,10 @@ export const VIRTUAL_GEOMETRY_BUILDER_SOURCE = `
 using namespace scratchbox::vgeo;
 
 int main(int argc, char** argv) {
-    if (argc < 3) { std::fprintf(stderr, "usage: sbvg_builder <input.glb> <output.sbvg> [atlas stem]\\n"); return 2; }
+    if (argc < 3) { std::fprintf(stderr, "usage: sbvg_builder <input.glb> <output.sbvg> [atlas stem] [--single-level]\\n"); return 2; }
     const std::string atlasStem = argc > 3 ? argv[3] : "";
+    // --single-level: the leaf clusters only (no simplified levels, no atlases), for geometry traced whole.
+    const bool singleLevel = argc > 4 && std::string(argv[4]) == "--single-level";
     try {
         auto t0 = std::chrono::steady_clock::now();
         SourceMesh src = GlbSceneLoader::loadFile(argv[1]);
@@ -41,7 +43,7 @@ int main(int argc, char** argv) {
         scratchbox::gltf::GltfScene scene;
         RetextureOptions retex;
         const RetextureOptions* retexPtr = nullptr;
-        if (mesh.materialCount > 0) {
+        if (mesh.materialCount > 0 && !singleLevel) {
             scene = scratchbox::gltf::GlbSceneReader::readFile(argv[1]);
             if (!scene.ok) throw std::runtime_error("materials: " + scene.error);
             retex.sampleLevel0 = [&scene](uint32_t material, const F2& uv) {
@@ -54,13 +56,24 @@ int main(int argc, char** argv) {
                 }
                 return base;
             };
+            retex.sampleEmissionLevel0 = [&scene](uint32_t material, const F2& uv) {
+                if (material >= scene.materials.size()) return F3(0, 0, 0);
+                const auto& m = scene.materials[material];
+                F3 e(m.emissiveFactor.x, m.emissiveFactor.y, m.emissiveFactor.z);
+                if (e.x <= 0.0f && e.y <= 0.0f && e.z <= 0.0f) return F3(0, 0, 0);
+                if (m.emissiveImage >= 0 && m.emissiveImage < static_cast<int>(scene.images.size()) && scene.images[static_cast<size_t>(m.emissiveImage)].decoded) {
+                    const F3 t = retex::sampleImageLinear(scene.images[static_cast<size_t>(m.emissiveImage)].pixels, uv, m.emissiveWrapS, m.emissiveWrapT);
+                    e = F3(e.x * t.x, e.y * t.y, e.z * t.z);
+                }
+                return e;
+            };
             retex.bake = retex::bakeAtlas;
             for (const auto& m : scene.materials) retex.materialFactors.push_back({m.metallicFactor, m.roughnessFactor});
             retex.minTexelWorld = retex::sourceTexelWorld(mesh, scene);
             retex.maxAtlasSize = 4096;
             retexPtr = &retex;
         }
-        ClusterDag dag = buildClusterDag(std::move(mesh), 24, retexPtr);
+        ClusterDag dag = buildClusterDag(std::move(mesh), singleLevel ? 1 : 24, retexPtr);
         auto t2 = std::chrono::steady_clock::now();
         SbvgSummary s = writeSbvg(dag, argv[2], src.skippedPrimitives, atlasStem);
         auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
@@ -152,6 +165,11 @@ export interface ServedVirtualGeometry {
 
 export interface VirtualGeometryBuildOptions {
     timeoutMs?: number;
+    /**
+     * Only the leaf clusters: no simplified levels and no re-textured atlases. For geometry a path tracer traces
+     * whole (a viewport snapshot), where the LOD pyramid costs most of the build and nothing reads it.
+     */
+    singleLevel?: boolean;
     /** Aborting kills the builder process; the call rejects with an AbortError. */
     signal?: AbortSignal;
 }
@@ -216,7 +234,7 @@ function envNumber(name: string): number | undefined {
  * than maxAgeMs go, then the least recently used until the directory is within maxBytes; nothing used within
  * minIdleMs is removed. Temp files of builds that are no longer running go after a day.
  */
-/** The atlas PNGs written next to an .sbvg (`<stem>.atlas<level>.png`), whether or not they exist. */
+/** The atlas PNGs written next to an .sbvg (`<stem>.atlas<level>.png`, `.normal<level>`, `.emission<level>`), whether or not they exist. */
 export function atlasSiblings(sbvgPath: string): string[] {
     const dir = path.dirname(sbvgPath);
     const stem = path.basename(sbvgPath, '.sbvg');
@@ -226,7 +244,7 @@ export function atlasSiblings(sbvgPath: string): string[] {
     } catch {
         return [];
     }
-    const re = new RegExp(`^${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(atlas|normal)\\d+\\.png$`);
+    const re = new RegExp(`^${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(atlas|normal|emission)\\d+\\.png$`);
     return names.filter(n => re.test(n)).map(n => path.join(dir, n));
 }
 
@@ -368,7 +386,7 @@ export class VirtualGeometryBuildService {
         const start = Date.now();
         try {
             const stdout = await new Promise<string>((resolve, reject) => {
-                execFile(binary, [inputGlbPath, tmp, atlasStem], { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, signal, killSignal: 'SIGKILL' }, (err, out, stderr) => {
+                execFile(binary, [inputGlbPath, tmp, atlasStem, ...(options.singleLevel ? ['--single-level'] : [])], { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, signal, killSignal: 'SIGKILL' }, (err, out, stderr) => {
                     if (err) {
                         (err as any).stderr = stderr;
                         reject(err);
@@ -411,7 +429,7 @@ export class VirtualGeometryBuildService {
         if (!fs.existsSync(inputGlbPath)) throw new VirtualGeometryBuildError(`Input GLB not found: ${inputGlbPath}`);
         const { signal } = options;
         if (signal?.aborted) throw abortError();
-        const key = `${this.contentHash(inputGlbPath)}-${this.builderHash()}`;
+        const key = `${this.contentHash(inputGlbPath)}-${this.builderHash()}${options.singleLevel ? '-leaves' : ''}`;
         const name = `${key}.sbvg`;
         const sbvgPath = path.join(this.serveDir(), name);
         const sbvgUrl = `${VIRTUAL_GEOMETRY_URL_PREFIX}/${name}`;
@@ -427,7 +445,7 @@ export class VirtualGeometryBuildService {
         let job = this.served.get(key);
         if (!job) {
             const controller = new AbortController();
-            const promise = this.build(inputGlbPath, sbvgPath, { timeoutMs: options.timeoutMs, signal: controller.signal })
+            const promise = this.build(inputGlbPath, sbvgPath, { timeoutMs: options.timeoutMs, signal: controller.signal, singleLevel: options.singleLevel })
                 .then(r => ({ sbvgUrl, sbvgPath, cached: false, summary: summaryFromFile(sbvgPath), stats: r.stats, buildMs: r.buildMs }));
             const created: SharedJob = { promise, controller, waiters: 0 };
             job = created;

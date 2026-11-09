@@ -13,6 +13,8 @@ import * as path from 'path';
 import type { SymbolKind } from '../../../common/context-graph-protocol';
 import { resolveWithinRoot, PathTraversalError } from '../../security/path-guard';
 import { stagedWorkspaceRoot } from '../../3d-engine/staged-location/stage-cache';
+import { SandboxCommandRejectedError } from '../../security/sandbox-policy';
+import { GENERATED_IMAGES_DIR, GENERATED_IMAGES_ROUTE, resolveRepoRoot } from './nano-banana-tools';
 import type { ToolDeclaration, ToolHandler, ToolContext, ToolHandlerOutcome } from './types';
 
 export const IGNORED_DIRS = [
@@ -100,10 +102,32 @@ function isProjectKnowledgePath(filePath: string): boolean {
     return i >= 0 && segments[i + 1] === 'knowledge' && !segments.includes('..');
 }
 
+/**
+ * The app's own generated pictures (generate_image, vfx_segment_subject and the decal tools write under
+ * GENERATED_IMAGES_DIR, inside the protected build/ folder): the file a path names there, given as written in a tool
+ * result (absolute, relative to the repository, or as the app's URL), else undefined. Read-only: writes never come here.
+ */
+export function generatedImagePath(filePath: string, repoRoot: string = resolveRepoRoot()): string | undefined {
+    if (!filePath) return undefined;
+    const dir = path.resolve(repoRoot, GENERATED_IMAGES_DIR);
+    const slashed = filePath.replace(/\\/g, '/');
+    const candidate = slashed.startsWith(GENERATED_IMAGES_ROUTE)
+        ? path.join(dir, slashed.slice(GENERATED_IMAGES_ROUTE.length))
+        : path.isAbsolute(filePath) ? filePath : path.resolve(repoRoot, slashed.replace(/^\.\//, ''));
+    try {
+        const resolved = resolveWithinRoot(dir, candidate);
+        // the folder itself names no picture (both sides canonical: /tmp and /private/tmp are one folder)
+        return resolved === resolveWithinRoot(dir, '.') ? undefined : resolved;
+    } catch (err) {
+        if (err instanceof PathTraversalError) return undefined;
+        throw err;
+    }
+}
+
 const READ_OPERATIONS = new Set(['read', 'view', 'list directory']);
 
 export function assertSafeWorkspacePath(filePath: string, operation: string): void {
-    if (READ_OPERATIONS.has(operation) && isProjectKnowledgePath(filePath)) return;
+    if (READ_OPERATIONS.has(operation) && (isProjectKnowledgePath(filePath) || generatedImagePath(filePath))) return;
     if (isProtectedInternalPath(filePath)) {
         throw new Error(
             `Scratchbox Sandbox Protection: Access denied for ${operation} on internal IDE runtime path "${filePath}". ` +
@@ -111,6 +135,13 @@ export function assertSafeWorkspacePath(filePath: string, operation: string): vo
             `To render interactive 3D scenes, live code sandboxes, or kanban boards, use the declarative "mount_canvas_primitive" tool.`
         );
     }
+}
+
+/** What the model can do instead when the command sandbox refuses a command, by the refusal's reason. */
+export function sandboxRefusalNextStep(reason: string | undefined): string {
+    if (reason === 'inline_code') return 'Write the code to a script file with workspace_write_file and run that file (e.g. python3 scripts/task.py); inline code needs the user\'s confirmation.';
+    if (reason === 'not_allowlisted') return 'That command is not available here: use a dedicated tool instead (load_tools lists them; the vfx_ffmpeg_* tools run ffmpeg).';
+    return '';
 }
 
 const asString = (value: unknown, fallback = ''): string => (typeof value === 'string' ? value : fallback);
@@ -143,6 +174,9 @@ function resolveInRoot(root: string, rel: string): string {
  * workspaceRoot, through the ordinary resolveInRoot).
  */
 function resolveReadPath(ctx: Pick<ToolContext, 'workspaceRoot'>, rel: string): string {
+    // the app's own generated pictures live under the repository, whichever project folder the chat has open
+    const generated = generatedImagePath(rel);
+    if (generated) return generated;
     if (path.isAbsolute(rel)) {
         try {
             return resolveWithinRoot(path.join(stagedWorkspaceRoot(), 'public'), rel);
@@ -191,7 +225,7 @@ export const WORKSPACE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'workspace_view_image',
-        description: 'Look at an image file in the workspace (PNG, JPEG or WebP): it is shown to you after this call, so you can judge it yourself, e.g. a survey photograph, a wall plate or a render of your own build to compare with them. Paths come from a tool result or the user. Up to 8 images per turn are shown.',
+        description: `Look at an image file in the workspace (PNG, JPEG or WebP): it is shown to you after this call, so you can judge it yourself, e.g. a survey photograph, a wall plate, a render of your own build to compare with them, or a picture, mask or matte a tool generated (under ${GENERATED_IMAGES_DIR}, as the tool's result names it). Paths come from a tool result or the user. Up to 8 images per turn are shown.`,
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -286,7 +320,7 @@ export const WORKSPACE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'workspace_run_command',
-        description: 'Execute a terminal or build command in the workspace safely inside the sandbox.',
+        description: 'Execute a terminal or build command in the workspace safely inside the sandbox. Only allowlisted commands run, and interpreters run script files, not inline code (python -c, node -e): write the code to a file with workspace_write_file and run the file. For media work use the dedicated tools (the vfx_ffmpeg_* tools run ffmpeg).',
         parameters: {
             type: 'OBJECT',
             properties: {
@@ -675,12 +709,19 @@ export const workspaceHandlers: Record<string, ToolHandler> = {
             timeoutMs
         });
 
-        const res = await ctx.sandbox.executeCommand(envId, {
-            command: cmd,
-            cwd: cwdArg ? resolveInRoot(root, cwdArg) : root,
-            timeoutMs,
-            signal: ctx.signal
-        });
+        let res: Awaited<ReturnType<typeof ctx.sandbox.executeCommand>>;
+        try {
+            res = await ctx.sandbox.executeCommand(envId, {
+                command: cmd,
+                cwd: cwdArg ? resolveInRoot(root, cwdArg) : root,
+                timeoutMs,
+                signal: ctx.signal
+            });
+        } catch (err) {
+            // a refusal says what to do instead, so the model does not retry the same form or improvise around it
+            if (err instanceof SandboxCommandRejectedError) throw new Error(`${err.message}. ${sandboxRefusalNextStep(err.reason)}`.trim());
+            throw err;
+        }
 
         return {
             resultPayload: {

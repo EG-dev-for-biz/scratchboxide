@@ -1274,6 +1274,8 @@ export interface Scene3DData {
         active?: boolean;
     };
     vectorRoadmap?: VectorRoadmapConfig;
+    /** The viewport's Map data view: blob groups, Google vector map data and the roadmap over the scene (common/spatial/map-data-view.ts). */
+    mapDataView?: import('../../common/spatial/map-data-view').MapDataViewConfig;
     wasmPhysics?: {
         waveActive?: boolean;
         deformFactor?: number;
@@ -1382,6 +1384,8 @@ export interface Scene3DData {
         };
         atmosphericScattering?: boolean | {
             enabled?: boolean;
+            /** The clear-sky model: 'multiple-scattering' (native, set by the scene weather), else the spectral sky (atmosphere-types.ts). */
+            skyModel?: 'multiple-scattering';
             rayleigh?: number;
             mie?: number;
             turbidity?: number;
@@ -1414,6 +1418,9 @@ export interface Scene3DData {
             cloudShadowScale?: number;
             atmosphereShadowLength?: number;
             windVector?: [number, number];
+            /** Set when the weather wrote this sky (scene-weather.ts): its version, the sun's source, and whether cloud
+             *  shadows were requested on it (cloudShadowsRequested). */
+            weather?: { version: string; sun?: string; cloudShadows?: boolean };
         };
         contrails?: boolean | {
             enabled?: boolean;

@@ -44,7 +44,7 @@
  * borders, and each such level has one material of its own, appended after the glTF materials, whose
  * base colour is an atlas PNG written next to the file (atlas table at the end, version 4).
  *
- * Layout (little-endian, 4-byte words), version 5:
+ * Layout (little-endian, 4-byte words), version 6:
  *   header (128 bytes)          see writeSbvg (word 24: skipped non-triangle primitives,
  *                               word 25: dropped degenerate triangles, word 26: glTF material count,
  *                               word 27: atlas count, words 28-29: atlas table byte offset,
@@ -62,7 +62,9 @@
  *     materials  triCount u32             (glTF material index, a level atlas material, or 0xFFFFFFFF; version 3+)
  *   atlas table (version 4+), per atlas: level, material id, width, height, metallic f32, roughness f32,
  *                               name length, name bytes padded to 4; version 5 adds the normal atlas's
- *                               name the same way (length 0 when the level has none)
+ *                               name the same way (length 0 when the level has none); version 6 adds
+                               the emission atlas's name the same way and its scale (f32: the atlas
+                               holds emitted radiance over that peak, sRGB-encoded; 0 when it emits nothing)
  */
 
 #include "scratchbox_texture.hpp"
@@ -97,7 +99,7 @@ constexpr uint32_t kGroupTriangles = kGroupSize * kMaxClusterTriangles;
 /** Clusters a group may hold, growing to its triangle budget or after stuck groups have merged into it. */
 constexpr uint32_t kMaxMergedGroupSize = 4 * kGroupSize;
 constexpr uint32_t kSbvgMagic = 0x47564253; // 'SBVG'
-constexpr uint32_t kSbvgVersion = 5;
+constexpr uint32_t kSbvgVersion = 6;
 constexpr uint32_t kSbvgHeaderBytes = 128;
 constexpr uint32_t kSbvgLevelWords = 16;
 constexpr uint32_t kSbvgClusterWords = 32;
@@ -659,7 +661,10 @@ inline bool sameUv(const F2& a, const F2& b) {
 }
 
 /**
- * Vertices weld by exact position, so the mesh is watertight for clustering and simplification.
+ * Vertices weld by exact position, so the mesh is watertight for clustering and simplification; then the
+ * positions on an open edge (an edge with one triangle) within kOutlineWeldM of each other weld too. A
+ * Pipeline K twin is built of separate facade pieces whose outlines meet within millimetres without sharing
+ * vertices; simplified apart, their seams open into cracks that show the inner layers through the facade.
  * A triangle corner keeps its own uv (cornerUv) and every triangle its glTF material: UV seams and
  * material borders are attributes on the position mesh, not splits in it. Normals are area-weighted
  * per position.
@@ -678,6 +683,11 @@ struct WeldedMesh {
     uint32_t sourceTriangles{0};
     uint32_t droppedDegenerate{0};
 };
+
+/** Open-edge positions within this distance (metres) weld into one (see WeldedMesh). Measured 2026-11-07 on the
+ * ESB and 30 Rock Pipeline K twins at DAG level 3: holes 1,458 -> 276 and 896 -> 193 px, stray texels 6,304 -> 268
+ * and 2,197 -> 694; 3 cm opened larger errors on 30 Rock. */
+constexpr float kOutlineWeldM = 0.01f;
 
 inline WeldedMesh weld(const SourceMesh& src) {
     WeldedMesh out;
@@ -717,6 +727,52 @@ inline WeldedMesh weld(const SourceMesh& src) {
         } else {
             remap[i] = it->second;
         }
+    }
+
+    // Outline weld: each position on an open edge takes the nearest earlier open-edge position within
+    // kOutlineWeldM (searched over the 27 grid cells around it); positions nothing uses any more are dropped.
+    {
+        std::unordered_map<uint64_t, uint32_t> edgeUse;
+        edgeUse.reserve(src.indices.size());
+        auto edgeKey = [](uint32_t a, uint32_t b) { return a < b ? (uint64_t(a) << 32 | b) : (uint64_t(b) << 32 | a); };
+        for (size_t t = 0; t + 2 < src.indices.size(); t += 3) {
+            const uint32_t c[3] = { remap[src.indices[t]], remap[src.indices[t + 1]], remap[src.indices[t + 2]] };
+            if (c[0] == c[1] || c[1] == c[2] || c[0] == c[2]) continue;
+            for (int k = 0; k < 3; ++k) edgeUse[edgeKey(c[k], c[(k + 1) % 3])]++;
+        }
+        std::vector<uint8_t> outline(welded.size(), 0);
+        for (const auto& [k, n] : edgeUse) if (n == 1) { outline[k >> 32] = 1; outline[k & 0xffffffffu] = 1; }
+        std::vector<uint32_t> joined(welded.size());
+        for (uint32_t v = 0; v < joined.size(); ++v) joined[v] = v;
+        std::unordered_map<Key, std::vector<uint32_t>, KeyHash> cells;
+        auto cellOf = [](float x) { return static_cast<uint32_t>(static_cast<int32_t>(std::floor(x / kOutlineWeldM))); };
+        for (uint32_t v = 0; v < welded.size(); ++v) {
+            if (!outline[v]) continue;
+            const F3& p = welded[v];
+            const uint32_t cx = cellOf(p.x), cy = cellOf(p.y), cz = cellOf(p.z);
+            uint32_t best = v;
+            float bestD = kOutlineWeldM;
+            for (int dx = -1; dx <= 1; ++dx) for (int dy = -1; dy <= 1; ++dy) for (int dz = -1; dz <= 1; ++dz) {
+                auto it = cells.find(Key{cx + uint32_t(dx), cy + uint32_t(dy), cz + uint32_t(dz)});
+                if (it == cells.end()) continue;
+                for (uint32_t w : it->second) {
+                    const float d = length(welded[w] - p);
+                    if (d <= bestD) { bestD = d; best = w; }
+                }
+            }
+            if (best != v) joined[v] = best;
+            else cells[Key{cx, cy, cz}].push_back(v);
+        }
+        std::vector<uint32_t> compact(welded.size(), std::numeric_limits<uint32_t>::max());
+        std::vector<F3> kept;
+        kept.reserve(welded.size());
+        for (uint32_t v = 0; v < welded.size(); ++v) {
+            if (joined[v] != v) continue;
+            compact[v] = static_cast<uint32_t>(kept.size());
+            kept.push_back(welded[v]);
+        }
+        for (uint32_t& r : remap) r = compact[joined[r]];
+        welded.swap(kept);
     }
 
     F3 mn(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
@@ -838,6 +894,8 @@ struct BakeRequest {
     SourceSampler sample;
     /** Optional: the source's own normal maps (an earlier level's normal atlas); vertex normals otherwise. */
     NormalSampler sampleNormal;
+    /** Optional: the source's emitted radiance (linear); with it the bake also writes an emission atlas. */
+    SourceSampler sampleEmission;
     /** Finest texel worth baking, in world units. */
     float minTexelWorld{0.05f};
     uint32_t maxAtlasSize{8192};
@@ -847,6 +905,9 @@ struct BakeResult {
     AtlasImage atlas;
     /** The finer surface's shading normals in each coarse triangle's tangent frame, glTF normal-map encoded. */
     AtlasImage normal;
+    /** Emitted radiance over emissionScale, sRGB-encoded; empty when nothing the level covers emits. */
+    AtlasImage emission;
+    float emissionScale{0.0f};
     std::vector<F2> cornerUv;   // per coarse corner
     uint32_t cells{0};
     /** Cells shared by two triangles along a common edge. */
@@ -865,6 +926,8 @@ struct BakeResult {
  */
 struct RetextureOptions {
     SourceSampler sampleLevel0;
+    /** Optional: emitted radiance of the glTF materials (factor, strength and texture), so coarse levels keep their emitters. */
+    SourceSampler sampleEmissionLevel0;
     std::function<BakeResult(const BakeRequest&)> bake;
     /** metallic, roughness per glTF material; the level materials take the area-dominant one's. */
     std::vector<std::array<float, 2>> materialFactors;
@@ -877,6 +940,9 @@ struct LevelAtlas {
     uint32_t materialId{0};
     AtlasImage image;
     AtlasImage normal;
+    /** Emitted radiance over emissionScale (empty when the level emits nothing). */
+    AtlasImage emission;
+    float emissionScale{0.0f};
     uint32_t cells{0};
     uint32_t pairedCells{0};
     uint64_t texels{0};
@@ -1371,6 +1437,21 @@ private:
             if (tr[0] == to || tr[1] == to || tr[2] == to) shared++;
         }
         if (shared == 0) return false;
+        // A collapse never leaves fewer than two triangles at the vertex it keeps: it would erase a small piece of
+        // the surface, or shrink it to one triangle, metres from where it was (on the ESB and 30 Rock twins the only
+        // collapses over 1 m RMS were these, 2.7 m and 2.1 m).
+        uint32_t survivors = 0;
+        for (uint32_t end : { from, to }) {
+            for (uint32_t t : vtris_[end]) {
+                if (!triAlive_[t]) continue;
+                const auto& tr = tri_[t];
+                const bool hasFrom = tr[0] == from || tr[1] == from || tr[2] == from;
+                const bool hasTo = tr[0] == to || tr[1] == to || tr[2] == to;
+                if (!(hasFrom && hasTo) && ++survivors >= 2) break;
+            }
+            if (survivors >= 2) break;
+        }
+        if (survivors < 2) return false;
 
         // No triangle around `from` may flip or collapse to a sliver.
         F3 target = pos(to);
@@ -1816,10 +1897,16 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24, cons
             }
             if (level == 0) {
                 request.sample = retex->sampleLevel0;
+                request.sampleEmission = retex->sampleEmissionLevel0;
             } else {
                 const AtlasImage* previous = &dag.atlases.back().image;
                 const AtlasImage* previousNormal = &dag.atlases.back().normal;
                 request.sample = [previous](uint32_t, const F2& uv) { return previous->sampleLinear(uv); };
+                if (dag.atlases.back().emission.width > 0) {
+                    const AtlasImage* previousEmission = &dag.atlases.back().emission;
+                    const float scale = dag.atlases.back().emissionScale;
+                    request.sampleEmission = [previousEmission, scale](uint32_t, const F2& uv) { return previousEmission->sampleLinear(uv) * scale; };
+                }
                 // The previous level's baked normals, decoded in the source triangle's own frame.
                 request.sampleNormal = [previousNormal](uint32_t, const F2& uv, const F3& T, const F3& B, const F3& N, F3& out) {
                     if (previousNormal->width == 0) return false;
@@ -1835,6 +1922,8 @@ inline ClusterDag buildClusterDag(WeldedMesh mesh, uint32_t maxLevels = 24, cons
             atlas.materialId = m.materialCount + static_cast<uint32_t>(dag.atlases.size());
             atlas.image = std::move(baked.atlas);
             atlas.normal = std::move(baked.normal);
+            atlas.emission = std::move(baked.emission);
+            atlas.emissionScale = baked.emissionScale;
             atlas.cells = baked.cells;
             atlas.pairedCells = baked.pairedCells;
             atlas.texels = baked.texels;
@@ -1911,6 +2000,11 @@ inline std::string atlasFileName(const std::string& stem, uint32_t level) {
 }
 
 /** Name of the PNG holding a level's baked normal map: `<stem>.normal<level>.png`. */
+/** Name of the PNG holding a level's emission atlas, next to the .sbvg: `<stem>.emission<level>.png`. */
+inline std::string emissionAtlasFileName(const std::string& stem, uint32_t level) {
+    return stem + ".emission" + std::to_string(level) + ".png";
+}
+
 inline std::string normalAtlasFileName(const std::string& stem, uint32_t level) {
     return stem + ".normal" + std::to_string(level) + ".png";
 }
@@ -2084,6 +2178,16 @@ inline SbvgSummary writeSbvg(const ClusterDag& dag, const std::string& path, uin
         body.push_back(bits);
         putName(name);
         putName(normalName);
+        // Version 6: the emission atlas and the peak it is scaled by (no name and 0 when the level emits nothing).
+        std::string emissionName;
+        if (atlas.emission.width > 0 && atlas.emission.height > 0) {
+            emissionName = emissionAtlasFileName(atlasStem, atlas.level);
+            writePng(atlas.emission, emissionName);
+        }
+        putName(emissionName);
+        const float scale = emissionName.empty() ? 0.0f : atlas.emissionScale;
+        std::memcpy(&bits, &scale, 4);
+        body.push_back(bits);
     }
     words[27] = static_cast<uint32_t>(dag.atlases.size());
     putU64(&words[28], tableOffset);

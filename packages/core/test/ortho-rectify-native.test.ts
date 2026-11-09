@@ -79,6 +79,8 @@ function expectParity(ts: OrthoRectifyResult, nat: OrthoRectifyResult): void {
     if (ts.occluded) expect(countDiff(nat.occluded!, ts.occluded)).toBe(0);
     const { ms: _a, ...rt } = ts.report, { ms: _b, ...rn } = nat.report;
     expect(rn).toEqual(rt);
+    // what was traced (the straightening's overlay), when the native was asked for it: every line, sample and dropped peak
+    if (nat.trace) expect(nat.trace).toEqual(ts.trace);
 }
 
 const P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS;
@@ -97,7 +99,7 @@ describe('native ortho rectify parity', () => {
         smear(img, 120, 100, 160, 400, 0.55);
         const occ = occlusion(img.width, img.height);
         const ts = rectifyOrtho({ ...img, rgba: new Uint8Array(img.rgba) }, bentSpec.px, P, occ.slice());
-        const nat = await rectifyOrthoNative(img, bentSpec.px, P, occ.slice());
+        const nat = await rectifyOrthoNative(img, bentSpec.px, P, occ.slice(), { trace: true });
         // the case exercises what it should
         expect(ts.report.warp.kept).toBe(true);
         expect(ts.report.lines.vertical).toBeGreaterThan(0);
@@ -106,6 +108,8 @@ describe('native ortho rectify parity', () => {
         expect(ts.report.holes.uncovered).toBeGreaterThan(0);
         expect(ts.report.holes.fromRepeats).toBeGreaterThan(0);
         expect(countDiff(ts.occluded!, occ)).toBeGreaterThan(0);
+        expect(nat.trace?.lines.length).toBe(ts.report.lines.vertical + ts.report.lines.horizontal);
+        expect(nat.trace?.after).toBeDefined();
         expectParity(ts, nat);
     }, 120_000);
 
@@ -117,7 +121,8 @@ describe('native ortho rectify parity', () => {
         transparent(img, 0, 400, 300, 420);
         hole(img, 200, 300, 230, 360);
         const ts = rectifyOrtho({ ...img, rgba: new Uint8Array(img.rgba) }, spec.px, P);
-        const nat = await rectifyOrthoNative(img, spec.px, P);
+        const nat = await rectifyOrthoNative(img, spec.px, P, undefined, { trace: true });
+        expect(nat.trace).toBeDefined();
         expect(ts.report.warp.kept).toBe(false);
         expect(ts.report.holes.featureless).toBeGreaterThan(0);
         expect(ts.occluded).toBeUndefined();
@@ -132,7 +137,7 @@ describe('native ortho rectify parity', () => {
         const params: OrthoRectifyParams = { ...P, gridM: 0.6, bendCost: 0.4, minGain: 0.05, smearK: 2, fillRepeats: 2, minFillRepeats: 2, traceHorizontal: false };
         const occ = occlusion(spec.W, spec.H);
         const ts = rectifyOrtho({ ...img, rgba: new Uint8Array(img.rgba) }, spec.px, params, occ.slice());
-        const nat = await rectifyOrthoNative(img, spec.px, params, occ.slice());
+        const nat = await rectifyOrthoNative(img, spec.px, params, occ.slice(), { trace: true });
         expect(ts.report.lines.horizontal).toBe(0);
         expect(ts.report.holes.fromNearest).toBe(0);
         expect(ts.report.holes.uncovered).toBeGreaterThan(ts.report.holes.fromRepeats + ts.report.holes.fromStoreys);

@@ -7,6 +7,7 @@
  ********************************************************************************/
 
 import type { GoogleGenAI } from '@google/genai';
+import { finalImagePart } from '../google-media-generation-service';
 import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
 
 export const STREET_VIEW_RESTYLE_MODEL = 'gemini-3.1-flash-lite-image';
@@ -310,7 +311,7 @@ export class StreetViewRestyleService {
                 ]
             } as any
         });
-        const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData?.data);
+        const part = finalImagePart(response.candidates?.[0]?.content?.parts);
         if (!part?.inlineData?.data) {
             throw new Error('No image data returned from Gemini for vehicle/pedestrian removal');
         }

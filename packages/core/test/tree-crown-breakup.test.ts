@@ -30,7 +30,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { TreeLodController } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/TreeLodController';
 import {
-    BREAKUP_FRAGMENT_DISCARD, BREAKUP_FRAGMENT_PARS, CROWN_FIELD_VERTEX_PARS, breakupDepthMaterial, breakupDistanceMaterial, breakupKeepAt, crownShadingUniforms, crownSignedDepthAt,
+    BREAKUP_FRAGMENT_DISCARD, BREAKUP_FRAGMENT_PARS, CROWN_FIELD_VERTEX_PARS, CROWN_RIM_SHARE_PACK, breakupDepthMaterial, breakupDistanceMaterial, breakupKeepAt, crownRimHoles, crownRimSlot, crownShadingUniforms, crownSignedDepthAt,
     isBreakupDepthMaterial, resolveCrownShading, setCrownShadingUniforms, DEFAULT_CROWN_BREAKUP, DEFAULT_CROWN_SHADING
 } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeCrownShading';
 import { isFadeVariant, makeFadeVariant } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeLodFade';
@@ -208,6 +208,32 @@ describe('crown breakup: options', () => {
         expect(near).toBeGreaterThan(50); expect(far).toBe(0);
         setCrownShadingUniforms(DEFAULT_CROWN_SHADING);
     });
+
+    it('gives a level holes in proportion to what lies behind its rim: none for a crown that is all rim', () => {
+        setCrownShadingUniforms(resolveCrownShading(null));
+        // the share rides in the slot's fraction and leaves the slot as it was
+        expect(crownRimSlot(2, 0.5)).toBeCloseTo(2 + 0.5 * CROWN_RIM_SHARE_PACK, 9);
+        expect(crownRimSlot(crownRimSlot(3, 0.9), 0.2)).toBeCloseTo(3 + 0.2 * CROWN_RIM_SHARE_PACK, 9);
+        expect(CROWN_RIM_SHARE_PACK).toBeLessThan(0.5);
+        // full holes up to rimShareFull of the leaves in the rim band, then (1 - share) / (1 - rimShareFull), none at all rim
+        expect(DEFAULT_CROWN_BREAKUP.rimShareFull).toBe(0.45);
+        expect(crownRimHoles(3)).toBe(1);
+        expect(crownRimHoles(crownRimSlot(3, 0.45))).toBeCloseTo(1, 6);
+        expect(crownRimHoles(crownRimSlot(3, 0.725))).toBeCloseTo(0.5, 6);
+        expect(crownRimHoles(crownRimSlot(3, 1))).toBe(0);
+        setCrownShadingUniforms(resolveCrownShading({ breakup: { rimShareFull: 0.2 } }));
+        expect(crownRimHoles(crownRimSlot(2, 0.6))).toBeCloseTo(0.5, 6);
+        // on the rim with only rim holes: a level with nothing behind its rim keeps every fragment, one with little in it loses many
+        setCrownShadingUniforms(resolveCrownShading({ breakup: { holes: [1, 1, 1, 1], pockets: [0, 0, 0, 0] } }));
+        let lean = 0, allRim = 0;
+        for (let i = 0; i < 200; i++) {
+            const p: [number, number, number] = [i * 0.37, 1.3 * i, 0.71 * i];
+            if (!breakupKeepAt(p, -0.1, crownRimSlot(3, 0.1), 0.01, 0.5, 4)) lean++;
+            if (!breakupKeepAt(p, -0.1, crownRimSlot(3, 1), 0.01, 0.5, 4)) allRim++;
+        }
+        expect(lean).toBeGreaterThan(50); expect(allRim).toBe(0);
+        setCrownShadingUniforms(DEFAULT_CROWN_SHADING);
+    });
 });
 
 describe.skipIf(!chromeAvailable())('crown breakup in a WebGL viewport (trees grown by the native plant)', () => {
@@ -238,7 +264,9 @@ describe.skipIf(!chromeAvailable())('crown breakup in a WebGL viewport (trees gr
         const configs = [
             { n: 96, origin: [3.1, 6.2, -4.4] as [number, number, number], span: 9, depthS: -0.1, slot: 3, footprintM: 0.02, dither: 0.31, crownRadiusM: 4.5 },
             { n: 96, origin: [-20.5, 2.0, 7.3] as [number, number, number], span: 14, depthS: 0.2, slot: 2, footprintM: 0.3, dither: 0.77, crownRadiusM: 3.0 },
-            { n: 64, origin: [100.2, 12.0, -55.1] as [number, number, number], span: 6, depthS: 0.6, slot: 1, footprintM: 0.05, dither: 0.5, crownRadiusM: 6.0 }
+            { n: 64, origin: [100.2, 12.0, -55.1] as [number, number, number], span: 6, depthS: 0.6, slot: 1, footprintM: 0.05, dither: 0.5, crownRadiusM: 6.0 },
+            // a level whose leaves lie 80% in the rim band: its rim share in the slot's fraction
+            { n: 96, origin: [7.7, 3.4, 12.9] as [number, number, number], span: 9, depthS: -0.1, slot: crownRimSlot(3, 0.8), footprintM: 0.02, dither: 0.31, crownRadiusM: 2.0 }
         ];
         for (const cfg of configs) {
             const gpu = await h.eval<number[]>(`window.H.glslKeepGrid(${JSON.stringify(cfg)})`);

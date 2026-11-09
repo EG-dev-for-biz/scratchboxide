@@ -31,9 +31,9 @@ export const BUILD_RESULTS: Record<string, string> = {
     place: 'the place', tiles: 'tile mesh', surveyPhotos: 'Street View photos', canopy: 'canopy',
     scanClay: 'remeshed scan', orthos: 'facade orthophotos', straightOrthos: 'straightened facade photos', occlusion: 'occlusion masks', windows: 'windows', planeReadings: 'openings read by the vision agent',
     depth: 'window depth', cleanClay: 'cleaned scan', latticeClay: 'facades rebuilt', baseClay: 'base cleaned',
-    sealedClay: 'sealed shell', finalClay: 'final model', score: 'relief score', holes: 'holes seen',
+    sealedClay: 'sealed shell', closedClay: 'closed from outside', finalClay: 'final model', score: 'relief score', holes: 'holes seen',
     ownerViews: 'ownership views', ownerMasks: 'ownership vote', votedClay: 'voted remesh', registeredPoses: 'registered photos', treeStrip: 'trees', delit: 'de-lit photos',
-    harmonised: 'harmonised photos', materials: 'material maps', partyWall: 'party wall', late: 'later layers', published: 'scene'
+    harmonised: 'harmonised photos', materials: 'material maps', partyWall: 'party wall', facadeDetail: 'upscaled facade photos', relief: 'displaced near surfaces', late: 'later layers', published: 'scene'
 };
 
 /** Pipeline K's steps, in run order. */
@@ -46,15 +46,18 @@ export const BUILD_STEPS: BuildStepSpec[] = [
     { key: 'remesh.occlusion', stage: 'remesh', title: 'What stood in front of each facade', needs: ['tiles'], makes: ['occlusion'] },
     { key: 'remesh.pipelineK', stage: 'remesh', title: 'Straighten the facade photos', needs: ['orthos', 'occlusion'], makes: ['straightOrthos'] },
     { key: 'remesh.windowFit', stage: 'remesh', title: 'Window fit', needs: ['straightOrthos'], makes: ['windows'] },
+    { key: 'remesh.windowArray', stage: 'remesh', title: 'Window array per facade', needs: ['windows'], makes: ['windows'] },
     { key: 'remesh.facadeRead', stage: 'remesh', title: 'Read every plane\'s openings', needs: ['straightOrthos', 'tiles'], makes: ['planeReadings'] },
     { key: 'remesh.revealDepth', stage: 'remesh', title: 'Window depth from Street View', needs: ['windows', 'surveyPhotos'], makes: ['depth'] },
     { key: 'polish.cleanup', stage: 'remesh', title: 'Remesh cleanup', needs: ['scanClay'], makes: ['cleanClay'] },
     { key: 'polish.lattice', stage: 'remesh', title: 'Facades rebuilt on the lattice', needs: ['cleanClay', 'straightOrthos', 'windows', 'planeReadings', 'depth'], makes: ['latticeClay'] },
+    { key: 'polish.latticeCut', stage: 'remesh', title: 'Scan cut at the rebuilt cells', needs: ['latticeClay'], makes: ['latticeClay'] },
     { key: 'polish.base', stage: 'remesh', title: 'Base cleanup', needs: ['latticeClay'], makes: ['baseClay'] },
     { key: 'polish.clip', stage: 'remesh', title: 'Clip at the footprint', needs: ['baseClay'], makes: ['baseClay'] },
     { key: 'polish.infill', stage: 'remesh', title: 'Fill the openings', needs: ['baseClay'], makes: ['baseClay'] },
     { key: 'polish.seal', stage: 'remesh', title: 'Seal (cut and stitch)', needs: ['baseClay'], makes: ['sealedClay'] },
     { key: 'polish.orient', stage: 'remesh', title: 'Turn inward faces outward', needs: ['baseClay'], makes: ['finalClay'] },
+    { key: 'polish.closure', stage: 'remesh', title: 'Close from outside: joins, inner core, hole repair', needs: ['finalClay', 'cleanClay'], makes: ['finalClay'] },
     { key: 'remesh.streetViewScore', stage: 'remesh', title: 'Relief score against Street View', needs: ['scanClay', 'finalClay', 'surveyPhotos'], makes: ['score'] },
     { key: 'remesh.visibleDefects', stage: 'remesh', title: 'Holes seen from outside', needs: ['finalClay'], makes: ['holes'] },
     { key: 'ownership', stage: 'ownership', title: 'Ownership vote', needs: ['tiles', 'finalClay'], makes: ['ownerMasks'] },
@@ -67,9 +70,11 @@ export const BUILD_STEPS: BuildStepSpec[] = [
     { key: 'twin.viewRelight', stage: 'textures', title: 'Relight from views', needs: ['delit'], makes: ['relit'] },
     { key: 'twin.roofShadow', stage: 'textures', title: 'Lift roof shadows', needs: ['delit'], makes: ['roofLit'] },
     { key: 'twin.harmonize', stage: 'textures', title: 'Harmonise the photos', needs: ['delit'], makes: ['harmonised'] },
-    { key: 'twin.materials', stage: 'textures', title: 'Material regions', needs: ['harmonised', 'windows', 'planeReadings'], makes: ['materials'] },
+    { key: 'twin.materials', stage: 'textures', title: 'Material regions', needs: ['harmonised', 'planeReadings'], makes: ['materials'] },
     { key: 'twin.partyWall', stage: 'textures', title: 'Party wall', needs: ['harmonised', 'baseClay'], makes: ['partyWall'] },
     { key: 'twin.detailBake', stage: 'textures', title: 'Swatch detail', needs: ['harmonised', 'tiles'], makes: ['detail'] },
+    { key: 'twin.facadeUpscale', stage: 'textures', title: 'Upscale the facade photos', needs: ['harmonised', 'latticeClay'], makes: ['facadeDetail'] },
+    { key: 'twin.heightRelief', stage: 'textures', title: 'Displace the near surfaces', needs: ['materials', 'latticeClay'], makes: ['relief'] },
     { key: 'textures.lateLayers', stage: 'textures', title: 'Textures of later layers', needs: ['materials'], makes: ['late'] },
     { key: 'textures-late', stage: 'textures-late', title: 'Textures of later layers', needs: ['materials'], makes: ['late'] }
 ];
@@ -84,22 +89,27 @@ export const WRAPPER_STEPS = new Set(['remesh.polish', 'textures.waitRebuildGram
 export const TOGGLEABLE_STEPS = new Map<string, string>([
     ['remesh.occlusion', 'a facade texel behind a tree, an awning or a neighbour is read as wall like any other'],
     ['remesh.windowFit', 'the facades are opened by their bay rhythm and the lattice\'s own window cells'],
-    ['remesh.facadeRead', 'the openings stay as the window fit read them; roofs and the walls without a facade photo get none'],
+    ['remesh.windowArray', 'each facade\'s windows stay as its bands read them, off their grid where a band drifted'],
+    ['remesh.facadeRead', 'the window geometry stays as the window fit read it, and the material reads are told no brief of the building'],
     ['remesh.revealDepth', 'the recesses follow the photo-contrast rule'],
     ['polish.cleanup', 'the lattice works on the remesh as tile_refine left it'],
     ['polish.lattice', 'the facades stay as scanned'],
+    ['polish.latticeCut', 'whole scan triangles are removed under the rebuilt facades, the rest left standing over them'],
     ['polish.base', 'the base is left as scanned, no skirt'],
     ['polish.clip', 'the building is not cut at its footprint'],
     ['polish.infill', 'the openings the clip leaves stay open'],
     ['polish.seal', 'the shell is left open'],
     ['polish.orient', 'inward-facing scan pieces stay as they are'],
+    ['polish.closure', 'rebuilt facades are not joined where they meet, no inner core stands behind the holes and the holes found are not repaired'],
     ['remesh.streetViewScore', 'no relief score against Street View'],
     ['remesh.visibleDefects', 'holes are not looked for'],
     ['evidence', 'no Street View close-ups or their registration (a 3D Building reads neither)'],
     ['twin.viewRelight', 'the photos keep the lighting the de-light left (no image-model relight of rendered views)'],
     ['twin.roofShadow', 'the roof decks keep the shadows the building cast on them in the photos'],
     ['twin.harmonize', 'the de-lit photos are kept as they are, photo by photo'],
-    ['twin.materials', 'no roughness, metal or glass maps: the photos only'],
+    ['twin.materials', 'no occlusion, roughness, metalness or normal maps: the photos only'],
     ['twin.partyWall', 'the party wall stays untextured'],
-    ['twin.detailBake', 'the photo atlases keep the tile\'s own resolution, no swatch detail']
+    ['twin.detailBake', 'the photo atlases keep the tile\'s own resolution, no swatch detail'],
+    ['twin.facadeUpscale', 'the rebuilt facades keep their photo\'s own resolution (about 15 cm a texel), no image-model detail'],
+    ['twin.heightRelief', 'the rebuilt facades stay flat up close: their materials\' height is drawn by the viewer\'s parallax only, no geometry moved']
 ]);

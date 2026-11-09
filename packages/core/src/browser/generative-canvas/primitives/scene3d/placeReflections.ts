@@ -22,8 +22,8 @@
  * it is never the viewport background, and no sky, cloud or fog is added to the scene (AGENTS.md "Zero Uninvited
  * Defaults"): the probe is lighting and reflection only.
  *
- * The same capture (`ReflectionProbeRenderer`) draws the facade material reading's glass probe (facadeMaterialLook.ts),
- * so the facade glass also sees the fallback sky, not the backdrop, where its layer stands alone.
+ * The same capture (`ReflectionProbeRenderer`) draws the staged twins' facade probe (facadeMaterialLook.ts), so a facade's
+ * reflection also sees the fallback sky, not the backdrop, where its layer stands alone.
  *
  * Cost: probes are re-rendered only when the scene changes materially (an object loads, moves or is removed, the
  * geometry or textures resident on the GPU change, the atmosphere or render mode changes, or the camera moves far
@@ -141,7 +141,7 @@ export interface PlaceReflectionsDeps {
     receivers: () => THREE.Object3D[];
     /** Hidden in every capture (gizmos, selection box, brush cursor, grid). */
     overlays?: () => Array<THREE.Object3D | null | undefined>;
-    /** Re-rendered with the heroes' probes (the facade glass probe), when given. */
+    /** Re-rendered with the heroes' probes (the facade probe), when given. */
     refreshOthers?: () => void;
     size?: number;
 }
@@ -268,7 +268,7 @@ export class PlaceReflections {
                 console.warn('[place reflections] the reflection probe failed:', err);
             }
         }
-        try { this.d.refreshOthers?.(); } catch (err) { console.warn('[place reflections] the facade glass probe failed:', err); }
+        try { this.d.refreshOthers?.(); } catch (err) { console.warn('[place reflections] the facade probe failed:', err); }
         const ms = performance.now() - t0;
         this.captures++;
         this.lastCaptureMs = ms;

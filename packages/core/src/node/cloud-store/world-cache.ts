@@ -85,8 +85,11 @@ async function filesUnder(dir: string, rel = ''): Promise<string[]> {
     const out: string[] = [];
     for (const e of await fs.readdir(path.join(dir, rel), { withFileTypes: true })) {
         const r = rel ? `${rel}/${e.name}` : e.name;
-        if (e.isDirectory()) { if (!(rel === '' && SKIPPED_DIRS.has(e.name))) out.push(...await filesUnder(dir, r)); }
-        else if (e.isFile() && e.name !== WORLD_MANIFEST) out.push(r);
+        // a link is stored as what it points at: a district world links its models where its build left them
+        const st = e.isSymbolicLink() ? await fs.stat(path.join(dir, r)).catch(() => undefined) : e;
+        if (!st) continue;
+        if (st.isDirectory()) { if (!(rel === '' && SKIPPED_DIRS.has(e.name))) out.push(...await filesUnder(dir, r)); }
+        else if (st.isFile() && e.name !== WORLD_MANIFEST) out.push(r);
     }
     return out;
 }

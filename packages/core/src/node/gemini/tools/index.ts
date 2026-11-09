@@ -29,6 +29,8 @@ export * from './image-to-pbr-tools';
 export * from './turnaround-tools';
 export * from './pbr-material-tools';
 export * from './weathering-tools';
+export * from './object-detail-tools';
+export * from './blueprint-outline-tools';
 export * from './local-sf3d-tools';
 export * from './tile-refine-tools';
 export * from './scene-healing-tools';
@@ -70,6 +72,8 @@ import { LOCATION_REFERENCE_TOOL_DECLARATIONS, locationReferenceHandlers } from 
 import { SURFACE_MATERIALS_TOOL_DECLARATIONS, surfaceMaterialsHandlers } from './surface-material-tools';
 import { PBR_MATERIAL_TOOL_DECLARATIONS, pbrMaterialHandlers } from './pbr-material-tools';
 import { WEATHERING_TOOL_DECLARATIONS, WEATHERING_TOOL_HANDLERS } from './weathering-tools';
+import { OBJECT_DETAIL_TOOL_DECLARATIONS, objectDetailHandlers } from './object-detail-tools';
+import { BLUEPRINT_OUTLINE_TOOL_DECLARATIONS, blueprintOutlineHandlers } from './blueprint-outline-tools';
 import { TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers } from './turnaround-tools';
 import { IMAGE_TO_PBR_TOOL_DECLARATIONS, imageToPbrHandlers } from './image-to-pbr-tools';
 import { PYTHON_3D_TOOL_DECLARATIONS, python3DHandlers } from './python-3d-tools';
@@ -231,6 +235,8 @@ export const DEFAULT_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ...IMAGE_TO_PBR_TOOL_DECLARATIONS,
     ...PBR_MATERIAL_TOOL_DECLARATIONS,
     ...WEATHERING_TOOL_DECLARATIONS,
+    ...OBJECT_DETAIL_TOOL_DECLARATIONS,
+    ...BLUEPRINT_OUTLINE_TOOL_DECLARATIONS,
     ...LOCAL_SF3D_TOOL_DECLARATIONS,
     ...TURNAROUND_TOOL_DECLARATIONS,
     ...LENS_TOOL_DECLARATIONS,
@@ -290,6 +296,8 @@ export const DEFAULT_TOOL_HANDLERS: Record<string, ToolHandler> = {
     ...imageToPbrHandlers,
     ...pbrMaterialHandlers,
     ...WEATHERING_TOOL_HANDLERS,
+    ...objectDetailHandlers,
+    ...blueprintOutlineHandlers,
     ...localSf3DHandlers,
     ...lensHandlers,
     ...browserHandlers,

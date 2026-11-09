@@ -13,7 +13,8 @@
  * native build cache. Same parameters, same result: the image, the uncovered, featureless and (warped) occluded masks
  * and the report, bit for bit on the same input (ortho-rectify-native.test.ts holds the parity). ortho-rectify-worker.ts
  * calls it when SCRATCHBOX_K_NATIVE runs `rectify` (native-switch.ts; the default). A failed build or run throws; there is
- * no fallback to the TypeScript.
+ * no fallback to the TypeScript. With `trace: true` the driver also writes what it traced (--trace), read back as the
+ * result's `trace`, the same as the TypeScript's, for the straightening's overlay (rectify-overlay.ts).
  */
 
 import { execFile } from 'child_process';
@@ -21,7 +22,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { compileNativeCached, defaultNativeFlags, NativeBuildError } from '../../../native-build-cache';
-import { ORTHO_RECTIFY_PARAMS, type OrthoRectifyParams, type OrthoRectifyReport, type OrthoRectifyResult, type Rgba } from '../ortho-rectify';
+import { ORTHO_RECTIFY_PARAMS, type OrthoRectifyParams, type OrthoRectifyReport, type OrthoRectifyResult, type RejectedPeak, type Rgba, type TracedLine } from '../ortho-rectify';
 
 const CLI_SOURCE = path.join('scripts', 'ortho_rectify_native.cpp');
 const INCLUDE_DIR = path.join('packages', 'core', 'src', 'native', '3d-engine', 'include');
@@ -106,17 +107,47 @@ function decodeResult(buf: Buffer, report: OrthoRectifyReport, withOccluded: boo
     return { image: { width: W, height: H, rgba }, report, uncovered, featureless, ...(occluded ? { occluded } : {}) };
 }
 
+/** The trace file (scripts/ortho_rectify_native.cpp, --trace) back into the TypeScript result's `trace`. */
+export function decodeTrace(buf: Buffer): NonNullable<OrthoRectifyResult['trace']> {
+    if (buf.length < 20 || buf.toString('latin1', 0, 4) !== 'SBTR' || buf.readUInt32LE(4) !== 1) throw new Error('ortho_rectify_native: not a trace file');
+    const nLines = buf.readUInt32LE(8), nRejected = buf.readUInt32LE(12), hasAfter = buf.readUInt32LE(16) === 1;
+    let o = 20;
+    const need = (n: number) => { if (o + n > buf.length) throw new Error('ortho_rectify_native: a truncated trace file'); };
+    const f64s = (n: number) => { need(n * 8); const v: number[] = new Array(n); for (let k = 0; k < n; k++, o += 8) v[k] = buf.readDoubleLE(o); return v; };
+    const axisOf = (c: number): 'v' | 'h' => (c === 0x76 ? 'v' : 'h');
+    const lines: TracedLine[] = [];
+    for (let i = 0; i < nLines; i++) {
+        need(13);
+        const axis = axisOf(buf[o]), at = buf.readInt32LE(o + 1), segments = buf.readInt32LE(o + 5), n = buf.readUInt32LE(o + 9);
+        o += 13;
+        const along = f64s(n), across = f64s(n), weight = f64s(n), straight = f64s(n);
+        lines.push({ axis, at, along, across, weight, straight, segments });
+    }
+    const why: Record<number, RejectedPeak['why']> = { 0x62: 'border', 0x65: 'no-edge', 0x73: 'no-segment' };
+    const rejected: RejectedPeak[] = [];
+    for (let i = 0; i < nRejected; i++) {
+        need(6);
+        const w = why[buf[o + 5]];
+        if (!w) throw new Error(`ortho_rectify_native: a dropped peak's reason ${buf[o + 5]} is not known`);
+        rejected.push({ axis: axisOf(buf[o]), at: buf.readInt32LE(o + 1), why: w });
+        o += 6;
+    }
+    const after = hasAfter ? lines.map(l => ({ ...l, across: f64s(l.along.length) })) : undefined;
+    if (o !== buf.length) throw new Error(`ortho_rectify_native: ${buf.length - o} bytes left over in the trace file`);
+    return { lines, rejected, ...(after ? { after } : {}) };
+}
+
 /**
  * rectifyOrtho, native: one facade ortho straightened (verified) and its smears levelled, `occluded` carried through a
- * kept warp. The report's `ms` is the kernel's own time.
+ * kept warp. The report's `ms` is the kernel's own time. `trace` asks for what it traced, as the result's `trace`.
  */
-export async function rectifyOrthoNative(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS, occluded?: Uint8Array, opts: { threads?: number; timeoutMs?: number } = {}): Promise<OrthoRectifyResult> {
+export async function rectifyOrthoNative(img: Rgba, pixelM: number, P: OrthoRectifyParams = ORTHO_RECTIFY_PARAMS, occluded?: Uint8Array, opts: { threads?: number; timeoutMs?: number; trace?: boolean } = {}): Promise<OrthoRectifyResult> {
     const bin = await ensureOrthoRectifyBinary();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-rectify-native-'));
     try {
-        const req = path.join(dir, 'request.bin'), res = path.join(dir, 'result.bin');
+        const req = path.join(dir, 'request.bin'), res = path.join(dir, 'result.bin'), tr = path.join(dir, 'trace.bin');
         fs.writeFileSync(req, encodeRequest(img, pixelM, P, occluded));
-        const args = [req, res, ...(opts.threads !== undefined ? ['--threads', String(opts.threads)] : [])];
+        const args = [req, res, ...(opts.threads !== undefined ? ['--threads', String(opts.threads)] : []), ...(opts.trace ? ['--trace', tr] : [])];
         const stdout = await new Promise<string>((resolve, reject) => {
             execFile(bin, args, { timeout: opts.timeoutMs ?? 600_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (err, out, stderr) => {
                 if (err) reject(new Error(`ortho_rectify_native failed: ${String(stderr).trim() || err.message}`));
@@ -125,7 +156,8 @@ export async function rectifyOrthoNative(img: Rgba, pixelM: number, P: OrthoRect
         });
         // the driver writes a non-finite number as null; the report holds no other null
         const report = JSON.parse(stdout, (_k, v) => (v === null ? NaN : v)) as OrthoRectifyReport;
-        return decodeResult(fs.readFileSync(res), report, !!occluded);
+        const result = decodeResult(fs.readFileSync(res), report, !!occluded);
+        return opts.trace ? { ...result, trace: decodeTrace(fs.readFileSync(tr)) } : result;
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
     }

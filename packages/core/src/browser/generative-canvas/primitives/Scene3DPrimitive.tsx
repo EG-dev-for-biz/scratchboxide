@@ -162,7 +162,9 @@ import { syncVectorRoadmapBlueprint } from './scene3d/syncVectorRoadmapBlueprint
 import { VectorRoadmapHUD } from './scene3d/VectorRoadmapHUD';
 import { NumericPrecisionInspector } from './scene3d/NumericPrecisionInspector';
 import { WeatherControl } from './scene3d/WeatherPanel';
+import { MapDataControl, useMapDataView } from './scene3d/MapDataControl';
 import { ScenePathTraceButton, ScenePathTraceLayer } from './scene3d/ScenePathTrace';
+import { QuickBeautifyButton, type QuickBeautifyView } from './scene3d/QuickBeautifyButton';
 import { SplatEditControl } from './scene3d/SplatEditPanel';
 import { createSplatEditTool, DEFAULT_SPLAT_BRUSH, type SplatBrush, type SplatEditTool } from './scene3d/splatEditTool';
 import { PRIMARY_SPLAT_TARGET, type SplatEditStroke } from '../../../common/spatial/splat-edits';
@@ -194,17 +196,19 @@ import {
 } from './scene3d/selection';
 import { groupVariantSets, resolveActiveVariants, variantSetKeyOf } from './scene3d/variantSets';
 import type { VectorRoadmapConfig } from '../canvas-types';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { createGltfLoader } from './scene3d/resilientGltfLoader';
 import { applyWeatheringLayer } from './scene3d/weatheringLayer';
 import { CINEMATIC_RIGS, computeSceneBudgetTelemetry } from './scene3d/lightingRigs';
 import type { SceneBudgetTelemetry } from './scene3d/lightingRigs';
 import { useStagedBuild } from './scene3d/stagedBuild/useStagedBuild';
+import { WindowCheckCard } from './scene3d/stagedBuild/WindowCheckCard';
 import { readStagedBuild, type StagedSceneData } from './scene3d/stagedBuild/stagedBuildState';
 import { mergeStagedParts, mergeStagedPartsEnabled } from './scene3d/stagedBuild/mergeStagedParts';
 import { carryStagedChoice, carryTwinObjects, twinSourceOf, type StagedMaterialModeFields } from './scene3d/stagedBuild/texturedTwins';
 import { prepareTexturedTwinModel } from './scene3d/stagedBuild/texturedTwinModel';
 import { drawPhotoTwinsLit } from './scene3d/stagedBuild/litPhotoTwins';
 import { refreshFacadeReflections } from './scene3d/stagedBuild/facadeMaterialLook';
+import { setHeightReliefEnabled, updateHeightReliefLods } from './scene3d/stagedBuild/heightRelief';
 
 // Aircraft helpers live in services/mesh/aircraft.ts (single source of truth, shared with the
 // transformer engine's sandbox template); re-exported here to keep the public API stable.
@@ -2172,6 +2176,8 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         (window as any).__SB_3D_STACK__ = stack;
         (window as any).__SB_3D_SCENE_DATA__ = sceneData;
         (window as any).__SB_3D_CAMERA_TARGET__ = cameraTargetRef;
+        // the materials' relief off and on at one camera (heightRelief.ts): a before/after for a proof sheet
+        (window as any).__SB_SET_HEIGHT_RELIEF__ = setHeightReliefEnabled;
         (window as any).__SB_3D_CAMERA_ROTATION__ = cameraRotationRef;
         // Loaded models by object id, including detached (inactive variant) ones kept for instant switching.
         (window as any).__SB_3D_EXTERNAL_OBJECTS__ = externalObjectsMapRef.current;
@@ -2416,7 +2422,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 return out;
             },
             overlays: () => [transformGizmoGroupRef.current, selectionBoxRef.current, brushCursorMeshRef.current, stack.gridHelper],
-            // the facade glass probe shares the capture and is re-rendered with the place's probes
+            // the facade probe shares the capture and is re-rendered with the place's probes
             refreshOthers: () => { refreshFacadeReflections(renderer, scene, externalObjectsMapRef.current.values()); }
         });
         placeReflectionsRef.current = placeReflections;
@@ -2496,7 +2502,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         let displayFlagWasOn = false;
         let compiledRootCache: THREE.Object3D | undefined;
         // a build step's snapshot under the flag (the model as it stood after that step)
-        const stepSnapshot = new StepSnapshotView(url => new GLTFLoader().loadAsync(resolveExternalModelUri(url)).then(g => g.scene));
+        const stepSnapshot = new StepSnapshotView(url => createGltfLoader().loadAsync(resolveExternalModelUri(url)).then(g => g.scene));
         const animate = () => {
             try {
                 const now = performance.now();
@@ -2629,6 +2635,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
 
                 // 12.9 Tree levels of detail: per-tree level, dither and culling for loaded trees GLBs (before the render).
                 updateTreeLods(now);
+
+                // 12.92 Material relief: the displaced cells near the camera drawn in place of their flat triangles (heightRelief.ts).
+                updateHeightReliefLods(camera);
 
                 // 12.95 Place reflections: re-rendered only once a material change in the scene has settled (placeReflections.ts).
                 placeReflections.tick(now);
@@ -3114,7 +3123,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             for (let i = 0; i < binaryStr.length; i++) {
                 bytes[i] = binaryStr.charCodeAt(i);
             }
-            const loader = new GLTFLoader();
+            const loader = createGltfLoader();
             pendingGeneratedGlbParsesRef.current++;
             loader.parse(bytes.buffer, '', (gltf) => {
                 pendingGeneratedGlbParsesRef.current--;
@@ -3345,7 +3354,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             }
         };
 
-        const loader = new GLTFLoader();
+        const loader = createGltfLoader();
 
         objects.forEach(obj => {
             const rawUri = obj.content?.durableUri;
@@ -3498,11 +3507,11 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     // its unlit photo surfaces drawn lit, so the sun lights and shadows them like everything else
                     drawPhotoTwinsLit(model);
                     void twinPrepared.then(() => {
-                        // the facade material reading's glass reflects the scene: render its probe once the textures are in,
+                        // the twin's facades reflect the scene: render its probe once the textures are in,
                         // and again for the other twins (this layer is now part of what they see)
                         const stack = stackRef.current;
                         if (!stack || !model.parent) return;
-                        try { refreshFacadeReflections(stack.renderer, stack.scene, currentMap.values()); } catch (err) { console.warn('[staged textures] the glass reflection probe failed:', err); }
+                        try { refreshFacadeReflections(stack.renderer, stack.scene, currentMap.values()); } catch (err) { console.warn('[staged textures] the facade reflection probe failed:', err); }
                     });
                     // A staged layer of many small parts (a pipeline E hero) draws one mesh per material; each vertex keeps its part
                     // (provenance, ids) for the staged build, the provenance view and picking (mergeStagedParts.ts).
@@ -3628,6 +3637,20 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const staged = useStagedBuild({
         state: readStagedBuild(sceneData), overriddenIds: materialOverriddenIds, stackRef, objectRootsRef: externalObjectsMapRef, loadStatus: externalLoadStatus, mutateSceneData, onPromptAction,
         sceneObjects: sceneData.objects, view: (sceneData as StagedSceneData).stagedBuildView, onEvictedChange: setEvictedLayerIds, displayObjectIds: sceneData.displayFlag?.objectIds
+    });
+
+    // ---- 5e. Map data view: blob groups, Google vector data and the roadmap over the scene (MapDataControl.tsx) ----
+    const mapData = useMapDataView({
+        stackRef, sceneData,
+        sceneRootsKey: JSON.stringify(externalLoadStatus),
+        sceneRoots: () => {
+            const scene = stackRef.current?.scene;
+            return [
+                ...Array.from(externalObjectsMapRef.current.values()),
+                ...Array.from(customMeshRegistryRef.current.values(), e => e.mesh),
+                ...(scene?.getObjectByName('scratchbox-cpp-generated-root') ? [scene.getObjectByName('scratchbox-cpp-generated-root')!] : [])
+            ];
+        }
     });
 
     // ---- 6. Custom meshes from schema (id-diffed, updated in place) ---------------
@@ -4311,6 +4334,35 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
         console.info(`[Asset Recovery] rebuilding ${lost.length} lost file(s) from the scene's place on its own`);
         recoveryRebuild();
     }, [recoveryRebuild, assetRecovery]);
+    // Quick AI Beautify (tool rail): the current frame as framed, the scene's name and place, and the camera, read at click time
+    const [beautifyError, setBeautifyError] = React.useState<string | null>(null);
+    const readQuickBeautifyView = React.useCallback((): QuickBeautifyView => {
+        const data = sceneDataRef.current;
+        const anchor = data.geoAnchor;
+        const place = anchor && anchor.active !== false && Number.isFinite(anchor.lat) && Number.isFinite(anchor.lng)
+            ? { lat: anchor.lat, lng: anchor.lng, ...(anchor.landmarkName ? { name: anchor.landmarkName } : {}) }
+            : undefined;
+        const camera = threeCameraRef.current;
+        let camFacts: Pick<QuickBeautifyView, 'headingDeg' | 'pitchDeg' | 'fovDeg' | 'subjectDistanceM'> = {};
+        if (camera) {
+            const dir = new THREE.Vector3();
+            camera.getWorldDirection(dir);
+            // the same heading convention as the roadmap HUD: -Z is north, +X east
+            camFacts = {
+                headingDeg: (Math.atan2(dir.x, -dir.z) * 180 / Math.PI + 360) % 360,
+                pitchDeg: Math.asin(Math.max(-1, Math.min(1, dir.y))) * 180 / Math.PI,
+                fovDeg: camera.fov,
+                subjectDistanceM: camera.position.distanceTo(cameraTargetRef.current)
+            };
+        }
+        return {
+            frameDataUrl: captureFrame(),
+            sceneName: activeArtifact?.title || anchor?.landmarkName || 'scene',
+            ...(place ? { place } : {}),
+            ...camFacts
+        };
+    }, [captureFrame, activeArtifact?.title, sceneDataRef]);
+
     const viewportNotices = React.useMemo(() => resolveViewportNotice({
         webglError,
         generatorError: currentGeneratorError,
@@ -4330,8 +4382,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             onCancel: () => { void assetRecoveryClient.cancel(); },
             reasons: recoveryReasons(assetRecovery.job),
             ...(recoveryRebuild ? { onRebuild: recoveryRebuild } : {})
-        } : undefined
-    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects, opticsIssues, assetRecovery, recoveryNoticeJobId, recoveryRebuild]);
+        } : undefined,
+        beautifyError: beautifyError ? { message: beautifyError, onDismiss: () => setBeautifyError(null) } : undefined
+    }), [webglError, currentGeneratorError, tilesError, sceneContentKind, sceneData.vectorRoadmap?.groundBlueprint, wantsWasmMesh, drawsBiomeTerrain, objectLoadErrors, undrawableObjects, opticsIssues, assetRecovery, recoveryNoticeJobId, recoveryRebuild, beautifyError]);
 
     const handleExportGlb = React.useCallback(async () => {
         if (!threeSceneRef.current) return;
@@ -4408,6 +4461,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 </div>
             )}
             {staged.overlay({ bottomInsetPx: isTimelineDrawerOpen ? 255 : 16 })}
+            {staged.active && readStagedBuild(sceneData)?.runId && <WindowCheckCard runId={readStagedBuild(sceneData)!.runId} />}
             <ObjectBuildLiveOverlay live={readObjectBuildLive(sceneData)} bottomInsetPx={isTimelineDrawerOpen ? 255 : 76} />
             {cameraMode === 'fps' && <WalkHud session={walkSessionOf} />}
 
@@ -4460,6 +4514,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 {/* Weather: time of day into night, cloud cover, haze, fog (scene-weather.ts) */}
                 <WeatherControl sceneData={sceneData} mutateSceneData={mutateSceneData} />
 
+                {/* Map data: blob groups, roads, footprints, areas, places and the roadmap over the scene (MapDataControl.tsx) */}
+                <MapDataControl state={mapData} mutateSceneData={mutateSceneData} />
+
                 {/* Path traced: the scene through the Metal path tracer (ScenePathTrace.tsx) */}
                 <ScenePathTraceButton active={pathTraceOn} onToggle={() => setPathTraceOn(v => !v)} />
 
@@ -4486,6 +4543,9 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                     pickError={focusPickError}
                     readFocusDistance={readFocusDistance}
                 />
+
+                {/* AI Beautify: the current view as a photograph, downloaded as a PNG (QuickBeautifyButton.tsx) */}
+                <QuickBeautifyButton readView={readQuickBeautifyView} onError={setBeautifyError} />
 
                 {/* 2. Translate / Move (W) */}
                 <button

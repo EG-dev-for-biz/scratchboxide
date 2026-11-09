@@ -56,11 +56,14 @@ describe('a staged build drawn as its steps', () => {
 
     it('wires each step to the step that made what it reads, labelled by the result', () => {
         expect(edge('stage-tiles', 'step-remesh.tileRefine')?.label).toBe('tile mesh');
-        expect(edge('step-remesh.windowFit', 'step-polish.lattice')?.label).toBe('windows');
+        // the window array (a step this recorded build predates, so off) stands between the window fit and what reads its windows
+        expect(edge('step-remesh.windowFit', 'step-remesh.windowArray')?.label).toBe('windows');
+        expect(edge('step-remesh.windowFit', 'step-polish.lattice')?.label).toBe('windows (Window array per facade off)');
         expect(edge('step-remesh.revealDepth', 'step-polish.lattice')?.label).toBe('window depth');
         expect(edge('step-polish.cleanup', 'step-polish.lattice')?.label).toBe('cleaned scan');
         expect(edge('stage-survey', 'step-remesh.revealDepth')?.label).toBe('Street View photos');
-        expect(edge('step-remesh.windowFit', 'step-twin.materials')?.label).toBe('windows');
+        // the materials read no window: every texel by its detected material
+        expect(edge('step-remesh.windowFit', 'step-twin.materials')).toBeUndefined();
         // orient reads the base (seal did not run, so nothing stands between them)
         expect(edge('step-polish.base', 'step-polish.orient')).toBeDefined();
         // an unlisted step is unwired but started by the build
@@ -136,11 +139,9 @@ describe('step switches for the next build', () => {
         // cleanup off: the lattice reads tile_refine's remesh
         expect(edge(g, 'step-remesh.tileRefine', 'step-polish.lattice')).toMatchObject({ label: 'remeshed scan (Remesh cleanup off)', style: 'dashed' });
         expect(edge(g, 'step-polish.cleanup', 'step-polish.lattice')).toBeUndefined();
-        // window fit off: the lattice and the materials read the straightened photos, and reveal depth too
+        // window fit off: the lattice reads the straightened photos, and reveal depth too
         expect(edge(g, 'step-remesh.pipelineK', 'step-polish.lattice')?.label).toContain('straightened facade photos');
         expect(edge(g, 'step-remesh.windowFit', 'step-polish.lattice')).toBeUndefined();
-        // (this recorded build predates the facade reader, so its readings fall through to the straightened photos too)
-        expect(edge(g, 'step-remesh.pipelineK', 'step-twin.materials')?.label).toContain('straightened facade photos (Window fit off)');
         // the build node re-runs with the switches
         expect(node(g, BUILD_NODE_ID).parameters.toolArgs).toMatchObject({ steps: { 'polish.cleanup': false, 'remesh.windowFit': false } });
     });

@@ -17,12 +17,18 @@
  *
  *   level 0 (near)      its wood (the whole triangle budget), the twigs the budget prunes as instances of one tapered tube,
  *                       and leaves as instances of shared SB-Veggie leaf clusters (scratchbox_sb_veggie.hpp
- *                       SbVeggieFoliage::buildCluster): real blade sizes, scaled from the tree's height.
- *   level 1 (near-mid)  the same wood without the twigs, the same cluster positions, a share of each cluster's leaves
+ *                       SbVeggieFoliage::buildCluster): real blade sizes, scaled from the tree's height; and core cards
+ *                       (LodParams coreCards*): open sprays of leaves on cards inset beneath the leaves where the crown
+ *                       still shows through them, the dense inner foliage for 2 triangles a card.
+ *   level 1 (near-mid)  the same wood without the twigs, and clumped leaf cards over the crown (LodParams nearMidCards*:
+ *                       open sprays, their leaves a little larger than the tree's blades), placed until the crown is
+ *                       covered to its target: a few thousand triangles. Without cards (nearMidCards off, or a crown
+ *                       no coverage was measured for): the same cluster positions, a share of each cluster's leaves
  *                       (nearMidLeafCountShare) with the near blade outline, each larger so the cluster keeps its leaf
  *                       area (about 0.3 of the level-0 triangles).
- *   level 2 (mid)       the same wood, the same cluster positions, fewer larger leaves per cluster as coarse cards (about
- *                       one eighth of the level-0 triangles); no twigs.
+ *   level 2 (mid)       the same wood and large crown cards (LodParams crownCards*: dense sprays). Without cards: the
+ *                       same cluster positions, fewer larger leaves per cluster as coarse cards (about one eighth of
+ *                       the level-0 triangles); no twigs.
  *   level 3 (far)       the blob masses the budgeted meshing already builds on the same skeleton (nature::meshWithinBudget),
  *                       over its own wood: the trunk and main limbs only, a few hundred triangles (farWoodBudgetFor), which a
  *                       viewer shows through the holes it opens in the masses.
@@ -42,7 +48,9 @@
  * measured, and a crown short of its target (LodParams coverage*, Beer-Lambert from a leaf area index, scaled by the
  * crown's season cue: its measured green share, else its hue and chroma) gets clusters on the outer shell of its envelope
  * where the views see the most of it uncovered, then a layer deeper. A crown whose colour says leafless keeps few or no
- * leaves (its stations are thinned by the same cue).
+ * leaves (its stations are thinned by the same cue). The station fill is capped (coverageMaxFillShare: leaf clusters cost
+ * triangles); what it leaves short of the target the card sets close (cardTargetShare): the near level's core cards, the
+ * near-mid and mid levels' cards, each placed until the views see the crown covered to the target.
  */
 
 #include "scratchbox_math.hpp"
@@ -55,9 +63,11 @@
 #include <cmath>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <queue>
+#include <set>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -152,6 +162,10 @@ struct LodParams {
     double leafSizeRatioToCrownHeight{0.0065};
     double leafMinM{0.08};
     double leafMaxM{0.14};
+    // with a leaf texture chosen (TreeLodInput::atlasLeafLengthM), the cards take its leaf's real length within
+    // [leafMinM, atlasLeafMaxM] instead: a needle spray's shoot draws at its own size, not a blade's (the viewport cuts a
+    // porous set's cover at a hashed threshold, treeTextureMaterials.ts, so a large spray card does not draw as a flake)
+    double atlasLeafMaxM{0.5};
     double referenceLeafM{0.11};         // blade length the library clusters are built at (instances scale from it)
     // leaf clusters
     double clusterRadiusPerLeaf{7.0};    // reach of a cluster's sub-shoot spray, in blade lengths
@@ -215,7 +229,21 @@ struct LodParams {
     // side lets about a tenth of the sky through), 0.68 at half leaf, 0 when bare. Clusters go to the envelope's outer
     // shell first (inset shellInsetPerReach cluster reaches), then a layer deeper, at most coverageMaxFillShare of the
     // tree's stations more. The coverage grid's cell is coverageCellPerLeaf blade lengths (never more than 512 cells across).
+    // The far level's leaf masses (nature::meshWithinBudget: closed blobs, as many as the tree's triangle budget holds) are
+    // spread along the crown surface about their centres, across the reference crown's outward normal and not along it
+    // (detail::FarMassSpread: a mass on the surface wraps along it, no vertex further out of the reference crown than its
+    // mass or the near level's leaves reached), until the far level covers as much of each coverage view as the near level
+    // draws (CoverageLevel meanAreaM2 of drawnFar and drawnLevel0, within farMassCoverTolerance of it), by a factor between
+    // farMassMinSpread and farMassMaxSpread: the same triangles.
+    bool farMassCoverMatch{true};
+    double farMassMinSpread{0.6}, farMassMaxSpread{3.0};
+    double farMassCoverTolerance{0.01};
     bool coverageFill{true};
+    // A textured tree whose leaves are porous (a needle spray: its cut-out covers a third of its box, mostly gaps, drawn by
+    // the viewport's hashed alpha) is filled toward the target as those leaves cover it (CoverageViews::Cutout::porous),
+    // with up to 1 / its fill times as many fill stations; solid leaves (fill solidLeafFillHi and over: every broad leaf
+    // of the library) are filled as their outlines, as before. solidLeafFill: tree-texture-library.ts SOLID_LEAF_FILL.
+    double solidLeafFillLo{0.42}, solidLeafFillHi{0.60};
     double coverageLeafAreaIndex{4.6};
     double coverageProjection{0.5};
     double coverageMaxFillShare{0.8};
@@ -243,7 +271,17 @@ struct LodParams {
     int crownCardCandidates{240};               // candidate places a tree, at least; ...
     double crownCardCandidatesPerStation{0.5};  // ... or this share of its placed clusters, when more
     double crownCardSelectCellsPerSide{8};
-    int crownCardCols{2}, crownCardRows{2};
+    // The atlas holds crownCardCols x crownCardRows cells: the first crownCardDenseCells are the dense sprays above (the mid
+    // level's cards, seen from 60 m and more, where a card is a patch of crown), the rest open sprays (the near-mid level's
+    // cards and the near level's core cards, seen from a few metres: crownCardOpenLeaves leaves spread evenly, radius ~
+    // u^crownCardOpenCentreBias, out to crownCardOpenRadius, the outline barely lobed, so single leaves and the gaps between
+    // them show and a card reads as a spray of leaves, not as one large leaf).
+    int crownCardCols{3}, crownCardRows{3};
+    int crownCardDenseCells{4};
+    int crownCardOpenLeaves{90};
+    double crownCardOpenRadius{0.46};
+    double crownCardOpenCentreBias{0.5};
+    double crownCardOpenLobeDepth{0.15};
     int crownCardLeaves{300};
     double crownCardRadius{0.40};
     double crownCardCentreBias{0.6};
@@ -252,6 +290,34 @@ struct LodParams {
     int crownCardLobes{3};                      // lobes of a cell's outline (cells alternate this and one more)
     double crownCardLobeDepth{0.35};            // how far the outline dips between lobes (share of crownCardRadius)
     int crownCardMaskPx{128};
+    // Every card set (the mid cards, the near-mid cards and the near level's core cards) aims at the larger of its own
+    // reference (the clusters it replaces, or the blades it fills between) and cardTargetShare x the crown's Beer-Lambert
+    // target (coverageTarget): a summer crown seen from the side lets about a tenth of the sky through at every level,
+    // whatever its clusters reached under coverageMaxFillShare. 0: the clusters' own coverage alone (as before).
+    double cardTargetShare{1.0};
+    // The near-mid level drawn as clumped leaf cards (the crown-card atlas, smaller cards) instead of a share of each cluster's
+    // leaves: from 12-30 m a crown's cover is what reads, and a near-mid cluster costs thousands of triangles where a card
+    // costs 2. Cards are placed as the mid level's are (placed clusters' leaf centres, five orientations, lazy greedy over the
+    // coverage views).
+    // (open cells of the atlas). A card's side is nearMidCardLeafScale x the tree's blade length / crownCardLeafLength, so its
+    // leaves are drawn nearMidCardLeafScale times the tree's own blades (a little larger: fewer cards, and at 12 m and more
+    // the cover is what reads), within [nearMidCardMinM, nearMidCardMaxM].
+    bool nearMidCards{true};
+    double nearMidCardLeafScale{1.3};
+    double nearMidCardMinM{0.6}, nearMidCardMaxM{2.4};
+    double nearCardCandidatesPerStation{0.5};   // candidate places of the near-mid and core cards, as crownCardCandidatesPerStation
+    // Core cards: the near level keeps every leaf it has and adds clumped leaf cards inset into the crown beneath them
+    // (coreCardInsetPerReach cluster reaches toward the reference crown's centre from the placed clusters' leaf centres), only
+    // where the views still see the crown through the near level's blades, until the crown is covered to its target. They
+    // stand for the dense inner foliage the station cap (coverageMaxFillShare) leaves out; a viewer darkens them with the
+    // crown's depth, so they read as the dark core seen through the gaps of the lit shell (the grass field's underlayer is
+    // the same idea). Open cells of the atlas; side coreCardLeafScale x the blade length / crownCardLeafLength (its leaves a
+    // little larger than the tree's own: they are seen through gaps, in shade, and a card is an instance to store), within
+    // [coreCardMinM, coreCardMaxM].
+    bool coreCards{true};
+    double coreCardLeafScale{1.25};
+    double coreCardMinM{0.6}, coreCardMaxM{2.2};
+    double coreCardInsetPerReach{0.9};
     // The season cue a crown's measured colour gives (tile_vegetation crowns.json colour): leafiness rises from 0 to 1 as
     // the share of its cells that pass the green-vegetation test rises from seasonGreenBare to seasonGreenFull; with no
     // judged cells, as the mean's chroma rises from seasonChromaBare to seasonChromaFull, weighted by how green its hue is
@@ -293,6 +359,10 @@ struct LibraryMesh {
     std::vector<uint32_t> bladeTri;      // 3 per triangle, into bladePos
     std::vector<Vec2> bladeUv;           // the blade's own coordinates at each bladePos (u = 0.5 + across / length, v = along / length)
     std::vector<Sphere> leafSpheres;     // `first`, `count`: triangles of bladeTri
+    // the rest of what the mesh draws (petioles, sub-shoots), own vertices: a blade's underside is its upper side's triangle
+    // again and is left out, so the blades' upper sides and these cover what the whole mesh covers
+    std::vector<Vec3> otherPos;
+    std::vector<uint32_t> otherTri;
     Vec3 bladeCentre;
     float bladeRadius{0};
     double bladeArea{0};                 // area of the blades' upper sides, m^2 (what a level's leaf cover is matched on)
@@ -317,6 +387,7 @@ struct ClusterVariant {
 struct CrownCardLayout {
     struct Leaf { float u{0.5f}, v{0.5f}, angle{0}, length{0.1f}, pick{0}; };
     int cols{2}, rows{2};
+    int denseCells{4};                           // cells [0, denseCells) are dense sprays (the mid level's), the rest open sprays
     std::vector<std::vector<Leaf>> cells;
     int cellCount() const { return cols * rows; }
 };
@@ -356,19 +427,22 @@ inline CrownCardLayout buildCrownCardLayout(const LodParams& P) {
     L.cols = std::max(1, P.crownCardCols);
     L.rows = std::max(1, P.crownCardRows);
     const uint64_t seed = 0xC4A2DCA2D5ull;
-    const double R = std::clamp(P.crownCardRadius, 0.05, 0.5);
+    L.denseCells = std::clamp(P.crownCardDenseCells, 0, L.cellCount());
     for (int c = 0; c < L.cellCount(); ++c) {
         std::vector<std::pair<double, CrownCardLayout::Leaf>> leaves;
+        const bool open = c >= L.denseCells;
+        const double R = std::clamp(open ? P.crownCardOpenRadius : P.crownCardRadius, 0.05, 0.5);
+        const double lobeDepth = open ? P.crownCardOpenLobeDepth : P.crownCardLobeDepth, bias = open ? P.crownCardOpenCentreBias : P.crownCardCentreBias;
         const double lobes = std::max(1, P.crownCardLobes + c % 2), phase = 2 * M_PI * hashUnit(seed, static_cast<uint64_t>(c), 0xF00Dull);
-        for (int i = 0; i < std::max(1, P.crownCardLeaves); ++i) {
+        for (int i = 0; i < std::max(1, open ? P.crownCardOpenLeaves : P.crownCardLeaves); ++i) {
             const double a = hashUnit(seed, static_cast<uint64_t>(c), static_cast<uint64_t>(5 * i));
             const double b = hashUnit(seed, static_cast<uint64_t>(c), static_cast<uint64_t>(5 * i + 1));
             const double h = hashUnit(seed, static_cast<uint64_t>(c), static_cast<uint64_t>(5 * i + 2));
             const double g = hashUnit(seed, static_cast<uint64_t>(c), static_cast<uint64_t>(5 * i + 3));
             const double th = 2 * M_PI * b;
             // the spray's outline: lobed, so a card does not read as a disc (crownCardLobes lobes, crownCardLobeDepth deep)
-            const double lobe = 1.0 - std::clamp(P.crownCardLobeDepth, 0.0, 0.9) * (0.5 + 0.5 * std::cos(lobes * th + phase));
-            const double r = R * lobe * std::pow(a, std::max(0.05, P.crownCardCentreBias));
+            const double lobe = 1.0 - std::clamp(lobeDepth, 0.0, 0.9) * (0.5 + 0.5 * std::cos(lobes * th + phase));
+            const double r = R * lobe * std::pow(a, std::max(0.05, bias));
             CrownCardLayout::Leaf lf;
             lf.u = static_cast<float>(0.5 + r * std::cos(th));
             lf.v = static_cast<float>(0.5 + r * std::sin(th));
@@ -455,6 +529,30 @@ inline LibraryMesh fromCluster(const std::string& name, const sv::SbVeggieCluste
             m.bladeUv.push_back(idx < c.uvs.size() ? c.uvs[idx] : Vec2(0.5f, 0.5f));
         }
         m.bladeTri.push_back(it->second);
+    }
+    {
+        // every other triangle, less those on the same three points as a blade's upper side (its underside)
+        auto corners = [&](const uint32_t* t) {
+            std::array<std::array<float, 3>, 3> k;
+            for (int j = 0; j < 3; ++j) { const Vec3& p = c.positions[t[j]]; k[static_cast<size_t>(j)] = {p.x, p.y, p.z}; }
+            std::sort(k.begin(), k.end());
+            return k;
+        };
+        std::set<std::array<std::array<float, 3>, 3>> fronts;
+        for (size_t t = 0; t + 2 < c.bladeFrontIndices.size(); t += 3) fronts.insert(corners(&c.bladeFrontIndices[t]));
+        std::unordered_map<uint32_t, uint32_t> other;
+        for (size_t t = 0; t + 2 < c.indices.size(); t += 3) {
+            if (fronts.count(corners(&c.indices[t]))) continue;
+            for (int j = 0; j < 3; ++j) {
+                const uint32_t idx = c.indices[t + static_cast<size_t>(j)];
+                auto it = other.find(idx);
+                if (it == other.end()) {
+                    it = other.emplace(idx, static_cast<uint32_t>(m.otherPos.size())).first;
+                    m.otherPos.push_back(c.positions[idx]);
+                }
+                m.otherTri.push_back(it->second);
+            }
+        }
     }
     const size_t front = m.bladeTri.size() / 3;
     for (size_t t = 0; t < front; ++t) {
@@ -582,7 +680,7 @@ inline ClusterLibrary buildClusterLibrary(const LodParams& P) {
         }
     }
     for (size_t k = 0; k < P.twigTapers.size(); ++k) lib.twigs.push_back(buildTwigTube(P.twigSides, P.twigTapers[k], "sb_veggie_twig_" + std::to_string(k)));
-    if (P.crownCards) {
+    if (P.crownCards || P.nearMidCards || P.coreCards) {
         lib.cardLayout = buildCrownCardLayout(P);
         lib.cardMask = rasterizeCardMask(lib.cardLayout, P.morphology.blade.widthRatio, 1.0, P.crownCardMaskPx);
         for (int c = 0; c < lib.cardLayout.cellCount(); ++c) lib.cards.push_back(buildCrownCard(lib.cardLayout, c, "sb_crown_card_" + std::to_string(c)));
@@ -709,6 +807,7 @@ inline double coverageTarget(const LodParams& P, double leafiness) {
 /** Projected coverage of one level: the mean and least share over the views, against the ellipsoid and the hull. */
 struct CoverageLevel {
     double meanEllipsoid{0}, minEllipsoid{0}, meanHull{0};
+    double meanAreaM2{0};                        // the area covered, inside the silhouettes or not, the mean over the views (m^2)
 };
 
 namespace detail {
@@ -726,10 +825,13 @@ struct CoverageViews {
         double x0{0}, y0{0};
         int w{0}, h{0};
         std::vector<uint8_t> ell, hull, covered;
-        size_t nEll{0}, nHull{0}, covEll{0}, covHull{0};
+        size_t nEll{0}, nHull{0}, covEll{0}, covHull{0}, covAll{0};
     };
-    /** A textured leaf's outline in a blade's coordinates: an ellipse centred (0.5, cv), semi-axes hu x hv, scaled by sqrt(r2). */
-    struct Cutout { double cv{0.5}, hu{0.35}, hv{0.5}, r2{1}; };
+    /** A textured leaf's outline in a blade's coordinates: an ellipse centred (0.5, cv), semi-axes hu x hv, scaled by sqrt(r2).
+     *  The porous share of a leaf set (`porous`, 1 - its solidity: a needle spray) covers each cell of its drawn box (the
+     *  ellipse's bounding box) with probability `porousCover` (its fill), per placed cluster and cell, as the viewport's hashed
+     *  alpha draws it: overlapping porous leaves cover 1 - (1 - fill)^k of a cell, not the union of solid shapes. */
+    struct Cutout { double cv{0.5}, hu{0.35}, hv{0.5}, r2{1}; double porous{0}, porousCover{0}; };
     std::vector<View> views;
     double cell{0.05};
 
@@ -818,10 +920,10 @@ struct CoverageViews {
     }
 
     void clearCovered() {
-        for (auto& v : views) { std::fill(v.covered.begin(), v.covered.end(), 0); v.covEll = v.covHull = 0; }
+        for (auto& v : views) { std::fill(v.covered.begin(), v.covered.end(), 0); v.covEll = v.covHull = v.covAll = 0; }
     }
 
-    void triangle(View& v, const Vec3& a, const Vec3& b, const Vec3& c, const Vec2& ua, const Vec2& ub, const Vec2& uc, const Cutout* cut) {
+    void triangle(View& v, const Vec3& a, const Vec3& b, const Vec3& c, const Vec2& ua, const Vec2& ub, const Vec2& uc, const Cutout* cut, uint64_t salt = 0) {
         const double inv = 1.0 / cell;
         const double ax_ = (v.ax.dot(a) - v.x0) * inv - 0.5, ay_ = (v.ay.dot(a) - v.y0) * inv - 0.5;
         const double bx = (v.ax.dot(b) - v.x0) * inv - 0.5, by = (v.ay.dot(b) - v.y0) * inv - 0.5;
@@ -842,9 +944,18 @@ struct CoverageViews {
                 if (cut) {
                     const double u = w0 * ua.x + w1 * ub.x + w2 * uc.x, t = w0 * ua.y + w1 * ub.y + w2 * uc.y;
                     const double su = (u - 0.5) / cut->hu, sv = (t - cut->cv) / cut->hv;
-                    if (su * su + sv * sv > cut->r2) continue;
+                    const bool inside = su * su + sv * sv <= cut->r2;
+                    if (cut->porous > 0) {
+                        // the solid share covers its outline, the porous share each cell of its box at its cover
+                        const bool inBox = std::abs(su) <= 1.0 && std::abs(sv) <= 1.0;
+                        const double p = (1.0 - cut->porous) * (inside ? 1.0 : 0.0) + cut->porous * (inBox ? cut->porousCover : 0.0);
+                        if (p <= 0.0 || hashUnit(salt, at, static_cast<uint64_t>(v.w)) >= p) continue;
+                    } else if (!inside) {
+                        continue;
+                    }
                 }
                 v.covered[at] = 1;
+                ++v.covAll;
                 v.covEll += v.ell[at];
                 v.covHull += v.hull[at];
             }
@@ -882,7 +993,7 @@ struct CoverageViews {
                     const double t = w0 * st[T[0]][1] + w1 * st[T[1]][1] + w2 * st[T[2]][1];
                     if (!mask.at(maskCell, s, t)) continue;
                     gained += v.ell[at];
-                    if (set) { v.covered[at] = 1; v.covEll += v.ell[at]; v.covHull += v.hull[at]; }
+                    if (set) { v.covered[at] = 1; v.covEll += v.ell[at]; v.covHull += v.hull[at]; ++v.covAll; }
                 }
             }
         }
@@ -904,6 +1015,81 @@ struct CoverageViews {
         return n;
     }
 
+    /**
+     * Covers what every triangle of one placed library mesh covers (a cluster's blades, both sides, petioles and sub-shoots; a
+     * twig's tube), solid, in every view.
+     */
+    void addWhole(const LibraryMesh& m, const Instance& in) {
+        if (m.indices.empty()) return;
+        std::vector<Vec3> p(m.positions.size());
+        for (size_t k = 0; k < p.size(); ++k) p[k] = in.t + in.q.rotate(Vec3(m.positions[k].x * in.s.x, m.positions[k].y * in.s.y, m.positions[k].z * in.s.z));
+        const Vec2 z(0.5f, 0.5f);
+        for (auto& v : views)
+            for (size_t t = 0; t + 2 < m.indices.size(); t += 3) triangle(v, p[m.indices[t]], p[m.indices[t + 1]], p[m.indices[t + 2]], z, z, z, nullptr);
+    }
+
+    /** Covers what one placed library mesh draws beside its blades' upper sides (its petioles, sub-shoots), solid, in every view. */
+    void addOther(const LibraryMesh& m, const Instance& in) {
+        if (m.otherTri.empty()) return;
+        std::vector<Vec3> p(m.otherPos.size());
+        for (size_t k = 0; k < p.size(); ++k) p[k] = in.t + in.q.rotate(Vec3(m.otherPos[k].x * in.s.x, m.otherPos[k].y * in.s.y, m.otherPos[k].z * in.s.z));
+        const Vec2 z(0.5f, 0.5f);
+        for (auto& v : views)
+            for (size_t t = 0; t + 2 < m.otherTri.size(); t += 3) triangle(v, p[m.otherTri[t]], p[m.otherTri[t + 1]], p[m.otherTri[t + 2]], z, z, z, nullptr);
+    }
+
+    /** What every view covers, to come back to (restore). */
+    struct Snapshot {
+        std::vector<std::vector<uint8_t>> covered;
+        std::vector<std::array<size_t, 3>> counts;   // covEll, covHull, covAll
+    };
+    Snapshot snapshot() const {
+        Snapshot s;
+        for (const auto& v : views) { s.covered.push_back(v.covered); s.counts.push_back({v.covEll, v.covHull, v.covAll}); }
+        return s;
+    }
+    void restore(const Snapshot& s) {
+        for (size_t k = 0; k < views.size() && k < s.covered.size(); ++k) {
+            views[k].covered = s.covered[k];
+            views[k].covEll = s.counts[k][0]; views[k].covHull = s.counts[k][1]; views[k].covAll = s.counts[k][2];
+        }
+    }
+
+    /**
+     * Covers what `finer` (views of the same directions over the same crown, at a finer cell) covers: a cell here is covered
+     * when at least half of its area is, counted from the finer cells whose centres fall in it. Far cheaper than covering the
+     * same leaves again at this resolution.
+     */
+    void coverFrom(const CoverageViews& finer) {
+        for (size_t k = 0; k < views.size() && k < finer.views.size(); ++k) {
+            View& v = views[k];
+            const View& f = finer.views[k];
+            std::vector<uint32_t> n(v.covered.size(), 0);
+            for (int j = 0; j < f.h; ++j) {
+                const int cj = static_cast<int>(std::floor((f.y0 + (j + 0.5) * finer.cell - v.y0) / cell));
+                if (cj < 0 || cj >= v.h) continue;
+                for (int i = 0; i < f.w; ++i) {
+                    if (!f.covered[static_cast<size_t>(j) * static_cast<size_t>(f.w) + static_cast<size_t>(i)]) continue;
+                    const int ci = static_cast<int>(std::floor((f.x0 + (i + 0.5) * finer.cell - v.x0) / cell));
+                    if (ci >= 0 && ci < v.w) ++n[static_cast<size_t>(cj) * static_cast<size_t>(v.w) + static_cast<size_t>(ci)];
+                }
+            }
+            const double half = 0.5 * (cell * cell) / (finer.cell * finer.cell);
+            for (size_t at = 0; at < n.size(); ++at) {
+                if (v.covered[at] || static_cast<double>(n[at]) < half) continue;
+                v.covered[at] = 1; ++v.covAll; v.covEll += v.ell[at]; v.covHull += v.hull[at];
+            }
+        }
+    }
+
+    /** Covers what a plain mesh covers (a level's wood, the far level's leaf masses), solid, in every view. */
+    void addMesh(const geometry::Mesh& m) {
+        const Vec2 z(0.5f, 0.5f);
+        for (auto& v : views)
+            for (size_t t = 0; t + 2 < m.indices.size(); t += 3)
+                triangle(v, m.vertices[m.indices[t]], m.vertices[m.indices[t + 1]], m.vertices[m.indices[t + 2]], z, z, z, nullptr);
+    }
+
     /** Covers what the blades of one placed library mesh cover, in every view. */
     void add(const LibraryMesh& m, const Instance& in, const Cutout* cut = nullptr) {
         if (m.bladeTri.empty()) return;
@@ -911,10 +1097,17 @@ struct CoverageViews {
         for (size_t k = 0; k < p.size(); ++k) p[k] = in.t + in.q.rotate(Vec3(m.bladePos[k].x * in.s.x, m.bladePos[k].y * in.s.y, m.bladePos[k].z * in.s.z));
         const bool uv = m.bladeUv.size() == m.bladePos.size();
         const Vec2 z(0.5f, 0.5f);
+        // a porous cut-out's cells are drawn per placed cluster: its place seeds the hash
+        uint64_t salt = 0;
+        if (cut && cut->porous > 0) {
+            uint32_t bits[3];
+            std::memcpy(&bits[0], &in.t.x, 4); std::memcpy(&bits[1], &in.t.y, 4); std::memcpy(&bits[2], &in.t.z, 4);
+            salt = mix64((static_cast<uint64_t>(bits[0]) << 32) ^ (static_cast<uint64_t>(bits[1]) << 16) ^ bits[2]);
+        }
         for (auto& v : views) {
             for (size_t t = 0; t + 2 < m.bladeTri.size(); t += 3) {
                 const uint32_t a = m.bladeTri[t], b = m.bladeTri[t + 1], c = m.bladeTri[t + 2];
-                triangle(v, p[a], p[b], p[c], uv ? m.bladeUv[a] : z, uv ? m.bladeUv[b] : z, uv ? m.bladeUv[c] : z, uv ? cut : nullptr);
+                triangle(v, p[a], p[b], p[c], uv ? m.bladeUv[a] : z, uv ? m.bladeUv[b] : z, uv ? m.bladeUv[c] : z, uv ? cut : nullptr, salt + t);
             }
         }
     }
@@ -928,6 +1121,7 @@ struct CoverageViews {
             const double h = v.nHull ? static_cast<double>(v.covHull) / static_cast<double>(v.nHull) : 0.0;
             L.meanEllipsoid += e / static_cast<double>(views.size());
             L.meanHull += h / static_cast<double>(views.size());
+            L.meanAreaM2 += static_cast<double>(v.covAll) * cell * cell / static_cast<double>(views.size());
             L.minEllipsoid = std::min(L.minEllipsoid, e);
         }
         return L;
@@ -974,6 +1168,10 @@ inline CoverageViews::Cutout leafCutout(const LodParams& P, double fill, double 
     c.hv = 0.5 * f;
     c.cv = 0.5 * f;
     c.r2 = std::clamp(fill, 0.0, 1.0) / (M_PI / 4.0);
+    // how solid the set's leaves are (tree-texture-library.ts leafSolidity: smoothstep of the fill over solidLeafFill)
+    const double sl = std::clamp((fill - P.solidLeafFillLo) / std::max(1e-9, P.solidLeafFillHi - P.solidLeafFillLo), 0.0, 1.0);
+    c.porous = fill > 0 ? 1.0 - sl * sl * (3.0 - 2.0 * sl) : 0.0;
+    c.porousCover = std::clamp(fill, 0.0, 1.0);
     return c;
 }
 } // namespace detail
@@ -1007,6 +1205,9 @@ struct TreeLodInput {
     double leafiness{1.0};                       // the crown's season cue (seasonLeafiness): scales psiSeason and the coverage target
     double cutoutFill{0.0};                      // the chosen leaf texture's fill of its cell (0: no textures; the cut-out coverage is not measured)
     double cutoutAspect{0.0};                    // ... and its leaf's width / length
+    double atlasLeafLengthM{0.0};                // ... and its leaf's real length (0: none; the cards take it, LodParams::atlasLeafMaxM)
+    geometry::Mesh* farFoliage{nullptr};         // the far level's leaf masses (nature::meshWithinBudget): measured, and spread to the near level's cover (LodParams farMass*) (null: neither)
+    size_t farPieces{0};                         // how many equal pieces (leaf masses, strands, leaflets) farFoliage holds (TreeBudgetReport::foliageClumps); 0: unknown, never trimmed
 };
 
 /** What the leaves of a tree cover of its measured crown, seen from outside (LodParams coverage*, detail::CoverageViews). */
@@ -1018,6 +1219,18 @@ struct CoverageReport {
     CoverageLevel level0, nearMid, mid;          // solid leaves (clay), after the fill; `mid` is what the mid level draws (its crown cards when it has them)
     CoverageLevel level0Cutout, midCutout;       // cut out as the chosen leaf texture is (only with textures)
     CoverageLevel midClusters, midClustersCutout; // the mid clusters (what the mid level drew before crown cards; the cards' target)
+    CoverageLevel nearMidClusters;               // the near-mid clusters' blades (what the near-mid level drew before its cards)
+    CoverageLevel level0Core;                    // the near level's blades with its core cards (LodParams coreCards*)
+    double nearMidCardTarget{0}, coreCardTarget{0};
+    // Everything each level draws, not only its leaf blades: the near level its wood, its twigs and every triangle of its
+    // leaf clusters (blades, petioles, sub-shoots); the near-mid and mid levels their wood and their clusters or crown
+    // cards; the far level its trunk and main limbs and its leaf masses. Solid (clay): with the blades cut out as a leaf
+    // texture cuts them the ratios between levels moved by under 0.01 on the forest demo's 49 crowns, for twice the time.
+    // What a viewer shows of the crown before it opens holes of its own.
+    CoverageLevel drawnLevel0, drawnNearMid, drawnMid, drawnFar;
+    bool drawnFarMeasured{false};
+    CoverageLevel drawnFarBefore;                // the far level as the budgeted meshing built its masses
+    double farMassSpread{1};                     // how far its masses were spread along the crown surface (LodParams farMass*)
     double cardTarget{0};                        // the projected coverage the crown cards were placed toward
     size_t fillStations{0};
     CrownEllipsoid reference;                    // the measured crown the shares are of (surface samples and footprint ring)
@@ -1058,12 +1271,37 @@ struct TreeLod {
     size_t cardCandidates{0};
     size_t cardCount() const { size_t n = 0; for (const auto& c : cards) n += c.size(); return n; }
     bool midCards() const { return cardCount() > 0; }
-    double msWood{0}, msTwigs{0}, msStations{0}, msRepair{0}, msFill{0}, msMeasure{0}, msCards{0};   // where the build's time went
+    // the near-mid level's clumped leaf cards (LodParams nearMidCards*): when there are any the near-mid level draws them
+    // instead of the near-mid clusters; and the near level's core cards (LodParams coreCards*), drawn with its clusters
+    std::vector<std::vector<Instance>> nearMidCardSet, coreCardSet;
+    double nearMidCardSideM{0}, coreCardSideM{0};
+    size_t nearMidCardCandidates{0}, coreCardCandidates{0};
+    static size_t countOf(const std::vector<std::vector<Instance>>& s) { size_t n = 0; for (const auto& c : s) n += c.size(); return n; }
+    size_t nearMidCardCount() const { return countOf(nearMidCardSet); }
+    size_t coreCardCount() const { return countOf(coreCardSet); }
+    bool nearMidCards() const { return nearMidCardCount() > 0; }
+    bool anyCards() const { return midCards() || nearMidCards() || coreCardCount() > 0; }
+    double msWood{0}, msTwigs{0}, msStations{0}, msRepair{0}, msFill{0}, msMeasure{0}, msCards{0}, msDrawn{0};   // where the build's time went
+    double msNearMidCards{0}, msCoreCards{0};
     std::string error;
-    /** Triangles drawn at the near level / the mid level / the near-mid level (wood, twigs and clusters, instances expanded). */
-    size_t drawnLevel0() const { return woodTriangles + twigTriangles + level0.clusterTriangles; }
-    size_t drawnLevel1() const { return woodTriangles + (midCards() ? 2 * cardCount() : level1.clusterTriangles); }
-    size_t drawnNearMid() const { return woodTriangles + nearMid.clusterTriangles; }
+    // A rosette tree's leaves (nature::SpaceColonizationConfig::rosetteLeaves > 0): the leaflets of its arching rachises,
+    // drawn as the tree's own mesh at the near (0), near-mid (1) and mid (2) levels, fewer leaflets a side each level out
+    // and more at each than the far level's (frondLeafletsPerSide). Such a tree carries no leaf clusters and no cards:
+    // its fronds are its foliage at every distance, so its crown keeps its spread and outline.
+    std::array<geometry::Mesh, 3> fronds;
+    std::array<std::vector<float>, 3> frondGrowth;
+    std::array<int, 4> frondLeafletsPerSide{};   // near, near-mid, mid, far
+    size_t frondTriangles(int level) const { return fronds[static_cast<size_t>(level)].indices.size() / 3; }
+    bool hasFronds() const { return !fronds[0].indices.empty(); }
+    // Every level draws fewer triangles than the one nearer it (near > near-mid > mid > far), whatever the tree's form:
+    // when a level would not, the least of what the farther one draws is left out: its last-placed cards (the greedy
+    // placement puts the ones that cover most first), or the last of the far level's leaf masses (the meshing puts the
+    // ones on the measured surface first). How many of each were left out to keep the order:
+    size_t orderDroppedNearMidCards{0}, orderDroppedMidCards{0}, orderDroppedFarPieces{0};
+    /** Triangles drawn at the near level / the mid level / the near-mid level (wood, twigs, clusters, cards and fronds, instances expanded). */
+    size_t drawnLevel0() const { return woodTriangles + twigTriangles + level0.clusterTriangles + 2 * coreCardCount() + frondTriangles(0); }
+    size_t drawnLevel1() const { return woodTriangles + (midCards() ? 2 * cardCount() : level1.clusterTriangles) + frondTriangles(2); }
+    size_t drawnNearMid() const { return woodTriangles + (nearMidCards() ? 2 * nearMidCardCount() : nearMid.clusterTriangles) + frondTriangles(1); }
     /** Triangles of the far level given its blob leaf masses: the trunk and main limbs and the masses. */
     size_t drawnFar(size_t blobTriangles) const { return farWoodTriangles + blobTriangles; }
 };
@@ -1235,6 +1473,80 @@ inline Vec3 ellipsoidNormal(const CrownEllipsoid& e, const Vec3& p) {
     return g.lengthSquared() > 1e-12f ? g.normalized() : Vec3(0, 1, 0);
 }
 
+/** Where p lies against an ellipsoid: 1 on its surface, less inside. */
+inline double ellipsoidRadius(const CrownEllipsoid& e, const Vec3& p) {
+    const double cy = std::cos(e.yawRad), sy = std::sin(e.yawRad);
+    const Vec3 axes[3] = {Vec3(static_cast<float>(cy), 0, static_cast<float>(sy)), Vec3(0, 1, 0), Vec3(static_cast<float>(-sy), 0, static_cast<float>(cy))};
+    const Vec3 d = p - e.centre;
+    double q = 0;
+    for (int k = 0; k < 3; ++k) { const double u = d.dot(axes[k]) / std::max(1e-6, e.radii[static_cast<size_t>(k)]); q += u * u; }
+    return std::sqrt(q);
+}
+
+/**
+ * The far level's leaf masses (closed blobs, one connected piece each) spread along the crown surface by a factor s about
+ * their centres: stretched across the reference crown's outward normal at each centre and not along it, and every vertex
+ * that would then lie further out of the reference ellipsoid than the mass's farthest one did, or than the near level's
+ * leaves reach (`leafReach`, in the same measure), pulled back onto that shell toward the crown's centre. A mass on the
+ * crown's surface wraps along it; the crown's outline stays where the near level's leaves put it.
+ */
+struct FarMassSpread {
+    CrownEllipsoid ref;
+    std::vector<Vec3> pos, nrm;                  // the masses as built
+    std::vector<uint32_t> piece;                 // each vertex's mass
+    std::vector<Vec3> centre, normal;            // per mass: its centroid, the reference's outward normal there
+    std::vector<double> reach;                   // per mass: how far out of the reference its vertices may lie
+
+    void init(const geometry::Mesh& m, const CrownEllipsoid& crown, double leafReach) {
+        ref = crown;
+        pos = m.vertices;
+        nrm = m.normals;
+        const size_t n = pos.size();
+        std::vector<uint32_t> up(n);
+        for (uint32_t k = 0; k < n; ++k) up[k] = k;
+        auto find = [&](uint32_t a) { while (up[a] != a) a = up[a] = up[up[a]]; return a; };
+        for (size_t t = 0; t + 2 < m.indices.size(); t += 3) {
+            const uint32_t a = find(m.indices[t]), b = find(m.indices[t + 1]);
+            up[b] = a;
+            up[find(m.indices[t + 2])] = a;
+        }
+        std::unordered_map<uint32_t, uint32_t> id;
+        piece.assign(n, 0);
+        std::vector<uint32_t> count;
+        for (uint32_t k = 0; k < n; ++k) {
+            const uint32_t r = find(k);
+            auto it = id.find(r);
+            if (it == id.end()) { it = id.emplace(r, static_cast<uint32_t>(centre.size())).first; centre.push_back(Vec3(0, 0, 0)); count.push_back(0); }
+            piece[k] = it->second;
+            centre[it->second] += pos[k];
+            ++count[it->second];
+        }
+        normal.resize(centre.size());
+        reach.assign(centre.size(), std::max(1.0, leafReach));
+        for (size_t p = 0; p < centre.size(); ++p) { centre[p] = centre[p] / static_cast<float>(count[p]); normal[p] = ellipsoidNormal(ref, centre[p]); }
+        for (uint32_t k = 0; k < n; ++k) reach[piece[k]] = std::max(reach[piece[k]], ellipsoidRadius(ref, pos[k]));
+    }
+
+    /** The masses at spread s; normals follow the stretch (its inverse transpose). */
+    void apply(geometry::Mesh& m, double s) const {
+        const bool normals = nrm.size() == pos.size() && m.normals.size() == pos.size();
+        for (size_t v = 0; v < pos.size(); ++v) {
+            const Vec3& c = centre[piece[v]], &n = normal[piece[v]];
+            const Vec3 d = pos[v] - c;
+            const float r = d.dot(n);
+            Vec3 p = c + n * r + (d - n * r) * static_cast<float>(s);
+            const double out = ellipsoidRadius(ref, p);
+            if (out > reach[piece[v]]) p = ref.centre + (p - ref.centre) * static_cast<float>(reach[piece[v]] / out);
+            m.vertices[v] = p;
+            if (normals) {
+                const float rn = nrm[v].dot(n);
+                const Vec3 g = n * rn + (nrm[v] - n * rn) * static_cast<float>(1.0 / s);
+                m.normals[v] = g.lengthSquared() > 1e-12f ? g.normalized() : nrm[v];
+            }
+        }
+    }
+};
+
 /**
  * The card atlas's cut-out as a textured leaf covers it. A viewer draws each textured leaf at the area of the clay one (its
  * box scaled so `fill` of it covers what the clay ellipse covers: crownCardTexturedScale), so the textured cut-out is an
@@ -1248,36 +1560,46 @@ inline CardMask texturedCardMask(const ClusterLibrary& lib, double fill, double 
 }
 
 /**
- * The mid level's crown cards of a tree (LodParams crownCards*): cards of side clamp(crownCardSidePerReach x reachM) at the
- * placed clusters' leaf centres, facing the reference crown's outward normal or tilted from it, chosen greedily (lazily:
- * a card's gain only falls as others are placed) by the crown silhouette each newly covers, in coarse views, until the mid
- * clusters' coverage (times crownCardCoverageShare) is reached in `fine` (the tree's coverage views, left covered by the
- * cards). `refPts` are the reference's points (the views' hull).
+ * One set of cards of a tree (the mid level's crown cards, the near-mid level's clumped leaf cards, the near level's core
+ * cards): cards of side `side` at the placed clusters' leaf centres (each moved `insetM` toward the reference crown's centre,
+ * never more than 0.9 of the way), facing the reference crown's outward normal or tilted from it by crownCardTiltRad (four
+ * ways), chosen greedily (lazily: a card's gain only falls as others are placed) by the crown silhouette each newly covers,
+ * in coarse views, until `target` is reached in `fine` (the tree's coverage views, left covered by what `precover` covers and
+ * the cards). `precover` covers the same thing in a set of views (the coarse and the fine ones both): nothing for a level the
+ * cards draw alone, the level's blades for cards that fill between them. `refPts` are the reference's points (the views' hull).
+ * Returns the cards per atlas cell in `out` and the candidates tried.
  */
-inline void placeCrownCards(TreeLod& T, const TreeLodInput& in, const ClusterLibrary& lib, double reachM, CoverageViews& fine, const std::vector<Vec3>& refPts) {
+template <class Precover>
+inline size_t placeCardSet(std::vector<std::vector<Instance>>& out, const TreeLod& T, const TreeLodInput& in, const ClusterLibrary& lib, CoverageViews& fine,
+                           const std::vector<Vec3>& refPts, double side, double target, double insetM, uint64_t salt, bool openCells, Precover&& precover) {
     const LodParams& P = lib.params;
     const CrownEllipsoid& ref = T.coverage.reference;
-    const int cells = static_cast<int>(lib.cards.size());
-    T.cards.assign(lib.cards.size(), {});
-    if (cells <= 0) return;
-    const double side = std::clamp(P.crownCardSidePerReach * reachM, P.crownCardMinM, std::max(P.crownCardMinM, P.crownCardMaxM));
-    T.cardSideM = side;
-    const double target = std::clamp(P.crownCardCoverageShare * T.coverage.midClusters.meanEllipsoid, 0.0, 1.0);
-    T.coverage.cardTarget = target;
+    out.assign(lib.cards.size(), {});
+    // the atlas cells the set draws: the dense sprays, or the open ones (every cell when the atlas has none of the kind)
+    const int all = static_cast<int>(lib.cards.size()), dense = std::clamp(lib.cardLayout.denseCells, 0, all);
+    int cell0 = openCells ? dense : 0, cells = openCells ? all - dense : dense;
+    if (cells <= 0) { cell0 = 0; cells = all; }
+    if (cells <= 0 || !(side > 0)) return 0;
     const size_t cap = std::max<size_t>(8, static_cast<size_t>(std::ceil(std::max(0.0, P.crownCardMaxPerArea) * ellipsoidArea(ref) / (side * side))));
     // candidates: the leaf centres of the placed clusters (their mid meshes), evenly thinned, with their growth order
     std::vector<std::pair<Vec3, float>> at;
     for (size_t k = 0; k < T.clusters.size() && k < lib.variants.size(); ++k)
         for (const auto& c : T.clusters[k]) at.push_back({transformPoint(c.t, c.q, c.s, lib.variants[k].level1.bladeCentre), c.order});
-    if (at.empty()) return;
-    const size_t want = std::max<size_t>(static_cast<size_t>(std::max(1, P.crownCardCandidates)), static_cast<size_t>(std::ceil(std::max(0.0, P.crownCardCandidatesPerStation) * static_cast<double>(at.size()))));
+    if (at.empty()) return 0;
+    const double perStation = openCells ? P.nearCardCandidatesPerStation : P.crownCardCandidatesPerStation;
+    const size_t want = std::max<size_t>(static_cast<size_t>(std::max(1, P.crownCardCandidates)), static_cast<size_t>(std::ceil(std::max(0.0, perStation) * static_cast<double>(at.size()))));
     const double stride = std::max(1.0, static_cast<double>(at.size()) / static_cast<double>(want));
     const Vec3 up(0, 1, 0);
     std::vector<Instance> cand;
     std::vector<int> candCell;
     for (double f = 0; f < static_cast<double>(at.size()); f += stride) {
         const size_t i = static_cast<size_t>(f);
-        const Vec3 p = at[i].first;
+        Vec3 p = at[i].first;
+        if (insetM > 0) {
+            const Vec3 d = ref.centre - p;
+            const float len = d.length();
+            if (len > 1e-4f) p = p + d * static_cast<float>(std::min(0.9 * len, insetM) / len);
+        }
         const Vec3 n0 = ellipsoidNormal(ref, p);
         Vec3 t1 = up.cross(n0);
         t1 = t1.lengthSquared() < 1e-6f ? Vec3(1, 0, 0) : t1.normalized();
@@ -1285,19 +1607,22 @@ inline void placeCrownCards(TreeLod& T, const TreeLodInput& in, const ClusterLib
         for (int o = 0; o < 5; ++o) {
             Vec3 n = n0;
             if (o > 0) n = Quat::fromAxisAngle(o <= 2 ? t1 : t2, static_cast<float>((o % 2 ? 1.0 : -1.0) * P.crownCardTiltRad)).rotate(n0).normalized();
-            const float roll = static_cast<float>(2 * M_PI * hashUnit(in.seed, 0xCA2Dull + i, static_cast<uint64_t>(o)));
+            const float roll = static_cast<float>(2 * M_PI * hashUnit(in.seed, salt + 0xCA2Dull + i, static_cast<uint64_t>(o)));
             Instance c;
             c.t = p;
             c.q = (Quat::fromAxisAngle(n, roll) * frameAlong(n, up)).normalized();
             c.s = Vec3(static_cast<float>(side), static_cast<float>(side), static_cast<float>(side));
             c.order = at[i].second;
             cand.push_back(c);
-            candCell.push_back(std::min(cells - 1, static_cast<int>(hashUnit(in.seed, 0xCE11ull + i, static_cast<uint64_t>(o)) * cells)));
+            candCell.push_back(cell0 + std::min(cells - 1, static_cast<int>(hashUnit(in.seed, salt + 0xCE11ull + i, static_cast<uint64_t>(o)) * cells)));
         }
     }
-    T.cardCandidates = cand.size();
     CoverageViews sel;
     sel.init(ref, refPts, std::max(fine.cell, side / std::max(2.0, P.crownCardSelectCellsPerSide)));
+    precover(sel);
+    fine.clearCovered();
+    precover(fine);
+    if (fine.level().meanEllipsoid >= target - 0.005) return cand.size();
     // lazy greedy: (gain, candidate, cards placed when the gain was measured)
     std::priority_queue<std::tuple<size_t, size_t, size_t>> pq;
     for (size_t c = 0; c < cand.size(); ++c) {
@@ -1306,7 +1631,6 @@ inline void placeCrownCards(TreeLod& T, const TreeLodInput& in, const ClusterLib
     }
     size_t placed = 0;
     double targetSel = target;
-    fine.clearCovered();
     for (int pass = 0; pass < 6; ++pass) {
         while (!pq.empty() && placed < cap && sel.level().meanEllipsoid < targetSel) {
             const auto [g, key, stamp] = pq.top();
@@ -1319,7 +1643,7 @@ inline void placeCrownCards(TreeLod& T, const TreeLodInput& in, const ClusterLib
             }
             sel.addCard(cand[c], lib.cardMask, candCell[c], true);
             fine.addCard(cand[c], lib.cardMask, candCell[c], true);
-            T.cards[static_cast<size_t>(candCell[c])].push_back(cand[c]);
+            out[static_cast<size_t>(candCell[c])].push_back(cand[c]);
             ++placed;
         }
         // the coarse views stop near the target; the tree's own views decide
@@ -1327,6 +1651,66 @@ inline void placeCrownCards(TreeLod& T, const TreeLodInput& in, const ClusterLib
         if (got >= target - 0.005 || pq.empty() || placed >= cap) break;
         targetSel = std::min(1.0, sel.level().meanEllipsoid + (target - got) + 0.003);
     }
+    return cand.size();
+}
+
+/** The target a card set aims at: the larger of its own reference and cardTargetShare x the crown's Beer-Lambert target. */
+inline double cardSetTarget(const LodParams& P, const TreeLod& T, double own) {
+    return std::clamp(std::max(own, std::max(0.0, P.cardTargetShare) * T.coverage.target), 0.0, 1.0);
+}
+
+/**
+ * The mid level's crown cards of a tree (LodParams crownCards*): side clamp(crownCardSidePerReach x reachM), toward the mid
+ * clusters' coverage (times crownCardCoverageShare) or the crown's target (cardSetTarget), whichever is more.
+ */
+inline void placeCrownCards(TreeLod& T, const TreeLodInput& in, const ClusterLibrary& lib, double reachM, CoverageViews& fine, const std::vector<Vec3>& refPts) {
+    const LodParams& P = lib.params;
+    const double side = std::clamp(P.crownCardSidePerReach * reachM, P.crownCardMinM, std::max(P.crownCardMinM, P.crownCardMaxM));
+    T.cardSideM = side;
+    const double target = cardSetTarget(P, T, std::clamp(P.crownCardCoverageShare * T.coverage.midClusters.meanEllipsoid, 0.0, 1.0));
+    T.coverage.cardTarget = target;
+    T.cardCandidates = placeCardSet(T.cards, T, in, lib, fine, refPts, side, target, 0.0, 0, false, [](CoverageViews&) {});
+}
+
+/** The side of a card whose leaves are drawn `leafScale` times the tree's blade length (a cell's leaves are crownCardLeafLength of its side). */
+inline double cardSideForLeaf(const LodParams& P, const TreeLod& T, double leafScale, double minM, double maxM) {
+    return std::clamp(leafScale * T.leafLengthM / std::max(1e-3, P.crownCardLeafLength), minM, std::max(minM, maxM));
+}
+
+/** The near-mid level's clumped leaf cards (LodParams nearMidCards*), toward its clusters' coverage or the crown's target. */
+inline void placeNearMidCards(TreeLod& T, const TreeLodInput& in, const ClusterLibrary& lib, CoverageViews& fine, const std::vector<Vec3>& refPts) {
+    const LodParams& P = lib.params;
+    const double side = cardSideForLeaf(P, T, P.nearMidCardLeafScale, P.nearMidCardMinM, P.nearMidCardMaxM);
+    T.nearMidCardSideM = side;
+    const double target = cardSetTarget(P, T, T.coverage.nearMidClusters.meanEllipsoid);
+    T.coverage.nearMidCardTarget = target;
+    T.nearMidCardCandidates = placeCardSet(T.nearMidCardSet, T, in, lib, fine, refPts, side, target, 0.0, 0x4E4Dull, true, [](CoverageViews&) {});
+}
+
+/**
+ * The near level's core cards (LodParams coreCards*): inset coreCardInsetPerReach x reachM beneath the leaves, where the
+ * views still see the crown through the near level's blades (`blades0`, the measured snapshot of them, solid), toward the
+ * crown's target. None when the blades already reach it.
+ */
+inline void placeCoreCards(TreeLod& T, const TreeLodInput& in, const ClusterLibrary& lib, double reachM, CoverageViews& fine, const std::vector<Vec3>& refPts,
+                           const CoverageViews::Snapshot& blades0) {
+    const LodParams& P = lib.params;
+    const double target = std::clamp(std::max(0.0, P.cardTargetShare) * T.coverage.target, 0.0, 1.0);
+    T.coverage.coreCardTarget = target;
+    T.coreCardSet.assign(lib.cards.size(), {});
+    if (!(target > T.coverage.level0.meanEllipsoid + 0.005)) return;
+    const double side = cardSideForLeaf(P, T, P.coreCardLeafScale, P.coreCardMinM, P.coreCardMaxM);
+    T.coreCardSideM = side;
+    // the fine views take the blades' snapshot, the coarse selection views what it covers, downsampled (placeCardSet covers
+    // the coarse views first)
+    auto precover = [&](CoverageViews& v) {
+        if (&v == &fine) { v.restore(blades0); return; }
+        CoverageViews::Snapshot keep = fine.snapshot();
+        fine.restore(blades0);
+        v.coverFrom(fine);
+        fine.restore(keep);
+    };
+    T.coreCardCandidates = placeCardSet(T.coreCardSet, T, in, lib, fine, refPts, side, target, std::max(0.0, P.coreCardInsetPerReach) * reachM, 0xC0DEull, true, precover);
 }
 
 } // namespace detail
@@ -1418,11 +1802,17 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     T.msTwigs = msSince(tPhase); tPhase = Clock::now();
     // ---- leaf-cluster stations ----
     const double H = in.heightAboveSupport;
-    T.leafLengthM = leafLengthFor(P, H);
+    T.leafLengthM = in.atlasLeafLengthM > 0 ? std::clamp(in.atlasLeafLengthM, P.leafMinM, P.atlasLeafMaxM) : leafLengthFor(P, H);
     const double baseScale = T.leafLengthM / P.referenceLeafM;
     double meanReach = 0;
     for (const auto& v : lib.variants) meanReach += v.level0.reach / static_cast<double>(lib.variants.size());
-    const double spacing = P.spacingRatio * meanReach * baseScale;
+    // porous leaves (a needle spray, LodParams::solidLeafFill) cover a fill's share of their box: their clusters stand
+    // closer, by 1 - porous x (1 - sqrt(fill)), so overlapping sprays reach a solid crown's cover (2.7 x the stations per
+    // area at a spray's fill of 0.37); solid leaves keep their spacing
+    const auto fillCut = detail::leafCutout(P, in.cutoutFill, in.cutoutAspect);
+    const detail::CoverageViews::Cutout* porousCut = in.cutoutFill > 0 && fillCut.porous > 0 ? &fillCut : nullptr;
+    const double porousSpacing = porousCut ? 1.0 - porousCut->porous * (1.0 - std::sqrt(std::max(0.0, porousCut->porousCover))) : 1.0;
+    const double spacing = P.spacingRatio * meanReach * baseScale * porousSpacing;
     detail::Envelope env;
     env.radii = in.sectorRadii;
     env.stemX = in.stemX;
@@ -1566,8 +1956,11 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
         (void)i;
     };
 
-    // the request's season, times the crown's own (its measured colour)
-    const double psi = std::clamp(P.psiSeason, 0.0, 1.0) * std::clamp(in.leafiness, 0.0, 1.0);
+    // the request's season, times the crown's own (its measured colour). A rosette tree's leaves are its fronds, drawn
+    // below as its own mesh: it places no leaf cluster on its rachises (as a bare tree places none)
+    const bool rosette = cfg.rosetteLeaves > 0;
+    const double seasonPsi = std::clamp(P.psiSeason, 0.0, 1.0) * std::clamp(in.leafiness, 0.0, 1.0);
+    const double psi = rosette ? 0.0 : seasonPsi;
     std::vector<uint32_t> stations;
     if (psi > 0.0) {
         for (uint32_t i : order) {
@@ -1673,6 +2066,7 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     // deeper; each hangs from the nearest skeleton node above the crown base (its shoot gives the orientation).
     detail::CoverageViews cov;
     std::vector<Vec3> refPts;
+    // porous leaves (porousCut) are filled toward the target as they draw: their cut-out
     T.coverage.leafiness = std::clamp(in.leafiness, 0.0, 1.0);
     T.coverage.target = coverageTarget(P, psi);
     if (!surface.empty()) {
@@ -1688,13 +2082,15 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
         T.coverage.measured = true;
         T.coverage.cellM = cov.cell;
         T.coverage.views = static_cast<int>(cov.views.size());
-        for (size_t k = 0; k < T.clusters.size(); ++k) for (const auto& c : T.clusters[k]) cov.add(lib.variants[k].level0, c);
+        for (size_t k = 0; k < T.clusters.size(); ++k) for (const auto& c : T.clusters[k]) cov.add(lib.variants[k].level0, c, porousCut);
         T.coverage.level0Before = cov.level();
     }
     if (T.coverage.measured && P.coverageFill && psi > 0.0 && cov.level().meanEllipsoid < T.coverage.target) {
         const CrownEllipsoid& ref = T.coverage.reference;
         const double reachM = meanReach * baseScale;
-        const size_t cap = static_cast<size_t>(std::ceil(std::max(0.0, P.coverageMaxFillShare) * static_cast<double>(std::max<size_t>(T.stations, 8))));
+        // porous leaves cover a fill's share of their box: up to 1 / fill times the fill stations
+        const double porousCapScale = porousCut ? 1.0 + porousCut->porous * (1.0 / std::max(0.1, porousCut->porousCover) - 1.0) : 1.0;
+        const size_t cap = static_cast<size_t>(std::ceil(std::max(0.0, P.coverageMaxFillShare) * porousCapScale * static_cast<double>(std::max<size_t>(T.stations, 8))));
         // the nodes a fill cluster may hang from
         std::vector<Vec3> fillNodePos;
         std::vector<uint32_t> fillNodeId;
@@ -1763,7 +2159,7 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
                     const long k = place(static_cast<uint32_t>(node), false, &q);
                     if (k < 0) continue;
                     accept(static_cast<uint32_t>(node), q);
-                    cov.add(lib.variants[static_cast<size_t>(k)].level0, T.clusters[static_cast<size_t>(k)].back());
+                    cov.add(lib.variants[static_cast<size_t>(k)].level0, T.clusters[static_cast<size_t>(k)].back(), porousCut);
                     ++added; ++placedNow;
                 }
                 if (!placedNow && picked.empty()) break;
@@ -1773,6 +2169,7 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
     }
     T.msFill = msSince(tPhase); tPhase = Clock::now();
     // ---- measurements of each level ----
+    detail::CoverageViews::Snapshot blades0, bladesNearMid, bladesMid;   // each level's blades, solid: what it draws starts from them
     auto finish = [&](LeafLevelMeasure& m, const detail::LeafSoup& soup, const detail::ReachTracker& tr) {
         m.reached = tr.nBig;
         m.reachedStrict = tr.nSmall;
@@ -1801,8 +2198,11 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
         auto nearMid = [](const ClusterVariant& v) -> const LibraryMesh& { return v.nearMid; };
         auto mid = [](const ClusterVariant& v) -> const LibraryMesh& { return v.level1; };
         T.coverage.level0 = levelOf(near, nullptr);
-        T.coverage.nearMid = levelOf(nearMid, nullptr);
+        blades0 = cov.snapshot();
+        T.coverage.nearMid = T.coverage.nearMidClusters = levelOf(nearMid, nullptr);
+        bladesNearMid = cov.snapshot();
         T.coverage.mid = T.coverage.midClusters = levelOf(mid, nullptr);
+        bladesMid = cov.snapshot();
         if (in.cutoutFill > 0) {
             T.coverage.level0Cutout = levelOf(near, &cut);
             T.coverage.midCutout = T.coverage.midClustersCutout = levelOf(mid, &cut);
@@ -1821,7 +2221,162 @@ inline void buildTreeLod(TreeLod& T, const TreeLodInput& in, const ClusterLibrar
             }
         }
     }
-    T.msCards = msSince(tPhase);
+    T.msCards = msSince(tPhase); tPhase = Clock::now();
+    if (P.nearMidCards && !lib.cards.empty() && T.coverage.measured && T.coverage.nearMidClusters.meanEllipsoid > 0) {
+        detail::placeNearMidCards(T, in, lib, cov, refPts);
+        if (T.nearMidCards()) T.coverage.nearMid = cov.level();   // the views hold what the cards cover
+    }
+    T.msNearMidCards = msSince(tPhase); tPhase = Clock::now();
+    T.coverage.level0Core = T.coverage.level0;
+    if (P.coreCards && !lib.cards.empty() && T.coverage.measured && T.coverage.level0.meanEllipsoid > 0) {
+        detail::placeCoreCards(T, in, lib, meanReach * baseScale, cov, refPts, blades0);
+        if (T.coreCardCount() > 0) T.coverage.level0Core = cov.level();   // the blades and the core cards
+    }
+    T.msCoreCards = msSince(tPhase); tPhase = Clock::now();
+    if (T.coverage.measured) {
+        // 0 near, 1 near-mid, 2 mid, 3 far
+        auto drawn = [&](int level) {
+            if (level == 3 || (level == 2 && T.midCards()) || (level == 1 && T.nearMidCards())) {
+                cov.clearCovered();
+                cov.addMesh(level == 3 ? T.farWood : T.wood);
+                if (level == 3 && in.farFoliage) cov.addMesh(*in.farFoliage);
+                const auto& set = level == 2 ? T.cards : T.nearMidCardSet;
+                if (level != 3) for (size_t k = 0; k < set.size(); ++k) for (const auto& cd : set[k]) cov.addCard(cd, lib.cardMask, static_cast<int>(k));
+                return cov.level();
+            }
+            // the level's blades are already covered (the measurement above): the rest of what it draws is added to them
+            cov.restore(level == 0 ? blades0 : level == 1 ? bladesNearMid : bladesMid);
+            if (level == 0) for (size_t k = 0; k < T.coreCardSet.size(); ++k) for (const auto& cd : T.coreCardSet[k]) cov.addCard(cd, lib.cardMask, static_cast<int>(k));
+            cov.addMesh(T.wood);
+            if (level == 0)
+                for (size_t k = 0; k < T.twigs.size() && k < lib.twigs.size(); ++k) for (const auto& tw : T.twigs[k]) cov.addWhole(lib.twigs[k], tw);
+            for (size_t k = 0; k < T.clusters.size() && k < lib.variants.size(); ++k) {
+                const ClusterVariant& v = lib.variants[k];
+                const LibraryMesh& m = level == 0 ? v.level0 : level == 1 ? v.nearMid : v.level1;
+                for (const auto& inst : T.clusters[k]) cov.addOther(m, inst);
+            }
+            return cov.level();
+        };
+        T.coverage.drawnLevel0 = drawn(0);
+        T.coverage.drawnNearMid = drawn(1);
+        T.coverage.drawnMid = drawn(2);
+        T.coverage.drawnFarMeasured = in.farFoliage != nullptr;
+        if (T.coverage.drawnFarMeasured) {
+            T.coverage.drawnFarBefore = T.coverage.drawnFar = drawn(3);
+            // the far masses spread along the crown surface until the far level covers as much of each view as the near level
+            // draws (the whole area, inside the crown's silhouette or not: what a viewer sees), out as far as its leaves reach
+            const double target = T.coverage.drawnLevel0.meanAreaM2;
+            auto relErr = [&](const CoverageLevel& c) { return c.meanAreaM2 / target - 1.0; };
+            if (P.farMassCoverMatch && !rosette && target > 0 && !in.farFoliage->indices.empty() && std::abs(relErr(T.coverage.drawnFar)) > P.farMassCoverTolerance) {
+                std::vector<double> leafOut;
+                for (size_t k = 0; k < T.clusters.size() && k < lib.variants.size(); ++k)
+                    for (const auto& c : T.clusters[k])
+                        for (const auto& sp : lib.variants[k].level0.support) leafOut.push_back(detail::ellipsoidRadius(T.coverage.reference, detail::transformPoint(c.t, c.q, c.s, sp)));
+                double leafReach = 1.0;
+                if (!leafOut.empty()) {
+                    const size_t q = std::min(leafOut.size() - 1, static_cast<size_t>(0.98 * static_cast<double>(leafOut.size())));
+                    std::nth_element(leafOut.begin(), leafOut.begin() + static_cast<std::ptrdiff_t>(q), leafOut.end());
+                    leafReach = leafOut[q];
+                }
+                detail::FarMassSpread spread;
+                spread.init(*in.farFoliage, T.coverage.reference, leafReach);
+                double best = 1.0, bestErr = std::abs(relErr(T.coverage.drawnFar));
+                CoverageLevel bestLevel = T.coverage.drawnFar;
+                auto at = [&](double s) {
+                    spread.apply(*in.farFoliage, s);
+                    const CoverageLevel L = drawn(3);
+                    const double e = relErr(L);
+                    if (std::abs(e) < bestErr) { bestErr = std::abs(e); best = s; bestLevel = L; }
+                    return e;
+                };
+                // the cover grows with the spread: first the end of its range the near level's cover lies toward (taken when
+                // even that falls short), then false position (the Illinois rule) between it and 1
+                double a = 1.0, fa = relErr(T.coverage.drawnFar);
+                double b = fa < 0 ? std::max(1.0, P.farMassMaxSpread) : std::min(1.0, P.farMassMinSpread), fb = at(b);
+                for (int it = 0, side = 0; it < 14 && fa * fb < 0 && bestErr > P.farMassCoverTolerance; ++it) {
+                    const double c = (a * fb - b * fa) / (fb - fa), fc = at(c);
+                    if (fc * fb > 0) { b = c; fb = fc; if (side == -1) fa *= 0.5; side = -1; }
+                    else { a = c; fa = fc; if (side == 1) fb *= 0.5; side = 1; }
+                }
+                if (best == 1.0) { in.farFoliage->vertices = spread.pos; if (!spread.nrm.empty()) in.farFoliage->normals = spread.nrm; }
+                else spread.apply(*in.farFoliage, best);
+                T.coverage.farMassSpread = best;
+                T.coverage.drawnFar = bestLevel;
+            }
+        }
+    }
+    T.msDrawn = msSince(tPhase);
+
+    // ---- a rosette's fronds at the near, near-mid and mid levels ----
+    if (rosette && seasonPsi > 0.0) {
+        // the far level's leaflets a side (what the budgeted meshing drew), and more at each level nearer: at least one more
+        // and half as many again, the near level never fewer than the species gives
+        const size_t leaves = std::max<size_t>(1, nat::SpaceColonizationTreeGenerator::rosetteLeafCount(sk));
+        const size_t farPiecesNow = in.farFoliage ? in.farFoliage->indices.size() / 6 : 0;   // leaflets and rachis ribbons, two triangles each
+        const size_t ribbons = static_cast<size_t>(nat::SpaceColonizationTreeGenerator::kRachisRibbons) * leaves;
+        const int farSide = farPiecesNow > ribbons ? std::max(1, static_cast<int>((farPiecesNow - ribbons) / (2 * leaves)))
+                                                                              : std::max(1, cfg.leafletsPerSide / 4);
+        auto more = [](int n) { return std::max(n + 1, static_cast<int>(std::ceil(1.5 * n))); };
+        const int midSide = more(farSide), nearMidSide = more(midSide), nearSide = std::max(more(nearMidSide), cfg.leafletsPerSide);
+        T.frondLeafletsPerSide = {nearSide, nearMidSide, midSide, farSide};
+        const int perSide[3] = {nearSide, nearMidSide, midSide};
+        LeafLevelMeasure* measures[3] = {&T.level0, &T.nearMid, &T.level1};
+        for (int k = 0; k < 3; ++k) {
+            geometry::Mesh& m = T.fronds[static_cast<size_t>(k)];
+            m = geometry::Mesh("Tree_Fronds");
+            const size_t pieces = nat::SpaceColonizationTreeGenerator::meshRosetteLeaflets(cfg, sk, perSide[k], growthDen, m, &T.frondGrowth[static_cast<size_t>(k)]);
+            for (const auto& v : m.vertices) m.bounds.expand(v);
+            // what the level's leaves are and reach: its leaflets, against the measured surface
+            LeafLevelMeasure& L = *measures[k];
+            L.leaves = pieces;
+            L.leafTriangles = m.indices.size() / 3;
+            L.samples = surface.size();
+            L.reached = L.reachedStrict = 0;
+            detail::PointGrid grid;
+            if (!m.vertices.empty()) grid.build(m.vertices, std::max(1.0, in.reachRadius));
+            for (const auto& s : surface) {
+                const double d = m.vertices.empty() ? 1e30 : grid.nearest(s);
+                if (d <= in.reachRadius) ++L.reached;
+                if (d <= P.strictReachM) ++L.reachedStrict;
+            }
+            for (const auto& v : m.vertices) {
+                L.topY = std::max(L.topY, static_cast<double>(v.y));
+                const double dx = v.x - in.stemX, dz = v.z - in.stemZ;
+                double& far = L.spread[static_cast<size_t>(detail::sectorOf(dx, dz))];
+                far = std::max(far, std::hypot(dx, dz));
+            }
+        }
+    }
+
+    // ---- every level lighter than the one nearer it ----
+    {
+        auto dropLast = [](std::vector<std::vector<Instance>>& set) {
+            size_t most = 0;
+            for (size_t k = 1; k < set.size(); ++k) if (set[k].size() > set[most].size()) most = k;
+            if (set.empty() || set[most].empty()) return false;
+            set[most].pop_back();
+            return true;
+        };
+        // the near-mid level's cards against the near level, then the mid level's against the near-mid
+        while (T.nearMidCards() && T.drawnNearMid() >= T.drawnLevel0() && dropLast(T.nearMidCardSet)) ++T.orderDroppedNearMidCards;
+        while (T.midCards() && T.cardCount() > 1 && T.drawnLevel1() >= T.drawnNearMid() && dropLast(T.cards)) ++T.orderDroppedMidCards;
+        // the far level's pieces against the mid level (never the last piece: the far level keeps a leaf)
+        if (in.farFoliage && in.farPieces > 1 && !in.farFoliage->indices.empty() && in.farFoliage->vertices.size() % in.farPieces == 0 && (in.farFoliage->indices.size() / 3) % in.farPieces == 0) {
+            geometry::Mesh& far = *in.farFoliage;
+            const size_t vpp = far.vertices.size() / in.farPieces, tpp = far.indices.size() / 3 / in.farPieces;
+            size_t pieces = in.farPieces;
+            const size_t mid = T.drawnLevel1();
+            while (pieces > 1 && T.farWoodTriangles + pieces * tpp >= mid) --pieces;
+            if (pieces < in.farPieces) {
+                T.orderDroppedFarPieces = in.farPieces - pieces;
+                far.vertices.resize(pieces * vpp);
+                if (far.normals.size() >= pieces * vpp) far.normals.resize(pieces * vpp);
+                if (far.uvs.size() >= pieces * vpp) far.uvs.resize(pieces * vpp);
+                if (far.vertexColors.size() >= pieces * vpp) far.vertexColors.resize(pieces * vpp);
+                far.indices.resize(pieces * tpp * 3);
+            }
+        }
+    }
 }
 
 /** The crown ellipsoid of a tree's level-0 leaves: the hull points of each placed cluster, in the tree's frame. */

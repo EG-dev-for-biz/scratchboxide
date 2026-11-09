@@ -84,8 +84,9 @@ function boxSoup(depth: (f: ReliefFacade, u: number, v: number) => number): Floa
 const noise = () => (rnd() - 0.5) * 0.08;
 // the scan tile_refine flattened: its walls on their planes, the windows recessed
 const flatScan = () => boxSoup((_f, u, v) => (inWindow(u, v) ? -0.25 : 0) + noise());
-// the scan before: the front's window columns (its bays) 0.2 m behind its piers
-const rawScan = () => boxSoup((f, u, v) => (inWindow(u, v) ? -0.35 : f.facadeId === 0 && u % 3 > 0.9 && u % 3 < 2.1 ? -0.2 : 0) + noise());
+// the scan before: the front's window columns (its bays) 0.2 m behind its piers, and the right wall's top storey a crown of
+// fins 0.7 m proud every 0.5 m (KEEP_MEASURED leaves those cells to the scan)
+const rawScan = () => boxSoup((f, u, v) => (f.facadeId === 1 && v > 12 ? (Math.floor(u / 0.5) % 2 ? 0 : -0.7) : inWindow(u, v) ? -0.35 : f.facadeId === 0 && u % 3 > 0.9 && u % 3 < 2.1 ? -0.2 : 0) + noise());
 // the windows 0.9 m deep
 const deepScan = () => boxSoup((_f, u, v) => (inWindow(u, v) ? -0.9 : 0) + noise());
 /** The box's walls flat, each as two large triangles (as the tiles draw a plain wall), and its roof. */
@@ -183,6 +184,10 @@ describe('facade lattice: native against TypeScript', () => {
         expect((byId.get(2) as any).windows.generated.label).toBe('generated');
         expect((byId.get(3) as any).structure).toBeDefined();
         expect((byId.get(1) as any).windowCells.cells.length).toBeGreaterThan(0);
+        expect((byId.get(1) as any).scanKept.cells).toBeGreaterThan(0);
+        expect((byId.get(1) as any).scanKept.label).toBe('measured');
+        expect((byId.get(0) as any).scanKept).toBeUndefined();
+        expect(ts.out.stats.scanKeptCells).toBe((byId.get(1) as any).scanKept.cells);
         const values = expectSameGlb(ts.out.clay, nat.out.clay) + expectSameGlb(ts.out.textured!, nat.out.textured!);
         console.log(`facade lattice, 4 facades (160 x 150 and 120 x 150 texels), ${values} vertex values compared: TypeScript ${ts.ms.toFixed(0)} ms, native ${nat.ms.toFixed(0)} ms`);
     }, 300_000);
@@ -250,6 +255,49 @@ describe('facade lattice: native against TypeScript', () => {
             expect(ts.out.tears.droppedFacades).toEqual([]);
             if (name === 'coarse-torn') expect(ts.out.tears.restoredInFront).toBeGreaterThan(0);
             if (name === 'coarse-slit') expect(ts.out.tears.keptInFront).toBeGreaterThan(0);
+            expect(nat.out.proud).toEqual(ts.out.proud);
+        }
+    }, 300_000);
+
+    it('audits proud scan the same: a whole triangle reaching past the cells over a recessed bay, measured, and removed only where the cells cover it', () => {
+        // the front, its lower right corner's cells left as scan (the photo never reached them), over a flat wall of two whole
+        // triangles: the triangles reach past the rebuilt cells, so neither is removed, and both lie on the wall plane a quarter metre
+        // proud of the recessed windows, which the tear audit cannot see
+        const f = FACADES[0], img = decodePng(fs.readFileSync(path.join(dir, f.image))), mask = decodePng(fs.readFileSync(path.join(dir, f.uncoveredMask!)));
+        const uncovered = new Uint8Array(img.width * img.height);
+        for (let k = 0; k < uncovered.length; k++) uncovered[k] = mask.rgba[k * 4] ? 1 : 0;
+        const r = latticeFacade(f, { rgba: new Uint8Array(img.rgba), width: img.width, height: img.height }, facadeSamples(flatScan(), f), undefined, uncovered)!;
+        expect(r.built.some(v => !v)).toBe(true);
+        const file = path.join(dir, 'proud-coarse.glb');
+        writeGlb(file, coarseSoup());
+        const ts = withNative('0', () => applyFacadeLattices(fs.readFileSync(file), [{ f, r }], false));
+        const nat = withNative('1', () => applyFacadeLattices(fs.readFileSync(file), [{ f, r }], false));
+        expect(ts.out.proud.m2).toBeGreaterThan(5);
+        expect(ts.out.proud.removedTriangles).toBe(0);
+        expect(ts.out.proud.afterM2).toBe(ts.out.proud.m2);
+        expect(ts.out.proud.perFacade).toEqual([{ id: 0, m2: ts.out.proud.m2, afterM2: ts.out.proud.afterM2 }]);
+        expect(nat.out.proud).toEqual(ts.out.proud);
+        expect(nat.out.tears).toEqual(ts.out.tears);
+        expect(Buffer.compare(nat.out.glb, ts.out.glb)).toBe(0);
+        // measuring only (SCRATCHBOX_K_PROUD_REMOVE=0): the same measure, nothing removed
+        const tsM = withNative('0', () => applyFacadeLattices(fs.readFileSync(file), [{ f, r }], false, undefined, { proudRemove: false }));
+        const natM = withNative('1', () => applyFacadeLattices(fs.readFileSync(file), [{ f, r }], false, undefined, { proudRemove: false }));
+        expect(natM.out.proud).toEqual(tsM.out.proud);
+        expect(tsM.out.proud.m2).toBe(ts.out.proud.m2);
+        expect(tsM.out.proud.removedTriangles).toBe(0);
+        expect(Buffer.compare(natM.out.glb, tsM.out.glb)).toBe(0);
+        // the same wall cut at the cells' lines (pipeline K): the pieces over the rebuilt cells go, and nothing stands proud but
+        // what closes the rebuild's own open edges
+        let wholeM2 = 0;
+        for (const extra of [{}, { cut: true }]) {
+            const clay = fs.readFileSync(file);
+            const a = withNative('0', () => rebuildFacadesOnLattice(Uint8Array.from(clay), undefined, dir, undefined, new Set([1, 2, 3]), { ...opts(), ...extra }));
+            const b = withNative('1', () => rebuildFacadesOnLattice(Uint8Array.from(clay), undefined, dir, undefined, new Set([1, 2, 3]), { ...opts(), ...extra }));
+            expect(b.out.stats).toEqual(a.out.stats);
+            expectSameGlb(a.out.clay, b.out.clay);
+            expect(a.out.stats.proud).toBeDefined();
+            if ('cut' in extra) expect(a.out.stats.proud!.afterM2).toBeLessThan(wholeM2 * 0.25);
+            else { wholeM2 = a.out.stats.proud!.m2; expect(wholeM2).toBeGreaterThan(5); }
         }
     }, 300_000);
 });

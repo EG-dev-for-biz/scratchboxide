@@ -38,6 +38,11 @@
  * (scratchbox_lattice_cut.hpp, scratchbox_lattice_stitch.hpp, scratchbox_open_loop_fill.hpp, scratchbox_fill_texture.hpp,
  * through remesh-polish-native.ts), giving these functions' results bit for bit; SCRATCHBOX_K_NATIVE without `cut`,
  * `stitch`, `clip`, `infill` or `fill-texture` runs them here.
+ *
+ * The native fill goes further than its TypeScript twin in one place (which SCRATCHBOX_K_NATIVE=0 therefore does not
+ * reproduce): flat caps are the constrained Delaunay triangulation (scratchbox_cdt.hpp; LATTICE_STITCH_PARAMS.cdtCaps):
+ * the loop's own vertices, exact predicates, the best smallest angles its triangulation can have, earcut only where the
+ * loop crosses itself or where earcut doubles fewer of the surface's own edges.
  */
 
 import { ShapeUtils, Vector2 } from 'three';
@@ -48,7 +53,7 @@ import type { FacadeLatticeResult, ReliefFacade } from '../facade-lattice';
 import { nativePolishThreads, runNativeClip, runNativeCut, runNativeFill, runNativeFillTexture, runNativeStitch, type NativeCutPrim, type NativeFillPrim } from '../remesh-polish-native';
 import { kNative } from './native/native-switch';
 
-export const LATTICE_STITCH_VERSION = 'lattice-stitch/21';
+export const LATTICE_STITCH_VERSION = 'lattice-stitch/22';
 
 export const LATTICE_STITCH_PARAMS = {
     /** The slab of a rebuilt facade cut from the scan: within this of its plane (m). */
@@ -95,7 +100,10 @@ export const LATTICE_STITCH_PARAMS = {
      *  capRayStartM off it; judged from up to capRaySamples of its largest triangles, the majority deciding. */
     capRayM: 120, capRayStartM: 0.05, capRaySamples: 5,
     /** The textured twin judges the fill in pieces no longer than this (m) along any edge. */
-    pieceM: 2
+    pieceM: 2,
+    /** The native fill's flat caps by the constrained Delaunay triangulation (the TypeScript twin keeps earcut: its parity
+     *  test turns this off). */
+    cdtCaps: true
 };
 export type LatticeStitchParams = typeof LATTICE_STITCH_PARAMS;
 
@@ -365,10 +373,19 @@ function appendWelded(glb: ReturnType<typeof parseGlbBytes>, welded: WeldedPiece
  * attribute is carried (UVs, normals), so the textured twin is clipped the same way. The openings the cut leaves are for the
  * fill (fillOpenLoops) to close.
  */
-export function clipToFootprint(bytes: Uint8Array, loops: Vec2[][], marginM: number, opts: { /** The native clip's threads (every core when none). */ threads?: number } = {}): { glb: Buffer; report: ClipReport } {
+export function clipToFootprint(bytes: Uint8Array, loops: Vec2[][], marginM: number, opts: { /** The native clip's threads (every core when none). */ threads?: number; /** Nodes left uncut, by name, with the reason for the report (the rebuilt facades when the footprint is only the scan's own outline). */ keepNodes?: { keep: (name: string) => boolean; why: string } } = {}): { glb: Buffer; report: ClipReport } {
     const glb = parseGlbBytes(bytes);
     const dv = new DataView(glb.bin.buffer, glb.bin.byteOffset, glb.bin.byteLength);
     const report: ClipReport = { cutTriangles: 0, removedTriangles: 0, removedAreaM2: 0, marginM };
+    // the meshes of the nodes left uncut (a mesh another node also draws is cut as before)
+    const keptMeshes = new Set<number>();
+    if (opts.keepNodes) {
+        const nodes: any[] = glb.json.nodes ?? [], kept = nodes.filter(n => n.mesh !== undefined && opts.keepNodes!.keep(n.name ?? ''));
+        for (const n of kept) if (!nodes.some(o => o.mesh === n.mesh && !opts.keepNodes!.keep(o.name ?? ''))) keptMeshes.add(n.mesh);
+        report.keptNodes = kept.length;
+        report.keptWhy = opts.keepNodes.why;
+    }
+    const clipped = (prims: PrimRead[]) => prims.filter(pr => !keptMeshes.has(pr.mesh));
     const outside = (x: number, z: number) => signedFootprintDistance(x, z, loops) - marginM;
     // each outline edge's line, pushed out by the margin: its outward normal is the side a point just off its middle stands outside
     const lines: Array<{ key: string; ax: number; az: number; nx: number; nz: number; g: (v: Vx) => number }> = [];
@@ -383,14 +400,14 @@ export function clipToFootprint(bytes: Uint8Array, loops: Vec2[][], marginM: num
     const extras = { sbFootprintClip: { version: LATTICE_STITCH_VERSION, provenance: `as-scanned: the scan cut at the footprint's outline plus ${marginM} m` } };
     if (kNative('clip')) {
         // natively: the same pieces, the same report, the area summed in the same order
-        const prims = readPrims(glb);
+        const prims = clipped(readPrims(glb));
         const r = runNativeClip(marginM, loops, lines, prims.map(nativeCutPrim), opts.threads ?? nativePolishThreads());
-        return { glb: appendNativeCut(glb, dv, prims, r.prims, extras), report: { cutTriangles: r.report.cutTriangles, removedTriangles: r.report.removedTriangles, removedAreaM2: Math.round(r.report.removedAreaM2), marginM } };
+        return { glb: appendNativeCut(glb, dv, prims, r.prims, extras), report: { ...report, cutTriangles: r.report.cutTriangles, removedTriangles: r.report.removedTriangles, removedAreaM2: Math.round(r.report.removedAreaM2) } };
     }
     const area = (poly: Vx[]) => { let s = 0; for (let k = 1; k + 1 < poly.length; k++) s += Math.hypot(...cross3(sub3(poly[k].p, poly[0].p), sub3(poly[k + 1].p, poly[0].p)) as [number, number, number]) / 2; return s; };
     const centreOutside = (poly: Vx[]) => outside(poly.reduce((a, v) => a + v.p[0], 0) / poly.length, poly.reduce((a, v) => a + v.p[2], 0) / poly.length) > 0;
     const appended: Array<{ pr: PrimRead; polys: Vx[][] }> = [];
-    for (const pr of readPrims(glb)) {
+    for (const pr of clipped(readPrims(glb))) {
         const kept: Vx[][] = [];
         const cache = new Map<string, Vx>();
         for (let t = 0; t + 2 < pr.I.length; t += 3) {
@@ -416,7 +433,7 @@ export function clipToFootprint(bytes: Uint8Array, loops: Vec2[][], marginM: num
     return { glb: appendPieces(glb, appended, extras), report };
 }
 
-export interface ClipReport { cutTriangles: number; removedTriangles: number; removedAreaM2: number; marginM: number }
+export interface ClipReport { cutTriangles: number; removedTriangles: number; removedAreaM2: number; marginM: number; /** Nodes left uncut (opts.keepNodes): how many, and why. */ keptNodes?: number; keptWhy?: string }
 
 /** A welded view of a GLB's live triangles: positions, faces, and which faces belong to rebuilt walls. */
 function welded(bytes: Uint8Array, P: LatticeStitchParams): { pos: number[][]; tris: number[][]; wall: number[]; idOf: (p: ArrayLike<number>) => number | undefined } {
@@ -559,7 +576,7 @@ const ROUTES = ['clay: no photo', "the rebuilt wall's own photo at that spot", "
  * Does a ray meet a triangle of the mesh: from o along unit d, within maxM. The triangles are binned in a grid of cells and the
  * ray walks the cells it passes (Amanatides-Woo), testing each cell's triangles once (Moller-Trumbore).
  */
-function rayIndex(pos: number[][], tris: number[][], C = 2): (o: number[], d: number[], maxM: number) => boolean {
+export function rayIndex(pos: number[][], tris: number[][], C = 2): (o: number[], d: number[], maxM: number, skip?: (t: number) => boolean) => boolean {
     const grid = new Map<string, number[]>();
     tris.forEach((f, t) => {
         const [a, b, c] = f.map(v => pos[v]);
@@ -577,13 +594,13 @@ function rayIndex(pos: number[][], tris: number[][], C = 2): (o: number[], d: nu
         const tt = dot(e2, q) / det;
         return tt > 0 && tt <= maxM;
     };
-    return (o, d, maxM) => {
+    return (o, d, maxM, skip) => {
         const cell = o.map(x => Math.floor(x / C)), step = d.map(x => (x > 0 ? 1 : x < 0 ? -1 : 0));
         const tMax = [0, 1, 2].map(k => (d[k] === 0 ? Infinity : ((cell[k] + (d[k] > 0 ? 1 : 0)) * C - o[k]) / d[k]));
         const tDelta = [0, 1, 2].map(k => (d[k] === 0 ? Infinity : C / Math.abs(d[k])));
         const seen = new Set<number>();
         for (let guard = 0; guard < 10000; guard++) {
-            for (const t of grid.get(`${cell[0]},${cell[1]},${cell[2]}`) ?? []) { if (seen.has(t)) continue; seen.add(t); if (hit(t, o, d, maxM)) return true; }
+            for (const t of grid.get(`${cell[0]},${cell[1]},${cell[2]}`) ?? []) { if (seen.has(t)) continue; seen.add(t); if (skip?.(t)) continue; if (hit(t, o, d, maxM)) return true; }
             const k = tMax[0] < tMax[1] ? (tMax[0] < tMax[2] ? 0 : 2) : tMax[1] < tMax[2] ? 1 : 2;
             if (tMax[k] > maxM) return false;
             cell[k] += step[k]; tMax[k] += tDelta[k];
@@ -1072,7 +1089,7 @@ function sealed(clay: Uint8Array, others: Uint8Array[], out: number[][][], piece
 
 /** LATTICE_STITCH_PARAMS' fill fields in the order of scratchbox_open_loop_fill.hpp's Params. */
 export function fillParamVector(P: LatticeStitchParams): number[] {
-    return [P.weldM, P.splitPerimeterM, P.splitRatio, P.doubledM, P.coveredByWallM, P.coveredByWallCellM, P.envelopeCellM, P.envelopeMarginM, P.skinM, P.skinShare, P.rimPlanarM, P.offRimCapM2, P.capRayM, P.capRayStartM, P.capRaySamples, P.pieceM];
+    return [P.weldM, P.splitPerimeterM, P.splitRatio, P.doubledM, P.coveredByWallM, P.coveredByWallCellM, P.envelopeCellM, P.envelopeMarginM, P.skinM, P.skinShare, P.rimPlanarM, P.offRimCapM2, P.capRayM, P.capRayStartM, P.capRaySamples, P.pieceM, P.cdtCaps ? 1 : 0];
 }
 
 /**

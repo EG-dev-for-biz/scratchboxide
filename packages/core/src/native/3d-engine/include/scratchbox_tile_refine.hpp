@@ -3698,7 +3698,8 @@ private:
             const V3 n0 = (pv(1) - pv(0)).cross(pv(2) - pv(0));
             if (n0.norm() < 2e-8 || n1.norm() < 2e-8) continue;
             ++checked;
-            bool fold = n0.dot(n1) < 0;
+            // a triangle of a region turned to face out (photometric_relief orientOutward) is rewound against its parent on purpose
+            bool fold = (n0.dot(n1) < 0) != t.turned;
             if (t.region >= 0) {
                 auto it = regionNormal.find(t.region);
                 if (it != regionNormal.end()) {
@@ -3751,6 +3752,7 @@ private:
            << ", \"observedCells\": " << relief.observedCells << ", \"inferredCells\": " << relief.inferredCells << ", \"inferredContradicted\": " << relief.inferredContradicted
            << ", \"cellsAtMaxDepth\": " << relief.cellsAtMaxDepth << ", \"recessDepthSource\": \"photo-contrast\""
            << ", \"insertedBorderVertices\": " << relief.insertedBorderVertices << ", \"earClipFallbacks\": " << relief.earClipFallbacks << ", \"earClipUnfilled\": " << relief.earClipUnfilled
+           << ", \"turnedRegions\": " << relief.turnedRegions << ", \"turnedTriangles\": " << relief.turnedTriangles
            << ", \"outputTriangles\": " << m.triangles.size() << ", \"flips\": " << flips << ", \"revealFacesTiltedPastParentPlane\": " << revealsPastParent
            << ", \"flipChecked\": " << checked << ", \"facades\": [";
         if (std::getenv("SB_DEBUG_FACADES"))

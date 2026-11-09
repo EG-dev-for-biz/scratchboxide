@@ -50,14 +50,14 @@ import { encodePng } from '../../../3d-engine/staged-location/png-encode';
 import { fetchOrthoReference, orthoReferenceCamera, type OrthoReference } from '../../../3d-engine/staged-location/ortho-reference';
 import { castCamera } from '../../../3d-engine/staged-location/survey-casting';
 import { isTreesLodJson } from '../../../3d-engine/staged-location/tree-lod-view';
-import { bearingDeg, discoverPanos, discoverPanosAt, evidenceImageId, fetchViews, knownRefusals, type PanoCandidate, type SelectedView, type StreetViewEvidenceDeps } from '../../../3d-engine/staged-location/streetview-evidence';
+import { bearingDeg, candidatePoints, discoverPanosAt, evidenceImageId, fetchViews, knownRefusals, type PanoCandidate, type SelectedView, type StreetViewEvidenceDeps } from '../../../3d-engine/staged-location/streetview-evidence';
 import { fetchStreetViewPanoMetadata } from '../../../spatial/StreetViewPanoramaProjectionService';
 import { isGoogleCapture } from '../../../spatial/StreetViewGroundingImageService';
 import { EDGE_MAX_RESIDUAL_PX, type HeldImage } from '../../../3d-engine/staged-location/pano-edge-registration';
 import { runPanoRegistrationOffThread } from '../../../3d-engine/staged-location/pano-registration-run';
 import { StageCache, stagedWorkspaceRoot } from '../../../3d-engine/staged-location/stage-cache';
 import { readGlbScene, renderFrameDepth, sceneToRenderMesh, type PoseCorrection } from '../../../spatial/StreetViewPoseRegistrar';
-import { buildGroundModel, geodeticToScan, loadScanMesh } from '../../../spatial/StreetViewSurveyPlanner';
+import { buildGroundModel, geodeticToScan, loadScanMesh, type GroundModel } from '../../../spatial/StreetViewSurveyPlanner';
 import { pickStructure, PICK_STRUCTURE, STRUCTURE_SEED_SEARCH_M } from '../../../3d-engine/staged-location/extraction-sizing';
 import { evidenceLookup, fetchVectorEvidence, type EvidenceLookup, type VectorEvidence } from '../../../3d-engine/staged-location/vector-footprints';
 import { BASE_CLEANUP_PARAMS, outsideFootprint } from '../../../3d-engine/staged-location/pipeline-k/base-cleanup';
@@ -104,6 +104,34 @@ export const OPEN_PLACE_RADII_M = [1, 2, 3, 4].map(k => k * STRUCTURE_SEED_SEARC
 export const FIXED_POSE_MAX_PANO_M = 20;
 /** A fixed pose's field of view when none is given (the grounding API's own default and its widest). */
 export const FIXED_POSE_DEFAULT_FOV = 90;
+/**
+ * Spacing of the street probes. Each asks for the nearest pano within 8 m, so a grid no wider than 8√2 (11.3 m) leaves no
+ * open ground unreached. The rings round the centre alone thin out with distance: at 72 to 130 m their points stand 19 to
+ * 34 m apart, and at the ESB (2026-11-02) they missed six of the eight panos whose views register.
+ */
+export const STREET_PROBE_SPACING_M = 10;
+/** Panos the search keeps (nearest the place first): enough for every street within reach of a large structure. */
+export const PHOTO_MATCH_MAX_DISCOVERED = 240;
+
+/**
+ * Where to look for panos: a STREET_PROBE_SPACING_M grid within `reachM` of the centre, kept where the tile's ground model
+ * marks open ground (a street, a sidewalk, a plaza) at the point or within 3 m of it (a sidewalk under a tree or beside a
+ * wall), so no probe is spent inside a building or past the tile's edge.
+ */
+export function streetProbePoints(ground: Pick<GroundModel, 'x0' | 'z0' | 'nx' | 'nz' | 'cellMeters' | 'open'>, centre: { x: number; z: number }, reachM: number, spacingM = STREET_PROBE_SPACING_M): Array<{ x: number; z: number }> {
+    const openAt = (x: number, z: number) => {
+        const i = Math.floor((x - ground.x0) / ground.cellMeters), k = Math.floor((z - ground.z0) / ground.cellMeters);
+        return i >= 0 && k >= 0 && i < ground.nx && k < ground.nz && ground.open[k * ground.nx + i] === 1;
+    };
+    const out: Array<{ x: number; z: number }> = [];
+    const n = Math.floor(reachM / spacingM);
+    for (let j = -n; j <= n; j++) for (let i = -n; i <= n; i++) {
+        const x = centre.x + i * spacingM, z = centre.z + j * spacingM;
+        if (Math.hypot(x - centre.x, z - centre.z) > reachM) continue;
+        if (openAt(x, z) || [[3, 0], [-3, 0], [0, 3], [0, -3]].some(([dx, dz]) => openAt(x + dx, z + dz))) out.push({ x, z });
+    }
+    return out;
+}
 
 export const PHOTO_MATCH_EVALUATE_DECLARATION: ToolDeclaration = {
     name: PHOTO_MATCH_EVALUATE_TOOL,
@@ -221,7 +249,8 @@ export interface PhotoMatchDeps {
     /** Root of the staged caches and public/models (stagedWorkspaceRoot()). */
     stagedRoot(): string;
     /** Google-captured panos near `centre` (tile frame), the grounding API's known refusals left out. */
-    discover(origin: GeodeticOrigin, centre: { x: number; z: number }, cacheDir: string, signal?: AbortSignal): Promise<PanoCandidate[]>;
+    /** The Google-captured panos near the place: round `centre`, and at each of `points` (tile frame) when given. */
+    discover(origin: GeodeticOrigin, centre: { x: number; z: number }, cacheDir: string, signal?: AbortSignal, points?: Array<{ x: number; z: number }>): Promise<PanoCandidate[]>;
     /**
      * Panos a fixed pose can look from, Google captures only and the grounding API's known refusals left out: those found round a
      * point (tile frame; the tool takes the nearest), or the one pano named. None, with the reason, when there is none.
@@ -253,8 +282,9 @@ export function defaultPhotoMatchDeps(): PhotoMatchDeps {
     const maps = () => require('../../../../browser/generative-canvas/services/google-maps-service') as typeof import('../../../../browser/generative-canvas/services/google-maps-service');
     return {
         stagedRoot: stagedWorkspaceRoot,
-        discover: async (origin, centre, cacheDir, signal) => {
-            const r = await discoverPanos(origin, [], { mapsApiKey: maps().resolveMapsApiKey(), metadataCachePath: path.join(cacheDir, 'streetview', 'metadata.json') }, signal, centre);
+        discover: async (origin, centre, cacheDir, signal, points) => {
+            // the rings round the centre, and the street probes the evaluation gives (open ground within reach of the target)
+            const r = await discoverPanosAt(origin, [...candidatePoints([], centre), ...(points ?? [])], { mapsApiKey: maps().resolveMapsApiKey(), metadataCachePath: path.join(cacheDir, 'streetview', 'metadata.json') }, signal, centre, PHOTO_MATCH_MAX_DISCOVERED);
             return r.panos;
         },
         posePanos: async (origin, at, cacheDir, signal) => {
@@ -508,12 +538,12 @@ class BuildResolver {
      * names them (its tile seam step). Undefined without the note or the files.
      */
     weldedTiles(rec: RunRecordLike): { dir: string; value: TilesValue } | undefined {
-        const note = this.cache.readRunNote<{ version?: string; raw?: string; tJunctions?: unknown; overlapTrim?: unknown }>(rec.runId, 'tile_seams');
+        const note = this.cache.readRunNote<{ version?: string; raw?: string; tJunctions?: unknown; overlapTrim?: unknown; adaptive?: unknown; tone?: unknown; capTrim?: unknown; rimZip?: unknown }>(rec.runId, 'tile_seams');
         if (!note?.raw || !note.version) return undefined;
         const dir = path.dirname(note.raw);
         let raw: TilesValue | undefined;
         try { raw = (JSON.parse(fs.readFileSync(path.join(dir, 'done.json'), 'utf8')) as { value?: TilesValue }).value; } catch { return undefined; }
-        const tag = `${note.version.replace(/\W/g, '_')}${note.tJunctions ? '' : '_notj'}${note.overlapTrim ? '' : '_noov'}`;
+        const tag = `${note.version.replace(/\W/g, '_')}${note.tJunctions ? '' : '_notj'}${note.overlapTrim ? '' : '_noov'}${note.adaptive && typeof note.adaptive === 'object' ? '_ad' : ''}${note.tone && typeof note.tone === 'object' ? '_tone' : ''}`;
         const value = raw && { ...raw, texturedGlb: `textured_${tag}.glb`, geometryGlb: `geometry_${tag}.glb` };
         return value && fs.existsSync(path.join(dir, value.texturedGlb)) && fs.existsSync(path.join(dir, value.geometryGlb)) ? { dir, value } : undefined;
     }
@@ -1456,7 +1486,10 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
     const near = structure ? 'the structure' : 'the place';
     progress(`finding Street View panos near ${near} that the build never used`, 0.02);
     const centre = structure ? { x: structure.cx, z: structure.cz } : { x: 0, z: 0 };
-    const panos = autoViews ? await deps.discover(ref.origin, centre, builds.cache.dir, signal) : [];
+    // the open ground within the candidates' reach of what the views look at (heldOutViews keeps panos under its radius + 110 m)
+    const reachM = (structure ? structure.radiusM : OPEN_PLACE_RADII_M[OPEN_PLACE_RADII_M.length - 1]) + 110;
+    const streetProbes = autoViews ? streetProbePoints(terrain, centre, reachM) : [];
+    const panos = autoViews ? await deps.discover(ref.origin, centre, builds.cache.dir, signal, streetProbes) : [];
     stopIfAborted(signal);
     // a pano standing inside a building's footprint is an indoor capture: never a held-out view (with no footprints at the
     // place, the rule cannot be applied, and heldOut.indoor says so)
@@ -2126,6 +2159,8 @@ export async function evaluatePhotoMatch(args: Record<string, unknown>, ctx: Pic
             ...(fixed ? { fixed: fixed.outcomes, ...(nViews > askedViews ? { viewsRaisedTo: nViews } : {}) } : {}),
             // false: only the fixed poses were fetched and judged, no automatic view was looked for or stood in for one
             autoViews,
+            // where the panos were looked for: rings round the centre, and a STREET_PROBE_SPACING_M grid on the open ground in reach
+            search: { streetProbes: streetProbes.length, spacingM: STREET_PROBE_SPACING_M, reachM: Math.round(reachM) },
             panosNear: panos.length,
             usedByBuild: builds.used.size,
             usedPanoSources: builds.usedSources,

@@ -32,6 +32,7 @@
  * with it off the audit still runs and its note says so. Neither step ever fails the build (a stopped build's stop passes through).
  */
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { StagedLayer } from '../../../common/spatial/staged-location-contracts';
@@ -42,7 +43,8 @@ import { auditDistrict, DISTRICT_AUDIT_VERSION, type AuditLayer, type DistrictAu
 import { districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
 import { chunkOwner, type DistrictChunkPlan } from './pipeline-k/district-chunks';
 import { DISTRICT_SEAMS_VERSION } from './pipeline-k/district-seams';
-import { MODEL_READINGS_DIR, readingFileOf, type ModelReadingReport } from './pipeline-k/model-readings';
+import { MODEL_READINGS_DIR, modelReadingsDir, readingFileOf, type ModelReadingReport } from './pipeline-k/model-readings';
+import { kdLookCode } from './place-store-best';
 import {
     openPlaceStore, placeCodeVersion, placeKey, PLACE_STORE_SCHEMA, pullPlace, syncPlaceObjects,
     type PlaceChunkGrid, type PlaceCodeVersion, type PlaceManifest, type PlacePullReport, type PlaceSyncReport
@@ -106,6 +108,13 @@ export interface DistrictAuditInput {
     signal?: AbortSignal;
     progress?: (message: string) => void;
     env?: NodeJS.ProcessEnv;
+    /** Filled with the footprints the audit cut the buildings by (the district's and its neighbours'), for the best versions (place-store-best.ts). */
+    footprintsOut?: DistrictFootprint[];
+}
+
+/** A footprint's sha256: its loops to the centimetre, so the same footprint gives the same hash in every run. */
+export function footprintSha256(f: DistrictFootprint): string {
+    return crypto.createHash('sha256').update(JSON.stringify(f.loops.map(l => l.map(p => [Math.round(p[0] * 100), Math.round(p[1] * 100)])))).digest('hex');
 }
 
 /** The measures of an object from its audit: each with the way that is better and the change within which it is noise. */
@@ -189,6 +198,7 @@ export async function auditDistrictForPlace(input: DistrictAuditInput): Promise<
                 neighbours = `the neighbours' footprints could not be read (${errorMessage(err)})`;
             }
         }
+        input.footprintsOut?.push(...buildings);
         const audit = await auditDistrict({
             layers, buildings, edge: { radiusM: plan.radiusM, grownBy: [...planned.values()] }, cuts: note.objectsKept,
             ...(input.signal ? { signal: input.signal } : {}), ...(input.progress ? { progress: input.progress } : {})
@@ -200,7 +210,7 @@ export async function auditDistrictForPlace(input: DistrictAuditInput): Promise<
             failing: audit.surfaces.filter(s => s.kind === 'building' && inDistrict(s) && s.failures.length).map(s => ({ id: s.id, checks: s.failures.map(f => f.check) })),
             trees: audit.trees, layers: audit.layers
         };
-        if (note.objectsKept && audit.cuts) addManifests(input, note, audit, byId, drawnFile, surfaceOf, inDistrict);
+        if (note.objectsKept && audit.cuts) addManifests(input, note, audit, byId, drawnFile, surfaceOf, inDistrict, new Map(buildings.map(b => [b.id, footprintSha256(b)])), kdLookCode(env, (input.request as { steps?: Record<string, unknown> }).steps));
         return done();
     } catch (err) {
         if (input.signal?.aborted) throw err;
@@ -211,7 +221,7 @@ export async function auditDistrictForPlace(input: DistrictAuditInput): Promise<
 
 /** Each surface layer's objects, as the scene object store cuts and keeps them (scene-objects.ts), with the audit's measures. */
 function addManifests(input: DistrictAuditInput, note: PlaceAuditNote, audit: DistrictAudit, byId: Map<string, StagedLayer>, drawnFile: Map<string, string>,
-    surfaceOf: Map<string, SurfaceAudit>, inDistrict: (s: SurfaceAudit) => boolean): void {
+    surfaceOf: Map<string, SurfaceAudit>, inDistrict: (s: SurfaceAudit) => boolean, footprintShas: Map<string, string>, look: Record<string, string>): void {
     const chunkAt = chunkOwner(input.plan);
     // the layer holding most of each owner carries its id and its measures; the rest of it elsewhere is a part
     const main = new Map<string, { layer: string; area: number }>();
@@ -242,7 +252,8 @@ function addManifests(input: DistrictAuditInput, note: PlaceAuditNote, audit: Di
             }
             objects.push({
                 kind, identity, inputHash: objectInputHash('kd-object', DISTRICT_AUDIT_VERSION, glbSha256, kind, identity),
-                inputs: { layer: layer.layer, layerSha256: glbSha256, areaM2: o.areaM2 }, cuts: o.cuts,
+                // a building's footprint and the look code it was drawn with: what its stored version must share to stand in for a worse one (place-store-best.ts)
+                inputs: { layer: layer.layer, layerSha256: glbSha256, areaM2: o.areaM2, ...(kind === 'building' ? { building: o.id, look, ...(footprintShas.has(o.id) ? { footprintSha256: footprintShas.get(o.id) } : {}) } : {}) }, cuts: o.cuts,
                 provenance: { labels: [String(layer.provenance.label)], confidence: null, note: `pipeline K-D: cut from the joined ${layer.layer} layer ${kind === 'building' ? 'by its Google vector footprint' : kind === 'ground' ? 'where no footprint or separate piece stands' : 'as a separate piece in no footprint'}` },
                 centre: o.centre, ...(kind === 'building' ? { catalogType: 'FEATURE_TYPE_BUILDING' } : {}),
                 // the measures are the whole owner's (a ground's is its layer's): they ride on its main part only
@@ -319,7 +330,7 @@ export async function syncPlaceAfterObjects(input: {
     if (note?.schema !== PLACE_AUDIT_SCHEMA) return undefined;
     try {
         const store = await openPlaceStore({ key: note.key, ...(input.placeStore ?? {}), ...(input.env ? { env: input.env } : {}) });
-        const cache = input.cache, readings = cache.dir ? { dir: path.join(cache.dir, MODEL_READINGS_DIR), ...runReadings(cache, input.runId) } : undefined;
+        const cache = input.cache, readings = cache.dir ? { dir: modelReadingsDir(cache.dir), ...runReadings(cache, input.runId) } : undefined;
         return await syncPlaceObjects(store, {
             ...(readings && (readings.used.length || readings.written.length) ? { readings: { ...readings, ...(cache.restoreFile ? { restore: (k: string) => cache.restoreFile!(`${MODEL_READINGS_DIR}/${readingFileOf(k)}`) } : {}) } } : {}),
             runId: input.runId, objects: new SceneObjectStore(input.store), objectKeys: input.kept.map(k => k.objectKey),

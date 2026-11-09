@@ -20,6 +20,7 @@
  */
 
 import type { SkippedMediaModel } from '../../common/media-generation-protocol';
+import { finalImagePart } from '../google-media-generation-service';
 import { obstructionFreeNote } from '../../browser/generative-canvas/services/location-beautify-service';
 
 /** Independent references come from different models (the same model asked twice tends to repeat itself). */
@@ -89,7 +90,7 @@ export async function fetchGroundedReferences(client: GroundedReferenceClient, r
             });
             const cand = r?.candidates?.[0];
             const parts: any[] = cand?.content?.parts ?? [];
-            const img = parts.find(p => p?.inlineData?.data);
+            const img = finalImagePart(parts);
             const account = parts.filter(p => typeof p?.text === 'string' && !p.thought).map(p => p.text.trim()).join(' ').trim();
             const g = cand?.groundingMetadata ?? {};
             const queries: string[] = [...(g.webSearchQueries ?? []), ...(g.imageSearchQueries ?? [])].filter((q: unknown): q is string => typeof q === 'string');

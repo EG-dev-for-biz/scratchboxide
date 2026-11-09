@@ -27,24 +27,26 @@
  *          i32 parent, i32 of, f64[9] corners, f64[9] barycentric weights.
  *
  *   remesh_polish_native lattice <threads>
- *     in:  "SBLF" u32 version (1), u32 nParams, f64[nParams] (scratchbox_facade_lattice.hpp Params), u32 flags (1: the
+ *     in:  "SBLF" u32 version (3), u32 nParams, f64[nParams] (scratchbox_facade_lattice.hpp Params), u32 flags (1: the
  *          photo's recess, 2: whole walls), u32 n, f32[n] the scan's triangles, u32 hasRaw, u32 n, f32[n] the raw scan's,
  *          u32 nFacades, per facade i32 id, f64[19] frame (centroid, normal, axisS, axisT, sMin, sMax, tMin, tMax, pixel,
- *          orthoSMin, orthoTMax), str image, str mask (u32 length, bytes; empty: none), u32 n, f64[4n] fitted windows,
+ *          orthoSMin, orthoTMax), str image, str mask (u32 length, bytes; empty: none), str inpainted mask (empty: none), u32 n, f64[4n] fitted windows,
  *          u32 hasBays, u32 n, f64[4n] bays, u32 hasRecess, f64 recessM, u32 n, f64[4n] the windows in texels.
  *     out: per facade in order, u32 ok, u32 W, u32 H (the photo's size), then when ok its lattice: u32 n, f64[n] s, u32 n, f64[n] t, i32 cells, f64
  *          measuredShare, f64[cells] depth, u32 hasPhotoRecess, i32 photoRecessCells, u32 n, f64[4n] strips, i32
  *          stripCells, u32 hasStructure (then u8[cells], f64 reliefM, str reliefFrom, str reason), u8[cells] built,
- *          u8[cells] windows, f64[] cellU, f64[] cellV, u32 n, f32[n] positions, u32 n, f32[n] normals, u32 n, f32[n] uv,
+ *          u32 hasScanKept (then u8[cells] kept, i32 count, f64 areaM2, f64 reliefM: KEEP_MEASURED), u8[cells] windows, f64[] cellU, f64[] cellV, u32 n, f32[n] positions, u32 n, f32[n] normals, u32 n, f32[n] uv,
  *          u32 n, u32[n] indices; then u32 hasRepeat and, when set, i32 groups, i32 windows, i32 spandrels, f64 texels,
  *          f64 filled, f64 edge, u32 n, u8[n] the PNG ([cells]: one per lattice cell, row by row).
  *
  *   remesh_polish_native lattice-audit <threads>
- *     in:  "SBLA" u32 version (2), u32 nParams, f64[nParams], u32 flags (1: same facing only), u32 n, f32[n] the scan's
+ *     in:  "SBLA" u32 version (3), u32 nParams, f64[nParams], u32 flags (1: same facing only; 2: the proud audit measures only), u32 n, f32[n] the scan's
  *          indexed triangles, u32 nFacades, per facade i32 id, f64[19] frame, u32 n, f64[n] s, u32 n, f64[n] t,
  *          u8[cells] built, u32 n, f32[n] positions, u32 n, u32[n] indices.
  *     out: u32 nTri, i32[nTri] the facade claiming each triangle (-1: kept), f64 found, f64 restored, f64 left,
- *          f64 obliqueLeft, u32 hasOblique, f64 oblique, f64 keptInFront, f64 restoredInFront, u32 n, i32[n] the facades dropped, in the order dropped.
+ *          f64 obliqueLeft, u32 hasOblique, f64 oblique, f64 keptInFront, f64 restoredInFront, u32 n, i32[n] the facades dropped, in the order dropped;
+ *          the proud audit: f64 removed, f64 restored, u32 nFacades, per facade f64 straight, f64 oblique, f64 straightAfter,
+ *          f64 obliqueAfter (proud pixels at auditPixelM).
  *
  *   remesh_polish_native wall-grammar <threads>
  *     in:  "SBWG" u32 version (1), u32 nParams, f64[nParams] (scratchbox_wall_grammar.hpp Params), u32 nWalls, per wall
@@ -66,6 +68,11 @@
  *     in:  "SBCL" u32 version (1), f64 marginM, u32 nLoops, per loop u32 n, f64[n*2] (plan x z), u32 nLines, per line
  *          f64 ax, az, nx, nz (an outline edge's point and outward normal), then the primitives as `cut` reads them.
  *     out: f64 cutTriangles, removedTriangles, removedAreaM2 (unrounded), then per primitive as `cut` writes it.
+ *
+ *   remesh_polish_native cdt <threads>
+ *     in:  "SBDT" u32 version (1), u32 fill (0 even-odd, 1 non-zero, 2 positive), u32 refine, f64 minAngleDeg, f64 maxArea,
+ *          u32 splitSegments, u32 nPoints, f64[n*2], u32 nSegments, i32[nSegments*2].
+ *     out: u32 jsonLen, the report's JSON, u32 nPoints, f64[n*2], u32 nTris, i32[nTris*3], i32[nTris] winding.
  *
  *   remesh_polish_native fill-texture <threads>
  *     in:  "SBFT" u32 version (1), u32 nParams, f64[nParams] (scratchbox_fill_texture.hpp Params), u32 nWalls, per facade
@@ -90,6 +97,16 @@
  *     out: per sheet in order, f64 holes, wallCoverage, wallAreaM2, fromRepeats, fromStoreys, smooth texels; u32 anyOccluded;
  *          u32 n, u8[n] the photo's PNG scanlines, u32 n, u8[n] the uncovered mask's, u32 n, u8[n] the occluded mask's.
  *
+ *   remesh_polish_native inner-core <threads>
+ *     in:  "SBIC" u32 version (1), u32 nParams, f64[nParams] (scratchbox_inner_core.hpp paramVector), u32 n, f32[n] the
+ *          building's triangles (world space), u8[n/9] each one's kind (0 untextured, 1 photo, 2 rebuilt wall), u32 nLoops,
+ *          per loop u32 n, f64[n*2] (the footprint, plan x z; none: no limit), f64 groundY (NaN: none), u32 nRegions,
+ *          f64[4*nRegions] (centre, radius: where the core may come closer), u32 queriesOnly (1: no core), u32 nQ, f64[3*nQ]
+ *          points whose winding number is wanted.
+ *     out: u32 jsonLen, the report's JSON, u32 n, f64[n] positions, u32 n, u32[n] indices, then per triangle i32 source
+ *          (the triangle it takes its photo from, -1 none) and u8 route (0 none, 1 rebuilt wall, 2 other photo); u32 nQ,
+ *          f64[nQ] the winding numbers.
+ *
  * Build: clang++ -std=c++20 -O3 -I packages/core/src/native/3d-engine/include scripts/remesh_polish_native.cpp -o build/3d-native/remesh_polish_native -lz
  */
 
@@ -98,9 +115,11 @@
 #include "scratchbox_facade_lattice.hpp"
 #include "scratchbox_wall_grammar.hpp"
 #include "scratchbox_lattice_cut.hpp"
+#include "scratchbox_cdt.hpp"
 #include "scratchbox_lattice_stitch.hpp"
 #include "scratchbox_wall_sheets.hpp"
 #include "scratchbox_fill_texture.hpp"
+#include "scratchbox_inner_core.hpp"
 #include "scratchbox_thread_pool.hpp"
 
 #include <chrono>
@@ -110,6 +129,8 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using namespace scratchbox;
@@ -253,7 +274,7 @@ void writeArray(const std::vector<T>& v) { writeOne<uint32_t>(static_cast<uint32
 void writeString(const std::string& v) { writeOne<uint32_t>(static_cast<uint32_t>(v.size())); writeExact(v.data(), v.size()); }
 
 int lattice(unsigned threads) {
-    expectMagic("SBLF", 1);
+    expectMagic("SBLF", 3);
     const auto params = facade_lattice::Params::from(readDoubles(readOne<uint32_t>()));
     const uint32_t flags = readOne<uint32_t>();
     const auto soup = readFloats();
@@ -264,6 +285,7 @@ int lattice(unsigned threads) {
         j.f = readFrame();
         j.image = readString();
         j.mask = readString();
+        j.inpainted = readString();
         j.fitted = readRects();
         j.hasBays = readOne<uint32_t>() != 0;
         j.bays = readRects();
@@ -306,6 +328,13 @@ int lattice(unsigned threads) {
             writeString(r.reason);
         }
         writeExact(r.built.data(), r.built.size());
+        writeOne<uint32_t>(r.hasScanKept ? 1 : 0);
+        if (r.hasScanKept) {
+            writeExact(r.scanKeptCells.data(), r.scanKeptCells.size());
+            writeOne<int32_t>(r.scanKeptCount);
+            writeOne<double>(r.scanKeptAreaM2);
+            writeOne<double>(r.scanKeptReliefM);
+        }
         writeExact(r.windows.data(), r.windows.size());
         writeDoubles(r.cellU);
         writeDoubles(r.cellV);
@@ -329,7 +358,7 @@ int lattice(unsigned threads) {
 }
 
 int latticeAudit(unsigned threads) {
-    expectMagic("SBLA", 2);
+    expectMagic("SBLA", 3);
     const auto params = facade_lattice::Params::from(readDoubles(readOne<uint32_t>()));
     const uint32_t flags = readOne<uint32_t>();
     const auto soup = readFloats();
@@ -346,7 +375,7 @@ int latticeAudit(unsigned threads) {
         if (!x.indices.empty()) readExact(x.indices.data(), x.indices.size() * sizeof(uint32_t));
     }
     FixedThreadPool pool(threads);
-    const auto r = facade_lattice::audit(soup, facades, params, (flags & 1) != 0, pool);
+    const auto r = facade_lattice::audit(soup, facades, params, (flags & 1) != 0, (flags & 2) == 0, pool);
     writeArray(r.claim);
     writeOne<double>(r.found);
     writeOne<double>(r.restored);
@@ -358,6 +387,15 @@ int latticeAudit(unsigned threads) {
     writeOne<double>(r.restoredInFront);
     std::vector<int32_t> dropped(r.dropped.begin(), r.dropped.end());
     writeArray(dropped);
+    writeOne<double>(r.proudRemoved);
+    writeOne<double>(r.proudRestored);
+    writeOne<uint32_t>(static_cast<uint32_t>(facades.size()));
+    for (size_t fi = 0; fi < facades.size(); ++fi) {
+        writeOne<double>(r.proudStraight[fi]);
+        writeOne<double>(r.proudOblique[fi]);
+        writeOne<double>(r.proudStraightAfter[fi]);
+        writeOne<double>(r.proudObliqueAfter[fi]);
+    }
     std::fflush(stdout);
     return 0;
 }
@@ -476,6 +514,38 @@ int clip(unsigned threads) {
     writeOne<double>(report.removedTriangles);
     writeOne<double>(report.removedAreaM2);
     writeCutOuts(outs);
+    return 0;
+}
+
+/** A constrained Delaunay triangulation (scratchbox_cdt.hpp), for its tests and tools. */
+int cdtCmd(unsigned) {
+    expectMagic("SBDT", 1);
+    cdt::Options o;
+    const uint32_t fill = readOne<uint32_t>();
+    o.fill = fill == 1 ? cdt::Fill::NonZero : fill == 2 ? cdt::Fill::Positive : cdt::Fill::EvenOdd;
+    o.refine = readOne<uint32_t>() != 0;
+    o.minAngleDeg = readOne<double>();
+    o.maxArea = readOne<double>();
+    o.splitSegments = readOne<uint32_t>() != 0;
+    const auto pv = readDoubles(static_cast<size_t>(readOne<uint32_t>()) * 2);
+    std::vector<cdt::P2> pts;
+    for (size_t i = 0; i + 1 < pv.size(); i += 2) pts.push_back({pv[i], pv[i + 1]});
+    std::vector<int32_t> sv(static_cast<size_t>(readOne<uint32_t>()) * 2);
+    if (!sv.empty()) readExact(sv.data(), sv.size() * sizeof(int32_t));
+    std::vector<std::array<int, 2>> segs;
+    for (size_t i = 0; i + 1 < sv.size(); i += 2) segs.push_back({sv[i], sv[i + 1]});
+    const auto r = cdt::triangulate(pts, segs, o);
+    char b[256];
+    std::snprintf(b, sizeof b, "{\"crossingPoints\":%d,\"segmentSplits\":%d,\"interiorPoints\":%d,\"lostSegments\":%d}", r.crossingPoints, r.segmentSplits, r.interiorPoints, r.lostSegments);
+    const std::string json(b);
+    writeOne<uint32_t>(static_cast<uint32_t>(json.size()));
+    writeExact(json.data(), json.size());
+    writeOne<uint32_t>(static_cast<uint32_t>(r.points.size()));
+    for (const auto& p : r.points) { writeOne<double>(p[0]); writeOne<double>(p[1]); }
+    writeOne<uint32_t>(static_cast<uint32_t>(r.tris.size()));
+    for (const auto& t : r.tris) for (int v : t) writeOne<int32_t>(v);
+    for (int w : r.winding) writeOne<int32_t>(w);
+    std::fflush(stdout);
     return 0;
 }
 
@@ -609,11 +679,45 @@ int fillTexture(unsigned threads) {
     return 0;
 }
 
+int innerCore(unsigned threads) {
+    expectMagic("SBIC", 1);
+    const auto params = inner_core::paramsFrom(readDoubles(readOne<uint32_t>()));
+    inner_core::Input in;
+    in.soup = readFloats();
+    in.kind.resize(in.soup.size() / 9);
+    if (!in.kind.empty()) readExact(in.kind.data(), in.kind.size());
+    in.footprint.resize(readOne<uint32_t>());
+    for (auto& loop : in.footprint) {
+        const auto v = readDoubles(static_cast<size_t>(readOne<uint32_t>()) * 2);
+        for (size_t i = 0; i + 1 < v.size(); i += 2) loop.push_back({v[i], v[i + 1]});
+    }
+    in.groundY = readOne<double>();
+    const auto rv = readDoubles(static_cast<size_t>(readOne<uint32_t>()) * 4);
+    for (size_t i = 0; i + 3 < rv.size(); i += 4) in.regions.push_back({{rv[i], rv[i + 1], rv[i + 2]}, rv[i + 3]});
+    in.queriesOnly = readOne<uint32_t>() != 0;
+    const auto qv = readDoubles(static_cast<size_t>(readOne<uint32_t>()) * 3);
+    for (size_t i = 0; i + 2 < qv.size(); i += 3) in.queries.push_back({qv[i], qv[i + 1], qv[i + 2]});
+    FixedThreadPool pool(threads);
+    const auto r = inner_core::build(in, params, pool);
+    char buf[1024];
+    std::snprintf(buf, sizeof buf, "{\"angleDeg\":%.4f,\"grid\":[%d,%d,%d],\"candidates\":%.0f,\"keptVoxels\":%.0f,\"droppedSpecks\":%.0f,\"nearSurface\":%.0f,\"outside\":%.0f,\"inRegions\":%.0f,\"areaM2\":%.3f,\"volumeM3\":%.3f,\"minClearanceM\":%.4f,\"facesWall\":%.0f,\"facesPhoto\":%.0f,\"facesNone\":%.0f}",
+        r.angleDeg, r.nx, r.ny, r.nz, r.candidates, r.keptVoxels, r.droppedSpecks, r.nearSurface, r.outside, r.inRegions, r.areaM2, r.volumeM3, r.minClearanceM, r.facesWall, r.facesPhoto, r.facesNone);
+    const std::string json(buf);
+    writeOne<uint32_t>(static_cast<uint32_t>(json.size()));
+    writeExact(json.data(), json.size());
+    writeArray(r.positions);
+    writeArray(r.indices);
+    for (size_t i = 0; i < r.source.size(); ++i) { writeOne<int32_t>(r.source[i]); writeOne<uint8_t>(r.route[i]); }
+    writeArray(r.winding);
+    std::fflush(stdout);
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|fill-texture|lattice|lattice-audit|wall-grammar|cut|clip|stitch|wall-sheets <threads>  (binary input on stdin)\n");
+        std::fprintf(stderr, "usage: remesh_polish_native window-fit|fill|fill-texture|lattice|lattice-audit|wall-grammar|cut|clip|cdt|stitch|wall-sheets|inner-core <threads>  (binary input on stdin)\n");
         return 2;
     }
     const std::string cmd = argv[1];
@@ -626,9 +730,11 @@ int main(int argc, char** argv) {
         if (cmd == "wall-grammar") return wallGrammar(threads);
         if (cmd == "cut") return cut(threads);
         if (cmd == "clip") return clip(threads);
+        if (cmd == "cdt") return cdtCmd(threads);
         if (cmd == "fill-texture") return fillTexture(threads);
         if (cmd == "stitch") return stitch(threads);
         if (cmd == "wall-sheets") return wallSheets(threads);
+        if (cmd == "inner-core") return innerCore(threads);
         std::fprintf(stderr, "unknown command %s\n", cmd.c_str());
         return 2;
     } catch (const std::exception& e) {

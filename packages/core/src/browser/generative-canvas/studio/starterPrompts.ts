@@ -25,9 +25,9 @@ export interface StarterButton {
     prompts: readonly string[];
     /**
      * A world already built: the button opens it in a 3D Scene straight away, by its folder name `slug` through
-     * /api/worlds (its newest saved version, else the Scene3DData location_generate_3dgs wrote beside its tileset,
-     * `scenePath`; its files fetched from the world cache when not on this machine). When neither is there it sends its
-     * prompt, which builds the world.
+     * /api/worlds (its newest saved version, else the Scene3DData beside it, `scenePath`: a splat world's from
+     * location_generate_3dgs, a district's from scripts/publish_district_world.ts; its files fetched from the world cache
+     * when not on this machine). When neither is there it sends its prompt, which builds one.
      */
     world?: { slug: string; scenePath: string; title: string };
 }
@@ -35,6 +35,14 @@ export interface StarterButton {
 /** The splat world on 7th Avenue's west sidewalk at the Penn Station / Madison Square Garden entrance (built 2026-10-29). */
 export const PENN_STATION_WORLD_SLUG = '7th_avenue_west_32nd_street_new_york_40.74974_-73.99163';
 export const PENN_STATION_WORLD_DIR = `/tilesets/${PENN_STATION_WORLD_SLUG}`;
+
+/**
+ * A district already massed: the Penn Station district around 2 Penn Plaza (pipeline K-D, run 8e3a912b with its centre on
+ * Cloud Run, 250 m, built 2026-11-03), kept as a world (scripts/publish_district_world.ts) so the 3D Scene button opens it at once instead of
+ * building a district from scratch (user ask, 2026-11-04).
+ */
+export const PENN_DISTRICT_WORLD_SLUG = 'penn_station_district_2_penn_plaza';
+export const PENN_DISTRICT_WORLD_DIR = `/tilesets/${PENN_DISTRICT_WORLD_SLUG}`;
 
 export const STARTER_BUTTONS: readonly StarterButton[] = [
     { icon: '✨', label: 'Interactive App', makes: 'live-code-sandbox', prompts: ['Build an interactive audio visualizer app with responsive controls'] },
@@ -74,6 +82,8 @@ export const STARTER_BUTTONS: readonly StarterButton[] = [
             'Build a textured 3D scene of Piazza del Duomo in Milan with its surrounding streets, buildings and trees, at a bright late-day light - a touch higher and less deeply orange than a full golden hour (around 20 degrees of sun elevation, a gentler warm tone, not deep orange), its azimuth set from the real solar geometry of this location, so the direction stays physically plausible, the sun glowing softly through scattered clouds behind it',
             'Build a textured 3D scene of Federation Square in Melbourne with its surrounding streets, buildings and trees, at a bright late-day light - a touch higher and less deeply orange than a full golden hour (around 20 degrees of sun elevation, a gentler warm tone, not deep orange), its azimuth set from the real solar geometry of this location, so the direction stays physically plausible, the sun glowing softly through scattered clouds behind it',
         ],
+        // the district already massed opens at once; without it on this machine, one of the prompts above builds one
+        world: { slug: PENN_DISTRICT_WORLD_SLUG, scenePath: `${PENN_DISTRICT_WORLD_DIR}/scene3d.json`, title: 'Penn Station district - 2 Penn Plaza' },
     },
     {
         icon: '🏛️',

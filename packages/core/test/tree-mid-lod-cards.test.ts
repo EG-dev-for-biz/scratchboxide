@@ -30,7 +30,7 @@ import { validateTreesGlbJson, type TreesGlbRootExtras } from '../src/common/spa
 import { TreeLodController } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/TreeLodController';
 import { CROWN_VERTEX_MAIN, isCrownVariant, makeCrownVariant } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeCrownShading';
 import { makeFadeVariant } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeLodFade';
-import { CARD_ALPHA_MIP, CROWN_CARD_ATLAS_PX, bakeCrownCardAtlas, clayLeafPaint } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeCrownCards';
+import { CARD_ALPHA_MIP, crownCardAtlasPx, bakeCrownCardAtlas, clayLeafPaint } from '../src/browser/generative-canvas/primitives/scene3d/treeLod/treeCrownCards';
 import { applyClayRenderMode, sharedTreeClayMaterial } from '../src/browser/generative-canvas/primitives/scene3d/clayRenderMode';
 import { parseGlb } from './helpers/clay-glb-render';
 import { encodePng } from '../src/node/texture-processing';
@@ -64,7 +64,11 @@ describe('the mid level as crown cards', () => {
         work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tree-mid-lod-')));
         svc = new TileVegetationService({ workspaceRoot: work, repoRoot: REPO });
         await svc.ensureBinary();
-        fs.writeFileSync(path.join(work, 'crowns.json'), JSON.stringify({ version: 1, frame: { frame: 'x = east, y = up, z = south (metres)' }, params: { sampleSpacing: 0.7 }, crowns: CROWNS }));
+        // the card counts are compared at one growth form: the crowns are grown decurrent (no leader through the crown; the
+        // 6 m crown is pointed enough to grow excurrent by default, its foliage then in tiers), as a measurement records it
+        const growth = { excurrentApicalLo: 2, excurrentApicalHi: 3 };
+        fs.writeFileSync(path.join(work, 'crowns.json'), JSON.stringify({ version: 1, frame: { frame: 'x = east, y = up, z = south (metres)' }, params: { sampleSpacing: 0.7 },
+            growth, species: { index: 'assets/vegetation/species/index.json' }, crowns: CROWNS }));
         cards = await svc.plant({ crownsPath: 'crowns.json', triangleBudget: 14000, seed: 'abc' });
         clusters = await svc.plant({ crownsPath: 'crowns.json', triangleBudget: 14000, seed: 'abc', params: { crownCards: 0 } });
     }, 900_000);
@@ -77,19 +81,21 @@ describe('the mid level as crown cards', () => {
         for (const [id, t] of on as Map<number, any>) {
             const o = (off as Map<number, any>).get(id);
             const c = t.lod.coverage;
-            // the cards were placed toward the clusters' cover and reached it (clay), and the clusters' cover is what the
-            // run without cards draws
+            // the cards were placed toward the larger of the clusters' cover and the crown's own target (a summer crown lets
+            // about a tenth of the sky through at every level) and reached it (clay); the clusters' cover is what the run
+            // without cards draws
             expect(t.lod.crownCards.cards).toBeGreaterThan(0);
-            expect(c.cardTarget).toBeCloseTo(c.midClusters.mean, 6);
+            expect(c.cardTarget).toBeCloseTo(Math.max(c.midClusters.mean, c.target), 6);
             expect(c.midClusters.mean).toBeCloseTo(o.lod.coverage.mid.mean, 6);
-            expect(Math.abs(c.mid.mean - o.lod.coverage.mid.mean)).toBeLessThan(0.03);
+            expect(Math.abs(c.mid.mean - c.cardTarget)).toBeLessThan(0.03);
+            expect(c.mid.mean).toBeGreaterThan(o.lod.coverage.mid.mean - 0.03);
             expect(c.mid.min).toBeGreaterThan(o.lod.coverage.mid.min - 0.1);
             // textured: the cards' cut-out covers at least what the clusters' did
             expect(c.cutout.mid.mean).toBeGreaterThan(c.cutout.midClusters.mean - 0.03);
             // triangles: two a card, plus the shared wood
             expect(t.lod.level1.drawnTriangles).toBe(t.lod.woodTriangles + 2 * t.lod.crownCards.cards);
             expect(t.lod.level1.drawnTriangles).toBeLessThan(0.1 * o.lod.level1.drawnTriangles);
-            // the near and near-mid levels are untouched
+            // the near and near-mid levels are untouched by the mid cards (their own cards are placed either way)
             expect(t.lod.level0.drawnTriangles).toBe(o.lod.level0.drawnTriangles);
             expect(t.lod.nearMid.drawnTriangles).toBe(o.lod.nearMid.drawnTriangles);
         }
@@ -119,15 +125,19 @@ int main() { auto lib = scratchbox::tree_lod::buildClusterLibrary(scratchbox::tr
         const r = spawnSync(process.env.CXX || 'clang++', ['-std=c++20', '-O2', '-I' + INCLUDE, src, '-o', bin], { encoding: 'utf8' });
         expect(r.status, r.stderr).toBe(0);
         const native = spawnSync(bin, [], { encoding: 'utf8' }).stdout.trim().split('\n').map(Number);
-        const px = CROWN_CARD_ATLAS_PX, atlas = bakeCrownCardAtlas(cc, px, clayLeafPaint(cc));
+        const px = crownCardAtlasPx(cc), atlas = bakeCrownCardAtlas(cc, px, clayLeafPaint(cc));
+        expect(cc.rows).toBe(cc.cols);
+        expect(Number.isInteger(px / cc.cols)).toBe(true);
         const cw = px / cc.cols;
         native.forEach((fill, cell) => {
             const col = cell % cc.cols, row = Math.floor(cell / cc.cols);
             let n = 0;
             for (let y = row * cw; y < (row + 1) * cw; y++) for (let x = col * cw; x < (col + 1) * cw; x++) if (atlas[(y * px + x) * 4 + 3] >= 128) n++;
             expect(Math.abs(n / (cw * cw) - fill)).toBeLessThan(0.01);
-            // a dense spray: most of the card's disc is leaf
-            expect(fill).toBeGreaterThan(0.3);
+            // a dense spray (the mid level's cells): most of the card's disc is leaf; an open spray (the near-mid and core
+            // cards' cells): single leaves with gaps between them, so a card seen from a few metres is not one large leaf
+            if (cell < (cc.denseCells ?? cc.cells.length)) expect(fill).toBeGreaterThan(0.3);
+            else { expect(fill).toBeGreaterThan(0.15); expect(fill).toBeLessThan(0.35); }
         });
         fs.mkdirSync(SHOTS, { recursive: true });
         const rgba = Buffer.alloc(px * px * 4);

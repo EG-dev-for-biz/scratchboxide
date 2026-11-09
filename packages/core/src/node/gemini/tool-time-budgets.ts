@@ -16,6 +16,7 @@
  * Kept off ToolDeclaration on purpose: declarations are sent to Gemini verbatim.
  */
 
+import { FACADE_UPSCALE_EXTRA_MS, facadeUpscaleAsked } from '../3d-engine/staged-location/pipeline-k/facade-upscale';
 import { stagedDistrict } from '../3d-engine/staged-location/staged-switches';
 
 export interface ToolTimeBudget {
@@ -52,7 +53,10 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     google_3d_tiles_get_clay: args => {
         const asked = typeof args.district === 'string' ? args.district : args.pipeline === 'kd' ? 'kd' : undefined;
         const kd = asked !== undefined ? stagedDistrict({ district: asked }) === 'kd' : args.isolate !== true && stagedDistrict({}) === 'kd';
-        return { maxMs: kd ? 362 * MIN : args.isolate === true ? 40 * MIN : 142 * MIN };
+        // pipeline K's facade upscale on a single building adds its own time (the run's budget grows by the same); a
+        // district's capped upscale fits its own budget
+        const upscale = args.isolate === true && facadeUpscaleAsked(args.steps as Record<string, unknown> | undefined) ? FACADE_UPSCALE_EXTRA_MS : 0;
+        return { maxMs: (kd ? 362 * MIN : args.isolate === true ? 40 * MIN : 142 * MIN) + upscale };
     },
     google_3d_tiles_get_full_texture: { maxMs: 40 * MIN },
     google_3d_tiles_clay_blockout_runner: { maxMs: 60 * MIN },
@@ -61,6 +65,11 @@ export const TOOL_TIME_BUDGETS: Readonly<Record<string, ToolTimeBudget | ((args:
     // Image, vision and native build calls with up to two revision passes; with a location it first stages on 3D
     // Tiles (above), which can go a long time between progress reports.
     build_3d_object_from_reference: { maxMs: 50 * MIN },
+    // The UV rewrap and the detail bake (the first call after an engine change also builds both binaries), plus one image
+    // call per painted decal; reports progress before the bake.
+    object_detail_pass: { maxMs: 20 * MIN, idleMs: 12 * MIN },
+    // Three image calls (the side view, then the top and front views together), each retried on transient errors.
+    object_blueprint_outlines: { maxMs: 10 * MIN, idleMs: 5 * MIN },
     // With a place not yet built it extracts and isolates the structure from 3D Tiles first (minutes, cached after), then
     // the grounding fetches, the registration (up to 90 s edges + 120 s joint) and, optionally, the segmenter per view.
     streetview_survey: { maxMs: 40 * MIN, idleMs: 10 * MIN },

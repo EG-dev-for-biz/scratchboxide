@@ -391,6 +391,88 @@ public:
         }
     }
 
+    /** The Vertex default tangent, (1,0,0,1): a placeholder that says nothing about the UVs. */
+    static bool isPlaceholderTangent(const Vec4& t) {
+        return t.x == 1.0f && t.y == 0.0f && t.z == 0.0f && t.w == 1.0f;
+    }
+
+    bool hasPlaceholderTangents() const {
+        for (const auto& v : vertices) if (isPlaceholderTangent(v.tangent)) return true;
+        return false;
+    }
+
+    /**
+     * Per-vertex tangents from the UVs, in glTF's convention: xyz along +u (the vertex's triangles' dP/du, weighted by
+     * corner angle, made perpendicular to the normal), w the sign that makes cross(N, T) * w point up the image
+     * (decreasing v), as glTF's +Y-up tangent-space normal textures need. Only the triangles whose UVs run the way most
+     * of the vertex's surface does count (by the area of surface each maps): a strip whose UVs wrap back across a
+     * texture without a seam vertex, or a mirrored neighbour, does not turn its neighbours' frames. A vertex none of
+     * whose triangles has a UV gradient gets a tangent perpendicular to its normal and w = +1. With onlyPlaceholders,
+     * vertices whose tangent is not the Vertex default keep it. Returns the number of vertices written.
+     */
+    size_t computeUvTangents(bool onlyPlaceholders = false) {
+        const size_t n = vertices.size(), triCount = indices.size() / 3;
+        struct UvTri { Vec3 dPdu, dPdv; float angle[3]; int orient; };
+        std::vector<UvTri> tris(triCount);
+        std::vector<float> vote(n, 0.0f);
+        std::vector<Vec3> faceN(n, Vec3(0, 0, 0));
+        for (size_t f = 0; f < triCount; ++f) {
+            UvTri& tri = tris[f];
+            tri.orient = 0;
+            const uint32_t* c = &indices[f * 3];
+            if (c[0] >= n || c[1] >= n || c[2] >= n) continue;
+            const Vertex &A = vertices[c[0]], &B = vertices[c[1]], &C = vertices[c[2]];
+            const Vec3 e1 = B.position - A.position, e2 = C.position - A.position;
+            const Vec3 fn = e1.cross(e2);
+            for (int k = 0; k < 3; ++k) faceN[c[k]] += fn;
+            const float u1 = B.uv.x - A.uv.x, v1 = B.uv.y - A.uv.y, u2 = C.uv.x - A.uv.x, v2 = C.uv.y - A.uv.y;
+            const float det = u1 * v2 - u2 * v1;
+            if (det == 0.0f || std::abs(det) <= 1e-7f * (std::abs(u1 * v2) + std::abs(u2 * v1))) continue;
+            tri.dPdu = (e1 * v2 - e2 * v1) * (1.0f / det);
+            tri.dPdv = (e2 * u1 - e1 * u2) * (1.0f / det);
+            const Vec3 jac = tri.dPdu.cross(tri.dPdv);   // surface area per unit of UV area, along the UVs' own normal
+            const float mapped = jac.length(), facing = jac.dot(fn);
+            if (!std::isfinite(mapped) || !(mapped > 0.0f) || facing == 0.0f) continue;
+            tri.orient = facing > 0.0f ? 1 : -1;
+            for (int k = 0; k < 3; ++k) {
+                const Vec3& p = vertices[c[k]].position;
+                const Vec3 a = vertices[c[(k + 1) % 3]].position - p, b = vertices[c[(k + 2) % 3]].position - p;
+                const float la = a.length(), lb = b.length();
+                tri.angle[k] = la > 0.0f && lb > 0.0f ? std::acos(std::clamp(a.dot(b) / (la * lb), -1.0f, 1.0f)) : 0.0f;
+                vote[c[k]] += static_cast<float>(tri.orient) * mapped * tri.angle[k];
+            }
+        }
+        std::vector<Vec3> du(n, Vec3(0, 0, 0)), dv(n, Vec3(0, 0, 0));
+        for (size_t f = 0; f < triCount; ++f) {
+            const UvTri& tri = tris[f];
+            if (tri.orient == 0) continue;
+            for (int k = 0; k < 3; ++k) {
+                const uint32_t v = indices[f * 3 + k];
+                if (static_cast<float>(tri.orient) * vote[v] < 0.0f) continue;
+                du[v] += tri.dPdu * tri.angle[k];
+                dv[v] += tri.dPdv * tri.angle[k];
+            }
+        }
+        size_t written = 0;
+        for (size_t k = 0; k < n; ++k) {
+            Vertex& v = vertices[k];
+            if (onlyPlaceholders && !isPlaceholderTangent(v.tangent)) continue;
+            Vec3 nrm = v.normal.length() > 1e-8f ? v.normal.normalized() : faceN[k].normalized();
+            if (!(nrm.length() > 0.5f)) nrm = Vec3(0, 1, 0);
+            Vec3 t = du[k] - nrm * nrm.dot(du[k]);
+            float w = 1.0f;
+            if (t.length() > 1e-6f) {
+                t = t.normalized();
+                w = nrm.cross(t).dot(dv[k]) > 0.0f ? -1.0f : 1.0f;
+            } else {
+                t = (std::abs(nrm.y) < 0.9f ? Vec3(0, 1, 0).cross(nrm) : Vec3(1, 0, 0).cross(nrm)).normalized();
+            }
+            v.tangent = Vec4(t.x, t.y, t.z, w);
+            ++written;
+        }
+        return written;
+    }
+
     /**
      * Merges vertices whose position, normal, UVs, colour and tangent are all bit-identical, re-indexing the
      * triangles. Nothing a renderer can see changes (unlike weldVertices, which merges by position alone and so

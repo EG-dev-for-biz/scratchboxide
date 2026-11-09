@@ -14,7 +14,7 @@
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { groupWalls, readWallBays, type GrammarFacade, type WallEvidence } from '../src/node/3d-engine/staged-location/wall-grammar';
+import { groupWalls, readWallBays, voteRects, wallEvidence, type GrammarFacade, type WallEvidence } from '../src/node/3d-engine/staged-location/wall-grammar';
 import { facadeSamples, latticeFacade, type ReliefFacade } from '../src/node/3d-engine/staged-location/facade-lattice';
 import { buildWallSheets, SHEET_ID_BASE } from '../src/node/3d-engine/staged-location/wall-sheets';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
@@ -105,6 +105,28 @@ describe('the wall grammar', () => {
         expect(bays.every(b => b.u1 - b.u0 < 6)).toBe(true);
     });
 
+    it("votes a plane the facade reader drew on the strips its single windows make, and a plane the fit read on its rects alone", () => {
+        // a 12 m x 9 m facade at 0.1 m a pixel: three columns of six windows a storey (1.5 m) apart, each 1 m x 0.4 m
+        const f = { pixel: 0.1, orthoSMin: 0, orthoTMax: 9 };
+        const rects: Array<[number, number, number, number]> = [];
+        for (const cx of [20, 60, 100]) for (let k = 0; k < 6; k++) { const y1 = 85 - k * 15; rects.push([cx - 5, y1 - 4, cx + 5, y1]); }
+        const fit = voteRects(f, { rects });
+        expect(fit).toEqual({ rects, strips: 0 });
+        const read = voteRects(f, { rects, reader: 'facade-reader/14' });
+        expect(read.strips).toBe(3);
+        expect(read.rects).toHaveLength(rects.length + 3);
+        // each strip runs the column from its lowest sill to its highest head, at the column's edges, in pixels
+        expect(read.rects.slice(rects.length)).toEqual([[15, 6, 25, 85], [55, 6, 65, 85], [95, 6, 105, 85]]);
+        // and the column vote (0.5 m cells) then reads the three columns as bays where the windows alone, 0.4 m of each 1.5 m storey, would not
+        const nu = 24, ny = 18, cellM = 0.5, mk = (list: Array<[number, number, number, number]>): WallEvidence => {
+            const covered = new Uint8Array(nu * ny).fill(1), window = new Uint8Array(nu * ny), lum = new Float32Array(nu * ny).fill(120);
+            for (const [x0, y0, x1, y1] of list) for (let y = Math.floor(y0 / 5); y < Math.ceil(y1 / 5); y++) for (let x = Math.floor(x0 / 5); x < Math.ceil(x1 / 5); x++) { window[(ny - 1 - y) * nu + x] = 1; lum[(ny - 1 - y) * nu + x] = 60; }
+            return { u0: 0, y0: 0, nu, ny, cellM, covered, window, lum };
+        };
+        expect(readWallBays(mk(rects)).bays).toHaveLength(0);
+        expect(readWallBays(mk(read.rects)).bays.length).toBeGreaterThanOrEqual(3);
+    });
+
     it('draws no bay over a stack of punched windows in shaded stone, and keeps a strip whose spandrels hold no windows but are no stone', () => {
         // columns 2 m wide every 4 m, 30 m tall; storeys 3.5 m: windows 2 m tall. The wall is in shade, stone as dark as the
         // glass, so light cannot tell them apart; on the left (u < 20) the window fit leaves the 1.5 m of stone between
@@ -178,5 +200,24 @@ describe('the wall grammar', () => {
         expect(at(whole, 6, 4)).toBe(1);
         expect(at(whole, 2, 4)).toBe(1);
         expect(at(whole, 10, 4)).toBe(0);
+    });
+    it("marks the window cells of a rect at fractional pixels (the facade reader's) under the rect, at whole texels, and none beside it", () => {
+        // a 10 m x 5 m facade at 0.1 m a pixel, one flat colour; one window at pixels x 40.4-60.3, y 10.6-20.2 (u 4.0-6.1 m,
+        // height 2.9-3.9 m); the evidence at its 0.1 m cells, one a texel. A fractional row used as a fill index shifted the
+        // mask sideways by a fraction of the row (2026-11-07): the cells beside the window then read as window
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wall-grammar-frac-'));
+        const f: GrammarFacade = { facadeId: 1, image: 'f1.png', centroid: [0, 0, 0], normal: [0, 0, 1], axisS: [1, 0, 0], axisT: [0, 1, 0], sMin: 0, sMax: 10, tMin: 0, tMax: 5, pixel: 0.1, width: 100, height: 50, orthoSMin: 0, orthoTMax: 5 };
+        const rgba = new Uint8Array(100 * 50 * 4);
+        for (let k = 0; k < 100 * 50; k++) rgba.set([190, 180, 170, 255], k * 4);
+        fs.writeFileSync(path.join(dir, f.image), encodePng(100, 50, rgba, 4));
+        const dec = (b: Buffer) => { const d = decodePng(b); return { rgba: d.rgba, width: d.width, height: d.height }; };
+        const e = wallEvidence(dir, [f], new Map([[1, [[40.4, 10.6, 60.3, 20.2]]]]), [1, 0, 0], 0, 0, 10, 5, dec);
+        expect([e.nu, e.ny]).toEqual([100, 50]);
+        const cells: Array<[number, number]> = [];
+        for (let cy = 0; cy < e.ny; cy++) for (let cu = 0; cu < e.nu; cu++) if (e.window[cy * e.nu + cu]) cells.push([cu, cy]);
+        // texels x 40-60 (floor 40.4, ceil 60.3) and y 10-20 (floor 10.6, ceil 20.2): u cells 40-60, height cells 49 - y = 29-39
+        expect(cells).toHaveLength(21 * 11);
+        expect(cells.every(([cu, cy]) => cu >= 40 && cu <= 60 && cy >= 29 && cy <= 39)).toBe(true);
+        fs.rmSync(dir, { recursive: true, force: true });
     });
 });

@@ -119,8 +119,11 @@ describe('trees at four levels', () => {
                 expect(Math.hypot(l[0] - c.stem[0], l[2] - c.stem[1])).toBeLessThan(radius);
                 expect(l[1]).toBeLessThan(c.apex[1]); expect(l[1]).toBeGreaterThan(c.supportY);
             }
+            // the lobes are spheres of about 0.75 of the crown radius (a smooth union), so their union reaches past the leaves
+            // themselves (0.95-0.98 of the radius; the ellipsoid above bounds their width): 1.31-1.39 of the radius on macOS,
+            // 1.40 on Ubuntu, moving by +-0.03 as the four lobe centres land
             const reach = Math.max(...crown.lobes.map((l: number[]) => Math.hypot(l[0] - c.stem[0], l[2] - c.stem[1]) + l[3]));
-            expect(reach).toBeGreaterThan(0.7 * radius); expect(reach).toBeLessThan(1.4 * radius);
+            expect(reach).toBeGreaterThan(0.7 * radius); expect(reach).toBeLessThan(1.5 * radius);
             const levels = t.children.map((k: number) => json.nodes[k]).sort((a: any, b: any) => a.extras.sbLod.level - b.extras.sbLod.level);
             expect(levels.map((n: any) => n.extras.sbLod.level)).toEqual([0, 1, 2, 3]);
             expect(levels.map((n: any) => n.extras.sbLod.instanced)).toEqual([true, true, true, false]);
@@ -145,7 +148,10 @@ describe('trees at four levels', () => {
             expect(Math.max(wp.max[0] - wp.min[0], wp.max[2] - wp.min[2])).toBeGreaterThan(0.5 * radius);
             // the near-mid and mid levels share the near level's wood mesh, and draw no twigs: leaf clusters at near-mid, crown cards at mid
             expect(levels[1].mesh).toBe(levels[0].mesh); expect(levels[2].mesh).toBe(levels[0].mesh);
-            for (const ci of levels[1].children) expect(json.nodes[ci].extras.sbCluster.clusterMesh).toMatch(/leaf_cluster/);
+            // (the near-mid level its clumped leaf cards where the tree has them, else its leaf clusters; the near level keeps
+            // its leaf clusters and adds core cards beneath them)
+            for (const ci of levels[1].children) expect(json.nodes[ci].extras.sbCluster.clusterMesh).toMatch(/leaf_cluster|crown_card/);
+            expect(levels[0].children.some((ci: number) => /leaf_cluster/.test(json.nodes[ci].extras.sbCluster.clusterMesh))).toBe(true);
             for (const ci of levels[2].children) expect(json.nodes[ci].extras.sbCluster.clusterMesh).toMatch(/leaf_cluster|crown_card/);
             // bands: each handover centred on lodBandsFor's distance, neighbours overlapping (no gap), handovers in order
             const H = t.extras.heightAboveSupportM as number;
@@ -169,14 +175,27 @@ describe('trees at four levels', () => {
             // triangles per level: near > near-mid > mid > far
             expect(b[0].triangles).toBeGreaterThan(b[1].triangles); expect(b[1].triangles).toBeGreaterThan(b[2].triangles); expect(b[2].triangles).toBeGreaterThan(b[3].triangles);
         }
-        // blade length follows the tree's height within the real range of leaf sizes
+        // blade length follows the tree's height within the real range of leaf sizes; with a leaf texture chosen (the
+        // default) the cards take that set's own leaf length instead, within [minM, atlasMaxM]
         const model = json.extras.sbTrees.clusterLibrary.leafSizeModel;
         expect(model.minM).toBeGreaterThanOrEqual(0.07);
         expect(model.maxM).toBeLessThanOrEqual(0.15);
+        expect(model.atlasMaxM).toBeGreaterThanOrEqual(model.maxM);
+        const index = JSON.parse(fs.readFileSync(path.join(REPO, 'assets/textures/trees/index.json'), 'utf8')) as { leaves: Array<{ id: string; leaf: { lengthM: number } }> };
+        const entryOf = new Map(trees.map((t: any) => [t.extras.sbTree.id, t.extras.sbTree.texture?.leaves?.entry as string | undefined]));
         const lens = planted.stats.perTree.map((t: any) => t.lod.leafLengthM as number);
-        for (const l of lens) { expect(l).toBeGreaterThanOrEqual(model.minM - 1e-9); expect(l).toBeLessThanOrEqual(model.maxM + 1e-9); }
-        // the taller tree's leaves are never smaller than a shorter one's
-        expect(lens[3]).toBeGreaterThanOrEqual(lens[0]);
+        planted.stats.perTree.forEach((t: any, k: number) => {
+            const entry = entryOf.get(t.crownId);
+            if (entry) {
+                const own = index.leaves.find(e => e.id === entry)!.leaf.lengthM;
+                expect(lens[k]).toBeCloseTo(Math.min(model.atlasMaxM, Math.max(model.minM, own)), 6);
+            } else {
+                expect(lens[k]).toBeGreaterThanOrEqual(model.minM - 1e-9);
+                expect(lens[k]).toBeLessThanOrEqual(model.maxM + 1e-9);
+            }
+        });
+        // without textures, the taller tree's leaves are never smaller than a shorter one's
+        if (!entryOf.get(planted.stats.perTree[3].crownId) && !entryOf.get(planted.stats.perTree[0].crownId)) expect(lens[3]).toBeGreaterThanOrEqual(lens[0]);
         // levels: the near-mid level draws about a third of the near level's triangles in its leaves, the mid level about an eighth
         for (const t of planted.stats.perTree) {
             const { level0, nearMid, level1 } = t.lod;
@@ -238,7 +257,14 @@ describe('trees at four levels', () => {
         const planted = await svc.plant({ crownsPath: writeCrowns('fork.json', CROWNS.slice(0, 3)), triangleBudget: 12000, seed: 'abc' });
         const ratios = planted.stats.perTree.map((t: any) => t.crownBaseRatio as number);
         expect(new Set(ratios.map((r: number) => r.toFixed(4))).size).toBe(3);
-        for (const r of ratios) expect(Math.abs(r - 0.35)).toBeLessThanOrEqual(0.1 + 1e-9);
+        // each within the seeded spread (0.10) of the ratio it grows with: its matched species entry's, else the growth's 0.35
+        const speciesIndex = JSON.parse(fs.readFileSync(path.join(REPO, 'assets/vegetation/species/index.json'), 'utf8')) as { entries: Array<{ id: string; crownBaseRatio: number }> };
+        const grownNodes: any[] = parseGlb(fs.readFileSync(planted.treesGlb)).json.nodes.filter((n: any) => n.extras?.sbTree);
+        planted.stats.perTree.forEach((t: any, i: number) => {
+            const matched = grownNodes.find(n => n.extras.sbTree.id === t.crownId)?.extras.sbTree.species?.entry as string | undefined;
+            const own = speciesIndex.entries.find(e => e.id === matched)?.crownBaseRatio ?? 0.35;
+            expect(Math.abs(ratios[i] - own), `${matched}`).toBeLessThanOrEqual(0.1 + 1e-9);
+        });
     }, 300_000);
 });
 

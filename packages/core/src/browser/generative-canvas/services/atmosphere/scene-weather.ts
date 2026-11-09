@@ -121,6 +121,19 @@ export function hazeRangeM(haze: number, large: boolean): number {
     return clear * Math.pow(thick / clear, clamp(haze, 0, 1));
 }
 
+/**
+ * Whether a sky config's cloud shadows were asked for (the viewport draws them only then, and while they are on): set by a request (the cloud-shadow operator, the gaffer rig, the
+ * atmosphere tool), not by the weather. A config the weather wrote carries its marker (`weather`), and the weather's own
+ * cloud shadows, which before 2026-11-04 it switched on with the cloud cover, are not a request; a request made on such
+ * a config marks it (`weather.cloudShadows`).
+ */
+export function cloudShadowsRequested(atmo: unknown): boolean {
+    if (typeof atmo !== 'object' || atmo === null) return false;
+    const a = atmo as { cloudShadowsEnabled?: unknown; weather?: { cloudShadows?: unknown } };
+    // the mark outlives a clear sky, which turns the shadows off for a while
+    return a.weather === undefined ? a.cloudShadowsEnabled === true : a.weather?.cloudShadows === true;
+}
+
 /** The scene's weather, when one is set. */
 export function readSceneWeather(scene: Partial<Scene3DData> | undefined): SceneWeather | undefined {
     const w = (scene as { weather?: SceneWeatherState } | undefined)?.weather;
@@ -129,8 +142,8 @@ export function readSceneWeather(scene: Partial<Scene3DData> | undefined): Scene
 
 /**
  * The scene with its weather set: the weather recorded on the scene, and the sky config the viewport draws written from
- * it (sun angles, cloud cover and density, cloud shadows, haze as turbidity, fog as an exponential density), the
- * skybox the atmospheric sky. Fields of the sky config the weather does not own are kept.
+ * it (the multiple-scattering sky model, sun angles, cloud cover and density, cloud shadows, haze as turbidity, fog as an
+ * exponential density), the skybox the atmospheric sky. Fields of the sky config the weather does not own are kept.
  */
 export function applySceneWeather(scene: Scene3DData, weather: Partial<SceneWeather>): Scene3DData {
     const w = normalizeWeather({ ...(readSceneWeather(scene) ?? DEFAULT_SCENE_WEATHER), ...weather });
@@ -149,13 +162,21 @@ export function applySceneWeather(scene: Scene3DData, weather: Partial<SceneWeat
     const atmosphericScattering = {
         ...base,
         enabled: true,
+        // the native multiple-scattering clear sky (García Liñán's method, scratchbox_sky_ms.hpp; multiple-scattering-sky.ts): at the low sun
+        // a real place opens under, the higher orders of scattering set the colour of the sky and of its light. The sun
+        // elevation drives it, the haze sets its aerosol (the turbidity below, as an optical depth at 550 nm), and the
+        // cloud cover stays the dome's cloud layer over it
+        skyModel: 'multiple-scattering' as const,
         sunElevation: sun.elevationDeg,
         sunAzimuth: sun.azimuthDeg,
         timeOfDay: w.timeOfDay,
         ...(loc ? { latitude: loc.lat, longitude: loc.lng } : {}),
         cloudCoverage: w.cloudCover,
         cloudDensity: w.cloudCover > 0 ? 0.3 + 0.4 * w.cloudCover : 0,
-        cloudShadowsEnabled: w.cloudCover > 0.05,
+        // the cloud shadows are a 2D noise pattern laid over every surface (AerialPerspectiveEffect.ts computeCloudShadow), not
+        // the shadows of the clouds the sky draws: across a district it reads as a huge stain, so the weather never turns
+        // them on (user decision, 2026-11-04); only an explicit request does (cloudShadowsRequested), and it is kept
+        cloudShadowsEnabled: cloudShadowsRequested(base) && w.cloudCover > 0.05,
         turbidity: 2 + 8 * w.haze,
         // haze is in the air all around, not only in the sky: the aerial perspective pass (AerialPerspectiveEffect.ts)
         // fades every surface toward the sky's colour with distance, over a range that shortens as the haze thickens
@@ -166,7 +187,7 @@ export function applySceneWeather(scene: Scene3DData, weather: Partial<SceneWeat
         mie: 0.002 + 0.03 * w.haze,
         inscatteringIntensity: 1,
         fogDensity: w.fog > 0 ? w.fog * (large ? 0.002 : 0.04) : 0,
-        weather: { version: SCENE_WEATHER_VERSION, sun: sun.source }
+        weather: { version: SCENE_WEATHER_VERSION, sun: sun.source, ...(cloudShadowsRequested(base) ? { cloudShadows: true } : {}) }
     };
     const { weatherCleared: _cleared, ...rest } = scene as Scene3DData & { weatherCleared?: boolean };
     return {

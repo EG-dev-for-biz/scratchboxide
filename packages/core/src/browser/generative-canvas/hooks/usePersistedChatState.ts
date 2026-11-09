@@ -10,9 +10,8 @@
 import * as React from 'react';
 import { CanvasArtifact, ChatSession, StudioAppearanceConfig } from '../canvas-types';
 import { DEFAULT_APPEARANCE_CONFIG, DEFAULT_SESSIONS } from '../state/studio-defaults';
-import { ChatState, Updater } from '../state/chatStore';
+import { ChatOnDisk, ChatState, selectChatToWrite, Updater } from '../state/chatStore';
 import { WorkspaceConfigClient } from '../workspace-config-client';
-import { mergeChatSessions } from '../../../common/chat-session-merge';
 import { stripEmbeddedGlb } from '../../../common/strip-embedded-glb';
 
 
@@ -184,32 +183,40 @@ export { loadSavedSessions, loadInitialSessionId, loadSavedVersions, loadSavedAp
 export function usePersistedChatState(
     chatState: ChatState,
     setSessions: (payload: Updater<ChatSession[]>) => void,
+    mergeSessionsFromDisk: (disk: ChatSession[]) => void,
     appearanceConfig: StudioAppearanceConfig,
     workspaceRoot?: string
 ): { persistSessionsImmediately: (updatedSessions: ChatSession[]) => void } {
     const { sessions, currentSessionId, messages, activeArtifact, artifactHistory, layoutMode, artifactVersions } = chatState;
 
-    // Disk is the durable copy (<workspace>/.scratchbox/sessions); localStorage only gives an instant first paint.
+    // Disk is the durable copy (<workspace>/.scratchbox/sessions); localStorage only gives an instant first paint, and
+    // can hold an older copy of a chat than disk. Reading disk brings the open chat up to date ('sessions/fromDisk'),
+    // and the open chat, which is written whole, is not written before that read: its older copy would replace disk's.
+    // What disk holds of each chat is kept, so a chat exactly as read (or as last written) is not written again.
+    const onDiskRef = React.useRef(new Map<string, ChatOnDisk>());
+    const [readRoot, setReadRoot] = React.useState<string>();
     React.useEffect(() => {
         let cancelled = false;
         WorkspaceConfigClient.getInstance().fetchSessions<ChatSession>(workspaceRoot).then(disk => {
-            if (!cancelled && disk.length > 0) setSessions(prev => mergeChatSessions(disk, prev));
+            if (cancelled) return;
+            onDiskRef.current = new Map(disk.map(s => [s.id, s]));
+            if (disk.length > 0) mergeSessionsFromDisk(disk);
+            setReadRoot(workspaceRoot ?? '');
         });
         return () => { cancelled = true; };
     }, [workspaceRoot]);
 
     // Only messages carry history worth keeping; an untouched default session is not written.
     React.useEffect(() => {
-        if (!currentSessionId || messages.length === 0) return;
+        if (readRoot !== (workspaceRoot ?? '')) return;
         const timer = setTimeout(() => {
-            const current = sessions.find(s => s.id === currentSessionId);
-            if (!current) return;
-            void WorkspaceConfigClient.getInstance().saveSession(workspaceRoot, {
-                ...current, messages, activeArtifact, artifactHistory, layoutMode
-            });
+            const session = selectChatToWrite(chatState, currentSessionId ? onDiskRef.current.get(currentSessionId) : undefined);
+            if (!session) return;
+            onDiskRef.current.set(session.id, session);
+            void WorkspaceConfigClient.getInstance().saveSession(workspaceRoot, { ...session });
         }, 1500);
         return () => clearTimeout(timer);
-    }, [messages, activeArtifact, artifactHistory, layoutMode, currentSessionId, workspaceRoot]);
+    }, [messages, activeArtifact, artifactHistory, layoutMode, currentSessionId, workspaceRoot, readRoot]);
 
     // Local Storage Debounced Auto-Persistence for Sessions, Artifacts & History
     React.useEffect(() => {

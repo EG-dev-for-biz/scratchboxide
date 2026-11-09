@@ -38,6 +38,8 @@ export interface FixturePrimitive {
     tangents?: number[];
     uvs?: number[][];          // TEXCOORD_n
     material?: number;
+    /** The node's name (a part id). */
+    name?: string;
 }
 
 export interface FixtureScene {
@@ -84,7 +86,7 @@ export function buildFixtureGlb(scene: FixtureScene): Buffer {
     const json: any = {
         asset: { version: '2.0', generator: 'uv-rewrap-fixtures' },
         scene: 0, scenes: [{ nodes: meshes.map((_, i) => i) }],
-        nodes: meshes.map((_, i) => ({ mesh: i })), meshes, accessors, bufferViews,
+        nodes: meshes.map((_, i) => ({ mesh: i, ...(scene.primitives[i].name ? { name: scene.primitives[i].name } : {}) })), meshes, accessors, bufferViews,
         buffers: [{ byteLength: offset }]
     };
     if (scene.materials) json.materials = scene.materials;

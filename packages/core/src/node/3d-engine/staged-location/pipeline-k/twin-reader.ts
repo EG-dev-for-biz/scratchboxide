@@ -11,7 +11,9 @@
  * The facade reader on the finished exterior (user decision, 2026-10-30): it reads the photos as the viewer will show them,
  * straightened, filled, de-lit, roof shadows lifted and harmonised (tile-refine-twin.ts), so it is not spent on, or fooled
  * by, the shadows, seams and smears the texture stage takes out. It runs in the twin after harmonising and before the
- * material regions, and its openings and panes draw the glass (the window recesses stay the window fit's, cut earlier).
+ * material regions. What it saw (the building's brief, what lies between the windows) is told to the material reads
+ * (material-finish.ts, material-choice.ts, material-naming.ts); nothing is drawn from its openings (user decision,
+ * 2026-11-05: one material path for every surface, no glass layer).
  *
  * - Each rebuilt facade's own texture in the twin is its straightened photo (facade-lattice.ts), the same size and frame:
  *   harmonised, it takes the photo's place in a copy of the orthos (facades.json, the coverage and occlusion masks kept,
@@ -20,8 +22,6 @@
  * - Every other plane (roofs, terraces, the walls tile_refine did not analyse) is photographed face on (plane-orthos.ts)
  *   from tile_refine's flat scan with its photos swapped for the harmonised ones: the twin appends to the scan's images,
  *   it never reorders them.
- * - A plane the reader drew takes its openings in place of the window fit's for the material regions; the window fit's
- *   stand where it drew nothing.
  */
 
 import * as crypto from 'crypto';
@@ -31,11 +31,10 @@ import { mapLimit } from '../../../../common/map-limit';
 import { encodePngAsync, pngCodecThreads } from '../../../png-codec-pool';
 import type { RgbaImage8 } from '../tile-texture-transfer';
 import { assembleGlb, parseGlbBytes } from '../glb-bytes';
-import type { FittedPlane } from '../window-fit';
 import { readPlanes, type FacadeAsk, type FacadeReaderFile } from './facade-reader';
 import type { NamedBuilding } from './facade-reader-brief';
 import type { ModelReadingStore } from './model-readings';
-import { planeOrthos, PLANES_FILE, type PlaneOrthosFile } from './plane-orthos';
+import { planeOrthos } from './plane-orthos';
 
 export const TWIN_READER_VERSION = 'twin-reader/2';
 
@@ -107,15 +106,15 @@ function imageSize(b: Uint8Array): [number, number] | undefined {
 
 /**
  * Reads every plane of the building on the harmonised twin (finalImage, the twin's photos by its own image index; json, its
- * glTF) beside the K orthos, and returns the planes for the material regions: the reader's where it drew, the window fit's
- * (`fitted`) elsewhere. With `readings`, a plane whose photo is unchanged since an earlier build is answered from the store.
+ * glTF) beside the K orthos, and returns its records (the brief, each plane's zones and what it saw between and in the
+ * windows). With `readings`, a plane whose photo is unchanged since an earlier build is answered from the store.
  */
 export async function readOnTwin(input: {
-    orthosDir: string; flatGlb: string; twinJson: any; finalImage: Map<number, RgbaImage8>; fitted: FittedPlane[];
+    orthosDir: string; flatGlb: string; twinJson: any; finalImage: Map<number, RgbaImage8>;
     ask: FacadeAsk; building?: NamedBuilding; signal?: AbortSignal; progress?: (m: string) => void;
     /** The reader's answers kept between builds (model-readings.ts), and the model they are asked of. */
     readings?: { store: ModelReadingStore; model: string };
-}): Promise<{ planes: FittedPlane[]; records: FacadeReaderFile; report: TwinReaderReport }> {
+}): Promise<{ records: FacadeReaderFile; report: TwinReaderReport }> {
     const key = crypto.createHash('sha256').update(TWIN_READER_VERSION).update(fs.readFileSync(path.join(input.orthosDir, 'facades.json'))).digest('hex').slice(0, 16);
     const dir = path.join(input.orthosDir, `twin_read_${key}`);
     fs.rmSync(dir, { recursive: true, force: true });
@@ -134,24 +133,24 @@ export async function readOnTwin(input: {
         for (const m of [f.uncoveredMask, f.occludedMask]) if (m && fs.existsSync(path.join(input.orthosDir, m))) fs.copyFileSync(path.join(input.orthosDir, m), path.join(dir, m));
     });
     fs.writeFileSync(path.join(dir, 'facades.json'), JSON.stringify(facadesFile));
+    // a facade's answers are kept by its straightened photo and masks (byte-identical build to build) and this reader's
+    // version, not by the harmonised texture it reads, which drifts by a few levels between builds of the same inputs
+    // (the Seagram: 127 of 210 twin images differed by 0.4 to 4 levels, and every twin-stage read was asked again,
+    // 2026-11-07); a plane photographed from the scan (a roof, a terrace) has no straightened photo and keeps its pixels' key
+    const planeKeys = new Map<number, string>();
+    for (const f of facadesFile.facades) {
+        const src = path.join(input.orthosDir, f.image);
+        if (!fs.existsSync(src)) continue;
+        const h = crypto.createHash('sha256').update(`twin-read\0${TWIN_READER_VERSION}\0`).update(fs.readFileSync(src));
+        for (const m of [f.uncoveredMask, f.occludedMask]) { h.update('\0mask\0'); if (m && fs.existsSync(path.join(input.orthosDir, m))) h.update(fs.readFileSync(path.join(input.orthosDir, m))); }
+        planeKeys.set(f.facadeId, h.digest('hex'));
+    }
     // the other planes, photographed from the flat scan with its photos harmonised
     const scan = await harmonisedScan(fs.readFileSync(input.flatGlb), input.finalImage);
     const scanFile = path.join(dir, 'scan_harmonised.glb');
     fs.writeFileSync(scanFile, scan.glb);
     const po = await planeOrthos(scanFile, dir);
     fs.rmSync(scanFile, { force: true });
-    const { records } = await readPlanes(dir, input.ask, { ...(input.signal ? { signal: input.signal } : {}), ...(input.progress ? { progress: input.progress } : {}), ...(input.building ? { building: input.building } : {}), ...(input.readings ? { readings: input.readings } : {}) });
-    // the reader's planes where it drew; the window fit's elsewhere (a facade keeps its wall grammar bays)
-    const frames = new Map<number, Omit<FittedPlane, 'windows' | 'panes'>>();
-    for (const f of facadesFile.facades as unknown as Array<Omit<FittedPlane, 'windows' | 'panes'>>) frames.set(f.facadeId, f);
-    for (const f of (JSON.parse(fs.readFileSync(path.join(dir, PLANES_FILE), 'utf8')) as PlaneOrthosFile).planes) frames.set(f.facadeId, f as unknown as Omit<FittedPlane, 'windows' | 'panes'>);
-    const read = new Map<number, FittedPlane>();
-    for (const r of records.readings) {
-        const f = frames.get(r.facadeId);
-        if (!f || f.width !== r.width || f.height !== r.height) continue;
-        const bays = input.fitted.find(p => p.facadeId === r.facadeId)?.bays;
-        read.set(r.facadeId, { facadeId: f.facadeId, centroid: f.centroid, normal: f.normal, axisS: f.axisS, axisT: f.axisT, orthoSMin: f.orthoSMin, orthoTMax: f.orthoTMax, pixel: f.pixel, width: f.width, height: f.height, windows: r.rects, panes: r.panes, ...(bays ? { bays } : {}) });
-    }
-    const planes = [...input.fitted.filter(p => !read.has(p.facadeId)), ...read.values()];
-    return { planes, records, report: { dir, facadesHarmonised, facadesAsPhotographed, photosHarmonised: scan.swapped, planes: po.file.planes.length } };
+    const { records } = await readPlanes(dir, input.ask, { ...(input.signal ? { signal: input.signal } : {}), ...(input.progress ? { progress: input.progress } : {}), ...(input.building ? { building: input.building } : {}), ...(input.readings ? { readings: input.readings, planeKey: (f: { facadeId: number }) => planeKeys.get(f.facadeId) } : {}) });
+    return { records, report: { dir, facadesHarmonised, facadesAsPhotographed, photosHarmonised: scan.swapped, planes: po.file.planes.length } };
 }

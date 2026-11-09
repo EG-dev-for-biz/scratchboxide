@@ -23,6 +23,7 @@ import {
 } from './diurnal-lighting';
 import { getSunVectorFromAngles } from './solar-position';
 import { buildPhysicalSkyLut, PhysicalSkyLut } from './physical-sky';
+import { cachedMultipleScatteringSky, fetchMultipleScatteringSky, MULTIPLE_SCATTERING_SKY_MODEL, multipleScatteringSkyKey } from './multiple-scattering-sky';
 import { calibratedExposure, luminance, NIGHT_MOON_INTENSITY, NIGHT_SKY_LIGHT_FLOOR, nightFillWeight, physicalSkyLevel, skyIrradianceChroma } from './sky-light-rig';
 import { SunGlare } from './SunGlare';
 import { cloudShellUniformArrays, cloudShellWindSpeeds, coverageForSkyCover, MAX_CLOUD_SHELL_LAYERS, resolveCloudShellLayers } from './cloud-shell-layers';
@@ -675,6 +676,26 @@ export function groundBounceColor(profile: { isGoldenHour: boolean; isNight: boo
 }
 
 /**
+ * A camera's daylight white balance: per-channel gains that make the light falling on a level grey surface (the sun at its
+ * elevation plus the sky) neutral, at the same luminance. Applied to the sun and the sky light alike, a sunlit face keeps
+ * a little warmth and a shaded one a little blue, as in a photograph, instead of the raw beam's cast (a sun 20 degrees
+ * up through light haze is about 4,000 K, (1, 0.67, 0.35) against the display's D65 white) tinting every texture.
+ * Undefined when there is no light to balance.
+ */
+export function daylightWhiteBalance(sun: THREE.Color, sunIntensity: number, elevationDeg: number, sky: THREE.Color, skyIntensity: number): THREE.Color | undefined {
+    const level = Math.max(0, Math.sin((elevationDeg * Math.PI) / 180)) * sunIntensity;
+    const e = [sun.r * level + sky.r * skyIntensity, sun.g * level + sky.g * skyIntensity, sun.b * level + sky.b * skyIntensity];
+    const y = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
+    if (!(y > 1e-9) || e.some(c => !(c > 1e-9))) return undefined;
+    return new THREE.Color(y / e[0], y / e[1], y / e[2]);
+}
+
+/** Whether the lights are white-balanced: by day only, unless the config chose a colour or turned it off. */
+export function whiteBalanced(profile: Pick<DiurnalLightingProfile, 'isGoldenHour' | 'isTwilight' | 'isNight'>, config: Pick<AtmosphericScatteringConfig, 'kelvinTemperature' | 'whiteBalance'>): boolean {
+    return config.whiteBalance !== false && !config.kelvinTemperature && !profile.isGoldenHour && !profile.isTwilight && !profile.isNight;
+}
+
+/**
  * The direct sun's colour. A `kelvinTemperature` in the config is a chosen colour and keeps the phase-tinted blackbody;
  * otherwise, while the disc is up, it is the profile's spectral beam (blackbody sun through Rayleigh, aerosol and ozone).
  * After sunset the phase tint stands in for the sky light that is left.
@@ -796,18 +817,54 @@ export function createAtmosphericSkyDome(
     let currentLut: PhysicalSkyLut | undefined;
     let exposure = 1;
     const skyTurbidity = () => config.turbidity ?? diurnalProfile.turbidity ?? 2;
-    let sunsetAnchor: { turbidity: number; lut: PhysicalSkyLut; level: number } | undefined;
+    // The sky model (config.skyModel): the scene weather asks for the native multiple-scattering sky, whose tables come
+    // from the server (multiple-scattering-sky.ts). Until a sun's table is in, the dome keeps the last multiple-scattering
+    // table it drew, else (the first sun) the spectral sky; the table's arrival redraws the sky and its lights. A native
+    // failure is kept (skyModelError, logged) and the spectral sky stays, named as such (skyModel).
+    let skyModelInUse: 'multiple-scattering' | 'spectral' = 'spectral';
+    let skyModelError: string | undefined;
+    let skyPending: Promise<void> | undefined;
+    const wantsMultipleScattering = () => config.skyModel === MULTIPLE_SCATTERING_SKY_MODEL;
+    const requestMultipleScattering = (elevDeg: number, turbidity: number) => {
+        if (skyModelError) return;
+        const key = multipleScatteringSkyKey(elevDeg, turbidity);
+        const pending = Promise.all([fetchMultipleScatteringSky(elevDeg, turbidity), fetchMultipleScatteringSky(0, turbidity)]).then(() => {
+            if (disposed || !wantsMultipleScattering()) return;
+            // redraw only for the sun the dome still shows (a later sun has its own request)
+            if (multipleScatteringSkyKey(Math.max(-18, initialElev), skyTurbidity()) === key) applySolarState(initialElev, initialAzim, diurnalProfile);
+        }, (err: unknown) => {
+            skyModelError = err instanceof Error ? err.message : String(err);
+            console.error(`[sky] the multiple-scattering sky could not be drawn; the spectral sky stays: ${skyModelError}`);
+            throw err;
+        });
+        skyPending = pending;
+        pending.catch(() => undefined);
+    };
+    const skyTableFor = (elevDeg: number): PhysicalSkyLut => {
+        const turbidity = skyTurbidity();
+        if (wantsMultipleScattering() && !skyModelError) {
+            const lut = cachedMultipleScatteringSky(elevDeg, turbidity);
+            if (lut && cachedMultipleScatteringSky(0, turbidity)) { skyModelInUse = 'multiple-scattering'; return lut; }
+            requestMultipleScattering(elevDeg, turbidity);
+            if (currentLut && skyModelInUse === 'multiple-scattering') return currentLut;
+        }
+        skyModelInUse = 'spectral';
+        return buildPhysicalSkyLut({ sunElevationDeg: elevDeg, turbidity });
+    };
+    let sunsetAnchor: { turbidity: number; model: string; lut: PhysicalSkyLut; level: number } | undefined;
     const sunsetSkyAnchor = () => {
         const turbidity = skyTurbidity();
-        if (!sunsetAnchor || sunsetAnchor.turbidity !== turbidity) {
+        if (!sunsetAnchor || sunsetAnchor.turbidity !== turbidity || sunsetAnchor.model !== skyModelInUse) {
             const p = computeDiurnalLightingProfile(0, beamOptions);
-            sunsetAnchor = { turbidity, lut: buildPhysicalSkyLut({ sunElevationDeg: 0, turbidity }), level: p.skyLightIntensity * colorLuminance(new THREE.Color(skyLightColorHex(p))) };
+            // the anchor comes from the same model as the table it scales (skyTableFor fetched both)
+            const lut = (skyModelInUse === 'multiple-scattering' ? cachedMultipleScatteringSky(0, turbidity) : undefined) ?? buildPhysicalSkyLut({ sunElevationDeg: 0, turbidity });
+            sunsetAnchor = { turbidity, model: skyModelInUse, lut, level: p.skyLightIntensity * colorLuminance(new THREE.Color(skyLightColorHex(p))) };
         }
         return sunsetAnchor;
     };
     const applyPhysicalSky = (elevDeg: number) => {
         uniforms.uPhysicalSkyWeight.value = 1;
-        const lut = buildPhysicalSkyLut({ sunElevationDeg: Math.max(-18, elevDeg), turbidity: skyTurbidity() });
+        const lut = skyTableFor(Math.max(-18, elevDeg));
         currentLut = lut;
         const W = lut.azimuthResolution, H = lut.elevationResolution;
         const rgba = new Float32Array(W * H * 4);
@@ -1034,6 +1091,16 @@ export function createAtmosphericSkyDome(
         sunLight.shadow.radius = diurnalProfile.shadowSoftness ?? 1;
     }
     scene.add(sunLight);
+    // the camera's white balance (daylightWhiteBalance), after every light's own colour is set; the dome and the sun's
+    // disc keep their colour, as the sky does in a photograph balanced for the ground
+    const applyWhiteBalance = (elevDeg: number) => {
+        if (!whiteBalanced(diurnalProfile, config)) return;
+        const gains = daylightWhiteBalance(sunLight.color, sunLight.intensity, elevDeg, hemiLight.color, hemiLight.intensity);
+        if (!gains) return;
+        sunLight.color.multiply(gains);
+        hemiLight.color.multiply(gains);
+        hemiLight.groundColor.multiply(gains);
+    };
 
     // Night light: a cool moonlight, opposite the sun and well up, and a floor under the sky light, fading in from 2° to
     // 12° below the horizon, so a night scene reads as moonlit (dim, blue, soft shadows) rather than black. The moon's
@@ -1075,6 +1142,7 @@ export function createAtmosphericSkyDome(
         (uniforms.uGroundRadiance.value as THREE.Color).setRGB(1, 1, 1).multiplyScalar(0.15 * groundE / Math.PI);
     };
     applyNightLight(initialElev, sunDirection);
+    applyWhiteBalance(initialElev);
 
     // Update function applying solar angles
     const applySolarState = (elevDeg: number, azimDeg: number, customProfile?: any) => {
@@ -1106,6 +1174,7 @@ export function createAtmosphericSkyDome(
         hemiLight.groundColor.copy(groundBounceColor(diurnalProfile, elevDeg, hemiKelvin));
         applyPhysicalSky(elevDeg);
         applyNightLight(elevDeg, sunDirection);
+        applyWhiteBalance(elevDeg);
     };
 
     return {
@@ -1148,6 +1217,21 @@ export function createAtmosphericSkyDome(
             applySolarState(presetState.elevationDeg, presetState.azimuthDeg, presetState);
         },
         setCloudLayers: (layers) => applyCloudLayers(layers),
+        get skyModel() {
+            return skyModelInUse;
+        },
+        get skyModelError() {
+            return skyModelError;
+        },
+        whenSkyReady: async () => {
+            // a redraw can ask for another sun; wait until the drawn table is the one asked for
+            for (let i = 0; i < 8 && skyPending; i++) {
+                const p = skyPending;
+                await p;
+                if (skyPending === p) break;
+            }
+            if (skyModelError) throw new Error(skyModelError);
+        },
         dispose: () => {
             if (disposed) return;
             disposed = true;

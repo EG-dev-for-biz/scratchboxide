@@ -23,20 +23,25 @@
  *     planned whole (one whose middle lies past the circle in the cell of its point nearest the centre); one reaching more
  *     than `edgeGrowthM` past the circle is left out whole, with its reason, never cut (M2a). The seam stage cuts the
  *     ground exactly on the circle (district-seams.ts).
- *  3. The join (joinChunkGlb): a chunk's layers, built in the chunk's own tangent frame, are placed in the district's frame
- *     by the exact rigid transform between the two frames (through ECEF), and cut to what the chunk owns: the scan and the
- *     ground triangle by triangle, each kept when its middle or a corner lies in what the chunk keeps (its own, and a band
- *     of `seamBandM` past its edge); trees whole, by each connected piece's middle.
+ *  3. The join: a chunk's layers, built in the chunk's own tangent frame, are cut to what the chunk owns (the scan and the
+ *     ground triangle by triangle, each kept when its middle or a corner lies in what the chunk keeps: its own, and a band
+ *     of `seamBandM` past its edge; trees whole, by each connected piece's middle) and placed in the district's frame by the
+ *     exact rigid transform between the two frames (through ECEF), and compacted. A chunk built in the cloud does all of
+ *     that in its own job once it has the district's frame (cutChunkLayer), so the laptop downloads only what it keeps and
+ *     only checks and publishes it, on a worker thread (joinChunkLayerFile); a layer that comes uncut is joined there.
+ *     joinChunkGlb does the whole join on one machine (the centre built here, the placeholders).
  * Seams: two neighbouring chunks remeshed the ground on either side of a cell line independently, and harmonised their
  * photos to their own references; the seam stage (district-seams.ts) cuts the overlapping bands exactly at the line, moves
  * the later chunk's cut edge onto the earlier one's, and levels their colour where they meet. A line never runs through a
  * building with a footprint.
  */
 
+import * as fs from 'fs';
 import * as os from 'os';
+import * as path from 'path';
 import type { Vec2 } from '../../../../common/spatial/staged-location-contracts';
 import { GoogleTileDistrictCrawler } from '../../../spatial/GoogleTileDistrictCrawler';
-import { assembleGlb, nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint, type Mat4 } from '../glb-bytes';
+import { accessorLayout, assembleGlb, nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint, type Mat4, type ParsedGlb } from '../glb-bytes';
 import { districtBuildingIndex, type DistrictFootprint } from './district-buildings';
 
 export const DISTRICT_CHUNKS_VERSION = 'district-chunks/3';  // 3: every building the circle reaches is planned whole, or left out (M2a)
@@ -257,32 +262,161 @@ const multiply = (a: Mat4, b: Mat4): Mat4 => {
 
 export interface JoinReport { keptTriangles: number; removedTriangles: number; pieces?: { kept: number; removed: number } }
 
+const align4 = (n: number) => n + ((4 - (n % 4)) % 4);
+
+/** Extensions that hold no bufferView or accessor of their own past those the compaction rewrites (EXT_mesh_gpu_instancing's). */
+const COMPACT_SAFE_EXTENSION = /^(KHR_materials_\w+|KHR_texture_transform|KHR_texture_basisu|KHR_mesh_quantization|KHR_lights_punctual|EXT_texture_webp|EXT_texture_avif|EXT_mesh_gpu_instancing)$/;
+
+/** An accessor's float VEC3 values: a view of the binary chunk when tightly packed and aligned, else read element by element. */
+function vec3Of(glb: ParsedGlb, index: number): ArrayLike<number> {
+    const l = accessorLayout(glb.json, index);
+    if (l.componentType === 5126 && l.comps === 3 && l.stride === 12 && (glb.bin.byteOffset + l.base) % 4 === 0) return new Float32Array(glb.bin.buffer, glb.bin.byteOffset + l.base, l.count * 3);
+    return readAccessor(glb, index).data;
+}
+
+/** An index accessor's values, a view of the binary chunk when it can be. */
+function indicesOf(glb: ParsedGlb, index: number): ArrayLike<number> {
+    const l = accessorLayout(glb.json, index);
+    const at = glb.bin.byteOffset + l.base;
+    if (l.componentType === 5125 && l.stride === 4 && at % 4 === 0) return new Uint32Array(glb.bin.buffer, at, l.count);
+    if (l.componentType === 5123 && l.stride === 2 && at % 2 === 0) return new Uint16Array(glb.bin.buffer, at, l.count);
+    return readAccessor(glb, index).data;
+}
+
 /**
- * A chunk's layer GLB placed in the district's frame (`transform`, on a new root node over its scene; its vertices are
- * not rewritten) and cut to what `keep` (plan x, z in the district's frame) gives it: triangle by triangle, kept when its
- * middle or any corner lies in it, or with `whole`, connected piece by piece by each piece's middle (trees: never cut through).
+ * A GLB opened for the join's edits. New data (the cut's indices, the placement's baked positions and normals) goes past
+ * the binary chunk as new bufferViews; `finish` writes the file, by default compacted: only the accessors something draws
+ * or reads, and the bufferViews they and the images use, are kept, so the data an edit replaced (the uncut indices, the
+ * unplaced positions) is not carried along (it was a third of a joined ground layer: 132 MB of 389 MB at Penn Station).
+ * Every kept byte is copied as it was; only offsets and indices into the lists change.
  */
-export function joinChunkGlb(bytes: Uint8Array, transform: Mat4, keep: (x: number, z: number) => boolean, opts: { whole?: boolean; /** false: the transform on a root node, the vertices as they were. */ bake?: boolean } = {}): { glb: Buffer } & JoinReport {
-    const glb = parseGlbBytes(bytes);
-    const json = glb.json;
+class GlbEdit {
+    readonly glb: ParsedGlb;
+    readonly json: any;
+    private length: number;
+    /** The appended data, by bufferView. */
+    private readonly appended = new Map<number, Uint8Array>();
+
+    constructor(bytes: Uint8Array) {
+        this.glb = parseGlbBytes(bytes);
+        this.json = this.glb.json;
+        this.json.bufferViews ??= [];
+        this.json.accessors ??= [];
+        this.length = align4(this.glb.bin.byteLength);
+    }
+
+    /** `data` as a new bufferView of the binary chunk; the new accessor's index once `accessor` is added for it. */
+    accessor(data: Uint8Array, target: number, accessor: Record<string, unknown>): number {
+        this.json.bufferViews.push({ buffer: 0, byteOffset: this.length, byteLength: data.byteLength, target });
+        this.appended.set(this.json.bufferViews.length - 1, data);
+        this.length += align4(data.byteLength);
+        this.json.accessors.push({ bufferView: this.json.bufferViews.length - 1, ...accessor });
+        return this.json.accessors.length - 1;
+    }
+
+    /** Why the file cannot be compacted (data the compaction does not know how to follow), or undefined. */
+    private uncompactable(): string | undefined {
+        const json = this.json;
+        if ((json.buffers?.length ?? 0) > 1 || json.buffers?.[0]?.uri !== undefined) return 'it has an external buffer';
+        if (json.bufferViews.some((v: any) => (v.buffer ?? 0) !== 0)) return 'a bufferView names another buffer';
+        const ext = (json.extensionsUsed ?? []).find((x: string) => !COMPACT_SAFE_EXTENSION.test(x));
+        return ext ? `it uses ${ext}` : undefined;
+    }
+
+    /** The file: compacted (the default), or laid out as before, the edits appended past the original binary chunk. */
+    finish(compact = true): { glb: Buffer; droppedBytes: number; uncompacted?: string } {
+        const l = this.layout(compact);
+        return { glb: assembleGlb(this.json, l.bin), droppedBytes: l.droppedBytes, ...(l.uncompacted ? { uncompacted: l.uncompacted } : {}) };
+    }
+
+    /** The binary chunk finish writes, the JSON's lists rewritten to match it (the JSON may still be edited before it is assembled). */
+    layout(compact = true): { bin: Uint8Array; droppedBytes: number; uncompacted?: string } {
+        const json = this.json;
+        const why = compact ? this.uncompactable() : 'not asked';
+        if (why) {
+            const bin = new Uint8Array(this.length);
+            bin.set(this.glb.bin, 0);
+            for (const [v, d] of this.appended) bin.set(d, json.bufferViews[v].byteOffset);
+            if (json.buffers?.[0]) json.buffers[0].byteLength = this.length;
+            else if (this.length) json.buffers = [{ byteLength: this.length }];
+            return { bin, droppedBytes: 0, ...(compact ? { uncompacted: why } : {}) };
+        }
+        // the accessors anything reads: primitives (attributes, indices, morph targets), skins, animations, GPU instancing
+        const accessors: any[] = json.accessors;
+        const used = new Uint8Array(accessors.length);
+        const mark = (i: unknown) => { if (Number.isInteger(i) && (i as number) >= 0 && (i as number) < accessors.length) used[i as number] = 1; };
+        const eachAccessorRef = (f: (holder: any, key: string) => void) => {
+            for (const mesh of json.meshes ?? []) for (const p of mesh.primitives ?? []) {
+                for (const k of Object.keys(p.attributes ?? {})) f(p.attributes, k);
+                if (p.indices !== undefined) f(p, 'indices');
+                for (const t of p.targets ?? []) for (const k of Object.keys(t)) f(t, k);
+            }
+            for (const s of json.skins ?? []) if (s.inverseBindMatrices !== undefined) f(s, 'inverseBindMatrices');
+            for (const a of json.animations ?? []) for (const s of a.samplers ?? []) { f(s, 'input'); f(s, 'output'); }
+            for (const n of json.nodes ?? []) { const at = n.extensions?.EXT_mesh_gpu_instancing?.attributes; if (at) for (const k of Object.keys(at)) f(at, k); }
+        };
+        eachAccessorRef((h, k) => mark(h[k]));
+        const accessorMap = new Int32Array(accessors.length).fill(-1);
+        const keptAccessors: any[] = [];
+        accessors.forEach((a, i) => { if (used[i]) { accessorMap[i] = keptAccessors.length; keptAccessors.push(a); } });
+        eachAccessorRef((h, k) => { const i = h[k]; if (Number.isInteger(i) && i >= 0 && i < accessors.length) h[k] = accessorMap[i]; });
+        json.accessors = keptAccessors;
+        // the bufferViews the kept accessors and the images read
+        const views: any[] = json.bufferViews;
+        const usedView = new Uint8Array(views.length);
+        const markView = (i: unknown) => { if (Number.isInteger(i) && (i as number) >= 0 && (i as number) < views.length) usedView[i as number] = 1; };
+        for (const a of keptAccessors) { markView(a.bufferView); markView(a.sparse?.indices?.bufferView); markView(a.sparse?.values?.bufferView); }
+        for (const im of json.images ?? []) markView(im.bufferView);
+        const viewMap = new Int32Array(views.length).fill(-1);
+        const keptViews: any[] = [];
+        let length = 0;
+        const parts: Array<[number, Uint8Array]> = [];
+        views.forEach((v, i) => {
+            if (!usedView[i]) return;
+            const from = v.byteOffset ?? 0;
+            const data = this.appended.get(i) ?? this.glb.bin.subarray(from, from + v.byteLength);
+            if (!data || data.byteLength < v.byteLength) throw new Error(`bufferView ${i} reads past the binary chunk`);
+            viewMap[i] = keptViews.length;
+            keptViews.push({ ...v, byteOffset: length });
+            parts.push([length, data.subarray(0, v.byteLength)]);
+            length += align4(v.byteLength);
+        });
+        const remapView = (h: any) => { if (h && h.bufferView !== undefined) h.bufferView = viewMap[h.bufferView]; };
+        for (const a of keptAccessors) { remapView(a); remapView(a.sparse?.indices); remapView(a.sparse?.values); }
+        for (const im of json.images ?? []) remapView(im);
+        json.bufferViews = keptViews;
+        const bin = new Uint8Array(length);
+        for (const [o, d] of parts) bin.set(d, o);
+        if (json.buffers?.[0]) json.buffers[0].byteLength = length;
+        else if (length) json.buffers = [{ byteLength: length }];
+        return { bin, droppedBytes: this.length - length };
+    }
+}
+
+/**
+ * The cut: each triangle mesh drawn by a node, its node's world matrix and `toPlan` taking it onto the district's plan,
+ * cut to `keep` triangle by triangle (kept when its middle or any corner lies in it), or with `whole` connected piece by
+ * piece by each piece's middle (trees: never cut through). Vertices and node transforms are left as they are; a cut
+ * primitive gets new indices.
+ */
+function cutGlb(e: GlbEdit, toPlan: Mat4, keep: (x: number, z: number) => boolean, whole: boolean): JoinReport {
+    const { glb, json } = e;
     const local = nodeWorldMatrices(json);
-    const extra: Uint8Array[] = [];
-    let binLength = glb.bin.byteLength + ((4 - (glb.bin.byteLength % 4)) % 4);
     let removed = 0, kept = 0, piecesKept = 0, piecesRemoved = 0;
     // a mesh drawn by several nodes is cut once, by the first node that draws it
     const done = new Set<number>();
     (json.nodes ?? []).forEach((node: any, ni: number) => {
         if (node.mesh === undefined || done.has(node.mesh)) return;
         done.add(node.mesh);
-        const m = multiply(transform, local[ni]);
+        const m = multiply(toPlan, local[ni]);
         for (const prim of json.meshes?.[node.mesh]?.primitives ?? []) {
             if ((prim.mode ?? 4) !== 4 || prim.attributes?.POSITION === undefined) continue;
-            const pos = readAccessor(glb, prim.attributes.POSITION).data;
-            const idx = prim.indices !== undefined ? readAccessor(glb, prim.indices).data : undefined;
+            const pos = vec3Of(glb, prim.attributes.POSITION);
+            const idx = prim.indices !== undefined ? indicesOf(glb, prim.indices) : undefined;
             const count = idx ? idx.length : pos.length / 3;
             const vi = (t: number) => (idx ? idx[t] : t);
             const keepTri = new Uint8Array(count / 3);
-            if (opts.whole) {
+            if (whole) {
                 // connected pieces (shared vertices), each kept or cut as one, by its middle
                 const parent = new Int32Array(pos.length / 3).map((_, i) => i);
                 const find = (x: number): number => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
@@ -313,24 +447,30 @@ export function joinChunkGlb(bytes: Uint8Array, transform: Mat4, keep: (x: numbe
                     keepTri[t / 3] = keep(w[0], w[2]) || kept(a) || kept(b) || kept(c) ? 1 : 0;
                 }
             }
-            const out: number[] = [];
-            for (let t = 0; t + 2 < count; t += 3) if (keepTri[t / 3]) out.push(vi(t), vi(t + 1), vi(t + 2));
-            const cut = count / 3 - out.length / 3;
-            removed += cut; kept += out.length / 3;
+            let n = 0;
+            for (let t = 0; t < keepTri.length; t++) n += keepTri[t];
+            const cut = count / 3 - n;
+            removed += cut; kept += n;
             if (!cut) continue;
-            const data = new Uint8Array(new Uint32Array(out).buffer);
-            json.bufferViews.push({ buffer: 0, byteOffset: binLength, byteLength: data.byteLength, target: 34963 });
-            json.accessors.push({ bufferView: json.bufferViews.length - 1, componentType: 5125, count: out.length, type: 'SCALAR' });
-            prim.indices = json.accessors.length - 1;
-            extra.push(data);
-            binLength += data.byteLength + ((4 - (data.byteLength % 4)) % 4);
+            const out = new Uint32Array(n * 3);
+            for (let t = 0, o = 0; t + 2 < count; t += 3) if (keepTri[t / 3]) { out[o++] = vi(t); out[o++] = vi(t + 1); out[o++] = vi(t + 2); }
+            prim.indices = e.accessor(new Uint8Array(out.buffer), 34963, { componentType: 5125, count: out.length, type: 'SCALAR' });
         }
     });
-    // the district's frame: baked into the vertices when every mesh is drawn by one node (the seam weld reads positions,
-    // never node transforms), else on a new root over the scene's roots (instanced meshes: trees, never welded)
+    return { keptTriangles: kept, removedTriangles: removed, ...(whole ? { pieces: { kept: piecesKept, removed: piecesRemoved } } : {}) };
+}
+
+/**
+ * The placement: the district's frame (`transform`) baked into the vertices when every mesh is drawn by one node (the
+ * seam weld reads positions, never node transforms), node transforms then cleared; else (instanced meshes: trees, never
+ * welded) on a new root over the scene's roots, the vertices as they were. `bake: false` always takes the root node.
+ */
+function placeGlb(e: GlbEdit, transform: Mat4, bakeAsked = true): void {
+    const { glb, json } = e;
+    const local = nodeWorldMatrices(json);
     const users = new Map<number, number>();
     for (const n of json.nodes ?? []) if (n.mesh !== undefined) users.set(n.mesh, (users.get(n.mesh) ?? 0) + 1);
-    const bake = opts.bake !== false && [...users.values()].every(c => c === 1);
+    const bake = bakeAsked && [...users.values()].every(c => c === 1);
     const scene = json.scenes?.[json.scene ?? 0];
     if (bake) {
         const baked = new Map<string, number>();
@@ -342,7 +482,7 @@ export function joinChunkGlb(bytes: Uint8Array, transform: Mat4, keep: (x: numbe
                 if (acc === undefined) continue;
                 const key = `${attr}:${acc}:${ni}`;
                 if (baked.has(key)) { prim.attributes[attr] = baked.get(key); continue; }
-                const src = readAccessor(glb, acc).data, out = new Float32Array(src.length);
+                const src = vec3Of(glb, acc), out = new Float32Array(src.length);
                 const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
                 for (let v = 0; v + 2 < src.length; v += 3) {
                     let q: number[];
@@ -354,13 +494,9 @@ export function joinChunkGlb(bytes: Uint8Array, transform: Mat4, keep: (x: numbe
                     }
                     for (let k = 0; k < 3; k++) { out[v + k] = q[k]; lo[k] = Math.min(lo[k], q[k]); hi[k] = Math.max(hi[k], q[k]); }
                 }
-                const data = new Uint8Array(out.buffer);
-                json.bufferViews.push({ buffer: 0, byteOffset: binLength, byteLength: data.byteLength, target: 34962 });
-                json.accessors.push({ bufferView: json.bufferViews.length - 1, componentType: 5126, count: out.length / 3, type: 'VEC3', ...(attr === 'POSITION' ? { min: lo, max: hi } : {}) });
-                prim.attributes[attr] = json.accessors.length - 1;
-                baked.set(key, json.accessors.length - 1);
-                extra.push(data);
-                binLength += data.byteLength + ((4 - (data.byteLength % 4)) % 4);
+                const index = e.accessor(new Uint8Array(out.buffer), 34962, { componentType: 5126, count: out.length / 3, type: 'VEC3', ...(attr === 'POSITION' ? { min: lo, max: hi } : {}) });
+                prim.attributes[attr] = index;
+                baked.set(key, index);
             }
         });
         for (const n of json.nodes ?? []) { delete n.matrix; delete n.translation; delete n.rotation; delete n.scale; }
@@ -368,10 +504,161 @@ export function joinChunkGlb(bytes: Uint8Array, transform: Mat4, keep: (x: numbe
         json.nodes.push({ name: 'district_frame', matrix: Array.from(transform), children: scene.nodes ?? [] });
         scene.nodes = [json.nodes.length - 1];
     }
-    const bin = new Uint8Array(binLength);
-    bin.set(glb.bin, 0);
-    let o = glb.bin.byteLength + ((4 - (glb.bin.byteLength % 4)) % 4);
-    for (const e of extra) { bin.set(e, o); o += e.byteLength + ((4 - (e.byteLength % 4)) % 4); }
-    if (json.buffers?.[0]) json.buffers[0].byteLength = binLength;
-    return { glb: assembleGlb(json, bin), keptTriangles: kept, removedTriangles: removed, ...(opts.whole ? { pieces: { kept: piecesKept, removed: piecesRemoved } } : {}) };
+}
+
+/**
+ * A chunk's layer GLB placed in the district's frame (`transform`; see placeGlb) and cut to what `keep` (plan x, z in the
+ * district's frame) gives it: triangle by triangle, kept when its middle or any corner lies in it, or with `whole`,
+ * connected piece by piece by each piece's middle (trees: never cut through). The file is compacted (GlbEdit.finish)
+ * unless `compact: false`. The whole join on one machine: the centre build's own layers, the placeholders; a chunk's
+ * layers are cut in its own job (cutChunkLayer) and only placed here (joinChunkLayerFile).
+ */
+export function joinChunkGlb(bytes: Uint8Array, transform: Mat4, keep: (x: number, z: number) => boolean, opts: { whole?: boolean; /** false: the transform on a root node, the vertices as they were. */ bake?: boolean; compact?: boolean } = {}): { glb: Buffer; droppedBytes: number } & JoinReport {
+    const e = new GlbEdit(bytes);
+    const report = cutGlb(e, transform, keep, !!opts.whole);
+    placeGlb(e, transform, opts.bake !== false);
+    const out = e.finish(opts.compact !== false);
+    return { glb: out.glb, droppedBytes: out.droppedBytes, ...report };
+}
+
+export const KD_CHUNK_CUT_VERSION = 'kd-chunk-cut/1';
+
+/** What a chunk's build needs to cut its own layers (the runner's request; a job without it sends them uncut). */
+export interface KdChunkCutSpec {
+    version: typeof KD_CHUNK_CUT_VERSION;
+    plan: DistrictChunkPlan;
+    /**
+     * The district's frame: its place, and its origin height once known (the centre's tiles: given when the centre is
+     * built here; with the centre in the cloud the centre job publishes it, kdDistrictFrameKey, and the other jobs read it).
+     */
+    district: { lat: number; lng: number; originEllipsoidalHeightM?: number };
+    /** The ground a chunk keeps past its own edge (m): DISTRICT_CHUNKS_PARAMS.seamBandM. */
+    bandM: number;
+}
+
+/** The record a cut layer carries (asset.extras.scratchbox.kdCut), taken off again on the laptop. */
+export interface ChunkCutStamp extends JoinReport {
+    version: typeof KD_CHUNK_CUT_VERSION;
+    /** The district's run and the chunk the layer was cut for. */
+    of: string;
+    chunk: number;
+    whole: boolean;
+    /** The transform it was placed by (frameTransform, column-major): the laptop's must be the same, number for number. */
+    transform: number[];
+    /** Bytes the compaction dropped, and the file's size before the cut. */
+    droppedBytes: number;
+    bytesIn: number;
+    ms: number;
+    /** What the stamp added to the asset's extras (taken off with it, so the published file's extras are the build's). */
+    added: { extras: boolean; scratchbox: boolean };
+}
+
+/** What chunk `index` keeps of a layer: its own (trees, whole pieces), else its own and the band past its edge. */
+export function chunkKeep(plan: DistrictChunkPlan, index: number, whole: boolean, bandM: number): (x: number, z: number) => boolean {
+    if (!whole) return chunkTerritory(plan, index, bandM);
+    const owner = chunkOwner(plan);
+    return (x, z) => owner(x, z) === index;
+}
+
+/**
+ * The chunk's half of the join, in its own build (kd-chunk-job.ts): a layer cut to what the chunk keeps, placed in the
+ * district's frame and compacted, exactly as the laptop would have (joinChunkGlb, the same transform from the same two
+ * frames), and stamped (asset.extras.scratchbox.kdCut) so the laptop only checks it and publishes it. The district's frame
+ * must be known exactly: its origin height moves a point's x and z only by the ECEF arithmetic's 1e-9 m, but a point
+ * lying exactly on a line (a remeshed ground's vertex on its cell line, a footprint's edge) is decided by that, so a cut
+ * in an assumed frame differed from the laptop's by a few triangles a chunk at Penn Station; a job without the frame
+ * sends its layers uncut.
+ */
+export function cutChunkLayer(bytes: Uint8Array, o: { frame: TileFrame; district: TileFrame; plan: DistrictChunkPlan; bandM: number; of: string; chunk: number; whole: boolean; now?: () => number }): { glb: Buffer; stamp: ChunkCutStamp } {
+    const now = o.now ?? Date.now, t0 = now();
+    const transform = frameTransform(o.frame, o.district);
+    const e = new GlbEdit(bytes);
+    const report = cutGlb(e, transform, chunkKeep(o.plan, o.chunk, o.whole, o.bandM), o.whole);
+    placeGlb(e, transform);
+    const l = e.layout(true);
+    const asset = (e.json.asset ??= { version: '2.0' });
+    const added = { extras: asset.extras === undefined, scratchbox: asset.extras?.scratchbox === undefined };
+    const stamp: ChunkCutStamp = { version: KD_CHUNK_CUT_VERSION, of: o.of, chunk: o.chunk, whole: o.whole, ...report, transform: Array.from(transform), droppedBytes: l.droppedBytes, bytesIn: bytes.byteLength, ms: now() - t0, added };
+    asset.extras ??= {};
+    asset.extras.scratchbox ??= {};
+    asset.extras.scratchbox.kdCut = stamp;
+    return { glb: assembleGlb(e.json, l.bin), stamp };
+}
+
+/** The cut stamp a layer carries, taken off its JSON as it was before the stamp (undefined when it carries none). */
+function takeCutStamp(json: any): ChunkCutStamp | undefined {
+    const extras = json.asset?.extras;
+    const stamp = extras?.scratchbox?.kdCut as ChunkCutStamp | undefined;
+    if (!stamp) return undefined;
+    delete extras.scratchbox.kdCut;
+    if (stamp.added?.scratchbox && !Object.keys(extras.scratchbox).length) delete extras.scratchbox;
+    if (stamp.added?.extras && !Object.keys(extras).length) delete json.asset.extras;
+    return stamp;
+}
+
+/** One layer file of a chunk joined on this machine (the chunks stage, on a worker thread: chunk-join-worker.ts). */
+export interface ChunkLayerJoinJob {
+    source: string;
+    target: string;
+    /** The chunk's frame into the district's (frameTransform), column-major. */
+    transform: number[];
+    whole: boolean;
+    /** The district's run, the chunk, and what it keeps: a layer that came uncut (a chunk built here) is cut here by them. */
+    of: string;
+    chunk: number;
+    plan: DistrictChunkPlan;
+    bandM: number;
+}
+
+export interface ChunkLayerJoinResult extends JoinReport {
+    /** Where the layer was cut and placed: in its chunk's own build, or here (it came uncut). */
+    cutBy: 'job' | 'here';
+    bytesIn: number;
+    bytesOut: number;
+    /** Bytes the compaction dropped (the job's, or this machine's). */
+    droppedBytes: number;
+    ms: { read: number; cut: number; write: number };
+}
+
+/**
+ * A chunk's layer file joined and written to `target`. One the chunk's build cut, placed and compacted (cutChunkLayer)
+ * is only checked (its stamp names this chunk, this district and this transform, number for number; else it is refused)
+ * and written without the stamp. One that came uncut (a chunk built on this machine, a job that had no district frame) is
+ * cut, placed and compacted here, as before.
+ */
+export function joinChunkLayerFile(job: ChunkLayerJoinJob, now: () => number = Date.now): ChunkLayerJoinResult {
+    let t = now();
+    const bytes = fs.readFileSync(job.source);
+    const e = new GlbEdit(bytes);
+    const ms = { read: now() - t, cut: 0, write: 0 };
+    const stamp = takeCutStamp(e.json);
+    let report: JoinReport, droppedBytes: number, glb: Buffer;
+    t = now();
+    if (stamp) {
+        const sameFrame = stamp.transform?.length === 16 && stamp.transform.every((v, i) => v === job.transform[i]);
+        if (stamp.version !== KD_CHUNK_CUT_VERSION || stamp.of !== job.of || stamp.chunk !== job.chunk || stamp.whole !== job.whole || !sameFrame) {
+            throw new Error(`${path.basename(job.source)} was cut for chunk ${stamp.chunk} of ${stamp.of}${stamp.whole ? ' (whole pieces)' : ''} by ${stamp.version}${sameFrame ? '' : ' in another frame'}, not for chunk ${job.chunk} of ${job.of}${job.whole ? ' (whole pieces)' : ''} by ${KD_CHUNK_CUT_VERSION} in this district's frame`);
+        }
+        report = { keptTriangles: stamp.keptTriangles, removedTriangles: stamp.removedTriangles, ...(stamp.pieces ? { pieces: stamp.pieces } : {}) };
+        droppedBytes = stamp.droppedBytes;
+        glb = assembleGlb(e.json, e.glb.bin);
+    } else {
+        const transform = Float64Array.from(job.transform);
+        report = cutGlb(e, transform, chunkKeep(job.plan, job.chunk, job.whole, job.bandM), job.whole);
+        placeGlb(e, transform);
+        const out = e.finish(true);
+        droppedBytes = out.droppedBytes;
+        glb = out.glb;
+    }
+    ms.cut = now() - t;
+    t = now();
+    fs.writeFileSync(job.target, glb);
+    ms.write = now() - t;
+    return { ...report, cutBy: stamp ? 'job' : 'here', bytesIn: bytes.byteLength, bytesOut: glb.byteLength, droppedBytes, ms };
+}
+
+/** Where the centre job publishes the district's frame for the other chunk jobs: `kd-jobs/<parentRunId>/frame.json`. */
+export function kdDistrictFrameKey(of: string): string {
+    if (!/^[0-9a-f]{8}$/.test(of)) throw new Error(`not a district run id: ${of}`);
+    return `kd-jobs/${of}/frame.json`;
 }

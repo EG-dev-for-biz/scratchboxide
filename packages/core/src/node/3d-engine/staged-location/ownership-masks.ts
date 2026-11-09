@@ -31,6 +31,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { VISION_CALL_POLICY, type VisionModelChain } from '../../gemini/vision-model-chain';
 import { encodePng } from './png-encode';
+import { readingKey, type ModelReadingStore } from './pipeline-k/model-readings';
 import { decodeImageInMemory } from './tile-texture-transfer';
 
 export interface OwnershipViewEntry { name: string; width: number; height: number }
@@ -116,6 +117,12 @@ export function outlinePrompt(target: string, width: number, height: number): st
  */
 export const OWNERSHIP_VOTE_RULE = { afterMs: 30_000, share: 0.75 };
 
+/** The outline answers' record version in the model readings store (model-readings.ts): bumped when the prompt or its parsing changes meaning. */
+export const OWNERSHIP_OUTLINE_VERSION = 'ownership-outline/1';
+
+/** An outline answer kept in the model readings store, by the view's pixels, the target and the prompt. */
+export interface OwnershipOutlineRecord { schema: 'scratchbox.ownership-outline/1'; key: string; model?: string; text: string; atMs: number }
+
 export interface SegmentOwnershipResult {
     /** Where views.txt and the masks are (a copy of the views list next to the masks). */
     masksDir: string;
@@ -136,6 +143,13 @@ export async function segmentOwnershipViews(opts: {
     viewsDir: string; masksDir: string; target: string; chain: VisionModelChain<string>; concurrency?: number; onProgress?: (m: string) => void;
     /** When the vote stops waiting for its slowest views (default OWNERSHIP_VOTE_RULE; false: it waits for every one). */
     vote?: { afterMs: number; share: number } | false;
+    /**
+     * The model's outline answers kept between builds (model-readings.ts), by the view's pixels, the target and the prompt:
+     * a view answered before is answered from here and never cut by the vote's rule, so the same views give the same masks
+     * and the same voted isolate (asked again, the model outlines a little differently, and the vote's 30 s cut leaves out
+     * whichever views were slowest that time).
+     */
+    readings?: ModelReadingStore;
 }): Promise<SegmentOwnershipResult> {
     const t0 = Date.now();
     const views = readOwnershipViewList(opts.viewsDir);
@@ -161,21 +175,30 @@ export async function segmentOwnershipViews(opts: {
         for (let i; (i = next++) < views.length;) {
             const v = views[i];
             const out = path.join(opts.masksDir, `${v.name}.mask.png`);
-            if (cutAt !== undefined) { cutViews.push(v.name); skipped.push({ view: v.name, reason: cutReason() }); done++; continue; }
             const ctl = new AbortController();
             inFlight.set(v.name, ctl);
             try {
                 const png = fs.readFileSync(path.join(opts.viewsDir, `${v.name}.png`));
                 const img = decodeImageInMemory(png);
                 if (img.width !== v.width || img.height !== v.height) throw new Error(`the view image is ${img.width}x${img.height}, views.txt says ${v.width}x${v.height}`);
-                const r = await opts.chain.generate({
-                    contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }, { text: outlinePrompt(opts.target, v.width, v.height) }] }],
-                    config: { responseMimeType: 'application/json', temperature: 0, abortSignal: ctl.signal }
-                }, { stage: 'ownership', ...VISION_CALL_POLICY.ownership, valid: res => { try { parseOutlineReply(res.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? ''); return true; } catch { return false; } } });
-                const text = r.response.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
-                const reply = parseOutlineReply(text);
-                r.remember();
-                model = r.model;
+                const prompt = outlinePrompt(opts.target, v.width, v.height);
+                const key = opts.readings ? readingKey('ownership-outline', [OWNERSHIP_OUTLINE_VERSION, opts.target, prompt, png]) : undefined;
+                const kept = key ? await opts.readings!.get<OwnershipOutlineRecord>(key) : undefined;
+                let reply: OutlineReply | undefined;
+                if (kept && typeof kept.text === 'string') { try { reply = parseOutlineReply(kept.text); if (kept.model) model = kept.model; } catch { reply = undefined; } }
+                if (!reply) {
+                    // a view still to be asked when the vote went ahead casts no vote (a kept answer still does)
+                    if (cutAt !== undefined) { cutViews.push(v.name); skipped.push({ view: v.name, reason: cutReason() }); continue; }
+                    const r = await opts.chain.generate({
+                        contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/png', data: png.toString('base64') } }, { text: prompt }] }],
+                        config: { responseMimeType: 'application/json', temperature: 0, abortSignal: ctl.signal }
+                    }, { stage: 'ownership', ...VISION_CALL_POLICY.ownership, valid: res => { try { parseOutlineReply(res.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? ''); return true; } catch { return false; } } });
+                    const text = r.response.candidates?.[0]?.content?.parts?.map(p => p.text ?? '').join('') ?? '';
+                    reply = parseOutlineReply(text);
+                    r.remember();
+                    model = r.model;
+                    if (key) opts.readings!.put(key, { schema: 'scratchbox.ownership-outline/1', key, model: r.model, text, atMs: Date.now() } satisfies OwnershipOutlineRecord);
+                }
                 if (!reply.visible) { skipped.push({ view: v.name, reason: 'the model did not find the structure in this view' }); continue; }
                 fs.writeFileSync(out, encodePng(v.width, v.height, rasterizeOutlines(reply.polygons, v.width, v.height), 1));
                 masks++;

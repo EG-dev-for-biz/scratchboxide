@@ -234,7 +234,120 @@ struct DecimateOptions {
     float creaseAngleDeg{45.0f};   // Dihedral angle threshold (same convention as IsotropicRemeshOptions) between
                                     // two triangles sharing an edge that counts that edge as a crease; also the angle
                                     // between two copies of one corner's normal that keeps them a hard edge
+    float normalWeight{0.001f};    // the normal field's length scale, as a share of the mesh's bounding diagonal: a
+                                    // unit change of the surface normal where a vertex lands costs as much as moving
+                                    // it that far off the surface (0: plane quadrics only)
+    float normalSmoothing{0.0f};   // the field's normals, blended: 0 each wedge's own (hard edges kept: clean meshes
+                                    // such as Pipeline K twins), 1 each position's area-weighted face normal (a raw 3D
+                                    // Tiles soup, whose own normals are noise). Measured RMS from input, 2026-11-07:
+                                    // the defaults keep the benchmark K twins at or under the previous decimator's error
+                                    // at a half and a quarter; a raw tile wants normalWeight 0.12 with normalSmoothing 1
+                                    // (ESB tile 14 cm at a quarter, 41 cm at a tenth, against 26 cm and 47 cm with the
+                                    // defaults), which on a clean twin costs up to 18 cm at half.
+    bool optimizeOrder{true};      // order the result's triangles for the post-transform vertex cache and its
+                                    // vertices by first use (optimizeVertexCache, optimizeVertexFetch)
 };
+
+// Triangle and vertex order for the GPU (post-transform vertex cache, then vertex fetch)
+
+/** Average vertex-shader invocations per triangle (ACMR) of `indices` through a FIFO cache of cacheSize entries. */
+inline double vertexCacheMissRatio(const std::vector<uint32_t>& indices, size_t vertexCount, size_t cacheSize = 16) {
+    if (indices.size() < 3) return 0.0;
+    std::vector<uint64_t> stamp(vertexCount, 0);
+    uint64_t clock = 0;
+    size_t misses = 0;
+    for (uint32_t i : indices) {
+        // a vertex is cached while fewer than cacheSize misses have followed its own
+        if (stamp[i] == 0 || clock - stamp[i] >= cacheSize) { ++misses; stamp[i] = ++clock; }
+    }
+    return double(misses) / double(indices.size() / 3);
+}
+
+/**
+ * Re-orders triangles for the post-transform vertex cache, in place (Forsyth's linear-speed vertex cache ordering).
+ * Each vertex scores by its place in a simulated LRU cache (the last triangle's three corners a fixed 0.75, deeper
+ * entries falling off as (1 - depth/size)^1.5) plus a boost for few remaining triangles (2 / sqrt(remaining)), so
+ * lone vertices are finished first; the next triangle is the best-scoring one around the cache, else the next
+ * unemitted one in input order.
+ */
+inline void optimizeVertexCache(std::vector<uint32_t>& indices, size_t vertexCount, int cacheSize = 32) {
+    const size_t triCount = indices.size() / 3;
+    if (triCount < 2) return;
+    std::vector<uint32_t> offset(vertexCount + 1, 0), remaining(vertexCount, 0);
+    for (size_t i = 0; i < triCount * 3; ++i) offset[indices[i] + 1]++;
+    for (size_t v = 0; v < vertexCount; ++v) { remaining[v] = offset[v + 1]; offset[v + 1] += offset[v]; }
+    std::vector<uint32_t> vertTris(triCount * 3), fill(offset.begin(), offset.end() - 1);
+    for (size_t t = 0; t < triCount; ++t) for (int k = 0; k < 3; ++k) vertTris[fill[indices[t * 3 + k]]++] = uint32_t(t);
+
+    std::vector<int> cachePos(vertexCount, -1);
+    auto vertexScore = [&](uint32_t v) -> float {
+        if (remaining[v] == 0) return -1.0f;
+        float score = 0.0f;
+        const int p = cachePos[v];
+        if (p >= 0) score = p < 3 ? 0.75f : std::pow(1.0f - float(p - 3) / float(cacheSize - 3), 1.5f);
+        return score + 2.0f / std::sqrt(float(remaining[v]));
+    };
+    std::vector<float> vScore(vertexCount), tScore(triCount, 0.0f);
+    for (size_t v = 0; v < vertexCount; ++v) vScore[v] = vertexScore(uint32_t(v));
+    for (size_t t = 0; t < triCount; ++t) tScore[t] = vScore[indices[t * 3]] + vScore[indices[t * 3 + 1]] + vScore[indices[t * 3 + 2]];
+
+    std::vector<uint8_t> emitted(triCount, 0);
+    std::vector<uint32_t> out;
+    out.reserve(indices.size());
+    std::vector<uint32_t> cache, next;
+    cache.reserve(cacheSize + 3);
+    size_t cursor = 0;
+    int64_t best = -1;
+    for (size_t done = 0; done < triCount; ++done) {
+        if (best < 0) {
+            while (cursor < triCount && emitted[cursor]) ++cursor;
+            best = int64_t(cursor);
+        }
+        const uint32_t t = uint32_t(best);
+        emitted[t] = 1;
+        const uint32_t tri[3] = { indices[t * 3], indices[t * 3 + 1], indices[t * 3 + 2] };
+        out.insert(out.end(), tri, tri + 3);
+        // the triangle's corners go to the front of the cache; the rest follow, pushed one place deeper
+        next.assign(tri, tri + 3);
+        for (uint32_t v : cache) if (v != tri[0] && v != tri[1] && v != tri[2]) next.push_back(v);
+        for (uint32_t v : tri) {
+            uint32_t* list = vertTris.data() + offset[v];
+            const uint32_t n = remaining[v];
+            for (uint32_t i = 0; i < n; ++i) if (list[i] == t) { list[i] = list[n - 1]; list[n - 1] = t; break; }
+            remaining[v]--;
+        }
+        for (uint32_t v : cache) cachePos[v] = -1;
+        for (size_t i = 0; i < next.size(); ++i) cachePos[next[i]] = i < size_t(cacheSize) ? int(i) : -1;
+        // the best live triangle around the cache, scored afresh
+        best = -1;
+        float bestScore = -1.0f;
+        for (uint32_t v : next) vScore[v] = vertexScore(v);
+        for (uint32_t v : next) {
+            for (uint32_t i = 0; i < remaining[v]; ++i) {
+                const uint32_t s = vertTris[offset[v] + i];
+                const float sc = vScore[indices[s * 3]] + vScore[indices[s * 3 + 1]] + vScore[indices[s * 3 + 2]];
+                tScore[s] = sc;
+                if (sc > bestScore) { bestScore = sc; best = int64_t(s); }
+            }
+        }
+        if (next.size() > size_t(cacheSize)) next.resize(cacheSize);
+        cache.swap(next);
+    }
+    indices.swap(out);
+}
+
+/** Vertices in the order the triangles first use them, unused ones dropped, in place (cheaper vertex fetch). */
+inline void optimizeVertexFetch(ScratchboxMesh& mesh) {
+    constexpr uint32_t NONE = std::numeric_limits<uint32_t>::max();
+    std::vector<uint32_t> remap(mesh.vertices.size(), NONE);
+    std::vector<Vertex> out;
+    out.reserve(mesh.vertices.size());
+    for (uint32_t& i : mesh.indices) {
+        if (remap[i] == NONE) { remap[i] = uint32_t(out.size()); out.push_back(mesh.vertices[i]); }
+        i = remap[i];
+    }
+    mesh.vertices.swap(out);
+}
 
 class QuadricDecimator {
 public:
@@ -247,8 +360,14 @@ public:
      * side, so a seam can neither open into a crack nor slide off the surface. Each copy stays a wedge with its own
      * attributes, and a collapse is taken only when every wedge of the vertex it removes has exactly one wedge of the
      * vertex it keeps to become (along a seam, side to side), so seams, colour edges and hard edges reach the output.
-     * A collapse must also keep the surface manifold (the link condition) and, with preventNormalFlips, fold no
-     * triangle around either end of the edge.
+     * Where no such partner exists the collapse crosses the seam: the wedge takes the kept vertex's nearest wedge in
+     * UV and the collapse pays for the texture it drags.
+     *
+     * Which collapses are allowed follows from each position's kind (step 3: manifold, border, seam, complex or
+     * fringe): a border vertex moves only along its own outline, a vertex where pieces of a scan soup touch only
+     * onto another such vertex, and a free vertex anywhere. With preventNormalFlips no triangle around either end may
+     * fold, and a face the collapse would draw twice is dropped. The cost is the plane quadric plus the normal field
+     * (normalWeight, step 2a), which makes a vertex pay for sliding to where its faces' normals disagree.
      */
     static ScratchboxMesh decimate(const ScratchboxMesh& input, const DecimateOptions& opt = {}) {
         if (input.vertices.empty() || input.indices.empty()) return input;
@@ -262,6 +381,7 @@ public:
         if (initialTriCount <= targetTriangles) return input;
 
         const uint32_t numVerts = static_cast<uint32_t>(input.vertices.size());
+        double normalScale = 0.0;   // set below, once the bounds are known
         constexpr uint32_t NONE = std::numeric_limits<uint32_t>::max();
         std::vector<Vertex> wedges = input.vertices;   // per-wedge attributes (only the entries wedgeOf points at are used)
         std::vector<Vec3> positions(numVerts);         // per welded position (only the entries posOf points at are used)
@@ -278,6 +398,7 @@ public:
                 hi = Vec3(std::max(hi.x, p.x), std::max(hi.y, p.y), std::max(hi.z, p.z));
             }
             const float eps = std::max(1e-5f, 1e-6f * (hi - lo).length()), inv = 1.0f / eps;
+            normalScale = double(std::max(0.0f, opt.normalWeight)) * (hi - lo).length();
             auto cellKey = [](int64_t x, int64_t y, int64_t z) -> uint64_t {
                 return (static_cast<uint64_t>(x & 0x1fffff) << 42) | (static_cast<uint64_t>(y & 0x1fffff) << 21) | static_cast<uint64_t>(z & 0x1fffff);
             };
@@ -359,6 +480,86 @@ public:
             }
         }
 
+        // 2a. The normal field. Over each face the normal runs linearly between its corners' normals. For every face and
+        // every normal component, the plane gradient g and offset d with g.p + d = that component at each corner give
+        // the component the face would show at any point p. A field sums, over its faces, area x L^2 x (g.p + d - s)^2
+        // for the normal s its vertex ends up with (L = normalWeight x the bounding diagonal): moving a vertex to where
+        // its faces' normals disagree with the one it keeps costs as much as moving it off the surface by L per unit of
+        // normal change. Plane quadrics alone let a vertex slide along a flat face for nothing, so a raw scan's faces
+        // stretch into slivers and later collapses fold the surface away; the field makes every slide pay for the
+        // normals it drags.
+        struct NormalField {
+            SymmetricQuadric a;                 // sum of w (g.p + d)^2 over faces and components
+            double g[3][4]{};                   // per component: sum of w g (xyz) and w d
+            double w{0.0};                      // sum of w
+            void add(const NormalField& o) {
+                a += o.a;
+                for (int c = 0; c < 3; ++c) for (int k = 0; k < 4; ++k) g[c][k] += o.g[c][k];
+                w += o.w;
+            }
+            double evaluate(const Vec3& p, const Vec3& s) const {
+                const double sc[3] = { s.x, s.y, s.z };
+                double e = a.evaluate(p);
+                for (int c = 0; c < 3; ++c) e += sc[c] * (sc[c] * w - 2.0 * (g[c][0] * p.x + g[c][1] * p.y + g[c][2] * p.z + g[c][3]));
+                return std::max(0.0, e);
+            }
+        };
+        // Two fields, blended by normalSmoothing s: one per wedge on the mesh's own normals (a hard edge keeps one per
+        // side; a wedge with none takes its position's), weighted 1 - s, and one per position on its area-weighted
+        // face normal, weighted s
+        const float normalSmoothing = std::clamp(opt.normalSmoothing, 0.0f, 1.0f);
+        const bool wedgeField = normalScale > 0.0 && normalSmoothing < 1.0f, positionField = normalScale > 0.0 && normalSmoothing > 0.0f;
+        std::vector<Vec3> wedgeNormal(wedgeField ? numVerts : 0, Vec3(0, 0, 0)), posNormal(normalScale > 0.0 ? numVerts : 0, Vec3(0, 0, 0));
+        std::vector<NormalField> fields(wedgeField ? numVerts : 0), posFields(positionField ? numVerts : 0);
+        auto faceField = [](const Vec3& p0, const Vec3& e1, const Vec3& e2, const Vec3& n0, const Vec3& n1, const Vec3& n2, double w) {
+            NormalField f;
+            const double a11 = e1.dot(e1), a12 = e1.dot(e2), a22 = e2.dot(e2), det = a11 * a22 - a12 * a12;
+            if (det <= 1e-20 || w <= 0.0) return f;
+            const double v0[3] = { n0.x, n0.y, n0.z }, v1[3] = { n1.x, n1.y, n1.z }, v2[3] = { n2.x, n2.y, n2.z };
+            for (int c = 0; c < 3; ++c) {
+                // g = x e1 + y e2 with g.e1 = v1 - v0, g.e2 = v2 - v0
+                const double b1 = v1[c] - v0[c], b2 = v2[c] - v0[c];
+                const double x = (a22 * b1 - a12 * b2) / det, y = (a11 * b2 - a12 * b1) / det;
+                const double gx = x * e1.x + y * e2.x, gy = x * e1.y + y * e2.y, gz = x * e1.z + y * e2.z;
+                const double d = v0[c] - (gx * p0.x + gy * p0.y + gz * p0.z);
+                SymmetricQuadric q(gx, gy, gz, d);
+                q *= w;
+                f.a += q;
+                f.g[c][0] = w * gx; f.g[c][1] = w * gy; f.g[c][2] = w * gz; f.g[c][3] = w * d;
+            }
+            f.w = w;
+            return f;
+        };
+        if (normalScale > 0.0) {
+            for (const auto& tri : triangles) {
+                if (tri.deleted) continue;
+                const Vec3 n = faceCross(tri);
+                for (int k = 0; k < 3; ++k) posNormal[corner(tri, k)] += n;
+            }
+            for (auto& n : posNormal) { const float l = n.length(); n = l > 1e-12f ? n * (1.0f / l) : Vec3(0, 0, 0); }
+            if (wedgeField) for (uint32_t w = 0; w < numVerts; ++w) {
+                const Vec3 own = wedges[w].normal;
+                const float lo = own.length();
+                wedgeNormal[w] = lo > 1e-6f ? own * (1.0f / lo) : posNormal[posOf[w]];
+            }
+            const double L2 = normalScale * normalScale;
+            for (const auto& tri : triangles) {
+                if (tri.deleted) continue;
+                const uint32_t c0 = corner(tri, 0), c1 = corner(tri, 1), c2 = corner(tri, 2);
+                const Vec3 p0 = positions[c0], e1 = positions[c1] - p0, e2 = positions[c2] - p0;
+                const double area = 0.5 * e1.cross(e2).length();
+                if (area <= 1e-12) continue;
+                if (wedgeField) {
+                    const NormalField f = faceField(p0, e1, e2, wedgeNormal[tri.w[0]], wedgeNormal[tri.w[1]], wedgeNormal[tri.w[2]], area * L2 * (1.0 - normalSmoothing));
+                    for (uint32_t w : tri.w) fields[w].add(f);
+                }
+                if (positionField) {
+                    const NormalField f = faceField(p0, e1, e2, posNormal[c0], posNormal[c1], posNormal[c2], area * L2 * normalSmoothing);
+                    for (uint32_t c : { c0, c1, c2 }) posFields[c].add(f);
+                }
+            }
+        }
+
         auto edgeKey = [](uint32_t a, uint32_t b) -> uint64_t {
             if (a > b) std::swap(a, b);
             return (static_cast<uint64_t>(a) << 32) | static_cast<uint64_t>(b);
@@ -383,7 +584,9 @@ public:
                 }
             }
 
-            constexpr double CREASE_WEIGHT = 1000.0;
+            // per metre of edge; with the normal field on, in step with it (400 x its length scale), so the outline
+            // holds against the field on a mesh of any size
+            const double CREASE_WEIGHT = std::max(1000.0, 400.0 * normalScale);
             float creaseCos = std::cos(opt.creaseAngleDeg * static_cast<float>(PI) / 180.0f);
             for (const auto& [key, ef] : edgeFaces) {
                 bool isCrease = ef.count == 1;
@@ -415,7 +618,69 @@ public:
             }
         }
 
-        // 3. Planning a collapse of the edge (a, b): which end it keeps (u), the target position and its cost, and the
+        // 3. What each welded position may do. Its kind is read once from the surface as loaded: whether its edges
+        // close around it, and how many wedges it has. An edge is open when its half-edge has no partner running the
+        // other way (one face, or faces that disagree on the edge's direction); an edge shared by more than two faces
+        // still has partners, so it is not open and its ends stay free, as a raw scan soup needs.
+        //   Manifold  no open edge, one wedge          moves anywhere
+        //   Seam      no open edge, two wedges         moves anywhere; its wedges go along the seam (or cross it)
+        //   Complex   no open edge, more wedges        moves anywhere: all its wedges always go to the one kept position
+        //   Border    one open loop through it         moves only along that loop, onto a Border or Fringe end
+        //   Fringe    any other open edges (a loop     moves along any of its edges, but only onto another Fringe end:
+        //             with several wedges, several     a scan soup's pieces touching at a corner, a seam meeting an
+        //             loops, faces that disagree)      outline, faces that disagree on their direction
+        // No position is locked: on the raw tile benchmark, locking the vertices whose open edges run only one way
+        // left 18 cm RMS at a quarter of the triangles and 61 cm at a tenth, against 14 cm and 42 cm as Fringe.
+        // The end kept keeps its kind, so a collapse never changes what the surface around it may do. A collapse
+        // into a Border or Fringe end lands on it; only two free ends, or two ends of one border loop, may meet at
+        // their midpoint or at the removed end. There is no link condition: a raw scan is non-manifold
+        // everywhere, and the kinds, the fold check and the duplicate-face rule (a face a collapse would draw twice is
+        // dropped, step 6) keep the surface whole without it.
+        enum class VertexKind : uint8_t { Manifold, Border, Seam, Complex, Fringe };
+        std::vector<VertexKind> kind(numVerts, VertexKind::Manifold);
+        {
+            constexpr uint32_t MANY = NONE - 1;   // more than one open edge that way
+            std::vector<uint64_t> halfEdges;
+            halfEdges.reserve(currentTriCount * 3);
+            for (size_t t = 0; t < initialTriCount; ++t) {
+                if (triangles[t].deleted) continue;
+                for (int e = 0; e < 3; ++e)
+                    halfEdges.push_back((static_cast<uint64_t>(corner(triangles[t], e)) << 32) | corner(triangles[t], (e + 1) % 3));
+            }
+            std::sort(halfEdges.begin(), halfEdges.end());
+            halfEdges.erase(std::unique(halfEdges.begin(), halfEdges.end()), halfEdges.end());
+            std::vector<uint32_t> openOut(numVerts, NONE), openIn(numVerts, NONE);
+            for (uint64_t h : halfEdges) {
+                const uint32_t a = static_cast<uint32_t>(h >> 32), b = static_cast<uint32_t>(h & 0xffffffffu);
+                if (std::binary_search(halfEdges.begin(), halfEdges.end(), (static_cast<uint64_t>(b) << 32) | a)) continue;
+                openOut[a] = openOut[a] == NONE ? b : MANY;
+                openIn[b] = openIn[b] == NONE ? a : MANY;
+            }
+            std::vector<uint8_t> used(numVerts, 0);
+            for (const auto& tri : triangles) if (!tri.deleted) for (uint32_t w : tri.w) used[w] = 1;
+            for (uint32_t p = 0; p < numVerts; ++p) {
+                if (posOf[p] != p) continue;
+                int wedgeCount = 0;
+                for (uint32_t w = p; w != NONE; w = nextWedge[w]) wedgeCount += used[w];
+                const bool closed = openOut[p] == NONE && openIn[p] == NONE;
+                const bool oneLoop = openOut[p] < MANY && openIn[p] < MANY && openOut[p] != openIn[p];
+                if (closed) kind[p] = wedgeCount <= 1 ? VertexKind::Manifold : wedgeCount == 2 ? VertexKind::Seam : VertexKind::Complex;
+                else if (oneLoop) kind[p] = wedgeCount <= 1 ? VertexKind::Border : VertexKind::Fringe;
+                else kind[p] = VertexKind::Fringe;
+            }
+        }
+        auto isFree = [](VertexKind k) { return k == VertexKind::Manifold || k == VertexKind::Seam || k == VertexKind::Complex; };
+        // How far collapsing v into u may move u: 0 not at all (no collapse), 1 u stays where it is, 2 anywhere
+        // between the two ends. alongOpen: the edge is an open edge of the surface (one face).
+        auto freedom = [&](uint32_t v, uint32_t u, bool alongOpen) -> int {
+            const VertexKind kv = kind[v], ku = kind[u];
+            if (isFree(kv)) return isFree(ku) ? 2 : 1;
+            if (kv == VertexKind::Fringe) return ku == VertexKind::Fringe ? 1 : 0;
+            if (kv == VertexKind::Border && alongOpen) return ku == VertexKind::Border ? 2 : ku == VertexKind::Fringe ? 1 : 0;
+            return 0;
+        };
+
+        // 4. Planning a collapse of the edge (a, b): which end it keeps (u), the target position and its cost, and the
         // wedge each wedge of the removed end (v) becomes. Returns false when no collapse of the edge is allowed.
         struct Plan {
             uint32_t u{0}, v{0};
@@ -423,10 +688,12 @@ public:
             float attrT{0.0f};   // 0: the target is u's position, 1: v's, 0.5: their midpoint
             double cost{0.0};
             std::vector<std::pair<uint32_t, uint32_t>> wedgeMap;   // (wedge of v, wedge of u)
+            std::vector<uint8_t> crossed;   // per wedgeMap entry: 1 when the pair crosses a seam (attributes not blended)
+            double seamCost{0.0};
         };
-        std::vector<uint32_t> ringA, ringB, edgeTris, opposite;
+        std::vector<uint32_t> ringA, edgeTris;
         auto ringOf = [&](uint32_t a, std::vector<uint32_t>& ring) {
-            // every other corner of a's live triangles, sorted: a neighbour listed once shares an outline edge with a
+            // every other corner of a's live triangles, sorted
             ring.clear();
             for (uint32_t t : vertTriangles[a]) {
                 const auto& tri = triangles[t];
@@ -434,15 +701,6 @@ public:
                 for (int k = 0; k < 3; ++k) if (corner(tri, k) != a) ring.push_back(corner(tri, k));
             }
             std::sort(ring.begin(), ring.end());
-        };
-        auto onOutline = [](const std::vector<uint32_t>& ring) {
-            for (size_t i = 0; i < ring.size(); ) {
-                size_t j = i;
-                while (j < ring.size() && ring[j] == ring[i]) ++j;
-                if (j - i == 1) return true;
-                i = j;
-            }
-            return false;
         };
         auto mapWedges = [&](uint32_t u, uint32_t v, std::vector<std::pair<uint32_t, uint32_t>>& map) {
             map.clear();
@@ -465,6 +723,71 @@ public:
                         return false;   // a wedge of v with no counterpart at u (the edge leaves v's seam)
             }
             return true;
+        };
+        // The seam-crossing map for collapsing v into u: each wedge of v takes its partner
+        // across the edge's own triangles where it has one, else u's wedge nearest in UV. Returns the texture-drift cost:
+        // over v's triangles that stay, area x (UV shift x metres per UV unit)^2, plus area^2 x (colour shift)^2 (a full
+        // colour flip costs as much as moving the triangle by its own size).
+        std::vector<uint32_t> uWedges;
+        auto uvGap2 = [&](uint32_t a, uint32_t b) {
+            const Vertex& x = wedges[a];
+            const Vertex& y = wedges[b];
+            const double du = x.uv.x - y.uv.x, dv = x.uv.y - y.uv.y, du1 = x.uv1.x - y.uv1.x, dv1 = x.uv1.y - y.uv1.y;
+            return du * du + dv * dv + du1 * du1 + dv1 * dv1;
+        };
+        auto colourGap2 = [&](uint32_t a, uint32_t b) {
+            const Vec4& x = wedges[a].color;
+            const Vec4& y = wedges[b].color;
+            const double dr = x.x - y.x, dg = x.y - y.y, db = x.z - y.z, da = x.w - y.w;
+            return dr * dr + dg * dg + db * db + da * da;
+        };
+        auto crossWedges = [&](uint32_t u, uint32_t v, std::vector<std::pair<uint32_t, uint32_t>>& map, std::vector<uint8_t>& crossed) -> double {
+            map.clear();
+            crossed.clear();
+            for (uint32_t t : edgeTris) {
+                const auto& tri = triangles[t];
+                uint32_t wu = NONE, wv = NONE;
+                for (int k = 0; k < 3; ++k) {
+                    if (corner(tri, k) == u) wu = tri.w[k];
+                    if (corner(tri, k) == v) wv = tri.w[k];
+                }
+                if (std::none_of(map.begin(), map.end(), [&](const auto& m) { return m.first == wv; })) { map.emplace_back(wv, wu); crossed.push_back(0); }
+            }
+            uWedges.clear();
+            for (uint32_t t : vertTriangles[u]) {
+                const auto& tri = triangles[t];
+                if (tri.deleted) continue;
+                for (int k = 0; k < 3; ++k)
+                    if (corner(tri, k) == u && std::find(uWedges.begin(), uWedges.end(), tri.w[k]) == uWedges.end()) uWedges.push_back(tri.w[k]);
+            }
+            double cost = 0.0;
+            for (uint32_t t : vertTriangles[v]) {
+                const auto& tri = triangles[t];
+                if (tri.deleted || std::find(edgeTris.begin(), edgeTris.end(), t) != edgeTris.end()) continue;
+                for (int k = 0; k < 3; ++k) {
+                    if (corner(tri, k) != v) continue;
+                    const uint32_t wv = tri.w[k];
+                    size_t i = 0;
+                    while (i < map.size() && map[i].first != wv) ++i;
+                    if (i == map.size()) {
+                        uint32_t best = uWedges.empty() ? NONE : uWedges[0];
+                        for (uint32_t w : uWedges) if (uvGap2(wv, w) < uvGap2(wv, best)) best = w;
+                        if (best == NONE) return -1.0;
+                        map.emplace_back(wv, best);
+                        crossed.push_back(1);
+                    }
+                    if (!crossed[i]) continue;
+                    const uint32_t wu = map[i].second;
+                    const double area = 0.5 * faceCross(tri).length();
+                    const Vec2& a = wedges[tri.w[0]].uv;
+                    const Vec2& b = wedges[tri.w[1]].uv;
+                    const Vec2& c = wedges[tri.w[2]].uv;
+                    const double uvArea = 0.5 * std::abs(double(b.x - a.x) * (c.y - a.y) - double(c.x - a.x) * (b.y - a.y));
+                    const double metres2PerUv2 = uvArea > 1e-14 ? area / uvArea : 0.0;
+                    cost += area * metres2PerUv2 * uvGap2(wv, wu) + area * area * colourGap2(wv, wu);
+                }
+            }
+            return cost;
         };
         auto foldsOver = [&](uint32_t a, uint32_t b, const Vec3& target) {
             for (uint32_t end : { a, b }) {
@@ -490,79 +813,95 @@ public:
             }
             return false;
         };
-        auto planCollapse = [&](uint32_t a, uint32_t b, Plan& plan) -> bool {
-            edgeTris.clear();
-            opposite.clear();
-            for (uint32_t t : vertTriangles[a]) {
+        // The normals u's wedges keep after collapsing v into u, at blend attrT: each wedge's own blended with the wedge
+        // of v that becomes it, its own when none does
+        std::vector<std::pair<uint32_t, Vec3>> kept;   // (wedge of u, normal it keeps)
+        std::vector<std::pair<uint32_t, Vec3>> keptBefore;
+        auto unitOr = [](const Vec3& n, const Vec3& fallback) { const float l = n.length(); return l > 1e-12f ? n * (1.0f / l) : fallback; };
+        auto keptNormals = [&](const Plan& plan, float attrT) {
+            kept.clear();
+            for (uint32_t t : vertTriangles[plan.u]) {
                 const auto& tri = triangles[t];
                 if (tri.deleted) continue;
-                uint32_t c[3] = { corner(tri, 0), corner(tri, 1), corner(tri, 2) };
-                if (c[0] != b && c[1] != b && c[2] != b) continue;
-                edgeTris.push_back(t);
-                for (uint32_t x : c) if (x != a && x != b) opposite.push_back(x);
+                for (int k = 0; k < 3; ++k)
+                    if (corner(tri, k) == plan.u && std::none_of(kept.begin(), kept.end(), [&](const auto& e) { return e.first == tri.w[k]; }))
+                        kept.emplace_back(tri.w[k], wedgeNormal[tri.w[k]]);
             }
-            if (edgeTris.empty() || edgeTris.size() > 2) return false;   // no longer an edge, or a non-manifold one
-
-            // Link condition: the only vertices next to both ends are the edge's own opposite corners, or the
-            // collapse would pinch the surface into a non-manifold edge. An inner edge joining two outline vertices
-            // would pinch a strip in two.
-            ringOf(a, ringA);
-            ringOf(b, ringB);
-            if (edgeTris.size() == 2 && onOutline(ringA) && onOutline(ringB)) return false;
-            size_t shared = 0;
-            for (size_t i = 0, j = 0; i < ringA.size() && j < ringB.size(); ) {
-                if (ringA[i] < ringB[j]) ++i;
-                else if (ringB[j] < ringA[i]) ++j;
-                else {
-                    uint32_t x = ringA[i];
-                    if (x != a && x != b) ++shared;
-                    while (i < ringA.size() && ringA[i] == x) ++i;
-                    while (j < ringB.size() && ringB[j] == x) ++j;
-                }
+            for (auto& [wu, n] : kept)
+                for (const auto& m : plan.wedgeMap) if (m.second == wu) { n = unitOr(math::lerp(n, wedgeNormal[m.first], attrT), n); break; }
+        };
+        // The normal field's cost of collapsing v into u at p: every wedge of u and every wedge of v (in the one of u it
+        // becomes) judged against the normal that wedge of u keeps
+        auto fieldCost = [&](const Plan& plan, const Vec3& p, float attrT) {
+            double cost = 0.0;
+            if (wedgeField) {
+                keptNormals(plan, attrT);
+                auto keptOf = [&](uint32_t wu) {
+                    for (const auto& e : kept) if (e.first == wu) return e.second;
+                    return wedgeNormal[wu];
+                };
+                for (const auto& [wu, n] : kept) cost += fields[wu].evaluate(p, n);
+                for (const auto& [wv, wu] : plan.wedgeMap) cost += fields[wv].evaluate(p, keptOf(wu));
             }
-            std::sort(opposite.begin(), opposite.end());
-            opposite.erase(std::unique(opposite.begin(), opposite.end()), opposite.end());
-            if (shared != opposite.size()) return false;
-
-            if (mapWedges(a, b, plan.wedgeMap)) { plan.u = a; plan.v = b; }
-            else if (mapWedges(b, a, plan.wedgeMap)) { plan.u = b; plan.v = a; }
-            else return false;
-
-            // A triangle around v whose other corners are both opposite corners of the edge would land on one u
-            // already has (the two triangles left of a tetrahedron).
-            for (uint32_t t : vertTriangles[plan.v]) {
-                const auto& tri = triangles[t];
-                if (tri.deleted || std::find(edgeTris.begin(), edgeTris.end(), t) != edgeTris.end()) continue;
-                uint32_t x = NONE, y = NONE;
-                for (int k = 0; k < 3; ++k) if (corner(tri, k) != plan.v) (x == NONE ? x : y) = corner(tri, k);
-                if (!std::binary_search(opposite.begin(), opposite.end(), x) || !std::binary_search(opposite.begin(), opposite.end(), y)) continue;
-                for (uint32_t s : vertTriangles[plan.u]) {
-                    const auto& other = triangles[s];
-                    if (other.deleted) continue;
-                    bool hasX = false, hasY = false;
-                    for (int k = 0; k < 3; ++k) { hasX |= corner(other, k) == x; hasY |= corner(other, k) == y; }
-                    if (hasX && hasY) return false;
-                }
+            if (positionField) {
+                NormalField f = posFields[plan.u];
+                f.add(posFields[plan.v]);
+                cost += f.evaluate(p, unitOr(math::lerp(posNormal[plan.u], posNormal[plan.v], attrT), posNormal[plan.u]));
+            }
+            return cost;
+        };
+        // Collapsing v into u, as far as freedom allows: the wedge map, then the cheapest target that folds nothing.
+        Plan alt;
+        auto planDirection = [&](uint32_t u, uint32_t v, int free, Plan& plan) -> bool {
+            plan.u = u;
+            plan.v = v;
+            plan.seamCost = 0.0;
+            if (mapWedges(u, v, plan.wedgeMap)) plan.crossed.assign(plan.wedgeMap.size(), 0);
+            else {
+                // Across a UV or colour seam (meshoptimizer's "permissive" idea): a wedge of the removed end with no
+                // partner at the kept end takes the kept end's wedge nearest in UV, and the collapse pays for the
+                // texture it drags in the quadric's units (crossWedges). Respecting seams instead stalls atlased scans
+                // (a seam at nearly every vertex) far above the target.
+                plan.seamCost = crossWedges(u, v, plan.wedgeMap, plan.crossed);
+                if (plan.seamCost < 0) return false;
             }
 
-            // Test endpoints and midpoint, cheapest first, and take the first that folds nothing
-            SymmetricQuadric Q = quadrics[plan.u] + quadrics[plan.v];
-            Vec3 pu = positions[plan.u], pv = positions[plan.v];
+            const SymmetricQuadric Q = quadrics[u] + quadrics[v];
+            const Vec3 pu = positions[u], pv = positions[v];
             struct Candidate { Vec3 p; float attrT; double err; };
-            Candidate cands[3] = { { (pu + pv) * 0.5f, 0.5f, 0.0 }, { pu, 0.0f, 0.0 }, { pv, 1.0f, 0.0 } };
-            for (auto& c : cands) c.err = Q.evaluate(c.p);
-            std::stable_sort(std::begin(cands), std::end(cands), [](const Candidate& x, const Candidate& y) { return x.err < y.err; });
-            for (const auto& c : cands) {
-                if (opt.preventNormalFlips && foldsOver(plan.u, plan.v, c.p)) continue;
-                plan.target = c.p;
-                plan.attrT = c.attrT;
-                plan.cost = c.err;
+            Candidate cands[3] = { { pu, 0.0f, 0.0 }, { (pu + pv) * 0.5f, 0.5f, 0.0 }, { pv, 1.0f, 0.0 } };
+            const int count = free >= 2 ? 3 : 1;
+            for (int i = 0; i < count; ++i) {
+                cands[i].err = Q.evaluate(cands[i].p);
+                if (normalScale > 0.0) cands[i].err += fieldCost(plan, cands[i].p, cands[i].attrT);
+            }
+            std::stable_sort(cands, cands + count, [](const Candidate& x, const Candidate& y) { return x.err < y.err; });
+            for (int i = 0; i < count; ++i) {
+                if (opt.preventNormalFlips && foldsOver(u, v, cands[i].p)) continue;
+                plan.target = cands[i].p;
+                plan.attrT = cands[i].attrT;
+                plan.cost = cands[i].err + plan.seamCost;
                 return true;
             }
             return false;
         };
+        auto planCollapse = [&](uint32_t a, uint32_t b, Plan& plan) -> bool {
+            edgeTris.clear();
+            for (uint32_t t : vertTriangles[a]) {
+                const auto& tri = triangles[t];
+                if (tri.deleted) continue;
+                if (corner(tri, 0) == b || corner(tri, 1) == b || corner(tri, 2) == b) edgeTris.push_back(t);
+            }
+            if (edgeTris.empty()) return false;   // no longer an edge
+            const bool alongOpen = edgeTris.size() == 1;
+            const int freeAB = freedom(b, a, alongOpen), freeBA = freedom(a, b, alongOpen);
+            const bool okAB = freeAB > 0 && planDirection(a, b, freeAB, plan);
+            const bool okBA = freeBA > 0 && planDirection(b, a, freeBA, okAB ? alt : plan);
+            if (okAB && okBA && alt.cost < plan.cost) std::swap(plan, alt);
+            return okAB || okBA;
+        };
 
-        // 4. Track candidate edges and collapse costs
+        // 5. Track candidate edges and collapse costs
         struct EdgeCollapse {
             uint32_t a, b;
             double cost;
@@ -593,7 +932,7 @@ public:
             for (uint64_t key : edges) enqueue(static_cast<uint32_t>(key >> 32), static_cast<uint32_t>(key & 0xffffffffu));
         }
 
-        // 5. Iterative edge collapse loop
+        // 6. Iterative edge collapse loop
         while (!pq.empty() && currentTriCount > targetTriangles) {
             auto top = pq.top();
             pq.pop();
@@ -613,7 +952,19 @@ public:
             uint32_t u = plan.u, v = plan.v;
             positions[u] = plan.target;
             quadrics[u] += quadrics[v];
-            for (auto [wv, wu] : plan.wedgeMap) {
+            if (wedgeField) {
+                keptNormals(plan, plan.attrT);
+                for (const auto& [wu, n] : kept) wedgeNormal[wu] = n;
+                for (const auto& [wv, wu] : plan.wedgeMap) fields[wu].add(fields[wv]);
+                keptBefore = kept;   // u's wedges before the collapse, for the fields the edge's own faces leave behind
+            }
+            if (positionField) {
+                posFields[u].add(posFields[v]);
+                posNormal[u] = unitOr(math::lerp(posNormal[u], posNormal[v], plan.attrT), posNormal[u]);
+            }
+            for (size_t i = 0; i < plan.wedgeMap.size(); ++i) {
+                if (plan.crossed[i]) continue;   // the two sides of a seam keep their own attributes
+                const auto [wv, wu] = plan.wedgeMap[i];
                 wedges[wu].uv = math::lerp(wedges[wu].uv, wedges[wv].uv, plan.attrT);
                 wedges[wu].uv1 = math::lerp(wedges[wu].uv1, wedges[wv].uv1, plan.attrT);
                 wedges[wu].color = math::lerp(wedges[wu].color, wedges[wv].color, plan.attrT);
@@ -642,9 +993,33 @@ public:
                     if (corner(tri, k) != v) continue;
                     tri.w[k] = std::find_if(plan.wedgeMap.begin(), plan.wedgeMap.end(), [&](const auto& m) { return m.first == tri.w[k]; })->second;
                 }
+                // a face u already has (the same three positions) is drawn once
+                uint32_t x = NONE, y = NONE;
+                for (int k = 0; k < 3; ++k) if (corner(tri, k) != u) (x == NONE ? x : y) = corner(tri, k);
+                const bool twin = std::any_of(newTriList.begin(), newTriList.end(), [&](uint32_t s) {
+                    const auto& o = triangles[s];
+                    bool hx = false, hy = false;
+                    for (int k = 0; k < 3; ++k) { hx |= corner(o, k) == x; hy |= corner(o, k) == y; }
+                    return hx && hy;
+                });
+                if (twin) { tri.deleted = true; currentTriCount--; continue; }
                 newTriList.push_back(tIdx);
             }
             vertTriangles[u] = std::move(newTriList);
+            if (wedgeField) {
+                // a wedge of u whose faces were all the edge's own keeps no face: its field joins u's surviving wedge
+                // with the nearest normal, so the surface it measured is not forgotten
+                std::vector<uint32_t> alive;
+                for (uint32_t tIdx : vertTriangles[u]) for (int k = 0; k < 3; ++k)
+                    if (corner(triangles[tIdx], k) == u && std::find(alive.begin(), alive.end(), triangles[tIdx].w[k]) == alive.end()) alive.push_back(triangles[tIdx].w[k]);
+                for (const auto& [w, n] : keptBefore) {
+                    if (alive.empty() || std::find(alive.begin(), alive.end(), w) != alive.end()) continue;
+                    uint32_t best = alive[0];
+                    for (uint32_t a : alive) if (wedgeNormal[a].dot(n) > wedgeNormal[best].dot(n)) best = a;
+                    fields[best].add(fields[w]);
+                    fields[w] = NormalField();
+                }
+            }
             vertTriangles[v].clear();
 
             // Re-evaluate edges connected to u
@@ -654,7 +1029,7 @@ public:
             for (uint32_t nIdx : neighbors) enqueue(u, nIdx);
         }
 
-        // 6. Pack surviving wedges and triangles
+        // 7. Pack surviving wedges and triangles
         ScratchboxMesh decimated(input.name + "_decimated");
         decimated.material = input.material;
         decimated.hasUv1 = input.hasUv1;
@@ -680,6 +1055,10 @@ public:
 
         decimated.recomputeSmoothNormals();
         decimated.recomputeBounds();
+        if (opt.optimizeOrder) {
+            optimizeVertexCache(decimated.indices, decimated.vertices.size());
+            optimizeVertexFetch(decimated);
+        }
         return decimated;
     }
 };

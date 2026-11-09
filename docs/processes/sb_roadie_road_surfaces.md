@@ -26,7 +26,7 @@ The layer is `l1r` (stage `roads`, order 2). Its label is `measured` when at lea
 - Typecheck clean; the registry, drift and staged-tool tests pass.
 
 ## Known gaps (not done)
-- The scan's own road triangles under the ribbon are not carved out; the ribbon stands 4 cm above them. Scan bumps taller than that can show through at grazing angles. The right fix is a carve of the remesh layer within the carriageway polygons and ±0.6 m of the road level.
+- The scan's own road triangles under the ribbon are not carved out; the ribbon stands 4 cm above them. Scan bumps taller than that can show through at grazing angles. (2026-11-03: with `SCRATCHBOX_STAGED_ROAD_KERBS=1` the streets are swept with kerbs and gutters and the scan is carved under them: [Kerbs and gutters as geometry](./2026-11-03-road-kerbs-and-gutters.md).)
 - Width class from the vector feature types is not read (only the centreline is used); the default half-width is one number.
 - Cars and shadows in the tile photo are in the texture, as they are in the tiles; the de-light pass does not run on it yet.
 - Not yet judged by the photo-match judge on a real place.

@@ -237,6 +237,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     const {
         state: chatState,
         setSessions,
+        mergeSessionsFromDisk,
         setCurrentSessionId,
         setMessages,
         setActiveArtifact,
@@ -570,7 +571,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
     }, [isConversationMenuOpen]);
 
     // Local Storage Debounced Auto-Persistence for Sessions, Artifacts & History
-    const { persistSessionsImmediately } = usePersistedChatState(chatState, setSessions, appearanceConfig, activeWorkspace.path);
+    const { persistSessionsImmediately } = usePersistedChatState(chatState, setSessions, mergeSessionsFromDisk, appearanceConfig, activeWorkspace.path);
 
     const { handleUpdateArtifact } = useArtifactSync({ activeArtifact, activeWorkspace, artifactHistory, currentSessionId, graphControllerRef, isGenerating, layoutMode, lensControllerRef, messages, persistSessionsImmediately, recordArtifactVersion, setActiveArtifact, setArtifactHistory, setGraphEpoch, setMessages, setSessions });
 
@@ -1201,8 +1202,9 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         openSettingsToTab
     });
 
-    // A starter button for a world already built: its newest saved version (else its build's scene) opens in a 3D Scene,
-    // fetched from the world cache when not on this machine; with neither, the prompt builds it.
+    // A starter button for a world already built (a splat world, or a massed district): its newest saved version (else its
+    // build's scene) opens in a 3D Scene, fetched from the world cache when not on this machine; with neither, the prompt
+    // builds it.
     const handleOpenStarterWorld = React.useCallback(async (item: StarterButton) => {
         const world = item.world!;
         let data: Scene3DData | undefined;
@@ -1217,7 +1219,8 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
                 if (res.ok) data = { ...(await res.json() as Scene3DData), world: { slug: world.slug } };
             } catch { data = undefined; }
         }
-        if (!data?.splatUrl) {
+        // a splat world, or a massed district (its staged objects); anything else is no built world: the prompt builds one
+        if (!data?.splatUrl && !data?.objects?.length) {
             handleSendMessage(pickStarterPrompt(item));
             return;
         }

@@ -162,6 +162,8 @@ export function buildWallSheets(orthosDir: string, grammar: WallGrammarFile, fit
         if (occMask) fs.writeFileSync(path.join(orthosDir, occMask), p.occluded!);
         const facade: ReliefFacade = {
             facadeId: id, image, centroid: c, normal: ref.normal, axisS: S, axisT: T, sMin, sMax, tMin, tMax, pixel: px, width: W, height: H, orthoSMin: sMin, orthoTMax: tMax,
+            // the sheet faces the way its largest member faces, and was measured so
+            ...(ref.outward ? { outward: ref.outward } : {}),
             coverage: 1 - holes / (W * H), uncoveredMask: mask, ...(occMask ? { occludedMask: occMask } : {}), wallCoverage: Math.round(p.wallCoverage * 1000) / 1000, wallAreaM2: Math.round(p.wallAreaM2),
             textureFill: { label: 'generated', texels: holes, share: Math.round((holes / (W * H)) * 1e4) / 1e4, method: `the wall's ${members.length} facade photos laid on one sheet, the member covering most of its own wall first; its ${holes} texels no photo reached filled from the sheet's own repeats (${p.fromRepeats} at its bay pitch, ${p.fromStoreys} at its storey pitch), ${p.smooth} by a smooth fill between the colours at the holes' edges` }
         };

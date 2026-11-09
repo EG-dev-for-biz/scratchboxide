@@ -33,7 +33,6 @@
  * ladder, bounded concurrency and a time budget so a district with hundreds of leaf photos still finishes).
  */
 
-import type { FittedPlane } from './window-fit';
 import * as jpegJs from 'jpeg-js';
 import { TEXTURE_LADDER_RUNGS, TEXTURE_RUNG_CLAY } from '../../../common/spatial/texture-pass-contracts';
 import { delightLinearRgb, linearToSrgb255, PHOTOGRAMMETRIC_DELIGHT, SRGB8_TO_LINEAR } from '../../../common/spatial/photogrammetric-delight';
@@ -48,9 +47,9 @@ import { viewRelight, type ViewRelightParams, type ViewRelightReport } from './p
 import { roofShadowLift, type RoofShadowReport } from './pipeline-k/roof-shadow';
 import { evaluateShadowLift, type ShadowLiftQaReport } from './pipeline-k/shadow-lift-qa';
 import { skyDelight, type SkyDelightReport } from './pipeline-k/sky-delight';
-import { classSwatchSheet, describeMaterialRegions, readRegionClasses, writeMaterialRegions, type MaterialRegionsPlan, type MaterialRegionsReport, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
+import { applyExposureGain, applyFrameFinish, fitExposureGain, classPhotoTextures, classRepeatSizes, classSwatchSheet, describeMaterialRegions, readRegionClasses, writeMaterialRegions, type MaterialRegionsPlan, type MaterialRegionsReport, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { planMaterialRegionsOnThreads } from './pipeline-k/material-regions-pool';
-import { materialClassesExtras, type ClassWords, type GlassSeen, type MaterialClassesExtras } from './pipeline-k/material-naming';
+import { materialClassesExtras, type ClassWords, type MaterialClassesExtras } from './pipeline-k/material-naming';
 import {
     boxDownsample, cropImage, enhancementGate, padToModelAspect, RECREATE_GATE, recreatePrompt,
     type EnhanceModelClient, type EnhanceModelRequest
@@ -83,6 +82,8 @@ export interface TileRefineTwin {
     /** Share per rung by triangle area (TEXTURE_LADDER_RUNGS order). */
     rungShares: number[];
     provenance: Array<{ source: string; label: string; method: string; coverage: number }>;
+    /** The area of every triangle written, m2 (what a later step's coverage is a share of). */
+    surfaceAreaM2: number;
     ladderRung: number;
     triangles: number;
     recreate?: TileRefineRecreateReport;
@@ -183,7 +184,7 @@ function resizeToExact(img: RgbaImage8, width: number, height: number): RgbaImag
 }
 
 /** The twin of tile_refine's photo-textured output `texturedGlb` (its bytes) for the layer `layerKey`. */
-export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { /** Each step as it starts and finishes (the run's step log). */ onStep?: (step: string, state: 'running' | 'done' | 'failed') => void; recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ harmonize?: { groundY: number; /** The tile extraction with its neighbours (same frame): the sky de-light's occluders. */ skyContext?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }; /** A district (K-D): the building a point stands in (plan x, z; -1 for none), so colours are matched per building. */ buildingOf?: (x: number, z: number) => number }; /** false: the photos are already de-lit (a chunked district's welded ground, its chunks' twins joined): harmonised as they are. */ delight?: boolean; /** Pipeline K-D: the shadow lift of the upward surfaces seen from above (0 or absent: none, as for a building's roofs). */ upwardShadowLift?: number; /** Pipeline K (with harmonize): the photos relit from rendered views of the building (pipeline-k/view-relight.ts) before harmonising. */ viewRelight?: { client: EnhanceModelClient; models: string[]; params?: Partial<ViewRelightParams>; signal?: AbortSignal; progress?: (message: string) => void }; /** The mesh's cast shadow on its roofs and terraces lifted (pipeline-k/roof-shadow.ts), before any harmonising: pipeline K or a district. */ roofShadow?: { /** The tile extraction with its neighbours (same frame): their shadows on the lower terraces. */ context?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }; progress?: (message: string) => void }; /** Pipeline K: roughness, metalness and normal under the photos by appearance region (pipeline-k/material-regions.ts), one library set per class. */ materialRegions?: { /** The library set per class; given the classes' swatch sheet (classSwatchSheet: PNG, its patches' real size) when there is one, for a pick by their look. */ sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => Promise<RegionSet[]>; /** The tile-only harvest (material-harvest.ts): classes read from the wall alone, with their texture, for a pick by colour and texture. */ harvest?: boolean; /** The window fit's planes (window-fit.ts fittedPlanesOf): their windows drawn on the scan pieces lying on them. */ planes?: FittedPlane[]; /** The planes read on the harmonised photos (pipeline-k/twin-reader.ts): given the photos by image index and the glTF, the planes to draw instead of `planes`. */ planesFor?: (finalImage: Map<number, RgbaImage8>, json: any) => Promise<FittedPlane[]>; /** The classes named in words from a picture of them (pipeline-k/material-naming.ts), and the glass seen; its reason when it named none. */ nameClasses?: (classes: RegionClass[], swatches: Buffer) => Promise<{ words?: Array<ClassWords | undefined>; glass?: GlassSeen[]; unnamed?: string }> } }): Promise<TileRefineTwin> {
+export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, opts?: { /** Each step as it starts and finishes (the run's step log). */ onStep?: (step: string, state: 'running' | 'done' | 'failed') => void; recreate?: TileRefineRecreateOptions; /** Pipeline K: the de-lit photos colour-matched per side and height band and their seams levelled (pipeline-k/texture-harmonize.ts), measured from this ground. */ harmonize?: { groundY: number; /** The tile extraction with its neighbours (same frame): the sky de-light's occluders. */ skyContext?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }; /** A district (K-D): the building a point stands in (plan x, z; -1 for none), so colours are matched per building. */ buildingOf?: (x: number, z: number) => number }; /** false: the photos are already de-lit (a chunked district's welded ground, its chunks' twins joined): harmonised as they are. */ delight?: boolean; /** Pipeline K-D: the shadow lift of the upward surfaces seen from above (0 or absent: none, as for a building's roofs). */ upwardShadowLift?: number; /** Pipeline K (with harmonize): the photos relit from rendered views of the building (pipeline-k/view-relight.ts) before harmonising. */ viewRelight?: { client: EnhanceModelClient; models: string[]; params?: Partial<ViewRelightParams>; signal?: AbortSignal; progress?: (message: string) => void }; /** The mesh's cast shadow on its roofs and terraces lifted (pipeline-k/roof-shadow.ts), before any harmonising: pipeline K or a district. */ roofShadow?: { /** The tile extraction with its neighbours (same frame): their shadows on the lower terraces. */ context?: { vertices: ArrayLike<number>; indices: ArrayLike<number> }; progress?: (message: string) => void }; /** Pipeline K: occlusion, roughness, metalness and normal under the photos, each texel by its detected material (pipeline-k/material-regions.ts), one library set per class. */ materialRegions?: { /** The library set per class; given the classes' swatch sheet (classSwatchSheet: PNG, its patches' real size) when there is one, for a pick by their look. */ sets: (classes: RegionClass[], swatches?: { png: Buffer; spanM?: number }) => Promise<RegionSet[]>; /** The tile-only harvest (material-harvest.ts): classes read with their texture, for a pick by colour and texture. */ harvest?: boolean; /** The facade reader on the harmonised photos (pipeline-k/twin-reader.ts), before the classes are read: given the photos by image index and the glTF. */ readExterior?: (finalImage: Map<number, RgbaImage8>, json: any) => Promise<void>; /** The classes named in words from a picture of them (pipeline-k/material-naming.ts), and the glass seen; its reason when it named none. */ nameClasses?: (classes: RegionClass[], swatches: Buffer) => Promise<{ words?: Array<ClassWords | undefined>; unnamed?: string }> } }): Promise<TileRefineTwin> {
     const g = parseGlbBytes(texturedGlb);
     const json = JSON.parse(JSON.stringify(g.json));
     const materials: any[] = json.materials ?? (json.materials = []);
@@ -286,14 +287,13 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     if (opts?.harmonize && finalImage.size && process.env.SCRATCHBOX_K_SKY_DELIGHT === '1') { opts.onStep?.('sky de-light', 'running'); sky = skyDelight(g, json, finalImage, surfaces, opts.harmonize.skyContext); opts.onStep?.('sky de-light', 'done'); }
     if (opts?.harmonize && finalImage.size) { opts.onStep?.('harmonize', 'running'); harmonize = harmonizeTextures(g, json, finalImage, opts.harmonize.groundY, undefined, surfaces, opts.harmonize.buildingOf ? { buildingOf: opts.harmonize.buildingOf } : {}); opts.onStep?.('harmonize', 'done'); }
 
-    // pipeline K: material regions on the harmonised photos (accepted glass edits them before they are encoded)
+    // pipeline K: material regions on the harmonised photos, before they are encoded
     let regionsPlan: MaterialRegionsPlan | undefined, regionsSkipped: string | undefined, regionClasses: RegionClass[] | undefined, swatches: { png: Buffer; spanM?: number } | undefined;
     if (opts?.materialRegions && finalImage.size) {
-        // the openings read on the photos as they will be shown (the facade reader, after every fix above)
-        let planes = opts.materialRegions.planes ?? [];
-        if (opts.materialRegions.planesFor) {
+        // the facade reader on the photos as they will be shown (after every fix above)
+        if (opts.materialRegions.readExterior) {
             opts.onStep?.('facadeRead', 'running');
-            try { planes = await opts.materialRegions.planesFor(finalImage, json); }
+            try { await opts.materialRegions.readExterior(finalImage, json); }
             catch (err) { opts.onStep?.('facadeRead', 'failed'); throw err; }
             opts.onStep?.('facadeRead', 'done');
         }
@@ -301,12 +301,17 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
         const classes = regionClasses = readRegionClasses(json, finalImage, undefined, opts.materialRegions.harvest ? { g } : undefined);
         if (!classes) regionsSkipped = 'no rebuilt facade photo to read appearance classes from';
         else {
+            // each class's repeat size, so a set's pattern is drawn only as far as it fits the element it repeats on
+            classRepeatSizes(g, json, finalImage, classes);
+            // and each class's texture as the photos show it, which a set's grain is held to
+            classPhotoTextures(g, json, finalImage, classes);
             const sheet = classSwatchSheet(json, finalImage, classes, { g });
             if (sheet) swatches = { png: encodePng(sheet.width, sheet.height, sheet.rgba, 4), ...(sheet.spanM ? { spanM: sheet.spanM } : {}) };
             let sets: RegionSet[] | undefined;
             try { sets = await opts.materialRegions.sets(classes, swatches); } catch (err) { regionsSkipped = `the library sets could not be resolved: ${err instanceof Error ? err.message : String(err)}`; }
             // each photo's maps planned on its own worker thread (material-regions-pool.ts), the same plan as on one
-            if (sets) try { regionsPlan = await planMaterialRegionsOnThreads(g, json, finalImage, classes, sets, planes); } catch (err) { regionsSkipped = `planning the maps failed: ${err instanceof Error ? err.message : String(err)}`; }
+            // window frames beside the glass are not glass (the texturing expert's rule, applyFrameFinish), on whichever path planned
+            if (sets) try { regionsPlan = await planMaterialRegionsOnThreads(g, json, finalImage, classes, sets); applyFrameFinish(regionsPlan, json, finalImage, classes); /* the building's one exposure gain, after the maps are planned on the photos as read */ const ex = fitExposureGain(classes, sets, finalImage); applyExposureGain(finalImage, ex.gain); regionsPlan.report.exposure = ex; } catch (err) { regionsSkipped = `planning the maps failed: ${err instanceof Error ? err.message : String(err)}`; }
         }
         opts.onStep?.('materials', regionsSkipped ? 'failed' : 'done');
     }
@@ -314,7 +319,7 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     let materialClasses: MaterialClassesExtras | undefined;
     if (regionsPlan && regionClasses) {
         const report = regionsPlan.report;
-        let named: { words?: Array<ClassWords | undefined>; glass?: GlassSeen[]; unnamed?: string } = { unnamed: 'no namer in this build' };
+        let named: { words?: Array<ClassWords | undefined>; unnamed?: string } = { unnamed: 'no namer in this build' };
         if (opts?.materialRegions?.nameClasses && swatches) {
             opts.onStep?.('materialNames', 'running');
             try { named = await opts.materialRegions.nameClasses(regionClasses, swatches.png); }
@@ -322,7 +327,7 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
             opts.onStep?.('materialNames', 'done');
         } else if (!swatches) named = { unnamed: 'no patch of the facades held one class' };
         const withSets = regionClasses.map(c => { const r = report.classes.find(x => x.index === c.index); return { ...c, set: r?.set ?? '', distance: r?.distance ?? 0, ...(r?.choice ? { choice: r.choice } : {}) }; });
-        materialClasses = materialClassesExtras(withSets, named.words, named.glass, named.unnamed);
+        materialClasses = materialClassesExtras(withSets, named.words, named.unnamed);
     }
 
     // the binary chunk: appended to below, both for the final (de-lit or recreated) photos and the confidence texels
@@ -378,10 +383,6 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
         const r = regionsPlan.report;
         provenance.push({ source: 'material-regions', label: 'generated', method: describeMaterialRegions(r), coverage: photoArea / total });
         const regionProvenance = [provenance.length - 1];
-        if (r.texels.glass) {
-            provenance.push({ source: 'facade-material-reading', label: 'photo-inferred', method: "glass on the window fit's panes (the viewer reads them as the facade material reading's glass): the photo kept as their colour, roughness of float glass, dielectric", coverage: (photoArea / total) * (r.texels.glass / Math.max(1, r.texels.total)) });
-            regionProvenance.push(provenance.length - 1);
-        }
         json.samplers.push({ magFilter: 9729, minFilter: 9729, wrapS: 10497, wrapT: 10497 });
         const linear = json.samplers.length - 1;
         writeMaterialRegions(json, regionsPlan, (img, mimeType, name) => {
@@ -416,5 +417,5 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     let o = 0;
     for (const b of bin) { out.set(b, o); o += b.byteLength; }
     const ladderRung = rungShares.findIndex((_, k, a) => a.slice(k + 1).reduce((x, y) => x + y, 0) <= 0.1);
-    return { glb: assembleGlb(json, out), rungShares, provenance, ladderRung, triangles, ...(recreate ? { recreate } : {}), ...(harmonize ? { harmonize } : {}), ...(sky ? { skyDelight: sky } : {}), ...(relight ? { viewRelight: relight } : {}), ...(roofShadow ? { roofShadow } : {}), ...(roofShadowQa ? { roofShadowQa } : {}), ...(regionsPlan ? { materialRegions: regionsPlan.report } : regionsSkipped ? { materialRegions: { skipped: regionsSkipped } } : {}), ...(materialClasses ? { materialClasses } : {}) };
+    return { glb: assembleGlb(json, out), rungShares, provenance, surfaceAreaM2: total, ladderRung, triangles, ...(recreate ? { recreate } : {}), ...(harmonize ? { harmonize } : {}), ...(sky ? { skyDelight: sky } : {}), ...(relight ? { viewRelight: relight } : {}), ...(roofShadow ? { roofShadow } : {}), ...(roofShadowQa ? { roofShadowQa } : {}), ...(regionsPlan ? { materialRegions: regionsPlan.report } : regionsSkipped ? { materialRegions: { skipped: regionsSkipped } } : {}), ...(materialClasses ? { materialClasses } : {}) };
 }

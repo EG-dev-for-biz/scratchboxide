@@ -237,6 +237,29 @@ describe('pipeline K-D cloud chunk runner', () => {
         expect(t.jobs.cancelled).toEqual([expect.stringMatching(/kd-chunk-job-0$/)]);
     });
 
+    it("tries a cut-off download of the job's layers again before failing the chunk", async () => {
+        const s = setup();
+        const real = s.bucket.download.bind(s.bucket);
+        let cuts = 2;
+        s.bucket.download = async (key: string, file: string) => { if (key.includes('/models/') && cuts-- > 0) throw new Error('aborted'); return real(key, file); };
+        const out = await s.runChunk(request(), {});
+        expect(out.result.status).toBe('complete');
+        expect(fs.readFileSync(path.join(s.laptop.modelsDir, 'ground_c7.glb'), 'utf8')).toBe('glTF-ground');
+
+        const t = setup();
+        const realT = t.bucket.download.bind(t.bucket);
+        let tries = 0;
+        t.bucket.download = async (key: string, file: string) => { if (key.includes('/models/')) { tries++; throw new Error('aborted'); } return realT(key, file); };
+        await expect(t.runChunk(request(), {})).rejects.toThrow(/aborted/);
+        expect(tries).toBe(4);
+        // asked for again (the orchestrator's retry), the chunk its job built is downloaded again, never built again
+        t.bucket.download = realT;
+        const again = await t.runChunk(request(), {});
+        expect(again.result.status).toBe('complete');
+        expect(t.jobs.runs).toHaveLength(1);
+        expect(fs.readFileSync(path.join(t.laptop.modelsDir, 'ground_c7.glb'), 'utf8')).toBe('glTF-ground');
+    });
+
     it('a stop cancels the execution and rejects with the stop', async () => {
         const s = setup({ hang: true });
         const ac = new AbortController();

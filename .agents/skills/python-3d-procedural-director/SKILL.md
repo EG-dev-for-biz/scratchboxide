@@ -31,7 +31,7 @@ Procedural scripts execute inside a sandboxed Python sub-process communicating d
                  ▼
  [Python Runtime: import scratchbox as sb]
   - sb.core      (Scenes, submeshes, transforms)
-  - sb.shaper    (Taper, twist, bend, bulge, FFD lattices)
+  - sb.shaper    (Taper, twist, bend, bulge, FFD lattices; Kelvinlet elastic loads for soft or organic forms)
   - sb.create_tree / sb.vegetation (SB-Veggie trees from measurements; the only vegetation generator)
   - sb.nature    (ivy; trees are sb.create_tree)
   - sb.terrain   (Multi-fractal noise, elevation profiles)
@@ -264,6 +264,9 @@ chassis.subdivide(6)                   # deformers need vertices to bend
 # Non-linear deformers take integer axes: 0 = X, 1 = Y, 2 = Z
 sb.shaper.taper(chassis, axis=2, factor=0.45)
 sb.shaper.bulge(chassis, center=sb.math.Vec3(0.0, 0.0, 0.2), radius=1.2, strength=0.25)
+# sb.shaper.kelvinlet is for free-form elastic reshaping of soft or organic forms (a pushed-clay bulge, a flexed
+# growth): it has no falloff edge and keeps volume. A part meant to stay rigid, like this chassis, keeps the affine
+# and falloff deformers above, because a Kelvinlet bends it like rubber.
 add(chassis, "Primary_Chassis")
 
 # =========================================================================

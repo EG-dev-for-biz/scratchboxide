@@ -10,8 +10,8 @@
 /**
  * The tool packs the stdio MCP server serves: every pack the in-app chat registers (tool-registry.ts) whose handlers
  * run on the node side alone, with a workspace root, an abort signal and progress reports. The packs left out need the
- * IDE itself (IDE_ONLY_PACKS: the canvas, the lens and the browser proxy), and their handlers would only throw the
- * standalone context's "requires the IDE" error. Both MCP entry points (scratchbox-mcp.ts, the one .mcp.json runs, and
+ * IDE itself (IDE_ONLY_PACKS: the canvas, the lens, the browser proxy and the open scene), and their handlers would only
+ * throw the standalone context's "requires the IDE" error. Both MCP entry points (scratchbox-mcp.ts, the one .mcp.json runs, and
  * scratchbox-mcp-server.ts) take their tools from here, so there is one list to keep in step with the registry;
  * mcp-pack-drift.test.ts fails when tool-registry.ts registers a pack this file neither serves nor names as IDE-only.
  */
@@ -54,6 +54,7 @@ import {
     LOCAL_SF3D_TOOL_DECLARATIONS, localSf3DHandlers,
     TURNAROUND_TOOL_DECLARATIONS, turnaroundHandlers,
     OBJECT_REFERENCE_TOOL_DECLARATIONS, objectReferenceHandlers,
+    BLUEPRINT_OUTLINE_TOOL_DECLARATIONS, blueprintOutlineHandlers,
     SB_SCRIPT_GUIDE_TOOL_DECLARATIONS, sbScriptGuideHandlers,
     SCENE_HEALING_TOOL_DECLARATIONS, sceneHealingHandlers,
     TEXTURE_LIBRARY_TOOL_DECLARATIONS, textureLibraryHandlers,
@@ -79,8 +80,12 @@ import {
 
 export interface ToolPack { name: string; declarations: ToolDeclaration[]; handlers: Record<string, ToolHandler> }
 
-/** Packs whose handlers need the running IDE (canvas, lens, browser proxy): never served standalone. */
-export const IDE_ONLY_PACKS: ReadonlyArray<string> = ['CANVAS_TOOL_DECLARATIONS', 'LENS_TOOL_DECLARATIONS', 'BROWSER_TOOL_DECLARATIONS'];
+/**
+ * Packs whose handlers need the running IDE (canvas, lens, browser proxy): never served standalone.
+ * OBJECT_DETAIL_TOOL_DECLARATIONS: object_detail_pass weathers the object in the IDE's open scene and mounts the new
+ * version there (request.activeArtifact), which a standalone MCP call never has.
+ */
+export const IDE_ONLY_PACKS: ReadonlyArray<string> = ['CANVAS_TOOL_DECLARATIONS', 'LENS_TOOL_DECLARATIONS', 'BROWSER_TOOL_DECLARATIONS', 'OBJECT_DETAIL_TOOL_DECLARATIONS'];
 
 /** Every standalone pack, named by its declarations constant (the name tool-registry.ts imports). */
 export const STANDALONE_PACKS: ReadonlyArray<ToolPack> = [
@@ -122,6 +127,7 @@ export const STANDALONE_PACKS: ReadonlyArray<ToolPack> = [
     { name: 'LOCAL_SF3D_TOOL_DECLARATIONS', declarations: LOCAL_SF3D_TOOL_DECLARATIONS, handlers: localSf3DHandlers },
     { name: 'TURNAROUND_TOOL_DECLARATIONS', declarations: TURNAROUND_TOOL_DECLARATIONS, handlers: turnaroundHandlers },
     { name: 'OBJECT_REFERENCE_TOOL_DECLARATIONS', declarations: OBJECT_REFERENCE_TOOL_DECLARATIONS, handlers: objectReferenceHandlers },
+    { name: 'BLUEPRINT_OUTLINE_TOOL_DECLARATIONS', declarations: BLUEPRINT_OUTLINE_TOOL_DECLARATIONS, handlers: blueprintOutlineHandlers },
     { name: 'SB_SCRIPT_GUIDE_TOOL_DECLARATIONS', declarations: SB_SCRIPT_GUIDE_TOOL_DECLARATIONS, handlers: sbScriptGuideHandlers },
     { name: 'SCENE_HEALING_TOOL_DECLARATIONS', declarations: SCENE_HEALING_TOOL_DECLARATIONS, handlers: sceneHealingHandlers },
     { name: 'TEXTURE_LIBRARY_TOOL_DECLARATIONS', declarations: TEXTURE_LIBRARY_TOOL_DECLARATIONS, handlers: textureLibraryHandlers },

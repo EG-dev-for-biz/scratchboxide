@@ -30,7 +30,8 @@ import { RouteContext } from './types';
  *
  * POST /snapshot  body: a binary GLB (model/gltf-binary) of what a viewport shows
  *     -> { success, snapshotId, sbvgUrl, origin, cached, summary }  (built once per content; the newest 24 are kept)
- * POST /open   { sbvgUrl, sourceGlbPath?, workspaceRoot?, snapshotId?, lighting?, material? }
+ * POST /open   { sbvgUrl, sourceGlbPath?, workspaceRoot?, snapshotId?, lighting?, lights?, material? }
+ * POST /lights { sessionId, lighting?, lights? }  replaces the light without reopening (no rebuild); the next view uses it
  *     -> { success, sessionId, device, file, materials }        (503 with the reason when there is no ray tracing device)
  * POST /view   { sessionId, width, height, camera, lod?, maxBounces?, targetSpp? }
  *     -> { success, seq, cut, lighting, targetSpp }
@@ -120,7 +121,8 @@ export function createPathTraceRouter(service: MetalPathTracerService, ctx: Rout
                 fs.renameSync(`${file}.tmp`, file);
             }
             pruneSnapshots();
-            const built = await getVirtualGeometryBuildService().buildServed(file);
+            // Traced whole: the leaf clusters only, without the LOD pyramid and atlases that cost most of a build.
+            const built = await getVirtualGeometryBuildService().buildServed(file, { singleLevel: true });
             res.json({ success: true, snapshotId, sbvgUrl: built.sbvgUrl, origin: readSbvgOrigin(built.sbvgPath), cached: built.cached, summary: built.summary });
         } catch (err) {
             fail(res, err);
@@ -146,6 +148,7 @@ export function createPathTraceRouter(service: MetalPathTracerService, ctx: Rout
                 sbvgPath,
                 ...(glbPath ? { glbPath } : {}),
                 ...(body.lighting ? { lighting: body.lighting } : {}),
+                ...(Array.isArray(body.lights) ? { lights: body.lights } : {}),
                 ...(body.material ? { material: body.material } : {})
             });
             const sessionId = `pt${nextId++}`;
@@ -186,8 +189,10 @@ export function createPathTraceRouter(service: MetalPathTracerService, ctx: Rout
             res.status(204).end();
             return;
         }
+        // Nothing new: the client has this frame, or the frame belongs to a view older than the one it asked for.
         const after = String(req.query.after ?? '');
-        if (after === `${frame.seq}.${frame.spp}`) {
+        const seq = Number(req.query.seq);
+        if (after === `${frame.seq}.${frame.spp}` || (Number.isFinite(seq) && frame.seq < seq)) {
             res.status(204).end();
             return;
         }
@@ -200,7 +205,9 @@ export function createPathTraceRouter(service: MetalPathTracerService, ctx: Rout
             'Content-Type': 'application/octet-stream',
             'Cache-Control': 'no-store',
             // The page runs on another origin in development; without this the browser hides the frame headers.
-            'Access-Control-Expose-Headers': 'X-Frame-Seq, X-Frame-Spp, X-Frame-Rays, X-Frame-Gpu-Ms, X-Frame-Width, X-Frame-Height, X-Frame-Done, X-Frame-Denoised, X-Frame-Denoise-Ms, X-Frame-History, X-Frame-Render-Width, X-Frame-Render-Height, X-Frame-Upscale-Ms',
+            'Access-Control-Expose-Headers': 'X-Frame-Seq, X-Frame-Spp, X-Frame-Rays, X-Frame-Gpu-Ms, X-Frame-Width, X-Frame-Height, X-Frame-Display-Width, X-Frame-Display-Height, X-Frame-Done, X-Frame-Denoised, X-Frame-Denoise-Ms, X-Frame-History, X-Frame-Render-Width, X-Frame-Render-Height, X-Frame-Upscale-Ms',
+            'X-Frame-Display-Width': String(read.meta.displayWidth ?? read.meta.width),
+            'X-Frame-Display-Height': String(read.meta.displayHeight ?? read.meta.height),
             'X-Frame-Render-Width': String(read.meta.renderWidth ?? read.meta.width),
             'X-Frame-Render-Height': String(read.meta.renderHeight ?? read.meta.height),
             'X-Frame-Upscale-Ms': Number(read.meta.upscaleMs ?? 0).toFixed(3),
@@ -251,6 +258,7 @@ export function createPathTraceRouter(service: MetalPathTracerService, ctx: Rout
                 optimizations: { sampler: 'sobol' },
                 camera: body.camera,
                 ...(open.lighting ? { lighting: open.lighting } : {}),
+                ...(open.lights ? { lights: open.lights } : {}),
                 ...(open.glbPath ? { materials: { glbPath: open.glbPath } } : open.material ? { material: open.material } : {}),
                 ...(exposureEv !== undefined ? { exposureEv } : {})
             });
@@ -270,6 +278,38 @@ export function createPathTraceRouter(service: MetalPathTracerService, ctx: Rout
             fs.writeFileSync(target.replace(/\.png$/, '.json'), JSON.stringify(record, null, 2), 'utf8');
             fs.rmSync(outputDir, { recursive: true, force: true });
             res.json({ success: true, path: relative, stats: record });
+        } catch (err) {
+            fail(res, err);
+        }
+    });
+
+    router.post('/lights', async (req: Request, res: Response) => {
+        const body = req.body || {};
+        const session = sessions.get(String(body.sessionId ?? ''));
+        if (!session || !session.alive) {
+            res.status(404).json({ success: false, error: 'unknown or closed path tracing session; open it again' });
+            return;
+        }
+        try {
+            const updated = await session.setLights({
+                ...(body.lighting ? { lighting: body.lighting } : {}),
+                ...(Array.isArray(body.lights) ? { lights: body.lights } : {})
+            });
+            res.json({ success: true, ...updated });
+        } catch (err) {
+            fail(res, err);
+        }
+    });
+
+    router.post('/pause', async (req: Request, res: Response) => {
+        const session = sessions.get(String((req.body || {}).sessionId ?? ''));
+        if (!session || !session.alive) {
+            res.status(404).json({ success: false, error: 'unknown or closed path tracing session; open it again' });
+            return;
+        }
+        try {
+            const paused = await session.pause();
+            res.json({ success: true, ...paused });
         } catch (err) {
             fail(res, err);
         }

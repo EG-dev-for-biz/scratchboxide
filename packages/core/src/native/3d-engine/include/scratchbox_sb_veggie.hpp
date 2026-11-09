@@ -64,7 +64,7 @@ struct SbVeggieBlade {
 
 /** How a tree grows and carries its leaves. All continuous; defaults are the neutral values the canonical template was drawn with. */
 struct SbVeggieMorphology {
-    float apicalDominance{0.5f};       // 0..1: how far the leader outgrows the laterals (a grown tree: the momentum of a branch along its heading, 0.76 x this)
+    float apicalDominance{0.5f};       // 0..1: how far the leader outgrows the laterals (a grown tree: the momentum of a branch along its heading, 0.76 x this, and how firmly its leader holds its course to the apex, tile_vegetation GrowthParams::excurrentApical)
     float branchAngleMeanRad{0.80795f};// mean angle of laterals from the leader (atan2(0.68, 0.65): the direction scaffold limbs have always sprouted in)
     float branchAngleSpreadRad{0.2f};  // spread of that angle: between crowns and (half of it) between the limbs of one
     float crownAspect{1.0f};           // crown height / crown width (1 = the canonical template; a grown tree has the aspect of its measured crown)
@@ -396,8 +396,10 @@ public:
                 flare = fFactor * fFactor * 0.18f;
             }
 
-            for (int s = 0; s < trunkRadial; ++s) {
-                float angle = (static_cast<float>(s) / trunkRadial) * TWO_PI;
+            // trunkRadial + 1 columns: the last is the seam, at the first's angle (same position and normal) but u = 1,
+            // so the bark's last strip runs from (n-1)/n to 1 instead of wrapping back to 0
+            for (int s = 0; s <= trunkRadial; ++s) {
+                float angle = (static_cast<float>(s % trunkRadial) / trunkRadial) * TWO_PI;
 
                 // Organic longitudinal bark furrowing harmonics (smooth macro flare)
                 float furrowNoise = std::sin(angle * 4.0f) * 0.012f 
@@ -454,17 +456,18 @@ public:
             }
         }
 
-        // Trunk Quad Triangulation
+        // Trunk Quad Triangulation: the ring turns from +x towards +z, clockwise seen from above, so each quad is wound
+        // i00, i11, i10 to turn counter-clockwise about its outward normals
+        const int trunkColumns = trunkRadial + 1;
         for (int r = 0; r < trunkRings; ++r) {
             for (int s = 0; s < trunkRadial; ++s) {
-                int nextS = (s + 1) % trunkRadial;
-                uint32_t i00 = r * trunkRadial + s;
-                uint32_t i10 = r * trunkRadial + nextS;
-                uint32_t i01 = (r + 1) * trunkRadial + s;
-                uint32_t i11 = (r + 1) * trunkRadial + nextS;
+                uint32_t i00 = r * trunkColumns + s;
+                uint32_t i10 = r * trunkColumns + s + 1;
+                uint32_t i01 = (r + 1) * trunkColumns + s;
+                uint32_t i11 = (r + 1) * trunkColumns + s + 1;
 
-                tmpl.indices.push_back(i00); tmpl.indices.push_back(i10); tmpl.indices.push_back(i11);
-                tmpl.indices.push_back(i00); tmpl.indices.push_back(i11); tmpl.indices.push_back(i01);
+                tmpl.indices.push_back(i00); tmpl.indices.push_back(i11); tmpl.indices.push_back(i10);
+                tmpl.indices.push_back(i00); tmpl.indices.push_back(i01); tmpl.indices.push_back(i11);
             }
         }
 
@@ -533,8 +536,9 @@ public:
                 }
                 rRadius *= buttressFlare;
 
-                for (int s = 0; s < radial; ++s) {
-                    float a = (static_cast<float>(s) / radial) * TWO_PI;
+                // radial + 1 columns: the last is the seam, at the first's angle (same position and normal) but u = 1
+                for (int s = 0; s <= radial; ++s) {
+                    float a = (static_cast<float>(s % radial) / radial) * TWO_PI;
 
                     // Fluting root ridges on trunk base expanding organically into soil
                     float fluteMod = 1.0f;
@@ -570,13 +574,13 @@ public:
                 }
             }
 
+            const int columns = radial + 1;
             for (int r = 0; r < rings; ++r) {
                 for (int s = 0; s < radial; ++s) {
-                    int nextS = (s + 1) % radial;
-                    uint32_t i00 = branchStartVertex + r * radial + s;
-                    uint32_t i10 = branchStartVertex + r * radial + nextS;
-                    uint32_t i01 = branchStartVertex + (r + 1) * radial + s;
-                    uint32_t i11 = branchStartVertex + (r + 1) * radial + nextS;
+                    uint32_t i00 = branchStartVertex + r * columns + s;
+                    uint32_t i10 = branchStartVertex + r * columns + s + 1;
+                    uint32_t i01 = branchStartVertex + (r + 1) * columns + s;
+                    uint32_t i11 = branchStartVertex + (r + 1) * columns + s + 1;
 
                     tmpl.indices.push_back(i00); tmpl.indices.push_back(i10); tmpl.indices.push_back(i11);
                     tmpl.indices.push_back(i00); tmpl.indices.push_back(i11); tmpl.indices.push_back(i01);
@@ -586,19 +590,22 @@ public:
             // Hemispherical cap at branch tip for 100% watertight manifold integrity
             if (addCap) {
                 uint32_t capCenterIdx = static_cast<uint32_t>(tmpl.canonicalVertices.size());
+                uint32_t lastRingStart = branchStartVertex + rings * columns;
                 Vec3 endDir = (endPos - midPoint).normalized();
                 Vec3 capCenter = endPos + endDir * (rEnd * 0.5f);
-                tmpl.canonicalVertices.push_back(Vertex{capCenter, endDir, Vec2(0.5f, 0.5f), color});
+                // the centre continues the tube's v (2.5 over the branch) past the last ring, so the fan's UVs turn the
+                // same way as the tube's
+                float capSlant = (capCenter - tmpl.canonicalVertices[lastRingStart].position).length();
+                float capV = 2.5f * (1.0f + capSlant / std::max(branchLen, 1e-4f));
+                tmpl.canonicalVertices.push_back(Vertex{capCenter, endDir, Vec2(0.5f, capV), color});
 
                 SbVeggieSkinWeight capSw;
                 capSw.jointIndices[0] = childJointIdx; capSw.weights[0] = 1.0f;
                 tmpl.skinWeights.push_back(capSw);
 
-                uint32_t lastRingStart = branchStartVertex + rings * radial;
                 for (int s = 0; s < radial; ++s) {
-                    int nextS = (s + 1) % radial;
                     tmpl.indices.push_back(lastRingStart + s);
-                    tmpl.indices.push_back(lastRingStart + nextS);
+                    tmpl.indices.push_back(lastRingStart + s + 1);
                     tmpl.indices.push_back(capCenterIdx);
                 }
             }
@@ -1078,6 +1085,13 @@ public:
             const int row = static_cast<int>((q - 1) / 3) + 1, col = static_cast<int>((q - 1) % 3);
             return Vec2(0.5f * col, row / tv);
         };
+        // appends a triangle wound counter-clockwise about its vertices' own normals
+        auto pushFacingNormals = [&](uint32_t i0, uint32_t i1, uint32_t i2) {
+            const Vec3 f = (verts[i1].position - verts[i0].position).cross(verts[i2].position - verts[i0].position);
+            const Vec3 n = verts[i0].normal + verts[i1].normal + verts[i2].normal;
+            if (f.dot(n) >= 0.0f) indices.insert(indices.end(), {i0, i1, i2});
+            else indices.insert(indices.end(), {i0, i2, i1});
+        };
         uint32_t base = static_cast<uint32_t>(verts.size());
         for (size_t q = 0; q < P.size(); ++q) verts.push_back(SbVeggieBladeVertex{P[q], N[q], uvOf(q), false, false});
         indices.insert(indices.end(), tri.begin(), tri.end());
@@ -1091,7 +1105,8 @@ public:
             nb = nb.lengthSquared() < 1e-6f ? N[q] : nb.normalized();
             verts.push_back(SbVeggieBladeVertex{P[q], nb, uvOf(q), true, false});
         }
-        for (size_t i = 0; i + 2 < tri.size(); i += 3) indices.insert(indices.end(), {underBase + tri[i], underBase + tri[i + 2], underBase + tri[i + 1]});
+        // the underside's triangles face the way its normals do: down with the flipped normals, up with the upper side's
+        for (size_t i = 0; i + 2 < tri.size(); i += 3) pushFacingNormals(underBase + tri[i], underBase + tri[i + 1], underBase + tri[i + 2]);
         const size_t bladeTriangles = tri.size() / 3 * 2;
         if (withPetiole && b.petioleRatio > 0.0f) {
             // the petiole: one triangle, as wide as a stalk at the twig and a point at the blade
@@ -1100,7 +1115,7 @@ public:
             verts.push_back(SbVeggieBladeVertex{pl.petioleBase - w, pl.normal, Vec2(0.5f, 0.01f), false, true});
             verts.push_back(SbVeggieBladeVertex{pl.petioleBase + w, pl.normal, Vec2(0.5f, 0.01f), false, true});
             verts.push_back(SbVeggieBladeVertex{pl.petioleTip, pl.normal, Vec2(0.5f, 0.05f), false, true});
-            indices.insert(indices.end(), {pb, pb + 1, pb + 2});
+            pushFacingNormals(pb, pb + 1, pb + 2);
         }
         return bladeTriangles;
     }
@@ -1879,7 +1894,11 @@ private:
                 const uint32_t baseIdx = static_cast<uint32_t>(mesh.vertices.size());
                 for (const auto& v : bv) {
                     Vec4 col = v.petiole ? Vec4(0.32f, 0.22f, 0.15f, 1.0f) : (v.underside ? undersideColor : leafColor);
-                    const Vec3 nrm = v.petiole ? v.normal : calcNormal(v.position, v.normal);
+                    // an underside with the flipped normals takes the upper side's transfer reversed, so it stays facing
+                    // the way its triangles are wound
+                    const Vec3 nrm = v.petiole ? v.normal
+                        : v.normal.dot(normal) < 0.0f ? calcNormal(v.position, v.normal * -1.0f) * -1.0f
+                        : calcNormal(v.position, v.normal);
                     mesh.vertices.push_back(Vertex{v.position, v.underside ? nrm : nrm, v.uv, col});
                 }
                 for (uint32_t id : bi) mesh.indices.push_back(baseIdx + id);

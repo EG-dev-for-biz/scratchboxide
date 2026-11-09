@@ -96,6 +96,13 @@ describe('buildSurfaceSplatLayer', () => {
         expect(report.gains).toHaveLength(2);
     });
 
+    it('takes a picture\'s sky only above its camera\'s horizon: the flat blue one is sky there and a wall below', () => {
+        // both stations look 13 degrees down from 12 m: their horizon is about 70 px from the top of 240
+        expect(report.skyShares[0]).toBe(0);
+        expect(report.skyShares[1]).toBeGreaterThan(60 / H);
+        expect(report.skyShares[1]).toBeLessThan(90 / H);
+    });
+
     it('packs splats densest along the walk and writes the smaller SPZ', () => {
         const ground = splats.filter(s => Math.abs(s.p[1]) < 1e-3);
         const near = ground.filter(s => Math.abs(s.p[2] - 20) < 4 && Math.abs(s.p[0]) < 20).length / (8 * 40);
@@ -157,5 +164,66 @@ describe('buildSurfaceSplatLayer: one station per patch, stations\' colours agre
         // and the face reads as one grey: before, its two halves were 35 levels apart
         const grey = eastFace(splats).map(s => s.c[1]).sort((a, b) => a - b);
         expect(grey[Math.floor(grey.length * 0.95)] - grey[Math.floor(grey.length * 0.05)]).toBeLessThan(8);
+    }, 600000);
+});
+
+describe('buildSurfaceSplatLayer: a station\'s sky', () => {
+    const DIR = path.join(WORK, 'sky');
+    const SKY: [number, number, number] = [120, 170, 230], BRICK: [number, number, number] = [170, 90, 60];
+    /** The east face's top metre, where the scan's roof stands above the photo's roofline. */
+    const topBand = (list: ReturnType<typeof readSplats>) => list.filter(s => Math.abs(s.p[0] - 5) < 1e-3 && s.p[1] > 9 && Math.abs(s.p[2]) < 4.5);
+    const skyColoured = (c: number[]) => c[2] > c[0] + 25;
+
+    async function layer(name: string, skyMask: boolean) {
+        const glb = path.join(DIR, 'box.glb');
+        if (!fs.existsSync(glb)) { fs.ensureDirSync(DIR); writeBoxGroundGlb(glb, [-5, 0, -5], [5, 10, 5], 60, []); }
+        const renderer = new SurveyStationRenderService();
+        await renderer.loadMesh(glb);
+        const dir = path.join(DIR, name);
+        fs.ensureDirSync(dir);
+        // one station at street level east of the box, the roof above its horizon; its photo shows the roofline 12 px
+        // lower than the scan puts it (a registration error), sky above it and brick below
+        const eye: [number, number, number] = [30, 2.5, 0];
+        const st = await station(renderer, 1, eye, BRICK, dir);
+        const pose = await fs.readJson(st.posePath) as { fy: number; cy: number; up: number[]; forward: number[] };
+        const d = [5 - eye[0], 10 - eye[1], 0 - eye[2]];
+        const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        const roofRow = Math.round(pose.cy - pose.fy * dot(d, pose.up) / dot(d, pose.forward)) + 12;
+        const px = Buffer.alloc(W * H * 4);
+        for (let i = 0; i < W * H; i++) {
+            const c = Math.floor(i / W) < roofRow ? SKY : BRICK;
+            px[i * 4] = c[0]; px[i * 4 + 1] = c[1]; px[i * 4 + 2] = c[2]; px[i * 4 + 3] = 255;
+        }
+        await fs.writeFile(st.imagePath, encodePng(W, H, px));
+        const report = await buildSurfaceSplatLayer({
+            glbPath: glb, anchor: ANCHOR, renderer, stations: [st],
+            corridor: { a: [-30, 20], b: [30, 20], eyeY: 1.6 },
+            outSplat: path.join(dir, 'surface.splat'), outSpz: path.join(dir, 'surface.spz'), workDir: path.join(dir, 'work'), budget: 200_000, skyMask
+        });
+        return { report, roofRow, splats: readSplats(path.join(dir, 'surface.splat')) };
+    }
+
+    it('colours the roof edge from the sky behind it when the sky is read', async () => {
+        const { report, splats } = await layer('read', false);
+        expect(report.skyShares).toEqual([0]);
+        const band = topBand(splats);
+        expect(band.length).toBeGreaterThan(200);
+        expect(band.filter(s => skyColoured(s.c)).length).toBeGreaterThan(band.length * 0.5);
+    }, 600000);
+
+    it('never colours a splat from a station\'s sky when the sky is masked', async () => {
+        const { report, roofRow, splats } = await layer('masked', true);
+        // the photo's sky, grown by a few pixels, is what the station is not read over
+        expect(report.skyShares[0]).toBeGreaterThan(roofRow / H);
+        expect(report.skyShares[0]).toBeLessThan((roofRow + 8) / H);
+        const band = topBand(splats);
+        expect(band.length).toBeGreaterThan(200);
+        expect(band.filter(s => skyColoured(s.c)).length).toBeLessThan(band.length * 0.01);
+        // the face below the band is still read from the photo: brick
+        const face = splats.filter(s => Math.abs(s.p[0] - 5) < 1e-3 && s.p[1] > 1 && s.p[1] < 7 && Math.abs(s.p[2]) < 4.5);
+        expect(face.length).toBeGreaterThan(1000);
+        expect(face.filter(s => s.c[0] > s.c[2] + 60).length).toBeGreaterThan(face.length * 0.99);
+        // and nothing anywhere carries the sky's colour
+        expect(splats.filter(s => skyColoured(s.c)).length).toBeLessThan(splats.length * 0.005);
     }, 600000);
 });

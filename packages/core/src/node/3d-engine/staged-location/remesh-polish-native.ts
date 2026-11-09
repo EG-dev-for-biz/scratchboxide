@@ -23,9 +23,12 @@
  *    facade a task;
  *  - `clip`: pipeline-k/lattice-stitch.ts clipToFootprint (scratchbox_lattice_cut.hpp, the cut's splits and weld), triangles
  *    in chunks;
- *  - `infill`: pipeline-k/lattice-stitch.ts fillOpenLoops (scratchbox_open_loop_fill.hpp);
+ *  - `infill`: pipeline-k/lattice-stitch.ts fillOpenLoops (scratchbox_open_loop_fill.hpp), plus its native-only CDT caps
+ *    (LATTICE_STITCH_PARAMS.cdtCaps; off for its parity test);
  *  - `fill-texture`: pipeline-k/lattice-stitch.ts appendTexturedTriangles' routes (scratchbox_fill_texture.hpp), the
  *    texturing of the fill, seal and stitch in the twin, triangles and pieces in chunks.
+ * and ones with no TypeScript twin: the inner core (pipeline-k/inner-core.ts, scratchbox_inner_core.hpp), columns of voxels a task;
+ * and the engine's CDT itself (`cdt`: scratchbox_cdt.hpp), for its tests and tools.
  *
  * Data goes over stdin as raw little-endian buffers (a header, then arrays), never PNG; the window fit's facades are
  * streamed as they are decoded and fitted as they arrive. The pool's size is the caller's: a chunked district's builds
@@ -72,8 +75,9 @@ export function ensureRemeshPolishBinary(repoRoot = findTileRefineRepoRoot()): P
 }
 
 /** The polish input's native steps built before it runs: the lattice (its cut and stitch), the clip and the infill (or seal, and their textured fill) run synchronously and cannot compile. */
-export async function ensureNativePolishFor(input: { infill?: boolean; seal?: boolean; lattice?: boolean; orthosDir?: string; clip?: boolean; base?: unknown }): Promise<void> {
-    if (((input.infill || input.seal) && (kNative('infill') || kNative('fill-texture'))) || (input.clip && input.base && kNative('clip')) || (input.orthosDir && input.lattice !== false && (kNative('lattice') || kNative('cut') || kNative('stitch') || kNative('fill-texture')))) await ensureRemeshPolishBinary();
+export async function ensureNativePolishFor(input: { infill?: boolean; seal?: boolean; lattice?: boolean; orthosDir?: string; clip?: boolean; base?: unknown; closure?: unknown }): Promise<void> {
+    // the inner core is native only
+    if (input.closure || ((input.infill || input.seal) && (kNative('infill') || kNative('fill-texture'))) || (input.clip && input.base && kNative('clip')) || (input.orthosDir && input.lattice !== false && (kNative('lattice') || kNative('cut') || kNative('stitch') || kNative('fill-texture')))) await ensureRemeshPolishBinary();
 }
 
 /** The wall grammar's native reading built before it runs: readWallGrammar runs synchronously and cannot compile. */
@@ -239,7 +243,7 @@ function frame(w: Writer, f: NativeLatticeFrame): Writer {
 function rects(w: Writer, rs: readonly Rect4[] | undefined): Writer { return w.u32(rs?.length ?? 0).f64s((rs ?? []).flatMap(r => [r[0], r[1], r[2], r[3]])); }
 
 /** One facade for the native lattice: latticeFacade's arguments, its photo and mask by file, and the repeat texture's windows in texels. */
-export interface NativeLatticeJob { f: NativeLatticeFrame; image: string; mask?: string; fitted?: readonly Rect4[]; bays?: readonly Rect4[]; recessM?: number; rectsPx?: readonly Rect4[] }
+export interface NativeLatticeJob { f: NativeLatticeFrame; image: string; mask?: string; /** The holes sent to the image model (facade-lattice.ts photoLattice reads them as uncovered). */ inpainted?: string; fitted?: readonly Rect4[]; bays?: readonly Rect4[]; recessM?: number; rectsPx?: readonly Rect4[] }
 /** One facade's native lattice (undefined: latticeFacade's undefined) and its repeat texture, when it drew any texel. */
 export interface NativeLatticeOut {
     /** The photo's size. */
@@ -247,19 +251,19 @@ export interface NativeLatticeOut {
     lattice?: {
         s: number[]; t: number[]; cells: number; measuredShare: number; depth: Float64Array; photoRecessCells?: number;
         strips: Array<[number, number, number, number]>; stripCells: number; structure?: { cells: Uint8Array; reliefM: number; reliefFrom: string; reason: string };
-        built: Uint8Array; windows: Uint8Array; cellU: number[]; cellV: number[]; positions: Float32Array; normals: Float32Array; uv: Float32Array; indices: Uint32Array;
+        built: Uint8Array; scanKept?: { cells: Uint8Array; count: number; areaM2: number; reliefM: number }; windows: Uint8Array; cellU: number[]; cellV: number[]; positions: Float32Array; normals: Float32Array; uv: Float32Array; indices: Uint32Array;
     };
     repeat?: { groups: number; windows: number; spandrels: number; texels: number; filled: number; edge: number; png: Buffer };
 }
 
 /** facade-lattice.ts's per-facade work natively: decoded, sampled from the scan (and the raw scan), latticed, rebuilt and retextured. */
 export function runNativeLattice(params: number[], opts: { photoRecess: boolean; whole: boolean }, soup: Float32Array, rawSoup: Float32Array | undefined, jobs: NativeLatticeJob[], threads: number): NativeLatticeOut[] {
-    const w = new Writer().magic('SBLF').u32(1).u32(params.length).f64s(params).u32((opts.photoRecess ? 1 : 0) | (opts.whole ? 2 : 0));
+    const w = new Writer().magic('SBLF').u32(3).u32(params.length).f64s(params).u32((opts.photoRecess ? 1 : 0) | (opts.whole ? 2 : 0));
     w.u32(soup.length).f32s(soup).u32(rawSoup ? 1 : 0).u32(rawSoup?.length ?? 0);
     if (rawSoup) w.f32s(rawSoup);
     w.u32(jobs.length);
     for (const j of jobs) {
-        frame(w, j.f).str(j.image).str(j.mask ?? '');
+        frame(w, j.f).str(j.image).str(j.mask ?? '').str(j.inpainted ?? '');
         rects(w, j.fitted).u32(j.bays ? 1 : 0);
         rects(w, j.bays).u32(j.recessM !== undefined ? 1 : 0).f64s([j.recessM !== undefined ? Number(j.recessM) : 0]);
         rects(w, j.rectsPx);
@@ -274,10 +278,12 @@ export function runNativeLattice(params: number[], opts: { photoRecess: boolean;
         const strips = Array.from({ length: r.u32() }, () => Array.from(r.f64s(4)) as [number, number, number, number]);
         const stripCells = r.i32();
         const structure = r.u32() ? { cells: r.u8s(n), reliefM: r.f64(), reliefFrom: r.str(), reason: r.str() } : undefined;
-        const built = r.u8s(n), windows = r.u8s(n), cellU = Array.from(r.f64s(s.length)), cellV = Array.from(r.f64s(t.length));
+        const built = r.u8s(n);
+        const scanKept = r.u32() ? { cells: r.u8s(n), count: r.i32(), areaM2: r.f64(), reliefM: r.f64() } : undefined;
+        const windows = r.u8s(n), cellU = Array.from(r.f64s(s.length)), cellV = Array.from(r.f64s(t.length));
         const positions = r.f32s(r.u32()), normals = r.f32s(r.u32()), uv = r.f32s(r.u32()), indices = r.u32s(r.u32());
         const repeat = r.u32() ? { groups: r.i32(), windows: r.i32(), spandrels: r.i32(), texels: r.f64(), filled: r.f64(), edge: r.f64(), png: Buffer.from(r.u8s(r.u32())) } : undefined;
-        return { width, height, lattice: { s, t, cells, measuredShare, depth, ...(hasPhotoRecess ? { photoRecessCells } : {}), strips, stripCells, ...(structure ? { structure } : {}), built, windows, cellU, cellV, positions, normals, uv, indices }, ...(repeat ? { repeat } : {}) };
+        return { width, height, lattice: { s, t, cells, measuredShare, depth, ...(hasPhotoRecess ? { photoRecessCells } : {}), strips, stripCells, ...(structure ? { structure } : {}), built, ...(scanKept ? { scanKept } : {}), windows, cellU, cellV, positions, normals, uv, indices }, ...(repeat ? { repeat } : {}) };
     });
     r.done('lattice');
     return out;
@@ -290,8 +296,8 @@ export interface NativeAuditFacade { f: NativeLatticeFrame; s: number[]; t: numb
  * facade-lattice.ts applyFacadeLattices' removals under its tear audit natively: per scan triangle (nine floats each, the
  * indexed primitives' in order) the facade claiming it (-1: kept), and what the audit found, restored and dropped.
  */
-export function runNativeLatticeAudit(params: number[], sameFacing: boolean, soup: Float32Array, facades: NativeAuditFacade[], threads: number): { claim: Int32Array; found: number; restored: number; left: number; obliqueLeft: number; oblique?: number; keptInFront: number; restoredInFront: number; dropped: number[] } {
-    const w = new Writer().magic('SBLA').u32(2).u32(params.length).f64s(params).u32(sameFacing ? 1 : 0).u32(soup.length).f32s(soup).u32(facades.length);
+export function runNativeLatticeAudit(params: number[], sameFacing: boolean, proudRemove: boolean, soup: Float32Array, facades: NativeAuditFacade[], threads: number): { claim: Int32Array; found: number; restored: number; left: number; obliqueLeft: number; oblique?: number; keptInFront: number; restoredInFront: number; dropped: number[]; /** The proud audit, in pixels per facade (facade-lattice.ts ProudReport). */ proud: { straight: number[]; oblique: number[]; straightAfter: number[]; obliqueAfter: number[]; removed: number; restored: number } } {
+    const w = new Writer().magic('SBLA').u32(3).u32(params.length).f64s(params).u32((sameFacing ? 1 : 0) | (proudRemove ? 0 : 2)).u32(soup.length).f32s(soup).u32(facades.length);
     for (const x of facades) {
         if (x.built.length !== (x.s.length - 1) * (x.t.length - 1)) throw new Error(`facade ${x.f.facadeId}: its built cells do not match its lattice`);
         frame(w, x.f).u32(x.s.length).f64s(x.s).u32(x.t.length).f64s(x.t).raw(x.built).u32(x.positions.length).f32s(x.positions).u32(x.indices.length).raw(new Uint8Array(x.indices.buffer, x.indices.byteOffset, x.indices.byteLength));
@@ -299,8 +305,12 @@ export function runNativeLatticeAudit(params: number[], sameFacing: boolean, sou
     const r = new Reader(runSync('lattice-audit', w.take(), threads));
     const claim = r.i32s(r.u32()), found = r.f64(), restored = r.f64(), left = r.f64(), obliqueLeft = r.f64(), hasOblique = r.u32(), oblique = r.f64(), keptInFront = r.f64(), restoredInFront = r.f64();
     const dropped = Array.from(r.i32s(r.u32()));
+    const proud = { removed: r.f64(), restored: r.f64(), straight: [] as number[], oblique: [] as number[], straightAfter: [] as number[], obliqueAfter: [] as number[] };
+    const nF = r.u32();
+    if (nF !== facades.length) throw new Error(`remesh_polish_native lattice-audit: the proud audit reports ${nF} facades, not ${facades.length}`);
+    for (let i = 0; i < nF; i++) { proud.straight.push(r.f64()); proud.oblique.push(r.f64()); proud.straightAfter.push(r.f64()); proud.obliqueAfter.push(r.f64()); }
     r.done('lattice-audit');
-    return { claim, found, restored, left, obliqueLeft, ...(hasOblique ? { oblique } : {}), keptInFront, restoredInFront, dropped };
+    return { claim, found, restored, left, obliqueLeft, ...(hasOblique ? { oblique } : {}), keptInFront, restoredInFront, dropped, proud };
 }
 
 // ------------------------------------------------------------------------------------------------ the wall grammar
@@ -392,6 +402,24 @@ export function runNativeClip(marginM: number, loops: Vec2[][], lines: Array<{ a
     return { report, prims: out };
 }
 
+/** A constrained Delaunay triangulation (scratchbox_cdt.hpp through `cdt`): directed segments, a fill rule, optional refinement. */
+export function runNativeCdt(points: ReadonlyArray<readonly [number, number]>, segments: ReadonlyArray<readonly [number, number]>, opts: { fill?: 'even-odd' | 'non-zero' | 'positive'; refine?: boolean; minAngleDeg?: number; maxArea?: number; splitSegments?: boolean } = {}): { report: Record<string, number>; points: Array<[number, number]>; tris: Array<[number, number, number]>; winding: number[] } {
+    const fill = opts.fill === 'non-zero' ? 1 : opts.fill === 'positive' ? 2 : 0;
+    const w = new Writer().magic('SBDT').u32(1).u32(fill).u32(opts.refine ? 1 : 0).f64s([opts.minAngleDeg ?? 20, opts.maxArea ?? 0]).u32(opts.splitSegments === false ? 0 : 1);
+    w.u32(points.length).f64s(points.flatMap(p => [p[0], p[1]])).u32(segments.length);
+    const sb = Buffer.alloc(segments.length * 8);
+    segments.forEach((sg, i) => { sb.writeInt32LE(sg[0], i * 8); sb.writeInt32LE(sg[1], i * 8 + 4); });
+    w.raw(sb);
+    const r = new Reader(runSync('cdt', w.take(), 1));
+    const report = JSON.parse(r.str()) as Record<string, number>;
+    const pts = Array.from({ length: r.u32() }, () => [r.f64(), r.f64()] as [number, number]);
+    const n = r.u32();
+    const tris = Array.from({ length: n }, () => [r.i32(), r.i32(), r.i32()] as [number, number, number]);
+    const winding = Array.from({ length: n }, () => r.i32());
+    r.done('cdt');
+    return { report, points: pts, tris, winding };
+}
+
 // ------------------------------------------------------------------------------------------------ the stitch
 
 /** A rebuilt facade for the native stitch: its frame, lattice lines, rebuilt cells and their depths, row by row. */
@@ -480,4 +508,22 @@ export function runNativeFillTexture(params: number[], walls: NativeWallMap[], p
     });
     r.done('fill-texture');
     return { textured: true, repeatOrder, parts };
+}
+
+// ------------------------------------------------------------------------------------------------ the inner core
+
+/** pipeline-k/inner-core.ts's solid natively (scratchbox_inner_core.hpp): its report, closed surface and each triangle's photo source. */
+export function runNativeInnerCore(params: number[], soup: Float32Array, kind: Uint8Array, footprint: Vec2[][], groundY: number | undefined, regions: Array<{ c: number[]; r: number }>, threads: number, queries?: { points: ArrayLike<number>; only: boolean }): { report: Record<string, unknown>; positions: Float64Array; indices: Uint32Array; source: Int32Array; route: Uint8Array; winding: Float64Array } {
+    const w = new Writer().magic('SBIC').u32(1).u32(params.length).f64s(params).u32(soup.length).f32s(soup).raw(kind).u32(footprint.length);
+    for (const loop of footprint) w.u32(loop.length).f64s(loop.flatMap(p => [p[0], p[1]]));
+    w.f64s([groundY ?? Number.NaN]).u32(regions.length).f64s(regions.flatMap(g => [g.c[0], g.c[1], g.c[2], g.r]));
+    w.u32(queries?.only ? 1 : 0).u32((queries?.points.length ?? 0) / 3).f64s(queries?.points ?? []);
+    const r = new Reader(runSync('inner-core', w.take(), threads));
+    const report = JSON.parse(r.str()) as Record<string, unknown>;
+    const positions = r.f64s(r.u32()), indices = r.u32s(r.u32());
+    const n = indices.length / 3, source = new Int32Array(n), route = new Uint8Array(n);
+    for (let t = 0; t < n; t++) { source[t] = r.i32(); route[t] = r.u8s(1)[0]; }
+    const winding = r.f64s(r.u32());
+    r.done('inner-core');
+    return { report, positions, indices, source, route, winding };
 }

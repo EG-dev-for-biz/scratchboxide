@@ -32,7 +32,6 @@
  * pitch says should look the same). Source `'texture-repeat-inference'`.
  */
 
-import type { Vec3 } from '../../../common/spatial/staged-location-contracts';
 import {
     packConfidenceTexel, unpackConfidenceTexel, type BakedTexturePlanes, type TexelProvenance, type TexturePassDegradation, type UvAtlas
 } from '../../../common/spatial/texture-pass-contracts';
@@ -63,7 +62,7 @@ export const MIN_DONORS = 2;
 /**
  * How many pitch periods out from a texel donors are searched for, each axis: the starting radius, fast for the
  * common case (real evidence fairly evenly spread). When that radius does not find MIN_DONORS, the search doubles
- * (findDonors) up to MAX_DONOR_SEARCH_PERIODS rather than giving up — a plane whose real evidence is unevenly spread
+ * (fillPlaneFromRepeats) up to MAX_DONOR_SEARCH_PERIODS rather than giving up — a plane whose real evidence is unevenly spread
  * (dense near a supertall's base and street-level facades, sparse toward its crown, say) still gets a repeat fill in
  * its sparser regions instead of silently falling through to the flat palette rung at a radius sized for an ordinary
  * building's more even coverage.
@@ -232,38 +231,126 @@ export function detectPlaneRepeats(atlas: UvAtlas, planes: BakedTexturePlanes): 
     return out;
 }
 
-/** Trimmed-mean linear RGB of `samples` (each a texel index into `albedo`). */
-function trimmedLinearRgb(albedo: Uint8Array, samples: number[]): Vec3 {
-    const chans: [number[], number[], number[]] = [[], [], []];
-    for (const i of samples) for (let c = 0; c < 3; c++) chans[c].push(SRGB8_TO_LINEAR[albedo[i * 4 + c]]);
-    return chans.map(v => trimmedStats(v).mean) as Vec3;
+/**
+ * trimmedStats(values).mean over one channel's donors, from a byte histogram `hist` (offset `at`, 256 bins) of `n`
+ * donors instead of a sorted copy: SRGB8_TO_LINEAR rises with the byte, so walking the bins upward visits the values in
+ * sorted order, and adding them one at a time over the kept range repeats the sorted reduce's additions exactly (same
+ * mean to the last bit). Empties the bins it reads, ready for the next window.
+ */
+function histogramTrimmedMean(hist: Uint32Array, at: number, n: number): number {
+    const drop = Math.floor(n * TRIM);
+    let lo = drop, hi = n - drop || n; // sorted.slice(drop, n - drop || undefined)
+    if (hi <= lo) { lo = 0; hi = n; } // kept empty: the whole sorted list
+    let sum = 0, pos = 0;
+    for (let k = 0; k < 256; k++) {
+        let count = hist[at + k];
+        if (!count) continue;
+        hist[at + k] = 0;
+        const v = SRGB8_TO_LINEAR[k];
+        for (; count > 0; count--, pos++) if (pos >= lo && pos < hi) sum += v;
+    }
+    return sum / (hi - lo);
 }
 
 /**
- * Donor texels for texel (x, y) on plane `d`'s matching phase, searched at DONOR_SEARCH_PERIODS periods either way
- * first (fast, the common case); when that radius does not find MIN_DONORS, the radius doubles up to
- * MAX_DONOR_SEARCH_PERIODS before giving up. Keeps the fast path fast while still reaching across a plane whose real
- * evidence is unevenly spread (see DONOR_SEARCH_PERIODS's comment).
+ * The donor search for every texel of plane `d` the real rungs left uncovered. A texel's donors are the real texels on
+ * its plane at its phase ((x - x0) mod the column pitch, (y - y0) mod the row pitch; an axis without a pitch keeps the
+ * texel's own column or row) within `periods` pitches either way: DONOR_SEARCH_PERIODS first, doubling up to
+ * MAX_DONOR_SEARCH_PERIODS until MIN_DONORS are found (see DONOR_SEARCH_PERIODS's comment). Each phase's texels form a
+ * lattice, one cell a pitch; a summed-area table over the lattice's real cells counts any window's donors in constant
+ * time, so the radius is chosen without gathering, a texel with too few donors even at the widest radius costs a few
+ * lookups, and texels whose windows clip to the same cells (all of a phase's, once the window spans the plane) share one
+ * trimmed mean. Same donors, same mean, same bytes as gathering each texel's window afresh, which built new arrays per
+ * texel and radius and ran for over 80 minutes on one district's facades at Penn Station
+ * (packages/core/test/texture-repeat-donor-index.test.ts keeps that search as its oracle). Calls `write` per filled
+ * texel with its trimmed-mean sRGB and donor count; returns how many texels were considered.
  */
-function findDonors(atlas: UvAtlas, base: BakedTexturePlanes, d: PlaneRepeatDetection, x: number, y: number, rowPitch: AxisPitch | undefined, colPitch: AxisPitch | undefined): number[] {
+function fillPlaneFromRepeats(
+    atlas: UvAtlas, base: BakedTexturePlanes, d: PlaneRepeatDetection, rowPitch: AxisPitch | undefined, colPitch: AxisPitch | undefined,
+    write: (i: number, r: number, g: number, b: number, donors: number) => void
+): number {
     const { x0, y0, x1, y1 } = d.bbox;
-    for (let periods = DONOR_SEARCH_PERIODS; ; periods = Math.min(MAX_DONOR_SEARCH_PERIODS, periods * 2)) {
-        const xRange = colPitch ? Array.from({ length: 2 * periods + 1 }, (_, k) => x + (k - periods) * colPitch.pitchPx).filter(v => v >= x0 && v <= x1) : [x];
-        const yRange = rowPitch ? Array.from({ length: 2 * periods + 1 }, (_, k) => y + (k - periods) * rowPitch.pitchPx).filter(v => v >= y0 && v <= y1) : [y];
-        const donors: number[] = [];
-        for (const yy of yRange) for (const xx of xRange) {
-            if (xx === x && yy === y) continue;
-            const j = yy * atlas.width + xx;
-            if (atlas.texels.mapIndex[j] === d.mapIndex && isReal(atlas, base, j)) donors.push(j);
+    const W = atlas.width, bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+    // an axis without a pitch: a pitch the plane's whole extent, so each column (row) is its own phase of one cell
+    const px = colPitch ? colPitch.pitchPx : bw, py = rowPitch ? rowPitch.pitchPx : bh;
+    // per bbox texel: 1 a donor (real, on this plane), 2 a target (on this plane, covered, nothing written yet), else 0
+    const role = new Uint8Array(bw * bh);
+    let targets = 0;
+    for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+            const i = y * W + x;
+            if (atlas.texels.mapIndex[i] !== d.mapIndex) continue;
+            if (isReal(atlas, base, i)) role[(y - y0) * bw + x - x0] = 1;
+            else if (atlas.texels.covered[i] && !atlas.texels.gutter[i] && !base.albedo[i * 4 + 3]) { role[(y - y0) * bw + x - x0] = 2; targets++; }
         }
-        if (donors.length >= MIN_DONORS || periods >= MAX_DONOR_SEARCH_PERIODS) return donors;
     }
+    if (!targets) return 0;
+    const naMax = Math.ceil(bw / px), nbMax = Math.ceil(bh / py);
+    const sat = new Int32Array((naMax + 1) * (nbMax + 1));
+    const hist = new Uint32Array(256 * 3);
+    const shared = new Map<number, number>();
+    let considered = 0;
+    for (let phy = 0; phy < Math.min(py, bh); phy++) {
+        for (let phx = 0; phx < Math.min(px, bw); phx++) {
+            const na = Math.floor((bw - 1 - phx) / px) + 1, nb = Math.floor((bh - 1 - phy) / py) + 1, stride = na + 1;
+            // cell (a, b) is bbox texel (phx + a px, phy + b py); sat[(b + 1) stride + a + 1] = donors in cells [0, a] x [0, b]
+            let classTargets = 0;
+            sat.fill(0, 0, stride);
+            for (let b = 0; b < nb; b++) {
+                sat[(b + 1) * stride] = 0;
+                let row = 0;
+                for (let a = 0; a < na; a++) {
+                    const r = role[(phy + b * py) * bw + phx + a * px];
+                    if (r === 1) row++;
+                    else if (r === 2) classTargets++;
+                    sat[(b + 1) * stride + a + 1] = sat[b * stride + a + 1] + row;
+                }
+            }
+            if (!classTargets) continue;
+            const donorsIn = (aLo: number, aHi: number, bLo: number, bHi: number) =>
+                sat[(bHi + 1) * stride + aHi + 1] - sat[bLo * stride + aHi + 1] - sat[(bHi + 1) * stride + aLo] + sat[bLo * stride + aLo];
+            shared.clear();
+            for (let b = 0; b < nb; b++) {
+                for (let a = 0; a < na; a++) {
+                    if (role[(phy + b * py) * bw + phx + a * px] !== 2) continue;
+                    considered++;
+                    let aLo = 0, aHi = 0, bLo = 0, bHi = 0, donors = 0;
+                    for (let periods = DONOR_SEARCH_PERIODS; ; periods = Math.min(MAX_DONOR_SEARCH_PERIODS, periods * 2)) {
+                        aLo = Math.max(0, a - periods); aHi = Math.min(na - 1, a + periods);
+                        bLo = Math.max(0, b - periods); bHi = Math.min(nb - 1, b + periods);
+                        donors = donorsIn(aLo, aHi, bLo, bHi);
+                        if (donors >= MIN_DONORS || periods >= MAX_DONOR_SEARCH_PERIODS) break;
+                    }
+                    if (donors < MIN_DONORS) continue;
+                    const key = ((aLo * na + aHi) * nb + bLo) * nb + bHi;
+                    let rgb = shared.get(key);
+                    if (rgb === undefined) {
+                        for (let bb = bLo; bb <= bHi; bb++) {
+                            if (!donorsIn(aLo, aHi, bb, bb)) continue;
+                            const ty = phy + bb * py;
+                            for (let aa = aLo; aa <= aHi; aa++) {
+                                const tx = phx + aa * px;
+                                if (role[ty * bw + tx] !== 1) continue;
+                                const o = ((y0 + ty) * W + x0 + tx) * 4;
+                                hist[base.albedo[o]]++; hist[256 + base.albedo[o + 1]]++; hist[512 + base.albedo[o + 2]]++;
+                            }
+                        }
+                        rgb = 0;
+                        for (let c = 0; c < 3; c++) rgb += Math.round(linearToSrgb255(histogramTrimmedMean(hist, c * 256, donors))) << (8 * c);
+                        shared.set(key, rgb);
+                    }
+                    write((y0 + phy + b * py) * W + x0 + phx + a * px, rgb & 255, (rgb >> 8) & 255, (rgb >> 16) & 255, donors);
+                }
+            }
+        }
+    }
+    return considered;
 }
 
 /**
  * Fills same-plane texels the real rungs left uncovered, by resampling real texels at the detected pitch(es): a
  * trimmed average of every real texel at the same phase (same `(x - x0) mod pitchPx`, and/or `(y - y0) mod pitchPx`),
- * found by findDonors. Chosen over a single nearest-phase sample so one occluded or noisy repeat cannot dominate the
+ * found by fillPlaneFromRepeats. Chosen over a single nearest-phase sample so one occluded or noisy repeat cannot dominate the
  * fill; chosen over averaging every phase (which would blur the pattern away) because only the matching phase is
  * averaged. A texel with fewer than MIN_DONORS real samples at its phase even at the widest search radius is left
  * uncovered, same as before (it falls through to the palette rung).
@@ -284,26 +371,16 @@ export function repeatFill(atlas: UvAtlas, base: BakedTexturePlanes, detections:
             });
             continue;
         }
-        const { x0, y0, x1, y1 } = d.bbox;
         const confAt = rowPitch ? rowPitch.confidence : 0;
         const confBt = colPitch ? colPitch.confidence : 0;
         const confidence01 = rowPitch && colPitch ? Math.min(0.85, Math.max(confAt, confBt)) : (rowPitch ? confAt : confBt);
-        for (let y = y0; y <= y1; y++) {
-            for (let x = x0; x <= x1; x++) {
-                const i = y * atlas.width + x;
-                if (atlas.texels.mapIndex[i] !== d.mapIndex || !atlas.texels.covered[i] || atlas.texels.gutter[i]) continue;
-                if (base.albedo[i * 4 + 3]) continue; // already covered by a real or better rung
-                considered++;
-                const donors = findDonors(atlas, base, d, x, y, rowPitch, colPitch);
-                if (donors.length < MIN_DONORS) continue;
-                const rgbLinear = trimmedLinearRgb(base.albedo, donors);
-                const srgb = rgbLinear.map(v => Math.round(linearToSrgb255(v)));
-                albedo.set([srgb[0], srgb[1], srgb[2], 255], i * 4);
-                const weight = Math.min(0.85, confidence01 * Math.min(1, donors.length / (2 * MIN_DONORS)));
-                packConfidenceTexel(confidence, i, 0, weight, rungIndex);
-                filled++;
-            }
-        }
+        // a texel already covered by a real or better rung is not a target; one with fewer than MIN_DONORS is not written
+        considered += fillPlaneFromRepeats(atlas, base, d, rowPitch, colPitch, (i, r, g, b, donors) => {
+            albedo[i * 4] = r; albedo[i * 4 + 1] = g; albedo[i * 4 + 2] = b; albedo[i * 4 + 3] = 255;
+            const weight = Math.min(0.85, confidence01 * Math.min(1, donors / (2 * MIN_DONORS)));
+            packConfidenceTexel(confidence, i, 0, weight, rungIndex);
+            filled++;
+        });
     }
     const provenance: TexelProvenance[] = filled ? [{
         source: 'texture-repeat-inference', label: 'inferred-repeat',

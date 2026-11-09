@@ -27,6 +27,7 @@ import * as path from 'path';
 import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
 import { NativePythonRunnerService } from './native-python-runner-service';
 import { ESTIMATED_SIZES_FILE, type EstimatedSizes } from './texture-library-sizes';
+import { withHeightDepth, loadLibraryHeights } from './texture-library-heights';
 import type { TextureLibraryColour, TextureLibraryEntry, TextureLibraryIndex } from '../../common/spatial/texture-library-index';
 
 export interface LibrarySetMaps {
@@ -37,6 +38,8 @@ export interface LibrarySetMaps {
     metalness?: string;
     /** Poly Haven's packed map: R occlusion, G roughness, B metalness. */
     arm?: string;
+    /** The height (displacement) map; fetched only when asked for (fetchLibrarySets `height`). */
+    height?: string;
 }
 
 export interface LibrarySet {
@@ -63,14 +66,15 @@ const ROLE_PATTERNS: ReadonlyArray<{ role: keyof LibrarySetMaps; pattern: RegExp
     { role: 'roughness', pattern: /_(Roughness|rough)[_.]/i },
     { role: 'ao', pattern: /_(AmbientOcclusion|ao)[_.]/i },
     { role: 'metalness', pattern: /_(Metalness|metal)[_.]/i },
-    { role: 'arm', pattern: /_arm[_.]/i }
+    { role: 'arm', pattern: /_arm[_.]/i },
+    { role: 'height', pattern: /_(Displacement|disp|height)[_.]/i }
 ];
 const CATALOG_TTL_MS = 7 * 24 * 3600 * 1000;
 
 let indexCache: { file: string; mtimeMs: number; index: TextureLibraryIndex } | undefined;
 
 /** One set's statistics, measured by the engine on its publisher's preview maps, cached under build/texture-library/stats/. */
-interface MeasuredStats {
+export interface MeasuredStats {
     colour?: TextureLibraryColour;
     roughnessMean?: number;
     roughnessSpread?: number;
@@ -91,7 +95,51 @@ interface MeasuredStats {
 const STATS_VERSION = 2;
 
 const statsDir = (repoRoot: string) => path.join(repoRoot, 'build', 'texture-library', 'stats');
+
+/**
+ * Whether a checkout's own measured statistics (statsDir) are read and written. Off in a build: every checkout ranks the
+ * library from the committed bundle alone, so one scan and one answer store give the same shortlists, picks and bytes in
+ * every worktree (found 2026-11-08: the main checkout's 2,451 local files overrode the bundle while a worktree with none
+ * ranked from the bundle). `SCRATCHBOX_LIBRARY_LOCAL_STATS=1` turns them on for the maintainer's `npm run library:stats`,
+ * which measures sets locally and then writes the bundle they are committed in.
+ */
+export const localLibraryStatsAllowed = (): boolean => process.env.SCRATCHBOX_LIBRARY_LOCAL_STATS?.trim() === '1';
 const statsFile = (repoRoot: string, id: string) => path.join(statsDir(repoRoot), `${id}.json`);
+
+/**
+ * Every set's measured statistics, committed beside the index (scripts/bundle_texture_library_stats.ts, `npm run
+ * library:stats`), so a fresh checkout, worktree or cloud job ranks the library at once instead of measuring it inside a
+ * build. Only entries at the current STATS_VERSION (or a failure) are kept; a set's own file under statsDir wins over it.
+ */
+export const LIBRARY_STATS_BUNDLE = 'stats.json';
+export interface LibraryStatsBundle { version: number; sets: Record<string, MeasuredStats> }
+let bundleCache: { file: string; mtimeMs: number; sets: Map<string, MeasuredStats> } | undefined;
+function bundledStats(repoRoot: string): Map<string, MeasuredStats> {
+    const file = path.join(repoRoot, 'assets', 'textures', 'library', LIBRARY_STATS_BUNDLE);
+    let mtimeMs: number;
+    try { mtimeMs = fs.statSync(file).mtimeMs; } catch { return new Map(); }
+    if (bundleCache?.file !== file || bundleCache.mtimeMs !== mtimeMs) {
+        let sets = new Map<string, MeasuredStats>();
+        try {
+            const doc = JSON.parse(fs.readFileSync(file, 'utf8')) as LibraryStatsBundle;
+            if (doc.version === STATS_VERSION) sets = new Map(Object.entries(doc.sets).filter(([, st]) => !!st.error || st.version === STATS_VERSION));
+        } catch { /* an unreadable bundle is no bundle */ }
+        bundleCache = { file, mtimeMs, sets };
+    }
+    return bundleCache.sets;
+}
+
+/** The statistics of every set measured here (statsDir), at the current STATS_VERSION or failed: what the bundle is written from. */
+export function measuredLibraryStats(repoRoot: string): LibraryStatsBundle {
+    const sets: Record<string, MeasuredStats> = {};
+    let files: string[] = [];
+    try { files = fs.readdirSync(statsDir(repoRoot)).filter(f => f.endsWith('.json')).sort(); } catch { /* nothing measured */ }
+    for (const f of files) {
+        try { const st = JSON.parse(fs.readFileSync(path.join(statsDir(repoRoot), f), 'utf8')) as MeasuredStats; if (st.error || st.version === STATS_VERSION) sets[f.slice(0, -5)] = st; } catch { /* a half-written file */ }
+    }
+    for (const [id, st] of bundledStats(repoRoot)) if (!sets[id]) sets[id] = st;
+    return { version: STATS_VERSION, sets: Object.fromEntries(Object.entries(sets).sort(([a], [b]) => a.localeCompare(b))) };
+}
 
 /** Where the measured statistics are kept, one file a set: a cloud chunk job is handed them (cloud-chunk-runner.ts). */
 export function textureLibraryStatsDir(repoRoot: string): string {
@@ -135,14 +183,17 @@ export function loadTextureLibraryIndex(repoRoot: string): TextureLibraryIndex |
     try { mtimeMs = fs.statSync(file).mtimeMs; } catch { return undefined; }
     if (indexCache?.file !== file || indexCache.mtimeMs !== mtimeMs) indexCache = { file, mtimeMs, index: JSON.parse(fs.readFileSync(file, 'utf8')) as TextureLibraryIndex };
     let measured: string[] = [];
-    try { measured = fs.readdirSync(statsDir(repoRoot)).filter(f => f.endsWith('.json')); } catch { /* nothing measured yet */ }
+    if (localLibraryStatsAllowed()) { try { measured = fs.readdirSync(statsDir(repoRoot)).filter(f => f.endsWith('.json')); } catch { /* nothing measured yet */ } }
     const estimates = estimatedSizes(path.join(path.dirname(file), ESTIMATED_SIZES_FILE));
-    if (!measured.length && !estimates) return indexCache.index;
-    const stats = new Map<string, MeasuredStats>();
+    const bundled = bundledStats(repoRoot);
+    const heights = loadLibraryHeights(repoRoot);
+    if (!measured.length && !estimates && !bundled.size && !heights) return indexCache.index;
+    // the committed bundle first, each set's own file over it
+    const stats = new Map<string, MeasuredStats>(bundled);
     for (const f of measured) {
         try { stats.set(f.slice(0, -5), JSON.parse(fs.readFileSync(path.join(statsDir(repoRoot), f), 'utf8')) as MeasuredStats); } catch { /* a half-written file: measured again when needed */ }
     }
-    return { ...indexCache.index, sets: indexCache.index.sets.map(e => withEstimatedSize(withStats(e, stats.get(e.id)), estimates)) };
+    return { ...indexCache.index, sets: indexCache.index.sets.map(e => withHeightDepth(withEstimatedSize(withStats(e, stats.get(e.id)), estimates), heights)) };
 }
 
 let sizesCache: { file: string; mtimeMs: number; doc: EstimatedSizes } | undefined;
@@ -190,7 +241,8 @@ async function polyHavenPreviews(id: string, signal?: AbortSignal): Promise<NonN
         // the packed map carries the metalness (its blue channel); a separate roughness map, when listed, overrides its green
         ...(jpg('arm') ? { arm: jpg('arm') } : {}),
         ...(jpg('Rough') ? { roughness: jpg('Rough') } : {}),
-        ...(jpg('Metal') ? { metalness: jpg('Metal') } : {})
+        ...(jpg('Metal') ? { metalness: jpg('Metal') } : {}),
+        ...(jpg('Displacement') ? { height: jpg('Displacement') } : {})
     };
 }
 
@@ -199,12 +251,18 @@ async function polyHavenPreviews(id: string, signal?: AbortSignal): Promise<NonN
  * measures a set's texture from (pipeline-k/material-harvest.ts). Undefined when the publisher lists none.
  */
 export async function libraryColourPreview(entry: TextureLibraryEntry, repoRoot: string, signal?: AbortSignal): Promise<Uint8Array | undefined> {
+    return libraryPreview(entry, 'color', repoRoot, signal);
+}
+
+/** A set's preview map of one role (its publisher's 1K JPEG), cached under build/texture-library/previews; undefined when the publisher lists none. */
+export async function libraryPreview(entry: TextureLibraryEntry, role: 'color' | 'normal' | 'height', repoRoot: string, signal?: AbortSignal): Promise<Uint8Array | undefined> {
     const dir = path.join(repoRoot, 'build', 'texture-library', 'previews');
-    const file = path.join(dir, `${entry.id}.jpg`);
+    const file = path.join(dir, role === 'color' ? `${entry.id}.jpg` : `${entry.id}_${role}.jpg`);
     if (fs.existsSync(file)) return fs.readFileSync(file);
-    const previews = entry.previews?.color ? entry.previews : entry.publisher === 'Poly Haven' ? await polyHavenPreviews(entry.id, signal) : {};
-    if (!previews.color) return undefined;
-    const r = await fetchRetry(previews.color, signal);
+    const previews = entry.previews?.[role] ? entry.previews : entry.publisher === 'Poly Haven' ? await polyHavenPreviews(entry.id, signal) : {};
+    const url = previews[role];
+    if (!url) return undefined;
+    const r = await fetchRetry(url, signal);
     if (!r.ok) return undefined;
     const bytes = new Uint8Array(await r.arrayBuffer());
     fs.mkdirSync(dir, { recursive: true });
@@ -214,7 +272,8 @@ export async function libraryColourPreview(entry: TextureLibraryEntry, repoRoot:
 
 /** Whether a set has been measured at the current STATS_VERSION, or failed to be (a failure is not retried). */
 export function libraryEntryMeasured(repoRoot: string, id: string): boolean {
-    try { const st = JSON.parse(fs.readFileSync(statsFile(repoRoot, id), 'utf8')) as MeasuredStats; return !!st.error || st.version === STATS_VERSION; } catch { return false; }
+    if (localLibraryStatsAllowed()) { try { const st = JSON.parse(fs.readFileSync(statsFile(repoRoot, id), 'utf8')) as MeasuredStats; if (st.error || st.version === STATS_VERSION) return true; } catch { /* not measured here */ } }
+    return bundledStats(repoRoot).has(id);
 }
 
 /**
@@ -229,6 +288,8 @@ export async function measureLibraryEntries(entries: TextureLibraryEntry[], opts
     const todo = entries.filter(e => !libraryEntryMeasured(opts.repoRoot, e.id));
     const failed: Array<{ id: string; reason: string }> = [];
     if (!todo.length) return { measured: [], failed };
+    // a build measures nothing into the checkout (localLibraryStatsAllowed): the sets the bundle lacks are left out and reported
+    if (!localLibraryStatsAllowed()) return { measured: [], failed: todo.map(e => ({ id: e.id, reason: 'not in the committed statistics bundle; builds do not measure sets locally (SCRATCHBOX_LIBRARY_LOCAL_STATS=1 for npm run library:stats)' })) };
     const work = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-library-previews-'));
     const jobs: Array<{ id: string; publisher: string; color: string; normal?: string; roughness?: string; metalness?: string; arm?: string }> = [];
     let next = 0;
@@ -314,7 +375,7 @@ export function libraryBucket(): string {
     return process.env.GCS_TEXTURE_BUCKET || 'scratchbox-library-training-textures';
 }
 
-/** The role a library file plays, or undefined for files a GLB material does not use (displacement, DX normals, previews,
+/** The role a library file plays, or undefined for files the app does not use (DX normals, previews,
  * .blend/.usdc/.mtlx, half-uploaded `.part` maps). */
 export function mapRole(objectName: string): keyof LibrarySetMaps | undefined {
     if (!/\.(png|jpe?g)$/i.test(objectName)) return undefined;
@@ -357,7 +418,7 @@ async function loadCatalog(storage: ReturnType<GoogleMediaCredentialsService['cr
 }
 
 /** Fetches the named sets' maps into `cacheDir` (default build/texture-library under `repoRoot`). */
-export async function fetchLibrarySets(names: string[], opts: { repoRoot: string; cacheDir?: string; signal?: AbortSignal; progress?: (m: string) => void }): Promise<LibraryFetch> {
+export async function fetchLibrarySets(names: string[], opts: { repoRoot: string; cacheDir?: string; signal?: AbortSignal; progress?: (m: string) => void; /** Also fetch each set's height map (a GLB material has no slot for it: only the callers that draw relief ask). */ height?: boolean }): Promise<LibraryFetch> {
     const bucket = libraryBucket();
     const cacheDir = opts.cacheDir ?? path.join(opts.repoRoot, 'build', 'texture-library');
     const storage = new GoogleMediaCredentialsService().createStorageClient();
@@ -378,6 +439,7 @@ export async function fetchLibrarySets(names: string[], opts: { repoRoot: string
         for (const f of files) {
             const role = mapRole(f.name);
             const size = Number(f.metadata.size ?? 0);
+            if (role === 'height' && !opts.height) continue;
             if (role && (!chosen.has(role) || size < chosen.get(role)!.size)) chosen.set(role, { name: f.name, size });
         }
         if (!chosen.has('color')) {

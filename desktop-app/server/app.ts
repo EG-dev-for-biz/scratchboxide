@@ -70,11 +70,15 @@ import { createWorkspaceRouter, createGitRouter } from './routes/workspaceRoutes
 import { createCppRouter } from './routes/cppRoutes';
 import { createVirtualGeometryRouter } from './routes/virtualGeometryRoutes';
 import { createPathTraceRouter } from './routes/pathTraceRoutes';
+import { createMapDataRouter } from './routes/mapDataRoutes';
+import { createSkyRouter } from './routes/skyRoutes';
 import { createTileRefineRouter } from './routes/tileRefineRoutes';
+import { createWindowCheckRouter } from './routes/windowCheckRoutes';
 import { createTextureRouter } from './routes/textureRoutes';
 import { createMediaRouter, createVideoRouter } from './routes/mediaVideoRoutes';
 import { createWorldRouter } from './routes/worldRoutes';
 import { createColorMatchRouter } from './routes/colorMatchRoutes';
+import { createViewportBeautifyRouter } from './routes/viewportBeautifyRoutes';
 import {
     createTileCleanupRouter,
     createPbrRouter,
@@ -698,8 +702,11 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/3d', cppRouter);
     app.use('/compiler', cppRouter);
     app.use('/3d/tiles', createTileRefineRouter(routeContext));
+    app.use('/3d/window-check', createWindowCheckRouter(routeContext));
     app.use('/3d/virtual-geometry', createVirtualGeometryRouter(getVirtualGeometryBuildService(), routeContext));
     app.use('/3d/path-trace', createPathTraceRouter(new MetalPathTracerService(), routeContext));
+    app.use('/api/map-data', createMapDataRouter(routeContext));
+    app.use('/api/sky', createSkyRouter(routeContext));
 
     // 5. Media & Video Compositor Endpoints
     const mediaRouter = createMediaRouter({
@@ -758,6 +765,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/api/3d/ar', createArRouter());
     app.use('/api/geo', createGeoRouter());
     app.use('/api/color-match', createColorMatchRouter());
+    app.use('/api/viewport-beautify', createViewportBeautifyRouter({ mediaService: mediaGenerator, assetStore: mediaAssets }, routeContext));
     app.use('/api/worlds', createWorldRouter());
     app.use('/api/panorama', createPanoramaRouter(mediaCredentials));
     app.use('/api/3d-engine/splat-studio', createSplatStudioRouter());
