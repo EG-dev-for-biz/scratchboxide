@@ -33,6 +33,38 @@ all at once on Cloud Run. The parent build also ran in Cloud Run (`kd-district-d
 buildings; a building task pays all of it for one building. So **a task per building does not get a district under the
 slowest cell**: the time is model calls and texture preparation, not CPU, and more machines do not shorten it.
 
+## Band A measured (2026-11-09, run `be77c251`, `SCRATCHBOX_KD_BAND=shown`)
+
+Same place, same radius, fresh, 8 vCPU / 32 GiB, the parent in Cloud Run:
+
+| | Full band (`b3b2e8c3`) | Shown band (`be77c251`) |
+| --- | ---: | ---: |
+| District complete, end to end | 27.1 min | **6.5 min** (392 s) |
+| Building tasks | 10.8–21.2 min | 2.0–4.4 min |
+| Ground cells | 1.4–6.9 min | 2.4–3.4 min |
+| Compute | $5.33 | $1.31 |
+| Model calls / cost | 5,639 / $9.13 | 0 / $0 |
+| 429s (logged retries) | 0 | 0 |
+
+The full band's 156 failed model calls were deadlines on the slower fallback models (often hedged duplicates), not quota.
+Timing sheet: `docs/screenshots/kd-cloud-timing-sheet.png` (gitignored; sent with the report).
+
+**Where the 6.5 minutes go:** the last chunk lands at 290 s; the parent then reads the seam colours (8 s), closes the
+seams chunk by chunk (50 s), audits every layer (25 s) and writes overlaps and the place store (17 s), all after the last
+chunk. The slowest task (the Penn 2 block, 263 s in the cloud) is 189 s of build (K 49 s, twin 35 s, polish 29 s, window
+fit 26 s, window array 12 s) and 74 s of start, cut and upload; every shown task carries 70–80 s of that overhead.
+
+**What still blocks 3 minutes, ranked by estimated saving:**
+1. *The parent's tail* (−90 s): close each chunk's seams as it lands (the order can follow arrival), audit after the
+   district is shown, write the place store in the background.
+2. *Task overhead* (−40 to −50 s a task): compiled JavaScript in the image (ts-node ~15 s), the image kept warm (a new
+   image's first import took 33 s), outcome polled every 2 s instead of 10 s, layers uploaded as each stage commits.
+3. *The longest building* (−60 to −90 s): the Penn 2 block's K and polish run single-threaded per facade group; split a
+   block-sized building's facades across the task's 8 cores, or show its scan first and swap its straightened facades in.
+4. *Cells* (−30 s): cells at 141–202 s keep building facades that are cut away; skip remesh work inside footprints.
+
+With 1 and 2 the shown band at Penn 150 m is about 4.5 min; with all four, about 3 min.
+
 ## The design
 
 ### 1. Known places open from the store (seconds)
