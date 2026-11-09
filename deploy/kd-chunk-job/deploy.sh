@@ -19,6 +19,11 @@ set -euo pipefail
 #                                         is ready; a name that exists is kept (the runner's SCRATCHBOX_KD_CLOUD_VMS names
 #                                         them as name@zone, SCRATCHBOX_KD_FAST_CHUNKS sets how many chunks go there)
 #   deploy/kd-chunk-job/deploy.sh vms-delete  every kd-fast-* VM deleted
+#   deploy/kd-chunk-job/deploy.sh model-pool  the district model pool (gemini/model-call-pool.ts): one instance, every
+#                                         district's call budget and queue (POOL_LIMITS, POOL_MAX_CALLS); prints its URL for
+#                                         the runner's SCRATCHBOX_MODEL_POOL_URL
+#   deploy/kd-chunk-job/deploy.sh library-prepare  fills the prepared texture library (scripts/library_prepare.ts) with a
+#                                         Cloud Run job of TASKS tasks beside the library bucket
 #
 # Needs your own `gcloud auth login`. Every step creates or changes billed resources in the project.
 #
@@ -148,6 +153,33 @@ service() {
     --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT,SCRATCHBOX_GOOGLE_ADC=1,GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY,SCRATCHBOX_TRAINING_BUCKET=$TRAINING_BUCKET,SCRATCHBOX_STORE_BUCKET=off,SCRATCHBOX_CPUS=$CPU,SCRATCHBOX_TEXTURE_WORKERS=$((CPU > 1 ? CPU - 1 : 1)),SCRATCHBOX_KD_CHUNK_JOB=1"
 }
 
+# The district model pool (gemini/model-call-pool.ts): one instance holding every district's one call budget and queue;
+# the tasks take their turns from it (SCRATCHBOX_MODEL_POOL_URL on the runner). Request billing, 0 instances between
+# districts. POOL_LIMITS (`model=inFlight/perMinute`, `*` for every model) and POOL_MAX_CALLS (a district's cap).
+model_pool() {
+  local app; app="$(app_sa)"
+  local name="${SERVICE:-kd-model-pool}"
+  echo "[model-pool] $name -> $IMAGE, as $app, limits ${POOL_LIMITS:-*=96/}, at most ${POOL_MAX_CALLS:-20000} calls a district"
+  "${G[@]}" run deploy "$name" --region "$REGION" --image "$IMAGE" --service-account "$app" --no-allow-unauthenticated \
+    --cpu 1 --memory 1Gi --concurrency 1000 --timeout 3600 --min-instances 0 --max-instances 1 --execution-environment gen2 \
+    --command node --args="-r,ts-node/register,packages/core/src/node/3d-engine/staged-location/kd-chunk-job.js,--model-pool" \
+    --set-env-vars "^;^GOOGLE_CLOUD_PROJECT=$PROJECT;SCRATCHBOX_MODEL_POOL_LIMITS=${POOL_LIMITS:-*=96/};SCRATCHBOX_MODEL_POOL_MAX_CALLS=${POOL_MAX_CALLS:-20000}"
+  "${G[@]}" run services describe "$name" --region "$REGION" --format 'value(status.url)'
+}
+
+# The prepared texture library's fill (scripts/library_prepare.ts, prepared-library.ts) as a Cloud Run job beside the
+# library bucket: TASKS tasks share the sets; each set's full maps are fetched, prepared and deleted in turn.
+library_prepare() {
+  local app; app="$(app_sa)"
+  local name="${JOB_NAME:-kd-library-prepare}" tasks="${TASKS:-40}"
+  echo "[library-prepare] $name -> $IMAGE, as $app, $tasks tasks"
+  "${G[@]}" run jobs deploy "$name" --region "$REGION" --image "$IMAGE" --service-account "$app" \
+    --tasks "$tasks" --parallelism "$tasks" --max-retries 1 --task-timeout 2h --cpu 4 --memory 16Gi --execution-environment gen2 \
+    --command node --args="-r,ts-node/register,scripts/library_prepare.ts" \
+    --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT,SCRATCHBOX_GOOGLE_ADC=1,SCRATCHBOX_TRAINING_BUCKET=$TRAINING_BUCKET,TS_NODE_TRANSPILE_ONLY=1"
+  "${G[@]}" run jobs execute "$name" --region "$REGION" --async
+}
+
 # The fast VMs: each runs a new container of the image per chunk (docker run --rm in a loop: the chunk builds from the
 # image's own files, as a job task does), and is suspended between districts (billed for its disk and kept memory only).
 # The container uses the host's network: on resume the VM's network service closes every connection and leaves the docker
@@ -232,6 +264,10 @@ case "${1:-}" in
     GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(grep -m1 '^GOOGLE_MAPS_API_KEY=' "$ENV_FILE" | cut -d= -f2- | tr -d "\"' \r")}"
     export GOOGLE_MAPS_API_KEY
     if [ "$1" = vms ]; then vms; else vms_delete; fi ;;
+  model-pool|library-prepare)
+    export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$SA_KEY_FILE"
+    G=(gcloud --project "$PROJECT" --quiet)
+    if [ "$1" = model-pool ]; then model_pool; else library_prepare; fi ;;
   service)
     # as job-app: the app's account, the Maps key from the main checkout's .env (never printed)
     export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$SA_KEY_FILE"
@@ -240,5 +276,5 @@ case "${1:-}" in
     GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(grep -m1 '^GOOGLE_MAPS_API_KEY=' "$ENV_FILE" | cut -d= -f2- | tr -d "\"' \r")}"
     export GOOGLE_MAPS_API_KEY
     service ;;
-  *) sed -n '4,32p' "$0"; exit 2 ;;
+  *) sed -n '4,40p' "$0"; exit 2 ;;
 esac

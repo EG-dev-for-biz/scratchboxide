@@ -30,9 +30,10 @@ import { agreeMetal, drawFinish, energyFit, finishMaps, finishTarget, grainOf, O
 import { loadSetFitModel, setFitGrain } from './material-set-fit';
 import { heightRecessMap } from './material-height';
 import { readingKey, type ModelReadingStore } from './model-readings';
+import { preparedLibrary } from '../../prepared-library';
 
 /** Prepared map size: a facade texel is several centimetres, so a tile of a metre or two needs few texels. */
-const PREPARED_SIZE = 256;
+export const PREPARED_SIZE = 256;
 
 /**
  * A set's prepared maps kept in the model readings store (`library-prepared/<sha256>` of this version, the set and the
@@ -177,43 +178,30 @@ export async function resolveRegionSets(classes: RegionClass[], opts: {
     // the prepared maps kept from an earlier build, else the set fetched and prepared now (and kept)
     const kept = new Map<string, { normal: Uint8Array; orm: Uint8Array }>();
     const used = new Set(chosen.map(h => h.entry.id));
+    let fromLibrary = 0;
     for (const id of used) {
         const rec = opts.store ? await opts.store.get<PreparedRecord>(preparedKey(id)) : undefined;
         if (rec?.normal && rec.orm) kept.set(id, { normal: Buffer.from(rec.normal, 'base64'), orm: Buffer.from(rec.orm, 'base64') });
     }
+    // the prepared library (prepared-library.ts): the same records, kept once in GCS for every machine
+    const library = preparedLibrary();
+    if (library) {
+        await Promise.all([...used].filter(id => !kept.has(id)).map(async id => {
+            const rec = await library.getMaps(PREPARED_VERSION, PREPARED_SIZE, id);
+            if (!rec) return;
+            kept.set(id, { normal: Buffer.from(rec.normal, 'base64'), orm: Buffer.from(rec.orm, 'base64') });
+            opts.store?.put(preparedKey(id), rec);
+            fromLibrary++;
+        }));
+    }
     const toFetch = [...used].filter(id => !kept.has(id));
-    if (kept.size) opts.progress?.(`material regions: ${kept.size} sets' prepared maps kept from earlier builds${toFetch.length ? `, ${toFetch.length} fetched` : ''}`);
-    const fetched = !toFetch.length ? { sets: [], missing: [] } : await fetchLibrarySets(toFetch, { repoRoot, ...(opts.signal ? { signal: opts.signal } : {}), ...(opts.progress ? { progress: opts.progress } : {}) });
-    if (fetched.missing.length) throw new Error(`texture library: ${fetched.missing.map(m => m.reason).join('; ')}`);
-    const prepared = new Map<string, { normal: string; orm: string }>();
-    const todo: Array<{ id: string; out: string; maps: Record<string, string> }> = [];
-    for (const s of fetched.sets) {
-        const out = path.join(s.dir, `prepared_k${PREPARED_SIZE}`);
-        const files = { normal: path.join(out, 'normal.png'), orm: path.join(out, 'orm.png') };
-        prepared.set(s.name, files);
-        if (!fs.existsSync(files.normal) || !fs.existsSync(files.orm)) todo.push({ id: s.name, out, maps: { ...s.maps } as Record<string, string> });
-    }
-    if (todo.length) {
-        for (const t of todo) fs.mkdirSync(t.out, { recursive: true });
-        const jobs = path.join(todo[0].out, 'jobs.json');
-        fs.writeFileSync(jobs, JSON.stringify(todo));
-        const script = `
-import json, scratchbox_native as n
-for j in json.load(open(${JSON.stringify(jobs)})):
-    m = j["maps"]
-    r = n.surface.prepare_material_maps(m["color"], normal=m.get("normal", ""), roughness=m.get("roughness", ""), ao=m.get("ao", ""), metalness=m.get("metalness", ""), arm=m.get("arm", ""), max_size=${PREPARED_SIZE})
-    open(j["out"] + "/normal.png", "wb").write(bytes(r["normal_png"]))
-    open(j["out"] + "/orm.png", "wb").write(bytes(r["orm_png"]))
-`;
-        opts.progress?.(`material regions: preparing ${todo.map(t => t.id).join(', ')} with the engine`);
-        const run = await NativePythonRunnerService.getInstance().runScript(script, { timeoutMs: 10 * 60 * 1000, ...(opts.signal ? { signal: opts.signal } : {}) });
-        fs.rmSync(jobs, { force: true });
-        if (!run.success) throw new Error(`preparing the library maps failed: ${run.stderr || run.errorDetails}`);
-    }
-    for (const [id, files] of prepared) {
-        const maps = { normal: fs.readFileSync(files.normal), orm: fs.readFileSync(files.orm) };
+    if (kept.size) opts.progress?.(`material regions: ${kept.size} sets' prepared maps kept from earlier builds${fromLibrary ? ` (${fromLibrary} from the prepared library)` : ''}${toFetch.length ? `, ${toFetch.length} fetched` : ''}`);
+    for (const [id, maps] of await fetchAndPrepareSets(toFetch, { repoRoot, ...(opts.signal ? { signal: opts.signal } : {}), ...(opts.progress ? { progress: opts.progress } : {}) })) {
         kept.set(id, maps);
-        opts.store?.put(preparedKey(id), { normal: maps.normal.toString('base64'), orm: maps.orm.toString('base64') } satisfies PreparedRecord);
+        const rec = { normal: Buffer.from(maps.normal).toString('base64'), orm: Buffer.from(maps.orm).toString('base64') } satisfies PreparedRecord;
+        opts.store?.put(preparedKey(id), rec);
+        // and to the prepared library, for every machine after this one (written once: an object there is kept)
+        if (library) await library.putMaps(PREPARED_VERSION, PREPARED_SIZE, id, rec);
     }
     // each chosen set's height map (its publisher's preview: the map its depth was estimated on), for the sets with a depth
     const heightPreviews = new Map<string, ReturnType<typeof decodeImageInMemory>>();
@@ -261,4 +249,43 @@ for j in json.load(open(${JSON.stringify(jobs)})):
             ...(height ? { height: height.map, heightDrawn: height.drawn } : {})
         };
     });
+}
+
+/**
+ * Library sets fetched (fetchLibrarySets: per role the bucket's smallest file) and prepared by the engine at PREPARED_SIZE:
+ * each set's normal and occlusion-roughness-metalness PNGs, by set id. The one path a build and the prepared library's
+ * fill (scripts/library_prepare.ts) both take, so a prepared record is the bytes a build would have made.
+ */
+export async function fetchAndPrepareSets(ids: string[], opts: { repoRoot: string; signal?: AbortSignal; progress?: (m: string) => void }): Promise<Map<string, { normal: Uint8Array; orm: Uint8Array }>> {
+    const out = new Map<string, { normal: Uint8Array; orm: Uint8Array }>();
+    if (!ids.length) return out;
+    const fetched = await fetchLibrarySets(ids, { repoRoot: opts.repoRoot, ...(opts.signal ? { signal: opts.signal } : {}), ...(opts.progress ? { progress: opts.progress } : {}) });
+    if (fetched.missing.length) throw new Error(`texture library: ${fetched.missing.map(m => m.reason).join('; ')}`);
+    const prepared = new Map<string, { normal: string; orm: string }>();
+    const todo: Array<{ id: string; out: string; maps: Record<string, string> }> = [];
+    for (const s of fetched.sets) {
+        const dir = path.join(s.dir, `prepared_k${PREPARED_SIZE}`);
+        const files = { normal: path.join(dir, 'normal.png'), orm: path.join(dir, 'orm.png') };
+        prepared.set(s.name, files);
+        if (!fs.existsSync(files.normal) || !fs.existsSync(files.orm)) todo.push({ id: s.name, out: dir, maps: { ...s.maps } as Record<string, string> });
+    }
+    if (todo.length) {
+        for (const t of todo) fs.mkdirSync(t.out, { recursive: true });
+        const jobs = path.join(todo[0].out, 'jobs.json');
+        fs.writeFileSync(jobs, JSON.stringify(todo));
+        const script = `
+import json, scratchbox_native as n
+for j in json.load(open(${JSON.stringify(jobs)})):
+    m = j["maps"]
+    r = n.surface.prepare_material_maps(m["color"], normal=m.get("normal", ""), roughness=m.get("roughness", ""), ao=m.get("ao", ""), metalness=m.get("metalness", ""), arm=m.get("arm", ""), max_size=${PREPARED_SIZE})
+    open(j["out"] + "/normal.png", "wb").write(bytes(r["normal_png"]))
+    open(j["out"] + "/orm.png", "wb").write(bytes(r["orm_png"]))
+`;
+        opts.progress?.(`material regions: preparing ${todo.map(t => t.id).join(', ')} with the engine`);
+        const run = await NativePythonRunnerService.getInstance().runScript(script, { timeoutMs: 10 * 60 * 1000, ...(opts.signal ? { signal: opts.signal } : {}) });
+        fs.rmSync(jobs, { force: true });
+        if (!run.success) throw new Error(`preparing the library maps failed: ${run.stderr || run.errorDetails}`);
+    }
+    for (const [id, files] of prepared) out.set(id, { normal: fs.readFileSync(files.normal), orm: fs.readFileSync(files.orm) });
+    return out;
 }

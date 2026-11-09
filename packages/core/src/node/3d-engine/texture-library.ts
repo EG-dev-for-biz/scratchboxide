@@ -21,6 +21,7 @@
  * Poly Haven `_diff_`, `_nor_gl_`), never by what a set depicts.
  */
 
+import { preparedLibrary } from './prepared-library';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -259,6 +260,14 @@ export async function libraryPreview(entry: TextureLibraryEntry, role: 'color' |
     const dir = path.join(repoRoot, 'build', 'texture-library', 'previews');
     const file = path.join(dir, role === 'color' ? `${entry.id}.jpg` : `${entry.id}_${role}.jpg`);
     if (fs.existsSync(file)) return fs.readFileSync(file);
+    // the prepared library's copy (prepared-library.ts), the same bytes, before the publisher's site
+    const library = preparedLibrary();
+    const kept = await library?.getPreview(role, entry.id);
+    if (kept) {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, kept);
+        return kept;
+    }
     const previews = entry.previews?.[role] ? entry.previews : entry.publisher === 'Poly Haven' ? await polyHavenPreviews(entry.id, signal) : {};
     const url = previews[role];
     if (!url) return undefined;
@@ -267,6 +276,7 @@ export async function libraryPreview(entry: TextureLibraryEntry, role: 'color' |
     const bytes = new Uint8Array(await r.arrayBuffer());
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(file, bytes);
+    if (library) await library.putPreview(role, entry.id, bytes);
     return bytes;
 }
 
