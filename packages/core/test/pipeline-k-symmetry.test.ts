@@ -27,6 +27,7 @@ import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
 import { describeSymmetry, detectSymmetry, mirrorFillOrthos, mirrorWindows, stampSymmetryGlb, SYMMETRY_PARAMS, type SymmetryReport } from '../src/node/3d-engine/staged-location/pipeline-k/symmetry';
 import { decodePng } from '../src/node/texture-processing';
 import type { WindowFitFile, WindowRect } from '../src/node/3d-engine/staged-location/window-fit';
+import { layMirrorTexels } from '../src/node/3d-engine/staged-location/facade-lattice';
 
 type Box = { x0: number; x1: number; z0: number; z1: number; top: number };
 
@@ -283,4 +284,22 @@ describe('pipeline K symmetry reading', () => {
         // facade 8: neither region filled in part; both left to the repeat fill
         expect(f8.fromMirror).toBe(0);
     }, 300_000);
+
+    it('lays only the masked texels into a rebuilt facade texture, and leaves a texture of another size alone', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-mirror-tex-'));
+        const W = 8, H = 6, tex = new Uint8Array(W * H * 4), filled = new Uint8Array(W * H * 4), mask = new Uint8Array(W * H);
+        for (let k = 0; k < W * H; k++) { tex.set([10, 20, 30, 255], k * 4); filled.set([200, 150, 100, 255], k * 4); }
+        for (let y = 2; y < 4; y++) for (let x = 3; x < 6; x++) mask[y * W + x] = 255;
+        fs.writeFileSync(path.join(dir, 'f.png'), encodePng(W, H, filled, 4));
+        fs.writeFileSync(path.join(dir, 'm.png'), encodePng(W, H, mask, 1));
+        const out = decodePng(Buffer.from(layMirrorTexels(encodePng(W, H, tex, 4), path.join(dir, 'f.png'), path.join(dir, 'm.png'))));
+        let laid = 0, kept = 0;
+        for (let k = 0; k < W * H; k++) {
+            const px = Array.from(out.rgba.slice(k * 4, k * 4 + 3));
+            if (mask[k]) { expect(px).toEqual([200, 150, 100]); laid++; } else { expect(px).toEqual([10, 20, 30]); kept++; }
+        }
+        expect([laid, kept]).toEqual([6, 42]);
+        const small = encodePng(4, 4, new Uint8Array(64).fill(7), 4);
+        expect(layMirrorTexels(small, path.join(dir, 'f.png'), path.join(dir, 'm.png'))).toBe(small);
+    });
 });

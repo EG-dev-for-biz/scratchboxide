@@ -46,7 +46,7 @@ import { decodePng } from '../../../texture-processing';
 import { OCCLUSION_PARAMS } from './occlusion';
 import { nativeTwinThreads } from './native/twin-texels-native';
 
-export const SYMMETRY_VERSION = 'k-symmetry-3';
+export const SYMMETRY_VERSION = 'k-symmetry-4';
 
 export const SYMMETRY_PARAMS = {
     /** Plan raster cell (m); heights at least minStructureM above the ground are the structure; a cell is flat within flatM of its neighbours. */
@@ -239,6 +239,10 @@ export interface MirrorFilledOrthos { orthosDir: string; key: string; report: Sy
  * running it before them. Written to a clone of the orthos' folder (the orthos, their masks, facades.json; no later
  * stage's files), keyed by the orthos' key and this step's version and parameters; each filled facade names its mask
  * (`mirrorMask`) and carries what filled it in facades.json and in its textureFill's method. Returns the reading too.
+ * The clone is texture only: the polish lays its masked texels into the rebuilt facades' textures (facade-lattice.ts
+ * layMirrorTexels) and every reading stays on the unfilled orthos. Read back by the window fit, the reader and the lattice,
+ * a fill moved the geometry (Penn 2's facade 11 lost half its lattice lines, 2026-11-09). A region's texels its image does
+ * not reach keep the rectifier's fill.
  */
 export async function mirrorFillOrthos(orthosDir: string, orthosKey: string, input: Omit<SymmetryInput, 'orthosDir'>, opts: { params?: SymmetryParams; threads?: number; signal?: AbortSignal } = {}): Promise<MirrorFilledOrthos> {
     const t0 = Date.now();

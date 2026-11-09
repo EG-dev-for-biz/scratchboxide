@@ -950,22 +950,8 @@ inline void fillRegionsFrom(FillImage& dst, const FillImage& src, Map map, const
                 mask[static_cast<size_t>(i)] = 255;
                 lg.filled++;
             }
-            // the few texels of the region its image does not reach (at most 1 - minCover of it) take the nearest filled
-            // texel of the same region, breadth first, so the region ends whole and no edge is left inside it
-            std::vector<int> queue;
-            for (int i : region) if (mask[static_cast<size_t>(i)]) queue.push_back(i);
-            for (size_t q = 0; q < queue.size(); q++) {
-                const int i = queue[q], x = i % dst.W, y = i / dst.W;
-                const int nb[4] = {x > 0 ? i - 1 : -1, x < dst.W - 1 ? i + 1 : -1, y > 0 ? i - dst.W : -1, y < dst.H - 1 ? i + dst.W : -1};
-                for (int k : nb) {
-                    if (k < 0 || !dst.unread[static_cast<size_t>(k)] || mask[static_cast<size_t>(k)]) continue;
-                    for (int c = 0; c < 3; c++) dst.rgba[4 * static_cast<size_t>(k) + c] = dst.rgba[4 * static_cast<size_t>(i) + c];
-                    dst.unread[static_cast<size_t>(k)] = 0;
-                    mask[static_cast<size_t>(k)] = 255;
-                    lg.filled++;
-                    queue.push_back(k);
-                }
-            }
+            // the few texels of the region its image does not reach (at most 1 - minCover of it) keep the rectifier's own fill:
+            // spreading the nearest filled texel into them smeared streaks across the region (the Flatiron's blotches, 2026-11-09)
             counter += lg.filled;
             if (lg.filled) rep.regionsFilled++;
         } else if (acc.n > 0) rep.regionsRefused++;
