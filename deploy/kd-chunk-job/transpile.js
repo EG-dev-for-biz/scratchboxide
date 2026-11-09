@@ -30,6 +30,8 @@ const walk = dir => {
         try {
             r = esbuild.transformSync(fs.readFileSync(p, 'utf8'), {
                 loader: 'ts', format: 'cjs', platform: 'node', target: 'node22', sourcefile: p,
+                // import() becomes require(), as TypeScript's CommonJS output has it: a native import() of an extensionless path fails
+                supported: { 'dynamic-import': false },
                 tsconfigRaw: { compilerOptions: { target: 'ES2022', esModuleInterop: true, allowSyntheticDefaultImports: true } }
             });
         } catch (err) {
