@@ -252,4 +252,35 @@ describe('pipeline K symmetry reading', () => {
         expect(rec2.flag).toBeUndefined();
         expect((fit2.facades[0] as { rects: WindowRect[] }).rects.length).toBe(readerBoxes.length);
     }, 300_000);
+    it('fills a region whole or not at all, at the brightness of the photo around it', async () => {
+        const orthos = path.join(dir, 'fill2');
+        fs.mkdirSync(orthos, { recursive: true });
+        const glb = path.join(dir, 'fill2.glb');
+        roofsGlb(glb, [{ x0: -20, x1: 20, z0: -10, z1: 10, top: 10 }]);
+        const sym = (s: number, t: number) => noise(Math.abs(s), t, 7);
+        const hole = (s: number, t: number) => s > 4 && s < 7 && t > -1 && t < 2;
+        // facade 7: its right half lit at 0.8 of its left (another time of day), the hole on the right
+        const dim = (s: number, t: number) => (s > 0 ? 0.8 * sym(s, t) : sym(s, t));
+        // facade 8: the hole's mirror site half unread as well (s from -7 to -5.5): the region cannot be filled whole
+        const twoHoles = (s: number, t: number) => hole(s, t) || (s > -7 && s < -5.5 && t > -1 && t < 2);
+        const facades = [
+            facade(orthos, 7, [0, 5, 10], [0, 0, 1], [1, 0, 0], dim, undefined, hole),
+            facade(orthos, 8, [20, 5, 0], [1, 0, 0], [0, 0, -1], sym, undefined, twoHoles)
+        ];
+        fs.writeFileSync(path.join(orthos, 'facades.json'), JSON.stringify({ schema: 'test', facades }));
+        const r = await mirrorFillOrthos(orthos, 'test2', { scanGlb: glb, groundY: 0, footprint: [] });
+        const f7 = r.report.fills!.find(x => x.facadeId === 7)!, f8 = r.report.fills!.find(x => x.facadeId === 8)!;
+        expect(f7.fromMirror).toBeGreaterThan(0.95 * 30 * 30);
+        const after = decodePng(fs.readFileSync(path.join(r.orthosDir, 'facade_7.png')));
+        let off = 0, n = 0;
+        for (let y = 0; y < after.height; y++) for (let x = 0; x < after.width; x++) {
+            const s = -HALF_W + (x + 0.5) * PIXEL, t = HALF_H - (y + 0.5) * PIXEL;
+            if (!hole(s, t)) continue;
+            n++;
+            if (Math.abs(after.rgba[(y * after.width + x) * 4] - 0.8 * sym(s, t)) > 6) off++;
+        }
+        expect(off / n).toBeLessThan(0.1);
+        // facade 8: neither region filled in part; both left to the repeat fill
+        expect(f8.fromMirror).toBe(0);
+    }, 300_000);
 });

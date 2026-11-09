@@ -46,7 +46,7 @@ import { decodePng } from '../../../texture-processing';
 import { OCCLUSION_PARAMS } from './occlusion';
 import { nativeTwinThreads } from './native/twin-texels-native';
 
-export const SYMMETRY_VERSION = 'k-symmetry-2';
+export const SYMMETRY_VERSION = 'k-symmetry-3';
 
 export const SYMMETRY_PARAMS = {
     /** Plan raster cell (m); heights at least minStructureM above the ground are the structure; a cell is flat within flatM of its neighbours. */

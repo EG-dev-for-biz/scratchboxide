@@ -31,9 +31,11 @@
  *     absorbs the planes' fitting error): band-passed NCC over texels both photos read, gated as texture-repeat.ts gates a
  *     repeat (NCC_GATE).
  *  4. The mirror fill (step 2). A facade's unread texels (never reached, occluded, a smear) take the colour of the read
- *     texel its mirror pairs them with: its own mirror first, then an accepted twin's. Region by region, and only where the
- *     read ring around the region agrees with its image at the gate, so a part that breaks the symmetry (a door, a sign)
- *     is left to the repeat fill. A read texel is never written: the mirror never overrides what the photo measured.
+ *     texel its mirror pairs them with: its own mirror first, then an accepted twin's. Region by region, whole or not at
+ *     all (its image read over minCover of it), only where the read ring around the region agrees with its image at the
+ *     gate, so a part that breaks the symmetry (a door, a sign) is left to the repeat fill, and each channel's gain matched
+ *     to that ring (the halves are often lit differently). A read texel is never written: the mirror never overrides what
+ *     the photo measured.
  *
  * Plan coordinates are the tile frame's (x east, z south, metres); a plan angle is measured from +x toward +z. A mirror
  * axis is the vertical plane through `point` along `dir`.
@@ -822,9 +824,17 @@ struct FillParams {
     double nccGate = 0.55;
     /** Of the ring, at least this share must pair with read texels. */
     double minRingShare = 0.3;
+    /**
+     * A region is filled whole or not at all: its image must be read photo over at least this share of it (as
+     * pipeline-k.ts CONTINUE_FEATURELESS.minCover), so no fill stops part way across a region and leaves an edge against
+     * the repeat fill beside it.
+     */
+    double minCover = 0.9;
+    /** Each channel's gain matched to the ring (the ring's mean over its image's), within these bounds: the two halves are often lit differently. */
+    double minGain = 0.6, maxGain = 1.6;
 };
 
-struct FillRegionLog { int texels = 0; int filled = 0; double ringNcc = 0; int ringPairs = 0; std::string source; };
+struct FillRegionLog { int texels = 0; int filled = 0; double ringNcc = 0; int ringPairs = 0; double cover = 0; double gain[3]{1, 1, 1}; std::string source; };
 
 struct FillReport {
     int facadeId = 0;
@@ -915,23 +925,46 @@ inline void fillRegionsFrom(FillImage& dst, const FillImage& src, Map map, const
         lg.source = source;
         const std::vector<int> ring = detail::ringOf(dst, region, box, r);
         NccAcc acc;
+        double sumD[3]{}, sumS[3]{};
         for (int i : ring) {
             const int j = map(i);
-            if (j >= 0 && src.read[static_cast<size_t>(j)]) acc.add(detail::lumaAt(dst.rgba, static_cast<size_t>(i)), detail::lumaAt(src.rgba, static_cast<size_t>(j)));
+            if (j < 0 || !src.read[static_cast<size_t>(j)]) continue;
+            acc.add(detail::lumaAt(dst.rgba, static_cast<size_t>(i)), detail::lumaAt(src.rgba, static_cast<size_t>(j)));
+            for (int c = 0; c < 3; c++) { sumD[c] += dst.rgba[4 * static_cast<size_t>(i) + c]; sumS[c] += src.rgba[4 * static_cast<size_t>(j) + c]; }
         }
         lg.ringPairs = static_cast<int>(acc.n);
         lg.ringNcc = acc.ncc();
-        const bool holds = acc.n >= P.minRingPairs && acc.n >= P.minRingShare * ring.size() && lg.ringNcc >= P.nccGate;
+        int covered = 0;
+        for (int i : region) { const int j = map(i); if (j >= 0 && src.read[static_cast<size_t>(j)]) covered++; }
+        lg.cover = region.empty() ? 0 : static_cast<double>(covered) / region.size();
+        for (int c = 0; c < 3; c++) lg.gain[c] = sumS[c] > 0 ? std::clamp(sumD[c] / sumS[c], P.minGain, P.maxGain) : 1.0;
+        const bool holds = acc.n >= P.minRingPairs && acc.n >= P.minRingShare * ring.size() && lg.ringNcc >= P.nccGate && lg.cover >= P.minCover;
         if (holds) {
             for (int i : region) {
                 const int j = map(i);
                 if (j < 0 || !src.read[static_cast<size_t>(j)]) continue;
-                for (int c = 0; c < 3; c++) dst.rgba[4 * static_cast<size_t>(i) + c] = src.rgba[4 * static_cast<size_t>(j) + c];
+                for (int c = 0; c < 3; c++) dst.rgba[4 * static_cast<size_t>(i) + c] = static_cast<uint8_t>(std::clamp(std::lround(lg.gain[c] * src.rgba[4 * static_cast<size_t>(j) + c]), 0L, 255L));
                 // never the exact grey the rectifier marks as uncovered
                 if (dst.rgba[4 * static_cast<size_t>(i)] == 128 && dst.rgba[4 * static_cast<size_t>(i) + 1] == 128 && dst.rgba[4 * static_cast<size_t>(i) + 2] == 128) dst.rgba[4 * static_cast<size_t>(i) + 2] = 129;
                 dst.unread[static_cast<size_t>(i)] = 0;
                 mask[static_cast<size_t>(i)] = 255;
                 lg.filled++;
+            }
+            // the few texels of the region its image does not reach (at most 1 - minCover of it) take the nearest filled
+            // texel of the same region, breadth first, so the region ends whole and no edge is left inside it
+            std::vector<int> queue;
+            for (int i : region) if (mask[static_cast<size_t>(i)]) queue.push_back(i);
+            for (size_t q = 0; q < queue.size(); q++) {
+                const int i = queue[q], x = i % dst.W, y = i / dst.W;
+                const int nb[4] = {x > 0 ? i - 1 : -1, x < dst.W - 1 ? i + 1 : -1, y > 0 ? i - dst.W : -1, y < dst.H - 1 ? i + dst.W : -1};
+                for (int k : nb) {
+                    if (k < 0 || !dst.unread[static_cast<size_t>(k)] || mask[static_cast<size_t>(k)]) continue;
+                    for (int c = 0; c < 3; c++) dst.rgba[4 * static_cast<size_t>(k) + c] = dst.rgba[4 * static_cast<size_t>(i) + c];
+                    dst.unread[static_cast<size_t>(k)] = 0;
+                    mask[static_cast<size_t>(k)] = 255;
+                    lg.filled++;
+                    queue.push_back(k);
+                }
             }
             counter += lg.filled;
             if (lg.filled) rep.regionsFilled++;
