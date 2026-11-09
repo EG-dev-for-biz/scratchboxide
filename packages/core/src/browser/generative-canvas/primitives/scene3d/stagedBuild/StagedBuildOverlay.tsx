@@ -23,7 +23,7 @@ import type { DegradationRecord, StageStatus, StageSummary, StagedBuildState, St
 import type { LayerRevealFrame } from './revealScheduler';
 import type { LegendRow } from './provenanceShading';
 import type { StageProgress } from './stagedBuildState';
-import { CHROME_BUTTON, CHROME_MUTED, CHROME_PANEL } from './viewportChrome';
+import { CHROME_MUTED, CHROME_PANEL } from './viewportChrome';
 
 /** Where a degraded part is in the viewport (degradationPlacement.ts): an exact part, a whole layer, or nothing drawn. */
 export interface DegradationPlacementNote {
@@ -149,7 +149,10 @@ const PANEL: React.CSSProperties = {
     overflowY: 'auto', pointerEvents: 'auto', userSelect: 'text'
 };
 const MUTED = CHROME_MUTED;
-const BUTTON: React.CSSProperties = CHROME_BUTTON;
+const BUTTON: React.CSSProperties = {
+    font: 'inherit', fontSize: 12, color: '#e4e4e7', background: 'rgba(255, 255, 255, 0.08)',
+    borderWidth: 1, borderStyle: 'solid', borderColor: 'rgba(255, 255, 255, 0.18)', borderRadius: 6, padding: '2px 8px', cursor: 'pointer', textAlign: 'left'
+};
 const HIDDEN: React.CSSProperties = { position: 'absolute', width: 1, height: 1, margin: -1, padding: 0, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 };
 /** The HUD row (Fit to View, scene badge) sits within the top 48 px. */
 const HUD_CLEARANCE_PX = 56;

@@ -29,7 +29,11 @@ export const CHROME_PANEL: React.CSSProperties = {
     fontFamily: CHROME_FONT, fontSize: 12, lineHeight: 1.45, textAlign: 'left'
 };
 
-/** A secondary button: translucent, hairline border. */
+/**
+ * A secondary button: translucent, hairline border. Border longhands only, never the `border` shorthand beside them
+ * (React warns when an update sets a longhand the shorthand also set); the staged overlay's own BUTTON is the same look,
+ * written out where staged-material-edit.test.ts guards it.
+ */
 export const CHROME_BUTTON: React.CSSProperties = {
     font: 'inherit', fontSize: 12, color: CHROME_TEXT, background: 'rgba(255, 255, 255, 0.08)',
     borderWidth: 1, borderStyle: 'solid', borderColor: 'rgba(255, 255, 255, 0.18)', borderRadius: 6, padding: '2px 8px', cursor: 'pointer', textAlign: 'left'
