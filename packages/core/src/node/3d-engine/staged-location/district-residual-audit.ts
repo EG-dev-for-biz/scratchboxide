@@ -23,11 +23,21 @@ import { SB_FEATURE_PREFIX, typesFromLabels, type SbFeatureTypeLabel } from '../
 import { auditResidual, BUILDING_PART_MIN, type AuditedCluster, type AuditSource, type ResidualAuditResult, type ResidualVerdict } from './residual-audit';
 import { APRON_HEIGHT_M } from './pipeline-e/residual-audit-e';
 
-export const DISTRICT_AUDIT_VERSION = 'district-residual-audit/1';
+export const DISTRICT_AUDIT_VERSION = 'district-residual-audit/2';
 
 export const DISTRICT_AUDIT_PARAMS = {
     /** Scan within this of a vector building footprint belongs to the building (the solid): footprints are good to a metre or two. */
     buildingClearM: 2,
+    /**
+     * A wall the footprint's band only partly holds: scan connected to a building's upright triangle and lying within
+     * wallBandM of that triangle's plane belongs to the building too, however far past buildingClearM it reaches. At
+     * Penn's K-D district (2026-11-09) the rebuilt facades stand 1.3-3 m outside Google's footprints; past the band they
+     * fell apart into 2,166 "facade sliver" blobs, 22 of 24 sampled sitting on continuous walls with their window bays.
+     * A wall's own recesses and frames lie within the band; anything standing off it does not.
+     */
+    wallBandM: 0.6,
+    /** A building triangle seeds that walk when its normal is this close to horizontal (|n.y| below it: an upright face). */
+    wallSeedMaxNy: 0.35,
     /** Triangles wholly this close above the measured ground are the ground itself (kerbs, kerb-side noise), not audited. */
     apronM: APRON_HEIGHT_M,
     /**
@@ -50,7 +60,9 @@ function triOf(V: ArrayLike<number>, I: ArrayLike<number>, t: number, out: Float
 export interface DistrictAuditSplit {
     solid: Float32Array;
     sources: AuditSource[];
-    stats: { scanTriangles: number; buildingTriangles: number; groundTriangles: number; apronTriangles: number; outsideTriangles: number; candidateTriangles: number };
+    stats: { scanTriangles: number; buildingTriangles: number; groundTriangles: number; apronTriangles: number; outsideTriangles: number; candidateTriangles: number;
+        /** Triangles past the footprint's band given to the building because they are its walls (wallBandM), and their area. */
+        wallTriangles: number; wallAreaM2: number };
 }
 
 /**
@@ -77,6 +89,16 @@ export function districtAuditSplit(scan: ScanMesh, ground: GroundModel, opts: { 
         if (top <= g + P.apronM) { apron++; continue; }
         cand.push(t);
     }
+    // the walls past the band: from each upright building triangle, along the mesh's shared corners, every candidate within
+    // wallBandM of that triangle's plane (the plane carried from the seed, so a walk cannot drift off the wall)
+    const wall = claimWalls(scan, building, cand, P);
+    let wallArea = 0;
+    if (wall.size) {
+        for (const t of wall) { building.push(t); wallArea += scan.triArea[t]; }
+        const kept = cand.filter(t => !wall.has(t));
+        cand.length = 0;
+        for (const t of kept) cand.push(t);
+    }
     // the ground: a heightfield through the cell centres the terrain was measured at, within the extraction
     const g = ground, cell = g.cellMeters;
     const at = (i: number, k: number) => g.ground[k * g.nx + i];
@@ -101,8 +123,67 @@ export function districtAuditSplit(scan: ScanMesh, ground: GroundModel, opts: { 
     cand.forEach((t, k) => triOf(V, I, t, tris, k * 9));
     return {
         solid, sources: [{ node: 'scan', triangles: tris, localTriangles: cand }],
-        stats: { scanTriangles: scan.triCount, buildingTriangles: building.length, groundTriangles: nGround, apronTriangles: apron, outsideTriangles: outside, candidateTriangles: cand.length }
+        stats: { scanTriangles: scan.triCount, buildingTriangles: building.length, groundTriangles: nGround, apronTriangles: apron, outsideTriangles: outside, candidateTriangles: cand.length, wallTriangles: wall.size, wallAreaM2: Math.round(wallArea * 10) / 10 }
     };
+}
+
+/**
+ * The candidates that continue a building's walls: a breadth-first walk from every upright building triangle over the
+ * triangles sharing a corner, taking a candidate when its centroid lies within P.wallBandM of the seed's plane and passing
+ * that plane on. Measured geometry only.
+ */
+export function claimWalls(scan: Pick<ScanMesh, 'mesh' | 'triCount' | 'triNormal' | 'triCentroid'>, building: number[], cand: number[], P: Pick<typeof DISTRICT_AUDIT_PARAMS, 'wallBandM' | 'wallSeedMaxNy'> = DISTRICT_AUDIT_PARAMS): Set<number> {
+    const claimed = new Set<number>();
+    if (!cand.length || !building.length) return claimed;
+    const I = scan.mesh.indices as ArrayLike<number>, N = scan.triNormal, C = scan.triCentroid;
+    const isCand = new Uint8Array(scan.triCount);
+    for (const t of cand) isCand[t] = 1;
+    // corners welded by position (1 mm): a remeshed district repeats a corner's position under several vertex indices, and
+    // its rebuilt facade cells meet only there (Penn K-D: 1.2 to 3.8 distinct positions a triangle)
+    const Vx = scan.mesh.vertices as ArrayLike<number>;
+    const involved = [...building, ...cand];
+    const idOf = new Map<string, number>();
+    const corner = new Uint32Array(involved.length * 3);
+    involved.forEach((t, n) => {
+        for (let j = 0; j < 3; j++) {
+            const v = I[t * 3 + j] * 3, k = `${Math.round(Vx[v] * 1000)},${Math.round(Vx[v + 1] * 1000)},${Math.round(Vx[v + 2] * 1000)}`;
+            let id = idOf.get(k);
+            if (id === undefined) { id = idOf.size; idOf.set(k, id); }
+            corner[n * 3 + j] = id;
+        }
+    });
+    // welded corner -> triangles (CSR)
+    const nv = idOf.size, count = new Uint32Array(nv + 1);
+    for (let i = 0; i < corner.length; i++) count[corner[i] + 1]++;
+    for (let v = 0; v < nv; v++) count[v + 1] += count[v];
+    const fill = count.slice(0, nv), adj = new Uint32Array(count[nv]);
+    involved.forEach((t, n) => { for (let j = 0; j < 3; j++) adj[fill[corner[n * 3 + j]]++] = t; });
+    const cornersOf = new Map<number, number>();
+    involved.forEach((t, n) => cornersOf.set(t, n));
+    // the walk: each queued triangle carries its seed's plane (normal n, offset d)
+    const qt: number[] = [], qn: number[] = [];
+    const plane: Float32Array = new Float32Array(scan.triCount * 4);
+    for (const t of building) {
+        if (Math.abs(N[t * 3 + 1]) >= P.wallSeedMaxNy) continue;
+        const nx = N[t * 3], ny = N[t * 3 + 1], nz = N[t * 3 + 2];
+        plane.set([nx, ny, nz, nx * C[t * 3] + ny * C[t * 3 + 1] + nz * C[t * 3 + 2]], t * 4);
+        qt.push(t); qn.push(t);
+    }
+    for (let h = 0; h < qt.length; h++) {
+        const t = qt[h], s = qn[h] * 4;
+        const nx = plane[s], ny = plane[s + 1], nz = plane[s + 2], d = plane[s + 3];
+        const n = cornersOf.get(t)!;
+        for (let j = 0; j < 3; j++) {
+            const v = corner[n * 3 + j];
+            for (let a = count[v]; a < count[v + 1]; a++) {
+                const u = adj[a];
+                if (!isCand[u] || claimed.has(u)) continue;
+                if (Math.abs(nx * C[u * 3] + ny * C[u * 3 + 1] + nz * C[u * 3 + 2] - d) > P.wallBandM) continue;
+                claimed.add(u); qt.push(u); qn.push(qn[h]);
+            }
+        }
+    }
+    return claimed;
 }
 
 // ------------------------------------------------------------------------------------------------ rail context

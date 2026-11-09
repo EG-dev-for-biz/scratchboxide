@@ -19,7 +19,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { auditDistrict, buildingClearance, districtAuditSplit, districtStreetAuditSummary, measureRailLines, railContexts, uprightMeasure } from '../src/node/3d-engine/staged-location/district-residual-audit';
+import { auditDistrict, buildingClearance, DISTRICT_AUDIT_PARAMS, districtAuditSplit, districtStreetAuditSummary, measureRailLines, railContexts, uprightMeasure } from '../src/node/3d-engine/staged-location/district-residual-audit';
 import { decodeFeatureTile } from '../src/node/spatial/google-feature-tile-decoder';
 import type { GroundModel, ScanMesh } from '../src/node/spatial/StreetViewSurveyPlanner';
 import type { Vec2 } from '../src/common/spatial/staged-location-contracts';
@@ -176,5 +176,67 @@ describe('Google vector tiles: rail lines', () => {
         expect(d.rails).toHaveLength(1);
         expect(d.roads).toHaveLength(1);
         expect(d.rails[0].points).toHaveLength(2);
+    });
+});
+
+/** A ScanMesh over a soup with its corners welded (shared vertices, as a remeshed scan has them) and face normals. */
+function weldedScanOf(soup: number[]): ScanMesh {
+    const key = (i: number) => `${soup[i].toFixed(4)},${soup[i + 1].toFixed(4)},${soup[i + 2].toFixed(4)}`;
+    const at = new Map<string, number>(), verts: number[] = [], idx: number[] = [];
+    for (let i = 0; i < soup.length; i += 3) { const k = key(i); let v = at.get(k); if (v === undefined) { v = verts.length / 3; at.set(k, v); verts.push(soup[i], soup[i + 1], soup[i + 2]); } idx.push(v); }
+    const s = scanOf(soup), V = Float32Array.from(verts), I = Uint32Array.from(idx);
+    for (let t = 0; t < s.triCount; t++) {
+        const a = I[t * 3] * 3, b = I[t * 3 + 1] * 3, c = I[t * 3 + 2] * 3;
+        const ux = V[b] - V[a], uy = V[b + 1] - V[a + 1], uz = V[b + 2] - V[a + 2], vx = V[c] - V[a], vy = V[c + 1] - V[a + 1], vz = V[c + 2] - V[a + 2];
+        const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, l = Math.hypot(nx, ny, nz) || 1;
+        s.triNormal.set([nx / l, ny / l, nz / l], t * 3); s.triArea[t] = l / 2;
+    }
+    return { ...s, mesh: { vertices: V, indices: I } as unknown as ScanMesh['mesh'] };
+}
+
+describe('walls past the footprint\'s band', () => {
+    it('gives the building a wall that runs on past its footprint\'s band, with its recesses, but not what stands off it', () => {
+        const o: number[] = [];
+        // a facade 1.7 m west of the footprint's west edge (x = 10), in 1 m panels from z = -10 to z = 16: the part past
+        // z = 10 runs beyond the footprint's corner; a window recess 0.3 m deep in the far part
+        const X = 8.3;
+        for (let z = -10; z < 16; z++) for (let y = 0; y < 6; y++) {
+            if (z === 13 && (y === 2 || y === 3)) continue;   // the window's opening
+            quad(o, [X, y, z], [X, y + 1, z], [X, y + 1, z + 1], [X, y, z + 1]);
+        }
+        // the window recess: its back 0.3 m in, joined to the wall by its four reveals
+        const B = X - 0.3;
+        quad(o, [B, 2, 13], [B, 4, 13], [B, 4, 14], [B, 2, 14]);
+        quad(o, [X, 2, 13], [B, 2, 13], [B, 2, 14], [X, 2, 14]);
+        quad(o, [X, 4, 13], [X, 4, 14], [B, 4, 14], [B, 4, 13]);
+        quad(o, [X, 2, 13], [X, 4, 13], [B, 4, 13], [B, 2, 13]);
+        quad(o, [X, 2, 14], [B, 2, 14], [B, 4, 14], [X, 4, 14]);
+        const wallTris = o.length / 9;
+        // a balcony slab on the far part, standing 1.6 m off the wall (sharing the wall's corner at y = 3)
+        quad(o, [X, 3, 14], [X - 1.6, 3, 14], [X - 1.6, 3, 15], [X, 3, 15]);
+        // a post 4 m off, touching nothing
+        needlePole(o, 3.5, 14, 0, 4);
+        const within = (x: number, z: number) => Math.abs(x) <= R && Math.abs(z) <= R;
+        const scan = weldedScanOf(o);
+        const s = districtAuditSplit(scan, flatGround(R), { buildingAt, within });
+        // the wall's panels the band holds seed the walk; the panels past it are claimed, recess included
+        expect(s.stats.wallTriangles).toBeGreaterThan(0);
+        // every wall triangle is the building's; the balcony and the post stay in the street
+        const cand = s.sources[0].localTriangles!;
+        expect(cand.every(t => t >= wallTris)).toBe(true);
+        // the balcony's outer triangle (centroid 1.07 m off the wall) and the post's two stay; the balcony's inner triangle
+        // (centroid 0.53 m off, within the wall's band) goes with the wall: what lies within the band counts as wall
+        expect(cand).toEqual([wallTris, wallTris + 2, wallTris + 3]);
+        expect(s.stats.buildingTriangles).toBe(wallTris + 1);
+        // the same scene as a soup (every triangle its own corners, as some remeshed chunks are): the walk meets at the
+        // positions the corners share, and claims the same
+        const welded = weldedScanOf(o);
+        const soupScan = { ...welded, mesh: { vertices: Float32Array.from(o), indices: Uint32Array.from({ length: o.length / 3 }, (_, i) => i) } as unknown as ScanMesh['mesh'] };
+        const soup = districtAuditSplit(soupScan, flatGround(R), { buildingAt, within });
+        expect(soup.sources[0].localTriangles).toEqual(cand);
+        // the same scene without the wall rule (band 0): the far panels fall to the candidates
+        const off = districtAuditSplit(scan, flatGround(R), { buildingAt, within }, { ...DISTRICT_AUDIT_PARAMS, wallBandM: -1 });
+        expect(off.stats.candidateTriangles).toBeGreaterThan(cand.length);
+        expect(off.stats.wallTriangles).toBe(0);
     });
 });
