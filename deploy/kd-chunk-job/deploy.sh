@@ -17,6 +17,7 @@ set -euo pipefail
 #   GOOGLE_MAPS_API_KEY  the Maps key (setup, and job with KD_JOB_AUTH=app)
 #   KD_JOB_AUTH=app      job runs as the app's account, no secrets (when nobody may grant access to them)
 #   PROJECT / REGION     default scoutscan / us-central1
+#   IMAGE                the job's image (default HEAD's, as build tags it)
 #   JOB / CPU / MEMORY   the job's name and task size (default kd-chunk-job, 8, 32Gi); a second size is a second job,
 #                        e.g. JOB=kd-chunk-job-4c CPU=4 MEMORY=16Gi, chosen by the runner's SCRATCHBOX_KD_CLOUD_JOB
 ################################################################################
@@ -34,7 +35,7 @@ MAPS_SECRET="kd-maps-api-key"
 SA_KEY_FILE="${SA_KEY_FILE:-$HOME/.scratchbox-ide/service-account.json}"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
-IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/depthbox3-repo/kd-chunk-job:${COMMIT}"
+IMAGE="${IMAGE:-${REGION}-docker.pkg.dev/${PROJECT}/depthbox3-repo/kd-chunk-job:${COMMIT}}"
 G=(gcloud --project "$PROJECT" --quiet)
 
 app_sa() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["client_email"])' "$SA_KEY_FILE"; }

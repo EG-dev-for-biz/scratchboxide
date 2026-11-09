@@ -9,7 +9,9 @@
  *     --root /Volumes/3DTESTING/Scratchbox-drive/kd-penn-fanout --out /Volumes/3DTESTING/Scratchbox-drive/kd-penn-fanout/report
  *
  * --root is the build's workspace (its stage caches and models; an empty one is a build from nothing on this side), --env
- * a .env file whose keys are added where unset (the Maps key; never printed).
+ * a .env file whose keys are added where unset (the Maps key; never printed), --publish gs://<bucket>/<prefix> where the
+ * report and every run record (the district's and each chunk's) are sent at the end (the driver run as a Cloud Run job,
+ * whose disk goes with it). Each progress line is printed too.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -41,7 +43,11 @@ async function main(): Promise<void> {
     const t0 = Date.now();
     const progressFile = path.join(out, 'progress.log');
     fs.writeFileSync(progressFile, '');
-    const line = (m: string) => fs.appendFileSync(progressFile, `${String(Math.round((Date.now() - t0) / 1000)).padStart(6)} s  ${m}\n`);
+    const line = (m: string) => {
+        const l = `${String(Math.round((Date.now() - t0) / 1000)).padStart(6)} s  ${m}`;
+        fs.appendFileSync(progressFile, `${l}\n`);
+        console.log(`[district] ${l}`);
+    };
     line(`district ${query}, ${radiusM} m; runner ${process.env.SCRATCHBOX_KD_CHUNK_RUNNER ?? 'local'}, unit ${process.env.SCRATCHBOX_KD_CHUNK_UNIT ?? 'cell'}, job ${process.env.SCRATCHBOX_KD_CLOUD_JOB ?? 'kd-chunk-job'}, width ${process.env.SCRATCHBOX_KD_CLOUD_PARALLEL ?? 'default'}`);
     const own = new AbortController();
     process.once('SIGINT', () => own.abort(Object.assign(new Error('stopped'), { name: 'AbortError' })));
@@ -59,7 +65,25 @@ async function main(): Promise<void> {
         const f = path.join(runs, id, 'cloud-job.json');
         if (fs.existsSync(f)) chunks.push({ runId: id, ...JSON.parse(fs.readFileSync(f, 'utf8')) });
     }
-    fs.writeFileSync(path.join(out, 'summary.json'), JSON.stringify({ query, radiusM, wallMs, status: outcome.result.status, runId: outcome.result.runId ?? undefined, env: Object.fromEntries(Object.entries(process.env).filter(([k]) => /^SCRATCHBOX_(KD_|CACHE_|PLACE_|MODEL_CALL)/.test(k))), chunks }, null, 1));
+    fs.writeFileSync(path.join(out, 'summary.json'), JSON.stringify({ query, radiusM, wallMs, status: outcome.result.status, runId: (outcome.result as { runId?: string }).runId, env: Object.fromEntries(Object.entries(process.env).filter(([k]) => /^SCRATCHBOX_(KD_|CACHE_|PLACE_|MODEL_CALL)/.test(k))), chunks }, null, 1));
+    const publish = arg('publish');
+    if (publish) {
+        const m = /^gs:\/\/([^/]+)\/(.+?)\/?$/.exec(publish);
+        if (!m) throw new Error(`--publish must be gs://<bucket>/<prefix>, not ${publish}`);
+        const { GcsCloudBucket } = await import('../packages/core/src/node/cloud-store/cloud-bucket');
+        const { GoogleMediaCredentialsService } = await import('../packages/core/src/node/google-media-credentials-service');
+        const bucket = new GcsCloudBucket(new GoogleMediaCredentialsService().createStorageClient().bucket(m[1]));
+        const send = async (dir: string, prefix: string) => {
+            for (const e of fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }) : []) {
+                const f = path.join(dir, e.name);
+                if (e.isDirectory()) await send(f, `${prefix}/${e.name}`);
+                else if (e.isFile()) await bucket.putFile(`${prefix}/${e.name}`, f, { contentType: /\.jsonl?$/.test(e.name) ? 'application/json' : 'text/plain' });
+            }
+        };
+        await send(out, `${m[2]}/report`);
+        await send(runs, `${m[2]}/runs`);
+        console.log(`[district] report and run records sent to ${publish}`);
+    }
 }
 
 main().then(() => process.exit(0), err => { console.error(err); process.exit(1); });
