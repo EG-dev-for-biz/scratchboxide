@@ -203,7 +203,9 @@ EOS
 vms_delete() {
   local rows; rows="$("${G[@]}" compute instances list --filter="name~^kd-fast-" --format="value(name,zone.basename())")"
   [ -n "$rows" ] || { echo "[vms-delete] none"; return; }
-  while read -r n z; do "${G[@]}" compute instances delete "$n" --zone "$z" --async >/dev/null && echo "[vms-delete] $n ($z)"; done <<< "$rows"
+  # in parallel (delete has no --async), each waited for
+  while read -r n z; do ( "${G[@]}" compute instances delete "$n" --zone "$z" >/dev/null 2>&1 && echo "[vms-delete] $n ($z)" || echo "[vms-delete] $n ($z) FAILED" ) & done <<< "$rows"
+  wait
 }
 
 JOB_ID="${JOB_SA%%@*}"
