@@ -18,6 +18,9 @@ COPY . .
 RUN python3 -m venv --system-site-packages /app/.venv \
  && /app/.venv/bin/pip install --no-cache-dir nanobind==3.1.0
 
+# no Electron binary: the job never opens the desktop app, and its download (a 504 from GitHub) failed an image build
+ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
+
 # packages/core's dependencies alone (the workspace's other package.json files are in the archive for the lock file), and
 # ts-node, which runs the TypeScript as the app's worker threads do (worker-ts-register.ts)
 RUN npm ci --workspace packages/core --include-workspace-root=false --no-audit --no-fund \
