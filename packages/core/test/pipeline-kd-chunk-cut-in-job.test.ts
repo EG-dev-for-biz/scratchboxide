@@ -25,7 +25,7 @@ import { kdChunkJobKeys, KD_CHUNK_JOB_SCHEMA, type KdChunkJobOutcome, type KdChu
 import { runKdChunkJob } from '../src/node/3d-engine/staged-location/kd-chunk-job';
 import { createChunkJoiner } from '../src/node/3d-engine/staged-location/pipeline-k/chunk-join-worker';
 import {
-    chunkKeep, cutChunkLayer, DISTRICT_CHUNKS_PARAMS, frameTransform, joinChunkGlb, joinChunkLayerFile, KD_CHUNK_CUT_VERSION, planDistrictChunks,
+    chunkKeep, cutChunkLayer, DISTRICT_CHUNKS_PARAMS, frameTransform, joinChunkGlb, joinChunkLayerFile, KD_CHUNK_CUT_VERSION, planDistrictChunks, sameChunkTransform,
     type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame
 } from '../src/node/3d-engine/staged-location/pipeline-k/district-chunks';
 import { assembleGlb, nodeWorldMatrices, parseGlbBytes, readAccessor, type ParsedGlb } from '../src/node/3d-engine/staged-location/glb-bytes';
@@ -305,7 +305,23 @@ describe('pipeline K-D: the chunk cut in its own job, the laptop only publishing
         // the district's frame a millimetre higher: another transform, refused rather than published misplaced
         const other = frameTransform(frame, { ...here, originEllipsoidalHeightM: here.originEllipsoidalHeightM + 0.001 });
         expect(() => joinChunkLayerFile({ ...base, transform: Array.from(other) })).toThrow(/in another frame/);
+        // the same transform computed on another machine (last bits differ): accepted, the job's cut kept
+        const noisy = Array.from(base.transform, (v, i) => v + (i === 12 ? 3e-10 : i === 6 ? 1e-16 : 0));
+        expect(joinChunkLayerFile({ ...base, transform: noisy }).cutBy).toBe('job');
         expect(joinChunkLayerFile(base).cutBy).toBe('job');
+    });
+
+    it('takes a transform from an x86 job and one from an arm64 Mac as the same frame (Penn Station chunk 6, 2026-11-09)', () => {
+        // the stamp chunk 6 carried, and this machine's transform from the same two frames: four entries differed in the last bits
+        const job = [0.9999999996924933, 1.87871143421392e-05, 1.6188193930871675e-05, 0, -1.8787419651999926e-05, 0.999999999645665, 1.8860086664518327e-05, 0, -1.6187839598558185e-05, -1.886039079312951e-05, 0.9999999996911197, 0, -119.99956937736492, 22.243331654186107, 119.9995677115313, 1];
+        const mac = [0.9999999996924933, 0.0000187871143421392, 0.000016188193930871675, 0, -0.000018787419651999926, 0.999999999645665, 0.000018860086664407305, 0, -0.000016187839598558185, -0.000018860390793074, 0.9999999996911197, 0, -119.99956937736492, 22.24333165449007, 119.99956771117854, 1];
+        expect(job.some((v, i) => v !== mac[i])).toBe(true);
+        expect(sameChunkTransform(job, mac)).toBe(true);
+        // a frame a millimetre away, a wrong length or no stamp: not the same
+        expect(sameChunkTransform(job, mac.map((v, i) => (i === 13 ? v + 0.001 : v)))).toBe(false);
+        expect(sameChunkTransform(job.slice(0, 15), mac)).toBe(false);
+        expect(sameChunkTransform(undefined, mac)).toBe(false);
+        expect(sameChunkTransform(job.map((v, i) => (i === 0 ? NaN : v)), mac)).toBe(false);
     });
 
     it('joins on a worker thread with the same result as on this one', async () => {
