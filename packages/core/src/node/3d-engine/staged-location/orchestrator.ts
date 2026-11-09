@@ -1928,6 +1928,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
         const chunksPromise = !plan ? Promise.resolve(undefined) : runner.stage<{ chunks: number; joined: number; failed: number }>({
             id: 'chunks',
             run: async io => {
+                const chunksStartMs = now();
                 const tiles = centreInCloud ? undefined : await tilesReady;
                 if (!tiles && !centreInCloud) return { status: 'skipped', source: '', reason: 'the centre build has no tiles to join the chunks to' };
                 // the district's frame: the centre build's tiles; with the centre in the cloud, its job's frame once it is back
@@ -2107,7 +2108,10 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     const hiddenNow = new Set(shown.flatMap(l => l.supersedes));
                     // the order the chunks were built (the centre, then nearest first): a later chunk's cut edge moves onto an earlier one's
                     const dist = (l: StagedLayer) => { const c = plan.chunks[chunkOf(l)]; return c.centre ? -1 : Math.hypot(c.cx, c.cz); };
-                    const grounds = shown.filter(l => l.layer === 'l2' && !hiddenNow.has(l.objectId)).sort((a, b) => dist(a) - dist(b));
+                    // a building's task (plan.unit 'building') is not seamed: its job cut it to its footprint, it meets no cell line
+                    // and keeps a gain of 1 (district-seams.ts); only the cells' grounds and streets go through the seam stage
+                    const seamed = (l: StagedLayer) => !!plan.chunks[chunkOf(l)] && isCellChunk(plan.chunks[chunkOf(l)]);
+                    const grounds = shown.filter(l => l.layer === 'l2' && !hiddenNow.has(l.objectId) && seamed(l)).sort((a, b) => dist(a) - dist(b));
                     if (grounds.length >= 2) {
                         const dir = path.join(cache.dir, 'district-chunks', runId);
                         fs.mkdirSync(dir, { recursive: true });
@@ -2124,7 +2128,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         const { gains, fields, report: colour } = solveSeamGains(samples, plan);
                         // who keeps each point, the same for every chunk: ground a chunk's build never reached goes to one whose did.
                         // A chunk's streets count as its surface: each chunk carved its own ground under its own streets
-                        const streets = shown.filter(l => l.layer === 'l1r' && !hiddenNow.has(l.objectId)).sort((a, b) => dist(a) - dist(b));
+                        const streets = shown.filter(l => l.layer === 'l1r' && !hiddenNow.has(l.objectId) && seamed(l)).sort((a, b) => dist(a) - dist(b));
                         const coverage = new Map<number, SeamCoverage>();
                         for (const g of grounds) {
                             const c = chunkOf(g);
@@ -2216,16 +2220,23 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     }
                 }
                 await prefetching;
-                cache.writeRunNote(runId, 'district_chunks_joined', { version: DISTRICT_CHUNKS_VERSION, parallel, chunks: report, ...(seams ? { seams } : {}), ...(prefetch ? { prefetch } : {}) });
+                // the district is shown: every chunk joined, the seams closed (the shown band's 3-minute mark is measured here)
+                const shownAtMs = now() - chunksStartMs;
+                io.progress(`district shown: ${joined} of ${todo.length} chunks joined, seams closed (${Math.round(shownAtMs / 1000)} s)`);
+                cache.writeRunNote(runId, 'district_chunks_joined', { version: DISTRICT_CHUNKS_VERSION, parallel, chunks: report, shownAtMs, band: kdBand(), ...(seams ? { seams } : {}), ...(prefetch ? { prefetch } : {}) });
                 // the vector buildings shown past the centre build's tiles stand in only where no chunk was joined
                 if (joined === todo.length) for (const l of run.state.layers.filter(x => (x.layer === 'l0o' || (centreInCloud && x.layer === 'l0')) && !x.retired)) run.commit({ ...l, retired: true }, run.layerMeta[l.objectId]);
                 // the place store (place-store-district.ts; SCRATCHBOX_PLACE_STORE=0 off): the joined district audited, its buildings listed for the object store
                 const footprints: DistrictFootprint[] = [];
-                if (placeStoreEnabled() && here) cache.writeRunNote(runId, 'place_audit', await auditDistrictForPlace({ runId, place: placeValue!, originEllipsoidalHeightM: here.originEllipsoidalHeightM, plan, layers: run.state.layers, manifests: run.objectManifests, footprintsOut: footprints, modelsDir: cache.modelsDir, workspaceRoot: cache.workspaceRoot, request, ...(deps.vectorEvidence ? { vectorEvidence: deps.vectorEvidence } : {}), signal: io.signal, progress: m => io.progress(m) }));
+                // the shown band's objects are a preview (no model reading, material set or upscale): they never compete with a
+                // full build's in the place store, so it is neither audited nor shown from it here
+                const storeThisRun = placeStoreEnabled() && kdBand() !== 'shown';
+                if (!storeThisRun && placeStoreEnabled()) cache.writeRunNote(runId, 'place_audit', { skipped: true, reason: 'the shown band (SCRATCHBOX_KD_BAND=shown): a preview, not kept in the place store' });
+                if (storeThisRun && here) cache.writeRunNote(runId, 'place_audit', await auditDistrictForPlace({ runId, place: placeValue!, originEllipsoidalHeightM: here.originEllipsoidalHeightM, plan, layers: run.state.layers, manifests: run.objectManifests, footprintsOut: footprints, modelsDir: cache.modelsDir, workspaceRoot: cache.workspaceRoot, request, ...(deps.vectorEvidence ? { vectorEvidence: deps.vectorEvidence } : {}), signal: io.signal, progress: m => io.progress(m) }));
                 // each building shown at its best (place-store-best.ts): one whose version here is worse than its stored one stands as that
                 // the frame the run's objects are kept in: this build's extraction, else (the centre in the cloud) the centre job's
                 const objectsFrame = tiles ? objectFrameOf(tiles.extraction) : cloudScan ? objectFrameOf(cloudScanOf(cloudScan)) : undefined;
-                if (placeStoreEnabled() && footprints.length && objectsFrame) {
+                if (storeThisRun && footprints.length && objectsFrame) {
                     if (placePull) await Promise.race([placePull, new Promise(r => setTimeout(r, PLACE_STORE_PARAMS.pullWaitMs).unref())]);
                     const best = showBestVersions({
                         runId, frame: objectsFrame, layers: run.state.layers, manifests: run.objectManifests, footprints, store: defaultDurableAssetStore(),

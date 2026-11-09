@@ -234,6 +234,11 @@ export interface CloudChunkConfig {
     vcpu: number;
     memGiB: number;
     pollMs: number;
+    /**
+     * How often the job's progress is read between polls of its state (ms; default 2 s, never more than pollMs): its
+     * "chunk built" line is seen within this of being sent, not within a whole state poll (10 s a chunk at Penn).
+     */
+    progressPollMs?: number;
     /** Polls of the execution's state that may fail in a row (the API out of reach a moment) before the chunk is failed. */
     pollMisses: number;
     /** Tries of each download of the job's outcome and layers before the chunk is failed. */
@@ -424,10 +429,14 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
                 try {
                     // a poll that fails is asked again (a moment's timeout must not fail a job that is still building); after
                     // pollMisses in a row the chunk fails, its execution cancelled so a retry does not run beside it
-                    let misses = 0;
+                    let misses = 0, lastGet = Date.now();
+                    const tick = Math.min(config.progressPollMs ?? 2_000, config.pollMs);
                     while (true) {
-                        await sleep(config.pollMs, signal);
+                        await sleep(tick, signal);
                         await readProgress();
+                        // the state every pollMs, or at once when the outcome is in (its start time is the record's)
+                        if (builtAtMs === undefined && Date.now() - lastGet < config.pollMs) continue;
+                        lastGet = Date.now();
                         try {
                             state = await o.jobs.get(execution);
                             misses = 0;
