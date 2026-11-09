@@ -121,19 +121,21 @@ export function chunkSteps(plan: DistrictChunkPlan, chunk: DistrictChunk, steps:
 }
 
 /**
- * How many of a building plan's largest building tasks are marked for the fast VMs (SCRATCHBOX_KD_FAST_CHUNKS; default 0):
- * the runner builds them there while a VM is free (cloud-chunk-runner.ts HybridJobs). Set it to the number of VMs.
+ * How many of a building plan's largest chunks (cells and building tasks alike) are marked for the fast VMs
+ * (SCRATCHBOX_KD_FAST_CHUNKS; default 0): the runner builds them there while a VM is free (cloud-chunk-runner.ts
+ * HybridJobs). Set it to the number of VMs. On the pool every chunk builds ~35% slower, so a district is shown in under
+ * 3 minutes only with all of its chunks on the VMs (Penn 150 m: 34).
  */
 export function kdFastChunks(env: NodeJS.ProcessEnv = process.env): number {
     const n = Number(env.SCRATCHBOX_KD_FAST_CHUNKS);
     return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }
 
-/** The building tasks marked for the fast VMs: the `count` largest by extraction area (ties by index). */
+/** The chunks marked for the fast VMs: the `count` largest by extraction area, cells and building tasks alike (ties by index). */
 export function fastChunkIndices(plan: DistrictChunkPlan, count: number): Set<number> {
     if (plan.unit !== 'building' || count <= 0) return new Set();
     const area = (c: DistrictChunk) => (c.rect.x1 - c.rect.x0) * (c.rect.z1 - c.rect.z0);
-    return new Set(plan.chunks.filter(c => !isCellChunk(c)).sort((a, b) => area(b) - area(a) || a.index - b.index).slice(0, count).map(c => c.index));
+    return new Set([...plan.chunks].sort((a, b) => area(b) - area(a) || a.index - b.index).slice(0, count).map(c => c.index));
 }
 
 /** How a chunked district is split: by 120 m cells (each building whole in one), or a task per building beside the cells. */

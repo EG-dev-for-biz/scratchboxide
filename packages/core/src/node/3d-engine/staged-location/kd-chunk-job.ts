@@ -412,7 +412,8 @@ async function poll(root: string): Promise<void> {
     const { GcsCloudBucket } = await import('../../cloud-store/cloud-bucket');
     const { GoogleMediaCredentialsService } = await import('../../google-media-credentials-service');
     const me = await vmIdentity();
-    const bucket = new GcsCloudBucket(new GoogleMediaCredentialsService().createStorageClient().bucket(process.env.KD_VM_BUCKET?.trim() || 'scoutscan-kd-jobs'));
+    const openBucket = () => new GcsCloudBucket(new GoogleMediaCredentialsService().createStorageClient().bucket(process.env.KD_VM_BUCKET?.trim() || 'scoutscan-kd-jobs'));
+    let bucket = openBucket();
     const keys = kdVmKeys(me.name), scratch = path.join(root, '.scratchbox'), snapshot = filesUnder(scratch);
     const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'kd-vm-'));
     const idleS = Number(process.env.KD_VM_IDLE_SUSPEND_S) > 0 ? Number(process.env.KD_VM_IDLE_SUSPEND_S) : 600;
@@ -431,7 +432,9 @@ async function poll(root: string): Promise<void> {
     for (;;) {
         // a jump in the clock is a resume: the idle wait starts again, so the VM never suspends itself before it has read
         // the assignment it was resumed for
-        if (Date.now() - last > 10_000) idleSince = Date.now();
+        // and the storage client is made again: its pooled connections died with the suspend, and a request on one waited
+        // out a socket timeout (a VM's chunk started ~70 s after its resume, 2026-11-09)
+        if (Date.now() - last > 10_000) { idleSince = Date.now(); bucket = openBucket(); }
         last = Date.now();
         let asked: { env?: Record<string, unknown> } | undefined;
         try {

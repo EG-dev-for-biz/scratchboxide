@@ -105,9 +105,11 @@ describe('pipeline K-D: a district in chunks', () => {
         expect(bare.chunks.filter(c => !isCellChunk(c)).map(t => t.buildings)).toEqual([['block']]);
         expect(bare.chunks.find(c => c.cx === 0 && c.cz === 120)!.buildings).toEqual(['bare']);
         expect(bare.chunks.every(c => [c.cx, c.cz, c.rect.x0, c.rect.z1, c.radiusM].every(Number.isFinite))).toBe(true)
-        // the fast VMs take the largest building tasks (never a cell): the block before the east building
-        expect([...fastChunkIndices(plan, 1)]).toEqual([tasks[0].index]);
-        expect([...fastChunkIndices(plan, 5)].sort()).toEqual([tasks[0].index, tasks[1].index].sort());
+        // the fast VMs take the largest chunks, cells and building tasks alike: the cells' 136 m squares first, every chunk
+        // when there are as many VMs
+        expect([...fastChunkIndices(plan, 1)]).toEqual([cells[0].index]);
+        expect([...fastChunkIndices(plan, plan.chunks.length)].sort((a, b) => a - b)).toEqual(plan.chunks.map(c => c.index));
+        expect([...fastChunkIndices(plan, plan.chunks.length - 2)].includes(tasks[0].index)).toBe(false);
         expect(fastChunkIndices(cellPlan, 3).size).toBe(0);
         expect(kdFastChunks({ SCRATCHBOX_KD_FAST_CHUNKS: '6' })).toBe(6);
         expect(kdFastChunks({})).toBe(0);
