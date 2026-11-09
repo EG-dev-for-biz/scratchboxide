@@ -75,6 +75,16 @@ The user asked to investigate. Findings:
 - Added `drivePriorPosM` and `jointPriorPosM`; the joint stage's prior is now centred on the rigid stage's poses.
 - Next: an outside position check (Street View's own per-pano capture dates and links, to tell separate drives apart), and a tie filter that rejects matches whose disparity is ambiguous along a repeating row.
 
+### Two drives, not one (2026-11-09)
+
+The user asked to check. Street View's own metadata (Map Tiles API `streetview/metadata`, no imagery; `pano_meta.py` in the scratchpad) for the six panoramas, proof sheet `proof_two_drives.png`:
+
+- **Drive A:** hFvT5jKC -> VVmScUGc -> feKTMhN8 -> iUK9l3Uh (links), car heading 209, 209, 185, 177 degrees, then a link onward at 119 degrees: a car turning left from southbound 7th Ave onto W 32nd St. Camera roll about -2 degrees.
+- **Drive B:** XBym1B4Z -> 3yGYmP_G -> hx0IwVbv, heading 207-209 degrees, straight down the avenue; roll about +0.9 degrees. feKTMhN8 lists a link to 3yGYmP_G, but 3yGYmP_G does not link back. All six are dated 2026-04 (month only).
+- **Positions:** the stated positions are Google's metadata positions exactly. Across the avenue (east negative): drive A's straight panoramas -6.6 to -6.8 m, drive A's turning panorama iUK9l3Uh -16.2 m, drive B -7.0 to -7.1 m. Google thus has feKTMhN8 and iUK9l3Uh 9.4 m apart across the avenue but 3.5 m apart along it, which no car does. The drive-first fit puts drive A at -13.8 to -16.4 m (one lane, next to Google's own iUK9l3Uh position, the lane a left turn needs) and drive B at -6.0 m (moved 1.1 and 2.1 m, mostly down to street height); along the avenue every panorama stays within 2.2 m of Google's position.
+- So the lateral jump in the fit is two lanes on two passes; Google's positions for drive A's straight panoramas are the ones that are off. This settles the open point above about plausibility; it does not prove the fit to the decimetre. The one-window tie ambiguity is not ruled out, but the fit now agrees with Street View's own link graph, headings and the turning panorama's position, none of which the solver used.
+- Each panorama already has its own pose in `registerDriveOnScan`, so separate drives need no change to the solver; drive membership (the link graph) is a candidate for a check on its result: panoramas of one drive should lie on a smooth path along their headings.
+
 ## Still open
 
 1. The edge score used here (median distance from scan edges to photo edges) is too loose to judge a pose: it improved under the implausible forced move. The judge's registration or the research report's render-and-match is the measure to use.
