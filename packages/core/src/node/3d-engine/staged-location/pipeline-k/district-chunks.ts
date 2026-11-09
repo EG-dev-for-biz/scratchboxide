@@ -30,6 +30,13 @@
  *     that in its own job once it has the district's frame (cutChunkLayer), so the laptop downloads only what it keeps and
  *     only checks and publishes it, on a worker thread (joinChunkLayerFile); a layer that comes uncut is joined there.
  *     joinChunkGlb does the whole join on one machine (the centre built here, the placeholders).
+ * Building tasks (SCRATCHBOX_KD_CHUNK_UNIT=building, kdChunkUnit; plan.unit 'building'): every planned building is a chunk
+ * of its own, one task (a Cloud Run job) each, after the cells: its extraction is its footprint's box plus the margin, it
+ * runs the whole pipeline K over it and keeps only its footprint grown by `buildingReachM` (a scanned wall stands a little
+ * past the vector outline), whole; the cells keep the ground, streets and trees around the buildings and build with K's
+ * facade work turned off (KD_GROUND_CELL_STEPS: each building in a cell belongs to its own task), so a district takes about
+ * as long as its slowest building, not its slowest cell. The cell grid, its lines and the seam stage are the cell plan's:
+ * a building task's edge is its outline, where ownership already changed at no cell line.
  * Seams: two neighbouring chunks remeshed the ground on either side of a cell line independently, and harmonised their
  * photos to their own references; the seam stage (district-seams.ts) cuts the overlapping bands exactly at the line, moves
  * the later chunk's cut edge onto the earlier one's, and levels their colour where they meet. A line never runs through a
@@ -62,8 +69,36 @@ export const DISTRICT_CHUNKS_PARAMS = {
      * past the circle (m; the staged district's containment growth, orchestrator.ts DISTRICT_CONTAINMENT_MAX_GROWTH_M);
      * past that it is left out, with its reason, rather than cut at the edge.
      */
-    edgeGrowthM: 100
+    edgeGrowthM: 100,
+    /**
+     * A building task keeps the plan within this of its footprint (m, plan.unit 'building'): a scanned wall stands up to
+     * a few decimetres past Google's vector outline, and must stay with the building that rebuilt it, not with the cell.
+     */
+    buildingReachM: 1
 };
+
+/**
+ * What a building's cell builds when every building is a task of its own (plan.unit 'building'): K's facade work off (the
+ * reader, the window fit, the wall sheets, the material regions), since every surface it would rebuild is cut away and
+ * taken from the building's own task; the ground, the streets, the trees and the scan are built as in any chunk.
+ */
+export const KD_GROUND_CELL_STEPS: Readonly<Record<string, boolean>> = {
+    'remesh.facadeRead': false,
+    'remesh.windowFit': false,
+    'remesh.wallSheets': false,
+    'remesh.occlusion': false,
+    'twin.materials': false,
+    'twin.roofShadow': false,
+    'polish.lattice': false
+};
+
+/** How a chunked district is split: by 120 m cells (each building whole in one), or a task per building beside the cells. */
+export type DistrictChunkUnit = 'cell' | 'building';
+
+/** SCRATCHBOX_KD_CHUNK_UNIT=building: a task per building (with the cloud runner and its centre in the cloud only); else cells. */
+export function kdChunkUnit(env: NodeJS.ProcessEnv = process.env): DistrictChunkUnit {
+    return env.SCRATCHBOX_KD_CHUNK_UNIT?.trim() === 'building' ? 'building' : 'cell';
+}
 
 export interface DistrictChunk {
     /** Row-major over the grid; the centre cell is the run itself. */
@@ -80,6 +115,8 @@ export interface DistrictChunk {
     /** The buildings it owns (vector ids). */
     buildings: string[];
     centre: boolean;
+    /** 'building': one building's task (plan.unit 'building'); absent: a cell of the grid. */
+    kind?: 'building';
 }
 
 export interface DistrictChunkPlan {
@@ -91,7 +128,14 @@ export interface DistrictChunkPlan {
     footprints: Array<DistrictFootprint & { chunk: number }>;
     /** Buildings the circle reaches that reach too far past it to be planned whole: left out (no chunk owns them), with why. */
     leftOut?: Array<DistrictFootprint & { reason: string }>;
+    /** 'building': every building a task of its own after the cells (the cells keep the ground); absent: cells only. */
+    unit?: 'building';
+    /** With unit 'building': how far past its footprint a building's task keeps the plan (m). */
+    buildingReachM?: number;
 }
+
+/** Whether a chunk is one of the grid's cells (not a building's task). */
+export const isCellChunk = (c: DistrictChunk): boolean => c.kind !== 'building';
 
 /** The point of a footprint's outline nearest the district's centre and its distance (the centre itself, 0, when inside). */
 function nearestToCentre(loops: Vec2[][]): { p: Vec2; d: number } | undefined {
@@ -108,7 +152,7 @@ function nearestToCentre(loops: Vec2[][]): { p: Vec2; d: number } | undefined {
 }
 
 /** The plan for a district of `radiusM`; undefined when the district is small enough to be one build. */
-export function planDistrictChunks(radiusM: number, buildings: Array<{ id: string; centroid: Vec2; loops: Vec2[][] }>, P = DISTRICT_CHUNKS_PARAMS): DistrictChunkPlan | undefined {
+export function planDistrictChunks(radiusM: number, buildings: Array<{ id: string; centroid: Vec2; loops: Vec2[][] }>, P = DISTRICT_CHUNKS_PARAMS, unit: DistrictChunkUnit = 'cell'): DistrictChunkPlan | undefined {
     if (!(radiusM > P.minChunkedRadiusM)) return undefined;
     const half = P.cellM / 2, n = Math.ceil((radiusM - half) / P.cellM);
     const cells: Array<{ i: number; j: number; cx: number; cz: number }> = [];
@@ -141,14 +185,25 @@ export function planDistrictChunks(radiusM: number, buildings: Array<{ id: strin
         if (k < 0) continue;
         owned[k].push(b.id);
         footprints.push({ id: b.id, loops: b.loops, chunk: k });
-        for (const loop of b.loops) for (const [x, z] of loop) { const r = box[k]; r.x0 = Math.min(r.x0, x); r.z0 = Math.min(r.z0, z); r.x1 = Math.max(r.x1, x); r.z1 = Math.max(r.z1, z); }
+        // a building task's cell keeps only its ground: its extraction is the cell, not grown to the building
+        if (unit !== 'building') for (const loop of b.loops) for (const [x, z] of loop) { const r = box[k]; r.x0 = Math.min(r.x0, x); r.z0 = Math.min(r.z0, z); r.x1 = Math.max(r.x1, x); r.z1 = Math.max(r.z1, z); }
     }
-    const chunks = cells.map((c, k) => {
+    const farthest = (r: DistrictChunk['rect'], cx: number, cz: number) => Math.ceil(Math.max(...[[r.x0, r.z0], [r.x1, r.z0], [r.x0, r.z1], [r.x1, r.z1]].map(([x, z]) => Math.hypot(x - cx, z - cz))));
+    const chunks: DistrictChunk[] = cells.map((c, k) => {
         const r = { x0: box[k].x0 - P.marginM, z0: box[k].z0 - P.marginM, x1: box[k].x1 + P.marginM, z1: box[k].z1 + P.marginM };
-        const radius = Math.max(...[[r.x0, r.z0], [r.x1, r.z0], [r.x0, r.z1], [r.x1, r.z1]].map(([x, z]) => Math.hypot(x - c.cx, z - c.cz)));
-        return { index: k, cx: c.cx, cz: c.cz, half, rect: r, radiusM: Math.ceil(radius), buildings: owned[k], centre: c.i === 0 && c.j === 0 };
+        return { index: k, cx: c.cx, cz: c.cz, half, rect: r, radiusM: farthest(r, c.cx, c.cz), buildings: unit === 'building' ? [] : owned[k], centre: c.i === 0 && c.j === 0 };
     });
-    return { version: DISTRICT_CHUNKS_VERSION, radiusM, cellM: P.cellM, chunks, footprints, ...(leftOut.length ? { leftOut } : {}) };
+    if (unit !== 'building') return { version: DISTRICT_CHUNKS_VERSION, radiusM, cellM: P.cellM, chunks, footprints, ...(leftOut.length ? { leftOut } : {}) };
+    // a task per building, after the cells, in the footprints' order: its box, grown by its reach and the margin
+    for (const f of footprints) {
+        let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+        for (const loop of f.loops) for (const [x, z] of loop) { x0 = Math.min(x0, x); z0 = Math.min(z0, z); x1 = Math.max(x1, x); z1 = Math.max(z1, z); }
+        const g = P.marginM + P.buildingReachM, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+        const r = { x0: x0 - g, z0: z0 - g, x1: x1 + g, z1: z1 + g };
+        f.chunk = chunks.length;
+        chunks.push({ index: chunks.length, cx, cz, half: Math.max(x1 - x0, z1 - z0) / 2, rect: r, radiusM: farthest(r, cx, cz), buildings: [f.id], centre: false, kind: 'building' });
+    }
+    return { version: `${DISTRICT_CHUNKS_VERSION}+building`, radiusM, cellM: P.cellM, chunks, footprints, ...(leftOut.length ? { leftOut } : {}), unit: 'building', buildingReachM: P.buildingReachM };
 }
 
 /**
@@ -199,19 +254,20 @@ export function machineCores(env: NodeJS.ProcessEnv = process.env): number {
 
 /** Which chunk a plan point belongs to (see the file comment); -1 past the radius. */
 export function chunkOwner(plan: DistrictChunkPlan): (x: number, z: number) => number {
-    const inBuilding = districtBuildingIndex(plan.footprints, { marginM: 0, cellM: 20 });
+    // a building task keeps its footprint and the reach past it (the nearest footprint within it); a cell, its outline only
+    const inBuilding = districtBuildingIndex(plan.footprints, { marginM: plan.unit === 'building' ? (plan.buildingReachM ?? 0) : 0, cellM: 20 });
     const inLeftOut = plan.leftOut?.length ? districtBuildingIndex(plan.leftOut, { marginM: 0, cellM: 20 }) : undefined;
     const half = plan.cellM / 2;
     // the cell by its grid position (a point on a cell line goes to the lower row, then the lower column, as the plan's
     // row-major order has it); a point whose cell is not in the plan falls back to the search
     const at = new Map<string, number>();
-    plan.chunks.forEach((c, k) => at.set(`${Math.round(c.cx / plan.cellM)},${Math.round(c.cz / plan.cellM)}`, k));
+    plan.chunks.forEach((c, k) => { if (isCellChunk(c)) at.set(`${Math.round(c.cx / plan.cellM)},${Math.round(c.cz / plan.cellM)}`, k); });
     return (x, z) => {
         const b = inBuilding(x, z);
         if (b >= 0) return plan.footprints[b].chunk;
         if (Math.hypot(x, z) > plan.radiusM || (inLeftOut && inLeftOut(x, z) >= 0)) return -1;
         const k = at.get(`${Math.ceil((x - half) / plan.cellM)},${Math.ceil((z - half) / plan.cellM)}`);
-        return k ?? plan.chunks.findIndex(c => Math.abs(x - c.cx) <= half && Math.abs(z - c.cz) <= half);
+        return k ?? plan.chunks.findIndex(c => isCellChunk(c) && Math.abs(x - c.cx) <= half && Math.abs(z - c.cz) <= half);
     };
 }
 
@@ -224,7 +280,8 @@ export function chunkTerritory(plan: DistrictChunkPlan, index: number, bandM = 0
     const owner = chunkOwner(plan);
     const inBuilding = districtBuildingIndex(plan.footprints, { marginM: 0, cellM: 20 });
     const probes: Array<[number, number]> = [];
-    if (bandM > 0) for (const dx of [-1, 0, 1]) for (const dz of [-1, 0, 1]) if (dx || dz) probes.push([dx * bandM / Math.hypot(dx, dz), dz * bandM / Math.hypot(dx, dz)]);
+    // a building's task keeps its own and no band: its edge is its outline, beside the cell's ground
+    if (bandM > 0 && isCellChunk(plan.chunks[index])) for (const dx of [-1, 0, 1]) for (const dz of [-1, 0, 1]) if (dx || dz) probes.push([dx * bandM / Math.hypot(dx, dz), dz * bandM / Math.hypot(dx, dz)]);
     return (x, z) => {
         if (owner(x, z) === index) return true;
         if (!probes.length || inBuilding(x, z) >= 0 || Math.hypot(x, z) > plan.radiusM) return false;

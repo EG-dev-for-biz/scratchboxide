@@ -17,11 +17,15 @@ set -euo pipefail
 #   GOOGLE_MAPS_API_KEY  the Maps key (setup, and job with KD_JOB_AUTH=app)
 #   KD_JOB_AUTH=app      job runs as the app's account, no secrets (when nobody may grant access to them)
 #   PROJECT / REGION     default scoutscan / us-central1
+#   JOB / CPU / MEMORY   the job's name and task size (default kd-chunk-job, 8, 32Gi); a second size is a second job,
+#                        e.g. JOB=kd-chunk-job-4c CPU=4 MEMORY=16Gi, chosen by the runner's SCRATCHBOX_KD_CLOUD_JOB
 ################################################################################
 
 PROJECT="${PROJECT:-scoutscan}"
 REGION="${REGION:-us-central1}"
-JOB="kd-chunk-job"
+JOB="${JOB:-kd-chunk-job}"
+CPU="${CPU:-8}"
+MEMORY="${MEMORY:-32Gi}"
 JOB_BUCKET="scoutscan-kd-jobs"
 TRAINING_BUCKET="scoutscan-building-training"
 JOB_SA="kd-chunk-job@${PROJECT}.iam.gserviceaccount.com"
@@ -30,7 +34,7 @@ MAPS_SECRET="kd-maps-api-key"
 SA_KEY_FILE="${SA_KEY_FILE:-$HOME/.scratchbox-ide/service-account.json}"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD)"
-IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/depthbox3-repo/${JOB}:${COMMIT}"
+IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/depthbox3-repo/kd-chunk-job:${COMMIT}"
 G=(gcloud --project "$PROJECT" --quiet)
 
 app_sa() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["client_email"])' "$SA_KEY_FILE"; }
@@ -99,7 +103,7 @@ build() {
 
 job() {
   local app; app="$(app_sa)"
-  local common="SCRATCHBOX_TRAINING_BUCKET=$TRAINING_BUCKET,SCRATCHBOX_STORE_BUCKET=off,SCRATCHBOX_CPUS=8,SCRATCHBOX_TEXTURE_WORKERS=7"
+  local common="SCRATCHBOX_TRAINING_BUCKET=$TRAINING_BUCKET,SCRATCHBOX_STORE_BUCKET=off,SCRATCHBOX_CPUS=$CPU,SCRATCHBOX_TEXTURE_WORKERS=$((CPU > 1 ? CPU - 1 : 1))"
   local auth
   if [ "${KD_JOB_AUTH:-secrets}" = "app" ]; then
     # the job runs as the app's account with no key file (the Gemini client's SCRATCHBOX_GOOGLE_ADC fallback), and the Maps
@@ -114,7 +118,7 @@ job() {
       --set-env-vars "GOOGLE_APPLICATION_CREDENTIALS=/secrets/sa/key.json,$common")
   fi
   "${G[@]}" run jobs deploy "$JOB" --region "$REGION" --image "$IMAGE" \
-    --tasks 1 --max-retries 0 --task-timeout 3h --cpu 8 --memory 32Gi --execution-environment gen2 "${auth[@]}"
+    --tasks 1 --max-retries 0 --task-timeout 3h --cpu "$CPU" --memory "$MEMORY" --execution-environment gen2 "${auth[@]}"
   # a job run as the app's own account needs no grant for the app to run it (Editor)
   [ "${KD_JOB_AUTH:-secrets}" = "app" ] \
     || "${G[@]}" run jobs add-iam-policy-binding "$JOB" --region "$REGION" --member "serviceAccount:$app" --role roles/run.developer >/dev/null

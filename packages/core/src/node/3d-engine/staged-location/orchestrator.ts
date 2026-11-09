@@ -207,7 +207,7 @@ import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSIO
 import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
 import { districtBuildingIndex, districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
-import { chunkCpuShare, chunkOwner, chunkParallel, kdCentreRunner, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
+import { chunkCpuShare, chunkOwner, chunkParallel, isCellChunk, kdCentreRunner, kdChunkUnit, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, KD_GROUND_CELL_STEPS, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
 import { createChunkJoiner } from './pipeline-k/chunk-join-worker';
 import { auditDistrictForPlace, placeStoreEnabled, pullPlaceForRun, syncPlaceAfterObjects } from './place-store-district';
 import { PLACE_STORE_PARAMS } from './place-store';
@@ -1717,12 +1717,22 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // the buildings the circle may reach too (their middles up to the edge growth past it): each planned whole or left out
                 const reach = radius + DISTRICT_CHUNKS_PARAMS.edgeGrowthM;
                 const ev = await deps.vectorEvidence({ lat: placeValue.lat, lng: placeValue.lng, radiusM: reach });
-                chunkPlan = planDistrictChunks(radius, selectPaintBuildings(ev, reach).buildings.map(b => ({ id: b.id, centroid: b.centroid, loops: b.parts.map(p => p.loops[0]).filter(l => l && l.length >= 3) })));
+                // a task per building only where every chunk, the centre too, builds in the cloud: a centre built here would
+                // rebuild its cell's buildings only for them to be cut away
+                let unit = kdChunkUnit();
+                if (unit === 'building' && kdCentreRunner() !== 'cloud') {
+                    unit = 'cell';
+                    run.note(PROVENANCE.asScanned, 'a task per building (SCRATCHBOX_KD_CHUNK_UNIT=building) needs the cloud chunk runner with its centre in the cloud: the district is built by cells');
+                }
+                chunkPlan = planDistrictChunks(radius, selectPaintBuildings(ev, reach).buildings.map(b => ({ id: b.id, centroid: b.centroid, loops: b.parts.map(p => p.loops[0]).filter(l => l && l.length >= 3) })), DISTRICT_CHUNKS_PARAMS, unit);
                 if (chunkPlan) {
                     // the whole plan, footprints too: the seam stage's ownership can be rebuilt from it offline
                     cache.writeRunNote(runId, 'district_chunks', chunkPlan);
                     const owner = chunkOwner(chunkPlan), centre = chunkPlan.chunks.find(c => c.centre)!;
-                    run.note(PROVENANCE.asScanned, `chunked district (${DISTRICT_CHUNKS_VERSION}): the ${Math.round(radius)} m asked for cut into ${chunkPlan.chunks.length} chunks of ${chunkPlan.cellM} m, each building whole in one of them; this build is the centre one (${Math.round(centre.radiusM)} m), the others are built alongside it and joined`);
+                    const cellCount = chunkPlan.chunks.filter(isCellChunk).length;
+                    run.note(PROVENANCE.asScanned, chunkPlan.unit === 'building'
+                        ? `chunked district (${chunkPlan.version}): the ${Math.round(radius)} m asked for cut into ${cellCount} cells of ${chunkPlan.cellM} m for the ground, streets and trees, and a task of its own for each of its ${chunkPlan.chunks.length - cellCount} buildings, each whole; every chunk is built alongside the others and joined`
+                        : `chunked district (${DISTRICT_CHUNKS_VERSION}): the ${Math.round(radius)} m asked for cut into ${chunkPlan.chunks.length} chunks of ${chunkPlan.cellM} m, each building whole in one of them; this build is the centre one (${Math.round(centre.radiusM)} m), the others are built alongside it and joined`);
                     run.layerTransform = chainLayerTransforms(run.layerTransform, territoryClipper(run, cache, chunkTerritory(chunkPlan, centre.index, DISTRICT_CHUNKS_PARAMS.seamBandM), (x, z) => owner(x, z) === centre.index));
                 }
             } catch (err) {
@@ -1966,7 +1976,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             query: request.query, isolate: false, radiusM: c.radiusM, trees: request.trees, stageIntoActiveScene: false, district: 'kd',
                             // the centre keeps the hero's address: its scene is the one the district is published on
                             place: { lat: ll.lat, lng: ll.lng, formattedAddress: c.centre ? placeValue!.formattedAddress : `${placeValue!.formattedAddress} (chunk ${c.index})` },
-                            ...(request.enhance !== undefined ? { enhance: request.enhance } : {}), ...(request.steps ? { steps: request.steps } : {}),
+                            ...(request.enhance !== undefined ? { enhance: request.enhance } : {}),
+                            // with a task per building, a cell builds its ground with K's facade work off (its buildings are the tasks')
+                            ...(plan.unit === 'building' && isCellChunk(c) ? { steps: { ...(request.steps ?? {}), ...KD_GROUND_CELL_STEPS } } : request.steps ? { steps: request.steps } : {}),
                             chunk: { of: runId, index: c.index, rect: { x0: c.rect.x0 - c.cx, z0: c.rect.z0 - c.cz, x1: c.rect.x1 - c.cx, z1: c.rect.z1 - c.cz } }
                         }, {
                             signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce,

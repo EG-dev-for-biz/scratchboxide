@@ -248,13 +248,29 @@ export function cloudChunkConfig(env: NodeJS.ProcessEnv = process.env): CloudChu
         region: v('SCRATCHBOX_KD_CLOUD_REGION', 'us-central1'),
         job: v('SCRATCHBOX_KD_CLOUD_JOB', 'kd-chunk-job'),
         bucket: v('SCRATCHBOX_KD_JOB_BUCKET', 'scoutscan-kd-jobs'),
-        vcpu: 8,
-        memGiB: 32,
+        vcpu: Number(env.SCRATCHBOX_KD_CLOUD_VCPU) > 0 ? Number(env.SCRATCHBOX_KD_CLOUD_VCPU) : 8,
+        memGiB: Number(env.SCRATCHBOX_KD_CLOUD_MEM_GIB) > 0 ? Number(env.SCRATCHBOX_KD_CLOUD_MEM_GIB) : 32,
         pollMs: 10_000,
         pollMisses: 12,
         downloadAttempts: 4
     };
 }
+
+/**
+ * The switches a district's runner hands each of its jobs when set here (a measured run: SCRATCHBOX_CACHE_RESTORE=off
+ * builds every chunk from nothing, as a fresh district would; SCRATCHBOX_CACHE_MIRROR=off keeps its caches out of the
+ * bucket). Nothing else of this machine's environment reaches a job: the job's own settings are deploy.sh's.
+ */
+export const KD_JOB_FORWARDED_ENV = ['SCRATCHBOX_CACHE_RESTORE', 'SCRATCHBOX_CACHE_MIRROR'] as const;
+
+export function forwardedJobEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const k of KD_JOB_FORWARDED_ENV) { const v = env[k]?.trim(); if (v) out[k] = v; }
+    return out;
+}
+
+/** The progress line a job writes once its outcome is in the bucket (kd-chunk-job.ts), before it mirrors its caches. */
+export const KD_CHUNK_BUILT_LINE = /^chunk built \(\w+\) in \d+ s$/;
 
 /** The image tag's commit (`…/kd-chunk-job:<sha>`, or `…@sha256:` which names none). */
 export function imageCommit(image: string): string | undefined {
@@ -384,20 +400,24 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
                 // its share of the project's model calls: one of the chunks at once and the centre beside them
                 const shares = (opts.atOnce ?? chunkParallel(undefined, undefined, env)) + 1;
                 const budget = modelCallShareEnv(modelCallLimitsFromEnv(env), shares);
-                const execution = await o.jobs.run({ KD_JOB: `gs://${config.bucket}/${prefix}`, ...budget });
+                const execution = await o.jobs.run({ KD_JOB: `gs://${config.bucket}/${prefix}`, ...forwardedJobEnv(env), ...budget });
                 const short = execution.split('/').pop();
                 const kept = Object.entries(budget).map(([k, v]) => `${k}=${v}`).join(' ');
                 progress(`started in the cloud (${short}, run ${runId})${kept ? `, model calls kept to 1/${shares} of the budget (${kept})` : ''}`);
                 log(`[kd-cloud] chunk ${request.chunk!.index}: execution ${execution}, run ${runId}`);
 
-                let seen = 0, state: CloudExecution | undefined;
+                let seen = 0, state: CloudExecution | undefined, builtAtMs: number | undefined;
                 const progressFile = path.join(work, 'progress.jsonl');
                 const readProgress = async () => {
                     try {
                         if (!(await o.bucket.download(keys.progress, progressFile))) return;
                         const r = newProgressLines(fs.readFileSync(progressFile, 'utf8'), seen);
                         seen = r.seen;
-                        for (const l of r.lines) progress(l);
+                        for (const l of r.lines) {
+                            progress(l);
+                            // the outcome is in the bucket: the chunk is read now, while the job mirrors its caches
+                            if (builtAtMs === undefined && KD_CHUNK_BUILT_LINE.test(l)) builtAtMs = Date.now();
+                        }
                     } catch { /* the next poll reads it */ }
                 };
                 const cancel = () => o.jobs.cancel(execution).catch(e => log(`[kd-cloud] cancelling ${execution} failed: ${e instanceof Error ? e.message : String(e)}`));
@@ -418,6 +438,7 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
                             continue;
                         }
                         if (state.done) break;
+                        if (builtAtMs !== undefined) { state = { ...state, done: true, succeeded: true, endMs: builtAtMs }; break; }
                     }
                 } catch (err) {
                     if (signal?.aborted) {

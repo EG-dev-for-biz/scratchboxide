@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DirectoryCloudBucket } from '../src/node/cloud-store/cloud-bucket';
 import { GeminiClient } from '../src/node/gemini/gemini-client';
 import {
-    checkImageSkew, cloudChunkConfig, cloudRunTaskCostUsd, createCloudChunkRunner, imageCommit, kdChunkJobPrefix, kdChunkLayerFiles,
+    checkImageSkew, cloudChunkConfig, cloudRunTaskCostUsd, createCloudChunkRunner, forwardedJobEnv, imageCommit, KD_CHUNK_BUILT_LINE, kdChunkJobPrefix, kdChunkLayerFiles,
     localiseJobPaths, newProgressLines, parseExecution, type CloudExecution, type CloudRunJobs, type KdChunkJobSpec
 } from '../src/node/3d-engine/staged-location/cloud-chunk-runner';
 import { parseKdJobLocation, runKdChunkJob } from '../src/node/3d-engine/staged-location/kd-chunk-job';
@@ -175,6 +175,27 @@ describe('pipeline K-D cloud chunk runner', () => {
         const t = setup({ env: { SCRATCHBOX_KD_CHUNK_RUNNER: 'cloud', SCRATCHBOX_KD_CLOUD_PARALLEL: '3', SCRATCHBOX_MODEL_CALLS_PER_MINUTE: '100' } });
         await t.runChunk(request(), {});
         expect(t.jobs.runs[0].SCRATCHBOX_MODEL_CALLS_PER_MINUTE).toBe('25');
+    });
+
+    it('reads the chunk once its outcome is in, while the job still mirrors its caches, and hands the job only the forwarded switches', async () => {
+        const s = setup();
+        // the same chunk, its execution never ending (a job still sending its caches): the outcome is read all the same
+        const jobs = new FakeJobs(`us-central1-docker.pkg.dev/scoutscan/depthbox3-repo/kd-chunk-job:${SHA}`, async env => {
+            const where = parseKdJobLocation(env.KD_JOB);
+            await runKdChunkJob({ bucket: s.bucket, prefix: where.prefix, cache: s.jobCache, build: fakeBuild(s.jobCache), flushMs: 5, log: () => undefined, libraryStatsDir: s.jobStats });
+            return new Promise<boolean>(() => undefined);
+        });
+        const runChunk = createCloudChunkRunner({
+            cache: s.laptop, bucket: s.bucket, jobs, config: { ...cloudChunkConfig({}), bucket: 'scoutscan-kd-jobs', pollMs: 5 }, head: () => SHA, newRunId: () => 'a1b2c3d4',
+            env: { SCRATCHBOX_CACHE_RESTORE: 'off', GOOGLE_MAPS_API_KEY: 'never-sent', SCRATCHBOX_KD_CHUNK_UNIT: 'building' }, log: () => undefined, libraryStatsDir: s.laptopStats
+        });
+        const out = await runChunk(request(), {});
+        expect(out.result.status).toBe('complete');
+        expect(fs.readFileSync(path.join(s.laptop.modelsDir, 'ground_c7.glb'), 'utf8')).toBe('glTF-ground');
+        expect(jobs.runs).toEqual([{ KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/7', SCRATCHBOX_CACHE_RESTORE: 'off' }]);
+        expect(forwardedJobEnv({ SCRATCHBOX_CACHE_MIRROR: ' off ', SCRATCHBOX_CPUS: '8' })).toEqual({ SCRATCHBOX_CACHE_MIRROR: 'off' });
+        expect(KD_CHUNK_BUILT_LINE.test('chunk built (degraded) in 478 s')).toBe(true);
+        expect(KD_CHUNK_BUILT_LINE.test('chunk 3: chunk built (degraded) in 478 s')).toBe(false);
     });
 
     it('sets no budget on an execution when this process has none', async () => {
