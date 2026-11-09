@@ -125,7 +125,7 @@ export const streetObjectsHandler: ToolHandler = async (args, ctx): Promise<Tool
                 resultPayload: { status: 'success', blobRead: path.relative(ctx.workspaceRoot, path.join(outDir, 'blob_read.json')), blobStats: st }
             };
         }
-        const walkable = (x: number, z: number) => look.buildingAt(x, z) < 0 && !look.roadAt(x, z);
+        const walkable = (x: number, z: number) => look.buildingAt(x, z) <= 0 && !look.roadAt(x, z);
         const report = await rebuildStreetObjects({
             walkable,
             origin: { lat, lng, heightMeters: 0 }, audit, scanGlb: files.scan, tileGlb: files.tile, streetView: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() }, vision: chain, outDir,

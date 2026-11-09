@@ -24,7 +24,7 @@ const cluster = (id: number, x: number, z: number, w: number, d: number, h: numb
 const square = (x0: number, z0: number, x1: number, z1: number) => [[x0, z0], [x1, z0], [x1, z1], [x0, z1]] as Array<[number, number]>;
 const vector = { buildings: [{ id: 'b', parts: [[square(10, -5, 20, 5)]] }], roads: [[[-50, 8], [50, 8]]] as Array<Array<[number, number]>> };
 const look = {
-    buildingAt: (x: number, z: number) => (x >= 10 && x <= 20 && z >= -5 && z <= 5 ? 0 : -1),
+    buildingAt: (x: number, z: number) => (x >= 10 && x <= 20 && z >= -5 && z <= 5 ? 1 : 0),
     roadAt: (_x: number, z: number) => Math.abs(z - 8) < 3,
     landuseAt: () => undefined
 };

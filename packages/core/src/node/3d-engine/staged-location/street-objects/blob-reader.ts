@@ -147,6 +147,7 @@ function nearestEdges(lines: Array<Array<[number, number]>>, cellM = 20): (x: nu
 }
 
 /** Every cluster's evidence (see the file comment). */
+/** `look.buildingAt` is 0 off every building and the building's index (from 1) on one (vector-footprints.ts evidenceLookup). */
 export function blobEvidence(audit: ResidualAuditResult, look: Pick<EvidenceLookup, 'buildingAt' | 'roadAt' | 'landuseAt'>, ev: Pick<VectorEvidence, 'buildings' | 'roads'>): BlobEvidence[] {
     const rings: Array<Array<[number, number]>> = [];
     for (const b of ev.buildings) for (const part of b.parts) for (const loop of part) rings.push([...loop.map(p => [p[0], p[1]] as [number, number]), [loop[0][0], loop[0][1]]]);
@@ -155,8 +156,8 @@ export function blobEvidence(audit: ResidualAuditResult, look: Pick<EvidenceLook
         const cx = (c.lo[0] + c.hi[0]) / 2, cz = (c.lo[2] + c.hi[2]) / 2;
         const fr = c.frame, ext = fr.extentsM;
         const corners: Array<[number, number]> = [-1, 1].flatMap(sx => [-1, 1].map(sz => [fr.origin[0] + (sx * ext[0] / 2) * fr.xAxis[0] + (sz * ext[2] / 2) * fr.zAxis[0], fr.origin[2] + (sx * ext[0] / 2) * fr.xAxis[2] + (sz * ext[2] / 2) * fr.zAxis[2]] as [number, number]));
-        const inFootprint = look.buildingAt(cx, cz) >= 0;
-        const touches = inFootprint || corners.some(([x, z]) => look.buildingAt(x, z) >= 0);
+        const inFootprint = look.buildingAt(cx, cz) > 0;
+        const touches = inFootprint || corners.some(([x, z]) => look.buildingAt(x, z) > 0);
         const dB = toBuilding(cx, cz, 60);
         const top = c.attachment as unknown as { topAboveSupportM?: number | null };
         return {
