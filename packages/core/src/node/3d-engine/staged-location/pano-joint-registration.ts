@@ -481,6 +481,8 @@ export interface JointRegistrationInput {
      */
     faces?: Array<{ chart: SurfaceChart }>;
     log?: (m: string) => void;
+    /** The clock the budget is read from (default Date.now; a test ends the budget at a chosen point with it). */
+    now?: () => number;
 }
 
 export interface JointPanoOutcome {
@@ -513,7 +515,8 @@ const median = (v: number[]) => { if (!v.length) return null; const s = [...v].s
 
 /** Registers all panos jointly and keeps the result only when the held-out fit improves (see the file comment). */
 export function registerPanosJointly(input: JointRegistrationInput): JointRegistrationResult {
-    const t0 = Date.now();
+    const clock = input.now ?? Date.now;
+    const t0 = clock();
     const timings: Record<string, number> = {};
     const log = input.log ?? (() => undefined);
     const wide = input.frames.filter(f => f.view.fovDeg >= EDGE_REG_MIN_FOV_DEG).sort((a, b) => (a.key < b.key ? -1 : 1));
@@ -557,7 +560,7 @@ export function registerPanosJointly(input: JointRegistrationInput): JointRegist
     let before: CrossViewResult | undefined;
     let fineFrames: Prepared[] = [];
     for (const [s, width] of JOINT_WIDTHS_PX.entries()) {
-        const left = budget - (Date.now() - t0);
+        const left = budget - (clock() - t0);
         if (left < 5000) { log(`[joint] budget spent before the ${width} px scale`); break; }
         t = Date.now();
         const prepared = wide.map(f => prepare(f, width, refHeading.get(f.view.panoId)!));
@@ -575,7 +578,10 @@ export function registerPanosJointly(input: JointRegistrationInput): JointRegist
         });
         refiner.useThreads(input.threads ?? HeadlessEdgeRenderPool.defaultThreads());
         try {
-            if (s === JOINT_WIDTHS_PX.length - 1) { before = refiner.measure(corrs); fineFrames = prepared; }
+            // the matches before refining, at the finest scale that runs: measured at the coarsest too, so a budget that ends
+            // before the fine scale still keeps the coarse fit for the held-out test below (it was thrown away whole until
+            // 2026-11-08: Penn's street objects refined 44 panos to a 3.49 px median and the nominal poses stood)
+            if (s === 0 || s === JOINT_WIDTHS_PX.length - 1) { before = refiner.measure(corrs); fineFrames = prepared; }
             res = refiner.run(corrs, start);
         } finally {
             refiner.close();
