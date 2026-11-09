@@ -105,6 +105,15 @@ With 1 and 2 the shown band at Penn 150 m is about 4.5 min; with all four, about
 (22 s) and the stage cache's publishing (13 s) on the main thread are next; and contention in the fan-out (+25-35%).
 Findings record: `docs/processes/2026-11-09-kd-cloud-fanout.md`.
 
+## Second round (2026-11-09): 240 s, and what remains is the pool's CPU
+
+The twin's de-light and encode moved to the PNG codec threads (textures ~30% faster on the largest buildings) and the
+largest extractions start first: **Penn shown in 240 s**, byte-identical. Spreading the pool across two regions did not
+help (248 s). The largest building builds in 146-149 s alone as a Cloud Run job task but 193-211 s alone on a service
+instance (request- or instance-billed, gen1 or gen2): the pool's CPU is ~35% slower in the native multi-threaded steps.
+Under 3 minutes needs the few largest chunks on job-class CPU with a fast start (suspended Compute Engine VMs, or GKE
+Autopilot's Performance class); details in `docs/processes/2026-11-09-kd-cloud-fanout.md`.
+
 ## The design
 
 ### 1. Known places open from the store (seconds)

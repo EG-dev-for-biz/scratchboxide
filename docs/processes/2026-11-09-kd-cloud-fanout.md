@@ -59,3 +59,37 @@
 `kd-chunk-worker` (service, 0 instances at rest), `kd-chunk-job-fanout-8c` (job), `kd-district-driver` (job: a district
 built headless, `scripts/kd_district_cloud_run.ts`), `kd-chunk-prof` (job: a chunk under `--cpu-prof`, profiles to
 `gs://scoutscan-kd-jobs/kd-prof/`), `kd-chunk-job-fanout-4c` (job, not measured). The shared `kd-chunk-job` was not touched.
+
+## Toward 3 minutes, second round (2026-11-09, `feat/kd-shown-3min`)
+
+![timing sheet, second round](kd-cloud-fanout/2026-11-09-timing-sheet-2.jpg)
+
+- **The twin off the main thread:** every photo de-lit on the PNG codec threads (`pipeline-k/twin-delight.ts`, the same
+  function on either thread) and its PNGs encoded there, appended in order. Textures on the largest buildings 41 → 27 s
+  and 46 → 37 s. (The "13 s of cache publishing" in the profile was the twin itself, run inside the stage cache's
+  producer; publishing proper is about 1.5 s.)
+- **Largest first:** a building plan starts the centre, then the largest extractions first.
+- **Regions:** `RoundRobinJobs` deals the chunks to the pool in several regions (`SCRATCHBOX_KD_CLOUD_SERVICE_REGIONS`).
+  It did not help: shown in 248 s across us-central1 and us-east4, against 240 s in us-central1 alone.
+- **Penn 150 m, shown band, fresh: 240 s** (run `459d61d5`), byte-identical to the #207 reference (110/110 layers; the
+  two-region run `4ba23107` too).
+
+**What the slowest building is waiting on: the pool's CPU.** Chunk 25 (the largest building) built:
+
+| Where | Build |
+| --- | ---: |
+| Alone, as a Cloud Run job task (twice) | 146, 149 s |
+| Alone, on the pool's service instance: request-billed, instance-billed, gen1 | 202, 193, 211 s |
+| 8 copies at once on the pool | 182-255 s (median ~218) |
+| In the district (34 chunks), one region / two regions | 223 / 224 s |
+
+The same chunk runs about 35% slower on a service instance than on a job task, whatever the billing or execution
+environment, and the gap is in the native multi-threaded steps (window fit 19 → 52 s, lattice 12 → 20 s, polish 26 →
+34 s). The district's slowness is mostly that, not neighbours: chunk 25 alone on the pool (193-211 s) is close to its time
+in the full district (223 s). A job task has the faster CPU but starts in ~90 s, which cancels it.
+
+**To get under 3 minutes** the few largest buildings need job-class CPU with a service-class start: for example a small
+pool of suspended Compute Engine VMs (C3/C4, resumed in seconds when a district is asked for, billed for disk while
+suspended), or GKE Autopilot's Performance compute class, taking the largest chunks while the Cloud Run pool takes the rest.
+At job speed chunk 25 would land at about 150 s + 8 s, and the district would be shown in about 2.8 min.
+
