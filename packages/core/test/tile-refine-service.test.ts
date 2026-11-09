@@ -137,6 +137,24 @@ describe('TileRefineService', () => {
         expect(runs()).toBe(before);
     });
 
+    it('isolate(): runs tile_refine with --isolate-only, writes only the raw clay and answers the repeat from its own cache', async () => {
+        const svc = new TileRefineService({ workspaceRoot: root, binaryPath: fakeBin });
+        const before = runs();
+        const iso = await svc.isolate({ tilePath: 'public/tiles/a.glb', anchor: { x: 1, z: 2 } });
+        expect(runs()).toBe(before + 1);
+        expect(iso.cached).toBe(false);
+        expect(path.basename(path.dirname(iso.rawClayGlb))).toBe(`isolate_${iso.cacheKey}`);
+        expect(Buffer.compare(fs.readFileSync(iso.rawClayGlb), fs.readFileSync(path.join(root, 'public/tiles/a.glb')))).toBe(0);
+        expect(fs.existsSync(path.join(path.dirname(iso.rawClayGlb), 'textured.glb'))).toBe(false);
+        expect(iso.ownershipVotes).toBeUndefined();
+        const again = await svc.isolate({ tilePath: 'public/tiles/a.glb', anchor: { x: 1, z: 2 } });
+        expect(again).toMatchObject({ cached: true, cacheKey: iso.cacheKey, rawClayGlb: iso.rawClayGlb });
+        expect(runs()).toBe(before + 1);
+        // never the whole refine's entry
+        const whole = await svc.refine({ tilePath: 'public/tiles/a.glb', anchor: { x: 1, z: 2 }, isolate: true });
+        expect(whole.cacheKey).not.toBe(iso.cacheKey);
+    });
+
     it('facadeFlatten: false passes --no-flatten, a band passes --flatten-band, and both key the cache', async () => {
         const svc = new TileRefineService({ workspaceRoot: root, binaryPath: fakeBin });
         expect(svc.resolveRequest({ tilePath: 'public/tiles/a.glb' }).cliArgs).not.toContain('--no-flatten');
@@ -184,6 +202,25 @@ describe('TileRefineService', () => {
 });
 
 describe.skipIf(!fs.existsSync(TILE))('TileRefineService on the photogrammetric test tile', () => {
+    it('isolate(): the raw clay of the isolate alone is byte for byte the one a whole refine of the same request writes', async () => {
+        const work = fs.mkdtempSync(path.join(os.tmpdir(), 'tile-refine-isolate-'));
+        try {
+            fs.mkdirSync(path.join(work, 'public/tiles'), { recursive: true });
+            fs.copyFileSync(TILE, path.join(work, 'public/tiles/tile.glb'));
+            const svc = new TileRefineService({ workspaceRoot: work, repoRoot: REPO });
+            const req = { tilePath: 'public/tiles/tile.glb', isolate: true as const };
+            const iso = await svc.isolate(req);
+            const whole = await svc.refine(req);
+            expect(fs.readFileSync(iso.rawClayGlb).subarray(0, 4).toString('ascii')).toBe('glTF');
+            expect(Buffer.compare(fs.readFileSync(iso.rawClayGlb), fs.readFileSync(whole.rawClayGlb!))).toBe(0);
+            expect(iso.stats.mode).toBe('isolate-only');
+            expect(iso.stats.isolate?.enabled).toBe(true);
+            console.log(`[tile-refine-service] isolate only ${iso.stats.totalMs} ms against the whole refine's ${whole.stats.totalMs} ms`);
+        } finally {
+            fs.rmSync(work, { recursive: true, force: true });
+        }
+    }, 900_000);
+
     it('refines the tile with the native pipeline, then answers the repeat from the cache', async () => {
         const work = fs.mkdtempSync(path.join(os.tmpdir(), 'tile-refine-real-'));
         try {
