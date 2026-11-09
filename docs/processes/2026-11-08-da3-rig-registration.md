@@ -1,6 +1,6 @@
 # Street View registration from multi-view depth (Depth Anything 3 Small and Base) at 7th Ave & W 32nd St
 
-**Status: Refused on real data** (the module works on a synthetic drive; on the six 7th Ave panoramas neither DA3 Small's nor DA3 Base's poses hold together, so the registration declines and the stated poses stand). Proof sheets: `docs/screenshots/da3_rig_registration_2026-11-08/proof_sheet_da3_small.png` and `proof_sheet_da3_base.png` (gitignored).
+**Status: DA3 refused on real data; drive-first registration aligns most views (2026-11-09)** (the module works on a synthetic drive; on the six 7th Ave panoramas neither DA3 Small's nor DA3 Base's poses hold together, so the registration declines and the stated poses stand). Proof sheets: `docs/screenshots/da3_rig_registration_2026-11-08/proof_sheet_da3_small.png` and `proof_sheet_da3_base.png` (gitignored).
 
 ## What was asked
 
@@ -49,6 +49,20 @@ The user asked to get the panoramas aligned. Both tried against a fresh photo-te
 - **Held-out** (each view under the pose fitted to the other 11): in 5 of 6 panoramas 2-5 views land within 1.1-2.5 px (stated: 5-56 px). But they face one sector each; the other views stay 20-40 px off, and the moves (1.4-6.7 m) disagree along the drive: one correction shared by all six explains 1,038 of 14,916 matches (the six separate fits: 3,549). Not applied.
 - Likely causes: matches on one facade let a pose shift and turn to fit it; views toward changed places (the 2026 canopy and plaza) and transients (a parked police car) match wrongly.
 - Next: same-date photo-to-photo matches tie the six panoramas into one rigid drive first, then the drive is fitted to the scan with all its views at once.
+
+## Drive-first registration (2026-11-09)
+
+The user asked to build it. `packages/core/src/node/spatial/street-view-drive-registration.ts` (`registerDriveOnScan`): every panorama's six pose parameters in one robust least squares (Cauchy loss in pixels; two-view tie points eliminated by the Schur complement), in three stages: **drive** (photo-to-photo ties only, each pose held loosely to its stated one: 5 m, 3 m up, 3 degrees), **rigid** (the tied drive moved as one body onto the scan matches: coarse search over shift and turn, then robust refinement), **joint** (ties, scan matches and the loose priors). Tests: `packages/core/test/street-view-drive-registration.test.ts`, a synthetic canyon where each panorama's scan matches lie on one wall only, 15% wrong: every pose recovered within 0.1 m and 0.1 degree; a panorama with no scan matches placed within 0.2 m from its ties.
+
+The 7th Ave run (proof sheet `proof_sheet_drive_first.png`):
+
+- Ties: 141 co-visible view pairs between panoramas (chosen by lifting each view through its scan depth at the stated pose), DISK + LightGlue, kept by an essential-matrix check (MAGSAC, 1 px): 23,639 matches, 17,707 meeting at 1 degree or more. Photos fetched into memory only.
+- The stated poses fit 3,871 of the ties within 2 px; the tied drive 16,683: the stated poses disagree with each other, not only with the scan.
+- Rigid move of the drive: 6.7 m east, 2.5 m down, 2.1 m south, 1.2 degrees. Joint: scan matches within 3 px 11 -> 4,875 of 14,095; cameras moved 1.1-8.9 m (pano iUK9l3Uh 6.9 m down: the 5 m high elevation noted below).
+- **Leave one panorama out** (its scan matches removed, its pose from ties alone): lands 0.10-1.34 m from the full fit; its own scan matches then fit as well as in the full run (e.g. VVmScUGc views 30-180 degrees: 72-82% within 3 px, medians 1.7-3.5 px; stated 0%).
+- **Plausibility check** (not ground truth): the solver knows nothing of the ground, and every camera ends 2.04-2.19 m above the street surface below it (stated: 2.50-9.09 m).
+- Still off: views toward 120 and 300-330 degrees (medians 60-240 px in every panorama); the cause is not established. Views at 180 degrees improve but stay 3-11 px.
+- Not yet applied anywhere: no tool or stage consumes these poses. Next: find why the 300-degree views fail (wrong matches vs a scan surface missing, e.g. the canopy), then wire the drive registration into the Street View pose path.
 
 ## Still open
 
