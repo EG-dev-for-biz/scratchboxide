@@ -237,10 +237,19 @@ describe('pipeline K symmetry reading', () => {
         expect(rec.paired).toBe(4);
         expect(rec.flag?.kind).toBe('phase');
         expect(rec.flag!.offsetM).toBeCloseTo(0.8, 1);
+        expect(rec.axisHoldsForWindows).toBe(true);
         const e = fit.facades[0] as { rects: WindowRect[]; generated?: WindowRect[] };
         expect(e.generated!.length).toBe(1);
         expect(e.rects.length).toBe(readerBoxes.length + structural.length + 1);
         // nothing on read photo moved
         for (const b of structural) expect(e.rects.some(x => x.join() === b.join())).toBe(true);
+        // where the boxes on the far half hold nothing at the reader's mirror sites, the axis is the texture's, not the
+        // windows': nothing is added and nothing flagged
+        const fit2 = { version: 'test', params: {}, ms: 0, facades: [{ facadeId: 5, width: 200, height: 100, rects: [...readerBoxes], bands: [], reader: 'test', readerWindows: readerBoxes.length, structural: { rects: [] }, ms: 0 }] } as unknown as WindowFitFile;
+        const rec2 = mirrorWindows(r.orthosDir, fit2, r.report).facades[0];
+        expect(rec2.axisHoldsForWindows).toBe(false);
+        expect(rec2.added).toBe(0);
+        expect(rec2.flag).toBeUndefined();
+        expect((fit2.facades[0] as { rects: WindowRect[] }).rects.length).toBe(readerBoxes.length);
     }, 300_000);
 });

@@ -46,7 +46,7 @@ import { decodePng } from '../../../texture-processing';
 import { OCCLUSION_PARAMS } from './occlusion';
 import { nativeTwinThreads } from './native/twin-texels-native';
 
-export const SYMMETRY_VERSION = 'k-symmetry-1';
+export const SYMMETRY_VERSION = 'k-symmetry-2';
 
 export const SYMMETRY_PARAMS = {
     /** Plan raster cell (m); heights at least minStructureM above the ground are the structure; a cell is flat within flatM of its neighbours. */
@@ -300,16 +300,24 @@ export const MIRROR_WINDOW_PARAMS = {
     maxOverlap: 0.1,
     /** A mirrored window pairs with a box in its row (vertical overlap at least this share of its height) within one box width. */
     rowOverlap: 0.5,
-    /** A phase error: at least minPairs pairs on read texels, their median offset at least this share of the median box width, and this share of them on one side. */
-    minPairs: 4, phaseShare: 0.25, sameSide: 0.7,
+    /** A phase error: at least minPairs pairs on read texels, their median offset at least this share of the median box width and at least minOffsetM (three of the axis's working texels: below that the axis itself is unsure), and this share of them on one side. */
+    minPairs: 4, phaseShare: 0.25, minOffsetM: 0.6, sameSide: 0.7,
     /** The halves disagree when at least this share of the reader's mirror sites on read texels hold no box. */
-    missingShare: 0.3
+    missingShare: 0.3,
+    /**
+     * The photo's axis must hold for the windows before they are used across it: at least this share of the reader's mirror
+     * sites that the photo read hold a box there (confirmed, or within one box width). Below it the axis is the texture's,
+     * not the windows' (a facade frame wider than its window field, a stepped wall): nothing is added and nothing flagged.
+     */
+    minHolds: 0.5
 };
 
 export interface MirrorWindowFacade {
     facadeId: number; axisS: number; axisNcc: number; readerBoxes: number;
     /** Reader boxes whose mirror site holds a box, mirror sites filled (unread, empty: generated), and on read texels: paired with an offset or holding nothing. */
     confirmed: number; added: number; paired: number; missing: number;
+    /** Of the reader's mirror sites the photo read, the share holding a box (confirmed or paired): whether the axis holds for the windows (minHolds). */
+    holds: number; axisHoldsForWindows: boolean;
     /** A phase error flagged: the median offset (m) of the boxes on one half from the reader's mirrored boxes, or the halves disagreeing. */
     flag?: { kind: 'phase' | 'halves-disagree'; offsetM?: number; pairs: number; missingShare: number; why: string };
 }
@@ -327,7 +335,8 @@ const iou = (a: WindowRect, b: WindowRect) => { const i = inter(a, b); return i 
  * occluded, a smear) and no box stands on gets the mirrored window (generated, labelled with the axis and its NCC); on
  * read texels nothing is added or moved (the mirror never overrides what the photo measured), and where the boxes there
  * sit off the reader's mirrored windows by a steady offset, or are missing from too many mirror sites, the facade is
- * flagged as a reader phase error for review. Edits `fit` in place (the window_fit.json beside the orthos rewritten).
+ * flagged as a reader phase error for review. All of it only where the photo's axis holds for the windows (minHolds):
+ * the axis comes from the texture, and on a facade whose frame is wider than its window field it is not the windows'. Edits `fit` in place (the window_fit.json beside the orthos rewritten).
  */
 export function mirrorWindows(orthosDir: string, fit: WindowFitFile, rep: SymmetryReport, P = MIRROR_WINDOW_PARAMS): MirrorWindowReport {
     const t0 = Date.now();
@@ -360,7 +369,7 @@ export function mirrorWindows(orthosDir: string, fit: WindowFitFile, rep: Symmet
             return n ? u / n : 1;
         };
         const cx = (m.axisS - f.orthoSMin) / f.pixel;
-        const rec: MirrorWindowFacade = { facadeId: e.facadeId, axisS: r2(m.axisS), axisNcc: r2(m.ncc!), readerBoxes: reader.length, confirmed: 0, added: 0, paired: 0, missing: 0 };
+        const rec: MirrorWindowFacade = { facadeId: e.facadeId, axisS: r2(m.axisS), axisNcc: r2(m.ncc!), readerBoxes: reader.length, confirmed: 0, added: 0, paired: 0, missing: 0, holds: 0, axisHoldsForWindows: false };
         const offsets: number[] = [], widths: number[] = [];
         const added: WindowRect[] = [];
         for (const r of reader) {
@@ -388,20 +397,25 @@ export function mirrorWindows(orthosDir: string, fit: WindowFitFile, rep: Symmet
             if (bestDx === undefined) rec.missing++;
             else { rec.paired++; offsets.push(bestDx); }
         }
+        // the axis holds for the windows when most of the reader's read mirror sites hold a box; only then is anything used
+        const seen = rec.confirmed + rec.paired + rec.missing;
+        rec.holds = seen ? r2((rec.confirmed + rec.paired) / seen) : 0;
+        rec.axisHoldsForWindows = seen >= P.minPairs && rec.holds >= P.minHolds;
+        if (!rec.axisHoldsForWindows) { rec.added = 0; added.length = 0; }
         if (added.length) {
             e.rects = [...e.rects, ...added];
             e.generated = [...(e.generated ?? []), ...added];
         }
         const onRead = rec.paired + rec.missing;
         const missingShare = onRead ? rec.missing / onRead : 0;
-        if (offsets.length >= P.minPairs) {
+        if (rec.axisHoldsForWindows && offsets.length >= P.minPairs) {
             const sorted = [...offsets].sort((a, b) => a - b), med = sorted[sorted.length >> 1];
             const wMed = [...widths].sort((a, b) => a - b)[widths.length >> 1];
             const side = offsets.filter(d => Math.sign(d) === Math.sign(med) && d !== 0).length / offsets.length;
-            if (Math.abs(med) >= P.phaseShare * wMed && side >= P.sameSide) rec.flag = { kind: 'phase', offsetM: r2(med * f.pixel), pairs: offsets.length, missingShare: r2(missingShare), why: `the boxes on the far half sit ${r2(Math.abs(med) * f.pixel)} m ${med > 0 ? 'right' : 'left'} of the reader's windows mirrored about s = ${r2(m.axisS)} m (median of ${offsets.length}, ${Math.round(side * 100)}% on one side)` };
+            if (Math.abs(med) >= P.phaseShare * wMed && Math.abs(med) * f.pixel >= P.minOffsetM && side >= P.sameSide) rec.flag = { kind: 'phase', offsetM: r2(med * f.pixel), pairs: offsets.length, missingShare: r2(missingShare), why: `the boxes on the far half sit ${r2(Math.abs(med) * f.pixel)} m ${med > 0 ? 'right' : 'left'} of the reader's windows mirrored about s = ${r2(m.axisS)} m (median of ${offsets.length}, ${Math.round(side * 100)}% on one side)` };
         }
-        if (!rec.flag && onRead >= P.minPairs && missingShare >= P.missingShare) rec.flag = { kind: 'halves-disagree', pairs: offsets.length, missingShare: r2(missingShare), why: `${rec.missing} of ${onRead} mirror sites of the reader's windows on read photo hold no box` };
-        e.mirror = { version: SYMMETRY_VERSION, axisS: rec.axisS, axisNcc: rec.axisNcc, confirmed: rec.confirmed, added: added, ...(rec.flag ? { flag: rec.flag } : {}), label: "added windows: generated (the reader's window mirrored about the facade's axis onto a site the photo did not read)" };
+        if (rec.axisHoldsForWindows && !rec.flag && onRead >= P.minPairs && missingShare >= P.missingShare) rec.flag = { kind: 'halves-disagree', pairs: offsets.length, missingShare: r2(missingShare), why: `${rec.missing} of ${onRead} mirror sites of the reader's windows on read photo hold no box` };
+        e.mirror = { version: SYMMETRY_VERSION, axisS: rec.axisS, axisNcc: rec.axisNcc, confirmed: rec.confirmed, holds: rec.holds, axisHoldsForWindows: rec.axisHoldsForWindows, added: added, ...(rec.flag ? { flag: rec.flag } : {}), label: "added windows: generated (the reader's window mirrored about the facade's axis onto a site the photo did not read)" };
         out.push(rec);
     }
     fs.writeFileSync(path.join(orthosDir, WINDOW_FIT_FILE), JSON.stringify(fit));
@@ -412,7 +426,8 @@ export function mirrorWindows(orthosDir: string, fit: WindowFitFile, rep: Symmet
 export function describeMirrorWindows(r: MirrorWindowReport): string {
     const sum = (k: 'confirmed' | 'added' | 'paired' | 'missing') => r.facades.reduce((a, f) => a + f[k], 0);
     const flags = r.facades.filter(f => f.flag);
-    return `mirror windows (${r.version}): on ${r.facades.length} mirror-symmetric facades the reader's windows confirm ${sum('confirmed')} mirror sites and fill ${sum('added')} the photo did not read (generated); ${flags.length ? `${flags.length} flagged for a reader phase error (${flags.slice(0, 4).map(f => `facade ${f.facadeId}: ${f.flag!.kind}${f.flag!.offsetM !== undefined ? ` ${f.flag!.offsetM} m` : ''}`).join('; ')})` : 'no reader phase error flagged'}; nothing on read photo added or moved`;
+    const held = r.facades.filter(f => f.axisHoldsForWindows).length;
+    return `mirror windows (${r.version}): the photo's axis holds for the reader's windows on ${held} of ${r.facades.length} mirror-symmetric facades (the rest left alone); there they confirm ${sum('confirmed')} mirror sites and fill ${sum('added')} the photo did not read (generated); ${flags.length ? `${flags.length} flagged for a reader phase error (${flags.slice(0, 4).map(f => `facade ${f.facadeId}: ${f.flag!.kind}${f.flag!.offsetM !== undefined ? ` ${f.flag!.offsetM} m` : ''}`).join('; ')})` : 'no reader phase error flagged'}; nothing on read photo added or moved`;
 }
 
 /** The report without the sweeps (the GLB's asset.extras.sbSymmetry): every reading's score, share and axis. */
