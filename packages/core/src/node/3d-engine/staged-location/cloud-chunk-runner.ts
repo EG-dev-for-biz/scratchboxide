@@ -778,7 +778,7 @@ export class VmPoolJobs implements CloudRunJobs {
                 if (d.job === e.job) {
                     e.endMs = this.now(); e.ok = d.ok === true;
                     if (!e.ok) e.message = d.error ?? 'the VM did not send the chunk\'s outcome';
-                    this.release(e.vm, execution);
+                    await this.release(e.vm, execution);
                 }
             }
         }
@@ -786,11 +786,14 @@ export class VmPoolJobs implements CloudRunJobs {
         return { name: execution, done, succeeded: done && !!e.ok, ...(e.message ? { message: e.message } : {}), startMs: e.startMs, ...(done ? { endMs: e.endMs } : {}) };
     }
 
-    /** The VM suspended again (in the background: a suspend takes about 90 s) and free for the next chunk. */
-    private release(vm: string, execution: string): void {
+    /**
+     * The VM's suspend asked (awaited: the call returns once Compute Engine has the operation, the suspend itself takes
+     * minutes; a driver that exited before an unawaited call went out left 32 VMs running, 2026-11-09) and the VM free.
+     */
+    private async release(vm: string, execution: string): Promise<void> {
         if (this.busy.get(vm) !== execution) return;
         this.busy.delete(vm);
-        this.compute.suspend(vm).then(() => this.log(`[kd-vm] ${vm} suspended`), err => this.log(`[kd-vm] suspending ${vm} failed: ${err instanceof Error ? err.message : String(err)}`));
+        try { await this.compute.suspend(vm); this.log(`[kd-vm] ${vm} suspending`); } catch (err) { this.log(`[kd-vm] suspending ${vm} failed: ${err instanceof Error ? err.message : String(err)}`); }
     }
 
     async cancel(execution: string): Promise<void> {
@@ -798,7 +801,7 @@ export class VmPoolJobs implements CloudRunJobs {
         if (!e) return;
         await this.bucket.remove(kdVmKeys(e.vm).assign).catch(() => undefined);
         e.endMs = this.now(); e.ok = false; e.message = 'cancelled';
-        this.release(e.vm, execution);
+        await this.release(e.vm, execution);
     }
 }
 
