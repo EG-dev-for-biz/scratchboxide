@@ -95,6 +95,15 @@ export interface MeasuredStats {
 const STATS_VERSION = 2;
 
 const statsDir = (repoRoot: string) => path.join(repoRoot, 'build', 'texture-library', 'stats');
+
+/**
+ * Whether a checkout's own measured statistics (statsDir) are read and written. Off in a build: every checkout ranks the
+ * library from the committed bundle alone, so one scan and one answer store give the same shortlists, picks and bytes in
+ * every worktree (found 2026-11-08: the main checkout's 2,451 local files overrode the bundle while a worktree with none
+ * ranked from the bundle). `SCRATCHBOX_LIBRARY_LOCAL_STATS=1` turns them on for the maintainer's `npm run library:stats`,
+ * which measures sets locally and then writes the bundle they are committed in.
+ */
+export const localLibraryStatsAllowed = (): boolean => process.env.SCRATCHBOX_LIBRARY_LOCAL_STATS?.trim() === '1';
 const statsFile = (repoRoot: string, id: string) => path.join(statsDir(repoRoot), `${id}.json`);
 
 /**
@@ -174,7 +183,7 @@ export function loadTextureLibraryIndex(repoRoot: string): TextureLibraryIndex |
     try { mtimeMs = fs.statSync(file).mtimeMs; } catch { return undefined; }
     if (indexCache?.file !== file || indexCache.mtimeMs !== mtimeMs) indexCache = { file, mtimeMs, index: JSON.parse(fs.readFileSync(file, 'utf8')) as TextureLibraryIndex };
     let measured: string[] = [];
-    try { measured = fs.readdirSync(statsDir(repoRoot)).filter(f => f.endsWith('.json')); } catch { /* nothing measured yet */ }
+    if (localLibraryStatsAllowed()) { try { measured = fs.readdirSync(statsDir(repoRoot)).filter(f => f.endsWith('.json')); } catch { /* nothing measured yet */ } }
     const estimates = estimatedSizes(path.join(path.dirname(file), ESTIMATED_SIZES_FILE));
     const bundled = bundledStats(repoRoot);
     const heights = loadLibraryHeights(repoRoot);
@@ -263,7 +272,7 @@ export async function libraryPreview(entry: TextureLibraryEntry, role: 'color' |
 
 /** Whether a set has been measured at the current STATS_VERSION, or failed to be (a failure is not retried). */
 export function libraryEntryMeasured(repoRoot: string, id: string): boolean {
-    try { const st = JSON.parse(fs.readFileSync(statsFile(repoRoot, id), 'utf8')) as MeasuredStats; if (st.error || st.version === STATS_VERSION) return true; } catch { /* not measured here */ }
+    if (localLibraryStatsAllowed()) { try { const st = JSON.parse(fs.readFileSync(statsFile(repoRoot, id), 'utf8')) as MeasuredStats; if (st.error || st.version === STATS_VERSION) return true; } catch { /* not measured here */ } }
     return bundledStats(repoRoot).has(id);
 }
 
@@ -279,6 +288,8 @@ export async function measureLibraryEntries(entries: TextureLibraryEntry[], opts
     const todo = entries.filter(e => !libraryEntryMeasured(opts.repoRoot, e.id));
     const failed: Array<{ id: string; reason: string }> = [];
     if (!todo.length) return { measured: [], failed };
+    // a build measures nothing into the checkout (localLibraryStatsAllowed): the sets the bundle lacks are left out and reported
+    if (!localLibraryStatsAllowed()) return { measured: [], failed: todo.map(e => ({ id: e.id, reason: 'not in the committed statistics bundle; builds do not measure sets locally (SCRATCHBOX_LIBRARY_LOCAL_STATS=1 for npm run library:stats)' })) };
     const work = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-library-previews-'));
     const jobs: Array<{ id: string; publisher: string; color: string; normal?: string; roughness?: string; metalness?: string; arm?: string }> = [];
     let next = 0;

@@ -19,7 +19,8 @@
  *
  *  - Without a parameters texture (pipeline K's material regions, one material path for every surface; user decision,
  *    2026-11-05): every texel reflects the probe by its own roughness and metalness (the twin's metallic-roughness
- *    texture, from the library set of its detected material), nothing gated on a kind of surface.
+ *    texture, from the library set of its detected material), nothing gated on a kind of surface; a rough dielectric's
+ *    reflection is drawn in proportion to the fill its photo is lit by (MATTE_REFLECTION), as its diffuse is.
  *  - With a parameters texture (the facade material reading of the texture pass, facade-materials.ts, and pipeline E's
  *    openings): texels read as glass reflect it scaled by their weight (parameters R / 255, the reading's confidence), with a
  *    roughness floor (GLASS_MIN_ROUGHNESS); metal texels (B > 0) whole; every other texel the scene's direct light only.
@@ -79,6 +80,16 @@ uniform float uSbGroundAlbedo;
  * 0.12, 575 at 0.08, the largest piece 33% of them, 27% at 0.08).
  */
 export const GLASS_MIN_ROUGHNESS = 0.08;
+
+/**
+ * A rough dielectric reflects the probe in proportion to the fill its photo is lit by (FRAGMENT_ENV_GATE), from roughness
+ * `from` (the whole probe below it) to `full` (the fill's share of the probe's light at and above it). Measured in the app
+ * viewer (2026-11-08, Seagram scene, a flat wall of albedo 0.15 at roughness 0.85 in shade, linear light): the probe's
+ * reflection was 21% of the wall's brightness seen straight on and 47% at 80 degrees, where three.js's own physical render,
+ * the probe's diffuse kept, puts it at 8% and 20%: the viewer had taken the probe's diffuse out (the photo holds it) and left
+ * its reflection whole, so matte stone in shade read wet. With this weight, 7% and 20%. Generated.
+ */
+export const MATTE_REFLECTION = { from: 0.3, full: 0.7 } as const;
 
 /** The ground's albedo a surface reflects below the horizon (generated: asphalt and stone, 0.1-0.2; gaffer skill, section 1). */
 export const GROUND_ALBEDO = 0.15;
@@ -160,6 +171,16 @@ const FRAGMENT_ENV_GATE = `
             float sbAbove = smoothstep( -0.03, 0.03, sbRwG.y );
             radiance = mix( min( radiance, sbGround ), radiance, sbAbove );
         }
+        // a rough dielectric's reflection of the probe is the same sky light the probe's diffuse would have given it, and the
+        // photo already holds it: it is drawn in proportion to the fill the photo is lit by here (the hemisphere and ambient
+        // light), not at the probe's own brightness, so a matte wall in shade is not lit mostly by a reflection (the wet look;
+        // MATTE_REFLECTION); a smooth surface (glass, polished stone) and a metal keep the whole probe
+        {
+            float sbProbeE = dot( iblIrradiance, vec3( 0.2126, 0.7152, 0.0722 ) );
+            float sbFillE = dot( irradiance, vec3( 0.2126, 0.7152, 0.0722 ) );
+            float sbFill = sbProbeE > 1e-5 ? clamp( sbFillE / sbProbeE, 0.0, 1.0 ) : 1.0;
+            radiance *= mix( 1.0, sbFill, smoothstep( ${MATTE_REFLECTION.from.toFixed(2)}, ${MATTE_REFLECTION.full.toFixed(2)}, material.roughness ) * ( 1.0 - metalnessFactor ) );
+        }
         // the probe's diffuse light only on metal read by the parameters: every photo is already lit by the scene's sky
         // fill (the hemisphere light), so adding the probe's irradiance lit its colour twice (a metal's diffuse is ~0 anyway)
         #if defined( USE_MAP ) && defined( SB_PARAMS )
@@ -229,7 +250,7 @@ export async function prepareFacadeMaterials(gltf: GltfLike): Promise<number> {
                     .replace('#include <lights_physical_fragment>', FRAGMENT_SPECULAR_AA)
                     .replace('#include <lights_fragment_maps>', FRAGMENT_ENV_GATE);
             };
-            mat.customProgramCacheKey = () => `sb-facade-v9:${withParams ? 'p' : 'n'}:${withCourses ? courses.length : 0}`;
+            mat.customProgramCacheKey = () => `sb-facade-v10:${withParams ? 'p' : 'n'}:${withCourses ? courses.length : 0}`;
             mat.needsUpdate = true;
             patched++;
         } catch (err) {
@@ -260,7 +281,7 @@ export function updateFacadeReflections(renderer: THREE.WebGLRenderer, scene: TH
     // the shared probe capture (reflectionProbe.ts): directions where nothing was drawn see its labelled fallback sky
     const probe = new ReflectionProbeRenderer(renderer, size);
     try {
-        const target = probe.capture(scene, { position: centre, near, far: Math.max(near * 50, 5000) });
+        const target = probe.capture(scene, { position: centre, near, far: probeFar(scene, centre, near) });
         const env = target.texture;
         env.userData.sbProbeTarget = target;
         for (const m of mats) { m.envMap = env; m.envMapIntensity = 1; m.needsUpdate = true; }
@@ -284,6 +305,28 @@ export function updateFacadeReflections(renderer: THREE.WebGLRenderer, scene: TH
     } finally {
         probe.dispose();
     }
+}
+
+/**
+ * The probe's far plane: past everything drawn in the scene, the sky dome included, seen from `centre` (at least 50 times
+ * the near plane and 5 km). Measured 2026-11-08: with a fixed max(near x 50, 5000) m the scene's 18 km sky dome lay past
+ * it for most buildings (the Seagram, the Empire State Building), so their probe saw only the fallback gradient
+ * (reflectionProbe.ts, scaled from the lights, about the same in every direction): a white wall's irradiance from it
+ * 2.09 facing up and 1.76 both toward and away from the sun, where the sky gives 0.64, 1.37 and 0.34. The reflections came
+ * from no sky at all.
+ */
+export function probeFar(scene: THREE.Object3D, centre: THREE.Vector3, near: number): number {
+    let reach = 0;
+    const sphere = new THREE.Sphere();
+    scene.traverseVisible(o => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh || !mesh.geometry) return;
+        if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
+        if (!mesh.geometry.boundingSphere) return;
+        sphere.copy(mesh.geometry.boundingSphere).applyMatrix4(mesh.matrixWorld);
+        if (Number.isFinite(sphere.radius)) reach = Math.max(reach, centre.distanceTo(sphere.center) + sphere.radius);
+    });
+    return Math.max(near * 50, 5000, reach * 1.01);
 }
 
 /** Frees a facade probe environment (its render target, when it has one). */

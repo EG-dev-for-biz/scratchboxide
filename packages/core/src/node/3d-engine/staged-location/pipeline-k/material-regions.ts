@@ -33,7 +33,9 @@
  *     are drawn as glass (GLASS: roughness 0.08, no metalness, a flat normal; the photo stays the colour), except a pane
  *     most of whose texels (paneWallShare) are the wall's class, which is stone whatever was fitted there, and the wall's
  *     class's texels within a glass pane (a mullion, a sill); each texel's class among every class, so a stone texel in a
- *     pane is told from glass. Photo-inferred.
+ *     pane is told from glass. Photo-inferred. The rest of a window holding a glass pane (its frames, mullions and sills)
+ *     is drawn no smoother than a painted or anodised frame (applyFrameFinish, ARTIST_FINISH.frameRoughness; the
+ *     texturing expert, 2026-11-08: glass is smooth, the frames around it are not), whatever its class was read as.
  *  6. Maps: on each rebuilt facade, each texel's class's set tiled at the set's real size, box-filtered to the facade's
  *     texel (so a tile never aliases): occlusion, roughness and metalness (ORM) and the normal, as the set has them; on
  *     scan pieces, whose atlases carry no metric frame for a tile, each texel's class's set's mean ORM.
@@ -43,7 +45,12 @@
  *     (height-relief.ts) read them. A glass pane takes none (its class map texel names no class), and scan pieces
  *     take none: a measured surface is never moved.
  *
- * Labels: base colour photo-inferred (the photo, never relit or lifted: it is the evidence of how the building looks); each
+ *  8. Exposure (fitExposureGain, applyExposureGain; 2026-11-08): Google's tile photos come in dark (the Empire State
+ *     Building's limestone at 0.09 linear as captured, 0.18 after the de-light, where dressed limestone is 0.3-0.6), so
+ *     the building's photos take one gain in linear light, fitted so the classes whose reference finish (the expert's
+ *     reading, material-finish.ts) has an albedo land in it, every relative colour kept, after the maps are planned.
+ *
+ * Labels: base colour photo-inferred (the photo, never relit or lifted but by the building's one exposure gain: it is the evidence of how the building looks); each
  * texel's material photo-inferred (its class); occlusion, roughness, metalness, normal and height generated (library sets).
  * Nothing is drawn where no photo is.
  */
@@ -54,8 +61,9 @@ import { linearRgbToLab } from '../../../../common/spatial/texture-library-index
 import type { RgbaImage8 } from '../tile-texture-transfer';
 import { bandResponses, TEXTURE_BANDS_M, type TextureEnergy } from './material-harvest';
 import { HEIGHT_RELIEF, MATERIAL_HEIGHT_VERSION, type DrawnHeight } from './material-height';
+import { ARTIST_FINISH, EXPOSURE_FIT, referenceAlbedo } from '../../../../common/spatial/pbr-artist-reference';
 
-export const MATERIAL_REGIONS_VERSION = 'material-regions/34';
+export const MATERIAL_REGIONS_VERSION = 'material-regions/36';
 
 export const MATERIAL_REGIONS_PARAMS = {
     /**
@@ -123,7 +131,7 @@ export interface RegionSet {
      * none for a set without a height map or a depth, or drawn too flat to show. And what it was drawn at.
      */
     height?: RgbaImage8; heightDrawn?: DrawnHeight;
-    finish?: { read?: { roughness: number; metalness: number; conf: number; seen?: string }; why?: string; roughness: number; metallic: number; /** The finish and grain the set's maps were drawn at (material-finish.ts finishMaps), when either changed them. */ drawn?: { roughness: number; metallic: number; relief: number; grain: number }; label: 'photo-inferred' };
+    finish?: { read?: { roughness: number; metalness: number; conf: number; seen?: string; grain?: number; coverage?: number }; /** The pick by look voted the class not bare metal: drawn a dielectric (material-finish.ts agreeMetal). */ metalVetoed?: true; why?: string; roughness: number; metallic: number; /** The finish and grain the set's maps were drawn at (material-finish.ts finishMaps), when either changed them. */ drawn?: { roughness: number; metallic: number; relief: number; grain: number }; label: 'photo-inferred' };
 }
 
 export interface MaterialRegionsReport {
@@ -136,6 +144,10 @@ export interface MaterialRegionsReport {
     texels: { total: number; perClass: number[]; glass: number };
     /** The wall guard on the panes (see the file comment, 5): panes not drawn as glass, most of their texels wall-like (stone, whatever was fitted there), and texels of glass panes left out as wall-like. A reader pane the guard drops may be the reader's error or the guard's: both are reported. */
     panesOnStone: number; paneWallTexels: number;
+    /** Texels of windows holding a glass pane, outside every glass pane, raised to the frames' roughness (applyFrameFinish). */
+    frameTexels?: number;
+    /** The building's exposure gain on its photos (fitExposureGain): photo-inferred. */
+    exposure?: ExposureFit;
     ms: number;
 }
 
@@ -742,6 +754,98 @@ export function planMaterialRegions(g: ParsedGlb, json: any, images: Map<number,
 }
 
 /**
+ * Window frames are not glass (see the file comment, 5; ARTIST_FINISH.frameRoughness): on each rebuilt facade, a texel
+ * inside a fitted window that holds a glass pane, in none of its glass panes (a frame, a mullion, a sill) and drawn
+ * smoother than a frame, is raised to the frames' roughness, its metalness kept. A window with no glass pane is left as
+ * its class drew it (its class may be its only glass). Runs on the finished plan, whichever path planned it; sets the
+ * report's frameTexels and returns it.
+ */
+export function applyFrameFinish(plan: MaterialRegionsPlan, json: any, images: Map<number, RgbaImage8>, classes: RegionClass[], P: MaterialRegionsParams = MATERIAL_REGIONS_PARAMS, frameRoughness: number = ARTIST_FINISH.frameRoughness): number {
+    const { rebuilt } = photoMaterials(json), floor = Math.round(frameRoughness * 255);
+    let raised = 0;
+    for (const pm of plan.materials) {
+        const mesh = pm.rebuilt ? rebuilt.get(pm.material) : undefined, img = mesh ? images.get(photoOf(json, pm.material)!.image) : undefined;
+        if (!mesh || !img || img.width !== pm.orm.width || img.height !== pm.orm.height) continue;
+        const windows = fittedWindows(json, mesh), glass = paneGlass(img, classes, fittedPanes(json, mesh), P.paneWallShare)?.glass;
+        if (!windows || !glass) continue;
+        const W = img.width, H = img.height, o = pm.orm.rgba;
+        for (let i = 0; i + 3 < windows.length; i += 4) {
+            const x0 = Math.max(0, Math.floor(windows[i] * W)), y0 = Math.max(0, Math.floor(windows[i + 1] * H)), x1 = Math.min(W, Math.ceil(windows[i + 2] * W)), y1 = Math.min(H, Math.ceil(windows[i + 3] * H));
+            let hasGlass = false;
+            for (let y = y0; y < y1 && !hasGlass; y++) for (let x = x0; x < x1; x++) if (glass[y * W + x]) { hasGlass = true; break; }
+            if (!hasGlass) continue;
+            for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+                const k = y * W + x;
+                if (glass[k] || !img.rgba[k * 4 + 3] || o[k * 4 + 1] >= floor) continue;
+                o[k * 4 + 1] = floor; raised++;
+            }
+        }
+    }
+    plan.report.frameTexels = raised;
+    return raised;
+}
+
+/** A building's exposure gain and what it was fitted to (fitExposureGain). */
+export interface ExposureFit {
+    gain: number;
+    /** Each class the fit read: its mean linear luminance as photographed (de-lit, harmonised), its reference finish's albedo, the gains that would put it there. */
+    classes: Array<{ index: number; share: number; luminance: number; ref: number; albedo: [number, number]; gainRange: [number, number] }>;
+    /** The gain the fit wanted, the clip cap (EXPOSURE_FIT.clipLevel over the building's texels' clipShare quantile) and the bounds. */
+    fitted: number; clipCap: number;
+    why: string;
+    label: 'photo-inferred';
+}
+
+/**
+ * The building's exposure gain (see the file comment, 8): each class outside the window openings whose set's finish
+ * reading named a reference finish with an albedo (pbr-artist-reference.ts), drawn as a dielectric, wants a gain that puts
+ * its mean linear luminance in that albedo range; the gain is the one closest to all of them (the least share-weighted
+ * distance in log gain), held to EXPOSURE_FIT's bounds and below the gain that would carry more than clipShare of the
+ * building's photo texels past clipLevel. 1 (and why) when no class names such a finish.
+ */
+export function fitExposureGain(classes: RegionClass[], sets: Array<Pick<RegionSet, 'finish'>>, images: Map<number, RgbaImage8>, F = EXPOSURE_FIT): ExposureFit {
+    const lum = (c: [number, number, number]) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    const used: ExposureFit['classes'] = [];
+    classes.forEach((c, k) => {
+        const read = sets[k]?.finish?.read as { ref?: number } | undefined, albedo = referenceAlbedo(read?.ref);
+        const L = lum(c.meanLinear);
+        if (c.openings || !albedo || !(L > 1e-4) || (sets[k]?.finish?.drawn?.metallic ?? 0) > 0.5) return;
+        used.push({ index: c.index, share: c.share, luminance: Math.round(L * 1e4) / 1e4, ref: read!.ref!, albedo, gainRange: [Math.round((albedo[0] / L) * 1000) / 1000, Math.round((albedo[1] / L) * 1000) / 1000] });
+    });
+    // the clip cap: the clipShare quantile of the photos' linear luminance, sampled every 7th texel
+    const hist = new Float64Array(1024);
+    let n = 0;
+    for (const img of images.values()) for (let k = 0; k < img.width * img.height; k += 7) {
+        const p = k * 4;
+        if (!img.rgba[p + 3]) continue;
+        const L = 0.2126 * SRGB8_TO_LINEAR[img.rgba[p]] + 0.7152 * SRGB8_TO_LINEAR[img.rgba[p + 1]] + 0.0722 * SRGB8_TO_LINEAR[img.rgba[p + 2]];
+        hist[Math.min(1023, Math.floor(L * 1024))]++; n++;
+    }
+    let acc = 0, q = 1;
+    for (let b = 1023; b >= 0; b--) { acc += hist[b]; if (acc >= F.clipShare * n) { q = (b + 1) / 1024; break; } }
+    const clipCap = q > 0 ? F.clipLevel / q : F.maxGain;
+    const r3 = (v: number) => Math.round(v * 1000) / 1000;
+    if (!used.length) return { gain: 1, classes: [], fitted: 1, clipCap: r3(clipCap), why: 'no class outside the openings named a reference finish with an albedo: the photos kept as they are', label: 'photo-inferred' };
+    // the gain closest to every class's range, by share, in log gain (a grid of 1% steps over the bounds)
+    const dist = (g: number) => used.reduce((a, u) => a + u.share * (g < u.gainRange[0] ? Math.log(u.gainRange[0] / g) : g > u.gainRange[1] ? Math.log(g / u.gainRange[1]) : 0), 0);
+    let best = 1, bestD = Infinity;
+    for (let lg = Math.log(F.minGain); lg <= Math.log(F.maxGain) + 1e-9; lg += 0.01) { const g = Math.exp(lg), d = dist(g); if (d < bestD - 1e-12 || (Math.abs(d - bestD) <= 1e-12 && Math.abs(Math.log(g)) < Math.abs(Math.log(best)))) { bestD = d; best = g; } }
+    // within 2% of 1 the photos are left as they are (the grid's step, not a correction)
+    const held = Math.max(F.minGain, Math.min(best, clipCap, F.maxGain)), gain = Math.abs(held - 1) < 0.02 ? 1 : held;
+    const why = `${used.length} classes named a reference finish with an albedo (${used.map(u => `class ${u.index} at ${u.luminance} for ${u.albedo[0]}-${u.albedo[1]}`).join('; ')}): gain ${r3(best)} fitted${gain === 1 && Math.abs(best - 1) < 0.02 ? ' (within 2% of 1: the photos kept)' : gain < best ? `, held to ${r3(gain)} by ${gain === clipCap ? `the clip cap (${F.clipShare * 100}% of texels past ${F.clipLevel})` : 'the bound'}` : ''}`;
+    return { gain: r3(gain), classes: used, fitted: r3(best), clipCap: r3(clipCap), why, label: 'photo-inferred' };
+}
+
+/** Multiplies every photo's colour by `gain` in linear light (each channel, clamped at 1), in place; returns the photos touched. */
+export function applyExposureGain(images: Map<number, RgbaImage8>, gain: number): number {
+    if (!(gain > 0) || Math.abs(gain - 1) < 1e-6) return 0;
+    const lut = new Uint8Array(256);
+    for (let v = 0; v < 256; v++) { const l = Math.min(1, SRGB8_TO_LINEAR[v] * gain); lut[v] = Math.round((l <= 0.0031308 ? 12.92 * l : 1.055 * Math.pow(l, 1 / 2.4) - 0.055) * 255); }
+    for (const img of images.values()) for (let k = 0; k < img.width * img.height; k++) { const p = k * 4; img.rgba[p] = lut[img.rgba[p]]; img.rgba[p + 1] = lut[img.rgba[p + 1]]; img.rgba[p + 2] = lut[img.rgba[p + 2]]; }
+    return images.size;
+}
+
+/**
  * Writes a plan's maps into the GLB's materials: lit (KHR_materials_unlit removed), the metallic-roughness texture (its
  * red the occlusion, also the occlusion texture), the normal on rebuilt facades, and the extras: sbMaterial (the viewer's
  * reflection probe, every texel by its own roughness and metalness; and the relief: the facade's class map and metric
@@ -767,10 +871,11 @@ export function writeMaterialRegions(json: any, plan: MaterialRegionsPlan, addTe
         if (relief) anyRelief = true;
         m.extras = {
             ...(m.extras ?? {}),
+            ...(plan.report.exposure && plan.report.exposure.gain !== 1 ? { sbExposure: { gain: plan.report.exposure.gain, label: 'photo-inferred', source: plan.report.exposure.why } } : {}),
             sbMaterial: { schema: 'scratchbox.staged-material/1', provenanceIndices, ...(relief ? { relief } : {}) },
             sbMaterialRegions: {
                 version: MATERIAL_REGIONS_VERSION,
-                baseColor: { label: 'photo-inferred', source: "pipeline K's harmonised photo" },
+                baseColor: { label: 'photo-inferred', source: `pipeline K's harmonised photo${plan.report.exposure && plan.report.exposure.gain !== 1 ? `, its exposure raised x${plan.report.exposure.gain} in linear light (the building's one gain, fitted to its classes' reference albedos)` : ''}` },
                 material: { label: 'photo-inferred', source: `each texel's appearance class (CIELAB, the majority within ${MATERIAL_REGIONS_PARAMS.regionSmoothM} m)` },
                 ...(relief ? { height: { label: 'generated', source: `each texel's class's set's height map, tiled at the set's real size, as a recess of at most ${HEIGHT_RELIEF.capM} m below the rebuilt plane (${plan.sets.filter(st => st.heightDrawn).map(st => `${st.name} ${Math.round(st.heightDrawn!.maxRecessM * 1000)} mm, its depth ${st.heightDrawn!.source}`).join('; ')}); the scan's own pieces and the glass panes take none` } } : {}),
                 maps: { label: 'generated', source: `the texture library set of each texel's class (${sets}): ${pm.rebuilt ? 'occlusion, roughness, metalness and normal tiled at the set\'s real size' : "the set's mean occlusion, roughness and metalness"}` },
@@ -835,10 +940,11 @@ export function classSwatchSheet(json: any, images: Map<number, RgbaImage8>, cla
 }
 
 /** One line for the build's notes. */
+/** The provenance sentence written into the GLB: the classes, their sets and what was drawn, never how long it took (the run note keeps the timing; two builds of one scan must give one GLB, k_determinism.md §5). */
 export function describeMaterialRegions(r: MaterialRegionsReport): string {
     const pct = (a: number) => (r.texels.total ? `${Math.round((100 * a) / r.texels.total)}%` : '0%');
     return `material regions: ${r.classes.length} appearance classes (${r.classes.map((c, k) => `${c.openings ? 'in openings ' : ''}${c.wall ? 'lightest' : 'L ' + Math.round(c.meanLab[0])} -> ${c.set}, ${pct(r.texels.perClass[k] ?? 0)} of texels`).join('; ')}); ` +
-        `every texel its class's set: ${r.facades.total} rebuilt facades tiled at the sets' real size, ${r.scanPieces.total} scan pieces the sets' mean finish; glass in the fitted windows' panes on ${pct(r.texels.glass)} of texels (the wall guard: ${r.panesOnStone} panes left as stone, ${pct(r.paneWallTexels)} of texels wall-like within glass panes); ` +
-        `occlusion, roughness, metalness and normal generated from the library, colour the photo` +
-        `${r.classes.some(c => c.height) ? `; height (a recess below the rebuilt planes, generated): ${r.classes.filter(c => c.height).map(c => `${c.set} up to ${Math.round(c.height!.maxRecessM * 1000)} mm`).join(', ')}` : ''} (${r.ms} ms)`;
+        `every texel its class's set: ${r.facades.total} rebuilt facades tiled at the sets' real size, ${r.scanPieces.total} scan pieces the sets' mean finish; glass in the fitted windows' panes on ${pct(r.texels.glass)} of texels (the wall guard: ${r.panesOnStone} panes left as stone, ${pct(r.paneWallTexels)} of texels wall-like within glass panes)${r.frameTexels !== undefined ? `; window frames beside the glass no smoother than ${ARTIST_FINISH.frameRoughness} on ${pct(r.frameTexels)} of texels` : ''}; ` +
+        `occlusion, roughness, metalness and normal generated from the library, colour the photo` + (r.exposure ? `; exposure x${r.exposure.gain} (${r.exposure.why})` : '') +
+        `${r.classes.some(c => c.height) ? `; height (a recess below the rebuilt planes, generated): ${r.classes.filter(c => c.height).map(c => `${c.set} up to ${Math.round(c.height!.maxRecessM * 1000)} mm`).join(', ')}` : ''}`;
 }

@@ -17,7 +17,8 @@
 import { describe, expect, it } from 'vitest';
 import { assembleGlb, parseGlbBytes } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { encodePng } from '../src/node/3d-engine/staged-location/png-encode';
-import { classRepeatSizes, foldRepeats, GLASS, paneGlass, planMaterialRegions, readRegionClasses, regionClassMap, regionRadius, repeatElements, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
+import { ARTIST_FINISH, PBR_REFERENCE } from '../src/common/spatial/pbr-artist-reference';
+import { applyExposureGain, fitExposureGain, applyFrameFinish, classRepeatSizes, foldRepeats, GLASS, paneGlass, planMaterialRegions, readRegionClasses, regionClassMap, regionRadius, repeatElements, type RegionClass, type RegionSet } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions';
 import { planMaterialRegionsOnThreads } from '../src/node/3d-engine/staged-location/pipeline-k/material-regions-pool';
 import { tileRefineTwin } from '../src/node/3d-engine/staged-location/tile-refine-twin';
 import { decodeImageInMemory, type RgbaImage8 } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
@@ -243,6 +244,60 @@ describe('pipeline K material regions', () => {
         expect(tiny.glass[20 * W + 100]).toBe(1);
         expect(tiny.glass[22 * W + 100]).toBe(0);
     });
+    it("draws a window's frames beside its glass no smoother than a frame, and leaves a window without a glass pane as its class drew it", () => {
+        // a 20 x 20 m wall of light stone with two 2 x 2 m dark windows; the first holds a 1.4 x 1.4 m glass pane in its middle
+        // (its frame the 0.3 m ring around it), the second holds no pane
+        const W = 200, H = 200, rgba = new Uint8Array(W * H * 4);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) rgba.set([200, 196, 188, 255], (y * W + x) * 4);
+        for (const [x0, y0] of [[20, 20], [100, 20]]) for (let y = y0; y < y0 + 20; y++) for (let x = x0; x < x0 + 20; x++) rgba.set([25, 30, 42, 255], (y * W + x) * 4);
+        const r = (x0: number, y0: number, x1: number, y1: number) => [x0 / W, y0 / H, x1 / W, y1 / H];
+        const extras = { sbFacadeLattice: { facadeId: 1, windows: { uv: [...r(20, 20, 40, 40), ...r(100, 20, 120, 40)], panes: r(23, 23, 37, 37) } } };
+        const img = { width: W, height: H, rgba };
+        const g = parseGlbBytes(scene([{ mesh: 'facade_lattice_1', corners: wall(0, 20, 20), uv: FULL_UV, material: 0, extras }], [img]));
+        const classes = readRegionClasses(g.json, imagesOf([img]))!;
+        // every class's set as smooth as glass (roughness 20/255), so only the rule can raise a texel
+        const smooth = sets(classes).map(st => ({ ...st, orm: { ...st.orm, rgba: st.orm.rgba.map((v, i) => (i % 4 === 1 ? 20 : v)) } }));
+        const plan = planMaterialRegions(g, g.json, imagesOf([img]), classes, smooth);
+        const raised = applyFrameFinish(plan, g.json, imagesOf([img]), classes);
+        const orm = plan.materials[0].orm, floor = Math.round(ARTIST_FINISH.frameRoughness * 255);
+        // the frame ring (400 - 196 texels) raised to a frame's roughness, the glass kept at main's glass setting
+        expect(raised).toBe(400 - 14 * 14);
+        expect(plan.report.frameTexels).toBe(raised);
+        expect(at(orm, 21, 21)[1]).toBe(floor);
+        expect(at(orm, 30, 30)[1]).toBe(Math.round(GLASS.roughness * 255));
+        // the window with no pane, and the wall, as their classes drew them
+        expect(at(orm, 110, 30)[1]).toBe(20);
+        expect(at(orm, 60, 100)[1]).toBe(20);
+    });
+
+    it("fits the building's exposure so its named stone lands in its reference albedo, held below clipping, and keeps relative colours", () => {
+        const limestone = PBR_REFERENCE.findIndex(e => /dressed limestone/.test(e.look)) + 1, glass = PBR_REFERENCE.findIndex(e => /window glass in place/.test(e.look)) + 1;
+        const cls = (index: number, L: number, share: number, openings = false) => ({ index, meanLab: [0, 0, 0] as [number, number, number], meanLinear: [L, L, L] as [number, number, number], spreadLab: [0, 0, 0] as [number, number, number], share, wall: false, openings });
+        // a photo of dark texels (0.1 linear) with nothing bright: the clip cap stays out of the way
+        const W = 64, H = 64, px = (L: number) => Math.round((L <= 0.0031308 ? 12.92 * L : 1.055 * Math.pow(L, 1 / 2.4) - 0.055) * 255);
+        const dark = { width: W, height: H, rgba: new Uint8Array(W * H * 4) };
+        for (let k = 0; k < W * H; k++) dark.rgba.set([px(0.1), px(0.12), px(0.08), 255], k * 4);
+        const fit = fitExposureGain([cls(0, 0.1, 0.6), cls(1, 0.05, 0.3, true)], [{ finish: { read: { roughness: 0.85, metalness: 0, conf: 80, ref: limestone } as never, roughness: 0.85, metallic: 0, label: 'photo-inferred' } }, { finish: { read: { roughness: 0.08, metalness: 0, conf: 80, ref: glass } as never, roughness: 0.08, metallic: 0, label: 'photo-inferred' } }], new Map([[0, dark]]));
+        // limestone (0.3-0.6) at 0.1 wants x3 to x6; the nearest to 1 that lands it is x3; the opening class takes no part
+        expect(fit.gain).toBeCloseTo(3, 1);
+        expect(fit.classes.map(c => c.index)).toEqual([0]);
+        expect(fit.label).toBe('photo-inferred');
+        // a photo with bright texels: the clip cap holds the gain (0.5% of texels may pass 0.95)
+        const bright = { width: W, height: H, rgba: dark.rgba.slice() };
+        for (let k = 0; k < W * H / 10; k++) bright.rgba.set([px(0.5), px(0.5), px(0.5), 255], k * 4);
+        const capped = fitExposureGain([cls(0, 0.1, 0.6)], [{ finish: { read: { roughness: 0.85, metalness: 0, conf: 80, ref: limestone } as never, roughness: 0.85, metallic: 0, label: 'photo-inferred' } }], new Map([[0, bright]]));
+        expect(capped.gain).toBeLessThan(2);
+        expect(capped.gain).toBeCloseTo(capped.clipCap, 2);
+        // no class names a finish with an albedo: the photos stay as they are
+        expect(fitExposureGain([cls(0, 0.1, 1)], [{}], new Map([[0, dark]])).gain).toBe(1);
+        // the gain in linear light keeps the channels' ratios
+        const img = { width: 1, height: 1, rgba: new Uint8Array([px(0.1), px(0.05), px(0.02), 255]) };
+        applyExposureGain(new Map([[0, img]]), 2);
+        const lin = (v: number) => { const c = v / 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+        expect(lin(img.rgba[0]) / lin(img.rgba[1])).toBeCloseTo(2, 1);
+        expect(lin(img.rgba[0])).toBeCloseTo(0.2, 2);
+    });
+
     it('draws a speckle under regionSmoothM as the surface around it; a blot a metre across keeps its own set', () => {
         const W = 100, H = 100, rgba = new Uint8Array(W * H * 4);
         for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {

@@ -14,7 +14,8 @@
  * building's photos (classSwatchSheet) beside each candidate drawn at the same real size and recoloured to the class's
  * mean colour, so only the surface itself (grain, relief, joints, pattern, how its tone varies) tells them apart, and
  * picks the candidate that would pass for the same surface. The words it gives are labels; nothing branches on them.
- * A row it answers with none, or a reply that fails, keeps the ranking's nearest. The set is generated either way.
+ * A row it answers with none, or a reply that fails, keeps the ranking's nearest. The set is generated either way. It is
+ * asked as a PBR texture artist, told the artists' rules (common/spatial/pbr-artist-reference.ts; 2026-11-08).
  *
  * Each pick is kept (chooseWithMemory, model-readings.ts) under the candidates its class was shown, and a later class
  * (another building, chunk or run) shown the same candidates at the same span, whose colour lies within CHOICE_REUSE of
@@ -27,8 +28,9 @@ import { decodePng } from '../../../texture-processing';
 import { encodePng } from '../png-encode';
 import type { RgbaImage8 } from '../tile-texture-transfer';
 import { readingKey, type ModelReadingStore } from './model-readings';
+import { PBR_ARTIST_RULES } from '../../../../common/spatial/pbr-artist-reference';
 
-export const MATERIAL_CHOICE_VERSION = 'material-choice/2';
+export const MATERIAL_CHOICE_VERSION = 'material-choice/4';
 
 /** Candidates shown a class (the ranking's nearest), and the cell each is drawn in, pixels. */
 export const CHOICE_CANDIDATES = 10;
@@ -82,13 +84,17 @@ export function choicePrompt(rows: ChoiceRow[], spanM: number, ctx: { building?:
         `Image 1: each row is one appearance class of the outside of ${ctx.building ?? 'a building'}, patches of its photographed surfaces (straightened, de-lit photos), each about ${span} across.`,
         `Image 2: row k holds candidate surfaces for image 1's row k, numbered 1 to n from the left, each a patch ${span} across, recoloured to that class's mean colour, so the colour tells them nothing: judge the surface itself, its grain, relief, joints, pattern and how its tone varies.`,
         ...(ctx.brief ? [`The building, as an architect described it from its photos: ${ctx.brief}`] : []),
-        'For each row give "pick": the candidate that would pass for the same surface as the class seen on the building, or 0 when none would; "seen": what the class looks like in a few words; and "conf" (0..100).',
-        `There are ${rows.length} rows, with ${rows.map(r => r.candidates.length).join(', ')} candidates. Answer with JSON only: {"rows":[{"row":1,"pick":1,"seen":"...","conf":0}]}`
+        'Judge as an experienced PBR texture artist: the candidate\'s grain, relief and pattern must be what that surface shows at that size on a real weathered building (a dressed stone wall shows coursing and tooling, not a beach or a pavement; glass and polished panels show almost none). Remember:',
+        ...PBR_ARTIST_RULES.map(r => `- ${r}`),
+        'For each row give "pick": the candidate that would pass for the same surface as the class seen on the building, or 0 when none would; "seen": what the class looks like in a few words; "metal": 1 when the class shows bare, anodised or plated metal over most of its area, else 0 (paint, coating, oxide, glass, stone, shade: 0); and "conf" (0..100).',
+        `There are ${rows.length} rows, with ${rows.map(r => r.candidates.length).join(', ')} candidates. Answer with JSON only: {"rows":[{"row":1,"pick":1,"seen":"...","metal":0,"conf":0}]}`
     ].join('\n');
 }
 
 export interface SetChoice {
     pick: number; seen?: string; conf: number;
+    /** The chooser's own vote on bare metal (0 or 1): a second expert look the class's metal must agree with (material-finish.ts agreeMetal). */
+    metal?: 0 | 1;
     /** Taken from an earlier class shown the same candidates (CHOICE_REUSE), not asked: its colour, and how far this class's lies from it. */
     reused?: { meanLab: [number, number, number]; colourUnits: number };
 }
@@ -104,7 +110,7 @@ export function parseChoices(text: string, rows: ChoiceRow[]): Array<SetChoice |
         if (typeof r?.row !== 'number' || typeof r.pick !== 'number') throw new Error('a row without a "row" or "pick"');
         const k = Math.round(r.row) - 1, pick = Math.round(r.pick);
         if (k < 0 || k >= rows.length || pick < 0 || pick > rows[k].candidates.length) continue;
-        out[k] = { pick, ...(typeof r.seen === 'string' && r.seen.trim() ? { seen: r.seen.trim().slice(0, 80) } : {}), conf: typeof r.conf === 'number' && Number.isFinite(r.conf) ? Math.max(0, Math.min(100, r.conf)) : 50 };
+        out[k] = { pick, ...(typeof r.seen === 'string' && r.seen.trim() ? { seen: r.seen.trim().slice(0, 80) } : {}), ...(typeof r.metal === 'number' && Number.isFinite(r.metal) ? { metal: r.metal >= 0.5 ? 1 as const : 0 as const } : {}), conf: typeof r.conf === 'number' && Number.isFinite(r.conf) ? Math.max(0, Math.min(100, r.conf)) : 50 };
     }
     return out;
 }
@@ -124,7 +130,7 @@ export const colourUnits = (a: readonly number[], b: readonly number[]) => Math.
 /** The kept picks among one shortlist, under `material-choice/<sha256>` (its candidates in order, the span and the model). */
 export interface ChoiceMemoryRecord {
     schema: 'scratchbox.material-choice/1'; key: string; model: string;
-    classes: Array<{ meanLab: [number, number, number]; pick: number; seen?: string; conf: number; atMs: number }>;
+    classes: Array<{ meanLab: [number, number, number]; pick: number; seen?: string; metal?: 0 | 1; conf: number; atMs: number }>;
 }
 
 export const choiceKey = (row: ChoiceRow, spanM: number, model: string) => readingKey('material-choice', [MATERIAL_CHOICE_VERSION, model, Math.round(spanM * 10) / 10, row.candidates.map(c => c.id)]);
@@ -157,7 +163,7 @@ export async function chooseWithMemory(rows: ChoiceRow[], swatches: { png: Buffe
     for (const [k, key] of keys.entries()) {
         const kept = key ? (await memory!.store.get<ChoiceMemoryRecord>(key))?.classes ?? [] : [];
         const near = kept.map(c => ({ c, d: colourUnits(c.meanLab, labs[k]) })).filter(x => x.d < CHOICE_REUSE.maxColourUnits && x.c.pick >= 0 && x.c.pick <= rows[k].candidates.length).sort((a, b) => a.d - b.d)[0];
-        if (near) picks[k] = { pick: near.c.pick, ...(near.c.seen ? { seen: near.c.seen } : {}), conf: near.c.conf, reused: { meanLab: near.c.meanLab, colourUnits: Math.round(near.d * 1000) / 1000 } };
+        if (near) picks[k] = { pick: near.c.pick, ...(near.c.seen ? { seen: near.c.seen } : {}), ...(near.c.metal !== undefined ? { metal: near.c.metal } : {}), conf: near.c.conf, reused: { meanLab: near.c.meanLab, colourUnits: Math.round(near.d * 1000) / 1000 } };
     }
     const open = rows.map((_, k) => k).filter(k => !picks[k]);
     if (!open.length) return { picks, calls: 0, reused: rows.length };
@@ -171,7 +177,7 @@ export async function chooseWithMemory(rows: ChoiceRow[], swatches: { png: Buffe
         picks[k] = a;
         if (!a || !key) continue;
         const kept = (await memory!.store.get<ChoiceMemoryRecord>(key))?.classes ?? [];
-        const classes = [...kept, { meanLab: labs[k], pick: a.pick, ...(a.seen ? { seen: a.seen } : {}), conf: a.conf, atMs: Date.now() }].slice(-CHOICE_REUSE.maxKept);
+        const classes = [...kept, { meanLab: labs[k], pick: a.pick, ...(a.seen ? { seen: a.seen } : {}), ...(a.metal !== undefined ? { metal: a.metal } : {}), conf: a.conf, atMs: Date.now() }].slice(-CHOICE_REUSE.maxKept);
         memory!.store.put(key, { schema: 'scratchbox.material-choice/1', key, model: memory!.model, classes } satisfies ChoiceMemoryRecord);
     }
     return { picks, calls: 1, reused: rows.length - open.length };
