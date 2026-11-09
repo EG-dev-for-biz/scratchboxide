@@ -291,13 +291,21 @@ def segment(request):
     t_all = time.time()
     timings = {}
     image_path = request.get("image")
+    image_b64 = request.get("imageB64")
     out_mask = request.get("outMask")
     out_matte = request.get("outMatte")
-    if not image_path or not out_mask:
-        raise SegmentFailure("bad_request", "the request needs image and outMask")
-    bgr = cv2.imread(image_path, cv2.IMREAD_COLOR)
+    # returnMask: the mask comes back in the answer (a PNG, base64) and nothing is written; with imageB64 the image is
+    # decoded from the bytes as given, in memory (a photo that must never be written, e.g. a Street View grounding image)
+    return_mask = bool(request.get("returnMask"))
+    if not (image_path or image_b64) or not (out_mask or return_mask):
+        raise SegmentFailure("bad_request", "the request needs image (or imageB64) and outMask (or returnMask)")
+    if image_b64:
+        import base64
+        bgr = cv2.imdecode(np.frombuffer(base64.b64decode(image_b64), np.uint8), cv2.IMREAD_COLOR)
+    else:
+        bgr = cv2.imread(image_path, cv2.IMREAD_COLOR)
     if bgr is None:
-        raise SegmentFailure("bad_input", f"could not read the image {image_path}")
+        raise SegmentFailure("bad_input", "could not decode the image bytes" if image_b64 else f"could not read the image {image_path}")
     h, w = bgr.shape[:2]
     model_path = os.path.abspath(request.get("modelPath") or DEFAULT_MODEL)
     if not os.path.exists(model_path):
@@ -415,9 +423,17 @@ def segment(request):
         matte = np.maximum(matte, (mask > 0) * CONFIDENCE)
         matte_source = "interactive segmenter confidence"
 
-    os.makedirs(os.path.dirname(os.path.abspath(out_mask)), exist_ok=True)
-    if not cv2.imwrite(out_mask, mask):
-        raise SegmentFailure("write_failed", f"could not write {out_mask}")
+    mask_png = None
+    if return_mask:
+        import base64
+        ok, png = cv2.imencode(".png", mask)
+        if not ok:
+            raise SegmentFailure("encode_failed", "could not encode the mask")
+        mask_png = base64.b64encode(png.tobytes()).decode("ascii")
+    if out_mask:
+        os.makedirs(os.path.dirname(os.path.abspath(out_mask)), exist_ok=True)
+        if not cv2.imwrite(out_mask, mask):
+            raise SegmentFailure("write_failed", f"could not write {out_mask}")
     if out_matte and not cv2.imwrite(out_matte, np.clip(matte * 255.0 + 0.5, 0, 255).astype(np.uint8)):
         raise SegmentFailure("write_failed", f"could not write {out_matte}")
 
@@ -449,6 +465,7 @@ def segment(request):
         "model": f"mediapipe-interactive-segmenter-legacy ({os.path.basename(model_path)})",
         "timingsMs": timings,
         **({"iouWithCompare": compare} if compare is not None else {}),
+        **({"maskPng": mask_png} if mask_png is not None else {}),
     }
 
 

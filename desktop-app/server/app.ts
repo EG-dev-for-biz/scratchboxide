@@ -74,6 +74,7 @@ import { createMapDataRouter } from './routes/mapDataRoutes';
 import { createSkyRouter } from './routes/skyRoutes';
 import { createTileRefineRouter } from './routes/tileRefineRoutes';
 import { createWindowCheckRouter } from './routes/windowCheckRoutes';
+import { createBlobCheckRouter } from './routes/blobCheckRoutes';
 import { createTextureRouter } from './routes/textureRoutes';
 import { createMediaRouter, createVideoRouter } from './routes/mediaVideoRoutes';
 import { createWorldRouter } from './routes/worldRoutes';
@@ -703,6 +704,7 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/compiler', cppRouter);
     app.use('/3d/tiles', createTileRefineRouter(routeContext));
     app.use('/3d/window-check', createWindowCheckRouter(routeContext));
+    app.use('/3d/blob-check', createBlobCheckRouter(routeContext));
     app.use('/3d/virtual-geometry', createVirtualGeometryRouter(getVirtualGeometryBuildService(), routeContext));
     app.use('/3d/path-trace', createPathTraceRouter(new MetalPathTracerService(), routeContext));
     app.use('/api/map-data', createMapDataRouter(routeContext));
