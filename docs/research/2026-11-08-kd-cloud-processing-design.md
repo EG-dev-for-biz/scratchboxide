@@ -90,6 +90,21 @@ With 1 and 2 the shown band at Penn 150 m is about 4.5 min; with all four, about
 2. *The largest building* (−40 to −60 s): its K remesh (80–137 s) and twin (30–56 s) per facade group in parallel on the
    task's cores, or its scan shown first and its straightened facades swapped in.
 
+## The worker pool and the window array on threads (2026-11-09)
+
+- **The pool** (`kd-chunk-job.ts --serve`, `CloudRunServiceJobs`; `deploy.sh service`): the chunk build as a Cloud Run
+  service, 0 instances between districts, one chunk an instance (it exits after), request-based billing: idle cost $0/h.
+  A new instance started in about 8 s median (2-30 s) against a job task's 90 s. **Penn shown in 244-251 s.**
+- **Warm reuse was slower, not faster:** a reused instance built the same bytes (110/110) but its native steps took about
+  twice as long; hence one chunk an instance.
+- **The window array's first pass on the worker threads:** 15-24 s → 6-11 s on the largest buildings, the same bytes.
+- **Identity:** jobs vs pool, 110 of 110 layers byte-identical.
+- **Contention:** the largest building (chunk 26) built alone in 169 s, in 230 s beside 33 others.
+
+**Still blocking 3 minutes (244 s now):** the largest buildings' build (169 s alone): the twin's de-light and PNG encoding
+(22 s) and the stage cache's publishing (13 s) on the main thread are next; and contention in the fan-out (+25-35%).
+Findings record: `docs/processes/2026-11-09-kd-cloud-fanout.md`.
+
 ## The design
 
 ### 1. Known places open from the store (seconds)
