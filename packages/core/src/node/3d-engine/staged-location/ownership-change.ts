@@ -33,10 +33,14 @@ export interface OwnershipChange {
     /** (onlyFirst + onlySecond) / (onlyFirst + onlySecond + both). */
     share: number;
     material: boolean;
+    /** The centroids (x y z, metres, the scan frame) of the triangles in one isolate only: where the vote moved the structure. */
+    moved: Float64Array;
+    /** Their areas (m²), one per centroid. */
+    movedAreas: Float64Array;
 }
 
-function triangles(file: string): Map<string, number> {
-    const out = new Map<string, number>();
+function triangles(file: string): Map<string, { area: number; c: [number, number, number] }> {
+    const out = new Map<string, { area: number; c: [number, number, number] }>();
     for (const n of parseGlbNodes(fs.readFileSync(file))) {
         const p = n.positions;
         const count = n.indices ? n.indices.length : p.length / 3;
@@ -47,8 +51,10 @@ function triangles(file: string): Map<string, number> {
             const vx = p[c * 3] - ax, vy = p[c * 3 + 1] - ay, vz = p[c * 3 + 2] - az;
             const area = 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
             // the centroid to a centimetre: the same scan triangle in both isolates
-            const key = `${Math.round(((ax + p[b * 3] + p[c * 3]) / 3) * 100)},${Math.round(((ay + p[b * 3 + 1] + p[c * 3 + 1]) / 3) * 100)},${Math.round(((az + p[b * 3 + 2] + p[c * 3 + 2]) / 3) * 100)}`;
-            out.set(key, (out.get(key) ?? 0) + area);
+            const cx = (ax + p[b * 3] + p[c * 3]) / 3, cy = (ay + p[b * 3 + 1] + p[c * 3 + 1]) / 3, cz = (az + p[b * 3 + 2] + p[c * 3 + 2]) / 3;
+            const key = `${Math.round(cx * 100)},${Math.round(cy * 100)},${Math.round(cz * 100)}`;
+            const was = out.get(key);
+            if (was) was.area += area; else out.set(key, { area, c: [cx, cy, cz] });
         }
     }
     return out;
@@ -58,9 +64,10 @@ function triangles(file: string): Map<string, number> {
 export function ownershipChange(firstGlb: string, secondGlb: string, materialShare = OWNERSHIP_MATERIAL_SHARE): OwnershipChange {
     const a = triangles(firstGlb), b = triangles(secondGlb);
     let onlyFirstM2 = 0, onlySecondM2 = 0, bothM2 = 0;
-    for (const [k, area] of a) { if (b.has(k)) bothM2 += Math.max(area, b.get(k)!); else onlyFirstM2 += area; }
-    for (const [k, area] of b) if (!a.has(k)) onlySecondM2 += area;
+    const moved: number[] = [], movedAreas: number[] = [];
+    for (const [k, t] of a) { const o = b.get(k); if (o) bothM2 += Math.max(t.area, o.area); else { onlyFirstM2 += t.area; moved.push(...t.c); movedAreas.push(t.area); } }
+    for (const [k, t] of b) if (!a.has(k)) { onlySecondM2 += t.area; moved.push(...t.c); movedAreas.push(t.area); }
     const total = onlyFirstM2 + onlySecondM2 + bothM2;
     const share = total > 0 ? (onlyFirstM2 + onlySecondM2) / total : 0;
-    return { onlyFirstM2, onlySecondM2, bothM2, share, material: share >= materialShare };
+    return { onlyFirstM2, onlySecondM2, bothM2, share, material: share >= materialShare, moved: Float64Array.from(moved), movedAreas: Float64Array.from(movedAreas) };
 }
