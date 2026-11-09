@@ -27,11 +27,14 @@
  *
  * Morphology at a radius r (closing fills gaps and openings narrower than about 2r; opening removes parts thinner than
  * about 2r), both on the field itself:
- *  - closing: the outside distance carried out to r plus the band by closest-point propagation (each voxel keeps the
- *    surface point nearest it, handed on to its face neighbours, Danielsson-style, in parallel rounds over blocks), the field moved
+ *  - closing: the outside distance carried out to r plus the band by closest-point propagation from the field's zero
+ *    crossings (the solid's boundary; an open sheet that bounds nothing seeds nothing), each voxel keeping the surface
+ *    point nearest it, handed on to its face neighbours, Danielsson-style, in parallel rounds over blocks), the field moved
  *    out by r, then the distance inside that dilated surface recomputed the same way from its own zero crossings and the
  *    surface moved back in by r;
  *  - opening: the same on the negated field.
+ * A closing never ends above the original value and an opening never below it (a closing contains what it closes), so
+ * a boundary the field could not measure (where the winding number crosses one half in mid-air over a hole) stays put.
  * New blocks are allocated only where the propagation reaches; blocks that end wholly outside the band become tiles.
  *
  * Values are metres, negative inside, clamped to +-band.
@@ -457,8 +460,7 @@ struct MeshSource {
 };
 
 /** One level of build() below: the band at o.voxel, signed with the help of `guide` (a coarser field) when given. */
-inline SparseField buildLevel(const MeshSource& src, const BuildOptions& o, FixedThreadPool& pool, BuildStats* stats,
-                              std::vector<std::array<uint32_t, kVox>>* nearest, const SparseField* guide) {
+inline SparseField buildLevel(const MeshSource& src, const BuildOptions& o, FixedThreadPool& pool, BuildStats* stats, const SparseField* guide) {
     using namespace detail;
     if (!(o.voxel > 0)) throw std::runtime_error("voxel size must be positive");
     const int W = std::max(2, o.bandVoxels);
@@ -530,7 +532,6 @@ inline SparseField buildLevel(const MeshSource& src, const BuildOptions& o, Fixe
     // 2. Exact unsigned distance of every voxel within the band, per block in parallel.
     t0 = now();
     std::vector<Block> blocks(nb);
-    std::vector<std::array<uint32_t, kVox>> near(nb);
     std::vector<uint8_t> keep(nb, 0);
     pool.forEach(nb, [&](size_t i) {
         Block& B = blocks[i];
@@ -540,7 +541,6 @@ inline SparseField buildLevel(const MeshSource& src, const BuildOptions& o, Fixe
         B.by = static_cast<int>((key >> 21) & m) - (1 << 20);
         B.bz = static_cast<int>(key & m) - (1 << 20);
         B.v.fill(F.band);
-        near[i].fill(UINT32_MAX);
         const int X0 = B.bx * kDim, Y0 = B.by * kDim, Z0 = B.bz * kDim;
         for (size_t p = starts[i]; p < starts[i + 1]; ++p) {
             const uint32_t t = pairs[p].second;
@@ -562,7 +562,7 @@ inline SparseField buildLevel(const MeshSource& src, const BuildOptions& o, Fixe
                         const Vec3 cp = inner_core::detail::closestOnTriangle(q, T);
                         const double d = len(sub(q, cp));
                         const int li = localIndex(x, y, z);
-                        if (d < B.v[li]) { B.v[li] = static_cast<float>(d); near[i][li] = t; }
+                        if (d < B.v[li]) B.v[li] = static_cast<float>(d);
                     }
         }
         for (float v : B.v) if (v < F.band) { keep[i] = 1; break; }
@@ -757,12 +757,10 @@ inline SparseField buildLevel(const MeshSource& src, const BuildOptions& o, Fixe
     st.msSign = now() - t0;
 
     F.blocks.reserve(std::count(keep.begin(), keep.end(), 1));
-    if (nearest) nearest->clear();
     for (size_t i = 0; i < nb; ++i) {
         if (!keep[i]) continue;
         F.index.emplace(blockKey(blocks[i].bx, blocks[i].by, blocks[i].bz), static_cast<uint32_t>(F.blocks.size()));
         F.blocks.push_back(std::move(blocks[i]));
-        if (nearest) nearest->push_back(near[i]);
     }
 
     // 4. A tile sign for each unstored block beside a stored one (the winding number at its centre).
@@ -802,13 +800,8 @@ inline SparseField buildLevel(const MeshSource& src, const BuildOptions& o, Fixe
     return F;
 }
 
-/**
- * Builds the narrow band of `src` (see the file comment), with the coarser sign guides BuildOptions asks for. `nearest`,
- * when given, receives per stored block the index of each voxel's nearest triangle (UINT32_MAX beyond the band):
- * closest-point seeds for exact morphology.
- */
-inline SparseField build(const MeshSource& src, const BuildOptions& o, FixedThreadPool& pool, BuildStats* stats = nullptr,
-                         std::vector<std::array<uint32_t, kVox>>* nearest = nullptr) {
+/** Builds the narrow band of `src` (see the file comment), with the coarser sign guides BuildOptions asks for. */
+inline SparseField build(const MeshSource& src, const BuildOptions& o, FixedThreadPool& pool, BuildStats* stats = nullptr) {
     const double t0 = detail::now();
     std::unique_ptr<SparseField> guide;
     size_t levels = 0;
@@ -817,13 +810,13 @@ inline SparseField build(const MeshSource& src, const BuildOptions& o, FixedThre
         BuildOptions g = o;
         g.voxel = o.voxel * o.signGuideRatio;
         BuildStats gs;
-        guide = std::make_unique<SparseField>(build(src, g, pool, &gs, nullptr));
+        guide = std::make_unique<SparseField>(build(src, g, pool, &gs));
         levels = gs.guideLevels + 1;
         guideEvals = gs.windingEvaluations;
     }
     const double msGuide = detail::now() - t0;
     BuildStats st;
-    SparseField F = buildLevel(src, o, pool, &st, nearest, guide.get());
+    SparseField F = buildLevel(src, o, pool, &st, guide.get());
     st.guideLevels = levels;
     st.msGuide = msGuide;
     st.windingEvaluations += guideEvals;
@@ -1002,34 +995,26 @@ inline size_t seedFromCrossings(const SparseField& F, Seeds& S, int side, FixedT
 }  // namespace detail
 
 /**
- * Morphological closing at radius r (see the file comment). `src` and `nearest` (from build), when given, seed the
- * dilation with exact closest points on the mesh; otherwise it is seeded from the field's own zero crossings. The
- * field keeps its band; blocks that end wholly outside it become tiles.
+ * Morphological closing at radius r (see the file comment), seeded from the field's zero crossings both ways. The field
+ * keeps its band; blocks that end wholly outside it become tiles.
  */
-inline MorphStats close(SparseField& F, double r, FixedThreadPool& pool, const MeshSource* src = nullptr, const std::vector<std::array<uint32_t, kVox>>* nearest = nullptr) {
+inline MorphStats close(SparseField& F, double r, FixedThreadPool& pool) {
     using namespace detail;
     MorphStats ms;
     if (!(r > 0)) return ms;
     const double bandM = F.band, reach = r + bandM + F.voxel;
     double t0 = now();
+    // The original values: a closing contains what it closes, so the result is never above them (where the winding
+    // number crossed one half in mid-air, over a hole, the field jumps from -band to +band with no distance to place
+    // that boundary by, and re-measuring it would move it by up to half a voxel).
+    std::vector<std::array<float, kVox>> original(F.blocks.size());
+    pool.forEach(F.blocks.size(), [&](size_t b) { original[b] = F.blocks[b].v; });
     // 1. Distance outward (positive side), out to r + band.
     {
+        // seeded from the field's own zero crossings: the boundary of the solid. The mesh's nearest triangles would
+        // also seed from open sheets that bound nothing (outside on both sides), and the closing would thicken them.
         Seeds S;
-        S.grow(F.blocks.size());
-        if (src && nearest && nearest->size() == F.blocks.size()) {
-            std::vector<std::vector<std::pair<uint16_t, std::array<float, 3>>>> perBlock(F.blocks.size());
-            pool.forEach(F.blocks.size(), [&](size_t b) {
-                for (int a = 0; a < kVox; ++a) {
-                    const uint32_t t = (*nearest)[b][a];
-                    if (t == UINT32_MAX || F.blocks[b].v[a] < 0) continue;
-                    const Vec3 cp = inner_core::detail::closestOnTriangle(voxelCentre(F, static_cast<uint32_t>(b), a), src->tris[t]);
-                    perBlock[b].push_back({static_cast<uint16_t>(a), {static_cast<float>(cp[0]), static_cast<float>(cp[1]), static_cast<float>(cp[2])}});
-                }
-            });
-            ms.seeds = addSeeds(S, perBlock);
-        } else {
-            ms.seeds = seedFromCrossings(F, S, +1, pool);
-        }
+        ms.seeds = seedFromCrossings(F, S, +1, pool);
         ms.reached += propagate(F, S, +1, reach, ms, pool);
         // The dilated field: (outside distance) - r where reached; inside voxels and unreached outside ones keep theirs - r.
         pool.forEach(F.blocks.size(), [&](size_t b) {
@@ -1053,6 +1038,7 @@ inline MorphStats close(SparseField& F, double r, FixedThreadPool& pool, const M
                 float& v = F.blocks[b].v[a];
                 if (v < 0) v = S.id[b][a] != UINT32_MAX ? static_cast<float>(r - S.dist(S.id[b][a], voxelCentre(F, static_cast<uint32_t>(b), a))) : -F.band;
                 else v = static_cast<float>(v + r);
+                if (b < original.size()) v = std::min(v, original[b][a]);  // blocks added since were tiles or unknown: no solid to keep
                 v = std::clamp(v, -F.band, F.band);
             }
         });
@@ -1063,9 +1049,9 @@ inline MorphStats close(SparseField& F, double r, FixedThreadPool& pool, const M
 }
 
 /** Morphological opening at radius r: the closing of the negated field. */
-inline MorphStats open(SparseField& F, double r, FixedThreadPool& pool, const MeshSource* src = nullptr, const std::vector<std::array<uint32_t, kVox>>* nearest = nullptr) {
+inline MorphStats open(SparseField& F, double r, FixedThreadPool& pool) {
     F.negate();
-    MorphStats ms = close(F, r, pool, src, nearest);
+    MorphStats ms = close(F, r, pool);
     F.negate();
     return ms;
 }
@@ -1093,11 +1079,9 @@ inline CoarseMorphStats morphCoarse(SparseField& fine, double r, bool opening, c
     BuildOptions bo;
     bo.voxel = coarseVoxel;
     bo.bandVoxels = 3;
-    std::vector<std::array<uint32_t, kVox>> near;
-    SparseField c0 = build(src, bo, pool, &st.coarseBuild, &near);
+    SparseField c0 = build(src, bo, pool, &st.coarseBuild);
     SparseField c = c0;
-    st.coarse = opening ? open(c, r, pool, &src, &near) : close(c, r, pool, &src, &near);
-    std::vector<std::array<uint32_t, kVox>>().swap(near);
+    st.coarse = opening ? open(c, r, pool) : close(c, r, pool);
     const double t0 = now();
     const double tau = 0.5 * coarseVoxel;
     const float dir = opening ? 1.f : -1.f;  // the sign a changed value moves by

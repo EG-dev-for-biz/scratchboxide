@@ -74,8 +74,7 @@ std::string coarseJson(const std::string& op, double r, const sparse_field::Coar
 }
 
 /** One closing or opening: on a coarser grid merged into the field when coarseVoxel is above the field's voxel. */
-std::string applyOp(SparseField& F, uint32_t kind, double r, double coarseVoxel, const sparse_field::MeshSource& src,
-                    const std::vector<std::array<uint32_t, sparse_field::kVox>>* nearest, FixedThreadPool& pool, double* ms) {
+std::string applyOp(SparseField& F, uint32_t kind, double r, double coarseVoxel, const sparse_field::MeshSource& src, FixedThreadPool& pool, double* ms) {
     const double t0 = sparse_field::detail::now();
     const std::string op = kind == 0 ? "close" : "open";
     std::string js;
@@ -83,7 +82,7 @@ std::string applyOp(SparseField& F, uint32_t kind, double r, double coarseVoxel,
         const auto c = sparse_field::morphCoarse(F, r, kind == 1, src, coarseVoxel, pool);
         js = coarseJson(op, r, c, F);
     } else {
-        const auto m = kind == 0 ? sparse_field::close(F, r, pool, nearest ? &src : nullptr, nearest) : sparse_field::open(F, r, pool, nearest ? &src : nullptr, nearest);
+        const auto m = kind == 0 ? sparse_field::close(F, r, pool) : sparse_field::open(F, r, pool);
         js = morphJson(op, r, m, F);
     }
     if (ms) *ms = sparse_field::detail::now() - t0;
@@ -137,18 +136,14 @@ int runRequest(const std::string& reqPath, const std::string& resPath) {
     const double t0 = sparse_field::detail::now();
     sparse_field::MeshSource src(sparse_field::trianglesOf(pos.data(), V, idx.data(), T), bo.windingFarRatio);
     sparse_field::BuildStats bs;
-    // exact closest-point seeds are needed only when the first op runs on the field's own grid
-    const bool wantNearest = !ops.empty() && !(ops[0].coarseVoxel > bo.voxel * 1.0001);
-    std::vector<std::array<uint32_t, sparse_field::kVox>> nearest;
-    SparseField F = sparse_field::build(src, bo, pool, &bs, wantNearest ? &nearest : nullptr);
+    SparseField F = sparse_field::build(src, bo, pool, &bs);
     std::ostringstream json;
     json << "{\"ok\":true,\"voxelM\":" << fmt(F.voxel) << ",\"bandM\":" << fmt(F.band) << ",\"build\":" << buildJson(bs) << ",\"ops\":[";
     bool firstOp = true;
     for (const Op& o : ops) {
         if (o.kind > 1) throw std::runtime_error("unknown morphology op " + std::to_string(o.kind));
         if (!(o.radius > 0)) throw std::runtime_error("a morphology radius must be positive");
-        // exact mesh seeds hold only while the field is still the mesh's own
-        json << (firstOp ? "" : ",") << applyOp(F, o.kind, o.radius, std::max(o.coarseVoxel, F.voxel), src, firstOp && wantNearest ? &nearest : nullptr, pool, nullptr);
+        json << (firstOp ? "" : ",") << applyOp(F, o.kind, o.radius, std::max(o.coarseVoxel, F.voxel), src, pool, nullptr);
         firstOp = false;
     }
     json << "],\"blocks\":" << F.blocks.size() << ",\"activeVoxels\":" << F.activeVoxels() << ",\"tiles\":" << F.tiles.size() << ",\"memoryBytes\":" << F.memoryBytes();
@@ -258,8 +253,8 @@ texture::ImageBuffer renderClay(const SparseField& F, const Occupancy& occ, cons
     const Vec3 camUp = inner_core::cross(right, fwd);
     const double fov = 30 * M_PI / 180, dist = radius / std::sin(fov * 0.5) * 1.02;
     const Vec3 eye = inner_core::sub(c, inner_core::mul(fwd, dist));
-    Vec3 light{0, 0, 0};
-    light[a0] = 0.45; light[a1] = 0.35; light[up] = 0.82;
+    // key light from above and behind the camera's left shoulder, so every view is lit from the front
+    Vec3 light = inner_core::add(inner_core::add(inner_core::mul(upv, 0.75), inner_core::mul(fwd, -0.55)), inner_core::mul(right, -0.35));
     light = inner_core::mul(light, 1.0 / inner_core::len(light));
     texture::ImageBuffer img(W, H, 3, 255);
     const double tanH = std::tan(fov * 0.5), aspect = static_cast<double>(W) / H;
@@ -420,12 +415,8 @@ int runProof(int argc, char** argv) {
     bo.voxel = voxel;
     bo.bandVoxels = band;
     sparse_field::BuildStats bs;
-    bool anyDirect = false;
-    for (double r : closes) anyDirect = anyDirect || coarseFor(r, voxel, ratio) <= voxel * 1.0001;
-    for (double r : opens) anyDirect = anyDirect || coarseFor(r, voxel, ratio) <= voxel * 1.0001;
-    std::vector<std::array<uint32_t, sparse_field::kVox>> nearest;
     const double tb = sparse_field::detail::now();
-    SparseField base = sparse_field::build(src, bo, pool, &bs, anyDirect ? &nearest : nullptr);
+    SparseField base = sparse_field::build(src, bo, pool, &bs);
     const double msBuild = sparse_field::detail::now() - tb;
     std::cerr << "built " << base.blocks.size() << " blocks, " << bs.activeVoxels << " active voxels in " << msBuild << " ms\n";
 
@@ -466,9 +457,26 @@ int runProof(int argc, char** argv) {
         for (double r : kind == 0 ? closes : opens) {
             SparseField F = base;
             double ms = 0;
-            const std::string j = applyOp(F, static_cast<uint32_t>(kind), r, coarseFor(r, voxel, ratio), src, anyDirect ? &nearest : nullptr, pool, &ms);
-            std::cerr << (kind ? "opened" : "closed") << " r=" << r << " in " << ms << " ms\n";
-            emit(std::string(kind ? "open_" : "close_") + fmt(r), F, j.substr(0, j.size() - 1) + ",\"msTotal\":" + fmt(ms) + "}", false);
+            const std::string j = applyOp(F, static_cast<uint32_t>(kind), r, coarseFor(r, voxel, ratio), src, pool, &ms);
+            // a closing may only add solid and an opening only remove it: count the voxels that moved the other way
+            size_t wrongWay = 0;
+            for (const auto& b : base.blocks)
+                for (int a = 0; a < sparse_field::kVox; ++a) {
+                    const bool wasIn = b.v[a] < 0;
+                    bool known = true;
+                    const bool isIn = F.at(b.bx * 8 + (a >> 6), b.by * 8 + ((a >> 3) & 7), b.bz * 8 + (a & 7), &known) < 0;
+                    if (known && (kind == 0 ? (wasIn && !isIn) : (!wasIn && isIn))) {
+                        if (wrongWay < 12 && std::getenv("SF_DEBUG")) {
+                            const int x = b.bx * 8 + (a >> 6), y = b.by * 8 + ((a >> 3) & 7), z = b.bz * 8 + (a & 7);
+                            int nIn = 0;
+                            for (int d = 0; d < 6; ++d) { const int o[6][3] = {{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}}; nIn += base.at(x + o[d][0], y + o[d][1], z + o[d][2]) < 0; }
+                            std::cerr << "  lost voxel " << x << "," << y << "," << z << " base " << b.v[a] << " now " << F.at(x, y, z) << " base inside neighbours " << nIn << "/6\n";
+                        }
+                        ++wrongWay;
+                    }
+                }
+            std::cerr << (kind ? "opened" : "closed") << " r=" << r << " in " << ms << " ms; voxels moved the wrong way: " << wrongWay << "\n";
+            emit(std::string(kind ? "open_" : "close_") + fmt(r), F, j.substr(0, j.size() - 1) + ",\"msTotal\":" + fmt(ms) + ",\"voxelsMovedWrongWay\":" + std::to_string(wrongWay) + "}", false);
         }
     js << "],\"sectionLevel\":" << fmt(level) << "}";
     std::ofstream(out + "/report.json") << js.str() << "\n";
