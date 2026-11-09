@@ -58,7 +58,15 @@ export const BLOB_READ_PARAMS = {
     timeoutMs: 120_000,
     maxOutputTokens: 8192,
     /** A label at or above this confidence explains its blob; below it the blob is unsure (Street View may be asked). */
-    confidentAt: 0.6
+    confidentAt: 0.6,
+    /**
+     * The read's size floor: a blob is read when it stands at least minHeightM tall or covers at least minAreaM2 of surface,
+     * and has at least minTriangles. Below it is a fragment no photo can name (a remeshed K-D district splits into
+     * 110,886 clusters, 92% under 0.3 m tall with a median of 2 triangles), left out with its measures.
+     */
+    minHeightM: 0.25,
+    minAreaM2: 0.3,
+    minTriangles: 3
 };
 
 export interface BlobEvidence {
@@ -119,7 +127,7 @@ export interface BlobReadReport {
     leftOut: Array<{ clusterId: number; reason: string }>;
     labels: BlobLabel[];
     sheets: Array<{ index: number; clusters: number[]; key: string; cached: boolean; ms: number; error?: string }>;
-    stats: { clusters: number; read: number; confident: number; unsure: number; inFootprint: number; artefacts: number; visionCalls: number; storeHits: number; orthoMs: number; readMs: number };
+    stats: { clusters: number; read: number; confident: number; unsure: number; inFootprint: number; artefacts: number; fragments: number; visionCalls: number; storeHits: number; orthoMs: number; readMs: number };
 }
 
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
@@ -180,10 +188,11 @@ export function blobEvidence(audit: ResidualAuditResult, look: Pick<EvidenceLook
 }
 
 /** Which clusters the read takes: not a building's part (inside or touching a footprint), not a scan artefact the audit measured. */
-export function blobsToRead(evidence: BlobEvidence[]): { read: BlobEvidence[]; leftOut: Array<{ clusterId: number; reason: string }> } {
+export function blobsToRead(evidence: BlobEvidence[], P: Pick<typeof BLOB_READ_PARAMS, 'minHeightM' | 'minAreaM2' | 'minTriangles'> = BLOB_READ_PARAMS): { read: BlobEvidence[]; leftOut: Array<{ clusterId: number; reason: string }> } {
     const read: BlobEvidence[] = [], leftOut: Array<{ clusterId: number; reason: string }> = [];
     for (const e of evidence) {
-        if (e.vector.touchesFootprint) leftOut.push({ clusterId: e.clusterId, reason: e.vector.inFootprint ? 'inside a building footprint: a part of the building, not a street blob' : 'touching a building footprint: a part of the building, not a street blob' });
+        if ((e.heightM < P.minHeightM && e.areaM2 < P.minAreaM2) || e.triangles < P.minTriangles) leftOut.push({ clusterId: e.clusterId, reason: `a fragment below the read's size floor (${e.heightM} m tall, ${e.areaM2} m2, ${e.triangles} triangles)` });
+        else if (e.vector.touchesFootprint) leftOut.push({ clusterId: e.clusterId, reason: e.vector.inFootprint ? 'inside a building footprint: a part of the building, not a street blob' : 'touching a building footprint: a part of the building, not a street blob' });
         else if (e.verdict === 'scan-artefact') leftOut.push({ clusterId: e.clusterId, reason: `a scan artefact by the audit's measures (confidence ${e.auditConfidence})` });
         else read.push(e);
     }
@@ -322,7 +331,7 @@ export async function readBlobs(input: {
     const P = { ...BLOB_READ_PARAMS, ...(input.params ?? {}) };
     const progress = input.onProgress ?? (() => undefined);
     const evidence = blobEvidence(input.audit, input.look, input.vector);
-    const { read, leftOut } = blobsToRead(evidence);
+    const { read, leftOut } = blobsToRead(evidence, P);
     read.sort((a, b) => a.clusterId - b.clusterId);
     const groundY = input.audit.groundY ?? (() => { const ys = input.audit.clusters.map(c => c.lo[1]).sort((a, b) => a - b); return ys[ys.length >> 1] ?? 0; })();
     progress(`drawing the district's orthophoto from the tile for ${read.length} blobs`);
@@ -381,7 +390,7 @@ export async function readBlobs(input: {
         schema: 'scratchbox.blob-read/1', version: BLOB_READ_VERSION, evidence, leftOut, labels, sheets,
         stats: {
             clusters: evidence.length, read: read.length, confident, unsure: read.length - confident,
-            inFootprint: leftOut.filter(l => /footprint/.test(l.reason)).length, artefacts: leftOut.filter(l => /artefact/.test(l.reason)).length,
+            inFootprint: leftOut.filter(l => /footprint/.test(l.reason)).length, artefacts: leftOut.filter(l => /artefact/.test(l.reason)).length, fragments: leftOut.filter(l => /size floor/.test(l.reason)).length,
             visionCalls, storeHits, orthoMs, readMs: Date.now() - t1
         }
     };
