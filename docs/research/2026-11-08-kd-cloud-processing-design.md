@@ -117,7 +117,8 @@ Autopilot's Performance class); details in `docs/processes/2026-11-09-kd-cloud-f
 ## Third round (2026-11-09): under 3 minutes on suspended VMs
 
 Every chunk on its own suspended n2d-standard-8 VM (resumed in ~13 s, suspended by the runner after): **Penn shown in
-169 s and 173 s headless and 159 s from the app's chat**, byte-identical. C3s could not resume (a suspended VM holds no
+169 s and 173 s headless**, byte-identical (159 s from the app's chat, with the terrain and photo twin restored from the
+cache mirror, so not fresh). C3s could not resume (a suspended VM holds no
 capacity); N2D over four zones always did. Running from the app found two bugs, fixed: the join's bitwise frame check
 refused a chunk at random on an arm64 Mac (now within 1e-6 m), and a worker's own suspend could land after the next
 resume (now only the runner suspends). Standing cost if kept: about $3.7-5.9 a day for 34 VMs; they were deleted and
