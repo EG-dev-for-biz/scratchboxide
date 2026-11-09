@@ -25,6 +25,7 @@ import { buildWallSheets } from './wall-sheets';
 import { readWallGrammar, type WallGrammarFile } from './wall-grammar';
 import { fitOrthoFacades, type OrthoFacade, type WindowFitFile, type WindowFitParams } from './window-fit';
 import { streetViewClayScoreOf, visibleDefectsInline } from './remesh-scores';
+import { arrayFacadeFirstPass, type ArrayFacadeJob } from './pipeline-k/window-array';
 import type { ClayScoreView } from './streetview-clay-score';
 
 /** The polish's input, its step callback left out (the steps come back as messages). */
@@ -35,6 +36,8 @@ export type RemeshJob =
     | { kind: 'wallSheets'; orthosDir: string; grammar: WallGrammarFile; fit: WindowFitFile; threads?: number }
     | { kind: 'polish'; input: PolishJobInput }
     | { kind: 'windowFacade'; orthosDir: string; facade: OrthoFacade; params: WindowFitParams }
+    /** One facade's window array, first pass (pipeline-k/window-array.ts inferWindowArraysOnThreads). */
+    | { kind: 'windowArrayFacade'; job: ArrayFacadeJob }
     | { kind: 'streetViewScore'; clayGlb: string; views: ClayScoreView[] }
     | { kind: 'visibleDefects'; texturedGlb: string };
 
@@ -52,6 +55,7 @@ async function run(i: number, job: RemeshJob): Promise<unknown> {
         case 'wallSheets': return buildWallSheets(job.orthosDir, job.grammar, job.fit, decode, job.threads ? { threads: job.threads } : {});
         case 'polish': return polishRemesh({ ...job.input, onStep: (step, state) => parentPort!.postMessage({ i, step, state } satisfies RemeshWorkerMessage) });
         case 'windowFacade': return (await fitOrthoFacades(job.orthosDir, [job.facade], job.params))[0];
+        case 'windowArrayFacade': return arrayFacadeFirstPass(job.job) ?? null;
         case 'streetViewScore': return streetViewClayScoreOf(job.clayGlb, job.views);
         case 'visibleDefects': return visibleDefectsInline(job.texturedGlb);
     }

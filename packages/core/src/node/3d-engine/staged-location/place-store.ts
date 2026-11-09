@@ -70,8 +70,13 @@ export const PLACE_STORE_FALLBACK_ROOT = '/Volumes/G-RAID MIRROR/scratchbox-plac
 export const PLACE_STORE_PARAMS = {
     /** A lease not released by then is taken for a crashed writer's and may be taken over (ms). */
     leaseMs: 20 * 60_000,
-    /** Objects and blobs written (or read) at once. */
+    /** Objects and blobs written at once. */
     concurrency: 6,
+    /**
+     * Objects, blobs and readings read at once by a pull: opening Penn Station's 398 objects (446 MB) from a laptop took
+     * 44-60 s six at a time, 24 s at 32 (2026-11-08); a pull only reads, so no lease or generation is at stake.
+     */
+    pullConcurrency: 32,
     /** How long a finished build waits for its place's pull before it keeps its objects without it (ms). */
     pullWaitMs: 2 * 60_000
 };
@@ -554,7 +559,7 @@ export async function pullPlace(store: PlaceStore, pull: PlacePull, P = PLACE_ST
     const objects = pull.objects;
     if (!objects || pull.objectsOff) report.objects.skipped = pull.objectsOff ?? 'this machine keeps no object store';
     else {
-        await eachLimited(Object.keys(read.manifest.objects), P.concurrency, async objectKey => {
+        await eachLimited(Object.keys(read.manifest.objects), P.pullConcurrency, async objectKey => {
             const file = path.join(store.tmpDir, `blob-${crypto.randomBytes(6).toString('hex')}.glb`);
             try {
                 const rec = await loadPlaceObject(store, objectKey);
@@ -590,7 +595,7 @@ export async function pullPlace(store: PlaceStore, pull: PlacePull, P = PLACE_ST
         const dir = pull.readingsDir, prefix = readingsPrefix(store);
         let listed: CloudObject[] = [];
         try { listed = await store.bucket.list(prefix); } catch (err) { fail('the readings could not be listed', err); }
-        await eachLimited(listed.filter(o => READING_FILE.test(o.key.slice(prefix.length))), P.concurrency, async o => {
+        await eachLimited(listed.filter(o => READING_FILE.test(o.key.slice(prefix.length))), P.pullConcurrency, async o => {
             const rel = o.key.slice(prefix.length), target = path.join(dir, ...rel.split('/'));
             if (fs.existsSync(target)) { report.readings.present++; return; }
             const tmp = `${target}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;

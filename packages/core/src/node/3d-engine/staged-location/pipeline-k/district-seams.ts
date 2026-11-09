@@ -54,7 +54,7 @@ import { encodePng } from '../../../texture-processing';
 import { decodeImageInMemory, type RgbaImage8 } from '../tile-texture-transfer';
 import { assembleGlb, parseGlbBytes, readAccessor, type ParsedGlb } from '../glb-bytes';
 import { appendPieces, readPrims, split, vertexOf, type PrimRead, type Vx } from './lattice-stitch';
-import { chunkOwner, DISTRICT_CHUNKS_PARAMS, type DistrictChunkPlan } from './district-chunks';
+import { chunkOwner, DISTRICT_CHUNKS_PARAMS, isCellChunk, type DistrictChunkPlan } from './district-chunks';
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- glTF JSON is untyped */
 
@@ -101,7 +101,8 @@ export type DistrictSeamsParams = typeof DISTRICT_SEAMS_PARAMS;
 /** The cell lines of a plan: x = value (along z) and z = value (along x), sorted. */
 export function cellLines(plan: DistrictChunkPlan): { xs: number[]; zs: number[] } {
     const xs = new Set<number>(), zs = new Set<number>();
-    for (const c of plan.chunks) { xs.add(c.cx - c.half); xs.add(c.cx + c.half); zs.add(c.cz - c.half); zs.add(c.cz + c.half); }
+    // a building's task (plan.unit 'building') draws no line: its edge is its outline
+    for (const c of plan.chunks) if (isCellChunk(c)) { xs.add(c.cx - c.half); xs.add(c.cx + c.half); zs.add(c.cz - c.half); zs.add(c.cz + c.half); }
     return { xs: [...xs].sort((a, b) => a - b), zs: [...zs].sort((a, b) => a - b) };
 }
 
@@ -358,7 +359,7 @@ const covers = (c: SeamCoverage | undefined, x: number, z: number) => {
  */
 export function seamOwner(plan: DistrictChunkPlan, coverage: Map<number, SeamCoverage>, order: number[]): (x: number, z: number) => number {
     const owner = chunkOwner(plan), half = plan.cellM / 2;
-    const cellOf = (x: number, z: number) => plan.chunks.findIndex(c => Math.abs(x - c.cx) <= half && Math.abs(z - c.cz) <= half);
+    const cellOf = (x: number, z: number) => plan.chunks.findIndex(c => isCellChunk(c) && Math.abs(x - c.cx) <= half && Math.abs(z - c.cz) <= half);
     return (x, z) => {
         const o = owner(x, z);
         if (o < 0 || covers(coverage.get(o), x, z)) return o;
@@ -513,7 +514,8 @@ export function seamFieldAt(field: SeamField | undefined, x: number, z: number, 
 export function solveSeamGains(samples: Map<number, SeamSamples>, plan: DistrictChunkPlan, P: DistrictSeamsParams = DISTRICT_SEAMS_PARAMS): { gains: Map<number, [number, number, number]>; fields: Map<number, SeamField>; report: SeamGainsReport } {
     // every grid point's samples, by chunk
     const at = new Map<number, Array<[number, Float32Array]>>();
-    for (const [c, m] of samples) for (const [k, s] of m) { const l = at.get(k); if (l) l.push([c, s]); else at.set(k, [[c, s]]); }
+    // the cells' grounds only: a building's task keeps no ground past its outline to level against (plan.unit 'building')
+    for (const [c, m] of samples) if (plan.chunks[c] && isCellChunk(plan.chunks[c])) for (const [k, s] of m) { const l = at.get(k); if (l) l.push([c, s]); else at.set(k, [[c, s]]); }
     const ratios = new Map<string, { d: number[][]; x: number[]; z: number[] }>();
     for (const [k, list] of at) {
         if (list.length < 2) continue;

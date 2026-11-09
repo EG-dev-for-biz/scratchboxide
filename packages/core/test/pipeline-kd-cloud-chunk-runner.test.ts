@@ -20,10 +20,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DirectoryCloudBucket } from '../src/node/cloud-store/cloud-bucket';
 import { GeminiClient } from '../src/node/gemini/gemini-client';
 import {
-    checkImageSkew, cloudChunkConfig, cloudRunTaskCostUsd, createCloudChunkRunner, imageCommit, kdChunkJobPrefix, kdChunkLayerFiles,
+    checkImageSkew, cloudChunkConfig, CloudRunServiceJobs, cloudRunTaskCostUsd, createCloudChunkRunner, forwardedJobEnv, parseServiceAnswer, imageCommit, KD_CHUNK_BUILT_LINE, kdChunkJobPrefix, kdChunkLayerFiles,
     localiseJobPaths, newProgressLines, parseExecution, type CloudExecution, type CloudRunJobs, type KdChunkJobSpec
 } from '../src/node/3d-engine/staged-location/cloud-chunk-runner';
-import { parseKdJobLocation, runKdChunkJob } from '../src/node/3d-engine/staged-location/kd-chunk-job';
+import { parseKdJobLocation, requestEnv, restoreWorkspace, runKdChunkJob } from '../src/node/3d-engine/staged-location/kd-chunk-job';
 import { chunkCpuShare, chunkParallel, DISTRICT_CHUNKS_PARAMS, kdChunkRunner, machineCores } from '../src/node/3d-engine/staged-location/pipeline-k/district-chunks';
 import { StagedLocationHardFailure, type StagedLocationOutcome, type StagedLocationRequest } from '../src/node/3d-engine/staged-location/orchestrator';
 import { StageCache } from '../src/node/3d-engine/staged-location/stage-cache';
@@ -175,6 +175,76 @@ describe('pipeline K-D cloud chunk runner', () => {
         const t = setup({ env: { SCRATCHBOX_KD_CHUNK_RUNNER: 'cloud', SCRATCHBOX_KD_CLOUD_PARALLEL: '3', SCRATCHBOX_MODEL_CALLS_PER_MINUTE: '100' } });
         await t.runChunk(request(), {});
         expect(t.jobs.runs[0].SCRATCHBOX_MODEL_CALLS_PER_MINUTE).toBe('25');
+    });
+
+    it('reads the chunk once its outcome is in, while the job still mirrors its caches, and hands the job only the forwarded switches', async () => {
+        const s = setup();
+        // the same chunk, its execution never ending (a job still sending its caches): the outcome is read all the same
+        const jobs = new FakeJobs(`us-central1-docker.pkg.dev/scoutscan/depthbox3-repo/kd-chunk-job:${SHA}`, async env => {
+            const where = parseKdJobLocation(env.KD_JOB);
+            await runKdChunkJob({ bucket: s.bucket, prefix: where.prefix, cache: s.jobCache, build: fakeBuild(s.jobCache), flushMs: 5, log: () => undefined, libraryStatsDir: s.jobStats });
+            return new Promise<boolean>(() => undefined);
+        });
+        const runChunk = createCloudChunkRunner({
+            cache: s.laptop, bucket: s.bucket, jobs, config: { ...cloudChunkConfig({}), bucket: 'scoutscan-kd-jobs', pollMs: 5 }, head: () => SHA, newRunId: () => 'a1b2c3d4',
+            env: { SCRATCHBOX_CACHE_RESTORE: 'off', GOOGLE_MAPS_API_KEY: 'never-sent', SCRATCHBOX_KD_CHUNK_UNIT: 'building' }, log: () => undefined, libraryStatsDir: s.laptopStats
+        });
+        const out = await runChunk(request(), {});
+        expect(out.result.status).toBe('complete');
+        expect(fs.readFileSync(path.join(s.laptop.modelsDir, 'ground_c7.glb'), 'utf8')).toBe('glTF-ground');
+        expect(jobs.runs).toEqual([{ KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/7', SCRATCHBOX_CACHE_RESTORE: 'off' }]);
+        expect(forwardedJobEnv({ SCRATCHBOX_CACHE_MIRROR: ' off ', SCRATCHBOX_CPUS: '8' })).toEqual({ SCRATCHBOX_CACHE_MIRROR: 'off' });
+        expect(KD_CHUNK_BUILT_LINE.test('chunk built (degraded) in 478 s')).toBe(true);
+        expect(KD_CHUNK_BUILT_LINE.test('chunk 3: chunk built (degraded) in 478 s')).toBe(false);
+    });
+
+    it('sends the chunks to the warm worker pool (a Cloud Run service) as it would start job executions, the build the same', async () => {
+        const s = setup();
+        const posted: Array<{ url: string; env: Record<string, string> }> = [];
+        let release!: () => void;
+        const mirrorDone = new Promise<void>(r => { release = r; });
+        const svc = new CloudRunServiceJobs({ ...cloudChunkConfig({ SCRATCHBOX_KD_CLOUD_SERVICE: 'kd-chunk-worker' }), bucket: 'scoutscan-kd-jobs', pollMs: 5 },
+            async <T>() => ({ uri: 'https://kd-chunk-worker-x.a.run.app', template: { containers: [{ image: `us-central1-docker.pkg.dev/scoutscan/depthbox3-repo/kd-chunk-job:${SHA}` }] } }) as T,
+            async (url, body) => {
+                const env = (body as { env: Record<string, string> }).env;
+                posted.push({ url, env });
+                const where = parseKdJobLocation(env.KD_JOB);
+                const ok = await runKdChunkJob({ bucket: s.bucket, prefix: where.prefix, cache: s.jobCache, build: fakeBuild(s.jobCache), flushMs: 5, log: () => undefined, libraryStatsDir: s.jobStats });
+                // the worker answers only after its caches are mirrored; the runner does not wait for that
+                await mirrorDone;
+                return { ok };
+            });
+        expect(svc.label).toBe('run.googleapis.com/projects/scoutscan/locations/us-central1/services/kd-chunk-worker');
+        const runChunk = createCloudChunkRunner({ cache: s.laptop, bucket: s.bucket, jobs: svc, config: { ...cloudChunkConfig({}), bucket: 'scoutscan-kd-jobs', pollMs: 5 }, head: () => SHA, newRunId: () => 'a1b2c3d4', env: { SCRATCHBOX_CACHE_RESTORE: 'off' }, log: () => undefined, libraryStatsDir: s.laptopStats });
+        const out = await runChunk(request(), {});
+        expect(out.result.status).toBe('complete');
+        expect(fs.readFileSync(path.join(s.laptop.modelsDir, 'ground_c7.glb'), 'utf8')).toBe('glTF-ground');
+        expect(posted).toEqual([{ url: 'https://kd-chunk-worker-x.a.run.app/chunk', env: { KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/7', SCRATCHBOX_CACHE_RESTORE: 'off' } }]);
+        // the execution as the runner reads it: running until the worker answers, then done
+        const name = (await svc.run({ KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/8' }));
+        expect(await svc.get(name)).toMatchObject({ done: false, succeeded: false });
+        release();
+        await new Promise(r => setTimeout(r, 50));
+        expect(await svc.get(name)).toMatchObject({ done: true });
+        // the answer: heartbeats, then one JSON line
+        expect(parseServiceAnswer('\n\n{"ok":true,"ms":12}')).toEqual({ ok: true });
+        expect(parseServiceAnswer('\n{"ok":false,"error":"no KD_JOB"}')).toEqual({ ok: false, error: 'no KD_JOB' });
+        expect(parseServiceAnswer('\n\n')).toMatchObject({ ok: false });
+    });
+
+    it('a worker instance builds each chunk from the workspace the image left, and takes only KD_JOB and SCRATCHBOX_ switches', () => {
+        const dir = tmp('scratch');
+        fs.mkdirSync(path.join(dir, 'cache', 'native'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'cache', 'native', 'engine.bin'), 'compiled at image build');
+        const snapshot = new Set(['cache/native/engine.bin'.split('/').join(path.sep)]);
+        fs.mkdirSync(path.join(dir, 'cache', 'staged_location', 'remesh', 'k1'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'cache', 'staged_location', 'remesh', 'k1', 'done.json'), '{}');
+        fs.writeFileSync(path.join(dir, 'cache', 'native', 'other.bin'), 'built by the last chunk');
+        expect(restoreWorkspace(dir, snapshot)).toBe(2);
+        expect(fs.readFileSync(path.join(dir, 'cache', 'native', 'engine.bin'), 'utf8')).toBe('compiled at image build');
+        expect(fs.existsSync(path.join(dir, 'cache', 'staged_location'))).toBe(false);
+        expect(requestEnv({ KD_JOB: 'gs://b/kd-jobs/c527da43/7', SCRATCHBOX_CACHE_RESTORE: 'off', GOOGLE_MAPS_API_KEY: 'x', PATH: '/evil', SCRATCHBOX_N: 3 })).toEqual({ KD_JOB: 'gs://b/kd-jobs/c527da43/7', SCRATCHBOX_CACHE_RESTORE: 'off' });
+        expect(() => requestEnv({})).toThrow(/KD_JOB/);
     });
 
     it('sets no budget on an execution when this process has none', async () => {
