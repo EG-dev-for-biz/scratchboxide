@@ -150,6 +150,8 @@ service() {
 
 # The fast VMs: each runs a new container of the image per chunk (docker run --rm in a loop: the chunk builds from the
 # image's own files, as a job task does), and is suspended between districts (billed for its disk and kept memory only).
+# The container uses the host's network: on resume the VM's network service closes every connection and leaves the docker
+# bridge unmanaged, and on 2 of 34 VMs the bridged container never reached the bucket again (2026-11-09).
 vms() {
   local app; app="$(app_sa)"
   local count="${COUNT:-6}" machine="${MACHINE:-c3-standard-8}" zones="${ZONES:-us-central1-a,us-central1-b,us-central1-c,us-central1-f}"
@@ -165,7 +167,7 @@ IMAGE="$(md kd-image)"
 md kd-env > /var/tmp/kd.env
 docker-credential-gcr configure-docker --registries "${IMAGE%%/*}"
 docker pull "$IMAGE"
-nohup bash -c "while true; do docker run --rm --name kd --env-file /var/tmp/kd.env $IMAGE node --max-old-space-size=28672 -r ts-node/register packages/core/src/node/3d-engine/staged-location/kd-chunk-job.js --poll 2>&1 | logger -t kd-vm; sleep 1; done" >/dev/null 2>&1 &
+nohup bash -c "while true; do docker run --rm --name kd --network host --env-file /var/tmp/kd.env $IMAGE node --max-old-space-size=28672 -r ts-node/register packages/core/src/node/3d-engine/staged-location/kd-chunk-job.js --poll 2>&1 | logger -t kd-vm; sleep 1; done" >/dev/null 2>&1 &
 EOS
   # the VMs already there, name@zone; each missing name made in the next zone with room (a zone out of C3s is passed over)
   local existing; existing="$("${G[@]}" compute instances list --filter="name~^kd-fast-" --format="value(name,zone.basename())" | awk '{print $1"@"$2}')"
