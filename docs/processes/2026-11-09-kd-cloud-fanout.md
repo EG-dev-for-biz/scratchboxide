@@ -1,8 +1,10 @@
 # Pipeline K-D on Cloud Run: a task per building, the shown band and the worker pool
 
-**Date:** 2026-11-09 · **Branch:** `feat/kd-building-fanout` · **Status:** Measured fresh on the Penn Station district
-(2 Penn Plaza, 150 m: 9 ground cells and 25 building tasks, plus the outline-less buildings kept with their cells). Shown in
-4.1 min; under 3 min not reached. Design and order of work: `docs/research/2026-11-08-kd-cloud-processing-design.md`.
+**Date:** 2026-11-09 · **Branches:** `feat/kd-building-fanout`, `feat/kd-shown-3min`, `feat/kd-fast-vms` · **Status:**
+Measured fresh on the Penn Station district (2 Penn Plaza, 150 m: 9 ground cells and 25 building tasks, plus the
+outline-less buildings kept with their cells). **Shown in 2.6-2.8 min with every chunk on a suspended Compute Engine VM**
+(169 s and 173 s headless, 159 s from the app's own chat), byte-identical. Design and order of work:
+`docs/research/2026-11-08-kd-cloud-processing-design.md`.
 
 ![timing sheet](kd-cloud-fanout/2026-11-09-timing-sheet.jpg)
 
@@ -56,9 +58,11 @@
    larger machines.
 
 ## Cloud resources (project `scoutscan`, us-central1)
-`kd-chunk-worker` (service, 0 instances at rest), `kd-chunk-job-fanout-8c` (job), `kd-district-driver` (job: a district
-built headless, `scripts/kd_district_cloud_run.ts`), `kd-chunk-prof` (job: a chunk under `--cpu-prof`, profiles to
-`gs://scoutscan-kd-jobs/kd-prof/`), `kd-chunk-job-fanout-4c` (job, not measured). The shared `kd-chunk-job` was not touched.
+Left in place: the pool service `kd-chunk-worker` (us-central1, 0 instances at rest, $0 idle) on image `4dfe76e6`, and
+that image. Deleted when the task ended (2026-11-09): the 34 `kd-fast-*` VMs and their disks, the jobs
+`kd-chunk-job-fanout-8c`, `kd-chunk-job-fanout-4c`, `kd-district-driver` and `kd-chunk-prof`, the pool in us-east4, the
+16 older images this work built, 47 runs' chunk files under `gs://scoutscan-kd-jobs/kd-jobs/` (29 GB; the captured run
+`d9857e9b` kept), `kd-prof/` and `kd-vm/`. The shared `kd-chunk-job` was not touched.
 
 ## Toward 3 minutes, second round (2026-11-09, `feat/kd-shown-3min`)
 
@@ -93,3 +97,37 @@ pool of suspended Compute Engine VMs (C3/C4, resumed in seconds when a district 
 suspended), or GKE Autopilot's Performance compute class, taking the largest chunks while the Cloud Run pool takes the rest.
 At job speed chunk 25 would land at about 150 s + 8 s, and the district would be shown in about 2.8 min.
 
+
+## Under 3 minutes: suspended Compute Engine VMs (2026-11-09, `feat/kd-fast-vms`)
+
+![timing sheet, third round](kd-cloud-fanout/2026-11-09-timing-sheet-3.png)
+
+- **The fast VMs** (`deploy.sh vms`, `kd-chunk-job.ts --poll`, `cloud-chunk-runner.ts` `VmPoolJobs` / `HybridJobs`): one
+  n2d-standard-8 VM a chunk, each running the chunk image's polling worker, kept suspended between districts. The runner
+  writes the chunk's assignment, resumes the VM (~13 s) and suspends it again once it has read the chunk's outcome.
+  `SCRATCHBOX_KD_CLOUD_VMS` names them (`name@zone`), `SCRATCHBOX_KD_FAST_CHUNKS` how many chunks (largest first) go
+  there; the rest go to the pool.
+- **C3 could not be used:** a suspended VM holds no capacity, and 33 C3s across a zone could not resume for minutes
+  (`ZONE_RESOURCE_POOL_EXHAUSTED`); N2D spread over four zones resumed every time. The largest building alone: C3 149 s,
+  C4 143 s, N2D 154 s, N2 204 s, a job task 147 s, a pool instance 193-211 s.
+- **Penn 150 m, shown band, fresh, every chunk on its own VM: 169 s and 173 s** headless (runs `8743c01f`, `fbbd739a`), and
+  **159 s from the app's own chat** (run `d9857e9b`, committed at 2 min 40 s; all 34 chunks on the VMs, the slowest
+  144.5 s). 110/110 layers byte-identical against the pool runs and main's image.
+- **Two bugs the app run found** (the headless runs joined on x86 in Cloud Run and never met them):
+  1. *A chunk refused at random when the Mac joins:* the job (x86) and the Mac (arm64) compute the same frame transform
+     with different last bits (up to 3e-10 m), and the join's check was bitwise. It now accepts a transform within
+     1e-6 m of its own (`district-chunks.ts` `sameChunkTransform`); another frame differs by metres. The bytes are the
+     job's cut either way.
+  2. *A VM frozen at the start of its chunk:* the worker suspended its own VM after a chunk; that request reached
+     Compute Engine after the next district had resumed the VM (resume 10:09:02, the old worker's suspend 10:09:43), and
+     the new worker, frozen in its first metadata read, never built its chunk (that build took 17 min, one chunk lost).
+     Only the runner suspends a VM now, as it reads the chunk's outcome (`CloudRunJobs.finished`), and the worker's
+     metadata reads time out and retry. After the fix each VM got exactly one suspend.
+- **Captures from the app** (the viewport's own render at 1600 x 900, labelled in the corner):
+  `docs/screenshots/kd-cloud-fanout/report/` (gitignored). The shown band reads as the place; at street level its
+  roads are smeared and some walls are shard-like scan pieces.
+- **Standing cost:** keeping the 34 VMs suspended costs an estimated $3.7-5.9 a day (20 GB pd-balanced disks, about
+  $2.24/day, plus their saved memory, which the billing catalog could not confirm). They were deleted; `deploy.sh vms`
+  (COUNT=34 MACHINE=n2d-standard-8 ZONES=us-central1-a,b,c,f) makes them again in about 8 minutes.
+- **Also seen:** a chat request phrased "2 Penn Plaza, New York (7th Ave & W 32nd St)" geocoded to the Sheraton Times
+  Square on W 53rd St (Places text search with the parenthesis); "2 Penn Plaza, New York" resolves correctly.

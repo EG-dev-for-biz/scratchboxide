@@ -30,6 +30,16 @@
  * a new process on a clean instance, as a job task does. A reused instance gave the same bytes but built the largest
  * building about twice as slowly (its native steps 2x, Penn 2026-11-09), while a new service instance started in about 8 s
  * (a Cloud Run job task took 90 s).
+ *
+ * `--poll` runs it on a Compute Engine VM kept suspended between districts (the fast VMs: cloud-chunk-runner.ts VmPoolJobs,
+ * deploy.sh vms): every second it looks for `kd-vm/<instance>/assign.json` in the job bucket (KD_VM_BUCKET, default
+ * scoutscan-kd-jobs), takes it (removed first, so a chunk is built once), builds that chunk exactly as a job task does from
+ * the workspace the image left, writes `kd-vm/<instance>/done.json` (`{ ok, ms, job }`) and exits, so the container's restart
+ * gives the next chunk a new process. With nothing to build for KD_VM_IDLE_SUSPEND_S (default 600) it suspends its own VM,
+ * only when the API says it is RUNNING: the runner suspends it once the chunk is done, and this keeps a VM a runner forgot
+ * from running on. (A suspend takes minutes, the VM running meanwhile; a self-suspend asked then reached the VM after its
+ * next resume and froze it mid-chunk, 2026-11-09: hence the long wait and the check.) A service instance
+ * built the largest building about 35% slower than a job task or this VM's C3 (149 s, 2026-11-09); a VM resumes in ~14 s.
  */
 
 import * as fs from 'fs';
@@ -37,7 +47,7 @@ import * as path from 'path';
 import type { CloudBucket } from '../../cloud-store/cloud-bucket';
 import { CACHE_MIRROR_PARAMS, cacheMirrorRoots, syncCacheDir } from '../../cloud-store/cache-mirror';
 import { textureLibraryStatsDir } from '../texture-library';
-import { KD_CHUNK_JOB_SCHEMA, kdChunkJobKeys, kdChunkLayerParts, kdLibraryStatsKey, unpackLibraryStats, type KdChunkJobError, type KdChunkJobOutcome, type KdChunkJobSpec, type KdLibraryStats } from './cloud-chunk-runner';
+import { KD_CHUNK_JOB_SCHEMA, kdChunkJobKeys, kdChunkLayerParts, kdVmKeys, kdLibraryStatsKey, unpackLibraryStats, type KdChunkJobError, type KdChunkJobOutcome, type KdChunkJobSpec, type KdLibraryStats } from './cloud-chunk-runner';
 import { cutChunkLayer, kdDistrictFrameKey, type TileFrame } from './pipeline-k/district-chunks';
 import { libraryRepoRoot } from './pipeline-k/material-sets';
 import type { StagedLocationContext, StagedLocationOutcome } from './orchestrator';
@@ -390,11 +400,119 @@ async function serve(root: string): Promise<void> {
     void import('./orchestrator').then(() => import('./staged-location-tool')).catch(err => console.error(`[kd-serve] preload: ${err}`));
 }
 
+/** The VM's own name, zone and project from the metadata server. */
+async function vmIdentity(): Promise<{ name: string; zone: string; project: string }> {
+    // each read timed out and asked again: just after a resume the metadata server does not answer for a while (the guest
+    // agent's own reads failed for ~20 s, 2026-11-09), and a read with no timeout left a worker waiting for ever
+    const get = async (p: string) => {
+        for (let tries = 1; ; tries++) {
+            try {
+                const r = await fetch(`http://metadata.google.internal/computeMetadata/v1/${p}`, { headers: { 'Metadata-Flavor': 'Google' }, signal: AbortSignal.timeout(5_000) });
+                if (r.ok) return await r.text();
+                throw new Error(`HTTP ${r.status}`);
+            } catch (err) {
+                if (tries >= 60) throw err;
+                await new Promise(res => setTimeout(res, 2_000));
+            }
+        }
+    };
+    const [name, zonePath, project] = await Promise.all([get('instance/name'), get('instance/zone'), get('project/project-id')]);
+    return { name: name.trim(), zone: zonePath.trim().split('/').pop()!, project: project.trim() };
+}
+
+/** Asks Compute Engine to suspend this VM, only while it is RUNNING (a suspend already under way is left alone). */
+async function selfSuspend(me: { name: string; zone: string; project: string }, why: string): Promise<void> {
+    try {
+        const { GoogleAuth } = await import('google-auth-library');
+        const client = await new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] }).getClient();
+        const url = `https://compute.googleapis.com/compute/v1/projects/${me.project}/zones/${me.zone}/instances/${me.name}`;
+        const status = (await client.request<{ status?: string }>({ url, method: 'GET' })).data.status;
+        if (status !== 'RUNNING') return;
+        console.log(`[kd-vm] ${why}: suspending ${me.name}`);
+        await client.request({ url: `${url}/suspend`, method: 'POST' });
+    } catch (err) {
+        console.error(`[kd-vm] could not suspend itself (${why}): ${err instanceof Error ? err.message : String(err)}`);
+    }
+}
+
+/** The chunk build on a suspended-between-districts VM (see the file comment). */
+async function poll(root: string): Promise<void> {
+    const { GcsCloudBucket } = await import('../../cloud-store/cloud-bucket');
+    const { GoogleMediaCredentialsService } = await import('../../google-media-credentials-service');
+    const me = await vmIdentity();
+    const openBucket = () => new GcsCloudBucket(new GoogleMediaCredentialsService().createStorageClient().bucket(process.env.KD_VM_BUCKET?.trim() || 'scoutscan-kd-jobs'));
+    let bucket = openBucket();
+    const keys = kdVmKeys(me.name), scratch = path.join(root, '.scratchbox'), snapshot = filesUnder(scratch);
+    const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'kd-vm-'));
+    const idleS = Number(process.env.KD_VM_IDLE_SUSPEND_S) > 0 ? Number(process.env.KD_VM_IDLE_SUSPEND_S) : 600;
+    let idleSince = Date.now(), last = Date.now();
+    console.log(`[kd-vm] ${me.name} (${me.zone}) waiting for ${bucket.label}/${keys.assign}`);
+    // ready: deploy.sh vms suspends a new VM once its worker says so
+    try {
+        const f = path.join(tmp, 'ready.json');
+        fs.writeFileSync(f, JSON.stringify({ vm: me.name, image: process.env.KD_IMAGE_COMMIT ?? null, atMs: Date.now() }));
+        await bucket.putFile(`kd-vm/${me.name}/ready.json`, f, { contentType: 'application/json' });
+    } catch (err) {
+        console.error(`[kd-vm] ready.json not sent: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    // the build's modules loaded while it waits
+    void import('./orchestrator').then(() => import('./staged-location-tool')).catch(err => console.error(`[kd-vm] preload: ${err}`));
+    for (;;) {
+        // a jump in the clock is a resume: the idle wait starts again, so the VM never suspends itself before it has read
+        // the assignment it was resumed for
+        // and the storage client is made again: its pooled connections died with the suspend, and a request on one waited
+        // out a socket timeout (a VM's chunk started ~70 s after its resume, 2026-11-09)
+        if (Date.now() - last > 10_000) { idleSince = Date.now(); bucket = openBucket(); }
+        last = Date.now();
+        let asked: { env?: Record<string, unknown> } | undefined;
+        try {
+            const file = path.join(tmp, 'assign.json');
+            if (await bucket.download(keys.assign, file)) {
+                asked = JSON.parse(fs.readFileSync(file, 'utf8'));
+                await bucket.remove(keys.assign);
+            }
+        } catch (err) {
+            // a resumed VM's connections may be stale for a moment: the next look reads it
+            console.error(`[kd-vm] reading the assignment: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        if (asked) {
+            const t0 = Date.now();
+            let ok = false, error: string | undefined, job = '';
+            try {
+                const env = requestEnv(asked.env);
+                job = env.KD_JOB;
+                for (const [k, v] of Object.entries(env)) process.env[k] = v;
+                const removed = restoreWorkspace(scratch, snapshot);
+                console.log(`[kd-vm] ${job}${removed ? ` (${removed} files of the last chunk removed first)` : ''}`);
+                const own = new AbortController();
+                ok = await buildChunkFromEnv(root, own.signal);
+            } catch (err) {
+                error = err instanceof Error ? err.message : String(err);
+                console.error(`[kd-vm] failed: ${error}`);
+            }
+            const out = path.join(tmp, 'done.json');
+            fs.writeFileSync(out, JSON.stringify({ ok, ms: Date.now() - t0, job, ...(error ? { error } : {}) }));
+            await bucket.putFile(keys.done, out, { contentType: 'application/json' }).catch(err => console.error(`[kd-vm] done.json not sent: ${err}`));
+            // the runner suspends the VM as it reads the chunk's outcome (VmPoolJobs.finished); a suspend asked from here
+            // could reach Compute Engine after the next district had resumed the VM, and froze its next chunk (2026-11-09).
+            // A new process for the next chunk (the container restarts), as a job task gets
+            process.exit(0);
+        }
+        if (Date.now() - idleSince > idleS * 1000) {
+            // nothing to build: the VM suspends itself (the runner normally has, after its chunk); after resume this loop goes on
+            await selfSuspend(me, `idle ${idleS} s`);
+            idleSince = Date.now();
+        }
+        await new Promise(r => setTimeout(r, 1_000));
+    }
+}
+
 async function main(): Promise<number> {
     const { stagedWorkspaceRoot } = await import('./stage-cache');
     const root = stagedWorkspaceRoot();
     if (process.argv.includes('--warm')) return warm(root);
     if (process.argv.includes('--serve')) { await serve(root); return new Promise<number>(() => undefined); }
+    if (process.argv.includes('--poll')) { await poll(root); return 0; }
     const own = new AbortController();
     process.once('SIGTERM', () => own.abort(Object.assign(new Error('the cloud job was cancelled'), { name: 'AbortError' })));
     return (await buildChunkFromEnv(root, own.signal)) ? 0 : 1;

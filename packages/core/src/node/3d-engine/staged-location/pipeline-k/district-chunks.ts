@@ -120,6 +120,24 @@ export function chunkSteps(plan: DistrictChunkPlan, chunk: DistrictChunk, steps:
     return { ...(steps ?? {}), ...(ground ? KD_GROUND_CELL_STEPS : {}), ...(band === 'shown' ? KD_SHOWN_STEPS : {}) };
 }
 
+/**
+ * How many of a building plan's largest chunks (cells and building tasks alike) are marked for the fast VMs
+ * (SCRATCHBOX_KD_FAST_CHUNKS; default 0): the runner builds them there while a VM is free (cloud-chunk-runner.ts
+ * HybridJobs). Set it to the number of VMs. On the pool every chunk builds ~35% slower, so a district is shown in under
+ * 3 minutes only with all of its chunks on the VMs (Penn 150 m: 34).
+ */
+export function kdFastChunks(env: NodeJS.ProcessEnv = process.env): number {
+    const n = Number(env.SCRATCHBOX_KD_FAST_CHUNKS);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+/** The chunks marked for the fast VMs: the `count` largest by extraction area, cells and building tasks alike (ties by index). */
+export function fastChunkIndices(plan: DistrictChunkPlan, count: number): Set<number> {
+    if (plan.unit !== 'building' || count <= 0) return new Set();
+    const area = (c: DistrictChunk) => (c.rect.x1 - c.rect.x0) * (c.rect.z1 - c.rect.z0);
+    return new Set([...plan.chunks].sort((a, b) => area(b) - area(a) || a.index - b.index).slice(0, count).map(c => c.index));
+}
+
 /** How a chunked district is split: by 120 m cells (each building whole in one), or a task per building beside the cells. */
 export type DistrictChunkUnit = 'cell' | 'building';
 
@@ -673,6 +691,23 @@ export function cutChunkLayer(bytes: Uint8Array, o: { frame: TileFrame; district
     return { glb: assembleGlb(e.json, l.bin), stamp };
 }
 
+/**
+ * Whether a cut stamp's transform is this district's transform for the chunk: the same two frames, though computed on
+ * another machine. The job's ECEF arithmetic (on an x86 VM) and this machine's (an arm64 Mac) differ in the last bits:
+ * entries of Penn Station's chunk 6 differed by up to 3e-10 m (2026-11-09), and a bitwise check refused one chunk a
+ * district at random. Another frame moves the translation by metres, so the tolerance (1e-9 rotation, 1e-6 m
+ * translation, far under a float32 vertex step at a district's few hundred metres) still refuses it. The layer keeps the
+ * job's cut either way: this only checks that it is this district's.
+ */
+export function sameChunkTransform(stamped: readonly number[] | undefined, here: ArrayLike<number>): boolean {
+    if (stamped?.length !== 16 || here.length !== 16) return false;
+    for (let i = 0; i < 16; i++) {
+        const tol = i >= 12 && i <= 14 ? 1e-6 : 1e-9;
+        if (!(Math.abs(stamped[i] - here[i]) <= tol)) return false;
+    }
+    return true;
+}
+
 /** The cut stamp a layer carries, taken off its JSON as it was before the stamp (undefined when it carries none). */
 function takeCutStamp(json: any): ChunkCutStamp | undefined {
     const extras = json.asset?.extras;
@@ -723,7 +758,7 @@ export function joinChunkLayerFile(job: ChunkLayerJoinJob, now: () => number = D
     let report: JoinReport, droppedBytes: number, glb: Buffer;
     t = now();
     if (stamp) {
-        const sameFrame = stamp.transform?.length === 16 && stamp.transform.every((v, i) => v === job.transform[i]);
+        const sameFrame = sameChunkTransform(stamp.transform, job.transform);
         if (stamp.version !== KD_CHUNK_CUT_VERSION || stamp.of !== job.of || stamp.chunk !== job.chunk || stamp.whole !== job.whole || !sameFrame) {
             throw new Error(`${path.basename(job.source)} was cut for chunk ${stamp.chunk} of ${stamp.of}${stamp.whole ? ' (whole pieces)' : ''} by ${stamp.version}${sameFrame ? '' : ' in another frame'}, not for chunk ${job.chunk} of ${job.of}${job.whole ? ' (whole pieces)' : ''} by ${KD_CHUNK_CUT_VERSION} in this district's frame`);
         }

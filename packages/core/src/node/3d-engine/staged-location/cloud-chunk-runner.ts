@@ -223,6 +223,11 @@ export interface CloudRunJobs {
     run(env: Record<string, string>): Promise<string>;
     get(execution: string): Promise<CloudExecution>;
     cancel(execution: string): Promise<void>;
+    /**
+     * The chunk's outcome is in (its "chunk built" line, or the execution done): a backend holding a machine for it lets
+     * the machine go now (VmPoolJobs suspends its VM), so nothing on the machine itself has to.
+     */
+    finished?(execution: string): Promise<void>;
 }
 
 export interface CloudChunkConfig {
@@ -250,6 +255,13 @@ export interface CloudChunkConfig {
      * turn (RoundRobinJobs): 34 chunks building at once in one region built the largest building ~35% slower than alone.
      */
     serviceRegions?: string[];
+    /**
+     * SCRATCHBOX_KD_CLOUD_VMS (comma list, each `name` or `name@zone`; the zone default SCRATCHBOX_KD_CLOUD_VM_ZONE, else
+     * us-central1-a): Compute Engine VMs kept suspended, the fast VMs (VmPoolJobs) the largest chunks are built on (the
+     * orchestrator marks them, kdFastChunks). One zone ran out of C3s at 16 (2026-11-09): spread them over several.
+     */
+    vms?: string[];
+    vmZone?: string;
 }
 
 /** The runner's settings: SCRATCHBOX_KD_CLOUD_{PROJECT,REGION,JOB,BUCKET}, defaults scoutscan / us-central1 / kd-chunk-job / scoutscan-kd-jobs. */
@@ -266,7 +278,8 @@ export function cloudChunkConfig(env: NodeJS.ProcessEnv = process.env): CloudChu
         pollMisses: 12,
         downloadAttempts: 4,
         ...(env.SCRATCHBOX_KD_CLOUD_SERVICE?.trim() ? { service: env.SCRATCHBOX_KD_CLOUD_SERVICE.trim() } : {}),
-        ...((r => r.length ? { serviceRegions: r } : {})((env.SCRATCHBOX_KD_CLOUD_SERVICE_REGIONS ?? '').split(',').map(x => x.trim()).filter(x => /^[a-z]+-[a-z]+\d+$/.test(x))))
+        ...((r => r.length ? { serviceRegions: r } : {})((env.SCRATCHBOX_KD_CLOUD_SERVICE_REGIONS ?? '').split(',').map(x => x.trim()).filter(x => /^[a-z]+-[a-z]+\d+$/.test(x)))),
+        ...((v => v.length ? { vms: v, vmZone: env.SCRATCHBOX_KD_CLOUD_VM_ZONE?.trim() || 'us-central1-a' } : {})((env.SCRATCHBOX_KD_CLOUD_VMS ?? '').split(',').map(x => x.trim()).filter(x => /^[a-z]([-a-z0-9]{0,61}[a-z0-9])?(@[a-z]+-[a-z]+\d+-[a-z])?$/.test(x))))
     };
 }
 
@@ -340,7 +353,7 @@ export interface CloudChunkRunnerOptions {
 }
 
 /** `atOnce`: the chunks the orchestrator builds at the same time (default chunkParallel()), for each one's share of the model-call budget. */
-export type RunChunk = (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void; atOnce?: number; cut?: KdChunkCutSpec }) => Promise<StagedLocationOutcome>;
+export type RunChunk = (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void; atOnce?: number; cut?: KdChunkCutSpec; /** One of the district's largest chunks: built on a fast VM when one is free (HybridJobs). */ fast?: boolean }) => Promise<StagedLocationOutcome>;
 
 /** The cloud `runChunk`. The image check runs once, on the first chunk; every chunk fails with its reason when it fails. */
 export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
@@ -414,7 +427,7 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
                 // its share of the project's model calls: one of the chunks at once and the centre beside them
                 const shares = (opts.atOnce ?? chunkParallel(undefined, undefined, env)) + 1;
                 const budget = modelCallShareEnv(modelCallLimitsFromEnv(env), shares);
-                const execution = await o.jobs.run({ KD_JOB: `gs://${config.bucket}/${prefix}`, ...forwardedJobEnv(env), ...budget });
+                const execution = await o.jobs.run({ KD_JOB: `gs://${config.bucket}/${prefix}`, ...forwardedJobEnv(env), ...budget, ...(opts.fast ? { [KD_FAST_ENV]: '1' } : {}) });
                 const short = execution.split('/').pop();
                 const kept = Object.entries(budget).map(([k, v]) => `${k}=${v}`).join(' ');
                 progress(`started in the cloud (${short}, run ${runId})${kept ? `, model calls kept to 1/${shares} of the budget (${kept})` : ''}`);
@@ -458,6 +471,7 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
                         if (state.done) break;
                         if (builtAtMs !== undefined) { state = { ...state, done: true, succeeded: true, endMs: builtAtMs }; break; }
                     }
+                    await o.jobs.finished?.(execution).catch(e => log(`[kd-cloud] letting ${short} go failed: ${e instanceof Error ? e.message : String(e)}`));
                 } catch (err) {
                     if (signal?.aborted) {
                         await cancel();
@@ -607,10 +621,7 @@ export class CloudRunServiceJobs implements CloudRunJobs {
             idClient ??= await auth.getIdTokenClient(new URL(url).origin);
             const h = await idClient.getRequestHeaders() as unknown as { get?: (k: string) => string | null } & Record<string, string>;
             const authorization = typeof h.get === 'function' ? h.get('authorization') ?? '' : h.Authorization ?? h.authorization ?? '';
-            const res = await fetch(url, { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
-            const text = await res.text();
-            if (!res.ok) return { ok: false, error: `the worker answered ${res.status}: ${text.slice(0, 300)}` };
-            return parseServiceAnswer(text);
+            return postChunk(() => fetch(url, { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify(body), signal }), signal);
         };
         return new CloudRunServiceJobs(config, request, post);
     }
@@ -647,6 +658,210 @@ export class CloudRunServiceJobs implements CloudRunJobs {
 
     async cancel(execution: string): Promise<void> {
         this.sent.get(execution)?.abort.abort();
+    }
+}
+
+/** The keys of a VM's assignment and its answer in the job bucket (kd-chunk-job.ts --poll reads and writes them). */
+export function kdVmKeys(vmIn: string): { assign: string; done: string } {
+    const vm = vmIn.split('@')[0];
+    if (!/^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$/.test(vm)) throw new Error(`not a VM name: ${vmIn}`);
+    return { assign: `kd-vm/${vm}/assign.json`, done: `kd-vm/${vm}/done.json` };
+}
+
+/** The mark run() reads to send a chunk to the fast VMs (HybridJobs); never passed on to a build. */
+export const KD_FAST_ENV = 'KD_FAST';
+
+/** The Compute Engine API calls VmPoolJobs makes (a fake under test). */
+export interface ComputeVms {
+    status(vm: string): Promise<string>;
+    resume(vm: string): Promise<void>;
+    suspend(vm: string): Promise<void>;
+    /** The image the VM's worker runs (its `kd-image` metadata). */
+    image(vm: string): Promise<string | undefined>;
+}
+
+/**
+ * The fast VMs (kd-chunk-job.ts --poll): Compute Engine VMs kept suspended between districts, each building one chunk at
+ * a time. `tryRun` writes a free VM's assignment, resumes it (about 14 s) and returns undefined when every VM is busy; a
+ * chunk is done when its VM writes done.json, and the VM is then suspended again. A C3 built Penn's largest building in
+ * 149 s, as fast as a Cloud Run job task, where a Cloud Run service instance took 193-211 s (2026-11-09).
+ */
+export class VmPoolJobs implements CloudRunJobs {
+    readonly label: string;
+    private readonly busy = new Map<string, string>();
+    private readonly sent = new Map<string, { vm: string; job: string; startMs: number; endMs?: number; ok?: boolean; message?: string }>();
+    private n = 0;
+
+    constructor(private readonly vms: string[], private readonly compute: ComputeVms, private readonly bucket: CloudBucket, private readonly workDir: string,
+        private readonly log: (m: string) => void = () => undefined, private readonly now: () => number = Date.now, private readonly settleMs = 5_000) {
+        this.label = `compute VMs ${vms.join(', ')}`;
+    }
+
+    /** With the app's service account, as CloudRunJobsRest has it. */
+    static async create(config: CloudChunkConfig, bucket: CloudBucket, workDir: string, log?: (m: string) => void): Promise<VmPoolJobs> {
+        const { GoogleAuth } = await import('google-auth-library');
+        const { GoogleMediaCredentialsService } = await import('../../google-media-credentials-service');
+        let authOptions: Record<string, unknown> = {};
+        try { authOptions = ((await new GoogleMediaCredentialsService().getVertexAuth()).googleAuthOptions ?? {}) as Record<string, unknown>; } catch { /* application default credentials */ }
+        const client = await new GoogleAuth({ ...authOptions, scopes: ['https://www.googleapis.com/auth/cloud-platform'] }).getClient();
+        // a VM is `name` (in the default zone) or `name@zone`
+        const at = (vm: string) => { const [name, zone] = vm.split('@'); return `https://compute.googleapis.com/compute/v1/projects/${config.project}/zones/${zone || config.vmZone || 'us-central1-a'}/instances/${name}`; };
+        const get = async (vm: string) => (await client.request<{ status?: string; metadata?: { items?: Array<{ key: string; value?: string }> } }>({ url: at(vm), method: 'GET' })).data;
+        const compute: ComputeVms = {
+            status: async vm => (await get(vm)).status ?? 'UNKNOWN',
+            resume: async vm => { await client.request({ url: `${at(vm)}/resume`, method: 'POST' }); },
+            suspend: async vm => { await client.request({ url: `${at(vm)}/suspend`, method: 'POST' }); },
+            image: async vm => (await get(vm)).metadata?.items?.find(i => i.key === 'kd-image')?.value
+        };
+        return new VmPoolJobs(config.vms ?? [], compute, bucket, workDir, log);
+    }
+
+    async jobImage(): Promise<string> {
+        const images = await Promise.all(this.vms.map(vm => this.compute.image(vm)));
+        if (images.some(i => !i)) throw new Error(`${this.label}: a VM names no kd-image (deploy.sh vms sets it)`);
+        const other = images.findIndex(i => i !== images[0]);
+        if (other > 0) throw new Error(`${this.vms[other]} runs ${images[other]}, not ${images[0]}: create the VMs again from one image`);
+        return images[0]!;
+    }
+
+    /** Free VMs. */
+    free(): number { return this.vms.filter(v => !this.busy.has(v)).length; }
+
+    async tryRun(env: Record<string, string>): Promise<string | undefined> {
+        const vm = this.vms.find(v => !this.busy.has(v));
+        if (!vm) return undefined;
+        const name = `vm/${vm}/${++this.n}`;
+        this.busy.set(vm, name);
+        const keys = kdVmKeys(vm);
+        try {
+            await this.bucket.remove(keys.done);
+            const file = path.join(this.workDir, `assign-${vm}-${this.n}.json`);
+            fs.mkdirSync(this.workDir, { recursive: true });
+            fs.writeFileSync(file, JSON.stringify({ env }));
+            await this.bucket.putFile(keys.assign, file, { contentType: 'application/json' });
+            fs.rmSync(file, { force: true });
+            this.sent.set(name, { vm, job: env.KD_JOB, startMs: this.now() });
+            await this.wake(vm);
+        } catch (err) {
+            this.busy.delete(vm);
+            this.sent.delete(name);
+            throw err;
+        }
+        return name;
+    }
+
+    /** A suspended VM resumed; one still suspending waited for first; one running left as it is. */
+    private async wake(vm: string): Promise<void> {
+        for (let tries = 0; ; tries++) {
+            const st = await this.compute.status(vm);
+            if (st === 'RUNNING') return;
+            if (st === 'SUSPENDED') { await this.compute.resume(vm); this.log(`[kd-vm] ${vm} resumed`); return; }
+            if (tries > 120) throw new Error(`${vm} is ${st}: it could not be resumed`);
+            await new Promise(r => setTimeout(r, this.settleMs));
+        }
+    }
+
+    async run(env: Record<string, string>): Promise<string> {
+        const name = await this.tryRun(env);
+        if (!name) throw new Error(`${this.label}: every VM is building`);
+        return name;
+    }
+
+    async get(execution: string): Promise<CloudExecution> {
+        const e = this.sent.get(execution);
+        if (!e) throw new Error(`${this.label}: no chunk ${execution} was sent from here`);
+        if (e.endMs === undefined) {
+            // a VM found suspended with its chunk unfinished (a suspend that reached it late) is resumed: the build goes on
+            try {
+                if (await this.compute.status(e.vm) === 'SUSPENDED') { this.log(`[kd-vm] ${e.vm} was suspended mid-chunk: resumed`); await this.compute.resume(e.vm); }
+            } catch (err) {
+                this.log(`[kd-vm] reading ${e.vm}: ${err instanceof Error ? err.message : String(err)}`);
+            }
+            const file = path.join(this.workDir, `done-${e.vm}.json`);
+            if (await this.bucket.download(kdVmKeys(e.vm).done, file)) {
+                const d = JSON.parse(fs.readFileSync(file, 'utf8')) as { ok?: boolean; job?: string; error?: string };
+                fs.rmSync(file, { force: true });
+                if (d.job === e.job) {
+                    e.endMs = this.now(); e.ok = d.ok === true;
+                    if (!e.ok) e.message = d.error ?? 'the VM did not send the chunk\'s outcome';
+                    await this.release(e.vm, execution);
+                }
+            }
+        }
+        const done = e.endMs !== undefined;
+        return { name: execution, done, succeeded: done && !!e.ok, ...(e.message ? { message: e.message } : {}), startMs: e.startMs, ...(done ? { endMs: e.endMs } : {}) };
+    }
+
+    /**
+     * The VM's suspend asked (awaited: the call returns once Compute Engine has the operation, the suspend itself takes
+     * minutes; a driver that exited before an unawaited call went out left 32 VMs running, 2026-11-09) and the VM free.
+     */
+    private async release(vm: string, execution: string): Promise<void> {
+        if (this.busy.get(vm) !== execution) return;
+        this.busy.delete(vm);
+        try { await this.compute.suspend(vm); this.log(`[kd-vm] ${vm} suspending`); } catch (err) { this.log(`[kd-vm] suspending ${vm} failed: ${err instanceof Error ? err.message : String(err)}`); }
+    }
+
+    /**
+     * The chunk's outcome is read: its VM suspended now, by this runner alone. The worker no longer suspends itself after a
+     * chunk: its request could reach Compute Engine after the next district had resumed the VM (a resume at 10:09:02, the
+     * old worker's suspend at 10:09:43, the new worker frozen at its start and its chunk never built, 2026-11-09).
+     */
+    async finished(execution: string): Promise<void> {
+        const e = this.sent.get(execution);
+        if (!e) return;
+        if (e.endMs === undefined) { e.endMs = this.now(); e.ok = true; }
+        await this.release(e.vm, execution);
+    }
+
+    async cancel(execution: string): Promise<void> {
+        const e = this.sent.get(execution);
+        if (!e) return;
+        await this.bucket.remove(kdVmKeys(e.vm).assign).catch(() => undefined);
+        e.endMs = this.now(); e.ok = false; e.message = 'cancelled';
+        await this.release(e.vm, execution);
+    }
+}
+
+/**
+ * The largest chunks (marked KD_FAST by the runner, from the orchestrator's kdFastChunks) on the fast VMs while one is
+ * free, every other chunk, and a marked one with no VM free, on `rest` (the Cloud Run pool).
+ */
+export class HybridJobs implements CloudRunJobs {
+    readonly label: string;
+    private readonly owner = new Map<string, CloudRunJobs>();
+
+    constructor(private readonly fast: VmPoolJobs, private readonly rest: CloudRunJobs) {
+        this.label = `${fast.label} + ${rest.label}`;
+    }
+
+    async jobImage(): Promise<string> {
+        const [a, b] = await Promise.all([this.fast.jobImage(), this.rest.jobImage()]);
+        if (a !== b) throw new Error(`the fast VMs run ${a} and ${this.rest.label} ${b}: deploy one image to both`);
+        return a;
+    }
+
+    async run(envIn: Record<string, string>): Promise<string> {
+        const { [KD_FAST_ENV]: fast, ...env } = envIn;
+        const onVm = fast === '1' ? await this.fast.tryRun(env) : undefined;
+        if (onVm) { this.owner.set(onVm, this.fast); return onVm; }
+        const name = await this.rest.run(env);
+        this.owner.set(name, this.rest);
+        return name;
+    }
+
+    async get(execution: string): Promise<CloudExecution> {
+        const b = this.owner.get(execution);
+        if (!b) throw new Error(`${this.label}: no chunk ${execution} was sent from here`);
+        return b.get(execution);
+    }
+
+    async cancel(execution: string): Promise<void> {
+        await this.owner.get(execution)?.cancel(execution);
+    }
+
+    async finished(execution: string): Promise<void> {
+        await this.owner.get(execution)?.finished?.(execution);
     }
 }
 
@@ -687,6 +902,41 @@ export class RoundRobinJobs implements CloudRunJobs {
 
     async cancel(execution: string): Promise<void> {
         await this.owner.get(execution)?.cancel(execution);
+    }
+
+    async finished(execution: string): Promise<void> {
+        await this.owner.get(execution)?.finished?.(execution);
+    }
+}
+
+/** Statuses the pool answers while it scales (no instance yet, or one already busy): the chunk is sent again. */
+export const SERVICE_RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
+/** Tries of each chunk's request to the pool (backing off 2, 4, 8, ... s). */
+export const SERVICE_POST_ATTEMPTS = 6;
+
+/**
+ * One chunk's request to the pool: the pool scaling from zero under a burst can answer 503 (no instance yet), 429, or drop
+ * the connection before answering; each is asked again after 2, 4, 8, ... s (SERVICE_POST_ATTEMPTS in all), never taken
+ * for a failed chunk (a 503 at Penn's burst left a chunk to the retry after every other, 2026-11-09).
+ */
+export async function postChunk(send: () => Promise<{ ok: boolean; status: number; text(): Promise<string> }>, signal: AbortSignal, sleep: (ms: number) => Promise<void> = ms => new Promise(r => setTimeout(r, ms))): Promise<{ ok: boolean; error?: string }> {
+    for (let attempt = 1; ; attempt++) {
+        let res: { ok: boolean; status: number; text(): Promise<string> };
+        try {
+            res = await send();
+        } catch (err) {
+            if (signal.aborted || attempt >= SERVICE_POST_ATTEMPTS) throw err;
+            await sleep(1_000 * 2 ** attempt);
+            continue;
+        }
+        if (SERVICE_RETRY_STATUS.has(res.status) && attempt < SERVICE_POST_ATTEMPTS) {
+            await res.text().catch(() => '');
+            await sleep(1_000 * 2 ** attempt);
+            continue;
+        }
+        const text = await res.text();
+        if (!res.ok) return { ok: false, error: `the worker answered ${res.status}: ${text.slice(0, 300)}` };
+        return parseServiceAnswer(text);
     }
 }
 
