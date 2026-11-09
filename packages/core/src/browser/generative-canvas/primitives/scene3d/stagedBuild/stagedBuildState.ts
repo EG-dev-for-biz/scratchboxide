@@ -64,6 +64,15 @@ export function isRunSettled(state: StagedBuildState, pageLoadedAtMs: number): b
     return state.runState === 'finished' && state.updatedAtMs < pageLoadedAtMs;
 }
 
+/**
+ * Whether the run's remesh stage (tile_refine, the window fit and array, the polish) is running right now: dead time for
+ * the viewer, when the window check is shown as a popup (WindowCheckCard). False once the run is over or interrupted.
+ */
+export function isRemeshRunning(state: StagedBuildState, pageLoadedAtMs: number): boolean {
+    if (state.runState !== 'running' || isInterrupted(state, pageLoadedAtMs)) return false;
+    return state.stages.some(s => s.stage === 'remesh' && s.status === 'running');
+}
+
 const STATUS_RANK: Record<StageStatus, number> = { pending: 0, running: 1, committed: 2, degraded: 2, skipped: 2, failed: 2, stopped: 2 };
 
 /**
