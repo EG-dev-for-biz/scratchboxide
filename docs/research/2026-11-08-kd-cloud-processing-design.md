@@ -114,6 +114,15 @@ instance (request- or instance-billed, gen1 or gen2): the pool's CPU is ~35% slo
 Under 3 minutes needs the few largest chunks on job-class CPU with a fast start (suspended Compute Engine VMs, or GKE
 Autopilot's Performance class); details in `docs/processes/2026-11-09-kd-cloud-fanout.md`.
 
+## Third round (2026-11-09): under 3 minutes on suspended VMs
+
+Every chunk on its own suspended n2d-standard-8 VM (resumed in ~13 s, suspended by the runner after): **Penn shown in
+169 s and 173 s headless and 159 s from the app's chat**, byte-identical. C3s could not resume (a suspended VM holds no
+capacity); N2D over four zones always did. Running from the app found two bugs, fixed: the join's bitwise frame check
+refused a chunk at random on an arm64 Mac (now within 1e-6 m), and a worker's own suspend could land after the next
+resume (now only the runner suspends). Standing cost if kept: about $3.7-5.9 a day for 34 VMs; they were deleted and
+are made again in about 8 minutes. Details in `docs/processes/2026-11-09-kd-cloud-fanout.md`.
+
 ## The design
 
 ### 1. Known places open from the store (seconds)
