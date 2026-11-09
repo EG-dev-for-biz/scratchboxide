@@ -31,6 +31,7 @@ import { rebuildStreetObjects } from '../../../3d-engine/staged-location/street-
 import type { ResidualAuditResult } from '../../../3d-engine/staged-location/residual-audit';
 import { VisionModelChain } from '../../vision-model-chain';
 import { BLOB_READ_PARAMS, readBlobs, type BlobReadReport } from '../../../3d-engine/staged-location/street-objects/blob-reader';
+import { BLOB_PATCHES_DIR, BLOB_READ_FILE } from '../../../3d-engine/staged-location/street-objects/blob-check';
 import { evidenceLookup } from '../../../3d-engine/staged-location/vector-footprints';
 import { fileReadingStore, modelReadingsDir } from '../../../3d-engine/staged-location/pipeline-k/model-readings';
 import { readTileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
@@ -114,9 +115,10 @@ export const streetObjectsHandler: ToolHandler = async (args, ctx): Promise<Tool
         const blobs: BlobReadReport = await readBlobs({
             audit, look, vector, tile: readTileTriangles(fs.readFileSync(files.tile)), vision: blobChain, ...(store ? { store } : {}),
             onSheet: (i, jpeg) => fs.writeFileSync(path.join(outDir, `blob_sheet_${String(i).padStart(3, '0')}.jpg`), jpeg),
+            onPatch: (id, jpeg) => { fs.mkdirSync(path.join(outDir, BLOB_PATCHES_DIR), { recursive: true }); fs.writeFileSync(path.join(outDir, BLOB_PATCHES_DIR, `${id}.jpg`), jpeg); },
             ...(ctx.signal ? { signal: ctx.signal } : {}), onProgress: m => ctx.reportProgress?.(m)
         });
-        fs.writeFileSync(path.join(outDir, 'blob_read.json'), JSON.stringify(blobs));
+        fs.writeFileSync(path.join(outDir, BLOB_READ_FILE), JSON.stringify({ ...blobs, origin: { lat, lng } }));
         // 2. Street View only for the blobs the cheap read leaves unsure that stand up off the ground and look like things
         const labelled = new Set(blobs.labels.map(l => l.clusterId));
         const unsure = [...blobs.labels.filter(l => l.confidence < BLOB_READ_PARAMS.confidentAt && l.standing >= 0.5 && l.scanFault < 0.5).map(l => l.clusterId),
@@ -125,8 +127,8 @@ export const streetObjectsHandler: ToolHandler = async (args, ctx): Promise<Tool
         if (args.streetView === false || !only.length) {
             const st = blobs.stats;
             return {
-                status: 'completed', summaryResult: `${STREET_OBJECTS_TOOL_NAME}: ${st.clusters} blobs; ${st.read} read from the scan, the map and the tile photo (${st.visionCalls} vision calls, ${st.storeHits} answers from the readings store), ${st.confident} labelled with confidence, ${st.unsure} unsure; ${st.inFootprint} building parts and ${st.artefacts} scan artefacts left out. Street View not asked. Report: ${path.relative(ctx.workspaceRoot, path.join(outDir, 'blob_read.json'))}.`,
-                resultPayload: { status: 'success', blobRead: path.relative(ctx.workspaceRoot, path.join(outDir, 'blob_read.json')), blobStats: st }
+                status: 'completed', summaryResult: `${STREET_OBJECTS_TOOL_NAME}: ${st.clusters} blobs; ${st.read} read from the scan, the map and the tile photo (${st.visionCalls} vision calls, ${st.storeHits} answers from the readings store), ${st.confident} labelled with confidence, ${st.unsure} unsure; ${st.inFootprint} building parts and ${st.artefacts} scan artefacts left out. Street View not asked. Report: ${path.relative(ctx.workspaceRoot, path.join(outDir, BLOB_READ_FILE))}.`,
+                resultPayload: { status: 'success', blobRead: path.relative(ctx.workspaceRoot, path.join(outDir, BLOB_READ_FILE)), blobStats: st }
             };
         }
         const walkable = (x: number, z: number) => look.buildingAt(x, z) <= 0 && !look.roadAt(x, z);
@@ -144,7 +146,7 @@ export const streetObjectsHandler: ToolHandler = async (args, ctx): Promise<Tool
         return {
             status: 'completed', summaryResult: `${summary} Before it, ${blobs.stats.read} blobs were read from the scan, the map and the tile photo: ${blobs.stats.confident} labelled with confidence, ${blobs.stats.unsure} unsure (Street View asked for ${only.length}).`,
             resultPayload: {
-                status: 'success', blobRead: rel(path.join(outDir, 'blob_read.json')), blobStats: blobs.stats, report: rel(path.join(outDir, 'street_objects.json')), ...(report.layerGlb ? { layerGlb: rel(report.layerGlb) } : {}), stats: st, notes: report.notes,
+                status: 'success', blobRead: rel(path.join(outDir, BLOB_READ_FILE)), blobStats: blobs.stats, report: rel(path.join(outDir, 'street_objects.json')), ...(report.layerGlb ? { layerGlb: rel(report.layerGlb) } : {}), stats: st, notes: report.notes,
                 families: report.families.map(f => ({
                     id: f.id, members: f.members.length, decision: f.decision, reason: f.decisionReason, seen: f.seen?.description, ...(f.check ? { iouRebuild: f.check.iouRebuild, iouScan: f.check.iouScan, deltaERebuild: f.check.deltaERebuild, deltaEScan: f.check.deltaEScan } : {}),
                     ...(f.spec ? { operator: f.spec.operator, provenance: f.spec.provenance.map(p => `${p.field}: ${p.label}`) } : {}), ...(f.glb ? { glb: rel(f.glb) } : {}), ...(f.overlays ? { overlays: f.overlays.map(rel) } : {}), ...(f.era ? { era: f.era } : {})

@@ -220,27 +220,39 @@ function line(rgba: Uint8Array, W: number, H: number, ax: number, ay: number, bx
 /** The patch side (m) a cluster is shown at. */
 export const patchSideM = (e: BlobEvidence, P = BLOB_READ_PARAMS) => Math.max(P.minPatchM, P.patchScale * Math.max(e.planM[0], 1));
 
-/** One contact sheet: each cluster's square patch of the orthophoto (resampled to patchPx), its plan box outlined in magenta, its number in a corner. */
+/** One blob's square patch of the orthophoto (patchPx a side), its plan box outlined in magenta (the blob check's image). */
+export function blobPatch(ortho: TopDownPhoto & { x0: number; z0: number }, e: BlobEvidence, P = BLOB_READ_PARAMS): { rgba: Uint8Array; width: number; height: number } {
+    const S = P.patchPx, out = new Uint8Array(S * S * 4).fill(255);
+    drawPatch(out, S, S, 0, 0, ortho, e, P);
+    return { rgba: out, width: S, height: S };
+}
+
+function drawPatch(out: Uint8Array, W: number, H: number, ox: number, oy: number, ortho: TopDownPhoto & { x0: number; z0: number }, e: BlobEvidence, P: typeof BLOB_READ_PARAMS): void {
+    const S = P.patchPx;
+    const side = patchSideM(e, P), px0 = e.centre[0] - side / 2, pz0 = e.centre[1] - side / 2;
+    for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+        const wx = px0 + ((x + 0.5) / S) * side, wz = pz0 + ((y + 0.5) / S) * side;
+        const sx = Math.floor((wx - ortho.x0) / ortho.texelM), sy = Math.floor((wz - ortho.z0) / ortho.texelM);
+        const o = ((oy + y) * W + ox + x) * 4;
+        if (sx < 0 || sy < 0 || sx >= ortho.width || sy >= ortho.height) { out[o] = out[o + 1] = out[o + 2] = 128; continue; }
+        const i = (sy * ortho.width + sx) * 4;
+        out[o] = ortho.rgba[i]; out[o + 1] = ortho.rgba[i + 1]; out[o + 2] = ortho.rgba[i + 2]; out[o + 3] = 255;
+    }
+    // the plan box, in the patch's pixels
+    const b = e.box, zx = -b.xAxis[1], zz = b.xAxis[0];
+    const toPx = (wx: number, wz: number): [number, number] => [ox + ((wx - px0) / side) * S, oy + ((wz - pz0) / side) * S];
+    const c = [-1, 1, 1, -1].map((sx, k) => { const sz = [-1, -1, 1, 1][k]; return toPx(b.origin[0] + (sx * b.extentsM[0] / 2) * b.xAxis[0] + (sz * b.extentsM[1] / 2) * zx, b.origin[1] + (sx * b.extentsM[0] / 2) * b.xAxis[1] + (sz * b.extentsM[1] / 2) * zz); });
+    for (let k = 0; k < 4; k++) line(out, W, H, c[k][0], c[k][1], c[(k + 1) % 4][0], c[(k + 1) % 4][1], [255, 0, 255]);
+}
+
+/** One contact sheet: each cluster's patch (blobPatch), numbered in a corner. */
 export function contactSheet(ortho: TopDownPhoto & { x0: number; z0: number }, blobs: BlobEvidence[], P = BLOB_READ_PARAMS): { rgba: Uint8Array; width: number; height: number } {
     const cols = P.sheetColumns, rows = Math.ceil(blobs.length / cols), S = P.patchPx, gap = 6;
     const W = cols * S + (cols + 1) * gap, H = rows * S + (rows + 1) * gap;
     const out = new Uint8Array(W * H * 4).fill(255);
     blobs.forEach((e, n) => {
         const ox = gap + (n % cols) * (S + gap), oy = gap + Math.floor(n / cols) * (S + gap);
-        const side = patchSideM(e, P), px0 = e.centre[0] - side / 2, pz0 = e.centre[1] - side / 2;
-        for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-            const wx = px0 + ((x + 0.5) / S) * side, wz = pz0 + ((y + 0.5) / S) * side;
-            const sx = Math.floor((wx - ortho.x0) / ortho.texelM), sy = Math.floor((wz - ortho.z0) / ortho.texelM);
-            const o = ((oy + y) * W + ox + x) * 4;
-            if (sx < 0 || sy < 0 || sx >= ortho.width || sy >= ortho.height) { out[o] = out[o + 1] = out[o + 2] = 128; continue; }
-            const i = (sy * ortho.width + sx) * 4;
-            out[o] = ortho.rgba[i]; out[o + 1] = ortho.rgba[i + 1]; out[o + 2] = ortho.rgba[i + 2]; out[o + 3] = 255;
-        }
-        // the plan box, in the patch's pixels
-        const b = e.box, zx = -b.xAxis[1], zz = b.xAxis[0];
-        const toPx = (wx: number, wz: number): [number, number] => [ox + ((wx - px0) / side) * S, oy + ((wz - pz0) / side) * S];
-        const c = [-1, 1, 1, -1].map((sx, k) => { const sz = [-1, -1, 1, 1][k]; return toPx(b.origin[0] + (sx * b.extentsM[0] / 2) * b.xAxis[0] + (sz * b.extentsM[1] / 2) * zx, b.origin[1] + (sx * b.extentsM[0] / 2) * b.xAxis[1] + (sz * b.extentsM[1] / 2) * zz); });
-        for (let k = 0; k < 4; k++) line(out, W, H, c[k][0], c[k][1], c[(k + 1) % 4][0], c[(k + 1) % 4][1], [255, 0, 255]);
+        drawPatch(out, W, H, ox, oy, ortho, e, P);
         drawNumber(out, W, ox + 2, oy + 2, n + 1);
     });
     return { rgba: out, width: W, height: H };
@@ -303,6 +315,8 @@ export async function readBlobs(input: {
     tile: TileTriangles; vision: VisionModelChain<string>; store?: ModelReadingStore; params?: Partial<typeof BLOB_READ_PARAMS>;
     /** Writes each sheet as JPEG (the tile's own photo, no Street View), for the proof. */
     onSheet?: (index: number, jpeg: Buffer) => void;
+    /** Each read blob's patch as JPEG (blobPatch), for the blob check (blob-check.ts). */
+    onPatch?: (clusterId: number, jpeg: Buffer) => void;
     signal?: AbortSignal; onProgress?: (m: string) => void;
 }): Promise<BlobReadReport> {
     const P = { ...BLOB_READ_PARAMS, ...(input.params ?? {}) };
@@ -315,6 +329,7 @@ export async function readBlobs(input: {
     const t0 = Date.now();
     const ortho = read.length ? districtOrtho(input.tile, read, groundY, P) : undefined;
     const orthoMs = Date.now() - t0;
+    if (ortho && input.onPatch) for (const e of read) { const p = blobPatch(ortho, e, P); input.onPatch(e.clusterId, Buffer.from(jpegJs.encode({ data: Buffer.from(p.rgba.buffer, p.rgba.byteOffset, p.rgba.byteLength), width: p.width, height: p.height }, 85).data)); }
     const batches: BlobEvidence[][] = [];
     for (let i = 0; i < read.length; i += P.patchesPerSheet) batches.push(read.slice(i, i + P.patchesPerSheet));
     const labels: BlobLabel[] = [], sheets: BlobReadReport['sheets'] = [];
