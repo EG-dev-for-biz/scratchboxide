@@ -30,6 +30,10 @@ import { VISION_HEDGE_AFTER_MS } from '../../../3d-engine/staged-location/orches
 import { rebuildStreetObjects } from '../../../3d-engine/staged-location/street-objects/run';
 import type { ResidualAuditResult } from '../../../3d-engine/staged-location/residual-audit';
 import { VisionModelChain } from '../../vision-model-chain';
+import { BLOB_READ_PARAMS, readBlobs, type BlobReadReport } from '../../../3d-engine/staged-location/street-objects/blob-reader';
+import { evidenceLookup } from '../../../3d-engine/staged-location/vector-footprints';
+import { fileReadingStore, modelReadingsDir } from '../../../3d-engine/staged-location/pipeline-k/model-readings';
+import { readTileTriangles } from '../../../3d-engine/staged-location/tile-texture-transfer';
 
 export const STREET_OBJECTS_TOOL_NAME = 'location_street_objects';
 export const STREET_OBJECTS_DIR = path.join('build', 'street-objects');
@@ -51,6 +55,7 @@ export function readAudit(file: string): ResidualAuditResult {
 export const STREET_OBJECTS_TOOL_DECLARATION: ToolDeclaration = {
     name: STREET_OBJECTS_TOOL_NAME,
     description: 'Rebuilds the street objects of a staged district (the bollards, posts, lamps, planters, benches, signs, kiosks and shelters the scan melts) as clean procedural objects. ' +
+        'First, every blob of the audit is read from cheap evidence, with no Street View: the scan\'s measures, where it stands against Google\'s vector data (building line, road centreline, carriageway; a blob inside or touching a building footprint is left out as a building\'s part) and its top-down tile photo, on contact sheets read by the vision model in batches, each blob given an open label and a confidence (photo-inferred; the answers kept in the model readings store, so a rerun reads the same). Street View is asked only for the blobs that read leaves unsure. ' +
         'The district residual audit says where each object stands and how tall it is (measured); alike objects repeating along a line at a steady pitch are one family, built once and placed at every member. ' +
         'Registered Google Street View views that see each family clear (the Maps Imagery Grounding API; images held in memory, never written) are read once by the vision model: what it is, its colours and finishes, ' +
         'its masks; its profile along the height is measured from those silhouettes and scaled to the scan\'s height (photo-inferred), then built natively from solids of revolution or vertical sweeps and panels. ' +
@@ -68,6 +73,7 @@ export const STREET_OBJECTS_TOOL_DECLARATION: ToolDeclaration = {
             maxFamilies: { type: 'NUMBER', description: 'At most this many families, the largest first (default: all).' },
             only: { type: 'ARRAY', items: { type: 'STRING' }, description: 'Only these families (report ids such as "row/12" or "one/40") or cluster ids.' },
             maxImages: { type: 'NUMBER', description: 'The image budget for the district (default 400).' },
+            streetView: { type: 'BOOLEAN', description: 'Ask Street View for the blobs the cheap read (scan measures, map, tile photo) leaves unsure (default true). False: the cheap read only.' },
             overlays: { type: 'BOOLEAN', description: 'Write per checked view a PNG of the tile\'s own render at the view\'s registered pose with three outlines: what Street View showed of the object (green), the scan\'s blob (red), the rebuild (cyan). No photo pixel is written. Default true.' }
         },
         required: ['auditJson', 'scanGlb', 'tileGlb', 'lat', 'lng']
@@ -91,10 +97,37 @@ export const streetObjectsHandler: ToolHandler = async (args, ctx): Promise<Tool
         const vision = deps.vision && 'client' in deps.vision ? deps.vision : undefined;
         if (!vision) throw new StreetObjectsToolError('no_vision', 'no vision model is configured: the objects cannot be read from Street View');
         const chain = new VisionModelChain<string>({ client: vision.client, candidates: vision.candidates, signal: ctx.signal, hedgeAfterMs: VISION_HEDGE_AFTER_MS, replyCache: stagedReplyCache(deps.cache) });
-        const only = Array.isArray(args.only) ? (args.only as unknown[]).map(String).map(x => (/^\d+$/.test(x) ? Number(x) : x)) : undefined;
-        const key = crypto.createHash('sha256').update(JSON.stringify([files, lat, lng, only ?? null, args.maxFamilies ?? null, args.maxImages ?? null])).digest('hex').slice(0, 12);
+        const asked = Array.isArray(args.only) ? (args.only as unknown[]).map(String).map(x => (/^\d+$/.test(x) ? Number(x) : x)) : undefined;
+        const key = crypto.createHash('sha256').update(JSON.stringify([files, lat, lng, asked ?? null, args.maxFamilies ?? null, args.maxImages ?? null, args.streetView ?? true])).digest('hex').slice(0, 12);
         const outDir = path.join(ctx.workspaceRoot, STREET_OBJECTS_DIR, key);
+        fs.mkdirSync(outDir, { recursive: true });
+        // 1. every blob read from the cheap evidence first (blob-reader.ts): the scan's measures, the map, the tile's own photo
+        if (!deps.vectorEvidence) throw new StreetObjectsToolError('no_vector', 'Google\'s vector data is not available: the blobs cannot be placed against the map');
+        const radiusM = Math.max(30, ...audit.clusters.map(c => Math.hypot((c.lo[0] + c.hi[0]) / 2, (c.lo[2] + c.hi[2]) / 2))) + 30;
+        const vector = await deps.vectorEvidence({ lat, lng, radiusM });
+        const look = evidenceLookup(vector, radiusM);
+        const store = fileReadingStore(modelReadingsDir(deps.cache.dir));
+        const blobs: BlobReadReport = await readBlobs({
+            audit, look, vector, tile: readTileTriangles(fs.readFileSync(files.tile)), vision: chain, store,
+            onSheet: (i, jpeg) => fs.writeFileSync(path.join(outDir, `blob_sheet_${String(i).padStart(3, '0')}.jpg`), jpeg),
+            ...(ctx.signal ? { signal: ctx.signal } : {}), onProgress: m => ctx.reportProgress?.(m)
+        });
+        fs.writeFileSync(path.join(outDir, 'blob_read.json'), JSON.stringify(blobs));
+        // 2. Street View only for the blobs the cheap read leaves unsure that stand up off the ground and look like things
+        const labelled = new Set(blobs.labels.map(l => l.clusterId));
+        const unsure = [...blobs.labels.filter(l => l.confidence < BLOB_READ_PARAMS.confidentAt && l.standing >= 0.5 && l.scanFault < 0.5).map(l => l.clusterId),
+            ...blobs.evidence.filter(e => !labelled.has(e.clusterId) && !blobs.leftOut.some(o => o.clusterId === e.clusterId)).map(e => e.clusterId)];
+        const only = asked ?? unsure;
+        if (args.streetView === false || !only.length) {
+            const st = blobs.stats;
+            return {
+                status: 'completed', summaryResult: `${STREET_OBJECTS_TOOL_NAME}: ${st.clusters} blobs; ${st.read} read from the scan, the map and the tile photo (${st.visionCalls} vision calls, ${st.storeHits} answers from the readings store), ${st.confident} labelled with confidence, ${st.unsure} unsure; ${st.inFootprint} building parts and ${st.artefacts} scan artefacts left out. Street View not asked. Report: ${path.relative(ctx.workspaceRoot, path.join(outDir, 'blob_read.json'))}.`,
+                resultPayload: { status: 'success', blobRead: path.relative(ctx.workspaceRoot, path.join(outDir, 'blob_read.json')), blobStats: st }
+            };
+        }
+        const walkable = (x: number, z: number) => look.buildingAt(x, z) < 0 && !look.roadAt(x, z);
         const report = await rebuildStreetObjects({
+            walkable,
             origin: { lat, lng, heightMeters: 0 }, audit, scanGlb: files.scan, tileGlb: files.tile, streetView: { ...sv, refusedPanos: sv.refusedPanos ?? new Map<string, string>() }, vision: chain, outDir,
             ...(typeof args.maxFamilies === 'number' ? { maxFamilies: args.maxFamilies } : {}), ...(only?.length ? { only } : {}),
             ...(typeof args.maxImages === 'number' ? { see: { maxImages: args.maxImages } } : {}), overlays: args.overlays !== false,
@@ -105,9 +138,9 @@ export const streetObjectsHandler: ToolHandler = async (args, ctx): Promise<Tool
         const summary = `${STREET_OBJECTS_TOOL_NAME}: ${st.families} street object families (${st.rows} rows, ${st.members} objects); ${st.seen} read from Street View (${st.fetched} of ${st.images} images, ${st.registered} panos registered, ${st.visionCalls} vision calls); ` +
             `${st.rebuilt} rebuilt and kept, ${st.scanKept} kept as scanned, ${st.temporary} temporary (not rebuilt), ${st.notSeen} not seen. Report-only: the build is unchanged. Report: ${rel(path.join(outDir, 'street_objects.json'))}.`;
         return {
-            status: 'completed', summaryResult: summary,
+            status: 'completed', summaryResult: `${summary} Before it, ${blobs.stats.read} blobs were read from the scan, the map and the tile photo: ${blobs.stats.confident} labelled with confidence, ${blobs.stats.unsure} unsure (Street View asked for ${only.length}).`,
             resultPayload: {
-                status: 'success', report: rel(path.join(outDir, 'street_objects.json')), ...(report.layerGlb ? { layerGlb: rel(report.layerGlb) } : {}), stats: st, notes: report.notes,
+                status: 'success', blobRead: rel(path.join(outDir, 'blob_read.json')), blobStats: blobs.stats, report: rel(path.join(outDir, 'street_objects.json')), ...(report.layerGlb ? { layerGlb: rel(report.layerGlb) } : {}), stats: st, notes: report.notes,
                 families: report.families.map(f => ({
                     id: f.id, members: f.members.length, decision: f.decision, reason: f.decisionReason, seen: f.seen?.description, ...(f.check ? { iouRebuild: f.check.iouRebuild, iouScan: f.check.iouScan, deltaERebuild: f.check.deltaERebuild, deltaEScan: f.check.deltaEScan } : {}),
                     ...(f.spec ? { operator: f.spec.operator, provenance: f.spec.provenance.map(p => `${p.field}: ${p.label}`) } : {}), ...(f.glb ? { glb: rel(f.glb) } : {}), ...(f.overlays ? { overlays: f.overlays.map(rel) } : {}), ...(f.era ? { era: f.era } : {})

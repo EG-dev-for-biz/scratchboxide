@@ -41,7 +41,7 @@ import { parseGlbBytes, assembleGlb } from '../glb-bytes';
 import type { AuditedCluster, ResidualAuditResult } from '../residual-audit';
 import { SB_FEATURE_PREFIX } from '../../../../common/spatial/sb-feature-types';
 import { streetObjectFamilies, STREET_OBJECTS_VERSION, type StreetObjectFamily, type StreetObjectMember, type V3 } from './families';
-import { discoveryPoints, planFamilyViews, SEE_PARAMS, type PlannedView, type SeeParams } from './see';
+import { aimAt, clearShare, discoveryPoints, planFamilyViews, SEE_PARAMS, type PlannedView, type SeeParams } from './see';
 import { familyReadPrompt, parseFamilyReading, READ_PARAMS, type FamilyReading } from './read';
 import { combineProfiles, profileFromSilhouette, type SilhouetteProfile } from './silhouette-profile';
 import { planHeadingOf, streetObjectSpec, type StreetObjectSpec } from './object-spec';
@@ -87,9 +87,15 @@ export interface StreetObjectsInput {
     register?: (job: PanoRegistrationJob, opts: { signal?: AbortSignal; log?: (m: string) => void }) => Promise<PanoRegistrationOutcome>;
     /** Cuts an object's mask out of a photo held in memory, from the read's box (default: the app's segmenter, in memory). */
     segment?: PhotoSegmenter;
+    /** Where a person can stand (Google's vector data: off the carriageway, outside every building footprint): the
+     * eye-level camera stands only there, clear of the scan. Without it the camera stands back toward the lead pano. */
+    walkable?: (x: number, z: number) => boolean;
     signal?: AbortSignal;
     onProgress?: (m: string) => void;
 }
+
+/** The eye-level camera's candidate stands: this many directions round the member, at these multiples of the base distance. */
+export const EYE_STAND = { directions: 16, distances: [1, 1.4, 0.75], eyeM: 1.6, minClear: 0.5 };
 
 /** A photo's encoded bytes and a box (0..1000, [ymin, xmin, ymax, xmax]) in; the object's mask (one byte a pixel, 1: it) out. */
 export type PhotoSegmenter = (bytes: Buffer, box: [number, number, number, number], signal?: AbortSignal) => Promise<Uint8Array>;
@@ -680,12 +686,29 @@ export async function rebuildStreetObjects(input: StreetObjectsInput): Promise<S
             const m0 = j.fam.members.slice().sort((a, b) => Math.hypot(a.foot[0] - j.side[0], a.foot[2] - j.side[1]) - Math.hypot(b.foot[0] - j.side[0], b.foot[2] - j.side[1]))[0];
             let dx = j.side[0] - m0.foot[0], dz = j.side[1] - m0.foot[2];
             const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L;
-            // far enough that the frame's height (70 degrees across at 16:9) holds the member whole, at most as far as the pano stood
-            const dist = Math.min(L, Math.max(3.5, j.fam.heightM * 1.9 + 1.5));
-            const ex = m0.foot[0] + dx * dist, ez = m0.foot[2] + dz * dist;
-            const g = ground.groundAt(ex, ez);
-            const eye: V3 = [ex, (Number.isFinite(g) ? g : m0.foot[1]) + 1.6, ez];
+            // far enough that the frame's height (70 degrees across at 16:9) holds the member whole
+            const dist = Math.max(3.5, j.fam.heightM * 1.9 + 1.5);
             const target: V3 = [m0.foot[0], m0.foot[1] + j.fam.heightM * 0.5, m0.foot[2]];
+            const standAt = (ex: number, ez: number): V3 => { const g = ground.groundAt(ex, ez); return [ex, (Number.isFinite(g) ? g : m0.foot[1]) + EYE_STAND.eyeM, ez]; };
+            // the stand: on walkable ground (the map's sidewalk and plazas), from where the scan shows the most of the member
+            // (clearShare against the tile near it: a stand inside a blob or behind a wall sees none of it); the side the
+            // lead view saw it from wins a tie. Without the map, back toward the lead pano as before.
+            let eye = standAt(m0.foot[0] + dx * Math.min(L, dist), m0.foot[2] + dz * Math.min(L, dist));
+            const pts = memberPoints.get(m0.clusterId);
+            if (input.walkable && pts?.length) {
+                const local = meshNear(tileMesh, [[m0.foot[0], m0.foot[2]]], dist * 1.6 + 6);
+                let best = -1;
+                for (const k of EYE_STAND.distances) for (let d = 0; d < EYE_STAND.directions; d++) {
+                    const a = Math.atan2(dz, dx) + (d * 2 * Math.PI) / EYE_STAND.directions;
+                    const ex = m0.foot[0] + Math.cos(a) * dist * k, ez = m0.foot[2] + Math.sin(a) * dist * k;
+                    if (!input.walkable(ex, ez)) continue;
+                    const e = standAt(ex, ez);
+                    const aim = aimAt(e, m0);
+                    const clear = clearShare(e, aim, pts, local);
+                    const score = clear - 0.02 * Math.min(d, EYE_STAND.directions - d) - 0.05 * Math.abs(k - 1);
+                    if (clear >= EYE_STAND.minClear && score > best) { best = score; eye = e; }
+                }
+            }
             const cam = lookAtCamera(eye, target, 70, 1280, 720);
             const stem = path.join(input.outDir, `${j.fam.id.replace(/\//g, '_')}_eye`);
             const before = renderTriangles([tileSoup], cam, { supersample: 2 }), after = renderTriangles([without, ...placed], cam, { supersample: 2 });
