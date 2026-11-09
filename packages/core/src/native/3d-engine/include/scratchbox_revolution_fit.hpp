@@ -30,6 +30,11 @@
  *      `sliceRmsFloorM`); at least `minSliceShare` of the slices must count, and their median RMS must be within
  *      `maxSliceRmsRel` of the radius. The axis is vertical through the weighted mean of the counted slices' centres; its
  *      error is their RMS about it; a tilt is fitted (at most `maxTiltDeg`) and reported, not applied.
+ *      With `endAtNonRound` (off by default) the revolution is the lowest run of round sections at least `minStackM`
+ *      tall, joined across failed runs of at most `maxFailM` (every later test judges that run alone), and ends flat at
+ *      its top (`topCutY`: the run's end or its highest scanned point, whichever is lower; no cap is extrapolated above the
+ *      scan): what stands above, a lattice mast or a square part, is not fitted. Without it a non-round part above or
+ *      below the round one can reject the whole.
  *   3. Profile, uniform first. With the axis fixed every point has (r, y, theta); each slice's radius is the half-sample
  *      mode of its points' r (dents and openings pull a median in; the mode stays on the surface most of the scan agrees
  *      on). Above a cap base y0 the meridian is one smooth curve of five continuous numbers,
@@ -145,6 +150,9 @@ struct Params {
     // geometry
     int angularSegments{192};
     double sinkM{1.0};
+    // the revolution ends, going up from its lowest round section, where its sections stop being circles for more than
+    // `maxFailM` (what stands above, a lattice or a square part, is not fitted: it stays scan); 0: fitted to the summit
+    double endAtNonRound{0.0};
 
     void set(const std::string& k, double v) {
         std::map<std::string, double*> m{{"cellM", &cellM}, {"peakWindowM", &peakWindowM}, {"minRiseM", &minRiseM}, {"levelStepM", &levelStepM},
@@ -152,7 +160,7 @@ struct Params {
             {"centreDrift", &centreDrift}, {"maxFailM", &maxFailM}, {"density", &density}, {"sliceM", &sliceM}, {"minSectorShare", &minSectorShare},
             {"maxSliceRmsRel", &maxSliceRmsRel}, {"minSliceShare", &minSliceShare}, {"maxTiltDeg", &maxTiltDeg}, {"maxModulationRel", &maxModulationRel}, {"sliceRmsFloorM", &sliceRmsFloorM}, {"ringStepM", &ringStepM}, {"ringStepRel", &ringStepRel}, {"minBandM", &minBandM}, {"simplerShare", &simplerShare}, {"coreScaleM", &coreScaleM}, {"maxTaper", &maxTaper},
             {"stackRiseM", &stackRiseM}, {"stackMinAreaM2", &stackMinAreaM2}, {"stackMaxRadiusShare", &stackMaxRadiusShare}, {"mastMaxRadiusShare", &mastMaxRadiusShare}, {"mastStackRadiusShare", &mastStackRadiusShare}, {"mastMinSlenderness", &mastMinSlenderness}, {"mastMaxTaperShare", &mastMaxTaperShare}, {"mastMinHeightM", &mastMinHeightM}, {"ribSignificance", &ribSignificance}, {"ribMinAmpM", &ribMinAmpM}, {"minModulationM", &minModulationM}, {"bumpPreference", &bumpPreference},
-            {"departureM", &departureM}, {"departureMinAreaM2", &departureMinAreaM2}, {"sinkM", &sinkM}};
+            {"departureM", &departureM}, {"departureMinAreaM2", &departureMinAreaM2}, {"sinkM", &sinkM}, {"endAtNonRound", &endAtNonRound}};
         if (k == "minSlices") { minSlices = static_cast<int>(v); return; }
         if (k == "maxStacks") { maxStacks = static_cast<int>(v); return; }
         if (k == "minPeriods") { minPeriods = static_cast<int>(v); return; }
@@ -430,6 +438,8 @@ struct Revolution {
     int levels{0};
     // axis
     double cx{0}, cz{0}, axisErrM{0}, tiltDeg{0};
+    /** With `endAtNonRound`: the flat top, at the end of the round run or the highest scanned point it keeps (NaN: off). */
+    double topCutY{std::numeric_limits<double>::quiet_NaN()};
     std::vector<Slice> slices;
     int slicesOk{0};
     double sliceRmsRelMedian{0}, sectorShareMedian{0};
@@ -482,7 +492,8 @@ public:
             o << "{\"id\":" << r.id << ",\"accepted\":" << (r.accepted ? "true" : "false") << ",\"referenceDetails\":" << (r.referenceDetails ? "true" : "false") << ",\"reason\":" << detail::jstr(r.reason)
               << ",\"plan\":{\"x\":" << detail::num(r.planX) << ",\"z\":" << detail::num(r.planZ) << ",\"r\":" << detail::num(r.planR) << ",\"peakY\":" << detail::num(r.peakY) << ",\"baseY\":" << detail::num(r.baseY) << ",\"levels\":" << r.levels << ",\"spread\":" << detail::num(r.planSpread) << "}"
               << ",\"axis\":{\"x\":" << detail::num(r.cx) << ",\"z\":" << detail::num(r.cz) << ",\"errM\":" << detail::num(r.axisErrM) << ",\"tiltDeg\":" << detail::num(r.tiltDeg) << ",\"slices\":" << r.slices.size() << ",\"slicesOk\":" << r.slicesOk
-              << ",\"sliceRmsRelMedian\":" << detail::num(r.sliceRmsRelMedian) << ",\"sectorShareMedian\":" << detail::num(r.sectorShareMedian) << "}";
+              << ",\"sliceRmsRelMedian\":" << detail::num(r.sliceRmsRelMedian) << ",\"sectorShareMedian\":" << detail::num(r.sectorShareMedian)
+              << ",\"topCutY\":" << (std::isfinite(r.topCutY) ? detail::num(r.topCutY) : std::string("null")) << "}";
             o << ",\"fit\":{\"points\":" << r.points << ",\"rmsM\":" << detail::num(r.rmsM) << ",\"rmsTruncM\":" << detail::num(r.rmsTruncM) << ",\"within25cm\":" << detail::num(r.within25) << "}";
             o << ",\"stacks\":[";
             for (size_t s = 0; s < r.stacks.size(); ++s) {
@@ -789,6 +800,32 @@ private:
             sl.push_back(c);
         }
         R.slices = sl;
+        // endAtNonRound: the revolution is the lowest run of round sections at least minStackM tall, joined across failed
+        // runs of at most maxFailM (a step ledge is one failed section; a lattice mast or the square block a drum stands
+        // on is many); every test below judges that run alone, and the scan above it is not fitted
+        double runLo = std::numeric_limits<double>::quiet_NaN(), runHi = runLo;
+        if (p_.endAtNonRound > 0) {
+            struct Run { double lo, hi; };
+            std::vector<Run> runs;
+            double failFrom = std::numeric_limits<double>::quiet_NaN();
+            for (const auto& c : sl) {
+                const double a = c.y - 0.5 * s, b = c.y + 0.5 * s;
+                if (c.ok) {
+                    if (!runs.empty() && (!std::isfinite(failFrom) || a - failFrom <= p_.maxFailM)) runs.back().hi = b;
+                    else runs.push_back({a, b});
+                    failFrom = std::numeric_limits<double>::quiet_NaN();
+                } else if (!std::isfinite(failFrom)) failFrom = a;
+            }
+            for (const auto& run : runs) if (run.hi - run.lo >= p_.minStackM) { runLo = run.lo; runHi = run.hi; break; }
+            // what is left above the run within maxFailM of the summit is the part's own top (a flat disk's section is no
+            // circle), not another part standing on it: the run reaches the summit
+            if (std::isfinite(runHi) && R.peakY - runHi <= p_.maxFailM) runHi = R.peakY + 0.5 * s;
+            if (std::isfinite(runHi)) {
+                std::vector<Slice> in;
+                for (const auto& c : sl) if (c.y >= runLo && c.y <= runHi) in.push_back(c);
+                sl.swap(in);
+            }
+        }
         std::vector<double> rr, sec;
         double wx = 0, wz = 0, ws = 0;
         for (const auto& c : sl) if (c.ok) { ++R.slicesOk; rr.push_back(c.rmsRel); sec.push_back(c.sectors); const double w = c.n * c.r; wx += w * c.cx; wz += w * c.cz; ws += w; }
@@ -817,16 +854,30 @@ private:
         // the lowest counted slice: the stack's bottom (below it the region had joined what it stands on)
         double yBottom = R.peakY;
         for (const auto& c : sl) if (c.ok) { yBottom = std::min(yBottom, c.y - 0.5 * s); }
+        // optionally the top too: going up from the lowest round section, the first run of sections that are not circles
+        // longer than maxFailM ends the revolution (a step ledge is one failed section; a lattice mast is many)
+        double yTop = R.peakY;
+        if (std::isfinite(runHi)) {
+            yBottom = std::max(yBottom, runLo);
+            yTop = runHi;
+        }
         std::vector<MP> mp;
         for (size_t i = 0; i < pts.size(); ++i) {
             const auto& q = pts[i];
-            if (q.y < yBottom) continue;
+            if (q.y < yBottom || q.y > yTop) continue;
             mp.push_back({std::hypot(q.x - R.cx, q.z - R.cz), q.y, std::atan2(q.z - R.cz, q.x - R.cx), wts[i]});
         }
         // a point far outside every counted section's radius belongs to something beside the stack
         double rMax = 0; for (const auto& c : sl) if (c.ok) rMax = std::max(rMax, c.r);
         mp.erase(std::remove_if(mp.begin(), mp.end(), [&](const MP& m) { return m.r > rMax * 1.15 + 0.6; }), mp.end());
         R.points = static_cast<int>(mp.size());
+        if (p_.endAtNonRound > 0 && !mp.empty()) {
+            // the top is flat at the highest scanned point the revolution keeps: a cap is not extrapolated above the scan
+            // (a flat-topped drum's points do not hold a cap fit down, and the run's end is no measured top either)
+            double highest = -std::numeric_limits<double>::infinity();
+            for (const auto& m : mp) highest = std::max(highest, m.y);
+            R.topCutY = std::min(yTop, highest);
+        }
         // the stacks: the first from the whole, the next from what stands above its cap near the axis
         std::vector<MP> rest = mp;
         double bottom = yBottom;
@@ -854,6 +905,13 @@ private:
             rest = above;
         }
         if (R.stacks.empty()) { R.reason = "no profile could be fitted"; return; }
+        if (std::isfinite(R.topCutY)) {
+            // the scan above the cut is not fitted: the top stack ends flat there, its cap not extrapolated into the air
+            for (auto& st : R.stacks) {
+                if (st.cap.present) st.cap.cut = std::min(st.cap.cut, R.topCutY);
+                st.yTop = std::min(st.yTop, R.topCutY);
+            }
+        }
         // the modulation, residuals and departures over the whole
         for (size_t k = 0; k < R.stacks.size(); ++k) fitModulation(R.stacks[k], k + 1 < R.stacks.size() ? &R.stacks[k + 1] : nullptr, mp);
         // a part whose sections are polygons of few sides (a square turret roof) is not uniform about its axis (measured only)
