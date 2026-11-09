@@ -109,6 +109,27 @@ The user asked for it, after reading that streetview-to-3d drops Google's points
 - **Wired into the 3D World build** (`Location3DGaussianSplatService`): after the Street View registration, with the textured twin and the vector lookups, the clay GLB the stations are baked on is replaced by the patched one; the result reports `streetView.seenThrough` and `driveSummary`. `SCRATCHBOX_SEEN_THROUGH=0` off.
 - **The in-app rebuild** (my instance, the world cache off): the chat ran `location_generate_3dgs` without a street vantage, so the world took 16 survey stations and no Street View station: no registration, drive step or removal ran. Not yet seen in the app.
 
+### SHARP one-panorama trial (2026-11-09)
+
+Status: trial only, outside the repo (a scratch script and a scratch Python environment under `~/.cache/scratchbox-sharp-trial`); nothing in the app calls it. The user asked for it after comparing our world with the reference app (streetview-to-3d), whose splats come from SHARP (Apple's single-image-to-Gaussians model) per panorama slice, scaled to a depth reference.
+
+- **What ran:** panorama `3yGYmP_G` (registered pose, moved 1.07 m by the registration), four level views (yaw 0/90/180/270, hfov 110) and one floor view (pitch -90, hfov 100), 640 px, fetched in memory and never written. SHARP on each view (1,179,648 Gaussians a view). In place of the reference's Depth Anything 3, the scale reference is **the scan's depth rendered at the registered pose**: per view, the median scan / SHARP depth ratio per (log depth x horizontal angle) cell, nearest-filled and smoothed, applied to positions and sizes; the floor view per image cell. Gaussians with no scan surface under their pixel (sky, and buildings above the scan's extraction) are dropped.
+- **Result:** 4,387,204 splats in 65 s on this Mac (mps; 11 s a view, 7 s to load the model). About 10 Static Street View fetches a run, three runs: cents.
+- **Fit to the scan** (kept Gaussians, |scaled SHARP depth - scan depth|):
+
+| View | Kept | Scan/SHARP ratio p10 / median / p90 | Median residual raw -> scaled | p90 | Within 0.5 m |
+|---|---|---|---|---|---|
+| level 0 | 853,336 | 0.75 / 1.22 / 2.20 | 1.10 -> 0.31 m | 8.3 m | 54 % |
+| level 90 | 797,361 | 0.89 / 1.42 / 1.71 | 1.29 -> 0.09 m | 4.6 m | 59 % |
+| level 180 | 890,202 | 0.97 / 1.63 / 1.92 | 1.65 -> 0.53 m | 7.6 m | 50 % |
+| level 270 | 983,397 | 0.71 / 1.54 / 2.24 | 1.96 -> 0.83 m | 6.8 m | 45 % |
+| floor | 862,908 | 4.03 / 4.42 / 4.88 | 1.65 -> 0.01 m | 0.04 m | (fitted per cell on a flat surface: says little) |
+
+  SHARP's depth is not one scale off the scan: within a view the ratio spreads 2-3x, so the per-cell field is needed, and it filled only 45-52 % of its cells from data. The long tail (p90 4.5-8 m) is partly real disagreement: the photo's vehicles and trees are not the scan's.
+- **Proof sheet:** `docs/screenshots/da3_rig_registration_2026-11-08/sharp_one_pano_trial.png`: the scan, the trial and the current world (six panoramas + tile stations) from the same four cameras, none at a pose SHARP was given (3 m beside the panorama, 6 m up and down the avenue, 14 m back and 9 m up).
+- **Reading:** near the panorama (3-6 m away) the trial reads as a photograph where the current world reads as flat, torn planes: crosswalk, vehicles, billboards and facades hold together (an independent visual check agreed for rows A-C). Its faults, from the same check: the slices' edges show (a hard diagonal edge on the upper-right building in C, a step in a slab at A's right), a billboard floats in front of the tower behind it in B (its depth is SHARP's, off the scan's), and from above (D) it is streaks and smears, neither clearly better nor worse than the current world's shards and holes. It is one viewpoint: behind vehicles it smears, and the photo's vehicles are baked in as splats (the seen-through and vehicle removals do not apply to them). The current world's panel C is mostly empty on the right: it has no surface there, not a wrong camera.
+- **Licence:** SHARP's code is Apple's sample-code licence, but its **weights are under the Apple Machine Learning Research Model License: research use only, not for a product**. The trial is a measurement of what the approach gives; shipping it needs a model with a usable licence (or our own), and AGENTS.md section 2 would need the user's decision either way.
+
 ## Still open
 
 1. The edge score used here (median distance from scan edges to photo edges) is too loose to judge a pose: it improved under the implausible forced move. The judge's registration or the research report's render-and-match is the measure to use.
