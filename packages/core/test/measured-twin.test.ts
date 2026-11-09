@@ -207,6 +207,12 @@ describe.skipIf(!fs.existsSync(RUN))('the measured twin of a real pipeline K bui
         expect(r.report.piers!.walls).toBeGreaterThan(10);
         expect(r.report.piers!.turnedBands).toBeGreaterThan(0);
         expect(r.report.detail.faces).toBeGreaterThan(100);
+        // the scan's photos corrected first: roof shadow lifted, the photos' seams closer than before
+        expect(r.photometry && 'glb' in r.photometry && fs.existsSync(r.photometry.glb)).toBe(true);
+        const ph = r.photometry as { harmonize?: string; roofShadow?: string };
+        expect(ph.roofShadow).toMatch(/lifted/);
+        const m = /seams ([0-9.]+) -> ([0-9.]+)/.exec(ph.harmonize ?? '');
+        expect(m && Number(m[2]) < Number(m[1])).toBe(true);
     }, 600_000);
 });
 

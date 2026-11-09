@@ -26,6 +26,7 @@ import { preparedKey } from '../pipeline-k/material-sets';
 import type { ModelReadingStore } from '../pipeline-k/model-readings';
 import { REVEAL_DEPTH_PARAMS } from '../reveal-depth';
 import type { NamedBuilding } from '../pipeline-k/facade-reader-brief';
+import { tileRefineTwin } from '../tile-refine-twin';
 import { enuOffset, inferFromSelfOrthos, type InferModels, type InferReport, type StreetViewSource } from './infer';
 
 export const MEASURED_TWIN_VERSION = 'measured-twin/2';
@@ -246,7 +247,7 @@ export function ensureMeasuredTwinBinary(repoRoot = findTileRefineRepoRoot()): P
  * `reliefM` above 0 (and no scanDetailM) rebuilds, purely procedurally, what stands at least that far off the shell: relief maps
  * of the scan on the walls, roofs and slender top in 0.3 m cells, as measured blocks.
  */
-export interface MeasuredTwinOptions { scanDetailM?: number; reliefM?: number; kFree?: boolean; /** K-free, then inferred (infer.ts): the building's window system, symmetry, pier depth, finishes, Street View base, relief. */ infer?: boolean }
+export interface MeasuredTwinOptions { scanDetailM?: number; reliefM?: number; kFree?: boolean; /** K-free, then inferred (infer.ts): the building's window system, symmetry, pier depth, finishes, Street View base, relief. */ infer?: boolean; /** The scan's photo texture corrected before the twin reads it (K's de-light, roof-shadow lift and harmonising, tile-refine-twin.ts). Default: on with infer. */ photometry?: boolean }
 
 /** The generator's report (scratchbox_measured_twin.hpp reportJson). */
 export interface MeasuredTwinReport {
@@ -265,7 +266,8 @@ export interface MeasuredTwinReport {
 }
 
 export interface MeasuredTwinResult {
-    version: string; glb: string; specFile: string; report: MeasuredTwinReport; /** What the infer mode inferred between its two passes. */ infer?: InferReport; records: Omit<KRunRecords, 'planes' | 'windowFit' | 'photos'> & { planes: number; windowPlanes: number; photos: number }; mapsMissing: string[]; ms: number;
+    version: string; glb: string; specFile: string; report: MeasuredTwinReport; /** What the infer mode inferred between its two passes. */ infer?: InferReport;
+    /** The scan's photo texture as corrected before the twin read it, or why not. */ photometry?: PhotometryReport; records: Omit<KRunRecords, 'planes' | 'windowFit' | 'photos'> & { planes: number; windowPlanes: number; photos: number }; mapsMissing: string[]; ms: number;
 }
 
 /**
@@ -297,8 +299,15 @@ export async function buildMeasuredTwin(opts: { runDir: string; cacheRoot: strin
             } catch (e) { reject(new Error(`measured_twin answered no report: ${String(e)}`)); }
         });
     });
-    let inferReport: InferReport | undefined;
+    let inferReport: InferReport | undefined, photometry: PhotometryReport | undefined;
     let extra: string[] = [];
+    if ((options.photometry ?? options.infer) && rec.textured) {
+        try {
+            const fixed = await correctedScanTexture(rec.textured, opts.outDir);
+            photometry = fixed.report;
+            rec = { ...rec, textured: fixed.glb };
+        } catch (err) { photometry = { reason: `the photometry step failed: ${err instanceof Error ? err.message : String(err)}` }; }
+    }
     if (options.infer) {
         // the first pass: the K-free twin, writing each wall's own photo as an orthos folder
         const selfDir = path.join(opts.outDir, 'self_orthos');
@@ -316,8 +325,46 @@ export async function buildMeasuredTwin(opts: { runDir: string; cacheRoot: strin
     fs.writeFileSync(specFile, measuredTwinSpec(rec, { glb, report }, maps, { ...options, kFree: options.infer ? false : options.kFree }) + extra.map(l => l + '\n').join(''));
     const answer = await run(specFile);
     const { planes, windowFit, photos, ...rest } = rec;
-    return { version: MEASURED_TWIN_VERSION, glb, specFile, report: answer, ...(inferReport ? { infer: inferReport } : {}), records: { ...rest, planes: planes.length, windowPlanes: windowFit.filter(e => e.rects?.length).length, photos: Object.keys(photos).length }, mapsMissing: missing, ms: Date.now() - t0 };
+    return { version: MEASURED_TWIN_VERSION, glb, specFile, report: answer, ...(inferReport ? { infer: inferReport } : {}), ...(photometry ? { photometry } : {}), records: { ...rest, planes: planes.length, windowPlanes: windowFit.filter(e => e.rects?.length).length, photos: Object.keys(photos).length }, mapsMissing: missing, ms: Date.now() - t0 };
 }
+
+/** What the photometry step did to the scan's photos (tile-refine-twin.ts's reports, summarised). */
+export type PhotometryReport = { glb: string; reused: boolean; groundY: number; photos: number; roofShadow?: string; harmonize?: string; ms: number } | { reason: string };
+
+/**
+ * The scan's photo texture corrected with pipeline K's steps (tile-refine-twin.ts) but not its de-light curve: the cast
+ * shadow on roofs and terraces lifted by a sun fitted from the mesh, then every photo's gain matched per side and height
+ * band and the seams between photos levelled.
+ * Only gains and smooth fields: no texel is moved or drawn (photo-inferred). The ground for the height bands is the scan's
+ * lowest point. Kept beside the twin (scan_photometry.glb) and reused while the scan is unchanged.
+ */
+export async function correctedScanTexture(textured: string, outDir: string): Promise<{ glb: string; report: Extract<PhotometryReport, { glb: string }> }> {
+    const t0 = Date.now();
+    const out = path.join(outDir, 'scan_photometry.glb'), stamp = path.join(outDir, 'scan_photometry.json');
+    const st = fs.statSync(textured), key = `${PHOTOMETRY_VERSION} ${textured} ${st.size} ${st.mtimeMs}`;
+    const kept = readJson<Extract<PhotometryReport, { glb: string }> & { key: string }>(stamp);
+    if (kept && kept.key === key && fs.existsSync(out)) return { glb: out, report: { ...kept, reused: true, ms: Date.now() - t0 } };
+    const bytes = fs.readFileSync(textured);
+    const jl = bytes.readUInt32LE(12), json = JSON.parse(bytes.subarray(20, 20 + jl).toString('utf8')) as { accessors: Array<{ min?: number[] }>; meshes: Array<{ primitives: Array<{ attributes: { POSITION: number } }> }>; images?: unknown[] };
+    let groundY = Infinity;
+    for (const m of json.meshes) for (const p of m.primitives) { const a = json.accessors[p.attributes.POSITION]; if (a.min) groundY = Math.min(groundY, a.min[1]); }
+    if (!Number.isFinite(groundY)) throw new Error('the textured scan has no position bounds');
+    // no de-light curve (delight: false): it lifts every dark, the windows' glass with the shadows, and on the ESB the twin
+    // read washed-out grey (colour difference from the scan 4.1-4.4 -> 9.4-10.7); the roof shadow lift and the seam levelling
+    // correct what is wrong without flattening what is right
+    const twin = await tileRefineTwin(bytes, 'measured-twin-photometry', { harmonize: { groundY }, roofShadow: {}, delight: false });
+    fs.writeFileSync(out, twin.glb);
+    const h = twin.harmonize, r = twin.roofShadow;
+    const report = {
+        glb: out, reused: false, groundY, photos: json.images?.length ?? 0,
+        ...(r ? { roofShadow: r.applied ? `${r.audit ? `${Math.round(r.audit.lifted)} m2` : `${r.texelsLifted} texels`} of roof and terrace shadow lifted on ${r.photosChanged} photos` : `not lifted (${r.why})` } : {}),
+        ...(h ? { harmonize: h.kept ? `${h.images} photos matched in ${h.groups} groups, seams ${h.seams.before.toFixed(3)} -> ${h.seams.after.toFixed(3)}` : `not kept (${h.why})` } : {}),
+        ms: Date.now() - t0
+    };
+    fs.writeFileSync(stamp, JSON.stringify({ ...report, key }));
+    return { glb: out, report };
+}
+const PHOTOMETRY_VERSION = 'measured-twin-photometry/2';
 
 /**
  * Registered Street View plates for the run's place (StreetViewPoseRegistrar's plates.json under the repository's
