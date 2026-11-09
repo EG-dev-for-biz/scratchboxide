@@ -25,8 +25,11 @@
  * one chunk exactly as a job task does, the instance's workspace put back as the image left it first, so a reused warm
  * instance builds from nothing as a new one would. The answer's headers go at once and a newline every 20 s, the result
  * last (`{ ok, ms }`), and only once the caches are mirrored, so with request-based billing nothing runs unbilled after it.
- * One chunk an instance at a time (the service's concurrency 1; a second request is answered 429). A Cloud Run job task took
- * 90 s to start; a service scales from zero and keeps its instances warm between requests at no cost.
+ * One chunk an instance at a time (the service's concurrency 1; a second request is answered 429), and by default one chunk
+ * an instance at all: the worker exits once it has answered (SCRATCHBOX_KD_SERVE_ONCE=0 keeps it), so every chunk builds in
+ * a new process on a clean instance, as a job task does. A reused instance gave the same bytes but built the largest
+ * building about twice as slowly (its native steps 2x, Penn 2026-11-09), while a new service instance started in about 8 s
+ * (a Cloud Run job task took 90 s).
  */
 
 import * as fs from 'fs';
@@ -373,7 +376,10 @@ async function serve(root: string): Promise<void> {
                     for (const [k, v] of saved) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
                     clearInterval(beat);
                     busy = false;
-                    res.end(JSON.stringify({ ok, ms: Date.now() - t0, ...(error ? { error } : {}) }));
+                    res.end(JSON.stringify({ ok, ms: Date.now() - t0, ...(error ? { error } : {}) }), () => {
+                        // one chunk an instance: Cloud Run starts a clean one for the next
+                        if (process.env.SCRATCHBOX_KD_SERVE_ONCE?.trim() !== '0') setTimeout(() => process.exit(0), 200).unref();
+                    });
                 }
             })();
         });

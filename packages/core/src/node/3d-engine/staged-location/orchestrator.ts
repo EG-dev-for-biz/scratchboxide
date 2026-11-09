@@ -224,7 +224,7 @@ import { VIEW_RELIGHT_VERSION, viewRelightEnvParams } from './pipeline-k/view-re
 import { ROOF_SHADOW_VERSION, roofShadowAuditPng } from './pipeline-k/roof-shadow';
 import { FACADE_READER_MODEL, FACADE_READER_MODEL_KEY, FACADE_READER_PARAMS, FACADE_READER_VERSION, facadeReplyUsable, mergeReadings, readPlanes, type FacadeAsk } from './pipeline-k/facade-reader';
 import { readOnTwin, TWIN_READER_VERSION } from './pipeline-k/twin-reader';
-import { describeWindowArrays, inferWindowArrays, WINDOW_ARRAY_VERSION } from './pipeline-k/window-array';
+import { describeWindowArrays, inferWindowArrays, inferWindowArraysOnThreads, WINDOW_ARRAY_VERSION, type ArrayOutput } from './pipeline-k/window-array';
 import { BUILDING_SYSTEM_VERSION, readBuildingSystem, type BuildingSystem } from './pipeline-k/building-system';
 import { CHOICE_SPAN_M, candidateSheetPng, choicePrompt, chooseWithMemory, MATERIAL_CHOICE_VERSION, parseChoices, type ChoiceRow, type SetChoice } from './pipeline-k/material-choice';
 import { fileReadingStore, MODEL_READINGS_DIR, modelReadingsDir, readingKey, type ModelReadingStore } from './pipeline-k/model-readings';
@@ -4636,7 +4636,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                         }
                                     } else notes.write('pipeline_k_building_system', { version: BUILDING_SYSTEM_VERSION, skipped: geometryAsk ? 'SCRATCHBOX_K_BUILDING_SYSTEM=0' : 'no vision model, or the facade reader off' });
                                     // the structure's roof line bounds the array's step into an unreached band at a photo's top
-                                    const wa = await timed('windowArray', async () => inferWindowArrays(k.orthosDir, wf.fit, undefined, { ...(structure ? { envelopeTopY: structure.groundY + structure.heightM } : {}), ...(system ? { system } : {}) }));
+                                    // each facade's first pass on the worker threads (the same bytes; 12-24 s on this thread for Penn's largest buildings)
+                                    const arrayOpts = { ...(structure ? { envelopeTopY: structure.groundY + structure.heightM } : {}), ...(system ? { system } : {}) };
+                                    const wa = await timed('windowArray', async () => onThreads
+                                        ? inferWindowArraysOnThreads(k.orthosDir, wf.fit, jobs => runRemeshJobs<ArrayOutput | null>(jobs.map(job => ({ kind: 'windowArrayFacade' as const, job })), { threads: cpuShare ? Math.min(cpuShare.threads, remeshWorkerThreads()) : remeshWorkerThreads(), signal: io.signal }).then(r => r.map(x => x ?? undefined)), undefined, arrayOpts)
+                                        : inferWindowArrays(k.orthosDir, wf.fit, undefined, arrayOpts));
                                     notes.write('pipeline_k_window_array', { ...wa, on: "the window fit, with the facade reader's openings merged in" });
                                     notes.note(PROVENANCE.photoInferred, describeWindowArrays(wa));
                                 } catch (err) {
