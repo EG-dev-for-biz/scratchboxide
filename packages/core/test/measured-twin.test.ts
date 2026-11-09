@@ -228,13 +228,15 @@ describe.skipIf(!fs.existsSync(RUN))('the hybrid twin of a real staged run (ESB)
         expect(h.array.windows).toBeGreaterThan(h.windowFit.windows);
         expect(fs.existsSync(path.join(outDir, 'hybrid', 'relief_orthos'))).toBe(true);
         const spec = fs.readFileSync(r.specFile, 'utf8').split('\n');
-        for (const l of ['param selfFill 1', 'param orthoBlend 0.6', 'param scanDetailStepM 0.6', 'param atlasJpeg 1']) expect(spec).toContain(l);
+        for (const l of ['param selfFill 1', 'param slenderTex 1', 'param orthoBlend 0.6', 'param scanDetailStepM 0.6', 'param atlasJpeg 1']) expect(spec).toContain(l);
         expect(spec.some(l => l.startsWith('win '))).toBe(true);
         // no model: the window fit and arrays alone (with the reader and system, cold, 4,418 on the twin)
         expect(r.report.windows.placed).toBeGreaterThan(1000);
         // every wall textured: K's photo blended in where one stands on it, its own scan photo elsewhere
         expect(r.report.piers!.orthoTexels).toBeGreaterThan(1_000_000);
         expect(r.report.piers!.selfFilled).toBeGreaterThan(0);
+        // the mast's panels carry the scan's photo, not one colour each
+        expect(r.report.piers!.slenderTexels).toBeGreaterThan(100_000);
         expect(r.report.detail.faces).toBeGreaterThan(100);
         // the scan kept only where it steps out (ornament), the lips still drawn
         expect(r.report.scanDetail.pieces).toBeGreaterThan(0);
