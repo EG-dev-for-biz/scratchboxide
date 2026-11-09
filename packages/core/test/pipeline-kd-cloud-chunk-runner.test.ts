@@ -94,7 +94,23 @@ class FakeJobs implements CloudRunJobs {
     async finished(name: string) { this.finishedCalls.push(name); }
 }
 
-function setup(opts: { progress?: string[]; fail?: Error; hang?: boolean; image?: string; withMirror?: boolean; env?: NodeJS.ProcessEnv } = {}) {
+/** A build whose ground file names the band its steps ask for: the first band (models off) as fakeBuild, then _B, then _C. */
+function bandBuild(cache: StageCache, failBand?: string) {
+    const base = fakeBuild(cache);
+    return async (spec: KdChunkJobSpec, ctx: { reportProgress?: (m: string, f?: number) => void }) => {
+        const out = await base(spec, ctx);
+        const steps = spec.request.steps ?? {};
+        const tag = steps.models === false ? '' : steps['twin.materials'] === false ? '_B' : '_C';
+        if (!tag) return out;
+        if (failBand && tag === `_${failBand}`) throw new Error(`band ${failBand}'s facade reader timed out`);
+        fs.writeFileSync(path.join(cache.modelsDir, `ground_c7${tag}.glb`), `glTF-ground${tag}`);
+        const layers = (out.result.artifact as any).data.stagedBuild.layers as any[];
+        layers[0] = { ...layers[0], url: `/models/ground_c7${tag}.glb`, textured: undefined };
+        return out;
+    };
+}
+
+function setup(opts: { progress?: string[]; fail?: Error; hang?: boolean; image?: string; withMirror?: boolean; env?: NodeJS.ProcessEnv; build?: (cache: StageCache) => ReturnType<typeof fakeBuild> } = {}) {
     const bucketDir = tmp('bucket'), laptopRoot = tmp('laptop'), jobRoot = tmp('job');
     const laptopStats = path.join(laptopRoot, 'build', 'texture-library', 'stats'), jobStats = path.join(jobRoot, 'build', 'texture-library', 'stats');
     const bucket = new DirectoryCloudBucket(bucketDir);
@@ -103,10 +119,11 @@ function setup(opts: { progress?: string[]; fail?: Error; hang?: boolean; image?
     const jobCache = new StageCache({ workspaceRoot: jobRoot });
     const jobs = new FakeJobs(opts.image ?? `us-central1-docker.pkg.dev/scoutscan/depthbox3-repo/kd-chunk-job:${SHA}`, async env => {
         const where = parseKdJobLocation(env.KD_JOB);
-        return runKdChunkJob({ bucket, prefix: where.prefix, cache: jobCache, build: fakeBuild(jobCache, opts), flushMs: 5, log: () => undefined, libraryStatsDir: jobStats, ...(mirror ? { mirror } : {}) });
+        return runKdChunkJob({ bucket, prefix: where.prefix, cache: jobCache, build: opts.build ? opts.build(jobCache) : fakeBuild(jobCache, opts), flushMs: 5, log: () => undefined, libraryStatsDir: jobStats, ...(mirror ? { mirror } : {}) });
     }, opts.hang);
     const config = { ...cloudChunkConfig({}), bucket: 'scoutscan-kd-jobs', pollMs: 5 };
-    const runChunk = createCloudChunkRunner({ cache: laptop, bucket, jobs, config, head: () => SHA, newRunId: () => 'a1b2c3d4', env: opts.env ?? {}, log: () => undefined, libraryStatsDir: laptopStats });
+    let ids = 0;
+    const runChunk = createCloudChunkRunner({ cache: laptop, bucket, jobs, config, head: () => SHA, newRunId: () => (ids++ === 0 ? 'a1b2c3d4' : `b0000${String(ids).padStart(3, '0')}`), env: opts.env ?? {}, log: () => undefined, libraryStatsDir: laptopStats });
     return { bucket, bucketDir, laptop, jobCache, jobs, runChunk, mirror, laptopRoot, jobRoot, laptopStats, jobStats };
 }
 
@@ -142,6 +159,51 @@ describe('pipeline K-D cloud chunk runner', () => {
         expect(seen.at(-1)).toMatch(/^built in the cloud in 600 s \(about \$0\.12\)/);
         // nothing left in the stage cache's working dirs
         expect(fs.readdirSync(s.laptop.dir).filter(n => n.startsWith('.kd-cloud-'))).toEqual([]);
+    });
+
+    it("builds a streamed chunk's bands B and C in the same task after the first, hands each on as it lands, and lets the task go after the last", async () => {
+        const s = setup({ build: c => bandBuild(c) });
+        const got: Array<{ name: string; ground: string }> = [], failed: string[] = [];
+        let settled!: () => void;
+        const done = new Promise<void>(r => { settled = r; });
+        const specs = [{ name: 'B', steps: { 'twin.materials': false, 'twin.facadeUpscale': false } }, { name: 'C', steps: {} }];
+        const out = await s.runChunk({ ...request(), steps: { models: false, 'twin.materials': false, 'twin.facadeUpscale': false } }, {
+            bands: {
+                specs,
+                onBand: async (name, o) => { got.push({ name, ground: ((o.result.artifact as any).data.stagedBuild.layers[0] as { url: string }).url }); },
+                onFailed: (name, why) => failed.push(`${name}: ${why}`),
+                onSettled: () => settled()
+            }
+        });
+        // the first band back at once, as before; the task not yet let go
+        expect(((out.result.artifact as any).data.stagedBuild.layers[0] as { url: string }).url).toBe('/models/ground_c7.glb');
+        await done;
+        expect(failed).toEqual([]);
+        expect(got).toEqual([{ name: 'B', ground: '/models/ground_c7_B.glb' }, { name: 'C', ground: '/models/ground_c7_C.glb' }]);
+        // each band's layers in this workspace, its outcome under band-<name>/, its own run id
+        expect(fs.readFileSync(path.join(s.laptop.modelsDir, 'ground_c7_B.glb'), 'utf8')).toBe('glTF-ground_B');
+        expect(fs.readFileSync(path.join(s.laptop.modelsDir, 'ground_c7_C.glb'), 'utf8')).toBe('glTF-ground_C');
+        const spec = JSON.parse(fs.readFileSync(path.join(s.bucketDir, 'kd-jobs', 'c527da43', '7', 'request.json'), 'utf8'));
+        expect(spec.bands.map((b: { name: string; runId: string }) => b.name)).toEqual(['B', 'C']);
+        expect(new Set([spec.runId, ...spec.bands.map((b: { runId: string }) => b.runId)]).size).toBe(3);
+        expect(fs.existsSync(path.join(s.bucketDir, 'kd-jobs', 'c527da43', '7', 'band-C', 'outcome.json'))).toBe(true);
+        // the task let go once, after its last band
+        expect(s.jobs.finishedCalls).toHaveLength(1);
+        expect(fs.readdirSync(s.laptop.dir).filter(n => /^\.kd-(cloud|band|progress)-/.test(n))).toEqual([]);
+    });
+
+    it("leaves a streamed chunk at its band B when its band C fails, and says why", async () => {
+        const s = setup({ build: c => bandBuild(c, 'C') });
+        const got: string[] = [], failed: string[] = [];
+        let settled!: () => void;
+        const done = new Promise<void>(r => { settled = r; });
+        await s.runChunk({ ...request(), steps: { models: false } }, {
+            bands: { specs: [{ name: 'B', steps: { 'twin.materials': false } }, { name: 'C', steps: {} }], onBand: async n => { got.push(n); }, onFailed: (n, why) => failed.push(`${n}: ${why}`), onSettled: () => settled() }
+        });
+        await done;
+        expect({ got, failed }).toEqual({ got: ['B'], failed: ["C: band C's facade reader timed out"] });
+        expect(JSON.parse(fs.readFileSync(path.join(s.bucketDir, 'kd-jobs', 'c527da43', '7', 'band-C', 'error.json'), 'utf8')).message).toBe("band C's facade reader timed out");
+        expect(s.jobs.finishedCalls).toHaveLength(1);
     });
 
     it('hands the jobs the measured texture library once a district, and a job keeps what it already measured', async () => {

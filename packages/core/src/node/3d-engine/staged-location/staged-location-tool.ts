@@ -350,7 +350,7 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
         // pipeline K-D: each chunk of a chunked district is a build of its own, on its own worker thread, or with
         // SCRATCHBOX_KD_CHUNK_RUNNER=cloud one Cloud Run job each (cloud-chunk-runner.ts); the district's leaf tiles are
         // fetched ahead of its chunks into the shared leaf cache only when the chunks build here
-        ...(kdChunkRunner() === 'cloud' ? { runChunk: cloudRunChunk(cache) } : {
+        ...(kdChunkRunner() === 'cloud' ? { runChunk: cloudRunChunk(cache), chunkBands: true as const } : {
             prefetchTiles: (req: Parameters<NonNullable<StagedLocationDeps['prefetchTiles']>>[0]) => prefetchGoogle3DTileLeaves({ lat: req.lat, lng: req.lng, ...(req.elevation !== undefined ? { elevation: req.elevation } : {}) }, req.radiusM, { ...(req.signal ? { signal: req.signal } : {}), ...(req.onProgress ? { onProgress: req.onProgress } : {}) }),
             runChunk: (request: StagedLocationRequest, o: { signal?: AbortSignal; onProgress?: (message: string) => void }) => runStagedLocationOffThread(request, workspaceRoot, undefined, { ...(o.signal ? { signal: o.signal } : {}), ...(o.onProgress ? { reportProgress: (m: string) => o.onProgress!(m) } : {}) })
         }),

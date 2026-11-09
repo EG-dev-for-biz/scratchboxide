@@ -54,7 +54,16 @@ export interface KdChunkJobSpec {
     cut?: KdChunkCutSpec;
     /** The commit the laptop runs, for the job's record. */
     commit?: string;
+    /**
+     * The district's later bands (district-chunks.ts kdBandSteps), built by the same task after the first, each in the
+     * workspace the one before left, so only the stages their switches change run again: each band's outcome and layers go
+     * under `<prefix>/band-<name>/` (kdChunkJobKeys) and its progress line is KD_CHUNK_BAND_LINE.
+     */
+    bands?: KdChunkBandSpec[];
 }
+
+/** One later band of a chunk: its name (B, C, ...), the run id it builds under and its steps. */
+export interface KdChunkBandSpec { name: string; runId: string; steps: Record<string, boolean> }
 
 /** What the job writes when the build ends (outcome.json): the outcome and the workspace it was built in. */
 export interface KdChunkJobOutcome {
@@ -288,7 +297,7 @@ export function cloudChunkConfig(env: NodeJS.ProcessEnv = process.env): CloudChu
  * builds every chunk from nothing, as a fresh district would; SCRATCHBOX_CACHE_MIRROR=off keeps its caches out of the
  * bucket). Nothing else of this machine's environment reaches a job: the job's own settings are deploy.sh's.
  */
-export const KD_JOB_FORWARDED_ENV = ['SCRATCHBOX_CACHE_RESTORE', 'SCRATCHBOX_CACHE_MIRROR'] as const;
+export const KD_JOB_FORWARDED_ENV = ['SCRATCHBOX_CACHE_RESTORE', 'SCRATCHBOX_CACHE_MIRROR', 'SCRATCHBOX_MODEL_POOL_URL'] as const;
 
 export function forwardedJobEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
     const out: Record<string, string> = {};
@@ -298,6 +307,13 @@ export function forwardedJobEnv(env: NodeJS.ProcessEnv = process.env): Record<st
 
 /** The progress line a job writes once its outcome is in the bucket (kd-chunk-job.ts), before it mirrors its caches. */
 export const KD_CHUNK_BUILT_LINE = /^chunk built \(\w+\) in \d+ s$/;
+/** How long the runner waits, after a chunk's last band, for its task to say it is done (it mirrors its caches) before letting it go. */
+export const KD_TASK_DONE_WAIT_MS = 15 * 60_000;
+/** A later band's outcome is in the bucket (`<prefix>/band-<name>/outcome.json`): the band's name is the first group. */
+export const KD_CHUNK_BAND_LINE = /^chunk band ([A-Z]) built \(\w+\) in \d+ s$/;
+/** A later band failed: the chunk stays at the band before it (the first group names the band). */
+export const KD_CHUNK_BAND_FAILED_LINE = /^chunk band ([A-Z]) failed: /;
+
 
 /** The image tag's commit (`…/kd-chunk-job:<sha>`, or `…@sha256:` which names none). */
 export function imageCommit(image: string): string | undefined {
@@ -353,7 +369,20 @@ export interface CloudChunkRunnerOptions {
 }
 
 /** `atOnce`: the chunks the orchestrator builds at the same time (default chunkParallel()), for each one's share of the model-call budget. */
-export type RunChunk = (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void; atOnce?: number; cut?: KdChunkCutSpec; /** One of the district's largest chunks: built on a fast VM when one is free (HybridJobs). */ fast?: boolean }) => Promise<StagedLocationOutcome>;
+export type RunChunk = (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void; atOnce?: number; cut?: KdChunkCutSpec; /** One of the district's largest chunks: built on a fast VM when one is free (HybridJobs). */ fast?: boolean; bands?: ChunkBands }) => Promise<StagedLocationOutcome>;
+
+/**
+ * The later bands a chunk builds after the first (district-chunks.ts kdBandSteps), and where their outcomes go. The run
+ * resolves with the first band's outcome as before; each later band's outcome, its layers already downloaded, is handed to
+ * `onBand` as it lands, a band that fails (or never came: the job ended first) to `onFailed`, and `onSettled` is called
+ * once, after every band, whatever happened. The task is let go (a fast VM suspended) only then.
+ */
+export interface ChunkBands {
+    specs: Array<{ name: string; steps: Record<string, boolean> }>;
+    onBand: (name: string, outcome: StagedLocationOutcome) => Promise<void>;
+    onFailed: (name: string, reason: string) => void;
+    onSettled: () => void;
+}
 
 /** The cloud `runChunk`. The image check runs once, on the first chunk; every chunk fails with its reason when it fails. */
 export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
@@ -412,52 +441,82 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
         const prefix = kdChunkJobPrefix(request);
         await libraryStatsSent(request.chunk!.of);
         const keys = kdChunkJobKeys(prefix);
-        const runId = built.get(prefix)?.runId ?? (o.newRunId ?? (() => crypto.randomBytes(4).toString('hex')))();
+        const newRunId = o.newRunId ?? (() => crypto.randomBytes(4).toString('hex'));
+        const runId = built.get(prefix)?.runId ?? newRunId();
+        const bandSpecs: KdChunkBandSpec[] | undefined = opts.bands?.specs.length ? opts.bands.specs.map(b => ({ name: b.name, runId: newRunId(), steps: b.steps })) : undefined;
         fs.mkdirSync(o.cache.dir, { recursive: true });
         const work = fs.mkdtempSync(path.join(o.cache.dir, '.kd-cloud-'));
+        // the chunk's progress lines, read on from where the first band left them by the follower of the later bands
+        const tracker = { dir: fs.mkdtempSync(path.join(o.cache.dir, '.kd-progress-')), seen: 0, builtAtMs: undefined as number | undefined, bandLines: [] as Array<{ name: string; ok: boolean; line: string }> };
+        const readProgress = async () => {
+            try {
+                const file = path.join(tracker.dir, 'progress.jsonl');
+                if (!(await o.bucket.download(keys.progress, file))) return;
+                const r = newProgressLines(fs.readFileSync(file, 'utf8'), tracker.seen);
+                tracker.seen = r.seen;
+                for (const l of r.lines) {
+                    progress(l);
+                    // the outcome is in the bucket: the chunk is read now, while the job mirrors its caches
+                    if (tracker.builtAtMs === undefined && KD_CHUNK_BUILT_LINE.test(l)) tracker.builtAtMs = Date.now();
+                    const ok = KD_CHUNK_BAND_LINE.exec(l), bad = KD_CHUNK_BAND_FAILED_LINE.exec(l);
+                    if (ok) tracker.bandLines.push({ name: ok[1], ok: true, line: l });
+                    else if (bad) tracker.bandLines.push({ name: bad[1], ok: false, line: l });
+                }
+            } catch { /* the next poll reads it */ }
+        };
+        const tick = Math.min(config.progressPollMs ?? 2_000, config.pollMs);
+        // a band's outcome and its layers into this workspace (the first band's and every later one's)
+        const fetchOutcome = async (k: ReturnType<typeof kdChunkJobKeys>, short: string | undefined, record: Record<string, unknown>, runIdOf: string, dir: string): Promise<{ outcome: StagedLocationOutcome; bytes: number; downloadMs: number; job: KdChunkJobOutcome }> => {
+            const outFile = path.join(dir, 'outcome.json');
+            if (!(await download(k.outcome, outFile, signal))) throw new Error(`the cloud chunk job ${short} ended without its outcome (${k.outcome})`);
+            const job = JSON.parse(fs.readFileSync(outFile, 'utf8')) as KdChunkJobOutcome;
+            if (job.schema !== KD_CHUNK_JOB_SCHEMA || !job.outcome) throw new Error(`the cloud chunk job ${short} wrote an outcome this runner cannot read`);
+            const outcome = localiseJobPaths(job.outcome, job, { root: o.cache.workspaceRoot, modelsDir: o.cache.modelsDir, cacheDir: o.cache.dir });
+            fs.mkdirSync(o.cache.modelsDir, { recursive: true });
+            let bytes = 0;
+            const t0 = Date.now();
+            for (const name of kdChunkLayerFiles(outcome)) {
+                const target = path.join(o.cache.modelsDir, name), tmp = path.join(dir, `model-${name}`);
+                if (!(await download(k.model(name), tmp, signal))) throw new Error(`the cloud chunk job ${short} did not upload its layer ${name}`);
+                bytes += fs.statSync(tmp).size;
+                fs.renameSync(tmp, target);
+            }
+            const downloadMs = Date.now() - t0;
+            await downloadRunRecord(o, k, runIdOf, { ...record, runId: runIdOf, buildMs: job.ms, downloadedBytes: bytes, downloadMs, ...(job.cut ? { cut: job.cut } : {}) });
+            return { outcome, bytes, downloadMs, job };
+        };
+        let following = false;
         try {
             // a chunk whose job already built it (only its download failed) is downloaded again, never built again
             const launch = async (): Promise<{ execution: string; state: CloudExecution }> => {
                 // a chunk built again (the orchestrator's retry) starts from no objects of the earlier attempt
                 for (const obj of await o.bucket.list(`${prefix}/`)) await o.bucket.remove(obj.key);
-                const spec: KdChunkJobSpec = { schema: KD_CHUNK_JOB_SCHEMA, runId, request, ...(opts.cut ? { cut: opts.cut } : {}), ...(imageCommit(image) ? { commit: imageCommit(image) } : {}) };
+                const spec: KdChunkJobSpec = { schema: KD_CHUNK_JOB_SCHEMA, runId, request, ...(opts.cut ? { cut: opts.cut } : {}), ...(imageCommit(image) ? { commit: imageCommit(image) } : {}), ...(bandSpecs ? { bands: bandSpecs } : {}) };
                 const specFile = path.join(work, 'request.json');
                 fs.writeFileSync(specFile, JSON.stringify(spec));
                 await o.bucket.putFile(keys.request, specFile, { contentType: 'application/json' });
-                // its share of the project's model calls: one of the chunks at once and the centre beside them
+                // its share of the project's model calls: one of the chunks at once and the centre beside them; with the district
+                // model pool (SCRATCHBOX_MODEL_POOL_URL, model-call-pool.ts) every task takes its turns from the district's one budget
+                const pooled = !!env.SCRATCHBOX_MODEL_POOL_URL?.trim();
                 const shares = (opts.atOnce ?? chunkParallel(undefined, undefined, env)) + 1;
-                const budget = modelCallShareEnv(modelCallLimitsFromEnv(env), shares);
+                const budget: Record<string, string> = pooled ? { SCRATCHBOX_MODEL_POOL_DISTRICT: request.chunk!.of } : modelCallShareEnv(modelCallLimitsFromEnv(env), shares);
                 const execution = await o.jobs.run({ KD_JOB: `gs://${config.bucket}/${prefix}`, ...forwardedJobEnv(env), ...budget, ...(opts.fast ? { [KD_FAST_ENV]: '1' } : {}) });
                 const short = execution.split('/').pop();
                 const kept = Object.entries(budget).map(([k, v]) => `${k}=${v}`).join(' ');
-                progress(`started in the cloud (${short}, run ${runId})${kept ? `, model calls kept to 1/${shares} of the budget (${kept})` : ''}`);
+                progress(`started in the cloud (${short}, run ${runId})${pooled ? ', model calls from the district model pool' : kept ? `, model calls kept to 1/${shares} of the budget (${kept})` : ''}`);
                 log(`[kd-cloud] chunk ${request.chunk!.index}: execution ${execution}, run ${runId}`);
 
-                let seen = 0, state: CloudExecution | undefined, builtAtMs: number | undefined;
-                const progressFile = path.join(work, 'progress.jsonl');
-                const readProgress = async () => {
-                    try {
-                        if (!(await o.bucket.download(keys.progress, progressFile))) return;
-                        const r = newProgressLines(fs.readFileSync(progressFile, 'utf8'), seen);
-                        seen = r.seen;
-                        for (const l of r.lines) {
-                            progress(l);
-                            // the outcome is in the bucket: the chunk is read now, while the job mirrors its caches
-                            if (builtAtMs === undefined && KD_CHUNK_BUILT_LINE.test(l)) builtAtMs = Date.now();
-                        }
-                    } catch { /* the next poll reads it */ }
-                };
+                let state: CloudExecution | undefined;
                 const cancel = () => o.jobs.cancel(execution).catch(e => log(`[kd-cloud] cancelling ${execution} failed: ${e instanceof Error ? e.message : String(e)}`));
                 try {
                     // a poll that fails is asked again (a moment's timeout must not fail a job that is still building); after
                     // pollMisses in a row the chunk fails, its execution cancelled so a retry does not run beside it
                     let misses = 0, lastGet = Date.now();
-                    const tick = Math.min(config.progressPollMs ?? 2_000, config.pollMs);
                     while (true) {
                         await sleep(tick, signal);
                         await readProgress();
                         // the state every pollMs, or at once when the outcome is in (its start time is the record's)
-                        if (builtAtMs === undefined && Date.now() - lastGet < config.pollMs) continue;
+                        if (tracker.builtAtMs === undefined && Date.now() - lastGet < config.pollMs) continue;
                         lastGet = Date.now();
                         try {
                             state = await o.jobs.get(execution);
@@ -469,9 +528,10 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
                             continue;
                         }
                         if (state.done) break;
-                        if (builtAtMs !== undefined) { state = { ...state, done: true, succeeded: true, endMs: builtAtMs }; break; }
+                        if (tracker.builtAtMs !== undefined) { state = { ...state, done: true, succeeded: true, endMs: tracker.builtAtMs }; break; }
                     }
-                    await o.jobs.finished?.(execution).catch(e => log(`[kd-cloud] letting ${short} go failed: ${e instanceof Error ? e.message : String(e)}`));
+                    // with later bands to come the task is let go once they are in (the follower below)
+                    if (!bandSpecs) await o.jobs.finished?.(execution).catch(e => log(`[kd-cloud] letting ${short} go failed: ${e instanceof Error ? e.message : String(e)}`));
                 } catch (err) {
                     if (signal?.aborted) {
                         await cancel();
@@ -499,26 +559,67 @@ export function createCloudChunkRunner(o: CloudChunkRunnerOptions): RunChunk {
             }
 
             built.set(prefix, { execution, runId, state });
-            const outFile = path.join(work, 'outcome.json');
-            if (!(await download(keys.outcome, outFile, signal))) throw new Error(`the cloud chunk job ${short} ended without its outcome (${keys.outcome})`);
-            const job = JSON.parse(fs.readFileSync(outFile, 'utf8')) as KdChunkJobOutcome;
-            if (job.schema !== KD_CHUNK_JOB_SCHEMA || !job.outcome) throw new Error(`the cloud chunk job ${short} wrote an outcome this runner cannot read`);
-            const outcome = localiseJobPaths(job.outcome, job, { root: o.cache.workspaceRoot, modelsDir: o.cache.modelsDir, cacheDir: o.cache.dir });
-            fs.mkdirSync(o.cache.modelsDir, { recursive: true });
-            let bytes = 0;
-            const t0 = Date.now();
-            for (const name of kdChunkLayerFiles(outcome)) {
-                const target = path.join(o.cache.modelsDir, name), tmp = path.join(work, `model-${name}`);
-                if (!(await download(keys.model(name), tmp, signal))) throw new Error(`the cloud chunk job ${short} did not upload its layer ${name}`);
-                bytes += fs.statSync(tmp).size;
-                fs.renameSync(tmp, target);
+            const got = await fetchOutcome(keys, short, record, runId, work);
+            progress(`built in the cloud in ${seconds !== undefined ? `${Math.round(seconds)} s` : 'an unknown time'}${cost !== undefined ? ` (about $${cost.toFixed(2)})` : ''}, ${(got.bytes / 1e6).toFixed(0)} MB of layers downloaded in ${(got.downloadMs / 1000).toFixed(1)} s${got.job.cut ? ', cut and compacted by the job' : ''}`);
+            // the later bands, read as their lines come; the first band's outcome goes back now
+            if (bandSpecs && opts.bands && !earlier) {
+                following = true;
+                const bands = opts.bands;
+                void (async () => {
+                    const pending = new Set(bandSpecs.map(b => b.name));
+                    const dir = fs.mkdtempSync(path.join(o.cache.dir, '.kd-band-'));
+                    try {
+                        let lastGet = Date.now();
+                        while (pending.size) {
+                            if (signal?.aborted) { for (const n of pending) bands.onFailed(n, 'the build was stopped'); return; }
+                            await sleep(tick, signal).catch(() => undefined);
+                            await readProgress();
+                            for (const ev of tracker.bandLines.splice(0)) {
+                                if (!pending.has(ev.name)) continue;
+                                pending.delete(ev.name);
+                                if (!ev.ok) { bands.onFailed(ev.name, ev.line.replace(/^chunk band [A-Z] failed: /, '')); for (const n of pending) bands.onFailed(n, `band ${ev.name} failed before it`); pending.clear(); break; }
+                                const spec = bandSpecs.find(b => b.name === ev.name)!;
+                                try {
+                                    const b = await fetchOutcome(kdChunkJobKeys(`${prefix}/band-${ev.name}`), short, { ...record, band: ev.name }, spec.runId, dir);
+                                    progress(`band ${ev.name}: ${(b.bytes / 1e6).toFixed(0)} MB of layers downloaded in ${(b.downloadMs / 1000).toFixed(1)} s`);
+                                    await bands.onBand(ev.name, b.outcome);
+                                } catch (err) {
+                                    bands.onFailed(ev.name, err instanceof Error ? err.message : String(err));
+                                }
+                            }
+                            if (pending.size && Date.now() - lastGet >= config.pollMs) {
+                                lastGet = Date.now();
+                                const st = await o.jobs.get(execution).catch(() => undefined);
+                                // the task ended: read its last lines once more, then whatever never came failed
+                                if (st?.done && !st.succeeded) {
+                                    await readProgress();
+                                    if (!tracker.bandLines.length) { for (const n of pending) bands.onFailed(n, `the task ended before band ${n} (${st.message ?? 'no message'})`); pending.clear(); }
+                                }
+                            }
+                        }
+                    } finally {
+                        // the task mirrors its caches (the model readings among them) after its last band: it is let go once it says
+                        // it is done (a fast VM's done.json releases it), or after KD_TASK_DONE_WAIT_MS
+                        const until = Date.now() + KD_TASK_DONE_WAIT_MS;
+                        while (!signal?.aborted && Date.now() < until) {
+                            const st = await o.jobs.get(execution).catch(() => undefined);
+                            if (st?.done) break;
+                            await sleep(config.pollMs, signal).catch(() => undefined);
+                        }
+                        await o.jobs.finished?.(execution).catch(e => log(`[kd-cloud] letting ${short} go failed: ${e instanceof Error ? e.message : String(e)}`));
+                        fs.rmSync(dir, { recursive: true, force: true });
+                        fs.rmSync(tracker.dir, { recursive: true, force: true });
+                        bands.onSettled();
+                    }
+                })();
+            } else if (opts.bands) {
+                for (const b of opts.bands.specs) opts.bands.onFailed(b.name, 'the chunk was downloaded again from an earlier task, with no later bands');
+                opts.bands.onSettled();
             }
-            const downloadMs = Date.now() - t0;
-            await downloadRunRecord(o, keys, runId, { ...record, buildMs: job.ms, downloadedBytes: bytes, downloadMs, ...(job.cut ? { cut: job.cut } : {}) });
-            progress(`built in the cloud in ${seconds !== undefined ? `${Math.round(seconds)} s` : 'an unknown time'}${cost !== undefined ? ` (about $${cost.toFixed(2)})` : ''}, ${(bytes / 1e6).toFixed(0)} MB of layers downloaded in ${(downloadMs / 1000).toFixed(1)} s${job.cut ? ', cut and compacted by the job' : ''}`);
-            return outcome;
+            return got.outcome;
         } finally {
             fs.rmSync(work, { recursive: true, force: true });
+            if (!following) fs.rmSync(tracker.dir, { recursive: true, force: true });
         }
     };
 }

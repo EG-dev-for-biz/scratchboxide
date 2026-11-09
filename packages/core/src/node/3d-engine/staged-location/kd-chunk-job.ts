@@ -132,37 +132,62 @@ export async function runKdChunkJob(o: KdChunkJobOptions): Promise<boolean> {
         await framePublished;
         // each layer cut to what the chunk keeps and compacted here, so the laptop downloads only that and only places it
         // (district-chunks.ts cutChunkLayer); a request without the cut sends them as built, and the laptop cuts them
-        const cut: NonNullable<KdChunkJobOutcome['cut']> = {};
         const frame = outcome.compat.frame;
         if (spec.cut && !frame) throw new Error('the chunk did not report its frame, so its layers cannot be cut');
         const district = spec.cut && frame ? await districtFrame(o, spec, frame, isCentre, progress, log) : undefined;
-        progress(district ? 'cutting the layers to what the chunk keeps and sending them to the runner' : 'sending the layers to the runner');
-        for (const { name, whole } of kdChunkLayerParts(outcome)) {
-            const file = path.join(o.cache.modelsDir, name);
-            if (!fs.existsSync(file)) throw new Error(`the build names the layer ${name}, which is not in ${o.cache.modelsDir}`);
-            let send = file;
-            if (spec.cut && frame && district) {
-                const r = cutChunkLayer(fs.readFileSync(file), { frame, district, plan: spec.cut.plan, bandM: spec.cut.bandM, of: spec.request.chunk!.of, chunk: spec.request.chunk!.index, whole, now });
-                send = path.join(work, `cut-${name}`);
-                fs.writeFileSync(send, r.glb);
-                cut[name] = { keptTriangles: r.stamp.keptTriangles, removedTriangles: r.stamp.removedTriangles, bytesIn: r.stamp.bytesIn, bytesOut: r.glb.byteLength, droppedBytes: r.stamp.droppedBytes, ms: r.stamp.ms };
+        const sendPass = async (built: StagedLocationOutcome, k: ReturnType<typeof kdChunkJobKeys>, runId: string, tPass: number): Promise<void> => {
+            const cut: NonNullable<KdChunkJobOutcome['cut']> = {};
+            const f = built.compat.frame;
+            if (spec!.cut && !f) throw new Error('the chunk did not report its frame, so its layers cannot be cut');
+            progress(district ? 'cutting the layers to what the chunk keeps and sending them to the runner' : 'sending the layers to the runner');
+            for (const { name, whole } of kdChunkLayerParts(built)) {
+                const file = path.join(o.cache.modelsDir, name);
+                if (!fs.existsSync(file)) throw new Error(`the build names the layer ${name}, which is not in ${o.cache.modelsDir}`);
+                let send = file;
+                if (spec!.cut && f && district) {
+                    const r = cutChunkLayer(fs.readFileSync(file), { frame: f, district, plan: spec!.cut.plan, bandM: spec!.cut.bandM, of: spec!.request.chunk!.of, chunk: spec!.request.chunk!.index, whole, now });
+                    send = path.join(work, `cut-${name}`);
+                    fs.writeFileSync(send, r.glb);
+                    cut[name] = { keptTriangles: r.stamp.keptTriangles, removedTriangles: r.stamp.removedTriangles, bytesIn: r.stamp.bytesIn, bytesOut: r.glb.byteLength, droppedBytes: r.stamp.droppedBytes, ms: r.stamp.ms };
+                }
+                await o.bucket.putFile(k.model(name), send, { contentType: 'model/gltf-binary' });
+                if (send !== file) fs.rmSync(send, { force: true });
             }
-            await o.bucket.putFile(keys.model(name), send, { contentType: 'model/gltf-binary' });
-            if (send !== file) fs.rmSync(send, { force: true });
-        }
-        if (district) {
-            const v = Object.values(cut), mb = (n: number) => (n / 1e6).toFixed(0);
-            progress(`${v.length} layers cut and compacted: ${mb(v.reduce((s, x) => s + x.bytesIn, 0))} MB to ${mb(v.reduce((s, x) => s + x.bytesOut, 0))} MB in ${(v.reduce((s, x) => s + x.ms, 0) / 1000).toFixed(1)} s`);
-        }
-        await sendRunRecord(o, keys, spec.runId);
-        const record: KdChunkJobOutcome = {
-            schema: KD_CHUNK_JOB_SCHEMA, runId: spec.runId, root: o.cache.workspaceRoot, modelsDir: o.cache.modelsDir, cacheDir: o.cache.dir,
-            outcome, ...(o.commit ? { commit: o.commit } : {}), ms: now() - t0, ...(district ? { cut } : {})
+            if (district) {
+                const v = Object.values(cut), mb = (n: number) => (n / 1e6).toFixed(0);
+                progress(`${v.length} layers cut and compacted: ${mb(v.reduce((a, x) => a + x.bytesIn, 0))} MB to ${mb(v.reduce((a, x) => a + x.bytesOut, 0))} MB in ${(v.reduce((a, x) => a + x.ms, 0) / 1000).toFixed(1)} s`);
+            }
+            await sendRunRecord(o, k, runId);
+            const record: KdChunkJobOutcome = {
+                schema: KD_CHUNK_JOB_SCHEMA, runId, root: o.cache.workspaceRoot, modelsDir: o.cache.modelsDir, cacheDir: o.cache.dir,
+                outcome: built, ...(o.commit ? { commit: o.commit } : {}), ms: now() - tPass, ...(district ? { cut } : {})
+            };
+            const outFile = path.join(work, 'outcome.json');
+            fs.writeFileSync(outFile, JSON.stringify(record));
+            await o.bucket.putFile(k.outcome, outFile, { contentType: 'application/json' });
         };
-        const outFile = path.join(work, 'outcome.json');
-        fs.writeFileSync(outFile, JSON.stringify(record));
-        await o.bucket.putFile(keys.outcome, outFile, { contentType: 'application/json' });
+        await sendPass(outcome, keys, spec.runId, t0);
         progress(`chunk built (${outcome.result.status}) in ${Math.round((now() - t0) / 1000)} s`);
+        // the later bands (KdChunkSpec.bands), each in the workspace the band before left: only the stages their switches
+        // change run again. A band that fails leaves the chunk at the band before it (the runner keeps that one's layers)
+        for (const band of spec.bands ?? []) {
+            const tb = now(), bk = kdChunkJobKeys(`${o.prefix}/band-${band.name}`);
+            await flush();
+            try {
+                const built = await o.build({ ...spec, runId: band.runId, request: { ...spec.request, steps: band.steps } }, { ...(o.signal ? { signal: o.signal } : {}), reportProgress: m => progress(`band ${band.name}: ${m}`) });
+                await sendPass(built, bk, band.runId, tb);
+                progress(`chunk band ${band.name} built (${built.result.status}) in ${Math.round((now() - tb) / 1000)} s`);
+            } catch (err) {
+                if (o.signal?.aborted) throw err;
+                const e = err instanceof Error ? err : new Error(String(err));
+                const errFile = path.join(work, 'error.json');
+                fs.writeFileSync(errFile, JSON.stringify({ name: e.name, message: e.message, ...(e.stack ? { stack: e.stack } : {}) } satisfies KdChunkJobError));
+                await o.bucket.putFile(bk.error, errFile, { contentType: 'application/json' }).catch(() => undefined);
+                log(`[kd-job] band ${band.name} failed: ${e.message}`);
+                progress(`chunk band ${band.name} failed: ${e.message}`);
+                break;
+            }
+        }
     } catch (err) {
         const e = err instanceof Error ? err : new Error(String(err));
         const record: KdChunkJobError = {
@@ -352,6 +377,23 @@ async function buildChunkFromEnv(root: string, signal: AbortSignal): Promise<boo
     });
 }
 
+/**
+ * The district model pool as a Cloud Run service (gemini/model-call-pool.ts; deploy.sh model-pool, one instance): every
+ * task of a district takes its model-call turns from it. SCRATCHBOX_MODEL_POOL_LIMITS sets the limits,
+ * SCRATCHBOX_MODEL_POOL_MAX_CALLS the calls a district may make.
+ */
+async function serveModelPool(): Promise<void> {
+    const http = await import('http');
+    const { ModelCallPool, modelPoolHandler, modelPoolLimitsFromEnv } = await import('../../gemini/model-call-pool');
+    const max = Number(process.env.SCRATCHBOX_MODEL_POOL_MAX_CALLS);
+    const limits = modelPoolLimitsFromEnv();
+    const pool = new ModelCallPool(limits, Number.isFinite(max) && max > 0 ? Math.floor(max) : undefined);
+    const server = http.createServer(modelPoolHandler(pool));
+    server.keepAliveTimeout = 65_000;
+    await new Promise<void>(r => server.listen(Number(process.env.PORT) || 8080, r));
+    console.log(`[model-pool] listening; limits ${process.env.SCRATCHBOX_MODEL_POOL_LIMITS ?? '(none)'}, at most ${process.env.SCRATCHBOX_MODEL_POOL_MAX_CALLS ?? 'unlimited'} calls a district`);
+}
+
 /** The chunk build as a Cloud Run service (see the file comment). */
 async function serve(root: string): Promise<void> {
     const http = await import('http');
@@ -510,6 +552,7 @@ async function poll(root: string): Promise<void> {
 async function main(): Promise<number> {
     const { stagedWorkspaceRoot } = await import('./stage-cache');
     const root = stagedWorkspaceRoot();
+    if (process.argv.includes('--model-pool')) { await serveModelPool(); return new Promise<number>(() => undefined); }
     if (process.argv.includes('--warm')) return warm(root);
     if (process.argv.includes('--serve')) { await serve(root); return new Promise<number>(() => undefined); }
     if (process.argv.includes('--poll')) { await poll(root); return 0; }

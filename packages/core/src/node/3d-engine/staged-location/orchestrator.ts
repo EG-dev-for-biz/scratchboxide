@@ -208,7 +208,8 @@ import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
 import { describeMirrorFill, describeMirrorWindows, describeSymmetry, detectSymmetry, mirrorFillOrthos, mirrorWindows, stampSymmetryGlb, symmetryFillOn, symmetryOn, symmetryWindowsOn, SYMMETRY_VERSION, type SymmetryReport } from './pipeline-k/symmetry';
 import { districtBuildingIndex, districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
-import { chunkCpuShare, chunkOwner, chunkParallel, chunkSteps, fastChunkIndices, isCellChunk, kdFastChunks, kdBand, kdCentreRunner, kdChunkUnit, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunk, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
+import { chunkCpuShare, chunkOwner, chunkParallel, chunkSteps, kdBandSteps, fastChunkIndices, isCellChunk, kdFastChunks, kdBand, kdCentreRunner, kdChunkUnit, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunk, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
+import type { ChunkBands } from './cloud-chunk-runner';
 import { createChunkJoiner } from './pipeline-k/chunk-join-worker';
 import { auditDistrictForPlace, placeStoreEnabled, pullPlaceForRun, syncPlaceAfterObjects } from './place-store-district';
 import { PLACE_STORE_PARAMS } from './place-store';
@@ -664,7 +665,9 @@ export interface StagedLocationDeps {
     /** Pipeline K-D: every leaf tile of the district's radius fetched into the shared leaf cache while the chunks build; absent = each chunk fetches its own. */
     prefetchTiles?: (req: { lat: number; lng: number; elevation?: number; radiusM: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void }) => Promise<{ leaves: number; downloaded: number; ms: number }>;
     /** Pipeline K-D: one chunk of a chunked district built on its own (its own worker, staged-location-tool.ts); absent = no chunking. */
-    runChunk?: (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void; atOnce?: number; /** What the chunk keeps, for a build that cuts its own layers (the cloud job); one that does not sends them uncut. */ cut?: KdChunkCutSpec }) => Promise<StagedLocationOutcome>;
+    runChunk?: (request: StagedLocationRequest, opts: { signal?: AbortSignal; onProgress?: (message: string) => void; atOnce?: number; /** What the chunk keeps, for a build that cuts its own layers (the cloud job); one that does not sends them uncut. */ cut?: KdChunkCutSpec; /** A streamed district's later bands (SCRATCHBOX_KD_BAND=stream), for a runner that builds them (chunkBands). */ bands?: ChunkBands }) => Promise<StagedLocationOutcome>;
+    /** The chunk runner builds a streamed district's later bands (the cloud runner); without it a streamed district builds its first band only. */
+    chunkBands?: true;
 }
 
 export interface StagedLocationContext {
@@ -1997,6 +2000,99 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // set below, once the seam stage's start is wired: a cell that has joined or failed for good
                 let settleCell: (c: DistrictChunk) => void = () => undefined;
                 const retry: Array<DistrictChunkPlan['chunks'][number]> = [];
+                // ---- a streamed district (SCRATCHBOX_KD_BAND=stream): the shown band first, then each chunk's bands B and C as its
+                // task builds them (district-chunks.ts kdBandSteps), each layer that changed republished in place of the one shown
+                // (a crossfade, no reload). A cell's ground and streets are held back and seamed again once every band is in ----
+                const streaming = kdBand() === 'stream' && !!deps.chunkBands;
+                interface BandSlot { firstId: string; clay: string; tex?: string; raw: StagedLayer; seamed: boolean; gone?: boolean }
+                const slots = new Map<number, Map<string, BandSlot>>();
+                const slotKey = (l: StagedLayer) => `${l.layer}|${l.stage}`;
+                const newDeferred = () => deferred<void>();
+                const bandJoined = new Map<number, ReturnType<typeof newDeferred>>(), bandSettled = new Map<number, ReturnType<typeof newDeferred>>();
+                const bandReport: Array<{ chunk: number; band: string; atMs: number; changed?: number; unchanged?: number; retired?: number; failed?: string }> = [];
+                let seamsDirty = false;
+                // the layer shown now for one committed earlier (the one that supersedes it, and so on)
+                const currentOf = (id: string): string => {
+                    for (let g = 0; g < 64; g++) { const by = run.state.layers.find(l => !l.retired && l.supersedes.includes(id)); if (!by) return id; id = by.objectId; }
+                    return id;
+                };
+                const retireShown = (firstId: string): boolean => {
+                    const cur = run.state.layers.find(x => x.objectId === currentOf(firstId));
+                    if (!cur || cur.retired) return false;
+                    run.commit({ ...cur, retired: true }, run.layerMeta[cur.objectId]);
+                    return true;
+                };
+                const joinBand = async (c: DistrictChunk, band: string, out: StagedLocationOutcome, io: StageIO): Promise<void> => {
+                    await bandJoined.get(c.index)?.promise;
+                    if (!out.compat.frame || !here) { bandReport.push({ chunk: c.index, band, atMs: now() - chunksStartMs, failed: 'no frame to place it in' }); return; }
+                    if (c.centre) cloudScan = out;
+                    const m = frameTransform(out.compat.frame, here);
+                    const layers = ((out.result.artifact as { data?: { stagedBuild?: { layers?: StagedLayer[] } } } | undefined)?.data?.stagedBuild?.layers ?? []);
+                    const hidden = new Set(layers.filter(l => !l.retired).flatMap(l => l.supersedes));
+                    const take = layers.filter(l => !l.retired && !hidden.has(l.objectId) && l.stage !== 'vector');
+                    const dir = path.join(cache.dir, 'district-chunks');
+                    fs.mkdirSync(dir, { recursive: true });
+                    const mine = slots.get(c.index) ?? new Map<string, BandSlot>();
+                    slots.set(c.index, mine);
+                    const joinFile = async (url: string, whole: boolean) => {
+                        const source = path.join(cache.modelsDir, path.basename(url));
+                        if (!fs.existsSync(source)) return undefined;
+                        const name = `${path.basename(url, '.glb')}_kd${c.index}${band}_${crypto.createHash('sha256').update(`${runId}:${band}:${url}`).digest('hex').slice(0, 8)}.glb`;
+                        const r: ChunkLayerJoinResult = await joiner.join({ source, target: path.join(dir, name), transform: Array.from(m), whole, of: runId, chunk: c.index, plan, bandM: DISTRICT_CHUNKS_PARAMS.seamBandM });
+                        return { ...cache.publishFile(path.join(dir, name), name), kept: r.keptTriangles };
+                    };
+                    const seen = new Set<string>(), batch: StagedLayer[] = [];
+                    let changed = 0, unchanged = 0, retired = 0;
+                    for (const l of take) {
+                        const key = slotKey(l);
+                        seen.add(key);
+                        const prior = mine.get(key);
+                        const clayName = path.basename(l.url), texName = l.textured ? path.basename(l.textured.url) : undefined;
+                        // the same file as the band before (its name is its content's): nothing to republish
+                        if (prior && !prior.gone && prior.clay === clayName && prior.tex === texName) { unchanged++; continue; }
+                        const whole = l.stage === 'trees';
+                        const clay = await joinFile(l.url, whole);
+                        const seamed = isCellChunk(c) && (l.layer === 'l2' || l.layer === 'l1r');
+                        if (!clay || !clay.kept) {
+                            if (prior && seamed) { prior.gone = true; seamsDirty = true; } else if (prior) { if (retireShown(prior.firstId)) retired++; mine.delete(key); }
+                            continue;
+                        }
+                        const tex = l.textured ? await joinFile(l.textured.url, whole) : undefined;
+                        changed++;
+                        const layer: StagedLayer = {
+                            ...l, objectId: `${l.objectId}-kd${c.index}${band}`, url: clay.url, bytes: clay.bytes, counts: { vertices: l.counts.vertices, triangles: clay.kept },
+                            supersedes: [], revealAfter: [], reveal: { ...l.reveal, crossfadeFrom: [] },
+                            ...(l.textured && tex ? { textured: { ...l.textured, url: tex.url, bytes: tex.bytes } } : {}),
+                            provenance: { ...l.provenance, note: `${l.provenance.note ? `${l.provenance.note}; ` : ''}chunk ${c.index} of the district, band ${band} (built by its task after the district was shown), joined here in place of its earlier version` }
+                        };
+                        // a cell's ground and streets wait for the seams, closed again from every cell's last band
+                        if (seamed) { mine.set(key, { firstId: prior?.firstId ?? layer.objectId, clay: clayName, ...(texName ? { tex: texName } : {}), raw: layer, seamed: true }); seamsDirty = true; continue; }
+                        const replaces = prior ? currentOf(prior.firstId) : undefined;
+                        const shown: StagedLayer = replaces ? { ...layer, supersedes: [replaces], reveal: { ...layer.reveal, durationMs: 600, stagger: 0, crossfadeFrom: [replaces] } } : layer;
+                        run.commit(shown, { source: l.stage === 'trees' ? 'SB-Veggie' : 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, ...(l.stage === 'trees' ? { vegetation: true } : {}), extra: { chunk: c.index, band } });
+                        committed.push(shown);
+                        batch.push(shown);
+                        mine.set(key, { firstId: shown.objectId, clay: clayName, ...(texName ? { tex: texName } : {}), raw: shown, seamed: false });
+                    }
+                    // what the band no longer has goes (a cell's ground or streets at the seams)
+                    for (const [key, prior] of mine) {
+                        if (seen.has(key) || prior.gone) continue;
+                        if (prior.seamed) { prior.gone = true; seamsDirty = true; } else { if (retireShown(prior.firstId)) retired++; mine.delete(key); }
+                    }
+                    bandReport.push({ chunk: c.index, band, atMs: now() - chunksStartMs, changed, unchanged, retired });
+                    io.progress(`chunk ${c.index}: band ${band} joined (${changed} layers changed, ${unchanged} unchanged${retired ? `, ${retired} gone` : ''})`);
+                    if (batch.length) run.emit('chunks', 'running', { message: `chunk ${c.index}: band ${band}`, layers: batch }, true);
+                };
+                const bandsFor = (c: DistrictChunk, io: StageIO): ChunkBands => {
+                    if (!bandJoined.has(c.index)) bandJoined.set(c.index, newDeferred());
+                    if (!bandSettled.has(c.index)) bandSettled.set(c.index, newDeferred());
+                    return {
+                        specs: kdBandSteps(plan, c, request.steps),
+                        onBand: (band, out) => joinBand(c, band, out, io).catch(err => { bandReport.push({ chunk: c.index, band, atMs: now() - chunksStartMs, failed: `its join failed: ${errorMessage(err)}` }); }),
+                        onFailed: (band, reason) => { bandReport.push({ chunk: c.index, band, atMs: now() - chunksStartMs, failed: reason }); io.progress(`chunk ${c.index}: band ${band} not built (${reason})`); },
+                        onSettled: () => bandSettled.get(c.index)!.resolve()
+                    };
+                };
                 const one = async (c: DistrictChunkPlan['chunks'][number], atOnce: number, last = false) => {
                     const t0 = now();
                     const ll = frameToLatLng(placeValue!, [c.cx, c.cz]);
@@ -2015,7 +2111,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce, ...(fast.has(c.index) ? { fast: true } : {}),
                             // the district's frame when known already (the centre built here); else the centre job publishes it to the
                             // others (district-chunks.ts cutChunkLayer)
-                            cut: { version: KD_CHUNK_CUT_VERSION, plan, district: here ? { ...here } : { lat: placeValue!.lat, lng: placeValue!.lng }, bandM: DISTRICT_CHUNKS_PARAMS.seamBandM }
+                            cut: { version: KD_CHUNK_CUT_VERSION, plan, district: here ? { ...here } : { lat: placeValue!.lat, lng: placeValue!.lng }, bandM: DISTRICT_CHUNKS_PARAMS.seamBandM },
+                            ...(streaming ? { bands: bandsFor(c, io) } : {})
                         });
                         if (!out.compat.frame) throw new Error('the chunk did not report its frame');
                         if (c.centre) {
@@ -2067,8 +2164,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             };
                             run.commit(layer, { source: l.stage === 'trees' ? 'SB-Veggie' : 'Google3DTilesClay', resolvedAddress: placeValue!.formattedAddress, ...(l.stage === 'trees' ? { vegetation: true } : {}), extra: { chunk: c.index } });
                             batch.push(layer);
+                            if (streaming) {
+                                const mine = slots.get(c.index) ?? new Map<string, BandSlot>();
+                                slots.set(c.index, mine);
+                                mine.set(slotKey(l), { firstId: layer.objectId, clay: path.basename(l.url), ...(l.textured ? { tex: path.basename(l.textured.url) } : {}), raw: layer, seamed: isCellChunk(c) && (l.layer === 'l2' || l.layer === 'l1r') });
+                            }
                         }
                         committed.push(...batch);
+                        bandJoined.get(c.index)?.resolve();
                         joined++;
                         retirePlaceholders(c.index);
                         settleCell(c);
@@ -2090,6 +2193,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         if (!last) { retry.push(c); io.progress(`chunk ${c.index} failed (${errorMessage(err)}); it is built again after the others`); return; }
                         if (c.centre) centreFrame.resolve(undefined);
                         settleCell(c);
+                        bandJoined.get(c.index)?.resolve();
+                        bandSettled.get(c.index)?.resolve();
                         report.push({ index: c.index, radiusM: c.radiusM, buildings: c.buildings.length, status: 'failed', ms: now() - t0, error: errorMessage(err) });
                         degradations.push(run.degrade(record('chunks', 'chunk_failed', {
                             part: { description: `chunk ${c.index} of the district` }, intended: `its ${c.buildings.length} buildings and ground at leaf LOD`, fellTo: "the vector buildings past the centre build's tiles",
@@ -2097,7 +2202,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         })));
                     }
                 };
-                const closeSeams = async (): Promise<Record<string, unknown> | undefined> => {
+                // `input`: the cells' raw grounds and streets to seam (a streamed district's last bands), each with the layer it takes
+                // the place of; without it, the grounds and streets shown now
+                const closeSeams = async (input?: { grounds: Array<{ layer: StagedLayer; chunk: number; replaces: string }>; streets: Array<{ layer: StagedLayer; chunk: number; replaces: string }> }): Promise<Record<string, unknown> | undefined> => {
                     let seams: Record<string, unknown> | undefined;
                     if (joined) {
                         // the centre build's own ground, its texture and its streets are committed first
@@ -2109,7 +2216,11 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         }
                         const t1 = now();
                         const centreIndex = plan.chunks.find(c => c.centre)!.index;
-                        const chunkOf = (l: StagedLayer) => (run.layerMeta[l.objectId]?.extra as { chunk?: number } | undefined)?.chunk ?? centreIndex;
+                        const fromInput = new Map<string, { chunk: number; replaces: string }>();
+                        for (const e of input ? [...input.grounds, ...input.streets] : []) fromInput.set(e.layer.objectId, e);
+                        const chunkOf = (l: StagedLayer) => fromInput.get(l.objectId)?.chunk ?? (run.layerMeta[l.objectId]?.extra as { chunk?: number } | undefined)?.chunk ?? centreIndex;
+                        const replacesOf = (l: StagedLayer) => fromInput.get(l.objectId)?.replaces ?? l.objectId;
+                        const seamId = (l: StagedLayer) => `${l.objectId}-seam${input ? '-final' : ''}`;
                         const shown = run.state.layers.filter(l => !l.retired);
                         const hiddenNow = new Set(shown.flatMap(l => l.supersedes));
                         // the order the chunks were built (the centre, then nearest first): a later chunk's cut edge moves onto an earlier one's
@@ -2117,7 +2228,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                         // a building's task (plan.unit 'building') is not seamed: its job cut it to its footprint, it meets no cell line
                         // and keeps a gain of 1 (district-seams.ts); only the cells' grounds and streets go through the seam stage
                         const seamed = (l: StagedLayer) => !!plan.chunks[chunkOf(l)] && isCellChunk(plan.chunks[chunkOf(l)]);
-                        const grounds = shown.filter(l => l.layer === 'l2' && !hiddenNow.has(l.objectId) && seamed(l)).sort((a, b) => dist(a) - dist(b));
+                        const grounds = (input ? input.grounds.map(e => e.layer) : shown.filter(l => l.layer === 'l2' && !hiddenNow.has(l.objectId) && seamed(l))).sort((a, b) => dist(a) - dist(b));
                         if (grounds.length >= 2) {
                             const dir = path.join(cache.dir, 'district-chunks', runId);
                             fs.mkdirSync(dir, { recursive: true });
@@ -2134,7 +2245,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             const { gains, fields, report: colour } = solveSeamGains(samples, plan);
                             // who keeps each point, the same for every chunk: ground a chunk's build never reached goes to one whose did.
                             // A chunk's streets count as its surface: each chunk carved its own ground under its own streets
-                            const streets = shown.filter(l => l.layer === 'l1r' && !hiddenNow.has(l.objectId) && seamed(l)).sort((a, b) => dist(a) - dist(b));
+                            const streets = (input ? input.streets.map(e => e.layer) : shown.filter(l => l.layer === 'l1r' && !hiddenNow.has(l.objectId) && seamed(l))).sort((a, b) => dist(a) - dist(b));
                             const coverage = new Map<number, SeamCoverage>();
                             for (const g of grounds) {
                                 const c = chunkOf(g);
@@ -2164,13 +2275,14 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 }
                                 addSeamEdges(edges, clay.edges);
                                 const note = `chunk ${c}'s ground cut at its cell lines (${DISTRICT_SEAMS_VERSION}): ${clay.report.cut} triangles cut there, ${clay.report.snapped} cut corners moved at most ${Math.round(clay.report.maxSnapM * 100)} cm onto the edge its neighbour left${gain && gainMode !== 'none' ? `; its photos levelled to its neighbours' by a gain of ${gain.map(x => x.toFixed(3)).join(' / ')}${fields.get(c)?.lines.length ? ` and a correction fading in over its last ${DISTRICT_SEAMS_PARAMS.featherM} m to each neighbour` : ''} (generated)` : ''}`;
+                                const gRep = replacesOf(g);
                                 const layer: StagedLayer = {
-                                    ...g, objectId: `${g.objectId}-seam`, url: pubClay.url, bytes: pubClay.bytes, counts: layerCounts(path.join(dir, `ground_${c}.glb`)),
-                                    supersedes: [g.objectId], revealAfter: [], reveal: { durationMs: 600, stagger: 0, crossfadeFrom: [g.objectId] },
+                                    ...g, objectId: seamId(g), url: pubClay.url, bytes: pubClay.bytes, counts: layerCounts(path.join(dir, `ground_${c}.glb`)),
+                                    supersedes: [gRep], revealAfter: [], reveal: { durationMs: 600, stagger: 0, crossfadeFrom: [gRep] },
                                     ...(g.textured && pubTex ? { textured: { ...g.textured, url: pubTex.url, bytes: pubTex.bytes } } : {}),
                                     provenance: { ...g.provenance, note: `${g.provenance.note ? `${g.provenance.note}; ` : ''}${note}` }, cached: false, builtAtMs: now()
                                 };
-                                const meta = run.layerMeta[g.objectId];
+                                const meta = run.layerMeta[gRep];
                                 run.commit(layer, { ...meta, extra: { ...(meta?.extra ?? {}), chunk: c } });
                                 if (meta?.isGround) run.setGround(layer.objectId);
                                 committed.push(layer);
@@ -2188,7 +2300,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 // as it stands now: a street may have been committed again since it was listed (coloured again from a
                                 // ground committed above), and the cut keeps that
                                 const s = run.state.layers.find(l => l.objectId === listed.objectId) ?? listed;
-                                const c = chunkOf(s), meta = run.layerMeta[s.objectId];
+                                const sRep = replacesOf(listed);
+                                const c = chunkOf(listed), meta = run.layerMeta[sRep];
                                 io.progress(`cutting chunk ${c}'s streets at its cell lines (${roads.length + 1} of ${streets.length})`);
                                 const key8 = crypto.createHash('sha256').update(`${runId}:${DISTRICT_SEAMS_VERSION}:${s.url}`).digest('hex').slice(0, 8);
                                 const subject = "as measured: the chunk's streets";
@@ -2197,7 +2310,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 roads.push({ chunk: c, objectId: s.objectId, clay: clay.report, ...(tex ? { textured: tex.report } : {}) });
                                 // every triangle of it is its neighbours' to draw: the joined layer goes
                                 if (clay.report.trianglesIn <= clay.report.dropped && !clay.report.skippedPrimitives) {
-                                    run.commit({ ...s, retired: true }, meta);
+                                    const shownNow = run.state.layers.find(l => l.objectId === sRep);
+                                    if (shownNow && !shownNow.retired) run.commit({ ...shownNow, retired: true }, meta);
                                     continue;
                                 }
                                 fs.writeFileSync(path.join(dir, `roads_${c}_${key8}.glb`), clay.glb);
@@ -2209,8 +2323,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                                 }
                                 const note = `chunk ${c}'s streets cut at its cell lines by who keeps the ground there (${DISTRICT_SEAMS_VERSION}): ${clay.report.cut} triangles cut there and ${clay.report.dropped} left to its neighbours; the cut edge where it was measured, its colour as drawn`;
                                 const layer: StagedLayer = {
-                                    ...s, objectId: `${s.objectId}-seam`, url: pubClay.url, bytes: pubClay.bytes, counts: layerCounts(path.join(dir, `roads_${c}_${key8}.glb`)),
-                                    supersedes: [s.objectId], revealAfter: [], reveal: { durationMs: 600, stagger: 0, crossfadeFrom: [s.objectId] },
+                                    ...s, objectId: seamId(s), url: pubClay.url, bytes: pubClay.bytes, counts: layerCounts(path.join(dir, `roads_${c}_${key8}.glb`)),
+                                    supersedes: [sRep], revealAfter: [], reveal: { durationMs: 600, stagger: 0, crossfadeFrom: [sRep] },
                                     ...(s.textured && pubTex ? { textured: { ...s.textured, url: pubTex.url, bytes: pubTex.bytes } } : {}),
                                     provenance: { ...s.provenance, note: `${s.provenance.note ? `${s.provenance.note}; ` : ''}${note}` }, cached: false, builtAtMs: now()
                                 };
@@ -2241,7 +2355,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                     await Promise.all(Array.from({ length: width }, async () => { while (next < todo.length) await one(todo[next++], width); }));
                     if (retry.length) { let k = 0; const again = Math.min(parallel, retry.length); await Promise.all(Array.from({ length: again }, async () => { while (k < retry.length) await one(retry[k++], again, true); })); }
                 } finally {
-                    await joiner.close();
+                    // a streamed district's bands are joined after this: the joiner is closed once they are in
+                    if (!streaming) await joiner.close();
                 }
                 // ---- the seam stage over the joined ground (scene-healing §3.1; pipeline-k/district-seams.ts), one chunk at a time:
                 // the chunks' photos levelled to one another by a gain per chunk, fitted where they meet; each chunk's ground cut
@@ -2254,6 +2369,35 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 const shownAtMs = now() - chunksStartMs;
                 io.progress(`district shown: ${joined} of ${todo.length} chunks joined, seams closed (${Math.round(shownAtMs / 1000)} s)`);
                 cache.writeRunNote(runId, 'district_chunks_joined', { version: DISTRICT_CHUNKS_VERSION, parallel, chunks: report, shownAtMs, band: kdBand(), ...(seams ? { seams } : {}), ...(prefetch ? { prefetch } : {}) });
+                // a streamed district: every chunk's later bands in (each joined as it landed), then the seams closed again from the
+                // cells' last bands, and only then the place store, on the finished district
+                if (streaming) {
+                    try {
+                        io.progress('district shown: each chunk\'s bands B and C stream in as its task builds them');
+                        await Promise.all([...bandSettled.values()].map(d => d.promise));
+                        let finalSeams: Record<string, unknown> | undefined;
+                        if (seamsDirty) {
+                            const input = { grounds: [] as Array<{ layer: StagedLayer; chunk: number; replaces: string }>, streets: [] as Array<{ layer: StagedLayer; chunk: number; replaces: string }> };
+                            for (const [chunk, mine] of slots) for (const sl of mine.values()) {
+                                if (!sl.seamed) continue;
+                                if (sl.gone) { retireShown(sl.firstId); continue; }
+                                (sl.raw.layer === 'l2' ? input.grounds : input.streets).push({ layer: sl.raw, chunk, replaces: currentOf(sl.firstId) });
+                            }
+                            io.progress(`every band in: closing the seams again over the cells' last bands (${input.grounds.length} grounds, ${input.streets.length} street layers)`);
+                            finalSeams = await closeSeams(input);
+                        }
+                        const doneAtMs = now() - chunksStartMs;
+                        const at = (band: string) => { const v = bandReport.filter(r => r.band === band && !r.failed).map(r => r.atMs); return v.length ? Math.max(...v) : undefined; };
+                        io.progress(`district finished: bands in (B at ${Math.round((at('B') ?? 0) / 1000)} s, C at ${Math.round((at('C') ?? 0) / 1000)} s), ${bandReport.filter(r => r.failed).length} band(s) not built (${Math.round(doneAtMs / 1000)} s)`);
+                        cache.writeRunNote(runId, 'district_bands', { shownAtMs, bandBAtMs: at('B'), bandCAtMs: at('C'), doneAtMs, bands: bandReport, ...(finalSeams ? { seams: finalSeams } : {}) });
+                        for (const r of bandReport.filter(x => x.failed)) degradations.push(run.degrade(record('chunks', 'chunk_band_failed', {
+                            part: { description: `chunk ${r.chunk}'s band ${r.band}` }, intended: `its band ${r.band} streamed in after the district was shown`, fellTo: 'the band before it, as shown',
+                            provenanceAfter: PROVENANCE.asScanned, reason: `chunk ${r.chunk}'s band ${r.band} was not built (${r.failed})`, transient: true, runId, now: now()
+                        })));
+                    } finally {
+                        await joiner.close();
+                    }
+                }
                 // the vector buildings shown past the centre build's tiles stand in only where no chunk was joined
                 if (joined === todo.length) for (const l of run.state.layers.filter(x => (x.layer === 'l0o' || (centreInCloud && x.layer === 'l0')) && !x.retired)) run.commit({ ...l, retired: true }, run.layerMeta[l.objectId]);
                 // the place store (place-store-district.ts; SCRATCHBOX_PLACE_STORE=0 off): the joined district audited, its buildings listed for the object store

@@ -21,7 +21,7 @@ import * as path from 'path';
 import { runStagedLocation, type StagedLocationDeps, type StagedLocationOutcome, type StagedLocationRequest } from '../src/node/3d-engine/staged-location/orchestrator';
 import { StageCache } from '../src/node/3d-engine/staged-location/stage-cache';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
-import { kdCentreRunner } from '../src/node/3d-engine/staged-location/pipeline-k/district-chunks';
+import { kdCentreRunner, kdBandSteps, KD_BAND_B_STEPS } from '../src/node/3d-engine/staged-location/pipeline-k/district-chunks';
 import { nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { fakeNative, type WorldSpec } from './helpers/staged-synthetic-world';
 import type { StageEvent } from '../src/common/spatial/staged-location-contracts';
@@ -37,15 +37,15 @@ const square = (cx: number, cz: number) => [[[cx - 8, cz - 8], [cx + 8, cz - 8],
 const EVIDENCE = { buildings: [[0, 0], [120, 0], [-120, 0], [0, 120], [0, -120]].map(([x, z], i) => ({ id: `b${i}`, parts: [square(x, z)], heightM: 15, extruded: [{ loops: square(x, z), heightM: 15 }] })), water: [], roads: [], tiles: 1, zoom: 17 };
 
 /** A chunk job: its ground over its rectangle (in its own frame, at y 0), as a cloud job's outcome reads once downloaded. */
-function chunkJob(cache: StageCache, req: StagedLocationRequest, originEllipsoidalHeightM: number): StagedLocationOutcome {
+function chunkJob(cache: StageCache, req: StagedLocationRequest, originEllipsoidalHeightM: number, tag = ''): StagedLocationOutcome {
     const i = req.chunk!.index, r = req.chunk!.rect!;
     const pos: number[] = [];
     for (let x = Math.floor(r.x0); x < Math.ceil(r.x1); x += 4) for (let z = Math.floor(r.z0); z < Math.ceil(r.z1); z += 4) pos.push(x, 0, z, x + 4, 0, z, x + 4, 0, z + 4, x, 0, z, x + 4, 0, z + 4, x, 0, z + 4);
     fs.mkdirSync(cache.modelsDir, { recursive: true });
-    const file = path.join(cache.modelsDir, `ground_c${i}.glb`);
+    const file = path.join(cache.modelsDir, `ground_c${i}${tag}.glb`);
     writeStagedGlbFile(file, [{ name: 'ground', positions: Float32Array.from(pos), indices: Uint32Array.from({ length: pos.length / 3 }, (_, k) => k) }], {});
     const layer = {
-        objectId: `stg-c${i}-l2`, stage: 'remesh', layer: 'l2', order: 2, url: `/models/ground_c${i}.glb`, bytes: fs.statSync(file).size,
+        objectId: `stg-c${i}${tag}-l2`, stage: 'remesh', layer: 'l2', order: 2, url: `/models/ground_c${i}${tag}.glb`, bytes: fs.statSync(file).size,
         counts: { vertices: pos.length / 3, triangles: pos.length / 9 }, provenance: { label: 'remeshed', measuredGeometry: true }, provenanceLabels: ['remeshed'],
         supersedes: [], revealAfter: [], reveal: { durationMs: 300, stagger: 0, crossfadeFrom: [] }, cached: false, builtAtMs: 0
     };
@@ -192,6 +192,85 @@ describe('pipeline K-D: the centre cell in the cloud', () => {
         expect(joined.shownAtMs).toBeGreaterThanOrEqual(0);
         expect(s.cache.readRunNote<{ skipped: boolean }>('c0ffee01', 'place_audit')).toMatchObject({ skipped: true });
         expect(result.status).toBe('complete');
+    });
+
+    it('streams bands B and C in after the district is shown: each changed layer in place of the one shown, the seams closed again from the cells\' last band, a failed band left at the one before', async () => {
+        vi.stubEnv('SCRATCHBOX_KD_CHUNK_RUNNER', 'cloud');
+        vi.stubEnv('SCRATCHBOX_KD_CHUNK_UNIT', 'building');
+        vi.stubEnv('SCRATCHBOX_KD_BAND', 'stream');
+        const s = setup();
+        s.deps.chunkBands = true;
+        const job = s.deps.runChunk!;
+        const asked: Array<{ index: number; specs: Array<{ name: string; steps: Record<string, boolean> }> }> = [];
+        const lines: string[] = [];
+        s.deps.runChunk = async (req, o) => {
+            const out = await job(req, o);
+            const bands = o.bands;
+            if (bands) {
+                asked.push({ index: req.chunk!.index, specs: bands.specs });
+                // the later bands land after the first, on their own: a cell's band B is its band A's file (unchanged), its band C a
+                // new one; a building's every band is new; building 9's band C fails
+                void (async () => {
+                    for (const b of bands.specs) {
+                        await new Promise(r => setTimeout(r, 5));
+                        const i = req.chunk!.index;
+                        if (i === 9 && b.name === 'C') { bands.onFailed('C', 'the facade reader timed out'); continue; }
+                        const tag = i < 9 && b.name === 'B' ? '' : `_${b.name}`;
+                        await bands.onBand(b.name, chunkJob(s.cache, req, !req.place!.formattedAddress.includes('(chunk') ? 30 : 30 + i, tag));
+                    }
+                    bands.onSettled();
+                })();
+            }
+            return out;
+        };
+        const { result } = await runStagedLocation(REQUEST, s.deps, { ...s.ctx, reportProgress: m => lines.push(m) });
+        // every chunk asked for B (models on, no sets or upscale) and C (the full build's steps)
+        expect(asked).toHaveLength(14);
+        for (const a of asked) {
+            expect(a.specs.map(b => b.name)).toEqual(['B', 'C']);
+            expect(a.specs[0].steps).toMatchObject(KD_BAND_B_STEPS);
+            expect(a.specs[0].steps.models).toBeUndefined();
+            // a building's band C draws its material sets; a cell never does (its ground steps)
+            expect(a.specs[1].steps['twin.materials']).toBe(a.index < 9 ? false : undefined);
+            expect(a.specs[1].steps['remesh.facadeRead'] === false).toBe(a.index < 9);
+        }
+        // shown before any band was in
+        const shownAt = lines.findIndex(m => /^district shown/.test(m));
+        expect(shownAt).toBeGreaterThan(-1);
+        expect(lines.findIndex(m => /band [BC] joined/.test(m))).toBeGreaterThan(-1);
+        const layers = (result.artifact as any).data.stagedBuild.layers as any[];
+        const hidden = new Set(layers.filter(l => !l.retired).flatMap(l => l.supersedes));
+        const shown = layers.filter(l => !l.retired && !hidden.has(l.objectId));
+        // the buildings: band C shown (building 9 at band B: its C failed), each in place of the version before
+        for (const i of [10, 11, 12, 13]) expect(shown.filter(l => l.objectId === `stg-c${i}_C-l2-kd${i}C`), `building ${i}`).toHaveLength(1);
+        expect(shown.filter(l => l.objectId === 'stg-c9_B-l2-kd9B')).toHaveLength(1);
+        expect(shown.some(l => /^stg-c(9|1[0-3])-l2-kd\d+$/.test(l.objectId))).toBe(false);
+        // the cells: their grounds seamed again from band C, the band A seams superseded
+        const finals = shown.filter(l => /-seam-final$/.test(l.objectId));
+        expect(finals).toHaveLength(9);
+        expect(finals.every(l => /^stg-c[0-8]_C-l2-kd[0-8]C-seam-final$/.test(l.objectId))).toBe(true);
+        expect(shown.some(l => /-seam$/.test(l.objectId))).toBe(false);
+        // the failed band reported, the rest timed
+        expect(result.degradations.find(d => d.reasonCode === 'chunk_band_failed')).toMatchObject({ reason: expect.stringMatching(/chunk 9's band C was not built \(the facade reader timed out\)/) });
+        const bands = s.cache.readRunNote<{ shownAtMs: number; bandBAtMs: number; bandCAtMs: number; doneAtMs: number; bands: Array<{ chunk: number; band: string; changed?: number; unchanged?: number; failed?: string }> }>('c0ffee01', 'district_bands')!;
+        // (an early chunk's band B may land before the last chunk's band A: shown is when every chunk has its first band)
+        expect(bands.bandBAtMs).toBeGreaterThan(0);
+        expect(bands.doneAtMs).toBeGreaterThanOrEqual(bands.bandCAtMs);
+        // a cell's band B was its band A's file: nothing republished for it
+        expect(bands.bands.filter(b => b.chunk < 9 && b.band === 'B').every(b => b.changed === 0 && b.unchanged === 1)).toBe(true);
+        expect(bands.bands.filter(b => b.failed)).toEqual([expect.objectContaining({ chunk: 9, band: 'C' })]);
+        expect(s.cache.readRunNote<{ band: string }>('c0ffee01', 'district_chunks_joined')!.band).toBe('stream');
+        expect(result.status).toBe('degraded');
+    });
+
+    it('defines band B as the full steps without the material sets and upscale, and band C as the full steps', () => {
+        const plan = { unit: 'building', chunks: [] } as never;
+        const cell = { index: 0, kind: 'cell', buildings: [] } as never, building = { index: 9, kind: 'building', buildings: ['b'] } as never;
+        const [b, c] = kdBandSteps(plan, building, { 'twin.roofShadow': false });
+        expect(b).toEqual({ name: 'B', steps: { 'twin.roofShadow': false, 'twin.materials': false, 'twin.facadeUpscale': false } });
+        expect(c).toEqual({ name: 'C', steps: { 'twin.roofShadow': false } });
+        const [, cc] = kdBandSteps(plan, cell, undefined);
+        expect(cc.steps).toMatchObject({ 'remesh.facadeRead': false, 'twin.materials': false });
     });
 
     it("frames the scene with the centre job's camera when the vector paint could not be drawn", async () => {

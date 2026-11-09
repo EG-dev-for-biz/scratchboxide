@@ -28,6 +28,7 @@
 import { isMainThread, MessagePort, workerData } from 'worker_threads';
 import type { GenerateContentParameters, GenerateContentResponse } from '@google/genai';
 import type { VisionGenAIClient } from './vision-model-chain';
+import { cloudRunIdTokenHeaders, modelPoolFromEnv, PoolCallBudget } from './model-call-pool';
 
 export interface ModelCallLimits { inFlight?: number; perMinute?: number }
 
@@ -208,9 +209,14 @@ let processBudget: CallBudget | undefined;
 export function processModelCallBudget(): CallBudget {
     if (processBudget) return processBudget;
     const limits = modelCallLimitsFromEnv();
-    const limited = !!(limits.all.inFlight || limits.all.perMinute || [...limits.byModel.values()].some(l => l.inFlight || l.perMinute));
+    // the district model pool (model-call-pool.ts) when the environment names one: one queue and budget for every task of
+    // the district (the two modules use each other only inside functions)
+    const pool = modelPoolFromEnv();
+    const limited = !!pool || !!(limits.all.inFlight || limits.all.perMinute || [...limits.byModel.values()].some(l => l.inFlight || l.perMinute));
     const port = isMainThread ? undefined : (workerData as { modelCallBudget?: unknown } | null | undefined)?.modelCallBudget;
-    processBudget = limited && port instanceof MessagePort ? new RemoteCallBudget(port) : new ModelCallBudget(limits);
+    processBudget = limited && port instanceof MessagePort ? new RemoteCallBudget(port)
+        : pool ? new PoolCallBudget(pool.url, pool.district, cloudRunIdTokenHeaders(pool.url))
+        : new ModelCallBudget(limits);
     return processBudget;
 }
 

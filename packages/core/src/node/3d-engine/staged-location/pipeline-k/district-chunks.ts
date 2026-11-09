@@ -105,19 +105,44 @@ export const KD_SHOWN_STEPS: Readonly<Record<string, boolean>> = {
     'twin.facadeUpscale': false
 };
 
-/** Which band a chunked district builds: SCRATCHBOX_KD_BAND=shown (KD_SHOWN_STEPS), else everything. */
-export function kdBand(env: NodeJS.ProcessEnv = process.env): 'shown' | 'full' {
-    return env.SCRATCHBOX_KD_BAND?.trim() === 'shown' ? 'shown' : 'full';
+/**
+ * Which band a chunked district builds: SCRATCHBOX_KD_BAND=shown (KD_SHOWN_STEPS) only, `stream` the shown band first and
+ * then bands B and C streamed in by the same tasks (kdBandSteps), else everything at once.
+ */
+export function kdBand(env: NodeJS.ProcessEnv = process.env): 'shown' | 'stream' | 'full' {
+    const v = env.SCRATCHBOX_KD_BAND?.trim();
+    return v === 'shown' ? 'shown' : v === 'stream' ? 'stream' : 'full';
+}
+
+/**
+ * Band B (user decision 2026-11-09, relayed by MAIN): the model-refined band, every model read on (the facade reader, the
+ * building system, the window reader) and the glass and lattice drawn from them, still without the material sets and the
+ * facade upscale, which are band C's.
+ */
+export const KD_BAND_B_STEPS: Readonly<Record<string, boolean>> = {
+    'twin.materials': false,
+    'twin.facadeUpscale': false
+};
+
+/**
+ * A streamed district's later bands for a chunk, built by its task after the shown band (cloud-chunk-runner.ts
+ * KdChunkSpec.bands): B, then C with exactly the steps a full build gives the chunk, so a finished streamed district is
+ * the full build's.
+ */
+export function kdBandSteps(plan: DistrictChunkPlan, chunk: DistrictChunk, steps: Record<string, boolean> | undefined): Array<{ name: 'B' | 'C'; steps: Record<string, boolean> }> {
+    const full = chunkSteps(plan, chunk, steps, 'full') ?? {};
+    return [{ name: 'B', steps: { ...full, ...KD_BAND_B_STEPS } }, { name: 'C', steps: { ...full } }];
 }
 
 /**
  * The steps a chunk's build is asked for: the district's, then a building task's cell's ground steps (plan.unit
  * 'building'), then the band's; undefined when none.
  */
-export function chunkSteps(plan: DistrictChunkPlan, chunk: DistrictChunk, steps: Record<string, boolean> | undefined, band: 'shown' | 'full'): Record<string, boolean> | undefined {
+export function chunkSteps(plan: DistrictChunkPlan, chunk: DistrictChunk, steps: Record<string, boolean> | undefined, band: 'shown' | 'stream' | 'full'): Record<string, boolean> | undefined {
     const ground = plan.unit === 'building' && isCellChunk(chunk);
     if (!ground && band === 'full') return steps;
-    return { ...(steps ?? {}), ...(ground ? KD_GROUND_CELL_STEPS : {}), ...(band === 'shown' ? KD_SHOWN_STEPS : {}) };
+    // a streamed district's first band is the shown band
+    return { ...(steps ?? {}), ...(ground ? KD_GROUND_CELL_STEPS : {}), ...(band !== 'full' ? KD_SHOWN_STEPS : {}) };
 }
 
 /**
