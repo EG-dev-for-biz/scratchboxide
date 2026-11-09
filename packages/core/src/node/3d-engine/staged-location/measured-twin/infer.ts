@@ -261,7 +261,7 @@ export async function inferFromSelfOrthos(dir: string, opts: { models?: InferMod
         finishes = settleFinishes(rows.map(r => ({ meanLab: r.meanLab, share: r.share, openings: r.openings })), finishes);
         all.forEach((a, k) => {
             const f = finishes[k], read = !!f && f.conf >= P.finishMinConf;
-            const roughness = read ? drawnRoughness(f!.roughness) : a.openings ? 0.08 : 0.85, metallic = read ? drawnMetalness(f!.metalness) : 0;
+            const roughness = read ? drawnRoughness(f!.roughness) : a.openings ? 0.08 : 0.85, metallic = read ? drawnMetalness(f!) : 0;
             classes.push({ index: k, meanLab: a.c.map(v => Math.round(v * 100) / 100) as V3, openings: a.openings, set: `class${k}`, finish: { roughness, metallic } });
         });
         if (!report.classes) report.classes = { count: classes.length, read: finishes.filter(f => f && f.conf >= P.finishMinConf).length, finishes: classes.map((c, k) => ({ lab: c.meanLab, openings: !!c.openings, roughness: c.finish!.roughness!, metalness: c.finish!.metallic!, conf: finishes[k]?.conf ?? 0, ...(finishes[k]?.seen ? { seen: finishes[k]!.seen } : {}) })) };

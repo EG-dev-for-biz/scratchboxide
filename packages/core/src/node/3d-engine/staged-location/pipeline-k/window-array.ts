@@ -1133,7 +1133,10 @@ export function inferWindowArray(inputIn: ArrayInput, img: ArrayPhoto, valid: Ui
     const foldStrips = singles.length >= spans.length || (seed.clear && agree(seed.row!.pitch, row.pitch));
     for (const b of spans) {
         const ci = siteOf(b.cx, col);
-        if (foldStrips && b.w <= P.spanSites * col.pitch && Math.abs(ci.res) <= P.snapTol) {
+        // a box the facade reader drew is never folded either: it stands whole as read (Penn 2's reader drew its shaft's
+        // windows two storeys tall; folded at the storey they drew a wall band and recess edges through every one, a long
+        // dark line across the facade)
+        if (foldStrips && !fixedSet.has(b.r.join(',')) && b.w <= P.spanSites * col.pitch && Math.abs(ci.res) <= P.snapTol) {
             const own = panesOf(b.r);
             let n = 0;
             for (const t of [main, ...tiers]) {
@@ -1456,8 +1459,16 @@ export function inferWindowArrays(orthosDir: string, fit: WindowFitFile, P: Wind
         pending.set(e.facadeId, p);
         run(p);
     }
-    const building = buildingStorey([...pending.values()].flatMap(p => {
-        const r = facades.find(x => x.facadeId === p.e.facadeId);
+    // the building's storeys from every facade's own rows: those inferred now, and those already arrayed (a facade taken
+    // from the first pass when the ownership vote left it unchanged, pipeline-k/facade-reuse.ts) unless the building's
+    // storeys gave them their rows (the second run below; the system's faces count, as they do when inferred now)
+    const arrayed = fit.facades.flatMap(entry => {
+        if ('error' in entry || pending.has(entry.facadeId)) return [];
+        const e = entry as FitEntry, f = frames.find(x => x.facadeId === e.facadeId);
+        return f && e.array?.version === WINDOW_ARRAY_VERSION && !(e.array.report.rowsFrom === 'building' && e.array.report.source !== 'system') ? [{ facadeId: e.facadeId, f }] : [];
+    });
+    const building = buildingStorey([...[...pending.values()].map(p => ({ facadeId: p.e.facadeId, f: p.f })), ...arrayed].flatMap(p => {
+        const r = facades.find(x => x.facadeId === p.facadeId);
         const main = r && !r.reason ? r.tiers?.find(t => t.from !== 'residual-tier') : undefined;
         return main && r!.rowsIn ? [{ frame: p.f, rowPitchPx: main.rowPitchM / p.f.pixel, rowPhasePx: main.rowPhaseM / p.f.pixel, rows: r!.rowsIn, cols: r!.colsIn }] : [];
     }), P);

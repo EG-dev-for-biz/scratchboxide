@@ -47,7 +47,7 @@ import { viewRelight, type ViewRelightParams, type ViewRelightReport } from './p
 import { roofShadowLift, type RoofShadowReport } from './pipeline-k/roof-shadow';
 import { evaluateShadowLift, type ShadowLiftQaReport } from './pipeline-k/shadow-lift-qa';
 import { skyDelight, type SkyDelightReport } from './pipeline-k/sky-delight';
-import { classPhotoTextures, classRepeatSizes, classSwatchSheet, describeMaterialRegions, readRegionClasses, writeMaterialRegions, type MaterialRegionsPlan, type MaterialRegionsReport, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
+import { applyExposureGain, applyFrameFinish, fitExposureGain, classPhotoTextures, classRepeatSizes, classSwatchSheet, describeMaterialRegions, readRegionClasses, writeMaterialRegions, type MaterialRegionsPlan, type MaterialRegionsReport, type RegionClass, type RegionSet } from './pipeline-k/material-regions';
 import { planMaterialRegionsOnThreads } from './pipeline-k/material-regions-pool';
 import { materialClassesExtras, type ClassWords, type MaterialClassesExtras } from './pipeline-k/material-naming';
 import {
@@ -310,7 +310,8 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
             let sets: RegionSet[] | undefined;
             try { sets = await opts.materialRegions.sets(classes, swatches); } catch (err) { regionsSkipped = `the library sets could not be resolved: ${err instanceof Error ? err.message : String(err)}`; }
             // each photo's maps planned on its own worker thread (material-regions-pool.ts), the same plan as on one
-            if (sets) try { regionsPlan = await planMaterialRegionsOnThreads(g, json, finalImage, classes, sets); } catch (err) { regionsSkipped = `planning the maps failed: ${err instanceof Error ? err.message : String(err)}`; }
+            // window frames beside the glass are not glass (the texturing expert's rule, applyFrameFinish), on whichever path planned
+            if (sets) try { regionsPlan = await planMaterialRegionsOnThreads(g, json, finalImage, classes, sets); applyFrameFinish(regionsPlan, json, finalImage, classes); /* the building's one exposure gain, after the maps are planned on the photos as read */ const ex = fitExposureGain(classes, sets, finalImage); applyExposureGain(finalImage, ex.gain); regionsPlan.report.exposure = ex; } catch (err) { regionsSkipped = `planning the maps failed: ${err instanceof Error ? err.message : String(err)}`; }
         }
         opts.onStep?.('materials', regionsSkipped ? 'failed' : 'done');
     }
