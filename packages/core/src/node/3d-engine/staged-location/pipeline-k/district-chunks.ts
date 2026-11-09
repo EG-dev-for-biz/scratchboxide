@@ -92,6 +92,34 @@ export const KD_GROUND_CELL_STEPS: Readonly<Record<string, boolean>> = {
     'polish.lattice': false
 };
 
+/**
+ * The shown band (user decision 2026-11-08: a district is shown and explorable within 3 minutes, its model-refined detail
+ * after; docs/research/2026-11-08-kd-cloud-processing-design.md): every chunk built with no model call at all (`models`
+ * off: the facade reader, the building system, the window reader, material naming and picks, the upscale, the lighting
+ * models), no material sets and no facade upscale. Each building keeps K's straightened geometry, its window fit from
+ * the photo, and its de-lit, harmonised photos.
+ */
+export const KD_SHOWN_STEPS: Readonly<Record<string, boolean>> = {
+    models: false,
+    'twin.materials': false,
+    'twin.facadeUpscale': false
+};
+
+/** Which band a chunked district builds: SCRATCHBOX_KD_BAND=shown (KD_SHOWN_STEPS), else everything. */
+export function kdBand(env: NodeJS.ProcessEnv = process.env): 'shown' | 'full' {
+    return env.SCRATCHBOX_KD_BAND?.trim() === 'shown' ? 'shown' : 'full';
+}
+
+/**
+ * The steps a chunk's build is asked for: the district's, then a building task's cell's ground steps (plan.unit
+ * 'building'), then the band's; undefined when none.
+ */
+export function chunkSteps(plan: DistrictChunkPlan, chunk: DistrictChunk, steps: Record<string, boolean> | undefined, band: 'shown' | 'full'): Record<string, boolean> | undefined {
+    const ground = plan.unit === 'building' && isCellChunk(chunk);
+    if (!ground && band === 'full') return steps;
+    return { ...(steps ?? {}), ...(ground ? KD_GROUND_CELL_STEPS : {}), ...(band === 'shown' ? KD_SHOWN_STEPS : {}) };
+}
+
 /** How a chunked district is split: by 120 m cells (each building whole in one), or a task per building beside the cells. */
 export type DistrictChunkUnit = 'cell' | 'building';
 

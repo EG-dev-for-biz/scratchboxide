@@ -207,7 +207,7 @@ import { runMassingStage, stagedPipelineE, pipelineEInference, PIPELINE_E_VERSIO
 import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
 import { districtBuildingIndex, districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
-import { chunkCpuShare, chunkOwner, chunkParallel, isCellChunk, kdCentreRunner, kdChunkUnit, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, KD_GROUND_CELL_STEPS, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
+import { chunkCpuShare, chunkOwner, chunkParallel, chunkSteps, isCellChunk, kdBand, kdCentreRunner, kdChunkUnit, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
 import { createChunkJoiner } from './pipeline-k/chunk-join-worker';
 import { auditDistrictForPlace, placeStoreEnabled, pullPlaceForRun, syncPlaceAfterObjects } from './place-store-district';
 import { PLACE_STORE_PARAMS } from './place-store';
@@ -1587,9 +1587,23 @@ function activeSceneReport(run: StagedRun): StagedActiveSceneReport | undefined 
     };
 }
 
+/**
+ * The deps with every model client taken out (request.steps.models false): the vision chain (the facade reader, the
+ * building system, the window reader, vehicles, material naming, picks and finishes, the upscale), the texture pass's
+ * enhancement and lighting models, the grounded references and pipeline J's paid services. Each stage that needed one
+ * then runs its own model-free path, as it does where no model is configured, and says so.
+ */
+export function withoutModels(deps: StagedLocationDeps): StagedLocationDeps {
+    const { groundedReferences: _g, pipelineI: _i, ...rest } = deps;
+    const textures = deps.textures ? (({ enhance: _e, lighting: _l, ...t }) => t)(deps.textures) : undefined;
+    return { ...rest, vision: { unavailable: 'no model is asked in this build (models off: the district\'s shown band, its model-refined detail after)' }, ...(textures ? { textures } : {}) };
+}
+
 export async function runStagedLocation(requestIn: StagedLocationRequest, deps: StagedLocationDeps, ctx: StagedLocationContext = {}): Promise<StagedLocationOutcome> {
     // every request to the vision models this run makes is kept to the process's call budget and counted (model_calls note)
     const modelCalls = new ModelCallMeter();
+    // `models` off (a district's shown band, district-chunks.ts KD_SHOWN_STEPS): this build asks no model anything
+    if (requestIn.steps?.models === false) deps = withoutModels(deps);
     if (deps.vision && 'client' in deps.vision) deps = { ...deps, vision: { ...deps.vision, client: budgetedClient(deps.vision.client, { meter: modelCalls }) } };
     const now = deps.now ?? Date.now;
     const cache = deps.cache;
@@ -1977,8 +1991,9 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             // the centre keeps the hero's address: its scene is the one the district is published on
                             place: { lat: ll.lat, lng: ll.lng, formattedAddress: c.centre ? placeValue!.formattedAddress : `${placeValue!.formattedAddress} (chunk ${c.index})` },
                             ...(request.enhance !== undefined ? { enhance: request.enhance } : {}),
-                            // with a task per building, a cell builds its ground with K's facade work off (its buildings are the tasks')
-                            ...(plan.unit === 'building' && isCellChunk(c) ? { steps: { ...(request.steps ?? {}), ...KD_GROUND_CELL_STEPS } } : request.steps ? { steps: request.steps } : {}),
+                            // with a task per building a cell builds its ground with K's facade work off (its buildings are the tasks');
+                            // in the shown band no chunk calls a model (district-chunks.ts chunkSteps)
+                            ...((s => s ? { steps: s } : {})(chunkSteps(plan, c, request.steps, kdBand()))),
                             chunk: { of: runId, index: c.index, rect: { x0: c.rect.x0 - c.cx, z0: c.rect.z0 - c.cz, x1: c.rect.x1 - c.cx, z1: c.rect.z1 - c.cz } }
                         }, {
                             signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce,

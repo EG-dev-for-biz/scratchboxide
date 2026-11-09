@@ -19,9 +19,10 @@ vi.mock('os', async importOriginal => {
     return { ...real, totalmem: () => machine.totalMem || real.totalmem() };
 });
 
-import { chunkCpuShare, chunkOwner, chunkParallel, chunkTerritory, DISTRICT_CHUNKS_PARAMS, frameTransform, isCellChunk, joinChunkGlb, kdChunkUnit, planDistrictChunks } from '../src/node/3d-engine/staged-location/pipeline-k/district-chunks';
+import { chunkCpuShare, chunkOwner, chunkParallel, chunkSteps, chunkTerritory, DISTRICT_CHUNKS_PARAMS, frameTransform, isCellChunk, joinChunkGlb, kdBand, kdChunkUnit, KD_GROUND_CELL_STEPS, KD_SHOWN_STEPS, planDistrictChunks } from '../src/node/3d-engine/staged-location/pipeline-k/district-chunks';
 import { nodeWorldMatrices, parseGlbBytes, readAccessor, transformPoint } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { writeStagedGlbFile } from '../src/node/3d-engine/staged-location/staged-glb-writer';
+import { withoutModels } from '../src/node/3d-engine/staged-location/orchestrator';
 import { cellLines, solveSeamGains } from '../src/node/3d-engine/staged-location/pipeline-k/district-seams';
 import { scanToGeodetic } from '../src/node/spatial/StreetViewSurveyPlanner';
 import { GoogleTileDistrictCrawler } from '../src/node/spatial/GoogleTileDistrictCrawler';
@@ -107,6 +108,34 @@ describe('pipeline K-D: a district in chunks', () => {
         // the switch
         expect(kdChunkUnit({ SCRATCHBOX_KD_CHUNK_UNIT: 'building' })).toBe('building');
         expect(kdChunkUnit({})).toBe('cell');
+    });
+
+    it('asks each chunk for its steps: the ground steps in a building plan\'s cells, and in the shown band no model at all', () => {
+        const block = { id: 'block', centroid: [50, 0] as [number, number], loops: [rect(20, -10, 80, 10)] };
+        const cells = planDistrictChunks(350, [block])!, tasks = planDistrictChunks(350, [block], DISTRICT_CHUNKS_PARAMS, 'building')!;
+        const cell = tasks.chunks.find(c => c.centre)!, building = tasks.chunks.find(c => !isCellChunk(c))!;
+        const asked = { 'remesh.facadeRead': true, 'polish.base': false };
+        // the full band of a cell plan: the district's own steps, untouched
+        expect(chunkSteps(cells, cells.chunks[0], asked, 'full')).toBe(asked);
+        expect(chunkSteps(cells, cells.chunks[0], undefined, 'full')).toBeUndefined();
+        // a building plan's cell: its ground steps over the district's; its building task: the district's
+        expect(chunkSteps(tasks, cell, asked, 'full')).toEqual({ ...asked, ...KD_GROUND_CELL_STEPS });
+        expect(chunkSteps(tasks, building, asked, 'full')).toBe(asked);
+        // the shown band: no model, no material sets, no upscale, everywhere, over anything asked
+        expect(chunkSteps(tasks, building, asked, 'shown')).toEqual({ ...asked, ...KD_SHOWN_STEPS, 'remesh.facadeRead': true });
+        expect(chunkSteps(tasks, building, { models: true }, 'shown')!.models).toBe(false);
+        expect(chunkSteps(tasks, cell, undefined, 'shown')).toEqual({ ...KD_GROUND_CELL_STEPS, ...KD_SHOWN_STEPS });
+        expect(kdBand({ SCRATCHBOX_KD_BAND: 'shown' })).toBe('shown');
+        expect(kdBand({})).toBe('full');
+        // models off: every model client gone, the rest of the deps kept
+        const deps = { cache: {}, vision: { client: {}, candidates: ['m'] }, groundedReferences: async () => ({}), pipelineI: {}, textures: { enhance: {}, lighting: {}, maxSide: 4096 }, elevations: async () => [] } as never;
+        const off = withoutModels(deps) as unknown as Record<string, unknown>;
+        expect(off.vision).toMatchObject({ unavailable: expect.stringContaining('models off') });
+        expect(off.groundedReferences).toBeUndefined();
+        expect(off.pipelineI).toBeUndefined();
+        expect(off.textures).toEqual({ maxSide: 4096 });
+        expect(off.cache).toBe((deps as unknown as Record<string, unknown>).cache);
+        expect(off.elevations).toBe((deps as unknown as Record<string, unknown>).elevations);
     });
 
     it('plans whole every building the circle reaches, its middle past it or not, and leaves out one reaching too far', () => {
