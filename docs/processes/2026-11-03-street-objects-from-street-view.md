@@ -51,6 +51,28 @@
     * the 2,758 unsure or artefact clusters are not street-object candidates at all.
   * **The eye-level renders are weak:** for the lamp-post row and the utility pole, the camera stands against scan geometry, so the before/after pair barely differs; the tree rebuilt as a solid of revolution reads as a toy.
   * **Sheet:** `docs/screenshots/street-objects_2026-11-08/penn-street-objects-pr95-sheet.jpg` (`make_map.py` beside it draws the plan map by decision).
+* **Penn, run 2 on the same audit, after the fixes in fdb431ba (2026-11-08):**
+  * **The fixes:**
+    * the clear test sees only a blob's near side;
+    * the budget is 400 images, and views prefer panos already registered;
+    * timed-out fetches are asked for again.
+  * **Before (run 1) against after (run 2):**
+    * images fetched: 117 of 160 against 393 of 400 (64 asked twice);
+    * vision reads: 46 against 142;
+    * clusters with a Street View label: 71 against 186, which is 4.2% of 4,425, or 11.2% of the 1,667 street clusters;
+    * rebuilt families: 4 against 8; scan kept: 1 against 6; temporary: 5 against 16;
+    * run time: 35 min against 128 min.
+  * **Still unexplained:**
+    * 760 clusters are blocked in the scan (858 before): most of these blocks are real, sidewalk sheds and trees in the tile;
+    * 372 are past the budget;
+    * 271 have no pano near enough to frame them;
+    * 151 are "views show nothing there".
+  * **Weaknesses:**
+    * The vision read is not stable from run to run. The young tree one/4102, rebuilt in run 1 from the same three panos, is read "not there" in run 2. The lamp-post row row/658 lost its one edge-registered view to the pano-reuse preference, and its other views show nothing.
+    * A building's projecting bay (one/0) was rebuilt as a street object; a building part should not reach the families.
+    * The eye-level renders still often stand inside scan geometry.
+    * The joint registration never ran: scoring 22 panos' start poses against the whole district tile took its whole 600 s budget. This is fixed separately in PR #202.
+  * **Sheet:** `docs/screenshots/street-objects_2026-11-08/penn-street-objects-run2-sheet.jpg`.
 * **Penn, 8th Ave at the Farley Building (2026-11-04, the user's walk-mode block).**
   * **The build:** staged at 40.7506, -73.9952 (`"query": "40.75060, -73.99520"`, `district: "scan"`, trees on), stopped once its district audit was written. A first build queried as "8th Ave & W 32nd St" geocoded to the 14 St / 8 Av station and was stopped.
   * **The audit:** 951 clusters. The bollard rows come out as rows: 20, 16 and 15 members at about 1.52 m pitch.
