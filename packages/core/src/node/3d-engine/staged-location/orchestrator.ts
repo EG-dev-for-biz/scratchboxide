@@ -208,7 +208,7 @@ import { stagedModelService } from './staged-switches';
 import { describeRectified, PIPELINE_K_VERSION, rectifyReliefOrthos, stagedPipelineK, stagedPipelineKD } from './pipeline-k/pipeline-k';
 import { describeMirrorFill, describeMirrorWindows, describeSymmetry, detectSymmetry, mirrorFillOrthos, mirrorWindows, stampSymmetryGlb, symmetryFillOn, symmetryOn, symmetryWindowsOn, SYMMETRY_VERSION, type SymmetryReport } from './pipeline-k/symmetry';
 import { districtBuildingIndex, districtFootprints, type DistrictFootprint } from './pipeline-k/district-buildings';
-import { chunkCpuShare, chunkOwner, chunkParallel, chunkSteps, isCellChunk, kdBand, kdCentreRunner, kdChunkUnit, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunk, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
+import { chunkCpuShare, chunkOwner, chunkParallel, chunkSteps, fastChunkIndices, isCellChunk, kdFastChunks, kdBand, kdCentreRunner, kdChunkUnit, chunkTerritory, DISTRICT_CHUNKS_PARAMS, DISTRICT_CHUNKS_VERSION, frameTransform, joinChunkGlb, KD_CHUNK_CUT_VERSION, planDistrictChunks, type ChunkLayerJoinResult, type DistrictChunk, type DistrictChunkPlan, type KdChunkCutSpec, type TileFrame } from './pipeline-k/district-chunks';
 import { createChunkJoiner } from './pipeline-k/chunk-join-worker';
 import { auditDistrictForPlace, placeStoreEnabled, pullPlaceForRun, syncPlaceAfterObjects } from './place-store-district';
 import { PLACE_STORE_PARAMS } from './place-store';
@@ -1948,6 +1948,8 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                 // longest builds start first and, with the pool in several regions, the largest land in different regions;
                 // otherwise nearest first
                 const area = (c: DistrictChunk) => (c.rect.x1 - c.rect.x0) * (c.rect.z1 - c.rect.z0);
+                // the largest building tasks marked for the fast VMs (SCRATCHBOX_KD_FAST_CHUNKS)
+                const fast = fastChunkIndices(plan, kdFastChunks());
                 const todo = plan.chunks.filter(c => !c.centre || centreInCloud).sort(plan.unit === 'building'
                     ? (a, b) => Number(b.centre) - Number(a.centre) || area(b) - area(a) || a.index - b.index
                     : (a, b) => Math.hypot(a.cx, a.cz) - Math.hypot(b.cx, b.cz));
@@ -2010,7 +2012,7 @@ export async function runStagedLocation(requestIn: StagedLocationRequest, deps: 
                             ...((s => s ? { steps: s } : {})(chunkSteps(plan, c, request.steps, kdBand()))),
                             chunk: { of: runId, index: c.index, rect: { x0: c.rect.x0 - c.cx, z0: c.rect.z0 - c.cz, x1: c.rect.x1 - c.cx, z1: c.rect.z1 - c.cz } }
                         }, {
-                            signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce,
+                            signal: io.signal, onProgress: m => io.progress(`chunk ${c.index}: ${m}`), atOnce, ...(fast.has(c.index) ? { fast: true } : {}),
                             // the district's frame when known already (the centre built here); else the centre job publishes it to the
                             // others (district-chunks.ts cutChunkLayer)
                             cut: { version: KD_CHUNK_CUT_VERSION, plan, district: here ? { ...here } : { lat: placeValue!.lat, lng: placeValue!.lng }, bandM: DISTRICT_CHUNKS_PARAMS.seamBandM }

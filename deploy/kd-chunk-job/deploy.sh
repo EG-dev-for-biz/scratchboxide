@@ -13,6 +13,11 @@ set -euo pipefail
 #   deploy/kd-chunk-job/deploy.sh service the warm worker pool: the same image as a Cloud Run service (kd-chunk-job.ts --serve),
 #                                         0 instances between districts, one chunk an instance, as the app's account
 #                                         (SERVICE, MAX_INSTANCES; the runner's SCRATCHBOX_KD_CLOUD_SERVICE names it)
+#   deploy/kd-chunk-job/deploy.sh vms     the fast VMs: COUNT (default 6) Compute Engine VMs kd-fast-1.. (MACHINE, default
+#                                         c3-standard-8; ZONE, default us-central1-a) running the image's --poll worker, each
+#                                         suspended once its worker is ready (the runner's SCRATCHBOX_KD_CLOUD_VMS names
+#                                         them, SCRATCHBOX_KD_FAST_CHUNKS sets how many chunks go there)
+#   deploy/kd-chunk-job/deploy.sh vms-delete  every kd-fast-* VM deleted
 #
 # Needs your own `gcloud auth login`. Every step creates or changes billed resources in the project.
 #
@@ -142,6 +147,48 @@ service() {
     --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT,SCRATCHBOX_GOOGLE_ADC=1,GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY,SCRATCHBOX_TRAINING_BUCKET=$TRAINING_BUCKET,SCRATCHBOX_STORE_BUCKET=off,SCRATCHBOX_CPUS=$CPU,SCRATCHBOX_TEXTURE_WORKERS=$((CPU > 1 ? CPU - 1 : 1)),SCRATCHBOX_KD_CHUNK_JOB=1"
 }
 
+# The fast VMs: each runs a new container of the image per chunk (docker run --rm in a loop: the chunk builds from the
+# image's own files, as a job task does), and is suspended between districts (billed for its disk and kept memory only).
+vms() {
+  local app; app="$(app_sa)"
+  local count="${COUNT:-6}" machine="${MACHINE:-c3-standard-8}" zone="${ZONE:-us-central1-a}"
+  [ -n "${GOOGLE_MAPS_API_KEY:-}" ] || { echo "set GOOGLE_MAPS_API_KEY"; exit 1; }
+  local work; work="$(mktemp -d)"; chmod 700 "$work"
+  printf 'GOOGLE_CLOUD_PROJECT=%s\nSCRATCHBOX_GOOGLE_ADC=1\nGOOGLE_MAPS_API_KEY=%s\nSCRATCHBOX_TRAINING_BUCKET=%s\nSCRATCHBOX_STORE_BUCKET=off\nSCRATCHBOX_CPUS=8\nSCRATCHBOX_TEXTURE_WORKERS=7\nSCRATCHBOX_KD_CHUNK_JOB=1\nKD_VM_BUCKET=%s\n' \
+    "$PROJECT" "$GOOGLE_MAPS_API_KEY" "$TRAINING_BUCKET" "$JOB_BUCKET" > "$work/kd.env"
+  cat > "$work/startup.sh" <<'EOS'
+#!/bin/bash
+export HOME=/var/tmp
+md() { curl -s -H 'Metadata-Flavor: Google' "http://metadata.google.internal/computeMetadata/v1/instance/attributes/$1"; }
+IMAGE="$(md kd-image)"
+md kd-env > /var/tmp/kd.env
+docker-credential-gcr configure-docker --registries "${IMAGE%%/*}"
+docker pull "$IMAGE"
+nohup bash -c "while true; do docker run --rm --name kd --env-file /var/tmp/kd.env $IMAGE node --max-old-space-size=28672 -r ts-node/register packages/core/src/node/3d-engine/staged-location/kd-chunk-job.js --poll 2>&1 | logger -t kd-vm; sleep 1; done" >/dev/null 2>&1 &
+EOS
+  local names=()
+  for i in $(seq 1 "$count"); do names+=("kd-fast-$i"); "${G[@]}" storage rm "gs://$JOB_BUCKET/kd-vm/kd-fast-$i/**" >/dev/null 2>&1 || true; done
+  echo "[vms] ${names[*]}: $machine in $zone, $IMAGE"
+  "${G[@]}" compute instances create "${names[@]}" --zone "$zone" --machine-type "$machine" --image-family cos-stable --image-project cos-cloud \
+    --boot-disk-size 20GB --boot-disk-type pd-balanced --service-account "$app" --scopes cloud-platform \
+    --metadata "kd-image=$IMAGE" --metadata-from-file "startup-script=$work/startup.sh,kd-env=$work/kd.env" >/dev/null
+  rm -rf "$work"
+  for n in "${names[@]}"; do
+    until "${G[@]}" storage ls "gs://$JOB_BUCKET/kd-vm/$n/ready.json" >/dev/null 2>&1; do sleep 5; done
+    echo "[vms] $n ready: suspending"
+    "${G[@]}" compute instances suspend "$n" --zone "$zone" --async >/dev/null
+  done
+  echo "[vms] done: SCRATCHBOX_KD_CLOUD_VMS=$(IFS=,; echo "${names[*]}") SCRATCHBOX_KD_FAST_CHUNKS=$count"
+}
+
+vms_delete() {
+  local zone="${ZONE:-us-central1-a}"
+  local names; names="$("${G[@]}" compute instances list --filter="name~^kd-fast-" --format="value(name)")"
+  [ -n "$names" ] || { echo "[vms-delete] none"; return; }
+  # shellcheck disable=SC2086
+  "${G[@]}" compute instances delete $names --zone "$zone"
+}
+
 JOB_ID="${JOB_SA%%@*}"
 case "${1:-}" in
   setup) setup ;;
@@ -157,6 +204,13 @@ case "${1:-}" in
     export GOOGLE_MAPS_API_KEY
     job ;;
   all) setup; build; job ;;
+  vms|vms-delete)
+    export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$SA_KEY_FILE"
+    G=(gcloud --project "$PROJECT" --quiet)
+    ENV_FILE="${ENV_FILE:-$(git -C "$REPO_ROOT" worktree list --porcelain | sed -n '1s/^worktree //p')/.env}"
+    GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(grep -m1 '^GOOGLE_MAPS_API_KEY=' "$ENV_FILE" | cut -d= -f2- | tr -d "\"' \r")}"
+    export GOOGLE_MAPS_API_KEY
+    if [ "$1" = vms ]; then vms; else vms_delete; fi ;;
   service)
     # as job-app: the app's account, the Maps key from the main checkout's .env (never printed)
     export CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="$SA_KEY_FILE"
@@ -165,5 +219,5 @@ case "${1:-}" in
     GOOGLE_MAPS_API_KEY="${GOOGLE_MAPS_API_KEY:-$(grep -m1 '^GOOGLE_MAPS_API_KEY=' "$ENV_FILE" | cut -d= -f2- | tr -d "\"' \r")}"
     export GOOGLE_MAPS_API_KEY
     service ;;
-  *) sed -n '4,27p' "$0"; exit 2 ;;
+  *) sed -n '4,32p' "$0"; exit 2 ;;
 esac
