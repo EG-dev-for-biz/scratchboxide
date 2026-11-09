@@ -506,6 +506,8 @@ export class Location3DGaussianSplatService {
                 }
             } : {})
         };
+        // what the street-level step did, kept beside the world: text and numbers only, never a photograph
+        if (result.streetView) await fs.writeJson(path.join(outDir, 'street_view.json'), result.streetView, { spaces: 2 }).catch(() => undefined);
         if (cache) {
             // stored after the answer, so the user is not kept waiting on the upload; the manifest goes last, so an
             // interrupted upload is never taken for a world
