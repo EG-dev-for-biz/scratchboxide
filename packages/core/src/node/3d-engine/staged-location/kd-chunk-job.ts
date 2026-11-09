@@ -407,6 +407,21 @@ async function vmIdentity(): Promise<{ name: string; zone: string; project: stri
     return { name: name.trim(), zone: zonePath.trim().split('/').pop()!, project: project.trim() };
 }
 
+/** Asks Compute Engine to suspend this VM, only while it is RUNNING (a suspend already under way is left alone). */
+async function selfSuspend(me: { name: string; zone: string; project: string }, why: string): Promise<void> {
+    try {
+        const { GoogleAuth } = await import('google-auth-library');
+        const client = await new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] }).getClient();
+        const url = `https://compute.googleapis.com/compute/v1/projects/${me.project}/zones/${me.zone}/instances/${me.name}`;
+        const status = (await client.request<{ status?: string }>({ url, method: 'GET' })).data.status;
+        if (status !== 'RUNNING') return;
+        console.log(`[kd-vm] ${why}: suspending ${me.name}`);
+        await client.request({ url: `${url}/suspend`, method: 'POST' });
+    } catch (err) {
+        console.error(`[kd-vm] could not suspend itself (${why}): ${err instanceof Error ? err.message : String(err)}`);
+    }
+}
+
 /** The chunk build on a suspended-between-districts VM (see the file comment). */
 async function poll(root: string): Promise<void> {
     const { GcsCloudBucket } = await import('../../cloud-store/cloud-bucket');
@@ -465,23 +480,16 @@ async function poll(root: string): Promise<void> {
             const out = path.join(tmp, 'done.json');
             fs.writeFileSync(out, JSON.stringify({ ok, ms: Date.now() - t0, job, ...(error ? { error } : {}) }));
             await bucket.putFile(keys.done, out, { contentType: 'application/json' }).catch(err => console.error(`[kd-vm] done.json not sent: ${err}`));
+            // the VM suspends itself at once: it is the first to know the chunk is done (the runner moves on at the chunk's
+            // "chunk built" line and may never read done.json; 29 of 34 VMs were left running so, 2026-11-09). The request
+            // goes out before this process exits; the next district resumes the VM only once it reads SUSPENDED
+            await selfSuspend(me, 'chunk done');
             // a new process for the next chunk (the container restarts), as a job task gets
             process.exit(0);
         }
         if (Date.now() - idleSince > idleS * 1000) {
-            // nothing to build: the VM suspends itself (the runner normally has); after resume this loop goes on
-            try {
-                const { GoogleAuth } = await import('google-auth-library');
-                const client = await new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] }).getClient();
-                const url = `https://compute.googleapis.com/compute/v1/projects/${me.project}/zones/${me.zone}/instances/${me.name}`;
-                const status = (await client.request<{ status?: string }>({ url, method: 'GET' })).data.status;
-                if (status === 'RUNNING') {
-                    console.log(`[kd-vm] idle ${idleS} s: suspending ${me.name}`);
-                    await client.request({ url: `${url}/suspend`, method: 'POST' });
-                }
-            } catch (err) {
-                console.error(`[kd-vm] could not suspend itself: ${err instanceof Error ? err.message : String(err)}`);
-            }
+            // nothing to build: the VM suspends itself (it normally has after its chunk); after resume this loop goes on
+            await selfSuspend(me, `idle ${idleS} s`);
             idleSince = Date.now();
         }
         await new Promise(r => setTimeout(r, 1_000));
