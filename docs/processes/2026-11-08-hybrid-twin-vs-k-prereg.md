@@ -126,6 +126,47 @@ changes.
   iL6aK4K9 and 02zHXunY (2024-2026 captures, the tile's massing). The paid call's grids are checked for era before any
   score is read; a view from another era is dropped and said so.
 
+- **Paid call:** `empire_state_building_350_5th_av_20261109T042449_07b9`, the pinned poses, every arm and decoy, run
+  through photo_match_evaluate's own code (a ts-node driver in this session's scratchpad, the app's environment; the
+  tool unchanged). Three earlier attempts stopped before any photo was fetched or anything judged: a module path the
+  driver could not resolve, the Maps key not in the driver's environment, and the driver compiled to a JavaScript target
+  that empties a Map's spread (so no pose reached the tool). None produced a score; this is the first and only judged run.
+- **Views:** v0 (lui1N8rP), v1 (iL6aK4K9) and v3 (w4nU8TkI) did not register (edge residual), so three views were judged:
+  v2 02zHXunY, v4 -qdlw7_X, v5 6BQ_gXrX, all 2026-04 captures whose massing matches the tile (era kept). v2's photo shows a
+  street-level scaffold shed on the podium that no arm has. Three views: judged, not indicative.
+- **Records:** report and grids in `docs/screenshots/hybrid_vs_k_2026-11-08/` (gitignored).
+
 ## Report
 
-(filled in after the paid call)
+Means over the three judged views (each the mean of 3 blind runs); spread = the run spread of the overall score.
+
+| # | Bar | K | H | Met? |
+|---|---|---|---|---|
+| 1 | Overall, H ≥ K | 4.55 (±0.31) | **5.00** (±0.00) | **met** (+0.45, wider than either spread) |
+| 2 | Shape, H ≥ K − 0.5 | 6.00 | **6.33** | **met** |
+| 3 | Materials, H ≥ K | 4.00 | **4.89** | **met** |
+| V1 | Spread ≤ 0.75, every arm | 0.31 | 0.00 | **met** (largest of any arm 0.31) |
+| V2 | Placement X2 ≥ H + 4.10 px | | H 3.71, X2 9.78 | **met** (+6.07) |
+| V3 | Materials H ≥ X3 + 1.0 | | H 4.89, X3 3.00 | **met** (+1.89) |
+
+Every arm, all criteria (judge means):
+
+| Arm | Overall | Shape | Materials | Detail | Errors | Realism | Identity | Clay shape | Placement px |
+|---|---|---|---|---|---|---|---|---|---|
+| raw scan | **6.67** | 6.89 | 6.22 | 5.89 | 6.00 | 5.56 | 7.00 | 3.11 | 2.98 |
+| K | 4.55 | 6.00 | 4.00 | 4.33 | 4.56 | 3.89 | 5.22 | **6.11** | 3.70 |
+| H (hybrid) | **5.00** | 6.33 | 4.89 | 4.33 | 5.00 | 4.22 | 5.66 | 5.89 | 3.71 |
+| I (inferred, K-free) | 4.45 | 6.00 | 4.45 | 4.11 | 4.56 | 3.78 | 5.22 | 4.00 | 3.72 |
+| X2 (H moved 4 m) | 4.89 | 5.89 | 4.89 | 4.33 | 4.67 | 4.22 | 5.66 | 5.44 | 9.78 |
+| X3 (H flat colour) | 3.11 | 6.33 | 3.00 | 3.22 | 5.67 | 3.00 | 4.22 | 5.89 | 3.71 |
+
+**Decision:** all three bars and both decoy bars are met: on this measure, at the ESB, the hybrid twin is at least at
+K's level (overall +0.45, materials +0.89, shape +0.33, identity +0.44, realism +0.33), at a fraction of K's model calls
+and size. The hybrid is a candidate for K's role on single buildings, for MAIN to class; next, the other cached
+benchmark buildings and the Penn district under a new preregistration.
+
+**What it does not say:**
+- Both builds score below the raw scan (6.67 overall), as K did in every earlier ESB comparison.
+- In clay (shape alone) K's shell edges the hybrid's (6.11 against 5.89, within the run spreads).
+- The judge does not see a 4 m move (X2 overall 4.89 against H 5.00); the placement measure does (bar V2), as designed.
+- Three of six views registered; one place. Detail is level (4.33 each).
