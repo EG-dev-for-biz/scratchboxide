@@ -79,6 +79,8 @@
 #include "scratchbox_geometry.hpp"
 #include "scratchbox_math.hpp"
 #include "scratchbox_revolution_fit.hpp"
+#include "scratchbox_inner_core.hpp"
+#include <memory>
 
 #include <algorithm>
 #include <array>
@@ -119,6 +121,7 @@ struct Plane {
     double d{0};
     double supportAreaM2{0};
     bool bounding{false};
+    int prior{-1};         // the id of the prior plane (Input::priors) this plane is, else -1
     double dist(const V3& p) const { return n.dot(p) + d; }
 };
 
@@ -155,11 +158,20 @@ struct Params {
     double revolutionTolM{0.35};   // ... and take the skin within this of a fitted profile out of the planes, the votes and the residual
     revolution_fit::Params revolution = [] { revolution_fit::Params r; r.endAtNonRound = 1; return r; }();
     int threads{0};                // 0: hardware concurrency
+    /** Inside/outside at a point by the skin's generalised winding number (Barnes-Hut, scratchbox_inner_core.hpp) instead
+     *  of the ray votes: the share of a cell's samples inside is the mean of the winding number clamped to [0, 1]. */
+    bool windingLabels{false};
+    double windingFarRatio{2.0};
+    /** A fitted region within alignDeg of a prior plane's direction and mergeDistM of it becomes that plane exactly. */
+    double priorAlignDeg{5.0};
 };
 
 struct Input {
     std::vector<V3> positions;
     std::vector<uint32_t> indices;
+    /** Planes fitted elsewhere (n unit, n . x + d = 0, n facing out; `prior` an id the caller chooses), taken as they are:
+     *  fitted regions on them join them, and they cut cells by the scan that lies on them like any fitted plane. */
+    std::vector<Plane> priors;
 };
 
 /** One shell face: every shell triangle on one plane, facing one way, with one label. */
@@ -207,6 +219,8 @@ struct Metrics {
 
 struct Result {
     std::vector<Plane> planes;                 // the 6 bounding planes first, then the fitted ones
+    /** Per prior plane given: (its id, the id of the prior plane it was taken as: itself, or an earlier one on its plane). */
+    std::vector<std::pair<int, int>> priorPlaneOf;
     /** Every fitted region tested as a plane: its direction agreement and its spread, and whether it was kept as a candidate. */
     struct PlaneCandidate { V3 n, o; double areaM2{0}, normalResultant{0}, rmsM{0}; bool rejected{false}; };
     std::vector<PlaneCandidate> planeCandidates;
@@ -725,7 +739,7 @@ public:
                     if (a != b) edgeTris[edgeKey(a, b)].push_back(static_cast<uint32_t>(t));
                 }
             }
-            struct Region { V3 n, o, sumN; double area{0}, rmsM{0}, resultant{0}; std::vector<uint32_t> tris; };
+            struct Region { V3 n, o, sumN; double area{0}, rmsM{0}, resultant{0}; std::vector<uint32_t> tris; int prior{-1}; };
             std::vector<Region> regions;
             std::vector<int> reg(nt, -1);
             std::vector<uint32_t> order;
@@ -829,14 +843,34 @@ public:
                 // two fits of one warped wall never cross at a shallow angle; planes then exactly parallel and within the
                 // merge offset of each other are one plane
                 const double cosAlign = std::cos(p.alignDeg * M_PI / 180.0);
+                const double cosPrior = std::cos(p.priorAlignDeg * M_PI / 180.0);
                 std::vector<Region> aligned;
+                // prior planes first, exactly as given; a prior on an earlier prior's plane is that plane
+                for (const auto& pr : in.priors) {
+                    bool dup = false;
+                    for (auto& a : aligned) if (a.n.dot(pr.n) >= cosPrior && std::abs(a.n.dot(pr.n * (-pr.d) - a.o)) <= p.mergeDistM) { R.priorPlaneOf.push_back({pr.prior, a.prior}); dup = true; break; }
+                    if (dup) continue;
+                    Region r; r.n = pr.n; r.o = pr.n * (-pr.d); r.prior = pr.prior; r.area = 0;
+                    R.priorPlaneOf.push_back({pr.prior, pr.prior});
+                    aligned.push_back(std::move(r));
+                }
+                const size_t nPriors = aligned.size();
                 for (auto& m : merged) {
                     Region* into = nullptr;
-                    for (auto& a : aligned) {
+                    bool onPrior = false;
+                    for (size_t k = 0; k < nPriors; ++k) {
+                        Region& a = aligned[k];
+                        if (a.n.dot(m.n) < cosPrior || std::abs(a.n.dot(m.o - a.o)) > p.mergeDistM) continue;
+                        a.tris.insert(a.tris.end(), m.tris.begin(), m.tris.end()); a.sumN += m.sumN; a.area += m.area;
+                        onPrior = true; break;
+                    }
+                    if (onPrior) continue;
+                    for (size_t k = 0; k < aligned.size(); ++k) {
+                        Region& a = aligned[k];
                         const double c = a.n.dot(m.n);
                         if (std::abs(c) < cosAlign) continue;
                         m.n = a.n * (c >= 0 ? 1.0 : -1.0);
-                        if (c >= 0 && std::abs(a.n.dot(m.o - a.o)) <= p.mergeDistM) into = &a;
+                        if (c >= 0 && k >= nPriors && std::abs(a.n.dot(m.o - a.o)) <= p.mergeDistM) into = &a;
                         break;
                     }
                     if (into) {
@@ -871,7 +905,7 @@ public:
             std::vector<int> remap(merged.size(), -1);
             for (size_t k = 0; k < keep.size(); ++k) {
                 remap[keep[k]] = static_cast<int>(k);
-                Plane pl; pl.n = merged[keep[k]].n; pl.d = -pl.n.dot(merged[keep[k]].o); pl.supportAreaM2 = area[keep[k]];
+                Plane pl; pl.n = merged[keep[k]].n; pl.d = -pl.n.dot(merged[keep[k]].o); pl.supportAreaM2 = area[keep[k]]; pl.prior = merged[keep[k]].prior;
                 fitted.push_back(pl);
             }
             double assignedArea = 0;
@@ -945,7 +979,23 @@ public:
         M.supportCells = leaves.size();
 
         // a ray vote at a point: the side of the skin each direction first meets
+        // the skin's winding number (each skin triangle as it faces out); Barnes-Hut over its dipoles
+        std::unique_ptr<inner_core::detail::Bvh> windTree;
+        if (p.windingLabels) {
+            std::vector<inner_core::detail::Tri> wt;
+            wt.reserve(skin.indices.size() / 3);
+            for (size_t i = 0; i + 2 < skin.indices.size(); i += 3) {
+                const auto& A = skin.vertices[skin.indices[i]].position; const auto& B = skin.vertices[skin.indices[i + 1]].position; const auto& C = skin.vertices[skin.indices[i + 2]].position;
+                wt.push_back({{A.x, A.y, A.z}, {B.x, B.y, B.z}, {C.x, C.y, C.z}});
+            }
+            windTree = std::make_unique<inner_core::detail::Bvh>(wt);
+        }
         auto voteAt = [&](const V3& s, double& in, double& out) {
+            if (windTree) {
+                const double w = std::clamp(windTree->winding({s.x, s.y, s.z}, p.windingFarRatio), 0.0, 1.0);
+                in += w; out += 1.0 - w;
+                return;
+            }
             for (const auto& d : dirs) {
                 bvh::RayHit h;
                 if (skinBvh.raycast(math::Ray(f3(s), f3(d)), h)) {
