@@ -614,10 +614,7 @@ export class CloudRunServiceJobs implements CloudRunJobs {
             idClient ??= await auth.getIdTokenClient(new URL(url).origin);
             const h = await idClient.getRequestHeaders() as unknown as { get?: (k: string) => string | null } & Record<string, string>;
             const authorization = typeof h.get === 'function' ? h.get('authorization') ?? '' : h.Authorization ?? h.authorization ?? '';
-            const res = await fetch(url, { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
-            const text = await res.text();
-            if (!res.ok) return { ok: false, error: `the worker answered ${res.status}: ${text.slice(0, 300)}` };
-            return parseServiceAnswer(text);
+            return postChunk(() => fetch(url, { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify(body), signal }), signal);
         };
         return new CloudRunServiceJobs(config, request, post);
     }
@@ -765,6 +762,12 @@ export class VmPoolJobs implements CloudRunJobs {
         const e = this.sent.get(execution);
         if (!e) throw new Error(`${this.label}: no chunk ${execution} was sent from here`);
         if (e.endMs === undefined) {
+            // a VM found suspended with its chunk unfinished (a suspend that reached it late) is resumed: the build goes on
+            try {
+                if (await this.compute.status(e.vm) === 'SUSPENDED') { this.log(`[kd-vm] ${e.vm} was suspended mid-chunk: resumed`); await this.compute.resume(e.vm); }
+            } catch (err) {
+                this.log(`[kd-vm] reading ${e.vm}: ${err instanceof Error ? err.message : String(err)}`);
+            }
             const file = path.join(this.workDir, `done-${e.vm}.json`);
             if (await this.bucket.download(kdVmKeys(e.vm).done, file)) {
                 const d = JSON.parse(fs.readFileSync(file, 'utf8')) as { ok?: boolean; job?: string; error?: string };
@@ -871,6 +874,37 @@ export class RoundRobinJobs implements CloudRunJobs {
 
     async cancel(execution: string): Promise<void> {
         await this.owner.get(execution)?.cancel(execution);
+    }
+}
+
+/** Statuses the pool answers while it scales (no instance yet, or one already busy): the chunk is sent again. */
+export const SERVICE_RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
+/** Tries of each chunk's request to the pool (backing off 2, 4, 8, ... s). */
+export const SERVICE_POST_ATTEMPTS = 6;
+
+/**
+ * One chunk's request to the pool: the pool scaling from zero under a burst can answer 503 (no instance yet), 429, or drop
+ * the connection before answering; each is asked again after 2, 4, 8, ... s (SERVICE_POST_ATTEMPTS in all), never taken
+ * for a failed chunk (a 503 at Penn's burst left a chunk to the retry after every other, 2026-11-09).
+ */
+export async function postChunk(send: () => Promise<{ ok: boolean; status: number; text(): Promise<string> }>, signal: AbortSignal, sleep: (ms: number) => Promise<void> = ms => new Promise(r => setTimeout(r, ms))): Promise<{ ok: boolean; error?: string }> {
+    for (let attempt = 1; ; attempt++) {
+        let res: { ok: boolean; status: number; text(): Promise<string> };
+        try {
+            res = await send();
+        } catch (err) {
+            if (signal.aborted || attempt >= SERVICE_POST_ATTEMPTS) throw err;
+            await sleep(1_000 * 2 ** attempt);
+            continue;
+        }
+        if (SERVICE_RETRY_STATUS.has(res.status) && attempt < SERVICE_POST_ATTEMPTS) {
+            await res.text().catch(() => '');
+            await sleep(1_000 * 2 ** attempt);
+            continue;
+        }
+        const text = await res.text();
+        if (!res.ok) return { ok: false, error: `the worker answered ${res.status}: ${text.slice(0, 300)}` };
+        return parseServiceAnswer(text);
     }
 }
 

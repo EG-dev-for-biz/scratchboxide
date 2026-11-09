@@ -35,8 +35,10 @@
  * deploy.sh vms): every second it looks for `kd-vm/<instance>/assign.json` in the job bucket (KD_VM_BUCKET, default
  * scoutscan-kd-jobs), takes it (removed first, so a chunk is built once), builds that chunk exactly as a job task does from
  * the workspace the image left, writes `kd-vm/<instance>/done.json` (`{ ok, ms, job }`) and exits, so the container's restart
- * gives the next chunk a new process. With nothing to build for KD_VM_IDLE_SUSPEND_S (default 120) it suspends its own VM:
- * the runner suspends it once the chunk is done, and this keeps a VM a runner forgot from running on. A service instance
+ * gives the next chunk a new process. With nothing to build for KD_VM_IDLE_SUSPEND_S (default 600) it suspends its own VM,
+ * only when the API says it is RUNNING: the runner suspends it once the chunk is done, and this keeps a VM a runner forgot
+ * from running on. (A suspend takes minutes, the VM running meanwhile; a self-suspend asked then reached the VM after its
+ * next resume and froze it mid-chunk, 2026-11-09: hence the long wait and the check.) A service instance
  * built the largest building about 35% slower than a job task or this VM's C3 (149 s, 2026-11-09); a VM resumes in ~14 s.
  */
 
@@ -413,7 +415,7 @@ async function poll(root: string): Promise<void> {
     const bucket = new GcsCloudBucket(new GoogleMediaCredentialsService().createStorageClient().bucket(process.env.KD_VM_BUCKET?.trim() || 'scoutscan-kd-jobs'));
     const keys = kdVmKeys(me.name), scratch = path.join(root, '.scratchbox'), snapshot = filesUnder(scratch);
     const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'kd-vm-'));
-    const idleS = Number(process.env.KD_VM_IDLE_SUSPEND_S) > 0 ? Number(process.env.KD_VM_IDLE_SUSPEND_S) : 120;
+    const idleS = Number(process.env.KD_VM_IDLE_SUSPEND_S) > 0 ? Number(process.env.KD_VM_IDLE_SUSPEND_S) : 600;
     let idleSince = Date.now(), last = Date.now();
     console.log(`[kd-vm] ${me.name} (${me.zone}) waiting for ${bucket.label}/${keys.assign}`);
     // ready: deploy.sh vms suspends a new VM once its worker says so
@@ -468,8 +470,12 @@ async function poll(root: string): Promise<void> {
             try {
                 const { GoogleAuth } = await import('google-auth-library');
                 const client = await new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] }).getClient();
-                console.log(`[kd-vm] idle ${idleS} s: suspending ${me.name}`);
-                await client.request({ url: `https://compute.googleapis.com/compute/v1/projects/${me.project}/zones/${me.zone}/instances/${me.name}/suspend`, method: 'POST' });
+                const url = `https://compute.googleapis.com/compute/v1/projects/${me.project}/zones/${me.zone}/instances/${me.name}`;
+                const status = (await client.request<{ status?: string }>({ url, method: 'GET' })).data.status;
+                if (status === 'RUNNING') {
+                    console.log(`[kd-vm] idle ${idleS} s: suspending ${me.name}`);
+                    await client.request({ url: `${url}/suspend`, method: 'POST' });
+                }
             } catch (err) {
                 console.error(`[kd-vm] could not suspend itself: ${err instanceof Error ? err.message : String(err)}`);
             }

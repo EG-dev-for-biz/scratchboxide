@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DirectoryCloudBucket } from '../src/node/cloud-store/cloud-bucket';
 import { GeminiClient } from '../src/node/gemini/gemini-client';
 import {
-    checkImageSkew, cloudChunkConfig, CloudRunServiceJobs, HybridJobs, kdVmKeys, RoundRobinJobs, VmPoolJobs, type ComputeVms, cloudRunTaskCostUsd, createCloudChunkRunner, forwardedJobEnv, parseServiceAnswer, imageCommit, KD_CHUNK_BUILT_LINE, kdChunkJobPrefix, kdChunkLayerFiles,
+    checkImageSkew, cloudChunkConfig, CloudRunServiceJobs, HybridJobs, kdVmKeys, postChunk, RoundRobinJobs, VmPoolJobs, type ComputeVms, cloudRunTaskCostUsd, createCloudChunkRunner, forwardedJobEnv, parseServiceAnswer, imageCommit, KD_CHUNK_BUILT_LINE, kdChunkJobPrefix, kdChunkLayerFiles,
     localiseJobPaths, newProgressLines, parseExecution, type CloudExecution, type CloudRunJobs, type KdChunkJobSpec
 } from '../src/node/3d-engine/staged-location/cloud-chunk-runner';
 import { parseKdJobLocation, requestEnv, restoreWorkspace, runKdChunkJob } from '../src/node/3d-engine/staged-location/kd-chunk-job';
@@ -316,11 +316,32 @@ describe('pipeline K-D cloud chunk runner', () => {
         const d = await vms.run({ KD_JOB: 'gs://scoutscan-kd-jobs/kd-jobs/c527da43/31' });
         expect(d.startsWith('vm/kd-fast-1/')).toBe(true);
         expect(status.get('kd-fast-1')).toBe('RUNNING');
+        // a VM found suspended with its chunk unfinished (a late suspend) is resumed, the chunk still running
+        status.set('kd-fast-1', 'SUSPENDED');
+        calls.length = 0;
+        expect(await vms.get(d)).toMatchObject({ done: false });
+        expect(calls).toEqual(['resume kd-fast-1']);
         // VMs created from different images are refused; the config
         const mixed = new VmPoolJobs(['x', 'y'], { ...compute, image: async vm => (vm === 'x' ? img : img.replace(SHA, 'c'.repeat(40))) }, bucket, tmp('vm-work2'));
         await expect(mixed.jobImage()).rejects.toThrow(/one image/);
         expect(cloudChunkConfig({ SCRATCHBOX_KD_CLOUD_VMS: 'kd-fast-1,kd-fast-2, Bad_Name' })).toMatchObject({ vms: ['kd-fast-1', 'kd-fast-2'], vmZone: 'us-central1-a' });
         expect(() => kdVmKeys('../x')).toThrow();
+    });
+
+    it('sends a chunk to the pool again while it scales (503, 429, a dropped connection), never failing it for that', async () => {
+        const answers: Array<() => { ok: boolean; status: number; text(): Promise<string> }> = [
+            () => { throw new Error('socket hang up'); },
+            () => ({ ok: false, status: 503, text: async () => 'no instance' }),
+            () => ({ ok: false, status: 429, text: async () => 'busy' }),
+            () => ({ ok: true, status: 200, text: async () => '\n{"ok":true,"ms":5}' })
+        ];
+        const waits: number[] = [];
+        let k = 0;
+        expect(await postChunk(async () => answers[k++](), new AbortController().signal, async ms => { waits.push(ms); })).toEqual({ ok: true });
+        expect(waits).toEqual([2000, 4000, 8000]);
+        // a real refusal is the chunk's answer at once; a pool that never comes is a failure after the last try
+        expect(await postChunk(async () => ({ ok: false, status: 400, text: async () => 'no KD_JOB' }), new AbortController().signal, async () => undefined)).toEqual({ ok: false, error: 'the worker answered 400: no KD_JOB' });
+        expect(await postChunk(async () => ({ ok: false, status: 503, text: async () => 'none' }), new AbortController().signal, async () => undefined)).toMatchObject({ ok: false, error: expect.stringMatching(/503/) });
     });
 
     it('sets no budget on an execution when this process has none', async () => {
