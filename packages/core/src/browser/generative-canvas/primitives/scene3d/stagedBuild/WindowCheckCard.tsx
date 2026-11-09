@@ -11,7 +11,9 @@
  * The window check (user ask, 2026-11-07): when a 3D Building scene loads, a card asks the viewer to select the images,
  * cropped from earlier builds' facade photos, whose outlined box is a window, as a CAPTCHA does. The answers label the
  * window-array sites the pipeline was least sure of (pipeline-k/window-check.ts, GET and POST /3d/window-check). Once
- * per build per session; Skip and close leave it; nothing shows when the server has no check.
+ * per build per session; Skip and close leave it; nothing shows when the server has no check. The same card asks the blob
+ * check (street-objects/blob-check.ts, /3d/blob-check: "Select every image where the magenta box is on a ..."), its
+ * heading taken from the check: `endpoints` are tried in order and the first with a check shows.
  *
  * Where it shows (user ask, 2026-11-08): while the build's remesh stage is running, dead time for the viewer, the card
  * is a popup centred over the viewport (`modal`), drawn in the viewport's own chrome (viewportChrome.ts); once that stage
@@ -24,8 +26,10 @@ import * as React from 'react';
 import { getApiBase, withApiHeaders } from '../../../../../common/api-client-config';
 import { CHROME_ACCENT, CHROME_ACCENT_FILL, CHROME_BUTTON, CHROME_BUTTON_PRIMARY, CHROME_MUTED, CHROME_PANEL, CHROME_TEXT } from './viewportChrome';
 
-interface Tile { id: string; png: string }
-interface Check { id: string; detail: string; tiles: Tile[] }
+interface Tile { id: string; png?: string; jpg?: string }
+/** `lead`, `subject` and `note` set the heading (the window check's when absent); `base` is the endpoint that served it. */
+interface Check { id: string; detail: string; tiles: Tile[]; lead?: string; subject?: string; note?: string; base?: string }
+const WINDOW_CHECK_PATH = '/3d/window-check';
 
 function url(p: string): string {
     const base = getApiBase();
@@ -37,19 +41,23 @@ function markSeen(runId: string): void { try { sessionStorage.setItem(seenKey(ru
 
 /** One request per build at a time: a remounted card (React's development double effect) shares it rather than drawing a second check. */
 const inFlight = new Map<string, Promise<Check | undefined>>();
-function checkFor(runId: string): Promise<Check | undefined> {
+function checkFor(runId: string, endpoints: string[]): Promise<Check | undefined> {
     let p = inFlight.get(runId);
-    if (!p) { p = fetchWindowCheck().catch(() => undefined); inFlight.set(runId, p); }
+    if (!p) {
+        p = (async () => { for (const e of endpoints) { const c = await fetchWindowCheck(undefined, e).catch(() => undefined); if (c) return c; } return undefined; })();
+        inFlight.set(runId, p);
+    }
     return p;
 }
 
-export async function fetchWindowCheck(fetchImpl: typeof fetch = (...a) => fetch(...a)): Promise<Check | undefined> {
-    const res = await fetchImpl(url('/3d/window-check'), withApiHeaders({}));
+/** A check from `endpoint` (a path, a query allowed), with `base` set to the path its answer goes to. */
+export async function fetchWindowCheck(fetchImpl: typeof fetch = (...a) => fetch(...a), endpoint: string = WINDOW_CHECK_PATH): Promise<Check | undefined> {
+    const res = await fetchImpl(url(endpoint), withApiHeaders({}));
     const body = await res.json().catch(() => ({}));
-    return res.ok && body?.check ? (body.check as Check) : undefined;
+    return res.ok && body?.check ? ({ ...(body.check as Check), base: endpoint.split('?')[0] }) : undefined;
 }
-export async function answerWindowCheck(id: string, selected: string[], skipped: boolean, fetchImpl: typeof fetch = (...a) => fetch(...a)): Promise<{ stored: number; controlsPassed: boolean } | undefined> {
-    const res = await fetchImpl(url(`/3d/window-check/${id}`), withApiHeaders({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selected, skipped }) }));
+export async function answerWindowCheck(id: string, selected: string[], skipped: boolean, fetchImpl: typeof fetch = (...a) => fetch(...a), base: string = WINDOW_CHECK_PATH): Promise<{ stored: number; controlsPassed: boolean } | undefined> {
+    const res = await fetchImpl(url(`${base}/${id}`), withApiHeaders({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selected, skipped }) }));
     const body = await res.json().catch(() => ({}));
     return res.ok && body?.success ? { stored: body.stored, controlsPassed: body.controlsPassed } : undefined;
 }
@@ -79,6 +87,7 @@ export interface WindowCheckPanelProps {
 /** The card itself, given its data: what the live card draws, and what the tests render. */
 export const WindowCheckPanel: React.FC<WindowCheckPanelProps> = ({ check, selected, state, note, modal, topPx, leftPx, onToggle, onSend }) => {
     const dialogRef = React.useRef<HTMLDivElement>(null);
+    const isWindow = (check.base ?? WINDOW_CHECK_PATH) === WINDOW_CHECK_PATH;
     // the popup takes the keyboard when it opens (Escape skips, Tab reaches the tiles); the corner card waits to be clicked
     React.useEffect(() => { if (modal) dialogRef.current?.focus(); }, [modal]);
     const place: React.CSSProperties = modal
@@ -90,7 +99,7 @@ export const WindowCheckPanel: React.FC<WindowCheckPanelProps> = ({ check, selec
             tabIndex={-1}
             role="dialog"
             aria-modal={modal || undefined}
-            aria-label="Window check: select every image where the yellow box is on a window"
+            aria-label={check.detail}
             data-testid="sb-window-check"
             data-placement={modal ? 'popup' : 'corner'}
             className="sb-window-check"
@@ -99,10 +108,10 @@ export const WindowCheckPanel: React.FC<WindowCheckPanelProps> = ({ check, selec
         >
             <style>{CARD_CSS}</style>
             <div style={{ padding: '10px 12px 8px', borderBottom: '1px solid rgba(255,255,255,0.1)', position: 'relative' }}>
-                <div style={{ color: CHROME_MUTED, fontSize: 11, letterSpacing: 0.3, textTransform: 'uppercase' }}>Window check</div>
-                <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.3, marginTop: 2, paddingRight: 20 }}>Select every image where the yellow box is on a <span style={{ color: CHROME_ACCENT }}>window</span>.</div>
-                <div style={{ color: CHROME_MUTED, marginTop: 2 }}>{modal ? 'Optional, while the building is remeshed: it helps the 3D Building feature find windows. Leave the others.' : 'Optional: it helps the 3D Building feature find windows. Leave the others.'}</div>
-                <button type="button" className="sb-window-check-close" aria-label="Close the window check" onClick={() => onSend(true)}
+                <div style={{ color: CHROME_MUTED, fontSize: 11, letterSpacing: 0.3, textTransform: 'uppercase' }}>{isWindow ? 'Window check' : 'Quick check'}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.3, marginTop: 2, paddingRight: 20 }}>{check.lead ?? 'Select every image where the yellow box is on a'} <span style={{ color: CHROME_ACCENT }}>{check.subject ?? 'window'}</span>.</div>
+                <div style={{ color: CHROME_MUTED, marginTop: 2 }}>{check.note ?? (modal ? 'Optional, while the building is remeshed: it helps the 3D Building feature find windows. Leave the others.' : 'Optional: it helps the 3D Building feature find windows. Leave the others.')}</div>
+                <button type="button" className="sb-window-check-close" aria-label="Close the check" onClick={() => onSend(true)}
                     style={{ position: 'absolute', top: 6, right: 8, background: 'transparent', border: 'none', color: CHROME_MUTED, fontSize: 18, cursor: 'pointer', lineHeight: 1, padding: 2 }}>×</button>
             </div>
             {state === 'thanks'
@@ -118,7 +127,7 @@ export const WindowCheckPanel: React.FC<WindowCheckPanelProps> = ({ check, selec
                                         background: 'rgba(255,255,255,0.06)', border: `2px solid ${on ? CHROME_ACCENT : 'rgba(255,255,255,0.14)'}`,
                                         boxShadow: on ? `0 0 0 2px ${CHROME_ACCENT_FILL} inset` : 'none', transition: 'border-color 120ms'
                                     }}>
-                                    <img src={`data:image/png;base64,${t.png}`} alt="" draggable={false} style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover', transform: on ? 'scale(0.86)' : 'none', transition: 'transform 120ms', borderRadius: 3 }} />
+                                    <img src={t.jpg ? `data:image/jpeg;base64,${t.jpg}` : `data:image/png;base64,${t.png}`} alt="" draggable={false} style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover', transform: on ? 'scale(0.86)' : 'none', transition: 'transform 120ms', borderRadius: 3 }} />
                                     {on && <span aria-hidden="true" style={{ position: 'absolute', top: 4, left: 4, width: 18, height: 18, borderRadius: 9, background: CHROME_ACCENT, color: '#0b0b0e', fontSize: 12, fontWeight: 700, lineHeight: '18px', textAlign: 'center' }}>✓</span>}
                                 </button>
                             );
@@ -142,7 +151,7 @@ export const WindowCheckPanel: React.FC<WindowCheckPanelProps> = ({ check, selec
     );
 };
 
-export const WindowCheckCard: React.FC<{ runId: string; modal?: boolean; topPx?: number; leftPx?: number }> = ({ runId, modal = false, topPx = 12, leftPx = 72 }) => {
+export const WindowCheckCard: React.FC<{ runId: string; modal?: boolean; topPx?: number; leftPx?: number; endpoints?: string[] }> = ({ runId, modal = false, topPx = 12, leftPx = 72, endpoints = [WINDOW_CHECK_PATH] }) => {
     const [check, setCheck] = React.useState<Check | undefined>();
     const [selected, setSelected] = React.useState<Set<string>>(new Set());
     const [state, setState] = React.useState<'idle' | 'sending' | 'thanks' | 'closed'>('idle');
@@ -150,8 +159,9 @@ export const WindowCheckCard: React.FC<{ runId: string; modal?: boolean; topPx?:
     React.useEffect(() => {
         if (seen(runId)) return;
         let live = true;
-        void checkFor(runId).then(c => { if (live && c) { setCheck(c); markSeen(runId); } });
+        void checkFor(runId, endpoints).then(c => { if (live && c) { setCheck(c); markSeen(runId); } });
         return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [runId]);
     React.useEffect(() => {
         if (state !== 'thanks') return;
@@ -162,7 +172,7 @@ export const WindowCheckCard: React.FC<{ runId: string; modal?: boolean; topPx?:
 
     const send = async (skipped: boolean) => {
         setState('sending');
-        const r = await answerWindowCheck(check.id, [...selected], skipped).catch(() => undefined);
+        const r = await answerWindowCheck(check.id, [...selected], skipped, undefined, check.base).catch(() => undefined);
         if (skipped) { setState('closed'); return; }
         setNote(r ? `Thanks: ${r.stored} answers saved${r.controlsPassed ? '' : ' (kept aside: a known image was answered differently)'}.` : 'Your answers could not be saved.');
         setState('thanks');

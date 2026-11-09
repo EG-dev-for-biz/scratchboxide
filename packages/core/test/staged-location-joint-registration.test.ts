@@ -158,6 +158,41 @@ describe('joint pano registration (pano-joint-registration)', () => {
         fs.writeFileSync(path.join(out, 'staged_location_joint_registration_report.json'), JSON.stringify({ perPanoErrPx: perPano, jointErrPx: together, chosen: joint.chosen, reason: joint.reason, fit: { current: { c: joint.fit.current.chamferPx, n: joint.fit.current.gradNcc }, joint: { c: joint.fit.joint?.chamferPx, n: joint.fit.joint?.gradNcc }, warped: { c: joint.fit.warped?.chamferPx, n: joint.fit.warped?.gradNcc } }, panos: joint.panos, edge: edge.panos.map(p => ({ id: p.panoId, chosen: p.chosen, res: p.edgeResidualPx })) }, null, 1));
     }, 600_000);
 
+    it('keeps the coarse fit for the held-out test when the budget ends before the fine scale', () => {
+        const truthMesh = facade({ parapetUp: 0, openingIn: 0 });
+        const scan = facade({ parapetUp: 0.2, openingIn: 0.15 });
+        const truths: Record<string, PoseCorrection> = {
+            p1: { ...ZERO_CORRECTION, dx: 0.6, dy: 0.2, dz: -0.4, dyawDeg: 0.6 },
+            p2: { ...ZERO_CORRECTION, dx: -0.7, dz: 0.5, dpitchDeg: -0.5 },
+            p3: { ...ZERO_CORRECTION, dx: 0.4, dy: -0.15, dyawDeg: -0.8 }
+        };
+        const views = [view('p1', [-6, 1.7, 18], 12), view('p2', [-1, 1.7, 21], 2), view('p3', [4, 1.7, 19], -10)];
+        const frames: EdgeRegFrame[] = views.map(v => ({ key: v.panoId, view: v, image: photo(truthMesh, v, truths[v.panoId]) }));
+        const current: Registration = {
+            corrections: new Map(views.map(v => [v.panoId, ZERO_CORRECTION])),
+            perPano: views.map(v => ({ panoId: v.panoId, dxM: 0, dzM: 0, dyawDeg: 0, dpitchDeg: 0, pairs: 1, beforeRmsM: 1.3, afterRmsM: 1.3 })),
+            setAside: [], pairs: [], beforeRmsM: 1.3, afterRmsM: 1.3, used: 1, rejected: 0
+        };
+        const candidates = new Map(views.map(v => [v.panoId, { box: ZERO_CORRECTION, edgeLocked: false }]));
+        // the clock runs normally until the coarse scale's refiner has finished, then jumps past the budget
+        let spent = false;
+        const logs: string[] = [];
+        const joint = registerPanosJointly({
+            frames, mesh: scan, current, candidates, budgetMs: 240_000,
+            now: () => Date.now() + (spent ? 1e9 : 0),
+            log: m => { logs.push(m); if (m.startsWith('[cross-view] final')) spent = true; }
+        });
+        expect(logs.some(m => m.includes('budget spent before the 640 px scale'))).toBe(true);
+        expect(joint.timingsMs.scale360).toBeGreaterThan(0);
+        expect(joint.timingsMs.scale640).toBeUndefined();
+        // the coarse fit was scored on the held-out cells, not thrown away (until 2026-11-08: "did not run in its budget")
+        expect(joint.reason).not.toBe('the joint fit did not run in its budget');
+        expect(joint.fit.joint).not.toBeNull();
+        expect(joint.matches.medianPxBefore).not.toBeNull();
+        // and the held-out test still decides: kept only when it fits the held-out cells better than the current poses
+        if (joint.chosen !== 'current') expect(joint.fit.joint!.chamferPx!).toBeLessThan(joint.fit.current.chamferPx!);
+    }, 600_000);
+
     it('holds the outline of the structure\'s own faces: the tile near the fitted faces, a tree in front and a building behind left out', () => {
         const scan = facade({ parapetUp: 0, openingIn: 0 }, true);
         const front: SurfaceChart = { plane: { origin: [-7, 0, 0], u: [1, 0, 0], v: [0, 1, 0], normal: [0, 0, 1], extentUv: [[0, 0], [14, 0], [14, 11.5], [0, 11.5]] } };

@@ -75,6 +75,23 @@ describe('the window check card', () => {
     });
 });
 
+describe('the same card for the blob check', () => {
+    test('its heading, note and JPEG tiles come from the check; the eyebrow is not the window check\'s', () => {
+        const blob = {
+            id: 'fedcba9876543210', base: '/3d/blob-check', lead: 'Select every image where the magenta box is on a', subject: 'car',
+            note: 'Seen from straight above. Leave the others.', detail: 'Select every image where the magenta box is on a car.',
+            tiles: Array.from({ length: 9 }, (_, i) => ({ id: `b${i}`, jpg: '/9j/4AAQ' }))
+        };
+        const html = markup({ check: blob, modal: true });
+        expect(html).toContain('aria-label="Select every image where the magenta box is on a car."');
+        expect(html).toContain(`magenta box is on a <span style="color:${CHROME_ACCENT}">car</span>.`);
+        expect(html).toContain('Seen from straight above. Leave the others.');
+        expect(html).toContain('>Quick check<');
+        expect(html.match(/src="data:image\/jpeg;base64,/g)?.length).toBe(9);
+        expect(markup()).toContain('>Window check<');
+    });
+});
+
 describe('when the popup shows', () => {
     const now = Date.now();
     test('while the remesh stage runs in a live run', () => {

@@ -77,3 +77,26 @@ moving, Penn 2 landing on different isolates. No single before/after pair could 
 - A wall sheet (`wall-sheets.ts`) builds its photo from its members' rectified photos; the inpainted mask is not carried
   into the sheet. In these builds no sheet's geometry differed.
 - The ownership vote, asked afresh, can still land differently (outlines and the 30 s cut); the store makes a kept vote repeat.
+
+## 5. Addendum (2026-11-08, `feat/k-deterministic-stats`): three ESB builds, three class sets, and what varied
+
+Three builds of the ESB on current main (17f1d2f1) from one cached remesh and one shared answer store gave three different
+appearance-class sets and set picks (Gravel030 at metalness 0.18; concrete_floor_worn_001 at 0.32; Concrete015/029), which
+also made any single-build material comparison meaningless. What varied, in the order it was found:
+
+- **Every run that differed had re-asked the facade reader about the same 77 planes** (38 lattice facades, 39 scan-photographed
+  planes) and the building brief, about 110 to 120 store misses; every run that reproduced its predecessor had none. The twin's
+  harmonised images, the window fit and the wall grammar were then re-derived from the new readings, and the classes with them.
+- **The twin chain itself is repeatable.** `tileRefineTwin` run twice on one input, in one process and in two processes, with
+  the de-light, the roof-shadow lift (with the tiles' geometry as context) and harmonising, gave byte-identical GLBs (272 images).
+- **The misses came from unsettled caches and from checkouts, not from the clustering.** The first build after a pipeline change
+  rebuilt tile_refine's straightened photos (the reader keys a facade by them), and a worktree's own measured library statistics
+  (`build/texture-library/stats`, 2,451 files in the main checkout, none in the worktrees) override the committed bundle and
+  change the shortlists. Once a checkout's caches settled, consecutive builds reproduced the classes, the picks and the answer
+  store hits exactly, across code versions that leave the pre-reader pipeline alone (runs 10925ecc, 37ccfb4d, 9265a7fc), and the
+  texturing session's two repeats of the ESB and Penn 2 matched texel for texel.
+- **Fixes.** A build reads the committed `stats.json` alone and measures no set into its checkout; `SCRATCHBOX_LIBRARY_LOCAL_STATS=1`
+  (set by `npm run library:stats`) turns the local files back on for the maintainer who writes the bundle. The twin's stage key
+  hashed `window_fit.json` and `wall_grammar.json` by their bytes, which carry timings, so every build of the same scan re-ran the
+  twin (a cache miss, not a change); it hashes them without timings now, as the polish key has since §3.
+- **Proof.** Three uncached ESB builds on commit 6482e5b8 (runs 0eab8f0e, 15d74cf2, fd15619b; one cached remesh, one shared answer store, 247 readings kept and 0 missed in each) wrote `model.glb` with one SHA-256, `bab9d30e…`, the same six appearance classes (shares 0.188, 0.306, 0.215, 0.144, 0.079, 0.067) and the same sets (Concrete027, PavingStones105, Plaster004, PaintedPlaster015, Foam001 x2). An earlier proof on 1607ea7d alone had identical binary chunks and three hashes: the JSON differed only in the material-regions provenance sentence's "(N ms)" and `sbHeightRelief.ms`, both removed in 6482e5b8. Records: `/Volumes/3DTESTING/scratchbox-ide/benchmarks/2026-11-07-height/determinism/proof_final.txt` and `final_model{1,2,3}.glb`.

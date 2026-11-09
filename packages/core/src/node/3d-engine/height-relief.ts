@@ -245,7 +245,9 @@ export async function applyHeightRelief(bytes: Uint8Array, P: HeightReliefParams
     if (binLength % 4) { const padBytes = new Uint8Array(4 - (binLength % 4)); bin.push(padBytes); binLength += padBytes.length; }
     json.buffers = [{ byteLength: binLength }];
     report.ms = Date.now() - t0;
-    json.asset.extras = { ...json.asset.extras, sbHeightRelief: report };
+    // the extras carry the relief's measures, never its timing: two builds of one scan must give one GLB (k_determinism.md §5)
+    const { ms: _ms, ...extras } = report;
+    json.asset.extras = { ...json.asset.extras, sbHeightRelief: extras };
     const out = new Uint8Array(binLength);
     let o = 0;
     for (const b of bin) { out.set(b, o); o += b.byteLength; }
