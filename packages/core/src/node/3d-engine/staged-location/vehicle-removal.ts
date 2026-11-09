@@ -111,7 +111,14 @@ export const VEHICLE_REMOVAL_PARAMS = {
     batchTimeoutMs: 180_000,
     sendQuality: 90
 };
-export type VehicleRemovalParams = typeof VEHICLE_REMOVAL_PARAMS;
+export type VehicleRemovalParams = typeof VEHICLE_REMOVAL_PARAMS & {
+    /**
+     * Keep what stands over open space in a region (measureStacks: an awning, a canopy over the vehicle). Default true. The
+     * seen-through removal (seen-through.ts) passes false: the registered photos see through the whole height of what they
+     * remove, so nothing of it stays as an awning and no ramp joins a kept top to the lowered base.
+     */
+    keepOverOpenSpace?: boolean;
+};
 
 /** On by default (the user rule); SCRATCHBOX_STAGED_VEHICLES=0 keeps the scan's vehicles. */
 export function vehicleRemovalEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -925,7 +932,7 @@ async function mapConcurrent<T>(items: T[], n: number, fn: (item: T, index: numb
 /** Finds the vehicles in a textured scan and writes it (and its geometry twin) without them. */
 export async function removeVehicles(input: RemoveVehiclesInput): Promise<RemoveVehiclesResult> {
     const t0 = Date.now();
-    const P = input.P ?? VEHICLE_REMOVAL_PARAMS;
+    const P: VehicleRemovalParams = input.P ?? VEHICLE_REMOVAL_PARAMS;
     const log = input.log ?? (() => undefined);
     fs.mkdirSync(input.outDir, { recursive: true });
     const { grid, candidates } = vehicleCandidates(input.scan, input.ground, input.look ?? {}, P);
@@ -982,7 +989,7 @@ export async function removeVehicles(input: RemoveVehiclesInput): Promise<Remove
     readings.sort((a, b) => a.crop - b.crop || a.lo[0] - b.lo[0] || a.lo[1] - b.lo[1]);
     const { region, unmatchedReadings, vehicles: distinct, boxOnly } = vehicleRegion(grid, candidates, readings, P);
     measureRings(region, input.scan, input.ground, P);
-    measureStacks(region, input.scan, input.ground, P);
+    if (P.keepOverOpenSpace !== false) measureStacks(region, input.scan, input.ground, P);
     const whatOf = (g: RegionGroup) => whatOfGroup(g, readings);
     // the surface under each region and its texels: the surface infill (one ladder and seam gate for every removed surface),
     // charted in plan so the vertices move straight down and the region's plan cells are its chart's cells

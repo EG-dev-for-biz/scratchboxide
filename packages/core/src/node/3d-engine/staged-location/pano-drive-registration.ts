@@ -27,7 +27,7 @@ import { frameCamera, loadTexturedScene, PLATE_EMPTY_DEPTH, ZERO_CORRECTION, typ
 import { renderForMatching } from '../../spatial/StreetViewFeatureRegistrar';
 import type { LearnedMatcher, MatchImage, MatchPairRequest } from '../../spatial/LearnedFeatureMatcherService';
 import {
-    posedCamera, registerDriveOnScan, rotationFromVector, scanResidualsByView, vectorFromRotation,
+    posedCamera, registerDriveOnScan, rotationFromVector, scanResidualsByView, triangulateTies, vectorFromRotation,
     type DrivePano, type DrivePose, type DriveRegistrationOptions, type DriveScanMatch, type DriveTie, type DriveView, type V3
 } from '../../spatial/street-view-drive-registration';
 import { castCamera } from './survey-casting';
@@ -38,6 +38,13 @@ import { encodePng } from './png-encode';
 
 /** Photos and renders are matched at this width at most (the 7th Ave run: 640 px). */
 export const DRIVE_MATCH_WIDTH_PX = 640;
+/** A tie is a seen point only when it reprojects within this (px) in both photos and its rays meet at this angle at least (degrees). */
+export const SEEN_POINT_MAX_PX = 2;
+export const SEEN_POINT_MIN_ANGLE_DEG = 3;
+
+/** A point both photos see, with the two cameras that see it (the poses in force after the step); tile frame. */
+export interface SeenPoint { X: V3; eyes: [V3, V3]; panos: [string, string] }
+
 /** Bottom share of each photo left out of the matching (the Street View watermark strip: 32 of 640 px). */
 export const DRIVE_IGNORE_BOTTOM = 0.05;
 /** A view pair between two panoramas is matched when this share of each one's scan surface is seen by the other. */
@@ -118,6 +125,12 @@ export interface DriveStepResult {
     tiesUsed: number;
     scanMatches: number;
     fit: { current: PoseFit | null; drive: PoseFit | null };
+    /**
+     * Points two registered photos both see (ties within SEEN_POINT_MAX_PX, rays at SEEN_POINT_MIN_ANGLE_DEG or more), under
+     * the poses in force after the step: what the photos measure of the street (seen-through.ts reads which scan surfaces
+     * they look through). Absent when the step skipped.
+     */
+    seenPoints?: SeenPoint[];
     ms: number;
 }
 
@@ -295,8 +308,17 @@ export async function registerPanosByDrive(input: DriveStepInput): Promise<Drive
     const fitDrive = heldOutFitOfFrames(input.frames, input.mesh, corrections);
     const base = { panos: panoOut, viewPairs: viewPairs.length, ties: ties.length, tiesUsed: drive.tiesUsed, scanMatches: scan.length, fit: { current: fitCurrent, drive: fitDrive } };
     const f = (x: PoseFit) => `chamfer ${x.chamferPx ?? 'n/a'} px / NCC ${x.gradNcc ?? 'n/a'}`;
+    const seenUnder = (ps: DrivePose[]): SeenPoint[] => {
+        const out: SeenPoint[] = [];
+        triangulateTies(panos, ps, ties, SEEN_POINT_MIN_ANGLE_DEG).forEach((r, k) => {
+            if (!r || r.resPx > SEEN_POINT_MAX_PX) return;
+            const t = ties[k];
+            out.push({ X: r.X, eyes: [ps[t.a.pano].eye, ps[t.b.pano].eye], panos: [panos[t.a.pano].panoId, panos[t.b.pano].panoId] });
+        });
+        return out;
+    };
     if (!fitIsBetter(fitDrive, fitCurrent)) {
-        return { status: 'kept-current', reason: `the held-out fit is not better (in force ${f(fitCurrent)}, drive ${f(fitDrive)})`, ...base, ms: Date.now() - t0 };
+        return { status: 'kept-current', reason: `the held-out fit is not better (in force ${f(fitCurrent)}, drive ${f(fitDrive)})`, ...base, seenPoints: seenUnder(start), ms: Date.now() - t0 };
     }
     // the residual each pano's scan matches leave, at their distance (m), as the path reports it
     const perPanoResidualM = panos.map((p, i) => {
@@ -325,7 +347,7 @@ export async function registerPanosByDrive(input: DriveStepInput): Promise<Drive
     // the joint registration's warps were fitted to the poses this replaces
     const { warps: _w, ...rest } = current;
     const registration: Registration = { ...rest, corrections: allCorrections, perPano, setAside: current.setAside.filter(s => !ids.has(s.panoId)) };
-    return { status: 'accepted', reason: `the held-out fit is better (in force ${f(fitCurrent)}, drive ${f(fitDrive)})`, registration, ...base, ms: Date.now() - t0 };
+    return { status: 'accepted', reason: `the held-out fit is better (in force ${f(fitCurrent)}, drive ${f(fitDrive)})`, registration, ...base, seenPoints: seenUnder(poses), ms: Date.now() - t0 };
 }
 
 /** The drive step in words for the stage panel. */

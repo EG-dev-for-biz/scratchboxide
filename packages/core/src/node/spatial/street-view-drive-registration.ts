@@ -543,3 +543,22 @@ export function scanResidualsByView(panos: DrivePano[], poses: DrivePose[], scan
         return { n: r.length, medianPx: s[Math.floor(s.length / 2)], within: r.filter(x => x <= px).length / r.length };
     }));
 }
+
+/**
+ * Each tie's 3-D point under poses (the midpoint of its two rays), with the larger of its two reprojection errors (px) and
+ * the angle its rays meet at (degrees); null where the rays barely meet or diverge. The photos' own measure of where the
+ * surfaces they both see stand.
+ */
+export function triangulateTies(panos: DrivePano[], poses: DrivePose[], ties: DriveTie[], minAngleDeg = DRIVE_REGISTRATION_DEFAULTS.minTieAngleDeg): Array<{ X: V3; resPx: number; angleDeg: number } | null> {
+    const cams = poses.map((p, i) => panos[i].views.map(v => posedCamera(v, p)));
+    return ties.map(t => {
+        const ca = cams[t.a.pano][t.a.view], cb = cams[t.b.pano][t.b.view];
+        const X = triangulate(ca, t.a, cb, t.b, minAngleDeg * DEG);
+        if (!X) return null;
+        const pa = project(ca, X), pb = project(cb, X);
+        if (!pa || !pb) return null;
+        const da = sub(X, ca.eye), db = sub(X, cb.eye);
+        const angleDeg = Math.acos(Math.max(-1, Math.min(1, dot(da, db) / (Math.hypot(...da) * Math.hypot(...db))))) / DEG;
+        return { X, resPx: Math.max(Math.hypot(pa[0] - t.a.u, pa[1] - t.a.v), Math.hypot(pb[0] - t.b.u, pb[1] - t.b.v)), angleDeg };
+    });
+}

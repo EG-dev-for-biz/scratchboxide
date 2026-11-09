@@ -96,6 +96,19 @@ The user asked to wire it in. The drive registration is now the last step of the
 - Tests: `pano-drive-registration.test.ts` (correction round trip, lift, covisibility), `street-view-drive-registration.test.ts`; the existing registration, worker, survey and bake tests pass with the step in place (it skips without the matcher's interpreter).
 - Cost: about 5 minutes for six panoramas on this Mac (matching on mps); it runs after the edges and joint steps, whatever their budgets.
 
+### Seen-through removal (2026-11-09)
+
+The user asked for it, after reading that streetview-to-3d drops Google's points "standing in front of what a pano saw" (`merged_world.py`). `packages/core/src/node/3d-engine/staged-location/seen-through.ts`, as the vehicle removal's decision instead of its vision model:
+
+- The drive step now returns its **seen points** (`SeenPoint`): ties within 2 px in both photos whose rays meet at 3 degrees or more, triangulated under the poses in force. Each ends a clear line of sight from two cameras.
+- **Evidence** (`seenThroughEvidence`): along every line, the vehicle removal's candidate cells (proud of the measured street, clear of the vector buildings) it passes under the top of and over the street, at least 1.5 m short of the seen point; lines and panoramas counted per cell.
+- **Judge** (`seenThroughJudge`): clusters seen through from 2+ panoramas (3+ lines) become readings, boxed in tiles of at most 4 m tight round their own cells (one box round a long cluster on a 29-degree avenue took 367 m²). Not permanent, so `removeTemporary` takes them; no model call.
+- **Patch:** the vehicle removal's own (ring-measured street, infill paint), with two changes for this caller only: `keepOverOpenSpace: false` (its awning rule kept a shed's top and left a ramp to the lowered base, across storefronts the photos show) and a height limit of 8 m (`SEEN_THROUGH_MAX_HEIGHT_M`; at 5 m a taller sidewalk structure left a ramp). The vehicle removal's tests pass unchanged (its default keeps awnings).
+- A final pass that cut triangles still on clear lines was tried and dropped: it left shards and holes.
+- **7th Ave** (standalone, the drive's tie points and poses, textured tiles, vector buildings): 13 regions, 3,340 vertices lowered, 263 m² lowered in the height map, all on the street and sidewalks (the east curb strip beside drive A and the south side of W 32nd St). The block 1-2 m beside VVmScUGc is gone and the building behind it shows, its windows on the photo's edges. Proof sheet `proof_seen_through.png`. Still open: the patch paints the street from its own texture (smooth grey); a few cut edges remain.
+- **Wired into the 3D World build** (`Location3DGaussianSplatService`): after the Street View registration, with the textured twin and the vector lookups, the clay GLB the stations are baked on is replaced by the patched one; the result reports `streetView.seenThrough` and `driveSummary`. `SCRATCHBOX_SEEN_THROUGH=0` off.
+- **The in-app rebuild** (my instance, the world cache off): the chat ran `location_generate_3dgs` without a street vantage, so the world took 16 survey stations and no Street View station: no registration, drive step or removal ran. Not yet seen in the app.
+
 ## Still open
 
 1. The edge score used here (median distance from scan edges to photo edges) is too loose to judge a pose: it improved under the implausible forced move. The judge's registration or the research report's render-and-match is the measure to use.

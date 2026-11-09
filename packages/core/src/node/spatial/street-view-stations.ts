@@ -35,6 +35,7 @@ import {
 } from '../3d-engine/staged-location/streetview-evidence';
 import { runPanoRegistrationOffThread, type PanoRegistrationJob, type PanoRegistrationOutcome } from '../3d-engine/staged-location/pano-registration-run';
 import { castCamera, type CastView } from '../3d-engine/staged-location/survey-casting';
+import { describeDriveRegistration, type SeenPoint } from '../3d-engine/staged-location/pano-drive-registration';
 
 /** Where the viewer stands and which way they look. */
 export interface StreetVantage {
@@ -78,6 +79,10 @@ export interface StreetViewStationsResult {
     failures: Array<{ panoId: string; headingDeg: number; error: string }>;
     /** One line: how many panos took a registered pose. */
     registrationSummary: string;
+    /** Points two registered photos both see (the drive registration's), for the seen-through removal (seen-through.ts). */
+    seenPoints?: SeenPoint[];
+    /** The drive registration in words, when it ran. */
+    driveSummary?: string;
 }
 
 export interface StreetViewStationsRequest {
@@ -361,6 +366,8 @@ export async function planStreetViewStations(req: StreetViewStationsRequest): Pr
     const used = new Set(stations.map(s => s.photo.panoId)).size;
     return {
         stations, ...vantage, discovery, failures,
-        registrationSummary: `${registered} of ${used} pano${used === 1 ? '' : 's'} registered against the scan${regError ? ` (registration failed: ${regError})` : ''}; the rest keep the nominal pose (about ±2 m, ±2°)`
+        registrationSummary: `${registered} of ${used} pano${used === 1 ? '' : 's'} registered against the scan${regError ? ` (registration failed: ${regError})` : ''}; the rest keep the nominal pose (about ±2 m, ±2°)`,
+        ...(reg?.drive?.seenPoints?.length ? { seenPoints: reg.drive.seenPoints } : {}),
+        ...(reg?.drive ? { driveSummary: describeDriveRegistration(reg.drive) } : {})
     };
 }

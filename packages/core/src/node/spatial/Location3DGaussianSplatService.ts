@@ -20,6 +20,10 @@ import {
 import { resolveSurveyPreset } from './survey-router';
 import { geocode3DTilesAddress, getGoogle3DTilesClay, getGoogle3DTilesFullTexture } from './Google3DTileBlockoutPipelineService';
 import { HeadlessMeshSilhouetteRenderer } from './HeadlessMeshSilhouetteRenderer';
+import { removeSeenThrough, vectorLookups } from '../3d-engine/staged-location/seen-through';
+
+/** SCRATCHBOX_SEEN_THROUGH=0 keeps in the world's tiles what the registered photos see through. */
+export const seenThroughEnabled = (): boolean => process.env.SCRATCHBOX_SEEN_THROUGH !== '0';
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import type { Scene3DData, Media4DObject } from '../../browser/generative-canvas/canvas-types';
 import { glbRaycaster, planStreetViewStations, snapVantageToDrivenSidewalk, snapVantageToSidewalk, SNAP_STREET_RADIUS_M, type SidewalkSnap, type StreetVantage, type StreetViewStationsResult, type VectorStreet } from './street-view-stations';
@@ -146,10 +150,16 @@ export interface Location3DGSResult {
     /** One line per distinct station image source: the model that answered and, when another was asked for, why. */
     imageSources: string[];
     /** With a vantage: where the viewer was placed (the sidewalk snap), the street stations found, how many were accepted, and how they were registered. */
-    streetView?: Omit<StreetViewStationsResult, 'stations'> & { snap?: SidewalkSnap; stations: number; accepted: number; unmatched: number; panos: string[] };
+    streetView?: Omit<StreetViewStationsResult, 'stations' | 'seenPoints'> & {
+        snap?: SidewalkSnap; stations: number; accepted: number; unmatched: number; panos: string[];
+        /** What the registered photos see through, taken out of the tiles before baking (seen-through.ts), or why not. */
+        seenThrough?: SeenThroughSummary;
+    };
     /** The world cache: this world was fetched from it (built when `storedAt`), or is being stored in it. */
     worldCache?: { key: string; bucket: string; state: 'fetched' | 'storing'; storedAt?: string };
 }
+
+export type SeenThroughSummary = { regions: number; areaM2: number; points: number; lines: number; linesThroughCandidates: number; candidateCells: number; cellsSeenThrough: number } | { skipped: string };
 
 /**
  * Location3DGaussianSplatService (Canonical Location 3DGS Service)
@@ -351,6 +361,7 @@ export class Location3DGaussianSplatService {
         let street: StreetViewStationsResult | undefined;
         let snap: SidewalkSnap | undefined;
         let viewer: { eye: [number, number, number]; headingDeg: number } | undefined;
+        let seenThrough: SeenThroughSummary | undefined;
         if (req.vantage && req.streetView) {
             const place = { lat: req.vantage.lat ?? anchor.lat, lng: req.vantage.lng ?? anchor.lng };
             let vantage: StreetVantage;
@@ -383,6 +394,25 @@ export class Location3DGaussianSplatService {
                 onProgress: m => progressReporter(0.09, m)
             });
             throwIfStopped(req.signal);
+            if (street.driveSummary) progressReporter(0.09, street.driveSummary.slice(0, 400));
+            // what the registered photos see through (a shed, a parked truck the tiles baked in) goes from the tiles first
+            if (seenThroughEnabled() && street.seenPoints?.length && twin.glbPath) {
+                progressReporter(0.095, `Removing what the registered photos see through (${street.seenPoints.length} points two photos see)...`);
+                try {
+                    const look = await vectorLookups(anchor, preset.cropRadius || 75);
+                    const removed = await removeSeenThrough({
+                        texturedGlb: twin.glbPath, geometryGlb: glbPath, points: street.seenPoints, look,
+                        outDir: path.join(outDir, 'seen_through'), ...(req.signal ? { signal: req.signal } : {}), log: m => progressReporter(0.095, m)
+                    });
+                    seenThrough = { regions: removed.report.removed.length, areaM2: Math.round(removed.report.removed.reduce((a, r) => a + r.areaM2, 0)), ...removed.evidence };
+                    if (removed.report.removed.length && removed.geometryGlb) glbPath = removed.geometryGlb;
+                } catch (e) {
+                    if (req.signal?.aborted) throw e;
+                    seenThrough = { skipped: `the seen-through removal did not run: ${e instanceof Error ? e.message : String(e)}` };
+                }
+            } else if (street.seenPoints?.length) {
+                seenThrough = { skipped: !twin.glbPath ? twin.reason : 'off (SCRATCHBOX_SEEN_THROUGH=0)' };
+            }
             // the scene opens where the viewer stands: eye height above the scan's sidewalk, looking along the heading
             viewer = { eye: [street.vantageLocal.x, (street.vantageGroundY ?? 0) + VIEWER_EYE_HEIGHT_M, street.vantageLocal.z], headingDeg: vantage.headingDeg };
         }
@@ -468,6 +498,7 @@ export class Location3DGaussianSplatService {
                 streetView: {
                     ...(snap ? { snap } : {}),
                     vantageLocal: street.vantageLocal, discovery: street.discovery, failures: street.failures, registrationSummary: street.registrationSummary,
+                    ...(street.driveSummary ? { driveSummary: street.driveSummary } : {}), ...(seenThrough ? { seenThrough } : {}),
                     stations: street.stations.length,
                     accepted: pipelineResult.stations.filter(st => st.accepted && st.groundingPanoId).length,
                     unmatched: pipelineResult.stations.filter(st => st.accepted && st.scanMismatch).length,
