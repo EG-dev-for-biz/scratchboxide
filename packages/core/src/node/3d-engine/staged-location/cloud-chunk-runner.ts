@@ -243,6 +243,8 @@ export interface CloudChunkConfig {
     pollMisses: number;
     /** Tries of each download of the job's outcome and layers before the chunk is failed. */
     downloadAttempts: number;
+    /** SCRATCHBOX_KD_CLOUD_SERVICE: the chunks go to this Cloud Run service (the warm worker pool, kd-chunk-job.ts --serve), not the job. */
+    service?: string;
 }
 
 /** The runner's settings: SCRATCHBOX_KD_CLOUD_{PROJECT,REGION,JOB,BUCKET}, defaults scoutscan / us-central1 / kd-chunk-job / scoutscan-kd-jobs. */
@@ -257,7 +259,8 @@ export function cloudChunkConfig(env: NodeJS.ProcessEnv = process.env): CloudChu
         memGiB: Number(env.SCRATCHBOX_KD_CLOUD_MEM_GIB) > 0 ? Number(env.SCRATCHBOX_KD_CLOUD_MEM_GIB) : 32,
         pollMs: 10_000,
         pollMisses: 12,
-        downloadAttempts: 4
+        downloadAttempts: 4,
+        ...(env.SCRATCHBOX_KD_CLOUD_SERVICE?.trim() ? { service: env.SCRATCHBOX_KD_CLOUD_SERVICE.trim() } : {})
     };
 }
 
@@ -562,6 +565,94 @@ export class CloudRunJobsRest implements CloudRunJobs {
 
     async cancel(execution: string): Promise<void> {
         await this.request({ url: `https://run.googleapis.com/v2/${execution}:cancel`, method: 'POST', data: {} });
+    }
+}
+
+/**
+ * The same operations on a Cloud Run service running the chunk build (kd-chunk-job.ts --serve): the warm worker pool, kept
+ * at zero instances between districts. `run` sends one chunk (the env a job execution would take as overrides) and returns
+ * at once; the chunk is done when the service answers (its result comes last, after the caches are mirrored; the runner
+ * itself moves on at the job's "chunk built" line, as with a job). `cancel` drops the request, which stops the build.
+ * startMs is when the chunk was sent: a service instance's start is part of the chunk's time here, as a task's is not.
+ */
+export class CloudRunServiceJobs implements CloudRunJobs {
+    readonly label: string;
+    private readonly serviceName: string;
+    private readonly sent = new Map<string, { abort: AbortController; startMs: number; endMs?: number; ok?: boolean; message?: string }>();
+    private n = 0;
+
+    constructor(private readonly config: CloudChunkConfig, private readonly request: <T>(opts: { url: string; method: 'GET' | 'POST'; data?: unknown }) => Promise<T>,
+        private readonly post: (url: string, body: unknown, signal: AbortSignal) => Promise<{ ok: boolean; error?: string }>, private readonly now: () => number = Date.now) {
+        this.serviceName = `projects/${config.project}/locations/${config.region}/services/${config.service}`;
+        this.label = `run.googleapis.com/${this.serviceName}`;
+    }
+
+    /** With the app's service account: the Admin API as CloudRunJobsRest has it, the service called with an ID token for its URL. */
+    static async create(config: CloudChunkConfig): Promise<CloudRunServiceJobs> {
+        const { GoogleAuth } = await import('google-auth-library');
+        const { GoogleMediaCredentialsService } = await import('../../google-media-credentials-service');
+        let authOptions: Record<string, unknown> = {};
+        try { authOptions = ((await new GoogleMediaCredentialsService().getVertexAuth()).googleAuthOptions ?? {}) as Record<string, unknown>; } catch { /* application default credentials */ }
+        const auth = new GoogleAuth({ ...authOptions, scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+        const client = await auth.getClient();
+        const request = async <T>(opts: { url: string; method: 'GET' | 'POST'; data?: unknown }) => (await client.request<T>({ ...opts, ...(opts.data !== undefined ? { data: opts.data } : {}) })).data;
+        let idClient: Awaited<ReturnType<typeof auth.getIdTokenClient>> | undefined;
+        const post = async (url: string, body: unknown, signal: AbortSignal) => {
+            idClient ??= await auth.getIdTokenClient(new URL(url).origin);
+            const h = await idClient.getRequestHeaders() as unknown as { get?: (k: string) => string | null } & Record<string, string>;
+            const authorization = typeof h.get === 'function' ? h.get('authorization') ?? '' : h.Authorization ?? h.authorization ?? '';
+            const res = await fetch(url, { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
+            const text = await res.text();
+            if (!res.ok) return { ok: false, error: `the worker answered ${res.status}: ${text.slice(0, 300)}` };
+            return parseServiceAnswer(text);
+        };
+        return new CloudRunServiceJobs(config, request, post);
+    }
+
+    private async service(): Promise<{ uri?: string; template?: { containers?: Array<{ image?: string }> } }> {
+        return this.request({ url: `https://run.googleapis.com/v2/${this.serviceName}`, method: 'GET' });
+    }
+
+    async jobImage(): Promise<string> {
+        const image = (await this.service()).template?.containers?.[0]?.image;
+        if (!image) throw new Error(`${this.label} has no container image`);
+        return image;
+    }
+
+    async run(env: Record<string, string>): Promise<string> {
+        const uri = (await this.service()).uri;
+        if (!uri) throw new Error(`${this.label} has no URL`);
+        const name = `${this.serviceName}/chunks/${++this.n}-${env.KD_JOB?.split('/').slice(-2).join('-') ?? 'chunk'}`;
+        const entry = { abort: new AbortController(), startMs: this.now() } as { abort: AbortController; startMs: number; endMs?: number; ok?: boolean; message?: string };
+        this.sent.set(name, entry);
+        this.post(`${uri}/chunk`, { env }, entry.abort.signal).then(
+            r => { entry.ok = r.ok; entry.endMs = this.now(); if (!r.ok) entry.message = r.error ?? 'the worker did not send the chunk\'s outcome'; },
+            err => { entry.ok = false; entry.endMs = this.now(); entry.message = entry.abort.signal.aborted ? 'cancelled' : (err instanceof Error ? err.message : String(err)); }
+        );
+        return name;
+    }
+
+    async get(execution: string): Promise<CloudExecution> {
+        const e = this.sent.get(execution);
+        if (!e) throw new Error(`${this.label}: no chunk ${execution} was sent from here`);
+        const done = e.endMs !== undefined;
+        return { name: execution, done, succeeded: done && !!e.ok, ...(e.message ? { message: e.message } : {}), startMs: e.startMs, ...(done ? { endMs: e.endMs } : {}) };
+    }
+
+    async cancel(execution: string): Promise<void> {
+        this.sent.get(execution)?.abort.abort();
+    }
+}
+
+/** The worker's answer: heartbeat newlines, then one JSON line `{ ok, ms, error? }`. */
+export function parseServiceAnswer(text: string): { ok: boolean; error?: string } {
+    const last = text.split('\n').map(l => l.trim()).filter(Boolean).pop();
+    if (!last) return { ok: false, error: 'the worker answered nothing' };
+    try {
+        const r = JSON.parse(last) as { ok?: boolean; error?: string };
+        return { ok: r.ok === true, ...(r.error ? { error: r.error } : {}) };
+    } catch {
+        return { ok: false, error: `the worker's answer is not JSON: ${last.slice(0, 200)}` };
     }
 }
 
