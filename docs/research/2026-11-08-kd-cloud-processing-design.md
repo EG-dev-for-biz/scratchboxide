@@ -65,6 +65,31 @@ fit 26 s, window array 12 s) and 74 s of start, cut and upload; every shown task
 
 With 1 and 2 the shown band at Penn 150 m is about 4.5 min; with all four, about 3 min.
 
+## The tail and the start, cut (2026-11-09, same place, fresh, shown band)
+
+| Run | Change | Shown | Slowest task |
+| --- | --- | ---: | ---: |
+| `be77c251` | first shown run | 392 s | 263 s |
+| `9b41cf60` | JavaScript image (no ts-node), runner reads progress every 2 s, building layers not seamed, no place audit | 395 s | 320 s |
+| shown3 | the cells' seams closed while the buildings build | 334 s | 320 s |
+| shown4 | slim node base (image 1,039 → 749 MB) | **296 s** | 282 s |
+
+- **The tail is gone:** the seams start when the last cell lands (228–245 s) and are closed before the largest building
+  lands; the district is shown one second after its last chunk.
+- **The start did not move:** Cloud Run reports every task "started deployed execution in 1m29s–1m30s", on the JavaScript
+  image and on the slim one alike (the image itself imports in about a second). It is the time Cloud Run takes to start
+  an 8 vCPU / 32 GiB task, not our code or the pull. Removing it needs instances that are already running (below).
+- **Identity:** the two shown runs `be77c251` (ts-node image) and `9b41cf60` (JavaScript image) built every one of their
+  34 chunks to the same bytes: 110 of 110 layers, 1.19 GB, identical binary chunks (only the cut stamp's run id differs).
+- **Variance:** the largest building's build moved between 190 and 231 s from run to run on the same input.
+
+**What still blocks 3 minutes (296 s now):**
+1. *Cloud Run's task start* (−80 to −90 s a task): a pool of warm 8 vCPU workers (a Cloud Run service with min instances
+   or a worker pool, scaled up when a district is asked for) taking chunks from a queue, instead of one job execution
+   per chunk. This alone gives about 3.4 min at Penn.
+2. *The largest building* (−40 to −60 s): its K remesh (80–137 s) and twin (30–56 s) per facade group in parallel on the
+   task's cores, or its scan shown first and its straightened facades swapped in.
+
 ## The design
 
 ### 1. Known places open from the store (seconds)
