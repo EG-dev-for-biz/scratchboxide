@@ -35,11 +35,12 @@
 
 import * as jpegJs from 'jpeg-js';
 import { TEXTURE_LADDER_RUNGS, TEXTURE_RUNG_CLAY } from '../../../common/spatial/texture-pass-contracts';
-import { delightLinearRgb, linearToSrgb255, PHOTOGRAMMETRIC_DELIGHT, SRGB8_TO_LINEAR } from '../../../common/spatial/photogrammetric-delight';
+import { PHOTOGRAMMETRIC_DELIGHT } from '../../../common/spatial/photogrammetric-delight';
 import { IMAGE_MODEL_PRIORITY } from '../../../common/media-generation-protocol';
 import { MediaModelUnavailableError } from '../../../common/errors/pipeline-errors';
 import { assembleGlb, parseGlbBytes, readAccessor } from './glb-bytes';
 import { encodePng } from './png-encode';
+import { delightImageAsync, encodePngAsync } from '../../png-codec-pool';
 import { CONFIDENCE_CHANNELS } from './staged-glb-writer';
 import { decodeImageInMemory, type RgbaImage8 } from './tile-texture-transfer';
 import { harmonizeTextures, surfaceClassMasks, TEXEL_ROOF, type TextureHarmonizeReport } from './pipeline-k/texture-harmonize';
@@ -113,23 +114,10 @@ const png = (img: RgbaImage8): Uint8Array => encodePng(img.width, img.height, Bu
 /** One embedded photo, decoded and de-lit, ready to encode or to try recreating. */
 interface ImageJob { originalIndex: number; name: string; mimeType: string; delit: RgbaImage8; }
 
-/** Roof texels (pipeline K): highlights compressed, no shadow lift (a roof photographed from the air is lit; a dark one is a dark material). */
-const ROOF_DELIGHT = { shadowLift: 0, highlightCompress: PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress };
-
-/**
- * `upward` (pipeline K-D): the upward surfaces seen from above (roofs, terraces, streets, plazas; a texel any of them draws)
- * and the shadow lift they take, in place of ROOF_DELIGHT's none: a district's ground is mostly in its buildings' baked
- * shadows. It is the same brightness curve as the walls', so it lifts a dark material as much as a shadow; hence gentler.
- */
-function delightImage(decoded: RgbaImage8, surface?: Uint8Array, upward?: { mask: Uint8Array; shadowLift: number }): RgbaImage8 {
-    const out = new Uint8Array(decoded.rgba.length);
-    const upParams = upward ? { shadowLift: upward.shadowLift, highlightCompress: PHOTOGRAMMETRIC_DELIGHT.defaults.highlightCompress } : undefined;
-    for (let p = 0; p < decoded.rgba.length; p += 4) {
-        const params = upParams && upward!.mask[p >> 2] === TEXEL_ROOF ? upParams : surface?.[p >> 2] === TEXEL_ROOF ? ROOF_DELIGHT : PHOTOGRAMMETRIC_DELIGHT.defaults;
-        const [lr, lg, lb] = delightLinearRgb(SRGB8_TO_LINEAR[decoded.rgba[p]], SRGB8_TO_LINEAR[decoded.rgba[p + 1]], SRGB8_TO_LINEAR[decoded.rgba[p + 2]], params);
-        out[p] = Math.round(linearToSrgb255(lr)); out[p + 1] = Math.round(linearToSrgb255(lg)); out[p + 2] = Math.round(linearToSrgb255(lb)); out[p + 3] = decoded.rgba[p + 3];
-    }
-    return { width: decoded.width, height: decoded.height, rgba: out };
+/** encodeAs with a PNG encoded on the PNG codec threads (encodePngAsync: the same encoder). */
+async function encodeAsAsync(img: RgbaImage8, mimeType: string): Promise<Uint8Array> {
+    if (mimeType === 'image/jpeg') return encodeAs(img, mimeType);
+    return new Uint8Array(await encodePngAsync(img.width, img.height, Buffer.from(img.rgba.buffer, img.rgba.byteOffset, img.rgba.byteLength), 4));
 }
 
 function encodeAs(img: RgbaImage8, mimeType: string): Uint8Array {
@@ -231,10 +219,11 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     // the upward surfaces' own mask (a texel any upward surface draws), for their shadow lift
     const upLift = opts?.delight !== false && (opts?.upwardShadowLift ?? 0) > 0 ? opts!.upwardShadowLift! : 0;
     const upMasks = upLift ? surfaceClassMasks(g, json, new Map(decodedImages.map(d => [d.i, d.decoded])), undefined, { sharedTexel: 'up' }) : undefined;
-    const jobs: ImageJob[] = decodedImages.map(({ i, im, decoded }) => {
+    // each photo de-lit on the PNG codec threads (the same function and pixels as here), kept in the photos' order
+    const jobs: ImageJob[] = await Promise.all(decodedImages.map(async ({ i, im, decoded }) => {
         const up = upMasks?.get(i);
-        return { originalIndex: i, name: im.name ?? `image_${i}`, mimeType: im.mimeType, delit: opts?.delight === false ? decoded : delightImage(decoded, surfaces?.get(i), up ? { mask: up, shadowLift: upLift } : undefined) };
-    });
+        return { originalIndex: i, name: im.name ?? `image_${i}`, mimeType: im.mimeType, delit: opts?.delight === false ? decoded : await delightImageAsync(decoded, surfaces?.get(i), up ? { mask: up, shadowLift: upLift } : undefined) };
+    }));
 
     const finalImage = new Map<number, RgbaImage8>();
     for (const job of jobs) finalImage.set(job.originalIndex, job.delit);
@@ -335,9 +324,10 @@ export async function tileRefineTwin(texturedGlb: Uint8Array, layerKey: string, 
     let binLength = g.bin.byteLength;
     const pad = () => { const r = binLength % 4; if (r) { bin.push(new Uint8Array(4 - r)); binLength += 4 - r; } };
     const finalImageIndex = new Map<number, number>();
-    for (const job of jobs) {
-        const img = finalImage.get(job.originalIndex)!;
-        const bytes = encodeAs(img, job.mimeType);
+    // the photos encoded on the PNG codec threads at once (the same encoder, the same bytes), appended in their order
+    const encoded = await Promise.all(jobs.map(job => encodeAsAsync(finalImage.get(job.originalIndex)!, job.mimeType)));
+    for (const [k, job] of jobs.entries()) {
+        const bytes = encoded[k];
         pad();
         json.bufferViews.push({ buffer: 0, byteOffset: binLength, byteLength: bytes.length });
         bin.push(bytes);
