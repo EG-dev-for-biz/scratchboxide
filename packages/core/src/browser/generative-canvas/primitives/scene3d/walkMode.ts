@@ -375,7 +375,13 @@ export interface WalkSessionOptions {
 }
 
 /** Where to start: the ground under `ndc` of the camera's view (the screen centre by default), else under `fallback`. */
-export interface WalkStart { ndc?: THREE.Vector2; fallback?: THREE.Vector3; mode?: WalkSubMode }
+export interface WalkStart {
+    ndc?: THREE.Vector2;
+    fallback?: THREE.Vector3;
+    mode?: WalkSubMode;
+    /** Walking starts on the surface under the camera, keeping where it stands and which way it faces (a scene that opens walking). */
+    underCamera?: boolean;
+}
 
 const REFRESH_MS = 500;
 const STATS_WINDOW = 120;
@@ -406,7 +412,7 @@ export class WalkSession {
         if (mode === 'fly') {
             this.walker.placeAt(camera.position.clone().setY(camera.position.y - p.eyeHeight), view.y, view.x, 'fly');
         } else {
-            this.walker.placeAt(this.dropPoint(start), view.y, 0, 'walk');
+            this.walker.placeAt(start.underCamera ? camera.position.clone() : this.dropPoint(start), view.y, start.underCamera ? view.x : 0, 'walk');
         }
         this.last.copy(this.walker.feet);
         this.walker.applyTo(camera);
@@ -418,6 +424,8 @@ export class WalkSession {
         const { camera, scene } = this.opts;
         const raycaster = new THREE.Raycaster();
         raycaster.setFromCamera(start.ndc ?? new THREE.Vector2(0, 0), camera);
+        // surfaces the viewport never draws (a scene's walk surface, on its own layer) are stood on like any other
+        raycaster.layers.enableAll();
         const hit = raycaster.intersectObjects(scene.children, true).find(h => this.world.meets(h.object));
         if (!hit) return (start.fallback ?? camera.position).clone();
         const normal = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : new THREE.Vector3(0, 1, 0);

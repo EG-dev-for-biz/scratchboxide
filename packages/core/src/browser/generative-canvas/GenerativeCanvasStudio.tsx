@@ -1248,6 +1248,8 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         (window as any).__scratchbox_send_prompt = (text: string) => handleSendMessage(text);
         (window as any).__scratchbox_queue_prompt = (text: string) => handleQueueMessage(text);
         (window as any).__scratchbox_new_chat = () => handleNewChat();
+        // opens a built world by its folder, as its starter button would (live verification of a world that has no button)
+        (window as any).__scratchbox_open_world = (world: NonNullable<StarterButton['world']>) => handleOpenStarterWorld({ world } as StarterButton);
         const handleSendPromptEvent = (e: Event) => {
             const detail = (e as CustomEvent).detail;
             if (detail?.prompt) {
@@ -1258,6 +1260,7 @@ export const GenerativeCanvasStudio: React.FC<GenerativeCanvasStudioProps> = ({
         return () => {
             delete (window as any).__scratchbox_send_prompt;
             delete (window as any).__scratchbox_queue_prompt;
+            delete (window as any).__scratchbox_open_world;
             delete (window as any).__scratchbox_new_chat;
             window.removeEventListener('scratchbox:send-prompt', handleSendPromptEvent);
         };

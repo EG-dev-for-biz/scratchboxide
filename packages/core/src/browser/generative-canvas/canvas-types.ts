@@ -1181,6 +1181,12 @@ export interface Scene3DData {
         outputGlbPath?: string;
     };
     cameraMode?: 'orbit' | 'fps';
+    /**
+     * Surfaces the first-person walker stands on and stops at that the viewport never draws: a mesh in the scene's frame
+     * (a splat world's scan, since splats are not surfaces). With one, a scene that opens in 'fps' opens walking, its
+     * feet on the surface under the camera, instead of flying.
+     */
+    walkSurface?: { url: string };
     toolMode?: ViewportToolMode;
     sculptSettings?: SculptSettings;
     transformMode?: TransformGizmoMode;

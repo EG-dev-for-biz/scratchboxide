@@ -983,6 +983,9 @@ interface ExternalLoadStatus {
 }
 
 /** Request URL for an objects[] durableUri: bare '/<file>.glb' paths are served from /models/. */
+/** The three.js layer of a scene's walk surface: no camera or pointer ray reads it. */
+const WALK_SURFACE_LAYER = 7;
+
 function resolveExternalModelUri(rawUri: string): string {
     if (rawUri.startsWith('/') && !rawUri.startsWith('/models/') && !rawUri.startsWith('/tiles/') && !rawUri.startsWith('/api/') && !rawUri.startsWith('/panoramas/')) {
         const fileName = rawUri.split('/').pop();
@@ -1944,10 +1947,16 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
     const cameraModeRef = useLatest(cameraMode);
 
     // ---- Walk mode (walkMode.ts): first person at street level, walking or flying ----
+    /** The scene's walk surface (data.walkSurface): loaded, kept off the drawn layer, met by the walker. */
+    const walkSurfaceRef = React.useRef<THREE.Object3D | null>(null);
+    const walkSurfaceUrl = sceneData.walkSurface?.url;
+    const [walkSurfaceState, setWalkSurfaceState] = React.useState<'none' | 'loading' | 'ready' | 'failed'>(walkSurfaceUrl ? 'loading' : 'none');
     /** Viewport plumbing the walker never meets: cursors, the gizmo and helpers, by flag and identity (never by name). */
     const walkMeets = React.useCallback((mesh: THREE.Mesh) => {
         if (mesh === brushCursorMeshRef.current) return false;
         for (let cur: THREE.Object3D | null = mesh; cur; cur = cur.parent) {
+            // the scene's walk surface is there to be met, though the viewport never draws it
+            if (cur === walkSurfaceRef.current) return true;
             if (cur === transformGizmoGroupRef.current || cur.userData?.isHelper || cur.userData?.isGizmo || cur.userData?.handleType) return false;
         }
         return true;
@@ -1968,7 +1977,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
      * Enters first person: walking drops the walker on the ground under the pointer (`at` 'pointer', when it is over the
      * viewport) or the screen centre, else under the orbit pivot; flying starts where the camera is.
      */
-    const startWalk = React.useCallback((at: 'centre' | 'pointer', mode: WalkSubMode = 'walk') => {
+    const startWalk = React.useCallback((at: 'centre' | 'pointer' | 'camera', mode: WalkSubMode = 'walk') => {
         const stack = stackRef.current;
         if (!stack) return;
         walkSessionRef.current?.dispose();
@@ -1983,18 +1992,22 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             container: stack.container,
             include: walkMeets,
             onPointerLockLost: () => { if (walkSessionRef.current === session) endWalk(true); }
-        }, { ndc, fallback: cameraTargetRef.current.clone(), mode });
+        }, { ndc, fallback: cameraTargetRef.current.clone(), mode, underCamera: at === 'camera' });
         walkSessionRef.current = session;
         setToolMode('view');
         setCameraMode('fps');
         if (mode === 'walk') session.lockPointer();
     }, [walkMeets, endWalk]);
     const walkSessionOf = React.useCallback(() => walkSessionRef.current, []);
-    // A scene that asks for the first-person camera (data.cameraMode 'fps') starts flying where its camera is.
+    // A scene that asks for the first-person camera (data.cameraMode 'fps') starts where its camera is: walking, its feet
+    // on the scene's walk surface once that has loaded (so the ground holds from the first step), else flying.
     React.useEffect(() => {
-        if (cameraMode === 'fps' && !walkSessionRef.current) startWalk('centre', 'fly');
-        else if (cameraMode === 'orbit' && walkSessionRef.current) endWalk(true);
-    }, [cameraMode, startWalk, endWalk]);
+        if (cameraMode === 'fps' && !walkSessionRef.current) {
+            if (walkSurfaceState === 'loading' || (walkSurfaceUrl && walkSurfaceState === 'none')) return;
+            if (walkSurfaceState === 'ready') startWalk('camera', 'walk');
+            else startWalk('centre', 'fly');
+        } else if (cameraMode === 'orbit' && walkSessionRef.current) endWalk(true);
+    }, [cameraMode, startWalk, endWalk, walkSurfaceState, walkSurfaceUrl]);
     React.useEffect(() => {
         (window as any).__SB_WALK__ = { session: walkSessionOf, start: startWalk, end: () => endWalk(true) };
         return () => { delete (window as any).__SB_WALK__; };
@@ -3614,6 +3627,41 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
             activeSplatMeshesRef.current.clear();
         };
     }, []);
+
+    // ---- 5c1. The walk surface (data.walkSurface): triangles the walker meets and the viewport never draws ----
+    React.useEffect(() => {
+        const scene = stackRef.current?.scene;
+        if (!walkSurfaceUrl || !scene) { setWalkSurfaceState('none'); return; }
+        let cancelled = false;
+        let root: THREE.Object3D | null = null;
+        setWalkSurfaceState('loading');
+        // the world's own file, where the world's splats are served from (not a model of the models folder)
+        createGltfLoader().load(walkSurfaceUrl, gltf => {
+            if (cancelled) { disposeObject3DDeep(gltf.scene); return; }
+            root = gltf.scene;
+            root.name = 'sb-walk-surface';
+            root.userData.isHelper = true;
+            // no camera draws layer WALK_SURFACE_LAYER and no pointer ray reads it: the mesh costs no frame time
+            root.traverse(o => { o.layers.set(WALK_SURFACE_LAYER); });
+            root.updateMatrixWorld(true);
+            scene.add(root);
+            walkSurfaceRef.current = root;
+            walkSessionRef.current?.world.refresh();
+            setWalkSurfaceState('ready');
+        }, undefined, err => {
+            if (cancelled) return;
+            console.warn(`[Scene3D] the walk surface ${walkSurfaceUrl} could not be loaded; first person flies instead of walking:`, err);
+            setWalkSurfaceState('failed');
+        });
+        return () => {
+            cancelled = true;
+            if (root) {
+                root.removeFromParent();
+                disposeObject3DDeep(root);
+                if (walkSurfaceRef.current === root) walkSurfaceRef.current = null;
+            }
+        };
+    }, [walkSurfaceUrl]);
 
     // ---- 5c2. Explicit object materials (sb_set_material_pbr): drawn over the clay default; removed (undo) they bring it back ----
     const materialOverrideFingerprint = React.useMemo(

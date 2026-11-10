@@ -11,8 +11,8 @@
  * Joint depth and camera poses for the views of one Street View drive (Depth Anything 3 Small, tools/depth/rig_depth_da3.py),
  * the input of rig-depth-registration.ts.
  *
- * Depth Anything 3 Small (or Base; both Apache-2.0) is allowed for Street View registration only (user decision,
- * 2026-11-08): scene depth and geometry still come from the scan, the tiles or Depth Anything V2 Small (AGENTS.md
+ * Depth Anything 3 Small (or Base; both Apache-2.0) is allowed for Street View registration (user decision, 2026-11-08)
+ * and as the reference SHARP's street splats are scaled onto (SharpStreetSplatService; 2026-11-09): scene depth and geometry still come from the scan, the tiles or Depth Anything V2 Small (AGENTS.md
  * section 2). The views are sent to the worker inline and never written to disk (Street View imagery is not stored);
  * only the derived depth comes back through a temporary file, removed after reading.
  *

@@ -21,6 +21,9 @@ import { resolveSurveyPreset } from './survey-router';
 import { geocode3DTilesAddress, getGoogle3DTilesClay, getGoogle3DTilesFullTexture } from './Google3DTileBlockoutPipelineService';
 import { HeadlessMeshSilhouetteRenderer } from './HeadlessMeshSilhouetteRenderer';
 import { removeSeenThrough, vectorLookups } from '../3d-engine/staged-location/seen-through';
+import { SharpStreetSplatService, SHARP_STREET_VERSION, sharpStreetEnabled, type SharpStreetReport } from './SharpStreetSplatService';
+import { Splat3DTilesService } from './Splat3DTilesService';
+import { SplatService } from '../3d-engine/splat-service';
 
 /** SCRATCHBOX_SEEN_THROUGH=0 keeps in the world's tiles what the registered photos see through. */
 export const seenThroughEnabled = (): boolean => process.env.SCRATCHBOX_SEEN_THROUGH !== '0';
@@ -30,6 +33,7 @@ import { glbRaycaster, planStreetViewStations, snapVantageToDrivenSidewalk, snap
 import { geodeticToScan } from './StreetViewSurveyPlanner';
 import { discoverPanosAt, type StreetViewEvidenceDeps } from '../3d-engine/staged-location/streetview-evidence';
 import type { CloudBucket } from '../cloud-store/cloud-bucket';
+import { WALK_SURFACE_FILE, writeWalkSurface } from './street-walk-surface';
 import { defaultWorldCacheBucket, fetchWorld, storeWorld, worldCacheKey, type WorldManifest } from '../cloud-store/world-cache';
 
 export interface Location3DGSRequest {
@@ -150,10 +154,12 @@ export interface Location3DGSResult {
     /** One line per distinct station image source: the model that answered and, when another was asked for, why. */
     imageSources: string[];
     /** With a vantage: where the viewer was placed (the sidewalk snap), the street stations found, how many were accepted, and how they were registered. */
-    streetView?: Omit<StreetViewStationsResult, 'stations' | 'seenPoints'> & {
+    streetView?: Omit<StreetViewStationsResult, 'stations' | 'seenPoints' | 'panoPoses'> & {
         snap?: SidewalkSnap; stations: number; accepted: number; unmatched: number; panos: string[];
         /** What the registered photos see through, taken out of the tiles before baking (seen-through.ts), or why not. */
         seenThrough?: SeenThroughSummary;
+        /** The street level drawn from the panoramas themselves (SHARP, `generated`, scaled onto the scan), or why it was not. */
+        sharp?: SharpStreetReport;
     };
     /** The world cache: this world was fetched from it (built when `storedAt`), or is being stored in it. */
     worldCache?: { key: string; bucket: string; state: 'fetched' | 'storing'; storedAt?: string };
@@ -265,6 +271,8 @@ export class Location3DGaussianSplatService {
         const cacheKey = worldCacheKey({
             lat: anchor.lat.toFixed(6), lng: anchor.lng.toFixed(6), location: req.location, glbPath: req.glbPath,
             headingDeg: req.vantage?.headingDeg, sideDeg: req.vantage?.sideDeg, walkMeters: req.vantage?.walkMeters, maxPanos: req.vantage?.maxPanos,
+            // the street level's SHARP splats are part of a vantage world: a world built without them, or by another version, is another world
+            ...(req.vantage ? { streetSharp: sharpStreetEnabled() ? SHARP_STREET_VERSION : 0 } : {}),
             cameraCount: req.cameraCount, surveyPattern: req.surveyPattern, draft: req.draft === true || req.fidelity === 'draft',
             styleSuffix: req.styleSuffix, moodPromptContext: req.moodPromptContext, architecturalStyle: req.architecturalStyle, stylePreset: req.stylePreset, mood: req.mood
         });
@@ -462,11 +470,53 @@ export class Location3DGaussianSplatService {
             throw new GeneratorFailedError('survey splat pipeline', `the 3DGS pipeline for ${beautifyContext.locationName} produced no splats (${accepted.length}/${pipelineResult.stations.length} station images accepted)`);
         }
 
+        // The street level, drawn from the panoramas themselves and scaled onto the scan (SHARP; `generated`), over the
+        // survey's splats, which stay wherever no street splat stands. A step that cannot run leaves the world as it is.
+        let sharp: SharpStreetReport | undefined;
+        if (street?.panoPoses?.length && req.streetView) {
+            progressReporter(0.955, `Drawing the street level from ${street.panoPoses.length} Street View panorama${street.panoPoses.length === 1 ? '' : 's'} (SHARP)...`);
+            sharp = await new SharpStreetSplatService().run({
+                glbPath, panos: street.panoPoses, baseSplatPath: pipelineResult.fusedSplatPath, outSplatPath: pipelineResult.fusedSplatPath,
+                workDir: path.join(outDir, 'sharp_street'),
+                ...(req.streetView.mapsApiKey ? { mapsApiKey: req.streetView.mapsApiKey } : {}),
+                ...(req.signal ? { signal: req.signal } : {}), onProgress: m => progressReporter(0.96, m)
+            });
+            throwIfStopped(req.signal);
+            if (sharp.ran) {
+                // the tileset and the compressed copy are of the merged world, not the survey's
+                progressReporter(0.985, `Tiling the world with its street level (${sharp.splats.toLocaleString()} splats)...`);
+                const tiled = await new Splat3DTilesService().convert({
+                    inputPath: pipelineResult.fusedSplatPath, outDir, origin: { lat: anchor.lat, lng: anchor.lng, alt: anchor.elevationMeters ?? 0 }, headingDeg: 0, maxDepth: 5,
+                    ...(req.signal ? { signal: req.signal } : {})
+                });
+                if (!tiled.success) throw new GeneratorFailedError('splat tiling', `the world with its street level could not be tiled: ${tiled.error ?? 'no error was reported'}`);
+                pipelineResult.fusedSplatCount = sharp.splats;
+                if (pipelineResult.spzPath) {
+                    const spz = await new SplatService().runPipeline({ inputPath: pipelineResult.fusedSplatPath, outSpzPath: pipelineResult.spzPath }).catch(() => undefined);
+                    if (!spz?.success) { await fs.remove(pipelineResult.spzPath).catch(() => undefined); delete pipelineResult.spzPath; }
+                }
+            } else {
+                progressReporter(0.985, `The street level was not drawn from the panoramas: ${sharp.reason}`);
+            }
+        }
+
+        // a world walked at street level keeps its scan as the surface the walker stands on and stops at (never drawn):
+        // splats alone are nothing to stand on. A scan that cannot be written leaves the world without one, and says so.
+        let walkSurfacePath: string | undefined;
+        if (viewer) {
+            try {
+                const surface = writeWalkSurface(glbPath, path.join(outDir, WALK_SURFACE_FILE));
+                walkSurfacePath = surface.path;
+                progressReporter(0.99, `Walk surface: ${surface.triangles.toLocaleString()} scan triangles to stand on`);
+            } catch (err) {
+                progressReporter(0.99, `No walk surface (the walker will fly, not walk): ${err instanceof Error ? err.message : String(err)}`);
+            }
+        }
         const { scene3DData, splatMediaObject } = SurveySplatPipelineService.toScene3DData(
             pipelineResult,
             anchor,
             beautifyContext.locationName,
-            viewer ? { vantage: viewer } : {}
+            viewer ? { vantage: viewer, ...(walkSurfacePath ? { walkSurfacePath } : {}) } : {}
         );
         // the scene beside its tileset, so the world can be opened again without building it (the 3D World starter button)
         await fs.writeJson(path.join(outDir, 'scene3d.json'), scene3DData, { spaces: 2 });
@@ -498,7 +548,7 @@ export class Location3DGaussianSplatService {
                 streetView: {
                     ...(snap ? { snap } : {}),
                     vantageLocal: street.vantageLocal, discovery: street.discovery, failures: street.failures, registrationSummary: street.registrationSummary,
-                    ...(street.driveSummary ? { driveSummary: street.driveSummary } : {}), ...(seenThrough ? { seenThrough } : {}),
+                    ...(street.driveSummary ? { driveSummary: street.driveSummary } : {}), ...(seenThrough ? { seenThrough } : {}), ...(sharp ? { sharp } : {}),
                     stations: street.stations.length,
                     accepted: pipelineResult.stations.filter(st => st.accepted && st.groundingPanoId).length,
                     unmatched: pipelineResult.stations.filter(st => st.accepted && st.scanMismatch).length,
@@ -533,7 +583,8 @@ function worldFromCache(hit: WorldManifest<CachedWorld>, outDir: string, duratio
     const spzPath = path.join(outDir, 'fused.spz');
     const { scene3DData } = SurveySplatPipelineService.toScene3DData(
         { success: true, stations: [], fusedSplatPath, ...(fs.existsSync(spzPath) ? { spzPath } : {}), fusedSplatCount: cached.splatCount, tilesetPath, metaPath, cropBox: cached.cropBox, durationMs },
-        cached.geoAnchor, cached.locationName, viewer ? { vantage: viewer } : {}
+        cached.geoAnchor, cached.locationName,
+        viewer ? { vantage: viewer, ...(fs.existsSync(path.join(outDir, WALK_SURFACE_FILE)) ? { walkSurfacePath: path.join(outDir, WALK_SURFACE_FILE) } : {}) } : {}
     );
     fs.writeJsonSync(path.join(outDir, 'scene3d.json'), scene3DData, { spaces: 2 });
     return {

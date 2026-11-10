@@ -705,6 +705,8 @@ export class SurveySplatPipelineService {
              * first-person (walk) mode instead of orbiting the place from above.
              */
             vantage?: { eye: [number, number, number]; headingDeg: number };
+            /** The world's walk surface (street-walk-surface.ts), when it was written: the walker stands on it, undrawn. */
+            walkSurfacePath?: string;
         } = {}
     ): { scene3DData: Scene3DData; splatMediaObject: Media4DObject } {
         const splatUrl = SurveySplatPipelineService.toWebUrl(result.spzPath ?? result.fusedSplatPath);
@@ -750,8 +752,13 @@ export class SurveySplatPipelineService {
         };
 
         // a real place opens under its partly cloudy, low-sun sky (user decision 2026-11-02; the splat keeps its own even
-        // light); the studio stays as the sky the Weather tool's Off returns to
-        const scene3DData: Scene3DData = withLocationSceneWeather({
+        // light); the studio stays as the sky the Weather tool's Off returns to. A street-vantage world does not (user
+        // decision 2026-11-09): seen from the street a drawn sky fills half the frame, costs frame time and stands against
+        // the photos' own, so it opens on the neutral backdrop, marked so the starter adds none; the Weather tool still can.
+        const underSky = (scene: Scene3DData): Scene3DData => vantage
+            ? { ...scene, weatherCleared: true } as Scene3DData
+            : withLocationSceneWeather(scene, weatherDateOf(Date.now()));
+        const scene3DData: Scene3DData = underSky({
             title: `${locationName} — 3D Gaussian Splat`,
             subtitle: `Photorealistic 3DGS radiance field at Lat ${anchor.lat.toFixed(4)}°, Lng ${anchor.lng.toFixed(4)}° synthesized via Nano Banana multi-station capture and C++20 metric depth unprojection.`,
             worldBranch: `splat-world/${sceneSlug}`,
@@ -794,9 +801,10 @@ export class SurveySplatPipelineService {
                 active: false,
                 landmarkName: locationName
             },
+            ...(options.walkSurfacePath ? { walkSurface: { url: SurveySplatPipelineService.toWebUrl(options.walkSurfacePath) } } : {}),
             customMeshes: [],
             objects: [splatMediaObject]
-        }, weatherDateOf(Date.now()));
+        });
 
         return { scene3DData, splatMediaObject };
     }

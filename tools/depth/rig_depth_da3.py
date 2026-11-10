@@ -4,7 +4,8 @@
 """Joint depth and camera poses for the views of one Street View drive, by Depth Anything 3 Small.
 
 Used by Da3RigDepthService (packages/core/src/node/spatial/Da3RigDepthService.ts) for Street View registration
-(rig-depth-registration.ts). Depth Anything 3 Small is allowed for registration only (user decision, 2026-11-08;
+(rig-depth-registration.ts) and by SharpStreetSplatService as the reference its street splats are scaled onto. Depth
+Anything 3 Small is allowed for these two uses only (user decisions, 2026-11-08 and 2026-11-09;
 Apache-2.0 weights; the larger DA3 models are non-commercial and are refused here).
 
 Request (stdin, one JSON object):

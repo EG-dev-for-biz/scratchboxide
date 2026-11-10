@@ -26,7 +26,7 @@
 import type { ColmapCameraPose, GeodeticAnchor } from '../../common/spatial/colmap-vector-reference-types';
 import type { GeodeticOrigin } from './StreetViewSurveyPlanner';
 import { geodeticToScan, scanToGeodetic } from './StreetViewSurveyPlanner';
-import { groundingHorizontalFovDeg, readGlbScene, sceneToRenderMesh, stationForFrame } from './StreetViewPoseRegistrar';
+import { groundingHorizontalFovDeg, readGlbScene, sceneToRenderMesh, stationForFrame, type PoseCorrection } from './StreetViewPoseRegistrar';
 import { TileMeshRaycaster } from './tile-mesh-raycast';
 import type { GroundingPhoto } from './BeautifyStationService';
 import {
@@ -83,6 +83,17 @@ export interface StreetViewStationsResult {
     seenPoints?: SeenPoint[];
     /** The drive registration in words, when it ran. */
     driveSummary?: string;
+    /** Each panorama used: its nominal eye in the GLB frame, its registered correction when it has one, and how it was registered. */
+    panoPoses?: StreetPanoPose[];
+}
+
+export interface StreetPanoPose {
+    panoId: string;
+    /** The nominal eye: the panorama's position, 2.5 m above the scan's top surface there. */
+    eye: [number, number, number];
+    correction?: PoseCorrection;
+    /** 'joint', 'edges', ... or 'nominal' (unregistered: good to about ±2 m and ±2°). */
+    method: string;
 }
 
 export interface StreetViewStationsRequest {
@@ -368,6 +379,13 @@ export async function planStreetViewStations(req: StreetViewStationsRequest): Pr
         stations, ...vantage, discovery, failures,
         registrationSummary: `${registered} of ${used} pano${used === 1 ? '' : 's'} registered against the scan${regError ? ` (registration failed: ${regError})` : ''}; the rest keep the nominal pose (about ±2 m, ±2°)`,
         ...(reg?.drive?.seenPoints?.length ? { seenPoints: reg.drive.seenPoints } : {}),
-        ...(reg?.drive ? { driveSummary: describeDriveRegistration(reg.drive) } : {})
+        ...(reg?.drive ? { driveSummary: describeDriveRegistration(reg.drive) } : {}),
+        panoPoses: panos.filter(p => streetY.has(p.panoId)).map(p => {
+            const correction = registration?.corrections.get(p.panoId);
+            return {
+                panoId: p.panoId, eye: [p.x, streetY.get(p.panoId)! + STREET_VIEW_EYE_HEIGHT_M, p.z] as [number, number, number],
+                ...(correction ? { correction } : {}), method: registration?.perPano.find(q => q.panoId === p.panoId)?.method ?? 'nominal'
+            };
+        })
     };
 }

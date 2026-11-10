@@ -18,7 +18,7 @@ import { BeautifyStationService, createGoogleStationImageGenerator, STATION_EMPT
 import { MediaModelUnavailableError } from '../src/common/errors/pipeline-errors';
 import { SurveyStationRenderService } from '../src/node/spatial/SurveyStationRenderService';
 import { SurveySplatPipelineService } from '../src/node/spatial/SurveySplatPipelineService';
-import { LOCATION_SCENE_WEATHER, normalizeWeather, weatherSun } from '../src/browser/generative-canvas/services/atmosphere/scene-weather';
+import { LOCATION_SCENE_WEATHER, normalizeWeather, weatherSun, withLocationSceneWeather } from '../src/browser/generative-canvas/services/atmosphere/scene-weather';
 import { GoogleMediaGenerationService } from '../src/node/google-media-generation-service';
 import { MediaAssetStore } from '../src/node/media-asset-store';
 import { stationFromLookAt } from '../src/common/spatial/SurveySynthesisEngine';
@@ -356,7 +356,7 @@ describe('chained references', () => {
 describe('the splat world opens as a 3D scene', () => {
     const result = { success: true, stations: [], fusedSplatPath: path.join(process.cwd(), 'public', 'tilesets', 'x', 'fused.splat'), fusedSplatCount: 10, tilesetPath: path.join(process.cwd(), 'public', 'tilesets', 'x', 'tileset.json'), metaPath: '', cropBox: { min: [-50, -2, -50] as [number, number, number], max: [50, 40, 50] as [number, number, number] }, durationMs: 0 };
 
-    it('at a street vantage: first-person at the viewer\'s eye, looking along the heading, under the place\'s sky', () => {
+    it('at a street vantage: first-person at the viewer\'s eye, looking along the heading, on the neutral backdrop with no drawn sky', () => {
         const { scene3DData } = SurveySplatPipelineService.toScene3DData(result, ANCHOR, 'Test Place', { vantage: { eye: [3, 1.6, -4], headingDeg: 90 } });
         expect(scene3DData.cameraMode).toBe('fps');
         expect(scene3DData.camera!.position).toEqual([3, 1.6, -4]);
@@ -364,11 +364,17 @@ describe('the splat world opens as a 3D scene', () => {
         expect(scene3DData.camera!.target[0]).toBeCloseTo(23, 6);
         expect(scene3DData.camera!.target[1]).toBeCloseTo(1.6, 6);
         expect(scene3DData.camera!.target[2]).toBeCloseTo(-4, 6);
-        expectLocationSky(scene3DData);
+        // no weather sky is drawn over a street world (user decision 2026-11-09), and the starter is told to add none
+        const s = scene3DData as typeof scene3DData & { weather?: unknown; features?: Record<string, any>; weatherCleared?: boolean };
+        expect(s.environment).toMatchObject({ skybox: 'studio', lighting: 'studio' });
+        expect(s.weather).toBeUndefined();
+        expect(s.features?.atmosphericScattering).toBeUndefined();
+        expect(s.weatherCleared).toBe(true);
+        expect(withLocationSceneWeather(scene3DData, new Date())).toBe(scene3DData);
         expect(scene3DData.splatUrl).toBe('/tilesets/x/fused.splat');
     });
 
-    it('without one: orbiting the place, under the same sky', () => {
+    it('without one: orbiting the place, under the place\'s sky', () => {
         const { scene3DData } = SurveySplatPipelineService.toScene3DData(result, ANCHOR, 'Test Place');
         expect(scene3DData.cameraMode).toBe('orbit');
         expectLocationSky(scene3DData);
