@@ -57,7 +57,7 @@ import { createFalTrellisClient } from './pipeline-i/fal-trellis';
 import { createFalMeshyClient } from './pipeline-i/fal-meshy';
 import { resolveRegionSets } from './pipeline-k/material-sets';
 import { StageCache, stagedWorkspaceRoot } from './stage-cache';
-import { reportStagedSwitchProblems, RETIRED_PIPELINE_LETTERS, STAGED_DISTRICT_MODES, stagedBuildingPipelineEnv } from './staged-switches';
+import { cacheRestoreMode, reportStagedSwitchProblems, RETIRED_PIPELINE_LETTERS, STAGED_DISTRICT_MODES, stagedBuildingPipelineEnv } from './staged-switches';
 import { genAiEnhanceClient } from './texture-enhance';
 import { lightingCorrectionEnabled, lightingModels } from './texture-lighting';
 import { bakeTileDetail, defaultSwatchServices, subjectSwatchLibrary } from '../../spatial/tile-detail-bake';
@@ -237,7 +237,7 @@ export async function createStagedLocationDeps(workspaceRoot: string, options: {
     // a stage this workspace lacks is read back from the cache mirror's bucket before it runs, and so is a model's answer
     // kept as one file (pipeline-k/model-readings.ts) before the model is asked (SCRATCHBOX_CACHE_RESTORE=off: never;
     // `readings`: the model's answers only, every stage built here: a build compared with another on the same answers)
-    const restoreMode = process.env.SCRATCHBOX_CACHE_RESTORE?.trim();
+    const restoreMode = cacheRestoreMode();
     const mirror = restoreMode === 'off' ? undefined : cacheMirrorBucket();
     const readingsOnly = restoreMode === 'readings';
     const cache: StageCache = new StageCache({

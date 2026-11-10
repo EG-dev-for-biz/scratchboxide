@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { reportStagedSwitchProblems, stagedBuildingPipelineEnv, stagedDistrict, stagedDistrictMode, stagedModelService, stagedSwitchProblems } from '../src/node/3d-engine/staged-location/staged-switches';
+import { cacheRestoreMode, reportStagedSwitchProblems, stagedBuildingPipelineEnv, stagedDistrict, stagedDistrictMode, stagedModelService, stagedSwitchProblems } from '../src/node/3d-engine/staged-location/staged-switches';
 import { districtMassingEnabled, proceduralDistrictEnabled } from '../src/node/3d-engine/staged-location/district-massing';
 import { stagedPipelineK } from '../src/node/3d-engine/staged-location/pipeline-k/pipeline-k';
 import { parseStagedLocationArgs } from '../src/node/3d-engine/staged-location/staged-location-tool';
@@ -130,5 +130,14 @@ describe('staged build switches: one meaning each (2026-10-30)', () => {
             expect(() => parse({ pipeline: letter }), letter).toThrow(InvalidInputError);
             expect(() => parse({ pipeline: letter }), letter).toThrow(/retired on 2026-10-30/);
         }
+    });
+
+    it('reads SCRATCHBOX_CACHE_RESTORE off as off, 0, false and no alike, reports a value it does not know, and reads it as on', () => {
+        for (const v of ['off', '0', 'false', 'no', ' OFF ']) expect(cacheRestoreMode({ SCRATCHBOX_CACHE_RESTORE: v }), v).toBe('off');
+        expect(cacheRestoreMode({ SCRATCHBOX_CACHE_RESTORE: 'readings' })).toBe('readings');
+        for (const v of [undefined, '', 'on', '1', 'true', 'yes']) expect(cacheRestoreMode({ SCRATCHBOX_CACHE_RESTORE: v }), String(v)).toBe('on');
+        expect(stagedSwitchProblems({ SCRATCHBOX_CACHE_RESTORE: '0' })).toEqual([]);
+        expect(cacheRestoreMode({ SCRATCHBOX_CACHE_RESTORE: 'fresh' })).toBe('on');
+        expect(stagedSwitchProblems({ SCRATCHBOX_CACHE_RESTORE: 'fresh' })).toEqual([expect.stringMatching(/SCRATCHBOX_CACHE_RESTORE takes off \(0, false, no\), readings or on; "fresh" is read as on/)]);
     });
 });

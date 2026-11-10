@@ -90,8 +90,24 @@ function replacementOf(name: typeof RETIRED_STAGED_SWITCHES[number], v: string):
 }
 
 /** What is wrong with the staged switches in `env`, one sentence each: retired switches still set, values a switch does not take. */
+/**
+ * SCRATCHBOX_CACHE_RESTORE: whether a build reads what this workspace lacks back from the cache mirror. `off` (also `0`,
+ * `false`, `no`: the other switches' "off") reads nothing back (a fresh build), `readings` only the model's answers,
+ * anything else, unset included, everything; a value it does not know is read as on and reported (stagedSwitchProblems).
+ * Until 2026-11-09 only `off` was off, and a fresh build started with `=0` restored every chunk's terrain and twin.
+ */
+export function cacheRestoreMode(env: NodeJS.ProcessEnv = process.env): 'on' | 'off' | 'readings' {
+    const v = (env.SCRATCHBOX_CACHE_RESTORE ?? '').trim().toLowerCase();
+    if (['off', '0', 'false', 'no'].includes(v)) return 'off';
+    return v === 'readings' ? 'readings' : 'on';
+}
+
+const CACHE_RESTORE_VALUES = ['', 'on', '1', 'true', 'yes', 'off', '0', 'false', 'no', 'readings'];
+
 export function stagedSwitchProblems(env: NodeJS.ProcessEnv = process.env): string[] {
     const out: string[] = [];
+    const restore = (env.SCRATCHBOX_CACHE_RESTORE ?? '').trim();
+    if (!CACHE_RESTORE_VALUES.includes(restore.toLowerCase())) out.push(`SCRATCHBOX_CACHE_RESTORE takes off (0, false, no), readings or on; "${restore}" is read as on: stages and answers are read back from the cache mirror.`);
     for (const name of RETIRED_STAGED_SWITCHES) {
         const raw = (env[name] ?? '').trim();
         if (raw) out.push(`${name}=${raw} is no longer read (replaced 2026-10-30): set ${replacementOf(name, raw.toLowerCase())}.`);

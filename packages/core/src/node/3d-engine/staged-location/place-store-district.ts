@@ -32,6 +32,7 @@
  * with it off the audit still runs and its note says so. Neither step ever fails the build (a stopped build's stop passes through).
  */
 
+import { cacheRestoreMode } from './staged-switches';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -295,7 +296,7 @@ export async function pullPlaceForRun(input: {
     return pullPlace(store, {
         ...(input.store && !objectsOff ? { objects: new SceneObjectStore(input.store) } : {}), ...(objectsOff ? { objectsOff } : {}),
         ...(input.readingsDir ? { readingsDir: input.readingsDir } : {}),
-        ...(env.SCRATCHBOX_CACHE_RESTORE?.trim() === 'off' ? { readingsOff: 'SCRATCHBOX_CACHE_RESTORE=off: nothing is read back' } : {}),
+        ...(cacheRestoreMode(env) === 'off' ? { readingsOff: 'SCRATCHBOX_CACHE_RESTORE=off: nothing is read back' } : {}),
         ...(input.workspace ? { workspace: input.workspace } : {})
     });
 }
