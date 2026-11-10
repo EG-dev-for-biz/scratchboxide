@@ -152,6 +152,16 @@ Status: trial only, outside the repo (`~/.cache/scratchbox-sharp-trial/joint`: a
 - **Reading:** five eyes on one street are too few to constrain a joint fit; the gain at the panoramas does not carry to the views between them. What would: many more panoramas along the drive (every 3-5 m instead of five), or one consistent geometry under the splats (the scan) instead of five depth predictions.
 - **Proof sheet:** `docs/screenshots/da3_rig_registration_2026-11-08/sharp_joint_optimisation_trial.png`.
 
+### Vehicles and people removed before SHARP (2026-11-10)
+
+Status: in the app, on by default (`SharpStreetSplatService.clearViews`, `SHARP_CLEAR_PROMPT`; `SCRATCHBOX_STREET_SHARP_CLEAR=0` off). User decision, 2026-11-10. Built through the app's chat at 7th Ave & W 32nd St (v6, world cache off, scan depth reference).
+
+- **What runs:** each of a panorama's five views goes inline to the world's station image generator (answered by `gemini-3.1-flash-image`, 1K) with a prompt to remove every vehicle and person and change nothing else. The worker then checks the edit against its photograph (`framing_held`: edge strength on a 160-cell grid, correlated over shifts of up to 4 cells; held when the best match is within one cell of no shift, the correlation at no shift is at least 0.2, and the image is square). A held edit is what SHARP draws (`generated`); otherwise the photograph is.
+- **v6:** 24 of 24 level views edited and held (edge correlation 0.63-0.95, no shift). All five used panoramas' straight-down views were refused (correlation about 0: a road seen from above has few edges, and the model redrew it) and kept as photographed. 9,423,206 splats predicted, 7,918,607 in the world.
+- **Reading** (four cameras away from every panorama, against v5, same poses): the taxis, cars and most pedestrians of v5 are gone in all four cameras and the road under them reads as road. An independent visual check also found: one standing figure and one or two possible vehicle remnants left (far sidewalk, camera D), a painted turn arrow much fainter than in v5, and grey or white flat patches where v5 showed a building at the left edge (the base layer's station images differ between the two builds, so not all of that is the edit's).
+- **Proof sheet:** `docs/screenshots/da3_rig_registration_2026-11-08/sharp_no_vehicles.png`.
+- **Cost:** 30 image edits a build (six panoramas by five views), on top of the stations'.
+
 ## Still open
 
 1. The edge score used here (median distance from scan edges to photo edges) is too loose to judge a pose: it improved under the implausible forced move. The judge's registration or the research report's render-and-match is the measure to use.

@@ -82,7 +82,7 @@ describe('SHARP street splats', () => {
         });
         expect(report.ran).toBe(false);
         expect(!report.ran && report.reason).toMatch(/SHARP street step failed/);
-        expect(SHARP_STREET_VERSION).toBe(4);
+        expect(SHARP_STREET_VERSION).toBe(5);
         expect(fs.readFileSync(base).equals(rows)).toBe(true);
         expect(fs.existsSync(path.join(tmp, 'work'))).toBe(false);
     });
@@ -121,6 +121,29 @@ print(json.dumps({"layers": [len(l) for l in layers], "curtain": int(curtain.sum
         expect(out.curtainHit).toBe(2304);
         expect(out.wallHit).toBe(0);
         expect(out.groundHit).toBe(0);
+    });
+
+    it.skipIf(!hasNumpy)('holds an edit that only removed something, and refuses one that moved or replaced the view', () => {
+        const out = worker(`
+rng = np.random.default_rng(11)
+img = np.full((640, 640, 3), 120, np.uint8)
+for _ in range(40):   # a street of rectangles: walls, windows, markings
+    x, y, w_, h = rng.integers(0, 560), rng.integers(0, 560), rng.integers(20, 80), rng.integers(20, 80)
+    img[y:y + h, x:x + w_] = rng.integers(0, 255, 3)
+removed = img.copy()
+removed[400:520, 200:420] = 120            # a vehicle painted out
+moved = np.roll(img, 16, axis=1)           # the same view, 16 px to the right
+other = rng.integers(0, 255, (640, 640, 3)).astype(np.uint8)
+res = {k: w.framing_held(img, v) for k, v in {"same": img, "removed": removed, "moved": moved, "other": other}.items()}
+print(json.dumps({k: {"held": r[0], "ncc": round(r[1], 3), "shift": list(r[2])} for k, r in res.items()}))
+`);
+        expect(out.same).toEqual({ held: true, ncc: 1, shift: [0, 0] });
+        expect(out.removed.held).toBe(true);
+        expect(out.removed.shift).toEqual([0, 0]);
+        expect(out.removed.ncc).toBeGreaterThan(0.6);
+        expect(out.moved.held).toBe(false);
+        expect(out.moved.shift).toEqual([4, 0]);
+        expect(out.other.held).toBe(false);
     });
 
     it.skipIf(!hasNumpy)('hard cells: each panorama keeps only the splats nearer to it on the plan than to any other', () => {

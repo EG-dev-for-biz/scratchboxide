@@ -25,6 +25,12 @@ Served by worker_host.py: main() reads one JSON request from stdin and prints on
       the scan stand, so every panorama stops at one level height). A panorama with fewer than two level views that fit
       the scan at all is left out, with the reason.
 
+  {"op": "framing", "pairs": [{"photoBase64", "editedBase64"}]}
+      Whether each edited photo (its vehicles and people removed by an image model) still holds its photo's framing:
+      [{"held", "ncc", "shiftPx", "square"}]. The edges of the two are compared on a 160-cell grid over shifts of up to
+      4 cells; the edit is held when the best match is within one cell of no shift, the edges still correlate, and the
+      image is square. An edit that moved or re-cropped the view would put every splat in the wrong place.
+
   {"op": "merge", "inputs": [{"path", "eye", "streetTopY"?}], "basePath": path | null, "outPath": path, "budget": n}
       The panoramas' splats as one world. A splat that stands in the free space another panorama saw through is dropped;
       where several panoramas cover a 1 m cell, the nearest one that covers it well keeps it; the base layer's splats
@@ -364,6 +370,52 @@ def eye_height_over_scan(job, all_depth):
     return None
 
 
+FRAMING_GRID = 160
+FRAMING_REACH = 4
+FRAMING_MIN_NCC = 0.2
+
+
+def edge_grid(rgb, grid=FRAMING_GRID):
+    """Edge strength of an RGB array on a grid x grid raster."""
+    from PIL import Image
+    g = np.asarray(Image.fromarray(rgb).convert("L").resize((grid, grid), Image.BILINEAR), np.float64)
+    gy, gx = np.gradient(g)
+    return np.hypot(gx, gy)
+
+
+def framing_held(photo, edited, reach=FRAMING_REACH, min_ncc=FRAMING_MIN_NCC):
+    """
+    Does `edited` show `photo`'s view from the same camera, uncropped? (held, ncc at no shift, best shift in cells (dx, dy)).
+    """
+    a, b = edge_grid(photo), edge_grid(edited)
+    n = a.shape[0]
+
+    def ncc(dx, dy):
+        x0, x1, y0, y1 = max(0, dx), n + min(0, dx), max(0, dy), n + min(0, dy)
+        p, q = a[y0:y1, x0:x1], b[y0 - dy:y1 - dy, x0 - dx:x1 - dx]
+        p, q = p - p.mean(), q - q.mean()
+        return float((p * q).sum() / max(np.sqrt((p * p).sum() * (q * q).sum()), 1e-12))
+
+    scores = {(dx, dy): ncc(dx, dy) for dx in range(-reach, reach + 1) for dy in range(-reach, reach + 1)}
+    best = max(scores, key=scores.get)
+    still = scores[(0, 0)]
+    # how far the edit's content sits from the photo's, in cells (right and down positive)
+    return bool(max(abs(best[0]), abs(best[1])) <= 1 and still >= min_ncc), still, (-best[0], -best[1])
+
+
+def run_framing(job):
+    from PIL import Image
+    out = []
+    for pair in job["pairs"]:
+        photo = Image.open(io.BytesIO(base64.b64decode(pair["photoBase64"]))).convert("RGB")
+        edited = Image.open(io.BytesIO(base64.b64decode(pair["editedBase64"]))).convert("RGB")
+        square = abs(edited.width - edited.height) <= 0.02 * max(edited.width, edited.height)
+        held, still, best = framing_held(np.asarray(photo), np.asarray(edited))
+        cell = photo.width / FRAMING_GRID
+        out.append({"held": bool(held and square), "ncc": round(still, 3), "shiftPx": [round(best[0] * cell, 1), round(best[1] * cell, 1)], "square": bool(square)})
+    print(json.dumps({"pairs": out}))
+
+
 def run_pano(job):
     from PIL import Image
     t0 = time.time()
@@ -375,7 +427,11 @@ def run_pano(job):
     for v in job["views"]:
         t1 = time.time()
         n = int(v["size"])
-        img = np.asarray(Image.open(io.BytesIO(base64.b64decode(v["jpegBase64"]))).convert("RGB"))
+        pil = Image.open(io.BytesIO(base64.b64decode(v["jpegBase64"]))).convert("RGB")
+        if pil.size != (n, n):
+            # an edited photo comes back at the image model's size: the view's camera is for n x n
+            pil = pil.resize((n, n), Image.LANCZOS)
+        img = np.asarray(pil)
         mean, sv, quat, col, op = _predict(model, dev, img, float(v["focalPx"]))
         depth = all_depth[int(v["depthOffset"]):int(v["depthOffset"]) + n * n].reshape(n, n)
         photo = None
@@ -574,6 +630,8 @@ def main():
         run_merge(job)
     elif job.get("op") == "pano":
         run_pano(job)
+    elif job.get("op") == "framing":
+        run_framing(job)
     else:
         print(json.dumps({"error": f"unknown op {job.get('op')!r}"}))
         sys.exit(2)

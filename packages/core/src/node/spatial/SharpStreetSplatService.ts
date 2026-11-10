@@ -20,6 +20,11 @@
  * Anything 3 (SCRATCHBOX_STREET_SHARP_DEPTH=scan, or its interpreter missing) the scan itself is the reference, fitted
  * only where it agrees with the view's ground, and the report says so.
  *
+ * Before SHARP draws a view, the image model removes its vehicles and people (Nano Banana, through the world's station
+ * image generator; SCRATCHBOX_STREET_SHARP_CLEAR=0 off): what was parked or walking in one panorama is not in the next,
+ * and would otherwise be baked into the street as splats. The edit is `generated`, and is used only where it holds the
+ * photograph's framing (edges compared over small shifts); otherwise the photograph is drawn and the view's report says why.
+ *
  * Each view is then cleaned, every drop counted in its report: splats hanging between a near and a far surface of the view
  * (the streaks a per-pixel prediction leaves at depth edges), splats well behind the scan, and, in a view under half of
  * which lands on the scan, everything that does not (the view is dropped when little is left); a panorama with fewer than
@@ -54,9 +59,10 @@ import { frameCamera, loadTexturedScene, renderTexturedView, ZERO_CORRECTION, ty
 import type { StreetPanoPose } from './street-view-stations';
 import { Da3RigDepthService, type RigViewImage } from './Da3RigDepthService';
 import type { RigDepthView } from './rig-depth-registration';
+import { toStationImageAnswer, type StationImageGenerator } from './BeautifyStationService';
 
 /** Part of the world cache's key: a world built with another version of this step is another world. */
-export const SHARP_STREET_VERSION = 4;
+export const SHARP_STREET_VERSION = 5;
 export const SHARP_CHECKPOINT_NAME = 'sharp_2572gikvuh.pt';
 export const SHARP_LICENCE_NOTE = "SHARP weights: Apple's research-only model licence";
 /** A panorama's views: four level, a quarter turn apart, and one straight down. Square, in pixels and degrees. */
@@ -66,6 +72,14 @@ export const SHARP_FLOOR_FOV_DEG = 100;
 export const SHARP_LEVEL_HEADINGS_DEG = [0, 90, 180, 270];
 /** Street splats kept after the merge (SCRATCHBOX_STREET_SHARP_BUDGET moves it). */
 export const SHARP_STREET_BUDGET = 6_000_000;
+
+/** What the image model is asked of each view before SHARP draws it. */
+export const SHARP_CLEAR_PROMPT = [
+    'Remove every vehicle (cars, taxis, buses, trucks, vans, motorcycles, bicycles, scooters) and every person from this street photograph, with their shadows.',
+    'Fill what they hid with the road, crosswalk, kerb, sidewalk and building fronts that continue behind them, in the same light.',
+    'Change nothing else: the same camera, the same framing and crop, the same buildings, signs, road markings, trees, poles, scaffolds and street furniture, each exactly where it is.',
+    'No new objects, no text, no border, no change of colour or exposure.'
+].join(' ');
 
 export const sharpStreetEnabled = (): boolean => process.env.SCRATCHBOX_STREET_SHARP !== '0';
 
@@ -143,6 +157,11 @@ export interface SharpViewReport {
     /** Why the street top was not applied, when it was not. */
     streetTop?: string;
     inferS?: number;
+    /** Drawn from the photo with its vehicles and people removed by the image model (`generated`); else why not. */
+    cleared?: boolean;
+    clearedNote?: string;
+    /** The edit against its photo: edge correlation at no shift, and the shift that matches best, pixels. */
+    clearedNcc?: number; clearedShiftPx?: [number, number];
 }
 
 export interface SharpPanoReport {
@@ -209,6 +228,12 @@ export interface SharpStreetRequest {
      * the merge's inputs): what a re-merge or a refinement trial needs. Derived data only; no photograph is in it.
      */
     keepWorkDir?: boolean;
+    /**
+     * The image model that removes vehicles and people from each view before SHARP draws it (SCRATCHBOX_STREET_SHARP_CLEAR=0
+     * off). The photograph goes to it inline and is never written; a view whose edit moved or re-cropped the framing, or
+     * that the model did not answer, is drawn from its photograph, and its report says so.
+     */
+    clearGenerator?: StationImageGenerator;
     mapsApiKey?: string;
     fetchImpl?: typeof fetch;
     /** The views of one panorama, in memory (default: the Street View Static API). The images are never written. */
@@ -248,6 +273,45 @@ export class SharpStreetSplatService {
             MapsImageryGroundingService.fetchPanoViewsInMemory({ ...base, headingsDeg: floor.map(v => v.headingDeg), fovDegrees: SHARP_FLOOR_FOV_DEG, pitchDeg: -90 })
         ]);
         return [...a.views.map(v => v.image), ...b.views.map(v => v.image)];
+    }
+
+    /**
+     * Each view with its vehicles and people removed by the image model, where the edit holds the photo's framing.
+     * One entry per view: `image` when the edit is used; `note` says the model, or why the photograph stands.
+     */
+    private async clearViews(
+        req: SharpStreetRequest, images: Buffer[], progress: (m: string) => void, ask: <T>(request: object, timeoutMs: number) => Promise<T>
+    ): Promise<Array<{ image?: Buffer; note?: string; ncc?: number; shiftPx?: [number, number]; skipped?: boolean }>> {
+        const generator = req.clearGenerator;
+        if (!generator || process.env.SCRATCHBOX_STREET_SHARP_CLEAR === '0') return images.map(() => ({ skipped: true }));
+        progress(`removing vehicles and people from ${images.length} views (${generator.name})`);
+        const edits = await Promise.all(images.map(async photo => {
+            try {
+                const out = toStationImageAnswer(await generator.generate({
+                    prompt: SHARP_CLEAR_PROMPT, blockoutPng: Buffer.alloc(0), groundingPhoto: { bytes: photo, mimeType: 'image/jpeg' },
+                    aspectRatio: '1:1', width: SHARP_VIEW_SIZE, height: SHARP_VIEW_SIZE, imageSize: '1K', ...(req.signal ? { signal: req.signal } : {})
+                }));
+                return { png: out.png, model: out.modelUsed ?? generator.name };
+            } catch (err) {
+                if (req.signal?.aborted) throw err;
+                return { error: (err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 200) };
+            }
+        }));
+        const made = edits.map((e, k) => ({ e, k })).filter((x): x is { e: { png: Buffer; model: string }; k: number } => 'png' in x.e);
+        let checks: Array<{ held: boolean; ncc: number; shiftPx: [number, number]; square: boolean }> = [];
+        if (made.length) {
+            checks = (await ask<{ pairs: typeof checks }>({
+                op: 'framing', pairs: made.map(x => ({ photoBase64: images[x.k].toString('base64'), editedBase64: x.e.png.toString('base64') }))
+            }, 120_000)).pairs;
+        }
+        return edits.map((e, k) => {
+            if ('error' in e) return { note: `photograph kept: the image model gave no edit (${e.error})` };
+            const c = checks[made.findIndex(x => x.k === k)];
+            if (!c) return { note: 'photograph kept: the edit could not be checked' };
+            const measured = { ncc: c.ncc, shiftPx: c.shiftPx };
+            if (!c.held) return { ...measured, note: `photograph kept: the edit did not hold the framing (${c.square ? `best match ${c.shiftPx[0]}, ${c.shiftPx[1]} px off, edge correlation ${c.ncc}` : 'not square'})` };
+            return { image: e.png, ...measured, note: `vehicles and people removed by ${e.model} (generated)` };
+        });
     }
 
     /** The street level from `req.panos`, merged with the base layer into `req.outSplatPath`. Never throws for a step that could not run: the report says why, and the base layer stands untouched. */
@@ -290,6 +354,8 @@ export class SharpStreetSplatService {
                     const views = sharpPanoViews(pano);
                     const images = await this.fetchViews(req, pano, views);
                     if (images.length !== views.length) throw new Error(`Street View returned ${images.length} of ${views.length} views`);
+                    const cleared = await this.clearViews(req, images, m => progress(`Panorama ${i + 1} of ${req.panos.length}: ${m}`), ask);
+                    cleared.forEach((c, k) => { if (c.image) images[k] = c.image; });
                     const n = SHARP_VIEW_SIZE;
                     const depth = Buffer.alloc(views.length * n * n * 4);
                     views.forEach((v, k) => {
@@ -342,6 +408,14 @@ export class SharpStreetSplatService {
                         answer = await ask<PanoAnswer>(request, 600_000);
                     }
                     report.views = answer.views ?? [];
+                    report.views.forEach(vr => {
+                        const c = cleared[views.findIndex(v => v.name === vr.name)];
+                        if (!c || c.skipped) return;
+                        vr.cleared = !!c.image;
+                        if (c.note) vr.clearedNote = c.note;
+                        if (c.ncc !== undefined) vr.clearedNcc = c.ncc;
+                        if (c.shiftPx) vr.clearedShiftPx = c.shiftPx;
+                    });
                     if (answer.eyeHeightM) report.eyeHeightM = answer.eyeHeightM;
                     if (answer.streetTopY !== undefined) report.streetTopY = answer.streetTopY;
                     if (answer.leftOut) report.leftOut = true;

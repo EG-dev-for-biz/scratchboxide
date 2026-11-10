@@ -479,6 +479,7 @@ export class Location3DGaussianSplatService {
                 glbPath, panos: street.panoPoses, baseSplatPath: pipelineResult.fusedSplatPath, outSplatPath: pipelineResult.fusedSplatPath,
                 workDir: path.join(outDir, 'sharp_street'),
                 ...(process.env.SCRATCHBOX_STREET_SHARP_KEEP === '1' ? { keepWorkDir: true } : {}),
+                ...(generator ? { clearGenerator: generator } : {}),
                 ...(req.streetView.mapsApiKey ? { mapsApiKey: req.streetView.mapsApiKey } : {}),
                 ...(req.signal ? { signal: req.signal } : {}), onProgress: m => progressReporter(0.96, m)
             });
