@@ -7,6 +7,7 @@ import {
     SHARP_CHECKPOINT_NAME, SHARP_FLOOR_FOV_DEG, SHARP_LEVEL_FOV_DEG, SHARP_STREET_VERSION, SHARP_VIEW_SIZE,
     SharpStreetSplatService, sharpPanoViews, sharpStreetAvailability
 } from '../src/node/spatial/SharpStreetSplatService';
+import { streetViewTileGrid, streetViewTileZoom } from '../src/node/spatial/street-view-tiles';
 
 /** The SHARP street step: what it asks of each panorama, and that a machine without SHARP is told so, with nothing made. */
 describe('SHARP street splats', () => {
@@ -82,7 +83,7 @@ describe('SHARP street splats', () => {
         });
         expect(report.ran).toBe(false);
         expect(!report.ran && report.reason).toMatch(/SHARP street step failed/);
-        expect(SHARP_STREET_VERSION).toBe(5);
+        expect(SHARP_STREET_VERSION).toBe(6);
         expect(fs.readFileSync(base).equals(rows)).toBe(true);
         expect(fs.existsSync(path.join(tmp, 'work'))).toBe(false);
     });
@@ -121,6 +122,44 @@ print(json.dumps({"layers": [len(l) for l in layers], "curtain": int(curtain.sum
         expect(out.curtainHit).toBe(2304);
         expect(out.wallHit).toBe(0);
         expect(out.groundHit).toBe(0);
+    });
+
+    it('reads a panorama at the zoom that is just wide enough, and counts its tiles', () => {
+        // a current capture: 16,384 x 8,192 at zoom 5, halved per zoom below
+        expect(streetViewTileZoom(16384, 5027)).toBe(4);
+        expect(streetViewTileZoom(16384, 8193)).toBe(5);
+        expect(streetViewTileZoom(16384, 100)).toBe(0);
+        expect(streetViewTileGrid(16384, 8192, 512, 4)).toEqual({ width: 8192, height: 4096, nx: 16, ny: 8 });
+        // an older camera's panorama does not fill its last tiles
+        expect(streetViewTileGrid(13312, 6656, 512, 4)).toEqual({ width: 6656, height: 3328, nx: 13, ny: 7 });
+    });
+
+    it.skipIf(!hasNumpy)('draws a view from a panorama so that each compass direction lands where the view looks', () => {
+        const out = worker(`
+# a panorama whose red is the compass bearing (0..255 over 360 degrees) and green the elevation, centred on bearing 40
+wid, hgt = 1440, 720
+lon = (np.arange(wid) + 0.5) / wid * 360 - 180 + 40
+lat = 90 - (np.arange(hgt) + 0.5) / hgt * 180
+pano = np.zeros((hgt, wid, 3), np.float64)
+pano[..., 0] = (lon % 360)[None, :] / 360 * 255
+pano[..., 1] = (lat[:, None] + 90) / 180 * 255
+rot = w.pano_rotation(40.0, 0.0, 0.0)
+def centre(heading, pitch):
+    img = w.sample_equirect(pano, w.view_rays(heading, pitch, 90, 64), rot)
+    c = img[31:33, 31:33].reshape(-1, 3).mean(0)
+    return [round(float(c[0]) / 255 * 360, 0), round(float(c[1]) / 255 * 180 - 90, 0)]
+east = w.sample_equirect(pano, w.view_rays(90, 0, 90, 64), rot)
+print(json.dumps({"east": centre(90, 0), "west": centre(270, 0), "up30": centre(180, 30),
+                  "eastLeft": round(float(east[32, 0, 0]) / 255 * 360, 0), "eastRight": round(float(east[32, 63, 0]) / 255 * 360, 0),
+                  "eastTop": round(float(east[0, 32, 1]) / 255 * 180 - 90, 0)}))
+`);
+        expect(out.east).toEqual([90, 0]);
+        expect(out.west).toEqual([270, 0]);
+        expect(out.up30).toEqual([180, 30]);
+        // a 90 degree view looking east runs from north-east at its left edge to south-east at its right, and up at its top
+        expect(out.eastLeft).toBeGreaterThan(44); expect(out.eastLeft).toBeLessThan(48);
+        expect(out.eastRight).toBeGreaterThan(132); expect(out.eastRight).toBeLessThan(136);
+        expect(out.eastTop).toBeGreaterThan(40);
     });
 
     it.skipIf(!hasNumpy)('holds an edit that only removed something, and refuses one that moved or replaced the view', () => {

@@ -20,6 +20,10 @@
  * Anything 3 (SCRATCHBOX_STREET_SHARP_DEPTH=scan, or its interpreter missing) the scan itself is the reference, fitted
  * only where it agrees with the view's ground, and the report says so.
  *
+ * Each view is drawn from the panorama's own full-resolution tiles where they can be read (Map Tiles API, 1536 px a view
+ * in place of the Static API's 640; SCRATCHBOX_STREET_SHARP_TILES=0 off), and only where the tile view matches the Static
+ * view the registration used.
+ *
  * Before SHARP draws a view, the image model removes its vehicles and people (Nano Banana, through the world's station
  * image generator; SCRATCHBOX_STREET_SHARP_CLEAR=0 off): what was parked or walking in one panorama is not in the next,
  * and would otherwise be baked into the street as splats. The edit is `generated`, and is used only where it holds the
@@ -60,9 +64,11 @@ import type { StreetPanoPose } from './street-view-stations';
 import { Da3RigDepthService, type RigViewImage } from './Da3RigDepthService';
 import type { RigDepthView } from './rig-depth-registration';
 import { toStationImageAnswer, type StationImageGenerator } from './BeautifyStationService';
+import { GeminiMultimodalObjectDetectorService } from './GeminiMultimodalObjectDetectorService';
+import { fetchStreetViewPanoTiles } from './street-view-tiles';
 
 /** Part of the world cache's key: a world built with another version of this step is another world. */
-export const SHARP_STREET_VERSION = 5;
+export const SHARP_STREET_VERSION = 6;
 export const SHARP_CHECKPOINT_NAME = 'sharp_2572gikvuh.pt';
 export const SHARP_LICENCE_NOTE = "SHARP weights: Apple's research-only model licence";
 /** A panorama's views: four level, a quarter turn apart, and one straight down. Square, in pixels and degrees. */
@@ -71,15 +77,29 @@ export const SHARP_LEVEL_FOV_DEG = 110;
 export const SHARP_FLOOR_FOV_DEG = 100;
 export const SHARP_LEVEL_HEADINGS_DEG = [0, 90, 180, 270];
 /** Street splats kept after the merge (SCRATCHBOX_STREET_SHARP_BUDGET moves it). */
-export const SHARP_STREET_BUDGET = 6_000_000;
+export const SHARP_STREET_BUDGET = 10_000_000;
 
 /** What the image model is asked of each view before SHARP draws it. */
 export const SHARP_CLEAR_PROMPT = [
-    'Remove every vehicle (cars, taxis, buses, trucks, vans, motorcycles, bicycles, scooters) and every person from this street photograph, with their shadows.',
+    'Remove every vehicle (cars, taxis, buses, trucks, vans, motorcycles, bicycles, scooters) and every person from this street photograph, with their shadows, however small or far away.',
     'Fill what they hid with the road, crosswalk, kerb, sidewalk and building fronts that continue behind them, in the same light.',
-    'Change nothing else: the same camera, the same framing and crop, the same buildings, signs, road markings, trees, poles, scaffolds and street furniture, each exactly where it is.',
-    'No new objects, no text, no border, no change of colour or exposure.'
+    'Keep every painted road marking exactly as it is: crosswalk stripes, lane lines, arrows, stop lines and lettering stay, and continue under what is removed.',
+    'Change nothing else: the same camera, the same framing and crop, the same buildings, signs, trees, poles, scaffolds and street furniture, each exactly where it is.',
+    'No new objects, no text, no border, no change of colour, sharpness or exposure.'
 ].join(' ');
+/** The second pass, on an edit the detector still finds a vehicle or a person in. */
+export const SHARP_CLEAR_AGAIN_PROMPT = `Some vehicles or people are still in this picture. ${SHARP_CLEAR_PROMPT}`;
+/** The side of the views SHARP is given where the panorama's tiles can be read (its own working size). */
+export const SHARP_SOURCE_SIZE = 1536;
+
+/** How many vehicles and people a vision model still finds in an edited view (the edit, never the photograph). */
+export async function countVehiclesAndPeople(png: Buffer): Promise<number> {
+    const res = await GeminiMultimodalObjectDetectorService.detectObjectsFromImage(`data:image/png;base64,${png.toString('base64')}`, {
+        customPrompt: 'Detect every vehicle (car, taxi, bus, truck, van, motorcycle, bicycle, scooter) and every person visible in this street picture, however small. Return only those; an empty list when there are none. Do not return buildings, signs, billboards or pictures of people on posters.'
+    });
+    if (!res.success) throw new Error(res.error ?? 'the detector did not answer');
+    return res.objects.length;
+}
 
 export const sharpStreetEnabled = (): boolean => process.env.SCRATCHBOX_STREET_SHARP !== '0';
 
@@ -160,6 +180,10 @@ export interface SharpViewReport {
     /** Drawn from the photo with its vehicles and people removed by the image model (`generated`); else why not. */
     cleared?: boolean;
     clearedNote?: string;
+    /** Edits made (1 or 2), and the vehicles and people the detector still finds in the one used. */
+    clearedPasses?: number; clearedLeftover?: number;
+    /** Where the view's photograph came from, and at what size. */
+    source?: string;
     /** The edit against its photo: edge correlation at no shift, and the shift that matches best, pixels. */
     clearedNcc?: number; clearedShiftPx?: [number, number];
 }
@@ -234,6 +258,8 @@ export interface SharpStreetRequest {
      * that the model did not answer, is drawn from its photograph, and its report says so.
      */
     clearGenerator?: StationImageGenerator;
+    /** How many vehicles and people are left in an edited view (default: countVehiclesAndPeople, a vision model). */
+    countLeftovers?: (png: Buffer) => Promise<number>;
     mapsApiKey?: string;
     fetchImpl?: typeof fetch;
     /** The views of one panorama, in memory (default: the Street View Static API). The images are never written. */
@@ -276,42 +302,86 @@ export class SharpStreetSplatService {
     }
 
     /**
-     * Each view with its vehicles and people removed by the image model, where the edit holds the photo's framing.
-     * One entry per view: `image` when the edit is used; `note` says the model, or why the photograph stands.
+     * The panorama's views drawn from its full-resolution tiles (Map Tiles API), where each holds its Static view's framing.
+     * One entry per view: the sharper image, or why the 640 px Static view stands. Nothing is written.
+     */
+    private async sharperViews(
+        req: SharpStreetRequest, pano: StreetPanoPose, views: SharpPanoView[], images: Buffer[], ask: <T>(request: object, timeoutMs: number) => Promise<T>
+    ): Promise<Array<{ image?: Buffer; note: string }>> {
+        const stand = (why: string) => images.map(() => ({ note: `Static API view, ${SHARP_VIEW_SIZE} px (${why})` }));
+        if (req.fetchViews) return stand('the views were supplied');
+        if (process.env.SCRATCHBOX_STREET_SHARP_TILES === '0') return stand('SCRATCHBOX_STREET_SHARP_TILES=0');
+        try {
+            const apiKey = MapsImageryGroundingService.resolveApiKey(req.mapsApiKey);
+            // enough of the panorama for a view of SHARP_SOURCE_SIZE across its field of view
+            const minWidth = Math.ceil(SHARP_SOURCE_SIZE * 360 / Math.min(SHARP_LEVEL_FOV_DEG, SHARP_FLOOR_FOV_DEG));
+            const tiles = await fetchStreetViewPanoTiles({ panoId: pano.panoId, apiKey, minWidth, ...(req.fetchImpl ? { fetchImpl: req.fetchImpl } : {}), ...(req.signal ? { signal: req.signal } : {}) });
+            const answer = await ask<{ views: Array<{ jpegBase64: string | null; held: boolean; ncc: number; shiftPx: [number, number] }> }>({
+                op: 'tileViews', width: tiles.width, height: tiles.height, tileSize: tiles.tileSize, headingDeg: tiles.headingDeg, tiltDeg: tiles.tiltDeg, rollDeg: tiles.rollDeg,
+                size: SHARP_SOURCE_SIZE, tiles: tiles.tiles.map(t => ({ x: t.x, y: t.y, jpegBase64: t.image.toString('base64') })),
+                views: views.map((v, k) => ({ headingDeg: v.headingDeg, pitchDeg: v.pitchDeg, hfovDeg: v.hfovDeg, staticBase64: images[k].toString('base64') }))
+            }, 300_000);
+            return answer.views.map(v => v.held && v.jpegBase64
+                ? { image: Buffer.from(v.jpegBase64, 'base64'), note: `Street View tiles, ${SHARP_SOURCE_SIZE} px (matches the Static view, edge correlation ${v.ncc})` }
+                : { note: `Static API view, ${SHARP_VIEW_SIZE} px (the tile view did not match it: ${v.shiftPx[0]}, ${v.shiftPx[1]} px off, edge correlation ${v.ncc})` });
+        } catch (err) {
+            if (req.signal?.aborted) throw err;
+            return stand(`the tiles could not be read: ${(err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 160)}`);
+        }
+    }
+
+    /**
+     * Each level view with its vehicles and people removed by the image model, where the edit holds the photo's framing.
+     * A detector then looks at the edit; one it still finds a vehicle or a person in is edited once more. One entry per
+     * view: `image` when an edit is used; `note` says the model, or why the photograph stands.
      */
     private async clearViews(
-        req: SharpStreetRequest, images: Buffer[], progress: (m: string) => void, ask: <T>(request: object, timeoutMs: number) => Promise<T>
-    ): Promise<Array<{ image?: Buffer; note?: string; ncc?: number; shiftPx?: [number, number]; skipped?: boolean }>> {
+        req: SharpStreetRequest, views: SharpPanoView[], images: Buffer[], progress: (m: string) => void, ask: <T>(request: object, timeoutMs: number) => Promise<T>
+    ): Promise<Array<{ image?: Buffer; note?: string; ncc?: number; shiftPx?: [number, number]; passes?: number; leftover?: number; skipped?: boolean }>> {
         const generator = req.clearGenerator;
         if (!generator || process.env.SCRATCHBOX_STREET_SHARP_CLEAR === '0') return images.map(() => ({ skipped: true }));
-        progress(`removing vehicles and people from ${images.length} views (${generator.name})`);
-        const edits = await Promise.all(images.map(async photo => {
+        const count = req.countLeftovers ?? countVehiclesAndPeople;
+        const mime = (b: Buffer) => (b[0] === 0x89 ? 'image/png' : 'image/jpeg');
+        type Check = { held: boolean; ncc: number; shiftPx: [number, number]; square: boolean };
+        const edit = async (source: Buffer, prompt: string): Promise<{ png: Buffer; model: string } | { error: string }> => {
             try {
                 const out = toStationImageAnswer(await generator.generate({
-                    prompt: SHARP_CLEAR_PROMPT, blockoutPng: Buffer.alloc(0), groundingPhoto: { bytes: photo, mimeType: 'image/jpeg' },
-                    aspectRatio: '1:1', width: SHARP_VIEW_SIZE, height: SHARP_VIEW_SIZE, imageSize: '1K', ...(req.signal ? { signal: req.signal } : {})
+                    prompt, blockoutPng: Buffer.alloc(0), groundingPhoto: { bytes: source, mimeType: mime(source) },
+                    aspectRatio: '1:1', width: SHARP_SOURCE_SIZE, height: SHARP_SOURCE_SIZE, imageSize: '2K', ...(req.signal ? { signal: req.signal } : {})
                 }));
                 return { png: out.png, model: out.modelUsed ?? generator.name };
             } catch (err) {
                 if (req.signal?.aborted) throw err;
                 return { error: (err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 200) };
             }
+        };
+        const framing = async (photo: Buffer, edited: Buffer): Promise<Check | undefined> =>
+            (await ask<{ pairs: Check[] }>({ op: 'framing', pairs: [{ photoBase64: photo.toString('base64'), editedBase64: edited.toString('base64') }] }, 120_000)).pairs[0];
+        const level = views.filter(v => v.kind === 'level').length;
+        progress(`removing vehicles and people from ${level} views (${generator.name})`);
+        return Promise.all(images.map(async (photo, k) => {
+            // a road seen from straight above has too little for the model to hold on to: it redraws it
+            if (views[k].kind !== 'level') return { note: 'photograph kept: a straight-down view is not edited (the image model redraws it)' };
+            const first = await edit(photo, SHARP_CLEAR_PROMPT);
+            if ('error' in first) return { note: `photograph kept: the image model gave no edit (${first.error})` };
+            const c1 = await framing(photo, first.png);
+            if (!c1) return { note: 'photograph kept: the edit could not be checked' };
+            if (!c1.held) return { ncc: c1.ncc, shiftPx: c1.shiftPx, note: `photograph kept: the edit did not hold the framing (${c1.square ? `best match ${c1.shiftPx[0]}, ${c1.shiftPx[1]} px off, edge correlation ${c1.ncc}` : 'not square'})` };
+            let used = { png: first.png, check: c1, passes: 1 };
+            let leftover = await count(first.png).catch(() => undefined);
+            if (leftover) {
+                const second = await edit(first.png, SHARP_CLEAR_AGAIN_PROMPT);
+                const c2 = 'png' in second ? await framing(photo, second.png) : undefined;
+                if ('png' in second && c2?.held) {
+                    used = { png: second.png, check: c2, passes: 2 };
+                    leftover = await count(second.png).catch(() => undefined);
+                }
+            }
+            return {
+                image: used.png, ncc: used.check.ncc, shiftPx: used.check.shiftPx, passes: used.passes, ...(leftover !== undefined ? { leftover } : {}),
+                note: `vehicles and people removed by ${first.model} (generated), ${used.passes} pass${used.passes === 1 ? '' : 'es'}; ${leftover === undefined ? 'the result was not checked by the detector' : leftover ? `the detector still finds ${leftover}` : 'the detector finds none left'}`
+            };
         }));
-        const made = edits.map((e, k) => ({ e, k })).filter((x): x is { e: { png: Buffer; model: string }; k: number } => 'png' in x.e);
-        let checks: Array<{ held: boolean; ncc: number; shiftPx: [number, number]; square: boolean }> = [];
-        if (made.length) {
-            checks = (await ask<{ pairs: typeof checks }>({
-                op: 'framing', pairs: made.map(x => ({ photoBase64: images[x.k].toString('base64'), editedBase64: x.e.png.toString('base64') }))
-            }, 120_000)).pairs;
-        }
-        return edits.map((e, k) => {
-            if ('error' in e) return { note: `photograph kept: the image model gave no edit (${e.error})` };
-            const c = checks[made.findIndex(x => x.k === k)];
-            if (!c) return { note: 'photograph kept: the edit could not be checked' };
-            const measured = { ncc: c.ncc, shiftPx: c.shiftPx };
-            if (!c.held) return { ...measured, note: `photograph kept: the edit did not hold the framing (${c.square ? `best match ${c.shiftPx[0]}, ${c.shiftPx[1]} px off, edge correlation ${c.ncc}` : 'not square'})` };
-            return { image: e.png, ...measured, note: `vehicles and people removed by ${e.model} (generated)` };
-        });
     }
 
     /** The street level from `req.panos`, merged with the base layer into `req.outSplatPath`. Never throws for a step that could not run: the report says why, and the base layer stands untouched. */
@@ -354,7 +424,9 @@ export class SharpStreetSplatService {
                     const views = sharpPanoViews(pano);
                     const images = await this.fetchViews(req, pano, views);
                     if (images.length !== views.length) throw new Error(`Street View returned ${images.length} of ${views.length} views`);
-                    const cleared = await this.clearViews(req, images, m => progress(`Panorama ${i + 1} of ${req.panos.length}: ${m}`), ask);
+                    const sharper = await this.sharperViews(req, pano, views, images, ask);
+                    sharper.forEach((s, k) => { if (s.image) images[k] = s.image; });
+                    const cleared = await this.clearViews(req, views, images, m => progress(`Panorama ${i + 1} of ${req.panos.length}: ${m}`), ask);
                     cleared.forEach((c, k) => { if (c.image) images[k] = c.image; });
                     const n = SHARP_VIEW_SIZE;
                     const depth = Buffer.alloc(views.length * n * n * 4);
@@ -409,8 +481,12 @@ export class SharpStreetSplatService {
                     }
                     report.views = answer.views ?? [];
                     report.views.forEach(vr => {
-                        const c = cleared[views.findIndex(v => v.name === vr.name)];
+                        const at = views.findIndex(v => v.name === vr.name);
+                        if (sharper[at]) vr.source = sharper[at].note;
+                        const c = cleared[at];
                         if (!c || c.skipped) return;
+                        if (c.passes) vr.clearedPasses = c.passes;
+                        if (c.leftover !== undefined) vr.clearedLeftover = c.leftover;
                         vr.cleared = !!c.image;
                         if (c.note) vr.clearedNote = c.note;
                         if (c.ncc !== undefined) vr.clearedNcc = c.ncc;

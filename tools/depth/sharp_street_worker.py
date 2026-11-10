@@ -25,6 +25,13 @@ Served by worker_host.py: main() reads one JSON request from stdin and prints on
       the scan stand, so every panorama stops at one level height). A panorama with fewer than two level views that fit
       the scan at all is left out, with the reason.
 
+  {"op": "tileViews", "width", "height", "tileSize", "headingDeg", "tiltDeg", "rollDeg", "tiles": [{"x", "y", "jpegBase64"}],
+   "views": [{"headingDeg", "pitchDeg", "hfovDeg", "staticBase64"}], "size": n}
+      The panorama's own full-resolution tiles (Map Tiles API), drawn as the same views the Static API gave at 640 px:
+      {"views": [{"jpegBase64" | null, "held", "ncc", "shiftPx"}], "tilt", "roll"}. How Google's stated tilt and roll turn
+      the panorama is not documented, so each sign is tried and the one whose views match the Static views best is kept;
+      a view is returned only when it holds its Static view's framing. Nothing is written.
+
   {"op": "framing", "pairs": [{"photoBase64", "editedBase64"}]}
       Whether each edited photo (its vehicles and people removed by an image model) still holds its photo's framing:
       [{"held", "ncc", "shiftPx", "square"}]. The edges of the two are compared on a 160-cell grid over shifts of up to
@@ -416,6 +423,81 @@ def run_framing(job):
     print(json.dumps({"pairs": out}))
 
 
+def view_rays(heading_deg, pitch_deg, hfov_deg, n):
+    """World directions (east, north, up) of an n x n level-horizon view's pixels."""
+    h, p = np.radians(heading_deg), np.radians(pitch_deg)
+    fwd = np.array([np.sin(h) * np.cos(p), np.cos(h) * np.cos(p), np.sin(p)])
+    right = np.array([np.cos(h), -np.sin(h), 0.0])
+    up = np.cross(right, fwd)
+    f = n / 2 / np.tan(np.radians(hfov_deg) / 2)
+    j, i = np.meshgrid(np.arange(n) + 0.5 - n / 2, np.arange(n) + 0.5 - n / 2)
+    d = j[..., None] * right - i[..., None] * up + f * fwd
+    return d / np.linalg.norm(d, axis=2, keepdims=True)
+
+
+def pano_rotation(heading_deg, tilt_off_deg, roll_deg):
+    """World (east, north, up) to the panorama's frame (right, forward, up): heading, then tilt about right, then roll about forward."""
+    h, a, b = np.radians(heading_deg), np.radians(tilt_off_deg), np.radians(roll_deg)
+    rz = np.array([[np.cos(h), -np.sin(h), 0], [np.sin(h), np.cos(h), 0], [0, 0, 1]])
+    rx = np.array([[1, 0, 0], [0, np.cos(a), np.sin(a)], [0, -np.sin(a), np.cos(a)]])
+    ry = np.array([[np.cos(b), 0, -np.sin(b)], [0, 1, 0], [np.sin(b), 0, np.cos(b)]])
+    return ry @ rx @ rz
+
+
+def sample_equirect(pano, rays, rot):
+    """The panorama's colour along world rays (bilinear, wrapped round the horizon)."""
+    hgt, wid = pano.shape[:2]
+    d = rays @ rot.T
+    lon = np.arctan2(d[..., 0], d[..., 1])
+    lat = np.arcsin(np.clip(d[..., 2], -1, 1))
+    x = (lon / (2 * np.pi) + 0.5) * wid - 0.5
+    y = np.clip((0.5 - lat / np.pi) * hgt - 0.5, 0, hgt - 1)
+    x0, y0 = np.floor(x).astype(np.int64), np.floor(y).astype(np.int64)
+    fx, fy = (x - x0)[..., None], (y - y0)[..., None]
+    xa, xb, ya, yb = x0 % wid, (x0 + 1) % wid, y0, np.minimum(y0 + 1, hgt - 1)
+    out = (pano[ya, xa] * (1 - fx) + pano[ya, xb] * fx) * (1 - fy) + (pano[yb, xa] * (1 - fx) + pano[yb, xb] * fx) * fy
+    return np.clip(out + 0.5, 0, 255).astype(np.uint8)
+
+
+def run_tile_views(job):
+    from PIL import Image
+    wid, hgt, ts = int(job["width"]), int(job["height"]), int(job["tileSize"])
+    pano = np.zeros((hgt, wid, 3), np.uint8)
+    for t in job["tiles"]:
+        tile = np.asarray(Image.open(io.BytesIO(base64.b64decode(t["jpegBase64"]))).convert("RGB"))
+        x0, y0 = int(t["x"]) * ts, int(t["y"]) * ts
+        part = tile[:max(0, min(ts, hgt - y0)), :max(0, min(ts, wid - x0))]
+        pano[y0:y0 + part.shape[0], x0:x0 + part.shape[1]] = part
+    views = job["views"]
+    statics = [np.asarray(Image.open(io.BytesIO(base64.b64decode(v["staticBase64"]))).convert("RGB")) for v in views]
+    tilt_off, roll = float(job["tiltDeg"]) - 90.0, float(job["rollDeg"])
+    # which way the stated tilt and roll turn the panorama: the signs whose small views match the Static views best
+    small = pano[::max(1, wid // 2048), ::max(1, wid // 2048)].astype(np.float64)
+    best = None
+    for st in (1, -1, 0):
+        for sr in (1, -1, 0):
+            rot = pano_rotation(float(job["headingDeg"]), st * tilt_off, sr * roll)
+            score = float(np.mean([framing_held(s, sample_equirect(small, view_rays(v["headingDeg"], v["pitchDeg"], v["hfovDeg"], 320), rot), reach=0)[1]
+                                   for v, s in zip(views, statics)]))
+            if best is None or score > best[0] + 1e-6:
+                best = (score, st, sr, rot)
+    _, st, sr, rot = best
+    n = int(job["size"])
+    full = pano.astype(np.float32)
+    out = []
+    for v, s in zip(views, statics):
+        img = sample_equirect(full, view_rays(v["headingDeg"], v["pitchDeg"], v["hfovDeg"], n), rot)
+        held, still, shift = framing_held(s, img)
+        cell = s.shape[1] / FRAMING_GRID
+        entry = {"held": bool(held), "ncc": round(still, 3), "shiftPx": [round(shift[0] * cell, 1), round(shift[1] * cell, 1)], "jpegBase64": None}
+        if held:
+            buf = io.BytesIO()
+            Image.fromarray(img).save(buf, "JPEG", quality=95)
+            entry["jpegBase64"] = base64.b64encode(buf.getvalue()).decode()
+        out.append(entry)
+    print(json.dumps({"views": out, "tilt": st * tilt_off, "roll": sr * roll, "matchScore": round(best[0], 3)}))
+
+
 def run_pano(job):
     from PIL import Image
     t0 = time.time()
@@ -427,12 +509,10 @@ def run_pano(job):
     for v in job["views"]:
         t1 = time.time()
         n = int(v["size"])
-        pil = Image.open(io.BytesIO(base64.b64decode(v["jpegBase64"]))).convert("RGB")
-        if pil.size != (n, n):
-            # an edited photo comes back at the image model's size: the view's camera is for n x n
-            pil = pil.resize((n, n), Image.LANCZOS)
-        img = np.asarray(pil)
-        mean, sv, quat, col, op = _predict(model, dev, img, float(v["focalPx"]))
+        # the photo at whatever size it came (640 px from the Static API, more from the tiles or the image model): the
+        # view's camera is stated for n x n, so only the focal length follows the image
+        img = np.asarray(Image.open(io.BytesIO(base64.b64decode(v["jpegBase64"]))).convert("RGB"))
+        mean, sv, quat, col, op = _predict(model, dev, img, float(v["focalPx"]) * img.shape[1] / n)
         depth = all_depth[int(v["depthOffset"]):int(v["depthOffset"]) + n * n].reshape(n, n)
         photo = None
         if v.get("photoDepth"):
@@ -630,6 +710,8 @@ def main():
         run_merge(job)
     elif job.get("op") == "pano":
         run_pano(job)
+    elif job.get("op") == "tileViews":
+        run_tile_views(job)
     elif job.get("op") == "framing":
         run_framing(job)
     else:
