@@ -64,7 +64,7 @@ import type { StreetPanoPose } from './street-view-stations';
 import { Da3RigDepthService, type RigViewImage } from './Da3RigDepthService';
 import type { RigDepthView } from './rig-depth-registration';
 import { toStationImageAnswer, type StationImageGenerator } from './BeautifyStationService';
-import { GeminiMultimodalObjectDetectorService } from './GeminiMultimodalObjectDetectorService';
+import { GoogleMediaCredentialsService } from '../google-media-credentials-service';
 import { fetchStreetViewPanoTiles } from './street-view-tiles';
 
 /** Part of the world cache's key: a world built with another version of this step is another world. */
@@ -92,13 +92,27 @@ export const SHARP_CLEAR_AGAIN_PROMPT = `Some vehicles or people are still in th
 /** The side of the views SHARP is given where the panorama's tiles can be read (its own working size). */
 export const SHARP_SOURCE_SIZE = 1536;
 
-/** How many vehicles and people a vision model still finds in an edited view (the edit, never the photograph). */
+/** The vision model that looks for leftovers in an edited view. */
+export const SHARP_LEFTOVER_MODEL = 'gemini-3.8-flash';
+
+/**
+ * How many vehicles and people a vision model still finds in an edited view (the edit, never the photograph), through
+ * the same Google credentials the image model uses.
+ */
 export async function countVehiclesAndPeople(png: Buffer): Promise<number> {
-    const res = await GeminiMultimodalObjectDetectorService.detectObjectsFromImage(`data:image/png;base64,${png.toString('base64')}`, {
-        customPrompt: 'Detect every vehicle (car, taxi, bus, truck, van, motorcycle, bicycle, scooter) and every person visible in this street picture, however small. Return only those; an empty list when there are none. Do not return buildings, signs, billboards or pictures of people on posters.'
+    const client = await new GoogleMediaCredentialsService().createClient();
+    const res = await client.models.generateContent({
+        model: SHARP_LEFTOVER_MODEL,
+        contents: [{ role: 'user', parts: [
+            { inlineData: { mimeType: 'image/png', data: png.toString('base64') } },
+            { text: 'Count the vehicles (cars, taxis, buses, trucks, vans, motorcycles, bicycles, scooters) and the people actually standing or moving in this street picture, however small. Do not count buildings, signs, or people and vehicles pictured on billboards and posters. Answer with JSON only: {"vehicles": n, "people": n}.' }
+        ] }],
+        config: { responseMimeType: 'application/json', temperature: 0 }
     });
-    if (!res.success) throw new Error(res.error ?? 'the detector did not answer');
-    return res.objects.length;
+    const parsed = JSON.parse(res.text ?? '') as { vehicles?: number; people?: number };
+    const n = Number(parsed.vehicles ?? 0) + Number(parsed.people ?? 0);
+    if (!Number.isFinite(n)) throw new Error('the vision model gave no count');
+    return n;
 }
 
 export const sharpStreetEnabled = (): boolean => process.env.SCRATCHBOX_STREET_SHARP !== '0';

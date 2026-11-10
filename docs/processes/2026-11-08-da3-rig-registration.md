@@ -162,6 +162,24 @@ Status: in the app, on by default (`SharpStreetSplatService.clearViews`, `SHARP_
 - **Proof sheet:** `docs/screenshots/da3_rig_registration_2026-11-08/sharp_no_vehicles.png`.
 - **Cost:** 30 image edits a build (six panoramas by five views), on top of the stations'.
 
+### Fidelity: full-resolution tiles, a 2K two-pass removal, no thinning (2026-11-10)
+
+Status: in the app, on by default. Built through the app's chat at 7th Ave & W 32nd St (v7, world cache off, scan depth reference). A first attempt failed four minutes in with ENOSPC: the app's working files go to the 3DTESTING drive, which another session had filled.
+
+- **Sharper source** (`street-view-tiles.ts`, the worker's `tileViews`): the Map Tiles API serves these panoramas at 16,384 x 8,192 px. Each view is drawn from zoom 4 (8,192 px round the horizon, 128 tiles a panorama, in memory only) at 1536 px, SHARP's own working size, where the Static API gives 640. How Google's stated tilt and roll turn the panorama is not documented, so each sign is tried and the one that matches the Static views best is kept; a view is used only where it holds its Static view's framing. On `3yGYmP` the level views matched at 0.95-0.97 edge correlation with no shift (floor 0.71). v7: 30 of 30 views from the tiles.
+- **Removal at 2K** on level views only (a straight-down view is not sent: the model redraws it). v7: 24 of 24 edits held (0.64-0.95, no shift).
+- **Leftover check:** in v7 it did not run (the first version called a detector that needs a gcloud login this machine does not have, and every view's note says "not checked"). It now asks a vision model (`gemini-3.8-flash`) through the app's own Google credentials; on derived renders from camera A it counts 11 in v5 and 0 in v7. The second pass has therefore not yet been exercised in a build.
+- **No thinning:** budget 10 M. v7: 9,427,756 predicted, 803,165 outside their cell, 0 thinned, 8,589,902 street splats, 10,958,745 in the world (v6: 7,918,607).
+- **Proof sheet:** `docs/screenshots/da3_rig_registration_2026-11-08/sharp_fidelity.png` (v6, v7, and v7 with the in-between view below).
+
+### One generated in-between view (trial, 2026-11-10)
+
+Status: trial only (`~/.cache/scratchbox-sharp-trial/joint/between.ts`); not adopted as tried. A virtual camera halfway between `3yGYmP` and `XBym1B` (10.4 m apart): v7 rendered from it in five views, each repainted by the image model at 2K, SHARP on the repaints, merged with the five real panoramas by hard cells (1,156,193 splats in the new cell).
+
+- All five repaints held their render's framing (0.25-0.98). That is the weakness: the model sharpened the render's edges and kept its smears, stretched patches and holes where they were, so the new cell carries the old defects at a new position.
+- From the proof cameras the merge is nearly indistinguishable from v7 beside the new view, and adds a floating patch on the road in camera A.
+- To help, the in-between view would have to bring content the render does not have: the two neighbours' real views as references, or a prompt and check that reward repair over fidelity to the render.
+
 ## Still open
 
 1. The edge score used here (median distance from scan edges to photo edges) is too loose to judge a pose: it improved under the implausible forced move. The judge's registration or the research report's render-and-match is the measure to use.
