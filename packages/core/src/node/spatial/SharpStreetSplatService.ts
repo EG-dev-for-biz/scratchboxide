@@ -204,6 +204,11 @@ export interface SharpStreetRequest {
     outSplatPath: string;
     /** Holds each panorama's splats until the merge; removed afterwards. */
     workDir: string;
+    /**
+     * Keep `workDir` after the run, with a copy of the base layer and `job.json` (the scan's path, the panoramas' poses and
+     * the merge's inputs): what a re-merge or a refinement trial needs. Derived data only; no photograph is in it.
+     */
+    keepWorkDir?: boolean;
     mapsApiKey?: string;
     fetchImpl?: typeof fetch;
     /** The views of one panorama, in memory (default: the Street View Static API). The images are never written. */
@@ -359,11 +364,19 @@ export class SharpStreetSplatService {
             const hardCells = process.env.SCRATCHBOX_STREET_SHARP_CELLS !== '0';
             type MergeAnswer = { predicted: number; inFreeSpace: number; outsideCell?: number; doubled: number; thinned: number; street: number; perPano: number[]; baseKept?: number; baseReplaced?: number; baseKeptAboveStreet?: number; splats: number };
             let merged: MergeAnswer;
+            const mergeJob = {
+                op: 'merge', inputs: done.map(d => ({ path: d.path, eye: d.eye, ...(d.report.streetTopY !== undefined ? { streetTopY: d.report.streetTopY } : {}) })),
+                basePath: req.baseSplatPath && fs.existsSync(req.baseSplatPath) ? req.baseSplatPath : null, outPath: mergedPath, budget, cells: hardCells
+            };
+            if (req.keepWorkDir) {
+                const keptBase = mergeJob.basePath ? path.join(req.workDir, 'base.splat') : null;
+                if (keptBase && mergeJob.basePath) await fs.copy(mergeJob.basePath, keptBase);
+                await fs.writeJson(path.join(req.workDir, 'job.json'), {
+                    glbPath: req.glbPath, panos: req.panos, used: done.map(d => d.report.panoId), merge: { ...mergeJob, basePath: keptBase, outPath: path.join(req.workDir, 'merged.splat') }
+                }, { spaces: 1 });
+            }
             try {
-                merged = await ask<MergeAnswer>({
-                    op: 'merge', inputs: done.map(d => ({ path: d.path, eye: d.eye, ...(d.report.streetTopY !== undefined ? { streetTopY: d.report.streetTopY } : {}) })),
-                    basePath: req.baseSplatPath && fs.existsSync(req.baseSplatPath) ? req.baseSplatPath : null, outPath: mergedPath, budget, cells: hardCells
-                }, 900_000);
+                merged = await ask<MergeAnswer>(mergeJob, 900_000);
                 await fs.move(mergedPath, req.outSplatPath, { overwrite: true });
             } catch (err) {
                 if (req.signal?.aborted) throw err;
@@ -382,7 +395,7 @@ export class SharpStreetSplatService {
             return { ran: false, reason: `the SHARP street step failed: ${err instanceof Error ? err.message : String(err)}`, panos: reports };
         } finally {
             await fs.remove(depthPath).catch(() => undefined);
-            await fs.remove(req.workDir).catch(() => undefined);
+            if (!req.keepWorkDir) await fs.remove(req.workDir).catch(() => undefined);
         }
     }
 }

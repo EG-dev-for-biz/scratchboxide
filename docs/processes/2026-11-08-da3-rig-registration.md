@@ -140,6 +140,18 @@ Status: in the app (`SharpStreetSplatService`, `tools/depth/sharp_street_worker.
 - **Reading** (four cameras away from every panorama; an independent visual check of v4 against hard cells): hard cells has less smear and doubling on the road and round the buildings in three of four cameras and no real difference in the fourth; it loses a bus the overlap rule showed (smeared), and shows flat grey patches, hard cut lines and card-like panels where the base layer stands behind the cut. Neither reads as a clean street between panoramas or from above. One panorama alone, seen from near its own eye, still reads best: the six predictions are independent and do not agree.
 - **Not done:** the proof renders and the merge snapshot were scratch files and were lost with the session's scratch folder; the sheet was sent to the user. Vehicles and people in the photographs are baked in.
 
+### Joint optimisation of the SHARP street splats (trial, 2026-11-09)
+
+Status: trial only, outside the repo (`~/.cache/scratchbox-sharp-trial/joint`: a PyTorch splat renderer written for it, on Metal; nothing in the app calls it). Not adopted. The user asked for it after the question of how apps keep splats consistent: trained scenes fit every photo jointly, ours are five independent predictions.
+
+- **Inputs:** an in-app build (v5: hard cells on by default, scan depth reference, since the scratch Depth Anything 3 environment was lost and its reinstall was refused) with `SCRATCHBOX_STREET_SHARP_KEEP=1`, which keeps each panorama's cleaned splats, the base layer and the poses. v5 in the app: 9,534,241 splats predicted, 776,156 outside their cell, 8,355,500 in the world.
+- **Views:** 15 a panorama (the five SHARP views, four more level, four at -25 degrees, two held out), 75 in all, fetched in memory and never written; trained at 320 px. The loss counts only pixels the street set covered to begin with, and penalises new coverage elsewhere.
+- **Finding 1, the measurement that explains the mess:** from a panorama's own eye, its own splats alone reproduce its photo at 22-25 dB (33 dB straight down); with the other panoramas' splats added, 13-17 dB. The other panoramas' splats stand in front.
+- **Everything optimised** (place, size, turn, colour, opacity; 450 steps, 1.2 s a step): held-out views at the panoramas 14.8 -> 22.7 dB, splats moved 5 cm at the median, mean opacity 0.84 -> 0.82. From cameras between the panoramas it is worse: the road is speckled and the crosswalk softer. The optimiser repainted the splats in front to look right from the five eyes (sparse-view overfit).
+- **Votes only** (colour, place and size fixed; the views may only fade a splat, and one under 0.25 goes): 307,550 of 9,534,241 removed, held-out 14.8 -> 18.6 dB. Merged with hard cells, it is nearly indistinguishable from hard cells alone from the proof cameras: the cells already remove most of what the vote removes.
+- **Reading:** five eyes on one street are too few to constrain a joint fit; the gain at the panoramas does not carry to the views between them. What would: many more panoramas along the drive (every 3-5 m instead of five), or one consistent geometry under the splats (the scan) instead of five depth predictions.
+- **Proof sheet:** `docs/screenshots/da3_rig_registration_2026-11-08/sharp_joint_optimisation_trial.png`.
+
 ## Still open
 
 1. The edge score used here (median distance from scan edges to photo edges) is too loose to judge a pose: it improved under the implausible forced move. The judge's registration or the research report's render-and-match is the measure to use.
