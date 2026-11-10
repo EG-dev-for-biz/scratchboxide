@@ -56,7 +56,7 @@ describe('a district kept as a world', () => {
         const b = STARTER_BUTTONS.find(x => x.label === '3D Scene')!;
         expect(b.world?.slug).toBe('penn_station_district_2_penn_plaza');
         expect(b.world?.scenePath).toBe('/tilesets/penn_station_district_2_penn_plaza/scene3d.json');
-        expect(b.prompts.length).toBeGreaterThanOrEqual(8);
+        expect(b.prompts).toEqual(['Make a 3D scene']);
     });
 });
 
