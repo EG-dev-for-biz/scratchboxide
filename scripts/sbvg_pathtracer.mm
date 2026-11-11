@@ -173,6 +173,13 @@ LightingSetup parseLighting(const Json& lightingConfig, const math::AABB& bounds
         setup.sky = std::make_unique<sky::PhysicalSky>(sunDirection, atmosphere);
         setup.lighting.mode = metalpt::Lighting::Mode::Sky;
         setup.lighting.sky = setup.sky.get();
+        // lighting.haze: a grey haze of visibilityMeters (Koschmieder: extinction 3.912 / V) that thins with height above
+        // baseAltitudeMeters (the file's coordinates) by scaleHeightMeters; the sky model's own haze thins with it.
+        const Json& hazeConfig = lightingConfig["haze"];
+        const float visibility = numberOr(hazeConfig["visibilityMeters"], 0.0f);
+        if (visibility > 0.0f) setup.lighting.haze.extinction = Vec3(1, 1, 1) * (3.912f / visibility);
+        setup.lighting.haze.scaleHeight = std::max(0.0f, numberOr(hazeConfig["scaleHeightMeters"], 0.0f));
+        setup.lighting.haze.baseY = numberOr(hazeConfig["baseAltitudeMeters"], 0.0f);
     } else {
         setup.lighting.mode = metalpt::Lighting::Mode::Studio;
         setup.lighting.studioRadiance = vec3Or(lightingConfig["studio"]["radiance"], Vec3(1, 1, 1));
@@ -453,7 +460,8 @@ int renderOnce(const std::string& configPath) {
             if (!sceneMaterials) tracer.setClayMaterial(material.albedo, material.roughness, material.metallic);
             tracer.setLightSampling(sampleLights);
             const render::Environment environment{lighting.lighting.mode == metalpt::Lighting::Mode::Sky ? lighting.sky.get() : nullptr,
-                                                  lighting.lighting.studioRadiance};
+                                                  lighting.lighting.studioRadiance,
+                                                  lighting.lighting.haze};
             out = tracer.render(camera, environment, settings);
             usedLights = tracer.lightSet();
         }
@@ -549,6 +557,8 @@ int renderOnce(const std::string& configPath) {
               << ", \"texturesUploaded\": " << texturesUploaded << ", \"loadMs\": " << source.loadMs << " },\n"
               << "  \"material\": { \"albedo\": " << jsonVec(material.albedo) << ", \"roughness\": " << material.roughness << ", \"metallic\": " << material.metallic << " },\n"
               << "  \"sun\": { \"elevationDeg\": " << lighting.elevationDeg << ", \"azimuthDeg\": " << lighting.azimuthDeg << " },\n"
+              << "  \"haze\": { \"extinctionPerM\": " << lighting.lighting.haze.extinction.x << ", \"scaleHeightMeters\": " << lighting.lighting.haze.scaleHeight
+              << ", \"baseAltitudeMeters\": " << lighting.lighting.haze.baseY << " },\n"
               << "  \"camera\": { \"position\": " << jsonVec(camera.position) << ", \"target\": " << jsonVec(camera.target)
               << ", \"up\": " << jsonVec(camera.up) << ", \"verticalFovDeg\": " << camera.verticalFovDeg << " },\n"
               << "  \"colorRaw\": \"color.f32: float32 scene-linear RGB per pixel, row-major\"\n"

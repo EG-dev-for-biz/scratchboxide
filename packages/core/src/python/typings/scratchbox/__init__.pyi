@@ -5,6 +5,7 @@ Autonomous, headless, real-time procedural creation with cinematic DCC fidelity.
 
 import collections.abc
 import scratchbox.human
+import scratchbox.shot_plan
 import scratchbox.structure
 import scratchbox.terrain
 import scratchbox.vegetation
@@ -16,7 +17,7 @@ import scratchbox_native.human
 import scratchbox_native.math
 import typing
 
-__all__ = ['Any', 'Armature', 'Dict', 'Human', 'List', 'Optional', 'PbrMaterial', 'PbrMaterialWrapper', 'PoseBone', 'PrincipledBsdfMaterial', 'RomanOrder', 'SbVeggieTree', 'Scene', 'ShapeKeyBlock', 'ShapeKeys', 'Structure', 'StudioHuman', 'Terrain', 'Tuple', 'Union', 'World', 'adaptive_object', 'architecture', 'benchmark_massing', 'composer', 'constants', 'core', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_building', 'create_building_parts', 'create_cambered_foil', 'create_catenary_cable', 'create_character', 'create_cone', 'create_cube', 'create_curved_building', 'create_cylinder', 'create_envelope', 'create_form', 'create_human', 'create_hydraulic_actuator', 'create_intake_strainer', 'create_ivy', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_louver_bay', 'create_panelized_loft', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_spline_conduit_harness', 'create_structural_truss_member', 'create_studio_pedestal', 'create_subdivided_box', 'create_tower', 'create_tree', 'create_vegetation', 'create_wheel', 'create_wheel_assembly', 'export_glb', 'geometry', 'geospatial', 'glb_read', 'hair', 'human', 'io', 'k', 'layout', 'library_surface', 'massing', 'massing_module', 'math', 'meshops', 'moulding_profile', 'nature', 'object_spec', 'os', 'pbr', 'processing', 'py_math', 'random', 'read_glb', 'relief', 'replicate_metric_array', 'revolve_harmonic_solid', 'rig', 'sdf', 'shaper', 'site', 'site_colors', 'site_crown', 'site_guides', 'site_lattice', 'site_part_colors', 'site_score', 'site_textures', 'site_tiers', 'stack_buildings', 'structure', 'superellipse_loop', 'superellipse_point', 'sweep_curve_profile', 'sys', 'terrain', 'topology', 'validate_scene', 'validation', 'vegetation', 'world', 'write_glb', 'write_textured_building']
+__all__ = ['Any', 'Armature', 'Dict', 'Human', 'List', 'Optional', 'PbrMaterial', 'PbrMaterialWrapper', 'PoseBone', 'PrincipledBsdfMaterial', 'RomanOrder', 'SbVeggieTree', 'Scene', 'ShapeKeyBlock', 'ShapeKeys', 'Shot', 'Structure', 'StudioHuman', 'Terrain', 'Tuple', 'Union', 'World', 'adaptive_object', 'architecture', 'benchmark_massing', 'camera_move', 'composer', 'constants', 'core', 'create_arched_blister', 'create_beveled_box', 'create_box', 'create_building', 'create_building_parts', 'create_cambered_foil', 'create_catenary_cable', 'create_character', 'create_cone', 'create_cube', 'create_curved_building', 'create_cylinder', 'create_envelope', 'create_form', 'create_human', 'create_hydraulic_actuator', 'create_intake_strainer', 'create_ivy', 'create_lathe', 'create_loft', 'create_lofted_hull', 'create_louver_bay', 'create_panelized_loft', 'create_plane', 'create_revolving_component', 'create_sphere', 'create_spline_conduit_harness', 'create_structural_truss_member', 'create_studio_pedestal', 'create_subdivided_box', 'create_tower', 'create_tree', 'create_vegetation', 'create_wheel', 'create_wheel_assembly', 'export_glb', 'geometry', 'geospatial', 'glb_read', 'hair', 'human', 'io', 'k', 'layout', 'library_surface', 'massing', 'massing_module', 'math', 'meshops', 'moulding_profile', 'nature', 'object_spec', 'os', 'pbr', 'processing', 'py_math', 'random', 'read_glb', 'relief', 'replicate_metric_array', 'revolve_harmonic_solid', 'rig', 'sdf', 'shaper', 'shot', 'shot_plan', 'site', 'site_colors', 'site_crown', 'site_guides', 'site_lattice', 'site_part_colors', 'site_score', 'site_textures', 'site_tiers', 'stack_buildings', 'structure', 'superellipse_loop', 'superellipse_point', 'sweep_curve_profile', 'sys', 'terrain', 'topology', 'validate_scene', 'validation', 'vegetation', 'world', 'write_glb', 'write_textured_building']
 
 Any = typing.Any
 Armature = scratchbox.human.Armature
@@ -329,6 +330,7 @@ SbVeggieTree = scratchbox.vegetation.SbVeggieTree
 Scene = scratchbox.world.World
 ShapeKeyBlock = scratchbox.human.ShapeKeyBlock
 ShapeKeys = scratchbox.human.ShapeKeys
+Shot = scratchbox.shot_plan.Shot
 Structure = scratchbox.structure.Structure
 StudioHuman = scratchbox.human.StudioHuman
 Terrain = scratchbox.terrain.Terrain
@@ -348,6 +350,17 @@ def benchmark_massing(plan: typing.Dict[str, typing.Any], benchmark: str, crown:
     Returns {"setbacks": [{"floor", "expected_m", "nearest_m", "error_m", "found"}...], "found", "documented",
     "extra_levels": tier boundaries matching no documented setback, "mean_abs_error_m", "footprint": {"documented_m",
     "measured_m", "error_share"}, "heights": {...}, "tolerance_m", "notes"}.
+    """
+
+
+def camera_move(keys: typing.Sequence[typing.Tuple[float, ForwardRef('Shot')]], name: str = 'move') -> typing.Dict[str, typing.Any]:
+    """
+    Animate the camera through declared shots.
+
+    `keys` are (time in seconds, shot) pairs, the shots already declared with sb.shot, in increasing time. The scene's
+    timeline plays the move: the camera passes through each shot at its time on a smooth path (cubic, Catmull-Rom
+    tangents over the key times, easing in at the first key and out at the last; the focal length tweened in log space),
+    and path_trace_render renders any moment of it (timeSeconds). A slow push-in is two shots forty seconds apart.
     """
 
 import scratchbox_native.composer as composer
@@ -670,6 +683,16 @@ def revolve_harmonic_solid(anchor_point: typing.Tuple[float, float, float] = (0.
 import scratchbox_native.rig as rig
 import scratchbox_native.sdf as sdf
 import scratchbox_native.shaper as shaper
+
+def shot(position: typing.Sequence[float], target: typing.Sequence[float], focal_mm: float = 35.0, sensor_width_mm: float = 36.0, aspect: float = 1.777778, width_px: int = 1920, detail_px: float = 2.0, name: str = '') -> scratchbox.shot_plan.Shot:
+    """
+    Declare a camera the scene is built for.
+
+    The first shot declared is the one the scene opens on and is reviewed from; declare further shots for other
+    angles, and detail counts as seen when any shot resolves it.
+    """
+
+import scratchbox.shot_plan as shot_plan
 
 def site() -> typing.Dict[str, typing.Any]:
     """

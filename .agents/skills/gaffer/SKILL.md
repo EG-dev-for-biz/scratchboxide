@@ -81,6 +81,13 @@ these three being too strong, too weak, the wrong colour or not occluded where i
 ## 5. In Scratchbox
 
 - **Rigs:** `lighting_configure_gaffer_rig` builds photographic key-fill-rim rigs at real stop ratios around a subject.
+- **Scripted scenes built for a shot (`sb.shot`):** a scene shot down a street reads deepest backlit: one low sun ahead
+  of the camera and to one side, faces toward the lens in shade with bright edges, long shadows running toward the lens,
+  and haze thinning with height in front (`atmosphere_configure_scene` `visibilityMeters`, `hazeScaleHeightMeters`). Take
+  the sun's azimuth from the frame, `hero.sun_azimuth_deg(frame_x)` (-1.5 ahead-left, 1.5 ahead-right), and pass the same
+  number to `atmosphere_configure_scene` and `path_trace_render`: both measure clockwise from -z (north), 90 toward +x.
+  Then confirm the side in the render: shadows fall away from the sun, so with the sun ahead-left they run toward the
+  lower right of the frame. A sun guessed from the axes mirrors the whole look.
 - **Staged buildings (pipeline K):** one material path for every surface (user decision, 2026-11-05): each texel's
   detected material carries its library set's occlusion, roughness, metalness and normal, and the viewer reflects the
   scene's probe on every texel by those numbers alone; there is no separate glass layer, glass weight or pane tilt.

@@ -170,6 +170,11 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
             inscatteringIntensity?: number;
             aerialPerspectiveRange?: number;
             fogDensity?: number;
+            /** Haze that thins with height: its e-fold height in metres above fogBaseAltitude (0 or absent: uniform). */
+            fogHeight?: number;
+            fogBaseAltitude?: number;
+            /** A grey haze of this visibility at ground level, in metres (Koschmieder). */
+            hazeVisibilityMeters?: number;
             albedoScale?: number;
         }) => {
             const scene = ctx.getSceneData();
@@ -184,6 +189,9 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
             if (params.inscatteringIntensity !== undefined) updatedAtm.inscatteringIntensity = params.inscatteringIntensity;
             if (params.aerialPerspectiveRange !== undefined) updatedAtm.aerialPerspectiveRange = params.aerialPerspectiveRange;
             if (params.fogDensity !== undefined) updatedAtm.fogDensity = params.fogDensity;
+            if (params.fogHeight !== undefined) updatedAtm.fogHeight = params.fogHeight;
+            if (params.fogBaseAltitude !== undefined) updatedAtm.fogBaseAltitude = params.fogBaseAltitude;
+            if (params.hazeVisibilityMeters !== undefined) updatedAtm.hazeVisibilityMeters = params.hazeVisibilityMeters;
             if (params.albedoScale !== undefined) updatedAtm.albedoScale = params.albedoScale;
 
             scene.features.atmosphericScattering = updatedAtm;
@@ -195,7 +203,10 @@ export const NATURE_ATMOSPHERE_OPERATORS: OperatorDefinition[] = [
                     enabled: updatedAtm.aerialPerspectiveEnabled,
                     inscatteringIntensity: updatedAtm.inscatteringIntensity,
                     aerialPerspectiveRange: updatedAtm.aerialPerspectiveRange,
-                    fogDensity: updatedAtm.fogDensity
+                    fogDensity: updatedAtm.fogDensity,
+                    fogHeight: updatedAtm.fogHeight,
+                    fogBaseAltitude: updatedAtm.fogBaseAltitude,
+                    hazeVisibilityMeters: updatedAtm.hazeVisibilityMeters
                 }
             };
         }

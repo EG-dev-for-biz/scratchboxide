@@ -62,9 +62,22 @@ struct RenderSettings {
 };
 
 /** What lights the scene besides its own lights: the physical sun and sky, or (with no sky) a uniform studio dome. */
+/**
+ * Haze beyond the sky model's own: a grey extinction per metre at the layer's base (a visibility V gives 3.912 / V,
+ * Koschmieder) and, when scaleHeight > 0, a density that falls off as exp(-(y - baseY) / scaleHeight) above baseY,
+ * which thins the sky model's haze with height too. Heights are in the traced file's coordinates. The viewport's
+ * aerial perspective pass draws the same layer (common/spatial/height-haze.ts).
+ */
+struct HeightHaze {
+    Vec3 extinction{0.0f, 0.0f, 0.0f};
+    float scaleHeight{0.0f};
+    float baseY{0.0f};
+};
+
 struct Environment {
     const sky::PhysicalSky* sky{nullptr};
     Vec3 studioRadiance{1.0f, 1.0f, 1.0f};
+    HeightHaze haze{};
 };
 
 struct RenderOutput {
@@ -114,6 +127,20 @@ private:
 };
 
 inline float luminance(const Vec3& c) { return view::luminance(c); }
+
+/**
+ * Mean haze density along a straight segment between heights y0 and y1, for a density exp(-(y - base) / H) above
+ * `base` and 1 at and below it; 1 with no scale height. A segment's optical depth is extinction x length x this.
+ * The Metal kernel and common/spatial/height-haze.ts carry the same expression.
+ */
+inline float hazeColumnFactor(float y0, float y1, float scaleHeight, float base) {
+    if (!(scaleHeight > 0.0f)) return 1.0f;
+    const float a = (y0 - base) / scaleHeight, b = (y1 - base) / scaleHeight;
+    auto column = [](float t) { return t <= 0.0f ? t : 1.0f - std::exp(-t); };
+    const float span = b - a;
+    if (std::fabs(span) < 1e-4f) return a <= 0.0f ? 1.0f : std::exp(-a);
+    return (column(b) - column(a)) / span;
+}
 inline float maxComponent(const Vec3& v) { return std::max(v.x, std::max(v.y, v.z)); }
 inline bool isFinite(const Vec3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
 
@@ -551,7 +578,9 @@ public:
         if (const sky::PhysicalSky* sky = environment.sky) {
             frame.sunIrradiance = sky->sunIrradiance();
             frame.sunVisible = detail::luminance(frame.sunIrradiance) > 1e-8f;
-            frame.hazeExtinction = sky->hazeExtinction();
+            frame.hazeExtinction = sky->hazeExtinction() + environment.haze.extinction;
+            frame.hazeScaleHeight = environment.haze.scaleHeight;
+            frame.hazeBaseY = environment.haze.baseY;
             Vec3 horizontalIrradiance = frame.sunIrradiance * std::max(0.0f, sky->sunDirection().y) + sky->skyIrradianceHorizontal();
             frame.bakedRadianceScale = detail::luminance(horizontalIrradiance) / detail::kPi;
         } else {
@@ -648,6 +677,8 @@ private:
         Vec3 sunIrradiance{0, 0, 0};
         bool sunVisible{false};
         Vec3 hazeExtinction{0, 0, 0};
+        float hazeScaleHeight{0.0f};
+        float hazeBaseY{0.0f};
         float bakedRadianceScale{1.0f};
     };
 
@@ -1007,7 +1038,8 @@ private:
             }
 
             if (sky) {
-                Vec3 opticalDepth = frame.hazeExtinction * hit.t;
+                const float column = detail::hazeColumnFactor(origin.y, origin.y + dir.y * hit.t, frame.hazeScaleHeight, frame.hazeBaseY);
+                Vec3 opticalDepth = frame.hazeExtinction * (hit.t * column);
                 Vec3 transmittance(std::exp(-opticalDepth.x), std::exp(-opticalDepth.y), std::exp(-opticalDepth.z));
                 accumulate(radiance, throughput * (sky->horizonRadiance(dir) * (Vec3(1, 1, 1) - transmittance)), bounce, settings.clampIndirect);
                 throughput = throughput * transmittance;

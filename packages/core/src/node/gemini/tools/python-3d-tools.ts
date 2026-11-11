@@ -14,8 +14,10 @@ import type { ToolDeclaration, ToolHandlerOutcome } from './types';
 import { NativePythonRunnerService } from '../../3d-engine/native-python-runner-service';
 import { PipelineError } from '../../../common/errors/pipeline-errors';
 import { GeometricComplexityGate, GeometricSceneMetrics, GeometricMeshSummary, ComplexityGateReport } from '../../../common/spatial/GeometricComplexityGate';
-import { analyzePartConnectivityAsync, ConnectivityAnalysisAbortedError, describeFloatingParts, glbToTriangleSoup, glbWorldBounds, isSbVeggieNearLevel, isSbVeggieNode, type PartConnectivityReport, type TriangleSoup } from '../../3d-engine/part-connectivity';
-import { callVisionModel, describeVisualProblems, reviewModelVisually, type VisualReviewResult } from '../../3d-engine/visual-review';
+import { analyzePartConnectivityAsync, ConnectivityAnalysisAbortedError, describeFloatingParts, glbToNamedTriangleSoups, glbToTriangleSoup, glbWorldBounds, isSbVeggieNearLevel, isSbVeggieNode, type PartConnectivityReport, type TriangleSoup } from '../../3d-engine/part-connectivity';
+import { callVisionModel, describeVisualProblems, renderShotView, reviewModelVisually, type VisualReviewResult } from '../../3d-engine/visual-review';
+import { describeShotDetailBudget, evaluateShotDetailBudget, parseShotMoves, parseShotPlan, verticalFovDeg, type ShotCamera, type ShotDetailBudgetReport } from '../../../common/spatial/shot-detail-budget';
+import { cameraPoseAt, type CameraPathKey } from '../../../common/spatial/camera-path';
 import { formatSbApiErrors, sbTypeCheckMetadata, typeCheckSbScript } from '../../3d-engine/sb-script-typecheck';
 import { SB_API_CORE_SUMMARY, SB_API_VERSION } from '../../3d-engine/sb-api.generated';
 import { firstPassRenderMode } from '../scene3d-first-pass-baseline';
@@ -206,6 +208,7 @@ Usage notes:
 - Meshes have no clone(), copy() or transform. To duplicate: dup = sb.geometry.Mesh(); dup.append(mesh), then position it with translate, rotate_x/y/z (degrees) and scale.
 - Materials: sb.PbrMaterial(base_color=(r, g, b, a), roughness=, metallic=) or a preset such as sb.PbrMaterial.clay(). There is no separate materials module.
 - Scene and export: scene = sb.Scene(); scene.add_mesh(mesh); finish with sb.io.write_glb(OUTPUT_GLB_PATH, scene). A single Mesh can be written directly too.
+- A scene built for a view (a camera height, lens or frame in the request, or an environment too large to detail everywhere): declare it before building with hero = sb.shot(position=(x, y, z), target=(x, y, z), focal_mm=35, aspect=16/9, width_px=1920, name="hero") (metres, y up). The scene opens on that camera, the review looks through it, and the result reports the shot detail budget: the share of in-frame triangles under 2 px. Size detail from it: hero.resolves(size_m, at=(x, y, z)) -> bool on a feature's overall size (an opening, a balcony, a tank, a car; never its thinnest member), then hero.member_m(real_size, at=) -> metres for its bars, mullions and reveals, thickened just enough to show; hero.pixels(size_m, at=) -> px, hero.min_feature_m(at=) -> metres, hero.sees(point) -> bool, hero.frame_point(x, y, depth) -> the world point at frame position x (-1 left .. 1 right), y (-1 bottom .. 1 top), so what the request puts left of frame goes at x < 0 (looking down -z, frame left is -x), hero.right / hero.forward -> unit vectors; sb.shot_plan.resolves(size_m, at) asks every declared shot. A moving camera: sb.camera_move([(0, start_shot), (40, end_shot)], name="push-in") puts the move on the scene's timeline (path_trace_render timeSeconds renders a moment). Detail under the budget is wasted, and a frame of plain blocks is under-built: spend the triangles on what resolves, nearest the lens first.
 - Trees, shrubs and any plant with a crown: sb.create_tree(position=(x, y, z), height=, crown_radius= (or (along x, along z)), crown_base_height=, crown_widest_at= (0 cone .. 0.5 round .. 0.8 umbrella), crown_top_exponent= (1 cone, 2 dome, 4 flat), trunk_radius=, leaf_color='#rrggbb', label=) returns an SB-Veggie tree described by those measurements; add it with scene.merge(tree) or world.add(tree) (world.scatter(tree, ...) plants copies) and it is grown natively when the scene is written (space colonisation, SB-Veggie leaf clusters, species and leaf textures, levels of detail). It is not a mesh: move it with translate / rotate_y / scale only. This is the only way to make vegetation: never build trees or foliage from cones, spheres, boxes, sweeps or lathes.`;
 
 /**
@@ -284,6 +287,23 @@ function placeArgumentError(args: Record<string, unknown>): string | undefined {
     if (given.length === 0) return undefined;
     const asked = given.map(name => `${name} ${typeof args[name] === 'string' ? `"${String(args[name]).trim()}"` : JSON.stringify(args[name])}`).join(' and ');
     return `execute_3d_python_script does not stage scripts on real places (got ${asked}). For the place itself call google_3d_tiles_get_clay; for one object standing at the place call build_3d_object_from_reference with that location and a placement. Run this tool without location or coordinates for a scene in a studio void.`;
+}
+
+/** The shots a run declared with sb.shot, written beside its GLB (shot_plan.py); none when the script declared none. */
+export function readShotPlan(glbPath: string | undefined): ShotCamera[] {
+    return readShotFile(glbPath).shots;
+}
+
+/** The shots and camera moves a run declared (sb.shot, sb.camera_move), written beside its GLB; none when it declared none. */
+export function readShotFile(glbPath: string | undefined): { shots: ShotCamera[]; moves: Array<{ name: string; keys: CameraPathKey[] }> } {
+    if (!glbPath) return { shots: [], moves: [] };
+    try {
+        const json = JSON.parse(fs.readFileSync(`${glbPath}.shots.json`, 'utf8'));
+        const shots = parseShotPlan(json);
+        return { shots, moves: parseShotMoves(json, shots) };
+    } catch {
+        return { shots: [], moves: [] };
+    }
 }
 
 function failedOutcome(error: unknown, summary: string): ToolHandlerOutcome {
@@ -516,6 +536,18 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
         }
 
         const vegetation = sbVeggieOf(glbBuf);
+        // The shots the script declared (sb.shot): the scene opens on the first, the review looks through it, and the
+        // geometry is measured against what each lens can show.
+        const { shots, moves: cameraMoves } = readShotFile(result.glbPath);
+        let shotBudget: ShotDetailBudgetReport | undefined;
+        if (shots.length) {
+            try {
+                const parts = glbToNamedTriangleSoups(glbBuf, vegetation ? { exclude: isSbVeggieNode } : {});
+                if (parts) shotBudget = evaluateShotDetailBudget([...parts].map(([name, soup]) => ({ name, positions: soup.positions, indices: soup.indices })), shots);
+            } catch (err: any) {
+                console.warn('[execute_3d_python_script] Shot detail budget skipped:', err?.message || err);
+            }
+        }
         let structureReport: PartConnectivityReport | null = null;
         let visualReview: (VisualReviewResult & { imagePaths?: string[] }) | undefined;
         if (glbBuf) {
@@ -538,7 +570,8 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
             if (soup && userRequest && process.env.SCRATCHBOX_3D_VISUAL_REVIEW !== 'off') {
                 const reviewDesc = typeof args.description === 'string' ? args.description : '';
                 const { result: review, views } = await reviewModelVisually(soup, userRequest, reviewDesc,
-                    (prompt, images) => callVisionModel(prompt, images, _ctx?.request?.model));
+                    (prompt, images) => callVisionModel(prompt, images, _ctx?.request?.model),
+                    shots.length ? [renderShotView(soup, shots[0])] : []);
                 const imagePaths = result.glbPath ? views.map((v, i) => {
                     const p = result.glbPath!.replace(/\.glb$/i, `_review_${i}.png`);
                     try { fs.writeFileSync(p, v.png); } catch { /* best effort */ }
@@ -571,6 +604,30 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 bounds.center[2] + distance * 0.85
             ];
         }
+
+        // A declared shot is the camera the scene was built for: the scene opens on it, with its lens; with a camera move,
+        // on the move's first moment, and the timeline plays the move.
+        const heroShot: ShotCamera | undefined = shots[0];
+        const move = cameraMoves[0];
+        const moveStart = move ? cameraPoseAt(move.keys, 0) : null;
+        const sceneCamera = moveStart
+            ? {
+                position: moveStart.position,
+                target: moveStart.target,
+                fov: +moveStart.verticalFovDeg.toFixed(3),
+                lens: { focalLengthMm: moveStart.focalMm, sensorWidthMm: moveStart.sensorWidthMm, sensorHeightMm: +(moveStart.sensorWidthMm / moveStart.aspect).toFixed(3), depthOfField: false },
+                keepPoseOnLoad: true
+            }
+            : heroShot
+            ? {
+                position: heroShot.position,
+                target: heroShot.target,
+                fov: +verticalFovDeg(heroShot).toFixed(3),
+                lens: { focalLengthMm: heroShot.focalMm, sensorWidthMm: heroShot.sensorWidthMm, sensorHeightMm: +(heroShot.sensorWidthMm / heroShot.aspect).toFixed(3), depthOfField: false },
+                keepPoseOnLoad: true
+            }
+            : { position: cameraPosition, target: cameraTarget, fov: cameraFov };
+        const shotBudgetText = shotBudget ? describeShotDetailBudget(shotBudget) : '';
 
         // Nothing comes from the scene on the canvas: the new scene holds only the model this script wrote.
         const sceneSubtitle = `Generated 3D asset via Scratchbox Python 3 engine (${result.executionTimeMs}ms)`;
@@ -659,6 +716,8 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                 gateReport: gateReport,
                 structureReport,
                 structuralIssues: structureReport ? describeFloatingParts(structureReport) : undefined,
+                ...(cameraMoves.length ? { cameraMoves: cameraMoves.map(m => ({ name: m.name, keys: m.keys.length, durationS: m.keys[m.keys.length - 1].timeMs / 1000 })) } : {}),
+                ...(shots.length ? { shots, shotDetailBudget: shotBudget ? { ...shotBudget, parts: undefined } : undefined } : {}),
                 visualReview,
                 visualIssues: visualReview ? describeVisualProblems(visualReview) : undefined,
                 groundDatum: {
@@ -681,11 +740,10 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                         renderMode: args.renderMode === 'clay' ? 'clay' : firstPassRenderMode(_ctx?.request?.prompt),
                         cameraMode: 'orbit',
                         animation: 'orbit',
-                        camera: {
-                            position: cameraPosition,
-                            target: cameraTarget,
-                            fov: cameraFov
-                        },
+                        camera: sceneCamera,
+                        ...(shots.length ? { shots } : {}),
+                        // no isPlaying / currentTimeMs: the viewport re-applies those on every data update, which would stop playback
+                        ...(move ? { timeline: { durationMs: move.keys[move.keys.length - 1].timeMs, isLooping: true, camera: { name: move.name, keys: move.keys } } } : {}),
                         environment: {
                             skybox: 'studio',
                             lighting: 'studio',
@@ -713,7 +771,7 @@ export const python3DHandlers: Record<string, (args: Record<string, unknown>, _c
                     }
                 }
             },
-            summaryResult: `Generated a 3D GLB via Python (${result.executionTimeMs}ms; ${writtenGeometry.totalVertices} vertices, ${writtenGeometry.totalTriangles} triangles). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}]. Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') + ' Refine the script and run execute_3d_python_script again: revolve continuous profiles with sb.create_lathe, displace a unit high-resolution sphere for organic masses, sweep rails with sb.sweep_curve_profile, and raise segment counts.' : ''}${structureReport && !structureReport.passed ? ' ' + describeFloatingParts(structureReport) : ''}${visualReview && visualReview.verdict === 'problems' ? ' ' + describeVisualProblems(visualReview) : ''}`
+            summaryResult: `Generated a 3D GLB via Python (${result.executionTimeMs}ms; ${writtenGeometry.totalVertices} vertices, ${writtenGeometry.totalTriangles} triangles). GLB framed dynamically at bounds [${bounds ? bounds.dimensions.map(d => d.toFixed(1) + 'm').join(' x ') : 'default'}]. Shared Metric Ground Logic: SI meters (1 unit = 1m), anchor ground datum Y=0.0m.${gateReport && !gateReport.passed ? ' Fidelity alerts: ' + gateReport.violations.join('; ') + ' Refine the script and run execute_3d_python_script again: revolve continuous profiles with sb.create_lathe, displace a unit high-resolution sphere for organic masses, sweep rails with sb.sweep_curve_profile, and raise segment counts.' : ''}${shotBudgetText ? ' ' + shotBudgetText : ''}${move ? ` Camera move "${move.name}": ${move.keys.length} keys over ${(move.keys[move.keys.length - 1].timeMs / 1000).toFixed(1)} s on the scene's timeline (the scene opens on its first moment; path_trace_render timeSeconds renders any moment).` : ''}${structureReport && !structureReport.passed ? ' ' + describeFloatingParts(structureReport) : ''}${visualReview && visualReview.verdict === 'problems' ? ' ' + describeVisualProblems(visualReview) : ''}`
         };
     }
 };

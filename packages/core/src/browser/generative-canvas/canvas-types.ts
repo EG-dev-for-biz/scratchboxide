@@ -1200,6 +1200,20 @@ export interface Scene3DData {
         keepPoseOnLoad?: boolean;
     };
     /**
+     * The cameras the scene was built for, as its script declared them (sb.shot): position and target in metres, the
+     * lens in millimetres, the frame in pixels and the detail budget in pixels. The first is the one `camera` opens on.
+     */
+    shots?: Array<{
+        name: string;
+        position: [number, number, number];
+        target: [number, number, number];
+        focalMm: number;
+        sensorWidthMm: number;
+        aspect: number;
+        widthPx: number;
+        detailPx: number;
+    }>;
+    /**
      * The scene's weather (the viewport's Weather tool, the graph's Weather node): time of day, date, cloud cover, haze and
      * fog, turned into the sky config by services/atmosphere/scene-weather.ts applySceneWeather; absent = no weather set.
      */
@@ -1291,6 +1305,14 @@ export interface Scene3DData {
         isLooping?: boolean;
         tracks?: TimelineTrack[];
         animationClip?: any;
+        /**
+         * A camera move (sb.camera_move): keyed poses in metres and millimetres; the viewport drives its camera from the
+         * move while the timeline plays or is scrubbed (common/spatial/camera-path.ts cameraPoseAt).
+         */
+        camera?: {
+            name?: string;
+            keys: Array<{ timeMs: number; position: [number, number, number]; target: [number, number, number]; focalMm: number; sensorWidthMm?: number; aspect?: number }>;
+        };
     };
     customScript?: string;
     code?: string;
@@ -1410,6 +1432,8 @@ export interface Scene3DData {
             fogDensity?: number;
             fogBaseAltitude?: number;
             fogHeight?: number;
+            /** A grey haze of this visibility at ground level, in metres; thinned with height by fogHeight. */
+            hazeVisibilityMeters?: number;
             albedoScale?: number;
 
             // Terrain Cloud Shadows
