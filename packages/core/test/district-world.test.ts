@@ -52,10 +52,9 @@ describe('a district kept as a world', () => {
         expect(() => districtWorldScene({}, 'penn_x')).toThrow(/no scene data/);
     });
 
-    it('the 3D Scene starter opens the massed Penn district, and keeps its build prompts for a machine without it', () => {
+    it('the 3D Scene starter opens no prebuilt district: it sends a plain request, so the chat asks where', () => {
         const b = STARTER_BUTTONS.find(x => x.label === '3D Scene')!;
-        expect(b.world?.slug).toBe('penn_station_district_2_penn_plaza');
-        expect(b.world?.scenePath).toBe('/tilesets/penn_station_district_2_penn_plaza/scene3d.json');
+        expect(b.world).toBeUndefined();
         expect(b.prompts).toEqual(['Make a 3D scene']);
     });
 });

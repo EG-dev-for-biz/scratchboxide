@@ -38,40 +38,18 @@ export const PENN_STATION_WORLD_DIR = `/tilesets/${PENN_STATION_WORLD_SLUG}`;
 
 /**
  * A district already massed: the Penn Station district around 2 Penn Plaza (pipeline K-D, run 8e3a912b with its centre on
- * Cloud Run, 250 m, built 2026-11-03), kept as a world (scripts/publish_district_world.ts) so the 3D Scene button opens it at once instead of
- * building a district from scratch (user ask, 2026-11-04).
+ * Cloud Run, 250 m, built 2026-11-03), kept as a world (scripts/publish_district_world.ts). No starter button opens it since 2026-11-11: the 3D Scene
+ * button asks where.
  */
 export const PENN_DISTRICT_WORLD_SLUG = 'penn_station_district_2_penn_plaza';
 export const PENN_DISTRICT_WORLD_DIR = `/tilesets/${PENN_DISTRICT_WORLD_SLUG}`;
 
 export const STARTER_BUTTONS: readonly StarterButton[] = [
     { icon: '✨', label: 'Interactive App', makes: 'live-code-sandbox', prompts: ['Make an interactive app'] },
-    {
-        icon: '🪐',
-        label: '3D Scene',
-        makes: '3d-scene',
-        // A real district in a major city: the request routes to the staged Google 3D Tiles build (prompt-builder.ts),
-        // which remeshes and resurfaces every building, applies the real textures and regrows the measured trees.
-        // Stays in district mode deliberately (not isolate: true) - that is a different build shape (one structure,
-        // no surrounding streets/trees), not a "cleaner" version of this one. "textured" and the mood/sun clause are
-        // said outright: textures are the default, and since 2026-11-02 (user decision) every staged place opens under
-        // the same partly cloudy, low-sun sky on its own (scene-weather.ts withLocationSceneWeather), so the clause now
-        // only names the light the build already gives. 2026-10-21 (user ask): raised and cooled from a full
-        // golden hour (~20 deg elevation, a gentler warmth) so shadow regions read less crushed/near-black, and the
-        // azimuth is asked from the place's own real solar geometry rather than a fixed number - there is no tool
-        // that reads the sun direction baked into the tile imagery itself (investigated: the closest prior work,
-        // tile-sun/measured-brdf, is archived and unported), so this is the closest honest approximation, not a
-        // measured match. This button's own chosen mood, not a general build default elsewhere.
-        // 2026-10-21 (user ask): a dozen impressive town centres, skewed toward New York (5 of 12 - the places this
-        // session verified build cleanly: stepped/setback massing from the scan's own heightfield, de-lit textures,
-        // and working SB-Veggie trees after this session's native crash fix), each with real street trees so the
-        // tree stage has something to show - a deliberate curated set for this quickstart button, not a limit on
-        // what a user can type in chat: any place can still be asked for directly, this only narrows the button's
-        // own examples.
-        prompts: ['Make a 3D scene'],
-        // the district already massed opens at once; without it on this machine, one of the prompts above builds one
-        world: { slug: PENN_DISTRICT_WORLD_SLUG, scenePath: `${PENN_DISTRICT_WORLD_DIR}/scene3d.json`, title: 'Penn Station district - 2 Penn Plaza' },
-    },
+    // 3D Scene and 3D Building send a plain request that names no place, so the chat asks where (SPATIAL_INTENT_POLICY,
+    // prompt-builder.ts) before anything is built. Neither opens a prebuilt place (user decision, 2026-11-11: the
+    // 3D Scene button opened the massed Penn district, or did nothing on a machine without it).
+    { icon: '🪐', label: '3D Scene', makes: '3d-scene', prompts: ['Make a 3D scene'] },
     {
         icon: '🏛️',
         label: '3D Building',
