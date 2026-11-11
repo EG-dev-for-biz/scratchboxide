@@ -309,11 +309,11 @@ export const WORKSPACE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'workspace_find_symbols',
-        description: 'Find symbol definitions, usages, and references in the workspace AST context graph.',
+        description: 'Find a symbol definition by name in the index of the workspace\'s parsed source: declarations whose name matches or contains the name asked for, with the file and line of each. The index holds declarations, not usages, so this does not list a symbol\'s call sites; grep for those.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                query: { type: 'STRING', description: 'Symbol name to search for' },
+                query: { type: 'STRING', description: 'Symbol name, or part of one' },
                 kind: { type: 'STRING', description: 'Optional symbol kind (e.g. "function", "class", "interface")' }
             },
             required: ['query']
@@ -321,12 +321,12 @@ export const WORKSPACE_TOOL_DECLARATIONS: ToolDeclaration[] = [
     },
     {
         name: 'workspace_semantic_search',
-        description: 'Semantic vector / natural language conceptual code search across symbols, functions, classes, and documentation in the workspace AST context graph.',
+        description: 'Search the index of the workspace\'s parsed source by word, over each declaration\'s name, signature, docstring, file path and body text, then one hop along the symbol graph. It matches words that literally appear in the code, so phrase the query in the codebase\'s own vocabulary; it is not an embedding search and will not find a concept under a synonym the source never uses (for text that is not a declaration, use workspace_grep_search). The count of files and symbols indexed comes back with every answer, so a result of none can be told from an index that does not cover the code.',
         parameters: {
             type: 'OBJECT',
             properties: {
-                query: { type: 'STRING', description: 'Conceptual, intent-based natural language search query (e.g. "authentication token refresh", "calculate tax", "canvas zoom logic")' },
-                maxResults: { type: 'NUMBER', description: 'Maximum number of semantic matches to return (default: 10)' },
+                query: { type: 'STRING', description: 'Words expected to appear in or near the code (e.g. "authentication token refresh", "facade lattice recess")' },
+                maxResults: { type: 'NUMBER', description: 'Maximum number of matches to return (default: 10)' },
                 pathPrefix: { type: 'STRING', description: 'Optional subfolder or path prefix to filter results' }
             },
             required: ['query']
@@ -729,14 +729,24 @@ export const workspaceHandlers: Record<string, ToolHandler> = {
             minRelevanceScore: 0.1,
             maxSymbols: 25
         });
+        const coverage = ctx.contextGraph.getIndexCoverage();
         return {
             resultPayload: {
                 status: 'success',
                 query,
                 count: symResult.matchingSymbols.length,
+                indexedFiles: coverage.files,
+                indexedSymbols: coverage.symbols,
+                ...(symResult.matchingSymbols.length === 0 ? {
+                    note: `No indexed declaration matches that name. The index covers ${coverage.symbols} symbols from ${coverage.files} source file(s)` +
+                        `${coverage.files === 0 ? ' — it is empty, so this is not evidence about the codebase' : ''}. ` +
+                        'It holds declarations only, so a symbol used but declared elsewhere is not here; grep for usages.'
+                } : {}),
                 symbols: symResult.matchingSymbols.map(s => ({ name: s.name, kind: s.kind, filePath: s.filePath, range: s.range }))
             },
-            summaryResult: `Found ${symResult.matchingSymbols.length} symbol(s) matching "${query}".`
+            summaryResult: symResult.matchingSymbols.length > 0
+                ? `Found ${symResult.matchingSymbols.length} symbol(s) matching "${query}".`
+                : `No symbol matches "${query}" among the ${coverage.symbols} symbols indexed from ${coverage.files} file(s).`
         };
     },
 
@@ -764,17 +774,30 @@ export const workspaceHandlers: Record<string, ToolHandler> = {
             filePath: s.filePath,
             range: s.range,
             docstring: s.docstring,
-            relevanceScore: symResult.relevanceScores ? symResult.relevanceScores[s.name] : undefined
+            // The scorer's own weight: higher means more of the query's words, in more telling places. It ranks these
+            // matches against each other and means nothing on its own or across queries.
+            matchWeight: symResult.relevanceScores ? symResult.relevanceScores[s.name] : undefined
         }));
 
+        const coverage = ctx.contextGraph.getIndexCoverage();
         return {
             resultPayload: {
                 status: 'success',
                 query,
                 count: results.length,
+                indexedFiles: coverage.files,
+                indexedSymbols: coverage.symbols,
+                // The model reads this payload, not the summary below, so a miss states its own reach here.
+                ...(results.length === 0 ? {
+                    note: `No indexed declaration carries these words. The index covers ${coverage.symbols} symbols from ${coverage.files} source file(s)` +
+                        `${coverage.files === 0 ? ' — it is empty, so this is not evidence about the codebase' : ''}. ` +
+                        'Matching is by word, not meaning: try the codebase\'s own wording, or workspace_grep_search for text that is not a declaration.'
+                } : {}),
                 matches: results
             },
-            summaryResult: `Found ${results.length} semantic match(es) for "${query}".`
+            summaryResult: results.length > 0
+                ? `Found ${results.length} match(es) for "${query}" by word, among the ${coverage.symbols} symbols indexed from ${coverage.files} file(s).`
+                : `No indexed symbol carries the words "${query}" (searched ${coverage.symbols} symbols from ${coverage.files} file(s)). Try the codebase's own wording, or workspace_grep_search.`
         };
     },
 

@@ -70,6 +70,11 @@ const apiServer = app.listen(PORT, HOST, () => {
     void warmNativeEngine();
     // Build a first chat turn's payload once (prompt builder, tool catalogue, workspace pattern scan), so the first turn does not.
     void (app.locals.geminiService as GeminiService).warmChatPrompt();
+    // Index the workspace's symbols for retrieval; the file watcher keeps them current from there.
+    const indexWorkspaceSymbols = app.locals.indexWorkspaceSymbols as (() => Promise<number>) | undefined;
+    if (typeof indexWorkspaceSymbols === 'function') {
+        void indexWorkspaceSymbols().catch(() => {});
+    }
 });
 attachListenErrorHandler(apiServer, 'API', PORT);
 

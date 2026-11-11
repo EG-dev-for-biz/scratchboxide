@@ -92,6 +92,9 @@ export interface ProjectContextGraph {
 }
 
 export interface ContextGraphSliceOptions {
+    /** Characters the rendered slice is cut to. */
+    maxChars?: number;
+    /** @deprecated The old name for `maxChars`: it was always compared against a character count, never tokens. */
     maxTokens?: number;
     depth?: number;
     includeTypes?: ContextNodeType[];
@@ -103,8 +106,11 @@ export interface ContextGraphSlice {
     focusNodeId?: string;
     nodes: ContextGraphNode[];
     edges: ContextGraphEdge[];
+    /** The slice rendered one line per node and edge, cut to `maxChars`. */
     compressedPromptContext: string;
+    /** Estimated tokens of the *full* rendering (bodies included), at four characters a token. */
     totalTokens: number;
+    /** Characters saved by the one-line rendering against the full one, 0 to 1. Not a model-side measurement. */
     compressionRatio: number;
     matchedSymbols?: CodeSymbol[];
 }

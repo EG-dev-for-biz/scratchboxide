@@ -639,8 +639,10 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     const longRunningAgentService = new LongRunningAgentService(sandboxService, undefined, geminiService);
     const subagentPoolService = new SubagentPoolService({}, geminiService);
 
-    // Trigger continuous AST symbol indexing for default workspace in background
-    contextGraphService.indexWorkspaceDirectory(process.cwd()).catch(() => {});
+    // Index the workspace's source once, started by the listen callbacks like the chat warm-up above and never here:
+    // the scan walks every source file in the workspace, and a test that builds the app must not pay for it. The file
+    // watcher below keeps each file current from there.
+    app.locals.indexWorkspaceSymbols = () => contextGraphService.indexWorkspaceDirectory(process.cwd());
 
     const userLearningService = new UserLearningService(memoriesService);
     const goalAnalyzer = new GoalAnalyzer(geminiService, userLearningService);
@@ -648,6 +650,24 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     const dynamicDagPlanner = new DynamicDagPlanner(geminiService);
     const executionBridge = new DeepWriteExecutionBridge(geminiService);
     const fileWatcher = new WorkspaceFileWatcherService();
+
+    // Keep the symbol index in step with the files the watcher reports, so a saved edit is not answered from the
+    // version indexed at boot. The watcher covers the directories it watches, not the whole workspace.
+    fileWatcher.onFileChange(event => {
+        if (!/\.(tsx?|jsx?|mjs|cjs|py|rs|go|java|cpp|cc|c|h|hpp)$/i.test(event.path)) {
+            return;
+        }
+        try {
+            if (event.changeType === 'delete') {
+                contextGraphService.removeSourceFile(event.path);
+            } else if (typeof event.content === 'string') {
+                contextGraphService.indexSourceFile(event.path, event.content);
+            }
+        } catch {
+            // A file that cannot be parsed leaves the previous symbols in place
+        }
+    });
+
     const lensSyncService = new CodebaseLensSyncService(workspaceService, fileWatcher);
     const cppCompiler = new NativeCppCompilerService();
     const tileCleanupService = new PhotorealTileCleanupService(cppCompiler);

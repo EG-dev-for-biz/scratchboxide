@@ -27,12 +27,91 @@ import {
     MarkdownDocumentData,
     NodeGraphData
 } from '../browser/generative-canvas/canvas-types';
+
+/**
+ * A dependency name resolves across files only while it identifies this few symbols. One is the honest number: a
+ * name two files both declare does not say which one is meant, and linking both (or eight) states a relationship the
+ * source never showed. Same-file declarations are resolved first and are not subject to this.
+ */
+const AMBIGUOUS_DEPENDENCY_FANOUT = 1;
+
+/**
+ * The source extensions the symbol extractors can read. Data and markup (`.json`, `.css`, images, `.md`) yield no
+ * symbol and would enter the graph as file nodes alone, crowding out code in every slice, so they are left out; a
+ * caller that wants them passes its own `extensions`.
+ */
+const INDEXABLE_SOURCE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.rs', '.go', '.java', '.cpp', '.cc', '.c', '.h', '.hpp'];
+
+/**
+ * Directory names skipped by the directory walk (the fallback for a root that is not a git worktree): dependencies,
+ * build output, caches, and the agent and asset trees that hold no source of this project's own. The git enumeration
+ * needs none of this — `.gitignore` already says what is not ours.
+ */
+const UNINDEXED_DIRECTORIES = [
+    'node_modules', '.git', 'dist', 'lib', 'build', 'out', 'coverage', '.cache', '.turbo', '.next', '.vite',
+    '.claude', '.agents', '.scratchbox', '.model-cache', '.venv', 'venv', '__pycache__',
+    'public', 'assets', 'test-results', 'vendor', 'third_party'
+];
+
+/** A file larger than this is generated, minified or vendored, whatever its extension; parsing it buys nothing. */
+const MAX_INDEXED_FILE_BYTES = 512 * 1024;
+
+/** Files parsed between yields, so a boot-time index of a large repository does not hold the event loop. */
+const INDEX_YIELD_INTERVAL = 25;
+
+/**
+ * Words a request is phrased in rather than words the code is written in. They appear in most prompts and in most
+ * source files, so they rank nothing and only add matches that look considered.
+ */
+const STOP_WORDS = new Set([
+    'the', 'and', 'for', 'with', 'this', 'that', 'from', 'into', 'using', 'get', 'set',
+    'what', 'why', 'how', 'when', 'where', 'which', 'does', 'did', 'are', 'was', 'were',
+    'can', 'should', 'would', 'could', 'has', 'have', 'its', 'you', 'please', 'there', 'here',
+    'all', 'any', 'not', 'but', 'our', 'out', 'use', 'via', 'per', 'then', 'than', 'they'
+]);
+
+/** A letter or digit: inside an identifier or a word, rather than at its edge. */
+function isWordCharacter(ch: string | undefined): boolean {
+    return ch !== undefined && /[a-z0-9]/.test(ch);
+}
+
+/**
+ * Whether `needle` appears in `haystack` as a word of its own — flanked by punctuation, space or nothing, never by
+ * more letters. Done with indexOf rather than a RegExp because this runs once per indexed symbol per query.
+ */
+function containsAtWordBoundary(haystack: string, needle: string): boolean {
+    let from = 0;
+    for (;;) {
+        const at = haystack.indexOf(needle, from);
+        if (at < 0) {
+            return false;
+        }
+        if (!isWordCharacter(haystack[at - 1]) && !isWordCharacter(haystack[at + needle.length])) {
+            return true;
+        }
+        from = at + 1;
+    }
+}
+
 export class ProjectContextGraphService {
     private nodes: Map<string, ContextGraphNode> = new Map();
     private edges: ContextGraphEdge[] = [];
     private symbols: Map<string, CodeSymbol> = new Map();
     private fileToSymbols: Map<string, string[]> = new Map(); // filePath -> symbolId[]
     private symbolNameToIds: Map<string, string[]> = new Map(); // symbolName.toLowerCase() -> symbolId[]
+    /**
+     * `edges` indexed by endpoint, so expansion walks a node's neighbours instead of every edge — and so an insert
+     * dedupes against one node's own edges instead of scanning the whole list.
+     */
+    private outgoing: Map<string, ContextGraphEdge[]> = new Map();
+    private incoming: Map<string, ContextGraphEdge[]> = new Map();
+    /**
+     * The last scoring pass, kept because a single turn scores the same query twice (the prompt builder takes the
+     * symbol subgraph, then a slice of the same prompt, asking for a different number of symbols each time) and
+     * scoring every indexed symbol is the expensive part, while choosing the top N from the scores is not. Keyed by
+     * what scoring reads and by the index's own version, so an edit anywhere invalidates it.
+     */
+    private lastScoring?: { key: string; indexedAt: number; scores: Map<string, number> };
     private lastUpdated: number = Date.now();
 
     /**
@@ -221,12 +300,7 @@ export class ProjectContextGraphService {
         });
 
         // Remove old symbols indexed for this file
-        const oldSymbolIds = this.fileToSymbols.get(cleanPath) || [];
-        for (const symId of oldSymbolIds) {
-            this.nodes.delete(symId);
-            this.symbols.delete(symId);
-            this.edges = this.edges.filter(e => e.sourceId !== symId && e.targetId !== symId);
-        }
+        this.forgetSymbolsOf(cleanPath);
 
         const symbols: CodeSymbol[] = [];
         const isTsOrJs = /\.(tsx?|jsx?|mjs|cjs)$/i.test(cleanPath) || language === 'typescript' || language === 'javascript' || language === 'react';
@@ -287,7 +361,7 @@ export class ProjectContextGraphService {
         for (const sym of symbols) {
             if (sym.dependencies && sym.dependencies.length > 0) {
                 for (const depName of sym.dependencies) {
-                    const targetIds = this.symbolNameToIds.get(depName.toLowerCase()) || [];
+                    const targetIds = this.resolveDependencyTargets(depName, cleanPath);
                     for (const targetId of targetIds) {
                         if (targetId !== sym.id) {
                             this.addEdge(sym.id, targetId, 'references');
@@ -648,7 +722,11 @@ export class ProjectContextGraphService {
     }
 
     /**
-     * Recursively index all source code files across a workspace directory.
+     * Index the workspace's own source files. The file list comes from git where the root is a git worktree — the
+     * tracked and untracked-but-not-ignored files, so `.gitignore` decides what is this project's source and nothing
+     * here has to guess — and from a directory walk otherwise. `maxFiles` is a guard against an unbounded tree, not a
+     * sample: a cap low enough to bite leaves the index holding whichever files the enumeration happened to reach
+     * first, which is worse than an index that is plainly too small, so the count reached is reported back.
      */
     async indexWorkspaceDirectory(
         workspaceRoot: string,
@@ -658,46 +736,108 @@ export class ProjectContextGraphService {
             extensions?: string[];
         } = {}
     ): Promise<number> {
-        const allowedExts = new Set(options.extensions || ['.ts', '.tsx', '.js', '.jsx', '.py', '.rs', '.go', '.java', '.cpp', '.c', '.h', '.hpp', '.css', '.json']);
-        const maxFiles = options.maxFiles || 200;
-        let count = 0;
+        const allowedExts = new Set(options.extensions || INDEXABLE_SOURCE_EXTENSIONS);
+        const maxFiles = options.maxFiles || 5000;
+        if (!(await fs.pathExists(workspaceRoot))) {
+            return 0;
+        }
 
-        const walk = async (dir: string): Promise<void> => {
-            if (count >= maxFiles) return;
-            const entries = await fs.readdir(dir);
-
-            for (const entry of entries) {
-                if (count >= maxFiles) break;
-                const fullPath = path.join(dir, entry);
-                const relativePath = path.relative(workspaceRoot, fullPath).replace(/\\/g, '/');
-
-                const stat = await fs.stat(fullPath);
-                if (stat.isDirectory()) {
-                    if (['node_modules', '.git', 'dist', 'lib', 'build', '.cache', '.turbo', '.next'].includes(entry)) {
-                        continue;
-                    }
-                    await walk(fullPath);
-                } else if (stat.isFile()) {
-                    const ext = path.extname(entry).toLowerCase();
-                    if (!allowedExts.has(ext)) continue;
-                    if (options.fileFilter && !options.fileFilter(relativePath)) continue;
-
-                    try {
-                        const content = await fs.readFile(fullPath, 'utf8');
-                        this.indexSourceFile(relativePath, content);
-                        count++;
-                    } catch {
-                        // Skip unreadable files safely
-                    }
-                }
-            }
+        const admits = (relativePath: string): boolean => {
+            if (!allowedExts.has(path.extname(relativePath).toLowerCase())) return false;
+            if (relativePath.split('/').some(segment => UNINDEXED_DIRECTORIES.includes(segment))) return false;
+            return options.fileFilter ? options.fileFilter(relativePath) : true;
         };
 
-        if (await fs.pathExists(workspaceRoot)) {
-            await walk(workspaceRoot);
+        const candidates = (await this.gitTrackedSourceFiles(workspaceRoot))?.filter(admits)
+            ?? await this.walkSourceFiles(workspaceRoot, admits, maxFiles);
+
+        let count = 0;
+        for (const relativePath of candidates) {
+            if (count >= maxFiles) break;
+            try {
+                const fullPath = path.join(workspaceRoot, relativePath);
+                const stat = await fs.stat(fullPath);
+                if (!stat.isFile() || stat.size > MAX_INDEXED_FILE_BYTES) continue;
+                this.indexSourceFile(relativePath, await fs.readFile(fullPath, 'utf8'));
+                count++;
+                if (count % INDEX_YIELD_INTERVAL === 0) {
+                    await new Promise(resolve => setImmediate(resolve));
+                }
+            } catch {
+                // Skip unreadable or vanished files safely
+            }
         }
 
         return count;
+    }
+
+    /**
+     * The workspace's source files according to git: tracked plus untracked-but-not-ignored, workspace-relative.
+     * Undefined when the root is not the top of a git worktree or git cannot be run, so the caller walks instead.
+     */
+    private async gitTrackedSourceFiles(workspaceRoot: string): Promise<string[] | undefined> {
+        try {
+            const { execFile } = await import('child_process');
+            const run = (args: string[]): Promise<string> => new Promise((resolve, reject) => {
+                execFile('git', ['-C', workspaceRoot, ...args], { maxBuffer: 64 * 1024 * 1024 }, (err, stdout) => {
+                    if (err) { reject(err); } else { resolve(stdout); }
+                });
+            });
+            // Only this root's own files: inside a subdirectory of a repository, git would list the whole repository.
+            const top = (await run(['rev-parse', '--show-toplevel'])).trim();
+            if (!top || path.resolve(top) !== path.resolve(workspaceRoot)) {
+                return undefined;
+            }
+            const listed = await run(['ls-files', '--cached', '--others', '--exclude-standard', '-z']);
+            return listed.split('\0').filter(Boolean);
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * Breadth-first walk for a root git does not describe: every directory's files before its subdirectories, so a
+     * cap reached early leaves the shallow files (a project's own source) indexed rather than whatever lies deepest
+     * down the first branch.
+     */
+    private async walkSourceFiles(
+        workspaceRoot: string,
+        admits: (relativePath: string) => boolean,
+        maxFiles: number
+    ): Promise<string[]> {
+        const found: string[] = [];
+        const queue: string[] = [workspaceRoot];
+
+        while (queue.length > 0 && found.length < maxFiles) {
+            const dir = queue.shift()!;
+            let entries: string[];
+            try {
+                entries = await fs.readdir(dir);
+            } catch {
+                continue;
+            }
+            const subdirectories: string[] = [];
+            for (const entry of entries) {
+                const fullPath = path.join(dir, entry);
+                const relativePath = path.relative(workspaceRoot, fullPath).replace(/\\/g, '/');
+                let stat;
+                try {
+                    stat = await fs.stat(fullPath);
+                } catch {
+                    continue;
+                }
+                if (stat.isDirectory()) {
+                    if (!UNINDEXED_DIRECTORIES.includes(entry)) {
+                        subdirectories.push(fullPath);
+                    }
+                } else if (stat.isFile() && admits(relativePath) && found.length < maxFiles) {
+                    found.push(relativePath);
+                }
+            }
+            queue.push(...subdirectories);
+        }
+
+        return found;
     }
 
     // =========================================================================
@@ -718,44 +858,8 @@ export class ProjectContextGraphService {
         const targetFiles = options.targetFiles ? new Set(options.targetFiles.map(f => f.replace(/\\/g, '/'))) : undefined;
         const minScore = options.minRelevanceScore ?? 0.5;
 
-        // Tokenize query
-        const queryTokens = this.tokenizeQuery(query);
-        const scores: Map<string, number> = new Map();
-
-        // 1. Semantic Relevance Scoring
-        for (const [symId, sym] of this.symbols.entries()) {
-            if (targetFiles && !targetFiles.has(sym.filePath)) {
-                continue;
-            }
-            if (options.kinds && !options.kinds.includes(sym.kind)) {
-                continue;
-            }
-
-            const score = this.calculateSymbolSemanticScore(sym, query, queryTokens);
-            if (score > 0) {
-                scores.set(symId, score);
-            }
-        }
-
-        // 2. Graph Topological Proximity & Centrality Boost
-        const highScoringIds = Array.from(scores.entries())
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 10)
-            .map(e => e[0]);
-
-        for (const seedId of highScoringIds) {
-            const seedScore = scores.get(seedId) || 0;
-            // 1-hop neighbor expansion
-            for (const edge of this.edges) {
-                if (edge.sourceId === seedId) {
-                    const targetScore = scores.get(edge.targetId) || 0;
-                    scores.set(edge.targetId, Math.max(targetScore, seedScore * 0.6));
-                } else if (edge.targetId === seedId) {
-                    const sourceScore = scores.get(edge.sourceId) || 0;
-                    scores.set(edge.sourceId, Math.max(sourceScore, seedScore * 0.4));
-                }
-            }
-        }
+        // 1 & 2. Relevance scoring and 1-hop graph expansion, from the last pass when this turn already ran it
+        const scores = this.scoreSymbolsForQuery(query, targetFiles, options.kinds);
 
         // 3. Sort and pick top matching symbols
         const sortedEntries = Array.from(scores.entries())
@@ -792,7 +896,7 @@ export class ProjectContextGraphService {
 
         // 5. Synthesize compact prompt context
         const promptLines: string[] = [
-            `[SEMANTIC_CODEBASE_SYMBOL_GRAPH: matched=${matchingSymbols.length} indexed=${this.symbols.size}]`
+            `[CODEBASE_SYMBOLS_BY_WORD_MATCH_AND_ONE_GRAPH_HOP: listed=${matchingSymbols.length} indexed=${this.symbols.size} from_files=${this.fileToSymbols.size}]`
         ];
 
         for (const sym of matchingSymbols) {
@@ -830,19 +934,85 @@ export class ProjectContextGraphService {
     }
 
     /**
+     * Score every eligible symbol against the query, then raise each top seed's neighbours. The result depends only
+     * on the query, the filters and the index, so it is kept until one of those changes: the same turn asks for it
+     * more than once, with a different number of symbols each time, and this is the pass that walks all of them.
+     */
+    private scoreSymbolsForQuery(
+        query: string,
+        targetFiles?: Set<string>,
+        kinds?: SymbolKind[]
+    ): Map<string, number> {
+        const key = JSON.stringify([query, targetFiles ? [...targetFiles].sort() : null, kinds ?? null]);
+        if (this.lastScoring && this.lastScoring.key === key && this.lastScoring.indexedAt === this.lastUpdated) {
+            return this.lastScoring.scores;
+        }
+
+        const queryTokens = this.tokenizeQuery(query);
+        const scores: Map<string, number> = new Map();
+
+        for (const [symId, sym] of this.symbols.entries()) {
+            if (targetFiles && !targetFiles.has(sym.filePath)) {
+                continue;
+            }
+            if (kinds && !kinds.includes(sym.kind)) {
+                continue;
+            }
+            const score = this.calculateSymbolSemanticScore(sym, query, queryTokens);
+            if (score > 0) {
+                scores.set(symId, score);
+            }
+        }
+
+        const highScoringIds = Array.from(scores.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10)
+            .map(e => e[0]);
+
+        for (const seedId of highScoringIds) {
+            const seedScore = scores.get(seedId) || 0;
+            // 1-hop neighbour expansion, over the seed's own adjacency rather than every edge in the graph
+            for (const edge of this.outgoing.get(seedId) || []) {
+                const targetScore = scores.get(edge.targetId) || 0;
+                scores.set(edge.targetId, Math.max(targetScore, seedScore * 0.6));
+            }
+            for (const edge of this.incoming.get(seedId) || []) {
+                const sourceScore = scores.get(edge.sourceId) || 0;
+                scores.set(edge.sourceId, Math.max(sourceScore, seedScore * 0.4));
+            }
+        }
+
+        this.lastScoring = { key, indexedAt: this.lastUpdated, scores };
+        return scores;
+    }
+
+    /**
      * Compute semantic relevance score for a symbol against user query.
      */
     private calculateSymbolSemanticScore(sym: CodeSymbol, rawQuery: string, tokens: string[]): number {
         let score = 0;
         const lowerName = sym.name.toLowerCase();
         const lowerQuery = rawQuery.toLowerCase();
+        // Lowered once per symbol, not once per token: this runs over every indexed symbol on every query, and the
+        // repeated case folding of a signature and a body summary was the whole cost of a retrieval.
+        const lowerSignature = sym.signature?.toLowerCase();
+        const lowerDocstring = sym.docstring?.toLowerCase();
+        const lowerPath = sym.filePath.toLowerCase();
+        const lowerBody = sym.bodySummary?.toLowerCase();
 
-        // Exact name match
+        // Exact name match, then containment either way — but only for names and queries long enough for
+        // containment to mean anything. A symbol named `a`, `h` or `s` is inside almost every question ever asked,
+        // and used to score 6.0 for it; an exact match on a short name still scores through the first clause.
+        const CONTAINMENT_FLOOR = 3;
         if (lowerName === lowerQuery) {
             score += 10.0;
-        } else if (lowerQuery.includes(lowerName)) {
+        } else if (lowerName.length >= CONTAINMENT_FLOOR && !STOP_WORDS.has(lowerName) && containsAtWordBoundary(lowerQuery, lowerName)) {
+            // The name written out in the request ("why does roofShadowLift halo"), not merely its letters sitting
+            // inside a word of it: "swallow" contains "wall" and "all", and used to rank both as matches.
             score += 6.0;
-        } else if (lowerName.includes(lowerQuery)) {
+        } else if (lowerQuery.length >= CONTAINMENT_FLOOR && lowerName.includes(lowerQuery)) {
+            // The query inside the name is left as plain containment: identifiers run words together, so
+            // `facadeLattice` must still answer "lattice".
             score += 4.0;
         }
 
@@ -854,19 +1024,19 @@ export class ProjectContextGraphService {
                 score += 2.0;
             }
 
-            if (sym.signature && sym.signature.toLowerCase().includes(token)) {
+            if (lowerSignature && lowerSignature.includes(token)) {
                 score += 1.5;
             }
 
-            if (sym.docstring && sym.docstring.toLowerCase().includes(token)) {
+            if (lowerDocstring && lowerDocstring.includes(token)) {
                 score += 1.0;
             }
 
-            if (sym.filePath.toLowerCase().includes(token)) {
+            if (lowerPath.includes(token)) {
                 score += 1.2;
             }
 
-            if (sym.bodySummary && sym.bodySummary.toLowerCase().includes(token)) {
+            if (lowerBody && lowerBody.includes(token)) {
                 score += 0.5;
             }
         }
@@ -891,7 +1061,10 @@ export class ProjectContextGraphService {
             .replace(/[-_.:#/\\()]/g, ' ')
             .toLowerCase()
             .split(/\s+/)
-            .filter(w => w.length > 1 && !['the', 'and', 'for', 'with', 'this', 'that', 'from', 'into', 'using', 'get', 'set'].includes(w));
+            // Tokens are tested as substrings of names, paths and bodies, where a two-letter token matches almost
+            // everything: "an" and "of" turned any question into a dozen confident-looking matches. Three letters is
+            // the floor, and a symbol whose whole name is in the query still scores through the name clauses above.
+            .filter(w => w.length > 2 && !STOP_WORDS.has(w));
 
         return Array.from(new Set(words));
     }
@@ -900,9 +1073,110 @@ export class ProjectContextGraphService {
      * Add a directed relationship edge between two nodes.
      */
     private addEdge(sourceId: string, targetId: string, relation: ContextRelationType, weight: number = 1.0): void {
-        const exists = this.edges.some(e => e.sourceId === sourceId && e.targetId === targetId && e.relation === relation);
-        if (!exists) {
-            this.edges.push({ sourceId, targetId, relation, weight });
+        const existing = this.outgoing.get(sourceId);
+        if (existing && existing.some(e => e.targetId === targetId && e.relation === relation)) {
+            return;
+        }
+        const edge: ContextGraphEdge = { sourceId, targetId, relation, weight };
+        this.edges.push(edge);
+        const out = existing;
+        if (out) { out.push(edge); } else { this.outgoing.set(sourceId, [edge]); }
+        const into = this.incoming.get(targetId);
+        if (into) { into.push(edge); } else { this.incoming.set(targetId, [edge]); }
+    }
+
+    /**
+     * A dependency name resolves to the symbols of that name in the same file, else to the repo-wide ones while the
+     * name identifies few enough of them to mean anything. A name hundreds of symbols share (`id`, `render`, `path`)
+     * resolves to none: an edge to each would say only that the name is common, and would square the graph.
+     */
+    private resolveDependencyTargets(depName: string, filePath: string): string[] {
+        const candidates = this.symbolNameToIds.get(depName.toLowerCase());
+        if (!candidates || candidates.length === 0) {
+            return [];
+        }
+        const sameFile = candidates.filter(id => this.symbols.get(id)?.filePath === filePath);
+        if (sameFile.length > 0) {
+            return sameFile;
+        }
+        return candidates.length <= AMBIGUOUS_DEPENDENCY_FANOUT ? candidates : [];
+    }
+
+    /**
+     * Forget everything a file contributed except its file node: its symbols, their nodes and edges, and its entries
+     * in the name lookup (which otherwise keeps pointing at symbols that no longer exist).
+     */
+    private forgetSymbolsOf(cleanPath: string): void {
+        const oldSymbolIds = this.fileToSymbols.get(cleanPath) || [];
+        if (oldSymbolIds.length === 0) {
+            // A file that yielded no symbol still had an entry, and it is still a file this index has read
+            this.fileToSymbols.delete(cleanPath);
+            return;
+        }
+        const dropped = new Set(oldSymbolIds);
+        for (const symId of oldSymbolIds) {
+            const sym = this.symbols.get(symId);
+            if (sym) {
+                const lowerName = sym.name.toLowerCase();
+                const remaining = (this.symbolNameToIds.get(lowerName) || []).filter(id => id !== symId);
+                if (remaining.length > 0) {
+                    this.symbolNameToIds.set(lowerName, remaining);
+                } else {
+                    this.symbolNameToIds.delete(lowerName);
+                }
+            }
+            this.nodes.delete(symId);
+            this.symbols.delete(symId);
+        }
+        this.removeEdgesTouching(dropped);
+        this.fileToSymbols.delete(cleanPath);
+    }
+
+    /**
+     * Drop a file from the graph: its symbols and its own file node. Called when a watched file is deleted, so the
+     * index does not answer with symbols from a file that is gone.
+     */
+    removeSourceFile(filePath: string): void {
+        const cleanPath = filePath.replace(/\\/g, '/');
+        this.forgetSymbolsOf(cleanPath);
+        const fileNodeId = `file:${cleanPath}`;
+        if (this.nodes.delete(fileNodeId)) {
+            this.removeEdgesTouching(new Set([fileNodeId]));
+        }
+        this.lastUpdated = Date.now();
+    }
+
+    /**
+     * Drop every edge touching these node ids, from the edge list and both adjacency indexes. Called when a file is
+     * re-indexed or removed, so a deleted symbol leaves no edge behind.
+     */
+    private removeEdgesTouching(nodeIds: Set<string>): void {
+        if (nodeIds.size === 0) {
+            return;
+        }
+        const touchedNeighbours = new Set<string>();
+        this.edges = this.edges.filter(e => {
+            if (!nodeIds.has(e.sourceId) && !nodeIds.has(e.targetId)) {
+                return true;
+            }
+            touchedNeighbours.add(e.sourceId);
+            touchedNeighbours.add(e.targetId);
+            return false;
+        });
+        // Rebuild only the adjacency lists that lost an edge.
+        for (const id of touchedNeighbours) {
+            this.outgoing.delete(id);
+            this.incoming.delete(id);
+        }
+        for (const edge of this.edges) {
+            if (touchedNeighbours.has(edge.sourceId)) {
+                const out = this.outgoing.get(edge.sourceId);
+                if (out) { out.push(edge); } else { this.outgoing.set(edge.sourceId, [edge]); }
+            }
+            if (touchedNeighbours.has(edge.targetId)) {
+                const into = this.incoming.get(edge.targetId);
+                if (into) { into.push(edge); } else { this.incoming.set(edge.targetId, [edge]); }
+            }
         }
     }
 
@@ -925,16 +1199,26 @@ export class ProjectContextGraphService {
     }
 
     /**
-     * Extracts a topological context slice centered around a focus node or all active nodes,
-     * and compacts it via MLA compression for token-efficient reasoning with Gemini 3.8 Flash.
+     * What the index holds: source files parsed and symbols extracted. Reported alongside every search result,
+     * because "no match" and "the index does not cover your code" look identical without it.
+     */
+    getIndexCoverage(): { files: number; symbols: number } {
+        return { files: this.fileToSymbols.size, symbols: this.symbols.size };
+    }
+
+    /**
+     * A slice of the graph around a focus node, or around what the query matches, rendered one line per node and
+     * edge. `maxChars` bounds that rendering: it was called `maxTokens` and compared against a character count, so
+     * every caller's budget was four times smaller than it read as; the name now says which unit it is, and
+     * `maxTokens` is still accepted as the characters it always meant.
      */
     getContextSlice(focusNodeId?: string, options: ContextGraphSliceOptions = {}): ContextGraphSlice {
-        const maxTokens = options.maxTokens || 2000;
+        const maxChars = options.maxChars ?? options.maxTokens ?? 2000;
         const selectedNodes: ContextGraphNode[] = [];
         const selectedEdges: ContextGraphEdge[] = [];
         let matchedSymbols: CodeSymbol[] | undefined;
 
-        // If query provided, use semantic symbol retrieval
+        // A query selects the symbols it matches and their subgraph; a focus node selects its neighbourhood below
         if (options.query) {
             const symResult = this.retrieveSymbolGraph({
                 query: options.query,
@@ -969,11 +1253,11 @@ export class ProjectContextGraphService {
                     selectedNodes.push(node);
                 }
             }
-        } else if (selectedNodes.length === 0) {
-            // Select top nodes up to limit
-            selectedNodes.push(...Array.from(this.nodes.values()).slice(0, 20));
-            selectedEdges.push(...this.edges.slice(0, 30));
         }
+        // A query that matched nothing used to fall back to the first twenty nodes in insertion order, which reads
+        // as context about the request and is not: it is whatever was indexed first. The slice says so instead, with
+        // what the index holds, so a miss can be told from an index that does not cover the code.
+        const matchedNothing = selectedNodes.length === 0;
 
         // Synthesize raw topological context representation
         const rawLines: string[] = [
@@ -996,19 +1280,23 @@ export class ProjectContextGraphService {
 
         const rawContext = rawLines.join('\n');
 
-        // Apply Multi-Head Latent (MLA) context compaction for topological graphs
-        const nodeAnchors = selectedNodes.map(n => `[${n.type.toUpperCase()}:${n.id}] ${n.title} -> ${n.summary || ''}`);
-        const edgeAnchors = selectedEdges.map(e => `${e.sourceId} --(${e.relation})--> ${e.targetId}`);
+        // One line per node and per edge: a title and a summary, with the bodies left behind. This is a shorter
+        // rendering of the same slice, not a learned or latent compression of it, whatever it was once called.
+        const nodeLines = selectedNodes.map(n => `[${n.type.toUpperCase()}:${n.id}] ${n.title} -> ${n.summary || ''}`);
+        const edgeLines = selectedEdges.map(e => `${e.sourceId} --(${e.relation})--> ${e.targetId}`);
 
-        const latentParts: string[] = [
-            `[MLA_LATENT_CONTEXT_GRAPH_STATE: nodes=${selectedNodes.length} edges=${selectedEdges.length} focus=${focusNodeId || 'global'}]`,
-            ...nodeAnchors,
-            ...edgeAnchors
-        ];
+        const coverage = this.getIndexCoverage();
+        const compactParts: string[] = matchedNothing
+            ? [`[PROJECT_CONTEXT_GRAPH_SLICE: nothing in the graph matched this request; ${coverage.symbols} symbols indexed from ${coverage.files} file(s)]`]
+            : [
+                `[PROJECT_CONTEXT_GRAPH_SLICE: nodes=${selectedNodes.length} edges=${selectedEdges.length} focus=${focusNodeId || 'global'} indexed_files=${coverage.files}]`,
+                ...nodeLines,
+                ...edgeLines
+            ];
 
-        let compressedText = latentParts.join('\n');
-        if (compressedText.length > maxTokens) {
-            compressedText = compressedText.slice(0, maxTokens) + '...[TRUNCATED]';
+        let compressedText = compactParts.join('\n');
+        if (compressedText.length > maxChars) {
+            compressedText = compressedText.slice(0, maxChars) + '...[TRUNCATED]';
         }
 
         const rawLength = Math.max(1, rawContext.length);
@@ -1031,9 +1319,12 @@ export class ProjectContextGraphService {
     clear(): void {
         this.nodes.clear();
         this.edges = [];
+        this.outgoing.clear();
+        this.incoming.clear();
         this.symbols.clear();
         this.fileToSymbols.clear();
         this.symbolNameToIds.clear();
+        this.lastScoring = undefined;
         this.lastUpdated = Date.now();
     }
 }
