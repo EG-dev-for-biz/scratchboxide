@@ -1427,6 +1427,30 @@ def create_building_parts(
     return parts
 
 
+def reference() -> Dict[str, Any]:
+    """
+    The real place passed as execute_3d_python_script's reference, read from Google's vector data: "place", "frame"
+    (x east, z south, metres from the place point), "radius_m", "streets" (each "points", "types", "length_m",
+    "frontage_width_m" front to front with "frontage_left_m" / "frontage_right_m" and "frontage_samples"), "buildings"
+    (each "loops", "height_m" where Google has one, "area_m2", "centroid"), "areas" (each "types", "loops"), "rails",
+    "pois" and "stats" ("height_m", "footprint_area_m2", "street_frontage_width_m" as p10/p50/p90/max/count,
+    "built_share", "street_length_m", "grid_bearing_deg") with "provenance". Raises when the call gave no reference.
+    """
+    path = os.environ.get("SCRATCHBOX_REFERENCE_JSON")
+    if not path or not os.path.exists(path):
+        raise RuntimeError("no reference place was read for this run: pass reference=<place> to execute_3d_python_script")
+    with open(path, "r", encoding="utf-8") as fh:
+        raw = _json.load(fh)
+    snake = lambda k: _re.sub(r"(?<!^)(?=[A-Z])", "_", k).lower()
+    def conv(o):
+        if isinstance(o, dict):
+            return {snake(k): conv(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [conv(v) for v in o]
+        return o
+    return conv(raw)
+
+
 def site() -> Dict[str, Any]:
     """
     The measured massing of the real building passed as execute_3d_python_script's site: place, frame (x east,

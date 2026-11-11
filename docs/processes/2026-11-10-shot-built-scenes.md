@@ -70,3 +70,10 @@ All three runs are measured against one camera, (0, 160, 95) toward (0, 14, −2
 2. New chat; paste the brief in section 1 unchanged.
 3. Read the result's `shotDetailBudget` in the `execute_3d_python_script` row, the shot view `*_review_0.png` beside the GLB in `build/3d-python/`, and the render under `desktop-app/renders/path-traced/`.
 4. Reload the tab and read `window.__SB_3D_CAMERA__`: it stands at the declared shot.
+
+## 7. Follow-up: a real place as the reference for an imagined scene
+
+* **What:** `execute_3d_python_script` takes `reference="<place>"` (a name or "lat, lng") and `referenceRadiusM` (50-1000, default 250). It measures the place from Google's vector data (`node/3d-engine/reference-place.ts`, read through the cached vector-tile overlay) and gives the script `sb.reference()`: street widths front to front, building heights and footprint areas as p10/p50/p90 spreads, the share of ground built, the grid's bearing, and the streets, footprints and areas themselves in metres (x east, z south). Nothing is staged at the place; the scene stays imagined (`generated`), its numbers taken from the real one.
+* **Live, Fifth Avenue & W 34th St, 250 m:** 198 footprints (196 with heights): heights 16 / 44 / 80 m (max 441 m, the Empire State Building); widths 16.5 / 23.3 / 43.9 m; 58.5% built; grid 28.3° from north. Read in 0.4-1.4 s, cached after.
+* **The agent used it unprompted** from a brief naming the place: it set 36 m avenue and 18.5 m cross-street frontages, 58.5% built, heights 18-116 m. Its first script failed on its own misuse of a mesh list; the retry built the scene and its reviewer scored the path-traced still 6.3/10.
+* **Proof:** `docs/screenshots/shot-built-scenes/proof-sheet-reference.png`. Tests: `reference-place` (4).

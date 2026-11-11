@@ -22,6 +22,11 @@ Write down, from the brief:
 - **The shot:** camera position and target in metres (y up), focal length, frame aspect, frame width. Declare it first in
   the script: `hero = sb.shot(position=..., target=..., focal_mm=..., aspect=..., width_px=1920, name="hero")`.
   Declare more shots only for other angles the brief asks for: every declared shot is detail the scene must hold up to.
+- **A real place as the reference:** when the brief takes after a real place ("an avenue like Fifth Avenue"), or should
+  feel real, pass `reference="<place>"` (`referenceRadiusM` 150-500) and read `sb.reference()`: the real street widths
+  front to front, building heights and footprint sizes as spreads (p10/p50/p90), the share of ground built and the grid's
+  bearing, plus the streets, footprints and areas themselves in metres (x east, z south). Set the layout's numbers from
+  them, or build on the real streets and footprints; heights Google lacks are filled from the spread (generated).
 - **The layout:** every shared number once, at the top of the script (street, pavement and block widths, footprints and
   heights, storey height, setbacks), and everything else derived from those names. Two parts that must meet are both
   computed from the same number, never typed twice.
