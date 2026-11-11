@@ -152,6 +152,17 @@ export function runCameraCommands(scene: Scene3DData, commands: CameraCommand[])
     return { ok: true, camera: out.camera, cameraMode: out.cameraMode, issues };
 }
 
+/**
+ * Whether a generated model arriving in the viewport keeps the scene's camera instead of re-framing it. A scene built
+ * for a declared shot (sb.shot: `shots`, the camera saved on purpose) always opens on that shot, whether it arrives
+ * from the chat into an open viewport or loads on a reload; any other stored pose is kept only for the first model of
+ * a mount (a reload), and new generated content re-frames.
+ */
+export function keepsPoseForGeneratedModel(camera: SceneCamera | undefined, shots: readonly unknown[] | undefined, firstModelOfMount: boolean): boolean {
+    if (camera?.position && camera.keepPoseOnLoad && Array.isArray(shots) && shots.length > 0) return true;
+    return firstModelOfMount && keepsStoredPose(camera);
+}
+
 /** Whether loading the scene should open on its stored pose rather than re-frame generated content. */
 export function keepsStoredPose(camera: SceneCamera | undefined): boolean {
     return !!camera?.position && (!!camera.keepPoseOnLoad || !!camera.lens);

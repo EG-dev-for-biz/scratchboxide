@@ -3,10 +3,10 @@
 // from a fresh generation.
 
 /** Hash of the generated stubs: the scratchbox API version a script was checked against. */
-export const SB_API_VERSION = '99207cb972cd';
+export const SB_API_VERSION = 'f9ded5225008';
 
 /** The API reference (module -> class -> signatures, one-line docs), within the full token budget. */
-export const SB_API_SUMMARY = `scratchbox API (generated from the engine's stubs, version 99207cb972cd; parameter names and defaults, -> return type, # first doc line). Scripts are type-checked against these stubs before they run: an attribute, function or keyword that is not in the API is rejected without running.
+export const SB_API_SUMMARY = `scratchbox API (generated from the engine's stubs, version f9ded5225008; parameter names and defaults, -> return type, # first doc line). Scripts are type-checked against these stubs before they run: an attribute, function or keyword that is not in the API is rejected without running.
 
 sb functions (import scratchbox as sb):
   sb.benchmark_massing(plan, benchmark, crown=None) -> Dict[str, Any]  # Scores a massing (sb.site_tiers' plan, and optionally sb.site_crown's result) against a building's documented…
@@ -31,7 +31,7 @@ sb functions (import scratchbox as sb):
   sb.create_lathe(profile, segments=32, total_angle_rad=None, color=None, material=None, **kwargs) -> Mesh
   sb.create_loft(slices, close_ends=True, color=None, material=None, **kwargs) -> Mesh
   sb.create_lofted_hull(stations, profile='superellipse', m=2.8, close_ends=True, n_pts=32, color=None, material=None, **kwargs) -> Mesh  # Continuous Compound-Curvature Hull Generator (ADA Invariant 1 & 6).
-  (+36 more)
+  (+37 more)
 sb.geometry.Mesh:
   attributes: name: str, material: PbrMaterial, has_uv1: bool, vertex_count: int (read-only), triangle_count: int (read-only), bounds: AABB (read-only), vertices: list[Vertex] (read-only), indices: list[int] (read-only)
   sb.geometry.Mesh()
@@ -159,25 +159,20 @@ sb.pbr:
   attributes: PbrMaterial (read-only), ProceduralMaterial (read-only)
 sb.validation:
   _ValidationModule.validate_scene(scene_or_mesh, auto_heal=True) -> Dict[str, Any]  # In-Engine Kinematic & Geometric Invariant Validator.
-sb.composer.StudioLight:
-  attributes: name: str, position: Vec3, color: Vec3, intensity: float, color_temperature_kelvin: float
+sb.Shot:
+  attributes: height_px: int (read-only), focal_px: float (read-only), horizontal_fov_deg: float (read-only), vertical_fov_deg: float (read-only), right: Tuple[float, float, float] (read-only), up: Tuple[float, float, float] (read-only), forward: Tuple[float, float, float] (read-only), position, target, focal_mm, sensor_width_mm, aspect, width_px, detail_px, name
+  (+9 more)
 sb.Armature:
   attributes: bones, pose
   sb.Armature()
-  .get_bone(name) -> PoseBone | None
-sb.PoseBone:
-  attributes: name, rotation_euler, rotation_quaternion, location, scale
-  sb.PoseBone(name)
-sb.ShapeKeyBlock:
-  attributes: name, value
-  sb.ShapeKeyBlock(name, value=0.0)
-Also in the API (not listed here): sb.PbrMaterialWrapper; sb.PrincipledBsdfMaterial; sb.ShapeKeys; sb.math.AABB; sb.human.Skeleton; sb.math.Quat; sb.processing.HausdorffResult; sb.processing.SurfaceSamplePoint; sb.scan_massing.Slice; …
+  (+1 more)
+Also in the API (not listed here): sb.composer.StudioLight; sb.PbrMaterialWrapper; sb.PoseBone; sb.PrincipledBsdfMaterial; sb.ShapeKeyBlock; sb.ShapeKeys; sb.math.AABB; sb.human.Skeleton; …
 `;
 
 /** The same reference within the small budget used in the execute_3d_python_script description. */
-export const SB_API_CORE_SUMMARY = `scratchbox API (generated from the engine's stubs, version 99207cb972cd; parameter names and defaults, -> return type). Scripts are type-checked against these stubs before they run: an attribute, function or keyword that is not in the API is rejected without running.
+export const SB_API_CORE_SUMMARY = `scratchbox API (generated from the engine's stubs, version f9ded5225008; parameter names and defaults, -> return type). Scripts are type-checked against these stubs before they run: an attribute, function or keyword that is not in the API is rejected without running.
 
-sb functions (import scratchbox as sb): benchmark_massing(plan, benchmark, crown=None) -> Dict[str, Any]; create_arched_blister(bounds=(0.35, 0.45, 0.9), arch_radius=0.4, swell=0.08, side=1.0, grid=(16, 8), …) -> Mesh; create_beveled_box(size=(1.0, 1.0, 1.0), bevel=0.02, color=None, material=None, **kwargs) -> Mesh; create_box(*args, **kwargs) -> Mesh; create_building(width=18.0, depth=14.0, floors=4, floor_height=3.4, ground_floor_height=4.2, …) -> Mesh; create_building_parts(width=18.0, depth=14.0, floors=4, floor_height=3.4, ground_floor_height=4.2, …) -> _BuildingParts; create_cambered_foil(span=1.8, chord=0.45, camber=0.04, thickness=0.05, angle_of_attack_deg=-4.0, …) -> Mesh; create_catenary_cable(start=(0, 0, 0), end=(10, 0, 0), sag=1.2, radius=0.03, segments=16, …) -> Mesh; create_character(name='Human', height=1.78, gender_beta=0.0, position=(0.0, 0.0, 0.0), **kwargs) -> StudioHuman; create_cone(radius=1.0, height=2.0, segments=24, color=None, material=None, …) -> Mesh; create_cube(*args, **kwargs) -> Mesh; create_curved_building(width=18.0, depth=18.0, floors=6, curvature=0.85, superellipse_exponent=2.4, …) -> Mesh; create_cylinder(radius_top=1.0, radius_bottom=1.0, height=2.0, segments=24, color=None, …) -> Mesh; create_envelope(bounds=(1.0, 0.3, 1.5), crown=0.25, slope=0.3, center_dip=0.0, grid=(16, 16), …) -> Mesh; create_form(bounds=(1.0, 1.0, 1.0), curvature=0.0, bevel=0.02, axis_of_revolution=None, crown=0.25, …) -> Mesh; create_human(role='scale_figure', height=1.76, gender_beta=0.0, pose='standing_survey', position=(0.0, 0.0, 0.0), …) -> Human; create_hydraulic_actuator(anchor_a, anchor_b, barrel_radius=0.035, rod_radius=0.02, rod_extension_ratio=0.45, …) -> Mesh; create_intake_strainer(center, normal=(0.0, 0.0, 1.0), radius=0.24, ring_count=3, spoke_count=4, …) -> Mesh; create_ivy(root=(0.0, 0.0, 0.0), obstacle_min=(-4.0, 0.0, -4.0), obstacle_max=(4.0, 6.0, 4.0), max_steps=60, cling_distance=None, …) -> Mesh; create_lathe(profile, segments=32, total_angle_rad=None, color=None, material=None, …) -> Mesh (+38 more)
+sb functions (import scratchbox as sb): benchmark_massing(plan, benchmark, crown=None) -> Dict[str, Any]; create_arched_blister(bounds=(0.35, 0.45, 0.9), arch_radius=0.4, swell=0.08, side=1.0, grid=(16, 8), …) -> Mesh; create_beveled_box(size=(1.0, 1.0, 1.0), bevel=0.02, color=None, material=None, **kwargs) -> Mesh; create_box(*args, **kwargs) -> Mesh; create_building(width=18.0, depth=14.0, floors=4, floor_height=3.4, ground_floor_height=4.2, …) -> Mesh; create_building_parts(width=18.0, depth=14.0, floors=4, floor_height=3.4, ground_floor_height=4.2, …) -> _BuildingParts; create_cambered_foil(span=1.8, chord=0.45, camber=0.04, thickness=0.05, angle_of_attack_deg=-4.0, …) -> Mesh; create_catenary_cable(start=(0, 0, 0), end=(10, 0, 0), sag=1.2, radius=0.03, segments=16, …) -> Mesh; create_character(name='Human', height=1.78, gender_beta=0.0, position=(0.0, 0.0, 0.0), **kwargs) -> StudioHuman; create_cone(radius=1.0, height=2.0, segments=24, color=None, material=None, …) -> Mesh; create_cube(*args, **kwargs) -> Mesh; create_curved_building(width=18.0, depth=18.0, floors=6, curvature=0.85, superellipse_exponent=2.4, …) -> Mesh; create_cylinder(radius_top=1.0, radius_bottom=1.0, height=2.0, segments=24, color=None, …) -> Mesh; create_envelope(bounds=(1.0, 0.3, 1.5), crown=0.25, slope=0.3, center_dip=0.0, grid=(16, 16), …) -> Mesh; create_form(bounds=(1.0, 1.0, 1.0), curvature=0.0, bevel=0.02, axis_of_revolution=None, crown=0.25, …) -> Mesh; create_human(role='scale_figure', height=1.76, gender_beta=0.0, pose='standing_survey', position=(0.0, 0.0, 0.0), …) -> Human; create_hydraulic_actuator(anchor_a, anchor_b, barrel_radius=0.035, rod_radius=0.02, rod_extension_ratio=0.45, …) -> Mesh; create_intake_strainer(center, normal=(0.0, 0.0, 1.0), radius=0.24, ring_count=3, spoke_count=4, …) -> Mesh; create_ivy(root=(0.0, 0.0, 0.0), obstacle_min=(-4.0, 0.0, -4.0), obstacle_max=(4.0, 6.0, 4.0), max_steps=60, cling_distance=None, …) -> Mesh; create_lathe(profile, segments=32, total_angle_rad=None, color=None, material=None, …) -> Mesh (+39 more)
 sb.geometry.Mesh: attributes: name: str, material: PbrMaterial, has_uv1: bool, vertex_count: int (read-only), triangle_count: int (read-only), bounds: AABB (read-only), vertices: list[Vertex] (read-only), indices: list[int] (read-only); Mesh(); Mesh(name='mesh'); get_positions_flat() -> bytes; get_normals_flat() -> bytes; get_indices_bytes() -> bytes; add_vertex(pos: Vec3, norm: Vec3=..., uv: Vec2=..., color: Vec4=...); add_triangle(i0, i1, i2); append(other) -> Mesh; translate(*args) -> Mesh; scale(*args) -> Mesh; rotate_x(angle_deg) -> Mesh; rotate_y(angle_deg) -> Mesh; rotate_z(angle_deg) -> Mesh; set_color(color: Vec4) -> Mesh; multiply_vertex_colors(factor: Vec4) -> Mesh; set_material(mat) -> Mesh; apply_material(mat) -> Mesh; compute_curvature_ao(intensity=0.65) -> Mesh; apply_procedural_weathering(frequency=2.0, amplitude=0.15) -> Mesh; displace_along_normals(frequency=2.0, amplitude=0.05) -> Mesh; tessellate_and_displace(tessellation_factor=4, displacement_scale=0.06, noise_freq=32.0, noise_amp=0.015) -> Mesh; clear() (+32 more)
 sb.math.Vec3: attributes: x: float, y: float, z: float; Vec3(); Vec3(x, y, z); length() -> float; normalized() -> Vec3; dot(arg: Vec3) -> float; cross(arg: Vec3) -> Vec3
 sb.PbrMaterial: attributes: base_color: Vec4, clearcoat: float, clearcoat_roughness: float, color: Vec4, double_sided: bool, emissive: Vec3, emissive_intensity: float, extras_json: str, ior: float, metallic: float, metalness: float, name: str, roughness: float, thickness: float, transmission: float; PbrMaterial(name='defaultMaterial', **kwargs) -> PbrMaterial; PbrMaterial.asphalt_street() -> PbrMaterial; PbrMaterial.basalt_rock() -> PbrMaterial; PbrMaterial.carbon_composite() -> PbrMaterial (+22 more)
@@ -194,7 +189,7 @@ sb.architecture: attributes: RomanOrder, BuildingConfig, RoofType; _Architecture
 sb.constants: attributes: OUTPUT_GLB_PATH (read-only)
 sb.human: attributes: Any, Armature, CANONICAL_22_BONES, FACS_52_ACTION_UNITS, GenderMorph, Human, PoseBone, PrincipledBsdfMaterial, SbHumanModel, ShapeKeyBlock, ShapeKeys, Skeleton, StudioHuman, Union; _human_namespace.create(name='Human', height=1.78, gender_beta=0.0, position=(0.0, 0.0, 0.0), **kwargs) -> StudioHuman (+2 more)
 sb.layout: attributes: SpatialConstraintSolver (read-only) (+2 more)
-Also in the API (not listed here): sb.nature; sb.pbr; sb.validation; sb.composer.StudioLight; sb.Armature; …
+Also in the API (not listed here): sb.nature; sb.pbr; sb.validation; sb.Shot; sb.composer.StudioLight; sb.Armature; …
 `;
 
 /** Names each module and class of the stubs defines (classes by their short name), for the type-check gate's
@@ -868,6 +863,31 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "get",
         "key_blocks"
     ],
+    "Shot": [
+        "aspect",
+        "depth",
+        "detail_px",
+        "focal_mm",
+        "focal_px",
+        "forward",
+        "frame_point",
+        "height_px",
+        "horizontal_fov_deg",
+        "member_m",
+        "min_feature_m",
+        "name",
+        "pixels",
+        "position",
+        "resolves",
+        "right",
+        "sees",
+        "sensor_width_mm",
+        "target",
+        "to_dict",
+        "up",
+        "vertical_fov_deg",
+        "width_px"
+    ],
     "Skeleton": [
         "find_joint",
         "get_joint_rotation",
@@ -1157,6 +1177,7 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "Scene",
         "ShapeKeyBlock",
         "ShapeKeys",
+        "Shot",
         "Structure",
         "StudioHuman",
         "Terrain",
@@ -1233,6 +1254,8 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "rig",
         "sdf",
         "shaper",
+        "shot",
+        "shot_plan",
         "site",
         "site_colors",
         "site_crown",
@@ -1359,6 +1382,25 @@ export const SB_API_INDEX: Record<string, readonly string[]> = {
         "math",
         "part_material",
         "validate"
+    ],
+    "scratchbox.shot_plan": [
+        "Any",
+        "Dict",
+        "List",
+        "Optional",
+        "Point",
+        "Sequence",
+        "Shot",
+        "Tuple",
+        "declared_shots",
+        "json",
+        "math",
+        "member_m",
+        "min_feature_m",
+        "os",
+        "resolves",
+        "shot",
+        "shots_path"
     ],
     "scratchbox.structure": [
         "Any",
@@ -1709,6 +1751,7 @@ export const SB_API_CLASS_PATHS: Record<string, string> = {
     "Scene": "sb.Scene",
     "SensorPassesOptions": "sb.core.SensorPassesOptions",
     "SensorPassesResult": "sb.core.SensorPassesResult",
+    "Shot": "sb.Shot",
     "SpatialConstraintSolver": "sb.composer.SpatialConstraintSolver",
     "SpecError": "sb.object_spec.SpecError",
     "Structure": "sb.Structure",

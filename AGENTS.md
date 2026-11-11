@@ -60,6 +60,7 @@ These rules are for coding agents changing this repository. The in-app chat mode
 8. **Modular packs.**
    - **Tools:** in-app Gemini tools live in domain packs under `packages/core/src/node/gemini/tools/`. `tool-registry.ts` only orchestrates; never add declarations or handlers there.
    - **Viewport operators:** they live in `packages/core/src/browser/generative-canvas/services/operators/`; `direct-dispatch-operator-engine.ts` only routes.
+9. **Scenes built for a shot.** A script that declares its camera (`sb.shot`; `scratchbox/shot_plan.py`: position, target, lens and frame, all measurements) opens on that camera with its lens, is reviewed through it (`visual-review.ts` `renderShotView`) and is measured against it (`common/spatial/shot-detail-budget.ts`: the share of in-frame triangles whose longest edge is under the shot's detail budget, 2 px by default, in every declared shot, and the parts that hold them). The budget is reported to the builder, never a gate: `execute_3d_python_script` returns it and says which parts to build coarser. With no shot declared the engine frames the model itself. Haze that thins with height is one expression on both sides (`common/spatial/height-haze.ts`; the aerial perspective pass, `atmosphere_configure_scene` `hazeScaleHeightMeters`), set only on request (rule 6).
 
 ## 4. Product behaviour (enforced in code; keep the code and this summary in step)
 

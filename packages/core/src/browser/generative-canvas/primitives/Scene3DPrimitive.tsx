@@ -177,7 +177,7 @@ import { MAX_BLUR_RADIUS_FRAME_FRACTION, ViewportOpticsChain } from './scene3d/v
 import { ViewportFocusController, pinholeNdcToDisplayedNdc, viewAxisDepth } from './scene3d/viewportFocus';
 import { CameraSettingsControl } from './scene3d/CameraSettingsControl';
 import type { SetCameraLensParams } from '../services/operators/lighting-camera-operators';
-import { keepsStoredPose, lensCommands, liveViewMatches, runCameraCommands, withLivePose, type CameraCommand, type Vec3 } from './scene3d/cameraSettings';
+import { keepsPoseForGeneratedModel, lensCommands, liveViewMatches, runCameraCommands, withLivePose, type CameraCommand, type Vec3 } from './scene3d/cameraSettings';
 import { syncObjectMaterial } from './scene3d/materialOverride';
 import { TreeLodController, findShadowCamera, formatTreeLodStats, type TreeLodFrame } from './scene3d/treeLod/TreeLodController';
 import { countSceneTriangles, sharedTreeBudgetEnabled, type SceneTriangleShare } from './scene3d/treeLod/sceneTriangleShare';
@@ -3181,7 +3181,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                 // The first model of a mount (a reload) opens on a saved pose, or the pose a lens was set for (its
                 // focus distance is measured from there); calculateStandoffCamera still re-frames a pose inside the
                 // geometry. New generated content re-frames.
-                const keepPose = !generatedFramedOnceRef.current && keepsStoredPose(sceneDataRef.current.camera);
+                const keepPose = keepsPoseForGeneratedModel(sceneDataRef.current.camera, sceneDataRef.current.shots, !generatedFramedOnceRef.current);
                 generatedFramedOnceRef.current = true;
                 const bounds = computeSceneGeometryBounds(stack.scene);
                 const autoFrame = calculateStandoffCamera(bounds, sceneDataRef.current.camera, {
@@ -3552,7 +3552,7 @@ export const Scene3DPrimitive: React.FC<Scene3DPrimitiveProps> = ({
                         if (Number.isFinite(sphere.radius) && sphere.radius > 0) setGeneratedContentRadius(Number(sphere.radius.toPrecision(2)));
                     }
                     // As for its base64 copy (effect 5b): the first model of a mount keeps a saved pose or a lens's pose.
-                    const keepPose = isGeneratedHero && !generatedFramedOnceRef.current && keepsStoredPose(sceneDataRef.current.camera);
+                    const keepPose = isGeneratedHero && keepsPoseForGeneratedModel(sceneDataRef.current.camera, sceneDataRef.current.shots, !generatedFramedOnceRef.current);
                     if (attach && isGeneratedHero) generatedFramedOnceRef.current = true;
                     if (attach) autoFrameIfNeeded(isGeneratedHero && !keepPose);
                 },
