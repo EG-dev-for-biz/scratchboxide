@@ -268,8 +268,11 @@ export interface ModelAnswerProvenance {
     modelUsed: string;
     /** Set when modelUsed differs from requestedModel: each model that was skipped and why. */
     fallbackReason?: string;
-    /** 'vertex' (Google Cloud service account, Vertex AI) or 'api-key' (Gemini API key, AI Studio). */
-    credential: 'vertex' | 'api-key';
+    /**
+     * 'vertex' (Google Cloud service account, Vertex AI) or 'api-key' (Gemini API key, AI Studio); for a chat on Claude
+     * or an OpenAI model, that provider's API key.
+     */
+    credential: 'vertex' | 'api-key' | 'anthropic-api-key' | 'openai-api-key';
     /** Set when a service account is configured but the API key answered: why Vertex was not used. */
     credentialNote?: string;
     /**

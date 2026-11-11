@@ -124,6 +124,9 @@ export const SERVER_SECRET_ALLOWLIST = [
     'SCRATCHBOX_VERTEX_LOCATION',
     'GOOGLE_SERVICE_ACCOUNT_JSON',
     'GOOGLE_OAUTH_CLIENT_ID',
+    // the chat's Claude and OpenAI models (chat-agent/provider-credentials.ts); a key saved in Settings comes first
+    'ANTHROPIC_API_KEY',
+    'OPENAI_API_KEY',
     // the hosted Scratchbox Studio MCP (scratchbox.ai): Style DNA reference images for object builds
     'SCRATCHBOX_MCP_ENDPOINT',
     'SCRATCHBOX_MCP_SECRET',

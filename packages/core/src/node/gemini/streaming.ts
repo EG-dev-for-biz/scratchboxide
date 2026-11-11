@@ -8,7 +8,7 @@
  ********************************************************************************/
 import * as fs from 'fs';
 import { modelImage } from './model-image';
-import type { FunctionCall, Part } from '@google/genai';
+import type { Part } from '@google/genai';
 import type {
     GeminiGenerateRequest,
     GeminiGenerateResponse,
@@ -58,6 +58,13 @@ import * as path from 'path';
 import { deliverablePathsFromResult, deriveCriteria, filesToReview, formatReviewFeedback, formatReviewNotice, gateScratchDir, gateStopReason, measureDeliverable, qualityGateEnabled, reviewDeliverables, reviewFailed } from './quality-gate';
 import { resolveRepoRoot } from './tools/nano-banana-tools';
 import { ChatTurnTimer } from './chat-turn-telemetry';
+import type { ToolDeclaration } from './tools/types';
+import { CHAT_PROVIDER_KEY_HINT, CHAT_PROVIDER_LABEL, providerForChatModel } from '../../common/chat-models';
+import type { AgentImage, AgentToolCall, AgentToolResult, ChatSession, TurnOutcome, TurnSink } from '../chat-agent/agent-turn';
+import { buildChatPrompt, effortForThinkingBudget } from '../chat-agent/chat-prompt';
+import { AnthropicChatSession } from '../chat-agent/anthropic-session';
+import { OpenAIChatSession } from '../chat-agent/openai-session';
+import { ProviderCredentials, type KeyedProvider } from '../chat-agent/provider-credentials';
 
 export type StreamEventSink = (event: GeminiStreamEvent) => void;
 
@@ -83,6 +90,10 @@ export interface StreamingEngineOptions {
     executeSubagentTask: (request: SubagentRequest) => Promise<SubagentResponse>;
     /** Override for artifact synthesis (defaults to `parseOrSynthesizeArtifact`). */
     synthesizeArtifact?: ArtifactSynthesizer;
+    /** Keys for the chat's Claude and OpenAI models (defaults to Settings' key store, then the environment). */
+    providerCredentials?: ProviderCredentials;
+    /** Test hook: the fetch the Claude and OpenAI SDKs use (recorded streams; tests never bill). */
+    providerFetch?: typeof fetch;
 }
 
 type UsageMetadata = NonNullable<GeminiStreamEvent['usage']> & Record<string, unknown>;
@@ -244,6 +255,8 @@ interface TurnAttemptState {
     authAt?: number;
     /** Set when a router took part in the first model call (fast-router.ts): who chose the first tool, and why. */
     routing?: string;
+    /** Set when the provider served the turn on another model (Claude's server-side refusal fallback). */
+    servedBy?: string;
 }
 
 /**
@@ -261,6 +274,8 @@ export class StreamingEngine {
     private readonly synthesizeArtifact: ArtifactSynthesizer;
     /** Explicit context caches of the chat's stable prefix, per model (context-cache.ts). */
     readonly contextCache = new ContextCacheManager(() => resolveFetch());
+    private readonly providerCredentials: ProviderCredentials;
+    private readonly providerFetch?: typeof fetch;
 
     constructor(options: StreamingEngineOptions) {
         this.client = options.client;
@@ -271,6 +286,8 @@ export class StreamingEngine {
         this.toolContext = options.toolContext;
         this.executeSubagentTask = options.executeSubagentTask;
         this.synthesizeArtifact = options.synthesizeArtifact || parseOrSynthesizeArtifact;
+        this.providerCredentials = options.providerCredentials || new ProviderCredentials();
+        this.providerFetch = options.providerFetch;
     }
 
     /**
@@ -305,6 +322,14 @@ export class StreamingEngine {
     ): Promise<GeminiGenerateResponse> {
         const turnStartedAt = Date.now();
         throwIfAborted(signal);
+
+        // The chat runs on the provider of the model the chat picked (common/chat-models.ts); Claude and OpenAI models
+        // take their own key and the same agent loop (runAgentLoop). Vertex agent interactions stay on Gemini.
+        const requestedModel = request.model || this.client.preferredModel;
+        const provider = providerForChatModel(requestedModel);
+        if (provider !== 'gemini' && !request.agent) {
+            return this.streamProviderGenerate(provider, requestedModel, request, onEvent, signal, turnStartedAt);
+        }
 
         // Vertex (service account) is preferred; the Gemini API key answers when there is no service account, or when
         // one is configured but cannot issue a token. The second case is a credential fallback, so it is recorded
@@ -348,37 +373,7 @@ export class StreamingEngine {
         // Helper calls of this turn that did not run on their requested model or on the service account (shown on the reply).
         const helperNotes: string[] = [];
 
-        // Run subagent preprocessing if requested and there are complex multi-skills attached
-        if (request.enableSubagentPreprocess && request.attachedSkills && request.attachedSkills.length > 1) {
-            try {
-                onEvent({
-                    type: 'subagent_start',
-                    text: 'Subagent analyzing attached skills and formulating strategic approach...'
-                });
-                const subagentRes = await this.executeSubagentTask({
-                    taskType: 'preprocess',
-                    prompt: `Prioritize skills and structure initial guidance for prompt: "${request.prompt}"`,
-                    attachedSkills: request.attachedSkills,
-                    attachedMcpTools: request.attachedMcpTools
-                });
-                onEvent({
-                    type: 'subagent_done',
-                    text: subagentRes.result,
-                    subagentResult: subagentRes
-                });
-                const note = describeHelperProvenance('Skill preprocessing', subagentRes.modelProvenance);
-                if (note) {
-                    helperNotes.push(note);
-                    onEvent({ type: 'status', text: note });
-                }
-            } catch (err) {
-                // Preprocessing is advisory; the turn goes on without it, and the reply says so.
-                const note = `Skill preprocessing failed (${summarizeModelError(err)}); answered without it`;
-                helperNotes.push(note);
-                onEvent({ type: 'subagent_done', text: `${note}.` });
-                onEvent({ type: 'status', text: `${note}.` });
-            }
-        }
+        await this.runSubagentPreprocess(request, onEvent, helperNotes);
 
         throwIfAborted(signal);
         const attempt: TurnAttemptState = { modelResponded: false, helperNotes, startedAt: turnStartedAt, authAt };
@@ -434,6 +429,41 @@ export class StreamingEngine {
             throw err;
         }
         return { ...response, modelProvenance: provenanceFor(response.modelUsed) };
+    }
+
+    /** Subagent preprocessing of several attached skills (advisory: the turn goes on without it, and the reply says so). */
+    private async runSubagentPreprocess(request: GeminiGenerateRequest, onEvent: StreamEventSink, helperNotes: string[]): Promise<void> {
+        // Run subagent preprocessing if requested and there are complex multi-skills attached
+        if (request.enableSubagentPreprocess && request.attachedSkills && request.attachedSkills.length > 1) {
+            try {
+                onEvent({
+                    type: 'subagent_start',
+                    text: 'Subagent analyzing attached skills and formulating strategic approach...'
+                });
+                const subagentRes = await this.executeSubagentTask({
+                    taskType: 'preprocess',
+                    prompt: `Prioritize skills and structure initial guidance for prompt: "${request.prompt}"`,
+                    attachedSkills: request.attachedSkills,
+                    attachedMcpTools: request.attachedMcpTools
+                });
+                onEvent({
+                    type: 'subagent_done',
+                    text: subagentRes.result,
+                    subagentResult: subagentRes
+                });
+                const note = describeHelperProvenance('Skill preprocessing', subagentRes.modelProvenance);
+                if (note) {
+                    helperNotes.push(note);
+                    onEvent({ type: 'status', text: note });
+                }
+            } catch (err) {
+                // Preprocessing is advisory; the turn goes on without it, and the reply says so.
+                const note = `Skill preprocessing failed (${summarizeModelError(err)}); answered without it`;
+                helperNotes.push(note);
+                onEvent({ type: 'subagent_done', text: `${note}.` });
+                onEvent({ type: 'status', text: `${note}.` });
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -612,12 +642,20 @@ export class StreamingEngine {
         attempt: TurnAttemptState = { modelResponded: false, helperNotes: [] }
     ): Promise<GeminiGenerateResponse> {
         const turnStartedAt = attempt.startedAt ?? Date.now();
-        const url = auth.type === 'vertex'
-            ? this.client.vertexModelUrl(auth.projectId, model, 'streamGenerateContent')
-            : `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(auth.apiKey)}`;
+        await this.compactHistory(request, onEvent, attempt);
+        const historyAt = Date.now();
+        const built = await this.buildFirstCallPayload(request, model);
+        const payloadAt = Date.now();
+        const session = this.createGeminiSession(model, auth, request, built, onEvent, attempt, { turnStartedAt, historyAt, payloadAt });
+        return this.runAgentLoop(session, request, onEvent, signal, attempt);
+    }
 
-        // The summary of older turns is a helper call: when the API key answered it, or it failed and the older
-        // turns were dropped, the reply says so (helperNotes), not only a passing status line.
+    /**
+     * The summary of older turns is a helper call: when the API key answered it, or it failed and the older turns
+     * were dropped, the reply says so (helperNotes), not only a passing status line. It runs on Gemini whichever
+     * provider answers the chat (a helper call, like the image and vision tools).
+     */
+    private async compactHistory(request: GeminiGenerateRequest, onEvent: StreamEventSink, attempt: TurnAttemptState): Promise<void> {
         const addHelperNote = (note: string) => {
             if (!attempt.helperNotes.includes(note)) attempt.helperNotes.push(note);
             onEvent({ type: 'status', text: `${note}.` });
@@ -639,73 +677,94 @@ export class StreamingEngine {
             undefined,
             (dropped, error) => addHelperNote(`${dropped} earlier message${dropped === 1 ? ' was' : 's were'} left out of the context: summarizing them with ${DEFAULT_SUBAGENT_MODEL} failed (${summarizeModelError(error)})`)
         );
-        const historyAt = Date.now();
-        const built = await this.buildFirstCallPayload(request, model);
-        const payloadAt = Date.now();
-        const payload = built.payload;
-        // Tools loaded with load_tools in this conversation (tool-catalog.ts).
-        const loadedTools = new Set(request.loadedTools || []);
+    }
 
-        onEvent({
-            type: 'status',
-            text: 'Connected to Studio AI Engine with Thinking active...',
-            modelUsed: model
+    /** The function declarations offered to a provider other than Gemini (Google Search and code execution are Gemini's own). */
+    private functionDeclarationsFor(request: GeminiGenerateRequest): ToolDeclaration[] {
+        return (this.buildToolDeclarations(request) || []).flatMap(t => 'functionDeclarations' in t ? t.functionDeclarations : []);
+    }
+
+    /**
+     * A chat turn on Claude or an OpenAI model: the provider's key, then the same agent loop as Gemini's. The key
+     * comes from Settings or the secrets file (provider-credentials.ts); without one the turn fails with a message
+     * saying which key is missing and where to put it.
+     */
+    private async streamProviderGenerate(
+        provider: KeyedProvider,
+        model: string,
+        request: GeminiGenerateRequest,
+        onEvent: StreamEventSink,
+        signal: AbortSignal | undefined,
+        turnStartedAt: number
+    ): Promise<GeminiGenerateResponse> {
+        const credential = provider === 'anthropic' ? 'anthropic-api-key' as const : 'openai-api-key' as const;
+        const helperNotes: string[] = [];
+        const attempt: TurnAttemptState = { modelResponded: false, helperNotes, startedAt: turnStartedAt, currentModel: model };
+        const provenanceFor = (modelUsed: string): ModelAnswerProvenance => ({
+            requestedModel: model,
+            modelUsed,
+            ...(modelUsed !== model ? { fallbackReason: `${model} declined the request and the provider's server-side fallback answered` } : {}),
+            credential,
+            ...(helperNotes.length > 0 ? { helperNotes } : {})
         });
-
-        const fetchFn = resolveFetch();
-        // Rounds of tool calls before the run stops and asks to continue.
-        const maxTurns = request.maxTurns || 40;
-        let hitTurnLimit = false;
-        let awaitingUser = false;
-        let currentTurn = 0;
-        const modifiedFiles = new Set<string>();
-        let pendingGeometryVerification: GeometryVerificationOptions | undefined;
-        let verificationAttempts = 0;
-        const maxVerificationAttempts = 2;
-        // The quality gate (quality-gate.ts): the files this turn's tools made, the bar read from the request (set
-        // when the first file appears, before anything made is looked at), and the review rounds used.
-        const gateFiles: string[] = [];
-        let gateCriteria: Promise<string[]> | undefined;
-        let gateRounds = 0;
-        // the mean score of each failed review, and when the first review ran (gateStopReason's stall and time rules)
-        const gateMeans: number[] = [];
-        let gateStartedAt: number | undefined;
-        let gateClosed = !qualityGateEnabled() || request.mode === 'plan';
-        const gateRoots = (() => {
-            const repo = resolveRepoRoot();
-            const ws = this.toolContext(request).workspaceRoot;
-            return [...new Set([ws, repo, path.join(repo, 'public')].filter(Boolean))];
-        })();
-
-        let accumulatedText = '';
-        const accumulatedThoughts: string[] = [];
-        const mcpExecutions: McpExecutionState[] = [];
-        let accumulatedGroundingMetadata: GroundingMetadata | undefined;
-        let finalUsage: UsageMetadata | undefined;
-        let streamMountedArtifact: CanvasArtifact | undefined = undefined;
-        let streamQuestionCard: any = undefined;
-        let streamExecutionPlanCard: any = undefined;
-        let lastFinishReason: string | undefined;
-
-        const mergeGrounding = (g: GroundingMetadata): void => {
-            accumulatedGroundingMetadata = mergeGroundingMetadata(accumulatedGroundingMetadata, g);
+        const fail = (message: string): never => {
+            const err = new Error(message) as ErrorWithProvenance;
+            err.modelProvenance = { ...provenanceFor(model), noModelAnswered: true };
+            throw err;
         };
-
-        const headers: Record<string, string> = {
-            'Content-Type': 'application/json'
-        };
-        if (auth.type === 'vertex') {
-            headers['Authorization'] = `Bearer ${auth.token}`;
+        const apiKey = await this.providerCredentials.resolveKey(provider);
+        if (!apiKey) {
+            fail(`No ${CHAT_PROVIDER_LABEL[provider]} API key is configured, so ${model} cannot answer. Add the key in Settings > Models & AI, or set ${CHAT_PROVIDER_KEY_HINT[provider]} in ~/.scratchbox/secrets.json; or pick a model of another provider in the chat's model picker.`);
         }
+        if (request.requireGoogleSearch) {
+            fail(`@web needs Google Search grounding, which only Gemini models have; pick a Gemini model in the chat's model picker for @web, or remove @web to ask ${model}.`);
+        }
+        await this.runSubagentPreprocess(request, onEvent, helperNotes);
+        throwIfAborted(signal);
+        try {
+            await this.compactHistory(request, onEvent, attempt);
+            const prompt = await buildChatPrompt(request, this.promptServices());
+            const tools = () => this.functionDeclarationsFor(request);
+            const effort = effortForThinkingBudget(request.thinkingBudget ?? this.client.thinkingBudget);
+            const options = { apiKey: apiKey!, model, prompt, tools, effort, fetch: this.providerFetch };
+            const session: ChatSession = provider === 'anthropic' ? new AnthropicChatSession(options) : new OpenAIChatSession(options);
+            const response = await this.runAgentLoop(session, request, withProvenance(onEvent, () => provenanceFor(attempt.servedBy || model)), signal, attempt);
+            return { ...response, modelProvenance: provenanceFor(response.modelUsed) };
+        } catch (err) {
+            if (err instanceof Error && !provenanceOfError(err)) {
+                (err as ErrorWithProvenance).modelProvenance = { ...provenanceFor(attempt.servedBy || model), ...(attempt.modelResponded ? {} : { noModelAnswered: true }) };
+            }
+            throw err;
+        }
+    }
 
-        while (currentTurn < maxTurns) {
-            throwIfAborted(signal);
-            currentTurn++;
-            const turnDetectedToolCalls: FunctionCall[] = [];
-            /** What is left of the turn's image allowance (modelImageParts). */
-            const imageBudget = { left: MAX_MODEL_IMAGES_PER_TURN, bytesLeft: MAX_MODEL_IMAGE_TURN_BYTES };
-            let turnText = '';
+    /**
+     * Gemini's side of the agent loop: the streamGenerateContent payload (chat-payload.ts) and its contents with
+     * thought signatures, the fast router's race on the first call (fast-router.ts), the router's explicit context
+     * cache (context-cache.ts), and the [chat-turn] timings. The payload is built once and grows with each turn.
+     */
+    private createGeminiSession(
+        model: string,
+        auth: StreamAuth,
+        request: GeminiGenerateRequest,
+        built: BuiltChatPayload,
+        onEvent: StreamEventSink,
+        attempt: TurnAttemptState,
+        timings: { turnStartedAt: number; historyAt: number; payloadAt: number }
+    ): ChatSession {
+        const { turnStartedAt, historyAt, payloadAt } = timings;
+        const payload = built.payload;
+        const url = auth.type === 'vertex'
+            ? this.client.vertexModelUrl(auth.projectId, model, 'streamGenerateContent')
+            : `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(auth.apiKey)}`;
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (auth.type === 'vertex') headers['Authorization'] = `Bearer ${auth.token}`;
+        const fetchFn = resolveFetch();
+        let currentTimer: ChatTurnTimer | undefined;
 
+        onEvent({ type: 'status', text: 'Connected to Studio AI Engine with Thinking active...', modelUsed: model });
+
+        const streamTurn = async (sink: TurnSink, signal: AbortSignal | undefined, currentTurn: number): Promise<TurnOutcome> => {
             if (auth.type === 'vertex' && currentTurn > 1) {
                 // The token was taken when the turn started and lasts about an hour; a long tool call can outlive it.
                 // getAccessToken returns the cached token, refreshing it when it is close to expiry.
@@ -715,7 +774,6 @@ export class StreamingEngine {
                     // Keep the current token; if it has expired the request below reports the 401.
                 }
             }
-
             const timer = new ChatTurnTimer(turnStartedAt, {
                 ...built.shape,
                 model,
@@ -730,159 +788,22 @@ export class StreamingEngine {
                     payloadMs: payloadAt - turnStartedAt
                 } : {})
             });
-
-            // One tool call: run it under its deadline, show its result, and return the parts for the next call.
-            const runToolCall = async (toolCall: FunctionCall, callModel: string): Promise<{ modelPart: Part; responsePart: Part; imageParts?: Part[] }> => {
-                throwIfAborted(signal);
-                const toolName = toolCall.name || '';
-                const rawToolCall = toolCall as any;
-                // A thought signature belongs to the model that wrote it; a call the router wrote is sent to the chat
-                // model without one (the explicit skip sentinel). Within one model turn, only the first of several
-                // function calls carries its own signature (Gemini signs the turn's thought once, not every call) —
-                // the rest genuinely have none, so the field is left off rather than filled with the skip sentinel:
-                // mixing a real signature and the skip sentinel across calls in the same turn is what Vertex rejected
-                // as "Requests ending with a model turn are not supported" (its content-validator discards the whole
-                // malformed turn, which from the outside looks like the conversation ending on a model turn).
-                const realSig = callModel === model && (rawToolCall.thought_signature || rawToolCall.thoughtSignature);
-                const sig = realSig || (callModel !== model ? 'skip_thought_signature_validator' : undefined);
-                const modelPart = {
-                    functionCall: {
-                        name: toolName,
-                        args: toolCall.args || {}
-                    },
-                    ...(sig ? { thought_signature: sig } : {})
-                } as any as Part;
-
-                if (toolName === 'workspace_write_file' || toolName === 'workspace_apply_diff') {
-                    const fp = (toolCall.args as any)?.filePath;
-                    if (typeof fp === 'string') {
-                        modifiedFiles.add(fp);
-                    }
-                }
-
-                const { exec, resultPayload } = await this.executeToolCallWithDeadline({ id: toolCall.id, name: toolName, args: toolCall.args }, request, onEvent, model, signal);
-                mcpExecutions.push(exec);
-
-                if (exec.status === 'completed') {
-                    const geomInput = extractGeometryVerificationInput(resultPayload);
-                    if (geomInput) {
-                        pendingGeometryVerification = geomInput;
-                    }
-                    if (!gateClosed) {
-                        for (const file of deliverablePathsFromResult(resultPayload, gateRoots)) {
-                            if (!gateFiles.includes(file)) gateFiles.push(file);
-                        }
-                        if (gateFiles.length && !gateCriteria) {
-                            gateCriteria = deriveCriteria(this.client, request.prompt);
-                            gateCriteria.catch(() => undefined);
-                        }
-                    }
-                }
-
-                if (toolName === 'mount_canvas_primitive' || (resultPayload && (resultPayload as any).artifact)) {
-                    const mountedArtifact: CanvasArtifact | undefined = (resultPayload as any)?.artifact
-                        ? continueTurnArtifact(streamMountedArtifact, (resultPayload as any).artifact as CanvasArtifact)
-                        : undefined;
-                    if (mountedArtifact) {
-                        // The model reads the result too: it names the artifact by the id the canvas shows.
-                        (resultPayload as any).artifact = mountedArtifact;
-                        request.activeArtifact = mountedArtifact;
-                        streamMountedArtifact = mountedArtifact;
-                        onEvent({ type: 'artifact_start', artifact: mountedArtifact, modelUsed: model });
-                        onEvent({ type: 'artifact_complete', artifact: mountedArtifact, modelUsed: model });
-                    }
-                }
-
-                if (toolName === 'ask_user_question' || (resultPayload && (resultPayload as any).questionCard)) {
-                    const questionCard = (resultPayload as any).questionCard;
-                    if (questionCard) {
-                        streamQuestionCard = questionCard;
-                        onEvent({ type: 'question_card', questionCard, modelUsed: model });
-                    }
-                }
-
-                if (toolName === 'present_execution_plan' || (resultPayload && (resultPayload as any).executionPlanCard)) {
-                    const executionPlanCard = (resultPayload as any).executionPlanCard;
-                    if (executionPlanCard) {
-                        streamExecutionPlanCard = executionPlanCard;
-                        onEvent({ type: 'execution_plan_card', executionPlanCard, modelUsed: model });
-                    }
-                }
-
-                if (resultPayload && Array.isArray((resultPayload as any).taskList)) {
-                    onEvent({ type: 'task_list', taskList: (resultPayload as any).taskList, modelUsed: model });
-                }
-
-                if ((resultPayload as any)?.questionCard || (resultPayload as any)?.executionPlanCard) {
-                    awaitingUser = true;
-                }
-
-                const callId = toolCall.id || `call-${Date.now()}`;
-                const toolResult = { id: callId, name: toolName, result: resultPayload };
-                onEvent({ type: 'tool_result', mcpExecution: exec, toolResult, modelUsed: model });
-
-                if (toolName === LOAD_TOOLS_NAME && Array.isArray((resultPayload as any)?.loaded)) {
-                    // Loaded tools are appended after the entry set for the rest of the request (and sent back on
-                    // `done` so the conversation's next request offers them too).
-                    for (const name of (resultPayload as any).loaded as string[]) loadedTools.add(name);
-                    request.loadedTools = [...loadedTools];
-                    payload.tools = toolsForModel(this.buildToolDeclarations(request), model, request.requireGoogleSearch);
-                    built.shape.toolCount = functionDeclarationCount(payload.tools);
-                    built.shape.toolBytes = payload.tools ? JSON.stringify(payload.tools).length : 0;
-                }
-
-                // images a tool shows the model (resultPayload.modelImages): sent as images after the tool responses, not as JSON
-                const shown = modelImageParts(toolName, resultPayload, imageBudget);
-                return {
-                    modelPart,
-                    responsePart: {
-                        functionResponse: {
-                            name: toolName,
-                            response: {
-                                name: toolName,
-                                content: toolResultForModel(toolName, exec, shown.payload)
-                            }
-                        }
-                    } as Part,
-                    ...(shown.parts.length ? { imageParts: shown.parts } : {})
-                };
-            };
-
-            // Tools start as soon as their functionCall part arrives, one after another in the order the model wrote
-            // them; the rest of the stream (usage, closing text) does not hold them up.
-            const toolRuns: Array<Promise<{ modelPart: Part; responsePart: Part; imageParts?: Part[] }>> = [];
-            let toolChain: Promise<unknown> = Promise.resolve();
-            const startTool = (toolCall: FunctionCall, callModel: string) => {
-                const run = toolChain.then(() => {
-                    timer.toolStarted();
-                    return runToolCall(toolCall, callModel);
-                });
-                toolChain = run.catch(() => undefined);
-                toolRuns.push(run);
-            };
+            currentTimer = timer;
+            let turnText = '';
+            const calls: AgentToolCall[] = [];
+            let usage: UsageMetadata | undefined;
+            let finishReason: string | undefined;
+            let routing: string | undefined;
             const handleLine = (line: string, lineModel: string) => {
                 timer.firstByte();
                 const parsed = parseSseDataLine(line);
                 if (!parsed) return;
-                const before = turnDetectedToolCalls.length;
-                this.processChunk(
-                    parsed as VertexGenerateContentJson,
-                    accumulatedThoughts,
-                    turnDetectedToolCalls,
-                    lineModel,
-                    onEvent,
-                    chunkText => {
-                        accumulatedText += chunkText;
-                        turnText += chunkText;
-                    },
-                    usage => { finalUsage = usage; },
-                    mergeGrounding,
-                    reason => { lastFinishReason = reason; }
-                );
-                for (const call of turnDetectedToolCalls.slice(before)) {
-                    timer.functionCall(call.name || '');
-                    startTool(call, lineModel);
-                }
+                this.processChunk(parsed as VertexGenerateContentJson, lineModel, {
+                    text: (delta, m) => { turnText += delta; sink.text(delta, m); },
+                    thought: (delta, m) => sink.thought(delta, m),
+                    grounding: (g, m) => sink.grounding?.(g, m),
+                    toolCall: call => { calls.push(call); timer.functionCall(call.name); sink.toolCall(call); }
+                }, u => { usage = u; }, reason => { finishReason = reason; });
             };
             const startStream = (streamUrl: string, streamPayload: VertexStreamPayload, streamModel: string, useCache = false): StartStream => async (streamSignal, onLine) => {
                 // The router reads the stable prefix from an explicit context cache when one is ready
@@ -941,11 +862,10 @@ export class StreamingEngine {
                         signal: turnSignal
                     });
                     if (outcome.decidedBy === 'router') attempt.modelResponded = true;
-                    const routeNote = describeRouteOutcome(outcome, model);
-                    attempt.routing = routeNote;
-                    timer.routed(routeNote);
+                    routing = describeRouteOutcome(outcome, model);
+                    timer.routed(routing);
                     if (outcome.decidedBy === 'router') {
-                        onEvent({ type: 'status', text: `Routing: ${routeNote}.`, modelUsed: router.model });
+                        onEvent({ type: 'status', text: `Routing: ${routing}.`, modelUsed: router.model });
                     }
                 } else {
                     await startStream(url, payload, model)(signal ?? new AbortController().signal, line => handleLine(line, model));
@@ -954,11 +874,262 @@ export class StreamingEngine {
                 timer.log();
                 throw err;
             }
-            timer.usage(finalUsage as never, lastFinishReason);
+            timer.usage(usage as never, finishReason);
             timer.log();
 
+            // The model turn as sent back: its text, then each call with its thought signature. A signature belongs to
+            // the model that wrote it; a call the router wrote is sent to the chat model without one (the explicit skip
+            // sentinel). Within one model turn, only the first of several function calls carries its own signature
+            // (Gemini signs the turn's thought once, not every call) — the rest genuinely have none, so the field is
+            // left off rather than filled with the skip sentinel: mixing a real signature and the skip sentinel across
+            // calls in the same turn is what Vertex rejected as "Requests ending with a model turn are not supported"
+            // (its content-validator discards the whole malformed turn, which from the outside looks like the
+            // conversation ending on a model turn).
+            const modelParts: Part[] = [];
+            if (turnText) modelParts.push({ text: turnText });
+            for (const call of calls) {
+                const realSig = call.callModel === model && call.meta?.thoughtSignature;
+                const sig = realSig || (call.callModel !== model ? 'skip_thought_signature_validator' : undefined);
+                modelParts.push({ functionCall: { name: call.name, args: call.args }, ...(sig ? { thought_signature: sig } : {}) } as any as Part);
+            }
+            if (modelParts.length > 0) payload.contents.push({ role: 'model', parts: modelParts });
+            return { text: turnText, toolCalls: calls, finishReason, usage, routing };
+        };
+
+        return {
+            provider: 'gemini',
+            model,
+            streamTurn,
+            addToolResults: results => {
+                // A tool's own images go in a separate user turn right after the function responses: mixed into the
+                // same content as the functionResponse parts, Vertex rejected the whole request as "Requests ending
+                // with a model turn are not supported" even though the array's last role genuinely was 'user' — its
+                // function-response turn parser seems to expect that content to hold only functionResponse parts.
+                payload.contents.push({
+                    role: 'user',
+                    parts: results.map(r => ({ functionResponse: { name: r.call.name, response: { name: r.call.name, content: r.content } } }) as Part)
+                });
+                const imageParts = results.flatMap(r => r.images.flatMap(img => [{ text: img.label } as Part, { inlineData: { mimeType: img.mimeType, data: img.data } } as Part]));
+                if (imageParts.length) payload.contents.push({ role: 'user', parts: imageParts });
+            },
+            addUserText: text => { payload.contents.push({ role: 'user', parts: [{ text }] }); },
+            addAssistantText: text => { payload.contents.push({ role: 'model', parts: [{ text }] }); },
+            refreshTools: () => {
+                payload.tools = toolsForModel(this.buildToolDeclarations(request), model, request.requireGoogleSearch);
+                built.shape.toolCount = functionDeclarationCount(payload.tools);
+                built.shape.toolBytes = payload.tools ? JSON.stringify(payload.tools).length : 0;
+            },
+            onToolStarted: () => currentTimer?.toolStarted()
+        };
+    }
+
+    /**
+     * The agent loop every provider runs: a model call, the tool calls it made (each under its deadline, shown as a
+     * card), their results back to the model, until the model answers without a tool call; then plan mode's
+     * plan_ready, agent mode's verification and self-healing turns, and the turn's artifact.
+     */
+    private async runAgentLoop(
+        session: ChatSession,
+        request: GeminiGenerateRequest,
+        onEvent: StreamEventSink,
+        signal: AbortSignal | undefined,
+        attempt: TurnAttemptState
+    ): Promise<GeminiGenerateResponse> {
+        const model = session.model;
+        // Tools loaded with load_tools in this conversation (tool-catalog.ts).
+        const loadedTools = new Set(request.loadedTools || []);
+        // Rounds of tool calls before the run stops and asks to continue.
+        const maxTurns = request.maxTurns || 40;
+        let hitTurnLimit = false;
+        let awaitingUser = false;
+        let currentTurn = 0;
+        const modifiedFiles = new Set<string>();
+        let pendingGeometryVerification: GeometryVerificationOptions | undefined;
+        let verificationAttempts = 0;
+        const maxVerificationAttempts = 2;
+        // The quality gate (quality-gate.ts): the files this turn's tools made, the bar read from the request (set
+        // when the first file appears, before anything made is looked at), and the review rounds used.
+        const gateFiles: string[] = [];
+        let gateCriteria: Promise<string[]> | undefined;
+        let gateRounds = 0;
+        // the mean score of each failed review, and when the first review ran (gateStopReason's stall and time rules)
+        const gateMeans: number[] = [];
+        let gateStartedAt: number | undefined;
+        let gateClosed = !qualityGateEnabled() || request.mode === 'plan';
+        const gateRoots = (() => {
+            const repo = resolveRepoRoot();
+            const ws = this.toolContext(request).workspaceRoot;
+            return [...new Set([ws, repo, path.join(repo, 'public')].filter(Boolean))];
+        })();
+
+        let accumulatedText = '';
+        const accumulatedThoughts: string[] = [];
+        const mcpExecutions: McpExecutionState[] = [];
+        let accumulatedGroundingMetadata: GroundingMetadata | undefined;
+        let finalUsage: UsageMetadata | undefined;
+        let streamMountedArtifact: CanvasArtifact | undefined = undefined;
+        let streamQuestionCard: any = undefined;
+        let streamExecutionPlanCard: any = undefined;
+        let lastFinishReason: string | undefined;
+        let modelUsed = model;
+
+        while (currentTurn < maxTurns) {
+            throwIfAborted(signal);
+            currentTurn++;
+            /** What is left of the turn's image allowance (collectModelImages). */
+            const imageBudget = { left: MAX_MODEL_IMAGES_PER_TURN, bytesLeft: MAX_MODEL_IMAGE_TURN_BYTES };
+
+            // One tool call: run it under its deadline, show its result, and return what the model reads of it.
+            const runToolCall = async (call: AgentToolCall): Promise<AgentToolResult> => {
+                throwIfAborted(signal);
+                const toolName = call.name || '';
+
+                if (toolName === 'workspace_write_file' || toolName === 'workspace_apply_diff') {
+                    const fp = (call.args as any)?.filePath;
+                    if (typeof fp === 'string') {
+                        modifiedFiles.add(fp);
+                    }
+                }
+
+                const invalidArguments = call.meta?.invalidArguments;
+                const { exec, resultPayload } = invalidArguments !== undefined
+                    ? failedToolResult(toolName, `The arguments of this call were not valid JSON, so it was not run: ${String(invalidArguments).slice(0, 500)}`, 'scratchbox-arguments')
+                    : await this.executeToolCallWithDeadline({ id: call.id || undefined, name: toolName, args: call.args }, request, onEvent, model, signal);
+                mcpExecutions.push(exec);
+
+                if (exec.status === 'completed') {
+                    const geomInput = extractGeometryVerificationInput(resultPayload);
+                    if (geomInput) {
+                        pendingGeometryVerification = geomInput;
+                    }
+                    if (!gateClosed) {
+                        for (const file of deliverablePathsFromResult(resultPayload, gateRoots)) {
+                            if (!gateFiles.includes(file)) gateFiles.push(file);
+                        }
+                        if (gateFiles.length && !gateCriteria) {
+                            gateCriteria = deriveCriteria(this.client, request.prompt);
+                            gateCriteria.catch(() => undefined);
+                        }
+                    }
+                }
+
+                if (toolName === 'mount_canvas_primitive' || (resultPayload && (resultPayload as any).artifact)) {
+                    const mountedArtifact: CanvasArtifact | undefined = (resultPayload as any)?.artifact
+                        ? continueTurnArtifact(streamMountedArtifact, (resultPayload as any).artifact as CanvasArtifact)
+                        : undefined;
+                    if (mountedArtifact) {
+                        // The model reads the result too: it names the artifact by the id the canvas shows.
+                        (resultPayload as any).artifact = mountedArtifact;
+                        request.activeArtifact = mountedArtifact;
+                        streamMountedArtifact = mountedArtifact;
+                        onEvent({ type: 'artifact_start', artifact: mountedArtifact, modelUsed: model });
+                        onEvent({ type: 'artifact_complete', artifact: mountedArtifact, modelUsed: model });
+                    }
+                }
+
+                if (toolName === 'ask_user_question' || (resultPayload && (resultPayload as any).questionCard)) {
+                    const questionCard = (resultPayload as any).questionCard;
+                    if (questionCard) {
+                        streamQuestionCard = questionCard;
+                        onEvent({ type: 'question_card', questionCard, modelUsed: model });
+                    }
+                }
+
+                if (toolName === 'present_execution_plan' || (resultPayload && (resultPayload as any).executionPlanCard)) {
+                    const executionPlanCard = (resultPayload as any).executionPlanCard;
+                    if (executionPlanCard) {
+                        streamExecutionPlanCard = executionPlanCard;
+                        onEvent({ type: 'execution_plan_card', executionPlanCard, modelUsed: model });
+                    }
+                }
+
+                if (resultPayload && Array.isArray((resultPayload as any).taskList)) {
+                    onEvent({ type: 'task_list', taskList: (resultPayload as any).taskList, modelUsed: model });
+                }
+
+                if ((resultPayload as any)?.questionCard || (resultPayload as any)?.executionPlanCard) {
+                    awaitingUser = true;
+                }
+
+                const callId = call.id || `call-${Date.now()}`;
+                const toolResult = { id: callId, name: toolName, result: resultPayload };
+                onEvent({ type: 'tool_result', mcpExecution: exec, toolResult, modelUsed: model });
+
+                if (toolName === LOAD_TOOLS_NAME && Array.isArray((resultPayload as any)?.loaded)) {
+                    // Loaded tools are appended after the entry set for the rest of the request (and sent back on
+                    // `done` so the conversation's next request offers them too).
+                    for (const name of (resultPayload as any).loaded as string[]) loadedTools.add(name);
+                    request.loadedTools = [...loadedTools];
+                    session.refreshTools();
+                }
+
+                // images a tool shows the model (resultPayload.modelImages): sent as images after the tool responses, not as JSON
+                const shown = collectModelImages(toolName, resultPayload, imageBudget);
+                return {
+                    call,
+                    content: toolResultForModel(toolName, exec, shown.payload),
+                    isError: toolResultFailed(exec, resultPayload),
+                    images: shown.images
+                };
+            };
+
+            // Tools start as soon as the session hands over their call (Gemini: as the functionCall part arrives), one
+            // after another in the order the model wrote them; the rest of the stream does not hold them up.
+            const toolRuns: Array<Promise<AgentToolResult>> = [];
+            let toolChain: Promise<unknown> = Promise.resolve();
+            const startTool = (call: AgentToolCall) => {
+                const run = toolChain.then(() => {
+                    session.onToolStarted?.();
+                    return runToolCall(call);
+                });
+                toolChain = run.catch(() => undefined);
+                toolRuns.push(run);
+            };
+            const sink: TurnSink = {
+                text: (delta, m) => {
+                    accumulatedText += delta;
+                    onEvent({ type: 'delta', text: delta, modelUsed: m });
+                },
+                thought: (delta, m) => {
+                    accumulatedThoughts.push(delta);
+                    onEvent({ type: 'thought', thought: delta, modelUsed: m });
+                },
+                grounding: (g, m) => {
+                    accumulatedGroundingMetadata = mergeGroundingMetadata(accumulatedGroundingMetadata, g);
+                    onEvent({ type: 'grounding', groundingMetadata: g, modelUsed: m });
+                    if (g.webSearchQueries && g.webSearchQueries.length > 0) {
+                        onEvent({ type: 'status', text: `Google Search Grounding active: ${g.webSearchQueries.join(', ')}`, modelUsed: m });
+                    }
+                },
+                toolCall: call => {
+                    const callObj = { id: call.id || `call-${Date.now()}`, name: call.name || '', args: call.args || {} };
+                    onEvent({ type: 'tool_call', toolCall: callObj, modelUsed: call.callModel || model });
+                    onEvent({ type: 'mcp_call', toolCall: callObj, modelUsed: call.callModel || model });
+                    startTool(call);
+                }
+            };
+
+            const outcome = await session.streamTurn(sink, signal, currentTurn);
+            attempt.modelResponded = true;
+            if (outcome.usage) finalUsage = outcome.usage as UsageMetadata;
+            lastFinishReason = outcome.finishReason;
+            if (outcome.routing) attempt.routing = outcome.routing;
+            if (outcome.servedBy) {
+                modelUsed = outcome.servedBy;
+                attempt.servedBy = outcome.servedBy;
+            }
+            const turnText = outcome.text;
+
+            if (outcome.stopNotice) {
+                // A refusal or a cut-off tool call: the turn ends with the reason, and no call of it runs.
+                const notice = `${accumulatedText ? '\n\n' : ''}${outcome.stopNotice}`;
+                accumulatedText += notice;
+                onEvent({ type: 'delta', text: notice, modelUsed });
+                break;
+            }
+
             // If no tools requested this turn, check for planning completion or verification
-            if (turnDetectedToolCalls.length === 0) {
+            if (outcome.toolCalls.length === 0) {
                 // In plan mode, emit plan_ready event
                 if (request.mode === 'plan') {
                     onEvent({
@@ -986,7 +1157,7 @@ export class StreamingEngine {
                     const geomSnapshot = pendingGeometryVerification;
                     pendingGeometryVerification = undefined;
 
-                    let outcome = hasCodeToVerify
+                    let verification = hasCodeToVerify
                         ? await verifier.verify({
                             workspaceRoot: toolCtx.workspaceRoot,
                             modifiedFiles: Array.from(modifiedFiles),
@@ -997,34 +1168,29 @@ export class StreamingEngine {
 
                     if (geomSnapshot) {
                         const geomOutcome = verifier.verifyGeometry(geomSnapshot);
-                        if (!outcome) {
-                            outcome = geomOutcome;
+                        if (!verification) {
+                            verification = geomOutcome;
                         } else {
-                            outcome = {
-                                ...outcome,
-                                passed: outcome.passed && geomOutcome.passed,
-                                summary: [outcome.summary, geomOutcome.summary].filter(Boolean).join('\n'),
+                            verification = {
+                                ...verification,
+                                passed: verification.passed && geomOutcome.passed,
+                                summary: [verification.summary, geomOutcome.summary].filter(Boolean).join('\n'),
                                 geometryVerification: geomOutcome.geometryVerification
                             };
                         }
                     }
 
-                    if (outcome) {
+                    if (verification) {
                         onEvent({
                             type: 'verification_result',
-                            verification: outcome,
+                            verification,
                             modelUsed: model
                         });
 
-                        if (!outcome.passed) {
+                        if (!verification.passed) {
                             // Diagnostic or geometry errors detected: initiate self-healing turn
-                            payload.contents.push({ role: 'model', parts: [{ text: turnText || accumulatedText }] });
-                            payload.contents.push({
-                                role: 'user',
-                                parts: [{
-                                    text: `[AUTOMATED VERIFICATION FEEDBACK]\n${outcome.summary || ''}\n\n${hasCodeToVerify ? 'Read the failing lines, find the cause, and fix it with workspace tools.' : 'Inspect the geometry failure and re-run the 3D generation or repair tool with valid non-degenerate parameters.'}`
-                                }]
-                            });
+                            if (!turnText) session.addAssistantText(accumulatedText);
+                            session.addUserText(`[AUTOMATED VERIFICATION FEEDBACK]\n${verification.summary || ''}\n\n${hasCodeToVerify ? 'Read the failing lines, find the cause, and fix it with workspace tools.' : 'Inspect the geometry failure and re-run the 3D generation or repair tool with valid non-degenerate parameters.'}`);
                             continue;
                         }
                     }
@@ -1053,8 +1219,9 @@ export class StreamingEngine {
                         const stopReason = gateStopReason(gateMeans, Date.now() - gateStartedAt);
                         // once the gate stops the agent only reports: no further review
                         if (stopReason) gateClosed = true;
-                        payload.contents.push({ role: 'model', parts: [{ text: claims || '(no reply text)' }] });
-                        payload.contents.push({ role: 'user', parts: [{ text: formatReviewFeedback(review, stopReason) }] });
+                        // The model's own turn is already in the session's transcript unless it was empty.
+                        if (!turnText) session.addAssistantText(claims || '(no reply text)');
+                        session.addUserText(formatReviewFeedback(review, stopReason));
                         continue;
                     }
                 }
@@ -1063,24 +1230,7 @@ export class StreamingEngine {
             }
 
             const results = await Promise.all(toolRuns);
-            const modelParts: Part[] = [];
-            if (turnText) {
-                modelParts.push({ text: turnText });
-            }
-            modelParts.push(...results.map(r => r.modelPart));
-            const toolResponseParts: Part[] = results.map(r => r.responsePart);
-            const imageParts: Part[] = results.flatMap(r => r.imageParts ?? []);
-
-            // Append assistant model turn with functionCalls and user turn with functionResponses. A tool's own
-            // images (modelImageParts) go in a separate user turn right after: mixed into the same content as the
-            // functionResponse parts, Vertex rejected the whole request as "Requests ending with a model turn are
-            // not supported" even though the array's last role genuinely was 'user' — its function-response turn
-            // parser seems to expect that content to hold only functionResponse parts.
-            payload.contents.push({ role: 'model', parts: modelParts });
-            payload.contents.push({ role: 'user', parts: toolResponseParts });
-            if (imageParts.length) {
-                payload.contents.push({ role: 'user', parts: imageParts });
-            }
+            session.addToolResults(results);
 
             // A question or plan card is a request for the user's decision: stop and wait for it.
             if (awaitingUser) {
@@ -1094,7 +1244,7 @@ export class StreamingEngine {
 
             onEvent({
                 type: 'status',
-                text: `Executed ${turnDetectedToolCalls.length} tool(s). Reasoning on turn ${currentTurn + 1}/${maxTurns}...`,
+                text: `Executed ${outcome.toolCalls.length} tool(s). Reasoning on turn ${currentTurn + 1}/${maxTurns}...`,
                 modelUsed: model
             });
         }
@@ -1108,8 +1258,8 @@ export class StreamingEngine {
         // Building an artifact from the prompt alone would present a template as if the model had made it.
         if (!accumulatedText.trim() && !streamMountedArtifact && !streamQuestionCard && !streamExecutionPlanCard) {
             const error = describeEmptyModelReply(lastFinishReason);
-            onEvent({ type: 'error', error, modelUsed: model });
-            return { success: false, error, text: '', thoughts: accumulatedThoughts, mcpExecutions, modelUsed: model, usage: finalUsage };
+            onEvent({ type: 'error', error, modelUsed });
+            return { success: false, error, text: '', thoughts: accumulatedThoughts, mcpExecutions, modelUsed, usage: finalUsage };
         }
 
         // Canvas artifacts come from mount_canvas_primitive or from a tag / JSON envelope the model wrote, in every
@@ -1132,7 +1282,7 @@ export class StreamingEngine {
             mcpExecution: mcpExecutions[0],
             groundingMetadata: accumulatedGroundingMetadata,
             usage: finalUsage,
-            modelUsed: model,
+            modelUsed,
             ...(loadedTools.size > 0 ? { loadedTools: [...loadedTools] } : {})
         };
         if (artifact) {
@@ -1147,7 +1297,7 @@ export class StreamingEngine {
             artifact,
             mcpExecutions,
             groundingMetadata: accumulatedGroundingMetadata,
-            modelUsed: model,
+            modelUsed,
             questionCard: streamQuestionCard,
             executionPlanCard: streamExecutionPlanCard,
             usage: finalUsage,
@@ -1308,15 +1458,12 @@ export class StreamingEngine {
         );
     }
 
+    /** One Gemini SSE chunk: its text, thoughts, grounding and function calls to the turn's sink. */
     private processChunk(
         chunk: VertexGenerateContentJson,
-        accumulatedThoughts: string[],
-        detectedToolCalls: FunctionCall[],
         model: string,
-        onEvent: StreamEventSink,
-        appendChunkText: (text: string) => void,
+        sink: Pick<TurnSink, 'text' | 'thought' | 'grounding' | 'toolCall'>,
         setUsage: (usage: UsageMetadata) => void,
-        setGroundingMetadata?: (metadata: GroundingMetadata) => void,
         setFinishReason?: (reason: string) => void
     ): void {
         if (chunk.usageMetadata) {
@@ -1331,30 +1478,21 @@ export class StreamingEngine {
             // Grounding Metadata from the Google Search Grounding tool
             const groundingMeta = cand.groundingMetadata || chunk.groundingMetadata;
             if (groundingMeta) {
-                setGroundingMetadata?.(groundingMeta);
-                onEvent({ type: 'grounding', groundingMetadata: groundingMeta, modelUsed: model });
-                if (groundingMeta.webSearchQueries && groundingMeta.webSearchQueries.length > 0) {
-                    onEvent({
-                        type: 'status',
-                        text: `Google Search Grounding active: ${groundingMeta.webSearchQueries.join(', ')}`,
-                        modelUsed: model
-                    });
-                }
+                sink.grounding?.(groundingMeta, model);
             }
 
             const parts = cand.content?.parts || [];
             for (const part of parts) {
                 if (part.thought) {
-                    accumulatedThoughts.push(part.text || '');
-                    onEvent({ type: 'thought', thought: part.text || '', modelUsed: model });
+                    sink.thought(part.text || '', model);
                 } else if (part.functionCall) {
                     const rawPart = part as any;
                     // Gemini signs a turn's thought once, not every call in it: only the first of several function
                     // calls in one candidate turn carries a real signature. Defaulting every signature-less call to
-                    // the skip sentinel (as this used to) made runToolCall's own real-vs-skip check always see a
+                    // the skip sentinel (as this used to) made the model turn's own real-vs-skip check always see a
                     // truthy value and never the genuine fallback, so a turn with one real signature and several
                     // sentinel ones went out as sent — which Vertex rejects ("Requests ending with a model turn are
-                    // not supported"). Leaving the field off when there is no real signature lets runToolCall decide
+                    // not supported"). Leaving the field off when there is no real signature lets the session decide
                     // whether this call's call model warrants the explicit skip sentinel.
                     const sig = rawPart.thought_signature ||
                                 rawPart.thoughtSignature ||
@@ -1364,20 +1502,15 @@ export class StreamingEngine {
                                 (cand as any)?.thoughtSignature ||
                                 (chunk as any)?.thought_signature ||
                                 (chunk as any)?.thoughtSignature;
-                    detectedToolCalls.push({
-                        ...part.functionCall,
-                        ...(sig ? { thought_signature: sig } : {})
-                    } as any);
-                    const callObj = {
-                        id: part.functionCall.id || `call-${Date.now()}`,
+                    sink.toolCall({
+                        id: part.functionCall.id || '',
                         name: part.functionCall.name || '',
-                        args: part.functionCall.args || {}
-                    };
-                    onEvent({ type: 'tool_call', toolCall: callObj, modelUsed: model });
-                    onEvent({ type: 'mcp_call', toolCall: callObj, modelUsed: model });
+                        args: (part.functionCall.args || {}) as Record<string, unknown>,
+                        callModel: model,
+                        ...(sig ? { meta: { thoughtSignature: sig } } : {})
+                    });
                 } else if (part.text) {
-                    appendChunkText(part.text);
-                    onEvent({ type: 'delta', text: part.text, modelUsed: model });
+                    sink.text(part.text, model);
                 }
             }
         }
@@ -1525,10 +1658,10 @@ export const MAX_MODEL_IMAGE_TURN_BYTES = 3_000_000;
  * the model asked for went through that tool's checks). The payload sent as JSON lists them by label instead. `budget`
  * counts what the turn has left; an image past it, unreadable or too large, is listed with why it was not shown.
  */
-export function modelImageParts(toolName: string, resultPayload: any, budget: { left: number; bytesLeft?: number }): { payload: any; parts: Part[] } {
+export function collectModelImages(toolName: string, resultPayload: any, budget: { left: number; bytesLeft?: number }): { payload: any; images: AgentImage[] } {
     const list = Array.isArray(resultPayload?.modelImages) ? resultPayload.modelImages as Array<{ path?: string; data?: string; mimeType?: string; label?: string }> : undefined;
-    if (!list) return { payload: resultPayload, parts: [] };
-    const parts: Part[] = [], listed: Array<{ label: string; shown: boolean; why?: string }> = [];
+    if (!list) return { payload: resultPayload, images: [] };
+    const images: AgentImage[] = [], listed: Array<{ label: string; shown: boolean; why?: string }> = [];
     for (const img of list) {
         const label = img.label || img.path || 'image';
         if (budget.left <= 0) { listed.push({ label, shown: false, why: `over ${MAX_MODEL_IMAGES_PER_TURN} images this turn` }); continue; }
@@ -1552,16 +1685,27 @@ export function modelImageParts(toolName: string, resultPayload: any, budget: { 
         if (budget.bytesLeft !== undefined && data.length > budget.bytesLeft) { listed.push({ label, shown: false, why: 'over this turn\'s image size allowance' }); continue; }
         budget.left--;
         if (budget.bytesLeft !== undefined) budget.bytesLeft -= data.length;
-        parts.push({ text: `Image from ${toolName}: ${label}${small ? ` (${small.width} x ${small.height} px)` : ''}` } as Part, { inlineData: { mimeType, data } } as Part);
+        images.push({ mimeType, data, label: `Image from ${toolName}: ${label}${small ? ` (${small.width} x ${small.height} px)` : ''}` });
         listed.push({ label, shown: true });
     }
     const { modelImages: _omit, ...rest } = resultPayload;
-    return { payload: { ...rest, images: listed }, parts };
+    return { payload: { ...rest, images: listed }, images };
+}
+
+/** collectModelImages as Gemini parts: each image's label, then the image. */
+export function modelImageParts(toolName: string, resultPayload: any, budget: { left: number; bytesLeft?: number }): { payload: any; parts: Part[] } {
+    const { payload, images } = collectModelImages(toolName, resultPayload, budget);
+    return { payload, parts: images.flatMap(img => [{ text: img.label } as Part, { inlineData: { mimeType: img.mimeType, data: img.data } } as Part]) };
+}
+
+/** Whether a tool call failed, as the model is told (toolResultForModel) and as Claude's is_error marks it. */
+export function toolResultFailed(exec: Pick<McpExecutionState, 'status'> | undefined, resultPayload: any): boolean {
+    return exec?.status === 'failed' || resultPayload?.success === false || resultPayload?.status === 'error' || resultPayload?.status === 'failed';
 }
 
 export function toolResultForModel(toolName: string, exec: Pick<McpExecutionState, 'status'> | undefined, resultPayload: any): any {
     const prepared = prepareToolResultForModel(toolName, resultPayload);
-    const failed = exec?.status === 'failed' || resultPayload?.success === false || resultPayload?.status === 'error' || resultPayload?.status === 'failed';
+    const failed = toolResultFailed(exec, resultPayload);
     if (!failed || resultPayload?.timedOut === true || toolName.startsWith('workspace_')) {
         return prepared;
     }
