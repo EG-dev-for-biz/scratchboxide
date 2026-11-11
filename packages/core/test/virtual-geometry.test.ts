@@ -505,6 +505,55 @@ describe.skipIf(!clang.ok)(withReason('Virtual geometry builder (C++20 cluster L
         expect(tool.resultPayload.artifact.data.virtualGeometry.buildStats.skippedPrimitives).toBe(1);
     });
 
+    it('decodes KHR_mesh_quantization positions (16-bit normalized, padded stride, node scale) and leaves out instanced levels of detail', async () => {
+        // A unit quad in the XZ plane stored as normalized int16 in an 8-byte stride (as SB-Veggie writes crowns), placed by
+        // the node's scale 4 and translation (10, 2, -3); and a second level of detail marked instanced, which is left out.
+        const quad = [[-1, 0, -1], [1, 0, -1], [1, 0, 1], [-1, 0, 1]];
+        const pos = Buffer.alloc(quad.length * 8);
+        quad.forEach((v, i) => v.forEach((c, k) => pos.writeInt16LE(Math.round(c * 32767), i * 8 + k * 2)));
+        const idx = Buffer.from(new Uint16Array([0, 2, 1, 0, 3, 2]).buffer);
+        const far = Buffer.from(new Float32Array([0, 0, 0, 1, 0, 0, 0, 0, 1]).buffer);
+        const bin = Buffer.concat([pos, idx, far]);
+        const json = {
+            asset: { version: '2.0' }, extensionsUsed: ['KHR_mesh_quantization'], extensionsRequired: ['KHR_mesh_quantization'],
+            scene: 0, scenes: [{ nodes: [0, 1] }],
+            nodes: [
+                { name: 'crown_lod3', mesh: 0, scale: [4, 4, 4], translation: [10, 2, -3], extras: { sbLod: { level: 3, instanced: false } } },
+                { name: 'crown_lod0', mesh: 1, extras: { sbLod: { level: 0, instanced: true } } }
+            ],
+            meshes: [
+                { primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] },
+                { primitives: [{ attributes: { POSITION: 2 } }] }
+            ],
+            accessors: [
+                { bufferView: 0, componentType: 5122, normalized: true, count: 4, type: 'VEC3' },
+                { bufferView: 1, componentType: 5123, count: 6, type: 'SCALAR' },
+                { bufferView: 2, componentType: 5126, count: 3, type: 'VEC3' }
+            ],
+            bufferViews: [
+                { buffer: 0, byteOffset: 0, byteLength: pos.length, byteStride: 8 },
+                { buffer: 0, byteOffset: pos.length, byteLength: idx.length },
+                { buffer: 0, byteOffset: pos.length + idx.length, byteLength: far.length }
+            ],
+            buffers: [{ byteLength: bin.length }]
+        };
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sbx-vgeo-quant-'));
+        fs.writeFileSync(path.join(dir, 'quantized.glb'), rawGlb(json, bin));
+        const result = await service.build(path.join(dir, 'quantized.glb'), path.join(dir, 'quantized.sbvg'));
+        expect(result.stats.skippedInstancedLevels).toBe(1);
+        const file = readFile(fs.readFileSync(result.sbvgPath));
+        expect(file.header.sourceTriangleCount).toBe(2);
+        const xs: number[] = [], ys: number[] = [], zs: number[] = [];
+        for (let v = 0; v < file.vertices.length / SBVG_VERTEX_FLOATS; v++) {
+            xs.push(file.vertices[v * SBVG_VERTEX_FLOATS]); ys.push(file.vertices[v * SBVG_VERTEX_FLOATS + 1]); zs.push(file.vertices[v * SBVG_VERTEX_FLOATS + 2]);
+        }
+        // the file stores vertices relative to its origin: compare extents, which the origin does not move
+        const ext = (a: number[]) => Math.max(...a) - Math.min(...a);
+        expect(ext(xs)).toBeCloseTo(8, 3);
+        expect(ext(zs)).toBeCloseTo(8, 3);
+        expect(ext(ys)).toBeCloseTo(0, 6);
+    });
+
     it('writes format version 6 with uvs, materials and an atlas table naming colour, normal and emission atlases; reads versions 1 to 5; refuses unknown versions clearly', () => {
         expect(SBVG_VERSION).toBe(6);
         expect(sphere.header.version).toBe(6);

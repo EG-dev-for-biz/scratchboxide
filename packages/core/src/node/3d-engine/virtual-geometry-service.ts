@@ -77,10 +77,10 @@ int main(int argc, char** argv) {
         auto t2 = std::chrono::steady_clock::now();
         SbvgSummary s = writeSbvg(dag, argv[2], src.skippedPrimitives, atlasStem);
         auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
-        std::printf("{\\"sourceTriangles\\":%u,\\"weldedVertices\\":%zu,\\"droppedDegenerate\\":%u,\\"skippedPrimitives\\":%u,"
+        std::printf("{\\"sourceTriangles\\":%u,\\"weldedVertices\\":%zu,\\"droppedDegenerate\\":%u,\\"skippedPrimitives\\":%u,\\"skippedInstancedLevels\\":%u,"
                     "\\"vertexCount\\":%u,\\"clusterCount\\":%u,\\"triangleCount\\":%llu,\\"leafTriangleCount\\":%llu,\\"levelCount\\":%u,"
                     "\\"fileBytes\\":%llu,\\"atlasCount\\":%u,\\"atlasBytes\\":%llu,\\"loadMs\\":%.1f,\\"dagMs\\":%.1f,\\"levels\\":[",
-                    dag.mesh.sourceTriangles, dag.mesh.positions.size(), dag.mesh.droppedDegenerate, src.skippedPrimitives,
+                    dag.mesh.sourceTriangles, dag.mesh.positions.size(), dag.mesh.droppedDegenerate, src.skippedPrimitives, src.skippedInstancedLevels,
                     s.vertexCount, s.clusterCount, (unsigned long long)s.triangleCount, (unsigned long long)s.leafTriangleCount, s.levelCount,
                     (unsigned long long)s.fileBytes, s.atlasCount, (unsigned long long)s.atlasBytes, ms(t0, t1), ms(t1, t2));
         for (size_t i = 0; i < dag.levels.size(); ++i) {
@@ -129,6 +129,8 @@ export interface VirtualGeometryBuildStats {
     droppedDegenerate: number;
     /** Primitives without a surface (points, lines) or without POSITION: not in the build. */
     skippedPrimitives: number;
+    /** Levels of detail drawn by GPU instances (extras.sbLod.instanced), left out: the group's plain level stands in. */
+    skippedInstancedLevels?: number;
     vertexCount: number;
     clusterCount: number;
     triangleCount: number;

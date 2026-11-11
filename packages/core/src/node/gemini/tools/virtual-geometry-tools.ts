@@ -15,6 +15,8 @@ import type { ToolDeclaration, ToolHandler } from './types';
 import { getVirtualGeometryBuildService, VirtualGeometryBuildError } from '../../3d-engine/virtual-geometry-service';
 import { MetalPathTracerError, MetalPathTracerService, readSbvgOrigin, type MetalPathTraceRequest } from '../../3d-engine/metal-path-tracer-service';
 import { PathTraversalError, resolveWithinRoot } from '../../security/path-guard';
+import { resolveSceneModelPath } from './canvas-tools';
+import { heightPx, verticalFovDeg, type ShotCamera } from '../../../common/spatial/shot-detail-budget';
 
 export const VIRTUAL_GEOMETRY_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
@@ -37,10 +39,10 @@ export const VIRTUAL_GEOMETRY_TOOL_DECLARATIONS: ToolDeclaration[] = [
         parameters: {
             type: 'OBJECT',
             properties: {
-                glbPath: { type: 'STRING', description: 'Path of the .glb inside the workspace (relative to the workspace root, or absolute within it).' },
+                glbPath: { type: 'STRING', description: 'Path of the .glb inside the workspace (relative to the workspace root, or absolute within it), or a published model (/models/<file>.glb, as a scene\'s objects name it). Omit to render the open 3D scene\'s own model.' },
                 camera: {
                     type: 'OBJECT',
-                    description: 'Camera in the GLB\'s coordinates. Omit to frame the whole model.',
+                    description: 'Camera in the GLB\'s coordinates. Omit to use the open scene\'s first declared shot (sb.shot) at its own frame size when rendering that scene\'s model, else to frame the whole model.',
                     properties: {
                         position: { type: 'ARRAY', items: { type: 'NUMBER' }, description: '[x, y, z] eye position.' },
                         target: { type: 'ARRAY', items: { type: 'NUMBER' }, description: '[x, y, z] point looked at.' },
@@ -71,7 +73,7 @@ export const VIRTUAL_GEOMETRY_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 samplesPerPixel: { type: 'NUMBER', description: 'Samples per pixel (default 1024).' },
                 exposureEv: { type: 'NUMBER', description: 'Fixed exposure in EV; by default it is metered from the image.' }
             },
-            required: ['glbPath']
+            required: []
         }
     }
 ];
@@ -82,6 +84,42 @@ const clampInt = (v: unknown, fallback: number, min: number, max: number) =>
     typeof v === 'number' && Number.isFinite(v) ? Math.max(min, Math.min(max, Math.round(v))) : fallback;
 
 let metalPathTracer: MetalPathTracerService | null = null;
+
+/** Where the app publishes generated models (python-3d-tools publishToModels): `<repo>/public/models`, served as /models/. */
+function publishedModelsDir(): string {
+    const repoRoot = process.env.SCRATCHBOX_ROOT || (fs.existsSync(path.resolve(process.cwd(), 'packages')) ? process.cwd() : path.resolve(process.cwd(), '..'));
+    return path.resolve(repoRoot, 'public', 'models');
+}
+
+/**
+ * The GLB to render: a path inside the workspace; else a published model (a /models/ URL, a public/models path, or a
+ * bare file name the app published); else, with no path, the open 3D scene's own model.
+ */
+export function resolveRenderGlb(glbPath: string, workspaceRoot: string, openScene: Scene3DData | undefined): { file: string; fromOpenScene: boolean } | { error: string } {
+    if (!glbPath) {
+        const own = resolveSceneModelPath(openScene);
+        return own ? { file: own, fromOpenScene: true } : { error: 'glbPath is required (no 3D scene with a model is open): the .glb to render, inside the workspace or a published /models/ file.' };
+    }
+    let inWorkspace: string | undefined;
+    try {
+        inWorkspace = resolveWithinRoot(workspaceRoot, glbPath);
+    } catch (err) {
+        if (!(err instanceof PathTraversalError)) throw err;
+    }
+    if (inWorkspace && fs.existsSync(inWorkspace)) {
+        const own = resolveSceneModelPath(openScene);
+        return { file: inWorkspace, fromOpenScene: !!own && fs.realpathSync(own) === fs.realpathSync(inWorkspace) };
+    }
+    const published = /^(?:\/?public)?\/?models\/([^/\\]+\.glb)$/i.exec(glbPath)?.[1] ?? (/^[^/\\]+\.glb$/i.test(glbPath) ? glbPath : undefined);
+    if (published) {
+        const file = resolveWithinRoot(publishedModelsDir(), published);
+        if (fs.existsSync(file)) {
+            const own = resolveSceneModelPath(openScene);
+            return { file, fromOpenScene: !!own && path.basename(own) === published };
+        }
+    }
+    return { error: inWorkspace || published ? `${glbPath} does not exist in the workspace (${workspaceRoot}) or among the published models.` : `${glbPath} is outside the workspace (${workspaceRoot}).` };
+}
 
 export const virtualGeometryHandlers: Record<string, ToolHandler> = {
     async virtual_geometry_open_glb(args, ctx) {
@@ -157,17 +195,18 @@ export const virtualGeometryHandlers: Record<string, ToolHandler> = {
     async path_trace_render(args, ctx) {
         const glbPath = typeof args.glbPath === 'string' ? args.glbPath.trim() : '';
         const fail = (error: string) => ({ status: 'failed' as const, resultPayload: { success: false, error }, summaryResult: `Failed: ${error}` });
-        if (!glbPath) return fail('glbPath is required: the .glb to render, inside the workspace.');
-        let file: string;
-        try {
-            file = resolveWithinRoot(ctx.workspaceRoot, glbPath);
-        } catch (err) {
-            if (err instanceof PathTraversalError) return fail(`${glbPath} is outside the workspace (${ctx.workspaceRoot}).`);
-            throw err;
-        }
-        if (!fs.existsSync(file)) return fail(`${glbPath} does not exist in the workspace (${ctx.workspaceRoot}).`);
+        const openScene = ctx.request?.activeArtifact?.type === '3d-scene' ? ctx.request.activeArtifact.data as Scene3DData : undefined;
+        const resolved = resolveRenderGlb(glbPath, ctx.workspaceRoot, openScene);
+        if ('error' in resolved) return fail(resolved.error);
+        const file = resolved.file;
 
         let camera: MetalPathTraceRequest['camera'];
+        // No camera given: the open scene's first declared shot (sb.shot), at its own frame, else automatic framing.
+        const shot: ShotCamera | undefined = !args.camera && resolved.fromOpenScene ? openScene?.shots?.[0] : undefined;
+        if (shot) {
+            args = { ...args, camera: { position: shot.position, target: shot.target, verticalFovDeg: verticalFovDeg(shot) } };
+            if (args.width === undefined && args.height === undefined) args = { ...args, width: shot.widthPx, height: heightPx(shot) };
+        }
         const cam = args.camera as Record<string, unknown> | undefined;
         let origin: [number, number, number] = [0, 0, 0];
         const built = await (async () => {
