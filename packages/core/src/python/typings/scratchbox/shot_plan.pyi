@@ -16,7 +16,7 @@ GLB, so the scene opens on the first one and the result reports how many triangl
 
 import typing
 
-__all__ = ['Any', 'Dict', 'List', 'Optional', 'Point', 'Sequence', 'Shot', 'Tuple', 'declared_shots', 'json', 'math', 'member_m', 'min_feature_m', 'os', 'resolves', 'shot', 'shots_path']
+__all__ = ['Any', 'Dict', 'List', 'Optional', 'Point', 'Sequence', 'Shot', 'Tuple', 'camera_move', 'declared_shots', 'json', 'math', 'member_m', 'min_feature_m', 'os', 'resolves', 'shot', 'shots_path']
 
 Any = typing.Any
 Dict = typing.Dict
@@ -109,6 +109,17 @@ class Shot:
     name: typing.Any
 
 Tuple = typing.Tuple
+
+def camera_move(keys: typing.Sequence[typing.Tuple[float, ForwardRef('Shot')]], name: str = 'move') -> typing.Dict[str, typing.Any]:
+    """
+    Animate the camera through declared shots.
+
+    `keys` are (time in seconds, shot) pairs, the shots already declared with sb.shot, in increasing time. The scene's
+    timeline plays the move: the camera passes through each shot at its time on a smooth path (cubic, Catmull-Rom
+    tangents over the key times, easing in at the first key and out at the last; the focal length tweened in log space),
+    and path_trace_render renders any moment of it (timeSeconds). A slow push-in is two shots forty seconds apart.
+    """
+
 
 def declared_shots() -> typing.List[Shot]:
     """The shots this run has declared, in order."""

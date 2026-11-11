@@ -32,6 +32,11 @@ Write down, from the brief:
   camera toward that frame position (-1.5 ahead and to the left, 1.5 ahead and to the right, plus 180 behind the
   camera), in the convention both `atmosphere_configure_scene` and `path_trace_render` take. Pass the same number to both.
 
+- **A moving camera** (a push-in, a crane, a fly-through): declare a shot for each key pose and join them with
+  `sb.camera_move([(0, start), (40, end)], name="push-in")` (times in seconds). The scene's timeline plays the move in the
+  viewport, easing in and out; `path_trace_render` with `timeSeconds` renders any moment of it. Build for every key shot:
+  the detail budget counts detail as seen when any declared shot resolves it.
+
 ## 2. Block out, then look through the lens
 
 Build the large forms only (masses, streets, the hero structures) and run the script. The result's visual review now
@@ -79,7 +84,8 @@ blocking the lens now, while each fix is one number in the layout.
 
 ## 6. Render, look, compare, fix
 
-- `path_trace_render` with no camera renders the open scene's declared shot at its own frame size. Open the image with
+- `path_trace_render` with no camera renders the open scene's declared shot at its own frame size, and with
+  `timeSeconds` a moment of its camera move (the first, middle and last moments check a move). Open the image with
   `workspace_view_image` and look at it yourself.
 - **Compare the frame with the brief clause by clause** (each object asked for, its side of the frame, the light's side,
   the lens and frame, the air) and fix the first clause that fails before rendering again.

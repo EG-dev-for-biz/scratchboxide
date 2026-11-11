@@ -22,6 +22,7 @@ import os
 Point = Sequence[float]
 
 _SHOTS: List["Shot"] = []
+_MOVES: List[Dict[str, Any]] = []
 
 
 def _vec(value: Any, what: str) -> Tuple[float, float, float]:
@@ -202,7 +203,7 @@ def _write_shots() -> None:
         return
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"shots": [s.to_dict() for s in _SHOTS]}, f)
+        json.dump({"shots": [s.to_dict() for s in _SHOTS], "moves": _MOVES}, f)
 
 
 def shot(
@@ -224,6 +225,32 @@ def shot(
     _SHOTS.append(s)
     _write_shots()
     return s
+
+
+def camera_move(keys: Sequence[Tuple[float, "Shot"]], name: str = "move") -> Dict[str, Any]:
+    """Animate the camera through declared shots.
+
+    `keys` are (time in seconds, shot) pairs, the shots already declared with sb.shot, in increasing time. The scene's
+    timeline plays the move: the camera passes through each shot at its time on a smooth path (cubic, Catmull-Rom
+    tangents over the key times, easing in at the first key and out at the last; the focal length tweened in log space),
+    and path_trace_render renders any moment of it (timeSeconds). A slow push-in is two shots forty seconds apart.
+    """
+    if len(keys) < 2:
+        raise ValueError("a camera move needs at least two (time, shot) keys")
+    out = []
+    last = -1.0
+    for t, s in keys:
+        if not isinstance(s, Shot) or s not in _SHOTS:
+            raise ValueError("each key's shot must be one declared with sb.shot")
+        t = float(t)
+        if not math.isfinite(t) or t < 0 or t <= last:
+            raise ValueError("camera move times must be finite, non-negative and increasing")
+        last = t
+        out.append({"timeS": t, "shot": s.name})
+    move = {"name": str(name), "keys": out}
+    _MOVES.append(move)
+    _write_shots()
+    return move
 
 
 def declared_shots() -> List[Shot]:

@@ -1305,6 +1305,14 @@ export interface Scene3DData {
         isLooping?: boolean;
         tracks?: TimelineTrack[];
         animationClip?: any;
+        /**
+         * A camera move (sb.camera_move): keyed poses in metres and millimetres; the viewport drives its camera from the
+         * move while the timeline plays or is scrubbed (common/spatial/camera-path.ts cameraPoseAt).
+         */
+        camera?: {
+            name?: string;
+            keys: Array<{ timeMs: number; position: [number, number, number]; target: [number, number, number]; focalMm: number; sensorWidthMm?: number; aspect?: number }>;
+        };
     };
     customScript?: string;
     code?: string;

@@ -392,5 +392,6 @@ def window_parts(at):
 - The scene opens on the first shot declared, the visual review looks through it, and the result's shot detail budget gives the share of in-frame triangles under 2 px and the parts that hold them. Rebuild those parts coarser and move the triangles to what stands nearest the lens: the viewport holds about a million vertices.
 - Block the scene out as plain massing from the layout first and check it with `hero.sees(...)`; add detail only after the blockout frames correctly. Put what the request places left or right of frame where `hero.frame_point(x, y, depth)` says (x from -1 at the left edge to 1 at the right): looking down -z, frame left is -x, and guessing the axis mirrors the whole scene.
 - Vary repeats with the seeded generator by amounts a real place has (pane offsets of millimetres, parapet heights, rooftop objects off the grid), keeping each variation above the budget where it stands.
+- A moving camera: declare a shot per key pose and join them with `sb.camera_move([(0, start), (40, end)])`; the timeline plays it.
 - Sun, sky and haze are set after the build with `atmosphere_configure_scene`, only when the request asks for them. A street reads deepest backlit (the sun low and ahead of the camera); `hazeScaleHeightMeters` makes the haze hug the ground so the far street fades while rooftops stay clear.
 

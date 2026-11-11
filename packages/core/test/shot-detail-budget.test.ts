@@ -193,6 +193,36 @@ describe('execute_3d_python_script with a declared shot', () => {
         expect(outcome.summaryResult).toContain('min_feature_m');
     }, 180000);
 
+    it('puts a declared camera move on the scene timeline and opens on its first moment', async () => {
+        const outcome = await python3DHandlers.execute_3d_python_script({
+            script: [
+                'import scratchbox as sb',
+                'start = sb.shot(position=(0, 180, 140), target=(0, 10, -200), focal_mm=24, aspect=2.39, name="start")',
+                'end = sb.shot(position=(0, 120, 20), target=(0, 10, -200), focal_mm=50, aspect=2.39, name="end")',
+                'move = sb.camera_move([(0, start), (40, end)], name="push-in")',
+                'assert move["keys"][1] == {"timeS": 40.0, "shot": "end"}',
+                'try:',
+                '    sb.camera_move([(5, end), (1, start)])',
+                '    raise SystemExit("decreasing times were accepted")',
+                'except ValueError:',
+                '    pass',
+                'scene = sb.geometry.Mesh("Ball")',
+                'scene.merge(sb.create_sphere(radius=6.0, rings=64, sectors=128))',
+                'sb.io.write_glb(OUTPUT_GLB_PATH, scene)'
+            ].join('\n'),
+            description: 'Move probe'
+        });
+        expect(outcome.status).toBe('completed');
+        const payload = outcome.resultPayload as any;
+        expect(payload.cameraMoves).toEqual([{ name: 'push-in', keys: 2, durationS: 40 }]);
+        const data = payload.artifact.data;
+        expect(data.timeline.durationMs).toBe(40000);
+        expect(data.timeline.camera.keys.map((k: any) => [k.timeMs, k.focalMm])).toEqual([[0, 24], [40000, 50]]);
+        expect(data.camera.position).toEqual([0, 180, 140]);
+        expect(data.camera.lens.focalLengthMm).toBe(24);
+        expect(outcome.summaryResult).toContain('Camera move "push-in": 2 keys over 40.0 s');
+    }, 120000);
+
     it('frames the model itself when the script declares no shot', async () => {
         const outcome = await python3DHandlers.execute_3d_python_script({
             script: 'import scratchbox as sb\nscene = sb.geometry.Mesh("Ball")\nscene.merge(sb.create_sphere(radius=1.0, rings=64, sectors=128))\nsb.io.write_glb(OUTPUT_GLB_PATH, scene)',

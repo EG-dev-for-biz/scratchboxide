@@ -3518,12 +3518,13 @@ from . import object_spec
 
 # The shot a scene is built for and its screen-space detail budget (shot_plan.py): sb.shot(...) -> sb.Shot
 from . import shot_plan
-from .shot_plan import Shot, shot
+from .shot_plan import Shot, shot, camera_move
 
 __all__ = [
     "read_glb",
     "Shot",
     "shot",
+    "camera_move",
     "shot_plan",
     "create_panelized_loft",
     "create_hydraulic_actuator",

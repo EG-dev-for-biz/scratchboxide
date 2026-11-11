@@ -17,6 +17,7 @@ import { MetalPathTracerError, MetalPathTracerService, readSbvgOrigin, type Meta
 import { PathTraversalError, resolveWithinRoot } from '../../security/path-guard';
 import { resolveSceneModelPath } from './canvas-tools';
 import { heightPx, verticalFovDeg, type ShotCamera } from '../../../common/spatial/shot-detail-budget';
+import { cameraPoseAt, normalizeCameraKeys } from '../../../common/spatial/camera-path';
 
 export const VIRTUAL_GEOMETRY_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
@@ -76,6 +77,10 @@ export const VIRTUAL_GEOMETRY_TOOL_DECLARATIONS: ToolDeclaration[] = [
                         scaleHeightMeters: { type: 'NUMBER', description: 'Height over which the haze thins to about a third, metres; omit for the same haze at every height.' },
                         baseAltitudeMeters: { type: 'NUMBER', description: 'Height at and below which the haze is densest (default 0).' }
                     }
+                },
+                timeSeconds: {
+                    type: 'NUMBER',
+                    description: 'Render this moment, in seconds, of the open scene\'s camera move (sb.camera_move) instead of a fixed camera, at its first shot\'s frame size. Call once per moment for frames of the move.'
                 },
                 width: { type: 'NUMBER', description: 'Image width in pixels (default 1920, at most 8192).' },
                 height: { type: 'NUMBER', description: 'Image height in pixels (default 1080, at most 8192).' },
@@ -230,6 +235,15 @@ export const virtualGeometryHandlers: Record<string, ToolHandler> = {
         const file = resolved.file;
 
         let camera: MetalPathTraceRequest['camera'];
+        // A moment of the open scene's camera move (sb.camera_move), at the frame size of its first shot.
+        if (typeof args.timeSeconds === 'number' && !args.camera) {
+            const keys = resolved.fromOpenScene ? normalizeCameraKeys(openScene?.timeline?.camera?.keys) : [];
+            const pose = keys.length >= 2 ? cameraPoseAt(keys, Math.max(0, args.timeSeconds) * 1000) : null;
+            if (!pose) return fail('timeSeconds renders a moment of the open scene\'s camera move (sb.camera_move); this scene has none. Give a camera instead.');
+            const widthPx = openScene?.shots?.[0]?.widthPx ?? 1920;
+            args = { ...args, camera: { position: pose.position, target: pose.target, verticalFovDeg: pose.verticalFovDeg } };
+            if (args.width === undefined && args.height === undefined) args = { ...args, width: widthPx, height: Math.max(8, Math.round(widthPx / pose.aspect)) };
+        }
         // No camera given: the open scene's first declared shot (sb.shot), at its own frame, else automatic framing.
         const shot: ShotCamera | undefined = !args.camera && resolved.fromOpenScene ? openScene?.shots?.[0] : undefined;
         if (shot) {

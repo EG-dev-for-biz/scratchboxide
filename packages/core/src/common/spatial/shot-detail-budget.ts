@@ -17,6 +17,8 @@
  * The Python side of the same maths is scratchbox/shot_plan.py (sb.shot).
  */
 
+import { normalizeCameraKeys, type CameraPathKey } from './camera-path';
+
 export type Vec3 = [number, number, number];
 
 /** One camera a scene is built for. Lengths in metres (y up), the lens in millimetres, the frame in pixels. */
@@ -55,6 +57,29 @@ export function parseShotPlan(json: unknown): ShotCamera[] {
         });
     }
     return shots;
+}
+
+/**
+ * The camera moves a script declared (sb.camera_move) as timeline keys: each key a declared shot's pose at its time.
+ * Keys naming no complete shot are dropped, and a move left with fewer than two keys is dropped.
+ */
+export function parseShotMoves(json: unknown, shots: ShotCamera[]): Array<{ name: string; keys: CameraPathKey[] }> {
+    const list = (json as { moves?: unknown } | null)?.moves;
+    if (!Array.isArray(list)) return [];
+    const byName = new Map(shots.map(s => [s.name, s]));
+    const moves: Array<{ name: string; keys: CameraPathKey[] }> = [];
+    for (const raw of list as Array<Record<string, unknown>>) {
+        if (!raw || !Array.isArray(raw.keys)) continue;
+        const keys: CameraPathKey[] = [];
+        for (const k of raw.keys as Array<Record<string, unknown>>) {
+            const shot = k && typeof k.shot === 'string' ? byName.get(k.shot) : undefined;
+            if (!shot || typeof k.timeS !== 'number' || !Number.isFinite(k.timeS) || k.timeS < 0) continue;
+            keys.push({ timeMs: Math.round(k.timeS * 1000), position: shot.position, target: shot.target, focalMm: shot.focalMm, sensorWidthMm: shot.sensorWidthMm, aspect: shot.aspect });
+        }
+        const clean = normalizeCameraKeys(keys);
+        if (clean.length >= 2) moves.push({ name: typeof raw.name === 'string' && raw.name ? raw.name : `move ${moves.length + 1}`, keys: clean });
+    }
+    return moves;
 }
 
 /** Focal length in pixels: a 1 m object 1 m in front of the lens covers this many pixels. */
