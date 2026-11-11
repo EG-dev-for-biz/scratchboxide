@@ -174,7 +174,7 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
             type: 'OBJECT',
             properties: {
                 sunElevationDeg: { type: 'NUMBER', description: 'Sun elevation above the horizon in degrees (with sunAzimuthDeg).' },
-                sunAzimuthDeg: { type: 'NUMBER', description: 'Sun azimuth in degrees clockwise from north (with sunElevationDeg).' },
+                sunAzimuthDeg: { type: 'NUMBER', description: 'Sun azimuth in degrees clockwise from north (with sunElevationDeg). In the scene, north is -z and east +x: 0 toward -z, 90 toward +x, as path_trace_render takes it. For a scene built for a shot, hero.sun_azimuth_deg(frame_x) gives it from the frame (-1.5 ahead and to the left).' },
                 preset: {
                     type: 'STRING',
                     description: 'Diurnal preset: "dawn", "golden_hour", "midday", "afternoon", "sunset", "twilight", "blue_hour", "night", or "overcast".'

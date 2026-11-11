@@ -64,7 +64,7 @@ export const VIRTUAL_GEOMETRY_TOOL_DECLARATIONS: ToolDeclaration[] = [
                     description: 'A physical sun and sky instead of the studio dome.',
                     properties: {
                         elevationDeg: { type: 'NUMBER', description: 'Sun height above the horizon, degrees.' },
-                        azimuthDeg: { type: 'NUMBER', description: 'Sun direction: 0 toward -Z, 90 toward +X, degrees.' }
+                        azimuthDeg: { type: 'NUMBER', description: 'Sun direction: 0 toward -Z, 90 toward +X, degrees (the same as atmosphere_configure_scene\'s sunAzimuthDeg; hero.sun_azimuth_deg(frame_x) gives it from a declared shot).' }
                     },
                     required: ['elevationDeg', 'azimuthDeg']
                 },

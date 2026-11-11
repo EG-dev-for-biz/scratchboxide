@@ -82,6 +82,14 @@ class Shot:
         and on the right at x > 0, and read its world coordinates from here instead of guessing which axis is left.
         """
 
+    def sun_azimuth_deg(self, frame_x: float) -> float:
+        """
+        The azimuth of a sun standing ahead of the camera toward frame position `frame_x` (-1 the left edge, 0 the
+        centre, 1 the right edge; beyond 1 outside the frame, 3 well to the side), in the convention
+        atmosphere_configure_scene and path_trace_render take: degrees clockwise from -z (north), 90 toward +x.
+        "Ahead and to the left" is sun_azimuth_deg(-1.5), "behind the camera" is that azimuth plus 180.
+        """
+
     def sees(self, at: typing.Sequence[float], margin: float = 0.0) -> bool:
         """True when the point is in front of the lens and inside the frame (`margin`: extra frame, 0.1 = 10 %)."""
 

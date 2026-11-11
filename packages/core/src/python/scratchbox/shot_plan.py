@@ -150,6 +150,20 @@ class Shot:
         hh = self.height_px * 0.5 / self.focal_px * float(depth)
         return tuple(self.position[i] + self._forward[i] * depth + self._right[i] * x * hw + self._up[i] * y * hh for i in range(3))  # type: ignore[return-value]
 
+    def sun_azimuth_deg(self, frame_x: float) -> float:
+        """
+        The azimuth of a sun standing ahead of the camera toward frame position `frame_x` (-1 the left edge, 0 the
+        centre, 1 the right edge; beyond 1 outside the frame, 3 well to the side), in the convention
+        atmosphere_configure_scene and path_trace_render take: degrees clockwise from -z (north), 90 toward +x.
+        "Ahead and to the left" is sun_azimuth_deg(-1.5), "behind the camera" is that azimuth plus 180.
+        """
+        hw = self.width_px * 0.5 / self.focal_px
+        dx = self._forward[0] + self._right[0] * frame_x * hw
+        dz = self._forward[2] + self._right[2] * frame_x * hw
+        if abs(dx) < 1e-12 and abs(dz) < 1e-12:
+            dx, dz = self._up[0], self._up[2]  # looking straight down: ahead is the frame's top
+        return math.degrees(math.atan2(dx, -dz)) % 360.0
+
     def sees(self, at: Point, margin: float = 0.0) -> bool:
         """True when the point is in front of the lens and inside the frame (`margin`: extra frame, 0.1 = 10 %)."""
         x, y, z = self._camera_space(at)
