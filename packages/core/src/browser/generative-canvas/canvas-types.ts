@@ -1920,6 +1920,8 @@ export interface ChatSession {
     workspaceName?: string;
     relativeTime?: string;
     viewState?: SessionViewState;
+    /** The model this chat's agent runs on (Gemini, Claude or OpenAI: common/chat-models.ts); unset, the default. */
+    chatModel?: string;
 }
 
 export interface PromptSuggestion {
