@@ -59,7 +59,7 @@ static std::string metricsJson(const sf::Metrics& m, const sf::Params& p) {
         .n("planeAssignedAreaShare", m.planeAssignedAreaShare)
         .i("supportCells", static_cast<long long>(m.supportCells)).i("refineSplits", static_cast<long long>(m.refineSplits)).i("separatorPlanes", static_cast<long long>(m.separatorPlanes))
         .i("cells", static_cast<long long>(m.cells)).i("insideCells", static_cast<long long>(m.insideCells)).i("interfaces", static_cast<long long>(m.interfaces))
-        .i("pocketsFilled", static_cast<long long>(m.pocketsFilled)).i("componentsDropped", static_cast<long long>(m.componentsDropped))
+        .i("pocketsFilled", static_cast<long long>(m.pocketsFilled)).i("roofCaps", static_cast<long long>(m.roofCaps)).i("roofLevels", static_cast<long long>(m.roofLevels)).i("componentsDropped", static_cast<long long>(m.componentsDropped))
         .i("shellTriangles", static_cast<long long>(m.shellTriangles)).i("shellVertices", static_cast<long long>(m.shellVertices)).i("shellFaces", static_cast<long long>(m.shellFaces))
         .i("boundaryEdges", static_cast<long long>(m.boundaryEdges)).i("nonManifoldEdges", static_cast<long long>(m.nonManifoldEdges))
         .i("degenerateTriangles", static_cast<long long>(m.degenerateTriangles)).i("tJunctionsClosed", static_cast<long long>(m.tJunctionsClosed))
@@ -77,7 +77,7 @@ static std::string metricsJson(const sf::Metrics& m, const sf::Params& p) {
     o.raw("ms", ms.text());
     sg::json::Object tol;
     tol.n("supportTolM", p.supportTolM).n("measuredShare", p.measuredShare).n("residualTolM", p.residualTolM).n("growDistM", p.growDistM)
-        .n("minNormalResultant", p.minNormalResultant).n("maxPlaneRmsM", p.maxPlaneRmsM).b("revolutionParts", p.revolutionParts).b("topIsAir", p.topIsAir).n("revolutionTolM", p.revolutionTolM)
+        .n("minNormalResultant", p.minNormalResultant).n("maxPlaneRmsM", p.maxPlaneRmsM).b("revolutionParts", p.revolutionParts).b("topIsAir", p.topIsAir).b("windingVotes", p.windingVotes).n("revolutionTolM", p.revolutionTolM)
         .n("minPlaneAreaM2", p.minPlaneAreaM2).i("maxPlanes", p.maxPlanes).n("minSplitAreaM2", p.minSplitAreaM2)
         .n("unaryWeight", p.unaryWeight).n("unsupportedCutCost", p.unsupportedCutCost).n("supportedCutCost", p.supportedCutCost);
     o.raw("params", tol.text());
@@ -103,6 +103,7 @@ int main(int argc, char** argv) {
             else if (a == "--no-skin") p.skinOnly = false;
             else if (a == "--revolution") p.revolutionParts = true;
             else if (a == "--top-air") p.topIsAir = true;
+            else if (a == "--winding") p.windingVotes = true;
             else if (a == "--set-revolution") { const std::string k = next(); p.revolution.set(k, std::stod(next())); }
             else if (a == "--set") {
                 const std::string k = next();
@@ -118,6 +119,7 @@ int main(int argc, char** argv) {
                 else if (k == "minNormalResultant") p.minNormalResultant = v;
                 else if (k == "maxPlaneRmsM") p.maxPlaneRmsM = v;
                 else if (k == "revolutionTolM") p.revolutionTolM = v;
+                else if (k == "roofMinAreaM2") p.roofMinAreaM2 = v;
                 else if (k == "maxPlanes") p.maxPlanes = static_cast<int>(v);
                 else if (k == "minSplitAreaM2") p.minSplitAreaM2 = v;
                 else if (k == "marginM") p.marginM = v;
