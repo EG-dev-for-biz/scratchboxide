@@ -18,6 +18,10 @@ import { PathTraversalError, resolveWithinRoot } from '../../security/path-guard
 import { resolveSceneModelPath } from './canvas-tools';
 import { heightPx, verticalFovDeg, type ShotCamera } from '../../../common/spatial/shot-detail-budget';
 import { cameraPoseAt, normalizeCameraKeys } from '../../../common/spatial/camera-path';
+import * as crypto from 'crypto';
+import { dressTreesGlb, TREES_DRESS_VERSION, type TreesDressReport } from '../../3d-engine/trees-glb-dress';
+import { findTileVegetationRepoRoot, treeTextureIndexPath } from '../../3d-engine/tile-vegetation-service';
+import { virtualGeometryServeDir } from '../../3d-engine/virtual-geometry-service';
 
 export const VIRTUAL_GEOMETRY_TOOL_DECLARATIONS: ToolDeclaration[] = [
     {
@@ -98,6 +102,30 @@ const clampInt = (v: unknown, fallback: number, min: number, max: number) =>
     typeof v === 'number' && Number.isFinite(v) ? Math.max(min, Math.min(max, Math.round(v))) : fallback;
 
 let metalPathTracer: MetalPathTracerService | null = null;
+
+/**
+ * The GLB a still is traced from: a copy with its SB-Veggie trees dressed in glTF materials from the tree texture
+ * library (trees-glb-dress.ts), cached by content and dressing version beside the virtual geometry builds; the file
+ * itself when it holds no textured trees or the library is missing.
+ */
+export function glbForTracing(file: string): { file: string; trees?: TreesDressReport } {
+    const bytes = fs.readFileSync(file);
+    // cheap test before parsing: a trees GLB names its root extras
+    if (!bytes.includes('"sbTrees"')) return { file };
+    const indexFile = treeTextureIndexPath(findTileVegetationRepoRoot());
+    if (!indexFile) return { file };
+    const key = crypto.createHash('sha256').update(bytes).update(`dress${TREES_DRESS_VERSION}`).digest('hex').slice(0, 24);
+    const dir = path.join(virtualGeometryServeDir(), 'dressed-trees');
+    const out = path.join(dir, `${path.basename(file, '.glb')}-${key}.glb`);
+    const reportFile = `${out}.json`;
+    if (fs.existsSync(out) && fs.existsSync(reportFile)) return { file: out, trees: JSON.parse(fs.readFileSync(reportFile, 'utf8')) };
+    const dressed = dressTreesGlb(bytes, indexFile);
+    if (!dressed) return { file };
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(out, dressed.glb);
+    fs.writeFileSync(reportFile, JSON.stringify(dressed.report));
+    return { file: out, trees: dressed.report };
+}
 
 /**
  * The sun and haze an open 3D scene is lit with (features.atmosphericScattering, written by atmosphere_configure_scene),
@@ -232,7 +260,9 @@ export const virtualGeometryHandlers: Record<string, ToolHandler> = {
         const openScene = ctx.request?.activeArtifact?.type === '3d-scene' ? ctx.request.activeArtifact.data as Scene3DData : undefined;
         const resolved = resolveRenderGlb(glbPath, ctx.workspaceRoot, openScene);
         if ('error' in resolved) return fail(resolved.error);
-        const file = resolved.file;
+        // trees dressed from the tree texture library, as the viewport dresses them
+        const traced = glbForTracing(resolved.file);
+        const file = traced.file;
 
         let camera: MetalPathTraceRequest['camera'];
         // A moment of the open scene's camera move (sb.camera_move), at the frame size of its first shot.
@@ -254,7 +284,9 @@ export const virtualGeometryHandlers: Record<string, ToolHandler> = {
         let origin: [number, number, number] = [0, 0, 0];
         const built = await (async () => {
             try {
-                return await getVirtualGeometryBuildService().buildServed(file, { signal: ctx.signal });
+                // cut-out trees need the finest level everywhere: the coarse levels' re-textured atlases carry no alpha,
+                // so a distant card or leaf drawn from them would be opaque (as viewport snapshots are built)
+                return await getVirtualGeometryBuildService().buildServed(file, { signal: ctx.signal, ...(traced.trees ? { singleLevel: true } : {}) });
             } catch (err) {
                 if (err instanceof VirtualGeometryBuildError) return err;
                 throw err;
@@ -333,7 +365,8 @@ export const virtualGeometryHandlers: Record<string, ToolHandler> = {
         // The camera back in the GLB's coordinates, so the record can be reused as a tool argument.
         const worldCamera = { ...s.camera, position: s.camera.position.map((v, i) => v + origin[i]), target: s.camera.target.map((v, i) => v + origin[i]) };
         const record = {
-            renderer: 'Metal path tracer (sbvg_pathtracer)', device: s.device, source: path.relative(ctx.workspaceRoot, file),
+            renderer: 'Metal path tracer (sbvg_pathtracer)', device: s.device, source: path.relative(ctx.workspaceRoot, resolved.file),
+            ...(traced.trees ? { trees: { dressed: traced.trees.dressedTrees, of: traced.trees.trees, skipped: traced.trees.skipped, label: 'library' } } : {}),
             width: s.width, height: s.height, samplesPerPixel: s.samplesPerPixel, maxBounces: s.maxBounces, denoised: s.denoised,
             exposureEv: s.exposureEv, lighting: s.lighting === 'sky' ? { sun: s.sun, ...(hazeGlb ? { haze: hazeGlb } : {}) } : { studio: {} }, camera: worldCamera,
             cut: s.cut, geometryCoverage: s.geometryCoverage, materials: s.materials, renderMs: s.renderMs, raysPerSecond: s.raysPerSecond
