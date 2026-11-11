@@ -53,12 +53,23 @@
  *                maxModulationRel raised to 0.3: one part, 335-380 m, 0.29 m RMS, 84% within 25 cm, 1,627 m2 of skin,
  *                replacing the planes' slabs there; the Flatiron and the Dakota give 3 and 4 small round parts at
  *                0.06-0.14 m RMS with the default limit.
- *   topIsAir     (off by default) a cell touching the bounding volume's top is outside outright. The ESB's tall prism
- *                is not the shaft but columns over the antenna's lattice, which the votes call inside and the solver
- *                closes at the margin; this removes them and keeps the antenna as residual scan, but it also adds about
- *                16,000 m2 of generated side faces through the tower (volume down 5,000 m3, nothing changed outside),
- *                most likely a column cell hollowed down through the building: not ready. Making the whole margin air
- *                breaks the base instead, where the isolation's cut runs along the sides.
+ *   topIsAir     (off by default) solid stops at the highest roof the scan shows. The ESB's tall prism is not its shaft
+ *                but columns over the antenna's lattice, which the votes call inside and the solver closes at the volume's
+ *                margin. After the cells are refined, every cell reaching the volume's top is cut at a roof level
+ *                (`roofLevels`: heights with at least roofMinAreaM2 of up-facing measured area over the whole structure):
+ *                the highest level with roof inside the cell's own footprint, else the highest no higher than the scan's
+ *                top over it, else the highest it spans (`capCellsAtRoof`); the piece above is outside, the piece below
+ *                keeps its votes. On the ESB (2026-11-11, with the round part) the slabs go, the antenna stays scan,
+ *                generated area 20,038 -> 14,565 m2, scan within 0.5 m 0.927 -> 0.930, and on a 1.5 m grid through the
+ *                tower no point inside before is outside after below the scan's top except one 1 m sliver at a setback
+ *                edge (313.5 m against 319.7 m); the Flatiron and the Dakota change by under 1.5%, but on the Dakota two
+ *                thin cells within 2 m of the scan's cut edge, whose roof falls in the neighbouring cell, lose their
+ *                upper part (21 of 33,572 inside samples, the solid ending at 0-18.5 m against walls to 41 m). Forcing whole cells to
+ *                air instead drilled a 3 m shaft from the street to the top; making the whole margin air broke the base.
+ *   windingLabels (off by default) votes by the skin's generalised winding number (scratchbox_inner_core.hpp). Measured
+ *                on the ESB (2026-11-11, with a floor at the ground datum added for the test; this switch has none): half
+ *                the time and the fewest non-manifold edges, but where a setback's scan has holes it calls the body
+ *                outside (a 47 m slot at one column), so it stays off for single buildings.
  *
  * Every shell face carries its plane, the share of its area the scan supports within `supportTolM` (continuous) and a
  * provenance label: `measured` where that share reaches `measuredShare`, else `generated` (the solver closed a gap; the
@@ -68,7 +79,7 @@
  * Known limits of the prototype (2026-11-05, ESB and 2 Penn Plaza): tapered and round parts no plane explains become
  * a prism between placed planes or stay residual (a per-region flatness test does not prevent this: the facets are flat;
  * the round part has to be found as a whole: `revolutionParts`); the ESB's tall prism is columns over the antenna's
- * lattice closed at the margin (see topIsAir); thin open structures (a canopy) are residual, not solid;
+ * lattice closed at the margin (`topIsAir` cuts them at the roof); thin open structures (a canopy) are residual, not solid;
  * a gap with no plane beyond it is closed at the bounding volume's margin; a few edges where two cells meet only along
  * a line are non-manifold (reported, not repaired); facade relief under `growDistM` is flattened away.
  *
@@ -80,7 +91,6 @@
 #include "scratchbox_math.hpp"
 #include "scratchbox_revolution_fit.hpp"
 #include "scratchbox_inner_core.hpp"
-#include <memory>
 
 #include <algorithm>
 #include <array>
@@ -91,6 +101,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <queue>
 #include <stdexcept>
 #include <string>
@@ -144,7 +155,8 @@ struct Params {
     double refineMinorityShare{0.0625};   // a cell is mixed when more than this share of its samples disagree with the rest
     double refineMinVolumeM3{2.0};        // cells smaller than this are not refined
     double marginM{2.0};           // the bounding volume stands this far outside the scan (sides and top)
-    bool topIsAir{false};          // a cell touching the bounding volume's top is outside outright, not by its face's cost
+    bool topIsAir{false};          // solid stops at the highest roof the scan shows: cells reaching the volume's top are capped there (capCellsAtRoof) and their part above is outside
+    double roofMinAreaM2{20.0};    // ... a roof level is a height with at least this much up-facing measured area (roofLevels)
     double supportTolM{0.5};       // a face point is supported when scan lies within this along the face normal
     double measuredShare{0.5};     // a face is `measured` from this support share up
     double residualTolM{1.0};      // skin farther than this from the shell is kept as residual scan
@@ -201,6 +213,7 @@ struct Metrics {
     size_t refineSplits{0};            // mixed cells split again, by a fitted plane continued into them ...
     size_t separatorPlanes{0};         // ... or by a plane placed between their inside and outside samples (no scan of its own)
     size_t pocketsFilled{0}, componentsDropped{0};
+    size_t roofCaps{0}, roofLevels{0};  // cells reaching the top split at the highest roof level they span (topIsAir); the levels found
     size_t shellTriangles{0}, shellVertices{0}, shellFaces{0};
     size_t boundaryEdges{0}, nonManifoldEdges{0}, degenerateTriangles{0};
     size_t tJunctionsClosed{0};
@@ -431,6 +444,104 @@ inline bool splitCell(const Cell& cell, const Plane& pl, int planeId, Cell& pos,
     neg.faces.push_back(std::move(capNeg));
     measureCell(pos); measureCell(neg);
     return pos.volume > 1e-4 && neg.volume > 1e-4;
+}
+
+/** True when p lies inside the convex cell: on the cell's side of every face's plane (within eps). */
+inline bool insideCell(const Cell& c, const std::vector<Plane>& planes, const V3& p, double eps = 1e-6) {
+    for (const auto& f : c.faces) if (static_cast<double>(f.side) * planes[static_cast<size_t>(f.plane)].dist(p) < -eps) return false;
+    return true;
+}
+
+/**
+ * Roof levels: the heights at which the scan shows a real roof, read from the whole structure, not from one cell: every
+ * `binM` height band whose up-facing measured area, summed over `windowBins` neighbouring bands, reaches `minAreaM2`, the
+ * highest band of each run kept. A platform or collar on a mast is a few square metres and makes no level; the roof a
+ * mast stands on does. `roofY` / `roofArea` are the up-facing surfaces' heights and areas. Returned high to low.
+ */
+inline std::vector<double> roofLevels(const std::vector<double>& roofY, const std::vector<double>& roofArea, double minAreaM2, double binM = 0.25, int windowBins = 3) {
+    std::map<long long, double> bands;
+    for (size_t i = 0; i < roofY.size(); ++i) bands[static_cast<long long>(std::floor(roofY[i] / binM))] += roofArea[i];
+    std::vector<long long> hit;
+    for (const auto& [b, a] : bands) {
+        (void)a;
+        double sum = 0;
+        for (long long k = b - windowBins / 2; k <= b + windowBins / 2; ++k) { auto it = bands.find(k); if (it != bands.end()) sum += it->second; }
+        if (sum >= minAreaM2) hit.push_back(b);
+    }
+    std::vector<double> levels;
+    for (size_t i = 0; i < hit.size(); ++i) if (i + 1 == hit.size() || hit[i + 1] > hit[i] + 1) levels.push_back((static_cast<double>(hit[i]) + 1.0) * binM);
+    std::sort(levels.rbegin(), levels.rend());
+    return levels;
+}
+
+/**
+ * Roof cap: solid stops at the highest roof the scan shows. A thin structure standing over a solid (a lattice mast, a
+ * pole, a crane, rooftop plant) draws inside votes from its scan's back faces, so a cell that runs from inside the solid
+ * up past it is labelled solid all the way up, and making the whole cell air instead hollows the solid below. So every
+ * cell reaching `topPlane` is split by a level plane at a roof level (`roofLevels`) inside its height range, at least
+ * `minRiseM` above its floor: the highest level that has roof inside the cell's own footprint (up-facing measured area
+ * within `levelTolM` of it, at least max(0.1 m2, `localShare` x the cell's plan box), from `roofPts` / `roofArea`,
+ * surface samples), else the highest level no higher than the scan's top over the cell's footprint (`scanPts`, every
+ * measured surface's samples), else the highest level the cell spans: a cell with no roof of its own is still cut where
+ * the structure's roof is, never left whole to be called air from top to bottom. The piece below keeps its votes; the piece above holds
+ * nothing a roof supports. Nothing here knows what stands on the roof: the inputs are surfaces, areas and heights.
+ */
+inline size_t capCellsAtRoof(std::vector<Cell>& cells, std::vector<Plane>& planes, int topPlane, const std::vector<double>& levels,
+                             const std::vector<V3>& roofPts, const std::vector<double>& roofArea, const std::vector<V3>& scanPts,
+                             double localShare = 0.1, double levelTolM = 0.75, double minRiseM = 0.5) {
+    size_t caps = 0;
+    std::vector<Cell> out;
+    out.reserve(cells.size());
+    for (auto& cell : cells) {
+        bool touchesTop = false;
+        V3 lo(1e300, 1e300, 1e300), hi(-1e300, -1e300, -1e300);
+        for (const auto& f : cell.faces) {
+            if (f.plane == topPlane) touchesTop = true;
+            for (const auto& q : f.pts) { lo = V3(std::min(lo.x, q.x), std::min(lo.y, q.y), std::min(lo.z, q.z)); hi = V3(std::max(hi.x, q.x), std::max(hi.y, q.y), std::max(hi.z, q.z)); }
+        }
+        double cut = std::numeric_limits<double>::quiet_NaN();
+        if (touchesTop) {
+            std::vector<double> span;
+            for (double y : levels) if (y > lo.y + minRiseM && y < hi.y - 0.05) span.push_back(y);   // high to low
+            if (!span.empty()) {
+                std::vector<double> local(span.size(), 0.0);
+                for (size_t i = 0; i < roofPts.size(); ++i) {
+                    const V3& q = roofPts[i];
+                    if (q.x < lo.x || q.x > hi.x || q.z < lo.z || q.z > hi.z) continue;
+                    size_t k = 0;
+                    while (k < span.size() && std::abs(q.y - span[k]) > levelTolM) ++k;
+                    if (k == span.size()) continue;
+                    // the roof sample's column through the cell: inside at the level's height
+                    if (!insideCell(cell, planes, V3(q.x, std::clamp(span[k] - 0.5 * levelTolM, lo.y + 1e-3, hi.y - 1e-3), q.z), 1e-4)) continue;
+                    local[k] += roofArea[i];
+                }
+                const double need = std::max(0.1, localShare * (hi.x - lo.x) * (hi.z - lo.z));
+                for (size_t k = 0; k < span.size(); ++k) if (local[k] >= need) { cut = span[k]; break; }
+                if (!std::isfinite(cut)) {
+                    // no roof of its own: cut at the highest level no higher than the scan's top over the cell's footprint
+                    // (a column beside a part stops where the scan beside it stops), else the highest level it spans
+                    double top = -std::numeric_limits<double>::infinity();
+                    for (const V3& q : scanPts) {
+                        if (q.x < lo.x || q.x > hi.x || q.z < lo.z || q.z > hi.z || q.y <= top) continue;
+                        if (!insideCell(cell, planes, V3(q.x, std::clamp(q.y, lo.y + 1e-3, hi.y - 1e-3), q.z), 1e-4)) continue;
+                        top = q.y;
+                    }
+                    for (double y : span) if (y <= top + levelTolM) { cut = y; break; }
+                    if (!std::isfinite(cut)) cut = span.front();
+                }
+            }
+        }
+        if (!std::isfinite(cut)) { out.push_back(std::move(cell)); continue; }
+        Plane pl; pl.n = V3(0, 1, 0); pl.d = -cut;
+        const int id = static_cast<int>(planes.size());
+        Cell above, below;
+        if (!splitCell(cell, pl, id, above, below)) { out.push_back(std::move(cell)); continue; }
+        planes.push_back(pl);
+        out.push_back(std::move(below)); out.push_back(std::move(above));
+        ++caps;
+    }
+    cells.swap(out);
+    return caps;
 }
 
 /** Dinic maximum flow on doubles. */
@@ -1096,6 +1207,32 @@ public:
             }
             leaves = std::move(done);
             for (auto& c : active) leaves.push_back(std::move(c));
+        }
+        if (p.topIsAir) {
+            // solid stops at the highest roof the scan shows (round parts' tops count: they are measured too)
+            std::vector<double> roofY, roofArea;
+            std::vector<V3> roofPts, scanPts; std::vector<double> sampleArea;
+            for (size_t t = 0; t < nt; ++t) {
+                if (!skinSide[t] || apron[t]) continue;
+                {
+                    const V3& a = in.positions[in.indices[t * 3]]; const V3& b = in.positions[in.indices[t * 3 + 1]]; const V3& c = in.positions[in.indices[t * 3 + 2]];
+                    scanPts.push_back(a); scanPts.push_back(b); scanPts.push_back(c); scanPts.push_back(tc[t]);
+                }
+                if (tn[t].y <= 0.7) continue;
+                roofY.push_back(tc[t].y); roofArea.push_back(ta[t]);
+                // surface samples about 0.5 m apart, each with its share of the area, so a thin cell under one large
+                // roof triangle still finds its roof
+                const V3& a = in.positions[in.indices[t * 3]]; const V3& b = in.positions[in.indices[t * 3 + 1]]; const V3& c = in.positions[in.indices[t * 3 + 2]];
+                const int n = std::clamp(static_cast<int>(std::ceil(std::sqrt(ta[t] / 0.25))), 1, 64);
+                const int count = n * (n + 1) / 2;
+                for (int u = 0; u < n; ++u) for (int v = 0; u + v < n; ++v) {
+                    roofPts.push_back(a + (b - a) * ((u + 1.0 / 3.0) / n) + (c - a) * ((v + 1.0 / 3.0) / n));
+                    sampleArea.push_back(ta[t] / count);
+                }
+            }
+            const std::vector<double> levels = roofLevels(roofY, roofArea, p.roofMinAreaM2);
+            M.roofLevels = levels.size();
+            M.roofCaps = capCellsAtRoof(leaves, R.planes, 3, levels, roofPts, sampleArea, scanPts);
         }
         const int nc = static_cast<int>(leaves.size());
         M.cells = leaves.size();

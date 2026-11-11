@@ -313,4 +313,22 @@ describe('shell fit: one closed solid from a scan with gaps', () => {
         expect(c.boundary).toBe(0);
         expect(c.volume).toBeGreaterThan(0);
     }, 120_000);
+
+    it('topIsAir: the solid stops at the roof a mast stands on, closed, the right volume, the mast kept as scan', async () => {
+        const scanPath = path.join(TMP, 'mast_top.glb'), shellPath = path.join(TMP, 'mast_top_shell.glb'), reportPath = path.join(TMP, 'mast_top.json');
+        fs.writeFileSync(scanPath, steppedBlock({ hole: false, mast: true }).glb());
+        await run(['--input', scanPath, '--report', reportPath, '--out-shell', shellPath, '--threads', '2', '--top-air']);
+        const m = JSON.parse(fs.readFileSync(reportPath, 'utf8')).metrics;
+        expect(m.roofLevels).toBeGreaterThanOrEqual(2);   // the base roof at 10 m and the tower top at 20 m
+        expect(m.boundaryEdges).toBe(0);
+        expect(Math.abs(m.shellVolumeM3 - 5000) / 5000).toBeLessThan(0.02);
+        expect(m.residualAreaM2).toBeGreaterThan(9);      // the mast, 2 pi 0.4 x 6 = 15 m2, stays scan
+        // nothing of the closed solid stands above the tower's top (checked from the written GLB)
+        const shell = readGlbTriangles(fs.readFileSync(shellPath));
+        let top = -Infinity;
+        for (let i = 1; i < shell.positions.length; i += 3) top = Math.max(top, shell.positions[i]);
+        expect(top).toBeLessThan(20.5);
+        const c = closedness(shell.positions, shell.indices, 0, shell.indices.length / 3);
+        expect(c.boundary).toBe(0);
+    }, 60_000);
 });
