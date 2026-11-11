@@ -84,5 +84,6 @@ blocking the lens now, while each fix is one number in the layout.
 - **Compare the frame with the brief clause by clause** (each object asked for, its side of the frame, the light's side,
   the lens and frame, the air) and fix the first clause that fails before rendering again.
 - **The still carries the scene's light:** `path_trace_render` of the open scene takes its sun and haze, the same haze
-  the viewport draws. Say what the render cannot show: trees appear at their plain far level there.
+  the viewport draws. Say what the render cannot show: trees carry every leaf and twig there but no textures (the viewport dresses them from its
+  tree texture library), so they read as grey geometry close to the lens.
 - Deliver the still and the scene together, with what is generated (everything here) said plainly.

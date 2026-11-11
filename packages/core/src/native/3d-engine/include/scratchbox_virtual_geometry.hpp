@@ -319,7 +319,8 @@ struct SourceMesh {
     /** Length of the glTF materials array. */
     uint32_t materialCount{0};
     uint32_t skippedPrimitives{0}; // primitives without a surface (points / lines) or without POSITION
-    uint32_t skippedInstancedLevels{0}; // levels of detail drawn by GPU instances, left out (visitNode)
+    uint32_t skippedLodLevels{0};       // coarser levels of a level-of-detail group, left out (visitNode)
+    uint64_t expandedInstances{0};      // EXT_mesh_gpu_instancing instances drawn
 };
 
 using Mat4 = std::array<double, 16>; // column-major
@@ -370,6 +371,26 @@ inline Mat4 nodeLocalMatrix(const Json& node) {
     out[12] = tx;
     out[13] = ty;
     out[14] = tz;
+    out[15] = 1;
+    return out;
+}
+
+/** The matrix of one translation (x, y, z), unit quaternion (x, y, z, w) and scale (x, y, z), as glTF composes them. */
+inline Mat4 mat4FromTrs(const double t[3], const double q[4], const double s[3]) {
+    const double qx = q[0], qy = q[1], qz = q[2], qw = q[3];
+    Mat4 out{};
+    out[0] = (1 - 2 * (qy * qy + qz * qz)) * s[0];
+    out[1] = (2 * (qx * qy + qz * qw)) * s[0];
+    out[2] = (2 * (qx * qz - qy * qw)) * s[0];
+    out[4] = (2 * (qx * qy - qz * qw)) * s[1];
+    out[5] = (1 - 2 * (qx * qx + qz * qz)) * s[1];
+    out[6] = (2 * (qy * qz + qx * qw)) * s[1];
+    out[8] = (2 * (qx * qz + qy * qw)) * s[2];
+    out[9] = (2 * (qy * qz - qx * qw)) * s[2];
+    out[10] = (1 - 2 * (qx * qx + qy * qy)) * s[2];
+    out[12] = t[0];
+    out[13] = t[1];
+    out[14] = t[2];
     out[15] = 1;
     return out;
 }
@@ -454,7 +475,11 @@ private:
         if (scenes.size() > 0) {
             const Json& scene = scenes[index(root_["scene"], 0)];
             const Json& roots = scene["nodes"];
-            for (size_t i = 0; i < roots.size(); ++i) visitNode(index(roots[i]), mat4Identity(), 0);
+            const double finest = finestLodLevel(roots);
+            for (size_t i = 0; i < roots.size(); ++i) {
+                if (coarserLod(index(roots[i]), finest)) continue;
+                visitNode(index(roots[i]), mat4Identity(), 0);
+            }
         } else if (nodes.size() > 0) {
             std::vector<uint8_t> isChild(nodes.size(), 0);
             for (size_t n = 0; n < nodes.size(); ++n) {
@@ -481,16 +506,42 @@ private:
         }
         const Json& node = root_["nodes"][nodeIndex];
         if (node.isNull()) return;
-        // A level of detail whose leaves are GPU instances (extras.sbLod.instanced: SB-Veggie's nearer crown levels) is
-        // left out with its subtree: EXT_mesh_gpu_instancing is not expanded here, and the group's plain level
-        // (instanced false) stands in, so a tree is drawn once and not as every level stacked.
-        const Json& lodInstanced = node["extras"]["sbLod"]["instanced"];
-        if (lodInstanced.type == Json::Bool && lodInstanced.b) { out_.skippedInstancedLevels++; return; }
         Mat4 world = mat4Mul(parent, nodeLocalMatrix(node));
         const Json& meshIdx = node["mesh"];
-        if (!meshIdx.isNull()) appendMesh(root_["meshes"][index(meshIdx)], world);
+        if (!meshIdx.isNull()) {
+            const Json& instancing = node["extensions"]["EXT_mesh_gpu_instancing"]["attributes"];
+            if (instancing.type == Json::Object) appendInstances(root_["meshes"][index(meshIdx)], world, instancing);
+            else appendMesh(root_["meshes"][index(meshIdx)], world);
+        }
         const Json& children = node["children"];
-        for (size_t c = 0; c < children.size(); ++c) visitNode(index(children[c]), world, depth + 1);
+        const double finest = finestLodLevel(children);
+        for (size_t c = 0; c < children.size(); ++c) {
+            if (coarserLod(index(children[c]), finest)) continue;
+            visitNode(index(children[c]), world, depth + 1);
+        }
+    }
+
+    /**
+     * Levels of detail are sibling nodes carrying extras.sbLod.level (SB-Veggie writes each tree's levels as the children
+     * of one node). Of one set of siblings only the finest level present is built: the cluster hierarchy this builder
+     * makes is the level of detail, so a tree is drawn once and coarsened by screen error, not as every level stacked;
+     * a viewport snapshot that holds one level of a tree keeps it. The finest level among `list`, or -1 for none.
+     */
+    double finestLodLevel(const Json& list) const {
+        double finest = -1;
+        for (size_t i = 0; i < list.size(); ++i) {
+            const Json& level = root_["nodes"][index(list[i])]["extras"]["sbLod"]["level"];
+            if (level.type == Json::Number && (finest < 0 || level.num < finest)) finest = level.num;
+        }
+        return finest;
+    }
+
+    /** True (and counted) for a node that is a coarser level than the finest of its siblings. */
+    bool coarserLod(size_t nodeIndex, double finest) {
+        if (finest < 0) return false;
+        const Json& level = root_["nodes"][nodeIndex]["extras"]["sbLod"]["level"];
+        if (level.type == Json::Number && level.num > finest) { out_.skippedLodLevels++; return true; }
+        return false;
     }
 
     /** Non-negative integer field, `def` when absent. */
@@ -533,6 +584,44 @@ private:
         stride = static_cast<size_t>(s);
         count = static_cast<size_t>(n);
         return bin_ + viewOffset + accOffset;
+    }
+
+    /**
+     * EXT_mesh_gpu_instancing: the mesh once per instance, each at the node's frame times its own TRANSLATION, ROTATION
+     * and SCALE (float32, or the integer forms KHR_mesh_quantization allows). A missing attribute is the identity.
+     */
+    void appendInstances(const Json& mesh, const Mat4& world, const Json& attributes) {
+        struct Attr { const uint8_t* data{nullptr}; size_t stride{0}, comp{0}; int64_t ct{0}; bool norm{false}; size_t count{0}; };
+        auto read = [&](const char* name, size_t components) {
+            Attr a;
+            const Json& idx = attributes[name];
+            if (idx.isNull()) return a;
+            const Json& acc = root_["accessors"][index(idx)];
+            a.ct = acc["componentType"].asInt(0);
+            a.comp = componentBytes(a.ct);
+            if (a.comp == 0 || acc["type"].str != (components == 4 ? "VEC4" : "VEC3")) {
+                throw GlbFormatError(std::string("EXT_mesh_gpu_instancing ") + name + " must be " + (components == 4 ? "VEC4" : "VEC3") + " of float32 or 8 or 16-bit integers");
+            }
+            a.norm = acc["normalized"].type == Json::Bool && acc["normalized"].b;
+            a.data = accessorData(acc, a.comp * components, a.stride, a.count);
+            return a;
+        };
+        const Attr t = read("TRANSLATION", 3), r = read("ROTATION", 4), s = read("SCALE", 3);
+        const size_t count = t.data ? t.count : r.data ? r.count : s.data ? s.count : 0;
+        if ((t.data && t.count != count) || (r.data && r.count != count) || (s.data && s.count != count)) {
+            throw GlbFormatError("EXT_mesh_gpu_instancing attributes differ in count");
+        }
+        for (size_t i = 0; i < count; ++i) {
+            double tr[3] = {0, 0, 0}, q[4] = {0, 0, 0, 1}, sc[3] = {1, 1, 1};
+            for (int k = 0; k < 3 && t.data; ++k) tr[k] = readComponent(t.data + i * t.stride + k * t.comp, t.ct, t.norm);
+            for (int k = 0; k < 4 && r.data; ++k) q[k] = readComponent(r.data + i * r.stride + k * r.comp, r.ct, r.norm);
+            for (int k = 0; k < 3 && s.data; ++k) sc[k] = readComponent(s.data + i * s.stride + k * s.comp, s.ct, s.norm);
+            // integer quaternions are normalized only approximately; renormalize so the instance keeps its size
+            const double qn = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+            if (qn > 1e-12) for (double& c : q) c /= qn; else { q[0] = q[1] = q[2] = 0; q[3] = 1; }
+            appendMesh(mesh, mat4Mul(world, mat4FromTrs(tr, q, sc)));
+            out_.expandedInstances++;
+        }
     }
 
     /** Bytes of one component: float32, (u)int16 or (u)int8; 0 for any other type. */

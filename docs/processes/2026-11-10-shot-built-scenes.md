@@ -23,7 +23,7 @@ What was taken from the case, as continuous rules rather than a scene recipe: on
 * **Review far plane:** the review's software renders drew nothing past 1 km. Every view of the baseline's 1 km street came back blank, and the agent's independent reviewer scored it 1/10 for "blank images" (`HeadlessMeshSilhouetteRenderer.renderShadedMesh` `farPlane`).
 * **Haze that thins with height** (`packages/core/src/common/spatial/height-haze.ts`, one expression in TypeScript and GLSL): `atmosphere_configure_scene` gained `visibilityMeters` (a grey haze, Koschmieder extinction 3.912 / V) and `hazeScaleHeightMeters` / `hazeBaseAltitudeMeters`. The aerial perspective pass multiplies its optical depth by the sight line's mean density. The existing `fogHeight` / `fogBaseAltitude` fields were passed around but read by no shader; they now are.
 * **`path_trace_render`** finds a published model (`/models/...`, which lives under the repo's `public/models`, outside the chat workspace), or the open scene's own model when given no path. With no camera it renders the open scene's first shot at its own frame size.
-* **The virtual geometry builder** (`scratchbox_virtual_geometry.hpp`) decodes `KHR_mesh_quantization` positions and texture coordinates, and leaves out levels of detail drawn by GPU instances (`extras.sbLod.instanced`), keeping each tree's plain level. Before this, no scripted scene with trees could be path-traced.
+* **The virtual geometry builder** (`scratchbox_virtual_geometry.hpp`) decodes `KHR_mesh_quantization` positions and texture coordinates, and leaves out levels of detail drawn by GPU instances (`extras.sbLod.instanced`), keeping each tree's plain level. Before this, no scripted scene with trees could be path-traced. (Since replaced: the builder now expands GPU instances and builds each group's level 0.)
 * **Guidance:** rule 9 of the script guide (`prompt-builder.ts`), the tool's usage note, `python-3d-procedural-director` section 7, and AGENTS.md section 3.9.
 
 ## 3. What Was Tested & What Worked (Verified)
@@ -60,7 +60,7 @@ All three runs are measured against one camera, (0, 160, 95) toward (0, 14, −2
 ## 5. Candidate Tool/Service Ideas
 
 * **Haze in the path tracer:** a participating medium with the same height falloff (`height-haze.ts`), so the rendered still matches the viewport. This session could only show haze in the viewport.
-* **GPU instancing in the virtual geometry builder** (`EXT_mesh_gpu_instancing`): the trees' near levels are left out of path-traced stills today.
+* **GPU instancing in the virtual geometry builder** (`EXT_mesh_gpu_instancing`): done after this session; the builder expands instances and builds each level-of-detail group's level 0, so stills carry every leaf and twig. Still open: the trees' textures, which the viewport applies from its tree texture library and the GLB does not carry, so path-traced trees are grey geometry.
 * **A viewport capture tool for the agent:** "render the live viewport from the scene's shot to a PNG", with its atmosphere, tone mapping and lens. `path_trace_render` and the clay review both ignore the viewport's haze.
 * **A camera path on the scene timeline:** the brief's "slow push-in" has no field to land in (`Scene3DData.timeline` has no camera track).
 
