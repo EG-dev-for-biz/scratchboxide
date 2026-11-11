@@ -127,8 +127,8 @@ When the request named a camera and asked for a render, judge the delivered fram
    the lower right of the frame.
 4. **Density, measured:** the script tool's shot detail budget gives the share of in-frame triangles under 2 px
    ("wasted") and pixels per triangle ("under-built" past 16). A frame of plain boxes is under-built whatever it costs.
-5. **What the tool cannot show is not the scene's fault, and is said plainly:** the path tracer draws no haze and shows
-   trees at their plain far level; the live viewport draws the haze. Review renders of a scene more than a kilometre
+5. **What the tool cannot show is not the scene's fault, and is said plainly:** the path tracer shows trees at their
+   plain far level (it draws the scene's haze as the viewport does). Review renders of a scene more than a kilometre
    across were blank before their far plane was fixed: a blank review image is a render fault to report, never a verdict
    on the scene.
 

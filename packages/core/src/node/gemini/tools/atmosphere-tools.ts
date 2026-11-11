@@ -201,7 +201,7 @@ export const ATMOSPHERE_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 visibilityMeters: {
                     type: 'NUMBER',
-                    description: 'Optional: a grey haze of this visibility at ground level, in metres (the distance at which a dark object fades to 2% contrast: a clear day tens of kilometres, a hazy city 2000-5000, mist a few hundred), drawn on top of the sky\'s own aerial perspective and thinned with height by hazeScaleHeightMeters. Omitted adds no haze.'
+                    description: 'Optional: a grey haze of this visibility at ground level, in metres (the distance at which a dark object fades to 2% contrast: a clear day tens of kilometres, a hazy city 2000-5000, mist a few hundred), drawn on top of the sky\'s own aerial perspective and thinned with height by hazeScaleHeightMeters; path_trace_render of this scene draws the same haze. Omitted adds no haze.'
                 },
                 hazeScaleHeightMeters: {
                     type: 'NUMBER',

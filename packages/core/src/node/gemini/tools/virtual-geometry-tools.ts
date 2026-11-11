@@ -61,12 +61,21 @@ export const VIRTUAL_GEOMETRY_TOOL_DECLARATIONS: ToolDeclaration[] = [
                 },
                 sun: {
                     type: 'OBJECT',
-                    description: 'A physical sun and sky instead of the studio dome.',
+                    description: 'A physical sun and sky instead of the studio dome. Omit it to use the open scene\'s own sun (atmosphere_configure_scene) when rendering that scene.',
                     properties: {
                         elevationDeg: { type: 'NUMBER', description: 'Sun height above the horizon, degrees.' },
                         azimuthDeg: { type: 'NUMBER', description: 'Sun direction: 0 toward -Z, 90 toward +X, degrees (the same as atmosphere_configure_scene\'s sunAzimuthDeg; hero.sun_azimuth_deg(frame_x) gives it from a declared shot).' }
                     },
                     required: ['elevationDeg', 'azimuthDeg']
+                },
+                haze: {
+                    type: 'OBJECT',
+                    description: 'Haze in the air, with a sun: a grey haze of visibilityMeters at its base that thins with height by scaleHeightMeters above baseAltitudeMeters (the GLB\'s coordinates, default 0), as atmosphere_configure_scene draws it in the viewport. Omit it to render the open scene\'s own haze when rendering that scene.',
+                    properties: {
+                        visibilityMeters: { type: 'NUMBER', description: 'Distance at which a dark object fades to 2% contrast at the haze\'s base, metres.' },
+                        scaleHeightMeters: { type: 'NUMBER', description: 'Height over which the haze thins to about a third, metres; omit for the same haze at every height.' },
+                        baseAltitudeMeters: { type: 'NUMBER', description: 'Height at and below which the haze is densest (default 0).' }
+                    }
                 },
                 width: { type: 'NUMBER', description: 'Image width in pixels (default 1920, at most 8192).' },
                 height: { type: 'NUMBER', description: 'Image height in pixels (default 1080, at most 8192).' },
@@ -84,6 +93,26 @@ const clampInt = (v: unknown, fallback: number, min: number, max: number) =>
     typeof v === 'number' && Number.isFinite(v) ? Math.max(min, Math.min(max, Math.round(v))) : fallback;
 
 let metalPathTracer: MetalPathTracerService | null = null;
+
+/**
+ * The sun and haze an open 3D scene is lit with (features.atmosphericScattering, written by atmosphere_configure_scene),
+ * in the scene's coordinates; each absent when the scene sets none.
+ */
+export function sceneSunAndHaze(scene: Scene3DData | undefined): {
+    sun?: { elevationDeg: number; azimuthDeg: number };
+    haze?: { visibilityMeters?: number; scaleHeightMeters?: number; baseAltitudeMeters?: number };
+} {
+    const a = scene?.features?.atmosphericScattering;
+    if (!a || typeof a !== 'object' || a.enabled === false) return {};
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+    const elevation = num(a.sunElevation), azimuth = num(a.sunAzimuth);
+    const sun = elevation !== undefined && azimuth !== undefined ? { elevationDeg: elevation, azimuthDeg: azimuth } : undefined;
+    const visibility = num(a.hazeVisibilityMeters), scale = num(a.fogHeight), base = num(a.fogBaseAltitude);
+    const haze = a.aerialPerspectiveEnabled !== false && (visibility !== undefined || scale !== undefined)
+        ? { ...(visibility !== undefined ? { visibilityMeters: visibility } : {}), ...(scale !== undefined ? { scaleHeightMeters: scale } : {}), ...(base !== undefined ? { baseAltitudeMeters: base } : {}) }
+        : undefined;
+    return { ...(sun ? { sun } : {}), ...(haze ? { haze } : {}) };
+}
 
 /** Where the app publishes generated models (python-3d-tools publishToModels): `<repo>/public/models`, served as /models/. */
 function publishedModelsDir(): string {
@@ -238,8 +267,25 @@ export const virtualGeometryHandlers: Record<string, ToolHandler> = {
                 }
             };
         }
-        const sun = args.sun as { elevationDeg?: unknown; azimuthDeg?: unknown } | undefined;
-        if (sun && (typeof sun.elevationDeg !== 'number' || typeof sun.azimuthDeg !== 'number')) return fail('sun needs elevationDeg and azimuthDeg.');
+        const sunArg = args.sun as { elevationDeg?: unknown; azimuthDeg?: unknown } | undefined;
+        if (sunArg && (typeof sunArg.elevationDeg !== 'number' || typeof sunArg.azimuthDeg !== 'number')) return fail('sun needs elevationDeg and azimuthDeg.');
+        // Rendering the open scene's own model: its sun and haze unless the call gives its own (atmosphere_configure_scene).
+        const sceneLight = resolved.fromOpenScene ? sceneSunAndHaze(openScene) : {};
+        const sun = sunArg ? { elevationDeg: sunArg.elevationDeg as number, azimuthDeg: sunArg.azimuthDeg as number } : sceneLight.sun;
+        const hazeArg = args.haze as Record<string, unknown> | undefined;
+        const hazeGlb = hazeArg ? {
+            visibilityMeters: typeof hazeArg.visibilityMeters === 'number' ? hazeArg.visibilityMeters : undefined,
+            scaleHeightMeters: typeof hazeArg.scaleHeightMeters === 'number' ? hazeArg.scaleHeightMeters : undefined,
+            baseAltitudeMeters: typeof hazeArg.baseAltitudeMeters === 'number' ? hazeArg.baseAltitudeMeters : undefined
+        } : sceneLight.haze;
+        if (hazeGlb && !sun) return fail('haze needs a sun: give sun, or render an open scene lit by atmosphere_configure_scene.');
+        // Heights in the file's coordinates, which are relative to its stored origin.
+        const fileOriginY = hazeGlb ? readSbvgOrigin(built.sbvgPath)[1] : 0;
+        const haze = hazeGlb ? {
+            ...(hazeGlb.visibilityMeters !== undefined ? { visibilityMeters: hazeGlb.visibilityMeters } : {}),
+            ...(hazeGlb.scaleHeightMeters !== undefined ? { scaleHeightMeters: hazeGlb.scaleHeightMeters } : {}),
+            baseAltitudeMeters: (hazeGlb.baseAltitudeMeters ?? 0) - fileOriginY
+        } : undefined;
 
         const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-path-trace-render-'));
         metalPathTracer ??= new MetalPathTracerService();
@@ -256,7 +302,7 @@ export const virtualGeometryHandlers: Record<string, ToolHandler> = {
                 optimizations: { sampler: 'sobol' },
                 materials: { glbPath: file },
                 camera,
-                lighting: sun ? { sun: { elevationDeg: sun.elevationDeg as number, azimuthDeg: sun.azimuthDeg as number } } : { studio: {} },
+                lighting: sun ? { sun, ...(haze ? { haze } : {}) } : { studio: {} },
                 ...(typeof args.exposureEv === 'number' ? { exposureEv: args.exposureEv } : {})
             });
         } catch (err) {
@@ -275,7 +321,7 @@ export const virtualGeometryHandlers: Record<string, ToolHandler> = {
         const record = {
             renderer: 'Metal path tracer (sbvg_pathtracer)', device: s.device, source: path.relative(ctx.workspaceRoot, file),
             width: s.width, height: s.height, samplesPerPixel: s.samplesPerPixel, maxBounces: s.maxBounces, denoised: s.denoised,
-            exposureEv: s.exposureEv, lighting: s.lighting === 'sky' ? { sun: s.sun } : { studio: {} }, camera: worldCamera,
+            exposureEv: s.exposureEv, lighting: s.lighting === 'sky' ? { sun: s.sun, ...(hazeGlb ? { haze: hazeGlb } : {}) } : { studio: {} }, camera: worldCamera,
             cut: s.cut, geometryCoverage: s.geometryCoverage, materials: s.materials, renderMs: s.renderMs, raysPerSecond: s.raysPerSecond
         };
         fs.writeFileSync(imagePath.replace(/\.png$/, '.json'), JSON.stringify(record, null, 2), 'utf8');

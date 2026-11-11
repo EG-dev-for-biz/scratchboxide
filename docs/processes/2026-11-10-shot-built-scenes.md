@@ -1,7 +1,7 @@
 # Process: Scenes built for a shot: the in-app agent on a cinematic city brief
 
 > **Recorded:** 2026-11-10
-> **Status:** Verified for the shot plan, its report, the shot-camera review, haze with height and the path-traced still; Needs Fix: the path tracer draws no haze, and the agent's scenes stay sparse
+> **Status:** Verified for the shot plan, its report, the shot-camera review, haze with height and the path-traced still; Needs Fix (later fixed: the path tracer draws the haze since its height-haze commit): the path tracer drew no haze, and the agent's scenes stay sparse
 > **Tags:** `operate-scratchbox` `3d-viewport` `python-3d` `shot-plan` `detail-budget` `atmosphere` `path-tracer`
 > **Target Domain:** Gemini agent chat / scripted 3D scenes (`execute_3d_python_script`), 3D viewport, Metal path tracer
 
@@ -51,7 +51,7 @@ All three runs are measured against one camera, (0, 160, 95) toward (0, 14, −2
 * **The first rule made scenes worse (run 2).** The agent tested `resolves()` on a window's 22 cm reveal and a fire escape's 15 cm bars. From 160 m up neither is 2 px, so it left out the whole window system and every fire escape: 12 k triangles near the lens against the baseline's 316 k. Fixed by asking about the feature's overall size and sizing members with `member_m`, which run 3 used.
 * **Spatial left/right.** Run 3's first pass put the tower on the right and the sun ahead-right: it took +X as frame-left while looking down −Z. The agent fixed it itself from its render. `frame_point` and the review's side check were added after that run and have not yet been exercised by the agent.
 * **Arrival from the chat re-frames the camera.** The viewport kept a saved pose only for the first model of a mount (`Scene3DPrimitive.tsx`, both generated-model paths), so a scene arriving from the chat into an open viewport was re-framed, its shot ignored, until reloaded. Fixed in `cameraSettings.ts` `keepsPoseForGeneratedModel`, where a scene that declares shots always keeps its camera; verified live (section 3).
-* **The path tracer draws no haze**, so the hero render shows none of what the agent set; the viewport draws it.
+* **The path tracer drew no haze**, so the hero render showed none of what the agent set; the viewport drew it. Fixed after this session: both tracers draw the same height haze (`render::HeightHaze`, `lighting.haze`), and `path_trace_render` takes the open scene's sun and haze; on run 3's final scene the street's contrast falls 32.9 → 14.2 and the roofs' 47.6 → 30.0.
 * **The scenes stay sparse.** The final pass is 34 px a triangle (the first pass of run 3 was 8.4). The blocks behind the brick row are plain boxes, and the materials are flat factors with no weathering pass, which the brief did not ask for.
 * **The agent's own error:** run 2's first script failed on an indentation error in its 43 KB script; it rewrote and continued.
 * **A page reload ends the agent's turn** (run 2): the turn stopped mid-request and had to be asked to continue.

@@ -44,8 +44,8 @@ struct Uniforms {
     float sunTangent[3]{1, 0, 0}, sunSolidAngle{0.0f};
     float sunBitangent[3]{0, 0, 1}, metallic{0.0f};
     float sunIrradiance[3]{0, 0, 0}, limbDarkening{0.6f};
-    float hazeExtinction[3]{0, 0, 0}, pad0{0};
-    float albedo[3]{0.5f, 0.5f, 0.5f}, pad1{0};
+    float hazeExtinction[3]{0, 0, 0}, hazeScaleHeight{0};
+    float albedo[3]{0.5f, 0.5f, 0.5f}, hazeBaseY{0};
     uint32_t seedLo{0}, seedHi{0};
     /** 0: one uniform material (albedo, roughness, metallic above); 1: the material table and per-triangle ids. */
     uint32_t useMaterials{0};
@@ -282,8 +282,8 @@ struct Uniforms {
     float sunTangent[3], sunSolidAngle;
     float sunBitangent[3], metallic;
     float sunIrradiance[3], limbDarkening;
-    float hazeExtinction[3], pad0;
-    float albedo[3], pad1;
+    float hazeExtinction[3], hazeScaleHeight;
+    float albedo[3], hazeBaseY;
     uint seedLo, seedHi, useMaterials, defaultMaterial;
     uint useBounceAccel;
     float bounceErrorPerDistance;
@@ -632,6 +632,16 @@ inline float3 sampleSunDirection(constant Uniforms& u, float u1, float u2) {
     float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
     float phi = 2.0f * kPi * u2;
     return normalize(f3(u.sunDir) * cosTheta + (f3(u.sunTangent) * cos(phi) + f3(u.sunBitangent) * sin(phi)) * sinTheta);
+}
+
+// Mean haze density along a segment between heights y0 and y1 (render::detail::hazeColumnFactor, the same expression).
+inline float hazeColumn(float t) { return t <= 0.0f ? t : 1.0f - exp(-t); }
+inline float hazeColumnFactor(float y0, float y1, float scaleHeight, float base) {
+    if (scaleHeight <= 0.0f) return 1.0f;
+    float a = (y0 - base) / scaleHeight, b = (y1 - base) / scaleHeight;
+    float span = b - a;
+    if (abs(span) < 1e-4f) return a <= 0.0f ? 1.0f : exp(-a);
+    return (hazeColumn(b) - hazeColumn(a)) / span;
 }
 
 inline float3 horizonRadiance(constant Uniforms& u, device const float* lut, float3 direction) {
@@ -1524,7 +1534,8 @@ inline PathResult tracePath(float3 origin, float3 dir, thread Sampler& smp, cons
             }
         }
         if (sky) {
-            float3 opticalDepth = f3(u.hazeExtinction) * hit.distance;
+            float column = hazeColumnFactor(origin.y, origin.y + dir.y * hit.distance, u.hazeScaleHeight, u.hazeBaseY);
+            float3 opticalDepth = f3(u.hazeExtinction) * (hit.distance * column);
             float3 transmittance = float3(exp(-opticalDepth.x), exp(-opticalDepth.y), exp(-opticalDepth.z));
             float3 inScatter = throughput * (horizonRadiance(u, lut, dir) * (float3(1.0f) - transmittance));
             if (giActive) accumulate(giRadiance, inScatter, bounce, u.clampIndirect);

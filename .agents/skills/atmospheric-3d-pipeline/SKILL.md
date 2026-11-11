@@ -192,8 +192,8 @@ for every parameter; a backlit street at golden hour with haze that hugs the gro
   the frame (-1.5 ahead and to the left).
 - **Haze:** `visibilityMeters` (a clear day tens of kilometres, a hazy city 2000-5000, mist a few hundred) and
   `hazeScaleHeightMeters` (30-80 for street haze under clear upper air) only when the request asks for air, haze or mist.
-- **Where it shows:** the live viewport draws the haze; `path_trace_render` draws sun and sky but no haze. Say so when a
-  still is delivered for a hazy brief.
+- **Where it shows:** the live viewport and `path_trace_render` draw the same haze. A still of the open scene takes the
+  scene's sun and haze by itself; `path_trace_render` `haze` sets them for any other model.
 
 ---
 

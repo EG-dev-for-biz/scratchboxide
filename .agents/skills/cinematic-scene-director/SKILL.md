@@ -83,6 +83,6 @@ blocking the lens now, while each fix is one number in the layout.
   `workspace_view_image` and look at it yourself.
 - **Compare the frame with the brief clause by clause** (each object asked for, its side of the frame, the light's side,
   the lens and frame, the air) and fix the first clause that fails before rendering again.
-- **Say what the render cannot show:** the path tracer draws no haze, and trees appear at their plain far level there.
-  When the brief asks for haze, say that the live viewport shows it and the still does not, rather than claiming it.
+- **The still carries the scene's light:** `path_trace_render` of the open scene takes its sun and haze, the same haze
+  the viewport draws. Say what the render cannot show: trees appear at their plain far level there.
 - Deliver the still and the scene together, with what is generated (everything here) said plainly.

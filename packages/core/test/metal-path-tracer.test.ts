@@ -19,7 +19,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { deflateSync } from 'zlib';
-import { MetalPathTracerService, MetalPathTracerError, readLinearColor, type MetalDeviceInfo, type MetalPathTraceResult } from '../src/node/3d-engine/metal-path-tracer-service';
+import { MetalPathTracerService, MetalPathTracerError, readLinearColor, readSbvgOrigin, type MetalDeviceInfo, type MetalPathTraceResult } from '../src/node/3d-engine/metal-path-tracer-service';
+import { hazeColumnFactor } from '../src/common/spatial/height-haze';
 import { VirtualGeometryBuildService } from '../src/node/3d-engine/virtual-geometry-service';
 import { requireAsset, withReason } from './helpers/requirements';
 
@@ -922,3 +923,88 @@ describe.skipIf(process.platform !== 'darwin')('Path tracer alpha-masked surface
         expect(opaque).toBeLessThan(0.05);
     });
 });
+
+describe.skipIf(process.platform !== 'darwin')('Path tracer haze that thins with height (as the viewport draws it)', () => {
+    const service = new MetalPathTracerService();
+    const builder = new VirtualGeometryBuildService();
+    let tmp = '', sbvg = '', glb = '';
+    let device: MetalDeviceInfo;
+    let originY = 0;
+    // A dark street 400 m long, and on its left a dark roof 60 m up over the same stretch, seen from 80 m up.
+    const dark = { pbrMetallicRoughness: { baseColorFactor: [0.04, 0.04, 0.04, 1], metallicFactor: 0, roughnessFactor: 1 } };
+
+    beforeAll(async () => {
+        tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-pt-haze-'));
+        device = await service.probe();
+        if (!device.raytracing) return;
+        const ground = gridMesh([-60, 0, 20], [120, 0, 0], [0, 0, -420], 24, 84, 0);
+        const roof = gridMesh([-60, 60, -60], [52, 0, 0], [0, 0, -300], 12, 60, 0);
+        glb = path.join(tmp, 'street.glb');
+        writeSceneGlb(glb, [ground, roof], [dark]);
+        sbvg = path.join(tmp, 'street.sbvg');
+        await builder.build(glb, sbvg, { singleLevel: true });
+        originY = readSbvgOrigin(sbvg)[1];
+    }, 300_000);
+
+    const render = (name: string, haze: object | undefined, backend: 'metal' | 'cpu' = 'metal') => {
+        // The file is relative to its origin: the camera and the haze's base are given in its coordinates.
+        const lift = (p: [number, number, number]): [number, number, number] => [p[0], p[1] - originY, p[2]];
+        return service.render({
+            sbvgPath: sbvg, materials: { glbPath: glb }, outputDir: path.join(tmp, `${name}_${backend}`), backend,
+            width: 160, height: 90, samplesPerPixel: 32, maxBounces: 1, seed: 5, lod: { thresholdPx: 0.01 },
+            lighting: { sun: { elevationDeg: 35, azimuthDeg: 200 }, ...(haze ? { haze } : {}) },
+            camera: { position: lift(eye), target: lift(look), verticalFovDeg: fovDeg }
+        });
+    };
+    const eye: [number, number, number] = [0, 80, 40], look: [number, number, number] = [0, 20, -200], fovDeg = 40;
+    /** The pixel a world point projects to (pinhole, the frame's aspect), as the tracer's camera is built. */
+    const pixelOf = (p: number[], w: number, h: number) => {
+        const f = look.map((v, i) => v - eye[i]); const fl = Math.hypot(...f); const fw = f.map(v => v / fl);
+        const r = [-fw[2], 0, fw[0]]; const rl = Math.hypot(...r); const rw = r.map(v => v / rl);
+        const u = [rw[1] * fw[2] - rw[2] * fw[1], rw[2] * fw[0] - rw[0] * fw[2], rw[0] * fw[1] - rw[1] * fw[0]];
+        const d = p.map((v, i) => v - eye[i]); const z = d[0] * fw[0] + d[1] * fw[1] + d[2] * fw[2];
+        const t = Math.tan(fovDeg * Math.PI / 360), a = w / h;
+        const x = (d[0] * rw[0] + d[1] * rw[1] + d[2] * rw[2]) / (z * t * a), y = (d[0] * u[0] + d[1] * u[1] + d[2] * u[2]) / (z * t);
+        return [Math.round((x + 1) / 2 * w), Math.round((1 - y) / 2 * h)];
+    };
+    // A roof point and a street point about the same distance from the lens (155 m and 153 m).
+    const roofPoint = [-34, 60, -110], streetPoint = [10, 0, -90];
+    const at = (r: MetalPathTraceResult, p: number[]) => {
+        const c = readLinearColor(r), w = r.stats.width, h = r.stats.height;
+        const [px, py] = pixelOf(p, w, h);
+        let sum = 0, n = 0;
+        for (let y = py - 2; y <= py + 2; y++) for (let x = px - 2; x <= px + 2; x++) { sum += luminance(c, (y * w + x) * 3); n++; }
+        return sum / n;
+    };
+    const regions = (r: MetalPathTraceResult) => ({ roof: at(r, roofPoint), street: at(r, streetPoint) });
+
+    it('fills the street with haze and leaves the roof 60 m up nearly clear, as the column factor says', async ctx => {
+        if (!device.raytracing) return ctx.skip();
+        const clear = regions(await render('clear', undefined));
+        const layered = await render('layered', { visibilityMeters: 400, scaleHeightMeters: 20, baseAltitudeMeters: -originY });
+        const uniform = regions(await render('uniform', { visibilityMeters: 400 }));
+        const hazy = regions(layered);
+        expect(layered.stats.haze).toMatchObject({ scaleHeightMeters: 20 });
+        expect(layered.stats.haze!.extinctionPerM).toBeCloseTo(3.912 / 400, 6);
+        const streetGain = hazy.street - clear.street, roofGain = hazy.roof - clear.roof;
+        // Seen from 80 m up, the street's sight lines run through the layer, the roof's lie above most of it.
+        expect(hazeColumnFactor(80, 0, 20)).toBeGreaterThan(4 * hazeColumnFactor(80, 60, 20));
+        expect(streetGain).toBeGreaterThan(0);
+        expect(streetGain).toBeGreaterThan(3 * Math.max(roofGain, 0));
+        // The same haze at every height brightens the roof about as much as the street.
+        const uStreet = uniform.street - clear.street, uRoof = uniform.roof - clear.roof;
+        expect(uRoof).toBeGreaterThan(0.5 * uStreet);
+    }, 300_000);
+
+    it('agrees between the GPU and the CPU reference with haze on', async ctx => {
+        if (!device.raytracing) return ctx.skip();
+        const haze = { visibilityMeters: 400, scaleHeightMeters: 20, baseAltitudeMeters: -originY };
+        const gpu = await render('parity', haze, 'metal');
+        const cpu = await render('parity', haze, 'cpu');
+        expect(cpu.stats.haze).toEqual(gpu.stats.haze);
+        const agreement = compareLinear(gpu, cpu);
+        expect(Math.abs(agreement.meanRatio - 1)).toBeLessThan(0.02);
+        expect(agreement.blockMeanRelDiff).toBeLessThan(0.03);
+    }, 300_000);
+});
+
