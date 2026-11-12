@@ -12,10 +12,13 @@ import { CanvasArtifact, LiveCodeSandboxData, PrimitiveType, StageLayoutMode, St
 import { ProjectItem } from '../ProjectsModal';
 import { ProjectArtifactController } from '../project-artifact-controller';
 import { StageDock } from './stage-dock';
+import type { SceneProposalReview } from '../hooks/useSceneProposalReview';
 
 /** Everything the right-hand artifact stage (header, tabs, version controls and primitive surfaces) needs from the Studio. */
 export interface ArtifactStageProps {
     activeArtifact: CanvasArtifact | undefined;
+    /** The agent edit waiting on the scene on stage, with Accept / Reject (services/scene-proposals.ts). */
+    sceneProposalReview?: SceneProposalReview;
     setActiveArtifact: (updater: CanvasArtifact | undefined | ((prev: CanvasArtifact | undefined) => CanvasArtifact | undefined)) => void;
     artifactHistory: CanvasArtifact[];
     setArtifactHistory: (updater: CanvasArtifact[] | ((prev: CanvasArtifact[]) => CanvasArtifact[])) => void;

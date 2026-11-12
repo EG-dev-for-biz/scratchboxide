@@ -30,6 +30,7 @@ export function getActiveUserName(customName?: string): string {
 import type { VideoTimelineData, TimelineTrack, KeyframeEasing } from './services/video/videoTypes';
 import type { SplatEditStroke } from '../../common/spatial/splat-edits';
 import type { StagedBuildState } from '../../common/spatial/staged-location-contracts';
+import type { SceneProposal } from './services/scene-proposals';
 export type { VideoTimelineData, TimelineTrack };
 export * from './services/video/videoTypes';
 
@@ -1919,6 +1920,8 @@ export interface ChatSession {
     artifactHistory: CanvasArtifact[];
     /** 3D scenes this session has made a node graph for (or that were here before it did): never made twice. */
     nodeGraphsFor?: string[];
+    /** Agent edits to an open 3D scene waiting for Accept / Reject, one per scene (services/scene-proposals.ts). */
+    sceneProposals?: SceneProposal[];
     layoutMode?: StudioLayoutMode;
     fileType?: WorkspaceFileType;
     workspaceId?: string;

@@ -60,6 +60,8 @@ import { cleanMessageTextSmart } from '../ChatMarkdownRenderer';
 import { ProjectArtifactController } from '../project-artifact-controller';
 import { WorkspaceConfigClient } from '../workspace-config-client';
 import { markStagedRun, publishStageEvent, settleStagedRunInSession } from '../primitives/scene3d/stagedBuild/stagedBuildState';
+import { isProposalDecided, routeAgentSceneArtifact, upsertProposal } from '../services/scene-proposals';
+import type { SceneProposal } from '../services/scene-proposals';
 import type { StageEvent } from '../../../common/spatial/staged-location-contracts';
 import { ProjectItem } from '../ProjectsModal';
 
@@ -157,6 +159,14 @@ interface StreamProgress {
     loadedTools?: string[];
     /** Notes from tool results whose media a model other than the requested one made (recordMediaModelNote). */
     mediaModelNotes: string[];
+    /** The turn's latest agent edit to the open scene, as the backend sent it: routed again at commit against the live scene then. */
+    agentScene?: CanvasArtifact;
+    /** The turn's proposal for that edit (services/scene-proposals.ts): what it already applied stays what Undo takes back. */
+    agentProposal?: SceneProposal;
+    /** The scene this turn last put on the stage for that edit. */
+    agentShown?: CanvasArtifact;
+    /** How many of this turn's proposals the user has already decided on (each later one gets its own id). */
+    proposalRound?: number;
 }
 
 interface GenerationContext {
@@ -168,6 +178,8 @@ interface GenerationContext {
     generationStartTime: number;
     thinkingTimer: ReturnType<typeof setInterval>;
     progress: StreamProgress;
+    /** The artifact the request carried: the base an agent's edit to the open scene is read against. */
+    baseArtifact?: CanvasArtifact;
 }
 
 interface BackendStreamResult {
@@ -394,11 +406,44 @@ function beginGeneration(d: SendMessageDeps, text: string, textToSend: string | 
         }
     }, 100);
     const progress: StreamProgress = { text: '', thinking: '', steps: [], execs: [], mediaModelNotes: [] };
-    return { text, textToSend, targetPrimitiveType, targetSessionId, updatedMessages, generationStartTime, thinkingTimer, progress };
+    return { text, textToSend, targetPrimitiveType, targetSessionId, updatedMessages, generationStartTime, thinkingTimer, progress, baseArtifact: d.activeArtifact };
+}
+
+/**
+ * An agent artifact routed against the live scene: an edit to the open scene is applied as a delta (the user's edits since
+ * the request stand) or held for review (services/scene-proposals.ts). `artifact` is what the stage shows (undefined: the
+ * stage stays as it is), `proposals` the session's waiting proposals after it.
+ */
+function routeAgentArtifact(ctx: GenerationContext, incoming: CanvasArtifact, live: CanvasArtifact | undefined): {
+    artifact: CanvasArtifact | undefined;
+    routed: boolean;
+    proposals: (list: SceneProposal[] | undefined) => SceneProposal[] | undefined;
+} {
+    // the user decided on this turn's proposal while the turn ran: what it held is settled, so later calls are read from
+    // the agent's scene as it stood then (only their own changes are new), under a new proposal
+    if (ctx.progress.agentProposal && isProposalDecided(ctx.progress.agentProposal.id) && ctx.progress.agentScene) {
+        ctx.baseArtifact = ctx.progress.agentScene;
+        ctx.progress.agentProposal = undefined;
+        ctx.progress.agentShown = undefined;
+        ctx.progress.proposalRound = (ctx.progress.proposalRound ?? 0) + 1;
+    }
+    const proposalId = `proposal-${ctx.targetSessionId}-${ctx.generationStartTime}-${incoming.id}${ctx.progress.proposalRound ? `-${ctx.progress.proposalRound}` : ''}`;
+    const previous = ctx.progress.agentProposal?.id === proposalId ? ctx.progress.agentProposal : undefined;
+    // the backend sends a tool's scene twice (artifact_start, artifact_complete) and the next can come before the stage
+    // re-renders: the scene this turn last put on the stage is the live one while it is newer than what React reports
+    const shown = ctx.progress.agentShown;
+    const current = shown && shown.id === incoming.id && (!live || live.id !== shown.id || (shown.version ?? 0) > (live.version ?? 0)) ? shown : live;
+    const result = routeAgentSceneArtifact({ incoming, base: ctx.baseArtifact, live: current, proposalId, previous });
+    const routed = result.show !== incoming;
+    const proposal = result.proposal;
+    if (proposal) ctx.progress.agentProposal = proposal;
+    if (routed && proposal?.status !== 'pending') ctx.progress.agentShown = result.show;
+    const proposals = (list: SceneProposal[] | undefined) => (proposal ? upsertProposal(list, proposal) : list);
+    return { artifact: proposal?.status === 'pending' ? undefined : result.show, routed, proposals };
 }
 
 /** Step 3 — stream from the Gemini backend, applying artifact/thought/tool events as they arrive. */
-async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext, signal: AbortSignal): Promise<BackendStreamResult> {
+async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext, signal: AbortSignal, latest: () => SendMessageDeps = () => d): Promise<BackendStreamResult> {
     const { skills, selectedSkillIds, mcpServers, selectedMcpIds, setSessions, setLiveThinkingText, setLiveSteps, setLiveStreamedText, setActiveStreamingSectionId, activeSessionRef, googleSearchGrounding, activeArtifact, setActiveArtifact, artifactHistory, setArtifactHistory, layoutMode, setLayoutMode, setMcpExecutions, setTokenBudget, setActiveTerminalError, setShowTerminalErrorToast } = d;
     const { text, textToSend, targetSessionId, updatedMessages, progress } = ctx;
     const attachedSkillObjects = d.skills.filter(s => d.selectedSkillIds.includes(s.id));
@@ -578,10 +623,16 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                     const text = event.text;
                     updateSteps(prev => [...prev, { id: `model-${Date.now()}-${prev.length}`, title: text, status: 'completed', kind: 'context' }]);
                 }
-                if (event.artifact) {
-                    // Mounted exactly as the backend sent it: words in the prompt never swap in a template
-                    // artifact or switch on playback the model did not set.
-                    const art = event.artifact;
+                const scene = event.artifact ? routeAgentArtifact(ctx, event.artifact, latest().activeArtifact) : undefined;
+                if (scene?.routed) progress.agentScene = event.artifact;
+                if (event.artifact && scene && !scene.artifact) {
+                    // An edit to the open scene held for review: the stage keeps the live scene, the proposal waits.
+                    setSessions(prev => prev.map(s => (s.id !== targetSessionId ? s : { ...s, sceneProposals: scene.proposals(s.sceneProposals) })));
+                }
+                if (event.artifact && scene?.artifact) {
+                    // Mounted exactly as the backend sent it (an edit to the open scene, applied onto the live scene as a
+                    // delta): words in the prompt never swap in a template artifact or switch on playback the model did not set.
+                    const art = scene.artifact;
                     progress.artifact = art;
                     const resolvedMode = resolveModeForArtifact(art.type);
                     if (visible) {
@@ -602,6 +653,7 @@ async function streamBackendResponse(d: SendMessageDeps, ctx: GenerationContext,
                             activeArtifact: art,
                             artifactHistory: [art, ...(s.artifactHistory || []).filter(a => a.id !== art.id)],
                             layoutMode: resolvedMode,
+                            sceneProposals: scene.proposals(s.sceneProposals),
                             updatedAt: 'Just now'
                         };
                     }));
@@ -809,7 +861,11 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
     setAttachedDataFile(undefined);
     d.setAttachedImages?.([]);
 
-    const newlyGeneratedArtifact = generatedArtifact;
+    // The turn's latest edit to the open scene, routed again against the live scene now: edits the user made while the
+    // reply streamed stand, and a held edit leaves the stage as it is.
+    const agentScene = ctx.progress.agentScene;
+    const sceneRoute = agentScene ? routeAgentArtifact(ctx, agentScene, activeArtifact) : undefined;
+    const newlyGeneratedArtifact = sceneRoute && generatedArtifact?.id === agentScene?.id ? sceneRoute.artifact : generatedArtifact;
     const finalArtifact = newlyGeneratedArtifact
         ? graphControllerRef.current.registerArtifact(
             newlyGeneratedArtifact,
@@ -839,6 +895,7 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
     setSessions(prev => {
         const existingSession = prev.find(s => s.id === targetSessionId);
         const exists = !!existingSession;
+        const sceneProposals = sceneRoute ? sceneRoute.proposals(existingSession?.sceneProposals) : existingSession?.sceneProposals;
         const canvas = committedSessionCanvas({
             targetVisible,
             visible: { artifactHistory, layoutMode },
@@ -859,7 +916,8 @@ function commitAssistantMessage(d: SendMessageDeps, ctx: GenerationContext, fina
             messages: nextFullMessages,
             activeArtifact: canvas.activeArtifact,
             artifactHistory: canvas.artifactHistory,
-            layoutMode: canvas.layoutMode
+            layoutMode: canvas.layoutMode,
+            ...(sceneProposals?.length ? { sceneProposals } : {})
         };
         const updated = exists ? prev.map(s => s.id === targetSessionId ? sessionData : s) : [sessionData, ...prev];
         persistSessionsImmediately(updated);
@@ -1048,7 +1106,7 @@ export function useSendMessage(deps: SendMessageDeps): UseSendMessageResult {
 
         let completedNormally = false;
         try {
-            const backend = await streamBackendResponse(depsRef.current, ctx, signal);
+            const backend = await streamBackendResponse(depsRef.current, ctx, signal, () => depsRef.current);
             if (signal.aborted) {
                 return;
             }
