@@ -74,6 +74,9 @@ import { createMapDataRouter } from './routes/mapDataRoutes';
 import { createSkyRouter } from './routes/skyRoutes';
 import { createTileRefineRouter } from './routes/tileRefineRoutes';
 import { createWindowCheckRouter } from './routes/windowCheckRoutes';
+import { createAccountRouter, createStudioRouter } from './routes/accountRoutes';
+import { configureScratchboxAccount } from '../../packages/core/src/node/scratchbox-account/account-service';
+import type { NativeEncryption } from '../../packages/core/src/node/scratchbox-account/desktop-vault';
 import { createBlobCheckRouter } from './routes/blobCheckRoutes';
 import { createTextureRouter } from './routes/textureRoutes';
 import { createMediaRouter, createVideoRouter } from './routes/mediaVideoRoutes';
@@ -104,6 +107,12 @@ export interface StandaloneServerOptions {
     toolsPort?: number;
     /** Host the tools origin is reachable at from the renderer. Defaults to 127.0.0.1. */
     toolsHost?: string;
+    /**
+     * Secure storage for the scratchbox.ai connection: Electron's `safeStorage` and the app's user-data directory, passed
+     * by the embedding app. A server started on its own (development) keeps it in the key file instead.
+     */
+    accountEncryption?: NativeEncryption;
+    accountDataDir?: string;
 }
 
 export type ExportedTool = ExportedToolRecord;
@@ -129,7 +138,9 @@ export const SERVER_SECRET_ALLOWLIST = [
     'SCRATCHBOX_MCP_SECRET',
     'SCRATCHBOX_MCP_USER_ID',
     'SCRATCHBOX_MCP_WORKSPACE_ID',
-    'SCRATCHBOX_MCP_CANVAS_ID'
+    'SCRATCHBOX_MCP_CANVAS_ID',
+    // Sign in with scratchbox.ai: the site the IDE signs in to (default https://www.scratchbox.ai)
+    'SCRATCHBOX_ACCOUNT_URL'
 ];
 
 /** Origins allowed to call the API when an Origin header is present. */
@@ -772,6 +783,15 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/api/panorama', createPanoramaRouter(mediaCredentials));
     app.use('/api/3d-engine/splat-studio', createSplatStudioRouter());
     app.use('/api/textures', createTextureRouter(mediaCredentials));
+
+    // Sign in with scratchbox.ai (behind the launch token): the account, and the connected workspace's hosted tools.
+    // The browser's return goes to the account's own one-use loopback listener, not to this server.
+    configureScratchboxAccount({
+        ...(options.accountEncryption ? { encryption: options.accountEncryption } : {}),
+        ...(options.accountDataDir ? { dataDir: options.accountDataDir } : {})
+    });
+    app.use('/api/account', createAccountRouter(routeContext));
+    app.use('/api/studio', createStudioRouter());
 
     // 7. Standalone Tools, Models, 4D Performer & Capabilities
     app.use('/api/tools', createToolsRouter(exportedToolsStore, toolsHost, toolsPort));
