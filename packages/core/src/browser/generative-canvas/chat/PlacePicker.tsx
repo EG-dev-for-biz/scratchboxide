@@ -190,7 +190,7 @@ export const PlacePicker: React.FC<PlacePickerProps> = ({ request, value, onChan
                         aria-label="Search a place or address"
                         style={fieldStyle}
                     />
-                    <button type="submit" disabled={busy || !search.trim()} style={{ ...smallButton, opacity: busy || !search.trim() ? 0.5 : 1 }}>
+                    <button type="submit" className="sb-btn sb-btn-xs sb-place-picker-find" disabled={busy || !search.trim()} style={{ ...smallButton, opacity: busy || !search.trim() ? 0.5 : 1 }}>
                         Find
                     </button>
                 </form>
@@ -264,10 +264,10 @@ export const PlacePicker: React.FC<PlacePickerProps> = ({ request, value, onChan
 
                 <div style={{ position: 'absolute', right: '8px', top: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}
                     onPointerDown={e => e.stopPropagation()} onPointerUp={e => e.stopPropagation()}>
-                    <button type="button" aria-label="Zoom in" disabled={zoom >= PLACE_PICKER_MAX_ZOOM}
+                    <button type="button" className="sb-btn sb-btn-xs sb-place-picker-zoom" aria-label="Zoom in" disabled={zoom >= PLACE_PICKER_MAX_ZOOM}
                         onClick={() => setView(v => zoomView(v, 1, width, MAP_HEIGHT_PX))}
                         style={{ ...smallButton, width: '28px', padding: '4px 0', background: 'rgba(17, 24, 39, 0.85)' }}>+</button>
-                    <button type="button" aria-label="Zoom out" disabled={zoom <= PLACE_PICKER_MIN_ZOOM}
+                    <button type="button" className="sb-btn sb-btn-xs sb-place-picker-zoom" aria-label="Zoom out" disabled={zoom <= PLACE_PICKER_MIN_ZOOM}
                         onClick={() => setView(v => zoomView(v, -1, width, MAP_HEIGHT_PX))}
                         style={{ ...smallButton, width: '28px', padding: '4px 0', background: 'rgba(17, 24, 39, 0.85)' }}>−</button>
                 </div>
