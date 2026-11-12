@@ -74,6 +74,8 @@ import { createMapDataRouter } from './routes/mapDataRoutes';
 import { createSkyRouter } from './routes/skyRoutes';
 import { createTileRefineRouter } from './routes/tileRefineRoutes';
 import { createWindowCheckRouter } from './routes/windowCheckRoutes';
+import { createAccountRouter, createAccountCallbackHandler } from './routes/accountRoutes';
+import { ACCOUNT_CALLBACK_PATH } from '../../packages/core/src/node/scratchbox-account/scratchbox-account';
 import { createBlobCheckRouter } from './routes/blobCheckRoutes';
 import { createTextureRouter } from './routes/textureRoutes';
 import { createMediaRouter, createVideoRouter } from './routes/mediaVideoRoutes';
@@ -129,7 +131,9 @@ export const SERVER_SECRET_ALLOWLIST = [
     'SCRATCHBOX_MCP_SECRET',
     'SCRATCHBOX_MCP_USER_ID',
     'SCRATCHBOX_MCP_WORKSPACE_ID',
-    'SCRATCHBOX_MCP_CANVAS_ID'
+    'SCRATCHBOX_MCP_CANVAS_ID',
+    // Sign in with scratchbox.ai: the site the IDE signs in to (default https://www.scratchbox.ai)
+    'SCRATCHBOX_ACCOUNT_URL'
 ];
 
 /** Origins allowed to call the API when an Origin header is present. */
@@ -281,7 +285,9 @@ const OPEN_ROUTES: Array<{ method: string; path: string }> = [
     { method: 'GET', path: '/health' },
     { method: 'GET', path: '/api/browser/status' },
     { method: 'GET', path: '/api/models' },
-    { method: 'GET', path: '/api/models/status' }
+    { method: 'GET', path: '/api/models/status' },
+    // the browser's return from scratchbox.ai's consent page: completes only a sign-in this server started (its state)
+    { method: 'GET', path: ACCOUNT_CALLBACK_PATH }
 ];
 
 /** GET routes consumed by EventSource, which cannot set headers: accept `?token=`. */
@@ -772,6 +778,10 @@ export function createStandaloneServer(options: StandaloneServerOptions = {}): E
     app.use('/api/panorama', createPanoramaRouter(mediaCredentials));
     app.use('/api/3d-engine/splat-studio', createSplatStudioRouter());
     app.use('/api/textures', createTextureRouter(mediaCredentials));
+
+    // Sign in with scratchbox.ai: the account routes (behind the launch token) and the browser's return (open, by state)
+    app.use('/api/account', createAccountRouter(routeContext));
+    app.get(ACCOUNT_CALLBACK_PATH, createAccountCallbackHandler());
 
     // 7. Standalone Tools, Models, 4D Performer & Capabilities
     app.use('/api/tools', createToolsRouter(exportedToolsStore, toolsHost, toolsPort));

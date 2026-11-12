@@ -23,6 +23,8 @@ import { SkillsTab } from './settings/tabs/SkillsTab';
 import { McpTab } from './settings/tabs/McpTab';
 import { ShortcutsTab } from './settings/tabs/ShortcutsTab';
 import { AboutTab } from './settings/tabs/AboutTab';
+import { AccountTab } from './settings/tabs/AccountTab';
+import { useScratchboxAccount } from './services/scratchbox-account-client';
 import { MemoriesTab } from './settings/tabs/MemoriesTab';
 import { AdminTab } from './settings/tabs/AdminTab';
 import { ShowcaseDemoItem } from './demos/preloadedDemos';
@@ -54,6 +56,7 @@ export interface SettingsModalProps {
 
 const ACTIVE_TAB_IDS = new Set<StudioSettingsTab>([
     'general',
+    'account',
     'appearance',
     'models',
     'workspace',
@@ -95,7 +98,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
     // All per-control settings live in one reducer-backed store (see settings/settingsReducer.ts)
     const { state: settingsState, setters: settingsSetters } = useSettingsStore({ propGoogleSearchGrounding });
-    const activeUserName = getActiveUserName(`${settingsState.firstName} ${settingsState.lastName}`.trim());
+    const account = useScratchboxAccount();
+    const activeUserName = account?.signedIn && account.user?.username ? account.user.username : getActiveUserName(`${settingsState.firstName} ${settingsState.lastName}`.trim());
 
     const settingsHandlers = useSettingsHandlers({
         activeWorkspace,
@@ -179,6 +183,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     // Active Scratchbox Settings Navigation Items — clean typography
     const sidebarNavSections: { id: StudioSettingsTab; label: string; isExternal?: boolean }[] = [
         { id: 'general', label: 'General' },
+        { id: 'account', label: 'Account' },
         { id: 'appearance', label: 'Appearance' },
         { id: 'models', label: 'Models & AI' },
         { id: 'workspace', label: 'Workspace Rules' },
@@ -334,6 +339,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         )}
 
                         {activeTab === 'general' && <GeneralTab />}
+                        {activeTab === 'account' && <AccountTab />}
                         {activeTab === 'appearance' && <AppearanceTab />}
                         {activeTab === 'models' && <ModelsTab />}
                         {activeTab === 'workspace' && <WorkspaceTab />}

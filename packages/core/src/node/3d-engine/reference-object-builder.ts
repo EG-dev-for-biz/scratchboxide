@@ -84,7 +84,7 @@ import { materialPreviewMeshes, renderMaterialPreview } from './material-preview
 import { downscaleForVision } from '../vision-image-downscale';
 import { finalImagePart } from '../google-media-generation-service';
 import type { ObjectOutlines } from '../../common/spatial/blueprint-loft';
-import { generateStyleDnaImage, studioMcpConfigFromEnv, type StudioImagePresets } from '../scratchbox-studio/studio-mcp-client';
+import { generateStyleDnaImage, studioMcpConfig, type StudioImagePresets } from '../scratchbox-studio/studio-mcp-client';
 
 /** Nano Banana Lite: the reference model for clay builds, and when the Style DNA source is not configured or fails. */
 export const REFERENCE_IMAGE_MODEL = 'gemini-3.1-flash-lite-image';
@@ -221,9 +221,9 @@ export function buildStyleDnaReferencePrompt(request: string): string {
     ].join(' ');
 }
 
-/** The Studio Style DNA reference source, when the Studio connection is configured (SCRATCHBOX_MCP_*). */
+/** The Studio Style DNA reference source, when the IDE is signed in to scratchbox.ai (or, in development, SCRATCHBOX_MCP_* is set). */
 export function styleDnaReferenceSource(env: Record<string, string | undefined> = process.env): StyleReferenceSource | undefined {
-    const config = studioMcpConfigFromEnv(env);
+    const config = studioMcpConfig(env);
     if (!config) return undefined;
     return async (request, signal) => {
         const prompt = buildStyleDnaReferencePrompt(request);

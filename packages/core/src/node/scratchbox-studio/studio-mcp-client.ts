@@ -9,26 +9,55 @@
 
 /**
  * A client for the hosted Scratchbox Studio MCP (scratchbox.ai/api/mcp/canvas, docs/integrations/mcp/README.md): JSON-RPC
- * over Streamable HTTP, authenticated by the internal secret, user id and workspace id headers. Used for the workspace's
- * Style DNA: `ai.generate_images` with `inheritCanvasStyle` applies the saved canvas/workspace style, and explicit
- * presets override fields of it. Generation is a durable, billed job: queued, then polled with `operation.get` until
- * terminal, and its image fetched from the workspace's public storage URL.
+ * over Streamable HTTP. It acts as the user signed in with scratchbox.ai (packages/core/src/node/scratchbox-account): their
+ * per-workspace credential as `Bearer`, with the workspace it is bound to. Used for the workspace's Style DNA:
+ * `ai.generate_images` with `inheritCanvasStyle` applies the saved canvas/workspace style, and explicit presets override
+ * fields of it. Generation is a durable, billed job: queued, then polled with `operation.get` until terminal, and its
+ * image fetched from the workspace's public storage URL.
  */
+
+import { getScratchboxAccount, type ScratchboxAccount } from '../scratchbox-account/scratchbox-account';
 
 export interface StudioMcpConfig {
     endpoint: string;
-    secret: string;
-    userId: string;
     workspaceId: string;
     canvasId?: string;
+    /** The signed-in user's scratchbox.ai credential, sent as `Bearer`. */
+    credential?: string;
+    /**
+     * Development only: the server's internal secret and a user id from SCRATCHBOX_MCP_* in a developer's own
+     * secrets.json, used while no one is signed in. It can act as any user, so it is never part of a release.
+     */
+    secret?: string;
+    userId?: string;
 }
 
-/** The connection from SCRATCHBOX_MCP_* (secrets.json, loaded by the server); undefined when any required value is missing. */
+/** The development connection from SCRATCHBOX_MCP_* (secrets.json, loaded by the server); undefined when any required value is missing. */
 export function studioMcpConfigFromEnv(env: Record<string, string | undefined> = process.env): StudioMcpConfig | undefined {
     const secret = env.SCRATCHBOX_MCP_SECRET?.trim(), userId = env.SCRATCHBOX_MCP_USER_ID?.trim(), workspaceId = env.SCRATCHBOX_MCP_WORKSPACE_ID?.trim();
     if (!secret || !userId || !workspaceId) return undefined;
     const canvasId = env.SCRATCHBOX_MCP_CANVAS_ID?.trim();
     return { endpoint: env.SCRATCHBOX_MCP_ENDPOINT?.trim() || 'https://scratchbox.ai/api/mcp/canvas', secret, userId, workspaceId, ...(canvasId ? { canvasId } : {}) };
+}
+
+/**
+ * The connection to use: the signed-in user's (Sign in with scratchbox.ai) when there is one, else the development
+ * connection from SCRATCHBOX_MCP_*, else none. Synchronous: the key store reads synchronously.
+ */
+export function studioMcpConfig(env: Record<string, string | undefined> = process.env, account: ScratchboxAccount = getScratchboxAccount()): StudioMcpConfig | undefined {
+    const cred = account.credentialSync();
+    if (cred) {
+        const canvasId = env.SCRATCHBOX_MCP_CANVAS_ID?.trim();
+        return { endpoint: `${cred.baseUrl}/api/mcp/canvas`, credential: cred.token, workspaceId: String(cred.workspaceId), ...(canvasId ? { canvasId } : {}) };
+    }
+    return studioMcpConfigFromEnv(env);
+}
+
+/** The request headers that say who is calling: the user's credential, or (development only) the internal secret. */
+export function studioMcpHeaders(config: StudioMcpConfig): Record<string, string> {
+    if (config.credential) return { Authorization: `Bearer ${config.credential}`, 'x-scratchbox-workspace-id': config.workspaceId };
+    if (config.secret && config.userId) return { 'x-internal-secret': config.secret, 'x-internal-user-id': config.userId, 'x-scratchbox-workspace-id': config.workspaceId };
+    throw new StudioMcpError('Not signed in to scratchbox.ai: connect the IDE in Settings > Account.');
 }
 
 export class StudioMcpError extends Error {
@@ -43,6 +72,8 @@ type FetchLike = (url: string, init: { method: string; headers: Record<string, s
 export interface StudioCallOptions {
     fetch?: FetchLike;
     signal?: AbortSignal;
+    /** scratchbox.ai refused the user's credential (401: revoked from the web, or expired): the account forgets it by default. */
+    onCredentialRejected?: () => Promise<void>;
 }
 
 const fetchOf = (o: StudioCallOptions): FetchLike => o.fetch ?? (globalThis.fetch as unknown as FetchLike);
@@ -65,14 +96,16 @@ export async function callStudioTool(config: StudioMcpConfig, name: string, args
         headers: {
             'Content-Type': 'application/json',
             Accept: 'application/json, text/event-stream',
-            'x-internal-secret': config.secret,
-            'x-internal-user-id': config.userId,
-            'x-scratchbox-workspace-id': config.workspaceId
+            ...studioMcpHeaders(config)
         },
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
         ...(options.signal ? { signal: options.signal } : {})
     });
     const body = await res.text();
+    if (res.status === 401 && config.credential) {
+        await (options.onCredentialRejected ?? (() => getScratchboxAccount().rejected()))();
+        throw new StudioMcpError(`scratchbox.ai no longer accepts this sign-in (revoked or expired): connect the IDE again in Settings > Account.`, { status: 401, tool: name });
+    }
     if (!res.ok) throw new StudioMcpError(`Scratchbox Studio ${name} failed (HTTP ${res.status}): ${body.slice(0, 200)}`, { status: res.status, tool: name });
     const answer = parseMcpAnswer(body);
     if (answer.error) throw new StudioMcpError(`Scratchbox Studio ${name} failed: ${answer.error.message}`, { code: answer.error.code, tool: name });

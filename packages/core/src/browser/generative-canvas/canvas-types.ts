@@ -1694,6 +1694,7 @@ export type StudioSettingsTab =
     | 'memories'
     | 'shortcuts'
     | 'admin'
+    | 'account'
     | 'about';
 export type StudioLayoutMode = 'chat' | 'code' | 'document' | 'kanban' | 'automation' | 'canvas' | '3d' | 'browser' | 'video';
 

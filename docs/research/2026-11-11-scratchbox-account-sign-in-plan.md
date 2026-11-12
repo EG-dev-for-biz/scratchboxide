@@ -50,9 +50,11 @@ a released build. Replacing it is the first purpose of this phase.
 ## 4. Using the credential
 
 - `studio-mcp-client.ts` sends `Authorization: Bearer <credential>` (and the workspace id header it is bound to) in place of
-  the internal secret. `studioMcpConfigFromEnv` gives way to a resolver that reads the store; the `SCRATCHBOX_MCP_SECRET`
-  path is removed from the app (a developer signs in like anyone else).
-- On sign-in and at start-up the IDE calls the MCP `auth.whoami` tool: a 401 marks it signed out and says why.
+  the internal secret. `studioMcpConfig` reads the store first. As built (2026-11-11), the `SCRATCHBOX_MCP_*` secret is
+  kept only as a development fallback while no one is signed in (it comes from a developer's own `secrets.json` and is
+  never in a release); removing it outright waits until the web half is live.
+- A 401 from scratchbox.ai on any call marks the IDE signed out and says why (`ScratchboxAccount.rejected`). A start-up
+  `auth.whoami` probe is not built yet.
 - The sidebar's user chip and `getActiveUserName` show the signed-in username; signed out, "Scratchbox User" as now.
 - **Workspace:** a credential is bound to one workspace (`allowedWorkspaceId`). Switching workspace means connecting again
   for the other one (phase A); a user-wide credential is an open question (section 9).
@@ -85,9 +87,12 @@ a released build. Replacing it is the first purpose of this phase.
 
 **Scratchbox IDE** (this repository):
 - `packages/core/src/node/scratchbox-account/`: PKCE, the flow's state, the exchange, the store and the status;
-- `desktop-app/server` routes `/auth/scratchbox/{start,callback,status,signout}`; the Electron `openExternal` hook and the
-  `safeStorage` cipher;
-- `studio-mcp-client.ts` on the bearer credential, the internal-secret path removed;
+- `desktop-app/server` routes, as built: `POST /api/account/sign-in`, `GET /api/account/status`, `POST /api/account/sign-out`
+  behind the launch token, and the open `GET /auth/scratchbox/callback` (one-time state); the browser opens through
+  Electron's existing `setWindowOpenHandler` → `openExternal`. The key store is the existing `FileKeyStore` (machine-scoped
+  AES-GCM; `SCRATCHBOX_CREDENTIALS_FILE` isolates a second instance); wiring Electron `safeStorage` as its cipher is still
+  to do;
+- `studio-mcp-client.ts` on the bearer credential (the internal secret kept as a development-only fallback, see 4);
 - Settings → Account (connect, who, workspace, expiry, sign out), the sidebar user chip.
 
 ## 8. Order, tests and checks
