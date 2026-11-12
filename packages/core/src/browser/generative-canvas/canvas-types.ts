@@ -1744,6 +1744,10 @@ export interface InteractiveQuestionCardData {
     questions: InteractiveQuestionItem[];
     submitted?: boolean;
     selectedOptions?: Record<string, string[]>;
+    /** A map to pick a place on (common/spatial/place-picker.ts), shown above the questions. */
+    placePicker?: import('../../common/spatial/place-picker').PlacePickerRequest;
+    /** The place the user picked on that map, kept once the card is submitted. */
+    pickedPlace?: import('../../common/spatial/place-picker').PlacePick;
 }
 
 export interface ExecutionPlanStep {

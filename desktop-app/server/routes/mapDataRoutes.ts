@@ -13,6 +13,7 @@ import * as path from 'path';
 import { encodeBlobGroups } from '../../../packages/core/src/common/spatial/map-data-view';
 import { buildMapVectorOverlay, discoverBlobGraph, loadBlobGroups, RoadmapTileService, ROADMAP_ZOOM } from '../../../packages/core/src/node/spatial/map-data-service';
 import { GoogleVectorTileService } from '../../../packages/core/src/node/spatial/GoogleVectorTileService';
+import { GoogleMapsService } from '../../../packages/core/src/browser/generative-canvas/services/google-maps-service';
 import { stagedWorkspaceRoot } from '../../../packages/core/src/node/3d-engine/staged-location/stage-cache';
 import { resolveWithinRoot } from '../../../packages/core/src/node/security/path-guard';
 import { RouteContext } from './types';
@@ -26,6 +27,7 @@ import { RouteContext } from './types';
  * GET /roadmap?lat&lng&radiusM[&zoom]          -> RoadmapManifest (available: false with Google's reason when refused)
  * GET /roadmap/tile/:z/:x/:y                   -> image/png
  * GET /usage                                   -> roadmap tiles fetched from Google (billed) and served from cache
+ * GET /geocode?q=<place name or address>       -> { lat, lng, formattedAddress, name? }  the chat's place picker's search
  */
 export function createMapDataRouter(ctx: RouteContext, deps: { roadmap?: RoadmapTileService } = {}): Router {
     const router = Router();
@@ -117,6 +119,19 @@ export function createMapDataRouter(ctx: RouteContext, deps: { roadmap?: Roadmap
             res.end(t.bytes);
         } catch (err) {
             fail(res, err);
+        }
+    });
+
+    // the place picker's search box (common/spatial/place-picker.ts): one Places lookup, the same the staged build makes
+    router.get('/geocode', async (req: Request, res: Response) => {
+        const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+        if (!q) { res.status(400).json({ success: false, error: 'q is required' }); return; }
+        try {
+            const g = await GoogleMapsService.getInstance().geocode(q);
+            res.json({ success: true, lat: g.lat, lng: g.lng, formattedAddress: g.formattedAddress, name: g.name });
+        } catch (err) {
+            // an unresolved place is an answer for the picker to show, not a server fault
+            res.status(404).json({ success: false, error: (err as Error).message });
         }
     });
 
