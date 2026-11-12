@@ -15,6 +15,8 @@ import { buildMeasuredTwin, GENERATED_REVEAL_M, measuredTwinSpec, rebasePath, ty
 import { parseGlbBytes, readAccessor } from '../src/node/3d-engine/staged-location/glb-bytes';
 import { fileReadingStore } from '../src/node/3d-engine/staged-location/pipeline-k/model-readings';
 import { enuOffset } from '../src/node/3d-engine/staged-location/measured-twin/infer';
+import { applyGlbExposure } from '../src/node/3d-engine/staged-location/measured-twin/exposure';
+import { decodeImageInMemory } from '../src/node/3d-engine/staged-location/tile-texture-transfer';
 
 const frame = (id: number, w: number, h: number) => ({ facadeId: id, centroid: [0, 50, 0] as [number, number, number], normal: [0, 0, 1] as [number, number, number], axisS: [1, 0, 0] as [number, number, number], axisT: [0, 1, 0] as [number, number, number], orthoSMin: -10, orthoTMax: 50, pixel: 0.1, width: w, height: h });
 
@@ -244,6 +246,30 @@ describe.skipIf(!fs.existsSync(RUN))('the hybrid twin of a real staged run (ESB)
         const glb = fs.readFileSync(r.glb);
         const json = JSON.parse(glb.subarray(20, 20 + glb.readUInt32LE(12)).toString('utf8')) as { images: Array<{ mimeType: string }> };
         expect(json.images[0].mimeType).toBe('image/jpeg');
+        // pipeline K's symmetry on the same orthos: the mirror fill ran (native, no model) and the twin's masks count
+        // its texels covered
+        expect(h.symmetry && 'fill' in h.symmetry).toBe(true);
+        if (h.symmetry && 'fill' in h.symmetry) expect(h.symmetry.textureTexels).toBeGreaterThanOrEqual(0);
+        // no model, no finish read: the photos keep their level, and the twin says why
+        expect(r.exposure && 'reason' in r.exposure).toBe(true);
+        // the exposure pass on the real twin: every base-colour texel raised in linear light, the GLB labelled
+        const copy = path.join(outDir, 'exposed.glb');
+        fs.copyFileSync(r.glb, copy);
+        const ex = applyGlbExposure(copy, { gain: 1.5, classes: [], fitted: 1.5, clipCap: 4, why: 'test', label: 'photo-inferred' })!;
+        expect(ex.images).toBeGreaterThan(0);
+        const before = parseGlbBytes(fs.readFileSync(r.glb)), after = parseGlbBytes(fs.readFileSync(copy));
+        expect(after.json.asset.extras.sbExposure).toMatchObject({ gain: 1.5, label: 'photo-inferred' });
+        const atlasOf = (g: ReturnType<typeof parseGlbBytes>) => { const v = g.json.bufferViews[g.json.images[0].bufferView]; return decodeImageInMemory(g.bin.subarray(v.byteOffset ?? 0, (v.byteOffset ?? 0) + v.byteLength)); };
+        const a = atlasOf(before), b = atlasOf(after);
+        expect([b.width, b.height]).toEqual([a.width, a.height]);
+        const lin = (v: number) => { const c = v / 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+        let sa = 0, sb = 0;
+        for (let i = 0; i < a.rgba.length; i += 4 * 97) { const g = a.rgba[i + 1]; if (g > 20 && g < 150) { sa += lin(g); sb += lin(b.rgba[i + 1]); } }
+        expect(sb / sa).toBeGreaterThan(1.4);
+        expect(sb / sa).toBeLessThan(1.6);
+        // the geometry is untouched
+        const pos = (g: ReturnType<typeof parseGlbBytes>) => readAccessor(g, g.json.meshes[0].primitives[0].attributes.POSITION).data;
+        expect(Array.from(pos(after).slice(0, 30))).toEqual(Array.from(pos(before).slice(0, 30)));
     }, 1_200_000);
 });
 

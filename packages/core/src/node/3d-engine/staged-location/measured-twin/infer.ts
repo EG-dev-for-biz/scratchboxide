@@ -35,6 +35,8 @@ import type { FacadeAsk } from '../pipeline-k/facade-reader';
 import { FACADE_READER_MODEL_KEY } from '../pipeline-k/facade-reader';
 import type { NamedBuilding } from '../pipeline-k/facade-reader-brief';
 import { drawnMetalness, drawnRoughness, finishPrompt, parseClassFinish, settleFinishes, type ClassFinish } from '../pipeline-k/material-finish';
+import { fitExposureGain, type ExposureFit, type RegionClass, type RegionSet } from '../pipeline-k/material-regions';
+import type { RgbaImage8 } from '../tile-texture-transfer';
 import { readingKey, type ModelReadingStore } from '../pipeline-k/model-readings';
 import { inferWindowArrays, type WindowArrayReport } from '../pipeline-k/window-array';
 import type { WindowFitFile, WindowRect } from '../window-fit';
@@ -77,6 +79,8 @@ export interface InferReport {
     base?: { faces: number; texels: number; plates: number } | { reason: string };
     classes?: { count: number; read: number; finishes: Array<{ lab: V3; openings: boolean; roughness: number; metalness: number; conf: number; seen?: string }> } | { reason: string };
     relief?: { faces: number; chunks: number; shared?: number; kept: number; rejected: number; boxRejected?: number; corrs?: number[] } | { reason: string };
+    /** The building's one exposure gain (pipeline K's fitExposureGain on the twin's classes): applied to the twin's colour by measured-twin.ts. */
+    exposure?: ExposureFit;
     calls: { text: number; image: number };
     ms: number;
 }
@@ -264,6 +268,17 @@ export async function inferFromSelfOrthos(dir: string, opts: { models?: InferMod
             const roughness = read ? drawnRoughness(f!.roughness) : a.openings ? 0.08 : 0.85, metallic = read ? drawnMetalness(f!) : 0;
             classes.push({ index: k, meanLab: a.c.map(v => Math.round(v * 100) / 100) as V3, openings: a.openings, set: `class${k}`, finish: { roughness, metallic } });
         });
+        // the building's one exposure gain, as pipeline K fits it (material-regions.ts fitExposureGain): the classes whose
+        // confident finish read named a reference finish with a measured albedo land in it; a class's luminance is its
+        // centre's (L* -> Y), every wall photo read for the clip cap
+        {
+            const Y = (L: number) => { const f = (L + 16) / 116; return f ** 3 > 0.008856 ? f ** 3 : (f - 16 / 116) / 7.787; };
+            const rc = rows.map((r, k) => ({ index: k, share: r.share, openings: !!r.openings, meanLinear: [Y(r.meanLab[0]), Y(r.meanLab[0]), Y(r.meanLab[0])] })) as unknown as RegionClass[];
+            const sets = classes.map((c, k) => ({ finish: { read: finishes[k] && finishes[k]!.conf >= P.finishMinConf ? { ref: finishes[k]!.ref } : undefined, drawn: { metallic: c.finish!.metallic ?? 0 } } })) as unknown as Array<Pick<RegionSet, 'finish'>>;
+            const imgs = new Map<number, RgbaImage8>();
+            for (const f of frames) imgs.set(f.facadeId, photoOf(f) as RgbaImage8);
+            report.exposure = fitExposureGain(rc, sets, imgs);
+        }
         if (!report.classes) report.classes = { count: classes.length, read: finishes.filter(f => f && f.conf >= P.finishMinConf).length, finishes: classes.map((c, k) => ({ lab: c.meanLab, openings: !!c.openings, roughness: c.finish!.roughness!, metalness: c.finish!.metallic!, conf: finishes[k]?.conf ?? 0, ...(finishes[k]?.seen ? { seen: finishes[k]!.seen } : {}) })) };
     }
 

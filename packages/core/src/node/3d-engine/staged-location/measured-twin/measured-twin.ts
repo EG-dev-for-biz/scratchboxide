@@ -27,6 +27,7 @@ import type { ModelReadingStore } from '../pipeline-k/model-readings';
 import { REVEAL_DEPTH_PARAMS } from '../reveal-depth';
 import type { NamedBuilding } from '../pipeline-k/facade-reader-brief';
 import { tileRefineTwin } from '../tile-refine-twin';
+import { applyGlbExposure, type GlbExposureReport } from './exposure';
 import { hybridInputs, type HybridReport } from './hybrid';
 import { enuOffset, inferFromSelfOrthos, type InferModels, type InferReport, type StreetViewSource } from './infer';
 
@@ -248,7 +249,7 @@ export function ensureMeasuredTwinBinary(repoRoot = findTileRefineRepoRoot()): P
  * `reliefM` above 0 (and no scanDetailM) rebuilds, purely procedurally, what stands at least that far off the shell: relief maps
  * of the scan on the walls, roofs and slender top in 0.3 m cells, as measured blocks.
  */
-export interface MeasuredTwinOptions { scanDetailM?: number; reliefM?: number; kFree?: boolean; /** K-free, then inferred (infer.ts): the building's window system, symmetry, pier depth, finishes, Street View base, relief. */ infer?: boolean; /** The scan's photo texture corrected before the twin reads it (K's roof-shadow lift and harmonising, tile-refine-twin.ts). Default: on with infer or hybrid. */ photometry?: boolean; /** The hybrid (hybrid.ts, docs/research/2026-11-08-hybrid-twin-plan.md): pipeline K's detail stages on the cut-out's own facade orthos, the twin's shell and texture built from them. */ hybrid?: boolean }
+export interface MeasuredTwinOptions { scanDetailM?: number; reliefM?: number; kFree?: boolean; /** K-free, then inferred (infer.ts): the building's window system, symmetry, pier depth, finishes, Street View base, relief. */ infer?: boolean; /** The scan's photo texture corrected before the twin reads it (K's roof-shadow lift and harmonising, tile-refine-twin.ts). Default: on with infer or hybrid. */ photometry?: boolean; /** The hybrid (hybrid.ts, docs/research/2026-11-08-hybrid-twin-plan.md): pipeline K's detail stages on the cut-out's own facade orthos, the twin's shell and texture built from them. */ hybrid?: boolean; /** The building's one exposure gain on the twin's colour (pipeline K's fitExposureGain on the twin's classes). Default: on with infer or hybrid; false keeps the photos' level. */ exposure?: boolean; /** Pipeline K's symmetry (symmetry.ts) on the hybrid's orthos: unread texels filled from each facade's mirror, the reader's windows confirmed or filled at mirror sites. Default on with hybrid; false off. */ symmetry?: boolean }
 
 /** The generator's report (scratchbox_measured_twin.hpp reportJson). */
 export interface MeasuredTwinReport {
@@ -269,7 +270,8 @@ export interface MeasuredTwinReport {
 export interface MeasuredTwinResult {
     version: string; glb: string; specFile: string; report: MeasuredTwinReport; /** What the infer mode inferred between its two passes. */ infer?: InferReport;
     /** The scan's photo texture as corrected before the twin read it, or why not. */ photometry?: PhotometryReport;
-    /** The hybrid's K stages (orthos, window fit, reader, system, array), with their times and calls. */ hybrid?: HybridReport; records: Omit<KRunRecords, 'planes' | 'windowFit' | 'photos'> & { planes: number; windowPlanes: number; photos: number }; mapsMissing: string[]; ms: number;
+    /** The hybrid's K stages (orthos, window fit, reader, system, array), with their times and calls. */ hybrid?: HybridReport;
+    /** The building's one exposure gain applied to the twin's colour (infer and hybrid; pipeline K's fit on the twin's classes). */ exposure?: GlbExposureReport | { reason: string }; records: Omit<KRunRecords, 'planes' | 'windowFit' | 'photos'> & { planes: number; windowPlanes: number; photos: number }; mapsMissing: string[]; ms: number;
 }
 
 /**
@@ -313,7 +315,7 @@ export async function buildMeasuredTwin(opts: { runDir: string; cacheRoot: strin
     if (options.hybrid) {
         // pipeline K's detail stages on the cut-out's own facade orthos, then the twin's shell from them
         const groundY = photometry && 'groundY' in photometry ? photometry.groundY : NaN;
-        const h = await hybridInputs(rec.orthosDir, path.join(opts.outDir, 'hybrid'), { groundY: Number.isFinite(groundY) ? groundY : 0, ...(opts.models ? { models: opts.models } : {}), ...(opts.store ? { store: opts.store } : {}), ...(opts.building ? { building: opts.building } : {}), ...(opts.streetView ? { streetView: opts.streetView } : {}), ...(opts.signal ? { signal: opts.signal } : {}) });
+        const h = await hybridInputs(rec.orthosDir, path.join(opts.outDir, 'hybrid'), { groundY: Number.isFinite(groundY) ? groundY : 0, ...(opts.models ? { models: opts.models } : {}), ...(opts.store ? { store: opts.store } : {}), ...(opts.building ? { building: opts.building } : {}), ...(opts.streetView ? { streetView: opts.streetView } : {}), ...(opts.signal ? { signal: opts.signal } : {}), ...(options.symmetry !== false && rec.textured ? { symmetryScan: rec.textured } : {}) });
         hybridReport = h.hybrid; inferReport = h.report;
         rec = { ...rec, planes: h.planes, windowFit: h.windowFit, photos: h.photos, classes: h.classes };
         extra = ['param piers 1', 'param turnedBelowM 1.2', 'param selfFill 1', 'param slenderTex 1', 'param patchRows 1536', 'param orthoBlend 0.6', 'param detailAtlas 8192', 'param detailTexelM 0.07', 'param atlasJpeg 1', 'param scanDetailM 0.3', 'param scanDetailStepM 0.6', 'param scanDetailMinArea 2',
@@ -334,8 +336,13 @@ export async function buildMeasuredTwin(opts: { runDir: string; cacheRoot: strin
     }
     fs.writeFileSync(specFile, measuredTwinSpec(rec, { glb, report }, maps, { ...options, kFree: options.infer || options.hybrid ? false : options.kFree }) + extra.map(l => l + '\n').join(''));
     const answer = await run(specFile);
+    // the building's one exposure gain (pipeline K's fit, on the twin's classes in infer.ts), on the twin's colour
+    let exposure: GlbExposureReport | { reason: string } | undefined;
+    if (inferReport?.exposure && options.exposure !== false) {
+        try { exposure = applyGlbExposure(glb, inferReport.exposure) ?? { reason: inferReport.exposure.why }; } catch (err) { exposure = { reason: `the exposure gain failed: ${err instanceof Error ? err.message : String(err)}` }; }
+    }
     const { planes, windowFit, photos, ...rest } = rec;
-    return { version: MEASURED_TWIN_VERSION, glb, specFile, report: answer, ...(inferReport ? { infer: inferReport } : {}), ...(photometry ? { photometry } : {}), ...(hybridReport ? { hybrid: hybridReport } : {}), records: { ...rest, planes: planes.length, windowPlanes: windowFit.filter(e => e.rects?.length).length, photos: Object.keys(photos).length }, mapsMissing: missing, ms: Date.now() - t0 };
+    return { version: MEASURED_TWIN_VERSION, glb, specFile, report: answer, ...(inferReport ? { infer: inferReport } : {}), ...(photometry ? { photometry } : {}), ...(hybridReport ? { hybrid: hybridReport } : {}), ...(exposure ? { exposure } : {}), records: { ...rest, planes: planes.length, windowPlanes: windowFit.filter(e => e.rects?.length).length, photos: Object.keys(photos).length }, mapsMissing: missing, ms: Date.now() - t0 };
 }
 
 /** What the photometry step did to the scan's photos (tile-refine-twin.ts's reports, summarised). */

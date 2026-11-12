@@ -167,7 +167,9 @@ export async function renderTwinViews(r: MeasuredTwinResult, outDir: string, sig
 function hybridSummary(r: MeasuredTwinResult): string {
     const h = r.hybrid!;
     const rd = h.reader && 'read' in h.reader ? `the facade reader read ${h.reader.read} planes (${h.reader.readerWindows} openings, ${h.reader.calls} calls, ${h.reader.reused} kept answers)` : `facade reader ${h.reader && 'reason' in h.reader ? `skipped (${h.reader.reason})` : 'not run'}`;
-    return `hybrid: ${h.orthos.rectified} of ${h.orthos.facades} facade photos straightened; window fit ${h.windowFit.windows}; ${rd}; ${h.array.windows} windows after the arrays; the stages took ${Math.round(h.ms / 1000)} s; `;
+    const sym = h.symmetry && 'fill' in h.symmetry ? `symmetry: ${h.symmetry.fill}${h.symmetry.windows ? `; ${h.symmetry.windows}` : ''} (generated); ` : h.symmetry ? `symmetry skipped (${h.symmetry.reason}); ` : '';
+    const ex = r.exposure ? ('gain' in r.exposure ? `exposure raised x${r.exposure.gain} in linear light (photo-inferred: ${r.exposure.why}); ` : `exposure kept (${r.exposure.reason}); `) : '';
+    return `hybrid: ${h.orthos.rectified} of ${h.orthos.facades} facade photos straightened; window fit ${h.windowFit.windows}; ${rd}; ${h.array.windows} windows after the arrays; ${sym}${ex}the stages took ${Math.round(h.ms / 1000)} s; `;
 }
 
 /** What the infer mode inferred, for the chat (every step that did not run says why). */
